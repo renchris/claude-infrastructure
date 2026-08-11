@@ -24,6 +24,12 @@
 #                                                                  or — on --venue cloud ONLY — if
 #                                                                  the work cannot run off-box
 #                                                                  (see OFF-BOX ELIGIBILITY)
+#   venue   <id> --venue local|cloud --why "<token>: <detail>"   → RECORD A ROUTING DECISION on an
+#                                                                  open row (see VENUE PLAN). Gates
+#                                                                  nothing; the enforcing gate is
+#                                                                  still cc-eligible at claim time.
+#                                                                  Idempotent, and --why is required.
+#                                                                  Producer: bin/cc-venue.
 #   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
 #                                                                  condition group (the lease's
 #                                                                  population); --force to re-key
@@ -134,6 +140,26 @@
 # Cloud liveness cannot be read from this box's process table at all; it is read from the repo side
 # and the control plane. The observable set, the channel taxonomy and the producer contract a cloud
 # dispatch must satisfy before it is fired: docs/research/cloud-observability-2026-08-07.md.
+#
+# ── VENUE PLAN (2026-08-11, W1 of docs/plans/CLOUD_BACKLOG_PIPELINE.md) ─────────────────────────
+# `venue` above answers "where does the CURRENT HOLDER run". `venuePlan` answers the question that
+# comes BEFORE a holder exists: where SHOULD this work run? They are two fields on purpose.
+#
+# The gap this closes, in the plan's own words (§2): `claim --venue local|cloud` shipped fully built
+# and fully tested with ZERO PRODUCERS — 0 of 294 open items carried a cloud venue, so nothing ever
+# decided what should run off-box and nothing did. But the venue could not simply be written EARLY
+# into the existing field, for two mechanical reasons:
+#
+#   · `venue` is claim-scoped and RESET ON CLAIM. A plan written there would be erased by the first
+#     ordinary local claim, i.e. the label would vanish exactly when the dispatcher went to read it.
+#   · `venue` SELECTS WHICH ORACLES MAY CONVICT a live claim. An unclaimed row carrying "cloud"
+#     would tell `reap` that its (nonexistent) holder is unobservable — inventing a session.
+#
+# So `venuePlan`/`venueWhy` are carried, last-non-empty-wins, by their own `venue` EVENT, which
+# changes no status and does not advance `lastTs` (see the fold). The decision is a PROPOSAL: the
+# refusal that binds is still OFF-BOX ELIGIBILITY below, re-run at claim time against the tree as
+# it is then. A producer that could authorise its own dispatch would be a one-time review, and a
+# one-time review is precisely the decay this whole file is built to refuse.
 #
 # ── OFF-BOX ELIGIBILITY (2026-08-08, gate G8) ───────────────────────────────────────────────────
 # `--venue cloud` says WHERE the worker runs. This asks the prior question: may this WORK go there
@@ -837,6 +863,20 @@ fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its
         # would close it and the next brace reads as bash. That failed loudly here — `bash -n`
         # pointed at this very line — but a quote landing inside a jq STRING would not.)
         venue: (if $r.event == "claim" then ($r.venue // "local") else ($p.venue // "local") end),
+        # VENUE PLAN — the PRODUCER side of the venue, and deliberately a DIFFERENT FIELD from
+        # `venue` above rather than an early write to it (see VENUE PLAN in the header). `venue`
+        # answers "where does the CURRENT HOLDER run", is claim-scoped, and selects which liveness
+        # oracles may convict; `venuePlan` answers "where SHOULD this work run", is written while
+        # the item is open and unclaimed, and selects nothing at all — it is an input to the
+        # dispatcher, not a verdict about a session. Writing the plan into `venue` would make an
+        # unclaimed item read as held by a cloud worker that does not exist, and reset-on-claim
+        # would silently erase the plan on the first local claim.
+        #
+        # LAST-NON-EMPTY-WINS, like `falsifier` and for the same reason: a plan is not history, it
+        # is the CURRENT routing decision, and a re-run that flips cloud→local (the tree moved, the
+        # premise decayed) must win over the older record.
+        venuePlan: ($r.venuePlan // $p.venuePlan // ""),
+        venueWhy:  ($r.venueWhy  // $p.venueWhy  // ""),
         # ROLE — WHAT the current holder is, which decides whether a `reclaim` may re-key past a
         # LIVE claimer (see DISPATCHER HAND-OVER in the header). "dispatcher" means the holder is a
         # cc-dispatch pass holding a placeholder lease for a worker it has not spawned yet; ""
@@ -867,7 +907,20 @@ fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its
           if   $r.event == "done"                            then true
           elif ($r.event == "reopen" and ($r.force // false)) then false
           else ($p.wasDone // false) end),
-        lastTs:   ($r.ts // $p.lastTs // "")
+        # lastTs — THE CLOCK OF THE ITEM ITSELF, and a `venue` record must not touch it. Every other
+        # event here is something HAPPENING TO THE WORK; a venue label is a routing annotation
+        # written by a sweep over the whole store, so folding its ts in would stamp today onto all
+        # ~485 open items at once. Two live consumers read this as an age: the cc-dispatch queue
+        # order sorts on `(.ts // .lastTs)`, so the entire backlog would flatten to one timestamp
+        # and lose its oldest-first bias; and the cc-premise age histogram would report a store with
+        # no history at all. The annotation is real and it is recorded — it is simply not an event
+        # in the life of the work.
+        #
+        # (No apostrophes in this block: the whole fold is a single-quoted shell string, so one
+        # would close it and the next brace reads as bash. This comment was written with three and
+        # `bash -n` pointed straight at the line — the third time this file has paid for it.)
+        lastTs: (if $r.event == "venue" then ($p.lastTs // $r.ts // "")
+                 else ($r.ts // $p.lastTs // "") end)
       })
     ) | [ .[] ]'
 }
@@ -2395,7 +2448,13 @@ cmd_list() {
            # ""-carrying key would make every item in the store answer "yes, it has a probe". The
            # metric would read 100% the day the field became visible, over a store where nothing had
            # one. `has("falsifier")` and `select(.falsifier)` must agree, which needs the key absent.
-           | (if (.falsifier // "") == "" then del(.falsifier) else . end) )'
+           | (if (.falsifier // "") == "" then del(.falsifier) else . end)
+           # Same del-when-empty rule as `falsifier`, same reason and it is the same metric: the
+           # coverage question is `select(.venuePlan)`, jq treats "" as TRUTHY, and a ""-carrying
+           # key would make every item in the store answer "yes, it has been routed" on the day the
+           # field became visible — over a store where nothing had been.
+           | (if (.venuePlan // "") == "" then del(.venuePlan) else . end)
+           | (if (.venueWhy  // "") == "" then del(.venueWhy)  else . end) )'
     return 0
   fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" --arg pad "$TSV_PAD" "$CELL"'
@@ -2413,6 +2472,88 @@ cmd_list() {
         printf '%-8s | %s | %-28s | %s\n' "$st" "$id" "$proj" "$title"
       fi
     done
+}
+
+# cmd_venue — RECORD A ROUTING DECISION on an open row. The write half of `bin/cc-venue`.
+#
+# It is a separate verb from `claim --venue` for the reason spelled out at `venuePlan` in the fold:
+# the plan is written while the item is OPEN and UNCLAIMED, and it must not be mistaken for a
+# statement about a live holder. Nothing here gates anything — the enforcing gate is still
+# cc-eligible at `claim --venue cloud`, and it re-runs there against the tree as it is THEN. That
+# separation is the point: a label is a proposal with a timestamp, and a proposal that could
+# authorise its own execution would be a review that goes stale the moment it finishes.
+#
+# --why IS REQUIRED, and this is the whole reason the verb exists rather than a bare flag. A venue
+# label with no recorded reason is unauditable in exactly the direction that costs money: the
+# wrongly-routed item is the one that burns quota and reports success
+# (docs/plans/CLOUD_BACKLOG_PIPELINE.md §5 anti-goal), and six weeks later nothing can say whether
+# it was routed on a measurement or on a hunch.
+cmd_venue() {
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local plan="" why=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --venue) shift; plan="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --why)   shift; why="${1:-}";  [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog venue: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  # NO `--by`, deliberately. The obvious shape for "who decided this" is a `by` field on the record,
+  # and it would be a silent corruption: the fold carries `by` as `($r.by // $p.by // "")` across
+  # EVERY event, so a venue record naming its producer would overwrite the LEASE HOLDER on a
+  # claimed row — an annotation quietly re-assigning the work it annotates. The producer is
+  # identified by the `why` (which names the predicate that decided) and by the record's ts.
+  [ -n "$id" ] || { printf 'cc-backlog venue: <id> is required\n' >&2; return 2; }
+  # CLOSED-SET, exactly as `claim --venue` is and for a sharper reason here: this string is what
+  # cc-dispatch reads to decide whether to put `--cloud` in a fire's argv, so a typo accepted as
+  # free text would fall through every equality test back onto the local path and read as a
+  # decision that was never made (memory: default-path-hardening-is-blind-to-the-explicit-argument).
+  case "$plan" in
+    local|cloud) ;;
+    "") printf 'cc-backlog venue: --venue local|cloud is required\n' >&2; return 2 ;;
+    *)  printf 'cc-backlog venue: unknown --venue %s (expected: local, cloud)\n' "$plan" >&2; return 2 ;;
+  esac
+  [ -n "$why" ] || {
+    { printf 'cc-backlog venue: --why "<token>: <detail>" is required\n'
+      printf '  usage: cc-backlog venue <id> --venue local|cloud --why "<token>: <detail>"\n'
+      printf '  The why is the MACHINE-READABLE record of the routing decision. Lead it with the\n'
+      printf '  verdict token (cc-eligible has the closed set) so `split(": ")[0]` is the class and\n'
+      printf '  the rest is the evidence a human needs. Producer: bin/cc-venue.\n'
+    } >&2
+    return 2
+  }
+  ensure_file
+  has_id "$id" || { printf 'cc-backlog venue: unknown id %s\n' "$id" >&2; return 3; }
+
+  local cur status prev pwhy
+  cur="$(item_json "$id")"
+  status="$(printf '%s' "$cur" | jq -r '.status // ""' 2>/dev/null)"
+  if [ "$status" = "done" ]; then
+    { printf 'cc-backlog venue: REFUSED — %s is DONE; routing terminal work decides nothing.\n' "$id"
+      printf '  A venue plan is an input to the next dispatch, and a done item never reaches one.\n'
+    } >&2
+    return 4
+  fi
+
+  # IDEMPOTENT. The producer is a SWEEP over the whole open store and is meant to be re-run — on a
+  # cadence, after a land, whenever the tree moves. Appending an identical record every pass would
+  # grow the ledger without carrying one bit of new information, and would bury the records that DO
+  # mark a decision changing (which is the only thing a reader of this trail wants to find).
+  prev="$(printf '%s' "$cur" | jq -r '.venuePlan // ""' 2>/dev/null)"
+  pwhy="$(printf '%s' "$cur" | jq -r '.venueWhy  // ""' 2>/dev/null)"
+  if [ "$prev" = "$plan" ] && [ "$pwhy" = "$why" ]; then
+    printf 'cc-backlog venue: %s already routed %s (unchanged, nothing appended)\n' "$id" "$plan" >&2
+    echo "$id"; return 0
+  fi
+
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg plan "$plan" --arg why "$why" \
+     '{id:$id, ts:$ts, event:"venue", venuePlan:$plan, venueWhy:$why}' >> "$BACKLOG"
+  if [ -n "$prev" ] && [ "$prev" != "$plan" ]; then
+    printf 'cc-backlog venue: %s RE-ROUTED %s → %s (%s)\n' "$id" "$prev" "$plan" "$why" >&2
+  else
+    printf 'cc-backlog venue: %s routed %s (%s)\n' "$id" "$plan" "$why" >&2
+  fi
+  echo "$id"; return 0
 }
 
 cmd_compact() {
@@ -3536,6 +3677,9 @@ case "${1:-}" in
   # an item newly dispatchable — and if anything it makes one LESS dispatchable, since the probe it
   # attaches may retract the item on the very next claim.
   falsify) shift; cmd_falsify "$@" ;;
+  # NO dispatch_kick, same reasoning as `link` and `falsify`: a venue record writes no status, so it
+  # cannot make an item newly dispatchable. It only changes WHERE an already-dispatchable item goes.
+  venue)   shift; cmd_venue "$@" ;;
   dups)    shift; cmd_dups "$@" ;;
   # `backfill --apply` writes only `link` records, via cmd_link — same reasoning as `link` above:
   # a link cannot make an item newly dispatchable, so a kick would be backwards.
