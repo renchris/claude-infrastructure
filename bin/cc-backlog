@@ -1436,6 +1436,31 @@ cmd_transition() {
           } >&2
           return 4
         fi
+        # (5a) THE SUPERSESSION WARNING — the one advisory this verb relays, and it GRANTS the
+        # claim. Until now every non-3 exit from cc-premise was discarded here: the contract
+        # reached a DISPATCHED worker's brief (cc-dispatch injects `cc-premise contract`) and
+        # nobody else. But the dispatcher is not the only claimer — a desk, a peer session, a
+        # worker claiming by hand all reach this transition and none of them ever saw it.
+        #
+        # WHY THIS ONE AND NOT THE WHOLE CONTRACT. Relaying every advisory would print a block on
+        # every claim, which is the banner a reader learns to skip. This arm is scoped: it speaks
+        # only when a SIBLING ROW CLOSED AFTER THIS ONE WAS FILED and its landed diff touched a
+        # file this item cites — measured at 12% of the live store, never on a quiet item.
+        #
+        # IT MUST NOT REFUSE. Supersession is a judgement (the sibling may have fixed a
+        # neighbouring bug, or half of this one), and a false refusal strands real work — the same
+        # asymmetry that keeps `corrected` advisory in guard (5) proper. rc is untouched: the claim
+        # proceeds and the worker adjudicates, which is exactly what the filing item asked for
+        # (0c5d47c863bf). Matched on cc-premise's own headline token, positively, so a rewording
+        # there makes this go quiet rather than fire on everything.
+        if [ "${pout#*POSSIBLE SUPERSESSION}" != "$pout" ]; then
+          { printf 'cc-backlog claim: WARNING supersession — %s (claim GRANTED, adjudicate first)\n' "$id"
+            printf '%s\n' "$pout" | sed -n '/POSSIBLE SUPERSESSION/,$p' | sed 's/^/  /'
+            printf '  This is ADVISORY, not a refusal: the sibling may hold this fix, part of it, or\n'
+            printf '  a neighbouring one. Verify by CONTENT on trunk before you re-derive anything.\n'
+            printf '  Already landed ⇒  cc-backlog "done" %s --evidence "SUPERSEDED by <sha> (sibling <id>)"\n' "$id"
+          } >&2
+        fi
       fi
     fi
     # (5b) OFF-BOX ELIGIBILITY — fires ONLY on `--venue cloud`, so a local claim is byte-for-byte

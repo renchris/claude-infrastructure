@@ -46,6 +46,7 @@ cc-backlog uses, so a fixtured test and the live desk read the same way.
 
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -184,6 +185,68 @@ PLAN_SNAPSHOT_ENABLED = os.environ.get("CC_PREMISE_PLAN_SNAPSHOT", "on").lower()
 # that hides its own existence reads as "this is everything").
 PLAN_REMAINING_MAX = 8
 
+# ── the SUPERSESSION arm ─────────────────────────────────────────────────────────────────────────
+# "Has a SIBLING stream already landed what this OPEN item asks for?" — distinct from every arm
+# above, which ask about THIS item's own claim. Filing is cheap and concurrent, so two discovery
+# streams routinely file one defect from different evidence; whichever stream lands first silently
+# retires the others, and nothing re-reads them.
+#
+# THE MEASURED INCIDENT (backlog 0c5d47c863bf). `bfe937b10cee` (owned_wait is argv-blind) was filed
+# 2026-07-26T18:26Z. Sibling `b1b7a425e169` landed the IDENTICAL fix — 5d85e916, cwd-keyed
+# occupancy — at 22:32Z, four hours later. The item then sat open four days and was dispatched
+# 07-30T15:59Z to a peer who re-verified an already-deployed fix. Three rows existed for one defect.
+# The done-guard (cc-dispatch step 1b, item 344da980ad96) cannot see this: it asks whether THIS row
+# is done, and this row never was.
+#
+# ⚠️ THE FILING ITEM PRESCRIBED "title-token overlap" AND THE MEASUREMENT REFUTED IT — read this
+# before "simplifying" the git conjunct out. Scored over the live store (1848 rows, 498 not-done),
+# title-token overlap alone cannot separate the incident from the noise at ANY threshold: the pair
+# shares exactly one subject-bearing identifier (`owned_wait`, df 5) plus one generic one
+# (`cc-backlog`, df 84). Every setting loose enough to catch it fired on 40-48% of the store and
+# ranked the true sibling SEVENTH of eight. An alarm that fires on half the backlog says as little
+# as one that cannot fire at all (memory: alarm-polarity-and-attention-budget), and the worker would
+# learn to skip it — which is the same as not shipping it. So the lexical signal is kept as the
+# CHEAP PRE-FILTER only, and the thing that actually speaks is git:
+#
+#   a done sibling's landed EVIDENCE SHA touched a repo path THIS ITEM CITES.
+#
+# With that conjunct the same store fires on 60 of 498 (12.0%), averages 1.7 siblings, and ranks the
+# true sibling FIRST of five on the incident. The pre-filter is strictly WEAKER than the full
+# predicate (it drops the path conjunct and keeps the rest), so it can only widen what git then
+# adjudicates — never shadow it (memory: cost-gate-must-be-strictly-weaker).
+#
+# ADVISORY, NEVER BLOCKING, and deliberately not a new verdict token. This arm appends LINES and
+# leaves `verdict` alone, exactly as the plan-open snapshot does: `cmd_contract` gates on `lines`,
+# so the finding reaches the worker's brief, while BLOCKING gains no member and no consumer's `*)`
+# arm silently re-derives a token it has never seen (memory:
+# new-enum-member-falls-into-fail-closed-default). Supersession is a JUDGEMENT — the sibling may
+# have fixed a neighbouring bug, or half of this one — and the item's own DoD asks for the worker to
+# ADJUDICATE it, not for a gate to decide it.
+SUPERSESSION_ENABLED = os.environ.get("CC_PREMISE_SUPERSESSION", "on").lower() not in (
+    "off", "0", "no"
+)
+# The rarity cut for a shared identifier, as a document frequency over the SAME text space the match
+# runs against (every item's title + its done evidence). Computing it over titles alone — the first
+# cut — was dishonest in the direction that matters: a token rare among titles but ubiquitous in
+# evidence prose scored as a subject key and inflated the candidate set.
+SUPERSESSION_DF_MAX = int(os.environ.get("CC_PREMISE_SUPERSESSION_DF_MAX", "8"))
+# Siblings shown, best-scoring first. Same reasoning as PLAN_REMAINING_MAX: the total is printed
+# beside the shown count, so a truncation is never silent.
+SUPERSESSION_MAX_SIBS = 3
+# How many evidence shas this arm will resolve through git in one check. A bound the arm can hit is
+# a bound whose truncation must be SAID — see supersession_lines' `budget_spent` line.
+SUPERSESSION_GIT_BUDGET = int(os.environ.get("CC_PREMISE_SUPERSESSION_GIT_BUDGET", "60"))
+# The headline string. cc-backlog's guard (5) and cc-dispatch both discriminate on this token
+# POSITIVELY, so it is the arm's consumed contract — one spelling, in one place.
+SUPERSESSION_MARKER = "POSSIBLE SUPERSESSION"
+# An identifier: a symbol or path with internal structure (`owned_wait`, `bin/cc-backlog`,
+# `tests/cc-await-ping.bats`). Prose words are excluded BY SHAPE rather than by a stopword list — a
+# denylist enumerates spellings, never the class, and would need editing every time the codebase
+# grew a new noun (memory: denylist-enumerates-spellings-not-the-class).
+RE_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:[_./-][A-Za-z0-9_]+)+")
+# A 12-hex backlog id, for the LINEAGE tier (the item's own `source` naming a sibling row).
+RE_ITEM_ID = re.compile(r"\b[0-9a-f]{12}\b")
+
 # ── the EVIDENCE-AGE arm ─────────────────────────────────────────────────────────────────────────
 # How old an item's description must be before churn under its cited files is worth reporting. A
 # file touched an hour after filing is ordinary traffic and says nothing; the class this arm exists
@@ -307,7 +370,8 @@ def build_index(recs):
         text = " ".join(p for p in parts if p)
         ent = idx.setdefault(rid, {"text": "", "first_ts": r.get("ts") or "", "title": "",
                                    "project": "", "notes": [], "falsifier": "",
-                                   "source": "", "dodRef": ""})
+                                   "source": "", "dodRef": "",
+                                   "done_ts": "", "done_evidence": ""})
         # LAST-WRITE-WINS, deliberately unlike `notes` below. A falsifier is not a claim whose
         # history matters — it is the CURRENT way to ask "is this condition still live", so a later
         # record correcting it is strictly better than an earlier one. The per-record accretion that
@@ -339,6 +403,19 @@ def build_index(recs):
             ent["source"] = r["source"]
         if r.get("dodRef"):
             ent["dodRef"] = r["dodRef"]
+        # WHEN THIS ITEM REACHED DONE, and what it landed. LAST-DONE-WINS: an item re-opened and
+        # re-done carries the newer landing, which is the one a sibling could have been superseded
+        # by. Read off the EVENT rather than the fold's `status`, deliberately — the supersession
+        # question is "did a fix land after I was filed", and a `done` that was later reopened
+        # still landed a fix at the time it was written. Keying on the folded status instead would
+        # make a sibling's later reopen retroactively un-supersede work that is on trunk.
+        #
+        # `r.get("ts")`, NOT the local `ts` — that local is bound further down this same loop body,
+        # so reading it here would take the PREVIOUS record's stamp on every iteration and
+        # NameError on the first. The two agree by construction; only the ordering differs.
+        if r.get("event") == "done":
+            ent["done_ts"] = r.get("ts") or ""
+            ent["done_evidence"] = r.get("evidence") or ""
         if text:
             ent["text"] = (ent["text"] + " " + text).strip()
             # PER-RECORD, WITH ITS OWN TIMESTAMP. Two measured reasons this cannot collapse to one
@@ -628,6 +705,205 @@ def cited_paths(text):
         seen.add(p)
         out.append(p)
     return out[:12]  # a contract is read by a human; an unbounded list is not read at all
+
+
+def _idents(text):
+    """The subject-bearing tokens of a text: structured symbols and paths, never prose words.
+
+    A path also yields its BASENAME, so an item citing `bin/cc-backlog` matches a sibling whose
+    evidence names `cc-backlog`. Pure-hex tokens are dropped — a sha is an identifier of an EVENT,
+    not of a subject, and `cited_shas` is the arm that speaks about those.
+    """
+    out = set()
+    for m in RE_IDENT.finditer(text):
+        w = m.group(0).lower().strip("-._/")
+        if len(w) < 6:
+            continue
+        if not re.search(r"[g-z]", re.sub(r"[^a-z0-9]", "", w)):
+            continue  # sha-shaped / all-hex: an event id, not a subject
+        out.add(w)
+        if "/" in w:
+            base = w.rsplit("/", 1)[1]
+            if len(base) >= 6:
+                out.add(base)
+    return out
+
+
+_TRUNK_PATHS = []  # one-slot cache; None inside means "asked and could not enumerate"
+
+
+def _trunk_paths():
+    """Every path on origin/main, or None if git could not be asked.
+
+    THE FILTER THIS EXISTS FOR. `cited_paths` is deliberately loose — it matches any `*.sh`/`*.md`/
+    `*.bats` token anywhere in a title, because the arms it was written for want to report a path
+    that ISN'T on trunk. The supersession arm wants the opposite: it compares a cited path against a
+    landed DIFF, and a path git has never heard of cannot meaningfully overlap one. Measured on the
+    live store, dropping the filter took the arm from 12% of rows to 22% — the extra ten points were
+    prose tokens that merely LOOKED like paths.
+    """
+    if not _TRUNK_PATHS:
+        out = _git(["ls-tree", "-r", "--name-only", "origin/main"])
+        _TRUNK_PATHS.append(set(out.split("\n")) if out else None)
+    return _TRUNK_PATHS[0]
+
+
+def _sha_touches(sha):
+    """The paths a landed sha touched, or None if git could not be ASKED.
+
+    None and set() are kept APART on purpose: the first is "no answer", the second is "answered,
+    and it touched nothing here". Collapsing them is the exact defect `_git_usable` was built to
+    close on the path arm (memory: lookup-miss-is-not-absence).
+    """
+    out = _git(["show", "--name-only", "--format=", "--no-renames", sha])
+    if out is None:
+        return None
+    return {ln.strip() for ln in out.splitlines() if ln.strip()}
+
+
+def supersession_lines(item_id, idx):
+    """Sibling items that reached DONE after this one was filed and may already hold its fix.
+
+    Two tiers, both gated on the SAME ordering test and reported with their evidence:
+
+      LINEAGE  — this item's `source` names the sibling row (or the sibling's names this one).
+                 Exact, needs no git, and is how a follow-on filed FROM another item is linked.
+      SUBJECT  — a shared rare identifier (cheap pre-filter) AND a landed evidence sha that
+                 touched a repo path this item cites (the conjunct that makes it precise).
+
+    THE ORDERING TEST IS THE WHOLE POINT AND IS NOT INCIDENTAL — see the RED-proof the filing item
+    demanded. A sibling that closed BEFORE this item was filed cannot have superseded it: the filer
+    was looking at the world that landing had already produced. On the live store that control is
+    non-vacuous rather than decorative: `2d36e63d16a2` shares the identifier `owned_wait` with
+    `bfe937b10cee` AND its evidence shas touched the very file cited (`bin/cc-backlog`) — it passes
+    every other conjunct and is excluded by the timestamp ALONE (memory:
+    sibling-guard-makes-the-fixture-vacuous).
+
+    FAIL-SILENT, not fail-open-loud, and the distinction matters here. Every other arm's failure
+    mode is "let the claim through"; this arm never held a claim, so its failure mode is "say
+    nothing". The one thing it must NOT do is degrade to the bare lexical signal when git is
+    unavailable — that is the 40-48%-firing alarm the module header measured and rejected. It says
+    so instead, and only when there was actually a candidate it could not adjudicate, so blindness
+    is reported rather than being the silent shipping path (memory:
+    sensor-default-off-makes-blindness-the-shipping-path).
+    """
+    if not SUPERSESSION_ENABLED:
+        return []
+    ent = idx.get(item_id)
+    if ent is None:
+        return []
+    add_ts = ent.get("first_ts") or ""
+    if not add_ts:
+        return []
+
+    # The candidate population: every row that reached `done` STRICTLY after this one was filed.
+    later = [(sid, s) for sid, s in idx.items()
+             if sid != item_id and (s.get("done_ts") or "") > add_ts]
+    if not later:
+        return []
+
+    # (1) LINEAGE — exact, and free. `source` is where a follow-on records the row it was split
+    # from: this very arm's own item carries `source: bfe937b10cee`, whose row closed 15 s later.
+    src_ids = set(RE_ITEM_ID.findall(ent.get("source") or ""))
+    hits, seen = [], set()
+    for sid, s in later:
+        if sid in src_ids or item_id in set(RE_ITEM_ID.findall(s.get("source") or "")):
+            hits.append((float("inf"), sid, s, "filed FROM it (source lineage)"))
+            seen.add(sid)
+
+    # (2) SUBJECT — the lexical pre-filter first, because it costs no fork. Document frequency is
+    # computed over the SAME space the match runs against, so a token's rarity means what it says.
+    ask = _idents(ent.get("title") or "")
+    prefiltered = []
+    if ask:
+        fix, df = {}, defaultdict(int)
+        for sid, s in idx.items():
+            toks = _idents((s.get("title") or "") + " " + (s.get("done_evidence") or ""))
+            fix[sid] = toks
+            for t in toks:
+                df[t] += 1
+        for sid, s in later:
+            if sid in seen:
+                continue
+            shared = {t for t in (ask & fix[sid]) if df[t] <= SUPERSESSION_DF_MAX}
+            if shared:
+                # log(N/df) — a token only two rows ever used outweighs three that fifty did.
+                score = sum(math.log(len(idx) / float(df[t])) for t in shared)
+                prefiltered.append((score, sid, s, shared))
+        prefiltered.sort(key=lambda c: -c[0])
+
+    # (3) The git conjunct, over the pre-filtered few only. Bounded, and the bound SPEAKS.
+    budget_spent = False
+    if prefiltered:
+        # Cited paths, narrowed to ones that are actually ON TRUNK — see _trunk_paths.
+        trunk = _trunk_paths()
+        cited = set(cited_paths(ent.get("title") or ""))
+        if trunk is not None:
+            cited &= trunk
+        if not _git_usable() or trunk is None:
+            # THE SENSOR COULD NOT BE ASKED — a property of the environment, not of the item, and
+            # the one blindness worth reporting. Rare and systemic: if git stops answering, every
+            # item loses this arm at once, and a reader who sees nothing would read that as "no
+            # sibling landed anything" (memory: sensor-default-off-makes-blindness-the-shipping-path,
+            # lookup-miss-is-not-absence).
+            if not hits:
+                return ["%s: %d sibling(s) closed after this item was filed and share its subject "
+                        "vocabulary, but git could not be read here, so the landed-diff check could "
+                        "not run. UNADJUDICATED — check by hand before working: %s"
+                        % (SUPERSESSION_MARKER, len(prefiltered),
+                           ", ".join(sid for _, sid, _, _ in prefiltered[:SUPERSESSION_MAX_SIBS]))]
+        elif not cited:
+            # NOT BLINDNESS — the arm simply has no key. An item that names no repo path (a policy
+            # question, an operator step, a doc decision) is not a case this arm can speak about,
+            # and saying "I could not check" on every one of them would fire on 15% of the live
+            # store while carrying no information at all. Silence is the honest answer; the LINEAGE
+            # tier above still speaks for these items when it has something exact to say.
+            pass
+        else:
+            budget = SUPERSESSION_GIT_BUDGET
+            known = set(idx)
+            for score, sid, s, shared in prefiltered:
+                touched, asked = set(), False
+                for sha in cited_shas(s.get("done_evidence") or "", known)[:4]:
+                    if budget <= 0:
+                        budget_spent = True
+                        break
+                    budget -= 1
+                    got = _sha_touches(sha)
+                    if got is not None:
+                        asked = True
+                        touched |= got
+                if not asked:
+                    continue
+                overlap = cited & touched
+                if overlap:
+                    hits.append((score, sid, s,
+                                 "its landed fix touched %s, which this item cites (shared: %s)"
+                                 % (", ".join(sorted(overlap)[:3]),
+                                    ", ".join(sorted(shared)[:4]))))
+
+    if not hits:
+        return []
+    hits.sort(key=lambda h: -h[0])
+    shown = hits[:SUPERSESSION_MAX_SIBS]
+    lines = [
+        "%s — %d sibling item(s) reached DONE after this one was filed (%s) and may already hold "
+        "its fix. ADJUDICATE BEFORE WORKING: if the landed change already satisfies this item, "
+        "close it citing that sha rather than re-deriving it; if it does not, say so and proceed."
+        % (SUPERSESSION_MARKER, len(hits), add_ts)
+    ]
+    for _score, sid, s, why in shown:
+        ev = " ".join((s.get("done_evidence") or "").split())[:180] or "<no evidence recorded>"
+        lines.append("  %s done %s — %s" % (sid, s.get("done_ts") or "?", why))
+        lines.append("      title:    %s" % " ".join((s.get("title") or "").split())[:160])
+        lines.append("      evidence: %s" % ev)
+    if len(hits) > len(shown):
+        lines.append("  (%d more not shown — `cc-premise contract %s` lists the top %d)"
+                     % (len(hits) - len(shown), item_id, SUPERSESSION_MAX_SIBS))
+    if budget_spent:
+        lines.append("  ⚠️ the landed-diff budget (%d shas) was spent, so lower-scoring siblings "
+                     "went unchecked — this list may be incomplete." % SUPERSESSION_GIT_BUDGET)
+    return lines
 
 
 def _age_seconds(ts):
@@ -1190,6 +1466,15 @@ def assess(item_id, idx):
     # member joins BLOCKING. Reached only when the derived falsifier did NOT fire (that path returns
     # above), which is exactly the case where the item is live and the worker needs today's scope.
     lines.extend(plan_remaining_lines(ent))
+
+    # (0c) A SIBLING STREAM MAY ALREADY HAVE LANDED THIS. Every arm around it asks about THIS
+    # item's own claim; this one asks whether somebody else finished the work while the row sat
+    # open. Advisory ONLY — it appends lines and deliberately does not touch `verdict`, so BLOCKING
+    # gains no member and `check` still exits 0. See the SUPERSESSION arm's constants block for why
+    # a gate would be wrong here (supersession is a judgement the worker makes, and the filing
+    # item's own DoD asks for exactly that) and for the measurement that rejected the bare
+    # title-overlap form.
+    lines.extend(supersession_lines(item_id, idx))
 
     # (a) THIS item declares itself redundant. Strongest signal in the store and the cheapest to
     # act on: the canonical sibling is named, so the reader is never left guessing what survives.
