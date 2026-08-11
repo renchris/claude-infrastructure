@@ -10,6 +10,24 @@
   (launchctl bootstrap) after the C10 review in docs/activation/dispatcher-activate-snippet.md.
   The agent never loads launchd. Kill-switch: `launchctl bootout gui/$UID/com.claude.dispatcher`.
 
+  PAUSED TO DECIDE-ONLY 2026-08-11 (operator directive). CC_DISPATCH_DECIDE_ONLY=on makes every
+  pass journal its decisions and take ZERO claims, spawns and pages — cc-dispatch calls this "the
+  safe activation lane" at :1326. Two reasons, both measured that day:
+    1. CAPACITY. 189 worker panes fired in one day against an operator budget of ~15 concurrent
+       sessions. The box sat at 2.19 load/core against handoff-fire's own 2.0 ceiling, which
+       REFUSED this session's fire — the dispatcher was competing with the operator for the fleet.
+    2. STALENESS. Nothing yet gates an item on being current at the moment it FIRES. cc-premise
+       re-runs a stored falsifier at claim time, but coverage is 51.5% and it deliberately advises
+       rather than refuses, so ~half of dispatchable rows can fire a brief written against a tree
+       that has since moved. The readiness conjunction that closes this is filed, not built:
+       docs/plans/BACKLOG_CONSOLIDATION_2026-08-09.md section READINESS, waves d73a772a8468 /
+       0e8a10c501af / df003b95630b.
+  Store hygiene is UNAFFECTED and that is why this lever was chosen over a bootout: the decide pass
+  still runs step 1d, retracting stale plan-open items, and still journals every decision — so the
+  backlog keeps converging while nothing spawns.
+  REVERT: delete the export, reinstall, `launchctl bootout` + `bootstrap`. Do that only once the
+  readiness gate is enforcing, or the two reasons above are both still true.
+
   StartInterval 300s (5 min): the BACKSTOP, not the primary clock (AUTONOMY_DISPATCH_V2 §3 S5).
   `cc-backlog add` kicks a debounced decision pass on write, so the common path is seconds; this
   timer is what GUARANTEES the 5-minute decision bound (§7 A2) even with the kick disabled
@@ -38,7 +56,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_DISPATCH_DECIDE_ONLY=on; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
     </array>
 
     <key>StartInterval</key>
