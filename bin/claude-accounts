@@ -109,6 +109,16 @@ Usage:
       cannot see them reports UNKNOWN + a loud stderr line — never a confident wrong "OK".
   claude-accounts --fresh             bypass the shared cache
   claude-accounts --no-heal           never run the headless heal (pure read-only)
+  claude-accounts --max-wait S        wall-clock ceiling for producing an answer. `--max-wait 0`
+      is CACHE-ONLY: serve the cache or ABSTAIN (exit 3) — never take the single-flight lock,
+      never sweep, never heal. This is the interactive-launcher contract: without it a launch can
+      inherit the sweeper's tail, whose documented worst case is minutes and whose floor behind a
+      wedged holder is 240s then exit 5. Composes with --route/--rank/--json.
+  claude-accounts --max-age S         staleness ceiling for a served cache (default cache_ttl_s).
+      600 is free by measurement: at <=10 min staleness the stale pick is now-excluded in 0.8% of
+      pairs (median score-ratio 1.000), and across 931 recorded routing decisions the grace band
+      has never once been entered (max observed quota_age_s = 89).
+      Malformed value on either flag ⇒ exit 64. Absent ⇒ unchanged behaviour.
   claude-accounts --no-color          plain output (also: NO_COLOR env, pipes, TERM=dumb;
                                       FORCE_COLOR=1 forces color for screenshots)
 
@@ -213,7 +223,29 @@ def resolve_claude_bin(fallback):
     return fallback
 
 
-def load_cfg():
+def _num_flag(args, name):
+    """Non-negative float value of a positional flag, or None when absent.
+
+    Exit 64 (usage) on a missing or malformed value rather than defaulting: `--route fabel`
+    already taught this file that a silently-defaulted flag value hands the caller a confident
+    wrong answer. A bound the caller believes it set, and did not, is worse than no bound."""
+    if name not in args:
+        return None
+    i = args.index(name)
+    raw = args[i + 1] if i + 1 < len(args) else None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        print(f"claude-accounts: {name} requires a number of seconds (got {raw!r})",
+              file=sys.stderr)
+        sys.exit(64)
+    if v < 0:
+        print(f"claude-accounts: {name} must be >= 0 (got {v})", file=sys.stderr)
+        sys.exit(64)
+    return v
+
+
+def load_cfg(need_claude_bin=True):
     try:
         with open(CFG_PATH) as f:
             cfg = json.load(f)
@@ -223,7 +255,14 @@ def load_cfg():
         a["config_dir"] = os.path.expanduser(a["config_dir"])
     for k in ("claude_bin", "model_config_ssot", "dia_local_state"):
         cfg[k] = os.path.expanduser(cfg[k])
-    cfg["claude_bin"] = resolve_claude_bin(cfg["claude_bin"])
+    # resolve_claude_bin() forks bin/cc-claude-bin (subprocess.run, timeout=10) and its only
+    # consumers are heal()'s headless grant and probe_account()'s certification — both sweep-path.
+    # A cache-only read (--max-wait 0) can never reach either, so paying the fork there is ~16 ms
+    # of waste AND, worse, a 10 s hang surface on the one path this file advertises as
+    # NON-BLOCKING. Skipped there; the SSOT literal rides through unresolved, which is safe
+    # precisely because nothing on that path reads it.
+    if need_claude_bin:
+        cfg["claude_bin"] = resolve_claude_bin(cfg["claude_bin"])
     _validate_router(cfg)
     return cfg
 
@@ -1684,6 +1723,21 @@ class FreshLockWedged(Exception):
     type makes it impossible to fall into the degrade path by accident."""
 
 
+class CacheOnlyUnavailable(Exception):
+    """A cache-only read (--max-wait 0) found nothing servable inside its staleness bound.
+
+    ABSTENTION, not failure — and a distinct type for the same reason FreshLockWedged is one: the
+    alternative outcomes are not interchangeable. The whole point of the cache-only mode is that an
+    interactive launcher must NEVER inherit the sweeper's tail, whose documented worst case is
+    minutes (get_data's own comment: 4 accounts x keychain + a 90 s heal subprocess + two
+    fetch_usage retry ladders) with a hard 240 s + exit 5 floor behind a wedged holder. Returning
+    False here would drop into exactly that path; raising cannot.
+
+    Maps to exit 3 (data unavailable — callers may degrade to a proxy), NOT a new exit code: a new
+    enum member lands in every existing consumer's `*)` arm, and both 2 and 3 already mean
+    "no answer", so a fourth value would strand the callers it was invented to inform."""
+
+
 def _fresh_lock_wait_s(cfg):
     """Wall-clock budget for the --fresh path. Deliberately generous: a LEGITIMATE holder can own
     this for minutes (4 accounts x keychain read + a 90s heal subprocess + two fetch_usage retry
@@ -1740,11 +1794,20 @@ def _acquire_lock(lock, cfg, allow_degrade):
             time.sleep(0.15)
 
 
-def get_data(cfg, fresh=False, no_heal=False):
+def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
     if not fresh:
-        c = cache_read(cfg, want_heal=not no_heal)
+        c = cache_read(cfg, want_heal=not no_heal, grace_s=max_age)
         if c:
             return c["rows"], c["window"], True, c.get("prev")
+    # CACHE-ONLY: abstain before touching the lock. Everything below this line can block —
+    # _acquire_lock waits lock_wait_s, the degrade path re-reads, and the second flock loop waits
+    # fresh_lock_wait_s (240 s) before raising. A caller that asked for max_wait 0 has declared it
+    # would rather have no answer than any of that, and "no answer" is a legitimate routing input
+    # (exit 3) because every consumer already has a degrade path for it.
+    if max_wait is not None and max_wait <= 0:
+        raise CacheOnlyUnavailable(
+            f"no cache within {max_age if max_age is not None else cfg.get('cache_ttl_s', 90)}s "
+            f"and --max-wait 0 forbids sweeping")
     lock_path = cfg["cache_file"] + ".lock"
     with open(lock_path, "w") as lock:
         # single-flight: first caller sweeps, rest reuse. The holder can own this for MINUTES
@@ -2882,8 +2945,19 @@ def main():
         print("\n".join(lines).lstrip("\n"))
         return
 
-    cfg = load_cfg()
+    # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
+    # also decides whether load_cfg may fork the claude-bin resolver. Shaped exactly like
+    # `--login-status --window-h N`: positional value, malformed ⇒ exit 64, absent ⇒ None ⇒ every
+    # existing caller byte-identical. Deliberately NOT a `--route-cached` flag — that would need a
+    # `--rank-cached` twin, and the doubling is the tell that it belongs on the axis, not the verb.
+    max_wait = _num_flag(args, "--max-wait")
+    max_age = _num_flag(args, "--max-age")
+    cache_only = max_wait is not None and max_wait <= 0
+    cfg = load_cfg(need_claude_bin=not cache_only)
     fresh = "--fresh" in args
+    if fresh and cache_only:
+        sys.exit("claude-accounts: --fresh and --max-wait 0 are contradictory "
+                 "(--fresh must sweep; --max-wait 0 forbids it)")
     # --relogin-status is a read-only status surface: it reports what the renewal loop should
     # do, so it must never perform an account operation itself as a side effect of being read.
     no_heal = "--no-heal" in args or "--relogin-status" in args
@@ -2946,7 +3020,8 @@ def main():
     # text or its indentation silently turns that patch into a no-op and the test then exercises a
     # different program than it claims to. That is why FreshLockWedged is handled at the __main__
     # entry instead of wrapped around this call. Keep it byte-identical.
-    rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
+    rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal,
+                                      max_wait=max_wait, max_age=max_age)
     mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
     refresh_login_countdown(rows)                 # ditto — a cached countdown is a stale one
     apply_assignments(rows, cfg)                  # ditto — phantoms must act INSIDE the cache TTL
@@ -3150,6 +3225,23 @@ if __name__ == "__main__":
     # line and silently disabled that patch.
     try:
         main()
+    except CacheOnlyUnavailable as e:
+        # ABSTAIN, reported in each surface's own vocabulary. On --route/--rank stdout carries the
+        # answer, and "none" is the value those callers already handle (it is what an unroutable
+        # fleet prints), so the launcher needs no new parsing to fall back to its pinned account.
+        # The REASON rides route-meta, which cc-route:126-131 already parses — a consumer that
+        # wants to distinguish "cache absent" from "policy says nobody" can, and one that does not
+        # keeps working unchanged.
+        argv = sys.argv[1:]
+        if "--json" in argv:
+            print(json.dumps({"error": "cache_only_unavailable", "detail": str(e),
+                              "rows": [], "cached": False}, indent=2))
+        else:
+            if "--route" in argv or "--rank" in argv:
+                print("none")
+            print(f"claude-accounts: {e}", file=sys.stderr)
+        print("route-meta: cache=absent mode=cache-only waited_ms=0", file=sys.stderr)
+        sys.exit(3)
     except FreshLockWedged as e:
         if "--json" in sys.argv[1:]:
             print(json.dumps({"error": "fresh_lock_wedged", "detail": str(e),
