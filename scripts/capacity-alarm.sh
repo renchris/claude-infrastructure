@@ -198,7 +198,8 @@
 #        CC_CAP_PRESSURE_WARN (default 2) · CC_CAP_PRESSURE_ALARM (default 4) ·
 #        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
 #        CC_CAP_COAL_WARN (default 500) · CC_CAP_COAL_ALARM (default 700) ·
-#        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk) ·
+#        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk AND the per-session cost walk) ·
+#        CC_CAP_PER_SESSION_MB (explicit per-session MB; wins over the live tree-RSS derivation) ·
 #        CC_CAP_SWAP_DELTA_MB (default 256) · CC_CAP_SWAP_WINDOW_S (default 600) ·
 #        CC_CAP_PRIOR_ROWS (default 15, tail depth of the log's own history) ·
 #        CC_CAP_SEG_SOURCE (est | zprint — default est) ·
@@ -704,25 +705,77 @@ fi
 # Reports the LARGEST terminal coalition, not the sum: two terminals at 300 each is a different
 # (and benign) state from one at 600, and the threshold was derived against a single coalition.
 # Unreadable ⇒ prints nothing ⇒ rung SKIPPED, never a fabricated healthy 0 (rung 3's policy).
+# ── ONE ppid walk, shared by rung 6 and the per-session cost derivation ───────────────────────────
+# Two callers need the same question answered — "which root, if any, owns this pid?" — over two
+# different root sets (terminal apps for rung 6; session roots for the per-session cost below). The
+# walk is therefore written ONCE, here, and both callers prepend it to their own awk program. A
+# second copy would be a second place for the cycle cap to drift, and the cap is the part that makes
+# a corrupt ppid chain survivable at all.
+#
+# Callers must fill `parent[pid]` and `root[pid]` before calling. Returns the owning root's pid, or
+# "" when the chain reaches pid 1, dead-ends, or exceeds the cap. Exceeding the cap drops the
+# process (under-counts, never over) — a capacity instrument that spins is worse than one that
+# under-reports, and over-reporting is the direction that lies about safety.
+TREE_WALK_AWK='
+function tree_root(p,   q, d) {
+  q = p; d = 0
+  while (q != "" && q + 0 > 1 && d < 64) {
+    if (q in root) return q
+    q = parent[q]; d++
+  }
+  return ""
+}'
+
 read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalition, or nothing
-  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,comm= 2>/dev/null | awk '
+  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,comm= 2>/dev/null | awk "$TREE_WALK_AWK"'
     { p = $1; pp = $2; c = $3; for (i = 4; i <= NF; i++) c = c " " $i
       sub(/.*\//, "", c)
       parent[p] = pp; pids[++np] = p
       if (c == "iTerm2" || c == "kitty" || c == "ghostty" || c == "Ghostty") root[p] = c }
     END {
-      for (i = 1; i <= np; i++) {
-        q = pids[i]; d = 0
-        # Depth cap is a cycle guard, not a tree-depth assumption: a corrupt ppid chain must not
-        # spin here. Exceeding it drops the process from the count (under-counts, never over).
-        while (q != "" && q + 0 > 1 && d < 64) {
-          if (q in root) { cnt[q]++; break }
-          q = parent[q]; d++
-        }
-      }
+      for (i = 1; i <= np; i++) { r = tree_root(pids[i]); if (r != "") cnt[r]++ }
       best = -1; bestn = ""
       for (r in root) if (cnt[r] + 0 > best) { best = cnt[r] + 0; bestn = root[r] }
       if (bestn != "") printf "%d %s\n", best, bestn
+    }'
+}
+
+# ── per-session memory cost, DERIVED from live session TREES ──────────────────────────────────────
+# THE FROZEN CONSTANT WAS ROOT-ONLY, AND THAT IS THE DEFECT (2026-08-11). The 636 MB figure below was
+# the mean of summed `ps rss` over session tree ROOTS. A session does not stop at its root: teammates,
+# MCP servers and tool children are memory this box is holding on that session's behalf. The same
+# research measured 616 MB root-only against 681 MB per whole TREE — so the constant undercounts a
+# session by every descendant it owns, and PER_MB is a DIVISOR of headroom, so undercounting the cost
+# OVERSTATES how many more sessions fit. That is the unsafe direction for a capacity figure, and it is
+# the one direction the surrounding prose promised this number would never be wrong in.
+#
+# So the cost is MEASURED each tick instead of remembered: sum rss over every process whose ppid chain
+# reaches a session root, divide by the number of roots. Roots are matched at the COMMAND POSITION,
+# exactly as census() does and for the same measured reason (a whole-argv grep counts wrappers that
+# merely NAME a claude binary — see census's prose); nested roots attribute to the OUTERMOST root, so
+# a tree is counted once whichever way a future binary forks.
+#
+# Prints nothing when ps is unreadable or the box holds no session at all. Nothing is a real answer
+# here — the caller falls back to the documented constant and SAYS SO in the row, rather than
+# rendering a fabricated value (rung 3's policy, and the `${SWAP_MB:-0}` lesson: one value that means
+# both "measured" and "could not measure" is how a dead instrument reads as healthy).
+read_session_tree_mb() { # → "<total_tree_mb> <trees>", or nothing when unreadable / no sessions
+  "${CC_CAP_PS:-ps}" -eo pid=,ppid=,rss=,args= 2>/dev/null | awk "$TREE_WALK_AWK"'
+    {
+      p = $1; pp = $2; kb = $3; cmd = $4
+      if (p !~ /^[0-9]+$/ || pp !~ /^[0-9]+$/ || kb !~ /^[0-9]+$/) next
+      parent[p] = pp; pids[++np] = p; kbytes[p] = kb + 0
+      if (cmd ~ /claude-code\/bin\/claude\.exe$/ || cmd ~ /node_modules\/\.bin\/claude$/) cand[p] = 1
+    }
+    END {
+      nroot = 0
+      # A root whose parent is also a root is a child of an already-counted tree (census(), same
+      # reduction): its RSS is attributed to the OUTER root and it is not counted as its own tree.
+      for (p in cand) if (!(parent[p] in cand)) { root[p] = 1; nroot++ }
+      if (nroot == 0) exit 0
+      tot = 0
+      for (i = 1; i <= np; i++) if (tree_root(pids[i]) != "") tot += kbytes[pids[i]]
+      printf "%.0f %d\n", tot / 1024, nroot
     }'
 }
 
@@ -1037,6 +1090,13 @@ esac
 
 # Projected ceiling: how many MORE sessions fit in the reclaimable headroom.
 #
+# HISTORY — the paragraph below described the FROZEN constant and is kept because its bias argument
+# is still the argument for the fallback path; it is SUPERSEDED as a description of the live figure
+# by the derivation note further down (2026-08-11). Its "UPPER BOUND / under-promises" claim was only
+# ever true of the ROOT-ONLY population it was measured over, which is exactly the hole this row now
+# closes: the shared-page overcount it warns about is real, but a whole session tree is bigger than
+# one root by more than that overcount inflates it (616 MB root-only vs 681 MB per tree, measured).
+#
 # THE CONSTANT IS KNOWN-BIASED, AND THE BIAS DIRECTION IS THE POINT. 636 MB is the mean of summed
 # per-process `ps rss`, and that instrument OVERCOUNTS because it bills every process for shared
 # pages it does not exclusively own (the row that produced it retracted the derived fleet total for
@@ -1062,7 +1122,48 @@ esac
 # log that could not be read — and NO-DATA rows ARE appended, so a single blind sample poisoned the
 # file for every consumer. The regex-based NO-DATA test did not catch it because matching
 # `"verdict":"NO-DATA"` never requires the surrounding document to parse.
-PER_MB="${CC_CAP_PER_SESSION_MB:-636}"
+#
+# THE FIGURE IS NOW DERIVED, NOT FROZEN (2026-08-11) — see read_session_tree_mb() for why a root-only
+# constant is wrong in the unsafe direction. Three sources, and the row NAMES which one it used:
+#   override — CC_CAP_PER_SESSION_MB, honoured verbatim (a measured footprint(1) figure, say)
+#   derived  — this tick's live tree RSS ÷ live trees
+#   fallback — the documented root-only constant, used ONLY when the derivation could not be made
+# The fallback is LABELLED rather than silent for the reason the `?` incident below records: a row
+# that cannot say which instrument produced its number is a row a consumer will read as measured.
+PER_MB_FALLBACK=636
+PER_MB=""
+PER_MB_SRC="derived"
+if [ -n "${CC_CAP_PER_SESSION_MB:-}" ]; then
+  # Shape-checked, because this value lands unquoted in the JSON row: a non-numeric override would
+  # break every consumer of the log, which is the same class of defect as the `?` below.
+  case "$CC_CAP_PER_SESSION_MB" in
+    ''|*[!0-9.]*|.*|*.|*.*.*) : ;;
+    *) PER_MB="$CC_CAP_PER_SESSION_MB"; PER_MB_SRC="override" ;;
+  esac
+fi
+if [ -z "$PER_MB" ]; then
+  TREE_ROW="$(read_session_tree_mb || true)"
+  if [ -n "$TREE_ROW" ]; then
+    TREE_MB="${TREE_ROW%% *}"; TREE_N="${TREE_ROW##* }"
+    case "$TREE_MB" in ''|*[!0-9]*) TREE_MB="" ;; esac
+    case "$TREE_N"  in ''|*[!0-9]*) TREE_N=0 ;; esac
+    # 0 trees ⇒ fall back, never divide. PER_MB is itself a DIVISOR two lines below, so a 0 here
+    # would take the whole row down rather than merely mis-report it.
+    if [ -n "$TREE_MB" ] && [ "$TREE_N" -gt 0 ]; then
+      PER_MB="$(awk -v t="$TREE_MB" -v n="$TREE_N" 'BEGIN{printf "%d", t/n}')"
+      case "$PER_MB" in ''|0|*[!0-9]*) PER_MB="" ;; esac
+    fi
+  fi
+fi
+if [ -z "$PER_MB" ]; then
+  PER_MB="$PER_MB_FALLBACK"
+  PER_MB_SRC="fallback"
+fi
+case "$PER_MB_SRC" in
+  derived)  PER_MB_NOTE="measured this tick: live session TREES (roots + every descendant), ${TREE_MB:-?} MB over ${TREE_N:-?} trees" ;;
+  override) PER_MB_NOTE="from CC_CAP_PER_SESSION_MB" ;;
+  *)        PER_MB_NOTE="FALLBACK CONSTANT — tree RSS unreadable or no live session; this figure is ROOT-ONLY and undercounts descendants" ;;
+esac
 ROOM="?"          # human-readable
 ROOM_JSON="null"  # machine-readable — must stay a JSON literal in every branch
 if [ -n "$HEAD" ]; then
@@ -1123,7 +1224,7 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1134,7 +1235,7 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
   "${LOAD_1M:-null}" "${LOAD_5M:-null}" "${LOAD_15M:-null}" "${NCPU:-null}" \
   "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE" \
-  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}")"
+  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -1165,8 +1266,8 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
       date +%s 2>/dev/null || echo 0
       printf 'capacity %s — reclaimable headroom %s GB with %s live sessions (warn <%s, alarm <%s)\n' \
         "$VERDICT" "${HEAD:-?}" "$SESSIONS" "$WARN_GB" "$ALARM_GB"
-      printf 'swap used: %s MB  ·  compressor: %s GB  ·  est. room: ~%s more sessions\n' \
-        "${SWAP_MB:-0}" "${COMP:-?}" "${ROOM:-?}"
+      printf 'swap used: %s MB  ·  compressor: %s GB  ·  est. room: ~%s more sessions (~%s MB/session, %s)\n' \
+        "${SWAP_MB:-0}" "${COMP:-?}" "${ROOM:-?}" "$PER_MB" "$PER_MB_SRC"
       printf 'sessions: %s trees (%s claude.exe + %s .bin/claude)  ·  kernel pressure level: %s\n' \
         "$SESSIONS" "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-unreadable}"
       printf 'load: %s/%s/%s on %s cores = %s/core (warn %s · alarm %s — UNCALIBRATED, see D4)\n' \
@@ -1271,7 +1372,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  ptys (ptmx clones):     ${PTY_USED} / ${PTY_MAX:-unknown}   (${PTY_PCT:-unknown}% of kern.tty.ptmx_max · 1 per PANE · gauge only, feeds no rung)"
   echo "  swap used:              ${SWAP_MB:-unreadable} MB   (a LEVEL never alarms — it latches for days)"
   echo "  swap growth:            ${SWAP_DELTA:-unknown} MB in the last ${SWAP_WINDOW_S}s   (>=${SWAP_DELTA_MB} ⇒ ALARM)"
-  echo "  est. room for:          >=${ROOM} more sessions (FLOOR: ~${PER_MB} MB/session is an rss-derived UPPER bound, so this under-promises)"
+  echo "  est. room for:          >=${ROOM} more sessions   (~${PER_MB} MB/session · ${PER_MB_SRC}: ${PER_MB_NOTE})"
   echo "  VERDICT:                ${VERDICT}"
   if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then
     echo "  This alarm never refuses a spawn. Shed by CLOSING sessions (/handoff the idle ones);"
