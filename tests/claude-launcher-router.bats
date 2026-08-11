@@ -215,6 +215,19 @@ mkrouter_recording() {   # $1 stdout, $2 exit code, $3 log path
   grep -q next4 "$log"
 }
 
+# ── D4: the account map is a projection of a mutable SSOT, not a shell-lifetime snapshot ───────
+
+@test "D4: the map is re-read per launch — an account removed from it stops being routable" {
+  # The bad case is a REMOVED account: the router still names it, a cached map still declares a
+  # dir, the dir still exists, and the launch lands on a decommissioned account with no warning.
+  mkrouter next4 0
+  run runlauncher "claude
+    print 'cc_acct_dir_for_name() { return 1 }' > '$HOME/.claude/lib/account-map.generated.sh'
+    claude"
+  [[ "${lines[0]}" == *"cfg=$HOME/.claude-quaternary"* ]] || false
+  [[ "${lines[1]}" == *"cfg=unset"* ]]
+}
+
 @test "the DECISION is recorded in _CC_ROUTE_NOTE — routed vs pinned are distinguishable" {
   # The print itself is `[[ -t 2 ]]`-gated so scripted callers stay quiet; the note is the
   # observable contract and is what makes a dark router distinguishable from a pinned choice.
