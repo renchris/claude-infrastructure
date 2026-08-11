@@ -15,7 +15,7 @@ outputs correctly.
 |---|---|---|---|---|
 | A | `claude-fable-5` | `xhigh` | anthropic | incumbent — what `roles.research_adversarial` holds today |
 | B | `gpt-5.6-sol` | `xhigh` | openai-codex | candidate at the pinned Codex default |
-| C | `gpt-5.6-sol` | `ultra` (**unverified — see below**) | openai-codex | candidate at max reasoning |
+| C | `gpt-5.6-sol` | `ultra` (**not in the API enum — see below**) | openai-codex | candidate at higher reasoning |
 | D | `claude-opus-5` | `max` | anthropic | cost anchor — the fallback when the frontier window is off |
 
 **Arm A's effort was read from disk, not chosen.** `model-config.yaml` sets
