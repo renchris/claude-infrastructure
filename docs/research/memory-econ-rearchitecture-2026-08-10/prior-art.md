@@ -26,7 +26,7 @@ Axis-by-axis overlap with this wave's decomposition:
 | D worktree lifecycle | **PARTIALLY** — janitor blindness root-caused `8cc16e41`; 558→252 dirs since | below §II.4 |
 | E git maintenance | **THIN** — only "git shared store crosses `gc.auto` (6700 loose) within hours at 15×" | `:35` |
 | F hook economics | **CLOSED** — `HOOK_CHAIN_COST.md` status `complete`; broker rejected, collapse deferred; hooks run in PARALLEL (measured) | `HOOK_CHAIN_COST.md:1-30`, `scaling-…:151` |
-| G session levers | **ANSWERED + the biggest open lever** — MCP children ~507 MB/session, absent from every budget; forecloses 150 on its own | `:31` |
+| G session levers | **ANSWERED + the biggest open lever** — MCP children ~507 MB/session, absent from every budget; forecloses 150 on its own *(REFUTED 2026-08-10, 8× down — aggregate misread as marginal; see A3 in `census-fleet.md:379-401` and `docs/research/mcp-memory-groundup-2026-08-10.md`)* | `:31` |
 | H terminal | **SETTLED** — kitty; render is NOT a wall (idle panes 0.001 cores, occluded free) | `terminal-for-30-panes-2026-07-31.md:1-40`, `:37` |
 | I stores | **PARTIALLY** — `cc-backlog list --blocked` = 92% of turn-end lag (2.1 MB store, ~60 jq forks) | `:39-41` |
 | J prior art | **THIS IS ITS SUCCESSOR** — `11-prior-art.md` already did platform-lever prior art | `11-prior-art.md` |
@@ -58,7 +58,7 @@ Status: **LIVE** = binding now · **SUPERSEDED** = replaced, cited so it is not 
 | 6 | **RSS is the wrong instrument** — `ps` RSS charges ~992 MB of shared libs per session (511 MB/session). `vmmap` phys_footprint: 216 MB fresh / 232 MB median. | `CONCURRENCY_PROGRAM.md:1253-1258` | **LIVE** (but see 7) |
 | 7 | **232 MB is the RESIDENT figure; an ACTIVE session costs ~2.2 GB — a 10× gap.** Measured: available memory 29.04 → 3.94 GB as 10 sessions worked. | `CONCURRENCY_PROGRAM.md:1877-1878` | **LIVE — supersedes the 232 MB planning figure** |
 | 8 | **Session arrival cost re-measured at 340 MB**, not 232; usable denominator 38–42 GB, not 45. | `scaling-bottlenecks-2026-08-09.md:30` | **LIVE** |
-| 9 | **MCP children ~507 MB/session are in NO budget** — 22 `chrome-devtools-mcp` procs / 5.1 GB at 10 sessions. ~49 GB at 150 ⇒ forecloses 150-resident alone. **Named the single biggest lever on the box.** | `scaling-bottlenecks-2026-08-09.md:31`, `:126` | **LIVE, OPEN** |
+| 9 | **MCP children ~507 MB/session are in NO budget** — 22 `chrome-devtools-mcp` procs / 5.1 GB at 10 sessions. ~49 GB at 150 ⇒ forecloses 150-resident alone. **Named the single biggest lever on the box.** | `scaling-bottlenecks-2026-08-09.md:31`, `:126` | ~~LIVE~~ **REFUTED 2026-08-10** — 8× down (aggregate÷N misread, banned instrument); measured 0 B for ~85-90% of sessions, ~5-7 GB at 150; re-ranked to scoping + lifecycle + accounting, daemon-consolidation rejected. `docs/research/mcp-memory-groundup-2026-08-10.md` |
 | 10 | **Session age is NOT the enemy** — equilibrium age 3.7 h contributes ≤35 MB. Transcript-span age is length-biased by `--resume` (34.6 h vs true 3.7 h). | `scaling-bottlenecks-2026-08-09.md:70`, `:150` | **LIVE** |
 | 11 | **Memory + leaks were EXONERATED once already** (row 13): 30 sessions = 44.7 GB of 64 GiB, and that overcounts shared pages ~2.34×; RSS and fd both flat with age. | `GROUND_UP_REBUILD_MAP.md:30` (§8.5.7) | **LIVE — the "leak" framing is dead** |
 
