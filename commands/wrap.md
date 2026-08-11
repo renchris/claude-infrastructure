@@ -77,7 +77,11 @@ unverifiable — freeze one (`~/.claude/autonomy/dod/<hash>.md`) rather than ass
 `--full` prints the dense per-field SESSION LEDGER block.
 
 Machine consumers (Stop hooks) call `scripts/wrap-ledger.sh --machine` and parse the
-`RUNG=` / `DIRTY=` / `UNLANDED=` / `REMAINDER=` / `DOD=` lines.
+`RUNG=` / `DIRTY=` / `UNLANDED=` / `REMAINDER=` / `DOD=` lines. Those seven call sites are ONE Stop
+event, so they pass `--transcript`/`$WRAP_TRANSCRIPT` and share one memoized snapshot (measured
+2026-08-11: 133 → 19 git subprocesses per close; `scripts/wrap-ledger-memo-bench.sh` re-runs it).
+**`/wrap` itself passes no transcript and therefore always computes** — a pull surface the operator
+invoked is a fresh question, not a replay of the last Stop.
 
 ## Origin final close — the Pyramid contract (CLOSE_INTEGRITY W1, 2026-08-10)
 

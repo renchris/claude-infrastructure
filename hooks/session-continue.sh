@@ -559,6 +559,13 @@ ${reason}"
 # own bound is how two caps that must agree drift apart.
 # Seams: CC_MECH_CONTINUE (0 disables) · WRAP_LEDGER_BIN · SESSION_WRITES_LIB
 TP_MECH="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+# ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
+# Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close, and TWO of them
+# are in this file (the mechanical arm and the ship floor, which already share one sample via
+# SC_LED_CACHE). They are one event, so they should observe one snapshot: handing the ledger this
+# session's transcript is what lets it serve one. Absent ⇒ that script computes as it always has.
+_sc_tp="$TP_MECH"; case "$_sc_tp" in "~"*) _sc_tp="$HOME${_sc_tp#\~}" ;; esac
+[ -n "$_sc_tp" ] && export WRAP_TRANSCRIPT="$_sc_tp"
 mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = did not arm
   [ "${CC_MECH_CONTINUE:-1}" = "0" ] && return 1
   command -v jq >/dev/null 2>&1 || return 1

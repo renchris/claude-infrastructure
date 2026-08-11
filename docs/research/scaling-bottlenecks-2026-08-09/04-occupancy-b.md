@@ -312,6 +312,44 @@ key = session_id  ⊕  stat -f '%m %z' "$transcript_path"        # 1 exec, 2.25 
    event**. More than one means the harness writes during dispatch — the memo then degrades to
    today's cost, which is the designed failure direction.
 
+### 6.1 BUILT AND MEASURED (2026-08-11, backlog `9414dfb87233`)
+
+Shipped in `scripts/wrap-ledger.sh` § THE MEMO, with the seven call sites passing `$WRAP_TRANSCRIPT`.
+Harness: `scripts/wrap-ledger-memo-bench.sh` — N concurrent callers, git subprocesses counted by a
+PATH shim, throwaway fixture repos, a live layer sharing the work tree's origin so the live-layer arm
+(calls 12–19) actually runs. **No sequential arm exists in it**, deliberately.
+
+| arm (N=7 concurrent, the real call-site count) | git subprocesses |
+|---|---|
+| `WRAP_CACHE=off` (control — today's close) | **133** |
+| memo, COLD (a new event: nothing is cached) | **19** |
+| memo, WARM (the same event again) | **0** |
+| MUTANT — the single-flight lock neutered, nothing else changed | **133** |
+
+Prediction 1 **holds exactly**: 133 today (§4's census predicted the number to the unit), 19 with the
+memo against a ≤25 bound. Prediction 2 **holds**: `tests/wrap-ledger.bats` is 66/66 with the memo on,
+by construction rather than by tuning — no test in it passes a transcript. Prediction 3 is what the
+key rests on and is now pinned by a test that replays 5da21949's exact grave (a class-C packet
+flipped open→vetoed between events, through the REAL `bin/cc-decide`), plus a mutation control that
+neuters the transcript term and reproduces the staleness on demand. Prediction 4 is unmeasurable from
+this VM — it needs 20 real Stops on the operator's box — and is the one open falsifier.
+
+Two design points the measurement forced, neither of them in the plan above:
+
+- **The lock's parent directory must exist before the lock.** With the memo dir absent, `mkdir
+  "$lock"` fails for EVERY caller, so all six become waiters, all six time out, and all six compute:
+  114 git and **2.8 s** of wall where uncached is 114 git and 0.48 s. That is FAILURE 1 rebuilt with
+  sleeps on top, from one missing `[ -d ]`.
+- **A flat wait cannot serve both ends.** 3 × 100 ms woke every loser before the winner finished
+  (114 git again). The sleeps now double — 50/100/200/400 ms, ≤4 forks, ≤750 ms — which is roughly
+  the uncached cost of the whole script under six-way contention, so the worst case degrades to
+  "uncached plus the wait" instead of an unbounded hold. `WRAP_CACHE_WAIT_TRIES` / `_WAIT_MS` tune it.
+
+Also corrected in passing: `stat -f '%m %z'` is **BSD-only**. GNU `stat -f` is `--file-system`, and it
+prints a multi-line filesystem block on stdout while returning non-zero — so trusting its rc or its
+non-emptiness would key every session on one constant string, i.e. a memo that never invalidates.
+The implementation tries BSD, then GNU, and **validates that it got two integers** either way.
+
 ---
 
 ## 7. XProtect: assessment is per FILE, not per exec (MEASURED)
