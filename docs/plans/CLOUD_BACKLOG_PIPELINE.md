@@ -30,7 +30,7 @@ read the history that justifies the exclusions. W1 is a local dispatched session
 |---|---|---|---|
 | **W1 · venue producer** ✅ DONE | S (local) | something labels an item `venue=cloud\|local` against the VM's real constraints | — |
 | **W2 · management rails** | S | custody + wake + goal + auto-land for a cloud session | — (parallel with W1) |
-| **W3 · refusal loop** | S | a land refusal routes back to the session that caused it | W2 |
+| **W3 · refusal loop** ✅ DONE | S (local) | a land refusal routes back to the session that caused it | W2 |
 | **W4 · cost A/B** | S | the same brief run local vs cloud, both arms measured | — (parallel) |
 
 W1 and W2 are independent (one decides *what* goes, the other manages *what came back*) and should
@@ -281,6 +281,117 @@ Write probes against the trunk ref (`git show origin/main:<path> | grep -q …`)
 a bare `grep -q X path` grades whatever happens to be checked out, and grep's exit 2 (no such file) is
 indistinguishable here from a real miss — so a probe can read NOT-MET over work that landed perfectly.
 
+---
+
+## 7 · W3 — the refusal loop, built and demonstrated live (2026-08-11)
+
+**§2's gap row 4 is closed: a gate refusal now reaches the machine that caused it.** W2 left the
+seam deliberately — it wrote `<id>.land-refused`, woke the originator, and stopped.
+`scripts/cloud-refusal-route.sh` is the other half: it reads that marker, decides who can actually
+clear the refusal, and sends the gate's OWN verdict text off-box over `cc-offload say`. No second
+refusal store, no second wake rail, no re-implementation of the land — `cloud-return`'s next pass
+still owns the re-land, so the circuit closes through machinery that already existed.
+
+| Gap | Closed by | Where the mechanism lives |
+|---|---|---|
+| 4 · refusals do not route back | `scripts/cloud-refusal-route.sh`, called from `autonomy-sweep.sh` one step AFTER the return pass | classification + routing only; the re-land is `cloud-return`'s next pass, unchanged |
+
+**Four rules, and each is a defect this repo had already paid for once.**
+
+1. **A land CUT by a bound is a NON-VERDICT** (`d079576e`). Recorded, never routed, and it spends
+   **no cycle** — otherwise a busy box exhausts a session's whole budget without one real refusal
+   ever being sent.
+2. **The identity wall is BY DESIGN** (§13.4-13.5) and must not enter the loop. The VM cannot change
+   who authored its commits, and the re-authoring land already answers it.
+3. **Fixable-by-VM is decided by asking whether the gate NAMED one of the VM's own files** — the set
+   derived from its own commits by W2's `fill-paths`, never "the most recent session". The search
+   runs in that direction on purpose: the naive form scrapes paths out of the verdict and convicts
+   `scripts/desk-land.sh`, which the lander's preamble names in every artifact ever written.
+4. **The default direction is HOME, never off-box.** A wrong VM route spends quota, hands a
+   confident brief to a machine that cannot act on it, and is discovered only by exhausting the
+   bound; a wrong originator route costs one ping. Uncertainty routes home.
+
+The cycle counter lives in `<id>.refusal-route`, not in the marker, because `cloud-return` writes
+the marker with `>` — a counter inside it would be reset by the very event it bounds and the loop
+would run forever reading `cycle 1` (memory: counter-resets-at-the-boundary-the-runaway-crosses).
+Bound: **2 VM cycles**, then the originator is woken with the chain PRINTED, never a silent loop
+and never a silent give-up. `--chain <id>` renders it on demand; `--classify <file>` is a pure read.
+
+### 7.1 · §5 clause 6, demonstrated on a real round trip
+
+`session_01HEudSuWY9hLk2Y5jqqX7Nr` on next3, branch `claude/fire-20260811T202615Z-68218-1`. The
+refusal was INDUCED (the brief asked for a probe suite that reads `$HOME`) but nothing about the
+loop was: a real lint, in the real land gate, refused a real push, and the VM fixed it.
+
+| step | evidence, timestamped |
+|---|---|
+| the VM pushed | `bc46a12` — the memo + `tests/w3-gate-probe.bats` |
+| a REAL gate refused | 20:51 · `test-hermeticity-lint: ⛔ 1 new non-hermetic suite(s)` → `✗ ship-land: GATE RED` → `cloud-reconcile` exit 70 → `<id>.land-refused` |
+| classified | `arm=vm`, `match=basename:w3-gate-probe.bats` — see the basename finding below |
+| routed off-box | 20:45:21 · `cc-offload say` → `verdict=cloud-queued reason=api-ok`, carrying the lint's own LEAK line **and its `Fix:` remedy** |
+| **the VM amended** | 20:46:17 (**56 s later**) · `e6c3569` *"fix(tests): fixture $HOME in the w3 gate probe setup"* — the diff is the lint's remedy verbatim: `export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"` |
+| the re-land succeeded | `9270197a8` + `67dca77aa` on `origin/main`, re-authored `Chris Ren <ren.chris@outlook.com>` |
+| content-verified | `docs/research/cloud-w3-refusal-loop-2026-08-11.md` blob `2c1aeed3` · `tests/w3-gate-probe.bats` blob `71a9c39b` (the FIXED tree) |
+| W2's rails closed out | `LANDED+VERIFIED on origin/main · goal: MET · discharged session_01HEudSuWY9hLk2Y5jqqX7Nr` |
+
+**No human read the log.** The only thing a person did between the refusal and the fix was run the
+router; the diagnosis, the remedy and the amend were the gate's text and the VM's own work.
+
+Two other live artifacts on this box exercised two more arms on real data rather than fixtures:
+W2's `rc=143` artifact classified **`cut`** (recorded, not routed), and its landed sibling
+classified **`STALE`**.
+
+### 7.2 · Three defects the hermetic suite could not produce, and the first two are one defect
+
+**A substring match on a bare TOKEN that the tooling also prints as VOCABULARY.** Both were live,
+both were invisible to 37 green hermetic cases, and one of them fired on the very first artifact.
+
+1. **`GATE-KILLED`.** `desk-land` surfaces an exit-code LEGEND on every non-zero ship rail —
+   `(2 dirty/preflight · … · 9 GATE-KILLED · 75 LOCK-STARVED)` — so the token is in the body of
+   every refusal there will ever be. The first real artifact, an ordinary hermeticity RED, was
+   classified `cut` and **not routed**: the loop would have been silently inert on precisely the
+   event it exists for. Anchored on the emitter, `ship-land: GATE-KILLED`.
+2. **`git-identity`.** `ship-land` prints `→ gate: git-identity escape ratchet (…)` as a PROGRESS
+   line whenever that arm RUNS, green or red. A bare match would have sent HOME every refusal
+   raised by any LATER arm — utc-stamp, self-path, pane-spawn, permission-gate, bats, smoke — i.e.
+   most of the gate, while working correctly for the handful that run before it. Never triggered
+   live; found by reading the real artifact against the gate's own source. Anchored on
+   `gate: git-identity RED`.
+
+The remedy generalises past the two: **the fixtures now TRANSCRIBE the first real artifact** — the
+shared `preamble()` carries the git-identity progress line and `desk_tail()` carries the legend — so
+all four known traps ride in every body and a regression reds every arm rather than one.
+
+3. **A refusal can be TRUE about a tree the VM has already replaced.** A land takes minutes; a VM
+   answering a routed refusal pushes in about one. The second land fetched at bc46a12, the fix
+   reached origin at 20:46:17 as e6c3569, and the gate reported bc46a12's lint at 20:51:21 — same
+   file, same remedy, already applied. Routing it spends a cycle telling a machine to redo its own
+   work, and the second identical message is how a loop teaches its subject that the loop is noise.
+   Two guards, because the case has two shapes and each is blind to the other:
+   - **SUPERSEDED** — `cloud-return` now records `seen_sha=` (WHICH PUSH the gate judged) in the
+     artifact, so it is one comparison against the live sidecar rather than an inference. No cycle
+     spent. An artifact without the field is routed rather than held: absence is not evidence.
+   - **STALE by the LOCAL RE-AUTHORED REF** — the content arm needs a path set, and that is exactly
+     what is missing here: `fill-paths` derives from the branch's range against the trunk, which is
+     EMPTY once it lands, and a REFUSED land never wrote `paths=`. So the commonest stale refusal —
+     a losing concurrent land whose sibling already put the work on trunk, which is *what actually
+     happened* — was invisible to the guard.
+     ⚠️ **This is not §1's forbidden check.** That rule is about the sha the VM PUSHED, which never
+     lands because `cloud-reconcile` re-authors. `refs/heads/<branch>` in the declared repo is the
+     other object: the re-authored range the lander built and pushed, and the same ref `cc-cloud
+     fill-paths` uses to name its own already-landed cause.
+
+⚠️ **Two lands ran concurrently on one branch and that is how the work landed at all** — the one
+that fetched before the fix went RED, the one that fetched after landed it. It ended well by
+luck, not by design, and the losing land's refusal is what defect 3 exists to absorb. Whether
+`cloud-return`'s single-flight lock should also bar a second land of the SAME BRANCH is named here
+as open rather than assumed away: the lock is per-pass, and the `--id` path a person names bypasses
+nothing.
+
+**Coverage:** `tests/cloud-refusal-route.bats`, 46 hermetic cases — every routing arm paired with
+the control that must NOT route, over bodies differing only in the axis under test, plus four
+structural wiring arms (a hermetic suite cannot see whether anything CALLS the script it tests).
+
 ## Status log
 
 - **2026-08-11** — plan opened. Arm proven end-to-end (create + land + 4 items landed); pipeline
@@ -357,3 +468,34 @@ indistinguishable here from a real miss — so a probe can read NOT-MET over wor
   actuator would accept it — a cloud-labelled item on a box without the opt-in fires LOCALLY and
   the IDL records the unhonoured plan, rather than becoming a fire failure that strands exactly the
   work the producer routed.
+
+- **2026-08-11 — W3 LANDED. §5 clause 6 is met: a gate refusal reached the VM and the VM fixed it,
+  with no human reading a log.** Full account in §7. One real cloud session
+  (`session_01HEudSuWY9hLk2Y5jqqX7Nr`, next3): a real hermeticity lint refused the land, the
+  verdict was classified `arm=vm` and sent over `cc-offload say`, and **56 seconds later** the VM
+  pushed the lint's own remedy verbatim. Both files are content-verified on `origin/main`
+  (`9270197a8`, `67dca77aa`); `LANDED+VERIFIED · goal MET · custody discharged`.
+
+  **The finding worth carrying forward is that the suite was wrong in a way only a real producer
+  could show, twice, in the same way.** 37 green hermetic cases, and the FIRST real artifact was
+  misclassified: the classifier matched `GATE-KILLED` and `git-identity` as bare tokens, but
+  `desk-land` prints an exit-code LEGEND on every failure and `ship-land` prints
+  `→ gate: git-identity escape ratchet` as a PROGRESS line. Both tokens are VOCABULARY, present in
+  bodies that mean the opposite. The first would have made the loop silently inert on the exact
+  event it exists for; the second would have sent home every refusal raised by any arm after
+  git-identity — most of the gate. The fixtures now TRANSCRIBE the real artifact so all four known
+  traps ride in every test body (§13.5's lesson, met from the inside one layer up).
+
+  A third defect followed from the timing rather than the text: **a refusal can be TRUE about a
+  tree the VM has already replaced.** A land takes minutes, a VM answers in about one, and the
+  losing half of a concurrent land filed a refusal naming a file the VM had already fixed. Guarded
+  two ways (`seen_sha=` supersession, recorded by `cloud-return`; staleness by the LOCAL
+  re-authored ref, which is the one available when a refused land left `paths=` empty).
+
+  Named as open, not assumed away: two lands ran concurrently on one branch and it ended well by
+  luck. Whether the return path should bar a second land of the SAME branch is §7.2's open item.
+
+  Coverage: `tests/cloud-refusal-route.bats`, 46 cases. Wiring: `autonomy-sweep.sh` calls the router
+  one step AFTER the return pass (which is what files the artifact) and above the nothing-new early
+  exit, under the same deployed-copy guard — stricter here, because this one hands a real VM a
+  brief it will act on.
