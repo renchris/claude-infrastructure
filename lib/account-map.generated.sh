@@ -12,7 +12,7 @@ cc_acct_dir_for_name() {
   CC_ACCT_IS_FABLE=0
   CC_ACCT_DIR=""
   case "$1" in
-    next|claude1) CC_ACCT_DIR="$HOME/.claude-next" ;;
+    next|claude) CC_ACCT_DIR="$HOME/.claude-next" ;;
     fable) CC_ACCT_IS_FABLE=1; CC_ACCT_DIR="$HOME/.claude-next" ;;
     next4|claude4) CC_ACCT_DIR="$HOME/.claude-quaternary" ;;
     fable4) CC_ACCT_IS_FABLE=1; CC_ACCT_DIR="$HOME/.claude-quaternary" ;;
@@ -32,7 +32,7 @@ cc_acct_dir_for_name() {
 # shell does not define.
 cc_acct_launcher_for_name() {
   case "$1" in
-    next) echo "claude1" ;;
+    next) echo "claude" ;;
     next4) echo "claude4" ;;
     next3) echo "claude3" ;;
     next2) echo "claude2" ;;
