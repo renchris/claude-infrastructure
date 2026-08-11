@@ -170,20 +170,35 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   [ "$(jq -r 'select(.gate=="capacity-admit") | .basis' "$BATS_TEST_TMPDIR/iso-idl.jsonl")" = "absent" ]
 }
 
-@test "25 reso-resume-one is UNGATEABLE in its own body — and the residue is stated, not hidden" {
-  # §12.1 lists it as a bypass path. It is not in any git repository (an untracked file under
-  # ~/.reso/bin), so nothing this repo can land or verify reaches its body. Every IN-REPO
-  # invocation goes through boot-resume-launch.sh, which case 21 pins as gated.
-  if [ -e "$REAL_HOME/.reso/bin/reso-resume-one" ]; then   # the live file, deliberately — see setup()
-    run git -C "$REAL_HOME/.reso" rev-parse --show-toplevel
-    [ "$status" -ne 0 ]     # confirms the premise: still untracked, still unlandable
-  fi
-  # the only in-repo caller, and it is the gated one
+@test "25 reso-resume-one is UNGATED in its own body — and the residue is stated, not hidden" {
+  # §12.1 lists it as a bypass path. Every IN-REPO invocation goes through boot-resume-launch.sh,
+  # which case 21 pins as gated; the engine's own body carries no capacity term.
+  #
+  # THE PREMISE MOVED UNDER THIS CASE ON 2026-08-10. It used to read "UNGATEABLE … not in any git
+  # repository", and that reasoning died the moment 5c38ad5a tracked the engine at bin/ precisely
+  # so that fixes would reach it. The case then failed for a reason that had nothing to do with its
+  # subject — the file census counted the ENGINE as a caller of itself — and it blocked every land
+  # in the repo, including diffs that never touched it. Restated to what is now measurable.
+  #
+  # WHAT IS NOT BEING LAUNDERED: the engine is tracked AND still ungated, which is unchanged in
+  # substance (it was never gated) but is now FIXABLE, so it is filed rather than accepted —
+  # backlog "gate bin/reso-resume-one in its own body". This case asserts today's truth and will
+  # redden the moment that lands, which is when it should be rewritten to assert the gate.
+  [ -f "$REPO/bin/reso-resume-one" ] \
+    || skip "the engine is not in this tree — nothing to make a claim about"
+  run grep -cE 'cc_capacity_admit|capacity-admit' "$REPO/bin/reso-resume-one"
+  [ "$output" = "0" ] \
+    || { echo "the engine now carries a capacity term — rewrite this case to ASSERT the gate"; false; }
+
+  # The invocation census: which OTHER in-repo files reach it. The engine itself is the subject,
+  # not a caller, so it is excluded by name alongside the three limit-recover files that only
+  # mention it in prose.
   callers="$(grep -rlE '^[^#]*(RESUME_ONE|reso-resume-one)' "$REPO/scripts" "$REPO/bin" 2>/dev/null \
-             | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py' || true)"
-  [ "$callers" = "$REPO/scripts/boot-resume-launch.sh" ]
+             | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one' || true)"
+  [ "$callers" = "$REPO/scripts/boot-resume-launch.sh" ] \
+    || { echo "a NEW in-repo invoker appeared, and it is not the gated launcher: $callers"; false; }
   # and the limitation must be written where the next reader looks, not left to be re-discovered
-  grep -q 'NOT IN ANY GIT REPOSITORY' "$REPO/scripts/boot-resume-launch.sh"
+  grep -q 'UNGATED IN ITS OWN BODY' "$REPO/scripts/boot-resume-launch.sh"
 }
 
 @test "26 TERM PARITY — ONE literal per term, so the ceilings CANNOT drift (not merely 'do not')" {

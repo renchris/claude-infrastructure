@@ -219,12 +219,17 @@ if [ ! -x "$RESUME_ONE" ]; then
 fi
 
 # ── MACHINE-CAPACITY ADMISSION — the reso-resume-one seam (MACHINE_CAPACITY_V2 §12.1/§12.4). ───
-# §12.1's bypass table lists `~/.reso/bin/reso-resume-one` as an ungated spawn path. That file is
-# NOT IN ANY GIT REPOSITORY — `git -C ~/.reso rev-parse` fails, it is an untracked 2026-07-05 file
-# on disk — so it cannot be gated in its own body by anything this repo can land or verify. Its
-# every in-repo invocation goes through THIS line, so this is where the term can bind and stay
-# landed. Direct hand-invocations of `reso-resume-one` remain uncovered by construction; that
-# residue is stated in §12.1 rather than papered over here.
+# §12.1's bypass table lists `reso-resume-one` as an ungated spawn path — UNGATED IN ITS OWN BODY.
+# Every in-repo invocation goes through THIS line, so this is where the term binds. Direct
+# hand-invocations of the engine remain uncovered; that residue is stated in §12.1, not papered
+# over here.
+#
+# WHY THIS NO LONGER SAYS "UNGATEABLE" (2026-08-10). It used to argue the engine COULD not be gated
+# in its own body because it was not in any git repository — an untracked file under ~/.reso/bin, so
+# nothing this repo could land would reach it. `5c38ad5a` then tracked it at `bin/reso-resume-one`
+# for exactly that reason, which retired the argument without retiring the sentence. The gap is now
+# fixable and is filed ("gate bin/reso-resume-one in its own body"); until it lands, the honest
+# claim is ungated-in-body, not ungateable.
 #
 # PLACEMENT. After the `--dry-run` return above (a dry run prints a command and spawns nothing —
 # gating it would refuse an inspection) and after the RESUME_ONE executability check (a resume with
