@@ -194,6 +194,107 @@ json_escape() {
     | awk 'BEGIN{ORS=""} {if(NR>1) print "\\n"; print}'
 }
 
+# ── the READ side of json_escape (one implementation, five consumers) ───────────────────
+# json_escape above is correct, and for a while nothing on the read path was: every consumer
+# pulled fields back out with `"key":"\([^"]*\)"`. A character class cannot see `\"` — it
+# stops at the FIRST escaped quote — and nothing reversed the escaping, so
+#
+#     cc-bus post beta 'he said "hi" then left'
+#     stored:     {...,"body":"he said \"hi\" then left"}     ← correct
+#     delivered:  he said \                                    ← truncated, still escaped
+#
+# A writer that escapes and a reader that does not unescape is not "mostly fine": the bus
+# silently corrupts exactly the payloads worth sending across a box boundary (a diff, a shell
+# line, a JSON blob, a quoted error message). So the decode lives ONCE, here, as awk source
+# shared by every consumer — the alternative is five regexes drifting apart, which is how the
+# bug got in. No `jq`: cc-bus has no dependency today and a bus that needs one is a bus a
+# cloud clone cannot run.
+#
+#   jfield(line,key) → the DECODED string value ("" if absent)
+#   jnum(line,key)   → the numeric literal      ("" if absent)
+#   jesc(s)          → s, escaped for re-emission into JSON (the inverse of jfield)
+#
+# Field lookup anchors on `{` or `,` before the key, so an attacker-controlled value that
+# CONTAINS a field-shaped substring cannot shadow the real field — and because `body` is
+# always emitted LAST, the first anchored match is always the genuine one.
+JSON_AWK_LIB='
+function _jhex(h,   v, i, c, d) {
+  v = 0
+  for (i = 1; i <= 4; i++) {
+    c = tolower(substr(h, i, 1))
+    d = index("0123456789abcdef", c) - 1
+    if (d < 0) return "\\u" h
+    v = v * 16 + d
+  }
+  if (v == 10) return "\n"
+  if (v == 9)  return "\t"
+  if (v == 13) return "\r"
+  if (v >= 32 && v < 127) return sprintf("%c", v)
+  return "\\u" h          # non-ASCII: pass through rather than emit a broken byte
+}
+function _jseek(line, pat,   base, pos, c) {
+  base = 0
+  while (1) {
+    pos = index(substr(line, base + 1), pat)
+    if (pos == 0) return 0
+    pos += base
+    if (pos == 1) return pos
+    c = substr(line, pos - 1, 1)
+    if (c == "{" || c == ",") return pos
+    base = pos
+  }
+}
+function jfield(line, key,   pat, pos, i, n, c, out) {
+  pat = "\"" key "\":\""
+  pos = _jseek(line, pat)
+  if (pos == 0) return ""
+  i = pos + length(pat); n = length(line); out = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (c == "\"") break
+    if (c == "\\") {
+      i++; c = substr(line, i, 1)
+      if      (c == "n") out = out "\n"
+      else if (c == "t") out = out "\t"
+      else if (c == "r") out = out "\r"
+      else if (c == "b") out = out sprintf("%c", 8)
+      else if (c == "f") out = out sprintf("%c", 12)
+      else if (c == "u") { out = out _jhex(substr(line, i + 1, 4)); i += 4 }
+      else out = out c
+      i++
+      continue
+    }
+    out = out c; i++
+  }
+  return out
+}
+function jnum(line, key,   pat, pos, i, n, c, out) {
+  pat = "\"" key "\":"
+  pos = _jseek(line, pat)
+  if (pos == 0) return ""
+  i = pos + length(pat); n = length(line); out = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (c !~ /[-+0-9.eE]/) break
+    out = out c; i++
+  }
+  return out
+}
+function jesc(s,   i, n, c, out) {
+  n = length(s); out = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if      (c == "\\") out = out "\\\\"
+    else if (c == "\"") out = out "\\\""
+    else if (c == "\n") out = out "\\n"
+    else if (c == "\t") out = out "\\t"
+    else if (c == "\r") out = out "\\r"
+    else out = out c
+  }
+  return out
+}
+'
+
 next_seq() {
   # One more than the highest seq this actor has already written. The shard is the only
   # source — no counter file to drift out of step with the records it counts.
@@ -311,10 +412,18 @@ fold_sorted() {
 }
 
 json_field() {
-  # json_field <line> <key> → value, or empty. Strings only; adequate for this schema
-  # because every field cc-bus writes is a string except v/seq.
-  printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
+  # json_field <line> <key> → the DECODED string value, or empty. Escape-aware in both
+  # directions (see JSON_AWK_LIB): the value that comes out is byte-for-byte the value the
+  # caller passed to `emit`, quotes/backslashes/newlines included.
+  printf '%s' "$1" | awk -v k="$2" "$JSON_AWK_LIB"'{ printf "%s", jfield($0, k) }'
 }
+
+# The two `seq` reads stay on sed (cmd_inbox, cmd_drain) and that is deliberate, not an
+# oversight: `seq` is a NUMBER, so no unescaping is owed, and the greedy `.*` that would
+# otherwise pick a later match cannot be steered — reaching a second `"seq":` on the line
+# needs an UNESCAPED quote inside a value, which json_escape makes unreachable by
+# construction. jnum() exists in the lib for a consumer that needs it; adding one here would
+# be a change no test could turn red.
 
 cmd_fold() {
   local kind="" actor="" as_json=0
@@ -366,8 +475,8 @@ cmd_inbox() {
 
   # Acked ids, gathered across ALL shards: an ack is a record like any other, so a peer
   # acking on another box is visible here after a sync.
-  local acked; acked="$(fold_sorted | awk '/"kind":"ack"/' \
-      | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | sort -u)"
+  local acked; acked="$(fold_sorted | awk "$JSON_AWK_LIB"'
+      /"kind":"ack"/ { v = jfield($0, "ref"); if (v != "") print v }' | sort -u)"
 
   local line to id n=0
   while IFS= read -r line; do
@@ -415,25 +524,24 @@ cmd_work() {
   local as_json=0
   [ "${1:-}" = "--json" ] && as_json=1
   # Fold: last transition wins, exactly as cc-backlog defines it.
-  fold_sorted | awk -v json="$as_json" '
-    function f(line, key,   r) { r=""
-      if (match(line, "\"" key "\":\"[^\"]*\"")) {
-        r = substr(line, RSTART + length(key) + 4, RLENGTH - length(key) - 5) }
-      return r }
+  fold_sorted | awk -v json="$as_json" "$JSON_AWK_LIB"'
     {
-      k = f($0,"kind"); if (k != "claim" && k != "done" && k != "release") next
-      it = f($0,"item"); if (it == "") next
-      status[it] = k; holder[it] = f($0,"actor"); ts[it] = f($0,"ts")
-      if (k == "done") ev[it] = f($0,"evidence")
+      k = jfield($0,"kind"); if (k != "claim" && k != "done" && k != "release") next
+      it = jfield($0,"item"); if (it == "") next
+      status[it] = k; holder[it] = jfield($0,"actor"); ts[it] = jfield($0,"ts")
+      if (k == "done") ev[it] = jfield($0,"evidence")
       order[it] = order[it] ? order[it] : ++n
     }
     END {
       if (n == 0) { print "cc-bus: no work records on the bus yet" > "/dev/stderr"; exit 0 }
       for (it in status) {
         st = status[it]; st = (st == "claim" ? "claimed" : (st == "done" ? "done" : "open"))
+        # --json re-emits DECODED values, so every one of them goes back through jesc().
+        # Interpolating a raw value here is how a hostile evidence string used to produce
+        # output that no JSON parser would accept.
         if (json)
           printf "{\"item\":\"%s\",\"status\":\"%s\",\"actor\":\"%s\",\"ts\":\"%s\",\"evidence\":\"%s\"}\n",
-                 it, st, holder[it], ts[it], ev[it]
+                 jesc(it), st, jesc(holder[it]), jesc(ts[it]), jesc(ev[it])
         else
           printf "%-14s %-8s %-22s %s %s\n", it, st, holder[it], ts[it], ev[it]
       }
@@ -454,18 +562,14 @@ cmd_hello() {
 cmd_actors() {
   local as_json=0
   [ "${1:-}" = "--json" ] && as_json=1
-  fold_sorted | awk -v json="$as_json" '
-    function f(line, key,   r) { r=""
-      if (match(line, "\"" key "\":\"[^\"]*\"")) {
-        r = substr(line, RSTART + length(key) + 4, RLENGTH - length(key) - 5) }
-      return r }
-    { a = f($0,"actor"); if (a=="") next
-      last[a] = f($0,"ts"); cnt[a]++
-      if (f($0,"kind") == "hello") note[a] = f($0,"note") }
+  fold_sorted | awk -v json="$as_json" "$JSON_AWK_LIB"'
+    { a = jfield($0,"actor"); if (a=="") next
+      last[a] = jfield($0,"ts"); cnt[a]++
+      if (jfield($0,"kind") == "hello") note[a] = jfield($0,"note") }
     END {
       if (length(last) == 0) { print "cc-bus: no actors on the bus yet" > "/dev/stderr"; exit 0 }
       for (a in last)
-        if (json) printf "{\"actor\":\"%s\",\"lastSeen\":\"%s\",\"records\":%d,\"note\":\"%s\"}\n", a, last[a], cnt[a], note[a]
+        if (json) printf "{\"actor\":\"%s\",\"lastSeen\":\"%s\",\"records\":%d,\"note\":\"%s\"}\n", jesc(a), jesc(last[a]), cnt[a], jesc(note[a])
         else      printf "%-22s last-seen %s  records %-4d %s\n", a, last[a], cnt[a], note[a]
     }' | sort
 }
