@@ -90,11 +90,28 @@ _cc_route_config_dir() {
 # `source` line ever; the original body is preserved byte-for-byte so the change is reversible by
 # deleting that line; and no sed ever runs against the operator's live shell config.
 #
-# Must be sourced AFTER ~/.zshrc defines claude(). Idempotent — re-sourcing is a no-op.
+# Must be sourced AFTER ~/.zshrc defines claude(). Sourcing the LIB twice is a no-op; a re-source of
+# the RC — which redefines claude() in between — RE-ARMS.
 _cc_install_router() {
   emulate -L zsh
-  (( ${+functions[claude]} ))         || return 0   # nothing to wrap yet
-  (( ${+functions[_claude_pinned]} )) && return 0   # already installed
+  (( ${+functions[claude]} )) || return 0           # nothing to wrap yet
+  # 🚨 GUARD ON THE LIVE BODY, NEVER ON `_claude_pinned` MERELY EXISTING. ~/.zshrc:451 redefines
+  # claude() every time the rc is sourced, and the activation script's own closing line tells the
+  # operator to `source $ZSHRC`. The old guard read "_claude_pinned exists ⇒ installed", which is
+  # true forever after the first source — so every later re-source left the RAW pinned body in
+  # place with the router silently gone, permanently, for that shell. Measured on the real rc:
+  # `functions claude | grep -c _CC_ROUTED_DIR` → 2 before a re-source, 0 after. And silently gone
+  # is indistinguishable from "the router legitimately chose account 1", which is the exact
+  # dark-feature failure the :121 fallback notice was written to prevent.
+  #
+  # The marker is _CC_ROUTED_DIR because it is LOAD-BEARING — the routing branch cannot exist
+  # without it — so the marker cannot rot away from the thing it certifies, the way a decorative
+  # one deleted or left behind by an edit would. It has to be code, not a comment: zsh strips
+  # comments from stored function bodies, so a comment marker is invisible to this test.
+  [[ "${functions[claude]}" == *_CC_ROUTED_DIR* ]] && return 0
+  # Re-snapshot from the LIVE body. `claude1` calls this copy forever, so taking it once at first
+  # source froze it: after any rc edit + re-source, claude1 ran the OLD launcher — different binary,
+  # model and effort — while claude2/3/4, which call claude(), ran the new one, silently.
   functions[_claude_pinned]="${functions[claude]}"
 
   claude() {
