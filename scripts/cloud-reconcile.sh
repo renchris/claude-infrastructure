@@ -335,11 +335,56 @@ msg_hook_refuses() {  # <repo> <msg-file> → 0 the repo's OWN commit-msg hook r
   return 0
 }
 
+add_trailers() {  # <repo> <msg-file> <orig-sha> <branch> <decl-id>
+  local -a ta=(--trailer "Original-commit: $3" --trailer "Original-branch: $4")
+  [ -n "$5" ] && ta=(--trailer "Cloud-session: $5" "${ta[@]}")
+  "$GIT_BIN" -C "$1" interpret-trailers --in-place "${ta[@]}" "$2" 2>/dev/null
+}
+
+strip_trailer_block() {  # <repo> <msg-file> → 0 the final paragraph WAS the trailer block, dropped
+  # A cloud VM writes its own attribution block — `Co-Authored-By: Claude …` and
+  # `Claude-Session: https://claude.ai/code/…` — and githooks/commit-msg blocks BOTH. So the text
+  # this rewrite must clear is usually not the text it added; it is inherited. That block is
+  # exactly what the provenance trailers above re-express in a form the hook allows (same session
+  # id, plus the original sha and branch), so dropping it loses nothing and is what the repo's
+  # primary control — settings.json `attribution.commit: ""` — would have done at write time.
+  #
+  # WHICH LINES ARE TRAILERS is git's question, answered by `git interpret-trailers --parse`; only
+  # the cut is ours. Re-deriving "is this an AI-authorship trailer" here would be a second copy of
+  # githooks/commit-msg's predicate, and the point of consulting the hook was to have exactly one.
+  local repo="$1" f="$2" nt
+  nt="$("$GIT_BIN" -C "$repo" interpret-trailers --parse < "$f" 2>/dev/null | grep -c .)" || nt=0
+  [ "${nt:-0}" -gt 0 ] || return 1
+  awk -v nt="$nt" '
+    { line[NR] = $0 }
+    END {
+      # Find the last NON-blank line first. `git log --format=%B` ends the message with a blank
+      # line, so a naive "last blank line" scan lands on that terminator, measures an empty final
+      # paragraph, and reports "no trailer block to drop" over a message that plainly has one —
+      # measured on a real VM commit before this had a second line.
+      tail = 0
+      for (i = NR; i >= 1; i--) if (line[i] !~ /^[[:space:]]*$/) { tail = i; break }
+      if (tail == 0) exit 1                 # nothing but blanks
+      last = 0
+      for (i = tail; i >= 1; i--) if (line[i] ~ /^[[:space:]]*$/) { last = i; break }
+      if (last == 0) exit 1                 # one paragraph only ⇒ no separable trailer block
+      n = 0
+      for (i = last + 1; i <= tail; i++) if (line[i] !~ /^[[:space:]]*$/) n++
+      if (n != nt) exit 1                   # the final paragraph is not exactly what git parsed
+      end = last - 1
+      while (end > 0 && line[end] ~ /^[[:space:]]*$/) end--
+      if (end == 0) exit 1                  # the whole message IS the trailer block — never empty it
+      for (i = 1; i <= end; i++) print line[i]
+    }
+  ' "$f" > "$f.stripped" 2>/dev/null || { rm -f "$f.stripped"; return 1; }
+  mv "$f.stripped" "$f" 2>/dev/null || { rm -f "$f.stripped"; return 1; }
+  return 0
+}
+
 REAUTH_DETAIL=""
 reauthor_branch() {  # <repo> <trunk-ref> <branch> <decl-id> → 0 ok (rewritten OR not needed) · 1 no
   local repo="$1" trunk="$2" b="$3" id="$4"
-  local want base sha ae ce tree new f n=0 total=0 date
-  local -a ta=()
+  local want base sha ae ce tree new f n=0 total=0 stripped=0 date
   REAUTH_DETAIL=""
 
   want="$(git_ident_email "$repo")" || want=""
@@ -392,15 +437,25 @@ EOF
       REAUTH_DETAIL="could not read the commit message of $sha."
       rm -f "$f"; return 1
     fi
-    ta=(--trailer "Original-commit: $sha" --trailer "Original-branch: $b")
-    [ -n "$id" ] && ta=(--trailer "Cloud-session: $id" "${ta[@]}")
-    if ! "$GIT_BIN" -C "$repo" interpret-trailers --in-place "${ta[@]}" "$f" 2>/dev/null; then
+    if ! add_trailers "$repo" "$f" "$sha" "$b" "$id"; then
       REAUTH_DETAIL="could not append the provenance trailers to the message of $sha."
       rm -f "$f"; return 1
     fi
+    # ONE retry, and only on a refusal: drop the message's INHERITED trailer block and re-compose.
+    # Unconditional stripping would throw away a trailer nothing objected to; the hook objecting is
+    # the evidence that the block is the machine attribution this repo does not keep.
     if msg_hook_refuses "$repo" "$f"; then
-      REAUTH_DETAIL="this repo's OWN commit-msg hook REFUSES the message this rewrite composed for $sha — the trailers carry something it blocks (an AI-authorship trailer such as \`Co-authored-by: Claude\` is the case it exists for). NOTHING was written; fix the trailers, not the hook."
-      rm -f "$f"; return 1
+      if ! "$GIT_BIN" -C "$repo" log -1 --format=%B "$sha" > "$f" 2>/dev/null \
+         || ! strip_trailer_block "$repo" "$f" \
+         || ! add_trailers "$repo" "$f" "$sha" "$b" "$id"; then
+        REAUTH_DETAIL="this repo's OWN commit-msg hook REFUSES the message of $sha and there is no trailer block to drop, so what it blocks is in the SUBJECT or BODY the VM wrote. This rewrite re-attributes authorship; it does NOT edit what a commit says. Fix the message at the source and re-push."
+        rm -f "$f"; return 1
+      fi
+      if msg_hook_refuses "$repo" "$f"; then
+        REAUTH_DETAIL="this repo's OWN commit-msg hook still REFUSES the message of $sha after its inherited trailer block was dropped, so what it blocks is in the SUBJECT or BODY the VM wrote — not in a trailer. This rewrite re-attributes authorship; it does NOT edit what a commit says. Fix the message at the source and re-push."
+        rm -f "$f"; return 1
+      fi
+      stripped=$((stripped + 1))
     fi
     date="$("$GIT_BIN" -C "$repo" log -1 --format=%aI "$sha" 2>/dev/null)" || date=""
     new="$(GIT_AUTHOR_DATE="$date" "$GIT_BIN" -C "$repo" commit-tree "$tree" -p "$new" -F "$f" 2>/dev/null)" || new=""
@@ -423,6 +478,7 @@ EOF
     return 1
   fi
   REAUTH_DETAIL="re-authored $total commit(s) as <$want> ($n of them were unattributable); provenance in Cloud-session / Original-commit / Original-branch trailers, and '$REMOTE' still holds the originals."
+  [ "$stripped" -gt 0 ] && REAUTH_DETAIL="$REAUTH_DETAIL On $stripped of them the VM's OWN attribution trailer block was dropped — this repo's commit-msg hook refused it — and the provenance trailers re-express it in a form the hook allows."
   return 0
 }
 
