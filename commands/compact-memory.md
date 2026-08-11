@@ -486,6 +486,58 @@ Consequences for how you run this command:
   forward-references. A sibling appended one entry mid-pass and was folded in, not clobbered — the
   compare-and-swap on the file's md5 is what proves it (fifth consecutive pass to observe a
   concurrent write).
+- **This pass (2026-08-11), for the record — and it started at FITS = 0.** Backlog
+  `cf6eb3e47b12`, filed quoting *22.5 KB*. Re-measured at intake: **24,879 B / 123 entries,
+  headroom 106 B** — 2.4 KB above the size the item named and **one append from the loader dropping
+  its newest lines**, the closest to the cliff any recorded pass has begun. The band behaviour
+  documented in the SCOPE CORRECTION above reproduced exactly: `cc-memory-rotate --dry-run` returned
+  `verdict=exhausted size=24879` and moved **0** (`tail=15 type=76 hub=9 young=22 marker=1
+  min_keep=40`), so the machine was holding nothing back and the lever was in fact ours. Three-state
+  check re-derived: budget `(22,485 − 610 fixed − 9,803 prefix)/123` = **98 B** vs hook avg
+  **117.6 B**, with **112 of 123** lines over ⇒ **LENGTH binds**, 2,463 B of excess against 2,394 B
+  needed — i.e. the only available lever cleared the target by 69 B on paper. Lever: 118 hand-authored
+  rewrites + 74 retitles, **24,879 → 21,450 B, headroom 106 → 3,535 B** (1,035 B past the done
+  target, so the index header comment was left untouched rather than ground for its last ~300 B).
+  123/123 entries kept, 0 hooks grew, 0 severed rules, 0 dangling. SAFE-AUTO a legitimate no-op on
+  all five sweeps, positive control passing. The audit was run **6-way in parallel**, one shard of
+  ~21 entries per agent, each writing only to its own topic files while the lead held `MEMORY.md`
+  exclusively — no shard shares a topic file, so there is no owner conflict.
+  ⚠️ **First pass in six to observe NO concurrent write** — the md5 CAS held end-to-end. Recorded as
+  the measurement it is, not as a change in the mechanism: the four prior passes' rule stands and the
+  CAS is why this one is checkable at all.
+  ⚠️ **The `--condition` fix has actuated.** This item was minted `condition=memory-index-over-budget`
+  with the size left in `--title`, exactly as the RE-INFLATION bullet prescribes — so the 21-duplicate
+  re-keying defect is closed at the producer. The title still hands a reader *"compact to <17.1KB"*,
+  which remains product-side and unreachable (~67 B/entry at this N); read it as the measurement it
+  is and budget against 24,985 B.
+
+🚨 **A CORRECTION that landed in the topic file and never reached the index is invisible to BOTH
+detectors — and it leaves a refuted rule on the auto-loaded surface.** The audit above is
+directional: it asks *"does the hook state a fact the topic file lacks?"* This pass found the
+inverse, and neither detector can see it. `reference-claude-accounts-tooling`'s index hook read
+*"`refreshTokenExpiresAt` anchors to the last /login; no refresh extends it"* while its topic file's
+**MECHANISM CORRECTED 2026-08-04** section says the binary recomputes the field on *every* refresh —
+a refresh rewrites the cliff and can never advance it, so **only a new grant moves it**, and a grant
+can be dead long before its cliff (next2 answered `400` for 95 minutes at `login_expires_h` 674.6).
+Every hard token in the hook is *present* in the file — the file quotes the refuted mechanism in
+order to correct it — so token-matching passes, and clause coverage passes for the same reason. The
+line survived **7 days** as a wrong rule every session loaded. **Sweep it directly: when a topic
+file carries a `CORRECTED` / `SUPERSEDED` / `REFUTED` marker, diff the index hook against the text
+BELOW that marker, not against the file as a whole.** Cheap, and it is the only check that runs in
+this direction. Same family as the "index can be WRONG, not merely bloated" finding, but sharper:
+there the index was stale on its own, here the correction existed and simply never propagated
+([[work-item-remedy-can-become-forbidden]] is the symptom/remedy version of the same rot).
+
+⚠️ **A hard-token detector that normalizes by stripping punctuation cannot check a PURE-punctuation
+token** — it normalizes to the empty string, matches nothing, and auto-flags. **5 of this pass's 8
+finished-file flags were that class** (`` `*)` ``, `` `$(` ``, `` `$!` ``, `` `;` ``, `` `&&` ``), all
+five literally present in their topic files, and they cluster precisely on shell-operator rules —
+the hooks whose one backticked token IS the whole rule. Check any token with no alphanumerics with a
+literal `grep -F` *before* normalizing. Same shape as the documented multi-word-span over-flag:
+**the detector's own preprocessing decides which facts it is structurally unable to verify.** The
+remaining 3 flags were inflection (`ADVISE`/advisory, `ACCUMULATES`/accumulator, `SKIPPED`/skips) —
+so **0 real index-only facts**, and the fifth consecutive pass in which the second detector pass
+carried the entire verdict.
 
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
