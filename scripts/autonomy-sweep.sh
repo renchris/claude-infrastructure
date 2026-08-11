@@ -553,11 +553,15 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
 # that gate would run it only on sweeps that already had other news, i.e. never on the quiet fleet
 # where the work is actually sitting.
 #
-# THE BOUND IS 240 s, UNDER THIS JOB'S OWN 300 s CADENCE, and that is deliberate rather than
-# generous: a land can outlast a sweep, so the pass is single-flight (it takes a lock and a second
-# pass exits 4) and idempotent (a killed run resumes on the next tick). A bound that exceeded the
-# cadence would let two passes overlap on the same branch, which is the one thing the lock exists
-# to prevent.
+# 🚨 THE BOUND MUST FIT A LAND, AND 240 s DID NOT. This shipped at 240 s "to stay under the 300 s
+# cadence", which sounded disciplined and was exactly backwards: `ship-land` runs the full gate and
+# takes minutes (592 s worst case on record), so the bound cut a healthy land at 240 s and the
+# return path filed the SIGTERM as a gate refusal — a bound smaller than what it bounds can only
+# convict (memory: exoneration-bound-must-fit-what-it-bounds). It is now 900 s, sized to the thing
+# it actually bounds. Overlap is not the hazard the old comment imagined: launchd does not stack a
+# second instance of a running job, and the pass is single-flight (lock, exit 4) and idempotent, so
+# a long land simply means fewer sweeps while it runs. The return path also now abstains on
+# 124/137/143 rather than convicting, so even a cut leaves no false artifact.
 #
 # rc is CAPTURED, never `|| true`: 0 = the pass completed, 4 = another pass held the lock (normal,
 # not a fault), 124 = the bound cut a land mid-flight (the next tick resumes it), anything else is a
@@ -588,13 +592,13 @@ esac
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudret_rc="skipped-not-deployed"
 elif [ -x "$_cloudret" ]; then
-  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 240 bash "$_cloudret" --sweep >/dev/null 2>&1
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 900 bash "$_cloudret" --sweep >/dev/null 2>&1
   else bash "$_cloudret" --sweep >/dev/null 2>&1; fi
   _cloudret_rc=$?
 fi
 log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
   '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = bound cut it, next tick resumes; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
