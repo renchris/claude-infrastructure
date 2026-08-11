@@ -296,15 +296,38 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
     }'
 }
 
+# ── the executable-name table: the ONE place a process is named ───────────────────────────────────
+# → "<pid> <ppid> <rss_kb> <exe_basename>" for EVERY process. Three consumers — the census, the
+# actuator's cohort test, and the parent-breaker's protection list — so "is this thing node" is
+# decided once, here, and never re-spelled per caller.
+#
+# WHY THE COMM MUST BE REBUILT TO END-OF-LINE. `ps -o comm=` prints the executable's FULL path, and
+# on this box node lives at `…/Library/Application Support/fnm/node-versions/…/bin/node`. `$4` is one
+# WHITESPACE-split field, so that path's basename read `Application`, failed `^node`, and the row was
+# dropped — census n=0 while 12,105 of 55,631 rows were node (docs/research/
+# mcp-memory-groundup-2026-08-10/01-census-trees.md §7 item 5). Rebuilding $4..NF is exact HERE and
+# only here, because `comm=` is the LAST column in this read and nothing follows it to swallow.
+#
+# WHY THE BASENAME'S SPACES BECOME UNDERSCORES. A basename can itself contain spaces (`Razer
+# Elevation Service`, 41 of 1224 live rows). Emitting it raw would make this table's own 4th field
+# ambiguous for every consumer below — the same defect one layer down. `_` cannot appear in a name
+# this file tests for, so collapsing is lossless for every decision made on it.
+exe_table() {
+  ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null | awk '
+    $1 ~ /^[0-9]+$/ {
+      comm = $4; for (i = 5; i <= NF; i++) comm = comm " " $i
+      n = split(comm, p, "/"); base = p[n]
+      gsub(/[[:space:]]+/, "_", base)
+      print $1, $2, $3, base
+    }'
+}
+
 # ── node census (every CENSUS_EVERY ticks) ────────────────────────────────────────────────────────
 # → "<node_count> <orphans> <node_rss_mb>|<pid pid ...>". The pid list is what makes the actuator
 # able to say "new since 60 s ago" — the burst cohort — instead of stopping the whole fleet.
-# -ww because macOS ps truncates a column to its width, and a truncated comm silently drops matches.
 census() {
-  ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null | awk '
-    $1 ~ /^[0-9]+$/ {
-      n = split($4, p, "/"); base = p[n]
-      if (base !~ /^node/) next
+  exe_table | awk '
+    $4 ~ /^node/ {
       c++; rss += $3; if ($2 == 1) orph++
       pids = pids " " $1
     }
@@ -312,38 +335,70 @@ census() {
 }
 
 # ── actuator target selection ─────────────────────────────────────────────────────────────────────
-# stdin: `ps -axwwo pid=,ppid=,rss=,comm=,args=`. Prints "<pid> <rss_kb> <comm>" per line, capped.
+# stdin: `ps -axwwo pid=,ppid=,rss=,args=`; <exe_file> is one `exe_table` capture taken immediately
+# before it. Prints "<pid> <rss_kb> <exe_basename>" per line, capped.
 #
-# The ppid column is read by select_break_parents, not by this function, and it is in this stream
-# rather than a second `ps` on purpose: the two reads would be taken seconds apart in the middle of a
-# 300-processes-in-90-s churn, and a parent attributed from the later read can be a pid that was
-# already recycled. One table, one instant, both decisions.
+# WHY THE NAME COMES FROM A SECOND READ, when the comment this replaces insisted on one table.
+# `ps` gives a column its FULL value only when that column is LAST — measured 2026-08-11, in
+# `pid=,ppid=,rss=,comm=,args=` the comm column is truncated to a FIXED 16 characters
+# (`/Users/chrisren/`, `/Library/Applica`, `endpointsecurity` — all exactly 16). A basename is
+# therefore not merely space-split in that stream, it is ABSENT: every real node install is a path
+# longer than 16 characters, so `base` was `` or `bi` and the cohort test could match nothing but a
+# process whose comm was literally the short string `node`. argv[0] is no escape either — it carries
+# the same spaced path and splits identically. comm-last and args-last cannot both hold in one read,
+# so the split is drawn where it costs least:
+#   · ARGS stays last, so every exclusion below reads a complete argv. These are the safety rails;
+#     a truncated argv is how an operator's session gets frozen.
+#   · PARENTAGE stays in this one table too — that is what the old comment was really protecting
+#     (a ppid attributed from a later read can name a recycled pid), and select_break_parents still
+#     takes its ppid column from here.
+#   · Only the NAME comes from the adjacent read, and it can only ever REMOVE a process from the
+#     cohort: a pid that is stale by the time this table is read simply has no row here to select.
 #
 # Deliberately UNDER-inclusive: the cohort test is the EXECUTABLE NAME (comm basename ~ /^node/),
 # never the argv. Matching argv would sweep in any shell whose command line merely mentions node, and
 # the cost asymmetry is total — a missed worker costs one more tick of ramp, a wrongly-stopped
 # process costs the operator's session. For the same reason claude.exe/claude and anything
-# claude/mcp-shaped are excluded twice over (comm and args), even though the comm filter alone
+# claude/mcp-shaped are excluded twice over (name and args), even though the name filter alone
 # already excludes claude.exe.
-select_stop_targets() { # <prev_census_pids> <rss_floor_kb> <cap>
-  awk -v prev=" $1 " -v floor="$2" -v cap="$3" '
+#
+# THE MCP EXCLUSION IS A CLASS TEST, NOT A SPELLING. `args ~ /mcp/` was a substring denylist, and it
+# had never had to be right: with the cohort test blind, nothing reached it. Repairing the name
+# RE-ARMS this predicate against the whole live population at once, so it now matches mcp as a TOKEN
+# at any of the separators a real command line uses, plus the protocol's own full name — the class,
+# not the four spellings someone happened to think of (memory denylist-enumerates-spellings).
+#
+# THE RECYCLE GUARD. A second read is a second instant, and the hazard it opens is a pid that named
+# one process in the exe table and a different one here. Both tables carry PPID, so the two rows have
+# to agree on it before the name is believed; they are taken back-to-back, so a healthy process
+# agrees trivially, while the one case this exists for — a pid reused between the reads — has to
+# reproduce its predecessor's parent to get through. UNIDENTIFIABLE ⇒ NEVER ACTED ON is the polarity
+# throughout: absent from the exe table, or disagreeing with it, means not a target here (and, in
+# select_break_parents, PROTECTED — there the same ignorance means the claude/claude.exe name test
+# cannot be applied, so the only safe reading is that it might be one).
+select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
+  awk -v prev=" $2 " -v floor="$3" -v cap="$4" '
+    NR == FNR { if ($1 ~ /^[0-9]+$/) { base[$1] = $4; eppid[$1] = $2 } next }
     $1 ~ /^[0-9]+$/ {
-      pid = $1; rss = $3 + 0; comm = $4
-      args = ""; for (i = 5; i <= NF; i++) args = args " " $i
-      n = split(comm, p, "/"); base = p[n]
-      if (base !~ /^node/) next
-      if (base == "claude.exe" || base == "claude") next
-      if (args ~ /claude/ || args ~ /mcp/) next
+      pid = $1; rss = $3 + 0
+      args = ""; for (i = 4; i <= NF; i++) args = args " " $i
+      if (!(pid in base)) next                        # named by no exe_table row ⇒ never a target
+      if (eppid[pid] != $2) next                      # the two reads disagree on its parent ⇒ ditto
+      b = base[pid]
+      if (b !~ /^node/) next
+      if (b == "claude.exe" || b == "claude") next
+      if (args ~ /claude/) next
+      if (args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) next
       if (rss <= floor) next
       if (index(prev, " " pid " ") > 0) next          # present at the last census ⇒ not the burst
       if (++k > cap) exit
-      printf "%s %s %s\n", pid, rss, base
-    }'
+      printf "%s %s %s\n", pid, rss, b
+    }' "$1" -
 }
 
 # ── parent-breaker: the spawner is not in the cohort ──────────────────────────────────────────────
-# stdin: the SAME `ps -axwwo pid=,ppid=,rss=,comm=,args=` table the cohort was selected from.
-# Prints "<pid> <burst_children> <comm>" per eligible spawner, most children first, capped.
+# stdin: the SAME `ps -axwwo pid=,ppid=,rss=,args=` table the cohort was selected from, and the SAME
+# <exe_file>. Prints "<pid> <burst_children> <exe_basename>" per eligible spawner, ranked, capped.
 #
 # WHY A SPAWNER NEEDS ITS OWN SELECTOR. `select_stop_targets` is keyed on comm `^node`, and the
 # thing minting the horde is by observation NOT node-named — `next-server` on 08-09, a shell or a
@@ -375,14 +430,18 @@ select_stop_targets() { # <prev_census_pids> <rss_floor_kb> <cap>
 # Only pid → (comm, protected?) is retained, never argv: agent briefs travel in argv (memory
 # pgrep-f-matches-agent-briefs), so buffering the table's argv to answer a question about parentage
 # would make the instrument allocate in proportion to the fleet at the one moment memory is scarce.
-select_break_parents() { # <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>
-  awk -v cohort=" $1 " -v min="$2" -v cap="$3" -v self="$4" -v selfp="$5" '
+select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>
+  awk -v cohort=" $2 " -v min="$3" -v cap="$4" -v self="$5" -v selfp="$6" '
+    NR == FNR { if ($1 ~ /^[0-9]+$/) { ebase[$1] = $4; eppid[$1] = $2 } next }
     $1 ~ /^[0-9]+$/ {
-      pid = $1; ppid = $2; comm = $4
-      args = ""; for (i = 5; i <= NF; i++) args = args " " $i
-      n = split(comm, p, "/"); base = p[n]
+      pid = $1; ppid = $2
+      args = ""; for (i = 4; i <= NF; i++) args = args " " $i
+      named = (pid in ebase && eppid[pid] == ppid)
+      base = named ? ebase[pid] : "?"
       seen[pid] = 1; name[pid] = base
-      if (base == "claude.exe" || base == "claude" || args ~ /claude/ || args ~ /mcp/) protect[pid] = 1
+      if (!named) protect[pid] = 1                    # cannot apply the name test ⇒ assume it fails
+      if (base == "claude.exe" || base == "claude" || args ~ /claude/ \
+          || args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) protect[pid] = 1
       if (index(cohort, " " pid " ") > 0) kids[ppid]++
     }
     END {
@@ -413,7 +472,7 @@ select_break_parents() { # <cohort_pids> <min_children> <cap> <self_pid> <self_p
         t = cand[i]; cand[i] = cand[b]; cand[b] = t
         printf "%s %s %s\n", cand[i], kids[cand[i]], name[cand[i]]
       }
-    }'
+    }' "$1" -
 }
 
 # ── trip capture: rank first, then attribute ──────────────────────────────────────────────────────
@@ -795,12 +854,20 @@ while :; do
     snapshot_trip "$TS" "$WHY" "$HEAD_LINE"
     write_page "$TS" "$WHY" "$HEAD_LINE" "$ROW"
 
-    if [ "$ACT" = "stop" ]; then
+    if [ "$ACT" = "stop" ] || [ "$ACT" = "observe" ]; then
       STOPPED=0; PARENT_N=0; PARENT_STOPPED=0
-      # ONE `ps`, feeding both selections — see select_stop_targets' header for why a second read is
-      # not equivalent. Held in a variable rather than piped twice for the same reason.
-      PSTABLE="$(ps -axwwo pid=,ppid=,rss=,comm=,args= 2>/dev/null)"
-      TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
+      # OBSERVE runs the whole selection and signals nothing. It is the rung this actuator was
+      # supposed to have on 2026-08-09 and did not: `off` computes no selection at all, so the only
+      # way to learn what the predicate would touch was to arm it. Every later change to the
+      # predicate — this one included — gets a logged would-stop tick first.
+      [ "$ACT" = "observe" ] && ACTVERB="WOULD-STOP" || ACTVERB="SIGSTOP"
+      # TWO reads, back-to-back, and the split between them is load-bearing — select_stop_targets'
+      # header has the measurement. exe_table FIRST so the args table is the later instant: a pid
+      # that dies between them is simply absent from the table that selects.
+      EXEF="$(mktemp -t cc-sentinel-exe)"
+      exe_table > "$EXEF" 2>/dev/null || true
+      PSTABLE="$(ps -axwwo pid=,ppid=,rss=,args= 2>/dev/null)"
+      TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
       COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
 
@@ -810,13 +877,16 @@ while :; do
       # into the next 60 s cooldown. Stopping the parent first makes the cohort a closed set.
       if [ "$ACT_PARENT" = "on" ]; then
         PARENTS="$(printf '%s\n' "$PSTABLE" \
-                   | select_break_parents "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID")"
+                   | select_break_parents "$EXEF" "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID")"
         while read -r ppid pkids pcomm; do
           [ -n "$ppid" ] || continue
           PARENT_N=$((PARENT_N + 1))
-          if kill -STOP "$ppid" 2>/dev/null; then
+          if [ "$ACT" = "observe" ]; then
             PARENT_STOPPED=$((PARENT_STOPPED + 1))
-            printf 'SIGSTOP parent pid=%s kids=%s comm=%s\n' "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
+            printf '%s parent pid=%s kids=%s comm=%s\n' "$ACTVERB" "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
+          elif kill -STOP "$ppid" 2>/dev/null; then
+            PARENT_STOPPED=$((PARENT_STOPPED + 1))
+            printf '%s parent pid=%s kids=%s comm=%s\n' "$ACTVERB" "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
           fi
         done <<< "$PARENTS"
       fi
@@ -825,12 +895,17 @@ while :; do
         [ -n "$spid" ] || continue
         # SIGSTOP only. Never SIGKILL — we are the only actor above the kernel here (§4a: jetsam is
         # off and no_paging_space_action is untrippable by a fleet), so we must be the reversible one.
-        if kill -STOP "$spid" 2>/dev/null; then
+        if [ "$ACT" = "observe" ]; then
           STOPPED=$((STOPPED + 1))
-          printf 'SIGSTOP pid=%s rss_kb=%s comm=%s\n' "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
+          printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
+        elif kill -STOP "$spid" 2>/dev/null; then
+          STOPPED=$((STOPPED + 1))
+          printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
         fi
       done <<< "$TARGETS"
-      printf 'actuator: SIGSTOPped %s process(es) (cap %s, floor %s kB)\n' \
+      rm -f "$EXEF" 2>/dev/null || true
+      printf 'actuator: %s %s process(es) (cap %s, floor %s kB)\n' \
+        "$([ "$ACT" = observe ] && echo 'WOULD have SIGSTOPped' || echo SIGSTOPped)" \
         "$STOPPED" "$ACT_CAP" "$ACT_RSS_KB" >> "$SNAP" 2>/dev/null || true
       # A verdict on EVERY armed trip, including the negative one. A mechanism that prints nothing
       # when it finds nothing is indistinguishable in the log from a mechanism that is not wired.
