@@ -3342,6 +3342,13 @@ main_outer() {
     # site in main_locked for why not there). stage:"round" marks it non-terminal, so it counts in
     # the staleness census and in NO rate's denominator. ATTESTED is cleared afterwards because the
     # land is NOT over: the next round's terminal outcome still owes the ledger its own row.
+    #
+    # attest_refs runs HERE and not in the child for the same reason the row does: it is two git
+    # forks, and out here they cost the fleet nothing. It makes the round replayable — WHICH base
+    # and head went stale — and it cannot disturb postland-verify.sh's `author_sid` lookup, the
+    # only other parser of these rows: that keys on the LANDED sha, which a pre-re-rebase round row
+    # never carries, and it reads `sid`, which is identical on both rows anyway.
+    attest_refs "$GATE_BASE"
     attest_land "n/a" "n/a" "n/a" 42 "round"
     ATTESTED=0
     echo "↻ ship-land: optimistic round ${round}/${ROUNDS} invalidated (sibling land mid-gate) — re-gating the new final tree unlocked." >&2
