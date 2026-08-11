@@ -8,7 +8,9 @@ Written from inside the cloud VM, 2026-08-11.
   That is the whole history this container has; anything older was never fetched.
 - **Branch pushed to**: `claude/fire-20260811T193743Z-35340-1`
 - **Base commit before this memo**: `43e156a1b357d433c664191f344fe312ba682d08`
-- **Sha pushed** (the commit carrying this memo): `SHA_PENDING`
+- **Sha pushed** (the commit carrying this memo): `0fd813adb020c40d55998f592e55db45d687e115`
+  — a commit cannot name its own hash, so this line was filled in by the follow-up commit on the
+  same branch; both are in the pushed history.
 
 ## The half I cannot do
 
