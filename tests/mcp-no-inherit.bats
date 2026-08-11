@@ -20,18 +20,35 @@
 # silently inert (no .mcp.json written, a server that cannot start, a log path nothing writes to).
 
 setup() {
+  # HERMETIC PINS. This suite executes handoff-fire.sh, so it inherits that script's whole ambient
+  # surface — and the land gate is right to refuse without these: an unfixtured run reads the
+  # operator's live ~/, their real machine load, and their deployed claude-accounts. Same four seams
+  # as tests/handoff-fire-argv-launch.bats, for the same reason: fixturing $HOME alone does not
+  # redirect an absolute /tmp default or a BARE NAME the subject executes off the live PATH.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # …and terminal identity: handoff-fire is terminal-aware, so an inherited KITTY_WINDOW_ID from the
+  # developer's own pane would decide which arm runs. Same pin as tests/boot-resume-launch.bats.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
+
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/scripts/lib/mcp-noinherit.sh"
   FIRE="$REPO/scripts/handoff-fire.sh"
   SERVER="$REPO/tests/fixtures/mcp-noinherit/fake-stdio-server.py"
-  # This suite executes handoff-fire.sh, which is terminal-aware — an inherited KITTY_WINDOW_ID
-  # from the developer's own terminal would otherwise decide which arm runs. Same pin as
-  # tests/boot-resume-launch.bats setup().
-  unset KITTY_WINDOW_ID
-  export IT2_WRAPPER_NO_KITTY=1
 
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mcp-noinherit.XXXXXX")"
-  export TMPDIR_ORIG="${TMPDIR:-/tmp}"
+  WORK="$BATS_TEST_TMPDIR/work"; mkdir -p "$WORK"
+
+  # The account the dry-run tests name must resolve to a config dir UNDER the fixtured $HOME, with
+  # user-scope http servers in it — otherwise the passthrough cannot be built and the assertions
+  # below would silently measure the no-passthrough fallback instead of the shipped path.
+  mkdir -p "$HOME/.claude-secondary"
+  cat > "$HOME/.claude-secondary/.claude.json" <<'JSON'
+{"mcpServers": {"motion": {"type": "http", "url": "https://example.invalid/a"}}}
+JSON
   # A fixture config dir standing in for an account: two http servers (which must SURVIVE) and one
   # stdio server (which must NOT). The stdio entry is what proves the filter keys on `command`
   # rather than on a name we happened to pick.
@@ -53,8 +70,7 @@ JSON
 }
 
 teardown() {
-  [ -n "${WORK:-}" ] && rm -rf "$WORK"
-  return 0
+  return 0   # everything lives under $BATS_TEST_TMPDIR, which bats removes
 }
 
 # ── layer 1: the composition decision ──────────────────────────────────────────────────────────
