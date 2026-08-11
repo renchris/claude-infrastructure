@@ -109,7 +109,7 @@
 # expansion with zero forks. Every branch INSIDE the dispatch-worktree population still records.
 #
 # Env: CC_WCLAIM_GATE(on) · CC_WCLAIM_TTL_S(60) · CC_WCLAIM_TIMEOUT_S(30) · CC_WCLAIM_BACKLOG_BIN ·
-#      CC_WCLAIM_STATE_DIR · CC_WCLAIM_IDL · CC_WCLAIM_HOST · CC_WCLAIM_PID
+#      CC_WCLAIM_STATE_DIR · CC_WCLAIM_IDL · CC_WCLAIM_HOST · CC_WCLAIM_PID · CC_WCLAIM_ARGV_FILE
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 
 CC_WCLAIM_REASON=""
@@ -168,6 +168,72 @@ _cc_wclaim_ancestor_pid() {
   done
   [ -n "$found" ] || found="$PPID"
   printf '%s' "$found"
+}
+
+# ── IS THAT ANCESTOR A SUBAGENT RATHER THAN A SESSION? ─────────────────────────────────────────
+# THE DEFECT (backlog 5bb6555f22df, observed 2026-08-08T01:20:09Z on item 23eccae755a9). A lead
+# spawned two READ-ONLY research subagents. A background subagent is a REAL child CC process whose
+# comm is `claude.exe`, so the walk above stopped on IT — and the gate then called `reclaim`, which
+# is a RE-KEY. The subagent took its own lead's lease. The lead's very next Write was refused with
+# `DUPLICATE WORKER`, a sentence that is correct for a genuine duplicate and, aimed at the owner of
+# the work, tells it to STAND DOWN and retire its pane — i.e. to abandon its own item. It cost ~17
+# minutes of blocked writes and self-released only when the children exited.
+#
+# WHY NOT "WALK PAST THE AGENT TO THE OWNING SESSION" — REFUTED BY MEASUREMENT, 2026-08-11. The
+# obvious repair is to widen the identity: keep walking and claim under the lead. It cannot work,
+# because the lead IS NOT AN ANCESTOR of its own subagent. Measured live on CC 2.1.220, a background
+# `Explore` subagent of the session pid 76225:
+#     35727 claude.exe --agent-id argvprobe@session-b2da9008 --agent-name argvprobe \
+#                      --team-name session-b2da9008 --parent-session-id b2da9008-… --agent-type Explore
+#     35467 /bin/bash bin/cc-pane-runner        ← its parent
+#     35453 /usr/bin/login … kitty              ← and then kitty; 76225 appears NOWHERE
+# The harness parents an agent to a pane runner, not to the session that spawned it. The lineage the
+# widening repair needs does not exist in the process tree at all, so the only sound remedy is the
+# one this function implements: an agent NEVER takes a lease.
+#
+# ADMIT, AND WHY THAT SURRENDERS ALMOST NOTHING. Declining to claim means declining to arbitrate, so
+# a subagent's write is admitted unconditionally. The population that could exploit that — the
+# subagents of a DUPLICATE lead — is already empty by construction: `hooks/agent-teams-enforce.sh`
+# runs this same gate on the Agent-tool spawn (`cc_worker_claim_admit agent-tool`), from the LEAD's
+# own identity, so a lead that does not hold the lease cannot spawn into the worktree in the first
+# place. A live subagent is therefore already evidence that its lead passed this gate.
+#
+# THE MATCH IS A CONSISTENT TRIPLE, NEVER THE BARE FLAG — and this file is the proof. `ps -o command=`
+# flattens argv, so a session's BRIEF is indistinguishable from its flags, and the brief of the very
+# session that fixed this bug quotes `--agent-id` (it is in the backlog title above). A bare
+# `case $cmd in *--agent-id*)` therefore reads a LEAD as a subagent and silently disarms the gate for
+# it — the strictly worse direction, since a false "agent" forfeits duplicate protection while a
+# false "session" only reproduces the bug being fixed here. So all three flags must be present AND
+# the record must agree with itself: CC always emits `--agent-id <name>@<team>` with `--agent-name
+# <name>` and `--team-name <team>` as the very same strings. Prose does not reproduce that by
+# accident. This is the same rule, and the same reasoning, as hooks/lib/agent-identity.sh:60-71.
+#
+# DUPLICATED, NOT SOURCED — deliberately, and the house pattern for exactly this file: the identity
+# derivation above is likewise a duplicate of hooks/session-register.sh's, "pinned equal by test
+# instead" (see its comment). Two reasons here. This asks a NARROWER question than
+# agent-identity.sh's `agent_is_assignee` — not "is this session an assignee" but "is the process
+# whose pid I am about to write into a lease an agent" — and it is inherently keyed on the pid the
+# walk above already resolved, which no session-scoped oracle takes as input. And agent-identity's
+# confirmation half reads `teams/<team>/config.json`, which a plain research subagent (no team) has
+# no row in. Parity with its argv rule is pinned by test.
+_cc_wclaim_is_agent_argv() { # $1=pid → 0 = that process is a harness AGENT (subagent/assignee)
+  local cmd id nm tm
+  [ -n "${1:-}" ] || return 1
+  # CC_WCLAIM_ARGV_FILE is the test seam, mirroring agent-identity.sh's CC_WF_PSTABLE_FILE: a live
+  # agent's pid is a value a suite cannot know in advance, so without it this branch could only be
+  # tested by stubbing out the read — i.e. not tested at all.
+  if [ -n "${CC_WCLAIM_ARGV_FILE:-}" ] && [ -f "${CC_WCLAIM_ARGV_FILE}" ]; then
+    cmd=" $(cat "$CC_WCLAIM_ARGV_FILE" 2>/dev/null) "
+  else
+    cmd=" $(ps -o command= -p "$1" 2>/dev/null) "
+  fi
+  case "$cmd" in *' --agent-id '*)   ;; *) return 1 ;; esac
+  case "$cmd" in *' --agent-name '*) ;; *) return 1 ;; esac
+  case "$cmd" in *' --team-name '*)  ;; *) return 1 ;; esac
+  id="${cmd#* --agent-id }";   id="${id%% *}"
+  nm="${cmd#* --agent-name }"; nm="${nm%% *}"
+  tm="${cmd#* --team-name }";  tm="${tm%% *}"
+  [ -n "$nm" ] && [ -n "$tm" ] && [ "$id" = "$nm@$tm" ]
 }
 
 # ── cc-backlog resolution ──────────────────────────────────────────────────────────────────────
@@ -308,6 +374,20 @@ cc_worker_claim_admit() { # $1=caller $2=cwd $3=what → 0 admit / 9 refuse
   if _cc_wclaim_cache_fresh "$cfile" "$ttl"; then
     CC_WCLAIM_REASON="worker-claim-gate: ADMIT (cached, <${ttl}s) — $ident owns $item"
     return 0                                  # deliberately silent: one row per TTL, not per write
+  fi
+
+  # A SUBAGENT NEVER TAKES A LEASE (backlog 5bb6555f22df). Placed HERE, above the reclaim and below
+  # the cache, for two reasons that are both load-bearing. Above the reclaim, because `reclaim` is a
+  # RE-KEY and the damage is done the moment it succeeds — a check afterwards would be reading a
+  # lease it had already stolen. Below the cache, because a writing agent must not pay a `ps` per
+  # Write; the admit is cached under its own `<host>-<agent pid>` like any other, and a pid cannot
+  # outlive the process it names, so nothing here can inherit a stale verdict.
+  if _cc_wclaim_is_agent_argv "$pid"; then
+    [ -n "$cfile" ] && printf '%s\n' "$(date +%s 2>/dev/null || echo 0)" > "$cfile" 2>/dev/null || true
+    detail="$ident is a harness subagent; the lease on $item stays with the session that spawned it"
+    CC_WCLAIM_REASON="worker-claim-gate: ADMIT — $detail"
+    _cc_wclaim_emit admit subagent "$caller" "$what" "$detail" "$item"
+    return 0
   fi
 
   # THE REAL CALL. Bounded, but the bound is a backstop against a wedged fork, not a latency budget:

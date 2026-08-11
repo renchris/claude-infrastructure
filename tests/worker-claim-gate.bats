@@ -498,3 +498,100 @@ wclaim_stub_verdict() { # $1=verdict line → points the gate's ledger seam at a
   run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/Users/x/Development/claude-infrastructure/scripts"
   [ "$output" = "" ]
 }
+
+# ── 26-29 · A SUBAGENT MUST NOT TAKE ITS OWN LEAD'S LEASE (backlog 5bb6555f22df) ────────────────
+#
+# THE INCIDENT, 2026-08-08T01:20:09Z on item 23eccae755a9. A lead spawned two READ-ONLY research
+# subagents. A background subagent is a REAL child CC process whose comm is `claude.exe`, so
+# `_cc_wclaim_ancestor_pid` stopped on IT, and the gate then called `reclaim` — which is a RE-KEY.
+# The subagent won the race for a lease its lead had not yet touched, and the lead's next Write was
+# refused as a DUPLICATE WORKER and told to stand down and retire its own pane. ~17 minutes of
+# blocked writes, self-released only when the children exited.
+#
+# WHY THE FIX IS "NEVER CLAIM" RATHER THAN "CLAIM AS THE LEAD". Measured live on CC 2.1.220: a
+# background subagent is parented to `bin/cc-pane-runner` under kitty, and the spawning session's pid
+# appears NOWHERE in its ancestry. The lineage that a widen-the-identity repair would need does not
+# exist in the process tree, so declining the lease is the only reachable remedy.
+#
+# RED-PROOF (recorded 2026-08-11, against the REAL pre-fix artifact from origin/main, not a mutant):
+# case 26 replayed against `git show origin/main:scripts/lib/worker-claim-gate.sh` gives the
+# subagent the lease (`by` becomes the agent identity) and then returns rc 9 for the LEAD — the
+# incident reproduced exactly. Case 28 is the other direction and fails against a library that
+# matches the bare `--agent-id` flag instead of the consistent triple.
+
+# argv of a REAL background subagent, transcribed from the live measurement above.
+agent_argv() { # $1=name $2=team → writes an argv file, echoes its path
+  local f="$BATS_TEST_TMPDIR/argv.$1"
+  printf '%s\n' "/Users/x/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id $1@$2 --agent-name $1 --team-name $2 --agent-color blue --parent-session-id b2da9008-fecf-4ef0-81c9-e0ac56baa061 --agent-type Explore --permission-mode auto --effort high --model claude-opus-5" > "$f"
+  printf '%s' "$f"
+}
+
+@test "26 a SUBAGENT never takes the lease, so its LEAD is not locked out of its own item" {
+  # the spent identity cc-dispatch left behind — a lease nobody live holds yet, which is the state
+  # the 2026-08-08 race was run from (the lead had not yet made its first Write).
+  id="$(item_claimed_by dispatched "$HOST-$DEADPID")"
+
+  # the lead's read-only subagent writes FIRST. Its pid is $$ — provably alive, so pre-fix this
+  # reclaim SUCCEEDS and the theft is real, not hypothetical.
+  CC_WCLAIM_ARGV_FILE="$(agent_argv probe session-b2da9008)"; export CC_WCLAIM_ARGV_FILE
+  export CC_WCLAIM_PID=$$
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'subagent'
+  # THE ASSERTION THE WHOLE ITEM IS ABOUT: the lease did not move.
+  [ "$(by_of "$id")" = "$HOST-$DEADPID" ]
+
+  # now the LEAD writes. Pre-fix this was rc 9 + "STAND DOWN … retire this pane".
+  unset CC_WCLAIM_ARGV_FILE
+  export CC_WCLAIM_PID=$PPID
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  [ "$(by_of "$id")" = "$HOST-$PPID" ]
+}
+
+@test "27 the subagent admit is RECORDED with its own basis — never a silent bypass" {
+  id="$(item_claimed_by recorded "$HOST-$DEADPID")"
+  CC_WCLAIM_ARGV_FILE="$(agent_argv probe session-b2da9008)"; export CC_WCLAIM_ARGV_FILE
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  # one row, and it says WHY it was admitted — an admit indistinguishable from a measured one would
+  # make this branch invisible to cc-idl and cc-audit (the header's every-branch-records rule).
+  [ "$(jq -r 'select(.gate=="worker-claim-gate") | .basis' < "$CC_WCLAIM_IDL" | grep -c '^subagent$')" -eq 1 ]
+  [ "$(jq -r 'select(.basis=="subagent") | .item' < "$CC_WCLAIM_IDL")" = "$id" ]
+}
+
+@test "28 PROSE is not an agent — a brief that MENTIONS --agent-id must not disarm the gate" {
+  # This suite's own subject demonstrates the trap: `ps -o command=` flattens argv, so the brief of
+  # the session that fixed this bug carries `--agent-id` as an apparent word (it is in the backlog
+  # title). A bare-flag match would read that LEAD as a subagent and skip the lease check entirely.
+  # Here the three flags are all present but the record does not agree with itself.
+  id="$(item_claimed_by prose "$HOST-$$")"          # a LIVE incumbent, as in case 02
+  printf '%s\n' "claude --model claude-opus-5 TASK — gate the claim on NOT being an agent: argv carries --agent-id and --agent-name and --team-name, see backlog" \
+    > "$BATS_TEST_TMPDIR/argv.prose"
+  export CC_WCLAIM_ARGV_FILE="$BATS_TEST_TMPDIR/argv.prose"
+  export CC_WCLAIM_PID=999999                        # a DIFFERENT session, exactly as case 02
+  run admit "$(wt "$id")"
+  [ "$status" -eq 9 ]                                # still refused: prose bought nothing
+  [ "$(by_of "$id")" = "$HOST-$$" ]
+
+  # and the same with a consistent-looking pair but a mismatched team — co-presence is not identity
+  printf '%s\n' "claude.exe --agent-id probe@session-aaa --agent-name probe --team-name session-bbb" \
+    > "$BATS_TEST_TMPDIR/argv.mixed"
+  export CC_WCLAIM_ARGV_FILE="$BATS_TEST_TMPDIR/argv.mixed"
+  run admit "$(wt "$id")"
+  [ "$status" -eq 9 ]
+}
+
+@test "29 the agent discriminator is at PARITY with hooks/lib/agent-identity.sh's rule" {
+  # Duplicated rather than shared — the same treatment the identity derivation gets (case 14), for
+  # the reasons in the library header. Duplication is only safe while a divergence goes RED.
+  AID="$REPO/hooks/lib/agent-identity.sh"
+  [ -f "$AID" ]
+  for flag in ' --agent-id ' ' --agent-name ' ' --team-name '; do
+    grep -q -- "$flag" "$LIB"
+    grep -q -- "$flag" "$AID"
+  done
+  # BOTH must require the record to agree with itself, not merely carry the three flags.
+  grep -q 'nm@\$tm' "$LIB"
+  grep -q 'substr(id, 1, at - 1) == nm' "$AID"
+}
