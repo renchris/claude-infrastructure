@@ -109,7 +109,7 @@
     "has_defect": false,
     "sibling_axis_pinned": null,
     "clean_basis": "SCREENED AND NOT CONVICTED — the only basis that survived. An independent adversarial pass over all eight defect classes this corpus scores returned CLEAN, and it EXECUTED rather than reasoned: it ran the script against the live 12,743-row store, proved both terms of the health filter are load-bearing (neither absorbed by the other, neither defaultable to always-true — the AND rejects 1,232 rows the verdict term alone would admit), independently REIMPLEMENTED the floor computation and got the same answer, and confirmed the INSUFFICIENT-DATA arm is a real non-verdict whose success token cannot certify a floor that was never computed. It also checked the direction of the one imprecision it found and established it can only UNDER-report. Chosen to LOOK like the defective briefs — an instrument that publishes a verdict, the same class of code as cp-04 — while sharing NO subject matter with any of them (it names none of the other eight subjects).",
-    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence against live data. Nine of the twelve candidates screened the same way were CONVICTED and dropped.",
+    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence against live data. Nine of the thirteen candidates screened the same way were CONVICTED and dropped.",
     "known_findings_not_scored": [
       {
         "finding": "the utilization store has no readability guard and rows() swallows OSError, so a PRESENT but unreadable store renders as 'Store is EMPTY'. Reproduced by the screen with chmod 000 on a copy of the real store.",
@@ -300,7 +300,7 @@
     "has_defect": false,
     "sibling_axis_pinned": null,
     "clean_basis": "SCREENED AND NOT CONVICTED — the only basis that survived. An independent adversarial pass over all eight defect classes this corpus scores returned CLEAN, and it EXECUTED rather than reasoned: it ran all 13 classify inputs against the real library and confirmed each asserted status, verified the anti-rot arm's 8 patterns are genuinely present in the resolved binary while the control string is genuinely absent (so the loop is neither inert nor always-matching), and confirmed each negative arm is paired with a positive that reds if the matcher opens up. Zero subsequent commits to the path; no doc in the repo names a defect in it. Chosen to LOOK like the defective briefs — a bats suite over a shell classifier, the same class of code as cp-02 and cp-05 — while sharing NO subject matter with any of them (it names none of the other eight subjects).",
-    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence. Nine of the twelve candidates screened the same way were CONVICTED and dropped.",
+    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence. Nine of the thirteen candidates screened the same way were CONVICTED and dropped.",
     "notes": "Not proven defect-free — no file in a live repo can be. A judge should adjudicate a finding here against the code rather than scoring it a false positive by assumption.",
     "ground_truth": []
   },
