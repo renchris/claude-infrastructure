@@ -162,6 +162,18 @@
 #   CC_DISPATCH_CLUSTER      (default: on)   off ⇒ a slot per ROW again, not per cluster
 #   CC_DISPATCH_WT_FRESH     (default: on)   off ⇒ reuse a wt- branch / pre-existing tree unchecked
 #   CC_DISPATCH_WT_BASE      (default: the repo's own origin/HEAD, else origin/main)
+#   CC_DISPATCH_VENUE_BIN    (default: co-versioned sibling cc-venue, else PATH / ~/.claude/bin)
+#   CC_DISPATCH_READY_GATE   (default: advisory)  the READINESS precondition of admission (W1):
+#                            advisory ⇒ journal the verdict and admit anyway (measure first);
+#                            enforce  ⇒ a `void` item DEFERS (never a drop, never a done);
+#                            off      ⇒ no verdict computed at all.
+#   CC_DISPATCH_READY_MAX    (default: 6)     hard bound on readiness checks per pass — past it the
+#                                             verdict is UNKNOWN, which never blocks
+#   CC_DISPATCH_READY_SCAN   (default: 4000)  IDL tail lines scanned for a prior `readyAt`
+#   CC_DISPATCH_VENUE_LABEL  (default: on)    off ⇒ no write-path venue labelling
+#   CC_DISPATCH_VENUE_NEW_WINDOW_S (default: 900) how new a row must be to be labelled on the
+#                                             add-kick; the bound is a POPULATION, never a count
+#   CC_DISPATCH_VENUE_NEW_MAX (default: 2)    labels per decide pass
 #   (CC_BACKLOG_FILE flows through to the backlog bin unchanged — tests point it at a temp jsonl.)
 set -uo pipefail
 
@@ -827,12 +839,219 @@ order_dispatchable() {
     # check which side has the incident before assuming the assertion is the stale one).
     | ( [ $items[] | select(._kn != "") | {k: ._kn, t: ._rawt} ] | group_by(.k)
         | map({key: .[0].k, value: ([.[].t] | unique | length)}) | from_entries ) as $distinct
-    | [ $items[] | . + {_cluster:
-          (if   ._kc != ""                                 then ._kc
-           elif ._kn != "" and (($distinct[._kn] // 0) >= 2) then ._kn
-           else "" end)} ]
+    # `_clusterSrc` rides alongside the key because the READINESS gate needs the two apart and the
+    # key alone cannot tell them: a DECLARED (`--condition`) cluster is a filer saying these rows
+    # are one piece of work — resolved, by the only authority that can resolve it — while an
+    # INFERRED one is a guess by this normaliser that nobody has adjudicated. Derived in ONE
+    # expression with the key it labels, so the two can never disagree about which branch fired.
+    # (No apostrophes in here: this whole block is inside a single-quoted shell string.)
+    | [ $items[] | (if   ._kc != ""                                   then {c: ._kc, s: "declared"}
+                    elif ._kn != "" and (($distinct[._kn] // 0) >= 2) then {c: ._kn, s: "inferred"}
+                    else {c: "", s: ""} end) as $cl
+                 | . + {_cluster: $cl.c, _clusterSrc: $cl.s} ]
     | sort_by([._thrash, -._land, -._in, -._recur, (.ts // .lastTs // "")])
     | map(del(._thrash, ._land, ._in, ._recur, ._kc, ._kn, ._rawt))'
+}
+
+# ── READINESS — A PRECONDITION OF ADMISSION (W1; BACKLOG_CONSOLIDATION_2026-08-09 § READINESS) ────
+# THE GENERATOR THIS CLOSES. Readiness has four properties and only ONE of them was checked at
+# consumption: premise currency, re-run by the claim gate every time (cc-premise, M2). The other
+# three — is this row's venue label current, is this one effort or five rows, is the probe
+# trustworthy — were checked by a BATCH, and a batch over a growing stream must be re-run forever.
+# That treadmill is the one-time triage that keeps being re-minted. The cure is not more effort, it
+# is the shape: check it where the act happens (memory: enforcement-must-live-at-the-chokepoint).
+#
+# O(2) PER PASS, NEVER A SWEEP, and that is the whole reason it can be always-on. The admission set
+# is bounded by free_slots, so readiness is evaluated only for the items ABOUT TO BE ADMITTED —
+# never for the 300-row store. `CC_DISPATCH_READY_MAX` bounds it absolutely, including the enforce
+# lane where a void item defers and the next candidate is tried in its place; past the bound an item
+# is UNKNOWN, which never blocks. A readiness check costs one `cc-venue paths` (a python fold) plus
+# two bounded git reads, against a decision phase budgeted at 5 minutes.
+#
+# ADVISORY FIRST, AND NOT AS TIMIDITY. Measured 2026-08-11, 219 of the open rows carried no venue
+# label at all; a gate shipped ENFORCING on day one would have admitted nothing and the dispatcher
+# would have read as dead. So the default lane JOURNALS the verdict and admits anyway, and the
+# would-block rate rides the summary record — the flip to `enforce` is then a measurement someone
+# reads, not a guess someone makes (the same ratchet discipline M2 used).
+READY_GATE="${CC_DISPATCH_READY_GATE:-advisory}"
+case "$READY_GATE" in advisory|enforce|off) ;; *)
+  die3 "CC_DISPATCH_READY_GATE must be advisory, enforce or off (got '$READY_GATE')" ;; esac
+READY_MAX="${CC_DISPATCH_READY_MAX:-6}"
+is_uint "$READY_MAX" || die3 "CC_DISPATCH_READY_MAX must be a non-negative integer (got '$READY_MAX')"
+READY_CHECKED=0; READY_VOID=0; READY_UNKNOWN=0   # → the summary record's would-block rate
+
+# ready_trunk_sha <repo> → origin/main's sha, or "" when git could not be asked.
+# NEVER a fabricated or defaulted value: every arm below treats this as a real point in history, and
+# a made-up one would make "trunk moved under this item" answerable against nothing.
+ready_trunk_sha() {
+  local r="$1"
+  [ -n "$r" ] && [ -d "$r" ] || { printf ''; return 0; }
+  git -C "$r" rev-parse --verify origin/main 2>/dev/null || printf ''
+}
+
+# ready_last_sha <id> → the trunk sha this item's readiness basis was last established at, or "".
+#
+# THE DERIVED CACHE LIVES IN THE DECIDER, NOT ON THE LEDGER (R2). `readyAt` says what THIS
+# dispatcher checked and against which trunk; the backlog ledger is the store of EVIDENCE, written
+# by filers and workers. A derived field written there would be indistinguishable from a claim, and
+# every other consumer would inherit a value it has no way to verify.
+#
+# BOUNDED TAIL READ. The IDL is append-only and unbounded. A verdict that has scrolled past the
+# window reads as ABSENT, which VOIDS the item — the safe direction by construction, because a void
+# is re-derived in place (one cc-venue call) and is eligible again next pass. It is never a drop.
+# `fromjson?` per line, so one malformed record cannot take the whole read down with it.
+ready_last_sha() {
+  local id="$1" n="${CC_DISPATCH_READY_SCAN:-4000}"
+  [ -f "$IDL" ] || { printf ''; return 0; }
+  tail -n "$n" "$IDL" 2>/dev/null | jq -Rr --arg i "$id" '
+      fromjson? | select(type=="object")
+    | select(.action=="readiness" and .id==$i and ((.readyAt // "") != ""))
+    | .readyAt' 2>/dev/null | tail -1
+}
+
+# ready_paths <repo> <id> → the item's usable cited path set on stdout. rc 0 = ANSWERED (zero lines
+# is a real answer), rc 2 = COULD NOT ASK. The two are three states in one call and the caller keeps
+# them apart — see the EMPTY SET rule at readiness_verdict.
+#
+# The extractor is cc-premise's, reached through cc-venue's `paths` verb, because bash cannot import
+# a python predicate and a bash re-derivation of "what does this item cite" would be a SECOND
+# implementation of the exact rule that decides whether a verdict survives.
+ready_paths() {
+  local r="$1" id="$2" vbin out rc
+  vbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
+  [ -x "$vbin" ] || vbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vbin=""
+  [ -n "$vbin" ] && [ -x "$vbin" ] || return 2
+  out="$(CC_PREMISE_REPO="$r" "$vbin" paths "$id" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  printf '%s' "$out"
+  return 0
+}
+
+# ready_moved <repo> <sha> <paths> → 0 trunk MOVED under a cited path · 1 it did not · 2 unaskable.
+# Three states, never two: "the diff was empty" and "there was no diff to read" are opposite facts
+# about an item's freshness (memory: lookup-miss-is-not-absence).
+ready_moved() {
+  local r="$1" sha="$2" paths="$3" out p; local -a ps=()
+  [ -n "$r" ] && [ -n "$sha" ] || return 2
+  git -C "$r" cat-file -e "${sha}^{commit}" 2>/dev/null || return 2
+  while IFS= read -r p; do [ -n "$p" ] && ps+=("$p"); done <<< "$paths"
+  [ "${#ps[@]}" -gt 0 ] || return 2
+  out="$(git -C "$r" diff --name-only "$sha..origin/main" -- "${ps[@]}" 2>/dev/null)" || return 2
+  [ -n "$out" ] && return 0
+  return 1
+}
+
+# ready_relabel <id> — THE REPAIR, and cc-venue's second missing caller (W1 item 5b). A void venue
+# verdict is RE-DERIVED IN PLACE: the producer re-runs its four questions against today's tree and
+# rewrites `venuePlan`/`venueWhy` through `cc-backlog venue`, which is the one writer.
+#
+# NEVER A DROP AND NEVER A `done` (R3). The item keeps its row, its evidence and its queue position;
+# all that changes is that its routing decision is current again, so it is eligible on the NEXT
+# pass. A gate that silently shreds work is worse than the staleness it was built to prevent.
+#
+# Deliberately NOT re-checked in the same pass. Repairing and then admitting on the repaired verdict
+# would make the would-block rate read 0 forever — the measurement the advisory lane exists to take
+# would be destroyed by the repair it is measuring.
+ready_relabel() {
+  local id="$1" r="$2" vbin
+  vbin="${CC_DISPATCH_VENUE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-venue}"
+  [ -x "$vbin" ] || vbin="$(resolve_bin "" cc-venue "$HOME/.claude/bin/cc-venue")" || vbin=""
+  [ -n "$vbin" ] && [ -x "$vbin" ] || return 1
+  CC_PREMISE_REPO="$r" "$vbin" label "$id" >/dev/null 2>&1
+}
+
+# readiness_verdict <id> <project> <venuePlan> <cluster-src> <may-repair 0|1>
+#                                                   → "<state>\037<reason>\037<readyAt>"
+#   state ∈ ready | void | unknown        readyAt = the sha the basis is established at ("" = none)
+#
+# ready = venue-current ∧ cluster-resolved ∧ sha-current. The FOURTH conjunct, premise currency, is
+# deliberately NOT re-implemented here: `cc-backlog claim` runs cc-premise itself and REFUSES with
+# verdict=premise-refuted, and this file already journals that refusal as a skip. Re-deriving an
+# atomic gate's predicate in its caller is how a report and a refusal drift apart (memory:
+# make-the-actuator-the-arbiter) — the conjunction holds because the actuator enforces its arm, not
+# because this function re-asks the same question a second time.
+#
+# 🚨 AN EMPTY PATH SET IS ALWAYS VOID, NEVER ALWAYS-FRESH. This is the fail-open trap, and it is the
+# one the naive reading walks straight into: with no cited paths the intersection with any diff is
+# empty, so "trunk did not move under it" is TRUE and the item reads permanently ready. But that
+# sentence is vacuous — an item citing nothing has proven nothing survived, and a verdict that can
+# never be falsified is not a verdict. Void, and its repair is a citation, not a re-run.
+#
+# UNKNOWN IS A THIRD STATE AND NEVER BLOCKS. A missing cc-venue, an unreadable repo, a spent budget:
+# none of those is an answer about the item, and a fail-closed reading of a dead sensor is how a
+# gate stalls a queue it was supposed to protect (memory:
+# sensor-default-off-makes-blindness-the-shipping-path).
+readiness_verdict() {
+  local id="$1" proj="$2" vplan="$3" csrc="$4" may_repair="${5:-1}"
+  local repo cur prior paths rc basis state reason repaired=0
+  repo="$(project_repo "$proj")"
+  cur="$(ready_trunk_sha "$repo")"
+  prior="$(ready_last_sha "$id")"
+  state=ready; reason=""
+
+  if [ -z "$vplan" ]; then
+    state=void; reason="venue-unlabelled"
+  elif [ "$csrc" = inferred ]; then
+    # An INFERRED multi-row cluster: this dispatcher believes N rows are one effort and nobody has
+    # declared it. `--condition` rows are the resolved case — a filer DECLARED them one piece of
+    # work — and are not void. The repair is the consolidation actuator (R6), not this file.
+    state=void; reason="cluster-unresolved"
+  else
+    paths="$(ready_paths "$repo" "$id")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      state=unknown; reason="paths-unreadable"
+    elif [ -z "$paths" ]; then
+      state=void; reason="cites-nothing"
+    elif [ -z "$cur" ]; then
+      state=unknown; reason="trunk-unreadable"
+    elif [ -z "$prior" ]; then
+      # Nothing has ever certified this item against a trunk sha. VOID — and self-repairing: this
+      # pass records today's sha as the basis, so the very next pass can actually ask the question.
+      state=void; reason="no-prior-verdict"
+    else
+      ready_moved "$repo" "$prior" "$paths"; rc=$?
+      case "$rc" in
+        0) state=void;    reason="trunk-moved" ;;
+        1) state=ready;   reason="" ;;
+        *) state=unknown; reason="diff-unreadable" ;;
+      esac
+    fi
+  fi
+
+  # THE REPAIR RUNS ON THE TWO REASONS A RE-DERIVATION CAN ACTUALLY CURE. `cites-nothing` and
+  # `cluster-unresolved` are not among them: re-running the producer cannot make an item cite a
+  # file, and it cannot decide that five rows are one effort. Reporting a repair that could not have
+  # worked is the claimed-vs-checked defect, so those two are journalled void and left alone.
+  #
+  # `may_repair` is 0 on a DRY pass, and that is load-bearing rather than tidy: `cc-venue label`
+  # appends to the OPERATOR's live ledger, so a `--dry-run` that repaired would be a writing dry run
+  # — the one thing every other branch in this file is careful not to be. A dry pass then reports
+  # the void it FOUND, which is exactly what a reader of a dry run wants to see anyway.
+  if [ "$may_repair" -eq 1 ]; then
+    case "$reason" in
+      venue-unlabelled|trunk-moved) ready_relabel "$id" "$repo" && repaired=1 ;;
+    esac
+  fi
+
+  # readyAt is the sha the BASIS was established at, not the sha of the pass that read it. It is
+  # pinned once set and reset only by a repair, which is what makes "void iff trunk moved under this
+  # item SINCE its basis" literally true rather than a rolling window that can never catch a creep.
+  basis="$prior"
+  if [ -z "$basis" ] || [ "$repaired" -eq 1 ]; then basis="$cur"; fi
+  # \037 again, for the reason the admission loop gives: `reason` is empty on a READY verdict, and a
+  # tab-split would silently deliver the sha into it.
+  printf '%s\037%s\037%s' "$state" "$reason" "$basis"
+}
+
+# idl_readiness <id> <state> <reason> <readyAt> <project> — the readiness record. Its own action, so
+# a consumer counting decisions is untouched by it and `ready_last_sha` has an unambiguous key.
+idl_readiness() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg state "$2" \
+     --arg reason "$3" --arg sha "$4" --arg project "${5:-$PROJECT}" --arg gate "$READY_GATE" \
+     '{ts:$ts, actor:"cc-dispatch", action:"readiness", pass:$pass, project:$project, id:$id,
+       ready:($state=="ready"), state:$state, reason:$reason, gate:$gate,
+       readyAt:(if $sha == "" then null else $sha end)}' >> "$IDL" 2>/dev/null || true
 }
 
 # ── S6: singleton, skip-not-queue ─────────────────────────────────────────────────────────────────
@@ -990,12 +1209,63 @@ warm_worktree() {
   return 0
 }
 
+# ready_rate → the WOULD-BLOCK rate as "<void>/<checked>", plus its percent, or "0/0" and null when
+# nothing was checked. THE DENOMINATOR SHIPS WITH THE RATE, always: a bare percentage over an
+# unstated population is how a figure survives long after the population it was true of stopped
+# existing (memory: positive-control-the-denominator, published-figure-decays-with-its-source).
+# `unknown` is counted SEPARATELY and is NOT in the numerator — an item the sensor could not read
+# would not have been blocked, and folding it in would inflate the very number the flip to
+# `enforce` is supposed to be decided on.
+# ── cc-venue's FIRST MISSING CALLER: LABEL THE ROW THAT WAS JUST WRITTEN (W1 item 5a) ─────────────
+# `cc-venue run` shipped with ZERO automatic callers — the only reader of `venuePlan` in the fleet
+# was this file, and nothing ever wrote one, so the whole cloud lane was reachable only by hand and
+# the label went stale the instant the batch that produced it finished.
+#
+# THE WRITE PATH IS ALREADY WIRED, so this needs no new timer: `cc-backlog add` kicks a debounced
+# `cc-dispatch --decide` (bin/cc-backlog § S5 KICK-ON-WRITE), which is precisely the moment new work
+# enters the ledger. This labels THAT row.
+#
+# 🚨 IT IS SCOPED BY POPULATION, NOT BY A COUNT, and the distinction is the whole anti-goal. "Label
+# the newest unlabelled row, one per pass" looks bounded and is not: at a 300 s cadence it walks the
+# entire store in a day — a full-store sweep wearing a clock, which is the batch this wave exists to
+# delete. The window admits only rows WRITTEN IN THE LAST few minutes, so the ~219 legacy unlabelled
+# rows can never enter it however long the dispatcher runs. Those are labelled at ADMISSION instead
+# (the readiness gate's repair), which is where a label is actually consumed.
+#
+# Failure is a no-op by construction: an unlabelled row is exactly the incumbent state, its
+# readiness verdict then reads `venue-unlabelled`, and the admission-time repair covers it.
+venue_label_new() { # <open-items-json>
+  local win="${CC_DISPATCH_VENUE_NEW_WINDOW_S:-900}" max="${CC_DISPATCH_VENUE_NEW_MAX:-2}" nid nproj n=0
+  [ "${CC_DISPATCH_VENUE_LABEL:-on}" = off ] && return 0
+  while IFS="$(printf '\t')" read -r nid nproj; do
+    [ -n "$nid" ] || continue
+    [ "$n" -lt "$max" ] || break
+    n=$((n + 1))
+    if ready_relabel "$nid" "$(project_repo "$nproj")"; then
+      idl note "$nid: venue labelled on write — cc-venue ran at the add-kick, not in a sweep"
+    else
+      idl note "$nid: venue label FAILED on write — the admission-time repair covers it"
+    fi
+  done < <(printf '%s' "$1" | jq -r --argjson w "$win" '
+      [ .[] | select((.status // "") == "open" and ((.venuePlan // "") == ""))
+            | select((((.lastTs // .ts // "") | try fromdateiso8601 catch 0)) > (now - $w)) ]
+    | .[] | "\(.id // "")\t\(.project // "")"' 2>/dev/null)
+}
+
+ready_rate_pct() {
+  [ "$READY_CHECKED" -gt 0 ] || { printf 'null'; return 0; }
+  printf '%s' "$(( READY_VOID * 100 / READY_CHECKED ))"
+}
+
 idl_summary() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
      --argjson s "$SKIPPED" --argjson a "$ADMITTED" --argjson d "$DEFERRED" --arg pass "$PASS_ID" \
+     --argjson rc "$READY_CHECKED" --argjson rv "$READY_VOID" --argjson ru "$READY_UNKNOWN" \
+     --argjson rp "$(ready_rate_pct)" --arg rg "$READY_GATE" \
      '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s,
-       admitted:$a, deferred:$d, pass:$pass}' \
+       admitted:$a, deferred:$d, pass:$pass, ready_gate:$rg, ready_checked:$rc, ready_void:$rv,
+       ready_unknown:$ru, ready_would_block_pct:$rp}' \
      >> "$IDL" 2>/dev/null || true
 }
 
@@ -1089,6 +1359,14 @@ dispatch() { # <dry|run|decide>
   # after both, cannot do.
   guarded="$(     printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone == true) ]')"
   dispatchable="$(printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone != true) ]')"
+
+  # 1a2. THE WRITE-PATH VENUE LABEL (W1 item 5a). DECIDE mode only, because that is what
+  # `cc-backlog add` kicks — a `--once` cron tick is a clock, and hanging a labeller off a clock is
+  # the sweep this wave deletes. A dry pass writes nothing, by the same rule as every other write
+  # here, and a pass that lost the singleton is a pure read.
+  if [ "$v2" -eq 1 ] && [ "$mode" = decide ] && [ "$inflight" -eq 0 ]; then
+    venue_label_new "$open_items"
+  fi
   gcount="$(printf '%s' "$guarded"      | jq 'length' 2>/dev/null || echo 0)"
   count="$( printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
 
@@ -1271,8 +1549,16 @@ dispatch() { # <dry|run|decide>
     # bash 3.2 (this box) has NO associative arrays, so membership is a newline-delimited string
     # matched with `grep -Fxq` — an exact WHOLE-LINE match, because a cluster key is free text and a
     # substring test would merge a key into any longer key containing it.
-    local dproj dclus taken_clusters="" n_admit=0
-    while IFS="$(printf '\t')" read -r did dproj dclus; do
+    # ⚠️ THE SEPARATOR IS \037 (UNIT SEPARATOR), NOT A TAB, AND THAT IS A CORRECTNESS FIX, NOT A
+    # STYLE ONE. Tab is an IFS *whitespace* character, so bash `read` collapses a RUN of them into a
+    # single delimiter and empty middle fields vanish. With three fields that was invisible (an empty
+    # trailing cluster is just a short line); with five it is a silent COLUMN SHIFT — a row whose
+    # `_cluster` and `_clusterSrc` are both empty delivered `venuePlan` into `$dclus`, so two
+    # unrelated items both "clustered" on the string `local` and the second was deferred as a sibling
+    # of the first. Measured on a two-item fixture before this line existed. A non-whitespace IFS
+    # character delimits exactly one field each time, so an empty field stays empty.
+    local dproj dclus dcsrc dvplan taken_clusters="" n_admit=0 rverd rstate rreason rsha
+    while IFS="$(printf '\037')" read -r did dproj dclus dcsrc dvplan; do
       [ -n "$did" ] || continue
       pos=$((di + 1)); di=$((di + 1))
       if [ -n "$dclus" ] && [ "${CC_DISPATCH_CLUSTER:-on}" != off ] \
@@ -1283,11 +1569,46 @@ dispatch() { # <dry|run|decide>
         # full, and a cluster deferral is evidence of nothing of the kind.
         vverdict=defer; vreason="cluster-sibling"; DEFERRED=$((DEFERRED + 1))
       elif [ "$n_admit" -lt "$admit_n" ]; then
-        vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1)); n_admit=$((n_admit + 1))
-        admitted_ids="$admitted_ids$did
+        # ── THE READINESS CONJUNCTION, at the ONE seam where admission is decided ────────────────
+        # Evaluated HERE and nowhere else: an item reaches this branch only when capacity exists for
+        # it and no sibling has taken its cluster's slot, so the check runs O(free_slots) times per
+        # pass rather than over the store. `READY_MAX` bounds it absolutely — past the budget the
+        # verdict is UNKNOWN, which is journalled and never blocks, so a long enforce-lane walk can
+        # never turn into an unbounded scan wearing a gate's clothes.
+        rstate=unknown; rreason="gate-off"; rsha=""
+        if [ "$READY_GATE" != off ]; then
+          if [ "$READY_CHECKED" -ge "$READY_MAX" ]; then
+            rstate=unknown; rreason="budget-spent"; rsha=""
+          else
+            rverd="$(readiness_verdict "$did" "$dproj" "$dvplan" "$dcsrc" \
+              "$( [ "$mode" = dry ] && echo 0 || echo 1 )" </dev/null)"
+            IFS="$(printf '\037')" read -r rstate rreason rsha <<< "$rverd"
+            READY_CHECKED=$((READY_CHECKED + 1))
+            case "$rstate" in
+              void)    READY_VOID=$((READY_VOID + 1)) ;;
+              unknown) READY_UNKNOWN=$((READY_UNKNOWN + 1)) ;;
+            esac
+          fi
+          if [ "$mode" = dry ]; then
+            printf 'READY: %s %s%s (readyAt=%s)\n' \
+              "$did" "$rstate" "${rreason:+ — $rreason}" "${rsha:-none}"
+          else
+            idl_readiness "$did" "$rstate" "$rreason" "$rsha" "$dproj"
+          fi
+        fi
+        if [ "$rstate" = void ] && [ "$READY_GATE" = enforce ]; then
+          # ENFORCE — a DEFERRAL, never a drop and never a `done` (R3). The row, its evidence and
+          # its queue position are untouched; the slot it would have spent goes to the next
+          # candidate, exactly like a cluster sibling's. `readiness_verdict` has already re-derived
+          # what a re-derivation can cure, so the item is eligible again on the next pass.
+          vverdict=defer; vreason="not-ready:$rreason"; DEFERRED=$((DEFERRED + 1))
+        else
+          vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1)); n_admit=$((n_admit + 1))
+          admitted_ids="$admitted_ids$did
 "
-        [ -n "$dclus" ] && taken_clusters="$taken_clusters$dclus
+          [ -n "$dclus" ] && taken_clusters="$taken_clusters$dclus
 "
+        fi
       else
         vverdict=defer; DEFERRED=$((DEFERRED + 1))
         # pass-in-flight outranks at-ceiling, which outranks capacity (slots existed, this item is
@@ -1303,16 +1624,27 @@ dispatch() { # <dry|run|decide>
         else                               vreason="capacity"; fi
       fi
       [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason" "$dproj"
-    done < <(printf '%s' "$ordered" | jq -r '.[]
-      | "\(.id // "")\t\(.project // "")\t\((._cluster // "") | gsub("[\\t\\n\\r]"; " "))"')
-    # The cluster rides a TSV field, so it is scrubbed of tabs/newlines at the source rather than
-    # trusted: a title is free text and one stray tab would shift every later field silently.
+    done < <(printf '%s' "$ordered" | jq -r --arg s "$(printf '\037')" '.[]
+      | [ (.id // ""), (.project // ""),
+          ((._cluster // "") | gsub("[\\t\\n\\r\\u001f]"; " ")),
+          (._clusterSrc // ""), (.venuePlan // "") ] | join($s)')
+    # The cluster rides a delimited field, so it is scrubbed of the separator AND of tabs/newlines at
+    # the source rather than trusted: a title is free text and one stray control character would
+    # shift every later field silently.
 
     # admit_n is the CAPACITY bound; n_admit is what was actually spent after cluster collapse, and
     # the two differ exactly when a sibling was declined a slot. Report the spent one — a PLAN line
     # that says "4 admit" while the wave holds 2 is the claimed-vs-checked defect in miniature.
-    [ "$mode" = dry ] && printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
-      "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$n_admit" "$((count - n_admit))"
+    if [ "$mode" = dry ]; then
+      printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
+        "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$n_admit" "$((count - n_admit))"
+      # The would-block rate, printed with its DENOMINATOR — this is the number the flip from
+      # `advisory` to `enforce` is decided on, and a rate whose population is not stated alongside
+      # it cannot be re-derived later by anyone reading the line.
+      printf 'READY: gate=%s checked=%s void=%s unknown=%s would_block=%s%%\n' \
+        "$READY_GATE" "$READY_CHECKED" "$READY_VOID" "$READY_UNKNOWN" \
+        "$( [ "$READY_CHECKED" -gt 0 ] && ready_rate_pct || printf 'n-a' )"
+    fi
 
     # 3a0. S6 — NO LOCK, so the journal above IS the whole product of this pass. Returning HERE, and
     # not at step 0, is the A2 fix: every dispatchable item now has a verdict from this pass, which
