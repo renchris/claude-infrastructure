@@ -161,6 +161,76 @@ seed_herm() {   # $1 = exit code the stub lint returns
   [ -z "$(git ls-tree origin/main -- herm-stub.sh)" ]
 }
 
+# ── .bats shellcheck ratchet: a MISSING shellcheck must be a loud non-verdict, never a silent skip ─
+# The defect (grok-wiki tests shard candidate 1, backlog 9ea31151dd94): the ratchet's applicability
+# condition carried `&& command -v shellcheck`, so on a host without the tool the whole gate
+# VANISHED and the land read exactly like a clean one — while the sibling .sh path fails loudly at
+# 127 for any diff touching a *.sh. A .bats-only land therefore got zero shellcheck coverage in
+# silence. The lint has always exited 2 ("⛔ shellcheck not installed — NOT a clean verdict"); the
+# guard is what stopped anyone from seeing it.
+#
+# CASE 1 DRIVES THE REAL LINT WITH SHELLCHECK GENUINELY ABSENT, not a stub asserting a number: the
+# seam points at a shim that re-execs scripts/bats-shellcheck-lint.sh under PATH=/usr/bin:/bin,
+# where no shellcheck exists (verified: `env PATH=/usr/bin:/bin command -v shellcheck` → rc 1).
+# That is the production code path on a shellcheck-less host, byte for byte — the only thing the
+# shim changes is the environment, which is precisely the condition under test.
+seed_batsc() {   # $1 = "real-nosc" | an exit code for a stub lint
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\nsetup() { export HOME="$BATS_TEST_TMPDIR/home"; }\n@test "x" { true; }\n' > tests/zz.bats
+  if [ "$1" = "real-nosc" ]; then
+    printf '#!/bin/bash\nexec env PATH=/usr/bin:/bin "%s" "$@"\n' "$REPO/scripts/bats-shellcheck-lint.sh" > batsc-stub.sh
+  elif [ "$1" = "scan-only-2" ]; then
+    # --selftest passes, the SCAN returns 2. Without this the scan leg's non-verdict arm is dead
+    # code that no case reaches, because the selftest leg always fires first on a real absent tool.
+    printf '#!/bin/bash\ncase "$1" in --selftest) exit 0 ;; --own-lines) exit 0 ;; *) echo "stub scan: exit 2" >&2; exit 2 ;; esac\n' > batsc-stub.sh
+  else
+    printf '#!/bin/bash\ncase "$1" in --own-lines) exit 0 ;; esac\necho "stub lint: exiting %s" >&2\nexit %s\n' "$1" "$1" > batsc-stub.sh
+  fi
+  chmod +x batsc-stub.sh
+  git add tests/zz.bats batsc-stub.sh && git commit -q -m "feat: bats-shellcheck fixture"
+}
+
+@test "bats-shellcheck: shellcheck ABSENT → exit 9 GATE-KILLED and NAMED, never a silent green" {
+  git checkout -q -b feat/batsc-nosc main
+  seed_batsc real-nosc
+
+  run env SHIP_LAND_BATS_SC_LINT="$WORK/batsc-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                        # 9 = no verdict, NOT 0 = clean
+  echo "$output" | grep -q 'bats-shellcheck-lint could not RUN' || false
+  echo "$output" | grep -q 'NON-VERDICT' || false
+  echo "$output" | grep -q 'shellcheck is not installed' || false
+  ! echo "$output" | grep -q 'GATE RED' || false             # a could-not-run is never a claim
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- batsc-stub.sh)" ]       # fail-closed: nothing landed
+}
+
+@test "bats-shellcheck: the SCAN's exit 2 reaches the same non-verdict arm (not just --selftest)" {
+  git checkout -q -b feat/batsc-scan2 main
+  seed_batsc scan-only-2
+
+  run env SHIP_LAND_BATS_SC_LINT="$WORK/batsc-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q 'bats-shellcheck-lint could not RUN' || false
+  ! echo "$output" | grep -q 'GATE RED' || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- batsc-stub.sh)" ]
+}
+
+@test "bats-shellcheck: exit 1 is still a REAL verdict → exit 6 GATE RED, never softened to 9" {
+  # The positive control for the two above. Without it, "exit 2 → 9" would pass just as well for a
+  # ratchet that had stopped blocking altogether — the one way this split can silently go wrong.
+  git checkout -q -b feat/batsc-verdict main
+  seed_batsc 1
+
+  run env SHIP_LAND_BATS_SC_LINT="$WORK/batsc-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'bats-shellcheck' || false
+  ! echo "$output" | grep -q 'GATE-KILLED' || false
+  ! echo "$output" | grep -q 'could not RUN' || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- batsc-stub.sh)" ]
+}
+
 # ── THE CHOKEPOINT: own-scope must cover every population the lint judges ────────────────────────
 # Own-scope makes a violation OUTSIDE the lander's diff advisory, so the pathspec that builds the
 # own-set IS the gate's scope. It listed only `tests/*.bats` until rule 4 (embedded selftests)
