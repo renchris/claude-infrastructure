@@ -365,6 +365,43 @@ against install.sh's own loop heads by an anti-rot test rather than by prose.
 
 ### 2.I Population — the growth is refs and residue, not stranded work
 
+> **ERRATUM 2026-08-10 (P7 implementation session).** Two claims in this lane are FALSE at HEAD and
+> are struck below; the lane's other findings stand and were re-verified. Both errors point the same
+> way — *a sensor was searched for by SPELLING and its absence recorded as a fact*.
+>
+> 1. **"no collector, no retention policy" is refuted — by this lane's own cited grep.** A bounded
+>    retention GC has existed since 2026-08-06 at `hooks/teammate-checkpoint.sh:153-248`:
+>    `GC_FLOOR=3` newest-per-member immortal · `GC_KEEP=50` per-member rank cap · `GC_DAYS=14` age
+>    rule, deletions batched through `update-ref --stdin`. The evidence file states its search as
+>    `update-ref -d.*checkpoints`, `prune.*checkpoints`, `CHECKPOINT_RETAIN`, `reap.*checkpoint` over
+>    `scripts/ hooks/ bin/` — re-run verbatim, the third pattern HITS `teammate-checkpoint.sh:45`
+>    (`TEAMMATE_CHECKPOINT_RETAIN_DAYS`). The first two miss only because the code deletes via a
+>    batched `--stdin` transaction rather than `update-ref -d`. It also demonstrably RUNS: it swept in
+>    three sibling worktrees within 30 min of this check, and the cap binds (12 members sit at exactly
+>    50, **zero above**). The store is therefore **bounded, not unbounded**; 5,175 → 5,553 is growth in
+>    MEMBER COUNT, not per-member. The true residual is small and structural: **65 dead members
+>    holding ~180 refs immortal under `GC_FLOOR`, ≈3.2% of the store.** Building a second collector
+>    would have raced the existing one's `packed-refs` lock.
+> 2. **The loose-object figure was true when measured and is now moot.** 1,832 loose objects was a
+>    real reading at ~01:20; a repack has since run and the count is **513 — 7.7% of the 6,700
+>    auto-gc threshold**, `garbage: 0`. There is no gc-headroom pressure to act on.
+>
+> Consequence for §5: P7 items **1 (checkpoint retention) and 4 (gc headroom) are DROPPED**. Items
+> **2 (KEEP ladder asks content) and 3 (`--assert` consumer)** were verified TRUE at HEAD and are the
+> implemented scope. See §3 P7 row and `land-architecture-100p-2026-08-10/I-population.md` §3.4.
+>
+> **A third correction, found while implementing item 2 and load-bearing for anyone who reuses this
+> lane's framing.** "64 landed-content residue" is the right count of a WRONGLY-NAMED class: it is
+> not residue. Measured over the live population, **79 of 84 dirty worktrees carry TRACKED entries**,
+> dominated by paths **staged-but-never-committed** — and `git cherry` calls 72 of them "landed"
+> because it reads COMMITS, which those paths are not in. Four such staged paths
+> (`tools/blender/clawd_bmo.py` + three `assets/blender/clawd-bmo-*.webp` renders, **held in six
+> worktrees each**) are **absent from `origin/main` entirely and exist on no ref anywhere**. A
+> remedy that trusted `landed()` would have force-removed the only copies of expensive generated
+> assets — the class `~/.claude/CLAUDE.md` protects by name. The shipped gate therefore asks
+> **per-dirty-path content** against trunk (`ls-tree` blob identity, ship-backup-reap's shape: any
+> uncertainty KEEPS), which frees 36 of 84 and correctly holds the rest.
+
 - **The stranded-branch myth, corrected**: of 499 branches, 279 hold 612 truly-unlanded commits
   (patch-id census; raw ahead-counts inflate **5.9×** because rebase-landing mints new shas —
   five outlier branches read 455-ahead while 447/456 commits are patch-equivalent to trunk).
@@ -373,11 +410,15 @@ against install.sh's own loop heads by an anti-rot test rather than by prose.
   land-time content reap; a retrospective sweep is deliberately forbidden — the predicate
   misclassifies 437/739 against a drifted trunk). 75% of truly-stranded branches hold exactly
   ONE commit; 61% are <4d old (in-flight). Real backlog: 71 branches >7d.
-- **The unmanaged growth term**: `refs/checkpoints/` = **5,175 refs at ~700/day** (teammate
+- ~~**The unmanaged growth term**: `refs/checkpoints/` = **5,175 refs at ~700/day** (teammate
   shutdown preservation), **no collector, no retention policy** — and they are load-bearing
   (reap-guard reads them as a work-preservation oracle), so the gap is policy, not deletion.
   Loose objects 692→1,832 in one day (auto-gc cliff at 6,700 turns some session's next write
-  into a gc over a 120MB pack). `refs/heads` is 8% of packed-refs — branch-only remediation
+  into a gc over a 120MB pack).~~ **STRUCK — see ERRATUM above.** A bounded collector exists
+  (`hooks/teammate-checkpoint.sh:153-248`, floor 3 / cap 50 / age 14d) and runs; the store is
+  bounded, and the residual is 65 dead members' ~180 floor-immortal refs (≈3.2%). Loose objects
+  are 513 (7.7% of the cliff), not 1,832. What SURVIVES from this bullet: the refs ARE load-bearing
+  (reap-guard reads them), and `refs/heads` is 8% of packed-refs — branch-only remediation
   misses 92% of the store.
 - **Worktrees**: 125 registered; 90 >7d stale, of which only 25 hold unlanded work (82
   commits) — **64 are landed-content residue kept by the dirty-tree KEEP rule
@@ -479,7 +520,7 @@ conflicts at ~0%, and post-remedy capacity headroom is ~400×.
 | P4 | Land lifecycle: no signal trap (killed land attests nothing), no in-flight marker (double-fire + close-conviction), waiters invisible until release, an orphaned (ppid-1) holder pages nobody, `exit 127` misuse takes the mutex, a failed land's notice dies with its pane, the dead-holder reap races (3 simultaneous holders reproduced), and a live-hung holder wedges the box — in-lock network calls are unbounded (§2.A, §2.F, §2.B, §2.G) | lifecycle |
 | P5 | Verifier lane breaches (p50 3.13h, 56% censored; green 2-3%) with the 2.26×/3.19× QoS lever priced and unfired; auto-revert at 12%; 601 deploy refusals with zero escalation (R7 gap) (§2.D, §2.E) | verify→live |
 | P6 | Live convergence incompleteness: ADD-repair covers 5/19 link classes; `~/.claude/CLAUDE.md` has no converger or detector; ungated hand-pulls (8/15 sessions in the shared checkout) do the real work and suppress the self-heal; torn-state windows unguarded (§2.E, §2.I) | verify→live |
-| P7 | Growth without policy: `refs/checkpoints/` 5,175 @ ~700/day no collector; `ship/backup-*` discharge ~50%; 64 landed-content worktrees kept forever; `--assert` liveness probe has zero callers; loose objects 2.6×/day toward the auto-gc cliff (§2.I) | population |
+| P7 | ~~Growth without policy: `refs/checkpoints/` 5,175 @ ~700/day no collector~~ (STRUCK — a bounded collector exists and runs, §2.I ERRATUM); `ship/backup-*` discharge ~50%; **84 dirty worktrees kept forever by a dirty-tree rule that never asks whether the dirt is already on trunk** (36 are freeable; the rest hold staged assets absent from trunk); `--assert` liveness probe has zero callers; ~~loose objects 2.6×/day toward the auto-gc cliff~~ (STRUCK — 513, 7.7% of it) (§2.I) | population |
 
 P0, cross-cutting: **no instrument measures end-to-end land wall-clock** — v2's own acceptance
 criterion is unverifiable from the artifact it nominates, waits are right-censored, and two
@@ -561,5 +602,5 @@ P5's launchd half is already the operator-owned C10 `70dff02dcf4a`.
 | P4 loud lifecycle | trap+attest; in-flight marker read by wrap-ledger/completion-assert; waiter registry; orphan-holder page; verb allowlist; failure inbox (`refs/land/failed` + backlog row) | zero silent land deaths; zero mid-flight 📦 convictions; a dead author's failed land renders at the next close |
 | P5 verifier share | fire `70dff02dcf4a` (repo half now; C10 half stays operator-owned); R7 escalation arm | verifier p50 <2h; ≥1 green/day; deploy T1 advances without hand-pulls |
 | P6 converge completeness | ~~extend link-refresh classes; CLAUDE.md parity leg; UNGATED verdict files~~ **DONE 2026-08-10** (see §2.E "P6 IMPLEMENTED") | `LIVE_ADDS` breach impossible for any install.sh **symlink** class ✓ · CLAUDE.md sensed ✓ · UNGATED files ✓ · hand-pull rate → 0 *(pending — the filed row is the escalation, not the cure)* |
-| P7 population policy | checkpoints retention + KEEP-ladder content question + `--assert` consumer | packed-refs stops monotone growth; stale-residue worktrees ≤10 |
+| P7 population policy | ~~checkpoints retention~~ (DROPPED — already exists and runs, §2.I ERRATUM) + KEEP-ladder content question (`--dispose-landed-dirt`, per-dirty-path `ls-tree` identity) + `--assert` consumer (`cc-blockers` kind `janitor-stale`) | 36 of 84 dirty worktrees become reapable; a janitor that stops running surfaces on the board instead of silently |
 | P0 self-measurement | attestation fields + census panels | v2 §7 renders as a computed verdict |
