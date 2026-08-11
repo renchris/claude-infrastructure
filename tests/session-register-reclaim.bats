@@ -312,3 +312,85 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   printf '%s' "$output" | jq -e '.cwd | test("/plain$")'
   printf '%s' "$output" | jq -e '.pid > 1'
 }
+
+# ── A SUBAGENT MUST NOT RE-KEY ITS LEAD'S LEASE (backlog 5bb6555f22df) ──────────────────────────
+#
+# The incident report (2026-08-08T01:20:09Z, item 23eccae755a9) named only the Write gate
+# scripts/lib/worker-claim-gate.sh. This hook is the OTHER path to the same theft, and it fires
+# EARLIER — at the subagent's own SessionStart, before any tool call. Measured 2026-08-11: a
+# background `Explore` subagent of a live lead appeared in the registry as
+#     pid 35727   cwd /Users/chrisren/Development/.worktrees/wt-5bb6555f22df
+# so SessionStart fires inside a subagent, it registers as a full session, and it inherits its LEAD's
+# dispatch worktree — every precondition this function gates on. `claude_ancestor_pid` then resolves
+# the SUBAGENT's pid (its comm is `claude.exe`) and the re-key hands the lead's item to a child that
+# exits in seconds.
+#
+# The window is real because the lead's OWN re-key is detached: until it lands, the holder is the
+# spent dispatcher identity, and a reclaim against a dead holder succeeds for whoever asks first.
+#
+# RED-PROOF: case A fails against the pre-fix hook (`git show origin/main:hooks/session-register.sh`)
+# — the lease moves to the subagent's identity. Case B is the other direction and fails against a
+# guard that abstains on a bare `--agent-id` substring instead of the consistent triple.
+
+# A ps table in the shape agent-identity.sh's awk reads: pid ppid command…
+agent_pstable() { # $1=name $2=team → writes the table, echoes its path
+  local f="$BATS_TEST_TMPDIR/pstable.$1"
+  printf '%s\n' "4242 4241 /Users/x/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id $1@$2 --agent-name $1 --team-name $2 --agent-color blue --parent-session-id b2da9008-fecf-4ef0-81c9-e0ac56baa061 --agent-type Explore --permission-mode auto" > "$f"
+  printf '%s' "$f"
+}
+
+@test "A a SUBAGENT does not re-key its lead's lease, and says so in the IDL" {
+  id="$(dispatched_item subagent-must-not-steal)"
+  CC_WF_PSTABLE_FILE="$(agent_pstable probe session-b2da9008)"; export CC_WF_PSTABLE_FILE
+  export CC_WF_START_PID=4242
+  # the harness's own record, transcribed from the live measurement: a plain research subagent IS
+  # listed as a non-lead member, so the confirmation arm returns CONFIRMED, not merely UNKNOWN.
+  mkdir -p "$BATS_TEST_TMPDIR/teams/session-b2da9008"
+  printf '%s\n' '{"members":[{"name":"team-lead","tmuxPaneId":"leader","agentType":"team-lead"},{"name":"probe","tmuxPaneId":"344","agentType":"Explore"}]}' \
+    > "$BATS_TEST_TMPDIR/teams/session-b2da9008/config.json"
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/teams"
+
+  run fire "$BATS_TEST_TMPDIR/wt-$id"
+  [ "$status" -eq 0 ]
+  # THE ASSERTION THE ITEM IS ABOUT: the lease did not move off the dispatcher's spent identity.
+  [ "$(by_of "$id")" = "$HOST-$DEADPID" ]
+  # and the abstention is RECORDED — a silent no-op cannot be told apart from an inert mechanism.
+  [ "$(jq -r 'select(.basis=="subagent") | .item' < "$SESSION_REGISTER_IDL")" = "$id" ]
+  # the ledger was never written at all
+  refute_in_file 'reclaim' "$CC_BACKLOG_FILE"
+}
+
+@test "B PROSE is not an agent — a brief that MENTIONS --agent-id still re-keys" {
+  # `ps -o command=` flattens argv, so a session whose BRIEF quotes the flags is indistinguishable
+  # from one that carries them. If that disarmed this guard, the dispatcher hand-over — the whole
+  # reason this function exists — would silently stop for any worker whose brief discusses agents.
+  id="$(dispatched_item prose-is-not-an-agent)"
+  # The fixture must reach the DISCRIMINATOR to be worth anything. All three flags are present,
+  # cleanly space-delimited, and the id even has the `<name>@session-<team>` grammar — so the flag
+  # test, the co-presence test and the shape gate all pass. The ONLY thing that rejects it is the
+  # record failing to agree with itself: agent-id says probe@session-aaa while agent-name says
+  # `other` and team-name says `session-bbb`. An earlier draft of this case quoted the flags inside
+  # prose punctuation (`--agent-id)`), which no regex matched — it passed against every mutant and
+  # certified nothing.
+  printf '%s\n' "4242 4241 claude --model claude-opus-5 TASK — remedy: a subagent whose argv carries --agent-id probe@session-aaa --agent-name other --team-name session-bbb must never take a work lease" \
+    > "$BATS_TEST_TMPDIR/pstable.prose"
+  export CC_WF_PSTABLE_FILE="$BATS_TEST_TMPDIR/pstable.prose"
+  export CC_WF_START_PID=4242
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/noteams"
+
+  run fire "$BATS_TEST_TMPDIR/wt-$id"
+  [ "$status" -eq 0 ]
+  [ "$(by_of "$id")" != "$HOST-$DEADPID" ]
+  by_of "$id" | grep -qE "^$HOST-[0-9]+\$"
+}
+
+@test "C the guard has an OFF seam, and it is not load-bearing for the hand-over" {
+  id="$(dispatched_item guard-off)"
+  CC_WF_PSTABLE_FILE="$(agent_pstable probe session-b2da9008)"; export CC_WF_PSTABLE_FILE
+  export CC_WF_START_PID=4242
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/noteams"
+  export SESSION_REGISTER_AGENT_LIB_OFF=1
+  run fire "$BATS_TEST_TMPDIR/wt-$id"
+  [ "$status" -eq 0 ]
+  [ "$(by_of "$id")" != "$HOST-$DEADPID" ]
+}

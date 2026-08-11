@@ -265,6 +265,56 @@ reclaim_worker_item() {
   esac
   [ "${#item}" -eq 12 ] || return 0
 
+  # ── A SUBAGENT MUST NOT RE-KEY ITS LEAD'S LEASE (backlog 5bb6555f22df) ────────────────────────
+  # THE SECOND PATH, and it fires EARLIER than the one the incident named. That report blamed the
+  # Write gate (scripts/lib/worker-claim-gate.sh), and fixing only that would have left the theft
+  # reachable from here — measured 2026-08-11, and the measurement is the whole justification:
+  # a background `Explore` subagent of this very session appeared in the live registry as
+  #     pid 35727   cwd /Users/chrisren/Development/.worktrees/wt-5bb6555f22df
+  # i.e. SessionStart FIRES inside a subagent, it registers as a full session, and it inherits its
+  # LEAD's dispatch worktree as cwd. So the gate above passes, `claude_ancestor_pid` resolves the
+  # SUBAGENT's own pid (its comm is `claude.exe`), and the reclaim below re-keys the lead's item to a
+  # child that will exit in seconds. The lead's next Write is then refused as a DUPLICATE WORKER and
+  # told to stand down and retire its own pane — the 2026-08-08T01:20:09Z incident on 23eccae755a9,
+  # ~17 minutes of blocked writes.
+  #
+  # WHY THE WINDOW IS REAL AND NOT CLOSED BY `claimer_live`. `cc-backlog reclaim` refuses to steal a
+  # provably-live claim, so once the lead holds the lease a subagent can only noop. But the lead's own
+  # re-key is fired DETACHED at the foot of this file, so between the lead's process start and that
+  # background reclaim landing, the holder is still the SPENT identity cc-dispatch left behind — and a
+  # reclaim against a dead holder succeeds for whoever asks first. A subagent spawned in that window
+  # wins the race, which is exactly the state the incident was observed in.
+  #
+  # THE ORACLE IS THE SSOT, NOT A FOURTH COPY. hooks/lib/agent-identity.sh already answers "is this
+  # session a harness agent" and already carries the two traps this decision needs: the flags must
+  # form a CONSISTENT triple (`ps -o command=` flattens argv, so a session whose BRIEF quotes
+  # `--agent-id` matches a bare flag test — the brief of the session that fixed this bug does exactly
+  # that), and the argv claim is cross-checked against the harness's own teams/<team>/config.json.
+  # Verified against this population rather than assumed: the plain research subagent measured above
+  # is recorded there as `{"name":"argvprobe","tmuxPaneId":"344","agentType":"Explore"}`, a non-lead
+  # member, so the confirmation arm returns CONFIRMED for it and not merely UNKNOWN.
+  #
+  # ABSENT LIB ⇒ PROCEED, and that direction is deliberate. Treating "cannot tell" as "is an agent"
+  # would abstain from the dispatcher hand-over re-key for EVERY worker on the box, which is the
+  # mechanism this whole function exists to provide; treating it as "is a session" merely restores
+  # today's behaviour, whose worst case is the bounded, self-releasing stall above.
+  # The cost — one `ps` table plus awk — is paid only here, INSIDE the dispatch-worktree gate and on
+  # the detached path, so neither a session start nor a non-worker pays it.
+  if [ -z "${SESSION_REGISTER_AGENT_LIB_OFF:-}" ]; then
+    local _sr_aid
+    for _sr_aid in "$(dirname "${BASH_SOURCE[0]}")/lib/agent-identity.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh" \
+                   "${HOME:-}/.claude/hooks/lib/agent-identity.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      [ -r "$_sr_aid" ] && { . "$_sr_aid"; break; }
+    done
+    if command -v agent_is_assignee >/dev/null 2>&1 && agent_is_assignee >/dev/null 2>&1; then
+      reclaim_idl abstained "harness subagent — the lease stays with the session that spawned it" \
+                            "$item" "subagent"
+      return 0
+    fi
+  fi
+
   bin="$(_resolve_backlog_bin)"
   [ -n "$bin" ] && [ -x "$bin" ] || { reclaim_idl abstained "cc-backlog not resolvable: ${bin:-<none>}" "$item"; return 0; }
 
