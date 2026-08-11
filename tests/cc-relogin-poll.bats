@@ -9,6 +9,10 @@ setup() {
   # the subject resolves its own state under ~, so unfixtured this suite reads/writes the
   # operator's LIVE layer. Everything this suite asserts is already redirected elsewhere.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Nothing in this subject reads $KITTY_WINDOW_ID — this is inherited-environment hygiene, not a
+  # fixture: the suite forks child processes (the watchdog arms below fork a real cc-relogin stub),
+  # and an inherited terminal id is the kind of ambient value a child can key a divert on.
+  unset KITTY_WINDOW_ID
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   P="$REPO/bin/cc-relogin-poll"
   D="$BATS_TEST_TMPDIR"
@@ -1002,4 +1006,169 @@ STUB
   [ "$(cmdpos "sed -n '/CONFIRM:-0/,\$p' '$A'")" -gt 0 ] || false
   # ...and NONE before the gate.
   [ "$(cmdpos "sed -n '1,/CONFIRM:-0/p' '$A'")" -eq 0 ] || false
+}
+
+# ── W: CC_RELOGIN_POLL_TIMEOUT_S is a BOUND, not a request ──────────────────────────────────────
+# THE DEFECT. The child watchdog sent TERM and nothing else, while the parent's `wait "$cp"` is
+# unbounded — so the timeout bounded exactly ONE case: a child that dies on a plain TERM. TERM is
+# by definition catchable and ignorable; $RELOGIN_BIN is env-overridable (the same
+# CC_RELOGIN_POLL_RELOGIN_BIN these tests drive it with); and a SIGSTOPped child, or one blocked
+# in an uninterruptible syscall, does not reap on TERM either. Today's real child (bin/cc-relogin,
+# a python3 script with no signal handler) DOES die on a plain TERM — the arms below are not a
+# claim that it hangs. They are the claim that nothing in the poller MADE the bound true.
+#
+# BLAST RADIUS, which is what makes this worth four tests: launchd will not start a second
+# instance of a label while one is running, and launchd/staged/com.claude.relogin.plist carries no
+# overlap guard (StartInterval 3600, and the poller has no lock of its own). A parent stuck in
+# `wait` therefore wedges the ENTIRE hourly cadence — silently, with no RESULT line, no
+# write_state, and no attempt accounting — for as long as the child lives.
+#
+# Every arm here BOUNDS ITSELF with `timeout`, so a regression fails the test instead of hanging
+# the suite: status 124 is the test's own bound firing, i.e. the subject hung. This suite runs in
+# the background QoS band (bin/cc-bats demotes to PRI=4), so the elapsed assertions are sized with
+# a wide margin — they discriminate 5s from 90s, never 5s from 6s.
+
+relogin_stub() { cat > "$D/cc-relogin"; chmod +x "$D/cc-relogin"; }   # stdin → the child under test
+
+@test "W1: a child that IGNORES TERM is still bounded — TERM, grace, then KILL" {
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=3 CC_RELOGIN_POLL_KILL_GRACE_S=2
+  # `trap '' TERM` = SIG_IGN, which is also inherited by the sleeps, so nothing here dies on TERM.
+  # A LOOP of short sleeps rather than one long one: on the KILL this shell is gone instantly and
+  # at most one 1s sleep is orphaned, instead of a 60s stray per test run.
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+trap '' TERM
+echo "stub: TERM is ignored here"
+i=0; while [ $i -lt 180 ]; do sleep 1; i=$((i+1)); done
+exit 0
+STUB
+  t0="$(date +%s)"
+  run timeout -k 2 45 "$P" --json
+  t1="$(date +%s)"
+  [ "$status" -ne 124 ] || false          # 124 = OUR bound fired ⇒ the subject never returned
+  [ "$status" -eq 0 ] || false            # a child failure is DATA, not a poller error
+  [ $((t1 - t0)) -lt 30 ] || false        # 3s + 2s grace against a 180s child — a 6x gap, not a stopwatch
+  # …and the outcome is recorded as the timeout it was, on all three surfaces.
+  json | jq -e '.child_timeout=="kill" and .child_exit=="137"' >/dev/null || false   # 128+SIGKILL
+  grep -q 'TIMEOUT next3' "$CC_RELOGIN_POLL_LOG" || false
+  grep -q 'timeout=kill' "$CC_RELOGIN_POLL_LOG" || false
+  [ "$(jq -r .last_result "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json")" = "timeout-kill exit=137" ] || false
+  # The attempt still counts: a child that had to be KILLed is exactly the failure MAX_ATTEMPTS
+  # exists to catch, and a timeout that did not move S_ATT would make the cap unreachable again.
+  [ "$(attempts next3)" -eq 1 ] || false
+  # NEVER booked as proven — that claim is what would tell the board the deadline should move.
+  run grep -q 'PROVEN' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W2: a well-behaved slow child dies on TERM, does NOT pay the grace, and is still a timeout" {
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=3 CC_RELOGIN_POLL_KILL_GRACE_S=40
+  # `exec` so the pid the poller signals IS the sleep — no wrapper shell left holding an orphan.
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+exec sleep 60
+STUB
+  t0="$(date +%s)"
+  run timeout -k 2 90 "$P" --json
+  t1="$(date +%s)"
+  [ "$status" -ne 124 ] || false
+  [ "$status" -eq 0 ] || false
+  # DISCRIMINATING: a 3s bound plus a 40s grace it must not spend. Under 25s can only mean TERM sufficed.
+  [ $((t1 - t0)) -lt 25 ] || false
+  json | jq -e '.child_timeout=="term" and .child_exit=="143"' >/dev/null || false   # 128+SIGTERM
+  [ "$(jq -r .last_result "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json")" = "timeout-term exit=143" ] || false
+  grep -q 'died on TERM' "$CC_RELOGIN_POLL_LOG" || false
+  run grep -q 'PROVEN' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W3 CONTROL: a child that exits promptly is reaped AT ONCE — the grace is never paid" {
+  # THE CONTROL that catches "just always sleep the grace". The grace here is 120s and the test's
+  # own bound is 60s, so an unconditional grace fails this arm TWICE — once on elapsed, once on
+  # status 124 — while the honest implementation finishes in about a second. Every margin in this
+  # section is a MULTIPLE (4x-6x), never a handful of seconds: the suite runs demoted to PRI=4
+  # (bin/cc-bats), so a bound sized on an idle bench is a flake waiting for a busy box.
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=120 CC_RELOGIN_POLL_KILL_GRACE_S=120
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+echo "stub: done immediately"
+exit 0
+STUB
+  t0="$(date +%s)"
+  run timeout -k 2 60 "$P" --json
+  t1="$(date +%s)"
+  [ "$status" -ne 124 ] || false
+  [ "$status" -eq 0 ] || false
+  [ $((t1 - t0)) -lt 30 ] || false
+  json | jq -e '.child_timeout==null and .child_exit=="0"' >/dev/null || false
+  [ "$(jq -r .last_result "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json")" = "exit=0" ] || false
+  grep -q 'PROVEN — deadline should move' "$CC_RELOGIN_POLL_LOG" || false
+  run grep -q 'TIMEOUT next3' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W3b CONTROL: a prompt NON-ZERO exit keeps its true rc — the bound never rewrites it" {
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=120 CC_RELOGIN_POLL_KILL_GRACE_S=120
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+exit 7
+STUB
+  t0="$(date +%s)"
+  run timeout -k 2 60 "$P" --json
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ] || false            # child failure is data
+  [ $((t1 - t0)) -lt 30 ] || false
+  json | jq -e '.child_exit=="7" and .child_timeout==null' >/dev/null || false
+  [ "$(jq -r .last_result "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json")" = "exit=7" ] || false
+  [ "$(attempts next3)" -eq 1 ] || false
+  run grep -q 'PROVEN' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W4 CONTROL: a child that exits 143 ON ITS OWN is not a timeout (rc alone cannot decide)" {
+  # The verdict needs the watchdog's marker AND the exit code, and this arm is why the rc half is
+  # not sufficient: 143 is 128+SIGTERM, and a child is free to return it without anyone signalling
+  # it. An rc-only implementation books this clean run as `timeout-term`, tells the escalation path
+  # a bounded attempt failed, and — the direction that actually costs — makes a genuine renewal
+  # indistinguishable from a wedge. (The marker half alone is unsound in the other direction: the
+  # watchdog wakes exactly at the boundary, and a child that has exited but is not yet reaped is a
+  # ZOMBIE, which still answers `kill -0` with 0.)
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=120 CC_RELOGIN_POLL_KILL_GRACE_S=120
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+exit 143
+STUB
+  run timeout -k 2 60 "$P" --json
+  [ "$status" -eq 0 ] || false
+  json | jq -e '.child_exit=="143" and .child_timeout==null' >/dev/null || false
+  [ "$(jq -r .last_result "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json")" = "exit=143" ] || false
+  run grep -q 'TIMEOUT next3' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W5: the escalation delay is a named env knob, and a garbage value falls back, never exits 1" {
+  # The knob follows the file's own CC_RELOGIN_POLL_* convention. Garbage falls BACK rather than
+  # aborting: this constant bounds a watchdog, and refusing to poll at all because a watchdog knob
+  # is malformed would turn a cosmetic typo into the very missed-cadence this whole fix is about.
+  mk next3 100 0
+  build json
+  export CC_RELOGIN_POLL_TIMEOUT_S=3 CC_RELOGIN_POLL_KILL_GRACE_S=not-a-number
+  relogin_stub <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  run timeout -k 2 60 "$P" --json
+  [ "$status" -eq 0 ] || false
+  json | jq -e '.child_exit=="0" and .action=="invoked"' >/dev/null || false
+  grep -q 'CC_RELOGIN_POLL_KILL_GRACE_S' "$P" || false
 }
