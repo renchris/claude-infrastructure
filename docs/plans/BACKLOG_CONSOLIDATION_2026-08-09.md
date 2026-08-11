@@ -558,3 +558,127 @@ and this diff adds no file to the live layer, so nothing here is inert. That ref
 anti-rollback gate working and is already filed ~20 times over (`22200e4962d0` quotes the identical
 message; `b79591064f75` and `16c864bd34a8` are about the `🚀` rung being unreachable for exactly this
 reason). No new duplicate was filed.
+
+---
+
+# READINESS (2026-08-11) — why the one-time triage keeps being re-minted, and the four things that make it stop
+
+**The operator's ask, frozen:** *"I want the backlog to always be in a consolidated, finalized,
+updated, and ready-to-fire state before any fires"* — i.e. no recurring heroic triage, ever again.
+
+**The law is already settled and already written down in this repo.** `bin/cc-premise`'s own header
+states it: *"A one-time review goes stale the moment it finishes — that decay is precisely what
+produced the pile it would be reviewing. The durable form has to run at CONSUMPTION, every time."*
+M2 built that for ONE property (premise currency) and it works. **This section is about the other
+three, and about the instrument that was supposed to tell us they were rotting.**
+
+## The generator, stated exactly
+
+Readiness has four properties. Minting is continuous; three of the four are checked by a batch.
+
+| property | question | mechanism today | consumption-time? |
+|---|---|---|---|
+| premise currency | is the claim still true vs today's tree? | `cc-premise` re-run at `claim` (M2) | ✅ yes |
+| **probe trustworthiness** | would the probe have FAILED on filing day? | **nothing** | ❌ unbuilt |
+| **venue label** | where can this run? | `bin/cc-venue`, hand-invoked | ❌ one-shot batch |
+| **cluster identity** | is this one effort or five rows? | trigger DETECTS ≥5, files an item | ❌ detector, not actuator |
+
+A batch over a growing stream must be re-run forever. That is `#152`, and it is why it will be
+re-minted a third time unless the shape changes rather than the effort.
+
+## Four measurements, taken 2026-08-11 on the live store
+
+1. **The ratchet — the one always-on guard on backlog rot — is dead, and has never once been green.**
+   `coverage_high_water` is latched at **100.0%** (recorded 07:12:51Z); live coverage is **51.5%**
+   (157 of 305), so `--assert` returns **rc=1 every run**. `autonomy-sweep` journals it every 300 s
+   and **3 of 3 recorded `ratchet_rc` values are `"1"`** — documented in the sweep as *"ratchet saw
+   coverage FALL"*. An alarm that fires unconditionally carries exactly as many bits as one that
+   cannot fire (MEMORY: `alarm-polarity-and-attention-budget`). **This is why nobody saw the decay.**
+2. **100% is unreachable by construction, so the GREEN state does not exist.** The CURRENCY pass
+   deliberately left 103 items unprobed (investigations, design calls, multi-part conditions), and
+   the `needs` class has no machine oracle by design. A ratchet whose healthy state the population
+   cannot attain is the `cap-whose-population-is-empty` defect: *prove the green event can happen.*
+3. ⚠️ **RETRACTED — this measurement was the analyst's error, and it is the most useful line here.**
+   It read: *"168 open `needs` rows sit in the ratchet's `live` set; only 1 is dispatchable… they
+   drag a firing-readiness metric they are not part of"*, concluding coverage was **28.7% and
+   falling** from 32.5%. All of that is **false**. `needs` rows are born **BLOCKED**
+   (`bin/cc-backlog:544` — the verb files them blocked and deliberately skips the dispatch kick), so
+   the ratchet's `live` = open ∨ claimed had already excluded 167 of the 168. The 505-row figure
+   came from `cc-backlog list --open`, whose projection **includes 198 blocked rows** — so the
+   polluted denominator was mine, not the script's. **Correct numbers: 304 open + 3 claimed = 307
+   live, 157 with a probe = 51.5%** — which is *up* from the CURRENCY pass's 51.0%, not down.
+   Coverage was never falling. Invoking `positive-control-the-denominator` while failing to control
+   the denominator is precisely how this class survives; the `$probeable` exclusion shipped anyway
+   as defence-in-depth (one `needs` row is open today, so a reopen CAN put the class back in `live`)
+   and the census now prints the excluded count so it can never again be assumed non-zero.
+4. **Minting is fast but its pressure on the FIRING set is much smaller than the raw count.**
+   Adds/day: 26 · 75 · 39 · 146 · 126 · 92 · 156 · **225** — but 132 of the last 225 are `needs`,
+   which are born blocked and never dispatched. They grow the *store*, not the queue. The
+   consolidation lever is therefore real but **second-order**, and the store-size figure must never
+   again be quoted as if it were queue pressure (same defect as #3, one level up).
+
+## The design — readiness is a PRECONDITION OF ADMISSION, keyed on an invalidator, never on a clock
+
+**R1 · One conjunction, at the one seam.** `cc-dispatch`'s admission set is ≤ `CC_DISPATCH_MAX_SPAWN`
+(default 2). Checking readiness there costs **O(2) per pass, never O(505)** — which is the whole
+reason it can be always-on. `ready = premise-standing ∧ probe-trustworthy ∧ venue-current ∧
+cluster-resolved`. Enforcement lives at the chokepoint that IS the act
+(MEMORY: `enforcement-must-live-at-the-chokepoint`).
+
+**R2 · A verdict is keyed on the trunk sha it was computed against, and voided by a PATH-INTERSECTING
+move — not by age.** Store `readyAt: <sha>`. Void iff
+`git diff --name-only <readyAt>..origin/main` intersects the item's cited path set. Trunk moving
+elsewhere costs nothing; trunk moving *under the item* voids it instantly. This is the exact answer
+to *"written hours/days/weeks before, with significant diff changes since"* — such an item is
+**mechanically unfireable until re-derived**, whatever its age. 🚨 **An EMPTY path set is always
+void, never always fresh** — an item citing nothing has proven nothing survived (the fail-open trap
+this repo keeps paying for).
+
+**R3 · Not-ready must be REPAIRABLE, never a drop.** A void item is re-derived in place and fires on
+the next pass. A gate that silently shreds work is worse than the staleness it prevents; ship it
+**advisory-first** (journal the verdict, admit anyway), measure the would-block rate, then flip to
+enforcing — the same ratchet discipline M2 used.
+
+**R4 · The second screen, which the CURRENCY pass specified and nothing built.** Its own words:
+*"Did it already pass on the day the item was filed? — nothing checks this, and it is the commoner
+failure by 8 instances to 2."* Mechanical form given there: `git log -S<token> --before=<item lastTs>`
+— a token already in the tree at filing cannot be the remedy's signature. **16 of 26 hand-reviewed
+probes were refuted for exactly this**, and the lead's own spot check caught 1 of the 16. Unbuilt,
+every future coverage push re-manufactures anti-coverage: rows that read as checked and are a
+guaranteed false retraction.
+
+**R5 · Fix the instrument before trusting anything measured through it.** Correct denominator
+(dispatchable, not `live`), re-baseline the high-water, and refuse to record a high-water from a
+denominator below a floor — so a degenerate read can never again latch a target the population
+cannot reach. ⚠️ MEMORY: `corrected-instrument-can-lie-again` — re-check it after the fix rather
+than assuming the correction took.
+
+**R6 · Consolidation ACTS on the mechanical half.** `cc-backlog` already has `--condition` re-keying.
+Rows differing only by an embedded sha/digit fold into their condition master with **no judgment
+required**; only semantically-distinct clusters escalate to a decision. A detector that files an
+item asking a human to consolidate is one more row in the pile it is measuring.
+
+**R7 · Brake the mint.** The dominant generator (`needs`, 132/225) should be **condition-keyed so a
+recurrence UPDATES rather than MINTS**. This is the only lever that changes the denominator's slope,
+and every other number here is a ratio over that denominator.
+
+## Phase 0 · Agent Team Orchestration
+
+**EXECUTION LOCUS PER WAVE.** W0 is **L** (lead-inline): it is the instrument every other wave is
+measured through, it is one file plus its suite, and doing it first is what makes W1–W3 verifiable at
+all. W1–W3 are **S** (dispatched sessions, the default) — each is a multi-file implementation whose
+detail belongs in its own context.
+
+| Wave | Locus | Deliverable | Depends on |
+|---|---|---|---|
+| **W0 · the instrument** | L | ratchet: dispatchable denominator · re-baseline · floor guard so an unreachable target cannot latch | — |
+| **W1 · the conjunction** | S | `readyAt` + the admission-seam gate (advisory-first) + `cc-venue`'s missing caller | W0 |
+| **W2 · the second screen** | S | filing-day discrimination (`git log -S… --before=`), retro-scan of the 145 stored probes | W0 |
+| **W3 · act, and brake** | S | consolidation actuator (condition-fold) + `needs` condition-keying | W0 |
+
+W1/W2/W3 are independent (different files, no ordering dependency) and fire concurrently after W0.
+**Lead context budget:** recycle at the seam after W0 lands and the three are fired.
+
+**Anti-goal:** a readiness gate that stalls the dispatcher. 219 open rows carry no venue label today;
+a fail-closed gate shipped enforcing on day one would admit nothing. Advisory-first is not timidity,
+it is the only way to learn the would-block rate before it becomes a wall.
