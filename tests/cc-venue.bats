@@ -255,3 +255,41 @@ EOF
   run "$CV" run --limit banana
   [ "$status" -eq 2 ] || { echo "$output"; false; }
 }
+
+@test "19 the re-run cost gate is STRICTLY WEAKER than the actuator idempotence it shadows" {
+  mkrepo
+  add "add a bats case for the tsv-pad helper" >/dev/null
+  add "restart the launchd daemon" a2 >/dev/null
+  "$CV" run --apply >/dev/null
+  local before; before="$(grep -c '' "$CC_BACKLOG_FILE")"
+
+  # A cc-backlog that FAILS if it is invoked at all. On an unchanged store the gate must skip every
+  # write, so this must not be reached — which is what makes the skip observable rather than merely
+  # fast. (Case 15 already pins the end-to-end idempotence; this pins WHERE it is paid for.)
+  local tripwire="$BATS_TEST_TMPDIR/cb-tripwire"
+  cat > "$tripwire" <<EOF
+#!/bin/bash
+case "\$1" in
+  list) exec "$CB" "\$@" ;;
+  *) echo "cc-backlog was invoked to write: \$*" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$tripwire"
+  CC_VENUE_BACKLOG_BIN="$tripwire" run "$CV" run --apply --json
+  [ "$status" -eq 0 ] || { echo "the gate did not skip: $output"; false; }
+  echo "$output" | jq -e '.counts.unchanged >= 2' >/dev/null || { echo "$output"; false; }
+  [ "$(grep -c '' "$CC_BACKLOG_FILE")" -eq "$before" ] || { echo "the store grew"; false; }
+}
+
+@test "20 CONTROL: a CHANGED decision still reaches the actuator — the gate is not a mute button" {
+  mkrepo
+  local id; id="$(add "add a bats case for the tsv-pad helper")"
+  "$CV" run --apply >/dev/null
+  [ "$(plan_of "$id")" = cloud ] || { echo "setup failed"; false; }
+  # Hand-write a DIFFERENT decision, so the fold no longer matches what the producer will compute.
+  "$CB" venue "$id" --venue local --why "stale: hand-written" >/dev/null
+  run "$CV" run --apply --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(plan_of "$id")" = cloud ] \
+    || { echo "the gate suppressed a write the actuator would have taken"; false; }
+}

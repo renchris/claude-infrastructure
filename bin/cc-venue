@@ -327,11 +327,26 @@ def cmd_run(argv):
         counts[d["venue"]] += 1
         counts["token:" + d["token"]] += 1
         if apply_:
-            ok, msg = write_label(it["id"], d["venue"], why_of(d))
-            d["written"] = ok
-            if not ok:
-                counts["write-failed"] += 1
-                sys.stderr.write("cc-venue: %s NOT labelled — %s\n" % (it["id"], msg))
+            # A COST GATE, and STRICTLY WEAKER than the idempotence it shadows (memory:
+            # cost-gate-must-be-strictly-weaker). `cc-backlog venue` already declines to append an
+            # unchanged decision — it is the arbiter and stays so — but reaching that decline costs
+            # a full fold of the ledger PER ITEM, and the ledger is append-only. Measured on the
+            # live store: 302 items over 8,100 records is ~20 minutes, essentially all of it spent
+            # re-deriving state this loop already holds in `items`.
+            #
+            # So the skip fires ONLY on an exact match of both fields against the same fold the
+            # actuator would read, which is a subset of the cases the actuator itself would skip.
+            # It can never admit a write the actuator would refuse, and it can never suppress one
+            # the actuator would take: the sole effect is not paying to be told "unchanged".
+            if (it.get("venuePlan") or "", it.get("venueWhy") or "") == (d["venue"], why_of(d)):
+                d["written"] = "unchanged"
+                counts["unchanged"] += 1
+            else:
+                ok, msg = write_label(it["id"], d["venue"], why_of(d))
+                d["written"] = ok
+                if not ok:
+                    counts["write-failed"] += 1
+                    sys.stderr.write("cc-venue: %s NOT labelled — %s\n" % (it["id"], msg))
         decisions.append(d)
 
     horizons = {}
