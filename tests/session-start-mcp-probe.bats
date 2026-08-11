@@ -26,9 +26,12 @@
 #   · Every ABSENCE assertion is paired with a POSITIVE CONTROL sharing its fixture: (b) pairs
 #     "UNKNOWN" against a real zero, (c) pairs the two stripped vars against an inherited third, (d)
 #     pairs the timeout against the same stub not hanging, (f) pairs the PPID hit against a miss.
-#   · Test (a-control) replays the REAL pre-fix artifact from git (`git show origin/main:…`), never
-#     a mutant of this file — memory control-must-replay-the-real-artifact. It is the only test that
-#     can tell the two trees apart, and it is why (a) is not a vacuous pass.
+#   · Test (a-control) replays the REAL pre-fix artifact from git at a PINNED SHA, never a mutant
+#     of this file — memory control-must-replay-the-real-artifact. It is the only test that can
+#     tell the two trees apart, and it is why (a) is not a vacuous pass. It named `origin/main`
+#     until 2026-08-11, which made it self-defeating: the fix landed on main and the control began
+#     replaying the FIXED hook, so it went red permanently for a reason unrelated to any diff
+#     running it. A control keyed on a moving ref expires the moment its own subject lands.
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)"
@@ -111,10 +114,19 @@ run_hook() { run bash "$HOOK" <<< '{}'; }
   [[ "$output" != *"MCP: 1 server"* ]] || false
 }
 
-@test "(a-control) the PRE-FIX artifact from origin/main answers with the stale PATH binary" {
+@test "(a-control) the PRE-FIX artifact answers with the stale PATH binary" {
+  # PINNED SHA, NOT `origin/main`. This control replayed origin/main, which MOVES: once the fix
+  # landed there (37ef2489c), the control was replaying the POST-fix artifact and went red
+  # permanently — reproducing nothing, while looking like a regression in whatever diff happened
+  # to run it next. Measured 2026-08-11: red at HEAD with an empty working tree.
+  # 54555bed1 is 37ef2489c^ — the last commit whose hook still had the `command -v claude` gate and
+  # no _resolve_claude_bin. A control must be keyed on the MECHANISM it replays, not on a ref that
+  # advances past it.
   [ -n "$GIT_BIN" ] || skip "git unavailable"
-  "$GIT_BIN" -C "$REPO" show origin/main:hooks/session-start.sh > "$TMP/pre.sh" 2>/dev/null \
-    || skip "origin/main copy of the hook unavailable"
+  "$GIT_BIN" -C "$REPO" show 54555bed1:hooks/session-start.sh > "$TMP/pre.sh" 2>/dev/null \
+    || skip "pre-fix commit 54555bed1 unavailable (shallow clone?)"
+  # The replayed artifact must actually BE pre-fix, or this test passes for the wrong reason.
+  ! grep -q '_resolve_claude_bin' "$TMP/pre.sh" || false
   fixture_track_mismatch
   run bash "$TMP/pre.sh" <<< '{}'
   [ "$status" -eq 0 ] || false
