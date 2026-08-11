@@ -81,8 +81,11 @@ grep -q 'claude1' "$REPO/lib/account-map.generated.sh" || die "generated map doe
 say "regenerated lib/account-map.generated.sh"
 
 # ---- step 4: prove it, in this shell, before claiming anything ----------------------------------
+# `grep 'x' >/dev/null`, NOT `grep -q`: under `set -euo pipefail` an early-exiting consumer
+# SIGPIPEs the producer, and pipefail then makes the whole pipeline non-zero — so the condition
+# would read FALSE on a MATCH and this check would report failure exactly when it succeeded.
 if zsh -fc "claude() { print \"cfg=\${CLAUDE_CONFIG_DIR:-unset}\" }; source '$LIB_LIVE'; claude1" \
-     2>/dev/null | grep -q 'claude-next'; then
+     2>/dev/null | grep 'claude-next' >/dev/null; then
   say "VERIFIED: claude1 pins ~/.claude-next"
 else
   die "claude1 did not pin account 1 — the zshrc line is in place but the lib is not behaving; revert with the backups above"
