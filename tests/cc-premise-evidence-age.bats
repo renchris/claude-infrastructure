@@ -75,6 +75,16 @@ mkrepo() {
   printf 'seed\n' > "$r/scripts/target.sh"
   printf 'seed\n' > "$r/scripts/untouched.sh"
   printf 'seed\n' > "$r/bin/deep-tool.sh"
+  # The two names that make the basename arm's boundary testable, and both are needed: `shared.sh`
+  # is carried by TWO directories (the only case where "no known directory" is actually true), and
+  # `café.sh` is what `ls-tree --name-only` mangles into `"bin/caf\303\251.sh"` unless the read asks
+  # for -z. The non-ASCII spelling is the REACHABLE one and an embedded quote is not: RE_PATH's
+  # character class is `[\w./@-]`, which excludes `"` (so a `wei"rd.sh` fixture is only ever seen as
+  # `rd.sh`) but `\w` is unicode-aware in Python 3 and matches `café`. Verified on this box —
+  # core.precomposeunicode is true, so git stores the NFC form this file is written in.
+  printf 'seed\n' > "$r/scripts/shared.sh"
+  printf 'seed\n' > "$r/bin/shared.sh"
+  printf 'seed\n' > "$r/bin/café.sh"
   git -C "$r" init -q -b main .
   git -C "$r" config user.email t@t
   git -C "$r" config user.name t
@@ -286,11 +296,22 @@ verdict() { printf '%s' "$1" | sed -n 's/^verdict=//p'; }
   [ "$cited" = "scripts/target.sh" ]
 }
 
-@test "a BARE BASENAME is excluded from the pathspec — it has no known directory to ask about" {
-  # `deep-tool.sh` lives at `bin/deep-tool.sh`. The path arm clears it via the trunk basename set
-  # WITHOUT learning where it is, so it is not a usable pathspec: handing git a bare basename either
-  # matches nothing or matches a root file that does not exist. Excluding it is the honest read, and
-  # the item below has no other cited path, so the arm must fall silent entirely.
+@test "a UNIQUELY-carried bare basename REACHES the arm, named by where it resolved" {
+  # THIS TEST USED TO ASSERT THE OPPOSITE, and the reversal is the lesson worth keeping. It read
+  # "a BARE BASENAME is excluded — it has no known directory to ask about", and its reasoning was
+  # true of the implementation rather than of the world: `_trunk_basenames` cleared the name against
+  # a SET built by discarding the directory, and the exclusion was then justified by that discard.
+  # `deep-tool.sh` is carried by exactly one file on trunk, so its directory was never unknown.
+  #
+  # What moved the judgment was a measurement, not an argument. Over the 385 live items on
+  # 2026-08-11 the exclusion silenced this arm for 47 of the 179 that name a file — 26% — with 22
+  # already sitting on reportable churn, while the ambiguity it guarded against reached exactly ONE
+  # (memory: caller-census-keyed-on-path-misses-the-name; stale-assertion-becomes-an-inverted-guard,
+  # since a test pinning a decision its own premise has outlived guards the defect).
+  #
+  # The `cited:` assertion is the load-bearing half: the block must name bin/deep-tool.sh, the path
+  # it ASKED GIT ABOUT, not the bare spelling the item happened to use. A reader who cannot tell
+  # which file the commit list came from cannot check the finding.
   r="$(mkrepo)"
   export CC_PREMISE_REPO="$r"
   add 8b8b8b8b8b8b "the converger deep-tool.sh refuses" "$(ts_ago 5d)"
@@ -298,8 +319,84 @@ verdict() { printf '%s' "$1" | sed -n 's/^verdict=//p'; }
 
   run "$CP" check 8b8b8b8b8b8b
   [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "EVIDENCE AGE"
+  printf '%s' "$output" | grep -q "1 commit(s) have landed"
+  printf '%s' "$output" | grep -q "stop refusing"
+  cited="$(printf '%s' "$output" | sed -n 's/^ *cited: //p')"
+  [ "$cited" = "bin/deep-tool.sh" ]
+  # Still ADVISORY. Resolving a name tells us where to look; it says nothing about whether the
+  # premise died, so the verdict must be untouched exactly as it is for a literal path.
+  [ "$(verdict "$output")" = clear ]
+  refute_match "$output" "not at that location"
+}
+
+@test "an AMBIGUOUS bare basename stays excluded — there the directory really IS unknown" {
+  # The other half of the boundary, and the control that stops the fix above from becoming "resolve
+  # every name somehow". `shared.sh` is carried by scripts/ AND bin/; picking either would report
+  # churn from a file the item never meant, and reporting both would attribute one file's commits to
+  # another. Silence is the honest answer, and it is the answer the old blanket exclusion was
+  # actually right about.
+  #
+  # BOTH CARRIERS ARE COMMITTED TO, and that is the whole reason this control can fail. Its first
+  # version touched only scripts/shared.sh and went green against the mutant that deletes the
+  # `len(hits) == 1` guard — that mutant takes hits[0], which ls-tree orders as bin/shared.sh, so it
+  # resolved to the WRONG file, found nothing under it, and fell silent for a reason that has
+  # nothing to do with the property under test (memory: control-must-replay-the-real-artifact).
+  # With churn under both, every possible resolution speaks and only the exclusion is silent, so the
+  # assertion no longer depends on which name ls-tree happens to return first.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 8c8c8c8c8c8c "the helper shared.sh drops a field" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" scripts/shared.sh "fix(shared): pad the field"
+  commit_at "$r" "$(ts_ago 2d)" bin/shared.sh "fix(shared): pad the other one"
+
+  run "$CP" check 8c8c8c8c8c8c
+  [ "$status" -eq 0 ]
   [ "$(verdict "$output")" = clear ]
   refute_match "$output" "EVIDENCE AGE"
+  # …and it is excluded, never CONVICTED: an ambiguous name is still present on trunk.
+  refute_match "$output" "not at that location"
+}
+
+@test "the trunk read is -z, so a QUOTED path is neither convicted nor mis-asked" {
+  # `ls-tree -r --name-only` C-quotes any path carrying a non-ASCII byte, so bin/café.sh comes back
+  # as the literal characters `"bin/caf\303\251.sh"`. Under that read the basename set holds a
+  # mangled key, the cited name misses it, and the path arm convicts a file that has never moved.
+  # Now that the same entry is handed to git AS A PATHSPEC the second failure is quieter and worse:
+  # a pathspec matching nothing counts zero commits, so the arm falls silent while looking like it
+  # asked (memory: lookup-miss-is-not-absence).
+  #
+  # BOTH assertions are needed and they fail differently — the first catches the mangled SET (a
+  # fabricated "not at that location"), the second catches the mangled PATHSPEC (a silent arm). A
+  # test asserting only the first would pass with the -z dropped from the churn read alone.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 8d8d8d8d8d8d "the wrapper café.sh mis-splits" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" "bin/café.sh" "fix(cafe): split on tabs"
+
+  run "$CP" check 8d8d8d8d8d8d
+  [ "$status" -eq 0 ]
+  refute_match "$output" "not at that location"
+  printf '%s' "$output" | grep -q "EVIDENCE AGE"
+  printf '%s' "$output" | grep -q "split on tabs"
+}
+
+@test "ONE file cited under TWO spellings is one pathspec, not two" {
+  # An item that says both `scripts/target.sh` and `target.sh` resolves to the same file twice. The
+  # list is printed to a human and handed to git, so the duplicate is noise in the contract and a
+  # repeated pathspec in the count — and a `cited:` line naming one file twice reads as two pieces
+  # of evidence.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 8e8e8e8e8e8e "scripts/target.sh is unpadded, and target.sh has no test" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" scripts/target.sh "fix(target): pad the reader"
+
+  run "$CP" check 8e8e8e8e8e8e
+  [ "$status" -eq 0 ]
+  cited="$(printf '%s' "$output" | sed -n 's/^ *cited: //p')"
+  [ "$cited" = "scripts/target.sh" ]
+  # The COUNT must not double either — the headline number is the one a reader acts on.
+  printf '%s' "$output" | grep -q "1 commit(s) have landed"
 }
 
 @test "a CROSS-PROJECT item is silent — this arm only ever speaks about THIS repo" {
