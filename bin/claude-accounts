@@ -1482,6 +1482,71 @@ def record_assignment(cfg, acct, src=None, path=None):
     return None
 
 
+def _route_records_path():
+    """`~/.claude/route/route.jsonl`, honouring cc-route's OWN env override.
+
+    Read at CALL time, not import time, so a test (or a probe) that exports the variable after
+    this module is loaded still lands in its sandbox — the alternative is a suite that silently
+    appends fabricated fleet decisions to the operator's real record, which is exactly the trap
+    the LOG_PATH note in tests/claude-accounts-core.bats documents."""
+    return os.path.join(os.environ.get("CC_ROUTE_RECORDS_DIR")
+                        or os.path.join(HOME, ".claude", "route"), "route.jsonl")
+
+
+def log_route_decision(kind, cand, reasons, cfg, cached, path=None):
+    """Append ONE record per DESK decision to route.jsonl — the lane that had no recorder (W2.6).
+
+    Every other routed decision on this box is on disk: cc-route writes {ts, slot, outcome, detail}
+    plus its inputs for general and fable. The interactive lane wrote NOTHING. Its only footprint
+    was one `--assign` row in a ledger it SHARES with handoff-fire and which prunes 400 -> 200
+    (ASSIGN_PRUNE_LINES), so at the moment the routing incident was investigated exactly FOUR
+    launcher-routed launches survived in the whole history — the incident was reconstructable only
+    because it happened to be the ledger's last line. A lane whose decisions cannot be replayed is
+    a lane whose policy cannot be falsified, which is how a measured-false premise (W1) shipped and
+    stayed for a day.
+
+    Written for the DESK only. general/fable already have a recorder in cc-route, and a second
+    producer for the same slot would double-count every dispatch decision.
+
+    Contract: {ts, slot, outcome, detail} FIRST and in cc-route's own spelling, so a consumer that
+    selects .slot/.outcome/.detail reads both producers with one filter; the desk's own fields ride
+    additively behind them. An ABSTENTION is recorded too (outcome "none") — "the desk refused and
+    the launcher fell back to its pinned account" is a decision, and the silent version of it is
+    indistinguishable from the router never having run.
+
+    Never fatal, never noisy: this sits on the launcher's own critical path, so an unwritable
+    records dir degrades to no record rather than to no launch. Kill: CC_ROUTE_DESK_LOG=off."""
+    if kind != "interactive" or not _term_on("CC_ROUTE_DESK_LOG"):
+        return None
+    path = path or _route_records_path()
+    w = cand[0][1] if cand else None
+    run = cand[1][1] if len(cand) > 1 else None
+    row = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "slot": "interactive",
+           "outcome": "route" if w else "none",
+           "detail": (f"desk -> {w['acct']}" if w else "desk -> none")
+                     + (f" (runner-up {run['acct']})" if run else ""),
+           "kind": kind,
+           "acct": w["acct"] if w else None,
+           "score": round(cand[0][0], 6) if cand else None,
+           # The RUNNER-UP is the field that makes a decision re-judgeable rather than merely
+           # readable: "next2 won" says nothing about whether it won by a nose or by a mile, and
+           # the margin is exactly what the hysteresis term (W1.4) acts on.
+           "runner_up": run["acct"] if run else None,
+           "runner_up_score": round(cand[1][0], 6) if run else None,
+           "desk_tier": desk_keys(w, cfg)[2] if w else None,
+           "desk_incumbent": bool(w.get("desk_incumbent")) if w else False,
+           "quota_cached": bool(cached),
+           "excluded": dict(reasons or {})}
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError as e:
+        return f"route record append failed: {e}"
+    return None
+
+
 def apply_assignments(rows, cfg):
     """Stamp live phantom counts onto rows (cached or fresh — both are ≤TTL-old opinions about
     everything EXCEPT what this box fired seconds ago, which is exactly what phantoms carry).
@@ -2487,6 +2552,32 @@ def _md_cell(iso, hours):
     return f"{when} (in {fmt_h(hours)})"
 
 
+# The desk lane's rungs, in the words the footer prints. Keyed on the SAME constants desk_keys
+# returns, so a renamed rung cannot leave a renderer describing a ladder that no longer exists.
+DESK_TIER_LABEL = {DESK_TIER_SAFE: "safe set",
+                   DESK_TIER_5H: "5h-safe only",
+                   DESK_TIER_ANY: "no floor met"}
+
+
+def desk_why(r, cfg):
+    """The desk route line's clause, in the DESK lane's OWN terms — one builder, both renderers.
+
+    W2.2 is explicit that this string must speak the two-key rule (5h-safe set, then EARLIEST
+    WEEKLY RESET) and not general's. A footer clause is read as an explanation of the pick beside
+    it, so a clause carrying the wrong lane's reasoning does worse than omitting one: it makes a
+    correct decision look like a mistake. The order here is the rule's own — the weekly reset is
+    the sort key, the 5h figure is the gate it had to pass, and the rung says which of the two
+    keys survived (`desk_keys`' ladder, never inferred from the numbers).
+
+    `sticky` names hysteresis (W1.4): this account kept the desk on incumbency, so the operator
+    can tell "it is best" from "it is where you already are and nothing beat it by the margin"."""
+    tier = desk_keys(r, cfg)[2]
+    return (f"weekly ↻ {fmt_h(r.get('weekly_reset_h'))}"
+            f" · 5h {(r.get('session_pct') or 0):.0f}%"
+            f" · {DESK_TIER_LABEL.get(tier, '?')}"
+            + (" · sticky" if r.get("desk_incumbent") else ""))
+
+
 def render_readout(rows, cfg, win, cached):
     """Emit the /accounts chat readout as finished markdown — the SINGLE renderer.
 
@@ -2502,8 +2593,14 @@ def render_readout(rows, cfg, win, cached):
     """
     warn_h = float(cfg.get("login_warn_h", 72.0))
     s_cut = cfg["router"]["S_CUT"] * 100
+    # THREE lanes, and the DESK one leads (W2.1-2). Until now this surface computed general and
+    # fable only, so the lane bare `claude` actually launches on was rendered NOWHERE — and the
+    # lanes are not cosmetically different: replayed on two synthetic accounts they invert
+    # completely (`➤ general → soon` printed while bare `claude` launched onto `far`, R6 §3).
+    rank_i, _ire = ranked(rows, cfg, win, "interactive")
     rank_g, _gre = ranked(rows, cfg, win, "general")
     rank_f, _fre = ranked(rows, cfg, win, "fable")
+    pick_i = rank_i[0][1]["acct"] if rank_i else None
     pick_g = rank_g[0][1]["acct"] if rank_g else None
     pick_f = rank_f[0][1]["acct"] if rank_f else None
 
@@ -2524,10 +2621,19 @@ def render_readout(rows, cfg, win, cached):
     notes, footnotes = [], []
     for r in rows:
         acct, a = r["acct"], r.get("auth")
+        # THE BARE ➤ IS THE DESK PICK, in both renderers (W2.1). It used to be the general pick
+        # here and in render_table, which made one glyph mean "what handoff-fire will do" on a
+        # surface a human reads to answer "which account do I use". The lane-specific marks keep
+        # their superscripts, and general now carries one too rather than borrowing the bare form:
+        # a reader must not have to know which renderer they are looking at to know what ➤ means.
+        # De-dup follows the existing rule — a lane's mark is suppressed when a louder lane
+        # already marked the same row, so a row picked by everything reads `➤`, not `➤ ➤ᵍ ➤ᶠ`.
         marks = ""
-        if pick_g and acct == pick_g:
+        if pick_i and acct == pick_i:
             marks += " ➤"
-        if pick_f and acct == pick_f and pick_f != pick_g:
+        if pick_g and acct == pick_g and pick_g != pick_i:
+            marks += " ➤ᵍ"
+        if pick_f and acct == pick_f and pick_f not in (pick_i, pick_g):
             marks += " ➤ᶠ"
         name = (f"**{acct}**" if marks else acct) + marks + (" ← you" if r.get("is_self") else "")
 
@@ -2622,6 +2728,19 @@ def render_readout(rows, cfg, win, cached):
 
     # ---- footer: the router's own answer, never a re-rank of score_*
     out.append("")
+    # THE DESK LINE COMES FIRST (W2.2). It answers "what will bare `claude` do" — the question the
+    # operator actually asked, and the only one on this surface whose answer they act on by typing
+    # a command. general/fable keep their own line, byte-identical, because they answer a different
+    # question (what handoff-fire and the frontier lane will do) and are consumed programmatically.
+    if rank_i:
+        out.append(f"➤ desk (bare `claude`) → **{pick_i}** — earliest weekly reset among "
+                   f"5h-safe accounts · {desk_why(rank_i[0][1], cfg)}")
+    else:
+        # ABSTENTION IS AN ANSWER: the desk lane never yields the login-cliff term, so it can
+        # refuse where general routes — and the launcher then falls back to its PINNED account.
+        # Printed as "none", never omitted: a missing line reads as "not computed".
+        out.append("➤ desk (bare `claude`) → **none** — no account routable; "
+                   "the launcher falls back to its pinned account")
     out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     pl = pace_line(rows)
     if pl:
@@ -2699,9 +2818,10 @@ def render_table(rows, cfg, win, cached, prev=None):
     # below — this is a hoist, not a second ranking pass.
     # NOT `g`/`f`: the per-row loop below rebinds `f` as a field name ("for f, tag in ..."),
     # which silently turned the fable list into a string when these were hoisted over it.
+    rank_i, ire = ranked(rows, cfg, win, "interactive")
     rank_g, gre = ranked(rows, cfg, win, "general")
     rank_f, fre = ranked(rows, cfg, win, "fable")
-    pick_general = rank_g[0][1]["acct"] if rank_g else None
+    pick_desk = rank_i[0][1]["acct"] if rank_i else None
     alerts = []
     for r in rows:
         a = r.get("auth")
@@ -2717,12 +2837,17 @@ def render_table(rows, cfg, win, cached, prev=None):
             glyph, grgb = "↻", AMBER
         # the invoking session's own account, resolved in probe_account from config_dir
         label = r["acct"] + (" ←" if r.get("is_self") else "")
-        # ➤ = the general-route pick, in the SAME glyph and colour the footer's route line
-        # uses, so the mark and its explanation are visibly one answer rather than two. Bold
-        # alone could not carry this: every healthy row is already bold, so it has no contrast
-        # left to spend. The fable pick stays footer-only — the 8-wide column holds
-        # "next3 ←➤" exactly, and a second marker would overflow and skew the row.
-        mark = "➤" if (pick_general and r["acct"] == pick_general) else ""
+        # ➤ = the DESK pick — what bare `claude` will launch onto (W2.1). It marked the GENERAL
+        # pick from 2026-07-30 until now, and that was never a decision: the mark exists because
+        # operator feedback asked "which account do I use", a HUMAN question, and on 2026-07-30 the
+        # desk lane did not exist yet, so the machine's answer was the only one available. It
+        # existed 11 days later, and this row went on answering the other question — while the two
+        # lanes can invert completely (R6 §3). The general pick is consumed by handoff-fire, which
+        # reads stdout, not tables; it keeps the footer line below.
+        # Still exactly ONE mark, in the same glyph and colour the footer's route line uses: the
+        # 8-wide column holds "next3 ←➤" exactly, so a second marker would overflow and skew the
+        # row. Bold cannot carry this either — every healthy row is already bold.
+        mark = "➤" if (pick_desk and r["acct"] == pick_desk) else ""
         pad = " " * max(0, 8 - len(label) - len(mark))
         name = (c(label, bold=True) if a in ("ok", "healed") else label) \
             + c(mark, CLAY, bold=True) + pad
@@ -2920,6 +3045,10 @@ def render_table(rows, cfg, win, cached, prev=None):
             return f"resets in {fmt_h(frh)} — use it or lose it · Fable {r['fable_pct']:.0f}%"
         return f"Fable {r['fable_pct']:.0f}% ↻ {fmt_h(frh)} · weekly {r['weekly_pct']:.0f}%"
 
+    # DESK FIRST (W2.2): the one line on this surface that answers what the operator's next bare
+    # `claude` will do. `desk` is 4 chars, inside route_line's f"{label:<7}", so the three lines
+    # stay column-aligned and inside the 82-col budget without widening anything.
+    print("  " + route_line("desk", rank_i, ire, lambda r: desk_why(r, cfg)))
     print("  " + route_line("general", rank_g, gre, lambda r:
           f"5h {r['session_pct']:.0f}% · weekly {r['weekly_pct']:.0f}% ↻ {fmt_h(r.get('weekly_reset_h'))}"))
     print("  " + route_line("fable", rank_f, fre, fable_why))
@@ -2935,7 +3064,12 @@ def render_table(rows, cfg, win, cached, prev=None):
     # states the CONSEQUENCE, at the point where the decision is actually taken. Kept off the
     # route lines themselves: those are inside the 82-col budget and already carry a clause.
     seen = set()
-    for lst in (rank_g, rank_f):
+    # rank_i FIRST and included at all (W2.4). Without it a pick that only the DESK lane makes —
+    # and the desk lane is the one that NEVER yields the cliff term, so it is also the lane whose
+    # winner is most likely to be lane-specific — carried a dying login with no warning on any
+    # surface: the alert block above fires per-ROW, and this is the only place that says "the
+    # account you are about to launch onto is the one whose credentials are expiring".
+    for lst in (rank_i, rank_g, rank_f):
         w = lst[0][1] if lst else None
         lxh = w.get("login_expires_h") if w else None
         if w and lxh is not None and lxh <= login_warn_h and w["acct"] not in seen:
@@ -3428,8 +3562,18 @@ def main():
         for r in rows:
             g, gr = score_general(r, cfg)
             f, fr_ = score_fable(r, cfg, win)
+            # score_interactive rides here for the same reason the readout gained a desk line
+            # (W2.3): a lane emitted by no machine surface is a lane no consumer can check. The
+            # keys are ADDITIVE — `score_general`/`score_fable` and both maps keep their names,
+            # shapes and meanings, so every existing consumer is untouched.
+            i, ir = score_interactive(r, cfg)
             r["score_general"], r["score_fable"] = g, f
-            r["route_reasons"] = {"general": gr, "fable": fr_}
+            r["score_interactive"] = i
+            # The desk lane's own decision inputs, as DATA rather than as a number a consumer
+            # would have to re-derive from the score: which rung of the degradation ladder this
+            # row sits on, and whether hysteresis is holding the desk here.
+            r["desk_tier"] = desk_keys(r, cfg)[2]
+            r["route_reasons"] = {"general": gr, "fable": fr_, "interactive": ir}
             # The band is emitted as its own field, not left implicit in a reason string:
             # cc-route records it per decision (route.jsonl cliff_band) so "did routing see the
             # cliff?" is answerable from disk rather than inferred from prose.
@@ -3439,7 +3583,8 @@ def main():
             # None where the account routed — there is nothing to classify.
             r["route_reason_class"] = {
                 "general": reason_class(r, gr) if gr else None,
-                "fable": reason_class(r, fr_) if fr_ else None}
+                "fable": reason_class(r, fr_) if fr_ else None,
+                "interactive": reason_class(r, ir) if ir else None}
             # M7 pace surface: what the account needs to burn/day to finish its week at 100%.
             # burn_wk_ppd (the measured recent rate) already rides the row when the series has
             # enough span; the pair is the machine form of the renderers' pace line.
@@ -3529,6 +3674,11 @@ def main():
         if kind not in ("general", "fable", "interactive"):
             sys.exit(f"claude-accounts: {flag} requires general|fable|interactive (got {kind!r})")
         cand, reasons = ranked(rows, cfg, win, kind)
+        # W2.6 — the desk decision goes on disk BEFORE either exit path, so an abstention is
+        # recorded as faithfully as a pick. `--rank` is diagnostic and deliberately silent here:
+        # only a `--route` is a decision something acts on.
+        if flag == "--route":
+            log_route_decision(kind, cand, reasons, cfg, cached)
         if not cand:
             print("none")
             print(f"claude-accounts: no routable account for {kind}: "

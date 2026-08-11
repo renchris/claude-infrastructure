@@ -37,6 +37,11 @@ setup() {
   # flipped exactly that way. Pin both into the sandbox; module-level cases pass path= explicitly.
   export CC_UTIL_LOG="$BATS_TEST_TMPDIR/util-series.jsonl"
   export CC_ASSIGN_LOG="$BATS_TEST_TMPDIR/assign-ledger.jsonl"
+  # W2.6 — `--route interactive` now APPENDS a decision record, so an unpinned suite would write
+  # fabricated fleet decisions into the operator's real ~/.claude/route/route.jsonl and they would
+  # read there as genuine launches. Same hermeticity rule, and the same failure mode, as the
+  # LOG_PATH redirect in $LOAD below. cc-route owns this variable's name; both producers honour it.
+  export CC_ROUTE_RECORDS_DIR="$BATS_TEST_TMPDIR/route-records"
   rm -f "$CA_LEDGER" "$CACHE"
   python3 - "$CA_CFG" "$CACHE" "$CA_SSOT" "$YAML" <<'PY'
 import json, sys
@@ -391,6 +396,11 @@ print("OK")'
 }
 
 @test "render_table: the routed row is marked IN the table, not only in the footer" {
+  # MOVED (W2.1): the assertions are unchanged in kind — exactly ONE ➤, on the row a footer line
+  # names, with both rows keeping equal length — but the lane the ➤ answers for is now the DESK,
+  # not general. On this fixture the two lanes agree, so this case pins the marker's EXISTENCE and
+  # its alignment; the lane it points at is discriminated by the case below, on rows where the two
+  # lanes disagree.
   run python3 -c "$LOAD"'
 import io, contextlib, re
 # two healthy rows; "win" has the headroom, so the router must pick it
@@ -409,12 +419,100 @@ plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
 tbl = [ln for ln in plain.splitlines() if re.match(r"^\s{2}(win|loser)\b", ln)]
 assert len(tbl) == 2, tbl
 picked = [ln for ln in tbl if "➤" in ln]
-# exactly ONE row marked, and it is the row the footer route line also names
+# exactly ONE row marked, and it is the row the footer route lines also name
 assert len(picked) == 1, picked
 assert picked[0].lstrip().startswith("win"), picked
+assert "➤ desk    → win" in plain, plain
 assert "➤ general → win" in plain, plain
 # the marker must not cost the row its column alignment
 assert len(tbl[0]) == len(tbl[1]), [len(x) for x in tbl]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "render_table: the ➤ answers the DESK lane, on rows where desk and general disagree" {
+  # THE DISCRIMINATING CASE (W2.1). The marker pointed at the GENERAL pick from 2026-07-30 until
+  # this commit — not by decision, but because the desk lane did not exist for another 11 days and
+  # the machine lane was the only answer available. The lanes are different objectives over the
+  # same eligibility and they diverge on ordinary fleets: "roomy" has almost its whole week left
+  # (general is headroom/T**2, so it wants that) but its 5h window sits at 70%, past the desk floor
+  # — the exact pathology the two-key rule exists to keep an operator out of. "sooner" is 5h-safe
+  # with 20% of its week left, so the desk takes it by a whole rung of the ladder.
+  # A ➤ on "roomy" is the bug this case exists to catch, so the fixture asserts BOTH picks.
+  run python3 -c "$LOAD"'
+import io, contextlib, re
+def rw(acct, wk, wrh, sp):
+    return {"acct": acct, "auth": "ok", "k": 0, "k_work": 0, "session_pct": sp, "weekly_pct": wk,
+            "fable_pct": 10, "email": acct + "@x.com", "dia_profile": acct.upper(),
+            "launcher": "claude-" + acct, "weekly_reset_h": wrh, "fable_reset_h": 40.0,
+            "session_reset_h": 3.0, "credits_on": False}
+rows = [rw("roomy", 5, 20.0, 70), rw("sooner", 80, 20.0, 5)]
+WIN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
+# the lanes must genuinely disagree, or the assertion below is satisfied by a marker that never
+# moved — the control that makes this case a discriminator rather than a restatement
+g, _ = ca.ranked(rows, cfg, WIN, "general")
+i, _ = ca.ranked(rows, cfg, WIN, "interactive")
+gp, ip = g[0][1]["acct"], i[0][1]["acct"]
+assert gp == "roomy" and ip == "sooner", (gp, ip)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_table(rows, cfg, WIN, False, None)
+plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+tbl = [ln for ln in plain.splitlines() if re.match(r"^\s{2}(roomy|sooner)\b", ln)]
+assert len(tbl) == 2, tbl
+picked = [ln for ln in tbl if "➤" in ln]
+assert len(picked) == 1, picked
+assert picked[0].lstrip().startswith("sooner"), picked        # the DESK pick, not general s
+assert len(tbl[0]) == len(tbl[1]), [len(x) for x in tbl]      # alignment survives either way
+# ...and the footer names the desk FIRST, in the desk lane s own terms, with general still stated
+lines = [ln.strip() for ln in plain.splitlines() if "→" in ln and "➤" in ln]
+assert lines[0].startswith("➤ desk"), lines
+assert "sooner" in lines[0] and "safe set" in lines[0], lines
+assert any(ln.startswith("➤ general") and "roomy" in ln for ln in lines), lines
+# every footer line stays inside the 82-col budget the table is built to (render_table W = 82)
+assert all(len(ln) + 2 <= 82 for ln in lines), [(len(ln), ln) for ln in lines]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "render_table: a desk-only pick with a dying login is warned about, not silently launched" {
+  # W2.4 — the cliff-warning loop iterated (rank_g, rank_f) only, so a winner that ONLY the desk
+  # lane names carried an expiring login with no warning anywhere: the per-row alert block fires on
+  # the row, but the sentence that says "the account you are about to launch onto is the one whose
+  # credentials die" lives here. And this is the lane it matters most for — the desk NEVER yields
+  # the cliff term (ranked()), so its winner is the one most likely to be lane-specific.
+  run python3 -c "$LOAD"'
+import io, contextlib, datetime as dt, re
+# SEEDED RELATIVE TO NOW, never an absolute stamp: the subject re-derives the remaining time from
+# this field, so a hardcoded date silently changes meaning as the clock advances and the suite
+# reds on a calendar boundary with no code change (the land gate walltime ratchet).
+EXP = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=60)).isoformat()
+def rw(acct, wk, wrh, sp, fp, **kw):
+    d = {"acct": acct, "auth": "ok", "k": 0, "k_work": 0, "session_pct": sp, "weekly_pct": wk,
+         "fable_pct": fp, "email": acct + "@x.com", "dia_profile": acct.upper(),
+         "launcher": "claude-" + acct, "weekly_reset_h": wrh, "fable_reset_h": 40.0,
+         "session_reset_h": 3.0, "credits_on": False}
+    d.update(kw); return d
+# "sooner" wins the DESK lane ONLY — general prefers the roomier week, and an exhausted Fable
+# bucket keeps the fable lane off it too — and its login expires inside the warn band (72h) but
+# OUTSIDE the cliff drain band (48h), i.e. the account is still fully routable. That gap is the
+# whole point: a drained account is excluded and needs no warning; a soft-band one is picked.
+rows = [rw("roomy", 5, 20.0, 70, 10),
+        rw("sooner", 80, 20.0, 5, 99, login_expires_h=60.0, login_expires_at=EXP)]
+WIN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
+g, _ = ca.ranked(rows, cfg, WIN, "general")
+f, _ = ca.ranked(rows, cfg, WIN, "fable")
+i, _ = ca.ranked(rows, cfg, WIN, "interactive")
+# the CONTROL: only the desk lane names it, so a warning that fires is the desk lane s doing
+assert g[0][1]["acct"] == "roomy" and f[0][1]["acct"] == "roomy", (g[0][1], f[0][1])
+assert i[0][1]["acct"] == "sooner", i[0][1]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_table(rows, cfg, WIN, False, None)
+plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+warn = [ln for ln in plain.splitlines() if "is the pick" in ln]
+assert len(warn) == 1, plain
+assert "sooner" in warn[0], warn
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
@@ -595,8 +693,13 @@ d = json.loads(sys.stdin.read())
 assert 's_cut' in d and 'window' in d and 'cached' in d
 assert 'permanent' in d['window']
 r = d['rows'][0]
-for f in ('acct', 'auth', 'k', 'is_self', 'route_reasons', 'route_reason_class'):
+for f in ('acct', 'auth', 'k', 'is_self', 'route_reasons', 'route_reason_class',
+          'score_interactive', 'desk_tier'):
     assert f in r, f
+# W2.3 — the DESK lane rides the machine surface too. A lane emitted by no machine surface is a
+# lane no consumer can check, which is how a measured-false routing premise survived a day.
+for m in ('route_reasons', 'route_reason_class'):
+    assert set(r[m]) == {'general', 'fable', 'interactive'}, (m, r[m])
 print('OK')" <<< "$output"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
@@ -1091,23 +1194,40 @@ def acctrow(out, name):
 '
 
 @test "--readout: marks the routed accounts and the self row, without a second ranking pass" {
+  # MOVED (W2.1-2): the mark scheme gained a third lane and the bare ➤ was re-pointed. It now
+  # means the DESK pick in BOTH renderers — the readout used to spend it on general while
+  # render_table spent it on general too, and re-pointing only one would have left one glyph
+  # meaning two different things depending on which surface you were reading. General keeps a
+  # mark, as its own superscript. Every assertion below is the same assertion as before, per lane.
   run python3 -c "$LOAD$READOUT"'
 rows = [row(acct="poor", weekly_pct=95, fable_pct=95),
         row(acct="rich", weekly_pct=5,  fable_pct=90, is_self=True),
         row(acct="fab",  weekly_pct=40, fable_pct=1)]
 out = rd(rows)
+i, _ = ca.ranked(rows, cfg, WIN_OPEN, "interactive")
 g, _ = ca.ranked(rows, cfg, WIN_OPEN, "general")
 f, _ = ca.ranked(rows, cfg, WIN_OPEN, "fable")
-gp, fp = g[0][1]["acct"], f[0][1]["acct"]
+ip, gp, fp = i[0][1]["acct"], g[0][1]["acct"], f[0][1]["acct"]
 assert gp != fp, (gp, fp)                       # the case a single marker would collapse
-assert "➤" in acctrow(out, gp) and f"**{gp}**" in acctrow(out, gp), out
+assert "➤" in acctrow(out, ip) and f"**{ip}**" in acctrow(out, ip), out
 assert "➤ᶠ" in acctrow(out, fp), out
 assert "➤ᶠ" not in acctrow(out, gp), out        # general pick is not also flagged as fable
+if gp != ip:
+    assert "➤ᵍ" in acctrow(out, gp), out        # general keeps a mark — its own, never the desk s
+    assert "➤ᵍ" not in acctrow(out, ip), out
 assert "← you" in acctrow(out, "rich"), out
-# the footer states the SAME answer as the marks — one router, not two opinions
+# the footer states the SAME answer as the marks — one router, not three opinions — and the DESK
+# line comes FIRST, because it is the one that answers what bare `claude` will do
+body = [ln for ln in out.splitlines() if ln.startswith("➤")]
+assert body[0].startswith("➤ desk") and f"**{ip}**" in body[0], out
 assert f"➤ general → **{gp}**" in out and f"➤ fable → **{fp}**" in out, out
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  # TWO statements, not `A && B || C`: an assertion in the LEFT element of an AND-OR list is
+  # the [and-absorbed] class the liveness analyzer reports (scripts/bats-assert-liveness.py),
+  # and the fixer DECLINES this three-part shape rather than guess. Split, each failure keeps
+  # its own diagnostic, and each `[[ ]]` sits in condition position where errexit still binds.
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
 @test "--readout: an inherited row is starred and declared, never presented as a reading" {
@@ -1908,4 +2028,99 @@ PY
   run bash -c "python3 '$CA_BIN' --route general 2>&1 >/dev/null"
   [[ "$output" == *"k_src="* ]] || { echo "$output"; false; }
   [[ "$output" != *desk_tier* ]] || { echo "$output"; false; }
+}
+
+@test "--route interactive: the desk decision is RECORDED, with its runner-up, and only for --route" {
+  # W2.6 — before this the desk lane wrote nothing. cc-route records every general/fable decision
+  # into route.jsonl; the interactive lane's only footprint was one `--assign` row in a ledger it
+  # SHARES with handoff-fire and which prunes 400 -> 200, so exactly FOUR launcher-routed launches
+  # survived in the entire history when the routing incident was investigated. A lane whose
+  # decisions cannot be replayed is a lane whose policy cannot be falsified.
+  python3 - <<'PY'
+import json, os, time, importlib.machinery, importlib.util
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+cfg = json.load(open(os.environ["CA_CFG"]))
+def r(n, wk, wrh):
+    return {"acct": n, "auth": "ok", "k": 0, "k_work": 0, "session_pct": 10,
+            "session_reset_h": 3.0, "weekly_pct": wk, "weekly_reset_h": wrh, "fable_pct": 10,
+            "fable_reset_h": 24.0, "credits_on": False}
+json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+           "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
+           "prev": None,
+           "rows": [r("roomy", 3, 159.0), r("expiring", 47, 86.0)]},
+          open(os.environ["CACHE"], "w"))
+PY
+  local rec="$CC_ROUTE_RECORDS_DIR/route.jsonl"
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 0 ] && [ "${lines[0]}" = "expiring" ] || false
+  [ -f "$rec" ]
+  run python3 -c "
+import json, os, sys
+rows = [json.loads(l) for l in open(os.environ['CC_ROUTE_RECORDS_DIR'] + '/route.jsonl')]
+assert len(rows) == 1, rows
+d = rows[0]
+# cc-route's OWN four keys first, so one jq filter reads both producers
+for f in ('ts', 'slot', 'outcome', 'detail'):
+    assert f in d, (f, d)
+assert d['slot'] == 'interactive' and d['outcome'] == 'route', d
+assert d['acct'] == 'expiring' and d['kind'] == 'interactive', d
+# the runner-up is what makes a decision RE-JUDGEABLE rather than merely readable: 'expiring won'
+# says nothing about whether it won by a nose, and the margin is what hysteresis acts on
+assert d['runner_up'] == 'roomy', d
+assert d['score'] > d['runner_up_score'], d
+assert d['desk_tier'] == 2 and d['desk_incumbent'] is False, d
+print('OK')"
+  # TWO statements, not `A && B || C`: an assertion in the LEFT element of an AND-OR list is
+  # the [and-absorbed] class the liveness analyzer reports (scripts/bats-assert-liveness.py),
+  # and the fixer DECLINES this three-part shape rather than guess. Split, each failure keeps
+  # its own diagnostic, and each `[[ ]]` sits in condition position where errexit still binds.
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  # --rank is DIAGNOSTIC: it must not manufacture a decision record...
+  run bash -c "python3 '$CA_BIN' --rank interactive >/dev/null 2>&1"
+  [ "$(wc -l < "$rec")" -eq 1 ]
+  # ...and the dispatch lanes must not be double-recorded — cc-route is their producer, and a
+  # second one would double-count every dispatch decision in the same file.
+  run bash -c "python3 '$CA_BIN' --route general >/dev/null 2>&1"
+  [ "$(wc -l < "$rec")" -eq 1 ]
+  # kill switch (house pattern): off means no record, never a broken launch
+  run bash -c "CC_ROUTE_DESK_LOG=off python3 '$CA_BIN' --route interactive >/dev/null 2>&1"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$rec")" -eq 1 ]
+}
+
+@test "--route interactive: an ABSTENTION is recorded too, never silence" {
+  # "the desk refused and the launcher fell back to its pinned account" is a decision. Recorded as
+  # outcome=none: the silent version is indistinguishable from the router never having run, which
+  # is precisely the state that made the 2026-08-11 incident nearly unreconstructable.
+  python3 - <<'PY'
+import json, os, time, importlib.machinery, importlib.util
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+cfg = json.load(open(os.environ["CA_CFG"]))
+# 5h past the routing cutoff on every account: policy refuses, data is fine
+json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+           "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
+           "prev": None,
+           "rows": [{"acct": "capped", "auth": "ok", "k": 0, "k_work": 0, "session_pct": 99,
+                     "session_reset_h": 3.0, "weekly_pct": 10, "weekly_reset_h": 20.0,
+                     "fable_pct": 10, "fable_reset_h": 24.0, "credits_on": False}]},
+          open(os.environ["CACHE"], "w"))
+PY
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 2 ] && [ "${lines[0]}" = "none" ] || false
+  run python3 -c "
+import json, os
+rows = [json.loads(l) for l in open(os.environ['CC_ROUTE_RECORDS_DIR'] + '/route.jsonl')]
+assert len(rows) == 1, rows
+d = rows[0]
+assert d['outcome'] == 'none' and d['acct'] is None and d['score'] is None, d
+# and the reason the desk refused is IN the record — an abstention with no cause is a shrug
+assert d['excluded'].get('capped'), d
+print('OK')"
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
