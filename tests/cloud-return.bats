@@ -355,6 +355,6 @@ seen_at() { # <epoch>
   local call_line exit_line
   call_line="$(grep -n 'cloud-return.sh' "$sweep" | head -1 | cut -d: -f1)"
   exit_line="$(grep -n 'total_new" -eq 0' "$sweep" | head -1 | cut -d: -f1)"
-  [ -n "$call_line" ] && [ -n "$exit_line" ]
+  [ -n "$call_line" ] && [ -n "$exit_line" ] || false
   [ "$call_line" -lt "$exit_line" ]
 }

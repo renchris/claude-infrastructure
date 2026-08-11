@@ -140,6 +140,8 @@ lock_acquire() {
   mkdir "$LOCK" 2>/dev/null || return 1
   return 0
 }
+# shellcheck disable=SC2329
+#   Invoked from the EXIT/INT/TERM trap below, which shellcheck cannot see — it is not dead.
 lock_release() { rm -rf "$LOCK" 2>/dev/null || true; }
 
 # ── the control-plane sensor ─────────────────────────────────────────────────────────────────────
