@@ -108,6 +108,15 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # detector in this file over the real tree. A count may only go DOWN, and it goes down by DECLARING
 # a bound (or deleting a gate), never by editing this number alone: the lint fails on a stale entry
 # exactly as it fails on a new gate.
+#
+# ship-land.sh 17 -> 15 (2026-08-11, backlog 9ea31151dd94): the .bats shellcheck ratchet's two
+# legs were rewritten from `if ! "$LINT" ...; then ... gate_red` to the rc-capture form the
+# five sibling non-verdict arms already use (`"$LINT" ... || rc=$?` then `[[ $rc -eq 2 ]]`), so
+# exit 2 stops being dressed up as a RED. `negated()` matches `if ! cmd`, not an rc compare, so
+# both left the undeclared count. Nothing was un-gated — the same two refusals fire, plus a new
+# NON-VERDICT arm — and the shape they moved TO is the one ship-land's own tsv-pad block argues
+# for on this lint's doctrine. This is the DOWNWARD half of the ratchet doing its job: without
+# it the stale 17 would sit here as a permanent two-gate allowance nobody could account for.
 EMBEDDED_RATCHET="$(cat <<'RATCHET'
 install.sh 1
 scripts/deploy-live.sh 10
@@ -115,7 +124,7 @@ scripts/deploy-parity-assert.sh 1
 scripts/desk-land.sh 7
 scripts/land-verify.sh 1
 scripts/ship-backup-reap.sh 2
-scripts/ship-land.sh 17
+scripts/ship-land.sh 15
 RATCHET
 )"
 

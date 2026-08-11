@@ -1685,6 +1685,19 @@ own_run() {
   fi
 }
 
+# The .bats shellcheck ratchet's NON-VERDICT arm, factored out because BOTH of its legs (--selftest
+# and the scan) reach it and a copy-paste pair is how one of them ends up saying something else.
+# GATE_KILLED (⇒ exit 9, retryable) rather than gate_red (⇒ exit 6): exit 2 is the lint saying it
+# could not run, which is not a claim about the lander's tree.
+# shellcheck disable=SC2329  # invoked from run_gate's bats-shellcheck arm below.
+bats_sc_nonverdict() {
+  echo "⛔ gate: bats-shellcheck-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+  echo "  The usual cause is that shellcheck is not installed on this host. Landing anyway would" >&2
+  echo "  leave every .bats suite unlinted and SAY NOTHING, which is what this arm exists to stop." >&2
+  echo "  Install shellcheck and re-land." >&2
+  GATE_KILLED=1
+}
+
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0 HERM_LINT SELFPATH_LINT
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
@@ -2434,9 +2447,20 @@ run_gate() {  # $1=range → 0 green / 1 red
   # --selftest runs alongside the scan, for the reason the UTC ratchet documents: a ratchet whose own
   # discrimination is unverified is not a gate. Its abort control replays a real prose-comment line
   # byte-for-byte and asserts that file's genuine defect goes UNSEEN.
+  #
+  # NO `command -v shellcheck` IN THE APPLICABILITY CONDITION (2026-08-11, grok-wiki tests shard
+  # candidate 1, backlog 9ea31151dd94). It used to read `… && command -v shellcheck`, which made a
+  # missing tool a SILENT SKIP: on a host without shellcheck this whole ratchet vanished and the
+  # land said nothing, while the sibling .sh path — bare `shellcheck "${sc_todo[@]}"` above — fails
+  # loudly at 127 for any diff touching a *.sh. So a .bats-only land got ZERO shellcheck coverage
+  # and read exactly like a clean one. The lint itself has ALWAYS handled this correctly: it exits
+  # 2 with "⛔ shellcheck not installed — NOT a clean verdict". The guard is what stopped anyone
+  # from ever seeing that. Removing it routes the absence through the exit-2 arm below, which is
+  # the same NON-VERDICT ⇒ GATE_KILLED shape the hermeticity, afunix, git-identity, pipefail and
+  # tsv-pad arms already use. Exit 2 must NOT become gate_red: a could-not-run dressed up as a RED
+  # is a false claim about the lander's tree (backlog 9c5d0ba74e79).
   SC_BATS_LINT="${SHIP_LAND_BATS_SC_LINT:-scripts/bats-shellcheck-lint.sh}"
-  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$SC_BATS_LINT" ]] \
-     && command -v shellcheck >/dev/null 2>&1; then
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$SC_BATS_LINT" ]]; then
     local bown=""
     if [[ "${SHIP_LAND_BATS_SC_OWN_SCOPE:-on}" != "off" ]]; then
       # Failure to resolve the range yields an EMPTY own-set, which means "I wrote no line" ⇒
@@ -2454,13 +2478,22 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$bown" ]] && echo "→ gate: bats-shellcheck own-scope — blocking on $(printf '%s\n' "$bown" | grep -c .) changed line(s); pre-existing findings advisory." >&2
     fi
     echo "→ gate: .bats shellcheck ratchet (this gate never linted a test file before)" >&2
-    if ! "$SC_BATS_LINT" --selftest >/dev/null 2>&1; then
+    # `--own-lines` above is deliberately NOT part of this: it parses a diff and needs no linter
+    # at all, so it keeps working on a host without the tool and an unresolvable range keeps
+    # meaning "I wrote no line", exactly as before.
+    local scrc=0
+    "$SC_BATS_LINT" --selftest >/dev/null 2>&1 || scrc=$?
+    if [[ $scrc -eq 2 ]]; then bats_sc_nonverdict; return 1; fi
+    if [[ $scrc -ne 0 ]]; then
       echo "✗ gate: bats-shellcheck-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red bats-shellcheck-selftest
       return 1
     fi
-    if ! own_run BATS_SC CC_BATS_SC_OWN "$bown" "$SC_BATS_LINT" tests >&2; then
+    scrc=0
+    own_run BATS_SC CC_BATS_SC_OWN "$bown" "$SC_BATS_LINT" tests >&2 || scrc=$?
+    if [[ $scrc -eq 2 ]]; then bats_sc_nonverdict; return 1; fi
+    if [[ $scrc -ne 0 ]]; then
       echo "✗ gate: bats-shellcheck RED — a line THIS LAND WROTE carries a shellcheck finding," >&2
       echo "  or a suite it touches aborts shellcheck entirely. Both are named above." >&2
       gate_red bats-shellcheck
