@@ -421,6 +421,40 @@ live on the checkout fast-forward. So the close-out sequence is: `deploy-live.sh
 **AND** `./install.sh` (copy classes) **AND** `install.sh --config-dir <dir> --wire-hooks` × 5 for
 the new board hook, then `deploy-parity-assert.sh` — reading 3 as NO VERDICT, never as 0.
 
+### 3c. Convergence state at 2026-08-11T23:20Z — READ THIS BEFORE RE-RUNNING ANYTHING
+
+**What is already LIVE** (symlink classes rode the fast-forward to live HEAD `32355a9b1`):
+`hooks/lib/task-helpers.sh`, `hooks/session-start.sh`, `bin/claude-accounts`. Verified by grepping
+the LIVE files, and by timing the LIVE hook: **`~/.claude/hooks/setup-task-symlinks.sh` = 1.105 s**
+(vs 28.699 s pre-fix) under a loaded box — inside its `timeout: 5`.
+
+**What is NOT live, and exactly why — do not "fix" this by forcing it:**
+
+1. `scripts/deploy-parity-assert.sh` exits **1** (a NAMED failure, *not* 3/NO-VERDICT). The single
+   name is `launchd/*.plist  COPYSTALE` — 25 tracked, and the copy differs from the repo.
+   **Attribution: NOT this plan's diff.** The launchd change in range came from a sibling,
+   `f4d9216c2` (autonomy-sweep `CC_FIRE_CLOUD`). Every other class reads `ok`.
+2. The remedy the parity script prints is `./install.sh` — and **`install.sh` REFUSES**, correctly:
+   the shared checkout is **12 commits behind `origin/main`**, so installing would "copy pre-trunk
+   content into `~/.claude` … while printing success. That is the 2026-08-01 failure this guard
+   exists to make impossible."
+3. `install.sh`'s printed reconcile is `git -C <checkout> pull --rebase origin main`. 🚨 **DO NOT
+   RUN THAT HERE.** It advances the live-layer source *outside* `deploy-live.sh`, whose whole job is
+   to fast-forward the checkout ONLY to a commit carrying a GREEN post-land tree. Doing it by hand
+   deploys 12 UNVERIFIED commits to the live fleet — bypassing the gate, not satisfying it.
+4. `deploy-live.sh` is therefore correctly *waiting*: "no GREEN tree is a DESCENDANT of live HEAD";
+   lag 11-12 commits / 0 h, **inside the degrade budget (25 / 6 h)**.
+5. The gate is **healthy and mid-run, not stuck** — `~/.claude/autonomy/postland/runner.log` shows
+   `com.claude.postland-verify` actively verifying `e5d9ed514` (441 tree suites, 8352 tests planned)
+   at the time of writing.
+
+**So the correct action is to WAIT, then run in this order:** `deploy-live.sh` (advances the
+checkout once a green tree descends live HEAD) → `./install.sh` (copy classes: `statusline.sh`,
+the plists) → `deploy-parity-assert.sh`. ⚠️ Once W3b lands, `hooks/accounts-board.sh` and
+`migrations/0011-*` are **ADDs**, and an ADD gets NO converge budget — absent, not stale, with every
+`[ -f x ]` consumer guard silently skipping — so that land breaches at a lag of 1 and needs
+`install.sh --config-dir <dir> --wire-hooks` for all five dirs, including the forked `.claude-next`.
+
 **Process finding worth more than the diff:** `handoff-fire.sh`'s INC-4 engagement detector gave a
 FALSE NEGATIVE twice (panes 379, 384 — both declared "never engaged … TASK-LESS", both then did
 their whole wave correctly). Its printed recovery is a warm re-fire into the SAME worktree, which
