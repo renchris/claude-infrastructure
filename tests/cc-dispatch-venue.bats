@@ -190,3 +190,65 @@ code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "
   ! grep -q -- '--venue cloud' "$mutant" || false
   grep -q -- '--venue local' "$mutant"
 }
+
+# ── G5-P: THE PRODUCER'S DECISION REACHES THE ARGV (W1, 2026-08-11) ────────────────────────────
+#
+# Cases 1-13 above proved the venue is read off the fire's own argv. That was true and inert: no
+# caller ever put `--cloud` into an argv, which is the "ZERO PRODUCERS" the dispatcher documents
+# about itself. bin/cc-venue now writes `venuePlan` onto open rows, and these cases pin the seam
+# where the plan becomes an argument — including the two ways that seam could be wrong in a way
+# nothing downstream would notice.
+
+@test "14 the plan MUTATES THE ARGV rather than setting the venue directly" {
+  # The load-bearing property of the whole G5 design: `fire_venue` reads the array that will
+  # ACTUALLY RUN. If the seam assigned `venue=cloud` itself, the label would be derived from the
+  # PLAN instead of from the fire, and a plan that failed to become an argument would produce a
+  # claim asserting a venue nothing was launched into — the mislabel-that-reads-as-a-verdict this
+  # suite exists to prevent. So: the injection appends to fire_args, and `venue` is still assigned
+  # from fire_venue AFTER it.
+  code_of "$DISPATCH"
+  grep -q 'fire_args+=(--cloud)' "$CODE" \
+    || { echo "the plan never reaches the argv"; false; }
+  grep -q 'venue="$(fire_venue "${fire_args\[@\]}")"' "$CODE" \
+    || { echo "the venue is no longer derived from the argv that will run"; false; }
+  # …and the ORDER holds: the injection is above the read, else it lands too late to be seen.
+  local inj rd
+  inj="$(grep -n 'fire_args+=(--cloud)' "$CODE" | head -1 | cut -d: -f1)"
+  rd="$(grep -n 'venue="$(fire_venue' "$CODE" | head -1 | cut -d: -f1)"
+  [ "$inj" -lt "$rd" ] || { echo "injection at $inj is AFTER the read at $rd"; false; }
+}
+
+@test "15 the duplicate check is fire_venue itself, never a substring test over the argv" {
+  # `--venue` is a closed set at the actuator precisely so a loose match cannot hand it a
+  # well-formed string derived from the wrong fire (case 3). A `case " ${fire_args[*]} " in
+  # *" --cloud "*)` guard here would re-introduce exactly that substring matching one line above
+  # the function that refuses it.
+  code_of "$DISPATCH"
+  ! grep -q 'fire_args\[\*\]' "$CODE" \
+    || { echo "an argv SUBSTRING test appeared beside the element-exact reader"; false; }
+  grep -q '\[ "$(fire_venue "${fire_args\[@\]}")" = cloud \] || fire_args+=(--cloud)' "$CODE" \
+    || { echo "the duplicate check must reuse the one element-exact reader"; false; }
+}
+
+@test "16 the BOX OPT-IN outranks the plan, and an unhonoured plan is journalled" {
+  # handoff-fire ships --cloud default-off and exits 2 unless CC_FIRE_CLOUD=on, because an off-box
+  # fire spends an ACCOUNT's rate limit rather than this box's cores. Injecting regardless would
+  # turn every cloud-labelled item on a box without the opt-in into a FIRE FAILURE — a producer
+  # that strands exactly the work it routed. The item must fire locally instead, and the IDL must
+  # say so: a plan silently dropped is indistinguishable from a plan never made.
+  code_of "$DISPATCH"
+  grep -q 'CC_FIRE_CLOUD:-off' "$CODE" \
+    || { echo "the seam does not consult the same opt-in the actuator enforces"; false; }
+  grep -q 'PLANNED but not honoured' "$CODE" \
+    || { echo "an unhonoured plan leaves no record"; false; }
+}
+
+@test "17 MUTATION CONTROL — cases 14-16 can fail" {
+  # Without this they could all be passing because their greps cannot go red.
+  code_of "$DISPATCH"
+  local mutant="$BATS_TEST_TMPDIR/mutant-p"
+  sed -e 's/fire_args+=(--cloud)/fire_args+=(--local)/' \
+      -e 's/CC_FIRE_CLOUD:-off/CC_FIRE_ALWAYS:-on/' "$CODE" > "$mutant"
+  ! grep -q 'fire_args+=(--cloud)' "$mutant" || false
+  ! grep -q 'CC_FIRE_CLOUD:-off' "$mutant" || false
+}
