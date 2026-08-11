@@ -553,6 +553,37 @@ cloud_declare() {
     printf 'UNDECLARED — the cloud fire for %s emitted no session id; it is unobservable AND reapable' "$id"
     return 1
   fi
+  # ── ADOPT, NEVER RE-DECLARE (2026-08-11, fire-#1 forensics) ───────────────────────────────────
+  # A re-declare here OVERWRITES the fire path's declaration — fire #1's correct record (branch
+  # claude/fire-…, the branch the VM actually pushes) was replaced by one naming the WORKTREE, so
+  # the reconcile watched a branch that could never appear. cc-cloud declare also RE-PROBES the
+  # remote baseline, so a late re-declare after the VM pushes would poison push-detection too.
+  # When the captured fire output shows the fire path already declared, this function's only jobs
+  # are to ADOPT the sid for the journal and to close any management gap it can without touching
+  # the declaration.
+  if /usr/bin/grep -q 'anthropic_cloud VM, repo ATTACHED' "$cap" 2>/dev/null; then
+    # cc-offload up: declared with the real branch AND managed (custody at fire, fields on the
+    # declaration, brief delivered). Nothing to add.
+    printf 'adopted %s — declared+managed by cc-offload up (real branch preserved)' "$sid"
+    return 0
+  fi
+  if /usr/bin/grep -Eq 'declared session_[A-Za-z0-9._-]+ .*now observable' "$cap" 2>/dev/null; then
+    # The legacy CLI leg: declared with the real branch, but bare — no management fields, no
+    # custody, and NO BRIEF DELIVERED (the leg's own output offers the send as a next step).
+    # Custody is openable from here; the item/notify-back fields need a declaration-amend verb
+    # cc-cloud does not have yet, and the brief needs the caller to send it — both are stated in
+    # the verdict rather than silently absent.
+    local cust cbin
+    cbin="$(resolve_bin "${CC_DISPATCH_CUSTODY_BIN:-}" cc-custody "$HOME/.claude/bin/cc-custody")" || cbin=""
+    if [ -n "$cbin" ] && "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
+         --slug "cloud-$sid" >/dev/null 2>&1; then
+      cust="custody OPEN"
+    else
+      cust="custody NOT OPENED"
+    fi
+    printf 'adopted %s — leg declaration preserved (real branch); %s · UNMANAGED FIELDS: no item/notify-back on the declaration and NO BRIEF DELIVERED — send it with: cc-notify --cloud %s <the composed brief text>' "$sid" "$cust" "$sid"
+    return 0
+  fi
   if [ -z "$branch" ]; then
     printf 'UNDECLARED — %s fired as %s but the fire names no branch (no --worktree/--cwd); cc-cloud declare requires one' "$id" "$sid"
     return 1
@@ -1472,16 +1503,30 @@ dispatch() { # <dry|run|decide>
     plan_venue="$(printf '%s' "$items" \
       | jq -r --arg i "$id" 'map(select(.id == $i)) | first | .venuePlan // ""' 2>/dev/null)" \
       || plan_venue=""
+    # THE CLOUD ACTUATOR IS `cc-offload up`, NOT a --cloud flag on the local spawn (2026-08-11,
+    # the lead's fire-#1 forensics — session_01YcTifmgrKh3KFYuz45Rret, item 38de29ec5e59). The
+    # handoff-fire cloud leg is the DEPRECATED CLI create: it bundle-retries, DELIVERS NO BRIEF
+    # (its own success output offers `send: cc-notify --cloud …` as a step nobody takes — the
+    # session sat NOT-STARTED forever), and this dispatcher's follow-up declare then OVERWROTE the
+    # leg's correct declaration with the worktree name as the branch, so the reconcile watched a
+    # branch the VM would never push. cc-offload up --via api is the one managed create: the
+    # acceptance-gated two-call create, the brief delivery, the declaration with the REAL branch +
+    # management fields, and custody-at-fire all live there and are pinned by its own suites.
+    # The venue is therefore a SELECTION between actuators, not an argv mutation — and the
+    # selection variable is the single source the claim label reads, which preserves G5's rule
+    # (the label cannot disagree with what launches, because it and the launch read one variable).
+    local venue claim_args
+    venue=local
     if [ "$plan_venue" = cloud ]; then
       if [ "${CC_FIRE_CLOUD:-off}" = on ]; then
-        [ "$(fire_venue "${fire_args[@]}")" = cloud ] || fire_args+=(--cloud)
+        venue=cloud
       else
         idl skipped "$id: venue=cloud PLANNED but not honoured — CC_FIRE_CLOUD is '${CC_FIRE_CLOUD:-off}' (needs 'on') on this box, so the off-box actuator would refuse; fired LOCALLY instead"
       fi
     fi
-
-    local venue claim_args
-    venue="$(fire_venue "${fire_args[@]}")"
+    # A hand-authored fire_line that already says --cloud keeps its meaning even when the plan is
+    # silent: the legacy flag routes to the same selection, never to the deprecated leg.
+    [ "$venue" = cloud ] || venue="$(fire_venue "${fire_args[@]}")"
     claim_args=(claim "$id" --by "$SID" --role dispatcher)
     if [ "$venue" = cloud ]; then claim_args+=(--venue cloud); fi
     local cerrf crc cexc
@@ -1707,7 +1752,33 @@ dispatch() { # <dry|run|decide>
     # is preserved verbatim because thrash_map splits the detail on the FIRST colon to recover the id.
     local ferrf frc fexc
     ferrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-fire.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$ferrf" ]; then "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
+    if [ "$venue" = cloud ]; then
+      # The managed cloud actuator (see the venue-selection block above). The brief is the SAME
+      # composed prompt file the local fire would have carried — extracted from the argv that
+      # would actually run, never re-derived — and the account is the routed one. notify-back is
+      # the DESK role's pane when one is claimed; with no role file the fire still declares WITH
+      # custody, so the sweep manages it and only the wake degrades. A resolve failure or a
+      # refused create lands in the ordinary failure arm below: self-release + FAILED + excerpt,
+      # which is exactly what those arms exist for.
+      local offload_bin cloud_pf="" cnb="" _fa_prev=""
+      for _fa in "${fire_args[@]}"; do
+        [ "$_fa_prev" = "--prompt-file" ] && { cloud_pf="$_fa"; break; }
+        _fa_prev="$_fa"
+      done
+      offload_bin="$(resolve_bin "${CC_DISPATCH_OFFLOAD_BIN:-}" cc-offload "$HOME/.claude/bin/cc-offload")" || offload_bin=""
+      cnb="$(cat "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
+      if [ -z "$offload_bin" ] || [ -z "$cloud_pf" ]; then
+        frc=3
+        [ -n "$ferrf" ] && printf 'cloud fire REFUSED before create: %s\n' \
+          "${offload_bin:+prompt-file missing from fire_line}${offload_bin:-cc-offload unresolvable (set CC_DISPATCH_OFFLOAD_BIN)}" >"$ferrf"
+      else
+        local -a up_args=(up --via api --task "$cloud_pf" --account "$acct" --item "$id")
+        [ -n "$cnb" ] && up_args+=(--notify-back "$cnb")
+        if [ -n "$ferrf" ]; then "$offload_bin" "${up_args[@]}" >"$ferrf" 2>&1; frc=$?
+        else                     "$offload_bin" "${up_args[@]}" >/dev/null 2>&1; frc=$?
+        fi
+      fi
+    elif [ -n "$ferrf" ]; then "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
     else                     "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
     fi
     # …BUT ONLY THE FAILURES WERE EVER READ, AND THAT IS ITS OWN BLIND SPOT (2026-08-07).
