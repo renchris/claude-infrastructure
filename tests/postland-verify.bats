@@ -1326,6 +1326,106 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
   [ "$output" = "green" ]
 }
 
+# ── PRE-PLAN GRACE: the counting pass emits no TAP, so it cannot share the stall clock ──────────
+# `bats <N files>` runs bats-gather-tests over every file BEFORE printing `1..N`, and writes nothing
+# to the TAP stream while it does. tap_done is therefore 0 for a healthy run and a wedged one alike,
+# and a stall clock started at t=0 cuts the healthy one — a FALSE CUT that the ledger records
+# identically to a real wedge (a cut names no suite, so nothing is ever traced back to it).
+# Measured 2026-08-10 under the real band: 403 suites gather in 72s quiet, and the 2026-07-29 bisect
+# caught the same pass still running at >600s at load 33-48 over 141 files.
+
+@test "PRE-PLAN grace: a slow COUNTING pass is never cut — the stall clock starts at the plan line" {
+  # THE DISCRIMINATING TEST. The stall bound here is 2s and the counting pass takes 5s, so on the
+  # pre-fix code this run is cut before it ever plans; the grace (floored at 900s) is the only thing
+  # that can carry it to the plan line. Nothing else in this test can produce a green.
+  b="$(stub_bats slowcount "case \"\$1\" in --count) echo 1; exit 0 ;; esac
+sleep 5
+printf '1..1\nok 1 p\n'")"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  POSTLAND_STALL_S=2 POSTLAND_STALL_POLL_S=1 POSTLAND_SUITE_TIMEOUT_S=60 \
+    run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]
+  # ...and the transition was actually observed, not merely survived by the run being short.
+  grep -q 'bats finished counting' "$CC_POSTLAND_DIR/runner.log"
+  # POSITIVE CONTROL on the predicate itself, so this cannot pass by tap_planned never matching.
+  # The two states int_or_zero collapses onto 0 must read DIFFERENTLY here: an emitted `1..0` is
+  # PLANNED (a finished empty corpus, which must leave the grace), an empty TAP is not.
+  printf '' > "$BATS_TEST_TMPDIR/empty.tap"
+  run grep -aqE '^1\.\.[0-9]' "$BATS_TEST_TMPDIR/empty.tap"; [ "$status" -ne 0 ]
+  printf '1..0\n' > "$BATS_TEST_TMPDIR/zero.tap"
+  run grep -aqE '^1\.\.[0-9]' "$BATS_TEST_TMPDIR/zero.tap"; [ "$status" -eq 0 ]
+}
+
+@test "PRE-PLAN grace: a pass that NEVER plans is still cut, and lands as a non-verdict" {
+  # The other half — the grace must not become a hole a genuine gather-wedge escapes through.
+  # POSTLAND_STALL_S is left at its 900s default here ON PURPOSE: the stall clock provably cannot
+  # be what ends this run, so only the pre-plan bound can, and the wall (120s) is 15x the grace.
+  b="$(stub_bats nevercount "case \"\$1\" in --count) echo 1; exit 0 ;; esac
+sleep 300")"
+  export CC_POSTLAND_BATS="$b"
+  echo ppf > "$R/preplan-fixture"; push_commit "pre-plan wedge fixture"
+  tree="$(origin_tree)"
+  POSTLAND_PRE_PLAN_GRACE_S=4 POSTLAND_STALL_POLL_S=1 POSTLAND_SUITE_TIMEOUT_S=120 \
+    POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  grep -q 'PRE-PLAN STALL' "$CC_POSTLAND_DIR/runner.log"
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  # A NON-VERDICT, never a conviction: a run that never planned proves nothing about any suite.
+  run jq -r '.verdict' "$s"; [ "$output" != "green" ]
+  run jq -r '.verdict' "$s"; [ "$output" != "red" ]
+  [ "$(pages_n)" = "0" ]
+  # THE WALL PROVABLY DID NOT FIRE — this is the grace, not the backstop it is nested inside.
+  run jq -r '.run_s' "$s"; [ "$output" -lt 60 ] || false
+}
+
+@test "PRE-PLAN grace: the window is DERIVED from corpus size, not a constant that rots" {
+  # A fixed grace is how this defect class recurs — the corpus grew 141 -> 403 suites in two weeks,
+  # so any constant sized today erodes silently (memory: bound-must-fit-the-band-not-the-bench,
+  # third tell). Asserted on the arithmetic the log reports: 4 suites x 2s = 8s, with the floor
+  # lowered out of the way so the derivation is the only thing that can produce that number.
+  printf '@test "a" { true; }\n' > "$R/tests/a.bats"
+  printf '@test "b" { true; }\n' > "$R/tests/b.bats"
+  printf '@test "c" { true; }\n' > "$R/tests/c.bats"
+  b="$(stub_bats nevercount2 "case \"\$1\" in --count) echo 1; exit 0 ;; esac
+sleep 300")"
+  export CC_POSTLAND_BATS="$b"
+  push_commit "four suites, none of which will ever be counted"
+  POSTLAND_PRE_PLAN_PER_SUITE_S=2 POSTLAND_PRE_PLAN_FLOOR_S=1 POSTLAND_STALL_POLL_S=1 \
+    POSTLAND_SUITE_TIMEOUT_S=120 POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  grep -q 'grace 8s over 4 suite(s)' "$CC_POSTLAND_DIR/runner.log"
+}
+
+@test "PRE-PLAN grace: REAL bats emits no TAP until it has counted (the premise, on the producer)" {
+  # THE PREMISE CHECK. Every pre-plan test above drives a STUB, and a stub is a claim ABOUT the real
+  # producer — when the producer changes shape a stub keeps passing for a new reason (this suite has
+  # already been bitten: see the `flaky` mode's note on keying off the v1 invocation shape). The fix
+  # rests entirely on one property of bats itself, so assert it against bats itself.
+  # Both assertions are ORDERING/CONTENT properties, deliberately not wall-clock ones: a timing floor
+  # would be a flake surface on a fast box and would go red for a bats that merely got quicker, which
+  # is not a regression. The measured cost is recorded instead — 19ms/file at load 7 (10 files 279ms,
+  # 30 files 696ms, 60 files 1116ms), i.e. ~72s for the real 403-suite corpus.
+  d="$BATS_TEST_TMPDIR/realgather"; mkdir -p "$d"
+  i=0; while [ "$i" -lt 60 ]; do printf '@test "t%s" { true; }\n' "$i" > "$d/t$i.bats"; i=$(( i + 1 )); done
+  # (1) The counting pass does its whole job while emitting NOTHING that any TAP reader can see —
+  #     which is exactly why tap_done cannot distinguish it from a wedge. EQUALITY, not a grep for
+  #     TAP shapes: `run` captures stdout+stderr into $output, so "the whole output is exactly the
+  #     count" is strictly stronger than "no line looks like TAP" — it rules out any extra byte,
+  #     TAP-shaped or not. (It also replaces a genuinely DEAD assertion: `… | grep -q … && false ||
+  #     true` can never fail, because both branches reach the `|| true`. Caught by this repo's own
+  #     dead-assertion ratchet at land time, which is exactly the vacuous control this suite's
+  #     header warns about.)
+  run env CC_BATS_MAX_ROOTS=0 bats --count "$d"/t*.bats
+  [ "$status" -eq 0 ]
+  [ "$output" = "60" ]
+  # (2) Nothing precedes the plan line in a real run, so "no plan yet" really is the whole blind
+  #     window — there is no earlier signal the watcher could have keyed on instead.
+  run env CC_BATS_MAX_ROOTS=0 bats "$d"/t*.bats
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | head -1)" = "1..60" ]
+}
+
 @test "C15: a HUNG tree is ABSTAINED as a real verdict, never re-run forever" {
   # the counterpart to C13's "a cut tree is RETRIED": a hang is PROVEN about the tree, so
   # re-running it every sweep re-proves a decided fact and burns a full suite per tick.
