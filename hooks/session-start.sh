@@ -9,7 +9,13 @@ LOG_DIR=~/.claude/logs
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/sessions.log"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session started in $(pwd)" >> "$LOG_FILE"
+# `--refresh-mcp-cache` re-enters this same script as a detached background refresher (see the
+# MCP section). It must do the probe and NOTHING else — no session log line, no daily prunes, no
+# stdout JSON — so the dispatch happens after the probe machinery is defined and before every
+# other duty. MCP_MODE is read here, at the top, so the ordering constraint is visible.
+MCP_MODE="${1:-}"
+[ "$MCP_MODE" = "--refresh-mcp-cache" ] || \
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session started in $(pwd)" >> "$LOG_FILE"
 
 # === EFFORT ENV-VAR TRIPWIRE (2026-06-11) ===
 # CLAUDE_CODE_EFFORT_LEVEL in the process env outranks /effort EVERY turn and
@@ -32,7 +38,9 @@ fi
 PRUNE_SCRIPT="$HOME/.claude/scripts/prune-backups.sh"
 LAST_PRUNE_FILE="$HOME/.claude/.last-backup-prune"
 TODAY=$(date +%Y-%m-%d)
-if [ -x "$PRUNE_SCRIPT" ]; then
+# The background cache refresher must not consume the daily marker — it would make the real
+# session start skip the prune for the rest of the day.
+if [ "$MCP_MODE" != "--refresh-mcp-cache" ] && [ -x "$PRUNE_SCRIPT" ]; then
   if [ ! -f "$LAST_PRUNE_FILE" ] || [ "$(cat "$LAST_PRUNE_FILE" 2>/dev/null)" != "$TODAY" ]; then
     echo "$TODAY" > "$LAST_PRUNE_FILE"
     "$PRUNE_SCRIPT" &  # Background, non-blocking
@@ -45,7 +53,7 @@ fi
 # Bounds MANIFEST.jsonl to keep-10-per-plan + 90 d and `git gc`s the plan-history repo.
 PLAN_PRUNE_SCRIPT="$HOME/.claude/scripts/prune-plan-history.sh"
 LAST_PLAN_PRUNE_FILE="$HOME/.claude/.last-plan-history-prune"
-if [ -x "$PLAN_PRUNE_SCRIPT" ]; then
+if [ "$MCP_MODE" != "--refresh-mcp-cache" ] && [ -x "$PLAN_PRUNE_SCRIPT" ]; then
   if [ ! -f "$LAST_PLAN_PRUNE_FILE" ] || [ "$(cat "$LAST_PLAN_PRUNE_FILE" 2>/dev/null)" != "$TODAY" ]; then
     echo "$TODAY" > "$LAST_PLAN_PRUNE_FILE"
     "$PLAN_PRUNE_SCRIPT" >/dev/null 2>&1 &  # Background, non-blocking
@@ -85,6 +93,31 @@ fi
 # above its 2.6 s median under that load (memory bound-must-fit-the-band-not-the-bench). 10 s leaves
 # ~4x headroom over the measured median; the budget caps the pathological case near 15 s. A too-tight
 # bound is not a safe default here: it would convert a healthy probe into a FALSE "could not ask".
+#
+# WHY IT IS NO LONGER ON THE CRITICAL PATH AT ALL (DESK_ROUTER_AND_STARTUP_V1 W0.2).
+# Every number above is a cost paid on EVERY SessionStart — and both SessionStart blocks use a
+# null matcher, so `startup`, `resume`, `clear` and `compact` all pay it. Once the 21-29 s
+# setup-task-symlinks.sh fork storm was fixed (W0.1), this 2.5 s median WAS the remaining floor.
+# It buys one advisory string.
+#
+# The fix is stale-while-revalidate, not a bigger timeout (raising the bound would make the tail
+# worse, which is the opposite of the goal):
+#   · fresh cache (<= TTL)      -> serve it, zero subprocesses.
+#   · stale cache (<= MAX_AGE)  -> serve it AND detach a background refresh for the NEXT start.
+#   · no cache / too old        -> probe INLINE exactly as before, then cache.
+# So a healthy fleet pays the 2.5 s once and never again, while a box that has never probed still
+# gets a real answer on its first start rather than a fabricated one.
+#
+# Three deliberate choices, each of which the obvious version gets wrong:
+#   · ONLY `ok` results are cached. Caching a failure makes a transient failure STICKY and hides a
+#     genuinely broken probe behind a TTL — the runtime form of the anti-capture rule. A probe that
+#     could not ask therefore still costs full price on the next start, which is exactly the
+#     current behaviour, so this is not a regression: the alarm keeps firing.
+#   · Staleness is VISIBLE. A served-from-cache claim carries its age. A board that silently prints
+#     stale numbers is worse than no board, and the same holds for a sensor.
+#   · MAX_AGE is a hard stop, not decoration. If background refreshes keep failing, the cache
+#     eventually stops being served and the inline probe returns — degrading loudly toward the old
+#     cost instead of quietly serving an answer from last week.
 MAX_ATTEMPTS=${CC_MCP_PROBE_ATTEMPTS:-2}
 PROBE_TIMEOUT=${CC_MCP_PROBE_TIMEOUT:-10}   # seconds, per attempt
 PROBE_BUDGET=${CC_MCP_PROBE_BUDGET:-15}     # seconds, whole probe including backoff
@@ -94,7 +127,66 @@ CONNECTED_COUNT=0
 DEGRADED_COUNT=0
 MCP_STATE=unknown        # ok = the probe ANSWERED (count is real) | unknown = could not ask
 MCP_REASON="not attempted"
+MCP_AGE=-1               # >=0 ⇒ this answer came from cache, that many seconds old
 PROBE_START=$SECONDS
+
+# The cache is keyed per CONFIG DIR: the probe's answer depends on which binary/track the session
+# is, and that is what CLAUDE_CONFIG_DIR selects. A single shared file would let account 1's answer
+# be served to account 3.
+_MCP_CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+MCP_CACHE_FILE="${CC_MCP_CACHE_FILE:-$_MCP_CFG_DIR/.mcp-probe-cache}"
+MCP_CACHE_TTL=${CC_MCP_CACHE_TTL:-300}          # serve with no refresh
+MCP_CACHE_MAX_AGE=${CC_MCP_CACHE_MAX_AGE:-86400} # beyond this, refuse to serve; probe inline
+MCP_CACHE_LOCK="$MCP_CACHE_FILE.refresh.lock"
+MCP_CACHE_LOCK_STALE=${CC_MCP_CACHE_LOCK_STALE:-600}
+
+_now() { date +%s; }
+
+# Reads the cache into CACHE_*; returns 1 on absent/unparseable/wrong-version/not-ok. A record that
+# fails any check is treated as absent, never as a partial answer.
+_mcp_cache_read() {
+  [ -f "$MCP_CACHE_FILE" ] || return 1
+  local v e s c d r
+  IFS="$(printf '\t')" read -r v e s c d r < "$MCP_CACHE_FILE" 2>/dev/null || return 1
+  [ "$v" = "v1" ] || return 1
+  case "$e" in ''|*[!0-9]*) return 1 ;; esac
+  case "$c" in ''|*[!0-9]*) return 1 ;; esac
+  case "$d" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$s" = "ok" ] || return 1
+  CACHE_EPOCH="$e"; CACHE_STATE="$s"; CACHE_CONNECTED="$c"; CACHE_DEGRADED="$d"; CACHE_REASON="${r:-}"
+  return 0
+}
+
+# Atomic (write-temp + rename) so a concurrent reader never sees a half-written record.
+_mcp_cache_write() {
+  [ "$MCP_STATE" = "ok" ] || return 0
+  mkdir -p "$_MCP_CFG_DIR" 2>/dev/null || true
+  local tmp="$MCP_CACHE_FILE.$$"
+  if printf 'v1\t%s\t%s\t%s\t%s\t%s\n' \
+       "$(_now)" "$MCP_STATE" "$CONNECTED_COUNT" "$DEGRADED_COUNT" "$MCP_REASON" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$MCP_CACHE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+}
+
+# Detach ONE refresher. `mkdir` is the atomic test-and-set — several sessions starting together
+# must not each spawn a CLI. A lock left behind by a crash is reaped by age, otherwise refreshes
+# would stop forever and the cache would silently rot up to MAX_AGE.
+_mcp_spawn_refresh() {
+  if [ -d "$MCP_CACHE_LOCK" ]; then
+    local lock_m now_s
+    lock_m=$(stat -f %m "$MCP_CACHE_LOCK" 2>/dev/null || echo 0)
+    now_s=$(_now)
+    if [ "$(( now_s - lock_m ))" -gt "$MCP_CACHE_LOCK_STALE" ]; then
+      rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true
+    fi
+  fi
+  mkdir "$MCP_CACHE_LOCK" 2>/dev/null || return 0
+  # Same script, same probe code — one implementation, two entry points.
+  ( bash "${BASH_SOURCE[0]}" --refresh-mcp-cache >/dev/null 2>&1
+    rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true ) &
+}
 
 # Resolve the binary the RUNNING session is, in strictly-decreasing authority. Deliberately no bare
 # `command -v claude` rung here: that is the stale stock install this fix exists to stop calling.
@@ -129,6 +221,10 @@ for _t in timeout gtimeout; do
   if command -v "$_t" >/dev/null 2>&1; then _TIMEOUT_BIN="$_t"; break; fi
 done
 
+# The probe itself, unchanged in behaviour and now reachable from two entry points: the inline
+# cache-miss path below, and the detached `--refresh-mcp-cache` re-entry. Deliberately ONE
+# implementation — a second copy for the background path is how the two answers drift apart.
+_mcp_probe() {
 if _RES="$(_resolve_claude_bin)"; then
   CLAUDE_BIN="${_RES%%	*}"
   BIN_RUNG="${_RES#*	}"
@@ -193,9 +289,49 @@ else
   MCP_REASON="no claude binary resolved (PPID, cc-claude-bin)"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] MCP probe SKIPPED: $MCP_REASON" >> "$LOG_FILE"
 fi
+}
+
+# ── Background-refresh entry point ────────────────────────────────────────────────────────────
+# Probe, cache, exit. No stdout JSON, no session log line, no daily prunes (guarded above).
+if [ "$MCP_MODE" = "--refresh-mcp-cache" ]; then
+  _mcp_probe
+  _mcp_cache_write
+  exit 0
+fi
+
+# ── Serve: fresh cache → stale cache + refresh → inline probe ─────────────────────────────────
+_MCP_SERVED_FROM_CACHE=0
+if _mcp_cache_read; then
+  _AGE=$(( $(_now) - CACHE_EPOCH ))
+  [ "$_AGE" -lt 0 ] && _AGE=0          # clock moved backwards; treat as fresh, never negative
+  if [ "$_AGE" -le "$MCP_CACHE_MAX_AGE" ]; then
+    MCP_STATE="$CACHE_STATE"
+    CONNECTED_COUNT="$CACHE_CONNECTED"
+    DEGRADED_COUNT="$CACHE_DEGRADED"
+    MCP_REASON="$CACHE_REASON"
+    MCP_AGE="$_AGE"
+    _MCP_SERVED_FROM_CACHE=1
+    [ "$_AGE" -gt "$MCP_CACHE_TTL" ] && _mcp_spawn_refresh
+  fi
+fi
+
+if [ "$_MCP_SERVED_FROM_CACHE" -eq 0 ]; then
+  _mcp_probe
+  _mcp_cache_write
+fi
 
 # Sanitize for JSON interpolation — same treatment the effort tripwire gives its value.
 MCP_REASON=$(printf '%s' "$MCP_REASON" | tr -cd '[:alnum:] ()=.,:_/-' | cut -c1-120)
+
+# Staleness is part of the claim, never implied. A reader must be able to tell a live answer from
+# one carried over from an earlier session.
+_CACHE_NOTE=""
+if [ "$MCP_AGE" -ge 0 ]; then
+  if [ "$MCP_AGE" -lt 60 ]; then _CACHE_NOTE=" [cached ${MCP_AGE}s ago]"
+  elif [ "$MCP_AGE" -lt 3600 ]; then _CACHE_NOTE=" [cached $(( MCP_AGE / 60 ))m ago]"
+  else _CACHE_NOTE=" [cached $(( MCP_AGE / 3600 ))h ago]"
+  fi
+fi
 
 # Check agent-browser installation
 AGENT_BROWSER_STATUS="not installed"
@@ -212,9 +348,9 @@ fi
 _DEG=""
 [ "$DEGRADED_COUNT" -gt 0 ] && _DEG=" ($DEGRADED_COUNT degraded)"
 if [ "$MCP_STATE" = ok ] && [ "$CONNECTED_COUNT" -gt 0 ]; then
-  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}. agent-browser: $AGENT_BROWSER_STATUS. If BrowserMCP tools fail with 'No such tool available', use agent-browser skill instead."
+  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. If BrowserMCP tools fail with 'No such tool available', use agent-browser skill instead."
 elif [ "$MCP_STATE" = ok ]; then
-  MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
+  MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
 else
   MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON). This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS. If a BrowserMCP tool fails with 'No such tool available', use agent-browser skill instead."
 fi
