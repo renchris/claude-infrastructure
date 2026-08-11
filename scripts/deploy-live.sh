@@ -974,7 +974,11 @@ merge_blockers() { # <from-sha> <to-sha>
   local from="$1" to="$2" line path
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    case "$line" in '??'*) continue ;; esac        # untracked cannot block a --ff-only
+    # `??` is skipped HERE because untracked has its OWN arm (untracked_blockers below) with its own
+    # class and its own remedy — NOT because it is harmless. This line used to read "untracked cannot
+    # block a --ff-only", which is false, and that false claim is why this lane met a third cause it
+    # could not name. Skipping is still correct: this function's subject is the dirty-TRACKED set.
+    case "$line" in '??'*) continue ;; esac
     path="${line#???}"                             # porcelain v1: exactly 2 status chars + a space
     case "$path" in *' -> '*) path="${path##* -> }" ;; esac   # rename ⇒ the DESTINATION is on disk
     [ -n "$path" ] || continue
@@ -982,6 +986,40 @@ merge_blockers() { # <from-sha> <to-sha>
   done <<EOF
 $(g status --porcelain 2>/dev/null)
 EOF
+  return 0
+}
+
+# ── which UNTRACKED path is about to block the fast-forward (THE THIRD CAUSE) ────────────────────
+# `--ff-only` also refuses when the advance would overwrite an UNTRACKED working-tree file. That is
+# a different set from the dirty-tracked one above, with a different remedy, and until 2026-08-11
+# this lane could not name it at all: merge_blockers() skipped `??` on the claim "untracked cannot
+# block a --ff-only". PROVEN FALSE in a throwaway repo — an untracked file sitting at a path the
+# advance ADDS gives "error: The following untracked working tree files would be overwritten by
+# merge" and exit 1. That is how this lane produced refusals it could not explain: deploy.log carries
+# two "BOTH named causes RULED OUT" lines (targets d079576e07b0, e0c6b4e877d7), which is what a
+# ladder that knows two causes says when it meets a third. The shape is live, not hypothetical — a
+# peer session writing a new file into the shared checkout, which then LANDS from a worktree, leaves
+# exactly this collision behind.
+#
+# THE ORACLE IS GIT, NOT A RE-DERIVATION (memory: make-the-actuator-the-arbiter). `read-tree -n` is
+# git's own dry run of the index update the fast-forward performs, so it cannot disagree with the
+# merge the way a hand-rolled set intersection would — and a hand-rolled one WOULD have been wrong
+# here: `git status --porcelain` collapses a wholly-untracked directory to a single `dir/` entry, so
+# an added path nested inside it is INVISIBLE without -uall (measured in the same probe).
+#
+# IT NAMES ONE BLOCKER, NOT ALL OF THEM: read-tree aborts at the first collision (measured with two
+# planted). The refusal message says so rather than implying a complete list — after that file is
+# moved, the next tick names the next one. The page's `inspect:` line is what shows the whole set.
+#
+# FAIL-OPEN BY CONSTRUCTION: only the untracked-collision message is consumed. read-tree also errors
+# for the dirty-tracked case ("Entry 'x' not uptodate"), which the arm ABOVE already owns and owns
+# better — a second oracle firing on the first one's subject REPLACES the rung below instead of
+# adding one (memory: secondary-oracle-fires-only-on-the-primarys-failure). Every other read-tree
+# failure yields nothing here on purpose: the merge then runs and its own captured stderr names the
+# cause, rather than this probe inventing a class it cannot read.
+untracked_blockers() { # <to-sha> — one path per line; empty ⇒ no untracked collision detected
+  g read-tree -n -u -m HEAD "$1" 2>&1 >/dev/null \
+    | sed -n "s/^error: Untracked working tree file '\(.*\)' would be overwritten by merge\.\$/\1/p"
   return 0
 }
 
@@ -1446,6 +1484,31 @@ if [ -n "$BLOCKERS" ]; then
   die "DIRTY TREE — the advance to ${TARGET:0:12} rewrites tracked path(s) carrying UNCOMMITTED local changes: $BLOCKER_LIST(very likely a peer session's work — this lane never stashes or discards it; commit or stash it yourself, then re-run)"
 fi
 
+# ── the SECOND blocking state, named before the merge for the same reason as the first ───────────
+# Ordered AFTER the dirty-tracked arm deliberately: git's dry run errors on that case too, so
+# running this first would let a broad oracle answer a question the narrow, better-worded arm above
+# already owns. Distinct class, distinct remedy — an untracked file is not a peer's uncommitted EDIT
+# but a file that exists ONLY here, so nothing else on the machine can recover one, and this lane
+# moves and deletes exactly as much of it as it does of the dirty case: nothing.
+UNTRACKED="$(untracked_blockers "$TARGET")"
+if [ -n "$UNTRACKED" ]; then
+  UNTRACKED_LIST="$(printf '%s\n' "$UNTRACKED" | tr '\n' ' ')"
+  refusal_bump untracked-collision "UNTRACKED COLLISION — the advance to ${TARGET:0:12} ADDS tracked path(s) that already exist as UNTRACKED files: $UNTRACKED_LIST"
+  if [ "$AUTO" -eq 1 ] && ! damp_ok "untracked-collision:$UNTRACKED_LIST"; then exit 1; fi
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  { date +%s
+    printf 'deploy-live BLOCKED: UNTRACKED COLLISION — the advance %.12s → %.12s ADDS tracked path(s)\n' "$HEAD_SHA" "$TARGET"
+    printf 'that already exist as UNTRACKED files in the shared checkout %s:\n' "$DEPLOY_REPO"
+    printf '%s\n' "$UNTRACKED" | sed 's/^/  /'
+    printf 'git refuses to overwrite them, so the fast-forward cannot run. git names the FIRST such\n'
+    printf 'path only — there may be more behind it. This lane never moves or deletes them: they\n'
+    printf 'exist only in this checkout, so no land, branch or stash can bring one back.\n'
+    printf 'Move, remove or commit them there and the next tick advances.\n'
+    printf 'inspect (the WHOLE set): git -C %s status --porcelain -uall\n' "$DEPLOY_REPO"
+  } > "$PAGES_DIR/deploy-untracked-collision.page" 2>/dev/null || true
+  die "UNTRACKED COLLISION — the advance to ${TARGET:0:12} ADDS tracked path(s) that already exist as UNTRACKED files: $UNTRACKED_LIST(git names the first one only; it will not overwrite them — move, remove or commit them yourself, then re-run)"
+fi
+
 # ⚠️ THE FILE UNDER THIS PROCESS CHANGES ON THE NEXT LINE. The merge rewrites the working tree and
 # THIS script is in it, so from here on the code executing is the copy bash parsed BEFORE the merge,
 # never the copy now on disk. Every function called below was defined above this line (host_checks()
@@ -1467,7 +1530,14 @@ fi
 # construction — it can only bite a change to deploy-live.sh itself — and the cost it actually
 # imposes is diagnostic, which is what these lines remove. Re-open the question if a post-merge fix
 # ever needs to be correct on the FIRST deploy rather than the second.
-if ! g merge --ff-only "$TARGET" >/dev/null 2>&1; then
+#
+# GIT'S OWN STDERR IS CAPTURED, NOT DISCARDED. This was `>/dev/null 2>&1`, which threw away the one
+# artifact that says WHY — and the arm below then told the operator "BOTH named causes RULED OUT …
+# read git status by hand", i.e. it asked them to re-derive what it had just deleted. A ladder can
+# only rule out the causes it knows; git names the one that actually fired, including the ones no
+# pre-flight here models (a concurrent peer's index.lock in the shared checkout, a hook, a
+# permission). Nothing regresses on the success path: that output was already suppressed.
+if ! MERGE_ERR="$(g merge --ff-only "$TARGET" 2>&1 >/dev/null)"; then
   # The dirty-tree pre-flight above ruled out the first of the old message's two guesses. Rule out
   # the second by MEASURING it rather than offering it: divergence is `origin/main..HEAD` non-empty.
   # It should be structurally unreachable — the anti-rollback guard passed, so live HEAD is an
@@ -1476,7 +1546,8 @@ if ! g merge --ff-only "$TARGET" >/dev/null 2>&1; then
   AHEAD="$(g rev-list --count "origin/main..$HEAD_SHA" 2>/dev/null || echo 0)"
   case "$AHEAD" in ''|*[!0-9]*) AHEAD=0 ;; esac
   [ "$AHEAD" -gt 0 ] && die "DIVERGED — the live checkout carries $AHEAD commit(s) that are not on origin/main, so it cannot fast-forward to ${TARGET:0:12}. This lane never rebases or resets a shared checkout; land or drop those commits by hand."
-  die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with BOTH named causes RULED OUT (no dirty tracked path inside the advance's own path set; HEAD carries no commit missing from trunk) — read \`git -C $DEPLOY_REPO status\` by hand"
+  MERGE_ERR="$(printf '%s' "$MERGE_ERR" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//')"
+  die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with all THREE named causes ruled out (no dirty tracked path inside the advance's own path set; no untracked collision; HEAD carries no commit missing from trunk) — GIT SAID: ${MERGE_ERR:-<git printed nothing>}"
 fi
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"
 
