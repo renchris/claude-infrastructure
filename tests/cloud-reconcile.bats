@@ -164,6 +164,33 @@ STUB
     true
   }
 
+  push_branch_msg() {  # $1=branch  $2=author/committer email  $3=commit message (verbatim)
+    local b="$1" em="$2" m="$3" w
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    printf 'x\n' > "$w/f1.txt"
+    git -C "$w" add -A
+    printf '%s\n' "$m" > "$D/cm.txt"
+    GIT_COMMITTER_EMAIL="$em" GIT_COMMITTER_NAME=cloud \
+      git -C "$w" -c user.email="$em" -c user.name=cloud commit -q --no-verify -F "$D/cm.txt"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
+  # The REAL githooks/commit-msg, installed where git would look for it. The strip arm exists to
+  # clear THAT predicate, so a fixture stand-in would prove the mechanism and not the outcome.
+  install_real_msg_hook() {
+    local h
+    h="$(git -C "$REPO" rev-parse --git-path hooks)"
+    case "$h" in /*) ;; *) h="$REPO/$h" ;; esac
+    mkdir -p "$h"
+    cp "$ROOT/githooks/commit-msg" "$h/commit-msg"
+    chmod +x "$h/commit-msg"
+  }
+
   remote_sha() { git -C "$REPO" ls-remote origin "refs/heads/$1" 2>/dev/null | awk '{print $1}'; }
   local_sha()  { git -C "$REPO" rev-parse --verify --quiet "refs/heads/$1" 2>/dev/null; }
 
@@ -304,6 +331,68 @@ STUB
   [ "$status" -eq 0 ]
   landed_branches | /usr/bin/grep -q '^claude/hooked$'
   [ "$(local_sha claude/hooked)" != "$orig" ]
+}
+
+@test "the VM's OWN attribution block is what the hook blocks — it is dropped and the land proceeds" {
+  # Measured on the live artifact (session_01QEiWYuB1ygLLcVwCQJoUZE, commit bd67e747): the text
+  # githooks/commit-msg refuses is INHERITED, not added — a cloud VM writes its own
+  # `Co-Authored-By: Claude …` + `Claude-Session: https://claude.ai/code/…` block. The first cut of
+  # this rewrite blamed its own trailers for that refusal, which is the same wrong-cause defect the
+  # whole change exists to remove.
+  install_real_msg_hook
+  push_branch_msg claude/vmtrailers "$VM_EMAIL" \
+"docs(research): a thing the VM wrote
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01ABCDEF"
+  decl cloud-vt claude/vmtrailers
+  orig="$(remote_sha claude/vmtrailers)"
+
+  CONFIRM=1 run cr --land claude/vmtrailers
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/vmtrailers$'
+  echo "$output" | /usr/bin/grep -q 'attribution trailer block was dropped'
+
+  msg="$(git -C "$REPO" log -1 --format=%B refs/heads/claude/vmtrailers)"
+  # The subject — what the commit SAYS — is untouched. Only the attribution block went.
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'docs(research): a thing the VM wrote'
+  printf '%s\n' "$msg" | /usr/bin/grep -qi 'co-authored-by' && false
+  printf '%s\n' "$msg" | /usr/bin/grep -qi 'claude-session' && false
+  printf '%s\n' "$msg" | /usr/bin/grep -q 'claude.ai/code' && false
+  # …and the same session id survives, re-expressed in the spelling the hook allows.
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'Cloud-session: cloud-vt'
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-commit: $orig"
+
+  # POSITIVE CONTROL: the real hook genuinely refuses the ORIGINAL message off this same fixture,
+  # so "dropped" cannot pass because the hook was inert here.
+  h="$(git -C "$REPO" rev-parse --git-path hooks)"; case "$h" in /*) ;; *) h="$REPO/$h" ;; esac
+  git -C "$REPO" log -1 --format=%B "$orig" > "$D/orig.txt"
+  run bash "$h/commit-msg" "$D/orig.txt"
+  [ "$status" -ne 0 ]
+}
+
+@test "blocked text in the SUBJECT is refused, not silently edited — a rewrite re-attributes, it does not censor" {
+  install_real_msg_hook
+  push_branch_msg claude/badsubject "$VM_EMAIL" "docs: see https://claude.ai/code/session_01ZZ for the write-up"
+  decl cloud-bs claude/badsubject
+  orig="$(remote_sha claude/badsubject)"
+
+  CONFIRM=1 run cr --land claude/badsubject
+  [ "$status" -eq 70 ]
+  echo "$output" | /usr/bin/grep -q 'SUBJECT or BODY'
+  [ ! -s "$LAND_STUB_LOG" ]
+  [ "$(local_sha claude/badsubject)" = "$orig" ]
+
+  # POSITIVE CONTROL: the identical fixture with the blocked text in a TRAILER instead is stripped
+  # and lands. The discriminator under test is WHERE the text is, not that the hook fired.
+  push_branch_msg claude/badtrailer "$VM_EMAIL" \
+"docs: a clean subject
+
+Claude-Session: https://claude.ai/code/session_01ZZ"
+  decl cloud-bt claude/badtrailer
+  CONFIRM=1 run cr --land claude/badtrailer
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/badtrailer$'
 }
 
 # ── DEFECT 2 · a failed land poisons its own retry ───────────────────────────────────────────
