@@ -38,6 +38,16 @@
   is at t=120, so the cache is stale for the whole t=90..120 window and every reader in it abstains.
   Refreshing at age>30 means the cache is never expired when a consumer arrives.
 
+  IT ALSO PRODUCES THE SESSIONSTART BOARD (W3.6, 2026-08-11), and this job is the ONLY thing that
+  does. `--keepwarm` renders `--readout --narrow` to board_file (default
+  /tmp/claude-accounts-board.txt) in the same pass, and hooks/accounts-board.sh does nothing but
+  read that file. So if the startup board reads STALE or "unavailable", the fault is HERE — check
+  this job before anything else (`launchctl list | grep accounts-keepwarm`, then the out.log below;
+  the line reports `board=<path>` or `board=FAILED` every tick). The hook cannot self-heal by
+  fetching live: `claude-accounts --readout` measures 5.33s against a 5s hook timeout, which is the
+  whole reason the work is on this job instead. Rendering costs ~3ms on a served cache, so it does
+  not move any figure above.
+
   IT SWEEPS WITH HEAL, DELIBERATELY. cache_read refuses a no-heal payload to a heal-wanting caller
   whenever any row is BAD_AUTH, so a --no-heal producer would poison the cache for every other
   consumer precisely on the day an account is logged out — the day it matters most.
