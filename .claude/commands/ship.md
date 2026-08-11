@@ -11,7 +11,14 @@ sessions, so its landing flow must be fail-closed against a sibling session movi
 (shellcheck / `bash -n` / py_compile on changed files, hermeticity + wall-clock ratchets)
 plus a **bounded direct-suite smoke** (`SHIP_LAND_SMOKE_BUDGET_S=120`, `nice`d, **skipped
 outright — never waited — under load**), then the seconds-long locked push. Typical land
-≈ 20-40s; worst case ≈ 3 min, load-indifferent. The full-suite claim moved to **one
+≈ 20-40s; worst case ≈ 3 min, load-indifferent. ⚠ **That pair of numbers has never been
+measured and the first measurement disagrees with it.** `total_s` shipped 2026-08-11 (P0);
+the first land carrying it took **592s** — 506s of that inside the gate, 243s of that in the
+ratchet arms, across 2 rounds — and the two attempts before it took 256s and 556s. **n=3, on
+one branch, during heavy contention, and two of the three include a stale re-round**, so that
+is not a replacement figure and is deliberately not written as one: it is the reason to read
+`bash scripts/gate-red-census.sh` (LAND LATENCY + GATE COST, each with its coverage) instead
+of either number here. Revisit this sentence once the panel clears its 8-row floor. The full-suite claim moved to **one
 background verifier** (`postland-verify.sh`, every 300s, fresh worktree, background QoS)
 which is now the **only** party that may assert "this tree is green": a GREEN stamp is
 what advances the `gate-green` marker, and a reproducible red is **auto-reverted** with
