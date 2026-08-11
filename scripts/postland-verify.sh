@@ -377,10 +377,32 @@ BISECT_CULPRIT=""
 # every retry: ~2h of sleeping per run (backlog 60ec4c2d86d4), and with 5 concurrent gates each
 # gate's own corpus WAS the load the others were waiting out — self-starvation below their own
 # ceiling. Deleted rather than tuned: a shedder that WAITS amplifies (R7), and the verifier is the
-# net, so it is the one party that may never be the thing that waits. Instead the corpus runs in
-# Darwin's BACKGROUND band — nice 19 (scheduler) + `taskpolicy -c background` (throttled CPU *and*
-# I/O tier, yields to interactive sessions). Wall time under load becomes DEPLOY LATENCY, never
+# net, so it is the one party that may never be the thing that waits. Instead the corpus is
+# launched DEMOTED — nice 19 (scheduler) + `taskpolicy -c background` (throttled CPU *and* I/O
+# tier, yields to interactive sessions). Wall time under load becomes DEPLOY LATENCY, never
 # blockage. Seam: CC_POSTLAND_TASKPOLICY_BIN (set-but-EMPTY ⇒ nice alone, honored verbatim).
+#
+# ⚠️ THIS ARRAY DOES NOT DECIDE THE BAND THE CORPUS ACTUALLY RUNS IN — MEASURED 2026-08-11 (backlog
+# 70dff02dcf4a). Read the two facts together before believing any band claim in this file:
+#
+#   1. $BATS_BIN is the bare name `bats`, which PATH-resolves to ~/.claude/bin/cc-bats (the note at
+#      BATS_BIN says so for a different reason — admission control). cc-bats' own default band is
+#      `utility`, and it EXECs `taskpolicy -c utility <real bats>`. taskpolicy sets a FRESH clamp on
+#      the child — the LINT_QOS note below already relies on that — so cc-bats OVERRIDES the
+#      `-c background` above. Sampled live on a real run: the corpus's bats processes read PRI 20,
+#      not PRI 4. What this array actually clamps is the wrapper, not the work.
+#   2. The one context where it is NOT overridden is a launchd job declaring `ProcessType
+#      Background`, which applies Darwin's darwinbg TASK ROLE — a one-way floor. From inside it,
+#      `taskpolicy -c utility` still reads PRI 4, and `taskpolicy -B -p <pid>` does not lift it
+#      either. So the SCHEDULED lane ran at PRI 4 and the session-invoked lane at PRI 20, on the
+#      same corpus and the same box: p50 3.11h vs 0.98h.
+#
+# The consequence that matters: the band was set by the PLIST, never by this array, and flipping
+# this array to `utility` would have changed NOTHING in either population. The plist key was removed
+# 2026-08-11 (launchd/com.claude.postland-verify.plist), which is what actually lets cc-bats' own
+# `utility` clamp take effect on the scheduled lane. The array stays as-is because it is still the
+# correct floor for any caller that supplies a REAL bats via CC_POSTLAND_BATS, bypassing cc-bats.
+# Invariant pinned by tests/postland-band-floor.bats; derivation in LAND_PIPELINE_V2.md §8.
 if [ -n "${CC_POSTLAND_TASKPOLICY_BIN+set}" ]; then TASKPOLICY_BIN="$CC_POSTLAND_TASKPOLICY_BIN"
 else TASKPOLICY_BIN=/usr/sbin/taskpolicy; fi
 if [ -n "$TASKPOLICY_BIN" ] && [ -x "$TASKPOLICY_BIN" ]; then
@@ -2933,8 +2955,29 @@ selftest() {
   grep -qE '^[[:space:]]*gate_admit' "$SELF" \
     && badp "qos: gate_admit still present (the verifier must never wait on load)" \
     || okp "qos: no admission control anywhere in the runner"
+  # The corpus must be LAUNCHED demoted. Worded as "launched", not "runs in", because until
+  # 2026-08-11 this check read `okp "the corpus runs in the background band"` — and that was FALSE
+  # of the running process: $BATS_BIN resolves to cc-bats, which re-clamps to `utility` (PRI 20).
+  # A control asserting a claim about a RUNNING band by grepping a PREFIX in its own source can
+  # only ever confirm the prefix. It passed for weeks over a corpus running in a different band
+  # than the one it named, and that false confirmation is what kept the real lever hidden.
   grep -qE 'nice -n 19' "$SELF" \
-    && okp "qos: the corpus runs in the background band" || badp "qos: no background-band prefix"
+    && okp "qos: the corpus is LAUNCHED demoted (prefix present)" || badp "qos: no demotion prefix"
+
+  # THE BAND THE CORPUS ACTUALLY GETS is decided by the launchd plist, not by the prefix above:
+  # `ProcessType Background` applies the darwinbg task role, a one-way floor that pins every
+  # descendant at PRI 4 and that cc-bats' `-c utility` provably cannot lift. Re-adding that key
+  # would silently restore a 3.19x wall-clock tax on the scheduled lane with nothing else changing,
+  # so assert its ABSENCE from the SSOT here — this file is the only place that would notice.
+  _pv_plist="$(dirname "$SELF")/../launchd/com.claude.postland-verify.plist"
+  if [ -f "$_pv_plist" ]; then
+    grep -qE '<string>Background</string>' "$_pv_plist" \
+      && badp "qos: plist re-declares ProcessType Background (pins the corpus at PRI 4)" \
+      || okp "qos: plist declares no darwinbg ProcessType (cc-bats' utility clamp can take)"
+  else
+    okp "qos: plist SSOT not reachable from here (skipped, not asserted)"
+  fi
+  unset _pv_plist
 
   # ── C29 cross-window corroboration — structural, and specifically that it did NOT become a wait ──
   # The failure mode this guards is not "the feature is missing", it is "somebody implemented the

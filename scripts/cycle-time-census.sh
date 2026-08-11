@@ -190,10 +190,22 @@ if show_all and sess:
     print('  SESSION-invoked (diagnostic runs, NOT the lane) — shown for comparison only')
     print('    completed runs: %d      run_s p50: %.2fh' % (len(sess), h(sp50)))
     if n and sp50 > 0:
-        print('    scheduled/session ratio: %.2fx — the launchd envelope (ProcessType Background +'
+        # CORRECTED 2026-08-11 (backlog 70dff02dcf4a). This used to read "the launchd envelope,
+        # NOT the corpus band", reasoning that postland-verify.sh applies the same
+        # `taskpolicy -c background` prefix to both populations. The premise is true and the
+        # conclusion was backwards: that prefix is OVERRIDDEN — $BATS_BIN resolves to cc-bats,
+        # which re-clamps to `utility` — so the prefix never set the corpus's band in either
+        # population. `ProcessType Background` did, by applying the darwinbg task role, a one-way
+        # floor no child can lift. The gap below IS a band gap (PRI 4 vs PRI 20); the envelope is
+        # simply what produced it. Measured, not inferred: tests/postland-band-floor.bats.
+        print('    scheduled/session ratio: %.2fx — this IS a band gap: PRI 4 vs PRI 20 on the'
               % (p50 / sp50))
-        print('      Nice 10 + LowPriorityIO), NOT the corpus band: postland-verify.sh clamps the')
-        print('      corpus to `taskpolicy -c background` for BOTH populations, unconditionally.')
+        print('      same corpus and box. Cause is the plist `ProcessType Background` (darwinbg')
+        print('      task role, unliftable from inside), not postland-verify.sh\'s own prefix,')
+        print('      which cc-bats overrides to `utility` in both populations alike.')
+        print('      FALSIFIER: that key was removed 2026-08-11. If this ratio stays ~3x over')
+        print('      stamps written after the operator applies it, the diagnosis is WRONG —')
+        print('      re-derive rather than re-explain (LAND_PIPELINE_V2.md §8).')
 print('')
 print('verdict=%s' % verdict)
 if verdict == 'BREACH':

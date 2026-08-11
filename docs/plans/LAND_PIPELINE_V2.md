@@ -769,6 +769,103 @@ deployed HEAD > 60 min ⇒ surface). Both read disk only. land.log keeps one lin
   exclusion is removed. **Re-read it with `bash scripts/cycle-time-census.sh --all`; do not
   re-derive it by hand.**
 
+  ### Resolution of backlog `70dff02dcf4a` (2026-08-11) — there was never a corpus-band lever, and the two levers were one
+
+  **Verdict: do not touch the corpus band; remove `ProcessType Background` from the plist. That is
+  the entire lever, and it is worth ~3x on the scheduled lane.** The finding that decides it is that
+  **finding 3 above measured a band tax the corpus was never paying.**
+
+  **The falsified premise.** Finding 3 says the corpus "is clamped to `taskpolicy -c background`
+  (PRI 4, E-core confined) while every other actuator moved to `utility`". The first half is true of
+  the SOURCE TEXT and false of the RUNNING PROCESS. `$BATS_BIN` defaults to the bare name `bats`
+  (`postland-verify.sh:118`), which PATH-resolves — under the launchd job's own `PATH`, and under
+  any session's — to `~/.claude/bin/cc-bats`. cc-bats' default band is `utility` and it `exec`s
+  `taskpolicy -c utility <real bats>`. `taskpolicy(8)` sets a FRESH clamp on the child, a property
+  this very file already documents and relies on for `LINT_QOS` and `RETRY_QOS`. So cc-bats
+  **overrides** the corpus prefix. Sampled on a live run 2026-08-11: the corpus's own `bats-exec-*`
+  processes read **PRI 20**. Flipping the `QOS` array to `utility` would have been a **no-op** — the
+  change the filing was holding back for a documented-deliberate-choice reason was never capable of
+  moving anything.
+
+  **What the array clamps is the wrapper, not the work**, and that is why the deliberate choice at
+  `postland-verify.sh:285-297` never had to be reversed. *"The verifier may never be the thing that
+  waits"* is a statement about ADMISSION CONTROL — the deleted `gate_admit` — not about a band. It is
+  untouched here. Likewise `DEPLOY_GATE_CONVERGENCE.md:95` (direction C, "foregrounding a 233-suite
+  corpus") is moot rather than merely conflated: nobody is foregrounding anything, and the corpus was
+  already at `utility` in every context that permitted it.
+
+  **The one context that did not permit it, and why it is a floor and not a band.** launchd
+  `ProcessType Background` applies Darwin's **darwinbg task role**, a different mechanism from a
+  `taskpolicy -c` clamp and **one-way**. Measured on this box, both directions, so the instrument can
+  fail:
+
+  | applied | PRI | a child's own `taskpolicy -c utility` then reads |
+  |---|---|---|
+  | plain | 31 | — |
+  | `nice -n 19` alone | 31 | — (nice never moves PRI on Darwin) |
+  | `taskpolicy -c utility` | 20 | — |
+  | `taskpolicy -c background` | 4 | **20 — LIFTABLE** |
+  | `taskpolicy -b` (= `ProcessType Background`) | 4 | **4 — NOT LIFTABLE** |
+  | `taskpolicy -B -p <pid>`, post-spawn | 4 | 4 (un-setting it does not lift it either) |
+
+  Fleet corroboration, same box, same hour: **every** `ProcessType Background` job runs at PRI 4
+  (`postland-verify` itself, `deploy-live`, `discovery`, `dispatcher`, `autonomy-sweep`, `cc-reaper`)
+  at both `Nice 5` and `Nice 10`, while every job declaring no `ProcessType` runs at PRI 20. `Nice`
+  is not the term and `LowPriorityIO` is an I/O tier, so both stay.
+
+  **Therefore the "two independent levers" were one lever counted twice.** The filing's own reasoning
+  — *"the band is NOT what separates the two stamp populations, since `QOS` is applied unconditionally
+  to both"* — is valid about the array and backwards about the outcome, because the array is not what
+  sets the band. Both populations run the same corpus; the scheduled one inherits an unliftable PRI 4
+  floor and the session one gets cc-bats' PRI 20. **The 2.46x (now 3.19x) population gap and the
+  2.26x directly-measured band tax are the same phenomenon**, not addends. The census printed that
+  wrong causal note itself and now prints the corrected one, with a falsifier attached.
+
+  **The change, and the honest bound on it.** `launchd/com.claude.postland-verify.plist` loses its
+  `ProcessType` key and instead execs the runner through `taskpolicy -c utility`; `Nice 10` and
+  `LowPriorityIO` stay. The replacement is deliberately `utility` and not *nothing*: dropping the key
+  alone would leave the runner's own shell at PRI 31, and "we un-demoted the verifier" would be a
+  fair reading of that. `utility` is the band every other actuator moved to at `2514226e` — below
+  interactive, P-core eligible, and **liftable**, so cc-bats' `-c utility` on the corpus becomes a
+  no-op re-clamp instead of a fight. Verified: the runner resolves to PRI 20 under that line, and the
+  real corpus chain (`nice -n 19` + `taskpolicy -c background` + cc-bats), sampled by walking the
+  process tree from the captured root rather than grepping the box, reads **PRI 20 with no darwinbg
+  role and PRI 4 under one** — the plist key is the whole difference. Expected effect is the
+  population gap itself
+  — scheduled p50 **3.11h → toward the session lane's 0.98h** — which crosses the 2h trigger. Two
+  reasons to trust that number over a scaled band-tax multiplier: it is the *same corpus on the same
+  box*, already observed 54 times, and it needs no multiplication (memory
+  `bound-must-fit-the-band-not-the-bench`: a band tax is not a constant you may multiply through).
+  The floor remains the **~1.2h of literal `sleep`** in the corpus (4312s across 46 files,
+  band-immune), so a result near 1.2-1.5h is success and a result still near 3h falsifies the
+  diagnosis — the census now says so in its own output rather than leaving it to be remembered.
+
+  **Second host: still no, and now for a cheaper reason.** Findings 1 and 2 stand unchanged. This
+  resolution removes the last reason to keep the trigger open on cost grounds: the lane's breach was
+  a $0 plist key.
+
+  **Why this was invisible for twelve days, and the instrument fixed because of it.** The claim was
+  true when written and went false on **2026-07-30**, when M1-rev flipped `bin/cc-bats`' default band
+  from `background` to `utility` (`2514226e`) — the same commit finding 3 cites as evidence that
+  *other* actuators had moved. cc-bats sits in the corpus's own execution path, so that commit moved
+  the corpus too, and nothing said so. The runner's own
+  `--selftest` asserted `grep 'nice -n 19' $SELF` and printed **"qos: the corpus runs in the
+  background band"**. That control cannot fail while the prefix is present, and it says nothing
+  whatsoever about the band the corpus *runs in* — it passed continuously over a corpus running in a
+  different band than the one it named, and every reader downstream (this plan's finding 3, the
+  census's causal note, the backlog filing) inherited the claim. It now asserts what it can actually
+  see — the prefix is present, *launched* demoted — plus the fact that does decide the band: that the
+  plist SSOT declares no darwinbg `ProcessType`. Same class as memory
+  `control-calibrated-to-implementation-decays` and `claimed-outcome-vs-checked-outcome`.
+
+  **Delivered:** plist key removed · `postland-verify.sh` band comment + `--selftest` corrected ·
+  `cycle-time-census.sh` causal note corrected + falsifier · `tests/postland-band-floor.bats` pins the
+  lift matrix (so a macOS that makes darwinbg liftable reds instead of silently re-hiding this) ·
+  `migrations/0010-postland-band-plist.sh` (class `c10`) files the one operator step, since applying a
+  plist needs a `launchctl bootout`/`bootstrap`. **Until the operator runs it,
+  `scripts/launchd-parity-lint.sh` is RED on this label by construction** — live is behind its SSOT,
+  which is exactly what that lint exists to say; it is the pending-step signal, not a defect.
+
 ## §9 Supersessions & backlog reconciliation
 
 - GATE_ARCHITECTURE_PLAN: Phase 1 (per-suite) and 2a ($HOME clone) live on inside the
