@@ -656,3 +656,56 @@ Claude-Session: https://claude.ai/code/session_01ZZ"
   run cr --frobnicate
   [ "$status" -eq 64 ]
 }
+
+# ══ the POST-HOC path fill (backlog a435e3987fbf) ═══════════════════════════════════════════════
+# A declaration records paths= EMPTY (the dispatcher cannot know at fire time what the VM will
+# write) and landed() returns "not landed" on an empty list BY DESIGN — so a finished cloud result
+# read ELIGIBLE forever and every sweep re-attempted it. The fill runs AFTER a successful land,
+# when the branch is a local head and its own commits state the set exactly.
+
+@test "a successful land FILLS the declaration's path set from the branch's own commits" {
+  push_branch claude/fillme 1
+  decl fillme claude/fillme                       # …declared with paths= EMPTY, as `up` writes it
+  run env CONFIRM=1 CLOUD_RECONCILE_CLOUD_BIN="$ROOT/bin/cc-cloud" bash "$CR" --land claude/fillme
+  [ "$status" -eq 0 ]
+  grep -q '^paths=f1.txt$' "$CC_CLOUD_STATE/fillme.decl"
+}
+
+@test "…and the branch that used to re-attempt forever now classifies as LANDED" {
+  # The point of the whole change, off one fixture: ELIGIBLE before, LANDED after. Without the
+  # "before" half, "LANDED after" would be equally explained by a fixture that was always landed.
+  push_branch claude/twice 1
+  decl twice claude/twice
+  run bash "$CR" --list
+  [[ "$output" == *"claude/twice"*ELIGIBLE* ]] || false
+  run env CONFIRM=1 CLOUD_RECONCILE_CLOUD_BIN="$ROOT/bin/cc-cloud" bash "$CR" --land claude/twice
+  [ "$status" -eq 0 ]
+  # the stub does not really push to origin/main, so make the content present there the way a real
+  # land does — by CONTENT, under a different sha (the reconciler re-authors; the pushed sha never
+  # lands, and a checker written against it reads "not landed" on a perfect land).
+  tree="$(git -C "$REPO" rev-parse "refs/heads/claude/twice^{tree}")"
+  new="$(git -C "$REPO" commit-tree "$tree" -p origin/main -m "landed by a re-author")"
+  git -C "$REPO" push -q origin "$new:refs/heads/main"
+  git -C "$REPO" fetch -q origin
+  run bash "$CR" --list
+  [[ "$output" == *"claude/twice"*LANDED* ]] || false
+}
+
+@test "a DRY RUN never fills — filling from a land that landed nothing would fake the next verdict" {
+  push_branch claude/dry 1
+  decl dry claude/dry
+  run env CONFIRM=1 CLOUD_RECONCILE_CLOUD_BIN="$ROOT/bin/cc-cloud" bash "$CR" --land claude/dry --dry-run
+  [ "$status" -eq 0 ]
+  grep -q '^paths=$' "$CC_CLOUD_STATE/dry.decl"
+}
+
+@test "a fill that could NOT run is reported, never silent" {
+  # A silent failure here is invisible until the next sweep re-attempts the same finished branch —
+  # which is exactly the symptom the fill exists to remove, so it must not look like success.
+  push_branch claude/nofill 1
+  decl nofill claude/nofill
+  run env CONFIRM=1 CLOUD_RECONCILE_CLOUD_BIN="$D/no-such-cc-cloud" bash "$CR" --land claude/nofill
+  [ "$status" -eq 0 ]                       # the land itself succeeded and is not retracted …
+  [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
+  grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
+}

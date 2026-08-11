@@ -482,6 +482,45 @@ EOF
   return 0
 }
 
+# ── the POST-HOC path fill (backlog a435e3987fbf) ────────────────────────────────────────────
+# A declaration records `paths=` EMPTY, because at fire time the dispatcher cannot know what the VM
+# will write — and `landed()` returns "not landed" on an empty list BY DESIGN. So a cloud result
+# whose content was already on trunk read ELIGIBLE forever and every sweep re-attempted it, bounded
+# only by the lander noticing ("origin/main already contains HEAD"). Harmless per occurrence,
+# unbounded as the fleet grows.
+#
+# THE FILL BELONGS HERE, AFTER A SUCCESSFUL LAND, and the ordering is the whole point: the branch is
+# a local head by now (fetch_branch brought it down) so the VM's own commits can state the path set
+# exactly, and the classification that consumes it is the NEXT run's, not this one's. Filling before
+# the land would make this run's own `classify` read LANDED for a branch that has not landed yet.
+# bin/cc-cloud owns the derivation — this is a caller, not a second implementation.
+CLOUD_BIN="${CLOUD_RECONCILE_CLOUD_BIN:-}"
+if [ -z "$CLOUD_BIN" ]; then
+  for _c in "$REPO/bin/cc-cloud" "$HOME/.claude/bin/cc-cloud"; do
+    [ -x "$_c" ] && { CLOUD_BIN="$_c"; break; }
+  done
+fi
+fill_paths() {  # <decl-id> — best-effort, never fatal to a land that already succeeded
+  local id="$1" rc=0 out
+  [ -n "$id" ] || return 0
+  # A MISSING TOOL IS A NON-VERDICT AND MUST SAY SO. The first cut of this returned 0 silently when
+  # cc-cloud could not be resolved — a caller's own dependency probe muting its callee's answer
+  # (memory: callers-dependency-probe-mutes-the-callees-non-verdict), and indistinguishable from a
+  # fill that ran. Its own bats arm caught it by asserting the message rather than the outcome.
+  if [ -z "$CLOUD_BIN" ] || [ ! -x "$CLOUD_BIN" ]; then
+    printf '! %s — cc-cloud not found, so the path set was NOT filled; this result will read ELIGIBLE again next sweep.\n' "$id" >&2
+    return 0
+  fi
+  out="$("$CLOUD_BIN" fill-paths --id "$id" 2>&1)" || rc=$?
+  # Reported either way. A silent failure here is invisible until the NEXT sweep re-attempts the
+  # same finished branch, which is exactly the symptom this fill exists to remove — so "the fill
+  # could not run" must not look like "the fill ran".
+  if [ "$rc" -eq 0 ]; then printf '→ %s\n' "$(printf '%s' "$out" | tail -1)"
+  else printf '! %s — the path set could NOT be filled (rc %s); this result will read ELIGIBLE again next sweep: %s\n' \
+        "$id" "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" >&2; fi
+  return 0
+}
+
 land_one() {  # <branch> — classify() must have run for it. → 0 landed, else the lander's code
   local b="$1" rc=0
   local -a a=(--branch "$b" --repo "$C_REPO")
@@ -536,7 +575,11 @@ EOF
   fi
   [ -n "$REAUTH_DETAIL" ] && echo "→ $TARGET — $REAUTH_DETAIL"
   rc=0; land_one "$TARGET" || rc=$?
-  if [ "$rc" -eq 0 ]; then echo "✓ $TARGET — landed via $LAND_BIN."; exit 0; fi
+  if [ "$rc" -eq 0 ]; then
+    echo "✓ $TARGET — landed via $LAND_BIN."
+    [ "$DRY_RUN" = 1 ] || fill_paths "$C_ID"
+    exit 0
+  fi
   echo "✗ $TARGET — lander exited $rc." >&2
   exit 70
 fi
@@ -587,6 +630,9 @@ while IFS= read -r row || [ -n "$row" ]; do
   rc=0; land_one "$b" || rc=$?
   if [ "$rc" -eq 0 ]; then
     echo "✓ $b — $([ "$DRY_RUN" = 1 ] && echo 'passed dry-run (NOT pushed)' || echo 'landed')."
+    # A dry run landed nothing, so filling from it would declare a path set for work that is not on
+    # trunk — and the very next real classify would then read LANDED over an unlanded branch.
+    [ "$DRY_RUN" = 1 ] || fill_paths "$C_ID"
     LANDED_N=$((LANDED_N + 1))
   else
     # A lander exit is a statement about ONE branch. Report it and keep going — aborting here would
