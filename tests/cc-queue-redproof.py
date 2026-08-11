@@ -150,6 +150,11 @@ def failed_tests(tap: str) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="print case names and exit")
+    ap.add_argument(
+        "--check-anchors",
+        action="store_true",
+        help="assert every anchor still matches the subject EXACTLY once; no bats run",
+    )
     args = ap.parse_args()
 
     if args.list:
@@ -158,6 +163,37 @@ def main() -> int:
         return 0
 
     src = SUBJECT.read_text()
+
+    # --check-anchors: the half of this harness that is cheap enough to be part of the normal test
+    # contract (tests/anti-vacuity-contract.bats runs it). The full proof needs a bats run per case and
+    # stays an explicit invocation; this needs none, and it is the mode that catches the ROT.
+    #
+    # An anchor is a literal line of the subject that a load-bearing assertion depends on. It going
+    # to 0 matches means the subject changed out from under the proof — which is exactly when the
+    # suite's claim about that behaviour may have quietly become vacuous, and precisely the case
+    # "run it manually sometime" never covers. Going to 2+ means the mutation would sabotage more
+    # than it claims. Both are unsound, and both used to be discoverable only by running the whole
+    # thing by hand.
+    if args.check_anchors:
+        bad = 0
+        for name, anchor, _repl, _must_break in CASES:
+            hits = src.count(anchor)
+            if hits != 1:
+                print(
+                    f"  {name:<40} ANCHOR MATCHED {hits}x (must be exactly 1) — case is unsound"
+                )
+                bad += 1
+        if bad:
+            print(
+                f"cc-queue-redproof --check-anchors: FAIL — {bad} of {len(CASES)} anchors no longer "
+                f"match {SUBJECT.name} exactly once. The proof is stale: re-anchor it, or the "
+                f"assertions it backs are unproven."
+            )
+            return 1
+        print(
+            f"cc-queue-redproof --check-anchors: {len(CASES)}/{len(CASES)} anchors live in {SUBJECT.name}"
+        )
+        return 0
 
     with tempfile.TemporaryDirectory() as td:
         work = Path(td) / "tree"
