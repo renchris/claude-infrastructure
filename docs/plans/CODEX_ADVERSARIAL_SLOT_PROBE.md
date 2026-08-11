@@ -242,6 +242,30 @@ systematically disagree about the same output, that disagreement is itself the d
 
 ## Status log
 
+- **2026-08-11** — **W2 DONE.** 36/36 runs (4 arms × 9 briefs), all `ok:true`, verbatim outputs +
+  `index.json` at `tests/fixtures/codex-probe/runs/`, landed `5673145d`. Nothing scored — that is W3.
+  Run conditions in `runs/README.md`; read it before judging. Three things W3 must carry:
+  **(1) The two isolation regimes are NOT equivalent.** Claude arms are hard-denied (`--tools ""`
+  removes the tools — a probe told to read the real `manifest.json` fabricated both the call and the
+  contents; `num_turns=1` on 18/18 is the per-run control). Codex `-s read-only` denies *writes* and
+  permits reads of the whole filesystem, so arms B/C were **measured, not denied**: 18/18 rollouts
+  show zero `exec_command`/`function_call` items. Evidence none *did*, not proof none *could*.
+  `--setting-sources ""` was load-bearing — this repo's `MEMORY.md` states cp-01's ground truth in
+  one line.
+  **(2) Arm C is a real tier, not a duplicate of B.** `ultra` is absent from the API's
+  reasoning-effort enum (a bogus value 400s) yet completes and is echoed back verbatim — the exact
+  accepted-and-ignored shape this corpus exists to catch. Paired reasoning tokens on the same brief:
+  **C > B on 7/9, 1.76× in sum**, so B-vs-C is a legitimate comparison. Still open and not to be
+  overclaimed: its relation to the enum's `max` is unestablished, so arm C is "more reasoning than
+  `xhigh`", not "the maximum" the plan's W2 table assumed.
+  **(3) Cost stays DIRECTIONAL.** Codex weekly `used_percent` 22.0 → 27.0 across 18 runs; per-run
+  rollout token counts are the finer-grained substitute and have no Anthropic-side equivalent.
+  *Two arm-C records (cp-01, cp-02) are RECONSTRUCTED — the orchestrator was killed three times
+  mid-grid while its `codex exec` grandchild survived; outputs are the untouched files those runs
+  wrote, timestamps came from disk. Separately, a launchd relaunch with a minimal PATH lost
+  `timeout`, and because a failed cell still writes a record, one missing binary manufactured 25
+  false `ok:false` "results" in ~40s that then SKIPPED the real runs — purged and re-run, and the
+  runner now preflights its binaries. Both are in `runs/README.md` § Known limitations.*
 - **2026-08-10** — **W1 DONE.** Frozen corpus at `tests/fixtures/codex-probe/` — 9 briefs (7 defective
   + 2 clean), 36 anchored ground-truth entries, every `pre_fix_ref` resolving and every brief body
   proven byte-identical to its ref. Gated by `tests/codex-probe-corpus.bats`. Detail + the
