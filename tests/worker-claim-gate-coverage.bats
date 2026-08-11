@@ -38,6 +38,23 @@
 # Case 12's predicate was likewise caught by its own first run: it asserted `"basis":"absent"` (JSON)
 # against a file that writes `basis:"absent"` (jq object construction), and went RED on the subject
 # it was meant to certify.
+#
+# RED-PROOF for the THIRD enforcement point, cases 14-18 (recorded 2026-08-11, backlog
+# f2617b0480df), by three mutations applied to hooks/validate-bash.sh:
+#   M1 the invocation commented out          → 14, 15 RED   (16, 17, 18 green — other axes)
+#   M3 the `*self-close*) _wcs_hit=0` line    → 16, 18 RED   — the cure-is-exempt axis
+#      deleted
+#   M4 the pre-filter forced to always hit    → 15 RED       — via its CONTROL 3, so 15 observes
+#      (`_wcs_hit=0` → `_wcs_hit=1`)                           SCOPE and not merely the deny
+#
+# M3 IS THE ONE THAT EARNED ITS KEEP, and it caught a vacuous fixture rather than a code defect.
+# The cure-is-exempt assertion was originally CONTROL 4 inside case 15, and it stayed GREEN with the
+# exemption deleted — because the library caches an ADMIT keyed on the caller, so CONTROL 1's admit
+# earlier in the same case was still warm and answered the probe before the subject could. A
+# negative assertion sharing a cache with an earlier positive is not a control at all (memory
+# `sibling-guard-makes-the-fixture-vacuous`). It is now case 18, with its OWN state dir per probe
+# and a positive control that must DENY on the same fixture first — so the admit it asserts can
+# only come from the exemption.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -48,6 +65,13 @@ setup() {
   # PreToolUse|Write|Edit|MultiEdit, HOOK2 on PreToolUse|Agent — so neither needed a settings.json
   # entry, which is the C10 hand-step that leaves gates rotting in the activation queue.
   HOOK2="$REPO/hooks/agent-teams-enforce.sh"
+  # The THIRD enforcement point (backlog f2617b0480df), on PreToolUse|Bash — also already
+  # registered, so it needed no settings.json entry either. HOOK stops a duplicate CORRUPTING the
+  # worktree and HOOK2 stops it SPENDING the fleet, but neither can see the runaway the item names:
+  # the 224-spawn / 167-session / 3-generation cascade was PANE splits run as ordinary Bash, so
+  # every step minted a new CLI session and reset both spawn counters. HOOK3 is the generation
+  # bound, keyed on the one thing the cascade does not reset — the lease.
+  HOOK3="$REPO/hooks/validate-bash.sh"
   DETECT="$REPO/hooks/session-register.sh"
   # HERMETIC $HOME even though every case here only READS the tree. The subjects default their state
   # dir, IDL and cc-backlog resolution to $HOME, so any case added later that actually RUNS one of
@@ -58,6 +82,16 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_WCLAIM_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  # THE FIRE SEAMS, pinned because cases 15/18 name `handoff-fire.sh` — as a STRING, inside a JSON
+  # payload that validate-bash.sh only ever READS (nothing in this suite executes a fire). So
+  # scripts/test-hermeticity-lint.sh is matching a name rather than an execution here. Pinned
+  # regardless, and deliberately not allowlisted: the lint's own instruction is "fix the suite, the
+  # ratchet only shrinks", the cost is four exports, and it is already correct if a later case ever
+  # does fire for real. An ABSENT path is the right value — these sensors fail open on one.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts-absent"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
 }
 
 refute_match() { [ "$(printf '%s' "$1" | grep -c "$2")" -eq 0 ]; }
@@ -298,4 +332,122 @@ EOF
   # deployed-layer-bootstrap-circle, verified live in 64a7d1fa.
   first="$(grep -A1 'for _wcg in' "$HOOK" | head -1)"
   printf '%s' "$first" | grep -q 'dirname "\$_ceb_self"'
+}
+
+# ── THE THIRD ENFORCEMENT POINT, cases 14-17 (backlog f2617b0480df) ────────────────────────────
+# The surface the measured runaway actually crossed. Cases 09-13 pin the Agent surface; these pin
+# Bash, where `chain:"it2-kitty"` pane splits mint the sessions that reset every counter.
+
+@test "14 the PANE-SPAWN surface carries the gate — a real invocation, in a hook already registered" {
+  [ -f "$HOOK3" ]
+  # A real call, anchored to a statement start so a leading `#` cannot be absorbed (case 01's lesson)
+  [ "$(grep -cE '^[[:space:]]*cc_worker_claim_admit pane-spawn' "$HOOK3")" -ge 1 ]
+  grep -q 'command -v cc_worker_claim_admit' "$HOOK3"
+  # …and it must sit ABOVE every deny that would exit first, or the common case never reaches it.
+  gate="$(lineno "$HOOK3" 'cc_worker_claim_admit pane-spawn')"
+  firstdeny="$(lineno "$HOOK3" 'Dangerous command pattern blocked')"
+  [ -n "$gate" ] && [ -n "$firstdeny" ] && [ "$gate" -lt "$firstdeny" ]
+}
+
+@test "15 END-TO-END: a pane spawn is DENIED from a session that lacks the lease" {
+  wt="$BATS_TEST_TMPDIR/.worktrees/wt-aaaaaaaaaaaa"; mkdir -p "$wt"
+  fake="$BATS_TEST_TMPDIR/cc-backlog"
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; aaaaaaaaaaaa is held by Chriss-MacBook-Pro-3-999999, which is LIVE"
+exit 4
+EOF
+  chmod +x "$fake"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"it2-kitty split-pane\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecision')" = "deny" ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q 'DUPLICATE WORKER'
+
+  # CONTROL 1 — the lease held BY THIS SESSION must ADMIT. Without it the deny above could be an
+  # unconditional refusal of every pane spawn in a wt- dir, which would break ordinary dispatch.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: verdict=noop-already-ours"
+exit 0
+EOF
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"it2-kitty split-pane\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 2 — NOT a dispatch worktree ⇒ not our population, whatever the ledger would have said.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; held by someone-else, which is LIVE"
+exit 4
+EOF
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$BATS_TEST_TMPDIR\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"it2-kitty split-pane\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 3 — the SAME refusing ledger, in the SAME worktree, on a command that is NOT a spawn.
+  # This is what proves the term is scoped to pane spawns rather than gating the whole Bash surface
+  # (a duplicate must keep the Bash it needs to inspect, checkpoint and retire).
+  #
+  # A FRESH STATE DIR, and this is not decoration. The library caches an ADMIT keyed on the caller,
+  # so CONTROL 1's admit above is still warm here: run without isolating it, this probe passes
+  # whether the pre-filter scopes anything or not — measured, not reasoned about (mutation M3 left
+  # it GREEN with the subject deleted, which is exactly the vacuous-fixture shape in memory
+  # `sibling-guard-makes-the-fixture-vacuous`). Each probe below gets its own cache.
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/st3" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"git status --short\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+}
+
+@test "18 THE GATE ALLOWS ITS OWN CURE — self-close is exempt, and the fixture proves it bites" {
+  # `self-close` is the exact command the refusal tells a duplicate to run. A guard that forbids its
+  # own prescribed remedy re-emits forever (memory `work-item-remedy-can-become-forbidden`).
+  # Its own @test with its own caches, because the assertion is a NEGATIVE and a negative is only
+  # worth anything beside a positive that fires on the same fixture.
+  wt="$BATS_TEST_TMPDIR/.worktrees/wt-bbbbbbbbbbbb"; mkdir -p "$wt"
+  fake="$BATS_TEST_TMPDIR/cc-backlog-cure"
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; bbbbbbbbbbbb is held by Chriss-MacBook-Pro-3-999999, which is LIVE"
+exit 4
+EOF
+  chmod +x "$fake"
+
+  # POSITIVE CONTROL FIRST — the same ledger, the same worktree, a spawn: must DENY. If this ever
+  # stops firing, the ADMIT below proves nothing at all.
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/st-cure-a" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"it2-kitty split-pane\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'DUPLICATE WORKER'
+
+  # THE SUBJECT — same ledger, same worktree, the cure: must ADMIT. Fresh cache, so the admit can
+  # only come from the exemption.
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/st-cure-b" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"command\":\"\$HOME/.claude/scripts/handoff-fire.sh self-close --terminal\"}}' | bash '$HOOK3'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+}
+
+@test "16 the pane-spawn refusal names a drivable action, and that action is the exempt one" {
+  block="$(sed -n '/DUPLICATE-WORKER PANE-SPAWN ADMISSION/,/^# ── Hard deny/p' "$HOOK3")"
+  printf '%s' "$block" | grep -q 'self-close --terminal'
+  printf '%s' "$block" | grep -q 'CC_WCLAIM_GATE=off'
+  # the cure is exempted by the FILTER, not merely mentioned in the sentence — else the refusal
+  # would name a command it also refuses.
+  printf '%s' "$block" | grep -qE '\*self-close\*\) _wcs_hit=0'
+}
+
+@test "17 an ABSENT library falls through and SAYS SO — never a silent ungated spawn" {
+  block="$(sed -n '/DUPLICATE-WORKER PANE-SPAWN ADMISSION/,/^# ── Hard deny/p' "$HOOK3")"
+  # `[ -f ] && . && break` then a `command -v` test — never an unconditional source, never an exit.
+  refute_match "$(printf '%s' "$block" | grep -A3 'for _wcs_lib in')" 'exit 1'
+  # the symlink-resolved sibling must be FIRST (deployed-layer-bootstrap-circle, as in case 08)
+  first="$(printf '%s' "$block" | grep -A1 'for _wcs_lib in' | head -1)"
+  printf '%s' "$first" | grep -q 'dirname "\$_wcs_self"'
+  # inertness reaches the LEDGER, with a basis that distinguishes "admitted" from "could not ask"
+  printf '%s' "$block" | grep -q 'basis:"absent"'
+  printf '%s' "$block" | grep -q 'caller:"pane-spawn"'
 }

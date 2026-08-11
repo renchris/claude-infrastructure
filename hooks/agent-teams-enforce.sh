@@ -246,6 +246,35 @@ fi
 #     (memory: sensor-default-off-makes-blindness-the-shipping-path — one value must never mean
 #     both "answered no" and "could not ask", so basis is `depth-read` vs `depth-unavailable`.)
 #
+#     ── ANSWERED 2026-08-11 (backlog f2617b0480df), AND THE ANSWER IS NEITHER BRANCH ────────────
+#     The instrumentation did its job: 43 evaluations across 15 sessions, 2026-08-10T08:10:21Z →
+#     2026-08-11T02:05:06Z, read from the IDL *and its gzip archives*. Every single one is
+#     `basis=depth-toplevel`, depth 0, transcript = a session path. Not one subagent path.
+#
+#     The reason is not that hooks are handed the lead's transcript. It is that THERE IS NO NESTED
+#     HOOK INVOCATION TO HAND ANYTHING TO: Claude Code does not expose the Agent tool to subagents
+#     at all. Probed directly — a `general-purpose` subagent instructed to make one Agent call got
+#     back "No such tool available: Agent. Agent is disabled for this session, in subagents as well
+#     as here." Corroborated on disk, independently and predating the probe:
+#     ~/.claude/agents/deep-research.md:105 ("Claude Code harness silently does not expose the
+#     Agent tool to subagents") and CLAUDE.md § Research Subagents ("nested fan-out is not
+#     operational in stock Claude Code").
+#
+#     So THIS TERM'S POPULATION IS EMPTY BY CONSTRUCTION, and `depth-toplevel` at 43/43 is not a
+#     measurement that the fan-out is shallow — it is the only value reachable. Read it that way.
+#     The term STAYS: it costs nothing, it is the correct cap the day nesting returns (deep-
+#     research.md:128 records `--teammate-mode tmux` restoring the Agent tool to teammates, GH
+#     #31977), and removing it would delete a guard that is right rather than wrong. But it must
+#     never be cited as the reason a fan-out is bounded in depth.
+#
+#     WHERE THE GENERATION BOUND ACTUALLY LIVES, therefore: the 224-spawn / 167-session / 3-
+#     generation runaway crossed SESSION boundaries via pane splits executed as ordinary Bash
+#     (`logs/pane-spawns.jsonl`: 324 rows with a bare `chain:"it2-kitty"`). Neither term here can
+#     see that — depth has no population, and the budget resets at exactly the edge the cascade
+#     traverses. The lease is what spans it, so the bound is a third consumer of
+#     scripts/lib/worker-claim-gate.sh on the surface the spawns cross: hooks/validate-bash.sh
+#     § DUPLICATE-WORKER PANE-SPAWN ADMISSION, landed with this note.
+#
 # REFUSAL IS HARD, NOT BOUNDED — deliberately UNLIKE capacity-admit above. That gate bounds its
 # refusals because memory pressure is transient and a wave must never be permanently blocked by a
 # reading. A spawn budget is the opposite: it bounds a quantity the caller chose, and a budget

@@ -158,6 +158,99 @@ if [[ "$_gg_hit" == 1 ]]; then
   fi
 fi
 
+# ── DUPLICATE-WORKER PANE-SPAWN ADMISSION ────────────────────────────────────────────────────────
+# The THIRD consumer of the duplicate-worker lease (backlog f2617b0480df), and the first one on the
+# surface where the measured runaway actually happened. The other two are
+# hooks/check-edit-boundary.sh (PreToolUse|Write|Edit — stops a duplicate CORRUPTING the worktree)
+# and hooks/agent-teams-enforce.sh (PreToolUse|Agent — stops it SPENDING the fleet on subagents).
+#
+# WHY A THIRD POINT AT ALL — because neither of the first two can see the cascade they were built
+# for. Measured 2026-08-11 against the full IDL history (985k rows, 2026-08-08 → 2026-08-11):
+#
+#   surface                        cap                          evaluations   sees the cascade?
+#   Agent tool, in-process depth   CC_SPAWN_MAX_DEPTH=2         43            NO — empty population
+#   Agent tool, per-session count  CC_SPAWN_MAX_PER_SESSION=60  43            NO — counter resets
+#   Write/Edit, lease identity     worker-claim-gate            793           after the fact
+#   Bash → pane spawn              (none)                       —             THIS IS THE ACTUATOR
+#
+# The depth term's population is EMPTY BY HARNESS CONSTRUCTION, which resolves the open unknown
+# recorded at hooks/agent-teams-enforce.sh — see the note landed there in the same commit. All 43
+# of its evaluations read `basis=depth-toplevel`, depth 0, and always will: Claude Code does not
+# expose the Agent tool to subagents at all, so an in-process spawn cannot nest and `spawnDepth`
+# can never exceed the value the lead already has. The per-session budget is real but resets at
+# exactly the edge the cascade traverses — every step of the 2026-08-07 blow-up MINTED A NEW CLI
+# SESSION, so 91+ sessions each sat perfectly inside a cap of 60 (memory
+# `counter-resets-at-the-boundary-the-runaway-crosses`).
+#
+# And the sessions were minted HERE. `logs/pane-spawns.jsonl` records 324 spawns carrying a bare
+# `chain:"it2-kitty"` where a real fire stamps `chain:"handoff-fire.sh>it2-kitty"` — i.e. a pane
+# split executed as an ordinary Bash command, going around the door that does the claim
+# bookkeeping. That is the item's own sentence, "the lease cannot refuse what never calls claim",
+# with the actor located: not the dispatcher, not the Agent tool, but `Bash`. Nothing on this
+# surface consulted the lease before this term; the seven registered PreToolUse|Bash hooks are curl
+# scope, this validator, worktree guard, keychain, rm allowlist, ship-rail push and qos rewrite.
+#
+# THE CONSEQUENCE IS A GENERATION BOUND, which is what the item asked for and what a depth cap on
+# the wrong surface could not give. The lease HOLDER still spawns normally; every session it puts
+# into that worktree is refused the moment IT tries to spawn further. The recursion therefore
+# terminates at generation 2 — deliberately not stronger, because refusing the holder's own
+# fan-out would break ordinary dispatch, and the runaway measured here is the recursion.
+#
+# WHY IN THIS HOOK — it is ALREADY registered on PreToolUse|Bash, so the term goes live on the
+# trunk fast-forward instead of waiting behind a settings.json C10 operator step in the activation
+# queue, where gates rot >24h. Same reasoning that placed the capacity and depth terms inside
+# agent-teams-enforce.sh rather than a new hook file (the inertness generator).
+#
+# THE PRE-FILTER IS A COST GATE, NOT THE PREDICATE. This hook fires on EVERY Bash call on the box,
+# and the library's real check forks. So a forkless command-position match selects the candidates
+# and the LEASE decides — identity, which spans the cascade, never a spelling. That ordering is
+# what keeps this from being a denylist over ways to say "spawn a pane" (memory
+# `denylist-enumerates-spellings-not-the-class`): a spelling this filter misses simply falls
+# through to today's behaviour, which is ungated, so a miss can never be a REGRESSION — only a
+# smaller improvement. The class is closed on the other side, by the lease.
+#
+# THE GATE ALLOWS ITS OWN CURE. `self-close` is the exact command the refusal instructs a duplicate
+# to run, so it is exempt unconditionally — a guard that forbids its own prescribed remedy re-emits
+# forever (memory `work-item-remedy-can-become-forbidden`).
+#
+# FAIL OPEN, NEVER SILENTLY: library unreachable ⇒ admit AND record, so "was this surface gated?"
+# is answerable from the same store as the verdicts (memory
+# `sensor-default-off-makes-blindness-the-shipping-path` — one value must never mean both
+# "answered no" and "could not ask").
+_wcs_first="${CMD%%[[:space:]]*}"
+_wcs_hit=0
+case "$_wcs_first" in
+  *it2-kitty|*kitty-split-launch.sh|*kitty-pane-menu|*handoff-fire.sh|*cc-respawn|*lr-handoff.sh|*lr-fire-resume.sh|*lr-reset-poller.sh) _wcs_hit=1 ;;
+esac
+case "$CMD" in
+  *bin/it2-kitty*|*bin/kitty-split-launch.sh*|*bin/kitty-pane-menu*|*bin/cc-respawn*|*scripts/handoff-fire.sh*|*limit-recover/lr-handoff.sh*|*limit-recover/lr-fire-resume.sh*|*limit-recover/lr-reset-poller.sh*) _wcs_hit=1 ;;
+esac
+# The cure, and the same-pane relaunch that mints no session, are never refused.
+case "$CMD" in *self-close*) _wcs_hit=0 ;; esac
+if [[ "$_wcs_hit" == 1 && "${CC_WCLAIM_GATE:-on}" != off ]]; then
+  _wcs_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  for _wcs_lib in "$(dirname "$_wcs_self")/../scripts/lib/worker-claim-gate.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/worker-claim-gate.sh" \
+                  "${HOME:-}/.claude/scripts/lib/worker-claim-gate.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    [[ -f "$_wcs_lib" ]] && . "$_wcs_lib" 2>/dev/null && break
+  done
+  if command -v cc_worker_claim_admit >/dev/null 2>&1; then
+    _wcs_cwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+    [[ -n "$_wcs_cwd" ]] || _wcs_cwd="$PWD"
+    if ! CC_WCLAIM_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')" \
+         cc_worker_claim_admit pane-spawn "$_wcs_cwd" "pane spawn"; then
+      deny "DUPLICATE WORKER — pane spawn refused. This session does not hold the lease on item $(cc_worker_claim_item). $(cc_worker_claim_reason). Another LIVE session ($(cc_worker_claim_holder)) is doing this work right now, and spawning a pane from a duplicate is how one dispatch became 224 spawns / 167 sessions across 3 generations in ~38 minutes: every step minted a fresh CLI session, which reset both spawn counters to zero, so 91 sessions each read perfectly healthy inside a cap of 60. DO NOT retry and DO NOT re-word the command — the refusal is a FACT about a live lease, read from your working directory, not from your text. STAND DOWN: stop work and retire this pane with \`\$HOME/.claude/scripts/handoff-fire.sh self-close --terminal\` (exempt from this gate by construction; it refuses a dirty tree, which is the intended safety). If you believe the incumbent is DEAD, do not force it — the lease self-releases the moment its claimer dies or \`cc-backlog reap\` ages the claim out, and the next spawn is admitted automatically. Override for this session only: CC_WCLAIM_GATE=off. Rule: backlog f2617b0480df, docs/plans/CONCURRENCY_PROGRAM.md#s4."
+    fi
+  else
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+      '{ts:$ts,hook:"worker-claim-gate",sid:"?",disposition:"abstained",reason:"duplicate-worker",
+        gate:"worker-claim-gate",verdict:"admit",basis:"absent",caller:"pane-spawn",
+        what:"pane spawn",detail:"scripts/lib/worker-claim-gate.sh unreachable — pane spawn UNGATED for duplicate workers"}' \
+      >> "${CC_WCLAIM_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
+  fi
+fi
+
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,
