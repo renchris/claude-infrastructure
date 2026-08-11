@@ -3,7 +3,8 @@ name: resume-sessions
 description: >
   Recover and autonomously resume all Claude Code sessions across the 4 accounts (next/next2/next3/next4)
   after a crash or reboot, and un-stick sessions that stalled after /compact. Finds the open sessions,
-  recreates reaped worktrees, resumes WITHOUT the blocking "resume from summary" prompt, clears terminal
+  recreates reaped worktrees (in whatever repo owns them), answers the blocking "resume from summary"
+  prompt autonomously by taking the FULL session rather than the summary, clears terminal
   escape-sequence gibberish, re-engages each session with a continue-prompt (via the reliable it2 keystroke
   API, not osascript write text), and keeps them working with a keepalive watcher. Also gives a live
   cross-account quota view + optimal work routing. Use when: the machine crashed/rebooted with sessions
@@ -14,7 +15,9 @@ description: >
 
 # Resume Sessions — crash recovery + autonomous restart (100th-percentile runbook)
 
-The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`). Deep rationale,
+The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`) — `reso-resume-one`
+is a symlink to the tracked, gated, tested `bin/reso-resume-one` in claude-infrastructure; its two
+neighbours are still untracked, which is the state that let this one rot. Deep rationale,
 every gotcha, and the exact API details are in **`REFERENCE.md`** (read it if a step misbehaves).
 **The load-bearing rule: send keystrokes to a running Claude TUI with `it2 session send`, NEVER
 `osascript … write text` (it drops submits and mangles long text as pastes).**
@@ -61,6 +64,14 @@ branch** (that is what `reso-resume-one`'s `git worktree add` is for). Without i
 filtered before Phase 2 ever sees them — the callers that *cannot* recreate a worktree omit the flag.
 The TSV's 4th column is the branch, which is exactly `reso-resume-one`'s optional 4th argument.
 
+> **That contract was only true for one repo until 2026-08-10.** `reso-resume-one` hardcoded
+> `REPO=$HOME/Development/reso-management-app`, so a reaped worktree belonging to any other
+> repository died at `worktree <wt> missing` — *after* `--allow-missing-cwd` had admitted it
+> specifically on the promise that Phase 2 could rebuild it. The repo is now derived from the
+> reaped worktree's own owner (the `.git/worktrees/<n>/gitdir` back-reference the owning repo keeps
+> after the directory is deleted), so the flag now means what this paragraph says for every repo.
+> Ambiguous cases **refuse** rather than guess — pass `--repo <path>` to name the owner outright.
+
 - Resumes **one session per worktree** — the one that holds the most real state — and **lists** the
   rest. Total ceiling 4 per run. Both are flags (`--max-per-worktree`, `--max-total`), so exceeding
   them is explicit and visible, never a silent default.
@@ -84,11 +95,30 @@ not work around the helper.
 ```
 
 `reso-resume-one` (idempotent) does all of: **recreate the worktree from `<branch>` if its dir was
-reaped** (`git worktree add`; branches survive worktree deletion — verify with `git show-ref`), **reset
-mouse reporting** (stops crashed-session escape-seq garbage), **auto-answer the large-session "Resume
-from summary" prompt** via `expect` (picks summary = quota-cheap; **timeout 240s** because big sessions
-take >60s to reach the prompt — a short timeout leaves them stuck), then hand off to a live session.
-For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5`.
+reaped** (`git worktree add` in whatever repo owns it; branches survive worktree deletion — verify with
+`git show-ref`), **reset mouse reporting** (stops crashed-session escape-seq garbage), **auto-answer the
+large-session resume dialog** via `expect` — selecting **option 2, "Resume full session as-is"**, never
+option 1 (**timeout 240s** because big sessions take >60s to reach the prompt — a short timeout leaves
+them stuck), then hand off to a live session.
+
+**It picks the FULL session, not the summary** (changed 2026-08-10; it answered with a bare CR before,
+which takes option 1). Option 1 runs `/compact` on the transcript, and per REFERENCE.md §5 that drops
+the session-scoped `/goal` Stop-hook — so the cheaper answer is exactly why recovered sessions came
+back idle. A crash recovery is meant to return the session, not a précis of it. The trigger is the
+five-character token `as-is`, because the previous 19-character literal `Resume from summary` breaks
+across rows on a narrow pane and then never matches at all — three transplants sat on an unanswered
+menu for 20+ minutes that way. Re-check the option list on any CC bump: **option 3 is "Don't ask me
+again"**, a persistent per-account preference change.
+
+The tool lives in the repo at `bin/reso-resume-one`, with `~/.reso/bin/reso-resume-one` a symlink to
+it (`install.sh`), so the deployed copy cannot drift from the gated one. It was untracked until
+2026-08-10, which is how its binary path, its model id and its effort all went stale unnoticed.
+
+For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5` — and **pass
+`--effort <tier>` to keep the reasoning tier too**. The account alone only fixes the model: until
+2026-08-10 every fable arm re-pinned `effort=high`, so a Fable-5-at-**max** session came back at
+high while its statusline still read "Fable 5". Omit the flag and prior behaviour is unchanged
+(`high`). Same flag, same values and same reason as `lr-handoff.sh --effort` (`0c00b814`).
 
 **Layout** (default = window per account, split panes; ask if unsure): create an iTerm2 window per
 account with `create window` then `split vertically/horizontally with default profile`, and run the
