@@ -44,6 +44,12 @@ setup() {
   sed -n '/^[a-z_]*() {/,/^}/p' "$S" > "$D/lib.sh"
   bash -n "$D/lib.sh" || false
 
+  # THE PRE-FIX CONTROL. Every case in §5c must be able to FAIL, and the only artifact that proves
+  # it is the REAL code as it stood before this diff — replayed from git, never a mutant of this
+  # file (memory: control-must-replay-the-real-artifact). Extracted the same way as lib.sh.
+  git -C "$REPO" show origin/main:scripts/compressor-sentinel.sh 2>/dev/null \
+    | sed -n '/^[a-z_]*() {/,/^}/p' > "$D/prelib.sh" || true
+
   export LOG="$D/cs.jsonl"
   export SNAPLOG="${LOG%.jsonl}-snap.log"
   export PAGE="$HOME/.claude/autonomy/pages/compressor-sentinel.page"
@@ -109,19 +115,21 @@ esac
 SH
 
   # ORDERING LAW — MOST SPECIFIC FIRST, and it is load-bearing rather than tidy. Each caller's
-  # format is a SUBSTRING of a longer one: the actuator's `pid=,ppid=,rss=,comm=,args=` contains the
-  # census's `pid=,ppid=,rss=,comm=`, which itself ends with the by-executable aggregate's
-  # `rss=,comm=`. Get the order wrong and one caller silently reads another's fixture file — and
-  # since those files are EMPTY in most tests, the symptom is not a red test but a green one over a
-  # mechanism that never ran. The actuator arm moved above the census arm when the parent-breaker
-  # put ppid into that read (the two formats then differed only by the `,args=` tail); the routing
-  # test in §5 is the positive control that keeps this order honest from here on.
+  # format is a SUBSTRING of a longer one: the snapshot's `pid=,ppid=,rss=,pcpu=,args=` contains the
+  # actuator's `pid=,ppid=,rss=,args=`, and the census's `pid=,ppid=,rss=,comm=` ends with the
+  # by-executable aggregate's `rss=,comm=`. Get the order wrong and one caller silently reads
+  # another's fixture file — and since those files are EMPTY in most tests, the symptom is not a red
+  # test but a green one over a mechanism that never ran. The actuator arm carries NO comm column as
+  # of the fnm-space fix (§5c): `ps` widens only its LAST column, so a comm requested before `args=`
+  # comes back truncated to 16 characters and cannot yield a basename at all. PS_CENSUS therefore
+  # feeds BOTH the census and `exe_table`, which is the point — one node-ness predicate, one fixture.
+  # The routing test in §5 is the positive control that keeps this order honest from here on.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 case "$*" in
-  *"pid=,ppid=,rss=,comm=,args="*) cat "$PS_ACT"    2>/dev/null ;;
-  *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
   *"pid=,ppid=,rss=,pcpu=,args="*) cat "$PS_SNAP"   2>/dev/null ;;
+  *"pid=,ppid=,rss=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
+  *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
   *"rss=,comm="*)                  cat "$PS_EXE"    2>/dev/null ;;
   *) echo "stub-ps $*" ;;
 esac
@@ -385,8 +393,19 @@ assert rows[0]["n"] == 2 and rows[0]["orph"] == 2 and rows[0]["nrss"] == 1044, r
 # The ppid column belongs to the parent-breaker (§5b) and is inert here — which is itself asserted
 # below, because a silently mis-indexed column would read ppid as RSS and re-admit the whole fleet.
 
-sel() { # <prev pids> <stdin lines>
-  run env bash -c '. "$1"; select_stop_targets "$2" 102400 200' _ "$D/lib.sh" "$1" <<< "$2"
+# EXE is the `exe_table` capture the actuator takes alongside its args table. mkexe derives it from
+# the SAME fixture rows the case already writes, so a case states its processes once: field 4 of an
+# actuator row is argv[0], and its basename is what the real exe_table would have reported. Cases
+# that need the two tables to DISAGREE (a stale pid, a recycled one) write $D/exe by hand instead.
+mkexe() { # <actuator rows>  → "<pid> <ppid> <rss> <exe_basename>"
+  awk '$1 ~ /^[0-9]+$/ { b = $4; sub(/.*\//, "", b); gsub(/[[:space:]]+/, "_", b)
+                         print $1, $2, $3, b }' <<< "$1" > "$D/exe"
+}
+
+sel() { # <prev pids> <stdin lines> [exe_file]
+  [ -n "${3:-}" ] || mkexe "$2"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' \
+    _ "$D/lib.sh" "${3:-$D/exe}" "$1" <<< "$2"
 }
 
 @test "claude.exe is NEVER stopped, however big or however new" {
@@ -458,9 +477,10 @@ sel() { # <prev pids> <stdin lines>
 # 70001/70002 stand in for the daemon's own pid and its launcher. They are constants here on purpose:
 # a test that passed the LIVE $$ could not tell "the guard excluded me" from "that pid was absent".
 
-brk() { # <cohort pids> <stdin lines> [min] [cap]
-  run env bash -c '. "$1"; select_break_parents "$2" "$3" "$4" 70001 70002' \
-    _ "$D/lib.sh" "$1" "${3:-3}" "${4:-4}" <<< "$2"
+brk() { # <cohort pids> <stdin lines> [min] [cap] [exe_file]
+  [ -n "${5:-}" ] || mkexe "$2"
+  run env bash -c '. "$1"; select_break_parents "$2" "$3" "$4" "$5" 70001 70002' \
+    _ "$D/lib.sh" "${5:-$D/exe}" "$1" "${3:-3}" "${4:-4}" <<< "$2"
 }
 
 @test "THE INCIDENT: three postcss workers name the next-server that is not in the cohort" {
@@ -584,7 +604,11 @@ brk() { # <cohort pids> <stdin lines> [min] [cap]
   # on the real machine. That impossibility is the reason this test is safe to run at all.
   mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
   printf '999901 1 900000 /opt/homebrew/bin/node w.js\n' > "$PS_ACT"
-  ACT=stop run_daemon 3
+  # The exe table names it. Without this row the pid is unidentifiable and the actuator selects
+  # NOTHING — the fail-safe §5c pins directly. CENSUS_EVERY is lifted past the run so no census
+  # takes place: these pids must read as burst, and a census would file them as incumbents.
+  printf '999901 1 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=stop run_daemon 3
   grep -q 'actuator: SIGSTOPped 0 process' "$SNAPLOG" || false
   ! grep -q 'DISARMED' "$SNAPLOG" || false
   # THE ROUTING CONTROL. `SIGSTOPped 0` is also what a run reads when the actuator's `ps` was routed
@@ -599,7 +623,8 @@ brk() { # <cohort pids> <stdin lines> [min] [cap]
   # this machine can be signalled by it, and `0 of 1 spawner` is the proof the kill was attempted.
   mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
   printf '999900 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n999901 999900 900000 /opt/homebrew/bin/node postcss.js\n999902 999900 900000 /opt/homebrew/bin/node postcss.js\n999903 999900 900000 /opt/homebrew/bin/node postcss.js\n' > "$PS_ACT"
-  ACT=stop run_daemon 3
+  printf '999900 1 3432416 /w/reso/node_modules/.bin/next-server\n999901 999900 900000 /opt/homebrew/bin/node\n999902 999900 900000 /opt/homebrew/bin/node\n999903 999900 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=stop run_daemon 3
   grep -qF 'actuator: parent-break SIGSTOPped 0 of 1 spawner(s), each owning >= 3 of the 3 selected burst procs' "$SNAPLOG" || false
   grep -q 'actuator: SIGSTOPped 0 process' "$SNAPLOG" || false
 }
@@ -894,4 +919,167 @@ scan() { CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/panic.jsonl" bash "$S" --
   export CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/panic.jsonl" CC_PANIC_SCAN=off
   run env CC_SENTINEL_LOG="$D/s.jsonl" bash "$S" --once
   [ ! -f "$D/panic.jsonl" ] || false
+}
+
+
+# ══ 5c. THE fnm-SPACE BLINDNESS — the census the actuator was reading was structurally 0 ══════════
+#
+# THE DEFECT, in two different shapes, in the two different `ps` streams this file runs.
+# `ps` widens only its LAST column, so exactly one of `comm=` and `args=` can be complete:
+#
+#   · census, `pid=,ppid=,rss=,comm=` — comm IS last, so its value is COMPLETE and its SPACES SPLIT.
+#     `$4` of `/Users/…/Library/Application Support/fnm/…/bin/node` is `/Users/…/Library/Application`,
+#     whose basename is `Application`, which fails `^node`. Every fnm-installed node was dropped.
+#     Measured on the live box 2026-08-11: census read 0 while 4 node processes were resident, and
+#     the research measured 12,105 dropped rows of 55,631.
+#
+#   · the actuator, `pid=,ppid=,rss=,comm=,args=` — comm is NOT last, so `ps` truncates it to a
+#     FIXED 16 characters (`/Users/chrisren/`, `/Library/Applica`, `endpointsecurity` — all exactly
+#     16, measured). There the basename was not merely split, it was ABSENT: no real node install
+#     has a path under 16 characters, so the cohort test could match nothing but a process whose
+#     comm was literally the 4-character string `node`. argv[0] is no escape — it carries the same
+#     spaced path and splits identically.
+#
+# Hence the two-table shape under test: the NAME comes from the comm-last read, and `args=` keeps
+# the last column in the actuator's read so every exclusion still sees a complete argv.
+
+precensus() { # <PS_CENSUS contents> — the census as it stood BEFORE this diff
+  [ -n "${PS_CENSUS:-}" ] || mkstubs 0 0 0
+  printf '%s\n' "$1" > "$PS_CENSUS"
+  run env PATH="$STUB:$PATH" bash -c '. "$1"; census' _ "$D/prelib.sh"
+}
+nowcensus() { # <PS_CENSUS contents> — the census as it stands now
+  [ -n "${PS_CENSUS:-}" ] || mkstubs 0 0 0
+  printf '%s\n' "$1" > "$PS_CENSUS"
+  run env PATH="$STUB:$PATH" bash -c '. "$1"; census' _ "$D/lib.sh"
+}
+
+FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installation/bin/node'
+
+@test "CENSUS SITE: an fnm node is COUNTED — and the pre-fix census read the same fixture as 0" {
+  local rows; rows="$(printf '1001 1 900000 %s\n1002 1 900000 %s\n1003 1 900000 /opt/homebrew/bin/node' "$FNM" "$FNM")"
+  # THE CONTROL FIRST, so a green below cannot be a test that never had a way to fail. The pre-fix
+  # census sees ONLY the homebrew row: the two fnm rows basename to `Application`.
+  precensus "$rows"
+  [ "${output%%|*}" = "1 1 878" ] || false
+  nowcensus "$rows"
+  [ "${output%%|*}" = "3 3 2636" ] || false
+  [ "${output#*|}" = " 1001 1002 1003" ] || false
+}
+
+@test "CENSUS SITE: a basename containing spaces stays ONE field and never counts as node" {
+  # `Razer Elevation Service` is 41 of 1224 live rows. Emitted raw it would make exe_table's own 4th
+  # field ambiguous for every consumer — the same defect one layer down.
+  nowcensus "$(printf '1010 1 900000 /Library/Application Support/Razer/Razer Elevation Service\n1011 1 900000 %s' "$FNM")"
+  [ "${output%%|*}" = "1 1 878" ] || false
+  [ "${output#*|}" = " 1011" ] || false
+}
+
+@test "SELECTOR SITE: an fnm node is SEEN — the name comes from exe_table, not the args table" {
+  # exe_table is RUN here rather than hand-written: the point of the case is that it resolves a comm
+  # whose path contains spaces, which no field-split of the actuator's own table can do.
+  mkstubs 0 0 0
+  printf '1001 1 900000 %s\n' "$FNM" > "$PS_CENSUS"
+  run env PATH="$STUB:$PATH" bash -c '. "$1"; exe_table' _ "$D/lib.sh"
+  [ "$output" = "1001 1 900000 node" ] || false
+  printf '%s\n' "$output" > "$D/exe.fnm"
+  sel "" "$(printf '1001 1 900000 %s /w/app/worker.js' "$FNM")" "$D/exe.fnm"
+  [ "$output" = "1001 900000 node" ] || false
+}
+
+@test "SELECTOR SITE: the pre-fix selector could not see that same process — 16-char truncation" {
+  # The pre-fix stdin format, spelled as REAL ps emits it: comm truncated to 16 chars and padded,
+  # then the full argv. `$4` is `/Users/x/Library` — basename `Library`, not `^node`.
+  run env bash -c '. "$1"; select_stop_targets "" 102400 200' _ "$D/prelib.sh" \
+    <<< "$(printf '1001 1 900000 /Users/x/Library %s /w/app/worker.js' "$FNM")"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL — the pre-fix selector is not simply broken: a SHORT comm it can basename works.
+  run env bash -c '. "$1"; select_stop_targets "" 102400 200' _ "$D/prelib.sh" \
+    <<< '1002 1 900000 /opt/homebrew/bin/node /w/app/worker.js'
+  [ "$output" = "1002 900000 node" ] || false
+}
+
+@test "SELECTOR SITE: mcp is excluded as a CLASS, including the spelling the substring test missed" {
+  # `modelcontextprotocol` contains no `mcp` substring at all, so the pre-fix `args ~ /mcp/` would
+  # have handed it to SIGSTOP the moment the cohort test started working — this is the B.3 hazard
+  # that made the class test non-optional in the same diff as the census repair.
+  sel "" "$(printf '1101 1 900000 /opt/homebrew/bin/node /w/@modelcontextprotocol/server/index.js\n1102 1 900000 /opt/homebrew/bin/node /w/mcp-server/index.js\n1103 1 900000 /opt/homebrew/bin/node /w/tools/mcp/run.js\n1104 1 900000 /opt/homebrew/bin/node --title=agent_mcp w.js')"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL — four innocent rows of the SAME shape ARE selected, so the emptiness above is
+  # the exclusion firing and not the selector being inert.
+  sel "" "$(printf '1101 1 900000 /opt/homebrew/bin/node /w/server/index.js\n1102 1 900000 /opt/homebrew/bin/node /w/build/index.js\n1103 1 900000 /opt/homebrew/bin/node /w/tools/run.js\n1104 1 900000 /opt/homebrew/bin/node --title=agent w.js')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "4" ] || false
+  # AND THE CONTROL ON THE PRE-FIX RULE: the old substring test really did miss the first spelling.
+  run env bash -c '. "$1"; select_stop_targets "" 102400 200' _ "$D/prelib.sh" \
+    <<< '1101 1 900000 /opt/homebrew/bin/node /w/@modelcontextprotocol/server/index.js'
+  [ "$output" = "1101 900000 node" ] || false
+}
+
+@test "RECYCLE GUARD: a pid the two tables disagree about on PPID is never a target" {
+  # The hazard the second read opens. Both tables carry ppid, they are taken back-to-back, so a
+  # healthy process agrees trivially and a pid reused between the reads has to reproduce its
+  # predecessor's parent to get through.
+  printf '1201 4242 900000 node\n' > "$D/exe.mm"
+  sel "" '1201 7 900000 /opt/homebrew/bin/node /w/app/w.js' "$D/exe.mm"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL — the identical row with the ppids AGREEING is selected.
+  printf '1201 7 900000 node\n' > "$D/exe.ok"
+  sel "" '1201 7 900000 /opt/homebrew/bin/node /w/app/w.js' "$D/exe.ok"
+  [ "$output" = "1201 900000 node" ] || false
+}
+
+@test "RECYCLE GUARD: a pid absent from the exe table is never a target" {
+  : > "$D/exe.empty"
+  sel "" '1202 1 900000 /opt/homebrew/bin/node /w/app/w.js' "$D/exe.empty"
+  [ -z "$output" ] || false
+}
+
+@test "BREAK-PARENTS SITE: a spawner the exe table cannot name is PROTECTED, not frozen" {
+  # UNIDENTIFIABLE ⇒ NEVER ACTED ON. Here the ignorance is worse than in the cohort: without a name
+  # the claude/claude.exe test cannot be applied at all, so the only safe reading of an unnamed
+  # parent is that it might be one. It costs a missed spawner; the converse costs the session.
+  printf '40001 36923 900000 node\n40002 36923 900000 node\n40003 36923 900000 node\n' > "$D/exe.noparent"
+  brk "40001 40002 40003" "$(printf '36923 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n40001 36923 900000 /opt/homebrew/bin/node p.js\n40002 36923 900000 /opt/homebrew/bin/node p.js\n40003 36923 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.noparent"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL — the same table with the spawner NAMED yields the incident's own verdict.
+  printf '36923 1 3432416 next-server\n40001 36923 900000 node\n40002 36923 900000 node\n40003 36923 900000 node\n' > "$D/exe.named"
+  brk "40001 40002 40003" "$(printf '36923 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n40001 36923 900000 /opt/homebrew/bin/node p.js\n40002 36923 900000 /opt/homebrew/bin/node p.js\n40003 36923 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.named"
+  [ "$output" = "36923 3 next-server" ] || false
+}
+
+@test "BREAK-PARENTS SITE: a modelcontextprotocol spawner is protected by the class test" {
+  printf '36924 1 3432416 node\n40001 36924 900000 node\n40002 36924 900000 node\n40003 36924 900000 node\n' > "$D/exe.mcp"
+  brk "40001 40002 40003" "$(printf '36924 1 3432416 /opt/homebrew/bin/node /w/@modelcontextprotocol/server/i.js\n40001 36924 900000 /opt/homebrew/bin/node p.js\n40002 36924 900000 /opt/homebrew/bin/node p.js\n40003 36924 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.mcp"
+  [ -z "$output" ] || false
+}
+
+# ══ 5d. OBSERVE — the rung that lets a predicate change be watched before it acts ═════════════════
+
+@test "CC_SENTINEL_ACT=observe selects and logs a would-stop, and signals NOTHING" {
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '999901 1 900000 /opt/homebrew/bin/node w.js\n' > "$PS_ACT"
+  printf '999901 1 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=observe run_daemon 3
+  grep -qF 'WOULD-STOP pid=999901 rss_kb=900000 comm=node' "$SNAPLOG" || false
+  grep -qF 'actuator: WOULD have SIGSTOPped 1 process(es)' "$SNAPLOG" || false
+  ! grep -q 'DISARMED' "$SNAPLOG" || false
+  # It is NOT the armed verb — a run that printed SIGSTOP here would mean the mode is decorative.
+  ! grep -qE '^SIGSTOP ' "$SNAPLOG" || false
+}
+
+@test "observe and stop select the SAME set — the mode changes the act, never the predicate" {
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '999901 1 900000 /opt/homebrew/bin/node w.js\n999902 1 900000 /opt/homebrew/bin/node /w/mcp-server/i.js\n' > "$PS_ACT"
+  printf '999901 1 900000 /opt/homebrew/bin/node\n999902 1 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=observe run_daemon 3
+  grep -qF 'actuator: WOULD have SIGSTOPped 1 process(es)' "$SNAPLOG" || false
+  # REBUILD the stub machine: it owns the per-tick sequence AND the tick counter, so a second run
+  # over the spent counter starts mid-ramp and never reaches the two consecutive breaching ticks.
+  : > "$SNAPLOG"
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '999901 1 900000 /opt/homebrew/bin/node w.js\n999902 1 900000 /opt/homebrew/bin/node /w/mcp-server/i.js\n' > "$PS_ACT"
+  printf '999901 1 900000 /opt/homebrew/bin/node\n999902 1 900000 /opt/homebrew/bin/node\n' > "$PS_CENSUS"
+  CENSUS_EVERY=99 ACT=stop run_daemon 3
+  grep -qF 'actuator: SIGSTOPped 0 process(es)' "$SNAPLOG" || false   # impossible pid ⇒ kill fails
+  grep -qF 'parent-break none — no eligible parent owns >= 3 of the 1 selected burst procs' "$SNAPLOG" || false
 }
