@@ -241,17 +241,40 @@ _cc_wclaim_cache_fresh() { # $1=file $2=ttl → 0 fresh / 1 stale-or-absent
 # ── the gate ───────────────────────────────────────────────────────────────────────────────────
 cc_worker_claim_admit() { # $1=caller $2=cwd $3=what → 0 admit / 9 refuse
   local caller="${1:-unknown}" cwd="${2:-}" what="${3:-write}"
-  local base item bin host pid ident ttl cap cfile out detail
+  local base leaf cand item bin host pid ident ttl cap cfile out detail
 
   CC_WCLAIM_REASON=""; CC_WCLAIM_ITEM=""; CC_WCLAIM_HOLDER=""
 
   # NOT-A-WORKER: zero forks, no record. See the header — this is the hot path for every session on
   # the box, and it must cost nothing. Parameter expansion only, never `basename`.
   [ -n "$cwd" ] || return 0
-  base="${cwd%/}"; base="${base##*/}"
-  case "$base" in wt-*) item="${base#wt-}" ;; *) return 0 ;; esac
-  case "$item" in *[!0-9a-f]*|'') return 0 ;; esac    # ids are 12 lowercase hex — `wt-pool-7` is not one
-  [ "${#item}" -eq 12 ] || return 0
+  # Walk UP the path, not just the leaf. Reading only the final component made the gate
+  # blind one directory deep: `wt-<id>` resolved to its item while `wt-<id>/src` resolved
+  # to nothing and returned admit-without-record — so every duplicate-worker and
+  # live-incumbent refusal was bypassed for any worker that cd'd into a subdirectory,
+  # which is the normal case (measured 2026-08-10). The header's cost constraint still
+  # binds: this is a bounded loop of parameter expansions, zero forks, no `basename`.
+  item=""
+  base="${cwd%/}"
+  while [ -n "$base" ]; do
+    leaf="${base##*/}"
+    case "$leaf" in
+      wt-*)
+        cand="${leaf#wt-}"
+        # ids are 12 LOWERCASE hex — `wt-pool-7` is not one, and neither is `wt-AAAAAAAAAAAA`.
+        # The class is enumerated, not a range: `[!0-9a-f]` is collation-dependent and under
+        # this box's locale it ACCEPTS uppercase, so `wt-AAAAAAAAAAAA` resolved to an item
+        # while the comment beside it claimed lowercase was enforced (measured 2026-08-10).
+        case "$cand" in
+          *[!0123456789abcdef]*|'') ;;
+          *) if [ "${#cand}" -eq 12 ]; then item="$cand"; break; fi ;;
+        esac
+        ;;
+    esac
+    [ "$base" = "${base%/*}" ] && break                 # no separator left ⇒ done
+    base="${base%/*}"
+  done
+  [ -n "$item" ] || return 0
   CC_WCLAIM_ITEM="$item"
 
   # From here down we are inside the dispatch-worker population, and every branch records.
