@@ -35,6 +35,20 @@ session per the standing default. The lead holds ≥50% of its window for decidi
 **Serialization:** W1 and W2 both edit `bin/claude-accounts`. **W1 lands first**, W2 rebases onto it.
 W0 and W3 are disjoint from both and from each other.
 
+> 🚨 **CORRECTION 2026-08-11 (implementation) — the table above is wrong about W3, and W3 must
+> split.** The "Files owned (no overlap)" column gives W3 `lib/claude-launcher.zsh` + the new hook +
+> the migration, but **§3 W3 item 6 puts the narrow renderer in `bin/claude-accounts`** ("a new
+> renderer mode … NOT a second hand-built table"). That is the same file W1 and W2 own, so W3 as
+> written is *not* disjoint and three sessions would have collided in it. Actual execution:
+>
+> | Wave | Files | Order |
+> |---|---|---|
+> | **W3a** | `lib/claude-launcher.zsh`, `tests/claude-launcher-router.bats` | concurrent with W1 — genuinely disjoint |
+> | **W3b** | `bin/claude-accounts` (`--narrow`), `hooks/accounts-board.sh`, `migrations/0011-*.sh` | **after W2** |
+>
+> Generalisable: a file-ownership table is only as good as its narrowest claim, and the collision
+> was in the *prose* of the item, not the table — the table was never re-derived from the items.
+
 **Lead context budget:** succession point after W0 + W1 land. Do not carry W2/W3 review in the same
 context as W1 implementation.
 
@@ -231,6 +245,47 @@ board therefore needs a **narrow (≤76 col) variant**, not the chat table.
    zero correctness cost.
 
 **Verify:** re-run R4's ablation (`--safe-mode` floor ≈3.5 s) and the `sleep 25` blocking control.
+
+#### W0 — OUTCOME (2026-08-11, lead-inline) — items 1-2 DONE, 3-5 FILED
+
+| Item | State | Evidence |
+|---|---|---|
+| 1 `find_active_list` | **DONE** `8d642bca` | hook **28.699 s → 0.598 s** like-for-like on the real store, byte-identical stdout. Fn alone 21.2 → 0.11 s; legacy no-project branch 13.0 → 0.20 s. `_current` + `.active-list-id` mtime-verify as written by the run (TASKS.md correctly absent — that list has 0 tasks and `generate_tasks_md` removes it at `totalOnDisk == 0`). |
+| 2 `claude mcp list` | **DONE** `1d03837c` | **2.030 s → 0.036 s** warm. Stale-while-revalidate, not a bigger timeout. |
+| — decayed control | **DONE** `29c82bbf` | Not in the plan; found on the way. See below. |
+| 3 task-store prune | **FILED** `f9b5ce0c5d17` | Premise re-measured and largely REFUTED — see below. |
+| 4-5 `worktree-pool.sh` | **FILED** `399b9938bef8` | **CROSS-REPO** — the file is in `reso-management-app`, not here. |
+
+**Learnings that outlived the diff:**
+
+- **The rewrite's real risk was ORDER, not speed.** Iterating the index instead of the directory
+  glob changes which list wins an mtime tie (jq object order is insertion order). Preserved
+  deliberately and pinned by a test that an index-order mutant kills. Differential control over the
+  live store: **60 pairs, 37 of them multi-list projects (the discriminating population), 0
+  mismatches.**
+- **The seven existing tests passed on BOTH implementations**, so they credited the rewrite with
+  nothing. Two of the three added are mutation-proven; the third is labelled in-file as NOT
+  mutation-proven rather than left to imply coverage it lacks.
+- **Item 3's premise died with item 1.** "Without this the fix decays again" was true of the
+  fork-per-directory shape. Post-fix the scan is 36 µs/dir, so it needs ~28,000 dirs to cost 1 s
+  (currently 2,428, of which 2,363 hold no task json). The remaining action is destructive on live
+  operator state, so it is filed, not run.
+- **A control keyed on `origin/main` expires when its own subject lands there.** The MCP suite's
+  only real control replayed `origin/main`, its fix landed as `37ef2489c`, and it had been red at
+  HEAD ever since — reading as a regression in whatever diff ran next. Re-pinned to `54555bed1`
+  (`37ef2489c^`) plus an assertion that the replayed file really is pre-fix.
+- 🚨 **`claude -p` CANNOT measure this fleet's interactive session start.** `asyncRewake` is honored
+  only when the session is interactive or has streaming input; in a one-shot `-p` the ~4 h
+  `mailbox-wake-arm.sh` watch is dispatched **synchronously** and prompts. Measured: `--safe-mode`
+  3.47/3.68 s vs hooks-on 22.24/22.89 s — a delta that is print-mode-only and reaches no
+  interactive session. `asyncRewake: true` verified present in all five `settings.json`.
+  **Use per-hook timing against the real store instead.** Post-W0 the synchronous set is
+  sub-second: `setup-task-symlinks.sh` 0.598 s (real store), `session-start.sh` 0.036 s warm, and
+  the other twelve ≤ 0.11 s each under a fixture.
+- **Probe hooks in a fixtured `$HOME`, always.** A timing probe run with a throwaway
+  `CLAUDE_PROJECT_DIR` inherited this session's real `CLAUDE_CODE_TASK_LIST_ID`, so the hook
+  self-indexed a live task list to `/tmp/w0probe` — live-store pollution, restored by hand. The
+  hook was doing its job; the probe was malformed.
 
 ### W1 — Routing policy
 
