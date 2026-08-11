@@ -600,6 +600,34 @@ log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
   '{cloud_return_rc:$c,
     note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (the return path itself abstains on a cut land rather than filing a refusal); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
+# ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
+# The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
+# circuit at the earliest moment it can be closed: a refusal filed at 12:00 reaches the VM at 12:00
+# rather than at 12:05. It is a separate call rather than a step inside cloud-return on purpose —
+# detecting a refusal and answering one are different jobs with different blast radii, and the
+# return path must stay able to run on a box where nothing may be sent off-box.
+#
+# 🚨 THE SAME DEPLOYED-COPY DISCRIMINATOR, FOR A STRICTER REASON. cloud-return lands branches and
+# marks items done; this SPENDS QUOTA ON A REMOTE MACHINE and hands it a brief it will act on. Four
+# concurrent suite copies of the return sweep have already been measured acting on the operator's
+# live store (2026-08-11); the same four copies here would have sent four identical refusal briefs
+# to a real VM. `$0` is read UNRESOLVED for the reason recorded above — resolving it follows the
+# deployed symlink back into the checkout and erases the only difference there is.
+# The router is single-flight and idempotent per refusal (keyed on the artifact's own content), so
+# a long land simply means fewer routing passes, never a double-send.
+_cloudrfz="$_SWEEP_DIR/cloud-refusal-route.sh"
+_cloudrfz_rc="skipped"
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudrfz_rc="skipped-not-deployed"
+elif [ -x "$_cloudrfz" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 180 bash "$_cloudrfz" --sweep >/dev/null 2>&1
+  else bash "$_cloudrfz" --sweep >/dev/null 2>&1; fi
+  _cloudrfz_rc=$?
+fi
+log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
+  '{cloud_refusal_rc:$c,
+    note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
+
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0

@@ -532,3 +532,62 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   grep -q "$ID" "$SAYS"
   grep -q "$ID2" "$SAYS"
 }
+
+# ═══ 11. THE WIRING ══════════════════════════════════════════════════════════════════════════════
+# Every arm above is hermetic, and a hermetic suite cannot see whether anything CALLS this script.
+# W2's own suite records exactly that shape: a router nothing invokes routes nothing, and every test
+# here would stay green. These four are structural on purpose — running the real 300 s sweep costs
+# more than the suite it lives in.
+
+@test "autonomy-sweep INVOKES cloud-refusal-route --sweep (a loop nothing calls closes nothing)" {
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  # Anchor on the INVOCATION, not on the tool name: the name also appears in the assignment, and a
+  # test that matched only the assignment would stay green over a script that is never run.
+  grep -q 'cloud-refusal-route.sh' "$sweep"
+  grep -q -- '_cloudrfz" --sweep' "$sweep"
+}
+
+@test "…and it is called AFTER the return pass, which is what writes the artifact it consumes" {
+  # Ordering is the whole value of routing in the same tick: the return pass files
+  # `<id>.land-refused`, so a router placed above it would always be reading the PREVIOUS tick's
+  # refusals and every routed verdict would reach the VM 300 s late.
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  local ret_line rfz_line
+  ret_line="$(grep -n '_cloudret" --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  rfz_line="$(grep -n '_cloudrfz" --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  [ -n "$ret_line" ] && [ -n "$rfz_line" ] || false
+  [ "$ret_line" -lt "$rfz_line" ]
+}
+
+@test "…and ABOVE the nothing-new early exit, where a quiet fleet still reaches it" {
+  # A refused land produces no page and no alarm; it is silent by construction. Anchored on CODE —
+  # the invocation and the `total_new` test that IS the exit — never on the prose around them.
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  local call_line exit_line
+  call_line="$(grep -n '_cloudrfz" --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  exit_line="$(grep -n 'total_new" -eq 0' "$sweep" | head -1 | cut -d: -f1)"
+  [ -n "$call_line" ] && [ -n "$exit_line" ] || false
+  [ "$call_line" -lt "$exit_line" ]
+}
+
+@test "the sweep's call is GATED to the deployed copy — a suite may never send off-box" {
+  # Stricter than the return path's version of this guard, and for a stricter reason: cloud-return
+  # lands a branch, this hands a real VM a brief it will ACT on. The four concurrent suite copies
+  # measured landing against the live store on 2026-08-11 would have been four identical refusal
+  # briefs sent to one machine.
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  local gate_line rfz_line
+  # The gate keys on the UNRESOLVED $0: the deployed path is a SYMLINK into the checkout, so a
+  # resolved path is identical in both cases and the discriminator disappears.
+  gate_line="$(grep -n 'case "\$0" in' "$sweep" | head -1 | cut -d: -f1)"
+  rfz_line="$(grep -n '_cloudrfz" --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  [ -n "$gate_line" ] && [ -n "$rfz_line" ] || false
+  [ "$gate_line" -lt "$rfz_line" ]
+  grep -q 'skipped-not-deployed' "$sweep"
+  # …and the guard must actually govern THIS call, not merely precede it in the file.
+  grep -q '_cloudret_deployed" != 1' "$sweep"
+}
