@@ -1768,3 +1768,80 @@ the shared checkout, which sits 15 commits behind trunk, and `deploy-live.sh` is
 *"no GREEN tree is a DESCENDANT of live HEAD"*. That is the already-filed bootstrap circle
 (`3df911c0470e`, `7d6b462a468c`), not anything this section introduced, and a raw fast-forward is
 recorded as the wrong remedy (`04470b5d` — it wedges deploy and resets both legs of the alarm).
+
+### 13.5 · ✅ CLOSED — `cc-offload land` finishes a cloud round trip with zero hand-work (2026-08-11)
+
+`cc-offload land --all` printed `cloud-reconcile: 2 ok, 0 failed` and put the VM's file on trunk.
+No cherry-pick, no ref surgery, no re-authoring by hand. The two defects §13.4 recorded as the last
+manual steps are gone, and the one they hid is gone with them.
+
+| | proof |
+| --- | --- |
+| session | `session_01FFj9fUit3mt4bYFs9bLgKN` on next2 — `--verify` reads `{"environment_kind": "anthropic_cloud", "sources": 1, "accepted": true}` |
+| the VM pushed | `claude/fire-20260811T035034Z-93119-1` at `90f2f50e` |
+| landed by the reconciler alone | `9096fc62` on origin/main, authored AND committed `Chris Ren <ren.chris@outlook.com>` |
+| the file | `docs/research/cloud-vm-shallow-clone-blast-radius-2026-08-11.md`, blob `17142e7d` on `origin/main` |
+| the originals | `90f2f50e` and `bd67e747` still on origin, unmoved |
+
+**The identity wall is TRANSLATED, not weakened.** `githooks/pre-push` still refuses an
+unattributable range; what changed is that the range never arrives unattributable. `cloud-reconcile`
+re-authors between the fetch and the land — the transform the gate itself prescribes — and preserves
+provenance in `Cloud-session:` / `Original-commit:` / `Original-branch:` on every rewritten commit,
+which is strictly more than the VM's own block carried. The replay is `git commit-tree`, not a
+rebase: no checkout, no index, no working tree, so it cannot touch the shared checkout's HEAD, and
+each original tree crosses byte-exact. The original author date rides along, which `--reset-author`
+would have discarded.
+
+🚨 **THE TEXT THE COMMIT-MSG HOOK REFUSES IS INHERITED, NOT ADDED — and that is the finding this
+section exists for.** §13.4 read the constraint as *"do not use `Co-authored-by:` in the trailers you
+write"*, which is true and is not the binding half. A cloud VM writes its OWN attribution block —
+an AI co-authorship trailer plus a session-URL trailer — and `githooks/commit-msg` blocks both, so
+the rewrite was refused over text it had not authored. Its first cut then *blamed its own trailers*
+in the refusal message: the identical wrong-cause defect as the exit-7 trap above, reproduced inside
+the fix for it, one rehearsal after being written.
+
+It was caught because the fix was rehearsed `--dry-run` against the real 2026-08-10 range before the
+one-shot proof, instead of being trusted from a hermetic suite that only ever fed it messages the
+suite itself had composed. **A fixture cannot surprise you with what a real producer writes.**
+
+The resolution keeps ONE arbiter. On a refusal — and only on a refusal, because the hook objecting
+is the evidence that the block is machine attribution — the inherited trailer block is dropped and
+the message re-composed. *What is a trailer* stays git's question (`interpret-trailers --parse`);
+only the cut is ours. Nothing is lost: the same session id returns as `Cloud-session:`, alongside
+the original sha and branch. Blocked text in the SUBJECT or BODY still refuses, and now says which —
+**a rewrite re-attributes authorship; it does not edit what a commit says.**
+
+*(The paragraph scan needed one correction that no hermetic message would have produced:
+`git log --format=%B` terminates the message with a blank line, so a "last blank line" scan lands on
+the terminator, measures an empty final paragraph, and reports "no trailer block to drop" over a
+message that plainly has one. That is what the live rehearsal printed.)*
+
+**The second defect was the first one's residue, which is why self-healing is not optional.** A
+failed land leaves a rebased — and now a re-authored — local head of that name in the shared
+checkout, and the next run refused it as *"diverged, or checked out in a worktree"*: a first-failure
+cause reported as a second, different one, which no retry could clear. Those two states now have
+separate messages and separate outcomes. **Checked out somewhere is still a refusal** (`git worktree
+list` names the path; someone owns it). **Checked out nowhere is healed to the remote**, which is
+the authority for a branch a VM pushed. The heal is scoped by restating `$PREFIX` rather than a
+second literal, so it cannot widen without discovery widening first. The re-author *guarantees* the
+residue, so without the heal the fix would have poisoned its own second run.
+
+Coverage: `tests/cloud-reconcile.bats` 14 → 23, hermetic, real local remotes and real `git push`,
+one fixture per half so a regression is attributed. The commit-msg arms run against the REAL
+`githooks/commit-msg` installed where git looks for it — a stand-in would prove the mechanism and
+not the outcome. Proven by per-site mutation, each convicting the test that names its site: no
+re-author · unconditional re-author · no hook consult · author-only detection (which reds exactly
+the committer-dirty case `githooks/pre-push` says an author-only scan misses) · no heal · heal
+without the worktree check · the `Co-authored-by:` spelling · no `Original-commit:` trailer · strip
+disabled · the trailing-blank-line regression.
+
+Landed `25aa774a` + `7cecb8d3`.
+
+⚠️ **Still open, and now the only thing between this and unattended dispatch at scale:** a
+declaration records `paths=` EMPTY, so `landed()` can never say LANDED and a cloud result whose
+content is already on trunk reads ELIGIBLE forever — `cc-offload land --all` re-attempts it every
+sweep. Live example: `session_01QEiWYuB1ygLLcVwCQJoUZE`, whose file has been on `origin/main` since
+`8e625e7b` and which this very run re-landed to `nothing to land (origin/main already contains
+HEAD)`. Harmless today, one wasted land per stale declaration per sweep, and unbounded as the fleet
+grows. Filed as backlog `a435e3987fbf`; the fix is a post-hoc `paths` fill from the branch's own
+diff, never a wider `landed()`.
