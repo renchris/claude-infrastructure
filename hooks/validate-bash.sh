@@ -297,6 +297,60 @@ if [[ "$_wcs_hit" == 1 && "${CC_WCLAIM_GATE:-on}" != off ]]; then
   fi
 fi
 
+# ── SPAWN-LINEAGE GENERATION CAP ─────────────────────────────────────────────────────────────────
+# The SECOND term on this surface (backlog bffbce207f12), and it exists for the population the term
+# above cannot see. `cc_worker_claim_admit` keys on the cwd being `wt-<12 lowercase hex>` and
+# abstains on anything else — correct for a lease, since without a worktree there is no item and no
+# claim. But that abstention is most of the fleet, and the fan-outs beyond it are the widest ones.
+# Measured 2026-08-11 over all 1085 rows of logs/pane-spawns.jsonl:
+#
+#   cwd class                            spawns   distinct claude spawners   max fan-out by one
+#   dispatch wt-<12hex>  (lease binds)      214             40                      7
+#   shared repo root     (lease abstains)   303             23                     21   ← 5 sessions ≥10
+#
+# So the bound that exists works and the uncovered population is the one carrying the worst shapes.
+# Identity is still the instrument — a per-session COUNT resets at exactly the edge a cascade
+# crosses (memory `counter-resets-at-the-boundary-the-runaway-crosses`) — but where the ledger has
+# no identity to offer, one has to be carried. scripts/lib/spawn-lineage.sh carries it, and its
+# header records the probe that proves it can: the OS process tree is severed at the kitty daemon,
+# so an explicit `--env` stamp from bin/it2-kitty is the only thing that crosses a pane boundary.
+#
+# ONLY THE GENERATION IS ENFORCED. Width per root is counted by the library and never refused: the
+# widest legitimate observation (21) and the pathological one are not separated by any threshold
+# this data supports, and a bound sitting inside the survived band can only manufacture false
+# refusals (memory `threshold-must-separate-fatal-from-survived`). The counter ships so a later
+# reader has the distribution; it does not gate.
+#
+# SAME PRE-FILTER, DELIBERATELY. `_wcs_hit` above already selects the pane-spawn commands and
+# already zeroes itself on `self-close`, so this term inherits both the population and the
+# gate-allows-its-own-cure exemption rather than re-deriving either (memory
+# `work-item-remedy-can-become-forbidden`, `denylist-enumerates-spellings-not-the-class`).
+#
+# FAIL OPEN, LOUDLY. Library unreachable, stamp absent, or stamp unparseable ⇒ ADMIT plus one IDL
+# row with a distinct `basis`, so "unstamped" never reads the same as "could not ask".
+if [[ "$_wcs_hit" == 1 && "${CC_LINEAGE_GATE:-on}" != off ]]; then
+  _lin_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  for _lin_lib in "$(dirname "$_lin_self")/../scripts/lib/spawn-lineage.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/spawn-lineage.sh" \
+                  "${HOME:-}/.claude/scripts/lib/spawn-lineage.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    [[ -f "$_lin_lib" ]] && . "$_lin_lib" 2>/dev/null && break
+  done
+  if command -v cc_lineage_admit >/dev/null 2>&1; then
+    if ! cc_lineage_admit pane-spawn \
+           "$(printf '%s' "$INPUT" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')" \
+           "pane spawn"; then
+      deny "SPAWN GENERATION CAP — pane spawn refused. This session is generation $(cc_lineage_gen) of spawn lineage $(cc_lineage_root), and the cap is ${CC_LINEAGE_MAX_GEN:-3}: $(cc_lineage_reason). Generation is read from an environment stamp this machine wrote when your pane was created, NOT from your text — so do not retry and do not re-word the command, it will read exactly the same. The ladder the cap protects is desk → wave lead → dispatched phase session → that session's own teammates; you are one rung past it, and past it is where a fan-out stops being a wave and becomes the recursion that reached 224 spawns / 167 sessions in ~38 minutes and ignited the kernel watchdog panics that destroy every live session at once. INSTEAD: do this work SERIALLY in this session, or RETURN your findings to the session that spawned you and let it decide whether to widen — it has generations you do not. Retiring this pane (\`\$HOME/.claude/scripts/handoff-fire.sh self-close --terminal\`) is exempt from this gate by construction. Override for this session only: CC_LINEAGE_GATE=off, or raise the ladder with CC_LINEAGE_MAX_GEN=<n>. Rule: backlog bffbce207f12, docs/research/spawn-lineage-probe-2026-08-11.md."
+    fi
+  else
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+      '{ts:$ts,hook:"spawn-lineage",sid:"?",disposition:"abstained",reason:"spawn-lineage",
+        gate:"spawn-lineage",verdict:"admit",basis:"absent",caller:"pane-spawn",
+        what:"pane spawn",detail:"scripts/lib/spawn-lineage.sh unreachable — pane spawn UNGATED for lineage"}' \
+      >> "${CC_LINEAGE_IDL:-${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}}" 2>/dev/null || true
+  fi
+fi
+
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,

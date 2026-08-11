@@ -233,8 +233,9 @@ fi
 #  2. DEPTH, derived from `.transcript_path`. The harness ALREADY computes it: a subagent's
 #     transcript lives at <session-dir>/subagents/agent-<id>.jsonl beside an
 #     agent-<id>.meta.json carrying {"agentType","toolUseId","spawnDepth"}. So depth is a READ,
-#     not an invention — `CC_SPAWN_DEPTH`-style env propagation (never measured, and vacuous if
-#     the env does not cross the spawn) is not needed. The ONE unknown is whether a nested hook
+#     not an invention — `CC_SPAWN_DEPTH`-style env propagation (MEASURED 2026-08-11, see below;
+#     it is not merely unnecessary here, it is impossible here) is not needed. The ONE unknown is
+#     whether a nested hook
 #     invocation is handed the SUBAGENT's transcript_path or the LEAD's. Nothing in this repo
 #     logs transcript_path, so it cannot be answered from disk today.
 #
@@ -267,6 +268,22 @@ fi
 #     #31977), and removing it would delete a guard that is right rather than wrong. But it must
 #     never be cited as the reason a fan-out is bounded in depth.
 #
+#     ── AND THE ENV ROUTE IS NOT A FALLBACK EITHER, ON THIS HALF (backlog bffbce207f12, probed
+#     2026-08-11) ─────────────────────────────────────────────────────────────────────────────────
+#     The filed design's remedy for this term was to stamp `CC_SPAWN_ROOT`/`CC_SPAWN_DEPTH` on the
+#     child instead of reading the harness. For an IN-PROCESS subagent that is not merely
+#     unnecessary, it is unreachable: its Bash forks from the LEAD'S OWN process — probed pid 81973
+#     on both sides, byte-identical — so it has no environment of its own to stamp, and a PreToolUse
+#     hook cannot mutate its caller's. There is no per-child slot at any depth.
+#
+#     But that verdict covers only the in-process half of this tool's traffic. A NAMED Agent call
+#     mints a PANE, which is a real session with a real environment — and env DOES cross that
+#     boundary under an explicit `--env` (it does not cross by itself, and `--source-window` does
+#     not copy it either; all four arms with positive controls in
+#     docs/research/spawn-lineage-probe-2026-08-11.md). So the lineage bound is reachable on exactly
+#     the population the correction below identifies, and it is implemented as § SPAWN-LINEAGE
+#     GENERATION CAP further down this file, fed by a stamp bin/it2-kitty puts on the launch.
+#
 #     WHERE THE GENERATION BOUND ACTUALLY LIVES, therefore: neither term here can see the 224-spawn
 #     / 167-session / 3-generation runaway — depth has no population, and the budget resets at
 #     exactly the edge the cascade traverses (every step MINTED A NEW CLI SESSION). The lease is
@@ -287,6 +304,13 @@ fi
 #     term — which is a real guard on a real, smaller population — could not have seen this cascade.
 #     Full evidence and the re-derivation commands live in that block's § WHICH SURFACE THE CASCADE
 #     ACTUALLY CROSSED. Case 13 of tests/worker-claim-gate-coverage.bats red-proofs the call below.
+#
+#     INDEPENDENTLY RE-DERIVED 2026-08-11 (bffbce207f12) before building on it, because a bound
+#     placed on the wrong surface is the defect this whole thread keeps re-discovering. Same log,
+#     the discriminating leg and its control: bare `chain:"it2-kitty"` rows carry
+#     `ppid_comm=claude` 319/324, while the session-invoked `chain:"kitty-split-launch.sh"` rows
+#     carry `ppid_comm=zsh` 16/16. A Bash tool call necessarily puts its own shell between, so the
+#     first shape cannot be one. Confirmed.
 #
 # REFUSAL IS HARD, NOT BOUNDED — deliberately UNLIKE capacity-admit above. That gate bounds its
 # refusals because memory pressure is transient and a wave must never be permanently blocked by a
@@ -377,6 +401,64 @@ else
   fi
 
   _sb_row admit "budget $_sb_n/$_sb_max depth $_sb_depth/$_sb_maxdepth"
+fi
+
+# ── SPAWN-LINEAGE GENERATION CAP ──────────────────────────────────────────────────────────────
+# The bound the two terms above cannot supply, on the surface the correction in the DEPTH note
+# identifies (backlog bffbce207f12, building on 6f24f9c49e3e). Depth has no population because
+# nothing nests in-process; the budget resets at the session edge the cascade crosses. This one
+# neither nests nor resets: it rides an environment stamp that survives the pane boundary, so it is
+# the same lineage on both sides of the edge.
+#
+# SCOPED TO PANE-MINTING CALLS ONLY, and that scoping is the whole correctness argument. A NAMED
+# Agent call is what Claude Code's teammate-pane backend turns into a new CLI session — measured
+# `ppid_comm=claude` on 319 of 324 bare `chain:"it2-kitty"` rows, against `ppid_comm=zsh` 16/16 on
+# the session-invoked control. An UNNAMED call is an in-process subagent: it mints no session, it
+# has no environment of its own (its Bash forks from this very process — probed pid 81973 on both
+# sides), and the harness does not expose the Agent tool to it, so it cannot begin a generation at
+# all. Charging one a generation would refuse ordinary read-only research fan-out — the single
+# largest legitimate consumer of this tool — to bound a thing it cannot do (memory
+# `guard-universalization-deletes-a-capability-silently`).
+#
+# WHY IT DOES NOT DUPLICATE THE LEASE TERM AT THE TOP OF THIS FILE. That term asks "is this session
+# entitled to be working this item at all", and abstains wherever the cwd is not `wt-<12 hex>` —
+# which, measured over all 1085 rows of logs/pane-spawns.jsonl, is most of the fleet, and the side
+# carrying the widest fan-outs: the shared repo root shows 303 spawns across 23 sessions with a
+# maximum of 21 by ONE session, against a maximum of 7 inside dispatch worktrees. This term asks a
+# different question — "how deep is this lineage" — and can answer it where there is no item.
+#
+# The stamp is written by bin/it2-kitty onto the launch, above all three of its launch branches;
+# scripts/lib/spawn-lineage.sh derives and reads it. Enforced identically on the Bash pane-spawn
+# surface (hooks/validate-bash.sh), which covers the smaller session-invoked population.
+# FAIL OPEN, LOUDLY: unreachable library, absent stamp, or unparseable stamp all ADMIT and record a
+# distinct `basis`, so "unstamped" never reads the same as "could not ask".
+_lin_named="$(printf '%s' "$INPUT" | jq -r '.tool_input.name // .tool_input.team_name // empty' 2>/dev/null)"
+if [ -n "$_lin_named" ] && [ "${CC_LINEAGE_GATE:-on}" != off ]; then
+  for _lin_lib in "$(dirname "$_ateh_self")/../scripts/lib/spawn-lineage.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/spawn-lineage.sh" \
+                  "${HOME:-}/.claude/scripts/lib/spawn-lineage.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    [ -f "$_lin_lib" ] && . "$_lin_lib" 2>/dev/null && break
+  done
+  if command -v cc_lineage_admit >/dev/null 2>&1; then
+    if ! cc_lineage_admit agent-tool "${_sb_sid:-?}" "teammate pane spawn"; then
+      jq -n --arg r "$(cc_lineage_reason)" --arg g "$(cc_lineage_gen)" \
+            --arg root "$(cc_lineage_root)" --arg cap "${CC_LINEAGE_MAX_GEN:-3}" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: ("SPAWN GENERATION CAP — teammate spawn refused. This session is generation \($g) of spawn lineage \($root) and the cap is \($cap): \($r). A NAMED Agent call is turned into a whole new CLI session by the teammate-pane backend, so it starts a generation — and generation is read from an environment stamp this machine wrote when your pane was created, NOT from your text, so re-wording the prompt changes nothing. The ladder the cap protects is desk → wave lead → dispatched phase session → the teammates of that session; you are one rung past it, and past it is where a fan-out stops being a wave and becomes the recursion that reached 224 spawns / 167 sessions in ~38 minutes and ignited the kernel watchdog panics that destroy every live session at once. INSTEAD: drop the name/team_name and run this as an in-process subagent if it is read-only work (those mint no session and are not capped), do it SERIALLY in this session, or RETURN your findings to the session that spawned you and let IT widen — it has generations you do not. Override for this session only: CC_LINEAGE_GATE=off, or raise the ladder with CC_LINEAGE_MAX_GEN=<n>. Rule: backlog bffbce207f12, docs/research/spawn-lineage-probe-2026-08-11.md.")
+        }
+      }'
+      exit 0
+    fi
+  else
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+      '{ts:$ts,hook:"spawn-lineage",sid:"?",disposition:"abstained",reason:"spawn-lineage",
+        gate:"spawn-lineage",verdict:"admit",basis:"absent",caller:"agent-tool",
+        what:"teammate pane spawn",detail:"scripts/lib/spawn-lineage.sh unreachable — teammate spawn UNGATED for lineage"}' \
+      >> "${CC_LINEAGE_IDL:-${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}}" 2>/dev/null || true
+  fi
 fi
 
 # Teammate spawns (team_name set) MUST use a Max-plan auto-mode-allowlisted model.
