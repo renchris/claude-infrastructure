@@ -58,7 +58,7 @@
     {
       "name": "next",
       "config_dir": "~/.claude-next",
-      "launcher": "claude1",
+      "launcher": "claude",
       "fable_name": "fable",
       "port_index": 0,
       "email": "ichris96+claude@hotmail.com",

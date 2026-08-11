@@ -6481,8 +6481,21 @@ if [ -n "$EXTRA" ]; then
   ARGS="$ARGS $EXTRA"
 fi
 
-PREFIX=""
-[ "$IN_PLACE" = 1 ] && PREFIX="CLAUDE_ISOLATION_SKIP=1 "
+# CC_ACCOUNT_PINNED=1 on EVERY typed launch line. The fire has already CHOSEN an account and
+# charged it (`--assign` at pick time), so the interactive router in lib/claude-launcher.zsh must
+# not get a second opinion at exec — otherwise a fire assigned to `next` can land elsewhere and the
+# spread math is inverted rather than merely lost.
+#
+# 🚨 THIS IS THE PIN, and it is deliberately an ENV PREFIX rather than a distinct launcher NAME.
+# 2026-08-11: account 1's launcher was flipped to `claude1` to carry the pin in the name. It broke
+# every fire on the box within minutes — `zsh: command not found: claude1` — because the launchers
+# are zsh functions defined ONLY in the operator's interactive rc (see the CORRECT-shield note
+# below), so a NEW name exists solely in shells started AFTER the rc changed, while handoff-fire
+# types into long-lived panes that started before it. A flip of a config FILE is not a flip of the
+# already-running SHELLS. An env prefix has no such problem: it is plain zsh syntax that every
+# shell, old or new, evaluates identically, and it needs nothing defined anywhere.
+PREFIX="CC_ACCOUNT_PINNED=1 "
+[ "$IN_PLACE" = 1 ] && PREFIX="CC_ACCOUNT_PINNED=1 CLAUDE_ISOLATION_SKIP=1 "
 
 # THE LAUNCHER IS THE LAST CORRECTABLE WORD IN EVERY TYPED LINE — shield it (item 7146aab37a9a).
 # The 2026-07-29 fix (WT_DEPS, :2941) moved the package-manager chain out of the typed line, which
