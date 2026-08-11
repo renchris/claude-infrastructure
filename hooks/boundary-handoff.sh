@@ -68,7 +68,8 @@
 # Env seams (tests): CC_TELEMETRY_DIR · CC_IDL · CC_BOUNDARY_T · CC_BOUNDARY_REARM_DELTA ·
 #                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL ·
 #                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S ·
-#                    CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_SIZE_REARM_MB · CC_CE_*
+#                    CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_SIZE_REARM_MB ·
+#                    CC_BOUNDARY_T_FREEWIN · CC_CE_*
 #
 # ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
 # The desk runs on .claude-secondary / -tertiary, which today carry NO boundary hook at all; it
@@ -260,26 +261,57 @@ if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&
 # unreachable while the trunk-wide gate marker decided the rung.
 #
 # COST: the ledger read is gated behind the fill floor, so a low-fill session pays nothing.
-# SAFETY: advisory only — it sets `early`, and every downstream guard (conversation-in-flight,
-# re-arm damping, latch) still applies. Fails silent on any unknown: no cwd, no ledger, non-✅.
+# SAFETY: advisory only — it sets `freewin` (its own axis, never `early` — see ATTRIBUTION below), and
+# every downstream guard still applies: re-arm damping, the latch, and the S6 conversation-hold, which
+# at THIS tier alone suppresses outright rather than re-wording. Fails silent on any unknown: no cwd,
+# no ledger, non-✅.
+# ATTRIBUTION + DIAGNOSABILITY (2026-08-11). Two defects shipped with the arm above and are fixed here.
+#
+#  (i) THE ARM HAD NO AXIS OF ITS OWN. A free-win trigger set the same `early` flag the FORECAST tier
+#      sets, so a fire at 41% narrated itself as "context 41% BURNING toward the 88% auto-compact wall
+#      — forecast ≤-1min at the observed rate" and recorded axis:"forecast" on the IDL row. The `-1` is
+#      the sentinel for UNKNOWN forecast: the advisory printed a burn rate it had explicitly failed to
+#      measure. That is the exact misattribution this hook's own SIZE-axis header warns about — "a fire
+#      narrating the wrong cause LOOKS like a false positive; the reader checks the fill, finds it low,
+#      and distrusts the hook" — and it also made free-win fires uncountable, since every one of them
+#      would be filed under the forecast tier forever. Caught by a positive control, not by the suite:
+#      tests/boundary-handoff.bats asserted only that the arm FIRES, never what it SAID.
+#      `freewin` is now its own flag, its own axis value, and its own wording.
+#
+# (ii) A DECLINED LEDGER WAS INDISTINGUISHABLE FROM A LOW FILL. Both abstained `below-threshold:41<73`,
+#      so "no session was eligible" and "the arm is broken" produced byte-identical evidence — the
+#      dormancy this whole rail exists to escape (`positive-control-the-denominator`). Measured over the
+#      IDL at the time of the fix: 383 evaluations sat at used ≥ 35 and every one recorded only the 73
+#      threshold it was never going to meet. `FREEWIN_RUNG` now rides the abstain reason, so the rung
+#      that declined is on the record and a dormant arm can be told from an eligible-but-silent one.
 T_FREEWIN="${CC_BOUNDARY_T_FREEWIN:-35}"   # 0 disables the arm
+# The ledger verdict THIS evaluation actually read. Distinguishes "could not ask" (off · below-floor ·
+# no-cwd · no-ledger) from "asked and was told no" (a rung glyph) — a bare failure would collapse them.
+FREEWIN_RUNG=""
 free_win_now() {
+  FREEWIN_RUNG="off"
   [ "${T_FREEWIN:-0}" -gt 0 ] 2>/dev/null || return 1
+  FREEWIN_RUNG="below-floor"
   [ "$used" -ge "$T_FREEWIN" ] 2>/dev/null || return 1
   local c w r
   c="$(jq -r '.cwd // empty' "$tel" 2>/dev/null || true)"
+  FREEWIN_RUNG="no-cwd"
   { [ -n "$c" ] && [ -d "$c" ]; } || return 1
   # `_bscd` is this hook's own resolved dir (:103). Deliberately NOT a bare $SCRIPT_DIR — that name
   # does not exist in this script, and under `set -u` referencing it would abort the hook.
   for w in "${_bscd:-}/../scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
     [ -f "$w" ] && break || w=""
   done
+  FREEWIN_RUNG="no-ledger"
   [ -n "$w" ] || return 1
   r="$( cd "$c" 2>/dev/null && bash "$w" --machine 2>/dev/null | grep -E '^RUNG=' | head -1 | cut -d= -f2- )"
+  # An EMPTY read is "the ledger did not answer", not "the ledger said no" — keep them apart, or a
+  # broken wrap-ledger would be filed forever as a fleet of legitimately-busy sessions.
+  FREEWIN_RUNG="${r:-no-answer}"
   [ "$r" = "✅" ]
 }
 
-early=0
+early=0; freewin=0
 if [ "$used" -lt "$T" ]; then
   if [ "$used" -ge "$T_MIN" ] && [ "$forecast_min" -ge 0 ] && [ "$forecast_min" -le "$LEAD_MIN" ]; then
     early=1
@@ -287,9 +319,9 @@ if [ "$used" -lt "$T" ]; then
     :   # the SIZE axis carries the fire on its own — no fill floor applies, because fill is the metric
         # that is blind here (a compacted giant sits at low used_pct BY CONSTRUCTION).
   elif free_win_now; then
-    early=1   # see free_win_now() — the ✅-ledger free-win arm
+    freewin=1   # see free_win_now() — the ✅-ledger free-win arm, its OWN axis (never `early`)
   else
-    abstain "below-threshold:${used}<${T}"
+    abstain "below-threshold:${used}<${T};freewin=${FREEWIN_RUNG}"
   fi
 fi
 
@@ -380,12 +412,27 @@ if [ -f "$latch" ]; then
   [ "$rearm" = 1 ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA};tx=${tx_mb}MB,last_tx=${last_tx}MB,need=+${SIZE_REARM_MB}MB"
 fi
 
-# ── context-econ: is an exchange in flight? (wording only — never suppression; see header) ──
+# ── context-econ: is an exchange in flight? (wording at the URGENT tiers; SUPPRESSION at the free-win
+#    tier — see the S6 block just below) ──
 conv_age=""
 if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$tp" ]; then
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -f "$tp" ] && conv_age="$(ce_last_interactive_age "$tp")"
   case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
+fi
+
+# ── S6 CONVERSATION-HOLD — the ONE tier where an exchange in flight SUPPRESSES rather than re-words ──
+# At ≥73% (and on the forecast/size axes) the advisory must survive a live exchange: the wall is coming
+# whether or not the operator is mid-sentence, so it fires and tells the model to finish + persist FIRST.
+# The free-win tier is the opposite case and needs the opposite treatment. Nothing is urgent there — the
+# whole claim is "this recycle is FREE" — and CLAUDE.md § Context Stewardship rules an in-flight exchange
+# a ⏸ HOLD: "the context IS the asset … do NOT cut it." Firing anyway would emit a recycle advisory whose
+# own appended sentence tells the model not to act on it, which is not advice, and it would also burn the
+# latch: a stamped latch silences the next +10% of fill, so one badly-timed fire during a conversation
+# costs the genuinely-idle boundary that follows it. Suppressing keeps the arm armed for that boundary.
+# Placed BEFORE the latch stamp for exactly that reason.
+if [ "$freewin" = 1 ] && [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
+  abstain "freewin-conversation-hold:${conv_age}s<${CONV_S}s"
 fi
 
 # ── FIRE — record the fill AND the size at fire-time (both re-arm baselines), log, then advise ──
@@ -400,15 +447,18 @@ size_fired=0; { [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; } && [ "$used" -lt 
 # produce, and it carries the window so the fill is interpretable later (the row's core defect).
 command -v ce_record_recycle >/dev/null 2>&1 && \
   ce_record_recycle "$tel" advised "$used" \
-    "$(if [ "$size_fired" = 1 ]; then printf 'size'; elif [ "$early" = 1 ]; then printf 'forecast'; else printf 'fill'; fi)" \
+    "$(if [ "$size_fired" = 1 ]; then printf 'size'; elif [ "$early" = 1 ]; then printf 'forecast'
+       elif [ "$freewin" = 1 ]; then printf 'freewin'; else printf 'fill'; fi)" \
     "boundary" || true
 log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
       --argjson osz "$over_size" --argjson orss "$over_rss" --argjson sf "$size_fired" \
+      --argjson fw "$freewin" --arg fwr "$FREEWIN_RUNG" \
       --arg gate "$gate_state" \
       '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
-        over_size:($osz==1),over_rss:($orss==1),gate_green:$gate,axis:(if $sf==1 then "size" elif $early==1 then "forecast" else "fill" end)}')"
+        over_size:($osz==1),over_rss:($orss==1),gate_green:$gate,freewin:($fw==1),freewin_rung:$fwr,
+        axis:(if $sf==1 then "size" elif $early==1 then "forecast" elif $fw==1 then "freewin" else "fill" end)}')"
 if [ "$size_fired" = 1 ]; then
   if [ "$over_size" = 1 ] && [ "$over_rss" = 1 ]; then why="this session is OVERSIZE on both axes — transcript ${tx_mb}MB (≥ ${SIZE_MB}MB) and process RSS ${rss_mb}MB (≥ ${RSS_MB}MB) — at only ${used}% context"
   elif [ "$over_size" = 1 ];                        then why="this session's TRANSCRIPT is ${tx_mb}MB (≥ ${SIZE_MB}MB) at only ${used}% context — a size problem your context fill cannot show you"
@@ -416,11 +466,19 @@ if [ "$size_fired" = 1 ]; then
   fi
 elif [ "$early" = 1 ]; then
   why="context ${used}% BURNING toward the ${CC_CE_WALL:-88}% auto-compact wall — forecast ≤${forecast_min}min at the observed rate"
+elif [ "$freewin" = 1 ]; then
+  why="context ${used}% (≥ ${T_FREEWIN}%) at an IDLE boundary the ledger reads ✅ — clean, landed, no DoD remainder, no operator step outstanding"
 else
   why="context ${used}% ≥ ${T}%"
 fi
 if [ "$size_fired" = 1 ]; then
   reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+elif [ "$freewin" = 1 ]; then
+  # The FREE-WIN wording, deliberately not the forced-drain wording. Nothing here is urgent and nothing
+  # is at risk — that is the whole point, and a drain framing ("before auto-compaction") would both
+  # misstate the cause and read as alarming at 40% fill. It names the ONE command, per CLAUDE.md's
+  # ♻️ Recycle row: same pane, fresh context, because everything of value is already on disk.
+  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: recycle now with \`handoff-fire.sh --recycle\`. (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 else
   reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 fi
