@@ -121,14 +121,16 @@ would be argued out of the finding.
 🚨 **The finding that changes how W1 should have been scoped: "nobody ever fixed it" is not evidence
 a file is sound.** Clean briefs were first selected on the only mechanical basis available — zero
 subsequent commits to the path. Candidates were then put through an independent adversarial pass over
-the same defect classes the corpus scores. **Eleven of thirteen were convicted** — several on scored
-classes, one on a defect already sitting in this repo's own red-team notes as an open MED-HIGH
-finding, and one on an argument-parsing bug that spins forever at 100% CPU on a documented flag. Two
-further candidates were rejected for **disclosure** rather than defects: both were post-fix twins of
-`cp-01`, one narrating `cp-01`'s defect outright in its own comments and the other sharing its
-subject matter, either of which would prime that brief in a single-context run.
+the same defect classes the corpus scores. **Twelve were screened and nine were convicted** — several
+on scored classes, one on a defect already sitting in this repo's own red-team notes as an open
+MED-HIGH finding, and one on an argument-parsing bug that spins forever at 100% CPU on a documented
+flag. Two further candidates were rejected for **disclosure** rather than defects, before screening:
+both were post-fix twins of `cp-01`, one narrating `cp-01`'s defect outright in its own comments and
+the other sharing its subject matter, either of which would prime that brief in a single-context run.
 
-The two survivors are `scripts/pool-floor.sh` (`cp-03`) and `tests/pane-modal.bats` (`cp-07`). The
+The three survivors are `scripts/pool-floor.sh` (→ `cp-03`), `tests/pane-modal.bats` (→ `cp-07`) and
+`tests/origin-identity.bats`, which arrived after the corpus was fixed and is held as a **vetted
+alternate** should either seat be challenged in W3. The
 surviving basis for `clean` is therefore **screened and not convicted**, recorded per record in
 `screen`, and a screen only clears a candidate if it *executed* rather than reasoned — both survivors
 were cleared by running the subject against real data and independently reimplementing the thing
@@ -136,9 +138,16 @@ under test. `cp-03` additionally carries a `known_findings_not_scored` entry: th
 real-but-inert imprecision, with an explicit instruction that an arm reporting it must be CREDITED,
 not scored as a false positive.
 
-Consequence for W3, and it is not a footnote: at an 11-in-13 base rate, a model reporting a defect on
-a clean brief may well be **right**. The judge must adjudicate every such finding against the code
+Consequence for W3, and it is not a footnote: at a 9-in-12 base rate, a model reporting a defect on a
+clean brief may well be **right**. The judge must adjudicate every such finding against the code
 rather than trust the label.
+
+*(Screening also produced nine unlogged real defects in live infrastructure as a by-product —
+including a `--trunk`/`--keep`/`--restore` argument spin in `scripts/branch-reaper.sh`, a memo salt in
+`scripts/lib/gate-memo.sh` that omits `.shellcheckrc` and so can carry a green earned under looser
+policy, and a swallowed `git diff` failure in `hooks/lib/session-writes.sh` that flips a close gate
+fail-GREEN. Reports are in this session's scratchpad. They are out of W1's scope and are NOT filed by
+this plan — someone should triage them.)*
 
 **Two run-time requirements W2 must honour, or the controls collapse.** (a) An arm gets the brief and
 nothing else — no repo, no tools, no network; an arm that can `git log` the subject finds the fix.
