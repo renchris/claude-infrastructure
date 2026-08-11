@@ -122,11 +122,28 @@
 # <sid>` can recover only own-drops. ship-land stamps land.log with the sid (a
 # post-hoc commit trailer is impossible), and adds the trailer to any commit IT makes.
 #
-# land.log schema (growth is safe — its only reader is a raw tail): `gate_scope` now carries the
-# LANE ("fast"|"v1"), plus smoke:"green|red|partial|skipped|none", smoke_n, smoke_s, and
-# net:"live|inert|none". The verifier's liveness is ATTESTED, never a control-flow input: a land
-# that cannot see a live net WARNS and lands anyway — degrading to a corpus is precisely the
-# fail-closed-amplifier class v2 exists to delete (R7).
+# land.log schema (growth is safe — the readers select by key): `gate_scope` carries the LANE
+# ("fast"|"v1"), plus smoke, smoke_n, smoke_s, and net:"live|inert|none". The verifier's liveness is
+# ATTESTED, never a control-flow input: a land that cannot see a live net WARNS and lands anyway —
+# degrading to a corpus is precisely the fail-closed-amplifier class v2 exists to delete (R7).
+#
+# P0 (land-architecture-100p §5 P0) added the fields that let the pipeline answer questions about
+# ITSELF, and every one of them exists because a question the acceptance criteria ASK was
+# unanswerable from this store:
+#   stage:"land"|"round"  a terminal outcome, or an internal stale-gate re-round. ABSENT ⇒ "land",
+#                         which is what every pre-P0 row is and what every rate already assumed.
+#   total_s               END-TO-END wall seconds. v2's "land latency p50 ≤ 30s" names this store
+#                         and there was no duration in it; the criterion could not be checked.
+#   gate_rounds · gate_s · gate_arms_s · gate_statics_s
+#                         how many gates this land ran and where the seconds went. Split because
+#                         §5.P3 measured the ratchet arms at ~112s of a 127-137s re-round — one
+#                         opaque total cannot separate "re-gated three times" from "the remote hung".
+#   smoke:"green|red|partial|skipped|none-<cause>"
+#                         `none` was FIVE causes in one token (six, once the gate-died-first case is
+#                         counted) over 83% of lands. See run_smoke for the enumeration.
+# Every terminal exit now writes a row — exits 2/4/7/42 and the in-lock fallback's 6 wrote none, so
+# a land could die in five ways that left the instrument reading "never attempted" (see
+# _land_exit_trap). Census renderer: scripts/gate-red-census.sh.
 #
 # UNION SCOPE survives: a stale-gate re-round hands the selector a SECOND range
 # (FIRST_BASE..new base) so the smoke covers what siblings landed while we gated — the composed
@@ -196,10 +213,12 @@ GATE_SELECT="${SHIP_LAND_GATE_SELECT:-${SCRIPT_DIR}/gate-select.sh}"
 # full-corpus gate for one release — an ENV switch, not a revert, because a revert would itself
 # need the gate (the bootstrap deadlock this plan exists to escape).
 LANE="${SHIP_LAND_LANE:-fast}"
-case "$LANE" in
-  fast|v1) ;;
-  *) echo "✗ ship-land: unknown SHIP_LAND_LANE '$LANE' (want fast|v1)" >&2; exit 2 ;;
-esac
+# THE REFUSAL IS DEFERRED TO DISPATCH (validate_lane_scope, called from the dispatch block at the
+# foot of this file) — the VALUE is still bound here, where every function below expects it. It used
+# to `exit 2` inline, at a line that runs before the traps are installed and before attest_land is
+# even defined, so the one exit code an operator can trigger by typo was structurally incapable of
+# attesting (P0 §2.B). Deferring the check costs nothing: nothing between here and dispatch acts on
+# the value, and both entry points validate before doing any work.
 
 # ---- gate scope (committed policy file; env always wins) --------------------
 # BACK-COMPAT ONLY in v2, and deliberately INERT: the scope machinery chose between
@@ -213,10 +232,18 @@ GATE_POLICY="${SHIP_LAND_GATE_POLICY:-${SCRIPT_DIR}/gate-policy.sh}"
 # shellcheck source=/dev/null
 [[ -r "$GATE_POLICY" ]] && . "$GATE_POLICY"
 SCOPE="${SHIP_LAND_GATE_SCOPE:-${SHIP_LAND_GATE_SCOPE_DEFAULT:-full}}"
-case "$SCOPE" in
-  full|scoped|shadow) ;;
-  *) echo "✗ ship-land: unknown SHIP_LAND_GATE_SCOPE '$SCOPE' (want full|scoped|shadow)" >&2; exit 2 ;;
-esac
+# Deferred to validate_lane_scope for the same reason as LANE above — the refusal is unchanged in
+# effect (same message, same exit 2, before any work), it just now happens where it can attest.
+validate_lane_scope() {
+  case "$LANE" in
+    fast|v1) ;;
+    *) echo "✗ ship-land: unknown SHIP_LAND_LANE '$LANE' (want fast|v1)" >&2; exit 2 ;;
+  esac
+  case "$SCOPE" in
+    full|scoped|shadow) ;;
+    *) echo "✗ ship-land: unknown SHIP_LAND_GATE_SCOPE '$SCOPE' (want full|scoped|shadow)" >&2; exit 2 ;;
+  esac
+}
 # What the gate ACTUALLY did. Seeded from the env because the locked phase is a separate
 # process (re-exec'd under land-lock) that, in CAS mode, does not re-run the gate — without the
 # handoff its land.log line would understate the run as n/a. INTERNAL vars, not a UI.
@@ -277,11 +304,58 @@ gate_red() {  # $1=arm  [$2=subject: the file/suite it named] — raise GATE_RED
 }
 
 # ---- SMOKE + NET state (attested, seeded across the locked re-exec like SELECTED_N) ---------
-SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"   # green | red | partial | skipped | none
+# SMOKE_STATE is green | red | partial | skipped | none-<cause>. The bare `none` survives ONLY as
+# the pre-P0 legacy value and as the value no code path claims — see the none-* block in run_smoke.
+SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"
 SMOKE_N="${SHIP_LAND_SMOKE_N:-0}"              # direct suites the smoke actually RAN
 SMOKE_S="${SHIP_LAND_SMOKE_S:-0}"              # wall seconds the smoke spent
 NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | inert | none — ATTESTED, never enforced
 SMOKE_DEADLINE=""                              # non-empty ⇒ gate_bats bounds every child by it
+
+# ---- P0: THE PIPELINE MEASURES ITSELF ---------------------------------------
+# (land-architecture-100p-2026-08-10 §5 P0 / §2.B.) v2's own acceptance criterion — "land latency
+# p50 ≤ 30s, p99 ≤ 3 min" — names land.log as the artifact to read it from, and land.log carried NO
+# END-TO-END DURATION FIELD. The criterion was structurally unverifiable from the instrument it
+# nominates, so the acceptance read was prose in both directions: the published hold figures
+# (README "5-15s", ship.md "84-302s") contradicted each other AND the store, and neither could be
+# refuted by anything cheaper than an investigation.
+#
+# THREE FIELDS, and the split is the point. `total_s` alone would be one opaque number over a
+# pipeline whose cost is known to be concentrated: §5.P3 measured the fifteen ratchet arms at ~112s
+# of a 127-137s re-round, so a land that is slow because it re-gated three times is a different
+# animal from one that is slow because the remote hung, and a total cannot tell them apart.
+#   total_s      wall seconds from the OUTER process's first line to this row. Survives the locked
+#                re-exec via SHIP_LAND_T0, so it is end-to-end and not per-process.
+#   gate_rounds  how many times run_gate ran for this land — the CAS re-round counter, made visible.
+#   gate_s       cumulative wall seconds inside run_gate, of which:
+#   gate_arms_s  the fifteen ratchet arms (the dominant term, per §5.P3), and
+#   gate_statics_s  shellcheck / bash -n / py_compile (the ~2% the P3 memo already retired).
+#
+# COST INSIDE THE MUTEX: two date(1) forks per gate call and one per attest, all outside the lock
+# except the attest itself — which already forked `date -u` before this existed. P1 spent a whole
+# session emptying this mutex; an instrument that re-filled it would have destroyed its own subject.
+LAND_T0="${SHIP_LAND_T0:-}"
+[[ -z "$LAND_T0" ]] && LAND_T0="$(date +%s)"
+MEAS_ROUNDS="${SHIP_LAND_MEAS_ROUNDS:-0}"
+MEAS_GATE_S="${SHIP_LAND_MEAS_GATE_S:-0}"
+MEAS_ARMS_S="${SHIP_LAND_MEAS_ARMS_S:-0}"
+MEAS_STATICS_S="${SHIP_LAND_MEAS_STATICS_S:-0}"
+GATE_T0=""              # non-empty ⇒ a gate is OPEN (run_gate was entered and has not closed)
+GATE_T_STATICS_END=""   # set at the statics/arms boundary inside run_gate
+GATE_T_ARMS_END=""      # set at the arms/smoke boundary inside run_gate
+
+# ---- P0: the attest latch, and who is entitled to write a row ---------------
+# ATTESTED is what makes "attest every terminal exit" expressible as ONE mechanism instead of a
+# call bolted onto each of the fourteen `exit` sites: the EXIT trap attests whatever nobody else
+# did, and this latch is how it knows. ATTEST_SUPPRESS is the other direction — a row that must
+# NOT be written because someone else already wrote THIS outcome (the locked child) or because the
+# invocation is not a land at all (the precheck, whose contract is that it writes no land.log row).
+ATTESTED=0
+ATTEST_SUPPRESS=0
+# A --precheck invocation is suppressed from its FIRST line, not from main_precheck: the LANE/SCOPE
+# refusals and main_outer's own arg-parse refusals fire before that function is reached, and a
+# precheck that mistyped a flag must not mint a land.log row for a land that never started.
+case " $* " in *' --precheck '*) ATTEST_SUPPRESS=1 ;; esac
 
 # ---- bounding every child of the smoke -------------------------------------
 # R5: every step bounded by an ABSOLUTE-PATH timeout(1), and the bound must cover the failure mode
@@ -543,11 +617,47 @@ attest_refs() {  # $1=base — pin the gated/landed IDENTITY for the next attest
   ATTEST_TREE="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo '?')"
 }
 
-attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log line
+gate_meas_close() {  # close an OPEN gate measurement — idempotent, and safe to call from anywhere
+  # The fifteen ratchet arms `return 1` straight out of run_gate (fail-fast, deliberately), so the
+  # arms and the whole-gate timers cannot be closed at the bottom of that function alone. They are
+  # closed HERE instead, from run_gate's own tail on the green path and from attest_land on every
+  # red — which is exact, because a gate red always attests before it exits. An unclosed gate is
+  # therefore impossible to attest, rather than silently attesting 0.
+  [[ -n "${GATE_T0:-}" ]] || return 0
+  local now; now="$(date +%s)"
+  local se="${GATE_T_STATICS_END:-$now}" ae="${GATE_T_ARMS_END:-}"
+  # Died inside the arms ⇒ the arms ran until now. Died inside the statics ⇒ both boundaries are
+  # `now`, so arms_s adds 0 and statics_s carries the whole span. Neither case invents a phase.
+  [[ -z "$ae" ]] && ae="$now"
+  MEAS_GATE_S=$(( MEAS_GATE_S + now - GATE_T0 ))
+  MEAS_STATICS_S=$(( MEAS_STATICS_S + se - GATE_T0 ))
+  MEAS_ARMS_S=$(( MEAS_ARMS_S + ae - se ))
+  GATE_T0=""; GATE_T_STATICS_END=""; GATE_T_ARMS_END=""
+  return 0
+}
+
+attest_land() {  # $1=verify $2=sweep $3=esc $4=exit [$5=stage: land|round] — self-attesting line
   # Schema GROWTH is safe: land.log's only reader is a raw tail. head/base/tree make a line
   # replayable (which tree was gated); gate_scope now carries the LANE, and smoke/smoke_n/smoke_s
   # + net make "what did this land actually prove, and was the net alive to prove the rest?"
   # answerable per land — the §7 acceptance read (p50/p99, zero exit-9) comes from exactly here.
+  #
+  # THE PRECHECK MAY NEVER REACH THIS (P2's contract: a precheck is not a land attempt, and counting
+  # it as one poisons the denominator the census reports). Enforced here rather than at the call
+  # sites, because P0 added a call site — the EXIT trap — that fires on paths nobody enumerated.
+  [[ "${ATTEST_SUPPRESS:-0}" = "1" ]] && return 0
+  gate_meas_close
+  # REPO_ROOT / BRANCH are set by main_outer and main_locked, and the P0 trap attests from paths
+  # that run BEFORE either — the LANE/SCOPE refusal, most of all. Under `set -u` an unset one does
+  # not degrade the row, it KILLS the handler mid-printf and the exit attests nothing at all: the
+  # instrument's own blast radius exceeding itself, in the one arm added to widen coverage
+  # (memory: addon-failure-exceeds-its-blast-radius). Resolved lazily and only when missing, so the
+  # hot path pays nothing and the cold path still names which repo and branch died.
+  if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')}"
+  fi
+  BRANCH="${BRANCH:-?}"
   local log; log="${LAND_LOG:-$HOME/.claude/land.log}"
   mkdir -p "$(dirname "$log")" 2>/dev/null || true
   # `red` has THREE states and they must never collapse into two (memory:
@@ -557,12 +667,34 @@ attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log
   # instrument, not the tree — so a reader can subtract it instead of miscounting it as a cause.
   local red=""
   [[ "${GATE_RED:-0}" = "1" ]] && red="${GATE_RED_WHY:-unattributed}"
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s"}\n' \
+  # `stage` is what stops the new exit-42 row from silently moving the gate-red denominator. A
+  # stale-gate re-round is an INTERNAL signal — the same land continues — so it is one land.log row
+  # per ROUND, not per attempt, and a rate computed over "every ship-land row" would now be diluted
+  # by however many times siblings happened to move the trunk. `land` (the default, and the value
+  # every legacy row is read as) = a terminal outcome of the whole invocation. Consumers key on
+  # ABSENT-or-`land`, so no reader had to change to keep its old answer (memory:
+  # new-enum-member-falls-into-fail-closed-default).
+  local stage="${5:-land}"
+  local total_s=$(( $(date +%s) - LAND_T0 ))
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"stage":"%s","head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
-    "$1" "$2" "$3" "$4" \
+    "$1" "$2" "$3" "$4" "$stage" \
     "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${LANE}" "${SELECTED_N:--1}" \
     "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" "${red}" \
+    "$total_s" "${MEAS_ROUNDS:-0}" "${MEAS_GATE_S:-0}" "${MEAS_ARMS_S:-0}" "${MEAS_STATICS_S:-0}" \
     >> "$log" 2>/dev/null || true
+  ATTESTED=1
+  # THE CROSS-PROCESS HALF OF THE LATCH. The locked phase is a separate process behind land-lock, so
+  # its ATTESTED cannot be seen by the outer that will propagate its exit code — and the outer's own
+  # EXIT trap would then write a SECOND row for the same outcome. A file, because that is the only
+  # channel two processes share here, and keyed on the outer's pid like the post-state handover it
+  # sits beside. Absent marker ⇒ the outer attests, which is the right answer for the cases where
+  # nobody could have: land-lock's own exit 75 (the lock was never acquired, so the child never ran)
+  # and an untrappable SIGKILL of the child.
+  if [[ "${LIFECYCLE_ROLE:-}" = "locked" && -n "${SHIP_LAND_POST_STATE:-}" ]]; then
+    : > "${SHIP_LAND_POST_STATE}.attested" 2>/dev/null || true
+  fi
+  return 0
 }
 
 rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never exits on a wedged tree.
@@ -719,6 +851,32 @@ _land_exit_trap() {
   # any second one "must compose with this". This IS that composition — one EXIT handler, teardown
   # first (it is idempotent and refuses to remove anything it did not create), lifecycle second.
   gate_home_teardown
+  # ---- P0: ATTEST EVERY TERMINAL EXIT ----------------------------------------
+  # (§2.B: "exits 2/4/7/42 and the in-lock fallback's exit-6 write no attestation row".) Measured on
+  # the live store the day this landed: 14 days of ship-land rows carry ONLY exits 0, 3, 6 and 143 —
+  # five ways for a land to die left the ledger reading as though the land had never been attempted,
+  # which is the same blindness P4 removed for signalled deaths.
+  #
+  # HERE, not at the exit sites, and for the same reason P4 put the signal verdict in a trap: there
+  # are fourteen `exit` statements across two roles, the set grows, and a rule enforced at each site
+  # is a rule the next author does not know about. The trap is the one place every terminal exit
+  # passes through. It is deliberately NARROW — non-zero only. A zero exit either already attested
+  # (the landed path) or is a "nothing to land" / `--dry-run` no-op, and minting a success row for
+  # those would inflate the very denominator this work exists to make readable.
+  #
+  # FAILS NO WIDER THAN ITSELF (memory: addon-failure-exceeds-its-blast-radius): attest_land's write
+  # is `|| true`, the latch is a variable, and this arm cannot change `rc` — an instrument that
+  # could fail a land would be worse than the blindness it replaces.
+  # ONE EXCEPTION, and it is the exit that is not an outcome: 42 is the locked child's INTERNAL
+  # stale-gate signal to the outer loop, which owns that row and writes it as stage:"round" with the
+  # mutex already released. Left to this trap the child would write a stage:"land" row for a land
+  # that is still running — a phantom terminal outcome, and one that would land in every rate's
+  # denominator. Only the locked role is exempted, because 42 never escapes ship-land: if it ever
+  # reached the outer as a terminal code, that WOULD be an outcome and should attest as one.
+  if [[ "$rc" -ne 0 && "${ATTESTED:-0}" != "1" ]] \
+     && ! { [[ "$rc" -eq 42 && "$LIFECYCLE_ROLE" = "locked" ]]; }; then
+    attest_land "n/a" "n/a" "n/a" "$rc"
+  fi
   if [[ "$LIFECYCLE_ROLE" = "outer" ]]; then
     [[ "$rc" -ne 0 ]] && land_failure_inbox "$rc" "exit"
     inflight_release
@@ -758,6 +916,29 @@ post_state_path() {  # $1=key — inside the git dir: never the worktree, never 
   printf '%s/ship-land-post-%s' "$gc" "$1"
 }
 
+meas_export() {  # P0: carry the measurement across the locked re-exec, like the SMOKE_* handover
+  # T0 is the load-bearing one: without it the child's `total_s` would restart at its own first
+  # line and report the LOCKED phase's duration under a field named end-to-end — a number that is
+  # not wrong so much as answering a different question, which is the failure mode this whole item
+  # exists to remove.
+  export SHIP_LAND_T0="$LAND_T0" \
+         SHIP_LAND_MEAS_ROUNDS="$MEAS_ROUNDS" SHIP_LAND_MEAS_GATE_S="$MEAS_GATE_S" \
+         SHIP_LAND_MEAS_ARMS_S="$MEAS_ARMS_S" SHIP_LAND_MEAS_STATICS_S="$MEAS_STATICS_S"
+}
+
+child_attested_absorb() {  # the cross-process half of the attest latch — see attest_land
+  # The child writes this marker whenever IT attested, so the outer's EXIT trap does not write a
+  # second row for one outcome. Absence is meaningful and is the safe direction: land-lock's own
+  # exit 75 (never acquired ⇒ the child never ran) and an untrappable SIGKILL of the child both
+  # leave no marker, and both are outcomes that would otherwise attest NOTHING at all.
+  [[ -n "${SHIP_LAND_POST_STATE:-}" ]] || return 0
+  if [[ -f "${SHIP_LAND_POST_STATE}.attested" ]]; then
+    rm -f "${SHIP_LAND_POST_STATE}.attested" 2>/dev/null || true
+    ATTESTED=1
+  fi
+  return 0
+}
+
 post_state_write() {  # $1=landed_head — the locked child's entire handover
   local f="${SHIP_LAND_POST_STATE:-}"
   [[ -n "$f" ]] || return 0
@@ -774,6 +955,13 @@ post_state_write() {  # $1=landed_head — the locked child's entire handover
     printf 'NET_STATE=%s\n'    "${NET_STATE:-none}"
     printf 'GATE_RED=%s\n'     "${GATE_RED:-0}"
     printf 'GATE_RED_WHY=%s\n' "${GATE_RED_WHY:-}"
+    # P0: the fallback lane gates INSIDE the child, so these are the child's alone — the same
+    # reason SMOKE_* is here. An outer that re-derived them from its own globals would attest a
+    # gate_rounds one short and a gate_s that excludes the only round that ran.
+    printf 'MEAS_ROUNDS=%s\n'     "${MEAS_ROUNDS:-0}"
+    printf 'MEAS_GATE_S=%s\n'     "${MEAS_GATE_S:-0}"
+    printf 'MEAS_ARMS_S=%s\n'     "${MEAS_ARMS_S:-0}"
+    printf 'MEAS_STATICS_S=%s\n'  "${MEAS_STATICS_S:-0}"
   } > "$f" 2>/dev/null || true
 }
 
@@ -795,6 +983,10 @@ post_state_read() {  # $1=file — one explicit arm per key: no `eval`, so a cor
       NET_STATE)    NET_STATE="$v"    ;;
       GATE_RED)     GATE_RED="$v"     ;;
       GATE_RED_WHY) GATE_RED_WHY="$v" ;;
+      MEAS_ROUNDS)     MEAS_ROUNDS="$v"     ;;
+      MEAS_GATE_S)     MEAS_GATE_S="$v"     ;;
+      MEAS_ARMS_S)     MEAS_ARMS_S="$v"     ;;
+      MEAS_STATICS_S)  MEAS_STATICS_S="$v"  ;;
     esac
   done < "$1"
 }
@@ -1344,21 +1536,46 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
   local range="$1" direct budget start f n=0 red=0 cut=0 srv
   local -a redf=()          # the direct suites that named a failure — attested, not just counted
-  SMOKE_STATE="none"; SMOKE_N=0; SMOKE_S=0; SMOKE_DEADLINE=""
+  # ---- P0 §3: `none` WAS FIVE CAUSES WEARING ONE TOKEN ------------------------------------------
+  # (§2.B.) 83% of lands execute no test of their own diff, and until now the ledger could not say
+  # WHY for any of them — a load-shed land, a lint-only land, a land whose selector was missing, and
+  # a land whose gate died before the smoke all attested the identical `none`. So the single largest
+  # coverage fact about this pipeline was unbreakdownable, and "83% ungated" could not be argued
+  # about: it pooled a deliberate cheap path with an instrument outage. Each cause is now its own
+  # token, all sharing the `none-` prefix so a reader can still ask the pooled question in one match
+  # (memory: sensor-default-off-makes-blindness-the-shipping-path — one value serving two questions
+  # is how a blind sensor becomes the shipping path).
+  #
+  #   none-unreached   a statics/ratchet arm went red first — the gate never reached the smoke
+  #   none-nosuites    the repo has no tests/*.bats at all
+  #   none-locked      the in-lock fallback lane: bats is structurally banned under the mutex
+  #   none-precheck    --precheck scope (never reaches land.log; the precheck writes no row)
+  #   none-noselector  gate-select.sh missing / not executable
+  #   none-undecided   the selector answered FULL, its fail-closed "I cannot decide"
+  #   none-nodirect    0 direct suites map to this range after the host-suite filter (lint-only)
+  #
+  # `skipped` (load-shed) already had its own token and keeps it — it was never part of the
+  # conflation, and re-spelling it would break every reader for no gain.
+  SMOKE_STATE="none-nosuites"; SMOKE_N=0; SMOKE_S=0; SMOKE_DEADLINE=""
   ls tests/*.bats >/dev/null 2>&1 || return 0
 
   # STRUCTURAL: nothing heavy may EVER run under the land-lock. Not a policy an author can forget —
   # the check lives here, at the only place that could start a suite. v1's in-lock full gate is the
   # 3h36m lock holder and the multi-day jam; the lock exists for the CAS race window alone.
   if [[ "$IN_LAND_LOCK" = "1" ]]; then
+    SMOKE_STATE="none-locked"
     echo "→ gate[locked]: statics + ratchets only — no bats inside the land-lock (v2 invariant)." >&2
     return 0
   fi
   # The precheck's declared scope (see the header): statics + all fifteen ratchet arms, no smoke.
   # Stated as its own branch and its own message so a precheck can never be mistaken, in a log or
-  # by a reader, for a land that happened to select zero suites — SMOKE_STATE stays "none" for both
-  # and only this line distinguishes them.
+  # by a reader, for a land that happened to select zero suites. It now also has its own TOKEN — the
+  # comment used to say "SMOKE_STATE stays none for both and only this line distinguishes them",
+  # i.e. the distinction lived in a stderr line nobody stores. A precheck writes no land.log row, so
+  # the token is unreachable from the store; it is set anyway so the two states differ in the
+  # variable as well as in the message, which is what a later reader will actually check.
   if [[ "$GATE_PRECHECK" = "1" ]]; then
+    SMOKE_STATE="none-precheck"
     echo "→ gate[precheck]: statics + ratchets only — the smoke phase is the land's, not the precheck's." >&2
     return 0
   fi
@@ -1368,6 +1585,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     # proof" IS the amplifier: the selector is missing exactly on the live-symlink path where a
     # brand-new tracked file has no symlink yet, i.e. on the busiest boxes. No selection ⇒ no
     # smoke; the verifier still proves the tree, and the land is not punished for a deploy gap.
+    SMOKE_STATE="none-noselector"
     echo "⚠ gate: selector '$GATE_SELECT' missing/not executable — no smoke this land; the post-land verifier proves this tree." >&2
     return 0
   fi
@@ -1375,6 +1593,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   if [[ "$direct" = "FULL" ]]; then
     # FULL is the selector's own fail-closed answer ("I could not decide"). It can no longer mean
     # "run everything", so its honest v2 reading is "this selection is untrustworthy" ⇒ no smoke.
+    SMOKE_STATE="none-undecided"
     echo "⚠ gate: selector answered FULL (its fail-closed 'cannot decide') — no direct-suite smoke this land; the verifier proves the tree." >&2
     return 0
   fi
@@ -1384,6 +1603,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # rather than a separate one.
   direct="$(filter_host_suites "$direct" | grep -v '^[[:space:]]*$' || true)"
   if [[ -z "$direct" ]]; then
+    SMOKE_STATE="none-nodirect"
     echo "→ gate: smoke — 0 direct suite(s) map to this range (lint-only land)." >&2
     return 0
   fi
@@ -1706,6 +1926,19 @@ run_gate() {  # $1=range → 0 green / 1 red
   # the exit-42 stale-gate round, and a why that outlived its flag would attest round 1's arm against
   # round 2's verdict — attribution that is worse than none, because it reads as evidence.
   GATE_EFFECTIVE_FULL=0; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0; GATE_RED_WHY=""
+  # ---- P0: open the round's measurement ----------------------------------------------------
+  # Incremented HERE rather than in the optimistic loop, because the loop is not the only thing that
+  # re-gates: the in-lock fallback gates once more in a different process, and the post-drop retry
+  # loop gates again inside the lock. `gate_rounds` must count what actually RAN, so it counts
+  # entries to this function and carries across the locked re-exec like SMOKE_* does.
+  GATE_T0="$(date +%s)"; GATE_T_STATICS_END=""; GATE_T_ARMS_END=""
+  MEAS_ROUNDS=$(( MEAS_ROUNDS + 1 ))
+  # THE DEFAULT SMOKE CAUSE IS "the gate never got there", and it must be set at the TOP. Fifteen
+  # ratchet arms `return 1` before the smoke phase, and every one of them used to attest the same
+  # `smoke:"none"` a lint-only land attests — 305 of the 735 `none` rows in the live store are
+  # exit-6 rows, i.e. lands whose gate died before the smoke could have a cause at all. That is a
+  # sixth cause the audit's five did not name, and it is the second largest.
+  SMOKE_STATE="none-unreached"
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
@@ -1775,6 +2008,9 @@ run_gate() {  # $1=range → 0 green / 1 red
   memo_count $(( ${#shellfiles[@]} * 2 + ${#pyfiles[@]} - ${#sc_todo[@]} - ${#bn_todo[@]} - ${#py_todo[@]} )) \
              $(( ${#sc_todo[@]} + ${#bn_todo[@]} + ${#py_todo[@]} ))
   memo_summary
+  # P0 phase boundary: everything above is the STATICS (the ~2% P3's memo already retired);
+  # everything below, to the smoke, is the fifteen ratchet ARMS (~112s of a 127-137s re-round).
+  GATE_T_STATICS_END="$(date +%s)"
 
   # ── test-hermeticity ratchet — BEFORE the bats block, in EVERY scope (~1s) ──────────────────
   # The ratchet already existed, but ONLY as tests/test-hermeticity-lint.bats, which made it
@@ -2547,6 +2783,7 @@ run_gate() {  # $1=range → 0 green / 1 red
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —
   # ≤120s on an already-doomed run buys every finding named at once instead of one per round-trip.
   local rbase direct
+  GATE_T_ARMS_END="$(date +%s)"   # P0 phase boundary: the arms are done, the test phase begins
   # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
   # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / post-drop re-gate.
   # Derived from the range so every gate call site gets it for free.
@@ -2562,14 +2799,19 @@ run_gate() {  # $1=range → 0 green / 1 red
       if [[ "$IN_LAND_LOCK" = "1" ]]; then
         # The never-in-lock invariant binds in BOTH lanes. The kill switch restores the v1 PROOF,
         # never the v1 lock pathology (a 3h36m holder while every other lander queued behind it).
+        SMOKE_STATE="none-locked"
         echo "→ gate[v1/locked]: statics + ratchets only — no bats inside the land-lock, in either lane." >&2
       elif [[ "$GATE_PRECHECK" = "1" ]]; then
         # The precheck's scope is lane-independent for the same reason: it is a claim about WHICH
         # PHASE runs, and the v1 kill switch changes only which phase the SMOKE step expands into.
+        SMOKE_STATE="none-precheck"
         echo "→ gate[v1/precheck]: statics + ratchets only — the corpus is the land's, not the precheck's." >&2
       else
         direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
         [[ "$direct" = "FULL" ]] && direct=""   # "cannot decide" ⇒ exonerate nothing is unknown
+        # The v1 kill switch runs the CORPUS, so there is no smoke to have a verdict about. Named
+        # rather than left at the generic none: a v1 row and a lint-only v2 row are different lands.
+        SMOKE_STATE="none-corpus"
         gate_home_setup
         run_corpus "$direct" || rc=1
       fi
@@ -2577,7 +2819,12 @@ run_gate() {  # $1=range → 0 green / 1 red
       run_smoke "$range" || rc=1
       SELECTED_N="$SMOKE_N"
     fi
+  else
+    # No tests/*.bats in this repo at all — a real and reachable cause, and the one that makes the
+    # token set complete: every other `none-*` is a decision, this one is an absence.
+    SMOKE_STATE="none-nosuites"
   fi
+  gate_meas_close
   # Unconditional, and BEFORE the return so it runs on red and on GATE-KILLED alike — the EXIT trap
   # is only the backstop for a mid-gate `exit`. Both are no-ops when isolation fell open.
   gate_home_teardown
@@ -2682,6 +2929,12 @@ main_locked() {
     now_head="$(git rev-parse HEAD 2>/dev/null || echo '?')"
     if [[ "$now_base" != "$GATE_BASE" || "$now_head" != "$GATE_HEAD" ]]; then
       echo "↻ ship-land[locked]: STALE GATE — origin/$TRUNK or HEAD moved during the unlocked gate (base ${GATE_BASE:0:7}→${now_base:0:7}, head ${GATE_HEAD:0:7}→${now_head:0:7}). Releasing the lock; re-reconciling + re-gating the new final tree unlocked." >&2
+      # P0: this exit's row is written by the OUTER process, AFTER the lock is released — see the
+      # `rc == 42` arm of the optimistic loop. Deliberately not here: this is the one exit that
+      # fires while the mutex is held AND is not terminal, it is the hot path (74 stale rounds in
+      # one day on the live box), and P1 spent a session emptying this lock. An instrument that
+      # bought its own visibility with two git forks and a write inside the mutex would be paying
+      # in the exact currency it exists to measure. The outer has every fact the row needs.
       exit 42
     fi
     LAND_BASE="$GATE_BASE"
@@ -2846,6 +3099,7 @@ main_precheck() {  # $1=trunk $2=working(0|1) $3=fetch(0|1)
   trap - TERM HUP INT EXIT
   trap 'gate_home_teardown' EXIT
   LIFECYCLE_ROLE="precheck"
+  ATTEST_SUPPRESS=1   # belt to the argv scan's braces — the contract is "no land.log row", stated twice
   GATE_PRECHECK=1
   IN_LAND_LOCK=0
 
@@ -3057,7 +3311,8 @@ main_outer() {
   # the only leak left: this process killed between the child's write and our read.
   SHIP_LAND_POST_STATE="$(post_state_path "$$")"
   export SHIP_LAND_POST_STATE
-  rm -f "$SHIP_LAND_POST_STATE" 2>/dev/null || true
+  # `.attested` rides the same slot and the same prune (the glob covers it) — see attest_land.
+  rm -f "$SHIP_LAND_POST_STATE" "${SHIP_LAND_POST_STATE}.attested" 2>/dev/null || true
   find "$(dirname "$SHIP_LAND_POST_STATE")" -maxdepth 1 -name 'ship-land-post-*' -mtime +1 -delete 2>/dev/null || true
 
   # --- optimistic rounds: the gate runs UNLOCKED (parallel across sessions); the lock holds
@@ -3076,11 +3331,19 @@ main_outer() {
            SHIP_LAND_FIRST_BASE="$FIRST_BASE" \
            SHIP_LAND_SMOKE_STATE="$SMOKE_STATE" SHIP_LAND_SMOKE_N="$SMOKE_N" \
            SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
+    meas_export
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
     # THE LOCK IS RELEASED THE INSTANT THAT RETURNS. Cleanup + attest run here, unlocked.
+    child_attested_absorb
     if [[ "$rc" -eq 0 ]]; then post_release_finish "$TRUNK"; exit 0; fi
-    [[ "$rc" -ne 42 ]] && exit "$rc"   # a real failure (incl. land-lock's 75) — propagate
+    if [[ "$rc" -ne 42 ]]; then exit "$rc"; fi   # a real failure (incl. land-lock's 75) — propagate
+    # P0: THE STALE-GATE ROUND, ATTESTED — here, with the mutex already released (see the exit-42
+    # site in main_locked for why not there). stage:"round" marks it non-terminal, so it counts in
+    # the staleness census and in NO rate's denominator. ATTESTED is cleared afterwards because the
+    # land is NOT over: the next round's terminal outcome still owes the ledger its own row.
+    attest_land "n/a" "n/a" "n/a" 42 "round"
+    ATTESTED=0
     echo "↻ ship-land: optimistic round ${round}/${ROUNDS} invalidated (sibling land mid-gate) — re-gating the new final tree unlocked." >&2
   done
 
@@ -3094,8 +3357,10 @@ main_outer() {
   # phase, so this lane would have kept the sweep inside the lock — the exact defect, surviving in
   # the one lane that only fires under sustained contention, i.e. when the fleet can least afford
   # an 87s hold. Same handover, same finish, one process deeper.
+  meas_export
   "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
   rc=$?
+  child_attested_absorb
   [[ "$rc" -eq 0 ]] && post_release_finish "$TRUNK"
   exit "$rc"
 }
@@ -3114,7 +3379,9 @@ trap '_land_sig_verdict INT 2'   INT
 if [[ "${1:-}" = "__locked" ]]; then
   shift
   LIFECYCLE_ROLE="locked"
+  validate_lane_scope  # after the traps: an exit 2 here now attests, like every other terminal exit
   main_locked "$@"     # always exits internally
 else
+  validate_lane_scope
   main_outer "$@"      # exec's the locked child, or exits on a preflight refusal
 fi
