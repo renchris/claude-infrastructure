@@ -101,3 +101,55 @@ setup() {
   run bash "$VERIFY"
   [ "$status" -eq 64 ]
 }
+
+# ── unresolvable ranges are a NON-VERDICT, never a clean land ────────────────────
+#
+# Measured 2026-08-10: `land-verify.sh definitely-not-a-rev..also-not-a-rev` printed
+# "✓ 0 path(s) present + content-identical on origin/main" and exited 0. The enumeration
+# ran in a process substitution with stderr suppressed, so "could not look" and "looked,
+# all clean" were the same observable. ship-land calls this to PROVE a land reached the
+# trunk, so a green here certifies a land nobody inspected.
+#
+# Every assertion below fails against the pre-fix script.
+
+@test "an unresolvable range is refused, not reported clean" {
+  run "$VERIFY" "definitely-not-a-rev..also-not-a-rev"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"path(s) present + content-identical"* ]]
+}
+
+@test "the refusal names the endpoint that did not resolve" {
+  run "$VERIFY" "definitely-not-a-rev..also-not-a-rev"
+  [[ "$output" == *"definitely-not-a-rev"* ]] || false
+  [[ "$output" == *"does not resolve"* ]]
+}
+
+@test "a RIGHT-hand endpoint that does not resolve is caught too" {
+  run "$VERIFY" "HEAD..also-not-a-rev"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"path(s) present + content-identical"* ]]
+}
+
+@test "an unresolvable SINGLE rev is refused" {
+  run "$VERIFY" "definitely-not-a-rev"
+  [ "$status" -ne 0 ]
+}
+
+@test "a VALID range still verifies clean (the fix must not over-refuse)" {
+  echo change > f.txt
+  git add f.txt
+  git commit -q -m change
+  git push -q origin main
+  run "$VERIFY" "HEAD~1..HEAD"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"present + content-identical"* ]]
+}
+
+@test "a valid range whose content did NOT land is still caught (no regression)" {
+  echo unlanded > g.txt
+  git add g.txt
+  git commit -q -m unlanded          # deliberately NOT pushed
+  run "$VERIFY" "HEAD~1..HEAD"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"g.txt"* ]]
+}
