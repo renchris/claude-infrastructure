@@ -74,6 +74,7 @@ EOF
   cat >"$STUBDIR/reconcile.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "reconcile confirm=${CONFIRM:-UNSET} $*" >>"$CALLS"
+[ "${LAND_SAY_KILLED:-0}" = 1 ] && echo "✗ ship-land: verdict=killed signal=SIGTERM role=outer — TERMINATED from outside"
 [ "${LAND_RC:-0}" = 0 ] || { echo "!! land refused (stub)"; exit "${LAND_RC}"; }
 [ "${LAND_EMPTY:-0}" = 1 ] && { echo "stub: reported success and landed NOTHING"; exit 0; }
 b="$2"
@@ -376,4 +377,35 @@ seen_at() { # <epoch>
   # …and it must precede the invocation it guards.
   res_line="$(grep -n 'cloud-return.sh --sweep' "$sweep" | head -1 | cut -d: -f1)"
   [ -z "$res_line" ] || [ "$gate_line" -lt "$res_line" ]
+}
+
+@test "a land CUT by a bound is a NON-VERDICT — no refusal artifact, no 'REFUSED' wake, no latch" {
+  # Measured on the second live round trip: the sweep's 240s bound killed a healthy land, ship-land
+  # said `verdict=killed signal=SIGTERM … nothing was proven about the tree`, and this code filed a
+  # land-refused artifact and woke the originator with a refusal. A bound smaller than what it
+  # bounds can only convict (memory: exoneration-bound-must-fit-what-it-bounds).
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  LAND_RC=143 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CUT by a bound"* ]] || false
+  [[ "$output" != *"REFUSED"* ]] || false
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  ! grep -q 'HANDOFF-PING' "$CALLS" || false
+  # POSITIVE CONTROL off the same fixture: a REAL gate red still files the artifact and wakes.
+  LAND_RC=6 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  grep -q 'HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
+}
+
+@test "ship-land's OWN killed token abstains too, whatever exit code reaches us" {
+  # The signal can arrive as 124, 137 or 143 depending on who cut it and how, so the lander's own
+  # verdict token is read as corroboration rather than trusting one number to carry the fact.
+  declare_managed
+  seen_at 1000
+  LAND_RC=70 LAND_SAY_KILLED=1 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CUT by a bound"* ]] || false
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
 }

@@ -293,6 +293,25 @@ handle() { # <row-json> → prints outcome lines
     say "→ $id — landing $branch via $(basename "$RECONCILE_BIN")"
     land_out="$(CONFIRM=1 "$RECONCILE_BIN" --land "$branch" 2>&1)"; land_rc=$?
     printf '%s\n' "$land_out" | sed 's/^/    /'
+
+    # 🚨 A LAND THAT WAS KILLED IS A NON-VERDICT, NOT A REFUSAL — measured 2026-08-11 on the second
+    # live round trip, and it is this repo's own lesson met from the inside: a bound smaller than
+    # what it bounds can only ever CONVICT (memory: exoneration-bound-must-fit-what-it-bounds).
+    # The sweep's timeout cut a perfectly healthy land at 240 s; ship-land said so in its own words
+    # — `verdict=killed signal=SIGTERM … it did not fail a gate and nothing was proven about the
+    # tree` — and this code filed a `land-refused` artifact, woke the originator with "LAND REFUSED"
+    # and pointed W3 at a routing job that does not exist. Nothing was wrong with the branch.
+    # 124/137/143 are the three ways a bound reaches a process (timeout's own code, SIGKILL, SIGTERM)
+    # and ship-land's killed token corroborates from the other side; either is enough to abstain.
+    case "$land_rc" in
+      124|137|143) land_rc=-1 ;;
+    esac
+    case "$land_out" in *"verdict=killed"*) land_rc=-1 ;; esac
+    if [ "$land_rc" -eq -1 ]; then
+      say "? $id — the land was CUT by a bound, not refused: nothing was proven about the branch, and no artifact is filed. The next pass resumes it."
+      ledger "$id" land-cut "$(jq -cn --arg b "$branch" '{branch:$b, note:"killed from outside (bound/SIGTERM) — a non-verdict, never a gate refusal"}')"
+      return 0
+    fi
     if [ "$land_rc" -ne 0 ]; then
       # THE W3 SEAM. A refusal is recorded as an artifact with everything the routing loop will
       # need, the originator is woken WITH the failure, and custody stays OPEN — an un-landed result
