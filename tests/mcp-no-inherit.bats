@@ -79,8 +79,8 @@ teardown() {
   # shellcheck source=/dev/null
   source "$LIB"
   cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
-  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--strict-mcp-config"* ]]
-  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]]
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--strict-mcp-config"* ]] || false
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]] || false
   pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config=}"
   [ -f "$pass" ]
   # the two http servers survive, the stdio one is filtered out — the whole point of the passthrough
@@ -96,13 +96,13 @@ teardown() {
   # shellcheck source=/dev/null
   source "$LIB"
   cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
-  [[ "$CC_MCP_NOINHERIT_ARGS" != *"--mcp-config "* ]]
-  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]]
+  [[ "$CC_MCP_NOINHERIT_ARGS" != *"--mcp-config "* ]] || false
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]] || false
 
   run timeout 300 bash "$FIRE" --prompt-file "$BRIEF_PLAIN" --dry-run --account next2
   [ "$status" -eq 0 ]
   cmd="$(printf '%s\n' "$output" | grep '^command:')"
-  [[ "$cmd" == *"--mcp-config="* ]]
+  [[ "$cmd" == *"--mcp-config="* ]] || false
   [[ "$cmd" != *"--mcp-config "* ]]
 }
 
@@ -149,14 +149,14 @@ teardown() {
 @test "handoff-fire --dry-run: default fire carries the isolation flags" {
   run timeout 300 bash "$FIRE" --prompt-file "$BRIEF_PLAIN" --dry-run --account next2
   [ "$status" -eq 0 ]
-  [[ "$output" == *"--strict-mcp-config"* ]]
+  [[ "$output" == *"--strict-mcp-config"* ]] || false
   [[ "$output" == *"mcp:      project .mcp.json stdio servers OFF"* ]]
 }
 
 @test "POSITIVE CONTROL: handoff-fire --with-mcp does NOT carry them" {
   run timeout 300 bash "$FIRE" --prompt-file "$BRIEF_PLAIN" --dry-run --account next2 --with-mcp
   [ "$status" -eq 0 ]
-  [[ "$output" != *"--strict-mcp-config"* ]]
+  [[ "$output" != *"--strict-mcp-config"* ]] || false
   [[ "$output" == *"--with-mcp: project .mcp.json servers left ON"* ]]
 }
 
