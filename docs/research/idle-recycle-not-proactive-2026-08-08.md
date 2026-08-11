@@ -196,7 +196,7 @@ suite's own growth; converted to floor + tally (`exact-count-assertion-tripwires
 >   report proposed. The stronger predicate: ✅ *is* CLAUDE.md's Recycle test, mechanically.
 > - `57d8c4dd` (08-11) — gate-green demoted from gate to reported field, in this hook and in
 >   `wrap-ledger.sh`. This is what made the arm reachable at all.
-> - `3f6f1ade` (08-11) — the arm fired under the **forecast tier's name**: it set the shared `early`
+> - `af66a60b` (08-11) — the arm fired under the **forecast tier's name**: it set the shared `early`
 >   flag, so a 41% fire narrated itself "BURNING toward the wall — forecast ≤-1min at the observed
 >   rate" (`-1` = the UNKNOWN sentinel) and recorded `axis:"forecast"`. Now its own axis, its own
 >   free-win wording (`handoff-fire.sh --recycle`), S6 conversation-hold **suppressing** at this tier
@@ -204,10 +204,33 @@ suite's own growth; converted to floor + tally (`exact-count-assertion-tripwires
 >   byte-identical to a dead arm.
 >
 > Proposal items 1–4 below map onto what shipped: **1** = `T_FREEWIN` (with the ✅ predicate replacing
-> the bare threshold), **2** = shipped in `3f6f1ade`, **3** = shipped in `3f6f1ade`, **4** = the damping
+> the bare threshold), **2** = shipped in `af66a60b`, **3** = shipped in `af66a60b`, **4** = the damping
 > is the ✅ predicate + the B-2 latch rather than an env kill-switch; the arm defaults ON at 35 and is
 > disabled with `CC_BOUNDARY_T_FREEWIN=0`. The **secondary items** at the end of this section are
 > untouched and remain open.
+>
+> **Verified at close (2026-08-11), backlog `bd2f7c2209fa`.** Executed rather than re-read: 35/35
+> `tests/boundary-handoff.bats` green, shellcheck `-x` clean. Ten of those cases are the arm itself —
+> it fires at 43% on a ✅ ledger, stays silent at 34% (floor) and on a 🔧 dirty tree, says FREE WIN and
+> names `--recycle` (not the drain wording), records `axis:"freewin"` with `early:false` and the rung
+> that authorised it, leaves the forecast tier's own attribution intact, and is SUPPRESSED (not
+> re-worded, and without burning the latch) by a live exchange. Case 65 is the PREMISE control: it
+> fails loudly if the fixture repo stops computing ✅, so the fire cases cannot pass vacuously.
+> Live layer at close: 11 commits / 4h behind, inside the converge budget (25 / 6h), and `af66a60b`
+> is an EDIT — it rides its per-file symlink and merely runs the older wording until the
+> fast-forward. No `LIVE_ADDS` breach on this hook.
+>
+> **The item's own remedy had rotted, and the literal reading was the wrong build.** Item
+> `bd2f7c2209fa` prescribed "damped env-gated `CC_BOUNDARY_T_IDLE` … reusing its clean-tree/**gate-green**
+> /no-teammates gates". Both halves were stale by the time a worker read them: the knob shipped as
+> `CC_BOUNDARY_T_FREEWIN`, so building `CC_BOUNDARY_T_IDLE` would have minted a second name for one
+> switch — and `gate-green` was DELIBERATELY DEMOTED from gate to reported field in `57d8c4dd`,
+> because gating on a stamp only `postland-verify` can advance is what made this rail unfireable for
+> 1,341 evaluations. Implementing the remedy as written would have re-introduced the defect the item
+> exists to fix (`work-item-remedy-can-become-forbidden`). Its falsifier — `grep -q CC_BOUNDARY_T_IDLE
+> hooks/boundary-handoff.sh` — names a symbol that must never exist, so it can only ever CONVICT;
+> harmless only because `cc-backlog` re-runs a falsifier on the claim path alone, which a done-latched
+> row never reaches (`bin/cc-backlog:1855`).
 
 **Not built here.** It is a fleet-wide behaviour change to when every session is blocked at Stop,
 which is larger than a safe in-actuator fix, so it is specified rather than shipped.
