@@ -2411,3 +2411,156 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   echo "$output" | grep -q 'isolated'                      # …and gate_home_setup WAS reached
   grep -q '"smoke":"green"' "$LAND_LOG"
 }
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# P4 — THE LAND LIFECYCLE: every land terminates LOUDLY, author present or not
+# (docs/research/land-architecture-100p-2026-08-10.md §5 row P4, §2.A, §2.F)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── defect 1: NO SIGNAL TRAP ─────────────────────────────────────────────────────────────────────
+# ship-land installed no TERM/INT/HUP trap, so a signalled death recorded NOTHING — no land.log
+# line, no marker discharged, no notice — and that is the COMMON path: a turn cannot hold a
+# contended land (Bash-tool ceiling 600 s < episode p90 991 s), so backgrounded is the only
+# workable shape and it is exactly the shape the harness's process-group kill reaches.
+#
+# WHAT THIS TEST CAN AND CANNOT PROVE, stated so the green is not read as more than it is: SIGKILL
+# is untrappable and no code change reaches it. What is provable, and is the fix, is that a
+# TRAPPABLE signalled death now ATTESTS instead of vanishing. Note also that bash defers a trap
+# until the current foreground child returns (measured: a TERM at t+2 s ran the handler at t+10 s
+# behind a `sleep 10`), so the fixture bounds that child with LAND_LOCK_WAIT rather than hoping.
+
+@test "P4 signal: a TERMed land ATTESTS its death (verify:killed, exit 143) instead of recording nothing" {
+  git checkout -q -b feat/sig main
+  printf '#!/usr/bin/env bash\necho hi\n' > s.sh
+  git add s.sh && git commit -q -m "feat: s"
+
+  # Park a LIVE holder on the machine-wide mutex so the land is guaranteed to still be running
+  # when the signal arrives, and bound its wait so the deferred trap fires inside the test.
+  mkdir -p "$LAND_LOCK_DIR/lock.d"
+  sleep 60 & holder=$!
+  echo "$holder" > "$LAND_LOCK_DIR/lock.d/pid"
+  ps -o lstart= -p "$holder" > "$LAND_LOCK_DIR/lock.d/lstart"
+
+  LAND_LOCK_WAIT=10 bash "$SHIPLAND" --trunk main >/dev/null 2>&1 &
+  land=$!
+  sleep 4
+  kill -TERM "$land" 2>/dev/null || true
+  rc=0; wait "$land" 2>/dev/null || rc=$?     # `|| ` — bats's errexit would abort on the 143 itself
+  kill "$holder" 2>/dev/null || true
+
+  [ "$rc" -eq 143 ]                                    # 128 + SIGTERM, re-raised not swallowed
+  grep -q '"verify":"killed"' "$LAND_LOG"              # THE fix: the death is on the record
+  grep -q '"exit":143' "$LAND_LOG"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- s.sh)" ]          # fail-closed: a killed land pushes nothing
+}
+
+# ── defect 2: NO FAILURE INBOX ───────────────────────────────────────────────────────────────────
+# A failed land's notice died with its pane: the only record was stderr in a terminal whose session
+# is gone. The ref is durable repo state that pins the exact head; the backlog row is what makes it
+# RENDER at somebody's next close.
+
+@test "P4 inbox: a FAILED land pins refs/land/failed/* at the exact head that could not land" {
+  git checkout -q -b feat/inbox main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad.sh    # SC2164 → shellcheck RED
+  git add bad.sh && git commit -q -m "feat: bad"
+  head_sha="$(git rev-parse HEAD)"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  refs="$(git for-each-ref --format='%(refname)' refs/land/failed/)"
+  [ -n "$refs" ]
+  [ "$(git for-each-ref --format='%(objectname)' refs/land/failed/)" = "$head_sha" ]
+}
+
+@test "P4 inbox: the backlog row carries the EXACT re-land command (a headline is not a step)" {
+  git checkout -q -b feat/inbox-row main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad2.sh
+  git add bad2.sh && git commit -q -m "feat: bad2"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  [ -s "$BATS_TEST_TMPDIR/backlog.jsonl" ]
+  grep -q 're-land feat/inbox-row' "$BATS_TEST_TMPDIR/backlog.jsonl"
+  grep -q 'ship-land.sh' "$BATS_TEST_TMPDIR/backlog.jsonl"      # the runnable command, not a name
+}
+
+@test "P4 inbox: a SUCCESSFUL land files nothing (an inbox of every land is not an inbox)" {
+  git checkout -q -b feat/inbox-green main
+  printf '#!/usr/bin/env bash\necho ok\n' > good.sh
+  git add good.sh && git commit -q -m "feat: good"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ -z "$(git for-each-ref --format='%(refname)' refs/land/failed/)" ]
+}
+
+@test "P4 inbox: a PREFLIGHT refusal files nothing — the inbox starts where the LAND starts" {
+  # The placement proof. A dirty tree is immediate, author-visible feedback; filing it would drown
+  # the inbox in noise its author has already read. Only failures PAST the in-flight claim file.
+  git checkout -q -b feat/inbox-dirty main
+  printf 'x\n' > uncommitted.txt
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  [ -z "$(git for-each-ref --format='%(refname)' refs/land/failed/)" ]
+}
+
+# ── defect 3: NO IN-FLIGHT MARKER ────────────────────────────────────────────────────────────────
+# `trunk..HEAD` is unlanded for the WHOLE duration of a land, so the close protocol read 📦 "/ship
+# to land it" while the land was already running and pressed for a SECOND /ship on the same
+# worktree — which can only queue behind its own sibling on the machine-wide mutex.
+
+@test "P4 in-flight: a SECOND concurrent fire on the same worktree is REFUSED (11), before the mutex" {
+  sleep 60 & other=$!
+  gd="$(git rev-parse --absolute-git-dir)"
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/other\n' \
+    "$other" "$(ps -o lstart= -p "$other")" "$(date +%s)" > "$gd/ship-land-inflight"
+
+  git checkout -q -b feat/second main
+  printf '#!/usr/bin/env bash\necho two\n' > two.sh
+  git add two.sh && git commit -q -m "feat: two"
+
+  run bash "$SHIPLAND" --trunk main
+  kill "$other" 2>/dev/null || true
+  [ "$status" -eq 11 ]
+  echo "$output" | grep -q "ALREADY IN FLIGHT"
+  [ ! -d "$LAND_LOCK_DIR/lock.d" ]                     # refused BEFORE the mutex, not after
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- two.sh)" ]
+}
+
+@test "P4 in-flight: a STALE marker does NOT block — the rule is pid+lstart, never pid alone" {
+  # THE DISCRIMINATOR between this and a naive lockfile. A land killed by the process-group SIGKILL
+  # runs no trap and leaves its marker behind, and the OS recycles pids under load. A marker naming
+  # a LIVE pid whose start-time does not match is a dead land's residue and must not wedge the
+  # worktree forever — the same failure land-lock.sh was taught in 2026-07-25.
+  gd="$(git rev-parse --absolute-git-dir)"
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/ghost\n' \
+    "$$" 'Thu Jan  1 00:00:00 2020' "$(date +%s)" > "$gd/ship-land-inflight"
+
+  git checkout -q -b feat/stale main
+  printf '#!/usr/bin/env bash\necho three\n' > three.sh
+  git add three.sh && git commit -q -m "feat: three"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- three.sh)" ]
+}
+
+@test "P4 in-flight: the marker is DISCHARGED on every exit — a failed land does not wedge the worktree" {
+  gd="$(git rev-parse --absolute-git-dir)"
+  git checkout -q -b feat/discharge main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad3.sh
+  git add bad3.sh && git commit -q -m "feat: bad3"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  [ ! -e "$gd/ship-land-inflight" ]
+
+  # …and the proof it was ever there: the very same land filed its failure inbox, which is gated
+  # on having held the marker (see land_failure_inbox).
+  [ -n "$(git for-each-ref --format='%(refname)' refs/land/failed/)" ]
+}

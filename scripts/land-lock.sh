@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # land-lock.sh — machine-wide landing serializer, REPO-KEYED (any repo).
 #
-#   scripts/land-lock.sh [--] <cmd> [args…]
+#   scripts/land-lock.sh [--] <cmd> [args…]      run <cmd> holding the mutex
+#   scripts/land-lock.sh --status | --waiters | --alarms | --print-lock-dir
+#                                                pure reads; NO lock is taken (P4 defect 6)
 #
 # Runs <cmd> while holding a single mutex keyed to the current repo, so at most ONE
 # session's gate+push runs at a time across all worktrees of that repo on this box.
@@ -27,8 +29,12 @@
 # Tunables:     LAND_LOCK_TTL (empty/wedged-reap age, default 1200s) ·
 #               LAND_LOCK_WAIT (max queue wait, default 3600s) ·
 #               LAND_LOCK_REAP_TTL (abandoned reap-mutex age, default 30s — see reap_and_claim).
-# Telemetry:    one JSON line per landing appended to ${LAND_LOG:-~/.claude/land.log}
-#               {ts, repo, branch, wait_s, hold_s, exit, pid}.
+# Telemetry:    JSON lines appended to ${LAND_LOG:-~/.claude/land.log}
+#               {ts, repo, branch, event, wait_s, hold_s, exit, depth, pid}.
+#               event=release (the terminal row, as before) · timeout · and — new in P4 — queued
+#               and acquired, emitted ONLY by a lander that actually had to wait, so the wait is
+#               visible while it is happening instead of only once it resolves. Non-terminal rows
+#               carry exit -1.
 #
 # bash 3.2-safe (macOS default — no declare -A / mapfile / [[ -v ]] / ${var^^}).
 # `pipefail` load-bearing; NO `set -e` (the EXIT trap must fire with the child's real
@@ -53,30 +59,171 @@ LOCK_PARENT="${LAND_LOCK_DIR:-/tmp/land-lock-${HASH}}"
 LOCK="${LOCK_PARENT}/lock.d"
 REAP_LOCK="${LOCK_PARENT}/reap.d"   # serializes REAPERS only — never the lock itself
 
-# Introspection: print the resolved lock dir this repo/worktree maps to, then exit.
-# Pure read (runs before any mkdir) so it never litters /tmp. Works in any serialize mode.
-if [[ "${1:-}" = "--print-lock-dir" ]]; then
-  printf '%s\n' "${LOCK_PARENT}"
-  exit 0
-fi
 LOG="${LAND_LOG:-${HOME}/.claude/land.log}"
 TTL="${LAND_LOCK_TTL:-1200}"        # empty/wedged-holder reap age (s)
 WAIT_MAX="${LAND_LOCK_WAIT:-3600}"  # max seconds to queue for the lock before giving up
 REAP_TTL="${LAND_LOCK_REAP_TTL:-30}"  # abandoned reap-mutex age (s) — the section is milliseconds
 POLL=2
+WAITERS="${LOCK_PARENT}/waiters"    # one file per QUEUED acquirer — the visible depth (P4 defect 4)
+
+# ── INTROSPECTION VERBS + THE MISUSE GUARD (P4 defect 6) ─────────────────────────────────────────
+# MEASURED: 23 ledger rows are `exit 127` — agents guessing `land-lock.sh status`. `status` was not
+# a verb, so it was treated as PAYLOAD: the machine-wide mutex was TAKEN and only then did `status`
+# fail to exec. One such guess waited 2,777 s on the lock to run a command that never existed, and
+# every other lander on the box paid for that wait. Two halves, and neither works alone:
+#   1. REAL VERBS, so the guess has a destination. The word agents reach for is `status`; refusing
+#      it and offering nothing just moves the misuse to the next synonym.
+#   2. A GUARD BEFORE THE MUTEX. A first argument that contains no `/` and that `command -v` cannot
+#      resolve is not a payload, it is a typo or a guessed verb — refuse with EX_USAGE (64) while
+#      the lock is still untouched. Keyed on RESOLVABILITY, not on a denylist of spellings, because
+#      a denylist gets out-run by the next guess (memory: denylist-enumerates-spellings-not-the-
+#      class). A path (`./x.sh`, `/usr/bin/foo`) is never second-guessed, so every real call site —
+#      ship-land's `"$LAND_LOCK" -- "$SELF" __locked …` included — is untouched.
+# All verbs are PURE READS and run before any mkdir, so introspection never litters /tmp and never
+# takes the lock.
+holder_live() {   # $1=lock.d → 0 iff its recorded holder is a LIVE process whose lstart MATCHES.
+                  # Same pid+lstart rule as lock_is_stale, in the same dialect, for the same reason.
+  local d="$1" pid rec cur
+  pid="$(cat "${d}/pid" 2>/dev/null || true)"
+  case "${pid:-}" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "${pid}" 2>/dev/null || return 1
+  rec="$(cat "${d}/lstart" 2>/dev/null || true)"
+  cur="$(ps -o lstart= -p "${pid}" 2>/dev/null || true)"
+  [[ -n "${rec}" && "${rec}" != "${cur}" ]] && return 1
+  return 0
+}
+
+waiters_live() {  # $1=lock parent → one "<pid> <waited_s> <branch>" line per LIVE waiter.
+                  # PRUNES as it reads: a waiter SIGKILLed mid-queue runs no trap and leaves its
+                  # file behind, so the registry is self-healing rather than monotonically growing.
+  local wd="$1/waiters" f pid rec cur ts now
+  [[ -d "${wd}" ]] || return 0
+  now="$(date +%s)"
+  for f in "${wd}"/*; do
+    [[ -f "${f}" ]] || continue
+    pid="${f##*/}"
+    case "${pid}" in ''|*[!0-9]*) rm -f "${f}" 2>/dev/null; continue ;; esac
+    rec="$(sed -n 's/^lstart=//p' "${f}" 2>/dev/null | sed -n 1p)"
+    cur="$(ps -o lstart= -p "${pid}" 2>/dev/null || true)"
+    if ! kill -0 "${pid}" 2>/dev/null || [[ -z "${cur}" ]] || { [[ -n "${rec}" ]] && [[ "${rec}" != "${cur}" ]]; }; then
+      rm -f "${f}" 2>/dev/null; continue
+    fi
+    ts="$(sed -n 's/^since=//p' "${f}" 2>/dev/null | sed -n 1p)"
+    case "${ts}" in ''|*[!0-9]*) ts="${now}" ;; esac
+    printf '%s %s %s\n' "${pid}" "$(( now - ts ))" "$(sed -n 's/^branch=//p' "${f}" 2>/dev/null | sed -n 1p)"
+  done
+}
+
+lock_alarm_rows() {  # machine-wide: one JSON row per LIVE holder that is PAST ITS BUDGET.
+  # P4 defect 5. H2 (never reap a LIVE holder) STANDS and is not weakened by one byte here — this
+  # is the OTHER half of H2, which was missing: if the policy is that we will never take the lock
+  # back from a live holder, then a live holder that never lets go has to reach a human, and it
+  # reached nobody. Live proof: holder pid 82031 was observed ppid-1 (its owning session dead) and
+  # nothing anywhere raised a word about it.
+  #
+  # THE TRIGGER IS "LIVE PAST TTL", NOT "ppid == 1" — deliberately, and this corrects the framing
+  # the audit row uses. Orphanhood is NOT evidence of abandonment on this box: a backgrounded land
+  # is the normal shape (Bash-tool ceiling 600 s < episode p90 991 s) and its launching shell exits
+  # immediately, so a perfectly healthy lander is reparented to pid 1 exactly like a derelict one —
+  # the identical false-positive cc-await-ping's owner guard documents. An alarm that fired on every
+  # healthy backgrounded land would fire always and therefore say nothing (memory:
+  # alarm-polarity-and-attention-budget). Over-budget IS the harm, it strictly contains the observed
+  # case (82031 was orphaned AND long-held), and ppid is carried in the DETAIL where it belongs.
+  local parent d age pid ppid state now
+  now="$(date +%s)"
+  for parent in ${LAND_LOCK_SCAN:-/tmp/land-lock-*}; do
+    d="${parent}/lock.d"
+    [[ -d "${d}" ]] || continue
+    holder_live "${d}" || continue
+    age="$(( now - $(stat -f %m "${d}" 2>/dev/null || echo "${now}") ))"
+    [[ "${age}" -gt "${TTL}" ]] || continue
+    pid="$(cat "${d}/pid" 2>/dev/null || echo '?')"
+    ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+    if [[ "${ppid:-0}" = "1" ]]; then state="ORPHANED-HELD"; else state="OVER-BUDGET"; fi
+    printf '{"kind":"land-lock-hung","state":"%s","detail":"pid %s has held the land mutex %ss (budget %ss, ppid %s); H2 forbids reaping a LIVE holder — this needs a human","subject":"%s","recover_cmd":"ps -o pid,ppid,lstart,command -p %s","ts":%s}\n' \
+      "${state}" "${pid}" "${age}" "${TTL}" "${ppid:-?}" "${d}" "${pid}" "${now}"
+  done
+}
+
+case "${1:-}" in
+  --print-lock-dir)
+    printf '%s\n' "${LOCK_PARENT}"
+    exit 0 ;;
+  --status)
+    printf 'lock dir: %s\n' "${LOCK}"
+    if [[ -d "${LOCK}" ]]; then
+      if holder_live "${LOCK}"; then
+        printf 'holder:   pid %s  branch %s  held %ss  (LIVE — H2: never reaped)\n' \
+          "$(cat "${LOCK}/pid" 2>/dev/null || echo '?')" "$(cat "${LOCK}/branch" 2>/dev/null || echo '?')" \
+          "$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || date +%s) ))"
+      else
+        printf 'holder:   present but DEAD or empty — the next acquirer reaps it\n'
+      fi
+    else
+      printf 'holder:   (free)\n'
+    fi
+    printf 'waiters:  %s\n' "$(waiters_live "${LOCK_PARENT}" | grep -c . || true)"
+    waiters_live "${LOCK_PARENT}" | while read -r p w b; do printf '  pid %s  branch %s  waited %ss\n' "$p" "$b" "$w"; done
+    exit 0 ;;
+  --waiters)
+    waiters_live "${LOCK_PARENT}"
+    exit 0 ;;
+  --alarms)
+    lock_alarm_rows
+    exit 0 ;;
+  --help|-h)
+    sed -n '2,6p' "$0"
+    printf 'Verbs (pure reads, no lock taken): --print-lock-dir · --status · --waiters · --alarms\n'
+    exit 0 ;;
+esac
+
 mkdir -p "${LOCK_PARENT}"
 mkdir -p "$(dirname "${LOG}")" 2>/dev/null || true
 
 # Accept an optional `--` separator, then require a command.
 [[ "${1:-}" = "--" ]] && shift
-[[ $# -gt 0 ]] || { echo "✗ land-lock.sh: no command given. Usage: land-lock.sh [--] <cmd> [args…]" >&2; exit 64; }
+[[ $# -gt 0 ]] || { echo "✗ land-lock.sh: no command given. Usage: land-lock.sh [--] <cmd> [args…]  |  verbs: --print-lock-dir --status --waiters --alarms" >&2; exit 64; }
+
+# THE GUARD — before the mutex, never after (see the block above).
+case "$1" in
+  */*) ;;   # a path: never second-guessed
+  *)
+    if ! command -v "$1" >/dev/null 2>&1; then
+      echo "✗ land-lock.sh: '$1' is neither a runnable command nor a land-lock verb — REFUSING before the lock is taken. (Guessed verbs used to be run as payload: the mutex was held for the whole wait and then exited 127; one such guess waited 2777s to run a command that does not exist.) Verbs: --print-lock-dir · --status · --waiters · --alarms. To wrap a command: land-lock.sh -- <cmd> [args…]" >&2
+      exit 64
+    fi ;;
+esac
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
 
-logline() {  # $1=wait_s $2=hold_s $3=exit
-  printf '{"ts":"%s","repo":"%s","branch":"%s","wait_s":%s,"hold_s":%s,"exit":%s,"pid":%s}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "$1" "$2" "$3" "$$" >> "${LOG}" 2>/dev/null || true
+logline() {  # $1=event $2=wait_s $3=hold_s $4=exit [$5=queue depth]
+  # SCHEMA GROWTH IS SAFE (land.log's readers tail it / select by key), and `event` is what makes
+  # the waiter rows below distinguishable from a completed hold: a non-terminal row carries
+  # exit -1, so nothing that counts `exit == 0` lands or sums hold_s changes its answer.
+  printf '{"ts":"%s","repo":"%s","branch":"%s","event":"%s","wait_s":%s,"hold_s":%s,"exit":%s,"depth":%s,"pid":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "$1" "$2" "$3" "$4" "${5:-0}" "$$" >> "${LOG}" 2>/dev/null || true
 }
+
+# ── THE WAITER REGISTRY (P4 defect 4) ────────────────────────────────────────────────────────────
+# MEASURED: land-lock logged only at timeout or the release EXIT trap, so a QUEUED waiter wrote
+# NOTHING until its wait resolved — three live waiters were observed with zero ledger rows, and all
+# four rows then appeared at once on release. Waits of 98 s / 665 s / 2,362 s / 5,536 s were
+# therefore invisible for their entire duration, which is precisely the interval in which someone
+# would want to know. Two fixes, both about the WAIT rather than its outcome:
+#   · a file per queued acquirer in the lock dir, so DEPTH is readable by anyone (`--status`);
+#   · a ledger row at ACQUIRE-START, not only at resolution.
+# Registration happens only once the first try_acquire has FAILED — an uncontended land (the
+# common case) adds no file and no row, so this cannot become log volume that hides its own signal.
+waiter_register() {
+  mkdir -p "${WAITERS}" 2>/dev/null || return 0
+  {
+    printf 'lstart=%s\n' "$(ps -o lstart= -p "$$" 2>/dev/null || true)"
+    printf 'since=%s\n'  "$(date +%s)"
+    printf 'branch=%s\n' "${BRANCH}"
+  } > "${WAITERS}/$$" 2>/dev/null || true
+}
+# shellcheck disable=SC2329  # invoked indirectly via `trap waiter_unregister EXIT` while queued.
+waiter_unregister() { rm -f "${WAITERS}/$$" 2>/dev/null || true; }
 
 # Kill switch → concurrent behavior (no lock, no log).
 if [[ "${LAND_SERIALIZE:-on}" = "off" ]]; then
@@ -178,24 +325,41 @@ try_acquire() {
 
 WAIT_START="$(date +%s)"
 WAITED=0
+QUEUED=0
+DEPTH=0
 until try_acquire; do
+  if [[ "${QUEUED}" -eq 0 ]]; then
+    # FIRST failure ⇒ we are genuinely queued. Register, become visible, and say so in the ledger
+    # NOW rather than at resolution. The EXIT trap covers the timeout path and any trapped death
+    # while queued; an untrapped kill leaves a file that waiters_live prunes on the next read.
+    QUEUED=1
+    waiter_register
+    trap waiter_unregister EXIT
+    DEPTH="$(waiters_live "${LOCK_PARENT}" | grep -c . || true)"
+    logline "queued" 0 0 -1 "${DEPTH}"
+    echo "→ land-lock: QUEUED behind $(cat "${LOCK}/branch" 2>/dev/null || echo '?') (holder pid $(cat "${LOCK}/pid" 2>/dev/null || echo '?')) — queue depth ${DEPTH}. This wait is visible now: bash $0 --status" >&2
+  fi
   WAITED="$(( $(date +%s) - WAIT_START ))"
   if [[ "${WAITED}" -ge "${WAIT_MAX}" ]]; then
     echo "✗ land-lock: waited ${WAITED}s for ${LOCK} (holder pid $(cat "${LOCK}/pid" 2>/dev/null || echo '?'), branch $(cat "${LOCK}/branch" 2>/dev/null || echo '?')). Retry, or LAND_SERIALIZE=off to bypass." >&2
-    logline "${WAITED}" 0 75
+    logline "timeout" "${WAITED}" 0 75 "${DEPTH}"
     exit 75   # EX_TEMPFAIL
   fi
   [[ "$(( WAITED % 30 ))" -lt "${POLL}" ]] && echo "→ land-lock: queued behind $(cat "${LOCK}/branch" 2>/dev/null || echo '?') (pid $(cat "${LOCK}/pid" 2>/dev/null || echo '?')) — ${WAITED}s…" >&2
   sleep "${POLL}"
 done
 WAITED="$(( $(date +%s) - WAIT_START ))"
+if [[ "${QUEUED}" -eq 1 ]]; then
+  waiter_unregister
+  logline "acquired" "${WAITED}" 0 -1 "${DEPTH}"
+fi
 
 HOLD_START="$(date +%s)"
 CODE=130
 # shellcheck disable=SC2329  # invoked indirectly via `trap release EXIT`
 release() {
   rm -rf "${LOCK}"
-  logline "${WAITED}" "$(( $(date +%s) - HOLD_START ))" "${CODE}"
+  logline "release" "${WAITED}" "$(( $(date +%s) - HOLD_START ))" "${CODE}" "${DEPTH}"
 }
 trap release EXIT
 if [[ "${WAITED}" -gt 0 ]]; then

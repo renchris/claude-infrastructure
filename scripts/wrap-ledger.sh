@@ -200,6 +200,27 @@ if [ -n "$TRUNK" ]; then
 fi
 UNLANDED=0; { [ "$AHEAD" -gt 0 ] || [ "$CHERRY" -eq 1 ]; } && UNLANDED=1
 
+# ── LAND IN FLIGHT (land-architecture-100p §5 P4, defect 3) ──
+# UNLANDED is true for the WHOLE duration of a land, not only before one — a land is minutes long
+# and its only workable shape is backgrounded, so the close protocol routinely runs mid-flight and
+# rendered "📦 … /ship to land it" as the one command over a land that was already running. The
+# marker inverts that instruction; it never invents a landed state (📦 still outranks ✅, the
+# commits really are unlanded, and the certificate stays unreachable). ONE reader for the predicate,
+# shared with the producer — never a second copy (memory: make-the-actuator-the-arbiter).
+LANDING=0; LANDING_PID=""; LANDING_AGE=0
+_wl_lil="${WRAP_LAND_INFLIGHT_LIB:-$(dirname "$0")/../hooks/lib/land-inflight.sh}"
+[ -f "$_wl_lil" ] || _wl_lil="$HOME/.claude/hooks/lib/land-inflight.sh"
+if [ -f "$_wl_lil" ]; then
+  # shellcheck source=../hooks/lib/land-inflight.sh
+  # shellcheck disable=SC1091
+  . "$_wl_lil" 2>/dev/null || true
+  if _wl_live="$(land_inflight_live . 2>/dev/null)" && [ -n "$_wl_live" ]; then
+    LANDING=1
+    LANDING_PID="${_wl_live%% *}"
+    LANDING_AGE="$(( $(date +%s) - $(printf '%s' "$_wl_live" | cut -d' ' -f2) ))"
+  fi
+fi
+
 # ── Gate-green marker: green (== HEAD) · stale (present, ≠ HEAD) · none (absent) ──
 GATE_FILE="${WRAP_GATE_GREEN:-$(git rev-parse --git-common-dir 2>/dev/null)/gate-green}"
 GATE="none"
@@ -543,7 +564,12 @@ elif [ "$DIRTY" -eq 1 ]; then
 elif [ "$REMAINDER" -gt 0 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${REMAINDER} frozen-DoD item(s) remain; continuing."
 elif [ "$UNLANDED" -eq 1 ]; then
-  RUNG="📦"; READOUT="📦 Done, but only on a branch (${AHEAD} commit(s) unlanded) — /ship to land it (else lost)."
+  RUNG="📦"
+  if [ "$LANDING" -eq 1 ]; then
+    READOUT="📦 Land IN FLIGHT (pid ${LANDING_PID}, ${LANDING_AGE}s) — do NOT fire a second /ship on this worktree; await its verdict."
+  else
+    READOUT="📦 Done, but only on a branch (${AHEAD} commit(s) unlanded) — /ship to land it (else lost)."
+  fi
 else
   # ✅-eligible on the git facts. ONLY here do the custody count, the operator-step count and the
   # live-layer read matter — on the 🔧/📦 paths none can change the answer, so none is ever paid
@@ -608,6 +634,8 @@ emit_machine() {
   printf 'AHEAD=%s\n' "$AHEAD"
   printf 'CHERRY=%s\n' "$CHERRY"
   printf 'UNLANDED=%s\n' "$UNLANDED"
+  printf 'LANDING=%s\n' "$LANDING"
+  printf 'LANDING_PID=%s\n' "$LANDING_PID"
   printf 'LIVE=%s\n' "$LIVE"
   printf 'LIVE_SRC=%s\n' "$LIVE_SRC"
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
@@ -694,7 +722,11 @@ rung_next() {
   case "$RUNG" in
     "⛔") printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)' ;;
     "🔧") printf 'continue → finish · run-gate · commit (explicit paths)' ;;
-    "📦") printf '/ship to land (verified net-positive work is drivable — not a hold)' ;;
+    "📦") if [ "$LANDING" -eq 1 ]; then
+            printf 'AWAIT the land already in flight (pid %s) — a second /ship on this worktree only queues behind it' "$LANDING_PID"
+          else
+            printf '/ship to land (verified net-positive work is drivable — not a hold)'
+          fi ;;
     "🚀") printf 'bash scripts/deploy-live.sh — %s; the conclusion is landed but inert' \
             "$( if [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then \
                   printf '%s NEW file(s) never reached the live layer' "$LIVE_ADDS"; \
