@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+# reso-resume-one — AUTONOMOUS single-session resume.
+#   Usage: reso-resume-one <account> <worktree-path> <session-id> [branch]
+#                          [--effort low|medium|high|xhigh|max] [--repo PATH] [--branch BR]
+#   account: next|next2|next3|next4 (Opus) · fable|fable2|fable3|fable4 (Fable 5)
+# - recreates the worktree from <branch> if its dir was reaped, in WHATEVER repo owns it
+# - resets mouse reporting (stops crashed-session escape-seq garbage leaking into the input box)
+# - auto-answers the large-session resume dialog by selecting "Resume full session as-is"
+#   (NEVER blocks), waiting as long as the session needs to load (>60s on a big session)
+# - hands off to a live interactive session
+#
+# ── WHY THIS FILE IS IN THE REPO (2026-08-09) ────────────────────────────────────────────────────
+# It lived untracked at ~/.reso/bin/reso-resume-one while FOUR tracked scripts depended on it —
+# scripts/boot-resume-launch.sh:89, scripts/boot-resume.sh, scripts/limit-recover/lr-fire-resume.sh,
+# and the resume-sessions skill's runbook. Untracked means no lint, no test, no review, and no way
+# for a gate to see it rot — and it HAD rotted, in the one direction that is silent:
+#
+#   bin=$HOME/.claude-183/node_modules/.bin/claude      # that dir now holds 2.1.215, not 2.1.183
+#   model=claude-opus-4-8 effort=max                    # opus_latest has been claude-opus-5 since 07-25
+#
+# The session it was used to resume on 2026-08-09 ran 2.1.220 / claude-opus-5 in every one of its
+# versioned rows. Using the tool as shipped would have DOWNGRADED both the binary and the model on a
+# recovery, and said nothing. Note the shape of the first pin: the directory NAME is not the version
+# it contains, so a name-based pin cannot even be audited by reading it.
+#
+# So both pins are RESOLVED, never hardcoded, and both are ANNOUNCED before the spawn — a downgrade
+# during recovery must be loud or it is invisible. Unresolvable ⇒ refuse (exit 3) naming the exact
+# override, because a recovery that silently runs the wrong model is worse than one that does not run.
+# bash, not zsh (2026-08-09): as the repo's first zsh script under bin/, shellcheck refused this
+# file outright (SC1071) the moment it was tracked — so the land gate could see it existed and not
+# a line of it. Tracking a file the linters cannot READ is only half the move this commit is about.
+#
+# ── THE THREE DEFECTS THAT SURVIVED THAT COMMIT (fixed 2026-08-10) ───────────────────────────────
+# That commit never reached origin/main — it is reachable only from refs/heads/fix/sigterm-forensics
+# — so the file stayed untracked, outside the gate, and three defects went on shipping. Each has a
+# landed sibling fix on another path; this file was the last place each was still live.
+#
+# 1. EFFORT WAS PINNED, so a Fable-5-at-max session came back at high. Same family as 0c00b814
+#    (--effort passthrough on lr-handoff) and 91ef8694 (the opus model id). All three are silent by
+#    construction: nothing in a resumed pane announces the tier it came up on, and the statusline
+#    still reads "Fable 5" after the reasoning tier has been halved. --effort now rides through,
+#    validated HERE for the reason lr-handoff gives — the binary's own refusal would land in a pane
+#    that has already taken over the session. Omitted ⇒ prior behaviour exactly.
+#    No printf %q: lr-handoff needs it because it EMITS a launcher script; this file execs directly,
+#    and every value reaching the expect program below is passed as an environment variable read
+#    with $env(...), so there is no source text for a value to escape from at all.
+#
+# 2. IT ANSWERED THE RESUME DIALOG WITH THE WRONG OPTION, by a match that broke on narrow panes.
+#    See the expect block.
+#
+# 3. REPO WAS A CONSTANT — $HOME/Development/reso-management-app — so "recreate a reaped worktree
+#    from <branch>", this tool's headline capability and the reason /resume-sessions Phase 1b passes
+#    --allow-missing-cwd, could only ever work for ONE repo. Every other repo's reaped session died
+#    at "worktree <wt> missing" having been admitted specifically on the promise that it would not.
+#    The repo is now DERIVED from the worktree itself; see resolve_repo.
+set -uo pipefail
+
+# The 4th positional stays the branch — boot-resume-launch.sh, boot-resume.sh and the
+# /resume-sessions runbook all pass it, and lr-select.py's 4th TSV column feeds it verbatim. Flags
+# are additive after it, so every existing caller's argv means exactly what it meant before.
+acct=${1:-} wt=${2:-} sid=${3:-} br=""
+_consumed=$(( $# < 3 ? $# : 3 ))
+if [ $# -gt 3 ]; then
+  case "$4" in --*) ;; *) br="$4"; _consumed=4 ;; esac
+fi
+[ "$_consumed" -gt 0 ] && shift "$_consumed"
+EFFORT="" REPO_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --effort) EFFORT="${2:-}"; shift 2 ;;
+    --repo)   REPO_ARG="${2:-}"; shift 2 ;;
+    --branch) br="${2:-}"; shift 2 ;;
+    *) printf '%s\n' "reso-resume-one: unknown arg $1" >&2; exit 2 ;;
+  esac
+done
+# Reject an unknown effort HERE, not at the spawn. Identical liveness argument to lr-handoff:110 —
+# the binary refuses an unrecognised --effort at startup, and by then this process has already
+# recreated a worktree and handed the pane over to a session that will never come up.
+case "$EFFORT" in
+  ""|low|medium|high|xhigh|max) ;;
+  *) printf '%s\n' "reso-resume-one: --effort must be low|medium|high|xhigh|max (got '$EFFORT')" >&2; exit 2 ;;
+esac
+
+MODEL_CONFIG=${CC_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}
+if [ -z "$acct" ] || [ -z "$wt" ] || [ -z "$sid" ]; then
+  printf '%s\n' "usage: reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo PATH]"; exit 2
+fi
+wt=${wt%/}
+
+# ── binary: the HIGHEST ACTUALLY-INSTALLED version, read from each package.json. Never the directory
+#    name (~/.claude-183 holds 2.1.215) and never a literal — both rot without a reader. ──
+# Prints "<version><TAB><path>". It must print BOTH, not set a global: the caller reads it through
+# $( ), and a variable assigned inside that subshell is discarded — which is how the announcement
+# line below first shipped reading "(voverride)". A resolver whose own announcement is blank is the
+# same silence this file exists to remove.
+resolve_claude_bin() {
+  [[ -n "${CC_RESUME_CLAUDE_BIN:-}" ]] && { printf '%s\n' "override	$CC_RESUME_CLAUDE_BIN"; return 0; }
+  local d v pj best
+  best=$(
+    for d in "$HOME"/.claude-*/; do
+      [ -d "$d" ] || continue
+      [[ -x "$d/node_modules/.bin/claude" ]] || continue
+      pj="$d/node_modules/@anthropic-ai/claude-code/package.json"
+      [[ -f "$pj" ]] || continue
+      v=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$pj" | head -1)
+      [[ -n "$v" ]] && printf '%s\t%s\n' "$v" "${d}node_modules/.bin/claude"
+    done | sort -V | tail -1
+  )
+  [[ -n "$best" ]] || return 1
+  printf '%s\n' "$best"
+}
+
+# ── model: the SSOT's opus_latest, not a literal. ──
+resolve_model() {
+  [[ -n "${CC_RESUME_MODEL:-}" ]] && { printf '%s\n' "$CC_RESUME_MODEL"; return 0; }
+  [[ -f "$MODEL_CONFIG" ]] || return 1
+  local m
+  m=$(sed -n 's/^[[:space:]]*opus_latest:[[:space:]]*\([A-Za-z0-9._-]*\).*/\1/p' "$MODEL_CONFIG" | head -1)
+  [[ -n "$m" ]] || return 1
+  printf '%s\n' "$m"
+}
+
+# ── repo: DERIVED from the worktree being recreated, never a constant ─────────────────────────────
+# Only ever needed on the recreate path (a worktree that still exists needs no repo at all), so the
+# derivation is asked exactly the question that path has: "which repo owns this reaped directory?"
+#
+# It is answered from the OWNING REPO'S OWN BACK-REFERENCE, not from the path. Deleting a worktree
+# directory does not remove the admin entry git keeps for it: $REPO/.git/worktrees/<n>/gitdir still
+# holds the absolute path of the dir that vanished. That file is authoritative and unambiguous —
+# exactly one repo can hold it — which matters because the worktree paths on this box
+# (~/Development/.worktrees/<branch>) are pooled across repos and name no repo at all.
+#
+# Falling back to "the repo that has this branch" is deliberately narrower than it looks: it accepts
+# only a UNIQUE match. Branch names repeat across repos (`main`, `fix/x`), and picking one of two
+# candidates would recreate the constant's failure mode with a different constant — a worktree
+# checked out of the wrong repository, which is worse than not recreating it.
+# Seams: --repo · CC_RESUME_REPO (either short-circuits everything) · CC_RESUME_REPO_ROOTS.
+# Canonicalize a path that need NOT exist — the subject here is a directory that was just reaped.
+# Required, not defensive: git stores the RESOLVED path in gitdir, so on this box a caller passing
+# /var/… is compared against a stored /private/var/… and the back-reference is missed every time.
+# That is not a tmpdir artifact — $HOME, /Volumes and any pooled worktree root can each be a
+# symlink, and the miss is silent: the derivation falls through to the branch fallback, which
+# answers correctly only while the branch name happens to be unique. No readlink -f (GNU-only).
+abspath() {
+  local p="$1" tail="" base
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  while [ ! -d "$p" ] && [ "$p" != "/" ]; do
+    base=${p##*/}; tail="/$base$tail"; p=${p%/*}
+    [ -z "$p" ] && p=/
+  done
+  p=$(cd "$p" 2>/dev/null && pwd -P) || return 1
+  printf '%s\n' "${p%/}$tail"
+}
+
+resolve_repo() { # <worktree> <branch> → repo root on stdout, or 1
+  local w="$1" b="$2" roots root cand gdf gd hit="" matches=() IFS
+  [[ -n "$REPO_ARG" ]] && { printf '%s\n' "$REPO_ARG"; return 0; }
+  w=$(abspath "$w") || return 1
+  [[ -n "${CC_RESUME_REPO:-}" ]] && { printf '%s\n' "$CC_RESUME_REPO"; return 0; }
+  roots="${CC_RESUME_REPO_ROOTS:-$HOME/Development}"
+  IFS=:
+  # shellcheck disable=SC2086  # word-splitting on the colon-list is the intent
+  set -- $roots
+  unset IFS
+  for root in "$@"; do
+    for cand in "$root"/*/; do
+      cand=${cand%/}
+      [[ -d "$cand/.git/worktrees" ]] || continue
+      for gdf in "$cand"/.git/worktrees/*/gitdir; do
+        [[ -f "$gdf" ]] || continue
+        gd=$(cat "$gdf" 2>/dev/null)
+        gd=${gd%$'\n'}
+        gd=$(abspath "${gd%/.git}") || continue
+        [[ "$gd" == "$w" ]] && { hit="$cand"; break 3; }
+      done
+    done
+  done
+  [[ -n "$hit" ]] && { printf '%s\n' "$hit"; return 0; }
+  [[ -n "$b" ]] || return 1
+  for root in "$@"; do
+    for cand in "$root"/*/; do
+      cand=${cand%/}
+      [[ -d "$cand/.git" ]] || continue
+      git -C "$cand" show-ref --verify --quiet "refs/heads/$b" && matches+=("$cand")
+    done
+  done
+  [[ ${#matches[@]} -eq 1 ]] || return 1
+  printf '%s\n' "${matches[0]}"
+}
+
+if [[ ! -d "$wt" ]]; then
+  if [[ -z "$br" ]]; then
+    printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2; exit 1
+  fi
+  REPO=$(resolve_repo "$wt" "$br") || {
+    printf '%s\n' "reso-resume-one: REFUSING — cannot tell which repo owns the reaped worktree $wt." >&2
+    printf '%s\n' "  No .git/worktrees back-reference to it under ${CC_RESUME_REPO_ROOTS:-$HOME/Development}," >&2
+    printf '%s\n' "  and branch '$br' does not resolve to exactly one repo there." >&2
+    printf '%s\n' "  Name it explicitly:  reso-resume-one $acct $wt $sid $br --repo /path/to/repo" >&2
+    exit 3
+  }
+  if ! git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then
+    printf '%s\n' "reso-resume-one: branch '$br' does not exist in $REPO — nothing to recreate $wt from" >&2; exit 1
+  fi
+  git -C "$REPO" worktree prune 2>/dev/null
+  git -C "$REPO" worktree add "$wt" "$br" || {
+    printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; exit 1
+  }
+fi
+cd "$wt" || exit 1
+
+_binrow=$(resolve_claude_bin) || {
+  printf '%s\n' "reso-resume-one: REFUSING — no installed claude binary found under ~/.claude-*."
+  printf '%s\n' "  Override explicitly:  CC_RESUME_CLAUDE_BIN=/path/to/claude reso-resume-one $*"
+  exit 3
+}
+RESOLVED_VERSION=${_binrow%%	*}
+bin=${_binrow#*	}
+model=$(resolve_model) || {
+  printf '%s\n' "reso-resume-one: REFUSING — cannot read opus_latest from $MODEL_CONFIG."
+  printf '%s\n' "  Override explicitly:  CC_RESUME_MODEL=claude-opus-5 reso-resume-one $*"
+  exit 3
+}
+effort=${CC_RESUME_EFFORT:-high}
+# The fable arms set the MODEL only. They used to re-pin `effort=high` as well, which is what made
+# --effort unreachable on the one account family that needs it most: Fable 5 is the tier a session
+# is deliberately put ON, so a Fable session at max is the likeliest thing anyone resumes, and high
+# is where every one of them landed. The default for both families is unchanged (high).
+case "$acct" in
+  next|claude-next)     cfg=$HOME/.claude-next ;;
+  next2|claude-next2)   cfg=$HOME/.claude-secondary ;;
+  next3|claude-next3)   cfg=$HOME/.claude-tertiary ;;
+  next4|claude-next4)   cfg=$HOME/.claude-quaternary ;;
+  fable|claude-fable)   cfg=$HOME/.claude-next;       model=claude-fable-5 ;;
+  fable2|claude-fable2) cfg=$HOME/.claude-secondary;  model=claude-fable-5 ;;
+  fable3|claude-fable3) cfg=$HOME/.claude-tertiary;   model=claude-fable-5 ;;
+  fable4|claude-fable4) cfg=$HOME/.claude-quaternary; model=claude-fable-5 ;;
+  *) printf '%s\n' "unknown account $acct"; exit 2 ;;
+esac
+# LAST, so it beats both the account default and CC_RESUME_EFFORT — an explicit flag is the caller
+# saying what tier the session it is CONTINUING was running at, and nothing above knows that.
+[[ -n "$EFFORT" ]] && effort="$EFFORT"
+
+# ANNOUNCE. The 2026-08-09 defect was not that the pins were wrong — it was that being wrong looked
+# exactly like being right. One line makes a downgrade legible at the moment it would happen.
+printf '%s\n' "reso-resume-one: binary ${bin} (v${RESOLVED_VERSION}) · model ${model} · effort ${effort} · cfg ${cfg}"
+[[ -n "${CC_RESUME_DRYRUN:-}" ]] && exit 0
+
+# reset mouse reporting so leftover escape sequences from a crashed session don't leak as input
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
+
+# ── autonomous resume ────────────────────────────────────────────────────────────────────────────
+# Values reach expect as ENVIRONMENT, and the program below is single-quoted so bash expands none of
+# it. The previous form interpolated $cfg/$bin/$model/$sid into a double-quoted Tcl program — every
+# one of them a path or an id that only has to contain a quote or a bracket to rewrite the program.
+export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$effort" CC_RR_SID="$sid"
+export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
+# shellcheck disable=SC2016  # single quotes REQUIRED: this is an expect(1) program and its
+#   $env(...) / $spawn_out references must reach expect uninterpreted.
+exec expect -c '
+  set timeout 240
+  set cfg    $env(CC_RR_CFG)
+  set bin    $env(CC_RR_BIN)
+  set model  $env(CC_RR_MODEL)
+  set effort $env(CC_RR_EFFORT)
+  set sid    $env(CC_RR_SID)
+  set answered 0
+  spawn -noecho env DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.
+  # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the
+  # spawn-time width (verified 2026-07-05).
+  trap {
+    set rows [stty rows]
+    set cols [stty columns]
+    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}
+  } WINCH
+  expect {
+    # ── THE RESUME DIALOG. Two defects lived in the one line this replaces. ──
+    #
+    # WRONG OPTION. It answered with a bare CR, which takes whatever the cursor is resting on —
+    # option 1, "Resume from summary". That runs /compact on the transcript: the session comes back
+    # as a precis of itself, and (REFERENCE.md section 5) drops its session-scoped /goal Stop-hook,
+    # which is why recovered sessions then sit idle. A crash recovery is supposed to return the
+    # session. The operator wants option 2, "Resume full session as-is".
+    #
+    # WIDTH-DEPENDENT MATCH. "Resume from summary" is a 19-character literal and Ink hard-wraps to
+    # the pane width, so on a pane narrowed by a recovery layout the phrase is split across rows and
+    # the match never fires at all — the session then sits on an unanswered menu until the timeout,
+    # which is how three transplants parked 20+ minutes.
+    #
+    # So the trigger is as-is: five characters, narrow enough that no usable pane can break it, and
+    # present in exactly one place in the dialog — option 2 label. Not the title, and NOT the body
+    # ("we recommend resuming from a summary"), which matters for the reason lr-fire-resume:178
+    # documents: the body streams several seconds before Ink mounts the SelectInput and enables raw
+    # mode, so anything triggered on it is answered into a terminal that is not listening yet.
+    # Verbatim from the 2.1.220 bundle, in render order:
+    #   [{value:"compact",  label:"Resume from summary (recommended)"},
+    #    {value:"continue", label:"Resume full session as-is"},
+    #    {value:"never",    label:"Do not ask me again"}]
+    # RE-CHECK that list on any CC bump. Option 3 dismisses the dialog PERMANENTLY for the account,
+    # so an extra Down here is a persistent preference change, not a mis-click — which is why the
+    # move below is a clamp and exactly one step, never a loop.
+    -re {as-is} {
+      if {!$answered} {
+        set answered 1
+        # settle for raw mode, then move DETERMINISTICALLY. Up clamps at the first option, so three
+        # of them cost nothing and leave the cursor at a KNOWN place whatever it did before; one
+        # Down then lands on option 2.
+        sleep 2
+        send "\033\[A"; send "\033\[A"; send "\033\[A"
+        sleep 1
+        send "\033\[B"
+        sleep 1
+        send "\r"
+      }
+      exp_continue
+    }
+    -re {you created or one you trust|Quick safety check} { sleep 1; send "1"; send "\r"; exp_continue }
+    -re {spent .* on the Anthropic API this session} { send "\r"; exp_continue }
+    # fullscreen upsell: Down+CR selects "Not now" (option 2). RE-CHECK on any CC bump.
+    -re {new fullscreen renderer|Try the new fullscreen} { sleep 1; send "\033\[B"; send "\r"; exp_continue }
+    -re {shift.tab to cycle}  { }
+    -re {auto mode on}        { }
+    -re {\? for shortcuts}    { }
+    timeout {}
+    eof { exit }
+  }
+  # interact needs a controlling tty, so it is the one thing a headless harness cannot run. The
+  # tests drive everything above this line — the real spawn, the real matcher, the real keystrokes.
+  if {$env(CC_RR_NO_INTERACT) ne ""} {
+    set timeout 20
+    expect eof
+    exit
+  }
+  interact
+'

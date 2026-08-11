@@ -421,6 +421,22 @@ if $IS_GLOBAL; then
   # /tmp cache would be split-brain. Verified by scripts/deploy-parity-assert.sh.
   link_file "$REPO_DIR/bin/claude-accounts" "$HOME/bin/claude-accounts"
 
+  # reso-resume-one — SYMLINKED for the same reason, arrived at the hard way. It lived as an
+  # UNTRACKED file at ~/.reso/bin/ while boot-resume-launch.sh:89, boot-resume.sh, lr-fire-resume.sh
+  # and the resume-sessions runbook all called it, so it sat outside the ship gate, outside the
+  # linters and outside every reader that could see it rot — and it rotted for weeks, in the
+  # directions that are silent (a pinned binary path, a pinned model generation, a pinned effort).
+  # (That wording is deliberate: a comment whose first word after `#` is the linter's own name is
+  # parsed as a DIRECTIVE and aborts the file, so this very block once made install.sh unreadable
+  # to the gate it is explaining.)
+  # A copy here would restore exactly that: the deployed path is what boot-resume execs, so a copy
+  # that fell behind would resume the fleet on stale code and say nothing. ~/.reso/bin stays the
+  # deployed location because those four callers reference it by absolute path.
+  if [[ -f "$REPO_DIR/bin/reso-resume-one" ]]; then
+    mkdir -p "$HOME/.reso/bin"
+    link_file "$REPO_DIR/bin/reso-resume-one" "$HOME/.reso/bin/reso-resume-one"
+  fi
+
   # Accounts SSOT — symlink (repo = source of truth; the knowledge-layer mirror
   # shares ~/.claude/accounts.json into every alt config dir automatically).
   echo ""

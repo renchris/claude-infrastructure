@@ -9,7 +9,7 @@ across 4 accounts. Every gotcha below cost a real debugging cycle — trust them
 
 | tool | what it does |
 |---|---|
-| `reso-resume-one <acct> <wt> <sid> [branch]` | autonomous single-session resume: recreate reaped worktree, reset mouse reporting, auto-answer the summary prompt (expect, 240s), hand off to interactive |
+| `reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo P]` | autonomous single-session resume: recreate the reaped worktree in whatever repo owns it, reset mouse reporting, answer the resume dialog with **full-session-as-is** (expect, 240s), hand off to interactive. `--effort` keeps the reasoning tier the session was running at; the account fixes only the model |
 | `reso-keepalive [interval_s]` | re-nudges only idle panes (from `/tmp/reso-keepalive-ids.txt`) every interval; skips working panes + decision-prompts |
 | `reso-quota [--json\|--route general\|--route fable]` | COMPAT SHIM (2026-07-10) → `~/bin/claude-accounts` (claude-infrastructure/bin; adds `--rank`, `--relogin-info`, auth states, SSOT Fable window, fixed k counter; heals via headless `claude auth login`, never raw refresh-and-discard) |
 
@@ -146,16 +146,28 @@ option 2, order verified for CC 2.1.183 — RE-CHECK on any bump; mouse-reportin
 ## 5. The auto-continue gap (why sessions stall after /compact)
 
 `--resume` on a large session shows the "Resume from summary / full / don't-ask" prompt (GitHub #46751 —
-**non-configurable by design** in 2.1.183; no flag/env/setting). The only autonomous answer is to
-auto-press Enter via `expect` (picks option 1 = summary = quota-cheap). `reso-resume-one` does this with a
-240s timeout + `exp_continue` + a UI-ready match (`shift+tab to cycle`) so it works for both prompting
-(large) and non-prompting (small) sessions.
+**non-configurable by design** in 2.1.183; no flag/env/setting), so the only autonomous answer is to drive
+it with `expect`. `reso-resume-one` does this with a 240s timeout + `exp_continue` + a UI-ready match
+(`shift+tab to cycle`) so it works for both prompting (large) and non-prompting (small) sessions.
+
+**Which option it picks — changed 2026-08-10, and the paragraph below is why.** It used to auto-press
+Enter, which takes whatever the cursor rests on: option 1, summary, chosen as "quota-cheap". It now moves
+to **option 2, "Resume full session as-is"**. The quota saving was never free — it was paid for in the
+exact failure this section documents — and a crash recovery whose whole job is to lose nothing was
+choosing the answer that discards the transcript. Verbatim option list from the 2.1.220 bundle:
+`compact` = "Resume from summary (recommended)" · `continue` = "Resume full session as-is" · `never` =
+"Don't ask me again" (a persistent per-account preference — never send an extra Down). Re-check on any CC
+bump; `bin/reso-resume-one` triggers on the token `as-is` and is covered by `tests/reso-resume-one.bats`.
 
 **Resume-from-summary runs `/compact` and then DROPS the session-scoped `/goal` Stop-hook** → the session
-sits idle instead of auto-continuing. Fix = re-engage with a continue-prompt (Phase 3) and/or run
-`reso-keepalive` (Phase 4) for perpetual operation. To restore a true native loop, re-arm `/goal <cond>`
-on the session (sends a Stop-hook that blocks stopping until the condition holds) — but a blanket loop on
-a genuinely-done session invents busywork, so prefer the keepalive watcher (idle-only, decision-aware).
+sits idle instead of auto-continuing. **That is the cost that made option 1 the wrong default**: the
+cheap answer produced the very stall Phases 3 and 4 exist to undo. Taking the full session no longer
+inflicts it — but the re-engagement remains correct for the sessions that arrive here already compacted
+(a session the operator compacted by hand, or one resumed before this change). Fix = re-engage with a
+continue-prompt (Phase 3) and/or run `reso-keepalive` (Phase 4) for perpetual operation. To restore a
+true native loop, re-arm `/goal <cond>` on the session (sends a Stop-hook that blocks stopping until the
+condition holds) — but a blanket loop on a genuinely-done session invents busywork, so prefer the
+keepalive watcher (idle-only, decision-aware).
 
 ---
 
