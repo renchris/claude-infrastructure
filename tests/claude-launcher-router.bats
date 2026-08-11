@@ -73,7 +73,7 @@ mkrouter_recording() {   # $1 stdout, $2 exit code, $3 log path
 @test "claude1 pins account 1" {
   mkrouter next4 0
   run runlauncher "claude1"
-  [ "$status" -eq 0 ] || false      # unguarded, this would be graded away — only the last line counts
+  [ "$status" -eq 0 ]
   [[ "$output" == *"cfg=$HOME/.claude-next"* ]]
 }
 
@@ -157,10 +157,13 @@ mkrouter_recording() {   # $1 stdout, $2 exit code, $3 log path
   # `claude` reverted to account 1 with NO notice line — for the life of that shell.
   mkrouter next4 0
   run resource_rc "functions claude | grep -c _CC_ROUTED_DIR || true"
-  # Every assertion is `|| false`-guarded: this suite grades a test on its LAST statement only,
-  # so an unguarded early assertion is decoration. Measured on the pre-fix lib, which passed the
-  # bare-claude case below purely because its failing assertion was not the last one.
-  [ "$status" -eq 0 ] || false
+  # Every non-final `[[ ]]` below is `|| false`-guarded. bash exempts `[[ ]]` (and `(( ))`, and
+  # `! cmd`) from errexit, so a non-final one is evaluated, discarded, and DEAD — only being the
+  # body's last statement fails the test. `[ ]` is a plain builtin and needs no guard, which is
+  # why this line has none. Not theory: the pre-fix lib PASSED the bare-claude case below purely
+  # because its failing assertion was not the last line. scripts/bats-assert-liveness.py is the
+  # analyzer for this class, and the land gate runs it on every changed suite.
+  [ "$status" -eq 0 ]
   [[ "$output" =~ ^[1-9] ]]
 }
 
