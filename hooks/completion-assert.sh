@@ -402,13 +402,34 @@ _ca_dirt_predates() {   # stdout: `paths=N,newest=…,start=…` on rc 0
   dirt_predates_session "$CWD" "$SID" "$TP"
 }
 
+# ── THE SECOND AXIS, for the residue the ordering proof names (2026-08-12, backlog 76e444a40188) ──
+# Ordering exonerates only dirt OLDER than this session, and the measured ORIGIN case is the other
+# shape: claude-infrastructure-387, zero file-edit records, blocked 3/3 over a sibling's work made
+# 38 minutes INTO its run. It could not commit (this checkout's .claude/CLAUDE.md forbids it), could
+# not exonerate (write-free exoneration is gated on `_ca_assignee`, which an ORIGIN session is not)
+# and could not stay silent — unfalsifiable, which is a defect in the guard, not strictness.
+# The lib answers the assignee carve-out's TWO objections rather than dropping it: the transcript
+# must bracket the mtime (objection A, completeness) and the mtime must fall outside every Bash
+# execution window (objection B, the blind spot — bounded in TIME, so no verb is ever enumerated).
+# See hooks/lib/peer-owned.sh § THE SAME QUESTION ON A SECOND AXIS for the full conjunction.
+# GATED ON rc 2 ALONE and ordered AFTER the ordering term, exactly as that term is gated: rc 0 is
+# positive self-evidence that a dirty path is this session's own and is never overridden, rc 1 has
+# already exonerated, so this can only convert a subset of "cannot tell" into a verdict.
+_ca_dirt_outside_exec() {   # stdout: `paths=N,windows=…,newest=…,span=…` on rc 0
+  _ca_po_source || return 2
+  command -v dirt_outside_session_execution >/dev/null 2>&1 || return 2
+  dirt_outside_session_execution "$CWD" "$TP"
+}
+
 contra=0; facts=""; _ca_exon=""
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
-  _ca_dp=""
+  _ca_dp=""; _ca_dx=""
   if [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
   elif [ "$_ca_d" -eq 2 ] && _ca_dp="$(_ca_dirt_predates)" && [ -n "$_ca_dp" ]; then
     _ca_exon="${_ca_exon}dirty-predates-session:${_ca_dp} "
+  elif [ "$_ca_d" -eq 2 ] && _ca_dx="$(_ca_dirt_outside_exec)" && [ -n "$_ca_dx" ]; then
+    _ca_exon="${_ca_exon}dirty-outside-session-exec:${_ca_dx} "
   else contra=1; facts="${facts}dirty tree (${DIRTY_N} file(s)); "; fi
 fi
 if [ "$UNLANDED" -eq 1 ]; then
