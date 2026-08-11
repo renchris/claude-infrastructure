@@ -196,6 +196,30 @@ nothing). The shipped control re-adds the target account's user-scope non-stdio 
   control spawns BEFORE asserting the flagged one does not. A mutant run (`CC_MCP_NOINHERIT=off`) kills
   4 of the 8, so the guards are not vacuous.
 
+**Real-fire verification — an A/B, because one arm alone proves nothing.** Two live `handoff-fire.sh`
+fires of the same brief into the same worktree, which carried a project `.mcp.json` declaring the fake
+logging server:
+
+| fire | engaged | project stdio servers started |
+|---|---|---|
+| `--with-mcp` (the pre-change command shape) | yes, latency 169 s | **1** — parent recorded as the fired session's own `claude … --effort high You are a one-shot evidence…` |
+| default (no-inherit) | yes, latency 16 s | **0** |
+
+The fired session's own report closes it from the inside: its argv carried
+`--strict-mcp-config --mcp-config=/…/cc-mcp-userscope-.claude-quaternary.json`, and `pgrep -P $PPID -l`
+returned exactly one child — `caffeinate`. No MCP child.
+
+⚠️ **The first attempt at this evidence FAILED THE FIRE, and that is the finding worth keeping.** It died
+at `Invalid MCP configuration: Failed to read file: ENAMETOOLONG` with the pane left at a shell: the
+composer had emitted `--mcp-config <path>`, and the option is variadic, so it consumed the brief — a bare
+positional in every interactive launch — as a second config path. Nine green tests and every free probe
+missed it because they all drive the CLI with `-p`, where the prompt is the value of a flag and can never
+be slurped: **the shape under test did not contain the failing axis.** Fixed to `--mcp-config=<path>`
+(`f32ba1f0`), now pinned both at the composer and by grepping the dry run's typed command line, which is
+the only place a loose positional exists. (A second fire also failed to engage, before the control fire
+engaged at 169 s on a box at load 13/10 cores — that one is the known INC-4 cold-fire race, not this
+change; the treatment fire engaged in 16 s with the flags present.)
+
 **Sites deliberately NOT changed** (a silent cap reads as coverage):
 - `hooks/session-start.sh:74` — `claude mcp list`, a flagless child CLI that health-starts every approved
   stdio server on every session start, then exits. It is a spawn site and it was previously unnamed, but
