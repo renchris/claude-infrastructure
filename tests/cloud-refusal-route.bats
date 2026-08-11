@@ -93,17 +93,37 @@ artifact() { # <rc> <at> <body>
     printf '%s\n' "$3"; } >"$CC_CLOUD_STATE/$ID.land-refused"
 }
 
-# The lander's preamble, VERBATIM in shape from the live 2026-08-11 artifact. It is prepended to
-# every body on purpose: it names `scripts/desk-land.sh` and a /private/tmp worktree, which is
-# exactly the text a path-scraping classifier would convict, and it contains the word
-# "unattributable" from the SUCCESS line, which is what the by-design control turns on.
+# The lander's preamble and tail, TRANSCRIBED FROM THE FIRST REAL ARTIFACT this rail ever produced
+# (2026-08-11) rather than composed here. Both are carried by every body on purpose, because each
+# holds a trap a hand-written fixture would never think to include — and TWO of them were live
+# defects found exactly this way:
+#
+#   · `scripts/desk-land.sh` + a /private/tmp worktree — what a path-SCRAPING classifier convicts
+#   · "unattributable", from cloud-reconcile's SUCCESS line — what a word-keyed identity matcher hits
+#   · `→ gate: git-identity escape ratchet` — a PROGRESS line ship-land prints whenever that arm
+#     RUNS, green or red, so every refusal raised by a LATER arm contains the string "git-identity"
+#   · desk-land's exit-code LEGEND — which spells `9 GATE-KILLED` as VOCABULARY on every failure
+#
+# Carrying them in the shared fixture means a regression on any of the four reds EVERY arm below,
+# not one. (memory: control-must-replay-the-real-artifact — a fixture cannot surprise you with what
+# a real producer writes.)
 preamble() {
   cat <<EOF
 → $BRANCH — re-authored 2 commit(s) as <ren.chris@outlook.com> (2 of them were unattributable); provenance in Cloud-session / Original-commit / Original-branch trailers, and 'origin' still holds the originals.
 → desk-land: created throwaway worktree for '$BRANCH': /private/tmp/.desk-land-x-15071 (removed on exit)
 → desk-land: handing '$BRANCH' to the ship rail (/private/tmp/.desk-land-x-15071/scripts/ship-land.sh)…
 → ship-land[unlocked]: fetch + rebase + gate (statics + ratchets + bounded smoke) — no lock held
+→ gate: statics memo — 0 file verdict(s) carried, 0 proven fresh.
+→ gate: git-identity escape ratchet (a fixture identity that can land in the caller's repo)
 → gate: test-hermeticity ratchet (before bats — seconds, and it names the file)
+EOF
+}
+
+# desk-land's own failure tail. The parenthesised code map is the trap.
+desk_tail() { # <ship-land exit code>
+  cat <<EOF
+✗ desk-land: ship rail exited $1 for '$BRANCH' — surfaced verbatim (2 dirty/preflight · 3 escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push non-ff · 8 verify-fail · 9 GATE-KILLED · 75 LOCK-STARVED). NOT retrying blindly — but 9 and 75 are statements about the MACHINE, not findings about the tree: those two ARE the retryable ones.
+✗ $BRANCH — lander exited $1.
 EOF
 }
 
@@ -116,7 +136,9 @@ $(preamble)
 test-hermeticity-lint: ⛔ 1 new non-hermetic suite(s) above.
   Fix: in setup(), \`export HOME="\$BATS_TEST_TMPDIR/home"; mkdir -p "\$HOME"\`, then
        seed whatever fixture state the subject reads under it. Do NOT add to the allowlist.
+✗ gate: test-hermeticity RED — something THIS LAND CHANGES runs against ambient state.
 ✗ ship-land: GATE RED — not pushing.
+$(desk_tail 6)
 EOF
 }
 
@@ -173,6 +195,33 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   [ "$(says_n)" -eq 0 ]
 }
 
+@test "CONTROL: desk-land's exit-code LEGEND spells 'GATE-KILLED' on every failure — vocabulary, not a verdict" {
+  # THE FIRST REAL ARTIFACT FAILED HERE, and no fixture written by hand would have. desk-land
+  # surfaces a code map on every non-zero ship rail — `(… 8 verify-fail · 9 GATE-KILLED · 75
+  # LOCK-STARVED)` — so a bare `*"GATE-KILLED"*` read an ordinary hermeticity RED as a cut, refused
+  # to route it, and the refusal loop would have been silently inert on its first live run. The
+  # matcher must anchor on the EMITTER (`ship-land: GATE-KILLED`), never on the token.
+  decl "tests/probe.bats"
+  artifact 70 1786479000 "$(hermeticity_red probe.bats)"
+  grep -q '9 GATE-KILLED' "$CC_CLOUD_STATE/$ID.land-refused"     # the trap is really in the body
+  run "$SUT" --id "$ID"
+  [[ "$output" != *"arm=cut"* ]]
+  [[ "$output" == *"arm=vm"* ]]
+  [ "$(says_n)" -eq 1 ]
+}
+
+@test "…and a REAL kill still reads as a cut even with that legend present" {
+  # The other half of the same pair: tightening the matcher must not make it blind. Both spellings
+  # of a genuine kill are in one body here, alongside the legend that must be ignored.
+  decl "tests/probe.bats"
+  artifact 70 1786479000 "$(preamble)
+⛔ ship-land: GATE-KILLED — the gate died without earning a verdict, so this is NOT a red.
+$(desk_tail 9)"
+  run "$SUT" --id "$ID"
+  [[ "$output" == *"arm=cut"* ]]
+  [ "$(says_n)" -eq 0 ]
+}
+
 # ═══ 2. THE IDENTITY WALL — by design, and its control is the load-bearing one ═══════════════════
 
 @test "an identity-gate refusal goes HOME, never to the VM — the re-authoring land owns it" {
@@ -201,11 +250,30 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
 @test "a git-identity GATE ARM red is by-design too — the VM cannot change who authored its commits" {
   decl "docs/vm.md"
   artifact 6 1786479000 "$(preamble)
-✗ gate: git-identity RED — the range carries an unattributable author.
+✗ gate: git-identity RED — a file THIS LAND CHANGES can write its test identity into the caller's repo.
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
   [[ "$output" == *"arm=by-design"* ]]
   [ "$(says_n)" -eq 0 ]
+}
+
+@test "CONTROL: 'git-identity' is a PROGRESS line on every land that reaches that arm" {
+  # The second live defect, and the more damaging of the two. ship-land prints
+  # `→ gate: git-identity escape ratchet (…)` whenever that arm RUNS — green or red — so a bare
+  # `*"git-identity"*` would classify EVERY refusal raised by a later arm (utc-stamp, self-path,
+  # pane-spawn, permission-gate, bats, smoke …) as the by-design identity wall and send it home.
+  # The loop would have worked only for the handful of arms that run BEFORE git-identity.
+  decl "tests/probe.bats"
+  artifact 6 1786479000 "$(preamble)
+→ gate: script-dir resolution ratchet (a repo root derived from an unresolved \$0)
+✗ gate: self-path RED: tests/probe.bats
+✗ ship-land: GATE RED — not pushing.
+$(desk_tail 6)"
+  grep -q 'git-identity escape ratchet' "$CC_CLOUD_STATE/$ID.land-refused"   # the trap is present
+  run "$SUT" --id "$ID"
+  [[ "$output" != *"arm=by-design"* ]]
+  [[ "$output" == *"arm=vm"* ]]
+  [ "$(says_n)" -eq 1 ]
 }
 
 # ═══ 3. FIXABLE-BY-VM — the gate named a file this session's own commits wrote ═══════════════════
