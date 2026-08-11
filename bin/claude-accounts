@@ -275,6 +275,23 @@ def load_cfg(need_claude_bin=True):
 ROUTER_KEYS = ("S_CUT", "S_SOFT", "SF_FLOOR", "KMAX", "KFLOOR", "MARGIN_H", "EPS_H",
                "WEEKLY_FLOOR", "FABLE_FLOOR", "JB_BONUS")
 
+# The desk lane's constants (DESK_ROUTER_AND_STARTUP_V1 W1) are VALIDATED but deliberately not in
+# ROUTER_KEYS. That tuple is a REQUIRED list — a key missing from it is a sys.exit inside every
+# consumer of this tool at once — and ~/.claude/accounts.json is a symlink into a checkout that is
+# older than the code for as long as a land takes to converge, so a required-key addition fails
+# CLOSED across the whole fleet during exactly that window. M7's own additions (URGENCY_EXP,
+# KWORK_WINDOW_MIN, ASSIGN_TTL_MIN, PROJ_LOOKAHEAD_H) are absent from ROUTER_KEYS for that reason
+# and ride R.get() defaults. So: optional PRESENCE, range-checked when present — which is strictly
+# more than ROUTER_KEYS does for most of its own keys, and it catches the plausible typo here: a
+# floor written as 60 instead of 0.60 (a fraction entered as a percentage) would silently make
+# every account 5h-safe forever, i.e. delete the guard while reading as a configured one.
+ROUTER_OPTIONAL_RANGES = {
+    "DESK_5H_FLOOR": (0.0, 1.0),        # projected 5h utilisation must be BELOW this to be safe
+    "DESK_W_FLOOR": (0.0, 1.0),         # weekly headroom must be AT/ABOVE this to be safe
+    "DESK_HYST_MARGIN": (0.0, 1.0),     # fraction a rival must beat the incumbent by
+    "DESK_HYST_TTL_MIN": (0.0, 10080.0),  # how long a launcher assignment names the incumbent
+}
+
 
 def _validate_router(cfg):
     """Fail with a MESSAGE on a bad router block, never with a traceback.
@@ -299,6 +316,12 @@ def _validate_router(cfg):
         problems.append(f"KMAX must be >= 1 (got {R['KMAX']})")
     if R["EPS_H"] <= 0:
         problems.append(f"EPS_H must be > 0 (got {R['EPS_H']})")
+    for key, (lo, hi) in ROUTER_OPTIONAL_RANGES.items():
+        if key not in R:
+            continue                    # optional by contract — the code default stands
+        v = R[key]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not lo <= v <= hi:
+            problems.append(f"{key} must be a number in [{lo}, {hi}] (got {v!r})")
     if problems:
         sys.exit(f"claude-accounts: invalid router constants in {CFG_PATH}: "
                  + "; ".join(problems))
@@ -443,7 +466,29 @@ def concurrency(cfg):
     return counts
 
 
-def working_concurrency(cfg, window_min=None, budget_s=2.0):
+KWORK_BUDGET_S = 5.0       # was 2.0 — see the budget note in working_concurrency's docstring
+KWORK_TIMEOUTS = 0         # per-process count, surfaced on route-meta as kwork_to=
+
+
+def _kwork_unmeasured(budget_s, scanned):
+    """The ONE return path for an over-budget walk: log it, count it, return None.
+
+    Silence here was a real blind spot (R1 §5): the swing is `k_eff` 2 → 7 for one account, which
+    is the difference between routable and `kmax-concurrency`, and nothing anywhere said the count
+    had changed instrument mid-decision. It is logged rather than printed because the caller is a
+    sweep, not a route — the route path surfaces the same fact per-decision as `k_src=` on
+    route-meta, which is answerable from disk afterwards."""
+    global KWORK_TIMEOUTS
+    KWORK_TIMEOUTS += 1
+    log_event(f"working_concurrency: walk exceeded budget_s={budget_s:.1f} after {scanned} "
+              "project dirs — k_work UNMEASURED for this sweep, so the router charges the PANE "
+              "census instead (measured swing k_eff 2 -> 7 on one account, R1 §5). The normal "
+              "walk is 0.04-0.07s over 826 transcripts, so this means the box is pathologically "
+              "loaded — i.e. exactly when the concurrency count matters most.")
+    return None
+
+
+def working_concurrency(cfg, window_min=None, budget_s=None):
     """WORKING sessions per account: transcripts (projects/<slug>/*.jsonl) written within the
     window. concurrency() above counts every live interactive PROCESS — measured 28 on an
     account whose 5h window sat at 60%, i.e. mostly idle desks — so it over-states burn
@@ -456,13 +501,30 @@ def working_concurrency(cfg, window_min=None, budget_s=2.0):
 
     Returns None — not {} — when the walk cannot finish inside budget_s: a partial count reads
     as 'nothing working', which is the dangerous direction (it would ADMIT a pile-on), so the
-    consumer (k_eff) falls back to the stricter pane census instead."""
+    consumer (k_eff) falls back to the stricter pane census instead.
+
+    THE BUDGET, 2.0 -> 5.0 (W1.7, and it is not a "just raise the timeout" — the number was
+    sized against the wrong distribution). The measured walk is 0.04-0.07 s over 826 transcripts,
+    so 2.0 s is ~30x the normal case and 5.0 s is ~70x: neither is a real bound on healthy work,
+    and the only walks the old bound cut were ones the box had already made pathological. What the
+    cut BUYS is nothing — the fallback is the pane census, which R1 measured at 7 where the true
+    working count was 2, i.e. the fallback excludes the account the routing goal most needs burned.
+    The cost of raising it is bounded and paid on the SWEEP path only: `--max-wait 0` cache reads
+    (the launcher's own call, `claude-launcher.zsh:59`) never reach this function at all, and a
+    concurrent caller behind the sweep lock degrades to the grace cache rather than waiting. So
+    the worst case is +3 s on a sweep that is already the slow path, in exchange for measuring the
+    term instead of guessing it. Not unbounded: a genuinely hung filesystem still returns None,
+    now loudly."""
     R = cfg.get("router") or {}
     window_s = 60.0 * (window_min if window_min is not None else
                        _cliff_env("CC_ROUTE_KWORK_WINDOW_MIN",
                                   R.get("KWORK_WINDOW_MIN", KWORK_WINDOW_MIN)))
+    if budget_s is None:
+        budget_s = _cliff_env("CC_ROUTE_KWORK_BUDGET_S",
+                              R.get("KWORK_BUDGET_S", KWORK_BUDGET_S))
     deadline = time.monotonic() + budget_s
     now = time.time()
+    scanned = 0
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
     mirror_next = next((a["name"] for a in cfg["accounts"]
@@ -483,14 +545,15 @@ def working_concurrency(cfg, window_min=None, budget_s=2.0):
                 continue
             for slug in slugs:
                 if time.monotonic() > deadline:
-                    return None
+                    return _kwork_unmeasured(budget_s, scanned)
+                scanned += 1
                 if not slug.is_dir(follow_symlinks=False):
                     continue
                 try:
                     with os.scandir(slug.path) as files:
                         for fe in files:
                             if time.monotonic() > deadline:
-                                return None
+                                return _kwork_unmeasured(budget_s, scanned)
                             if not fe.name.endswith(".jsonl"):
                                 continue
                             try:
@@ -500,7 +563,12 @@ def working_concurrency(cfg, window_min=None, budget_s=2.0):
                                 continue
                 except OSError:
                     continue
-    except Exception:
+    except Exception as e:
+        # Same instrument change as the budget path, different cause — and just as invisible
+        # before this line: the sweep records k_work=None and the router silently re-charges
+        # the pane census. Never fatal (a census is a valid, stricter answer), never silent.
+        log_event(f"working_concurrency: walk aborted by {type(e).__name__}: {e} — k_work "
+                  "UNMEASURED for this sweep, router charges the pane census")
         return None
     return counts
 
@@ -1249,6 +1317,32 @@ ASSIGN_TTL_MIN = 15.0      # assignment lifetime ≈ cache TTL + engage + first 
 ASSIGN_PRUNE_LINES = 400   # ledger rewrite threshold (kept to the newest half)
 URGENCY_EXP_DEFAULT = 2.0
 PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the window reset)
+
+# ---- the DESK lane's own terms (DESK_ROUTER_AND_STARTUP_V1 W1, R2 §7(ii)/§10) -------------------
+# The desk lane is a two-key SORT, not a product of factors (see score_interactive), so it needs
+# three constants the other lanes do not have. All optional in the SSOT, all kill-switched, all
+# range-validated by _validate_router when present.
+#   DESK_5H_FLOOR       projected 5h utilisation below which an account is "5h-safe".
+#                       Kill: CC_ROUTE_DESK_5H_FLOOR=off (a NUMBER moves the floor; see below).
+#   DESK_W_FLOOR        weekly headroom at/above which an account is "weekly-safe".
+#                       Kill: CC_ROUTE_DESK_W_FLOOR=off.
+#   DESK_HYST_MARGIN    fraction by which a rival must beat the INCUMBENT desk account to take it
+#                       (D-B, START_LATENCY_ROUTER.md:82-83 — specified, never built until now).
+#                       Kill: CC_ROUTE_DESK_HYST=off; CC_ROUTE_DESK_HYST_MARGIN overrides the value.
+#   DESK_HYST_TTL_MIN   how long a `--assign … --src claude-launcher` row still names the incumbent.
+#                       300 min = one full 5-hour window: the bucket the desk's own burn lives in.
+#                       Longer would pin the desk to an account whose quota state no longer has
+#                       anything to do with the session the operator is sitting in.
+DESK_5H_FLOOR = 0.60
+DESK_W_FLOOR = 0.15
+DESK_HYST_MARGIN = 0.15
+DESK_HYST_TTL_MIN = 300.0
+# `--src` values whose phantom charge the DESK lane does not pay (W1.5). A launcher assignment is
+# the desk's own previous launch: charging it means the second bare `claude` inside the TTL is
+# nudged AWAY from the account the operator is already sitting on. Right for dispatch (spread),
+# wrong for a human desk (flapping). General/fable keep charging it — one store, two readings.
+# Kill: CC_ROUTE_DESK_ASSIGN_EXEMPT=off.
+DESK_EXEMPT_SRC = ("claude-launcher",)
 ASSIGN_PATH = os.environ.get("CC_ASSIGN_LOG") or os.path.join(
     HOME, ".claude", "logs", "account-assignments.jsonl")
 
@@ -1273,16 +1367,31 @@ def k_eff(r):
     return (base or 0) + (r.get("k_phantom") or 0)
 
 
-def assignment_counts(cfg, path=None, now=None):
-    """Live per-account count of assignments younger than the TTL. Read at INVOCATION time, not
-    sweep time — acting inside the 90s cache TTL is this term's entire purpose. A malformed line
-    or missing ledger is silence, never an error: spread is advisory."""
-    counts = {}
-    if not _term_on("CC_ROUTE_ASSIGN"):
-        return counts
-    ttl_s = 60.0 * _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
-                              cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN))
-    now = time.time() if now is None else now
+def k_eff_desk(r):
+    """Concurrency the DESK lane charges: k_eff minus the desk's own launcher phantoms (W1.5).
+
+    The desk lane's two-key sort has no KF term, so this reaches routing through exactly ONE gate
+    — `_excluded`'s KMAX cap — and that is the harsher half of the original complaint: a phantom
+    that merely re-ordered the general lane can lock the desk OUT of the account the operator is
+    already working in, for a whole ASSIGN_TTL_MIN, on the evidence of the operator's own previous
+    launch. `k_phantom_desk` is stamped by apply_assignments; its ABSENCE (a module-level caller, an
+    older cached row) degrades to the shared `k_phantom`, i.e. to pre-W1 behaviour — the exemption
+    fails toward charging, never toward admitting a pile-on."""
+    if not _term_on("CC_ROUTE_DESK_ASSIGN_EXEMPT"):
+        return k_eff(r)
+    kw = r.get("k_work")
+    base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else r.get("k", 0)
+    ph = r.get("k_phantom_desk")
+    if ph is None:
+        ph = r.get("k_phantom")
+    return (base or 0) + (ph or 0)
+
+
+def _assignment_rows(path=None):
+    """Every parseable assignment row, oldest first. One read, two readings (all-srcs for the
+    dispatch lanes, launcher-exempt for the desk) — a second open() would race the appender and
+    could hand the two lanes different ledgers for the same decision."""
+    out = []
     try:
         with open(path or ASSIGN_PATH) as f:
             for line in f:
@@ -1290,12 +1399,58 @@ def assignment_counts(cfg, path=None, now=None):
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                t = e.get("t")
-                if isinstance(t, (int, float)) and 0 <= now - t <= ttl_s and e.get("acct"):
-                    counts[e["acct"]] = counts.get(e["acct"], 0) + 1
+                if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and e.get("acct"):
+                    out.append(e)
     except OSError:
         pass
+    return out
+
+
+def assignment_counts(cfg, path=None, now=None, exempt_src=()):
+    """Live per-account count of assignments younger than the TTL. Read at INVOCATION time, not
+    sweep time — acting inside the 90s cache TTL is this term's entire purpose. A malformed line
+    or missing ledger is silence, never an error: spread is advisory.
+
+    `exempt_src` drops rows by their `--src` (W1.5) — used only by the desk lane; the default is
+    empty, so general/fable charging is byte-identical to pre-W1."""
+    counts = {}
+    if not _term_on("CC_ROUTE_ASSIGN"):
+        return counts
+    ttl_s = 60.0 * _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
+                              cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN))
+    now = time.time() if now is None else now
+    for e in _assignment_rows(path):
+        if 0 <= now - e["t"] <= ttl_s and e.get("src") not in exempt_src:
+            counts[e["acct"]] = counts.get(e["acct"], 0) + 1
     return counts
+
+
+def desk_incumbent(cfg, path=None, now=None):
+    """The account the DESK is currently on — the newest `--src claude-launcher` assignment inside
+    DESK_HYST_TTL_MIN — or None. This is the hysteresis input (W1.4 / D-B).
+
+    Why this store and not a new one: the launcher already records the fact at the moment of
+    choice (`claude-launcher.zsh:84`), so the desk's own history is already on disk and a second
+    store would be a second truth. Note the symmetry with W1.5 — the SAME rows the desk refuses to
+    charge as load are the rows it reads as memory. That is the honest reading of a launcher
+    assignment: it is not concurrent burn, it is where the operator is sitting.
+
+    None whenever the term is off, the ledger is unreadable, or nothing is in window — hysteresis
+    then simply does not apply, which is exactly pre-W1 behaviour."""
+    if not _term_on("CC_ROUTE_DESK_HYST"):
+        return None
+    ttl_s = 60.0 * _cliff_env("CC_ROUTE_DESK_HYST_TTL_MIN",
+                              cfg["router"].get("DESK_HYST_TTL_MIN", DESK_HYST_TTL_MIN))
+    now = time.time() if now is None else now
+    best = None
+    for e in _assignment_rows(path):
+        if e.get("src") not in DESK_EXEMPT_SRC:
+            continue
+        if not 0 <= now - e["t"] <= ttl_s:
+            continue
+        if best is None or e["t"] >= best["t"]:
+            best = e
+    return best["acct"] if best else None
 
 
 def record_assignment(cfg, acct, src=None, path=None):
@@ -1329,10 +1484,20 @@ def record_assignment(cfg, acct, src=None, path=None):
 
 def apply_assignments(rows, cfg):
     """Stamp live phantom counts onto rows (cached or fresh — both are ≤TTL-old opinions about
-    everything EXCEPT what this box fired seconds ago, which is exactly what phantoms carry)."""
+    everything EXCEPT what this box fired seconds ago, which is exactly what phantoms carry).
+
+    Three fields, one ledger read each by construction: `k_phantom` (every src — what general and
+    fable charge, unchanged), `k_phantom_desk` (launcher-src exempt — W1.5), and `desk_incumbent`
+    (W1.4). The desk facts are stamped HERE, beside the phantom count, rather than read inside
+    score_interactive, because a scorer runs once per row and would otherwise re-read the ledger
+    four times per decision and could see it change mid-ranking."""
     counts = assignment_counts(cfg)
+    desk_counts = assignment_counts(cfg, exempt_src=DESK_EXEMPT_SRC)
+    inc = desk_incumbent(cfg)
     for r in rows:
         r["k_phantom"] = counts.get(r.get("acct"), 0)
+        r["k_phantom_desk"] = desk_counts.get(r.get("acct"), 0)
+        r["desk_incumbent"] = (inc is not None and r.get("acct") == inc)
 
 
 def _su_projected(r, R):
@@ -1452,7 +1617,12 @@ def pace_line(rows):
     return ("pace to 100%: " + " · ".join(parts)) if parts else ""
 
 
-def _excluded(r, R, cliff=True):
+def _excluded(r, R, cliff=True, k_of=None):
+    """`k_of` selects the concurrency charge (default k_eff). The desk lane passes k_eff_desk so its
+    own launcher phantom cannot lock it out of the account the operator is already in (W1.5); every
+    other caller keeps k_eff, so eligibility for general/fable is unchanged. Eligibility otherwise
+    stays SHARED across lanes — a different objective over the same eligibility (C6), never a
+    second opinion about who is eligible."""
     if "error" in r:
         return r["error"]
     if r.get("session_pct") is None:
@@ -1461,7 +1631,7 @@ def _excluded(r, R, cliff=True):
     sr = r.get("session_reset_h")
     if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
         return "5h-cutoff"
-    if k_eff(r) >= R["KMAX"]:
+    if (k_of or k_eff)(r) >= R["KMAX"]:
         return "kmax-concurrency"
     # LAST of the exclusions, deliberately: a row with no live quota must still report its DATA
     # reason (that is what drives exit 3 rather than 2), and a genuinely capped account must still
@@ -1489,43 +1659,166 @@ def score_general(r, cfg, cliff=True):
     return (w_rem / (T ** urgency_exp(R))) * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
 
 
-def score_interactive(r, cfg, cliff=True):
-    """SURVIVAL score for a human's long-lived desk. Deliberately NOT score_general.
+DESK_TIER_SAFE = 2      # 5h-safe AND weekly-safe — the set the rule wants to pick from
+DESK_TIER_5H = 1        # 5h-safe only (the weekly-headroom key degraded away)
+DESK_TIER_ANY = 0       # eligible, neither key satisfied (both keys degraded away)
+DESK_KEY_MAX = 0.999    # ceiling on the within-tier term: a tier boundary is never crossable
 
-    🚨 score_general is `headroom / T**2` — deadline-DOMINANT by construction (M7), because a
-    dispatched fire is SHORT and the objective there is to spend quota before it strands. It
-    therefore prefers the account nearest its reset. An interactive desk is the opposite shape: it
-    lives for hours or days, and the cost of a wrong pick is the operator hitting a wall mid-work.
-    Pointing bare `claude` at the dispatch score would place the operator NEAREST exhaustion and
-    manufacture the 5-hour wall this lane exists to prevent — while reading as an ordinary limit
-    hit, with nothing anywhere pointing at routing as the cause.
 
-    So this lane maximises RUNWAY and carries no 1/T urgency term at all:
-      w_rem  absolute weekly headroom  — how much work is left this week
-      s_rem  projected 5h headroom     — the near-term wall, and the one the operator actually feels
-      KF/CF  the shared concurrency and credits factors
-    The login-cliff factor still applies, and the interactive lane never YIELDS it — see ranked().
+def _desk_floor(env, R, key, default, neutral):
+    """A desk floor: env override > SSOT constant > code default, with `off` NEUTRALISING the key.
 
-    Shares every exclusion with general (_excluded), so this is a different objective over the
-    same eligibility, never a second opinion about who is eligible."""
+    `off`/`false`/`none` is the kill switch. The numeral 0 deliberately is NOT — this is where the
+    knob departs from _term_on, because for the 5h key 0 does not mean "no floor", it means MAXIMAL
+    strictness (nothing is ever 5h-safe), so reading 0 as off would invert the switch. A malformed
+    value falls back to the default (_cliff_env's contract): a typo in a tuning knob must never
+    silently disable a guard."""
+    raw = (os.environ.get(env) or "").strip().lower()
+    if raw in ("off", "false", "none"):
+        return neutral
+    return clamp(_cliff_env(env, R.get(key, default)), 0.0, 1.0)
+
+
+def desk_5h_floor(R):
+    return _desk_floor("CC_ROUTE_DESK_5H_FLOOR", R, "DESK_5H_FLOOR", DESK_5H_FLOOR, float("inf"))
+
+
+def desk_w_floor(R):
+    return _desk_floor("CC_ROUTE_DESK_W_FLOOR", R, "DESK_W_FLOOR", DESK_W_FLOOR, 0.0)
+
+
+def desk_hyst_margin(R):
+    if not _term_on("CC_ROUTE_DESK_HYST"):
+        return 0.0
+    return clamp(_cliff_env("CC_ROUTE_DESK_HYST_MARGIN",
+                            R.get("DESK_HYST_MARGIN", DESK_HYST_MARGIN)), 0.0, 1.0)
+
+
+def desk_keys(r, cfg):
+    """The desk lane's two keys and its TIER for one row -> (su, w_rem, tier).
+
+    THE DEGRADATION LADDER, written out rather than left to emerge from a fallback that happens to
+    fire (W1.1). Every ELIGIBLE row lands on exactly one rung, so the candidate set cannot be
+    emptied by these keys — that is the property, and it is structural, not lucky:
+
+      tier 2  SAFE SET  projected 5h utilisation < DESK_5H_FLOOR  AND  weekly headroom >= DESK_W_FLOOR
+      tier 1  5H-SAFE   the 5h key holds; the weekly-headroom key does not
+      tier 0  ELIGIBLE  neither key holds — still routable, still ranked
+
+    The weekly key degrades FIRST because it is the cheaper guarantee to lose: it exists only to
+    stop a pure earliest-reset sort from handing the desk an account with 2% of its week left and
+    3 hours to reset (a WEEKLY wall, the unrecoverable one). The 5h key degrades second because a
+    5-hour wall self-heals in <=5 h and has three escapes. Below both, the ladder still ranks by the
+    objective; it never answers "none" while an eligible account exists.
+
+    (su, None, tier 0) when weekly_pct is absent — the caller's own data gate rejects that row
+    before the tier is used; the tier is defined here anyway so route-meta can never index None.)"""
     R = cfg["router"]
-    reason = _excluded(r, R, cliff)
+    su = _su_projected(r, R)
+    wp = r.get("weekly_pct")
+    if wp is None:
+        return su, None, DESK_TIER_ANY
+    w_rem = max(0.0, (0.98 if r.get("credits_on") else 1.00) - wp / 100.0)
+    if su < desk_5h_floor(R):
+        return su, w_rem, (DESK_TIER_SAFE if w_rem >= desk_w_floor(R) else DESK_TIER_5H)
+    return su, w_rem, DESK_TIER_ANY
+
+
+def score_interactive(r, cfg, cliff=True):
+    """The DESK lane: a TWO-KEY rule — 5h-safe set first, then EARLIEST WEEKLY RESET.
+
+    ── The reversal, recorded (2026-08-11, DESK_ROUTER_AND_STARTUP_V1 W1, docs/research/R2) ──────
+    This function shipped on 2026-08-10 (`9a843f988`) as a SURVIVAL score — `w_rem * s_rem * KF *
+    CF`, maximise runway, no 1/T term — on the argument preserved verbatim below. That argument's
+    load-bearing claim is now MEASURED FALSE, so the objective is inverted here. The old reasoning
+    is kept, not deleted, because it is exactly the plausible-but-wrong derivation the next reader
+    would otherwise re-do from scratch (it was itself derived as agent finding "S8" in a research
+    wave, on the same day the operator's own M7 /goal stated the opposite objective, and it was
+    validated on a SYNTHETIC PAIR because the live snapshot could not discriminate the lanes):
+
+      C1-C3 (still true): score_general is `w_rem / T**2`, deadline-DOMINANT by construction (M7),
+        because a dispatched fire is SHORT and the objective there is to spend quota before it
+        strands. A desk session does live for hours or days in WALL-CLOCK terms.
+      C4 (MEASURED FALSE): "pointing bare `claude` at the dispatch score would place the operator
+        NEAREST exhaustion and manufacture the 5-hour wall this lane exists to prevent."
+        🚨 It would not, and the refutation is a CODE fact before it is a measurement:
+        score_general already multiplies by `_soft` — which carries the hard S_CUT=0.85 exclusion,
+        a PROJECTED 5h ramp from S_SOFT=0.50, the same KF and the same CF (see _soft above). Both
+        lanes always shared the 5-hour brake; they differed in exactly two terms (the 1/T**2
+        urgency, and the shape of the 5h term). "NEAREST exhaustion" under score_general means
+        nearest its WEEKLY reset, which is a different bucket from the one the operator feels.
+        Replayed over all 324 sweeps of the utilization series, scored on what actually happened in
+        the following 6 h: the survival lane hit the 5h wall on 4.6% of picks and the dispatch lane
+        on 3.4% — the survival lane was measurably WORSE at its own job, because w_rem dominance
+        sent it to the roomiest WEEKLY account rather than the roomiest 5-HOUR one. Weekly
+        exhaustion: 0/324, both lanes. The two lanes disagreed on 92% of sweeps (298/324), so the
+        landing commit's "both lanes name next4 on today's live fleet" was a one-snapshot artifact.
+      C5 (superseded): the two-key rule below scored 0.6% wall exposure on the same replay (5-8x
+        better than either shipped lane) and 0.0% on the one genuinely stressed window, while
+        picking the earliest-resetting account — i.e. it dominates the survival score on the
+        survival axis too, which is why this is a reversal and not a trade.
+
+    ── The rule ──────────────────────────────────────────────────────────────────────────────────
+    Among _excluded-eligible accounts: prefer those with projected 5h utilisation < DESK_5H_FLOOR
+    and weekly headroom >= DESK_W_FLOOR; among those, take the EARLIEST WEEKLY RESET. It is the
+    operator's own sentence executed literally ("earlier weekly expiry and low 5-hour used"), and
+    it is the M7 objective — spend quota before it strands — with a 5-hour guard in front of it.
+    ~30 percentage-points of weekly quota is forecast to strand per week on this fleet, and stranded
+    weekly quota has NO recovery, where a 5-hour wall self-heals in <=5 h and has three escapes.
+
+    Expressed as a score so _rank_pass/ranked() stay one code path: `tier + within-tier key`, with
+    the tier from desk_keys() (the explicit ladder) and the key `1/(1+T)` — largest for the
+    soonest reset, bounded in (0,1) so it can never cross a tier boundary. Consequences worth
+    naming: there is no KF term any more (concurrency binds only through _excluded's KMAX cap, and
+    the desk does not pay its own launcher phantom — k_eff_desk, W1.5), and no CF term (the credits
+    weekly target is already in w_rem). Ties inside a tier fall to accounts.json order, which is
+    deterministic — a desk must not flap between two equal accounts.
+
+    ⚠️ DESK_5H_FLOOR = 0.60 is UNTESTED BY THIS DATA, NOT VALIDATED BY IT. The replay was flat at
+    0.6% for every floor in {0.50, 0.60, 0.70} x every weekly floor in {0, 0.15, 0.30} — but that
+    is because the fleet almost never approaches 60% 5h utilisation (3 of 4 accounts never exceeded
+    61% across 38 h), so the floor almost never binds and its insensitivity is an ABSENCE OF
+    EVIDENCE, not evidence of robustness. It is insurance, sized by argument rather than by
+    measurement: below S_CUT=0.85 with real margin, above the 61% ceiling three accounts observed,
+    so it binds on pathology (the one next3-shaped case in 38 h, which is precisely when a naive
+    earliest-reset sort would hand the operator a capped desk) and never on ordinary load. The
+    weekly floor made no difference at all on this data (0/324) and is kept for the same reason.
+    Re-run the replay after >=2 full weekly cycles before treating either number as durable.
+
+    KEPT from the shipped lane, unchanged: every exclusion is shared with general (_excluded, C6 —
+    a different objective over the same eligibility, never a second opinion about who is eligible),
+    the login-cliff factor applies, and the interactive lane NEVER YIELDS the cliff term (C7, see
+    ranked() — past the cliff `invalid_grant` has no reset to wait for). That rule, not the score,
+    is why this lane deserves to exist."""
+    R = cfg["router"]
+    reason = _excluded(r, R, cliff, k_of=k_eff_desk)
     if reason:
         return None, reason
     if r.get("weekly_pct") is None:
         return None, "no-weekly-data"
-    wtgt = 0.98 if r.get("credits_on") else 1.00
-    w_rem = max(0.0, wtgt - r["weekly_pct"] / 100.0)
+    su, w_rem, tier = desk_keys(r, cfg)
     if w_rem <= R["WEEKLY_FLOOR"]:
         return None, "weekly-exhausted"
-    # Linear 5h headroom rather than _soft's S_SOFT..S_CUT band: the band is a late-stage brake
-    # meant to break ties near the cutoff, whereas this lane wants the difference between a 10%
-    # and a 60% window to dominate the pick from the start.
-    su = _su_projected(r, R)
-    s_rem = clamp((R["S_CUT"] - su) / R["S_CUT"], R["SF_FLOOR"], 1.0)
-    KF = clamp(1 - k_eff(r) / R["KMAX"], R["KFLOOR"], 1.0)
-    CF = (1.0 if (r.get("weekly_pct") or 0) / 100.0 < 0.90 else 0.5) if r.get("credits_on") else 1.0
-    return w_rem * s_rem * KF * CF * (_cliff_factor(r) if cliff else 1.0), None
+    # EARLIEST WEEKLY RESET, as a bounded descending key: T is the same urgency denominator every
+    # other lane uses (horizon() — so an absent or elapsed reset reads as FAR AWAY, never imminent),
+    # and 1/(1+T) is in (0,1) for every T >= EPS_H, so a within-tier key can never reach the next
+    # tier however the operator tunes EPS_H.
+    key = 1.0 / (1.0 + horizon(r.get("weekly_reset_h"), R))
+    # The cliff SOFT band demotes INSIDE the tier rather than across tiers: the band's documented
+    # job is "loses ties" (a multiplier, not an exclusion — hard-excluding for a week would discard
+    # ~25% of fleet capacity), and a soft-band account is still a safer desk than an account that
+    # failed the 5h key outright.
+    key *= (_cliff_factor(r) if cliff else 1.0)
+    # HYSTERESIS (W1.4 / D-B, specified at START_LATENCY_ROUTER.md:82-83 and never built until
+    # now): the incumbent desk account keeps the desk unless a rival beats it by DESK_HYST_MARGIN.
+    # Inside the tier only, deliberately — stickiness must never hold the operator on an account
+    # that has fallen out of the safe set, which is exactly when the desk SHOULD move. What it
+    # prevents is the measured churn: consecutive-decision flips ran 20.6% lifetime and 43.4% over
+    # the last 100 decisions, and a flip is not free — projects/sessions/history.jsonl are
+    # per-account, so `--resume` cannot see across a move.
+    if r.get("desk_incumbent"):
+        key *= 1.0 + desk_hyst_margin(R)
+    return tier + min(key, DESK_KEY_MAX), None
 
 
 def score_fable(r, cfg, win, cliff=True):
@@ -3278,7 +3571,24 @@ def main():
                               f"quota_as_of={w.get('quota_as_of') or '-'}",
                               f"quota_age_s={age if age is not None else '-'}",
                               f"cached={1 if cached else 0}",
-                              f"yielded={1 if w.get('cliff_yielded') else 0}"]),
+                              f"yielded={1 if w.get('cliff_yielded') else 0}",
+                              # W1.7 — WHICH INSTRUMENT charged concurrency for this decision.
+                              # k_work is None whenever the sweep's walk went over budget, and the
+                              # router then silently re-charges the PANE census: measured swing
+                              # k_eff 2 -> 7 for one account, i.e. the difference between routable
+                              # and kmax-concurrency, with nothing on disk saying the instrument
+                              # had changed. `kwork_to` counts over-budget walks in THIS process
+                              # (0 on a cache read, which is why k_src is reported too).
+                              f"k_src={'off' if not _term_on('CC_ROUTE_KWORK') else ('work' if w.get('k_work') is not None else 'panes')}",
+                              f"k_work={w.get('k_work') if w.get('k_work') is not None else '-'}",
+                              f"k={w.get('k') if w.get('k') is not None else '-'}",
+                              f"k_eff={k_eff(w)}",
+                              f"kwork_to={KWORK_TIMEOUTS}"]
+                             # The desk lane's own decision inputs: which rung of the degradation
+                             # ladder the winner came from, and whether hysteresis was in play.
+                             + ([f"desk_tier={desk_keys(w, cfg)[2]}",
+                                 f"desk_incumbent={1 if w.get('desk_incumbent') else 0}",
+                                 f"desk_k_eff={k_eff_desk(w)}"] if kind == "interactive" else [])),
                   file=sys.stderr)
         drained = [r["acct"] for _s, r in cand if r.get("cliff_yielded")]
         if drained:

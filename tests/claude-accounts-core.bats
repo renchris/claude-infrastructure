@@ -1621,3 +1621,291 @@ PY
   # the bad call must not have appended
   [ "$(wc -l < "$ledger")" -eq 1 ]
 }
+
+# ---- the DESK lane: the two-key rule (DESK_ROUTER_AND_STARTUP_V1 W1, docs/research/R2) ---------
+# The `interactive` lane shipped 2026-08-10 with NO test coverage at all — not one case named it —
+# which is how a score whose load-bearing premise was false landed and stayed. These cases pin the
+# policy itself (not its arithmetic), the degradation ladder, both kill switches, hysteresis, the
+# phantom exemption, and the one rule the reversal must NOT touch (cliff no-yield).
+
+@test "router desk: the two-key rule takes the EARLIEST WEEKLY RESET among 5h-safe accounts" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_DESK_HYST",
+          "CC_ROUTE_DESK_ASSIGN_EXEMPT", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+# The 2026-08-11T20:05:28Z incident, verbatim from R1 §2: the shipped survival lane ranked next3
+# 0.6334 over next 0.5402 (+17.2%) on weekly headroom 0.97 vs 0.56, while /accounts (general)
+# ranked next3 LAST. next resets its week in 103h, next3 in 159h.
+n3 = row(acct="next3", session_pct=15, session_reset_h=2.5, weekly_pct=3, weekly_reset_h=159.0,
+         k=0, k_work=0)
+n1 = row(acct="next", session_pct=3, session_reset_h=3.4, weekly_pct=44, weekly_reset_h=103.0,
+         k=0, k_work=0)
+s3, w3 = ca.score_interactive(n3, cfg); s1, w1 = ca.score_interactive(n1, cfg)
+assert w3 is None and w1 is None, (w3, w1)
+# CONTROL — the pre-W1 survival formula, inline, so the fixture provably discriminates the two
+# POLICIES and not merely the two accounts. The old code is deleted; its answer must not be.
+def survival(r):
+    su = ca._su_projected(r, R)
+    s_rem = ca.clamp((R["S_CUT"] - su) / R["S_CUT"], R["SF_FLOOR"], 1.0)
+    w_rem = 1.0 - r["weekly_pct"] / 100.0
+    KF = ca.clamp(1 - ca.k_eff(r) / R["KMAX"], R["KFLOOR"], 1.0)
+    return w_rem * s_rem * KF
+assert survival(n3) > survival(n1), "fixture no longer reproduces the incident"
+# ...and the two-key rule inverts it: both accounts are in the SAFE SET, so the pick is decided
+# purely by which week expires first. This assertion is RED on the pre-change scorer.
+assert s1 > s3, (s1, s3)
+assert ca.desk_keys(n3, cfg)[2] == ca.desk_keys(n1, cfg)[2] == ca.DESK_TIER_SAFE
+# the SSOT constants ARE the code defaults (accounts.json claims it; nothing checked it)
+assert R["DESK_5H_FLOOR"] == ca.DESK_5H_FLOOR, R["DESK_5H_FLOOR"]
+assert R["DESK_W_FLOOR"] == ca.DESK_W_FLOOR, R["DESK_W_FLOOR"]
+# lane isolation: general keeps its own objective, unchanged by any of this
+g3 = ca.score_general(n3, cfg)[0]; g1 = ca.score_general(n1, cfg)[0]
+assert g1 > g3, (g1, g3)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router desk: the degradation ladder never empties — safe-set, then 5h-safe, then eligible" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+safe = row(acct="safe", session_pct=10, weekly_pct=40, weekly_reset_h=150.0)
+thin = row(acct="thin", session_pct=10, weekly_pct=95, weekly_reset_h=10.0)   # 5h-safe, weekly-thin
+hot  = row(acct="hot",  session_pct=70, weekly_pct=40, weekly_reset_h=1.0)    # over the 5h floor
+assert ca.desk_keys(safe, cfg)[2] == ca.DESK_TIER_SAFE
+assert ca.desk_keys(thin, cfg)[2] == ca.DESK_TIER_5H      # the WEEKLY key degrades first
+assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY
+# TIER DOMINANCE: the ladder is lexicographic, so no weekly deadline however imminent can lift a
+# row out of its rung — hot resets in 1h and still loses to safe, which resets in 150h.
+ss = ca.score_interactive(safe, cfg)[0]
+st = ca.score_interactive(thin, cfg)[0]
+sh = ca.score_interactive(hot, cfg)[0]
+assert ss > st > sh, (ss, st, sh)
+# ...AND THE SET IS NEVER EMPTIED. A fleet where every account fails BOTH keys still returns a
+# ranking — the failure mode most likely to ship is this one answering "none" and the launcher
+# silently falling back to the pinned account.
+allhot = [row(acct="h1", session_pct=70, weekly_pct=40, weekly_reset_h=100.0),
+          row(acct="h2", session_pct=80, weekly_pct=95, weekly_reset_h=20.0)]
+out, reasons = ca.ranked(allhot, cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out] == ["h2", "h1"], (out, reasons)   # earliest reset still wins
+assert reasons == {}, reasons
+# every returned score is strictly positive — _rank_pass drops s <= 0, so a zero-valued bottom
+# rung would silently empty the set instead of ranking it
+assert all(s > 0 for s, _r in out), out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router desk: both floors are kill-switched, and 0 is STRICTNESS, never off" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+hot  = row(session_pct=70, weekly_pct=40)      # over the 0.60 floor
+cool = row(session_pct=10, weekly_pct=40)
+thin = row(session_pct=10, weekly_pct=95)      # weekly headroom 0.05 < 0.15
+assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "off"
+assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_SAFE          # key neutralised
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0"
+# POLARITY: 0 is not "no floor", it is "nothing is ever 5h-safe". _term_on would have read this
+# as off and inverted the switch — the reason these knobs do not use it.
+assert ca.desk_keys(cool, cfg)[2] == ca.DESK_TIER_ANY
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0.75"
+assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_SAFE          # a NUMBER moves the floor
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "not-a-number"
+assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY           # malformed ⇒ the default stands
+os.environ.pop("CC_ROUTE_DESK_5H_FLOOR")
+assert ca.desk_keys(thin, cfg)[2] == ca.DESK_TIER_5H
+os.environ["CC_ROUTE_DESK_W_FLOOR"] = "off"
+assert ca.desk_keys(thin, cfg)[2] == ca.DESK_TIER_SAFE
+os.environ["CC_ROUTE_DESK_W_FLOOR"] = "0"                      # 0 headroom-floor IS neutral here
+assert ca.desk_keys(thin, cfg)[2] == ca.DESK_TIER_SAFE
+os.environ.pop("CC_ROUTE_DESK_W_FLOOR")
+# with both keys off the rule degenerates to a pure earliest-weekly-reset sort — the documented
+# degenerate form, and it must still never empty the set
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "off"; os.environ["CC_ROUTE_DESK_W_FLOOR"] = "off"
+rows = [row(acct="far", session_pct=70, weekly_pct=95, weekly_reset_h=140.0),
+        row(acct="soon", session_pct=70, weekly_pct=95, weekly_reset_h=4.0)]
+out, _ = ca.ranked(rows, cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out] == ["soon", "far"], out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router desk: hysteresis keeps the incumbent unless beaten by the margin, and is switchable" {
+  run python3 -c "$LOAD"'
+import json, os, time
+for v in ("CC_ROUTE_DESK_HYST", "CC_ROUTE_DESK_HYST_MARGIN", "CC_ROUTE_DESK_HYST_TTL_MIN",
+          "CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_PROJ", "CC_ROUTE_ASSIGN"):
+    os.environ.pop(v, None)
+inc  = row(acct="inc", weekly_pct=40, weekly_reset_h=30.0, desk_incumbent=True)
+near = row(acct="near", weekly_pct=40, weekly_reset_h=27.0)    # earlier reset, inside the margin
+far  = row(acct="far", weekly_pct=40, weekly_reset_h=20.0)     # earlier reset, PAST the margin
+si = ca.score_interactive(inc, cfg)[0]
+assert si > ca.score_interactive(near, cfg)[0], "incumbent lost inside the margin"
+assert si < ca.score_interactive(far, cfg)[0], "incumbent held past the margin"
+# it is a WITHIN-TIER preference only: stickiness must never hold the desk on an account that has
+# fallen out of the safe set, which is exactly when it should move.
+hot_inc = row(acct="inc", session_pct=70, weekly_pct=40, weekly_reset_h=30.0, desk_incumbent=True)
+assert ca.score_interactive(hot_inc, cfg)[0] < ca.score_interactive(near, cfg)[0]
+os.environ["CC_ROUTE_DESK_HYST"] = "off"
+assert ca.score_interactive(inc, cfg)[0] < ca.score_interactive(near, cfg)[0]
+os.environ.pop("CC_ROUTE_DESK_HYST")
+# the incumbent comes from the launcher`s own --assign rows and nothing else
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "hyst.jsonl")
+now = time.time()
+with open(p, "w") as f:
+    f.write(json.dumps({"t": now - 60, "acct": "desk-acct", "src": "claude-launcher"}) + "\n")
+    f.write(json.dumps({"t": now - 10, "acct": "fired-acct", "src": "handoff-fire"}) + "\n")
+assert ca.desk_incumbent(cfg, path=p) == "desk-acct"           # a NEWER dispatch fire is not it
+with open(p, "a") as f:
+    f.write(json.dumps({"t": now - 5, "acct": "newer-desk", "src": "claude-launcher"}) + "\n")
+assert ca.desk_incumbent(cfg, path=p) == "newer-desk"
+os.environ["CC_ROUTE_DESK_HYST_TTL_MIN"] = "0.01"              # everything now out of window
+assert ca.desk_incumbent(cfg, path=p) is None
+os.environ.pop("CC_ROUTE_DESK_HYST_TTL_MIN")
+os.environ["CC_ROUTE_DESK_HYST"] = "off"
+assert ca.desk_incumbent(cfg, path=p) is None
+os.environ.pop("CC_ROUTE_DESK_HYST")
+assert ca.desk_incumbent(cfg, path="/nonexistent/ledger") is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router desk: the desk does not pay its OWN launcher phantom; dispatch still does" {
+  run python3 -c "$LOAD"'
+import json, os, time
+for v in ("CC_ROUTE_ASSIGN", "CC_ROUTE_ASSIGN_TTL_MIN", "CC_ROUTE_DESK_ASSIGN_EXEMPT",
+          "CC_ROUTE_KWORK", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "exempt.jsonl")
+now = time.time()
+with open(p, "w") as f:
+    f.write(json.dumps({"t": now - 30, "acct": "next3", "src": "claude-launcher"}) + "\n")
+    f.write(json.dumps({"t": now - 20, "acct": "next3", "src": "handoff-fire"}) + "\n")
+assert ca.assignment_counts(cfg, path=p) == {"next3": 2}
+assert ca.assignment_counts(cfg, path=p, exempt_src=ca.DESK_EXEMPT_SRC) == {"next3": 1}
+# the CHARGE, and the one gate it reaches: the desk lane has no KF term, so a launcher phantom can
+# only ever act through _excluded`s KMAX cap — i.e. by locking the desk OUT of the account the
+# operator is already sitting in.
+r = row(k_work=R["KMAX"] - 1, k_phantom=1, k_phantom_desk=0)
+assert ca.k_eff(r) == R["KMAX"] and ca.k_eff_desk(r) == R["KMAX"] - 1
+assert ca.score_general(r, cfg) == (None, "kmax-concurrency")
+assert ca.score_interactive(r, cfg)[1] is None, ca.score_interactive(r, cfg)
+os.environ["CC_ROUTE_DESK_ASSIGN_EXEMPT"] = "off"
+assert ca.score_interactive(r, cfg) == (None, "kmax-concurrency")
+os.environ.pop("CC_ROUTE_DESK_ASSIGN_EXEMPT")
+# ABSENCE fails toward CHARGING: a row with no k_phantom_desk (an older cache, a module caller)
+# reads the shared count, never zero.
+assert ca.k_eff_desk(row(k_work=2, k_phantom=3)) == 5
+# apply_assignments stamps all three desk fields from ONE ledger read
+os.environ["CC_ASSIGN_LOG"] = p
+ca.ASSIGN_PATH = p
+rows = [row(acct="next3"), row(acct="other")]
+ca.apply_assignments(rows, cfg)
+assert rows[0]["k_phantom"] == 2 and rows[0]["k_phantom_desk"] == 1, rows[0]
+assert rows[0]["desk_incumbent"] is True and rows[1]["desk_incumbent"] is False, rows
+assert rows[1]["k_phantom"] == 0 and rows[1]["k_phantom_desk"] == 0, rows[1]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router desk: the cliff no-yield rule survives the objective change" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_CLIFF_TERM", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+# every account inside the DRAIN band ⇒ the cliff term is what emptied the candidate set
+rows = [row(acct="a", login_expires_h=10.0), row(acct="b", login_expires_h=20.0)]
+out, reasons = ca.ranked(rows, cfg, WIN_OPEN, "general")
+assert [r["acct"] for _s, r in out] == ["a", "b"], out          # dispatch YIELDS and re-ranks
+assert all(r.get("cliff_yielded") for _s, r in out), out
+# the desk lane does NOT: past the cliff invalid_grant has no reset to wait for, so abstaining and
+# letting the launcher fall back to its pinned account beats a desk that dies on auth mid-session.
+out_i, reasons_i = ca.ranked(rows, cfg, WIN_OPEN, "interactive")
+assert out_i == [], out_i
+assert set(reasons_i.values()) == {ca.CLIFF_DRAIN_REASON}, reasons_i
+# the SOFT band still demotes inside the lane, and only inside its own tier
+soft = row(acct="soft", weekly_pct=40, weekly_reset_h=30.0, login_expires_h=100.0)
+clear = row(acct="clear", weekly_pct=40, weekly_reset_h=30.0)
+assert ca.cliff_band(soft) == "soft"
+assert ca.score_interactive(soft, cfg)[0] < ca.score_interactive(clear, cfg)[0]
+assert ca.desk_keys(soft, cfg)[2] == ca.DESK_TIER_SAFE
+assert ca.score_interactive(soft, cfg)[0] > ca.score_interactive(
+    row(acct="hot", session_pct=70, weekly_pct=40, weekly_reset_h=1.0), cfg)[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "load_cfg: a desk constant out of range fails with a message; absence keeps the default" {
+  python3 - "$CA_CFG" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1])); c["router"]["DESK_5H_FLOOR"] = 60      # a fraction typed as a %
+json.dump(c, open(sys.argv[1], "w"))
+PY
+  run python3 "$CA_BIN" --route interactive --no-heal
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid router constants"* ]] || { echo "$output"; false; }
+  [[ "$output" == *DESK_5H_FLOOR* ]] || { echo "$output"; false; }
+  [[ "$output" != *Traceback* ]] || false
+
+  # OPTIONAL by contract: removed entirely, the code default stands and the tool still runs. A
+  # required-key addition would sys.exit for every consumer at once while a land converges.
+  python3 - "$CA_CFG" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+for k in ("DESK_5H_FLOOR", "DESK_W_FLOOR", "DESK_HYST_MARGIN", "DESK_HYST_TTL_MIN"):
+    c["router"].pop(k, None)
+json.dump(c, open(sys.argv[1], "w"))
+PY
+  run bash -c "python3 '$CA_BIN' --route interactive --fresh --no-heal 2>&1 >/dev/null"
+  [[ "$output" != *Traceback* ]] || { echo "$output"; false; }
+  [[ "$output" != *"invalid router constants"* ]] || { echo "$output"; false; }
+}
+
+@test "--route interactive: e2e picks the earliest-resetting safe account and says WHY on route-meta" {
+  python3 - <<'PY'
+import json, os, time, importlib.machinery, importlib.util
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
+cfg = json.load(open(os.environ["CA_CFG"]))
+def r(n, wk, wrh, **kw):
+    d = {"acct": n, "auth": "ok", "k": 0, "k_work": 0, "session_pct": 10, "session_reset_h": 3.0,
+         "weekly_pct": wk, "weekly_reset_h": wrh, "fable_pct": 10, "fable_reset_h": 24.0,
+         "credits_on": False}
+    d.update(kw); return d
+# roomiest week + latest reset vs the operator's stated preference: earlier expiry, low 5h use
+json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+           "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
+           "prev": None,
+           "rows": [r("roomy", 3, 159.0), r("expiring", 47, 86.0)]},
+          open(os.environ["CACHE"], "w"))
+PY
+  run bash -c "python3 '$CA_BIN' --route interactive 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [ "${lines[0]}" = "expiring" ]
+  run bash -c "python3 '$CA_BIN' --route interactive 2>&1 >/dev/null"
+  [[ "$output" == *"route-meta: "* ]] || { echo "$output"; false; }
+  [[ "$output" == *"acct=expiring"* ]] || { echo "$output"; false; }
+  # W1.7 — WHICH instrument charged concurrency, so a pick made on the pane census is auditable
+  [[ "$output" == *"k_src=work"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kwork_to=0"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"desk_tier=2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"desk_incumbent=0"* ]] || { echo "$output"; false; }
+  # the desk fields are the DESK lane's own — they must not leak onto a dispatch decision
+  run bash -c "python3 '$CA_BIN' --route general 2>&1 >/dev/null"
+  [[ "$output" == *"k_src="* ]] || { echo "$output"; false; }
+  [[ "$output" != *desk_tier* ]] || { echo "$output"; false; }
+}
