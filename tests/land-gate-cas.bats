@@ -548,7 +548,7 @@ EOF
   sl="$REPO/scripts/ship-land.sh"
   ml="$(awk '/^main_locked\(\)/{print NR; exit}' "$sl")"
   nx="$(awk -v s="$ml" 'NR>s && /^[a-z_]+\(\) \{/{print NR; exit}' "$sl")"
-  [ -n "$ml" ] && [ -n "$nx" ]
+  [ -n "$ml" ] && [ -n "$nx" ] || false
   [ "$(awk -v a="$ml" -v b="$nx" 'NR>a && NR<b' "$sl" | grep -c 'attest_land .*"round"')" -eq 0 ]
   # …and it DOES appear in the outer loop, so this is a placement assertion and not a vacuous one.
   [ "$(grep -c 'attest_land .*"round"' "$sl")" -eq 1 ]

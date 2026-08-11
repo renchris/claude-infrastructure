@@ -502,14 +502,14 @@ print(\"ok\")"' _ "$output"
   # re-run. A QUEUED row (exit -1) carries hold_s 0 and must not enter the percentile — it would
   # pull the median toward zero exactly when the box is most contended, i.e. quietest when it
   # matters most, which is this suite's standing failure direction.
-  printf '{"ts":"%s","repo":"/r","branch":"b","event":"queued","wait_s":0,"hold_s":0,"exit":-1,"depth":1,"pid":9}\n' \
-    "$(ago 2)" >> "$LAND_LOG"
-  printf '{"ts":"%s","repo":"/r","branch":"b","event":"queued","wait_s":0,"hold_s":0,"exit":-1,"depth":1,"pid":9}\n' \
-    "$(ago 2)" >> "$LAND_LOG"
-  printf '{"ts":"%s","repo":"/r","branch":"b","event":"release","wait_s":0,"hold_s":100,"exit":0,"depth":0,"pid":4}\n' \
-    "$(ago 2)" >> "$LAND_LOG"
-  printf '{"ts":"%s","repo":"/r","branch":"b","event":"release","wait_s":0,"hold_s":200,"exit":0,"depth":0,"pid":5}\n' \
-    "$(ago 2)" >> "$LAND_LOG"
+  lock_hold() {  # <hours-ago> <event> <hold_s> <exit>
+    printf '{"ts":"%s","repo":"/r","branch":"b","event":"%s","wait_s":0,"hold_s":%s,"exit":%s,"depth":0,"pid":9}\n' \
+      "$(ago "$1")" "$2" "$3" "$4" >> "$LAND_LOG"
+  }
+  lock_hold 2 queued  0   -1
+  lock_hold 2 queued  0   -1
+  lock_hold 2 release 100  0
+  lock_hold 2 release 200  0
   for _ in 1 2 3 4 5 6 7 8 9 10; do land 2 0 ''; done
   run "$CENSUS" --days 1 --json
   [ "$status" -eq 0 ]

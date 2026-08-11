@@ -2754,7 +2754,11 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   scope_fixture                                          # a real tests/ tree, so the smoke has a cause
   stub_selector "" "tests/a.bats"
   git checkout -q -b feat/p0-fallback-red main
-  printf '#!/usr/bin/env bash\nfoo=$(echo hi\necho "$foo\n' > broken.sh   # shellcheck cannot pass this
+  # A file the statics phase cannot pass. The comment says "ShellCheck" with a capital S on
+  # purpose: a trailing comment whose first word is the lowercase tool name parses as a MISPLACED
+  # DIRECTIVE (SC1126 → SC1073 → SC1072) and aborts analysis of this whole suite, which the
+  # bats-shellcheck ratchet then reports as UNANALYZABLE. Caught by `--precheck` on this very diff.
+  printf '#!/usr/bin/env bash\nfoo=$(echo hi\necho "$foo\n' > broken.sh
   git add broken.sh && git commit -q -m "feat: broken"
 
   run env SHIP_LAND_GATE_ROUNDS=0 bash "$SHIPLAND" --trunk main
