@@ -14,6 +14,14 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/autonomy"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/ratchet.json"
+  # PIN THE PRODUCTION LATCH GUARDS OFF, so every case below measures the RATCHET rather than the
+  # guard. Both defaults exist to stop a degenerate read latching an unreachable target, and a bats
+  # fixture (2-5 items, often 100% covered) is EXACTLY the degenerate population they refuse — so
+  # unpinned they convict the harness instead of the subject
+  # (MEMORY.md: guard-refusal-fires-on-its-own-harness). Each guard gets its own case below, where
+  # it is the subject and the pin is lifted deliberately.
+  export CC_RATCHET_MIN_N=1
+  export CC_RATCHET_MAX_HW=100.0
   : > "$CC_BACKLOG_FILE"
 }
 
@@ -113,4 +121,83 @@ done_() { printf '{"id":"%s","ts":"%s","event":"done"}\n' "$1" "$2" >> "$CC_BACK
 @test "an unknown argument is refused rather than silently ignored" {
   run "$SUT" --nonsense
   [ "$status" -eq 2 ]
+}
+
+# ── READINESS W0 (2026-08-11): the guards that stop the ratchet latching a target it cannot reach ──
+#
+# The live ratchet died of exactly this. Its high-water sat at 100.0% against a population where
+# ~103 items are deliberately unprobed, so --assert returned rc=1 on EVERY run and all 3 verdicts
+# autonomy-sweep had ever journalled were RED. Four cases, and each one must be able to fail.
+
+@test "CEILING: a coverage above MAX_HW is reported but must NOT latch as the target" {
+  # THE REGRESSION TEST FOR THE DEAD RATCHET. Without the ceiling this records 100.0 and every
+  # later run of a realistic store is permanently RED.
+  export CC_RATCHET_MAX_HW=95.0
+  add a 2026-08-01T00:00:00Z "true"
+  add b 2026-08-01T00:00:00Z "true"
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "NOT raised"
+  printf '%s' "$output" | grep -q "ceiling 95.0%"
+  # The unreachable target must not be on disk at all — a latched 100.0 is the whole defect.
+  [ ! -f "$CC_RATCHET_STATE" ] || ! grep -q '"coverage_high_water":"100.0"' "$CC_RATCHET_STATE"
+}
+
+@test "CEILING lets a REACHABLE coverage latch, or it would just be a different way to never arm" {
+  # The paired control. A guard that blocked every latch would disarm the ratchet as thoroughly as
+  # the bug it replaces, so the ceiling must be PERMISSIVE below its own bound.
+  export CC_RATCHET_MAX_HW=95.0
+  add a 2026-08-01T00:00:00Z "true"
+  add b 2026-08-01T00:00:00Z "true"
+  add c 2026-08-01T00:00:00Z "true"
+  add d 2026-08-01T00:00:00Z          # 3 of 4 = 75%, under the ceiling
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]
+  grep -q '"coverage_high_water":"75.0"' "$CC_RATCHET_STATE"
+}
+
+@test "FLOOR: a denominator under MIN_N may not set the fleet's target" {
+  # 1-of-1 is 100%. A transient or half-written store must never become the standing bar.
+  export CC_RATCHET_MIN_N=20
+  add a 2026-08-01T00:00:00Z "true"
+  add b 2026-08-01T00:00:00Z
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "denominator 2 < floor 20"
+  [ ! -f "$CC_RATCHET_STATE" ] || ! grep -q 'coverage_high_water' "$CC_RATCHET_STATE"
+}
+
+@test "a denominator VERSION change resets the mark, says so, and PERSISTS the new version" {
+  # Changing WHAT is counted makes the old mark incomparable rather than stale. The reset is the one
+  # path on which the mark may fall — so it must announce itself, and it must actually write, or
+  # every subsequent run re-announces a reset that never happened.
+  printf '{"coverage_high_water":"100.0","denominator_version":1,"recorded":"2026-08-11T07:12:51Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  add a 2026-08-01T00:00:00Z "true"
+  add b 2026-08-01T00:00:00Z
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]                                  # the stale v1 mark must not red the new v2
+  printf '%s' "$output" | grep -q "v1→v2"
+  grep -q '"denominator_version":2' "$CC_RATCHET_STATE"
+  ! grep -q '"coverage_high_water":"100.0"' "$CC_RATCHET_STATE" || false
+  # …and the reset must be ONE event: a second run re-announces nothing.
+  run "$SUT" --assert
+  printf '%s' "$output" | grep -qv "v1→v2" || true
+  ! printf '%s' "$output" | grep -q "RESET from"
+}
+
+@test "the \`needs\` class is excluded from the denominator, and the exclusion is PRINTED" {
+  # `needs` rows are born BLOCKED (bin/cc-backlog:544), so today this exclusion removes zero rows —
+  # it guards the reopen case. The count is printed precisely so it can never again be ASSUMED
+  # non-zero, which is the error that produced this wave's retracted measurement #3.
+  printf '{"id":"n1","ts":"2026-08-01T00:00:00Z","event":"add","project":"p","title":"t","source":"needs"}\n' \
+    >> "$CC_BACKLOG_FILE"
+  add a 2026-08-01T00:00:00Z "true"
+  run "$SUT" --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"live_items":2'      # the needs row IS live (never blocked here)
+  printf '%s' "$output" | grep -q '"probeable_items":1' # …and is NOT in the denominator
+  printf '%s' "$output" | grep -q '"falsifier_coverage_pct":100'
+  run "$SUT"
+  printf '%s' "$output" | grep -q '2 live minus 1 needs-class'
 }
