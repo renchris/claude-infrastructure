@@ -105,6 +105,62 @@ atomic `mv`, or via `claude mcp remove` from a session on that config dir; never
 `87ef04ead50d` closed. **Constraint:** touch only browsermcp keys — the `agent-browser` entry in
 `enabledMcpjsonServers` stays (it is the CLI's skill hook, not a server).
 
+### W1 + W2 — DONE 2026-08-11 (one session, as Phase 0 planned)
+
+**Landed.** reso `f4eadb534` (free wins) + `e0e7c951a` (opt-in flip), both content-verified on
+`origin/main` via reso's own `scripts/ship-land.sh` — `land-status.sh` asserted live that landing
+bills nothing. claude-infrastructure `47cc3f27` (wrapper retirement), 7 paths content-verified.
+Backlog `572b6341aa12` and `87ef04ead50d` closed with evidence.
+
+**🚨 W1's stated premise was already false when this plan was written — check before briefing from
+it again.** The plan (and the wave brief) recorded the stanza as
+`chrome-devtools: npx chrome-devtools-mcp@latest --isolated`, "verified 2026-08-10". `origin/main`
+had routed it through `scripts/mcp/chrome-devtools-mcp.sh` since **2026-08-06** (`7f3ffea02`). The
+pre-grep read a lagging checkout — the exact trap reso's own `CLAUDE.md` documents ("local `main`
+is a LAGGING CACHE — read `origin/main`"). The plan also expected the wrapper in "two worktrees";
+it is on trunk, so it is in **all** of them. Nothing errored; the free wins simply had to be applied
+inside the wrapper rather than to the stanza.
+
+**The flip PASSED its evidence gate** (it was not forced):
+
+- **Parity 11/11.** `agent-browser` was run — not name-matched — against a live reso preview route,
+  one row per tool weighted by the real 30-day mix. The checklist needed two corrections before its
+  result meant anything: `tab new` switches context (so the snapshot and click rows had been running
+  against `about:blank`), and the click row asserted a regex that could not fail, reporting PASS over
+  the literal text "Element not found". Final form counts click events the PAGE receives, with a
+  bogus-selector negative control that must not increment.
+- **Control A/B/A.** default → 2 processes (~188 MB + ~79 MB); `disabledMcpjsonServers` → none;
+  setting removed again → chain returns. The third run is the point. Attribution walks UP each
+  candidate's ppid chain — a global `ps | grep` on this box credited other sessions' chains to the
+  probe.
+
+**🔑 Two findings W3 should not have to rediscover:**
+
+1. **A project-level disable BEATS a local enable, and it fails SILENTLY.**
+   `enabledMcpjsonServers:["chrome-devtools"]` in a worktree `settings.local.json` spawned nothing
+   against a project-level `disabledMcpjsonServers`. The working opt-in needs BOTH keys
+   (`"disabledMcpjsonServers": []` as well). Documented in reso's `CLAUDE.md`; shipping the flip
+   without it would have been shipping a trap. The asymmetry is also what makes disable-by-default
+   safe — nothing can accidentally re-enable it.
+2. **W2's site list was under-counted, in a way a name-grep finds and a path-grep does not.** Actual:
+   **5** config dirs with `enabledMcpjsonServers` (plan said 2 + "mirrors"), **5** project
+   `settings.local.json` (plan said 4), plus **60 dead `mcp__browsermcp__*` permissions** (12 × 5
+   files) the plan did not mention at all, and `~/.claude/.mcp.json` is **one real file that 4
+   config dirs symlink into**. Repo-side, the wrapper was named by **three copy-lists**
+   (`install.sh`, `sync.sh`, `deploy-parity-assert.sh` `COPY_TOOLS`) — a parity list naming a file
+   the repo no longer ships reports drift forever, which is how a guard stops being read.
+
+**Known reach limit, stated not discovered later.** `.mcp.json` and `.claude/settings.json` are
+tracked, so a worktree gets the free wins and the flip only once it **rebases**. At land time ~70 of
+77 reso worktrees were on an older base and kept the eager `npx @latest` server; the live census
+still shows their chains. Fleet-wide effect is a rebase question, not a landing question — W5's
+sweep should count it that way rather than reading those chains as a failed flip.
+
+**Also done under W1(d):** the dead 1.3 GB `~/.cache/chrome-devtools-mcp/chrome-profile` deleted,
+after proving unreachability first — every chrome-devtools config on the box (77 worktrees + 2
+checkouts) either passes `--isolated` or routes through the wrapper, which passes it on both exec
+paths; the one config that did not was the `~/.claude.json` shadow entry, deleted the same day (1.e).
+
 ## W3 · no-inherit for agent fan-out (backlog `eece54939e7f`)
 
 The measured mechanism: headless/`-p`/SDK processes load project `.mcp.json` stdio servers UNCONDITIONALLY
