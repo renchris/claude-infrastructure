@@ -197,14 +197,27 @@ classify() { # <body> <rc> <vm-paths-csv> → sets ARM ∈ cut|by-design|local-o
   if [ -z "$ARM" ]; then
     case "$body" in
       *"verdict=killed"*) ARM="cut"; ARM_WHY="ship-land reported verdict=killed — it did not fail a gate and nothing was proven about the tree" ;;
-      *"GATE-KILLED"*)    ARM="cut"; ARM_WHY="the gate died without earning a verdict (GATE-KILLED) — a claim about the machine, not about the tree" ;;
+      # 🚨 ANCHORED ON THE EMITTER, NOT ON THE TOKEN — and this cost the FIRST real artifact.
+      # A bare `*"GATE-KILLED"*` classified a perfectly ordinary hermeticity RED as a cut, because
+      # desk-land prints an exit-code LEGEND on every failure — `(2 dirty/preflight · 3
+      # escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push non-ff · 8 verify-fail ·
+      # 9 GATE-KILLED · 75 LOCK-STARVED)`. The token was VOCABULARY, not a verdict. Only
+      # `ship-land: GATE-KILLED` is the emit (`⛔ ship-land: GATE-KILLED — the gate died without
+      # earning a verdict`), and it is still reached by the arms that set GATE_KILLED internally.
+      *"ship-land: GATE-KILLED"*) ARM="cut"; ARM_WHY="the gate died without earning a verdict (GATE-KILLED) — a claim about the machine, not about the tree" ;;
     esac
   fi
 
   # 2. THE IDENTITY WALL — by design, and the re-authoring land owns it.
   if [ -z "$ARM" ]; then
     case "$body" in
-      *"could not be re-authored"*|*"authored by someone GitHub cannot attribute"*|*"git-identity"*)
+      # 🚨 `gate: git-identity RED` — the EMIT, never the bare arm name. ship-land prints
+      # `→ gate: git-identity escape ratchet (…)` as a PROGRESS line every time that arm RUNS,
+      # green or red, so a bare `*"git-identity"*` would classify every refusal from any LATER arm
+      # (utc-stamp, self-path, pane-spawn, permission-gate, …) as an identity refusal and send it
+      # home — silently defeating the loop for most of the gate. Found by reading the first real
+      # artifact against the gate's own source; no fixture composed here could have produced it.
+      *"could not be re-authored"*|*"authored by someone GitHub cannot attribute"*|*"gate: git-identity RED"*)
         ARM="by-design"
         ARM_WHY="the identity gate — the VM authors as noreply@anthropic.com and this repo refuses that range ON PURPOSE; the re-authoring land is what answers it, so the VM has nothing to fix" ;;
     esac
@@ -213,7 +226,10 @@ classify() { # <body> <rc> <vm-paths-csv> → sets ARM ∈ cut|by-design|local-o
   # 3. MACHINE-SIDE CAUSES — nothing off-box can clear any of these.
   if [ -z "$ARM" ]; then
     case "$body" in
-      *"non-fast-forward"*)              ARM="local-only"; ARM_WHY="the push lost a race with a sibling land (non-fast-forward) — the lander's own retry clears it, not the VM" ;;
+      # Every marker below is a PHRASE from the emitting line, for the reason the two arms above
+      # record: desk-land's legend spells these as `7 push non-ff` and `8 verify-fail`, so a bare
+      # token would match the vocabulary rather than the verdict.
+      *"REJECTED (non-fast-forward"*)    ARM="local-only"; ARM_WHY="the push lost a race with a sibling land (non-fast-forward) — the lander's own retry clears it, not the VM" ;;
       *"CONTENT-VERIFY FAILED"*)         ARM="local-only"; ARM_WHY="post-push content-verify failed on this box — a concurrent rebase-land dropped content; recovery is local" ;;
       *"ALREADY IN FLIGHT"*)             ARM="local-only"; ARM_WHY="another land holds this worktree's in-flight marker — contention on this box" ;;
       *"hit a conflict"*)                ARM="local-only"; ARM_WHY="the rebase onto the trunk conflicted — resolving it needs the trunk the VM's shallow clone cannot see" ;;
