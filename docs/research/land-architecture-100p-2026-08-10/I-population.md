@@ -289,6 +289,17 @@ land path mints backup refs at roughly the rate it lands, and the reap discharge
 
 ### 3.4 `refs/checkpoints/` (5,175) and `refs/wip/` (600) — the real ref-store term, with NO collector
 
+> **ERRATUM 2026-08-10 — this section's headline is WRONG; see the ERRATUM block in
+> `../land-architecture-100p-2026-08-10.md` §2.I.** A bounded collector has existed since
+> 2026-08-06 (`hooks/teammate-checkpoint.sh:153-248`: floor 3 / per-member cap 50 / age 14d,
+> batched via `update-ref --stdin`) and demonstrably runs. **The "Collector: none found" bullet
+> below is refuted by the grep it itself cites** — its `CHECKPOINT_RETAIN` pattern, re-run verbatim
+> over `hooks/`, hits `teammate-checkpoint.sh:45`; the two `update-ref -d` patterns miss only
+> because deletion goes through a batched `--stdin` transaction. The store is bounded (cap binds:
+> 12 members at exactly 50, none above); the true residual is 65 dead members' ~180
+> floor-immortal refs, ≈3.2%. §3.5's loose-object pressure is likewise moot at HEAD (513, not
+> 1,832). Everything else in this lane stands, including that these refs are load-bearing.
+
 `.git/packed-refs` is 541,094 B / 6,281 lines. Namespace breakdown
 (`grep -o 'refs/[a-z]*/' .git/packed-refs | sort | uniq -c`):
 
