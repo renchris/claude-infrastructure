@@ -584,8 +584,20 @@ STUB
   # is the case where the net never had to fire, and it is only distinguishable from "the check is
   # asleep" because the coverage loop below runs over the same manifest and would red on a plist
   # with no row. Do NOT read a quiet ratchet as a weak one.
-  if [ "$n" != 29 ]; then
-    echo "manifest declares $n labels, expected 29 — if a plist was legitimately added or retired,"
+  # 30 since 2026-08-11: com.claude.accounts-keepwarm (b3b14ecbe0, `staged`) — the qos-census shape
+  # with the count LEFT BEHIND. b3b14ecbe0 landed the plist under launchd/staged/ and its manifest
+  # row in one commit, correctly, and moved neither this count nor anything else that mirrors it, so
+  # this assertion alone went red on pristine origin/main for every lander after it. Note which leg
+  # caught it and which could not: the coverage loop below walks launchd/*.plist -> manifest, and a
+  # STAGED plist is not in that glob, so the only thing standing between a staged addition and a
+  # silent manifest is this hand-copied count. That is the direction the paragraph above refuses to
+  # give up by deriving `n` from disk, and this entry is what it buys — at the price of a post-land
+  # red, because the count cannot be checked before the row exists. Caught by postland-verify
+  # (RED 60a8f0cc8ff7, C29-corroborated across two load windows) whose auto-revert then FAILED
+  # rc=90 (`git revert b3b14ecbe00` conflicts against the five commits on top), so the veto could
+  # not actuate and forward was the only remedy left — which is the branch the FAILED page names.
+  if [ "$n" != 30 ]; then
+    echo "manifest declares $n labels, expected 30 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
