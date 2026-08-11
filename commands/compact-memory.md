@@ -510,6 +510,51 @@ Consequences for how you run this command:
   re-keying defect is closed at the producer. The title still hands a reader *"compact to <17.1KB"*,
   which remains product-side and unreachable (~67 B/entry at this N); read it as the measurement it
   is and budget against 24,985 B.
+- **This pass (2026-08-11 pass 2), for the record — the FIRST recorded HEADROOM-OK no-op close.**
+  Backlog `152e9cacc8aa`, filed quoting *21.7 KB* and asking for *<17.1 KB*. Re-measured at intake:
+  **21,450 B / 123 entries, headroom 3,535 B** — i.e. already **1,035 B PAST the 2,500 B done
+  target**, because the pass recorded in the bullet directly above had landed it there 6 hours
+  earlier. Three-state check re-derived from the live file: budget **104.5 B** vs hook avg
+  **96.1 B**, slack **+16.7** entries, `runway_now` **20.7** ⇒ **NEITHER lever binds**, and even the
+  discredited 115 B constant reported **0 B** of excess for once. `cc-memory-rotate --dry-run`
+  agreed: `verdict=noop size=21450 rotate_at=23485`. **No cut was authorized, so none was made** —
+  the outcome the HEADROOM-OK row has always prescribed and which no pass had yet had occasion to
+  record. SAFE-AUTO a legitimate no-op on all five sweeps: 0 archivable after the durability
+  criterion (5 marker hits, all live rules), **0 orphans**, 0 dangling, 2 demotion records
+  discovered by content. The inverse `CORRECTED`/`SUPERSEDED`/`REFUTED` sweep below was also run and
+  is clean: **6 topic files carry a correction marker, 0 index hooks assert a refuted mechanism** —
+  including `reference-claude-accounts-tooling`, whose hook now states the corrected rule (*"only a
+  new /login moves it"*), confirming that fix propagated. A sibling appended 2 entries mid-pass (**21,450 → 21,878 B, 123 → 125**);
+  re-measured rather than clobbered, and the verdict is unchanged at headroom 3,107 B.
+  ⚠️ **The item was a DUPLICATE of `cf6eb3e47b12` and the store already knew it.** Open item
+  `073c620b571e` records `cc-backlog backfill` correctly proposing to join exactly these two ids to
+  the `memory-index-over-budget` group — and finding no caller to run it. So the `--condition` fix
+  closed re-keying at the producer while these two were minted, but nothing joins pre-existing
+  orphans, and a worker was spent on an index that was already 1 KB under its done target.
+
+🚨 **A "denominator disagreement" between a KB figure and `wc -c` is arithmetically REFUTABLE — and
+when it refutes, the gap is STALENESS, which is a different bug with a different fix.** This item was
+filed on the premise that *"the hook said 21.7KB while wc -c read 23.2KB"* and instructed the worker
+to establish *which one the loader applies* before sizing a cut. Three measurements settle it, and
+the first two cost nothing:
+
+- **The ratio disproves units.** KiB→kB is a factor of **1.024**. The observed gap is
+  23.2/21.7 = **1.0691** — **2.9× too large** for any base-1000/1024 difference to produce. A units
+  hypothesis is testable with one division; run it before spending a pass on it.
+- **The named hook renders no KB figure at all.** `hooks/memory-nudge.sh` emits raw bytes in both
+  branches (`"${TOTAL}/${LIMIT} B across $N entries"`), and `grep -iE 'kb|1024|1000'` over it returns
+  only comment prose. So *"the memory-nudge hook reports 21.7KB"* misattributes the **product-side**
+  reminder to our hook — the same template the RE-INFLATION bullet above already flags as not a live
+  read (it repeated `20.9KB` unchanged across two size-changing edits). **The stale figure is the
+  smaller one**, which is the dangerous direction: it understates urgency.
+- 🚨 **The answer to "which one does the loader apply" is NEITHER — it applies BYTES.** The enforced
+  quantity is `24985`, pinned in `tests/memory-nudge-budget.bats:29` and `tests/memory-index-budget.bats:32`
+  and asserted present in all three code paths (`hooks/memory-nudge.sh`, `hooks/lib/memory-index-budget.sh`,
+  `bin/cc-memory-rotate`). Every KB rendering — ours, theirs, `24.4KB`, `17.1KB` — is a lossy display
+  of a byte count, and `24.4 × 1024 = 24,985.6` is the only reason the product's label reconciles at
+  all. **Size a cut in bytes or do not size it.** Prior instance: item `eec945d6e2ec` hit this same
+  disagreement, wrote *"re-derive the true limit before cutting"*, and the question stayed open for
+  five days because nobody ran the division.
 
 🚨 **A CORRECTION that landed in the topic file and never reached the index is invisible to BOTH
 detectors — and it leaves a refuted rule on the auto-loaded surface.** The audit above is
