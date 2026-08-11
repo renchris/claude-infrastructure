@@ -62,10 +62,25 @@ had taken an hour earlier and never refreshed, in the very passage warning that 
 The rule this earns: a live-layer claim must carry the measurement that produced it *in the same
 edit*, or it must not be made.
 
-Remaining, serialized by file ownership of `scripts/ship-land.sh`: **P4** (loud lifecycle) in
-flight; then **P3** (blob-sha statics memo) → **P2** (shift-left statics + own-diff blocking-leak
-audit) → **P0** (self-measurement). Briefs for P3/P2/P0 are written but deliberately unfired —
-each must read the *current* `ship-land.sh`, since every predecessor reshapes it.
+**Remainder + the succession contract** (so the next shepherd does not re-derive it). Order is
+**P4 → P3 → P2 → P0**, serialized by one thing only: **exclusive ownership of
+`scripts/ship-land.sh` + `land-lock.sh`**. Fire the next item when its predecessor's paths are
+content-verified on `origin/main` — never two owners of those files in flight at once. Landed so
+far: P4 `b078e2fa`; P3 dispatched 2026-08-11.
+
+- Briefs live at `/tmp/fire-land-arch-p{2,0}.txt` (transient — if absent, regenerate from §5 rows
+  P2/P0 of the audit plus the constraint block in this section; the content is not precious, the
+  *ordering rule* is).
+- Every brief must tell its session to rebase and read the **current** `ship-land.sh` — each
+  predecessor reshapes it, and the audit quotes a version that no longer exists.
+- **P7 and P5 are NOT in this chain.** Verified by diff: P7 touches `bin/cc-blockers`,
+  `scripts/worktree-gc.sh` and its tests; P5-R7 touched `scripts/deploy-live.sh`. Neither touches
+  `ship-land.sh`, so both ran in parallel with the chain and neither gates it. A shepherd that
+  serializes them anyway idles the chain for nothing.
+- ⚠️ If you are running under a `/goal` that names a *prerequisite ordering* rather than an end
+  state, check it against this rule before pausing work — one such goal on 2026-08-11 required all
+  of P1/P6/P7 landed before *any* chain dispatch, which is stricter than the file-ownership
+  constraint and became permanently unsatisfiable once the chain correctly proceeded without P7.
 
 ---
 
