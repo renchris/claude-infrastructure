@@ -5743,6 +5743,113 @@ fi
 # the three can never disagree. "" for anything that is not a git worktree.
 hf_git_owner() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true; }
 
+# ---- FIRE-TIME FRESHNESS: never hand a worker a tree that PREDATES trunk ----------------------
+# (cc-backlog 6110fc45141e.) On 2026-08-08 a dispatched worker was fired into an ALREADY-EXISTING
+# `wt-<id>` worktree whose HEAD measured `git rev-list --count HEAD..origin/main` = 735 — eight days
+# of trunk. The item it carried (a post-land RED at a historical sha) reproduced FAITHFULLY there,
+# because the fix that had landed on trunk seven days earlier was simply not in that tree. So every
+# ordinary check passed: the failure was live, the file matched the item, the diagnosis was correct
+# — and the diff it produced would have REVERTED two landed generalisations, with a commit message
+# confidently explaining why. Staleness is invisible to a worker that only reads its own tree, and a
+# silent trunk regression wearing a green local gate is the worst outcome this fleet can produce.
+#
+# WHY HERE AND NOT ONLY IN cc-dispatch. cc-dispatch fixed its OWN path (backlog 1b00d62958a6:
+# warm_worktree's branch-reuse arm, plus the pre-existing-`--cwd`-dir arm that short-circuits it) —
+# but that path is `--cwd`, and it is not the only producer. `--worktree <branch>` is the form the
+# global CLAUDE.md hands every lead for a dispatched wave, and its `exists — reused as-is` arm did
+# no fetch, read no base and printed no lag. A gate that lives in one caller is not a gate on the
+# EVENT (memory: enforcement-must-live-at-the-chokepoint); this is the actuator every fire goes
+# through, so the freshness question is asked here, of whatever directory the fire will land in.
+#
+# THREE STATES, NOT TWO — deliberately the SAME model and the same words as cc-dispatch's
+# wt_base_state, so two sibling auditors of one population cannot disagree about it (memory:
+# sibling-auditors-must-share-the-state-model). `merge-base --is-ancestor` exits 0 for yes, 1 for no
+# and something ELSE for "I could not evaluate that" (missing ref, no repo, corrupt object);
+# collapsing that third into `no` is how a sensor that cannot READ reports ABSENT
+# (memory: lookup-miss-is-not-absence). Both refs are resolved first as a positive control, and only
+# rc 1 from a probe that actually ran convicts. `unknown` always PROCEEDS — starving a fire on an
+# unreadable probe is the worse error, and it is announced rather than swallowed.
+HF_WT_FRESH=""            # one line for the dry-run readout; "" = the gate had nothing to say
+
+hf_base_state() { # <dir> <ref> <base> → fresh | stale | unknown. ALWAYS rc 0: the WORD is the verdict.
+  local d="$1" ref="$2" base="$3" rc
+  git -C "$d" rev-parse --verify --quiet "$base" >/dev/null 2>&1 || { echo unknown; return 0; }
+  git -C "$d" rev-parse --verify --quiet "$ref"  >/dev/null 2>&1 || { echo unknown; return 0; }
+  git -C "$d" merge-base --is-ancestor "$base" "$ref" >/dev/null 2>&1; rc=$?
+  case "$rc" in 0) echo fresh ;; 1) echo stale ;; *) echo unknown ;; esac
+  return 0
+}
+
+# hf_freshness_gate <dir> <mode: worktree|cwd> → 0 proceed · 1 REFUSE (caller exits 1)
+#
+# TWO ARMS, because two very different things are both spelled "behind $BASE":
+#   · NO commits of its own ⇒ a LEFTOVER, not work: a fresh cut that has simply aged. Nothing can be
+#     lost by moving it, so it is CURED (ff-only onto the freshly-fetched base) and said out loud.
+#     This is the arm that fixes the 735 incident; it needs no threshold and makes no judgment call.
+#   · commits of its own (or uncommitted changes) ⇒ somebody's WIP. An unattended actuator must not
+#     rebase or discard that, so it WARNS with the numbers, every time, and refuses only past
+#     CC_FIRE_WT_STALE_MAX — a backstop for the catastrophic case, not a hygiene threshold (a branch
+#     a few commits behind trunk is the normal state of live work and must keep firing).
+#
+# MODE decides only whether a refusal is available. `worktree` names a branch THIS TOOL provisions,
+# so refusing is safe and correct. `cwd` is also how a lead re-fires a peer INTO its own live
+# worktree — divergent and dirty by construction — so that arm may only ever warn; a refusal there
+# would break re-engagement, which is the guard-refusal-fires-on-its-own-harness shape.
+# Kill switch: CC_FIRE_WT_FRESH=off restores the pre-gate behaviour exactly.
+hf_freshness_gate() {
+  local d="$1" mode="$2" state lag own dirty note=""
+  HF_WT_FRESH=""
+  if [ "${CC_FIRE_WT_FRESH:-on}" = off ]; then return 0; fi
+  [ -d "$d" ] || return 0
+  # Not a git worktree ⇒ there is no base for it to be behind. No claim to contradict, no note.
+  [ -n "$(hf_git_owner "$d")" ] || return 0
+  # Fetch through the worktree itself: a linked worktree shares its checkout's common dir, so this
+  # is the same fetch $REPO would do and it works for a --cwd whose repo was never resolved.
+  if ! git -C "$d" fetch origin -q 2>/dev/null; then
+    note=" (fetch failed — measured against the LAST-FETCHED $BASE, so this lag is a floor)"
+  fi
+  state="$(hf_base_state "$d" HEAD "$BASE")"
+  case "$state" in
+    fresh) return 0 ;;
+    unknown)
+      HF_WT_FRESH="freshness UNKNOWN — $BASE or HEAD could not be resolved in $d; firing anyway, as every unreadable sensor here does"
+      echo "⚠ $HF_WT_FRESH" >&2
+      return 0 ;;
+  esac
+  lag="$(git -C "$d" rev-list --count "HEAD..$BASE" 2>/dev/null || echo unknown)"
+  own="$(git -C "$d" rev-list --count "$BASE..HEAD" 2>/dev/null || echo unknown)"
+  dirty="$(git -C "$d" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  if [ "$own" = 0 ] && [ -z "$dirty" ]; then
+    if [ "$DRY" = 1 ]; then
+      HF_WT_FRESH="STALE by $lag commit(s) behind $BASE with no commits of its own — would be fast-forwarded to $BASE before the fire$note"
+      echo "→ $HF_WT_FRESH" >&2
+      return 0
+    fi
+    if git -C "$d" merge --ff-only "$BASE" >/dev/null 2>&1; then
+      HF_WT_FRESH="was $lag commit(s) behind $BASE with no commits of its own — fast-forwarded to $BASE$note"
+      echo "→ freshness: $d $HF_WT_FRESH" >&2
+      return 0
+    fi
+    HF_WT_FRESH="STALE by $lag and could not be fast-forwarded to $BASE"
+    echo "!! $d is $lag commit(s) behind $BASE and the fast-forward FAILED — refusing to fire a worker into a tree that predates trunk." >&2
+    echo "   Its diff would be measured against $BASE-minus-$lag, so a fix it re-derives can REVERT what already landed (cc-backlog 6110fc45141e)." >&2
+    echo "   Remedy: git -C $d merge --ff-only $BASE   (or remove the worktree and let the fire cut a fresh one)" >&2
+    [ "$mode" = worktree ] && return 1
+    return 0
+  fi
+  # WIP arm — warn with the numbers, always.
+  HF_WT_FRESH="STALE: $lag commit(s) behind $BASE, $own of its own${dirty:+, uncommitted changes present}$note"
+  echo "⚠ freshness: $d is $HF_WT_FRESH" >&2
+  echo "   A worker here reads a tree that predates trunk — check the item's cited artifacts with \`git show $BASE:<path>\`, never against this tree alone." >&2
+  local max="${CC_FIRE_WT_STALE_MAX:-150}"
+  case "$max" in ''|*[!0-9]*) max=150 ;; esac
+  if [ "$mode" = worktree ] && [ "$max" -gt 0 ] && [ "$lag" != unknown ] && [ "$lag" -gt "$max" ]; then
+    echo "!! …and $lag exceeds CC_FIRE_WT_STALE_MAX=$max — refusing. Land or delete this branch, or re-fire with CC_FIRE_WT_STALE_MAX=0 once you have read $BASE." >&2
+    return 1
+  fi
+  return 0
+}
+
 # $REPO is the repo a fire TARGETS: the `git worktree add` for a cold --worktree, the .env.local it
 # copies in, the worktree pool it may claim a slot from, and the dir a self-routing fire lands in.
 # It was hardcoded to $DEFAULT_REPO (reso) unless --repo was passed, so EVERY --worktree fire from
@@ -6933,6 +7040,14 @@ elif [ -n "$WORKTREE" ]; then
       fi
     fi
   fi
+  # FRESHNESS (6110fc45141e). Only the paths that REUSE a tree someone else cut: `cold` creates its
+  # own off a fetched $BASE two lines down and is fresh by construction, so gating it would only add
+  # a second fetch. `pool` is checked because a slot is only claimed to BE at origin/main — that is
+  # the pool's contract, not an observation, and a slot that has drifted is exactly as dangerous as
+  # a leftover wt-<id>.
+  case "$WT_SETUP" in
+    existing|pool) hf_freshness_gate "$WT" worktree || exit 1 ;;
+  esac
   if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
     ( cd "$REPO" && git worktree add "$WT" -b "$WORKTREE" "$BASE" >/dev/null )
@@ -6975,6 +7090,9 @@ elif [ -n "$WORKTREE" ]; then
     CMD="cd $(printf %q "$WT") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   fi
 elif [ -n "$CWD" ]; then
+  # WARN-ONLY here, by design (see hf_freshness_gate's MODE paragraph): --cwd is also the warm
+  # re-fire of a peer into its OWN live worktree, which is divergent and dirty on purpose.
+  hf_freshness_gate "$CWD" cwd || true
   CMD="cd $(printf %q "$CWD") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 else
   # Land in the repo root and let the launcher self-route (_cc_route_check auto-creates a fresh
@@ -8212,6 +8330,10 @@ if [ "$DRY" = 1 ]; then
       *)        echo "worktree: $WT  (cold: off $BASE, created at fire time + in-pane install)" ;;
     esac
   fi
+  # The freshness verdict belongs in the READOUT, not only on stderr: `exists — reused as-is` is
+  # exactly the line that read green over a tree 735 commits behind trunk (6110fc45141e), and a dry
+  # run is where an operator looks before firing.
+  [ -n "$HF_WT_FRESH" ] && echo "freshness: $HF_WT_FRESH"
   [ -n "$NOTIFY_BACK" ] && echo "notify-back: originator $BACK_SID — fired prompt carries the cc-notify ping recipe (copy: $PROMPT_FILE)"
   if [ "$RECYCLE" = 0 ]; then
     echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
