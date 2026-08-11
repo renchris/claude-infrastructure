@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""cc-wf-harvest — turn a Workflow tool result into a durable research doc + per-axis evidence dir.
+
+WHY THIS EXISTS (measured 2026-08-11).
+A `Workflow` run's return value lands in ONE place: a task output file under the session's
+`tasks/` dir. That file is session-scoped scratch — it is not on any ref, no generator reads it,
+and it is garbage-collected. So the entire product of an N-agent wave (this fleet routinely spends
+2-3M subagent tokens per wave) exists only until the session ends.
+
+The lead therefore hand-writes a JSON->markdown converter at the end of every wave. Measured in one
+session on 2026-08-11: written TWICE, ~60 lines each time, from scratch, for two waves two hours
+apart. That is the repeatable-process-with-no-durable-script defect the operator named — the tokens
+go on re-deriving the same shape instead of on the work.
+
+`bin/cc-agent-harvest` is the ADJACENT tool and does NOT cover this: it recovers a TEAM MEMBER's
+deliverable from its own transcript, because `Agent({name})` registers a team member with no
+Agent-tool return value. A Workflow DOES return its value; the problem is that the value is
+scratch. Different loss path, different tool.
+
+THREE THINGS THIS ENCODES THAT COST REAL TOKENS TO LEARN:
+
+  1. THE RESULT IS NESTED. The task output file is `{summary, agentCount, logs, result:{...}}`.
+     Reading the top level returns nothing and reads as "the wave produced no output" — the exact
+     false-negative the Workflow tool's own diagnostics warn about. Unwrap `result` first.
+
+  2. ONE FILE IS TOO BIG TO LOAD. Rendering every axis inline produced a 271 KB doc — 5x the
+     largest sibling in docs/research/. A doc nobody can open is inert. The repo's own convention
+     for multi-axis waves is a SYNTHESIS file plus a sibling DIRECTORY of per-axis files
+     (memory-econ-rearchitecture-2026-08-10/, scaling-bottlenecks-2026-08-09/). Split by default.
+
+  3. THE SYNTHESIS FIELD IS NOT NAMED CONSISTENTLY. Scripts name it `memo`, `verdict`, `synthesis`,
+     `report`... Probe for the longest string field rather than requiring one name, or this tool
+     needs editing for every new workflow — which is how it would rot back into hand-written code.
+
+READ-ONLY with respect to the workflow artifacts. Refuses to overwrite an existing doc without
+--force, because a research doc accumulates corrections (INTEGRATE-never-overwrite).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+
+# Field names probed for the synthesis body, in preference order. Falls back to
+# "longest string value in result" so a workflow using a novel name still harvests.
+SYNTH_KEYS = ("memo", "verdict", "synthesis", "report", "answer", "summary")
+CRITIC_KEYS = ("critic", "completeness", "critique")
+# A per-axis array can be named several things; each element is expected to carry a
+# nested finding object plus (optionally) a skeptic verdict.
+AXES_KEYS = ("axes", "findings", "results", "items")
+
+
+def die(msg: str, code: int = 2) -> None:
+    print("cc-wf-harvest: %s" % msg, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def slugify(s: str) -> str:
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", str(s)).strip("-").lower()
+    return s or "axis"
+
+
+def unwrap(doc):
+    """The task output file wraps the script's return value under `result`."""
+    if isinstance(doc, dict) and "result" in doc and isinstance(doc["result"], (dict, list)):
+        return doc["result"]
+    return doc
+
+
+def pick_synth(res):
+    """Return (key, text). Probes known names, then the longest string value."""
+    if isinstance(res, str):
+        return ("result", res)
+    if not isinstance(res, dict):
+        return (None, "")
+    for k in SYNTH_KEYS:
+        v = res.get(k)
+        if isinstance(v, str) and v.strip():
+            return (k, v)
+    best_k, best_v = None, ""
+    for k, v in res.items():
+        if isinstance(v, str) and len(v) > len(best_v):
+            best_k, best_v = k, v
+    return (best_k, best_v)
+
+
+def pick_axes(res):
+    if not isinstance(res, dict):
+        return []
+    for k in AXES_KEYS:
+        v = res.get(k)
+        if isinstance(v, list) and v and isinstance(v[0], (dict, str)):
+            return v
+    return []
+
+
+def axis_parts(entry):
+    """Normalise one axis entry to (key, title, found, skeptic)."""
+    if not isinstance(entry, dict):
+        return (slugify(entry), str(entry), {}, {})
+    found = entry.get("found") if isinstance(entry.get("found"), dict) else entry
+    skeptic = entry.get("verdict") if isinstance(entry.get("verdict"), dict) else {}
+    key = entry.get("axis") or found.get("axis") or entry.get("key") or entry.get("label") or "axis"
+    title = entry.get("title") or found.get("title") or found.get("axis") or key
+    return (slugify(key), str(title), found, skeptic)
+
+
+def render_axis(key, title, found, skeptic, slug, run_id):
+    b = ["---", "status: closed", "created: %s" % ARGS.date, "owner: %s" % ARGS.owner, "---", ""]
+    b.append("# %s" % title)
+    b.append("")
+    b.append(
+        "*Axis `%s` of `%s`%s. Synthesis: [`../%s.md`](../%s.md).*"
+        % (key, slug, (" (run `%s`)" % run_id) if run_id else "", slug, slug)
+    )
+    b.append("")
+    for label, field in (("Rating", "at_100p"), ("Verdict", "verdict"),
+                         ("Load-bearing claim", "top_claim"), ("Why it matters", "top_claim_why"),
+                         ("Shortest fix", "shortest_fix")):
+        v = found.get(field)
+        if isinstance(v, str) and v.strip():
+            b.append("**%s.** %s" % (label, v))
+            b.append("")
+    if skeptic:
+        refuted = skeptic.get("refuted")
+        verd = "REFUTED" if refuted else "SURVIVED"
+        b.append("**Skeptic: %s** (confidence %s)" % (verd, skeptic.get("confidence", "?")))
+        b.append("")
+        if skeptic.get("corrected_claim"):
+            b.append("> %s" % skeptic["corrected_claim"])
+            b.append("")
+        if skeptic.get("evidence"):
+            b.append("Evidence: %s" % skeptic["evidence"])
+            b.append("")
+        if skeptic.get("instrument_defect"):
+            b.append("**Instrument defect:** %s" % skeptic["instrument_defect"])
+            b.append("")
+    findings = found.get("findings")
+    if isinstance(findings, list) and findings:
+        b.append("---")
+        b.append("")
+        b.append("## Findings")
+        b.append("")
+        for f in findings:
+            if not isinstance(f, dict):
+                b.append("- %s" % f)
+                continue
+            tags = [str(f[t]) for t in ("status", "gap_or_strength", "confidence") if f.get(t)]
+            head = ("`[%s]` " % "][".join(tags)) if tags else ""
+            b.append("### %s%s" % (head, f.get("claim") or f.get("title") or "(unlabelled)"))
+            b.append("")
+            for label, field in (("Evidence", "evidence"), ("Source", "source"),
+                                 ("Decision relevance", "decision_relevance"),
+                                 ("Failure scenario", "failure_scenario")):
+                v = f.get(field)
+                if isinstance(v, str) and v.strip():
+                    fmt = "- **%s:** `%s`" if field == "source" else "- **%s:** %s"
+                    b.append(fmt % (label, v))
+            b.append("")
+    unk = found.get("unknowns")
+    if isinstance(unk, list) and unk:
+        b.append("## Unknowns")
+        b.append("")
+        b.extend("- %s" % u for u in unk)
+        b.append("")
+    return "\n".join(b)
+
+
+def main():
+    global ARGS
+    ap = argparse.ArgumentParser(prog="cc-wf-harvest")
+    ap.add_argument("output", help="Workflow task output file (the .output JSON), or - for stdin")
+    ap.add_argument("--name", required=True, help="doc slug, e.g. jcode-due-diligence-2026-08-11")
+    ap.add_argument("--title", default=None, help="H1 for the synthesis doc")
+    ap.add_argument("--out", default="docs/research", help="output dir (default: docs/research)")
+    ap.add_argument("--run-id", default="", help="workflow run id, recorded in the doc")
+    ap.add_argument("--date", default="", help="created: date (frontmatter); default from --name or blank")
+    ap.add_argument("--owner", default="desk")
+    ap.add_argument("--status", default="closed")
+    ap.add_argument("--note", default="", help="extra paragraph under the method line")
+    ap.add_argument("--flat", action="store_true", help="inline axes instead of a sibling dir (NOT default: see docstring #2)")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing synthesis doc")
+    ap.add_argument("--dry-run", action="store_true")
+    ARGS = ap.parse_args()
+
+    if not ARGS.date:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", ARGS.name)
+        ARGS.date = m.group(1) if m else ""
+
+    raw = sys.stdin.read() if ARGS.output == "-" else open(ARGS.output, encoding="utf-8").read()
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as e:
+        die("output is not JSON (%s). If this is a bash task log, it is not a Workflow result." % e)
+
+    top = doc if isinstance(doc, dict) else {}
+    res = unwrap(doc)
+    synth_key, synth = pick_synth(res)
+    if not synth.strip():
+        die("no synthesis text found. Keys present: %s. "
+            "Inspect journal.jsonl before assuming the wave returned nothing."
+            % (sorted(res.keys()) if isinstance(res, dict) else type(res).__name__))
+    axes = [] if ARGS.flat else pick_axes(res)
+    critic = ""
+    if isinstance(res, dict):
+        for k in CRITIC_KEYS:
+            if isinstance(res.get(k), str) and res[k].strip():
+                critic = res[k]
+                break
+
+    slug = ARGS.name
+    synth_path = os.path.join(ARGS.out, slug + ".md")
+    axis_dir = os.path.join(ARGS.out, slug)
+    if os.path.exists(synth_path) and not ARGS.force:
+        die("%s exists — refusing to overwrite (research docs accumulate corrections). "
+            "Use --force only if you mean to replace it." % synth_path)
+
+    rows, axis_files = [], []
+    for entry in axes:
+        key, title, found, skeptic = axis_parts(entry)
+        body = render_axis(key, title, found, skeptic, slug, ARGS.run_id)
+        axis_files.append((os.path.join(axis_dir, key + ".md"), body))
+        n = len(found.get("findings") or [])
+        sk = "—"
+        if skeptic:
+            sk = "REFUTED" if skeptic.get("refuted") else "SURVIVED"
+        rating = found.get("at_100p") or found.get("routable") or ""
+        rows.append((key, rating, sk, n, (found.get("verdict") or "").replace("|", "/")))
+
+    h = ["---", "status: %s" % ARGS.status]
+    if ARGS.date:
+        h.append("created: %s" % ARGS.date)
+    h += ["owner: %s" % ARGS.owner, "---", "", "# %s" % (ARGS.title or slug), ""]
+    meta = []
+    if top.get("agentCount"):
+        meta.append("%s agents" % top["agentCount"])
+    if ARGS.run_id:
+        meta.append("run `%s`" % ARGS.run_id)
+    # The per-axis link is emitted ONLY when axis files were actually written. Under --flat there
+    # is no sibling dir, and linking to one anyway ships a dead link — caught by this tool's own
+    # link check in tests/cc-wf-harvest.bats, which is the point of running the check on itself.
+    if meta or axis_files:
+        line = "**Method.** " + (" · ".join(meta) + "." if meta else "")
+        if axis_files:
+            line += " Per-axis evidence: [`%s/`](%s/)." % (slug, slug)
+        h += [line.strip(), ""]
+    if ARGS.note:
+        h += [ARGS.note, ""]
+    if rows:
+        hdr = "| Axis | Rating | Skeptic | Findings | Verdict |"
+        h += [hdr, "|---|---|---|---|---|"]
+        for key, rating, sk, n, verdict in rows:
+            h.append("| [`%s`](%s/%s.md) | %s | %s | %d | %s |" % (key, slug, key, rating or "—", sk, n, verdict))
+        h.append("")
+    h += ["---", ""]
+    body = "\n".join(h) + synth
+    if critic:
+        body += "\n\n---\n\n## Appendix — completeness critic\n\n" + critic + "\n"
+
+    if ARGS.dry_run:
+        print("would write %s (%d B) + %d axis file(s) under %s/"
+              % (synth_path, len(body), len(axis_files), axis_dir))
+        print("  synthesis field: %s" % synth_key)
+        return 0
+
+    os.makedirs(ARGS.out, exist_ok=True)
+    if axis_files:
+        os.makedirs(axis_dir, exist_ok=True)
+    with open(synth_path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    for path, txt in axis_files:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(txt)
+
+    # Link integrity: every relative link the synthesis emits must resolve. A dead link in a
+    # landed README/doc is the spec-named-but-not-built defect, and it is cheap to prevent here.
+    missing = [t for t in re.findall(r"\]\((%s/[^)]*)\)" % re.escape(slug), body)
+               if not os.path.exists(os.path.join(ARGS.out, t.rstrip("/")))]
+    print("wrote %s (%d B)" % (synth_path, len(body)))
+    print("      %d axis file(s) under %s/" % (len(axis_files), axis_dir))
+    print("      synthesis field: %s" % synth_key)
+    if missing:
+        print("cc-wf-harvest: BROKEN LINKS: %s" % ", ".join(missing), file=sys.stderr)
+        return 1
+    print("      links: all resolve")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
