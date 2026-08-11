@@ -315,6 +315,71 @@ verdict — a cold `--worktree` fire has an auto-submit race.
 
 ## Wave log (coordinator appends; map rows carry the durable status)
 
+### 🚨 2026-08-11 — RE-ARMED. ONLY ONE ROW WAS EVER UNREACHABLE, AND IT WAS UNREACHABLE BY CONSTRUCTION
+
+Run from a dispatch worker (`cc-backlog 2d687628ce46`), no coordinator in existence — which is itself
+the first piece of evidence below. **Scope (frozen):** re-arm the campaign so all three open rows
+advance with no coordinator alive. Everything here is re-derived from trunk today; nothing is
+inherited from the 2026-08-07 entry, and two of its conclusions are corrected.
+
+**THE 2026-08-07 DIAGNOSIS WAS RIGHT BUT ONE LEVEL TOO HIGH.** It concluded the campaign died because
+its continuation lived in a coordinator's memory. True — and it prescribed the right cure, *file it in
+a store*. But measured today, **rows 2 and 11 would have self-healed regardless**: the `plan-open`
+generator had already minted dispatcher-reachable rows for both (`d7c413fe823f` →
+`SESSION_LIFECYCLE_V2.md`, `dc426ee8df11` → `WORKTREE_MANAGEMENT_V2.md`), and the dispatcher is
+`enabled` and running (pid observed today). **Row 6 alone could not, and no amount of coordinator
+discipline would have changed that** — the generator takes an OPEN PLAN DOC as its input, row 6 is the
+campaign's only open row that has never had one, so the single continuation path that survives a dead
+coordinator is *structurally blind to exactly the row that needed it*. Every one of the 13 rows with a
+`docs/plans/*_V2.md` is reachable; the one without is not. **A store-based continuation is only as
+wide as its generator's input predicate** — filing the umbrella item was necessary and insufficient,
+because an umbrella item dispatches ONCE and takes its rows with it when it closes.
+**Cure, landed:** row 6 filed as its own row — `cc-backlog f5b31e05b0f7`, dodRef = its payload — and
+the payload now tells that row to **land its design doc first**, which is the act that makes row 6
+permanently self-healing. The campaign no longer has a row that depends on anyone being alive.
+
+**Row state re-derived from trunk 2026-08-11 — 11 of 13 DONE · 2 genuinely open (6 · 11):**
+
+| Row | Verdict today | Basis |
+|---|---|---|
+| **9** memory-knowledge | **DONE** (was "open" in the 2026-08-07 table) | attempt #2 reconciled 2026-08-08; all three remainders content-verified on trunk — see the sha trap below |
+| **11** worktree-warmpool | **OPEN, re-scoped, and ALREADY ARMED** | `dc426ee8df11` open (`source=plan-open`); AC-7 held by a **live claim**, `d605fd2f4635` @ 2026-08-11T03:23Z. Not this session's, and not re-filed |
+| **6** guardrail-hooks | **OPEN — the one real gap; now armed** | `f5b31e05b0f7` |
+
+🚨 **THE SHA TRAP — a re-derivation was three days from re-opening a closed row for the third time.**
+Row 9's map cell credited attempt #2's three remainders to `25e897fd`, `1f828fcc` and `3f3600b4`. All
+three read **NOT-ON-TRUNK** under `git merge-base --is-ancestor`, and `git branch -a --contains`
+returns **empty for all three** — they are dangling pre-rebase objects. The obvious reading is "the
+build never landed", which is what this campaign's own re-derivation protocol would have concluded,
+and it is **wrong**: the content landed under different shas when the branch was rebased —
+`65c107b7` (harvest field-collapse: per-column extraction replacing the `cut -d'|'` split, because
+`commands_run` is raw shell text that holds pipes) · `6ef80691` (`hooks/memory-nudge.sh` +82 test
+lines: exact dropped-entry count, plus a guard that fails when the limit's two literals drift) ·
+`98d92d34` (`commands/compact-memory.md`: trigger moved off the non-binding unit it read at 1.84× the
+cap). Map corrected; the originals are recorded in the cell so the trap is legible rather than erased.
+**Law, now carried in every payload: a sha that reads NOT-ON-TRUNK is not evidence of absent work.**
+Verify by CONTENT — `ls-tree` / `grep` / the diff — before concluding absence. This is the
+verify-by-content rule that already governs *landings*, arriving from the opposite direction: it has
+always been stated as "a count of 0 does not prove landed", and its mirror is equally true.
+
+**THE 2026-08-07 RECONCILE INSTRUCTION NEVER REACHED ITS READER, AND THAT IS THE SAME DEFECT AGAIN.**
+That entry declared both stale payloads "superseded on this point" and put the correction in *this
+wave log*. But `handoff-fire` submits **the payload file** as the fired session's first prompt — a
+worker reads the payload, never the runbook that discusses it. Verified today: all three payloads
+still opened with `YOUR TASK — a from-first-principles GROUND-UP rebuild`, with no reconcile step
+anywhere. **A correction addressed to a coordinator does not bind a worker any more than a runbook
+paragraph binds a successor who is never spawned** — same generator as the dormancy itself, one layer
+down. Fixed at the consumer: each payload now opens with a `STEP -1 — RECONCILE` block (row 9's is a
+`DO NOT FIRE` header, since the row is closed) carrying the MET/FAILS/SUPERSEDED discipline, the
+already-owned-elsewhere list so a worker cannot race a live claim, and the sha law above.
+
+**No fires from this pane, and this time it is not a deferral.** This session self-retires, so a
+`--notify-back` aimed at it would land nowhere — the orphan class rows 2 and 4 spent the campaign
+closing. Ambient load was **14.23** against the runbook's own `< 10` cadence guard. Both rows are
+filed into a store whose dispatcher owns an atomic capacity gate that refuses before side effects
+(`rc 9`), which is the right actuator for a load decision — strictly better than a hand-fire into
+load 14 from a pane that is about to close. **The fire is armed, not skipped.**
+
 ### 🚨 2026-08-07 — THE CAMPAIGN HAS BEEN DORMANT 8 DAYS, AND "OPEN ROW" NO LONGER MEANS "NEEDS A REBUILD"
 
 Coordinator cycle run from a dispatch worker (`cc-backlog 1af414fbe229`), not from the standing
@@ -1874,6 +1939,36 @@ whoever picks up `da18f179ac50` should not re-file it.
 
 ## Learnings (accumulate; never delete)
 
+- 🚨 **A store-based continuation is only as wide as its GENERATOR'S INPUT PREDICATE — filing the work
+  is necessary and not sufficient.** Refines the learning below it, which was right and one level too
+  high. Measured 2026-08-11: the `plan-open` generator that keeps this campaign alive without a
+  coordinator takes an **open plan doc** as its input, so rows 2 and 11 were dispatcher-reachable the
+  whole dormant fortnight (`d7c413fe823f`, `dc426ee8df11`) and **would have self-healed with no
+  coordinator discipline at all**. Row 6 — the only open row that has never had a
+  `docs/plans/*_V2.md` — was invisible to the one mechanism that survives a dead coordinator, and no
+  amount of runbook care would have reached it. **Ask of any "I filed it" cure: what does the reader
+  of that store take as INPUT, and is this item inside that predicate?** Corollary that bit here: an
+  UMBRELLA item covering N rows dispatches **once** and takes its rows with it when it closes — it is
+  a one-shot, not a standing arm. File the unit that the generator can re-mint (row 6 is now
+  `f5b31e05b0f7`, and its payload tells it to land its design doc first, which is the act that puts it
+  permanently inside the predicate).
+- 🚨 **A correction must land in the artifact the CONSUMER reads — the same defect as the dormancy,
+  one layer down.** The 2026-08-07 entry declared both stale payloads "superseded" and recorded the
+  reconcile instruction *in the wave log*. But `handoff-fire` submits **the payload file** as the
+  fired session's first prompt: a worker reads the payload and never the runbook that discusses it.
+  Verified 2026-08-11 — all three payloads still opened `YOUR TASK — a from-first-principles GROUND-UP
+  rebuild`, no reconcile step anywhere, four days after the instruction was written. Prose addressed
+  to a coordinator binds a worker exactly as much as a runbook binds a successor nobody spawns: not at
+  all. **Edit the consumed artifact, in the same change that records the decision.**
+- 🚨 **A sha that reads NOT-ON-TRUNK is not evidence of absent work — verify absence by CONTENT.**
+  Row 9's cell credited its three landed remainders to `25e897fd`/`1f828fcc`/`3f3600b4`; all three
+  read NOT-ON-TRUNK under `merge-base --is-ancestor` and `branch -a --contains` is **empty for all
+  three**. They are dangling pre-rebase objects — the content landed under `65c107b7`/`6ef80691`/
+  `98d92d34` when the branch was rebased. The obvious reading, *"the build never landed"*, is what
+  this campaign's own re-derivation protocol would have concluded, and it would have re-opened a
+  closed row for the **third** time. This is the mirror of the landing rule already in force
+  (*"a count of 0 does not prove landed — verify by content"*): the same instrument fails in **both**
+  directions, so content is the oracle for presence AND for absence. `ls-tree` / `grep` / the diff.
 - 🚨 **A campaign's next action must live in a STORE, not in a paragraph addressed to a successor.**
   This campaign went dormant for **8 days** with 3 rows open, no blocker and no load problem. The
   prior coordinator armed both fire loops correctly and wrote the exact re-arm commands into

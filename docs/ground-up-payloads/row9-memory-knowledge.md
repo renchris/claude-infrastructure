@@ -1,3 +1,33 @@
+🚨 DO NOT FIRE THIS PAYLOAD. ROW 9 IS CLOSED — reconciled and built 2026-08-08, re-verified by
+content 2026-08-11. This file is retained as the historical brief and for its measurements; every
+instruction below is SPENT. Firing it would be the campaign's third re-do of the same work.
+
+**What actually happened, and the trap it left behind.** Row 9's design landed (`1761b9ee`) and its
+build never did — its named M1 artifacts (`bin/cc-mem-budget`, `hooks/lib/memory-budget.sh`,
+`MEM_INDEX_BYTE_CAP`) are absent from trunk to this day, and correctly so. A non-campaign session had
+already solved the same problem by a **different and better** route: `16dfe3b5` moved the predicate off
+the advisory `UserPromptSubmit` nudge to the **PreToolUse chokepoint**, refusing only a write that both
+exceeds the limit AND grows the index — so compaction can never be locked out of its own cure. Attempt
+#2 (2026-08-08) obeyed *reconcile, not rebuild*: not one line of M1 was built, AC1·AC2·AC3 are
+**SUPERSEDED rather than failed**, and it landed only the three genuine remainders.
+
+⚠️ **Those three remainders were cited in the map by shas that no branch contains.** `25e897fd`,
+`1f828fcc` and `3f3600b4` are **dangling pre-rebase objects** — `git merge-base --is-ancestor` reads
+NOT-ON-TRUNK for all three, and `git branch -a --contains` is empty for all three, while the content
+landed under different shas when the branch was rebased. The verified trunk shas are:
+`65c107b7` (harvest field-collapse — per-column extraction replacing the `cut -d'|'` split, since
+`commands_run` is raw shell text that holds pipes) · `6ef80691` (`hooks/memory-nudge.sh` + 82 lines of
+new tests — the dropped-entry count is exact rather than an average applied to the tail, plus a guard
+that fails when the limit's two literals drift) · `98d92d34` (`commands/compact-memory.md` — the
+trigger moved off the non-binding unit it read at 1.84× the real cap).
+**The transferable law: a sha that reads NOT-ON-TRUNK is not evidence of absent work.** Verify by
+CONTENT — `git ls-tree` / `git grep` / the diff — before concluding a row's build never landed. A
+count or a sha lookup can be falsified by any rebase; the content cannot.
+
+**Still live, and deliberately NOT this row's:** the index remains over budget as a standing condition
+(`memory-index-over-budget`), because the store is tracked by no repository and its lossy remedy is
+human-gated. That is policy, not omission — no new item is minted for it.
+
 YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: memory & knowledge (row 9) —
 what survives sessions. You were fired by the ground-up campaign coordinator.
 

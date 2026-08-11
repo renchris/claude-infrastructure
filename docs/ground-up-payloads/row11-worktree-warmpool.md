@@ -1,3 +1,28 @@
+STEP -1 — RECONCILE, DO NOT REBUILD. THIS PAYLOAD IS SUPERSEDED AS A BUILD BRIEF and is retained for
+its measurements, not its instructions. Row 11 was **re-scoped 2026-08-07**: its Phase 1 design
+(`docs/plans/WORKTREE_MANAGEMENT_V2.md`) is on trunk, and its headline finding E1 — a bare
+`git worktree remove` silently destroying gitignored content at exit 0 — **was answered out-of-band
+while this payload sat stranded** (`scripts/worktree-gc.sh --ignored`, `tests/worktree-gc.bats` at
+64 tests, AC-1 MET). ⚠ **But the shipped remedy is NOT AC-2's**: a KEEP gate was considered and
+*rejected in-file* with a measured reason (`tests/worktree-gc.bats:776` — "6 of 6 candidates carry
+ignored content, so a KEEP gate here would make oracle 3 inert"); what shipped is blast-radius
+recording (`:779`). **Your job on AC-2 is to ADJUDICATE that disagreement, never to implement the
+stranded prescription blind.** Run every AC against `origin/main` first and mark it MET (cite the
+trunk sha, content-verified) · FAILS (quote the failing read) · SUPERSEDED (name the shipping answer
+and why it wins); design only against what FAILS. When two oracles disagree, the shipping side wins
+and this doc is the stale one.
+
+**ALREADY OWNED ELSEWHERE — do not duplicate, re-file, or race these:**
+- **AC-7** (`scripts/worktree-gc.sh` has no env kill switch — 16 `CC_WTGC_*` vars, none a disable —
+  while `com.claude.worktree-gc-infra` is launchd-registered, i.e. a *scheduled destructive* job
+  breaching the campaign's standing kill-switch rule) is `cc-backlog d605fd2f4635` and was **held by a
+  live claim as of 2026-08-11T03:23Z**. Re-verified still open on trunk 2026-08-11 (greps for
+  `DISABL`/`KILL`/`OFF`/`ENABLE` return zero) — but it is that worker's, not yours.
+- **The rebuild slot itself** is `cc-backlog dc426ee8df11` (`source=plan-open`, dodRef
+  `WORKTREE_MANAGEMENT_V2.md`) — an auto-minted, dispatcher-reachable row. Row 11 therefore already
+  self-heals with no coordinator alive; if you are reading this you were probably fired from it.
+- **Decayed, do not inherit:** C32 — row 4's `~/.claude/cc-beats` is now PRESENT (was ABSENT/INERT).
+
 YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: worktree & warm-pool
 management (row 11) — where writers work. You were fired by the ground-up campaign coordinator.
 
