@@ -111,10 +111,36 @@ differs it is named. Risk is operational, not just technical.
 | **G4** | Make chrome-devtools **opt-in**, not always-on | Started eagerly in 100 % of reso-worktree sessions; **used in 19 of 600 transcripts (3.2 %) over 7 d** (946 `tool_use` calls, so heavily used *when* used). It is also started per **teammate** — 2 of the 5 live chains belong to teammates in the same worktree | **312 MB** per session/teammate that never calls it | a 12-member wave in a reso worktree = **13 chains ≈ 4.0 GB** | **Med** — a browser task in a session that didn't opt in fails until restart | move the `chrome-devtools` block out of the tracked `.mcp.json` into `.mcp.browser.json`, or add the worktree paths to `disabledMcpjsonServers` in each account `settings.json` and enable per-need |
 | **G5** | **`teammateMode: "in-process"`** | `sql=["auto","tmux","iterm2","in-process"]` in the binary; fleet sets `"iterm2"` in both settings.json files ⇒ **every teammate is a full 228 MB-floor OS process**. In-process teammates cost only their context (0.343 MB/1 K tok) | **~220 MB × (team size)** | this live 15-member wave = **3.3 GB** → ~1.0 GB in-process ⇒ **−2.3 GB per wave** | **High — values conflict.** Operator standing preference is VISIBLE panes (memory `feedback-dedicated-split-pane-sessions-for-parallel-work`); and all teammate context then lands in ONE process's window | `~/.claude*/settings.json` → `"teammateMode": "in-process"`. **Do not adopt silently — this is an operator call, not an F1-F4 auto-pass** |
 | **G6** | Bound fan-out at the source: `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | Default is **20** (`function wHu(){return Z.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS??Et_}`, `Et_=20`); `MAX_SUBAGENTS_PER_SESSION` default **200** (`vt_=200`). At 233 MB mean per teammate that is a **4.7 GB per-session tail**, ×15 sessions = an unbounded 70 GB ceiling | bounds the tail, saves 0 at rest | tail: **−1.9 GB/session** at cap 12 | **Low-Med** — a cap of 12 would have *refused this 15-member wave*; set 15–16, not 12 | `settings.json` `env` → `"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "16"`. **Already flagged as unused prior art**: `docs/research/scaling-bottlenecks-2026-08-09/11-prior-art.md:200` |
-| **G7** | Turn off the 1 M context window | `function Nje(){return Z.CLAUDE_CODE_DISABLE_1M_CONTEXT}` … `function OH(e){if(Nje())return!1; … r?.native_1m …}` — a real, load-bearing gate. Caps the context term at 200 K × 0.343 = 69 MB instead of 343 MB | **−60 MB** at today's mean fill (~320 K); **−274 MB** of ceiling | **−0.9 GB** now, **−4.1 GB** of tail | **High** — invalidates the whole Context-Stewardship threshold system (35 %/50 %/75 % of 1 M) and forces ~5× more handoffs | `settings.json` `env` → `"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"`. **Prefer the softer knob if it works: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (semantics UNVERIFIED — see §6)** |
+| **G7** | ~~Turn off the 1 M context window~~ **RETRACTED 2026-08-11 — do not do this** | `function Nje(){return Z.CLAUDE_CODE_DISABLE_1M_CONTEXT}` … `function OH(e){if(Nje())return!1; … r?.native_1m …}` — a real, load-bearing gate. Caps the context term at 200 K × 0.343 = 69 MB instead of 343 MB | **−60 MB** at today's mean fill (~320 K); **−274 MB** of ceiling | **−0.9 GB** now, **−4.1 GB** of tail | **High** — invalidates the whole Context-Stewardship threshold system (35 %/50 %/75 % of 1 M) and forces ~5× more handoffs | `settings.json` `env` → `"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"`. **Prefer the softer knob if it works: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (semantics UNVERIFIED — see §6)** |
 | **G8** | Undo the self-inflicted context inflation | `settings.json` sets `"CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "1000"`; the binary default is **200** (`wt_=200`). Each extra search puts thousands of tokens into the window at 0.343 MB/1 K | up to **−140 MB** on a search-heavy research session | research waves only | **Low** — 200 is already generous; a wave worker rarely exceeds it | delete the key, or set `"200"` |
 | **G9** | ~~`NODE_OPTIONS` / `--max-old-space-size` on the CC process~~ | **INERT — do not do this.** `claude.exe` is a **bun-compiled Mach-O arm64** (binary contains `bun-repl`, `BUN_INSPECT_NOTIFY`, `BUN_CONFIG_TOKEN`) ⇒ JavaScriptCore, not V8. Confirms `docs/plans/MACHINE_CAPACITY_V2.md:1080` and `TERMINAL_AGNOSTIC_L3_L4.md:163`, and the rejection at `docs/research/l3-l4-terminal-and-workflow-2026-07-31.md:296` | 0 | 0 | — | none. G1 is the *different* case: node-based **MCP servers**, where the flag does bind |
 | **G10** | ~~Statusline~~ | **Not a memory lever.** 0.06–0.13 s wall per render, peak transient child RSS **4 MB**, already collapsed to 2 git calls (`statusline.sh` header, audit 06 §5.2) | ~0 | ~0 | — | none — axis C's cardinality question stands, but the *memory* answer is nil |
+
+> 🚨 **G7 RETRACTED 2026-08-11 — the 0.343 MB/1K-token coefficient does not reproduce, and the
+> window *setting* costs nothing.** Measured by the context-economy assessment
+> ([`../context-economy-100p-2026-08-11.md`](../context-economy-100p-2026-08-11.md), `wf_5e9f820e-438`):
+>
+> - **Interleaved A/B, 4 reps each**, identical prompt/model/cwd, peak `vmmap` physical footprint:
+>   1M-eligible **190.5 MB** mean vs `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` **192.9 MB** mean — the
+>   *capped* arm reads nominally **higher**, inside a 7 MB within-arm spread. **There is no
+>   preallocation by window size**, so the setting has no independent memory value at all.
+> - **The coefficient is RSS-shaped and was fitted where the regressor had zero variance.** A causal
+>   probe (fresh process, real token loads, same instrument) measured **0.045–0.060 MB/K-token**; a
+>   within-session fixed-effects panel measured **0.098–0.147** (rss slope 0.302 vs footprint slope
+>   0.019 in that same panel). All 21 sessions in the original cohort sat at `window=1,000,000`.
+>   Applied to today's fleet it over-predicts the highest-token session by **216 MB (81%)**.
+> - **Therefore the whole prize from 1M down to zero is ≤45 MB/session**, and moving a recycle
+>   threshold across the entire 30–60% band is worth ~110 MB across a 16-session fleet — **0.17% of
+>   64 GiB**, against 12.6 GB free + 22.8 GB inactive and **0.00 M swap in use**.
+>
+> **Operator ruling 2026-08-11:** a static cap is rejected. The system must keep context small by
+> *understanding, handoff and self-recycling at good pause-points* — never by amputating the ceiling,
+> because the ability to hold high-signal detail up to 1M is the thing the policy exists to protect.
+> The decisive argument is **capability, not megabytes**: the terminal failure (`Prompt is too long`)
+> is a pure token-count event with zero memory content, and a 200K cap would *raise* its frequency by
+> ~5×-ing the handoff rate. **Retire the memory cost model from this decision rather than re-fitting
+> it.** The real lever is the absolute-token arm at `hooks/boundary-handoff.sh:105` — see the
+> assessment's ranked table.
 
 **Ranked by MB recovered today, no operator decision required (G1–G4):** ≈ **3.0 GB**, all of it
 inside one MCP server family that has no browser attached.
