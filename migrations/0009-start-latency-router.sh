@@ -1,7 +1,7 @@
 #!/bin/bash
 # migration-class: c10
 # migration-step: the interactive account router is built, tested and landed but NOT wired — wiring it edits ~/.zshrc (how every session launches) and flips the accounts.json launcher field that handoff-fire types into panes; both are yours
-# migration-run: CONFIRM=1 bash ~/.claude/docs/activation/pending-activation/36-start-latency-router-activate.sh
+# migration-run: CONFIRM=1 bash ~/Development/claude-infrastructure/docs/activation/pending-activation/36-start-latency-router-activate.sh
 # migration-subject: ~/.zshrc
 # migration-verify: zsh -ic 'whence -w claude1' 2>/dev/null | grep -q function
 #
@@ -39,7 +39,7 @@
 set -euo pipefail
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
-ACTIVATE="$CLAUDE_DIR/docs/activation/pending-activation/36-start-latency-router-activate.sh"
+ACTIVATE="$HOME/Development/claude-infrastructure/docs/activation/pending-activation/36-start-latency-router-activate.sh"
 
 echo "0009: interactive account router — landed, NOT wired."
 
