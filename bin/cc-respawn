@@ -47,6 +47,37 @@ record() { # <phase> <outcome> <member> <detail>
 
 pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
 
+# member_pid <member> — the teammate-discovery primitive for PHASE 3 and PHASE 5. Prints the pid of a
+# process whose argv carries `--agent-name <member>`, or nothing.
+#
+# TOKEN-EXACT, and that is the whole point. The first form of this was
+#   ps -eo pid=,command= | grep -F -- "--agent-name $member"
+# — a LITERAL SUBSTRING match, so `--agent-name tm-api` also matched a live `--agent-name
+# tm-api-worker`. Both verbs then invert, in the exact direction the tool exists to prevent:
+# verify-spawned says "successor live" when the successor was never spawned (a FALSE GO), and
+# verify-stopped says "STILL ALIVE" over a member that IS stopped (a permanent block). Every member
+# name that is a PREFIX of a sibling's — the ordinary tm-<area> / tm-<area>-worker convention — is
+# affected. The awk walk below compares whole argv FIELDS, so a prefix cannot match.
+#
+# NOT interchangeable with `pgrep -f`, and that rejection is deliberate, not an oversight: pgrep -f
+# matches against the WHOLE argv as one string, so it also counts any session whose BRIEF merely
+# mentions this member name (memory pgrep-f-matches-agent-briefs — that read 50 where the truth was
+# 1). The `--agent-name` FLAG immediately followed by the member as its own token is the
+# discriminator, and only a field-wise walk can express it.
+#
+# The member reaches awk through the ENVIRONMENT, never interpolated into the program text and never
+# via -v (which would run BACKSLASH-ESCAPE processing over the value), and it is compared with an
+# explicit string concatenation — so a name is matched as BYTES: regex metacharacters (`.` `*` `[`)
+# can never be read as a pattern, and a numeric-looking name can never be compared NUMERICALLY (awk
+# would otherwise call member `123` equal to a live `0123`). awk's own argv cannot self-match either:
+# the flag appears there only inside double quotes, so its field is `"--agent-name"`.
+member_pid() {
+  ps -eo pid=,command= | CC_RESPAWN_MEMBER="$1" awk '
+    BEGIN { m = ENVIRON["CC_RESPAWN_MEMBER"] }
+    { for (i = 2; i < NF; i++) if ($i == "--agent-name" && ($(i+1) "") == (m "")) { print $1; exit } }
+  '
+}
+
 # ── PHASE 1: prepare — checkpoint-BEFORE-stop + brief-compose (fail-closed) ─────────────────────────
 cmd_prepare() {
   local member="" worktree="" go="" branch="" desk="" brief_out=""
@@ -142,11 +173,9 @@ cmd_verify_stopped() {
   done
   if [ -n "$member" ] && [ -z "$pid" ]; then
     # the memory-verified discovery method: the teammate pane's claude process carries --agent-name.
-    # shellcheck disable=SC2009  # NOT interchangeable with pgrep here: `pgrep -f` matches the whole
-    # argv, so it also counts any session whose BRIEF merely mentions this member name (memory
-    # pgrep-f-matches-agent-briefs — that read 50 where the truth was 1). Matching the literal
-    # `--agent-name <member>` flag in ps output is the discriminator.
-    pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
+    # TOKEN-EXACT via member_pid (see its header for why not pgrep, and why not a substring grep —
+    # a prefix match here reports a stopped member as STILL ALIVE and blocks the respawn forever).
+    pid="$(member_pid "$member")"
     if [ -z "$pid" ]; then
       record verify-stopped stop-verified "$member" "no --agent-name $member process found"
       echo "cc-respawn: verify-stopped OK — no '$member' teammate process exists."
@@ -182,9 +211,9 @@ cmd_verify_spawned() {
   done
   [ -n "$member" ] || die "verify-spawned needs --member <name>"
   local pid
-  # shellcheck disable=SC2009  # see the note on the sibling call above: `pgrep -f` would also match
-  # any session whose BRIEF mentions this member name; the literal --agent-name flag is the discriminator.
-  pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
+  # TOKEN-EXACT via member_pid (see its header): a substring match here reports a successor that was
+  # never spawned as live — a FALSE GO — whenever some other member's name has this one as a prefix.
+  pid="$(member_pid "$member")"
   if [ -n "$pid" ]; then
     record verify-spawned spawn-verified "$member" "pid $pid"
     echo "cc-respawn: verify-spawned OK — '$member' successor live (pid $pid). The GO is delivered: it is IN the brief the process was born with."

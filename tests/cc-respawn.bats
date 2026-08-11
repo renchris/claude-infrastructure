@@ -5,7 +5,14 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  T="$REPO/bin/cc-respawn"
+  # CC_RESPAWN_BIN lets the same assertions run against a scratch MUTANT copy of the subject, which
+  # is how the prefix-match tests below were proven able to go RED (see their header).
+  T="${CC_RESPAWN_BIN:-$REPO/bin/cc-respawn}"
+  # hermeticity: the subject resolves its records dir under $HOME, so an unfixtured run would read
+  # and WRITE the operator's live ~/.claude/respawn (scripts/test-hermeticity-lint.sh rule 1).
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  unset KITTY_WINDOW_ID
   export CC_RESPAWN_RECORDS_DIR="$BATS_TEST_TMPDIR/records"
 }
 mkwt() {
@@ -62,6 +69,72 @@ mkwt() {
 @test "unknown command → exit 2 (fail-closed parser)" {
   run "$T" respawn-everything
   [ "$status" -eq 2 ]
+}
+
+# ── member discovery must be TOKEN-EXACT, not a substring ──────────────────────────────────────────
+# The pre-fix subject found a member with `grep -F -- "--agent-name $member"`, so `--agent-name
+# tm-api` also matched a live `--agent-name tm-api-worker` — and BOTH verbs then inverted:
+# verify-spawned reported a successor that was never spawned as live (a FALSE GO, rc 0), and
+# verify-stopped reported a member that IS stopped as STILL ALIVE (rc 5, blocking the respawn
+# forever). Every member name that is a PREFIX of a sibling's hits this, which the tm-<area> /
+# tm-<area>-worker convention makes ordinary. Both assertions below were RED-proved against a
+# scratch copy carrying the old grep line (CC_RESPAWN_BIN=<mutant> bats …).
+#
+# `; true` prevents bash's implicit-exec optimization — a bare -c 'sleep N' execs sleep and the
+# --agent-name argv disappears from ps, which would make these tests pass for the wrong reason.
+# The settle budget is sized for THIS box's real load band (measured at 3-4 run-queue/core with
+# sibling suites live), not for an idle bench — a bound that only fits the bench turns into a
+# permanent non-verdict the moment the machine is busy. It returns NON-ZERO on failure to settle,
+# which under bats' set -e fails the test — the vacuous pass this guards is a sibling that never
+# became visible in ps, under which the prefix tests below would go green for the wrong reason.
+spawn_fake() { # <member> → FAKE_PID, once the argv is actually VISIBLE in ps
+  bash -c 'sleep 60; true' fake-claude --agent-name "$1" &
+  FAKE_PID=$!
+  for _ in $(seq 1 150); do
+    ps -p "$FAKE_PID" -o command= 2>/dev/null | grep -q -- "--agent-name $1" && return 0
+    perl -e 'select(undef,undef,undef,0.1)'
+  done
+  reap_fake
+  return 1
+}
+reap_fake() {
+  [ -n "${FAKE_PID:-}" ] || return 0
+  kill "$FAKE_PID" 2>/dev/null || true
+  wait "$FAKE_PID" 2>/dev/null || true
+  FAKE_PID=""
+}
+# The in-test reap runs before the assertions so nothing lingers; this is the net for the path where
+# an assertion FAILS and never reaches it. Idempotent — reap_fake clears FAKE_PID.
+teardown() { reap_fake; }
+
+@test "RS-f: a PREFIX sibling is not the successor — verify-spawned FAILS LOUD (no false GO)" {
+  M="tm-bats-api-$$-$BATS_TEST_NUMBER"
+  spawn_fake "$M-worker"
+  run "$T" verify-spawned --member "$M"
+  reap_fake
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"FAILED LOUD"* ]] || false
+  grep -q '"outcome":"spawn-missing"' "$CC_RESPAWN_RECORDS_DIR/$M.jsonl"
+}
+
+@test "RS-c: a PREFIX sibling is not the target — verify-stopped reports OK (no permanent block)" {
+  M="tm-bats-api-$$-$BATS_TEST_NUMBER"
+  spawn_fake "$M-worker"
+  run "$T" verify-stopped --member "$M"
+  reap_fake
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no '$M' teammate process exists"* ]] || false
+}
+
+@test "positive control: an EXACT --agent-name process is still found by both verbs" {
+  M="tm-bats-exact-$$-$BATS_TEST_NUMBER"
+  spawn_fake "$M"
+  run "$T" verify-spawned --member "$M"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$FAKE_PID"* ]] || false
+  run "$T" verify-stopped --member "$M"
+  reap_fake
+  [ "$status" -eq 5 ]
 }
 
 @test "structural: the tool has NO send-to-target code path (GO cannot be expressed as a message)" {
