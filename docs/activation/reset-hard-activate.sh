@@ -36,6 +36,11 @@ HOOK_DEST="$HOME/.claude/hooks/reset-hard-shadow-allow.sh"     # tilde resolved 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 CONFIG_DIRS=( "$HOME/.claude" "$HOME/.claude-secondary" "$HOME/.claude-next" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary" )
 BAKS=()
+# A per-config transform failure used to be PROSE ONLY: the loop printed
+# "FAILED (left intact)" and the script still printed DONE and exited 0, so an
+# operator reading the last line believed the hook was registered everywhere while
+# it was absent from one config dir. Count them, and let the exit status carry it.
+WIRE_FAILURES=0
 
 say(){ printf '%s\n' "$*"; }
 [ -f "$HOOK_SRC" ] || { say "FATAL: hook source missing: $HOOK_SRC"; exit 1; }
@@ -90,6 +95,7 @@ for dir in "${CONFIG_DIRS[@]}"; do
       mv "$tmp" "$f"; say "registered:        $f  (backup: $f.bak-$TS)"
     else
       rm -f "$tmp"; say "FAILED (left intact): $f — jq transform did not validate"
+      WIRE_FAILURES=$(( WIRE_FAILURES + 1 ))
     fi
   else
     tmp="$(mktemp)"
@@ -104,7 +110,12 @@ done
 
 say ""
 if [ $APPLY = 1 ]; then
+  if [ "$WIRE_FAILURES" -gt 0 ]; then
+    say "INCOMPLETE: $WIRE_FAILURES config(s) were NOT wired (named above) — this hook is absent there."
+    say "Nothing was left half-written; each failure left its settings.json intact."
+  else
   say "DONE — hook wired in SHADOW. It now LOGS would-allow events; it does NOT auto-allow yet."
+  fi
   say "Soak:  ~/.claude/hooks/reset-hard-shadow-allow.sh status"
   say "Arm:   ~/.claude/hooks/reset-hard-shadow-allow.sh arm --confirm   (only after a clean soak)"
   if [ ${#BAKS[@]} -gt 0 ]; then
@@ -114,3 +125,7 @@ if [ $APPLY = 1 ]; then
 else
   say "DRY-RUN only — no files changed. Re-run with --apply to write."
 fi
+
+# The exit STATUS is the part a caller can act on — a message is not a verdict.
+# Non-zero when any config was left unwired, so `activate && say-it-is-on` cannot lie.
+[ "${WIRE_FAILURES:-0}" -eq 0 ] || exit 1
