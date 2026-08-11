@@ -1,8 +1,15 @@
 ---
-status: open
+status: complete
 ---
 
 # README timeline banner + proactive idle-recycle — 2-track plan
+
+> **COMPLETE 2026-08-11.** Track A landed `1f31117f`; Track B landed its report + the
+> `idl-abstain-alarm` fix, and its one named blocker — a Stop-side carrier for the ≥35% idle
+> free-win tier — is closed by `ab6d3d1e` (the arm), `57d8c4dd` (what made it reachable) and
+> `3f6f1ade` (what made it fire under its own name). The three `waiting-recycle.sh` secondary items
+> in the Track B report stay open as their own work; they are not this plan's scope. Full account in
+> the Status log at the end.
 
 **Created** 2026-08-08 by session `a64e4989` at 71% context, immediately before a `--recycle`.
 Durable anchor for two dispatched sessions the successor must fire. Both report back by ping.
@@ -174,3 +181,42 @@ suspects is the binding one, and either the fix or a named blocker. Report to
   Incidental: `scripts/render-diagrams.mjs` claimed `assets/diagrams/handoff-choreography.svg` was
   the hand-authored exception. That file has never existed in this tree — the comment now names the
   real one.
+
+- **2026-08-11 — Track B's named blocker CLOSED; the plan is DONE** (`3f6f1ade`). The ≥35% idle
+  free-win tier has a Stop-side carrier and it now fires under its own name.
+
+  **The blocker was already closed when it was named.** `hooks/boundary-handoff.sh` shipped the
+  ✅-ledger free-win arm (`T_FREEWIN`, default 35) on **2026-08-03** in `ab6d3d1e` — five days before
+  the Track B report said the tier had "no Stop-side implementation at all". The report was not
+  careless: **the arm had never fired once**, because the `gate-not-green-at-head` abstain sat
+  upstream of it and only the background `postland-verify` daemon can advance that marker (1,341
+  evaluations across 296 sessions, zero fires). `57d8c4dd` demoted gate-green to a reported field
+  here and in `wrap-ledger.sh`, which is what made the arm reachable. **Keep this, because it is the
+  transferable part: an inert mechanism is indistinguishable from an absent one.** Two sessions in a
+  row read this hook's source and concluded the tier did not exist.
+
+  **What this session found and fixed.** A positive control — the deployed hook, a synthetic
+  telemetry payload at 41%, a clean ✅ worktree — fired, but *as the forecast tier*: the arm set the
+  shared `early` flag, so the advisory read `context 41% BURNING toward the 88% auto-compact wall —
+  forecast ≤-1min at the observed rate` and the IDL row said `axis:"forecast"`. `-1` is the sentinel
+  for UNKNOWN: the advisory quoted a burn rate it had explicitly failed to measure. Three fixes,
+  matching the report's spec items 2 and 3:
+  - **Its own axis.** `freewin` flag, `axis:"freewin"`, and the free-win wording (`⟳ FREE WIN … 
+    handoff-fire.sh --recycle`) instead of the forced-drain "before auto-compaction".
+  - **S6 conversation-hold SUPPRESSES here**, rather than appending "do NOT cut it" to a recycle
+    advisory — advice that retracts itself. It also protects the latch: a fire mid-exchange stamps
+    it and silences the next +10% of fill, costing the genuinely-idle boundary that follows. The
+    ≥73% tier still fires mid-exchange with wording only, unchanged.
+  - **The silence is attributable.** The sub-`T` abstain carries `FREEWIN_RUNG`, so "the ledger said
+    no" is no longer byte-identical to "the arm never ran" — 383 live evaluations sat at used ≥ 35
+    recording only the 73 they were never going to meet.
+
+  **Why the suite missed it:** the shipped free-win test asserted that the arm FIRES and never read
+  what it SAID. 8 new assertions, each provably RED against the pre-fix hook; 2 more are
+  counter-direction anchors (the forecast tier keeps its own axis; the ≥73 tier still fires
+  mid-exchange) that pass both ways by design. 35/35 bats, shellcheck -x clean.
+
+  **Still open, and deliberately not taken here** — the report's three secondary items, all about
+  `waiting-recycle.sh` rather than this carrier: arm state is partitioned per account while the
+  router picks the account; `disarm` has no TTL and no visibility; `cc-roles/desk` is absent, leaving
+  two mechanisms keyed on a deleted file. Each is a migration with its own blast radius.

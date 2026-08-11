@@ -178,6 +178,37 @@ suite's own growth; converted to floor + tally (`exact-count-assertion-tripwires
 
 ## Named blocker — the idle free-win tier has no Stop-side carrier
 
+> **CLOSED 2026-08-11 — and the premise below was already false when this was written.** The carrier
+> exists: `hooks/boundary-handoff.sh` shipped the ✅-ledger **free-win arm** (`T_FREEWIN`, default 35)
+> on **2026-08-03** in `ab6d3d1e` — five days BEFORE this report claimed the tier had "no Stop-side
+> implementation at all". The claim was not a bad inference from the evidence; it was a stale reading
+> of the subject, and the evidence could not contradict it because **the arm had never fired**: the
+> `gate-not-green-at-head` abstain sat upstream of it, and only the background `postland-verify`
+> daemon can advance that marker, so the whole rail was unfireable (1,341 evaluations / 296 sessions /
+> zero fires). This report's own §2 read the hook's threshold as 73 and stopped there. Lesson, in this
+> repo's own vocabulary: *an inert mechanism is indistinguishable from an absent one* — a hook that
+> cannot fire will read as unbuilt no matter how carefully you grep its source
+> (`spec-named-mechanism-may-be-prose-only`, inverted — here the mechanism was real and the prose was
+> the thing that lagged).
+>
+> Resolution timeline, all landed:
+> - `ab6d3d1e` (08-03) — the arm itself, keyed on `RUNG=✅` rather than the bare fill number this
+>   report proposed. The stronger predicate: ✅ *is* CLAUDE.md's Recycle test, mechanically.
+> - `57d8c4dd` (08-11) — gate-green demoted from gate to reported field, in this hook and in
+>   `wrap-ledger.sh`. This is what made the arm reachable at all.
+> - `3f6f1ade` (08-11) — the arm fired under the **forecast tier's name**: it set the shared `early`
+>   flag, so a 41% fire narrated itself "BURNING toward the wall — forecast ≤-1min at the observed
+>   rate" (`-1` = the UNKNOWN sentinel) and recorded `axis:"forecast"`. Now its own axis, its own
+>   free-win wording (`handoff-fire.sh --recycle`), S6 conversation-hold **suppressing** at this tier
+>   rather than re-wording, and `FREEWIN_RUNG` on the abstain so a declining ledger stops being
+>   byte-identical to a dead arm.
+>
+> Proposal items 1–4 below map onto what shipped: **1** = `T_FREEWIN` (with the ✅ predicate replacing
+> the bare threshold), **2** = shipped in `3f6f1ade`, **3** = shipped in `3f6f1ade`, **4** = the damping
+> is the ✅ predicate + the B-2 latch rather than an env kill-switch; the arm defaults ON at 35 and is
+> disabled with `CC_BOUNDARY_T_FREEWIN=0`. The **secondary items** at the end of this section are
+> untouched and remain open.
+
 **Not built here.** It is a fleet-wide behaviour change to when every session is blocked at Stop,
 which is larger than a safe in-actuator fix, so it is specified rather than shipped.
 
