@@ -1,7 +1,33 @@
+STEP -1 — RECONCILE BEFORE YOU BUILD. THIS PAYLOAD WAS COMPOSED 2026-07-30 AND IS OLDER THAN THE
+SUBSYSTEM IT DESCRIBES. The campaign's own measured law (GROUND_UP_REBUILD_MAP.md Learnings,
+2026-08-07): **an open row is not a row that needs a rebuild — a dormant row's subsystem keeps moving
+without it.** Two of the three rows open on 2026-08-07 had already been answered out-of-band, one of
+them *better* than its own spec. A session that fires against a stale payload rebuilds shipped code.
+So before any design or build work, run THIS row's own acceptance reads against `origin/main` and
+write down, per AC, one of: MET (cite the trunk sha, content-verified — `git ls-tree`/`git grep`, never
+a sha lookup alone) · FAILS (quote the read that fails) · SUPERSEDED (a different, shipping answer
+exists — say what it is and why it wins). **Design only against what actually FAILS.** If an AC is
+MET or SUPERSEDED, say so and move on; do not re-implement it to match the spec's wording.
+Two hard-won corollaries: when two oracles disagree, **the shipping side wins and the stranded doc is
+the stale one**, however carefully it was measured; and a cited sha that reads NOT-ON-TRUNK may be a
+**dangling pre-rebase object whose content did land** — verify by CONTENT before concluding absence
+(this exact trap sat in row 9's cell for 3 days; see the 2026-08-11 wave-log entry).
+
 YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: the guardrail/hook layer
 (row 6) — what a session may do. You were fired by the ground-up campaign coordinator. **You are the
 LAST row of a 13-row campaign, and you are last on purpose: you are every other row's enforcement
 surface, so you rebuild after your customers have stabilised their contracts.**
+
+**Row 6 status as re-derived 2026-08-11: GENUINELY UNTOUCHED — no design doc, no build** (only this
+payload landed, `53c6eee9`). It is the campaign's one row with no `docs/plans/*_V2.md`, which is
+exactly why it went dormant: the `plan-open` generator that mints dispatcher-reachable backlog rows
+for rows 2 and 11 takes an OPEN PLAN DOC as its input, so it is structurally blind to a row that has
+never had one. Your first landed artifact should therefore be the design doc — the moment
+`docs/plans/GUARDRAIL_HOOKS_V2.md` exists and is open, this row self-heals into the dispatch wave and
+stops depending on any coordinator being alive. **Known live overlap to reconcile against, not
+duplicate:** `cc-backlog 4ce34a4f703c` (hook-wiring parity across the 5 config dirs has no checker;
+a permission rail missing from 2 of 5) is your AC territory and is already filed — read it, and
+either subsume it with evidence or leave it to its own worker; do not re-file it.
 
 Scope (frozen): every session gets the SAME guardrails, and a guardrail's presence is provable rather
 than assumed — no session silently running with a rail its siblings have. Measured, landed, and
