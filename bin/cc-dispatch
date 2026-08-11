@@ -522,12 +522,30 @@ fire_branch() {
 # session that exists only off-box (bin/cc-cloud:51 — "pushed nothing and was never declared leaves
 # zero trace anywhere this box can read").
 #
-# cc-cloud is called as a CLI and is NEVER edited from here. TODO(in-flight): a sibling session is
-# adding `--account` to bin/cc-cloud; once it lands, pass the routed account through here so the
-# declaration records WHICH account's quota the off-box session is spending. Until then the account
-# lives in this dispatcher's own IDL journal (see the claim site below).
+# cc-cloud is called as a CLI and is NEVER edited from here. (--account landed with W2; the routed
+# account is now passed through, so the declaration records WHICH account's quota the off-box
+# session is spending — the TODO this comment used to carry is resolved.)
+#
+# ── THE MANAGEMENT FIELDS (2026-08-11, the lead's first-fire integration find) ──────────────────
+# cc-offload up records custody/notify-back on the declaration and opens the custody debt AT THE
+# FIRE; this path — the dispatcher's cloud leg — declared bare. Consequence, measured on the very
+# first producer-routed dispatch (session_01YcTifmgrKh3KFYuz45Rret, item 38de29ec5e59, fired
+# 2026-08-11T20:30Z): cloud-return.sh's sweep population is "declarations carrying the W2
+# management fields (notify_back or custody)", so a dispatcher-fired session was born UNMANAGED —
+# no custody, no wake, no auto-land, exactly the §2 rows 1-4 state the rails were built to end,
+# reachable through the OTHER door. The fields are recorded here at declare time because a
+# fire-time fact cannot be reconstructed later (cc-offload's own rule):
+#   notify-back → the DESK role's pane uuid, resolved NOW (~/.claude/cc-roles/desk). A cron pass
+#                 has no pane of its own; the desk pane is the durable address (a recycle
+#                 relaunches the SAME pane). Missing/empty role file ⇒ field omitted — --custody
+#                 alone still admits the declaration to the sweep, so wake degrades before
+#                 management does.
+#   custody     → marker = the session id (cc-offload's convention), opened below keyed on this
+#                 pass's own cwd. Best-effort: custody bookkeeping must never break a declared
+#                 fire — but a failure is stated in the verdict, so the ledger records an
+#                 armed-ness gap rather than a silent green.
 cloud_declare() {
-  local id="$1" cap="$2" branch="$3" sid="" ccbin
+  local id="$1" cap="$2" branch="$3" acct="${4:-}" sid="" ccbin nb=""
   if [ -n "$cap" ] && [ -f "$cap" ]; then
     sid="$(/usr/bin/grep -Eo 'session_[A-Za-z0-9._-]+' "$cap" 2>/dev/null | head -1 || true)"
   fi
@@ -544,11 +562,23 @@ cloud_declare() {
     printf 'UNDECLARED — %s fired as %s but cc-cloud is unresolvable (set CC_DISPATCH_CLOUD_BIN)' "$id" "$sid"
     return 1
   fi
-  if ! "$ccbin" declare --id "$sid" --branch "$branch" >/dev/null 2>&1; then
+  nb="$(cat "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
+  local -a dargs=(declare --id "$sid" --branch "$branch" --item "$id" --custody "$sid")
+  [ -n "$acct" ] && dargs+=(--account "$acct")
+  [ -n "$nb" ] && dargs+=(--notify-back "$nb")
+  if ! "$ccbin" "${dargs[@]}" >/dev/null 2>&1; then
     printf 'UNDECLARED — %s fired as %s but cc-cloud declare --id %s --branch %s FAILED' "$id" "$sid" "$sid" "$branch"
     return 1
   fi
-  printf 'declared %s (branch %s)' "$sid" "$branch"
+  local cust cbin
+  cbin="$(resolve_bin "${CC_DISPATCH_CUSTODY_BIN:-}" cc-custody "$HOME/.claude/bin/cc-custody")" || cbin=""
+  if [ -n "$cbin" ] && "$cbin" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
+       --slug "cloud-$sid" ${nb:+--notify-back "$nb"} >/dev/null 2>&1; then
+    cust="custody OPEN (marker $sid)"
+  else
+    cust="custody NOT OPENED — the close-integrity arm is NOT armed for it"
+  fi
+  printf 'declared %s (branch %s, managed: %s%s)' "$sid" "$branch" "$cust" "${nb:+ · wakes $nb}"
   return 0
 }
 
@@ -1722,7 +1752,7 @@ dispatch() { # <dry|run|decide>
       # own name in the ledger rather than being folded into "the spawn failed".
       if [ "$venue" = cloud ]; then
         local cdv cdrc=0
-        cdv="$(cloud_declare "$id" "$ferrf" "$(fire_branch "${fire_args[@]}")")" || cdrc=$?
+        cdv="$(cloud_declare "$id" "$ferrf" "$(fire_branch "${fire_args[@]}")" "$acct")" || cdrc=$?
         if [ "$cdrc" -eq 0 ]; then
           idl declared "$id: $cdv"
         else

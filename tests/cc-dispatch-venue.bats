@@ -52,8 +52,20 @@ exit "\${STUB_DECL_RC:-0}"
 EOF
   chmod +x "$BIN/cc-cloud"
   export CC_DISPATCH_CLOUD_BIN="$BIN/cc-cloud"
+  # cc-custody stub — REQUIRED for hermeticity, not only for the custody cases: resolve_bin falls
+  # through to `command -v cc-custody`, so without this override the success path of every declare
+  # case would open a REAL custody row in the operator's live store (the exact class the
+  # test-hermeticity ratchet exists for). Logs argv; fails on demand ($STUB_CUST_RC).
+  cat > "$BIN/cc-custody" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/custody.log"
+exit "\${STUB_CUST_RC:-0}"
+EOF
+  chmod +x "$BIN/cc-custody"
+  export CC_DISPATCH_CUSTODY_BIN="$BIN/cc-custody"
   CAP="$BATS_TEST_TMPDIR/fire-output.txt"
 }
+custodied() { cat "$BATS_TEST_TMPDIR/custody.log" 2>/dev/null; }
 
 lib() { bash -c ". '$LIB'; $*"; }
 declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
@@ -251,4 +263,50 @@ code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "
       -e 's/CC_FIRE_CLOUD:-off/CC_FIRE_ALWAYS:-on/' "$CODE" > "$mutant"
   ! grep -q 'fire_args+=(--cloud)' "$mutant" || false
   ! grep -q 'CC_FIRE_CLOUD:-off' "$mutant" || false
+}
+
+# ── the management fields (2026-08-11): a dispatcher-fired declaration must be SWEEP-MANAGED —
+# cloud-return.sh acts only on declarations carrying notify_back or custody, and the first live
+# producer-routed fire (session_01YcTifmgrKh, item 38de29ec5e59) was born outside that population ──
+
+@test "14 the declaration carries --item and --custody, so the sweep can manage it" {
+  printf 'Created cloud session: session_m1 on branch feat/m\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' feat/m"
+  [ "$status" -eq 0 ]
+  declared | grep -q 'declare --id session_m1 --branch feat/m --item item9 --custody session_m1'
+}
+
+@test "15 the routed account is threaded into the declaration" {
+  printf 'Created cloud session: session_m2 on branch feat/m\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' feat/m next9"
+  [ "$status" -eq 0 ]
+  declared | grep -q -- '--account next9'
+}
+
+@test "16 desk role present → notify-back rides declare AND custody; absent → token absent, still declared" {
+  mkdir -p "$HOME/.claude/cc-roles"; printf 'aaaa-bbbb-cccc\n' > "$HOME/.claude/cc-roles/desk"
+  printf 'Created cloud session: session_m3 on branch feat/m\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' feat/m"
+  [ "$status" -eq 0 ]
+  declared | grep -q -- '--notify-back aaaa-bbbb-cccc'
+  custodied | grep -q -- '--notify-back aaaa-bbbb-cccc'
+  rm -f "$HOME/.claude/cc-roles/desk"
+  : > "$BATS_TEST_TMPDIR/declared.log"
+  printf 'Created cloud session: session_m4 on branch feat/m\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' feat/m"
+  [ "$status" -eq 0 ]
+  ! declared | grep -q -- '--notify-back' || false
+}
+
+@test "17 custody opens at the fire with the session-id marker — and its FAILURE is stated, never silent" {
+  printf 'Created cloud session: session_m5 on branch feat/m\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' feat/m"
+  [ "$status" -eq 0 ]
+  custodied | grep -q 'open .*--target cloud:session_m5 --marker session_m5 --slug cloud-session_m5'
+  [[ "$output" == *"custody OPEN (marker session_m5)"* ]] || { echo "$output"; false; }
+  : > "$BATS_TEST_TMPDIR/custody.log"
+  printf 'Created cloud session: session_m6 on branch feat/m\n' > "$CAP"
+  run bash -c ". '$LIB'; export STUB_CUST_RC=1; cloud_declare item9 '$CAP' feat/m"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"custody NOT OPENED"* ]] || { echo "$output"; false; }
 }
