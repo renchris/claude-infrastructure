@@ -839,3 +839,87 @@ blind spot.
   *lead's* writes as a duplicate worker. The gate walks the ancestor chain to a `claude` pid, so a
   subagent's tool call claims under the subagent's pid. It self-released when the children exited
   and no override was used — but a read-only research subagent should never take a work lease.
+
+
+---
+
+# UPDATE 5 — 2026-08-11: the prediction, tested forward
+
+UPDATE 4 closed the trigger question **by effect**, on 899 post-fix sessions ending 2026-08-07.
+That is a claim about the future, and this is the first reading of it against data that did not
+exist when it was made. Backlog item `7abb4b8fcbce` (the disproof, filed as its own row) is closed
+by this section.
+
+**The cure held.** The post-fix window has grown from 899 sessions to **1321** — 422 more, a 47%
+larger denominator — and class A is still **exactly 0**. **8.4 days and 25.3 TTL cycles** per
+account now separate the last class-A error from the present (measured to 2026-08-11T04:30Z),
+against the 41.2 hours in which all 35 of them arrived.
+
+| | at UPDATE 4 (2026-08-07) | now (2026-08-11) | why it moved |
+|---|---|---|---|
+| class-A before onset | 0 / 1727 sessions | 0 / 1627 | denominator **shrank** — retention roll-off, below |
+| class-A during the window | 35 / 224 | **35 / 224** | closed period, both ends fixed |
+| class-A since the fix | 0 / 899 | **0 / 1321** | denominator grew by 422 |
+
+The three complete new days add 174 / 123 / 143 sessions (2026-08-08/09/10, counted by start day;
+187 / 143 / 148 on the active-day basis — the distinction matters, see below) with zero class A.
+Class B continues on its own unrelated schedule — one on 08-09 — which is the point of the split.
+
+## The controls were re-run, not recalled
+
+* **The positive control still reproduces.** `--active-denominator` returns the 2026-08-02
+  published table *row for row* four days later — 190/123/61/22/101/270/171/182 sessions,
+  Aug 2 = 79. Not one cell moved, on a corpus that gained 422 sessions at one end and lost ~100
+  off the other in the interval.
+* **The loophole is still closed.** Every `isApiErrorMessage` in the now-1321 post-fix sessions was
+  re-read on its **untruncated** text: **none pairs the client literals `Please run /login` and
+  `API Error`.** The remainder are `-:other-api-error` (52 — session/weekly limit, 529 Overloaded,
+  ECONNRESET, stalled or closed streams) and `B:credential-gone` (15). A reworded server 401 would
+  still have carried the client frame, so the absence of class A is an absence, not a blind spot.
+
+## One thing UPDATE 4 did not state: class A straddles both client builds
+
+Split by the build that emitted it, the 35 class-A errors are **2.1.219 × 20 and 2.1.220 × 15**.
+UPDATE 4 controlled the version axis only on the *denominator* side (2.1.220 ran on both sides of
+the boundary). Stated on the numerator side it is a sharper fact: **no build-specific cause can
+produce an error class that straddles two builds, beginning on one and ending with both in
+service.** The window opens while only 2.1.219 is installed and closes ~30h after 2.1.220 arrives,
+with neither install nor either build's absence marking an edge. (The install instant itself,
+2026-08-01T12:15Z, is the original item's measurement and is not re-derived here; the 20/15 split
+is, and it does not depend on the exact boundary — it only needs both builds inside the window.)
+
+That is the same shape as the account axis in UPDATE 4, and it points the same way: machine-wide,
+scoped to a build no more than to an account. It also re-derives, from the numerator side, the
+correction in `bbad96d163ab` that retracted the original item's version claim as time-confounded.
+
+## Two traps this re-reading walked into, recorded so the next one does not
+
+* **Two denominators moved, for two different reasons, and one cause was reached for both.** The
+  daily table read Jul 30 as 245 against a published 270, and the all-history pre-onset bucket read
+  1627 against a published 1727. "The corpus is aging out from under the published figures" was
+  written down here as the explanation of both before either was checked. It is the right answer
+  to exactly one of them:
+  * The **daily** gap is a *flag*, not decay. The default table counts a session on its **start
+    day**; `--active-denominator` counts it on **every day it was active**, which is the basis the
+    2026-08-02 table used. Run on its own basis, every cell is identical — nothing decayed at all.
+  * The **all-history** gap *is* decay, and it is the only place decay appears. Transcripts roll
+    off an oldest-first retention horizon: the corpus now begins **2026-07-09** and that day holds
+    a single session, 07-10 two, 07-11 ten — the ramp of a boundary, not of real usage. The ~100
+    sessions that vanished are the early-July days that fell past it since 2026-08-07.
+
+  Both readings were plausible, one metric was genuinely true, and it corroborated the wrong cause
+  for the other. Two discrepancies in the same instrument do not have to share an explanation.
+  The finding is untouched either way — the numerator is 0 on both sides of the change — but a
+  denominator is only comparable to one computed on its own basis **and at its own time**.
+* **The millisecond boundary trap catches its own reader.** This document's window bounds are
+  truncated to the second (`…T00:46:55Z`) while transcript stamps carry milliseconds
+  (`…:55.138Z`). The instrument's docstring warns about exactly this, and the verification harness
+  written to re-check these claims still fell into it — it reported the last class-A error as
+  falling *outside* the published window, by 64 ms. Compare on parsed datetimes, and treat a
+  published second-resolution bound as a truncation rather than an instant.
+
+Neither trap changed a conclusion, and both were caught by the harness being able to fail: its
+first run went red on four checks — three the millisecond bug above, the fourth an assertion that
+mis-stated what UPDATE 4 actually claimed about the version axis. **All four were defects in the
+re-verification, none in UPDATE 4.** That is the useful part: a re-verification that could only
+pass would have been worth nothing, and the four reds are the evidence these checks are live.
