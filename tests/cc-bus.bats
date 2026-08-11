@@ -27,6 +27,14 @@ setup() {
   export CC_BUS_DIR="$BATS_TEST_TMPDIR/bus"
   export CC_BUS_APPLIED_FILE="$BATS_TEST_TMPDIR/applied"
   export CC_BUS_ACTOR=tester
+
+  # THE ROUND-TRIP PROBE. One string, used by every read-path test below, carrying all three
+  # characters that json_escape transforms — so a reader that handles two of them still goes
+  # red. The escaped quote is the one that matters most: it is what makes `[^"]*` stop early,
+  # which is how a delivered message came out as `he said \` for a year.
+  HOSTILE='he said "hi" \ then left
+and wrote a second line'
+  printf '%s' "$HOSTILE" > "$BATS_TEST_TMPDIR/want"
 }
 
 @test "selftest passes 20/20 (a zero-check suite must not 'pass')" {
@@ -85,6 +93,51 @@ r=json.loads(open(sys.argv[1]).readline())
 assert '\"' in r['body'], r
 assert '\n' in r['body'], r
 print('ok')" "$CC_BUS_DIR/actors/tester.jsonl"
+  [ "$status" -eq 0 ]
+}
+
+# ── the READ path ───────────────────────────────────────────────────────────────────────
+# The test above proves only the WRITER. It passed for as long as the reader was broken,
+# because a correctly-escaped record on disk says nothing about what comes back OUT of it:
+# every consumer pulled fields back with `"key":"\([^"]*\)"`, a class that cannot see `\"`,
+# and none of them unescaped. `post beta 'he said "hi" then left'` was delivered as
+# `he said \`. These four tests drive the CONSUMERS, so the writer's escaping and the
+# reader's unescaping are pinned as one contract rather than two independent half-truths.
+
+@test "READ PATH: inbox delivers a hostile body VERBATIM (not truncated at the escaped quote)" {
+  CC_BUS_ACTOR=remote "$BUS" post tester "$HOSTILE" >/dev/null
+  run "$BUS" inbox
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HOSTILE"* ]]
+}
+
+@test "READ PATH: work --json emits VALID JSON for hostile evidence and round-trips it" {
+  CC_BUS_ACTOR=remote "$BUS" "done" I-9 --evidence "$HOSTILE" >/dev/null
+  "$BUS" work --json > "$BATS_TEST_TMPDIR/work.json"
+  # Two independent failures are possible and both must be caught: output no parser accepts
+  # (a raw `"` interpolated into the emitter), and output that parses but lost bytes.
+  run python3 -c '
+import json, sys
+want = open(sys.argv[2]).read()
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert len(rows) == 1, rows
+assert rows[0]["evidence"] == want, (rows[0]["evidence"], want)
+assert rows[0]["item"] == "I-9", rows
+' "$BATS_TEST_TMPDIR/work.json" "$BATS_TEST_TMPDIR/want"
+  [ "$status" -eq 0 ]
+}
+
+@test "READ PATH: actors --json emits VALID JSON for a hostile note and round-trips it" {
+  "$BUS" hello --note "$HOSTILE" >/dev/null
+  "$BUS" actors --json > "$BATS_TEST_TMPDIR/actors.json"
+  run python3 -c '
+import json, sys
+want = open(sys.argv[2]).read()
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert len(rows) == 1, rows
+assert rows[0]["note"] == want, (rows[0]["note"], want)
+assert rows[0]["actor"] == "tester", rows
+' "$BATS_TEST_TMPDIR/actors.json" "$BATS_TEST_TMPDIR/want"
   [ "$status" -eq 0 ]
 }
 
@@ -225,7 +278,12 @@ stub_helpers() {
   cat > "$BATS_TEST_TMPDIR/stub/cc-backlog" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$CALLS"
-[ "${1:-}" = "list" ] && printf '[{"id":"ABC123","title":"an offered item","dodRef":"docs/p.md"}]\n'
+# HOSTILE1's title is written as the real ledger would write it — ESCAPED. cc-bus must decode
+# it before re-emitting, or it publishes a doubly-escaped (or truncated) title onto the bus.
+# Emitted via cat, not printf: printf would eat the backslashes in the format string.
+[ "${1:-}" = "list" ] && cat <<'JSON'
+[{"id":"ABC123","title":"an offered item","dodRef":"docs/p.md"},{"id":"HOSTILE1","title":"a \"quoted\" title with \\ backslash","dodRef":"docs/p.md"}]
+JSON
 exit 0
 STUB
   cat > "$BATS_TEST_TMPDIR/stub/cc-notify" <<'STUB'
@@ -265,6 +323,38 @@ STUB
   run "$BUS" drain --apply
   [ "$status" -eq 0 ]
   [ ! -s "$CALLS" ]
+}
+
+@test "READ PATH: drain hands the hostile body to cc-notify VERBATIM (dry-run and --apply)" {
+  stub_helpers
+  CC_BUS_ACTOR=remote "$BUS" post tester "$HOSTILE" >/dev/null
+
+  run "$BUS" drain
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HOSTILE"* ]] || false
+
+  run "$BUS" drain --apply
+  [ "$status" -eq 0 ]
+  # The stub logs "$*", so this asserts what the LOCAL mailbox would actually have received.
+  grep -qF 'he said "hi" \ then left' "$CALLS"
+  grep -qF 'and wrote a second line' "$CALLS"
+}
+
+@test "READ PATH: offer decodes the ledger's ESCAPED title before republishing it" {
+  stub_helpers
+  run "$BUS" offer HOSTILE1
+  [ "$status" -eq 0 ]
+  # The bus record must be valid JSON whose body is the title the ledger meant — neither
+  # truncated at `a \` nor double-escaped into `a \\"quoted\\"`.
+  run python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+offers = [r for r in rows if r["kind"] == "offer"]
+assert len(offers) == 1, rows
+assert offers[0]["body"] == "a \"quoted\" title with \\ backslash", offers[0]["body"]
+assert offers[0]["item"] == "HOSTILE1", offers
+' "$CC_BUS_DIR/actors/tester.jsonl"
+  [ "$status" -eq 0 ]
 }
 
 @test "offer refuses an id the local ledger does not hold" {
