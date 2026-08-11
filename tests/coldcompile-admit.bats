@@ -11,7 +11,8 @@
 # asserted on the gate's exit code would pass for every possible implementation, including one that
 # does nothing at all.
 #
-# Hermetic: $HOME is fixtured, the process census comes from a FIXTURE FILE via CC_IGNITION_PS_FILE,
+# Hermetic: $HOME is fixtured, the process census comes from FIXTURE FILES via CC_IGNITION_PS_FILE
+# (args-last rows) and CC_IGNITION_EXE_FILE (the pid->exe-name table); ps_fixture derives both,
 # and every table fixture lives in $BATS_TEST_TMPDIR. Two things are deliberately tested against the
 # REAL shipped artifacts instead, because they ARE the deliverable and a fixture would test nothing
 # about them: config/coldcompile.patterns (its three rows and their command-position anchoring) and
@@ -38,10 +39,26 @@ cmd_of() { printf '%s' "$1" | jq -r '.hookSpecificOutput.updatedInput.command //
 
 # A process-census fixture. Rows are `<pid> <etime> <comm> <args…>`, exactly what
 # `ps -Awwo pid=,etime=,comm=,args=` prints.
-ps_fixture() { # $1 = name, then whole rows
+# THE GATE NOW TAKES TWO READS, and this splits one authored row into both. `ps` widens only its
+# LAST column, so a `comm=` requested before `args=` came back truncated to a FIXED 16 characters —
+# measured 2026-08-11 — and TERM 2's `basename(comm) == "node"` could therefore match nothing but a
+# process whose comm was literally `node`. bin/cc-ignition-gate now reads args-LAST rows plus a
+# separate pid->exe-name table (see its ps_rows/exe_rows).
+#
+# The fixture constants below stay authored as ONE readable line per process,
+# `<pid> <etime> <comm> <args…>`, and this function derives the two streams from it exactly as the
+# two `ps` calls would: the comm column becomes the name table, everything after it is the args
+# stream. Keeping the authoring shape matters — OLD_SERVER's comm is node while its argv[0] is
+# `next-server`, which is the whole point of case 21, and a fixture that derived the name from
+# argv[0] would silently destroy that distinction.
+ps_fixture() { # $1 = name, then whole rows: "<pid> <etime> <comm> <args…>"
   local out="$D/$1.ps"; shift
-  : > "$out"
-  while [ "$#" -gt 0 ]; do printf '%s\n' "$1" >> "$out"; shift; done
+  : > "$out"; : > "$out.exe"
+  while [ "$#" -gt 0 ]; do
+    awk '{ n = split($3, p, "/"); b = p[n]; gsub(/[[:space:]]+/, "_", b); print $1, b }' <<< "$1" >> "$out.exe"
+    awk '{ printf "%s %s", $1, $2; for (i = 4; i <= NF; i++) printf " %s", $i; print "" }' <<< "$1" >> "$out"
+    shift
+  done
   printf '%s' "$out"
 }
 NODE=/usr/local/bin/node
@@ -186,7 +203,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 
 @test "20 an ignition younger than the settle window is an incumbent ⇒ busy" {
   local f; f="$(ps_fixture busy "$FRESH_NEXT" "$OLD_SERVER" "$A_SHELL")"
-  CC_IGNITION_PS_FILE="$f" run bash "$GATE" --class next-dev --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" run bash "$GATE" --class next-dev --check
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=busy"* ]] || false
   [[ "$output" == *"incumbent pid=123"* ]]
@@ -194,7 +211,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 
 @test "21 a long-lived next-server is NOT an incumbent — the burst is over, the lock must not be" {
   local f; f="$(ps_fixture clear "$OLD_SERVER" "$A_SHELL")"
-  CC_IGNITION_PS_FILE="$f" run bash "$GATE" --class next-dev --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" run bash "$GATE" --class next-dev --check
   [ -z "$output" ]
   [ "$(jq -r 'select(.verdict=="admit") | .reason' "$CC_IGNITION_LOG" | tail -1)" = "clear node_n=1" ]
 }
@@ -202,7 +219,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 @test "22 MUTATION CONTROL — a settle window of 0 makes the incumbent invisible" {
   # Pins that case 20 is detecting the AGE test and not merely the presence of a next-shaped row.
   local f; f="$(ps_fixture busy2 "$FRESH_NEXT" "$A_SHELL")"
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_SETTLE_S=0 run bash "$GATE" --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_SETTLE_S=0 run bash "$GATE" --check
   [ -z "$output" ]
 }
 
@@ -216,7 +233,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   f="$(ps_fixture brief \
       '  301    00:05 /bin/bash bash -lc echo starting next dev now' \
       '  300    00:05 /Users/x/.claude/bin/claude claude --prompt run next dev cold compile now')"
-  CC_IGNITION_PS_FILE="$f" run bash "$GATE" --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" run bash "$GATE" --check
   [ -z "$output" ]
 }
 
@@ -230,7 +247,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   grep -q "IGNITION_ERE='next\[\[:space:\]\]+dev'" "$m"     # the mutant must have APPLIED
   local f
   f="$(ps_fixture brief2 '  301    00:05 /bin/bash bash -lc echo starting next dev now')"
-  CC_IGNITION_PS_FILE="$f" run bash "$m" --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" run bash "$m" --check
   [[ "$output" == *"verdict=busy"* ]]
 }
 
@@ -239,30 +256,46 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   # whose comm is node would otherwise be counted as a node process, and 150 resident sessions
   # would hold the gate permanently busy at any sane BURST_N — the gate would strand the fleet at
   # exactly the residency it exists to make possible.
-  local f="$D/fleet.ps" i
-  : > "$f"
+  # Through ps_fixture for the same reason as case 25, and here it is load-bearing rather than tidy:
+  # these rows must be NAMED `node` for the argv0 exclusion to be what produces node_n=0. A hand-built
+  # file with no name table reports 0 whether the exclusion works or not, so the case would pass
+  # against a gate that had lost it entirely.
+  local f rows=() i
   for i in 1 2 3 4 5; do
-    printf '  %d 30:00 %s %s /Users/x/.claude/bin/claude-next --prompt work\n' $((500+i)) "$NODE" /Users/x/.claude/bin/claude >> "$f"
+    rows+=("  $((500+i)) 30:00 $NODE /Users/x/.claude/bin/claude /Users/x/.claude/bin/claude-next --prompt work")
   done
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_BURST_N=2 run bash "$GATE" --check
+  f="$(ps_fixture fleet "${rows[@]}")"
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_BURST_N=2 run bash "$GATE" --check
   [ -z "$output" ]
   [ "$(jq -r 'select(.verdict=="admit") | .reason' "$CC_IGNITION_LOG" | tail -1)" = "clear node_n=0" ]
+  # POSITIVE CONTROL — the SAME five rows, named identically, with an argv the exclusion does not
+  # cover DO inflate the census. Without this the case above is satisfied by any gate that counts
+  # nothing at all.
+  local g; rows=()
+  for i in 1 2 3 4 5; do rows+=("  $((600+i)) 30:00 $NODE /srv/worker.js"); done
+  g="$(ps_fixture fleetctl "${rows[@]}")"
+  CC_IGNITION_PS_FILE="$g" CC_IGNITION_EXE_FILE="$g.exe" CC_IGNITION_BURST_N=2 run bash "$GATE" --check
+  [[ "$output" == *"burst node_n=5 limit=2"* ]] || false
 }
 
 @test "25 the burst term fires on node-process count alone, with no incumbent present" {
   # Term 2 exists because term 1 is blind to an OLD next-server re-storming on mass invalidation.
-  local f="$D/burst.ps" i
-  : > "$f"; for i in 1 2 3 4 5; do printf '  %d 10:00 %s %s /srv/w.js\n' $((400+i)) "$NODE" "$NODE" >> "$f"; done
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_BURST_N=3 run bash "$GATE" --check
+  # Built through ps_fixture, not by hand: it is the one place that knows how a row splits into the
+  # gate's two reads, and a hand-built file with no name table would report node_n=0 for ANY gate —
+  # a green that proves nothing (memory: sensor-default-off-makes-blindness-the-shipping-path).
+  local f rows=() i
+  for i in 1 2 3 4 5; do rows+=("  $((400+i)) 10:00 $NODE $NODE /srv/w.js"); done
+  f="$(ps_fixture burst "${rows[@]}")"
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_BURST_N=3 run bash "$GATE" --check
   [[ "$output" == *"burst node_n=5 limit=3"* ]] || false
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_BURST_N=9 run bash "$GATE" --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_BURST_N=9 run bash "$GATE" --check
   [ -z "$output" ]
 }
 
 # ── the gate: fail-open, always, and never silently ────────────────────────────────────────────
 
 @test "30 an unreadable census ADMITS — fail-open is the hard contract" {
-  CC_IGNITION_PS_FILE="$D/nope.ps" run bash "$GATE" --check
+  CC_IGNITION_PS_FILE="$D/nope.ps" CC_IGNITION_EXE_FILE="$D/nope.exe" run bash "$GATE" --check
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -270,7 +303,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 @test "31 the wait budget running out ADMITS, and says so with a parseable verdict token" {
   # The one outcome that must never be silent: it is the residual the compressor sentinel holds.
   local f; f="$(ps_fixture stuck "$FRESH_NEXT")"
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_WAIT_S=2 CC_IGNITION_INTERVAL_S=1 run bash "$GATE" --class next-dev
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_WAIT_S=2 CC_IGNITION_INTERVAL_S=1 run bash "$GATE" --class next-dev
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=admit-timeout"* ]] || false
   [ "$(jq -r 'select(.verdict=="admit-timeout") | .waited_s' "$CC_IGNITION_LOG" | tail -1)" = "2" ]
@@ -279,21 +312,21 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 @test "32 a cleared incumbent releases the wait — admit-after-wait, not admit-timeout" {
   local f; f="$(ps_fixture flip "$FRESH_NEXT")"
   ( sleep 2; printf '%s\n' "$A_SHELL" > "$f" ) &
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_WAIT_S=20 CC_IGNITION_INTERVAL_S=1 run bash "$GATE" --class next-dev
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_WAIT_S=20 CC_IGNITION_INTERVAL_S=1 run bash "$GATE" --class next-dev
   wait
   [[ "$output" == *"verdict=admit-after-wait"* ]]
 }
 
 @test "33 the kill switch costs nothing — no census, no telemetry row" {
   local f; f="$(ps_fixture off "$FRESH_NEXT")"
-  CC_IGNITION_GATE=off CC_IGNITION_PS_FILE="$f" run bash "$GATE" --check
+  CC_IGNITION_GATE=off CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" run bash "$GATE" --check
   [ -z "$output" ]
   [ ! -s "$CC_IGNITION_LOG" ]
 }
 
 @test "34 a non-numeric seam falls back to its default rather than breaking the caller" {
   local f; f="$(ps_fixture nan "$FRESH_NEXT")"
-  CC_IGNITION_PS_FILE="$f" CC_IGNITION_SETTLE_S=abc CC_IGNITION_WAIT_S=xyz run bash "$GATE" --check
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" CC_IGNITION_SETTLE_S=abc CC_IGNITION_WAIT_S=xyz run bash "$GATE" --check
   [[ "$output" == *"verdict=busy"* ]]      # default settle=90 ⇒ the 15 s incumbent still counts
 }
 
@@ -301,7 +334,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   # ONE malformed line aborts a downstream `jq -rs` slurp, which then reads as "no records" and
   # silently flips a census green. Every field is jq-encoded for exactly this.
   local f; f="$(ps_fixture q "$OLD_SERVER")"
-  CC_IGNITION_PS_FILE="$f" bash "$GATE" --class 'next-dev' --check >/dev/null 2>&1
+  CC_IGNITION_PS_FILE="$f" CC_IGNITION_EXE_FILE="$f.exe" bash "$GATE" --class 'next-dev' --check >/dev/null 2>&1
   run jq -rs 'length' "$CC_IGNITION_LOG"
   [ "$status" -eq 0 ]
   [ "$output" -ge 1 ]
