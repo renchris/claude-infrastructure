@@ -67,6 +67,13 @@ mark_seen_sweep() { : > "$CC_SWEEP_SEEN_DIR/$(printf '%s' "$1" | shasum -a 256 |
 # the form the FROZEN INTERFACE documents (and whatever cc-escalations ack may write)
 mark_seen_basename() { : > "$CC_SWEEP_SEEN_DIR/$(basename "$1").seen"; }
 
+# Entry count across one or more store dirs, for the mutates-NOTHING assertion. `find`, not
+# `ls -A | wc -l` (SC2012): over MULTIPLE dirs `ls` interleaves a header line and a blank per
+# directory, so that count was never the number of entries — it only worked because the same
+# inflation appeared on both sides of the comparison. `-mindepth 1` excludes the dirs themselves,
+# and a missing dir contributes 0 instead of aborting the count.
+entry_count() { find "$@" -mindepth 1 2>/dev/null | wc -l | tr -d ' '; }
+
 ctx() { # run the hook, unwrap additionalContext when jq wrapped it
   run "$HOOK"
   [ "$status" -eq 0 ] || false
@@ -218,7 +225,9 @@ ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong 
   # specified — and the same fixture must flip to reporting a healthy sweep.
   printf '{"ts":"%s","hook":"waiting-recycle","disposition":"abstained"}\n' \
     "$(date -u -r "$(( CC_ESCALATION_NOW - 5 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_IDL"
-  local m; m="$(ew_mutant 's/grep .\"tool\":\"autonomy-sweep\". "\$IDL"/cat "$IDL"/')"
+  local m
+  # shellcheck disable=SC2016  # a sed script: $IDL must reach sed literally, not this shell
+  m="$(ew_mutant 's/grep .\"tool\":\"autonomy-sweep\". "\$IDL"/cat "$IDL"/')"
   run bash "$m"
   [ "$status" -eq 0 ] || false
   [ -z "$output" ]                   # the mutant goes SILENT where the subject alarms
@@ -261,13 +270,16 @@ ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong 
 @test "the hook mutates NOTHING — no seen marker, no record, no ledger row" {
   mk_handoff_alarm 1; mk_announce_alarm 1; mk_completion 1 "push-failed(rc=5)"; mk_page 1
   local before_seen before_rec before_idl
-  before_seen="$(ls -A "$CC_SWEEP_SEEN_DIR" | wc -l)"
-  before_rec="$(ls -A "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" | wc -l)"
+  before_seen="$(entry_count "$CC_SWEEP_SEEN_DIR")"
+  before_rec="$(entry_count "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR")"
   before_idl="$(wc -l < "$CC_IDL")"
   run "$HOOK"
   [ "$status" -eq 0 ] || false
-  [ "$(ls -A "$CC_SWEEP_SEEN_DIR" | wc -l)" -eq "$before_seen" ]
-  [ "$(ls -A "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" | wc -l)" -eq "$before_rec" ]
+  # A positive control on the counter itself: the fixtures above created records, so a counter
+  # that always returned 0 would satisfy every equality here without measuring anything.
+  [ "$before_rec" -gt 0 ]
+  [ "$(entry_count "$CC_SWEEP_SEEN_DIR")" -eq "$before_seen" ]
+  [ "$(entry_count "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR")" -eq "$before_rec" ]
   [ "$(wc -l < "$CC_IDL")" -eq "$before_idl" ]
 }
 
