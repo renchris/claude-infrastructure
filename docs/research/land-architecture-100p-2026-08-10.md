@@ -603,7 +603,7 @@ P5's launchd half is already the operator-owned C10 `70dff02dcf4a`.
 | P5 verifier share | fire `70dff02dcf4a` (repo half now; C10 half stays operator-owned); R7 escalation arm | verifier p50 <2h; ≥1 green/day; deploy T1 advances without hand-pulls |
 | P6 converge completeness | ~~extend link-refresh classes; CLAUDE.md parity leg; UNGATED verdict files~~ **DONE 2026-08-10** (see §2.E "P6 IMPLEMENTED") | `LIVE_ADDS` breach impossible for any install.sh **symlink** class ✓ · CLAUDE.md sensed ✓ · UNGATED files ✓ · hand-pull rate → 0 *(pending — the filed row is the escalation, not the cure)* |
 | P7 population policy | ~~checkpoints retention~~ (DROPPED — already exists and runs, §2.I ERRATUM) + KEEP-ladder content question (`--dispose-landed-dirt`, per-dirty-path `ls-tree` identity) + `--assert` consumer (`cc-blockers` kind `janitor-stale`) | 36 of 84 dirty worktrees become reapable; a janitor that stops running surfaces on the board instead of silently |
-| P0 self-measurement | attestation fields + census panels | v2 §7 renders as a computed verdict |
+| P0 self-measurement | ~~attestation fields + census panels~~ **DONE 2026-08-11** — see §5.P0 below | v2 §7 renders as a computed verdict — **mechanism met; the latency criterion becomes CHECKABLE from the next land on, and is not claimed retroactively** (the field has a birthday; §5.P0 states the coverage) |
 
 ### §5.P3 — what the statics memo actually bought, and why the ratchet half is filed rather than shipped
 
@@ -798,3 +798,90 @@ landed into:
    landing box red" remains reachable from an inventory difference alone.
 6. **The basename-collapse vector in arms 1, 4, 5 and 13** — latent today (no collisions in the
    tree), and it fails toward blocking, so it would surface as a loud nameable refusal.
+
+### §5.P0 — the instrument, and the two things measuring it changed about the findings
+
+*(Implementation note, 2026-08-11, backlog 42ee2eaeed97. INTEGRATE-only: §5's P0 row is struck, not
+deleted, and the two corrections below are corrections to THIS document.)*
+
+**Shipped, five parts** (`48875a11` ship-land + suites, `638b0a1a` census + suite, and the doc
+corrections in the same land).
+
+1. **`total_s`, `gate_rounds`, `gate_s`** — plus `gate_arms_s` and `gate_statics_s`, because §5.P3
+   already measured where the seconds are (arms ~112s of a 127-137s re-round, statics ~2%) and one
+   opaque total cannot separate *re-gated three times* from *the remote hung*. Carried across the
+   locked re-exec in the environment (`SHIP_LAND_T0`, `SHIP_LAND_MEAS_*`) and back through the
+   post-state handover, for the same reason `SMOKE_*` already was: the fallback lane's gate runs in
+   the CHILD, so an outer that re-derived the counter would report one round short and exclude the
+   only gate that ran.
+2. **Every terminal exit attests.** Implemented as ONE arm in P4's existing EXIT trap rather than a
+   call bolted onto each of the fourteen `exit` sites — the set grows, and a rule enforced per-site
+   is a rule the next author does not know about. Non-zero only: a zero exit either already attested
+   or is a "nothing to land" no-op, and minting a success row for those would inflate the very
+   denominator this item exists to make readable. The `SHIP_LAND_LANE`/`GATE_SCOPE` refusal had to
+   MOVE to dispatch — it fired at a top-level line that runs before the traps are installed and
+   before `attest_land` is defined, so the one exit code an operator can reach by typo was
+   structurally incapable of attesting.
+3. **`smoke:"none"` split.** See the correction below — it was six causes, not five.
+4. **Census panels** in `scripts/gate-red-census.sh` (P2's renderer, extended — one reader per
+   store): LAND LATENCY split by outcome, GATE COST (rounds + arms vs statics), STALENESS
+   (P(stale|waited), the wait-free column, rounds/land) and MUTEX HOLD. Deliberately NOT merged
+   with `cycle-time-census.sh`, and neither calls the other: that tool reads the postland STAMP
+   store about the VERIFIER lane's cycle time. Two stores, two subjects, two tools.
+5. **The published figures corrected**, with their coverage and decay mode — see below.
+
+**Correction 1: `smoke:"none"` was SIX causes, not five, and the sixth is the second largest.**
+§2.B says five. The code has six reachable in `land.log` (seven counting `--precheck`, which writes
+no row): the audit's five — no-suites-in-repo, in-lock, selector-missing, selector-FULL, lint-only —
+plus **the gate never reached the smoke phase at all**, because the fifteen ratchet arms `return 1`
+straight out of `run_gate` and `SMOKE_STATE` was still at its initial value. Measured on the live
+store: **305 of the 735 `none` rows are exit-6 rows**, i.e. 41% of the token's population is this
+cause, and reading it as "no suite mapped to this diff" is reading a refusal as a coverage decision.
+It is now `none-unreached`.
+
+**Correction 2: the wait-FREE staleness column was measured on the WRONG SENSOR, and the right one
+did not exist.** §2.B derives P(exit-42 | wait>0) and the wait-free column from the LOCK ledger,
+which is the only place a `wait_s` lives — and that ledger is structurally blind to exactly the
+population the column is about, because a round that never queued still takes the lock and still
+goes stale, but its row is indistinguishable from a fast successful hold unless the wrapped
+command's exit happens to be 42. Re-measured on 2026-08-11 the lock-side numbers hold and have
+sharpened (P(stale|waited) 53.7%/14d → 90.4%/3d → **95.8%/1d**; wait-free 11.4% → 25.5% → **31.2%**,
+so the audit's "rising" reading is confirmed and the level is higher than the 48% partial-day figure
+suggested). The tool-side sensor P0 adds — one `stage:"round"` row per re-round, written by the
+OUTER process after the lock releases — is the one that sees rounds the lock ledger cannot attribute,
+and its column reads **0 for all of history**: the field has a birthday, and the census says so
+rather than reporting an absence as a zero rate.
+
+**The published figures, re-measured** (and this is the third time this document's own numbers have
+had to be re-derived rather than quoted, which is the finding):
+
+| figure | published | measured 2026-08-11 | population |
+|---|---|---|---|
+| mutex hold | README "5-15s" · ship.md "84-302s" | **p50 3s · p90 5s · p99 139s · max 146s** | 110 completed holds since `145fab7d` (P1, 2026-08-11T01:32Z) moved the sweep + reap out of the lock |
+| mutex hold, before P1 | — | p50 61s · p90 228s · **max 6771s** | 1,571 holds |
+| in-lock wait | ship.md "0s wait" | p50 **0s** · p90 0s · max 125s | same 110 |
+| gate-red rate | 27%/14d → 39%/3d → 45%/1d (§2.B) | **29.3%/14d → 40.0%/3d → 40.8%/1d** | 1,678 invocations |
+| land latency | *unverifiable — no duration field existed* | **coverage 0%, and honest**: the field ships with this land | — |
+
+Two of those needed a mechanism, not just a re-run. The hold figure was wrong in **two directions at
+once** in two documents, for a day and a fortnight respectively, because its only home was prose:
+nothing could refute it more cheaply than an investigation. It is a census panel now — and the panel
+carries the warning its own data demands, that a rolling window spanning P1 pools two mechanisms and
+describes neither. The latency figure is the sharper case: v2's acceptance criterion named
+`land.log` and instructed "measure it, do not narrate it", and the field it needed was never there,
+so **the criterion was narrated for v2's entire life**. It is now checkable, from the next land
+forward, and reporting it as 0%-coverage rather than back-filling an estimate is the whole point
+(memory: published-figure-decays-with-its-source).
+
+**Filed rather than fixed, and the reason is a boundary rather than an effort estimate.** §5.P2 item
+1 — nine ratchet arms collapsing a lint's exit 2 (COULD-NOT-RUN) into `gate_red` (THE TREE IS BAD) —
+is the same non-verdict class as splitting `smoke:"none"`, and it is deliberately NOT taken here. It
+is already backlog **`446fe07464e0`**. The two look alike and are not: `smoke` is an ATTESTATION
+field that decides nothing, so splitting it changes what the store can say and cannot change what a
+land does; the exit-2 conflation decides whether a land is refused as **6** ("fix your tree") or
+**9** ("retry when the box is quieter"), across nine arms, each needing a mutant that produces a
+genuine 2 and one that produces a genuine red. Folding a verdict-semantics change into a measurement
+side-car would also break this item's own constraint — that the instrument fail no wider than itself
+— by giving a bug in it the power to refuse a land. What P0 does give it is the instrument it was
+missing: `red:"<arm>"` attribution plus the exit histogram make the conflation COUNTABLE, so the
+next session can size it from a re-run instead of a re-derivation.
