@@ -64,11 +64,15 @@ Verbs:
   run [--apply] [--json] [--project P] [--limit N]
                           decide over every OPEN item. DRY BY DEFAULT — prints the plan and the
                           counts; `--apply` writes the labels via `cc-backlog venue`.
+  paths <id> [--json]     the item's USABLE CITED PATH SET — the invalidation basis for
+                          cc-dispatch's readiness verdict. exit 0 = answered (zero lines is a
+                          REAL answer: this item cites nothing usable); exit 4 = COULD NOT ASK.
 
 Env:
   CC_VENUE_BACKLOG_BIN / CC_VENUE_ELIGIBLE_BIN / CC_VENUE_PREMISE_BIN — sibling resolution overrides
   CC_VENUE_PREMISE=off   — skip question 3 (for a fixtured test with no repo to ask about)
   CC_ELIGIBLE_REPO, CC_ELIGIBLE_HISTORY_DEPTH — read by the imported predicate, not by this file
+  CC_PREMISE_REPO        — read by the imported cc-premise, and what `paths` resolves against
 """
 
 import json
@@ -105,6 +109,74 @@ def _load_eligible():
 
 
 CE = _load_eligible()
+
+
+def _load_premise():
+    """Import bin/cc-premise AS A MODULE — the same extractor its own contract arm runs.
+
+    LAZY, unlike `_load_eligible` above, and the difference is the failure direction each one
+    needs. cc-eligible IS the routing predicate: without it this file has no decision to make and
+    exiting 3 at import is right. cc-premise is consulted here for ONE derived read (the cited
+    path set), whose consumer — cc-dispatch's readiness gate — must be able to tell "this item
+    cites nothing" from "I could not ask". Exiting at import would collapse those two into one
+    dead process, which is exactly the sensor-default-off shape this stack keeps paying for.
+
+    Returns the module, or None when it cannot be imported. Never raises.
+    """
+    import importlib.machinery
+    import importlib.util
+    path = _resolve("CC_VENUE_PREMISE_BIN", "cc-premise")
+    if not os.path.isfile(path):
+        return None
+    try:
+        spec = importlib.util.spec_from_loader(
+            "cc_premise", importlib.machinery.SourceFileLoader("cc_premise", path)
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception:  # noqa: BLE001 — an unimportable sibling is UNKNOWN, never a crash
+        return None
+    for sym in ("cited_paths", "_trunk_paths", "_trunk_basenames", "_git_usable"):
+        if not hasattr(mod, sym):
+            return None  # a renamed symbol is "could not ask", never a silently empty answer
+    return mod
+
+
+def usable_paths(text, cp):
+    """(paths, ok) — the cited tokens of `text` that RESOLVE to a real path on origin/main.
+
+    `ok` is False iff git could not be asked at all, and the two are kept apart for the reason
+    cc-premise's own `_git_usable` exists: an unreadable repo makes every cited token look absent,
+    and a caller reading that as "cites nothing" would VOID every item in the store on a missing
+    checkout (memory: lookup-miss-is-not-absence).
+
+    WHY THE RESOLUTION AND NOT THE RAW TOKENS. The consumer hands these to
+    `git diff --name-only <sha>..origin/main -- <paths>` as a PATHSPEC. `cited_paths` is
+    deliberately loose — it matches any `*.sh`/`*.md`/`*.bats`-shaped token anywhere in a title —
+    so a prose token that merely looks like a path would silently match nothing and read as
+    "trunk did not move under this item". Resolving through trunk first is what makes the empty
+    intersection mean something. The bare-basename arm mirrors cc-premise's contract exactly:
+    `deploy-live.sh` lives at `scripts/deploy-live.sh`, and a name carried by exactly ONE trunk
+    file has a known directory; two or more carriers is the genuinely ambiguous case and is
+    dropped rather than guessed at.
+    """
+    if not cp._git_usable():
+        return [], False
+    trunk = cp._trunk_paths()
+    names = cp._trunk_basenames()
+    if trunk is None:
+        return [], False
+    out = []
+    for p in cp.cited_paths(text):
+        if p in trunk:
+            hit = p
+        elif "/" not in p and names is not None and len(names.get(p) or []) == 1:
+            hit = names[p][0]
+        else:
+            continue
+        if hit not in out:
+            out.append(hit)
+    return out, True
 
 # The closed set of `venueWhy` tokens. Every why is `"<token>: <detail>"`, so `split(": ")[0]` is
 # the class and the rest is the evidence — the same head-biased shape every verdict in this stack
@@ -300,6 +372,48 @@ def cmd_label(item_id):
     sys.exit(0)
 
 
+def cmd_paths(item_id, as_json):
+    """The item's usable cited path set — the INVALIDATION BASIS for cc-dispatch's readiness verdict.
+
+    IT LIVES HERE RATHER THAN IN cc-dispatch BECAUSE BASH CANNOT IMPORT A PYTHON PREDICATE.
+    cc-premise owns the one implementation of "what does this item cite"; a bash re-derivation at
+    the admission seam would be a second implementation of exactly the rule that decides whether a
+    verdict survives, and a report and a gate that can disagree is the defect this whole stack is
+    factored to prevent (same reasoning as `_load_eligible` above, one file over).
+
+    THE THREE ANSWERS ARE THREE EXIT CODES, and collapsing any two of them is the fail-open trap
+    this verb exists to make impossible:
+        0 + lines  — answered: these paths.
+        0 + NO lines — answered: this item cites nothing that resolves on trunk. The caller MUST
+                       read that as VOID, never as "nothing moved under it, so it is still fresh":
+                       an item citing nothing has proven nothing survived.
+        4          — COULD NOT ASK (no cc-premise, no readable repo). Not a verdict at all.
+    """
+    cp = _load_premise()
+    if cp is None:
+        sys.stderr.write("cc-venue paths: cc-premise is not importable at %s — no path set, and "
+                         "that is UNKNOWN, not an empty one\n"
+                         % _resolve("CC_VENUE_PREMISE_BIN", "cc-premise"))
+        sys.exit(4)
+    idx = build_index()
+    ent = idx.get(item_id)
+    if ent is None:
+        sys.stderr.write("cc-venue paths: %s is not in the ledger\n" % item_id)
+        sys.exit(3)
+    paths, ok = usable_paths(ent["text"], cp)
+    if not ok:
+        sys.stderr.write("cc-venue paths: origin/main could not be read in %s — UNKNOWN, not an "
+                         "empty path set\n" % (getattr(cp, "REPO", "") or "(no repo)"))
+        sys.exit(4)
+    if as_json:
+        sys.stdout.write(json.dumps({"id": item_id, "paths": paths,
+                                     "repo": getattr(cp, "REPO", "")}) + "\n")
+    else:
+        for p in paths:
+            sys.stdout.write(p + "\n")
+    sys.exit(0)
+
+
 def cmd_run(argv):
     apply_ = "--apply" in argv
     as_json = "--json" in argv
@@ -435,6 +549,11 @@ def main():
             sys.stderr.write("cc-venue label: <id> is required\n")
             sys.exit(2)
         cmd_label(rest[0])
+    elif verb == "paths":
+        if not rest:
+            sys.stderr.write("cc-venue paths: <id> is required\n")
+            sys.exit(2)
+        cmd_paths(rest[0], "--json" in rest)
     elif verb == "run":
         cmd_run(rest)
     else:
