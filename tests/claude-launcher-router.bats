@@ -63,6 +63,13 @@ resource_rc() {
   " 2>/dev/null
 }
 
+# A router stub that RECORDS every `--assign` it is handed, so the charge is observable.
+mkrouter_recording() {   # $1 stdout, $2 exit code, $3 log path
+  printf '#!/bin/sh\n[ "$1" = --assign ] && { echo "$2" >> "%s"; exit 0; }\necho "%s"\nexit %s\n' \
+      "$3" "$1" "$2" > "$STUB"
+  chmod +x "$STUB"
+}
+
 @test "claude1 pins account 1" {
   mkrouter next4 0
   run runlauncher "claude1"
@@ -171,6 +178,41 @@ resource_rc() {
   run resource_rc "claude1"
   [[ "$output" == *"cfg=$HOME/.claude-next"* ]] || false
   [[ "$output" == *"body=V2"* ]]
+}
+
+# ── D3: a refused launch must not be charged a phantom ─────────────────────────────────────────
+
+@test "D3: a launch the pinned body REFUSES is not charged" {
+  # ~/.zshrc:456-457 returns 1 without ever exec'ing when the worktree claim fails. The charge
+  # used to fire at DECISION time, so the account carried a 15-min phantom for a session that
+  # never started — against record_assignment's own "consumer that COMMITS" contract.
+  log="$BATS_TEST_TMPDIR/assigns"
+  mkrouter_recording next4 0 "$log"
+  CC_LAUNCH_ASSIGN_SETTLE_S=1 CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
+      claude() { return 1 }
+      source '$LIB'
+      claude" >/dev/null 2>&1 || true
+  # Wait WELL past the settle window before concluding "not charged". The charger is a detached
+  # subshell, so under load its wake can lag its sleep — and a wait that is merely long enough on
+  # an idle box turns this assertion into "we asked too early", which reads as a pass.
+  sleep 4
+  [ ! -s "$log" ]
+}
+
+@test "D3 control: a launch that COMMITS is still charged (the spread signal is not lost)" {
+  # Without this the case above passes on a lib that simply never charges anything.
+  log="$BATS_TEST_TMPDIR/assigns"
+  mkrouter_recording next4 0 "$log"
+  CC_LAUNCH_ASSIGN_SETTLE_S=1 CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
+      claude() { sleep 3 }
+      source '$LIB'
+      claude" >/dev/null 2>&1
+  # POLL, never assert-once. The charge lands from a detached subshell whose wake can lag under
+  # load, so a bare assertion here is a race that reds a correct lib. It can still fail: a lib that
+  # never charges leaves the log empty for the whole 5 s.
+  for _ in $(seq 1 10); do [ -s "$log" ] && break; sleep 0.5; done
+  [ -s "$log" ] || false
+  grep -q next4 "$log"
 }
 
 @test "the DECISION is recorded in _CC_ROUTE_NOTE — routed vs pinned are distinguishable" {
