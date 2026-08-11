@@ -41,6 +41,36 @@ _CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup .credenti
 _CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
 _CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
 
+# ── fork-free symlink-target read ──────────────────────────────────────────────────────────────
+# `$(readlink X)` costs a FORK PLUS A SUBSHELL per call, and the mirror calls it once per mirrored
+# entry. Measured 2026-08-10 on this box: _cc_sync_config_mirror took 1554 ms on ~/.claude-next
+# (186 symlinks / 400 entries) and 1473 ms on ~/.claude-secondary (192 / 437) — against 1.8 ms for
+# the same 314-iteration loop via zsh/stat. The launcher runs this on EVERY start and SessionStart's
+# config-mirror-assert.sh runs the whole thing AGAIN, so an interactive launch paid the fork storm
+# at least twice (three times on claude2/3/4, which also walk the memory mirror).
+#
+# 🚨 The saving is in deleting the COMMAND SUBSTITUTION, not merely the readlink binary: `$( )`
+# forks a subshell whatever is inside it. So this helper SETS a variable and prints nothing — a
+# `$(_cc_linktarget …)` call site would re-introduce the entire cost it exists to remove.
+#
+# zstat +link yields the RAW link target, byte-identical to readlink (verified over every symlink
+# in ~/.claude, 0 mismatches). It is deliberately NOT ${f:A}/${f:P}, which fully RESOLVE the path —
+# every comparison below wants the literal target, and resolution would silently change the verdict
+# for a link that points at another link. Falls back to readlink when the module is unavailable, so
+# correctness never depends on zsh/stat being present.
+typeset -g _CC_LINK=''
+typeset -g _CC_HAVE_ZSTAT=0
+zmodload -F zsh/stat b:zstat 2>/dev/null && _CC_HAVE_ZSTAT=1
+_cc_linktarget() {   # <path> → sets $_CC_LINK to the raw symlink target ('' if not a symlink)
+  _CC_LINK=''
+  if (( _CC_HAVE_ZSTAT )); then
+    local -a _z
+    zstat -L -A _z +link -- "$1" 2>/dev/null && _CC_LINK="${_z[1]}"
+  else
+    _CC_LINK="$(readlink "$1" 2>/dev/null)"
+  fi
+}
+
 # _cc_sync_config_mirror [--convert] <dst-config-dir>
 #   Default (no --convert): RACE-SAFE. Creates MISSING symlinks + HEALS isolated entries that were
 #   wrongly symlinked to ~/.claude (e.g. the .last-session leak). It NEVER mv's a forked real dir,
@@ -74,7 +104,10 @@ _cc_sync_config_mirror() {
       [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; print -u2 "config-mirror: un-shared transient '$name' in ${dst:t}"; }
       continue
     fi
-    [[ -L "$dst/$name" && "$(readlink "$dst/$name")" == "$e" ]] && continue  # already the right symlink
+    if [[ -L "$dst/$name" ]]; then
+      _cc_linktarget "$dst/$name"
+      [[ "$_CC_LINK" == "$e" ]] && continue                               # already the right symlink
+    fi
     if [[ -e "$dst/$name" && ! -L "$dst/$name" ]]; then                   # a forked real file/dir
       (( convert )) || continue                                           # safe mode: don't touch it
       mv -f "$dst/$name" "$dst/$name.premirror-bak" 2>/dev/null
@@ -96,7 +129,8 @@ _cc_sync_config_mirror() {
   # begins with a dot, so without D the loop is a no-op that still looks correct.
   local l
   for l in "$dst"/*(N@D); do
-    [[ "$(readlink "$l")" == "$src"/* ]] || continue     # not ours — leave it alone
+    _cc_linktarget "$l"
+    [[ "$_CC_LINK" == "$src"/* ]] || continue            # not ours — leave it alone
     [[ -e "$l" ]] && continue                            # target still resolves — healthy
     rm -f "$l"; print -u2 "config-mirror: reaped dangling '${l:t}' in ${dst:t}"
   done
@@ -136,7 +170,10 @@ _cc_sync_memory_mirror() {
   for sp in "$dst/projects"/*(N/); do slugs[${sp:t}]=1; done
   for slug in ${(k)slugs}; do
     c="$cano/$slug/memory"; d="$dst/projects/$slug/memory"
-    [[ -L "$d" && "$(readlink "$d")" == "$c" ]] && continue        # already shared
+    if [[ -L "$d" ]]; then
+      _cc_linktarget "$d"
+      [[ "$_CC_LINK" == "$c" ]] && continue                        # already shared
+    fi
     if [[ -d "$d" && ! -L "$d" ]]; then                            # dst has its own real memory
       (( convert )) || continue                                    # safe mode: don't merge under a live session
       mkdir -p "$c"; command rsync -a --ignore-existing "$d"/ "$c"/ 2>/dev/null
