@@ -736,6 +736,55 @@ cond_slug() {
   [ -n "$s" ] || s=unattributed
   printf 'postland-red-%s' "${s:0:50}"      # 13 + 50 = 63, inside valid_condition's 64
 }
+# file_linked <failing-entry> <title> <falsifier> — mint a TITLE-KEYED item and JOIN it to the
+# condition group cond_slug() gives that suite, so cc-backlog's claim guard (6) can SEE it.
+#
+# THE DEFECT THIS FIXES (backlog 4f657ed3e064, 2026-08-11). This file has FOUR mint sites and
+# exactly one of them — red_actions' per-entry loop — was condition-keyed. The other three
+# (AUTO-REVERT <outcome>, AUTO-REVERT INERT, HUNG) were title-keyed on a sha or a tree, so one red
+# episode on ONE suite minted TWO rows carrying two ids and no shared field. Measured on
+# tests/cc-backlog-venue.bats @ 508c2b9db0ea: fd458e142ddc ("post-land RED") and 28740c313840
+# ("post-land AUTO-REVERT FAILED") are the same (file, culprit) pair, both were dispatched, and two
+# workers fixed it in parallel and collided at the rebase — 28740c313840's own closing evidence
+# records it ("the cure landed on trunk from a sibling worker … my redundant commit reconciled
+# away"). That is the 97f16b6709fa / 6078392359ac incident again, in a different producer.
+#
+# WHY BOTH VERBS AND NOT `add --condition`. Handing these three sites a condition at `add` would not
+# dedupe the pair, it would DELETE the second item's CONTENT: `--condition` derives the id FROM the
+# condition (cc-backlog § CONDITION KEY), so one suite can hold only one row, and cmd_add returns
+# early with rc 0 on a known id. An AUTO-REVERT FAILED filed under a live RED condition would
+# therefore write nothing at all — and its remedy is the one in this whole file that needs a HUMAN
+# (resolve a revert conflict by hand), so its title, its branch and its falsifier would exist only
+# in a page a green deletes. `link` sets the field WITHOUT touching the id or the status, which is
+# precisely the verb cc-backlog's § CONDITION LEASE says exists "for a row minted from its title
+# before anyone knew it was a sibling". Both rows survive; the LEASE, not the mint, is what stops
+# the second dispatch — and cc-dispatch step 5a already journals that refusal as a SKIP
+# (verdict=sibling-held), so the whole downstream path was built and waiting on a producer.
+#
+# THE VERDICT IS COUNTED, NOT ASSUMED (memory: claimed-outcome-vs-checked-outcome). `link` returns
+# 4 when the row is already on a DIFFERENT condition and 2/3 on a bad slug or unknown id; a filed
+# item that did not get linked is invisible to guard (6), which is the exact state being fixed, so
+# it is logged as its own verdict token rather than folded into the success line.
+file_linked() {
+  local fentry="$1" title="$2" falsifier="$3" cond bid lerr lrc
+  [ -x "$BACKLOG_BIN" ] || return 0
+  bid="$("$BACKLOG_BIN" add --title "$title" --falsifier "$falsifier" \
+           --project claude-infrastructure --source postland-verify 2>/dev/null)"
+  # An id is the ONE thing `link` cannot proceed without, and cmd_add echoes it on the idempotent
+  # path too — so an empty capture is a real add failure, never a re-file.
+  if [ -z "$bid" ]; then
+    log "backlog verdict=add-failed entry=$fentry — NOT filed: ${title:0:90}"
+    return 0
+  fi
+  cond="$(cond_slug "$fentry")"
+  lerr="$("$BACKLOG_BIN" link "$bid" --condition "$cond" 2>&1 >/dev/null)"; lrc=$?
+  if [ "$lrc" -eq 0 ]; then
+    log "backlog verdict=filed+linked id=$bid condition=$cond entry=$fentry"
+  else
+    log "backlog verdict=filed-UNLINKED rc=$lrc id=$bid condition=$cond entry=$fentry — claim guard (6) cannot see it, so this row can be dispatched beside its sibling: ${lerr//$'\n'/ }"
+  fi
+  return 0
+}
 tree_of() { git -C "$REPO" rev-parse "$1^{tree}" 2>/dev/null; }
 env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tree (tool bumps happen
   local b c l                                # constantly), so a stale-env green stamp stays diagnosable
@@ -1940,11 +1989,12 @@ revert_inert() { # <culprit> <c12> <reason> <detail>
   if [ "$fresh" -eq 1 ]; then
     # The page above already names the FIRST question a reader must ask — "is $ftest still red on
     # trunk? a green there makes this moot" — and until now nothing ever asked it. That question IS
-    # --falsify-red, so the item now carries it and cc-premise re-asks it at claim time.
-    [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-      --title "post-land AUTO-REVERT INERT ($reason): $ftest @ $c12 — the veto cannot actuate, $detail; check $ftest is still red before reverting" \
-      --falsifier "$(fals_red "$ftest" "$c")" \
-      --project claude-infrastructure --source postland-verify >/dev/null 2>&1
+    # --falsify-red, so the item now carries it and cc-premise re-asks it at claim time. It is also
+    # JOINED to $ftest's condition group, so a RED row naming the same suite holds the lease against
+    # this one instead of being dispatched beside it (see file_linked).
+    file_linked "$ftest" \
+      "post-land AUTO-REVERT INERT ($reason): $ftest @ $c12 — the veto cannot actuate, $detail; check $ftest is still red before reverting" \
+      "$(fals_red "$ftest" "$c")"
     notify "Claude post-land AUTO-REVERT INERT" "$c12 — $reason on $ftest; see $pf"
   fi
   log "AUTOREVERT verdict=skipped reason=$reason culprit=$c12 terminal=1 fresh=$fresh ($detail)"
@@ -2095,10 +2145,13 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   # A landed revert and a failed one share this premise: $file was broken by $c. Whichever way the
   # attempt went, a full-corpus green that CONTAINS $c settles it — the revert worked, someone fixed
   # forward, or the suite left the corpus. That is one meaning, and --falsify-red is how it is asked.
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-    --title "post-land AUTO-REVERT $outcome: $file @ $c12 (revert ${rev:-none} on $br)" \
-    --falsifier "$(fals_red "$file" "$c")" \
-    --project claude-infrastructure --source postland-verify >/dev/null 2>&1   # sha defeats wasDone
+  # The sha in the title keeps each ATTEMPT its own row (it defeats wasDone) — and file_linked then
+  # joins that row to $file's condition group, because "revert attempt N on this suite" and "this
+  # suite is red on trunk" are two rows naming ONE piece of work. This exact pair is what
+  # 4f657ed3e064 was filed about; the lease is what stops both being dispatched.
+  file_linked "$file" \
+    "post-land AUTO-REVERT $outcome: $file @ $c12 (revert ${rev:-none} on $br)" \
+    "$(fals_red "$file" "$c")"
   sid="$(author_sid "$c")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
     && "$NOTIFY_BIN" "$sid" "post-land AUTO-REVERT $outcome — your land $c12 failed $file in the trunk verifier; revert branch $br" >/dev/null 2>&1
@@ -2303,10 +2356,14 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
   # run — a falsifier that is inert by construction, which is the one outcome indistinguishable from
   # never having emitted one. A wedged suite also keeps the corpus from ever going green, so this
   # correctly stays at "still live" for exactly as long as the hang does.
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-    --title "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a peer pkill)" \
-    --falsifier "$(fals_red "$file" "$sha")" \
-    --project claude-infrastructure --source postland-verify >/dev/null 2>&1   # tree defeats wasDone
+  # Linked for the same reason as the two AUTO-REVERT sites, and it is NOT redundant here even
+  # though a hang and a red are different verdicts: a wedged suite keeps the corpus from ever going
+  # green, so the very next sweep that classifies it as a failure files a `post-land RED` row for
+  # the SAME suite — one wedge, two rows, both dispatchable. The tree in the title keeps each hang
+  # episode its own row; the condition is what tells guard (6) they are one piece of work.
+  file_linked "$file" \
+    "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a peer pkill)" \
+    "$(fals_red "$file" "$sha")"
   notify "Claude post-land HUNG" "$file wedges at $WEDGE_AT — un-stubbed seam, see $pf"
   sid="$(author_sid "$sha")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \

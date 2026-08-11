@@ -112,6 +112,15 @@
 #               2026-07-30T05:47:21Z and 06:04:21Z, `STALL … at test 0` then `RED failing=tests/`.
 #               Distinct from C13c, which decides the same branch on the RUN'S rc: C13c answers
 #               "was anyone speaking about the tree", C30 answers "is this line a verdict at all".
+#   C32 lease   ONE RED EPISODE ON ONE SUITE IS ONE PIECE OF WORK, however many rows it mints. This
+#               file has four mint sites and C13e-g cover only the condition-keyed one; the other
+#               three (AUTO-REVERT <outcome>, AUTO-REVERT INERT, HUNG) are title-keyed on a sha or a
+#               tree, which is right for keeping one ATTEMPT per row and shares no field with the
+#               RED row naming the same suite. So each of them JOINS its row to cond_slug(<suite>)
+#               via `cc-backlog link` after the add — never `add --condition`, which derives the id
+#               FROM the condition and would drop the second row's content instead of deduping it.
+#               The dedupe is then the CLAIM's (cc-backlog claim guard 6), not the mint's: both rows
+#               survive, and only the second DISPATCH is deferred while the first is live.
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -164,6 +173,18 @@ setup() {
     printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/%s.argv"\nexit 0\n' "$REC" "$s" > "$STUB/$s"
     chmod +x "$STUB/$s"
   done
+  # cc-backlog ALONE also ECHOES AN ID, because the real one does and a caller now READS it.
+  # `add` returns the item id on stdout — on the idempotent path too (bin/cc-backlog cmd_add) — and
+  # postland-verify's file_linked captures it to aim the follow-up `link`. A stub that printed
+  # nothing made every link structurally unreachable under test while the production path linked
+  # fine: the harness would have certified a mint-side dedupe it could not exercise (memory:
+  # default-off-sensor / harness-default-collapses-the-states-under-test). The id is a fixed
+  # 12-hex-shaped literal — tests assert the SHAPE of the argv pair, never the value, and the
+  # real-binary case below is what pins identity. Everything else discards this stdout, so no
+  # existing assertion moves.
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/cc-backlog.argv"\ncase "$1" in add) echo stubbedid00 ;; esac\nexit 0\n' \
+    "$REC" > "$STUB/cc-backlog"
+  chmod +x "$STUB/cc-backlog"
   export PATH="$STUB:$PATH"
 
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
@@ -1257,6 +1278,83 @@ STUB
   # it would have green-lit a set where two keys were fine and the third carried a sha. Measured,
   # not assumed — `printf 'aa\nbb2\n' | grep -qv '[0-9]'` exits 0.
   ! printf '%s' "$output" | grep -q '[0-9]' || { echo "a condition key carries a digit: $output"; false; }
+}
+
+# ── C32: ONE RED EPISODE, ONE LEASE — every mint site JOINS the suite's condition group ─────────
+# C13e-g above cover ONE of this file's four mint sites: red_actions' per-entry loop, which is
+# condition-keyed and therefore idempotent and lease-visible. The other three (AUTO-REVERT
+# <outcome>, AUTO-REVERT INERT, HUNG) were title-keyed on a sha or a tree — correct for keeping one
+# ATTEMPT per row, and silently fatal for dedupe, because a title key shares no field with the RED
+# row naming the same suite. Filed as 4f657ed3e064 off a live incident: fd458e142ddc ("post-land
+# RED") and 28740c313840 ("AUTO-REVERT FAILED"), tests/cc-backlog-venue.bats @ 508c2b9db0ea, one
+# suite, two rows, both dispatched, two workers, a rebase collision.
+#
+# THE FIX IS `link`, NOT `add --condition` — see file_linked's header in the SUT for why the
+# obvious spelling would delete the second row's content instead of deduping it. The property
+# therefore splits in two, and NEITHER half is sufficient alone:
+#   · the CALL SITES emit the pair (add → link) — pinned below off a live SUT run;
+#   · the LINK ACTUALLY ARMS THE LEASE — pinned below against the REAL cc-backlog, with the
+#     unlinked state as the control, because a refusal proves nothing until the same claim is shown
+#     to SUCCEED without the link (memory: control-must-be-able-to-fail).
+@test "C32: a HUNG item is JOINED to its suite's condition group, not merely filed" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo hf > "$R/hung-fixture"; push_commit "hung fixture"
+  stub_bats_mode hung
+  POSTLAND_SUITE_TIMEOUT_S=4 POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  [ -f "$REC/cc-backlog.argv" ]
+  grep -q 'post-land HUNG' "$REC/cc-backlog.argv"     # control: the mint site was reached at all
+  # THE CLAIM — and the key is DERIVED, never a literal. The page is the producer's own record of
+  # which suite wedged, and cond_slug is read out of the SUT rather than restated here: a copy of
+  # the rule could drift from the rule and this test would still pass (the C13f pattern, and memory
+  # sibling-auditors-must-share-the-state-model).
+  local page wedged expect
+  page="$(find "$CC_PAGES_DIR" -name 'postland-hung-*.page' | head -1)"
+  [ -n "$page" ]
+  wedged="$(sed -n 's/^wedged:  \([^ ]*\) at .*/\1/p' "$page" | head -1)"
+  [ -n "$wedged" ]                                    # control: the page names a suite...
+  eval "$(sed -n '/^cond_slug() {/,/^}/p' "$REPO/scripts/postland-verify.sh")"
+  expect="$(cond_slug "$wedged")"
+  grep -qF "link stubbedid00 --condition $expect" "$REC/cc-backlog.argv"
+  # ...and the link is aimed at the id the ADD returned, which is the only thing making it reach
+  # the row that was just filed. A link naming some other id would join the wrong work.
+  grep -q 'post-land HUNG.*stubbedid00\|^add .*post-land HUNG' "$REC/cc-backlog.argv"
+}
+
+@test "C32: two rows, one condition — the SECOND claim is REFUSED (the lease the link arms)" {
+  # The REAL binary, not the recording stub: the stub cannot fold a ledger, so it can record the
+  # link and prove nothing about what the link DOES. CC_BACKLOG_KICK=off is mandatory with the real
+  # one — `add` fires dispatch_kick, which resolves the OPERATOR's cc-dispatch via `command -v` and
+  # spawns live worker sessions (the C13g warning, same mechanism).
+  local B="$REPO/bin/cc-backlog" me red arv
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/lease.jsonl" CC_BACKLOG_KICK=off
+  me="$(hostname -s 2>/dev/null || hostname)-$$"      # a claimer this box reads as LIVE (kill -0 $$)
+  # The incident's two rows, filed exactly as their producers file them.
+  red="$("$B" add --title 'post-land RED: tests/cc-backlog-venue.bats::cloud claim @ 508c2b9db0ea' \
+           --condition postland-red-cc-backlog-venue \
+           --project claude-infrastructure --source postland-verify)"
+  arv="$("$B" add --title 'post-land AUTO-REVERT FAILED(step=revert rc=90): tests/cc-backlog-venue.bats @ 508c2b9db0ea (revert none)' \
+           --project claude-infrastructure --source postland-verify)"
+  [ -n "$red" ] && [ -n "$arv" ] && [ "$red" != "$arv" ] || false # control: two ids, as the incident had
+  "$B" claim "$red" --by "$me"                             # worker 1 takes the RED row
+  # ── THE CONTROL: unlinked, the second row dispatches too. This is the state that SHIPPED, and
+  # without it the refusal below could be produced by anything (a done-latch, a row lease, a
+  # malformed id) and would still read as a pass.
+  run "$B" claim "$arv" --by "$me"
+  [ "$status" -eq 0 ]
+  "$B" reopen "$arv" --force >/dev/null                    # put it back for the real question
+  # ── THE CLAIM: joined to the RED row's condition, guard (6) sees one piece of work with a live
+  # holder and declines to mint a second worker onto it.
+  "$B" link "$arv" --condition postland-red-cc-backlog-venue >/dev/null
+  run "$B" claim "$arv" --by "$me"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"verdict=sibling-held"* ]] || false
+  [[ "$output" == *"$red"* ]] || false                     # ...and it NAMES the row holding it
+  # A refused claim must append NOTHING — the item stays open and the next dispatch pass retries
+  # once the sibling releases. A refusal that also consumed the row would trade a duplicate worker
+  # for a lost one.
+  run jq -r --arg i "$arv" 'select(.id==$i and .event=="claim") | .id' "$CC_BACKLOG_FILE"
+  [ "$(printf '%s\n' "$output" | grep -c .)" = "1" ]       # the CONTROL's claim only, not a second
 }
 
 # ── NO PATH NORMALIZATION: the corpus runs in the environment being gated (settled 2026-07-29) ──
