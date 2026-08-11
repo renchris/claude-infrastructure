@@ -79,5 +79,22 @@ delegate() {
 # The one replicated condition, as a bash builtin test — no fork.
 case "$input" in
   *"$PROJECT_ROOT"*) delegate ;;
-  *)                 exit 0 ;;        # cwd cannot be under PROJECT_ROOT ⇒ gate is a proven no-op
 esac
+
+# A LINKED WORKTREE of PROJECT_ROOT lives OUTSIDE it (this machine creates them under
+# $HOME/Development/.worktrees/), so the prefix test above cannot see one — it exited 0
+# calling itself "a proven no-op" while 64 live reso worktrees ran ungated (2026-08-10).
+# The shim cannot tell WHOSE worktree it is without reading that worktree's .git pointer,
+# so it delegates and lets curl-gate.py's in_project_scope() make the precise call.
+# Gated on the payload mentioning curl at all, so the no-fork fast path is preserved for
+# every non-curl Bash call — which is the cost this shim exists to avoid.
+WORKTREES_ROOT="${CC_CURL_GATE_WORKTREES_ROOT:-$HOME/Development/.worktrees}"
+case "$input" in
+  *curl*)
+    case "$input" in
+      *"$WORKTREES_ROOT"*) delegate ;;
+    esac
+    ;;
+esac
+
+exit 0                                # not PROJECT_ROOT, not a worktree ⇒ genuinely out of scope
