@@ -168,6 +168,55 @@ but it is the larger win on the `--json` path and wants a provider-probe cache (
 invalidated on `providers.json` mtime). Filed separately; declaring start latency "fixed" while this
 stands would be a measured false claim (C/§0).
 
+## Outcome (2026-08-11) — DONE, and the biggest win was not the one we set out to get
+
+| # | Shipped | Measured |
+|---|---|---|
+| `b944be5f` | `lib/config-mirror.zsh` de-forked (`zsh/stat` instead of `$(readlink)` ×3) | `_cc_sync_config_mirror` **1554ms → 25.8ms** (.claude-next), 1473 → 24.5 (.claude-secondary), memory mirror 99 → 23.5. The SessionStart re-run fell **1137ms → 0.03s** with no extra machinery — the double-run was only a problem because each run was 1.1s. 186 links byte-identical; 5-case control + mutant. |
+| `e4ddb464` | `--max-wait` / `--max-age` — bounded, non-blocking reads | warm 0.07s; abstain (`none`, rc 3, `route-meta: cache=absent`) 0.07s; no-flag behaviour byte-identical |
+| `d45d95f5` | `--route interactive` — the survival lane | discriminates 13.7× on the canonical M7 case; both lanes agree on today's live fleet, so the synthetic pair is what proves it |
+| `faeeab24` | `lib/claude-launcher.zsh` + migration 0009 + activation 36 | 15/15 hermetic, no grandfather line |
+| `23bbf259` | `--keepwarm` + staged plist + manifest row | found and fixed two silent bugs (below) |
+
+**THE HEADLINE, and it reframes the original question.** `claude --help` measured **1587.7ms** while
+the binary alone is **180.8ms** — so ~1407ms was shell prologue, and ONE function was 1075-1554ms of
+it. The router was never the start cost; the config-mirror fork storm was, and it was paid at least
+twice per launch. J's red-team said "routing is not the launch cost" and was right for a smaller
+reason than the real one.
+
+**Two silent bugs the work surfaced**, both of which would have shipped looking healthy:
+- `get_data`'s post-lock re-read ignored `grace_s`, which would have made the keep-warm daemon a
+  **no-op that logs success** — every tick serving a <90s cache, never sweeping, cache expiring anyway.
+- Reformatting the `get_data` call broke a documented **source-patch anchor**; a literal replace that
+  matches nothing is a silent no-op, so two tests ran unpatched and failed with an unrelated symptom.
+  The patch now asserts it applied (mutant-verified).
+
+**Refuted along the way** (recorded so they are not re-litigated): the lead's own first reading that
+account 1 silently skips 15 configured hooks — the commands are absolute `~/.claude/hooks/…` and
+resolve to the shared dir; the 53-vs-75 per-dir file count is a red herring. What IS real is small
+and bounded: 74 configured hook commands in accounts 2/3/4 vs **69 in account 1**, intersection 69,
+account 1 alone lacking `cc-unattended-ask-guard.sh`, `desk-brief-inject.sh`, `session-beat.sh`
+(prompt+stop), `session-deregister.sh` (P0 above).
+
+**Process note worth keeping.** Two measurements in this session were nulls from blind instruments:
+a `cc-bats` run refused for concurrency read as "0 failures", and an A/B via
+`git checkout origin/main -- .` silently staged a sibling's newly-landed files into the worktree.
+Both were caught only by asking whether the instrument had actually run.
+
+## Follow-ons — FILED, not forgotten
+
+1. **Parallel sweep** (D's report, complete patch shape). `collect()` is serial; `working_concurrency`
+   (865ms) is consumed *after* the loop so it is a free 5th task. Measured 5-way: **340-674ms** vs
+   2480ms. Requires `_REJECTED_LOCK`, unique temp names (`_save_rejected():735` uses a pid-only temp,
+   identical across threads), `_HEAL_GATE`, SSL/opener pre-warm, and jitter in both `fetch_usage`
+   sleeps — plus a `log_event` on the 429 branch, which today emits nothing at all (5,413 log lines,
+   zero throttle entries, because the instrument does not exist). Off the interactive critical path,
+   which is why it is not in this land.
+2. **Provider-probe cache.** `probe_provider` is **4.31s of a 4.37s warm `--json` call** — 6
+   providers, 8 child CLI processes, uncached and TTL-free, re-run every invocation. Consumers:
+   `cc-context`, `cc-value`, `cc-board`, `cc-wave-plan`, `cc-blockers`. Not on the `--route` path, so
+   outside this DoD, but it is the larger win on `--json`.
+
 ## Open at time of writing
 
 Reports A (start-path census), C (keep-warm design), F (shell code), L (binary boot cost) were
