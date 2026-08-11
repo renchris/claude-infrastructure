@@ -48,6 +48,7 @@
 # reason set inside it never reaches the caller and the decision renders blank. That is not
 # hypothetical — it is how the first wiring of this shipped into a dry run reading
 # `mcp: (undecided)`, with the flags correctly composed and the explanation silently lost.
+# shellcheck disable=SC2034  # CC_MCP_NOINHERIT_ARGS/REASON are the RETURN VALUES — read by the caller.
 cc_mcp_noinherit_args() {
   local cfg="${1:-}" brief="${2:-}"
   CC_MCP_NOINHERIT_REASON=""
