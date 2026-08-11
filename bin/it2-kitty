@@ -106,6 +106,34 @@ for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/..
 done
 unset _psl
 
+# ---- SPAWN LINEAGE (item bffbce207f12) ---------------------------------------------------------
+# The pane-spawn log above names a spawn's CALLER for a forensic AFTER the fact. This names its
+# LINEAGE, so a bound can be applied BEFORE it. The two are siblings on purpose and share this
+# site: it is the same `session split` primitive, and it is the one surface every pane arrival
+# converges on.
+#
+# It has to be an explicit stamp because the process tree cannot carry the fact. kitty launches a
+# pane as a child of the kitty DAEMON, so a pane spawned BY a pane is indistinguishable from a
+# top-level one in `ps` — visible in this box's own records, where `ancestry` across all 1085 rows
+# of logs/pane-spawns.jsonl contains `claude` at most ONCE and every chain ends at a kitty pid.
+# Probed 2026-08-11 with positive controls (docs/research/spawn-lineage-probe-2026-08-11.md):
+# a var merely exported by the caller does NOT reach the pane; `--env` does, and survives the real
+# `zsh -l -i -c` pane shape; and `--source-window` does NOT copy it either (measured on kitty
+# 0.48.2 — the note at the --source-window pin below is about title/colors/cwd, not about the
+# launched process's environment), while an explicit `--env` on the same launch WINS. So `--env`
+# is the sole carrier, and it cannot be shadowed by a copy.
+#
+# Absent library ⇒ silent no-op, never an error — identical contract to the log above. An unstamped
+# pane simply starts a fresh lineage, which is exactly today's behaviour, so a miss can never be a
+# regression (the same reasoning the pane-spawn gate's pre-filter is built on).
+for _sl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../scripts/lib/spawn-lineage.sh" \
+           "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/spawn-lineage.sh" \
+           "${HOME:-}/.claude/scripts/lib/spawn-lineage.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_sl" ] && . "$_sl" 2>/dev/null && break
+done
+unset _sl
+
 # ── RESOLVE THE KITTY BINARY BY ABSOLUTE PATH, NOT BY NAME ───────────────────────────────────────
 # `KITTY_BIN="${CC_TERM_KITTY:-kitty}"` — a bare name — was the whole line here until 2026-08-01, and
 # it made EVERY AUTOMATED pane close a no-op on kitty while every interactive one worked.
@@ -769,6 +797,19 @@ case "$verb" in
       # (it named the operator's active window, not the anchor) — this line is what makes them agree.
       # title / colors / env are copied from the source window too, so the pin fixes those as well.
       launch_args+=(--match "window_id:$SESSION" --next-to "id:$SESSION" --source-window "id:$SESSION")
+    fi
+
+    # STAMP THE LINEAGE — here, above the three launch branches below, so every one of them carries
+    # it. The predelivered and armed branches each append their own `--env … -- <shell>` tail, and
+    # the third (legacy typed) branch appends nothing at all; a stamp added inside any one of them
+    # would silently miss the other two, and the typed fallback is precisely the degraded path a
+    # runaway is most likely to be on. Appending to `launch_args` before the branch keeps one site.
+    #
+    # Order is safe: `--env` may appear any number of times and must precede the `--` separator,
+    # which every branch below adds after this point.
+    if command -v cc_lineage_child_env >/dev/null 2>&1; then
+      while IFS= read -r _le_tok; do launch_args+=("$_le_tok"); done < <(cc_lineage_child_env)
+      unset _le_tok
     fi
 
     # ARM the pane: launch the runner instead of an interactive shell, so `run` can hand the command
