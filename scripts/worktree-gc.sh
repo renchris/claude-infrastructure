@@ -128,9 +128,10 @@ set -uo pipefail
 DRY_RUN=0
 PRUNE_BRANCHES=0
 DISPOSE_ABANDONED=0
+DISPOSE_LANDED_DIRT=0
 WARRANT_PATH=""
 WARRANT_REASON=""
-USAGE="usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dry-run]
+USAGE="usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dispose-landed-dirt] [--dry-run]
        worktree-gc.sh --warrant <worktree-path> --reason '<why this is abandoned>'"
 # `--warrant` and `--reason` take a VALUE, so the loop carries a one-slot latch: a flag sets WANT,
 # and the next argument is consumed as that flag's value instead of being parsed as a flag. A
@@ -149,6 +150,7 @@ for arg in "$@"; do
     --dry-run|-n)         DRY_RUN=1 ;;
     --prune-branches)     PRUNE_BRANCHES=1 ;;
     --dispose-abandoned)  DISPOSE_ABANDONED=1 ;;
+    --dispose-landed-dirt) DISPOSE_LANDED_DIRT=1 ;;
     --warrant)            WANT=warrant ;;
     --reason)             WANT=reason ;;
     --prune)              : ;;   # compat alias: the guard hook's advertised invocation == default
@@ -376,6 +378,73 @@ landed() { # <branch> → 0 iff every commit since the merge-base is on the trun
   "$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 || return 1
   out="$("$GIT_BIN" -C "$MAIN" cherry "$TRUNK" "$br" 2>/dev/null)" || return 1
   ! printf '%s\n' "$out" | grep -q '^+'
+}
+
+DIRT_BLOCKER=""
+dirt_landed() { # <path> → 0 iff EVERY dirty path is byte-identical on $TRUNK; else 1 + DIRT_BLOCKER
+  # The dirty-tree KEEP protects work in progress, but it never asked the second question: is the
+  # "work" already on the trunk? `landed()` CANNOT answer it — that reads COMMITS, and this dirt is
+  # dominated by paths STAGED-but-never-committed. Measured over the live population 2026-08-10:
+  # 79 of 84 dirty trees carry tracked entries, and `git cherry` calls 72 of them landed — while
+  # four staged paths (tools/blender/clawd_bmo.py + three assets/blender/clawd-bmo-*.webp, held in
+  # SIX worktrees each) are absent from origin/main entirely and exist on no ref anywhere. Trusting
+  # `landed()` here would have force-removed the only copies of expensive generated assets, which is
+  # exactly the class ~/.claude/CLAUDE.md protects by name.
+  #
+  # So the question is asked PER DIRTY PATH against trunk CONTENT — the same shape as
+  # ship-backup-reap.sh's predicate, including its bias: ANY uncertainty KEEPS. This function only
+  # ever removes the dirty rung's VETO; every liveness/ownership gate below it still runs, and the
+  # removal itself needs --dispose-landed-dirt on top.
+  local path="$1" porc ent st p tb wb
+  DIRT_BLOCKER=""
+  porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" || { DIRT_BLOCKER="status unreadable"; return 1; }
+  while IFS= read -r ent; do
+    [ -n "$ent" ] || continue
+    st="${ent:0:2}"; p="${ent:3}"
+    # A rename, deletion or unmerged entry is divergence by construction — never byte-identical.
+    case "$ent" in *' -> '*) DIRT_BLOCKER="rename in the tree"; return 1 ;; esac
+    case "$st" in *D*|*U*) DIRT_BLOCKER="deletion/unmerged entry"; return 1 ;; esac
+    # git QUOTES paths with spaces/UTF-8/control bytes. Decoding that is a second parser and a
+    # second way to be wrong about which file we are about to destroy — refuse instead of guess.
+    case "$p" in '"'*) DIRT_BLOCKER="quoted path (not decoded): $p"; return 1 ;; esac
+    [ -f "$path/$p" ] || { DIRT_BLOCKER="not a regular file: $p"; return 1; }
+    tb="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK:$p" 2>/dev/null)"
+    [ -n "$tb" ] || { DIRT_BLOCKER="absent from $TRUNK: $p"; return 1; }
+    wb="$("$GIT_BIN" -C "$path" hash-object -- "$path/$p" 2>/dev/null)"
+    [ -n "$wb" ] || { DIRT_BLOCKER="unhashable: $p"; return 1; }
+    [ "$wb" = "$tb" ] || { DIRT_BLOCKER="differs from $TRUNK: $p"; return 1; }
+  done <<EOF
+$porc
+EOF
+  return 0
+}
+
+clear_redundant_dirt() { # <path> → 0 iff the tree is CLEAN afterwards, having lost nothing
+  # Called ONLY after dirt_landed() has just re-proven every dirty path byte-identical to the
+  # trunk, so each action below restores content that is already durably on origin/main. The point
+  # is to reach a clean tree WITHOUT --force, so git's own refusal survives as the final gate.
+  #   · staged        → unstage it (a path absent from HEAD simply becomes untracked)
+  #   · tracked file  → restore it from HEAD
+  #   · untracked     → delete it (its bytes are on the trunk)
+  # The verdict is the tree's own emptiness, never the rc of these commands: if anything remains —
+  # a shape the parser missed, a submodule, a permission failure — we return 1 and KEEP.
+  local path="$1" porc ent p
+  porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" || return 1
+  while IFS= read -r ent; do
+    [ -n "$ent" ] || continue
+    p="${ent:3}"
+    "$GIT_BIN" -C "$path" reset -q -- "$p" 2>/dev/null || true
+    if "$GIT_BIN" -C "$path" cat-file -e "HEAD:$p" 2>/dev/null; then
+      "$GIT_BIN" -C "$path" checkout -q -- "$p" 2>/dev/null || true
+    else
+      rm -f -- "$path/$p" 2>/dev/null || true
+    fi
+  done <<EOF
+$porc
+EOF
+  porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" || return 1
+  [ -z "$porc" ] || { DIRT_BLOCKER="tree still dirty after restore"; return 1; }
+  return 0
 }
 
 # ── DISPOSE class: abandoned-but-unlanded (A1 age · A2 owning item terminal · A3 preserved) ──
@@ -646,6 +715,7 @@ protected_branch() { # never deleted, whatever the evidence says
 }
 
 N_REMOVED=0; N_KEPT=0; N_BR_DELETED=0; N_REFUSED=0; N_DISPOSED=0; N_DISPOSE_CAND=0; VERIFY_FAIL=0
+N_DIRT_CAND=0; N_DIRT_REMOVED=0
 N_UNOWNED=0; N_OWNER_ACTIVE=0
 PREFIX=""; [ "$DRY_RUN" = "1" ] && PREFIX="would "
 
@@ -713,7 +783,7 @@ fi
 # ── 2. Per-worktree gates. Records come ONLY from git — never a directory listing. ───────
 wt=""; br=""; detached=0; locked=0
 process_record() {
-  local path="$wt" branch="$br" base reason=""
+  local path="$wt" branch="$br" base reason="" dirty_porc=""
   [ -n "$path" ] || return 0
   [ "$path" = "$MAIN" ] && return 0                       # never the primary checkout
   local cpath; cpath="$(canon "$path")"
@@ -723,7 +793,12 @@ process_record() {
   elif [ ! -d "$path" ];                                     then reason="directory is gone (admin record only — 'git worktree prune' handles it)"
   elif [ "$locked" = "1" ];                                  then reason="locked worktree"
   elif [ -f "$path/.teammate-busy" ];                        then reason=".teammate-busy marker present"
-  elif [ -n "$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" ]; then reason="dirty tree (removal would need --force ⇒ data loss)"
+  # Two commands, so the LAST one decides the branch: this keeps the `status` fork lazy (the four
+  # rungs above still short-circuit it) while capturing its output for the removal path, which must
+  # know whether it is removing a tree whose dirt was PROVEN redundant.
+  elif dirty_porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)"
+       [ -n "$dirty_porc" ] && ! dirt_landed "$path"; then
+                                                                  reason="dirty tree, $DIRT_BLOCKER (removal would need --force ⇒ data loss)"
   elif op_in_progress "$path";                               then reason="a git operation is parked here ($OP_KIND) — removal would discard it"
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
@@ -770,6 +845,59 @@ process_record() {
   if [ -n "$reason" ]; then
     echo "KEEP    $path [${branch:-detached}] — $reason"
     N_KEPT=$((N_KEPT + 1))
+    return 0
+  fi
+
+  # ── LANDED-DIRT class ────────────────────────────────────────────────────────────────────────
+  # Reaching here with a non-empty tree means dirt_landed() PROVED every dirty path byte-identical
+  # to the trunk, and every liveness/ownership rung below the dirty gate then passed too. It is
+  # still its OWN opt-in flag rather than a widening of --dispose-abandoned: that class preserves
+  # unlanded COMMITS on a branch and is a different risk with a different proof, and the cron must
+  # be able to enable exactly one of them.
+  if [ -n "$dirty_porc" ]; then
+    if [ "$DISPOSE_LANDED_DIRT" = "0" ]; then
+      echo "DIRT?   $path [$branch] — dirty but every dirty path is byte-identical on $TRUNK — pass --dispose-landed-dirt to reap"
+      N_DIRT_CAND=$((N_DIRT_CAND + 1))
+      return 0
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "${PREFIX}dispose-dirt  $path [$branch] — dirt redundant with $TRUNK · idle · landed"
+      N_DIRT_REMOVED=$((N_DIRT_REMOVED + 1))
+      printf '%s\n' "$branch" >> "$REMOVED_BR"
+      return 0
+    fi
+    if recheck_live "$path" "$cpath"; then
+      echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+      N_KEPT=$((N_KEPT + 1))
+      return 0
+    fi
+    # RE-PROVE the dirt at act time — a session can start editing inside the classify→act window.
+    if ! dirt_landed "$path"; then
+      echo "KEEP    $path [$branch] — dirt CHANGED after classification ($DIRT_BLOCKER)"
+      N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+      return 0
+    fi
+    # NO --force, exactly as on the other two removal paths. It would have been the easy way to get
+    # a dirty tree removed, and it is precisely what audit §8-H bans (tests/worktree-gc.bats guards
+    # the SOURCE for it): `git worktree remove` refusing is the LAST net under our own evidence, and
+    # this class needs that net MORE than the others, not less — the predicate above is a parser,
+    # and a path shape it mis-reads is exactly what git's own opinion would still catch.
+    # So instead of overriding the refusal, REMOVE ITS CAUSE: every dirty path here is proven
+    # byte-identical to the trunk, so restoring it loses nothing, and a tree that does not come out
+    # clean is one we never understood — git then refuses on its own and we KEEP.
+    if ! clear_redundant_dirt "$path"; then
+      echo "KEEP    $path [$branch] — could not clear proven-redundant dirt ($DIRT_BLOCKER)"
+      N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+      return 0
+    fi
+    if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+      echo "dispose-dirt  $path [$branch] — dirt redundant with $TRUNK (re-proven at act time) · idle · landed"
+      N_DIRT_REMOVED=$((N_DIRT_REMOVED + 1))
+      printf '%s\n' "$branch" >> "$REMOVED_BR"
+    else
+      echo "KEEP    $path [$branch] — git REFUSED the removal after the tree was restored"
+      N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+    fi
     return 0
   fi
 
@@ -837,12 +965,15 @@ if [ "$PRUNE_BRANCHES" = "1" ]; then
 fi
 
 SUFFIX=""; [ "$DRY_RUN" = "1" ] && SUFFIX="   [DRY-RUN — nothing was mutated]"
-echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abandoned · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
+echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abandoned · $N_DIRT_REMOVED landed-dirt · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
 # Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
 # whether or not it passed the flag that acts on it.
 if [ "$N_DISPOSE_CAND" -gt 0 ]; then
   echo "worktree-gc: $N_DISPOSE_CAND abandoned-unlanded worktree(s) are reapable — pass --dispose-abandoned to reap them (every branch is preserved; disposals are logged to $DISPOSAL_LOG)"
+fi
+if [ "$N_DIRT_CAND" -gt 0 ]; then
+  echo "worktree-gc: $N_DIRT_CAND dirty worktree(s) hold nothing but content already byte-identical on $TRUNK — pass --dispose-landed-dirt to reap them"
 fi
 # The un-ownable RESIDUE, reported as the TWO states it actually is. Reporting a count at all is
 # what keeps the permanent-KEEP bucket from silently regrowing into the 2026-07-26 measurement (37
