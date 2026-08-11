@@ -453,6 +453,59 @@ exist yet, which is why it did not join the frozen four.
 4. 2.1.221 adoption (MCP discovery cache — the down-daemon failure-posture change) stays OUT of these waves:
    it is a fleet binary bump owned by the `cc-version-audit` process; file/refresh a backlog item if not present.
 
+### W5 OUTCOME (2026-08-11) — all seven ids closed; the program is LANDED, and NOT LIVE for one shared reason
+
+**Ids, all `done` with real shas** (verified by re-reading the ledger, not by trusting the reports):
+`572b6341aa12` reso `e0e7c951a` · `87ef04ead50d` `47cc3f27` · `eece54939e7f` `ff49e1e3..2b0977be` ·
+`819839ed24b3` `24e30061` · `ef28f9bb11e6` `6df645dc` · `e3fb627bc57a` `e5312a26` (superseded, not
+done-by-us) · `aac347ddc003` `49a6e466`. Reso's two land via reso's own rail (`land-status.sh`
+asserted live that landing bills nothing there — read at execution time, never assumed from here).
+
+**1 · Census (run + printed).** 13 `chrome-devtools`-family processes still alive fleet-wide.
+**This is the reach limit, not a failed flip** — and the distinction is the finding. Tracked config
+reaches a worktree only on REBASE, and ~70 of 77 reso worktrees sit on an older base still running
+the eager `npx chrome-devtools-mcp@latest --isolated` chain. The landed shape is correct and proven:
+stanza is `bash scripts/mcp/chrome-devtools-mcp.sh`, `disabledMcpjsonServers: ["chrome-devtools"]`,
+and a `-p` probe plus interactive `mcp list` in a landed worktree both spawn ZERO. Read a live census
+against a tracked-config change as a **rebase question**; a fleet number cannot falsify a per-tree fix.
+
+**2 · Live layer — the one thing that is NOT done, and it is a bootstrap circle, not a lag.**
+`deploy-live` refuses: *no GREEN tree is a DESCENDANT of live HEAD* — the newest green stamp is
+BEHIND it. So the budget is not the binding constraint; there is **no eligible tree at all**, and
+nothing landed since has converged. The circle (filed `3df911c0470e`, blocked, pre-existing and NOT
+caused by these waves): `~/.claude/scripts/postland-verify.sh` symlinks into the shared checkout,
+which is behind trunk, so the LIVE runner is the pre-C29 one → it keeps false-redding → no green
+stamp can appear → the live layer never receives the fix that would stop the false reds.
+Direct observation from three consecutive sweeps this session: two CUT by machine pressure (SIGTERM,
+load 22 on 10 cores), one convicting `tests/cc-fleet.bats` in a single load window (C29 pending).
+Consequence, measured: origin/main carries the W4 fixes while `$HOME/.claude/scripts/compressor-sentinel.sh`
+still serves pre-fix bytes (`grep -c exe_table` → 6 on trunk, 0 live). **Net safety position is
+unchanged and no worse** — the actuator keeps the predicate it has always had; the fix is landed,
+content-verified, and inert. Breaking the circle needs a one-time forced advance past a fail-closed
+gate — operator judgment, and a raw `ff` is explicitly NOT the move (`04470b5d` records that it
+wedges deploy and resets both legs). Downstream and gated on it: `b3093462ed6c` (the sentinel daemon
+is a long-running bash that parsed its loop once — pid 77490 — so even after the fast-forward the new
+predicate is not armed until `launchctl kickstart -k gui/$UID/com.claude.compressor-sentinel`).
+
+**4 · 2.1.221** filed as `c9787e610bca` (none existed).
+
+**Scope (grown): +the goal-vs-background-Bash guard** (`0e021a9d68e3` → `d59dff44`), F1-F4 PASS,
+surfaced BY this program rather than planned into it. The lead parked a `Bash(run_in_background)`
+monitor to watch a fire; CC skips `/goal` evaluation at every Stop while any non-terminal background
+Bash exists, so the goal driving this program never evaluated — measured **2 h / ~12 turns / 0
+evaluations** — and 8 peer HANDOFF-PINGs waited for the operator to type across four round-trips.
+Two defects, and the second is the durable one: (1) that monitor could never exit, because its
+predicate matched only the SUCCESS token (`^→ fired:`) while the fire wrote `!! FIRE FAILED` — a
+watcher that cannot observe the failure path parks forever; (2) **the guard was on one door only** —
+`cc-await-ping` REFUSED to arm and said why, while a raw backgrounded Bash had no guard at all and
+disabled the goal identically. Shipped as a DENY in `hooks/validate-bash.sh` keyed on SHAPE
+(poll-loop / follow-tail / `sleep ≥120` / `cc-await-ping`, judged per command segment), because
+duration is the real hazard but is unknowable at PreToolUse; 16/16 TAP with 5 red-proved against
+pre-fix trunk and four passes-silently controls green on both trees. The standing memory
+`goal-stop-hook-vs-task-registry` named only the cc-await-ping door and has been widened to the
+mechanism. **Generalisable:** when two call paths reach one hazard, a guard on the ergonomic one is
+not coverage — it is a signpost on the road nobody takes.
+
 ---
 
 ## Standing constraints (all waves)
