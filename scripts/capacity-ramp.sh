@@ -23,6 +23,29 @@
 # the operator's sessions. The consequence is that a memory blowout driven by claude processes
 # themselves has NOTHING above it: CONFIG_JETSAM is off and the fleet sits in jetsam band 180. So
 # this script carries its OWN floor and aborts on it. That floor is the only backstop the ramp has.
+#
+# 🚨 A SILENT ALARM IS NOT A QUIET BOX — D3 ABORTS AS UNVERIFIABLE (added 2026-08-11, closing
+# scaling-bottlenecks-2026-08-09/10-adv-redteam.md finding F5). The old reader was
+#     seg_pct() { tail -1 …compressor-sentinel.jsonl | jq -r '.pct // 0' || echo 0; }
+# so a MISSING, STALE, or UNPARSEABLE log read `0` — and 0 is the HEALTHIEST possible segment
+# figure. `breach()` then passed, and the ramp advanced a stage on an instrument that was not
+# reporting. The sentinel dying mid-ramp is not hypothetical: it has its own SKIP path, and a
+# launchd restart loses its baselines. The redteam's falsifier was one line — `mv` the jsonl aside
+# and run `capacity-ramp.sh breach` — and it read OK.
+#
+# THE DISTINCTION THE FIX TURNS ON: "measured 0" and "could not measure" are DIFFERENT STATES and
+# reach DIFFERENT BRANCHES. A fresh row saying 0.00% is a real reading of a healthy box and the
+# ramp proceeds. No row, no `ts`, a null `pct`, no `jq`, or a row older than CC_RAMP_SEG_MAX_AGE is
+# an ABSENCE of reading and the ramp ABORTS. The sentinel itself already implements exactly this
+# contract on its own side (SKIP emits no row rather than a zero one,
+# compressor-sentinel.sh:46-53); its DoD consumer was the half that violated it. Fleet memory:
+# alarm-polarity, published-figure-decays, and render-census.sh's own NO-DATA rung, which is this
+# same rule one instrument over.
+#
+# Freshness is computed from the ROW'S OWN `ts`, converted to epoch by civil-date arithmetic in
+# awk rather than by `date`. Deliberate: the ISO-8601 parse spellings diverge (`date -j -f` on
+# macOS, `date -d` on GNU), and an instrument whose freshness check silently fails to parse on one
+# of them would fail exactly the way F5 describes. `date -u +%s` — the one call kept — is portable.
 set -uo pipefail
 
 BIN="${CC_RAMP_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
@@ -31,6 +54,8 @@ FIFODIR="${CC_RAMP_FIFODIR:-/tmp}"
 FLOOR_GB="${CC_RAMP_FLOOR_GB:-8}"     # abort below this (free+purgeable); the alarm's WARN line
 SEG_MAX="${CC_RAMP_SEG_MAX:-15}"      # abort at/above this seg_pct — the sentinel's own trip level
 SETTLE="${CC_RAMP_SETTLE:-4}"         # seconds between unit launches
+SEG_LOG="${CC_RAMP_SEG_LOG:-$HOME/.claude/logs/compressor-sentinel.jsonl}"
+SEG_MAX_AGE="${CC_RAMP_SEG_MAX_AGE:-30}"  # a row older than this is a DEAD instrument, not a calm one
 
 avail_gb() { vm_stat 2>/dev/null | awk '
   /^Pages free:/        {gsub(/[^0-9]/,"",$NF); f=$NF}
@@ -43,24 +68,84 @@ avail_gb() { vm_stat 2>/dev/null | awk '
 sessions() { ps -axo comm= 2>/dev/null | grep -c 'node_modules/.bin/claude'; }
 # shellcheck disable=SC2009  # same reason: comm=/tty= are command-position reads, not argv matches.
 ptys()     { ps -axo tty=  2>/dev/null | grep '^ttys' | sort -u | wc -l | tr -d ' '; }
-seg_pct()  { tail -1 "$HOME/.claude/logs/compressor-sentinel.jsonl" 2>/dev/null \
-               | jq -r '.pct // 0' 2>/dev/null || echo 0; }
+# iso_age: ISO-8601 Zulu timestamp + a `now` epoch → whole seconds of age on stdout, NOTHING (and
+# rc 1) on anything that is not exactly that shape. Howard Hinnant's days_from_civil, which is pure
+# integer arithmetic and therefore identical under BWK awk (macOS) and gawk — unlike mktime, which
+# macOS awk does not have at all.
+iso_age() { # $1=ts  $2=now_epoch
+  awk -v ts="$1" -v now="$2" '
+    function dfc(y, m, d,   era, yoe, doy, doe) {
+      if (m <= 2) y -= 1
+      era = int((y >= 0 ? y : y - 399) / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    BEGIN {
+      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) exit 1
+      printf "%d", now + 0 - (dfc(substr(ts,1,4)+0, substr(ts,6,2)+0, substr(ts,9,2)+0) * 86400 \
+             + substr(ts,12,2)*3600 + substr(ts,15,2)*60 + substr(ts,18,2))
+    }'
+}
+
+# seg_read: prints "<pct> <age_seconds>" for a row that was ACTUALLY READ, and prints NOTHING for
+# every failure mode — absent log, empty log, no `ts`, `pct` null, no `jq`, unparseable timestamp.
+# EMPTY IS THE BLIND STATE AND IT IS NEVER A NUMBER. Every caller must branch on emptiness before
+# it has a figure to compare, which is what stops a dead instrument re-entering as a healthy 0.
+seg_read() {
+  local row ts pct now age
+  [ -s "$SEG_LOG" ] || return 1
+  row="$(tail -1 "$SEG_LOG" 2>/dev/null)" || return 1
+  [ -n "$row" ] || return 1
+  # `// empty` NOT `// 0`: a null pct means the sentinel emitted a row it could not fill, and that
+  # is the same absence as no row at all. jq missing exits non-zero here rather than echoing 0.
+  ts="$(printf '%s\n' "$row" | jq -r '.ts // empty' 2>/dev/null)" || return 1
+  pct="$(printf '%s\n' "$row" | jq -r '.pct // empty' 2>/dev/null)" || return 1
+  [ -n "$ts" ] && [ -n "$pct" ] || return 1
+  now="$(date -u +%s 2>/dev/null)" || return 1
+  [ -n "$now" ] || return 1
+  age="$(iso_age "$ts" "$now")" || return 1
+  [ -n "$age" ] || return 1
+  printf '%s %s\n' "$pct" "$age"
+}
+# seg_pct: the DISPLAY spelling. BLIND, never 0 — the string cannot be mistaken for a reading by a
+# reader, a grep, or an arithmetic comparison.
+seg_pct()  { local r; if r="$(seg_read)" && [ -n "$r" ]; then printf '%s' "${r%% *}"; else printf 'BLIND'; fi; }
 # shellcheck disable=SC2012  # panic filenames are Apple-generated and alphanumeric; a count is all
 # D2 needs, and `find` here would add a directory walk to a hot per-unit loop.
 panics()   { ls -1 /Library/Logs/DiagnosticReports/*.panic 2>/dev/null | wc -l | tr -d ' '; }
 
 # breach: echoes the reason and returns 0 when a D2-D6 abort condition holds.
+#
+# THREE D3 OUTCOMES, NOT TWO. The segment arm can now say "over the ceiling", "under the ceiling",
+# or "I did not get a reading" — and only the middle one lets the ramp advance. D6 is still
+# evaluated first, so a box that is simultaneously out of memory reports the memory floor (the
+# louder, more actionable fact) rather than the instrument.
 breach() {
-  local a s
-  a="$(avail_gb)"; s="$(seg_pct)"
+  local a r pct age
+  a="$(avail_gb)"
   awk -v a="$a" -v f="$FLOOR_GB" 'BEGIN{exit !(a+0 < f+0)}' && { echo "D6 memory: ${a}GB < ${FLOOR_GB}GB floor"; return 0; }
-  awk -v s="$s" -v m="$SEG_MAX" 'BEGIN{exit !(s+0 >= m+0)}' && { echo "D3 segments: ${s}% >= ${SEG_MAX}%"; return 0; }
+  r="$(seg_read)" || r=""
+  if [ -z "$r" ]; then
+    echo "D3 UNVERIFIABLE: compressor sentinel gave no reading ($SEG_LOG) — could not measure is NOT healthy"
+    return 0
+  fi
+  pct="${r%% *}"; age="${r##* }"
+  if awk -v g="$age" -v m="$SEG_MAX_AGE" 'BEGIN{exit !(g+0 > m+0 || g+0 < -(m+0))}'; then
+    echo "D3 UNVERIFIABLE: sentinel sample is ${age}s old (max ${SEG_MAX_AGE}s) — the alarm is dead, not quiet"
+    return 0
+  fi
+  awk -v s="$pct" -v m="$SEG_MAX" 'BEGIN{exit !(s+0 >= m+0)}' && { echo "D3 segments: ${pct}% >= ${SEG_MAX}%"; return 0; }
   return 1
 }
 
 stat_line() {
-  printf 'sessions=%s ptys=%s avail=%sGB seg=%s%% panics=%s\n' \
-    "$(sessions)" "$(ptys)" "$(avail_gb)" "$(seg_pct)" "$(panics)"
+  local r seg age
+  r="$(seg_read)" || r=""
+  if [ -n "$r" ]; then seg="${r%% *}%"; age="${r##* }s"; else seg="BLIND"; age="n/a"; fi
+  printf 'sessions=%s ptys=%s avail=%sGB seg=%s segage=%s panics=%s\n' \
+    "$(sessions)" "$(ptys)" "$(avail_gb)" "$seg" "$age" "$(panics)"
 }
 
 up() {
@@ -98,9 +183,12 @@ case "${1:-}" in
 usage: capacity-ramp.sh {up <n>|down|stat|breach}
   up <n>   launch n RESIDENT idle sessions (tracked in $PIDFILE), aborting on a D3/D6 breach
   down     terminate ONLY the pids this script recorded — never by age, never by pattern
-  stat     one line: sessions, ptys, available GB, seg_pct, panic count
+  stat     one line: sessions, ptys, available GB, seg_pct (or BLIND), sample age, panic count
   breach   exit 1 with the reason if a D3/D6 abort condition holds right now
 Stages for S6-DOD D1: 19 -> 40 -> 80 -> 150, measuring at each and never advancing past a breach.
+D3 aborts as UNVERIFIABLE when the compressor sentinel gives no reading at all — a missing, stale
+(> \$CC_RAMP_SEG_MAX_AGE=${SEG_MAX_AGE}s), or unparseable row is a dead instrument, never a healthy 0.
+Seams: CC_RAMP_SEG_LOG (${SEG_LOG}) · CC_RAMP_SEG_MAX_AGE (${SEG_MAX_AGE}s).
 USAGE
      exit 64 ;;
 esac
