@@ -17,9 +17,18 @@
   copy from arming the job at next login. launchd/staged/ is outside install.sh's non-recursive
   glob, so this job cannot start until the operator deliberately installs it.
 
-  StartInterval 60, and the arithmetic is the point. cache_ttl_s is 90 (accounts.json) and a warm
-  sweep measures 1.85-2.53s, so worst-case age at a consumer is 60 + 2.5 = 62.5s — a 27.5s margin
-  under the TTL. 75s was rejected: it leaves 12.5s, which is less than the variance ONE fetch_usage
+  StartInterval 60, and the arithmetic is the point — but size it from the PRODUCTION band, not a
+  foreground bench. cache_ttl_s is 90 (accounts.json). A warm sweep measures 1.85-2.53s in the
+  FOREGROUND, and that is NOT what this job gets: ProcessType Background + LowPriorityIO clamp it to
+  PRI 4, and the first 6 live runs measured 6.2-11.8s — 3-5x the bench. Worst-case age at a consumer
+  is therefore 60 + 11.8 = 71.8s, an 18.2s margin, not the 27.5s a foreground figure would promise.
+  (Measured 2026-08-11 from this job's own out.log; the class is 'a bound sized from a foreground
+  bench is a non-verdict once Background taxes it'.)
+
+  THAT MARGIN IS A QUALITY KNOB, NOT A SAFETY ONE. If a consumer does miss the TTL, the interactive
+  launcher abstains and falls back to its PINNED account — the status quo, not a failure. So the
+  correct response to a shrinking margin is to lengthen StartInterval (fewer sweeps, more
+  abstentions) rather than to shorten it (more sweeps, more 429 exposure per the risk below). 75s was rejected: it leaves 12.5s, which is less than the variance ONE fetch_usage
   retry introduces (+1s sleep, up to a 12s timeout), so a single retried account would put the
   producer over the TTL and hand the miss to a consumer. Fleet precedent for 60s:
   com.claude.session-search-sweep and com.claude.capacity-alarm.
