@@ -105,6 +105,12 @@ unseen_rows() {
     chomp;
     my ($cls, $path) = split /\t/, $_, 2;
     next unless defined $path && length $path;
+    # TSV field-collapse guard (scripts/tsv-pad-lint.sh). Tab is IFS-whitespace, so an empty
+    # NON-LAST cell does not read back empty — it shifts every later column left, silently, at
+    # exit 0. candidates() only ever prints one of five literal class names, so this is
+    # belt-and-braces; it PADS rather than `next`s because dropping a record is the exact silent
+    # loss this hook exists to prevent. $path is last and already length-tested above.
+    $cls = "unknown" unless defined $cls && length $cls;
     my $seen = $ENV{SEEN_DIR};
     # BOTH marker forms — see header note (1). Either one means drained.
     my $key = substr(sha256_hex($path), 0, 32);
