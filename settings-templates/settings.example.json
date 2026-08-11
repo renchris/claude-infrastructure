@@ -363,6 +363,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "_comment": "The /accounts board at session start, at ZERO model tokens: it emits a TOP-LEVEL systemMessage (the only one of the three SessionStart channels that reaches the terminal without entering model context — hookSpecificOutput.systemMessage is silently ignored and additionalContext is billed; proven in docs/research/R5b-sessionstart-render-probe.py). It is a file read (~65ms), never a claude-accounts call: --readout measures 5.33s, over this timeout. The board is pre-rendered by the com.claude.accounts-keepwarm launchd job (claude-accounts --keepwarm), and the hook labels or withholds it by age.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/accounts-board.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionEnd": [

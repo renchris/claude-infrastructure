@@ -42,6 +42,11 @@ Usage:
       `*` on inherited numbers, flags-as-bullets) lives here in code, so it can be tested
       and cannot drift from the CLI table. commands/accounts.md keeps only the judgment:
       how to INTERPRET a stale row, an exclusion, or a cliff.
+  claude-accounts --readout --narrow  the same readout at <=76 cols, for the SessionStart board.
+      A MODE on the same renderer, never a second table: the board must not be able to claim a
+      different pick, staleness or cliff than /accounts does. Written to disk (board_file, default
+      alongside cache_file) by --keepwarm; read by hooks/accounts-board.sh, which never runs this
+      program — --readout measured 5.33s, over a hook's 5s timeout.
       Appends the provider section unless --no-agents.
   claude-accounts --agents            NON-Claude agent backends only (registry:
       ~/.claude/providers.json). Needs no keychain read, no usage sweep and no lock, so it
@@ -138,6 +143,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 import traceback
 import unicodedata
@@ -2108,6 +2114,54 @@ def cache_write(cfg, payload):
         pass
 
 
+def board_path(cfg):
+    """Where the pre-rendered SessionStart board lives.
+
+    DERIVED FROM cache_file, not a second independent constant, and for the same reason cache
+    entries are keyed by `_cfg_key`: a fixtured `CLAUDE_ACCOUNTS_JSON` pointing at a scratch cache
+    must get a scratch board too, or a test run would overwrite the live operator's board with
+    fixture accounts — and the board is a surface nobody re-reads adversarially, so that would be
+    believed. `CC_ACCOUNTS_BOARD` overrides both, and is the seam the hook's tests fixture: the
+    hook must be able to read a board this producer wrote WITHOUT either of them touching
+    accounts.json, because the hook is forbidden from loading config at all (it may not fork this
+    program — see hooks/accounts-board.sh).
+    """
+    env = os.environ.get("CC_ACCOUNTS_BOARD")
+    if env:
+        return env
+    if cfg.get("board_file"):
+        return os.path.expanduser(cfg["board_file"])
+    cf = cfg.get("cache_file") or "/tmp/claude-accounts-cache.json"
+    return cf[:-len("-cache.json")] + "-board.txt" if cf.endswith("-cache.json") else cf + ".board.txt"
+
+
+def write_board(cfg, lines):
+    """Atomically publish the rendered board. Returns the path, or None on failure.
+
+    os.replace, never a truncate-then-write: the reader is a SessionStart hook that may fire at
+    any instant, including the microseconds this producer is mid-write. A torn board is worse
+    than a stale one — stale is labelled by the hook's age check, whereas a half-written table
+    looks like a complete table with fewer accounts in it.
+    """
+    path = board_path(cfg)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, path)
+        return path
+    except OSError:
+        # A producer that cannot write the board must not take the CACHE sweep down with it: the
+        # cache is what the interactive launch path depends on, the board is a convenience. The
+        # hook reports the resulting absence itself, so this failure is visible without an alarm
+        # here that only launchd's log would ever see.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return None
+
+
 def _prev_snapshot(cfg):
     """Last sweep's percents (TTL-ignored, cfg-key-checked) — feeds the burn-delta display."""
     try:
@@ -2578,8 +2632,79 @@ def desk_why(r, cfg):
             + (" · sticky" if r.get("desk_incumbent") else ""))
 
 
-def render_readout(rows, cfg, win, cached):
-    """Emit the /accounts chat readout as finished markdown — the SINGLE renderer.
+# ---- narrow (board) presentation ---------------------------------------------------------------
+# The SessionStart board's width budget, and the reason it is not the readout's ~100. The board
+# renders INSIDE the TUI frame (`⎿ SessionStart:startup says: …`), where a row wider than the pane
+# wraps mid-token — measured as "unreadable soup" in §2.7 of the plan. A wrapped row is strictly
+# worse than a narrower one: it costs the same vertical space AND loses the column alignment that
+# makes a table readable at a glance. 76 leaves margin for the TUI's own left gutter at the
+# 80-column floor.
+NARROW_W = 76
+# Column widths, as constants rather than literals in three places: the header, the rows and the
+# test all have to agree, and a header that disagrees with its rows is the classic silent drift.
+_NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 6
+
+
+def _disp_w(s):
+    """Display CELLS, not characters — the one measure the width budget can be stated in.
+
+    `len()` is wrong for exactly the thing this budget exists to prevent: `🚨` (which the
+    unauthorized-spend note carries) is ONE character and TWO cells, so a line that passes a
+    len()-based check can still wrap. Ambiguous-width characters are counted as 1, which is what
+    a Western terminal renders them as — `➤`, `↻`, `—` and the lane superscripts are all in that
+    class, so the table rows measure identically either way and only prose with emoji differs.
+    """
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+
+
+def _demark(s):
+    """Markdown → plain text, at the PRESENTATION edge.
+
+    The notes are authored once and read on both surfaces. In a terminal `**bold**` and
+    `backticks` are literal noise rather than emphasis, but stripping them here — instead of
+    keeping a second, terminal-flavoured copy of every note string — is what preserves the
+    single-renderer rule: there is still exactly one place that decides what a note SAYS.
+    """
+    return s.replace("**", "").replace("`", "")
+
+
+def _clip(s, n):
+    """Truncate to n cells, marking the truncation. A silently-cut account name is a different
+    account name; `next-quaternar…` at least says a name was shortened."""
+    if _disp_w(s) <= n:
+        return s
+    out = ""
+    for ch in s:
+        if _disp_w(out + ch) > n - 1:
+            break
+        out += ch
+    return out + "…"
+
+
+def _wrap_narrow(s, first="", cont="   ", width=NARROW_W):
+    """Wrap one prose line to the budget, VERIFIED in cells.
+
+    textwrap measures in characters, so on a line carrying a wide glyph its output can still
+    breach the budget. Rather than reimplement wrapping, wrap at a candidate width and check the
+    real measure, narrowing until it holds — the check is the contract, the width is just a knob.
+    """
+    w = width
+    while w > 24:
+        lines = textwrap.wrap(s, width=w, initial_indent=first, subsequent_indent=cont,
+                              break_long_words=False, break_on_hyphens=False) or [first]
+        if all(_disp_w(ln) <= width for ln in lines):
+            return lines
+        w -= 4
+    return [_clip(first + s, width)]
+
+
+def render_readout(rows, cfg, win, cached, narrow=False):
+    """Print the readout. See readout_lines — this is the thin stdout wrapper."""
+    print("\n".join(readout_lines(rows, cfg, win, cached, narrow)))
+
+
+def readout_lines(rows, cfg, win, cached, narrow=False):
+    """Build the /accounts readout as finished lines — the SINGLE renderer, in TWO presentations.
 
     Why this exists: the readout used to be ~200 lines of prose in commands/accounts.md
     instructing the model to rebuild this table by hand from --json on every invocation —
@@ -2590,6 +2715,14 @@ def render_readout(rows, cfg, win, cached):
     them drifting. Prose cannot be tested; this can. The doc keeps what genuinely needs
     judgment — how to INTERPRET a stale row, an exclusion, a cliff — and stops restating
     what the code already knows.
+
+    `narrow=True` is the ≤76-col board presentation (W3.6), and it is a MODE rather than a second
+    function for that same reason. Every fact below — which row the desk picked, which percent
+    carries the `*` inherited-reading suffix, which bucket has rolled, what the desk's clause
+    says — is computed exactly once and then laid out one of two ways. A hand-built second table
+    would re-derive them, and the two would drift the first time a format changed: that is the
+    history this function was extracted from, and a board is a worse place to discover it than a
+    chat readout, because nobody reads a startup banner adversarially.
     """
     warn_h = float(cfg.get("login_warn_h", 72.0))
     s_cut = cfg["router"]["S_CUT"] * 100
@@ -2615,9 +2748,23 @@ def render_readout(rows, cfg, win, cached):
             return "—"
         return f"{v:.0f}%" + ("*" if r.get("stale_quota") or r.get("error") else "")
 
-    out = ["| account | live | 5h used | 5h resets | weekly used | Fable used "
-           "| weekly resets | login expires |",
-           "|---|---|---|---|---|---|---|---|"]
+    if narrow:
+        # THE BOARD STATES ITS OWN AGE, on line 1, before any number it is about to print.
+        # `cached`/`*` already say "this row is inherited"; neither says how old the sweep is,
+        # and a board is read at a glance by someone who did not ask for it — the one reading
+        # posture where an unlabelled stale number is most likely to be believed. The hook adds
+        # the second axis (how old the pre-rendered FILE is); this is the first (how old the
+        # QUOTA reading is), and they are genuinely different failures.
+        age = _quota_age_s(cfg)
+        out = ["Claude Max accounts · " + ("cached" if cached else "live")
+               + (f" {age}s" if age is not None else "")
+               + " · " + datetime.now().strftime("%a %H:%M"),
+               f"{'':<{_NW_MARK}} {'account':<{_NW_NAME}} {'5h':>{_NW_PCT}} {'wk':>{_NW_PCT}} "
+               f"{'Fbl':>{_NW_PCT}}  {'wk ↻':<{_NW_WKR}} login"]
+    else:
+        out = ["| account | live | 5h used | 5h resets | weekly used | Fable used "
+               "| weekly resets | login expires |",
+               "|---|---|---|---|---|---|---|---|"]
     notes, footnotes = [], []
     for r in rows:
         acct, a = r["acct"], r.get("auth")
@@ -2660,11 +2807,30 @@ def render_readout(rows, cfg, win, cached):
             if lxh is not None and lxh <= warn_h and login != "—":
                 login = f"⚠ **{login}**"
 
-        out.append("| " + " | ".join([
-            name, str(r.get("k", 0)), pctc(r, "session_pct"),
-            _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
-            pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
-            _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
+        # ---- the row: ONE set of facts, laid out for the surface that asked for it.
+        # Only the LAYOUT branches here. Every value — the marks, the `*` suffixes, the em dash
+        # rules, the warn threshold — was decided above, once, for both.
+        if narrow:
+            # Narrow drops `live` (a k count is not what a startup glance is for), and renders
+            # both time columns as COUNTDOWNS rather than `absolute (in relative)` pairs: the
+            # wide cell is ~20 cells and a board has ~14 to give it. The countdown is the half a
+            # reader acts on; the absolute stamp stays one `claude-accounts` away.
+            login_n = "⊘ REQ" if a == "login-required" else (
+                fmt_h(lxh) if lxh is not None and lxh >= 0 else "—")
+            if a != "login-required" and lxh is not None and 0 <= lxh <= warn_h:
+                login_n = "⚠ " + login_n
+            nm = _clip(acct + (" ←" if r.get("is_self") else ""), _NW_NAME)
+            wk_n = fmt_h(r.get("weekly_reset_h")) if r.get("weekly_reset_h") is not None else "—"
+            out.append(
+                f"{marks.strip():<{_NW_MARK}} {nm:<{_NW_NAME}} "
+                f"{pctc(r, 'session_pct'):>{_NW_PCT}} {pctc(r, 'weekly_pct'):>{_NW_PCT}} "
+                f"{pctc(r, 'fable_pct'):>{_NW_PCT}}  {wk_n:<{_NW_WKR}} {login_n}".rstrip())
+        else:
+            out.append("| " + " | ".join([
+                name, str(r.get("k", 0)), pctc(r, "session_pct"),
+                _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
+                pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
+                _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
 
         # ---- flags: bullets, never extra columns, and enumerated by SOURCE not by literal
         if r.get("stale_quota") or r.get("error"):
@@ -2721,10 +2887,11 @@ def render_readout(rows, cfg, win, cached):
                          + f"`{r.get('launcher') or '?'}` → `/login`"
                          + (f" · {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
 
-    for n in notes:
-        out.append("- " + n)
-    for n in footnotes:
-        out.append("- " + n)
+    for n in notes + footnotes:
+        # Same note text, both surfaces. Markdown is a list item in chat and plain wrapped prose
+        # on the board; the SENTENCE is identical, which is the property that matters — an
+        # operator who reads the board and then runs /accounts must not meet two different claims.
+        out.extend(_wrap_narrow(_demark(n)) if narrow else ["- " + n])
 
     # ---- footer: the router's own answer, never a re-rank of score_*
     out.append("")
@@ -2733,28 +2900,47 @@ def render_readout(rows, cfg, win, cached):
     # a command. general/fable keep their own line, byte-identical, because they answer a different
     # question (what handoff-fire and the frontier lane will do) and are consumed programmatically.
     if rank_i:
-        out.append(f"➤ desk (bare `claude`) → **{pick_i}** — earliest weekly reset among "
-                   f"5h-safe accounts · {desk_why(rank_i[0][1], cfg)}")
+        # W3.6 REQUIRES the board carry this line: it is the only thing on the surface that says
+        # what the next bare `claude` will actually DO, which is the question a startup banner is
+        # read to answer. Narrow puts the clause on its own indented line rather than truncating
+        # it — the clause is the desk lane's reasoning, and a half-clause reads as a wrong one.
+        if narrow:
+            out.append(f"➤ desk (bare claude) → {pick_i}")
+            out.extend(_wrap_narrow(desk_why(rank_i[0][1], cfg), first="   "))
+        else:
+            out.append(f"➤ desk (bare `claude`) → **{pick_i}** — earliest weekly reset among "
+                       f"5h-safe accounts · {desk_why(rank_i[0][1], cfg)}")
     else:
         # ABSTENTION IS AN ANSWER: the desk lane never yields the login-cliff term, so it can
         # refuse where general routes — and the launcher then falls back to its PINNED account.
         # Printed as "none", never omitted: a missing line reads as "not computed".
-        out.append("➤ desk (bare `claude`) → **none** — no account routable; "
-                   "the launcher falls back to its pinned account")
-    out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
+        if narrow:
+            out.extend(_wrap_narrow("desk (bare claude) → none — no account routable; the "
+                                    "launcher falls back to its pinned account", first="➤ "))
+        else:
+            out.append("➤ desk (bare `claude`) → **none** — no account routable; "
+                       "the launcher falls back to its pinned account")
+    if narrow:
+        out.append(f"  general → {pick_g or 'none'} · fable → {pick_f or 'none'}")
+    else:
+        out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     pl = pace_line(rows)
     if pl:
-        out.append(pl)
+        out.extend(_wrap_narrow(_demark(pl)) if narrow else [pl])
     if win.get("permanent"):
         # permanent means NO expiry — never quote a countdown off the sentinel `end` date
-        out.append("Fable window: **permanent** (no expiry).")
+        wl = "Fable window: **permanent** (no expiry)."
     elif win.get("active"):
-        out.append(f"Fable window: open through {win.get('end')}.")
+        wl = f"Fable window: open through {win.get('end')}."
     else:
-        out.append("Fable window: **inactive** — router excluding Fable.")
-    if cached:
+        wl = "Fable window: **inactive** — router excluding Fable."
+    out.extend(_wrap_narrow(_demark(wl)) if narrow else [wl])
+    # The narrow header already carries the cache age in seconds, which is strictly more than
+    # this line says — repeating the TTL under it would spend two of the board's scarce rows
+    # restating a bound the reader can already see the actual value of.
+    if cached and not narrow:
         out.append(f"_Cache ≤{cfg.get('cache_ttl_s', 90)}s old; `--fresh` forces a live sweep._")
-    print("\n".join(out))
+    return out
 
 
 def _iso_utc(iso):
@@ -3473,11 +3659,32 @@ def main():
         # caller whenever any row is BAD_AUTH, so a no-heal producer would poison the cache for
         # every other consumer exactly on the day one account is logged out — the day it matters.
         t0 = time.time()
-        rows, _wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,
-                                                max_age=max_age)
+        rows, wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,
+                                               max_age=max_age)
+        # ---- ALSO the board producer (W3.6), and a FLAG on this job rather than a new script for
+        # the deployment reason the block above already gives: ~/.claude/bin/claude-accounts is a
+        # symlink into the checkout, so extending this verb is an EDIT that rides the link and goes
+        # live on the trunk fast-forward, while a new scripts/*.sh is an ADD with no symlink —
+        # absent from every path the box can reach, so the plist would exec nothing forever.
+        #
+        # And it must be produced HERE rather than read on demand, because `--readout` measured
+        # 5.33s against a 5s hook timeout (§2.7): a SessionStart hook that called this program
+        # would recreate the very latency bug W0 just removed. The hook is a file read; this job,
+        # already running every 60s for the cache, is where the 5s can be afforded.
+        #
+        # mark_self is deliberately NOT applied. It resolves "← you" from the CURRENT process's
+        # config dir — which for a launchd producer is launchd's, and for the readers is four
+        # different accounts. A shared artifact cannot carry a per-reader fact, and a wrong one
+        # here would point the arrow at somebody else's account.
+        refresh_login_countdown(rows)
+        apply_assignments(rows, cfg)
+        apply_burn(rows, cfg)
+        board = write_board(cfg, readout_lines(rows, cfg, win_from_json(wj), was_cached,
+                                               narrow=True))
         age = _quota_age_s(cfg)
         print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
               f"age_s={age if age is not None else '-'} "
+              f"board={board or 'FAILED'} "
               f"took_ms={int((time.time() - t0) * 1000)}")
         return
 
@@ -3753,12 +3960,17 @@ def main():
         return
 
     if "--readout" in args:
-        render_readout(rows, cfg, win, cached)
+        # `--narrow` is a MODE on this renderer (W3.6), not a second table. Absent, every byte of
+        # this surface is what it was.
+        narrow = "--narrow" in args
+        render_readout(rows, cfg, win, cached, narrow)
         # APPENDED, never interleaved: the Claude table and its router footer render byte-identical
         # to before, then the provider section follows as its own block. An empty or unreadable
         # registry appends nothing, so the canonical readout degrades to exactly its old output.
         # `--no-agents` exists for a caller that wants the historical readout verbatim.
-        if "--no-agents" not in args:
+        # Suppressed under --narrow: render_providers builds to its own ~82-col budget, so
+        # appending it would breach the board's width on a surface that cannot scroll sideways.
+        if "--no-agents" not in args and not narrow:
             lines = render_providers([probe_provider(p) for p in load_providers()])
             if lines:
                 print("\n".join(lines))

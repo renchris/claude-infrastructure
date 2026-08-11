@@ -389,6 +389,53 @@ board therefore needs a **narrow (≤76 col) variant**, not the chat table.
    ⚠️ `.claude-next` (**account 1, the default**) has a **forked real `hooks/` dir** (53 files vs 75)
    — the hook file itself will not appear there via the mirror; it needs its own link/install pass.
 
+#### W3b — OUTCOME (2026-08-11, dispatched session) — items 6-7 DONE, wiring STAGED as `0011`
+
+| Item | State | Evidence |
+|---|---|---|
+| 6 narrow renderer | **DONE** | `--readout --narrow`, a MODE on `render_readout` (now `readout_lines` + a print wrapper). Max **76 cells over 22 lines, 0 breaches**, on a 61-char account name. The wide `--readout` is **byte-identical to `origin/main`** (diffed, not asserted). |
+| 6 board hook | **DONE** | `hooks/accounts-board.sh`, top-level `systemMessage`, **~65 ms** (two `jq` forks) against a 5 s timeout. Producer is `--keepwarm`, **+3 ms** on a served cache. |
+| 7 wiring | **STAGED** `migrations/0011-accounts-board-wiring.sh` (c10) + `docs/activation/pending-activation/38-accounts-board-activate.sh` | verify is falsifiable — it reads 1 now, 0 after activation. |
+| tests | **DONE** | `tests/accounts-board.bats` 21/21, incl. two vacuity controls. |
+
+**Learnings that outlived the diff:**
+
+- 🚨 **W3.7's `.claude-next` warning is a RED HERRING for the hook FILE, and re-measuring is what
+  found it.** The plan says the new hook "will not appear there via the mirror … needs its own
+  link/install pass". Measured at implementation: **all 79 hook commands across all five
+  `settings.json` invoke the literal path `~/.claude/hooks/<name>`; ZERO reference a per-account
+  `hooks/` dir.** So the forked `hooks/` dir (53 files vs 75) does not affect reachability — the
+  file exists at `~/.claude/hooks/accounts-board.sh` and a `.claude-next` session runs that same
+  file. What `.claude-next` genuinely needs its own pass for is its **`settings.json`** (74 hook
+  entries vs 79 — the divergence `0009-claude-next-guardrail-parity` records, still staged). The
+  five-inodes fact was confirmed exactly as written: `452849547 · 452849554 · 464207462 ·
+  452849551 · 453104257`. **Generalisable: "it is forked" names a divergence, not its blast
+  radius — ask what actually dereferences the forked thing.**
+- **Staleness needed TWO axes, and they are different failures.** The board's own header carries
+  how old the QUOTA SWEEP was when it rendered; the hook carries how old the FILE is. A fresh file
+  can hold stale quota, and a stale file can hold quota that was fresh when written — neither
+  answers the other. The hook also needed a **hard band** (default 3600 s) that WITHHOLDS the
+  numbers rather than labelling them: everything on the board is a percentage of a window that
+  rolls, the 5h one every five hours, so past an hour "labelled but shown" is still a figure a
+  human acts on.
+- **Two of this suite's own cases were vacuous in first draft, and both would have shipped green.**
+  (1) `{"source":"startup"}` at the head of a `bash -c` string is parsed by bash as a **brace
+  group**, so five cases fed the hook *empty stdin* and silently tested the no-payload path while
+  claiming to test `source`. They passed. (2) The "long account name" fixture was 20 chars — which
+  overruns its 13-cell column by 7 and takes a ~56-cell row to ~63, still **inside** the 76 budget.
+  The width case would have passed with the truncation deleted. Fixed to 61 chars and pinned by a
+  mutant (test 21) that removes `_clip` and requires the breach. **A fixture has to be sized to the
+  budget it is probing, not merely to the adjective in its name.**
+- **The `--keepwarm` plist was ALREADY content-drifted** (repo ahead of live — a sibling's comment
+  update pending re-install), so documenting the board's producer in it added no new operator step.
+  Checked before editing precisely because a comment-only change to a parity-linted plist otherwise
+  files a spurious "reinstalling would CHANGE live behaviour" step. `launchd/staged/` **is** in
+  `launchd-parity-lint.sh`'s scope (`:72`) and the comparison is on content.
+- **`mark_self` is deliberately NOT applied by the producer.** It resolves "← you" from the calling
+  process's config dir — launchd's for the producer, and four different accounts for the readers.
+  A shared artifact cannot carry a per-reader fact; a wrong arrow would point at someone else's
+  account.
+
 ---
 
 ## 3b. Wave outcomes (2026-08-11)
