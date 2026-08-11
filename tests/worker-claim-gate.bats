@@ -459,3 +459,42 @@ wclaim_stub_verdict() { # $1=verdict line → points the gate's ledger seam at a
   grep -q 'noop-live-worktree' "$REPO/bin/cc-backlog"
   grep -q 'noop-live-worktree' "$REPO/hooks/session-register.sh"
 }
+
+# ── the gate must see the worktree from a NESTED cwd ─────────────────────────────
+#
+# Measured 2026-08-10: item derivation read only the FINAL path component, so
+# `wt-<id>` resolved to its item while `wt-<id>/src` resolved to nothing and took the
+# NOT-A-WORKER return — admit, no record, no ledger consult. Every duplicate-worker and
+# live-incumbent refusal was therefore bypassed for any worker that cd'd into a
+# subdirectory, which is the normal case: workers edit under src/, docs/, tests/.
+# The pre-existing tests all used the worktree ROOT as cwd, so they stayed green.
+
+@test "nested cwd inside a dispatch worktree still resolves the item" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/tmp/x/wt-aaaaaaaaaaaa/src"
+  [ "$output" = "aaaaaaaaaaaa" ]
+}
+
+@test "deeply nested cwd still resolves the item" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/tmp/x/wt-aaaaaaaaaaaa/src/a/b/c"
+  [ "$output" = "aaaaaaaaaaaa" ]
+}
+
+@test "the worktree ROOT still resolves (no regression)" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/tmp/x/wt-aaaaaaaaaaaa"
+  [ "$output" = "aaaaaaaaaaaa" ]
+}
+
+@test "a non-id worktree name stays out of the population even when nested" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/tmp/x/wt-pool-7/src"
+  [ "$output" = "" ]
+}
+
+@test "an UPPERCASE id is not a dispatch worktree, nested or not" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/tmp/x/wt-AAAAAAAAAAAA/src"
+  [ "$output" = "" ]
+}
+
+@test "an ordinary repo path is never in the population" {
+  run bash -c '. "$1"; cc_worker_claim_admit probe "$2" edit >/dev/null 2>&1; cc_worker_claim_item' _ "$LIB" "/Users/x/Development/claude-infrastructure/scripts"
+  [ "$output" = "" ]
+}
