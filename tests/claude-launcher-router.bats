@@ -131,7 +131,7 @@ runlauncher() {
   mkrouter next4 0
   out="$(CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
       claude() { : }; source '$LIB'; claude >/dev/null; print \"note=\$_CC_ROUTE_NOTE\"" 2>/dev/null)"
-  [[ "$out" == *"note=routed → next4"* ]]
+  [[ "$out" == *"note=routed → next4"* ]] || false
 
   mkrouter none 3
   out="$(CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
@@ -164,7 +164,7 @@ runlauncher() {
       source '$mutant'
       claude" 2>/dev/null)"
   # The mutant ROUTES on a failed router call; the real lib must not.
-  [[ "$out" == *"cfg=$HOME/.claude-quaternary"* ]]
+  [[ "$out" == *"cfg=$HOME/.claude-quaternary"* ]] || false
   real="$(runlauncher "claude")"
   [[ "$real" == *"cfg=unset"* ]]
 }
