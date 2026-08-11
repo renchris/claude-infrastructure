@@ -316,7 +316,15 @@ handle() { # <row-json> → prints outcome lines
       # THE W3 SEAM. A refusal is recorded as an artifact with everything the routing loop will
       # need, the originator is woken WITH the failure, and custody stays OPEN — an un-landed result
       # is precisely the state custody exists to keep from reading as done.
-      { printf 'id=%s\nbranch=%s\nrc=%s\nat=%s\n--\n' "$id" "$branch" "$land_rc" "$(now)"
+      # 🚨 `seen_sha=` IS THE SUBJECT OF THE VERDICT, and without it a refusal cannot be dated
+      # against the branch. A land takes minutes; a VM answering a routed refusal pushes in about
+      # one. Measured 2026-08-11 on the first W3 round trip: this land fetched at 20:44 (branch at
+      # bc46a12), the VM's fix landed on origin at 20:46:17 (e6c3569), and the gate reported the
+      # OLD tree's lint at 20:51:21. The refusal is true about a tree that no longer exists, and
+      # W3's router would have spent a cycle telling the VM to fix what it had already fixed.
+      # Recording which push the gate actually judged makes supersession decidable in one
+      # comparison, and it costs a variable that is already in scope.
+      { printf 'id=%s\nbranch=%s\nrc=%s\nat=%s\nseen_sha=%s\n--\n' "$id" "$branch" "$land_rc" "$(now)" "$seen_sha"
         printf '%s\n' "$land_out"; } >"$STATE/$id.land-refused" 2>/dev/null
       say "✗ $id — the land REFUSED (exit $land_rc). Recorded at $STATE/$id.land-refused; custody stays OPEN."
       wake "$nb" "HANDOFF-PING cloud/$id: LAND REFUSED (exit $land_rc) on $branch — the work is pushed but NOT on trunk. Refusal artifact: $STATE/$id.land-refused · session: $url"

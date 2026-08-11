@@ -145,7 +145,7 @@ ledger() { # <id> <outcome> <detail-json-object>
 # ── the artifact reader ──────────────────────────────────────────────────────────────────────────
 # W2's format is a KV header, a bare `--`, then the land's whole combined output. Read with sed
 # rather than sourcing it: the body is arbitrary gate text, quotes and backticks included.
-A_ID="" A_BRANCH="" A_RC="" A_AT="" A_BODY="" A_KEY=""
+A_ID="" A_BRANCH="" A_RC="" A_AT="" A_SEEN="" A_BODY="" A_KEY=""
 read_artifact() { # <file> → 0 ok · 1 unreadable
   local f="$1"
   [ -f "$f" ] || return 1
@@ -153,6 +153,7 @@ read_artifact() { # <file> → 0 ok · 1 unreadable
   A_BRANCH="$(sed -n 's/^branch=//p' "$f" | head -1)"
   A_RC="$(sed -n 's/^rc=//p' "$f" | head -1)"
   A_AT="$(sed -n 's/^at=//p' "$f" | head -1)"
+  A_SEEN="$(sed -n 's/^seen_sha=//p' "$f" | head -1)"
   A_BODY="$(sed -n '/^--$/,$p' "$f" | sed '1d')"
   case "$A_RC" in ''|*[!0-9-]*) A_RC="?" ;; esac
   case "$A_AT" in ''|*[!0-9]*) A_AT="0" ;; esac
@@ -326,17 +327,66 @@ send_home() { # <notify-back> <message> → 0 sent · 1 not · 3 no target
   return 0
 }
 
+# ── is the verdict about a tree the VM has already replaced? ─────────────────────────────────────
+# 🚨 A LAND TAKES MINUTES; A VM ANSWERING A ROUTED REFUSAL PUSHES IN ABOUT ONE. So the gate can be
+# judging tree N while the fix for tree N is already on origin, and the refusal it files is TRUE,
+# CURRENT-LOOKING AND ABOUT NOTHING. Measured on the first W3 round trip, exactly once and
+# immediately: the second land fetched at 20:44:xx with the branch at bc46a12, the VM's fix reached
+# origin at 20:46:17 as e6c3569, and the gate reported bc46a12's lint at 20:51:21 — naming the same
+# file, with the same remedy, which the VM had already applied. Routing that spends a cycle of a
+# two-cycle bound to tell a machine to redo work it has done, and the second identical message is
+# how a loop teaches its subject that the loop is noise.
+#
+# The comparison is exact because cloud-return now records WHICH PUSH the gate judged (`seen_sha=`).
+# A mismatch is not a refusal to act — it is a refusal to act TWICE: the next land pass gates the
+# new tree and either succeeds or files a verdict that is actually about it.
+#
+# An artifact with no `seen_sha=` (written before that field existed) is routed rather than held.
+# The field's absence is not evidence of supersession, and the cycle bound still protects the VM
+# from an endless loop — failing the other way would make every legacy refusal permanently unsendable.
+superseded() { # <id> → 0 the refusal is about a superseded push
+  local id="$1" cur
+  [ -n "$A_SEEN" ] || return 1
+  cur="$(sed -n 's/^sha=//p' "$STATE/$id.seen" 2>/dev/null | head -1)"
+  [ -n "$cur" ] || return 1
+  [ "$cur" = "$A_SEEN" ] && return 1
+  return 0
+}
+
 # ── has the branch since landed? ─────────────────────────────────────────────────────────────────
 # A refusal whose work is now on trunk is STALE, and routing it would hand the VM a job that is
 # already done. BY CONTENT, never by ancestry: the land RE-AUTHORS, so the branch ref is not an
 # ancestor of the trunk after a perfect land and `merge-base --is-ancestor` reads NOT-LANDED over
 # one (the §1 rule this whole subsystem is organised around).
-stale_resolved() { # <id> <paths-csv> → 0 all present on trunk
-  local id="$1" paths="$2" repo trunk rest p
-  [ -n "$paths" ] || return 1
+stale_resolved() { # <id> <paths-csv> → 0 the work is on trunk
+  local id="$1" paths="$2" repo trunk branch rest p
   repo="$(sed -n 's/^repo=//p' "$STATE/$id.decl" 2>/dev/null | head -1)"
   trunk="$(sed -n 's/^trunk=//p' "$STATE/$id.decl" 2>/dev/null | head -1)"; [ -n "$trunk" ] || trunk="origin/main"
   [ -n "$repo" ] && [ -d "$repo" ] || return 1
+
+  # ARM 1 — THE LOCAL RE-AUTHORED REF. The content check below needs a path set, and the path set
+  # is exactly what is UNAVAILABLE in the case this arm exists for: `fill-paths` derives from the
+  # branch's range against the trunk, which is EMPTY once the branch has landed, and a refused land
+  # never wrote `paths=` into the declaration. So the commonest stale refusal — a losing concurrent
+  # land whose sibling already put the work on trunk — was invisible to the guard. Measured on the
+  # first W3 round trip: two lands ran on one branch, the one that fetched before the VM's fix went
+  # RED and filed a refusal, the one that fetched after landed it.
+  #
+  # ⚠️ THIS IS NOT THE FORBIDDEN CHECK, and the distinction is exact. §1's rule is that the sha the
+  # VM PUSHED never lands, because cloud-reconcile re-authors — so `--is-ancestor <pushed-sha>` reads
+  # NOT-LANDED over a perfect land. `refs/heads/<branch>` in the declared repo is the OTHER object:
+  # the re-authored range the lander built and pushed. It is the same ref `cc-cloud fill-paths` uses
+  # to name its own already-landed cause. Ancestry on THAT is a fact about what went to trunk.
+  branch="$(sed -n 's/^branch=//p' "$STATE/$id.decl" 2>/dev/null | head -1)"
+  if [ -n "$branch" ] && "$GIT_BIN" -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; then
+    if "$GIT_BIN" -C "$repo" merge-base --is-ancestor "refs/heads/$branch" "$trunk" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  # ARM 2 — BY CONTENT, when a path set exists. The stronger statement of the two, and the only one
+  # available for a branch whose local ref has been pruned.
+  [ -n "$paths" ] || return 1
   rest="$paths"
   while [ -n "$rest" ]; do
     case "$rest" in *,*) p="${rest%%,*}"; rest="${rest#*,}" ;; *) p="$rest"; rest="" ;; esac
@@ -405,6 +455,13 @@ handle() { # <session-id>
     say "✗ $id — REFUSING TO ROUTE: $ARM_WHY"
     record_route "$id" "$A_KEY" misattributed none "$(jq -cn --arg w "$ARM_WHY" '{why:$w}')"
     ledger "$id" misattributed "$(jq -cn --arg w "$ARM_WHY" '{why:$w}')"
+    return 0
+  fi
+
+  if superseded "$id"; then
+    say "· $id — SUPERSEDED: this verdict judged push $A_SEEN and the VM has pushed since, so it is about a tree that no longer exists. NOT routed, no cycle spent — the next land pass judges the new one."
+    record_route "$id" "$A_KEY" superseded none "$(jq -cn --arg s "$A_SEEN" '{judged_push:$s, why:"the VM pushed after the land that produced this verdict began"}')"
+    ledger "$id" superseded "$(jq -cn --arg s "$A_SEEN" --arg b "$A_BRANCH" '{judged_push:$s, branch:$b}')"
     return 0
   fi
 
@@ -504,6 +561,12 @@ if [ "$MODE" = classify ]; then
   say "rc=$A_RC"
   say "paths=${VM_PATHS:-<none derived>}"
   say "match=${ARM_MATCH:-<none>}"
+  # The two ROUTING guards, reported alongside the classification because they are not part of it
+  # and a reader would otherwise be misled. `arm=vm` says what KIND of refusal this is; either of
+  # these says it will not be sent anyway — a `--classify` that printed `arm=vm` over a branch
+  # already on trunk reads as "this is about to be routed", which is the opposite of what happens.
+  superseded "$A_ID" && say "superseded=yes (it judged push $A_SEEN; the VM has pushed since)" || say "superseded=no"
+  stale_resolved "$A_ID" "$VM_PATHS" && say "stale=yes (the work is already on the trunk)" || say "stale=no"
   say "why=$ARM_WHY"
   exit 0
 fi

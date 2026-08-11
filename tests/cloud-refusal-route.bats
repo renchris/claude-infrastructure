@@ -88,9 +88,15 @@ decl() { # [paths] [repo] [trunk]
 }
 
 # The REAL shape cloud-return writes: KV header, a bare `--`, then the land's combined output.
+# `seen_sha=` names WHICH PUSH the gate judged; SEEN_SHA/SIDE_SHA below let a test put the sidecar
+# ahead of it, which is the supersession race.
 artifact() { # <rc> <at> <body>
-  { printf 'id=%s\nbranch=%s\nrc=%s\nat=%s\n--\n' "$ID" "$BRANCH" "$1" "$2"
+  { printf 'id=%s\nbranch=%s\nrc=%s\nat=%s\n' "$ID" "$BRANCH" "$1" "$2"
+    [ -n "${SEEN_SHA:-}" ] && printf 'seen_sha=%s\n' "$SEEN_SHA"
+    printf -- '--\n'
     printf '%s\n' "$3"; } >"$CC_CLOUD_STATE/$ID.land-refused"
+  [ -n "${SIDE_SHA:-}" ] && printf 'sha=%s\nsince=1786479000\n' "$SIDE_SHA" >"$CC_CLOUD_STATE/$ID.seen"
+  return 0
 }
 
 # The lander's preamble and tail, TRANSCRIBED FROM THE FIRST REAL ARTIFACT this rail ever produced
@@ -494,6 +500,59 @@ $(desk_tail 6)"
   [ "$(says_n)" -eq 2 ]
 }
 
+# ═══ 7b. SUPERSESSION — a verdict about a tree the VM has already replaced ═══════════════════════
+
+@test "a refusal that judged an OLDER push is not routed — the VM already answered it" {
+  # THE THIRD LIVE DEFECT, and it fired on the very first round trip. A land takes minutes; a VM
+  # answering a routed refusal pushes in about one. The second land fetched the branch at bc46a12,
+  # the VM's fix reached origin as e6c3569 two minutes later, and the gate reported bc46a12's lint
+  # five minutes after THAT — naming the same file with the same remedy the VM had already applied.
+  # Routing it spends a cycle telling a machine to redo work it has done.
+  decl "tests/probe.bats"
+  SEEN_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa SIDE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    artifact 70 1786479000 "$(hermeticity_red probe.bats)"
+  run "$SUT" --id "$ID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SUPERSEDED"* ]]
+  [ "$(says_n)" -eq 0 ]
+  [ "$(pings_n)" -eq 0 ]
+  # and it spends NO cycle — a race must not eat the budget a real refusal needs
+  run bash -c "jq -s '[.[]|select(.routed==\"vm\")]|length' '$CC_CLOUD_STATE/$ID.refusal-route'"
+  [ "$output" = "0" ]
+}
+
+@test "CONTROL: a refusal that judged the CURRENT push routes normally" {
+  decl "tests/probe.bats"
+  SEEN_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa SIDE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    artifact 70 1786479000 "$(hermeticity_red probe.bats)"
+  run "$SUT" --id "$ID"
+  [[ "$output" != *"SUPERSEDED"* ]]
+  [[ "$output" == *"arm=vm"* ]]
+  [ "$(says_n)" -eq 1 ]
+}
+
+@test "CONTROL: an artifact with NO seen_sha is routed, not held — absence is not supersession" {
+  # The field is new. Failing the other way would make every pre-existing refusal permanently
+  # unsendable, and the cycle bound already protects the VM from an endless loop.
+  decl "tests/probe.bats"
+  SIDE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb artifact 70 1786479000 "$(hermeticity_red probe.bats)"
+  run "$SUT" --id "$ID"
+  [[ "$output" != *"SUPERSEDED"* ]]
+  [ "$(says_n)" -eq 1 ]
+}
+
+@test "cloud-return RECORDS which push it judged — the field this arm decides on" {
+  # A guard whose input its producer never writes is decoration. Anchored on the write itself.
+  local ret="${BATS_TEST_DIRNAME}/../scripts/cloud-return.sh"
+  [ -f "$ret" ] || skip "cloud-return.sh absent"
+  grep -q 'seen_sha=%s' "$ret"
+  # …and in the artifact it writes, not somewhere else in the file.
+  grep -q 'land-refused' "$ret"
+  local w
+  w="$(grep -n 'seen_sha=%s' "$ret" | head -1 | cut -d: -f1)"
+  sed -n "${w},$((w + 1))p" "$ret" | grep -q 'land-refused'
+}
+
 # ═══ 8. STALENESS — by CONTENT, because the land re-authors ══════════════════════════════════════
 
 @test "a refusal whose work has SINCE LANDED is stale and is not routed" {
@@ -510,6 +569,49 @@ $(desk_tail 6)"
   [ "$status" -eq 0 ]
   [[ "$output" == *"STALE"* ]]
   [ "$(says_n)" -eq 0 ]
+}
+
+@test "a losing concurrent land is stale even with NO path set — the local ref decides" {
+  # The case the live run produced, and the one the content arm alone is BLIND to: two lands ran on
+  # one branch, the one that fetched before the VM's fix went RED and filed a refusal, the one that
+  # fetched after landed it. `fill-paths` cannot help here — the range against the trunk is EMPTY
+  # once the branch has landed, and a REFUSED land never wrote `paths=` — so the guard had no path
+  # set to check content with and would have routed a refusal about work already on trunk.
+  REPO="$BATS_TEST_TMPDIR/repo"
+  git init -q "$REPO"
+  printf 'seed\n' >"$REPO/seed"; git -C "$REPO" add -A
+  git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m seed
+  mkdir -p "$REPO/docs" && printf 'from the vm\n' >"$REPO/docs/vm.md"; git -C "$REPO" add -A
+  git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m "re-authored vm work"
+  # the LOCAL re-authored ref, and a trunk that already contains it — a landed cloud branch
+  git -C "$REPO" branch "$BRANCH" HEAD
+  git -C "$REPO" branch trunkref HEAD
+  decl "" "$REPO" "trunkref"                       # NO path set, exactly as a refused land leaves it
+  artifact 6 1786479000 "$(hermeticity_red probe.bats)"
+  run "$SUT" --id "$ID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"STALE"* ]]
+  [ "$(says_n)" -eq 0 ]
+}
+
+@test "CONTROL: an UNLANDED local ref is not stale — ancestry must actually hold" {
+  # The other half: this arm must not become an unconditional 'stale', or the loop never routes.
+  REPO="$BATS_TEST_TMPDIR/repo"
+  git init -q "$REPO"
+  printf 'seed\n' >"$REPO/seed"; git -C "$REPO" add -A
+  git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m seed
+  git -C "$REPO" branch trunkref HEAD
+  git -C "$REPO" checkout -q -b "$BRANCH"
+  mkdir -p "$REPO/tests" && printf 'x\n' >"$REPO/tests/probe.bats"; git -C "$REPO" add -A
+  git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m "not landed"
+  git -C "$REPO" checkout -q trunkref
+  decl "" "$REPO" "trunkref"
+  export CC_FILL_PRINT="tests/probe.bats"
+  artifact 6 1786479000 "$(hermeticity_red probe.bats)"
+  run "$SUT" --id "$ID"
+  [[ "$output" != *"STALE"* ]]
+  [[ "$output" == *"arm=vm"* ]]
+  [ "$(says_n)" -eq 1 ]
 }
 
 @test "CONTROL: the same refusal with the path ABSENT from the trunk is live and DOES route" {
@@ -570,6 +672,10 @@ $(desk_tail 6)"
   [ "$status" -eq 0 ]
   [[ "$output" == *"arm=vm"* ]]
   [[ "$output" == *"match=basename:probe.bats"* ]]
+  # …and it reports the two ROUTING guards beside the classification, because `arm=vm` over a
+  # branch already on trunk otherwise reads as "this is about to be sent", which is the opposite.
+  [[ "$output" == *"superseded="* ]]
+  [[ "$output" == *"stale="* ]]
   [ "$(says_n)" -eq 0 ]
   [ ! -f "$CC_CLOUD_STATE/$ID.refusal-route" ]
 }
