@@ -1,0 +1,412 @@
+[
+  {
+    "id": "cp-01",
+    "title": "a safety denylist enumerating spellings instead of the command class",
+    "mechanism_class": "denylist enumerates its author's examples, not the equivalence class it names",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/denylist-enumerates-spellings-not-the-class.md",
+    "culprit_commit": "18676efc52c5c83b5f7c859cbf5ce19a2242ca46",
+    "pre_fix_ref": "685a572097312b60bd430724da4274688afb0270",
+    "subject_path": "hooks/validate-bash.sh",
+    "prompt_path": "briefs/cp-01.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: hooks/tests/validate-bash.test.sh, which at this ref is GREEN and actually ENCODES the defect as expected behaviour — its rm fixtures use `-rf` only, and the bare-root case is written with a trailing space, exactly the character the `/[^a-zA-Z]` branch must consume. It is also not a gate: ship-land.sh and postland-verify.sh select tests/*.bats only, so hooks/tests/*.test.sh never blocked a land. No lint targets flag-spelling or alternation-branch consistency, and no comment in the file names the gap — the comments assert the opposite.",
+    "ground_truth": [
+      {
+        "defect": "The catastrophic-rm deny searches for the single literal flag bundle `-rf`, so every equivalent spelling of the same command (`-fr`, `-Rf`, `-r -f`, `-f -r`, `-rvf`, `--recursive --force`) walks past the deny entirely.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "116",
+        "anchor": "rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]",
+        "why_it_survives_a_first_look": "The clause reads as a faithful transcription of the rule everyone knows (\"block rm -rf /\"), so the reviewer checks that the string it contains is dangerous rather than asking which other strings mean the same thing."
+      },
+      {
+        "defect": "Two branches of the same alternation answer end-of-input differently: the root branch ends `/[^a-zA-Z]`, which must CONSUME a character, so a bare `rm -rf /` at end of command never matches, while the tilde branch beside it accepts end-of-input.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "116",
+        "anchor": "rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])",
+        "why_it_survives_a_first_look": "A 200-character single-line regex is skimmed branch-by-branch for \"does this describe something dangerous\", and nobody diffs sibling branches against each other for terminator consistency."
+      },
+      {
+        "defect": "The warn clause enumerates its own narrower bundle set `-(r|rf|fr)`, which knows neither `-R` nor `--recursive` nor split flags, so `rm -Rf /etc` and `rm --recursive --force src` produce NO decision at all and are silently allowed.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "217",
+        "anchor": "grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+'",
+        "why_it_survives_a_first_look": "It looks like a deliberate widening of the deny above (it adds `fr`, which the deny lacks), so a reviewer reads it as the safety net rather than as a second, independently rotting copy of the same enumeration."
+      },
+      {
+        "defect": "The rm rule decides on raw command TEXT rather than argv, so text merely written is treated as text run: `git commit -m \"fix: guard rm -rf / properly\"` is DENIED — the guard blocks the commit that documents or repairs it — even though argv-aware machinery (`check_real_flag`/`is_true_flag`) exists directly above and is used for other rules.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "116 (check_real_flag defined 96-110)",
+        "anchor": "if echo \"$CMD\" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]",
+        "why_it_survives_a_first_look": "The file's own comments boast about quote-awareness elsewhere (the pkill clause strips quotes; the `--no-verify` clause is argv-aware), so the reviewer credits the file with a property this particular clause never had."
+      },
+      {
+        "defect": "The warn extractor captures only the FIRST target token after the flags, so in a multi-target invocation such as `rm -rf node_modules docs` a safe first argument hides every argument after it.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "217-220",
+        "anchor": "target=$(echo \"$occurrence\" | sed -E 's/^rm[[:space:]]+-(r|rf|fr)[[:space:]]+//')",
+        "why_it_survives_a_first_look": "The comment immediately above claims per-clause extraction already closed the compound-command escape hatch, so the reviewer believes the multi-target case is the bug that was already fixed here."
+      },
+      {
+        "defect": "The home-directory branch matches the literal `$HOME` only, so `rm -rf ${HOME}` — the same variable, spelled with braces — reaches no decision.",
+        "file": "hooks/validate-bash.sh",
+        "line_hint": "116",
+        "anchor": "rm[[:space:]]+-rf[[:space:]]+\\$HOME",
+        "why_it_survives_a_first_look": "The adjacent `# shellcheck disable=SC2016` comment explains at length that `$HOME` is a literal to match in text, which reads as evidence that the author thought hard about this token and settled it."
+      }
+    ]
+  },
+  {
+    "id": "cp-02",
+    "title": "an exact ok-count assertion that is a tripwire on its own suite's growth",
+    "mechanism_class": "an absolute count assertion conflates non-vacuous with exactly-this-many",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/exact-count-assertion-tripwires-its-own-subject.md",
+    "culprit_commit": "404c832a2e360b004f93113440a784bef9220ba0",
+    "pre_fix_ref": "9f25b3758a43374b260ebb283c6e17ab8233b8c4",
+    "subject_path": "tests/activation-watch.bats",
+    "prompt_path": "briefs/cp-02.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: EXECUTION. At this ref `activation-watch --selftest` renders 26 ok lines against an assertion demanding 18, so anyone who RUNS the suite sees a red immediately — the brief is text-only, so that channel is closed. The analyzer that could have flagged the and-absorbed line (scripts/bats-assert-liveness.py, selected by gate-select for any tests/*.bats change) was run against this exact pre-fix file and returns 0 findings: it classifies DEAD assertions by block position, and both defects here are semantic. No lint or comment in the file names either gap.",
+    "ground_truth": [
+      {
+        "defect": "The selftest guard asserts an EXACT ok-line count over a suite that legitimately grows, so it reds on every added check rather than on any regression — it had already been bumped 7 to 14 to 18, and at this ref the tool renders 26 ok lines.",
+        "file": "tests/activation-watch.bats",
+        "line_hint": "22",
+        "anchor": "[ \"$(printf '%s' \"$output\" | grep -c '^  ok ')\" -eq 18 ]",
+        "why_it_survives_a_first_look": "An exact count reads as the strictest possible assertion, and the reviewer credits the strictness rather than asking what the number is a function of."
+      },
+      {
+        "defect": "The test never asserts the premise its own name claims: it never compares the reporter's summary (`N passed`) against the ok lines actually rendered, so a reporter counting PASS+2 claims `36 passed` while rendering 18 ok lines and passes GREEN, and a zero-check suite is caught only by the coincidence 0 != 18.",
+        "file": "tests/activation-watch.bats",
+        "line_hint": "20-23",
+        "anchor": "run \"$H\" --selftest",
+        "why_it_survives_a_first_look": "The `! grep -q '^  FAIL'` plus the ok-count looks like both directions are covered, hiding that only the RENDERED half is ever inspected and the tool's own claimed tally is never read."
+      },
+      {
+        "defect": "The test's title hardcodes the count and states a guarantee (\"a zero-check suite must not 'pass'\") that no assertion in the body implements, so the name is both stale at this ref and a false description of the coverage.",
+        "file": "tests/activation-watch.bats",
+        "line_hint": "19",
+        "anchor": "@test \"selftest passes and runs all 18 checks (a zero-check suite must not 'pass')\" {",
+        "why_it_survives_a_first_look": "The parenthetical states the intent so persuasively that a reviewer reads it as the assertion's contract instead of checking the body against it."
+      },
+      {
+        "defect": "The `stage` helper uses the `[ A ] && B` and-absorbed shape and then unconditionally returns 0, so a failed `touch -t` is swallowed and the fixture is silently staged FRESH instead of aged.",
+        "file": "tests/activation-watch.bats",
+        "line_hint": "17",
+        "anchor": "[ -n \"${2:-}\" ] && touch -t \"$2\" \"$Q/$1\"; return 0; }",
+        "why_it_survives_a_first_look": "The `return 0` is visibly deliberate (it stops a false `[ ]` from failing setup under set -e), so the reviewer reads it as a known idiom rather than as an error-swallowing path for the touch."
+      }
+    ]
+  },
+  {
+    "id": "cp-03",
+    "title": "CLEAN — capacity-floor reporter over a live measurement store, screened and not convicted",
+    "mechanism_class": "clean control: same class of code as the defective instruments (a measurement that publishes a verdict)",
+    "source_memory_file": null,
+    "culprit_commit": null,
+    "pre_fix_ref": "a9b5b325a1de730bbb00fd93ee7debcb46045799",
+    "subject_path": "scripts/pool-floor.sh",
+    "prompt_path": "briefs/cp-03.md",
+    "has_defect": false,
+    "sibling_axis_pinned": null,
+    "clean_basis": "SCREENED AND NOT CONVICTED — the only basis that survived. An independent adversarial pass over all eight defect classes this corpus scores returned CLEAN, and it EXECUTED rather than reasoned: it ran the script against the live 12,743-row store, proved both terms of the health filter are load-bearing (neither absorbed by the other, neither defaultable to always-true — the AND rejects 1,232 rows the verdict term alone would admit), independently REIMPLEMENTED the floor computation and got the same answer, and confirmed the INSUFFICIENT-DATA arm is a real non-verdict whose success token cannot certify a floor that was never computed. It also checked the direction of the one imprecision it found and established it can only UNDER-report. Chosen to LOOK like the defective briefs — an instrument that publishes a verdict, the same class of code as cp-04 — while sharing NO subject matter with any of them (it names none of the other eight subjects).",
+    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence against live data. Eleven other candidates screened the same way were CONVICTED and dropped.",
+    "known_findings_not_scored": [
+      {
+        "finding": "the utilization store has no readability guard and rows() swallows OSError, so a PRESENT but unreadable store renders as 'Store is EMPTY'. Reproduced by the screen with chmod 000 on a copy of the real store.",
+        "why_not_scored": "It is a lookup miss rendered as absence — a scored class — but it changes no verdict, no exit code and no published number: the branch already reads INSUFFICIENT-DATA and pool_samples:0 is printed immediately above it, so the sentence is operator advice rather than a guard or a certification.",
+        "judge_instruction": "An arm that reports this has found something real. CREDIT it; do NOT score it as a false positive."
+      }
+    ],
+    "notes": "Not proven defect-free — no file in a live repo can be. A judge should adjudicate a finding here against the code rather than scoring it a false positive by assumption.",
+    "ground_truth": []
+  },
+  {
+    "id": "cp-04",
+    "title": "verdict=OK certifies a constant-layout precondition the instrument never measures",
+    "mechanism_class": "a success token attests to what was obtained, not to the premise it is read as",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/gate-must-not-key-on-its-own-signal.md",
+    "culprit_commit": "2ecf541e4434dcfe1f2420c77f252f190ca5ea5e",
+    "pre_fix_ref": "62a6d63955263ede4e21036c083311cf7064d993",
+    "subject_path": "scripts/terminal-bench.sh",
+    "prompt_path": "briefs/cp-04.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: docs/research/terminal-for-30-panes-2026-07-31.md, which at this ref states the primary defect almost VERBATIM (\"verdict=OK does not certify the precondition: the token attests that two readings and a GPU profile were obtained, nothing about layout stability\") along with the 36->19 census fall; docs/plans/TERMINAL_AGNOSTIC_L3_L4.md points at the same section; scripts/kitty-drift-run.sh already implements the analogous abort and leaks the FIX shape; tools/terminal-bench/window-census.swift documents that `windows` is the on+off TOTAL. This is the corpus's strongest sibling leak and it is entirely outside the brief. tests/terminal-bench.bats exists at this ref but asserts nothing about layout, onscreen, offscreen, drift or the verdict — it mildly CONCEALS, since its header claims to guard this instrument's silent-failure paths.",
+    "ground_truth": [
+      {
+        "defect": "`verdict=OK` is assigned on the sole condition that the interval elapsed and two readings printed, so the token certifies two readings plus a resolved GPU profile and attests nothing about the constant-layout precondition the drift row is captioned with.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "231 (inside the INTERVAL block, 215-232)",
+        "anchor": "  VERDICT=\"OK\"",
+        "why_it_survives_a_first_look": "It sits at the bottom of a block whose echo already says \"constant layout\" and whose operator prompt says \"do not create or close panes\", so the precondition reads as established rather than merely requested."
+      },
+      {
+        "defect": "The census row is parsed for fields 3/5/7 only, so the onscreen count (field 4) is never read anywhere, and nothing can distinguish a pane opening or closing underneath the run from the offscreen accumulation the instrument exists to convict.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "166 (parse), 230 (drift columns)",
+        "anchor": "      win=\"$(cut -f3 <<<\"$c\")\"; off=\"$(cut -f5 <<<\"$c\")\"; mpx=\"$(cut -f7 <<<\"$c\")\"",
+        "why_it_survives_a_first_look": "The row already carries a `windows` and an `offscreen` column, which looks complete — the missed field only matters once you know `windows` is the on+off TOTAL, documented elsewhere and not here."
+      },
+      {
+        "defect": "The hold is a single `sleep` with no observation during it, so the run is an endpoint-only comparison: a window that opens AND closes inside the interval leaves both endpoints identical while having allocated and freed its mach ports.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "216-218",
+        "anchor": "  sleep \"$INTERVAL\"",
+        "why_it_survives_a_first_look": "Two readings a known interval apart is exactly what the file header specifies as the method, so the sleep looks like the design rather than a sampling hole."
+      },
+      {
+        "defect": "A run with no window census at all still reaches `verdict=OK` — `CENSUS_OK=0` only emits a warning and the variable is never consulted again — contradicting the header's own promise that a missing census yields PARTIAL.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "173-180, 225, 231",
+        "anchor": "[ -x \"$CENSUS_BIN\" ] || CENSUS_OK=0",
+        "why_it_survives_a_first_look": "`CENSUS_OK` is computed and loudly announced, which reads as the guard being handled."
+      },
+      {
+        "defect": "The `--out` JSONL row is appended BEFORE the GPU downgrade line, so a run whose stdout prints `verdict=PARTIAL` can leave `\"verdict\":\"OK\"` in the machine-readable sink.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "244-251",
+        "anchor": "[ \"$GPU_VERDICT\" = OK ] || VERDICT=\"PARTIAL\"",
+        "why_it_survives_a_first_look": "Both statements are within six lines and the downgrade is visually adjacent to the append block, so the ordering error reads as a formatting choice; the divergence only appears when the file sink is compared against the console."
+      },
+      {
+        "defect": "The per-hour drift arithmetic divides by the REQUESTED interval rather than the actual T0->T1 elapsed, which additionally contains the sampling run and two `top -l 2` passes, so short intervals publish an inflated rate.",
+        "file": "scripts/terminal-bench.sh",
+        "line_hint": "226-227",
+        "anchor": "    awk -v a=\"$a\" -v b=\"$b\" -v s=\"$INTERVAL\" -v l=\"$label\" \\",
+        "why_it_survives_a_first_look": "`s=\"$INTERVAL\"` is literally the number the operator asked for and the sleep is exactly that long, so the divisor looks self-evidently right unless you notice the sampling work between the T0 and T1 readings."
+      }
+    ]
+  },
+  {
+    "id": "cp-05",
+    "title": "a test whose terminal assertion spans the whole repo, so another file's debt is filed under its name",
+    "mechanism_class": "assertion span exceeds its subject — a tripwire for the next improvement to a neighbour",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/assertion-span-must-equal-its-subject.md",
+    "culprit_commit": "76be791a422dba51a48f6b571060899ed596feca",
+    "pre_fix_ref": "3c123bfc26318d9ce919426472ac4e1aba3fdabc",
+    "subject_path": "tests/autonomy-sweep.bats",
+    "prompt_path": "briefs/cp-05.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: tests/scratchpad-reaper.bats around line 148, which runs the SAME repo-wide lint, deliberately does NOT assert its exit code, and carries a prose comment stating the diagnosis and the fix shape verbatim (\"the lint scans every file in the repo, so a bare [ \"$status\" -eq 0 ] made this suite fail on violations it did not create\"). A reviewer who greps the repo for reaper-horizon-lint.sh is handed the answer; a reviewer confined to this file sees nothing — it contains no reference to the sibling and no hint that the lint is repo-wide. Note the sibling reveals the DEFECT strongly but only partially the FIX, since its remedy works only because scratchpad-reaper writes a literal the lint can score.",
+    "ground_truth": [
+      {
+        "defect": "The test's terminal assertion is the exit code of a REPO-WIDE lint, so any other file's debt turns this test red and post-land files that unrelated failure under this test's title (\"the event horizon is 7 days\"), misnaming a healthy mechanism for whoever picks the item up.",
+        "file": "tests/autonomy-sweep.bats",
+        "line_hint": "217-218",
+        "anchor": "  run bash \"$REPO/scripts/reaper-horizon-lint.sh\"",
+        "why_it_survives_a_first_look": "Invoking the project's own lint at the end of a horizon test reads as belt-and-braces rigor — a reviewer scores it as extra coverage rather than as an assertion whose span is the whole repo instead of this one file."
+      },
+      {
+        "defect": "The subject is not even in the checker's population: the lint scores only LITERAL `-mmin +N` / `-mtime +N`, while the sweep writes `-mtime +\"$EVENT_TTL\"`, so the lint never emits a verdict about this script at all and the green exit code is a vacuous pass.",
+        "file": "tests/autonomy-sweep.bats",
+        "line_hint": "217 (215 is the only other horizon assertion)",
+        "anchor": "  run bash \"$REPO/scripts/reaper-horizon-lint.sh\"",
+        "why_it_survives_a_first_look": "Verifying that the checker can actually SEE the file under test requires opening a third file and knowing its scoring regexes; from inside the bats file, \"run the horizon lint, expect 0\" looks self-evidently on-topic."
+      },
+      {
+        "defect": "The only assertion about the horizon itself is a string-presence grep for the default literal, which proves the knob is MENTIONED but never that it GOVERNS any reaping — the sweep passes the value to two separate find sites, so hardcoding either one bypasses the knob while this grep stays green.",
+        "file": "tests/autonomy-sweep.bats",
+        "line_hint": "215-216",
+        "anchor": "  run bash -c \"grep -c 'CC_EVENT_TTL_DAYS:-7' '$SWEEP'\"",
+        "why_it_survives_a_first_look": "A grep for the exact default value looks like a precise pin on the constant, and the reader assumes the second half of the test covers the behavioural half."
+      },
+      {
+        "defect": "The quantitative claim in the test's own name is never computed or asserted — the lint floor appears only in a section comment as a hand-restated copy of the lint's constant, so if the lint republishes a higher floor this test's name silently becomes false and the two copies of the constant drift apart.",
+        "file": "tests/autonomy-sweep.bats",
+        "line_hint": "213-214",
+        "anchor": "# ── the horizon must outlive the reaper-horizon-lint floor (600 s sweep × 10 = 6,000 s) ────────",
+        "why_it_survives_a_first_look": "The arithmetic is written out in the comment, which reads as if it had been checked; and the adjacent lint invocation creates the impression that the floor comparison is what the lint is doing."
+      }
+    ],
+    "cross_reference_adjudicated": [
+      {
+        "names": "cc-teardown",
+        "subject_of": "cp-08",
+        "why": "an env var and a temp-dir name (CC_TEARDOWN_RECORDS_DIR); says nothing about how that tool resolves a target"
+      }
+    ]
+  },
+  {
+    "id": "cp-06",
+    "title": "a page whose success is the notifier's exit code, not the notifier's own delivery verdict",
+    "mechanism_class": "claimed outcome read in place of the checked outcome, then damped on the claim",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/claimed-outcome-vs-checked-outcome.md",
+    "culprit_commit": "4e0732ee4844054b386b8c8ce68ed43642af9b0a",
+    "pre_fix_ref": "f23af2fd0b5f7c44f19b301ab8764de93121c290",
+    "subject_path": "scripts/lead-supervisor.sh",
+    "prompt_path": "briefs/cp-06.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: bin/cc-notify's own header one file away, which documents the `verdict=`/`enqueued=` tokens and says outright that callers MUST read them — reading the callee settles the first three defects immediately; and bin/cc-announce, which already parses `verdict=` and is a working in-repo precedent for the missing parse. Both are outside the brief. The in-tree TEST evidence is an ANTI-leak: tests/lead-supervisor-page-verdict.bats does not exist at this ref (the fix adds it), and the existing suite's cc-notify stub prints nothing to stderr and exits with a settable rc — i.e. it encodes the rc-only contract as CORRECT and stays green on the defect. No lint covers the class.",
+    "ground_truth": [
+      {
+        "defect": "`send_page` decides \"page delivered\" from the notifier's EXIT CODE alone, but that notifier also exits 0 for mailbox-only / unverified / rerouted sends, so a page enqueued into a box nobody drains returns success.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "171",
+        "anchor": "  [ \"$rc\" = 0 ] && return 0",
+        "why_it_survives_a_first_look": "The line sits under a dozen lines of comment that congratulate the function for having FIXED the truthfulness bug (\"Now the rc decides\"), so it reads as the repaired code, not the defect."
+      },
+      {
+        "defect": "Both invocation branches send the notifier's stderr to /dev/null, destroying the only channel that carries the verdict token — the outcome is thrown away before any check could read it.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "166, 169",
+        "anchor": "    sup_bounded \"$SUP_NOTIFY_TIMEOUT_S\" \"$NOTIFY_BIN\" \"$PAGE_TO\" \"$msg\" >/dev/null 2>&1; rc=$?",
+        "why_it_survives_a_first_look": "`>/dev/null 2>&1` on a fire-and-forget notifier is idiomatic shell hygiene and reads as noise suppression, not as discarding a machine-parseable verdict the callee documents."
+      },
+      {
+        "defect": "The function's own contract block asserts a false invariant — that the rc IS the outcome — and then explicitly rules the rc-0-but-undelivered case out of scope, delegating it to a reroute path and a backstop that do not cover a rotted role file.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "138-149 (esp. 138, 145-147)",
+        "anchor": "# ── COMMS TRUTHFULNESS: the cc-notify RC IS the outcome; an ATTEMPT is not a send. ──",
+        "why_it_survives_a_first_look": "It is a post-mortem-styled comment citing a prior incident and a dated fix, so a reviewer treats it as verified history rather than as an unaudited claim about the callee's exit-code semantics."
+      },
+      {
+        "defect": "`page_permpend` writes its damping marker on that unverified success, keyed on a beacon timestamp that never changes for a session stuck on one prompt, so a single falsely successful send silences that page permanently.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "243-248 (marker write at 247)",
+        "anchor": "    printf '%s\\n' \"$ts\" > \"$nf\"                             # recorded only on a CONFIRMED enqueue (send_page rc 0)",
+        "why_it_survives_a_first_look": "The comment says \"recorded only on a CONFIRMED enqueue\" and the guard genuinely is conditional — the lie is one call frame down, in what rc 0 actually certifies."
+      },
+      {
+        "defect": "`page()` likewise stamps the per-state damping marker on the same unchecked success, so every telemetry-liveness page is suppressed for the life of the incident once one page is enqueued into an undrained box.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "219-221",
+        "anchor": "    printf '%s\\n' \"$2\" > \"$nf\"                             # recorded only on a cc-notify-CONFIRMED enqueue",
+        "why_it_survives_a_first_look": "Damping is the deliberate page-storm fix and is heavily justified in comments, so the marker looks like the safety feature rather than the amplifier of a false success."
+      },
+      {
+        "defect": "`send_page` has exactly ONE delivery channel and its address is a rot-prone role file holding a pane uuid; there is no channel independent of pane liveness, so when the role file points at a dead pane every page — the daemon's only operator-facing act — has nowhere to land.",
+        "file": "scripts/lead-supervisor.sh",
+        "line_hint": "150-179 (gate at 152-155)",
+        "anchor": "  target=\"$PAGE_TO\"; [ -n \"$target\" ] || target=\"$(head -n1 \"$PAGE_TO_FILE\" 2>/dev/null | tr -d '[:space:]')\"",
+        "why_it_survives_a_first_look": "The comment above it argues the role indirection is the MORE robust design, so single-channel reads as intentional delegation rather than a single point of failure."
+      }
+    ],
+    "cross_reference_adjudicated": [
+      {
+        "names": "cc-teardown",
+        "subject_of": "cp-08",
+        "why": "names a safety-gate ('cc-teardown-safety-gate G-a') in a comment about a shipped-and-clean check; discloses no resolution or absence logic"
+      }
+    ]
+  },
+  {
+    "id": "cp-07",
+    "title": "CLEAN — bats suite over a pane-state classifier, screened and not convicted",
+    "mechanism_class": "clean control: same class of code as the defective test briefs (a bats suite)",
+    "source_memory_file": null,
+    "culprit_commit": null,
+    "pre_fix_ref": "399ed0da9a546f647c90338af4a2cd325e1b11ee",
+    "subject_path": "tests/pane-modal.bats",
+    "prompt_path": "briefs/cp-07.md",
+    "has_defect": false,
+    "sibling_axis_pinned": null,
+    "clean_basis": "SCREENED AND NOT CONVICTED — the only basis that survived. An independent adversarial pass over all eight defect classes this corpus scores returned CLEAN, and it EXECUTED rather than reasoned: it ran all 13 classify inputs against the real library and confirmed each asserted status, verified the anti-rot arm's 8 patterns are genuinely present in the resolved binary while the control string is genuinely absent (so the loop is neither inert nor always-matching), and confirmed each negative arm is paired with a positive that reds if the matcher opens up. Zero subsequent commits to the path; no doc in the repo names a defect in it. Chosen to LOOK like the defective briefs — a bats suite over a shell classifier, the same class of code as cp-02 and cp-05 — while sharing NO subject matter with any of them (it names none of the other eight subjects).",
+    "screen": "independent adversarial pass, 2026-08-10, over the eight scored classes plus anything else it would report; verdict CLEAN with executed evidence. Seven other candidates screened the same way were CONVICTED and dropped.",
+    "notes": "Not proven defect-free — no file in a live repo can be. A judge should adjudicate a finding here against the code rather than scoring it a false positive by assumption.",
+    "ground_truth": []
+  },
+  {
+    "id": "cp-08",
+    "title": "a lookup miss in the wrong namespace booked as proven absence, and shipped as exit 0 success",
+    "mechanism_class": "a probe acting on a negative without confirming the safe state; miss read as absence",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/lookup-miss-is-not-absence.md",
+    "culprit_commit": "4fd818ea51ad0c5b65370a74a469c8ad1d1f32cf",
+    "pre_fix_ref": "6dca3903f1238688685dd575801a2044e9dd6f95",
+    "subject_path": "bin/cc-teardown",
+    "prompt_path": "briefs/cp-08.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: tests/cc-teardown-assignee-adopt.bats, which exists at this ref and is an ANTI-leak: its test (4) asserts rc 0 and \"already gone\" for precisely the defective inference, CERTIFYING the defect as intended behaviour, while tests (3)/(3b) guard only the total-blindness case and so make the suite look as though the hazard class were already covered. All nine of its tests pass a real uuid, so the wrong-namespace defect is unreachable by it. tests/cc-teardown.bats never uses the flag at all; no lint validates a pane-key shape at a call site. The only in-file signal is principled, not mechanical, and the code contradicts it: the header and `pane_present`'s comment block state the law (\"return 2 (indeterminate), never 1 (absent)\") that the defective site breaks — a reviewer confined to the file can derive the defect, but nothing enforces it there.",
+    "ground_truth": [
+      {
+        "defect": "`resolve_assignee` uses its first argument as a pane UUID with no shape check, so a target that cannot belong to the pane-id namespace (an agent name) produces a lookup miss that is guaranteed by construction and is then read as a fact about the pane.",
+        "file": "bin/cc-teardown",
+        "line_hint": "235-236 (guard absent; consumed at 252)",
+        "anchor": "  local uuid=\"$1\" lead=\"$2\" lst n obj _tty base rpid rcomm rargs agid",
+        "why_it_survives_a_first_look": "The parameter is named `uuid` and the function's header declares the signature that way, so a reviewer reads the type as already established rather than as an unchecked assumption — while the CLI's documented target type is `<pane-uuid|name>`."
+      },
+      {
+        "defect": "A single readable, non-empty enumerator listing that omits the target is converted directly into \"provably absent\" — an absence inferred from one miss on one oracle, with no second independently-failing oracle and no positive control, even though that enumerator can be partially blind (readable and non-empty while omitting a live pane).",
+        "file": "bin/cc-teardown",
+        "line_hint": "253",
+        "anchor": "[ -n \"$obj\" ] || return 1          # enumerator was READABLE and non-empty",
+        "why_it_survives_a_first_look": "The three lines above it implement a careful tri-state against the ALL-blind enumerator, so this line reads as the already-hardened residual case, and its comment asserts the conclusion the reviewer is supposed to be checking."
+      },
+      {
+        "defect": "That inferred absence is booked as decision ALREADY-GONE with both legs marked verified and `exit 0` — the one verdict an automated caller cannot second-guess — for a state the tool's own contract assigns a failure exit, with no leg actually observed.",
+        "file": "bin/cc-teardown",
+        "line_hint": "422-423",
+        "anchor": "           say \"OK — assignee pane already gone (idempotent success, exit 0)\"; exit 0 ;;",
+        "why_it_survives_a_first_look": "\"Idempotent success on an already-absent target\" is a correct and familiar pattern, and the sibling branch ten lines down is a legitimate instance of it — but that one proves the pid dead first, whereas this one has proved nothing."
+      },
+      {
+        "defect": "The usage text advertises the target as `<pane-uuid|name>` and the adoption flag's help says nothing about the target having to be a pane UUID, so the documented interface invites exactly the call the adoption path cannot answer — an assignee has no registry row and therefore no name to resolve.",
+        "file": "bin/cc-teardown",
+        "line_hint": "124 (with 127-128)",
+        "anchor": "cc-teardown <pane-uuid|name> --done-evidence <text> [--force-adopted]",
+        "why_it_survives_a_first_look": "The `|name` alternative is true for the main registry path, so the usage line is accurate for the code a reviewer reads first and wrong only for the opt-in branch documented three lines below it."
+      },
+      {
+        "defect": "`record()` emits no machine-parseable verdict or exit token, so every caller must distinguish \"gate declined\" from \"actuator could not see the target\" from \"false reap\" by substring-matching prose or by a bare rc.",
+        "file": "bin/cc-teardown",
+        "line_hint": "135-149 (harm visible at 572-573)",
+        "anchor": "record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1>",
+        "why_it_survives_a_first_look": "The function already looks like the audit mechanism — mandatory on every branch, structured JSON, satisfying the file's stated no-silent-teardown rule — so the gap is not in what it writes but in what it fails to make parseable."
+      }
+    ]
+  },
+  {
+    "id": "cp-09",
+    "title": "a spawn time read from a registry that by construction never holds it, whose miss falls back to a value that never terminates the guard",
+    "mechanism_class": "wrong-population lookup whose fail-safe default is the one value the guard can never exit",
+    "source_memory_file": "~/.claude-quaternary/projects/-Users-chrisren-Development-claude-infrastructure/memory/lookup-miss-is-not-absence.md",
+    "culprit_commit": "ba6fb12f1a0758e3ec28c42d6c97d3b4dfeafb07",
+    "pre_fix_ref": "6e01e7e75129d68e8737960fe2900ee1534deab8",
+    "subject_path": "hooks/teammate-auto-shutdown.sh",
+    "prompt_path": "briefs/cp-09.md",
+    "has_defect": true,
+    "sibling_axis_pinned": "PINNED BY CONSTRUCTION: the brief is a self-contained text artifact — the arm gets the file body and nothing else (no repo, no test suite, no lint, no docs, no git history, no execution), and the brief text forbids any other resource. The specific sibling that would otherwise leak: tests/teammate-auto-shutdown.bats, which exists at this ref (542 lines, 23 tests) and is an ANTI-leak: its setup installs a MOCK registry on PATH and its fixture helper writes a row keyed on the teammate's own session id carrying the spawn field, so every test that reaches this code hands the hook a registry HIT — precisely the state that never occurs in production. That fixture-shape drift is what kept the suite green on a hook that had not reaped a teammate in nine days. No pre-fix test observes the relevant argv (the only stub discards its arguments); the argv-recording stub and the spawn-time tests arrive IN the fix commit. The authoritative field is read nowhere in this hook or its tests. No lint names the gap, and the only in-file comment near the defect asserts the opposite of the truth. The memory entry describing the mechanism postdates the fix, so it did not exist at this ref.",
+    "ground_truth": [
+      {
+        "defect": "The teammate's spawn instant is looked up ONLY in a registry that indexes LAUNCHER-started sessions and therefore by construction never contains a HARNESS-spawned teammate, so the lookup is a guaranteed miss for every subject this hook is invoked for.",
+        "file": "hooks/teammate-auto-shutdown.sh",
+        "line_hint": "690-691",
+        "anchor": "  _started_ms=\"$(cc-sessions --json 2>/dev/null \\",
+        "why_it_survives_a_first_look": "The query is well-formed, defensively coded and appears twice in the file, so it reads as an already-hardened lookup rather than a question asked of the wrong population."
+      },
+      {
+        "defect": "On that miss the code substitutes NOW as the spawn time, which makes the reap guard compute age 0, land permanently inside the birth grace, and DEFER on every idle event forever — the miss silently becomes the one value that never terminates, and nothing is logged to distinguish it from a genuine just-born defer.",
+        "file": "hooks/teammate-auto-shutdown.sh",
+        "line_hint": "692 (comment at 689)",
+        "anchor": "  if [[ \"$_started_ms\" =~ ^[0-9]+$ ]]; then _spawn_s=$(( _started_ms / 1000 )); else _spawn_s=\"$(date +%s)\"; fi",
+        "why_it_survives_a_first_look": "The comment on the line above literally labels it fail-safe, and deferring IS the conservative direction — a reviewer checks the direction of the failure and never asks whether the deferral can ever end."
+      },
+      {
+        "defect": "The second spawn-time consumer queries the same never-populated registry and on the miss uses 0, so its exclusion test reduces to a comparison that is true for every real epoch — a teammate's own spawn brief is scored as operator adoption and the pane is HELD and paged instead of closed.",
+        "file": "hooks/teammate-auto-shutdown.sh",
+        "line_hint": "919-921",
+        "anchor": "        _spawn_s=\"$(_spawn_epoch \"$SESSION_ID\" || echo 0)\"; [[ \"$_spawn_s\" =~ ^[0-9]+$ ]] || _spawn_s=0",
+        "why_it_survives_a_first_look": "The `|| echo 0` plus the regex re-validation looks like belt-and-suspenders defensive coding, and 0 looks like a neutral sentinel rather than an epoch that makes the guard's comparison unconditionally true."
+      },
+      {
+        "defect": "The same question — when did this teammate spawn — has two divergent implementations in one file, a helper that returns nothing on a miss and a re-inlined copy that returns NOW, so one unanswerable question yields two different answers with opposite failure semantics.",
+        "file": "hooks/teammate-auto-shutdown.sh",
+        "line_hint": "311-318 vs 690-692",
+        "anchor": "_spawn_epoch() {",
+        "why_it_survives_a_first_look": "The helper is defined 380 lines earlier under a different banner, so the two sites never appear on the same screen and each reads as locally correct."
+      },
+      {
+        "defect": "The registry tool is invoked bare off PATH with all output and errors discarded, in a hook that elsewhere documents that hooks run with a minimal PATH and resolves other binaries by absolute path — so a PATH miss produces the same empty string as a registry miss and funnels into the same fallback, undetectably.",
+        "file": "hooks/teammate-auto-shutdown.sh",
+        "line_hint": "690 (and 314)",
+        "anchor": "  ms=\"$(cc-sessions --json 2>/dev/null | jq -r --arg s \"$sid\" \\",
+        "why_it_survives_a_first_look": "Discarding stderr on a best-effort registry read is idiomatic throughout this file, and the PATH hazard is spelled out 570 lines away in a comment about a different binary."
+      }
+    ],
+    "cross_reference_adjudicated": [
+      {
+        "names": "cc-teardown",
+        "subject_of": "cp-08",
+        "why": "cites that tool's presence-oracle convention as a parity reference. The principle cited ('absent is not a licence to act') is already stated inside cp-08's own file, which is what makes cp-08 derivable but unenforced there — so this reference adds nothing an arm reading cp-08 does not already have"
+      }
+    ]
+  }
+]
