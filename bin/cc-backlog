@@ -21,6 +21,15 @@
 #                                                                  item still filed) when the label
 #                                                                  is not in the dispatch set — see
 #                                                                  EXPLICIT --project VALIDATION.
+#                                                                  On a KNOWN id it stays idempotent
+#                                                                  (echoes the id, rc 0, never
+#                                                                  re-opens) but a CHANGED --title /
+#                                                                  --dod-ref / --source now appends
+#                                                                  `event:"update"` — see THE UPDATE
+#                                                                  ARM in cmd_add. A done row and
+#                                                                  --falsifier are excluded; the
+#                                                                  falsifier keeps its own verb
+#                                                                  because that one RUNS the probe.
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid> [--venue local|cloud] [--force]      → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
@@ -1266,6 +1275,64 @@ cmd_add() {
           printf '  project+title+source). If THIS work regressed:  cc-backlog reopen %s --force\n' "$id"
         fi
       } >&2
+    fi
+    # ── THE UPDATE ARM (2026-08-12, backlog ce1e9d1adab8 · W2) ────────────────────────────────────
+    # WHAT WAS BROKEN. Everything above this line returns the id with rc 0 and writes NOTHING, which
+    # is the idempotency contract every caller depends on — and it also made a whole class of caller
+    # a permanent no-op. A generator that RE-FILES a condition-keyed row to refresh its wording is
+    # not adding an item; it is reporting a new measurement of the same standing state. It lands
+    # here, on a known id, and the store keeps the FIRST wording forever.
+    #
+    # Measured: `scripts/backlog-consolidation-trigger.sh --file` runs on every autonomy sweep and
+    # exists precisely so "repeated runs update rather than mint" (its own header says so). Its row
+    # 5df742fb3894 had been frozen at its pre-R6 wording since 2026-08-11 and would have stayed
+    # frozen for as long as the sweep ran — the sweep re-filing it every few minutes, each pass a
+    # silent rc-0 no-op. The escalation row that exists to tell a human what changed was the one row
+    # that could never change.
+    #
+    # WHY AN `update` EVENT IS SAFE HERE, and it is the same argument `falsify` made. The fold is
+    # LAST-NON-EMPTY-WINS per field and its status arm is a chain of `elif`s ending in a
+    # carry-forward, so a record with a title and NO status field lands in the carry-forward branch
+    # of every reader already: cc-backlog's own fold, backlog-ratchet.sh, the consolidation trigger,
+    # and cc-premise's build_index (which keys on the FIELD, not on an event whitelist). A new event
+    # member that lands in someone's `*)` arm is this repo's recurring defect — so this one was
+    # chosen to land in the arm that already carries state through (memory:
+    # new-enum-member-falls-into-fail-closed-default).
+    #
+    # THREE THINGS IT WILL NOT TOUCH, each for its own reason:
+    #   * a DONE row — its title is the history of finished work, and re-wording it would rewrite
+    #     what the evidence above refers to. The loud warning stands and nothing is written.
+    #     SECOND REASON, measured, and it is why this exclusion must not later be "improved" away:
+    #     `bin/cc-value:179` folds status as the RAW EVENT (`.[$r.id] = {status: $r.event}`), so the
+    #     LAST event on a row IS its status to that reader, and `tasks_closed` counts only `done`.
+    #     An `update` on a done row would therefore delete it from the fleet's closed-work metric.
+    #     That defect is pre-existing and already filed — `venue` masks 241 done rows this way today
+    #     — but excluding done rows here means this event adds nothing to it (verified: 1 masked row
+    #     on the live store, from an earlier hand sweep, and 0 from this arm).
+    #   * `project` and `condition` — both are IDENTITY (they are in the id hash). Changing either
+    #     would mean this is a different row, and the caller must say so by using a different key.
+    #   * a field the caller did not pass, or passed unchanged — an update that writes on every call
+    #     turns an idempotent re-file into unbounded ledger growth. Only a real difference appends.
+    #   * `--falsifier` — and this one is a SAFETY exclusion, not a scoping one. `cmd_falsify` exists
+    #     because add could not reach an existing row, and it does something this arm cannot: it RUNS
+    #     the probe before storing it, and REFUSES (rc 5) a probe that exits 0 against a live row,
+    #     because exit 0 is the RETRACTING direction and a wrong one silently retires live work.
+    #     Writing the falsifier from here would be a second door into that store with the guard
+    #     missing — so `add --falsifier` on a known id stays exactly the no-op cmd_falsify's header
+    #     documents, and `cc-backlog falsify` remains the only way in.
+    local up_title="" up_dod="" up_source=""
+    [ -n "$title" ]  && [ "$title"  != "$(printf '%s' "$ex" | jq -r '.title  // ""')" ] && up_title="$title"
+    [ -n "$dod" ]    && [ "$dod"    != "$(printf '%s' "$ex" | jq -r '.dodRef // ""')" ] && up_dod="$dod"
+    [ -n "$source" ] && [ "$source" != "$(printf '%s' "$ex" | jq -r '.source // ""')" ] && up_source="$source"
+    if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" != "done" ] &&
+       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ]; }; then
+      jq -nc --arg id "$id" --arg ts "$(now_iso)" \
+         --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" \
+         '{id:$id, ts:$ts, event:"update"}
+          + (if $title  == "" then {} else {title:$title}   end)
+          + (if $dod    == "" then {} else {dodRef:$dod}    end)
+          + (if $source == "" then {} else {source:$source} end)' \
+         >> "$BACKLOG"
     fi
     echo "$id"; return 0
   fi
