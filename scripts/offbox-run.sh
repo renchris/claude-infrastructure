@@ -249,12 +249,20 @@ cmd_verdict() {
   done
   [ "${#files[@]}" -gt 0 ] || die "verdict: no TSV inputs found" 2
 
-  cat "${files[@]}" | awk -v part_n="$(bash "$PARTITION_SH" list 2>/dev/null | grep -c . || echo 0)" '
-    BEGIN { FS="\t"; green=0; red=0; cut=0; empty=0; missing=0; n=0; secs=0 }
+  # The partition is read as a LIST, not merely counted. Counting can only tell you that suites are
+  # missing; the list is what lets the fold NAME them, and a hole nobody can name is a hole nobody
+  # fixes — measured below.
+  local plist; plist="$(mktemp)"
+  bash "$PARTITION_SH" list >"$plist" 2>/dev/null || :
+  cat "${files[@]}" | awk -v plist="$plist" '
+    BEGIN {
+      FS="\t"; green=0; red=0; cut=0; empty=0; missing=0; n=0; secs=0; part_n=0
+      while ((getline line < plist) > 0) if (line != "") { want[line]=1; ord[part_n++]=line }
+    }
     /^#/ { next }
     NF < 6 { next }
     {
-      n++; secs += $6
+      n++; secs += $6; seen[$1]=1
       if ($2 == "green")   green++
       else if ($2 == "red") { red++;  fails[nf++] = $1 }
       else if ($2 == "cut") { cut++;  nonv[nn++]  = $1 }
@@ -264,19 +272,37 @@ cmd_verdict() {
     END {
       # A fold over FEWER suites than the partition holds is itself a non-verdict: a shard that never
       # reported is indistinguishable, in the numbers alone, from a partition that got smaller.
-      short = (part_n > 0 && n < part_n)
-      if (red > 0)                       v = "red"
+      for (i = 0; i < part_n; i++) if (!(ord[i] in seen)) unrep[un++] = ord[i]
+      short = (part_n > 0 && (n < part_n || un > 0))
+
+      # UNREPORTED OUTRANKS RED, and that ordering is the fix. A shard whose job DIES leaves no row
+      # of any state — not green, not red, not cut — so every counter above is blind to it, and the
+      # old red-first test published "red, 7 failing" over a corpus in which 41 suites were never
+      # judged at all. short was computed and then discarded in exactly the runs where it mattered.
+      # MEASURED on run 31570936250: the shard-1 job was CANCELLED by a runner shutdown signal, and
+      # "if: always()" does not survive a cancelled job, so its artifact never uploaded; the
+      # unreported set is set-identical to the 41 suites of shard 1. Four consecutive runs died the
+      # same way. The old shape also fed the paste-ready cure block in the workflow, which invited
+      # manifest entries for 7 suites while 41 went unexamined — an exclusion list grown from a
+      # measurement that was itself incomplete.
+      #
+      # NOTE FOR THE NEXT EDITOR: this awk program is single-quoted, so an apostrophe anywhere in
+      # these comments TERMINATES it and the rest parses as shell. Write around it.
+      if (short)                         v = "cut"
+      else if (red > 0)                  v = "red"
       else if (cut+empty+missing > 0)    v = "cut"
-      else if (short)                    v = "cut"
       else if (n > 0)                    v = "green"
       else                               v = "cut"
 
-      printf "{\"verdict\":\"%s\",\"suites\":%d,\"expected\":%d,\"green\":%d,\"red\":%d,\"nonverdict\":%d,\"run_s\":%d,\"failing\":[", v, n, part_n, green, red, cut+empty+missing, secs
+      printf "{\"verdict\":\"%s\",\"suites\":%d,\"expected\":%d,\"green\":%d,\"red\":%d,\"nonverdict\":%d,\"unreported\":%d,\"run_s\":%d,\"failing\":[", v, n, part_n, green, red, cut+empty+missing, un, secs
       for (i = 0; i < nf; i++) printf "%s\"%s\"", (i ? "," : ""), fails[i]
       printf "],\"nonverdict_suites\":["
       for (i = 0; i < nn; i++) printf "%s\"%s\"", (i ? "," : ""), nonv[i]
+      printf "],\"unreported_suites\":["
+      for (i = 0; i < un; i++) printf "%s\"%s\"", (i ? "," : ""), unrep[i]
       printf "]}\n"
     }'
+  rm -f "$plist"
 }
 
 # ── SELFTEST ─────────────────────────────────────────────────────────────────────────────────────
@@ -332,6 +358,22 @@ cmd_selftest() {
 
   # F5c control: the SAME two rows plus the third ⇒ green, so F5 is about the count and nothing else.
   chk "F5c control — the third row flips it green" green "$(fold "$tmp/1.tsv" | sed 's/.*"verdict":"\([a-z]*\)".*/\1/')"
+
+  # F5d UNREPORTED OUTRANKS RED. F5 above only proves a short fold cannot mint a GREEN; it says
+  # nothing about a short fold that also contains a red, and that is the case the real runs hit —
+  # `red > 0` was tested first, so the verdict published "red" over a corpus in which a whole dead
+  # shard was never judged. A red is a claim about the suites that RAN; it cannot also speak for the
+  # ones that did not. Two rows, one of them red, against a partition of three.
+  hdr "$tmp/5d.tsv"
+  printf 'tests/a.bats\tgreen\t3\t0\t0\t1\ntests/b.bats\tred\t1\t2\t1\t1\n' >> "$tmp/5d.tsv"
+  v="$(fold "$tmp/5d.tsv")"
+  chk "F5d a red beside an UNREPORTED suite ⇒ cut, not red" cut "$(printf '%s' "$v" | sed 's/.*"verdict":"\([a-z]*\)".*/\1/')"
+  case "$v" in *'"unreported":1'*'"unreported_suites":["tests/c.bats"]'*)
+                 printf 'ok   F5e the fold NAMES the suite that never reported\n' ;;
+               *) printf 'FAIL F5e unreported suite not named: %s\n' "$v" >&2; st_fail=1 ;; esac
+  # F5f control — the same red with NOTHING missing is still a red, so F5d is about the hole and
+  # not a blanket demotion of every red to a non-verdict.
+  chk "F5f control — a red over a COMPLETE fold is still red" red "$(fold "$tmp/2.tsv" | sed 's/.*"verdict":"\([a-z]*\)".*/\1/')"
 
   # F6 THE LIVE CLASSIFIER, end to end against real bats. F1-F5 exercise only the fold, and a fold
   # test passes unchanged even if run_one classified every suite backwards — so without F6 the half
