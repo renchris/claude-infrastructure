@@ -503,12 +503,49 @@ _ratchet="$_SWEEP_DIR/backlog-ratchet.sh"
 # Caught before landing; the block is placed high on purpose (see above), so it brings its own bound.
 _tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 _bounded() { if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 5 60 "$@"; else "$@"; fi; }
-_trig_rc="skipped"; _rat_rc="skipped"
+_trig_rc="skipped"; _rat_rc="skipped"; _fold_rc="skipped"; _fold_note="skipped"; _fold_groups=0
 if [ -x "$_trigger" ]; then _bounded bash "$_trigger" --file >/dev/null 2>&1; _trig_rc=$?; fi
 if [ -x "$_ratchet" ]; then _bounded bash "$_ratchet" --assert >/dev/null 2>&1; _rat_rc=$?; fi
+
+# ── THE FOLD CALLER (backlog db81f8b43c31) — DRY-RUN, deliberately ────────────────────────────────
+# W3 shipped `--fold [--apply]` and NOTHING invoked it — the third instance of this wave's own defect
+# inside one session: `cc-venue` had no caller (W1 wired it), the ratchet was inert (W0 fixed it),
+# and the actuator that answers a duplicate pile had none either. W3 correctly FILED rather than
+# editing a file it did not own. This is that caller.
+#
+# WHY DRY-RUN AND NOT `--apply`, even though a fold is append-only and asserts its own conservation.
+# The advisory-first discipline W1's measurement vindicated binds harder here, because this arm
+# WRITES to the operator's live ledger while `--file` and `--assert` above are pure reads. W1
+# measured a 60% would-block rate nobody predicted; the equivalent unknown for the fold is how the
+# key behaves over TIME — 18 groups / 46 rows / conservation=ok is ONE snapshot, and the store moves
+# under it constantly. A bounded dry run every sweep produces exactly that series for the cost of a
+# read.
+#
+# THE FLIP IS A MEASUREMENT, NOT A DATE: when `fold_conservation` has read `ok` across a run of
+# sweeps and `fold_groups` is stable rather than drifting, change `--fold` to `--fold --apply` here.
+# `conservation=FAILED` must NEVER be flipped past — it means the key merged across a distinction,
+# which is precisely the nine-stranded-worktrees defect W3 found in R6's proposed key.
+#
+# THE VERDICT IS PARSED, NOT INFERRED FROM rc: an exit code cannot separate "nothing to fold" from
+# "the store moved under the read", and collapsing those is a defect this repo has already shipped
+# once (MEMORY.md: claimed-outcome-vs-checked-outcome). `no-verdict` is its own state so a silently
+# broken trigger can never read as a clean store.
+if [ -x "$_trigger" ]; then
+  _fold_out="$(_bounded bash "$_trigger" --fold 2>/dev/null)"; _fold_rc=$?
+  case "$_fold_out" in
+    *conservation=FAILED*)  _fold_note="FAILED" ;;
+    *conservation=unknown*) _fold_note="unknown" ;;
+    *conservation=ok*)      _fold_note="ok" ;;
+    *)                      _fold_note="no-verdict" ;;
+  esac
+  _fold_groups="$(printf '%s\n' "$_fold_out" | /usr/bin/grep -cE 'conservation=' 2>/dev/null)"
+  case "${_fold_groups:-}" in ''|*[!0-9]*) _fold_groups=0 ;; esac
+fi
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
+  --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
   '{consolidation_trigger_rc:$t, ratchet_rc:$r,
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean)"}')"
+    fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). fold is DRY-RUN: fold_conservation ok|unknown|FAILED|no-verdict — FAILED means the key merged across a distinction; never flip this call to --apply past one."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
