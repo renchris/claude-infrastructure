@@ -291,6 +291,37 @@ re-keys the id to `project+condition`, so `add` returns the group row's id early
 discarded. That is why this triage is in the plan and not in three new rows. File with `add` first,
 then `link --condition`.
 
+### S3 acceptance — the retractor covers 14 of 23, and that is the honest claim
+
+The DoD asks for a generator fix "so the population stops growing". Measured, not asserted: the
+fixed oracle was run over **every** re-land ref this session closed, as an independent instrument
+against the hand census.
+
+| | n | Meaning |
+|---|---|---|
+| oracle agrees (ON-TRUNK) | **14** | the falsifier retracts these automatically, with no human in the loop |
+| oracle abstains (exit 1) | **9** | it cannot PROVE the value landed; the row stays open pending a read |
+| oracle wrong | **0** | — |
+
+**The 9 abstentions are correct behaviour, not residual bug.** Spot-checked the worst of them,
+`f3bb2ac65` (20 ref-only lines): trunk carries every identifier that commit introduced —
+`BAND`×9, `taskpolicy`×14, `ProcessType`×5, `utility`×21 — and the ref-only lines are the
+**pre-`lstart` mutex** trunk deliberately replaced with the locale-canonical `proc_lstart` version.
+The value landed; the exact blob never existed on trunk, so blob-history cannot prove it. Exit 1
+means *do not retract*, which is the safe answer where only a semantic read settles it.
+
+So the claim to make is narrow and true: **the filer's rows now auto-retract for the majority and
+fail safe for the rest.** It does not close the loop unaided, and saying it did would be the same
+overclaim — a mechanism reported as complete because it is installed — that this whole effort
+exists to catch. The residue is *bounded and shrinking*: the more trunk diverges from a stranded
+ref, the more likely blob-history finds the ref's own blob in the path's past, so the arm gets
+STRONGER with age, unlike every instrument it replaced.
+
+**Do not chase the last 9 by loosening the test.** The rejected alternative — "did trunk touch this
+path after the ref?" — would have retracted all 23 including any genuine loss among them. For a
+falsifier that DESTROYS a row, over-forgiving costs work and under-forgiving costs noise; take the
+error on the noise side, always.
+
 ## Definition of done
 Every member row is either closed against a content-verified land or carries a named reason it
 cannot be landed. `git ls-tree origin/main` proves each claim. The exit-5/6/143 generator has a
