@@ -637,3 +637,59 @@ with its own README naming the one finding later corrected by measurement.
   and off entirely for the Agent tool.**
   **Named, not fixed here:** `link.py`/`prune.py` remain untracked (W2 item 1); the presence beat
   remains inert at every spawn site (W3 item 1); 248 rows remain unlabelled for venue (W2).
+
+- **2026-08-12 — the deploy lane was unblocked from the OFF-BOX side, not by finding the SIGTERM
+  sender (`cfe821e94`, `cedf79ed9`, landed `7df8cb7e2`).** Fired to hunt whatever kills the corpus
+  `bats` run (`b7252a3bb015`); the shorter path turned out to be `deploy-live.sh`'s **T1H** tier,
+  which advances on an off-box green with **no lag budget** and is blocked only by an on-box `red`
+  — and our stamps are `cut`, which T1H treats as eligible (R6). T1H's producer,
+  `.github/workflows/hermetic.yml`, had failed **8 consecutive runs**; the last off-box green was
+  2026-08-10. The fold read 403/405 green, so **two suites** stood between this box and a live
+  layer. Neither was a real regression, and both were instruments lying rather than subjects
+  breaking:
+  - `tests/worker-claim-gate-coverage.bats:247` — case 10 anchored the capacity term on
+    `^…if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit`, the two tokens ADJACENT on one line. W3's
+    `450a47c50` inserted `CC_ADMIT_SID=…` between them and wrapped the statement, so `$cap` came
+    back EMPTY and the case reddened against a subject whose ordering property is intact
+    (gate 113 < capacity 206). **A test calibrated to FORMATTING, failing on a reformat.**
+    Re-anchored on the invocation itself — invariant under both an env prefix and a rewrap.
+    RED-proved against the contract the suite records: M1 → 09/10/13 RED, M2 → 10 RED.
+  - `tests/autonomy-sweep.bats:534` — case 25 copies the sweep into `BATS_TEST_TMPDIR` to mutate
+    it, which breaks rung 1 of `autonomy-sweep.sh:103-113`'s lib ladder, so **the mutant was
+    resolving `cc-common.sh` off the developer's live `~/.claude`** (rung 3). The suite pins no
+    `HOME`, so it passed on a Mac and could never pass on a runner. Off-box the mutant died at
+    `:112` with `FATAL — cannot source` before reaching `ladder_v2` at all. Fixed by symlinking
+    `lib/` beside the mutant, pinning rung 1.
+  🚨 **THE METHOD LESSON, and it nearly shipped a false verdict.** The first repro attempt FAILED
+  to reproduce — case 25 passed with an empty `HOME`, which reads as "hypothesis refuted". It
+  passed because an exported `CLAUDE_CONFIG_DIR` rescued **rung 2**. Only
+  `env -u CLAUDE_CONFIG_DIR HOME=<empty>` reproduces: without the fix, the exact off-box `not ok`;
+  with it, 49/49. *An environment hypothesis is only tested at an environment you actually
+  cleaned* (memory: `hermetic-in-stubs-not-in-interpreter`). **The quieter casualty** is the
+  second assertion: a script that dies at `:112` also posts nothing, so `[ "$(osa_posts)" -eq 0 ]`
+  passed VACUOUSLY off-box — the control certified a silence it never observed.
+  **Also corrected:** `b7252a3bb015`'s own falsifier was INVERTED — its probe exits 0 exactly when
+  the newest stamp IS a cut, and `cc-backlog` reads exit 0 as *retract*, so the row refused every
+  claim with `verdict=falsified` while the condition was fully present. Probe re-polarised.
+
+- **2026-08-12 — the corpus was killing live processes as a side effect of verifying the tree
+  (`6fd24a59f`); the corpus SIGTERM sender is still NOT identified.** `sweep()` calls
+  `garbage_sweep` FIRST (`bin/cc-reaper:814`), and its seams live in `mk_garbage_fixtures`, which
+  each garbage test calls itself — **never in `setup()`**. So ~90 `sweep --reap` cases read the
+  real `ps -Ax` and issued real `kill -TERM`/`-KILL` at any ppid-1 process matching
+  `bin/cc-reaper:344-349`; `orphan-bash` is *any* ppid-1 bash older than 600 s whose argv misses
+  the `:339` whitelist, and `bats` is not in it. The suite is not in `host-suites.manifest`, so
+  the postland corpus runs it. **Nothing recorded the victims** — `setup()` redirects
+  `CC_REAPER_LOG` into the test tmpdir — which is exactly why the sender was unidentifiable after
+  the fact. Confirmed live at 12:53Z: a read-only ppid-1 watcher of this session, age 883 s, was
+  selected `orphan-bash` and killed **mid-measurement** — the arm reaped the instrument measuring
+  it. Pinned `/dev/null` (the documented fail-open seam) in `setup()`; 99/99 green.
+  **Do not read this as the cut engine.** The corpus's `cpid` is a `gtimeout` whose ppid is the
+  live runner, so this arm cannot select it. `28 cut · 6 red · 2 hung · 4 green` over 40 stamps
+  stands, and the honest state is: `scripts/gate-cleanup.sh:188` is confirmed to have **no**
+  automated caller (only `ship-land.sh:1481` advice and `validate-bash.sh:558` deny text); jetsam
+  sends SIGKILL not SIGTERM; `cc-reaper` is the only in-repo predicate that matches `gtimeout` /
+  `bash` by orphanhood, and it needs `ppid==1`, which the corpus chain does not present.
+  **The instrument is still the deliverable** — the runner deletes `RUN_TMP`
+  (`postland-verify.sh:2629`) the moment it cuts, destroying the TAP that would name the test
+  executing at kill time, and neither side records identity. Filed `a3a070520f3d`.
