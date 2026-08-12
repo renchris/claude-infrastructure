@@ -179,7 +179,17 @@ have opposite responses to raising the number.
 
 ## 3 · The waves
 
-### W1 · Freshness — a currency verdict for every row, on a schedule
+### W1 · Freshness — a currency verdict for every row, on a schedule ✅ DONE (`cf0f11a4b`)
+
+**Outcome: never-validated 536 → 387 on the live store, 18 falsified rows retired, decay now readable
+in commits (p50 402) as well as days (p50 2.0).** All six items landed and content-verified; the full
+account — including the correction the wave lead caught mid-build, which is the load-bearing part —
+is in the Status log below. The six items as originally written are kept verbatim underneath, because
+item 5's framing turned out to name the wrong half of its own defect.
+
+⚠️ **387 is not a failure to reach zero; it is the honest number.** 386 live rows carry no probe at
+all, so nothing can be asked about them and nothing is stamped. Driving that down is the coverage
+ratchet's queue (master M2 wires generators to emit `--falsifier`), not this wave's.
 
 **The gap in one sentence:** re-validation is demand-driven and 63% of live rows generate no demand.
 
@@ -322,6 +332,71 @@ stamp that does not yet exist.
 with its own README naming the one finding later corrected by measurement.
 
 ## Status log
+
+- **2026-08-12 — W1 LANDED, all six items. Row `b585e86ea4e4`.** One commit (`cf0f11a4b`) across
+  `bin/cc-backlog`, `bin/cc-premise`, `scripts/autonomy-sweep.sh`, `scripts/backlog-ratchet.sh`,
+  plus `tests/backlog-freshness.bats` (25 cases) and 3 caller-proof cases in
+  `tests/autonomy-sweep.bats`.
+
+  **DoD met, two readings on the live store: never-validated 536 → 387, falling.** `cc-backlog
+  freshness` is the command that prints it (`--never` prints the bare integer). The pass probed 150
+  rows and retired **18 falsified rows** — including `5df742fb3894`, the row W2 recorded as "frozen
+  at its pre-R6 wording since 2026-08-11 and will stay frozen forever".
+
+  🚨 **The most important number in this entry is 387, and it is deliberately NOT zero.** 386 live
+  rows carry no probe at all, so nothing was asked about them and nothing was stamped. That is the
+  honest reading and it took a correction to get there — see below.
+
+  **What each item turned into:**
+  1. The pass is on `autonomy-sweep` at utility with its **own** bound. The shared 180 s did not
+     fit: measured **106 s at utility over 564 rows**, so the bound is 420 s (4× measured). It runs
+     on a **6 h cadence, not per sweep** — the sweep fires every 300 s, and a 106 s pass every 5
+     minutes would spend a third of the box's sweep budget. The stamp is claimed BEFORE the run, so
+     a pass killed by its bound costs one interval instead of spiralling.
+  2. `lastValidated` + its trunk sha, in a **regenerated side file**, not the ledger. Per-row events
+     would add ~20 MB/day to a 2.8 MB store — the sweep is 5-minutely and `cc-backlog compact` has
+     no caller. Consequences (a close) still go in the ledger as ordinary records.
+  3. Decay in commits: **p50 402 · p75 686 · p90 1040 · max 2322** against p50 2.0 DAYS for the same
+     population. Anchored on a new **first-wins `firstTs`**, never `lastTs`.
+  4. `sweep --close-falsified <cap>` — re-asks each row immediately before acting, never touches a
+     CLAIMED row, and reports the cap whenever it binds. A bare `--close-falsified` is rc 2.
+  5. The re-read was `unblock`-only at `bin/cc-backlog:1935`. Re-measured: **374 reopen vs 60
+     unblock** on live rows. Both now re-ask; the verb picks the AUDIENCE, so reopen speaks only on a
+     blocking verdict — 374 advisories a day is an ambient alarm.
+  6. A red ratchet now files **one condition-keyed row carrying its own falsifier**, so the standing
+     regression is one standing row that retires itself when coverage recovers.
+
+  🚨 **THE CORRECTION, caught by the wave lead mid-build, and it was worse than reported.** The lead
+  measured that `lastTs` is worthless as a currency signal — W2's own grouping pass rewrote **70% of
+  the store's `lastTs` inside one hour** as pure link bookkeeping, so the store's decay p50 read 8
+  commits behind against a true ~361. The same defect was live in this wave's first design one layer
+  deeper: **`assess` returns `clear` both for "a probe ran and said still live" and for "there is no
+  probe, so nothing was asked"**, and the sweep was stamping both. That would have driven
+  never-validated to **zero** while ~400 of 564 rows had had nothing run against them — a metric
+  reporting fresh forever and hiding the exact staleness it was built to expose. Fixed by making
+  `assess` report WHICH ARM fired (`out["probed"]`), stamping only probed rows, publishing the
+  unprobed count beside them, and removing the stamp from the re-admission path entirely: **one
+  producer, and only a measurement.** Decay is additionally published from the validated **sha**,
+  which no bookkeeping write can bump. (memory: `proxy-must-be-independent-of-what-it-supplements`.)
+
+  **Two defects the build found in its own instruments, both silent:**
+  - `[ -d "$repo/.git" ]` is false in a **linked worktree** (`.git` is a file), so the second clock
+    was switched off in exactly the place this repo's waves work. The census printed "commits since
+    filing: UNKNOWN" against a perfectly readable repo.
+  - `git log --format=%cI` prints the **committer's offset** (`+02:00`) while the store is UTC `Z`,
+    and the comparison is lexicographic — it would have returned a plausible, wrong integer forever.
+
+  **RED-PROOF, not a green board.** The suite was replayed against the real pre-fix artifact
+  (`git archive origin/main` @ `53caadb3b`): **18 of 21 red**. The three that passed are named
+  controls, each proven killable by its own mutant. Case 19 was strengthened after a mutant survived
+  it — it had fixtured only an ABSENT premise binary, which skips the block before reaching the `||`
+  that carries the exit code, while the dangerous case is one that EXISTS and exits 3 (cc-premise's
+  normal blocking verdict). Case 9b kills the pre-correction design above.
+
+  **Left standing, deliberately:** coverage is 46% and the ratchet's high-water is 50%, so `--assert`
+  is genuinely RED — that is a true regression (rows are being filed without probes), and it now has
+  a consumer rather than being only a JSON field. Driving coverage back up is the generators' job
+  (master M2), not this wave's.
 
 - **2026-08-12 12:50Z — the live layer's no-budget door is T1H, its producer has been dead two days,
   and exactly TWO suites are holding it shut.** This supersedes the framing of every entry below that
