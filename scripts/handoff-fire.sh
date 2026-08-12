@@ -2529,9 +2529,21 @@ EOF
   fi
   newsid="$(cc_sid_for_pane "$pane")"
   if [ -n "$oldsid" ] && [ -n "$newsid" ] && [ "$newsid" != "$oldsid" ]; then
+    # BOTH LAYOUTS, and the nested one is the one that exists. Claude Code writes a transcript at
+    # $pdir/<project-slug>/<sid>.jsonl — one level DOWN — so the flat `$pdir/$newsid.jsonl` probe
+    # this arm used to be could never match a real transcript, and the ROW-CHANGE signal was dead
+    # in production while passing its own suite. It passed because the suite fixtures transcripts
+    # FLAT (see setup()), i.e. in the layout the bug assumes: a fixture calibrated to the
+    # implementation rather than to the subject (memory: control-calibrated-to-implementation-
+    # decays). Note the marker arm above never had this bug — its `find` recurses.
+    # The flat form is kept FIRST and unconditionally: it is what the suite's other cases pin, and
+    # a layout that may return costs one stat.
     # shellcheck disable=SC2086
     for pdir in $CC_PROJECTS_DIRS; do
-      if [ -f "$pdir/$newsid.jsonl" ] && assistant_turn_in "$pdir/$newsid.jsonl"; then return 0; fi
+      [ -f "$pdir/$newsid.jsonl" ] && assistant_turn_in "$pdir/$newsid.jsonl" && return 0
+      for hit in "$pdir"/*/"$newsid.jsonl"; do
+        [ -f "$hit" ] && assistant_turn_in "$hit" && return 0
+      done
     done
   fi
   return 1
