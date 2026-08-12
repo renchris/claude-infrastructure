@@ -144,6 +144,37 @@ reports `conservation=ok · 19 groups · 18 would fold · 0 ambiguous`. **The cr
 satisfied and no instrument on the box could observe it.** W2 owns the flip — on a series, not on this
 one reading.
 
+### 🚨 The BAND fix also attacks the thing blocking the ENTIRE live layer, and the arithmetic is
+### counter-intuitive enough that it was nearly shipped as a regression
+
+Raising a timeout from 60 s to 180 s reads like it must make a suite slower, and `tests/autonomy-sweep.bats`
+runs the real sweep once per test across **49 tests with no stubs for the trigger or the ratchet** —
+so the instinct was that this change would worsen a suite already stamping `verdict:"hung"`
+(`run_s` 4,144 s and 5,235 s on the two commits before this one; the hang is **pre-existing**, not
+introduced here).
+
+Measured instead, same box, launched from the Background band exactly as launchd and the verifier do:
+
+| per-sweep probe block | `--file` | `--assert` | `--fold` | **wall** |
+|---|---|---|---|---|
+| pre-fix (Background, 60 s ceiling) | rc 0 | rc 1 | **rc 124** | **94.1 s** |
+| post-fix (utility, 180 s ceiling) | rc 0 | rc 1 | **rc 0** | **26.0 s** |
+
+**3.6× faster.** The bound was never a ceiling the fold approached — the fold consumed the *entire*
+60 s and was then killed, every single pass. Completing costs 20 s; being cut costs 60 s. Raising the
+bound made the work finish instead of dying at the wall, and a bigger number bought less time.
+Across 49 tests that is roughly **77 min → 21 min** in the probe block alone.
+
+That matters far past this plan: **no GREEN `postland-verify` stamp exists because that suite hangs,
+and `deploy-live.sh` is fail-closed on GREEN stamps — so the live `~/.claude` layer cannot advance at
+all.** The measurement above is therefore a direct attack on the fleet's convergence blockage, not
+only on the fold. Whether it is sufficient is unproven: the verifier's own `run_s` is the arbiter and
+its first run against this commit is in flight.
+
+**Generalisable, and it is the reason this section exists:** a timeout that is always hit is not a
+bound, it is a fixed cost. Before sizing one, measure whether the subject *completes* — the two cases
+have opposite responses to raising the number.
+
 ---
 
 ## 3 · The waves
