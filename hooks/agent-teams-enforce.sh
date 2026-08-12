@@ -179,13 +179,36 @@ for _ca in "$(dirname "$_ateh_self")/../scripts/lib/capacity-admit.sh" \
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
   [ -f "$_ca" ] && . "$_ca" 2>/dev/null && break
 done
+#
+# ── §W3 item 3 (2026-08-12): THE LOAD TERM STAYS OFF, AND ITS PLACE IS TAKEN BY A CHARGED TERM ────
+# The item asks to "re-enable the load term for the Agent tool, OR charge its panes somewhere", and
+# names why the first half must not be done naively: the reasoning above is sound for a THRESHOLD, so
+# re-adding a loadavg ceiling here would re-commit the fleet-wide refusal §12.2 refuted. What was
+# missing is that NOTHING ELSE was charged either — this hook gated on memory headroom ALONE, so the
+# highest-volume spawn surface on the box contributed to no count anywhere.
+#
+# It now charges the term that IS stable enough to be charged: the `ps`-derived live SESSION-TREE
+# census, against a ceiling of 54 — pool-floor.sh's measured machine floor, replacing the `~15`
+# folklore that no code ever read (scripts/lib/spawn-presence.sh § THE CEILING). A session count does
+# not swing 2.05x at constant session count the way loadavg does — that is definitionally impossible —
+# and unlike loadavg it is attributable (each spawn adds exactly one tree) and sheddable (closing the
+# pane removes it). Both new refusals arrive through cc_capacity_admit's existing budget, so a wave can
+# be throttled and can never be permanently blocked.
+#
+# CC_ADMIT_SID IS WHAT MAKES THE RESERVE FAIR, and it is why the session id is passed. The reserve is
+# waived entirely when the SPAWNING session is itself operator-driven (`presence:"self"`): an operator
+# fanning out is the operator spending their own slots, and a gate that refused that would be the
+# reserve turned against its beneficiary. Autonomy driving itself while the operator works elsewhere is
+# the population this yields — which is the DoD of the wave, stated as a mechanism.
 if command -v cc_capacity_admit >/dev/null 2>&1; then
-  if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit agent-tool "${SUBAGENT_TYPE:-subagent} spawn"; then
+  _ateh_sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+  if ! CC_ADMIT_LOAD_TERM=off CC_ADMIT_SID="${_ateh_sid:-?}" \
+       cc_capacity_admit agent-tool "${SUBAGENT_TYPE:-subagent} spawn"; then
     jq -n --arg r "$(cc_capacity_admit_reason)" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: ("MACHINE CAPACITY — subagent spawn refused. \($r). This is memory pressure, not policy: reclaimable headroom (free+speculative+inactive+purgeable) is what a new process can take WITHOUT swapping, and below the floor the whole box swaps and every live session slows. DO NOT retry in a loop — the refusal is BOUNDED and will release itself after CC_ADMIT_BUDGET consecutive refusals (it then admits and pages), so a retry storm only spends the budget that protects you. Instead: shed first (close finished panes, let the running wave drain, reduce the fan-out width), then spawn. Run this work SERIALLY on the lead if it cannot wait. Override for one spawn: CC_ADMIT_GATE=off. Lower the bar: CC_ADMIT_MIN_HEADROOM_GB=<n>. Rule: MACHINE_CAPACITY_V2 §12.1.")
+        permissionDecisionReason: ("MACHINE CAPACITY — subagent spawn refused. \($r). Read the term named in that sentence: `headroom` means the box is genuinely out of reclaimable memory (free+speculative+inactive+purgeable is what a new process can take WITHOUT swapping; below the floor the whole box swaps and every live session slows). `reserve-headroom` or `reserve-slots` means something different and more specific — the box had room, and this spawn is YIELDING to the operator, who is at the keyboard right now. That reserve is a floor of local capacity autonomy may never take (BACKLOG_SELF_DRAINING §W3): it is waived automatically for a session the operator is driving, so if you are seeing it, this session is autonomy. DO NOT retry in a loop — every refusal here is BOUNDED and releases itself after CC_ADMIT_BUDGET consecutive refusals (it then admits and pages), so a retry storm only spends the budget that protects you. Instead: shed first (close finished panes, let the running wave drain, reduce the fan-out width), then spawn. Run this work SERIALLY on the lead if it cannot wait — that is the correct answer while the operator is working. Override for one spawn: CC_ADMIT_GATE=off. Lower the bar: CC_ADMIT_MIN_HEADROOM_GB=<n>. Drop the reserve for one spawn: CC_ADMIT_RESERVE_TERM=off. Rule: MACHINE_CAPACITY_V2 §12.1 + §W3 (backlog 8ae4b508f274).")
       }
     }'
     exit 0

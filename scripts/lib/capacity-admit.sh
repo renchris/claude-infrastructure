@@ -132,6 +132,7 @@ cc_hw_ready() {
   command -v cc_hw_headroom_gb      >/dev/null 2>&1 || return 1
   command -v cc_hw_headroom_verdict >/dev/null 2>&1 || return 1
   command -v cc_hw_resolve_sysctl   >/dev/null 2>&1 || return 1
+  command -v cc_hw_budget_charge    >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -195,6 +196,49 @@ cc_hw_headroom_verdict() { # $1=reclaimable GB $2=floor GB → REFUSE | ADMIT
 # Every caller fails OPEN on a false here — a gate must never convict on its own unreadable input.
 cc_hw_is_int() { case "${1:-}" in ''|*[!0-9]*)  return 1 ;; esac; return 0; }
 cc_hw_is_num() { case "${1:-}" in ''|*[!0-9.]*) return 1 ;; esac; return 0; }
+
+# ── THE BOUND, SHARED (2026-08-12, §W3 item 2) ─────────────────────────────────────────────────
+# Until now the bound was this file's alone, and that asymmetry WAS the defect §W3 exists to remove:
+# `capacity_gate()` in scripts/handoff-fire.sh — the OPERATOR's own `/handoff` path — was the only
+# unbounded affirmative-permission gate on an actuation path in the tree, while every UNATTENDED
+# caller here was budget-released after N consecutive refusals. So on a box whose loadavg sits over
+# the ceiling for structural reasons (§12.2: 2.16/core with 13 sessions, 24 GB free, 0 B compressor —
+# iTerm2 + WindowServer + XProtect are ~2.4 UNSHEDDABLE cores), the human's fire could be refused
+# forever and autonomy's could not. The gate protecting the box was outbidding its owner.
+#
+# WHICH WAY THE ASYMMETRY WAS RESOLVED, and why it is this way round: the operator's path GAINS the
+# release; autonomy does NOT lose its own. Removing autonomy's release would re-commit precisely the
+# architecture §8.5.2's retraction and §12.2's live measurement refuted — a permanent refusal on an
+# unattended recovery path is an outage, not a safeguard, and it cannot self-clear because refusing
+# spawns does not lower the number the gate reads. Whereas §9's narrowed law ("no gate on an
+# actuation path may be unbounded") was never satisfied by capacity_gate() at all. One law, applied
+# to both, with each gate keeping its OWN budget size and its own records — see cc_hw_budget_charge's
+# callers: the operator's is deliberately SMALLER (default 1) because a human is present to read the
+# refusal and shed, so one refusal is the whole message and a second is just an obstacle.
+#
+# PURE MECHANISM, NO POLICY: this returns WHICH SIDE of the bound the caller is on and writes only
+# the counter. What to say, what to record and whom to page stays with each gate — a library that
+# reached into its caller's telemetry is the defect _cc_admit_emit's header already refuses.
+#   rc 0  = charged; the caller may still REFUSE (budget remains)
+#   rc 10 = RELEASED; the budget is spent and reset — the caller must ADMIT and page
+#   rc 1  = the bound is UNTRACKABLE (no state file, bad budget) — the caller must ADMIT, because an
+#           untracked bound is an unbounded gate, and it must never convict on its own bad wiring.
+cc_hw_budget_charge() { # $1=state-file (may be empty) $2=budget → 0 charged / 10 released / 1 untrackable
+  local sf="${1:-}" budget="${2:-}" n
+  [ -n "$sf" ] || return 1
+  cc_hw_is_int "$budget" || return 1
+  n="$(cat "$sf" 2>/dev/null || echo 0)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  n=$((n + 1))
+  if [ "$n" -gt "$budget" ]; then
+    : > "$sf" 2>/dev/null || true
+    return 10
+  fi
+  printf '%s\n' "$n" > "$sf" 2>/dev/null || true
+  CC_HW_BUDGET_N="$n"
+  return 0
+}
+CC_HW_BUDGET_N=0
 # ══ END OF THE SHARED TERMS ════════════════════════════════════════════════════════════════════
 
 # Last-evaluation sentence, for a caller that wants to print or page it.
@@ -223,14 +267,80 @@ _cc_admit_emit() { # $1=verdict admit|refuse  $2=basis  $3=caller  $4=what  $5=d
   # `gate` is carried on BOTH verdicts (§9.5.1): admits and refusals must be selectable by ONE
   # predicate, never two hand-written asymmetric ones, or the denominator silently picks up rows
   # from a different gate — the exact mis-derivation §9.5.1 had to retract.
+  # `presence` and `reserve` ride on EVERY row, admits included, for §9.5.1's reason: a ratio computed
+  # over these rows is meaningless unless the population can be split by what was actually evaluated.
+  # An admit at reserve 0 (operator absent) and an admit at reserve 6 (operator present) are different
+  # events, and without the field the only visible difference is the free text of `detail`.
   jq -cn --arg ts "$ts" --arg disp "$( [ "$1" = admit ] && echo admitted || echo refused )" \
          --arg v "$1" --arg b "$2" --arg c "$3" --arg w "$4" --arg d "$5" --arg t "${6:-}" \
-         --arg sid "${CC_ADMIT_SID:-?}" \
+         --arg sid "${CC_ADMIT_SID:-?}" --arg pres "${CC_ADMIT_PRESENCE:-}" \
+         --arg rsv "${CC_ADMIT_RESERVE:-}" \
     '{ts:$ts,hook:"capacity-admit",sid:$sid,disposition:$disp,reason:"capacity",
       gate:"capacity-admit",verdict:$v,basis:$b,caller:$c,what:$w,detail:$d}
-     + (if $t == "" then {} else {term:$t} end)' >> "$idl" 2>/dev/null || true
+     + (if $t    == "" then {} else {term:$t} end)
+     + (if $pres == "" then {} else {presence:$pres} end)
+     + (if $rsv  == "" then {} else {reserve:$rsv} end)' >> "$idl" 2>/dev/null || true
   return 0
 }
+
+# ── THE PRESENCE CONSULT (§W3 item 1) ──────────────────────────────────────────────────────────
+# The beat is read HERE, at spawn, which is the whole point of the item: hooks/lib/cc-beat.sh had two
+# consumers in the tree and both were teardown-time, so the box knew the operator was present and no
+# spawner asked. This resolves the measurement library the same three-path way every other sibling is
+# resolved (script-relative FIRST, so the term goes live on the trunk fast-forward rather than waiting
+# behind a deploy it cannot trigger — the deployed-layer-bootstrap-circle), and it is ABSENT-TOLERANT:
+# a missing library yields presence `unavailable` and reserve 0, i.e. the gate behaves exactly as it
+# did before this term existed. Inertness is LOUD (it lands in every row's `presence` field), never a
+# silent tightening — a reserve applied on a measurement that could not be taken would refuse spawns
+# for a reason nothing on disk could later explain.
+_CC_ADMIT_SP=""
+_cc_admit_load_presence() { # → 0 when cc_sp_* is available
+  command -v cc_sp_reserve_slots >/dev/null 2>&1 && return 0
+  [ -n "$_CC_ADMIT_SP" ] && return 1          # resolved once already and failed; do not re-fork
+  local here d
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || here=""
+  if [ -n "${CC_ADMIT_PRESENCE_LIB:-}" ]; then
+    if [ -f "$CC_ADMIT_PRESENCE_LIB" ]; then
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      . "$CC_ADMIT_PRESENCE_LIB" 2>/dev/null || true
+    fi
+    command -v cc_sp_reserve_slots >/dev/null 2>&1 && return 0
+    _CC_ADMIT_SP=miss; return 1
+  fi
+  for d in "${here:-.}/spawn-presence.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/spawn-presence.sh" \
+           "$HOME/.claude/scripts/lib/spawn-presence.sh"; do
+    if [ -f "$d" ]; then
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      . "$d" 2>/dev/null || true
+      command -v cc_sp_reserve_slots >/dev/null 2>&1 && return 0
+    fi
+  done
+  _CC_ADMIT_SP=miss
+  return 1
+}
+
+# Sets CC_ADMIT_PRESENCE / CC_ADMIT_RESERVE / CC_ADMIT_RESERVE_GB / CC_ADMIT_RESERVE_SLOTS.
+# Called ONCE per evaluation, before the terms, so every row of that evaluation carries the same
+# reading — a second call could straddle a turn boundary and record two different worlds for one
+# decision (memory init-state-is-not-runtime-state).
+_cc_admit_presence_read() {
+  CC_ADMIT_PRESENCE=""; CC_ADMIT_RESERVE=""; CC_ADMIT_RESERVE_GB=0; CC_ADMIT_RESERVE_SLOTS=0
+  if [ "${CC_ADMIT_RESERVE_TERM:-on}" = off ]; then CC_ADMIT_PRESENCE="term-off"; return 0; fi
+  if ! _cc_admit_load_presence; then CC_ADMIT_PRESENCE="unavailable"; return 0; fi
+  CC_ADMIT_PRESENCE="$(cc_sp_operator_state "${CC_ADMIT_SID:-}" 2>/dev/null || printf 'unknown')"
+  case "$CC_ADMIT_PRESENCE" in self|present|absent|unknown) : ;; *) CC_ADMIT_PRESENCE=unknown ;; esac
+  CC_ADMIT_RESERVE_SLOTS="$(cc_sp_reserve_slots "$CC_ADMIT_PRESENCE" 2>/dev/null || printf 0)"
+  CC_ADMIT_RESERVE_GB="$(cc_sp_reserve_gb "$CC_ADMIT_PRESENCE" 2>/dev/null || printf 0)"
+  cc_hw_is_int "$CC_ADMIT_RESERVE_SLOTS" || CC_ADMIT_RESERVE_SLOTS=0
+  cc_hw_is_int "$CC_ADMIT_RESERVE_GB"    || CC_ADMIT_RESERVE_GB=0
+  CC_ADMIT_RESERVE="${CC_ADMIT_RESERVE_SLOTS} slots + ${CC_ADMIT_RESERVE_GB}GB"
+  return 0
+}
+CC_ADMIT_PRESENCE=""
+CC_ADMIT_RESERVE=""
+CC_ADMIT_RESERVE_GB=0
+CC_ADMIT_RESERVE_SLOTS=0
 
 # ── the bound (§9's law): consecutive refusals per caller ──────────────────────────────────────
 # State is a single integer per caller. Deliberately NOT a timestamp: this must behave identically
@@ -273,6 +383,9 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # handoff-fire's 222 dead rows all carried one identical string, so the ledger could not say
   # whether the next one was the same PATH miss or a NEW cause (exec-deny, sandbox, a sysctl that
   # stopped answering) — states that read alike and have different fixes.
+  # ONE presence reading per evaluation, taken before any term so every row of this decision agrees.
+  _cc_admit_presence_read
+
   sysctl_bin="$(cc_hw_resolve_sysctl "${CC_ADMIT_SYSCTL:-}")"
   ncpu="$(cc_hw_ncpu "$sysctl_bin")"
   load="$(cc_hw_load1 "$sysctl_bin")"
@@ -367,6 +480,57 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     _cc_admit_spend "$caller" "$what" "$budget" "$detail" "headroom"; return $?
   fi
 
+  # ── THE RESERVE (§W3 items 1/4/5) — the operator's floor, in the dimension the box binds on ────
+  # Runs LAST and only over an otherwise-admitting box, so a plain saturation refusal keeps its own
+  # numbers and its own term; this narrows admission only for the caller that is NOT the operator.
+  # The term is REACHED only when the presence read succeeded — `unavailable`/`term-off` leave the
+  # gate exactly as it was before this term existed.
+  #
+  # TWO DIMENSIONS, because a count alone is inert exactly when the operator complains. Measured
+  # 2026-08-12 while building this: 10-11 live session trees against a MEASURED 54-session floor with
+  # 30 GB reclaimable. A pure count reserve never fires at that occupancy; memory headroom is what the
+  # box actually binds on, and §8.5.2's retraction certified it as the one quantity that is both
+  # SHEDDABLE and SESSION-ATTRIBUTABLE. So autonomy must leave the operator's next session's worth of
+  # RAM standing (`reserve-headroom`) as well as its slots (`reserve-slots`).
+  #
+  # WHY THE TERMS STAY DISTINGUISHABLE IN THE ROW: `headroom` above means the box is genuinely out —
+  # the operator's own fire would have been refused too. `reserve-headroom` means the box had room and
+  # autonomy yielded. Folding them would make "did the reserve cost us anything?" unanswerable, which
+  # is the §9.5.1 population defect in miniature.
+  if [ "$CC_ADMIT_PRESENCE" = self ] || [ "$CC_ADMIT_PRESENCE" = present ] \
+  || [ "$CC_ADMIT_PRESENCE" = absent ] || [ "$CC_ADMIT_PRESENCE" = unknown ]; then
+    local eff_floor ceiling_n trees limit
+    if [ "$CC_ADMIT_RESERVE_GB" -gt 0 ] 2>/dev/null; then
+      eff_floor="$(awk -v f="$floor" -v r="$CC_ADMIT_RESERVE_GB" 'BEGIN { printf "%.2f", f + r }')"
+      if [ "$(cc_hw_headroom_verdict "$head_gb" "$eff_floor")" = REFUSE ]; then
+        detail="reclaimable ${head_gb}GB < floor ${floor}GB + operator reserve ${CC_ADMIT_RESERVE_GB}GB = ${eff_floor}GB (operator ${CC_ADMIT_PRESENCE})"
+        _cc_admit_spend "$caller" "$what" "$budget" "$detail" "reserve-headroom"; return $?
+      fi
+    fi
+    # The session-count ceiling — the ONE place `~15` is replaced by the measured 54-session floor
+    # (scripts/lib/spawn-presence.sh § THE CEILING). Charged against a `ps` TREE census, never the
+    # beat: measured 2026-08-12, zero beats were younger than 60 s while ten sessions were live,
+    # because the beat is written at turn boundaries and the busiest sessions are the quietest.
+    ceiling_n="${CC_ADMIT_SESSION_CEILING:-${CC_SP_CEILING:-${CC_SP_DEFAULT_CEILING:-54}}}"
+    if cc_hw_is_int "$ceiling_n" && [ "$CC_ADMIT_RESERVE_SLOTS" -ge 0 ] 2>/dev/null; then
+      trees="$(cc_sp_trees 2>/dev/null || true)"
+      if cc_hw_is_int "$trees"; then
+        limit=$(( ceiling_n - CC_ADMIT_RESERVE_SLOTS ))
+        [ "$limit" -lt 0 ] && limit=0
+        if [ $(( trees + 1 )) -gt "$limit" ]; then
+          detail="${trees} live session trees + 1 > ceiling ${ceiling_n} − operator reserve ${CC_ADMIT_RESERVE_SLOTS} = ${limit} (operator ${CC_ADMIT_PRESENCE})"
+          _cc_admit_spend "$caller" "$what" "$budget" "$detail" "reserve-slots"; return $?
+        fi
+      else
+        # An unreadable census is a fail-OPEN that must be VISIBLE, not an invisible skip: it is the
+        # 222-dead-sysctl-rows shape exactly — a term that silently stopped evaluating reads back as a
+        # healthy admit. Marked in `reserve`, which rides on the admit row this falls through to, so a
+        # window where the census was blind is greppable rather than indistinguishable from a quiet box.
+        CC_ADMIT_RESERVE="${CC_ADMIT_RESERVE} · census UNREADABLE"
+      fi
+    fi
+  fi
+
   # `measured` means what a naive reader assumes "admit" means: EVERY ENABLED term read a live
   # instrument and cleared. A caller running one term gets `headroom-only`/`load-only` instead, so a
   # single-term window can never be counted as evidence that both were exercised.
@@ -388,7 +552,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
 # while budget remains. Past it the gate admits and pages, so a saturated box delays a spawn and
 # can never stand as a permanent refusal — the §12.2 outage, made structurally unreachable.
 _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit / 9 refuse
-  local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n
+  local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n rc
   sf="$(_cc_admit_state_file "$caller")"
   if [ -z "$sf" ]; then
     # An unusable caller id means the bound cannot be tracked, and an UNTRACKED bound is an
@@ -397,18 +561,26 @@ _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit 
     _cc_admit_emit admit fail-open "$caller" "$what" "caller id unusable — bound untrackable ($detail)"
     return 0
   fi
-  n="$(cat "$sf" 2>/dev/null || echo 0)"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  n=$((n + 1))
-  if [ "$n" -gt "$budget" ]; then
+  # The counter itself is cc_hw_budget_charge (a SHARED TERM as of 2026-08-12) — one bound
+  # implementation, so the operator's gate in handoff-fire.sh and this one cannot drift on the
+  # arithmetic. Everything below is this gate's POLICY over that verdict: the sentence, the row and
+  # the page are its own.
+  cc_hw_budget_charge "$sf" "$budget"; rc=$?
+  if [ "$rc" -eq 1 ]; then
+    CC_ADMIT_REASON="capacity-admit: ADMIT (fail-open) — bound untrackable for '$caller'; a bound that cannot be tracked is an UNBOUNDED gate"
+    _cc_admit_emit admit fail-open "$caller" "$what" "bound untrackable — budget '$budget' unusable ($detail)"
+    return 0
+  fi
+  n="$CC_HW_BUDGET_N"
+  if [ "$rc" -eq 10 ]; then
     CC_ADMIT_REASON="capacity-admit: ADMIT (budget expired after ${budget} consecutive refusals) — ${detail}"
     _cc_admit_emit admit budget-expired "$caller" "$what" \
       "${term} term over after ${budget} consecutive refusals — admitting and paging: ${detail}" "$term"
     _cc_admit_page "⚠️ capacity-admit: ${caller} spent its ${budget}-refusal budget and is ADMITTING '${what}' into a saturated box — ${detail}. Shed load (close finished panes) or raise the bar."
-    : > "$sf" 2>/dev/null || true
     return 0
   fi
-  printf '%s\n' "$n" > "$sf" 2>/dev/null || true
+  # The counter write and the reset both live in cc_hw_budget_charge — deliberately NOT repeated here.
+  # Two writers over one state file is how a bound starts disagreeing with itself.
   CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — ${detail} (refusal ${n} of ${budget}; once the budget is spent the next evaluation ADMITS and pages)"
   # basis stays `measured` — BOTH instruments read fine; it is the box that is over, not the probe.
   # WHICH term refused is a separate field: folding it into `basis` would corrupt the one vocabulary

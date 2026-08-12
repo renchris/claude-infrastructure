@@ -329,7 +329,12 @@ EOF
   echo "$output" | grep -qx 'headroom' || false
   # and the detail carries the numbers, so the row is actionable without re-running the fire
   run bash -c "jq -r 'select(.refuse_reason==\"headroom\") | .detail' '$LOG'"
-  [ "$output" = "reclaimable 1.50GB < floor 4GB" ]
+  # The detail gained the PRESENCE reading on 2026-08-12 (§W3 item 1, backlog 8ae4b508f274): this gate
+  # now consults the session presence beat and records what it said AT THE MOMENT IT DECIDED, because
+  # "with the operator active, unattended spawns yield" is only checkable afterwards if both sides of
+  # the decision wrote their reading down. `unknown` is the correct value under a fixtured HOME — this
+  # suite has no beat dir — so it is deterministic here rather than a machine-mood read.
+  [ "$output" = "reclaimable 1.50GB < floor 4GB · operator unknown" ]
 }
 
 @test "22 --recycle is EXEMPT from BOTH terms — a replacement fire is net-zero panes AND net-zero memory" {
@@ -531,7 +536,8 @@ _fires() {
   # the numbers travel with the verdict — an admit with no numbers is worse than a refusal with
   # none, because nothing about it looks wrong
   run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG'"
-  [ "$output" = "load 1.00 on 10 cores = 0.10/core (ceiling 2.0/core) · reclaimable 64GB (floor 4GB)" ]
+  # + the presence reading (§W3 item 1) — see case 21 for why it rides on the ADMIT row too.
+  [ "$output" = "load 1.00 on 10 cores = 0.10/core (ceiling 2.0/core) · reclaimable 64GB (floor 4GB) · operator unknown" ]
 }
 
 @test "26 an admit carries NO engaged field — absent, never a fabricated false (R9)" {
@@ -648,12 +654,38 @@ _fires() {
     case "$line" in
       *"return 0"*)
         n=$((n + 1))
-        printf '%s\n%s\n' "$prev" "$line" | grep -q 'emit_gate_admit' \
+        # `_cc_fire_bound` counts as a recorder, and that is a DEEPENING of this invariant rather
+        # than a hole in it: as of 2026-08-12 (§W3 item 2) a refusal here is BOUNDED, and the release
+        # branch — the one that turns a standing refusal into an admit — lives in that helper, which
+        # emits on every one of its own admitting paths. The property is "no silent admit", never
+        # "the literal emit is on the previous line"; the nested scan below enforces it there, so the
+        # guard follows the emit down instead of being satisfied by its absence.
+        printf '%s\n%s\n' "$prev" "$line" | grep -qE 'emit_gate_admit|_cc_fire_bound' \
           || { echo "UNRECORDED ADMIT — a 'return 0' with no emit_gate_admit: $line"; false; } ;;
     esac
     prev="$line"
   done <<< "$body"
   [ "$n" -ge 9 ] || { echo "expected >=9 admitting returns, found $n — extractor drifted"; false; }
+  # (a2) THE SAME SCAN, ONE LEVEL DOWN — every `return 0` in _cc_fire_bound() is an ADMIT into a
+  # saturated box (the bound released, or it could not be tracked), so each must carry its own
+  # emit_gate_admit. Without this, accepting `_cc_fire_bound` as a recorder above would move the hole
+  # rather than close it.
+  local bbody bn=0
+  bbody="$(awk '/^_cc_fire_bound\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$REPO/scripts/handoff-fire.sh")"
+  [ -n "$bbody" ] || { echo "_cc_fire_bound() not found — the bound the operator's path depends on is missing"; false; }
+  bbody="$(printf '%s\n' "$bbody" | sed 's/^[[:space:]]*//' | grep -v '^#' \
+             | sed -e :a -e '/\\$/N; s/\\\n//; ta')"
+  prev=""
+  while IFS= read -r line; do
+    case "$line" in
+      *"return 0"*)
+        bn=$((bn + 1))
+        printf '%s\n%s\n' "$prev" "$line" | grep -q 'emit_gate_admit' \
+          || { echo "UNRECORDED RELEASE — a 'return 0' in _cc_fire_bound with no emit_gate_admit: $line"; false; } ;;
+    esac
+    prev="$line"
+  done <<< "$bbody"
+  [ "$bn" -ge 3 ] || { echo "expected >=3 releasing returns in _cc_fire_bound, found $bn"; false; }
   # positive control: the same scan MUST reject a body whose return is unrecorded, or (a) is vacuous
   prev=""; rc=0
   while IFS= read -r line; do
@@ -677,6 +709,10 @@ _fires() {
       # capacity denominator would mix two populations read by two different instruments.
       cloud-*)           printf '%s' "$mapped" | grep -q 'cloud-\*'          || false ;;
       payload-*)         printf '%s' "$mapped" | grep -q 'payload-\*'        || false ;;
+      # ARGV surface (an unescaped `!` in --extra). THIS ARM IS THE GUARD'S FIRST CATCH: `extra-bang`
+      # shipped unmapped and this case was RED on trunk over it, which also meant it could not report
+      # any OTHER unmapped reason — a guard blocked by its own first finding sees nothing after it.
+      extra-*)           printf '%s' "$mapped" | grep -q 'extra-\*'          || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac
