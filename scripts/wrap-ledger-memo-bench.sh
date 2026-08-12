@@ -12,13 +12,24 @@
 #   bash scripts/wrap-ledger-memo-bench.sh          # N=6
 #   N=7 bash scripts/wrap-ledger-memo-bench.sh      # the real call-site count
 #
-# Four arms, all N-concurrent, git subprocesses counted by a PATH shim:
+# Five arms, all N-concurrent, git subprocesses counted by a PATH shim:
 #   WRAP_CACHE=off            the control — what a close costs today
 #   memo COLD                 a new event: one caller computes, the rest are served
 #   memo WARM                 the same event again: nothing computes
 #   MUTANT, lock neutered     the MUTATION CONTROL — single-flight disabled and nothing else.
 #                             If this does not regress to the control's cost, the cold arm proves
 #                             nothing: a memo that never engaged looks identical to a perfect one.
+#   SPLIT FLOOR               the REJECTED ALTERNATIVE, priced at its floor (backlog 0b4d4e8a1889,
+#                             refuted 2026-08-12). §5.4 of CONCURRENCY_PROGRAM.md recorded a
+#                             fallback that caches the git-derived fields under a (HEAD, porcelain)
+#                             key and re-runs the store forks per caller. This arm spends ONLY that
+#                             key — no lookup, no ledger, no store fork — so it is a hard LOWER
+#                             BOUND on the design, and the bound is what refutes it: a per-caller
+#                             key cannot go below N git, where the memo's WARM arm measures ZERO.
+#                             (Its correctness half dies separately: a (HEAD, porcelain) key is
+#                             blind to the live layer's HEAD and to $CC_MIGRATIONS_STATE/failed,
+#                             both of which the converger moves between events — pinned by
+#                             tests/wrap-ledger-memo.bats § 7.)
 #
 # Everything lives in a throwaway tree under $BENCH_ROOT; nothing reads the operator's repos.
 set -uo pipefail
@@ -116,6 +127,25 @@ run_wave() {  # $1 = label · $2 = script
 
 new_event() { printf 'turn %s\n' "$(date +%s%N)" >> "$TP"; }
 
+# The rejected alternative's floor: N callers each minting §5.4's (HEAD, porcelain) key, and
+# NOTHING else. Deliberately generous to the design under test — it is charged for neither the
+# `rev-parse --is-inside-work-tree` guard, nor the cache lookup, nor its two per-caller store forks,
+# nor the compute on a miss. A floor that already loses is the honest way to price it.
+run_split_floor() {
+  local i p pids=() t0 t1 g
+  : > "$COUNT"
+  t0="$(date +%s%N)"
+  for (( i=0; i<N; i++ )); do
+    ( cd "$WORK" && git rev-parse HEAD >/dev/null 2>&1 && git status --porcelain >/dev/null 2>&1 ) &
+    pids+=($!)
+  done
+  for p in "${pids[@]}"; do wait "$p" || true; done
+  t1="$(date +%s%N)"
+  g="$(grep -c . "$COUNT" 2>/dev/null)" || g=0
+  printf '  %-30s git=%-5s wall=%sms   (key only — no lookup, no store fork, no ledger)\n' \
+    "SPLIT FLOOR (§5.4, rejected)" "$g" "$(( (t1 - t0) / 1000000 ))"
+}
+
 printf 'wrap-ledger memo — %s CONCURRENT callers, git subprocesses counted by a PATH shim\n' "$N"
 rm -rf "$CACHE"; new_event
 WRAP_CACHE=off run_wave "WRAP_CACHE=off (control)" "$REAL"
@@ -124,3 +154,4 @@ run_wave "memo COLD (new event)" "$REAL"
 run_wave "memo WARM (same event)" "$REAL"
 rm -rf "$CACHE"; new_event
 run_wave "MUTANT — lock neutered" "$MUTANT"
+run_split_floor

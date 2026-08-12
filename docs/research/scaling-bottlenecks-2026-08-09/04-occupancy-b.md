@@ -350,6 +350,57 @@ prints a multi-line filesystem block on stdout while returning non-zero — so t
 non-emptiness would key every session on one constant string, i.e. a memo that never invalidates.
 The implementation tries BSD, then GNU, and **validates that it got two integers** either way.
 
+### 6.2 THE RECORDED FALLBACK IS REFUTED — §5.4's split-cache (2026-08-12, backlog `0b4d4e8a1889`)
+
+§6's table already said the split "buys nothing and costs a correctness argument" on the store-fork
+line. That was a cost note, and it was not enough: `CONCURRENCY_PROGRAM.md` §S6.4 had *recorded* the
+split as **"the design that would work … so it is not rebuilt from scratch"**, so it stayed live as a
+filed item long after the memo shipped. Measured today, on this tree, it fails on **both** halves —
+and the correctness half is the one that was never stated.
+
+**Its key is not complete for the fields it claims to cache.** §5.4 proposes caching the git-derived
+fields under `(HEAD, porcelain)`. But **eight of the nineteen git calls (§4, calls 12–19) read a
+different repo**: the live checkout's `HEAD`, which the converger fast-forwards on a 600 s launchd
+tick, and `$CC_MIGRATIONS_STATE/failed`, which the converger writes. Both move with this repo's
+`HEAD` and porcelain **byte-identical**, so the proposed key cannot see either. Reproduced, with the
+key asserted unchanged across the two events:
+
+| between two events, this repo untouched | `(HEAD, porcelain)` | true rung | what the split would serve |
+|---|---|---|---|
+| the converger fast-forwards the live layer | **identical** | 🚀 → **✅** | a stale **🚀** over a converged box |
+| a failed-migration record appears | **identical** | ✅ → **🚀** | a **false ✅** over a landed-but-inert conclusion |
+
+That is FAILURE 2's exact shape — a key blind to a store that moves independently — relocated from
+⛔ to 🚀, and the second row is the FM1 hazard the ledger exists to prevent. Pinned as
+`tests/wrap-ledger-memo.bats` § 7, both cases mutation-verified red (neuter the converger run, or
+the migration write, and each goes green-for-the-wrong-reason ⇒ the case fails).
+
+**And the cost claim is priced against a baseline that no longer exists.** "~7 of the 10 git
+subprocesses per call" was written when `wrap-ledger.sh` was byte-identical to trunk. Re-measured at
+the real call-site count (`N=7 bash scripts/wrap-ledger-memo-bench.sh`, new **SPLIT FLOOR** arm):
+
+| arm (N=7 concurrent) | git subprocesses / event |
+|---|---|
+| `WRAP_CACHE=off` (control) | 133 |
+| memo COLD (every real Stop is a new event) | **19** |
+| memo WARM (same event, callers 2–7) | **0** |
+| **SPLIT FLOOR** — §5.4's key ONLY, nothing else charged | **14** |
+
+Read honestly: 14 < 19, so on a close where **nothing about the tree changed** the split would spend
+~5 fewer git calls — and that is its whole upside, before it is charged for the cache lookup, the two
+per-caller store forks, or re-deriving `RUNG` in seven places. On a **write** close — the close the
+ladder exists for, where `HEAD` or porcelain has by definition moved — its key **misses**, and it
+pays the 14 *plus* a full git-derived compute: **~31 against the memo's 19**. It can never reach the
+warm 0 at all, because every caller must mint the key itself before it can look anything up; that is
+the one cost an event-scoped key makes free, and it is structural, not tunable.
+
+**Verdict: do not build it, and do not re-file it.** The item is closed as refuted rather than done.
+One process note, because it is the reason this survived four days: the falsifier attached to the
+item was `grep -q _wl_cache_serve && ! grep -q 'if _wl_cache_serve; then exit 0; fi'` — that goes
+green only once the split is *implemented*, so it is a **completion detector, not a falsifier**. It
+can never refute the premise it is attached to, and its "STILL LIVE (exit 1)" was read at dispatch as
+"the premise is current" when all it said was "nobody has built this yet."
+
 ---
 
 ## 7. XProtect: assessment is per FILE, not per exec (MEASURED)

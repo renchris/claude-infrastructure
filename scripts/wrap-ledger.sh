@@ -169,6 +169,14 @@ done
 #   Never a poll loop: `sleep` is a fork here, and a 40 ms poll over a 2 s bound forks ~50× per
 #   loser and costs more than the git calls it saves.
 #
+#   (A THIRD design — "split the computation, not the cache": cache the git-derived fields under a
+#   (HEAD, porcelain) key, re-run the store forks per caller, re-derive RUNG — was RECORDED as the
+#   fallback in CONCURRENCY_PROGRAM.md §S6.4 and is REFUTED, 2026-08-12, backlog 0b4d4e8a1889.
+#   That key is blind to the live-layer arm, which is 8 of the 19 git calls and reads a DIFFERENT
+#   repo: the live checkout's HEAD and $CC_MIGRATIONS_STATE/failed both move under a byte-identical
+#   (HEAD, porcelain) — measured both ways, a stale 🚀 and a FALSE ✅. It is FAILURE 2 one rung down.
+#   Controls: tests/wrap-ledger-memo.bats § 7; cost arm SPLIT FLOOR in wrap-ledger-memo-bench.sh.)
+#
 #   FAILURE 2 (5da21949) — WITHDRAWN because its key could not see a real change. It keyed on the
 #   CONTENT of the operator stores via their directory mtimes, and A DIRECTORY'S MTIME DOES NOT
 #   MOVE WHEN A FILE'S CONTENT CHANGES: flipping a class-C packet open→vetoed edits an existing

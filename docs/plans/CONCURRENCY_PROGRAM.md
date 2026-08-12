@@ -1472,6 +1472,30 @@ already-bounded store forks, re-derive `RUNG` from the union. That keeps every r
 collapsing ~7 of the 10 git subprocesses. Not attempted here because re-deriving `RUNG` outside its
 existing code path is a change to the close protocol's core.
 
+🚨 **SUPERSEDED — the paragraph above is wrong on both of its claims, and this correction is the
+whole reason it is left standing** (2026-08-12, backlog `0b4d4e8a1889`, closed REFUTED; evidence
+`docs/research/scaling-bottlenecks-2026-08-09/04-occupancy-b.md` §6.2). Two things changed under it:
+
+1. **The memo was rebuilt on a sound key and SHIPPED** (2026-08-11, backlog `9414dfb87233`, §6.1 of
+   the findings doc). It keys on the **event** — the transcript's `(path, mtime, size)` ⊕ the session
+   inputs ⊕ cwd ⊕ the env seams — never on store content, so 5da21949's grave does not apply to it:
+   an operator resolving a decision happens BETWEEN turns, and a new turn always appends to the
+   transcript. Re-measured 2026-08-12 at the real call-site count: **133 git per close → 19 cold → 0
+   warm**, `tests/wrap-ledger.bats` 66/66 and `tests/wrap-ledger-memo.bats` 23/23, including a replay
+   of the exact class-C open→vetoed flip through the real `bin/cc-decide` plus a mutation control
+   that reproduces the staleness on demand. So the baseline the split was priced against — 10 git per
+   call, uncached — **no longer exists**.
+2. **"HEAD + porcelain is a complete, cheap key" is FALSE.** Eight of the nineteen git calls are the
+   live-layer arm, whose inputs are the live checkout's `HEAD` and `$CC_MIGRATIONS_STATE/failed` —
+   both moved by the converger, both with this repo's HEAD and porcelain byte-identical. Measured
+   both directions: a stale 🚀 over a converged box, and a **false ✅** over a landed-but-inert
+   conclusion. The split does not "keep every rung exact"; it re-creates FAILURE 2 one rung down.
+
+**Do not build it and do not re-file it.** The refutation is pinned as a re-runnable control
+(`tests/wrap-ledger-memo.bats` § 7, both cases mutation-verified) and a bench arm
+(`scripts/wrap-ledger-memo-bench.sh`, **SPLIT FLOOR** — 14 git/event for the key alone, against the
+memo's 0 warm), so the next reader measures instead of rebuilding.
+
 **MEASURED, and it is this wave's primary evidence: parallel dispatch costs ~3.5× the occupancy of
 serial for IDENTICAL work.** 3 sessions × 8 members, 5 interleaved cycles, ambient subtracted per
 cycle, divided by completed dispatches: serial **0.097** vs parallel **0.313** R-seconds/dispatch,

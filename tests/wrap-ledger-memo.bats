@@ -355,3 +355,98 @@ concurrent_git_count() {
   # SIX computes — the 20%-worse-than-uncached shape 9adc5120 shipped.
   [ "$six" -ge $((baseline * 6)) ]
 }
+
+# ══ 7. THE THIRD DESIGN, REFUTED — §5.4's "split the computation, not the cache" ════════════════
+# (backlog 0b4d4e8a1889, closed as REFUTED 2026-08-12; evidence
+#  docs/research/scaling-bottlenecks-2026-08-09/04-occupancy-b.md §6.2.)
+#
+# CONCURRENCY_PROGRAM.md §S6.4 recorded a fallback design "so it is not rebuilt from scratch":
+# cache the GIT-DERIVED FIELDS — "HEAD + porcelain is a complete, cheap key for them" — always run
+# the two bounded store forks, and re-derive RUNG from the union. It was recorded while the memo
+# was WITHDRAWN and `wrap-ledger.sh` was byte-identical to trunk, i.e. against a 10-git-per-call
+# uncached baseline that no longer exists.
+#
+# ITS KEY IS NOT COMPLETE FOR THE FIELDS IT CLAIMS TO CACHE. Eight of the nineteen git calls
+# (§4, calls 12-19) are the LIVE-LAYER arm, and every input to them lives OUTSIDE this repo: the
+# live checkout's HEAD, which the converger moves on a 600 s launchd tick, and $CC_MIGRATIONS_STATE
+# /failed, which the converger writes. Both move with this repo's HEAD and porcelain BYTE-IDENTICAL,
+# so a (HEAD, porcelain) key is blind to them — structurally FAILURE 2 again, relocated from ⛔ to
+# 🚀, and in the second case pointing at a FALSE ✅ over a landed-but-inert conclusion.
+#
+# The two cases below assert the key is byte-identical across the two events FIRST — without that
+# they would be vacuous, proving only that an uncached ledger recomputes.
+
+# The exact key §5.4 proposes, evaluated in $PWD.
+split_key() { printf 'HEAD=%s|PORCELAIN=[%s]' "$(git rev-parse HEAD)" "$(git status --porcelain)"; }
+
+# A live layer sharing this work tree's origin, parked at $1, so the live-layer arm actually runs.
+# Also satisfies the ✅-eligible path's other terms (a fully-checked DoD).
+_wl_live_fixture() {
+  git clone -q "$ORIGIN" "$D/live" 2>/dev/null
+  git -C "$D/live" checkout -q -B main "$1"
+  export WRAP_LIVE_REPO="$D/live"
+  printf -- '- [x] done\n' > "$D/dod-ok.md"; export WRAP_DOD_FILE="$D/dod-ok.md"
+}
+
+@test "§5.4 REFUTED: the converger moves the live layer under an UNCHANGED (HEAD, porcelain) key" {
+  base="$(git rev-parse HEAD)"
+  echo new > added.txt; git add added.txt; git commit -q -m "add a file"; git push -q origin main
+  _wl_live_fixture "$base"                       # live parked BEFORE the add ⇒ the inert-add breach
+  k1="$(split_key)"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+
+  git -C "$D/live" checkout -q -B main origin/main          # the converger runs BETWEEN events
+  k2="$(split_key)"
+  [ "$k1" = "$k2" ]                              # the proposed key did NOT move — the whole point
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]           # a (HEAD, porcelain) memo would still serve 🚀
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]
+}
+
+@test "§5.4 REFUTED: a FAILED migration appears under an UNCHANGED key ⇒ it would serve a false ✅" {
+  _wl_live_fixture "$(git rev-parse HEAD)"       # live AT HEAD ⇒ ✅-eligible on every git fact
+  k1="$(split_key)"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" MIG_FAILED)" = "0" ]
+
+  # The converger reporting it could NOT put a landed conclusion into its enforcing store. No commit,
+  # no edit, no `git` anything — this is written by a launchd job between two turns.
+  mkdir -p "$CC_MIGRATIONS_STATE/failed"
+  printf '{"id":"0007","why":"settings.json write refused"}\n' > "$CC_MIGRATIONS_STATE/failed/0007.json"
+  k2="$(split_key)"
+  [ "$k1" = "$k2" ]
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]           # the split would have served the ✅ over this
+  [ "$(field "$output" MIG_FAILED)" = "1" ]
+}
+
+# ── The COST half, for completeness. §5.4 claimed "~7 of the 10 git subprocesses" against the
+# uncached baseline; measured today the incumbent memo spends 19 git for a 7-caller event COLD and
+# ZERO WARM (scripts/wrap-ledger-memo-bench.sh, arm SPLIT FLOOR). The split cannot reach either
+# number, because every caller must compute the key ITSELF before it can look anything up — the one
+# thing an event-scoped memo makes free. This pins the floor rather than the whole design: N callers
+# ⇒ ≥N git, forever, where the incumbent measured 0.
+@test "§5.4 REFUTED on cost too: a per-caller git key can never reach the memo's WARM zero" {
+  bash "$LEDGER" --machine --transcript "$TP" >/dev/null      # warm the event
+  warm="$(concurrent_git_count 6 "$LEDGER")"
+  [ "$warm" -eq 0 ]
+  # the split's irreducible floor: each caller mints (HEAD, porcelain) before any lookup
+  : > "$D/gitcount"
+  local i pids=()
+  for (( i=0; i<6; i++ )); do
+    ( WLB_COUNT="$D/gitcount" PATH="$D/shim:$PATH" \
+        bash -c 'git rev-parse HEAD >/dev/null; git status --porcelain >/dev/null' ) &
+    pids+=($!)
+  done
+  for i in "${pids[@]}"; do wait "$i" || true; done
+  floor="$(grep -c . "$D/gitcount" 2>/dev/null)" || floor=0
+  [ "$floor" -ge 6 ]
+  [ "$floor" -gt "$warm" ]
+}
