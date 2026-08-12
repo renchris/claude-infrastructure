@@ -6,7 +6,7 @@ flowchart TB
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
     Tool --> Post["PostToolUse — 12 hooks<br/>plan version · bash log · context watch"]
     Post --> M
-    M --> Stop{"Stop<br/>11 hooks"}
+    M --> Stop{"Stop<br/>12 hooks"}
     Stop -->|"the live git ledger disagrees"| M
     Stop -->|"genuinely done"| End(["turn ends"])
     classDef gate fill:@gold-bg,stroke:@gold-fg,color:@text

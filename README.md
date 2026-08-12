@@ -5,7 +5,7 @@
 ### `~/.claude` becomes a system you deploy — and the sessions become the schedulers.
 
 [![sessions](https://img.shields.io/badge/sessions-7%2C939-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
-[![hooks](https://img.shields.io/badge/hooks-79%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
+[![hooks](https://img.shields.io/badge/hooks-81%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
 [![tests](https://img.shields.io/badge/bats%20tests-7%2C065-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
@@ -35,7 +35,7 @@ generated assets excluded), held to ground truth by a **7,065-test** bats suite 
 |---|---|---|
 | **1** | [**Sessions run each other**](#1-sessions-run-each-other) | You are no longer the scheduler. Sessions open, message, and retire one another — and page you only when a human must decide. |
 | **2** | [**Parallel work cannot collide**](#2-parallel-work-cannot-collide) | A worktree per writer, an account per lane, and exactly one machine-wide lock on landing. |
-| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 79 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
+| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 81 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
 
@@ -266,12 +266,12 @@ Full evidence and the migration plan: [`docs/research/terminal-for-30-panes-2026
 
 ## 3. Autonomy is bounded
 
-**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 90 hook scripts; the live config wires **79 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
+**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 90 hook scripts; the live config wires **81 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
 
 <!-- Diagram source: assets/diagrams/guardrail-pipeline.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/guardrail-pipeline-dark.svg">
-  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then twelve PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
+  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then twelve PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, twelve Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
 </picture>
 
 <details>
@@ -287,7 +287,7 @@ flowchart TB
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
     Tool --> Post["PostToolUse — 12 hooks<br/>plan version · bash log · context watch"]
     Post --> M
-    M --> Stop{"Stop<br/>11 hooks"}
+    M --> Stop{"Stop<br/>12 hooks"}
     Stop -->|"the live git ledger disagrees"| M
     Stop -->|"genuinely done"| End(["turn ends"])
     classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
@@ -317,8 +317,8 @@ flowchart TB
 <br>
 
 ```
-SessionStart (14)     session-start · session-register · live-session-registry · desk-brief-inject · dod-persist ·
-                      mailbox-drain · setup-plan/task-symlinks · session-index-start · pre-session-validate ·
+SessionStart (15)     session-start · session-register · live-session-registry · desk-brief-inject · dod-persist ·
+                      mailbox-drain · mailbox-wake-arm · setup-plan/task-symlinks · session-index-start · pre-session-validate ·
                       config-mirror-assert · activation-watch · frontier-status · lead-crash-watchdog
 UserPromptSubmit (6)  mailbox-drain · handoff-intent-nudge · research-precognition-nudge · memory-nudge ·
                       cache-expiry-warning · session-beat
@@ -329,9 +329,9 @@ PreToolUse (14)       validate-bash · backup-before-write (OVERWRITE GUARD) · 
 PostToolUse (12)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
                       log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle · relay-verbatim ·
                       cc-permission-beacon · mailbox-drain (post-tool — the mechanical wake path)
-Stop (11)             completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
+Stop (12)             completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
                       anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify ·
-                      session-beat · cc-permission-beacon
+                      session-beat · goal-inert-watch · cc-permission-beacon
 SessionEnd (7)        session-end (watchdog handshake) · session-deregister · session-index-end · session-save-id ·
                       live-session-registry · harvest-skill-end · cc-permission-beacon
 Notification (5)      notify ×2 (audio + desktop) · push-critical ×3    PermissionRequest (4)  notify ×3 (Bash · question · plan) ·
@@ -353,9 +353,9 @@ WorktreeCreate (1)    worktree-setup                                  TaskComple
 |---|---|---|
 | `deny` rules | 41 | **Always enforced** — the classifier cannot override |
 | `ask` rules | 6 | Classifier decides instead of prompting (collapsed from 45 as autonomy moved routine calls behind classifier + hook rails) |
-| `allow` rules | 350 | Auto-approved: read-only commands, WebFetch domains, Edit/Write, MCP tools |
+| `allow` rules | 339 | Auto-approved: read-only commands, WebFetch domains, Edit/Write, MCP tools |
 | PreToolUse hooks | 14 | Always fire — a hook deny is an absolute block |
-| PostToolUse hooks | 11 | Always fire — logging, plan versioning, task indexing |
+| PostToolUse hooks | 12 | Always fire — logging, plan versioning, task indexing |
 
 Key deny rules, enforced even in auto mode: `git push --force`, `sudo`/`su`, `eval`/`exec`, `git clean`, `wget`, `dd`, and reads of `.env*` / `*.key` / `*.pem`.
 
@@ -815,7 +815,7 @@ frames "frozen from t=0".
 
 But the renderer is the *second*-order fix: a 30-pane grid is a **polling** interface, so its cost scales with agent count, and exception routing does not. The beacon already writes every blocked session to `/tmp/cc-permission-pending/` and nothing reads it — caught live while this section was written, two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
 
-Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compound**, so a `Bash(prefix:*)` list caps at ~2.4% coverage regardless of rule count — already at `defaultMode: auto` with **350 allow / 6 ask / 41 deny**. The residue is the guardrail working. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
+Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compound**, so a `Bash(prefix:*)` list caps at ~2.4% coverage regardless of rule count — already at `defaultMode: auto` with **339 allow / 6 ask / 41 deny**. The residue is the guardrail working. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
 
 ### Roadmap
 
@@ -995,7 +995,7 @@ not part of the argument above.
 | Directory | Holds | Size |
 |---|---|---|
 | [`bin/`](bin) | the fleet tools you type — `cc-*` plus the account launchers | 86 files, 68 of them `cc-*` |
-| [`hooks/`](hooks) | one script per lifecycle refusal or record | 90 scripts; 79 wired across 12 events |
+| [`hooks/`](hooks) | one script per lifecycle refusal or record | 90 scripts; 81 wired across 12 events |
 | [`scripts/`](scripts) | orchestration — fire, land, verify, deploy, recover | 192 files |
 | [`commands/`](commands) | slash commands (`/ship`, `/handoff`, `/wrap`, `/desk`, …) | 19 |
 | [`skills/`](skills) · [`agents/`](agents) | loadable capabilities · custom subagent definitions | 15 · 4 |
