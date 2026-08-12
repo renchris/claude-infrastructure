@@ -412,8 +412,19 @@ EOF
   [ "$rel" -lt "$att" ]                        # pre-fix: the attest is INSIDE the hold ⇒ rel > att
 
   # NON-VACUITY. Every assertion above would also pass if the sweep had silently not run at all —
-  # which is precisely how a "we moved it out" change could pass by deleting it instead.
-  echo "$output" | grep -qE 'across 6[0-9][0-9] branch\(es\)'   # it really walked the 640
+  # which is precisely how a "we moved it out" change could pass by deleting it instead. The
+  # sweep's own verdict line carries BOTH numbers this fixture built, so assert both:
+  #   ✗ stranded-sweep: 40 commit(s) hold content not on origin/main, on 40 of 641 local branch(es)
+  # The denominator proves the WALK (all ~640 refs); the 40 proves the REPORTING path (the class
+  # whose paths are all absent from the trunk) — a sweep that walked nothing can satisfy neither.
+  # Wording note: pre-`ec357997b` that line read "…, across 641 branch(es)." and this assertion
+  # greped `across 6[0-9][0-9] branch\(es\)`. The 2026-08-12 damping commit re-shaped the
+  # un-`--mine` verdict into "on N of M local branch(es)" and did not carry this fixture with it,
+  # so the grep went red while the sweep was working perfectly — a stale assertion, not a
+  # regression. It is re-pointed at the current text and STRENGTHENED (two numbers, not one)
+  # rather than relaxed: relaxing it is the exact defect it exists to prevent.
+  echo "$output" | grep -qE 'on 40 of 6[0-9][0-9] local branch\(es\)'  # it really walked the 640…
+  echo "$output" | grep -qE '40 commit\(s\) hold content not on'       # …and flagged all 40 strands
   grep -q '"sweep":"review"' "$LAND_LOG"       # …and the attestation field still populates
 
   # The reap is post-release too, and still discharges the rollback ref.
