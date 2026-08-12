@@ -218,3 +218,103 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$(fals_of "$ID")" = "sleep 5" ]
   printf '%s' "$output" | grep -q "WARNING"
 }
+
+# ── THE SECOND SCREEN, at the WRITE path ─────────────────────────────────────────────────────────
+#
+# The exit-0 screen above asks only about TODAY, and today is not where this mechanism fails most:
+# of 26 force-stored probes hand-reviewed by the CURRENCY pass, 16 were refuted and the dominant
+# class — 8 instances against 2 for the next — was a probe whose token was ALREADY in the tree when
+# its item was filed. Such a probe passes the exit-0 screen as a model citizen (it fails today) while
+# discriminating nothing, so the row reads as covered and the first claim that re-runs it is a
+# guaranteed false retraction.
+#
+# BOTH DIRECTIONS ARE ASSERTED, for the reason the exit-0 screen's are — a screen that could only
+# warn, or only stay silent, is indistinguishable from no screen (memory:
+# guard-proxy-fails-in-both-directions). The two differ ONLY in the token, so nothing but the
+# filing-day answer can separate them.
+#
+# THE SILENT CASES ARE PRESERVATION CONTROLS and pass against `git show origin/main:bin/cc-backlog`
+# BY DESIGN — a warn-only arm has no other honest shape. They are what stops "warn on anti-coverage"
+# and "warn on every falsify" from being the same implementation, which is the whole risk of adding
+# a line of stderr to a verb four generators call.
+
+fixture_repo() {
+  # A repo whose ONE commit predates the item, so "was the token there at filing?" has an
+  # unambiguous answer under either date interpretation. `origin/main` is a remote-tracking ref
+  # because that is the ref cc-premise's `_git_usable` positive control and `_trunk_at` both read.
+  FIX="$BATS_TEST_TMPDIR/fixture"; mkdir -p "$FIX"
+  git -C "$FIX" init -q
+  printf 'ALREADY_HERE\n' > "$FIX/screen-fixture.txt"
+  git -C "$FIX" add screen-fixture.txt
+  GIT_AUTHOR_DATE='2026-08-01T00:00:00Z' GIT_COMMITTER_DATE='2026-08-01T00:00:00Z' \
+    git -C "$FIX" -c user.name=t -c user.email=t@e commit -qm 'the token was already here'
+  git -C "$FIX" update-ref refs/remotes/origin/main HEAD
+  export CC_PREMISE_REPO="$FIX"
+}
+
+@test "a probe whose token was ALREADY in the tree at filing is WARNED — and stored anyway" {
+  fixture_repo
+  run bash "$CB" falsify "$ID" --probe "grep -q ALREADY_HERE screen-fixture.txt"
+  # Never a refusal: only the author can tell anti-coverage from a guard whose CALLER is the fix.
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "grep -q ALREADY_HERE screen-fixture.txt" ]
+  printf '%s' "$output" | grep -q "ANTI-COVERAGE"
+  printf '%s' "$output" | grep -q "STORED ANYWAY"
+}
+
+@test "the warning carries the EVIDENCE — which commit put the token there before filing" {
+  # A verdict with no sha is unactionable: the author cannot tell a real anti-coverage reading from
+  # a parser mistake without the commit that proves the token pre-dated the filing.
+  fixture_repo
+  run bash "$CB" falsify "$ID" --probe "grep -q ALREADY_HERE screen-fixture.txt"
+  printf '%s' "$output" | grep -q "already in the tree before filing"
+  printf '%s' "$output" | grep -q "ALREADY_HERE"
+}
+
+@test "CONTROL — a probe that would have FAILED at filing is stored SILENTLY" {
+  fixture_repo
+  run bash "$CB" falsify "$ID" --probe "grep -q NOT_YET_THERE screen-fixture.txt"
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "grep -q NOT_YET_THERE screen-fixture.txt" ]
+  [ "$(printf '%s' "$output" | grep -c 'ANTI-COVERAGE')" -eq 0 ]
+}
+
+@test "CONTROL — an UNDECIDABLE probe is silent, never convicted" {
+  # An absolute path is in no git tree, so "not present at the filing-day commit" is a lookup that
+  # could only ever miss (memory: lookup-miss-is-not-absence). Silence, not a verdict either way.
+  fixture_repo
+  run bash "$CB" falsify "$ID" --probe "test -e $MISSING"
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "test -e $MISSING" ]
+  [ "$(printf '%s' "$output" | grep -c 'ANTI-COVERAGE')" -eq 0 ]
+}
+
+@test "FAIL OPEN — an unresolvable cc-premise stores silently rather than refusing" {
+  fixture_repo
+  CC_BACKLOG_PREMISE_BIN="$BATS_TEST_TMPDIR/no-such-premise" \
+    run bash "$CB" falsify "$ID" --probe "grep -q ALREADY_HERE screen-fixture.txt"
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "grep -q ALREADY_HERE screen-fixture.txt" ]
+  [ "$(printf '%s' "$output" | grep -c 'ANTI-COVERAGE')" -eq 0 ]
+}
+
+@test "the kill switch is cc-premise's own, not a second one" {
+  # ONE screen, ONE way to turn it off. A second switch here would let the write path and the claim
+  # path disagree about whether this question is being asked at all.
+  fixture_repo
+  CC_PREMISE_FILING_SCREEN=off \
+    run bash "$CB" falsify "$ID" --probe "grep -q ALREADY_HERE screen-fixture.txt"
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "grep -q ALREADY_HERE screen-fixture.txt" ]
+  [ "$(printf '%s' "$output" | grep -c 'ANTI-COVERAGE')" -eq 0 ]
+}
+
+@test "--no-run does NOT suppress the second screen — it executes nothing" {
+  # --no-run says "do not EXECUTE the probe". This screen re-asks the probe's clauses against the
+  # filing-day tree with git; it runs no probe, so the flag has nothing to suppress.
+  fixture_repo
+  run bash "$CB" falsify "$ID" --probe "grep -q ALREADY_HERE screen-fixture.txt" --no-run
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "grep -q ALREADY_HERE screen-fixture.txt" ]
+  printf '%s' "$output" | grep -q "ANTI-COVERAGE"
+}

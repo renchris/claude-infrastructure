@@ -564,6 +564,13 @@ merely agree with the world. Two screens, and only the first was built in:
    not the commit log. A date in a log is a claim about when someone WROTE a change; only the tree
    says what the repo actually contained. `bin/cc-premise screen` does it the tree way.
 
+   ⚠️ **AND IT NOW RUNS AT THE WRITE, not only at the claim** (W2b, 2026-08-12 — item
+   `75869b41c9d9`). W2 could only reach `assess`, because its brief did not own `bin/cc-backlog`;
+   `cc-backlog falsify` therefore went on storing anti-coverage probes silently, and the row read as
+   covered to every consumer between the write and the first claim. The verb now asks
+   `cc-premise screen --probe` and **warns** — never refuses, because a probe can legitimately key on
+   a token that predates its item. See § W2b.
+
 **Still open, and not caused by this pass.** `deploy-live.sh` refuses to converge the live layer (no
 green tree descends from live HEAD); lag was 12 commits, inside the 25-commit / 6h degrade budget,
 and this diff adds no file to the live layer, so nothing here is inert. That refusal is the
@@ -727,6 +734,47 @@ are where the next increment of trust lives.
 
 **Not this wave's, and not filed twice:** `deploy-live` still refuses (NO-GREEN-AHEAD, lag 24/1h,
 inside budget) — pre-existing, already filed 17× (`903e7ae67621` et al).
+
+### W2b — LANDED 2026-08-12 · the screen now runs where the probe is WRITTEN, not only where it is re-run
+
+W2 wired the second screen into `assess`, i.e. the CLAIM path — its brief forbade touching
+`bin/cc-backlog` (W3 owned that file), so the WRITE path kept storing anti-coverage probes in
+silence. That gap is what item `75869b41c9d9` names: *"the verb's existing exit-0 refusal cannot see
+this, because it only asks about today."* Catching it at `assess` is a strictly later and weaker
+moment — the row has already read as covered to every consumer in between, and the author who could
+tell a real anti-coverage probe from a guard-whose-caller-is-the-fix has long since moved on.
+
+`cc-backlog falsify` now asks `cc-premise screen <id> --probe` before it returns, and **WARNS** with
+the evidence sha rather than refusing. The warn/refuse split is the item's own instruction and it is
+right: a legitimate probe *can* key on a token that predates its item, and only the author can tell
+those apart — so this reports, exactly as `screen` does, and stores either way.
+
+Three things it deliberately does NOT do, each the cheaper wrong answer:
+
+- **No second implementation.** The rule lives in `cc-premise` and is asked over `--probe`, the
+  interface built for screening a string that is not stored yet. A shell re-derivation would be a
+  second answer to one question — the failure this mechanism has already paid for twice (the
+  falsifier fold diverging on `""` between these two files; `premise_bin` existing at all).
+- **Not the plan's `git log -S<token> --before=`.** § CURRENCY's own CORRECTED block retired that
+  form: `--before` filters on the AUTHOR date, and it CONVICTS `80e6637dfd9e`, which discriminated
+  perfectly. Inheriting `screen` inherits the tree-reconstruction fix for free.
+- **No second kill switch.** `CC_PREMISE_FILING_SCREEN=off` turns off both paths. A local switch
+  would let the write path and the claim path disagree about whether the question is asked at all.
+
+`--no-run` does not suppress it — that flag says "do not EXECUTE the probe", and this screen executes
+nothing; it re-asks the probe's clauses against the filing-day tree with `git grep`/`cat-file`.
+
+26/26 `tests/cc-backlog-falsify.bats` green (7 new); **3 of the 7 RED against
+`git show origin/main:bin/cc-backlog`**, the other 4 green there BY DESIGN — they are the silence
+controls, and a warn-only arm has no other honest shape. They are what separates "warn on
+anti-coverage" from "warn on every falsify", which is the whole risk of adding stderr to a verb four
+generators call. 123/123 across the other `cc-backlog-*` suites; 13/13 `cc-premise-filing-day.bats`.
+Positive control against the live tree, not a fixture: `grep -q cmd_falsify bin/cc-backlog` →
+ANTI-COVERAGE citing `41e4c8f2`, while `grep -q NO_SUCH_TOKEN bin/cc-backlog` stores silently.
+
+**Pre-existing red, not this diff's** (identical count with the change stashed): 14 `cc-backlog.bats`
+cases and 1 `falsifier-emission.bats` case that depend on process/`lsof` fixture shapes unavailable
+in the cloud container.
 
 ## W1 — LANDED 2026-08-11 (`9dd6f7a4c` · `056f5d9d8` / `5ac7990d9`) · and the measurement says DO NOT enforce yet
 
