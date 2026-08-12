@@ -125,6 +125,62 @@ Two smaller generator facts fell out of the census:
 - **The same failed land files twice.** `19692d4032b5` and `9cd25257a847` are the same change
   (`6573023ec` / `59c03d976`), filed 10 minutes apart from two different pane sids.
 
+## S5 · the other 23 — what they actually are
+
+The re-land rows were one mechanism seen 25 times. **The remaining members are not.** The semantic
+grouping joined genuinely distinct engineering to this condition, so the second half of this effort
+is ordinary work with ordinary reading lists — expect no sweep to close it.
+
+They partition three ways, and the split is what a successor needs:
+
+| | n | Disposition |
+|---|---|---|
+| **Agent work** | ~11 | drive it: a fix, a test, a land |
+| **Operator-owned** | 4 | a credential, a GUI action, or a spend — file the reason, never fake the close |
+| **The wave row itself** | 1 | `0328e7cc5742`, closes last |
+
+**Driven so far** (each verified by content on trunk, never by an exit code):
+
+- `417fbab3c317` — the shared checkout's `branch.main.merge` was still the leaked fixture value
+  `refs/heads/up`, so `main@{u}` did not resolve at all. Repaired; the two lag readings now AGREE
+  (`main@{u}..main` = `origin/main..main` = 0) where the incident had the sensor reading 2 against a
+  true 6. The orphan fixture branch `up` (`730e5c7a0`, author `t <t@t>`, subject `b`) is deleted —
+  it was the leak's source, and both preconditions were re-verified before the delete.
+- `7176bda11a8d` — `recycle_engaged()`'s ROW-CHANGE arm probed a FLAT `$pdir/$sid.jsonl`; Claude
+  Code writes transcripts one level down. All 835 real transcripts are nested and zero are flat, so
+  the arm was dead in production **while passing its own suite** — every case in
+  `tests/handoff-recycle-engagement.bats` fixtures transcripts flat, i.e. in the layout the bug
+  assumes. Fixed + two cases pinning the real layout.
+- `87822050d5e5` (`c4df09dd5`) — `/compact-memory`'s E3 exclusion asked ONE grep about three paths
+  and read it through `||`; an unreadable operand exits 2 **even when another operand matched**, so
+  every residual file printed as ORPHAN (13 false ones on reso). Re-measured, the defect is
+  environment-dependent and that is why it survived: `/usr/bin/grep` returns 0 here, the grep an
+  interactive session resolves returns 2 — correct for a script, broken for the reader pasting it,
+  and a `/command` is run by the reader.
+- `0db2c692efb7` — closed as a STALE BLOCK, not as work: the hook is on trunk, its live symlink
+  resolves, migration `0005` is in `applied/`, and `jq .hooks.Stop[].hooks[].command` finds it in
+  both live `settings.json` files. **Re-verify a park before working it** — this one had been done
+  for days.
+- `85bb7476f57f` / `6eebbe61881a` — both closed by re-derivation from content after their refs went
+  missing. A gone ref is a lookup miss, and in all three cases here the work had landed.
+
+**Still open** — `ed6d0716caa7` (L1 death-watch has no watch-file producer) · `dc426ee8df11`
+(WORKTREE MANAGEMENT V2) · `55065a61b31c` (cc-cloud trunk refusal, written, verification blocked on
+a bats admission slot) · `635eb82ef810` (cc-version-audit 2.1.224) · `f76e7d78aaac` (engagement
+oracle has ONE consumer and two spawners that ignore it) · `8ad4b02602dc` (no wake path for an idle
+headless session) · `6ab41e312a13` (vendor `reso-keepalive`; a reso land, so read reso's own
+`CLAUDE.md` first) · `d4c091a86fb8` (zshrc `_cc_sync_account` fails open at 10 sites) · plus the two
+stranded-sweep rows in S3.
+
+🚨 **The box is the binding constraint, not the work.** `cc-bats` refuses at
+`CC_BATS_MAX_ROOTS=2` when 1-min load/core ≥ 2.0, and it refuses as a **DEFERRAL — nothing ran,
+nothing was verified**, which is the honest shape but means a verification cannot be scheduled by
+wanting it. Four in-session teammates plus a sibling wave saturated every slot for the whole middle
+of this session. **Do not answer a load-gated queue by adding workers**: the parallelism that makes
+a wave fast is exactly what makes its own verifications undispatchable. Size the team to the *test*
+slots, not to the task list. Never reach for the printed `CC_BATS_MAX_ROOTS=0` override to get a
+verdict — the gate is measuring a real machine.
+
 ## Definition of done
 Every member row is either closed against a content-verified land or carries a named reason it
 cannot be landed. `git ls-tree origin/main` proves each claim. The exit-5/6/143 generator has a
