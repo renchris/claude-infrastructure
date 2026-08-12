@@ -456,6 +456,20 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # that would otherwise swallow it — the ordering hazard this block's first note names.
       scripts/lib/*/*)           want=0 ;;
       scripts/lib/*.sh)          want=1; cls='scripts/lib/*.sh' ;;
+      # scripts/backlog-consolidation/*.py — SAME ordering hazard as scripts/lib above, and it bit.
+      # install.sh gained this class on 2026-08-12 (6d96bf560) but this auditor did not, so the two
+      # disagreed about the same population: the installer wanted the files live, the assert scored
+      # them want=0 via the catch-all below and reported PARITY OK over their absence. That is the
+      # divergence memory `sibling-auditors-must-share-the-state-model` names, and here it had a
+      # second cost — `link_refresh()` repairs exactly the assert's own MISSING lines, so it is the
+      # ONE mechanism that can install a new class WITHOUT an advance, and a want=0 verdict silently
+      # disabled it. deploy-live then short-circuits at "at trunk tip — nothing to deploy" and never
+      # re-runs install.sh either, so the class could not reach the live layer by ANY path until an
+      # unrelated commit happened to land. Measured: `bash ~/.claude/scripts/backlog-grouping-sweep.sh`
+      # answered "no grouper at …/backlog-consolidation/group.py (fail-open)" with rc 0.
+      # .py, not .sh: this directory's executables are Python (install.sh globs it accordingly).
+      scripts/backlog-consolidation/*/*)  want=0 ;;
+      scripts/backlog-consolidation/*.py) want=1; cls='scripts/backlog-consolidation/*.py' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only
       scripts/*.sh)              want=1; cls='scripts/*.sh' ;;
       # bin/desk-* is a SEPARATE glob in install.sh:621, added because the cc-* glob does not cover
