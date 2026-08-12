@@ -1,12 +1,19 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # HANDOFF_FAILURE_DETECTION_V2 — deskless failure detection, ground-up
 
-**Status:** Phase 4/5 (T2 gate queued behind corpus mutex; all other slices landed on branch) · started 2026-08-07 · branch `deskless` · worktree `.worktrees/deskless`
+**Status:** COMPLETE — all of D1–D9 on `origin/main` since 2026-08-10; trunk shas and the
+verification record in **Phase 5** below. Started 2026-08-07 · branch `deskless` (rebased and
+landed 2026-08-10, then deleted) · worktree `.worktrees/deskless` (gone).
+*(This line read "Phase 4/5 (T2 gate queued behind corpus mutex)" until 2026-08-12 — see Phase 5
+§ Why this doc was stale for two days.)*
 
 ## Landed ledger (branch `deskless`, in order)
+
+⚠️ **These are the branch's PRE-REBASE shas and no longer resolve.** The branch was rebased onto
+main at land time; every commit below exists on trunk under a new sha. The mapping is in Phase 5.
 
 | Commit | What |
 |---|---|
@@ -33,8 +40,12 @@ as justification for dual-write; the amendment makes literal-only DAMP. Design s
 final shape: re-oracle case 9 to assert literal-only DOES damp the v2 sweep, keep dual-write
 justified by legacy-marker compatibility (1,193 live hash markers) instead, and add the mutation
 control (hash-write deletion) T4 already built. Owner: lead (T4 terminated).
+**RESOLVED** at land time exactly as prescribed — `3450abd0` *"re-oracle case 9 to the post-D2
+contract"*. Case 9 now reads *"cross-convention: EITHER marker form damps the v2 sweep; dual-write
+is for LEGACY markers"* and passes.
 
-**Pending:** D2+D4 (t2-sweep — code done, statically green; bats gate queued behind a full-corpus
+**Pending (as of 2026-08-07 — CLEARED 2026-08-10, see Phase 5):** D2+D4 (t2-sweep — code done,
+statically green; bats gate queued behind a full-corpus
 postland run under the capacity mutex, correctly not overridden). T2's live pre-measurement:
 1,019 teardown markers (1,013 past deadline), close-attrib.jsonl = 1 row, `it2 session list`
 returns SHORT NUMERIC ids ⇒ bare substring pane-match would mint ~40 false orphans on tick one —
@@ -484,3 +495,73 @@ stages the live activation copy (cp repo→live pending-activation, per the SSOT
   via `git archive` (never hand-edited) · positive control beside every absence assertion ·
   `|| false` on non-final `[[ ]]` in bats · `bats` on PATH is the cc-bats chokepoint (expect
   admission queueing under load; single-suite runs are fine).
+
+## Phase 5 — land & verify (DONE 2026-08-10; re-verified 2026-08-12)
+
+**All 17 `deskless` commits are on `origin/main`.** The branch was rebased at land time, so the
+ledger's shas are dead; these are the trunk ones (author date 2026-08-07, commit date 2026-08-10 —
+that split IS the rebase signature, and it is how to find the rest of the branch in `git log`).
+
+| Trunk sha | Slice | Ledger sha (dead) |
+|---|---|---|
+| `1d5653b6` | plan: frame, invariants, design | e30f6560 |
+| `bba172d1` | plan: scope grown — D7 + D8 | 88c69114 |
+| `5a16e0af` | **D8** cc-notify resolves kitty numeric pane ids | 5afe8429 |
+| `e7d86ef5` | plan: R2 telemetry | fda6d324 |
+| `66bd623a` | plan: Phase 1 closed | 76b28668 |
+| `ddb6e0ce` | **D9** completion-push suite hermeticity | 39b1e25b |
+| `61fe595c` | **D1** hf_alarm capture-before-notify, 3 sites | e9283b66 |
+| `a0f2ed2a` | **D7** picker desk-arm ownership demotion | e5300a6a |
+| `6c72434c` | **D5+D6** cc-escalations CLI + desk opt-in gate | a698bec9 |
+| `307850b6` | plan: frozen interface corrected (dual seen-keys) | ce0c52a9 |
+| `bb5e9f7a` | docs: map row 14 | d727c035 |
+| `9828b35d` | **D3** escalation-watch + readout ◆ line + activation 33 | 9259ea3a |
+| `4435df76` | plan: as-built corrections | d9c54dc6 |
+| `6f67fc8b` | **D2+D4** ladder un-nested + loud expiry, author-death join | (was pending) |
+| `3450abd0` | case-9 re-oracle — the integration finding above, resolved | (was pending) |
+| `60e8954a`, `6f0d4493` | plan: T2 interim + integration finding | — |
+
+Post-land hardening, all on trunk: `28a0fb48` (three rebase-reconciliation defects the own-scope
+gates caught) · `f1ce1850` (escalation-watch class cell could shift the row) · `699bbb74`
+(count entries with `find`, plus a positive control for the counter) · `90f7be7e` (the red-proof
+harnesses were run by nobody — now part of the test contract).
+
+**Why this doc was stale for two days — the branch was STRANDED, not merged.** The plan's last
+self-report (2026-08-07) is accurate for the day it was written: D2+D4's gate was correctly
+queued behind the capacity mutex and the lead stopped there. What followed is the stranded-work
+class this repo already has a law for. `b5c4256d` (2026-08-10) — *"the liveness-free rung sat
+inside the desk rung, so a deskless machine got nothing"* — **PORTED D2's ladder out of the branch
+by hand**, and its message records the branch as *"a698bec9..a5b83d06, 17 commits, 100%
+unlanded"*: four days of `1,009` records re-collected and re-dropped every 300 s, all-time
+notification-center deliveries zero, while the fix for exactly that sat finished on a branch.
+The branch was then rebased and landed the same day — which is why `28a0fb48` exists at all
+(reconciling the hand-port against the branch's own D2). **The lesson is the ledger's, not the
+design's: a plan whose closing entry is never written cannot tell anyone its work is stranded.**
+Verify a landing by CONTENT — the project `CLAUDE.md`'s standing rule — and write the closing
+entry in the same turn.
+
+**Re-verification, 2026-08-12** (cloud Linux session; suites re-run against trunk, not recalled):
+
+| Suite | Result |
+|---|---|
+| `handoff-alarm-records` (D1) | **15/15** |
+| `cc-escalations` (D5) | **11/11** |
+| `escalation-watch` (D3) | **23/23** |
+| `desk-invariant` (D6) | **24/24** |
+| `autonomy-sweep` (D2/D4) | **51/52** — the one red is the W1 premise-pass interval gate, a later program, red for the same platform reason below |
+| `operator-readout` — D3's six `ESCALATIONS:` cases | **6/6** (the suite's other reds are in legs other programs own) |
+
+⚠️ **Two caveats on that run, both about the platform, not the code.** (1) The mutation controls
+walk `git log` for a pre-change artifact, so they fail on a SHALLOW clone with nothing to
+discriminate against — `git fetch --unshallow` first or the RED-proofs read as red for the wrong
+reason. (2) This fleet is macOS and the suites are BSD-bound: `date -v-8d`, `date -u -r <epoch>`,
+and `stat -f %m` all fail on GNU coreutils. Every red in the first pass traced to one of those and
+cleared under a BSD→GNU shim, except `autonomy-sweep.sh:638`'s `/usr/bin/stat -f %m` — an ABSOLUTE
+path, so no shim on `PATH` can reach it; on GNU it prints filesystem prose to stdout, the numeric
+guard resets `_prem_last` to 0, and the interval gate reads DUE. Correct on Darwin, which is the
+only place it runs. **Off-Darwin these suites are not evidence unless shimmed** — worth knowing
+before a cloud session reads a red here as a trunk regression.
+
+**Live layer:** `docs/activation/pending-activation/33-escalation-watch-activate.sh` is the repo
+SSOT (C10 stage-don't-edit). Whether its live twin has been run is a fact about the operator's box
+and is not readable from a cloud session.
