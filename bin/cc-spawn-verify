@@ -14,7 +14,7 @@
 # disjoint: a spawn can still fail to start for reasons that have nothing to do with typing — a
 # logged-out account, a usage-limit refusal at first token, a reaped cwd, a binary that moved.
 #
-# THREE OUTCOMES, NOT TWO — and everything after the third is the whole point (same contract as
+# FIVE OUTCOMES, NOT TWO — and everything after the second is the whole point (same contract as
 # handoff-fire.sh:verify_engagement, deliberately, so consumers learn ONE exit-code vocabulary):
 #
 #   0  RUNNING  — the agent process exists AND is not sitting on a modal. It started, and it is
@@ -27,6 +27,20 @@
 #                 structurally unable to answer the question. A NON-VERDICT, not a severity.
 #   4  WEDGED   — the process EXISTS and is inert on a blocking modal. The exact inverse of 2, and
 #                 the state this file used to report as 0 RUNNING — see below.
+#   5  UNPROVEN — RESERVED, and NOT PRODUCED BY THIS FILE. handoff-fire.sh:verify_engagement spends
+#                 it for "the scan could not answer" (brief ingested, no assistant turn yet; or the
+#                 scan itself errored). It is listed here because this vocabulary is shared and a
+#                 number may not carry two meanings — the same reason that file spends 5 rather than
+#                 reusing the 3 already taken above. A caller of BOTH must therefore treat 5 as a
+#                 NON-VERDICT (like 3), never as a failure: it says the question went unanswered, not
+#                 that the answer was no, so it must not trigger a re-fire.
+#
+# 5 REACHED THIS FILE LATE, AND THAT IS THE BUG THIS ENTRY ALSO RECORDS (backlog eece3244fca5).
+# `6509abd2` (2026-08-11) added `return 5` to verify_engagement as a LOCAL edit — its own contract
+# header, its signature and its call-site comment all still said FOUR, and this file, the declared
+# second consumer, was never told the member existed. The paragraph below states the rule it broke:
+# a new member of a shared exit vocabulary "arrives here WITH its second consumer taught, never as a
+# local edit". An auditor reading either file's prose would have concluded 5 did not exist.
 #
 # ── WHY 4 EXISTS: LIVENESS IS NOT PROGRESS, AND 0 WAS ANSWERING THE WRONG QUESTION (plan §9.5) ───
 # A fresh session in a project whose `.mcp.json` declares an unapproved server renders "New MCP
@@ -60,6 +74,12 @@
 # containing a question this box could not ask must not report as a wave whose members were all
 # answered (memory: gate-never-ran-vs-gate-red). No existing input changes verdict — 4 did not
 # exist, so nothing that used to fold to 3 can now fold to 4.
+#
+# 5 (UNPROVEN) HAS NO RANK IN THIS TABLE, deliberately: this file never produces it, so a rank here
+# would be an untested claim about a member that cannot appear. Stated rather than left blank for
+# exactly the reason this section exists — a member with no explicit rank is the one that inherits
+# the top by arithmetic accident the moment someone reintroduces `max(rc)`. If a future change makes
+# this file produce 5, it earns its rank in this table in the SAME diff, as a NON-VERDICT beside 3.
 #
 # ── WHY 3 EXISTS, AND WHY IT OUTRANKS THE OTHERS (CLOUD_OBSERVABILITY.md §5.2, liar #1) ──────────
 # A session running in an Anthropic-managed VM shares no kernel and no process table with this box.

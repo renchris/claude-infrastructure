@@ -2178,14 +2178,31 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
 # INC-4 recovery), re-poll ≤retry, then return 1 (caller FAILS LOUD — never a false "→ fired").
 # All windows are env-overridable so tests run in seconds.
 #
-# FOUR outcomes, not two (item 7146aab37a9a gave the third, 75c2e3e2bde7 the fourth). 0 = engaged ·
-# 1 = never engaged · 2 = the pane is PARKED on a shell prompt, i.e. the launcher never ran ·
-# 4 = the pane is WEDGED, i.e. claude STARTED and is inert on a blocking modal. Neither 2 nor 4 is
-# a slower 1: each has a different cause, a different remedy, and — critically — each is knowable in
-# SECONDS rather than after the full window, which is the only reason the verdict reaches the caller
-# at all. Every consumer of this function must branch on 2 and 4 explicitly; a `!` test that folds
+# FIVE outcomes, not two (item 7146aab37a9a gave the third, 75c2e3e2bde7 the fourth, 6509abd2 the
+# fifth). 0 = engaged · 1 = never engaged · 2 = the pane is PARKED on a shell prompt, i.e. the
+# launcher never ran · 4 = the pane is WEDGED, i.e. claude STARTED and is inert on a blocking modal ·
+# 5 = UNPROVEN, i.e. the scan could not answer (the brief is ingested but no assistant turn yet, or
+# the scan itself errored). Neither 2 nor 4 is a slower 1: each has a different cause, a different
+# remedy, and — critically — each is knowable in SECONDS rather than after the full window, which is
+# the only reason the verdict reaches the caller at all. Every consumer of this function must branch on 2, 4 and 5 explicitly; a `!` test that folds
 # them into 1 loses the diagnosis (memory: a new state must be taught to EVERY consumer of the exit
 # code — new-enum-member-falls-into-fail-closed-default).
+#
+# 5 IS NOT A FAILURE VERDICT, which is why it may not be folded with 1. It says the question was not
+# answered, not that the answer was no — so its consumer must NOT tell the operator to re-fire (that
+# is how one live session becomes two in one worktree). It is the only member of this set that is a
+# NON-VERDICT, which is the same role 3 plays in bin/cc-spawn-verify's half of the shared vocabulary.
+#
+# ⚠ THIS BLOCK IS THE CONTRACT, AND IT WENT STALE ONCE — the exact defect backlog eece3244fca5 was
+# filed about. `6509abd2` (2026-08-11) added `return 5` in two places and left this header, the
+# signature line below, and the consumer comment at the ENGAGE_VERIFY call site all saying FOUR — so
+# for a day the documented contract UNDERSTATED the built mechanism, and bin/cc-spawn-verify (which
+# this block pledges shares the vocabulary verbatim) was never taught the new member at all. That is
+# precisely what the paragraph below forbids: a new member "arrives WITH its second consumer taught,
+# never as a local edit". Ranking or auditing this function by reading this comment, rather than by
+# reading its `return` statements, is how a built state gets reported as missing. The set is now
+# pinned by tests/fire-engagement.bats ("verify_engagement CONTRACT"), which compares the documented
+# codes against the actual `return` statements — so the next member cannot land silently.
 #
 # WHY 4 AND NOT 3. This vocabulary is shared verbatim with bin/cc-spawn-verify, deliberately, so a
 # consumer learns ONE exit-code set. That file already spends 3 on OFFBOX (a declared cloud session,
@@ -2197,7 +2214,7 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
 # whenever the screen is unreadable, so the disk oracle remains the authority on success. PARKED is
 # tested first because the two are mutually exclusive by construction — a pane cannot be both a bare
 # shell and a running TUI — so the order is stability, not precedence.
-verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2/4
+verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2/4/5
   local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
   local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
   local t=0 esrc=0
@@ -8729,10 +8746,11 @@ else
   }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
-    # Capture the rc rather than testing it inline: verify_engagement has FOUR outcomes and an
-    # `if verify_engagement` folds 2 (pane parked on a shell prompt) and 4 (session up, wedged on a
-    # modal) into the same else-branch as 1 (booted but never ingested), whose printed remedy —
-    # "re-fire warm" — is right for 1 and actively wrong for both others. `|| rc=$?` is set -e-safe.
+    # Capture the rc rather than testing it inline: verify_engagement has FIVE outcomes and an
+    # `if verify_engagement` folds 2 (pane parked on a shell prompt), 4 (session up, wedged on a
+    # modal) and 5 (cannot tell) into the same else-branch as 1 (booted but never ingested), whose
+    # printed remedy — "re-fire warm" — is right for 1 and actively wrong for all three others.
+    # `|| rc=$?` is set -e-safe.
     ENGAGE_RC=0
     verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")" \
       || ENGAGE_RC=$?
