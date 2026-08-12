@@ -528,3 +528,54 @@ STUB
   [ "$status" -eq 0 ]
   [ ! -f "$FDIR/$FPANE.prompt" ]
 }
+
+# ---- CONTRACT PIN: the documented verdict set must equal the returned one -------------------------
+# Backlog eece3244fca5. `6509abd2` (2026-08-11) added `return 5` (UNPROVEN) to verify_engagement and
+# left every piece of prose describing it saying FOUR — its own header, its signature line, the
+# comment at the ENGAGE_VERIFY call site, and bin/cc-spawn-verify, the file that header names as the
+# second holder of the same shared exit vocabulary. Nothing was red; the mechanism was correct and
+# only its DESCRIPTION was wrong, which is the failure this pin exists to make loud.
+#
+# Why that direction of error is worth a test at all: an auditor deciding whether a state exists
+# reads the contract, not the control flow — that is exactly how bc50117059ac came to rank a
+# fail-closed handoff ack as unbuilt and send two weeks of work at the one surface already finished.
+# A doc that UNDERSTATES a built mechanism is invisible to every other gate in this repo, because
+# nothing executes a comment.
+#
+# The pin is keyed on the MECHANISM (the `return` statements), never on the current spelling of the
+# prose, so it does not decay as the wording improves (memory: control-calibrated-to-implementation
+# -decays). Over-counting is the safe direction: an inline comment saying "return 5" on a code line
+# would red this test, and the cure for that red is to document 5 — which is the desired end state.
+_ve_documented() {   # $1=path to handoff-fire.sh → codes the SIGNATURE claims, one per line
+  sed -n 's/^verify_engagement() {.*→ *\([0-9/]*\).*/\1/p' "$1" \
+    | tr '/' '\n' | grep -E '^[0-9]+$' | sort -u
+}
+_ve_returned() {     # $1=path to handoff-fire.sh → codes the BODY actually returns, one per line
+  sed -n '/^verify_engagement() {/,/^}/p' "$1" \
+    | grep -vE '^[[:space:]]*#' | grep -oE 'return [0-9]+' | awk '{print $2}' | sort -u
+}
+
+@test "verify_engagement CONTRACT: the documented verdict set equals the returned one" {
+  doc="$(_ve_documented "$HF")"
+  act="$(_ve_returned "$HF")"
+  # Vacuous-pass guard: two EMPTY sets compare equal, so a signature line this sed stops matching
+  # would silently certify anything (memory: verification-harness-vacuous-pass-traps). Both sides
+  # must be non-empty, and the body must carry at least the four verdicts that predate this pin.
+  [ -n "$doc" ]
+  [ -n "$act" ]
+  [ "$(printf '%s\n' "$act" | wc -l | tr -d ' ')" -ge 4 ]
+  [ "$doc" = "$act" ]
+}
+
+@test "verify_engagement CONTRACT: the pin FAILS on a signature that understates the body (control)" {
+  # Replays the REAL pre-fix shape: signature at 0/1/2/4 while the body already returns 5. The
+  # mutation is ANCHOR-CHECKED — a sed that silently matched nothing would leave the file equal to
+  # the subject and this control would pass for the wrong reason.
+  STALE="$BATS_TEST_TMPDIR/stale-handoff-fire.sh"
+  sed 's|^\(verify_engagement() {.*→ \)0/1/2/4/5|\10/1/2/4|' "$HF" > "$STALE"
+  run diff -q "$HF" "$STALE"
+  [ "$status" -ne 0 ]                                   # the mutant IS different from the subject
+  [ "$(_ve_documented "$STALE" | tr -d '\n')" = "0124" ]  # …and different in the intended way
+  [ "$(_ve_returned  "$STALE" | tr -d '\n')" = "01245" ]  # body untouched — still returns 5
+  [ "$(_ve_documented "$STALE")" != "$(_ve_returned "$STALE")" ]
+}
