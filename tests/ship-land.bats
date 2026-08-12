@@ -2563,6 +2563,61 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   [ -s "$BATS_TEST_TMPDIR/backlog.jsonl" ]
   grep -q 're-land feat/inbox-row' "$BATS_TEST_TMPDIR/backlog.jsonl"
   grep -q 'ship-land.sh' "$BATS_TEST_TMPDIR/backlog.jsonl"      # the runnable command, not a name
+  # NEGATIVE CONTROL for the falsifier below: this fixture has no scripts/land-content-verify.sh,
+  # and a row is still filed — WITHOUT a probe. A probe that cannot answer is worse than none.
+  ! grep -q '"falsifier"' "$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+
+# ── defect 2b: THE ROW WAS A PREDICTION NOTHING EVER RE-ASKED ────────────────────────────────────
+# The row above measures ONE fact — ship-land exited non-zero — and nothing re-asks by content, so
+# it decays as the work lands under a different sha. Censused 2026-08-12: 24 of the 25 `re-land …`
+# rows of the master-stranded-work effort were FALSE, and four would have REVERTED trunk.
+
+@test "P4 inbox: the row carries a FALSIFIER — the content oracle over the pinned ref" {
+  git checkout -q -b feat/inbox-falsify main
+  mkdir -p scripts
+  cp "$REPO/scripts/land-content-verify.sh" scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad3.sh    # SC2164 → shellcheck RED
+  git add -A && git commit -q -m "feat: bad3"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"falsifier":"bash .*/scripts/land-content-verify.sh refs/land/failed/' \
+    "$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+
+@test "P4 inbox: the falsifier is filed exit-1 and RETRACTS once the content lands elsewhere" {
+  # The round trip, which is the whole mechanism: `falsify` REFUSES (rc 5) a probe that already
+  # exits 0, so a stored probe is itself proof the content was genuinely not on trunk at filing
+  # time; exit 0 later is the retraction. The second half replays the shape that made 24 of 25 rows
+  # false — the same CONTENT landing under a DIFFERENT sha, which every count-based instrument
+  # still reports as unlanded.
+  git checkout -q -b feat/inbox-retract main
+  mkdir -p scripts
+  cp "$REPO/scripts/land-content-verify.sh" scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad4.sh
+  git add -A && git commit -q -m "feat: bad4"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  probe="$(jq -r 'select(.falsifier != null and .falsifier != "") | .falsifier' \
+           "$BATS_TEST_TMPDIR/backlog.jsonl" | tail -1)"
+  [ -n "$probe" ]
+
+  run bash -c "$probe"
+  [ "$status" -eq 1 ]                                  # at filing time: the content is NOT on trunk
+
+  git checkout -q main
+  git checkout -q feat/inbox-retract -- bad4.sh scripts/land-content-verify.sh
+  git commit -q -m "the same content, landed under a different sha"
+  git push -q origin main
+  run bash -c "$probe"
+  [ "$status" -eq 0 ]                                  # …and now the row retracts itself
+  echo "$output" | grep -qF 'LANDED'
 }
 
 @test "P4 inbox: a SUCCESSFUL land files nothing (an inbox of every land is not an inbox)" {
