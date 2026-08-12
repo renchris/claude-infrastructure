@@ -957,11 +957,18 @@ SH
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
   grep -q '"premise_pass_rc":"0"' "$CC_IDL"
-  grep -q '"premise_rows_validated":1' "$CC_IDL"
-  grep -q '"premise_rows_closed":1' "$CC_IDL"
+  grep -q '"premise_pass_note":"ok"' "$CC_IDL"
   [ -f "$CC_PREMISE_PASS_STAMP" ]
+  # KEYED ON THIS TEST'S OWN ROW, never on an absolute count. Other arms of this same sweep FILE
+  # ROWS — `settings-drift-assert` files one carrying its own falsifier, and whether it fires depends
+  # on the real config dirs on the box — so `premise_rows_validated:1` asserts over a population the
+  # subject perturbs and the environment decides. It read 2 on this machine
+  # (memory: exact-count-assertion-tripwires-its-own-subject, span-must-equal-its-subject).
   run "$CC_BACKLOG_BIN" list --all --json
   [ "$(printf '%s' "$output" | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "done" ]
+  [ "$(printf '%s' "$output" | jq -r --arg i "$id" '.[]|select(.id==$i)|.evidence')" != "" ]
+  # …and the row's currency stamp exists, which is the fact the pass is FOR.
+  [ "$(jq -r --arg i "$id" '.rows[$i].verdict // "MISSING"' "$CC_BACKLOG_VALIDATED")" = "falsified" ]
 }
 
 @test "W1 · the interval gate HOLDS the pass off the 5-minute path" {
@@ -971,13 +978,17 @@ SH
   export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
   export CC_PREMISE_PASS_EVERY_S=99999
   export CC_PREMISE_REPO="$REPO"
-  "$CC_BACKLOG_BIN" add --title "w1 gate fixture" --project probe --source test \
-    --falsifier "true" >/dev/null
+  local id; id="$("$CC_BACKLOG_BIN" add --title "w1 gate fixture" --project probe --source test \
+    --falsifier "true")"
   : > "$CC_PREMISE_PASS_STAMP"                          # a pass just ran
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
   grep -q '"premise_pass_note":"not-due"' "$CC_IDL"
-  grep -q '"premise_rows_validated":0' "$CC_IDL"
+  # The held-back proof is that this row — whose probe PASSES, so a running pass would retire it —
+  # is untouched and unstamped. Asserted on the row, not on a count, for the reason in the case above.
+  run "$CC_BACKLOG_BIN" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "open" ]
+  [ ! -s "$CC_BACKLOG_VALIDATED" ]
   # POSITIVE CONTROL: the identical fixture DOES fire once the interval has elapsed, so this test
   # cannot pass merely because the block is broken or absent.
   #
@@ -988,7 +999,9 @@ SH
   : > "$CC_IDL"
   export CC_PREMISE_PASS_EVERY_S=0
   run bash "$SWEEP"
-  grep -q '"premise_rows_validated":1' "$CC_IDL"
+  grep -q '"premise_pass_note":"ok"' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "done" ]
 }
 
 @test "W1 · a RED ratchet files one self-falsifying row instead of only a JSON field" {
