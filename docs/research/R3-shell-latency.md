@@ -203,3 +203,31 @@ cd /tmp && zsh -lic 'claude --version'                                          
 cd /tmp && zsh -lic 'setopt xtrace; PS4="+%D{%s.%6.}|%N:%i> "; claude --version' 2>/tmp/r3-trace-on.err
 python3 /tmp/r3-parse.py /tmp/r3-trace-on.err
 ```
+
+---
+
+## R6 — implemented 2026-08-12: the chain's fat is gone; the lockfile step left the claim path
+
+Every §2 number was re-verified live before editing; every fix measured after. Landed: reso
+`1211088d7` (pool + db-ensure), infra `a09ce88e3` (launcher; hooks are R4's half).
+
+| Segment | §2 before (ms) | after (ms) | how |
+|---|---|---|---|
+| 3 claim, warm slot | 1,614 cold-stamp / 353 warm | **200** | `cmd_claim` provisions NOTHING — no `fetch_guarded`, no `refresh_slot`, no unconditional db-ensure. Pass 1 takes a slot already at last-fetched `origin/main`; pass 2 any clean slot at its last-refreshed base, logged when behind. Residual gates: db-ensure only when `sqlite.db` is absent, `.env.local` copy only when missing. |
+| 3a fetch on claim | 1,382 median, UNBOUNDED (12,064 degraded) | **0** — gone | fetching is ensure's job; `fetch_guarded` itself is now `timeout 30`-bounded (F6 degrade) for ensure/cold callers |
+| 3f pnpm first-touch on claim | 11,022–14,034 | **0** — gone | a stale slot is SERVED at its base; ensure refreshes behind the claim (gc.wake) |
+| 3d db-ensure on claim | 266 | ~0 warm | claim-level `-f sqlite.db` gate, plus db-ensure's no-refresh hot path now exits BEFORE `seed_key` — the ~250ms was node booting to hash seed inputs the present-DB branch never reads |
+| §3 end-to-end control | 2,713–2,960 | **940** | same command, cold fetch stamp both times |
+
+**The deployment trap that made every pool fix unreachable (the load-bearing finding):**
+`_cc_route_check` preferred the PRIMARY checkout's tracked `scripts/worktree-pool.sh` — a
+lagging fork (`/ship` pushes `HEAD:main` and local main never advances; measured FIVE WEEKS
+stale, Jul 3 vs Aug 5) — over `~/.reso/bin/worktree-pool.sh`, which every pool ensure
+self-updates to `origin/main`. The operator's launches were running a five-week-old claim
+path, and a claim fix landed on trunk structurally could not reach them. Fixed in the
+repo-owned lib (`lib/claude-launcher.zsh` shadows the rc copy at source time; order now
+installed-trunk → checkout copy → cold `new-worktree.sh`). Reaches new shells once the live
+layer converges on infra `a09ce88e3`.
+
+Deliberately NOT taken (measured, small): `_cc_tlid` 20ms (2 git forks) · `cc-close-attrib`
+~110ms (crash-forensics plumbing, bounded) · login-shell startup 310ms (not the launcher's).
