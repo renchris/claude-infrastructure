@@ -552,6 +552,18 @@ merely agree with the world. Two screens, and only the first was built in:
    time. The cheap mechanical form is `git log -S<token> --before=<item lastTs>`: a token already in
    the tree at filing cannot be the remedy's signature.
 
+   🚨 **CORRECTED 2026-08-11 by W2, which BUILT this and found the prescribed form defective.**
+   `git log --before=` filters on the **AUTHOR** date, and in this repo an author date routinely
+   precedes the landing by days. Worked example, and it is the one this plan itself got wrong:
+   `cb7f8e3fa` was **authored 2026-08-01** and **committed 2026-08-10 22:04**, while item
+   `80e6637dfd9e` was filed **2026-08-09 21:01** — so the prescribed command sees an 08-01 date,
+   concludes "already in the tree at filing", and CONVICTS a probe that in fact discriminated
+   perfectly. Verified against the filing-day tree: at trunk `51bdb524` (2026-08-09) the file still
+   read *"Our global default:max is WRONG-SIGNED for Opus 5"* — the fix had not landed.
+   **The correct instrument reconstructs the filing-day TREE** (`git show <trunk-as-of-ts>:<path>`),
+   not the commit log. A date in a log is a claim about when someone WROTE a change; only the tree
+   says what the repo actually contained. `bin/cc-premise screen` does it the tree way.
+
 **Still open, and not caused by this pass.** `deploy-live.sh` refuses to converge the live layer (no
 green tree descends from live HEAD); lag was 12 commits, inside the 25-commit / 6h degrade budget,
 and this diff adds no file to the live layer, so nothing here is inert. That refusal is the
@@ -641,7 +653,10 @@ enforcing — the same ratchet discipline M2 used.
 
 **R4 · The second screen, which the CURRENCY pass specified and nothing built.** Its own words:
 *"Did it already pass on the day the item was filed? — nothing checks this, and it is the commoner
-failure by 8 instances to 2."* Mechanical form given there: `git log -S<token> --before=<item lastTs>`
+failure by 8 instances to 2."* ⚠️ The mechanical form given there — `git log -S<token>
+--before=<item lastTs>` — is **defective and was corrected by W2 on delivery**: `--before` filters
+AUTHOR dates, so a change authored before an item and landed after it reads as "already passing".
+Reconstruct the filing-day TREE instead. See the CURRENCY correction above for the worked case
 — a token already in the tree at filing cannot be the remedy's signature. **16 of 26 hand-reviewed
 probes were refuted for exactly this**, and the lead's own spot check caught 1 of the 16. Unbuilt,
 every future coverage push re-manufactures anti-coverage: rows that read as checked and are a
@@ -682,3 +697,33 @@ W1/W2/W3 are independent (different files, no ordering dependency) and fire conc
 **Anti-goal:** a readiness gate that stalls the dispatcher. 219 open rows carry no venue label today;
 a fail-closed gate shipped enforcing on day one would admit nothing. Advisory-first is not timidity,
 it is the only way to learn the would-block rate before it becomes a wall.
+
+## W2 — LANDED 2026-08-11 (`295f6240a`) · the second screen exists, and it corrected the plan that specified it
+
+`bin/cc-premise screen <id>|--all` returns three verdicts — DISCRIMINATING · ANTI-COVERAGE ·
+**UNDECIDABLE, first-class and the default on every failure path** — and is wired ONE-WAY into
+`assess`, so an anti-coverage falsifier can no longer retract an item. 113/113 cc-premise cases
+green; **12 of 13 new cases RED against `origin/main`**, the 13th green by design (it is the
+preservation control).
+
+| | result |
+|---|---|
+| positive control | `918e9bac60b6` + `8e07e87770ce` → ANTI-COVERAGE, evidence shas `da81f555` / `bdb3fe750` |
+| replay over the 16 hand-refuted probes | 4 ANTI-COVERAGE · 9 DISCRIMINATING · 3 UNDECIDABLE — and it found **2 the brief never named** (`9a25cbc24799`, `97de2797ccf5`) |
+| live retro-scan, 163 stored probes | 86 DISCRIMINATING · **0 ANTI-COVERAGE** · 77 UNDECIDABLE · nothing cleared |
+
+🚨 **The finding worth carrying: the wave's own brief named THREE anti-coverage items and one of
+them was innocent.** `80e6637dfd9e` is DISCRIMINATING, and the false conviction came from the
+instrument this plan prescribed — see the CORRECTED block in § CURRENCY. A remedy specified in a
+plan is a claim like any other; W2's deliverable refuted its own brief's evidence, which is the
+outcome an adversarial screen is supposed to produce and the reason it was built to report rather
+than to auto-clear.
+
+**0 ANTI-COVERAGE on the live store is a real number, not a broken screen** — the 16 refuted probes
+were `--clear`ed by the CURRENCY pass, so the population it would convict was already removed. The
+replay over those 16 is what proves the screen can still fire; a live-store zero on its own could
+not (MEMORY: `positive-control-the-denominator`). The 77 UNDECIDABLE are the honest remainder and
+are where the next increment of trust lives.
+
+**Not this wave's, and not filed twice:** `deploy-live` still refuses (NO-GREEN-AHEAD, lag 24/1h,
+inside budget) — pre-existing, already filed 17× (`903e7ae67621` et al).
