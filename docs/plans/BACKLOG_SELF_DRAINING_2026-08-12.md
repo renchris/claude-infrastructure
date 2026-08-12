@@ -282,6 +282,40 @@ reducing the sessions needed to work it.
 
 ---
 
+## SUCCESSOR — start here
+
+State at the 2026-08-12 recycle: **🚀 landed, not live.** `c221caa58` + `39388b17d` are
+content-verified on `origin/main`; the live `~/.claude` layer still runs the pre-fix bytes because
+the shared checkout trails trunk and `deploy-live.sh` is fail-closed on a GREEN `postland-verify`
+stamp that does not yet exist.
+
+**Do these in order. The first one may already be done for you.**
+
+1. **Check whether the fleet's convergence blocker just cleared.**
+   `ls -t ~/.claude/autonomy/postland/stamps | head -3` and read the newest verdict.
+   The two stamps before this work read `verdict:"hung"` / `failing:["tests/autonomy-sweep.bats"]`
+   with `run_s` 4,144 s and 5,235 s. **The arithmetic says that suite's probe block WAS the hang**:
+   49 tests × ~94 s of probe = ~4,600 s, which is essentially the whole run time, and the BAND fix
+   takes that to ~26 s × 49 ≈ 1,270 s. If the stamp against `39388b17d` is GREEN, run
+   `bash scripts/deploy-live.sh` and the whole backlog fix goes live in one step.
+   **If it still hangs, that is the highest-value target on the box** — nothing in `~/.claude`
+   can advance until it passes (filed `35190812890d`).
+2. **Confirm the unwedge actually took, once live.** `bin/cc-dispatch` should stop reporting
+   `reason:"at-ceiling"` with `fired:0`, and finished cloud sessions should start carrying
+   `.retired` markers (there were 0 across 38 declarations).
+3. **Then W1/W2/W3** below — filed as `b585e86ea4e4` (freshness), `ce1e9d1adab8` (the untracked
+   `link.py`/`prune.py`), `8ae4b508f274` (capacity symmetry). W3 is the one the operator feels.
+
+**Two traps this session hit, so you do not pay for them twice.**
+- **A timeout that is ALWAYS hit is not a bound, it is a fixed cost.** Raising one can make a suite
+  faster. Measure whether the subject *completes* before sizing it.
+- **A harness that extracts one shell function loses the helpers it calls.** Extracting
+  `live_workers` without `is_uint` made every case return UNKNOWN and pass vacuously — against the
+  *broken* binary too. Always RED-prove against pristine trunk before believing a green suite.
+
+**Do not re-run the recon.** It is preserved at `docs/research/backlog-pipeline-recon-2026-08-12/`
+with its own README naming the one finding later corrected by measurement.
+
 ## Status log
 
 - **2026-08-12 — plan opened; W0 LANDED (`a984691f6`).** Recon by 5 read-only agents across staleness,
