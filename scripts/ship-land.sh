@@ -1974,7 +1974,23 @@ run_gate() {  # $1=range → 0 green / 1 red
 
   if [[ ${#shellfiles[@]} -gt 0 ]]; then
     echo "→ gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s) (${#sc_todo[@]} unproven / ${#bn_todo[@]} unparsed — the rest carried by blob sha)" >&2
-    if [[ ${#sc_todo[@]} -gt 0 ]]; then
+    if [[ ${#sc_todo[@]} -gt 0 ]] && ! command -v shellcheck >/dev/null 2>&1; then
+      # A MISSING checker is not a claim about this tree. Unguarded, `shellcheck` exits 127 and the
+      # else-arm below files gate_red shellcheck — so a box without the binary is told its code is
+      # RED, and told it identically whether the code is spotless or filthy. bats_sc_nonverdict()
+      # already states this rule for the .bats ratchet ~60 lines up — "the usual cause is that the
+      # checker is not installed on this host" — and this arm is the one that never got it. (That
+      # sentence is paraphrased on purpose: a comment line BEGINNING with the checker's own name
+      # parses as a directive, SC1073, and aborts the lint for the whole file.)
+      # MEASURED 2026-08-12: GitHub's macos-latest image ships no shellcheck, and
+      # tests/gate-precheck.bats was 6-ok / 7-notok there on every hermetic run because of it. The
+      # six "passes" were vacuous — they assert exit 6 naming `arm(s): shellcheck`, which is exactly
+      # what a missing binary produces, so off-box that suite has never once exercised shellcheck.
+      # GATE_KILLED ⇒ the retryable 9, which is what keeps could-not-run apart from is-wrong.
+      echo "⛔ gate: shellcheck is NOT INSTALLED — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  ${#sc_todo[@]} shell file(s) went unjudged. Install shellcheck and re-land." >&2
+      GATE_KILLED=1; rc=1
+    elif [[ ${#sc_todo[@]} -gt 0 ]]; then
       # No subject: shellcheck judges the whole set in one call, so naming one file would be a guess.
       if shellcheck "${sc_todo[@]}" >&2; then
         # Recorded ONLY on a whole-set green. A red says nothing about WHICH file was clean, so
