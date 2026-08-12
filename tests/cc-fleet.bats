@@ -596,8 +596,15 @@ STUB
   # (RED 60a8f0cc8ff7, C29-corroborated across two load windows) whose auto-revert then FAILED
   # rc=90 (`git revert b3b14ecbe00` conflicts against the five commits on top), so the veto could
   # not actuate and forward was the only remedy left — which is the branch the FAILED page names.
-  if [ "$n" != 30 ]; then
-    echo "manifest declares $n labels, expected 30 — if a plist was legitimately added or retired,"
+  # 31 since 2026-08-12: com.claude.cc-gc (backlog 6cab0ab3cb2f) — plist, manifest row and this count
+  # in ONE commit, the accounts-keepwarm miss above done right. It is the SECOND staged-out-of-glob
+  # addition, so re-read what that means here: launchd/staged/ is outside the coverage loop's
+  # `launchd/*.plist` glob on purpose (a standing DELETER must not be armable by a routine install),
+  # which leaves this hand-copied count as the ONLY leg that can notice it. That is the whole reason
+  # the block above refuses to derive `n` from disk, and it is why this entry had to move with the
+  # addition rather than be left for postland-verify — for a staged plist there is no second net.
+  if [ "$n" != 31 ]; then
+    echo "manifest declares $n labels, expected 31 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

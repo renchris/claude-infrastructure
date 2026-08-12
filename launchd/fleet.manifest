@@ -204,6 +204,20 @@ com.claude.relogin                | run    | 3600 | ~/.claude/logs/cc-relogin-po
 # nightly-regression and team-orphan-reaper already do — no scratchpad-specific script exists.
 com.claude.scratchpad-reaper      | staged | 21600 | auto | 11 | 18-fleet-activate.sh
 
+# ── com.claude.cc-gc — the GC franchise sweep (backlog 6cab0ab3cb2f, re-landed 2026-08-12) ────────
+# The one sweeping reaper the 2026-07-22 infra-reliability audit asked for (roadmap item 4). It
+# DELEGATES to each store's own reaper rather than duplicating it, which is why loading this job
+# SUPERSEDES com.claude.scratchpad-reaper above — load one or the other, never both, or the
+# scratchpad store is double-driven. Stated in the plist and again in the activation script.
+# Its plist deliberately lives in launchd/staged/ rather than launchd/: install.sh globs
+# launchd/*.plist, so a plist there would let a routine install arm a standing DELETING job with no
+# operator decision — the same reason com.claude.relogin is staged out of that glob. Standing
+# activation of a deleter is class-C and stays the operator's (40-cc-gc-activate.sh).
+# Fields are disk truth: interval 21600 = its StartInterval; `auto` is a REAL sensor — cc-gc.sh
+# prints its per-store table to stdout on every run, so StandardOutPath is written whenever it
+# fires. owner_row 11 (worktree/scratchpad disk hygiene), same PROVISIONAL routing as the row above.
+com.claude.cc-gc                  | staged | 21600 | auto | 11 | 40-cc-gc-activate.sh
+
 # com.claude.qos-census — row 13 completion (M12): the QoS coverage claim decays without a cadence
 # (every qos-census.jsonl row before 2026-07-30 was a manual run). Same shape as capacity-alarm:
 # 600 s, Background band. NO-BURST ticks (exit 3) are cheap, honest non-verdicts. Staged until the

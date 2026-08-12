@@ -156,13 +156,31 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 #                             RETAIN_H / MARKER_MAX_AGE_S / CC_SUP_GC_S, so §1/1b/1c/2/2b find
 #                             nothing to bound. Declared = reviewed (2026-07-31; the land of
 #                             57e16249 is what made §3 fire).
+# scripts/cc-gc.sh          — the GC franchise driver. READS CC_REGISTRY_DIR as its liveness roster
+#                             and never deletes a registry row; §3 flags it for owning `rm`. It IS a
+#                             genuine age reaper and belongs here on the merits. What it reaps is
+#                             per-session LITTER, never supervisor evidence: fully-acked dead
+#                             mailbox boxes (MBX_DAYS, 7 d = 604,800 s, 100× the 6,000 s floor),
+#                             watchdog .pid/.id pairs behind an identity pin (WD_AGE_S, 2 d =
+#                             172,800 s, 28× the floor), and abandoned mkbox lock dirs. Its two
+#                             evidence-bearing cases deliberately do NOT delete — a dead box with
+#                             UNACKED lines is ARCHIVED to mailbox/archive/ at MBX_STRAND_DAYS
+#                             (30 d), because unacked mail in a dead box is the proof the comms
+#                             layer dropped a message, and a `.forward` tombstone is never removed
+#                             at all so a forward chain stays resolvable. Liveness (a registry row
+#                             with a live pid, or a role pointer) outranks age in every adapter, and
+#                             the driver is DRY-RUN by default — `APPLY=0` until `--apply` is
+#                             passed, so no scheduled invocation deletes without that flag.
+#                             Declared = reviewed (2026-08-12 GC-franchise re-land; backlog
+#                             6cab0ab3cb2f).
 # ── ANCHORS: the load-bearing symbol of each justification, re-checked by §5 every run ────────────
 # Form: `# @anchor <path> <ERE>`. One per claim a reader would have to find code for. §5 fails if an
 # anchor stops matching CODE in its file — i.e. if the justification above now describes something
 # that moved, was renamed, or is gone. This is what makes "Declared = reviewed" a claim the gate
 # re-checks rather than a sentence someone wrote once.
 # ⚠️ COVERAGE IS PARTIAL AND DELIBERATELY STATED: anchors exist for the four entries re-verified
-# against live code on 2026-08-08 (item 74a0896ee989). The older declarations above are NOT anchored
+# against live code on 2026-08-08 (item 74a0896ee989), plus scripts/cc-gc.sh, anchored at its
+# 2026-08-12 re-land. The older declarations above are NOT anchored
 # and are NOT asserted to be current — add an anchor when you next re-verify one. A comment claiming
 # coverage it does not have is the defect this gate exists to prevent, so it is claimed narrowly.
 # @anchor hooks/dispatch-assert.sh mtime \+7
@@ -172,7 +190,11 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # @anchor bin/cc-recover-safeguard REWORDED
 # @anchor hooks/lead-crash-watchdog.sh gc_teardown_marker
 # @anchor hooks/lead-crash-watchdog.sh sid\.daemon
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue'
+# @anchor scripts/cc-gc.sh MBX_STRAND_DAYS
+# @anchor scripts/cc-gc.sh MBX_DIR/archive
+# @anchor scripts/cc-gc.sh WD_AGE_S
+# @anchor scripts/cc-gc.sh ^APPLY=0
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue scripts/cc-gc.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
