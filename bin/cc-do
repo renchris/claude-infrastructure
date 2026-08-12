@@ -47,12 +47,16 @@
 #   cc-do -h|--help    this block
 #
 # NON-INTERACTIVE SAFETY: with stdin not a TTY and none of --run/--list/CC_DO_ASSUME_YES=1, cc-do
-# prints the board and exits 0. It never blocks a scripted caller on a `read` that can never answer.
+# prints the board, says plainly that NOTHING RAN, and exits 3. It never blocks a scripted caller on
+# a `read` that can never answer — and never reports a no-op as success: an empty board still exits
+# 0, so 0 means "nothing outstanding" and 3 means "steps outstanding, no channel to confirm them".
 #
 # Env seams (tests): CC_ACTIVATION_DIR · CC_DECISIONS_DIR · CC_BACKLOG_FILE · CC_BACKLOG_BIN ·
 #   CC_SHARED_CHECKOUT · CC_DEPLOY_SCRIPT · CC_DO_ASSUME_YES
 # Exit: 0 ok / nothing to do / list · 1 a step FAILED (named, nothing after it ran) · 2 usage or
-#   unresolvable stem. bash 3.2 (macOS) clean — no associative arrays, no mapfile, no ${x^^}.
+#   unresolvable stem · 3 runnable steps pending and NOTHING RAN because stdin is not a terminal
+#   (see NON-INTERACTIVE SAFETY). bash 3.2 (macOS) clean — no associative arrays, no mapfile, no
+#   ${x^^}.
 set -uo pipefail
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -348,8 +352,21 @@ render
 [ "$NRUN" -gt 0 ] || exit 0
 
 if [ "$MODE" = run ] || [ "${CC_DO_ASSUME_YES:-0}" = 1 ]; then run_steps; exit $?; fi
-# A scripted caller must never be silently blocked on a read that can never be answered.
-[ -t 0 ] || exit 0
+# ── NO CONFIRM CHANNEL ────────────────────────────────────────────────────────────────────────────
+# A scripted caller must never be silently blocked on a read that can never be answered — but it
+# must not be told "0, all good" either, and that is what this branch used to do. Claude Code's `!`
+# prefix runs the command with stdin closed, so `!cc-do` printed the whole board and exited 0 having
+# executed NOTHING — byte-for-byte the same verdict as a board with nothing on it. The operator (and
+# the agent relaying the block verbatim) read a successful run off a no-op. Silent inaction wearing
+# success's exit code is the one failure mode this whole driver exists to remove.
+# So: still never block, still never run un-confirmed effect-bearing steps — but SAY nothing ran,
+# and exit 3 so a caller can tell "nothing to do" (0) from "something to do and no way to ask" (3).
+if [ ! -t 0 ]; then
+  printf 'cc-do: NOTHING RAN — stdin is not a terminal, so the confirm prompt cannot be asked.\n' >&2
+  printf 'cc-do:   %d runnable step(s) are still pending, exactly as listed above.\n' "$NRUN" >&2
+  printf 'cc-do:   Run them from a terminal with "cc-do", or non-interactively with "cc-do --run".\n' >&2
+  exit 3
+fi
 
 printf 'Run the %d runnable step(s) now? [Y/n] ' "$NRUN"
 read -r ans || ans=""

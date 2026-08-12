@@ -6,7 +6,8 @@
 #   · stem resolution: exactly-one runs, ambiguous and unknown both rc 2 and say why
 #   · decision folding matches the readout's: open C and default-less/deadline-less B in, A out
 #   · malformed packets degrade (skipped) rather than killing the board
-#   · non-TTY with no --run/--list/CC_DO_ASSUME_YES prints and exits 0 — it never blocks on a read
+#   · non-TTY with no --run/--list/CC_DO_ASSUME_YES prints, never blocks on a read — and exits 3
+#     saying NOTHING RAN, so a no-op can never be mistaken for a clean board (which still exits 0)
 #
 # EVERY negative assertion below carries a positive control in the same fixture: an unhooked probe
 # also reports "did not run", so "no side effect" proves nothing unless the SAME probe is shown
@@ -67,7 +68,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 @test "a pending activation renders RUN and --run leaves the .done marker" {
   mkact 05-alpha "$SENT"
   run "$DO" </dev/null
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ]                                 # rendered, ran nothing, SAID so (rc 3)
   echo "$output" | grep -q 'RUN  1. 05-alpha' || false
   [ ! -f "$CC_ACTIVATION_DIR/05-alpha.sh.done" ]      # not yet — rendering must not run
 
@@ -118,7 +119,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   mkact 04-plain "$BATS_TEST_TMPDIR/p"                 # sorts FIRST by filename
   mkact_confirm 18-gated "$BATS_TEST_TMPDIR/g"         # sorts LAST by filename
   run "$DO" </dev/null
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ]                                  # non-TTY render: nothing ran, rc 3
   echo "$output" | grep -q 'RUN  1. 18-gated' || false
   echo "$output" | grep -q 'RUN  2. 04-plain' || false
   # and the gate really is honoured: CONFIRM=1 is what makes the gated body fire
@@ -274,7 +275,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   mkact 05-after "$BATS_TEST_TMPDIR/a"
 
   run "$DO" </dev/null
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ]                                              # non-TTY render: nothing ran
   echo "$output" | grep -q 'RUN  1. deploy-live' || false          # irreversibility order
   echo "$output" | grep -q 'behind origin/main' || false
   echo "$output" | grep -q 'RUN  2. 05-after' || false
@@ -286,15 +287,48 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 
 # ── the non-interactive contract ─────────────────────────────────────────────────────────────────
 
-@test "non-TTY with no --run/--list/CC_DO_ASSUME_YES prints the board and exits 0 WITHOUT prompting" {
+@test "non-TTY with steps pending: prints the board, NEVER prompts, and never runs anything" {
   mkact 05-alpha "$SENT"
   run "$DO" </dev/null
-  [ "$status" -eq 0 ]
   echo "$output" | grep -q 'RUN  1. 05-alpha' || false
   run bash -c 'echo "$1" | grep -c "Y/n"' _ "$output"
-  [ "$output" -eq 0 ]
+  [ "$output" -eq 0 ]                                  # never blocks on a read it cannot answer
   [ ! -f "$SENT" ]
   [ ! -f "$CC_ACTIVATION_DIR/05-alpha.sh.done" ]
+}
+
+# The defect this pair pins: rc 0 + a printed board was BYTE-IDENTICAL in verdict to a clean board,
+# so `!cc-do` under Claude Code (stdin closed) read as a successful run of a no-op. The exit code is
+# what a caller can branch on, so it must SPLIT the two states — and the human-readable half must
+# say it too, since the operator reads the block, not the status.
+@test "non-TTY with steps pending → rc 3 and says NOTHING RAN (control: empty board is still rc 0)" {
+  mkact 05-alpha "$SENT"
+  run "$DO" </dev/null
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q 'NOTHING RAN' || false
+  echo "$output" | grep -q '1 runnable step(s) are still pending' || false
+  echo "$output" | grep -q 'cc-do --run' || false      # names the way out, non-interactively
+
+  # POSITIVE CONTROL — same binary, same closed stdin, nothing outstanding: the honest 0 survives,
+  # so rc 3 is carrying "there was work", not merely "there was no tty".
+  rm -f "$CC_ACTIVATION_DIR/05-alpha.sh"
+  run "$DO" </dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'nothing outstanding' || false
+  run bash -c 'echo "$1" | grep -c "NOTHING RAN"' _ "$output"
+  [ "$output" -eq 0 ]
+}
+
+@test "the non-TTY rc 3 is a RENDER verdict, not a mode verdict: --list/--json/--run keep rc 0" {
+  mkact 05-alpha "$SENT"
+  for mode in --list --json; do
+    run "$DO" "$mode" </dev/null
+    [ "$status" -eq 0 ]                                # explicit "runs nothing" modes are not a
+    [ ! -f "$SENT" ]                                   # failed run — they did what was asked
+  done
+  run "$DO" --run </dev/null                           # the scripted opt-in still succeeds
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ]
 }
 
 @test "CC_DO_ASSUME_YES=1 is the scripted opt-in that DOES run (control for the case above)" {
