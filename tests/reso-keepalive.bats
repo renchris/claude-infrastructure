@@ -48,7 +48,7 @@ setup() {
 @test "an EMPTY marker list exits 0 and SAYS so — it never loops blind" {
   # The failure this replaces is silent: a frozen list whose worktrees no longer exist gives a
   # nudger with nothing to aim at, looping forever with no output. Exiting loudly is the fix.
-  run env CC_KEEPALIVE_MARKERS="" "$KA" 1 fake-session-id
+  run timeout 10 env CC_KEEPALIVE_MARKERS="" "$KA" 1 fake-session-id
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "no target markers" || { echo "empty markers did not announce: $output"; false; }
 }
@@ -56,16 +56,28 @@ setup() {
 @test "CONTROL: a whitespace-only marker list is also EMPTY, not a marker named ' '" {
   # `[ -z "${MARKERS// /}" ]` is the guard; a plain `[ -z "$MARKERS" ]` would let a space through
   # and re-enter the loop with one bogus marker. This is the case that tells them apart.
-  run env CC_KEEPALIVE_MARKERS="   " "$KA" 1 fake-session-id
+  run timeout 10 env CC_KEEPALIVE_MARKERS="   " "$KA" 1 fake-session-id
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "no target markers" || { echo "whitespace-only list was treated as a marker: $output"; false; }
 }
 
 @test "MARKERS is env-overridable — the literal is a DEFAULT, not a freeze" {
-  # Proved without entering the loop: the default list must still be present in the file as a
-  # fallback, AND the parameter expansion must be the overridable form. A file that hardcoded the
-  # list would fail the second assertion while passing the first.
-  grep -q 'CC_KEEPALIVE_MARKERS:-' "$KA" || { echo "MARKERS is not env-overridable"; false; }
+  # ASSERTED AS BEHAVIOUR, NOT AS SPELLING. The first cut of this case grepped for the literal
+  # `CC_KEEPALIVE_MARKERS:-`, which pinned the TEXT of the expansion rather than what it does — and
+  # it went red the moment that text was corrected to `${VAR-default}` to fix a real bug, indicting
+  # the fix instead of the defect (memory: stale-assertion-becomes-an-inverted-guard).
+  #
+  # The behavioural pair below discriminates without entering the nudge loop, because the two env
+  # states must diverge: an EXPLICITLY EMPTY override exits 0 (cases 2 and 3 above), while UNSET
+  # must NOT exit — the default list is in force, so the script proceeds and is killed by the
+  # timeout. A file that ignored the env var entirely would run in both; one that had dropped the
+  # default would exit in both. Only a correct `${VAR-default}` gives one of each.
+  run timeout 5 env CC_KEEPALIVE_MARKERS="" "$KA" 1 fake-session-id
+  [ "$status" -eq 0 ] || { echo "an explicit empty override did not disable it (status $status)"; false; }
+  run timeout 5 "$KA" 1 fake-session-id
+  [ "$status" -eq 124 ] || { echo "UNSET should fall back to the default list and keep running, got status $status"; false; }
+  # The default itself must still be there: dropping it would silently change every existing
+  # caller, and boot-resume.sh passes only the interval.
   grep -q 'wt-cc-030951-65335' "$KA" || { echo "the original default was dropped — existing callers change behaviour"; false; }
 }
 
