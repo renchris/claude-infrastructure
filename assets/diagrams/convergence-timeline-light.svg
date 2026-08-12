@@ -1,27 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 636" width="1400" height="636"
      role="img" aria-labelledby="ttl dsc">
 <title id="ttl">Twice, this repo shipped it first</title>
-<desc id="dsc">Two tracks on one time axis, May to August 2026, over an amber ridge of this repo's own commit volume. On each track a green disc marks the date the capability was running here and a blue ring the Claude Code release that shipped it; the bar between them is the lead, drawn to scale, with its length in days as a large numeral at the left margin — 4 days and 28 days. Both leads fall before the ridge's climb. A light column crosses left to right once every 24 seconds, igniting each marker in date order.</desc>
+<desc id="dsc">Two lanes on one time axis, May to August 2026 — this repo above in green, Claude Code below in blue — over an amber ridge of this repo's own commit volume. A green curve drops from each capability running here to the Claude Code release that shipped it, carrying the lead: 4 days and 28 days. A light column crosses left to right once every 24 seconds, igniting each marker in date order.</desc>
 <defs>
 <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
   <stop offset="0" class="g-sky-a"/><stop offset=".42" class="g-sky-b"/>
   <stop offset=".76" class="g-sky-c"/><stop offset="1" class="g-sky-d"/></linearGradient>
-<linearGradient id="ridge" x1="0" y1="466" x2="0" y2="576"
+<linearGradient id="laneRep" x1="64" y1="0" x2="1336" y2="0" gradientUnits="userSpaceOnUse">
+  <stop offset="0" class="g-rep-dim"/><stop offset=".5" class="g-rep"/>
+  <stop offset="1" class="g-rep-hi"/></linearGradient>
+<linearGradient id="laneCc" x1="64" y1="0" x2="1336" y2="0" gradientUnits="userSpaceOnUse">
+  <stop offset="0" class="g-cc-dim"/><stop offset=".5" class="g-cc"/>
+  <stop offset="1" class="g-cc-hi"/></linearGradient>
+<linearGradient id="ridge" x1="0" y1="426" x2="0" y2="576"
     gradientUnits="userSpaceOnUse">
   <stop offset="0" class="g-ridge-a"/><stop offset=".55" class="g-ridge-b"/>
   <stop offset="1" class="g-ridge-c"/></linearGradient>
-<linearGradient id="band" x1="0" y1="0" x2="1" y2="0">
-  <stop offset="0" class="g-rep-hi"/><stop offset=".55" class="g-rep"/>
-  <stop offset="1" class="g-rep-dim"/></linearGradient>
+<linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-chip-a"/><stop offset="1" class="g-chip-b"/></linearGradient>
+<linearGradient id="scatter" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-scatter" stop-opacity="0"/>
+  <stop offset="1" class="g-scatter" stop-opacity="1"/></linearGradient>
 <radialGradient id="mkRep" cx=".38" cy=".32" r=".75">
   <stop offset="0" class="g-rep-hi"/><stop offset="1" class="g-rep"/></radialGradient>
 <radialGradient id="haloRep"><stop offset="0" class="g-rep" stop-opacity=".9"/>
   <stop offset="1" class="g-rep" stop-opacity="0"/></radialGradient>
 <radialGradient id="haloCc"><stop offset="0" class="g-cc" stop-opacity=".9"/>
   <stop offset="1" class="g-cc" stop-opacity="0"/></radialGradient>
-<linearGradient id="scatter" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-scatter" stop-opacity="0"/>
-  <stop offset="1" class="g-scatter" stop-opacity="1"/></linearGradient>
 <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
   <stop offset="0" class="g-sweep" stop-opacity="0"/>
   <stop offset=".62" class="g-sweep" stop-opacity=".55"/>
@@ -33,51 +38,62 @@
 .g-sky-c{stop-color:var(--sky_c)} .g-sky-d{stop-color:var(--sky_d)}
 .g-ridge-a{stop-color:var(--ridge_a)} .g-ridge-b{stop-color:var(--ridge_b)}
 .g-ridge-c{stop-color:var(--ridge_c)}
+.g-chip-a{stop-color:var(--chip_a)} .g-chip-b{stop-color:var(--chip_b)}
 .g-rep{stop-color:var(--rep)} .g-rep-hi{stop-color:var(--rep_hi)}
 .g-rep-dim{stop-color:var(--rep_dim)}
-.g-cc{stop-color:var(--cc)} .g-sweep{stop-color:var(--sweep)}
-.g-scatter{stop-color:var(--scatter)}
+.g-cc{stop-color:var(--cc)} .g-cc-hi{stop-color:var(--cc_hi)}
+.g-cc-dim{stop-color:var(--cc_dim)}
+.g-scatter{stop-color:var(--scatter)} .g-sweep{stop-color:var(--sweep)}
 </style>
 <style>
-:root{--sky_a:#ffffff;--sky_b:#f2f6fd;--sky_c:#e9eefb;--sky_d:#fbeedd;--edge:#d8e0ea;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e6ecf4;--ink:#0c1218;--ink2:#53606f;--ink3:#7c8794;--track:#ccd6e2;--rep:#1a7f37;--rep_hi:#2da44e;--rep_dim:#8fc9a2;--cc:#0969da;--cc_hi:#218bff;--ridge_a:#e3b64a;--ridge_b:#c99a2f;--ridge_c:#f3e3c4;--ridge_edge:#b8862a;--scatter:#e0a55c;--scatter_o:0.20;--sweep:#1f4e8c;--sweep_o:0.05;--halo_o:0.18;--glow_o:0.14;--core:#ffffff;}
-@media (prefers-color-scheme: dark){:root{--sky_a:#05080f;--sky_b:#0d1424;--sky_c:#1d1e3a;--sky_d:#3a2740;--edge:#242c3e;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1a2133;--ink:#eef3f9;--ink2:#9aa8bb;--ink3:#6c7889;--track:#2c3547;--rep:#3fb950;--rep_hi:#7ee787;--rep_dim:#1b6b2c;--cc:#4b93e6;--cc_hi:#8cc8ff;--ridge_a:#d4af37;--ridge_b:#7a5c22;--ridge_c:#241a10;--ridge_edge:#f0cf6a;--scatter:#c98a4a;--scatter_o:0.13;--sweep:#bcd6ff;--sweep_o:0.09;--halo_o:0.36;--glow_o:0.20;--core:#0b1020;}}
+:root{--sky_a:#ffffff;--sky_b:#f2f6fd;--sky_c:#e9eefb;--sky_d:#fbeedd;--edge:#d8e0ea;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e6ecf4;--ink:#0c1218;--ink2:#53606f;--ink3:#7c8794;--rep:#1a7f37;--rep_hi:#2da44e;--rep_dim:#94c9a4;--cc:#0969da;--cc_hi:#218bff;--cc_dim:#9dc4ec;--ridge_a:#e3b64a;--ridge_b:#c99a2f;--ridge_c:#f3e3c4;--ridge_edge:#b8862a;--scatter:#e0a55c;--scatter_o:0.20;--chip_a:#e9f7ed;--chip_b:#dcf1e3;--sweep:#1f4e8c;--sweep_o:0.05;--halo_o:0.18;--core:#ffffff;}
+@media (prefers-color-scheme: dark){:root{--sky_a:#05080f;--sky_b:#0d1424;--sky_c:#1d1e3a;--sky_d:#3a2740;--edge:#242c3e;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1a2133;--ink:#eef3f9;--ink2:#9aa8bb;--ink3:#6c7889;--rep:#3fb950;--rep_hi:#7ee787;--rep_dim:#1f7a33;--cc:#4b93e6;--cc_hi:#8cc8ff;--cc_dim:#2a5c96;--ridge_a:#d4af37;--ridge_b:#7a5c22;--ridge_c:#241a10;--ridge_edge:#f0cf6a;--scatter:#c98a4a;--scatter_o:0.13;--chip_a:#16241a;--chip_b:#0f1a13;--sweep:#bcd6ff;--sweep_o:0.09;--halo_o:0.34;--core:#0b1020;}}
 
 text{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;dominant-baseline:auto}
-.sans{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif}
 .ink{fill:var(--ink)} .ink2{fill:var(--ink2)} .ink3{fill:var(--ink3)}
 .c-rep{fill:var(--rep)} .c-cc{fill:var(--cc)}
 
-.t-lead{font-size:36px;font-weight:700;fill:var(--rep_hi)}
-.t-unit{font-size:18px;font-weight:600;letter-spacing:1.8px;fill:var(--rep)}
-.t-name{font-size:24px;font-weight:600;fill:var(--ink)}
-.t-s{font-size:18px;fill:var(--ink2)}
-.t-s3{font-size:18px;fill:var(--ink3)}
-.t-kick{font-size:18px;font-weight:600;letter-spacing:2.6px;fill:var(--ink3)}
+.t-l{font-size:34px;font-weight:700;fill:var(--rep_hi)}
+.t-lu{font-size:17px;font-weight:700;letter-spacing:2.4px;fill:var(--rep)}
+.t-m{font-size:22px;font-weight:600;fill:var(--ink)}
+.t-s{font-size:17px;fill:var(--ink2)}
+.t-s3{font-size:17px;fill:var(--ink3)}
+.t-lane{font-size:17px;font-weight:700;letter-spacing:2.4px}
+.t-kick{font-size:17px;font-weight:600;letter-spacing:2.6px;fill:var(--ink3)}
 
 .sky{fill:url(#sky)}
 .edge{fill:none;stroke:var(--edge);stroke-width:1.5}
 .edgehi{fill:none;stroke:var(--edge_hi);stroke-width:1.5;opacity:var(--edge_hi_o)}
 .grid{stroke:var(--grid);stroke-width:1}
-.horizon{stroke:var(--ridge_edge);stroke-width:1.5;opacity:.45}
-.scatter{fill:url(#scatter);opacity:var(--scatter_o)}
 
-/* the ridge — this repo's own commits, the warm source against the cool sky */
-.ridge{fill:url(#ridge)}
-.ridge-edge{fill:none;stroke:var(--ridge_edge);stroke-width:2;stroke-linejoin:round;opacity:.9}
+/* 1. LANE */
+.lane{stroke-width:2.5;stroke-linecap:round}
+.lane-rep{stroke:url(#laneRep)} .lane-cc{stroke:url(#laneCc)}
 
-/* the track, and the lead drawn as MASS */
-.track{stroke:var(--track);stroke-width:2;stroke-dasharray:2 10;stroke-linecap:round}
-.band-glow{fill:var(--rep);opacity:var(--glow_o)}
-.band{fill:url(#band)}
-.band-edge{fill:none;stroke:var(--rep_hi);stroke-width:1.2;opacity:.5}
-.tick-rep{stroke:var(--rep);stroke-width:1.5;opacity:.5;stroke-linecap:round}
-.tick-cc{stroke:var(--cc);stroke-width:1.5;opacity:.5;stroke-linecap:round}
+/* 3. DROP */
+.drop{fill:none;stroke:var(--rep);stroke-width:3;stroke-linecap:round}
+.drop-hi{fill:none;stroke:var(--rep_hi);stroke-width:1.2;opacity:.5;stroke-linecap:round}
+.drop-head{fill:var(--rep)}
+.flow{fill:none;stroke:var(--rep_hi);stroke-width:3;stroke-linecap:butt;opacity:.55;
+       stroke-dasharray:10 74}
+.flow-a{animation:flow 12s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
+.flow-b{animation:flow 8s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
 
+/* 2. MARKER */
 .halo{opacity:var(--halo_o)}
 .halo-rep{fill:url(#haloRep)} .halo-cc{fill:url(#haloCc)}
 .mk-rep{fill:url(#mkRep)}
 .mk-spec{fill:#ffffff;opacity:.5}
-.mk-cc{fill:var(--core);stroke:var(--cc);stroke-width:4.5}
+.mk-cc{fill:var(--core);stroke:var(--cc);stroke-width:4}
+
+/* 4. CHIP */
+.chip{fill:url(#chip);stroke:var(--rep);stroke-width:1.4}
+
+/* 6. GROUND */
+.scatter{fill:url(#scatter);opacity:var(--scatter_o)}
+.ridge{fill:url(#ridge)}
+.ridge-edge{fill:none;stroke:var(--ridge_edge);stroke-width:2;stroke-linejoin:round;opacity:.9}
+.horizon{stroke:var(--ridge_edge);stroke-width:1.5;opacity:.45}
 
 /* ── motion ─────────────────────────────────────────────────────────────────────────────────
    One animation per element, and no literal delay value anywhere — phase rides --d through the
@@ -92,30 +108,26 @@ text{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Libe
 @keyframes ignite{
   0%{opacity:0;transform:scale(1)}
   2%{opacity:.9;transform:scale(1)}
-  10%{opacity:0;transform:scale(2.15)}
+  10%{opacity:0;transform:scale(2.2)}
   100%{opacity:0;transform:scale(1)}}
 .ig{fill:none;stroke-width:2.6;transform-box:fill-box;transform-origin:50% 50%;opacity:0;
      animation:ignite 24s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
 .ig-rep{stroke:var(--rep_hi)} .ig-cc{stroke:var(--cc_hi)}
 
-@keyframes flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-104px}}
-.flow{fill:none;stroke:var(--rep_hi);stroke-width:16;stroke-linecap:butt;opacity:.13;
-       stroke-dasharray:16 88}
-.flow-a{animation:flow 12s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-.flow-b{animation:flow 8s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
+@keyframes flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-84px}}
 
 @media (prefers-reduced-motion: reduce){*{animation:none !important}}
 </style>
 <rect class="sky" x="0" y="0" width="1400" height="636" rx="16"/>
 <g class="sweep" style="--d:0s"><rect class="sweepfill" x="-300" y="0" width="300" height="636"/></g>
 <g>
-<line class="grid" x1="361.7" y1="96" x2="361.7" y2="576"/>
-<line class="grid" x1="767.7" y1="96" x2="767.7" y2="576"/>
-<line class="grid" x1="1187.1" y1="96" x2="1187.1" y2="576"/>
+<line class="grid" x1="361.7" y1="100" x2="361.7" y2="576"/>
+<line class="grid" x1="767.7" y1="100" x2="767.7" y2="576"/>
+<line class="grid" x1="1187.1" y1="100" x2="1187.1" y2="576"/>
 </g>
-<rect class="scatter" x="0" y="426" width="1400" height="150"/>
-<path class="ridge" d="M 64 576 L 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 566.9 L 388.8 566.9 L 388.8 565.7 L 402.3 565.7 L 402.3 565.7 L 415.8 565.7 L 415.8 565.1 L 429.4 565.1 L 429.4 564.1 L 442.9 564.1 L 442.9 564.1 L 456.4 564.1 L 456.4 564.1 L 470.0 564.1 L 470.0 565.7 L 483.5 565.7 L 483.5 566.3 L 497.0 566.3 L 497.0 565.7 L 510.6 565.7 L 510.6 566.3 L 524.1 566.3 L 524.1 567.6 L 537.6 567.6 L 537.6 567.6 L 551.1 567.6 L 551.1 567.6 L 564.7 567.6 L 564.7 571.1 L 578.2 571.1 L 578.2 572.6 L 591.7 572.6 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 572.6 L 740.6 572.6 L 740.6 572.6 L 754.1 572.6 L 754.1 572.6 L 767.7 572.6 L 767.7 571.1 L 781.2 571.1 L 781.2 567.6 L 794.7 567.6 L 794.7 559.2 L 808.3 559.2 L 808.3 559.2 L 821.8 559.2 L 821.8 559.5 L 835.3 559.5 L 835.3 559.5 L 848.9 559.5 L 848.9 559.5 L 862.4 559.5 L 862.4 559.9 L 875.9 559.9 L 875.9 561.4 L 889.4 561.4 L 889.4 564.1 L 903.0 564.1 L 903.0 555.4 L 916.5 555.4 L 916.5 555.4 L 930.0 555.4 L 930.0 554.5 L 943.6 554.5 L 943.6 539.8 L 957.1 539.8 L 957.1 536.7 L 970.6 536.7 L 970.6 535.3 L 984.2 535.3 L 984.2 534.0 L 997.7 534.0 L 997.7 524.7 L 1011.2 524.7 L 1011.2 518.9 L 1024.8 518.9 L 1024.8 514.4 L 1038.3 514.4 L 1038.3 518.3 L 1051.8 518.3 L 1051.8 519.7 L 1065.4 519.7 L 1065.4 517.9 L 1078.9 517.9 L 1078.9 515.4 L 1092.4 515.4 L 1092.4 509.4 L 1106.0 509.4 L 1106.0 504.8 L 1119.5 504.8 L 1119.5 508.6 L 1133.0 508.6 L 1133.0 507.7 L 1146.6 507.7 L 1146.6 484.3 L 1160.1 484.3 L 1160.1 475.7 L 1173.6 475.7 L 1173.6 466.0 L 1187.1 466.0 L 1187.1 469.5 L 1200.7 469.5 L 1200.7 472.7 L 1214.2 472.7 L 1214.2 470.9 L 1227.7 470.9 L 1227.7 472.3 L 1241.3 472.3 L 1241.3 487.7 L 1254.8 487.7 L 1254.8 495.8 L 1268.3 495.8 L 1268.3 501.9 L 1281.9 501.9 L 1281.9 499.1 L 1295.4 499.1 L 1295.4 493.6 L 1308.9 493.6 L 1308.9 482.8 L 1322.5 482.8 L 1322.5 473.4 L 1336.0 473.4 L 1336.0 476.6 L 1336.0 476.6 L 1336 576 Z"/>
-<path class="ridge-edge" d="M 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 566.9 L 388.8 566.9 L 388.8 565.7 L 402.3 565.7 L 402.3 565.7 L 415.8 565.7 L 415.8 565.1 L 429.4 565.1 L 429.4 564.1 L 442.9 564.1 L 442.9 564.1 L 456.4 564.1 L 456.4 564.1 L 470.0 564.1 L 470.0 565.7 L 483.5 565.7 L 483.5 566.3 L 497.0 566.3 L 497.0 565.7 L 510.6 565.7 L 510.6 566.3 L 524.1 566.3 L 524.1 567.6 L 537.6 567.6 L 537.6 567.6 L 551.1 567.6 L 551.1 567.6 L 564.7 567.6 L 564.7 571.1 L 578.2 571.1 L 578.2 572.6 L 591.7 572.6 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 572.6 L 740.6 572.6 L 740.6 572.6 L 754.1 572.6 L 754.1 572.6 L 767.7 572.6 L 767.7 571.1 L 781.2 571.1 L 781.2 567.6 L 794.7 567.6 L 794.7 559.2 L 808.3 559.2 L 808.3 559.2 L 821.8 559.2 L 821.8 559.5 L 835.3 559.5 L 835.3 559.5 L 848.9 559.5 L 848.9 559.5 L 862.4 559.5 L 862.4 559.9 L 875.9 559.9 L 875.9 561.4 L 889.4 561.4 L 889.4 564.1 L 903.0 564.1 L 903.0 555.4 L 916.5 555.4 L 916.5 555.4 L 930.0 555.4 L 930.0 554.5 L 943.6 554.5 L 943.6 539.8 L 957.1 539.8 L 957.1 536.7 L 970.6 536.7 L 970.6 535.3 L 984.2 535.3 L 984.2 534.0 L 997.7 534.0 L 997.7 524.7 L 1011.2 524.7 L 1011.2 518.9 L 1024.8 518.9 L 1024.8 514.4 L 1038.3 514.4 L 1038.3 518.3 L 1051.8 518.3 L 1051.8 519.7 L 1065.4 519.7 L 1065.4 517.9 L 1078.9 517.9 L 1078.9 515.4 L 1092.4 515.4 L 1092.4 509.4 L 1106.0 509.4 L 1106.0 504.8 L 1119.5 504.8 L 1119.5 508.6 L 1133.0 508.6 L 1133.0 507.7 L 1146.6 507.7 L 1146.6 484.3 L 1160.1 484.3 L 1160.1 475.7 L 1173.6 475.7 L 1173.6 466.0 L 1187.1 466.0 L 1187.1 469.5 L 1200.7 469.5 L 1200.7 472.7 L 1214.2 472.7 L 1214.2 470.9 L 1227.7 470.9 L 1227.7 472.3 L 1241.3 472.3 L 1241.3 487.7 L 1254.8 487.7 L 1254.8 495.8 L 1268.3 495.8 L 1268.3 501.9 L 1281.9 501.9 L 1281.9 499.1 L 1295.4 499.1 L 1295.4 493.6 L 1308.9 493.6 L 1308.9 482.8 L 1322.5 482.8 L 1322.5 473.4 L 1336.0 473.4 L 1336.0 476.6 L 1336.0 476.6"/>
+<rect class="scatter" x="0" y="386" width="1400" height="190"/>
+<path class="ridge" d="M 64 576 L 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 563.6 L 388.8 563.6 L 388.8 561.9 L 402.3 561.9 L 402.3 561.9 L 415.8 561.9 L 415.8 561.2 L 429.4 561.2 L 429.4 559.8 L 442.9 559.8 L 442.9 559.8 L 456.4 559.8 L 456.4 559.8 L 470.0 559.8 L 470.0 561.9 L 483.5 561.9 L 483.5 562.7 L 497.0 562.7 L 497.0 561.9 L 510.6 561.9 L 510.6 562.7 L 524.1 562.7 L 524.1 564.5 L 537.6 564.5 L 537.6 564.5 L 551.1 564.5 L 551.1 564.5 L 564.7 564.5 L 564.7 569.4 L 578.2 569.4 L 578.2 571.3 L 591.7 571.3 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 571.3 L 740.6 571.3 L 740.6 571.3 L 754.1 571.3 L 754.1 571.3 L 767.7 571.3 L 767.7 569.4 L 781.2 569.4 L 781.2 564.5 L 794.7 564.5 L 794.7 553.0 L 808.3 553.0 L 808.3 553.0 L 821.8 553.0 L 821.8 553.5 L 835.3 553.5 L 835.3 553.5 L 848.9 553.5 L 848.9 553.5 L 862.4 553.5 L 862.4 554.0 L 875.9 554.0 L 875.9 556.1 L 889.4 556.1 L 889.4 559.8 L 903.0 559.8 L 903.0 547.9 L 916.5 547.9 L 916.5 547.9 L 930.0 547.9 L 930.0 546.7 L 943.6 546.7 L 943.6 526.6 L 957.1 526.6 L 957.1 522.3 L 970.6 522.3 L 970.6 520.5 L 984.2 520.5 L 984.2 518.8 L 997.7 518.8 L 997.7 506.0 L 1011.2 506.0 L 1011.2 498.1 L 1024.8 498.1 L 1024.8 492.0 L 1038.3 492.0 L 1038.3 497.3 L 1051.8 497.3 L 1051.8 499.3 L 1065.4 499.3 L 1065.4 496.7 L 1078.9 496.7 L 1078.9 493.3 L 1092.4 493.3 L 1092.4 485.2 L 1106.0 485.2 L 1106.0 478.9 L 1119.5 478.9 L 1119.5 484.1 L 1133.0 484.1 L 1133.0 482.8 L 1146.6 482.8 L 1146.6 451.0 L 1160.1 451.0 L 1160.1 439.3 L 1173.6 439.3 L 1173.6 426.0 L 1187.1 426.0 L 1187.1 430.8 L 1200.7 430.8 L 1200.7 435.1 L 1214.2 435.1 L 1214.2 432.7 L 1227.7 432.7 L 1227.7 434.6 L 1241.3 434.6 L 1241.3 455.6 L 1254.8 455.6 L 1254.8 466.6 L 1268.3 466.6 L 1268.3 474.9 L 1281.9 474.9 L 1281.9 471.1 L 1295.4 471.1 L 1295.4 463.7 L 1308.9 463.7 L 1308.9 448.9 L 1322.5 448.9 L 1322.5 436.2 L 1336.0 436.2 L 1336.0 440.5 L 1336.0 440.5 L 1336 576 Z"/>
+<path class="ridge-edge" d="M 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 563.6 L 388.8 563.6 L 388.8 561.9 L 402.3 561.9 L 402.3 561.9 L 415.8 561.9 L 415.8 561.2 L 429.4 561.2 L 429.4 559.8 L 442.9 559.8 L 442.9 559.8 L 456.4 559.8 L 456.4 559.8 L 470.0 559.8 L 470.0 561.9 L 483.5 561.9 L 483.5 562.7 L 497.0 562.7 L 497.0 561.9 L 510.6 561.9 L 510.6 562.7 L 524.1 562.7 L 524.1 564.5 L 537.6 564.5 L 537.6 564.5 L 551.1 564.5 L 551.1 564.5 L 564.7 564.5 L 564.7 569.4 L 578.2 569.4 L 578.2 571.3 L 591.7 571.3 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 571.3 L 740.6 571.3 L 740.6 571.3 L 754.1 571.3 L 754.1 571.3 L 767.7 571.3 L 767.7 569.4 L 781.2 569.4 L 781.2 564.5 L 794.7 564.5 L 794.7 553.0 L 808.3 553.0 L 808.3 553.0 L 821.8 553.0 L 821.8 553.5 L 835.3 553.5 L 835.3 553.5 L 848.9 553.5 L 848.9 553.5 L 862.4 553.5 L 862.4 554.0 L 875.9 554.0 L 875.9 556.1 L 889.4 556.1 L 889.4 559.8 L 903.0 559.8 L 903.0 547.9 L 916.5 547.9 L 916.5 547.9 L 930.0 547.9 L 930.0 546.7 L 943.6 546.7 L 943.6 526.6 L 957.1 526.6 L 957.1 522.3 L 970.6 522.3 L 970.6 520.5 L 984.2 520.5 L 984.2 518.8 L 997.7 518.8 L 997.7 506.0 L 1011.2 506.0 L 1011.2 498.1 L 1024.8 498.1 L 1024.8 492.0 L 1038.3 492.0 L 1038.3 497.3 L 1051.8 497.3 L 1051.8 499.3 L 1065.4 499.3 L 1065.4 496.7 L 1078.9 496.7 L 1078.9 493.3 L 1092.4 493.3 L 1092.4 485.2 L 1106.0 485.2 L 1106.0 478.9 L 1119.5 478.9 L 1119.5 484.1 L 1133.0 484.1 L 1133.0 482.8 L 1146.6 482.8 L 1146.6 451.0 L 1160.1 451.0 L 1160.1 439.3 L 1173.6 439.3 L 1173.6 426.0 L 1187.1 426.0 L 1187.1 430.8 L 1200.7 430.8 L 1200.7 435.1 L 1214.2 435.1 L 1214.2 432.7 L 1227.7 432.7 L 1227.7 434.6 L 1241.3 434.6 L 1241.3 455.6 L 1254.8 455.6 L 1254.8 466.6 L 1268.3 466.6 L 1268.3 474.9 L 1281.9 474.9 L 1281.9 471.1 L 1295.4 471.1 L 1295.4 463.7 L 1308.9 463.7 L 1308.9 448.9 L 1322.5 448.9 L 1322.5 436.2 L 1336.0 436.2 L 1336.0 440.5 L 1336.0 440.5"/>
 <line class="horizon" x1="64" y1="576" x2="1336" y2="576"/>
 <g>
 <text class="t-s3" x="152.0" y="606" text-anchor="middle">May ’26</text>
@@ -123,65 +135,57 @@ text{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Libe
 <text class="t-s3" x="977.4" y="606" text-anchor="middle">Jul</text>
 <text class="t-s3" x="1261.6" y="606" text-anchor="middle">Aug</text>
 </g>
-<text class="t-lead" x="64" y="160">4</text>
-<text class="t-unit" x="95.6" y="160">DAYS</text>
-<text class="t-name sans" x="166.0" y="160">a research team that attacks its own findings</text>
-<line class="track" x1="64" y1="240" x2="237.4" y2="240"/>
-<line class="track" x1="323.6" y1="240" x2="1336" y2="240"/>
-<rect class="band-glow" x="249.4" y="223.0" width="62.1" height="34" rx="17.0"/>
-<rect class="band" x="253.4" y="227.0" width="54.1" height="26" rx="13.0"/>
-<line class="flow flow-a" x1="253.4" y1="240" x2="307.6" y2="240" style="--d:0s"/>
-<rect class="band-edge" x="253.4" y="227.0" width="54.1" height="26" rx="13.0"/>
-<line class="tick-rep" x1="253.4" y1="224" x2="253.4" y2="212"/>
-<line class="tick-cc" x1="307.6" y1="256" x2="307.6" y2="260"/>
-<g transform="translate(253.4,240)">
-<circle class="halo halo-rep" r="15"/>
-<circle class="mk-rep" r="10.5"/>
-<circle class="mk-spec" cx="-3.2" cy="-3.8" r="2.5"/>
-<circle class="ig ig-rep" r="13" style="--d:-20.394s"/>
-</g>
-<g transform="translate(307.6,240)">
-<circle class="halo halo-cc" r="14"/>
-<circle class="mk-cc" r="9"/>
-<circle class="ig ig-cc" r="12.5" style="--d:-19.630s"/>
-</g>
-<text class="t-s c-rep" x="247.4" y="206">2026-05-24</text>
-<text class="t-s" x="367.4" y="206">running here</text>
-<text class="t-s c-cc" x="301.6" y="274">2026-05-28</text>
-<text class="t-s" x="421.6" y="274">Dynamic Workflows 2.1.154 — the same idea</text>
-<text class="t-lead" x="64" y="336">28</text>
-<text class="t-unit" x="117.2" y="336">DAYS</text>
-<text class="t-name sans" x="187.6" y="336">two-way session messaging</text>
-<line class="track" x1="64" y1="416" x2="873.4" y2="416"/>
-<line class="track" x1="1284.3" y1="416" x2="1336" y2="416"/>
-<rect class="band-glow" x="885.4" y="399.0" width="386.9" height="34" rx="17.0"/>
-<rect class="band" x="889.4" y="403.0" width="378.9" height="26" rx="13.0"/>
-<line class="flow flow-b" x1="889.4" y1="416" x2="1268.3" y2="416" style="--d:0s"/>
-<rect class="band-edge" x="889.4" y="403.0" width="378.9" height="26" rx="13.0"/>
-<line class="tick-rep" x1="889.4" y1="400" x2="889.4" y2="388"/>
-<line class="tick-cc" x1="1268.3" y1="432" x2="1268.3" y2="436"/>
-<g transform="translate(889.4,416)">
-<circle class="halo halo-rep" r="15"/>
-<circle class="mk-rep" r="10.5"/>
-<circle class="mk-spec" cx="-3.2" cy="-3.8" r="2.5"/>
-<circle class="ig ig-rep" r="13" style="--d:-11.415s"/>
-</g>
-<g transform="translate(1268.3,416)">
-<circle class="halo halo-cc" r="14"/>
-<circle class="mk-cc" r="9"/>
-<circle class="ig ig-cc" r="12.5" style="--d:-6.066s"/>
-</g>
-<text class="t-s c-rep" x="883.4" y="382">2026-07-10</text>
-<text class="t-s" x="1003.4" y="382">running here</text>
-<text class="t-s c-cc" x="625.1" y="450">2026-08-07</text>
-<text class="t-s" x="745.1" y="450">Claude Code 2.1.224 — sessions message each other</text>
-<text class="t-kick" x="64" y="46">HERE FIRST · TWICE</text>
-<text class="t-s" x="64" y="82">Bar = the days it was running here before the Claude Code release that shipped it.</text>
 <text class="t-s3" x="64" y="552">this repo's own commits · 7-day trailing · peak 1,024/wk</text>
-<circle class="mk-rep" cx="905" cy="40" r="8"/>
-<text class="t-s" x="920" y="46">running here</text>
-<circle class="mk-cc" cx="1083" cy="40" r="6"/>
-<text class="t-s" x="1098" y="46">shipped in Claude Code</text>
+<line class="lane lane-rep" x1="64" y1="190" x2="1336" y2="190"/>
+<line class="lane lane-cc" x1="64" y1="330" x2="1336" y2="330"/>
+<text class="t-lane c-rep" x="64" y="166">THIS REPO</text>
+<text class="t-lane c-cc" x="64" y="354">CLAUDE CODE</text>
+<path class="drop" d="M 253.4 205 C 253.4 260 307.6 260 307.6 313"/>
+<path class="drop-hi" d="M 253.4 205 C 253.4 260 307.6 260 307.6 313"/>
+<path class="flow flow-a" d="M 253.4 205 C 253.4 260 307.6 260 307.6 313" style="--d:0s"/>
+<polygon class="drop-head" points="307.6,318 301.6,305 313.6,305"/>
+<rect class="chip" x="222.1" y="237" width="116.8" height="46" rx="23.0"/>
+<text class="t-l" x="240.1" y="271">4</text>
+<text class="t-lu" x="270.5" y="271">DAYS</text>
+<path class="drop" d="M 889.4 205 C 889.4 260 1268.3 260 1268.3 313"/>
+<path class="drop-hi" d="M 889.4 205 C 889.4 260 1268.3 260 1268.3 313"/>
+<path class="flow flow-b" d="M 889.4 205 C 889.4 260 1268.3 260 1268.3 313" style="--d:0s"/>
+<polygon class="drop-head" points="1268.3,318 1262.3,305 1274.3,305"/>
+<rect class="chip" x="1010.3" y="237" width="137.2" height="46" rx="23.0"/>
+<text class="t-l" x="1028.3" y="271">28</text>
+<text class="t-lu" x="1079.1" y="271">DAYS</text>
+<g transform="translate(253.4,190)">
+<circle class="halo halo-rep" r="15"/>
+<circle class="mk-rep" r="10"/>
+<circle class="mk-spec" cx="-3" cy="-3.6" r="2.4"/>
+<circle class="ig ig-rep" r="12.5" style="--d:-20.394s"/>
+</g>
+<g transform="translate(307.6,330)">
+<circle class="halo halo-cc" r="15"/>
+<circle class="mk-cc" r="8.5"/>
+<circle class="ig ig-cc" r="12" style="--d:-19.630s"/>
+</g>
+<text class="t-m" x="247.4" y="140">a research team that attacks its own findings</text>
+<text class="t-s c-rep" x="247.4" y="166">2026-05-24</text>
+<text class="t-m" x="301.6" y="380">Dynamic Workflows 2.1.154</text>
+<text class="t-s c-cc" x="301.6" y="354">2026-05-28</text>
+<g transform="translate(889.4,190)">
+<circle class="halo halo-rep" r="15"/>
+<circle class="mk-rep" r="10"/>
+<circle class="mk-spec" cx="-3" cy="-3.6" r="2.4"/>
+<circle class="ig ig-rep" r="12.5" style="--d:-11.415s"/>
+</g>
+<g transform="translate(1268.3,330)">
+<circle class="halo halo-cc" r="15"/>
+<circle class="mk-cc" r="8.5"/>
+<circle class="ig ig-cc" r="12" style="--d:-6.066s"/>
+</g>
+<text class="t-m" x="883.4" y="140">two-way session messaging</text>
+<text class="t-s c-rep" x="883.4" y="166">2026-07-10</text>
+<text class="t-m" x="1023.5" y="380">Claude Code 2.1.224</text>
+<text class="t-s c-cc" x="1023.5" y="354">2026-08-07</text>
+<text class="t-kick" x="64" y="46">HERE FIRST · TWICE</text>
+<text class="t-s" x="64" y="82">Each drop runs from a capability running here to the release that shipped it.</text>
 <rect class="edge" x=".75" y=".75" width="1398.5" height="634.5" rx="16"/>
 <path class="edgehi" d="M 17 1.5 H 1383 A 15.5 15.5 0 0 1 1398.5 17"/>
 </svg>
