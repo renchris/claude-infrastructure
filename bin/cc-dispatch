@@ -153,10 +153,41 @@
 #   CC_DISPATCH_PROJECT      (default: git toplevel, else $PWD)
 #   CC_DISPATCH_MAX_SPAWN    (default: 2)          per-PASS spawn cap (unchanged)
 #   CC_DISPATCH_SID          (default: <host>-<pid>)
-#   CC_DISPATCH_CEILING      (default: 6)   ON-BOX concurrency ceiling (panes/worktrees/CPU); 0 ⇒
+#   CC_DISPATCH_CEILING      (default: 12)  ON-BOX concurrency ceiling (panes/worktrees/CPU); 0 ⇒
 #                                           admit nothing (decisions are still journalled — a
 #                                           pure-observation mode). Charged only for claims whose
 #                                           venue is NOT cloud; see live_workers.
+#
+#                                           WAS 6 UNTIL 2026-08-12, AND 6 HAD BECOME A HARD STOP ON
+#                                           THE WHOLE DRAIN. Measured 13:33Z: 70 passes in one hour,
+#                                           316 rows, EVERY one verdict=defer reason=at-ceiling,
+#                                           free_slots 0, live_workers 8. Not wedged — correctly
+#                                           refusing over a real population — but the autonomous
+#                                           drain fired NOTHING, while the operator's own stated
+#                                           budget is ~15 concurrent sessions. At 6, any six
+#                                           sessions the operator opens shut the drain off outright,
+#                                           which is the opposite of "runs on the side".
+#
+#                                           WHY 12 IS SAFE NOW AND WAS NOT THIS MORNING. This
+#                                           ceiling is a COARSE pre-filter, not the operator's
+#                                           protection. The fine-grained guard is at the SPAWN:
+#                                           cc-dispatch spawns through CC_DISPATCH_SPAWN_BIN =
+#                                           handoff-fire.sh (see resolve_bin below), and
+#                                           handoff-fire consults scripts/lib/spawn-presence.sh —
+#                                           the presence beat plus the reserve floor autonomy may
+#                                           never take. That library did not exist before 450a47c50
+#                                           and did not reach the live layer until the 2026-08-12
+#                                           06:19 converge, so until today this number WAS the only
+#                                           thing between the operator and an unbounded drain. It no
+#                                           longer is. 12 also keeps a wide margin under the 54 the
+#                                           box was measured to sustain (10 consecutive green
+#                                           samples of 14,321) and under the operator's own ~15.
+#
+#                                           🚨 Do NOT raise this without re-reading the spawn call
+#                                           site to confirm it still consults spawn-presence. A grep
+#                                           census is not enough: `grep reserve` matches `preserved`
+#                                           and manufactured a false positive here on the first
+#                                           attempt at exactly this check.
 #   CC_DISPATCH_CLOUD_CEILING (default: 6)  OFF-BOX ceiling, charged for venue=cloud claims. A
 #                                           separate resource (quota) from a separate bound — an
 #                                           off-box session costs this box no pane and no worktree.
@@ -334,7 +365,7 @@ project_repo() {
 }
 
 # ── V2 config ─────────────────────────────────────────────────────────────────────────────────────
-CEILING="${CC_DISPATCH_CEILING:-6}"
+CEILING="${CC_DISPATCH_CEILING:-12}"
 # The OFF-BOX ceiling — a separate resource, therefore a separate bound (2026-08-12). It is a POLICY
 # default, not a measurement: the off-box concurrency limit is recorded UNMEASURED
 # (CONCURRENCY_PROGRAM.md §S5-CEILING, blocker named as create reliability rather than quota), so

@@ -19,7 +19,10 @@
 #   CC_DISPATCH_IDL        decision/wall journal   (default ~/.claude/autonomy/idl.jsonl)
 #   CC_BACKLOG_FILE        the ledger              (default ~/.claude/autonomy/backlog.jsonl)
 #   CC_DISPATCH_PAGES_DIR  page channel            (default ~/.claude/autonomy/pages)
-#   CC_DISPATCH_CEILING    concurrency ceiling     (default 6)
+#   CC_DISPATCH_CEILING    concurrency ceiling     (default 12 — MUST track bin/cc-dispatch's own
+#                                                  default; this reader exists to match its rule,
+#                                                  and a drifted default here reports acceptance
+#                                                  against a ceiling the dispatcher does not use)
 #   CC_ACCEPT_REPO         repo root for source greps (default: git toplevel of $PWD)
 #   CC_ACCEPT_LAUNCHCTL    launchctl bin           (default: launchctl; stubbed in tests)
 # shellcheck disable=SC2016  # grep PATTERNS are single-quoted on purpose — they must not expand
@@ -28,7 +31,7 @@ set -uo pipefail
 IDL="${CC_DISPATCH_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 PAGES_DIR="${CC_DISPATCH_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
-CEILING="${CC_DISPATCH_CEILING:-6}"
+CEILING="${CC_DISPATCH_CEILING:-12}"
 # NO project scoping here, deliberately. This reader must match cc-dispatch's eligibility rule, and
 # since multi-project coverage (item f7abcbdee98c) that rule is "every open item gets a decision" —
 # the dispatch set gets admit/defer, everything else gets skip/project-not-dispatched. A
