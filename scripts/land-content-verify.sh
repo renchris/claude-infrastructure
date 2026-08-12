@@ -163,8 +163,45 @@ if ! git -C "$REPO" diff --name-only -z "${BASE}...${REF}" > "$TMP/paths" 2>/dev
   exit 2
 fi
 
-N=0 BAD=0
-: > "$TMP/report"
+N=0 BAD=0 SUP=0
+: > "$TMP/report"; : > "$TMP/superseded"
+
+# ── SUPERSESSION: value that reached trunk AND WAS THEN IMPROVED ─────────────────────────────────
+# Without this arm the script convicts our own later fixes. Measured 2026-08-12 against the census
+# that motivated this file: it called 3 of 5 already-landed refs NOT-landed, and for 0a131da73 the
+# single "line present only in the ref" was the exact line trunk replaced in 12343c527 — the bug
+# that fix removed. Reported back as "content trunk lacks".
+#
+# That is not a cosmetic wrong verdict. The failure inbox wires this as a FALSIFIER and a falsifier
+# retracts on exit 0, so a ref whose region trunk later rewrote can never reach exit 0 again: the
+# rows this exists to close would stay open forever while the mechanism reads as installed. Landed,
+# wired, inert.
+#
+# 🚨 THE DISCRIMINATOR IS NARROW ON PURPOSE, and the obvious one is WRONG. "Did trunk touch this
+# path after the ref's commit?" (`rev-list --count REF..BASE -- PATH`) over-forgives: trunk editing
+# a file for an unrelated reason would retract a row whose work really was lost. For a falsifier
+# that RETRACTS, over-forgiving risks losing work while under-forgiving only makes noise, so the
+# error must be taken in the safe direction.
+#
+# What is asked instead is exact and has no judgment in it: DID TRUNK EVER CARRY THIS EXACT BLOB
+# FOR THIS PATH? If it did, the ref's version reached trunk and a later trunk commit changed it —
+# supersession. If it never did, the ref's bytes are genuinely absent — a real strand. Measured:
+#     0a131da73 : scripts/handoff-fire.sh     → MATCH at depth 2      ⇒ superseded
+#     fefa49b05 : tests/cc-backlog-venue.bats → NO MATCH in 7 revs    ⇒ genuinely held content
+# The second is the control that keeps the arm from forgiving everything.
+#
+# Bounded: the walk stops at LCV_HISTORY_MAX revisions of that ONE path (not of the repo), so cost
+# is a few rev-parses per differing path. Exhausting the bound WITHOUT a match does not forgive —
+# it falls through to the strand verdict, which is the safe direction.
+trunk_ever_carried() {   # $1=path $2=ref-blob → 0 trunk carried this blob once / 1 it never did
+  local p="$1" want="$2" c b n=0 max="${LCV_HISTORY_MAX:-200}"
+  while IFS= read -r c; do
+    n=$((n + 1)); [ "$n" -gt "$max" ] && return 1
+    b="$(git -C "$REPO" rev-parse -q --verify "${c}:${p}" 2>/dev/null || true)"
+    [ "$b" = "$want" ] && return 0
+  done < <(git -C "$REPO" log --format=%H "$BASE" -- "$p" 2>/dev/null)
+  return 1
+}
 while IFS= read -r -d '' P; do
   N=$((N + 1))
   RB="$(git -C "$REPO" rev-parse -q --verify "${REF}:${P}" 2>/dev/null || true)"
@@ -194,8 +231,14 @@ while IFS= read -r -d '' P; do
   ONLY_TRUNK="$(grep -c '^>' "$TMP/d" 2>/dev/null || true)"
   ONLY_REF="${ONLY_REF//[[:space:]]/}"; ONLY_TRUNK="${ONLY_TRUNK//[[:space:]]/}"
   if [ "${ONLY_REF:-0}" -gt 0 ]; then
-    BAD=$((BAD + 1))
-    printf '  %s — %s line(s) present only in the ref\n' "$P" "$ONLY_REF" >> "$TMP/report"
+    if trunk_ever_carried "$P" "$RB"; then
+      SUP=$((SUP + 1))
+      printf '  %s — %s ref-only line(s), but %s carried this exact blob before: SUPERSEDED, not lost\n' \
+        "$P" "$ONLY_REF" "$BASE" >> "$TMP/superseded"
+    else
+      BAD=$((BAD + 1))
+      printf '  %s — %s line(s) present only in the ref\n' "$P" "$ONLY_REF" >> "$TMP/report"
+    fi
   elif [ "${ONLY_TRUNK:-0}" -eq 0 ]; then
     # Blobs differ, yet neither side shows a line: binary, or diff could not compare them. Differing
     # bytes ARE content trunk lacks — this is a 1, not a 2.
@@ -214,12 +257,24 @@ if [ "$N" -eq 0 ]; then
 fi
 
 if [ "$BAD" -eq 0 ]; then
-  printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (trunk is a superset).\n' \
-    "$N" "$REF" "$BASE"
+  if [ "$SUP" -gt 0 ]; then
+    # SAY WHY, always. A bare ✓ over a superseded path is the same silent verdict this file exists
+    # to end — the reader has to be able to tell "trunk is a superset" from "trunk carried this and
+    # then improved it", because only the second one means re-landing would REVERT something.
+    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (%s superseded since):\n' \
+      "$N" "$REF" "$BASE" "$SUP"
+    head -40 "$TMP/superseded"
+    [ "$SUP" -gt 40 ] && printf '  … and %s more\n' "$((SUP - 40))"
+    printf '  ⚠ re-landing this ref would REVERT the later work on the path(s) above.\n'
+  else
+    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (trunk is a superset).\n' \
+      "$N" "$REF" "$BASE"
+  fi
   exit 0
 fi
 
 printf '✗ land-content-verify: %s of %s path(s) hold content %s LACKS — NOT landed:\n' "$BAD" "$N" "$BASE"
 head -40 "$TMP/report"
 [ "$BAD" -gt 40 ] && printf '  … and %s more\n' "$((BAD - 40))"
+[ "$SUP" -gt 0 ] && printf '  (%s further path(s) differ but are SUPERSEDED, not lost — not counted against the verdict)\n' "$SUP"
 exit 1
