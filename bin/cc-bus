@@ -93,6 +93,10 @@
 # id silently breaks everything. A cloud worker's launch brief SHOULD set CC_BUS_ACTOR
 # explicitly: two VMs cloning the same repo would otherwise derive the same id, and while
 # that collides loudly (a git conflict on one shard) rather than silently, it is avoidable.
+# An id — derived or overridden — is `[a-z0-9-]`, at most 64 chars, never leading `-`. An
+# override outside that is REFUSED at load, before any verb runs; see THE GATE below for why
+# refusing beats slugifying, and why the shape is not negotiable when the same string is also
+# a shard filename.
 #
 # bash 3.2-safe (macOS /bin/bash): no associative arrays, no mapfile, no ${x,,}.
 set -uo pipefail
@@ -147,12 +151,79 @@ now_ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # So the identity is keyed on the CHECKOUT, not the process: a worktree (or a cloud clone)
 # IS the unit of off-box work, it is stable for the life of that work, and it is already how
 # this repo names work units (`wt-<item-id>`).
+#
+# ── THE SHAPE, and THE GATE that enforces it ────────────────────────────────────────────
+# An actor id is not just a JSON field. It is ALSO a shard FILENAME (shard_for) and a path
+# fragment `sync --push` hands to `git add`. Three consumers, one string — and the $CC_BUS_ACTOR
+# override used to reach all three unchecked, while the DERIVED path below was carefully
+# sanitised. Measured on the unfixed file:
+#
+#     CC_BUS_ACTOR='ev"il'         → {"actor":"ev"il",...}    no JSON parser accepts it
+#                                  → bus/actors/ev"il.jsonl   a bare quote in a filename
+#     CC_BUS_ACTOR='../../esc/x'   → esc/x.jsonl written OUTSIDE the bus entirely: the record
+#                                    is unfoldable (fold globs actors/*.jsonl) and `sync --push`
+#                                    would git-add a path nobody chose.
+#
+# The first shape is the WRITER mirror of the read-path defect fixed alongside JSON_AWK_LIB, and
+# that fix makes it LOUDER, not quieter: an escape-aware reader now fails on a hostile actor
+# instead of silently truncating it.
+#
+# WHY REJECT, and not slugify or escape-with-a-derived-filename. All three were on the table:
+#
+#   * SLUGIFY (rewrite `ev"il` → `ev-il`) breaks the ONE-WRITER LAW it appears to serve. The law
+#     needs ids INJECTIVE onto shards; a many-to-one rewrite lets two genuinely different actors
+#     land in one file — precisely the conflict sharding exists to make impossible. It breaks
+#     addressing too: `inbox`/`ack` match the literal id a PEER used, so an id we quietly
+#     changed is an id nobody can reach.
+#   * ESCAPE + a separately-derived filename (hash the id for the shard) gives one identity two
+#     representations that can drift, and costs the property that makes the bus debuggable and
+#     `fold --refs` legible — the shard basename IS the actor.
+#   * REJECT is what the rest of the write path already does. scrub() REFUSES a secret rather
+#     than redacting it, for the stated reason that a silent transform teaches the caller the
+#     channel is safe for input it is not. An id is the same case.
+#
+# The accepted charset is not invented here: it is EXACTLY what the derivation below already
+# produces, so an override is held to the contract the default path has always met. Uppercase is
+# rejected rather than lowercased, and that rule earns its own reason: macOS is case-INSENSITIVE,
+# so `Alpha` and `alpha` are ONE file but TWO actor ids in the fold — a one-writer violation that
+# would appear only on the operator's own box.
+ACTOR_ID_MAX=64
+
+validate_actor_id() {
+  # → prints WHY the id is unusable; prints nothing at all when it is fine.
+  # `local LC_ALL=C` is load-bearing: `[a-z0-9-]` is a COLLATION range, and under some locales it
+  # matches uppercase and accented characters — which would leave open the hole this closes.
+  local id="$1" LC_ALL=C
+  case "$id" in
+    "")           printf 'it is empty\n'; return 0 ;;
+    -*)           printf 'it starts with "-" (a shard filename that reads as a flag)\n'; return 0 ;;
+    *[!a-z0-9-]*) printf 'it has a character outside [a-z0-9-]\n'; return 0 ;;
+  esac
+  [ "${#id}" -le "$ACTOR_ID_MAX" ] \
+    || printf 'it is %s characters (max %s — a shard basename must be a legal filename)\n' \
+              "${#id}" "$ACTOR_ID_MAX"
+}
+
+sanitize_id_part() {
+  # <text> <maxchars> → the same text reduced to [a-z0-9-], clamped, no trailing '-'.
+  # Clamp BEFORE stripping trailing hyphens, so a cut landing mid-run cannot leave one behind.
+  # Subshell + export because `tr` is a real process and must see the C locale too.
+  ( export LC_ALL=C
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' \
+      | cut -c1-"$2" | sed 's/-*$//' )
+}
+
 actor_id() {
+  # No validation here, deliberately — see THE GATE below: every caller reads this as
+  # `actor="$(actor_id)"`, and a die() inside a command substitution exits only the SUBSHELL.
   if [ -n "${CC_BUS_ACTOR:-}" ]; then printf '%s\n' "$CC_BUS_ACTOR"; return 0; fi
   local host unit top
   host="$(hostname -s 2>/dev/null || echo box)"
-  # Lowercase + strip anything that is not [a-z0-9-]; a shard filename must be portable.
-  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+  # Lowercase + strip anything that is not [a-z0-9-]; a shard filename must be portable. The
+  # clamps keep host+unit inside ACTOR_ID_MAX, so the derived path can never mint an id the gate
+  # would refuse. Transforming silently is safe HERE and only here: this value is ours, derived
+  # deterministically, so no peer can be addressing an earlier form of it.
+  host="$(sanitize_id_part "$host" 20)"
   if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
     unit="$(basename "$top")"
   else
@@ -164,9 +235,23 @@ actor_id() {
     unit="$(printf '%s' "$BUS_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
     [ -n "$unit" ] || unit="$$"
   fi
-  unit="$(printf '%s' "$unit" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+  unit="$(sanitize_id_part "$unit" 40)"
   printf '%s-%s\n' "${host:-box}" "${unit:-0}"
 }
+
+# THE GATE. At load, before any verb dispatches, so no code path can reach shard_for() or the
+# emit line holding an id the contract rejects — and so a refusal costs nothing but an exit.
+# NOT inside actor_id() for the reason noted there: `actor="$(actor_id)"` would swallow the
+# exit in a subshell and the parent would carry on with actor="", writing a shard named
+# `.jsonl`. One gate, at the one place that is not inside a substitution.
+if [ -n "${CC_BUS_ACTOR:-}" ]; then
+  _actor_why="$(validate_actor_id "$CC_BUS_ACTOR")"
+  [ -z "$_actor_why" ] || die "CC_BUS_ACTOR is not a usable actor id — $_actor_why.
+  An actor id is a JSON field, a shard FILENAME, and a path handed to git add, so it is held to
+  [a-z0-9-], max $ACTOR_ID_MAX, no leading '-' — the same shape cc-bus derives when you set
+  nothing (e.g. mymac-wt-5341a9e5fc4d). Got: '$CC_BUS_ACTOR'. Nothing was written."
+  unset _actor_why
+fi
 
 shard_for() { printf '%s/%s.jsonl\n' "$ACTORS_DIR" "$1"; }
 
@@ -344,6 +429,11 @@ cmd_emit() {
 
   seq="$(next_seq "$shard")"; ts="$(now_ts)"
 
+  # `v`, `ts`, `actor`, `seq` and `kind` are the fields NOT piped through json_escape, and the
+  # gate above is what makes that a claim rather than a gap: actor is [a-z0-9-] (refused at
+  # load), ts is generated here, seq is a number, kind is checked lowercase-only above. None can
+  # carry a `"` or a `\`. Escaping them anyway would be a change no test could turn red — the
+  # same reasoning that keeps the two `seq` reads on sed (see below).
   local line
   line="{\"v\":$VERSION,\"ts\":\"$ts\",\"actor\":\"$actor\",\"seq\":$seq,\"kind\":\"$kind\""
   [ -n "$to" ]       && line="$line,\"to\":\"$(printf '%s' "$to" | json_escape)\""
@@ -785,6 +875,27 @@ selftest() {
     */*|.*|"") badp "derived actor id is not filename-safe ('$a')" ;;
     *)         okp "derived actor id is filename-safe" ;;
   esac
+
+  # (0c) THE GATE, on the override path — the one (0a)/(0b) cannot see, because they only ever
+  #      exercise the DERIVED id. Both hostile shapes are checked, because they fail
+  #      independently: a quote produces JSON no parser accepts, while `..` walks the shard
+  #      clean out of the bus directory. And the refusal is proven to BE one — no .jsonl is
+  #      created anywhere under the fixture, under any name.
+  rm -rf "$d/gate"; mkdir -p "$d/gate/bus/actors" "$d/gate/esc"
+  out="$(CC_BUS_DIR="$d/gate/bus" CC_BUS_ACTOR='ev"il' "$SELF" emit note --body hi 2>&1)"; r=$?
+  CC_BUS_DIR="$d/gate/bus" CC_BUS_ACTOR='../../esc/pwned' "$SELF" emit note --body hi >/dev/null 2>&1; b=$?
+  a="$(find "$d/gate" -name '*.jsonl' | wc -l | tr -d ' ')"
+  [ "$r" = 2 ] && [ "$b" = 2 ] && [ "$a" = 0 ] \
+    && printf '%s' "$out" | grep -q 'not a usable actor id' \
+    && okp "hostile CC_BUS_ACTOR REFUSED — quote AND path-escape, no shard written anywhere" \
+    || badp "hostile actor id accepted (quote rc=$r, escape rc=$b, shards written=$a)"
+
+  # (0d) DISCRIMINATION, the mirror of check (6): a gate that refused everything would pass
+  #      (0c) while making the bus unusable. The id here is the exact shape the header documents.
+  r="$(CC_BUS_DIR="$d/gate/bus" CC_BUS_ACTOR=mymac-wt-5341a9e5fc4d "$SELF" emit note --body hi)"
+  [ "$r" = "mymac-wt-5341a9e5fc4d:1" ] \
+    && okp "DISCRIMINATES: a legitimate derived-shape actor id still emits" \
+    || badp "gate refused a legitimate actor id (got '$r')"
 
   # (1) emit writes to the emitting actor's OWN shard and nowhere else.
   r="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" emit note --body "hello")"
