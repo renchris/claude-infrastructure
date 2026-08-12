@@ -611,13 +611,113 @@ fi
 _grp_rc="skipped"
 if [ -x "$_grouping" ]; then _bounded bash "$_grouping" --file >/dev/null 2>&1; _grp_rc=$?; fi
 
+# ── 2b-iii. THE CURRENCY PASS (W1, backlog b585e86ea4e4) — the probes actually RUN ────────────────
+# `cc-premise sweep` and `cc-premise screen --all` were built, documented, and invoked by NOTHING on
+# this box — the fourth instance of this wave's own defect. What made it worse than the other three:
+# `run_falsifier` had exactly ONE call site, the CLAIM path, so a row nobody ever tried to claim had
+# never had its probe executed at all. Measured 2026-08-12: 205 of 327 live rows had never been
+# claimed. Re-validation was demand-driven, and 63% of the store generated no demand.
+#
+# ⚠️ IT DOES NOT RUN EVERY SWEEP, and the interval gate is the load-bearing part of this block. This
+# script fires at StartInterval 300 — every 5 minutes — and a full pass costs 106 s MEASURED at
+# utility over 564 rows (see the bound below). Running it every pass would spend a third of this
+# box's sweep budget re-asking questions whose answers change on the scale of a landing, and would
+# rewrite the stamp file 288 times a day for nothing. CC_PREMISE_PASS_EVERY_S defaults to 6 h, so
+# "a currency verdict no older than one sweep" means one CURRENCY sweep — four a day.
+#
+# THE STAMP IS CLAIMED BEFORE THE PASS RUNS, NOT AFTER. Writing it after would let a pass that dies
+# (or is killed by the bound) re-fire on the very next 5-minute tick, and a failing 106 s pass every
+# 5 minutes is a self-inflicted load spiral. Claim-then-run means a broken pass costs one interval,
+# not the box.
+_prem_rc="skipped"; _prem_note="not-due"; _prem_closed=0; _prem_recorded=0
+_premise="$(cd "$_SWEEP_DIR/.." 2>/dev/null && pwd)/bin/cc-premise"
+_prem_stamp="${CC_PREMISE_PASS_STAMP:-$HOME/.claude/autonomy/premise-pass.stamp}"
+_prem_every="${CC_PREMISE_PASS_EVERY_S:-21600}"
+if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
+  _prem_last=0
+  [ -f "$_prem_stamp" ] && _prem_last="$(/usr/bin/stat -f %m "$_prem_stamp" 2>/dev/null \
+                                         || /usr/bin/stat -c %Y "$_prem_stamp" 2>/dev/null || echo 0)"
+  case "${_prem_last:-}" in ''|*[!0-9]*) _prem_last=0 ;; esac
+  _prem_now="$(date +%s)"
+  if [ "$((_prem_now - _prem_last))" -ge "$_prem_every" ]; then
+    mkdir -p "$(dirname "$_prem_stamp")" 2>/dev/null; : > "$_prem_stamp"
+    # 🚨 ITS OWN BOUND, NOT CC_SWEEP_BOUND_S. The shared 180 s bound above is sized for the `--file`
+    # and `--assert` reads beside it; this pass MEASURED 106 s at utility over 564 rows on 2026-08-12
+    # — it COMPLETES, so a bound is a bound here and not a fixed cost (the trap W0 paid for: 10 of 10
+    # runs at rc 124, an unreachable flip criterion, and no instrument on the box could see it).
+    # 420 s is 4x the measured cost, so it absorbs store growth and a slow probe or two while staying
+    # far below the pathological tail (149 stored probes x the 20 s FALSIFIER_TIMEOUT_S = ~50 min, if
+    # every probe hung). Sized in the BAND it runs in: _bounded already runs at utility, which is
+    # where the 106 s was measured — not in a foreground shell (memory: bound-must-fit-the-band).
+    #
+    # --record ALWAYS; --close-falsified CAPPED AT 5. A falsified row refuses every claim and nothing
+    # closes it, so it is permanently live and permanently unfireable — 19 rows are in that state
+    # today. The cap is what keeps a probe-corrupting tree change from emptying the store in one
+    # pass, and cc-premise re-asks each row immediately before it closes it (see _close_falsified).
+    _prem_out="$(CC_SWEEP_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-420}" \
+                 _bounded python3 "$_premise" sweep --json --record \
+                   --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}" 2>/dev/null)"; _prem_rc=$?
+    _prem_recorded="$(printf '%s' "$_prem_out" | jq -r '.validated_recorded // 0' 2>/dev/null)"
+    _prem_closed="$(  printf '%s' "$_prem_out" | jq -r '.closed_falsified   // 0' 2>/dev/null)"
+    _prem_note="$(    printf '%s' "$_prem_out" | jq -r '.validated_note     // "unparsed"' 2>/dev/null)"
+    case "${_prem_recorded:-}" in ''|*[!0-9]*) _prem_recorded=0 ;; esac
+    case "${_prem_closed:-}"   in ''|*[!0-9]*) _prem_closed=0   ;; esac
+    [ -n "$_prem_note" ] || _prem_note="unparsed"
+    # rc 124 HERE MEANS THE BOUND WAS WRONG, and it is journalled as its own note rather than folded
+    # into "the pass failed" — that collapse is exactly what hid the fold's unreachable criterion for
+    # 10 runs. A reader seeing bound-exceeded knows to re-measure the band, not to debug cc-premise.
+    [ "$_prem_rc" -eq 124 ] && _prem_note="bound-exceeded"
+  fi
+fi
+
+# ── 2b-iv. THE RATCHET'S CONSUMER (W1 item 6) ─────────────────────────────────────────────────────
+# `ratchet_rc` has been journalled since the ratchet was wired and read RED on every recorded run,
+# and the only consequence was a JSON field. An alarm whose sole effect is to be written down is not
+# an alarm; it is a log line that happens to be shaped like one.
+#
+# THE CONSEQUENCE IS A WORK ITEM, and specifically a CONDITION-KEYED one, which is what stops this
+# from becoming the other failure mode. A fresh row per red sweep would file 288 rows a day into the
+# very store whose growth the wave exists to reverse; `--condition` folds every later filing onto the
+# same row (cc-backlog's own dedupe), so a standing regression is ONE standing row.
+#
+# AND IT CARRIES ITS OWN FALSIFIER, so it retires itself. The probe re-runs `--assert`: the moment
+# coverage climbs back to the high-water the row's own re-check exits 0, the currency pass above sees
+# `falsified`, and the closer retires it. That is the difference between an alarm with a consumer and
+# an alarm with a pager — this one can go away without a human, and can only go away by the condition
+# actually clearing.
+#
+# ONLY rc 1 FILES. rc 0 is healthy and `skipped` means the tool is absent, which is a DIFFERENT
+# problem and must not be laundered into a coverage regression (memory:
+# new-enum-member-falls-into-fail-closed-default).
+#
+# THE TITLE CARRIES NO LIVE NUMBER, deliberately. `cmd_add` returns early on a known id, so a
+# re-file never UPDATES the row (W2 item 4 measured that exact freeze) — a title reading "coverage
+# fell to 45.8%" would be frozen at whatever the first red sweep saw and would go on asserting it
+# after the number moved. The standing figures live where they are recomputed: `backlog-ratchet.sh`
+# itself, which the falsifier below runs.
+_rat_filed="n-a"
+if [ "$_rat_rc" = "1" ] && [ -n "$BACKLOG" ] && [ -x "$BACKLOG" ]; then
+  if _bounded "$BACKLOG" add \
+       --project claude-infrastructure \
+       --title "backlog falsifier coverage fell below its high-water mark — rows are being filed that cannot re-check themselves (run backlog-ratchet.sh for today's figures)" \
+       --condition "backlog-ratchet-coverage-regression" \
+       --source autonomy-sweep \
+       --falsifier "bash '$_ratchet' --assert >/dev/null 2>&1" \
+       >/dev/null 2>&1
+  then _rat_filed="filed"; else _rat_filed="file-failed"; fi
+fi
+
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
   --arg fa "$_fold_applied" --arg fw "$_fold_written" --arg g "$_grp_rc" \
-  '{consolidation_trigger_rc:$t, ratchet_rc:$r,
+  --arg pr "$_prem_rc" --arg pn "$_prem_note" --arg pv "$_prem_recorded" \
+  --arg pc "$_prem_closed" --arg rf "$_rat_filed" \
+  '{consolidation_trigger_rc:$t, ratchet_rc:$r, ratchet_filed:$rf,
     fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
     fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). The fold now APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed."}')"
+    premise_pass_rc:$pr, premise_pass_note:$pn,
+    premise_rows_validated:($pv|tonumber), premise_rows_closed:($pc|tonumber),
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 106 s measured at utility while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 420 s bound needs re-measuring in the band, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
