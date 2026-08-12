@@ -245,3 +245,34 @@ suspects is the binding one, and either the fix or a named blocker. Report to
   SCOPE, not because omitting it flatters us. **Two wrong intermediate readings were tried first,
   both from dating the vendor's side off this repo's own prose** — a `statusline.sh` header comment,
   then a commit message. Date both sides from a primary source or do not draw the row.
+
+- **2026-08-12 — Track A, v3: the craft pass, after v2 traded slop for inertness.** Operator verdict
+  on v2: *"REGRESSED … just as unreadable with the large varying texts and LESS visualization and
+  beautiful complexion."* Correct on all three counts, and they are separable defects:
+  **TYPE** — v2 carried EIGHT sizes between 16 and 26 px, which at the 0.599 README scale all land
+  inside 9.6–15.6 px: eight sizes, no hierarchy. v3 has THREE (36/24/18 → 21.6/14.4/10.8), 1.5×
+  apart, everything mono except the two capability names — which is the hero's own type system.
+  **VISUALIZATION** — v2 was four dots, two 3.5 px hairlines and two pills on a 1400×524 plate;
+  measured as ink it was prose with rules under it. v3 gives the leads MASS (a 26 px band with a
+  green ramp, capped by its markers) and adds a real second data layer: this repo's own commit
+  volume as an amber stepped ridge on the same axis, 7-day trailing, sqrt-scaled. It is not filler —
+  both "here first" moments land BEFORE the climb (2026-05-24 on the flat of the zero-commit May
+  this plan's own README section calls "the plateau between two"; 2026-07-10 on the first rise),
+  which is the section's thesis drawn to scale.
+  **COMPLEXION** — v2's plate was a near-flat two-stop wash. v3 is built the way `prior-art.md`
+  §B1/§B2/§B8 says the hero is: depth from colour bands before any shape, a four-stop dusk ramp
+  warming to the horizon, light scatter above it, and ONE warm source (amber, the repo's badge gold)
+  against a cool surround. Three hues, one job each — green a capability running here, blue the
+  Claude Code release, amber this repo's own work over time.
+
+  **The measurement that made this diagnosable, and the process lesson.** The gap was not a matter
+  of taste: the hero `assets/banner/v6c-dusk-line.svg` is the stated standard for this asset (this
+  plan, Track A objective) and it was never once opened while v1 and v2 were designed. Rendering it
+  and reading `prior-art.md` took one tool call each and produced the whole v3 brief. **Read the
+  house standard before designing against it** — two rejected iterations is what skipping it costs.
+
+  **Also fixed, all one root cause:** v3 sets the asset in mono while every width estimate still
+  used SANS metrics (0.505 vs 0.600/char, a 19% under-estimate), so the overflow guard could not
+  fire — the legend's two entries overlapped and a date block ran 26 px past the right margin. The
+  4-day band was additionally 100% hidden under its own two r=13 end caps. Both are now asserted
+  against the canvas edge rather than a guessed budget.
