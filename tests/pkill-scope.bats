@@ -302,6 +302,43 @@ decision() {  # $1 = command → DENY | ASK | ALLOW | PASS  (PASS = no decision 
   [ "$(decision 'echo "never run pkill -9 -f bats-core/bats"')" = "PASS" ]
 }
 
+@test "guard: a heredoc-fed message body is DATA, exactly like a quoted one" {
+  # backlog 15b99887cd5e. The position test erases QUOTED runs before splitting on & | ( ) — and a
+  # heredoc body has no quotes to erase. So the literal `(pkill|killall)` in the sentence below
+  # became a fragment BEGINNING with `pkill`, the gate opened, and the occurrence harvest lifted
+  # `killall) …bats…` straight back out of the prose. Measured while committing this clause's own
+  # previous fix: the guard refusing its own fix, for the second time in this file's history.
+  #
+  # ONE message, BOTH spellings, asserted together on purpose. The `-m` form above already passed,
+  # which is precisely what made the heredoc form's deny look impossible — the two must never again
+  # be able to disagree about the same sentence.
+  local body="fix(hooks): the position test splits on (pkill|killall), so a bats message body convicted itself"
+  [ "$(decision "git commit -m \"$body\"")" = "PASS" ]
+  [ "$(decision "$(printf '%s\n' "git commit -F - <<'MSG'" "$body" "MSG")")" = "PASS" ]
+  # The real commit's shape: subject, blank line, body — and an unquoted delimiter, which is the
+  # spelling that leaves the body open to parameter expansion and still is not argv.
+  [ "$(decision "$(printf '%s\n' 'git commit -F - <<MSG' 'fix(hooks): heredoc bodies are stdin' '' "$body" 'MSG')")" = "PASS" ]
+}
+
+@test "guard: a heredoc HIDES nothing — a real kill beside a body is still DENIED" {
+  # The strip removes BODIES; it must not remove REACH. Every fixture here puts a real unscoped
+  # kill exactly where a careless stripper would swallow it. The literal lives in a variable so
+  # this file's own lint (below) reads a quote-stripped `bad=''` instead of a command.
+  local bad='pkill -9 -f bats-core/bats'
+  [ "$(decision "$(printf '%s\n' "cat <<'EOF'" 'harmless' 'EOF' "$bad")")" = "DENY" ]   # after the body
+  [ "$(decision "$(printf '%s\n' "$bad <<'EOF'" 'harmless' 'EOF')")" = "DENY" ]         # on the opener line
+  # `<<<` is a HERESTRING, not an opener — and neither is the second `<` of one. Reading either as
+  # an opener would silently delete every following line, which is the ONLY direction of this
+  # change that could cost enforcement.
+  [ "$(decision "$(printf '%s\n' 'cat <<<EOF' "$bad")")" = "DENY" ]
+  # `<<-` strips leading TABS from its terminator. A stripper blind to that runs past the
+  # terminator and swallows whatever follows.
+  [ "$(decision "$(printf 'cat <<-EOF\n\tharmless\n\tEOF\n%s\n' "$bad")")" = "DENY" ]
+  # An UNTERMINATED body really does swallow the rest — bash feeds it to stdin too, so nothing in
+  # there is executed. Asserted, so the choice is deliberate and visible rather than a silent gap.
+  [ "$(decision "$(printf '%s\n' "cat <<'EOF'" "$bad")")" = "PASS" ]
+}
+
 @test "guard: the emitted decision is VALID JSON even when the reason quotes the command" {
   # A malformed body means the harness cannot parse the decision, so the deny silently becomes a
   # no-op: a guard that REPORTS blocking while not blocking. `decision` above already fails on
