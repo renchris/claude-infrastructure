@@ -4,7 +4,7 @@ status: open
 
 # MASTER: account facts — which account, which model, and whether it can still authenticate
 
-**Condition key:** `master-account-facts` · **Live members 2026-08-12:** 22 (17 open · 5 blocked)
+**Condition key:** `master-account-facts` · **Live members 2026-08-12 (measured after the apply):** 27 (18 open · 9 blocked)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-account-facts" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

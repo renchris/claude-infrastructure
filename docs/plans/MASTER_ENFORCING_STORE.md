@@ -4,7 +4,7 @@ status: open
 
 # MASTER: enforcing store — a conclusion only counts where something enforces it
 
-**Condition key:** `master-enforcing-store` · **Live members 2026-08-12:** 29 (21 open · 8 blocked)
+**Condition key:** `master-enforcing-store` · **Live members 2026-08-12 (measured after the apply):** 34 (22 open · 12 blocked)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-enforcing-store" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

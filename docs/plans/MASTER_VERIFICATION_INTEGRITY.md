@@ -4,7 +4,7 @@ status: open
 
 # MASTER: verification integrity — the instruments that decide red and green are wrong
 
-**Condition key:** `master-verification-integrity` · **Live members 2026-08-12:** 34 (28 open · 6 blocked)
+**Condition key:** `master-verification-integrity` · **Live members 2026-08-12 (measured after the apply):** 31 (30 open · 1 blocked)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-verification-integrity" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

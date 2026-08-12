@@ -26,7 +26,7 @@ had become the work.
 |---|---|---|---|
 | **W0 · unwedge** ✅ DONE | **L** (lead-inline) | the dispatcher fires again; a terminal cloud session releases its slot | — |
 | **W1 · freshness** | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact | W0 |
-| **W2 · grouping-for-execution** | **S** (dispatched, local) | the ungrouped remainder is folded into wave-sized `master-*` conditions; the applying scripts become tracked machinery | W0 |
+| **W2 · grouping-for-execution** ✅ DONE | **S** (dispatched, local) | the ungrouped remainder is folded into wave-sized `master-*` conditions; the applying scripts become tracked machinery — **delivered: ungrouped 424→7, ten master efforts, `1b044624d`** | W0 |
 | **W3 · capacity symmetry** | **S** (dispatched, local) | no unattended spawner can outbid the operator; the presence beat is consulted at SPAWN, not only at teardown | — (parallel with W1/W2) |
 | **W4 · drain** | **S ×N** (one long-running wave session per master effort) | the grouped efforts worked to done | W1, W2, W3 |
 
@@ -202,7 +202,12 @@ have opposite responses to raising the number.
 **DoD:** every live row carries a currency verdict no older than one sweep, and the count of
 never-validated rows is reportable and falling.
 
-### W2 · Grouping-for-execution — ~407 ungrouped rows into wave-sized efforts
+### W2 · Grouping-for-execution — ~407 ungrouped rows into wave-sized efforts ✅ DONE (`1b044624d`)
+
+**Outcome: ungrouped 424 → 7, ten master efforts, 418 links, 0 refusals.** All five items landed and
+content-verified; the full account with its three corrections is in the Status log below. The five
+items as originally written are kept verbatim underneath, because two of them turned out to be
+phrased for a defect that was not the binding one.
 
 1. **Promote `link.py` / `prune.py` into tracked machinery.** They are the only things that have ever
    moved this pile (161 closes, 113 links, 0 failures) and they are untracked with no caller.
@@ -317,6 +322,107 @@ stamp that does not yet exist.
 with its own README naming the one finding later corrected by measurement.
 
 ## Status log
+
+- **2026-08-12 — W2 LANDED, all five items. Row `ce1e9d1adab8`.** Five commits: the `cc-backlog`
+  update arm, the trigger's conservation span, the tracked consolidation machinery, the sweep wiring,
+  and the ten master plan files.
+
+  **The store, measured after the apply: 566 live · 559 grouped · UNGROUPED 7 (was 424) · 10 master
+  efforts.** DoD asked for ungrouped < 50 and an effort count countable on two hands; both met. 418
+  links were written in three passes, narrowest key first: the mechanical fold 46 (18 groups, its
+  first real apply ever), the 2026-08-09 triage wave's own human adjudication replayed 45 — rows it
+  had judged KEEP/UPDATE that nobody had ever linked — and the semantic grouper 327, with 0 refusals
+  in all three.
+
+  **The honest second number: 51 other condition groups hold the remaining 82 rows.** Those are the
+  ~12 per-worktree re-land groups the mechanical fold minted plus ~29 pre-existing singletons. They
+  are not wave-sized efforts and are not counted as such (see the fold-precedence decision below).
+  The 7 ungrouped are 4 residue rows a human should read and 3 CLAIMED rows deliberately left alone —
+  joining a held row makes its whole group unclaimable for as long as the holder lives, which is the
+  lease working against you.
+
+  **Where each wave now exists, all three places, as the brief required:** the plan file
+  (`docs/plans/MASTER_*.md`), a condition-keyed row the dispatcher can see, and the row's own title
+  restating its instruction — because a worker reads the payload, never the runbook. Six of the ten
+  wave rows resolved to the CLOSED M1-M6 rows from 2026-08-09/10 (`mk_cond_id` is project+condition,
+  so the M-wave already owned those keys) and cc-backlog's done-guard correctly refused to reopen them
+  silently. They were reopened with `--force` and evidence, because each state measurably holds again
+  with a far larger population: the convergence deadlock is unbroken, 69 stranded commits sit across
+  778 branches, 273 worktree dirs against 151 registered. **Their titles were then refreshed by this
+  wave's own update arm** — the M-wave wording became the W4 wave wording, which is item 4 in live
+  use. Every `dodRef` is `origin/main:<path>`, a TRUNK REF, never a shared-checkout path.
+
+  **Filed, not fixed:** `aee48ef0ffcf` — `cc-backlog link` costs one full ledger fold per row, so this
+  418-row pass degraded from ~4 s to ~20 s per link as the append-only ledger grew, and took over an
+  hour of wall clock to write one condition field per row. The next consolidation wave needs a batch
+  verb; `link.py --plan` already emits exactly the input it would take.
+
+  **What each item actually cost, and the three things that came out different from the plan:**
+
+  1. **`link.py` / `prune.py` promoted — and GENERALISED, because tracking alone would have left them
+     inert.** `link.py` read exactly one artifact (`verdicts.json`, from a wave that will never run
+     again in that shape), so a tracked copy's only possible caller was "the next hand-driven
+     triage", i.e. nobody. It now takes a PLAN of `(id, condition)` from a file or stdin and is the
+     single WRITER; the new `group.py` classifies and calls it. `citegraph.py` reads the live store
+     instead of a frozen snapshot (a derived signal that stops being derived still prints a confident
+     ranking). `prune.py` + `verify.py` stay the triage-wave pair, parameterised by `--dir`.
+     36 tests across three suites, every site mutation-tested one at a time.
+     ⚠️ **That sweep found a real coverage hole rather than confirming the tests:** deleting
+     `group.py`'s already-conditioned skip left the whole suite GREEN, because `link.py` applies the
+     same predicate and `cc-backlog link` refuses a re-key with rc 4 — three copies of one rule, only
+     the last two able to refuse a write. The per-site tests moved onto the writer that enforces them.
+  2. **Grouping is SEMANTIC and the classifier's two corrections are the transferable part.** A
+     backlog "title" here is a PARAGRAPH — p50 299 chars, p90 1251, max 2558 — so a generic word
+     matched anywhere in it is a lottery: `token` stole a row about attaching evidence, `by hand`
+     stole one about untracked skills, `codex` stole a lint row via a path in its `dodRef`. Rules now
+     match the HEADLINE (`title[:120]` + `dodRef` + `source`). **That cost recall — residue 14 → 31 —
+     and this plan's own discipline says to say so:** the comment in the file first read "recall cost,
+     measured: 0 rows", written before the measurement. Writing the families the residue exposed took
+     it to 3. Second correction: `_` is a word character, so `\bROUTER\b` never matched
+     `START_LATENCY_ROUTER` and the whole SCREAMING_SNAKE `plan-open` family fell through to residue.
+  3. **The `--apply` flip: the criterion was already satisfied and nothing on the box could see it.**
+     Five consecutive dry runs, `conservation=ok` on all five, 19 groups / 18 would fold / 0
+     ambiguous, byte-identical across the series. Flipped as **dry-then-apply**, not a bare
+     `--apply`: the writer runs only when THIS sweep's own dry verdict reads `ok`, so "never flip past
+     a FAILED" stops being a rule someone has to remember, and a key that starts merging across a
+     distinction disarms the writer on the sweep that notices.
+  4. **`cmd_add`'s early return, proven on the live row the brief named.** `5df742fb3894` carried ONE
+     `add` record from 2026-08-11T08:36:59Z and nothing since, while the sweep re-filed it every few
+     minutes — each pass a silent rc-0 no-op. After the fix its next `--file` run appended
+     `event:"update"` at 11:44:45Z carrying the current R6 wording: **27 hours frozen, then current.**
+     `--falsifier` is deliberately NOT updatable here — `cmd_falsify` RUNS the probe first and
+     refuses one that exits 0 against a live row, and writing it from `add` would be a second door
+     into that store with the guard missing. A DONE row is excluded for two reasons, the second
+     measured: `cc-value:179` folds status as the RAW EVENT, so an update on a done row would delete
+     it from the fleet's closed-work metric (`venue` already masks 241 rows that way).
+  5. **Ten plan files, each with its own Phase 0 wave table** — and `tests/backlog-grouping.bats`
+     asserts every master the taxonomy can emit HAS one, because a wave nobody can run is worse than
+     an ungrouped row.
+
+  🚨 **THE DEFECT THIS WAVE FOUND BY RUNNING ITS OWN TOOL: the fold's conservation assertion spanned
+  the whole store.** Its first real apply wrote 46 links with 0 refusals and reported
+  `conservation=FAILED live 555→555 · open 330→331` — a sibling session had unblocked an unrelated row
+  during the three minutes it took. Nothing was wrong with the fold. But FAILED is the one verdict a
+  caller may never flip past, so an over-wide version of it does not merely mis-report: **it would
+  have permanently disarmed the writer this wave had just armed, on another mechanism's correct
+  behaviour.** The dry-run branch already got this right in a comment; the apply branch under it did
+  not. The discriminator is structural rather than a tolerance — a `link` record carries no status
+  arm, so it CANNOT create, close, block or reopen a row, and a changed count is by construction not
+  ours; what it can break is a row IT linked losing its status. Both `link.py` and the trigger now ask
+  that, per row, against a pre-write snapshot, and report `unknown` when the store moved elsewhere.
+
+  **A decision worth recording, because the DoD's headline number reads better if you make the other
+  choice.** The mechanical fold ran FIRST (narrowest, key-verified), and it keyed 46 re-land rows onto
+  ~12 per-worktree digest slugs. Those rows are therefore NOT in `master-stranded-work` — the semantic
+  grouper never re-keys. Folding them in with `link --force` would have made the effort count smaller
+  and would have been optimising the metric over the mechanism: the fold's per-worktree key is the
+  more conservative one, and 46 rows → 12 groups is a real reduction. So the honest count has two
+  numbers, not one, and both are reported above.
+
+  **Venue re-labelling** (named in the brief as related work) is already filed as `116d5a15674b` and
+  is now a member of `master-fire-gate`, whose F1 sub-wave owns it — including the measured warning
+  that `CC_DISPATCH_VENUE_ONLY=cloud` parks 489 of 536 rows AND switches currency-checking off for
+  86% of the store. Routed, not dropped.
 
 - **2026-08-12 11:10Z — W3 LANDED (`8576c0190`), all five items, and two of them came out different from
   the way the plan phrased them.** Row `8ae4b508f274`. `scripts/lib/spawn-presence.sh` is new;

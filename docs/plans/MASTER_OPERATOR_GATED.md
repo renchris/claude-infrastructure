@@ -4,7 +4,7 @@ status: open
 
 # MASTER: operator-gated — the rows no agent session can discharge
 
-**Condition key:** `master-operator-gated` · **Live members 2026-08-12:** 42 (41 blocked · 1 open)
+**Condition key:** `master-operator-gated` · **Live members 2026-08-12 (measured after the apply):** 25 (23 blocked · 2 open)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-operator-gated" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

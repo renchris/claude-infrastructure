@@ -4,7 +4,7 @@ status: open
 
 # MASTER: fleet footprint — what the fleet leaves on the operator's machine
 
-**Condition key:** `master-fleet-footprint` · **Live members 2026-08-12:** 49 (38 open · 10 blocked · 1 claimed)
+**Condition key:** `master-fleet-footprint` · **Live members 2026-08-12 (measured after the apply):** 58 (39 open · 18 blocked · 1 claimed)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-fleet-footprint" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 
