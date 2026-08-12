@@ -71,6 +71,44 @@ FRESH_SEND_TOOLS = {"mcp__ms365__send-mail", "mcp__ms365__create-draft-email"}
 _REPLY_SUBJECT_RE = re.compile(r"^\s*(re|fw|fwd)\s*:", re.IGNORECASE)
 
 
+# Injected into context on EVERY matched ms365 write call, so the model never has to
+# recall it. Each rule below cost a real defect: the threading rule 2026-06-12 (a "RE:"
+# fresh-send that silently did not thread); the quote-source and verification rules
+# 2026-08-12 (the Vista Real pesticide reply, where get-mail-message's text/plain output
+# was mistaken for lost HTML three separate times — once causing a good draft to be
+# deleted and rebuilt, once flattening the entire quoted chain into one unbroken wall).
+# Full provenance: memory feedback_email_formatting.
+RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
+
+1. THREADING. To continue a chain, reply on the ORIGINAL message: create-reply-all-draft /
+   reply-all-mail-message with its messageId. NEVER send-mail or create-draft-email with a
+   "RE:"/"FW:" subject — that makes a detached message with no In-Reply-To/References and
+   silently breaks the chain.
+
+2. FORMATTING. Pass Message.body {contentType:"html"} wrapped in an inline
+   font-family:Calibri,Arial,sans-serif;font-size:11pt style, with real <p>/<ul>/<ol>.
+   Never put more than ~300 chars in `Comment` — Graph strips its newlines into one
+   paragraph.
+
+3. VISIBLE QUOTED CHAIN. Passing Message.body REPLACES the auto-quote, so the visible
+   history disappears. To keep it, append the prior message's HTML — and take that HTML
+   from get-mail-message-mime parsed with Python's email module (walk to the text/html
+   part, strip html/head/body/meta wrappers). NEVER from get-mail-message: it returns
+   text/plain, and pasting plain text into HTML collapses every paragraph, table and
+   nested reply into one unreadable wall.
+
+4. VERIFYING. get-mail-message ALWAYS reports contentType "text". That is the READER
+   handing back the text/plain alternative — it is NOT evidence the HTML was lost. The
+   only valid check is get-mail-message-mime. Drafts have no MIME, so to check a draft do
+   a DRY RUN: build it, swap recipients to the user alone, send, inspect that copy's MIME.
+   Do this before any high-stakes threaded reply, and make the dry run byte-identical to
+   the real body INCLUDING the quote block — a dry run that omits the risky part tests
+   nothing.
+
+5. SENDER. Set from = ren.chris@outlook.com; Graph otherwise defaults to the ichris96
+   alias. Display name is not settable per-message on this account."""
+
+
 def allow():
     """Emit an explicit allow and exit. (Silence would also allow, but being
     explicit keeps the transcript readable and matches the documented contract.)"""
@@ -81,6 +119,7 @@ def allow():
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
                     "permissionDecisionReason": "email-format gate: body OK (or nothing to judge)",
+                    "additionalContext": RECIPE,
                 }
             }
         )
