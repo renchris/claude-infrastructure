@@ -42,11 +42,16 @@
 #                                                                  that exits 0 against a live row
 #                                                                  is REFUSED (rc 5) — exit 0 is
 #                                                                  the RETRACTING direction.
-#   dups    [--project P] [--json] [--mode dodref|title|family|all]
+#   dups    [--project P] [--json] [--mode dodref|title|family|mechanical|all]
 #                                                                → REPORT candidate duplicate rows.
-#                                                                  THREE keys, because a dodRef-less
+#                                                                  FOUR keys, because a dodRef-less
 #                                                                  family is invisible to the first
 #                                                                  (see DUP KEYS). Gates nothing.
+#                                                                  `mechanical` is the only one a
+#                                                                  machine may ACT on unaided (see
+#                                                                  MECHANICAL FOLD); its writer is
+#                                                                  scripts/backlog-consolidation-
+#                                                                  trigger.sh --fold.
 #   backfill [--project P] [--json] [--apply]                    → propose — or with --apply, write —
 #                                                                  the `link` that joins a pre-fix
 #                                                                  row to an EXISTING condition
@@ -65,7 +70,14 @@
 #                                                                 done-latched item or a live claim,
 #                                                                 exactly as `reopen` is
 #                                                                 (see RE-OPEN EFFECT)
-#   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
+#   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id.
+#                                                                  BRAKED: a step already filed as a
+#                                                                  LIVE row (same prose, same subject
+#                                                                  modulo digits — key 4) re-files
+#                                                                  onto that row and echoes ITS id
+#                                                                  instead of minting a sibling.
+#                                                                  CC_BACKLOG_NEEDS_BRAKE=off opts
+#                                                                  out (see MECHANICAL FOLD).
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
 #
@@ -372,6 +384,79 @@
 # is strictly worse than a missed one — it feeds claim guard (6), which REFUSES dispatch, so a
 # false join parks real work with nothing downstream reporting the move. `backfill` therefore
 # DRY-RUNS by default and writes only under `--apply`.
+#
+# ── MECHANICAL FOLD + THE NEEDS BRAKE (2026-08-11, READINESS R6/R7) ────────────────────────────
+# KEY 4 — `mechanical`: the only key here a machine may ACT on without judgment, and the first one
+# with a WRITER (scripts/backlog-consolidation-trigger.sh --fold). The three above report; a report
+# answering a pile by describing it is still one more thing to read.
+#
+# THE PREMISE THE LIVE STORE REFUTED, and this is the load-bearing finding. R6 says rows differing
+# only by an embedded sha/digit fold with no judgment, and points at the trigger's own
+# normalisation as the thing that identifies them. It does not: that key substitutes
+# `[0-9a-f]{7,40}` → `<sha>` and `[0-9]+` → `<n>`, which ERASES the discriminator whenever the sha
+# IS the subject. Measured 2026-08-11 on the live ledger, the trigger's largest cluster was 14 rows
+# reported as "one effort wearing N rows" — and those 14 rows are NINE DIFFERENT stranded worktrees
+# (wt-7ff1b6f5ddbb x3, wt-6110fc45141e x3, wt-28740c313840 x2, and seven singletons), each needing
+# its own re-land. Folding that cluster would have joined nine unrelated pieces of work under one
+# condition, and `link` feeds claim guard (6), so the join REFUSES dispatch on eight of them. The
+# detector's key is sound for COUNTING a shape and unusable for acting on it.
+#
+# SO THE KEY MASKS DIGITS AND KEEPS LETTERS, in two token spaces at once. A row is mechanically
+# identical to another when BOTH hold:
+#   PROSE  — the digit-free tokens of the title, in order, are identical. This is `dups_title`'s
+#            own `normtitle` rule (called in spirit, stated once more here because this key spans
+#            `blocked` rows that key 2 excludes by construction).
+#   SUBJECT — the IDENTIFIER tokens (`family_ids_jq`'s space: dotted/hyphenated/slashed compounds)
+#            are identical after masking digit RUNS inside them. Masking cannot erase a letter, so
+#            `wt-7ff1b6f5ddbb` and `wt-4ce34a4f703c` stay distinct (`#ff#b#f#ddbb` vs `#ce#a#f#c`)
+#            while `refs/land/failed/20260811T081507Z-<uuid>-mcp-w3-no-inherit` and its 081742Z
+#            sibling collapse. That asymmetry is the whole mechanism: a MEASUREMENT varies only in
+#            digits, an IDENTITY carries letters that vary too.
+#
+# THREE FLOORS, each paying for a defect the detector already bought once (do not re-litigate them):
+#   (1) >= 3 surviving prose tokens. Keying on a normalised title unconditionally collapses every
+#       UNTITLED row into one cluster — key 2 pays this with `select(.norm != "")`; three tokens is
+#       the same guard sized for a key that WRITES.
+#   (2) >= 1 identifier. A step naming no file, path or ref has no subject to compare, so two
+#       different steps differing only in a bare number ("restart pane 3" / "restart pane 7") would
+#       fold. No identifier ⇒ abstain (memory: abstain-belongs-on-the-branch-the-case-reaches).
+#   (3) >= 2 DISTINCT raw titles. Same title + same project + same source is ONE id by
+#       construction, so a "group" of byte-identical titles is a group of rows that differ in
+#       `source` — a different generator saying the same sentence, which is not the same event.
+#
+# MEASURED, so the population is not assumed: 18 groups / 46 live rows on 2026-08-11, every group
+# exactly one worktree, zero cross-subject merges. All 46 are `source:"needs"` — which is R7's
+# answer as much as R6's, and why the brake below lives in `needs` and nowhere else.
+#
+# THE BRAKE. `cmd_needs` runs this same key against the live store BEFORE it mints, and on a hit it
+# re-files onto the EXISTING row (a `block` record, which the fold already carries) and echoes that
+# id instead of a new one. 172 live `needs` rows on the day it landed, 46 of them recurrences in 18
+# groups: 28 rows that would not exist. It is NOT an inferred `--condition` — the header above rules
+# that out and this respects it: nothing is re-keyed, no condition is guessed, and the only thing
+# inferred is that the identical sentence about the identical subject is the identical step. Scope
+# is `needs` alone (operator steps, born blocked, never dispatched); `add` is untouched, so
+# postland-verify's deliberately sha-keyed rows re-key exactly as before.
+#   · CC_BACKLOG_NEEDS_BRAKE=off restores the pre-brake mint.
+#   · The population is LIVE rows only. A recurrence of a step whose row is `done` is new work and
+#     must mint — swallowing it into a terminal row would drop the operator's step silently.
+#   · It costs one fold (~2 s on an 8.5k-record store) on the filing path. `needs` already pays a
+#     full scan via `has_id`; this is not on any per-command hot path (memory: fork-cost-proxies).
+#
+# WHY THIS DOES NOT CONTRADICT "OPT-IN, NEVER INFERRED" ABOVE, and the distinction is `link` vs
+# `add --condition`. That rule forbids INFERRING a condition at MINT, because `add --condition`
+# derives the ID from the condition: two rows that land on one key ARE one row, so a wrong inference
+# destroys one of them — which is exactly why postland-verify's per-sha titles must keep re-keying
+# ("a new RED at a new commit is new work"). `link` derives nothing: the id is untouched, every row
+# survives with its own sha and its own status, and the only thing the group gains is a LEASE, so a
+# second worker cannot be dispatched onto the same suite while the first is live. Folding six
+# per-sha RED rows therefore leaves six rows and one worker, which is the consolidation this
+# repo has been asking a human to perform by hand.
+#
+# WHAT A FOLD IS, AND WHAT IT IS NOT. The writer joins the group with `link` — an append-only record
+# the fold carries with NO status arm, so nothing is rewritten, nothing is closed, and every row
+# stays exactly as live as it was. Consolidation here means the group is ONE effort under the
+# condition lease (claim guard 6), not that surplus rows were retired: closing them is a judgment,
+# and this key exists precisely to separate the half that needs none.
 #
 # KICK ON WRITE (S5): a successful `add` fires ONE debounced, detached `cc-dispatch --decide` pass
 # so new work gets a decision in seconds instead of waiting out the launchd interval. Strictly
@@ -1732,6 +1817,53 @@ cmd_needs() {
   [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
   [ -n "$session" ] || session="${CC_SESSION_ID:-}"
 
+  # ── THE MINT BRAKE (READINESS R7 — see MECHANICAL FOLD in the header) ────────────────────────
+  # Ask, BEFORE minting, whether this exact step about this exact subject is already a live row.
+  # The question is put to KEY 4 and nothing else: one program answers it here, in `dups`, and in
+  # the trigger's writer, so a step this brake swallows is exactly a step the fold would have
+  # joined. A synthetic row carries the not-yet-minted title into the same grouping — `$mine`
+  # then keeps only a group that contains it, and the key's own ">= 2 distinct raw titles" floor
+  # means the group cannot be the synthetic row alone.
+  #
+  # FAIL-OPEN IN EVERY DIRECTION. No jq, an unreadable store, a malformed fold, a group whose
+  # other members are all synthetic — every one of them falls through to the ordinary mint. A
+  # brake that cannot ask must not answer "yes" (memory: lookup-miss-is-not-absence): swallowing a
+  # step on a broken read would delete an operator's work item silently, which is the one outcome
+  # worse than a duplicate row.
+  local brake_id=""
+  if [ "${CC_BACKLOG_NEEDS_BRAKE:-on}" != "off" ] && command -v jq >/dev/null 2>&1; then
+    local bproj="$project"
+    [ -n "$bproj" ] || bproj="$(project_default 2>/dev/null || true)"
+    if [ -n "$bproj" ] && [ -s "$BACKLOG" ]; then
+      local synth
+      synth="$(jq -nc --arg t "$step" --arg p "$bproj" \
+        '{id:"__pending__", project:$p, status:"blocked", title:$t, source:"needs",
+          condition:"", lastTs:"9999-12-31T23:59:59Z"}' 2>/dev/null)"
+      if [ -n "$synth" ]; then
+        # The OLDEST real member is the master: items are ts-sorted, and the synthetic row sorts
+        # last by construction, so `first(select(.id != "__pending__"))` is the row this step has
+        # been filed against before.
+        brake_id="$(fold 2>/dev/null \
+          | jq -r --arg p "$bproj" --arg mine "__pending__" --argjson extra "$synth" \
+              "(. + [\$extra]) | ${mech_jq}" 2>/dev/null \
+          | jq -r 'first(.[]?.items[]? | select(.id != "__pending__") | .id) // ""' 2>/dev/null)"
+      fi
+    fi
+  fi
+  if [ -n "$brake_id" ]; then
+    { printf 'cc-backlog needs: RECURRENCE — this step is already filed as %s; re-filing onto it\n' "$brake_id"
+      printf '  rather than minting a sibling (identical prose, identical subject modulo digits).\n'
+      printf '  To mint anyway:  CC_BACKLOG_NEEDS_BRAKE=off cc-backlog needs ...\n'
+    } >&2
+    local -a rargs
+    rargs=(block "$brake_id" --needs "$step")
+    [ -n "$run" ]     && rargs=("${rargs[@]}" --run "$run")
+    [ -n "$session" ] && rargs=("${rargs[@]}" --session "$session")
+    cmd_transition "${rargs[@]}" >/dev/null || return $?
+    echo "$brake_id"
+    return 0
+  fi
+
   # cmd_add's stdout is the id and must NOT reach ours twice — capture it, echo once at the end.
   # Its stderr (the already-DONE warning) is deliberately left flowing to the caller.
   # Built as an array for the same reason the transition args below are: an unquoted
@@ -2092,6 +2224,37 @@ dups_title() {
            items: [ .[] | {id, status, condition, title} ]})'
 }
 
+# KEY 4 — MECHANICAL identity (see MECHANICAL FOLD in the header for the derivation and the nine
+# worktrees that refuted the obvious key). ONE program, three consumers — `dups --mode mechanical`,
+# `needs`'s brake, and the trigger's `--fold` writer — because a report, a writer and a mint-time
+# guard that disagree about what "the same" means is the sibling-auditors defect with a WRITE on the
+# end (memory: sibling-auditors-must-share-the-state-model, make-the-actuator-the-arbiter).
+#
+# $mine (an id) is the brake's hook: it asks "does this row belong to a group?" and must not be
+# answered by the row's own presence, so the caller passes a synthetic row and this program requires
+# a second, PRE-EXISTING member. "" scans the whole store, which is what the report and the writer do.
+# shellcheck disable=SC2016  # single quotes are the POINT — $mine/$p are JQ variables.
+mech_jq='
+  def ids: [ scan("[A-Za-z_][A-Za-z0-9_]*(?:[./-][A-Za-z0-9_]+)+") ]
+    | map(ascii_downcase | gsub("[0-9]+"; "#")) | unique;
+  def prose: ascii_downcase | [ splits("[^a-z0-9]+") ] | map(select(test("^[a-z]+$")));
+  [ .[]
+    | select((.status == "open") or (.status == "claimed") or (.status == "blocked"))
+    | select($p == "" or .project == $p)
+    | {id, project, status, title, source, condition: (.condition // ""),
+       lastTs: (.lastTs // ""), p: (.title | prose), i: (.title | ids)} ]
+  | map(select((.p | length) >= 3 and (.i | length) >= 1))
+  | group_by([.project, (.p | join(" ")), (.i | join(" "))])
+  | map(select(length > 1))
+  | map(select([ .[] | .title ] | unique | length > 1))
+  | map(select($mine == "" or any(.[]; .id == $mine)))
+  | map({project: .[0].project, prose: (.[0].p | join(" ")), subject: (.[0].i | join(" ")),
+         conditions: ([ .[] | .condition ] | unique),
+         items: [ .[] | {id, status, source, condition, title, lastTs} ] | sort_by(.lastTs)})
+  | sort_by(- (.items | length))'
+
+dups_mechanical() { fold | jq -c --arg p "$1" --arg mine "${2:-}" "$mech_jq"; }
+
 cmd_dups() {
   local project="" json=0 mode=all min_shared=3 min_frac=0.40
   while [ $# -gt 0 ]; do
@@ -2105,36 +2268,38 @@ cmd_dups() {
     esac
   done
   case "$mode" in
-    dodref|title|family|all) ;;
-    *) printf 'cc-backlog dups: --mode must be dodref|title|family|all (got "%s")\n' "$mode" >&2
+    dodref|title|family|mechanical|all) ;;
+    *) printf 'cc-backlog dups: --mode must be dodref|title|family|mechanical|all (got "%s")\n' "$mode" >&2
        return 2 ;;
   esac
   if ! valid_num "$min_shared" || ! valid_num "$min_frac"; then
     printf 'cc-backlog dups: --min-shared and --min-frac must be numbers\n' >&2; return 2
   fi
   ensure_file
-  local groups='[]' tgroups='[]' fam='[]'
+  local groups='[]' tgroups='[]' fam='[]' mech='[]'
   if [ "$mode" = dodref ] || [ "$mode" = all ]; then groups="$(dups_dodref "$project")"; fi
   if [ "$mode" = title  ] || [ "$mode" = all ]; then tgroups="$(dups_title  "$project")"; fi
   if [ "$mode" = family ] || [ "$mode" = all ]; then
     fam="$(family_json "$project" "$min_shared" "$min_frac")"
   fi
+  if [ "$mode" = mechanical ] || [ "$mode" = all ]; then mech="$(dups_mechanical "$project")"; fi
 
   # ONE JSON SHAPE ON EVERY MODE — an object keyed by the three keys, so a consumer never has to
   # infer which key produced a bare array. This REPLACES the pre-2026-08-11 shape (the dodRef array
   # alone); `--mode dodref --json | jq .dodref` is that array. Safe to change because `dups` had no
   # programmatic caller in the tree — verified by grep, and the header's own §DUP KEYS records why.
   if [ "$json" -eq 1 ]; then
-    jq -nc --argjson d "$groups" --argjson t "$tgroups" --argjson f "$fam" \
-      '{dodref: $d, title: $t, family: $f}'
+    jq -nc --argjson d "$groups" --argjson t "$tgroups" --argjson f "$fam" --argjson m "$mech" \
+      '{dodref: $d, title: $t, family: $f, mechanical: $m}'
     return 0
   fi
 
-  local nd nt nf
+  local nd nt nf nm
   nd="$(printf '%s' "$groups"  | jq 'length')"
   nt="$(printf '%s' "$tgroups" | jq 'length')"
   nf="$(printf '%s' "$fam"     | jq 'length')"
-  if [ "$nd" -eq 0 ] && [ "$nt" -eq 0 ] && [ "$nf" -eq 0 ]; then
+  nm="$(printf '%s' "$mech"    | jq 'length')"
+  if [ "$nd" -eq 0 ] && [ "$nt" -eq 0 ] && [ "$nf" -eq 0 ] && [ "$nm" -eq 0 ]; then
     echo "cc-backlog dups: no candidate duplicate groups."; return 0
   fi
 
@@ -2163,6 +2328,16 @@ cmd_dups() {
     printf 'family: %s live row(s) with no condition that match an EXISTING condition group.\n' "$nf"
     printf '  Scored in identifier space (floors: shared>=%s, frac>=%s). backfill proposes the link.\n\n' \
       "$min_shared" "$min_frac"
+  fi
+  if [ "$nm" -gt 0 ]; then
+    printf '%s' "$mech" | jq -r '.[]
+      | "-- \(.project)  [mechanical] \(.prose[0:64])",
+        "   subject: \(.subject[0:96])",
+        (.items[] | "   \(.id)  \(.status)\(if .condition == "" then "" else "  [" + .condition + "]" end)  \(.title[0:88])"),
+        ""'
+    printf 'mechanical: %s group(s) — identical prose AND identical subject identifiers modulo digits.\n' "$nm"
+    printf '  This is the only key here a machine may act on: scripts/backlog-consolidation-trigger.sh --fold\n'
+    printf '  writes the link. The others are candidates for a human.\n\n'
   fi
   printf 'If two rows ARE one piece of work, join them so only one can be dispatched:\n'
   printf '    cc-backlog link <id> --condition <slug>   # both rows, same slug\n'

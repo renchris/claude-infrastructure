@@ -274,14 +274,20 @@ add_family() {
 @test "dups rejects an unknown --mode rather than silently reporting one key" {
   run bash "$CB" dups --mode dodrefs
   [ "$status" -eq 2 ]
-  printf '%s' "$output" | grep -qF -- "dodref|title|family|all"
+  # The refusal must ENUMERATE the live modes — a stale list here is how a caller learns a key
+  # exists. `mechanical` (READINESS R6) joined them on 2026-08-11.
+  printf '%s' "$output" | grep -qF -- "dodref|title|family|mechanical|all"
 }
 
-@test "dups --json emits ALL THREE keys on every mode, so a consumer never guesses" {
+@test "dups --json emits EVERY key on every mode, so a consumer never guesses" {
   add_family
   run bash "$CB" dups --json
   [ "$status" -eq 0 ]
-  [ "$(echo "$output" | jq 'has("dodref") and has("title") and has("family")')" = "true" ]
+  [ "$(echo "$output" | jq 'has("dodref") and has("title") and has("family") and has("mechanical")')" = "true" ]
+  # --mode <one key> must still emit the whole shape, empty arrays and all: a consumer that has to
+  # infer which key produced a bare array is the defect this shape replaced.
+  run bash "$CB" dups --mode mechanical --json
+  [ "$(echo "$output" | jq 'has("dodref") and has("title") and has("family") and has("mechanical")')" = "true" ]
 }
 
 @test "default mode is all — the family shows without asking for it" {
