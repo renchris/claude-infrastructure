@@ -489,7 +489,18 @@ else
   [ -n "$WD_MARK" ] || log "WATCHDOG-MARK-UNAVAILABLE $ACCT — cannot mktemp under ${TMPDIR:-/tmp}; the ${TIMEOUT_S}s bound still applies, only the term/kill label is lost"
   "$RELOGIN_BIN" "$ACCT" >>"$LOG" 2>>"$LOG" &
   cp=$!
-  ( sleep "$TIMEOUT_S"
+  ( # A NAP THAT DIES WITH ITS WATCHDOG. A bare `sleep` here is not killable by line 512's
+    # `kill "$wp"`: that signals the SUBSHELL, and the `sleep` it is blocked in is reparented to
+    # init, keeping every descriptor it inherited. Under bats that includes the harness's own
+    # OUTPUT PIPE, so bats cannot finish while the orphan holds it. MEASURED off-box: the suite's
+    # 64 tests all PASS and total 31s of work, then the run sits for the full TIMEOUT_S — 153s
+    # wall, recorded by the off-box harness as `cut 64 0 124 120`, a non-verdict over a suite that
+    # had already gone green. `lsof` on the orphan shows it holding bats' pipe and 1.out.
+    # THIS IS NOT A TEST ARTIFACT: every hourly production tick strands a `sleep` the same way.
+    # Backgrounding the nap and trapping TERM makes the watchdog reap its own sleeper, so the
+    # process group empties when the parent signals it.
+    _wd_nap() { sleep "$1" & _wd_np=$!; trap 'kill "$_wd_np" 2>/dev/null; exit 0' TERM; wait "$_wd_np"; trap - TERM; }
+    _wd_nap "$TIMEOUT_S"
     kill -0 "$cp" 2>/dev/null || exit 0            # finished inside the bound — nothing to bound
     # MARKER BEFORE SIGNAL, in both arms, and the order is load-bearing. The parent is sitting in
     # `wait "$cp"`, which returns the instant the child dies, and its very next statement is
@@ -502,7 +513,7 @@ else
     # matching 143/137 exit code as its second half, so a marker without a kill cannot convict.
     [ -n "$WD_MARK" ] && printf 'term\n' > "$WD_MARK"
     kill -TERM "$cp" 2>/dev/null
-    sleep "$KILL_GRACE_S"
+    _wd_nap "$KILL_GRACE_S"
     kill -0 "$cp" 2>/dev/null || exit 0            # TERM was enough
     [ -n "$WD_MARK" ] && printf 'kill\n' > "$WD_MARK"
     kill -KILL "$cp" 2>/dev/null                   # the actual bound: uncatchable, unignorable
