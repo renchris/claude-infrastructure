@@ -170,6 +170,12 @@
 #   CC_DISPATCH_READY_MAX    (default: 6)     hard bound on readiness checks per pass — past it the
 #                                             verdict is UNKNOWN, which never blocks
 #   CC_DISPATCH_READY_SCAN   (default: 4000)  IDL tail lines scanned for a prior `readyAt`
+#   CC_DISPATCH_VENUE_ONLY   (default: unset) cloud|local ⇒ admit ONLY items whose venuePlan is
+#                                           this venue; everything else is PARKED and counted in
+#                                           the IDL. The migration lever — DECIDE_ONLY stops every
+#                                           spawn, this one stops all but one venue. An unrecognised
+#                                           value REFUSES the pass (a filter matching nothing is a
+#                                           total outage that reads as an empty queue).
 #   CC_DISPATCH_VENUE_LABEL  (default: on)    off ⇒ no write-path venue labelling
 #   CC_DISPATCH_VENUE_NEW_WINDOW_S (default: 900) how new a row must be to be labelled on the
 #                                             add-kick; the bound is a POPULATION, never a count
@@ -1359,6 +1365,47 @@ dispatch() { # <dry|run|decide>
   # after both, cannot do.
   guarded="$(     printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone == true) ]')"
   dispatchable="$(printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone != true) ]')"
+
+  # 1a1. THE VENUE ADMISSION FILTER (CC_DISPATCH_VENUE_ONLY) — the migration lever.
+  #
+  # WHY IT HAD TO EXIST AT ALL. `CC_DISPATCH_VENUE_LABEL` decides what an item is LABELLED; nothing
+  # decided what a pass is ALLOWED TO FIRE. So the only way to stop local spawning was
+  # DECIDE_ONLY, which stops every spawn including the cloud ones — "migrate from local to cloud"
+  # was inexpressible, and the two states available were "everything fires" and "nothing does".
+  # This is the third axis: fire ONLY the venue named here.
+  #
+  # ELEMENT-EXACT against the closed set, never a substring: `venuePlan` is written by cc-venue from
+  # cc-eligible's own verdict, and a typo'd filter value that matched nothing would read exactly
+  # like a correctly-configured cloud-only box with an empty cloud queue — a silent total outage
+  # wearing the shape of success. An unrecognised value therefore REFUSES the pass rather than
+  # narrowing it to zero (MEMORY.md: default-path-hardening-is-blind-to-the-explicit-argument).
+  #
+  # 🚨 THE EXCLUDED ITEMS ARE COUNTED AND JOURNALLED, NOT SILENTLY DROPPED. Measured 2026-08-11 the
+  # live queue is 45 cloud / 236 local / 31 unlabelled, so `=cloud` parks 267 of 312 items —
+  # 86% of the queue, indefinitely. That is the true cost of the migration and it must be visible in
+  # the IDL on every pass, because an operator reading "the backlog is running on cloud now" has no
+  # other way to learn that six items in seven are not running at all. An unlabelled row is excluded
+  # too: absence of a plan is not evidence of eligibility, and the producer fails CLOSED for the
+  # same reason (a wrong answer in a venue where nobody can SEE it).
+  VENUE_ONLY="${CC_DISPATCH_VENUE_ONLY:-}"
+  venue_parked=0
+  if [ -n "$VENUE_ONLY" ]; then
+    case "$VENUE_ONLY" in
+      cloud|local) ;;
+      *) echo "cc-dispatch: refusing — CC_DISPATCH_VENUE_ONLY='$VENUE_ONLY' is not in the closed set (cloud|local). A filter that matches nothing is a total outage that reads as an empty queue." >&2
+         idl abstained "venue-only '$VENUE_ONLY' outside the closed set (cloud|local) — refusing rather than narrowing to zero"
+         return 3 ;;
+    esac
+    local _before _after
+    _before="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+    dispatchable="$(printf '%s' "$dispatchable" \
+      | jq -c --arg v "$VENUE_ONLY" '[ .[] | select((.venuePlan // "") == $v) ]')"
+    _after="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+    venue_parked=$((_before - _after))
+    if [ "$venue_parked" -gt 0 ]; then
+      idl skipped "venue-only=$VENUE_ONLY parked $venue_parked of $_before dispatchable item(s) — they carry a different venuePlan or none, and will NOT fire while this filter is set"
+    fi
+  fi
 
   # 1a2. THE WRITE-PATH VENUE LABEL (W1 item 5a). DECIDE mode only, because that is what
   # `cc-backlog add` kicks — a `--once` cron tick is a clock, and hanging a labeller off a clock is
