@@ -17,8 +17,13 @@
                                 COUNTED in the IDL every pass (bin/cc-dispatch 1a1)
     (DECIDE_ONLY removed)       the pause below is superseded — it stopped cloud spawns too, which
                                 is why the migration needed a venue filter rather than a lift
-  🚨 THE INTERLOCK, AND IT COST A REAL BLEED TO LEARN (2026-08-11). DECIDE_ONLY IS STILL ON, ON
-  PURPOSE, and it must stay on until the DEPLOYED binary honours CC_DISPATCH_VENUE_ONLY. The flip
+  ✅ INTERLOCK DISCHARGED 2026-08-11T19:0xZ — all four steps done, step 3 by POSITIVE CONTROL:
+  with the pause still on, one pass through the DEPLOYED binary journalled
+  `venue-only=cloud parked 272 of 315 dispatchable item(s)` and fired 0 local panes. Only then was
+  CC_DISPATCH_DECIDE_ONLY removed. The history below is kept because it is why the order exists.
+
+  🚨 THE INTERLOCK, AND IT COST A REAL BLEED TO LEARN (2026-08-11). DECIDE_ONLY had to stay on
+  until the DEPLOYED binary honoured CC_DISPATCH_VENUE_ONLY. The flip
   was attempted as a pure config change and it fired 2 LOCAL panes: `~/.claude/bin/cc-dispatch` is a
   per-file symlink into the shared checkout, which trails origin/main, so the running binary had
   never heard of the new variable — it read an env var it does not implement, ignored it, saw the
@@ -90,7 +95,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_FIRE_CLOUD=on; export CC_DISPATCH_VENUE_ONLY=cloud; export CC_DISPATCH_DECIDE_ONLY=on; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_FIRE_CLOUD=on; export CC_DISPATCH_VENUE_ONLY=cloud; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
     </array>
 
     <key>StartInterval</key>
