@@ -32,13 +32,22 @@ setup() {
   echo "$output" | grep -q "0 stranded"
 }
 
-@test "GATE 2: synthetic stranded (new file never merged) → exit 1, names sha+path+cherry-pick" {
+@test "GATE 2: synthetic stranded (new file never merged) → detected in both modes" {
+  # Detection is the gate. Since the fd517a5863cc damping, the per-commit sha/path/recipe
+  # is the OWNER's view (--mine); default mode counts it and names its branch.
   git checkout -q -b feature
   echo hello > newfile.txt
   git add newfile.txt
   git commit -q -m "add newfile"
   sha="$(git rev-parse --short HEAD)"
+  git update-ref refs/land/failed/20260812T000000Z-SID-G2-feature HEAD
+
   run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "1 commit(s)"
+  echo "$output" | grep -q "feature"
+
+  run bash "$SWEEP" --mine SID-G2 main
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "$sha"
   echo "$output" | grep -q "newfile.txt"
@@ -58,7 +67,14 @@ setup() {
   git push -q origin main
 
   git checkout -q featureF
+  git update-ref refs/land/failed/20260812T000000Z-SID-G1-featureF HEAD
+
   run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "1 commit(s)"
+  echo "$output" | grep -q "featureF"
+
+  run bash "$SWEEP" --mine SID-G1 main
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "$c1"
   echo "$output" | grep -q "fileA.txt"
@@ -113,12 +129,38 @@ seed_two_owned_strands() {
   echo "$output" | grep -q "0 own-session"
 }
 
-@test "default mode unchanged: both stranded reported → exit 1" {
+# --- DAMPING (backlog fd517a5863cc) -----------------------------------------------------
+# The un-`--mine` verdict fired on 955 of 989 lands and printed a per-commit wall with a
+# cherry-pick recipe for peer WIP that its own next line forbids cherry-picking. It is now
+# a bounded count. These cases pin that; they go red against the pre-damping subject.
+
+@test "DAMPED: default mode counts both strands but prints no per-commit wall and no recipe" {
   seed_two_owned_strands
   run bash "$SWEEP" main
+  [ "$status" -eq 1 ]                              # still a REVIEW prompt — it must fire
+  echo "$output" | grep -q "2 commit(s)"           # …as a count
+  echo "$output" | grep -q "featA"                 # …naming the branches, not the commits
+  echo "$output" | grep -q "featB"
+  ! echo "$output" | grep -q "fileA.txt" || false       # no per-commit path wall
+  ! echo "$output" | grep -q "recovery:" || false       # no recipe for a peer's WIP…
+  ! echo "$output" | grep -q "git cherry-pick" || false # …the phrase that remains is the
+                                                       # sentence FORBIDDING it
+  echo "$output" | grep -q -- "--mine"             # points at the one actionable question
+}
+
+@test "DAMPED: the branch list is bounded — 5 stranded branches render 3 names + a count" {
+  for n in 1 2 3 4 5; do
+    git checkout -q -b "wip$n" main
+    echo "x$n" > "file$n.txt" && git add "file$n.txt" && git commit -q -m "add file$n"
+  done
+  git checkout -q main
+
+  run bash "$SWEEP" main
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "fileA.txt"
-  echo "$output" | grep -q "fileB.txt"
+  echo "$output" | grep -q "5 commit(s)"
+  echo "$output" | grep -q "(+2 more)"
+  # exactly 3 branch names survive the cap (they share one line, so count occurrences)
+  [ "$(echo "$output" | grep -o 'wip[0-9] (1)' | wc -l | tr -d ' ')" -eq 3 ]
 }
 
 @test "--mine accepts trunk in any arg order (--mine SID then trunk)" {
@@ -153,10 +195,11 @@ seed_two_owned_strands() {
   git checkout -q -b feat
   echo hi > newfile.txt; git add newfile.txt; git commit -q -m "add newfile"
   sha="$(git rev-parse --short HEAD)"
+  git update-ref refs/land/failed/20260812T000000Z-SID-PC-feat HEAD
   git checkout -q main
   printf '%s\n' 0000000000000000000000000000000000000001 > .git/refs/heads/brokenref
 
-  run bash "$SWEEP" main
+  run bash "$SWEEP" --mine SID-PC main
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "NO VERDICT"         # the unreadable branch is reported...
   echo "$output" | grep -q "brokenref"
@@ -226,6 +269,7 @@ seed_anchor_strands() {
   git checkout -q -b feat
   echo zzz > fileZ.txt; git add fileZ.txt; git commit -q -m "branch adds fileZ"
   sha="$(git rev-parse --short HEAD)"
+  git update-ref refs/land/failed/20260812T000000Z-SID-CM-feat HEAD
 
   git checkout -q main
   echo zzz > fileZ.txt; git add fileZ.txt; git commit -q -m "trunk lands the same patch"
@@ -236,7 +280,7 @@ seed_anchor_strands() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '^- '                # the premise: cherry's own verdict is "landed"
 
-  run bash "$SWEEP" main
+  run bash "$SWEEP" --mine SID-CM main
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "$sha"
   echo "$output" | grep -q "fileZ.txt"
