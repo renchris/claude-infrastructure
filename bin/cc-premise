@@ -39,6 +39,15 @@ Verbs:
   check <id>       one-line `verdict=<token>` + the contract on stderr. exit 3 iff superseded.
   contract <id>    the brief-injectable block, or nothing at all. always exit 0.
   sweep [--json]   the whole-store triage report (§S3 "mechanical first").
+  screen <id> [--probe <cmd>] [--json]
+                   THE SECOND SCREEN — would this item's stored probe have FAILED on the day the
+                   item was filed? DISCRIMINATING · ANTI-COVERAGE · UNDECIDABLE. `--probe` screens
+                   a supplied string instead of the stored one (a probe since retired by
+                   `falsify --clear` carries no stored string, and is exactly what needs auditing).
+  screen --all [--json]
+                   the same screen over every stored probe: three-way tally + the ANTI-COVERAGE
+                   list with the sha/date proving each token pre-dated its item. REPORTS ONLY —
+                   it never clears a probe and always exits 0.
 
 Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl} — the same resolution
 cc-backlog uses, so a fixtured test and the live desk read the same way.
@@ -49,6 +58,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import defaultdict
@@ -1065,6 +1075,376 @@ def run_falsifier(item_id, ent):
     ]
 
 
+# ── THE SECOND SCREEN — filing-day discrimination ────────────────────────────────────────────────
+# `run_falsifier` above is the FIRST screen: "does the probe pass NOW?". It catches the probe that
+# agrees with a world where the item is finished. It is blind to the commoner failure, and the
+# CURRENCY pass (docs/plans/BACKLOG_CONSOLIDATION_2026-08-09.md) measured the ratio: of 26
+# hand-reviewed probes, 16 were refuted, and **8 of those 16 — the dominant class, against 2 for the
+# next — were "the grep was already true at filing"**. `918e9bac60b6`'s lint landed 2026-08-06 and
+# its item was filed 08-10; `80e6637dfd9e`'s `default: high` landed 8 days before its item;
+# `8e07e87770ce`'s string entered the file 5 minutes before.
+#
+# A probe that already passed on filing day discriminates NOTHING. It is not weak coverage, it is
+# ANTI-coverage: the row reads as checked, and the first `claim` that re-runs it retracts real work
+# on a probe that would have retracted it the moment it was written. The lead's own 5-item spot
+# check caught 1 of the 16, because it sampled for the failure mode already known — which is why
+# this has to be a mechanism and not another review.
+#
+# THE QUESTION, stated so the implementation cannot drift from it: *would this probe have FAILED
+# against the tree as it stood when the ITEM was filed?* The plan gives the cheap mechanical form
+# (`git log -S<token> --before=<item lastTs>`) and this starts from it; it goes one step stronger by
+# reconstructing the trunk commit at that instant and RE-ASKING the probe's own clauses there,
+# because presence-in-the-tree is the thing the probe actually tests, while `-S` is a proxy for it.
+# The `-S` form is kept, demoted to producing the EVIDENCE line (which commit put the token there).
+#
+# 🚨 AND THE DIFFERENCE BETWEEN THE TWO FORMS IS NOT ACADEMIC — IT REVERSES ONE OF THE PLAN'S OWN
+# THREE NAMED CASES. `80e6637dfd9e` is listed there as anti-coverage because "`default: high` landed
+# 8 days before its item". Re-asked at the filing-day trunk (`677dee7d1`, 2026-08-09), its probe
+# `grep -qE "^  default: high" model-config.yaml` does NOT match: that line still read `default: max`,
+# which is precisely what the item claims. The commit is `cb7f8e3fa` — AUTHORED 2026-08-01, but
+# COMMITTED to trunk 2026-08-10 22:04, a day AFTER the item was filed. A token search sorted by
+# author date sees "8 days before"; the tree sees a line that was not there yet. So the probe is
+# genuinely DISCRIMINATING and the item was cleared on a false conviction.
+#
+# Two rules fall out, and both are enforced above rather than left as prose: presence is read from a
+# reconstructed TREE and never from a log search, and every date this arm prints or filters on is a
+# COMMIT date. The generalisable half is already in this repo's memory — a proxy for the question is
+# not the question (memory: proxy-must-be-independent-of-what-it-supplements), and the corollary
+# earned here is that the proxy the SPEC hands you is still a proxy.
+#
+# THREE VERDICTS, AND UNDECIDABLE IS A FIRST-CLASS ONE. Most stored probes are not answerable this
+# way at all — they invoke a script, read a path outside the repo, shell out through a pipe, or ask
+# about a running process. A two-state answer to a three-state question is a defect this repo has
+# paid for before (memory: abstain-rule-can-retire-the-common-case): folding UNDECIDABLE into
+# DISCRIMINATING manufactures a clean bill of health for the majority, and folding it into
+# ANTI-COVERAGE convicts every probe the parser is merely too narrow to read. It gets its own state,
+# it carries the reason it could not be decided, and it is the DEFAULT on every failure path.
+#
+# FAIL-OPEN, LIKE EVERY OTHER ARM HERE. This screen can only ever move a verdict AWAY from a
+# refusal: see `assess`, where an ANTI-COVERAGE reading downgrades a `falsified` retraction to
+# advisory. It never mints a blocking verdict, never joins BLOCKING, and never clears a probe —
+# `cc-backlog falsify --clear` is a human's call, and the CURRENCY pass is explicit that closing on
+# second-hand evidence is the weaker move.
+DISCRIMINATING = "DISCRIMINATING"
+ANTI_COVERAGE = "ANTI-COVERAGE"
+UNDECIDABLE = "UNDECIDABLE"
+
+FILING_SCREEN_ENABLED = os.environ.get("CC_PREMISE_FILING_SCREEN", "on").lower() not in (
+    "off", "0", "no"
+)
+
+# Shell metacharacters that put a probe beyond this parser. Every one of them means the clause's
+# truth at filing time depends on something other than the tree — a command substitution, a pipe, a
+# variable, a redirect, a second statement — so the honest answer is UNDECIDABLE and NOT a guess.
+# `>`/`<` are here because `2>/dev/null` is common and a redirect changes what the exit code means.
+#
+# ⚠️ THEY ONLY COUNT OUTSIDE QUOTES, and getting that wrong is not a rounding error — it silently
+# retires the most precise probes in the store. A raw-substring screen (this parser's first draft)
+# called `grep -q "^link_refresh$" scripts/deploy-live.sh` unparseable for the `$` in a regex
+# ANCHOR, `grep -qF "2) cut=1 ;;"` for a `)` inside a literal, and `grep -qF "EMPTY|NO-TUI"` for an
+# alternation — 4 of the 16 hand-refuted probes, i.e. exactly the anchored, quoted, precise ones a
+# careful author writes. `_shell_atoms` below tracks quote state so a metacharacter is judged by its
+# POSITION rather than its spelling. Inside double quotes `$` and a backtick still expand, so those
+# two stay structural there; inside single quotes nothing does.
+_PROBE_UNPARSEABLE_CHARS = "|><;\n{}()&"
+_PROBE_EXPANDING_CHARS = "$`"
+# What must FOLLOW a `$` inside double quotes for it to be an expansion rather than a literal.
+_EXPANDS_AFTER_DOLLAR = re.compile(r"[A-Za-z_{(0-9@*#?!$-]")
+
+
+def _shell_atoms(cmd):
+    """Split on TOP-LEVEL `&&`/`||` with quote state tracked → [op, clause, op, clause…] or None.
+
+    None means some structural metacharacter appeared outside quotes (or an expansion appeared
+    outside single quotes), i.e. the probe asks something other than "what is in the tree".
+    """
+    out, buf, i, n = [], [], 0, len(cmd)
+    quote = ""
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+            elif quote == '"' and ch == "`":
+                return None  # "`…`" — command substitution, so the tree does not decide it
+            elif quote == '"' and ch == "$" and _EXPANDS_AFTER_DOLLAR.match(cmd[i + 1:i + 2]):
+                # …but ONLY when it is actually an expansion. `"^link_refresh$"` is a regex ANCHOR:
+                # sh leaves a `$` literal when the next character cannot begin a parameter name,
+                # and treating it as an expansion retires the anchored-pattern class — the most
+                # precise probes in the store, and the ones whose filing-day answer is worth most.
+                return None
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in _PROBE_EXPANDING_CHARS:
+            return None
+        if cmd.startswith("&&", i) or cmd.startswith("||", i):
+            out.append("".join(buf))
+            out.append(cmd[i:i + 2])
+            buf, i = [], i + 2
+            continue
+        if ch in _PROBE_UNPARSEABLE_CHARS:
+            return None  # a lone `&`, a pipe, a redirect, a second statement, a subshell
+        buf.append(ch)
+        i += 1
+    if quote:
+        return None  # unterminated quote: shlex would guess, and a guess is not a verdict
+    out.append("".join(buf))
+    return out
+
+# grep flags this screen can hand to `git grep` with identical meaning. Anything else — notably
+# `-r`/`-R` (a directory walk, whose file set at an old commit is a different question), `-v` (an
+# inverted per-line test, where `-qv` means "some line does NOT match" and does not survive the
+# translation), `-l`/`-L`, `-c` — makes the clause unparseable rather than approximated.
+_GREP_PASS_FLAGS = {"E": "-E", "F": "-F", "i": "-i", "w": "-w", "x": "-x", "P": "-P"}
+_GREP_DROP_FLAGS = set("qsh")  # quiet/no-message/no-filename: no effect on the match itself
+
+
+def _probe_clauses(cmd):
+    """A probe → [(op, negated, kind, args)] or None if any part is beyond this parser.
+
+    `op` is the shell operator JOINING this clause to the one before it ("" for the first), so the
+    caller can fold the result with sh's own left-associative `&&`/`||` semantics. Returning None
+    for the WHOLE probe on any single unreadable clause is deliberate: a conjunction is only as
+    decidable as its least decidable member, and half a verdict is the two-state answer this arm
+    exists to avoid.
+    """
+    if not cmd:
+        return None
+    parts = _shell_atoms(cmd.strip())
+    if not parts or not parts[0].strip():
+        return None
+    clauses, op = [], ""
+    for i, piece in enumerate(parts):
+        if i % 2 == 1:
+            op = piece
+            continue
+        try:
+            argv = shlex.split(piece)
+        except ValueError:
+            return None
+        if not argv:
+            return None
+        negated = False
+        while argv and argv[0] == "!":
+            negated = not negated
+            argv = argv[1:]
+        parsed = _parse_clause(argv)
+        if parsed is None:
+            return None
+        kind, args = parsed
+        clauses.append((op if i else "", negated, kind, args))
+    return clauses
+
+
+def _parse_clause(argv):
+    """One shell word-list → ("grep", (flags, pattern, paths)) | ("exists", (test, path)) | None."""
+    if not argv:
+        return None
+    head = argv[0]
+    if head == "grep":
+        flags, pattern, rest, i = [], None, [], 1
+        while i < len(argv):
+            a = argv[i]
+            if a == "--":
+                i += 1
+                break
+            if a == "-e":
+                if i + 1 >= len(argv):
+                    return None
+                pattern, i = argv[i + 1], i + 2
+                continue
+            if a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+                for ch in a[1:]:
+                    if ch in _GREP_PASS_FLAGS:
+                        flags.append(_GREP_PASS_FLAGS[ch])
+                    elif ch not in _GREP_DROP_FLAGS:
+                        return None  # -r, -v, -l, -c, -A/-B/-C … : not translatable, not guessed
+                i += 1
+                continue
+            break
+        rest = argv[i:]
+        if pattern is None:
+            if not rest:
+                return None
+            pattern, rest = rest[0], rest[1:]
+        if not rest:
+            return None  # reads stdin: nothing about the tree is being asked
+        paths = [_repo_path(p) for p in rest]
+        if any(p is None for p in paths):
+            return None
+        return "grep", (flags, pattern, paths)
+    if head in ("test", "["):
+        args = argv[1:]
+        if head == "[":
+            if not args or args[-1] != "]":
+                return None
+            args = args[:-1]
+        if len(args) != 2 or args[0] not in ("-f", "-e", "-s", "-d", "-r"):
+            return None  # -L (symlink), -n/-z (strings), and every compound form: undecidable
+        path = _repo_path(args[1])
+        if path is None:
+            return None
+        return "exists", (args[0], path)
+    return None
+
+
+def _repo_path(p):
+    """A repo-relative path, or None for anything a git tree cannot answer about.
+
+    ABSOLUTE AND `~` PATHS ARE UNDECIDABLE, NOT ABSENT — the single most important line in this
+    parser. `$HOME/.claude/...`, `/Users/chrisren/...` and `/tmp/...` are real subjects of real
+    probes and simply are not in any git tree, so resolving them here would return "not present at
+    the filing-day commit" for every one of them and convict the whole class as DISCRIMINATING on a
+    lookup that could only ever miss (memory: lookup-miss-is-not-absence).
+    """
+    if not p or p.startswith(("/", "~", "-")) or ".." in p.split("/"):
+        return None
+    return p
+
+
+def _trunk_at(ts):
+    """The trunk commit as of `ts`, or None. None ⇒ UNDECIDABLE, never "nothing was there"."""
+    if not ts:
+        return None
+    return _git(["rev-list", "-1", "--before=%s" % ts, "origin/main"]) or None
+
+
+def _clause_at(base, kind, args):
+    """Was this clause TRUE at `base`? True/False, or None iff git could not answer."""
+    if kind == "grep":
+        flags, pattern, paths = args
+        # AN EXPLICIT PATTERN TYPE, ALWAYS. `git grep`'s default honours `grep.patternType` from the
+        # operator's own gitconfig, so without this the verdict for an unflagged probe would be a
+        # function of a setting nothing here can see — the same instrument reading two different
+        # ways on two machines. Plain `grep` with no flag is BRE, so `-G` is the faithful match.
+        if not any(f in flags for f in ("-E", "-F", "-P")):
+            flags = ["-G"] + flags
+        rc = _git_rc(["grep", "-q"] + flags + ["-e", pattern, base, "--"] + paths)
+        if rc is None or rc > 1:
+            return None  # 2+ is git-grep's own error channel: could not ask, not "no match"
+        return rc == 0
+    # `exists`: a path absent from the tree makes `test -f` false, which is a real answer — but only
+    # once we know git ANSWERED. cat-file's rc conflates "absent" with "unreadable" the same way
+    # `_git` does, so the type read is what separates them.
+    test, path = args
+    out = _git(["cat-file", "-t", "%s:%s" % (base, path)])
+    if out is None:
+        # Absent object and broken repo are the same rc here — `_git_usable` (asserted by the
+        # caller) is what makes this branch mean ABSENT rather than UNREADABLE.
+        return False
+    if test == "-d":
+        return out == "tree"
+    if test == "-e":
+        return out in ("blob", "tree")
+    return out == "blob"
+
+
+def _clause_evidence(clause, ts):
+    """The commit that put this clause's subject in the tree BEFORE `ts` — the plan's `-S` form.
+
+    Best-effort by construction: evidence strengthens the report and never decides it, so every
+    failure path here returns None and the verdict computed above stands unchanged. That split is
+    load-bearing here rather than decorative — see below, where the `-S` form gets the verdict wrong.
+
+    🚨 `%cd`, THE COMMIT DATE, NEVER `%ad`. An author date is when somebody wrote a patch; a
+    landing date is when trunk started carrying it, and only the second one can make a probe pass.
+    The first draft of this function printed `%ad` and would have rendered a commit as proof that a
+    token pre-dated a filing it actually post-dated by a day.
+    """
+    _op, _neg, kind, args = clause
+    if kind == "grep":
+        flags, pattern, paths = args
+        pick = ["-S%s" % pattern]
+        if "-E" in flags or "-P" in flags:
+            pick.append("--pickaxe-regex")
+        out = _git(["log", "--format=%h %cd", "--date=short", "--before=%s" % ts]
+                   + pick + ["origin/main", "--"] + paths)
+        subject = pattern
+    else:
+        _test, path = args
+        out = _git(["log", "--format=%h %cd", "--date=short", "--before=%s" % ts,
+                    "--diff-filter=A", "origin/main", "--", path])
+        subject = path
+    if not out:
+        return None
+    # OLDEST first: `git log` is newest-first, and the line that PROVES the token pre-dated the
+    # filing is the one that introduced it, not the last one to touch it.
+    return "%s  (%s)" % (out.strip().splitlines()[-1].strip(), subject)
+
+
+def filing_day_screen(ent, probe=None):
+    """(verdict, lines) for one item's stored probe. Never None; UNDECIDABLE is the default.
+
+    `probe` overrides the stored string. That override is what makes the arm testable against a
+    probe its owner has since retired with `falsify --clear` — the fold keeps such a record as an
+    explicit `falsifier:""` (build_index folds on PRESENCE, not truthiness), so the three items the
+    CURRENCY pass named as anti-coverage carry no probe today. Reconstructing one from the ledger
+    and asking the screen about it is the positive control; RESURRECTING it into the fold would not
+    be, and is not done anywhere here.
+    """
+    cmd = (probe if probe is not None else (ent.get("falsifier") or "")).strip()
+    if not FILING_SCREEN_ENABLED:
+        return UNDECIDABLE, ["filing-day screen disabled (CC_PREMISE_FILING_SCREEN=off)"]
+    if not cmd:
+        return UNDECIDABLE, ["no probe stored — nothing to screen"]
+    if not _git_usable():
+        return UNDECIDABLE, ["git could not be asked (no readable repo) — sensor failure, not a "
+                             "verdict"]
+    ts = (ent.get("first_ts") or "").strip()
+    if not ts:
+        return UNDECIDABLE, ["item carries no filing timestamp"]
+    base = _trunk_at(ts)
+    if not base:
+        return UNDECIDABLE, ["no trunk commit at or before the filing time (%s)" % ts]
+    clauses = _probe_clauses(cmd)
+    if clauses is None:
+        return UNDECIDABLE, ["probe is not a tree question this screen can re-ask "
+                             "(script call, pipe, variable, redirect, absolute path, or a grep "
+                             "flag with no git-grep equivalent)"]
+
+    vals, truthy = [], None
+    for cl in clauses:
+        op, negated, kind, args = cl
+        v = _clause_at(base, kind, args)
+        if v is None:
+            return UNDECIDABLE, ["git could not answer one clause of the probe at %s" % base[:12]]
+        v = (not v) if negated else v
+        vals.append((cl, v))
+        # sh's own left-associative fold. Short-circuit is irrelevant to the RESULT (every clause is
+        # a pure read here), so folding all of them is exact and buys the per-clause evidence below.
+        truthy = v if truthy is None else (truthy and v if op == "&&" else truthy or v)
+
+    when = _git(["log", "-1", "--format=%h %ad", "--date=short", base]) or base[:12]
+    if not truthy:
+        return DISCRIMINATING, [
+            "Filing-day screen: this probe would have FAILED at filing (%s, trunk %s) — it can "
+            "tell the fix from the world, which is what makes it coverage." % (ts, when)]
+
+    lines = [
+        "ANTI-COVERAGE — this probe ALREADY PASSED on the day the item was filed (%s, trunk %s). "
+        "It discriminates nothing: it would have retracted this item the moment it was written, so "
+        "a pass today is no evidence the condition was ever fixed." % (ts, when),
+        "  probe: %s" % cmd,
+    ]
+    for cl, v in vals:
+        if not v:
+            continue
+        ev = _clause_evidence(cl, ts)
+        if ev:
+            lines.append("  already in the tree before filing: %s" % ev)
+    lines.append(
+        "Fix the PROBE or retire it (cc-backlog falsify <id> --clear) — this screen deliberately "
+        "does neither: a probe is its owner's own question, and clearing one on second-hand "
+        "evidence is how the anti-coverage got here.")
+    return ANTI_COVERAGE, lines
+
+
 def _resolve_helper(env_var, name):
     """The CO-VERSIONED sibling first, then the deployed layer. None ⇒ could not resolve ⇒ fail open.
 
@@ -1437,6 +1817,28 @@ def assess(item_id, idx):
     # re-run says the condition is gone, no amount of confident prose beneath it should be able to
     # send a worker at it.
     fals = run_falsifier(item_id, ent)
+    if fals is not None and fals[0] == "falsified":
+        # THE SECOND SCREEN, AT THE ONE MOMENT AN ANTI-COVERAGE PROBE DOES DAMAGE. A stored probe
+        # that exits 0 is about to REFUSE this claim (rc 3). If that same probe already passed on
+        # filing day, the refusal is the "guaranteed false retraction" the CURRENCY pass named — the
+        # probe is agreeing with a world it never disagreed with, and no work was ever done.
+        #
+        # The downgrade is strictly ONE-WAY and that is what keeps this fail-open: the screen can
+        # move a verdict out of BLOCKING and can never move one into it, so a parser too narrow to
+        # read a probe (UNDECIDABLE, the default on every failure path) leaves the refusal exactly
+        # as it was. It also mints no new verdict token — `clear` plus loud lines — because a fourth
+        # enum member lands in every consumer's `*)` arm and is silently re-derived as something
+        # else (memory: new-enum-member-falls-into-fail-closed-default; see cmd_contract's note).
+        screen_v, screen_lines = filing_day_screen(ent)
+        if screen_v == ANTI_COVERAGE:
+            # `run_falsifier`'s block ends with "Close it citing this run" — the exact instruction
+            # the screen has just refuted. Dropping it by CONTENT rather than by index: the two
+            # halves of a contradiction must not both ride one contract, and a slice index would
+            # rot the first time that block gains a line.
+            kept = [ln for ln in fals[1] if not ln.startswith("Close it citing this run")]
+            fals = ("clear", kept + list(screen_lines) + [
+                "The falsifier's exit 0 is therefore NOT a retraction, and this item is NOT "
+                "refused on it. Judge the premise on its own text below."])
     if fals is None:
         # …and when the item stores no probe, a `plan-open` item still HAS a question that can be
         # re-asked: its plan's own status. STORED WINS — this is reached only on None, never on a
@@ -1819,6 +2221,104 @@ def cmd_sweep(as_json):
     sys.exit(0)
 
 
+def cmd_screen(rest):
+    """The second screen, per item or over the whole store. Always exit 0 — this REPORTS.
+
+    Exit 0 unconditionally, including on ANTI-COVERAGE, and that is deliberate: the ratchet
+    (`backlog-ratchet.sh`) counts a stored probe as coverage, and a non-zero here would invite a
+    caller to wire this into a gate that clears probes automatically. The CURRENCY pass earned the
+    opposite rule — 16 of 26 "checked" probes did not survive a reader briefed to refute them, so
+    the deliverable of a screen is the EVIDENCE, and the retirement is a human's call through
+    `cc-backlog falsify --clear`.
+    """
+    as_json = "--json" in rest
+    args = [a for a in rest if a != "--json"]
+    probe = None
+    if "--probe" in args:
+        i = args.index("--probe")
+        if i + 1 >= len(args):
+            sys.stderr.write("cc-premise screen: --probe needs a command\n")
+            sys.exit(2)
+        probe = args[i + 1]
+        args = args[:i] + args[i + 2:]
+
+    idx = build_index(load_records())
+
+    if args and args[0] != "--all":
+        item_id = args[0]
+        ent = idx.get(item_id)
+        if ent is None:
+            sys.stdout.write("verdict=%s\n" % UNDECIDABLE)
+            sys.stderr.write("  no such item: %s\n" % item_id)
+            sys.exit(0)
+        verdict, lines = filing_day_screen(ent, probe=probe)
+        if as_json:
+            sys.stdout.write(json.dumps({"id": item_id, "verdict": verdict,
+                                         "probe": (probe if probe is not None
+                                                   else ent.get("falsifier") or ""),
+                                         "filedAt": ent.get("first_ts") or "",
+                                         "why": lines}) + "\n")
+            sys.exit(0)
+        sys.stdout.write("verdict=%s\n" % verdict)
+        for ln in lines:
+            sys.stderr.write("  " + ln + "\n")
+        sys.exit(0)
+
+    # ── RETRO-SCAN ───────────────────────────────────────────────────────────────────────────────
+    # The FOLD comes from cc-backlog (one arbiter per fact, as `_folded_items` says) so that the
+    # population screened here is exactly the population the ratchet counts as covered — otherwise
+    # the two would report over different denominators, which is the defect READINESS measurement 3
+    # retracted itself for.
+    items = _folded_items()
+    if items is None:
+        _die_open("cc-backlog list failed — cannot screen")
+    stored = [i for i in items if (i.get("falsifier") or "").strip()]
+    rows, tally = [], defaultdict(int)
+    for it in stored:
+        ent = idx.get(it["id"])
+        if ent is None:
+            # The fold knows the row but the raw ledger does not — a sensor failure, not a clean
+            # probe. It counts as UNDECIDABLE so the tally's denominator stays the whole population.
+            tally[UNDECIDABLE] += 1
+            continue
+        verdict, lines = filing_day_screen(ent)
+        tally[verdict] += 1
+        rows.append({"id": it["id"], "verdict": verdict,
+                     "status": it.get("status"), "filedAt": ent.get("first_ts") or "",
+                     "probe": (it.get("falsifier") or "").strip(),
+                     "title": (it.get("title") or "")[:120], "why": lines})
+
+    if as_json:
+        sys.stdout.write(json.dumps({
+            "screened": len(stored),
+            "tally": {k: tally[k] for k in (DISCRIMINATING, ANTI_COVERAGE, UNDECIDABLE)},
+            "items": rows}, indent=2) + "\n")
+        sys.exit(0)
+
+    w = sys.stdout.write
+    w("FILING-DAY SCREEN — would each stored probe have FAILED on the day its item was filed?\n")
+    w("  screened %d stored probe(s) over %d item(s)\n\n" % (len(stored), len(items)))
+    for k in (DISCRIMINATING, ANTI_COVERAGE, UNDECIDABLE):
+        w("  %-16s %4d\n" % (k, tally[k]))
+    anti = [r for r in rows if r["verdict"] == ANTI_COVERAGE]
+    if anti:
+        w("\n── ANTI-COVERAGE — already true at filing, so a pass proves nothing ──────────────\n")
+        for r in anti:
+            w("\n  %s [%s] filed %s\n      %s\n      probe: %s\n"
+              % (r["id"], r["status"], r["filedAt"], r["title"], r["probe"]))
+            for ln in r["why"]:
+                if ln.startswith("  already in the tree"):
+                    w("      %s\n" % ln.strip())
+    else:
+        w("\n  no ANTI-COVERAGE found among the decidable probes.\n")
+    # THE UNDECIDABLE COUNT IS PRINTED, NEVER IMPLIED. It is the majority here by construction (most
+    # probes call a script or read a path outside the repo), and a report that showed only the two
+    # decided buckets would read as a clean bill of health over a population it never examined.
+    w("\n  %d probe(s) UNDECIDABLE — NOT a pass: this screen could not re-ask them against the "
+      "filing-day tree. Run `cc-premise screen <id>` for the reason.\n" % tally[UNDECIDABLE])
+    sys.exit(0)
+
+
 def main():
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -1837,6 +2337,8 @@ def main():
         cmd_contract(rest[0])
     elif verb == "sweep":
         cmd_sweep("--json" in rest)
+    elif verb == "screen":
+        cmd_screen(rest)
     else:
         sys.stderr.write("cc-premise: unknown verb %s\n" % verb)
         sys.exit(2)
