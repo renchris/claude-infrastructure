@@ -530,3 +530,53 @@ setup() {
   run "$CLOUD" --table
   printf '%s' "$output" | grep -q 'no cloud sessions declared'
 }
+
+# ── the TRUNK REFUSAL (backlog 55065a61b31c) ──────────────────────────────────────────────────────
+# A session declared against the remote's DEFAULT branch cannot be told apart from its siblings:
+# every other session's push to that branch reads as this session's heartbeat, and the observer
+# reports a false state=ALIVE. Measured 2026-08-08. These cases pin the refusal, the thing it must
+# NOT refuse, and the abstain path — because a guard that refused everything, or one that could
+# never fire, would each pass a suite that only asserted the happy direction.
+
+@test "D1 declare REFUSES the remote's default branch — trunk cannot be a per-session heartbeat" {
+  have_subject
+  local r; r="$(bare trunkref)"
+  push_ref "$r" main                                  # HEAD of a bare repo follows its first branch
+  run cloud declare --id trunkdecl --branch main --remote "$r" --repo ""
+  [ "$status" -eq 2 ]
+  [ ! -f "$CC_CLOUD_STATE/trunkdecl.decl" ] || { echo "REFUSED but still wrote a declaration"; false; }
+  echo "$output" | grep -q "default branch of remote" || { echo "refusal did not name the cause: $output"; false; }
+}
+
+@test "D2 CONTROL: a per-session branch on the SAME remote still declares fine" {
+  # The guard must not be a blanket refusal. Same remote, same call shape, one word different.
+  have_subject
+  local r; r="$(bare trunkref2)"
+  push_ref "$r" main
+  run cloud declare --id sessdecl --branch claude/sess-1 --remote "$r" --repo ""
+  [ "$status" -eq 0 ]
+  [ -f "$CC_CLOUD_STATE/sessdecl.decl" ] || { echo "a legitimate declaration was lost"; false; }
+}
+
+@test "D3 the predicate is ASKED, not a name list — a repo whose default is NOT 'main' is refused too" {
+  # Refusing the spellings main/master/trunk would miss this repo and would still be a denylist
+  # (memory: denylist-enumerates-spellings-not-the-class). The guard resolves the remote's OWN
+  # default, so a repo defaulting to `release` is caught by the same code with no new spelling.
+  have_subject
+  local r; r="$(bare oddhead)"
+  push_ref "$r" release
+  run cloud declare --id odddecl --branch release --remote "$r" --repo ""
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "default branch of remote" || { echo "did not refuse a non-'main' default: $output"; false; }
+}
+
+@test "D4 ABSTAIN: an unreachable remote still declares — unobservable beats unverified" {
+  # Both resolvers are blind here. The declaration must still be written: an UNDECLARED cloud
+  # session is invisible to every oracle, which is strictly worse than one declared against a
+  # branch we could not check. This is the same trade-off the baseline probe already makes, and it
+  # is the case that proves the guard fails OPEN rather than turning a dead remote into a refusal.
+  have_subject
+  run cloud declare --id absdecl --branch main --remote "$D/nonexistent.git" --repo ""
+  [ "$status" -eq 0 ]
+  [ -f "$CC_CLOUD_STATE/absdecl.decl" ] || { echo "an unreachable remote turned into a refusal"; false; }
+}
