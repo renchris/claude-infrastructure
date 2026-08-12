@@ -299,4 +299,4 @@ com.chrisren.restic-claude-archive | run    | 0    | auto | 12 | 18-fleet-activa
 com.chrisren.screenshot-clipboard  | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
-com.claude.accounts-keepwarm        | staged | 60   | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh
+com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh

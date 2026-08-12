@@ -17,13 +17,26 @@
   copy from arming the job at next login. launchd/staged/ is outside install.sh's non-recursive
   glob, so this job cannot start until the operator deliberately installs it.
 
-  StartInterval 60, and the arithmetic is the point — but size it from the PRODUCTION band, not a
-  foreground bench. cache_ttl_s is 90 (accounts.json). A warm sweep measures 1.85-2.53s in the
-  FOREGROUND, and that is NOT what this job gets: ProcessType Background + LowPriorityIO clamp it to
-  PRI 4, and the first 6 live runs measured 6.2-11.8s — 3-5x the bench. Worst-case age at a consumer
-  is therefore 60 + 11.8 = 71.8s, an 18.2s margin, not the 27.5s a foreground figure would promise.
-  (Measured 2026-08-11 from this job's own out.log; the class is 'a bound sized from a foreground
-  bench is a non-verdict once Background taxes it'.)
+  StartInterval 180 since 2026-08-11 (was 60), and the arithmetic below is now a RECORD of why 60
+  failed rather than a live derivation. cache_ttl_s is 90 (accounts.json). A warm sweep measures
+  1.85-2.53s in the FOREGROUND, and that is NOT what this job gets: ProcessType Background +
+  LowPriorityIO clamp it to PRI 4, and the first 6 live runs measured 6.2-11.8s — 3-5x the bench.
+  60 was sized off that band: worst-case age 60 + 11.8 = 71.8s, an 18.2s margin inside the TTL.
+
+  🚨 THAT BAND WAS ITSELF A NON-VERDICT — n=6, on the first six runs, before the fleet reached its
+  real load. Re-measured 2026-08-11 over 25 consecutive live ticks: 3.9-36.8s, i.e. the upper bound
+  is 3.1x the one the interval was sized from. At 36.8s the worst-case age is 60 + 36.8 = 96.8s,
+  which EXCEEDS the 90s TTL — so the job had silently stopped meeting the invariant it exists for,
+  and no surface said so. Note the shape of the error, because it is the same one twice: a bound
+  sized from a foreground bench is a non-verdict once Background taxes it, and a bound sized from
+  SIX Background runs is a non-verdict once the box is loaded. Both times the fix was to re-measure
+  the production band, never to re-reason from the previous one.
+
+  AND THE TWO CONSTRAINTS ARE IRRECONCILABLE AT TTL 90, which is the finding that actually forced
+  this change. Meeting the TTL with a 36.8s sweep needs StartInterval < 53s; staying outside the
+  ~90s endpoint throttle needs StartInterval > 90s. There is no value satisfying both, so one had
+  to give — and the block below already ruled which: the margin is a QUALITY knob and the throttle
+  is a CORRECTNESS one. 180 puts the poll interval at 2x the throttle window.
 
   THAT MARGIN IS A QUALITY KNOB, NOT A SAFETY ONE. If a consumer does miss the TTL, the interactive
   launcher abstains and falls back to its PINNED account — the status quo, not a failure. So the
@@ -33,10 +46,17 @@
   producer over the TTL and hand the miss to a consumer. Fleet precedent for 60s:
   com.claude.session-search-sweep and com.claude.capacity-alarm.
 
-  --max-age 30 is REFRESH-AHEAD, not refresh-on-expiry, and it is load-bearing. Sweeping only once
-  the cache has expired leaves a hole: a tick at t=60 would see age 60 (<90, no sweep) and the next
-  is at t=120, so the cache is stale for the whole t=90..120 window and every reader in it abstains.
-  Refreshing at age>30 means the cache is never expired when a consumer arrives.
+  --max-age 90 (was 30). REFRESH-AHEAD IS RETIRED, deliberately, and this is the paragraph the
+  measurement overturned. The old reasoning — refresh at age>30 so a consumer never meets an expired
+  cache — was sound in isolation and had one unstated consequence: with --max-age at interval/2, the
+  cache age at every tick is ~interval, i.e. ALWAYS past the bound, so the producer swept on 100% of
+  ticks. Confirmed in its own out.log: 25 of 25 consecutive ticks logged `swept`, never once
+  `served-cache`, with age_s=0 every time. That is a poll every 60s per account against an endpoint
+  whose throttle window is ~90s — the tool's own /accounts doc says "never poll tighter than the 90s
+  TTL", and this job was the only thing on the box violating it.
+  At --max-age 90 the flag is refresh-ON-expiry: with StartInterval 180 the tick always sweeps
+  anyway, so the value now documents intent (sweep once the cache is genuinely past TTL) rather than
+  driving the cadence. The cadence is StartInterval, and it is the only knob that ever was.
 
   IT ALSO PRODUCES THE SESSIONSTART BOARD (W3.6, 2026-08-11), and this job is the ONLY thing that
   does. `--keepwarm` renders `--readout --narrow` to board_file (default
@@ -59,6 +79,15 @@
   If throttling appears, lengthen StartInterval before anything else, and read
   ~/.claude/logs/claude-accounts.log — the 429 branch is instrumented.
 
+  🚨 THAT RISK CAME TRUE ON 2026-08-11, and this note is the record. Symptom as the operator met it:
+  bare `claude` routed to an account the /accounts table did not recommend. Cause: 3 of 4 accounts
+  carried `poll throttled ↻ (cached usage)`, an errored row is excluded from routing, so the desk
+  lane picked the only survivor — correctly, from a one-account eligible set. Which account survived
+  varied per sweep, so the pick walked (next -> next2 -> next4 inside 40 minutes), and once a session
+  landed on one the `sticky` rung held it there. Nothing in the table marked the excluded rows, so
+  four healthy-looking accounts sat beside a pick that ignored three of them.
+  The remedy applied was this paragraph's own: lengthen StartInterval, 60 -> 180.
+
   Kill: launchctl bootout gui/$(id -u)/com.claude.accounts-keepwarm
 -->
 <plist version="1.0">
@@ -70,11 +99,11 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/bin/claude-accounts" --keepwarm --max-age 30</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/bin/claude-accounts" --keepwarm --max-age 90</string>
   </array>
 
   <key>StartInterval</key>
-  <integer>60</integer>
+  <integer>180</integer>
 
   <key>RunAtLoad</key>
   <false/>
