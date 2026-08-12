@@ -151,6 +151,32 @@ to what it actually is, and add a drift assert so the split cannot silently recu
 with a symlink is a live-layer mutation → **staged as an operator activation script, never applied
 in place** (C10).
 
+> **UPDATE 2026-08-12 — the THIRD part of that fix shape had not been built, and the assert nearest
+> the failure reported parity over it.** `69ddae7`. The first two parts landed; "add a drift assert"
+> did not, and the Status checklist below recorded only the two. `deploy-parity-assert.sh` already
+> enumerated `model-config.yaml` under a class it NAMED `root SSOT (link)` — but the check is `-e`,
+> which **follows a symlink**, so it asked only "does a live counterpart exist?". Reproduced on a
+> fixture before the fix: a live *real* file whose content had drifted from the repo SSOT — this
+> section's exact finding — scored `ok  root SSOT (link)  2 tracked · 2 live · 0 missing`, **exit 0**.
+> `deploy-link-parity.sh` does assert link-ness (`[ -L "$dest" ]`) but covers only the per-file
+> directory surfaces and never the root SSOTs, so *neither* reporter could see this class of drift.
+>
+> Now asserted for that class: a symlink cannot drift, so **link-ness is the property that makes the
+> SSOT claim true**. Verdicts reuse the strict-tools leg's vocabulary unchanged — `LINKED` /
+> `UNLINKED` (a copy matching *today* is still drift: it diverges on the next repo edit and nothing
+> would say so — precisely how the four-day drift happened) / `STALE` (content already diverged ⇒
+> "split-brain is ACTIVE"). Scoped to this class deliberately, **not** widened to the per-file
+> surfaces, whose failure class is the opposite one (a brand-new tracked file nobody linked).
+>
+> Two properties keep it from becoming a false RED. `pending_owner` is consulted **before** the
+> verdict, so while `20-model-config-ssot-activate.sh` is un-run the live host reports `PENDING`, not
+> drift — the operator is not convicted for obeying a design that is waiting on them (the false-RED
+> scar this leg already carries). And `DRIFT` is its own class-table column rather than folded into
+> `missing`, because the file *does* exist live and the "N tracked runtime file(s) have NO live
+> counterpart" summary would otherwise be false; the segment renders only when non-zero, so every
+> clean class stays byte-identical. Once the operator runs the activation, a real file reappearing
+> there becomes a hard RED — which is the ratchet §5 asked for.
+
 ## Two findings surfaced along the way (not in the audit)
 
 1. **`10-opus5-activate.sh` was marked `.done` while its own REMAINING step was never performed.**
@@ -214,7 +240,22 @@ replayed the real pre-change artifact recovered from git, not an approximation:
       jq-guard + selftest-scaffold rejected with reasons
 - [x] 4 — `plan-update` frontmatter repaired + rules de-duplicated into `plan-conventions`
 - [x] 5 — repo-root `model-config.yaml` SSOT + install.sh link + operator activation staged
+- [x] 5b — **the drift assert** §5's fix shape named and this checklist had omitted (`69ddae7`,
+      2026-08-12): `deploy-parity-assert.sh`'s `root SSOT (link)` class now asserts link-ness, not
+      existence. +5 bats cases (STALE · UNLINKED-but-identical · staged-PENDING · a relative link
+      resolving to the repo file · a link into a DIFFERENT checkout). 69/69 green
 - [x] 3 — stood down (evidence above)
+
+**Re-derived 2026-08-12, all four DO/PARTIAL sub-items still true on disk** (not read off the boxes
+above — a checked box is a claim, not data): `hooks/lib/idl-log.sh` present with all 5 hooks sourcing
+it and **zero** surviving lockstep `log_idl()` copies among them (the 9 other `log_idl` definitions
+in the tree hash 9 different ways — distinct implementations, never the audit's lockstep class, so
+not a regression); `resolve_bin` defined **once** in `scripts/lib/cc-common.sh` with both launchd
+consumers on the 3-tier source idiom; `plan-update`/`plan-conventions` de-split with no dangling
+pointer; `model-config.yaml` at the repo root with `templates/model-config.yaml` gone. All landed on
+`origin/main` and verified BY CONTENT (`git ls-tree`), never by count. Sub-item 3's STAND DOWN also
+re-checked and unchanged: the six `cc-mail{send,await,contract,announce,thread,guard}` binaries the
+audit named still do not exist, which is decisive on its own.
 
 **Operator-owned tail:** `docs/activation/pending-activation/20-model-config-ssot-activate.sh`
 swaps the live `~/.claude/model-config.yaml` real file for a symlink into the checkout. It is C10
