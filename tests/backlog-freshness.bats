@@ -17,9 +17,17 @@
 #   · `reopen` re-asks the premise and records it, which before this it never did
 #
 # ── RED-PROOF, MEASURED 2026-08-12 — read this before trusting a green board ─────────────────────
-# The whole suite was replayed against the REAL pre-fix artifact (`git archive origin/main`, sha
-# 53caadb3b), not against a hand-written approximation of it (memory:
-# control-must-replay-the-real-artifact). Result: 18 of 21 RED.
+# The whole suite was replayed against the REAL pre-fix artifact (`git archive origin/main`), not
+# against a hand-written approximation of it (memory: control-must-replay-the-real-artifact).
+# Result: **22 of 25 RED**.
+#
+# ⚠️ THAT FIGURE WAS RE-MEASURED AFTER THE LAND GATE FOUND SIX DEAD ASSERTIONS HERE. Six bare
+# `[[ … ]]` lines sat in non-final positions where errexit cannot reach them, so they were decorative
+# — the suite was green partly on lines that could not fail. `bats-assert-liveness-lint` caught it at
+# the land gate and `bats-assert-liveness-fix.py` revived them (`|| false`); the numbers above are
+# from the re-run WITH them live. A bare `[[ … ]]` is only an assertion when it is the LAST command
+# in its test, which is why the two that were left alone were left alone
+# (memory: verification-harness-vacuous-pass-traps).
 #
 # THE THREE THAT PASSED ON PRISTINE ARE CONTROLS, NOT HOLES, and each is named so nobody re-derives
 # this. They cannot red on pristine BY CONSTRUCTION — pristine had no re-read on reopen at all, so
@@ -137,7 +145,7 @@ add_row() {
   [ "$output" = "0" ]
   run bash -c 'printf "{\"id\":\"nosuchrow0000\",\"verdict\":\"clear\"}\n" | "$0" validated --batch' "$CB"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"REFUSED"* ]]
+  [[ "$output" == *"REFUSED"* ]] || false
   run "$CB" freshness --never
   [ "$output" = "0" ]                       # the good snapshot is still there
 }
@@ -182,8 +190,8 @@ add_row() {
   add_row "row one" >/dev/null
   CC_BACKLOG_REPO="$BATS_TEST_TMPDIR/not-a-repo" run "$CB" freshness
   [ "$status" -eq 0 ]
-  [[ "$output" == *"UNKNOWN"* ]]
-  [[ "$output" != *"p50 0"* ]]
+  [[ "$output" == *"UNKNOWN"* ]] || false
+  [[ "$output" != *"p50 0"* ]] || false
   CC_BACKLOG_REPO="$BATS_TEST_TMPDIR/not-a-repo" run "$CB" freshness --json
   [ "$(printf '%s' "$output" | jq -r '.git_readable')" = "false" ]
   [ "$(printf '%s' "$output" | jq -r '.commits_since_filing')" = "null" ]
@@ -316,7 +324,7 @@ add_row() {
   local a; a="$(add_row "row one" "true")"
   run "$CB" reopen "$a" --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"RE-READ ITS EVIDENCE"* ]]
+  [[ "$output" == *"RE-READ ITS EVIDENCE"* ]] || false
   [[ "$output" == *"PREMISE IS REFUTED"* ]]
 }
 
@@ -405,8 +413,8 @@ add_row() {
   export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/ratchet.json"
   run bash "$REPO/scripts/backlog-ratchet.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"probes ever RUN"* ]]
-  [[ "$output" == *"UNKNOWN"* ]]
+  [[ "$output" == *"probes ever RUN"* ]] || false
+  [[ "$output" == *"UNKNOWN"* ]] || false
   run bash "$REPO/scripts/backlog-ratchet.sh" --json
   [ "$(printf '%s' "$output" | jq -r '.validation_snapshot')" = "absent" ]
 }
