@@ -323,6 +323,54 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-12 12:50Z — the live layer's no-budget door is T1H, its producer has been dead two days,
+  and exactly TWO suites are holding it shut.** This supersedes the framing of every entry below that
+  treats convergence as "wait for a green stamp or wait for the clock". `deploy-live.sh` has a
+  **four-tier** ladder (its own header, lines 27-37), and only one tier had been looked at:
+
+  | Tier | Advances when | Budget |
+  |---|---|---|
+  | **T1** VERIFIED | newest GREEN tree descending live HEAD | — (producer emits **0.17 greens/day**, so this door is effectively shut by design) |
+  | **T1H** HERMETIC | newest commit above live HEAD carrying an **off-box green over the hermetic subset** AND no on-box RED | 🚨 **NONE — advances on a POSITIVE result** |
+  | **T2** DEGRADED | T1 and T1H empty AND lag past budget | 25 commits / 6 h, whichever trips first |
+  | **T3** BLOCKED | every commit above live HEAD is RED | refuse + page |
+
+  **T1H exists precisely because T1 is unreachable in practice** — the file says so: *"T1's producer
+  emits 0.17 greens/day, so the healthy silent path is unreachable in practice and every advance has
+  to come through T2's absence-of-evidence door. T1H is a SECOND producer for the same ladder."*
+
+  **That second producer is `.github/workflows/hermetic.yml`, and it has failed EVERY run since
+  2026-08-10** — six consecutive scheduled failures today (05:00, 06:41, 08:38, 10:09, 10:19, 11:56 Z),
+  each ~16-21 min. `~/.claude/autonomy/postland/offbox/` holds **exactly one** stamp, green, dated
+  `2026-08-10T09:50:08Z`. So the no-budget door has had nothing to open it for two days, and every
+  advance has been forced through T2's clock.
+
+  **The fold from run `31594132333`, verbatim — all ten shards completed:**
+
+  ```json
+  {"verdict":"red","suites":405,"expected":405,"green":403,"red":2,"nonverdict":0,
+   "unreported":0,"run_s":3571,
+   "failing":["tests/autonomy-sweep.bats","tests/worker-claim-gate-coverage.bats"],
+   "nonverdict_suites":[],"unreported_suites":[]}
+  ```
+
+  **403 of 405 green. Two suites.** Fix them → the workflow goes green → an off-box stamp lands →
+  T1H advances with no budget → W2's 21 new files and W3's `spawn-presence.sh` reach the live layer
+  immediately instead of on a 25-commit/6-hour timer. Filed `3b22efbc2340` under
+  `master-convergence-deadlock`. Pane 433 redirected onto it; the SIGTERM hunt (`b7252a3bb015`) is
+  demoted to its fallback, because T1H does not need the on-box corpus to succeed at all.
+
+  🚨 **AND IT REFUTES THIS SESSION'S OWN EARLIER CLOSE — `35190812890d` is REOPENED (`--force`).**
+  That row was closed citing *"the corpus named ZERO failing suites"*. The stamp it cited read
+  `verdict:"cut"`, and **a cut names no suite BY CONSTRUCTION** — the runner's own words are *"no test
+  completed and failed, so nothing is proven"*. An empty `failing[]` from a cut is a **null from a
+  blind instrument, not an absence**, and reading it as an acquittal is exactly the error the memory
+  `read-the-diff-not-the-commit-subject` names. The off-box run that DID complete all 405 lists
+  `tests/autonomy-sweep.bats` as one of the two reds. **The HANG is genuinely fixed — 3,562 s vs
+  4,144-5,235 s, and the off-box shard completed it — but the SUITE is not green, and those are
+  different claims.** The general guard this implies (a close may not cite an empty `failing[]` from a
+  non-verdict stamp) is filed as `3ec6c070f52f` under `master-verification-integrity`.
+
 - **2026-08-12 — W2 LANDED, all five items. Row `ce1e9d1adab8`.** Five commits: the `cc-backlog`
   update arm, the trigger's conservation span, the tracked consolidation machinery, the sweep wiring,
   and the ten master plan files.
