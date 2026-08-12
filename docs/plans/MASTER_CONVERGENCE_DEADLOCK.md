@@ -4,7 +4,7 @@ status: open
 
 # MASTER: convergence deadlock — trunk advances and the live layer does not
 
-**Condition key:** `master-convergence-deadlock` · **Live members 2026-08-12:** 82 (55 open · 27 blocked)
+**Condition key:** `master-convergence-deadlock` · **Live members 2026-08-12 (measured after the apply):** 89 (56 open · 33 blocked)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-convergence-deadlock" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

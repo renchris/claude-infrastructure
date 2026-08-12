@@ -4,7 +4,7 @@ status: open
 
 # MASTER: session lifecycle — born, engaged, heard from, retired
 
-**Condition key:** `master-session-lifecycle` · **Live members 2026-08-12:** 50 (36 open · 14 blocked)
+**Condition key:** `master-session-lifecycle` · **Live members 2026-08-12 (measured after the apply):** 42 (37 open · 5 blocked)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-session-lifecycle" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

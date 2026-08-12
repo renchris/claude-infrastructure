@@ -4,7 +4,7 @@ status: open
 
 # MASTER: fire gate — what spawns, where it runs, and what refuses it
 
-**Condition key:** `master-fire-gate` · **Live members 2026-08-12:** 57 (50 open · 6 blocked · 1 claimed)
+**Condition key:** `master-fire-gate` · **Live members 2026-08-12 (measured after the apply):** 62 (52 open · 9 blocked · 1 claimed)
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-fire-gate" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

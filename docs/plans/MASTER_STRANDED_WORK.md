@@ -4,7 +4,7 @@ status: open
 
 # MASTER: stranded work — value that reached a branch and never reached trunk
 
-**Condition key:** `master-stranded-work` · **Live members 2026-08-12:** 87 (72 blocked · 15 open)
+**Condition key:** `master-stranded-work` · **Live members 2026-08-12 (measured after the apply):** 50 (34 blocked · 16 open)
 **Inventory (run this, never trust the count above):**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-stranded-work" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 

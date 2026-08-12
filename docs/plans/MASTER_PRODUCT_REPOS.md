@@ -4,7 +4,7 @@ status: open
 
 # MASTER: product repos — the operator's actual products, one wave per repo
 
-**Condition key:** `master-product-repos` · **Live members 2026-08-12:** 58 (33 open · 25 blocked)
+**Condition key:** `master-product-repos` · **Live members 2026-08-12 (measured after the apply):** 59 (34 open · 25 blocked)
 **Inventory (note the project split — it is the lease boundary):**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-product-repos" and .status!="done")|"\(.project) \(.id) \(.status) \(.title[0:80])"' | sort`
 
