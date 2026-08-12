@@ -318,6 +318,54 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-12 11:10Z — W3 LANDED (`8576c0190`), all five items, and two of them came out different from
+  the way the plan phrased them.** Row `8ae4b508f274`. `scripts/lib/spawn-presence.sh` is new;
+  `capacity-admit.sh`, `handoff-fire.sh` and `agent-teams-enforce.sh` consume it.
+  **DoD met:** `tests/spawn-presence.bats` case 20 drives BOTH gates over ONE pinned world and
+  asserts they DISAGREE — autonomy refused on `reserve-slots`, the operator's own `capacity_gate`
+  admitted — because either half alone is satisfiable by a gate that refuses or admits everything.
+  31 cases, **31/31 RED against pristine `caab1c283`**, 31/31 green after; 129/129 with the four
+  neighbouring suites; shellcheck clean.
+
+  | item | what the plan said | what the measurement said |
+  |---|---|---|
+  | 4 · reserve slots | make `~15` a real number | **54.** `pool-floor.sh`: 54 sustained all-green, 10 consecutive samples of 14,321 over 320.7 h. 15 was never measured (`cloud-ceiling-probe.sh:14`, `CONCURRENCY_PROGRAM.md:574` both say so) and a ceiling of 15 would refuse a fleet this box carries. |
+  | 5 · quiet hours | none exist; the 08-10 peak sat inside the working day | the working day is **10:00→04:59 local** — 90.7% of 978 operator turn-attestations. The trough is **05:00–09:59** (5.0%). An assumed 08:00–20:00 would hold the reserve while the human sleeps and drop it while they work. |
+
+  **Item 2's direction was forced, not chosen.** The operator's path GAINS the budget release;
+  autonomy does not lose its own. Taking autonomy's away re-commits the architecture §8.5.2's
+  retraction and §12.2's live measurement already refuted — a permanent refusal on an unattended
+  recovery path is an outage, and it cannot self-clear because refusing spawns does not lower the
+  loadavg the gate reads. §9's law binds both; `capacity_gate` never satisfied it. The operator's
+  budget is 1 vs autonomy's 3: a human reads the refusal, so one delivers the whole message.
+
+  **The beat is PRESENCE, never a CENSUS — do not charge a ceiling on it.** Measured: **zero beats
+  younger than 60 s while ten sessions were live**, because `session-beat.sh` writes at turn
+  boundaries and the busiest sessions are the quietest. Population comes from `ps` at the command
+  position, counted as trees. And the consult is **ONE jq pass**, not `cb_system_live`'s per-file
+  fork: 1,527 beat files × ~10 ms is >15 s of PreToolUse latency on the highest-volume spawn surface.
+
+  🚨 **A BARE `[[ ]]` MID-TEST-BODY IS A NO-OP IN BATS — this cost a vacuous pass and it is the
+  W3-shaped trap for whoever reads this next.** Probed against bats 1.13: `[ 1 -eq 2 ]` mid-body
+  FAILS the test, `[[ "x" == "y" ]]` does NOT, so only the **last** assertion in a body binds.
+  Case 29 **passed on pristine trunk** while its own captured output read `rc2=9` against an
+  assertion of `rc2=0`. That is the same class as the predecessor's `live_workers`-without-`is_uint`
+  harness, arriving through the assertion syntax instead of the extraction. All 13 occurrences here
+  carry `|| false` (the idiom this corpus already uses in `agent-teams-enforce.bats`). **2,561 bare
+  occurrences remain across `tests/*.bats`** — filed `67a7d78c1134`, out of scope for a spawn-side
+  wave, but every one that is not the last command in its body is currently decorative.
+
+  Two more found by this diff's own controls: the census returned a well-formed **`0` when `ps`
+  produced nothing** — a dead probe reading as an empty fleet and therefore as infinite headroom
+  (case 18 found it; a rows-counted positive control now returns rc 1). And **`extra-bang` was in no
+  gate denominator** — an argv-surface refusal falling into `_fire_gate_of`'s fail-visible `*)` arm
+  since it was added, which had `handoff-fire-capacity-gate` case 31 RED on trunk and therefore blind
+  to every other unmapped reason. Both fixed in the same diff. `capacity-alarm.sh`'s own `census()`
+  copy is left alone deliberately — converting a live 60 s daemon is its own item, filed
+  `c4383f1c9172` — with the duplication pinned BEHAVIOURALLY by case 17 (both awk programs, one
+  stubbed `ps` fixture), because this repo already learned that a literal-comparison ratchet detects
+  drift it cannot prevent and says nothing about the lines it never compared.
+
 - **2026-08-12 11:05Z — the stamp landed and it settles the hang: `autonomy-sweep` is acquitted, and
   the thing blocking the live layer was never one mechanism.** Stamp `bfcb13dac9c1` @ commit
   `33a8f41a86c1` — the first tree ever verified that CARRIES the band fix — ran the corpus in
