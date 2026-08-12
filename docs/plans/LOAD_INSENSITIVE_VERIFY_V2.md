@@ -563,3 +563,157 @@ stamp first; it is the only measurement that can tell whether the remaining conv
 convict. `deploy-live` was **not** deadlocked at the time of writing — lag 21 commits against
 `CC_DEPLOY_MAX_LAG_COMMITS=25`, live HEAD 3.25h old against a 6h budget — so a REFUSED line here is
 inside budget and is *not* the 2026-07-30 deadlock shape (items `08d2f8651ccd` / `16f0abd6e9bd`).
+
+---
+
+## 10. 2026-08-11 — the cut engine was a LOCALE, and the load it "lost to" was its own
+
+§9's re-derivation was right that the inbound `retries=0` premise was stale, and it stopped one layer
+short of the cause. This section records that layer, because it changes what "load-insensitive" means
+for this document: **the dominant load the verifier was losing to was a second copy of the verifier.**
+
+### 10.1 The measurement that reframed it
+
+Live reads, 170 stamps (`~/.claude/autonomy/postland/stamps`), 2026-08-11:
+
+| window | red | cut | green | hung | green rate |
+|---|--:|--:|--:|--:|--:|
+| all | 112 | 49 | 8 | 1 | 4.7% |
+| last 60 | 14 | 41 | 5 | 0 | 8.3% |
+| last 30 | 5 | 21 | 4 | 0 | 13.3% |
+| last 15 | 3 | 12 | 0 | 0 | 0.0% |
+
+The inbound item's 2.6% (3 green / 115) is stale in BOTH directions, and the direction that matters is
+the second one: **the dominant non-green verdict flipped from `red` to `cut`.** Cut causes, from
+`runner.log`'s own `CUT_WHY`: 19 `awaiting a second load window (C29)` · 14 `KILLED by signal 15|9
+(machine pressure, not the tree)` · 19 legacy-format truncations · 6 own-bound. So the item's stated
+lever — *per-suite reliability under load* — addresses at most 3 of the last 15 sweeps. An independent
+census of `flakes.jsonl` put the point beyond argument: **zero real intermittent assertion failures in
+the trailing 7 days**; 26.5% of rows are machine pressure and 59.4% are `exit 75` admission deferrals
+(runs that never happened). There was no per-suite flake population left to fix.
+
+### 10.2 The cause — `ps -o lstart=` renders through LC_TIME
+
+`try_acquire`'s {pid,lstart} identity rule compares a string RECORDED by the holder to one READ FRESH
+by the challenger. That is an identity comparison only if both render the same instant identically,
+and `ps -o lstart=` does not:
+
+```
+"Tue Aug 11 15:20:07 2026"   launchd daemon  (no LANG in launchd's env ⇒ C locale)
+"Tue 11 Aug 15:20:07 2026"   interactive session (LANG=en_CA.UTF-8 on this box)
+```
+
+Same `/bin/ps`, same pid, same instant. So a session-fired `--run-if-needed` read the daemon's valid
+record, found "a DIFFERENT lstart", took the `stranger ⇒ holder DEAD ⇒ reap` branch **on a live
+holder**, and started a second full-corpus verifier beside the first.
+
+Caught live: launchd's `com.claude.postland-verify` (pid 22960, started 15:20:07) running 441 suites
+while a session copy from `wt-0c5d47c863bf` (pid 34453, started 15:27:39) held `run.lock.d` and ran
+441 more. **8 of the 9 overlapping run-pairs in the entire 170-stamp history fall on that one day** —
+the day a session started firing the verifier from a worktree, i.e. the day a second locale entered
+the population.
+
+### 10.3 Why this is the whole cut engine, not a latency bug
+
+Two 441-suite corpora on one box is self-inflicted machine pressure, and this pipeline reports machine
+pressure back as a verdict about the TREE. One kill truncates all 441 suites ⇒ `cut`. A cut is neither
+green nor red, so:
+
+- **T1 can never fire** (no green stamp is earned), and
+- **nothing blocks** (no red is stamped), so
+- **every advance goes through `deploy-live`'s T2 DEGRADED**, which is authorised by the *absence* of a
+  red. Hence the item's true observation — *nothing reaching the live `~/.claude` layer is ever
+  full-suite-proven* — with a cause nowhere near "per-suite reliability".
+
+It also silently violates C29's own premise. The block at `postland-verify.sh:591` argues consecutive
+sweeps clear `CONVICT_SPREAD=900` "by construction"; under overlap they do not (a measured pair 715 s
+apart), so corroboration is delayed by runs that should never have been concurrent.
+
+### 10.4 The fix (C33) and its fail direction
+
+`proc_lstart()` renders the identity through `LC_ALL=C` and trims ps's column padding, at BOTH the
+write and read sites, so the string is canonical regardless of who is asking. Two further points are
+the load-bearing ones:
+
+- **An EMPTY `cur` is no longer a mismatch.** `ps` returning nothing for a pid `kill -0` just proved
+  alive is a failed probe, not a stranger — and pre-C33 that fell straight through into the reap
+  branch. The one condition under which nothing is known was the one that produced two live verifiers.
+- **The fail direction is restated as an invariant**: an unverifiable identity must make the reader
+  MORE patient (honour, bounded by `LOCK_TTL`), never less. `stranger ⇒ reap` is the only branch that
+  can mint a second verifier, so nothing may reach it but a genuine mismatch of two canonical strings.
+
+RED-proofed with a stubbed `ps` rather than the real one: the real binary only exhibits the skew on a
+box whose locale differs from C, so a test driving `/bin/ps` would degrade to a silent no-op on a
+C-locale machine and certify the fix while proving nothing.
+
+### 10.5 The same class is UNFIXED in TWELVE sibling files — this is a family, not a bug
+
+Post-fix, `postland-verify.sh` makes exactly **one** `ps -o lstart=` call, inside `proc_lstart`, and
+it is pinned — the identity now has a single chokepoint rather than a write site and a read site free
+to drift apart. Every other implementation of the same {pid,lstart} idiom in this repo still calls it
+bare. Census (`grep -rc 'ps -o lstart' bin/ scripts/`; second column = how many are `LC_ALL=C`):
+
+| file | sites | pinned | what a false "stranger" verdict costs there |
+|---|--:|--:|---|
+| `scripts/land-lock.sh` | 5 | 0 | **the LANDING mutex** — two concurrent lands, the exact rebase-drop incident `.claude/CLAUDE.md` opens with |
+| `bin/cc-reaper` | 4 | 0 | a live process adjudicated derelict **and killed** |
+| `bin/cc-dispatch` | 3 | 0 | a dispatch lock stolen ⇒ two workers on one item |
+| `bin/cc-respawn` | 2 | 0 | respawning a session that is still alive |
+| `scripts/wait-contract-lint.sh` | 2 | 0 | sweep-liveness |
+| `scripts/ship-land.sh` | 1 | 0 | the in-flight marker's liveness |
+| `scripts/lead-deathwatch.sh` | 1 | 0 | a live lead adjudicated dead |
+| `bin/cc-backlog` · `bin/cc-wait` · `bin/cc-pane-headless` · `bin/cc-deathwatch-kqueue` · `scripts/limit-recover/lr-reset-poller.sh` | 1 each | 0 | claim-lease / wait / pane / deathwatch liveness |
+
+The exposure is not uniform — it needs a recorded value and a fresh reading taken by processes that
+**need not share a locale**, which is exactly the daemon-writes/session-reads shape. `land-lock.sh`
+and `cc-reaper` are the two that matter (a stolen landing mutex; a reaper that *kills* what it
+misjudges) and are filed separately: different blast radii, each deserving its own red-proof rather
+than a ride-along on this one.
+
+Note `tests/cc-reaper.bats:1145` already trims its lstart fixture (`tr -s ' ' | sed`) — somebody hit
+the *padding* half of this class there and fixed it locally, in a test. The locale half went
+unnoticed because a test writes and reads inside ONE process, where the locale is constant by
+construction. **That is the general lesson for this family: a single-process test can never see this
+bug.** It exists only across a process boundary that is also an environment boundary — which is why
+the C33 red-proof stubs `ps` instead of driving the real one.
+
+### 10.6 Adjacent, measured, filed — not fixed here
+
+`ship-land.sh:1439` (`gate_bats`) exports `CC_GATE_MAX_LOAD=0`, which is ship-land's OWN shed knob;
+`bin/cc-bats` gates admission on `CC_BATS_MAX_ROOTS` (:444) and refuses with `ADMIT_RC=75`
+(EX_TEMPFAIL, *"nothing ran, nothing was verified"*). `postland-verify.sh:221` exempts itself with
+`export CC_BATS_MAX_ROOTS=0`; the land gate does not. Result: **405 `land-gate / exit 75 / notok=0`
+rows in `flakes.jsonl`, first on 2026-08-09, 329 of them on 08-11 alone** — and the ≥2 live bats roots
+that trip the admission ceiling are precisely what C33's duplicate verifier was creating. Whether the
+land gate should be *exempt* from admission control or should *fail closed* on a deferral is a design
+call with real downside either way, so it is filed rather than guessed at here.
+
+### 10.7 C33b — the signal arm was naming a cause it had never established
+
+`rc_why`'s `>128` arm read `the run was KILLED by signal N (machine pressure, not the tree)`. The
+second clause is right and is the function's whole job; the first was a guess, and a dedicated sweep
+refuted it on every axis it could mean: **jetsam/OOM** — 0 `memorystatus: killing` events in 24 h of
+unified log, swap total 0.00M, compressor at 0.98% of its segment limit; **load** — killed runs
+average 13.18 against green's 9.56, but the distributions overlap and the extremes invert (killed at
+**2.26** and **5.90**; stamped **GREEN at 16.09** and **14.60**), so load does not separate the
+populations and cannot be the cause that distinguishes them; **a peer's broad `pkill`** — 535
+`land.log` rows on the day, zero with `exit==9`; **corpus-internal kills** — `bats-kill-guard-lint`
+clean over 444 suites.
+
+What *is* established is narrower and more useful: the signal arrives from **outside the runner's
+tree** (both stall sites set `cutby` and force rc 124, and no `STALL:` line precedes any of the 14),
+and **the parent survived every one** — which excludes as a class anything signalling the process
+group, the launchd job, or the session. One candidate could not be closed: `cc-reaper`'s garbage arm
+matches the shape exactly (TERM → 3 s → KILL, its `orphan-tool` class naming `gtimeout|timeout`) but
+**logs only a count** — `$termed` is built and discarded at `bin/cc-reaper:376-390` — so no sweep is
+attributable either way.
+
+The guess was not merely imprecise, it **prescribed the wrong remedy**: "the box is busy" reads as
+"retry when quieter", which §R1 of this document records as the one response guaranteed never to
+clear it on a box whose steady state is saturation. The arm now says what is known and marks what is
+not. Note also that the 15-vs-9 split may be ONE sender, not two: `timeout -k 10` re-raises the
+child's signal, so an external TERM manufactures an internal KILL 10 s later, and TERM→wrapper,
+TERM→child, KILL→wrapper and KILL→child all produce identical rc *and* identical shell text.
+
+The evidence that would actually name the sender — a `pgrep -P "$cpid"` + `ps` snapshot taken before
+`wait` and written into the stamp on `rc>128` — is **filed, not guessed at here**.
