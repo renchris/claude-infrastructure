@@ -104,8 +104,22 @@ lr_wrap_re() { # phrase → an expect(1)/Tcl regex that matches it at ANY termin
   # the walk below depends on, and both LC_ALL and LC_CTYPE are function-local, so nothing outside
   # this call sees the change. If no UTF-8 locale exists the loop leaves the last candidate set and
   # the walk degrades to the old byte behaviour rather than erroring — strictly no worse than before.
-  local LC_ALL='' LC_CTYPE probe='❯'
-  for LC_CTYPE in C.UTF-8 en_US.UTF-8 UTF-8; do
+  #
+  # 🚨 THE ASSIGNMENT IS IN THE LOOP BODY, NOT THE LOOP VARIABLE, AND THAT IS THE WHOLE FIX.
+  # bash 3.2.57 — /bin/bash on macOS, which is what runs this script — re-runs setlocale() on an
+  # ORDINARY assignment to LC_ALL/LC_CTYPE but NOT on a for-loop binding. Measured under
+  # `env -i PATH=… LC_ALL=C /bin/bash`, with ${#p} on a 2-char/4-byte string:
+  #     local LC_ALL=en_US.UTF-8          → 2   (characters)
+  #     local LC_ALL='' LC_CTYPE=en_US…   → 2   (characters)
+  #     for LC_CTYPE in en_US.UTF-8; …    → 4   (BYTES — silently inert)
+  # The first version of this fix used the loop-variable form and was inert in CI. It passed its own
+  # verification because that ran `LC_ALL=C bats …`, which leaves LANG set — so `local LC_ALL=''`
+  # fell through to the ambient en_CA.UTF-8 and the walk was correct for a reason the harness does
+  # not provide. scripts/offbox-run.sh uses `env -i … LC_ALL=C` with NO LANG at all. Verify any
+  # change to this block under that exact env, never under a bare LC_ALL=C.
+  local LC_ALL='' LC_CTYPE cand probe
+  for cand in C.UTF-8 en_US.UTF-8 UTF-8; do
+    LC_CTYPE="$cand"
     probe='❯'
     [ "${#probe}" -eq 1 ] && break
   done
