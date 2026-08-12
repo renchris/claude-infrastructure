@@ -502,7 +502,34 @@ _ratchet="$_SWEEP_DIR/backlog-ratchet.sh"
 # below as if it were the detector's own verdict: a broken caller reading exactly like a clean store.
 # Caught before landing; the block is placed high on purpose (see above), so it brings its own bound.
 _tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
-_bounded() { if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 5 60 "$@"; else "$@"; fi; }
+# 🚨 THE BOUND IS SIZED FOR THE BAND THIS ACTUALLY RUNS IN, NOT FOR THE BENCH (2026-08-12).
+# The 60 s bound was chosen in a foreground shell. This sweep runs from launchd under
+# `ProcessType: Background` + `Nice 5` — the Darwin background QoS band, live PRI 4, confined to the
+# E-cores. Same work, same box, same minute, measured three ways:
+#     foreground 17.5 s   ·   BACKGROUND 68.1 s   ·   utility 20.3 s
+# So `--fold` overran a 60 s bound by ~8 s on EVERY sweep and returned rc 124 — 10 of 10 recorded
+# runs carry `fold_rc:"124"` / `fold_conservation:"no-verdict"`. The consequence is not a slow probe,
+# it is an UNREACHABLE FLIP CRITERION: the caller below says to switch `--fold` to `--fold --apply`
+# "when fold_conservation has read `ok` across a run of sweeps", and run to completion the fold
+# reports `conservation=ok · 19 groups seen · 18 would fold · 0 ambiguous` — the criterion is already
+# satisfied and no instrument on this box could observe it.
+# (MEMORY: bound-must-fit-the-band-not-the-bench, and cap-whose-population-is-empty — the GREEN
+# state did not exist.)
+#
+# Two changes; the first is the load-bearing one. Run these probes at `utility` instead of inheriting
+# Background — the band every other actuator here already moved to
+# (launchd/com.claude.postland-verify.plist:62). That is NOT a promotion to foreground: it lifts the
+# E-core confinement and nothing else, so the sweep still yields to the operator's work. The bound
+# then goes to 180 s — 2.6× the measured background cost, 8.9× the measured utility cost — so it
+# remains a real bound while fitting the worst band ever observed rather than the best.
+_qos=""; [ -x /usr/sbin/taskpolicy ] && _qos=/usr/sbin/taskpolicy   # fail-open: no taskpolicy ⇒ plain exec
+_bounded() {
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then
+    ${_qos:+$_qos -c utility} "$_tmo" -k 5 "${CC_SWEEP_BOUND_S:-180}" "$@"
+  else
+    ${_qos:+$_qos -c utility} "$@"
+  fi
+}
 _trig_rc="skipped"; _rat_rc="skipped"; _fold_rc="skipped"; _fold_note="skipped"; _fold_groups=0
 if [ -x "$_trigger" ]; then _bounded bash "$_trigger" --file >/dev/null 2>&1; _trig_rc=$?; fi
 if [ -x "$_ratchet" ]; then _bounded bash "$_ratchet" --assert >/dev/null 2>&1; _rat_rc=$?; fi
