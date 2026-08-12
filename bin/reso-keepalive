@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# reso-keepalive — keeps recovered + quota-burner sessions autonomously working.
+# RE-DISCOVERS target panes every cycle by WORKTREE MARKER (robust to iTerm2 pane-id changes across
+# session recycles — a static id list goes stale). Nudges ONLY idle panes: not running a turn
+# ("esc to interrupt" shows for the whole turn, so its absence == idle) and not at a decision-prompt.
+# Usage: reso-keepalive [interval_s] [my-own-session-id-to-skip]
+#
+# ── WHY IT IS IN THE REPO, AND IN bash (2026-08-09) ──────────────────────────────────────────────
+# It lived untracked at ~/.reso/bin/reso-keepalive while scripts/boot-resume.sh:85-86 resolved it as
+# an actuator. Tracking it is the point — but tracking a file the gates cannot READ is only half the
+# move, and the land proved it: as the repo's first zsh script under bin/, shellcheck refused it
+# outright (SC1071), and it addressed iTerm2 by NAME, tripping the ratchet that
+# tests/iterm2-appname-lint.bats exists to hold. Both were invisible while the file was untracked.
+# So it is bash (shellcheck can read it) and it addresses iTerm2 BY BUNDLE ID behind an is-running
+# guard — the name form silently loses terminology (-2740/-2741) and can LAUNCH the app.
+set -uo pipefail
+
+IT2="${CC_IT2_BIN:-/Users/chrisren/Library/Python/3.11/bin/it2}"
+INTERVAL="${1:-240}"
+MYID="${2:-${ITERM_SESSION_ID##*:}}"
+LOG="${CC_KEEPALIVE_LOG:-$HOME/.reso/keepalive.log}"
+NUDGE="Continue autonomously with your goal: do your next task, commit it, and keep going. Stop only when the work is genuinely complete or you hit a real blocker (auth/session, destructive migration, or a decision you cannot infer)."
+
+# MARKERS — the panes this nudges. It USED TO BE a frozen literal: the 12 worktrees of the
+# 2026-07-04 recovery this script was written for, baked in where no caller could change them
+# (boot-resume.sh:288 passes only the interval). Sampled 2026-08-09, some of those worktrees no
+# longer exist — a nudger silently aimed at nothing. Env-overridable now, with the original list as
+# the default so no existing caller changes behavior; an EMPTY list exits rather than looping blind.
+MARKERS="${CC_KEEPALIVE_MARKERS:-wt-cc-030951-65335 wt-cc-020321-15848 wt-pool-2 wt-pool-1 wt-cc-141837-23982 wt-cc-034348-50611 wt-still-sin-muin wt-cc-040140-66703 wt-pool-10 wt-pool-6 wt-pool-7 wt-pool-8}"
+if [ -z "${MARKERS// /}" ]; then
+  printf '%s\n' "reso-keepalive: no target markers (CC_KEEPALIVE_MARKERS empty) — nothing to nudge, exiting"
+  exit 0
+fi
+
+discover() {   # print session-ids of IDLE target panes (marker present, not working, not at prompt, not me)
+  local clause="" m
+  # shellcheck disable=SC2086  # deliberate word-split: MARKERS is a space-separated list
+  for m in $MARKERS; do clause="$clause or (c contains \"$m\")"; done
+  clause="${clause# or }"
+  # BUNDLE ID + is-running short-circuit, never a name lookup: addressing the app by name resolves
+  # via CFBundleName, loses terminology when it is not already running (-2740/-2741), and can launch
+  # it. The guard returns empty rather than starting a terminal on a headless box.
+  osascript 2>/dev/null <<OSA
+if not (application id "com.googlecode.iterm2" is running) then return ""
+tell application id "com.googlecode.iterm2"
+  set out to ""
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        set sid to (id of s)
+        if sid is not "$MYID" then
+          set c to (get contents of s)
+          if ($clause) then
+            if not ((c contains "esc to interrupt") or (c contains "Tab to amend") or (c contains "ctrl+e to explain") or (c contains "Esc to cancel")) then
+              set out to out & sid & linefeed
+            end if
+          end if
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return out
+end tell
+OSA
+}
+
+printf '%s reso-keepalive started (interval %ss · marker-rediscovery · skip %s)\n' \
+  "$(date '+%F %T')" "$INTERVAL" "${MYID:0:8}" >> "$LOG"
+while :; do
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    "$IT2" session send -s "$id" "$NUDGE" 2>/dev/null; sleep 0.5
+    "$IT2" session send -s "$id" $'\r' 2>/dev/null; sleep 0.3
+    "$IT2" session send -s "$id" $'\r' 2>/dev/null
+    printf '%s nudged idle %s\n' "$(date '+%F %T')" "${id:0:8}" >> "$LOG"
+  done < <(discover)
+  sleep "$INTERVAL"
+done
