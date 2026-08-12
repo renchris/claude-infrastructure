@@ -9,7 +9,19 @@
 
 setup() {
   GC="${BATS_TEST_DIRNAME}/../scripts/cc-gc.sh"
-  TMP="$(mktemp -d)"
+  # ⚠️ $HOME FIRST, and here it is the load-bearing line rather than boilerplate. cc-gc.sh computes
+  # EVERY store path at start-up as `${CC_<X>_DIR:-$HOME/.claude/<store>}`, so an unexported seam
+  # does not fail — it silently resolves to the operator's LIVE tree, and this suite's subject is a
+  # REAPER. The exports below do cover all of today's stores, which is precisely why the guard is
+  # needed: the next store added to cc-gc.sh would default to live ~/ and this suite would reap it,
+  # green. Not hypothetical — an unexported CC_TEARDOWN_RECORDS_DIR let a test run delete 6 real
+  # ~/.claude/cc-teardown records on 2026-07-25, and tests/autonomy-sweep.bats carries the same
+  # warning over the same class of subject. Fixturing $HOME makes the DEFAULT safe, so coverage no
+  # longer depends on the export list staying exhaustive.
+  # (Caught by the land gate's test-hermeticity ratchet; this suite was written before it existed.)
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # BATS_TEST_TMPDIR, not `mktemp -d`: bats owns its lifetime, so a killed run cannot leak the tree.
+  TMP="$BATS_TEST_TMPDIR/gc"; mkdir -p "$TMP"
   export CC_MAILBOX_DIR="$TMP/mailbox"
   export CC_WATCHDOG_DIR="$TMP/watchdog"
   export CC_REGISTRY_DIR="$TMP/registry"
