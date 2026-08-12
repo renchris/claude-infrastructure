@@ -87,6 +87,28 @@ lr_resolve_opus_model() { # → opus_latest from the model-config SSOT on stdout
 # because word-wrap CONSUMES the space it breaks on ("from summary" → "from\nsummar").
 lr_wrap_re() { # phrase → an expect(1)/Tcl regex that matches it at ANY terminal width
   local phrase="$1" out="" ch i n
+  # CHARACTERS, NOT BYTES — and this function must decide that for itself, because every phrase it
+  # is called with carries `❯`, the selector glyph, which is THREE BYTES in UTF-8. `${#phrase}` and
+  # `${phrase:i:1}` split by character only under a multibyte LC_CTYPE; under C/POSIX they split by
+  # byte, so `❯2.` becomes five fragments, each separately backslash-escaped into the Tcl regex,
+  # and the readback that confirms which option the selector is on stops matching. That readback is
+  # the entire safety of answering this menu: without it the arm cannot tell option 1 (`Resume from
+  # summary` — runs /compact, spends usage, drops the session goal) from option 2 (`Resume full
+  # session as-is`), which is the second defect recorded in this file's own history.
+  # This is NOT hypothetical and NOT only a test concern: nothing else in this script pins a locale,
+  # so any C-locale caller — launchd, cron, a headless recovery — got the byte split. It surfaced as
+  # 8 of 11 reds in tests/lr-resume-answer-width.bats off-box, where the harness pins LC_ALL=C
+  # (scripts/offbox-run.sh); the ASCII-only cases stayed green, which is why it read as width-
+  # specific rather than locale-specific.
+  # The probe is bash's OWN splitting, not an external tool's: `${#probe}` is the exact operation
+  # the walk below depends on, and both LC_ALL and LC_CTYPE are function-local, so nothing outside
+  # this call sees the change. If no UTF-8 locale exists the loop leaves the last candidate set and
+  # the walk degrades to the old byte behaviour rather than erroring — strictly no worse than before.
+  local LC_ALL='' LC_CTYPE probe='❯'
+  for LC_CTYPE in C.UTF-8 en_US.UTF-8 UTF-8; do
+    probe='❯'
+    [ "${#probe}" -eq 1 ] && break
+  done
   # ANSI CSI (colour, cursor-move) | any whitespace incl. the wrap newline | box rules.
   local SEP=$'(?:\033\\[[0-9;?]*[a-zA-Z]|[[:space:]]|│|┃|┆|╎)*' 
   n=${#phrase}
