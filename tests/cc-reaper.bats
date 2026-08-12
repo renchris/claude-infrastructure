@@ -76,6 +76,29 @@ EOF
   export CC_REAPER_SETTLE_S=100
   export CC_REAPER_TRUNK=origin/main
   export CC_REAPER_LOG="$D/reaper.log"
+  # ── HERMETIC GARBAGE ARM (added 2026-08-12, backlog a3a070520f3d) ────────────────────────────
+  # sweep() calls garbage_sweep "$reap" FIRST (bin/cc-reaper:814), so every one of the ~90
+  # `run "$R" sweep --reap` cases below was running the DESTRUCTIVE arm. Its seams
+  # (CC_REAPER_GARBAGE_PS_A/_PS_B, CC_REAPER_GARBAGE_KILL) are exported only by
+  # mk_garbage_fixtures, which each garbage test calls ITSELF — they were never in setup(). So
+  # ~90 tests read the REAL `ps -Ax` table and issued REAL `kill -TERM` (then -KILL 3 s later)
+  # at any ppid-1 process matching bin/cc-reaper:344-349: orphan ps/tool/zsh/bash, where
+  # `orphan-bash` is any ppid-1 bash older than 600 s whose argv misses the :339 whitelist.
+  # `bats` is not in that whitelist. This suite is NOT in scripts/host-suites.manifest, so the
+  # postland corpus runs it — the tree verifier was killing live processes as a side effect of
+  # verifying the tree, on a box that also runs the operator's sessions.
+  # NOTHING RECORDED IT, which is the half that made it survive: CC_REAPER_LOG above is redirected
+  # to $D, so these kills appear in no log on the machine and the sender is unidentifiable after
+  # the fact. Observed live 2026-08-12T12:53Z while investigating exactly that blindness — a
+  # read-only ppid-1 watcher of mine, age 883 s, was selected `orphan-bash` and killed mid-run.
+  # /dev/null is the documented fail-open seam (`snapshot unavailable — arm skipped`,
+  # bin/cc-reaper:321), already asserted by "garbage: unavailable snapshot fails OPEN". Pinning it
+  # here makes INERT the default and leaves mk_garbage_fixtures free to re-arm per test, so every
+  # garbage case keeps its closed-world fixture and its exact-set assertion.
+  export CC_REAPER_GARBAGE_PS_A=/dev/null CC_REAPER_GARBAGE_PS_B=/dev/null
+  # Pinned too, though the fail-open return at :321 precedes the watchdog loop today: its default is
+  # the LIVE $HOME/.claude/watchdog, and that loop `kill -0`s real pids and can add real victims.
+  mkdir -p "$D/gs-wd-default"; export CC_REAPER_WATCHDOG_DIR="$D/gs-wd-default"
   # Hermetic sweep lock: without this every test would contend on the LIVE lockdir shared with the
   # launchd reaper — a real sweep mid-flight would make an arbitrary test skip its sweep and fail.
   export CC_REAPER_LOCKDIR="$D/sweep.lock.d"
