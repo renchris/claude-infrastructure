@@ -8,26 +8,6 @@ PLANS_DIR="${CC_PLANS_DIR:-$HOME/.claude/plans}"
 INDEX="${CC_PLAN_INDEX:-$HOME/.claude/plans-index.json}"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
-# plan_status <file> → open|in-progress|complete|superseded|unknown (from YAML
-# frontmatter `status:`). Missing/unparseable ⇒ unknown. Kept in sync with the
-# copies in find-plan.sh and validate-plan-structure.sh (no shared lib per
-# single-owner file boundary).
-plan_status() {
-  local f="$1" first val
-  IFS= read -r first < "$f" 2>/dev/null || true
-  [ "$first" = "---" ] || { printf 'unknown\n'; return 0; }
-  val=$(sed -n '2,/^---$/{ /^[Ss][Tt][Aa][Tt][Uu][Ss]:/p; }' "$f" 2>/dev/null | head -1)
-  [ -n "$val" ] || { printf 'unknown\n'; return 0; }
-  val=${val#*:}
-  val=$(printf '%s' "$val" | tr -d ' \t"'\''`' | tr '[:upper:]' '[:lower:]')
-  case "$val" in in_progress) val=in-progress ;; completed) val=complete ;; esac
-  case "$val" in
-    open|in-progress|complete|superseded) printf '%s\n' "$val" ;;
-    *) printf 'unknown\n' ;;
-  esac
-  return 0
-}
-
 # 1. Remove legacy global symlink
 [ -L ".claude-global-plans" ] && rm ".claude-global-plans" 2>/dev/null || true
 
@@ -72,15 +52,37 @@ project_files() {
     } | awk '{ n=split($0,a,"/"); b=a[n]; if(!(b in seen)){seen[b]=1; print} }'
 }
 
-PROJ_TOTAL=0; PROJ_OPEN=0
-while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    PROJ_TOTAL=$((PROJ_TOTAL + 1))
-    case "$(plan_status "$f")" in
-        complete|superseded) ;;
-        *) PROJ_OPEN=$((PROJ_OPEN + 1)) ;;
-    esac
-done < <(project_files)
+# Status is read in ONE awk pass over every plan's frontmatter. The old shape was a
+# plan_status() call per file — ~3 forks each, ~750 forks on a 250-plan project, which
+# was this hook's entire 0.5s SessionStart cost. The grammar matches the plan_status
+# copies in find-plan.sh / validate-plan-structure.sh: first line must be `---`; the
+# first `status:` line (case-insensitive) before the closing `---` wins; strip
+# space/tab/quote/backtick, lowercase; `completed`→complete; only complete|superseded
+# CLOSE a plan — everything else (open, in-progress, junk, no frontmatter, and a
+# 0-byte file awk never visits) stays OPEN, exactly as before (anti-FM1).
+PROJ_LIST="$(project_files)"
+PROJ_TOTAL=0; PROJ_OPEN=0; PROJ_CLOSED=0
+if [ -n "$PROJ_LIST" ]; then
+    PROJ_TOTAL=$(printf '%s\n' "$PROJ_LIST" | grep -c .)
+    # xargs may split a huge list into several awk runs; each prints its own closed
+    # count, so the trailing awk sums whatever arrives (0 runs ⇒ 0).
+    # shellcheck disable=SC2016  # the awk program is intentionally single-quoted (the $0/sub/gsub are awk's, and the one shell-visible token is the '\'' escape)
+    PROJ_CLOSED=$(printf '%s\n' "$PROJ_LIST" | tr '\n' '\0' | xargs -0 awk '
+        function flush() { if (infile && (st=="complete" || st=="superseded")) closed++; infile=0 }
+        FNR==1 { flush(); infile=1; st="unknown"; fm=($0=="---")?1:0; if (!fm) nextfile; next }
+        fm && $0=="---" { fm=0; nextfile }
+        fm && st=="unknown" && tolower($0) ~ /^status:/ {
+            v=$0; sub(/^[^:]*:/, "", v)
+            gsub(/[[:space:]"]|'\''|`/, "", v); v=tolower(v)
+            if (v=="completed") v="complete"
+            if (v=="complete" || v=="superseded") st=v
+            nextfile
+        }
+        END { flush(); print closed+0 }
+    ' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    case "$PROJ_CLOSED" in ''|*[!0-9]*) PROJ_CLOSED=0 ;; esac
+    PROJ_OPEN=$((PROJ_TOTAL - PROJ_CLOSED))
+fi
 
 # All-projects total from the index (kept fresh by `plan-index-update.sh reconcile`).
 ALL_TOTAL=0

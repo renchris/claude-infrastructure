@@ -107,6 +107,31 @@ all_open_rollup() {
     done
 }
 
+# summary_stale <dir> → 0 when the dir's _summary.json must be regenerated, 1 when it is
+# current. The freshness guard from scaling-bottlenecks-2026-08-09 §5 P0-2, factored here so
+# the store-wide sweep and the targeted active-list regen in setup-task-symlinks.sh read ONE
+# definition: regenerate when (a) a task json is newer than the summary (covers in-place
+# TaskUpdate rewrites), (b) tasks exist with no summary, or (c) the dir emptied AFTER its
+# summary was written (deletion moves dir mtime; the regen writes the summary into the dir,
+# so post-regen the two are equal and it skips). Pure bash, zero forks for an unchanged dir.
+# CC_TASKS_SUMMARY_FORCE=1 bypasses the guard (also the test suite's mutation control).
+summary_stale() {
+    local dir="${1%/}/" summary tj has_task=0
+    summary="${dir}_summary.json"
+    [ "${CC_TASKS_SUMMARY_FORCE:-0}" = "1" ] && return 0
+    for tj in "$dir"*.json; do
+        [ -e "$tj" ] || continue
+        case "$tj" in */_summary.json) continue ;; esac
+        has_task=1
+        if [ ! -f "$summary" ] || [ "$tj" -nt "$summary" ]; then return 0; fi
+    done
+    if [ "$has_task" -eq 0 ]; then
+        [ -f "$summary" ] || return 1
+        [ "$dir" -nt "$summary" ] && return 0
+    fi
+    return 1
+}
+
 # Regenerate _summary.json for a task list directory.
 regenerate_summary() {
     local dir="$1"
