@@ -162,8 +162,15 @@ EOF
 @test "postland-verify: the three no-derived-arm sites build a probe carrying suite AND commit" {
   # The emission sites call fals_red; assert the string it produces, since driving a real
   # AUTO-REVERT/HUNG episode would need a broken trunk. The probe's own behaviour is §2's job.
+  #
+  # The end pattern is `.*`, not `..`. The header it closes on carries the box-drawing run `──`:
+  # TWO codepoints but SIX bytes, so `..` matched under this box's UTF-8 locale and NOT under the
+  # LC_ALL=C that scripts/offbox-run.sh pins for every off-box suite. There the range ran to EOF
+  # and lifted 612 lines instead of 11 — including `main "$@"`, which executed the whole script
+  # into the test shell. `.*` closes on the same line in every locale, which removes the ambient
+  # dependence instead of freezing it.
   run bash -c "set -uo pipefail
-    $(awk '/^fals_sq\(\)/,/^# .. --falsify-red/' "$POSTLAND" | sed '$d')
+    $(awk '/^fals_sq\(\)/,/^# .* --falsify-red/' "$POSTLAND" | sed '$d')
     fals_red tests/foo.bats abc1234def"
   [ "$status" -eq 0 ]
   [[ "$output" == *"postland-verify.sh"* ]] || false
@@ -174,7 +181,7 @@ EOF
 
 @test "postland-verify: a missing half emits NOTHING rather than a half-formed probe" {
   run bash -c "set -uo pipefail
-    $(awk '/^fals_sq\(\)/,/^# .. --falsify-red/' "$POSTLAND" | sed '$d')
+    $(awk '/^fals_sq\(\)/,/^# .* --falsify-red/' "$POSTLAND" | sed '$d')
     fals_red tests/foo.bats ''; echo \"rc=\$?\""
   [[ "$output" == "rc=1" ]]
 }
