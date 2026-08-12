@@ -4,12 +4,50 @@
   "disabledMcpjsonServers": ["chrome-devtools", "browsermcp"],
   "permissions": {
     "_why_kitten": "scripts/cloud-websetup-drive.sh drives /web-setup by typing into a kitty pane over remote control, and `kitten @ send-text` is the one verb in that flow the auto-mode classifier judges intermittently — the payload is a command line plus a bare `\\r`, which reads as an unbounded write to something outside the working tree. Intermittent is the worst shape: the drive gets half-way through an account, blocks on a prompt no one is watching, and the pane is left sitting in /web-setup with consent unanswered. An explicit allow makes the verdict deterministic. The other four verbs are listed for the same reason and because a drive that can type but cannot read the pane back (get-text) is exactly the absence-is-not-success trap the driver exists to avoid.",
+    "_why_repo_tooling": "MEASURED 2026-08-12 from the manual-approval record, not guessed. The 59 `.claude/settings.local.json` files under ~/Development hold 2,036 DISTINCT approved patterns — 970 of them (48%) exact-match with no wildcard, 359 embedding an absolute path (`Bash(git -C /tmp/wt-accounts-login-cliff rebase origin/main)`). That is the defect: 'yes, don't ask again' writes back a pattern as specific as the invocation that produced it, so it can never match a second time and the same command re-prompts under a new path forever. The entries below are the GENERALIZED prefixes for this repo's own tooling, ranked by live invocation count across 200 recent claude-infrastructure transcripts: bats 366, cc-backlog 237, shellcheck 182, cc-await-ping 160, cc-bats 102, claude-accounts 46, cc-sessions 29, cc-custody 29, wrap-ledger 15. All are query/gate/local-ledger verbs — they read repo state, run the commit gate, or append to an append-only ledger on this box. DELIBERATELY EXCLUDED, and they must keep prompting: cc-offload / cc-cloud / cc-dispatch (spend Anthropic cloud compute), scripts/deploy-live.sh (mutates the LIVE ~/.claude layer), and bare `bash:*` / `perl:*` / `node:*` / `awk:*` (arbitrary code execution — `bats:*` is granted instead as the strictly narrower repo gate, and is narrower still than the `python3:*` and `bun:*` the fleet-wide settings.json already grants). Both the bare and `bin/`-prefixed spellings are listed because a prefix pattern cannot wildcard its own middle, and this repo is invoked both ways depending on whether $HOME/.claude/bin is on PATH. `sed -n` and `git fetch` are the two CROSS-REPO entries here, included because `bin/cc-permission-audit` ranks them #1 (2,434 hits) and #6 (382) among commands matching no allow rule fleet-wide; they belong in ~/.claude/settings.json rather than this file, and sit here only so this repo stops paying for them today. CAVEAT on `sed -n`: prefix matching cannot exclude a later flag, so this pattern also admits `sed -n -i …` and sed's `w` write-command. That is a real, narrow widening — accepted because the fleet-wide allow list already grants `python3:*`, `bun:*` and `node -e:*`, each of which is unboundedly wider, and because validate-bash.sh still runs on every call.",
     "allow": [
       "Bash(kitten @ send-text:*)",
       "Bash(kitten @ get-text:*)",
       "Bash(kitten @ launch:*)",
       "Bash(kitten @ close-window:*)",
-      "Bash(kitten @ ls:*)"
+      "Bash(kitten @ ls:*)",
+
+      "Bash(bats:*)",
+      "Bash(cc-bats:*)",
+      "Bash(bin/cc-bats:*)",
+      "Bash(shellcheck:*)",
+
+      "Bash(cc-backlog:*)",
+      "Bash(bin/cc-backlog:*)",
+      "Bash(cc-custody:*)",
+      "Bash(cc-decide:*)",
+
+      "Bash(cc-await-ping:*)",
+      "Bash(bin/cc-await-ping:*)",
+      "Bash(cc-wait:*)",
+
+      "Bash(claude-accounts:*)",
+      "Bash(bin/claude-accounts:*)",
+      "Bash(./bin/claude-accounts:*)",
+
+      "Bash(cc-sessions:*)",
+      "Bash(cc-context:*)",
+      "Bash(cc-pane:*)",
+      "Bash(cc-where:*)",
+      "Bash(cc-blockers:*)",
+      "Bash(cc-eligible:*)",
+      "Bash(cc-premise:*)",
+      "Bash(cc-claude-bin:*)",
+      "Bash(cc-in-kitty:*)",
+      "Bash(cc-do --list)",
+
+      "Bash(sed -n:*)",
+      "Bash(git fetch:*)",
+
+      "Bash(scripts/wrap-ledger.sh:*)",
+      "Bash(bash scripts/wrap-ledger.sh:*)",
+      "Bash(./scripts/deploy-parity-assert.sh)",
+      "Bash(./scripts/test-hermeticity-lint.sh)"
     ]
   }
 }
