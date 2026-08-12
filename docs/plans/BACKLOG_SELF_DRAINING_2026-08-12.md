@@ -318,6 +318,46 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-12 11:00Z — successor re-verified W0 and fired W1/W2/W3; the hang is gone and the retire
+  arm is now waiting on a live round trip that is ALREADY RUNNING.** Four findings, each from a live
+  read rather than the predecessor's record:
+
+  1. **The dispatcher has NOT re-wedged.** Its own IDL row at `10:41:58Z`:
+     `verdict:"admit", free_slots:6, ceiling:6, live_workers:0, deferred:0`. The `at-ceiling` /
+     `fired:0` state has not returned in the ~12 min of passes since.
+  2. **`tests/autonomy-sweep.bats` no longer hangs.** The two `hung` stamps (`07:04Z` run_s 5,235 ·
+     `08:39Z` run_s 4,144) both ran trees WITHOUT the band fix — `39388b17d` is not an ancestor of
+     either. The postland run in flight since `10:16Z` IS on a tree that carries it
+     (`33a8f41a8`), and its corpus `bats` **completed and exited** at ~36 min against the 69–87 min
+     hangs. No stamp yet, so this is a strong indication and not the verdict; the verdict is the
+     stamp for tree `33a8f41a86c1`.
+  3. **`cc-cloud retire` is still unexercised, but the round trip that will exercise it is live
+     now.** `session_01QmBkP5BH741J3BRw2A7F4a` (fired `10:26Z`) is `ALIVE`; a second, `…VA64gC…`,
+     is `NOT-STARTED`. Both are post-fix dispatcher fires, which is itself evidence the venue-scoped
+     ceiling works on the cloud side too.
+  4. 🚨 **The retire arm is FORWARD-ONLY, and that is a second gap the W0 fix does not reach**
+     (filed `b8a515115b2f`). 41 declarations · **0** `.retired` · 5 `.returned`. The 5 already-latched
+     sessions short-circuit at `already returned` on every future sweep, and the ~24 that reached a
+     terminal state before the fix landed have no path to release their claim at all. Cloud dispatch
+     is *not* blocked by this today (it fired twice at 10:26/10:27Z), so it is hygiene, not an
+     outage — but "the ceiling self-heals" is true only of round trips that START after the fix.
+
+  **W1/W2/W3 fired, locus S, one dispatched session each, `--goal` armed on all three:**
+  W3 capacity → pane 430 (`next4`, worktree `wave-w3-capacity`, goal verified at fire) ·
+  W2 grouping → pane 432 (`next3`, `wave-w2-grouping`, goal verified at fire) ·
+  W1 freshness → pane 431 (`next`, `wave-w1-freshness`, goal armed on the second attempt, see below).
+
+  ⚠️ **W1's fire declared `FIRE FAILED — never engaged` and was WRONG** (filed `4043ab43bf4a`).
+  `handoff-fire.sh`'s 120 s engagement window is sized for an idle box; at load 14.7 the cold-worktree
+  session engaged LATE, after the window closed. The consequences all landed on a session that was
+  working correctly: goal arming was skipped (`verdict=unreachable reason=never-engaged`), and
+  fire-cleanup registered the pane as **task-less and reapable**. Recovered by confirming engagement
+  from the pane's own transcript (150 rows, its own first line `"I'll start by reading the plan
+  section that is my DoD"`) and having it arm its own goal over `cc-notify` — receipt `acked=1`,
+  `goal-armed` present in its transcript. **The generalisable half: a fixed engagement bound sized on
+  an idle box mislabels a healthy session as dead on a loaded one, and every downstream action it
+  takes is destructive.** Same shape as W0's own bound-vs-band finding, one layer up.
+
 - **2026-08-12 10:29Z — W0 IS LIVE, AND THE WEDGE IS BROKEN ON THE LIVE BOX.** The converger advanced
   (live HEAD `0ffe96995` → `3d4585168d`, lag 14 → 1) and all four markers are present in the deployed
   files — `cc-dispatch` venue-scoped ceiling, `cloud-return` retire + split `.woken` latch,
