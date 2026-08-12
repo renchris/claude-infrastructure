@@ -1,16 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 524" width="1400" height="524"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 636" width="1400" height="636"
      role="img" aria-labelledby="ttl dsc">
 <title id="ttl">Twice, this repo shipped it first</title>
-<desc id="dsc">Two tracks on one time axis, May to August 2026. On each, a green disc marks the date the capability was running in this repo and a blue ring the Claude Code release that shipped it; the bar between them is the lead, drawn to scale and labelled — 4 days and 28 days. A light column crosses left to right once every 24 seconds, igniting each marker in date order.</desc>
+<desc id="dsc">Two tracks on one time axis, May to August 2026, over an amber ridge of this repo's own commit volume. On each track a green disc marks the date the capability was running here and a blue ring the Claude Code release that shipped it; the bar between them is the lead, drawn to scale, with its length in days as a large numeral at the left margin — 4 days and 28 days. Both leads fall before the ridge's climb. A light column crosses left to right once every 24 seconds, igniting each marker in date order.</desc>
 <defs>
-<linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-plate-a"/><stop offset="1" class="g-plate-b"/></linearGradient>
-<linearGradient id="pill" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-pill-a"/><stop offset="1" class="g-pill-b"/></linearGradient>
-<radialGradient id="haloRep"><stop offset="0" class="g-rep" stop-opacity=".85"/>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-sky-a"/><stop offset=".42" class="g-sky-b"/>
+  <stop offset=".76" class="g-sky-c"/><stop offset="1" class="g-sky-d"/></linearGradient>
+<linearGradient id="ridge" x1="0" y1="466" x2="0" y2="576"
+    gradientUnits="userSpaceOnUse">
+  <stop offset="0" class="g-ridge-a"/><stop offset=".55" class="g-ridge-b"/>
+  <stop offset="1" class="g-ridge-c"/></linearGradient>
+<linearGradient id="band" x1="0" y1="0" x2="1" y2="0">
+  <stop offset="0" class="g-rep-hi"/><stop offset=".55" class="g-rep"/>
+  <stop offset="1" class="g-rep-dim"/></linearGradient>
+<radialGradient id="mkRep" cx=".38" cy=".32" r=".75">
+  <stop offset="0" class="g-rep-hi"/><stop offset="1" class="g-rep"/></radialGradient>
+<radialGradient id="haloRep"><stop offset="0" class="g-rep" stop-opacity=".9"/>
   <stop offset="1" class="g-rep" stop-opacity="0"/></radialGradient>
-<radialGradient id="haloCc"><stop offset="0" class="g-cc" stop-opacity=".85"/>
+<radialGradient id="haloCc"><stop offset="0" class="g-cc" stop-opacity=".9"/>
   <stop offset="1" class="g-cc" stop-opacity="0"/></radialGradient>
+<linearGradient id="scatter" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-scatter" stop-opacity="0"/>
+  <stop offset="1" class="g-scatter" stop-opacity="1"/></linearGradient>
 <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
   <stop offset="0" class="g-sweep" stop-opacity="0"/>
   <stop offset=".62" class="g-sweep" stop-opacity=".55"/>
@@ -18,53 +29,55 @@
   <stop offset="1" class="g-sweep" stop-opacity="0"/></linearGradient>
 </defs>
 <style>
-.g-plate-a{stop-color:var(--plate_a)} .g-plate-b{stop-color:var(--plate_b)}
-.g-pill-a{stop-color:var(--pill_a)} .g-pill-b{stop-color:var(--pill_b)}
-.g-rep{stop-color:var(--rep)} .g-cc{stop-color:var(--cc)}
-.g-sweep{stop-color:var(--sweep)}
+.g-sky-a{stop-color:var(--sky_a)} .g-sky-b{stop-color:var(--sky_b)}
+.g-sky-c{stop-color:var(--sky_c)} .g-sky-d{stop-color:var(--sky_d)}
+.g-ridge-a{stop-color:var(--ridge_a)} .g-ridge-b{stop-color:var(--ridge_b)}
+.g-ridge-c{stop-color:var(--ridge_c)}
+.g-rep{stop-color:var(--rep)} .g-rep-hi{stop-color:var(--rep_hi)}
+.g-rep-dim{stop-color:var(--rep_dim)}
+.g-cc{stop-color:var(--cc)} .g-sweep{stop-color:var(--sweep)}
+.g-scatter{stop-color:var(--scatter)}
 </style>
 <style>
-:root{--plate_a:#ffffff;--plate_b:#f2f6fb;--edge:#d6dee8;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e4ebf3;--ink:#0d1319;--ink2:#54606e;--ink3:#7d8794;--track:#c8d3e0;--rep:#1a7f37;--rep_hi:#2da44e;--cc:#0969da;--cc_hi:#218bff;--pill_a:#e9f7ed;--pill_b:#dcf1e3;--sweep:#1f4e8c;--sweep_o:0.05;--halo_o:0.16;--core:#ffffff;}
-@media (prefers-color-scheme: dark){:root{--plate_a:#111823;--plate_b:#0a0e15;--edge:#222b3a;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1e2937;--ink:#e9eff6;--ink2:#98a5b5;--ink3:#6a7686;--track:#37455a;--rep:#3fb950;--rep_hi:#6ee787;--cc:#4b93e6;--cc_hi:#8cc8ff;--pill_a:#16241a;--pill_b:#0f1a13;--sweep:#a8d0ff;--sweep_o:0.09;--halo_o:0.34;--core:#0a0e15;}}
+:root{--sky_a:#ffffff;--sky_b:#f2f6fd;--sky_c:#e9eefb;--sky_d:#fbeedd;--edge:#d8e0ea;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e6ecf4;--ink:#0c1218;--ink2:#53606f;--ink3:#7c8794;--track:#ccd6e2;--rep:#1a7f37;--rep_hi:#2da44e;--rep_dim:#8fc9a2;--cc:#0969da;--cc_hi:#218bff;--ridge_a:#e3b64a;--ridge_b:#c99a2f;--ridge_c:#f3e3c4;--ridge_edge:#b8862a;--scatter:#e0a55c;--scatter_o:0.20;--sweep:#1f4e8c;--sweep_o:0.05;--halo_o:0.18;--glow_o:0.14;--core:#ffffff;}
+@media (prefers-color-scheme: dark){:root{--sky_a:#05080f;--sky_b:#0d1424;--sky_c:#1d1e3a;--sky_d:#3a2740;--edge:#242c3e;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1a2133;--ink:#eef3f9;--ink2:#9aa8bb;--ink3:#6c7889;--track:#2c3547;--rep:#3fb950;--rep_hi:#7ee787;--rep_dim:#1b6b2c;--cc:#4b93e6;--cc_hi:#8cc8ff;--ridge_a:#d4af37;--ridge_b:#7a5c22;--ridge_c:#241a10;--ridge_edge:#f0cf6a;--scatter:#c98a4a;--scatter_o:0.13;--sweep:#bcd6ff;--sweep_o:0.09;--halo_o:0.36;--glow_o:0.20;--core:#0b1020;}}
 
-text{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;dominant-baseline:auto}
-.mono{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace}
+text{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;dominant-baseline:auto}
+.sans{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif}
 .ink{fill:var(--ink)} .ink2{fill:var(--ink2)} .ink3{fill:var(--ink3)}
-.c-rep{fill:var(--rep)} .c-cc{fill:var(--cc)} .c-rep-hi{fill:var(--rep_hi)}
+.c-rep{fill:var(--rep)} .c-cc{fill:var(--cc)}
 
-.t-kicker{font-size:18px;font-weight:600;letter-spacing:2.4px;fill:var(--ink3)}
-.t-key{font-size:20px;fill:var(--ink2)}
-.t-legend{font-size:18px;fill:var(--ink2)}
-.t-name{font-size:26px;font-weight:600;fill:var(--ink)}
-.t-namesub{font-size:20px;fill:var(--ink2)}
-.t-date{font-size:17.5px;letter-spacing:.4px}
-.t-detail{font-size:19px;fill:var(--ink2)}
-.t-coda{font-size:17.5px;fill:var(--ink2)}
-.t-month{font-size:16px;letter-spacing:.4px;fill:var(--ink3)}
-.t-pill{font-size:26px;font-weight:700;fill:var(--rep_hi)}
-.t-pill-u{font-size:15px;font-weight:600;letter-spacing:1.5px;fill:var(--rep)}
+.t-lead{font-size:36px;font-weight:700;fill:var(--rep_hi)}
+.t-unit{font-size:18px;font-weight:600;letter-spacing:1.8px;fill:var(--rep)}
+.t-name{font-size:24px;font-weight:600;fill:var(--ink)}
+.t-s{font-size:18px;fill:var(--ink2)}
+.t-s3{font-size:18px;fill:var(--ink3)}
+.t-kick{font-size:18px;font-weight:600;letter-spacing:2.6px;fill:var(--ink3)}
 
-.plate{fill:url(#plate)}
+.sky{fill:url(#sky)}
 .edge{fill:none;stroke:var(--edge);stroke-width:1.5}
 .edgehi{fill:none;stroke:var(--edge_hi);stroke-width:1.5;opacity:var(--edge_hi_o)}
 .grid{stroke:var(--grid);stroke-width:1}
+.horizon{stroke:var(--ridge_edge);stroke-width:1.5;opacity:.45}
+.scatter{fill:url(#scatter);opacity:var(--scatter_o)}
 
-/* the full-width track: dotted where neither side had it yet, and where both do */
-.track{stroke:var(--track);stroke-width:2;stroke-dasharray:2 9;stroke-linecap:round}
-/* the lead: the one span that means "only this repo had it" */
-.rail{fill:none;stroke:var(--rep);stroke-width:3.5;stroke-linecap:round}
-.rail-hi{fill:none;stroke:var(--rep_hi);stroke-width:1.2;stroke-linecap:round;opacity:.55}
+/* the ridge — this repo's own commits, the warm source against the cool sky */
+.ridge{fill:url(#ridge)}
+.ridge-edge{fill:none;stroke:var(--ridge_edge);stroke-width:2;stroke-linejoin:round;opacity:.9}
+
+/* the track, and the lead drawn as MASS */
+.track{stroke:var(--track);stroke-width:2;stroke-dasharray:2 10;stroke-linecap:round}
+.band-glow{fill:var(--rep);opacity:var(--glow_o)}
+.band{fill:url(#band)}
+.band-edge{fill:none;stroke:var(--rep_hi);stroke-width:1.2;opacity:.5}
 .tick-rep{stroke:var(--rep);stroke-width:1.5;opacity:.5;stroke-linecap:round}
 .tick-cc{stroke:var(--cc);stroke-width:1.5;opacity:.5;stroke-linecap:round}
 
 .halo{opacity:var(--halo_o)}
 .halo-rep{fill:url(#haloRep)} .halo-cc{fill:url(#haloCc)}
-.mk-rep{fill:var(--rep)}
-.mk-core{fill:var(--core)}
-.mk-spec{fill:#ffffff;opacity:.45}
-.mk-ring-cc{fill:var(--core);stroke:var(--cc);stroke-width:4}
-
-.pill-bg{fill:url(#pill);stroke:var(--rep);stroke-width:1.4}
+.mk-rep{fill:url(#mkRep)}
+.mk-spec{fill:#ffffff;opacity:.5}
+.mk-cc{fill:var(--core);stroke:var(--cc);stroke-width:4.5}
 
 /* ── motion ─────────────────────────────────────────────────────────────────────────────────
    One animation per element, and no literal delay value anywhere — phase rides --d through the
@@ -79,85 +92,96 @@ text{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Hel
 @keyframes ignite{
   0%{opacity:0;transform:scale(1)}
   2%{opacity:.9;transform:scale(1)}
-  10%{opacity:0;transform:scale(3.1)}
+  10%{opacity:0;transform:scale(2.15)}
   100%{opacity:0;transform:scale(1)}}
-.ig{fill:none;stroke-width:2.4;transform-box:fill-box;transform-origin:50% 50%;opacity:0;
+.ig{fill:none;stroke-width:2.6;transform-box:fill-box;transform-origin:50% 50%;opacity:0;
      animation:ignite 24s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
 .ig-rep{stroke:var(--rep_hi)} .ig-cc{stroke:var(--cc_hi)}
 
+@keyframes flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-104px}}
+.flow{fill:none;stroke:var(--rep_hi);stroke-width:16;stroke-linecap:butt;opacity:.13;
+       stroke-dasharray:16 88}
+.flow-a{animation:flow 12s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
+.flow-b{animation:flow 8s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
+
 @media (prefers-reduced-motion: reduce){*{animation:none !important}}
 </style>
-<rect class="plate" x="0" y="0" width="1400" height="524" rx="16"/>
-<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-300" y="0" width="300" height="524"/></g>
+<rect class="sky" x="0" y="0" width="1400" height="636" rx="16"/>
+<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-300" y="0" width="300" height="636"/></g>
 <g>
-<line class="grid" x1="328.0" y1="104" x2="328.0" y2="472"/>
-<line class="grid" x1="688.0" y1="104" x2="688.0" y2="472"/>
-<line class="grid" x1="1060.0" y1="104" x2="1060.0" y2="472"/>
+<line class="grid" x1="361.7" y1="96" x2="361.7" y2="576"/>
+<line class="grid" x1="767.7" y1="96" x2="767.7" y2="576"/>
+<line class="grid" x1="1187.1" y1="96" x2="1187.1" y2="576"/>
 </g>
+<rect class="scatter" x="0" y="426" width="1400" height="150"/>
+<path class="ridge" d="M 64 576 L 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 566.9 L 388.8 566.9 L 388.8 565.7 L 402.3 565.7 L 402.3 565.7 L 415.8 565.7 L 415.8 565.1 L 429.4 565.1 L 429.4 564.1 L 442.9 564.1 L 442.9 564.1 L 456.4 564.1 L 456.4 564.1 L 470.0 564.1 L 470.0 565.7 L 483.5 565.7 L 483.5 566.3 L 497.0 566.3 L 497.0 565.7 L 510.6 565.7 L 510.6 566.3 L 524.1 566.3 L 524.1 567.6 L 537.6 567.6 L 537.6 567.6 L 551.1 567.6 L 551.1 567.6 L 564.7 567.6 L 564.7 571.1 L 578.2 571.1 L 578.2 572.6 L 591.7 572.6 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 572.6 L 740.6 572.6 L 740.6 572.6 L 754.1 572.6 L 754.1 572.6 L 767.7 572.6 L 767.7 571.1 L 781.2 571.1 L 781.2 567.6 L 794.7 567.6 L 794.7 559.2 L 808.3 559.2 L 808.3 559.2 L 821.8 559.2 L 821.8 559.5 L 835.3 559.5 L 835.3 559.5 L 848.9 559.5 L 848.9 559.5 L 862.4 559.5 L 862.4 559.9 L 875.9 559.9 L 875.9 561.4 L 889.4 561.4 L 889.4 564.1 L 903.0 564.1 L 903.0 555.4 L 916.5 555.4 L 916.5 555.4 L 930.0 555.4 L 930.0 554.5 L 943.6 554.5 L 943.6 539.8 L 957.1 539.8 L 957.1 536.7 L 970.6 536.7 L 970.6 535.3 L 984.2 535.3 L 984.2 534.0 L 997.7 534.0 L 997.7 524.7 L 1011.2 524.7 L 1011.2 518.9 L 1024.8 518.9 L 1024.8 514.4 L 1038.3 514.4 L 1038.3 518.3 L 1051.8 518.3 L 1051.8 519.7 L 1065.4 519.7 L 1065.4 517.9 L 1078.9 517.9 L 1078.9 515.4 L 1092.4 515.4 L 1092.4 509.4 L 1106.0 509.4 L 1106.0 504.8 L 1119.5 504.8 L 1119.5 508.6 L 1133.0 508.6 L 1133.0 507.7 L 1146.6 507.7 L 1146.6 484.3 L 1160.1 484.3 L 1160.1 475.7 L 1173.6 475.7 L 1173.6 466.0 L 1187.1 466.0 L 1187.1 469.5 L 1200.7 469.5 L 1200.7 472.7 L 1214.2 472.7 L 1214.2 470.9 L 1227.7 470.9 L 1227.7 472.3 L 1241.3 472.3 L 1241.3 487.7 L 1254.8 487.7 L 1254.8 495.8 L 1268.3 495.8 L 1268.3 501.9 L 1281.9 501.9 L 1281.9 499.1 L 1295.4 499.1 L 1295.4 493.6 L 1308.9 493.6 L 1308.9 482.8 L 1322.5 482.8 L 1322.5 473.4 L 1336.0 473.4 L 1336.0 476.6 L 1336.0 476.6 L 1336 576 Z"/>
+<path class="ridge-edge" d="M 64.0 576.0 L 77.5 576.0 L 77.5 576.0 L 91.1 576.0 L 91.1 576.0 L 104.6 576.0 L 104.6 576.0 L 118.1 576.0 L 118.1 576.0 L 131.7 576.0 L 131.7 576.0 L 145.2 576.0 L 145.2 576.0 L 158.7 576.0 L 158.7 576.0 L 172.3 576.0 L 172.3 576.0 L 185.8 576.0 L 185.8 576.0 L 199.3 576.0 L 199.3 576.0 L 212.9 576.0 L 212.9 576.0 L 226.4 576.0 L 226.4 576.0 L 239.9 576.0 L 239.9 576.0 L 253.4 576.0 L 253.4 576.0 L 267.0 576.0 L 267.0 576.0 L 280.5 576.0 L 280.5 576.0 L 294.0 576.0 L 294.0 576.0 L 307.6 576.0 L 307.6 576.0 L 321.1 576.0 L 321.1 576.0 L 334.6 576.0 L 334.6 576.0 L 348.2 576.0 L 348.2 576.0 L 361.7 576.0 L 361.7 576.0 L 375.2 576.0 L 375.2 566.9 L 388.8 566.9 L 388.8 565.7 L 402.3 565.7 L 402.3 565.7 L 415.8 565.7 L 415.8 565.1 L 429.4 565.1 L 429.4 564.1 L 442.9 564.1 L 442.9 564.1 L 456.4 564.1 L 456.4 564.1 L 470.0 564.1 L 470.0 565.7 L 483.5 565.7 L 483.5 566.3 L 497.0 566.3 L 497.0 565.7 L 510.6 565.7 L 510.6 566.3 L 524.1 566.3 L 524.1 567.6 L 537.6 567.6 L 537.6 567.6 L 551.1 567.6 L 551.1 567.6 L 564.7 567.6 L 564.7 571.1 L 578.2 571.1 L 578.2 572.6 L 591.7 572.6 L 591.7 576.0 L 605.3 576.0 L 605.3 576.0 L 618.8 576.0 L 618.8 576.0 L 632.3 576.0 L 632.3 576.0 L 645.9 576.0 L 645.9 576.0 L 659.4 576.0 L 659.4 576.0 L 672.9 576.0 L 672.9 576.0 L 686.5 576.0 L 686.5 576.0 L 700.0 576.0 L 700.0 576.0 L 713.5 576.0 L 713.5 576.0 L 727.1 576.0 L 727.1 572.6 L 740.6 572.6 L 740.6 572.6 L 754.1 572.6 L 754.1 572.6 L 767.7 572.6 L 767.7 571.1 L 781.2 571.1 L 781.2 567.6 L 794.7 567.6 L 794.7 559.2 L 808.3 559.2 L 808.3 559.2 L 821.8 559.2 L 821.8 559.5 L 835.3 559.5 L 835.3 559.5 L 848.9 559.5 L 848.9 559.5 L 862.4 559.5 L 862.4 559.9 L 875.9 559.9 L 875.9 561.4 L 889.4 561.4 L 889.4 564.1 L 903.0 564.1 L 903.0 555.4 L 916.5 555.4 L 916.5 555.4 L 930.0 555.4 L 930.0 554.5 L 943.6 554.5 L 943.6 539.8 L 957.1 539.8 L 957.1 536.7 L 970.6 536.7 L 970.6 535.3 L 984.2 535.3 L 984.2 534.0 L 997.7 534.0 L 997.7 524.7 L 1011.2 524.7 L 1011.2 518.9 L 1024.8 518.9 L 1024.8 514.4 L 1038.3 514.4 L 1038.3 518.3 L 1051.8 518.3 L 1051.8 519.7 L 1065.4 519.7 L 1065.4 517.9 L 1078.9 517.9 L 1078.9 515.4 L 1092.4 515.4 L 1092.4 509.4 L 1106.0 509.4 L 1106.0 504.8 L 1119.5 504.8 L 1119.5 508.6 L 1133.0 508.6 L 1133.0 507.7 L 1146.6 507.7 L 1146.6 484.3 L 1160.1 484.3 L 1160.1 475.7 L 1173.6 475.7 L 1173.6 466.0 L 1187.1 466.0 L 1187.1 469.5 L 1200.7 469.5 L 1200.7 472.7 L 1214.2 472.7 L 1214.2 470.9 L 1227.7 470.9 L 1227.7 472.3 L 1241.3 472.3 L 1241.3 487.7 L 1254.8 487.7 L 1254.8 495.8 L 1268.3 495.8 L 1268.3 501.9 L 1281.9 501.9 L 1281.9 499.1 L 1295.4 499.1 L 1295.4 493.6 L 1308.9 493.6 L 1308.9 482.8 L 1322.5 482.8 L 1322.5 473.4 L 1336.0 473.4 L 1336.0 476.6 L 1336.0 476.6"/>
+<line class="horizon" x1="64" y1="576" x2="1336" y2="576"/>
 <g>
-<text class="t-month mono" x="142.0" y="494" text-anchor="middle">May ’26</text>
-<text class="t-month mono" x="508.0" y="494" text-anchor="middle">Jun</text>
-<text class="t-month mono" x="874.0" y="494" text-anchor="middle">Jul</text>
-<text class="t-month mono" x="1198.0" y="494" text-anchor="middle">Aug</text>
+<text class="t-s3" x="152.0" y="606" text-anchor="middle">May ’26</text>
+<text class="t-s3" x="564.7" y="606" text-anchor="middle">Jun</text>
+<text class="t-s3" x="977.4" y="606" text-anchor="middle">Jul</text>
+<text class="t-s3" x="1261.6" y="606" text-anchor="middle">Aug</text>
 </g>
-<text class="t-name" x="64" y="140">a research team that attacks its own findings</text>
-<text class="t-namesub" x="720" y="140">· a share of every wave briefed to refute the rest</text>
-<line class="track" x1="64" y1="216" x2="217.0" y2="216"/>
-<line class="track" x1="295.0" y1="216" x2="1336" y2="216"/>
-<line class="rail" x1="232.0" y1="216" x2="280.0" y2="216"/>
-<line class="rail-hi" x1="232.0" y1="216" x2="280.0" y2="216"/>
-<line class="tick-rep" x1="232.0" y1="204" x2="232.0" y2="184"/>
-<line class="tick-cc" x1="280.0" y1="228" x2="280.0" y2="247"/>
-<rect class="pill-bg" x="310.0" y="195.0" width="101.4" height="42.0" rx="21.0"/>
-<text class="t-pill" x="330.0" y="225">4</text>
-<text class="t-pill-u" x="352.7" y="225">DAYS</text>
-<g transform="translate(232.0,216)">
-<circle class="halo halo-rep" r="16"/>
-<circle class="mk-rep" r="9.5"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.2"/>
-<circle class="ig ig-rep" r="12.5" style="--d:-20.696s"/>
+<text class="t-lead" x="64" y="160">4</text>
+<text class="t-unit" x="95.6" y="160">DAYS</text>
+<text class="t-name sans" x="166.0" y="160">a research team that attacks its own findings</text>
+<line class="track" x1="64" y1="240" x2="237.4" y2="240"/>
+<line class="track" x1="323.6" y1="240" x2="1336" y2="240"/>
+<rect class="band-glow" x="249.4" y="223.0" width="62.1" height="34" rx="17.0"/>
+<rect class="band" x="253.4" y="227.0" width="54.1" height="26" rx="13.0"/>
+<line class="flow flow-a" x1="253.4" y1="240" x2="307.6" y2="240" style="--d:0s"/>
+<rect class="band-edge" x="253.4" y="227.0" width="54.1" height="26" rx="13.0"/>
+<line class="tick-rep" x1="253.4" y1="224" x2="253.4" y2="212"/>
+<line class="tick-cc" x1="307.6" y1="256" x2="307.6" y2="260"/>
+<g transform="translate(253.4,240)">
+<circle class="halo halo-rep" r="15"/>
+<circle class="mk-rep" r="10.5"/>
+<circle class="mk-spec" cx="-3.2" cy="-3.8" r="2.5"/>
+<circle class="ig ig-rep" r="13" style="--d:-20.394s"/>
 </g>
-<g transform="translate(280.0,216)">
-<circle class="halo halo-cc" r="16"/>
-<circle class="mk-ring-cc" r="7.5"/>
-<circle class="ig ig-cc" r="12.5" style="--d:-20.019s"/>
+<g transform="translate(307.6,240)">
+<circle class="halo halo-cc" r="14"/>
+<circle class="mk-cc" r="9"/>
+<circle class="ig ig-cc" r="12.5" style="--d:-19.630s"/>
 </g>
-<text class="t-date mono c-rep" x="226.0" y="178">2026-05-24</text>
-<text class="t-detail" x="343.0" y="178">running here</text>
-<text class="t-date mono c-cc" x="274.0" y="262">2026-05-28</text>
-<text class="t-detail" x="391.0" y="262">Dynamic Workflows 2.1.154 — the same idea</text>
-<text class="t-name" x="64" y="320">two-way session messaging</text>
-<text class="t-namesub" x="436" y="320">· open, brief, question and retire peers from any session</text>
-<line class="track" x1="64" y1="396" x2="781.0" y2="396"/>
-<line class="track" x1="1147.0" y1="396" x2="1336" y2="396"/>
-<line class="rail" x1="796.0" y1="396" x2="1132.0" y2="396"/>
-<line class="rail-hi" x1="796.0" y1="396" x2="1132.0" y2="396"/>
-<line class="tick-rep" x1="796.0" y1="384" x2="796.0" y2="364"/>
-<line class="tick-cc" x1="1132.0" y1="408" x2="1132.0" y2="427"/>
-<rect class="pill-bg" x="906.0" y="375.0" width="116.1" height="42.0" rx="21.0"/>
-<text class="t-pill" x="926.0" y="405">28</text>
-<text class="t-pill-u" x="963.3" y="405">DAYS</text>
-<g transform="translate(796.0,396)">
-<circle class="halo halo-rep" r="16"/>
-<circle class="mk-rep" r="9.5"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.2"/>
-<circle class="ig ig-rep" r="12.5" style="--d:-12.734s"/>
+<text class="t-s c-rep" x="247.4" y="206">2026-05-24</text>
+<text class="t-s" x="367.4" y="206">running here</text>
+<text class="t-s c-cc" x="301.6" y="274">2026-05-28</text>
+<text class="t-s" x="421.6" y="274">Dynamic Workflows 2.1.154 — the same idea</text>
+<text class="t-lead" x="64" y="336">28</text>
+<text class="t-unit" x="117.2" y="336">DAYS</text>
+<text class="t-name sans" x="187.6" y="336">two-way session messaging</text>
+<line class="track" x1="64" y1="416" x2="873.4" y2="416"/>
+<line class="track" x1="1284.3" y1="416" x2="1336" y2="416"/>
+<rect class="band-glow" x="885.4" y="399.0" width="386.9" height="34" rx="17.0"/>
+<rect class="band" x="889.4" y="403.0" width="378.9" height="26" rx="13.0"/>
+<line class="flow flow-b" x1="889.4" y1="416" x2="1268.3" y2="416" style="--d:0s"/>
+<rect class="band-edge" x="889.4" y="403.0" width="378.9" height="26" rx="13.0"/>
+<line class="tick-rep" x1="889.4" y1="400" x2="889.4" y2="388"/>
+<line class="tick-cc" x1="1268.3" y1="432" x2="1268.3" y2="436"/>
+<g transform="translate(889.4,416)">
+<circle class="halo halo-rep" r="15"/>
+<circle class="mk-rep" r="10.5"/>
+<circle class="mk-spec" cx="-3.2" cy="-3.8" r="2.5"/>
+<circle class="ig ig-rep" r="13" style="--d:-11.415s"/>
 </g>
-<g transform="translate(1132.0,396)">
-<circle class="halo halo-cc" r="16"/>
-<circle class="mk-ring-cc" r="7.5"/>
-<circle class="ig ig-cc" r="12.5" style="--d:-7.991s"/>
+<g transform="translate(1268.3,416)">
+<circle class="halo halo-cc" r="14"/>
+<circle class="mk-cc" r="9"/>
+<circle class="ig ig-cc" r="12.5" style="--d:-6.066s"/>
 </g>
-<text class="t-date mono c-rep" x="790.0" y="358">2026-07-10</text>
-<text class="t-detail" x="907.0" y="358">running here</text>
-<text class="t-date mono c-cc" x="550.8" y="442">2026-08-07</text>
-<text class="t-detail" x="667.8" y="442">Claude Code 2.1.224 — sessions message each other</text>
-<text class="t-kicker" x="64" y="44">HERE FIRST — TWICE</text>
-<text class="t-key" x="64" y="78">Each bar is how long the capability was running here before the Claude Code release that shipped it.</text>
-<circle class="mk-rep" cx="967" cy="38" r="7"/>
-<text class="t-legend" x="980" y="44">running here</text>
-<circle class="mk-ring-cc" cx="1123" cy="38" r="5.5"/>
-<text class="t-legend" x="1136" y="44">shipped in Claude Code</text>
-<rect class="edge" x=".75" y=".75" width="1398.5" height="522.5" rx="16"/>
+<text class="t-s c-rep" x="883.4" y="382">2026-07-10</text>
+<text class="t-s" x="1003.4" y="382">running here</text>
+<text class="t-s c-cc" x="625.1" y="450">2026-08-07</text>
+<text class="t-s" x="745.1" y="450">Claude Code 2.1.224 — sessions message each other</text>
+<text class="t-kick" x="64" y="46">HERE FIRST · TWICE</text>
+<text class="t-s" x="64" y="82">Bar = the days it was running here before the Claude Code release that shipped it.</text>
+<text class="t-s3" x="64" y="552">this repo's own commits · 7-day trailing · peak 1,024/wk</text>
+<circle class="mk-rep" cx="905" cy="40" r="8"/>
+<text class="t-s" x="920" y="46">running here</text>
+<circle class="mk-cc" cx="1083" cy="40" r="6"/>
+<text class="t-s" x="1098" y="46">shipped in Claude Code</text>
+<rect class="edge" x=".75" y=".75" width="1398.5" height="634.5" rx="16"/>
 <path class="edgehi" d="M 17 1.5 H 1383 A 15.5 15.5 0 0 1 1398.5 17"/>
 </svg>
