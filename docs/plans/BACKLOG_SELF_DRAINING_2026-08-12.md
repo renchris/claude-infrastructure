@@ -318,6 +318,28 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-12 10:29Z — W0 IS LIVE, AND THE WEDGE IS BROKEN ON THE LIVE BOX.** The converger advanced
+  (live HEAD `0ffe96995` → `3d4585168d`, lag 14 → 1) and all four markers are present in the deployed
+  files — `cc-dispatch` venue-scoped ceiling, `cloud-return` retire + split `.woken` latch,
+  `autonomy-sweep` band-fitted bound. The dispatcher's own journal, before → after:
+
+  | ts | fired | admitted | deferred |
+  |---|---|---|---|
+  | 10:21:06Z | 0 | 3 | **320** |
+  | 10:24:32Z | 0 | 4 | **320** |
+  | **10:28:03Z** | **2** | 4 | **36** |
+  | 10:29:44Z | 0 | 1 | **0** |
+
+  and its decision rows moved from `live=6 free=0 reason=at-ceiling` to `live=0 free=6 verdict=admit`.
+  **`free_slots` 0 → 6, `deferred` 320 → 0, and it fired.** That is the `🚀 → ✅` transition earned by
+  observation in the enforcing store, not asserted off a git ref.
+
+  ⚠️ **`.retired` markers are still 0** — the release path has not been EXERCISED yet, only deployed;
+  no cloud session has reached the terminal branch since. That is the first thing to confirm once one
+  does, because D3 is the arm that keeps the ceiling self-healing and it is the least proven of the
+  three (its /Users/chrisren/.claude/bin/cc-bats coverage is structural, and the behavioural proof is a live round trip).
+
+
 - **2026-08-12 — plan opened; W0 LANDED (`a984691f6`).** Recon by 5 read-only agents across staleness,
   consolidation, cloud readiness, the capacity bottleneck, and long-horizon execution; every figure
   re-derived against the live store and tree. **The dispatcher was found wedged dead** (`fired:0,
