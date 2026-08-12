@@ -10,7 +10,41 @@
   (launchctl bootstrap) after the C10 review in docs/activation/dispatcher-activate-snippet.md.
   The agent never loads launchd. Kill-switch: `launchctl bootout gui/$UID/com.claude.dispatcher`.
 
-  PAUSED TO DECIDE-ONLY 2026-08-11 (operator directive). CC_DISPATCH_DECIDE_ONLY=on makes every
+  MIGRATED TO CLOUD-ONLY 2026-08-11 (operator directive: "fully migrate cc-backlog from local spawn
+  to cloud spawn"). Three exports, and they are one decision:
+    CC_FIRE_CLOUD=on            lifts handoff-fire's default-off refusal of the off-box venue
+    CC_DISPATCH_VENUE_ONLY=cloud admits ONLY venuePlan=cloud rows; everything else is parked and
+                                COUNTED in the IDL every pass (bin/cc-dispatch 1a1)
+    (DECIDE_ONLY removed)       the pause below is superseded — it stopped cloud spawns too, which
+                                is why the migration needed a venue filter rather than a lift
+  🚨 THE INTERLOCK, AND IT COST A REAL BLEED TO LEARN (2026-08-11). DECIDE_ONLY IS STILL ON, ON
+  PURPOSE, and it must stay on until the DEPLOYED binary honours CC_DISPATCH_VENUE_ONLY. The flip
+  was attempted as a pure config change and it fired 2 LOCAL panes: `~/.claude/bin/cc-dispatch` is a
+  per-file symlink into the shared checkout, which trails origin/main, so the running binary had
+  never heard of the new variable — it read an env var it does not implement, ignored it, saw the
+  pause lifted, and dispatched the local queue. An unknown env var is SILENTLY IGNORED by every
+  shell program; there is no arity error to catch this.
+  THE ORDER IS THEREFORE MECHANICAL, NOT A PREFERENCE:
+    1. land the filter                     2. converge the live layer (scripts/deploy-live.sh)
+    3. PROVE the deployed copy honours it  4. only then remove CC_DISPATCH_DECIDE_ONLY
+  Step 3 is a positive control, not a version check: run one pass with VENUE_ONLY set against a
+  queue that HAS local rows and assert the IDL carries `venue-only=... parked N of M`. Absence of
+  that record is the signature of the bleed above — a filter that is not there looks exactly like a
+  filter with nothing to do (MEMORY.md: deployed-layer-bootstrap-circle, and the cloud pipeline's
+  own defect #2: "a rail must call the siblings it shipped with").
+
+  🚨 THE COST, MEASURED AT THE FLIP AND NOT AN ESTIMATE: 45 cloud / 236 local / 31 unlabelled of 312
+  dispatchable rows, so 267 items — 86% of the queue — will NOT fire while this stands. That is
+  inherent, not a tuning problem: the VM gets a shallow 50-commit clone, no gh, and no ~/.claude, so
+  cc-eligible refuses most work BY MEASUREMENT (ineligible-box 155, spawn-rail 24, branch-banking
+  25, visual 16, deep-history 15, offbox-lane 10). Raising the migrated share means changing what
+  the VM can reach, never loosening the predicate — a wrong answer in a venue nobody can SEE is the
+  anti-goal CLOUD_BACKLOG_PIPELINE.md §5 names.
+  ROLLBACK is a config change, not a code change: CC_DISPATCH_VENUE_ONLY=local restores the old
+  behaviour for the local queue; deleting the export restores both venues.
+
+  SUPERSEDED — PAUSED TO DECIDE-ONLY 2026-08-11 (kept: it is why the venue filter exists).
+  CC_DISPATCH_DECIDE_ONLY=on made every
   pass journal its decisions and take ZERO claims, spawns and pages — cc-dispatch calls this "the
   safe activation lane" at :1326. Two reasons, both measured that day:
     1. CAPACITY. 189 worker panes fired in one day against an operator budget of ~15 concurrent
@@ -56,7 +90,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_DISPATCH_DECIDE_ONLY=on; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; export CC_FIRE_CLOUD=on; export CC_DISPATCH_VENUE_ONLY=cloud; export CC_DISPATCH_DECIDE_ONLY=on; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
     </array>
 
     <key>StartInterval</key>
