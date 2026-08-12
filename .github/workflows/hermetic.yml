@@ -72,7 +72,32 @@ concurrency:
 env:
   # A per-suite bound, not a job bound. An overrun is a CUT — a non-verdict that withholds an
   # acquittal — so this number can never convict anyone's code (scripts/offbox-run.sh § R6).
-  CC_OFFBOX_SUITE_BOUND_S: '120'
+  #
+  # 120 → 300, which is offbox-run.sh's OWN default: this file was overriding a considered default
+  # with a tighter number and recorded no reason for it. MEASURED on run 31570936250, every suite's
+  # wall time from the shard TSVs: the two slowest entries are both AT the bound —
+  # cloud-create-api-env 120s (red) and cc-relogin-poll 120s (cut) — and the next two are
+  # cc-reaper 117s and terminal-bench 113s, i.e. 3s and 7s of headroom. A bound sitting inside the
+  # tail of the distribution it bounds cannot discriminate a hung suite from a slow one; it just
+  # withholds acquittals, and it makes the two suites nearest it coin-flips (terminal-bench was
+  # indeed a non-verdict in run 31557716515 and green in the next). The third-slowest honest suite
+  # is 98s, so 300 clears every measured honest run by 3×.
+  #
+  # THE COST IS BOUNDED BY THE JOB BUDGET, WHICH IS BARELY TOUCHED. Measured per-shard totals in
+  # that run were 216-483s against `timeout-minutes: 60` — the shards spend 6-13% of their budget.
+  # At 300s a single hung suite costs 5 min of 60, so a shard would need eleven of them before the
+  # job dies uploading nothing. That is the failure this bound exists to prevent, and it stays far
+  # out of reach.
+  #
+  # THE SUITE TO WATCH: tests/autonomy-sweep.bats measures 232s on the operator's box, so 300 gives
+  # it only ~1.3× headroom. Do NOT reason about that margin from "CI is slower", which is false in
+  # the regime that matters here. Measured runner-vs-box on the same six suites at run 31570936250:
+  # the SHORT ones run 1.25-1.67× slower on the runner (spawn-lineage 5s/3s, cc-memory-rotate
+  # 10s/7s), but the two LONG ones are at parity or better — cc-reaper 117s runner / 158s box,
+  # terminal-bench 113s / 115s. Fixed per-suite overhead dominates a short suite and disappears in
+  # a long one, so the ratio inverts exactly where a bound is decided. Re-measure before moving
+  # this number again; do not carry either direction forward as an assumption.
+  CC_OFFBOX_SUITE_BOUND_S: '300'
 
 jobs:
   partition:
