@@ -64,7 +64,7 @@ side borrowed the other's vocabulary: **zero shared distinctive terms in either 
      assets/diagrams/vendor-convergence.mmd (`npm run diagrams`). -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/convergence-timeline-dark.svg">
-  <img src="assets/diagrams/convergence-timeline-light.svg" alt="A two-lane timeline, time running left to right, comparing when a capability was running in this repo against when it shipped in Claude Code. The lower lane is Claude Code and spans the whole chart; the upper lane is this repo and does not begin until 2026-03-24, because that is this repo's first commit — Claude Code had already run for 13 months. The axis breaks once, at that first commit: everything left of the break is compressed, everything right of it is drawn at about seven times the scale, and the month gridlines show both densities. On the Claude Code lane: 2025-02-24, Claude Code 0.2.6, the first npm publish; 2025-12-15, Claude Code 2.0.70, in which the status-line context fields first exist; 2026-05-28, Dynamic Workflows 2.1.154; and 2026-08-07, Claude Code 2.1.224, in which sessions can message each other. On this repo's lane: 2026-03-24, the first commit; 2026-05-24, an adversarial-role research team, a share of every wave briefed to attack the rest; 2026-07-10, peer session messaging; and 2026-07-14, the day this repo finally read the status-line fields. Two green arrows run downward from this repo's lane to Claude Code's, each labelled with the lead and drawn to scale: 4 days from the adversarial research team on 2026-05-24 to Dynamic Workflows on 2026-05-28, and 28 days from peer session messaging on 2026-07-10 to Claude Code 2.1.224 on 2026-08-07. One orange arrow runs the other way, upward from Claude Code 2.0.70 on 2025-12-15 across the axis break to 2026-07-14 — seven months in which the status-line fields existed and this repo did not read them. That one is this repo's gap, not Claude Code's.">
+  <img src="assets/diagrams/convergence-timeline-light.svg" alt="Two horizontal tracks on one time axis running from May to August 2026, one per capability. Each track carries a filled green disc on the date the capability was running in this repo, a hollow blue ring on the date of the Claude Code release that shipped it, and a green bar between them — drawn to scale — labelled with the lead in days. The green disc is left of the blue ring on both tracks. The upper track, a research team that attacks its own findings — a share of every wave briefed to refute the rest: running here on 2026-05-24; Dynamic Workflows 2.1.154, the same idea, on 2026-05-28, a lead of 4 days. The lower track, two-way session messaging — open, brief, question and retire peers from any session: running here on 2026-07-10; Claude Code 2.1.224, in which sessions message each other, on 2026-08-07, a lead of 28 days. Each track is dotted before its green disc, where neither side had the capability yet, and dotted again after its blue ring, where both do. A soft column of light crosses the chart from left to right once every 24 seconds, lighting each of the four markers as it passes, in date order.">
 </picture>
 
 <details>
@@ -73,28 +73,17 @@ side borrowed the other's vocabulary: **zero shared distinctive terms in either 
 <!-- mermaid-fence: assets/diagrams/vendor-convergence.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    T0["<b>2025-02-24</b> · Claude Code 0.2.6 ships"]
-    T1["<b>2025-12-15</b> · Claude Code 2.0.70<br/>status-line context fields exist"]
-    T2["<b>2026-03-24</b> · this repo's first commit<br/><i>13 months into Claude Code's life</i>"]
-    T3(["<b>2026-05-24</b> · this repo<br/><b>adversarial-role research team</b><br/>a fraction of every wave briefed to attack it"])
-    T4["<b>2026-05-28</b> · Dynamic Workflows 2.1.154<br/>the same idea — <b>4 days later</b>"]
-    T5(["<b>2026-07-10</b> · this repo<br/><b>peer session messaging</b>"])
-    T6["<b>2026-07-14</b> · this repo finally reads<br/>the 2025-12 status-line fields<br/><i>7 months late — our gap, not theirs</i>"]
-    T7["<b>2026-08-07</b> · Claude Code 2.1.224<br/>sessions can message each other<br/><b>28 days later</b>"]
-    T0 --> T1 --> T2 --> T3
-    T3 -->|"4 days"| T4
-    T4 --> T5
-    T5 -->|"28 days"| T7
-    T5 --> T6
-    T6 --> T7
+    A(["<b>2026-05-24</b> · this repo<br/><b>a research team that attacks its own findings</b><br/>a share of every wave briefed to refute the rest"])
+    B["<b>2026-05-28</b> · Claude Code<br/>Dynamic Workflows 2.1.154<br/>the same idea, independently"]
+    C(["<b>2026-07-10</b> · this repo<br/><b>two-way session messaging</b><br/>open, brief, question and retire peers"])
+    D["<b>2026-08-07</b> · Claude Code 2.1.224<br/>sessions message each other"]
+    A -->|"4 days later"| B
+    B --> C
+    C -->|"28 days later"| D
     classDef cc fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
     classDef win fill:#12261a,stroke:#3fb950,color:#e6edf3
-    classDef late fill:#2b1618,stroke:#f85149,color:#e6edf3
-    classDef base fill:#161b22,stroke:#6e7681,color:#e6edf3
-    class T0,T2 base
-    class T1,T4,T7 cc
-    class T3,T5 win
-    class T6 late
+    class B,D cc
+    class A,C win
 ```
 
 <sup><a href="assets/diagrams/vendor-convergence-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/vendor-convergence-light.svg?raw=true">light</a> · <a href="assets/diagrams/vendor-convergence.mmd">source</a></sup>

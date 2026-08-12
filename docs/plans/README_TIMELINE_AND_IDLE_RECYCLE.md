@@ -220,3 +220,28 @@ suspects is the binding one, and either the fix or a named blocker. Report to
   `waiting-recycle.sh` rather than this carrier: arm state is partitioned per account while the
   router picks the account; `disarm` has no TTL and no visibility; `cc-roles/desk` is absent, leaving
   two mechanisms keyed on a deleted file. Each is a migration with its own blast radius.
+
+- **2026-08-12 — Track A, v2: the banner rebuilt ground-up, and one of its facts was wrong.**
+  Operator verdict on the landed v1 (`822592338`): *"very unclear, disorganized, AI slop"*, plus a
+  ruling that the asset exists to state what ran here FIRST — so the orange "7 months late — our
+  gap, not theirs" arm does not belong on it whatever its sign. v2 is two full-width tracks on one
+  linear May–August axis, one per capability: green disc where it was running here, blue ring at the
+  Claude Code release, the span between them to scale with the lead in a pill on it. Dropping the
+  self-diminishing content is what removed the axis break — 529 days became 106, so the single
+  linear axis fits and the 4-day lead is a 48 px bar instead of v1's 26 px smudge. Design argument,
+  in full, in the `tools/timeline/gen.py` docstring; v1's four legs are preserved there with the
+  reason each was kept or dropped.
+
+  **The fact that did not survive, recorded because it cost the session an hour and a rebuild.** The
+  operator's framing was that the status-line context row is a POSITIVE — the need identified here
+  before the field existed, then adopted immediately — and a three-track v2 was built on it. It is
+  refuted by primary sources: `context_window.{used_percentage,remaining_percentage}` shipped in
+  `2.1.6`, npm **2026-01-13**, which is THREE DAYS BEFORE the 2026-01-16 comment on Claude Code
+  issue #12520; the fields that comment actually proposes (`conversation_output_tokens`,
+  `effective_remaining_percentage`) have NEVER shipped and #12520 is still open; and
+  `context_window_size` appears in no CHANGELOG entry at all — "CC >=2.1.207" in `1b8d671b1` is an
+  observation about a payload that got read as a release note. So the row is a LAG, exactly as
+  `docs/research/vendor-convergence-2026-08-07.md` §1 already measured, and it is off the chart on
+  SCOPE, not because omitting it flatters us. **Two wrong intermediate readings were tried first,
+  both from dating the vendor's side off this repo's own prose** — a `statusline.sh` header comment,
+  then a commit message. Date both sides from a primary source or do not draw the row.
