@@ -58,10 +58,10 @@ own worktree · acct 3" data-shape="rectangle">
   <text x="138.18300000000002" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="138.18300000000002" dy="-3.9000000000000012">session C</tspan><tspan x="138.18300000000002" dy="16.900000000000002">own worktree · acct 3</tspan></text>
 </g>
 <g class="node" data-id="Lock" data-label="land-lock
-held 5-15s:
+held p50 3s (p90 5s):
 the CAS push window only" data-shape="diamond">
   <polygon points="472.477,40.14300000000003 581.034,148.70000000000002 472.477,257.257 363.91999999999996,148.70000000000002" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="472.477" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="472.477" dy="-12.350000000000001">land-lock</tspan><tspan x="472.477" dy="16.900000000000002">held 5-15s:</tspan><tspan x="472.477" dy="16.900000000000002">the CAS push window only</tspan></text>
+  <text x="472.477" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="472.477" dy="-12.350000000000001">land-lock</tspan><tspan x="472.477" dy="16.900000000000002">held p50 3s (p90 5s):</tspan><tspan x="472.477" dy="16.900000000000002">the CAS push window only</tspan></text>
 </g>
 <g class="node" data-id="Push" data-label="push → verify by CONTENT,
 not commit count" data-shape="rectangle">
