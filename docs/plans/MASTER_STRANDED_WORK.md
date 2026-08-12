@@ -226,14 +226,30 @@ trunk deliberately rewrote, or it will re-learn this the same way.
 
 Branches, all committed; verify each BY CONTENT on `origin/main`, then close the row named:
 
-| Branch | Row | State |
+**RESOLVED as of the recycle** — this table is kept because the *shape* of the seam is the reusable
+part, but every row below is settled except the last two:
+
+| Branch | Row | Final state |
 |---|---|---|
-| `w4/cc-cloud-trunk-refusal` | `55065a61b31c` | landing; 26/26 green, D1/D3 red-proved against trunk's `bin/cc-cloud` |
-| `w4/keepalive-vendor` | `6ab41e312a13` | committed, **suite unrun** — queued behind cc-bats admission |
-| `w4/s3-content-oracle` | S3 / wave row | landed once; **must re-land** with the supersession fix above |
-| `w4/s3-sweep-fix` | `fd517a5863cc`, `634ecdccbc55` | 0 commits at the seam — check it is not wedged |
-| `w4/s5-rbw-shim` | `475a87e801bf` | committed, not landed |
-| `w4/s5-gc-franchise` | `6cab0ab3cb2f` | 8 commits, rebase + land pending; 2 operator steps stay operator's |
+| `w4/cc-cloud-trunk-refusal` | `55065a61b31c` | ✅ **landed + closed**, 26/26, D1/D3 red-proved |
+| `w4/keepalive-vendor` | `6ab41e312a13` | ✅ landed — **row still OPEN on purpose**, see below |
+| `w4/s3-content-oracle` | S3 / wave row | ✅ landed, then **re-landed by the lead** with the supersession fix |
+| `w4/s3-sweep-fix` | `fd517a5863cc`, `634ecdccbc55` | ❌ produced nothing; teammate stood down. Triage above is the lead's own |
+| `w4/s5-rbw-shim` | `475a87e801bf` | ✅ **landed + closed** (`b6ac4f6ed`), 31/31 standalone |
+| `w4/s5-gc-franchise` | `6cab0ab3cb2f` | ⏳ **untouched at `48850a3b2`** — teammate never rebased; 8 commits still stranded |
+
+🚨 **`6ab41e312a13` is landed but NOT closed, and that is the point.** `bin/reso-keepalive` and its
+suite are on trunk, but **`tests/reso-keepalive.bats` has never actually run.** The land's smoke
+phase GATE-KILLED it — `exit 124`, `ZERO 'not ok'`, printed as *"It is NOT a red and NOT evidence
+about your tree"* — and the land proceeded anyway, which is correct behaviour and exactly why **a
+green land is not a green suite**. Standalone runs were deferred for 25+ minutes at load 22. Run
+`bats tests/reso-keepalive.bats` and close the row on THAT, never on the land log.
+
+**Three of four teammates produced nothing** and were stood down with structured `shutdown_request`s
+after ~40–90 min of clean worktrees and no replies. The one that delivered (`s5-rbw-shim`) delivered
+superbly — and still had to have its land taken over. **Read that as a sizing lesson, not a staffing
+one:** on a box that admits two concurrent bats roots, a five-agent wave cannot verify itself, and
+every extra agent lengthens the queue its siblings are already stuck in.
 
 `w4/keepalive-vendor` carries an **unrun suite** and says so in its commit body. Do not close
 `6ab41e312a13` until `tests/reso-keepalive.bats` has actually run — a commit body is a claim, not a
@@ -341,3 +357,20 @@ landed fix with a red-proved test, so the population stops growing.
   artifact was later removed deliberately by `e9be66ebe`). **Remaining 23 rows are NOT re-land
   rows** — they are distinct engineering items the semantic grouping joined to this condition, so
   the effort's second half is ordinary work, not a sweep.
+- **2026-08-12 — W4 drain session, part 2: S3 + part of S5, then RECYCLED (not finished).** Live
+  members **50 → 15**. Landed and content-verified this session, beyond the S1/S2 work above:
+  `12343c527` (recycle's ROW-CHANGE arm read a transcript path Claude Code never writes — dead in
+  production while passing its own suite, because every case fixtured the layout the bug assumed) ·
+  `c4df09dd5` (`/compact-memory`'s orphan sweep called every residual file an orphan on any project
+  missing an E3 path; environment-dependent, which is why it survived) · the cc-cloud trunk refusal
+  (`55065a61b31c`) · `8eddb12bf` (`bin/reso-keepalive`, the half of `410f920c` that never landed —
+  its untracked copy had rotted into a nudger aimed at twelve worktrees that no longer exist) ·
+  `scripts/land-content-verify.sh` + the `ship-land.sh:845` falsifier, then its supersession fix ·
+  `b6ac4f6ed` (the read-before-write parity shim, untracked since Aug 5).
+  **The two findings that outlive the rows:** (1) the guard the shim restores is OFF in **16 of 16**
+  account × model-bucket cells — proven live by overwriting an unread file successfully, where both
+  prior sources claimed one bucket or one account; it is landed but INERT until wired, filed as
+  operator step `504d0bc2fe50`. (2) The S3 falsifier's coverage is **14 of 23**, measured by auditing
+  this session's own closes with it — see § S3 acceptance. **Recycled rather than finished**: 15 rows
+  remain, all triaged above, and the box (cc-bats deferring at load 22) not context was the binding
+  constraint for the last hour.
