@@ -239,6 +239,58 @@ Branches, all committed; verify each BY CONTENT on `origin/main`, then close the
 `6ab41e312a13` until `tests/reso-keepalive.bats` has actually run — a commit body is a claim, not a
 verdict, and this whole effort exists because a claim was mistaken for one.
 
+### Verified triage for the rows this session did not finish
+
+Measured on trunk 2026-08-12, so the next agent starts from facts rather than re-deriving them. Each
+is agent work; none is operator-gated.
+
+**`634ecdccbc55` — `scripts/stranded-sweep.sh` exonerates the land gate.** Two independent defects,
+both confirmed:
+
+- **The swallowed `git cherry` (lines ~130-132).** The per-branch loop is fed by
+  `done <<EOF\n$(git cherry "$REMOTE_TRUNK" "$branch" 2>/dev/null)\nEOF`. The rc is discarded and
+  stderr suppressed, so an instrument failure — unborn ref, no merge base, corrupt ref — makes the
+  loop read EMPTY and the branch is certified CLEAN. A failure of the instrument is reported as a
+  clean verdict about the subject. Worse, **`git cherry` is the wrong oracle here at all**: measured
+  over this very population it was wrong in BOTH directions (cleared 3 refs still holding residue,
+  convicted `0a131da73` whose every path was blob-identical). Keep it as a cheap pre-filter; take
+  the verdict from `scripts/land-content-verify.sh`, which now exists and handles supersession.
+- **`--mine` keys on a trailer nothing writes.** `mine_match()` matches a `Session-Id` or
+  `Land-Session` git trailer. **Measured: 0 of the last 500 commits on `origin/main` carry either.**
+  `ship-land.sh:121` is a comment *claiming* commits carry `Session-Id`; nothing in the tree writes
+  one. So `--mine` can only ever report 0 — the sweep's one damping mechanism is dead on arrival,
+  which is why the undamped verdict is all anyone sees. **The identity that DOES exist** is the
+  failed-land ref the filer already writes, `refs/land/failed/<utcstamp>-<sid>-<branch>`
+  (`ship-land.sh:806-812`): a sha is MINE if a `refs/land/failed/*-<MINE>-*` ref reaches it.
+
+**`fd517a5863cc` — the sweep's `review` verdict fires on 955/989 lands.** An alarm at 97% carries
+almost no bits; this session watched it fire on its own land over 69 peer commits across 675
+branches, none of them the lander's. It is the same defect as the row above seen from the other end:
+the damping arm (`--mine`) is dead, so everything falls through to the undamped wall. **Fix them
+together** — a working `--mine` is most of the damping, and the residual un-`--mine` verdict should
+degrade to a count rather than a per-commit wall with recovery recipes for peer WIP the sweep's own
+text tells the reader never to cherry-pick.
+
+**`ed6d0716caa7` — L1 death-watch has no watch-file producer.** Premise fully corroborated: every
+reference to `lead-deathwatch.sh --watch` in the tree is a SPECIFICATION, never a writer —
+`migrations/0004-lead-deathwatch-l1-activation.sh` (staged, step 2 BLOCKED),
+`docs/NEVER-WAIT-ACTIVATION.md` (a template "you adapt + install"), and two 2026-07-18 audit rows.
+Nothing writes a file in `lead-deathwatch.sh:31`'s format (`pid⇥start⇥label⇥waiter⇥worktree`);
+`~/.claude/deathwatch` holds only fixtures the 2026-07-15 `--selftest` left behind. This is the
+`spec-named-mechanism-may-be-prose-only` class. **The split:** *(a) agent* — derive the watch-file
+from the P8 registry (`~/.claude/cc-registry/*.json`) on a refresh cadence, plus a suite; *(b)
+operator* — the launchd load. 🚨 **Do not invert that order.** Migration 0004's own header says why:
+a launchd job installed today arms kqueue on an EMPTY watch-list forever and reports a perfectly
+healthy heartbeat while watching nothing — a watcher whose liveness proves nothing about its
+coverage, which is the exact failure L1-e exists to prevent, reintroduced one level up.
+**Completeness of the DETECTOR is not the same claim as COVERAGE of the fleet**, and
+`scripts/wait-safety-gate.sh` being GREEN only asserts the first.
+
+⚠️ **`cc-backlog add --condition <slug>` cannot file a NEW row into an existing group** — the flag
+re-keys the id to `project+condition`, so `add` returns the group row's id early and the title is
+discarded. That is why this triage is in the plan and not in three new rows. File with `add` first,
+then `link --condition`.
+
 ## Definition of done
 Every member row is either closed against a content-verified land or carries a named reason it
 cannot be landed. `git ls-tree origin/main` proves each claim. The exit-5/6/143 generator has a
