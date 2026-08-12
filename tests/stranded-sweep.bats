@@ -123,3 +123,60 @@ seed_two_owned_strands() {
   echo "$output" | grep -q "fileB.txt"
   ! echo "$output" | grep -q "fileA.txt"
 }
+
+# --- the ORACLE: `git cherry` enumerates, the per-path content check decides ------------
+# Backlog 634ecdccbc55(a). Both cases below PASS-as-clean against the pre-fix script:
+# it read only `+` lines out of a `$(git cherry ... 2>/dev/null)` heredoc, so both a
+# cherry FAILURE and a cherry `-` verdict reached the loop as "nothing to look at".
+
+@test "instrument failure: unreadable branch is a NON-VERDICT, never counted clean" {
+  # A ref pointing at a missing object is listed by for-each-ref but makes `git cherry`
+  # exit 128 with EMPTY stdout — pre-fix, that branch was silently certified CLEAN.
+  printf '%s\n' 0000000000000000000000000000000000000001 > .git/refs/heads/brokenref
+
+  run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "NO VERDICT"
+  echo "$output" | grep -q "brokenref"          # names the branch it could not read
+  # …and never renders the clean certificate. The non-verdict deliberately reuses the
+  # words "0 stranded" (0 of the READABLE branches were), so the discriminator is the ✓.
+  ! echo "$output" | grep -q "✓ stranded-sweep" || false
+}
+
+@test "instrument failure: POSITIVE CONTROL — a healthy branch in the SAME run still gets a real verdict" {
+  # Guards the other direction: the new non-verdict arm must not swallow every branch.
+  git checkout -q -b feat
+  echo hi > newfile.txt; git add newfile.txt; git commit -q -m "add newfile"
+  sha="$(git rev-parse --short HEAD)"
+  git checkout -q main
+  printf '%s\n' 0000000000000000000000000000000000000001 > .git/refs/heads/brokenref
+
+  run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "NO VERDICT"         # the unreadable branch is reported...
+  echo "$output" | grep -q "brokenref"
+  echo "$output" | grep -q "$sha"               # ...and the readable one is still judged
+  echo "$output" | grep -q "newfile.txt"
+}
+
+@test "cherry '-' is not landedness: patch-equivalent commit whose content is absent → flagged" {
+  # Trunk lands the same patch (→ `git cherry` marks the branch commit `-`), then a later
+  # trunk commit removes the file. Content is NOT on the trunk tree; cherry says landed.
+  git checkout -q -b feat
+  echo zzz > fileZ.txt; git add fileZ.txt; git commit -q -m "branch adds fileZ"
+  sha="$(git rev-parse --short HEAD)"
+
+  git checkout -q main
+  echo zzz > fileZ.txt; git add fileZ.txt; git commit -q -m "trunk lands the same patch"
+  git rm -q fileZ.txt; git commit -q -m "trunk later removes fileZ"
+  git push -q origin main
+
+  run git cherry origin/main feat
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '^- '                # the premise: cherry's own verdict is "landed"
+
+  run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "$sha"
+  echo "$output" | grep -q "fileZ.txt"
+}
