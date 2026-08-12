@@ -541,7 +541,14 @@ setup() {
 @test "D1 declare REFUSES the remote's default branch — trunk cannot be a per-session heartbeat" {
   have_subject
   local r; r="$(bare trunkref)"
-  push_ref "$r" main                                  # HEAD of a bare repo follows its first branch
+  push_ref "$r" main
+  # SET HEAD EXPLICITLY. A bare repo's HEAD does NOT follow the first branch pushed into it —
+  # measured on this box, `git init --bare` leaves HEAD at refs/heads/master and pushing `main`
+  # does not move it. The first cut of these cases assumed otherwise, so D1 and D3 failed against a
+  # CORRECT guard: the fixture had never made `main` the default at all. Worth keeping as a fact
+  # about the subject too — with HEAD dangling, `ls-remote --symref` prints NOTHING, so the guard
+  # resolves no default and abstains, which is the same fail-open D4 pins by another route.
+  git -C "$r" symbolic-ref HEAD refs/heads/main
   run cloud declare --id trunkdecl --branch main --remote "$r" --repo ""
   [ "$status" -eq 2 ]
   [ ! -f "$CC_CLOUD_STATE/trunkdecl.decl" ] || { echo "REFUSED but still wrote a declaration"; false; }
@@ -565,6 +572,7 @@ setup() {
   have_subject
   local r; r="$(bare oddhead)"
   push_ref "$r" release
+  git -C "$r" symbolic-ref HEAD refs/heads/release      # see D1 on why this is explicit
   run cloud declare --id odddecl --branch release --remote "$r" --repo ""
   [ "$status" -eq 2 ]
   echo "$output" | grep -q "default branch of remote" || { echo "did not refuse a non-'main' default: $output"; false; }
