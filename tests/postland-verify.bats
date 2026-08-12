@@ -141,6 +141,11 @@
 # unspecified by the contract, so it is deliberately NOT asserted.
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SUT="${CC_POSTLAND_BIN:-$REPO/scripts/postland-verify.sh}"
   [ -f "$SUT" ] || skip "postland-verify.sh not present in this worktree"

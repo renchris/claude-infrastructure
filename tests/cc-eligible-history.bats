@@ -29,6 +29,11 @@
 # behaviour this change had to PRESERVE.
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   # Fixture $HOME FIRST — the subject resolves both its store (~/.claude/autonomy/backlog.jsonl)
   # AND its repo ($HOME/Development/<project>) under it, so an unfixtured HOME would classify the
   # operator's real 5,700-record ledger against the operator's real checkouts.

@@ -15,6 +15,12 @@
 #
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S] [--condition SLUG]  → echoes the id
+#                                                                  An EXPLICIT --project is checked
+#                                                                  against scripts/dispatch-projects
+#                                                                  .conf and WARNS (stderr, rc 0,
+#                                                                  item still filed) when the label
+#                                                                  is not in the dispatch set — see
+#                                                                  EXPLICIT --project VALIDATION.
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid> [--venue local|cloud] [--force]      → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
@@ -1052,6 +1058,142 @@ project_default() {
   printf '%s' "$d"
 }
 
+# ── EXPLICIT --project VALIDATION (2026-08-12, backlog df2b6a40a5dc) ───────────────────────────
+# project_default() above refuses a label that names no project — but ONLY on the path where
+# --project is ABSENT. An EXPLICIT --project reaches the store having passed through none of those
+# normalizations, so the hardening that fixed "/" and "wt-closeout" is STRUCTURALLY BLIND to a
+# hand-typed one (memory: default-path-hardening-is-blind-to-the-explicit-argument).
+#
+# Live instance: `cc-backlog add --project reso` (source wave7-close-2026-08-07). ~/Development/reso
+# does not exist; the real project is reso-management-app. Nothing could see it — `reso` is a
+# plausible name, not a path, not empty, so project_default's refusals do not apply and
+# cc-dispatch's own label validator (which rejects paths) passes it too. Its one item — 333aed941b6b,
+# a live OrderBar clipping defect — was journalled {verdict:"skip", reason:"project-not-dispatched"}
+# on EVERY pass from 2026-08-07T09:07Z until a human migrated it by hand. The ONE artifact that knows
+# the label names nothing is scripts/dispatch-projects.conf, the SSOT of the dispatch set, so that is
+# what an explicit label is checked against — HERE, at the chokepoint every item passes through,
+# rather than at the dispatcher, which can only report the miss forever after the fact.
+#
+# WARN, NEVER REFUSE. Three reasons, each independently sufficient:
+#   (a) A GENUINELY NEW PROJECT MUST STAY FILEABLE. Its conf row is a separate, later decision; a
+#       store that refuses to record work until its dispatcher is wired loses the work instead.
+#   (b) THE LEDGER IS SHARED. A hard refusal would turn a foreign author's gate red over a row THIS
+#       repo's conf does not list — the same reason the dispatcher's uncovered-project report is
+#       deliberately not a blocking lint (see NOT LISTED = NOT DRAINED, LOUDLY in that conf, and
+#       memory: whole-tree-lint-is-a-fleet-wide-hard-stop).
+#   (c) THE CALLER CONTRACT IS UNCHANGED. The warning is stderr, the id is still stdout at rc 0, so
+#       every `id=$(cc-backlog add …)` — cc-discover, autonomy-sweep, deploy-live, needs — is
+#       byte-identical.
+# The default path (no --project) is deliberately NOT warned here: it resolves to a real checkout's
+# basename and project_default already refuses the degenerate cases. Whether a real-but-undeclared
+# checkout should warn too is a separate call, not this item's.
+
+# dispatch_conf → the path of the dispatch-set SSOT, same env knob and same resolution as
+# bin/cc-dispatch. $0's SYMLINK is resolved first because production invokes this as
+# $HOME/.claude/bin/cc-backlog: a dirname($0)-relative read would look in ~/.claude/scripts/, where
+# a file is per-file-symlinked and a NEW one is absent until the converger runs (memory:
+# deploy-lag-checkout-behind-origin) — i.e. the validator would silently validate nothing.
+dispatch_conf() {
+  local s="$0" l
+  while [ -L "$s" ]; do
+    l="$(readlink "$s" 2>/dev/null)" || break
+    case "$l" in /*) s="$l" ;; *) s="$(dirname "$s")/$l" ;; esac
+  done
+  printf '%s' "${CC_DISPATCH_PROJECTS_CONF:-$(cd "$(dirname "$s")/.." 2>/dev/null && pwd)/scripts/dispatch-projects.conf}"
+}
+
+# conf_verb_value <project> <verb> <conf> → the value declared for `<project> <verb>=<value>`, ""
+# when that project has no such row. Inline rather than sourced from a shared lib ON PURPOSE: a new
+# lib file is absent from the deployed symlink tree until convergence, so sourcing one would make
+# this path a hard error live on the day it landed (memory:
+# shared-lib-source-ladder-collapses-when-deployed). Same three normalizations as cc-dispatch's
+# conf_repo — leading key stripped, inline `# comment` stripped, trailing space trimmed — and an
+# EMPTY value is not a declaration, exactly as there.
+conf_verb_value() {
+  [ -r "$3" ] || return 0
+  awk -v p="$1" -v verb="$2" '
+    /^[[:space:]]*(#|$)/ { next }
+    $1 == p { rest=$0; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", rest)
+              if (rest !~ "^" verb "=") next
+              sub("^" verb "=", "", rest); sub(/[[:space:]]+#.*$/, "", rest)
+              sub(/[[:space:]]+$/, "", rest)
+              if (rest != "") { print rest; exit } }
+  ' "$3" 2>/dev/null || true
+}
+
+# conf_dispatchable <conf> → every project declared `repo=`, one per line. The dispatch set as
+# cc-dispatch computes it, minus the CC_DISPATCH_PROJECT union the caller below adds back.
+conf_dispatchable() {
+  [ -r "$1" ] || return 0
+  awk '
+    /^[[:space:]]*(#|$)/ { next }
+    { key=$1; rest=$0; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", rest)
+      if (rest !~ /^repo=/) next
+      sub(/^repo=/, "", rest); sub(/[[:space:]]+#.*$/, "", rest); sub(/[[:space:]]+$/, "", rest)
+      if (rest != "") print key }
+  ' "$1" 2>/dev/null || true
+}
+
+# project_dispatch_warn <project> — stderr only, never a status. Silent when it cannot know: no
+# readable conf validates NOTHING and says nothing (the dispatcher degrades the same way — narrower
+# coverage, never a louder guess), and CC_BACKLOG_PROJECT_WARN=off is the opt-out for a caller that
+# files into a fixture ledger.
+project_dispatch_warn() {
+  local p="$1" conf reason near="" hit=0 c
+  [ -n "$p" ] || return 0
+  [ "${CC_BACKLOG_PROJECT_WARN:-on}" = off ] && return 0
+  conf="$(dispatch_conf)"
+  [ -r "$conf" ] || return 0
+
+  # The pinned project is unioned in unconditionally, exactly as cc-dispatch unions it (and
+  # list-tolerant in the same way), so a box whose plist pins a project its conf has not caught up
+  # with can never be warned about a label that WILL drain.
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    [ "$c" = "$p" ] && hit=1
+  done <<EOF
+$(printf '%s' "${CC_DISPATCH_PROJECT:-}" | tr ',' '\n' | tr ' ' '\n')
+$(conf_dispatchable "$conf")
+EOF
+  [ "$hit" -eq 1 ] && return 0
+
+  # NEAREST DISPATCHABLE LABEL. Prefix containment in either direction, which is the shape an alias
+  # actually takes — `reso` ⊂ `reso-management-app` is the live instance, and it is the difference
+  # between "this label is unknown" and "you meant the repo two rows down". Suggested ONLY from the
+  # dispatchable set: proposing a `skip=` row would be advice to file into another dead label.
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    case "$c" in "$p"*) near="${near:+$near, }$c"; continue ;; esac
+    case "$p" in "$c"*) near="${near:+$near, }$c" ;; esac
+  done <<EOF
+$(conf_dispatchable "$conf")
+EOF
+
+  reason="$(conf_verb_value "$p" skip "$conf")"
+  { if [ -n "$reason" ]; then
+      printf 'cc-backlog add: WARNING — project "%s" is declared NOT DISPATCHED: %s\n' "$p" "$reason"
+    else
+      printf 'cc-backlog add: WARNING — project "%s" is not in the dispatch set.\n' "$p"
+    fi
+    printf '  The item IS filed, but no worker can reach it: every cc-dispatch pass journals it\n'
+    printf '  {verdict:"skip", reason:"project-not-dispatched"} until the label names a real project.\n'
+    [ -n "$near" ] && printf '  Did you mean: %s\n' "$near"
+    # A `skip=` row already EXISTS, so telling its author to add one would be advice they cannot
+    # follow (two rows for one project is what the conf's own header refuses). Promotion is the
+    # documented move there; a declaration is the move for a label the conf has never heard of.
+    if [ -n "$reason" ]; then
+      printf '  If it should drain now, promote its row in %s: skip= → repo=<path>.\n' "$conf"
+    else
+      printf '  Declare it in %s:  %s  repo=~/Development/%s\n' "$conf" "$p" "$p"
+    fi
+    [ -n "$near" ] && {
+      printf '  If this label is an ALIAS, MIGRATE the item to the real one — never close it. A wrong\n'
+      printf '  label is a mislabel, not a retraction of a real report (see 333aed941b6b → 0c9d92ba9a0a).\n'
+    }
+  } >&2
+  return 0
+}
+
 cmd_add() {
   local project="" title="" dod="" source="" condition="" falsifier=""
   while [ $# -gt 0 ]; do
@@ -1088,6 +1230,12 @@ cmd_add() {
   if [ -z "$project" ]; then
     project="$(project_default)" \
       || { echo "cc-backlog add: cannot resolve a project from $(pwd) — pass --project <name>" >&2; return 2; }
+  else
+    # EXPLICIT label → validate it against the dispatch set (see the block above project_default's
+    # neighbours). Warn-only, and BEFORE the idempotent-id early return: a re-file of an item that
+    # was already minted under a dead label is exactly as undrainable as the first one, so the
+    # warning must not be conditional on this call being the one that writes.
+    project_dispatch_warn "$project"
   fi
   ensure_file
   local id

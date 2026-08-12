@@ -6,6 +6,11 @@
 # cc-wave-plan (unbuilt; T-P7-6) + the spawn bin + the pages dir are stubbed via the env seams.
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DISP="$REPO/bin/cc-dispatch"
   BACKLOG="$REPO/bin/cc-backlog"

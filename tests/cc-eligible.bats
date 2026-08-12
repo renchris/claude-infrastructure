@@ -23,6 +23,11 @@
 # bats and would be a DEAD assertion that can never fail.
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   # Fixture $HOME FIRST (the test-hermeticity ratchet's rule 1): the subject's default store
   # resolves under ~/.claude/autonomy/backlog.jsonl, which is the operator's 5,759 real records.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
