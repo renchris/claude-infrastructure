@@ -26,11 +26,12 @@
 #     (a real own-drop to recover); exit 0 = no own-session drop. This turns the REVIEW
 #     into a machine-decidable pass/fail (T-P9-4 — the auto-land crux).
 #
-# OWNERSHIP TRAILER CONVENTION: a session's commits should carry a
-# `Session-Id: <CLAUDE_CODE_SESSION_ID>` trailer (`Land-Session:` is also accepted) so
-# `--mine` can attribute a drop. ship-land.sh stamps land.log with the sid and adds
-# this trailer to any commit IT makes; sessions add it per the commit convention. A
-# post-hoc trailer on already-made commits is impossible, hence the land.log sid too.
+# OWNERSHIP: `--mine <sid>` attributes a drop from the LAND ANCHORS ship-land already
+# writes — a `refs/land/failed/*-<sid>-*` ref (a land that failed) or a land.log row's
+# `head` for that sid (a land that succeeded). A commit is ours iff an anchor reaches it.
+# The `Session-Id:`/`Land-Session:` commit trailer this script was originally built on is
+# written by NOTHING (0 of the last 500 trunk commits carry one); it is kept only as a
+# last arm. See the block above mine_match for the measurement and the failure it caused.
 #
 # Exit 1 if any (own, under --mine) stranded found (lists all first), OR if any branch was
 # UNREADABLE (a non-verdict is not a pass); else exit 0. Exit 1 is advisory in every mode:
@@ -60,10 +61,62 @@ git fetch -q origin "${TRUNK}" 2>/dev/null || true
 
 REMOTE_TRUNK="origin/${TRUNK}"
 
-# is-this-commit-mine — true iff it carries our ownership trailer (Session-Id or
-# Land-Session == MINE). git parses trailers structurally; exact whole-line match.
-mine_match() {  # $1=sha
+# --- OWNERSHIP: which stranded commits are MINE -------------------------------------
+# Keyed on identity that EXISTS. `--mine` used to key solely on a `Session-Id:` /
+# `Land-Session:` git trailer that NOTHING in this repo writes — measured 2026-08-12, 0 of
+# the last 500 commits on origin/main carry either, and ship-land.sh:121 is a comment
+# describing a convention that was never built. So `--mine` could only ever report 0: the
+# sweep's one damping mechanism was dead on arrival. The trailer survives as the LAST arm
+# (one git call, and it starts working the day something writes it), but nothing depends
+# on it now.
+#
+# The two anchors ship-land really does write both name a COMMIT this session tried to put
+# on the trunk. A stranded sha is ours iff an anchor REACHES it:
+#
+#   1. refs/land/failed/<utcstamp>-<sid>-<branch>  (ship-land.sh:806-812) — the pinned head
+#      of a land that FAILED. 93 such refs exist in this repo today.
+#   2. land.log rows carrying our `sid`, via their `head` field (ship-land.sh attest_land)
+#      — the head of a land that SUCCEEDED. This arm is the one that covers the incident
+#      the whole script exists for: on 2026-07-11 the land succeeded and a SIBLING's
+#      rebase dropped dfacccd out of the trunk afterwards. No failed-land ref exists in
+#      that story, so anchor 1 alone would be blind to exactly the case being detected.
+#
+# Over-attribution direction: a commit a peer authored but that sits in the history we
+# landed reads as ours. That is the safe direction — it shows the owner one extra commit
+# to REVIEW, where the alternative (the trailer) showed them nothing, ever.
+MINE_ANCHORS=""
+if [[ -n "${MINE}" ]]; then
+  # ship-land builds the ref name through `tr -c 'A-Za-z0-9._-' '-'` over the WHOLE name,
+  # so the sid must be sanitised identically or a legal sid could not match its own ref.
+  mine_key="$(printf '%s' "${MINE}" | tr -c 'A-Za-z0-9._-' '-')"
+  mine_raw="$(git for-each-ref --format='%(objectname)' "refs/land/failed/*-${mine_key}-*" 2>/dev/null)"
+  land_log="${LAND_LOG:-${HOME}/.claude/land.log}"
+  if [[ -r "${land_log}" ]]; then
+    # Bounded read: a drop older than 5000 land rows is not the "recover it now" case.
+    mine_raw="${mine_raw}
+$(tail -n 5000 "${land_log}" 2>/dev/null | grep -F "\"sid\":\"${MINE}\"" \
+    | sed -n 's/.*"head":"\([0-9a-f][0-9a-f]*\)".*/\1/p')"
+  fi
+  # Keep only anchors this repo actually holds — an unknown sha would cost one fork per
+  # candidate commit and answer nothing (land.log is global; its rows span repos).
+  while IFS= read -r anchor; do
+    [[ -z "${anchor}" ]] && continue
+    git cat-file -e "${anchor}^{commit}" 2>/dev/null && MINE_ANCHORS="${MINE_ANCHORS}${anchor}
+"
+  done <<EOF
+$(printf '%s' "${mine_raw}" | sort -u)
+EOF
+fi
+
+mine_match() {  # $1=sha — an own-session land anchor reaches it, else the legacy trailer
   [[ -z "${MINE}" ]] && return 1
+  local anchor
+  while IFS= read -r anchor; do
+    [[ -z "${anchor}" ]] && continue
+    git merge-base --is-ancestor "$1" "${anchor}" 2>/dev/null && return 0
+  done <<EOF
+${MINE_ANCHORS}
+EOF
   git show -s --format='%(trailers:key=Session-Id,valueonly,separator=%x0A)%x0A%(trailers:key=Land-Session,valueonly,separator=%x0A)' "$1" 2>/dev/null \
     | grep -qxF "${MINE}"
 }

@@ -19,6 +19,11 @@ setup() {
   git add base.txt
   git commit -q -m "base"
   git push -q -u origin main
+
+  # HERMETIC: --mine reads land.log for its own-session land anchors. Without this the
+  # suite would read the operator's real ~/.claude/land.log.
+  export LAND_LOG="$BATS_TEST_TMPDIR/land.log"
+  : > "$LAND_LOG"
 }
 
 @test "clean: all commits landed → exit 0, '0 stranded'" {
@@ -157,6 +162,62 @@ seed_two_owned_strands() {
   echo "$output" | grep -q "brokenref"
   echo "$output" | grep -q "$sha"               # ...and the readable one is still judged
   echo "$output" | grep -q "newfile.txt"
+}
+
+# --- OWNERSHIP keyed on anchors that EXIST ---------------------------------------------
+# Backlog 634ecdccbc55(b). Pre-fix, --mine matched only a `Session-Id:` trailer that
+# nothing writes (0 of the last 500 trunk commits carry one), so every case below reported
+# "0 own-session drops" — the sweep's only damping mechanism could not fire at all.
+
+seed_anchor_strands() {
+  # featA — OUR dropped work, pinned by our own failed-land ref (ship-land.sh:806-812)
+  git checkout -q -b featA main
+  echo aaa > fileA.txt && git add fileA.txt && git commit -q -m "add fileA"
+  git update-ref refs/land/failed/20260812T000000Z-SID-A-featA HEAD
+  # featB — a PEER session's unlanded WIP, pinned by THEIR failed-land ref
+  git checkout -q -b featB main
+  echo bbb > fileB.txt && git add fileB.txt && git commit -q -m "add fileB"
+  git update-ref refs/land/failed/20260812T000100Z-SID-B-featB HEAD
+  git checkout -q main
+}
+
+@test "ALARM POLARITY: --mine FIRES on an own-session drop (failed-land ref) and stays silent on the peer" {
+  seed_anchor_strands
+  run bash "$SWEEP" --mine SID-A main
+  [ "$status" -eq 1 ]                            # counting NOT-success: it must still fire
+  echo "$output" | grep -q "fileA.txt"
+  echo "$output" | grep -q "cherry-pick"         # the owner still gets the recovery recipe
+  ! echo "$output" | grep -q "fileB.txt" || false # the peer's WIP is not the owner's problem
+}
+
+@test "ALARM POLARITY: --mine is SILENT when only a peer's anchor matches → exit 0" {
+  # The other half of the polarity control — a damped alarm that can never fire says as
+  # little as one that always fires.
+  seed_anchor_strands
+  run bash "$SWEEP" --mine SID-Z main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 own-session"
+}
+
+@test "--mine: a SUCCEEDED land later dropped by a sibling (land.log head) → fires" {
+  # The 2026-07-11 incident class itself: the land SUCCEEDED, so no failed-land ref
+  # exists; the only record that the session put this content on the trunk is land.log.
+  git checkout -q -b featC main
+  echo ccc > fileC.txt && git add fileC.txt && git commit -q -m "add fileC"
+  head="$(git rev-parse HEAD)"
+  sha="$(git rev-parse --short HEAD)"
+  git checkout -q main
+  printf '{"ts":"2026-08-12T00:00:00Z","tool":"ship-land","branch":"featC","sid":"SID-C","verify":"ok","sweep":"clean","exit":0,"head":"%s"}\n' "$head" > "$LAND_LOG"
+
+  run bash "$SWEEP" --mine SID-C main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "fileC.txt"
+  echo "$output" | grep -q "$sha"
+
+  # negative control on the SAME log: another session's sid matches no anchor
+  run bash "$SWEEP" --mine SID-OTHER main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 own-session"
 }
 
 @test "cherry '-' is not landedness: patch-equivalent commit whose content is absent → flagged" {
