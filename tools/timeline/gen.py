@@ -3,6 +3,7 @@
 
     python3 tools/timeline/gen.py           # writes assets/diagrams/convergence-timeline-{dark,light}.svg
     python3 tools/timeline/gen.py --check   # exit 1 if either file on disk differs from a fresh render
+    python3 tools/timeline/gen.py --alt     # print the README alt text
 
 WHY THIS IS HAND-BUILT AND NOT MERMAID. `beautiful-mermaid` 1.1.3 renders flowchart / stateDiagram /
 xychart only. There is no timeline primitive, no control over node geometry, no gradients, no motion —
@@ -10,45 +11,110 @@ so a chronology can only come out as a chain of boxes, which is what the two lan
 (`6c4c86d7`, `7691cd44`) and why both were rejected on design. The mermaid source stays as the
 interactive fallback; this is the shipped picture.
 
-THE DESIGN ARGUMENT, because it is the reason this beats the chain it replaces:
+────────────────────────────────────────────────────────────────────────────────────────────────
+THE DESIGN ARGUMENT (v2, 2026-08-12 — a ground-up redesign; v1's argument is preserved at the end
+of this docstring, because the reasons v1 was replaced are the reasons v2 is shaped as it is).
 
-  1. TWO LANES, NOT ONE CHAIN. The section's claim is about *two parties inventing the same thing
-     independently*. A single chain throws that away — it can only say "then, then, then". Two lanes
-     with time on the x-axis say it structurally: the distance between a repo marker and its Claude
-     Code twin IS the lead, drawn to scale.
-  2. THE AXIS BREAK IS SEMANTIC, NOT COSMETIC. A linear axis over 529 days puts every interesting
-     event in the right 15% (four of them inside 152 px) — unlabellable. So the axis breaks exactly
-     once, at 2026-03-24, this repo's first commit. Left of the break is Claude Code alone; right of
-     it is both lanes. The break is the repo's birth, so the compression is the story rather than a
-     concession to it. The month gridlines are drawn at both scales and their density change is the
-     honest disclosure — 27 px/month on the left, 194 px/month on the right.
-  3. THE GAPS ARE TO SCALE WITHIN THE ACT. 4 days = 26 px, 28 days = 179 px, and the 7-month lag we
-     owe runs 845 px across the break. The reader sees 7x and 33x without reading a number.
-  4. DIRECTION ENCODES OWNERSHIP. Both leads run repo lane -> Claude Code lane, downward. The one
-     gap that is ours runs the other way, upward, in orange, from a 2025-12 Claude Code release to
-     the 2026-07 commit where we finally read it.
+  0. THE CHART HAS ONE JOB. Two capabilities were running here before the Claude Code release that
+     shipped them. The reader needs three things and nothing else: WHICH capability, HOW LONG the
+     lead was, and PROOF (two dates and a version number). Everything that is not one of those
+     three is deleted — no head-start apology, no axis-break disclosure, no essay block. What is
+     NOT on the chart is as deliberate as what is: see leg 5.
+
+  1. ONE TRACK PER CAPABILITY, ONE SHARED TIME AXIS. Each gets a full-width track: a green disc
+     where it was running here, a blue ring at the Claude Code release, and the span between them
+     drawn to scale with the lead in a pill on it. Green is left of blue on every track, and that
+     repetition IS the claim — the reader gets it before reading a word. A faint rule left of the
+     green disc ("neither side yet") and right of the blue ring ("both have it") make each row a
+     full-width track, which is what ties a label at x=64 to a marker at x=1132.
+
+  2. NO AXIS BREAK, BECAUSE THE APOLOGY IS GONE. v1 spanned 529 days, which forced a broken axis,
+     which forced a paragraph explaining the break, which forced a note explaining the 13-month head
+     start. Dropping the self-diminishing content collapses the span to 106 days and a single linear
+     axis fits with room to spare — the design problem and the message problem had one solution. At
+     12 px/day even the 4-day lead is a 48 px bar rather than v1's 26 px unlabellable smudge.
+
+  3. THE LEAD IS THE HERO, AND IT IS A NUMBER AS WELL AS A DISTANCE. 4 days and 28 days differ by
+     7x, so the span carries the proportion and the pill carries the magnitude; each row has both,
+     and neither has to do the other's job. 4 days reading as "the same week" is not a weakness of
+     the chart — two parties inventing the same thing inside one week is the stronger of the two
+     facts, and the pill is what stops a short bar reading as a small win.
+
+  4. OURS ABOVE, THEIRS BELOW — one rule that removes every leader-line crossing. Each marker's date
+     block sits in its own horizontal band (green above the rail, blue below it) with a short tick
+     from the marker into its band. Two blocks can never collide and a tick can never cross a
+     neighbour's text, which is what made v1's four alternating label rows unreadable.
+
+  5. A THIRD ROW — THE STATUS-LINE CONTEXT GAUGE — WAS BUILT AND THEN CUT ON EVIDENCE. Recorded so
+     it is not re-added: the operator's 2026-01-16 comment on Claude Code issue #12520 is real
+     original work (it reverse-engineers `Tw7` against `uSA` out of `cli.js` and shows the status
+     line counts INPUT only while the red warning counts INPUT+OUTPUT against the auto-compact
+     limit), but it is NOT a "here first" fact. Three dates settle it, all from primary sources:
+       * `context_window.{used_percentage,remaining_percentage}` shipped in 2.1.6 — npm publish
+         2026-01-13, CHANGELOG "Added `context_window.used_percentage` and
+         `context_window.remaining_percentage` fields to status line input". THREE DAYS BEFORE the
+         comment, not after it.
+       * the fields the comment actually proposes — `conversation_output_tokens`,
+         `effective_remaining_percentage` — have NEVER shipped. #12520 is still open and neither
+         name appears anywhere in the CHANGELOG.
+       * this repo read `used_percentage` on 2026-07-14 (`1b8d671b1`), ~6 months after 2.1.6. That
+         commit cites "CC >=2.1.207" for `context_window_size`, but that is an observation about a
+         payload, not a release note: `context_window_size` is in no CHANGELOG entry, and 2.1.207
+         carries no status-line context change at all.
+     So the honest reading of that row is a LAG — which is what v1 drew, and what
+     docs/research/vendor-convergence-2026-08-07.md §1 had already measured. It is off this chart
+     because the chart is about capabilities that ran here FIRST, not because omitting it flatters
+     us. Do not re-add it as a lead without evidence that beats those three dates.
 
 MOTION BUDGET (prior-art.md §B6: ~5 sub-threshold motions on separate layers, exactly one legible).
-The legible one is the sweep — a light column crossing left to right over the master period, igniting
-each marker as it passes. It *enacts* chronology, which is the only justification the survey grants
-for animating a README asset at all ("the animation earns its place by explaining, not decorating").
-The other four — two lane flows, the orange march, the bloom — are individually below threshold.
+The legible one is the time cursor — a light column crossing left to right over the four months,
+igniting each marker as it passes, in true chronological order across both tracks. It *enacts*
+chronology, which is the only justification the survey grants for animating a README asset at all.
+The four ignitions are individually below threshold. The rails are deliberately STATIC: a rail that
+reveals with the cursor cannot return to its start value by 100% without a visible reset flash, and
+the seam check (t=0 == t=P) is not negotiable.
 
-HARNESS CONTRACT. `scripts/banner-shots.sh --lint` is what keeps the deterministic freeze exact, and
-it constrains authoring in two ways this file obeys everywhere:
+HARNESS CONTRACT (unchanged from v1 — this is measured, not stylistic). `scripts/banner-shots.sh
+--lint` is what keeps the deterministic freeze exact, and it constrains authoring in two ways this
+file obeys everywhere:
   * ONE animation per element. Anything needing two motions is split across a wrapper and a child.
   * NO literal `animation-delay`. Phase rides the additive channel `calc(var(--d,0s) + var(--fz,0s))`
     with the per-element offset in `--d`, which is the only spelling the freeze can seek.
-Every sub-period divides P so `banner-verify`'s SEAM check (t=0 == t=P) holds.
+Every sub-period divides P, so `banner-verify`'s SEAM check (t=0 == t=P) holds.
 
-WHY EACH FILE CARRIES BOTH PALETTES. The README picks the file through `<picture>` +
-`prefers-color-scheme`, which is GitHub's documented pattern and what every other diagram here uses.
-But an SVG in `<img>` also resolves `prefers-color-scheme` itself (through the embedding element's
-used `color-scheme`), so a file with ONE baked palette is wrong in exactly the case where the two
-mechanisms disagree. So both files carry both palettes and differ only in the default: -dark.svg
-defaults dark and overrides to light, -light.svg the reverse. Whichever mechanism wins, the reader
-gets the right look — and it is also what makes `banner-verify`'s THEMES check (dark != light)
-meaningful rather than a check the asset structurally cannot pass.
+WHY EACH FILE CARRIES BOTH PALETTES (unchanged from v1). The README picks the file through
+`<picture>` + `prefers-color-scheme`, which is GitHub's documented pattern and what every other
+diagram here uses. But an SVG in `<img>` also resolves `prefers-color-scheme` itself (through the
+embedding element's used `color-scheme`), so a file with ONE baked palette is wrong in exactly the
+case where the two mechanisms disagree. So both files carry both palettes and differ only in the
+default: -dark.svg defaults dark and overrides to light, -light.svg the reverse. Whichever mechanism
+wins, the reader gets the right look — and it is also what makes `banner-verify`'s THEMES check
+(dark != light) meaningful rather than a check the asset structurally cannot pass.
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+V1'S DESIGN ARGUMENT, AND WHY EACH LEG WAS REPLACED (kept so the next iteration does not re-derive
+a rejected design). v1 was a two-lane chronology: a Claude Code lane spanning 2025-02-24..2026-08-07,
+a this-repo lane starting at the 2026-03-24 first commit, connectors between paired events, and one
+orange connector running the other way for a lag.
+  v1.1 "two lanes, not one chain"  → KEPT IN SPIRIT, changed in form. Two parties still, but paired
+       per capability instead of pooled into two long lanes: the pairing is the claim, and a lane
+       forces the reader to find its own partner for each marker.
+  v1.2 "the axis break is semantic" → DROPPED. It was semantic, and it was still a break: it needed
+       a "break" label, a two-density gridline, and a three-line note to be read at all. See leg 2.
+  v1.3 "the gaps are to scale"      → KEPT, and now the ONLY thing the geometry claims. v1 also
+       scaled a 7-month lag across the break, which spent the widest ink on the one negative.
+  v1.4 "direction encodes ownership"→ DROPPED WITH ITS SUBJECT, on SCOPE and not on truth. The
+       orange upward path carried "7 months late — our gap, not theirs". Operator ruling
+       2026-08-12: this asset exists to state what ran here FIRST, so a lag does not belong on it
+       whatever its sign. The lag itself STANDS — leg 5 re-derived it from the CHANGELOG and it
+       survived. Two intermediate readings were tried while writing v2 and BOTH were wrong, which
+       is why leg 5 spells out its sources: (a) that the repo never had the gap, because its first
+       commit already read `remaining_percentage` — false, that field arrived in the SAME 2.1.6
+       release as the `used_percentage` it then ignored for six months; and (b) that
+       `used_percentage` shipped in 2.1.207 on 2026-07-10, four days before this repo adopted it —
+       false, that came from reading a commit MESSAGE ("CC >=2.1.207") as a release note. The
+       lesson is v1's own, one level up: date a capability from a primary source on BOTH sides, and
+       this repo's commit prose is not a primary source for the vendor's side.
 """
 
 from __future__ import annotations
@@ -64,41 +130,83 @@ STEM = "convergence-timeline"
 
 # ── canvas ────────────────────────────────────────────────────────────────────────────────────
 # 1400 wide against GitHub's measured 838 px README column (scripts/banner-column-width.py) is a
-# 0.599 scale, so the 26 px title reads at ~15.6 px — a touch above GitHub's own small text. Width
-# is spent on the axis; every label fits on one row per stagger without abbreviation.
-W, H = 1400, 640
+# 0.599 scale, so the 26 px row title reads at ~15.6 px — a touch above GitHub's own small text.
+W, H = 1400, 524
 
-PAD_L, PAD_R = 70, 1330  # plot extent
-BREAK_A, BREAK_B = 420, 462  # the axis break band; ACT II starts at its right edge
+PAD_L, PAD_R = (
+    64,
+    1336,
+)  # plot extent; also the text margins, so everything shares one grid
 
-LANE_TOP = 264  # this repo
-LANE_BOT = 426  # Claude Code
+# Row rhythm. Each track is name / ours-band / rail / theirs-band, and the two bands are what let a
+# marker's date block never collide with its neighbour's (design leg 4). The 180 px pitch is set by
+# the ONE gap that has to be unambiguous: a blue date block must not read as belonging to the bold
+# capability name below it, so below-band → next name is held at 58 px, wider than name → own band.
+ROW_Y = (216, 396)  # the rail of each track
+DY_NAME = -76  # capability name baseline, relative to the rail
+DY_ABOVE = -38  # "running here" band  (green)
+DY_BELOW = 46  # "shipped in Claude Code" band (blue)
 
-# Label rows. NEAR is the row adjacent to its lane, FAR the outer one; events alternate between them
-# so a leader line never crosses a neighbour's text.
-ROW_U_FAR, ROW_U_NEAR = 74, 156  # above LANE_TOP
-ROW_L_NEAR, ROW_L_FAR = 442, 524  # below LANE_BOT
-BLOCK_H = 76
+MONTH_Y = 494  # baseline of the month scale strip
+GRID_TOP, GRID_BOT = 104, 472
 
-MONTH_Y = 612  # baseline of the month scale strip
-
-# ── chronology (settled; docs/plans/README_TIMELINE_AND_IDLE_RECYCLE.md § Track A) ────────────
-D_START = date(2025, 2, 24)  # Claude Code 0.2.6 — first npm publish
-D_BREAK = date(2026, 3, 24)  # this repo's first commit (aa391e46)
-D_END = date(2026, 8, 7)  # Claude Code 2.1.224
-
-ACT1_DAYS = (D_BREAK - D_START).days  # 393
-ACT2_DAYS = (D_END - D_BREAK).days  # 136
-ACT1_PPD = (BREAK_A - PAD_L) / ACT1_DAYS
-ACT2_PPD = (PAD_R - BREAK_B) / ACT2_DAYS
+# ── chronology ────────────────────────────────────────────────────────────────────────────────
+# Every date below is verified against a primary source, not against this repo's own prose:
+#   Claude Code releases  npm `@anthropic-ai/claude-code` publish times
+#   this repo's dates     the commit or the public artefact named in the row
+D0 = date(2026, 5, 10)  # axis start — a fortnight before the first event
+D1 = date(
+    2026, 8, 24
+)  # axis end   — far enough past the last that its block has a margin
+SPAN = (D1 - D0).days  # 106
+PPD = (PAD_R - PAD_L) / SPAN  # 12.0 px/day
 
 
 def x_of(d: date) -> float:
-    """Map a date to an x. Linear within each act; the single break is at this repo's first commit."""
-    if d <= D_BREAK:
-        return PAD_L + (d - D_START).days * ACT1_PPD
-    return BREAK_B + (d - D_BREAK).days * ACT2_PPD
+    """Map a date to an x. One linear act — no break, because nothing needs one (design leg 2)."""
+    return PAD_L + (d - D0).days * PPD
 
+
+# Each track: what it is, when it was running here, and the release that shipped it in Claude Code.
+# `ours` is dated from this repo's own artefact, `theirs` from the npm publish time of the exact
+# version string that carries the CHANGELOG line — never from either side's prose about the other.
+TRACKS = [
+    dict(
+        key="adv",
+        name="a research team that attacks its own findings",
+        sub="a share of every wave briefed to refute the rest",
+        ours=date(2026, 5, 24),
+        ours_text="running here",
+        theirs=date(2026, 5, 28),
+        theirs_text="Dynamic Workflows 2.1.154 — the same idea",
+        # Placement, stated per label rather than derived. The constraint on each block is a
+        # DIFFERENT neighbour — a formula that got one right got the next one wrong (v1 learned
+        # this the expensive way). "start"/"end" is which END of the block the marker's tick lands
+        # on, never a page-margin anchor: a block that floats to the margin leaves its tick pointing
+        # into the middle of a sentence, which is what a leader line is for avoiding.
+        ours_at="start",  # 1050 px of clear room to the marker's right
+        theirs_at="start",
+        pill_at="after",  # 48 px of rail cannot hold a pill — it sits just past the blue ring
+    ),
+    dict(
+        key="peer",
+        name="two-way session messaging",
+        sub="open, brief, question and retire peers from any session",
+        ours=date(2026, 7, 10),
+        ours_text="running here",
+        theirs=date(2026, 8, 7),
+        theirs_text="Claude Code 2.1.224 — sessions message each other",
+        # The blue ring is in the right sixth, so its block runs back to the left from the marker.
+        ours_at="start",
+        theirs_at="end",
+        pill_at="rail",  # 336 px of rail — the pill rides its midpoint
+    ),
+]
+
+for _t in TRACKS:
+    _t["ox"] = x_of(_t["ours"])
+    _t["tx"] = x_of(_t["theirs"])
+    _t["lead"] = (_t["theirs"] - _t["ours"]).days
 
 # ── palettes ──────────────────────────────────────────────────────────────────────────────────
 DARK = dict(
@@ -107,29 +215,20 @@ DARK = dict(
     edge="#222b3a",
     edge_hi="#ffffff",
     edge_hi_o="0.05",
-    grid="#1d2736",
-    grid_o="1",
+    grid="#1e2937",
     ink="#e9eff6",
     ink2="#98a5b5",
     ink3="#6a7686",
+    track="#37455a",
     rep="#3fb950",
     rep_hi="#6ee787",
-    rep_dim="#1c4527",
     cc="#4b93e6",
     cc_hi="#8cc8ff",
-    cc_dim="#173453",
-    gap="#e0813c",
-    gap_hi="#f7b17a",
-    gap_dim="#48280f",
-    chip_a="#16241a",
-    chip_b="#0f1a13",
-    bloom_a="#2ea043",
-    bloom_b="#1f6feb",
-    bloom_o="0.16",
+    pill_a="#16241a",
+    pill_b="#0f1a13",
     sweep="#a8d0ff",
-    sweep_o="0.10",
-    halo_o="0.40",
-    glow_o="0.24",
+    sweep_o="0.09",
+    halo_o="0.34",
     core="#0a0e15",
 )
 
@@ -139,29 +238,20 @@ LIGHT = dict(
     edge="#d6dee8",
     edge_hi="#ffffff",
     edge_hi_o="0.85",
-    grid="#e7edf4",
-    grid_o="1",
+    grid="#e4ebf3",
     ink="#0d1319",
     ink2="#54606e",
     ink3="#7d8794",
+    track="#c8d3e0",
     rep="#1a7f37",
     rep_hi="#2da44e",
-    rep_dim="#63b87a",
     cc="#0969da",
     cc_hi="#218bff",
-    cc_dim="#7fb6ee",
-    gap="#bc4c00",
-    gap_hi="#e16f24",
-    gap_dim="#f6cfa8",
-    chip_a="#e9f7ed",
-    chip_b="#dcf1e3",
-    bloom_a="#2da44e",
-    bloom_b="#0969da",
-    bloom_o="0.07",
+    pill_a="#e9f7ed",
+    pill_b="#dcf1e3",
     sweep="#1f4e8c",
-    sweep_o="0.055",
-    halo_o="0.20",
-    glow_o="0.16",
+    sweep_o="0.05",
+    halo_o="0.16",
     core="#ffffff",
 )
 
@@ -210,131 +300,15 @@ def esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-# ── events ────────────────────────────────────────────────────────────────────────────────────
-# lane: "repo" (upper) | "cc" (lower).  kind drives the marker glyph and colour.
-#   win    — the capability was running here first (repo lane)
-#   caught — the Claude Code release that arrived after it (cc lane)
-#   base   — context, neither a lead nor a lag
-#   late   — the one we were behind on (repo lane, orange)
-# `tx` is the text anchor x and `budget` the width the block may occupy before it hits its
-# neighbour's text or a leader line dropping through its row. Both are explicit rather than derived,
-# because the constraint on each block is a DIFFERENT neighbour — a formula that got one right got
-# the next one wrong. `fits()` asserts the copy against the budget at build time.
-EVENTS = [
-    dict(
-        key="cc026",
-        lane="cc",
-        kind="base",
-        d=date(2025, 2, 24),
-        title="Claude Code 0.2.6",
-        sub="first npm publish",
-        row="far",
-        align="start",
-        tx=83,
-        budget=790,
-    ),
-    dict(
-        key="cc2070",
-        lane="cc",
-        kind="base",
-        d=date(2025, 12, 15),
-        title="Claude Code 2.0.70",
-        sub="status-line context fields exist",
-        row="near",
-        align="start",
-        tx=345,
-        budget=520,
-    ),
-    dict(
-        key="first",
-        lane="repo",
-        kind="base",
-        d=date(2026, 3, 24),
-        title="this repo's first commit",
-        sub="aa391e46",
-        row="far",
-        align="start",
-        tx=475,
-        budget=375,
-    ),
-    dict(
-        key="advers",
-        lane="repo",
-        kind="win",
-        d=date(2026, 5, 24),
-        title="adversarial research team",
-        sub="briefed to attack its own findings",
-        row="near",
-        align="end",
-        tx=838,
-        budget=368,
-    ),
-    dict(
-        key="dynwf",
-        lane="cc",
-        kind="caught",
-        d=date(2026, 5, 28),
-        title="Dynamic Workflows 2.1.154",
-        sub="the same idea, independently",
-        row="far",
-        align="start",
-        tx=890,
-        budget=430,
-    ),
-    dict(
-        key="peer",
-        lane="repo",
-        kind="win",
-        d=date(2026, 7, 10),
-        title="peer session messaging",
-        sub="open, brief and retire peers",
-        row="far",
-        align="end",
-        tx=PAD_R,
-        budget=468,
-    ),
-    # No label block: this one is named on the orange path, where the seven months it belongs to are.
-    dict(
-        key="lateread",
-        lane="repo",
-        kind="late",
-        d=date(2026, 7, 14),
-        title=None,
-        sub=None,
-        row=None,
-        align=None,
-        tx=0,
-        budget=0,
-    ),
-    dict(
-        key="cc2224",
-        lane="cc",
-        kind="caught",
-        d=date(2026, 8, 7),
-        title="Claude Code 2.1.224",
-        sub="sessions message each other",
-        row="near",
-        align="end",
-        tx=PAD_R - 13,
-        budget=430,
-    ),
-]
-EV = {e["key"]: e for e in EVENTS}
-for _e in EVENTS:
-    _e["x"] = x_of(_e["d"])
-    _e["y"] = LANE_TOP if _e["lane"] == "repo" else LANE_BOT
-# 2026-07-14 is 4 days after 2026-07-10 — 25 px at this scale, which is the truth and also a
-# collision. Drop it off the lane onto a short stem rather than move it along the axis: an
-# annotation hanging below the lane stays honest about WHEN, and stops being a smudge on the win.
-EV["lateread"]["y"] = LANE_TOP + 30
-
-# The two leads and the one lag, as (from, to) event keys.
-LEADS = [("advers", "dynwf"), ("peer", "cc2224")]
-LAG = ("cc2070", "lateread")
+# ── type scale ────────────────────────────────────────────────────────────────────────────────
+F_DATE = 17.5  # mono, the date in a marker block
+F_DETAIL = 19  # sans, the rest of a marker block
+F_CODA = 17.5
+GAP_DATE = 12  # between the date and its text
 
 
-def days(a: str, b: str) -> int:
-    return (EV[b]["d"] - EV[a]["d"]).days
+def block_w(dt: str, text: str, f_text: float = F_DETAIL) -> float:
+    return tw(dt, F_DATE, mono=True) + GAP_DATE + tw(text, f_text)
 
 
 # ── stylesheet ────────────────────────────────────────────────────────────────────────────────
@@ -350,60 +324,41 @@ def stylesheet(default: dict, override: dict, override_scheme: str) -> str:
 text{{font-family:{SANS};dominant-baseline:auto}}
 .mono{{font-family:{MONO}}}
 .ink{{fill:var(--ink)}} .ink2{{fill:var(--ink2)}} .ink3{{fill:var(--ink3)}}
-.t-date{{font-size:19px;letter-spacing:.6px;fill:var(--ink3)}}
-.t-title{{font-size:26px;font-weight:600;fill:var(--ink)}}
-.t-sub{{font-size:20px;fill:var(--ink2)}}
+.c-rep{{fill:var(--rep)}} .c-cc{{fill:var(--cc)}} .c-rep-hi{{fill:var(--rep_hi)}}
+
 .t-kicker{{font-size:18px;font-weight:600;letter-spacing:2.4px;fill:var(--ink3)}}
-.t-lane{{font-size:17px;font-weight:700;letter-spacing:2.6px}}
-.t-month{{font-size:16px;letter-spacing:.4px;fill:var(--ink3)}}
+.t-key{{font-size:20px;fill:var(--ink2)}}
 .t-legend{{font-size:18px;fill:var(--ink2)}}
-.t-chip{{font-size:25px;font-weight:700}}
-.t-chip-s{{font-size:16px;font-weight:600;letter-spacing:1.6px}}
-.t-gap{{font-size:21px}}
-.t-gap-s{{font-size:19px}}
-.t-note{{font-size:20px;fill:var(--ink3)}}
-.c-rep{{fill:var(--rep)}} .c-cc{{fill:var(--cc)}} .c-gap{{fill:var(--gap)}}
-.c-rep-hi{{fill:var(--rep_hi)}} .c-gap-hi{{fill:var(--gap_hi)}}
+.t-name{{font-size:26px;font-weight:600;fill:var(--ink)}}
+.t-namesub{{font-size:20px;fill:var(--ink2)}}
+.t-date{{font-size:{F_DATE}px;letter-spacing:.4px}}
+.t-detail{{font-size:{F_DETAIL}px;fill:var(--ink2)}}
+.t-coda{{font-size:{F_CODA}px;fill:var(--ink2)}}
+.t-month{{font-size:16px;letter-spacing:.4px;fill:var(--ink3)}}
+.t-pill{{font-size:26px;font-weight:700;fill:var(--rep_hi)}}
+.t-pill-u{{font-size:15px;font-weight:600;letter-spacing:1.5px;fill:var(--rep)}}
 
 .plate{{fill:url(#plate)}}
 .edge{{fill:none;stroke:var(--edge);stroke-width:1.5}}
 .edgehi{{fill:none;stroke:var(--edge_hi);stroke-width:1.5;opacity:var(--edge_hi_o)}}
-.grid{{stroke:var(--grid);stroke-width:1;opacity:var(--grid_o)}}
-.gridq{{stroke:var(--grid);stroke-width:1.5;opacity:var(--grid_o)}}
-.breakcut{{stroke:var(--edge);stroke-width:2;stroke-linecap:round;opacity:.9}}
+.grid{{stroke:var(--grid);stroke-width:1}}
 
-.lane-glow{{fill:none;stroke-width:11;stroke-linecap:round;opacity:var(--glow_o)}}
-.lane-core{{fill:none;stroke-width:3;stroke-linecap:round}}
-.lane-rep-glow{{stroke:var(--rep)}} .lane-rep-core{{stroke:url(#laneRep)}}
-.lane-cc-glow{{stroke:var(--cc)}}   .lane-cc-core{{stroke:url(#laneCc)}}
-.lane-dash{{fill:none;stroke-width:3;stroke-linecap:butt;opacity:.85}}
-.lane-dash-rep{{stroke:var(--rep_hi)}} .lane-dash-cc{{stroke:var(--cc_hi)}}
-.lane-cap{{stroke-width:3;stroke-linecap:round}}
-.ghost{{stroke:var(--rep);stroke-width:2;stroke-dasharray:2 12;stroke-linecap:round;opacity:.3}}
-
-.case{{fill:none;stroke:url(#plateStroke);stroke-width:9;stroke-linecap:round}}
-.lead{{fill:none;stroke:var(--rep);stroke-width:3.2;stroke-linecap:round}}
-.lead-hi{{fill:none;stroke:var(--rep_hi);stroke-width:1.2;stroke-linecap:round;opacity:.75}}
-.lag{{fill:none;stroke:var(--gap);stroke-width:2.6;stroke-linecap:round;
-      stroke-dasharray:11 9;opacity:.95}}
-.lag-soft{{fill:none;stroke:var(--gap);stroke-width:10;stroke-linecap:round;opacity:var(--glow_o)}}
-.arrow-rep{{fill:var(--rep)}} .arrow-gap{{fill:var(--gap)}}
+/* the full-width track: dotted where neither side had it yet, and where both do */
+.track{{stroke:var(--track);stroke-width:2;stroke-dasharray:2 9;stroke-linecap:round}}
+/* the lead: the one span that means "only this repo had it" */
+.rail{{fill:none;stroke:var(--rep);stroke-width:3.5;stroke-linecap:round}}
+.rail-hi{{fill:none;stroke:var(--rep_hi);stroke-width:1.2;stroke-linecap:round;opacity:.55}}
+.tick-rep{{stroke:var(--rep);stroke-width:1.5;opacity:.5;stroke-linecap:round}}
+.tick-cc{{stroke:var(--cc);stroke-width:1.5;opacity:.5;stroke-linecap:round}}
 
 .halo{{opacity:var(--halo_o)}}
-.halo-rep{{fill:url(#haloRep)}} .halo-cc{{fill:url(#haloCc)}} .halo-gap{{fill:url(#haloGap)}}
+.halo-rep{{fill:url(#haloRep)}} .halo-cc{{fill:url(#haloCc)}}
+.mk-rep{{fill:var(--rep)}}
 .mk-core{{fill:var(--core)}}
-.mk-rep{{fill:var(--rep)}} .mk-cc{{fill:var(--cc)}}
-.mk-ring-rep{{fill:none;stroke:var(--rep);stroke-width:3}}
-.mk-ring-cc{{fill:none;stroke:var(--cc);stroke-width:3}}
-.mk-ring-gap{{fill:none;stroke:var(--gap);stroke-width:2.6;stroke-dasharray:3.4 3.2}}
-.mk-dot{{fill:var(--core)}}
-.mk-spec{{fill:#ffffff;opacity:.5}}
-.stem{{stroke:var(--gap);stroke-width:2;opacity:.8;stroke-linecap:round}}
-.leader{{stroke-width:1.4;opacity:.55;stroke-linecap:round}}
-.leader-rep{{stroke:var(--rep)}} .leader-cc{{stroke:var(--cc)}}
+.mk-spec{{fill:#ffffff;opacity:.45}}
+.mk-ring-cc{{fill:var(--core);stroke:var(--cc);stroke-width:4}}
 
-.chip-bg{{fill:url(#chip);stroke:var(--rep);stroke-width:1.4}}
-.chip-glow{{fill:var(--rep);opacity:var(--glow_o)}}
+.pill-bg{{fill:url(#pill);stroke:var(--rep);stroke-width:1.4}}
 
 /* ── motion ─────────────────────────────────────────────────────────────────────────────────
    One animation per element, and no literal delay value anywhere — phase rides --d through the
@@ -422,58 +377,25 @@ text{{font-family:{SANS};dominant-baseline:auto}}
   100%{{opacity:0;transform:scale(1)}}}}
 .ig{{fill:none;stroke-width:2.4;transform-box:fill-box;transform-origin:50% 50%;opacity:0;
      animation:ignite {P}s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}}
-.ig-rep{{stroke:var(--rep_hi)}} .ig-cc{{stroke:var(--cc_hi)}} .ig-gap{{stroke:var(--gap_hi)}}
-
-@keyframes flow{{from{{stroke-dashoffset:0}}to{{stroke-dashoffset:-96px}}}}
-.flow-a{{stroke-dasharray:14 82;animation:flow 12s linear infinite;
-         animation-delay:calc(var(--d,0s) + var(--fz,0s))}}
-.flow-b{{stroke-dasharray:14 82;animation:flow 8s linear infinite;
-         animation-delay:calc(var(--d,0s) + var(--fz,0s))}}
-
-@keyframes march{{from{{stroke-dashoffset:0}}to{{stroke-dashoffset:-120px}}}}
-.lag{{animation:march {P}s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}}
-
-@keyframes breathe{{0%{{opacity:var(--bloom_o)}}50%{{opacity:calc(var(--bloom_o) * 1.85)}}
-                    100%{{opacity:var(--bloom_o)}}}}
-.bloom{{fill:url(#bloom);animation:breathe {P}s ease-in-out infinite;
-        animation-delay:calc(var(--d,0s) + var(--fz,0s))}}
-.bloom-still{{fill:url(#bloom2);opacity:calc(var(--bloom_o) * 0.8)}}
+.ig-rep{{stroke:var(--rep_hi)}} .ig-cc{{stroke:var(--cc_hi)}}
 
 @media (prefers-reduced-motion: reduce){{*{{animation:none !important}}}}
 """
 
 
 # ── defs ──────────────────────────────────────────────────────────────────────────────────────
-def defs(p_default: dict) -> str:
+def defs() -> str:
     # Gradient stops carry their colour through a class so the palette override reaches them; a
     # `stop-color="var(...)"` presentation attribute is not reliably resolved.
-    return f"""<defs>
+    return """<defs>
 <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
   <stop offset="0" class="g-plate-a"/><stop offset="1" class="g-plate-b"/></linearGradient>
-<linearGradient id="plateStroke" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-plate-a"/><stop offset="1" class="g-plate-b"/></linearGradient>
-<linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-chip-a"/><stop offset="1" class="g-chip-b"/></linearGradient>
-<linearGradient id="laneRep" x1="{BREAK_B}" y1="0" x2="{PAD_R}" y2="0" gradientUnits="userSpaceOnUse">
-  <stop offset="0" class="g-rep-dim"/><stop offset=".45" class="g-rep"/>
-  <stop offset="1" class="g-rep-hi"/></linearGradient>
-<linearGradient id="laneCc" x1="{PAD_L}" y1="0" x2="{PAD_R}" y2="0" gradientUnits="userSpaceOnUse">
-  <stop offset="0" class="g-cc-dim"/><stop offset=".5" class="g-cc"/>
-  <stop offset="1" class="g-cc-hi"/></linearGradient>
+<linearGradient id="pill" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-pill-a"/><stop offset="1" class="g-pill-b"/></linearGradient>
 <radialGradient id="haloRep"><stop offset="0" class="g-rep" stop-opacity=".85"/>
   <stop offset="1" class="g-rep" stop-opacity="0"/></radialGradient>
 <radialGradient id="haloCc"><stop offset="0" class="g-cc" stop-opacity=".85"/>
   <stop offset="1" class="g-cc" stop-opacity="0"/></radialGradient>
-<radialGradient id="haloGap"><stop offset="0" class="g-gap" stop-opacity=".85"/>
-  <stop offset="1" class="g-gap" stop-opacity="0"/></radialGradient>
-<radialGradient id="bloom" cx=".5" cy=".5" r=".5">
-  <stop offset="0" class="g-bloom-a" stop-opacity=".9"/>
-  <stop offset=".55" class="g-bloom-a" stop-opacity=".3"/>
-  <stop offset="1" class="g-bloom-a" stop-opacity="0"/></radialGradient>
-<radialGradient id="bloom2" cx=".5" cy=".5" r=".5">
-  <stop offset="0" class="g-bloom-b" stop-opacity=".8"/>
-  <stop offset=".55" class="g-bloom-b" stop-opacity=".26"/>
-  <stop offset="1" class="g-bloom-b" stop-opacity="0"/></radialGradient>
 <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
   <stop offset="0" class="g-sweep" stop-opacity="0"/>
   <stop offset=".62" class="g-sweep" stop-opacity=".55"/>
@@ -481,28 +403,22 @@ def defs(p_default: dict) -> str:
   <stop offset="1" class="g-sweep" stop-opacity="0"/></linearGradient>
 </defs>
 <style>
-.g-plate-a{{stop-color:var(--plate_a)}} .g-plate-b{{stop-color:var(--plate_b)}}
-.g-chip-a{{stop-color:var(--chip_a)}} .g-chip-b{{stop-color:var(--chip_b)}}
-.g-rep{{stop-color:var(--rep)}} .g-rep-hi{{stop-color:var(--rep_hi)}}
-.g-rep-dim{{stop-color:var(--rep_dim)}}
-.g-cc{{stop-color:var(--cc)}} .g-cc-hi{{stop-color:var(--cc_hi)}} .g-cc-dim{{stop-color:var(--cc_dim)}}
-.g-gap{{stop-color:var(--gap)}}
-.g-bloom-a{{stop-color:var(--bloom_a)}} .g-bloom-b{{stop-color:var(--bloom_b)}}
-.g-sweep{{stop-color:var(--sweep)}}
+.g-plate-a{stop-color:var(--plate_a)} .g-plate-b{stop-color:var(--plate_b)}
+.g-pill-a{stop-color:var(--pill_a)} .g-pill-b{stop-color:var(--pill_b)}
+.g-rep{stop-color:var(--rep)} .g-cc{stop-color:var(--cc)}
+.g-sweep{stop-color:var(--sweep)}
 </style>"""
 
 
-# ── drawing ───────────────────────────────────────────────────────────────────────────────────
-SWEEP_W = 340  # the light column's width
-SWEEP_TRAVEL = (
-    W + SWEEP_W
-)  # it starts fully off-canvas left and ends fully off-canvas right
+# ── the time cursor ───────────────────────────────────────────────────────────────────────────
+SWEEP_W = 300  # the light column's width
+SWEEP_TRAVEL = W + SWEEP_W  # starts fully off-canvas left, ends fully off-canvas right
 SWEEP_EDGE = SWEEP_W * (1 - 0.88)  # the bright stop sits at 88% across the column
 IGNITE_PEAK = 0.02 * P  # the ignite keyframe reaches full opacity at 2%
 
 
 def phase_for(x: float) -> str:
-    """The --d that makes a marker peak exactly as the sweep's bright edge crosses it.
+    """The --d that makes a marker peak exactly as the cursor's bright edge crosses it.
 
     Derived, not tuned. The column's leading bright edge is at `SWEEP_TRAVEL * t / P - SWEEP_EDGE`,
     so it reaches x at t_fire; the element's own animation clock is `t - delay`, and we want that to
@@ -511,307 +427,221 @@ def phase_for(x: float) -> str:
 
     (The first spelling of this was a bare `-(x + 250) / travel * P`, which ignored both the peak
     offset and the sign convention. It looked plausible and was wrong by ~11 s: every marker lit
-    while the sweep was somewhere else entirely, and the t=6 reference frame showed a marker at
-    2026-07-10 mid-flash with the light column still off at the far left.)
+    while the light column was somewhere else entirely.)
     """
     t_fire = (x + SWEEP_EDGE) * P / SWEEP_TRAVEL
     return f"--d:{t_fire - IGNITE_PEAK - P:.3f}s"
 
 
-def month_ticks() -> list[tuple[date, bool]]:
-    out = []
-    y, m = D_START.year, D_START.month + 1
+# ── drawing ───────────────────────────────────────────────────────────────────────────────────
+def month_starts() -> list[date]:
+    out, y, m = [], D0.year, D0.month
     while True:
+        d = date(y, m, 1)
+        if d > D1:
+            break
+        out.append(d)
+        m += 1
         if m > 12:
             y, m = y + 1, 1
-        d = date(y, m, 1)
-        if d > D_END:
-            break
-        # A label every 3rd month in the compressed act, every month in the expanded one — and
-        # never inside the break band, where it would collide with its neighbour across the cut.
-        labelled = (d > D_BREAK) or (d.month % 3 == 0)
-        if BREAK_A - 46 < x_of(d) < BREAK_B + 30:
-            labelled = False
-        out.append((d, labelled))
-        m += 1
     return out
+
+
+TICK_OVERHANG = (
+    6  # how far the block runs past its marker, so the tick lands INSIDE the text
+)
+
+
+def marker_block(
+    a,
+    x: float,
+    align: str,
+    dt: str,
+    text: str,
+    hue: str,
+    y: float,
+    f_text: float = F_DETAIL,
+    cls: str = "t-detail",
+    where: str = "",
+) -> None:
+    """One date block: `2026-07-10  Claude Code 2.1.207`, hung off one end from its own marker.
+
+    `align="start"` puts the block's LEFT edge just left of the marker, so it reads rightwards;
+    `align="end"` puts its RIGHT edge just right of the marker, so it reads back to the left. Either
+    way the marker's leader tick meets an END of the block rather than the middle of a sentence,
+    which is the whole reason the choice is stated per label (see the note in TRACKS).
+
+    The first spelling anchored an `end` block at the page margin (PAD_R) instead of at its marker.
+    Every block then lined up beautifully down the right edge — and every tick pointed into the
+    middle of a phrase 200 px from the marker it belonged to, which is the one thing a leader line
+    exists to prevent. Anchoring on the marker is what makes the tick mean something.
+    """
+    wid = block_w(dt, text, f_text)
+    left = (x - TICK_OVERHANG) if align == "start" else (x + TICK_OVERHANG - wid)
+    # Assert against the real neighbour — the canvas edge — rather than a guessed budget.
+    if left < PAD_L or left + wid > PAD_R:
+        WARNINGS.append(
+            f"  {where}: block runs {left:.0f}..{left + wid:.0f}, outside "
+            f"{PAD_L}..{PAD_R} — {dt} {text!r}"
+        )
+    a(f'<text class="t-date mono c-{hue}" x="{left:.1f}" y="{y:.0f}">{esc(dt)}</text>')
+    a(
+        f'<text class="{cls}" x="{left + tw(dt, F_DATE, mono=True) + GAP_DATE:.1f}" '
+        f'y="{y:.0f}">{esc(text)}</text>'
+    )
+
+
+def pill(a, cx: float, cy: float, n: int) -> tuple[float, float]:
+    """The lead, as a number. Returns its x extent so callers can keep the rail clear of nothing —
+    the pill is opaque, so it simply rides on top."""
+    num, unit = str(n), "DAYS"
+    wn = tw(num, 26, 700)
+    wu = tw(unit, 15, 600, 1.5)
+    inner = wn + 8 + wu
+    pw, ph = inner + 40, 42
+    a(
+        f'<rect class="pill-bg" x="{cx - pw / 2:.1f}" y="{cy - ph / 2:.1f}" width="{pw:.1f}" '
+        f'height="{ph:.1f}" rx="{ph / 2:.1f}"/>'
+    )
+    a(f'<text class="t-pill" x="{cx - inner / 2:.1f}" y="{cy + 9:.0f}">{num}</text>')
+    a(
+        f'<text class="t-pill-u" x="{cx - inner / 2 + wn + 8:.1f}" y="{cy + 9:.0f}">{unit}</text>'
+    )
+    return cx - pw / 2, cx + pw / 2
 
 
 def build() -> str:
     o: list[str] = []
     a = o.append
 
-    # ── plate, bloom, sweep ───────────────────────────────────────────────────────────────────
+    # ── plate + the time cursor ───────────────────────────────────────────────────────────────
     a(f'<rect class="plate" x="0" y="0" width="{W}" height="{H}" rx="16"/>')
-    # Two blooms, warm-ish green under the right where the leads are and cool blue under the left
-    # where Claude Code ran alone. Only one breathes; a second animated one would be legible, and
-    # the motion budget already has its one legible member.
-    a('<ellipse class="bloom-still" cx="300" cy="470" rx="620" ry="330"/>')
-    a('<ellipse class="bloom" cx="1060" cy="300" rx="700" ry="390" style="--d:0s"/>')
-    # The sweep band is authored fully off-canvas to the left, so the reduced-motion still — and the
-    # t=0/t=P seam — show no column at all.
+    # Authored fully off-canvas to the left, so the reduced-motion still — and the t=0/t=P seam —
+    # show no column at all.
     a(
-        f'<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-340" y="0" '
-        f'width="340" height="{H}"/></g>'
+        f'<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-{SWEEP_W}" y="0" '
+        f'width="{SWEEP_W}" height="{H}"/></g>'
     )
 
-    # ── month grid ────────────────────────────────────────────────────────────────────────────
+    # ── month grid + scale ────────────────────────────────────────────────────────────────────
+    starts = month_starts()
     a("<g>")
-    for d, labelled in month_ticks():
-        x = x_of(d)
-        cls = "gridq" if labelled else "grid"
+    for d in starts:
+        if d <= D0:
+            continue
         a(
-            f'<line class="{cls}" x1="{x:.1f}" y1="58" x2="{x:.1f}" y2="{MONTH_Y - 22:.0f}"/>'
+            f'<line class="grid" x1="{x_of(d):.1f}" y1="{GRID_TOP}" '
+            f'x2="{x_of(d):.1f}" y2="{GRID_BOT}"/>'
         )
     a("</g>")
-
-    # month scale strip
     a("<g>")
-    first_labelled = True
-    for d, labelled in month_ticks():
-        if not labelled:
-            continue
-        x = x_of(d)
-        lbl = d.strftime("%b")
-        if d.month == 1 or first_labelled:
-            lbl += f" ’{d.strftime('%y')}"
-        first_labelled = False
+    for i, d in enumerate(starts):
+        nxt = starts[i + 1] if i + 1 < len(starts) else D1
+        if nxt > D1:
+            nxt = D1
+        mid = (x_of(d) + x_of(nxt)) / 2
+        lbl = d.strftime("%b") + (" ’26" if i == 0 else "")
         a(
-            f'<text class="t-month mono" x="{x:.1f}" y="{MONTH_Y}" text-anchor="middle">'
+            f'<text class="t-month mono" x="{mid:.1f}" y="{MONTH_Y}" text-anchor="middle">'
             f"{esc(lbl)}</text>"
         )
     a("</g>")
 
-    # ── axis break ────────────────────────────────────────────────────────────────────────────
-    # No masking band across the gap. It was there to hide gridlines inside the break, but no month
-    # boundary falls in that 70 px anyway — so on GitHub light it was a bright white stripe down the
-    # chart doing nothing at all. The cut marks on the lane and the gridline density carry it.
-    for cx in (BREAK_A + 12, BREAK_A + 26):
+    # ── the three tracks ──────────────────────────────────────────────────────────────────────
+    for t, ry in zip(TRACKS, ROW_Y):
+        ox, tx = t["ox"], t["tx"]
+
+        # name + one-line subtitle, on the shared left margin so the eye reads the names down
+        nx = PAD_L
+        a(f'<text class="t-name" x="{nx}" y="{ry + DY_NAME}">{esc(t["name"])}</text>')
+        wn = tw(t["name"], 26, 600)
         a(
-            f'<line class="breakcut" x1="{cx - 9}" y1="{LANE_BOT + 13}" '
-            f'x2="{cx + 9}" y2="{LANE_BOT - 13}"/>'
+            f'<text class="t-namesub" x="{nx + wn + 18:.0f}" y="{ry + DY_NAME}">'
+            f"{esc('· ' + t['sub'])}</text>"
         )
-    a(
-        f'<text class="t-month" x="{(BREAK_A + BREAK_B) / 2:.0f}" y="{MONTH_Y}" '
-        f'text-anchor="middle">break</text>'
-    )
+        fits(
+            t["name"] + " · " + t["sub"],
+            PAD_R - PAD_L - 120,
+            22,
+            where=f"{t['key']} name",
+        )
 
-    # ── lanes ─────────────────────────────────────────────────────────────────────────────────
-    # Claude Code runs the whole width; this repo's lane BEGINS at the break, because that is when
-    # it began. The empty upper-left is the 13-month head start, stated by absence.
-    for x1, x2, y, key, flow in (
-        (BREAK_B, PAD_R, LANE_TOP, "rep", "flow-a"),
-        (PAD_L, BREAK_A - 4, LANE_BOT, "cc", "flow-b"),
-        (BREAK_B + 4, PAD_R, LANE_BOT, "cc", "flow-b"),
-    ):
+        # the track: dotted before anyone had it, dotted again once both do
+        a(f'<line class="track" x1="{PAD_L}" y1="{ry}" x2="{ox - 15:.1f}" y2="{ry}"/>')
+        a(f'<line class="track" x1="{tx + 15:.1f}" y1="{ry}" x2="{PAD_R}" y2="{ry}"/>')
+
+        # the lead itself
+        a(f'<line class="rail" x1="{ox:.1f}" y1="{ry}" x2="{tx:.1f}" y2="{ry}"/>')
+        a(f'<line class="rail-hi" x1="{ox:.1f}" y1="{ry}" x2="{tx:.1f}" y2="{ry}"/>')
+
+        # ticks from each marker into its own band — ours above, theirs below (design leg 4)
         a(
-            f'<line class="lane-glow lane-{key}-glow" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}"/>'
+            f'<line class="tick-rep" x1="{ox:.1f}" y1="{ry - 12}" x2="{ox:.1f}" y2="{ry + DY_ABOVE + 6}"/>'
         )
         a(
-            f'<line class="lane-core lane-{key}-core" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}"/>'
+            f'<line class="tick-cc" x1="{tx:.1f}" y1="{ry + 12}" x2="{tx:.1f}" y2="{ry + DY_BELOW - 15}"/>'
         )
-        a(
-            f'<line class="lane-dash lane-dash-{key} {flow}" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" '
-            f'style="--d:0s"/>'
-        )
-
-    # A ghost of the repo lane over the 13 months it did not exist. Absence alone left the top-left
-    # quarter of the canvas reading as blank space rather than as a stated fact; a fine dotted rule
-    # at the same y says "this lane is not here yet" instead of saying nothing.
-    a(
-        f'<line class="ghost" x1="{PAD_L}" y1="{LANE_TOP}" x2="{BREAK_A - 10}" y2="{LANE_TOP}"/>'
-    )
-
-    # Lane identity, both sitting just above their own lane's left end — consistently placed, and
-    # out of the middle band, which the leads and the lag need all of.
-    a(
-        f'<text class="t-lane c-rep" x="{BREAK_B + 16}" y="{LANE_TOP - 12}">THIS REPO</text>'
-    )
-    a(f'<text class="t-lane c-cc" x="{PAD_L}" y="{LANE_BOT - 18}">CLAUDE CODE</text>')
-
-    # The head-start note lives in the space the repo lane does not yet occupy — the absence is the
-    # point, so the note explains it rather than filling it. It also carries the axis disclosure,
-    # because the break and the head start are the same fact.
-    for i, line in enumerate(
-        (
-            "Claude Code ran 13 months",
-            "before this repo existed.",
-            "The axis breaks there, 7×.",
-        )
-    ):
-        a(f'<text class="t-note" x="{PAD_L}" y="{170 + i * 26}">{esc(line)}</text>')
-        fits(line, 320, 20, where="head-start note")
-
-    # ── the lag we owe (drawn first: it is context for the two leads, not a peer of them) ─────
-    # It runs LOW and flat for most of its length, hugging the Claude Code lane it belongs to, and
-    # only climbs at the very end. That keeps the middle band clear for the two leads — and it draws
-    # the shape of the fact: seven months spent down there before this repo caught up.
-    lag_a, lag_b = EV[LAG[0]], EV[LAG[1]]
-    x0, y0 = lag_a["x"], LANE_BOT - 10
-    flat = LANE_BOT - 14
-    x1, y1 = lag_b["x"], lag_b["y"] + 20
-    lag_d = (
-        f"M {x0:.1f} {y0:.1f} C {x0 + 220:.1f} {flat:.1f} {x1 - 430:.1f} {flat:.1f} "
-        f"{x1 - 128:.1f} {flat:.1f} C {x1 - 52:.1f} {flat:.1f} {x1:.1f} {y1 + 62:.1f} "
-        f"{x1:.1f} {y1:.1f}"
-    )
-    # No soft under-stroke: at width 10 it read as a brown smear behind the dashes rather than a
-    # glow, and worst exactly where the path climbs past the 28-day chip.
-    a(f'<path class="lag" d="{lag_d}" style="--d:0s"/>')
-    a(
-        f'<polygon class="arrow-gap" points="{x1:.1f},{y1 - 10:.1f} {x1 - 6.5:.1f},{y1 + 4:.1f} '
-        f'{x1 + 6.5:.1f},{y1 + 4:.1f}"/>'
-    )
-
-    # Sits above the flat run, inside the widest empty region on the canvas. Right edge is bounded
-    # by where the first lead's connector descends (x ~845).
-    lag_lines = (
-        ("7 months late", " — our gap, not theirs."),
-        (None, "the status-line context fields existed from"),
-        (None, "2025-12-15. This repo read them on 2026-07-14."),
-    )
-    for i, (bold, rest) in enumerate(lag_lines):
-        # Sits directly ON TOP of the flat run rather than floating in the middle of the band —
-        # at y≈292 the block read as unattached to the orange path it describes.
-        y = 344 + i * 24
-        if bold:
-            a(
-                f'<text class="t-gap" x="352" y="{y}">'
-                f'<tspan class="c-gap-hi" font-weight="700">{bold}</tspan>'
-                f'<tspan class="ink2">{esc(rest)}</tspan></text>'
-            )
+        # the lead, as a number
+        if t["pill_at"] == "rail":
+            pill(a, (ox + tx) / 2, ry, t["lead"])
         else:
-            a(f'<text class="t-gap-s ink2" x="352" y="{y}">{esc(rest)}</text>')
-        fits((bold or "") + rest, 465, 21 if bold else 19, where=f"lag L{i + 1}")
+            wn2 = tw(str(t["lead"]), 26, 700) + 8 + tw("DAYS", 15, 600, 1.5) + 40
+            pill(a, tx + 30 + wn2 / 2, ry, t["lead"])
 
-    # ── the two leads ─────────────────────────────────────────────────────────────────────────
-    for src, dst in LEADS:
-        s, t = EV[src], EV[dst]
-        sx, tx = s["x"], t["x"]
-        d = (
-            f"M {sx:.1f} {LANE_TOP + 11} C {sx:.1f} {LANE_TOP + 74:.0f} "
-            f"{tx:.1f} {LANE_BOT - 78:.0f} {tx:.1f} {LANE_BOT - 13}"
-        )
-        a(
-            f'<path class="case" d="{d}"/>'
-        )  # casing: the lead reads above the lag where they cross
-        a(f'<path class="lead" d="{d}"/>')
-        a(f'<path class="lead-hi" d="{d}"/>')
-        a(
-            f'<polygon class="arrow-rep" points="{tx:.1f},{LANE_BOT - 3:.1f} '
-            f'{tx - 6.5:.1f},{LANE_BOT - 17:.1f} {tx + 6.5:.1f},{LANE_BOT - 17:.1f}"/>'
-        )
+        # markers, drawn over everything on the rail
+        for x, hue, kind in ((ox, "rep", "ours"), (tx, "cc", "theirs")):
+            a(f'<g transform="translate({x:.1f},{ry})">')
+            a(f'<circle class="halo halo-{hue}" r="16"/>')
+            if kind == "ours":
+                a('<circle class="mk-rep" r="9.5"/>')
+                a('<circle class="mk-spec" cx="-3" cy="-3.4" r="2.2"/>')
+                a(f'<circle class="ig ig-rep" r="12.5" style="{phase_for(x)}"/>')
+            else:
+                a('<circle class="mk-ring-cc" r="7.5"/>')
+                a(f'<circle class="ig ig-cc" r="12.5" style="{phase_for(x)}"/>')
+            a("</g>")
 
-        # The chip rides low on its own connector, clear of the lag text above it. It is deliberately
-        # NOT sized by the day count — the proportion is already carried, to scale, by how far apart
-        # the two markers are; a chip that also scaled would double-count it.
-        n = days(src, dst)
-        label = f"{n} days"
-        cx, cy = 908 if n < 10 else 1252, 368
-        cw = max(146, tw(label, 25, 700) + 44)
-        ch = 60
-        a(
-            f'<rect class="chip-glow" x="{cx - cw / 2 - 3:.1f}" y="{cy - ch / 2 - 3:.1f}" '
-            f'width="{cw + 6:.1f}" height="{ch + 6:.1f}" rx="{(ch + 6) / 2:.1f}"/>'
+        # the date blocks
+        marker_block(
+            a,
+            ox,
+            t["ours_at"],
+            t["ours"].isoformat(),
+            t["ours_text"],
+            "rep",
+            ry + DY_ABOVE,
+            where=f"{t['key']} ours",
         )
-        a(
-            f'<rect class="chip-bg" x="{cx - cw / 2:.1f}" y="{cy - ch / 2:.1f}" width="{cw:.1f}" '
-            f'height="{ch:.1f}" rx="{ch / 2:.1f}"/>'
-        )
-        a(
-            f'<text class="t-chip c-rep-hi" x="{cx:.1f}" y="{cy - 2:.0f}" text-anchor="middle">'
-            f"{label}</text>"
-        )
-        a(
-            f'<text class="t-chip-s c-rep" x="{cx:.1f}" y="{cy + 20:.0f}" text-anchor="middle">'
-            f"LATER</text>"
-        )
-
-    # ── markers ───────────────────────────────────────────────────────────────────────────────
-    for e in EVENTS:
-        x, y, kind, lane = e["x"], e["y"], e["kind"], e["lane"]
-        hue = "gap" if kind == "late" else ("rep" if lane == "repo" else "cc")
-        if (
-            kind == "late"
-        ):  # the stem is what keeps the off-lane marker attached to its true date
-            a(
-                f'<line class="stem" x1="{x:.1f}" y1="{LANE_TOP}" x2="{x:.1f}" y2="{y - 8}"/>'
-            )
-        a(f'<g transform="translate({x:.1f},{y})">')
-        # Halo radius is tight. At r=26 the 2026-07-10 and 2026-07-14 markers — 4 days and 25 px
-        # apart, which is the truth — merged into one blob.
-        a(
-            f'<circle class="halo halo-{hue}" r="{18 if kind in ("win", "caught") else 11}"/>'
-        )
-        if kind == "late":
-            a('<circle class="mk-dot" r="7"/>')
-            a('<circle class="mk-ring-gap" r="7"/>')
-            a('<circle class="ig ig-gap" r="8.5" style="' + phase_for(x) + '"/>')
-        elif kind == "base":
-            a(f'<circle class="mk-dot" r="7.5"/>')
-            a(f'<circle class="mk-ring-{hue}" r="7.5"/>')
-            a(f'<circle class="ig ig-{hue}" r="10" style="{phase_for(x)}"/>')
-        else:  # win / caught — the paired events, drawn solid and one step larger
-            a(f'<circle class="mk-{hue}" r="10.5"/>')
-            a(f'<circle class="mk-dot" r="4"/>')
-            a(f'<circle class="mk-spec" cx="-3" cy="-3.4" r="2.1"/>')
-            a(f'<circle class="ig ig-{hue}" r="13" style="{phase_for(x)}"/>')
-        a("</g>")
-
-    # ── event labels ──────────────────────────────────────────────────────────────────────────
-    for e in EVENTS:
-        if not e["title"]:
-            continue
-        x, lane, row, align = e["x"], e["lane"], e["row"], e["align"]
-        if lane == "repo":
-            top = ROW_U_FAR if row == "far" else ROW_U_NEAR
-            leader_y1, leader_y2 = top + BLOCK_H + 4, LANE_TOP - 14
-        else:
-            top = ROW_L_NEAR if row == "near" else ROW_L_FAR
-            leader_y1, leader_y2 = LANE_BOT + 14, top - 6
-        hue = "rep" if lane == "repo" else "cc"
-        a(
-            f'<line class="leader leader-{hue}" x1="{x:.1f}" y1="{leader_y1:.0f}" '
-            f'x2="{x:.1f}" y2="{leader_y2:.0f}"/>'
-        )
-
-        anchor = "start" if align == "start" else "end"
-        tx, budget = e["tx"], e["budget"]
-        fits(e["title"], budget, 26, 600, where=f"{e['key']} title")
-        fits(e["sub"], budget, 20, where=f"{e['key']} sub")
-        a(
-            f'<text class="t-date mono" x="{tx:.1f}" y="{top + 18}" text-anchor="{anchor}">'
-            f"{e['d'].isoformat()}</text>"
-        )
-        a(
-            f'<text class="t-title" x="{tx:.1f}" y="{top + 48}" text-anchor="{anchor}">'
-            f"{esc(e['title'])}</text>"
-        )
-        a(
-            f'<text class="t-sub" x="{tx:.1f}" y="{top + 72}" text-anchor="{anchor}">'
-            f"{esc(e['sub'])}</text>"
+        marker_block(
+            a,
+            tx,
+            t["theirs_at"],
+            t["theirs"].isoformat(),
+            t["theirs_text"],
+            "cc",
+            ry + DY_BELOW,
+            where=f"{t['key']} theirs",
         )
 
     # ── header ────────────────────────────────────────────────────────────────────────────────
-    a(
-        f'<text class="t-kicker" x="{PAD_L}" y="42">SAME WALL, SAME ANSWER, WEEKS APART</text>'
+    a(f'<text class="t-kicker" x="{PAD_L}" y="44">HERE FIRST — TWICE</text>')
+    key = (
+        "Each bar is how long the capability was running here before the Claude Code release "
+        "that shipped it."
     )
-    legend = (
-        ("dot", "rep", "this repo"),
-        ("dot", "cc", "Claude Code"),
-        ("ring", "gap", "our gap"),
-    )
-    span = sum(15 + tw(t, 18) + 40 for _, _, t in legend) - 40
+    fits(key, PAD_R - PAD_L - 200, 20, where="key line")
+    a(f'<text class="t-key" x="{PAD_L}" y="78">{esc(key)}</text>')
+
+    legend = (("rep", "running here"), ("cc", "shipped in Claude Code"))
+    span = sum(13 + tw(s, 18) + 34 for _, s in legend) - 34
     lx = PAD_R - span
-    for glyph, colour, text in legend:
-        if glyph == "dot":
-            a(f'<circle class="mk-{colour}" cx="{lx:.0f}" cy="35" r="7"/>')
-            a(f'<circle class="mk-dot" cx="{lx:.0f}" cy="35" r="2.6"/>')
+    for hue, text in legend:
+        if hue == "rep":
+            a(f'<circle class="mk-rep" cx="{lx:.0f}" cy="38" r="7"/>')
         else:
-            a(f'<circle class="mk-dot" cx="{lx:.0f}" cy="35" r="6.5"/>')
-            a(f'<circle class="mk-ring-gap" cx="{lx:.0f}" cy="35" r="6.5"/>')
-        a(f'<text class="t-legend" x="{lx + 15:.0f}" y="41">{text}</text>')
-        lx += 15 + tw(text, 18) + 40
+            a(f'<circle class="mk-ring-cc" cx="{lx:.0f}" cy="38" r="5.5"/>')
+        a(f'<text class="t-legend" x="{lx + 13:.0f}" y="44">{esc(text)}</text>')
+        lx += 13 + tw(text, 18) + 34
 
     # ── card edge, drawn last so nothing paints over it ───────────────────────────────────────
     a(
@@ -825,32 +655,28 @@ def build() -> str:
 TITLE = "Twice, this repo shipped it first"
 
 ALT = (
-    "A two-lane timeline, time running left to right, comparing when a capability was running in "
-    "this repo against when it shipped in Claude Code. The lower lane is Claude Code and spans the "
-    "whole chart; the upper lane is this repo and does not begin until 2026-03-24, because that is "
-    "this repo's first commit — Claude Code had already run for 13 months. The axis breaks once, at "
-    "that first commit: everything left of the break is compressed, everything right of it is drawn "
-    "at about seven times the scale, and the month gridlines show both densities. "
-    "On the Claude Code lane: 2025-02-24, Claude Code 0.2.6, the first npm publish; 2025-12-15, "
-    "Claude Code 2.0.70, in which the status-line context fields first exist; 2026-05-28, Dynamic "
-    "Workflows 2.1.154; and 2026-08-07, Claude Code 2.1.224, in which sessions can message each "
-    "other. On this repo's lane: 2026-03-24, the first commit; 2026-05-24, an adversarial-role "
-    "research team, a share of every wave briefed to attack the rest; 2026-07-10, peer session "
-    "messaging; and 2026-07-14, the day this repo finally read the status-line fields. "
-    "Two green arrows run downward from this repo's lane to Claude Code's, each labelled with the "
-    "lead and drawn to scale: 4 days from the adversarial research team on 2026-05-24 to Dynamic "
-    "Workflows on 2026-05-28, and 28 days from peer session messaging on 2026-07-10 to Claude Code "
-    "2.1.224 on 2026-08-07. One orange arrow runs the other way, upward from Claude Code 2.0.70 on "
-    "2025-12-15 across the axis break to 2026-07-14 — seven months in which the status-line fields "
-    "existed and this repo did not read them. That one is this repo's gap, not Claude Code's."
+    "Two horizontal tracks on one time axis running from May to August 2026, one per capability. "
+    "Each track carries a filled green disc on the date the capability was running in this repo, "
+    "a hollow blue ring on the date of the Claude Code release that shipped it, and a green bar "
+    "between them — drawn to scale — labelled with the lead in days. The green disc is left of "
+    "the blue ring on both tracks. "
+    "The upper track, a research team that attacks its own findings — a share of every wave "
+    "briefed to refute the rest: running here on 2026-05-24; Dynamic Workflows 2.1.154, the same "
+    "idea, on 2026-05-28, a lead of 4 days. "
+    "The lower track, two-way session messaging — open, brief, question and retire peers from any "
+    "session: running here on 2026-07-10; Claude Code 2.1.224, in which sessions message each "
+    "other, on 2026-08-07, a lead of 28 days. "
+    "Each track is dotted before its green disc, where neither side had the capability yet, and "
+    "dotted again after its blue ring, where both do. A soft column of light crosses the chart "
+    "from left to right once every 24 seconds, lighting each of the four markers as it passes, in "
+    "date order."
 )
 
 DESC = (
-    "Two lanes on one time axis. Claude Code's lane spans the chart; this repo's lane begins at the "
-    "axis break, which is its first commit. Distance between paired markers is the lead, to scale: "
-    "4 days and 28 days downward from this repo to Claude Code, 7 months upward the other way for "
-    "the one gap this repo owes. A light sweep crosses left to right once every 24 seconds, igniting "
-    "each event as it passes."
+    "Two tracks on one time axis, May to August 2026. On each, a green disc marks the date the "
+    "capability was running in this repo and a blue ring the Claude Code release that shipped it; "
+    "the bar between them is the lead, drawn to scale and labelled — 4 days and 28 days. A light "
+    "column crosses left to right once every 24 seconds, igniting each marker in date order."
 )
 
 
@@ -864,7 +690,7 @@ def render(variant: str) -> str:
         f'     role="img" aria-labelledby="ttl dsc">\n'
         f'<title id="ttl">{esc(TITLE)}</title>\n'
         f'<desc id="dsc">{esc(DESC)}</desc>\n'
-        f"{defs(default)}\n"
+        f"{defs()}\n"
         f"<style>{stylesheet(default, override, scheme)}</style>\n"
         f"{body}\n"
         f"</svg>\n"
@@ -909,7 +735,7 @@ def main() -> int:
             file=sys.stderr,
         )
         for w in dict.fromkeys(WARNINGS):
-            print(w, file=sys.stderr)
+            print(f"  {w}", file=sys.stderr)
 
     return 1 if stale else 0
 

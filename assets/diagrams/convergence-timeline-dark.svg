@@ -1,34 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 640" width="1400" height="640"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 524" width="1400" height="524"
      role="img" aria-labelledby="ttl dsc">
 <title id="ttl">Twice, this repo shipped it first</title>
-<desc id="dsc">Two lanes on one time axis. Claude Code's lane spans the chart; this repo's lane begins at the axis break, which is its first commit. Distance between paired markers is the lead, to scale: 4 days and 28 days downward from this repo to Claude Code, 7 months upward the other way for the one gap this repo owes. A light sweep crosses left to right once every 24 seconds, igniting each event as it passes.</desc>
+<desc id="dsc">Two tracks on one time axis, May to August 2026. On each, a green disc marks the date the capability was running in this repo and a blue ring the Claude Code release that shipped it; the bar between them is the lead, drawn to scale and labelled — 4 days and 28 days. A light column crosses left to right once every 24 seconds, igniting each marker in date order.</desc>
 <defs>
 <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
   <stop offset="0" class="g-plate-a"/><stop offset="1" class="g-plate-b"/></linearGradient>
-<linearGradient id="plateStroke" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-plate-a"/><stop offset="1" class="g-plate-b"/></linearGradient>
-<linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" class="g-chip-a"/><stop offset="1" class="g-chip-b"/></linearGradient>
-<linearGradient id="laneRep" x1="462" y1="0" x2="1330" y2="0" gradientUnits="userSpaceOnUse">
-  <stop offset="0" class="g-rep-dim"/><stop offset=".45" class="g-rep"/>
-  <stop offset="1" class="g-rep-hi"/></linearGradient>
-<linearGradient id="laneCc" x1="70" y1="0" x2="1330" y2="0" gradientUnits="userSpaceOnUse">
-  <stop offset="0" class="g-cc-dim"/><stop offset=".5" class="g-cc"/>
-  <stop offset="1" class="g-cc-hi"/></linearGradient>
+<linearGradient id="pill" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" class="g-pill-a"/><stop offset="1" class="g-pill-b"/></linearGradient>
 <radialGradient id="haloRep"><stop offset="0" class="g-rep" stop-opacity=".85"/>
   <stop offset="1" class="g-rep" stop-opacity="0"/></radialGradient>
 <radialGradient id="haloCc"><stop offset="0" class="g-cc" stop-opacity=".85"/>
   <stop offset="1" class="g-cc" stop-opacity="0"/></radialGradient>
-<radialGradient id="haloGap"><stop offset="0" class="g-gap" stop-opacity=".85"/>
-  <stop offset="1" class="g-gap" stop-opacity="0"/></radialGradient>
-<radialGradient id="bloom" cx=".5" cy=".5" r=".5">
-  <stop offset="0" class="g-bloom-a" stop-opacity=".9"/>
-  <stop offset=".55" class="g-bloom-a" stop-opacity=".3"/>
-  <stop offset="1" class="g-bloom-a" stop-opacity="0"/></radialGradient>
-<radialGradient id="bloom2" cx=".5" cy=".5" r=".5">
-  <stop offset="0" class="g-bloom-b" stop-opacity=".8"/>
-  <stop offset=".55" class="g-bloom-b" stop-opacity=".26"/>
-  <stop offset="1" class="g-bloom-b" stop-opacity="0"/></radialGradient>
 <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
   <stop offset="0" class="g-sweep" stop-opacity="0"/>
   <stop offset=".62" class="g-sweep" stop-opacity=".55"/>
@@ -37,75 +19,52 @@
 </defs>
 <style>
 .g-plate-a{stop-color:var(--plate_a)} .g-plate-b{stop-color:var(--plate_b)}
-.g-chip-a{stop-color:var(--chip_a)} .g-chip-b{stop-color:var(--chip_b)}
-.g-rep{stop-color:var(--rep)} .g-rep-hi{stop-color:var(--rep_hi)}
-.g-rep-dim{stop-color:var(--rep_dim)}
-.g-cc{stop-color:var(--cc)} .g-cc-hi{stop-color:var(--cc_hi)} .g-cc-dim{stop-color:var(--cc_dim)}
-.g-gap{stop-color:var(--gap)}
-.g-bloom-a{stop-color:var(--bloom_a)} .g-bloom-b{stop-color:var(--bloom_b)}
+.g-pill-a{stop-color:var(--pill_a)} .g-pill-b{stop-color:var(--pill_b)}
+.g-rep{stop-color:var(--rep)} .g-cc{stop-color:var(--cc)}
 .g-sweep{stop-color:var(--sweep)}
 </style>
 <style>
-:root{--plate_a:#111823;--plate_b:#0a0e15;--edge:#222b3a;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1d2736;--grid_o:1;--ink:#e9eff6;--ink2:#98a5b5;--ink3:#6a7686;--rep:#3fb950;--rep_hi:#6ee787;--rep_dim:#1c4527;--cc:#4b93e6;--cc_hi:#8cc8ff;--cc_dim:#173453;--gap:#e0813c;--gap_hi:#f7b17a;--gap_dim:#48280f;--chip_a:#16241a;--chip_b:#0f1a13;--bloom_a:#2ea043;--bloom_b:#1f6feb;--bloom_o:0.16;--sweep:#a8d0ff;--sweep_o:0.10;--halo_o:0.40;--glow_o:0.24;--core:#0a0e15;}
-@media (prefers-color-scheme: light){:root{--plate_a:#ffffff;--plate_b:#f2f6fb;--edge:#d6dee8;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e7edf4;--grid_o:1;--ink:#0d1319;--ink2:#54606e;--ink3:#7d8794;--rep:#1a7f37;--rep_hi:#2da44e;--rep_dim:#63b87a;--cc:#0969da;--cc_hi:#218bff;--cc_dim:#7fb6ee;--gap:#bc4c00;--gap_hi:#e16f24;--gap_dim:#f6cfa8;--chip_a:#e9f7ed;--chip_b:#dcf1e3;--bloom_a:#2da44e;--bloom_b:#0969da;--bloom_o:0.07;--sweep:#1f4e8c;--sweep_o:0.055;--halo_o:0.20;--glow_o:0.16;--core:#ffffff;}}
+:root{--plate_a:#111823;--plate_b:#0a0e15;--edge:#222b3a;--edge_hi:#ffffff;--edge_hi_o:0.05;--grid:#1e2937;--ink:#e9eff6;--ink2:#98a5b5;--ink3:#6a7686;--track:#37455a;--rep:#3fb950;--rep_hi:#6ee787;--cc:#4b93e6;--cc_hi:#8cc8ff;--pill_a:#16241a;--pill_b:#0f1a13;--sweep:#a8d0ff;--sweep_o:0.09;--halo_o:0.34;--core:#0a0e15;}
+@media (prefers-color-scheme: light){:root{--plate_a:#ffffff;--plate_b:#f2f6fb;--edge:#d6dee8;--edge_hi:#ffffff;--edge_hi_o:0.85;--grid:#e4ebf3;--ink:#0d1319;--ink2:#54606e;--ink3:#7d8794;--track:#c8d3e0;--rep:#1a7f37;--rep_hi:#2da44e;--cc:#0969da;--cc_hi:#218bff;--pill_a:#e9f7ed;--pill_b:#dcf1e3;--sweep:#1f4e8c;--sweep_o:0.05;--halo_o:0.16;--core:#ffffff;}}
 
 text{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;dominant-baseline:auto}
 .mono{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace}
 .ink{fill:var(--ink)} .ink2{fill:var(--ink2)} .ink3{fill:var(--ink3)}
-.t-date{font-size:19px;letter-spacing:.6px;fill:var(--ink3)}
-.t-title{font-size:26px;font-weight:600;fill:var(--ink)}
-.t-sub{font-size:20px;fill:var(--ink2)}
+.c-rep{fill:var(--rep)} .c-cc{fill:var(--cc)} .c-rep-hi{fill:var(--rep_hi)}
+
 .t-kicker{font-size:18px;font-weight:600;letter-spacing:2.4px;fill:var(--ink3)}
-.t-lane{font-size:17px;font-weight:700;letter-spacing:2.6px}
-.t-month{font-size:16px;letter-spacing:.4px;fill:var(--ink3)}
+.t-key{font-size:20px;fill:var(--ink2)}
 .t-legend{font-size:18px;fill:var(--ink2)}
-.t-chip{font-size:25px;font-weight:700}
-.t-chip-s{font-size:16px;font-weight:600;letter-spacing:1.6px}
-.t-gap{font-size:21px}
-.t-gap-s{font-size:19px}
-.t-note{font-size:20px;fill:var(--ink3)}
-.c-rep{fill:var(--rep)} .c-cc{fill:var(--cc)} .c-gap{fill:var(--gap)}
-.c-rep-hi{fill:var(--rep_hi)} .c-gap-hi{fill:var(--gap_hi)}
+.t-name{font-size:26px;font-weight:600;fill:var(--ink)}
+.t-namesub{font-size:20px;fill:var(--ink2)}
+.t-date{font-size:17.5px;letter-spacing:.4px}
+.t-detail{font-size:19px;fill:var(--ink2)}
+.t-coda{font-size:17.5px;fill:var(--ink2)}
+.t-month{font-size:16px;letter-spacing:.4px;fill:var(--ink3)}
+.t-pill{font-size:26px;font-weight:700;fill:var(--rep_hi)}
+.t-pill-u{font-size:15px;font-weight:600;letter-spacing:1.5px;fill:var(--rep)}
 
 .plate{fill:url(#plate)}
 .edge{fill:none;stroke:var(--edge);stroke-width:1.5}
 .edgehi{fill:none;stroke:var(--edge_hi);stroke-width:1.5;opacity:var(--edge_hi_o)}
-.grid{stroke:var(--grid);stroke-width:1;opacity:var(--grid_o)}
-.gridq{stroke:var(--grid);stroke-width:1.5;opacity:var(--grid_o)}
-.breakcut{stroke:var(--edge);stroke-width:2;stroke-linecap:round;opacity:.9}
+.grid{stroke:var(--grid);stroke-width:1}
 
-.lane-glow{fill:none;stroke-width:11;stroke-linecap:round;opacity:var(--glow_o)}
-.lane-core{fill:none;stroke-width:3;stroke-linecap:round}
-.lane-rep-glow{stroke:var(--rep)} .lane-rep-core{stroke:url(#laneRep)}
-.lane-cc-glow{stroke:var(--cc)}   .lane-cc-core{stroke:url(#laneCc)}
-.lane-dash{fill:none;stroke-width:3;stroke-linecap:butt;opacity:.85}
-.lane-dash-rep{stroke:var(--rep_hi)} .lane-dash-cc{stroke:var(--cc_hi)}
-.lane-cap{stroke-width:3;stroke-linecap:round}
-.ghost{stroke:var(--rep);stroke-width:2;stroke-dasharray:2 12;stroke-linecap:round;opacity:.3}
-
-.case{fill:none;stroke:url(#plateStroke);stroke-width:9;stroke-linecap:round}
-.lead{fill:none;stroke:var(--rep);stroke-width:3.2;stroke-linecap:round}
-.lead-hi{fill:none;stroke:var(--rep_hi);stroke-width:1.2;stroke-linecap:round;opacity:.75}
-.lag{fill:none;stroke:var(--gap);stroke-width:2.6;stroke-linecap:round;
-      stroke-dasharray:11 9;opacity:.95}
-.lag-soft{fill:none;stroke:var(--gap);stroke-width:10;stroke-linecap:round;opacity:var(--glow_o)}
-.arrow-rep{fill:var(--rep)} .arrow-gap{fill:var(--gap)}
+/* the full-width track: dotted where neither side had it yet, and where both do */
+.track{stroke:var(--track);stroke-width:2;stroke-dasharray:2 9;stroke-linecap:round}
+/* the lead: the one span that means "only this repo had it" */
+.rail{fill:none;stroke:var(--rep);stroke-width:3.5;stroke-linecap:round}
+.rail-hi{fill:none;stroke:var(--rep_hi);stroke-width:1.2;stroke-linecap:round;opacity:.55}
+.tick-rep{stroke:var(--rep);stroke-width:1.5;opacity:.5;stroke-linecap:round}
+.tick-cc{stroke:var(--cc);stroke-width:1.5;opacity:.5;stroke-linecap:round}
 
 .halo{opacity:var(--halo_o)}
-.halo-rep{fill:url(#haloRep)} .halo-cc{fill:url(#haloCc)} .halo-gap{fill:url(#haloGap)}
+.halo-rep{fill:url(#haloRep)} .halo-cc{fill:url(#haloCc)}
+.mk-rep{fill:var(--rep)}
 .mk-core{fill:var(--core)}
-.mk-rep{fill:var(--rep)} .mk-cc{fill:var(--cc)}
-.mk-ring-rep{fill:none;stroke:var(--rep);stroke-width:3}
-.mk-ring-cc{fill:none;stroke:var(--cc);stroke-width:3}
-.mk-ring-gap{fill:none;stroke:var(--gap);stroke-width:2.6;stroke-dasharray:3.4 3.2}
-.mk-dot{fill:var(--core)}
-.mk-spec{fill:#ffffff;opacity:.5}
-.stem{stroke:var(--gap);stroke-width:2;opacity:.8;stroke-linecap:round}
-.leader{stroke-width:1.4;opacity:.55;stroke-linecap:round}
-.leader-rep{stroke:var(--rep)} .leader-cc{stroke:var(--cc)}
+.mk-spec{fill:#ffffff;opacity:.45}
+.mk-ring-cc{fill:var(--core);stroke:var(--cc);stroke-width:4}
 
-.chip-bg{fill:url(#chip);stroke:var(--rep);stroke-width:1.4}
-.chip-glow{fill:var(--rep);opacity:var(--glow_o)}
+.pill-bg{fill:url(#pill);stroke:var(--rep);stroke-width:1.4}
 
 /* ── motion ─────────────────────────────────────────────────────────────────────────────────
    One animation per element, and no literal delay value anywhere — phase rides --d through the
@@ -113,7 +72,7 @@ text{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Hel
    divides 24s, so t=0 and t=P render identically. NB the lint reads this stylesheet as text, so
    a prose mention of that property followed by a colon reads to it as a declaration. */
 
-@keyframes sweepx{from{transform:translateX(0px)}to{transform:translateX(1740px)}}
+@keyframes sweepx{from{transform:translateX(0px)}to{transform:translateX(1700px)}}
 .sweep{animation:sweepx 24s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
 .sweepfill{fill:url(#sweep);opacity:var(--sweep_o)}
 
@@ -124,190 +83,81 @@ text{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Hel
   100%{opacity:0;transform:scale(1)}}
 .ig{fill:none;stroke-width:2.4;transform-box:fill-box;transform-origin:50% 50%;opacity:0;
      animation:ignite 24s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-.ig-rep{stroke:var(--rep_hi)} .ig-cc{stroke:var(--cc_hi)} .ig-gap{stroke:var(--gap_hi)}
-
-@keyframes flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-96px}}
-.flow-a{stroke-dasharray:14 82;animation:flow 12s linear infinite;
-         animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-.flow-b{stroke-dasharray:14 82;animation:flow 8s linear infinite;
-         animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-
-@keyframes march{from{stroke-dashoffset:0}to{stroke-dashoffset:-120px}}
-.lag{animation:march 24s linear infinite;animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-
-@keyframes breathe{0%{opacity:var(--bloom_o)}50%{opacity:calc(var(--bloom_o) * 1.85)}
-                    100%{opacity:var(--bloom_o)}}
-.bloom{fill:url(#bloom);animation:breathe 24s ease-in-out infinite;
-        animation-delay:calc(var(--d,0s) + var(--fz,0s))}
-.bloom-still{fill:url(#bloom2);opacity:calc(var(--bloom_o) * 0.8)}
+.ig-rep{stroke:var(--rep_hi)} .ig-cc{stroke:var(--cc_hi)}
 
 @media (prefers-reduced-motion: reduce){*{animation:none !important}}
 </style>
-<rect class="plate" x="0" y="0" width="1400" height="640" rx="16"/>
-<ellipse class="bloom-still" cx="300" cy="470" rx="620" ry="330"/>
-<ellipse class="bloom" cx="1060" cy="300" rx="700" ry="390" style="--d:0s"/>
-<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-340" y="0" width="340" height="640"/></g>
+<rect class="plate" x="0" y="0" width="1400" height="524" rx="16"/>
+<g class="sweep" style="--d:0s"><rect class="sweepfill" x="-300" y="0" width="300" height="524"/></g>
 <g>
-<line class="gridq" x1="74.5" y1="58" x2="74.5" y2="590"/>
-<line class="grid" x1="102.1" y1="58" x2="102.1" y2="590"/>
-<line class="grid" x1="128.8" y1="58" x2="128.8" y2="590"/>
-<line class="gridq" x1="156.4" y1="58" x2="156.4" y2="590"/>
-<line class="grid" x1="183.1" y1="58" x2="183.1" y2="590"/>
-<line class="grid" x1="210.7" y1="58" x2="210.7" y2="590"/>
-<line class="gridq" x1="238.3" y1="58" x2="238.3" y2="590"/>
-<line class="grid" x1="265.0" y1="58" x2="265.0" y2="590"/>
-<line class="grid" x1="292.6" y1="58" x2="292.6" y2="590"/>
-<line class="gridq" x1="319.4" y1="58" x2="319.4" y2="590"/>
-<line class="grid" x1="347.0" y1="58" x2="347.0" y2="590"/>
-<line class="grid" x1="374.6" y1="58" x2="374.6" y2="590"/>
-<line class="grid" x1="399.5" y1="58" x2="399.5" y2="590"/>
-<line class="gridq" x1="513.1" y1="58" x2="513.1" y2="590"/>
-<line class="gridq" x1="704.5" y1="58" x2="704.5" y2="590"/>
-<line class="gridq" x1="902.4" y1="58" x2="902.4" y2="590"/>
-<line class="gridq" x1="1093.9" y1="58" x2="1093.9" y2="590"/>
-<line class="gridq" x1="1291.7" y1="58" x2="1291.7" y2="590"/>
+<line class="grid" x1="328.0" y1="104" x2="328.0" y2="472"/>
+<line class="grid" x1="688.0" y1="104" x2="688.0" y2="472"/>
+<line class="grid" x1="1060.0" y1="104" x2="1060.0" y2="472"/>
 </g>
 <g>
-<text class="t-month mono" x="74.5" y="612" text-anchor="middle">Mar ’25</text>
-<text class="t-month mono" x="156.4" y="612" text-anchor="middle">Jun</text>
-<text class="t-month mono" x="238.3" y="612" text-anchor="middle">Sep</text>
-<text class="t-month mono" x="319.4" y="612" text-anchor="middle">Dec</text>
-<text class="t-month mono" x="513.1" y="612" text-anchor="middle">Apr</text>
-<text class="t-month mono" x="704.5" y="612" text-anchor="middle">May</text>
-<text class="t-month mono" x="902.4" y="612" text-anchor="middle">Jun</text>
-<text class="t-month mono" x="1093.9" y="612" text-anchor="middle">Jul</text>
-<text class="t-month mono" x="1291.7" y="612" text-anchor="middle">Aug</text>
+<text class="t-month mono" x="142.0" y="494" text-anchor="middle">May ’26</text>
+<text class="t-month mono" x="508.0" y="494" text-anchor="middle">Jun</text>
+<text class="t-month mono" x="874.0" y="494" text-anchor="middle">Jul</text>
+<text class="t-month mono" x="1198.0" y="494" text-anchor="middle">Aug</text>
 </g>
-<line class="breakcut" x1="423" y1="439" x2="441" y2="413"/>
-<line class="breakcut" x1="437" y1="439" x2="455" y2="413"/>
-<text class="t-month" x="441" y="612" text-anchor="middle">break</text>
-<line class="lane-glow lane-rep-glow" x1="462" y1="264" x2="1330" y2="264"/>
-<line class="lane-core lane-rep-core" x1="462" y1="264" x2="1330" y2="264"/>
-<line class="lane-dash lane-dash-rep flow-a" x1="462" y1="264" x2="1330" y2="264" style="--d:0s"/>
-<line class="lane-glow lane-cc-glow" x1="70" y1="426" x2="416" y2="426"/>
-<line class="lane-core lane-cc-core" x1="70" y1="426" x2="416" y2="426"/>
-<line class="lane-dash lane-dash-cc flow-b" x1="70" y1="426" x2="416" y2="426" style="--d:0s"/>
-<line class="lane-glow lane-cc-glow" x1="466" y1="426" x2="1330" y2="426"/>
-<line class="lane-core lane-cc-core" x1="466" y1="426" x2="1330" y2="426"/>
-<line class="lane-dash lane-dash-cc flow-b" x1="466" y1="426" x2="1330" y2="426" style="--d:0s"/>
-<line class="ghost" x1="70" y1="264" x2="410" y2="264"/>
-<text class="t-lane c-rep" x="478" y="252">THIS REPO</text>
-<text class="t-lane c-cc" x="70" y="408">CLAUDE CODE</text>
-<text class="t-note" x="70" y="170">Claude Code ran 13 months</text>
-<text class="t-note" x="70" y="196">before this repo existed.</text>
-<text class="t-note" x="70" y="222">The axis breaks there, 7×.</text>
-<path class="lag" d="M 331.8 416.0 C 551.8 412.0 746.8 412.0 1048.8 412.0 C 1124.8 412.0 1176.8 376.0 1176.8 314.0" style="--d:0s"/>
-<polygon class="arrow-gap" points="1176.8,304.0 1170.3,318.0 1183.3,318.0"/>
-<text class="t-gap" x="352" y="344"><tspan class="c-gap-hi" font-weight="700">7 months late</tspan><tspan class="ink2"> — our gap, not theirs.</tspan></text>
-<text class="t-gap-s ink2" x="352" y="368">the status-line context fields existed from</text>
-<text class="t-gap-s ink2" x="352" y="392">2025-12-15. This repo read them on 2026-07-14.</text>
-<path class="case" d="M 851.3 275 C 851.3 338 876.9 348 876.9 413"/>
-<path class="lead" d="M 851.3 275 C 851.3 338 876.9 348 876.9 413"/>
-<path class="lead-hi" d="M 851.3 275 C 851.3 338 876.9 348 876.9 413"/>
-<polygon class="arrow-rep" points="876.9,423.0 870.4,409.0 883.4,409.0"/>
-<rect class="chip-glow" x="832.0" y="335.0" width="152.0" height="66.0" rx="33.0"/>
-<rect class="chip-bg" x="835.0" y="338.0" width="146.0" height="60.0" rx="30.0"/>
-<text class="t-chip c-rep-hi" x="908.0" y="366" text-anchor="middle">4 days</text>
-<text class="t-chip-s c-rep" x="908.0" y="388" text-anchor="middle">LATER</text>
-<path class="case" d="M 1151.3 275 C 1151.3 338 1330.0 348 1330.0 413"/>
-<path class="lead" d="M 1151.3 275 C 1151.3 338 1330.0 348 1330.0 413"/>
-<path class="lead-hi" d="M 1151.3 275 C 1151.3 338 1330.0 348 1330.0 413"/>
-<polygon class="arrow-rep" points="1330.0,423.0 1323.5,409.0 1336.5,409.0"/>
-<rect class="chip-glow" x="1176.0" y="335.0" width="152.0" height="66.0" rx="33.0"/>
-<rect class="chip-bg" x="1179.0" y="338.0" width="146.0" height="60.0" rx="30.0"/>
-<text class="t-chip c-rep-hi" x="1252.0" y="366" text-anchor="middle">28 days</text>
-<text class="t-chip-s c-rep" x="1252.0" y="388" text-anchor="middle">LATER</text>
-<g transform="translate(70.0,426)">
-<circle class="halo halo-cc" r="11"/>
-<circle class="mk-dot" r="7.5"/>
+<text class="t-name" x="64" y="140">a research team that attacks its own findings</text>
+<text class="t-namesub" x="720" y="140">· a share of every wave briefed to refute the rest</text>
+<line class="track" x1="64" y1="216" x2="217.0" y2="216"/>
+<line class="track" x1="295.0" y1="216" x2="1336" y2="216"/>
+<line class="rail" x1="232.0" y1="216" x2="280.0" y2="216"/>
+<line class="rail-hi" x1="232.0" y1="216" x2="280.0" y2="216"/>
+<line class="tick-rep" x1="232.0" y1="204" x2="232.0" y2="184"/>
+<line class="tick-cc" x1="280.0" y1="228" x2="280.0" y2="247"/>
+<rect class="pill-bg" x="310.0" y="195.0" width="101.4" height="42.0" rx="21.0"/>
+<text class="t-pill" x="330.0" y="225">4</text>
+<text class="t-pill-u" x="352.7" y="225">DAYS</text>
+<g transform="translate(232.0,216)">
+<circle class="halo halo-rep" r="16"/>
+<circle class="mk-rep" r="9.5"/>
+<circle class="mk-spec" cx="-3" cy="-3.4" r="2.2"/>
+<circle class="ig ig-rep" r="12.5" style="--d:-20.696s"/>
+</g>
+<g transform="translate(280.0,216)">
+<circle class="halo halo-cc" r="16"/>
 <circle class="mk-ring-cc" r="7.5"/>
-<circle class="ig ig-cc" r="10" style="--d:-22.952s"/>
+<circle class="ig ig-cc" r="12.5" style="--d:-20.019s"/>
 </g>
-<g transform="translate(331.8,426)">
-<circle class="halo halo-cc" r="11"/>
-<circle class="mk-dot" r="7.5"/>
+<text class="t-date mono c-rep" x="226.0" y="178">2026-05-24</text>
+<text class="t-detail" x="343.0" y="178">running here</text>
+<text class="t-date mono c-cc" x="274.0" y="262">2026-05-28</text>
+<text class="t-detail" x="391.0" y="262">Dynamic Workflows 2.1.154 — the same idea</text>
+<text class="t-name" x="64" y="320">two-way session messaging</text>
+<text class="t-namesub" x="436" y="320">· open, brief, question and retire peers from any session</text>
+<line class="track" x1="64" y1="396" x2="781.0" y2="396"/>
+<line class="track" x1="1147.0" y1="396" x2="1336" y2="396"/>
+<line class="rail" x1="796.0" y1="396" x2="1132.0" y2="396"/>
+<line class="rail-hi" x1="796.0" y1="396" x2="1132.0" y2="396"/>
+<line class="tick-rep" x1="796.0" y1="384" x2="796.0" y2="364"/>
+<line class="tick-cc" x1="1132.0" y1="408" x2="1132.0" y2="427"/>
+<rect class="pill-bg" x="906.0" y="375.0" width="116.1" height="42.0" rx="21.0"/>
+<text class="t-pill" x="926.0" y="405">28</text>
+<text class="t-pill-u" x="963.3" y="405">DAYS</text>
+<g transform="translate(796.0,396)">
+<circle class="halo halo-rep" r="16"/>
+<circle class="mk-rep" r="9.5"/>
+<circle class="mk-spec" cx="-3" cy="-3.4" r="2.2"/>
+<circle class="ig ig-rep" r="12.5" style="--d:-12.734s"/>
+</g>
+<g transform="translate(1132.0,396)">
+<circle class="halo halo-cc" r="16"/>
 <circle class="mk-ring-cc" r="7.5"/>
-<circle class="ig ig-cc" r="10" style="--d:-19.340s"/>
+<circle class="ig ig-cc" r="12.5" style="--d:-7.991s"/>
 </g>
-<g transform="translate(420.0,264)">
-<circle class="halo halo-rep" r="11"/>
-<circle class="mk-dot" r="7.5"/>
-<circle class="mk-ring-rep" r="7.5"/>
-<circle class="ig ig-rep" r="10" style="--d:-18.124s"/>
-</g>
-<g transform="translate(851.3,264)">
-<circle class="halo halo-rep" r="18"/>
-<circle class="mk-rep" r="10.5"/>
-<circle class="mk-dot" r="4"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.1"/>
-<circle class="ig ig-rep" r="13" style="--d:-12.175s"/>
-</g>
-<g transform="translate(876.9,426)">
-<circle class="halo halo-cc" r="18"/>
-<circle class="mk-cc" r="10.5"/>
-<circle class="mk-dot" r="4"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.1"/>
-<circle class="ig ig-cc" r="13" style="--d:-11.823s"/>
-</g>
-<g transform="translate(1151.3,264)">
-<circle class="halo halo-rep" r="18"/>
-<circle class="mk-rep" r="10.5"/>
-<circle class="mk-dot" r="4"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.1"/>
-<circle class="ig ig-rep" r="13" style="--d:-8.037s"/>
-</g>
-<line class="stem" x1="1176.8" y1="264" x2="1176.8" y2="286"/>
-<g transform="translate(1176.8,294)">
-<circle class="halo halo-gap" r="11"/>
-<circle class="mk-dot" r="7"/>
-<circle class="mk-ring-gap" r="7"/>
-<circle class="ig ig-gap" r="8.5" style="--d:-7.685s"/>
-</g>
-<g transform="translate(1330.0,426)">
-<circle class="halo halo-cc" r="18"/>
-<circle class="mk-cc" r="10.5"/>
-<circle class="mk-dot" r="4"/>
-<circle class="mk-spec" cx="-3" cy="-3.4" r="2.1"/>
-<circle class="ig ig-cc" r="13" style="--d:-5.572s"/>
-</g>
-<line class="leader leader-cc" x1="70.0" y1="440" x2="70.0" y2="518"/>
-<text class="t-date mono" x="83.0" y="542" text-anchor="start">2025-02-24</text>
-<text class="t-title" x="83.0" y="572" text-anchor="start">Claude Code 0.2.6</text>
-<text class="t-sub" x="83.0" y="596" text-anchor="start">first npm publish</text>
-<line class="leader leader-cc" x1="331.8" y1="440" x2="331.8" y2="436"/>
-<text class="t-date mono" x="345.0" y="460" text-anchor="start">2025-12-15</text>
-<text class="t-title" x="345.0" y="490" text-anchor="start">Claude Code 2.0.70</text>
-<text class="t-sub" x="345.0" y="514" text-anchor="start">status-line context fields exist</text>
-<line class="leader leader-rep" x1="420.0" y1="154" x2="420.0" y2="250"/>
-<text class="t-date mono" x="475.0" y="92" text-anchor="start">2026-03-24</text>
-<text class="t-title" x="475.0" y="122" text-anchor="start">this repo's first commit</text>
-<text class="t-sub" x="475.0" y="146" text-anchor="start">aa391e46</text>
-<line class="leader leader-rep" x1="851.3" y1="236" x2="851.3" y2="250"/>
-<text class="t-date mono" x="838.0" y="174" text-anchor="end">2026-05-24</text>
-<text class="t-title" x="838.0" y="204" text-anchor="end">adversarial research team</text>
-<text class="t-sub" x="838.0" y="228" text-anchor="end">briefed to attack its own findings</text>
-<line class="leader leader-cc" x1="876.9" y1="440" x2="876.9" y2="518"/>
-<text class="t-date mono" x="890.0" y="542" text-anchor="start">2026-05-28</text>
-<text class="t-title" x="890.0" y="572" text-anchor="start">Dynamic Workflows 2.1.154</text>
-<text class="t-sub" x="890.0" y="596" text-anchor="start">the same idea, independently</text>
-<line class="leader leader-rep" x1="1151.3" y1="154" x2="1151.3" y2="250"/>
-<text class="t-date mono" x="1330.0" y="92" text-anchor="end">2026-07-10</text>
-<text class="t-title" x="1330.0" y="122" text-anchor="end">peer session messaging</text>
-<text class="t-sub" x="1330.0" y="146" text-anchor="end">open, brief and retire peers</text>
-<line class="leader leader-cc" x1="1330.0" y1="440" x2="1330.0" y2="436"/>
-<text class="t-date mono" x="1317.0" y="460" text-anchor="end">2026-08-07</text>
-<text class="t-title" x="1317.0" y="490" text-anchor="end">Claude Code 2.1.224</text>
-<text class="t-sub" x="1317.0" y="514" text-anchor="end">sessions message each other</text>
-<text class="t-kicker" x="70" y="42">SAME WALL, SAME ANSWER, WEEKS APART</text>
-<circle class="mk-rep" cx="960" cy="35" r="7"/>
-<circle class="mk-dot" cx="960" cy="35" r="2.6"/>
-<text class="t-legend" x="975" y="41">this repo</text>
-<circle class="mk-cc" cx="1096" cy="35" r="7"/>
-<circle class="mk-dot" cx="1096" cy="35" r="2.6"/>
-<text class="t-legend" x="1111" y="41">Claude Code</text>
-<circle class="mk-dot" cx="1251" cy="35" r="6.5"/>
-<circle class="mk-ring-gap" cx="1251" cy="35" r="6.5"/>
-<text class="t-legend" x="1266" y="41">our gap</text>
-<rect class="edge" x=".75" y=".75" width="1398.5" height="638.5" rx="16"/>
+<text class="t-date mono c-rep" x="790.0" y="358">2026-07-10</text>
+<text class="t-detail" x="907.0" y="358">running here</text>
+<text class="t-date mono c-cc" x="550.8" y="442">2026-08-07</text>
+<text class="t-detail" x="667.8" y="442">Claude Code 2.1.224 — sessions message each other</text>
+<text class="t-kicker" x="64" y="44">HERE FIRST — TWICE</text>
+<text class="t-key" x="64" y="78">Each bar is how long the capability was running here before the Claude Code release that shipped it.</text>
+<circle class="mk-rep" cx="967" cy="38" r="7"/>
+<text class="t-legend" x="980" y="44">running here</text>
+<circle class="mk-ring-cc" cx="1123" cy="38" r="5.5"/>
+<text class="t-legend" x="1136" y="44">shipped in Claude Code</text>
+<rect class="edge" x=".75" y=".75" width="1398.5" height="522.5" rx="16"/>
 <path class="edgehi" d="M 17 1.5 H 1383 A 15.5 15.5 0 0 1 1398.5 17"/>
 </svg>
