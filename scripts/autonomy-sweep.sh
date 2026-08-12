@@ -695,13 +695,19 @@ fi
 # fell to 45.8%" would be frozen at whatever the first red sweep saw and would go on asserting it
 # after the number moved. The standing figures live where they are recomputed: `backlog-ratchet.sh`
 # itself, which the falsifier below runs.
+#
+# `--source backlog-ratchet`, NOT `autonomy-sweep`. The source names WHICH PRODUCER filed the row,
+# and `autonomy-sweep` is already taken by the class-B decision-default filer higher up this script.
+# Sharing it makes two unrelated producers indistinguishable in the store — and it broke that filer's
+# own test on the first run, whose assertion selects `source=="autonomy-sweep"` and suddenly got two
+# rows. The sweep is the CALLER of both; the ratchet is the PRODUCER of this one.
 _rat_filed="n-a"
 if [ "$_rat_rc" = "1" ] && [ -n "$BACKLOG" ] && [ -x "$BACKLOG" ]; then
   if _bounded "$BACKLOG" add \
        --project claude-infrastructure \
        --title "backlog falsifier coverage fell below its high-water mark — rows are being filed that cannot re-check themselves (run backlog-ratchet.sh for today's figures)" \
        --condition "backlog-ratchet-coverage-regression" \
-       --source autonomy-sweep \
+       --source backlog-ratchet \
        --falsifier "bash '$_ratchet' --assert >/dev/null 2>&1" \
        >/dev/null 2>&1
   then _rat_filed="filed"; else _rat_filed="file-failed"; fi

@@ -34,6 +34,19 @@ setup() {
   # D2/D4 stores. CC_HANDOFF_ALARM_DIR is REAPED by the sweep, so the warning above applies to it in
   # full; CC_EXPIRED_LEDGER is APPENDED to, and an unexported one would grow the operator's real
   # ledger from a test run.
+  # THE RATCHET'S STATE — unexported until 2026-08-12, so every run of this suite read the
+  # OPERATOR'S LIVE high-water mark (~/.claude/autonomy/backlog-ratchet.json). That was invisible
+  # while the ratchet's only effect was a journal field; the moment a red assert gained a CONSUMER
+  # that files a row, a test's outcome started depending on the live store's coverage. Same rule as
+  # the reaped dirs above: a default that resolves under $HOME is the harness's bug, not the
+  # subject's.
+  export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/backlog-ratchet.json"
+  export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/backlog-validated.json"
+  # The currency pass is OFF by default across this suite: it costs ~106 s on a real store and this
+  # file is not its subject. The three W1 cases at the bottom turn it on deliberately.
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"
+  export CC_PREMISE_PASS_EVERY_S=99999
+  : > "$CC_PREMISE_PASS_STAMP"
   export CC_HANDOFF_ALARM_DIR="$BATS_TEST_TMPDIR/handoff-alarms"
   export CC_EXPIRED_LEDGER="$BATS_TEST_TMPDIR/expired-unread.jsonl"
   export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/watchdog-teardown"
@@ -924,4 +937,74 @@ SH
   # POSITIVE CONTROL: without the switch, the identical fixture alarms
   run bash "$SWEEP"
   [ "$(ha_count)" -eq 1 ]
+}
+
+# ── W1 · THE CURRENCY PASS IS ACTUALLY CALLED (backlog b585e86ea4e4) ─────────────────────────────
+# `cc-premise sweep`/`screen` were built, documented and invoked by NOTHING — the fourth zero-caller
+# in this subsystem. Wiring them and not asserting the CALL would reproduce the defect one layer up:
+# a caller that exists in the file and never fires reads exactly like no caller at all. These cases
+# assert the fire, the interval gate that keeps it off the 5-minute path, and the journal fields a
+# reader would use to tell "held back" from "ran and found nothing".
+
+@test "W1 · the currency pass FIRES and journals what it did" {
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"
+  export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
+  export CC_PREMISE_PASS_EVERY_S=0                      # due now
+  export CC_PREMISE_REPO="$REPO"
+  # One row carrying a probe that PASSES, so the pass has something real to record and retire.
+  local id; id="$("$CC_BACKLOG_BIN" add --title "w1 currency fixture" --project probe \
+                    --source test --falsifier "true")"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"premise_pass_rc":"0"' "$CC_IDL"
+  grep -q '"premise_rows_validated":1' "$CC_IDL"
+  grep -q '"premise_rows_closed":1' "$CC_IDL"
+  [ -f "$CC_PREMISE_PASS_STAMP" ]
+  run "$CC_BACKLOG_BIN" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "done" ]
+}
+
+@test "W1 · the interval gate HOLDS the pass off the 5-minute path" {
+  # The sweep fires at StartInterval 300; the pass costs 106 s measured. Without this gate it would
+  # spend a third of the box's sweep budget re-asking questions that move on the scale of a landing.
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"
+  export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
+  export CC_PREMISE_PASS_EVERY_S=99999
+  export CC_PREMISE_REPO="$REPO"
+  "$CC_BACKLOG_BIN" add --title "w1 gate fixture" --project probe --source test \
+    --falsifier "true" >/dev/null
+  : > "$CC_PREMISE_PASS_STAMP"                          # a pass just ran
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"premise_pass_note":"not-due"' "$CC_IDL"
+  grep -q '"premise_rows_validated":0' "$CC_IDL"
+  # POSITIVE CONTROL: the identical fixture DOES fire once the interval has elapsed, so this test
+  # cannot pass merely because the block is broken or absent.
+  #
+  # `export` on its own line, NOT a `VAR=x run …` prefix. A one-shot assignment in front of bats'
+  # `run` does not reach the subshell it forks, so the prefixed form left EVERY_S at 99999 and the
+  # control "failed" while the subject was working perfectly — a harness defect that reads exactly
+  # like a real red (memory: verification-harness-vacuous-pass-traps).
+  : > "$CC_IDL"
+  export CC_PREMISE_PASS_EVERY_S=0
+  run bash "$SWEEP"
+  grep -q '"premise_rows_validated":1' "$CC_IDL"
+}
+
+@test "W1 · a RED ratchet files one self-falsifying row instead of only a JSON field" {
+  # ratchet_rc read RED on every recorded run and its only consequence was being written down.
+  export CC_PREMISE_PASS_EVERY_S=99999                   # keep this case about the ratchet alone
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/ratchet.json"
+  # A high-water the current store cannot meet ⇒ --assert returns 1, which is the real red path.
+  printf '{"coverage_high_water":"99.0","denominator_version":2,"recorded":"2020-01-01T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  "$CC_BACKLOG_BIN" add --title "w1 ratchet fixture" --project probe --source test >/dev/null
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"ratchet_filed":"filed"' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --open --json
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")]|length')" = "1" ]
+  # …and it carries its OWN falsifier, so it retires itself when coverage recovers.
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")][0]|.falsifier|length>0')" = "true" ]
 }
