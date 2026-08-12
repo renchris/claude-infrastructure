@@ -224,7 +224,86 @@ nightly() { # runs the nightly with every other check stubbed green
       CC_NIGHTLY_BATS_DIR="$BATS_TEST_TMPDIR/gt" CC_NIGHTLY_PLIST_GLOB="$BATS_TEST_TMPDIR/good.plist" \
       CC_NIGHTLY_PAGEDIR="$PAGES" CC_NIGHTLY_LOG="$BATS_TEST_TMPDIR/reg.log" \
       CC_NIGHTLY_REPO="$SHARED" CC_NIGHTLY_POSTLAND_DIR="$1" CC_NIGHTLY_POSTLAND_AGE=0 \
+      CC_NIGHTLY_POSTLAND_VERIFY="${PV_STUB:-/usr/bin/true}" \
       bash "$NIGHTLY"
+}
+
+# ── nightly step 3c: the post-land verifier's OWN instrument (item cb8b9620ddef) ─────────────────
+# The seam above is stubbed rather than left to default, and that is not tidiness: step 3c runs
+# scripts/postland-verify.sh --selftest, which lands fixture commits and runs a real bats corpus —
+# 424s measured. Defaulted, the two inertness tests above would each pay it to assert nothing.
+#
+# WHY THESE LIVE HERE AND NOT ONLY IN nightly-regression --selftest. That selftest matches neither
+# *gate*.sh nor *lint*.sh either, so nothing schedules it — a guard written only there would rot the
+# same way the thing it guards did. `bats tests/` IS step 1 of the nightly and the post-land corpus,
+# so the guard belongs in the corpus. Their subject is this file's own subject one step on: step 5
+# (postland-inertness, above) abstains on exactly one fact, the stamps dir not existing, and step 3c
+# is the one check in the job that can create it.
+pv_stub() { # <name> <body…> → an executable stand-in for postland-verify.sh, path on stdout
+  local n="$1"; shift
+  mkdir -p "$BATS_TEST_TMPDIR/pv"
+  { printf '#!/bin/bash\n'; printf '%s\n' "$@"; } > "$BATS_TEST_TMPDIR/pv/$n"
+  chmod +x "$BATS_TEST_TMPDIR/pv/$n"
+  printf '%s' "$BATS_TEST_TMPDIR/pv/$n"
+}
+
+@test "nightly 3c: postland-verify --selftest is RUN, with the flag and a sandboxed state dir" {
+  advance_origin b
+  # The stub reds unless it got both. `case $HOME` is the sandbox predicate stated the way the
+  # defect states it: postland-verify's main() runs ensure_dirs BEFORE dispatch, so every $HOME-
+  # rooted knob must be moved or a bare --selftest writes into live state.
+  PV_STUB="$(pv_stub pv-ok.sh \
+    '[ "${1:-}" = "--selftest" ] || { echo "no --selftest flag"; exit 1; }' \
+    '[ -n "${CC_POSTLAND_DIR:-}" ] || { echo "UNSANDBOXED: CC_POSTLAND_DIR unset"; exit 1; }' \
+    'case "$CC_POSTLAND_DIR" in "$HOME"/*) echo "UNSANDBOXED: live state"; exit 1 ;; esac' \
+    'mkdir -p "$CC_POSTLAND_DIR/stamps"' \
+    'echo "postland-verify selftest: 53 passed, 0 failed"')"
+  export PV_STUB
+  run nightly "$BATS_TEST_TMPDIR/no-such-postland"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "ok   postland-verify.sh --selftest"
+}
+
+@test "nightly 3c: the instrument check does NOT manufacture step 5's postland-inertness RED" {
+  advance_origin b
+  # The incident this pair exists for: 3c writes $CC_POSTLAND_DIR/stamps, step 5 green-abstains only
+  # while that dir is absent. Unsandboxed, night one creates it and every night after reds over a net
+  # the box never adopted. Both verdicts are read from ONE run — separately, the manufactured red
+  # would not appear until the second night, which is what makes this class survive review.
+  PV_STUB="$(pv_stub pv-mkdir.sh \
+    'mkdir -p "${CC_POSTLAND_DIR:?CC_POSTLAND_DIR unset — the check is unsandboxed}/stamps"' \
+    'echo "postland-verify selftest: 53 passed, 0 failed"')"
+  export PV_STUB
+  run nightly "$BATS_TEST_TMPDIR/no-such-postland"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "ok   postland-verify.sh --selftest"
+  echo "$output" | grep -q "ok   postland-inertness"
+  [ ! -d "$BATS_TEST_TMPDIR/no-such-postland/stamps" ]
+}
+
+@test "nightly 3c: a FAILING instrument reds the night and its detail reaches the page" {
+  # ANTI-VACUITY for the pair above: both pass just as well against a check that is launched and then
+  # ignored. Only a stub that fails proves its verdict reaches the night's.
+  advance_origin b
+  PV_STUB="$(pv_stub pv-red.sh 'echo "postland-verify selftest: 52 passed, 1 failed"' 'exit 1')"
+  export PV_STUB
+  run nightly "$BATS_TEST_TMPDIR/no-such-postland"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "RED  postland-verify.sh --selftest"
+  grep -q "52 passed, 1 failed" "$PAGES/nightly-regression.page"
+}
+
+@test "nightly 3c: POSTLAND_VERIFY=off SKIPS the check — a kill switch is not a green" {
+  # postland-verify exits 0 above its own dispatch when killed, so a bare run would score `ok` having
+  # proven nothing. The stub reds if it is reached at all, so a skip is the only way this passes.
+  advance_origin b
+  PV_STUB="$(pv_stub pv-red.sh 'echo reached; exit 1')"
+  export PV_STUB POSTLAND_VERIFY=off
+  run nightly "$BATS_TEST_TMPDIR/no-such-postland"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "skip postland-verify.sh --selftest"
+  ! echo "$output" | grep -q "ok   postland-verify.sh --selftest"
+  grep -q "postland-verify.sh:kill-switched" "$BATS_TEST_TMPDIR/reg.log"
 }
 
 @test "nightly postland-inertness: RED when the net exists but a settled trunk commit is unstamped" {

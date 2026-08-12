@@ -13,6 +13,9 @@
 #   3. never-stuck-gate.sh (live)        — THE systematic invariant (the p12 21·0→19·2 signal)
 #   3b. idl-abstain-alarm.sh (live)      — the IDL abstention monitor: PAGES a check stuck at 100%
 #                                          BLIND abstention (an inert no-check, T-P6-4); healthy-dormant is quiet.
+#   3c. postland-verify.sh --selftest    — the post-land verifier's OWN instrument. Not a *gate*/*lint*
+#                                          name, so step 4's globs never saw it. Run against a SANDBOXED
+#                                          state dir (the step says why that is not optional).
 #   4. every scripts/*gate*.sh + *lint*.sh: `--selftest` where supported, else a bare read-only run.
 #      SKIPS *-e2e.sh (side-effectful — would spawn panes/sessions) — the skip is LOGGED, never silent.
 #   5. postland_inertness — the post-land verification net's OWN liveness: stamps dir present but a
@@ -66,6 +69,7 @@ GATE_GLOB="${CC_NIGHTLY_GATE_GLOB:-$REPO/scripts/*gate*.sh}"
 LINT_GLOB="${CC_NIGHTLY_LINT_GLOB:-$REPO/scripts/*lint*.sh}"
 NEVERSTUCK="${CC_NIGHTLY_NEVERSTUCK:-$REPO/scripts/never-stuck-gate.sh}"   # live systematic invariant; stubbable for --selftest
 ABSTAIN="${CC_NIGHTLY_ABSTAIN:-$REPO/scripts/idl-abstain-alarm.sh}"        # live IDL abstention monitor (T-P6-4); stubbable for --selftest
+POSTLANDV="${CC_NIGHTLY_POSTLAND_VERIFY:-$REPO/scripts/postland-verify.sh}"   # the post-land verifier's OWN instrument (step 3c); stubbable
 PAGE_KEY="${CC_NIGHTLY_PAGE_KEY:-nightly-regression}"
 POSTLAND_DIR="${CC_NIGHTLY_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"   # post-land verification net; stubbable
 POSTLAND_AGE="${CC_NIGHTLY_POSTLAND_AGE:-7200}"                              # a trunk commit older than this MUST be stamped
@@ -338,6 +342,16 @@ NGR_CHECK_TIMEOUT_DECL=(
   # default would have converted the job's headline signal into a nightly rc-124 NON-VERDICT. 1800s
   # is ~4.3x the measured background number and is still a TIGHTENING: on run_check it was unbounded.
   "never-stuck-gate.sh|1800"
+  # postland-verify --selftest is the same animal for the same reason: it is not one check but a
+  # sequence of FIXTURE LANDS, each running a real bats corpus inside a real git repo, plus the
+  # pre-plan grace assertions that are timing by construction. MEASURED 2026-08-12 at trunk
+  # 1b044624: 424s wall in the FOREGROUND (53 passed, 0 failed), of which 3.5s is user time — it is
+  # dominated by waits, so it does not shrink on a bigger box and it does grow under the plist's
+  # ProcessType Background + Nice 10. Applying the same 1.72x band tax never-stuck-gate measured
+  # puts it near 730s, i.e. 2.4x ABOVE the 300s default: at the default this check would report rc
+  # 124 every night forever — a NON-VERDICT, which is silence wearing a verdict's clothes, and
+  # exactly the failure mode that would leave the instrument's rot as unwatched as it is today.
+  "postland-verify.sh|1800"
 )
 
 ngr_decl_lookup() { # <basename> <array-name> → payload on stdout, rc 1 when undeclared
@@ -484,6 +498,51 @@ regress() {
   #     *lint* name, so step 4's glob never double-runs it.
   [ -x "$ABSTAIN" ] && run_check "idl-abstain-alarm(live)" "$ABSTAIN"
 
+  # 3c. the post-land verifier's OWN instrument (item cb8b9620ddef, 2026-08-09).
+  #
+  # WHY IT IS ITS OWN STEP. Step 4 globs *gate*.sh + *lint*.sh; `postland-verify.sh` matches
+  # NEITHER, so its --selftest ran in exactly one place — docs/activation/pending-activation/
+  # 14-land-pipeline-v2-activate.sh, which gates on it at line 48. That is the rare moment it
+  # blocks something, not the standing moment a regression is caught, and the difference is
+  # measurable: an assertion invalidated by the 2026-08-08 identity-drop change sat RED on trunk
+  # with nothing to notice it. This job already carries step 5, which watches whether that
+  # verifier is STAMPING; nothing watched whether its own instrument still DISCRIMINATES. A net
+  # whose liveness is monitored and whose correctness is not is the blind-check law one level up.
+  #
+  # SANDBOXED STATE IS NOT OPTIONAL — the check would otherwise MANUFACTURE the red beside it.
+  # postland-verify's main() runs ensure_dirs BEFORE dispatch, so a bare `--selftest` mkdir -p's
+  # the LIVE $STATE/stamps. Step 5 (postland_inertness) abstains green on exactly one fact — that
+  # stamps dir NOT existing, i.e. "the net is not adopted here". So on an unadopted box this check
+  # would create the dir on its first night and step 5 would go RED from the second night on,
+  # forever, over a net nobody ever turned on. That is the step-4 classification defect
+  # (a runner counting things that are not regressions) re-entering through a new door.
+  # CC_POSTLAND_DIR/CC_PAGES_DIR/CC_IDL are the three $HOME-rooted knobs ensure_dirs touches;
+  # pointing them into this run's own capture dir costs the selftest nothing, because every
+  # assertion it makes is already fixture- or $SELF-based — its own last assertion, "sandbox: every
+  # $HOME-rooted path knob is overridden by run_fixture", is the standing proof of that. The one
+  # thing lost is its live-lock concurrency note, which cannot fire against a sandbox.
+  #
+  # NO SANDBOX ⇒ SKIP, never a bare run: this file's contract at the top is deterministic and
+  # side-effect-free, so an unsandboxable run is one we decline, not one we take anyway.
+  # KILL SWITCH ⇒ SKIP, never a green: POSTLAND_VERIFY=off exits 0 ABOVE the dispatch, so a
+  # kill-switched run would score `ok` having proven nothing — a kill switch reading as a verdict,
+  # the same two-meanings-for-exit-0 defect postland-verify itself dispatches --falsify-red above
+  # the switch to avoid.
+  if [ -x "$POSTLANDV" ]; then
+    if [ "${POSTLAND_VERIFY:-on}" = "off" ]; then
+      SKIPS+=("postland-verify.sh:kill-switched")
+      printf '  skip postland-verify.sh --selftest (POSTLAND_VERIFY=off exits 0 above the dispatch — a green here would be a verdict the instrument never gave)\n'
+    elif [ -n "$RUNDIR" ]; then
+      mkdir -p "$RUNDIR/pv" 2>/dev/null || true
+      run_check_step4 "postland-verify.sh --selftest" postland-verify.sh \
+        env CC_POSTLAND_DIR="$RUNDIR/pv/state" CC_PAGES_DIR="$RUNDIR/pv/pages" \
+            CC_IDL="$RUNDIR/pv/idl.jsonl" "$POSTLANDV" --selftest
+    else
+      SKIPS+=("postland-verify.sh:no-sandbox")
+      printf '  skip postland-verify.sh --selftest (no capture dir — refusing to run it against LIVE postland state)\n'
+    fi
+  fi
+
   # 4. every gate + lint: --selftest where supported, else bare; SKIP e2e (side-effectful)
   local f b reason
   # shellcheck disable=SC2086  # GATE_GLOB/LINT_GLOB are intentional globs
@@ -596,13 +655,19 @@ TORN
     || printf '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict/></plist>\n' > "$d/plists/good.plist"
   printf '<plist><dict><string>2>&1 raw ampersand</string></dict></plist>\n' > "$d/plists/bad.plist"
 
-  # run the invariant with a stubbed check-set (NO eval — env-scoped overrides). <pagedir> <log> <batsdir> <plistglob>
+  # run the invariant with a stubbed check-set (NO eval — env-scoped overrides).
+  # <pagedir> <log> <batsdir> <plistglob> [postland-verify-stub] [console-capture] [POSTLAND_VERIFY]
+  # The last three are POSITIONAL rather than ambient on purpose: a `VAR=x run_inv …` prefix on a
+  # *function* call persists in the caller afterwards (bash, non-POSIX), and wrapping each call in a
+  # subshell to contain that is what makes shellcheck read every one of them as an SC2030/SC2031
+  # lost-modification pair. Positionals have neither problem and state the fixture at the call site.
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
+        CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
         CC_NIGHTLY_GATE_GLOB="$d/emptygl/*.sh" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
         CC_NIGHTLY_PAGEDIR="$1" CC_NIGHTLY_LOG="$2" CC_NIGHTLY_BATS_DIR="$3" CC_NIGHTLY_PLIST_GLOB="$4" \
-        "$SELF" >/dev/null 2>&1
+        "$SELF" >"${6:-/dev/null}" 2>&1
   }
 
   echo "nightly-regression --selftest:"
@@ -790,6 +855,86 @@ TORN
   grep -qE '\[ -x "\$NEVERSTUCK" \][[:space:]]*&&[[:space:]]*run_check_step4 "never-stuck-gate\(live\)" never-stuck-gate\.sh' "$SELF" \
     && okp  "I: the live invariant is wired to the count-judging runner under its declared basename" \
     || badp "I: never-stuck-gate(live) is on plain run_check — its count and its NON-VERDICTs are dropped"
+
+  # ── P: the post-land verifier's instrument is a SCHEDULED check, and cannot manufacture step 5 ──
+  # Three properties, because the wiring can rot in three independent ways and only the first is
+  # visible in a diff: it can vanish, it can lose its sandbox (and then MINT step 5's red on every
+  # unadopted box), or it can be scored on a runner that throws away its NON-VERDICTs.
+  local pvd; pvd="$d/pv"; mkdir -p "$pvd"
+  # The stub reds on exactly the two things the call site must supply. `case $HOME` is the sandbox
+  # predicate stated the way the defect states it — ensure_dirs writes under $HOME unless every knob
+  # is moved — so an unsandboxed wiring fails HERE rather than in the live tree at 04:00.
+  cat > "$pvd/pv-ok.sh" <<'PVOK'
+#!/bin/bash
+[ "${1:-}" = "--selftest" ] || { echo "the check did not pass --selftest"; exit 1; }
+[ -n "${CC_POSTLAND_DIR:-}" ] || { echo "UNSANDBOXED: CC_POSTLAND_DIR unset"; exit 1; }
+case "$CC_POSTLAND_DIR" in "$HOME"/*) echo "UNSANDBOXED: points into live state"; exit 1 ;; esac
+mkdir -p "$CC_POSTLAND_DIR/stamps"      # what ensure_dirs does to whatever it is pointed at
+echo "postland-verify selftest: 53 passed, 0 failed"
+PVOK
+  printf '#!/bin/bash\necho "postland-verify selftest: 52 passed, 1 failed"\nexit 1\n' > "$pvd/pv-red.sh"
+  chmod +x "$pvd/pv-ok.sh" "$pvd/pv-red.sh"
+
+  # The composed property, in ONE run: 3c executes green AND step 5 still abstains. Asserting them
+  # together is the point — separately, a wiring that created $d/nopostland/stamps would still pass
+  # the first and the manufactured RED would only appear on the SECOND night, which is precisely the
+  # shape that makes this class of defect survive review.
+  run_inv "$d/pages" "$d/pv-green.log" "$d/goodtests" "$d/plists/good.plist" \
+          "$pvd/pv-ok.sh" "$d/pv-green.out"; local pvrc=$?
+  [ "$pvrc" -eq 0 ] && okp "P: postland-verify --selftest runs and is scored (green night)" \
+                    || badp "P: the postland-verify instrument check did not run green — see $d/pv-green.out"
+  grep -q 'ok   postland-verify.sh --selftest' "$d/pv-green.out" \
+    && okp "P: it is reported under its own name, not folded into another check" \
+    || badp "P: no 'postland-verify.sh --selftest' row in the run — the check is not wired"
+  grep -q 'ok   postland-inertness' "$d/pv-green.out" && [ ! -d "$d/nopostland/stamps" ] \
+    && okp "P: step 5 still ABSTAINS — 3c did not mint the stamps dir it keys on" \
+    || badp "P: 3c manufactured step 5's RED (stamps dir created under the live postland knob)"
+  rm -f "$d/pages/nightly-regression.page"
+
+  # ANTI-VACUITY. Everything above passes just as well against a check that is launched and then
+  # ignored; only a stub that FAILS can prove its verdict reaches the night's.
+  run_inv "$d/pages" "$d/pv-red.log" "$d/goodtests" "$d/plists/good.plist" \
+          "$pvd/pv-red.sh" "$d/pv-red.out"; local pvrrc=$?
+  [ "$pvrrc" -ne 0 ] && grep -q 'RED  postland-verify.sh --selftest' "$d/pv-red.out" \
+    && okp "P: a FAILING instrument reds the night (the verdict is not decorative)" \
+    || badp "P: a failing postland-verify --selftest did not red the night"
+  grep -q '52 passed, 1 failed' "$d/pages/nightly-regression.page" \
+    && okp "P: the page quotes WHICH assertions failed, not just the check name" \
+    || badp "P: the page carries no detail from the failing instrument"
+  rm -f "$d/pages/nightly-regression.page"
+
+  # KILL SWITCH ≠ VERDICT. POSTLAND_VERIFY=off exits 0 above the dispatch, so a bare run would score
+  # `ok` having proven nothing. It must SKIP — logged, never silent, and never counted as a pass.
+  run_inv "$d/pages" "$d/pv-off.log" "$d/goodtests" "$d/plists/good.plist" \
+          "$pvd/pv-red.sh" "$d/pv-off.out" off; local pvorc=$?
+  [ "$pvorc" -eq 0 ] && grep -q 'skip postland-verify.sh --selftest' "$d/pv-off.out" \
+    && ! grep -q 'ok   postland-verify.sh --selftest' "$d/pv-off.out" \
+    && okp "P: POSTLAND_VERIFY=off SKIPS the check — a kill switch never reads as a green" \
+    || badp "P: the kill switch produced a verdict (or reddened the night) instead of a logged skip"
+  grep -q 'skipped:.*postland-verify.sh:kill-switched' "$d/pv-off.log" \
+    && okp "P: the skip reaches regression.log with its reason" \
+    || badp "P: the kill-switched skip is invisible in the log"
+  rm -f "$d/pages/nightly-regression.page"
+
+  # The CALL SITE, pinned the same way the invariant's is at "I:" above and for the same reason:
+  # every assertion above would still pass with this check moved onto plain run_check, because none
+  # of them is its subject. run_check_step4 under the declared basename is what buys it the rc
+  # 124/137/143/75 NON-VERDICT arm and the 1800s bound — on run_check a cut night would be convicted
+  # as a REGRESSION in the instrument, which is worse than not watching it at all.
+  grep -qE 'run_check_step4 "postland-verify\.sh --selftest" postland-verify\.sh' "$SELF" \
+    && okp  "P: wired to the count/NON-VERDICT runner under its declared basename" \
+    || badp "P: postland-verify --selftest is not on run_check_step4 — its cuts would score as REDs"
+  # shellcheck disable=SC2016  # `$RUNDIR` is LITERAL TEXT being matched inside this file, not an
+  # expansion — expanding it would search for the resolved tmpdir and pass on any wiring at all.
+  grep -qE 'CC_POSTLAND_DIR="\$RUNDIR/pv/state"' "$SELF" \
+    && okp  "P: the sandbox is rooted in this run's capture dir (trap-cleaned), not in \$HOME" \
+    || badp "P: the sandbox no longer points into RUNDIR — the check can touch live postland state"
+  case "$(ngr_decl_lookup postland-verify.sh NGR_CHECK_TIMEOUT_DECL)" in
+    ''|*[!0-9]*) badp "P: postland-verify.sh has no numeric per-check bound (424s measured > 300s default)" ;;
+    *) [ "$(ngr_decl_lookup postland-verify.sh NGR_CHECK_TIMEOUT_DECL)" -gt "$NGR_CHECK_TIMEOUT" ] \
+         && okp  "P: its declared bound exceeds the default it exists to correct" \
+         || badp "P: the declared bound is at-or-under the default — a nightly rc-124 NON-VERDICT" ;;
+  esac
 
   # ── T: the per-check bound must FIT ITS BAND, and must reach the runner ─────────────────────────
   case "$(ngr_decl_lookup never-stuck-gate.sh NGR_CHECK_TIMEOUT_DECL)" in
