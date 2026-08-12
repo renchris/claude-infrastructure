@@ -106,7 +106,7 @@ else
   cp "$PLIST_SRC" "$PLIST_DST"
   launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null || launchctl load "$PLIST_DST" 2>/dev/null || true
   if launchctl print "gui/$(id -u)/com.claude.accounts-keepwarm" >/dev/null 2>&1; then
-    say "keep-warm LOADED (StartInterval 60, refresh-ahead --max-age 30)"
+    say "keep-warm LOADED (StartInterval 180, refresh-on-expiry --max-age 90)"
   else
     say "keep-warm copy in place but NOT loaded — load it with:"
     say "  launchctl bootstrap gui/$(id -u) $PLIST_DST"
