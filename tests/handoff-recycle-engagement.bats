@@ -98,6 +98,35 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REGDIR/$
   [ "$status" -eq 0 ] || { echo "the ROW-CHANGE signal did not fire"; false; }
 }
 
+@test "ROW-CHANGE fires on the NESTED layout Claude Code actually writes ($pdir/<slug>/<sid>.jsonl)" {
+  # THE FIXTURE ABOVE IS THE BLIND SPOT. Every other case here writes the transcript FLAT at
+  # $PROJDIR/<sid>.jsonl, which is the layout the OLD code assumed — so the ROW-CHANGE arm passed
+  # its own suite while being dead on the box. Measured 2026-08-12: all 835 real transcripts under
+  # ~/.claude/projects sit one level down, under a per-project slug dir, and `[ -f
+  # "$pdir/$newsid.jsonl" ]` cannot match any of them. This case pins the REAL layout, so the arm
+  # can never go dead again without a red board.
+  local slug="$PROJDIR/-Users-someone-Development-proj"
+  mkdir -p "$slug"
+  row "$NEW_SID"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"go"}}' \
+    '{"type":"assistant","message":{"content":"continuing the work"}}' > "$slug/$NEW_SID.jsonl"
+  [ ! -f "$PROJDIR/$NEW_SID.jsonl" ]   # the flat path must NOT exist, or this case is vacuous
+  run recycle_engaged "$PANE" "$OLD_SID" ""
+  [ "$status" -eq 0 ] || { echo "the ROW-CHANGE signal is blind to the nested layout"; false; }
+}
+
+@test "CONTROL: nested layout + ZERO assistant turns → still NOT engaged (birth is not engagement)" {
+  # The nested arm must not be a blanket pass: it has to apply the SAME assistant-turn test as the
+  # flat one. Without this, the fix above could be satisfied by any file at the nested path.
+  local slug="$PROJDIR/-Users-someone-Development-proj"
+  mkdir -p "$slug"
+  row "$NEW_SID"
+  printf '%s\n' '{"type":"user","message":{"content":"go"}}' > "$slug/$NEW_SID.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" ""
+  [ "$status" -eq 1 ] || { echo "the nested arm passed a transcript with no assistant turn"; false; }
+}
+
 @test "THE TRAP: row still names the DYING predecessor → NOT engaged, despite its assistant turns" {
   # A recycle reuses its own pane. Reading the row's sid without comparing it to the baseline reads
   # the PREDECESSOR's transcript, which is full of assistant turns — so the check would report
