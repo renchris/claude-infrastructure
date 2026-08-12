@@ -220,8 +220,19 @@ raw_typed_sends() {  # <file> <sanctioned-names, newline-delimited> → records;
     # from the VERB, never from the start of the line — `[ "$w" = 60 ] && … session send … $QUOTE\rQUOTE`
     # would otherwise be truncated before the payload was ever seen. Cutting conservatively can only
     # ever make a payload look LESS control-like, i.e. flag more — never less.
+    #
+    # THE CUT MUST SWALLOW THE FILE-DESCRIPTOR PREFIX, and that is not cosmetic (bin/reso-keepalive:79,
+    # 2026-08-12). A redirection is `[0-9]*[<>]`, so cutting at the redirection OPERATOR alone leaves
+    # the fd number behind as a word of its own: `session send -s $QUOTEidQUOTE $QUOTE\rQUOTE
+    # 2>/dev/null` cuts down to a payload whose LAST word is `2`, not the control escape — so a bare CR
+    # read as a typed command line. The SAME send spelled `>/dev/null 2>&1` (no digit before the first
+    # operator) was GREEN, which is how this survived: the --selftest ctrl fixture and all four real
+    # handoff-fire sites happen to use that spelling, so no case in the suite could tell them apart —
+    # and they are the same send. Consuming `[0-9]*` before the operator cuts EARLIER, the direction
+    # that can flag LESS; the only bytes it removes are an fd number, and a payload whose real last
+    # word is not a control escape is still not one once a digit is dropped.
     function ctrl_only(rest,   t, i, w) {
-      if (match(rest, /[>|;&]/)) rest = substr(rest, 1, RSTART - 1)
+      if (match(rest, /[0-9]*[>|;&]/)) rest = substr(rest, 1, RSTART - 1)
       sub(/^[[:space:]]+/, "", rest); sub(/[[:space:]]+$/, "", rest)
       if (rest == "") return 0
       i = split(rest, t, /[[:space:]]+/)
@@ -536,6 +547,8 @@ BODY
   mk ctrl <<'BODY'
 "$IT2" session send -s "$id" $'\r' >/dev/null 2>&1 || true
 "$IT2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true
+"$IT2" session send -s "$id" $'\r' 2>/dev/null; sleep 0.3
+"$IT2" session send -s "$id" $'\x15' 1>/dev/null 2>&1
 [ "$waited" = 60 ] && hf_bounded "$IT2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
 case "$waited" in 60|150|300) "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;; esac
 BODY

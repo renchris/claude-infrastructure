@@ -160,6 +160,25 @@ mk() {
   [ "$status" -eq 1 ] || { echo "a COMMAND payload on the same transport went green — the exemption is on the transport, not the payload: $output"; false; }
 }
 
+@test "7b: the control exemption survives an fd-prefixed redirect — \`2>/dev/null\` is the same send as \`>/dev/null 2>&1\`" {
+  # bin/reso-keepalive:79-80, 2026-08-12 — an off-box RED that was the DETECTOR, not the subject.
+  # A redirection is `[0-9]*[<>]`, but the payload cut ran to the first `[>|;&]` and so left the
+  # FILE-DESCRIPTOR number behind as a word of its own: `$'\r' 2>/dev/null` ended in `2`, not the
+  # escape, and a bare CR read as a typed command line. Case 7's fixture, and all four real
+  # handoff-fire sites, spell it `>/dev/null 2>&1` — no digit before the first operator — so nothing
+  # in this suite could tell the two spellings apart, and they are the same send.
+  mk ctrl_fd '"$IT2" session send -s "$id" $'"'"'\r'"'"' 2>/dev/null; sleep 0.3' \
+             '"$IT2" session send -s "$id" $'"'"'\x15'"'"' 1>/dev/null 2>&1'
+  run bash "$LINT" "$FIX/ctrl_fd"
+  [ "$status" -eq 0 ] || { echo "a control payload followed by an fd-prefixed redirect was flagged as a typed command line: $output"; false; }
+
+  # The other direction, or the cut could be swallowing the payload rather than the fd number: same
+  # fd spelling, same wrapper, COMMAND payload.
+  mk ctrl_fd_bad '"$IT2" session send -s "$id" "claude --resume $SID" 2>/dev/null; sleep 0.5'
+  run bash "$LINT" "$FIX/ctrl_fd_bad"
+  [ "$status" -eq 1 ] || { echo "a COMMAND payload with the same fd-prefixed redirect went green — the cut is eating the payload, not the fd: $output"; false; }
+}
+
 @test "8: prose and non-typing osascript are not findings — the same verb in a tell block is" {
   mk prose '# with spaces survives the osascript `write text` shell.' \
            '# re-engagement must NEVER keystroke a live composer.' \

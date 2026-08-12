@@ -75,6 +75,21 @@ printf '%s reso-keepalive started (interval %ss · marker-rediscovery · skip %s
 while :; do
   while IFS= read -r id; do
     [ -z "$id" ] && continue
+    # typed-send-lint:allow — reviewed 2026-08-12: $NUDGE is an English continue-prompt for a Claude
+    # Code COMPOSER, not a shell command line, so there is no first word for `setopt CORRECT` to offer
+    # a correction for and the [nyae] wedge this lint exists to prevent has no purchase. It is not
+    # routed through a sanctioned verified-typing helper because neither one fits a composer:
+    # osa_type_verified is shell-specific BY CONSTRUCTION (it types `unsetopt correct correct_all …`
+    # first and prefixes the payload with `: <nonce>;` — submitted into a composer, both land as
+    # prompt TEXT for the model), and it2_type_verified lives inside scripts/handoff-fire.sh, a
+    # 9,000-line executable that cannot be sourced from bin/. The detector cannot tell prose from a
+    # command line behind "$NUDGE", which is exactly what this marker is for.
+    #
+    # STILL OWED, and a DIFFERENT class than this lint gates: discover() selects panes by scrollback
+    # marker alone, so a pane whose claude has exited still matches and this prose lands in a zsh
+    # input line. handoff-fire.sh:it2_paste_submit refuses that shape outright — it ABSTAINS unless
+    # composer_owned() proves a live CC session owns the pane — and scripts/desk-invariant.sh:197
+    # retired its own reprompt() for the same reason (critique F7). This loop has neither gate.
     "$IT2" session send -s "$id" "$NUDGE" 2>/dev/null; sleep 0.5
     "$IT2" session send -s "$id" $'\r' 2>/dev/null; sleep 0.3
     "$IT2" session send -s "$id" $'\r' 2>/dev/null
