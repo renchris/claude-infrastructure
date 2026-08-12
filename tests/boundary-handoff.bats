@@ -366,7 +366,25 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   mk_btel fw5 43
   run drive fw5 "$(mk_btx 30)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q 'freewin-conversation-hold:30s<900s' "$CC_IDL"
+  # THE AGE IS WALL-CLOCK, SO IT IS NOT A LITERAL (2026-08-12). This line used to grep
+  # `freewin-conversation-hold:30s<900s`. `mk_btx 30` stamps the turn at `now-30`, and the hook
+  # re-derives the age from its OWN `date +%s` (context-econ.sh ce_last_interactive_age) several git
+  # calls and a whole wrap-ledger run later — so the observed value is 30 when that costs <1s and 31+
+  # when it does not. Measured on this fixture: 6/20 iterations read 31 at IDLE and 10/20 under an
+  # 8-way load, i.e. the literal was a coin-flip, not an assertion (it was the off-box red in run
+  # 31645128003 and the on-box red at 2026-08-12T02:02:19Z, and the C29 "convicted in ONE load window"
+  # note is explained by the same drift, not by the hook). The SUPPRESSION contract is unweakened and
+  # is asserted in three parts: nothing was emitted (the line above), the recorded REASON is the
+  # conversation-hold against the 900s threshold (below), and the age it recorded is the LIVE exchange
+  # rather than the old-exchange fixture the sibling case uses (2000s). The lower bound is exact, not
+  # slack: the age can only ever be 30 + elapsed, so `-ge 30` can never be bought by drift.
+  run grep -oE 'freewin-conversation-hold:[0-9]+s<900s' "$CC_IDL"
+  [ "$status" -eq 0 ]
+  local age; age="${output#freewin-conversation-hold:}"; age="${age%%s<*}"
+  run test "$age" -ge 30
+  [ "$status" -eq 0 ]
+  run test "$age" -le 120
+  [ "$status" -eq 0 ]
 }
 @test "free-win: the suppressed fire did NOT burn the latch — the next idle boundary still fires" {
   export CC_BOUNDARY_T_FREEWIN=35
