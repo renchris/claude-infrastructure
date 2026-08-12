@@ -682,10 +682,43 @@ IDL, same pass:
 ```
 
 `cc-cloud list` carries the resulting session — `session_01VMwdAbwLif2EDxtkQ39yZz`, branch
-`claude/fire-20260812T034126Z-64880-1`, age 24s at the time of the read. **That is the first cloud
-session on this box that a dispatcher created rather than a human.** The `venuePlan → cc-offload up
---via api` selection at `bin/cc-dispatch:1898-1905` works end to end: plan → claim `--venue cloud`
-→ managed create → declaration with a real branch.
+`claude/fire-20260812T034126Z-64880-1`. **That is the first cloud session on this box that a
+dispatcher created rather than a human**, and the managed wiring is all there:
+
+```
+✓ session_01VMwdAbwLif2EDxtkQ39yZz on next4 — anthropic_cloud VM, repo ATTACHED, branch claude/fire-…
+  managed: custody OPEN (marker session_01VMwdAbwLif2EDxtkQ39yZz) · wakes 386 on completion · goal: <default: landed by content>
+```
+
+🚨 **But state the result exactly, because half the round trip is NOT proven.** At T+15 min
+`cc-cloud show` reads:
+
+```
+item=abab60591342  account=next4  notify_back=386  custody=session_01VMwdAbwLif2EDxtkQ39yZz
+state=NOT-STARTED
+detail=no ref after 15m (boot budget 15m)
+```
+
+**Proven:** the venue selection, the `--venue cloud` claim, the managed `cc-offload up --via api`
+create, and a declaration carrying the REAL branch plus every management field (item, account,
+notify-back, custody). **NOT proven:** that the session ever runs its brief. It has pushed no ref and
+is past its boot budget.
+
+That matters because it is the *same shape* as the failure `bin/cc-dispatch:1876-1885` attributes to
+the DEPRECATED handoff-fire cloud leg — *"DELIVERS NO BRIEF … the session sat NOT-STARTED forever"*
+(the fire-#1 forensics session `session_01YcTifmgrKh3KFYuz45Rret`, still `never polled` at 7 h in
+today's `cc-cloud list`). This fire went through the **managed** path that was supposed to fix
+exactly that, and it is NOT-STARTED anyway. Either the boot budget is simply too tight for a cold VM,
+or brief delivery is still not landing on the dispatcher-driven path. **Until one dispatcher-driven
+cloud session is observed pushing a ref, "cloud can drain the backlog" remains proven only as far as
+session CREATION.** That is a strictly better position than this morning — the cliff is gone and the
+actuator fires — but it is not the end-to-end claim, and it should not be written up as one.
+
+One correction to the fear this session started with: the wave-plan's `fire_line` still reads
+`--split-right` with a local `--cwd`, which looks like a local pane fire. It is not. cc-wave-plan is
+a pure planner emitting the local default; the venue is a **selection between actuators** made later
+at `bin/cc-dispatch:1897-1908`, and `--dry-run` returns before that block, so the dry plan
+structurally cannot show the cloud actuator. The dry-run output is misleading, not wrong.
 
 One correction to the fear this session started with: the wave-plan's `fire_line` still reads
 `--split-right` with a local `--cwd`, which looks like a local pane fire. It is not. cc-wave-plan is
