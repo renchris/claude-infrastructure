@@ -276,3 +276,35 @@ suspects is the binding one, and either the fix or a named blocker. Report to
   fire — the legend's two entries overlapped and a date block ran 26 px past the right margin. The
   4-day band was additionally 100% hidden under its own two r=13 end caps. Both are now asserted
   against the canvas edge rather than a guessed budget.
+
+- **2026-08-12 — Track A, v4: v1's structure restored on a closed design system.** Operator: *"I
+  like the structure of v1 but just make it better with more concise design system and consistent
+  fonts."* So the two lanes come back — this repo above, Claude Code below, a drop from each
+  capability to the release that shipped it — and v1's *execution* is what gets replaced. **v1's
+  structure was never the defect**, which is worth stating plainly because three iterations were
+  spent finding that out: v2 and v3 both dissolved the lanes into isolated per-capability rows, and
+  the two-parties claim went from structural to inferred. Two lanes make it in the geometry.
+
+  **The design system, as an enforceable budget rather than an adjective.**
+  *Elements — SIX types, and nothing may be added without deleting one:* LANE ×2 · MARKER ×4 ·
+  DROP ×2 · CHIP ×2 · STACK ×4 · GROUND ×1. v1 carried thirteen (two lane styles, ghost rule, halo,
+  ring, dot, specular, chip, leader, stem, axis-cut, bloom, head-start note). The fixed inventory is
+  the point: the next edit has to argue against the budget instead of quietly appending to it.
+  *Type — ONE family, THREE sizes.* Everything is mono, so "consistent fonts" is enforced by there
+  being only one; 34/22/17 render 20.4/13.2/10.2 at the 838 px column, ~1.5× apart at each step. L
+  is chip numerals only, M is the four names, S is everything else. v1 had eight sizes between 16
+  and 26 px — all landing inside 9.6–15.6 px after the downscale — plus sans and mono mixed with no
+  rule about which meant what. Eight sizes four points apart are not a hierarchy.
+  *Colour — THREE hues, one job each:* green this repo · blue Claude Code · amber this repo's own
+  work over time. v1's fourth hue, orange, existed solely to carry the lag and went with it.
+
+  **Two rules make the layout collision-free by construction rather than by tuning.** Each lane's
+  STACKs sit on its OUTBOARD side (repo above its lane, Claude Code below its), so the inner band
+  belongs entirely to the drops and chips and the two label sets can never contend — v1's four
+  alternating label rows joined by leader lines were the whole readability failure. And the chip
+  rides its drop's midpoint *by construction*: with control points at `DROP_MID` the cubic's t=0.5
+  is exactly `((ox+tx)/2, DROP_MID)`, so no chip position is ever hand-tuned against a curve.
+
+  Kept from the discarded middle versions because each was earned: the commit ridge and the dusk
+  material (v3), ours-above/theirs-below (v2), and the single unbroken axis (v2) — the axis break
+  existed only to reach content that has since been cut, so it went with it.
