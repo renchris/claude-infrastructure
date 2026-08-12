@@ -109,10 +109,43 @@ minus the autonomous fork.
             <( { printf 'MEMORY.md\n'; printf '%s\n' "${recs[@]##*/}"
                  lines "$M/MEMORY.md" "${recs[@]}"; } | sort -u ) |     # minus E1 + E2
    while read -r f; do                                                  # minus E3
-     grep -rqF "${f%.md}" "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" 2>/dev/null \
-       || echo "ORPHAN $f"
+     hit=0                                                              # SKIP MISSING PATHS — see below
+     for c in "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules"; do
+       [ -e "$c" ] || continue
+       grep -rqF "${f%.md}" "$c" 2>/dev/null && { hit=1; break; }
+     done
+     [ "$hit" = 1 ] || echo "ORPHAN $f"
    done
    ```
+
+   🚨 **Why E3 iterates instead of passing all three paths to one `grep`.** The one-shot form —
+   `grep -rqF "$stem" "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" || echo ORPHAN` —
+   reports **every** residual file as an orphan on any project missing one of those paths, because
+   an unreadable operand makes grep exit 2 **even when another operand matched**, and `||` cannot
+   tell 2 from 1. Measured on reso 2026-08-05 (that worktree has no `.claude/CLAUDE.md`): the
+   documented sweep printed **13 ORPHANs**; restricting the grep to paths that exist printed **0
+   orphans / 13 E3-ok** — which is the count this section's own text records, so the spec was
+   self-inconsistent with its own snippet. The harm is exactly the failure two paragraphs up: a
+   pass that trusts the output re-indexes 13 correctly-unindexed files and re-triggers the rotation
+   it just performed.
+
+   **And it is environment-dependent, which is why it survived so long.** Re-measured 2026-08-12,
+   same fixture, match present + two paths missing:
+
+   | grep the caller resolves | rc | verdict |
+   |---|---|---|
+   | `/usr/bin/grep` (BSD) | **0** | a match wins over the missing-operand error — snippet looks fine |
+   | bare `grep` in an interactive session (shell function) | **2** | `\|\|` fires ⇒ **false ORPHAN** |
+
+   So the snippet was correct under the grep a *script* gets and broken under the grep a *reader
+   pasting it* gets. Iterating over paths that exist is right under **both**, which is the property
+   to keep — do not "fix" this by appending `/dev/null`, which does not help: the missing operand
+   still errors. (Same class as memory: `interactive-grep-is-ugrep-not-usr-bin-grep`.)
+
+   ⚠️ **`shopt -s nullglob` is a bash builtin and the first line means it.** Run this block in
+   `bash`, not in the zsh an interactive session gives you — in zsh `shopt` is a
+   `command not found` and the block has only ever appeared to work because the globs happened to
+   match. `bash -c '...'` or a `#!/usr/bin/env bash` script; never a paste into the prompt.
 
    Verified 2026-08-05: **0 orphans on both** reso (13 residual, all E3) and claude-infrastructure
    (229 topic files) — and a **positive control** proves that zero is not vacuous. On a fixture whose
