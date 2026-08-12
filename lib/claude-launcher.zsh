@@ -211,3 +211,42 @@ _cc_install_router() {
   claude1() { CLAUDE_CONFIG_DIR="$HOME/.claude-next" _claude_pinned "$@" }
 }
 _cc_install_router
+
+# ── _cc_route_check — repo-owned override (start-latency R6, 2026-08-12) ───────────────────────
+# Shadows the copy defined inline in ~/.zshrc: this lib is sourced at the rc's tail, so the
+# definition below wins in every new shell — the same later-definition mechanism
+# _cc_install_router already rides — and it survives a `reload` (the rc re-defines its copy,
+# then re-sources this lib, which re-shadows it).
+#
+# ONE deliberate change from the rc body, and it is the whole point: the PRIMARY checkout's
+# tracked pool script is consulted LAST, not first. `/ship` pushes HEAD:main and never advances
+# the primary's local main, so that tracked copy is a lagging fork of the claim path — measured
+# 2026-08-12 at FIVE WEEKS stale (Jul 3 vs Aug 5) — while `~/.reso/bin/worktree-pool.sh` is
+# self-updated to origin/main by every pool `ensure` (self_update_installed). Preferring the
+# checkout copy meant every interactive launch ran a five-week-old claim path, and any
+# claim-path fix landed on trunk could not reach the operator until local main happened to
+# advance. Order now: installed trunk copy → checkout copy (a fresh machine before its first
+# ensure) → cold new-worktree.sh. Everything else is byte-equal to the rc body.
+_cc_route_check() {
+    emulate -L zsh
+    [[ "${CLAUDE_ISOLATION_SKIP:-0}" == "1" ]] && return 0
+    local _top _wt _wtpath
+    _top="$(git rev-parse --show-toplevel 2>/dev/null || echo '')"
+    [[ -n "$_top" ]] || return 0                        # not a git repo → launch in place
+    [[ -f "$_top/.git" ]] && return 0                   # linked worktree → already isolated
+    [[ -d "$_top/.git" && "$(basename "$_top")" == "reso-management-app" ]] || return 0
+    _wt="cc-$(date +%H%M%S)-$$"   # +shell PID → unique per pane (no same-second collision)
+    if [[ -f "$HOME/.reso/bin/worktree-pool.sh" ]]; then
+        _wtpath="$( cd "$_top" && bash "$HOME/.reso/bin/worktree-pool.sh" claim "$_wt" )" || return 1
+    elif [[ -f "$_top/scripts/worktree-pool.sh" ]]; then
+        _wtpath="$( cd "$_top" && bash scripts/worktree-pool.sh claim "$_wt" )" || return 1
+    elif [[ -x "$_top/scripts/new-worktree.sh" ]]; then
+        ( cd "$_top" && ./scripts/new-worktree.sh "$_wt" ) >&2 || return 1
+        _wtpath="$HOME/Development/.worktrees/wt-$_wt"
+    else
+        return 0
+    fi
+    [[ -d "$_wtpath" ]] || return 1
+    printf '%s\n' "$_wtpath"
+    return 0
+}
