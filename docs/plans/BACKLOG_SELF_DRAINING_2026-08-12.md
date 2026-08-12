@@ -1,0 +1,270 @@
+---
+status: open
+---
+
+# BACKLOG, SELF-DRAINING — fresh against today's tree, grouped into wave-sized efforts, executed off the operator's box
+
+**Mission.** Make `cc-backlog` maintain and drain itself: every open row re-validated against the
+CURRENT tree rather than the one it was written against, the pile organised into a small number of
+wave-sized efforts each carrying its own roadmap, and those efforts executed to done — off-box where
+the work can leave this machine, locally where it cannot — under a capacity policy that can never
+again take the operator's own slots.
+
+**Why now.** Measured 2026-08-12: the dispatcher had fired **nothing at all — cloud or local — for
+1 h 34 m** (`fired:0, deferred:318`), and it had no timeout that would ever end that. Meanwhile the
+operator's product repos went quiet: `reso-management-app` **0 commits in 7 days** (last 2026-08-05),
+`lakehouse-lecture` **0 since 08-10**, while `claude-infrastructure` took **884**. The infrastructure
+had become the work.
+
+---
+
+## Phase 0 · Agent Team Orchestration
+
+**EXECUTION LOCUS PER WAVE.**
+
+| Wave | Locus | Deliverable | Depends on |
+|---|---|---|---|
+| **W0 · unwedge** ✅ DONE | **L** (lead-inline) | the dispatcher fires again; a terminal cloud session releases its slot | — |
+| **W1 · freshness** | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact | W0 |
+| **W2 · grouping-for-execution** | **S** (dispatched, local) | the ungrouped remainder is folded into wave-sized `master-*` conditions; the applying scripts become tracked machinery | W0 |
+| **W3 · capacity symmetry** | **S** (dispatched, local) | no unattended spawner can outbid the operator; the presence beat is consulted at SPAWN, not only at teardown | — (parallel with W1/W2) |
+| **W4 · drain** | **S ×N** (one long-running wave session per master effort) | the grouped efforts worked to done | W1, W2, W3 |
+
+**W0 was lead-inline and that needs its one line of justification:** it was four surgical edits in
+three files, fully diagnosed with line anchors before any code was written, and the box was in the
+exact capacity state this plan exists to protect — firing a teammate wave to repair the spawn
+economy would have been the defect performing itself. Every other wave is **S**, the default.
+
+🚨 **W4 is deliberately N long-running sessions, NOT one per backlog row.** That is the operator's
+directive and the measurements back it: 695 panes over 5 days, **94% agent-initiated, 1.6%
+operator-initiated**, and the machine's own commit `25f369292` records *"189 worker panes a day
+against an operator budget of ~15 … the dispatcher had become a competitor to the operator."*
+
+**Lead context budget:** the lead holds ≥50% for deciding venue and adjudicating grouping. Succession
+at the seam between waves, never mid-wave — `--recycle` is proven 14/14 on this box, but
+`--recycle --worktree` has **never run for real** (only a `--dry-run` on record), so a relocating
+recycle here would be its production debut and should be treated as such.
+
+---
+
+## 1 · What is measured, and what it refutes
+
+All figures re-derived 2026-08-12 from the live store and tree. Nothing quoted from an earlier plan —
+published figures in this repo have gone stale inside 36 hours more than once.
+
+**The store.** 1,905 folded ids · **536 live** (321 open · 209 blocked · 6 claimed) · 1,369 done.
+Intake vs drain over 14 days: **1,212 filed / 835 closed = +377**, ~27/day net. Peak intake 242 in one
+day; peak drain 229. **The drain capacity exists and does not keep up on average.**
+
+**Staleness is real and it is the median, not the tail.** The repo lands **~156 commits/day**. For the
+292 live `claude-infrastructure` rows, commits landed since the row was written:
+
+| p25 | **p50** | p75 | p90 | max |
+|---|---|---|---|---|
+| 184 | **361** | 558 | 737 | 2,066 |
+
+**249 of 292 (85%) are more than 100 commits behind.** Age in *days* reads healthy (p50 2.0 d) for the
+same population — because the store's clock is days and the tree's clock is commits. That single
+mismatch is the operator's complaint, quantified.
+
+**Nothing re-asks an unworked item.** `run_falsifier` has exactly one call site
+(`bin/cc-premise:1819`), reached only when somebody tries to CLAIM. **205 of 327 live rows have never
+been claimed**, so their probe may never have executed. There is no `lastValidated` field anywhere, so
+"how many have ever been re-validated" is **not answerable from the store**. And the whole-store
+re-validation pass that would fix this — `cc-premise sweep`, `cc-premise screen --all` — has **zero
+callers** on the box.
+
+### 🚨 The consolidation premise needs one correction, and the instinct behind it is right
+
+The ask was to merge the pile into grouped tickets so fewer sessions are needed. Two separate claims
+sit inside that, and they do not share a fate:
+
+- **Dedup cannot shrink the pile.** Three independent methods converge: the duplicate surplus is
+  **28–38 rows, 5–7% of 536**, recoverable once. The pile is **~93–95% genuinely distinct efforts**.
+  Worse, a `fold` removes **zero** rows *by design* — `backlog-consolidation-trigger.sh` asserts
+  `conservation=ok · live 537→537` and its own docstring says *"absorption is traceability, not
+  closure."* A perfect fold of all 18 mechanical groups leaves the count at 536.
+- **Grouping-for-execution is the real lever, and it is exactly what was asked for.** The binding
+  constraint is not row count, it is **session count against a load-bound box**. The condition lease
+  already makes one worker claim a whole condition group and refuses its siblings — so N grouped rows
+  cost ONE session. Today only **129 of 536 rows carry a condition, in 37 groups of which 29 are
+  n=1** — about 8 real groups. The other ~407 rows are one-session-each by default.
+
+So the target is not "fewer rows", it is **~407 ungrouped rows → a couple of dozen wave-sized
+efforts**. The proven precedent is already on disk: `link.py` wrote 113 links into seven hand-authored
+`master-*` conditions (`master-convergence-deadlock` 35, `master-fire-gate` 22,
+`master-fleet-footprint` 20, …). ⚠️ **`link.py` and `prune.py` are UNTRACKED** — they live only in
+`docs/plans/backlog-consolidation-2026-08-09/`, have no caller, and are one `git clean -f -d` from
+gone. *The only thing that has ever reduced this pile is not part of the machine.*
+
+### The crowd-out has a named mechanism, and it is asymmetry
+
+**There is no "15".** No code reads it; `CONCURRENCY_PROGRAM.md:574` already calls it folklore. What
+binds is **load ≥ 2.0/core** (`scripts/lib/capacity-admit.sh:121`). The asymmetry is the defect:
+
+- for `handoff-fire` — **the operator's own path** — the refusal is **unbounded**;
+- for unattended callers it **budget-releases after 3 consecutive refusals** (`capacity-admit.sh:398`);
+- for the **Agent tool**, the highest-volume spawn surface, the load term is **off entirely**
+  (`hooks/agent-teams-enforce.sh:183`, `basis:"headroom-only"`).
+
+**So the one path subject to the full gate is the human's.** 64 capacity refusals are logged in the
+retained window (12 / 46 / 6 across 08-09..08-11).
+
+**The guard that would fix this already exists and is inert.** `hooks/session-beat.sh` +
+`hooks/lib/cc-beat.sh` maintain a real operator-presence signal including `operatorT`, the sticky
+high-water of presence. Its only consumer is `hooks/teammate-auto-shutdown.sh`. **The fleet knows
+whether the human is at the keyboard and uses it solely to decide whether to CLOSE a pane — never
+whether to OPEN one.** There are no quiet hours on the spawn side anywhere.
+
+**This session's own conduct is part of the evidence.** The five recon subagents that produced these
+numbers registered as ordinary pane sessions (uuids 416–420) and were **5 of 8 live slots, 62%**.
+Nothing in the accounting separates "the operator's budget" from "the agent's fan-out". W3 owns that.
+
+---
+
+## 2 · W0 — the unwedge, done (commit `a984691f6`)
+
+The pipeline was not slow, it was **dead in place with no timeout**. Three defects composed; the
+symptom pointed at none of them. Full reasoning is in the commit body; the shape:
+
+| # | Defect | Fix |
+|---|---|---|
+| D1 | `live_workers()` folded `claimed` with **no venue predicate**, so six OFF-BOX sessions saturated the ceiling that bounds panes/worktrees/CPU | venue-scoped fold, one ceiling per resource, `CC_DISPATCH_CLOUD_CEILING` bounds the new lane |
+| D2 | the `.returned` latch omitted the **backlog close**, so a landed+verified round trip that failed to close latched anyway → `already returned` forever, unretryable | close joins the latch; refusal reason captured instead of `>/dev/null`; permanent failure bounded by `CC_RETURN_CLOSE_MAX` in a sidecar counter |
+| D3 | **nothing ever called `cc-cloud retire`** (0 markers / 38 declarations); `is-offbox` is two file-existence tests with no completion notion, so reap could never reopen the claim | the terminal path retires — and only there, so a working VM is never declared dead |
+| BAND | the fold's 60 s bound was sized in the foreground (17.5 s) while the sweep runs in Darwin's Background band (**68.1 s**) → rc 124 on 10/10 runs | probes run at `utility` (20.3 s), bound 180 s |
+
+**The honest caveat, because it changes what W1–W4 can assume:** venue-scoping *alone* would not have
+freed this box. All six claims were cloud, so a cloud lane at 6/6 is still full. **D3 is what actually
+releases them.** D1 is correct accounting that stops the two lanes starving each other.
+
+**And the BAND fix has a consequence worth naming:** `fold_conservation` can now reach `ok`, which is
+the documented precondition for flipping `--fold` to `--fold --apply`. Run to completion today it
+reports `conservation=ok · 19 groups · 18 would fold · 0 ambiguous`. **The criterion was already
+satisfied and no instrument on the box could observe it.** W2 owns the flip — on a series, not on this
+one reading.
+
+---
+
+## 3 · The waves
+
+### W1 · Freshness — a currency verdict for every row, on a schedule
+
+**The gap in one sentence:** re-validation is demand-driven and 63% of live rows generate no demand.
+
+1. **Wire the zero-caller pass.** `cc-premise sweep` and `cc-premise screen --all` are built,
+   documented, and invoked by nothing. Put them on the sweep, at `utility` with a band-fitting bound
+   (W0's `_bounded` is the pattern). Today's hand-run: 2 superseded · 2 self-duplicate · **16
+   falsified** · 67 suspect.
+2. **Record that a probe RAN.** Add `lastValidated` (+ the trunk sha it was validated against). Without
+   it, `backlog-ratchet.sh` measures *coverage* — how many rows CAN self-check — and a store could be
+   100% covered and 0% ever-executed and read GREEN.
+3. **Measure decay in COMMITS, not days.** Every age reader uses wall time. Publish
+   `commits-since-filing` per row; it is the number that makes p50=361 visible.
+4. **Close what is provably dead.** A falsified row today *refuses claims and never closes* — it
+   becomes permanently live and permanently unfireable. 16 rows are in that state right now.
+5. **Put `reopen` behind the same re-read as `unblock`.** Measured 276 reopens vs 44 unblocks on live
+   rows; the amnesia path is 6× the guarded one.
+6. **Give `ratchet_rc` a consumer.** It has read RED on every recorded run today (48.6% vs a 50.0%
+   high-water) and the only consequence is a JSON field.
+
+**DoD:** every live row carries a currency verdict no older than one sweep, and the count of
+never-validated rows is reportable and falling.
+
+### W2 · Grouping-for-execution — ~407 ungrouped rows into wave-sized efforts
+
+1. **Promote `link.py` / `prune.py` into tracked machinery.** They are the only things that have ever
+   moved this pile (161 closes, 113 links, 0 failures) and they are untracked with no caller.
+2. **Extend `master-*` coverage** from 129/536 toward the whole live set. Semantic grouping, not
+   mechanical — the mechanical key is honest about its own limits (its largest "cluster" of 14 was
+   **nine different stranded worktrees**; folding them would have refused dispatch on all nine).
+3. **Flip `--fold` to `--apply`** once `fold_conservation` reads `ok` across a *series* of sweeps —
+   now reachable. Never flip past a `FAILED`.
+4. **Fix the escalation row that can never update.** `cmd_add` returns early on a known id, so the
+   trigger's `--file` is a no-op rather than an update; row `5df742fb3894` has been frozen at its
+   pre-R6 wording since 2026-08-11 and will stay frozen forever.
+5. **Each master effort gets a plan file with its own Phase 0 wave table** — that is the artifact W4
+   executes.
+
+⚠️ **A roadmap in a plan file binds nothing on its own.** `GROUND_UP_DISPATCH.md` measured this the
+hard way: *"a runbook paragraph binds a successor who is never spawned"*, and *"a worker reads the
+payload, never the runbook that discusses it."* So each wave must exist in **three** places: the plan
+file (for humans), a condition-keyed `cc-backlog` row (for the dispatcher), and **restated inside the
+fired brief itself** (for the worker). Also: every `dodRef` is an absolute path into the shared
+checkout, which trails trunk — so a brief must reference the trunk ref, not the working tree.
+
+**DoD:** ungrouped live rows < 50, and the number of distinct wave-sized efforts is countable on two
+hands.
+
+### W3 · Capacity symmetry — the operator can never be outbid again
+
+1. **Consult the presence beat at every SPAWN site.** `cc-beat` is measured, live, and read by nothing
+   that opens a pane. This is the single highest-leverage inert guard on the box.
+2. **Remove the asymmetry.** Either the operator's path gets the same budget release, or unattended
+   callers lose theirs. Today only the human's fire can be refused indefinitely.
+3. **Re-enable the load term for the Agent tool**, or charge its panes somewhere. It is the
+   highest-volume surface and is gated on memory headroom alone.
+4. **Reserve slots.** A floor of local capacity that autonomy may never take, so `~15` becomes a real
+   number enforced in one place instead of folklore.
+5. **Quiet hours on the spawn side.** None exist; the 08-10 peak of 54 sustained sessions sat squarely
+   inside the operator's working day.
+
+**DoD:** with the operator active, unattended spawns yield — demonstrated by a capacity refusal that
+hits an autonomy path rather than a `/handoff`.
+
+### W4 · Drain — one long-running session per master effort
+
+Per effort: claim the condition (the lease refuses siblings, so the group costs one session), work the
+roadmap with teammates **inside** that session, land, converge, close the rows.
+
+**Longevity is not the constraint; cumulative context is.** Multi-day sessions already exist here —
+80.4 h observed. The only 100%-fatal class is `Prompt is too long` (5 sessions, 5 terminal), and it
+selects for exactly this shape: 4 of the 5 were long claude-infrastructure leads, none had ever
+compacted. Teammate-leads reach **1.6× the peak context** of dispatch-leads (458 K vs 289 K median).
+Hence: teammates belong *inside* a dispatched wave session, never on the standing lead, and the lead
+recycles at wave seams.
+
+**Venue:** cloud takes what it can, which is inherently limited — **47 of 536 (8.8%)** are off-box
+eligible, and the refusal classes are structural (`ineligible-box` 149, shallow 50-commit clone, no
+`gh`, no `~/.claude`). **248 rows carry no venue label at all** because `cc-venue run` is open-only and
+new rows wait for the next producer pass. Re-labelling is a W2 prerequisite for routing.
+
+🚨 **Do not set `CC_DISPATCH_VENUE_ONLY=cloud` and call the migration done.** It parks **489 of 536
+rows indefinitely** — and, because the claim path is the only *blocking* re-validation in the system,
+it also silently switches off currency-checking for 86% of the store. The venue lever steers; it does
+not scale.
+
+---
+
+## 4 · Definition of done
+
+1. No open row cites a tree state it has not been re-checked against since — and the check runs
+   whether or not anyone tries to work the row.
+2. The live set is organised into wave-sized efforts, each with a plan file, a condition-keyed row, and
+   a brief that restates its own instruction.
+3. Those efforts run to done — cloud where eligible, local otherwise — as long-running wave sessions.
+4. Throughput exceeds intake, so the count falls rather than oscillating.
+5. **The operator's own fire is never the one that gets refused.**
+
+**Anti-goal:** a pipeline that dispatches blind, or a consolidation that renames the pile without
+reducing the sessions needed to work it.
+
+---
+
+## Status log
+
+- **2026-08-12 — plan opened; W0 LANDED (`a984691f6`).** Recon by 5 read-only agents across staleness,
+  consolidation, cloud readiness, the capacity bottleneck, and long-horizon execution; every figure
+  re-derived against the live store and tree. **The dispatcher was found wedged dead** (`fired:0,
+  deferred:318` for 1 h 34 m, no timeout) and unwedged: venue-scoped ceiling, terminal-session retire,
+  close-aware latch with a bounded retry, and the fold's bound resized for the QoS band it actually
+  runs in (measured foreground 17.5 s / **background 68.1 s** / utility 20.3 s against a 60 s bound —
+  rc 124 on 10/10 runs, which made the documented `--apply` flip criterion unreachable). 16 cases,
+  12 RED pre-fix; cloud-return 22/22.
+  **Two premises corrected by measurement.** (1) Consolidation-as-dedup recovers 5–7% once and a fold
+  removes zero rows by design — the pile is 93–95% distinct, so the lever is grouping-for-*execution*,
+  not deduplication. (2) "~15 sessions" is folklore no code reads; the real bind is load 2.0/core, and
+  the defect is that it is **unbounded for the operator's path, budget-released for unattended callers,
+  and off entirely for the Agent tool.**
+  **Named, not fixed here:** `link.py`/`prune.py` remain untracked (W2 item 1); the presence beat
+  remains inert at every spawn site (W3 item 1); 248 rows remain unlabelled for venue (W2).
