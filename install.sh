@@ -500,6 +500,42 @@ if [[ -d "$REPO_DIR/scripts/lib" ]]; then
   done
 fi
 
+# scripts/backlog-consolidation/ — the SAME subdirectory gap as scripts/lib above and
+# scripts/limit-recover below, hit a third time, and this instance is the one that proves the
+# pattern is a defect rather than a quirk: the classes here are ENUMERATED BY HAND, so a wave that
+# adds a new directory of executables ships a live NO-OP and nothing says so.
+#
+# MEASURED 2026-08-12, by executing the deployed artifact rather than trusting the deploy. W2 landed
+# scripts/backlog-consolidation/{group,link,prune,citegraph,verify}.py plus its caller
+# scripts/backlog-grouping-sweep.sh. The CALLER is top-level `scripts/*.sh`, so it deployed and is
+# live. Its engine is in a subdirectory no glob covers, so it did not. Running the live copy:
+#
+#   $ bash ~/.claude/scripts/backlog-grouping-sweep.sh
+#   no grouper at /Users/chrisren/.claude/scripts/backlog-consolidation/group.py (fail-open)
+#   rc=0
+#
+# rc 0. The sweep is wired into autonomy-sweep, runs on schedule, reports success, and folds nothing
+# — the whole consolidation mechanism inert behind a green exit code. That is the ADD class stated
+# in CLAUDE.md ("a file the landed diff ADDS is not stale, it is ABSENT, and every consumer guard on
+# it is a SILENT skip"), and the fail-open is what makes it invisible: a fail-CLOSED engine check
+# would have paged on the first tick.
+#
+# .py, not .sh, deliberately — this directory's executables are Python and the *.sh globs above
+# would have skipped them even if the directory had been enumerated.
+if [[ -d "$REPO_DIR/scripts/backlog-consolidation" ]]; then
+  echo ""
+  echo "Backlog consolidation → $CONFIG_DIR/scripts/backlog-consolidation/"
+  ensure_real_dir "$CONFIG_DIR/scripts/backlog-consolidation"
+  for f in "$REPO_DIR"/scripts/backlog-consolidation/*.py; do
+    [[ -f "$f" ]] || continue
+    if $IS_GLOBAL; then
+      link_file "$f" "$CONFIG_DIR/scripts/backlog-consolidation/$(basename "$f")"
+    else
+      copy_file "$f" "$CONFIG_DIR/scripts/backlog-consolidation/$(basename "$f")"
+    fi
+  done
+fi
+
 # scripts/limit-recover/ — the loop above globs scripts/*.sh (top level only), so this
 # subdirectory was never deployed by the installer. It was reachable ONLY via
 # docs/activation/wiring-all.sh, which is explicitly marked run-by-hand — yet
