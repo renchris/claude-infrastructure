@@ -17,10 +17,13 @@
 # branch is a NON-VERDICT, named on stderr and never counted as clean.
 #
 # Two modes:
-#   * DEFAULT (review-not-fail) — reports EVERY stranded commit across all local
-#     branches; exit 1 = REVIEW (operator ruling: recover only YOUR own dropped work,
-#     NEVER cherry-pick a peer session's unlanded WIP onto the trunk). On a
-#     multi-session box exit 1 is the normal state, so it is a prompt, not a verdict.
+#   * DEFAULT (review-not-fail) — a bounded COUNT: how many commits, on how many of how
+#     many branches, naming at most 3. exit 1 = REVIEW (operator ruling: recover only YOUR
+#     own dropped work, NEVER cherry-pick a peer session's unlanded WIP onto the trunk).
+#     On a multi-session box exit 1 is the normal state, so it is a prompt, not a verdict:
+#     it fired on 955 of 989 lands, and what it used to print was a per-commit wall with a
+#     cherry-pick recipe for peer WIP that its own next line forbade cherry-picking. The
+#     detail and the recipe now belong to `--mine`, whose owner can act on them.
 #   * --mine <session-id> (decidable) — reports ONLY stranded commits carrying your
 #     session's ownership trailer, silent on peers. Exit 1 = YOUR content was dropped
 #     (a real own-drop to recover); exit 0 = no own-session drop. This turns the REVIEW
@@ -125,6 +128,8 @@ found=0
 branch_count=0
 unreadable=0
 unreadable_names=""
+hit_branches=0
+hit_list=""
 for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
   [[ "${branch}" = "${TRUNK}" ]] && continue
   branch_count=$(( branch_count + 1 ))
@@ -153,6 +158,7 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
     continue
   fi
 
+  branch_hits=0
   while IFS= read -r line; do
     case "${line}" in
       '+ '*) sha="${line#+ }" ;;
@@ -187,21 +193,39 @@ EOF
         continue
       fi
       found=$(( found + 1 ))
-      short="$(git rev-parse --short "${sha}")"
-      echo "✗ STRANDED ${short} on branch '${branch}' — paths absent from ${REMOTE_TRUNK}:"
-      printf '%s' "${absent_paths}" | while IFS= read -r p; do
-        [[ -n "${p}" ]] && echo "    ${p}"
-      done
-      echo "  recovery:"
-      echo "    git branch backup/stranded-${short} ${sha}"
-      echo "    git checkout ${TRUNK} && git fetch origin ${TRUNK} && git reset --hard ${REMOTE_TRUNK}"
-      echo "    git cherry-pick ${sha}"
-      echo "    # then gate (shellcheck + bats) and land via scripts/land-lock.sh"
-      echo ""
+      branch_hits=$(( branch_hits + 1 ))
+      # DAMPING (backlog fd517a5863cc). The per-commit wall and the recovery recipe are
+      # for the OWNER only. Un-`--mine`, this fired on 955 of 989 lands — an alarm that
+      # fires 97% of the time carries essentially no bits — and what it printed was a
+      # cherry-pick recipe for peer WIP that its own next line tells the reader never to
+      # cherry-pick. Default mode now reports the COUNT (below) and points at the one
+      # question that is actionable to the caller: was YOUR work dropped?
+      if [[ -n "${MINE}" ]]; then
+        short="$(git rev-parse --short "${sha}")"
+        echo "✗ STRANDED ${short} on branch '${branch}' — paths absent from ${REMOTE_TRUNK}:"
+        printf '%s' "${absent_paths}" | while IFS= read -r p; do
+          [[ -n "${p}" ]] && echo "    ${p}"
+        done
+        echo "  recovery:"
+        echo "    git branch backup/stranded-${short} ${sha}"
+        echo "    git checkout ${TRUNK} && git fetch origin ${TRUNK} && git reset --hard ${REMOTE_TRUNK}"
+        echo "    git cherry-pick ${sha}"
+        echo "    # then gate (shellcheck + bats) and land via scripts/land-lock.sh"
+        echo ""
+      fi
     fi
   done <<EOF
 ${cherry_out}
 EOF
+
+  if [[ "${branch_hits}" -gt 0 ]]; then
+    hit_branches=$(( hit_branches + 1 ))
+    # Bounded: the un-`--mine` summary names at most 3 branches and counts the rest. On
+    # this repo the un-damped verdict was 69 commits across 675 branches.
+    if [[ "${hit_branches}" -le 3 ]]; then
+      hit_list="${hit_list}${hit_list:+, }${branch} (${branch_hits})"
+    fi
+  fi
 done
 
 readable=$(( branch_count - unreadable ))
@@ -214,8 +238,11 @@ if [[ "${found}" -gt 0 ]]; then
   if [[ -n "${MINE}" ]]; then
     echo "✗ stranded-sweep --mine: ${found} commit(s) from YOUR session (${MINE}) dropped — content not on ${REMOTE_TRUNK}. Recover them via the recipes above; this is your own land drop, not peer WIP." >&2
   else
-    echo "✗ stranded-sweep: ${found} commit(s) with content not on ${REMOTE_TRUNK}, across ${branch_count} branch(es)." >&2
-    echo "  REVIEW each: recover only commits YOUR session just had a land drop; a peer session's unlanded WIP is expected — never cherry-pick it onto the trunk." >&2
+    more=""
+    [[ "${hit_branches}" -gt 3 ]] && more=" (+$(( hit_branches - 3 )) more)"
+    echo "✗ stranded-sweep: ${found} commit(s) hold content not on ${REMOTE_TRUNK}, on ${hit_branches} of ${readable} local branch(es): ${hit_list}${more}" >&2
+    echo "  Peer WIP is expected on a multi-session box and is NOT yours to recover — never cherry-pick it onto ${TRUNK}. That is why no recipe is printed here." >&2
+    echo "  The one actionable question is whether YOUR OWN work was dropped: scripts/stranded-sweep.sh --mine \"\$CLAUDE_CODE_SESSION_ID\" ${TRUNK}" >&2
   fi
   exit 1
 fi
