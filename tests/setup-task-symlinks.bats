@@ -13,6 +13,10 @@ setup() {
   export CC_TASKS_INDEX="$BATS_TEST_TMPDIR/tasks-index.json"
   export CLAUDE_PROJECT_DIR="$BATS_TEST_TMPDIR/proj"; mkdir -p "$CLAUDE_PROJECT_DIR"
   unset CLAUDE_CODE_TASK_LIST_ID CC_TASKS_SUMMARY_FORCE 2>/dev/null || true
+  # The store sweep is DETACHED by default (CC_TASKS_SWEEP=async); the guard fixtures below
+  # assert its effects immediately after run_hook returns, so they pin the sweep LOGIC via
+  # sync mode. The async plumbing has its own test further down.
+  export CC_TASKS_SWEEP=sync
   HOOK="$BATS_TEST_DIRNAME/../hooks/setup-task-symlinks.sh"
 }
 
@@ -62,4 +66,44 @@ mk_fresh_dir() {  # a dir whose summary POSTDATES its one task → guard must sk
   CC_TASKS_SUMMARY_FORCE=1 run run_hook
   [ "$status" -eq 0 ]
   ! grep -q "SENTINEL-epsilon" "$CC_TASKS_DIR/epsilon/_summary.json"
+}
+
+@test "async (default): the hook returns while the detached sweep still lands" {
+  local d="$CC_TASKS_DIR/zeta"; mkdir -p "$d"
+  printf 'SENTINEL-zeta\n' > "$d/_summary.json"
+  touch -t 202601010000 "$d/_summary.json"
+  printf '{"id":"1","status":"pending","description":"seed"}\n' > "$d/t1.json"
+  unset CC_TASKS_SWEEP
+  run run_hook
+  [ "$status" -eq 0 ]
+  # the child runs on its own clock — poll up to ~3s for its effect
+  for _ in $(seq 1 30); do grep -q "SENTINEL-zeta" "$d/_summary.json" 2>/dev/null || break; sleep 0.1; done
+  ! grep -q "SENTINEL-zeta" "$d/_summary.json" || false
+}
+
+@test "CC_TASKS_SWEEP=off: the ACTIVE list still regenerates (targeted), unmapped dirs do not" {
+  # eta is mapped to this project and stale → the synchronous targeted path must refresh it
+  # even with the sweep off; theta is stale but unmapped → nothing may touch it.
+  local d="$CC_TASKS_DIR/eta"; mkdir -p "$d"
+  printf 'SENTINEL-eta\n' > "$d/_summary.json"; touch -t 202601010000 "$d/_summary.json"
+  printf '{"id":"1","status":"pending","description":"seed"}\n' > "$d/1.json"
+  local d2="$CC_TASKS_DIR/theta"; mkdir -p "$d2"
+  printf 'SENTINEL-theta\n' > "$d2/_summary.json"; touch -t 202601010000 "$d2/_summary.json"
+  printf '{"id":"1","status":"pending","description":"seed"}\n' > "$d2/1.json"
+  printf '{"version":1,"taskLists":{"eta":{"project":"%s"}}}\n' "$CLAUDE_PROJECT_DIR" > "$CC_TASKS_INDEX"
+  CC_TASKS_SWEEP=off run run_hook
+  [ "$status" -eq 0 ]
+  ! grep -q "SENTINEL-eta" "$d/_summary.json" || false
+  grep -q "SENTINEL-theta" "$d2/_summary.json"
+}
+
+@test "GC: a week-old EMPTY dir is reaped; a fresh empty dir and an old non-empty dir survive" {
+  mkdir -p "$CC_TASKS_DIR/old-empty" "$CC_TASKS_DIR/new-empty" "$CC_TASKS_DIR/old-full"
+  printf '{"id":"1","status":"completed","description":"x"}\n' > "$CC_TASKS_DIR/old-full/1.json"
+  touch -t 202601010000 "$CC_TASKS_DIR/old-empty" "$CC_TASKS_DIR/old-full"
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ ! -d "$CC_TASKS_DIR/old-empty" ]
+  [ -d "$CC_TASKS_DIR/new-empty" ]
+  [ -d "$CC_TASKS_DIR/old-full" ]
 }

@@ -14,6 +14,59 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 # that helper exists to prevent.
 INDEX="$TASKS_INDEX"
 
+# ── Store-wide maintenance (--sweep) — DETACHED from the session-start critical path ────────
+# Everything here is O(all ~2,400 task dirs) upkeep whose freshness no session start depends
+# on: the index prune, the store-wide _summary.json sweep (scaling-bottlenecks-2026-08-09 §5
+# P0-2 — the staleness guard lives in task-helpers.sh summary_stale, zero forks for an
+# unchanged dir), and an empty-dir GC. It used to run inline and was the hook's residual
+# ~0.6s on every start of every project including /clear; the one summary a start actually
+# consumes — the ACTIVE list's, for TASKS.md — is regenerated synchronously below instead.
+# Dispatch: CC_TASKS_SWEEP=async (default, detached + stamp-throttled) · sync (tests, and any
+# caller that needs the effects before returning) · off.
+store_sweep() {
+    local dir TEMP listid now mt d gcout
+    # Empty-dir GC first (fewer dirs for the passes below). The store accretes one dir per
+    # session (2,479 on this box, 97% empty, nothing pruning them — R4 §4) and every consumer
+    # glob scales with it. `rmdir` IS the guard: it refuses a non-empty dir atomically, so the
+    # age gate only has to protect a just-created empty dir (a list mkdir'd at SessionStart
+    # whose first TaskCreate has not landed yet) — 7 days is generous for that window.
+    now=$(date +%s)
+    gcout="$(stat -f '%m %N' "$TASKS_DIR"/*/ 2>/dev/null)"
+    while IFS=' ' read -r mt d; do
+        [ -n "$d" ] || continue
+        case "$mt" in ''|*[!0-9]*) continue ;; esac
+        [ $(( now - mt )) -gt "${CC_TASKS_GC_AGE_S:-604800}" ] || continue
+        rmdir "$d" 2>/dev/null || true
+    done <<EOF
+$gcout
+EOF
+
+    # Prune stale index entries (directories that no longer exist)
+    if [ -f "$INDEX" ]; then
+        jq -r '.taskLists | keys[]' "$INDEX" 2>/dev/null | while IFS= read -r listid; do
+            if [ ! -d "$TASKS_DIR/$listid" ]; then
+                TEMP=$(mktemp)
+                if jq --arg k "$listid" 'del(.taskLists[$k])' "$INDEX" > "$TEMP" 2>/dev/null && [ -s "$TEMP" ]; then
+                    mv "$TEMP" "$INDEX"
+                else
+                    rm -f "$TEMP"
+                fi
+            fi
+        done
+    fi
+
+    # Store-wide summary refresh — only where staleness is provable (summary_stale).
+    for dir in "$TASKS_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        summary_stale "$dir" || continue
+        regenerate_summary "$dir"
+    done
+}
+if [ "${1:-}" = "--sweep" ]; then
+    store_sweep
+    exit 0
+fi
+
 # Filtered project-specific directory
 FILTERED_DIR=".claude-tasks"
 mkdir -p "$FILTERED_DIR" 2>/dev/null || true
@@ -61,20 +114,6 @@ if [ -n "$TASK_LIST_ID" ]; then
     fi
 fi
 
-# Prune stale index entries (directories that no longer exist)
-if [ -f "$INDEX" ]; then
-    jq -r '.taskLists | keys[]' "$INDEX" 2>/dev/null | while IFS= read -r listid; do
-        if [ ! -d "$TASKS_DIR/$listid" ]; then
-            TEMP=$(mktemp)
-            if jq --arg k "$listid" 'del(.taskLists[$k])' "$INDEX" > "$TEMP" 2>/dev/null && [ -s "$TEMP" ]; then
-                mv "$TEMP" "$INDEX"
-            else
-                rm -f "$TEMP"
-            fi
-        fi
-    done
-fi
-
 # Clean stale symlinks (exclude _all and _current)
 find "$FILTERED_DIR" -maxdepth 1 -type l ! -name '_all' ! -name '_current' \
   ! -exec test -e {} \; -delete 2>/dev/null || true
@@ -89,34 +128,6 @@ if [ -f "$INDEX" ]; then
         [ -d "$src" ] && [ ! -e "$dst" ] && ln -s "$src" "$dst" 2>/dev/null || true
     done
 fi
-
-# Generate _summary.json — ONLY where staleness is provable (scaling-bottlenecks-2026-08-09
-# §5 P0-2, item a7eebe63d0d0). Unconditionally regenerating all ~2,155 dirs (97% empty)
-# measured ~4 s CPU / ~800 forks per session start and was killed by this hook's own
-# settings timeout:5 with the work discarded every time — the fleet's single largest hook.
-# Pure-bash guard, zero forks for an unchanged dir: regenerate only when (a) a task json is
-# newer than the summary (covers in-place TaskUpdate rewrites), (b) tasks exist with no
-# summary, or (c) the dir emptied AFTER its summary was written (deletion moves dir mtime;
-# the regen writes the summary into the dir, so post-regen the two are equal and it skips).
-# CC_TASKS_SUMMARY_FORCE=1 bypasses the guard (also the test suite's mutation control).
-for dir in "$TASKS_DIR"/*/; do
-    [ ! -d "$dir" ] && continue
-    summary="${dir}_summary.json"
-    stale=0 has_task=0
-    for tj in "$dir"*.json; do
-        [ -e "$tj" ] || continue
-        case "$tj" in */_summary.json) continue ;; esac
-        has_task=1
-        if [ ! -f "$summary" ] || [ "$tj" -nt "$summary" ]; then stale=1; break; fi
-    done
-    if [ "$has_task" -eq 0 ]; then
-        [ -f "$summary" ] || continue
-        [ "$dir" -nt "$summary" ] && stale=1
-    fi
-    [ "${CC_TASKS_SUMMARY_FORCE:-0}" = "1" ] && stale=1
-    [ "$stale" -eq 1 ] || continue
-    regenerate_summary "$dir"
-done
 
 # ── Active task list detection ──────────────────────────────────────
 # Find the most recently modified task list MAPPED TO THIS PROJECT (G-P14-7).
@@ -141,8 +152,31 @@ fi
 # ── Generate TASKS.md ───────────────────────────────────────────────
 EFFECTIVE_ID="${ACTIVE_ID:-$TASK_LIST_ID}"
 ACTIVE_SUMMARY="$TASKS_DIR/${EFFECTIVE_ID}/_summary.json"
+# The ACTIVE list's summary is the one artifact this start actually consumes (TASKS.md is
+# generated from it), so it refreshes here, synchronously, under the same guard — every
+# other dir belongs to the detached store_sweep.
+if [ -n "$EFFECTIVE_ID" ] && [ -d "$TASKS_DIR/$EFFECTIVE_ID" ] && summary_stale "$TASKS_DIR/$EFFECTIVE_ID/"; then
+    regenerate_summary "$TASKS_DIR/$EFFECTIVE_ID/"
+fi
 if [ -n "$EFFECTIVE_ID" ] && [ -f "$ACTIVE_SUMMARY" ]; then
     generate_tasks_md "$ACTIVE_SUMMARY" "$FILTERED_DIR/TASKS.md" "$PROJECT_DIR"
+fi
+
+# ── Store-wide maintenance dispatch ─────────────────────────────────
+# Detached + throttled: a /clear burst must not stack sweeps, so a stamp gates re-spawn to
+# once per CC_TASKS_SWEEP_MIN_S (default 600s). All three fds are detached — a background
+# child holding the hook's stdout pipe would make the hook runner wait for EOF and re-create
+# the very stall this split removes.
+SWEEP_MODE="${CC_TASKS_SWEEP:-async}"
+if [ "$SWEEP_MODE" = "sync" ]; then
+    store_sweep
+elif [ "$SWEEP_MODE" != "off" ]; then
+    SWEEP_STAMP="$TASKS_DIR/.sweep-stamp"
+    NOW_S=$(date +%s); LAST_S=$(stat -f %m "$SWEEP_STAMP" 2>/dev/null || echo 0)
+    if [ $(( NOW_S - LAST_S )) -ge "${CC_TASKS_SWEEP_MIN_S:-600}" ]; then
+        : > "$SWEEP_STAMP" 2>/dev/null || true
+        ( "$0" --sweep </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+    fi
 fi
 
 # Report to session

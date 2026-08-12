@@ -136,14 +136,30 @@ age_axis() { # → the QUEUE finding (axis 1), empty only when the queue is genu
   # `17-qos-chokepoint` sat in the invisible half. Same law as the class budget: a surface may
   # de-emphasise a class, never delete it.
   # Kill switch: CC_ACTIVATION_AGE_FILTER=on restores the >MAX_AGE_H filter exactly.
-  local now f mt stale=() fresh=() n
+  local now f mt stale=() fresh=() n pending=() statout="" seen="|"
   now="$(date +%s)"
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
     [ -f "$f.done" ] && continue                 # already run (operator touched the marker)
-    mt="$(stat -f %m "$f" 2>/dev/null || echo "$now")"
-    if [ $(( now - mt )) -ge "$MAX_AGE_S" ]; then stale+=("$(basename "$f")")
-    else                                              fresh+=("$(basename "$f")"); fi
+    pending+=("$f")
+  done
+  # ONE stat for the whole queue — this used to fork a stat per file, which at ~46 scripts was
+  # the axis floor. `%m %N` rows re-join by path (%N is the line remainder, so `read -r mt f`
+  # splits the mtime off cleanly). A file the batch could not stat (deleted mid-scan) falls
+  # through the `seen` set and keeps the old per-file fallback verdict of mt=now, i.e. FRESH —
+  # fail-open, never dropped from the count.
+  [ "${#pending[@]}" -gt 0 ] && statout="$(stat -f '%m %N' ${pending[@]+"${pending[@]}"} 2>/dev/null)"
+  while IFS=' ' read -r mt f; do
+    [ -n "$f" ] || continue
+    seen="${seen}${f}|"
+    case "$mt" in ''|*[!0-9]*) mt="$now" ;; esac
+    if [ $(( now - mt )) -ge "$MAX_AGE_S" ]; then stale+=("${f##*/}")
+    else                                              fresh+=("${f##*/}"); fi
+  done <<EOF
+$statout
+EOF
+  for f in ${pending[@]+"${pending[@]}"}; do
+    case "$seen" in *"|$f|"*) : ;; *) fresh+=("${f##*/}") ;; esac
   done
   if [ "${CC_ACTIVATION_AGE_FILTER:-off}" = on ]; then
     [ "${#stale[@]}" -eq 0 ] && return 0
@@ -206,7 +222,7 @@ inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty w
   # board rather than competing with it. Axis 3 asks strictly "did the EFFECT land at all?", where
   # `list`'s absent-means-not-loaded is the safe direction.
   # Kill switch: CC_ACTIVATION_INERT_SCOPE=claude restores the com.claude-only pattern.
-  local f label inert=() listing disabled_db uid pat state lc
+  local f label inert=() listing disabled_db uid pat state lc cands=() labout loaded line
   # A SEAM (CC_ACTIVATION_LAUNCHCTL_BIN), and not decoration: without it this axis reads the
   # OPERATOR's real launchd from inside the suite and the verdict flips by machine — borrowed
   # hermeticity (memory hermetic-suite-leaks-caller-identity). READ-ONLY subcommands only.
@@ -220,15 +236,28 @@ inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty w
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
     [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
-    # Only the launchd class is effect-readable here; a script naming no label is out of scope.
-    label="$(grep -oE "$pat" "$f" 2>/dev/null | head -1)"
-    [ -n "$label" ] || continue
-    # $NF, not $3: matches the label as a whole final field, the idiom bin/cc-blockers already uses.
-    printf '%s\n' "$listing" | awk -v l="$label" '$NF==l{found=1} END{exit !found}' && continue
-    state="NOT-LOADED"
-    printf '%s\n' "$disabled_db" | grep -q "\"$label\" => disabled" && state="DISABLED"
-    inert+=("$(basename "$f") → $label [$state]")
+    cands+=("$f")
   done
+  [ "${#cands[@]}" -eq 0 ] && return 0
+  # ONE grep across every done-marked script (was one fork per file), first label per file kept
+  # by `awk -F: '!seen[$1]++'` — the same verdict the old per-file `head -1` produced. Only the
+  # launchd class is effect-readable here; a script naming no label simply emits no row.
+  labout="$(grep -HoE -- "$pat" ${cands[@]+"${cands[@]}"} 2>/dev/null | awk -F: '!seen[$1]++')"
+  [ -n "$labout" ] || return 0
+  # Loaded-set membership ($NF of each `launchctl list` row — the whole-final-field idiom
+  # bin/cc-blockers uses) and the disabled read collapse to builtin `case` scans of the two
+  # captured listings; the per-candidate awk/grep forks were this axis's real cost.
+  loaded="|$(printf '%s\n' "$listing" | awk '{print $NF}' | tr '\n' '|')"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    f="${line%%:*}"; label="${line#*:}"
+    case "$loaded" in *"|$label|"*) continue ;; esac
+    state="NOT-LOADED"
+    case "$disabled_db" in *"\"$label\" => disabled"*) state="DISABLED" ;; esac
+    inert+=("${f##*/} → $label [$state]")
+  done <<EOF
+$labout
+EOF
   [ "${#inert[@]}" -eq 0 ] && return 0
   printf 'ACTIVATION CLAIMED-DONE BUT INERT (axis 3, effect-read): %s activation(s) carry a `.done` marker while their launchd job is NOT loaded — %s. A `.done` marker proves the SCRIPT RAN, never that the EFFECT LANDED: these scripts print their commands and only cp+lint+bootstrap under CONFIRM=1, so a bare run + `touch` silences axis 1 permanently over a job that was never bootstrapped. Re-run with CONFIRM=1: `CONFIRM=1 bash %s/<name>` — then this axis clears itself, because it reads launchctl, not the marker.\n' \
     "${#inert[@]}" "$(join_names "${inert[@]}")" "$DIR"
@@ -344,7 +373,7 @@ on_trunk() { # <repo-root> <basename>
 }
 
 parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two copies agree
-  local mirror f b lonly=() ronly=() cdrift=() undep=() n out root lag tv
+  local mirror f b lonly=() ronly=() cdrift=() undep=() n out root lag tv dout drc line b2
   if ! mirror="$(resolve_mirror)"; then
     # Loud-not-silent: an unrunnable check is a finding, not a pass (see the 816015ecb30b note).
     printf 'ACTIVATION SSOT PARITY: the repo mirror could not be resolved (no checkout at %s, and no %s/%s) — the live-vs-repo parity check DID NOT RUN. Point CC_ACTIVATION_MIRROR_DIR at the repo copy to restore it.\n' \
@@ -356,24 +385,48 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
   # behind-checkout is not a parity number, and the operator must be able to see that before acting.
   lag="$(git -C "$root" rev-list --count 'HEAD..@{u}' 2>/dev/null || true)"
   case "${lag:-}" in ''|*[!0-9]*) lag="" ;; esac
-  for f in "$DIR"/*.sh; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f")"
-    [ -f "$f.local" ] && continue                # declared intentionally live-only
-    if [ ! -f "$mirror/$b" ]; then
-      on_trunk "$root" "$b"; tv=$?
-      case "$tv" in
-        0) undep+=("$b") ;;                      # committed on trunk, absent from THIS checkout
-        1) lonly+=("$b") ;;                      # genuinely never committed
-        *) lonly+=("$b (trunk unreadable — verdict UNCONFIRMED)") ;;
-      esac
-    elif ! cmp -s "$f" "$mirror/$b"; then cdrift+=("$b"); fi
-  done
-  for f in "$mirror"/*.sh; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f")"
-    [ -f "$DIR/$b" ] || ronly+=("$b")
-  done
+  # ONE `diff -rq` replaces the two per-file glob loops (a cmp fork per live script was the
+  # hook's largest cost at fleet scale) — the same three classes, read off diff's own
+  # vocabulary: `Only in <live>:` = live-only candidate, `Only in <mirror>:` = repo-only,
+  # `Files … differ` = content-drift. LC_ALL=C pins those phrases (diff localises them).
+  # Top-level *.sh only, exactly the old maxdepth-1 globs: the `case` prefixes match direct
+  # children and any subdirectory line falls through. rc>=2 is trouble (an unreadable side):
+  # REPORTED, never a silent zero-findings pass — same loud-not-silent law as an unresolvable
+  # mirror.
+  dout="$(LC_ALL=C diff -rq "$DIR" "$mirror" 2>/dev/null)"; drc=$?
+  if [ "$drc" -ge 2 ]; then
+    printf 'ACTIVATION SSOT PARITY: diff could not compare %s with %s (rc %s) — the live-vs-repo parity check DID NOT RUN.\n' \
+      "$DIR" "$mirror" "$drc"
+    return 0
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      "Only in $DIR: "*)
+        b="${line#"Only in $DIR: "}"
+        case "$b" in *.sh) ;; *) continue ;; esac
+        case "$b" in */*) continue ;; esac
+        [ -f "$DIR/$b.local" ] && continue       # declared intentionally live-only
+        on_trunk "$root" "$b"; tv=$?
+        case "$tv" in
+          0) undep+=("$b") ;;                    # committed on trunk, absent from THIS checkout
+          1) lonly+=("$b") ;;                    # genuinely never committed
+          *) lonly+=("$b (trunk unreadable — verdict UNCONFIRMED)") ;;
+        esac ;;
+      "Only in $mirror: "*)
+        b="${line#"Only in $mirror: "}"
+        case "$b" in *.sh) ;; *) continue ;; esac
+        case "$b" in */*) continue ;; esac
+        ronly+=("$b") ;;
+      "Files $DIR/"*" and $mirror/"*" differ" | "Binary files $DIR/"*" and $mirror/"*" differ")
+        b2="${line#"Binary files $DIR/"}"; b2="${b2#"Files $DIR/"}"; b="${b2%% and *}"
+        case "$b" in *.sh) ;; *) continue ;; esac
+        case "$b" in */*) continue ;; esac
+        [ -f "$DIR/$b.local" ] && continue       # .local exempts the live side's drift too
+        cdrift+=("$b") ;;
+    esac
+  done <<EOF
+$dout
+EOF
 
   n=$(( ${#lonly[@]} + ${#ronly[@]} + ${#cdrift[@]} + ${#undep[@]} ))
   [ "$n" -eq 0 ] && return 0
