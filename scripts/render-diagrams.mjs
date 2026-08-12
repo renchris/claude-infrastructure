@@ -97,15 +97,55 @@ function* walkMarkdown(dir) {
     } else if (entry.endsWith('.md')) yield p
   }
 }
+// A fence is GENERATED from its .mmd, so a hand-edit to a fence is DISCARDED by the next
+// sync. Until 2026-08-11 that discard was silent and the staleness report named only the
+// file: 6a55cdf4d landed a re-measured land-lock figure (p50 3s / p90 5s) in README.md's
+// fence and never touched parallel-lanes.mmd, so `--check` printed
+// "STALE fences in: README.md — run `npm run diagrams`" for 56 consecutive runs while the
+// prescribed cure's ONLY effect would have been to delete the newer number and restore the
+// figure the commit had just falsified. A cure that reverts the fix is worse than the drift.
+// So the report now names the drifting LINES and which side loses them: the reader can see
+// that the doc holds the newer truth and port it into the .mmd, which is the actual repair.
+const DRIFT_MAX = 12
+function fenceDrift(docBody, mmdBody) {
+  const a = docBody.split('\n')
+  const b = mmdBody.split('\n')
+  const out = []
+  for (let i = 0; i < Math.max(a.length, b.length) && out.length < DRIFT_MAX; i++) {
+    if (a[i] === b[i]) continue
+    if (a[i] !== undefined) out.push(`    doc  │ ${a[i]}`)
+    if (b[i] !== undefined) out.push(`    mmd  │ ${b[i]}`)
+  }
+  return out
+}
+
+function reportDrift(doc, drifts) {
+  console.error(`STALE fence: ${doc}`)
+  for (const d of drifts) {
+    console.error(`  ${d.relPath} → this fence; the .mmd is the source and OVERWRITES the doc:`)
+    for (const line of d.lines) console.error(line)
+  }
+  console.error(
+    '  If a `doc` line is the NEWER truth, port it into the .mmd FIRST — ' +
+      '`npm run diagrams` would delete it.',
+  )
+}
+
 function syncDocFences() {
   const changed = []
   for (const doc of walkMarkdown(ROOT)) {
     const text = readFileSync(doc, 'utf8')
-    const updated = text.replace(FENCE_RE, (_m, head, relPath, _body, tail) =>
-      head + applyPalette(readFileSync(join(ROOT, relPath), 'utf8'), 'dark') + tail,
-    )
+    const drifts = []
+    const updated = text.replace(FENCE_RE, (_m, head, relPath, body, tail) => {
+      const rendered = applyPalette(readFileSync(join(ROOT, relPath), 'utf8'), 'dark')
+      if (rendered !== body) drifts.push({ relPath, lines: fenceDrift(body, rendered) })
+      return head + rendered + tail
+    })
     if (updated !== text) {
       changed.push(doc.slice(ROOT.length))
+      // Print BEFORE the write, on both paths: the sync path is where the doc edit is
+      // actually lost, and a loss nobody is shown is the one that reaches trunk.
+      reportDrift(doc.slice(ROOT.length), drifts)
       if (!CHECK) writeFileSync(doc, updated)
     }
   }
@@ -146,7 +186,8 @@ for (const file of sources) {
 const fenceChanges = syncDocFences()
 if (CHECK) {
   if (fenceChanges.length) {
-    console.error(`STALE fences in: ${fenceChanges.join(', ')} — run \`npm run diagrams\``)
+    // The per-fence drift is already printed by syncDocFences(); this is the summary line.
+    console.error(`STALE fences in: ${fenceChanges.join(', ')} — see the drift above`)
     stale++
   }
   if (stale) process.exit(1)
