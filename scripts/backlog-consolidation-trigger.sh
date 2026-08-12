@@ -118,10 +118,14 @@ do_fold() {
   # `link` record has no status arm — so the counts are read before and after and compared. A count
   # is the weaker half (a sibling could move one either way), so the ID SETS are compared too: a
   # link that lost or created a row is caught even at an unchanged total.
-  local before_live before_open before_ids
+  local before_live before_open before_ids before_status linked_ids=""
   before_live="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq '[.[]|select(.status=="open" or .status=="blocked" or .status=="claimed")]|length')"
   before_open="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq '[.[]|select(.status=="open")]|length')"
   before_ids="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq -c '[.[].id]|sort')"
+  # id → status BEFORE the write, so the span-scoped check below can ask the only question a link
+  # could ever get wrong: did a row this run touched change status across its own link record?
+  before_status="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq -c 'map({key:.id, value:.status})|from_entries')"
+  printf '%s' "$before_status" | jq -e 'type=="object"' >/dev/null 2>&1 || before_status='{}'
 
   if [ -z "$groups" ]; then
     printf 'backlog-consolidation-trigger --fold: no mechanically identical group — nothing to fold.\n'
@@ -174,7 +178,8 @@ do_fold() {
       while IFS= read -r id; do
         [ -n "$id" ] || continue
         if "$BACKLOG_BIN" link "$id" --condition "$target" >/dev/null 2>&1; then
-          written=$((written + 1)); printf '   verdict=linked      %s → [%s]\n' "$id" "$target"
+          written=$((written + 1)); linked_ids="${linked_ids}${id}"$'\n'
+          printf '   verdict=linked      %s → [%s]\n' "$id" "$target"
         else
           refused=$((refused + 1)); printf '   verdict=refused     %s → [%s] (cc-backlog link said no)\n' "$id" "$target"
         fi
@@ -207,8 +212,40 @@ do_fold() {
     # alarm about someone else's correct behaviour (memory: alarm-polarity-and-attention-budget).
     printf 'conservation=unknown live %s→%s · open %s→%s · the store moved under the read; this run wrote nothing.\n' \
       "$before_live" "$after_live" "$before_open" "$after_open"
+  # ── THE SPAN CORRECTION (2026-08-12, W2) ───────────────────────────────────────────────────────
+  # WHAT THIS BRANCH GOT WRONG, measured on its own first real run. The apply wrote 46 links with 0
+  # refusals and then reported `conservation=FAILED live 555→555 · open 330→331`. Nothing was wrong
+  # with the fold: a sibling session unblocked a row during the ~3 minutes the apply took. But the
+  # assertion spanned THE WHOLE STORE while its subject is only the rows this run linked, so any
+  # concurrent write anywhere reads as "the key merged across a distinction" — and FAILED is the one
+  # verdict a caller must never flip past. An over-wide assertion tripwires on other mechanisms'
+  # correct behaviour (memory: assertion-span-must-equal-its-subject, alarm-polarity).
+  #
+  # THE DISCRIMINATOR IS STRUCTURAL, not a tolerance. A `link` record carries NO status arm, so it
+  # CANNOT create, close, block or reopen a row — therefore a changed count is, by construction, not
+  # ours. What this run could break is narrower and exactly checkable: a row it linked losing its
+  # status, or vanishing. So ask that, and let a sibling's write be `unknown`.
+  elif [ -n "$linked_ids" ]; then
+    local harmed=0 lid lst lcond
+    while IFS= read -r lid; do
+      [ -n "$lid" ] || continue
+      lst="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq -r --arg i "$lid" '.[]|select(.id==$i)|.status')"
+      lcond="$(printf '%s' "$before_status" | jq -r --arg i "$lid" '.[$i] // ""')"
+      if [ -z "$lst" ] || { [ -n "$lcond" ] && [ "$lst" != "$lcond" ]; }; then
+        harmed=$((harmed + 1))
+        printf 'conservation=FAILED %s changed status %s→%s across its own link — a link has no status arm.\n' \
+          "$lid" "${lcond:-?}" "${lst:-GONE}" >&2
+      fi
+    done <<< "$linked_ids"
+    if [ "$harmed" -gt 0 ]; then
+      printf 'conservation=FAILED live %s→%s · open %s→%s · %s linked row(s) harmed.\n' \
+        "$before_live" "$after_live" "$before_open" "$after_open" "$harmed" >&2
+      return 1
+    fi
+    printf 'conservation=unknown live %s→%s · open %s→%s · the store moved under the write, but every one of the %s row(s) this run linked kept its status — a sibling wrote, we did not.\n' \
+      "$before_live" "$after_live" "$before_open" "$after_open" "$written"
   else
-    printf 'conservation=FAILED live %s→%s · open %s→%s · id sets differ. A fold must change nothing but the condition.\n' \
+    printf 'conservation=FAILED live %s→%s · open %s→%s · id sets differ and this run linked nothing to explain it.\n' \
       "$before_live" "$after_live" "$before_open" "$after_open" >&2
     return 1
   fi
