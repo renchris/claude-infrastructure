@@ -276,3 +276,24 @@ log) and nothing prunes 2 397 dirs. The hook will sit pinned at its 5 s cap fore
 - TUI warns: `/Users/chrisren/.claude-tertiary/CLAUDE.md is over the 40.0k-char limit (62.0k chars)`.
 - Binary warns: `Skill listing over budget: 93 skills, 46716 chars > 8000 budget`.
 - reso project hook `timeout` values use milliseconds where the field is seconds.
+
+---
+
+## R6 — implemented 2026-08-12: SessionStart group max 0.9s → 0.24s
+
+§5's top two were already landed by the desk-router session (`find_active_list` single-pass
+`d31fee77f`, 21s → 0.09s; session-start mcp SWR `1d03837c`, 2.03s → 0.036s). This pass took
+the residual floor. Group cost = max of concurrent hooks; every rewrite A/B'd byte-identical
+on the live stores before landing (infra `a09ce88e3`):
+
+| Hook | before | after | how |
+|---|---|---|---|
+| activation-watch.sh | 660–900ms | **126ms** | fork collapse: ONE batched stat for the queue (was one per file), ONE `LC_ALL=C diff -rq` yielding parity's three classes (was a cmp fork per script plus two globs), ONE `grep -H` + builtin `case` scans for inert (was grep+awk per candidate). Selftest 26/26, /Users/chrisren/.claude/bin/cc-bats 38/38, output byte-identical on the live queue. |
+| setup-task-symlinks.sh | 800ms | **237ms** blocking | index prune + the 2,479-dir summary sweep + a NEW empty-dir GC (`rmdir`, >7d — the store grows one dir per session, 97% empty, nothing pruned it) moved to a detached, stamp-throttled `--sweep` self-reentry; the ACTIVE list's summary still regenerates synchronously (TASKS.md needs it; guard factored to task-helpers `summary_stale`). /Users/chrisren/.claude/bin/cc-bats 8/8. |
+| setup-plan-symlinks.sh | 560ms | **69ms** | ONE awk pass over every plan's frontmatter (was `plan_status` × 254 files × ~3 forks each). Same status grammar; unknown stays OPEN (anti-FM1). |
+| **group max** | **~900ms** | **~240ms** | paid at every session start, every project, every config dir, including every `/clear` |
+
+With §1, time-to-usable is now bounded by the binary's own ~1.1–1.4s to paint plus ~0.24s of
+hooks — everything this fleet's own code contributes to the startup path is sub-second. The
+remaining floor is CC-internal (settings ~300ms, skills/commands 159ms, MCP configs 207ms,
+API first byte) plus R3's pre-exec ~0.6s from the reso primary.
