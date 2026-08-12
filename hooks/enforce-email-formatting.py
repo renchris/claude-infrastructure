@@ -36,7 +36,9 @@ Kill switch: env CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1 -> allow everything.
 
 import json
 import os
+import pathlib
 import re
+import tempfile
 import sys
 
 # --- tunables -------------------------------------------------------------
@@ -51,9 +53,12 @@ GATED_TOOLS = {
     "mcp__ms365__reply-mail-message",
     "mcp__ms365__reply-all-mail-message",
     "mcp__ms365__create-reply-draft",
+    "mcp__ms365__create-reply-all-draft",
     "mcp__ms365__create-draft-email",
     "mcp__ms365__create-forward-draft",
     "mcp__ms365__forward-mail-message",
+    "mcp__ms365__update-mail-message",
+    "mcp__ms365__send-draft-message",
 }
 
 # Tag-open patterns that introduce a visible line/paragraph break in HTML.
@@ -109,16 +114,53 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    alias. Display name is not settable per-message on this account."""
 
 
+_SESSION_ID = None
+
+
+def _recipe_once() -> str:
+    """Return RECIPE the first time this session touches mail, "" afterwards.
+
+    The recipe is ~1.8KB; a mail-heavy session makes dozens of ms365 calls, so
+    re-injecting on every one would be pure waste. Once, early, is enough — it lands
+    while the model is still reading the thread, before it composes anything.
+    """
+    if not _SESSION_ID:
+        return ""
+    marker = pathlib.Path(tempfile.gettempdir()) / f"cc-ms365-recipe-{_SESSION_ID}"
+    try:
+        if marker.exists():
+            return ""
+        marker.touch()
+    except OSError:
+        return ""  # can't track it — stay quiet rather than spam
+    return RECIPE
+
+
 def allow():
     """Emit an explicit allow and exit. (Silence would also allow, but being
     explicit keeps the transcript readable and matches the documented contract.)"""
+    out = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "permissionDecisionReason": "email-format gate: body OK (or nothing to judge)",
+    }
+    recipe = _recipe_once()
+    if recipe:
+        out["additionalContext"] = recipe
+    print(json.dumps({"hookSpecificOutput": out}))
+    sys.exit(0)
+
+
+def deny(reason: str):
+    # Unlike allow(), this ALWAYS carries the recipe: a blocked send is precisely the
+    # moment the rules are needed, and it fires at most a handful of times.
     print(
         json.dumps(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": "email-format gate: body OK (or nothing to judge)",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
                     "additionalContext": RECIPE,
                 }
             }
@@ -127,28 +169,26 @@ def allow():
     sys.exit(0)
 
 
-def deny(reason: str):
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                }
-            }
-        )
-    )
-    sys.exit(0)
-
-
 def dig(d, *keys):
-    """Safe nested .get; returns None if any level is missing/not a dict."""
+    """Safe nested .get; returns None if any level is missing/not a dict.
+
+    Key lookup is case-insensitive at each level. The ms365 server has shipped BOTH
+    `Message` and `message` as the envelope key (current tools use lowercase), and a
+    case-sensitive lookup silently found neither — which made this whole gate inert on
+    the send-mail / reply* paths. Found 2026-08-12 while wiring the recipe injection.
+    """
     cur = d
     for k in keys:
         if not isinstance(cur, dict):
             return None
-        cur = cur.get(k)
+        if k in cur:
+            cur = cur.get(k)
+            continue
+        lk = k.lower()
+        match = next((kk for kk in cur if isinstance(kk, str) and kk.lower() == lk), None)
+        if match is None:
+            return None
+        cur = cur.get(match)
     return cur
 
 
@@ -207,6 +247,8 @@ def main():
         allow()
 
     data = json.loads(raw)
+    global _SESSION_ID
+    _SESSION_ID = data.get("session_id") or None
     tool_name = data.get("tool_name", "")
     if tool_name not in GATED_TOOLS:
         allow()
@@ -221,11 +263,7 @@ def main():
         body = tool_input.get("body")
         subj = ""
         if isinstance(body, dict):
-            s = (
-                dig(body, "Message", "subject")
-                if tool_name == "mcp__ms365__send-mail"
-                else body.get("subject")
-            )
+            s = dig(body, "Message", "subject") or dig(body, "subject")
             subj = s if isinstance(s, str) else ""
         if _REPLY_SUBJECT_RE.match(subj):
             deny(
