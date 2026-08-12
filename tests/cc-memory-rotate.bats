@@ -29,6 +29,13 @@ setup() {
   export MEMORY_ROTATE_MIN_KEEP=2
   export MEMORY_ROTATE_TAIL_GUARD=1
   export MEMORY_ROTATE_MIN_AGE_DAYS=7
+  # `wc -m` counts CODEPOINTS only under a multibyte LC_CTYPE; under C/POSIX, BSD wc -m
+  # degrades to counting BYTES. scripts/offbox-run.sh pins LC_ALL=C for every off-box suite,
+  # so the "bytes bind, not codepoints" fixture below was comparing bytes to bytes there and
+  # failing at 1560 — the one test whose entire subject is the byte/codepoint distinction was
+  # the one that could not make it. The pin is on the test's MEASURING INSTRUMENT only:
+  # bin/cc-memory-rotate exports its own LC_ALL=C, so the subject's semantics are untouched.
+  unset LC_ALL; export LC_CTYPE=en_US.UTF-8
   OLD=202601011200   # touch -t stamp far past MIN_AGE_DAYS
 }
 
