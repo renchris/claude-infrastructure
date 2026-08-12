@@ -37,11 +37,11 @@ and wrote a second line'
   printf '%s' "$HOSTILE" > "$BATS_TEST_TMPDIR/want"
 }
 
-@test "selftest passes 20/20 (a zero-check suite must not 'pass')" {
+@test "selftest passes 22/22 (a zero-check suite must not 'pass')" {
   run "$BUS" --selftest
   [ "$status" -eq 0 ]
   n="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n" -eq 20 ]
+  [ "$n" -eq 22 ]
 }
 
 @test "the derived actor id is stable across invocations (no CC_BUS_ACTOR)" {
@@ -69,6 +69,84 @@ and wrote a second line'
   # A shard filename must not contain a path separator or a leading dot.
   [[ "$output" != */* ]] || false
   [[ "$output" != .* ]]
+}
+
+# ── the actor-id gate (the WRITE side of the escaping contract) ─────────────────────────
+# The tests above exercise only the DERIVED id, which was always sanitised. The override was
+# not: $CC_BUS_ACTOR reached the JSON record, the shard FILENAME and `git add` unchecked. These
+# drive the override path, at the CLI, in both hostile shapes — and then check the gate did not
+# become a blanket refusal, which is the failure mode a one-sided test would call a pass.
+
+@test "GATE: a quote in CC_BUS_ACTOR is REFUSED (exit 2) and writes no record" {
+  # The exact filed repro. Before the gate: `{"actor":"ev"il",...}`, which no JSON parser
+  # accepts, in a shard literally named `ev"il.jsonl`.
+  run env CC_BUS_ACTOR='ev"il' "$BUS" emit note --body hi
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a usable actor id"* ]] || false
+  # Proven to be a refusal, not a mangled success: NO shard exists under any name.
+  n="$(find "$CC_BUS_DIR" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 0 ]
+}
+
+@test "GATE: CC_BUS_ACTOR cannot walk the shard out of the bus directory" {
+  # The half the filed item did not name and the more damaging one: `shard_for` pastes the
+  # actor straight into a path, so `..` wrote a real record OUTSIDE bus/actors/ — invisible to
+  # every fold (which globs actors/*.jsonl) and a path `sync --push` would hand to `git add`.
+  mkdir -p "$BATS_TEST_TMPDIR/esc"
+  run env CC_BUS_ACTOR='../../esc/pwned' "$BUS" emit note --body hi
+  [ "$status" -eq 2 ]
+  n="$(find "$BATS_TEST_TMPDIR" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 0 ]
+}
+
+@test "GATE: uppercase is REFUSED rather than lowercased (case-insensitive FS collision)" {
+  # Not pedantry about charset. On macOS `Alpha.jsonl` and `alpha.jsonl` are ONE file, so
+  # silently lowercasing would let two distinct actor ids share a shard — the exact
+  # cross-write the one-writer law exists to make impossible, visible only on the operator's box.
+  run env CC_BUS_ACTOR='Alpha' "$BUS" whoami
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"outside [a-z0-9-]"* ]]
+}
+
+@test "GATE: DISCRIMINATES — a legitimate actor id still emits and folds" {
+  # A gate that refused everything would pass all three tests above. This is the control.
+  run env CC_BUS_ACTOR=mymac-wt-5341a9e5fc4d "$BUS" emit note --body hi
+  [ "$status" -eq 0 ]
+  [ "$output" = "mymac-wt-5341a9e5fc4d:1" ]
+  [ -f "$CC_BUS_DIR/actors/mymac-wt-5341a9e5fc4d.jsonl" ]
+  run python3 -c "import json,sys; json.loads(open(sys.argv[1]).readline())" \
+    "$CC_BUS_DIR/actors/mymac-wt-5341a9e5fc4d.jsonl"
+  [ "$status" -eq 0 ]
+}
+
+@test "GATE: it fires on EVERY verb, not just emit (it runs before dispatch)" {
+  # A gate placed inside cmd_emit would leave `sync`, `drain` and `whoami` reaching shard_for()
+  # with the hostile id. Checked on a read verb, where nothing is written and a miss is silent.
+  for verb in whoami inbox sync drain; do
+    run env CC_BUS_ACTOR='ev"il' "$BUS" "$verb"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not a usable actor id"* ]] || false
+  done
+}
+
+@test "the derived actor id satisfies the same contract the gate enforces on an override" {
+  # The two halves must not drift: the accepted charset IS what derivation produces, so a
+  # derived id must never be one the gate would refuse. Driven from a checkout whose basename
+  # is itself hostile — a worktree called `WT Foo.Bar` is an ordinary thing for someone to make,
+  # and it is the input that sends derivation through every branch of the sanitiser at once
+  # (uppercase, space, dot, and an over-long run).
+  d="$BATS_TEST_TMPDIR/WT Foo.Bar-$(printf 'x%.0s' $(seq 1 80))"
+  mkdir -p "$d" && git -C "$d" init -q
+  a="$(cd "$d" && env -u CC_BUS_ACTOR CC_BUS_DIR="$d/bus" "$BUS" whoami)"
+  [ -n "$a" ]
+  [ "${#a}" -le 64 ]
+  [[ "$a" != -* ]] || false
+  printf '%s' "$a" | LC_ALL=C grep -qE '^[a-z0-9-]+$'
+  # …and the gate itself must accept it — the no-drift assertion, stated as the gate's own verdict
+  # rather than a second copy of its rule.
+  run env CC_BUS_ACTOR="$a" CC_BUS_DIR="$d/bus" "$BUS" whoami
+  [ "$status" -eq 0 ]
+  [ "$output" = "$a" ]
 }
 
 @test "emit returns a globally-unique id of the form <actor>:<seq>" {
