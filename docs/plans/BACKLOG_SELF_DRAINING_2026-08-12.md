@@ -318,6 +318,46 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-12 11:05Z — the stamp landed and it settles the hang: `autonomy-sweep` is acquitted, and
+  the thing blocking the live layer was never one mechanism.** Stamp `bfcb13dac9c1` @ commit
+  `33a8f41a86c1` — the first tree ever verified that CARRIES the band fix — ran the corpus in
+  **3,562 s and named ZERO failing suites**. `tests/autonomy-sweep.bats` is not in `failing[]`.
+  Backlog `35190812890d` is **closed on that evidence**; both of its `hung` stamps ran trees where
+  `39388b17d` is not an ancestor, so neither had ever tested the fix they were being read against.
+
+  🚨 **But the verdict is `cut`, not `green`, and the reason is a different mechanism entirely**
+  (filed `b7252a3bb015`, with a falsifier attached so it re-asks itself). The runner's own line:
+  *"corpus TRUNCATED — zero not-ok in a non-zero run — the run was KILLED by signal 15 from OUTSIDE
+  this runner (sender unidentified)"*. Three things make this its own item rather than a footnote:
+
+  - **It is the dominant verdict.** 28 `cut` · 6 `red` · 2 `hung` · **4 `green`** across the last 40
+    stamps. A cut proves nothing, so no green is earned, so nothing reaching the live layer is
+    full-suite-proven.
+  - **The known cut engine was already fixed and this one survived it.** `c5e08d419` (C33, 2026-08-11)
+    found the mutex comparing two locales' renderings of one instant — `ps -o lstart=` formats through
+    `LC_TIME`, so a session-fired `--run-if-needed` read the launchd daemon's C-locale record as a
+    *stranger*, reaped a LIVE holder, and started a second 441-suite verifier beside it. That fix is
+    landed AND deployed (`LC_ALL` present in the live file), and today's cut had **exactly one**
+    verifier — sequential runs, `09:05Z→10:02Z` then `10:03Z→11:02Z`, no overlap. So the double-corpus
+    explanation is spent and the sender is genuinely unknown.
+  - **The runner's own kills are excluded by construction.** `postland-verify.sh:2533/2540` set
+    `cutby=preplan|stall` and unify onto rc 124; this run reported rc>128 with `cutby` empty, which is
+    the branch at `:1502` that means *somebody else sent it*. `scripts/gate-cleanup.sh:188` is the only
+    worktree-scoped TERM sender in the tree and it has **no automated caller** — it is named only in
+    `ship-land.sh`'s advice and in `validate-bash.sh`'s denial message.
+
+  ⚠️ **It is NOT currently blocking convergence, and the successor brief's premise that it is has
+  expired.** `deploy-live.sh` reports `lag 5 commit(s) / 0h, inside the degrade budget (25 / 6h) — no
+  advance, and none is due yet`. The live layer converges; it converges *degraded*, on 4-in-40 greens.
+  Severity is "the full-suite claim is mostly unearned", not "the box is stuck".
+
+  **Also corrected: `at-ceiling` is no longer evidence of a wedge.** The dispatcher read
+  `verdict:"defer", reason:"at-ceiling", free_slots:0` again at `11:00:04Z` — but with
+  **`live_workers:7`** against `ceiling:6`. That is an honest refusal over seven real workers, which is
+  precisely what W0 built the distinction for; the wedge was `free_slots:0` with the slots held by
+  *terminal* claims. Three of those seven are this session's own wave fires, which is the tension W3
+  exists to resolve.
+
 - **2026-08-12 11:00Z — successor re-verified W0 and fired W1/W2/W3; the hang is gone and the retire
   arm is now waiting on a live round trip that is ALREADY RUNNING.** Four findings, each from a live
   read rather than the predecessor's record:
