@@ -2858,6 +2858,52 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── off-box ADMISSION ratchet — the LAST arm, because it is the only expensive one ────────────
+  # THE GENERATOR IT CLOSES. `scripts/offbox-partition.sh` makes the hermetic partition a SET
+  # DIFFERENCE, so a suite joins it BY EXISTING rather than by being proven off-box-clean. One
+  # not-green suite makes hermetic.yml's binary conclusion non-green, so no off-box stamp is written
+  # and `deploy-live.sh`'s T1H tier — the only tier that advances on a POSITIVE result with no lag
+  # budget — is shut for the WHOLE MACHINE. The workflow never gates a land (by construction), so
+  # that cost was paid by everyone and owed by nobody. Measured 2026-08-12: three folds in one day,
+  # corpus 405 → 414, reds 2 → 3, with two suites fixed and staying fixed. Whack-a-mole cannot win
+  # against a corpus that grows; moving the bill to the author can.
+  #
+  # WHY IT IS SAFE TO PUT A BATS RUN IN THE ARMS. It costs ONE `git diff` on the overwhelmingly
+  # common land, because it binds only on suites this range ADDS — usually none. When it does fire it
+  # runs exactly the added suite under the producer's own bound (300s), and that is the author's own
+  # file. It sits LAST so every cheap deterministic arm has already had its say: a land that is going
+  # to be refused for a 1s hermeticity finding should never first spend 300s here.
+  #
+  # WHY exit 2 IS A NON-VERDICT HERE TOO. The lint abstains when the runner cannot speak (no bats, no
+  # timeout, a missing suite) rather than convicting on it — R6, the same rule its five sibling arms
+  # route through GATE_KILLED. A gate that turned "this box has no timeout(1)" into "your suite is
+  # broken" would teach authors to distrust every verdict it issues.
+  # Resolved repo-root-relative and overridable by the same convention as HERM_LINT above: the tree
+  # being landed must be gated by its OWN admission lint, so a land that legitimately changes the
+  # gate is judged by the version it ships.
+  local ADM_LINT="${SHIP_LAND_ADM_LINT:-scripts/offbox-admission-lint.sh}"
+  if [[ -x "$ADM_LINT" ]] && [[ -d tests ]]; then
+    local adm_rc=0
+    "$ADM_LINT" --range "$range" >&2 || adm_rc=$?
+    if (( adm_rc == 2 )); then
+      echo "⛔ gate: offbox-admission could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  Nothing is wrong with the suites named above (if any). Re-run /ship when the box is quieter." >&2
+      GATE_KILLED=1
+      return 1
+    fi
+    if (( adm_rc != 0 )); then
+      echo "✗ gate: offbox-admission RED — a bats suite THIS LAND ADDS is not green off-box." >&2
+      echo "  Landing it would red the hourly hermetic producer, write no off-box stamp, and shut" >&2
+      echo "  deploy-live.sh's T1H tier for every session on this box until someone notices." >&2
+      echo "  The cure is printed above and is ONE line, in this same commit: fix the suite, or list" >&2
+      echo "  it in scripts/offbox-excluded.manifest with the measurement the lint just took." >&2
+      # A REAL verdict: the lint names a suite and re-ran it deterministically, so exit 6 (fix your
+      # tree), never a retryable 9 — same reasoning as the hermeticity and walltime ratchets.
+      gate_red offbox-admission
+      return 1
+    fi
+  fi
+
   # ── the test phase — SMOKE in the fast lane, the whole corpus only under the v1 kill switch ──
   # NOT gated on the statics rc above: an already-red land still runs the smoke, so the author gets
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —

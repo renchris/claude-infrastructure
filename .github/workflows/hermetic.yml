@@ -48,6 +48,16 @@ on:
     # queues runs behind each other, and a queued run is a verdict about a tree that has already
     # been superseded.
     - cron: '17 * * * *'
+    # DAILY CENSUS — the exclusion list's SHRINK ACTUATOR, and the reason this second entry exists.
+    # `scripts/offbox-excluded.manifest` calls itself "RE-MEASURED, NOT CURATED" and names
+    # `offbox-run.sh census` as the arm that keeps an entry from becoming permanent. That arm was a
+    # `workflow_dispatch` checkbox: no schedule, no consumer, and nothing that ever deleted a line.
+    # So the growth side was mechanized (a new suite joins the partition by existing) and the cure
+    # side was a human remembering to tick a box — which is the whole asymmetry that let the list
+    # only ever grow. A ratchet whose shrink half has no actuator is an exemption list with better
+    # comments. Daily, not hourly: the census is a superset of the partition and therefore strictly
+    # longer, and an exclusion that has started passing is not news that decays in an hour.
+    - cron: '43 9 * * *'
   push:
     branches: ['wt-**', 'offbox-**']
   pull_request:
@@ -190,7 +200,14 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "${{ runner.temp }}/out"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.census }}" = "true" ]; then
+          # TWO WAYS TO BE A CENSUS: the operator's checkbox, and the daily cron. Keyed on the cron
+          # EXPRESSION rather than on a time-of-day comparison — `github.event.schedule` is the
+          # literal string GitHub matched, so the selector cannot drift from the trigger that fired
+          # it, and adding a third schedule later cannot silently re-classify this one.
+          census=false
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.census }}" = "true" ] && census=true
+          [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "43 9 * * *" ] && census=true
+          if [ "$census" = "true" ]; then
             bash scripts/offbox-run.sh census ${{ matrix.shard }} 10 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
           else
             bash scripts/offbox-run.sh shard ${{ matrix.shard }} 10 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
@@ -298,6 +315,63 @@ jobs:
           print("is seeded on measurement, not attribution, and an entry is cheap to delete once")
           print("`offbox-run.sh census` shows the suite passing again.")
           PY
+
+      - name: release candidates — the shrink half of the ratchet
+        if: always()
+        run: |
+          set -uo pipefail
+          # THE CURE BLOCK ABOVE ONLY EVER GROWS THE LIST. This one only ever shrinks it, and without
+          # it the manifest's own claim to be "RE-MEASURED, NOT CURATED" has no mechanism behind it:
+          # the census could run daily forever and still nothing would name a line as deletable.
+          # An exclusion nothing re-tests is a permanent hole in the partition, and a hole that no
+          # report ever mentions is indistinguishable from coverage.
+          #
+          # A PARTITION RUN CANNOT SPEAK HERE, BY CONSTRUCTION. It does not execute the excluded
+          # suites at all, so every one of them is simply absent from its TSVs — and absence read as
+          # "green" would delete an exclusion on evidence that was never gathered. The guard is
+          # therefore positive: a suite must APPEAR, with state green, in the rows this run actually
+          # produced. On a partition run the intersection is empty and this step says nothing.
+          excl="$(bash scripts/offbox-partition.sh excluded 2>/dev/null || true)"
+          [ -n "$excl" ] || exit 0
+          # `find`, not a flat glob, and it is the difference between this step working and being a
+          # SILENT NO-OP. The shard job uploads TWO paths (`out/` and `logs/`), so upload-artifact
+          # preserves their common ancestor and the download lands each TSV at `shards/out/shard-N.tsv`
+          # — one directory below where `shards/*.tsv` looks. The glob would have matched nothing,
+          # `rows` would be empty, the step would exit 0, and it would have reported no release
+          # candidate ever, indistinguishably from having found none. `offbox-run.sh verdict`
+          # enumerates with `find … -name '*.tsv'` for exactly this reason; the layout is the
+          # artifact's fact, so it must not be re-guessed independently here.
+          rows="$(find shards -type f -name '*.tsv' -exec cat {} + 2>/dev/null || true)"
+          [ -n "$rows" ] || exit 0
+          green="$(printf '%s\n' "$rows" | awk -F'\t' '!/^#/ && NF>=6 && $2=="green" {print $1}' | sort -u)"
+          rel="$(printf '%s\n' "$excl" | sort -u | comm -12 - <(printf '%s\n' "$green"))"
+          [ -n "$rel" ] || exit 0
+          n="$(printf '%s\n' "$rel" | grep -c . || true)"
+          {
+            echo
+            # Worded "remove them from", and the wording is load-bearing. ship-land's escalation
+            # scan greps the raw diff case-insensitively for destructive-SQL shapes, one of which is
+            # the row-deletion verb followed by whitespace and the source keyword. This heading was
+            # first written in exactly that shape, in English, about a manifest — and it PARKED the
+            # land for human review over a step-summary string with no destructive effect anywhere
+            # near it. The pattern is right to be blunt: a denylist that tried to tell prose from SQL
+            # would start missing real SQL, so the prose moves rather than the guard.
+            #
+            # The first attempt at THIS comment tripped it too, by quoting the offending phrase in
+            # order to explain it — the guard firing on its own documentation. Hence the periphrasis
+            # above: do not re-introduce the literal spelling here, even inside backticks.
+            echo "#### shrink: $n exclusion(s) have lost their reason — remove them from \`scripts/offbox-excluded.manifest\`"
+            echo
+            echo "Each suite below is currently EXCLUDED and came back **green** in this run, which"
+            echo "executed it. Deleting the line (and its comment) widens the partition by set"
+            echo "difference on the next run — nothing else is needed. Re-measure before deleting if"
+            echo "the entry names a machine axis this runner happens not to exercise."
+            echo
+            echo '```text'
+            printf '%s\n' "$rel"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'release candidates (%s):\n%s\n' "$n" "$rel"
 
       - uses: actions/upload-artifact@v4
         if: always()
