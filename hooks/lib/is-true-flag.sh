@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Argv-level detectors for hooks/validate-bash.sh. Two functions, one model: a command STRING is
+# Argv-level detectors for hooks/validate-bash.sh. Three functions, one model: a command STRING is
 # not argv, so every question about "is this really being executed" is answered after tokenizing.
-#   is_true_flag  <flag> <cmd>   — is <flag> a real argv token, or just text in a message body?
-#   rm_argv_scan  <cmd>          — normalize every `rm` invocation to (recursive, force, target)
+#   is_true_flag          <flag> <cmd>  — is <flag> a real argv token, or just text in a body?
+#   rm_argv_scan          <cmd>         — normalize each `rm` to (recursive, force, target)
+#   strip_heredoc_bodies  <cmd>         — drop every heredoc BODY; what is left can be argv
 #
 # ── is_true_flag — layered detector for real argv flags vs. substring-only matches.
 #
@@ -368,4 +369,97 @@ PYEOF
 
   [[ -n "$out" ]] && printf '%s\n' "$out"
   return 0
+}
+
+# ── strip_heredoc_bodies — the same "text is not execution" question, one layer out.
+#
+#   strip_heredoc_bodies <command>
+#     stdout = <command> with every heredoc BODY and its terminator line REMOVED, and each
+#              `<<DELIM` operator replaced by the token HEREDOC_INPUT_SENTINEL.
+#     exit 0, always. This is a TOTAL function: there is no UNCLEAR, so no caller needs a
+#     fallback branch for a parse that failed — only for the library being absent.
+#
+# WHY a caller wants it: a heredoc body is INPUT. `git commit -F - <<'MSG' … MSG` hands its body to
+# git's stdin, so nothing inside it is ever a command, a flag or a target — exactly like the inside
+# of a quoted string, except that a quote-stripping pass leaves it completely untouched. Any
+# detector that decides on the raw command string therefore convicts prose, and it does so on the
+# one input shape (a multi-line commit message) whose whole purpose is to DESCRIBE the thing the
+# detector blocks. Measured: backlog 15b99887cd5e.
+#
+# WHY it exists BESIDE the strip_heredocs() inside is_true_flag's python: that one must keep the
+# body CONTENTS, because its entire job is to answer "was the flag in the body?" — it cannot be
+# reduced to "print the source without bodies". This one is only that, and it is called on the hot
+# path of EVERY Bash tool call, so it answers in ~2 ms of awk instead of ~30 ms of python fork. The
+# GRAMMAR is deliberately identical to that function's, so the two cannot disagree about what a
+# heredoc IS: `<<` or `<<-`, an optional ' " or \ quoting of the delimiter, and a delimiter word of
+# [A-Za-z_][A-Za-z0-9_]*.
+#
+# Two deliberate imprecisions, both chosen so a miss OVER-blocks (the caller's safe direction)
+# rather than under-blocks:
+#   · quote state is tracked PER LINE, so `-m "we replaced <<EOF"` is not read as an opener. An
+#     apostrophe that desynchronises that state costs a real heredoc going unstripped — which is
+#     the OLD behaviour, an over-block — and never a real opener being swallowed.
+#   · `<<<` is a herestring, not an opener, and neither is the second `<` of one. Reading it as an
+#     opener would silently delete every following line of a compound command: the under-block.
+strip_heredoc_bodies() {
+  local cmd="$1"
+
+  # Layer 1, as everywhere in this file: no `<<` at all → the answer is the input, zero forks.
+  if [[ "$cmd" != *'<<'* ]]; then
+    printf '%s' "$cmd"
+    return 0
+  fi
+
+  # printf, never echo: a body may legitimately begin with `-n` or contain backslash escapes.
+  # The quote CHARACTERS arrive as -v variables so the awk program needs neither of them in its
+  # own source, and can therefore stay one shell single-quoted string with nothing escaped.
+  printf '%s' "$cmd" | awk -v SQ="'" -v DQ='"' '
+    function pop_body(   i) {            # start the next queued body, or leave body mode
+      if (qn == 0) { body = 0; return }
+      bdelim = qd[1]; btabs = qt[1]
+      for (i = 1; i < qn; i++) { qd[i] = qd[i+1]; qt[i] = qt[i+1] }
+      qn--
+      body = 1
+    }
+    function scan(line,   out, i, n, k, c, q, d, sq, dq, tabs) {
+      out = ""; i = 1; n = length(line); sq = 0; dq = 0
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c == SQ && dq == 0) { sq = 1 - sq; out = out c; i++; continue }
+        if (c == DQ && sq == 0) { dq = 1 - dq; out = out c; i++; continue }
+        if (sq == 0 && dq == 0 && substr(line, i, 2) == "<<" &&
+            substr(line, i + 2, 1) != "<" &&
+            (i == 1 || substr(line, i - 1, 1) != "<")) {
+          k = i + 2
+          tabs = 0
+          if (substr(line, k, 1) == "-") { tabs = 1; k++ }
+          while (k <= n && (substr(line, k, 1) == " " || substr(line, k, 1) == "\t")) k++
+          q = substr(line, k, 1)
+          if (q == SQ || q == DQ) { k++ } else { if (q == "\\") k++; q = "" }
+          d = ""
+          while (k <= n && substr(line, k, 1) ~ /^[A-Za-z0-9_]$/) { d = d substr(line, k, 1); k++ }
+          if (d ~ /^[A-Za-z_]/ && (q == "" || substr(line, k, 1) == q)) {
+            if (q != "") k++
+            qn++; qd[qn] = d; qt[qn] = tabs
+            out = out "HEREDOC_INPUT_SENTINEL"
+            i = k
+            continue
+          }
+        }
+        out = out c; i++
+      }
+      return out
+    }
+    BEGIN { qn = 0; body = 0 }
+    {
+      if (body) {
+        t = $0
+        if (btabs) sub(/^\t+/, "", t)   # `<<-` strips leading TABS from the terminator, only tabs
+        if (t == bdelim) pop_body()
+        next                             # body line and terminator line alike: never argv
+      }
+      print scan($0)
+      if (qn > 0) pop_body()             # a body opened on this line begins on the next
+    }
+  '
 }

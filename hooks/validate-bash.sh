@@ -541,10 +541,30 @@ fi
 # `pkill -f bats` pattern matches peers because it matches TEXT). So the position test runs on a
 # quote-STRIPPED copy — killing message bodies — while the target/scope tests below still read the
 # ORIGINAL, because that is where the real pattern lives (`pkill -f "bats tests/"`).
-CMD_NOQ=$(printf '%s' "$CMD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+#
+# A HEREDOC BODY IS DATA TOO (2026-08-12, backlog 15b99887cd5e). Quote-stripping answered
+# `git commit -m "…pkill…"` correctly and still convicted the SAME sentence fed through a heredoc,
+# because it erases only QUOTED runs and a heredoc body carries no quotes to erase. The splitter
+# then turns a literal `(pkill|killall)` in the prose into a fragment BEGINNING with `pkill`, the
+# gate opens, and the harvest below lifts `killall) …bats…` back out of the message. Measured while
+# committing this clause's own previous fix: the guard blocked its own fix, for the second time —
+# which is why the body now comes off FIRST, ahead of the quotes it never had.
+#
+# The harvest reads that same body-free copy rather than $CMD. It still needs the ORIGINAL QUOTES
+# (that is where a real pattern lives), but never the original BODIES: otherwise a correctly scoped
+# `pkill -f "bats.*${PWD##*/}"` would be denied by the very commit message describing why it is
+# scoped. Text is not execution — and neither is stdin.
+CMD_NOHD="$CMD"
+if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F strip_heredoc_bodies >/dev/null 2>&1; then
+  # Absent library ⇒ $CMD unchanged ⇒ exactly the previous behaviour: an over-block on a heredoc
+  # message body, never an under-block. `declare -F` for the same reason rm_argv_scan needs it —
+  # hooks/ deploys as per-file symlinks, so a NEW hook can briefly sit beside an OLD lib.
+  CMD_NOHD=$(strip_heredoc_bodies "$CMD")
+fi
+CMD_NOQ=$(printf '%s' "$CMD_NOHD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
 if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
      | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
-  PK_OCCURRENCES=$(echo "$CMD" | grep -oE '(pkill|killall)[^;&|]*' || true)
+  PK_OCCURRENCES=$(printf '%s' "$CMD_NOHD" | grep -oE '(pkill|killall)[^;&|]*' || true)
   while IFS= read -r pk; do
     [[ -z "$pk" ]] && continue
     # Does this occurrence target a GATE program at all? Otherwise it is none of our business.
