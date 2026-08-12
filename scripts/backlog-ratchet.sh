@@ -92,6 +92,20 @@ set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 STATE="${CC_RATCHET_STATE:-$HOME/.claude/autonomy/backlog-ratchet.json}"
+# ── THE THIRD NUMBER (W1, backlog b585e86ea4e4): EXECUTION, not capability ───────────────────────
+# This file's own header says coverage is "what fraction of open items CAN re-check themselves". It
+# is a property of the ROW, and it was the only number here — so a store could read 100% covered and
+# 0% ever-executed and this census would print a clean bill of health over it. That was not
+# hypothetical: `run_falsifier` had exactly ONE call site, the claim path, and 205 of 327 live rows
+# had never been claimed, so their probe had most likely never run at all.
+#
+# NEVER-VALIDATED is the missing half and it is deliberately NOT part of the ratchet's assert. The
+# assert exists to catch a REGRESSION against a high-water mark; this number starts at 100% of the
+# store and falls as the currency pass works through it, so asserting on it would red for months
+# while the mechanism was working exactly as designed. It is a CENSUS line — reported every run,
+# gating nothing (memory: alarm-polarity-and-attention-budget: prove the healthy event can happen
+# before you let a number gate).
+VALIDATED="${CC_BACKLOG_VALIDATED:-$HOME/.claude/autonomy/backlog-validated.json}"
 MODE="census"
 case "${1:-}" in
   --json)   MODE="json" ;;
@@ -142,6 +156,49 @@ EOF
 
 open_n=${open_n:-0}; probe_n=${probe_n:-0}; fals_n=${fals_n:-0}
 closed_n=${closed_n:-0}; median_age=${median_age:-0}; p75_age=${p75_age:-0}
+
+# EXECUTION — how many LIVE rows carry a currency stamp, i.e. have had a probe actually run against
+# them. Counted over the same $live population the coverage ratio uses, so the two numbers are
+# comparable rather than two ratios of two denominators (the defect READINESS measurement 3 retracted
+# itself for). An ABSENT snapshot file means the currency pass has never run — reported as such, and
+# never as zero rows validated out of zero, which would read as 100%.
+# 🚨 THE DENOMINATOR IS NON-DONE, NOT `$live`, AND THE TWO ARE NOT THE SAME NUMBER. `$live` above is
+# open ∨ claimed (346 today) and deliberately excludes BLOCKED rows; the currency pass stamps every
+# row that is not `done` (564 today), blocked included, because a blocked row's premise decays like
+# any other and `unblock` puts it straight back in the wave. Reusing `$live` here would have printed
+# "346 rows, N never validated" beside a `cc-backlog freshness` reading 564 — two auditors over one
+# population, disagreeing, with nothing on either to say which population it meant. Both counts are
+# emitted so the gap is auditable rather than latent (memory:
+# sibling-auditors-must-share-the-state-model, positive-control-the-denominator).
+# ASKED OF cc-backlog, NEVER RE-DERIVED HERE. The first version of this block re-implemented the
+# fold — copying the mini-reduce this file already uses for coverage — and it drifted IMMEDIATELY:
+# it counted 553 non-done rows where `cc-backlog freshness` counted 564, an 11-row gap between two
+# auditors over one population, each of which would have been quoted as "the" number. That is the
+# defect this repo has now paid for three times (memory: sibling-auditors-must-share-the-state-model;
+# and the coverage fold above is itself the surviving instance, kept only because it is load-bearing
+# for the high-water mark's comparability). One arbiter per fact: cc-backlog owns the fold, so the
+# ratchet asks it.
+#
+# FAIL-OPEN to UNKNOWN, never to zero. A missing helper, an unreadable store or a jq that is not
+# there must report "not measured" — reporting 0 never-validated would be the strongest possible
+# claim of health, produced by the sensor being broken (memory:
+# sensor-default-off-makes-blindness-the-shipping-path).
+validated_n=0; nondone_n=0; never_n=0; validated_src="absent"
+_cbin="${CC_RATCHET_BACKLOG_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/bin/cc-backlog}"
+if [ -x "$_cbin" ] && command -v jq >/dev/null 2>&1; then
+  _fresh="$("$_cbin" freshness --json 2>/dev/null)" || _fresh=""
+  if [ -n "$_fresh" ]; then
+    read -r nondone_n validated_n never_n <<EOF
+$(printf '%s' "$_fresh" | jq -r '"\(.live) \(.validated) \(.never_validated)"' 2>/dev/null || echo "0 0 0")
+EOF
+    case "${nondone_n:-}"   in ''|*[!0-9]*) nondone_n=0   ;; esac
+    case "${validated_n:-}" in ''|*[!0-9]*) validated_n=0 ;; esac
+    case "${never_n:-}"     in ''|*[!0-9]*) never_n=0     ;; esac
+    # PRESENT means the snapshot FILE exists — never inferred from a non-zero count, because zero
+    # validated rows is a legitimate reading of a present-but-empty pass and must not read "absent".
+    [ -f "$VALIDATED" ] && validated_src="present"
+  fi
+fi
 if [ "$probe_n" -gt 0 ]; then
   coverage=$(awk -v a="$fals_n" -v b="$probe_n" 'BEGIN{printf "%.1f", (a*100)/b}')
 else
@@ -210,11 +267,16 @@ case "$MODE" in
   json)
     jq -nc --arg open "$open_n" --arg probe "$probe_n" --arg cov "$coverage" --arg covered "$fals_n" \
        --arg closed "$closed_n" --arg med "$median_age" --arg p75 "$p75_age" --arg hw "$prev" \
+       --arg valn "$validated_n" --arg nevn "$never_n" --arg vsrc "$validated_src" \
+       --arg ndn "$nondone_n" \
        --argjson dv "$DENOM_VERSION" \
        '{live_items:($open|tonumber), probeable_items:($probe|tonumber),
          falsifier_covered:($covered|tonumber),
          falsifier_coverage_pct:($cov|tonumber), closed_items:($closed|tonumber),
          median_days_to_close:($med|tonumber), p75_days_to_close:($p75|tonumber),
+         non_done_items:($ndn|tonumber),
+         validated_items:($valn|tonumber), never_validated_items:($nevn|tonumber),
+         validation_snapshot:$vsrc,
          coverage_high_water:($hw|tonumber), denominator_version:$dv}'
     ;;
   assert)
@@ -235,6 +297,18 @@ case "$MODE" in
     printf '  denominator         : %s live minus %s needs-class (no machine oracle by design) = %s probeable\n' \
       "$open_n" "$((open_n - probe_n))" "$probe_n"
     printf '  days to close       : median %s · p75 %s (over %s closed items)\n' "$median_age" "$p75_age" "$closed_n"
+    if [ "$validated_src" = absent ]; then
+      printf '  probes ever RUN     : UNKNOWN — no currency snapshot at %s.\n' "$VALIDATED"
+      printf '                        Coverage above says how many rows CAN self-check; nothing here\n'
+      printf '                        has measured how many actually did (cc-premise sweep --record).\n'
+    else
+      printf '  probes ever RUN     : %s of %s NON-DONE rows validated · %s NEVER validated\n' \
+        "$validated_n" "$nondone_n" "$never_n"
+      printf '                        (non-done = %s, wider than the %s live above: it includes\n' \
+        "$nondone_n" "$open_n"
+      printf '                         blocked rows, whose premise decays the same and which unblock\n'
+      printf '                         puts straight back in the wave)\n'
+    fi
     printf '  %s\n' "$prev_note"
     if awk -v c="$coverage" 'BEGIN{exit !(c < 1)}'; then
       printf '\n  Coverage is near zero because --falsifier landed in a7bf7068 and no generator emits\n'

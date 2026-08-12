@@ -751,6 +751,22 @@ set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 IDL="${CC_BACKLOG_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+# THE CURRENCY STAMP — "when did a probe last RUN against this row, and at what tree state".
+#
+# WHY IT IS NOT A LEDGER EVENT, which is the first thing a reader will want to change. `lastValidated`
+# is a whole-population snapshot REGENERATED every pass, not an event in the life of the work — the
+# same shape as `venue`, which the fold above already had to special-case out of `lastTs` for exactly
+# this reason ("a routing annotation written by a sweep over the whole store"). Appending it as an
+# event was measured and rejected: autonomy-sweep runs at StartInterval 300 (every 5 min), the store
+# folds 564 live rows, and `cc-backlog compact` has NO CALLER on this box — so a per-row event would
+# add ~20 MB/day to a 2.8 MB ledger with nothing to collapse it, and would stamp today onto every
+# row's clock unless a second exclusion were remembered in a third place. A regenerated snapshot
+# belongs in a file that is REWRITTEN, so it is 70 KB forever.
+#
+# WHAT STAYS IN THE LEDGER: the consequences. A validation that RETIRES a row writes an ordinary
+# `done` record carrying the probe and the sha as its evidence, so the audit trail of every state
+# change is still the append-only ledger and nothing about it moved.
+VALIDATED="${CC_BACKLOG_VALIDATED:-$HOME/.claude/autonomy/backlog-validated.json}"
 
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
@@ -1020,7 +1036,14 @@ fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its
         # would close it and the next brace reads as bash. This comment was written with three and
         # `bash -n` pointed straight at the line — the third time this file has paid for it.)
         lastTs: (if $r.event == "venue" then ($p.lastTs // $r.ts // "")
-                 else ($r.ts // $p.lastTs // "") end)
+                 else ($r.ts // $p.lastTs // "") end),
+        # firstTs — WHEN THIS ROW WAS FILED, and it is a different question from `lastTs` in the
+        # only way that matters to decay. `lastTs` is the last thing that HAPPENED to the row, so a
+        # reap, a self-release or a venue annotation moves it; a row re-opened this morning reads as
+        # filed this morning, and its premise reads current. FIRST-WINS, so nothing that happens
+        # later can move it. This is the anchor `cc-backlog freshness` measures commits-since-filing
+        # from — the number that reads p50 361 where the same population reads p50 2.0 DAYS.
+        firstTs: ($p.firstTs // $r.ts // "")
       })
     ) | [ .[] ]'
 }
@@ -1925,28 +1948,67 @@ cmd_transition() {
   # stops a false `done`. Here the reader is whoever is DECIDING to re-admit — and an item closed at
   # this moment never costs a dispatch slot at all.
   #
-  # SCOPED TO `unblock`, not to every re-admitting event. `reopen` folds to "open" too, but it is
-  # overwhelmingly machine traffic — cc-dispatch self-releasing a fire it could not make, reap
-  # returning a dead worker's claim — where there is no deciding reader to inform and the volume
-  # would make this ambient. Unblock is the deliberate one.
+  # ── EXTENDED TO `reopen` 2026-08-12 (W1 item 5, backlog b585e86ea4e4) ────────────────────────────
+  # This block used to be scoped to `unblock` alone, on the argument that `reopen` "is overwhelmingly
+  # machine traffic … where there is no deciding reader to inform and the volume would make this
+  # ambient". THE VOLUME HALF OF THAT IS TRUE AND RE-MEASURED — 374 reopen events against 60 unblock
+  # events on the live rows today, so the amnesia path is 6× the guarded one. THE CONCLUSION DRAWN
+  # FROM IT WAS NOT. "No reader to inform" is an argument against PRINTING; it was applied as an
+  # argument against ASKING, and those are different acts. The re-read is what re-admits a row to the
+  # dispatch wave with its premise re-checked, and reopen re-admits 6× more rows than unblock does.
   #
-  # It honours CC_BACKLOG_PREMISE_GATE: same predicate, same binary, one switch. An operator who has
-  # turned cc-premise off in this tool means it.
-  if [ "$event" = unblock ] && [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
-    local ubin uout
+  # SO THE VERB DECIDES THE AUDIENCE, NOT WHETHER THE QUESTION IS ASKED. One predicate, one binary,
+  # one switch — three outputs:
+  #   · unblock → print the full contract, unchanged. A human is deciding, and 60 of these a store
+  #     is not a banner.
+  #   · reopen  → print ONLY on a BLOCKING verdict (falsified / superseded / self-duplicate, i.e.
+  #     cc-premise rc 3). Printing an advisory on all 374 would be the ambient alarm the original
+  #     comment correctly refused, and an alarm that fires on everything carries as many bits as one
+  #     that cannot fire at all (memory: alarm-polarity-and-attention-budget). A blocking verdict is
+  #     rare and is news: it means this reopen just put PROVABLY DEAD work back in the wave.
+  #
+  # STILL ADVISORY, STILL AFTER THE APPEND, STILL FAIL-OPEN — every reason the unblock arm gives for
+  # that applies unchanged, and harder for reopen: cc-dispatch's self-release and reap's dead-worker
+  # return are RECOVERY paths, and a recovery path that a sensor failure can refuse is a wedge.
+  # `reopen --force` is deliberately NOT exempted: force overrides the re-open-effect GUARDS above,
+  # which refuse; this refuses nothing, so exempting it would only delete the record.
+  if { [ "$event" = unblock ] || [ "$event" = reopen ]; } && [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
+    local ubin uout urc
     ubin="$(premise_bin)"
     if [ -x "$ubin" ]; then
       # stderr only: `check` puts the contract there and `verdict=` on stdout, and stdout here is the
       # `echo "$id"` contract every caller captures. `2>&1 >/dev/null` is ordered so the capture takes
       # stderr and the verdict line is dropped — reversing the two would swallow the contract and
       # publish the verdict into the caller's id.
-      uout="$("$ubin" check "$id" 2>&1 >/dev/null)" || true
-      if [ -n "$uout" ]; then
-        { printf 'cc-backlog unblock: %s is back in the dispatch wave — RE-READ ITS EVIDENCE FIRST\n' "$id"
+      urc=0
+      uout="$("$ubin" check "$id" 2>&1 >/dev/null)" || urc=$?
+      # The verdict token comes from the EXIT CODE, not from grepping the prose. cc-premise's rc 3 is
+      # its published BLOCKING contract; the prose is written for a human and rewords freely, and a
+      # phrase-match on it would go quiet the first time somebody improved a sentence (memory:
+      # tui-literal-phrase-match-is-width-dependent). rc 3 ⇒ blocking; anything else ⇒ clear-or-
+      # unreadable, which are the same thing to a stamp that must never over-claim.
+
+      # 🚨 THIS ARM DELIBERATELY WRITES NO CURRENCY STAMP, and the first version of it did.
+      # `cc-premise check` exits 0 both when a probe RAN and said "still live" and when the row
+      # carries no probe at all and nothing was asked — so stamping here would mark ~400 unprobed
+      # rows as validated on the strength of no measurement, which is the precise failure that made
+      # `lastTs` worthless (a sibling wave rewrote 70% of it in one hour as link bookkeeping, and the
+      # store's decay p50 then read 8 commits against a true ~361). ONE PRODUCER writes the stamp —
+      # `cc-premise sweep --record`, which can see WHICH ARM fired and stamps only probed rows. A
+      # re-admission is not a measurement; it is a good moment to READ one.
+      # (memory: proxy-must-be-independent-of-what-it-supplements.)
+      if [ -n "$uout" ] && { [ "$event" = unblock ] || [ "$urc" -eq 3 ]; }; then
+        { printf 'cc-backlog %s: %s is back in the dispatch wave — RE-READ ITS EVIDENCE FIRST\n' "$event" "$id"
           printf '%s\n' "$uout" | sed 's/^/  /'
-          printf '  Nothing above blocked this unblock; it is what the next worker will be told.\n'
-          printf '  If the condition is already discharged, close it now rather than spending a\n'
-          printf '  dispatch slot on it:  cc-backlog done %s --evidence "<the commit that cured it>"\n' "$id"
+          if [ "$urc" -eq 3 ]; then
+            printf '  THE PREMISE IS REFUTED, and this %s put the row back in the wave anyway (this\n' "$event"
+            printf '  verb advises, it does not refuse). Close it rather than let a worker take it:\n'
+            printf '      cc-backlog done %s --evidence "<the probe run above>"\n' "$id"
+          else
+            printf '  Nothing above blocked this %s; it is what the next worker will be told.\n' "$event"
+            printf '  If the condition is already discharged, close it now rather than spending a\n'
+            printf '  dispatch slot on it:  cc-backlog done %s --evidence "<the commit that cured it>"\n' "$id"
+          fi
         } >&2
       fi
     fi
@@ -2969,6 +3031,293 @@ cmd_venue() {
     printf 'cc-backlog venue: %s routed %s (%s)\n' "$id" "$plan" "$why" >&2
   fi
   echo "$id"; return 0
+}
+
+# cmd_validated — RECORD THAT A PROBE RAN. The producer side of the currency stamp (see VALIDATED
+# above). Two forms, one writer:
+#
+#   cc-backlog validated <id> --verdict <v> [--sha <sha>]     one row
+#   cc-backlog validated --batch [--sha <sha>]  < JSONL       the whole population, one rewrite
+#
+# THE PROBLEM THIS EXISTS FOR. `run_falsifier` had exactly ONE call site — the claim path — so a row
+# nobody ever tried to claim had never had its probe executed, and 205 of 327 live rows were in that
+# state. Nothing recorded the difference: `backlog-ratchet.sh` counts how many rows CAN self-check
+# (coverage), which is a property of the ROW, and a store could read 100% covered while 0% of those
+# probes had ever run. Coverage is a claim about capability; this is the record of an ACT.
+#
+# BATCH IS THE PRIMARY FORM, and not for speed alone. A per-row invocation would take its own fold
+# over the whole ledger to check the id — 564 folds of a 2.8 MB store per pass — but the deciding
+# reason is atomicity: the stamp file is a SNAPSHOT of one pass, so it is written whole or not at
+# all. A half-written snapshot would read as "these 200 rows are fresh and the other 364 have never
+# been validated", which is indistinguishable from the real finding this mechanism exists to report.
+#
+# THE SHA IS NOT DECORATION. A verdict without the tree state it was reached against cannot be aged:
+# this store's clock is days and the tree's is ~156 commits/day, so "validated 2 hours ago" and
+# "validated 300 commits ago" are the same sentence. `--sha` records what the probe was asked
+# against; `cc-backlog freshness` turns it into a distance.
+#
+# UNKNOWN IDS ARE DROPPED, NOT FATAL, and the count is printed. A batch is produced by a sweep that
+# folded the store some seconds earlier, and rows close under it constantly (memory:
+# remediation-perturbs-its-own-population). Failing the whole pass because one row landed mid-sweep
+# would make the stamp file unwritable exactly on the busy days. Dropping silently would be worse —
+# a shrinking population reads as a falling never-validated count, which is this wave's own headline
+# number moving for the wrong reason — so the drop is reported on stderr every time it is non-zero.
+cmd_validated() {
+  local id="" verdict="" sha="" batch=0
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --batch)   batch=1 ;;
+      --verdict) verdict="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --sha)     sha="${1:-}";     [ $# -gt 0 ] && shift ;;
+      -*) printf 'cc-backlog validated: unknown arg %s\n' "$key" >&2; return 2 ;;
+      *)  if [ -z "$id" ]; then id="$key"; else
+            printf 'cc-backlog validated: unexpected extra argument %s\n' "$key" >&2; return 2
+          fi ;;
+    esac
+  done
+  if [ "$batch" -eq 0 ] && [ -z "$id" ]; then
+    printf 'cc-backlog validated: <id> is required (or --batch, reading JSONL on stdin)\n' >&2; return 2
+  fi
+  if [ "$batch" -eq 1 ] && [ -n "$id" ]; then
+    printf 'cc-backlog validated: --batch takes no <id> (ids come from stdin)\n' >&2; return 2
+  fi
+  command -v jq >/dev/null 2>&1 || {
+    printf 'cc-backlog validated: jq missing — cannot record (nothing written)\n' >&2; return 2; }
+  ensure_file
+  mkdir -p "$(dirname "$VALIDATED")" 2>/dev/null
+
+  local ts; ts="$(now_iso)"
+  # ATOMIC BY CONSTRUCTION: build beside the target on the SAME filesystem, then rename. A reader
+  # (freshness, the ratchet) either sees the whole previous pass or the whole new one, never a
+  # truncated file that would report the population as never-validated.
+  local tmp; tmp="$(mktemp "${VALIDATED}.XXXXXX")" || {
+    printf 'cc-backlog validated: could not create a temp file beside %s\n' "$VALIDATED" >&2; return 2; }
+
+  if [ "$batch" -eq 1 ]; then
+    local known kept
+    known="$(fold 2>/dev/null | jq -c 'map(.id)' 2>/dev/null)"
+    [ -n "$known" ] || known='[]'
+    # ONE jq pass: slurp the batch, drop ids the fold does not know, index by id. `--slurpfile` is
+    # not used for the batch itself because it arrives on stdin, which is where a producer streams it.
+    if ! jq -sc --argjson known "$known" --arg ts "$ts" --arg sha "$sha" '
+           ($known | map({(.): true}) | add // {}) as $k
+           | map(select(.id != null and ($k[.id] // false)))
+           | { schema: 1, pass_ts: $ts, pass_sha: $sha,
+               rows: (map({ key: .id,
+                            value: { ts: (.ts // $ts), sha: (.sha // $sha),
+                                     verdict: (.verdict // "") } }) | from_entries) }' \
+           > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      printf 'cc-backlog validated: the batch on stdin was not readable JSONL — NOTHING written\n' >&2
+      return 2
+    fi
+    kept="$(jq -r '.rows | length' "$tmp" 2>/dev/null || echo 0)"
+    if [ "${kept:-0}" -eq 0 ]; then
+      # An EMPTY snapshot would erase every stamp the previous pass recorded and report the whole
+      # store as never-validated — a catastrophic reading produced by an empty pipe. Refuse it: a
+      # producer with nothing to say must leave the last good snapshot standing.
+      rm -f "$tmp"
+      printf 'cc-backlog validated: batch matched 0 known ids — REFUSED (the previous snapshot stands).\n' >&2
+      printf '  An empty snapshot cannot be told apart from a store nothing has ever validated.\n' >&2
+      return 3
+    fi
+    mv -f "$tmp" "$VALIDATED" || { rm -f "$tmp"; return 2; }
+    printf 'cc-backlog validated: recorded %s row(s) at %s%s\n' \
+      "$kept" "$ts" "${sha:+ against ${sha}}" >&2
+    return 0
+  fi
+
+  # SINGLE-ROW FORM — a MERGE into the existing snapshot, never a rewrite. This is what the
+  # transition paths (claim / unblock / reopen) call: they have re-asked ONE row's premise and must
+  # not be able to erase the pass that answered for the other 563.
+  has_id "$id" || { printf 'cc-backlog validated: unknown id %s\n' "$id" >&2; return 3; }
+  local prev; prev="$(cat "$VALIDATED" 2>/dev/null)"
+  [ -n "$prev" ] || prev='{"schema":1,"rows":{}}'
+  if ! printf '%s' "$prev" | jq -c --arg id "$id" --arg ts "$ts" --arg sha "$sha" --arg v "$verdict" '
+         (.schema //= 1) | (.rows //= {})
+         | .rows[$id] = {ts:$ts, sha:$sha, verdict:$v}' > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    printf 'cc-backlog validated: %s is not readable JSON — NOTHING written\n' "$VALIDATED" >&2
+    return 2
+  fi
+  mv -f "$tmp" "$VALIDATED" || { rm -f "$tmp"; return 2; }
+  return 0
+}
+
+# cmd_freshness — THE REPORTABLE NUMBER. "How many live rows has a probe never actually run against,
+# and how far has the tree moved under the ones it has?"
+#
+# THE TWO CLOCKS, which is the whole reason this verb exists rather than a line in the ratchet. Age
+# in DAYS reads healthy for this store — p50 2.0 d over the live set — while commits-landed-since
+# reads p50 361. Both are true and they are the same population: the store's clock is days, the
+# tree's is ~156 commits/day, so a row filed "two days ago" is filed against a tree that no longer
+# exists. Every age reader on this box used wall time, so the number that makes the rot visible was
+# the one nobody printed.
+#
+# --json for machines, plain for a human, --never for just the headline integer (that last one is
+# what a caller greps, so it prints ONE token and nothing else).
+cmd_freshness() {
+  local fmt="text" repo=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --json)  fmt="json" ;;
+      --never) fmt="never" ;;
+      --repo)  repo="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog freshness: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  command -v jq >/dev/null 2>&1 || {
+    printf 'cc-backlog freshness: jq missing — cannot measure (fail-open)\n' >&2; return 0; }
+  ensure_file
+  # The repo whose commits are the second clock. Defaults to the one this script ships in, resolved
+  # through $0 exactly as premise_bin does — never $PATH, never a hardcoded ~/Development path, so a
+  # worktree under test measures ITSELF rather than the operator's live checkout.
+  if [ -z "$repo" ]; then
+    local fself; fself="$0"; [ -L "$fself" ] && fself="$(readlink "$fself")"
+    repo="${CC_BACKLOG_REPO:-$(cd "$(dirname "$fself")/.." 2>/dev/null && pwd)}"
+  fi
+
+  # THE COMMIT TIMELINE, read ONCE. Per-row `git rev-list --count --since=<ts>` would be one fork
+  # per row (564 of them); one `git log` plus a sorted merge is the same answer at 1/564 the cost.
+  # `git_ok` is a POSITIVE control, not an absence check: a repo that cannot be read must report
+  # UNKNOWN, because "git answered zero commits" and "git could not be asked" are the same value
+  # otherwise — the exact defect that fabricated 80 findings in cc-premise (memory:
+  # default-off-sensor-makes-blindness-the-shipping-path).
+  # ── TWO DECAY AXES, AND THEY ARE VULNERABLE TO DIFFERENT THINGS ─────────────────────────────────
+  # commits-since-FILING is anchored on `firstTs`, which is first-wins in the fold and therefore
+  # cannot be moved by anything that happens to the row later. That immunity is not incidental: this
+  # census originally read `lastTs`, and `lastTs` is worthless as a currency signal — a sibling
+  # grouping wave rewrote 70% of the store's `lastTs` inside ONE HOUR as pure link bookkeeping, and
+  # the store's decay p50 promptly read 8 commits behind against a true figure of ~361. A metric any
+  # writer can refresh reports "fresh" forever (memory:
+  # proxy-must-be-independent-of-what-it-supplements).
+  #
+  # commits-since-VALIDATION is anchored on the recorded SHA, not on a timestamp at all, and that is
+  # the stronger form: a sha cannot be bumped by a write that did no work. It answers the question
+  # the DoD actually asks — "is this row's verdict older than one sweep?" — where the filing axis
+  # answers "how far has the world moved since anyone wrote this down".
+  local commits="" git_ok=0 head_sha=""
+  # Asked of git, not of the filesystem: `.git` is a FILE in a linked worktree, so a `-d` test
+  # reports "not a repo" for the commonest place this runs. Measured on a linked worktree
+  # 2026-08-12: the census printed "commits since filing: UNKNOWN" against a perfectly readable repo,
+  # i.e. the second clock was silently switched off wherever this repo's own waves actually work.
+  if [ -n "$repo" ] && command -v git >/dev/null 2>&1 \
+     && git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+    local ref
+    # origin/main when it exists (the trunk a row's premise decays against), else HEAD — a fresh
+    # worktree with no fetched remote must still measure, and must SAY which ref it measured.
+    if git -C "$repo" rev-parse --verify -q origin/main >/dev/null 2>&1; then ref="origin/main"; else ref="HEAD"; fi
+    # ⚠️ `%cI` IS THE WRONG FORMAT HERE and the bug it causes is silent. Strict-ISO prints the
+    # COMMITTER'S OFFSET (`2026-08-12T05:27:33+02:00`) while every timestamp in the store is UTC
+    # `Z` — and the comparison below is LEXICOGRAPHIC, so an offset-bearing string sorts against a
+    # `Z` one by the character `+` vs `Z` rather than by time. The count would still come back a
+    # plausible integer. Forcing UTC at the formatter makes the two clocks the same clock.
+    commits="$(TZ=UTC git -C "$repo" log "$ref" --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+    head_sha="$(git -C "$repo" rev-parse --short "$ref" 2>/dev/null)"
+    [ -n "$commits" ] && git_ok=1
+  fi
+
+  local vsnap; vsnap="$(cat "$VALIDATED" 2>/dev/null)"
+  [ -n "$vsnap" ] || vsnap='{"schema":1,"rows":{}}'
+
+  # COMMITS SINCE EACH DISTINCT VALIDATION SHA, resolved by git rather than by comparing strings.
+  # Keyed on the sha SET (a pass stamps one sha across every row it touched, so this is a handful of
+  # rev-list calls, not one per row). A sha git cannot resolve — a rewritten branch, a stamp from a
+  # worktree whose commits never landed — maps to null and reads UNKNOWN, never 0.
+  local shamap="{}"
+  if [ "$git_ok" -eq 1 ]; then
+    local shalist
+    shalist="$(printf '%s' "$vsnap" | jq -r '[.rows[]?.sha // "" | select(. != "")] | unique[]' 2>/dev/null)"
+    if [ -n "$shalist" ]; then
+      local entries="" s n
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        n="$(git -C "$repo" rev-list --count "${s}..${ref:-HEAD}" 2>/dev/null)"
+        case "${n:-}" in ''|*[!0-9]*) n="null" ;; esac
+        entries="${entries}${entries:+,}$(jq -nc --arg k "$s" --argjson v "$n" '{($k): $v}')"
+      done <<EOF
+$shalist
+EOF
+      [ -n "$entries" ] && shamap="$(printf '[%s]' "$entries" | jq -c 'add // {}' 2>/dev/null || echo '{}')"
+    fi
+  fi
+
+  local report timeline_json="[]"
+  if [ "$git_ok" -eq 1 ]; then
+    timeline_json="$(printf '%s\n' "$commits" | jq -Rsc 'split("\n") | map(select(length > 0)) | sort')"
+  fi
+  report="$(fold 2>/dev/null | jq -c \
+      --argjson snap "$(printf '%s' "$vsnap" | jq -c '.rows // {}' 2>/dev/null || echo '{}')" \
+      --argjson timeline "$timeline_json" --argjson gitok "$git_ok" --arg headsha "${head_sha:-}" \
+      --argjson shamap "$shamap" '
+    # commits_since(ts): how many commits on the trunk are NEWER than ts. The timeline is sorted
+    # ascending, so this is a count of the tail — bsearch gives the insertion point directly.
+    def commits_since($t):
+      if $gitok == 0 or ($t // "") == "" then null
+      else ($t | sub("\\.[0-9]+Z$"; "Z")) as $ts
+        | ($timeline | length) as $n
+        | ($timeline | bsearch($ts)) as $b
+        | (if $b >= 0 then $b else (-1 - $b) end) as $i
+        | ($n - $i)
+      end;
+    [ .[] | select(.status != "done") ] as $live
+    | [ $live[] | . + { v: ($snap[.id] // null) } ] as $rows
+    | [ $rows[] | select(.v == null) ] as $never
+    | [ $rows[] | select(.v != null) ] as $ever
+    | ([ $live[] | commits_since(.firstTs) | select(. != null) ] | sort) as $csf
+    | ([ $ever[] | $shamap[.v.sha // ""] | select(. != null) ] | sort) as $csv
+    | { live: ($live | length),
+        never_validated: ($never | length),
+        validated: ($ever | length),
+        git_readable: ($gitok == 1),
+        trunk: $headsha,
+        commits_since_filing: (
+          if ($csf | length) == 0 then null
+          else { n: ($csf|length),
+                 p50: $csf[($csf|length)/2|floor],
+                 p75: $csf[($csf|length)*3/4|floor],
+                 p90: $csf[($csf|length)*9/10|floor],
+                 max: ($csf|last) } end),
+        # THE STALENESS AXIS THAT CANNOT BE BUMPED — commits landed since the sha each row was
+        # actually validated against. Null when nothing has been validated yet, which is a different
+        # statement from zero.
+        commits_since_validation: (
+          if ($csv | length) == 0 then null
+          else { n: ($csv|length),
+                 p50: $csv[($csv|length)/2|floor],
+                 p90: $csv[($csv|length)*9/10|floor],
+                 max: ($csv|last) } end),
+        verdicts: ($ever | map(.v.verdict // "") | group_by(.) | map({key: .[0], value: length}) | from_entries),
+        rows: ($rows | map({ id, status, title: ((.title // "")[0:90]),
+                             lastValidated: (.v.ts // ""), validatedSha: (.v.sha // ""),
+                             validatedVerdict: (.v.verdict // ""),
+                             commitsSinceFiling: commits_since(.firstTs),
+                             commitsSinceValidation: ($shamap[.v.sha // ""] // null) })) }' 2>/dev/null)"
+  if [ -z "$report" ]; then
+    printf 'cc-backlog freshness: the ledger could not be folded — no verdict\n' >&2; return 2
+  fi
+
+  case "$fmt" in
+    never) printf '%s\n' "$(printf '%s' "$report" | jq -r '.never_validated')" ;;
+    json)  printf '%s\n' "$report" ;;
+    *)
+      printf '%s' "$report" | jq -r '
+        "cc-backlog freshness — has a probe ever RUN against this row, and how far has the tree moved?",
+        "  never validated    : \(.never_validated) of \(.live) live rows   ← the number that must fall",
+        "  validated          : \(.validated)\(if (.verdicts|length) > 0 then "   (" + ([.verdicts|to_entries[]|"\(.key//"?")=\(.value)"]|join(" · ")) + ")" else "" end)",
+        (if .commits_since_filing == null
+         then "  commits since filing: UNKNOWN — the repo could not be read, so decay is unmeasured (NOT zero)"
+         else "  commits since filing: p50 \(.commits_since_filing.p50) · p75 \(.commits_since_filing.p75) · p90 \(.commits_since_filing.p90) · max \(.commits_since_filing.max)   (over \(.commits_since_filing.n) rows vs \(.trunk))"
+         end),
+        (if .commits_since_validation == null
+         then "  commits since VALIDATION: nothing validated yet — this is the axis no bookkeeping write can bump"
+         else "  commits since VALIDATION: p50 \(.commits_since_validation.p50) · p90 \(.commits_since_validation.p90) · max \(.commits_since_validation.max)   (over \(.commits_since_validation.n) validated rows)"
+         end)'
+      ;;
+  esac
+  return 0
 }
 
 cmd_compact() {
@@ -4108,6 +4457,11 @@ case "${1:-}" in
   needs)   shift; cmd_needs "$@" ;;
   reap)    shift; cmd_reap "$@" ;;
   compact) shift; cmd_compact "$@" ;;
+  # No dispatch_kick on either: `validated` records that a probe RAN and `freshness` is a pure read.
+  # Neither changes what is dispatchable, and a kick on a whole-population sweep would fire the
+  # dispatcher every pass over a store nothing had opened.
+  validated)  shift; cmd_validated "$@" ;;
+  freshness)  shift; cmd_freshness "$@" ;;
   ""|-h|--help|help) usage ;;
   *) printf 'cc-backlog: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
 esac

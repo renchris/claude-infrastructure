@@ -1802,8 +1802,30 @@ def plan_remaining_lines(ent):
     return out
 
 
-def assess(item_id, idx):
-    """The predicate. Returns (verdict, contract_lines)."""
+def assess(item_id, idx, out=None):
+    """The predicate. Returns (verdict, contract_lines).
+
+    `out`, when a dict is passed, is filled with ONE extra fact the return value cannot carry:
+    `out["probed"]` — did a probe (stored or derived) ACTUALLY EXECUTE for this item?
+
+    WHY THAT FACT NEEDS A CHANNEL OF ITS OWN, and it is the difference between a currency metric and
+    a lie. `verdict == "clear"` has two utterly different causes that this function deliberately
+    collapses, because for its own purpose — may this claim proceed? — they are the same answer:
+      · a probe ran against today's tree and said the condition is STILL LIVE, and
+      · there was no probe at all, so nothing was asked.
+    A caller recording "this row has been validated" must distinguish them. Stamping the second as
+    validated would mean ~400 of 564 live rows reading CURRENT on the strength of no measurement
+    whatsoever, and the never-validated headline falling to zero while nothing had been checked —
+    the same class of false-freshness that made `lastTs` useless the moment a sibling wave rewrote
+    70% of it as bookkeeping (memory: proxy-must-be-independent-of-what-it-supplements — a proxy for
+    the blind axis can be an algebraic restatement of it).
+
+    Default None keeps every existing caller byte-identical: the gate, the contract and the report
+    all ask only for the verdict, and none of them should start paying for a fact they ignore.
+    """
+    if out is not None:
+        out["probed"] = False
+        out["probe_kind"] = "none"
     ent = idx.get(item_id)
     if ent is None:
         return "unknown", []
@@ -1817,6 +1839,12 @@ def assess(item_id, idx):
     # re-run says the condition is gone, no amount of confident prose beneath it should be able to
     # send a worker at it.
     fals = run_falsifier(item_id, ent)
+    # MARKED AT THE ARM THAT RAN, never inferred afterwards from the verdict. `run_falsifier`
+    # returns None for "no probe stored", "probes disabled" AND "the probe could not be run" — all
+    # three mean nothing was measured, which is exactly what `probed` must report.
+    if out is not None and fals is not None:
+        out["probed"] = True
+        out["probe_kind"] = "stored"
     if fals is not None and fals[0] == "falsified":
         # THE SECOND SCREEN, AT THE ONE MOMENT AN ANTI-COVERAGE PROBE DOES DAMAGE. A stored probe
         # that exits 0 is about to REFUSE this claim (rc 3). If that same probe already passed on
@@ -1845,6 +1873,9 @@ def assess(item_id, idx):
         # stored probe's "still live", because a proxy must not outrank the measurement it stands in
         # for. See run_derived_plan_falsifier.
         fals = run_derived_plan_falsifier(item_id, ent)
+        if out is not None and fals is not None:
+            out["probed"] = True
+            out["probe_kind"] = "derived-plan"
     if fals is None:
         # …and a `post-land RED` item has one too: whether trunk has since gone green PAST the commit
         # it was filed against. Reached only on None for the same reason — a stored probe is the
@@ -1852,6 +1883,9 @@ def assess(item_id, idx):
         # exclusive by source (plan-open vs postland-verify), so their order between themselves
         # carries no meaning; both must stay strictly below the stored one.
         fals = run_derived_postland_falsifier(item_id, ent)
+        if out is not None and fals is not None:
+            out["probed"] = True
+            out["probe_kind"] = "derived-postland"
     if fals is not None:
         fverdict, flines = fals
         if fverdict == "falsified":
@@ -2071,6 +2105,144 @@ def _folded_items():
         return None
 
 
+def _backlog_bin():
+    """The cc-backlog that SHIPS WITH THIS cc-premise — never $PATH, for premise_bin's reason."""
+    return os.environ.get("CC_PREMISE_BACKLOG_BIN") or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "cc-backlog"
+    )
+
+
+def _trunk_sha():
+    """The tree state a probe was just asked against, or "" when it cannot be known.
+
+    "" IS A REAL ANSWER, never a guess — the reader turns this into a DISTANCE, and a fabricated
+    anchor reports a decay figure that is precise and false.
+    """
+    if not REPO:
+        return ""
+    for ref in ("origin/main", "HEAD"):
+        try:
+            p = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", ref],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+            if p.returncode == 0:
+                return p.stdout.decode("utf-8", "replace").strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return ""
+
+
+def _record_validations(verdicts, sha):
+    """Hand the whole pass to cc-backlog, which is the ONE writer of the currency stamp.
+
+    THE POINT OF THE WHOLE WAVE IS HERE. `run_falsifier` had exactly one call site — the claim path
+    — so 205 of 327 live rows had never had their probe executed at all, and nothing recorded the
+    difference between "this row can self-check" (coverage, which the ratchet measures) and "this
+    row's check has ACTUALLY RUN". A store could read 100% covered and 0% ever-executed and still
+    look green. This is the record of the act.
+
+    Batched into a single invocation on purpose: the stamp file is a SNAPSHOT of one pass, written
+    whole or not at all, so a half-recorded pass cannot report the unwritten half as never-validated.
+    Failures are reported and ignored — a census that cannot write its stamp must not fail the sweep
+    that carries it.
+    """
+    if not verdicts:
+        return 0, "empty"
+    payload = "".join(
+        json.dumps({"id": i, "verdict": v}, sort_keys=True) + "\n" for i, v in verdicts
+    )
+    try:
+        p = subprocess.run(
+            [_backlog_bin(), "validated", "--batch", "--sha", sha],
+            input=payload.encode("utf-8"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 0, "write-failed (%s)" % exc
+    if p.returncode != 0:
+        return 0, "write-failed rc=%d %s" % (
+            p.returncode, p.stderr.decode("utf-8", "replace").strip()[:200])
+    return len(verdicts), "ok"
+
+
+def _close_falsified(candidates, idx, sha, cap):
+    """Retire rows a probe has just proven dead. Returns (closed, skipped, lines).
+
+    WHY THIS EXISTS AS AN ACTUATOR AND NOT A REPORT. A `falsified` row is in a state with no exit:
+    it REFUSES every claim (rc 3, the BLOCKING contract) and nothing closes it, so it is permanently
+    live and permanently unfireable — it consumes a dispatch consideration on every pass forever and
+    can never become work. 19 rows are in that state on the live store today. The report that names
+    them has existed the whole time; naming was never the missing half.
+
+    FOUR BOUNDS, because this WRITES to the operator's ledger and a sensor failure here retires real
+    work:
+      1. RE-ASKED IMMEDIATELY BEFORE ACTING, against a freshly folded store, never on the sweep's
+         own minutes-old verdict — a batch fix mutates the state its own classifier read
+         (memory: remediation-perturbs-its-own-population). The re-run must AGAIN say falsified.
+      2. NEVER over a CLAIMED row. A claim means a worker is on it; the probe may be answering about
+         work that same worker has just landed, and closing under it destroys the claim's audit
+         trail. Those are left for the claim path's own refusal to surface to a human.
+      3. CAPPED per pass, so a probe-corrupting change to the tree cannot empty the store in one
+         sweep. The cap is REPORTED whenever it binds — a silent truncation reads as "that was all
+         of them" (memory: alarm-polarity-and-attention-budget).
+      4. The evidence names the PROBE and the SHA, so every auto-close is reproducible by hand and
+         reversible with `cc-backlog reopen --force`.
+
+    ANTI-COVERAGE IS ALREADY EXCLUDED, one layer down, and that is what makes this safe at all:
+    `assess` runs `filing_day_screen` on every stored probe that exits 0 and downgrades the verdict
+    out of BLOCKING when the probe would ALSO have passed on filing day. A probe that never
+    discriminated therefore never reaches this function.
+    """
+    closed, skipped, lines = 0, 0, []
+    if cap <= 0:
+        return 0, len(candidates), ["close-falsified: cap 0 — nothing attempted"]
+    live = _folded_items()
+    if live is None:
+        return 0, len(candidates), ["close-falsified: cc-backlog list failed — NOTHING closed"]
+    status_now = {i["id"]: (i.get("status") or "open") for i in live}
+    for cid in candidates:
+        if closed >= cap:
+            skipped += 1
+            continue
+        st = status_now.get(cid)
+        if st is None or st == "done":
+            skipped += 1
+            lines.append("  %s SKIPPED — already closed or gone under the sweep" % cid)
+            continue
+        if st == "claimed":
+            skipped += 1
+            lines.append("  %s SKIPPED — CLAIMED; a worker is on it and may be about to land it" % cid)
+            continue
+        # (1) re-ask, now, against a store folded seconds ago rather than at the top of the sweep.
+        verdict, why = assess(cid, idx)
+        if verdict != "falsified":
+            skipped += 1
+            lines.append("  %s SKIPPED — re-run says %s, not falsified (the sweep's verdict was stale)"
+                         % (cid, verdict))
+            continue
+        probe = (idx.get(cid, {}).get("falsifier") or "").strip() or "(derived)"
+        ev = "falsifier passed: %s @ %s (auto-closed by cc-premise sweep --close-falsified)" % (
+            probe[:160], sha or "unknown-sha")
+        try:
+            p = subprocess.run([_backlog_bin(), "done", cid, "--evidence", ev],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            skipped += 1
+            lines.append("  %s SKIPPED — close failed (%s)" % (cid, exc))
+            continue
+        if p.returncode != 0:
+            skipped += 1
+            lines.append("  %s SKIPPED — cc-backlog done rc=%d %s"
+                         % (cid, p.returncode,
+                            p.stderr.decode("utf-8", "replace").strip().splitlines()[:1]))
+            continue
+        closed += 1
+        lines.append("  %s CLOSED — %s" % (cid, (why[0] if why else ev)[:150]))
+    if skipped and closed >= cap:
+        lines.append("  CAP %d REACHED — %d falsified row(s) left for the next pass (not a clean store)"
+                     % (cap, skipped))
+    return closed, skipped, lines
+
+
 def _norm_title(t):
     """A title with its DECIMAL MEASUREMENTS removed — and deliberately NOT its shas.
 
@@ -2091,7 +2263,7 @@ def _norm_title(t):
     return re.sub(r"\s+", " ", t).strip()
 
 
-def cmd_sweep(as_json):
+def cmd_sweep(as_json, record=False, close_cap=0):
     items = _folded_items()
     if items is None:
         _die_open("cc-backlog list failed — cannot sweep")
@@ -2100,11 +2272,43 @@ def cmd_sweep(as_json):
     done = [i for i in items if i.get("status") == "done"]
 
     buckets = defaultdict(list)
+    # EVERY row's verdict, not just the interesting ones. The buckets below are the REPORT; this is
+    # the RECORD, and the difference is the whole point of `--record`: a row whose probe ran and said
+    # "still live" is the commonest outcome and the one that proves the pass reached it. Keeping only
+    # the non-clear verdicts would leave the census unable to tell "checked, healthy" from "never
+    # checked", which is exactly the blindness this wave was filed for.
+    # 🚨 ONLY PROBED ROWS ARE STAMPED, and this is the line the whole wave turns on. `assess`
+    # returns `clear` both for "a probe ran and the condition is still live" and for "there was no
+    # probe, so nothing was asked" — and stamping the second as validated would drive the
+    # never-validated headline to ZERO while ~400 of 564 rows had had nothing run against them. That
+    # is not a weaker metric than none, it is a WORSE one: it would report the store fresh forever
+    # and hide the exact staleness it was built to expose, which is precisely how `lastTs` became
+    # useless (a sibling wave's link pass rewrote 70% of it in one hour as pure bookkeeping, and the
+    # store's p50 read 8 commits behind while the real figure was 361).
+    # A currency stamp records a MEASUREMENT. No measurement, no stamp.
+    all_verdicts, unprobed = [], 0
     for it in nd:
-        verdict, lines = assess(it["id"], idx)
+        probe_out = {}
+        verdict, lines = assess(it["id"], idx, out=probe_out)
+        if probe_out.get("probed"):
+            all_verdicts.append((it["id"], verdict))
+        else:
+            unprobed += 1
         if verdict != "clear":
             buckets[verdict].append({"id": it["id"], "status": it.get("status"),
                                      "title": (it.get("title") or "")[:120], "why": lines[:2]})
+
+    # THE PROBES HAVE NOW RUN — every one of them, against this tree, in this pass. Recorded before
+    # anything is closed, so the stamp exists even if the closer refuses everything.
+    sha = _trunk_sha()
+    recorded, record_note = (0, "not-requested")
+    if record:
+        recorded, record_note = _record_validations(all_verdicts, sha)
+
+    closed, close_skipped, close_lines = 0, 0, []
+    if close_cap > 0:
+        closed, close_skipped, close_lines = _close_falsified(
+            [r["id"] for r in buckets.get("falsified", [])], idx, sha, close_cap)
 
     # THE RE-KEYING PILE. The item id hashes project+title+source, so a title carrying a live
     # measurement — a byte count, a sha, a session count — mints a BRAND NEW item every time the
@@ -2175,6 +2379,23 @@ def cmd_sweep(as_json):
         "rekey_clusters": clusters,
         "rekey_redundant": sum(c["n"] - 1 for c in clusters),
         "by_day": dict(sorted(ages.items())),
+        # THE PASS'S OWN RECEIPT. `assessed` is how many rows a probe was actually run against and
+        # `validated_recorded` how many of those reached the stamp file — reported separately, never
+        # collapsed, because a pass that assessed 564 and recorded 0 is a broken writer and would
+        # otherwise be indistinguishable from a pass that never ran (memory:
+        # claimed-outcome-vs-checked-outcome).
+        "assessed": len(all_verdicts),
+        # PRINTED, NEVER IMPLIED — the population the pass could not ask anything about. It is the
+        # majority today, and a report showing only the probed rows would read as a clean bill of
+        # health over a store it never examined. This number is the coverage ratchet's work queue:
+        # it falls only when generators start emitting `--falsifier`, never as a side effect of this
+        # pass running more often.
+        "unprobed": unprobed,
+        "validated_recorded": recorded,
+        "validated_note": record_note,
+        "validated_sha": sha,
+        "closed_falsified": closed,
+        "close_skipped": close_skipped,
     }
     if as_json:
         sys.stdout.write(json.dumps(report, indent=2) + "\n")
@@ -2182,6 +2403,15 @@ def cmd_sweep(as_json):
 
     w = sys.stdout.write
     w("cc-premise sweep — %d non-done items (%d done) · store %s\n" % (len(nd), len(done), BACKLOG))
+    if record:
+        w("  currency: %d row(s) PROBED and recorded (%s) @ %s · %d row(s) carry no probe at all, "
+          "so nothing was asked and nothing was stamped\n"
+          % (recorded, record_note, sha or "unknown-sha", unprobed))
+    if close_cap > 0:
+        w("  retired : %d falsified row(s) closed, %d skipped (cap %d)\n"
+          % (closed, close_skipped, close_cap))
+        for ln in close_lines:
+            w("  %s\n" % ln)
     w("\n  REFUSED at claim (exit 3):\n")
     w("    superseded     — another item retracts this one WHOLE : %d\n" % len(report["superseded"]))
     w("    self-duplicate — this item names its own canonical sib: %d\n" % len(report["self_duplicate"]))
@@ -2336,7 +2566,25 @@ def main():
             sys.exit(2)
         cmd_contract(rest[0])
     elif verb == "sweep":
-        cmd_sweep("--json" in rest)
+        # `--close-falsified` takes an explicit CAP and has no default value of its own: a bare
+        # `--close-falsified` meaning "unbounded" is one typo away from emptying the store, and a
+        # flag whose dangerous form is the SHORTER one is a trap. Non-numeric ⇒ rc 2, never a guess.
+        cap = 0
+        if "--close-falsified" in rest:
+            i = rest.index("--close-falsified")
+            if i + 1 >= len(rest):
+                sys.stderr.write("cc-premise sweep: --close-falsified needs a cap (e.g. 5)\n")
+                sys.exit(2)
+            try:
+                cap = int(rest[i + 1])
+            except ValueError:
+                sys.stderr.write("cc-premise sweep: --close-falsified takes an integer cap, got %r\n"
+                                 % rest[i + 1])
+                sys.exit(2)
+            if cap < 0:
+                sys.stderr.write("cc-premise sweep: --close-falsified cap must be >= 0\n")
+                sys.exit(2)
+        cmd_sweep("--json" in rest, record="--record" in rest, close_cap=cap)
     elif verb == "screen":
         cmd_screen(rest)
     else:
