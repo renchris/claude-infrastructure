@@ -715,3 +715,143 @@ about a directory the cloud session does not use.**
 This is the shape the brief predicted for `deep-history` and it is worth stating generally: **the
 binding constraint on cloud drain today is what the VM can REACH and what the local dispatcher
 insists on checking before letting it go — not the eligibility predicate.**
+
+## A3 · ONE TRACK, ONE RATCHET, VENUE AS A DIMENSION — never two ratchets
+
+**Decision: one metric with a venue dimension.** The question "are we up to date, not stale, optimally
+consolidated?" is a question about an ITEM. "Where can this run?" is a question about PLACEMENT. They
+are orthogonal, and three measured facts say a venue-keyed ratchet would be actively wrong:
+
+1. **Venue is already a field, not a queue.** `bin/cc-venue:14` writes `venuePlan` + `venueWhy` onto
+   open rows in the one `cc-backlog` store; `cc-dispatch` reads it per row at `:1882`. There is no
+   second store to keep consistent — a two-ratchet design would *create* the divergence risk the
+   operator is trying to avoid, not manage it.
+2. **Venue is MUTABLE, and this session moved it.** F3 above reclassifies items between venues by
+   changing provisioning, with the items themselves untouched; so does every fix to what the VM can
+   reach. A ratchet keyed on venue has a population that shifts under it — the
+   *remediation-perturbs-its-own-population* / *discovery-critic-premise-goes-stale* failure. Item
+   currency is stable under exactly those changes, which is what makes it the right ratchet key.
+3. **The staleness that actually dominates is venue-blind.** This session's live pass measured
+   `ready_checked=6 ready_void=6 would_block=100%`, with per-item reasons `no-prior-verdict` and
+   `cites-nothing`. "Cites no files" is a property of how the item was *written*. It is identical on
+   a Firecracker VM and in a local pane.
+
+**And the venue-keyed design already leaks, measurably.** 31 of ~312 rows carry NO `venuePlan`. The
+venue filter runs at step 1a1 (`bin/cc-dispatch:1390-1407`), *before* the decision loop, so the
+readiness gate's repair path `ready_relabel()` (`:961-967`) only ever sees the already-filtered set;
+and the write-path labeller `venue_label_new()` (`:1243-1259`) is bounded to rows written in the last
+900 s **and runs in decide mode only** (`:1408-1411`), which the 300 s `--once` cron never enters.
+Net: **those 31 rows are excluded on every pass, in every venue, forever.** Under two tracks they
+belong to neither and are invisible to both. Under one track they are simply rows whose venue
+dimension is unset — countable, reportable, and drainable the moment the labeller's gap is closed.
+
+**Therefore:**
+- **The ratchet counts NOT-READY open items, fleet-wide, venue-blind.** It must fall. This is the
+  consolidation metric, and the readiness conjunction landed today (`CC_DISPATCH_READY_GATE`,
+  `cc-premise screen`, `--fold`) is already exactly that instrument — it is venue-agnostic by
+  construction and should stay that way.
+- **Venue is a reporting fold and a routing decision**, never a second ratchet: report
+  `open × ready-verdict × venuePlan` as a cube, so "cloud can take 14%" is a *cell*, not a track.
+- **`venuePlan = unset` is a first-class value in that cube**, not an absence. A count that silently
+  omits 31 rows is the same defect as a filter that matches nothing.
+- **Backfill the 31 unlabelled rows** and fix the labeller's decide-mode/900 s bound; this is
+  separate work from the venue flip and should not ride on it.
+
+So the answer to "one track or two" is: **the work was never two populations — it is one population
+with a placement attribute**, and the ~14% figure is a statement about today's provisioning, not
+about the shape of the backlog.
+
+## A4 · CLOUD CONTINUOUS, LOCAL ON A SWITCH THAT A SCHEDULE WRITES — one resolver, not two mechanisms
+
+**Decision: build ONE venue resolver with a precedence ladder, and make the SWITCH the primitive.**
+
+```
+explicit operator override (if set and unexpired)  →  time window  →  standing default (cloud)
+```
+
+A toggle alone cannot express "while I'm asleep"; a window alone cannot express "I'm stepping out
+now". The override carries an **expiry**, so a forgotten `local` cannot silently hold 15 slots for a
+week — which is the exact failure the migration exists to prevent.
+
+**The rail: a state file under `~/.claude/autonomy/`, read at pass time — NOT a launchd env.** The
+inventory is unambiguous. There is **no time or presence machinery in this repo at all**: zero
+time-of-day predicates in any shell or python (every `%H` is timestamp formatting), no `HIDIdleTime` /
+`ioreg` / `pmset` read anywhere, and `scripts/caffeinate-floor.sh` pins the box awake 24/7 so "machine
+asleep" can never serve as an away proxy. The nearest neighbour is the desk-role FILE
+(`bin/cc-classify:52`), which says *which pane is the operator's*, never *whether they are there*. So
+whatever is built is the first of its kind, and it should ride the two rails that already exist:
+
+- the **fail-closed flag file** precedent — `bin/cc-config-slot:62-63,84-92`, whose reusable half is
+  pairing the file with a `--status` verb so the operator can read the switch without knowing the path;
+- the **pass-time conf** precedent — `scripts/dispatch-projects.conf` + `bin/cc-dispatch:249-286`,
+  which degrades on a malformed parse toward *narrower* coverage, never a wider blind fire.
+
+A launchd env change is the wrong rail for a thing that flips: it needs a land, a `deploy-live.sh`
+converge (measured 534 identical refusals / 91 commits stale in one 2026-08-07 episode), an
+`install.sh` copy, and a bootout/bootstrap that `install.sh:727-731` **skips entirely while the job is
+executing** — and with a 414-833 s admission tail against a 300 s interval, the dispatcher is often
+executing. A file the binary reads costs none of that and takes effect on the next tick.
+
+**Shape:** a `venue_policy()` resolver in `bin/cc-dispatch` and exactly one changed line at `:1390`
+(`VENUE_ONLY="${CC_DISPATCH_VENUE_ONLY:-$(venue_policy)}"`) so the plist env keeps precedence as the
+emergency override and every existing test still passes; the window in `scripts/dispatch-venue.conf`
+(versioned, reviewable); the override in `~/.claude/autonomy/dispatch-venue.json`
+(`{"venue","until","by"}`, fail-closed to `cloud` on missing/malformed/expired); and
+`cc-dispatch venue <cloud|local|both|auto> [--for 8h]` + `venue --status` as the only surface the
+operator touches, validating against the closed set **before** writing. Removing
+`export CC_DISPATCH_VENUE_ONLY=cloud` from the plist is the LAST step, not the first — the interlock.
+
+### A4a · The blocking constraint nobody has costed: turning local on STARVES cloud
+
+`CEILING` is one global number and `live_workers()` (`bin/cc-dispatch:438-447`) is the venue-BLIND
+`claimed` fold — a cloud worker consumes the same slot as a local one. The S7 ordering key is thrash
+ASC → derived rank → oldest ts (`:59-61`), with **no venue term**. With 236 local rows against 45
+cloud, a `both` window hands nearly every free slot to local work by pure queue position, and **cloud
+drain stops for the duration of the window**.
+
+So "cloud runs continually" is not achievable by adding a local window to today's dispatcher. It needs
+one of: a **reserved cloud slot** (a floor of the ceiling that only `venuePlan=cloud` may fill), or a
+**venue term in the S7 key**. Neither exists. This is a prerequisite of Q3, not a follow-on — without
+it the scheduler delivers "local on a schedule, cloud whenever local is idle", which is not what was
+asked for.
+
+Three further properties to accept or design against, none of them blocking:
+- **The window gates ADMISSION only.** Workers fired at 06:58 run past a 07:00 close; there is no
+  venue-aware drain and `cc-reaper` is a liveness reaper, not a policy one.
+- **The boundary is fuzzy by up to ~14 min** — one 300 s tick plus one 414-833 s admission tail.
+- **A local window opened while the box is loaded produces churn, not spawns.** `capacity_gate()`
+  (`scripts/handoff-fire.sh:3978`, default 2.0 load/core) refuses *after* the claim is taken, so the
+  item reopens with a thrash record — and the box measured 2.19 load/core on the day the pause went in.
+
+### A4b · Rejected, on the record
+
+- **Charging `CC_DISPATCH_CEILING` for the operator's panes** — already measured and rejected at
+  `bin/cc-dispatch:414-430`: it pinned `free_slots` at 0 permanently and silently. *"Charging dispatch
+  for human activity lets the operator silently throttle autonomy to zero."* Venue is the right axis;
+  the ceiling is not.
+- **A second launchd job on `StartCalendarInterval`** to rewrite the flag — needs a new plist, a
+  `fleet.manifest` row and a C10 operator bootstrap, for a clock a job already ticking every 300 s
+  computes for free.
+- **`launchctl bootout` as the "off" switch** — kills cloud dispatch too, and stops step 1d's
+  stale-item retraction. That is exactly what `CC_DISPATCH_VENUE_ONLY` was built to escape.
+- **A `$( )` substitution inside the plist's `bash -c` string** — works and is the fastest to ship,
+  but the predicate is then untestable by any `.bats` suite and invisible to `cc-dispatch selftest`.
+
+### A4c · Hazards the implementation must respect
+
+- **The interlock (H1).** Land the resolver → converge → PROVE by positive control → only then remove
+  the plist guard. The positive control is the same shape as 2026-08-11's: with `=cloud` still
+  exported, set the file to `local`, run one pass, assert the IDL carries `venue-only=local parked N
+  of M` (`bin/cc-dispatch:1404-1406`). **Absence of that record is the signature of the bleed.**
+  Today the live `~/.claude/bin/cc-dispatch` is byte-identical to origin/main's, but the live checkout
+  is 2 commits behind — that equality is a fact with a half-life, not a standing property.
+- **An unrecognised value is a TOTAL OUTAGE by design** (`:1394-1397` refuses the pass). A resolver
+  that can emit `both`, `auto`, `off`, `""`, a trailing newline or a date-formatting slip must map to
+  unset/empty and never pass its own vocabulary through. `Cloud` with a capital C is already pinned as
+  a refusal case in `tests/cc-dispatch-venue-only.bats:76`.
+- **`CC_FIRE_CLOUD=on` must stay set regardless of venue.** `bin/cc-dispatch:1900-1903` fires a
+  cloud-planned item **LOCALLY** when the opt-in is absent — removing that export converts cloud plans
+  into local spawns, the precise outcome the operator is bounding.
+- **Parity lint reds on any hand-edited live plist** (`scripts/launchd-parity-lint.sh`, run bare by
+  `nightly-regression.sh`): a plist change must land in the repo *and* reach `~/Library/LaunchAgents`
+  through `install.sh`. Header XML comments are exempt.
