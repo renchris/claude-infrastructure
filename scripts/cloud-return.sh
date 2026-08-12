@@ -364,13 +364,27 @@ handle() { # <row-json> → prints outcome lines
   # 8. MARK THE ITEM DONE — the laptop's job; the VM cannot reach the backlog store at all.
   # Only a real backlog id is treated as one: `item` is free text by contract, and a 12-hex id is
   # the store's own shape, so a title never gets passed to `done` as if it were a key.
-  local done_note="no backlog item recorded"
+  # `done_unsettled` is a SEPARATE fact from done_note's prose, because the latch below branches on
+  # it — and a latch that greps English is the same defect one layer up.
+  local done_note="no backlog item recorded" done_unsettled=0 done_err=""
   case "$item" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
       if [ "$landed_ok" -eq 0 ] && [ -n "$BACKLOG_BIN" ]; then
-        if "$BACKLOG_BIN" "done" "$item" --evidence "cloud $id → $trunk: $paths" >/dev/null 2>&1; then
+        # 🚨 CAPTURE THE REFUSAL. This call used to be `>/dev/null 2>&1`, and on 2026-08-12 it
+        # returned non-zero for item `0b4d4e8a1889` — over a land that WAS content-verified on trunk
+        # with custody discharged. The one fact needed to tell policy from contention was destroyed
+        # at the call site, so the incident could only be diagnosed afterwards by re-running the
+        # verb against a byte copy of the store (rc 0 in 1.96 s ⇒ contention, not policy). A caller
+        # must never mute its callee's non-verdict.
+        local _derr; _derr="$(mktemp -t ccret-done.XXXXXX 2>/dev/null || printf '/tmp/ccret-done.%s' "$$")"
+        if "$BACKLOG_BIN" "done" "$item" --evidence "cloud $id → $trunk: $paths" >"$_derr" 2>&1; then
           done_note="marked $item done"
-        else done_note="could NOT mark $item done (cc-backlog refused)"; fi
+        else
+          done_err="$(tr '\n\t' '  ' <"$_derr" 2>/dev/null | tr -cd '\40-\176' | tail -c 300)"
+          done_note="could NOT mark $item done (rc≠0: ${done_err:-no output})"
+          done_unsettled=1
+        fi
+        rm -f "$_derr" 2>/dev/null || true
       else
         done_note="left $item open — the content is not verified on trunk"
       fi ;;
@@ -392,24 +406,89 @@ handle() { # <row-json> → prints outcome lines
   say "  custody: $cust_note"
 
   # 10. WAKE THE ORIGINATOR. This is the step the whole script exists for.
+  #
+  # 🚨 THE WAKE LATCHES SEPARATELY FROM THE RETURN, and it has to (2026-08-12). Two invariants meet
+  # here and a single latch cannot serve both: the originator must be woken exactly ONCE ever (an
+  # alarm that re-fires every sweep carries no bits), while the backlog close must stay RETRYABLE
+  # after a transient refusal. Before the close joined the latch condition below, one marker
+  # happened to serve both — and that coincidence is what made a failed close permanent. Splitting
+  # them is the fix for both: `.woken` records that the originator has been told, `.returned` records
+  # that everything terminal is finished, and a close retry now costs no second ping.
   local verdict_word; [ "$landed_ok" -eq 0 ] && verdict_word="LANDED+VERIFIED" || verdict_word="LANDED-UNVERIFIED"
   local wrc2=0
-  wake "$nb" "HANDOFF-PING cloud/$id: $verdict_word on $trunk — paths: ${paths:-none} · goal: $gword · $done_note · $cust_note · session: $url" || wrc2=$?
-  case "$wrc2" in
-    0) say "  wake: sent → $nb ($WAKE_DETAIL)" ;;
-    3) say "  wake: $WAKE_DETAIL" ;;
-    *) say "  wake: NOT DELIVERED → $nb ($WAKE_DETAIL)" ;;
-  esac
+  if [ -f "$STATE/$id.woken" ]; then
+    wrc2=0; say "  wake: already sent for $id — not re-pinging while the close retries"
+  else
+    wake "$nb" "HANDOFF-PING cloud/$id: $verdict_word on $trunk — paths: ${paths:-none} · goal: $gword · $done_note · $cust_note · session: $url" || wrc2=$?
+    case "$wrc2" in
+      0) say "  wake: sent → $nb ($WAKE_DETAIL)"; printf 'woken_at=%s\n' "$(now)" >"$STATE/$id.woken" 2>/dev/null ;;
+      3) say "  wake: $WAKE_DETAIL"; printf 'woken_at=%s\nnote=no-target\n' "$(now)" >"$STATE/$id.woken" 2>/dev/null ;;
+      *) say "  wake: NOT DELIVERED → $nb ($WAKE_DETAIL)" ;;
+    esac
+  fi
 
   # LATCH only what actually completed. A pass whose wake failed is left unlatched on purpose, so
   # the next sweep tries again rather than leaving the originator permanently uninformed about work
   # that is already on trunk.
-  if [ "$landed_ok" -eq 0 ] && { [ "$wrc2" -eq 0 ] || [ "$wrc2" -eq 3 ]; }; then
+  #
+  # 🚨 `done_unsettled` IS PART OF THE LATCH CONDITION (2026-08-12). It was not, and that is how a
+  # perfect round trip became permanently unfinished: `session_01CCZcjYGJ…` landed, content-verified,
+  # discharged custody, FAILED to close its backlog row, and latched anyway — after which handle()
+  # short-circuits at `already returned` on every future sweep, forever. The failure was unretryable
+  # BY CONSTRUCTION and recorded in one file nobody reads. A latch must cover every step it is
+  # closing out, or the uncovered step is silently one-shot.
+  if [ "$landed_ok" -eq 0 ] && [ "$done_unsettled" -eq 0 ] && { [ "$wrc2" -eq 0 ] || [ "$wrc2" -eq 3 ]; }; then
     { printf 'outcome=returned\nat=%s\npaths=%s\ngoal=%s\n' "$(now)" "$paths" "$gword"; } >"$STATE/$id.returned" 2>/dev/null
+
+    # 🚨 RELEASE THE OFF-BOX SLOT — the missing half of the whole pipeline (2026-08-12).
+    # `cc-cloud retire` shipped as a verb with ZERO callers: 0 `.retired` markers across 38
+    # declarations. `cc-cloud is-offbox` is two file-existence tests with no completion notion, so
+    # it answers OFFBOX-LIVE forever, `cc-backlog reap` never reopens the claim, and the dispatcher's
+    # ceiling cannot self-heal. Measured consequence: six finished cloud sessions held all six
+    # admission slots and the dispatcher fired NOTHING — cloud or local — for 1 h 34 m, with no
+    # timeout that would ever end it (`UNRESOLVED_MAX_S` bounds an ABSTAINING oracle; this one
+    # answers, confidently and wrongly).
+    #
+    # Retire is the honest signal here and only here: this branch IS the terminal state — landed,
+    # content-verified, row closed, originator informed. Retiring earlier would tell reap that a
+    # still-working VM is dead and invite a duplicate peer onto live work, which is the exact
+    # false-dead hazard cc-dispatch refuses to reintroduce. Fail-open: a retire that does not stick
+    # leaves today's behaviour, never a worse one.
+    if [ -n "$CLOUD_BIN" ]; then
+      if "$CLOUD_BIN" retire --id "$id" >/dev/null 2>&1; then say "  slot: retired $id — the off-box claim can now be reaped"
+      else say "  slot: could NOT retire $id — its claim will keep holding an admission slot"; fi
+    fi
+  elif [ "$landed_ok" -eq 0 ] && [ "$done_unsettled" -ne 0 ]; then
+    # THE RETRY MUST BE BOUNDED, OR THE FIX RE-CREATES THE WEDGE IT REMOVES. Making the latch
+    # conditional on the close (above) is right for a TRANSIENT refusal — 2026-08-12's was
+    # contention and would have succeeded on the next pass. But a PERMANENT one (a malformed id, a
+    # row someone else already closed) would then never latch, never retire, and hold its admission
+    # slot exactly as before — the same outage reached by a different road.
+    #
+    # So: count the attempts in a SIDECAR, never inside `.returned` — that file is written only on
+    # the success path, so a counter kept there would be reset by the very event it bounds and the
+    # loop would run forever reading "attempt 1" (MEMORY: counter-resets-at-the-boundary-the-runaway
+    # -crosses, the same shape W3's refusal cycle counter already paid for).
+    #
+    # At the bound the work is LANDED and VERIFIED, so the honest disposition is to release the slot
+    # and leave the ROW open: an open row is re-dispatchable and visible, a held slot is neither.
+    local _cf="$STATE/$id.close-attempts" _n=0
+    [ -f "$_cf" ] && _n="$(tr -cd '0-9' <"$_cf" 2>/dev/null || echo 0)"
+    _n=$(( ${_n:-0} + 1 )); printf '%s\n' "$_n" >"$_cf" 2>/dev/null || true
+    if [ "$_n" -ge "${CC_RETURN_CLOSE_MAX:-3}" ] && [ -n "$CLOUD_BIN" ]; then
+      say "  slot: close has failed $_n× (${done_err:-no output}) — retiring $id anyway; the work is on trunk and the ROW stays open, which is re-dispatchable where a held slot is not"
+      "$CLOUD_BIN" retire --id "$id" >/dev/null 2>&1 || true
+      { printf 'outcome=returned-close-failed\nat=%s\npaths=%s\ngoal=%s\nattempts=%s\nerr=%s\n' \
+          "$(now)" "$paths" "$gword" "$_n" "${done_err:-}"; } >"$STATE/$id.returned" 2>/dev/null
+    else
+      say "  slot: close failed (attempt $_n of ${CC_RETURN_CLOSE_MAX:-3}) — NOT latching, the next sweep retries"
+    fi
   fi
   ledger "$id" returned "$(jq -cn --arg b "$branch" --arg p "$paths" --arg g "$gword" \
     --arg l "$landed_ok" --arg w "$WAKE_DETAIL" --arg d "$done_note" --arg c "$cust_note" \
-    '{branch:$b, paths:$p, goal:$g, content_verified:($l=="0"), wake:$w, backlog:$d, custody:$c}')"
+    --arg de "$done_err" \
+    '{branch:$b, paths:$p, goal:$g, content_verified:($l=="0"), wake:$w, backlog:$d, custody:$c}
+     + (if $de == "" then {} else {backlog_err:$de} end)')"
   return 0
 }
 

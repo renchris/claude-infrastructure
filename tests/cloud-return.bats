@@ -187,13 +187,45 @@ seen_at() { # <epoch>
 }
 
 @test "the wake fires ONCE, ever — an originator re-woken every sweep is an alarm that carries no bits" {
+  # ASSERTS THE PROPERTY, NOT THE MECHANISM THAT USED TO DELIVER IT (revised 2026-08-12).
+  # This case previously required the second sweep to print "already returned", i.e. it pinned the
+  # `.returned` short-circuit as the specific route to wake-once. A terminal session is now also
+  # RETIRED (`cc-cloud retire`, the verb that had zero callers and whose absence wedged the
+  # dispatcher's ceiling at fired:0), and a retired id leaves `cc-cloud ids()` altogether — so the
+  # second sweep does not reach handle() at all. Wake-once is therefore MORE strongly guaranteed
+  # than before, by an earlier exit. The invariant under test is "the originator is pinged exactly
+  # once", so that is what is asserted; either terminal shape satisfies it, and the count assertion
+  # is what would catch a regression.
   declare_managed --item deadbeef1234
   seen_at 1000
   CC_RETURN_NOW=999999 run "$SUT" --sweep
   [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]
+  [[ "$output" == *"slot: retired"* ]] || false      # the terminal state was reached and released
   CC_RETURN_NOW=999999 run "$SUT" --sweep
-  [[ "$output" == *"already returned"* ]] || false
+  [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]        # THE PROPERTY: still exactly one ping, ever
+}
+
+@test "a close that FAILS is retried without re-pinging the originator (the two latches are split)" {
+  # The regression this pairs with: joining the backlog close to the latch (so a failed close is
+  # retryable) would, with a single latch, have re-woken the originator on every sweep — trading a
+  # permanent silent failure for a permanent alarm. `.woken` and `.returned` are separate for this
+  # reason, and this is the case that holds them apart.
+  cat >"$STUBDIR/cc-backlog" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-backlog $*" >>"$CALLS"
+case "$1" in done) echo "refused: contention" >&2; exit 1 ;; esac
+EOF
+  chmod +x "$STUBDIR/cc-backlog"
+  declare_managed --item deadbeef1234
+  seen_at 1000
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
   [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]
+  [[ "$output" == *"could NOT mark deadbeef1234 done"* ]] || false
+  [[ "$output" == *"refused: contention"* ]] || false   # the reason survives, not >/dev/null
+  [[ "$output" != *"slot: retired"* ]] || false         # NOT terminal — the slot is still held
+  CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [[ "$output" == *"already sent"* ]] || false          # retried…
+  [ "$(grep -c 'cc-notify' "$CALLS")" -eq 1 ]           # …and still exactly one ping
 }
 
 # ══ THE LAUNDERING GUARDS ═══════════════════════════════════════════════════════════════════════

@@ -153,8 +153,13 @@
 #   CC_DISPATCH_PROJECT      (default: git toplevel, else $PWD)
 #   CC_DISPATCH_MAX_SPAWN    (default: 2)          per-PASS spawn cap (unchanged)
 #   CC_DISPATCH_SID          (default: <host>-<pid>)
-#   CC_DISPATCH_CEILING      (default: 6)   FLEET concurrency ceiling; 0 ⇒ admit nothing (decisions
-#                                           are still journalled — a pure-observation mode)
+#   CC_DISPATCH_CEILING      (default: 6)   ON-BOX concurrency ceiling (panes/worktrees/CPU); 0 ⇒
+#                                           admit nothing (decisions are still journalled — a
+#                                           pure-observation mode). Charged only for claims whose
+#                                           venue is NOT cloud; see live_workers.
+#   CC_DISPATCH_CLOUD_CEILING (default: 6)  OFF-BOX ceiling, charged for venue=cloud claims. A
+#                                           separate resource (quota) from a separate bound — an
+#                                           off-box session costs this box no pane and no worktree.
 #   CC_DISPATCH_LOCK_DIR     (default: <dir of CC_DISPATCH_IDL>/dispatch.lock)  the S6 pass lock
 #   CC_DISPATCH_DECIDE_ONLY  (default: off)  on ⇒ decisions only: zero claims/spawns/pages
 #   CC_DISPATCH_LANE         (default: v2)   v1 ⇒ the incumbent path verbatim (whole-rebuild switch)
@@ -330,6 +335,12 @@ project_repo() {
 
 # ── V2 config ─────────────────────────────────────────────────────────────────────────────────────
 CEILING="${CC_DISPATCH_CEILING:-6}"
+# The OFF-BOX ceiling — a separate resource, therefore a separate bound (2026-08-12). It is a POLICY
+# default, not a measurement: the off-box concurrency limit is recorded UNMEASURED
+# (CONCURRENCY_PROGRAM.md §S5-CEILING, blocker named as create reliability rather than quota), so
+# this number's job is only to stop the cloud lane becoming unbounded now that it no longer draws
+# from CEILING. Raise it on evidence, never on optimism.
+CLOUD_CEILING="${CC_DISPATCH_CLOUD_CEILING:-6}"
 LANE="${CC_DISPATCH_LANE:-v2}"
 # The pass lock lives in the SAME state dir as the IDL rather than at a second independent $HOME
 # path: the production default is then byte-identical to ~/.claude/autonomy/dispatch.lock, AND every
@@ -357,6 +368,7 @@ is_uint() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 is_on()   { case "${1:-}" in on|On|ON|1|true|True|TRUE|yes|Yes|YES) return 0 ;; *) return 1 ;; esac; }
 
 is_uint "$CEILING"          || die3 "CC_DISPATCH_CEILING must be a non-negative integer (got '$CEILING')"
+is_uint "$CLOUD_CEILING"    || die3 "CC_DISPATCH_CLOUD_CEILING must be a non-negative integer (got '$CLOUD_CEILING')"
 case "$LANE" in v1|v2) ;; *) die3 "CC_DISPATCH_LANE must be v1 or v2 (got '$LANE')" ;; esac
 
 # resolve_bin <override> <name> [fallback-abspath...] → echoes an executable path, or "" (rc 1)
@@ -435,11 +447,40 @@ idl_inflight() {
 #     spawning, and dispatch only controls its own workers.
 # A failure to read or parse the ledger still collapses to "" — UNKNOWN, which the caller must
 # never read as 0 and never as a cliff. Absence of a verdict is a THIRD state.
-live_workers() { # <backlog-bin> → count of workers dispatch has OUT, or "" for UNKNOWN
-  local b="$1" n
+#
+# 🚨 THE FOLD IS VENUE-SCOPED, AND THAT IS THE WHOLE POINT OF THE CEILING (2026-08-12).
+# Measured wedge: six OFF-BOX cloud sessions, fired by this dispatcher between 03:41Z and 07:15Z,
+# were folded by a venue-BLIND `.status=="claimed"` into a ceiling of 6 → `free_slots:0,
+# live_workers:6, deferred:318, fired:0` on every pass from 07:15Z onward. Cloud AND local both
+# stopped. The bug is a category error in the denominator: this ceiling bounds what DISPATCH spawns
+# ON THIS BOX — a pane, a worktree, local CPU — and an off-box session consumes none of the three.
+# CLOUD_BACKLOG_PIPELINE.md:162 states it directly: routing to cloud is a CAPACITY decision, "what
+# cloud uniquely spares is this box's CPU, RAM, pane and worktree". Charging it against the local
+# ceiling spends the very slot the migration was made to free.
+#
+# So the resource and its bound are now named together, one ceiling per resource:
+#   local slots  ← claims with venue != cloud, bounded by CEILING       (pane/worktree/CPU)
+#   cloud slots  ← claims with venue == cloud, bounded by CLOUD_CEILING (quota + off-box concurrency)
+# A cloud lane left UNBOUNDED would be the opposite defect — this fix must not turn a wedge into a
+# runaway — and the off-box ceiling is recorded UNMEASURED (CONCURRENCY_PROGRAM §S5-CEILING), so
+# CLOUD_CEILING is a policy default, not a measurement, and is named as such.
+#
+# `venue` is a FIELD READ, not an oracle: all three properties above survive unchanged — nothing is
+# probed, nothing can time out, and `reap` still owns liveness. A row with no venue counts as LOCAL
+# (absence of a plan is not evidence of off-box-ness — the same fail-CLOSED direction cc-venue takes).
+live_workers() { # <backlog-bin> [venue] → count of workers dispatch has OUT there, or "" for UNKNOWN
+  local b="$1" venue="${2:-local}" n filter
   [ -n "$b" ] || return 0
+  case "$venue" in
+    cloud) filter='.venue == "cloud"' ;;
+    local) filter='(.venue // "local") != "cloud"' ;;
+    any)   filter='true' ;;
+    *)     return 0 ;;
+  esac
+  # $filter is interpolated into the jq PROGRAM, which is safe here and only here: it comes from the
+  # closed case set above and never from a ledger value or an argument.
   n="$("$b" list --all --json 2>/dev/null \
-       | jq -er 'if type=="array" then ([.[] | select(.status=="claimed")] | length) else error("not an array") end' \
+       | jq -er 'if type=="array" then ([.[] | select(.status=="claimed") | select('"$filter"')] | length) else error("not an array") end' \
          2>/dev/null)" || return 0
   is_uint "$n" || return 0
   echo "$n"
@@ -1556,15 +1597,30 @@ dispatch() { # <dry|run|decide>
       # reason:"pass-in-flight" says exactly what happened. It also saves the `list --all` read.
       LIVE_RAW=""; FREE_SLOTS=0
     else
-      LIVE_RAW="$(live_workers "$backlog")"
+      # THE LANE THIS PASS FIRES INTO decides which ceiling bounds it (2026-08-12). A pass narrowed
+      # by CC_DISPATCH_VENUE_ONLY fires into exactly one venue, so it must be charged against that
+      # venue's own resource — off-box work against quota, on-box work against panes/worktrees/CPU.
+      # Charging cloud fires to the local ceiling is what wedged this dispatcher at fired:0 for 1h34m.
+      #
+      # UNSET (mixed queue) keeps the PRE-FIX behaviour byte-for-byte — `any` against CEILING. That is
+      # deliberate: per-item lane accounting in a mixed pass is a real change to admission ordering,
+      # it is not needed by the live configuration (which is venue-only), and shipping it untested
+      # here would trade a measured wedge for an unmeasured one. Named as open, not silently ~done.
+      local _lane _lane_ceiling
+      case "$VENUE_ONLY" in
+        cloud) _lane=cloud; _lane_ceiling="$CLOUD_CEILING" ;;
+        local) _lane=local; _lane_ceiling="$CEILING" ;;
+        *)     _lane=any;   _lane_ceiling="$CEILING" ;;
+      esac
+      LIVE_RAW="$(live_workers "$backlog" "$_lane")"
       if [ -z "$LIVE_RAW" ]; then
         # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable ledger would stall the queue
         # forever — fail-closed must not amplify into an outage) and not CEILING (that is a blind
         # fire into an unknown fleet). CEILING=0 still admits nothing: the switch outranks the guess.
-        FREE_SLOTS=1; [ "$CEILING" -lt 1 ] && FREE_SLOTS=0
+        FREE_SLOTS=1; [ "$_lane_ceiling" -lt 1 ] && FREE_SLOTS=0
         reason_admit="live-count-unknown"
       else
-        FREE_SLOTS=$((CEILING - LIVE_RAW)); [ "$FREE_SLOTS" -lt 0 ] && FREE_SLOTS=0
+        FREE_SLOTS=$((_lane_ceiling - LIVE_RAW)); [ "$FREE_SLOTS" -lt 0 ] && FREE_SLOTS=0
       fi
     fi
     admit_n="$FREE_SLOTS"; [ "$admit_n" -gt "$count" ] && admit_n="$count"
