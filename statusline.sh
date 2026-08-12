@@ -145,6 +145,14 @@ fi
 # it sits at the START of the line and survives narrow-terminal ellipsis truncation.
 GLYPH_PREFIX=""
 
+# The context % (computed near the bottom, where its payload fields are parsed) renders
+# immediately AFTER the glyph rather than at the end of the line — operator request
+# 2026-08-11. Same reasoning as the glyph's own left-anchoring: WHICH account and HOW FULL
+# are the two fields read on a glance and the two that must survive truncation, so they sit
+# together at the ellipsis-immune edge. It is carried as its own segment (not appended to
+# OUTPUT) because OUTPUT is built top-down from git state while the % is parsed last.
+PCT_SEG=""
+
 # Directory + Commit ID + branch.
 #
 # MECE de-duplication: worktrees are named `wt-<branch>` (scripts/new-worktree.sh),
@@ -389,14 +397,21 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 
     if [ -n "$PCT" ] && [ "$PCT" -gt 0 ] 2>/dev/null; then
+        # The three-tier COLOUR ladder is the severity signal and is carried over unchanged:
+        # <60 muted grey, 60-89 terminal default (brighter than its surroundings), >=90 muted
+        # red. Only the POSITION moved, so a tier change here is still a behaviour change.
         if [ "$PCT" -ge 90 ]; then
-            OUTPUT="${GRAY}${OUTPUT} ·${RESET} ${MUTED_RED}${PCT}%${RESET}"
+            PCT_SEG="${MUTED_RED}${PCT}%${RESET} "
         elif [ "$PCT" -ge 60 ]; then
-            OUTPUT="${GRAY}${OUTPUT} ·${RESET} ${PCT}%"
+            PCT_SEG="${PCT}% "
         else
-            OUTPUT="${GRAY}${OUTPUT} · ${PCT}%${RESET}"
+            PCT_SEG="${GRAY}${PCT}%${RESET} "
         fi
+        # OUTPUT still goes grey whenever a % is shown — that greying used to be a side effect
+        # of prefixing GRAY while appending the %, and it is preserved deliberately: without a
+        # context block the line keeps its default colour (statusline.sh GLYPH_PREFIX note).
+        OUTPUT="${GRAY}${OUTPUT}${RESET}"
     fi
 fi
 
-echo -e "${GLYPH_PREFIX}${OUTPUT}${RESET}"
+echo -e "${GLYPH_PREFIX}${PCT_SEG}${OUTPUT}${RESET}"

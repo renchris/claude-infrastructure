@@ -317,10 +317,30 @@ render() { # <payload-producer> <dir> [VAR=VAL ...]
             "$@" bash "$NEW" 2>/dev/null
   ) | sed $'s/\033\[[0-9;]*m//g'
 }
-# The line is ${GLYPH_PREFIX}${OUTPUT} and OUTPUT starts with the dir name, so the dir splits the
-# two. Keeping them apart is what makes this layer drift-proof: the marker is asserted only
-# DIFFERENTIALLY (below), and the body assertions cannot see a marker redesign at all.
-marker_of() { printf '%s' "${1%%"$2"*}"; }                       # <line> <dir>
+# The line is ${GLYPH_PREFIX}${PCT_SEG}${OUTPUT} and OUTPUT starts with the dir name, so the dir
+# splits the head from the body. Keeping them apart is what makes this layer drift-proof: the
+# marker is asserted only DIFFERENTIALLY (below), and the body assertions cannot see a marker
+# redesign at all.
+#
+# The head carries TWO fields since the context % moved off the end of the line (2026-08-11), so
+# marker_of alone is no longer the instance marker — chip_of and pct_of split it, and every
+# instance-marker assertion below uses chip_of. That is not cosmetic: `m3 != m1` compares two
+# payloads whose percentages ALSO differ (47 vs 78), so on the raw head it passes on the
+# PERCENTAGE alone and stops testing the account identity it exists to test.
+#
+# Mutation-measured 2026-08-11, blanking NNAME so both chips render `()`:
+#     marker_of   m3=[() 47% ]  m1=[() 78% ]   ->  m3 != m1 PASSES — blind to the mutant
+#     chip_of     m3=[()]       m1=[()]        ->  m3 != m1 RED    — catches it
+# Scope of that claim, stated exactly: the CASE still reddens under marker_of, but via the
+# unrelated `[ -z "$mstable" ]` assertion (a chipless render's head becomes "47% ", so it is
+# no longer empty). So the erosion is one assertion going vacuous behind a neighbour that
+# happens to fail — the kind that survives a green suite the moment the neighbour changes.
+marker_of() { printf '%s' "${1%%"$2"*}"; }                       # <line> <dir> — chip + context %
+chip_of()   { local m; m=$(marker_of "$1" "$2")                  # the instance marker alone
+              m="${m% [0-9]*% }"                                 # chip present: "(next3) 47% "
+              m="${m#[0-9]*% }"                                  # chip absent:  "47% "
+              printf '%s' "$m"; }
+pct_of()    { local m; m=$(marker_of "$1" "$2"); m="${m% }"; printf '%s' "${m##* }"; }
 body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
 
 @test "live: dir, short commit, feature branch and the DIRTY marker all render" {
@@ -328,16 +348,16 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   local sha line
   sha=$(git -C "$WORK/live-plain" rev-parse --short HEAD)
   line=$(render payload_full "$WORK/live-plain")
-  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch · max · 47%" ]
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch · max" ]
   # the POSITIVE twin of test 5. Test 5 asserts NO `*` for untracked files; on its own that is
   # satisfied by a dirty marker that never renders at all (mutation-confirmed 2026-08-09).
   printf 'changed\n' > "$WORK/live-plain/f"
   line=$(render payload_full "$WORK/live-plain")
-  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max · 47%" ]
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max" ]
   # and staged-only is dirty too (porcelain v2 `1` records, either index side)
   git -C "$WORK/live-plain" add -A
   line=$(render payload_full "$WORK/live-plain")
-  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max · 47%" ]
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max" ]
 }
 
 @test "live: main and detached HEAD suppress the branch segment" {
@@ -345,14 +365,14 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   local sha line
   sha=$(git -C "$WORK/live-main" rev-parse --short HEAD)
   line=$(render payload_full "$WORK/live-main")
-  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max · 47%" ]
+  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max" ]
   git -C "$WORK/live-main" checkout -q --detach
   line=$(render payload_full "$WORK/live-main")
-  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max · 47%" ]
+  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max" ]
   # a branch that is NOT main/master must still show — otherwise "suppressed" is unfalsifiable
   git -C "$WORK/live-main" checkout -q -b keeper
   line=$(render payload_full "$WORK/live-main")
-  [ "$(body_of "$line" live-main)" = "live-main ($sha)  keeper · max · 47%" ]
+  [ "$(body_of "$line" live-main)" = "live-main ($sha)  keeper · max" ]
 }
 
 @test "live: a wt-<branch> dir renders the branch ONCE, dirty folded onto the dir (MECE)" {
@@ -360,24 +380,24 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   local sha line
   sha=$(git -C "$WORK/wt-live-dedupe" rev-parse --short HEAD)
   line=$(render payload_full "$WORK/wt-live-dedupe")
-  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha) · max · 47%" ]
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha) · max" ]
   printf 'changed\n' > "$WORK/wt-live-dedupe/f"
   line=$(render payload_full "$WORK/wt-live-dedupe")
-  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe* ($sha) · max · 47%" ]
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe* ($sha) · max" ]
   # ...and the de-dup must not fire when the dir does NOT encode the branch, or "renders once"
   # is unfalsifiable — the same repo on a renamed branch keeps its separate branch segment.
   git -C "$WORK/wt-live-dedupe" checkout -q -b unrelated
   line=$(render payload_full "$WORK/wt-live-dedupe")
-  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha)  unrelated* · max · 47%" ]
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha)  unrelated* · max" ]
 }
 
 @test "live: the effort segment renders the payload's own effort level" {
   mk_repo "$WORK/live-effort" some-branch
   local line
   line=$(render payload_full "$WORK/live-effort")     # effort: max
-  [ "${line% · max · 47%}" != "$line" ]
+  [ "${line% · max}" != "$line" ]
   line=$(render payload_legacy "$WORK/live-effort")   # effort: medium
-  [ "${line% · medium · 78%}" != "$line" ]
+  [ "${line% · medium}" != "$line" ]
   # absent effort must render NO empty segment (payload_bare has no .effort)
   line=$(render payload_bare "$WORK/live-effort")
   ! printf '%s' "$line" | grep -q ' ·  ' || false
@@ -389,12 +409,12 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   local line
   # parity path: used_percentage is displayed as-is (integer-truncated), never recomputed.
   line=$(render payload_full "$WORK/live-ctx")
-  [ "${line% · 47%}" != "$line" ]
+  [ "$(pct_of "$line" live-ctx)" = "47%" ]
   # ...and it really is that FIELD being read: on a payload whose two figures do not sum to 100,
   # deriving from remaining_percentage would render 60%. This is the assertion that fails if the
   # parity path ever starts recomputing what the payload already states exactly.
   line=$(render payload_divergent "$WORK/live-ctx")
-  [ "${line% · 47%}" != "$line" ]
+  [ "$(pct_of "$line" live-ctx)" = "47%" ]
   ! printf '%s' "$line" | grep -q '60%' || false
   # estimate path (no used_percentage): 97000 reserved tokens are scaled to the REAL window.
   #   200k → offset 48 → 70-48 = 22 remaining → 78% used
@@ -403,9 +423,9 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # point: with the pre-2026-07-13 FIXED 48-point offset the 1M case renders 78% — the measured
   # ~2.3x overstatement that relieved a 47%-real lead as "95% context" (statusline.sh:16-20).
   line=$(render payload_legacy "$WORK/live-ctx")
-  [ "${line% · 78%}" != "$line" ]
+  [ "$(pct_of "$line" live-ctx)" = "78%" ]
   line=$(render payload_1m_estimate "$WORK/live-ctx")
-  [ "${line% · 39%}" != "$line" ]
+  [ "$(pct_of "$line" live-ctx)" = "39%" ]
   # and the fields must stay POSITIONAL: payload_1m_estimate has no used_percentage, so a
   # whitespace IFS in the one-shot payload read would shift remaining_percentage into USED and
   # render 70%. The US separator is what keeps empty fields positional (statusline.sh:52-55).
@@ -421,9 +441,9 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # is expected to change again. What must hold for ANY design: a mapped config dir renders SOME
   # marker, two different instances render DIFFERENT ones, and the stable launcher renders none.
   local m3 m1 mstable
-  m3=$(marker_of "$(render payload_full   "$WORK/live-inst")" live-inst)   # .claude-tertiary → 3
-  m1=$(marker_of "$(render payload_legacy "$WORK/live-inst")" live-inst)   # .claude-next     → 1
-  mstable=$(marker_of "$(render payload_stable "$WORK/live-inst")" live-inst)
+  m3=$(chip_of "$(render payload_full   "$WORK/live-inst")" live-inst)   # .claude-tertiary → 3
+  m1=$(chip_of "$(render payload_legacy "$WORK/live-inst")" live-inst)   # .claude-next     → 1
+  mstable=$(chip_of "$(render payload_stable "$WORK/live-inst")" live-inst)
   [ -n "$m3" ]
   [ -n "$m1" ]
   [ "$m3" != "$m1" ]
@@ -431,10 +451,10 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # route 1: the explicit override wins over the config-dir map, and a malformed one falls
   # through to the map rather than blanking the marker (statusline.sh:246-249).
   local mov mbad
-  mov=$(marker_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=7)" live-inst)
+  mov=$(chip_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=7)" live-inst)
   [ -n "$mov" ]
   [ "$mov" != "$m3" ]
-  mbad=$(marker_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=nonsense)" live-inst)
+  mbad=$(chip_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=nonsense)" live-inst)
   [ "$mbad" = "$m3" ]
 }
 
@@ -447,7 +467,7 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # make there. Route 1 ($CLAUDE_INSTANCE_N) is naming-INDEPENDENT by contract, so an instance
   # identified only by number still has an ordinal to draw and still takes this gate.
   local base iterm spoof kitty
-  ordinal() { marker_of "$(render payload_full "$WORK/live-term" CLAUDE_INSTANCE_N=3 "$@")" live-term; }
+  ordinal() { chip_of "$(render payload_full "$WORK/live-term" CLAUDE_INSTANCE_N=3 "$@")" live-term; }
   base=$(ordinal)
   iterm=$(ordinal TERM_PROGRAM=iTerm.app)
   [ "$iterm" != "$base" ]      # iTerm2 opts IN by name — otherwise the gate is doing nothing
@@ -472,8 +492,8 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # DESIGN stays differential above, but "which account am I on" is content, not decoration —
   # a redesign is free to change the frame, never to stop answering the question.
   local m3 m1
-  m3=$(marker_of "$(render payload_full   "$WORK/live-name")" live-name)   # .claude-tertiary
-  m1=$(marker_of "$(render payload_legacy "$WORK/live-name")" live-name)   # .claude-next
+  m3=$(chip_of "$(render payload_full   "$WORK/live-name")" live-name)   # .claude-tertiary
+  m1=$(chip_of "$(render payload_legacy "$WORK/live-name")" live-name)   # .claude-next
   [[ "$m3" == *next3* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
   [[ "$m1" == *next* ]]  || { printf 'marker: %s\n' "$m1" >&2; false; }
   # the ordinal is DROPPED, not carried alongside — `next3` already contains its own 3, and the
@@ -492,7 +512,8 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   local line
   line=$(render payload_full "$WORK/live-norepo")
   local body; body=$(body_of "$line" live-norepo)
-  [ "$body" = "live-norepo · max · 47%" ]
+  [ "$body" = "live-norepo · max" ]
+  [ "$(pct_of "$line" live-norepo)" = "47%" ]   # the % left the body but must still render
   # on the BODY, not the line — the instance marker carries its own parens, so testing the whole
   # line here would assert the marker's current design and re-introduce exactly the drift
   # this layer exists to stop.
