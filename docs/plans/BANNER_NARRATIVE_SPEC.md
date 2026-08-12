@@ -1716,14 +1716,29 @@ micro-event declares its three acts and cannot silently stop doing so — and no
 
 ## OPERATOR FEEDBACK, 2026-07-30 — transcribed here because that is why half of it was never done
 
-Five points, given against the storyboard render. **Three were fixed in `tools/banner/gen.py` within
-about fifteen hours. Two were never touched at all, and the discriminator was not difficulty — it
-was whether the point got written down.** The feedback lived only in
-`~/.claude/autonomy/feedback/banner-storyboard-feedback-2026-07-30.md`, which is untracked runtime
-state; a repo-wide grep for points 3 and 5 returns nothing. Points 1, 2 and 4 happened to be
+Five points, given against the storyboard render. **Three were fixed in `tools/banner/gen.py` — the
+first inside fifteen hours, the last only after forty-seven. Two were never touched at all, and the
+discriminator was not difficulty — it was whether the point got written down.** The feedback lived
+only in `~/.claude/autonomy/feedback/banner-storyboard-feedback-2026-07-30.md`, which is untracked
+runtime state; a repo-wide grep for points 3 and 5 returns nothing. Points 1, 2 and 4 happened to be
 restated inside commit bodies as they were fixed, so they acquired a home in the tree. The other two
 had none, and nothing that reads this repo could see them. **That is the whole failure mode, and
 this section is the fix for it** — the feedback now lives where the build does.
+
+**Correction, 2026-08-11 — this section shipped saying "within about fifteen hours", and that figure
+was measured wrong in the direction that flatters it.** Against the feedback's own timestamp
+(2026-07-30 01:50 PDT, recorded in the file above) the six commits are `322937a8` **+15 h**,
+`e66ee00d` **+15.5 h**, `31ed0731` **+41 h**, `bcd16114` **+45.5 h**, `1493a2e9` **+47 h**,
+`68cd16b5` **+47.5 h** — all six on trunk, all six verified by content, not by subject. Only point 1
+closed inside fifteen hours. Point 4 took forty-one, and point 2 took forty-seven, because **its
+first fix did not satisfy it**: `e66ee00d` is titled "a real top hat", and a top hat is precisely
+what a magician's hat is not — `bcd16114` ("the brim was narrower than the head") and `1493a2e9`
+("it is a WIZARD hat — a cone, not a stovepipe") are the commits that actually answered the point,
+a day and a half later. The thesis is unharmed and the sharper version is worth the correction:
+being written down bought points 1, 2 and 4 a *fix attempt*, and only re-reading the operator's own
+words against the render told anyone that the first attempt at point 2 had missed. A commit subject
+asserting a fix is not the fix landing — a claim this repo has had to relearn often enough that it
+should not have gone into this section unmeasured.
 
 Verbatim, then disposition:
 
@@ -1750,7 +1765,9 @@ Verbatim, then disposition:
    same-size clawds, so the peer is drawn smaller — and a smaller peer reads as a *child*, which is
    the summoning's relationship, not this one. Either that rule is overturned for this beat, or
    "peer" has to be said without using size (matched stride phase and a shared eye-line are the
-   candidates, and both are cheaper than a second saturated orange).
+   candidates, and both are cheaper than a second saturated orange). **Filed 2026-08-11 as backlog
+   `5cd2ecf792ae`** — neither exit needs an operator, so this is ordinary agent work that was simply
+   never put where the dispatcher could see it.
 4. *"I dont see our stars being Opus 5 beautiful dynamic and opacity/flickering changing/twinkling
    for depth"*
    → **DONE.** `31ed0731`. The machinery was alive; the amplitude was losing to render scale — a
@@ -1759,7 +1776,9 @@ Verbatim, then disposition:
    is carried by amplitude multiplying the magnitude tier and by a horizon gate, so the field nearest
    the wordmark stays still. **Residual, unclosed:** no gate asserts any of it. The only guard,
    `assert_twinkle_tables_paired`, checks table lengths — the floors could drift back to `.70` and
-   the build would stay green, which is exactly how this shipped the first time.
+   the build would stay green, which is exactly how this shipped the first time. A length check
+   cannot see amplitude, and amplitude was the whole defect. **Filed 2026-08-11 as backlog
+   `f295605eec01`**, with the redproof named: restore `.70` / 18 / 4 and the new gate must go red.
 5. *"if clawd summons someone he should probably move left positioned so that the new clawd can be
    right positioned such that its centered and not super right heavy"*
    → **HALF DONE — storyboard only; the live banner needs an operator ruling.** In
@@ -1778,6 +1797,8 @@ Verbatim, then disposition:
    *"a per-candidate decision, not a global one"* — v6c is right of centre deliberately, to balance
    the moon at x=250. Moving it left to centre the pair un-balances every second of the loop in which
    there is no second creature, which is most of them. **That trade is the operator's, not the
-   implementer's**, and it is filed rather than guessed. The precedent worth knowing: the GREETING
-   emote hit this exact problem and solved it by moving the resident statically (`cx=120.0`,
-   `emotes_world.py:706`) — for a *cropping* reason, and it was never carried back to `rSummon`.
+   implementer's**, and it is filed rather than guessed — backlog `38b79edd0e90`, verified 2026-08-11
+   to be genuinely in the store and parked as **blocked** on that ruling, which is the disposition
+   this point should have. The precedent worth knowing: the GREETING emote hit this exact problem and
+   solved it by moving the resident statically (`cx=120.0`, `emotes_world.py:706`) — for a *cropping*
+   reason, and it was never carried back to `rSummon`.
