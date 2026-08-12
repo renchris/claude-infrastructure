@@ -124,12 +124,66 @@ EOF
     | grep -qxF "${MINE}"
 }
 
+NL='
+'
+# The trunk's file paths, read ONCE. Membership is then a fork-free shell match instead of
+# a `git ls-tree` per candidate commit. This is load-bearing, not tidying: the script walks
+# 708 refs on the land path, and feeding cherry's `-` commits to the content check (the
+# oracle fix above) roughly triples the candidates — measured 72s → 154s with a fork per
+# candidate, back under the original with this.
+TRUNK_PATHS="${NL}$(git ls-tree -r --name-only "${REMOTE_TRUNK}" 2>/dev/null)${NL}"
+
 found=0
 branch_count=0
 unreadable=0
 unreadable_names=""
 hit_branches=0
 hit_list=""
+
+# Verdict for ONE candidate commit. Reads sha/paths/branch, updates found/branch_hits.
+# STRANDED := every path this commit touched is absent from the trunk tree. A path that
+# exists on trunk with different content is NOT the incident class (legitimately-evolved
+# file → no false alarm).
+judge_commit() {
+  [[ -z "${sha}" || -z "${paths}" ]] && return 0   # no paths ⇒ merge commit ⇒ nothing to judge
+  local p
+  while IFS= read -r p; do
+    [[ -z "${p}" ]] && continue
+    case "${TRUNK_PATHS}" in
+      *"${NL}${p}${NL}"*) return 0 ;;              # present on trunk → not the incident class
+    esac
+  done <<EOF
+${paths}
+EOF
+  # ALL absent. Only now confirm it is not already on the trunk by SHA. cherry's default
+  # limit IS the merge base, so a listed commit cannot be an ancestor of the trunk (it
+  # would have been the merge base); the check stays because it is the load-bearing
+  # invariant, and at one fork per would-be REPORT it is now free.
+  git merge-base --is-ancestor "${sha}" "${REMOTE_TRUNK}" 2>/dev/null && return 0
+  # --mine: skip a peer session's drop (silent); report only own-session drops.
+  [[ -n "${MINE}" ]] && ! mine_match "${sha}" && return 0
+  found=$(( found + 1 ))
+  branch_hits=$(( branch_hits + 1 ))
+  # DAMPING (backlog fd517a5863cc). The per-commit wall and the recovery recipe are for
+  # the OWNER only. Un-`--mine`, this fired on 955 of 989 lands — an alarm that fires 97%
+  # of the time carries essentially no bits — and what it printed was a cherry-pick recipe
+  # for peer WIP that its own next line tells the reader never to cherry-pick. Default
+  # mode reports the COUNT and points at the one question actionable to the caller.
+  [[ -z "${MINE}" ]] && return 0
+  local short
+  short="$(git rev-parse --short "${sha}")"
+  echo "✗ STRANDED ${short} on branch '${branch}' — paths absent from ${REMOTE_TRUNK}:"
+  printf '%s' "${paths}" | while IFS= read -r p; do
+    [[ -n "${p}" ]] && echo "    ${p}"
+  done
+  echo "  recovery:"
+  echo "    git branch backup/stranded-${short} ${sha}"
+  echo "    git checkout ${TRUNK} && git fetch origin ${TRUNK} && git reset --hard ${REMOTE_TRUNK}"
+  echo "    git cherry-pick ${sha}"
+  echo "    # then gate (shellcheck + bats) and land via scripts/land-lock.sh"
+  echo ""
+  return 0
+}
 for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
   [[ "${branch}" = "${TRUNK}" ]] && continue
   branch_count=$(( branch_count + 1 ))
@@ -158,65 +212,41 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
     continue
   fi
 
-  branch_hits=0
+  # Candidate shas — BOTH cherry markers, since its classification is not the verdict.
+  cands=""
   while IFS= read -r line; do
     case "${line}" in
-      '+ '*) sha="${line#+ }" ;;
-      '- '*) sha="${line#- }" ;;
-      *) continue ;;
+      '+ '*) cands="${cands}${line#+ }${NL}" ;;
+      '- '*) cands="${cands}${line#- }${NL}" ;;
     esac
-
-    # Already on trunk by SHA → landed, skip.
-    git merge-base --is-ancestor "${sha}" "${REMOTE_TRUNK}" 2>/dev/null && continue
-
-    paths="$(git diff-tree --no-commit-id --name-only -r "${sha}" 2>/dev/null)"
-    [[ -z "${paths}" ]] && continue
-
-    all_absent=1
-    absent_paths=""
-    while IFS= read -r path; do
-      [[ -z "${path}" ]] && continue
-      if [[ -n "$(git ls-tree "${REMOTE_TRUNK}" -- "${path}" 2>/dev/null)" ]]; then
-        all_absent=0                    # present on trunk (any content) → not the incident class
-        break                           # verdict decided; the rest of the paths cannot change it
-      else
-        absent_paths="${absent_paths}${path}
-"
-      fi
-    done <<EOF
-${paths}
-EOF
-
-    if [[ "${all_absent}" = "1" ]]; then
-      # --mine: skip a peer session's drop (silent); report only own-session drops.
-      if [[ -n "${MINE}" ]] && ! mine_match "${sha}"; then
-        continue
-      fi
-      found=$(( found + 1 ))
-      branch_hits=$(( branch_hits + 1 ))
-      # DAMPING (backlog fd517a5863cc). The per-commit wall and the recovery recipe are
-      # for the OWNER only. Un-`--mine`, this fired on 955 of 989 lands — an alarm that
-      # fires 97% of the time carries essentially no bits — and what it printed was a
-      # cherry-pick recipe for peer WIP that its own next line tells the reader never to
-      # cherry-pick. Default mode now reports the COUNT (below) and points at the one
-      # question that is actionable to the caller: was YOUR work dropped?
-      if [[ -n "${MINE}" ]]; then
-        short="$(git rev-parse --short "${sha}")"
-        echo "✗ STRANDED ${short} on branch '${branch}' — paths absent from ${REMOTE_TRUNK}:"
-        printf '%s' "${absent_paths}" | while IFS= read -r p; do
-          [[ -n "${p}" ]] && echo "    ${p}"
-        done
-        echo "  recovery:"
-        echo "    git branch backup/stranded-${short} ${sha}"
-        echo "    git checkout ${TRUNK} && git fetch origin ${TRUNK} && git reset --hard ${REMOTE_TRUNK}"
-        echo "    git cherry-pick ${sha}"
-        echo "    # then gate (shellcheck + bats) and land via scripts/land-lock.sh"
-        echo ""
-      fi
-    fi
   done <<EOF
 ${cherry_out}
 EOF
+  [[ -z "${cands}" ]] && continue
+
+  # ONE diff-tree for every candidate on this branch — `--stdin` reads commit ids and
+  # emits `<sha>` followed by that commit's paths. Output ordering is the input's.
+  branch_hits=0
+  sha=""
+  paths=""
+  while IFS= read -r line; do
+    is_head=0
+    if [[ "${#line}" -eq 40 ]]; then
+      # A 40-char line is a commit header only if it is one of the shas WE fed — a path
+      # could in principle be 40 hex chars, and guessing would silently drop its commit.
+      case "${cands}" in *"${line}${NL}"*) is_head=1 ;; esac
+    fi
+    if [[ "${is_head}" -eq 1 ]]; then
+      judge_commit
+      sha="${line}"
+      paths=""
+      continue
+    fi
+    [[ -n "${line}" ]] && paths="${paths}${line}${NL}"
+  done <<EOF
+$(printf '%s' "${cands}" | git diff-tree --stdin --name-only -r 2>/dev/null)
+EOF
+  judge_commit
 
   if [[ "${branch_hits}" -gt 0 ]]; then
     hit_branches=$(( hit_branches + 1 ))
