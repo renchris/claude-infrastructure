@@ -496,6 +496,7 @@ done
 _SWEEP_DIR="$(cd "$(dirname "$_sw")" && pwd)"
 _trigger="$_SWEEP_DIR/backlog-consolidation-trigger.sh"
 _ratchet="$_SWEEP_DIR/backlog-ratchet.sh"
+_grouping="$_SWEEP_DIR/backlog-grouping-sweep.sh"
 # SELF-CONTAINED BOUND, not sweep_bounded(). That helper and its TIMEOUT_BIN are defined ~100 lines
 # BELOW this point, and bash resolves a function only at call time — so calling it here would exit
 # 127 "command not found". With no `set -e` that is SILENT, and rc 127 would have been journalled
@@ -531,6 +532,9 @@ _bounded() {
   fi
 }
 _trig_rc="skipped"; _rat_rc="skipped"; _fold_rc="skipped"; _fold_note="skipped"; _fold_groups=0
+# `_fold_applied` defaults to "skipped", NOT to "ok" — the apply arm below runs only on a clean dry
+# verdict, and a default of ok would report a write that never happened on every sweep that held back.
+_fold_applied="skipped"; _fold_written=0; _fold_apply_rc="skipped"
 if [ -x "$_trigger" ]; then _bounded bash "$_trigger" --file >/dev/null 2>&1; _trig_rc=$?; fi
 if [ -x "$_ratchet" ]; then _bounded bash "$_ratchet" --assert >/dev/null 2>&1; _rat_rc=$?; fi
 
@@ -553,6 +557,20 @@ if [ -x "$_ratchet" ]; then _bounded bash "$_ratchet" --assert >/dev/null 2>&1; 
 # `conservation=FAILED` must NEVER be flipped past — it means the key merged across a distinction,
 # which is precisely the nine-stranded-worktrees defect W3 found in R6's proposed key.
 #
+# ── FLIPPED 2026-08-12 (W2, backlog ce1e9d1adab8), AND THE CRITERION IS NOW ENFORCED PER SWEEP ────
+# The criterion above was satisfied and no instrument could observe it: the bound was sized in the
+# foreground (17.5 s) while this sweep runs in Darwin's Background band (68.1 s), so `--fold` returned
+# rc 124 on 10 of 10 recorded runs and `fold_conservation` read `no-verdict` every time. W0 resized
+# it; measured after: 5 consecutive dry runs, `conservation=ok` on all five, 19 groups seen / 18 would
+# fold / 0 ambiguous, byte-identical across the series. That is the series the flip asked for.
+#
+# It is implemented as DRY-THEN-APPLY rather than as a bare `--apply`, which costs one extra bounded
+# read (~26 s measured) and buys the thing a one-time human flip cannot: **"never flip past a FAILED"
+# stops being a rule someone has to remember.** The apply arm runs only when THIS sweep's own dry run
+# reported `ok`, so a key that starts merging across a distinction disarms the writer on the very
+# sweep that notices, with no marker file and no memory of past runs. A flip enforced by a comment is
+# a flip that survives exactly until the next reader (memory: conclusion-must-reach-the-enforcing-store).
+#
 # THE VERDICT IS PARSED, NOT INFERRED FROM rc: an exit code cannot separate "nothing to fold" from
 # "the store moved under the read", and collapsing those is a defect this repo has already shipped
 # once (MEMORY.md: claimed-outcome-vs-checked-outcome). `no-verdict` is its own state so a silently
@@ -567,12 +585,39 @@ if [ -x "$_trigger" ]; then
   esac
   _fold_groups="$(printf '%s\n' "$_fold_out" | /usr/bin/grep -cE 'conservation=' 2>/dev/null)"
   case "${_fold_groups:-}" in ''|*[!0-9]*) _fold_groups=0 ;; esac
+  # THE APPLY ARM — gated on THIS sweep's own dry verdict, so a FAILED disarms it immediately.
+  # `unknown` also holds: it means the store moved under the read, and a writer that cannot tell its
+  # own conservation from a sibling's write is a writer that should wait one sweep.
+  if [ "$_fold_note" = "ok" ]; then
+    _fold_apply_out="$(_bounded bash "$_trigger" --fold --apply 2>/dev/null)"; _fold_apply_rc=$?
+    case "$_fold_apply_out" in
+      *conservation=FAILED*)  _fold_applied="FAILED" ;;
+      *conservation=unknown*) _fold_applied="unknown" ;;
+      *conservation=ok*)      _fold_applied="ok" ;;
+      *)                      _fold_applied="no-verdict" ;;
+    esac
+    _fold_written="$(printf '%s\n' "$_fold_apply_out" | /usr/bin/grep -cE 'verdict=linked' 2>/dev/null)"
+    case "${_fold_written:-}" in ''|*[!0-9]*) _fold_written=0 ;; esac
+  fi
 fi
+
+# ── 2b-ii. THE GROUPING SWEEP (W2, backlog ce1e9d1adab8) — the SEMANTIC half of the same question ──
+# The fold above answers "are these rows the same SENTENCE about the same subject", which is narrow by
+# design and must stay narrow: its own largest sha-keyed cluster of 14 was nine different stranded
+# worktrees. It therefore cannot see the far larger population — rows that are DIFFERENT sentences
+# about ONE effort. 424 of 553 live rows carried no master effort when this landed, each one a dispatch
+# slot by default. `backlog-grouping-sweep.sh --file` measures that and files ONE condition-keyed row
+# when it crosses the floor; it never writes links from here (see its header for the flip criterion).
+_grp_rc="skipped"
+if [ -x "$_grouping" ]; then _bounded bash "$_grouping" --file >/dev/null 2>&1; _grp_rc=$?; fi
+
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
+  --arg fa "$_fold_applied" --arg fw "$_fold_written" --arg g "$_grp_rc" \
   '{consolidation_trigger_rc:$t, ratchet_rc:$r,
     fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). fold is DRY-RUN: fold_conservation ok|unknown|FAILED|no-verdict — FAILED means the key merged across a distinction; never flip this call to --apply past one."}')"
+    fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). The fold now APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
