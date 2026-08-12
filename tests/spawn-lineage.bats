@@ -44,6 +44,15 @@ setup() {
   # test naming self-close must not have its verdict decided by what else is running.
   export CC_FIRE_CAPACITY_GATE=off
 
+  # …and the SAME class inside hooks/agent-teams-enforce.sh, which the NAMED-spawn DENY cases
+  # traverse BEFORE the lineage term. Its headroom arm reads live vm_stat against a 4 GB floor
+  # (scripts/lib/capacity-admit.sh), exits 0 with its own MACHINE-CAPACITY deny, and
+  # `SPAWN GENERATION CAP` is never emitted — so on a small box the two DENY cases red while the
+  # two ADMIT controls still "pass", for the wrong reason. That is exactly the off-box signature:
+  # reds at 19 and 22 and nowhere else, reproduced here with CC_ADMIT_HEADROOM_OVERRIDE=1. Same
+  # pin and same argument as tests/agent-teams-enforce.bats, which already documents it.
+  export CC_ADMIT_GATE=off
+
   # Seams that do NOT resolve under $HOME — an absolute /tmp default (5a) or a bare name the subject
   # would EXECUTE off the operator's PATH (5b). Fixturing $HOME alone does not redirect either, so
   # they are pinned into the test tmpdir. An absent path is the right value: these sensors fail open.
