@@ -512,6 +512,20 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   # approximation of one.
   local mutant="$BATS_TEST_TMPDIR/sweep-mutant.sh"
   sed 's/^  unbannered="\$(count_unbannered)"$/  unbannered=0/' "$SWEEP" > "$mutant"
+  # THE MUTANT MUST RESOLVE ITS LIBS THE WAY THE REAL SCRIPT DOES (added 2026-08-12, backlog
+  # b7252a3bb015). autonomy-sweep.sh:103-113 resolves lib/cc-common.sh on a three-rung ladder —
+  # beside-script → $CLAUDE_CONFIG_DIR → $HOME/.claude — and FATALs with `exit 1` if all three miss.
+  # Copying the mutant into BATS_TEST_TMPDIR breaks rung 1, so the copy resolved on rung 3 against
+  # the developer's LIVE ~/.claude. This suite pins no HOME, so that worked on a dev Mac and could
+  # not work on a CI runner, where ~/.claude does not exist: off-box the mutant died at :112 before
+  # reaching ladder_v2 at all, and `[ "$status" -eq 0 ]` below went RED for a reason that has
+  # nothing to do with the property this control defends. It cost the off-box green, and with it
+  # T1H and the whole deploy lane, for two days. Symlinking lib/ beside the mutant pins rung 1 —
+  # the same rung the real script takes — so the control now depends on the repo and not on the
+  # machine. Note the SECOND assertion was the quieter casualty: a script that dies at :112 also
+  # posts nothing, so `osa_posts -eq 0` passed VACUOUSLY off-box, certifying silence it never
+  # observed. memory: hermetic-in-stubs-not-in-interpreter · control-must-replay-the-real-artifact.
+  ln -sfn "$REPO/scripts/lib" "$BATS_TEST_TMPDIR/lib"
   # The mutation guard asserts the SPECIFIC edit landed — never merely that the two files differ.
   # TWO defects were in this guard's first form, and the second one is the general lesson:
   #   1. `! cmp -s "$SWEEP" "$mutant"` only asks "do they differ", which a no-op sed can satisfy for
