@@ -796,7 +796,7 @@ inflight_release() {  # idempotent · only ever removes a marker THIS process wr
 # conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
 # shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
 land_failure_inbox() {  # $1=exit code $2=cause word
-  local rc="$1" cause="$2" head name ref cmd bl
+  local rc="$1" cause="$2" head name ref cmd bl id oracle
   # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
   # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
   # visible feedback and filing them would drown the inbox in noise the author already read.
@@ -820,9 +820,32 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   [[ "${SHIP_LAND_FAILURE_INBOX:-auto}" = "off" ]] && return 0
   bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
   [[ -x "$bl" ]] || return 0
-  "$bl" needs \
+  # The id is CAPTURED now (it used to go to /dev/null) because the row needs a falsifier, and
+  # `falsify` is the only door to one: `needs --falsifier` reaches cmd_add, which returns early on a
+  # known id, so it is a silent no-op on any row the recurrence brake folds onto.
+  id="$("$bl" needs \
     "re-land ${BRANCH} (${REPO_ROOT}): ship-land exited ${rc} (${cause}) and its author's pane may be gone — head pinned at ${ref:-<unrecorded>}" \
-    --run "$cmd" --session "${CLAUDE_CODE_SESSION_ID:-}" >/dev/null 2>&1 || true
+    --run "$cmd" --session "${CLAUDE_CODE_SESSION_ID:-}" 2>/dev/null || true)"
+  # THE FALSIFIER — the half that was missing, and the reason this population rotted. A row filed
+  # here measures ONE thing: that ship-land exited non-zero. It never re-asks, so it is a PREDICTION
+  # about content, and the prediction is usually wrong within a day: censused 2026-08-12, 24 of the
+  # 25 `re-land …` rows of the master-stranded-work effort were false — the work had landed under a
+  # different sha — and actioning four of them would have REVERTED trunk.
+  #
+  # land-content-verify.sh exits 0 exactly when the pinned ref's content is on trunk, which is the
+  # RETRACTING direction, so `falsify` screens it before storing: at filing time the content is
+  # genuinely not on trunk (exit 1) and it stores; a probe that already exits 0 is REFUSED (rc 5),
+  # which is the store telling us this row should never have been filed. Both outcomes are correct
+  # and both are swallowed — this runs from a trap handler, so it may not touch ship-land's exit
+  # code, and a land must never fail because a backlog row could not be annotated.
+  #
+  # No ref ⇒ no probe: a falsifier over `<unrecorded>` could only ever answer "cannot tell", and a
+  # probe that cannot answer is worse than none (memory: sensor-default-off-makes-blindness-the-
+  # shipping-path). Same for a checkout that predates the oracle.
+  oracle="${REPO_ROOT}/scripts/land-content-verify.sh"
+  if [[ -n "$id" && -n "$ref" && -x "$oracle" ]]; then
+    "$bl" falsify "$id" --probe "bash ${oracle} ${ref}" >/dev/null 2>&1 || true
+  fi
   return 0
 }
 
