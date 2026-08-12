@@ -4,6 +4,7 @@
 #   offbox-run.sh shard <i> <n> [--out FILE]   run shard i of n; write a per-suite TSV
 #   offbox-run.sh all [--out FILE]             run the whole partition in one process
 #   offbox-run.sh census [--out FILE]          run EVERY tests/*.bats, partition or not (see below)
+#   offbox-run.sh suites <path>... [--out F]   run EXACTLY the named suites, same classifier
 #   offbox-run.sh verdict <dir|file...>        fold TSVs into the off-box stamp JSON on stdout
 #   offbox-run.sh --selftest                   RED-proves the classifier and the fold
 #
@@ -66,14 +67,26 @@ SUITE_BOUND_S="${CC_OFFBOX_SUITE_BOUND_S:-300}"
 # exists; both happen to a human reproducing a CI red locally, which is exactly when the two must
 # agree (memory: version-identity-is-the-running-process-not-the-launcher).
 # So: resolve past any bats living under the live layer. An explicit CC_OFFBOX_BATS always wins.
+#
+# SECOND SKIPPED CLASS: bats' OWN libexec. When this script is invoked from inside a running bats
+# test — which is exactly what tests/offbox-admission-lint.bats does, and what any suite exercising
+# the runner must do — bats has PREPENDED $BATS_LIBEXEC to PATH, and that directory contains a
+# `bats` of its own (the internal entrypoint, alongside bats-exec-file / bats-exec-test). It is not
+# under the live layer, so the walk below happily selected it. Running THAT under `env -i` produces
+# no TAP and exits 0, which run_one classifies `empty` — a state whose documented meaning is "a
+# suite that asserted nothing", so a perfectly green suite came back as not-green and the admission
+# gate refused it. Measured 2026-08-12: the same suite was `green` standalone and `empty` nested, on
+# consecutive invocations, which is precisely the un-debuggable shape a silent misresolution takes.
+# The `empty` classification is right; the binary it was applied to was not.
 resolve_bats() {
   if [ -n "${CC_OFFBOX_BATS:-}" ]; then printf '%s\n' "$CC_OFFBOX_BATS"; return 0; fi
-  local c live="${HOME:-/nonexistent}/.claude"
+  local c live="${HOME:-/nonexistent}/.claude" libexec="${BATS_LIBEXEC:-}"
   # `command -v` gives the FIRST match; walk every PATH entry so a wrapper earlier on PATH is
   # skipped rather than merely detected.
   local IFS=:
   for c in $PATH; do
     case "$c" in "$live"|"$live"/*) continue ;; esac
+    [ -n "$libexec" ] && case "$c" in "$libexec"|"$libexec"/*) continue ;; esac
     if [ -x "$c/bats" ]; then printf '%s\n' "$c/bats"; return 0; fi
   done
   # Nothing outside the live layer. Fall back to the bare name so the ordinary "bats is missing"
@@ -234,6 +247,31 @@ cmd_census() { # [<i> <n>] [--out FILE] — sharded exactly like the partition, 
   else
     printf '%s\n' "$all" | run_list "$out"
   fi
+}
+
+# SUITES — run EXACTLY the named suites through run_one, nothing else. The header's promise ("ONE
+# IMPLEMENTATION, TWO CALLERS … and so can a human reproducing a CI red on their own box") had no
+# verb that could keep it for ONE suite: `shard` and `census` both enumerate, so reproducing a
+# single CI red meant either running a whole shard or hand-rolling the `env -i` line — and a
+# hand-rolled line IS the second implementation this file exists to prevent. It drifts on the first
+# edit nobody makes twice, and the axes it drops (LC_ALL=C, TERM=dumb, the fresh TMPDIR, the TERM
+# trap restore) are exactly the ones that make an off-box red reproduce.
+#
+# The land-time admission gate (scripts/offbox-admission-lint.sh) is the third caller, and it is why
+# this verb is a verb rather than a documented incantation: a gate that REFUSES a land must run the
+# same predicate the producer runs, or it refuses on a claim it cannot substantiate.
+cmd_suites() { # <path>... [--out FILE]
+  local out=/dev/stdout suites=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out) out="${2:?--out needs a path}"; shift 2 ;;
+      *)     suites+=("$1"); shift ;;
+    esac
+  done
+  [ "${#suites[@]}" -gt 0 ] || die "suites: need at least one tests/<name>.bats path" 2
+  # A path that names no suite is reported `missing` by run_list, never silently skipped — the same
+  # rule the shard path already relies on, so a typo'd argument cannot read as an acquittal.
+  printf '%s\n' "${suites[@]}" | run_list "$out"
 }
 
 cmd_verdict() {
@@ -468,6 +506,7 @@ case "${1:-}" in
   shard)      shift; cmd_shard "$@" ;;
   all)        shift; cmd_all "$@" ;;
   census)     shift; cmd_census "$@" ;;
+  suites)     shift; cmd_suites "$@" ;;
   verdict)    shift; cmd_verdict "$@" ;;
   --selftest) shift; cmd_selftest "$@" ;;
   -h|--help)  usage ;;

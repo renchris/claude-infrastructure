@@ -35,6 +35,34 @@
 # ── HOW TO DELETE A LINE ─────────────────────────────────────────────────────────────────────────
 # Run the census, confirm the suite is green off-box, delete its line and its comment in one commit.
 # Nothing else is needed: the partition widens by set difference on the next run.
+#
+# ── 2026-08-12: BOTH DIRECTIONS NOW HAVE AN ACTUATOR, WHICH THEY DID NOT BEFORE ──────────────────
+# The paragraphs above describe a two-way ratchet, and the machinery for exactly one of the two
+# directions existed. Growth was mechanized — a new suite joins the partition BY EXISTING — while
+# the shrink arm this file names ("`offbox-run.sh census` runs EVERY suite … so an entry that has
+# started passing shows up as passing and can be deleted") was reachable only through a
+# `workflow_dispatch` checkbox: no schedule fired it, no step consumed its output, and nothing ever
+# named a line as deletable. So the honest reading of this file before today is that it could only
+# grow, and its own anti-rot argument had no mechanism behind it. Measured that day: the corpus grew
+# 405 → 414 suites while the red count went 2 → 3, across three folds, with two suites fixed and
+# staying fixed — growth outrunning cure, which is what an un-actuated ratchet looks like.
+#
+# THREE THINGS CHANGED, and this file's contract is unchanged by all of them:
+#   1. ADMISSION, at the land (scripts/offbox-admission-lint.sh, wired into ship-land.sh's arms). A
+#      suite a land ADDS must be green under the producer's own runner before it may land. Most
+#      entries that would have been added here are now never needed, because the defect is fixed by
+#      the author in the commit that creates it.
+#   2. THE ENTRY YOU DO ADD ARRIVES WITH ITS MEASUREMENT ALREADY TAKEN. That gate prints the line —
+#      `# <ts>: off-box state=<state> (offbox-admission-lint, at land)` — from a run it just
+#      performed. This file's central rule is that every entry is a MEASUREMENT and never a
+#      hypothesis; until now the only source of one was a CI round-trip, so satisfying the rule cost
+#      an hour and the rule was correspondingly often skipped.
+#   3. THE CENSUS RUNS ON A DAILY CRON and its verdict job now prints a RELEASE list: every suite
+#      that is excluded here AND came back green in a run that actually executed it. That is the
+#      shrink half, and it is deliberately positive-evidence-only — a partition run does not execute
+#      the excluded suites at all, so their absence from its rows is not evidence of anything and is
+#      never read as one.
+# An entry here still costs coverage. Prefer fixing the suite; that is what cure (a) is for.
 
 # ── terminal-emulator surface — these drive or assert a live iTerm2/kitty ────────────────────────
 # HINT (not verified): a hosted runner has no terminal application at all.
