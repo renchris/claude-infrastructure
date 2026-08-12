@@ -122,14 +122,23 @@ jobs:
           sudo /tmp/bats-core/install.sh /usr/local
           bats --version
 
-      - name: install GNU timeout, and ONLY GNU timeout
+      - name: install GNU timeout (and ONLY GNU timeout), plus shellcheck
         run: |
           set -euo pipefail
           # 487 references to `timeout` and 19 to `gtimeout` across the corpus; macOS ships neither.
           # Homebrew's gnubin directory is deliberately NOT put on PATH — it would also shadow sed,
           # date and stat with their GNU versions, and 62 suites depend on the BSD spellings. The
           # box under test has exactly this shape: GNU timeout/gdate present, gsed ABSENT.
-          brew install coreutils
+          #
+          # shellcheck rides along because the land gate invokes it and this image does not ship it.
+          # That absence made tests/gate-precheck.bats 6-ok / 7-notok on EVERY run — and the six
+          # passes were VACUOUS, because they assert exit 6 naming `arm(s): shellcheck`, which is
+          # precisely what a missing binary produced. Off-box, that suite had never once exercised
+          # the checker. The inventory step below has been printing `shellcheck MISSING` all along.
+          # Unpinned deliberately: this producer may emit a green or nothing, so a newer checker's
+          # stricter finding costs an acquittal and can never convict anyone's code. It lands in
+          # /opt/homebrew/bin, already on PATH, so the gnubin shim's "ONLY timeout" rule is intact.
+          brew install coreutils shellcheck
           # $RUNNER_TEMP, not /usr/local: the arm64 macOS image does not grant the runner user write
           # access to /usr/local (measured — `mkdir: /usr/local/gnubin: Permission denied`), and a
           # sudo'd system dir would be a worse answer for a per-job PATH shim anyway.
