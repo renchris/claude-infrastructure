@@ -595,6 +595,35 @@ cmd_declare() {
   case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody" in
     *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;;
   esac
+  # THE TRUNK REFUSAL (backlog 55065a61b31c). A cloud session declared against the remote's DEFAULT
+  # branch makes O2 read every SIBLING session's push to that branch as this session's heartbeat —
+  # measured 2026-08-08 as a false state=ALIVE, which is the one verdict the whole observability
+  # stack must never fabricate (a stranded session is visible and recoverable; a session wrongly
+  # reported alive is neither). The fire protocol wants a per-session ref
+  # (CONCURRENCY_PROGRAM §S5a's refs/cc/<id>); until it has one, declaring against trunk is not a
+  # thing to warn about, it is a thing to refuse.
+  #
+  # NOT A NAME LIST. Refusing the spellings `main`/`master`/`trunk` would be a denylist enumerating
+  # spellings rather than the class, and would still miss a repo whose default is anything else
+  # (memory: denylist-enumerates-spellings-not-the-class). The predicate is "is this ref the
+  # remote's default", ASKED — and it is asked twice, of two independent resolvers, because either
+  # can be blind: the remote may be unreachable, and a local checkout may have no
+  # refs/remotes/<remote>/HEAD. Only when BOTH are blind does the guard abstain, and abstaining is
+  # correct there: an undeclared session is unobservable, which is strictly worse than an
+  # unverified branch choice — the same trade-off the baseline probe below already makes.
+  local _def=""
+  _def="$(git ${repo:+-C "$repo"} ls-remote --symref "$remote" HEAD 2>/dev/null \
+          | sed -n 's#^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$#\1#p' | head -1)"
+  [ -z "$_def" ] && _def="$(git ${repo:+-C "$repo"} symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null | sed "s#^$remote/##")"
+  if [ -n "$_def" ] && [ "$branch" = "$_def" ]; then
+    echo "cc-cloud declare: REFUSED — '$branch' is the default branch of remote '$remote'." >&2
+    echo "  A session declared against trunk cannot be told apart from its siblings: every other" >&2
+    echo "  session's push to that branch reads as THIS session's heartbeat, so the observer" >&2
+    echo "  reports a false state=ALIVE (measured 2026-08-08, backlog 55065a61b31c)." >&2
+    echo "  Declare against the per-session branch this fire will actually push (e.g. claude/<id>)." >&2
+    return 2
+  fi
+
   mkdir -p "$STATE" || return 1
 
   # BASELINE (migrated from cc-cloud-watch `record`). Probe the remote ONCE, now, so that "the
