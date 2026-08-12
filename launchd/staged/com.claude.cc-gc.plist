@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SSOT for com.claude.cc-gc — the GC franchise sweep. STAGED, NOT LOADED: standing activation
+     of a DELETING job is a class-C operator decision (C10).
+
+     THIS IS THE ONE JOB TO LOAD. cc-gc drives every store, delegating to each store's own reaper
+     (scratchpad-reaper, worktree-gc) rather than duplicating it. com.claude.scratchpad-reaper.plist
+     is that store's own SSOT and remains valid standalone, but loading BOTH just double-drives the
+     same store — pick this one.
+
+     Activation is docs/activation/pending-activation/40-cc-gc-activate.sh, which also closes the
+     K26 deploy-symlink gap for the three new scripts (a landed file that was never symlinked into
+     ~/.claude/scripts is inert, which is root cause 1 of the audit this job answers).
+
+     Horizons live in the script, not here: mailbox 7 d (fully-acked) / 30 d (stranded, archived
+     not deleted), watchdog 2 d behind an identity pin, scratchpad 48 h, worktrees 30 min idle +
+     landed-by-patch-equivalence. Every one is liveness-gated first. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.cc-gc</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/cc-gc.sh --apply</string>
+  </array>
+  <key>StartInterval</key>    <integer>21600</integer>
+  <key>RunAtLoad</key>        <false/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>LowPriorityIO</key>    <true/>
+  <key>Nice</key>             <integer>10</integer>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/cc-gc.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/cc-gc.err.log</string>
+</dict>
+</plist>

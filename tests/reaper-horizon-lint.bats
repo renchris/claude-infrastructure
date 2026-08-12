@@ -33,9 +33,17 @@ setup() {
   # runs reads the fixture tree and nothing of the live repo.
   LINT="$FIX/scripts/reaper-horizon-lint.sh"
   cp "$REPO/scripts/reaper-horizon-lint.sh" "$LINT"
-  # Stubs carrying each anchored symbol AS CODE. Only the four files item 74a0896ee989 re-verified
-  # are anchored, so only those four need to exist; the rest of $DECLARED is absent by design and
-  # the scorers correctly find nothing to bound in it.
+  # Stubs carrying each anchored symbol AS CODE. Only ANCHORED files need to exist; the rest of
+  # $DECLARED is absent by design and the scorers correctly find nothing to bound in it.
+  #
+  # ⚠️ THIS SET IS COUPLED TO THE GATE'S @anchor BLOCK, and the coupling is invisible from the other
+  # side. Adding an `# @anchor <file> <ERE>` to reaper-horizon-lint.sh WITHOUT adding a stub here
+  # makes §5 report "names a file that no longer exists", which reds THREE tests in this suite
+  # (baseline, the L2 control, and the L4 relative-path control) — a correct anchor red-proved by a
+  # harness gap rather than by its subject. That is exactly what happened when scripts/cc-gc.sh was
+  # anchored on 2026-08-12 (backlog 6cab0ab3cb2f): all four of its anchors resolved against the live
+  # tree, the gate's own output said so, and the suite failed anyway, because THE FIXTURE IS NOT THE
+  # TREE. If you anchor a new file, stub it below in the same commit.
   printf '%s\n' 'find "$D" \( -name "*.pending" \) -mtime +7 -delete' 'rm -f "$PENDING"' \
     > "$FIX/hooks/dispatch-assert.sh"
   printf '%s\n' 'STALE_MARKER_MAX_AGE_S="${DESK_INVARIANT_MARKER_MAX_AGE_S:-604800}"' \
@@ -43,6 +51,14 @@ setup() {
   printf '%s\n' 'REWORDED="$(mktemp)"' 'rm -f "$REWORDED"' > "$FIX/bin/cc-recover-safeguard"
   printf '%s\n' 'gc_teardown_marker() { :; }' 'rm -f "$W/$sid.daemon"' \
     > "$FIX/hooks/lead-crash-watchdog.sh"
+  # cc-gc's four anchors: the 30 d strand horizon, the archive-instead-of-delete site that makes
+  # unacked mail evidence rather than litter, the identity-pinned watchdog age, and the dry-run
+  # default that keeps a scheduled run harmless without --apply.
+  printf '%s\n' 'MBX_STRAND_DAYS="${CC_GC_MBX_STRAND_DAYS:-30}"' \
+    'WD_AGE_S="${CC_GC_WATCHDOG_AGE_S:-172800}"' \
+    'APPLY=0' \
+    'mv -f "$MBX_DIR/$key.md" "$MBX_DIR/archive/$key.md"' \
+    'rm -f "$WD_DIR/$sid.pid"' > "$FIX/scripts/cc-gc.sh"
 }
 
 # ── the baseline every red below is measured against ───────────────────────────────────────────

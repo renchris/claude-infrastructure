@@ -22,7 +22,7 @@ setup() {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
-  # ⚠️ EVERY dir the sweep can DELETE from must be redirected here. The sweep age-reaps six event
+  # ⚠️ EVERY dir the sweep can delete files from must be redirected here. The sweep age-reaps six event
   # dirs; any one left unexported falls back to its $HOME default and the suite becomes a reaper
   # against LIVE state. (It did: an unexported CC_TEARDOWN_RECORDS_DIR let a test run delete 6 real
   # ~/.claude/cc-teardown records, 2026-07-25. A destructive default is the harness's bug.)
