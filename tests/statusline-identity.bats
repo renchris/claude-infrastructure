@@ -328,7 +328,7 @@ render() { # <payload-producer> <dir> [VAR=VAL ...]
 # payloads whose percentages ALSO differ (47 vs 78), so on the raw head it passes on the
 # PERCENTAGE alone and stops testing the account identity it exists to test.
 #
-# Mutation-measured 2026-08-11, blanking NNAME so both chips render `()`:
+# Mutation-measured 2026-08-11, blanking the ordinal so both chips render `()`:
 #     marker_of   m3=[() 47% ]  m1=[() 78% ]   ->  m3 != m1 PASSES — blind to the mutant
 #     chip_of     m3=[()]       m1=[()]        ->  m3 != m1 RED    — catches it
 # Scope of that claim, stated exactly: the CASE still reddens under marker_of, but via the
@@ -337,10 +337,10 @@ render() { # <payload-producer> <dir> [VAR=VAL ...]
 # happens to fail — the kind that survives a green suite the moment the neighbour changes.
 marker_of() { printf '%s' "${1%%"$2"*}"; }                       # <line> <dir> — chip + context %
 chip_of()   { local m; m=$(marker_of "$1" "$2")                  # the instance marker alone
-              m="${m% [0-9]*% }"                                 # chip present: "(next3) 47% "
-              m="${m#[0-9]*% }"                                  # chip absent:  "47% "
+              m="${m% [0-9]*% · }"                               # chip present: "(3) 47% · "
+              m="${m#[0-9]*% · }"                                # chip absent:  "47% · "
               printf '%s' "$m"; }
-pct_of()    { local m; m=$(marker_of "$1" "$2"); m="${m% }"; printf '%s' "${m##* }"; }
+pct_of()    { local m; m=$(marker_of "$1" "$2"); m="${m% · }"; printf '%s' "${m##* }"; }
 body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
 
 @test "live: dir, short commit, feature branch and the DIRTY marker all render" {
@@ -483,27 +483,33 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   [ "$kitty" = "$base" ]
 }
 
-@test "live: the instance marker names the ACCOUNT, and the ordinal path survives for the unnamed" {
+@test "live: the instance marker is the ORDINAL, on the config-dir map and the override alike" {
   mk_repo "$WORK/live-name" some-branch
-  # W2.5 — `(3)` required holding `.claude-tertiary → 3 → next3` in your head to answer a question
-  # the line was already answering. The name is the identity the whole toolchain uses
-  # (accounts.json, /accounts, cc-route, the assignment ledger), so the statusline now prints it.
-  # This is the ONE literal-content assertion in this suite, and it is deliberate: the marker's
-  # DESIGN stays differential above, but "which account am I on" is content, not decoration —
-  # a redesign is free to change the frame, never to stop answering the question.
+  # REVERSED from W2.5 (operator ruling 2026-08-11, "change it back to N"). W2.5 had made this
+  # case assert the account NAME — `(next3)` — on the argument that an ordinal makes you hold
+  # `.claude-tertiary → 3 → next3` in your head. The operator reversed it on sight: the mapping
+  # is one they know cold, and `(next3)` spends 5 more columns than `(3)` on every render.
+  #
+  # This is the ONE literal-content assertion in this suite, and it stays deliberate through the
+  # reversal: the marker's DESIGN is differential above, but WHICH instance it identifies is
+  # content, not decoration. A future redesign is free to change the frame, never to stop
+  # answering the question — and both directions of this preference are now on record, so the
+  # name is not re-proposed as if it had never been tried.
+  #
+  # $render pins TERM_PROGRAM=not-iterm, so the chip is the ASCII ring, not the circled glyph.
   local m3 m1
-  m3=$(chip_of "$(render payload_full   "$WORK/live-name")" live-name)   # .claude-tertiary
-  m1=$(chip_of "$(render payload_legacy "$WORK/live-name")" live-name)   # .claude-next
-  [[ "$m3" == *next3* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
-  [[ "$m1" == *next* ]]  || { printf 'marker: %s\n' "$m1" >&2; false; }
-  # the ordinal is DROPPED, not carried alongside — `next3` already contains its own 3, and the
-  # column budget on a status line is the scarce resource (R6 §4 rank 1 risk note)
-  [[ "$m3" != *"(3)"* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
-  # ...and an instance with NO name still renders: route 1 is naming-independent by contract, so
-  # dropping its ordinal rendering would have deleted the escape hatch instead of labelling it.
+  m3=$(chip_of "$(render payload_full   "$WORK/live-name")" live-name)   # .claude-tertiary → 3
+  m1=$(chip_of "$(render payload_legacy "$WORK/live-name")" live-name)   # .claude-next     → 1
+  [[ "$m3" == *"(3)"* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
+  [[ "$m1" == *"(1)"* ]] || { printf 'marker: %s\n' "$m1" >&2; false; }
+  # the NAME is not carried alongside the ordinal — that is the whole content of the reversal,
+  # and without this the case passes on a chip that renders BOTH
+  [[ "$m3" != *next* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
+  # route 1 stays naming-independent by contract and renders its own number
   local mov
-  mov=$(marker_of "$(render payload_full "$WORK/live-name" CLAUDE_INSTANCE_N=7)" live-name)
+  mov=$(chip_of "$(render payload_full "$WORK/live-name" CLAUDE_INSTANCE_N=7)" live-name)
   [ -n "$mov" ]
+  [[ "$mov" == *"(7)"* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
   [[ "$mov" != *next* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
 }
 
