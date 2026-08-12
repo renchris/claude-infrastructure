@@ -9,6 +9,11 @@
 # Malformed lines are reported, never silently dropped.
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
   # past its bar, so an unpinned suite goes RED purely because the box is busy — the corpus deciding a

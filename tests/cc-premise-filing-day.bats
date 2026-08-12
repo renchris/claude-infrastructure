@@ -33,6 +33,11 @@
 #     && CC_PREMISE_UNDER_TEST=/tmp/old-premise bats tests/cc-premise-filing-day.bats
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # The SUBJECT is overridable for the RED-PROOF replay above and defaults to this worktree's copy,
   # so the green run and the red run execute one identical suite rather than two hand-kept variants

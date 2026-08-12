@@ -11,6 +11,11 @@
 #   · IDL B-3: one {fired|abstained} line per hook invocation
 
 setup() {
+  # Project labels in this suite are FIXTURES, not projects — and `cc-backlog add` now WARNS on an
+  # explicit --project outside the dispatch set (df2b6a40a5dc), which bats folds into $output. Off
+  # here because dispatchability is not this suite's subject; tests/cc-backlog-project-dispatch.bats
+  # owns it, unfixtured, in both directions.
+  export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/operator-readout.sh"
   DECIDE="$REPO/bin/cc-decide"
