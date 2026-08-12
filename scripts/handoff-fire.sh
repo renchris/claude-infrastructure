@@ -580,6 +580,14 @@ _fire_gate_of() { # $1=refusal reason → gate name
     # and an admit ratio over a mixed population answers no question anyone asked.
     cloud-*)           printf cloud    ;;
     payload-*)         printf payload  ;;
+    # `extra-bang` — an ARGV-surface refusal (an unescaped `!` in --extra), not a payload one, and it
+    # had been falling into the fail-visible `*)` arm below since it was added: gate:"extra-bang",
+    # which is in no denominator any query groups by. Found by tests/handoff-fire-capacity-gate.bats
+    # case 31's ENUM half on 2026-08-12 while §W3 was landing; it is that guard's first catch, and it
+    # is fixed here rather than left because the guard was already RED on trunk over it, which makes
+    # every OTHER unmapped reason invisible behind it. Own gate name, for _fire_gate_of's own reason:
+    # an argv refusal never measured the box or the payload, so it belongs in neither population.
+    extra-*)           printf argv     ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
 }
@@ -3975,6 +3983,123 @@ if [ -n "$_CC_CA" ]; then
   . "$_CC_CA" 2>/dev/null || _CC_CA=""
 fi
 
+# ── THE OPERATOR'S OWN BOUND (§W3 item 2, 2026-08-12) ────────────────────────────────────────────
+# This gate was the ONLY unbounded affirmative-permission gate on an actuation path in the tree, and
+# that was measured as the defect the operator actually feels: unattended callers
+# (scripts/lib/capacity-admit.sh) were budget-released after N consecutive refusals, the Agent tool's
+# load term was off entirely, and the human's `/handoff` could be refused FOREVER — because a load
+# ceiling breached for structural reasons cannot self-clear (§12.2: 2.16/core with 13 sessions, 24 GB
+# free, 0 B compressor; iTerm2 + WindowServer + XProtect are ~2.4 UNSHEDDABLE cores, so refusing
+# spawns does not lower the number this gate reads). The gate protecting the box outbid its owner.
+#
+# THE ASYMMETRY IS RESOLVED IN THIS DIRECTION — the operator's path GAINS the release; autonomy keeps
+# its own. The other direction (take autonomy's release away) re-commits exactly the architecture
+# §8.5.2's retraction and §12.2's measurement refuted: a permanent refusal on an unattended recovery
+# path is an outage, not a safeguard. §9's narrowed law binds BOTH — "no gate on an actuation path may
+# be unbounded" — and this gate simply never satisfied it.
+#
+# THE BUDGET IS SMALLER HERE ON PURPOSE (default 1 vs capacity-admit's 3), and that is what keeps this
+# from becoming "the gate is off": a human is at the keyboard. One refusal delivers the whole message —
+# the numbers, what to shed, the override — and a SECOND refusal of the same fire adds no information
+# and is purely an obstacle. Autonomy gets 3 because nobody reads its refusals in the moment.
+#
+# The counter is cc_hw_budget_charge, the SHARED bound (scripts/lib/capacity-admit.sh § THE BOUND), so
+# the arithmetic cannot drift between the two gates. State lives under this gate's OWN dir and the
+# rows stay in handoffs.jsonl: shared mechanism, separate policy, separate telemetry — the same split
+# the CC_FIRE_* / CC_ADMIT_* namespaces already keep, for the same stub-redirection reason.
+# Env: CC_FIRE_ADMIT_BUDGET(1) · CC_FIRE_ADMIT_STATE_DIR
+_cc_fire_budget_file() { # $1=term → state path, or empty when it cannot be keyed
+  local dir="${CC_FIRE_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-fire}"
+  case "${1:-}" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '%s/%s.refusals' "$dir" "$1"
+}
+
+# The bound is on CONSECUTIVE refusals. Every admit clears both terms' counters, so refusals spread
+# across hours can never accumulate into a release — that would be a bound on a box that was never
+# saturated. Mirrors capacity-admit's `_cc_admit_reset` exactly.
+_cc_fire_page() { # $1=text — never fatal, never blocking; an unreachable notifier is not a refusal
+  local n="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-notify"
+  [ -x "$n" ] || n="$HOME/.claude/bin/cc-notify"
+  [ -x "$n" ] || return 0
+  "$n" --page "$1" >/dev/null 2>&1 || true
+  return 0
+}
+
+_cc_fire_budget_reset() {
+  local t f
+  for t in load headroom; do
+    f="$(_cc_fire_budget_file "$t")"
+    [ -n "$f" ] && : > "$f" 2>/dev/null
+  done
+  return 0
+}
+
+# ── THE PRESENCE CONSULT AT THIS SPAWN SITE (§W3 item 1) ─────────────────────────────────────────
+# This gate does NOT apply a reserve — the operator IS the reservee, and the whole point of the
+# reserve is that these slots are theirs. What it does is RECORD the reading, and that is not
+# bookkeeping: the DoD for this wave is "with the operator active, unattended spawns yield", and the
+# only way to check that claim after the fact is for BOTH sides of the decision to have written down
+# what the beat said at the moment they decided. Without this, the ledger holds autonomy's refusals
+# with `presence:"present"` and the operator's admits with nothing to compare them to.
+# Absent library / unreadable beat ⇒ the empty string, and the row simply omits the field.
+_cc_fire_presence() { # → present | absent | unknown | self | "" (unavailable)
+  local d
+  command -v cc_sp_operator_state >/dev/null 2>&1 || {
+    for d in "$(dirname "$_CC_KS")/lib/spawn-presence.sh" \
+             "$(dirname "$0")/lib/spawn-presence.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/spawn-presence.sh" \
+             "${HOME:-}/.claude/scripts/lib/spawn-presence.sh"; do
+      if [ -f "$d" ]; then
+        # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+        . "$d" 2>/dev/null || true
+        command -v cc_sp_operator_state >/dev/null 2>&1 && break
+      fi
+    done
+  }
+  command -v cc_sp_operator_state >/dev/null 2>&1 || { printf ''; return 0; }
+  cc_sp_operator_state "${CLAUDE_SESSION_ID:-}" 2>/dev/null || printf ''
+}
+
+# Returns 0 when the caller must ADMIT (the bound released, or it could not be tracked), 9 to refuse.
+# A RELEASE is an EVENT: it pages and it records basis `budget-expired`, so an admit into a saturated
+# box is never silent — that is the whole difference between a bound and a disabled gate.
+_cc_fire_bound() { # $1=term $2=detail → 0 = release+admit · 9 = refuse
+  local term="$1" detail="$2" sf budget rc n
+  budget="${CC_FIRE_ADMIT_BUDGET:-1}"
+  sf="$(_cc_fire_budget_file "$term")"
+  if ! command -v cc_hw_budget_charge >/dev/null 2>&1; then
+    # The shared bound is unreachable (absent library). An UNTRACKED bound is an UNBOUNDED gate, and
+    # this is the path §W3 exists to stop being unbounded — so admit, loudly, and say which.
+    echo "!! capacity gate: the refusal bound is UNREACHABLE (capacity-admit.sh absent) — ADMITTING rather than refusing indefinitely." >&2
+    emit_gate_admit capacity budget-untrackable "bound unreachable (cc_hw_budget_charge absent) — ${detail}"
+    return 0
+  fi
+  cc_hw_budget_charge "$sf" "$budget"; rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "!! capacity gate: the refusal bound cannot be tracked (state '${sf:-unset}', budget '$budget') — ADMITTING." >&2
+    emit_gate_admit capacity budget-untrackable "bound untrackable (state '${sf:-unset}', budget '$budget') — ${detail}"
+    return 0
+  fi
+  if [ "$rc" -eq 10 ]; then
+    echo "!! capacity gate: budget spent — this fire is ADMITTED into a saturated box after ${budget} consecutive refusal(s)." >&2
+    echo "   ${detail}" >&2
+    echo "   Shed load (close finished panes) — the box is over, and the next fire starts a fresh budget." >&2
+    # THE PAGE COMES FIRST AND THE RECORD LAST, deliberately: tests/handoff-fire-capacity-gate.bats
+    # case 31 scans this function for a `return 0` whose PRECEDING line is the emit, which is what
+    # makes "no silent admit" checkable by a lint rather than by reading. A side effect wedged between
+    # the record and the return is how that adjacency quietly stops holding — so the side effect goes
+    # above it, and the emit is always the last statement before the return.
+    _cc_fire_page "⚠️ capacity gate: the OPERATOR's fire spent its ${budget}-refusal budget and is ADMITTING into a saturated box — ${detail}. Shed load or raise the bar."
+    emit_gate_admit capacity budget-expired \
+      "${term} term over after ${budget} consecutive refusal(s) — admitting and paging: ${detail}"
+    return 0
+  fi
+  n="${CC_HW_BUDGET_N:-1}"
+  echo "   (refusal ${n} of ${budget} — the next fire past the budget ADMITS and pages, so this can never stand forever.)" >&2
+  return 9
+}
+
 capacity_gate() {
   # EVERY `return 0` below is preceded by an emit_gate_admit — the admit record cannot acquire a
   # silent branch, and the ADMIT-COVERAGE test in tests/handoff-fire-capacity-gate.bats greps this
@@ -4067,6 +4192,10 @@ capacity_gate() {
     return 0
   fi
   local ncpu load ceiling verdict lpc floor head_gb sysctl_bin
+  # ONE presence reading for this whole evaluation (§W3 item 1) — taken before any term, so the
+  # refusal and the admit can never record two different worlds for one decision.
+  CC_FIRE_PRESENCE="$(_cc_fire_presence)"
+  if [ -n "$CC_FIRE_PRESENCE" ]; then CC_FIRE_PRES_NOTE=" · operator ${CC_FIRE_PRESENCE}"; else CC_FIRE_PRES_NOTE=""; fi
   # The resolver, both probes, both verdicts and both default numbers are the SHARED TERMS — see
   # the header above. Everything this function does with them is its own.
   sysctl_bin="$(cc_hw_resolve_sysctl "${CC_FIRE_SYSCTL:-}")"
@@ -4107,10 +4236,17 @@ capacity_gate() {
     # F13 — leave a RECORD. This gate exits before spawn and so before emit_handoff_telemetry, which
     # made a load-blocked fleet indistinguishable from a quiet one in handoffs.jsonl. The admit/refuse
     # DECISION and the ceiling are row 13's surface and are untouched; only the legibility is row 2's.
-    emit_fire_refusal capacity "load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core"
-    return 9
+    emit_fire_refusal capacity "load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core${CC_FIRE_PRES_NOTE}"
+    # §W3 item 2 — the refusal is BOUNDED from here on. _cc_fire_bound returns 0 only when the budget
+    # is spent (or untrackable), in which case it has already recorded the admit and paged.
+    _cc_fire_bound load "load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core${CC_FIRE_PRES_NOTE}" || return 9
+    return 0
   fi
   echo "-- capacity gate: ADMIT — load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)" >&2
+  # Any admit resets both counters: the bound is on CONSECUTIVE refusals, not lifetime ones, exactly
+  # as capacity-admit's `_cc_admit_reset` does. Without this a box that alternated over/under the
+  # ceiling would eventually release on refusals spread across hours, which is not a saturation event.
+  _cc_fire_budget_reset
 
   # ---- M10: memory-headroom term. Runs ONLY once the load term above has admitted, so the load
   # refusal keeps its reason and its numbers; this term can only ever narrow admission further.
@@ -4143,16 +4279,18 @@ capacity_gate() {
     echo "   free+speculative+inactive+purgeable is what a new session can take WITHOUT swapping; below the floor it swaps." >&2
     echo "   Shed memory first (quit finished sessions — unlike load, a session's footprint IS reclaimable), then re-fire." >&2
     echo "   Override for one fire: CC_FIRE_HEADROOM_GATE=off ; lower the bar: CC_FIRE_MIN_HEADROOM_GB=<n>" >&2
-    emit_fire_refusal headroom "reclaimable ${head_gb}GB < floor ${floor}GB"
-    return 9
+    emit_fire_refusal headroom "reclaimable ${head_gb}GB < floor ${floor}GB${CC_FIRE_PRES_NOTE}"
+    _cc_fire_bound headroom "reclaimable ${head_gb}GB < floor ${floor}GB${CC_FIRE_PRES_NOTE}" || return 9
+    return 0
   fi
   echo "-- capacity gate: headroom ADMIT — reclaimable ${head_gb}GB (floor ${floor}GB)" >&2
+  _cc_fire_budget_reset
   # The only basis that means what a naive reader assumes "admit" means: BOTH terms read a live
   # instrument and both cleared. One row per gate evaluation, carrying both terms' numbers, so the
   # admit is as auditable as the refusal already was ("a refusal with no numbers is unauditable" —
   # and an admit with no numbers is worse, because nothing about it looks wrong).
   emit_gate_admit capacity measured \
-    "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)"
+    "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)${CC_FIRE_PRES_NOTE}"
   return 0
 }
 
