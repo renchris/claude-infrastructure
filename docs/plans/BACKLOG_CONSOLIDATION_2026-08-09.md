@@ -765,3 +765,39 @@ correctly deferring work. Separator is now `\037`; cases 28/29 pin both halves.
 **Not live yet, and not this wave's to fix:** `deploy-live` refuses (no GREEN tree descends from live
 HEAD `32355a9b1`, lag 25/2h inside the 25/6h budget), so `~/.claude/bin/cc-dispatch` still runs the
 old bytes. Fleet-wide converger state, already filed ~17×; no duplicate row was created.
+
+## W3 — LANDED 2026-08-11 (`8f1726cfb`) · R6's premise was FALSE, and folding on it would have joined nine unrelated efforts
+
+**R6 as written in § READINESS is wrong, and the error is mine.** It says rows differing only by an
+embedded sha/digit fold "with NO judgment required", and points at
+`scripts/backlog-consolidation-trigger.sh`'s existing normalisation as the thing that identifies
+them. **It does not.** That key substitutes `[0-9a-f]{7,40}` → `<sha>`, which **erases the
+discriminator precisely when the sha IS the subject**. Measured on the live ledger: the trigger's
+largest cluster — 14 rows, reported as "one effort wearing N rows" — is **nine different stranded
+worktrees**, each needing its own re-land. Folding it would have joined eight unrelated pieces of
+work under one condition and, because `link` feeds the claim guard, **REFUSED dispatch on all of
+them**. The mechanism I proposed would have created the failure I asked the wave to prevent.
+
+🚨 **The generalisable rule, and it is the wave's best sentence: a key that is sound for COUNTING a
+shape is not thereby safe for ACTING on it.** A detector may over-merge for free — it is only
+describing a pile. A writer that over-merges destroys the distinction it merged across. The two need
+separate keys even when they are looking at the same phenomenon, and this document assumed one.
+
+**The key that is safe to act on** masks digit RUNS while keeping letters, in two token spaces at
+once: the PROSE must be identical, AND the subject identifiers must be identical after masking
+digits inside them. A *measurement* varies only in digits; an *identity* carries letters that vary
+too — so `wt-7ff1b6f5ddbb` stays apart from `wt-4ce34a4f703c` (`#ff#b#f#ddbb` vs `#ce#a#f#c`) while
+two failed-land refs differing only in a timestamp collapse. Three floors, each paying for a defect
+the detector had already bought: ≥3 prose tokens, ≥1 identifier, ≥2 distinct raw titles.
+
+**Measured, not assumed: 18 groups / 46 live rows, every group exactly one worktree, ZERO
+cross-subject merges.**
+
+| | delivered |
+|---|---|
+| R6 · the actuator | `--fold [--apply]`, **dry-run by default**, non-destructive: one `link` record per row, no status arm, so no row is rewritten or closed and the id set is identical before and after — the run asserts that itself and prints `conservation=ok/unknown/FAILED`. Absorption is traceability, not closure. |
+| R6 · escalation | `--file` now escalates only the **residue** — a cluster reaches a human only when ≥2 members are unanswered. Live: **1 filed row instead of 2 clusters described**; the 6-row cluster folds without asking anyone. |
+| R7 · the brake | `cc-backlog needs` re-files a step already live onto **that** row and echoes its id. **172 live needs rows, 46 recurrences in 18 groups = 28 rows that would not exist.** |
+
+All 46 recurrences are `source:"needs"` — so R7's population and R6's turned out to be the same one,
+which neither the plan nor the briefs anticipated.
