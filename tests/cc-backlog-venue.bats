@@ -85,7 +85,12 @@ setup() {
 add_and_claim() {
   local src="$1" who="$2"; shift 2
   local id; id="$("$CB" add --title "venue probe $src" --project probe --source "$src")"
-  CC_BACKLOG_ELIGIBLE_GATE=off "$CB" claim "$id" --by "$who" "$@" >/dev/null
+  # Loud on failure: `printf` below returns 0, so an unchecked claim here made a refusal invisible
+  # and each caller failed later, on an assertion about something else entirely — which is exactly
+  # how the OFF-BOX LANE collision above cost five tests' worth of misdirected debugging before
+  # anyone looked two lines up. The pin stops that collision; this stops the NEXT one being silent.
+  CC_BACKLOG_ELIGIBLE_GATE=off "$CB" claim "$id" --by "$who" "$@" >/dev/null \
+    || { echo "add_and_claim: claim refused for $id ($src, $who $*)" >&2; return 1; }
   printf '%s' "$id"
 }
 
