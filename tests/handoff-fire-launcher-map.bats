@@ -106,13 +106,24 @@ fire() {
 }
 
 # ── 1-2: an EXPLICIT account composes its launch line from accounts.json ─────────────────────────
+#
+# WHY THE LAUNCHER ASSERTIONS BELOW ARE ANCHORED, NOT LITERAL. They used to read
+# `grep -q "nocorrect ax "`, i.e. the launcher must sit IMMEDIATELY after `nocorrect`. 088875158
+# (2026-08-11, "pin the account with an env prefix, not a launcher NAME") made handoff-fire's
+# PREFIX unconditional, so every composed line is now `nocorrect CC_ACCOUNT_PINNED=1 ax …` and
+# three of these tests went red on every machine — 2 of the 5 hermetic runs that named this suite.
+# The negative control at :129 failed WORSE than the positive ones: `nocorrect claude ` cannot
+# match the composed form either, so it passed vacuously and would have gone on passing over a
+# tree that really did compose `claude`. The regex now skips any run of `VAR=value ` between
+# `nocorrect` and the launcher, so the assertions survive the next prefix change instead of one
+# side dying loudly and the other silently.
 
 @test "1 --account uses the launcher accounts.json declares, not \`claude\`+digit" {
   CC_ACCOUNT_MAP="$(genmap next:ccx next3:cc-three)"; export CC_ACCOUNT_MAP
   fire --account next3
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "^launcher: cc-three$" || false
-  echo "$output" | grep -q "nocorrect cc-three " || false
+  echo "$output" | grep -qE "nocorrect ([A-Za-z_][A-Za-z0-9_]*=[^ ]+ )*cc-three " || false
   # the control: `claude` + the trailing digit of next3 is what the composed form produced here,
   # and it must appear NOWHERE — not in the readout, not in the command that would be spawned.
   ! echo "$output" | grep -q "claude3" || false
@@ -125,8 +136,8 @@ fire() {
   fire --account next
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "^launcher: ax$" || false
-  echo "$output" | grep -q "nocorrect ax " || false
-  ! echo "$output" | grep -q "nocorrect claude " || false
+  echo "$output" | grep -qE "nocorrect ([A-Za-z_][A-Za-z0-9_]*=[^ ]+ )*ax " || false
+  ! echo "$output" | grep -qE "nocorrect ([A-Za-z_][A-Za-z0-9_]*=[^ ]+ )*claude " || false
 }
 
 # ── 3-4: the map function itself, and what happens when it is missing ────────────────────────────
@@ -177,7 +188,7 @@ STALE
   fire --account auto
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "^launcher: ax$" || false
-  echo "$output" | grep -q "nocorrect ax " || false
+  echo "$output" | grep -qE "nocorrect ([A-Za-z_][A-Za-z0-9_]*=[^ ]+ )*ax " || false
 }
 
 # ── 7: the committed artifact is what the committed accounts.json produces ───────────────────────
