@@ -1215,16 +1215,19 @@ load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, senso
   max="${CC_GATE_MAX_LOAD:-}"
   if [ -z "$max" ]; then
     percore="${CC_GATE_MAX_LOAD_PER_CORE:-8}"
-    # These two `case`s are written MULTI-LINE on purpose, and it is not style. permission-gate-lint
-    # tracks an if/case block stack to decide which condition ENCLOSES a refusal, and it pushes on a
-    # line-initial `case` (its line 253) without the trailing-`esac` check it applies to a one-line
-    # `if … fi` (247-248). A single-line `case … esac` therefore pushes and never pops, and the leak
-    # shifts the MAXENC window for refusals far LATER in the file: two one-liners here made
-    # run_corpus()'s `no suites matched` guard (line ~890) read as a newly-added unbounded gate,
-    # 17 → 18 against the ratchet, in a function this change never touched. Multi-line pops
-    # correctly. The lint defect is real and filed separately — it is position-dependent, so
-    # injecting a one-liner at TOP LEVEL does NOT reproduce it (that probe reads clean and looks
-    # like a refutation). Do not collapse these back onto one line to "tidy" them.
+    # These two `case`s were written MULTI-LINE to work around a permission-gate-lint defect, and the
+    # DEFECT IS NOW FIXED (2026-08-12, backlog 3709b1649792) — so the constraint is retired and this
+    # note is history, kept because the scar explains a real land-block. The lint tracks an if/case
+    # block stack to decide which condition ENCLOSES a refusal, and it used to push on a line-initial
+    # `case` without the trailing-`esac` check it already applied to a one-line `if … fi`. A
+    # single-line `case … esac` therefore pushed and never popped, and the leak shifted the MAXENC
+    # window for refusals far LATER in the file: two one-liners here made the `no suites matched`
+    # guard of run_corpus() (line ~890) read as a newly-added unbounded gate, 17 → 18 against the
+    # ratchet, in a function this change never touched. It was position-dependent — injecting a
+    # one-liner at TOP LEVEL did NOT reproduce it, so the obvious probe read clean and looked like a
+    # refutation. permission-gate-lint.sh now skips the push on a trailing `esac`, and
+    # tests/permission-gate-lint.bats case 25 holds it there by mutation. Either spelling is safe;
+    # multi-line is kept here only because these two are already written that way.
     case "$percore" in
       ''|*[!0-9.]*) percore=8 ;;                               # non-numeric factor ⇒ the default
     esac

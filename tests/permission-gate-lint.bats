@@ -17,7 +17,7 @@
 # no gate on an actuation path may be UNBOUNDED, and every affirmative-permission predicate must
 # carry a finite budget whose expiry converts the standing state into an EVENT.
 #
-# Five properties are proved here, and all five matter:
+# Six properties are proved here, and all six matter:
 #   • it DISCRIMINATES ON DECLAREDNESS — the two controls are the REAL artifact either side of the
 #     REAL fix, and they share a predicate, a `die` and a message. Only the declaration differs. A
 #     control that hand-approximates the artifact passes vacuously
@@ -31,7 +31,12 @@
 #   • it is GREEN on the tree as it stands — a lint that ships standing-red is rot, and the nightly
 #     runs every scripts/*lint*.sh, so a false red here poisons the whole nightly signal;
 #   • it is WIRED AT THE CHOKEPOINT — enforcement by its own suite alone is detection, not a gate
-#     (memory: enforcement-must-live-at-the-chokepoint), so run_gate must invoke it.
+#     (memory: enforcement-must-live-at-the-chokepoint), so run_gate must invoke it;
+#   • the COUNT TRACKS THE GATE, NEVER THE SPELLING (cases 25-26). A one-line `case … esac` used to
+#     leak a block-stack frame, stranding an unrelated enclosing `if` open for the rest of the file
+#     and mis-attributing a later refusal to a function nobody touched — 17 -> 18 against the
+#     ratchet, blocking a land, with the multi-line spelling of the same code reading 17. A ratchet
+#     whose number moves when you reformat is a ratchet nobody can act on.
 #
 # Assertions use the explicit `|| { …; false; }` form throughout: a non-final `[[ ]]` is
 # errexit-EXEMPT under bats and would be a DEAD assertion that can never fail
@@ -510,4 +515,66 @@ fi'
   run_leg "$BATS_TEST_TMPDIR/rec.sh" >/dev/null
   grep -q 'OWN=\[scripts/deploy-live.sh\]' "$log" \
     || { echo "the leg did not pass the land's own actuation file as the own-set: $(cat "$log")"; false; }
+}
+
+@test "25: a ONE-LINE \`case … esac\` does not leak a block-stack frame — MUTATION-KILLED" {
+  # THE DEFECT, replayed from the 2026-08-08 measurement (backlog 3709b1649792). The detector pushed
+  # a one-line `case … esac` onto its block stack without the trailing-closer test the one-line
+  # `if … fi` form already had, so the frame never popped: the `fi` below it popped the PHANTOM case
+  # frame and left the real enclosing `if` open for the rest of the file. That stranded NEGATED
+  # condition then sat inside the MAXENC window of a later, unrelated refusal and mis-attributed a
+  # gate to a function the author never touched — ship-land.sh read 17 -> 18 against the ratchet and
+  # BLOCKED A LAND, while spelling the same two lines multi-line returned it to 17 with identical
+  # runtime behaviour. A count that tracks the SPELLING is the one thing a ratchet must never be.
+  #
+  # THE FIXTURE IS SHAPED THE WAY IT IS BECAUSE THE DEFECT IS POSITION-DEPENDENT — this is the trap
+  # that makes it read as already-fixed. A one-liner injected at TOP LEVEL moves the count by 0
+  # (measured at n=1, 2 and 3), because nothing later closes over the leaked frame. It reproduces
+  # only from INSIDE a block something else closes, ahead of a refusal further down, so the leak site
+  # here is inside one function and the victim is a DIFFERENT function below it.
+  mk oneliner scripts/deploy-x.sh 'load_above_ceiling() {
+  if [ ! -f "$CEILING" ]; then
+    case "${1:-}" in --strict) CEIL=1 ;; *) CEIL=0 ;; esac
+    case "$CEIL" in 1) MODE=strict ;; *) MODE=lax ;; esac
+    return 0
+  fi
+  MODE=pinned
+}
+
+run_corpus() {
+  if [ "$MATCHED" -eq 0 ]; then
+    echo "no suites matched" >&2
+    exit 1
+  fi
+}'
+  lint oneliner
+  [ "$status" -eq 0 ] || { echo "a one-line case leaked a frame and fabricated a gate: $output"; false; }
+
+  # MUTATION — without which the case above passes vacuously, since a fixture holding no real gate is
+  # green under any detector that simply finds nothing. The mutant deletes exactly ONE line, the new
+  # trailing-`esac` guard, restoring the pre-fix push. It must go RED on the same fixture.
+  mutant="$BATS_TEST_TMPDIR/mutant.sh"
+  awk 'index($0, "esac[[:space:]]*$/) continue") == 0' "$LINT" > "$mutant"
+  cmp -s "$LINT" "$mutant" && { echo "the mutation removed nothing — the guard line was not found"; false; }
+  run env CC_PERMGATE_RATCHET="" bash "$mutant" "$FIX/oneliner"
+  [ "$status" -eq 1 ] || { echo "the pre-fix detector did not fabricate a gate (rc $status) — case 25 is vacuous: $output"; false; }
+  printf '%s' "$output" | grep -q 'exit 1' \
+    || { echo "the mutant went red on something other than the mis-attributed refusal: $output"; false; }
+}
+
+@test "26: the one-line-case fix was re-measured across the WHOLE actuation set, not just one file" {
+  # The leak is latent wherever a one-liner sits inside a closed block, so the ratchet had to be
+  # re-measured everywhere and not only where it was first noticed. deploy-live.sh was the only file
+  # whose count moved (10 -> 9), and that is a claim this case KEEPS true: it re-runs the real tree
+  # against the real ratchet with the fix reverted, which must go RED. If a future edit re-measures
+  # the set correctly this stays green; if someone lowers a ratchet line to paper over the leak
+  # instead of fixing it, the mutant stops discriminating and this case says so.
+  mutant="$BATS_TEST_TMPDIR/mutant2.sh"
+  awk 'index($0, "esac[[:space:]]*$/) continue") == 0' "$LINT" > "$mutant"
+  # No ratchet override: the mutant carries the SAME re-measured EMBEDDED_RATCHET as the real lint,
+  # so the only thing under test is whether that measurement was taken with the fix in place.
+  run env -u CC_PERMGATE_OWN bash "$mutant" "$REPO"
+  [ "$status" -eq 1 ] || { echo "the pre-fix detector agreed with the re-measured ratchet (rc $status) — the ratchet was not re-measured, or the fix changes nothing: $output"; false; }
+  printf '%s' "$output" | grep -q 'deploy-live.sh' \
+    || { echo "the re-measured file was not the one that moved: $output"; false; }
 }

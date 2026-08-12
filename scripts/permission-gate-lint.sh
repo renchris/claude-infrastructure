@@ -109,6 +109,18 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # a bound (or deleting a gate), never by editing this number alone: the lint fails on a stale entry
 # exactly as it fails on a new gate.
 #
+# deploy-live.sh 10 -> 9 (2026-08-12, backlog 3709b1649792): the one-line-`case` block-stack leak
+# fixed in the detector above was FABRICATING one of these ten. deploy-live.sh:1595 — the `die` on
+# the ELSE leg of `if [ -x "$DEPLOY_REPO/install.sh" ]` — is reached from an AFFIRMATIVE test, and
+# the detector has no else-leg handling, so it was never a hit on the detector's own semantics: it
+# only became one because a leaked frame left an unrelated negated `if` open above it. The whole
+# actuation set was re-measured with the fix; deploy-live.sh is the ONLY file whose count moved,
+# even though 8 of the 12 scanned files carry one-line `case`s (deploy-live.sh 24, postland-verify.sh
+# 13, ship-land.sh 7, deploy-link-parity.sh 3, land-lock.sh 3, deploy-migrations.sh 5,
+# deploy-parity-assert.sh 2, deploy-now.sh 1) — the leak only bites when a later refusal falls inside
+# the window of the frame it stranded. Nothing was un-gated: the same nine refusals fire, and this is
+# the DOWNWARD half of the ratchet retiring an allowance that was never a real gate.
+#
 # ship-land.sh 17 -> 15 (2026-08-11, backlog 9ea31151dd94): the .bats shellcheck ratchet's two
 # legs were rewritten from `if ! "$LINT" ...; then ... gate_red` to the rc-capture form the
 # five sibling non-verdict arms already use (`"$LINT" ... || rc=$?` then `[[ $rc -eq 2 ]]`), so
@@ -119,7 +131,7 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # it the stale 17 would sit here as a permanent two-gate allowance nobody could account for.
 EMBEDDED_RATCHET="$(cat <<'RATCHET'
 install.sh 1
-scripts/deploy-live.sh 10
+scripts/deploy-live.sh 9
 scripts/deploy-parity-assert.sh 1
 scripts/desk-land.sh 7
 scripts/land-verify.sh 1
@@ -259,7 +271,21 @@ perm_gate_refusals() {  # <file> → "line:text" per undeclared guard-refusal; r
           cond[depth] = (s ~ /^[[:space:]]*(if|while|until)[[:space:]]/) ? s : ""
           continue
         }
-        if (s ~ /^[[:space:]]*case[[:space:]]/) { depth++; condln[depth] = i; cond[depth] = ""; continue }
+        # A ONE-LINE case opens and closes on the same line, exactly as the if/while/for form above,
+        # and pushing it leaks a frame that is never popped: the next `fi` pops the PHANTOM case
+        # frame and leaves the real enclosing `if` open for the rest of the file. Its condition then
+        # sits inside the MAXENC window of every later refusal — so a gate gets attributed to a
+        # function the author never touched. MEASURED 2026-08-08: two one-liners inside
+        # load_above_ceiling() flipped the "no suites matched" guard of run_corpus() into a new
+        # unbounded gate, 17 -> 18 against the ratchet, blocking a land — and the multi-line spelling
+        # of the SAME code returned it to 17. POSITION-DEPENDENT: injected at TOP LEVEL a one-liner
+        # moves the count by 0 (measured n=1,2,3) because nothing later closes over it, which reads
+        # as a clean refutation. The selftest case replays it from INSIDE a function that precedes
+        # another refusal, which is the only shape that reproduces.
+        if (s ~ /^[[:space:]]*case[[:space:]]/) {
+          if (s ~ /(^|;|[[:space:]])esac[[:space:]]*$/) continue     # one-liner: opens and closes
+          depth++; condln[depth] = i; cond[depth] = ""; continue
+        }
         if (s ~ /^[[:space:]]*elif[[:space:]]/ && depth > 0) { cond[depth] = s; condln[depth] = i; continue }
       }
     }
@@ -584,6 +610,38 @@ esac'
   return 0
 }'
 
+  # ── THE ONE-LINE `case`, which used to leak a block-stack frame and MIS-ATTRIBUTE a gate ────────
+  # Replayed from the 2026-08-08 measurement, not invented: a one-line `case … esac` was pushed onto
+  # the stack without the trailing-closer test the one-line `if … fi` form has, so it never popped.
+  # The `fi` below it popped the PHANTOM frame and left `if [ ! -f "$CEILING" ]` open for the rest of
+  # the file; its NEGATED condition then sat inside the MAXENC window of run_corpus()'s "no suites
+  # matched" refusal, which is not a permission gate at all, and the count went 17 -> 18 against the
+  # ratchet and blocked a land. Spelling the same two lines multi-line returned it to 17 with
+  # identical runtime behaviour — the count was tracking the SPELLING, which is the one thing a
+  # ratchet must never do.
+  #
+  # WHY THE FIXTURE IS SHAPED LIKE THIS AND NOT SIMPLER: the defect is POSITION-DEPENDENT. A
+  # one-liner injected at TOP LEVEL moves the count by 0 (measured at n=1, 2 and 3 one-liners),
+  # because nothing later closes over the leaked frame — so the obvious minimal fixture reads as a
+  # clean refutation of a real bug. It reproduces only from INSIDE a block that something else
+  # closes, ahead of a later refusal. Both halves are here: the leak site is inside a function, and
+  # the victim is a DIFFERENT function further down.
+  mk case_oneliner scripts/deploy-x.sh 'load_above_ceiling() {
+  if [ ! -f "$CEILING" ]; then
+    case "${1:-}" in --strict) CEIL=1 ;; *) CEIL=0 ;; esac
+    case "$CEIL" in 1) MODE=strict ;; *) MODE=lax ;; esac
+    return 0
+  fi
+  MODE=pinned
+}
+
+run_corpus() {
+  if [ "$MATCHED" -eq 0 ]; then
+    echo "no suites matched" >&2
+    exit 1
+  fi
+}'
+
   # ── jurisdiction: a file OUTSIDE the actuation set carries the shape and must not be scanned. It
   #    is placed beside a real actuation file so the case cannot pass merely by finding nothing.
   mkdir -p "$d/outside/scripts"
@@ -609,6 +667,7 @@ esac'
   green usage      "" "an unknown-arg usage error was counted as a permission gate"
   green depprobe   "" "a \`command -v\` dependency probe was counted as a permission gate"
   green predicate  "" "a boolean helper returning 1 was counted as a permission gate"
+  green case_oneliner "" "a ONE-LINE \`case … esac\` leaked a block-stack frame — the enclosing \`if\` it left open mis-attributed a later, unrelated refusal as a gate (the 17->18 land-blocker of 2026-08-08)"
   green outside    "" "a file OUTSIDE the actuation set was scanned"
 
   # ── THE VERDICT MUST NOT BE A FUNCTION OF THE CALLER'S CWD ─────────────────────────────────────
@@ -691,7 +750,7 @@ esac'
   ); expect 0 "$?" "an unrunnable detector under own-scope was treated as a verdict"
 
   if [ "$fails" -eq 0 ]; then
-    echo "permission-gate-lint --selftest: $checks/$checks — RED on the REAL pre-fix unbounded gate (0c393936, the 545-refusal scar), on a bare comment used as an exemption, on a \`gate_bounded:\` with no budget after it, on a count above AND below the ratchet, and on a ratchet line outside the actuation set; GREEN on the REAL fix (dcf2f11a) with its bound DECLARED — same predicate, same die — on a trailing marker, on exit 2, on usage errors, on dependency probes, on boolean helpers, on files outside the actuation set, and on the real tree with the real ratchet; LOUD on a missing root and on an empty actuation set; own-scope blocks INSIDE / advises OUTSIDE for both finding kinds across all three arity states; NON-VERDICT on an unrunnable detector (with and without an own-set), with no fabricated finding and no fabricated ratchet drift."
+    echo "permission-gate-lint --selftest: $checks/$checks — RED on the REAL pre-fix unbounded gate (0c393936, the 545-refusal scar), on a bare comment used as an exemption, on a \`gate_bounded:\` with no budget after it, on a count above AND below the ratchet, and on a ratchet line outside the actuation set; GREEN on the REAL fix (dcf2f11a) with its bound DECLARED — same predicate, same die — on a trailing marker, on exit 2, on usage errors, on dependency probes, on boolean helpers, on a ONE-LINE \`case … esac\` whose leaked block-stack frame used to mis-attribute a later unrelated refusal as a gate, on files outside the actuation set, and on the real tree with the real ratchet; LOUD on a missing root and on an empty actuation set; own-scope blocks INSIDE / advises OUTSIDE for both finding kinds across all three arity states; NON-VERDICT on an unrunnable detector (with and without an own-set), with no fabricated finding and no fabricated ratchet drift."
     exit 0
   fi
   echo "permission-gate-lint --selftest: FAILED ($checks case(s) run) — the detector does not discriminate."
