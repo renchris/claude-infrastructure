@@ -73,7 +73,7 @@ start_srv() {
   : >"$REQLOG"
 
   cat >"$SRV_DIR/server.py" <<'PY'
-import json, os, sys
+import json, os, socketserver, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 D = os.environ["SRV_DIR"]
@@ -125,7 +125,20 @@ class H(BaseHTTPRequestHandler):
         return self._send('{"error":"unrouted"}', 404)
 
 
-srv = HTTPServer(("127.0.0.1", 0), H)
+class Srv(HTTPServer):
+    # NO REVERSE DNS ON THE BIND PATH. HTTPServer.server_bind calls socket.getfqdn(host) purely to
+    # fill in server_name, which this stub never reads — and that call is an UNBOUNDED resolver
+    # round trip with no timeout. On GitHub's macos-latest it outlasts the readiness budget below,
+    # so the port line is never printed, all 17 tests fail inside start_srv, and server.err is
+    # EMPTY — a machine symptom wearing a red's clothes, which is how this suite spent days being
+    # reported as failing code. Bind, then name the host from what we already know.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
+srv = Srv(("127.0.0.1", 0), H)
 print(srv.server_address[1], flush=True)
 srv.serve_forever()
 PY
