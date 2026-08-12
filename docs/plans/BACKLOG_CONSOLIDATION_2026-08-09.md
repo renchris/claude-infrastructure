@@ -727,3 +727,41 @@ are where the next increment of trust lives.
 
 **Not this wave's, and not filed twice:** `deploy-live` still refuses (NO-GREEN-AHEAD, lag 24/1h,
 inside budget) — pre-existing, already filed 17× (`903e7ae67621` et al).
+
+## W1 — LANDED 2026-08-11 (`9dd6f7a4c` · `056f5d9d8` / `5ac7990d9`) · and the measurement says DO NOT enforce yet
+
+Readiness is now computed for each item the dispatcher is about to ADMIT, keyed on the trunk sha and
+voided by a path-intersecting diff, with `cc-venue` gaining `paths` (the cited path set, taken from
+cc-premise's own extractor rather than a second implementation). 136/136 green across
+`tests/cc-dispatch-*.bats` + `tests/cc-venue*.bats`; 30 new cases, 30/30 RED against
+`git show origin/main:<file>`, 3 mutants, 0 dead assertions.
+
+🚨 **THE MEASUREMENT IS THE DELIVERABLE, AND IT REFUTES THE OBVIOUS NEXT STEP.** Two passes over the
+live store with every write suppressed: **would-block 100% on pass 1** (nothing certified yet) →
+**60% on pass 2**. So flipping `CC_DISPATCH_READY_GATE` to `enforce` today would **block 3 admissions
+in 5**. This is exactly the anti-goal § READINESS names, and advisory-first is the only reason the
+number could be learned at all rather than discovered as a stalled dispatcher.
+
+**And the residual is not what the design assumed.** 6 of 10 verdicts are **cites-nothing**, not
+staleness — i.e. the binding constraint is R2's deliberate fail-closed rule (*"an EMPTY path set is
+ALWAYS VOID… an item citing nothing has proven nothing survived"*), working exactly as specified and
+hitting a store whose items mostly do not name their files. **The cure is item CITATIONS, not a
+weaker gate** — do NOT relax R2 to make the number look better; that would restore precisely the
+fail-open trap it was written to close. Citation coverage is therefore the next ratchet target, and
+it is the metric that gates the advisory→enforce flip.
+
+⚠️ **The plan's own "219 unlabelled" figure was stale and is retired.** Re-measured at W1's return:
+**312 open+claimed, 281 carrying a `venuePlan`, 31 without** — the venue arm is NOT the binding one,
+so the anti-goal's original justification has moved even though the anti-goal itself stands (the
+60% now comes from citations). Third time this document's figures have decayed under it
+(MEMORY: `published-figure-decays-with-its-source`): **re-derive, never quote.**
+
+**A defect W1 found in its own diff, and it is the sharpest thing in this wave.** Widening the admit
+loop's delimited read from 3 to 5 fields hit **tab-is-IFS-whitespace**: an empty cluster key let
+`venuePlan` slide into `$dclus`, so two unrelated items "clustered" on the string `local` and one
+deferred the other as a phantom sibling. Silent, and it would have looked like the readiness gate
+correctly deferring work. Separator is now `\037`; cases 28/29 pin both halves.
+
+**Not live yet, and not this wave's to fix:** `deploy-live` refuses (no GREEN tree descends from live
+HEAD `32355a9b1`, lag 25/2h inside the 25/6h budget), so `~/.claude/bin/cc-dispatch` still runs the
+old bytes. Fleet-wide converger state, already filed ~17×; no duplicate row was created.
