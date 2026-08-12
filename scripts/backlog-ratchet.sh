@@ -184,7 +184,19 @@ closed_n=${closed_n:-0}; median_age=${median_age:-0}; p75_age=${p75_age:-0}
 # claim of health, produced by the sensor being broken (memory:
 # sensor-default-off-makes-blindness-the-shipping-path).
 validated_n=0; nondone_n=0; never_n=0; validated_src="absent"
-_cbin="${CC_RATCHET_BACKLOG_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/bin/cc-backlog}"
+# RESOLVE THE SYMLINK CHAIN FIRST, THEN DERIVE. `dirname "${BASH_SOURCE[0]}"/..` is wrong on the
+# path this actually runs from: ~/.claude/scripts/ holds per-file SYMLINKS into the checkout, so
+# through the live layer the `..` traversal lands on ~/.claude rather than the repo — and it does not
+# fail, it silently reads the wrong tree. Caught by scripts/self-path-lint.sh at the land gate. The
+# loop below is ship-land.sh's `_resolve_self` verbatim; no `readlink -f`, which is GNU-only and this
+# box is BSD.
+_rself="${BASH_SOURCE[0]}"
+while [ -L "$_rself" ]; do
+  _rdir="$(cd "$(dirname "$_rself")" && pwd)"
+  _rself="$(readlink "$_rself")"
+  case "$_rself" in /*) ;; *) _rself="$_rdir/$_rself" ;; esac
+done
+_cbin="${CC_RATCHET_BACKLOG_BIN:-$(cd "$(dirname "$_rself")/.." 2>/dev/null && pwd)/bin/cc-backlog}"
 if [ -x "$_cbin" ] && command -v jq >/dev/null 2>&1; then
   _fresh="$("$_cbin" freshness --json 2>/dev/null)" || _fresh=""
   if [ -n "$_fresh" ]; then
