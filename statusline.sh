@@ -231,18 +231,20 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-# Parallel-instance indicator — which ACCOUNT this session is on: `(next3)`, the name the
-# whole toolchain uses (accounts.json, /accounts, cc-route, the assignment ledger). It used to
-# render the bare ordinal `(3)` / ③, which required holding `.claude-tertiary → 3 → next3` in
-# your head to answer a question the line was already answering — and said nothing about WHY
-# that account (R6 §4 rank 1, DESK_ROUTER_AND_STARTUP_V1 W2.5). The ordinal is DROPPED rather
-# than carried alongside: `next3` contains its own 3, so printing both spends columns to repeat
-# a fact. The name comes from the SAME literal `case` that already resolved the ordinal — no new
-# fork on a per-render hot path (measured 60–110 ms, unchanged).
+# Parallel-instance indicator — which claude-next<n> launcher this session is,
+# as a circled glyph ①..⑳ (stable claude/cc shows nothing).
 #
-# The ordinal path SURVIVES for the case that has no name: route 1 below is a naming-INDEPENDENT
-# escape hatch, so an instance identified only by number has no account name to print and gets
-# the old glyph exactly as before. That is also where the iTerm2/ASCII ring gate still lives.
+# ── THE ORDINAL, RESTORED (operator ruling 2026-08-11) ────────────────────────────────────────
+# W2.5 (a77faa72, same day) replaced it with the ACCOUNT NAME — `(3)` → `(next3)` — arguing the
+# ordinal made you hold `.claude-tertiary → 3 → next3` in your head. The operator reversed that
+# within hours of seeing it live: "change it back to N". The argument was not refuted, it was
+# OUTWEIGHED — a status line's scarce resource is columns, `(next3)` costs 5 more of them than
+# `(3)` on every render forever, and the mapping it spares you is one the operator already knows
+# cold. Whoever proposes the name again should know it has been tried and reverted on sight, and
+# that the reversal is a preference call about column budget, not a correctness finding.
+#
+# The name-resolving `case` arms are gone with it rather than left dangling: a variable computed
+# on a per-render hot path and read by nothing is worse than either design.
 #
 # LEFT-anchored: rendered
 # as GLYPH_PREFIX at the very start of the line (prepended at the final echo) so the
@@ -262,7 +264,6 @@ fi
 # with $CLAUDE_CONFIG_DIR as fallback.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     NIDX=""
-    NNAME=""            # initialised, never inherited: the ambient env must not name an account
     # Route 1: explicit override — accepted only if numeric (else ignored, so a
     # malformed value falls through to the dir map rather than blanking the glyph).
     if [ -n "${CLAUDE_INSTANCE_N:-}" ] && [ "${CLAUDE_INSTANCE_N}" -ge 1 ] 2>/dev/null; then
@@ -272,15 +273,11 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         TPATH="$PAY_TPATH"
         CFG="${TPATH%%/projects/*}"
         if [ -z "$CFG" ] || [ "$CFG" = "$TPATH" ]; then CFG="$CLAUDE_CONFIG_DIR"; fi
-        # NNAME is the account name from accounts.json for the same config dir — set in the
-        # SAME arm as the ordinal, so the two can never drift into disagreement. Arms past the
-        # four provisioned accounts carry no name (there is no account to name yet) and fall
-        # back to the ordinal rendering below.
         case "$CFG" in
-            */.claude-next)       NIDX=1;  NNAME=next ;;
-            */.claude-secondary)  NIDX=2;  NNAME=next2 ;;
-            */.claude-tertiary)   NIDX=3;  NNAME=next3 ;;
-            */.claude-quaternary) NIDX=4;  NNAME=next4 ;;
+            */.claude-next)       NIDX=1 ;;
+            */.claude-secondary)  NIDX=2 ;;
+            */.claude-tertiary)   NIDX=3 ;;
+            */.claude-quaternary) NIDX=4 ;;
             */.claude-quinary)    NIDX=5 ;;
             */.claude-senary)     NIDX=6 ;;
             */.claude-septenary)  NIDX=7 ;;
@@ -322,15 +319,7 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     # ink density is NOT legibility — its numeral is formed by hairline background GAPS,
     # which close under the same downsample that thinned the outline ring), and a solid
     # reverse-video chip ` 3 ` (legible, but a heavy block).
-    if [ -n "$NNAME" ]; then
-        # THE NAME, ringed exactly like the ordinal it replaces (same colours, same one-space
-        # gap) — `(next3)`. No per-terminal branch here and none is possible: the geometry
-        # argument above is about drawing a NUMBER inside a single cell, and a name is not a
-        # glyph, so there is nothing for a circled-digit font path to draw. The ring stays
-        # muted and the name bright, for the same reason the digit was: the identity is what
-        # gets read, the ring only frames it.
-        GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}${NNAME}${NEXT_RING})${RESET} "
-    elif [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
+    if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
         # Pinned to the LEFT edge (prepended at the final echo) so a narrow terminal's
         # ellipsis never eats it. RESET after it so the following segment keeps its own
         # color (default in the no-context path, or the GRAY the context-% block adds).
@@ -400,12 +389,16 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         # The three-tier COLOUR ladder is the severity signal and is carried over unchanged:
         # <60 muted grey, 60-89 terminal default (brighter than its surroundings), >=90 muted
         # red. Only the POSITION moved, so a tier change here is still a behaviour change.
+        # The trailing ` · ` is the same separator the rest of the line uses between segments
+        # (operator request 2026-08-11) — without it the % and the directory read as one field.
+        # It stays GREY at every tier: the middot is punctuation, and colouring it red at >=90
+        # would spend the severity signal on a character that carries none of the meaning.
         if [ "$PCT" -ge 90 ]; then
-            PCT_SEG="${MUTED_RED}${PCT}%${RESET} "
+            PCT_SEG="${MUTED_RED}${PCT}%${RESET}${GRAY} · ${RESET}"
         elif [ "$PCT" -ge 60 ]; then
-            PCT_SEG="${PCT}% "
+            PCT_SEG="${PCT}%${GRAY} · ${RESET}"
         else
-            PCT_SEG="${GRAY}${PCT}%${RESET} "
+            PCT_SEG="${GRAY}${PCT}% · ${RESET}"
         fi
         # OUTPUT still goes grey whenever a % is shown — that greying used to be a side effect
         # of prefixing GRAY while appending the %, and it is preserved deliberately: without a
