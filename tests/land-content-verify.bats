@@ -262,3 +262,83 @@ fx_landed_other_sha() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -qF 'g.txt'
 }
+
+# ── SUPERSESSION: value that reached trunk AND WAS THEN IMPROVED ──────────────────────────────────
+# Measured 2026-08-12 against the census that motivated this script: it called 3 of 5 already-landed
+# refs NOT-landed, and for 0a131da73 the single "line present only in the ref" was the exact line
+# trunk replaced in 12343c527 — the bug that fix removed, reported back as "content trunk lacks".
+# Because ship-land wires this as a FALSIFIER and a falsifier retracts on exit 0, a ref whose region
+# trunk later rewrote could never reach exit 0 again: the rows it exists to close would stay open
+# forever while the mechanism read as installed.
+
+@test "SUPERSEDED — trunk carried this exact blob and then improved it ⇒ 0, and it SAYS so" {
+  # THE REF MUST NOT BE AN ANCESTOR, and the first cut of this case got that wrong: committing v1 on
+  # main and then v2 on main makes the ref an ancestor, whose three-dot path set is 0, so it takes
+  # the ancestor early-exit and never reaches the arm under test — a case that passed for a reason
+  # that had nothing to do with supersession. The real shape is a SIDE branch whose content reached
+  # trunk under a DIFFERENT sha (a rebase copy — which is how 24 of the 25 censused rows landed),
+  # after which trunk improved it.
+  git -C "$W" checkout -q -b sup-side
+  printf 'v1\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'side v1'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'v1\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'trunk copy of v1'
+  git -C "$W" push -q origin main                       # trunk now CARRIES that exact blob
+  printf 'v2-improved\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'trunk improves it'
+  git -C "$W" push -q origin main
+  git -C "$W" fetch -q origin main
+  run git -C "$W" merge-base --is-ancestor "$ref" origin/main
+  [ "$status" -ne 0 ]                                   # the fixture is only valid if it is NOT an ancestor
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "SUPERSEDED, not lost" || { echo "did not name supersession: $output"; false; }
+  echo "$output" | grep -q "would REVERT" || { echo "did not warn that re-landing reverts: $output"; false; }
+}
+
+@test "CONTROL — the arm does NOT forgive everything: a blob trunk NEVER carried still ⇒ 1" {
+  # Without this the fix could be `always exit 0`, which would satisfy the case above and destroy
+  # the script's whole purpose (memory: alarm-polarity-and-attention-budget — count NOT-success).
+  printf 'trunk-only\n' > "$W/g.txt"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b side
+  printf 'trunk-only\nnever-on-trunk\n' > "$W/g.txt"; git -C "$W" add -A; git -C "$W" commit -qm side
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "g.txt" || { echo "the genuinely-stranded path was not named: $output"; false; }
+}
+
+@test "MIXED — one superseded path and one genuinely stranded ⇒ 1, and the strand is what decides" {
+  # The verdict must key on the STRAND, never on the count of differing paths. A superseded sibling
+  # must not launder a real loss into a retraction — that is the direction where a wrong answer
+  # costs work rather than noise.
+  printf 'a1\n' > "$W/a.txt"; printf 'b1\n' > "$W/b.txt"
+  git -C "$W" add -A; git -C "$W" commit -qm both; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b side2
+  printf 'b1\nb-never-lands\n' > "$W/b.txt"; git -C "$W" add -A; git -C "$W" commit -qm side2
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'a2-improved\n' > "$W/a.txt"; git -C "$W" add -A; git -C "$W" commit -qm improve-a; git -C "$W" push -q origin main
+  git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "b.txt" || { echo "the strand was not named: $output"; false; }
+}
+
+@test "the walk is BOUNDED and exhausting it does NOT forgive — LCV_HISTORY_MAX=0 ⇒ 1" {
+  # Cost control that must fail SAFE: if the history walk is cut short before it can prove
+  # supersession, the verdict falls through to the strand, never to a retraction.
+  # Same non-ancestor shape as the SUPERSEDED case above, for the same reason: an ancestor never
+  # reaches the walk, so a bound over it would be untested.
+  git -C "$W" checkout -q -b bound-side
+  printf 'v1\n' > "$W/h.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'side h1'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'v1\n' > "$W/h.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'trunk copy of h1'; git -C "$W" push -q origin main
+  printf 'v2\n' > "$W/h.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'trunk improves h'; git -C "$W" push -q origin main
+  git -C "$W" fetch -q origin main
+  run env LCV_HISTORY_MAX=0 bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 0 ]
+}
