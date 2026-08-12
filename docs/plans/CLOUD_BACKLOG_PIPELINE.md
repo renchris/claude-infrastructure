@@ -529,3 +529,72 @@ structural wiring arms (a hermetic suite cannot see whether anything CALLS the s
   one step AFTER the return pass (which is what files the artifact) and above the nothing-new early
   exit, under the same deployed-copy guard — stricter here, because this one hands a real VM a
   brief it will act on.
+
+---
+
+# NEXT PHASE (2026-08-11) — the migration is LIVE, and three questions it exposed are open
+
+**Status correction: this document's `status: complete` describes the ARM, and the arm is no longer
+the whole story.** As of 2026-08-11 the dispatcher runs `CC_FIRE_CLOUD=on` +
+`CC_DISPATCH_VENUE_ONLY=cloud` with no pause — cloud-only, by operator directive ("fully migrate
+cc-backlog from local spawn to cloud spawn"). What that migration exposed is below, and none of it
+is answered.
+
+## What is true today, measured — do not re-derive
+
+| fact | value | how |
+|---|---|---|
+| dispatcher argv (live) | `CC_FIRE_CLOUD=on CC_DISPATCH_VENUE_ONLY=cloud` | `launchctl print gui/$UID/com.claude.dispatcher` |
+| local pane spawns since the pause | **frozen at 191** | `grep -c '→ fired: claude' ~/.claude/logs/dispatch-fires.log` |
+| the filter, proven honoured by the DEPLOYED binary | `venue-only=cloud parked 272 of 315 dispatchable item(s)` | one pass with the pause still on; 0 local spawns |
+| venue split of the live queue | **45 cloud · 236 local · 31 unlabelled** of 312-315 (it moves) | `cc-backlog list --open --json` folded on `venuePlan` |
+| first uncaged pass | **⛔ QUOTA CLIFF — abstained, paged, NO spawn** | `cc-dispatch --once` |
+| account state at that cliff | 5h used **1-8%** on all four; weeklies 7-51% | `claude-accounts --readout` |
+
+🚨 **The cliff is the live blocker and it is NOT exhaustion.** A quota cliff fired while every
+account sat at 1-8% of its 5-hour window. Either the cliff predicate is wrong, or it is reading
+something other than 5h/weekly headroom (Fable? a per-window projection? a stale cache?). **No
+dispatcher-driven cloud session has EVER been created** — the 32 cloud declarations on this box are
+all hand-driven from the W1-W3 pipeline work. So the cloud arm is armed, filtered, and unproven
+end-to-end.
+
+## The three open questions (the successor's brief)
+
+**Q1 · Can cloud reliably drain the backlog — what can it take, what can't it, and WHY?**
+Start from the cliff above: until a dispatcher-driven cloud session exists, "cloud is migrated" is a
+configuration claim, not a behavioural one. Then the ceiling: `cc-eligible` refuses 236 of 312 rows
+by MEASUREMENT, not by keyword — `ineligible-box` 155, `spawn-rail` 24, `branch-banking` 25,
+`visual` 16, `deep-history` 15, `offbox-lane` 10. The VM's constraints are the shallow 50-commit
+clone, no `gh`, no `~/.claude`, reclaimed at session end (§3). **Which refusal classes are inherent
+to a Firecracker VM and which are artefacts of how we provision it?** `deep-history` in particular
+looks provisioning-shaped, not physics-shaped. Raising the migrated share means changing what the VM
+can REACH — never loosening the predicate, which is §5's anti-goal.
+
+**Q2 · One consolidated track for everything, or two tracks that must not diverge?**
+The operator wants "up to date, not stale, most optimally consolidated" — ideally ONE track covering
+all work. If cloud can only ever take ~14%, that is two populations with two venues, and the
+question becomes how they stay CONSISTENT rather than how they merge. The readiness machinery landed
+today is the substrate either way: the admission conjunction (`CC_DISPATCH_READY_GATE`, advisory —
+60% would-block, dominated by items that cite no files), the filing-day probe screen
+(`cc-premise screen`), and the mechanical fold (`--fold`, dry-run in the sweep). **Does a two-venue
+world need two ratchets, or one metric with a venue dimension?**
+
+**Q3 · Cloud continuous, local on a schedule or an explicit switch.**
+The operator's constraint is their ~15 concurrent session slots: local dispatch competes with them
+for panes, cloud does not (the A/B measured cost at parity — cloud's whole value is that it spares
+the box, §4). So: cloud runs continually; local runs on set hours, or when the operator says on/off
+(chiefly when they are away). `CC_DISPATCH_VENUE_ONLY` already makes the venue split a config
+change (`=cloud` / `=local` / unset), so the lever exists — **what is missing is the SCHEDULER and
+the operator switch**, plus the question of whether a time-based window or an explicit toggle is the
+right primitive. Note the interlock lesson before touching any of this: a config flip is not live
+until the binary that READS it is live.
+
+## The landmine, stated so the successor does not repeat it
+
+**A config flip that BOTH removes a guard and adds a control lands in two different readers.** The
+removal (launchd env) takes effect immediately; the control (a new variable the deployed binary must
+implement) takes effect only after the live layer converges. Attempted as one step, this fired 2
+local panes: `~/.claude/bin/cc-dispatch` is a per-file symlink into the shared checkout, and a shell
+program SILENTLY IGNORES an env var it does not implement — there is no arity error. The interlock
+now written into `launchd/com.claude.dispatcher.plist` is the general form: land → converge → PROVE
+by positive control → only then remove the guard.
