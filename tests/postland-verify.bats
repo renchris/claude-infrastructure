@@ -121,6 +121,18 @@
 #               FROM the condition and would drop the second row's content instead of deduping it.
 #               The dedupe is then the CLAIM's (cc-backlog claim guard 6), not the mint's: both rows
 #               survive, and only the second DISPATCH is deferred while the first is live.
+#   C33 locale THE {pid,lstart} IDENTITY MUST BE RENDERED CANONICALLY. `ps -o lstart=` formats through
+#               LC_TIME, so the SAME live pid reads "Tue Aug 11 15:20:07 2026" from the launchd daemon
+#               (no LANG ⇒ C) and "Tue 11 Aug 15:20:07 2026" from a session (LANG=en_CA.UTF-8). C6b
+#               compares a RECORDED string to a FRESHLY READ one, so that skew made a LIVE holder read
+#               as a recycled pid: the reader took the reap branch and a SECOND full-corpus verifier
+#               started beside the first (measured 2026-08-11 — two live 441-suite runs; 8 of the 9
+#               overlapping run-pairs in 170 stamps on that one day; ~50% of recent cuts read `KILLED
+#               by signal 15|9 (machine pressure)`, which was the duplicate's own load). proc_lstart
+#               pins LC_ALL=C and trims ps's padding at BOTH sites. An EMPTY fresh reading is an
+#               unreadable INSTRUMENT, not a mismatch, and is honoured TTL-bounded — the fail
+#               direction here is asymmetric: `stranger ⇒ reap` is the only branch that can mint a
+#               second verifier, so an unverifiable identity must make the reader MORE patient.
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -215,6 +227,11 @@ push_commit() { git -C "$R" add -A; git -C "$R" commit -q -m "$1"; git -C "$R" p
 origin_head() { git -C "$R" rev-parse origin/main; }
 origin_tree() { git -C "$R" rev-parse "origin/main^{tree}"; }
 stamps_n()    { find "$CC_POSTLAND_DIR/stamps" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+# C33: the CANONICAL rendering of a pid's start time — the exact string the SUT's proc_lstart writes.
+# A fixture that records a lock identity with a bare `ps` is recording it in whatever locale the
+# developer's shell happens to carry, which is the very skew C33 fixes; every lstart fixture below
+# goes through this so the tests assert the contract rather than the harness's own environment.
+canon_lstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
 idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
 pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 cells_n()     { find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-*' 2>/dev/null | wc -l | tr -d ' '; }
@@ -562,7 +579,7 @@ second_window() { run bash "$SUT" --run-if-needed; }
   live=$!
   echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
   echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid"
-  ps -o lstart= -p "$live" > "$CC_POSTLAND_DIR/run.lock.d/lstart"   # the SAME process, still running
+  canon_lstart "$live" > "$CC_POSTLAND_DIR/run.lock.d/lstart"       # the SAME process, still running
   touch -t 202001010000 "$CC_POSTLAND_DIR/run.lock.d"               # ...and long past LOCK_TTL
   run bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]                              # C6: quiet exit 0
@@ -589,6 +606,79 @@ second_window() { run bash "$SUT" --run-if-needed; }
   [ "$(stamps_n)" = "1" ]                          # reaped on age alone => never a permanent wedge
 }
 
+# ── C33 locale-canonical identity ───────────────────────────────────────────────
+# `ps -o lstart=` formats through LC_TIME. The daemon runs under launchd (no LANG ⇒ C) and renders
+# "Tue Aug 11 15:20:07 2026"; a session-fired run under LANG=en_CA.UTF-8 renders the SAME instant as
+# "Tue 11 Aug 15:20:07 2026". C6b's rule compares a RECORDED string to a FRESHLY READ one, so that
+# skew made a live holder read as a recycled pid, the reader took the reap branch, and a SECOND
+# full-corpus verifier started beside the first — measured on this box 2026-08-11 (two live 441-suite
+# runs; 8 of the 9 overlapping run-pairs in 170 stamps fell on that one day). Two corpora on one box
+# is self-inflicted machine pressure, and ~50% of recent cuts read `KILLED by signal 15|9`.
+#
+# `ps` IS STUBBED, deliberately: the real one only exhibits the skew on a box whose locale differs
+# from C, so a test driving /bin/ps would silently degrade to a no-op on a C-locale machine and
+# certify the fix while proving nothing (memory: default-off-sensor / harness-default-collapses-
+# the-states-under-test). The stub emulates exactly the one behaviour under test — lstart renders
+# per-locale — and defers everything else to the real binary.
+stub_locale_ps() { # <mode: skew|blind> — install a $PATH `ps` that emulates the C33 hazard
+  cat > "$STUB/ps" <<PS
+#!/bin/bash
+q=
+for a in "\$@"; do [ "\$a" = "lstart=" ] && q=1; done
+[ -n "\$q" ] || exec /bin/ps "\$@"
+case "$1" in
+  blind) exit 0 ;;                                     # the instrument cannot be read at all
+  *) if [ "\${LC_ALL:-}" = "C" ]; then printf 'Tue Aug 11 15:20:07 2026    \n'
+     else                              printf 'Tue 11 Aug 15:20:07 2026    \n'; fi ;;
+esac
+PS
+  chmod +x "$STUB/ps"
+}
+
+@test "C33: a LIVE holder recorded under a DIFFERENT LC_TIME is honoured — no second verifier" {
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  stub_locale_ps skew
+  # The daemon's record: rendered in C, with ps's column padding left intact, because that is what
+  # a lock already on disk looks like. Post-fix the READ side trims, so padding is not identity.
+  LC_ALL=C ps -o lstart= -p "$live" > "$CC_POSTLAND_DIR/run.lock.d/lstart"
+  [ -s "$CC_POSTLAND_DIR/run.lock.d/lstart" ]      # the fixture is armed, not silently empty
+  # ...read back by a session-shaped environment, which renders the same instant day-first.
+  # UNSET rather than set-empty: that is the shape a real session carries (LANG alone), and an
+  # empty LC_ALL= before a command is SC1007 — the gate is right that it reads as a typo.
+  unset LC_ALL LC_TIME
+  export LANG=en_CA.UTF-8
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]                              # C6: quiet exit 0
+  [ "$(stamps_n)" = "0" ]                          # C33: it did NOT start a second verifier
+  [ "$(cat "$CC_POSTLAND_DIR/run.lock.d/pid")" = "$live" ]   # ...and did not steal the lock
+}
+
+@test "C33: an UNREADABLE lstart instrument does not convict a LIVE holder" {
+  # `ps` returning nothing for a pid `kill -0` has just proved alive is a FAILED PROBE, not a
+  # stranger. Pre-C33 the empty reading fell straight through the `rec != cur` comparison into the
+  # reap branch, so an instrument failure — the one condition under which nothing is known — was
+  # the one that produced two live verifiers. Fail-safe direction is honour-and-bound, as with the
+  # missing-lstart compat rule above; the TTL half is asserted so this cannot become "honour forever".
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  printf 'Tue Aug 11 15:20:07 2026\n' > "$CC_POSTLAND_DIR/run.lock.d/lstart"
+  stub_locale_ps blind
+  run bash "$SUT" --run-if-needed                  # inside TTL: honoured
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "0" ]
+  touch -t 202001010000 "$CC_POSTLAND_DIR/run.lock.d"        # past TTL: still never a permanent wedge
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "1" ]
+}
+
 @test "C6b: the acquirer records its OWN {pid,lstart} — the identity the rule compares against" {
   # Without the lstart WRITE every production lock is a compat lock and the recycled-pid wedge comes
   # back (bounded by LOCK_TTL rather than forever) — with all three tests above still green, because
@@ -605,7 +695,7 @@ second_window() { run bash "$SUT" --run-if-needed; }
   [ -s "$L/pid" ]                                  # the SUT took the lock
   holder="$(cat "$L/pid")"
   [ -s "$L/lstart" ]                               # ...and recorded an identity, not just a pid
-  [ "$(cat "$L/lstart")" = "$(ps -o lstart= -p "$holder" 2>/dev/null)" ]   # ...its OWN
+  [ "$(cat "$L/lstart")" = "$(canon_lstart "$holder")" ]   # ...its OWN, in the C33 canonical form
   # `wait` is not politeness: without it bash reports the SIGTERMed job on stderr ("Terminated: 15"),
   # which lands in this suite's own TAP stream as a non-TAP line.
   kill "$runner" 2>/dev/null || true

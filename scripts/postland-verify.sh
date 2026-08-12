@@ -819,19 +819,59 @@ env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tr
 # the one recorded when the lock was taken. A live pid with a DIFFERENT lstart is a stranger, so the
 # real holder is dead ⇒ reap. A live pid with a MATCHING lstart is never reaped at any age — H2 is
 # unchanged, and it is what keeps this a mutex instead of "always reap".
+#
+# ── THE IDENTITY MUST BE READ THROUGH A LOCALE-PINNED INSTRUMENT (C33, 2026-08-11) ────────────────
+# The rule above compares a string RECORDED by one process to a string READ FRESH by another. That
+# is only an identity comparison if both processes render the same instant the same way — and
+# `ps -o lstart=` does not: it formats through LC_TIME, so the SAME live pid reads
+#     "Tue Aug 11 15:20:07 2026"   from the launchd daemon (no LANG in launchd's env ⇒ C locale)
+#     "Tue 11 Aug 15:20:07 2026"   from an interactive session (LANG=en_CA.UTF-8 on this box)
+# Both are /bin/ps; only the locale differs. So a session-fired `--run-if-needed` read the daemon's
+# perfectly valid record, found "a DIFFERENT lstart", took the `stranger ⇒ holder DEAD ⇒ reap`
+# branch on a LIVE holder, and started a SECOND full-corpus verifier beside the first.
+#
+# THIS IS THE CUT ENGINE, not a latency bug. Measured on this box 2026-08-11: two 441-suite corpus
+# runs live at once (launchd pid 22960 and session pid 34453, whose start times are 7 min apart and
+# whose lock the second one owned), 8 of the 9 overlapping run-pairs in the whole 170-stamp history
+# dated to that one day. Two concurrent corpora on one box is self-inflicted machine pressure, and
+# machine pressure is what the runner then reports back as a verdict about the TREE: 14 stamps read
+# `the run was KILLED by signal 15|9 (machine pressure, not the tree)`, ~50% of recent cuts. A cut
+# proves nothing, so no green can be earned, so deploy-live converges only through T2 DEGRADED and
+# nothing reaching the live layer is full-suite-proven. The fix is one word at two sites; the
+# symptom it was being read as ("per-suite reliability under load") had zero real intermittent
+# assertion failures behind it in the trailing 7 days.
+#
+# FAIL DIRECTION, restated because this bug INVERTED it: an unverifiable identity must make the
+# reader MORE patient, never less. `stranger ⇒ reap` is the only branch here that can produce two
+# live verifiers, so nothing may reach it except a genuine mismatch of two canonically-rendered
+# strings — hence the empty-`cur` guard below, which previously fell through to it whenever the
+# instrument simply could not be read.
+#
+# MIGRATION: a lock still on disk from a pre-C33 process is honoured iff its record was rendered in
+# C anyway (the daemon's always was — launchd has no LANG), and is reaped once otherwise. That is a
+# strict improvement on the steady state being fixed, where the reap happened every sweep.
+proc_lstart() { # <pid> → that pid's start time, rendered CANONICALLY (locale-pinned) and trimmed.
+  # LC_ALL, not LC_TIME: LC_ALL outranks every other locale variable, so one export cannot be
+  # defeated by an LC_TIME the caller also set. Trimmed because `ps -o lstart=` pads to a fixed
+  # column width — a difference in trailing blanks is not a difference in identity, and comparing
+  # untrimmed strings would re-introduce this same class the next time a ps changes its padding.
+  LC_ALL=C ps -o lstart= -p "${1:-$$}" 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
 lock_claim() { # write the holder identity into a lock dir THIS process just mkdir'd
   # ORDER MATTERS: lstart first, pid last. A racing acquirer reads pid first, so publishing pid last
   # makes "pid present" imply "lstart present" — the mid-acquire window is the empty-holder branch
   # (5s grace) rather than a lock that looks like a pre-fix one. Hence the no-lstart case below is
   # exclusively a PRE-FIX process, never a race.
-  printf '%s\n' "$(ps -o lstart= -p $$ 2>/dev/null || true)" > "$LOCK/lstart" 2>/dev/null || true
+  printf '%s\n' "$(proc_lstart $$)" > "$LOCK/lstart" 2>/dev/null || true
   printf '%s\n' "$$" > "$LOCK/pid"
 }
 try_acquire() {
   mkdir "$LOCK" 2>/dev/null && { lock_claim; return 0; }
   local holder age stale rec cur
   holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-  rec="$(cat "$LOCK/lstart" 2>/dev/null || true)"
+  # Trimmed on READ as well as on write (C33): a record written before proc_lstart existed carries
+  # ps's column padding, and the comparison below must not convict a live holder over blanks.
+  rec="$(sed 's/^ *//;s/ *$//' "$LOCK/lstart" 2>/dev/null || true)"
   age="$(( $(now_epoch) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) ))"
   stale=0
   if [ -z "$holder" ]; then { [ "$age" -ge 5 ] || [ "$age" -gt "$LOCK_TTL" ]; } && stale=1
@@ -846,8 +886,16 @@ try_acquire() {
     # rather than too-eager (two live verifiers on one box).
     [ "$age" -gt "$LOCK_TTL" ] && stale=1
   else
-    cur="$(ps -o lstart= -p "$holder" 2>/dev/null || true)"
-    [ "$rec" != "$cur" ] && stale=1                    # pid REUSED by a stranger → holder DEAD → reap
+    cur="$(proc_lstart "$holder")"
+    # EMPTY cur is NOT a mismatch — it is an unreadable instrument (C33). `ps` returning nothing for
+    # a pid `kill -0` just proved alive means the probe failed, not that the holder is a stranger,
+    # and routing that through the reap branch is how an instrument failure becomes two live
+    # verifiers. Same fail-safe direction as the missing-lstart branch above: honour, TTL-bounded.
+    if [ -z "$cur" ]; then
+      [ "$age" -gt "$LOCK_TTL" ] && stale=1
+    else
+      [ "$rec" != "$cur" ] && stale=1                  # pid REUSED by a stranger → holder DEAD → reap
+    fi
   fi                                                   # rec = cur → genuinely alive → NEVER reaped
   if [ "$stale" = 1 ]; then
     rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null && { lock_claim; return 0; }
@@ -1427,9 +1475,31 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
 # never red) and the CAUSE was unrecoverable from the log, so diagnosing it took an lsof against a
 # live run. Signal-death and our own bound are opposite findings — one says "a peer killed us", the
 # other "a test is slow" — and a default naming neither sends every reader to the wrong one.
+#
+# ── THE SIGNAL ARM NAMED A CAUSE IT HAD NEVER ESTABLISHED (C33b, 2026-08-11) ──────────────────────
+# It read `(machine pressure, not the tree)`. The second half is right and is the whole job of this
+# function; the first half was a GUESS, and it was swept against disk and refuted on every axis it
+# could mean:
+#   · jetsam/OOM — 0 `memorystatus: killing` events in 24h of unified log, swap total 0.00M,
+#     compressor at 0.98% of its segment limit. macOS was not killing anything for memory.
+#   · load — the killed runs average 13.18 against green's 9.56, but the distributions OVERLAP and
+#     the extremes invert: runs killed at load 2.26 and 5.90, runs stamped GREEN at 16.09 and 14.60.
+#     Load does not separate the populations, so it cannot be the cause that distinguishes them.
+#   · the 15-vs-9 split is not even known to be two senders: `timeout -k 10` re-raises the child's
+#     signal, so an external TERM manufactures an internal KILL 10s later, and TERM→wrapper,
+#     TERM→child, KILL→wrapper and KILL→child produce identical rc AND identical shell text (143/137).
+# What IS established: the signal came from outside this runner's tree (both stall sites set `cutby`
+# and force rc 124, and no `STALL:` line precedes any of the 14), and the parent survived every one —
+# which excludes anything signalling the process group, the launchd job, or the session.
+#
+# A GUESSED CAUSE IS WORSE THAN A NAMED UNKNOWN when it prescribes a remedy, and this one did: "the
+# box is busy" reads as "retry when quieter", which §R1 of LOAD_INSENSITIVE_VERIFY_V2 records as the
+# one response guaranteed never to clear it, on a box whose steady state is saturation. Say what is
+# known and mark what is not; the sender-identifying evidence (a child-process snapshot taken before
+# `wait` and written into the stamp) is filed, not guessed at here.
 rc_why() { # <rc> → why this rc says nothing about the tree
   if   [ "$1" -eq 124 ]; then printf 'our own bound cut the run'
-  elif [ "$1" -gt 128 ]; then printf 'the run was KILLED by signal %s (machine pressure, not the tree)' "$(( $1 - 128 ))"
+  elif [ "$1" -gt 128 ]; then printf 'the run was KILLED by signal %s from OUTSIDE this runner (sender unidentified) - not the tree' "$(( $1 - 128 ))"
   elif [ "$1" -eq 126 ] || [ "$1" -eq 127 ]; then printf 'the run could not execute (rc %s)' "$1"
   # WORDING IS LOAD-BEARING: this says "ADMISSION DEFERRAL", never the bare token R-E-F-U-S-E-D.
   # permission-gate-lint treats that token as a guard-refusal VERB (`s ~ /REFUSED/`, substring,
