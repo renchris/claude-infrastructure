@@ -598,3 +598,120 @@ local panes: `~/.claude/bin/cc-dispatch` is a per-file symlink into the shared c
 program SILENTLY IGNORES an env var it does not implement — there is no arity error. The interlock
 now written into `launchd/com.claude.dispatcher.plist` is the general form: land → converge → PROVE
 by positive control → only then remove the guard.
+
+---
+
+# ANSWERS (2026-08-11, successor session) — the cliff is named, and cloud has run
+
+## A1 · THE QUOTA CLIFF WAS NEVER ABOUT QUOTA — it was three of four accounts failing a FRESHNESS test
+
+**Root cause, named with the code path.** The cliff record carries its own diagnosis; it was never
+read. `~/.claude/autonomy/idl.jsonl` line 77973, the one and only `quota-cliff` record on this box:
+
+```json
+{"actor":"cc-wave-plan","action":"wall","verdict":"capacity",
+ "detail":"wave of 6 items exceeds capacity (1 accounts, 2 slot(s) total — all capped)",
+ "evidence":{"oracle_rc":0,"rank_rc":0,"route_rc":0,"ranked_n":1,
+   "accounts":[{"acct":"next","session_pct":4},{"acct":"next4","session_pct":8},
+               {"acct":"next3","session_pct":6},{"acct":"next2","session_pct":1}],
+   "stderr_excerpt":"claude-accounts: general excluded — next=poll throttled ↻ (cached usage); next4=poll throttled ↻ (cached usage); next2=poll throttled ↻ (cached usage)",
+   "reason":"wave-overflow","action":"reduce-wave-size"}}
+```
+
+Four accounts, all `state: ok`, all at 1-8% of their 5-hour window. **`ranked_n: 1`.** The chain, in
+four steps, each in code:
+
+1. **The exclusion.** `bin/claude-accounts:1086-1088` marks a row `poll_throttled` and sets
+   `error = "poll throttled ↻ (cached usage)"` when the OAuth usage endpoint 429s and the row
+   inherits its last-good usage. An errored row is excluded from `--route`/`--rank`
+   (`bin/claude-accounts:3041`), and the router excludes any row carrying `quota_as_of` — i.e. any
+   INHERITED row — *by construction* (`bin/claude-accounts:3925` comment). This is a **data-freshness**
+   exclusion. It says nothing about headroom, and the excluded accounts had 92-99% of their window free.
+2. **The collapse.** `bin/cc-wave-plan` computes capacity as `ranked_n × per-account allowance`
+   (flat `CC_WAVE_MAX_PER_ACCT`=2, widened to 4 for an account the urgency term marks BEHIND). With
+   3 of 4 accounts excluded, capacity fell from ~8-10 slots to **2**.
+3. **The overflow.** `bin/cc-dispatch` presented a wave of 6 (`CEILING`=6, `free_slots`=6,
+   `live_workers`=0). 6 > 2 ⇒ `WALL[capacity]`, exit 4, with `reason: wave-overflow` and
+   `action: reduce-wave-size` on the record.
+4. **The mislabel.** `bin/cc-dispatch:1760-1764` maps **every** exit 4 to
+   `⛔ QUOTA CLIFF — abstained, paged, NO spawn (run /limit-recover)`. cc-wave-plan is deliberately
+   trichotomous — it distinguishes `capacity`/`wave-overflow` from a genuine all-capped wall, and
+   its own suite pins that discrimination (`bin/cc-wave-plan:939-948`) — and cc-dispatch throws the
+   distinction away at the consumer. `/limit-recover` is the wrong operator action for a wave that
+   is merely too big; the record's own `action` field already said `reduce-wave-size`.
+
+**The generator was already fixed, one commit before this session started.** `0ffe96995`
+(*"the warmer polled tighter than the throttle it warned about"*) found `com.claude.accounts-keepwarm`
+polling every 60s against a ~90s endpoint throttle, which kept 3 of 4 accounts permanently throttled
+and therefore permanently unrankable. Verified LIVE this session — `launchctl print
+gui/$UID/com.claude.accounts-keepwarm` reads `run interval = 180 seconds` and `--max-age 90`, so the
+fix is converged, not merely landed. Re-probed after: `cc-wave-plan` ranks **4 accounts / 10 slots**
+and places a 10-item wave; it walls only at 12.
+
+**So the cliff is cleared — but the mechanism that produced it is not.** Capacity is
+`ranked_n × allowance` while the wave is a fixed `CEILING`=6. At 4 accounts capacity is 8-10 and 6
+fits; at 3 accounts it is 6 (exactly at); **at 2 accounts it is 4 and the cliff returns.** One
+transient throttle, one logged-out account, one slow poll — and a box with every account nearly
+empty pages the operator to run `/limit-recover`. Two bounded fixes, neither of which touches
+`cc-eligible`:
+
+- **F1 (consumer).** `cc-dispatch` must read cc-wave-plan's verdict, not just its exit code. On
+  `reason: wave-overflow`, re-plan with a wave of `capacity` items instead of abstaining — the tool
+  says `reduce-wave-size`; nothing does. Reserve the `QUOTA CLIFF` string and the `/limit-recover`
+  directive for the genuinely-capped verdict. (Memory class: *new-enum-member-falls-into-fail-closed-default*
+  and *new-nonverdict-state-strands-its-consumers* — this is both.)
+- **F2 (planner).** A `poll throttled ↻ (cached usage)` row at `session_pct: 4` is excellent evidence
+  of headroom. Excluding it is right for a *route* (pick the best account) and wrong for a *capacity
+  count* (how many slots exist at all). Count cached-but-healthy rows toward capacity while still
+  preferring fresh rows for placement.
+
+## A2 · THE FIRST DISPATCHER-DRIVEN CLOUD SESSION EXISTS — cloud is now a behavioural claim
+
+Run this session, cloud-only, capped at one spawn:
+
+```
+CC_FIRE_CLOUD=on CC_DISPATCH_VENUE_ONLY=cloud CC_DISPATCH_MAX_SPAWN=1 cc-dispatch --once
+```
+
+IDL, same pass:
+
+```
+{"actor":"cc-dispatch","action":"claimed","detail":"abab60591342: venue=cloud account=next4 — claimed --venue cloud"}
+{"actor":"cc-dispatch","action":"fired","detail":"abab60591342 -> next4"}
+{"actor":"cc-dispatch","action":"summary","fired":1,"abstained":0,"failed":2,"skipped":3,"admitted":6,"deferred":37}
+```
+
+`cc-cloud list` carries the resulting session — `session_01VMwdAbwLif2EDxtkQ39yZz`, branch
+`claude/fire-20260812T034126Z-64880-1`, age 24s at the time of the read. **That is the first cloud
+session on this box that a dispatcher created rather than a human.** The `venuePlan → cc-offload up
+--via api` selection at `bin/cc-dispatch:1898-1905` works end to end: plan → claim `--venue cloud`
+→ managed create → declaration with a real branch.
+
+One correction to the fear this session started with: the wave-plan's `fire_line` still reads
+`--split-right` with a local `--cwd`, which looks like a local pane fire. It is not. cc-wave-plan is
+a pure planner emitting the local default; the venue is a **selection between actuators** made later
+at `bin/cc-dispatch:1897-1908`, and `--dry-run` returns before that block, so the dry plan
+structurally cannot show the cloud actuator. The dry-run output is misleading, not wrong.
+
+### A2a · The measured cloud drain rate is 1 in 3, and the loss is NOT cc-eligible
+
+`fired:1, failed:2` out of 6 admitted. Both failures, verbatim:
+
+```
+cc-dispatch: refusing to fire into /Users/chrisren/Development/.worktrees/wt-62599dd76a60 — its HEAD does not contain origin/main (pre-existing worktree, never re-based)
+cc-dispatch: refusing to fire into /Users/chrisren/Development/.worktrees/wt-ee1ac85c6ff6 — its HEAD does not contain origin/main (pre-existing worktree, never re-based)
+```
+
+`bin/cc-dispatch:2102-2140` provisions a **local** worktree at `--cwd` and then freshness-gates it
+(the M2 guard). Both steps run at line ~2102, *after* the venue has already been resolved to `cloud`
+at line ~1899 — and a cloud fire never touches that directory. The VM clones from origin; the local
+`wt-<id>` tree is irrelevant to it. **Two thirds of this pass's cloud fires died on a staleness check
+about a directory the cloud session does not use.**
+
+- **F3.** Skip local worktree provisioning and the M2 freshness gate when `venue = cloud`. This is
+  not a loosening of any eligibility predicate — the item was already judged cloud-eligible; the
+  guard is simply about the wrong filesystem. Expected effect on this pass: 3 fired instead of 1.
+
+This is the shape the brief predicted for `deep-history` and it is worth stating generally: **the
+binding constraint on cloud drain today is what the VM can REACH and what the local dispatcher
+insists on checking before letting it go — not the eligibility predicate.**
