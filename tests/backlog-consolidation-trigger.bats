@@ -120,6 +120,57 @@ n_open()    { bash "$CB" list --all --json | jq '[.[]|select(.status=="open")]|l
   [ "$(bash "$CB" list --all --json | jq -r '[.[].condition]|unique|length')" -eq 1 ]
 }
 
+# ── THE CONSERVATION SPAN (2026-08-12, W2) ────────────────────────────────────────────────────────
+# Measured on the fold's first real apply against the live store: 46 links written, 0 refused, and
+# `conservation=FAILED live 555→555 · open 330→331`. Nothing was wrong with the fold — a sibling
+# session unblocked an unrelated row during the ~3 minutes the apply took. The assertion spanned the
+# WHOLE STORE while its subject is only the rows the run linked, so any concurrent write anywhere read
+# as "the key merged across a distinction", which is the one verdict a caller may never flip past.
+#
+# The wrapper below is the only way to reach that branch deterministically: a real cc-backlog for
+# every verb, plus a sibling write injected at exactly the moment a link lands.
+sibling_wrapper() { # $1 = the sibling verb to run after each link
+  W="$BATS_TEST_TMPDIR/cb-wrapper"
+  cat > "$W" <<WRAP
+#!/usr/bin/env bash
+real="$CB"
+if [ "\$1" = link ]; then
+  bash "\$real" "\$@"; rc=\$?
+  $1
+  exit \$rc
+fi
+exec bash "\$real" "\$@"
+WRAP
+  chmod +x "$W"
+  export CC_BACKLOG_BIN="$W"
+}
+
+@test "SPAN: a SIBLING's write during an apply is 'unknown', never FAILED — and the links still land" {
+  fold_setup
+  seed_sha_cluster 6
+  # The sibling files a brand-new row, which moves both the count and the id set — the exact shape
+  # that produced the false FAILED. A link has no status arm, so this cannot be ours.
+  sibling_wrapper 'bash "$real" add --project other --title "a sibling filed this mid-apply" --source sib >/dev/null 2>&1'
+  run "$SUT" --fold --apply
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "6 link(s) written"
+  printf '%s' "$output" | grep -q "conservation=unknown"
+  [ "$(printf '%s' "$output" | grep -c 'conservation=FAILED')" -eq 0 ]
+  printf '%s' "$output" | grep -q "kept its status"
+}
+
+@test "SPAN: a row that LOSES its status across its own link is still FAILED, rc 1" {
+  fold_setup
+  seed_sha_cluster 6
+  # THE CONTROL FOR THE CONTROL. `unknown` above must not be a blanket amnesty: this wrapper harms
+  # the very row it just linked, which is the only damage a link could ever do, and it must convict.
+  sibling_wrapper 'bash "$real" block "$2" --needs "harmed by the wrapper" >/dev/null 2>&1'
+  run "$SUT" --fold --apply
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q "conservation=FAILED"
+  printf '%s' "$output" | grep -q "changed status"
+}
+
 @test "FOLD REFUTATION: rows the detector merges but that name DIFFERENT subjects are NOT folded" {
   fold_setup
   # The live shape, verbatim: one sentence, nine worktrees. The detector's key erases the sha and
