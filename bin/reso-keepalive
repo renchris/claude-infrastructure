@@ -26,7 +26,13 @@ NUDGE="Continue autonomously with your goal: do your next task, commit it, and k
 # (boot-resume.sh:288 passes only the interval). Sampled 2026-08-09, some of those worktrees no
 # longer exist — a nudger silently aimed at nothing. Env-overridable now, with the original list as
 # the default so no existing caller changes behavior; an EMPTY list exits rather than looping blind.
-MARKERS="${CC_KEEPALIVE_MARKERS:-wt-cc-030951-65335 wt-cc-020321-15848 wt-pool-2 wt-pool-1 wt-cc-141837-23982 wt-cc-034348-50611 wt-still-sin-muin wt-cc-040140-66703 wt-pool-10 wt-pool-6 wt-pool-7 wt-pool-8}"
+# `${VAR-default}`, NOT `${VAR:-default}` — the colon form substitutes the default for an EMPTY
+# value as well as an unset one, so `CC_KEEPALIVE_MARKERS=""` silently fell back to the stale
+# 12-worktree list and the "empty list exits" guard below could never fire. Measured on the
+# recovered file: `CC_KEEPALIVE_MARKERS="" reso-keepalive 1 sid` ran until killed (rc 124) instead
+# of exiting 0. The guard's own comment has been describing behaviour the code never had since
+# 410f920c. Dropping the colon is the whole fix: unset ⇒ default, set-but-empty ⇒ empty ⇒ exit.
+MARKERS="${CC_KEEPALIVE_MARKERS-wt-cc-030951-65335 wt-cc-020321-15848 wt-pool-2 wt-pool-1 wt-cc-141837-23982 wt-cc-034348-50611 wt-still-sin-muin wt-cc-040140-66703 wt-pool-10 wt-pool-6 wt-pool-7 wt-pool-8}"
 if [ -z "${MARKERS// /}" ]; then
   printf '%s\n' "reso-keepalive: no target markers (CC_KEEPALIVE_MARKERS empty) — nothing to nudge, exiting"
   exit 0
