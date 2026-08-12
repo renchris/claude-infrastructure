@@ -9,12 +9,40 @@
 # validate-bash.sh still runs (hooks chain independently in Claude Code's
 # model — first non-empty decision wins; but deny always overrides).
 #
-# Auto-allows (top-5 by prompt-reduction impact):
+# Auto-allows:
 #   1. git commit        — unless --no-verify/--amend-published
-#   2. rm -rf <safe>     — all targets in SAFE_RM_TARGETS, no .. or globs
 #   3. sed -i <file>     — target under CWD, not in DENY_DIR/DENY_SENSITIVE
-#   4. git push origin <feature> — not main/master/etc, no --force
 #   5. chmod <safe-mode> — 644/755/600/700/750/640/+x/u+x only, under CWD
+#   6. sed -n <script>   — read-only paging (positive whitelist; see rule 6)
+#
+# RULE NUMBERS 2 AND 4 ARE RETIRED, NOT RENUMBERED — the gap is deliberate, so that a reader
+# comparing this file against the decision packet or the tests can see that two rules were
+# REMOVED rather than that the list was always this short.
+#
+# WHY THEY WERE REMOVED (2026-08-12). Both auto-approved a command the operator had independently
+# placed behind an `ask` rule in ~/.claude/settings.json (`Bash(git push:*)`, and deletion via the
+# global rm guard). A PreToolUse hook emitting "allow" BYPASSES the permission system, so wiring
+# this hook would have silently revoked those gates as a side effect of a prompt-reduction change
+# — the operator would keep the rule and lose the guard, with nothing in either file recording it.
+#
+# Rule 4 was also DEAD, and mis-specified underneath the deadness — measured, not read:
+#   • Its extraction regex `[[:alnum:]_.\-/]+` is an INVALID CHARACTER RANGE. /usr/bin/grep exits 2
+#     with "invalid character range", so GIT_PUSH_MATCH was always empty and rule 4 never allowed
+#     any push at all, on any branch, for its whole life.
+#   • Underneath that, its reject list was `^(develop|production|prod|release.*)$` — `main` and
+#     `master` ABSENT. So repairing the bracket expression, which any reader would call a typo fix,
+#     would have SILENTLY ARMED `git push origin main` against a standing never-push-to-main rule.
+# A latent defect sitting behind a broken matcher is the worst arrangement of the two: there is no
+# symptom to motivate the repair, and the repair is what makes it dangerous.
+#
+# (Recorded because the first pass of this analysis got it wrong in the operator-facing direction:
+# it reported that `git push origin main` WOULD be auto-allowed. The missing main|master was real;
+# the consequence attached to it was not, because the rule could not fire. The control in
+# tests/smart-bash-allowlist-narrow.bats is what caught it — a true fact next to a wrong
+# consequence reads exactly like a diagnosis.)
+#
+# Neither rule carried the prompt volume that justified them: the measured blockers in the beacon
+# archive (1,124 prompts, 2026-07-31 →) are compound commands, and rules 1/3/5/6 cover those.
 
 # Kill switch
 [[ "${SMART_ALLOWLIST_DISABLED:-0}" == "1" ]] && exit 0
@@ -79,23 +107,23 @@ if echo "$CMD" | grep -qE '^[[:space:]]*git\s+commit(\s|$)'; then
   allow "git commit: safe (no --no-verify, local operation)"
 fi
 
-# 2. rm -rf on SAFE_RM_TARGETS (all targets must be safe; no ..; no globs)
-SAFE_RM_TARGETS='(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel)'
-RM_MATCH=$(echo "$CMD" | grep -oE '^[[:space:]]*rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^;&|]+$' || true)
-if [[ -n "$RM_MATCH" ]]; then
-  TARGETS=$(echo "$RM_MATCH" | sed -E 's/^[[:space:]]*rm[[:space:]]+-(r|rf|fr)[[:space:]]+//')
-  # Reject: .. traversal, /absolute paths outside cwd, glob chars
-  if echo "$TARGETS" | grep -qE '(\.\.|\*|\?|^/|~)'; then exit 0; fi
-  # Each space-separated target must match SAFE_RM_TARGETS
-  ALL_SAFE=1
-  for t in $TARGETS; do
-    stripped=$(echo "$t" | sed -E 's|^\.?/?||')
-    if ! echo "$stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"; then ALL_SAFE=0; break; fi
-  done
-  if [[ "$ALL_SAFE" == "1" ]]; then
-    allow "rm -rf: all targets are build artifacts"
-  fi
-fi
+# 2. RETIRED — see the header. Deletion stays behind the operator's own gate.
+
+# path_escapes_project <path> — rc 0 when the path must NOT be auto-allowed.
+# Replaces an ERE negative lookahead `^/(?!Users/chrisren/Development…)`, which POSIX ERE does not
+# support: /usr/bin/grep exits 2 with "repetition-operator operand invalid" on it, and because the
+# call site was `if grep -qE …; then exit 0; fi`, rc 2 is not 0, so the branch never fired. The
+# guard was therefore INERT and fail-OPEN — every absolute path passed it — while also printing a
+# grep error to stderr on each invocation. Verified 2026-08-12 under bash + /usr/bin/grep; note it
+# behaves differently again under ugrep, so re-measure with the interpreter the hook actually runs.
+path_escapes_project() {
+  local p="$1"
+  case "$p" in
+    *..*|*'*'*|*'?'*) return 0 ;;          # traversal or glob — never auto-allow
+    /*) [ "${p#"$PWD"/}" = "$p" ] && return 0 || return 1 ;;   # absolute: must be under $PWD
+    *)  return 1 ;;                         # relative — already CWD-anchored
+  esac
+}
 
 # 3. sed -i targeting files under CWD, not in DENY_DIR/DENY_SENSITIVE
 # DENY regexes lifted from uidotsh-allowlist.sh
@@ -108,31 +136,22 @@ if [[ -n "$SED_MATCH" ]]; then
   SED_TARGET=$(echo "$CMD" | grep -oE '[^[:space:]]+$' | head -1)
   if [[ -n "$SED_TARGET" ]]; then
     # Reject absolute paths outside project, .. traversal, glob
-    if echo "$SED_TARGET" | grep -qE '(\.\.|\*|\?|^/(?!Users/chrisren/Development/reso-management-app))'; then exit 0; fi
+    if path_escapes_project "$SED_TARGET"; then exit 0; fi
     # Reject DENY_DIR / DENY_SENSITIVE
     if echo "$SED_TARGET" | grep -qE "$DENY_DIR" || echo "$SED_TARGET" | grep -qE "$DENY_SENSITIVE"; then exit 0; fi
     allow "sed -i: target under CWD, not in protected paths"
   fi
 fi
 
-# 4. git push origin <feature> (not main/master/develop/production/prod/release*, no --force)
-GIT_PUSH_MATCH=$(echo "$CMD" | grep -oE '^[[:space:]]*git[[:space:]]+push[[:space:]]+origin[[:space:]]+[[:alnum:]_.\-/]+$' || true)
-if [[ -n "$GIT_PUSH_MATCH" ]]; then
-  REF=$(echo "$GIT_PUSH_MATCH" | awk '{print $NF}')
-  # Reject protected branches
-  if echo "$REF" | grep -qiE '^(develop|production|prod|release.*)$'; then exit 0; fi
-  # Reject if -u/--set-upstream — that's first-push, confirm it
-  # Reject any --force-related flag (already in CMD but double-check)
-  if echo "$CMD" | grep -qE '(--force|-f\b|--force-with-lease)'; then exit 0; fi
-  allow "git push origin $REF: feature branch, no --force"
-fi
+# 4. RETIRED — see the header. `Bash(git push:*)` is an operator `ask` rule; this hook must not
+#    silently cancel it, and its protected-branch regex omitted main/master anyway.
 
 # 5. chmod with safe modes, target under CWD
 CHMOD_MATCH=$(echo "$CMD" | grep -oE '^[[:space:]]*chmod[[:space:]]+(644|755|600|700|750|640|\+x|u\+x)[[:space:]]+[^;&|]+$' || true)
 if [[ -n "$CHMOD_MATCH" ]]; then
   CHMOD_TARGET=$(echo "$CHMOD_MATCH" | awk '{print $NF}')
   # Reject absolute paths outside project, .. traversal, glob
-  if echo "$CHMOD_TARGET" | grep -qE '(\.\.|\*|\?|^/(?!Users/chrisren/Development))'; then exit 0; fi
+  if path_escapes_project "$CHMOD_TARGET"; then exit 0; fi
   allow "chmod: safe mode, target under CWD"
 fi
 
