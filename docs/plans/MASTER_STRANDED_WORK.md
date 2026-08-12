@@ -181,6 +181,64 @@ a wave fast is exactly what makes its own verifications undispatchable. Size the
 slots, not to the task list. Never reach for the printed `CC_BATS_MAX_ROOTS=0` override to get a
 verdict — the gate is measuring a real machine.
 
+### 🚨 The content oracle inherited this effort's own bug — measured 2026-08-12
+
+`scripts/land-content-verify.sh` + its falsifier wiring at `ship-land.sh:845` landed as the S3
+deliverable: the filer now attaches a probe that RETRACTS a `re-land …` row once the pinned ref's
+content reaches trunk. Cross-checked against the same 25-row census that motivated it, it disagrees
+on three of five:
+
+| ref | oracle | census |
+|---|---|---|
+| `845d18c17` | ON-TRUNK | landed ✓ |
+| `0a131da73` | HOLDS-CONTENT | **landed** ✗ |
+| `3a54808af` | HOLDS-CONTENT | **landed** ✗ |
+| `8c2416e03` | HOLDS-CONTENT | **landed** ✗ |
+| `fefa49b05` | HOLDS-CONTENT | held ✓ |
+
+**It is right about the bytes and wrong about the question.** For `0a131da73` it names one path and
+one line — `if [ -f "$pdir/$newsid.jsonl" ] && assistant_turn_in …` — which is *the bug this session
+deleted* (replaced by the nested-layout fix, `12343c527`). The oracle reports our own improvement as
+"content trunk lacks". `8c2416e03` (22 lines of `handoff-fire.sh`) and `3a54808af` are the same
+shape.
+
+**A falsifier that cannot fire is worse than none**, and this one cannot: it retracts on exit 0, and
+a ref whose region trunk later REWROTE can never again reach exit 0. So exactly the rows it exists
+to close stay open forever, and the population still grows. That is the inert-mechanism class —
+landed, wired, and changing nothing.
+
+The missing distinction is **trunk LACKS this** vs **trunk REWROTE this**, and a line-subset test
+cannot see it. Worse, the gap *widens with age*, which is precisely the population being aimed at: a
+1-day-old ref looks stranded, a 5-day-old one certainly does. A cheap discriminator that needs no
+judgment — **did trunk's history touch that path AFTER the ref's commit?**
+(`git rev-list --count <ref>..origin/main -- <path>`). Newer commits on the path ⇒ a line-level
+difference is supersession, not loss; no commits since ⇒ the missing lines are a genuine loss. Exit
+2 must stay reachable and distinct when the arm cannot decide.
+
+**The general lesson, which outlives this file:** every instrument in this effort failed by
+answering a *narrower* question than the one asked, and each new instrument inherited the flaw one
+level up — count → "is the sha there"; patch-id → "is this exact patch there"; line-subset → "are
+these exact bytes there". The question is always *"did the VALUE reach trunk"*, and supersession is
+value reaching trunk **and then being improved**. Any successor oracle must be tested against a ref
+trunk deliberately rewrote, or it will re-learn this the same way.
+
+### In flight at the succession point — what a successor must collect
+
+Branches, all committed; verify each BY CONTENT on `origin/main`, then close the row named:
+
+| Branch | Row | State |
+|---|---|---|
+| `w4/cc-cloud-trunk-refusal` | `55065a61b31c` | landing; 26/26 green, D1/D3 red-proved against trunk's `bin/cc-cloud` |
+| `w4/keepalive-vendor` | `6ab41e312a13` | committed, **suite unrun** — queued behind cc-bats admission |
+| `w4/s3-content-oracle` | S3 / wave row | landed once; **must re-land** with the supersession fix above |
+| `w4/s3-sweep-fix` | `fd517a5863cc`, `634ecdccbc55` | 0 commits at the seam — check it is not wedged |
+| `w4/s5-rbw-shim` | `475a87e801bf` | committed, not landed |
+| `w4/s5-gc-franchise` | `6cab0ab3cb2f` | 8 commits, rebase + land pending; 2 operator steps stay operator's |
+
+`w4/keepalive-vendor` carries an **unrun suite** and says so in its commit body. Do not close
+`6ab41e312a13` until `tests/reso-keepalive.bats` has actually run — a commit body is a claim, not a
+verdict, and this whole effort exists because a claim was mistaken for one.
+
 ## Definition of done
 Every member row is either closed against a content-verified land or carries a named reason it
 cannot be landed. `git ls-tree origin/main` proves each claim. The exit-5/6/143 generator has a
