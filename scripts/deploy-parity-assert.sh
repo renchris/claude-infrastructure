@@ -131,7 +131,7 @@ report() { printf '  %-9s %-22s %s\n' "$1" "$2" "$3"; }
 # bash 3.2 (the BSD box) has no associative arrays, so rows accumulate as TAB-delimited text and are
 # folded once at render time, in first-seen order.
 CLS_ROWS=""
-cls_row() {   # <class-label> <live|miss|pending>
+cls_row() {   # <class-label> <live|miss|pending|drift>
   [ -n "$1" ] || return 0
   CLS_ROWS="$CLS_ROWS$1	$2
 "
@@ -142,11 +142,19 @@ cls_table() {
   printf '%s' "$CLS_ROWS" | awk -F'\t' '
     $1 == "" { next }
     { if (!(($1) in seen)) { seen[$1]=1; order[++n]=$1 }
-      t[$1]++; if ($2=="live") l[$1]++; else if ($2=="pending") p[$1]++; else m[$1]++ }
+      t[$1]++; if ($2=="live") l[$1]++; else if ($2=="pending") p[$1]++
+               else if ($2=="drift") d[$1]++; else m[$1]++ }
     END { for (i=1; i<=n; i++) { c=order[i]
-            s = (m[c]+0 > 0) ? "MISS" : ((p[c]+0 > 0) ? "PEND" : "ok")
-            printf("  %-9s %-22s %d tracked · %d live · %d missing%s\n",
+            # DRIFT is its own state, never folded into "missing": the root-SSOT drift class is a
+            # file that EXISTS live and is the wrong KIND (a copy where a link is required), so
+            # counting it as missing would contradict the very leg that just found it — and the
+            # "N tracked runtime file(s) have NO live counterpart" summary below would be false.
+            # The segment is appended ONLY when non-zero, so every clean class renders byte-
+            # identically to before this state existed.
+            s = (m[c]+0 > 0) ? "MISS" : ((d[c]+0 > 0) ? "DRIFT" : ((p[c]+0 > 0) ? "PEND" : "ok"))
+            printf("  %-9s %-22s %d tracked · %d live · %d missing%s%s\n",
                    s, c, t[c], l[c]+0, m[c]+0,
+                   (d[c]+0 > 0) ? sprintf(" · %d drifted", d[c]) : "",
                    (p[c]+0 > 0) ? sprintf(" · %d staged-pending", p[c]) : "") } }'
 }
 
@@ -492,6 +500,57 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
+    # ── root SSOTs: EXISTENCE IS NOT ENOUGH (2026-08-12, consolidation audit 02 / b13787e71c9f) ──
+    # Every other class here asks "is there a live counterpart?", and for a per-file surface of
+    # hundreds that is the right question: the failure class is a BRAND-NEW tracked file nobody
+    # linked. The two root SSOTs fail the other way. `model-config.yaml` is the file the audit found
+    # split-brained — a 36 KB REAL file at ~/.claude/model-config.yaml carrying the whole Opus 5
+    # activation, drifting for four days against a repo copy that claimed SSOT and that no consumer
+    # read. §5's prescribed fix was three parts: one versioned file, an install.sh link, "and add a
+    # drift assert so the split cannot silently recur". The first two landed; this is the third, and
+    # its absence was measurable: the class was already NAMED `root SSOT (link)` while `-e` follows
+    # a symlink, so a real, drifted live file scored `ok  root SSOT (link)  2 tracked · 2 live · 0
+    # missing`, exit 0. The assert nearest the failure reported parity over it.
+    #
+    # Scoped to this class deliberately, not widened to every class above: a symlink CANNOT drift,
+    # so link-ness is the property that makes the SSOT claim true, and install.sh (:445, :454) links
+    # exactly these two by `link_file`. The verdict vocabulary is the strict-tools leg's, unchanged
+    # (LINKED / UNLINKED / STALE) — a copy that matches TODAY is still drift, because it will
+    # diverge on the next repo edit and nothing would say so. That is the audit's whole finding.
+    #
+    # PENDING is checked BEFORE the verdict, not after: `20-model-config-ssot-activate.sh` is the
+    # staged, un-run operator step that performs precisely this swap, and it is C10 (mutates the
+    # live layer). Convicting the live host for obeying a design that is waiting on the operator is
+    # the false-RED this leg already learned once (see pending_owner's own scar above).
+    if [ "$cls" = 'root SSOT (link)' ] && [ -e "$LIVE/$rel" ]; then
+      _lt=""
+      if [ -L "$LIVE/$rel" ]; then
+        _lt="$(readlink "$LIVE/$rel")"
+        case "$_lt" in /*) ;; *) _lt="$(dirname "$LIVE/$rel")/$_lt" ;; esac
+        _lt="$(cd "$(dirname "$_lt")" 2>/dev/null && pwd)/$(basename "$_lt")"
+      fi
+      if [ "$_lt" = "$REPO/$rel" ]; then
+        cls_row "$cls" live
+        continue
+      fi
+      _act="$(pending_owner "$rel")"
+      if [ -n "$_act" ]; then
+        report "PENDING" "$rel" "live copy is not the link YET — staged: $_act"
+        cls_row "$cls" pending
+        pending=$((pending + 1))
+        continue
+      fi
+      same_file "$REPO/$rel" "$LIVE/$rel"
+      case $? in
+        0) report "UNLINKED" "$rel" "live copy matches but must be a symlink → run ./install.sh"
+           cls_row "$cls" drift; drift=1 ;;
+        1) report "STALE" "$rel" "live copy DIFFERS from the repo SSOT — split-brain is ACTIVE → run ./install.sh"
+           cls_row "$cls" drift; drift=1 ;;
+        *) report "NOVERDICT" "$rel" "diff could not run (3 tries) — no claim either way"
+           cls_row "$cls" live; noverdict=1 ;;
+      esac
+      continue
+    fi
     # -e follows symlinks on purpose: a link whose target is gone is as dead as no link at all.
     if [ -e "$LIVE/$rel" ]; then cls_row "$cls" live; continue; fi
     # Unlinked BY DESIGN while its staged activation is un-run — reported, never counted as drift.

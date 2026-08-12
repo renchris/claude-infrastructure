@@ -726,6 +726,87 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 8 ]
 }
 
+# ── ROOT SSOT: LINK-NESS, not existence (2026-08-12, consolidation audit 02 / b13787e71c9f) ─────
+# Every case above asks "is there a live counterpart?". For the two root SSOTs that question is too
+# weak, and its weakness is the audit's own finding: ~/.claude/model-config.yaml was a REAL 36 KB
+# file carrying the whole Opus 5 activation, drifting for four days against a repo copy that claimed
+# SSOT and that no consumer read. `-e` follows a symlink, so that live real file scored `2 tracked ·
+# 2 live · 0 missing`, exit 0 — from the class already NAMED `root SSOT (link)`. A symlink cannot
+# drift; link-ness is the property that makes the SSOT claim true, so it is what gets asserted.
+@test "root SSOT: live REAL file that DIFFERS from the repo ⇒ STALE drift, exit 1 (the audit-02 split-brain)" {
+  _livefix
+  printf 'opus_latest: claude-opus-4-8\n' > "$CC_PARITY_REPO/model-config.yaml"
+  printf 'x\n' > "$CC_PARITY_LIVE/model-config.yaml"      # a real file, NOT a link — and drifted
+  printf 'opus_latest: claude-opus-5\n' >> "$CC_PARITY_LIVE/model-config.yaml"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"* ]] || false
+  [[ "$output" == *"split-brain is ACTIVE"* ]] || false
+  # DRIFT is its own column, never folded into "missing": the file EXISTS live, so counting it as
+  # missing would contradict the leg that just found it (and the "NO live counterpart" summary).
+  printf '%s\n' "$output" | grep -qE '^  DRIFT +root SSOT \(link\) +1 tracked · 0 live · 0 missing · 1 drifted'
+}
+
+@test "root SSOT: live copy MATCHES today but is not a link ⇒ UNLINKED drift, exit 1 (latent split-brain)" {
+  _livefix
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  cp "$CC_PARITY_REPO/model-config.yaml" "$CC_PARITY_LIVE/model-config.yaml"
+  _track
+  run "$ASSERT"
+  # Byte-identical TODAY is still drift: it diverges on the next repo edit and nothing would say so.
+  # That is precisely how the four-day drift happened, and why a content-only check is not enough.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNLINKED"* ]] || false
+  [[ "$output" == *"must be a symlink"* ]] || false
+}
+
+@test "root SSOT: un-run staged activation owns the swap ⇒ PENDING, not drift, exit 0" {
+  _livefix
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  printf 'drifted\n' > "$CC_PARITY_LIVE/model-config.yaml"
+  _pendfix model-config.yaml
+  _track
+  run "$ASSERT"
+  # 20-model-config-ssot-activate.sh is the real, staged, C10 operator step that performs exactly
+  # this swap. Convicting the live host for obeying a design that is waiting on the operator is the
+  # false RED this leg already learned once — the new check must not re-introduce it.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PENDING"* ]] || false
+  [[ "$output" == *"is not the link YET"* ]] || false
+  [[ "$output" != *"STALE"* ]]
+  [[ "$output" != *"UNLINKED"* ]]
+}
+
+@test "root SSOT: a RELATIVE symlink resolving to the repo file ⇒ clean, exit 0" {
+  _livefix
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  # install.sh writes an absolute link, but the resolver must not depend on that: a relative link
+  # landing on the same file is correctly deployed, and calling it drift would be a false RED.
+  ln -sfn "$(cd "$CC_PARITY_REPO" && pwd)/model-config.yaml" "$CC_PARITY_LIVE/model-config.yaml"
+  ( cd "$CC_PARITY_LIVE" && rm -f model-config.yaml && ln -sfn "../repo/model-config.yaml" model-config.yaml )
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"STALE"* ]]
+  [[ "$output" != *"UNLINKED"* ]]
+  printf '%s\n' "$output" | grep -qE '^  ok +root SSOT \(link\) +1 tracked · 1 live · 0 missing$'
+}
+
+@test "root SSOT: a symlink pointing at a DIFFERENT checkout ⇒ drift, exit 1" {
+  _livefix
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  mkdir -p "$BATS_TEST_TMPDIR/other"
+  printf 'opus_latest: claude-opus-4-8\n' > "$BATS_TEST_TMPDIR/other/model-config.yaml"
+  ln -sfn "$BATS_TEST_TMPDIR/other/model-config.yaml" "$CC_PARITY_LIVE/model-config.yaml"
+  # A link is not automatically parity: the subject under assertion is THIS checkout, and a link
+  # into another one is a second SSOT wearing a symlink — the same split the audit found.
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"* ]] || false
+}
+
 @test "class: the same eight files linked live ⇒ clean, exit 0 (the RED above was not a false demand)" {
   _livefix
   mkdir -p "$CC_PARITY_REPO"/{hooks,agents,lib,scripts/lib,bin} \
