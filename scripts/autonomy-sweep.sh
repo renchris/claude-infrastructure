@@ -694,9 +694,29 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
 _cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+# 🚨 THE MATCH IS EXACT, NOT A PREFIX — and the prefix form re-admitted the very run it was written
+# to exclude (2026-08-12, backlog 41b7bf09e4a2). This shipped as `"$_cc_cfg"/*`, i.e. "anything
+# under ~/.claude is the deployed copy". But postland-verify MINTS ITS DISPOSABLE WORKTREE UNDER
+# ~/.claude: `WT_ROOT="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"`, `WORKTREE=$WT_ROOT/
+# wt-run-$$` (scripts/postland-verify.sh:96,106,108). So `$0` inside the suite reads
+# `~/.claude/autonomy/postland/wt-run-NNN/scripts/autonomy-sweep.sh` — which the glob MATCHED. The
+# guard excluded a developer's ~/Development checkout and admitted the verifier, which is the exact
+# path named in the 2026-08-11 incident this block was added for.
+#
+# The consequence was not a wrong journal line, it was a WEDGED GATE. tests/autonomy-sweep.bats runs
+# the real sweep ~55 times; each run then took the two live branches above at their own bounds
+# (900 s + 180 s), so the suite's ceiling went from seconds to ~16 h and the corpus hung at 216/8520
+# — while every one of those passes acted on the operator's live declaration store.
+#
+# There is exactly ONE deployed path and launchd names it literally:
+# `~/.claude/scripts/autonomy-sweep.sh` (launchd/com.chrisren.autonomy-sweep.plist:10). Matching it
+# and nothing else makes "is this the deployed copy" a question with one true answer instead of a
+# containment test that any future dir under ~/.claude can accidentally satisfy.
+# (memory: guard-must-name-the-thing-not-its-neighbourhood — a prefix guard grows false positives
+# every time someone adds a directory the guard's author never saw.)
 case "$0" in
-  "$_cc_cfg"/*) _cloudret_deployed=1 ;;
-  *)            _cloudret_deployed=0 ;;
+  "$_cc_cfg"/scripts/autonomy-sweep.sh) _cloudret_deployed=1 ;;
+  *)                                    _cloudret_deployed=0 ;;
 esac
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudret_rc="skipped-not-deployed"
