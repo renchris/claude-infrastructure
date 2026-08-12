@@ -42,6 +42,32 @@ setup() {
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
            "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR" \
            "$CC_HANDOFF_ALARM_DIR" "$CC_TEARDOWN_DIR"
+  # ⚠️ THE SAME WARNING, ONE LEVEL DOWN — and this is the level that wedged the corpus. The block
+  # above redirects every store the SWEEP ITSELF names. But the sweep is also a CALLER: blocks 2b/2c
+  # run backlog-consolidation-trigger.sh, backlog-ratchet.sh and settings-drift-assert.sh above the
+  # nothing-new early exit, so all three fire on EVERY one of this file's 70 sweep invocations, and
+  # each carries its OWN $HOME defaults that no export above reaches. Measured 2026-08-11 (post-land
+  # HUNG @ 2471e41e04a2, wedged at 216/8517): settings-drift-assert reads the five LIVE config dirs
+  # — ~65 hooks each, a `basename` fork per hook and a `grep -qxF` per entry per dir — at 2.42 s per
+  # sweep against 0.154 s hermetic. 16×, times 70, is the whole wedge; nothing was infinite, the
+  # suite simply grew past POSTLAND_FILE_TIMEOUT_S because two later commits each added a caller.
+  #
+  # HOME ITSELF is the redirect, not one export per seam, and that IS the fix rather than a shortcut:
+  # every one of these defaults is spelled `${CC_X:-$HOME/.claude/…}`, so naming them individually
+  # closes the three that exist today and none of the ones a fourth caller adds tomorrow — which is
+  # exactly how this file arrived here. (Same idiom as tests/backlog-consolidation-trigger.bats.)
+  # Closed by this line: CC_RATCHET_STATE (a live WRITE to ~/.claude/autonomy/backlog-ratchet.json on
+  # all 70 sweeps), CC_DRIFT_DIRS (the 2.42 s read), CC_BACKLOG_IDL (cc-backlog appends the operator's
+  # real IDL — CC_IDL above does NOT cover it, it is a separate variable).
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/autonomy"
+  # …EXCEPT the one seam a HOME redirect makes WORSE, so it needs its own kill switch. `cc-backlog
+  # add` ends in dispatch_kick, which SPAWNS a detached `cc-dispatch --decide` against the operator's
+  # live store; the sweep calls `add` once per fired class-B default. kick_bin resolves `command -v
+  # cc-dispatch` from PATH BEFORE its $HOME fallback, so the line above cannot stop the spawn — and
+  # the 30 s debounce it would otherwise hit is keyed on a marker under HOME, now fresh per test, so
+  # redirecting alone would turn one kick per 30 s into one per `add`. `off` is cc-backlog's own
+  # documented kill switch (§6) and the idiom of ten other suites here.
+  export CC_BACKLOG_KICK=off
   # stub cc-notify: log every call to <stub>.log, and emit a cc-notify-SHAPED verdict token on
   # STDERR — the real binary does, and the exit code alone is NOT the outcome (measured against a
   # dead pane: `verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997` at rc=0). A stub
@@ -84,6 +110,31 @@ echo "$@" >> "$0.log"
 printf '%s\n' "${CC_STUB_IT2_OUT:-}"
 SH
   chmod +x "$CC_IT2_BIN"
+}
+# ── THE BOUND — every sweep invocation in this file goes through here ─────────────────────────────
+# The hermetic block in setup() removes the cost that wedged this file. This removes the CLASS. A
+# suite is the one consumer that can never tell "slow" from "stuck" on its own: bats has no per-test
+# ceiling, so an un-stubbed seam does not fail here at all — it runs until postland-verify's
+# POSTLAND_FILE_TIMEOUT_S cuts the whole corpus and files a HUNG naming a FILE, and a verdict whose
+# resolution is one file out of ninety costs a session to localise. Under this bound the same seam
+# reds ONE test, by name, with rc 124, in the run that introduced it.
+#
+# 60 s, and the number is chosen the way this repo learned to choose bounds: a healthy sweep is
+# 0.154 s hermetic, so this is ~400× headroom and cannot flake on a loaded box — which matters more
+# than tightness here, because postland runs bats in Darwin's BACKGROUND QoS band where throttling
+# is real and unpredictable. A bound that can convict a healthy run is worse than no bound at all
+# (memory: exoneration-bound-must-fit-what-it-bounds — 240 s cut a healthy land and filed it as a
+# refusal). What this bound is FOR is a seam that never returns; the accumulation class is closed
+# upstream, by hermeticity, which is where it belongs.
+#
+# Degrades to unbounded when neither binary exists rather than failing the suite — same idiom, and
+# the same reason, as autonomy-sweep.sh's own sweep_bounded(): no bound is the status quo, and a
+# missing coreutils must not turn every test in this file red.
+SWEEP_TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+sweep() { # run the SUT under a hard ceiling; rc 124 = it wedged (timeout(1)'s contract)
+  local s="${CC_TEST_SWEEP_TIMEOUT_S:-60}"
+  if [ -z "$SWEEP_TIMEOUT_BIN" ] || [ ! -x "$SWEEP_TIMEOUT_BIN" ]; then bash "$SWEEP" "$@"; return $?; fi
+  "$SWEEP_TIMEOUT_BIN" -k 5 "$s" bash "$SWEEP" "$@"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
 osa_count()    { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
@@ -134,7 +185,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 
 # ── nothing-new → abstain, no notify ───────────────────────────────────────────
 @test "nothing new → abstain, zero notifies" {
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 0 ]
   grep -q '"disposition":"abstained"' "$CC_IDL"
@@ -143,7 +194,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 # ── new alarm → exactly one notify, once (dedup on the second run) ──────────────
 @test "a new alarm → one notify to the desk role; a second run (nothing new) abstains" {
   echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
   # addressed by ROLE, not by the uuid snapshot the sweep read: cc-notify re-reads cc-roles/desk at
@@ -151,7 +202,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
   grep -q -- '--role desk' "$CC_NOTIFY_BIN.log"
   grep -q '"disposition":"fired"' "$CC_IDL"
   # second run: the alarm is now .seen → nothing new → abstain, still exactly ONE notify total
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
 }
@@ -159,7 +210,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 # ── a new page surfaces ────────────────────────────────────────────────────────
 @test "a new page triggers one notify" {
   echo "1784370726" > "$CC_PAGES_DIR/$(uuidgen 2>/dev/null || echo p1).page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
 }
@@ -167,12 +218,12 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 # ── completion-push: only push-failed records surface, not verified ────────────
 @test "completion-push: a push-failed record surfaces; a verified one does not" {
   echo '{"kind":"completion-push","verdict":"verified","event":"ok"}'   > "$CC_COMPLETION_RECORDS_DIR/good.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 0 ]                     # verified-only ⇒ nothing stuck ⇒ no notify
   grep -q '"disposition":"abstained"' "$CC_IDL"
   echo '{"kind":"completion-push","verdict":"push-failed(cc-announce rc=5)","event":"terminal"}' > "$CC_COMPLETION_RECORDS_DIR/bad.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]                     # the push-failed one wakes the desk
 }
@@ -181,7 +232,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 @test "a past-deadline class-B default fires → cc-backlog item appended, packet expired-actioned" {
   id=$(bash "$CC_DECIDE_BIN" open --class B --what "which account to continue on" \
         --default "continue cross-account on next2" --deadline "2000-01-01T00:00:00Z")
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   # the sweep is the default-ACTUATOR: it appends a backlog item rather than acting inline
   run bash "$CC_BACKLOG_BIN" list --open
@@ -195,9 +246,9 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 @test "an open (future-deadline) class-B packet surfaces once, then is deduped" {
   bash "$CC_DECIDE_BIN" open --class B --what "a pending fork" \
     --default "park + continue" --deadline "2099-01-01T00:00:00Z" >/dev/null
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]      # deduped on the second run
 }
 
@@ -205,19 +256,19 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 @test "no desk role → notify is not delivered and the record is NOT marked seen (retry)" {
   rm -f "$CC_ROLES_DIR/desk"
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 0 ]                       # nothing delivered
   grep -q 'no-desk-role\|undelivered' "$CC_IDL"     # loud, not silent
   # restore role: the SAME alarm must still surface (it was never marked seen)
   echo "desk-pane-uuid-current" > "$CC_ROLES_DIR/desk"
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]
 }
 
 # ── launchd/supervisor-callable: runs standalone, exit 0, no args ──────────────
 @test "runs standalone with no args and exits 0" {
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
 }
 
@@ -236,7 +287,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   mk_old   "$CC_COMPLETION_RECORDS_DIR/old.json";    mk_young "$CC_COMPLETION_RECORDS_DIR/new.json"
   mk_old   "$CC_TEARDOWN_RECORDS_DIR/old.json";      mk_young "$CC_TEARDOWN_RECORDS_DIR/new.json"
 
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
 
   [ ! -f "$CC_PAGES_DIR/old.page" ];              [ -f "$CC_PAGES_DIR/new.page" ]
@@ -251,7 +302,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   mk_old "$CC_DECISIONS_DIR/old.json"
   printf '{"status":"open"}\n' > "$CC_DECISIONS_DIR/old.json"
   touch -t "$(date -v-30d +%Y%m%d%H%M)" "$CC_DECISIONS_DIR/old.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ -f "$CC_DECISIONS_DIR/old.json" ]
 }
@@ -260,21 +311,21 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 @test "an old .escalated marker whose mailbox still exists is KEPT (damping preserved)" {
   mk_old "$CC_INBOX_GUARD_STATE_DIR/PANE-A.escalated"
   printf 'msg\n' > "$CC_MAILBOX_DIR/PANE-A.md"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ -f "$CC_INBOX_GUARD_STATE_DIR/PANE-A.escalated" ]
 }
 
 @test "an old .escalated marker whose mailbox is gone IS reaped (it can damp nothing)" {
   mk_old "$CC_INBOX_GUARD_STATE_DIR/PANE-B.escalated"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ ! -f "$CC_INBOX_GUARD_STATE_DIR/PANE-B.escalated" ]
 }
 
 @test "a YOUNG .escalated marker with no mailbox is still kept (horizon, not lifecycle)" {
   mk_young "$CC_INBOX_GUARD_STATE_DIR/PANE-C.escalated"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ -f "$CC_INBOX_GUARD_STATE_DIR/PANE-C.escalated" ]
 }
@@ -335,7 +386,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   id=$(bash "$CC_DECIDE_BIN" open --class B --what "rearchitect the program?" \
         --default "hold (no change without ruling)" --deadline "2000-01-01T00:00:00Z" \
         --default-effect no-change)
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   # the packet DID fire (the trail is intact — this is not a no-op path)
   [ "$(jq -r '.status' "$CC_DECISIONS_DIR/$id.json")" = "expired-actioned" ]
@@ -355,7 +406,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
     --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
   bash "$CC_DECIDE_BIN" open --class B --what "change one" --default "land the lossless fix" \
     --deadline "2000-01-01T00:00:00Z" --default-effect change >/dev/null
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   run bash "$CC_BACKLOG_BIN" list --open
   echo "$output" | grep -q "land the lossless fix"
@@ -367,7 +418,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   # would silently stop draining the class-B queue.
   bash "$CC_DECIDE_BIN" open --class B --what "legacy shape" --default "carry this out" \
     --deadline "2000-01-01T00:00:00Z" >/dev/null
-  run bash "$SWEEP"
+  run sweep
   run bash "$CC_BACKLOG_BIN" list --open
   echo "$output" | grep -q "carry this out"
 }
@@ -375,7 +426,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 @test "the item is filed against the packet's DECLARED subject project" {
   bash "$CC_DECIDE_BIN" open --class B --what "whose project?" --default "do the thing" \
     --deadline "2000-01-01T00:00:00Z" --project doc_classifier --default-effect change >/dev/null
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   run jq -r 'select(.source=="autonomy-sweep") | .project' "$CC_BACKLOG_FILE"
   [ "$output" = "doc_classifier" ]
@@ -387,7 +438,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   # (so `no-change` would never match and the title would go empty).
   bash "$CC_DECIDE_BIN" open --class B --what "no project" --default "carry this out" \
     --deadline "2000-01-01T00:00:00Z" >/dev/null
-  CC_SWEEP_PROJECT=host-proj run bash "$SWEEP"
+  CC_SWEEP_PROJECT=host-proj run sweep
   [ "$status" -eq 0 ]
   run jq -r 'select(.source=="autonomy-sweep") | .project + "|" + .title' "$CC_BACKLOG_FILE"
   [ "$output" = "host-proj|class-B default fired: carry this out" ]
@@ -411,7 +462,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   export CC_STUB_VERDICT=mailbox-only
   export CC_SWEEP_OS_CHANNEL=off
   echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
   # nothing may be FORGOTTEN — no reader was proven (the banner store is a different subject)
@@ -419,7 +470,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   grep -q '"delivered":false' "$CC_IDL"
   # …and the SAME record re-surfaces on the next sweep. This is the whole point: an escalation that
   # nobody read must keep asking.
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 2 ]
 }
@@ -433,14 +484,14 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   export CC_STUB_VERDICT=mailbox-only
   export CC_SWEEP_OS_CHANNEL=auto          # resolves the stub osascript on PATH (hermetic)
   echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(osa_posts)" -eq 1 ]                 # something was actually put in front of a human
   grep -q '"channel":"notification-center-advisory"' "$CC_IDL"
   [ "$(bannered_count)" -ge 1 ]            # damped
   [ "$(seen_count)" -eq 0 ]                # …but NOT forgotten — no reader was ever proven
   # the record keeps asking, and yet the banner does NOT repeat: exactly one post, ever.
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 2 ]
   [ "$(osa_posts)" -eq 1 ]
@@ -456,14 +507,14 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   export CC_STUB_VERDICT=unresolvable
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(seen_count)" -eq 0 ]                       # THE data-loss guard — unchanged
   [ "$(osa_posts)" -eq 1 ]                        # …and the operator is no longer told nothing
   echo "$output" | grep -q 'UNDELIVERED'          # loud, never silent (a17 S-4)
   grep -q '"delivered":false' "$CC_IDL"
   # bounded: a transport that refuses forever still posts exactly once per record
-  run bash "$SWEEP"
+  run sweep
   [ "$(osa_posts)" -eq 1 ]
 }
 
@@ -482,7 +533,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   rm -f "$CC_ROLES_DIR/desk"
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 0 ]              # r1 correctly did not run — no role is a NORMAL config
   [ "$(osa_posts)" -eq 1 ]                 # …and the operator was reached anyway
@@ -497,12 +548,12 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   rm -f "$CC_ROLES_DIR/desk"
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
-  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
-  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
+  run sweep; [ "$(osa_posts)" -eq 1 ]
+  run sweep; [ "$(osa_posts)" -eq 1 ]
+  run sweep; [ "$(osa_posts)" -eq 1 ]
   # a genuinely NEW record still gets its own post — damping must not become deafness
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a2.json"
-  run bash "$SWEEP"; [ "$(osa_posts)" -eq 2 ]
+  run sweep; [ "$(osa_posts)" -eq 2 ]
 }
 
 @test "D2 CONTROL: re-nesting r2 under r1's precondition FAILS the absent-role test" {
@@ -541,7 +592,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   export CC_SWEEP_OS_CHANNEL=auto
   export CC_SWEEP_LADDER=legacy
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(osa_posts)" -eq 0 ]
   grep -q 'no-desk-role' "$CC_IDL"
@@ -557,7 +608,7 @@ SH
   chmod +x "$CC_NOTIFY_BIN"
   export CC_SWEEP_OS_CHANNEL=off
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(seen_count)" -eq 0 ]
   grep -q '"verdict":"unreadable"' "$CC_IDL"
@@ -569,11 +620,11 @@ SH
   export CC_STUB_VERDICT=delivered
   export CC_SWEEP_OS_CHANNEL=off
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ -n "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
   grep -q '"channel":"desk"' "$CC_IDL"
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]
   grep -q '"disposition":"abstained"' "$CC_IDL"
 }
@@ -593,7 +644,7 @@ SH
 @test "the summary distinguishes queued fires from no-change fires" {
   bash "$CC_DECIDE_BIN" open --class B --what "nc" --default "hold it" \
     --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   # reporting only the total would read as "1 item queued" on a sweep that queued none
   grep -q "no-change: surfaced, NOT dispatched" "$CC_NOTIFY_BIN.log"
@@ -608,23 +659,23 @@ SH
 @test "seen markers are written under BOTH keys, and EITHER one alone suppresses re-surfacing" {
   export CC_STUB_VERDICT=delivered
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
   [ -f "$CC_SWEEP_SEEN_DIR/a1.json.seen" ]   # the literal key the render/CLI side can grep and write
   [ "$(seen_count)" -eq 2 ]                  # …and the legacy hash key beside it, still valid
   # the HASH key alone still damps (every marker written before today looks like this)
   rm -f "$CC_SWEEP_SEEN_DIR/a1.json.seen"
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]
   # the LITERAL key alone still damps (this is exactly what `cc-escalations ack` leaves behind)
   rm -f "$CC_SWEEP_SEEN_DIR"/*
   : > "$CC_SWEEP_SEEN_DIR/a1.json.seen"
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 1 ]
   # POSITIVE CONTROL: with NEITHER key the same record surfaces again — the gate is not just off
   rm -f "$CC_SWEEP_SEEN_DIR"/*
-  run bash "$SWEEP"
+  run sweep
   [ "$(notify_count)" -eq 2 ]
 }
 
@@ -641,7 +692,7 @@ SH
   export CC_SWEEP_OS_CHANNEL=auto          # resolves the stub osascript on PATH (hermetic)
   printf '{"kind":"handoff-alarm","class":"husk-pane","pane":"289","sid":"S-1","successor":"","detail":"pane close failed 4/4","ts":"2026-08-07T09:00:00Z"}\n' \
     > "$CC_HANDOFF_ALARM_DIR/alarm-1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 0 ]              # no role ⇒ rung 1 does not run at all…
   [ "$(osa_count)" -eq 1 ]                 # …and the operator is reached regardless. The whole fix.
@@ -650,7 +701,7 @@ SH
   grep -q '"channel":"notification-center-advisory"' "$CC_IDL"
   grep -q '"delivered":false' "$CC_IDL"
   # DAMPED: the record re-surfaces every tick (it is not .seen), and must never banner twice
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(osa_count)" -eq 1 ]
   [ "$(seen_count)" -eq 0 ]
@@ -665,7 +716,7 @@ SH
   export CC_SWEEP_OS_CHANNEL=auto
   printf '{"kind":"handoff-alarm","class":"husk-pane","pane":"289","detail":"d","ts":"t"}\n' \
     > "$CC_HANDOFF_ALARM_DIR/alarm-1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(osa_count)" -eq 0 ]                 # nested inside the desk arm ⇒ structurally unreachable
   [ "$(seen_count)" -eq 0 ]
@@ -680,12 +731,12 @@ SH
   export CC_STUB_VERDICT=unresolvable
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(osa_count)" -eq 1 ]
   [ "$(seen_count)" -eq 0 ]
   echo "$output" | grep -q 'UNDELIVERED'   # rung 3 is still loud (a17 S-4)
-  run bash "$SWEEP"
+  run sweep
   [ "$(osa_count)" -eq 1 ]                 # …and damped
 }
 
@@ -694,7 +745,7 @@ SH
   export CC_STUB_VERDICT=delivered
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(seen_count)" -gt 0 ]
   [ "$(osa_count)" -eq 0 ]
@@ -708,7 +759,7 @@ SH
     printf '{"kind":"handoff-alarm","class":"%s","pane":"p","sid":"s","detail":"d","ts":"t"}\n' "$c" \
       > "$CC_HANDOFF_ALARM_DIR/alarm-$c-$RANDOM.json"
   done
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
   grep -q '3 handoff-alarm(s)' "$CC_NOTIFY_BIN.log"
@@ -721,7 +772,7 @@ SH
 @test "collect · an aged handoff-alarm record is TTL-compacted, a young one is kept" {
   mk_old   "$CC_HANDOFF_ALARM_DIR/old.json"
   mk_young "$CC_HANDOFF_ALARM_DIR/new.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ ! -f "$CC_HANDOFF_ALARM_DIR/old.json" ]
   [ -f "$CC_HANDOFF_ALARM_DIR/new.json" ]
@@ -731,7 +782,7 @@ SH
 
 @test "expiry · a record aging out UNREAD is counted out loud, never quietly unlinked" {
   mk_old "$CC_PAGES_DIR/old.page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   grep -q '"store":"pages"' "$CC_EXPIRED_LEDGER"
   grep -q '"kind":"expired-unread"' "$CC_IDL"
@@ -744,11 +795,11 @@ SH
   # fires, and it would carry exactly as many bits as one that never fires.
   export CC_STUB_VERDICT=delivered
   mk_young "$CC_PAGES_DIR/p.page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(seen_count)" -gt 0 ]                # PROVEN delivered ⇒ it carries a .seen marker
   touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ ! -f "$CC_PAGES_DIR/p.page" ]          # reaped…
   [ ! -s "$CC_EXPIRED_LEDGER" ]            # …silently
@@ -763,7 +814,7 @@ SH
   mkdir -p "$CC_SWEEP_SEEN_DIR"
   mk_old "$CC_PAGES_DIR/old.page"
   : > "$CC_SWEEP_SEEN_DIR/old.page.seen"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ ! -f "$CC_PAGES_DIR/old.page" ]        # still reaped on the horizon…
   [ ! -s "$CC_EXPIRED_LEDGER" ]            # …and silently, because it WAS read
@@ -776,12 +827,12 @@ SH
   rm -f "$CC_ROLES_DIR/desk"
   export CC_SWEEP_OS_CHANNEL=auto
   mk_young "$CC_PAGES_DIR/p.page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(bannered_count)" -eq 1 ]
   [ "$(seen_count)" -eq 0 ]
   touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   grep -q '"kind":"expired-unread"' "$CC_IDL"
 }
@@ -795,7 +846,7 @@ SH
   export CC_STUB_IT2_OUT="240
 289
 7"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 1 ]
   grep -q '"class":"handoff-orphan"' "$CC_HANDOFF_ALARM_DIR"/*.json
@@ -807,7 +858,7 @@ SH
   # the record is a first-class escalation: surfaced in the SAME sweep that raised it
   grep -q '1 handoff-alarm(s) (1 handoff-orphan)' "$CC_NOTIFY_BIN.log"
   # IDEMPOTENT — a marker is adjudicated once, ever
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 1 ]
 }
@@ -815,13 +866,13 @@ SH
 @test "D4 · a marker younger than the deadline is not yet due" {
   mk_marker m1.json 289 terminal young
   export CC_STUB_IT2_OUT="289"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
   # POSITIVE CONTROL: the same marker, aged past the deadline, DOES alarm
   touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
-  run bash "$SWEEP"
+  run sweep
   [ "$(ha_count)" -eq 1 ]
 }
 
@@ -830,7 +881,7 @@ SH
   export CC_STUB_IT2_OUT="289"
   printf '{"ts":"2026-08-07T09:00:00Z","site":"self-close","mode":"self","terminal":"kitty","id_requested":"289","owner":"operator-or-unknown","verdict":"closed"}\n' \
     > "$CC_CLOSE_ATTRIB_LOG"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
@@ -838,7 +889,7 @@ SH
   # POSITIVE CONTROL beside the absence: same fixture, outcome row removed, marker re-armed
   : > "$CC_CLOSE_ATTRIB_LOG"
   rm -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked"
-  run bash "$SWEEP"
+  run sweep
   [ "$(ha_count)" -eq 1 ]
 }
 
@@ -846,14 +897,14 @@ SH
   mk_marker m1.json 289 terminal
   export CC_STUB_IT2_RC=124                # cut at the bound: we learned nothing about the world
   export CC_STUB_IT2_OUT="289"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]   # withholding the marker IS the retry
   grep -q '"no_data":1' "$CC_IDL"
   # POSITIVE CONTROL: the retry is real — the next tick, with a probe that answers, alarms
   unset CC_STUB_IT2_RC
-  run bash "$SWEEP"
+  run sweep
   [ "$(ha_count)" -eq 1 ]
 }
 
@@ -861,7 +912,7 @@ SH
   mk_marker m1.json 289 terminal
   export CC_STUB_IT2_OUT="240
 7"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
@@ -876,14 +927,14 @@ SH
   mk_marker m1.json 4 terminal             # `4` is a substring of `240` and of nothing that is live
   export CC_STUB_IT2_OUT="240
 263"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   # POSITIVE CONTROL: the very same id, now genuinely in the listing, DOES alarm
   rm -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked"
   export CC_STUB_IT2_OUT="240
 4"
-  run bash "$SWEEP"
+  run sweep
   [ "$(ha_count)" -eq 1 ]
 }
 
@@ -892,7 +943,7 @@ SH
     > "$CC_TEARDOWN_DIR/m1.json"
   touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
   export CC_STUB_IT2_OUT="240"
-  run bash "$SWEEP"
+  run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
@@ -903,11 +954,11 @@ SH
 @test "D4 · the kill switch (CC_HANDOFF_JOIN=0) suppresses the join entirely" {
   mk_marker m1.json 289 terminal
   export CC_STUB_IT2_OUT="289"
-  CC_HANDOFF_JOIN=0 run bash "$SWEEP"
+  CC_HANDOFF_JOIN=0 run sweep
   [ "$status" -eq 0 ]
   [ "$(ha_count)" -eq 0 ]
   [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
   # POSITIVE CONTROL: without the switch, the identical fixture alarms
-  run bash "$SWEEP"
+  run sweep
   [ "$(ha_count)" -eq 1 ]
 }
