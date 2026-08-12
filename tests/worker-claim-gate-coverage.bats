@@ -241,8 +241,19 @@ lineno() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
   # commented out — the mutation control below found it. A position case that a `#` satisfies is
   # measuring the position of a comment, which is case 01's lesson arriving one hook later. The
   # pattern requires the call to begin its own statement, so a leading `#` cannot be absorbed.
+  # THE CAP ANCHOR IS ON THE CALL, NOT ON ITS `if` LINE (fixed 2026-08-12, backlog b7252a3bb015).
+  # It read `^[[:space:]]*if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit` — the two tokens ADJACENT on
+  # one line. W3's reserve term (450a47c50) added `CC_ADMIT_SID="${_ateh_sid:-?}"` between them and
+  # wrapped the statement over two lines, so the anchor matched nothing, `cap` went empty, and this
+  # case went RED on a subject whose ordering property is still perfectly intact (gate 113 < cap 206).
+  # That is a test calibrated to FORMATTING failing on a reformat — and it cost the whole off-box
+  # green, hence the deploy lane, for two days. Anchoring on the invocation itself is strictly more
+  # durable: it survives any number of env-assignment prefixes and any rewrap, while staying a REAL
+  # call at statement position, so a leading `#` still cannot satisfy it (case 01's lesson) and
+  # `command -v cc_capacity_admit` at :203 still cannot either. M1/M2 both still go RED — M1 empties
+  # `gate`, M2 makes gate > cap — which is what this case exists to observe.
   gate="$(lineno "$HOOK2" '^[[:space:]]*cc_worker_claim_admit agent-tool')"
-  cap="$(lineno "$HOOK2" '^[[:space:]]*if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit')"
+  cap="$(lineno "$HOOK2" '^[[:space:]]*cc_capacity_admit agent-tool')"
   budget="$(lineno "$HOOK2" '_sb_max=')"
   [ -n "$gate" ]; [ -n "$cap" ]; [ -n "$budget" ]
   [ "$gate" -lt "$cap" ]
