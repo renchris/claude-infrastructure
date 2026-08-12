@@ -716,6 +716,146 @@ This is the shape the brief predicted for `deep-history` and it is worth stating
 binding constraint on cloud drain today is what the VM can REACH and what the local dispatcher
 insists on checking before letting it go — not the eligibility predicate.**
 
+### A2b · The ceiling: 15.7% today, 20.5% after the one fix worth doing, and a 79.5% hard floor
+
+**Re-derived from the store — and the first re-derivation was itself wrong, in a way worth keeping.**
+The obvious command is a `jq` fold over `~/.claude/autonomy/backlog.jsonl`:
+
+```
+jq -r 'select(.venuePlan)|.venuePlan' ~/.claude/autonomy/backlog.jsonl | sort | uniq -c
+   → 49 cloud · 263 local · "312 total, sums exactly"
+```
+
+**That number is an artefact and it must not be quoted.** `backlog.jsonl` is an **append-only event
+log — 8,609 records, `.status` null on essentially all of them.** `select(.venuePlan)` therefore
+counts *label-write events*, not current rows, and — the load-bearing part — it **structurally cannot
+see an unlabelled row at all**, because such a row has no `venuePlan` key to select. That is exactly
+why the fold looked so clean: the population it silently dropped is the one Q2 turns on. (Memory
+class: *positive-control-the-denominator* — a perfect-looking classifier over the wrong population.)
+
+**The authoritative read is the tool, and it disagrees:**
+
+```
+cc-backlog list --open --json | jq 'length'                    → 525 open
+… | jq '[.[] | .venuePlan // "UNLABELLED"] | group_by(.) …'    → 45 cloud · 241 local · 239 UNLABELLED
+```
+
+and the dispatcher's own journal, this session, for the *dispatchable* subset (project-scoped,
+unclaimed): **315 dispatchable · `venue-only=cloud parked 272` · 43 cloud dispatchable.**
+
+| denominator | cloud share |
+|---|---|
+| 315 dispatchable (the dispatcher's own population) | **43 → 13.7%** |
+| 525 open | 45 → 8.6% |
+| ~~312 "labelled"~~ | ~~49 → 15.7%~~ — event-log artefact, do not use |
+
+The brief's own "45 cloud · 236 local · 31 unlabelled" is close on cloud and **badly low on
+unlabelled**: measured today it is **239 of 525 open rows**, not 31. Its "236 of 312 refused" is not
+reproducible from any single read either — the six named refusal counts sum to 245.
+
+**The per-class analysis below is unaffected** — it was produced by importing `bin/cc-eligible` and
+calling `assess_full()` per item over the live store (the same code object the claim gate runs,
+`bin/cc-venue:104`), and a `cc-eligible sweep --json` reproduces every class within ±4 rows. Only the
+venue *fold* and its denominator were wrong.
+
+| venueWhy | n |
+|---|---|
+| `ineligible-box` | **160** *(brief said 155)* |
+| `ineligible-branch-banking` | 25 |
+| `ineligible-spawn-rail` | 24 |
+| `ineligible-visual` | **19** *(brief said 16)* |
+| `ineligible-deep-history` | 15 |
+| `ineligible-offbox-lane` | 10 |
+| `premise-*` (suspect 4 / falsified 4 / superseded 1) | 9 |
+| `ineligible-github` | 1 |
+
+Note also that `eligible` is an *upper bound* on dispatchable: `cc-venue` applies a fourth gate
+`cc-eligible` does not — `cc-premise` must return `clear` (`bin/cc-venue:184-193`) — costing 9 more
+rows. That is a staleness barrier, not a venue barrier, so it is excluded from the floor.
+
+**Exactly one of the six classes is a provisioning artefact.**
+
+| class | n | verdict | emitted by | fix |
+|---|---|---|---|---|
+| `ineligible-box` | 160 | **INHERENT** (all six sub-causes) | `bin/cc-eligible:126-210`, verdict `:326` | — |
+| `branch-banking` | 25 | INHERENT ×14; provisioning-in-principle ×11, **~1 row real** | `:304-312`, verdict `:328` | push 199 branches to `refs/banked/*` — **not worth it** |
+| `spawn-rail` | 24 | **INHERENT** | `:240-256`, verdict `:325` | — the verification *is* a live pane spawn via the it2 API; a Linux microVM has no window server |
+| `visual` | 19 | **INHERENT** | `:280-302`, verdict `:327` | — 12 of 19 need an iTerm2 window at a pinned font; the 7 reso rows need Turso creds the VM has no channel for |
+| `deep-history` | 15 | **PROVISIONING** ✅ | `DEEP_HISTORY` `:340`, minted in `assess_full` `:656-661` from `HistoryOracle.unreachable()` `:560-590` against `CLOUD_DEPTH=50` `:454` | **`git fetch --deepen 2000` in the VM preamble + lockstep `CLOUD_DEPTH`. Unlocks all 15** |
+| `offbox-lane` | 10 | **INHERENT** | `:212-238`, verdict `:324` | — circularity: *"the observer and the subject are the same object"* (`:225-227`) |
+
+`deep-history` is not a keyword — it is the one class the predicate had to **measure** rather than
+spell, which is exactly why it is the only one about the VM's *reach* instead of the work's *subject*.
+Measured `git rev-list --count <sha>..origin/main` over all 27 cited-unreachable shas: deepest is
+1512, so **`--deepen 2000` covers every one** with headroom against a 2,654-commit trunk. A full
+`--unshallow` would cost 133 MiB of pack — bytes, against a measured 437 s session. And because
+`CLASSES` runs self-referential-first with `DEEP_HISTORY` appended **last** (`:323-330`, `:656-661`),
+every one of the 14 live open `deep-history` items has **exactly one class firing** — so the deepen
+unlocks all of them and double-refuses none.
+
+**`ineligible-box` (160) is six distinct causes under one label**, and none is provisioning-shaped:
+a LIVE Claude Code session's own Stop/PreToolUse events (77 items touching, 38 solo) · terminal +
+window server (55 / 23) · the live `~/.claude` layer (49 / 15) · the Darwin kernel — launchd, jetsam,
+plists, sysctl (33 / 19) · keychain-held accounts and this disk's installed binaries (28 / 7) ·
+generic "this box" (5). **61 items span 2+ groups**, so even a fix to the largest group leaves them
+refused for a second reason.
+
+🚨 **The trap inside that: `~/.claude` looks provisionable and must NOT be provisioned.** Most of it
+is per-file symlinks into this checkout, so the repo already carries those bytes; the 49 items are
+precisely about the parts that are *not* in the repo — whether the symlink farm converged, the real
+non-symlinked `CLAUDE.md`, `autonomy/backlog.jsonl`, telemetry, `runner.log`. Mounting a snapshot
+hands the VM **a plausible-looking empty version**, which is §5's anti-goal in its purest form, and
+the filesystem is reclaimed at session end so anything it converges is gone anyway.
+
+**The second-order win is bigger than the 15 rows, and it is a live correctness problem.** The 49
+rows *already dispatching to cloud today* run against a 50-commit graft, where `git blame` attributes
+every line to `^e9f9c879`, `log -S` returns 1 commit, `rev-list --count --since=2020` returns 50 —
+and this repo's own `|| echo 0` idiom converts eight rc-128 sites into a silent `0`
+(`docs/research/cloud-vm-shallow-clone-blast-radius-2026-08-11.md` §3 S1-S7). So the deepen is not
+primarily a 15-row unlock; it removes a **silent-wrong-answer surface from every cloud dispatch we
+already make**.
+
+⚠️ **Named blocker, and the 15-row unlock is CONDITIONAL until it clears: nobody has run
+`git fetch --deepen` inside a cloud VM.** `git push --dry-run` is proven from inside
+(`docs/research/cloud-vm-roundtrip-2026-08-10.md:46-50`); a deepen over the same proxy is *inferred*.
+The injected credential could be push-scoped, or the proxy could reject a large negotiated fetch.
+**Cheapest next experiment: one throwaway cloud session that runs the deepen and prints
+`git rev-list --count HEAD` + `git rev-parse --is-shallow-repository`.**
+
+The deepen's interlock, landing as one diff: (1) `git fetch --deepen 2000 origin` as the VM's first
+action; (2) the VM prints both assertions and **aborts if the count is below the constant** — a
+deepen "does not help at all when the fetch is skipped, fails, or runs after they do"; (3) ONE SSOT —
+`CLOUD_DEPTH` (`bin/cc-eligible:454`, overridable via `CC_ELIGIBLE_HISTORY_DEPTH`) reads the same
+constant the preamble fetches to. Raising `CLOUD_DEPTH` *without* a verified deepen would mint cloud
+labels for work the VM still cannot see: the §5 anti-goal exactly.
+
+| | rows | share of 315 dispatchable |
+|---|---|---|
+| Reachable today (cloud-planned **and** dispatchable) | **43** | **13.7%** |
+| + verified deepen to 2000 + lockstep `CLOUD_DEPTH` | +15 → **58** | **~18%** |
+| *+ premise refresh (staleness, not venue — excluded from the floor)* | +9 → 67 | ~21% |
+| **HARD FLOOR — cloud can never take this** | **~248 of the labelled refusals** | **~79%** |
+
+*(Row 1 is the dispatcher's own journalled population, which is the only one that predicts behaviour.
+Over all 525 open rows the cloud share is 45 → 8.6%, and 239 rows are unlabelled — see A3, where the
+unlabelled population is the finding rather than a rounding note. The floor's 248 is a share of the
+**labelled** refusals and does not include the unlabelled 239, whose venue is simply unknown.)*
+
+**The generative statement, and it settles Q2's premise.** Four fifths of this backlog is refused
+because *the subject of the work is this machine*, and a machine cannot be provisioned into another
+machine. There is no second `deep-history` hiding in the other five classes. **If the cloud share is
+to rise materially past 20%, it will be because the backlog changes shape — more repo-only work
+filed — not because the VM changes shape.**
+
+*(One further measured observation, reported as a finding and NOT as a proposal, because loosening
+the predicate is the standing anti-goal: some counts are inflated by spelling collisions — `render`
+matching "render GATE-KILLED as its own non-red state", `css` matching the path fragment
+`styled-system/{css,jsx,recipes}`, `venue` matching the doc path `docs/research/venue-landing-…` and
+a reso feature literally named `provision-venue`. True `visual` is ~15-16 not 19; `offbox-lane` ~8-9
+not 10. That is a classifier-PRECISION question with a different risk profile from provisioning, and
+per `bin/cc-eligible:25-34` any narrowing must be per-token evidenced and re-audited — a word deleted
+on a hunch costs the tap a whole class, and a wrong `eligible` is silent by construction.)*
+
 ## A3 · ONE TRACK, ONE RATCHET, VENUE AS A DIMENSION — never two ratchets
 
 **Decision: one metric with a venue dimension.** The question "are we up to date, not stale, optimally
@@ -736,14 +876,21 @@ are orthogonal, and three measured facts say a venue-keyed ratchet would be acti
    `cites-nothing`. "Cites no files" is a property of how the item was *written*. It is identical on
    a Firecracker VM and in a local pane.
 
-**And the venue-keyed design already leaks, measurably.** 31 of ~312 rows carry NO `venuePlan`. The
-venue filter runs at step 1a1 (`bin/cc-dispatch:1390-1407`), *before* the decision loop, so the
-readiness gate's repair path `ready_relabel()` (`:961-967`) only ever sees the already-filtered set;
-and the write-path labeller `venue_label_new()` (`:1243-1259`) is bounded to rows written in the last
-900 s **and runs in decide mode only** (`:1408-1411`), which the 300 s `--once` cron never enters.
-Net: **those 31 rows are excluded on every pass, in every venue, forever.** Under two tracks they
-belong to neither and are invisible to both. Under one track they are simply rows whose venue
-dimension is unset — countable, reportable, and drainable the moment the labeller's gap is closed.
+**And the venue-keyed design already leaks — far worse than anyone had measured.** The standing
+figure was "31 unlabelled of 312". Measured today with the tool rather than a log fold:
+**239 of 525 open rows carry NO `venuePlan`** — 46% of the open backlog. The venue filter runs at
+step 1a1 (`bin/cc-dispatch:1390-1407`), *before* the decision loop, so the readiness gate's repair
+path `ready_relabel()` (`:961-967`) only ever sees the already-filtered set; and the write-path
+labeller `venue_label_new()` (`:1243-1259`) is bounded to rows written in the last 900 s **and runs
+in decide mode only** (`:1408-1411`), which the 300 s `--once` cron never enters. Net: **those rows
+are excluded on every pass, in every venue, forever.**
+
+This is the single strongest argument against two tracks. Under two tracks, nearly half the backlog
+belongs to neither and is invisible to both — and no per-venue ratchet can even *see* it, because
+having no venue is precisely what excludes it. Under one track they are rows whose venue dimension is
+unset: countable, reportable, and drainable the moment the labeller's gap is closed. **The unlabelled
+backfill is therefore not housekeeping — it is a prerequisite for any honest consolidation number**,
+and every migrated-share percentage published before it lands has a 46% blind spot in its denominator.
 
 **Therefore:**
 - **The ratchet counts NOT-READY open items, fleet-wide, venue-blind.** It must fall. This is the
