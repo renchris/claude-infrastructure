@@ -658,6 +658,63 @@ already fails it for one) and touches ~15 gate scripts, so it is a **separate it
 widening of this one**. The prerequisite for it is a mechanical read-set declaration per lint, which
 is also what would make finding 3's superset claim checkable instead of asserted.
 
+#### 🚨 CORRECTION, 2026-08-13 (backlog `cf440684e0e1` triage) — findings 1 and 3 do not survive a read of the code they cite
+
+*(INTEGRATE-only: the three findings above are kept verbatim, because what they got wrong is the
+reusable part. Finding 2 is UNTOUCHED and still binds.)*
+
+The prerequisite this note prescribes — "a mechanical read-set declaration per lint … which would
+make finding 3's superset claim checkable instead of asserted" — was applied by hand to the three
+lints the findings actually name. **All three claims fail, and finding 1's failure removes the only
+named blocker on the path this note calls the answer.**
+
+**Finding 1 is FALSE. `test-hermeticity` rule 4 is strictly PER-FILE as implemented.** Its scan is
+`for f in "$root"/bin/* "$root"/scripts/*.sh "$root"/hooks/*.sh`, and the two predicates inside are
+`selftest_names_const_path "$f"` and `selftest_state_unconfined "$f"` — each takes exactly one file.
+There is no pairing, no set of seen paths, and no comparison between files anywhere in the arm. The
+rule's own header says why, and says it deliberately: *"the compliant position is not 'fixture $HOME'
+but 'make the path PER-RUN UNIQUE'"* — i.e. it was written to replace a cross-file collision test
+with a locally-decidable one, precisely so it would not need the pair.
+
+**How the misreading happened, and it is this session's recurring generator:** the arm's finding
+message reads `COLLIDES <tool>: its embedded selftest names a CONSTANT /tmp path — two concurrent
+runs share it`, and its clean line ends `0 collisions`. The vocabulary is cross-file; the mechanism
+is not. The collision is between **two runs of the same tool**, never between two tools. A claim
+derived from a subject's VOCABULARY rather than its MEASURED behaviour is the same defect that
+produced two vacuous fixtures and two mis-targeted mutants in the recycles either side of this one.
+(memory: `contract-prose-can-understate-the-mechanism`, `control-must-replay-the-real-artifact`.)
+
+**Finding 3's first counter-example is FALSE, and had been for four days when this note was
+written.** `unattended-path-lint` does not judge `settings.json`. `hook_population()` stopped
+intersecting with the live settings.json at **`da81f555b` (2026-08-06)** — four days before this
+note's 2026-08-10 date and five before the backlog row restated it — deliberately, on two grounds
+the function's own comment states: *"reading the operator's real settings.json from a test suite is
+itself the live-state leak"*, and *"scanning the directory is deterministic, hermetic, and strictly
+WIDER"*. Strictly wider is the superset direction, so this counter-example now argues the opposite
+of what it was cited for.
+
+**Finding 3's second counter-example is TRUE but has its POLARITY inverted.** pipefail's pathspec
+does list `docs/*` (`scripts/ship-land.sh:2418`). That makes the declared spec WIDER than the
+population the lint judges — which is what a superset IS. A pathspec that is too wide costs
+unnecessary invalidations; only a pathspec that is too NARROW is the stale-verdict generator the
+item forbids. Cited as evidence against sound keying, it is evidence for it.
+
+**What is left, and it is the honest scope of this row.** Finding 2 stands, unprobed and unrefuted:
+arm-level keying skips only 27-46% of re-rounds, so it does not reach ≤10s and should not be built.
+But the note's own recommended path — per-file memoization inside each lint — was blocked by exactly
+one thing, finding 1's file-locality failure, **and that blocker does not exist**. Every arm named
+here is file-local. The remaining work is the mechanical read-set declaration itself (~15 lints), now
+without a known counter-example, plus the per-lint locality proof; the three declarations derived by
+hand above are the first three and none needed an exception.
+
+**Method note worth more than the row.** All three refutations came from ONE question asked of the
+citation rather than of the conclusion: *what has the cited mechanism done since this was written,
+and what does its code actually do?* One `git log -S` dated finding 3a's death to four days before
+the claim; one `sed` over the scan loop killed finding 1. Neither needed a measurement rig. A
+research note's findings decay exactly like a resident policy's facts, and for the same reason —
+they restate a perishable property of code that keeps moving. (memory:
+`resident-policy-must-not-restate-perishable-facts`, `published-figure-decays-with-its-source`.)
+
 ### §5.P2 — the per-arm own-diff blocking audit, and what shifting left actually shifts
 
 *(Implementation note, 2026-08-11, backlog 46eb9be14249. INTEGRATE-only: §5's P2 row states the
