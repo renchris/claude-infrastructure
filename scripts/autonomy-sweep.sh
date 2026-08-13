@@ -601,6 +601,50 @@ if [ -x "$_trigger" ]; then
   fi
 fi
 
+# ── 2b-i-b. THE BACKFILL CALLER (backlog 01edea637633, CONDITION_LEASE P6) — DRY-RUN, deliberately ─
+# THE DEFECT THIS CLOSES IS THE PLAN'S OWN, ONE LAYER UP. `docs/plans/CONDITION_LEASE.md` P5 was
+# filed because "`link` fires only when a human notices" — SEVEN link records in the ledger's whole
+# history, six of them written inside eleven seconds by one hand-driven sweep on 2026-08-08. The
+# remedy it shipped is `cc-backlog backfill`, which proposes the joins that sweep would have made.
+# Measured on trunk 2026-08-13: `backfill` has ZERO callers — not here, not in a plist, not in a
+# script. So the verb built to answer "nothing backfills" was itself backfilled by nothing, and the
+# family key reaches the lease exactly as often as before: when a human happens to look. This is
+# that caller (memory: feature-durability-mechanism-not-memory).
+#
+# WHY DRY-RUN, AND WHY THE FOLD'S FLIP CRITERION DOES NOT TRANSFER. The fold above writes unattended
+# because it asserts CONSERVATION per run — a machine-checkable statement that the key did not merge
+# across a distinction. `backfill` has no such assertion and cannot have one: its key is a scorer
+# over a living corpus, and cmd_backfill's own header states the position this caller must not
+# quietly overturn — "2 hits in 182 orphans on ONE day's ledger … is evidence for a review queue and
+# not for an unattended writer". The asymmetry is what makes a wrong join expensive: `link` feeds
+# claim guard (6), so a false join REFUSES a live worker onto work that is not duplicated, and
+# nothing downstream reports the move. A missed join costs one duplicate dispatch; a wrong one
+# strands real work with no alarm.
+#
+# THE FLIP IS A MEASUREMENT THIS ARM PRODUCES: when `backfill_proposed` has been small and STABLE
+# across a run of sweeps, and the proposals it named were spot-checked as true joins, add `--apply`
+# here. `backfill_note` must never read `no-verdict` on the sweep that flips — that state means the
+# probe did not answer, not that the store is clean (memory: claimed-outcome-vs-checked-outcome).
+#
+# IT RUNS EVERY SWEEP because it is one `fold | jq` pass with no per-item forks: 0.43 s measured over
+# a 2400-record / 600-item ledger, against the 106 s currency pass below that had to buy an interval
+# gate. Sized the way the premise pass had to be — in the band, on a store the size of the real one
+# (memory: bound-must-fit-the-band-not-the-bench).
+_bf_rc="skipped"; _bf_note="skipped"; _bf_proposed=0; _bf_ambig=0
+if [ -n "$BACKLOG" ] && [ -x "$BACKLOG" ]; then
+  _bf_out="$(_bounded "$BACKLOG" backfill --json 2>/dev/null)"; _bf_rc=$?
+  # PARSED, NEVER INFERRED FROM rc. `backfill` exits 0 on a clean store AND on a store it could not
+  # read past a bound, so the exit code cannot separate "nothing to join" from "no answer" — the
+  # exact conflation the fold arm above had to unpick. A count that does not parse is `no-verdict`.
+  _bf_proposed="$(printf '%s' "$_bf_out" | jq '.proposed  | length' 2>/dev/null)"
+  _bf_ambig="$(   printf '%s' "$_bf_out" | jq '.ambiguous | length' 2>/dev/null)"
+  case "${_bf_proposed:-}" in
+    ''|*[!0-9]*) _bf_proposed=0; _bf_note="no-verdict" ;;
+    *)                           _bf_note="ok" ;;
+  esac
+  case "${_bf_ambig:-}" in ''|*[!0-9]*) _bf_ambig=0 ;; esac
+fi
+
 # ── 2b-ii. THE GROUPING SWEEP (W2, backlog ce1e9d1adab8) — the SEMANTIC half of the same question ──
 # The fold above answers "are these rows the same SENTENCE about the same subject", which is narrow by
 # design and must stay narrow: its own largest sha-keyed cluster of 14 was nine different stranded
@@ -735,14 +779,17 @@ fi
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
   --arg fa "$_fold_applied" --arg fw "$_fold_written" --arg g "$_grp_rc" \
+  --arg br "$_bf_rc" --arg bn "$_bf_note" --arg bp "$_bf_proposed" --arg ba "$_bf_ambig" \
   --arg pr "$_prem_rc" --arg pn "$_prem_note" --arg pv "$_prem_recorded" \
   --arg pc "$_prem_closed" --arg rf "$_rat_filed" \
   '{consolidation_trigger_rc:$t, ratchet_rc:$r, ratchet_filed:$rf,
     fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
     fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
+    backfill_rc:$br, backfill_note:$bn, backfill_proposed:($bp|tonumber),
+    backfill_ambiguous:($ba|tonumber),
     premise_pass_rc:$pr, premise_pass_note:$pn,
     premise_rows_validated:($pv|tonumber), premise_rows_closed:($pc|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
