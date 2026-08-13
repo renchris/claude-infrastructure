@@ -28,7 +28,7 @@ setup() {
   export CC_RECOVER_NOTIFY_BIN="$BATS_TEST_TMPDIR/absent-cc-notify"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   FIX="$BATS_TEST_TMPDIR/fix"
-  mkdir -p "$FIX/scripts" "$FIX/hooks" "$FIX/bin"
+  mkdir -p "$FIX/scripts" "$FIX/hooks" "$FIX/hooks/lib" "$FIX/bin"
   # L1: the REAL gate, copied. Its `cd "$(dirname "$0")/.."` then lands in $FIX, so every grep it
   # runs reads the fixture tree and nothing of the live repo.
   LINT="$FIX/scripts/reaper-horizon-lint.sh"
@@ -59,6 +59,17 @@ setup() {
     'APPLY=0' \
     'mv -f "$MBX_DIR/$key.md" "$MBX_DIR/archive/$key.md"' \
     'rm -f "$WD_DIR/$sid.pid"' > "$FIX/scripts/cc-gc.sh"
+  # peer-owned's three anchors: the two porcelain-capture temps (one per term that captures
+  # `git status --porcelain -z` to a FILE) and the registry READ site that makes §3 flag it at all.
+  printf '%s\n' 'porcf="$(mktemp "${TMPDIR:-/tmp}/po-porc.XXXXXX")"' \
+    'porcf="$(mktemp "${TMPDIR:-/tmp}/po-exec.XXXXXX")"' \
+    '_po_live_peer() { :; }' \
+    'rm -f "$porcf"' > "$FIX/hooks/lib/peer-owned.sh"
+  # deathwatch-watchfile's two: the mktemp staging file its lone EXIT-trap rm owns, and the
+  # registry read that is its INPUT roster.
+  printf '%s\n' 'REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'tmp="$(mktemp "${TMPDIR:-/tmp}/deathwatch-wl.XXXXXX")"' \
+    'trap '"'"'rm -f "$tmp"'"'"' EXIT' > "$FIX/scripts/deathwatch-watchfile.sh"
 }
 
 # ── the baseline every red below is measured against ───────────────────────────────────────────
