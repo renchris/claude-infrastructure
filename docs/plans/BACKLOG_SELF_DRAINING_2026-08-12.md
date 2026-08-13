@@ -972,3 +972,39 @@ only a same-branch match; (2) adjudicate the 18 GONE branches by content, closin
 KEEPING any whose work is genuinely unlanded; (3) only then fix the generator (`b15a2984d134`), so
 the class stops refilling. Steps 1-2 are worth up to ~46 rows — more than twice the whole of effort 2
 — and step 3 is what stops the store rising underneath every future effort.
+
+### CORRECTION to the section above, same session — the 46 are NOT mostly litter, and bulk-closing them would have stranded 11 branches of real work
+
+The recommendation above ("steps 1-2 are worth up to ~46 rows") was written from a COUNT. Then the
+content adjudication ran, and it inverts the expectation. **Recording the correction rather than
+editing the claim away, because the wrong instinct is the reusable lesson.**
+
+**The predicate matters, and two obvious ones are wrong.** ❌ *branch absence* — a deleted branch says
+nothing about whether its content landed. ❌ `git diff <pinned-sha> origin/main` — that lists every
+change siblings landed since, so a long-landed branch still "differs" and reads as unlanded; it was
+tried here and produced exactly that false signal. ✅ **`git merge-base --is-ancestor <final pinned
+head> origin/main`, then the same test on EVERY distinct pinned sha** (a retry loop pins a different
+sha per attempt, and an amend/rebase between attempts can orphan an earlier one).
+
+**Result over the 18 vanished branches (46 rows):**
+
+| Verdict | Branches | Disposition |
+|---|---|---|
+| **LANDED** (every distinct pinned sha contained) | **2** — `mcp-w3-no-inherit`, `w2-cloud-rails` | **9 rows CLOSED** with per-sha evidence |
+| **UNLANDED** (final head not an ancestor of trunk) | **11** | 🚨 **KEEP.** `audit-tests` · `cloud-pipeline` · `deskless` · `detector-derive` · `falsifier-emission` · `fix-goal-bg-bash-guard` · `land-arch-p0-selfmeasure` · `land-arch-p2-shiftleft` · `probe-corpus` · `wt-6110fc45141e` · `wt-7ff1b6f5ddbb`. Each row is the **only surviving pointer** to real work — closing it strands that work permanently, which is the precise failure `re-land` exists to prevent. |
+| **NO PIN AT ALL** (no branch AND no `refs/land/failed/*`) | **5** | `feat/start-latency-router` · `feat/workflow-harvest` · `fix/backlog-ratchet-readiness-w0` · `fix/curl-gate-worktree-scope` · `fix/resume-path-width-asis-tombstone`. **The worst state and the least visible:** the row names work with no pointer left in this clone. Needs the graveyard sweep (`git log --all --diff-filter=A`, ref-containment) before any disposition. |
+
+**So the lever is real but it points the other way: ~11-16 of these rows are protecting genuinely
+stranded work, and the store is UNDER-counting the problem, not over-counting it.** Only 9 of 46 were
+litter. **Do not close a `re-land` row without the per-sha ancestry check above.**
+
+**Worked example of the subject-vs-diff trap, from this adjudication.** `w2-cloud-rails` had 3 pinned
+shas; two were contained and `bc7290e3f` was NOT — while carrying a commit subject *identical* to the
+contained `43e156a1b`. Closing on the matching subject would have been luck, not evidence. The diff
+settled it: identical patch-id (`6c7d8e578cd942336e5ff291ffd0c2f774a589c6`), same three files, same
+122 insertions / 12 deletions, and `git cherry origin/main bc7290e3f` marked `-` (equivalent patch
+already upstream) ⇒ a pre-rebase duplicate, safe. Had the patch-ids differed, that one sha alone would
+have made all three rows KEEP.
+
+**Store effect, measured:** non-cloud **472 → 463**. First genuine net decrease of this mission — the
+predecessor's two real closes netted 470 → 470 because sibling intake cancelled them.
