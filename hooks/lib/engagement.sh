@@ -12,8 +12,21 @@
 # `scripts/handoff-fire.sh` is the one path that already had an oracle for this, and it is proven in
 # production. The startup-modal census named lifting it into a shared home as the second arm of the
 # remedy — "It is the only thing in the tree that would have caught this incident" (§3). This is
-# that home. `bin/cc-wedge-watch` is its first consumer; `scripts/limit-recover/lr-fire-resume.sh`
-# and `scripts/cc-upgrade-gate.sh`, which have no oracle at all today, are the named next ones.
+# that home. `bin/cc-wedge-watch` is its first consumer.
+#
+# ⚠️ THE TWO "NAMED NEXT CONSUMERS" ARE BOTH REFUTED (measured 2026-08-12, backlog f76e7d78aaac).
+# This header used to read "scripts/limit-recover/lr-fire-resume.sh and scripts/cc-upgrade-gate.sh,
+# which have no oracle at all today, are the named next ones", and a backlog row prescribed exactly
+# that wiring. Neither can host an oracle:
+#   · cc-upgrade-gate.sh spawns NO pane. Every probe is `gate_headless()`
+#     (lib/cc-upgrade-gate/common.sh:42-48) = `--print --output-format json`, and
+#     `grep -rnE 'handoff-fire|it2|osascript|split-right' lib/cc-upgrade-gate/ scripts/cc-upgrade-gate.sh`
+#     returns zero hits. A headless run mints no registry row, so cc_engaged_pane could only ever
+#     answer `no-registry-row` — wiring it there would FAIL every healthy probe.
+#   · lr-fire-resume.sh `exec expect`s at :385, so the spawning process BECOMES the session. There
+#     is no "after the spawn" left in which to check anything.
+# The real gap is the daemon that DOES survive its spawns — scripts/limit-recover/lr-reset-poller.sh
+# — and it holds a SID, not a pane. That is what `cc_engaged_sid` below is for.
 #
 # ── WHY A COPY WITH A PARITY TEST, NOT A REFACTOR OF handoff-fire.sh ─────────────────────────────
 # Six suites (tests/fire-engagement.bats, handoff-engage-scan-window, handoff-fire-pane-parked,
@@ -81,6 +94,65 @@ cc_engagement_homes() {
   done
 }
 
+# cc_engaged_sid — $1=session id → 0 that session took a real assistant turn / 1 it did not
+#
+# WHY A SID ENTRY POINT EXISTS AT ALL. `cc_engaged_pane` is keyed on a PANE, and every caller that
+# holds a pane id is terminal-side. `scripts/limit-recover/lr-reset-poller.sh` — a long-running
+# daemon that DOES survive its spawns, unlike lr-fire-resume.sh which `exec expect`s and BECOMES the
+# session — holds only a SESSION ID: it writes `$CLAIMS/<sid>` before the launcher→expect→claude
+# chain exists, precisely because no pane and no registry row exist yet. The pane oracle was
+# therefore structurally unreachable from the one place in limit-recovery that could use it, and
+# that key mismatch is the whole reason this class was never wired there.
+#
+# EXTRACTED, NOT RE-SPELLED. `cc_engaged_pane` below now calls this function for the second half of
+# its own path; the search exists exactly once in this file. Two spellings of one predicate diverge
+# the day someone improves one of them (memory: make-the-actuator-the-arbiter).
+#
+# Same output contract as cc_engaged_pane (CC_ENGAGE_PROOF / CC_ENGAGE_SID / CC_ENGAGE_WHY on every
+# path). WHY values here: `no-session-id` · `transcript-without-assistant-turn` · `assistant-turn`.
+# The latter two are byte-identical to the pane path's strings on purpose — cc-wedge-watch prints
+# CC_ENGAGE_WHY as a parseable token and must not have to know which key produced the answer.
+#
+# PROOF is `transcript:<sid>` here and the pane path overwrites it with `registry:<sid>`, because
+# the two answers were reached through different evidence and a proof token that lies about its
+# provenance is worse than none.
+cc_engaged_sid() {
+  local sid="${1:-}" home t f
+  CC_ENGAGE_PROOF="" CC_ENGAGE_SID="" CC_ENGAGE_WHY=""
+
+  if [ -z "$sid" ]; then
+    # An empty sid is a caller with nothing to ask about — reported as not-engaged WITH the reason,
+    # never as a positive. `find -name ".jsonl"` would otherwise search every home for nothing.
+    CC_ENGAGE_WHY="no-session-id"
+    return 1
+  fi
+  CC_ENGAGE_SID="$sid"
+
+  while IFS= read -r home; do
+    [ -n "$home" ] || continue
+    t="$home/projects"
+    # The transcript lives under a cwd-slug subdir whose spelling this function has no business
+    # reconstructing; `find` on the sid filename is exact and cheap (the sid IS the filename).
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if assistant_turn_in "$f"; then
+        CC_ENGAGE_PROOF="transcript:$sid"
+        CC_ENGAGE_WHY="assistant-turn"
+        return 0
+      fi
+    done <<EOF
+$(find "$t" -name "$sid.jsonl" -type f 2>/dev/null)
+EOF
+  done <<EOF
+$(cc_engagement_homes)
+EOF
+
+  # A session id, but no assistant turn anywhere: the session exists and has done nothing. This is
+  # the ff2d6609a33e state — precisely the one a birth-check calls healthy.
+  CC_ENGAGE_WHY="transcript-without-assistant-turn"
+  return 1
+}
+
 # cc_engaged_pane — $1=pane id (kitty window id / paneUUID), $2=registry dir (optional)
 #   → 0 the session in that pane took a real assistant turn / 1 it did not
 #
@@ -92,7 +164,7 @@ cc_engagement_homes() {
 # every path, so a caller never has to re-derive WHY it got the answer it got (memory:
 # claimed-outcome-vs-checked-outcome — emit a token the consumer can parse, not a bare status).
 cc_engaged_pane() {
-  local pane="$1" regdir="${2:-${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}}" row sid home t
+  local pane="$1" regdir="${2:-${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}}" row sid
   CC_ENGAGE_PROOF="" CC_ENGAGE_SID="" CC_ENGAGE_WHY=""
 
   row="$regdir/$pane.json"
@@ -115,29 +187,14 @@ cc_engaged_pane() {
     CC_ENGAGE_WHY="row-without-session-id"
     return 1
   fi
-  CC_ENGAGE_SID="$sid"
-
-  while IFS= read -r home; do
-    [ -n "$home" ] || continue
-    t="$home/projects"
-    # The transcript lives under a cwd-slug subdir whose spelling this function has no business
-    # reconstructing; `find` on the sid filename is exact and cheap (the sid IS the filename).
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      if assistant_turn_in "$f"; then
-        CC_ENGAGE_PROOF="registry:$sid"
-        CC_ENGAGE_WHY="assistant-turn"
-        return 0
-      fi
-    done <<EOF
-$(find "$t" -name "$sid.jsonl" -type f 2>/dev/null)
-EOF
-  done <<EOF
-$(cc_engagement_homes)
-EOF
-
-  # A row AND a session id, but no assistant turn anywhere: the session exists and has done
-  # nothing. This is the ff2d6609a33e state — precisely the one a birth-check calls healthy.
-  CC_ENGAGE_WHY="transcript-without-assistant-turn"
+  # The rest of the path is key-agnostic — it is `cc_engaged_sid` above, which sets CC_ENGAGE_SID
+  # and CC_ENGAGE_WHY for us. Only the PROOF differs: this caller reached the sid through a
+  # registry row, so it names that evidence rather than the transcript it shares with the sid path.
+  # A failure leaves `transcript-without-assistant-turn` untouched — byte-identical to the string
+  # this function set inline before the extraction, which cc-wedge-watch and its suite both parse.
+  if cc_engaged_sid "$sid"; then
+    CC_ENGAGE_PROOF="registry:$sid"
+    return 0
+  fi
   return 1
 }
