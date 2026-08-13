@@ -176,7 +176,7 @@ mkbox() { # <key> <lines> <acked>
 # ── watchdog adapter — the identity pin ───────────────────────────────────────────────────────
 
 @test "watchdog: a dead pid's pair is reaped once aged" {
-  spawn; local p="$SPAWNED"; kill "$p" 2>/dev/null; sleep 0.2
+  spawn; local p="$SPAWNED"; kill "$p" 2>/dev/null || true; sleep 0.2
   echo "$p" > "$CC_WATCHDOG_DIR/sid-dead.pid"; echo sid-dead > "$CC_WATCHDOG_DIR/sid-dead.id"
   age_days "$CC_WATCHDOG_DIR/sid-dead.pid" 5
   run bash "$GC" --store watchdog --apply
@@ -208,7 +208,7 @@ mkbox() { # <key> <lines> <acked>
 }
 
 @test "watchdog: a young pair is KEPT regardless of pid state" {
-  spawn; local p="$SPAWNED"; kill "$p" 2>/dev/null; sleep 0.2
+  spawn; local p="$SPAWNED"; kill "$p" 2>/dev/null || true; sleep 0.2
   echo "$p" > "$CC_WATCHDOG_DIR/sid-young.pid"; echo sid-young > "$CC_WATCHDOG_DIR/sid-young.id"
   run bash "$GC" --store watchdog --apply
   [ -f "$CC_WATCHDOG_DIR/sid-young.pid" ]
