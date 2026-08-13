@@ -981,3 +981,95 @@ VOCABULARY instead of its MEASURED behaviour.**
 before you name it.** One `sed` over a scan loop. One `grep -c` on both artifacts. One `git log -S`
 on the citation. Each of these cost under a minute and each removed real work or prevented a
 fabricated finding.
+
+## RESUME-HERE, RECYCLE #7 — 2026-08-13, effort 2
+
+**Store, non-cloud open at entry: 444.** Custody clean, tree clean. Taking `cf440684e0e1`, the last
+workable row in `master-verification-integrity`.
+
+### The re-measurement the row demanded, and it moved the target
+
+Caution (a) of recycle #6 said the row's 2026-08-10 timings had decayed and the arm set had grown.
+Both true, but the correction that matters is one **I introduced and then caught**, and it is the
+same generator this plan has been tracking for three recycles.
+
+🚨 **I timed every arm by running it bare — and the gate does not invoke them that way.** ship-land
+runs each arm through `own_run`, which EXPORTS the arm's own-set variable. For most arms that only
+decides blocking-vs-advisory and the scan is unchanged. For `bats-shellcheck-lint` it decides **what
+gets scanned at all**: with an own-set the lint scans only the suites that own-set names
+(`scripts/bats-shellcheck-lint.sh`, the `scoped=()` loop at the entrypoint), and a land touching no
+`.bats` file exits before shellcheck runs.
+
+| | bare run (what I first measured) | as the gate invokes it |
+|---|---|---|
+| `bats-shellcheck-lint` | **50.50s** — census over all 467 suites | **0.07s** |
+
+Had I not read the entrypoint I would have spent this recycle memoizing the single most expensive
+arm in my table, which is **0.07s in production**. The row's own 2026-08-10 figures never listed
+bats-shellcheck among the heavy arms — the row was right and my measurement was wrong, because it
+measured a mode the gate never executes. *Same generator, new face: I named the arm's cost from the
+invocation I typed rather than the invocation that runs.*
+
+### The corrected arm table (this worktree, 2026-08-13, own-sets exported as `own_run` does)
+
+    test-hermeticity   45.96      git-identity     13.27      unattended-path  11.44 (+13.41 selftest)
+    pane-spawn          7.71      test-walltime     6.77      pipefail          6.04 (+0.96)
+    bats-kill-guard     5.47      moving-ref        5.22      utc-stamp         5.21 (+4.91)
+    test-afunix         4.88      self-path         1.68 (+1.82)                bats-shellcheck   0.07
+    permission-gate / chromium-bundle / tsv-pad / offbox-admission   ~0.8 combined
+
+**~114s main + ~21s selftest ≈ 135s** (row measured ~112s). The arms grew; so did the total.
+**`test-hermeticity` alone is 46s — 34% of the arms.** It is the whole target; nothing else is close.
+
+Its internal shape, measured by scaling the corpus (ENV_ROOT is `$ROOT` regardless of the dir
+argument, so the table build is a constant and the two costs separate cleanly):
+
+    n=0  10.38s   n=60  14.60s   n=120  18.64s   n=240  26.87s   n=467  42.37s
+
+**10.4s fixed** (the SEAM/ENV table build over 331 `bin` + `scripts/*.sh` + `hooks/*.sh` files)
+**+ 0.069s per .bats suite** — linear, 32s of the 46s is the per-suite loop.
+
+### The scope reduction: the read-set declaration is the REFUTED path's prerequisite
+
+The row says *"PREREQUISITE, and probably the whole item: a mechanical read-set declaration per gate
+lint"*, and recycle #6's caution (b) says land all ~15 declarations or none. **Neither binds the work
+that is actually left**, and the source that settles it is the row's own citation.
+
+`scripts/lib/gate-memo.sh`'s closing section lists four reasons the arms are not memoized. Reason
+**4** — the population declaration is not a superset — is a prerequisite of the **arm-level key**,
+which is reason **3**, which is finding 2, which recycle #6 confirmed **STANDS: do not build
+arm-level keying**. The per-file path is named separately in that same footer:
+
+> *"What WOULD reach the target is per-file memoization INSIDE each lint's scan loop … That needs a
+> **file-locality proof per lint**"*
+
+A locality proof, not a declaration. And because each lint's memo is keyed on its own inputs, an
+unmemoized lint runs exactly as it does today — so a partial rollout is **incomplete, never
+unsound**. Caution (b)'s "all or none" governs the declaration standard, which is not being built.
+**One lint, done completely, is a whole unit.**
+
+### Locality, MEASURED not read
+
+For `bats-shellcheck-lint` (before its cost was corrected away) the proof was worth keeping as the
+pattern: shellcheck is invoked without `-x`, so a file's findings should not depend on its
+batch-mates. Confirmed by running the corpus batched and then one file per invocation — **147
+findings both ways, byte-identical**. That is the shape every per-lint locality proof should take:
+run the real corpus both ways and diff, never quote the flag.
+
+### Next: per-suite memo inside `test-hermeticity-lint.sh`
+
+Read set per suite, from the scan loop at `scripts/test-hermeticity-lint.sh:1552`: the suite's own
+bytes, the lint's own blob (all seven embedded allowlists and every predicate), and the **SEAM_TABLE
++ ENV_TABLE** built from `bin`/`scripts`/`hooks` (rules 5 and 6 consult them per suite). Rules 1, 2,
+3, 4 and 7 are file-local — rule 4's per-file-ness is recycle #6's refutation of §5.P3 finding 1.
+
+The memoizable value is **"this suite emitted nothing"**, and that is own-set-independent by
+construction: every `printf` in the loop sits inside a finding branch, and `in_own` only selects
+which *wording* a finding gets. So a clean suite is clean for every land, and the memo keeps
+gate-memo's "only ever cache a green" invariant unwidened.
+
+**Two hazards to build against.** (1) Every emitting branch also increments exactly one counter, so
+a counter-sum snapshot around each suite detects "emitted nothing" in two lines — but that is only
+true while it stays true, so the selftest must pin a violating suite as NEVER memoized, per rule.
+(2) `CHECK_FAILED` must veto recording: a suite whose predicate could not RUN has no verdict to
+cache, and caching its fail-SAFE 'hermetic' would convert a non-verdict into a permanent green.
