@@ -2,7 +2,7 @@
 # shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom
 # escalation-watch.sh — SessionStart: the GUARANTEED READER for the escalation dead-letter stores (D3).
 #
-# Why: durable escalation records are written into four stores, and until now NOTHING session-facing
+# Why: durable escalation records are written into five stores, and until now NOTHING session-facing
 # read them. The push lane (desk role → banner) is liveness-dependent and currently dead — a live
 # sweep row reads `"notified":"no-desk-role","delivered":false` while carrying 12 new pages, 12 new
 # alarms and 12 stuck completion pushes. With no desk pane the operator can go days blind (F6/F8/F9).
@@ -35,8 +35,32 @@
 # and for the same reason: per-record `shasum` forks measured 10ms each, i.e. ~24s of SessionStart
 # stall at live volume. perl absent ⇒ the record scan is REPORTED as not-run, never silently passed.
 #
+# ── THE FIFTH STORE — M3 close-path dead letters (SESSION_LIFECYCLE_V2 R-6, 2026-08-13) ──────────
+# handoff-fire's M3 actuator dead-letters undrained mail on a TERMINAL close: one `<sid>.md` per
+# closed session that still owed messages, in `$CC_MAILBOX_DIR/dead-letter/`, plus a `.ran` append-log
+# as the store's existence evidence. Row 3's M3 contract requires that store be surfaced with that
+# evidence and "NEVER a silent file"; it was read by nothing at all — the writer and its own suite
+# were the only references on the whole tree. It is the purest instance of what this hook exists for:
+# the messages were DELIVERED and never READ, and then the pane that owed them evaporated.
+# `*.md` ONLY — the `.ran` evidence is deliberately NOT a record. Counting it would make an
+# empty-but-ran store indistinguishable from one holding a real dead letter, which is the exact
+# collapse that file exists to prevent (R4).
+#
+# ⚠ IT DAMPS DIFFERENTLY FROM THE OTHER FOUR, ON PURPOSE. autonomy-sweep writes a seen marker for
+# every record it collects on its 300s tick, so those four surface once and then go quiet by
+# themselves; the sweep does not read this store, so a dead letter renders at EVERY SessionStart
+# until `cc-escalations ack <sid>.md`. That is not an oversight of the polarity law, it is the one
+# place the law's premise does not hold: an alarm REPORTS AN EVENT THAT HAS PASSED, and re-reporting
+# it carries no new bits — but a dead letter IS UNREAD CONTENT that still exists, and going quiet
+# about it would recreate exactly the silent-file state this store was surfaced to end. The off
+# switch is therefore a HUMAN one and stays a human one, which is only tolerable because it is one
+# command and because the population is small by construction (a terminal close that still owed
+# mail, one record per closed session, never re-accumulating behind its own marker).
+#
 # Env seams: CC_ESCALATION_WATCH=0 (kill switch) · CC_HANDOFF_ALARM_DIR · CC_ANNOUNCE_ALARM_DIR ·
-#   CC_COMPLETION_RECORDS_DIR · CC_PAGES_DIR · CC_SWEEP_SEEN_DIR · CC_IDL · CC_EXPIRED_LEDGER ·
+#   CC_COMPLETION_RECORDS_DIR · CC_PAGES_DIR · CC_MAILBOX_DIR (the WRITER's own seam — handoff-fire
+#   composes the dead-letter path from the same variable, so the two ends cannot drift) ·
+#   CC_SWEEP_SEEN_DIR · CC_IDL · CC_EXPIRED_LEDGER ·
 #   CC_ESCALATION_SWEEP_MAX_AGE_S (default 900) · CC_ESCALATION_NOW (test clock).
 # BSD-first (no GNU `date -d`), bash 3.2-safe, no it2, no network. Selftest: `--selftest`.
 set -uo pipefail
@@ -45,6 +69,7 @@ ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
 ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
 COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+DEADLETTER_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/dead-letter"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 EXPIRED_LEDGER="${CC_EXPIRED_LEDGER:-$HOME/.claude/autonomy/expired-unread.jsonl}"
@@ -92,6 +117,8 @@ candidates() {
   for f in "$ANNOUNCE_DIR"/announce-degrade-*.json; do [ -f "$f" ] && printf 'announce-degrade\t%s\n' "$f"; done
   for f in "$COMPLETION_DIR"/*.json;           do [ -f "$f" ] && printf 'completion-push\t%s\n' "$f"; done
   for f in "$PAGES_DIR"/*.page;                do [ -f "$f" ] && printf 'page\t%s\n' "$f"; done
+  # M3 dead letters — `*.md` only, so the store's `.ran` existence evidence is never a record.
+  for f in "$DEADLETTER_DIR"/*.md;             do [ -f "$f" ] && printf 'mail-deadletter\t%s\n' "$f"; done
   # Load-bearing: the last `[ -f ]` is FALSE on an empty board, and under `pipefail` that rc would
   # propagate through the perl pipeline and report a healthy empty board as "the scan DID NOT RUN".
   return 0
@@ -132,9 +159,19 @@ unseen_rows() {
   ' 2>/dev/null
 }
 
-detail_of() { # <path> → first DETAIL_MAX chars of the record's human field, single-line
-  local f="${1:-}" d=""
+detail_of() { # <path> [<class>] → first DETAIL_MAX chars of the record's human field, single-line
+  local f="${1:-}" cls="${2:-}" d=""
   [ -f "$f" ] || return 0
+  # A dead letter is not JSON and its body is somebody else's message, so the useful identifier is
+  # the record's own name: the writer keys the file by the CLOSING session's sid. Naming the session
+  # is what makes the line actionable (R11 — address by session, never by a cached pane id); the
+  # message's own first line rides along behind it.
+  if [ "$cls" = "mail-deadletter" ]; then
+    d="sid=$(basename "$f" .md): $(head -1 "$f" 2>/dev/null || true)"
+    d="$(printf '%s' "$d" | tr '\n\t' '  ')"
+    printf '%s' "${d:0:$DETAIL_MAX}"
+    return 0
+  fi
   if [ -n "$JQ" ]; then
     d="$("$JQ" -r 'if type=="object" then (.detail // .event // .alarm // .class // "") else "" end' "$f" 2>/dev/null || true)"
   fi
@@ -192,7 +229,7 @@ watch() {
   # corpus), which keeps this to pure bash with NO eval and no dynamic variable names — the sibling
   # autonomy-sweep.sh declares "no eval" in its own header, and a parallel c_*/n_*/p_* triple read
   # back through `eval` is exactly the shape that makes a static check blind.
-  local classes="handoff-alarm announce-alarm announce-degrade completion-push page"
+  local classes="handoff-alarm announce-alarm announce-degrade completion-push page mail-deadletter"
   local total=0 rcls mt path cnt newest npath det line
   while IFS=$'\t' read -r rcls mt path; do
     [ -n "${path:-}" ] && total=$(( total + 1 ))
@@ -214,7 +251,7 @@ $rows
 EOF
       [ "$cnt" -gt 0 ] || continue
       line="$(printf '· %s: %s (newest %s' "$cls" "$cnt" "$(fmt_age $(( now - newest )))")"
-      det="$(detail_of "$npath")"
+      det="$(detail_of "$npath" "$cls")"
       [ -n "$det" ] && line="$line; $det"
       body="$body"$'\n'"$line)"
     done
@@ -247,7 +284,7 @@ selftest() {
   trap "rm -rf '$d'" EXIT
   echo "escalation-watch --selftest:"
 
-  mkdir -p "$d/alarms" "$d/announce" "$d/completion" "$d/pages" "$d/seen"
+  mkdir -p "$d/alarms" "$d/announce" "$d/completion" "$d/pages" "$d/seen" "$d/mailbox/dead-letter"
   local NOW=1786100000
   # a fresh sweep row, so the liveness line stays out of the record assertions
   printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"fired"}\n' \
@@ -259,9 +296,13 @@ selftest() {
   printf '{\n  "kind": "completion-push",\n  "detail": "stuck push",\n  "verdict": "push-failed(rc=5)"\n}\n' > "$d/completion/push-1.json"
   printf '{\n  "kind": "completion-push",\n  "detail": "fine",\n  "verdict": "verified"\n}\n'                > "$d/completion/push-2.json"
   printf '1785402302\n' > "$d/pages/p-1.page"
+  # M3 dead letter + the store's `.ran` existence evidence, in the writer's own two shapes
+  printf '## from desk\nthe seam ruling you asked for\n' > "$d/mailbox/dead-letter/sid-dead.md"
+  printf '2026-08-13T00:00:00Z terminal-close sid=sid-dead pending=2\n' > "$d/mailbox/dead-letter/.ran"
 
   ewrun() { CC_HANDOFF_ALARM_DIR="$d/alarms" CC_ANNOUNCE_ALARM_DIR="$d/announce" \
             CC_COMPLETION_RECORDS_DIR="$d/completion" CC_PAGES_DIR="$d/pages" \
+            CC_MAILBOX_DIR="$d/mailbox" \
             CC_SWEEP_SEEN_DIR="$d/seen" CC_IDL="$d/idl.jsonl" \
             CC_EXPIRED_LEDGER="$d/expired.jsonl" CC_ESCALATION_NOW="$NOW" "$SELF"; }
 
@@ -271,6 +312,8 @@ selftest() {
   printf '%s' "$out" | grep -q 'announce-degrade: 1' && okp "announce-degrade counted apart"  || badp "announce-degrade NOT separate"
   printf '%s' "$out" | grep -q 'completion-push: 1'  && okp "completion-push: only non-verified counted" || badp "completion-push count wrong"
   printf '%s' "$out" | grep -q 'page: 1'             && okp "page class rendered"             || badp "page NOT rendered"
+  printf '%s' "$out" | grep -q 'mail-deadletter: 1'  && okp "mail-deadletter class rendered (R-6)" || badp "mail-deadletter NOT rendered"
+  printf '%s' "$out" | grep -q 'sid=sid-dead'        && okp "dead letter names its closing session" || badp "dead-letter detail carries no sid"
   printf '%s' "$out" | grep -q 'ESCALATIONS'         && okp "header rendered"                 || badp "no header"
   printf '%s' "$out" | grep -q 'pane 1FBFCD05'       && okp "newest detail carried"           || badp "detail missing"
   if [ -n "$JQ" ]; then
@@ -294,7 +337,7 @@ selftest() {
   # zero records + live sweep → NOTHING AT ALL (the absence-of-noise contract)
   local e="$d/empty"; mkdir -p "$e/alarms" "$e/announce" "$e/completion" "$e/pages" "$e/seen"
   out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" \
+         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
          CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
          CC_ESCALATION_NOW="$NOW" "$SELF")"; rc=$?
   { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "zero records + live sweep → EMPTY stdout (control)" || badp "spurious output on a clean board"
@@ -303,7 +346,7 @@ selftest() {
   printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"fired"}\n' \
     "$(date -u -r "$(( NOW - 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$d/stale-idl.jsonl"
   out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" \
+         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
          CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/stale-idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
          CC_ESCALATION_NOW="$NOW" "$SELF")"
   printf '%s' "$out" | grep -q 'NOT being drained' && okp "stale sweep renders with ZERO records" || badp "stale-sweep line missing"
@@ -312,7 +355,7 @@ selftest() {
   printf '{"ts":"%s","hook":"waiting-recycle","disposition":"abstained"}\n' \
     "$(date -u -r "$(( NOW - 5 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$d/foreign-idl.jsonl"
   out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" \
+         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
          CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/foreign-idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
          CC_ESCALATION_NOW="$NOW" "$SELF")"
   printf '%s' "$out" | grep -q 'NEVER run' && okp "foreign IDL rows do NOT fake sweep liveness" || badp "foreign rows read as a live sweep"
@@ -325,7 +368,7 @@ selftest() {
 
   echo "escalation-watch --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "escalation-watch --selftest: GREEN — 5 classes · verified-filter · both seen forms · kill switch · empty-board control · stale sweep · foreign-row control · expired window."
+  echo "escalation-watch --selftest: GREEN — 6 classes · verified-filter · both seen forms · kill switch · empty-board control · stale sweep · foreign-row control · expired window."
 }
 
 case "${1:-}" in

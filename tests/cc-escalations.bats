@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# cc-escalations (D5) — the explicit drain + operator ack over the four escalation record stores.
+# cc-escalations (D5) — the explicit drain + operator ack over the five escalation record stores.
 #
 # The load-bearing test in this file is the CROSS-CONVENTION one: an ack is only worth something if
 # the CONSUMER treats it as its own. So rather than re-implement autonomy-sweep's marker key here and
@@ -20,9 +20,14 @@ setup() {
   export CC_ANNOUNCE_ALARM_DIR="$T/announce"
   export CC_COMPLETION_RECORDS_DIR="$T/completion"
   export CC_PAGES_DIR="$T/pages"
+  # The M3 dead-letter store's seam is the WRITER's own mailbox variable (handoff-fire composes
+  # $CC_MAILBOX_DIR/dead-letter), so redirecting the producer redirects this reader with it. It must
+  # be exported for the same reason as the other four: unexported, `list` would read the OPERATOR's
+  # live dead letters and `ack --all` would MARK THEM SEEN from inside a test run.
+  export CC_MAILBOX_DIR="$T/mailbox"
   export CC_SWEEP_SEEN_DIR="$T/seen"
   mkdir -p "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
-           "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
+           "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR" "$CC_MAILBOX_DIR/dead-letter"
 }
 
 # ── fixture writers (the record shapes are the FROZEN INTERFACE's, not invented here) ─────────────
@@ -35,6 +40,16 @@ handoff_alarm() { # <basename> <class> [<verdict-sidecar-token>]
 completion_record() { # <basename> <verdict> — PRETTY-printed, exactly as completion-push writes them
   printf '{\n  "kind": "completion-push",\n  "role": "desk",\n  "verdict": "%s",\n  "ts": "2026-08-07T00:00:00Z"\n}\n' \
     "$2" > "$CC_COMPLETION_RECORDS_DIR/$1"
+}
+# M3 dead letter — handoff-fire's own shape: `<closing-sid>.md` holding the raw inbox body (markdown,
+# NOT json — so this record exercises the push_verdict/json_field fallbacks on a non-JSON file).
+dead_letter() { # <sid>
+  printf '## from desk\nthe seam ruling you asked for\n' > "$CC_MAILBOX_DIR/dead-letter/$1.md"
+}
+# The store's EXISTENCE EVIDENCE — an append-log, deliberately NOT a record (R4).
+dead_letter_ran() { # <sid> <pending>
+  printf '2026-08-13T00:00:00Z terminal-close sid=%s pending=%s\n' "$1" "${2:-2}" \
+    >> "$CC_MAILBOX_DIR/dead-letter/.ran"
 }
 
 # Full seam surface for a REAL autonomy-sweep run against this fixture. ⚠️ Every dir the sweep can
@@ -131,15 +146,71 @@ swept() { tail -1 "$T/idl.jsonl" | jq -r "$1"; }   # <jq-filter> over the sweep'
   [ "$status" -eq 0 ]
 }
 
-@test "ack --all: leaves zero unseen across all four stores, and is idempotent" {
+# ── the FIFTH store: M3 close-path dead letters (SESSION_LIFECYCLE_V2 R-6) ───────────────────────
+# Until this landed, `grep -rn 'mailbox/dead-letter'` over bin/ hooks/ scripts/ found the WRITER
+# (handoff-fire.sh:selfclose_mail_disposition) and its own suite — no consumer anywhere on the tree.
+# Row 3's M3 contract requires the store be "SURFACED on the operator board with existence evidence,
+# NEVER a silent file", so a store nobody read was the contract's own defect. `list` is the read and
+# `ack` is the off switch WITHOUT WHICH THE SURFACING WOULD BE A PERMANENT NAG — the alarm-polarity
+# defect this CLI exists to prevent, so both halves are pinned here rather than only the render.
+@test "list: an M3 dead letter is an outstanding record, classed mail-deadletter" {
+  dead_letter 01998f3a-dead-4beef-9c21-000000000001
+  dead_letter_ran 01998f3a-dead-4beef-9c21-000000000001
+  run "$BIN" list
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '01998f3a-dead-4beef-9c21-000000000001\.md .*mail-deadletter'
+  echo "$output" | grep -qE 'mail-deadletter .* no$'         # unseen until acked
+}
+
+@test "list: the store's .ran EVIDENCE is never a record (R4: empty-but-ran != never-ran)" {
+  # Evidence alone: the store HAS run and dead-lettered nothing. Counting `.ran` would collapse that
+  # healthy state into "one outstanding dead letter" permanently, which is the exact distinction the
+  # writer created that file to preserve.
+  dead_letter_ran 01998f3a-dead-4beef-9c21-000000000002 0
+  run "$BIN" list
+  [ "$status" -eq 0 ]
+  [ "$output" = "none" ]
+  ! echo "$output" | grep -q '\.ran' || false
+  # Positive control, SAME store and same run: the absence assertion above is not vacuous.
+  dead_letter 01998f3a-dead-4beef-9c21-000000000002
+  run "$BIN" list
+  echo "$output" | grep -q 'mail-deadletter'
+}
+
+@test "ack: a dead letter is silenceable, in BOTH marker conventions" {
+  dead_letter dl-ack
+  run "$BIN" ack dl-ack.md
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'acked 1 record'
+  [ -f "$CC_SWEEP_SEEN_DIR/dl-ack.md.seen" ]                             # the literal form
+  [ -f "$CC_SWEEP_SEEN_DIR/$(printf '%s' "$CC_MAILBOX_DIR/dead-letter/dl-ack.md" | shasum -a 256 | cut -c1-32)" ]
+  run "$BIN" list
+  echo "$output" | grep -q 'dl-ack\.md .*yes'
+}
+
+@test "list --json: a dead letter carries class mail-deadletter and no fabricated verdict" {
+  dead_letter dl-json
+  run "$BIN" list --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.[0].class')"   = "mail-deadletter" ]
+  # A markdown record has no verdict field and no `.verdict` sidecar. The renderer must say so with
+  # the absent token rather than inventing one — an ABSENT verdict is never rendered as success.
+  [ "$(echo "$output" | jq -r '.[0].verdict')" = "-" ]
+  [ "$(echo "$output" | jq -r '.[0].seen')"    = "false" ]
+}
+
+@test "ack --all: leaves zero unseen across all FIVE stores, and is idempotent" {
   handoff_alarm alarm-1.json husk-pane
   printf '{"kind":"announce-degrade"}\n' > "$CC_ANNOUNCE_ALARM_DIR/announce-degrade-2.json"
   completion_record push-stuck.json "push-failed(rc=5)"
   completion_record push-ok.json    verified
   : > "$CC_PAGES_DIR/p2.page"
+  dead_letter dl-all
+  dead_letter_ran dl-all
   run "$BIN" ack --all
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'acked 4 record'                  # the verified record is not a record
+  # 5, not 6: the verified completion record is not outstanding, and `.ran` is not a record.
+  echo "$output" | grep -q 'acked 5 record'
   run "$BIN" list
   ! echo "$output" | grep -qE ' no$' || false                # zero unseen…
   echo "$output" | grep -qE ' yes$'                          # …with a positive control that rows exist
@@ -191,11 +262,11 @@ swept() { tail -1 "$T/idl.jsonl" | jq -r "$1"; }   # <jq-filter> over the sweep'
   [ "$(swept .new_pages)" -eq 0 ]
 }
 
-@test "--selftest passes and runs all 13 checks (a zero-check selftest must not 'pass')" {
+@test "--selftest passes and runs all 15 checks (a zero-check selftest must not 'pass')" {
   run "$BIN" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 13 ]
+  [ "$n_ok" -eq 15 ]
   ! printf '%s' "$output" | grep -q '^  FAIL' || false
 }
 

@@ -149,12 +149,19 @@ seed_inbox() { # $1=uuid $2=n
   [ "$output" = "1" ]
 }
 
-@test "terminal close names the operator surface that must show the store (row 10's row, not row 2's)" {
+# R-6 CLOSED 2026-08-13. This test used to assert the message NAMED a surface that would one day show
+# the store ("the operator board … row 10 owns that row"). That surface now exists — the store is the
+# D-series' fifth escalation store — so the assertion moves from a promise to the DRAIN: a close that
+# tells the operator only where the bytes went leaves them a path and no next action.
+@test "terminal close names the DRAIN for the store, not just the file it wrote" {
   seed_inbox "$MYSID" 1
   run selfclose_mail_disposition "$MYSID" "" "$BATS_TEST_TMPDIR/log"
   [ "$status" -eq 0 ]
   [[ "$output" == *"DELIVERED but never READ"* ]] || false
-  [[ "$output" == *"operator board"* ]] || false
+  [[ "$output" == *"cc-escalations list"* ]] || false          # the read
+  [[ "$output" == *"cc-escalations ack $MYSID.md"* ]] || false # …and the exact off switch
+  [[ "$output" == *"mail-deadletter"* ]] || false              # the class it will appear under
+  [[ "$output" == *"/dead-letter/.ran"* ]] || false            # existence evidence still named (R4)
 }
 
 @test "an undisposable dead-letter store BLOCKS the close rather than dropping the mail" {

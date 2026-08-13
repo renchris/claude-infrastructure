@@ -458,11 +458,11 @@ as `check_slash_head` (M-12), whose own override is `FIRE_ALLOW_SLASH_HEAD=1`.
 | # | Item | Owner | Why it is not done here |
 |---|---|---|---|
 | **R-1** | **16 corpus tests fail under load on the PRISTINE tree** (M-22) — they invoke the real fire path and the capacity gate refuses with exit 9 instead of their expected status. Load-dependent by construction, and a plausible contributor to the 30-red/0-green stamp condition blocking the campaign's deploy | **1** (corpus) + **13** (the gate) | Neither file is row 2's, and the fix is a policy call: either the suites set `CC_FIRE_CAPACITY_GATE=off` (they are testing the fire path, not admission) or the gate exempts test invocations. Reported to the coordinator with the measurement. |
-| **R-2** | **Marker-based engagement verification on the RECYCLE path** — F12 is made honest and disk-visible here, but not *verified* | **2** (this row) | It runs inside the detached `__recycle` watcher, which deliberately does only AppleEvent-free work and has its own 600s/90s windows. Wiring `verify_engagement` there is a real change that deserves its own RED-proof, and half-building it would have produced exactly the overclaimed verdict F12 is about. |
+| **R-2** | **Marker-based engagement verification on the RECYCLE path** — F12 is made honest and disk-visible here, but not *verified* | **2** (this row) | ~~It runs inside the detached `__recycle` watcher, which deliberately does only AppleEvent-free work and has its own 600s/90s windows. Wiring `verify_engagement` there is a real change that deserves its own RED-proof, and half-building it would have produced exactly the overclaimed verdict F12 is about.~~ **CLOSED — landed after this table was written, and this row is reconciled to the code 2026-08-13.** `recycle_engaged()` (`scripts/handoff-fire.sh`) verifies inside the detached watcher on TWO independent signals with the same OR-structure as `engagement_seen`: **(a) MARKER** — a token embedded in the relaunch prompt COPY found by content in any transcript that ALSO shows an assistant turn (the predecessor's own transcript is EXCLUDED, because the caller of a recycle *is* the session being recycled, so a leaked token would otherwise pass on the predecessor's turns); **(b) ROW-CHANGE** — the pane's registry row naming a sid DIFFERENT from the pre-recycle one, with the CHANGE as the whole discriminator (a recycle reuses its own pane, so reading the row's sid without comparing would read the DEAD PREDECESSOR's transcript, which trivially has assistant turns), disabled when the baseline sid is unresolvable. `RECYCLE_VERIFY=1` for every non-dry recycle. Suite: `tests/handoff-recycle-engagement.bats`. Its own later defect is recorded too (`12343c5`): arm (b) probed a FLAT `$pdir/<sid>.jsonl` that Claude Code has never written, so the signal was dead in production while passing its suite — the suite fixtured transcripts flat, i.e. in the layout the bug assumed (memory `control-calibrated-to-implementation-decays`). Both layouts are probed now. |
 | **R-3** | **28 truncated pane ids in the live docs corpus** (M-19) | **10** (operator surface) + each file's author | None is row 2's file; the enforcement row 2 adds is payload-scoped precisely so it cannot hold one author answerable for another's. The lint now exists, is hermetically tested, and has a call site — a corpus sweep is an ordinary follow-up task. |
 | **R-4** | **`firedBy` empty in 53.4% of stamps defeats `cc-classify`'s `handed-off-lead` cause** (M-20), so those predecessors fall to `finished-operator` and are never auto-reaped | **4** (classify/reap) | Row 2 now records `originator` in schema 2 and stops writing a fabricated `"?"`, which fixes the *producer* going forward. Making `cc-classify` consume the new field is row 4's surface. |
 | **R-5** | **Two pane-closers in no row's artifact list** — `hooks/teammate-auto-shutdown.sh:135`, `hooks/lead-crash-watchdog.sh:575`. Both can make a watched pane vanish with **no succession announce** | **unruled** | This is row 2's standing constraint's exact violation surface but not row 2's files. Coordinator ruling requested; not claimed silently, per the map's unowned-surface rule. |
-| **R-6** | **Which consumer SURFACES the M3 dead-letter store** on the operator board (`bin/cc-blockers` vs `bin/cc-comms-alarm-sweep`) | **10**, pending ruling | Row 3's M3 clause requires the store be surfaced with existence evidence. Row 2 writes the store **and** the `.ran` evidence at `~/.claude/mailbox/dead-letter/`; choosing the renderer is a seam row 2 must not decide alone. |
+| **R-6** | **Which consumer SURFACES the M3 dead-letter store** on the operator board (`bin/cc-blockers` vs `bin/cc-comms-alarm-sweep`) | ~~**10**, pending ruling~~ **CLOSED 2026-08-13** | Row 3's M3 clause requires the store be surfaced with existence evidence. Row 2 writes the store **and** the `.ran` evidence at `~/.claude/mailbox/dead-letter/`; choosing the renderer is a seam row 2 must not decide alone. **The ruling was overtaken by events, and the measurement is what closed it — see §13.** |
 | **R-8** | **A SELF-close path cannot rescue an IDLE orphan — the honest limit of F1's fix.** `--orphaned-assignee` requires the assignee to RUN it, and an idle assignee runs nothing. Demonstrated on this row's own three researchers: read-only, reports already harvested from disk, holding no worktree, but process-alive with ancestry tracing to iTerm2 rather than to this session — so they survive its exit as orphans. Note the ordering, which is not a bug: while their originator is alive my own gate correctly REFUSES them ("your originator is ALIVE"); the moment it dies they qualify, and nothing is left to invoke it | **2** (named) + **4/12** (the actuator) | The complete answer needs the EXTERNAL path: `bin/cc-teardown --assignee-of <lead-sid>` already exists (landed `44720884`, 9 tests, resolves an unregistered assignee by it2-liveness + argv — census 134/134 assignee panes have no registry row), but **its only caller `hooks/lead-crash-watchdog.sh:532` is DEFAULT OFF** (`LCW_ORPHAN_CLOSE=1`), staged unactivated at `docs/activation/pending-activation/10-lead-crash-orphan-close-activate.sh`. So F1's self-half is landed here and its actuator-half is one C10 activation away. Row 2 does not own that hook or that activation; naming it rather than reaching across the seam. |
 | **R-9** | **A `shutdown_request` does NOT terminate a background subagent** — measured at close: three read-only researchers, each sent a structured `shutdown_request`, all three still process-alive **240s later**. The sanctioned teammate teardown assumes a recipient that is PROCESSING messages; a finished fire-and-forget subagent is not, so the request lands and nothing acts on it. This is why the campaign's orphan census only ever grows | **2** (found here) + **4/12** (actuator) | Deepens R-8 rather than adding a new class: the gap is not that the assignee lacks a category, it is that **nothing with an actuator is watching**. `self-close`'s live-teammate gate correctly REFUSED this session (it did catch all three by `--agent-id`, which is worth knowing — the gate is not `--team-name`-only), and the documented `--allow-live-teammates` override is the sanctioned exit *once work is harvested*, which was verified here by disk: all three reports recovered by `agentName`, zero worktrees held, zero tracked writes. The durable fix is the same one R-8 names — activate `cc-teardown --assignee-of`'s caller. |
 | **R-7** | **`_mbx_valid_uuid` is a path-safety validator, not a uuid-shape one** — so `mailbox_migrate` accepts a TRUNCATED address and reports success into a dead box | **3** | Measured while building M3 (a test premise of mine failed on it). R11 says truncated is strictly worse than stale; here it does not even fail loud. Row 3's file; reported, not patched. |
@@ -486,12 +486,115 @@ as `check_slash_head` (M-12), whose own override is `FIRE_ALLOW_SLASH_HEAD=1`.
   | 5 | F12 recycle honesty + event-class split | 16 | — (extends Build 4's suite) |
   Regression: **253 ok / 0 not-ok** across all handoff + fire suites with the capacity gate neutralised
   so ambient load could not fake a RED.
+- **Remainder drain (2026-08-13)** — **R-6 CLOSED** (§13: the M3 dead-letter store had zero
+  consumers on the whole tree and is now the D-series' fifth escalation store, 11 tests RED-proved
+  against a pristine tree) · **R-2 reconciled to the code** (`recycle_engaged` landed after §12 was
+  written; the table said "not verified" over a verified path, and a stale remainder is as
+  misleading as a missing one). Still open and NOT row 2's to close alone: R-1 (rows 1+13), R-3
+  (row 10), R-4 (row 4), R-5 (**unruled** — the two pane-closers that can make a watched pane vanish
+  with no succession announce; this row's standing constraint's exact violation surface, and still
+  awaiting a coordinator ruling), R-7 (row 3), R-8/R-9 (the external actuator, one C10 activation
+  away and not row 2's file).
 - **Phase 5** land continuously, close honestly — **five lands, resolved from `origin/main` after
   ship-land's rebase** (a local sha names a commit that is not on trunk — row 3 hit exactly this):
   `91e2c65a` design · `eaa5e269` map · `0dc2b1c0` record+producer · `ad691965` third-category ·
   `f14f7028`→landed `b10ac9a7` M3 · `26787317` payload gates. **No activation step is required**
   (M-15: every change lands in an already-symlinked file), and Builds 1-2 were verified LIVE in
   `~/.claude/scripts/handoff-fire.sh` during the session.
+
+---
+
+## §13 R-6 CLOSED — the dead-letter store was written by row 2 and read by NOTHING (2026-08-13)
+
+**The measurement that decided it, before any code was written:**
+
+```
+$ grep -rn 'mailbox/dead-letter\|deadletter' --include='*.sh' --include='cc-*' bin/ hooks/ scripts/
+scripts/handoff-fire.sh:3411   ← the WRITER
+(tests/handoff-close-mail-guard.bats — its own suite)
+```
+
+**Zero consumers.** The four hits that *look* like consumers (`hooks/operator-readout.sh`,
+`hooks/escalation-watch.sh`, `scripts/autonomy-sweep.sh`) are the **escalation** dead-letter stores
+of the D-series — a different set of four dirs. So the store row 2 built to satisfy row 3's M3
+clause — *"a dead-letter store that is itself SURFACED on the operator board with existence
+evidence, never a silent file"* — **was a silent file**, and had been since it landed. A5/A6 passed
+at the write side and the contract failed at the read side, which is precisely the split the
+campaign's own `landed ≠ deployed ≠ activated ≠ exercised` rule (R5) exists to catch.
+
+**Why row 2 decided a seam it was told not to decide alone.** R-6 asked which of `bin/cc-blockers`
+or `bin/cc-comms-alarm-sweep` should render it. Neither is the answer any more: the **D-series**
+landed a purpose-built triad for this exact predicate — `bin/cc-escalations` (list + the humane
+`ack` off switch), `hooks/escalation-watch.sh` (the SessionStart GUARANTEED READER, whose own header
+states its purpose is "durable escalation records that NOTHING session-facing read"), and
+`hooks/operator-readout.sh`'s counted `◆` line. The dead-letter store is a member of that class by
+construction. So this was not a renderer choice; **joining an existing ruled surface is the opposite
+of building a second one**, and standing up a sixth renderer for the same predicate would have been
+the decision that needed a ruling.
+
+**What landed** — the store becomes the D-series' FIFTH escalation store, seamed on the WRITER's own
+`CC_MAILBOX_DIR` so the two ends cannot drift:
+
+| Leg | Change |
+|---|---|
+| `bin/cc-escalations` | fifth store; class `mail-deadletter`; `list` reads it, `ack` silences it in both marker conventions |
+| `hooks/escalation-watch.sh` | sixth class at SessionStart; the detail line **names the closing session's sid** (R11 — a count with no address gives the operator nothing to look up) |
+| `hooks/operator-readout.sh` | folded into the ONE standing `◆ N escalation record(s) unseen` line — one predicate, one line |
+| `scripts/handoff-fire.sh` | the writer's message now names the **drain** (`cc-escalations list` → `ack <sid>.md`), not just the path it wrote |
+
+**Two invariants the implementation is built against, each with a test:**
+
+- **`*.md` only — `.ran` is EVIDENCE, never a record (R4).** Counting the existence-evidence file
+  would make an empty-but-ran store permanently indistinguishable from one holding a real dead
+  letter, collapsing the exact distinction that file was created to preserve.
+- **It damps by HUMAN ack, unlike the other four.** `autonomy-sweep` auto-marks the four stores it
+  collects, so they surface once and go quiet; it does not read this store, so a dead letter renders
+  at every SessionStart until acked. That is a deliberate departure from the alarm-polarity law, not
+  an oversight of it: **an alarm reports an event that has passed and re-reporting carries no new
+  bits — a dead letter is UNREAD CONTENT that still exists**, and damping it automatically would
+  recreate the silent-file state the surfacing exists to end. Tolerable only because the off switch
+  is one command and the population is bounded by construction (one record per terminally-closed
+  session that still owed mail; a closed session never closes again, so an acked record cannot
+  re-accumulate behind its own marker).
+
+**Proof — RED against a pristine tree recovered by `git archive HEAD`, never a hand-edited
+approximation:**
+
+The load-bearing number is the WHOLE-CORPUS one, run over both trees in the same shell with the same
+shim, because a per-suite tally cannot prove the diff broke nothing elsewhere:
+
+```
+8 suites: escalation-watch · cc-escalations · operator-readout · handoff-close-mail-guard ·
+          autonomy-sweep · handoff-selfclose · handoff-lifecycle-record · handoff-recycle-engagement
+
+PRISTINE (git archive HEAD + this branch's test files)   207 ok / 30 not-ok
+THIS TREE                                                219 ok / 18 not-ok
+```
+
+**Every one of the 12 that flipped is attributable**, and the 18 that remain are the SAME 18 on both
+trees — all in `tests/autonomy-sweep.bats`, a suite this diff does not touch and whose subject it does
+not change. Driving those would be driving a 🔧 this diff did not cause.
+
+| | Flipped GREEN |
+|---|---|
+| 9 | new `mail-deadletter` cases in `escalation-watch` + `cc-escalations` (render · `.ran`-is-not-a-record · both seen forms · `list --json` class+absent-verdict · `ack` · `ack --all` across five stores · the 15-check selftest) |
+| 2 | new `operator-readout` cases (the record folds into the ONE `◆` count; `.ran` does not; an ack drops it) |
+| 1 | `handoff-close-mail-guard`'s writer-message test, **rewritten** — from asserting the message named a *promised* surface ("the operator board … row 10 owns that row") to asserting it names the **drain** that now exists |
+
+One new test — *"an absent dead-letter store is tolerated, and the other classes still render"* — is
+green on BOTH trees **by design**: it is a fail-open contract-preservation test, and it is named as
+such rather than counted as coverage.
+
+⚠ **Bounded honestly: this row was built and verified in a LINUX container, and the repo is
+BSD-first.** The three suites' baselines already failed there on `stat -f %m` and `date -r <epoch>`
+(GNU reads both flags differently — GNU `stat -f` prints *filesystem* status, whose output then
+arithmetic-evaluates to `File: unbound variable`), so an unshimmed run measures the platform, not the
+diff. Every tally above was therefore taken under a BSD-emulating `stat`/`date` shim on PATH, applied
+IDENTICALLY to both trees — which is what makes the comparison a measurement of the change. The shim
+is a harness, is not committed, and **no BSD-vs-GNU claim is asserted from this environment**; the
+project's own gate on the operator's box is still the arbiter for the platform behaviours.
+
+---
 
 ### Own gates catching own defects (the exemplar predicted this; recording it kept it honest)
 
