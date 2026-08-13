@@ -89,17 +89,67 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
 }
 
-in_allowlist() { printf '%s\n' "$2" | grep -qxF "$1"; }
+# ── COULD-NOT-CHECK is a THIRD state, never a verdict ─────────────────────────────────────────
+# Ported from the twin, scripts/test-hermeticity-lint.sh, which took this fix at afaf40de ("a check
+# that could not RUN is a non-verdict, not a leak") + ed4e6c6a ("retry the pure predicates before
+# condemning the run"). This file kept the pre-afaf40de shape.
+#
+# grep answers 0=found / 1=not-found / >1=I FAILED, and BOTH predicates below discarded the third
+# answer — in OPPOSITE directions, which is why neither was obvious:
+#   · in_allowlist  was a bare `grep -qxF`, so a lost fork returned non-zero = "not allowlisted" and
+#     the caller reported the suite as a TIMEBOMB. A FABRICATED RED about a clean tree.
+#   · future_dates  was an unchecked 4-stage pipeline whose output is consumed as a string, so a lost
+#     fork yielded "" = "no future dates" and a REAL bomb went unreported. A false GREEN.
+# One lint, both failure directions (memory: gate-default-decides-failure-direction).
+#
+# This matters more here than in the twin: tests/test-walltime-lint.bats is in
+# scripts/host-suites.manifest, so deploy-live runs this at nice -n 19 BESIDE a full corpus — exactly
+# the fork pressure that produces rc>=2 — and the wrapper asserts -eq 0, so a fabricated RED gets
+# filed automatically.
+#
+# Both predicates are PURE and CHEAP (a grep over a string / over one file), so re-running is free and
+# side-effect-free, and the failure being retried is transient by definition. Three tries, 1s apart,
+# then CHECK_FAILED — reserved for a box genuinely unable to run a grep three times in a row.
+CHECK_FAILED=0
+
+in_allowlist() { # 0 = allowlisted · 1 = not · sets CHECK_FAILED if grep could not RUN
+  local rc
+  for _ in 1 2 3; do
+    printf '%s\n' "$2" | grep -qxF "$1"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see COULD-NOT-CHECK above
+  done
+  CHECK_FAILED=1
+  return 1
+}
 
 # Future in-band dates in one suite, one per line. Comment lines are skipped: prose dates ("observed
 # 2026-07-25") are documentation, never a fixture, and flagging them would train people to ignore this.
-future_dates() { # $1=file
-  local today horizon
+# RETURNS 3 (not CHECK_FAILED=1) when it could not run. This function is consumed inside a COMMAND
+# SUBSTITUTION at the call site — `d="$(future_dates "$f" | …)"` — which is a SUBSHELL, so a global
+# assigned here would be discarded and the guard would be vacuous: exactly the could-not-run-reads-as-
+# an-answer defect this change exists to remove. A return code survives the subshell (pipefail carries
+# it past the `tr`/`sed` stages); the caller translates it into CHECK_FAILED in the parent shell.
+future_dates() { # $1=file · stdout = future in-band dates · rc 0 = answered · rc 3 = COULD NOT RUN
+  local today horizon out rc
   today="$(today_ymd)"; horizon=$(( ${today%????} + $(horizon_years) ))${today#????}
-  grep -vE '^[[:space:]]*#' "$1" 2>/dev/null \
-    | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' \
-    | sort -u \
-    | awk -v t="$today" -v h="$horizon" '{ y=$0; gsub("-","",y); if (y+0 > t+0 && y+0 <= h+0) print $0 }'
+  for _ in 1 2 3; do
+    # rc 1 is a real ANSWER here, not a failure: `grep -oE` exits 1 when the file carries no date at
+    # all, which under pipefail becomes the pipeline's rc. Only >=2 means a stage could not run.
+    out="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null \
+      | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' \
+      | sort -u \
+      | awk -v t="$today" -v h="$horizon" '{ y=$0; gsub("-","",y); if (y+0 > t+0 && y+0 <= h+0) print $0 }')"
+    rc=$?
+    case "$rc" in
+      0|1) printf '%s' "$out"; return 0 ;;
+    esac
+    sleep 1                       # transient fork pressure — see COULD-NOT-CHECK above
+  done
+  return 3
 }
 
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
@@ -111,6 +161,15 @@ lint_dir() {
     [ -e "$f" ] || continue
     seen=$((seen + 1)); base="$(basename "$f")"
     d="$(future_dates "$f" | tr '\n' ' ' | sed 's/ $//')"
+    # rc 3 = the date scan could not RUN for this file (see future_dates). Translate it into
+    # CHECK_FAILED HERE, in the parent shell — the function itself is inside a command substitution
+    # and cannot set a global that survives. Without this the empty "$d" would read as "no future
+    # dates", the file would pass, and a real timebomb would go unreported: a false GREEN.
+    if [ "$?" -eq 3 ]; then
+      CHECK_FAILED=1
+      echo "test-walltime-lint: ⛔ could not scan $base for dates after 3 tries — NOT a clean verdict for this file" >&2
+      continue
+    fi
     if [ -n "$d" ]; then
       if in_allowlist "$base" "$allow"; then
         continue                                   # grandfathered — known bomb, already on the list
@@ -204,4 +263,12 @@ if [ -n "${CC_WALLTIME_OWN+set}" ]; then
 else
   lint_dir "${1:-$ROOT/tests}" "${CC_WALLTIME_ALLOWLIST-$EMBEDDED_ALLOWLIST}"
 fi
-exit $?
+rc=$?
+# A predicate that could not RUN outranks BOTH answers: such a run has not earned the right to call
+# the tree clean, nor to name a file as a timebomb. 2 is this file's established could-not-run code
+# (lint_dir already returns it for an unusable scan dir), so no caller learns a new number.
+if [ "$CHECK_FAILED" -ne 0 ]; then
+  echo "test-walltime-lint: ⛔ a predicate could not RUN after 3 tries — exiting 2 (could-not-run), never 0 (clean) or 1 (timebomb)" >&2
+  exit 2
+fi
+exit "$rc"

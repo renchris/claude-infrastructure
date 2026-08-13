@@ -118,6 +118,40 @@ mk() {  # $1=dir  $2=setup-body
   [ "$status" -eq 2 ] || false
 }
 
+# A PREDICATE that could not RUN is the third state, and the two predicates failed in OPPOSITE
+# directions — which is why neither was visible from the outside and why both arms are pinned here.
+# grep answers 0=found / 1=not-found / >1=I FAILED; a stub returning 2 is the honest simulation of
+# the fork pressure this lint actually runs under (it is in scripts/host-suites.manifest, so
+# deploy-live runs it at nice -n 19 beside a full corpus). These drive the SCRIPT, because the defect
+# was in how the caller consumed the predicates, not inside the predicates themselves.
+_bomb_dir() {  # a fixture carrying one in-band future date → a REAL finding when nothing is stubbed
+  mkdir -p "$FIX/nv"
+  printf '@test "x" {\n  : %s\n}\n' "$BOMB" > "$FIX/nv/bomb.bats"
+}
+
+@test "NON-VERDICT: a date scan that cannot RUN exits 2, never 0 — the false-GREEN direction" {
+  _bomb_dir
+  mkdir -p "$FIX/stub"
+  printf '#!/bin/bash\nexit 2\n' > "$FIX/stub/grep"; chmod +x "$FIX/stub/grep"
+  # control first: unstubbed, this fixture is a real finding (1). Without this the 2 below could be
+  # an artifact of the fixture rather than of the stub.
+  CC_WALLTIME_TODAY=$T run bash "$LINT" "$FIX/nv"
+  [ "$status" -eq 1 ] || { echo "control failed — fixture is not a finding: $output"; false; }
+  PATH="$FIX/stub:$PATH" CC_WALLTIME_TODAY=$T run bash "$LINT" "$FIX/nv"
+  [ "$status" -eq 2 ] || { echo "a failed date scan did not exit 2 (got $status): $output"; false; }
+}
+
+@test "NON-VERDICT: an allowlist check that cannot RUN exits 2, never 1 — the fabricated-RED direction" {
+  _bomb_dir
+  mkdir -p "$FIX/stub2"
+  # fail ONLY in_allowlist's -qxF, so the date scan still answers and the allowlist arm is isolated
+  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = "-qxF" ] && exit 2; done\nexec /usr/bin/grep "$@"\n' \
+    > "$FIX/stub2/grep"; chmod +x "$FIX/stub2/grep"
+  PATH="$FIX/stub2:$PATH" CC_WALLTIME_TODAY=$T run bash "$LINT" "$FIX/nv"
+  [ "$status" -eq 2 ] || { echo "a failed allowlist check did not exit 2 (got $status): $output"; false; }
+  printf '%s' "$output" | grep -q 'could not RUN' || { echo "the non-verdict was silent: $output"; false; }
+}
+
 @test "ship-land runs it, own-scoped, with a kill switch" {
   # Anchored on the own_run ROUTING, not on the assignment spelling — see the identical note in
   # tests/test-hermeticity-lint.bats. `CC_WALLTIME_OWN=` was true until the P2 own-scope work made
