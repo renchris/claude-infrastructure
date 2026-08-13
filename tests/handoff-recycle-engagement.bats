@@ -98,7 +98,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REGDIR/$
   [ "$status" -eq 0 ] || { echo "the ROW-CHANGE signal did not fire"; false; }
 }
 
-@test "ROW-CHANGE fires on the NESTED layout Claude Code actually writes ($pdir/<slug>/<sid>.jsonl)" {
+@test "ROW-CHANGE fires on the NESTED layout Claude Code actually writes (\$pdir/<slug>/<sid>.jsonl)" {
   # THE FIXTURE ABOVE IS THE BLIND SPOT. Every other case here writes the transcript FLAT at
   # $PROJDIR/<sid>.jsonl, which is the layout the OLD code assumed — so the ROW-CHANGE arm passed
   # its own suite while being dead on the box. Measured 2026-08-12: all 835 real transcripts under

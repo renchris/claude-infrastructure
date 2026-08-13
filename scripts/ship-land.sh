@@ -2893,6 +2893,38 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── @test-name EVAL ratchet (a name that EXPANDS loses the expanded word, silently) ─────────────
+  # Sits beside kill-guard because it shares its shape exactly: whole-corpus, STRICT, no allowlist,
+  # because the baseline was swept to zero first (8942 @test lines, 0 offenders). bats evals every
+  # description, so a backtick / $( ) / $VAR in a NAME is substituted and the word is DELETED from
+  # the rendered TAP name — and the SILENT variant (an unset var, or a word that IS a command like
+  # bats' own `run`) passes with no diagnostic at all. Two live sites were measured and fixed on
+  # 2026-08-13 (announce-before-retire.bats:356, handoff-recycle-engagement.bats:101), 3 days after
+  # the class was swept — which is exactly why detection in a suite is not enforcement.
+  TESTNAME_LINT="${SHIP_LAND_TESTNAME_LINT:-scripts/bats-testname-eval-lint.sh}"
+  # gate_bounded: EVENT-ON-FIRST-LAND, DIFF-SCOPED, ONE-BACKSLASH-CLEARABLE — neither refusal can
+  # become a standing state. The scan names file:line and prints the whole cure (escape it), so it is
+  # an EVENT with an actor: the author who typed the name clears it in the same edit, and it cannot
+  # fire for anyone else because the corpus baseline is zero. Release valve, auditable in land.log:
+  # SHIP_LAND_TESTNAME_LINT=/nonexistent skips this block whole via the -x test.
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$TESTNAME_LINT" ]]; then
+    echo "→ gate: @test-name eval ratchet (a name whose word is deleted by shell expansion)" >&2
+    if ! "$TESTNAME_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: bats-testname-eval-lint --selftest FAILED — the lint no longer discriminates, so" >&2
+      echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
+      gate_red testname-eval-selftest
+      return 1
+    fi
+    "$TESTNAME_LINT" tests >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "bats-testname-eval-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
+      echo "✗ gate: @test-name eval RED — a name above EXPANDS, so bats deletes that word from the" >&2
+      echo "  rendered TAP name and the suite still passes. Backslash-escape it: \\\` or \\\$." >&2
+      gate_red testname-eval
+      return 1
+    fi
+  fi
+
   # ── off-box ADMISSION ratchet — the LAST arm, because it is the only expensive one ────────────
   # THE GENERATOR IT CLOSES. `scripts/offbox-partition.sh` makes the hermetic partition a SET
   # DIFFERENCE, so a suite joins it BY EXISTING rather than by being proven off-box-clean. One
