@@ -89,7 +89,7 @@ memory rlimit on macOS, so every bound must be CPU-time, cardinality, or actuato
 | # | Change | Evidence | Recovers | Effort | Enforcing-store edge |
 |---|---|---|---|---|---|
 | T1.1 | **Harden the `grep()` wrapper** (ours — injected into shell snapshots): `-m` max-count, max-files, reject `-o` with unanchored `.{0,N}` over a directory root; generalize reso's `mem-leash.sh` | one ugrep = 11.4GB live, 17.65GB max; 747 sentinel rows >500MB | 8-17GB of peak | S | the shell-snapshot function body (symlinked live layer — landing = deploying) |
-| T1.2 | **Deploy the researched CPU ceiling** at the Bash boundary: `ulimit -t 600` PREFIX for any command containing a search binary (inherited by children; cannot break pipelines; the design's own positive control) | qos-rewrite coverage measured **0.21%** of Bash calls; the compound-exclusion survey REFUTED by tonight's two 8.5/4.8GB greps ("the grep WAS the heavy job") | stops any runaway at ~3-4GB | S | `hooks/qos-rewrite.sh` transform (already live symlink) |
+| T1.2 | **Deploy the researched CPU ceiling** at the Bash boundary: `ulimit -t 600` PREFIX for any command containing a search binary (inherited by children; cannot break pipelines; the design's own positive control) | qos-rewrite coverage measured **0.21%** of Bash calls; the compound-exclusion survey REFUTED by tonight's two 8.5/4.8GB greps ("the grep WAS the heavy job") | stops any runaway at ~3-4GB | S | `hooks/qos-rewrite.sh` transform (already live symlink) — **✅ LANDED, ceiling 60 CPU-s not 600 (§11b)** |
 | T1.3 | **Second sentinel selector** — single-proc footprint > ~4GB AND rising, comm-agnostic (cohort today is `comm ~ ^node` only: it froze an innocent 1.73GB tsc and left 10.4GB of ugrep running) **+ bounded auto-SIGCONT** (a false positive costs latency, not a hung build — today it costs a silent stall with no thaw path) | `compressor-sentinel.sh:252,279`; trip 2026-08-10T07:09 | the 7-10GB class at the moment it matters | M | EXTEND `com.claude.compressor-sentinel` (never a new daemon — band diversity is survival, axis K) |
 | T1.4 | **Land the Next.js `experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` flag** — in NO live config today; 2.38GB of build-worker pool per dev server running now; the named ignition of the panics. Item `0e4f795b3a20` is filed under project `agent-build-hackathon` where infra waves never look → **re-file on reso's board**, land via reso's rails | axis M F6 | −2.38GB per dev server, −6 procs each | XS | reso `next.config.js` + the re-filed item |
 | T1.5 | **Process-class admission**: extend the LIVE spawn gate (`agent-teams-enforce.sh:79` → `capacity-admit.sh`) with (a) an **agent-process-count term** (reuse `capacity-alarm.sh`'s `sessions_exe` derivation — one derivation, no third copy) and (b) the **corrected headroom** — today's `cc_hw_headroom_gb()` counts anonymous-inactive as reclaimable, over-reporting by ≥10GB, and the over-report GROWS with fan-out (114 admits / 0 refusals ever). Class-cardinality (node > ~120) is observable ~60s before the memory it becomes | axis N F2/F3; axis A storm A | prevents the 44.7GB excursion class | S-M | `scripts/lib/capacity-admit.sh` + the wired PreToolUse hook |
@@ -111,11 +111,11 @@ armed-but-never-run, built-but-unwired, or missing-the-event:
 | T2.1 | **devserver-gc: run once ATTENDED, then trust the schedule** — plist rewritten `DEVGC_ACT=1` (ratified, packet `99637eaee7b9`) but `launchctl print` shows `runs = 0`; every logged run is `act=0`. "Armed" is an unverified claim; backlog `898f8eafb809` still says blocked — store and machine disagree | axis M F7 | the 27.5h-orphan class | XS | one attended run + close the item with its `verdict=` line |
 | T2.2 | **devserver-gc: cap arm ABOVE the owner arm** — the blocking predicate is *ownership*, which is not a clock: an owned server is immortal at any size (100% keep since 08-08; a 3.78GB tree unreapable). ≤1 owned server/session, ≤2 fleet-wide; evict oldest by SIGTERM; ownership decides WHICH, never WHETHER. **+ narrow the owner oracle**: `lsof -c claude` prefix-matches `claude.exe`, so research subagents extend dev-server immortality (50 cwds / 11 worktrees live) — restrict to session leaders / the live-session registry | axis M F3/F5 | bounds the class at ~4GB | S | `scripts/devserver-census.sh` (the actuator stays the arbiter) |
 | T2.3 | **SessionEnd dev-server reap arm** — 0 of 7 SessionEnd hooks mention dev servers; orphan tail is ~90min by schedule, 27.5h observed. TERM servers whose cwd is the exiting session's worktree and no other live session owns; hourly sweep becomes backstop | axis M F4 | orphan exposure → seconds | S | SessionEnd hook (c10 migration for the registration) |
-| T2.4 | **Pane-close guard: split the UNKNOWN arm** — `it2-kitty:852` rc=67 refused 73 closes since 08-07, **100% UNKNOWN / 0% NON-EMPTY (the protective arm has never fired)**; nothing retries; 10 stranded panes measured holding **~6.2GB** + 10 OS windows (+~3.4GB IOSurface). Split: unreadable-and-CC-alive ⇒ keep refusing; **agent-process-EXITED ⇒ close** (no composer left to protect). NON-EMPTY arm untouchable (real 08-07 incident) | axis H §5 | ~6.2GB + windows | M | `bin/it2-kitty` state machine (live symlink) |
+| T2.4 | **Pane-close guard: split the UNKNOWN arm** — `it2-kitty:852` rc=67 refused 73 closes since 08-07, **100% UNKNOWN / 0% NON-EMPTY (the protective arm has never fired)**; nothing retries; 10 stranded panes measured holding **~6.2GB** + 10 OS windows (+~3.4GB IOSurface). Split: unreadable-and-CC-alive ⇒ keep refusing; **agent-process-EXITED ⇒ close** (no composer left to protect). NON-EMPTY arm untouchable (real 08-07 incident) | axis H §5 | ~6.2GB + windows | M | `bin/it2-kitty` state machine (live symlink) — **✅ LANDED as prescribed: `AGENT-PANE`/`AGENT-NO-BOX`/`DEAD-PANE` (§11b)** |
 | T2.5 | **No crash-watchdog for subagents** — 18 of 36 watchdog daemons watch `claude.exe` subagents, which own no team/panes: the daemon's purpose is structurally inapplicable; scales with wave width | axis C C1 | 34MB + 180 forks/min + noise | S | `hooks/lead-crash-watchdog.sh` sidechain guard (reuse `mailbox-wake-arm.sh:60-77` discriminator) |
-| T2.6 | **One kqueue deathwatch, not 28 polling daemons** — `bin/cc-deathwatch-kqueue` is built, selftest-gated, and has ZERO hook call sites; the watchdogs re-implement its {pid,lstart} identity in `sleep 30` loops (~22K forks/hour fleet-wide) | axis C C2, axis A §6 | −27 procs, −280 forks/min, 30s→1ms detection | M (SPOF → needs the heartbeat `lead-deathwatch.sh` already has) | WIRE UP existing binary |
-| T2.7 | **MCP lifecycle** (no mechanism exists — genuine gap): (a) do NOT inherit MCP servers into `--agent-id` subagents (they spawn their own trees — measured); (b) pin the version, drop the `npm exec …@latest` wrapper (118MB × N + a registry round-trip per session start); (c) idle-TTL for zero-tool-call servers (~15min); (d) restart-on-footprint for the leak (one instance 1.93GB, peak 3.21GB; **4 of 5 instances never launched a browser** — 1.6GB idle scaffolding). **Wave-verified + extended 2026-08-10 → `docs/research/mcp-memory-groundup-2026-08-10.md`**: (a)-(d) confirmed with vendor-issue + tree-census evidence; class re-measured ~945 MB true RAM box-wide / 9-16% hosting; **shared-daemon consolidation REJECTED on measured architecture** (global tool mutex, one-browser-per-process, leak concentration, cloud-lane degradation, >6 s restart-strand); (a)'s mechanism refined — in-process Task subagents SHARE the parent's clients, the multiplier is `--agent-id` teammate PROCESSES bootstrapping from their cwd; add (e) zero-entry scoping of the reso stanza (×79 worktrees) and (f) telemetry-watchdog off (`CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1`, ~88-110 MB/chain) | axis A §4, axis N F7, axis C C6 | ~1.6GB standing + 3.2GB peak | S-M | `.claude.json` project MCP config + per-agent `CLAUDE_CONFIG_DIR` |
-| T2.8 | **Drop 31 redundant per-session `caffeinate -i -t 300`** — pid 818's standing `caffeinate -i -s` floor already asserts; the per-session ones respawn every 5min (~370 forks/h) for an assertion already held. (Vendor-spawned: needs the vendor env/config check first; if not suppressible, accept — cost is small) | axis A §6 | fork noise; 112MB | S | launcher env or accept |
+| T2.6 | **One kqueue deathwatch, not 28 polling daemons** — `bin/cc-deathwatch-kqueue` is built, selftest-gated, and has ZERO hook call sites; the watchdogs re-implement its {pid,lstart} identity in `sleep 30` loops (~22K forks/hour fleet-wide) | axis C C2, axis A §6 | −27 procs, −280 forks/min, 30s→1ms detection | M (SPOF → needs the heartbeat `lead-deathwatch.sh` already has) | ~~WIRE UP existing binary~~ **✅ WIRED — 6 call sites + 2 suites + migration 0004 (§11b)** |
+| T2.7 | **MCP lifecycle** (no mechanism exists — genuine gap): (a) do NOT inherit MCP servers into `--agent-id` subagents (they spawn their own trees — measured); (b) pin the version, drop the `npm exec …@latest` wrapper (118MB × N + a registry round-trip per session start); (c) idle-TTL for zero-tool-call servers (~15min); (d) restart-on-footprint for the leak (one instance 1.93GB, peak 3.21GB; **4 of 5 instances never launched a browser** — 1.6GB idle scaffolding). **Wave-verified + extended 2026-08-10 → `docs/research/mcp-memory-groundup-2026-08-10.md`**: (a)-(d) confirmed with vendor-issue + tree-census evidence; class re-measured ~945 MB true RAM box-wide / 9-16% hosting; **shared-daemon consolidation REJECTED on measured architecture** (global tool mutex, one-browser-per-process, leak concentration, cloud-lane degradation, >6 s restart-strand); (a)'s mechanism refined — in-process Task subagents SHARE the parent's clients, the multiplier is `--agent-id` teammate PROCESSES bootstrapping from their cwd; add (e) zero-entry scoping of the reso stanza (×79 worktrees) and (f) telemetry-watchdog off (`CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1`, ~88-110 MB/chain) | axis A §4, axis N F7, axis C C6 | ~1.6GB standing + 3.2GB peak | S-M | `.claude.json` project MCP config + per-agent `CLAUDE_CONFIG_DIR` — **RE-OWNED 2026-08-11 by `docs/plans/MCP_MEMORY_100P_IMPLEMENTATION.md` (5 waves, `status: open`); no longer M3-wave detail (§11b)** |
+| T2.8 | **Drop 31 redundant per-session `caffeinate -i -t 300`** — pid 818's standing `caffeinate -i -s` floor already asserts; the per-session ones respawn every 5min (~370 forks/h) for an assertion already held. (Vendor-spawned: needs the vendor env/config check first; if not suppressible, accept — cost is small) | axis A §6 | fork noise; 112MB | S | launcher env or accept — **premise now MECHANISED: `scripts/caffeinate-floor.sh` (T-P16-4) is the standing floor, not an observed pid. The cull itself is still open (§11b)** |
 | T2.9 | **Reap orphaned `gitstatusd`** (10 of 12 at ppid 1, oldest 7h55m) at pane death — `cc-teardown:524` already enumerates the name in its skip list; extend that arm | axis H §8 | 41MB + growth stopped | S | `bin/cc-teardown` |
 | T2.10 | **Editor cold-state hygiene**: Cursor 5.1GB (`state.vcdb` 1.46GB; 98 workspaces incl. dead worktree +/tmp paths minted by the `cursor /tmp/…` delivery doctrine). Prune workspaceStorage entries whose folder is gone — hang it off worktree removal; vacuum the db | axis M §6 | 5.1GB disk; window-restore risk | S | new tiny arm on worktree-gc's removal path |
 
@@ -125,22 +125,27 @@ armed-but-never-run, built-but-unwired, or missing-the-event:
 |---|---|---|---|---|
 | T3.1 | **footprint (= `top -stats mem`) as the primary metric** in capacity-alarm, sentinel snap ranking, and every census; RSS demoted to secondary | RSS: CC 1.6-2.8× over, kitty 10× under, fleet sums 2.34× over; `capacity-alarm.sh:641` already has the footprint rung — EXTEND to primary | S | 2 scripts, both live symlinks |
 | T3.2 | **Correct `cc_hw_headroom_gb()`** — exclude anonymous-inactive (≥10GB phantom headroom; reclaim = compression, not freeing) | axis N F3 | S | `capacity-admit.sh` |
-| T3.3 | **capacity-ramp freshness check** (dead sentinel reads 0% = healthy) | P0-6, absent tonight | XS | `capacity-ramp.sh breach()` |
+| T3.3 | **capacity-ramp freshness check** (dead sentinel reads 0% = healthy) | P0-6, ~~absent tonight~~ **✅ LANDED — `breach()`'s three-outcome D3 arm, mutation-tested (§11b)** | XS | `capacity-ramp.sh breach()` |
 | T3.4 | **Instrument corrections, recorded**: `ps -axo arch=` silently ignored on this macOS (false "no Rosetta"); `launchctl list` status column is LAST EXIT, not liveness (this wave's own prespawn census mis-read discovery + lead-supervisor as dead — both alive); argv-keyed predicates poisoned box-wide (C13); `tmutil destinationinfo` truncation hides the verdict | axes O/N + this wave's own errors | XS | docs + the census scripts that encode them |
 | T3.5 | **Benefit column for every guard** — fire-counts (sentinel 91 trips Aug 6-9; backup-before-write restores; stranded-sweep recoveries; completion-assert blocks) so cut-rankings stop reading pure prevention as pure cost | axis K missed-dimension 2 | S | wrap into the fleet census renderer |
 
 ## 6 · Thesis 4 — Close the recurrence: the prior wave's P0s, verified and re-owned
 
 Verified live this wave (axis J adversarial pass) — **the cheapest, highest-confidence items on
-the box**, all in symlinked files (landing = deploying):
+the box**, all in symlinked files (landing = deploying).
+
+🚨 **Re-verified 2026-08-13 (§11b): 4 of these 6 rows are now DISCHARGED and their ❌ is stale.** The
+cheapness was real — the recurrence closed itself within three days of being named. What did NOT
+close is the row this table cannot fix on its own: the `settings.json` registration in row 1, which
+is C10-gated (`migrations/README.md:72-77`, ratification still absent).
 
 | P0 | State tonight | Fix |
 |---|---|---|
 | setup-task-symlinks.sh at SessionStart (~4s CPU / ~800 forks / session, output DISCARDED by its own `timeout: 5`) | ❌ still registered (`settings.json:636`) | remove/guard the registration (c10) |
-| `cc-backlog list --blocked` on the Stop path — **92% of felt turn-end lag** (3.4s/turn) | ❌ still at `operator-readout.sh:702` | memo/cache off the hot path |
-| wrap-ledger transcript-keyed memo (60→27 git subprocesses/Stop) | ❌ reverted (`5da21949` — the memo staled the ⛔ rung); re-scoped key never built | rebuild on the re-scoped key |
-| render-census kitty arm (still charges 100% of WindowServer to iTerm2) | ❌ no kitty branch | add the arm |
-| capacity-ramp freshness | ❌ absent | T3.3 |
+| `cc-backlog list --blocked` on the Stop path — **92% of felt turn-end lag** (3.4s/turn) | ~~❌ still at `operator-readout.sh:702`~~ **✅ `blg_list_cached()` at `operator-readout.sh:138` (§11b)** | memo/cache off the hot path |
+| wrap-ledger transcript-keyed memo (60→27 git subprocesses/Stop) | ~~❌ reverted (`5da21949` — the memo staled the ⛔ rung); re-scoped key never built~~ **✅ built on the re-scoped key — `wrap-ledger.sh:149` § THE MEMO, one ledger per Stop EVENT (§11b)** | rebuild on the re-scoped key |
+| render-census kitty arm (still charges 100% of WindowServer to iTerm2) | ~~❌ no kitty branch~~ **✅ landed 2026-08-11, the day after this doc — `render-census.sh:11` (§11b)** | add the arm |
+| capacity-ramp freshness | ~~❌ absent~~ **✅ landed + mutation-tested (§11b)** | T3.3 |
 | `bash script.sh` for fresh-inode invocations (40× exec-assessment tax) | ⚪ unverified at scale | worktree-setup call sites |
 
 ## 7 · Thesis 5 — The scheduler fleet: kill the dead weight, convert calendars to events
@@ -321,13 +326,94 @@ switch ~3 lines at `handoff-fire.sh:5547` + B2 wire the existing `cc-cloud prefl
 
 | Owner | Items |
 |---|---|
-| **M3 wave detail** (its falsifier is already this doc's acceptance: *"a spawn-depth cap is enforced at the actuator AND `.worktrees` count is bounded by a reaper that runs"*) | T1.2/3/5/6 · T2.1-2.6 · T3.1-3.3 — **note the M3 wave itself is STRANDED on branch `m3-fleet-footprint` (+3: sentinel-reads-kernel, worktree-gc rungs, spawn-gate account-tree); land or supersede it first** |
+| **M3 wave detail** (its falsifier is already this doc's acceptance: *"a spawn-depth cap is enforced at the actuator AND `.worktrees` count is bounded by a reaper that runs"*) | T1.2/3/5/6 · T2.1-2.6 · T3.1-3.3 — ~~**note the M3 wave itself is STRANDED on branch `m3-fleet-footprint` (+3: sentinel-reads-kernel, worktree-gc rungs, spawn-gate account-tree); land or supersede it first**~~ **← REFUTED BY CONTENT 2026-08-13, see §11b: all three commits' content IS on trunk (rebase-landed under new shas). This row's stated precondition no longer blocks anything, and 9 of its own items are already discharged.** |
 | **GROUND_UP row 11** (worktree/warm-pool, attempt #3 pending) | worktree DISPOSE arming · AC-7 kill switch · staleness oracle (content-based, `git cherry`) · `worktree-pool.sh` phantom resolution (referenced by 15 files, never existed) · branch-reaper scheduling (on trunk, unscheduled, 394 unmerged branches) |
 | **GROUND_UP row 6** (hooks — scheduled LAST by design) | T2.5/2.6 wiring · P0 items 1-2 · statusline per-render cost (5.4% of a core O(N), dominant term `git status` in the 115-worktree checkout) |
 | **reso board** | T1.4 workerThreads flag (re-file `0e4f795b3a20` off `agent-build-hackathon`) |
-| **c10 migrations (⛔ the single gating decision: the C10 rescope is UNRATIFIED — 7 of 8 migrations staged, incl. 0006 mailbox-wake-arm)** | every settings.json/plist registration above |
+| **c10 migrations (⛔ the single gating decision: the C10 rescope is UNRATIFIED — ~~7 of 8 migrations staged, incl. 0006 mailbox-wake-arm~~ still unratified 2026-08-13 per `migrations/README.md:72-77`, but the LADDER has advanced past this count: trunk carries `0007-mailbox-wake-arm-registration.sh` + 0008-0011 — §11b)** | every settings.json/plist registration above |
 | **operator-only, filed** | C10 ratification · devserver-gc attended first armed run (T2.1) · Time Machine exclusions + destination decision (O-6) · third-party autolaunch cull (O-1, `sfltool dumpbtm` needs admin) · postgres@14 + ollama bootout (T5) · nightly-regression re-enable decision (coverage hole) · reso maintenance.lock rm (T7.1 — one command, or agent-run if sanctioned) |
-| **stranded, content-verify then land** | `crash-rootcause-2026-08-09` branch (+1) — devserver-gc arming commit; `m3-fleet-footprint` (+3); gu13c/* (5 branches, map claims rebase-landed — verify by content per C7) |
+| **stranded, content-verify then land** | `crash-rootcause-2026-08-09` branch (+1) — devserver-gc arming commit; ~~`m3-fleet-footprint` (+3)~~ **← content ON TRUNK, §11b**; gu13c/* (5 branches, map claims rebase-landed — verify by content per C7) |
+
+## 11b · Landing-map re-verification against trunk (2026-08-13)
+
+Written by the dispatch of backlog item `0095e83a191f` ("execute the §11 landing map"), whose brief
+required the premise be checked before acting. **It was three days old and half wrong**, in both
+directions: the one thing it named as BLOCKING had already landed, and nine of the items it listed as
+work were already discharged. Every verdict below is a content read of `origin/main`, named so the
+next dispatch inherits a measurement instead of re-deriving one. Method per C7: **content, never
+sha** — a rebase-land changes the sha and leaves `git branch --contains` and any count-based check
+reading "not landed" over code that is right there.
+
+**The blocking precondition is REFUTED.** `m3-fleet-footprint`'s three commits are not ancestors of
+`origin/main` — and their content is on it anyway, which is exactly what a rebase-land looks like:
+
+| stranded commit | added lines present on trunk | the 100%-negative, read |
+|---|---|---|
+| `77d33bdc` sentinel-reads-the-kernel | `compressor-sentinel.sh` **138/138** · `tests/compressor-sentinel.bats` **77/77** | none — byte-identical additions; trunk reads the kernel at `compressor-sentinel.sh:762` (`read_num_sysctl vm.compressor_segment_limit`) |
+| `ea58210f` worktree-gc rungs | `worktree-gc-infra-run.sh` **187/189** · `tests/worktree-gc-infra.bats` **124/124** | the 2 are the same two invocation lines, **evolved forward** on trunk — `worktree-gc-infra-run.sh:444,446` add `${GC_DIRT_FLAG:+…}`, a strict superset |
+| `fa2abe97` spawn-gate account-tree | `agent-teams-enforce.sh` **107/109** · `tests/agent-teams-enforce.bats` **80/80 (blob-identical to trunk)** · `tests/capacity-admit-coverage.bats` **7/7** | the 2 are reflowed comment prose, no code |
+
+So "land or supersede it first" gated the whole M3 row on work that was already live. **The
+generalisable defect: a landing map recorded branch NAMES as its precondition.** A branch name is
+not a fact about the tree — it survives its own content landing, and a map that keys on one goes
+stale silently while every reader believes it is blocked.
+
+The sibling row is the same story. `crash-rootcause-2026-08-09` (+1, `c6ab83a8` "arm devserver-gc")
+is also **on trunk by content**: `launchd/com.claude.devserver-gc.plist:48` exports `DEVGC_ACT=1` and
+cites the same ratification packet `99637eaee7b9`. What is genuinely left of T2.1 is the *attended
+first run* (`launchctl print` → `runs = 0`) — operator-only, and already filed as such. So of the
+three "stranded, content-verify then land" entries, **two are landed and the third (gu13c/*) is the
+one the row already suspected**. Both carriers corrected in
+`memory-econ-rearchitecture-2026-08-10/prior-art.md` §IV.2.
+
+**Nine rows the doc marks ❌ / "no mechanism" are DISCHARGED on trunk.** Two landed *after* this doc
+was written, which is why it could not know:
+
+| row | doc says | trunk says |
+|---|---|---|
+| T1.2 CPU ceiling at the Bash boundary | proposes `ulimit -t 600` | **LANDED, and calibrated tighter** — `config/qos-bound.patterns` + `hooks/qos-rewrite.sh` transform (c) + `bin/cc-cpubound`; ceiling **60** CPU-s not 600, chosen against 56,269 paired agent Bash calls (0 of the 233 simple search-binary calls exceeded 30 s) |
+| T3.3 / P0-6 capacity-ramp freshness | "absent tonight" | **LANDED** — `capacity-ramp.sh` `breach()` has the three-outcome D3 arm (no reading ⇒ UNVERIFIABLE; sample older than `SEG_MAX_AGE` ⇒ UNVERIFIABLE). `tests/capacity-ramp.bats` **20/20 green** even on a Linux container, incl. test 18 *"MUTATION: neutering the freshness check makes a STALE sentinel read healthy again"* |
+| P0-2 `cc-backlog list --blocked` on the Stop path (92% of felt lag) | "❌ still at `operator-readout.sh:702`" | **LANDED** — `hooks/operator-readout.sh:138` `blg_list_cached()`, citing its own predecessor item `d1b453ddf16e` |
+| P0-3/P0-4 wrap-ledger memo | "❌ reverted; re-scoped key never built" | **LANDED on the re-scoped key** — `scripts/wrap-ledger.sh:149` § THE MEMO, one ledger per Stop EVENT keyed on the transcript |
+| P0-4 render-census kitty arm | "❌ no kitty branch" | **LANDED 2026-08-11**, the day after this doc — `scripts/render-census.sh:11` *"THE RENDER SUM COUNTS kitty … closing the FIFTH instrument artifact"* |
+| T2.4 pane-close UNKNOWN split | "the protective arm has never fired", proposes agent-EXITED ⇒ close | **LANDED as prescribed** — `bin/it2-kitty` `composer_state()` now returns `AGENT-PANE`/`AGENT-NO-BOX`/`DEAD-PANE`; :655 *"Both exits below used to be an unconditional UNKNOWN; they now consult the [dead check]"*. NON-EMPTY arm untouched |
+| T2.6 wire `cc-deathwatch-kqueue` | "ZERO hook call sites" | **WIRED** — `scripts/lead-deathwatch.sh`, `scripts/deathwatch-watchfile.sh`, `scripts/never-stuck-gate.sh`, `launchd/fleet.manifest`, `migrations/0004-lead-deathwatch-l1-activation.sh`, + `tests/deathwatch-watchfile.bats` / `tests/lead-deathwatch.bats` |
+| T2.7 MCP lifecycle | "no mechanism exists — genuine gap" | **RE-OWNED, not M3 detail** — `docs/plans/MCP_MEMORY_100P_IMPLEMENTATION.md` (2026-08-11, `status: open`): 5 waves, Phase 0, six named backlog successors it discharges |
+| T2.8 caffeinate | premise = "pid 818's standing assertion already holds" | that premise is now a **mechanism**, not an observed pid — `scripts/caffeinate-floor.sh` (T-P16-4) is a RunAtLoad+KeepAlive floor. The **cull** of the 31 per-session ones is still open |
+
+**Eleven rows are STILL LIVE, verified absent by content** — this is the real remaining work, and it
+is a *shorter* list than §11's:
+
+| row | the negative that proves it open |
+|---|---|
+| T1.3 second sentinel selector | `compressor-sentinel.sh:358` still *"Deliberately UNDER-inclusive: the cohort test is the EXECUTABLE NAME (comm basename ~ `/^node/`)"* — no comm-agnostic >4GB arm, no bounded auto-SIGCONT |
+| T1.5 process-class admission | no agent-process-count term in `scripts/lib/capacity-admit.sh`; `sessions_exe` exists only in `capacity-alarm.sh`'s IDL row (:1227) — still the two-copy problem the row wants collapsed |
+| T3.2 corrected headroom | `capacity-admit.sh:169` `cc_hw_headroom_gb()` still sums free + speculative + **inactive** + purgeable — the ≥10GB anonymous-inactive phantom is intact |
+| T1.6 trip attribution | the only `uniq -c` in the sentinel is :700, the **panic-report** parse; the live trip census tick (`census()`, :328) still emits no comm/ppid histogram, and there is no claude.exe page-only watch row |
+| T2.2 devserver cap arm | no cap constant in `scripts/devserver-census.sh` (`grep -c 'MAX_OWNED\|fleet-wide cap\|evict'` = 0); :301 still concludes *"every server is owned, busy, or young"* — ownership still decides WHETHER, not WHICH |
+| T2.3 SessionEnd dev-server reap | `hooks/session-end.sh` mentions dev servers **0** times |
+| T2.5 subagent watchdog guard | no `--agent-id`/subagent discriminator in `hooks/lead-crash-watchdog.sh` |
+| T2.9 gitstatusd reap | `bin/cc-teardown:524` still only **skips** `gitstatusd*` in its case list — the doc's own observation, unextended |
+| T2.10 Cursor cold-state | no `workspaceStorage` / `state.vcdb` reference anywhere in `scripts/`, `hooks/`, `bin/` |
+| T3.1 footprint as *primary* | the rung exists (`capacity-alarm.sh:642`, "per-proc physical-footprint outlier") but the promotion to primary is **not verifiable off-Mac** — `top -stats mem` does not exist here. Left UNVERIFIED rather than guessed |
+| T3.5 benefit column | no fire-count column in any census renderer |
+
+**Why this dispatch stopped at the disproof instead of writing the eleven.** Two blockers, both
+still true, and both are facts about the enforcing store rather than about effort:
+
+1. **⛔ C10 is still unratified, confirmed in-repo** — `migrations/README.md:72-77`: *"§3's rescope of
+   C10 … is explicitly the one clause the doc says a human must ratify, once. **That ratification has
+   not**"*. Every settings.json/plist registration in §11 (T2.3's SessionEnd hook among them) stays
+   operator-gated. One correction to §11's own row: the ladder has **advanced past** what it recorded
+   — trunk carries `0007-mailbox-wake-arm-registration.sh` (numbered 0007, not 0006) plus 0008-0011.
+2. **The dispatch ran in a Linux cloud container, and the gate for these files is red there by
+   construction.** `vm_stat`, `top -stats mem`, `launchctl`, `lsof -c claude`, kqueue and the pane
+   layer are all absent, so `tests/capacity-admit.bats` fails its own P1/P2/P3 positive controls
+   (*"the REAL sysctl is reachable at the absolute path the library resolves"*, *"vm_stat is
+   reachable on a MINIMAL PATH"*). A T1.3/T1.5/T3.2 diff written there could not be gate-verified —
+   and per the same C7 logic that refuted the stranded branch, an unverifiable diff against code
+   whose cure may already be on trunk is how a correct-looking change reverts trunk. **Docs-only was
+   the only honestly-verifiable deliverable from that box; the eleven rows want a Mac session.**
 
 ## 12 · Open questions this wave could not settle (named, not hedged)
 
