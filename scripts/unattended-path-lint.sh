@@ -123,7 +123,8 @@
 # never silent-green — a check that could not run has nothing to say about the tree).
 #
 # Env seams: CC_UNATTENDED_ALLOWLIST overrides the embedded allowlist (used by --selftest) ·
-#            CC_UNATTENDED_OWN narrows which findings BLOCK to the caller's own files.
+#            CC_UNATTENDED_OWN narrows which findings BLOCK to the caller's own files ·
+#            CC_UNATTENDED_INVENTORY overrides the embedded binary inventory (used by --selftest).
 
 set -uo pipefail
 
@@ -251,11 +252,160 @@ ALLOW
 CORPUS_RUNNERS="com.claude.nightly-regression.plist
 com.claude.postland-verify.plist"
 
+# ── The binary inventory: an UPWARD ratchet that de-environments the new-finding arm ──────────────
+# One binary NAME per line. Every name here was observed, on some box that ran `--emit-inventory`, to
+# resolve to an executable FILE. `installed_somewhere` UNIONS this list with today's live probe.
+#
+# WHY THIS EXISTS. `installed_somewhere` searches the CALLER'S live inherited PATH, and a NO DROPS
+# the finding — so before this list, the lint's finding set was a function of the invoker's tool
+# inventory rather than of the tree. The ORDERING rule at the three call sites already immunised the
+# STUCK-ratchet arm against exactly this (an allowlist entry counts as USED whether or not the binary
+# is visible from here), but the NEW-finding arm was left environment-sensitive: a file in the
+# AUTHOR'S OWN DIFF whose finding exists only because the landing box installs a binary the author's
+# box lacks blocks that author on a red they cannot reproduce. Measured on this tree 2026-08-13:
+# `bun`, `cargo`, `ruff` and `agent-browser` are reported under a rich PATH and silently dropped
+# under `PATH=/usr/bin:/bin`, and the drop is strictly one-way (nothing appears only on the lean box).
+# That is the sibling defect `test-hermeticity-lint.sh` RULE 5 names in its own header: a lint that
+# resolves the operator's PATH to reach a verdict is committing the defect it exists to catch.
+#
+# WHY A UNION AND NOT A NARROWING. The tempting fix — skip the installability filter for files in the
+# own-set — was REFUTED BY MEASUREMENT, not by argument. Mutating `installed_somewhere` over the real
+# tree: real 35 findings, always-YES 975, always-NO 0. The filter drops 940 of 975 (96.4%); it is the
+# load-bearing noise filter, not a nicety, and skipping it floods the author with ~96% noise on their
+# own files. A union can only ever ADD a finding relative to today's probe, so unlike a narrowing it
+# cannot manufacture a false negative in the direction that matters — a suite silently reading the
+# live box. A box missing `gtimeout` now reports it anyway, so the author sees locally what the
+# landing box will see.
+#
+# 🚨 THIS RATCHET ONLY GROWS, which is the opposite direction from EMBEDDED_ALLOWLIST and is why
+# there is no stuck-entry check for it. A name that was ever a real binary stays one; retiring a name
+# because today's box happens not to install it would restore the very environment-sensitivity this
+# list removes. Regenerate with `--emit-inventory`, which UNIONS with what is already here and never
+# subtracts — run it on a box with a rich toolchain and paste the output back over this heredoc.
+EMBEDDED_BINARY_INVENTORY="$(cat <<'INVENTORY'
+afplay
+agent-browser
+awk
+basename
+bash
+bats
+bun
+cargo
+cat
+cc-backlog
+cc-blockers
+cc-decide
+cc-do
+cc-idl
+cc-notify
+cc-sessions
+cc-teardown
+chmod
+cksum
+cmp
+codesign
+cp
+curl
+cut
+date
+dd
+diff
+dirname
+du
+find
+getconf
+gh
+git
+grep
+gtimeout
+gunzip
+gzip
+head
+hostname
+id
+it2
+jq
+kitty
+ln
+ls
+lsof
+mkdir
+mkfifo
+mktemp
+mv
+nice
+node
+npm
+npx
+osacompile
+osascript
+paste
+perl
+pgrep
+pkill
+plutil
+pnpm
+ps
+python3
+readlink
+rm
+rmdir
+ruff
+say
+script
+sed
+seq
+SEQ
+sh
+shasum
+shellcheck
+sleep
+sort
+sqlite3
+stat
+stty
+swift
+swiftc
+sysctl
+tail
+tar
+taskpolicy
+tee
+timeout
+tmux
+touch
+tput
+tr
+uniq
+uuidgen
+uv
+vm_stat
+wc
+yarn
+yes
+yq
+zsh
+INVENTORY
+)"
+
+# Is this name a known-real binary by the checked-in inventory? Kept whole-line so `jq` cannot match
+# inside `jqx`. Deliberately a global (lint_tree's own `has_line` is local to it) and deliberately
+# bash pattern-matching rather than `printf | grep`, which forks once per scanned word.
+in_inventory() { # $1=binary
+  local inv="${CC_UNATTENDED_INVENTORY-$EMBEDDED_BINARY_INVENTORY}"
+  case $'\n'"$inv"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
 usage() {
   cat >&2 <<'USAGE'
 usage: unattended-path-lint.sh [ROOT]        scan a repo root (default: this script's repo)
        unattended-path-lint.sh --selftest    prove the detector still discriminates, both directions
        unattended-path-lint.sh --list        print the scanned populations and their PATHs, then exit
+       unattended-path-lint.sh --emit-inventory [ROOT]
+                                             print EMBEDDED_BINARY_INVENTORY unioned with every
+                                             scanned word this box resolves — paste it back in.
+                                             UNIONS, never subtracts: the inventory only grows.
 
 exit 0 clean · 1 finding · 2 unusable (a NON-VERDICT, never a clean bill)
 USAGE
@@ -663,6 +813,12 @@ installed_somewhere() {
   # environment instead of from the tree. These two are stock macOS locations, as static and
   # enumerable as the /usr/local/bin already here — the fnm/pid argument above is why the INHERITED
   # PATH stays in the union, and is not a reason to omit the fixed directories it may lack.
+  #
+  # UNIONED with the checked-in inventory (see EMBEDDED_BINARY_INVENTORY above), which is what makes
+  # this predicate's answer a property of the TREE rather than of the invoker's tool inventory. The
+  # inventory arm is tested FIRST because it is a string match and the probe is a stat loop over
+  # every PATH entry — and because a name the inventory already knows needs no probe at all.
+  in_inventory "$1" && return 0
   reachable_on "${PATH}:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/sbin:/sbin:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin" "$1"
 }
 
@@ -999,6 +1155,53 @@ lint_tree() {
   return 0
 }
 
+# ── --emit-inventory ─────────────────────────────────────────────────────────────────────────────
+# Regenerate EMBEDDED_BINARY_INVENTORY. Walks the same three populations lint_tree does — hooks/*.sh,
+# tests/*.bats, and the scripts each launchd plist executes — and keeps every plausible command-
+# position word this box can resolve to an executable FILE. The result is UNIONED with what is
+# already embedded and sorted; nothing is ever dropped, so running this on a lean box is a no-op
+# rather than a silent retirement of names a richer box contributed. That one-way property is the
+# whole point: it is what stops the inventory from re-acquiring the environment-sensitivity it exists
+# to remove.
+#
+# A superset of what any single arm could ask about is deliberate and harmless — each arm asks
+# `installed_somewhere` only about words it scanned from these same files, and a name that resolves
+# to a real binary is truthfully a real binary whichever arm asks.
+if [ "${1:-}" = "--emit-inventory" ]; then
+  root="${2:-$ROOT}"
+  [ -n "$root" ] && [ -d "$root" ] || die2 "--emit-inventory: '$root' is not a directory (NON-VERDICT)"
+  emit_files=""
+  while IFS= read -r f; do [ -n "$f" ] && emit_files="$emit_files$root/$f"$'\n'; done <<< "$(hook_population "$root")"
+  while IFS= read -r f; do [ -n "$f" ] && emit_files="$emit_files$root/$f"$'\n'; done <<< "$(bats_population "$root")"
+  if [ -d "$root/launchd" ]; then
+    for pl in "$root"/launchd/*.plist; do
+      [ -f "$pl" ] || continue
+      while IFS= read -r tgt; do
+        [ -n "$tgt" ] && [ -f "$root/$tgt" ] && emit_files="$emit_files$root/$tgt"$'\n'
+      done <<< "$(plist_target_scripts "$pl")"
+    done
+  fi
+  emit_words=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out="$(scan_shell "$f")" || die2 "--emit-inventory: the scanner failed on $f (NON-VERDICT)"
+    while IFS=$'\t' read -r _sf _sl w; do
+      [ -n "$w" ] || continue
+      plausible_binary "$w" || continue
+      emit_words="$emit_words$w"$'\n'
+    done <<< "$out"
+  done <<< "$emit_files"
+  # The probe runs ONCE per distinct name, not once per site — the corpus repeats names heavily.
+  kept=""
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    reachable_on "${PATH}:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/sbin:/sbin:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin" "$w" || continue
+    kept="$kept$w"$'\n'
+  done <<< "$(printf '%s' "$emit_words" | sort -u)"
+  printf '%s%s' "$kept" "${CC_UNATTENDED_INVENTORY-$EMBEDDED_BINARY_INVENTORY}" | grep -v '^$' | sort -u
+  exit 0
+fi
+
 # ── --list ───────────────────────────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--list" ]; then
   [ -n "$ROOT" ] || die2 "cannot resolve repo root"
@@ -1261,6 +1464,31 @@ esac'
   newtree t19c
   mk t19c hooks/a.sh 'head -1 x | shellcheck -'
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19c" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary after a real pipe was not detected'
+
+  # 20a. RED — a bare binary that resolves NOWHERE on this box is reported anyway when the checked-in
+  #      inventory vouches for it. This is the case the union arm exists for: on the AUTHOR'S box the
+  #      binary is absent, on the LANDING box it is present, and before the inventory the author got
+  #      a green their landing would turn red. `zzunobtainium` is chosen precisely because no box
+  #      installs it — the live probe CANNOT be the thing that makes this red, so the case can only
+  #      pass through `in_inventory`. Revert the `in_inventory "$1" && return 0` line and this fails.
+  newtree t20a; mk t20a hooks/a.sh 'zzunobtainium --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="zzunobtainium" "$SELF" "$d/t20a" >/dev/null 2>&1 )
+  expect 1 "$?" 'a binary vouched for by the inventory but absent from this box was not detected'
+
+  # 20b. GREEN — the CONTROL that stops 20a being vacuous. Same fixture, same PATH, inventory that
+  #      does NOT list the word: it must still be dropped as scanner noise. Without this pair, a
+  #      change that simply stopped filtering on installability at all would pass 20a and look like
+  #      the fix, while flooding every author with the 96.4% of findings the filter exists to drop.
+  newtree t20b; mk t20b hooks/a.sh 'zzunobtainium --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="somethingelse" "$SELF" "$d/t20b" >/dev/null 2>&1 )
+  expect 0 "$?" 'a word no box installs and no inventory vouches for was reported as a finding'
+
+  # 20c. GREEN — whole-line membership. `zzunobtainium` must not be vouched for by an inventory that
+  #      merely CONTAINS it as a substring, or the union arm would silently vouch for every name
+  #      sharing a prefix with a real binary.
+  newtree t20c; mk t20c hooks/a.sh 'zzunobtainium --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="zzunobtainiumx" "$SELF" "$d/t20c" >/dev/null 2>&1 )
+  expect 0 "$?" 'the inventory matched a name as a SUBSTRING rather than a whole line'
 
   # 19. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
   #     or it cannot be wired into the gate at all.

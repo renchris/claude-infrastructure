@@ -2,10 +2,14 @@
 # Guards scripts/unattended-path-lint.sh — the ratchet on bare-name binary resolution along the
 # paths nobody watches (launchd jobs, settings.json hooks).
 #
-# WHY THIS SUITE IS THIN AND WHY THAT IS DELIBERATE. The lint carries its own --selftest with 18
-# cases, and that selftest is what the gate runs; duplicating those cases here would create two
+# WHY THIS SUITE IS THIN AND WHY THAT IS DELIBERATE. The lint carries its own --selftest, and that
+# selftest is what the gate runs; duplicating those cases here would create two
 # oracles over one behaviour, which is the shape that goes stale asymmetrically (memory:
-# sibling-auditors-must-share-the-state-model). So this suite asserts the things --selftest
+# sibling-auditors-must-share-the-state-model).
+# (The case COUNT used to be restated here as "18 cases". It read 27 by the time anyone looked and is
+# higher now — a resident restatement of a perishable fact has no path to learn it changed, so the
+# number is deliberately gone rather than updated to one that will rot again.)
+# So this suite asserts the things --selftest
 # STRUCTURALLY CANNOT assert about itself:
 #   · that --selftest exists, runs, and passes (the gate depends on that exit code)
 #   · that the detector is not vacuous against the REAL corpus — the failure mode that actually
@@ -205,4 +209,44 @@ setup() {
     run grep -E '^PATH="\$PATH:\$HOME/\.claude/bin:' "$REPO/$f"
     [ "$status" -eq 0 ] || { echo "$f does not append with ~/.claude/bin first"; false; }
   done
+}
+
+@test "the binary inventory COVERS the real corpus — a name it omits is a box-dependent finding" {
+  # The staleness guard on EMBEDDED_BINARY_INVENTORY, and the half --selftest structurally cannot
+  # assert: its fixtures are synthetic trees, so only a run against the REAL corpus can catch the
+  # inventory drifting behind the tree it describes.
+  #
+  # WHY COVERAGE IS THE ASSERTABLE PROPERTY. `installed_somewhere` is `inventory OR live probe`, and
+  # a NO drops the finding — so a binary the inventory omits is reported only on boxes that install
+  # it. That is the defect the inventory exists to remove: a file in the AUTHOR'S OWN DIFF whose
+  # finding exists only because the landing box has a binary the author's box lacks blocks that
+  # author on a red they cannot reproduce. Every name in the corpus's finding set being IN the
+  # inventory is exactly the condition under which the two boxes agree.
+  #
+  # This does NOT re-prove the union arm — that is selftest 20a/20b/20c, which own the mechanism and
+  # die when the arm is reverted. Attempting to prove the arm here would be VACUOUS and was measured
+  # to be: on the box that GENERATED the inventory, every name it vouches for is also live, so no
+  # real-corpus run can distinguish the arm from its absence. The arm's value is cross-box; only its
+  # coverage is local.
+  run env -i PATH="$PATH" HOME="$HOME" CC_UNATTENDED_ALLOWLIST="" bash "$LINT" "$REPO"
+  [ "$status" -eq 1 ] || { echo "expected findings with the allowlist emptied, got status $status"; echo "$output"; false; }
+
+  local missing="" b
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    grep -qxF "$b" <(sed -n "/^EMBEDDED_BINARY_INVENTORY=/,/^INVENTORY\$/p" "$LINT") || missing="$missing $b"
+  done <<< "$(printf '%s\n' "$output" | sed -n 's/.*`\([^`]*\)` is unreachable on.*/\1/p' | sort -u)"
+
+  [ -z "$missing" ] || {
+    echo "these binaries are reported by the real corpus but absent from EMBEDDED_BINARY_INVENTORY:"
+    echo " $missing"
+    echo "Their findings are therefore a function of the caller's PATH, not of the tree."
+    echo "Fix: scripts/unattended-path-lint.sh --emit-inventory  (it unions; it never subtracts)"
+    false;
+  }
+
+  # POSITIVE CONTROL: the loop above must actually have had names to check. An empty finding set
+  # would satisfy the emptiness assertion above without testing anything.
+  run bash -c "printf '%s\n' \"\$1\" | sed -n 's/.*\`\\([^\`]*\\)\` is unreachable on.*/\\1/p' | sort -u | grep -c ." _ "$output"
+  [ "${output:-0}" -gt 0 ] || { echo "no binary names parsed out of the report — the parser is broken"; false; }
 }
