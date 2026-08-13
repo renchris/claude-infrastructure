@@ -173,6 +173,38 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 #                             passed, so no scheduled invocation deletes without that flag.
 #                             Declared = reviewed (2026-08-12 GC-franchise re-land; backlog
 #                             6cab0ab3cb2f).
+# hooks/lib/peer-owned.sh   — NOT a reaper. It READS CC_REGISTRY_DIR twice and owns four `rm -f`, so
+#                             §3 flags it; every one of the four is the SAME temp scaffold. Both
+#                             _po_dirt_predates_session and the exec-window term capture
+#                             `git status --porcelain -z -uall` into their own `mktemp` file
+#                             (po-porc.XXXXXX / po-exec.XXXXXX) because a command substitution would
+#                             strip the NUL delimiters, and each removes that file on the capture's
+#                             failure path and again after consuming it in the same function — the
+#                             handoff-fire.sh / cc-value / context-econ.sh scaffold shape declared
+#                             above. Its two registry touches are READS and only reads:
+#                             _po_session_start jq's the row for `startedAt`, and _po_live_peer runs
+#                             ONE jq over the whole roster to find a live peer. It writes no row and
+#                             deletes no row — the evidence spine is only ever CONSUMED here. No
+#                             -mmin / -mtime / RETAIN_H / MARKER_MAX_AGE_S / CC_SUP_GC_S anywhere, so
+#                             §1/1b/1c/2/2b find nothing to bound. (Its one RETAIN_H mention is a
+#                             COMMENT about the registry's OWN 24 h forensics retention — a horizon
+#                             this file observes, never sets.) Declared = reviewed (2026-08-13 W4
+#                             drain; backlog 412de404ecac — this file is why the gate was RED on a
+#                             pristine origin/main, on two independent trees).
+# scripts/deathwatch-watchfile.sh
+#                           — NOT a reaper. The L1 death-watch PRODUCER (backlog ed6d0716caa7 /
+#                             0328e7cc5742, landed 2026-08-12): it derives lead-deathwatch's
+#                             watch-file from the registry. §3 flags it for reading CC_REGISTRY_DIR
+#                             and owning one `rm -f`. The read is its INPUT roster — it iterates
+#                             "$REG_DIR"/*.json read-only and fail-CLOSED (exit 3 when the dir is
+#                             unreadable, deliberately, so a registry that blinks for one tick can
+#                             never truncate a good watch-file); it creates and deletes no row. The
+#                             single `rm -f` is an EXIT trap over its own `mktemp` staging file
+#                             (deathwatch-wl.XXXXXX) that the watch-list is built in and published
+#                             from by `mv -f`, with the trap disarmed on the successful publish —
+#                             the atomic-write scaffold declared above, in its mv-or-trap spelling.
+#                             It sets no horizon constant at all, so §1/1b/1c/2/2b find nothing to
+#                             bound. Declared = reviewed (2026-08-13 W4 drain; backlog 412de404ecac).
 # ── ANCHORS: the load-bearing symbol of each justification, re-checked by §5 every run ────────────
 # Form: `# @anchor <path> <ERE>`. One per claim a reader would have to find code for. §5 fails if an
 # anchor stops matching CODE in its file — i.e. if the justification above now describes something
@@ -194,7 +226,12 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # @anchor scripts/cc-gc.sh MBX_DIR/archive
 # @anchor scripts/cc-gc.sh WD_AGE_S
 # @anchor scripts/cc-gc.sh ^APPLY=0
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue scripts/cc-gc.sh'
+# @anchor hooks/lib/peer-owned.sh po-porc\.XXXXXX
+# @anchor hooks/lib/peer-owned.sh po-exec\.XXXXXX
+# @anchor hooks/lib/peer-owned.sh _po_live_peer
+# @anchor scripts/deathwatch-watchfile.sh deathwatch-wl\.XXXXXX
+# @anchor scripts/deathwatch-watchfile.sh ^REG_DIR=
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue scripts/cc-gc.sh hooks/lib/peer-owned.sh scripts/deathwatch-watchfile.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
