@@ -768,3 +768,99 @@ with its own README naming the one finding later corrected by measurement.
   **The instrument is still the deliverable** — the runner deletes `RUN_TMP`
   (`postland-verify.sh:2629`) the moment it cuts, destroying the TAP that would name the test
   executing at kill time, and neither side records identity. Filed `a3a070520f3d`.
+
+- **2026-08-13 — W4 off-box lane: five reds cleared and the generator closed. Row `3b22efbc2340`.**
+  Seven commits, `cc4f5e150`..`b9bbc201e`. The three named reds were the sample; the deliverable is
+  the admission rule, exactly as the wave lead framed it.
+
+  **Five root causes, five different mechanisms, and NOT ONE was load** — which matters because the
+  suite with the strongest load history had the crispest deterministic cause:
+  1. `tests/typed-send-lint.bats` (`cc4f5e150`) — the **detector**, not the subject. `ctrl_only()`
+     cut the payload at the first `[>|;&]`, but a redirection is `[0-9]*[<>]`, so
+     `session send … $'\r' 2>/dev/null` cut to a payload whose last word was the fd number `2`, and
+     a bare carriage return read as a typed command line. It survived because the selftest fixture
+     and all four real handoff-fire sites spell it `>/dev/null 2>&1` — no digit before the operator
+     — so no case in the suite could tell the two spellings apart, and they are the same send.
+  2. `tests/land-gate-cas.bats` (`c5f1d1d56`) — a **stale assertion**. The 2026-08-12 damping commit
+     reshaped the stranded-sweep verdict line into "on N of M local branch(es)" and did not carry
+     the fixture. The sweep was working perfectly. Re-pointed and STRENGTHENED to two numbers (the
+     walk and the reporting path), never relaxed — relaxing it is the defect it exists to prevent.
+  3. `tests/boundary-handoff.bats` (`378072b52`) — a **wall-clock age asserted as a string literal**.
+     `mk_btx 30` stamps `now-30`; the hook re-derives the age from its own `date +%s` after several
+     git calls and a wrap-ledger run, so `30` was a coin-flip: **6/20 at idle, 10/20 under an 8-way
+     load**. One mechanism explains all three prior convictions — the off-box red, the on-box red at
+     02:02:19Z, and postland-verify's C29 note. Load raises the odds; it is not the cause.
+  4. `tests/tsv-field-collapse.bats` (`e71ea0b66`) — **not ours, and it was blocking every land in
+     the repo.** 0x1f is the second byte of the GZIP MAGIC (1f 8b), so the sentinel guard matched
+     every vendored `.gz` by construction; sibling commit `28a8fba9b` added a `.gz` fixture for an
+     unrelated reason and turned that guard standing-red on trunk. Fixed with `-I`, carried into the
+     non-vacuity control too — a control running different flags from the scan it certifies proves
+     nothing about that scan.
+  5. `tests/cc-premise-supersession.bats` (`01d66b022`) — **the fixture's own subject was a random
+     variable.** `cc-premise`'s `cited_shas()` skips an all-digit token by design (a bare number in
+     prose is not a sha); the fixture minted a random `rev-parse --short=8`, and
+     P(8 hex chars all digits) = (10/16)^8 = 2.33% over ~5 asserting fixtures ⇒ ~11% per run.
+     Measured **1/8, 1/6, 1/12 red before; 0/40 outside bats; 20/20 green after**. The product is
+     right; the fixture was a coin-flip. The failing TEST moved run to run, which is why it read as
+     contention.
+
+  🚨 **TWO PREMISES IN THE WAVE BRIEF WERE WRONG, and re-measuring them changed the fix.**
+  - *"The fold counts a nonverdict into red, so it is stricter than the ladder it feeds."* It does
+    not. `offbox-run.sh` orders `short ⇒ cut · red ⇒ red · cut/empty/missing ⇒ cut`, honouring R6
+    exactly. The asymmetry is real but sits one layer LOWER: the workflow's conclusion is BINARY
+    (green or nothing), so a `cut` and a `red` are indistinguishable to the puller and a
+    merely-timing-out suite shuts T1H just as hard. The lead accepted this correction and amended
+    the row.
+  - *"New-suites-default-included is the defect."* It is not, and it was NOT reversed —
+    `offbox-partition.sh` argues correctly that an inclusion list decays invisibly. The real defect
+    is narrower and mechanical: **the growth side was actuated and the cure side was not.** The
+    manifest names `offbox-run.sh census` as its anti-rot arm; that arm was a `workflow_dispatch`
+    checkbox with no schedule, no consumer, and nothing that ever deleted a line.
+
+  **What closed it (`13f09023d`).** `scripts/offbox-admission-lint.sh`, wired as ship-land's LAST
+  gate arm: a /Users/chrisren/.claude/bin/cc-bats suite a land ADDS must be green under the off-box runner before it may land. It
+  binds only on ENTRY to the partition — an existing suite is already measured hourly, and
+  re-litigating it at every author's land is the fleet-wide stop §9 measured, not a gate. It costs
+  one `git diff` on the common land, which adds no suite at all.
+  It **runs the producer's own runner** rather than emulating one, via a new `offbox-run.sh suites`
+  verb reaching the same `run_one` the CI shards use. Positive control taken BEFORE the gate was
+  written, because a gate whose probe cannot fail is a vacuous pass: `boundary-handoff` was 35/35
+  GREEN under ordinary `bats` and came back `red ok=34 notok=1` in 27s through that path —
+  set-identical to that day's off-box fold.
+  It **allows its own cure**: the refusal prints the repro command AND a paste-ready manifest line
+  carrying the measurement it just took, so the manifest's every-entry-is-a-MEASUREMENT contract is
+  satisfiable at land time instead of via an hour-long CI round-trip. A gate that cannot be
+  satisfied gets routed around rather than obeyed.
+  **The shrink half** got the actuator it never had: a daily census cron (selected on the cron
+  EXPRESSION, so the selector cannot drift from the trigger) plus a verdict-job RELEASE list naming
+  exclusions that came back green in a run that actually executed them — positive-evidence only, a
+  partition run never executes them so their absence is never read as an acquittal.
+
+  **The ratchet then shed its first line ever (`b9bbc201e`)**, and the arm named it rather than a
+  human noticing: `tests/tsv-field-collapse.bats` had two recorded causes, both since fixed, and
+  re-measured green 34/34. Exclusions 44 → 43, partition 415 → 419.
+
+  **KNOWN LIMIT, stated rather than hidden.** The gate runs on THIS box, so it reproduces the
+  environment axes (`env -i`, empty `$HOME`, no `~/.gitconfig`, `LC_ALL=C`, `TERM=dumb`, a fresh
+  `TMPDIR`) and NOT the machine axes (no iTerm2, no launchd, a different scheduler band and brew
+  prefix). A suite red off-box for one of THOSE reasons still passes here and still shuts the door;
+  that class is what the exclusion manifest is for, which is why the shrink actuator is the other
+  half of the fix rather than a nicety.
+
+  **THREE DEFECTS THIS WORK FOUND IN ITSELF**, all before shipping, and all the same shape as the
+  five above — an instrument wrong about a healthy subject:
+  - The admission lint's own `--selftest` passed **VACUOUSLY**: load-time globals could not be
+    overridden by the env prefix its own stubs set, so every refusing-direction case silently ran
+    against the REAL partition and admitted suites that do not exist in it. Exactly the trap
+    `test-walltime-lint.sh` documents for `horizon_years()`. Now call-time resolvers.
+  - `resolve_bats()` skipped the live-layer wrapper but not `$BATS_LIBEXEC`, so a nested invocation
+    picked bats' internal entrypoint, which emits no TAP and exits 0 — classified `empty`, turning a
+    green suite into a refusal. The classification was right; the binary it was applied to was not.
+  - The new release step used a flat `shards/*.tsv` glob where the fold uses `find`; the shard
+    artifacts nest under `out/`, so it would have shipped as a **silent no-op** — the shrink arm
+    reporting nothing, indistinguishable from finding nothing.
+  And the RED-proof for cause 5 took **three** attempts, both failures recorded in the test because
+  both are easy to write again: a literal `12345678` is unresolvable, so the finding is absent for a
+  SECOND reason and mutating the skip leaves the test green; and grinding the LAST commit grinds the
+  one touching `bin/other-tool`, which the item does not cite, so the landed-diff conjunct rejects
+  it whatever its digits. Only grinding the SUBJECT commit isolates the variable.
