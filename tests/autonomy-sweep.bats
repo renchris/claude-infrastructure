@@ -151,9 +151,22 @@ SH
   # 420 s for the currency pass) are sized for a live store in the Background band; against these
   # tmpdir fixtures every one of them is sub-second, so a bound that large is not a bound here — it
   # is 180 s of headroom for the next un-stubbed seam to hide in, times 74. Sized to the band this
-  # actually runs in (memory: bound-must-fit-the-band-not-the-bench), and generous by ~30x.
-  export CC_SWEEP_BOUND_S="${CC_SWEEP_BOUND_S:-30}"
-  export CC_PREMISE_PASS_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-60}"
+  # actually runs in (memory: bound-must-fit-the-band-not-the-bench), and generous by ~20x.
+  #
+  # 🚨 THESE NEST UNDER SWEEP_TO, AND THE ORDERING IS THE WHOLE POINT. Two bounds now cover one
+  # invocation and they answer different questions: the INNER pair is the SUBJECT's own, and a cut
+  # there is a VERDICT — the arm returns 124 and the sweep journals it (`fold_rc:"124"`,
+  # `premise_pass_note:"bound-exceeded"`), which is the signal that says re-measure the band. The
+  # OUTER wrap is the HARNESS's backstop for the case the subject cannot cover: the inner ladder
+  # resolves timeout(1) off PATH alone, so it is INERT wherever coreutils is not there and nothing
+  # inside the sweep can bound anything at all. Set equal, the outer always fires first and the
+  # inner pair can never journal — the backstop silently replaces the instrument. So every inner
+  # bound stays strictly below SWEEP_TO's 30 s: a wedged ARM reads as a named red carrying its own
+  # rc, and only a wedged FILE reaches the wrap. Slowest invocation measured in this file is 876 ms
+  # (the W1 currency-pass case), so 10 s is ~11x headroom and 20 s ~23x — neither can cut a healthy
+  # sweep, and both remain env-overridable for a slower band.
+  export CC_SWEEP_BOUND_S="${CC_SWEEP_BOUND_S:-10}"
+  export CC_PREMISE_PASS_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-20}"
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
            "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR" \
@@ -1202,4 +1215,22 @@ SH
   # merely mean the regex rotted (memory: verification-harness-vacuous-pass-traps).
   run grep -cE '^[^#]*run bash "\$SWEEP"' <(printf '  run bash "$SWEEP"\n')
   [ "$output" = "1" ]
+}
+
+@test "THE LADDER NESTS: every inner bound is strictly below the harness wrap" {
+  # The two halves of this fix were authored independently against the same wedge, and merging them
+  # put the subject's per-arm bound and the harness wrap at the SAME 30 s. Equal is not a detail:
+  # the outer cut lands first on every wedge, so `fold_rc` / `premise_pass_note` can never carry a
+  # 124 and the one instrument that says "re-measure the band" goes permanently silent while
+  # reading healthy. Asserted rather than commented, because the failure is invisible — both bounds
+  # still exist, both still fire, and only the ORDER is wrong.
+  #
+  # Read from the environment setup() actually exported, never from the literals above: a defaulted
+  # `${VAR:-n}` means an operator override is what is live, and an assertion over the literal would
+  # certify a ladder the run is not using (memory: assertion-span-must-equal-its-subject).
+  [ "${SWEEP_TO[0]}" != "env" ] || skip "no timeout(1)/gtimeout(1) resolvable — the wrap is fail-open here"
+  local outer="${SWEEP_TO[${#SWEEP_TO[@]}-1]}"          # the seconds argument of `<tmo> -k 5 <n>`
+  [ "$outer" -gt 0 ] || false                            # positive control: we read a number, not ""
+  [ "$CC_SWEEP_BOUND_S" -lt "$outer" ] || false
+  [ "$CC_PREMISE_PASS_BOUND_S" -lt "$outer" ] || false
 }
