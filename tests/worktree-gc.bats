@@ -1020,7 +1020,13 @@ SH
 # ANCESTOR of trunk (landed by patch-id, idle by its backdated tip), and the working tree is dirty
 # only with respect to that older HEAD — exactly the live shape.
 dirt_wt() { # <name> <branch> <path> <content> → worktree dirty with <path>=<content>
-  git -C "$R" worktree add -q -b "$2" "$BATS_TEST_TMPDIR/$1" HEAD 2>/dev/null
+  # rc asserted, stderr not swallowed — the same reason as wt() above, and this is the SECOND site.
+  # Measured 2026-08-13: fixing wt() alone took the broken-fixture survivor count from 22 to 17, and
+  # every one of the 17 that touches a worktree comes through HERE. A per-site defect needs a
+  # per-site fix; one site cured is not the class cured.
+  git -C "$R" worktree add -q -b "$2" "$BATS_TEST_TMPDIR/$1" HEAD \
+    || { echo "dirt_wt: FIXTURE FAILED — 'worktree add -b $2 $BATS_TEST_TMPDIR/$1' returned $?" >&2; return 1; }
+  [ -d "$BATS_TEST_TMPDIR/$1" ] || { echo "dirt_wt: FIXTURE FAILED — $1 absent after a successful add" >&2; return 1; }
   printf '%s' "$4" > "$BATS_TEST_TMPDIR/$1/$3"
   # Canonicalised for the SAME reason warrant() is: on macOS $BATS_TEST_TMPDIR lives under /var,
   # which is a symlink to /private/var. Once trunk_add() has added and removed a worktree, git
@@ -1032,7 +1038,11 @@ dirt_wt() { # <name> <branch> <path> <content> → worktree dirty with <path>=<c
 # trunk_add <path> <content> — advance origin/main past the worktrees' branch point.
 trunk_add() {
   local t="$BATS_TEST_TMPDIR/trunkwt"
-  git -C "$R" worktree add -q --detach "$t" HEAD 2>/dev/null
+  # Third site. This one is the most dangerous of the three to leave swallowed: it is what ADVANCES
+  # origin/main, so a silent failure here leaves trunk where the branches already are, and every
+  # "landed" predicate downstream then reads a shape the test never built.
+  git -C "$R" worktree add -q --detach "$t" HEAD \
+    || { echo "trunk_add: FIXTURE FAILED — 'worktree add --detach $t' returned $?" >&2; return 1; }
   printf '%s' "$2" > "$t/$1"
   git -C "$t" add "$1"
   GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" git -C "$t" commit -qm "trunk adds $1"
