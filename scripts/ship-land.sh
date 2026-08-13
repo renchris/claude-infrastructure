@@ -117,10 +117,17 @@
 # and the wrong one to 6. Collapsing them into 6 is what let a load spike read as a code failure
 # and drove the 2026-07-26 kill → "RED" → re-block → dispatcher-retry runaway (f8e40b4c577d).
 #
-# TRAILER CONVENTION (ownership-decidable sweep, T-P9-4): a session's commits should
-# carry a `Session-Id: <CLAUDE_CODE_SESSION_ID>` trailer so `stranded-sweep.sh --mine
-# <sid>` can recover only own-drops. ship-land stamps land.log with the sid (a
-# post-hoc commit trailer is impossible), and adds the trailer to any commit IT makes.
+# OWNERSHIP (decidable sweep, T-P9-4) — CORRECTED 2026-08-12, this used to describe a convention
+# that was never built. It read: "a session's commits should carry a `Session-Id:
+# <CLAUDE_CODE_SESSION_ID>` trailer ... and [ship-land] adds the trailer to any commit IT makes."
+# MEASURED: 0 of the last 500 commits on origin/main carry `Session-Id:` or `Land-Session:`, and
+# nothing in this tree writes either. A comment asserting a convention is not a writer of one, and
+# this paragraph was the entire evidence base for an attribution arm that could only ever report 0.
+# What ship-land ACTUALLY writes, and what `stranded-sweep.sh --mine <sid>` now keys on, are two
+# anchors that exist: a `refs/land/failed/<ts>-<sid>-<branch>` ref (the pinned head of a land that
+# failed) and a land.log row's `head` for that sid (a land that succeeded). A stranded sha is ours
+# iff an anchor reaches it. The trailer arm survives in the sweep as a dead-but-present last resort
+# — it starts working the day something writes one — but nothing depends on it.
 #
 # land.log schema (growth is safe — the readers select by key): `gate_scope` carries the LANE
 # ("fast"|"v1"), plus smoke, smoke_n, smoke_s, and net:"live|inert|none". The verifier's liveness is
@@ -1044,14 +1051,45 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
     "$BACKUP_REAP" reap "$SHIP_LAND_BACKUP_REF" "$LANDED_HEAD" || true
   fi
 
+  # --- stranded-sweep: ATTRIBUTED, so the verdict is about US (backlog 175bce12e0e1) --------------
+  # This call site was the last un-damped leg. The sweep's callee-side fixes landed 2026-08-12
+  # (634ecdccbc55, fd517a5863cc) — the verdict is now a bounded count and `--mine` finally
+  # ATTRIBUTES, keyed on anchors that exist (`refs/land/failed/*-<sid>-*`, plus a land.log row's
+  # `head` for that sid) rather than the `Session-Id:` trailer nothing ever wrote. But the caller
+  # was deliberately left alone while a sibling owned the file, so ship-land kept invoking default
+  # mode and `sweep=review` kept reading ~955 of 989 lands. An alarm that fires 97% of the time
+  # carries essentially no bits, and what it printed was a per-commit wall of PEER WIP the very
+  # next line told the reader never to cherry-pick.
+  #
+  # 🚨 WHY `--mine` IS PASSED CONDITIONALLY, and why that is the load-bearing half. Before the
+  # ownership fix, `--mine` could only ever match 0 commits, so making this change any earlier
+  # would have swapped an always-alarm for a NEVER-alarm — the strictly worse failure, because it
+  # says nothing and says it silently (memory: alarm-polarity-and-attention-budget — count
+  # NOT-success). The same trap survives in one place: an EMPTY sid. `refs/land/failed/` names are
+  # built with `${CLAUDE_CODE_SESSION_ID:-nosid}` (see the ref writer above), so a sid-less land
+  # anchors under the literal `nosid` — and passing that as an identity would attribute EVERY
+  # sid-less session's drops to this one. The callee also treats an empty `--mine` as default mode,
+  # but relying on that would put this polarity guarantee in the wrong file: a later callee change
+  # could flip it with nothing here to notice. So the argv is built explicitly, and no sid means no
+  # `--mine` — degrade to the bounded default count, never to a confident silence.
   local sweep_out sweep_rc sweep_field
-  sweep_out="$("$STRANDED_SWEEP" "$TRUNK" 2>&1)"; sweep_rc=$?
+  local -a sweep_args=()
+  local sweep_sid="${CLAUDE_CODE_SESSION_ID:-}"
+  [[ -n "$sweep_sid" ]] && sweep_args+=(--mine "$sweep_sid")
+  sweep_out="$("$STRANDED_SWEEP" "${sweep_args[@]+"${sweep_args[@]}"}" "$TRUNK" 2>&1)"; sweep_rc=$?
   if [[ "$sweep_rc" -eq 0 ]]; then
     sweep_field="clean"
     echo "✓ ship-land: stranded-sweep clean."
   else
+    # `review` is kept verbatim as the attestation value: it is asserted by tests/land-gate-cas.bats
+    # and read by land.log consumers, and renaming it would red an existing suite to say nothing new.
+    # What changes is the PROSE, which under `--mine` is now about the lander instead of the fleet.
     sweep_field="review"
-    echo "⚠ ship-land: stranded-sweep flags commit(s) for REVIEW — peer WIP is expected on a multi-session box; recover ONLY your own dropped work, NEVER cherry-pick peer WIP onto $TRUNK:" >&2
+    if [[ ${#sweep_args[@]} -gt 0 ]]; then
+      echo "⚠ ship-land: stranded-sweep flags YOUR OWN session's dropped commit(s) — this is attributed to session $sweep_sid, not peer WIP. Recover them via the recipes below:" >&2
+    else
+      echo "⚠ ship-land: stranded-sweep flags commit(s) for REVIEW — no session id, so this is the UNATTRIBUTED count over every local branch; peer WIP is expected on a multi-session box; recover ONLY your own dropped work, NEVER cherry-pick peer WIP onto $TRUNK:" >&2
+    fi
     printf '%s\n' "$sweep_out" >&2
   fi
 

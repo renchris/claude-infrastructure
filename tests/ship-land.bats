@@ -86,6 +86,80 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   grep -q '"sid":"test-sid-123"' "$LAND_LOG"
 }
 
+# ── the sweep call site is ATTRIBUTED (backlog 175bce12e0e1) ──────────────────────────────────────
+# ship-land invoked stranded-sweep in DEFAULT mode, so `sweep=review` fired on ~955 of 989 lands —
+# an alarm at 97% carries essentially no bits. `--mine` now attributes (callee fixes 634ecdccbc55 /
+# fd517a5863cc), so the caller passes it. The pair below is the POLARITY proof and both halves are
+# required: alone, the peer-WIP test would also pass if the sweep had been silenced outright, which
+# is the strictly worse failure — before the callee's ownership fix `--mine` could only ever match
+# 0, so making this change earlier would have swapped an always-alarm for a NEVER-alarm.
+# The anchor is the one ship-land really writes: refs/land/failed/<ts>-<sid>-<branch>.
+stranded_branch() {  # $1=branch $2=file — a commit whose every path is absent from trunk
+  git checkout -q -b "$1" main
+  printf 'stranded\n' > "$2"
+  git add "$2" && git commit -q -m "wip: $2"
+  git rev-parse HEAD
+  git checkout -q main
+}
+
+@test "sweep FIRES on an own-session drop: the land names it as YOURS, not peer WIP" {
+  local sha; sha="$(stranded_branch wip/mine mine-only.txt | tail -1)"
+  # The own-session anchor. `test-sid-123` is this suite's CLAUDE_CODE_SESSION_ID (see setup).
+  git update-ref "refs/land/failed/20260812T000000Z-test-sid-123-wip" "$sha"
+
+  git checkout -q -b feat/sweep-mine main
+  printf '#!/usr/bin/env bash\necho "m"\n' > sweep-mine.sh
+  git add sweep-mine.sh && git commit -q -m "feat: sweep-mine"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                    # the sweep is ADVISORY — it never fails a land
+  echo "$output" | grep -q "LANDED"
+  echo "$output" | grep -q "YOUR OWN session's dropped commit"   # attributed prose, not the fleet count
+  echo "$output" | grep -q "test-sid-123"
+  grep -q '"sweep":"review"' "$LAND_LOG"
+  # NON-VACUITY: prove it ran in --mine mode and not merely that some review fired. The default
+  # mode's summary line is the one thing --mine never prints.
+  ! echo "$output" | grep -q "Peer WIP is expected on a multi-session box" || false
+}
+
+@test "sweep is SILENT on a peer's WIP: the 97% always-alarm is gone" {
+  local sha; sha="$(stranded_branch wip/peer peer-only.txt | tail -1)"
+  # Same stranded shape as the test above — the ONLY difference is whose sid the anchor names.
+  # That is the whole claim: attribution, not suppression.
+  git update-ref "refs/land/failed/20260812T000000Z-other-sid-999-wip" "$sha"
+
+  git checkout -q -b feat/sweep-peer main
+  printf '#!/usr/bin/env bash\necho "p"\n' > sweep-peer.sh
+  git add sweep-peer.sh && git commit -q -m "feat: sweep-peer"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  echo "$output" | grep -q "stranded-sweep clean"
+  grep -q '"sweep":"clean"' "$LAND_LOG"
+  ! echo "$output" | grep -q "YOUR OWN session's dropped commit" || false
+}
+
+@test "sweep with NO session id degrades to the bounded COUNT, never to a confident silence" {
+  # The remaining polarity trap: refs/land/failed names are built with ${CLAUDE_CODE_SESSION_ID:-nosid},
+  # so a sid-less land anchors under the literal `nosid`. Passing that as an identity would attribute
+  # every sid-less session's drops to this one. ship-land therefore omits --mine entirely when the sid
+  # is empty — this pins that it degrades to the UNATTRIBUTED count and does not go quiet.
+  local sha; sha="$(stranded_branch wip/nosid nosid-only.txt | tail -1)"
+  git update-ref "refs/land/failed/20260812T000000Z-other-sid-999-wip" "$sha"
+
+  git checkout -q -b feat/sweep-nosid main
+  printf '#!/usr/bin/env bash\necho "n"\n' > sweep-nosid.sh
+  git add sweep-nosid.sh && git commit -q -m "feat: sweep-nosid"
+
+  CLAUDE_CODE_SESSION_ID="" run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  echo "$output" | grep -q "UNATTRIBUTED count"
+  grep -q '"sweep":"review"' "$LAND_LOG"
+  ! echo "$output" | grep -q "YOUR OWN session's dropped commit" || false
+}
+
 @test "green: the ship/backup-* rollback ref is REAPED once the land is content-verified" {
   # The WIRING proof (the predicate itself is tests/ship-backup-reap.bats). The ref is written in
   # the OUTER preflight and discharged by the LOCKED child, which cannot recompute its name —
