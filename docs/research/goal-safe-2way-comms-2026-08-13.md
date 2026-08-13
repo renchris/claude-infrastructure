@@ -1,0 +1,262 @@
+---
+status: open
+---
+
+# Goal-safe 2-way comms — the ground-up architecture (2026-08-13)
+
+**Operator `/goal`:** *investigate the 100th percentile ground-up 2-way communication
+architecture/methodology such that we can work with /goal without a watcher/listener blocking it.*
+
+**Parents:** `docs/research/goal-in-handoff-2026-08-08.md` (the mechanism + R1–R3 resolution) ·
+`docs/research/mechanical-wake-asyncrewake-2026-07-29.md` (W0 proof, W2 spec) ·
+`docs/plans/CROSS_SESSION_COMMS_V2.md` (delivery SSOT) · `docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`.
+Everything below marked MEASURED was read from the live tree, the live settings, or the 5-config-dir
+transcript corpus this morning; DERIVED and UNPROBED are labelled as such.
+
+---
+
+## The answer, in three lines
+
+1. **The conflict was never "watcher vs goal" — it is that a session has exactly TWO idle modes and
+   needs a THIRD.** With a background task parked, CC defers goal evaluation indefinitely (the
+   starvation pole); with the registry quiet, an unmet goal blocks every stop until the cap (the
+   spin pole). MEASURED, post-R1–R3, 3-day window: **84 goal sessions · 47 never evaluated once ·
+   spin runs of 90/16/11/11/10 consecutive unmet evaluations · 15 cap force-idles.**
+2. **The missing primitive is an IDLE-SCOPED AWAITER** — a watcher that terminates on peer mail
+   *and on any new turn of its own session* (beat-file oracle), so the deferral spans exactly the
+   idle window and the goal is judged **once per new-information event** instead of 90 times while
+   waiting or 0 times forever. It is `cc-await-ping` plus two exit conditions, admitted as the one
+   sanctioned shape through the `validate-bash.sh` chokepoint that today denies the whole class.
+3. **The safety net beneath it already has a name and a spec: W2** (re-arm the asyncRewake watcher
+   at every Stop, idempotent via the existing `.watching` claim) — specified 2026-07-29, never
+   built, gated on one probe the spec itself names. With W2, a session that idles having armed
+   nothing is still wakeable, registry-free, for its whole life instead of its first 3h59m.
+
+---
+
+## 1 · Axioms — the binary facts any design must fit
+
+All measured against CC 2.1.220 unless noted; sources in brackets.
+
+| # | Fact | Status |
+|---|---|---|
+| A1 | `/goal` = session-scoped prompt-type Stop hook; the evaluator is a separate tool-less LLM that sees only what the session SURFACED (prose or tool_result) | MEASURED [goal-in-handoff §2] |
+| A2 | At any Stop where the task registry holds a non-terminal `local_bash` (`Tio`) or subagent/teammate/workflow (`_We`), CC removes the goal hook before the runner sees it and restores it in a `finally` — evaluation silently skipped. Deliberate; correct for real in-flight work | MEASURED [§ RESOLVED, binary @233098] |
+| A3 | An unmet evaluation is a `blockingError` — the same consecutive-block counter as every Stop blocker; at `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` the harness force-ends the turn; the counter resets per external stimulus (typed message / task-notification wake). Fleet default is **50** (`bin/claude-latest:348-349`) | MEASURED [R2] |
+| A4 | `asyncRewake` is a GENERIC per-hook field: the harness launches the hook in the background **outside the task registry** (module Set, not `taskRegistry`) and wakes the model with the hook's stderr when it exits 2, via a synthesized task-notification. Proven live on SessionStart (W0). **Never probed on Stop.** Skipped in one-shot print mode (the K gate; `hooks/mailbox-wake-arm.sh:46-93`) | MEASURED on SessionStart / UNPROBED on Stop |
+| A5 | A background task's COMPLETION re-invokes an idle model (task-notification). Its stdout is dropped; stderr is carried | MEASURED [mechanical-wake §2] |
+| A6 | Delivery into a running turn = the drain boundaries (SessionStart / UserPromptSubmit / PostToolUse + the Stop fold). Delivery into an IDLE session = only a wake: watcher completion, asyncRewake fire, typed message, composer injection | MEASURED [mailbox-drain.sh header] |
+| A7 | A goal dies with its session; `--recycle` inherits a live goal by default since R3 | MEASURED [goal-in-handoff §3.4, § RESOLUTION R3] |
+| A8 | Evaluation economics: across all 380 goals ever armed here, **82% of met goals were met on evaluation #1; the met rate falls to 27% at ≥10 evaluations**; the one `failed:true` goal burned 45 evaluations / 27.6 h / 390,885 tokens. Re-judging is grinding, not converging | MEASURED [commands/handoff.md § goal-condition rules] |
+| A9 | One attestation per turn boundary already lands in `~/.claude/cc-beats/<sid>.json` — `{kind: UserPromptSubmit|Stop, t, seq, who}` — written fail-open by `hooks/session-beat.sh` on every session. Auto-driven re-prompts (task notifications, Stop-hook feedback) DO fire UserPromptSubmit | MEASURED [session-beat.sh header] |
+
+The deployed R1–R3 state was re-verified live this morning: `mailbox-wake-arm.sh` registered
+`asyncRewake:true` in **all five** config dirs, `goal-inert-watch.sh` registered on Stop in all
+five, cap default 50 live in `bin/claude-latest`. The resolution shipped; what follows is what it
+measurably did not close.
+
+## 2 · The measured residual (2026-08-13; all five config dirs; transcripts touched in 72 h)
+
+Method: count `goal_status` ATTACHMENTS only (`type=="attachment"` — the prose-decoy filter the
+08-09 addendum mandates), split sentinel (arm) from non-sentinel (evaluation), track the longest
+run of consecutive `met:false` evaluations per session, and flag the harness's cap-override
+message. Mirrored projects dirs double-count a handful of sids (the knowledge-layer mirror), which
+moves totals, not the shape.
+
+```
+84 goal sessions · 37 with ≥1 evaluation · 47 with ZERO evaluations · 15 cap force-idles
+longest unmet runs: 90 · 16 · 11 · 11 · 10 · 10 · 9 …
+```
+
+**The spin pole, type specimen** — session `8f478e5c` (2026-08-11): condition = *"the three
+dispatched land-arch sessions … are landed on origin/main and content-verified, then the serialized
+remainder P4→P3→P2"*. A wave lead whose end state lived in OTHER sessions' lands. **90 unmet
+evaluations in 76 minutes — one evaluator LLM call plus one forced model turn every ~51 seconds —
+all of them re-judging a world in which nothing had changed.** By A8, evaluations past #1 on an
+unchanged world carry ~no information; this is the 390K-token anti-example's mechanism running at
+fleet scale, and it is invisible in any per-session view because each turn looks like diligence.
+
+**The starvation pole** — 47/84 zero-eval sessions. Not all defects: a goal deferred behind a REAL
+subagent/build is A2 working as designed, and a session that died before its first clean Stop never
+had an evaluation to show. But the class provably contains the pathological case, because the
+transcripts cannot show task terminal-status (the § RESOLVED census caveat) — the decomposition is
+retrospectively unknowable, which is itself a finding: **evaluation-liveness has no oracle today**
+(§9 B5).
+
+**The operator's screenshot (2026-08-13, this goal's trigger):** a session with a live goal killed
+its own pre-goal inbox watcher to un-starve the goal — correct per current doctrine — and the
+background task surfaced as `"Arm inbox wake watcher" failed with exit code 144` (the harness
+sentinel for an external group-TERM, i.e. the session's own kill: `bin/cc-await-ping:37-47`,
+`docs/research/await-ping-exit-144-2026-08-07.md`). Three defects in one frame: the arm existed to
+be killed (pre-goal habit), the kill reads as a failure, and the killed watcher's own inbox notice
+(`_wake_down_notice`, `bin/cc-await-ping:274-283`) then instructs **RE-ARM** — the exact act
+`validate-bash.sh:232` denies under a live goal. The session ends the exchange deaf when idle.
+
+## 3 · The state model — three session states, and the idle mode each needs
+
+```
+ACTIVE     goal evaluates at every stop attempt; unmet blocks feed the work; drains
+           deliver peer mail at every boundary.                     → correct today (A2/A3/A6)
+AWAITING   fired peers / an operator decision / any external event: the session holds
+           NOTHING actionable. Needs: quiet idle + wake-on-event + eval-ON-event.
+           Today it must choose starvation (park a task) or spin (stay bare). ← THE GAP
+DONE       a clean stop with the condition met: evaluator writes met:true, auto-clears.
+```
+
+The whole design reduces to one new invariant:
+
+> **Deferral must be idle-scoped.** A background task may exist under a live `/goal` only if it
+> terminates on every wake of its session — including wakes it did not cause. Then A2's deferral
+> spans exactly the idle window: the goal is never judged while nothing has changed (no spin), and
+> never skipped once something has (no starvation). Evaluation cadence becomes **once per
+> new-information event** — which A8 says is where all the verdict value lives anyway.
+
+Everything else in this doc is the mechanism that enforces that invariant without asking any model
+to remember it.
+
+## 4 · The primitive: `cc-await-ping --idle-scoped`
+
+Not a new tool — a mode on the existing watcher, which already owns the hard parts: the private
+cursor that the drain cannot starve (F-3), the keyset cover (pane AND session box), the claim
+files, the owner guard, the signal verdicts. The mode adds two exit conditions and three refusals:
+
+| Clause | Behaviour | Why |
+|---|---|---|
+| C1 exit-on-mail | unchanged: new inbox line → print body → exit 0 → task completes → **completion notification wakes the idle model with the mail** (A5) | the wake half of 2-way comms, as today |
+| C2 exit-on-turn | poll `~/.claude/cc-beats/<sid>.json`; any **UserPromptSubmit-kind** beat with `seq` > baseline-at-arm → exit 0 silently, `verdict=stood-down` | the session was woken by something else (typed message, task notification, asyncRewake fire). The awaiter's deferral job is over; the next natural Stop is registry-quiet and the goal judges the NEW state. Stop-kind beats are excluded so the arm-turn's own trailing Stop cannot self-cancel it |
+| C3 single-instance | refuse to arm when a live sibling claim exists for the keyset (the `.watchers` claim machinery, `cc-await-ping:179-196`) | overlapping awaiters re-create d33abf12's permanent deferral |
+| C4 refuse-on-pending | refuse to arm while `mailbox_has_pending` is true on any key | mail waiting = you have work; arming would defer the judgment of state you already hold |
+| C5 bounded | `--timeout` default 3600 (not 14400): timeout → exit 2 → *as a plain background task* that completion also wakes the model (A5) — a periodic "re-look at the world" floor, and the in-session deadline check for a peer that will never ping | staleness bound; custody-overdue detection cadence |
+| C6 chokepoint carve-out | `validate-bash.sh` allows exactly `cc-await-ping --idle-scoped …` in command position under a live goal; every other shape of the deny class stays denied, and the deny message TEACHES this form | enforcement stays at the chokepoint, and the chokepoint admits its own cure (MEMORY: enforcement-must-live-at-the-chokepoint) |
+| C7 who arms it | the goal-blocked turn: drain nudge + the deny text + the wake floor all currently say "do not arm" under a live goal — they switch to instructing THIS form when the state is awaiting | the arm is taught at the exact moment the model has nothing else to do; no memory required |
+
+**The cycle it produces** (DERIVED from A1–A5, each link individually measured):
+
+```
+event (ping/mail/answer) → awaiter exits → completion wake → model processes it
+  → tries to stop → registry quiet → goal EVALUATES the new state (once)
+     ├─ met  → auto-clear, done
+     └─ unmet → ONE blocked turn → model re-arms --idle-scoped → next stop DEFERRED → quiet idle
+```
+
+Per event: **1 evaluation + 1 blocked turn.** The type specimen's 90-evaluation wait becomes ~2
+evaluations (one per peer land it was actually waiting on). Starvation cannot outlive an idle,
+because C2 kills the deferral on any wake.
+
+**Known race, bounded:** a wake turn can end before the awaiter's next poll notices the beat, so
+one Stop can still be deferred; the awaiter then stands down within one `--interval` and its
+completion re-wakes the model, whose next stop evaluates. Cost: one bounce turn, only on wake,
+never periodic. Default `--interval` for the mode: 5 s (beat file is one small stat).
+
+**Interaction with our own Stop blockers** (session-continue 🔧, completion-assert): if one blocks
+the arm-turn's stop, the continuation fires a UserPromptSubmit beat and self-cancels the awaiter —
+converging one bounce later. Discipline unchanged by this doc: the arm is the turn's LAST action on
+a clean, committed state, which the close protocol already demands.
+
+**Under NO live goal:** the bare 14400 s form remains correct and remains the nag's instruction —
+nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same
+`goal_live_condition` predicate every producer already sources (`hooks/lib/goal-state.sh`).
+
+## 5 · The safety net: W2 — re-arm the asyncRewake watcher at every Stop
+
+The birth watcher (migration 0007) is **one-shot**: consumed by its first fire, or expired at
+3h59m, and nothing re-arms it — SessionStart does not recur mid-session, and under a live goal
+every model-armed re-arm is (rightly) denied. So today a goal-armed session that reaches cap
+force-idle after its birth watcher is spent is **deaf until someone types** — the residual half of
+the pane-248 "8 pings, none entered context" incident, and the terminal state of the screenshot
+session. `session-continue.sh:427`'s comment ("the goal itself keeps this session awake — a
+stronger wake path than any watcher") is true only below the cap; the 15 measured force-idles are
+exactly the population above it.
+
+W2 is already specified (`mechanical-wake-asyncrewake-2026-07-29.md` W1/W2 table): **the same
+`mailbox-wake-arm.sh`, additionally declared on `Stop` with `asyncRewake:true`, guarded by the
+pid-bearing `.watching` claim so it is a no-op whenever any live watcher (birth, idle-scoped, or a
+prior W2 instance) already covers the keyset.** Every idle boundary then re-establishes the wake
+path mechanically — settings fact, not model memory — and it never enters the task registry (A4),
+so it never defers the goal.
+
+**Gated on one probe, still un-run** (the spec's own §2 note, restated with today's knowledge):
+
+- P-W2a: a Stop-declared `asyncRewake:true` hook is dispatched ASYNC (the A4 gate is per-hook and
+  looks event-agnostic in the binary — `(e.async || e.asyncRewake && K) && !d` — but W0 proved
+  SessionStart only). Assert an ordinary stop is not blocked and not delayed.
+- P-W2b: its exit 2 while the session is idle synthesizes the wake (not a retroactive Stop
+  "blocking error" — exit 2 is overloaded as Stop's block code, which is exactly why this needs a
+  probe, not a citation).
+- P-W2c: idempotency — a second Stop while a watcher claim is fresh launches and exits 0 without a
+  second watcher.
+- P-W2d: no interaction with a same-Stop `decision:"block"` from a shell hook (the one-blocker
+  question the spec flagged).
+
+Method identical to W0: hermetic `CLAUDE_CONFIG_DIR`, detached pane, positive control first,
+red-proof by effect. Until it passes, W2 stays unbuilt — a documented-but-inert surface is this
+repo's most-measured trap.
+
+## 6 · Doctrine — where goals live in a wave topology, and how conditions are written
+
+Unchanged by this design, now stated in one place because the specimen shows conditions doing the
+awaiter's job badly:
+
+- Fired workers carry goals (the `--goal` recipe; end state in-session). Leads may carry goals over
+  dispatched work — that is the operator's standing recipe — and with §4 an awaiting lead is
+  QUIET, not spinning. Custody, the ship floor, and the origin close contract remain the
+  non-goal enforcement spine; the goal adds drive, not the bookkeeping.
+- The four no-goal exceptions stand (commands/handoff.md): standing-role/desk · `--cloud` ·
+  throwaway harness probes · a "done" that is an operator decision. Through-line: no reachable end
+  state ⇒ no goal.
+- Condition-writing under this architecture: end state + the check that proves it + the constraint,
+  as a pointer (A8: 82% of met goals close on evaluation #1). A condition whose truth lives in
+  OTHER sessions' progress is legitimate **only with the idle-scoped awaiter armed** — otherwise it
+  is a 90-evaluation grinder by construction.
+
+## 7 · The delivery/addressing layer beneath all of this — verified sound, inherited as-is
+
+One mailbox substrate (`~/.claude/mailbox/`), session-keyed with the read-side coverage fold
+healing pane-keyed writes at every boundary; drains at SessionStart / UserPromptSubmit / PostToolUse
+with the Stop fold promoting `.acked`; dup-biased cursors ("a visible dup over a silent loss")
+everywhere; `HANDOFF-PING` rides the same substrate, so there is no second transport to make
+goal-safe. Composer injection (cc-notify) stays what it is — the best-effort interrupt, never the
+load-bearing wake. Pane-less and resumed sessions arm via the harness's own `session_id`
+(`mailbox-wake-arm.sh:26-36`); headless one-shots skip arming by design (the K gate). Nothing in
+§§4–5 adds a transport, a daemon, or a registry — the 100th-percentile move here is that the
+architecture needed one new *contract* (idle-scoped deferral), not new machinery.
+
+## 8 · Sharp edges found on the way (each is a one-line fix, filed)
+
+| | Edge | Fix |
+|---|---|---|
+| E1 | `_wake_down_notice` (`cc-await-ping:274-283`) tells a killed watcher's session to RE-ARM the exact form `validate-bash` denies under a live goal | goal-aware notice text: under a live goal, name `--idle-scoped` (post-§4) or the goal-forced boundaries |
+| E2 | A watcher armed BEFORE `/goal` arrives defers the goal, and nothing model-facing surfaces the kill (goal-inert-watch is `systemMessage`-only = operator-only); the screenshot session knew by luck | the drain (already goal-sourcing, already at every boundary) additionally names the live watcher pid + the one `kill` when goal-live ∧ fresh claim ∧ that claim is not `--idle-scoped` |
+| E3 | `session-continue.sh:427` encodes "the goal keeps it awake" without the cap qualifier | comment + the W2 closure; no behaviour change |
+| E4 | `goal-inert-watch.sh` will correctly fire on a §4 deferred idle (armed goal + non-terminal bash) — true but now-sanctioned | recognize the idle-scoped claim marker; downgrade that case to an info line so the alarm keeps its polarity (MEMORY: alarm-polarity-and-attention-budget) |
+| E5 | Evaluation-liveness has no oracle (§2): zero-eval vs healthy-deferral is unmeasurable after the fact | B5 below — surface non-sentinel eval count + last verdict in the wrap ledger (`◎ goal: N evals · last unmet@HH:MM`), which also gives closes an honest goal line |
+
+## 9 · Build list — filed, ordered, each independently landable
+
+| id | backlog | Item | Gate |
+|---|---|---|---|
+| B1 | `62e0b88a58b5` | **Run the W2 probe** (P-W2a–d, §5), commit artifacts like W0 | none — read-only probe |
+| B2 | `3118d712f668` | Register W2 (same hook, Stop, `asyncRewake:true`) as a c10 migration across all five config dirs, claim-guarded | B1 green |
+| B3 | `6290f0ee6b52` | `cc-await-ping --idle-scoped` (C1–C5) + the `validate-bash` carve-out (C6) + producer messaging flips (C7: drain nudge, deny text, wake floor) + suites — red-proof BOTH poles: a mutant that never self-cancels must starve a fixture goal; a mutant that never defers must spin one | none |
+| B4 | `b33f424c747b` | E1 + E2 message fixes | none (E1 standalone; E2's final text references B3's form) |
+| B5 | `b0ce82d745be` | Goal-liveness oracle in `wrap-ledger.sh` + `/wrap` (E5) | none |
+
+Acceptance for the whole architecture, as disk-truth reads: in a fixture wave, non-sentinel
+evaluations per session ≈ external events ± 1 (today: 90 for ~2 events) · fleet p95 longest-unmet-run
+≤ 2 within a week of B3 (today: 90) · cap force-idles → ~0 (today: 15/3d) · zero-eval sessions
+holding a goal ≥30 min with ≥1 clean Stop → explained by A2-legitimate work or ~0 (needs B5 to be
+measurable) · a goal-armed idle session receives a 2nd and 3rd ping without an operator keystroke
+(today: guaranteed deaf after the birth watcher is spent).
+
+## 10 · What was deliberately NOT designed
+
+- **No defeat of CC's deferral** — A2 is correct; §4 *aligns* our idle with it instead of judging
+  half-finished work.
+- **No external wake daemon / keystroke injector as a load-bearing path** — injection stays the
+  interrupt it is; every load-bearing wake is a harness-native mechanism (A4/A5) with a
+  deterministic consumer.
+- **No second transport** for pings, decisions, or operator answers — one substrate, one drain, one
+  wake discipline; the failure modes of a parallel channel (2nd-transport-makes-an-e2e-ambient) are
+  already in the memory index.
+- **No change to `/goal` semantics or the cap** — 50 stays a runaway bound; §4 makes reaching it
+  rare instead of routine.
