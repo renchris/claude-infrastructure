@@ -86,3 +86,69 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
 ## Status log
 - **2026-08-12 — created by W2 of `BACKLOG_SELF_DRAINING_2026-08-12.md`.** 34 rows joined by
   `group.py`. Recommended FIRST of the ten: every other wave's DoD is measured by these instruments.
+
+- **2026-08-13 — THE LOCAL DRAIN, effort 2 opened.** Store baseline at start: **470** non-cloud rows
+  (`master-verification-integrity` holds 29, of which **20 are non-cloud and mine**; the other 9 are
+  `venuePlan=cloud`). Condition claimed as one lease on `f295605eec01` (`verdict=clear`). Twenty rows
+  fanned out to five read-only triage agents for a currency verdict each, before any code was written.
+
+  **V0 · THE MASTER INSTANCE OF THIS CONDITION, found while landing an unrelated docs commit.** This
+  effort exists because "the instruments that decide red and green are wrong in both directions". The
+  largest live instance is not in any of the 20 rows — it is the verifier that owns the full-suite
+  claim for this repo, and it is **stuck in a state its own source predicted**:
+
+  - `postland-verify`'s last six stamps are **5 × `cut` + 1 × `hung`, zero green**, each after
+    42 min–2.5 h of work (`run_s` 2533–8970). Every recent stamp records `corpus=null` — a verdict
+    with no denominator, which `postland-verify.sh:2485` itself calls "THE STAMP'S DENOMINATOR".
+  - Cause, from `~/.claude/autonomy/postland/runner.log`, **11 times in 14 h**: `corpus TRUNCATED —
+    zero not-ok in a non-zero run — the run was KILLED by signal 15 [since 22:23Z: signal 9] from
+    OUTSIDE this runner (sender unidentified) - not the tree`.
+  - **`cut` is the CORRECT verdict**, not a bug: the code deliberately refuses to convict a tree on a
+    truncated run (`classify_hang`/`classify_failures`, case (a)). The defect is downstream, and
+    `postland-verify.sh:1533` states it verbatim: *"With every run cut, NO GREEN STAMP CAN EVER EXIST,
+    so deploy-live refuses forever."*
+  - **Measured live, exactly as predicted:** `deploy-live: waiting — no GREEN tree is a DESCENDANT of
+    live HEAD a54569dbf020 (the newest one, 8f1726cfbe8e, is BEHIND it); lag 10 commit(s) / 2h, inside
+    the degrade budget (25 / 6h)`. It reads *inside budget*, which is why nothing has alarmed — but it
+    cannot leave that state, because the only thing that would clear it is a new green stamp and every
+    run is cut. The budget will breach with nothing to advance to. **This blocks the live layer for the
+    whole machine, not just this session.**
+
+  **Ruled out, so the next session does not re-derive them:** not the OS (59% memory free, zero swap,
+  no jetsam kills in 12 h); `scripts/gate-cleanup.sh` **is** worktree-scoped (`:23` — "scope REAL
+  rather than textual: the worktree is a filesystem fact"); and `hooks/validate-bash.sh:558` already
+  DENIES a worktree-unscoped `pkill -9 -f bats-core/bats` at the tool call, citing the 2026-07-26
+  false-RED epidemic (`a0718a5d78b3`) as its measured cause. So the known agent-side vector is CLOSED —
+  the sender executes outside that guard, which is precisely why it is unidentified. Remaining suspects
+  are the launchd jobs that can signal without passing validate-bash: `cc-gc`, `worktree-gc-infra`,
+  `team-orphan-reaper`, `teammate-reap-alarm`, `devserver-gc`, `lead-supervisor`, `dispatcher`,
+  `capacity-alarm`. **NOT YET A MEASUREMENT — do not act on that list.** The kill intervals
+  (~61 min, several times) most likely reflect postland's OWN relaunch cadence, not the killer's.
+
+  **The instrument cannot close its own loop**, and that is the V1/V3-shaped fix: a runner that reports
+  *"killed by someone, I don't know who"* can never name a culprit, so this recurs indefinitely. Sender
+  attribution is the prerequisite for any cure, not an optional diagnostic.
+
+  **Same shape as row `8efd655b0fe1`** (hermetic CI: a matrix shard CANCELLED mid-run by a runner
+  shutdown signal, ~41 suites of evidence lost, measured 4-for-4). One cause may generate both.
+
+  **Two instrument traps hit this session, both of which produced a false reading before being caught:**
+  1. `grep -r` over `~/.claude/bin|scripts|hooks` returns **EMPTY** — those are per-file symlinks into
+     the checkout and `grep -r` does not follow symlinks found during a walk. A "no sites found" there
+     is a blind instrument, not an absence. Grep the checkout's real files.
+  2. Fanning out 5 triage agents took load to **2.03/core — exactly `cc-bats`'s refusal threshold**
+     (rc 75, empty stdout, a DEFERRAL not a pass). On this box **fan-out and bats verification cannot
+     overlap**; they must be sequenced.
+
+  **`🚀` attribution (not this effort's loose end).** The ledger's `LIVE_ADDS=1` is
+  `tests/lr-reset-poller-engagement.bats`, added by the PREDECESSOR's effort-1 commit `4ba91ad95`.
+  Open row `4e6a51df2a84` already covers the class: `tests/` is not in `~/.claude`, so **no converger
+  can ever carry it**. Attributed, not driven, and never laundered into a `✅`.
+
+  Landed this session so far: **`bf3db4326`** — 26 of 39 waves across the ten `MASTER_*.md` plans
+  carried `S = dispatched handoff session` as their execution locus, authored before the mission
+  pivoted to one standing session. A successor following any of those tables would spend a second
+  concurrent slot and defeat the drain's single invariant. Purely additive (110 lines, 0 deleted); the
+  historical `S` markers are preserved as the record of original scoping.
+
+  Rows closed so far this effort: **0**. Filed: **0**. Store: **470 → (re-derive at effort close)**.
