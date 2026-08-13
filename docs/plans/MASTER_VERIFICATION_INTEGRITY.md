@@ -244,3 +244,31 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   rebuild already proven in a named commit; (2) pin `86488ad1c966` with a real fixture; (3) the two
   RED-on-trunk rows `c6c5ef54881e` / `0711d9e18934` still need an actual `cc-bats` run — they were
   never verified, and `ok=0 notok=0` from a refused run is a NON-VERDICT, never a pass.
+
+- **2026-08-13 — first CODE fix of this effort landed: `4239f02465cb` CLOSED (`3aecd1472`).**
+  `scripts/utc-stamp-lint.sh` collapsed `lint_dir`'s three-code contract (0 clean / 1 findings /
+  2 could-not-run) into two, via `lint_dir … || rc=1` on **both** branches of the `CC_UTC_OWN`
+  conditional. Now cased: 0 passes, 1 sets `rc=1`, anything else sets a non-verdict that exits **2**.
+  The fix extends this file's OWN contract rather than inventing one — the branch immediately below
+  already exits 2 for `scanned==0` and calls it *"NOT a clean verdict"*.
+
+  **Fail-closed direction, chosen deliberately:** a non-verdict dominates BOTH a clean result and a
+  finding. A run that could not judge every target has not earned the right to characterise the tree.
+  Findings still print; only the exit code is withheld.
+
+  🚨 **THE LESSON THAT GENERALISES TO EVERY REMAINING ROW IN THIS EFFORT.** All **17** pre-existing
+  selftest cases called `lint_dir` **directly**, so every one of them was GREEN for the entire life of
+  this bug — because the collapse lived in the **caller**. A suite that exercises the function can
+  never see a defect in the code that calls it. The three added cases drive the **script** (17/17 →
+  20/20) and are mutant-proved: restoring `|| rc=1` fires exactly the two new cases by name. When
+  fixing the rest of this effort, **ask which layer the defect is in and put the guard THERE** — most
+  of these rows are caller-side collapses, and their existing suites will look reassuringly green.
+
+  Also worth knowing: `tests/utc-stamp-lint.bats:37` pins the selftest count by literal grep and
+  fails with *"update this assertion deliberately"*. That is the `exact-count-assertion-tripwires-its-own-subject`
+  shape — it reds on the suite's own GROWTH, never on a regression — but it is self-documenting and
+  was ratified as designed (now `20/20`), not redesigned. 12/12 green.
+
+  **NO LAND REGRESSION:** `ship-land.sh:2322` treats any non-zero as `gate_red`, so a could-not-run
+  was red before (1) and is red now (2). What changed is that the lint is now HONEST, which is the
+  prerequisite for `446fe07464e0` (9 of 15 ratchet arms still collapse exit 2 into `gate_red`).
