@@ -325,3 +325,45 @@ while the pre-existing cases still pass).
 | `5d6dcbe8d462` | REAL, premise re-verified | `banner-gate-redproof.py` is unwired: nightly globs `scripts/*gate*.sh` / `*lint*.sh` (`nightly-regression.sh:65-66`), a `.py` matches neither; `--check-anchors` does not exist (0 hits); `anti-vacuity-contract.bats`'s census is `tests/`-only and its mention of the harness is a COMMENT (`:25`), not a wiring. |
 | `79811022b6a4` · `b449e49f1438` · `cf440684e0e1` · `f8f1b2c16fa8` · `8efd655b0fe1` · `c6c5ef54881e` · `0711d9e18934` | NOT YET TRIAGED this session | `c6c5ef54881e` / `0711d9e18934` claim suites are RED on trunk and were **never actually run** — a refused `cc-bats` returns `ok=0 notok=0`, which is a NON-VERDICT, never a pass. Run them before believing either. |
 | `782607797fc5` · `05ff1e5fabc0` | FILED BY THIS SESSION | operator-gated signal trace; and the 3 CI-only reds from run 31586181611 (locale and OS platform already REFUTED — do not re-run those two hypotheses). |
+
+- **2026-08-13 — `5d6dcbe8d462`: the row's premise is RIGHT, its prescribed remedy is WRONG for this
+  harness. Corrected spec below; do not start from the row.**
+
+  **Premise confirmed (all three claims):** `scripts/banner-gate-redproof.py` is unwired — nightly's
+  step-4 globs are `scripts/*gate*.sh` and `scripts/*lint*.sh` (`nightly-regression.sh:65-66`) and a
+  `.py` matches neither; `--check-anchors` does not exist (0 hits); and
+  `tests/anti-vacuity-contract.bats`'s CENSUS globs **`tests/*redproof*`**, so a harness living in
+  `scripts/` is structurally out of its scope. Its only mention there is a COMMENT (`:25-27`) that
+  says so outright: *"OUT OF SCOPE, deliberately … has no --check-anchors mode. Filed rather than
+  smuggled in here."*
+
+  **COUNT SETTLED:** `grep -c '^@case('` = **37**. Row `5d6dcbe8d462` says 37 (correct);
+  `f295605eec01` says 30 (wrong) — use 37.
+
+  🚨 **WHY THE PRESCRIBED PORT DOES NOT APPLY.** The row calls this "the same class as the two fixed
+  in 9ea31151dd94" and says the fix shape is "settled and already proven twice". The CLASS is the same
+  (an unwired red-proof); the SHAPE is not. The two precedent harnesses are **declarative**: their
+  `CASES` are `(name, anchor, replacement, must_break)` tuples over the subject's SOURCE TEXT, so
+  `--check-anchors` is just `src.count(anchor) != 1` (`tests/cc-queue-redproof.py:177`). This harness
+  is **procedural**: `CASES` is `(name, want, fn)` and each `fn` mutates LIVE MODULE STATE —
+  `g.WORLD_MOD["rAsk"] = ((0,12,0),(12,6,2.5)); g.build(v())` — with only **3 of 37** cases doing any
+  text substitution at all. **There are no anchors to count.** Porting the precedent verbatim would
+  produce a flag that checks nothing, which is the exact vacuity the suite exists to prevent.
+
+  **THE CORRECTED REMEDY** — same goal (catch ROT cheaply, no render/build), different mechanism:
+  1. **AST-derive each case's dependencies.** Walk each `@case`-decorated function with `ast` and
+     collect every `g.<NAME>` attribute access. Assert each `<NAME>` still exists on the imported
+     module. A case poking `g.STAR_TWINKLE` after that table is renamed is silently inert today, and
+     that is this harness's equivalent of a dead anchor.
+  2. **Assert each case's `want` string is still reachable** — i.e. still appears in the gate
+     vocabulary the assertions raise. A `want` no longer emitted by any assertion can never match, so
+     the case can never fail: dead by a second route.
+  3. **Wiring needs a decision the row does not make:** the census glob is `tests/*redproof*` and this
+     file is `scripts/`. Either widen the glob to cover both directories (and say so in the census
+     comment, which currently *justifies* the narrow scope), or add an explicit case invoking it.
+     **Do not silently widen** — the comment at `:25` is a deliberate scoping decision with a stated
+     reason, and overriding it without addressing that reason is how a guard loses its meaning.
+
+  Not implemented this session: it is a per-case AST pass plus a census-scope decision in a subsystem
+  (banner/SVG build) this session had no other reason to touch, and half-building it would leave a
+  flag that returns 0 unconditionally — worse than the current honest gap.
