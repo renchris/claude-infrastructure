@@ -936,3 +936,48 @@ the control is not "did the suite go red", it is "did the mutation happen at all
   rest of the reason it had been parked.
 - `ship-land.sh` now has one more gate arm. It is own-scoped and sub-second; a land that touches no
   `tests/*.bats` never sees it.
+
+### `cf440684e0e1` — TRIAGED IN FULL, not started. Its blocker does not exist
+
+**Do NOT start from the row, and do not start from `docs/research/land-architecture-100p-2026-08-10
+.md` §5.P3 either — start from the CORRECTION appended to §5.P3 on 2026-08-13 (`4fa8d34a5`).** The
+row is a faithful restatement of that section's three findings, and **three of the four do not
+survive a read of the code they cite.** All three refutations came from one question asked of the
+citation rather than the conclusion, and neither needed a measurement rig:
+
+| §5.P3 finding | verdict |
+|---|---|
+| **1** — `test-hermeticity` rule 4 is cross-file (a property of a PAIR of files), so no per-file verdict exists | **FALSE.** The scan is `for f in …` and both predicates take ONE file. No pairing anywhere. The header states the rule was written this way on purpose: *"the compliant position is not 'fixture $HOME' but 'make the path PER-RUN UNIQUE'"*. The misreading comes from the arm's VOCABULARY — it prints `COLLIDES … two concurrent runs share it` and `0 collisions`, but the collision is between two runs of the SAME tool. |
+| **3a** — `unattended-path-lint` also judges `settings.json`, outside its pathspec | **FALSE, and stale before it was written.** `hook_population()` stopped intersecting the live settings.json at **`da81f555b` (2026-08-06)** — four days before the note, five before the row — deliberately, because directory scanning is *"deterministic, hermetic, and strictly WIDER"*. Strictly wider IS the superset direction, so it now argues the opposite of its citation. |
+| **3b** — pipefail's pathspec lists `docs/*`, so it is not a superset | **TRUE but POLARITY-INVERTED.** Listing `docs/*` makes the spec WIDER than the judged population, which is what a superset is. Too wide costs extra invalidations; only too NARROW is the stale-verdict generator. |
+| **2** — arm-level keying skips only 27-46% of re-rounds over the last 200 lands | **STANDS, unprobed.** This is the real objection and it is sufficient: do NOT build arm-level keying. |
+
+**What that changes.** §5.P3's own recommended path — per-file memoization *inside* each lint's scan
+loop, "what would actually reach ≤10s" — was blocked by exactly one thing, finding 1's file-locality
+failure. **Every arm named is file-local, so the blocker is gone.** The remaining work is the
+mechanical read-set declaration itself (~15 lints) plus a per-lint locality proof; the three
+declarations derived by hand above are the first three and none needed an exception.
+
+**Two cautions for whoever builds it.** (a) The row's timing (re-round 127-137s, arms ~112s) is from
+2026-08-10 and the arm set has GROWN since — `bats-testname-eval-lint`, `offbox-admission`,
+`test-hermeticity` rule 7, and `moving-ref-control` all landed after it. **Re-measure before
+optimising**; a published figure decays with its source. (b) Half a declaration standard is worse
+than none — a partial read-set invites keying on a non-superset, which the row correctly calls a
+stale-verdict generator. Land all of them or none.
+
+### The generator this whole recycle kept hitting, stated once
+
+Four independent defects this session reduce to one move: **a claim taken from a subject's
+VOCABULARY instead of its MEASURED behaviour.**
+
+1. A marker chosen from the pre-fix `ps` spelling — greps 1 on BOTH sides, because the post-fix file
+   names it in the comment explaining the fix.
+2. §5.P3's finding 1 — "cross-file" read off the word `COLLIDES` in a message, over a loop that
+   compares nothing.
+3. Recycle #5's mis-targeted mutant — `shellcheck` deleted from an inventory it was never in.
+4. Recycle #5's vacuous control — keyed on `$STOCK` while the predicate probed a wider domain.
+
+**The cure is always the same and it is cheap: read what the code DOES to the thing you are naming,
+before you name it.** One `sed` over a scan loop. One `grep -c` on both artifacts. One `git log -S`
+on the citation. Each of these cost under a minute and each removed real work or prevented a
+fabricated finding.
