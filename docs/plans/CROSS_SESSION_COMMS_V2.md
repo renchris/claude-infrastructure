@@ -535,3 +535,17 @@ Registered as specified, the hook would stay **silent on every delivered message
 wake on every idle timeout** — precisely inverted. Its rc 2 cannot simply be re-mapped: it is
 load-bearing for `cc-wait:138`. W1 therefore needs a **contract adapter**, which is what this session
 builds. A spec is not a build, and this is what the difference was hiding.
+
+**2026-08-13 — the goal-safe third idle mode (operator `/goal`).** W1 shipped (migration 0007, all
+five config dirs, re-verified live today) and the R1–R3 goal resolution landed 2026-08-10 — and the
+3-day post-resolution corpus still shows the two idle poles failing: 84 goal sessions · 47 zero-eval
+(starvation) · unmet-evaluation runs of 90/16/11 + 15 cap force-idles (spin; type specimen
+`8f478e5c`, a wave lead re-judged every ~51 s for 76 min while awaiting dispatched lands). Ground-up
+architecture: `docs/research/goal-safe-2way-comms-2026-08-13.md` — one new invariant (**deferral
+must be idle-scoped**: a background task under a live goal must terminate on every wake of its
+session, including wakes it did not cause; the `cc-beats` file is the oracle), enforced by
+`cc-await-ping --idle-scoped` (the `validate-bash` chokepoint admits it as the one sanctioned
+shape), with **W2 as the mechanical safety net** — this plan's re-arm item, still gated on the
+Stop-dispatch probe, still unbuilt. Filed: probe `62e0b88a58b5` · W2 registration `3118d712f668` ·
+idle-scoped mode `6290f0ee6b52` · notice/messaging fixes `b33f424c747b` · goal-liveness oracle
+`b0ce82d745be`.
