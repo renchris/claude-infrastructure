@@ -1021,3 +1021,79 @@ SH
   # …and it carries its OWN falsifier, so it retires itself when coverage recovers.
   [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")][0]|.falsifier|length>0')" = "true" ]
 }
+
+# ── CONDITION-LEASE P6 · THE BACKFILL ARM IS ACTUALLY CALLED (backlog 01edea637633) ──────────────
+# `cc-backlog backfill` was built by CONDITION_LEASE P5 to answer "`link` fires only when a human
+# notices" — and on trunk 2026-08-13 it had ZERO callers, so the verb that fixes "nothing backfills"
+# was itself backfilled by nothing. That is the same zero-caller defect this subsystem has now paid
+# for five times, which is why the CALL is asserted here and not only the code.
+#
+# THE DRY-RUN CONTROL IS THE LOAD-BEARING ONE. This arm must PROPOSE and never WRITE: `link` feeds
+# cc-backlog's claim guard (6), so a wrong join REFUSES a live worker onto work that is not
+# duplicated and nothing downstream reports the move. A caller that quietly passed `--apply` would
+# pass the positive case below unchanged (memory: guard-proxy-fails-in-both-directions).
+
+# The `memory-index-over-budget` shape, copied from tests/cc-backlog-dups-family.bats so both
+# suites test the SAME population: ANCHOR carries the condition, ORPHAN is the un-joined sibling in
+# a different wording. Two identifiers shared (memory.md, compact-memory) plus the prose floor.
+add_backfill_family() {
+  "$CC_BACKLOG_BIN" add --project probe --source sess-A \
+    --condition memory-index-over-budget \
+    --title "MEMORY.md index over its loader budget — run compact-memory, the safe-auto arm and the propose-only dedupe" >/dev/null
+  BF_ORPHAN="$("$CC_BACKLOG_BIN" add --project probe --source sess-B \
+    --title "MEMORY.md index is over the read limit again at 22.5KB — compact-memory should run its safe-auto pass")"
+}
+
+@test "P6 · the backfill arm FIRES and journals the review queue's depth" {
+  add_backfill_family
+  # The fixture really is a candidate — asserted against the SUBJECT's own id, not a count, because
+  # other arms of this same sweep file rows into this store (memory:
+  # exact-count-assertion-tripwires-its-own-subject).
+  run "$CC_BACKLOG_BIN" backfill --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$BF_ORPHAN" '[.proposed[]|select(.id==$i)]|length')" = "1" ]
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"backfill_rc":"0"' "$CC_IDL"
+  grep -q '"backfill_note":"ok"' "$CC_IDL"
+  [ "$(jq -r 'select(.disposition=="backlog-health")|.backfill_proposed' "$CC_IDL" | tail -1)" -ge 1 ]
+}
+
+@test "P6 CONTROL · the arm is a DRY RUN — the sweep joins nothing" {
+  add_backfill_family
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # THE ARM RAN — without this line the case passes vacuously on a tree that has no caller at all,
+  # which is precisely the state this whole block was written to leave behind.
+  grep -q '"backfill_note":"ok"' "$CC_IDL"
+  # The orphan is STILL un-conditioned: proposed, not linked.
+  run "$CC_BACKLOG_BIN" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$BF_ORPHAN" '.[]|select(.id==$i)|.condition // ""')" = "" ]
+  # …and no `link` record was appended at all, which is the fact a status read alone would miss.
+  [ "$(jq -r 'select(.event=="link")|.id' "$CC_BACKLOG_FILE" | wc -l | tr -d ' ')" = "0" ]
+  # POSITIVE CONTROL: the identical fixture DOES join under --apply, so this case cannot pass
+  # because the family key found nothing.
+  "$CC_BACKLOG_BIN" backfill --apply >/dev/null
+  run "$CC_BACKLOG_BIN" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$BF_ORPHAN" '.[]|select(.id==$i)|.condition')" = "memory-index-over-budget" ]
+}
+
+@test "P6 · an UNREADABLE answer is no-verdict, never a clean store" {
+  # rc alone cannot separate "nothing to join" from "did not answer" — the conflation the fold arm
+  # beside it had to unpick after 10 of 10 runs read rc 124 as a verdict
+  # (memory: claimed-outcome-vs-checked-outcome).
+  local stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
+  cat > "$stub" <<STUB
+#!/bin/bash
+[ "\${1:-}" = "backfill" ] && { echo "cc-backlog: store moved under the read"; exit 0; }
+exec "$CC_BACKLOG_BIN" "\$@"
+STUB
+  chmod +x "$stub"
+  export CC_BACKLOG_BIN="$stub"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"backfill_note":"no-verdict"' "$CC_IDL"
+  [ "$(jq -r 'select(.disposition=="backlog-health")|.backfill_proposed' "$CC_IDL" | tail -1)" = "0" ]
+  # …and the count is NOT reported as a healthy zero: note and count are read together, which is
+  # exactly what the journal's own note tells a consumer to do.
+  ! grep -q '"backfill_note":"ok"' "$CC_IDL"
+}
