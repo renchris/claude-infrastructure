@@ -129,6 +129,20 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # NON-VERDICT arm — and the shape they moved TO is the one ship-land's own tsv-pad block argues
 # for on this lint's doctrine. This is the DOWNWARD half of the ratchet doing its job: without
 # it the stale 17 would sit here as a permanent two-gate allowance nobody could account for.
+#
+# ship-land.sh 15 -> 9 (2026-08-13, backlog 446fe07464e0): the SAME rewrite as the entry above, now
+# applied to the rest of the class. Eight gate arms — walltime, utc-stamp, self-path, pane-spawn,
+# unattended-path, permission-gate, chromium-bundle, kill-guard — moved from
+# `if ! own_run …; then … gate_red x` to the rc-capture form, so a lint's exit 2 (I-COULD-NOT-RUN)
+# routes to a new arm_nonverdict() / GATE_KILLED (retryable exit 9) instead of being dressed up as an
+# author-fixable RED (exit 6). Measured before: 9 of 16 arms collapsed exit 2; after: 1 of 16
+# (dead-assertion, a different shape). `negated()` matches `if ! cmd`, not an rc compare, so all
+# eight left the undeclared count — which is why the drop is 6 and not 8 (two of the eight were
+# already not matching). NOTHING WAS UN-GATED: the same refusals fire, and each now fires with the
+# honest exit code. Red-proved end-to-end through `--dry-run` with a stub lint exiting 2: before, the
+# run exited 6 "GATE RED — not pushing"; after, it exits 9 "NOT a red and NOT evidence about your
+# tree". Lowering this line is the DOWNWARD half again — leaving 15 would be a permanent six-gate
+# allowance nobody could account for.
 EMBEDDED_RATCHET="$(cat <<'RATCHET'
 install.sh 1
 scripts/deploy-live.sh 9
@@ -136,7 +150,7 @@ scripts/deploy-parity-assert.sh 1
 scripts/desk-land.sh 7
 scripts/land-verify.sh 1
 scripts/ship-backup-reap.sh 2
-scripts/ship-land.sh 15
+scripts/ship-land.sh 9
 RATCHET
 )"
 
