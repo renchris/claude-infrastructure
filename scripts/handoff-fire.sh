@@ -3571,7 +3571,12 @@ selfclose_mail_disposition() { # $1=our-sid $2=successor-pane(may be empty) $3=l
   fi
   MAIL_DISPOSITION="deadletter:$pending"
   _md_say "→ M3: $pending undrained message(s) DEAD-LETTERED to $dl/$sid.md (terminal close, no successor to reroute to)"
-  _md_say "  ⚠ these were DELIVERED but never READ — the operator board is the surface that must show this store (row 10 owns that row); evidence: $dl/.ran"
+  # R-6 CLOSED 2026-08-13: the store is no longer a silent file. It is the D-series' fifth escalation
+  # store, so the same triad that surfaces every other durable un-drained record now surfaces this one
+  # — `bin/cc-escalations list` (and `ack` to silence it), hooks/escalation-watch.sh at SessionStart,
+  # and the operator readout's counted `◆` line. Name the DRAIN, not just the file: a message that
+  # says only where the bytes went leaves the operator with a path and no next action.
+  _md_say "  ⚠ these were DELIVERED but never READ — outstanding until acked: run \`cc-escalations list\` (class mail-deadletter), then \`cc-escalations ack $sid.md\`; evidence: $dl/.ran"
   return 0
 }
 
