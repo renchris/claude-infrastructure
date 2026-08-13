@@ -925,6 +925,39 @@ strip_comments() { sed 's/[[:space:]]#.*$//; s/^#.*$//'; }
 # setup_statements(): same sed, whole file rather than the setup() bodies.
 code_lines() { strip_comments < "$1"; }
 
+# strip_prose — blank out occurrences of a lever's name that sit MID-SENTENCE, as a stdin filter.
+# The one sed for it, for strip_comments' reason: the halves of a rule must not drift.
+#
+# THE THIRD POSITION A LEVER'S NAME CAN OCCUPY. strip_comments already separated what a suite SAYS
+# ABOUT ITSELF (a comment) from what it DOES (code). It cannot separate the remaining pair, because
+# both live in code: a PATH to the script, and the same characters inside a STRING the suite is
+# merely handling as DATA. tests/cc-eligible-history.bats is the measured case — its only code
+# mention is the backlog-row TITLE `"patch scripts/handoff-fire.sh so the recycle inherits the
+# goal"`, a fixture specifying an item cc-eligible must REFUSE. The suite fires nothing; it was
+# convicted for a sentence, took the prescribed pin as a no-op, and said so in a comment. Same class
+# as pgrep-f-matches-agent-briefs: argv carried whole briefs, so a name-match counted every session
+# that MENTIONED the subject. Anchor on POSITION, not presence.
+#
+# 🚨 WHY THIS EXCLUDES PROSE RATHER THAN REQUIRING AN INVOCATION — the narrowing that looks right is
+# the one that breaks the rule. Keying scope on an EXECUTION position (the sibling ratchet's `_fires`
+# shape, `bash "$HF"`) was built and measured first: it drops 21 suites, and one of them is
+# tests/spawn-presence.bats, which EXTRACTS capacity_gate out of the real script and runs it under
+# `bash -c`. It is load-sensitive, it pins with form 2, and its setup() cites this rule by name — an
+# execution-position predicate cannot see that indirection, so the pin would go unenforced by both
+# this lint AND the sibling ratchet. A false negative here is a suite silently reading the live box;
+# a false positive is one harmless export. The asymmetry decides it: stay BROAD, and subtract only
+# what is provably a sentence. Measured over tests/: 4 suites leave scope, all four prose-only, none
+# executing anything (cc-dispatch's stub stderr line, cc-eligible-history's fixture title,
+# cc-recover-safeguard's @test name — which literally reads "handoff-fire never invoked" — and
+# claude-accounts-fresh-lock-bound's error string). Every executing suite stays in scope, unchanged.
+#
+# THE PREDICATE: a name followed by TWO consecutive bare lowercase words is prose. A real reference
+# is followed by a quote, a path, end-of-line, or a `-`-led flag — never by `so the`. `self-close
+# --terminal` survives (the hyphen breaks the second word), which is why spawn-lineage and
+# worker-claim-gate-coverage stay in. The bound is deliberately two words, not one: one lowercase
+# word after a path is a plausible subcommand, two is a sentence.
+strip_prose() { sed -E 's#handoff-fire(\.sh)?[[:punct:]]?[[:space:]]+[a-z]+[[:space:]]+[a-z]+#<prose>#g'; }
+
 # Is this suite in scope for rule 2 at all? 0 = it references handoff-fire · 1 = it does not.
 # Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
 # Textual by design — a suite that reaches the fire only through some other wrapper is not matched,
@@ -941,9 +974,14 @@ code_lines() { strip_comments < "$1"; }
 # added, would make the suite look permanently in-scope-and-compliant and dilute a real finding).
 # One of the 9 was tests/bats-assert-liveness.bats, whose only sin was a comment citing the suite
 # that motivated it. A rule that fires on prose is the same defect as one that cannot fire.
+# PROSE-STRIPPED as well, since 2026-08-13, and for the same asymmetry the comment fix turned on:
+# the name inside a sentence the suite HANDLES is evidence of nothing, exactly as the name inside a
+# sentence the suite WRITES was not. See strip_prose above for why this subtracts prose rather than
+# demanding an invocation — the invocation form was built, measured, and rejected for a false
+# negative on tests/spawn-presence.bats.
 references_fire() {
   local rc code
-  code="$(code_lines "$1" 2>/dev/null)"
+  code="$(code_lines "$1" 2>/dev/null | strip_prose)"
   for _ in 1 2 3; do
     grep -qF 'handoff-fire' <<<"$code"; rc=$?
     case "$rc" in

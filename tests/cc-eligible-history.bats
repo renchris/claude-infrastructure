@@ -46,12 +46,13 @@ setup() {
   # A 3-commit horizon over a 6-commit repo: small enough to read, wide enough that "inside" and
   # "outside" are both non-empty. The production default is 50, the measured depth of a real clone.
   export CC_ELIGIBLE_HISTORY_DEPTH=3
-  # Pinned because the test-hermeticity ratchet flags any suite whose TEXT names handoff-fire,
-  # and this one does — inside a FIXTURE TITLE, as the specification of an item the classifier
-  # must refuse. Nothing here fires anything. The pin is a no-op for this suite and it is the
-  # sanctioned fix, so it is taken rather than argued with; the detector reading a quoted
-  # string as an invocation is filed separately.
-  export CC_FIRE_CAPACITY_GATE=off
+  # NO CAPACITY PIN, and its absence is the assertion. This suite's only mention of handoff-fire is
+  # a FIXTURE TITLE — the specification of an item the classifier must REFUSE — and nothing here
+  # fires anything. It used to carry `export CC_FIRE_CAPACITY_GATE=off` purely because the
+  # hermeticity ratchet read that sentence as an invocation; the pin was a permanent no-op, which is
+  # how a pin stops meaning anything. Fixed at the detector (scripts/test-hermeticity-lint.sh
+  # § strip_prose): a name followed by two bare lowercase words is prose, not a reference. If that
+  # regresses, this file goes red again — which makes its missing pin the live proof of the fix.
   G="$HOME/Development/probe"
 }
 
