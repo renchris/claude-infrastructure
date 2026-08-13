@@ -21,6 +21,7 @@ setup() {
   LINT="$REPO/scripts/test-hermeticity-lint.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # dogfood: this suite obeys its own rule 1
   export CC_FIRE_CAPACITY_GATE=off                         # dogfood rule 2 — this file names handoff-fire
+  export CC_ADMIT_GATE=off                                 # dogfood rule 7 — it names capacity-admit's callers
   # Rule 4 OFF by default here, and switched back ON by name in the cases that mean to test it.
   # Every fixture-targeted case below passes a temp dir as the scan dir, but rule 4's population is
   # the REPO's tool dirs — it is driven off $ROOT, not off that argument, precisely so ship-land's
@@ -782,4 +783,168 @@ echo "$MODE"'
   r6run r6small r6small_s
   [ "$status" -eq 0 ] || false
   echo "$output" | grep -q 'grandfathered (inherited value)' || false
+}
+
+# ── RULE 7 (the capacity-ADMIT gate). Rule 2's twin at the OTHER gate. Rule 2 knows exactly one
+# lever, CC_FIRE_CAPACITY_GATE, because scripts/handoff-fire.sh's capacity_gate() is the only gate it
+# was written against. scripts/lib/capacity-admit.sh is a SECOND gate with its own CC_ADMIT_*
+# namespace and its own callers, and it refuses with exit 9 on live load, live memory headroom and —
+# since 450a47c50 — a live `ps` census of session trees. Backlog 5ef0dcb22aec:
+# tests/kitty-recovery-launch.bats (which drives scripts/boot-resume-launch.sh, a caller) went
+# red-by-LOAD three times in a 228-test sweep and green in isolation, while this lint reported it
+# clean throughout — it names no handoff-fire, so rule 2 never had it in scope.
+#
+# Every case below is FIXTURE-based, for the reason rules 5 and 6's blocks record (backlog
+# b59eb997d035). Rule 7's real-tree guarantee is proved where it costs nothing — case (e) of the
+# lint's own --selftest, which now judges EMBEDDED_ADMIT_ALLOWLIST alongside the other four.
+
+@test "RULE 7 RED: a suite that drives a capacity-admit caller without closing the gate in setup()" {
+  mk_suite admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+  echo "$output" | grep -q 'Do NOT add to the admit allowlist' || false
+}
+
+@test "RULE 7 SCOPE CONTROL: the same suite MINUS the caller reference is GREEN" {
+  # The positive control that makes the RED above mean something — rule 2's argument verbatim. These
+  # two fixtures differ in exactly one token; if this one also went RED the rule would be flagging
+  # every suite in the tree and the RED would be evidence of nothing.
+  mk_suite noadmit 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/some-other-tool.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/noadmit"
+  [ "$status" -eq 0 ] || false
+  [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
+}
+
+@test "RULE 7 SCOPE: a PROSE mention is not a reference — and a real path still is (two-sided)" {
+  # rule 2's third-position case over the shared strip_prose, which THIS rule generalised from a
+  # hardcoded `handoff-fire` to a parameter. Both halves in one test, deliberately: split apart, the
+  # OUT half could pass because the predicate matches nothing at all.
+  mk_suite admitprose 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    "run classify 'patch scripts/boot-resume-launch.sh so the resume inherits the goal'"
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitprose"
+  [ "$status" -eq 0 ] || { echo "prose mention was read as a reference:"; echo "$output"; false; }
+  [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
+
+  mk_suite admitexec 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitexec"
+  [ "$status" -eq 1 ] || { echo "prose-stripping swallowed a REAL reference:"; echo "$output"; false; }
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 7 GREEN: FORM 1 (CC_ADMIT_GATE=off) clears it — the prescribed fix actually works" {
+  mk_suite admitpin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_ADMIT_GATE=off' \
+    'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitpin"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 7 GREEN: FORM 2 needs ALL THREE terms — a suite whose SUBJECT is the gate cannot use form 1" {
+  mk_suite admitform2 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0
+  export CC_ADMIT_HEADROOM_OVERRIDE=64
+  export CC_ADMIT_RESERVE_TERM=off' \
+    'run bash ./scripts/lib/capacity-admit.sh'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitform2"
+  [ "$status" -eq 0 ] || { echo "form 2 is unreachable:"; echo "$output"; false; }
+}
+
+@test "RULE 7 RED: the TWO-VARIABLE form 2 is NOT closed — the reserve term is a third ambient input" {
+  # 🚨 The one case rule 2 has no analogue for, and the whole reason rule 7 is not a name-swap of
+  # is_fire_pinned. Backlog 5ef0dcb22aec prescribed exactly this shape (CC_ADMIT_GATE plus rule 2's
+  # two instrument overrides) and it was TRUE WHEN FILED. 450a47c50 landed two days later and added
+  # the operator RESERVE, which runs over an otherwise-ADMITTING box and refuses on a live `ps`
+  # census plus the operator's presence — neither of which either override touches, and neither of
+  # which a fixtured $HOME absents (_cc_admit_load_presence resolves spawn-presence.sh relative to
+  # capacity-admit.sh's OWN directory first, so it loads the real library).
+  #
+  # Measured two-sided on the gate's own suite, which is in exactly this state today:
+  # `bats tests/capacity-admit.bats` is 20/20 green ambient and 17/20 under CC_SP_TREES_OVERRIDE=999
+  # (tests 13, 14 and P3 flip on the census alone). Had form 2 been ported verbatim from rule 2, this
+  # lint would have certified the one suite whose subject IS this gate as PINNED while it read the
+  # live box — a false negative minted by the rule that exists to prevent it.
+  mk_suite admitform2short 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0
+  export CC_ADMIT_HEADROOM_OVERRIDE=64' \
+    'run bash ./scripts/lib/capacity-admit.sh'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitform2short"
+  [ "$status" -eq 1 ] || { echo "the two-variable form counted as PINNED:"; echo "$output"; false; }
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 7 GREEN: CC_SP_TREES_OVERRIDE is the OTHER reserve closure — it pins the live census" {
+  # The second spelling, and it must work: tests/spawn-presence.bats is the presence library's own
+  # suite and cannot turn the reserve term off without deleting what it tests. It pins the census
+  # itself instead, which reaches the same property by the other route.
+  mk_suite admitform2b 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0
+  export CC_ADMIT_HEADROOM_OVERRIDE=64
+  export CC_SP_TREES_OVERRIDE=5' \
+    'run bash ./scripts/lib/capacity-admit.sh'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitform2b"
+  [ "$status" -eq 0 ] || { echo "the census pin was not accepted as a reserve closure:"; echo "$output"; false; }
+}
+
+@test "RULE 7: a per-TEST close does not count (every OTHER test still reads the live box)" {
+  mkdir -p "$FIX/admitpertest"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'
+    echo '  export HOME="$BATS_TEST_TMPDIR/home"'
+    echo '  S="./scripts/boot-resume-launch.sh"'
+    echo '}'
+    echo '@test "a" { CC_ADMIT_GATE=off run bash "$S"; }'
+    echo '@test "b" { run bash "$S"; }'; } > "$FIX/admitpertest/zz-fixture.bats"
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitpertest"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 7 RED: a suite that closes the gate but is STILL grandfathered (the ratchet only shrinks)" {
+  mk_suite admitpin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_ADMIT_GATE=off' \
+    'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/admitpin"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'RATCHET-ADM' || false
+}
+
+@test "RULE 7 GREEN: an unclosed suite that IS grandfathered passes (today's list blocks nobody)" {
+  mk_suite admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 7 kill switch: CC_HERM_ADMIT_RULE=off disables it — with the RED as its positive control" {
+  mk_suite admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 1 ] || false                          # control: the rule DOES fire on this fixture
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_ADMIT_RULE=off run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 7 own-scope: an AMBIENT violation outside the diff is advisory, inside it blocks" {
+  mk_suite admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'advisory, not blocking' || false
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/admitleak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 7 is INDEPENDENT of rule 2 — the two gates' populations do not overlap" {
+  # scripts/handoff-fire.sh SOURCES capacity-admit.sh but never calls cc_capacity_admit: it reuses
+  # only the shared cc_hw_* terms and evaluates them under CC_FIRE_*. So a handoff-fire suite must be
+  # in rule 2's scope and NOT rule 7's, and a boot-resume-launch suite the other way round. Without
+  # this, rule 7 could be silently duplicating rule 2's population under a second remedy.
+  mk_suite r7indep_fire 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_ADMIT_GATE=off' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/r7indep_fire"
+  [ "$status" -eq 1 ] || false                          # rule 2 still convicts it
+  echo "$output" | grep -q 'CC_FIRE_CAPACITY_GATE' || false
+
+  mk_suite r7indep_admit 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_FIRE_CAPACITY_GATE=off' \
+    'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/r7indep_admit"
+  [ "$status" -eq 1 ] || false                          # rule 7 convicts it, and rule 2 does not
+  echo "$output" | grep -q 'capacity-admit' || false
 }
