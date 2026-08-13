@@ -634,17 +634,30 @@ SH
   # actually about. A plain `-r` scan also trips over untracked build artefacts: the working
   # __pycache__/lr-select.cpython-311.pyc legitimately contains a 0x1f byte.
   #
+  # `-I` (skip binary files) is the SAME correction one step further, and without it this case is a
+  # TIME BOMB that any lander can arm without touching this file. 0x1f is the second byte of the
+  # GZIP MAGIC NUMBER (1f 8b), so EVERY `.gz` under tests/fixtures/ matches by construction, forever.
+  # `28a8fba9b` vendored `tests/fixtures/cc-blockers-prefix-39ebcd07.gz` for an unrelated reason and
+  # turned this guard standing-red on trunk for every land in the repo — a diff that never came near
+  # the sentinel. The claim in this test's own title is about a tracked SOURCE file; a gzip blob is
+  # not one, and the scan's population has to say so.
+  #
   # Exit 1 is the PASS: 0 = a sentinel IS present, 1 = ran and found none, >1 = the scan failed.
   cd "$REPO"
-  run git grep -lF -- "$PAD" -- bin hooks scripts tests
+  run git grep -lFI -- "$PAD" -- bin hooks scripts tests
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 
   # …and prove that same scan can still SEE a raw sentinel, so the silence above is evidence of
-  # absence rather than evidence of a detector that stopped detecting.
+  # absence rather than evidence of a detector that stopped detecting. `-I` is carried here too, and
+  # carrying it is the whole point: a control that runs DIFFERENT flags from the scan it certifies
+  # proves nothing about that scan (memory: control-must-replay-the-real-artifact). It is also the
+  # exact flag that could have blinded the detector, so this is where that has to be ruled out —
+  # a text file holding 0x1f is not binary to git (that test is a NUL in the first 8000 bytes), so
+  # the planted sentinel is still found and `-I` costs no sensitivity on the population that matters.
   printf 'x%sy\n' "$PAD" > "$C/planted.txt"
   cd "$C"
-  run git grep --no-index -lF -- "$PAD"
+  run git grep --no-index -lFI -- "$PAD"
   [ "$status" -eq 0 ]
   [ -n "$output" ]
 }
