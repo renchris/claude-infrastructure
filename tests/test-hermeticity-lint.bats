@@ -325,6 +325,31 @@ skip_if_unrunnable() {
   [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
 }
 
+@test "RULE 2 SCOPE: a PROSE mention is not a reference — and a real path still is (two-sided)" {
+  # The third position the lever's name can occupy. strip_comments already ruled out what a suite
+  # SAYS ABOUT ITSELF; this rules out a sentence the suite HANDLES AS DATA. Measured case:
+  # tests/cc-eligible-history.bats, whose only code mention is a backlog-row TITLE naming the fire
+  # as the specification of an item cc-eligible must REFUSE. It fires nothing, was convicted for a
+  # sentence, and carried the prescribed pin as a permanent no-op — which is how a pin stops meaning
+  # anything.
+  #
+  # BOTH HALVES IN ONE CASE, deliberately: the two fixtures differ ONLY in whether the identical
+  # path sits inside a sentence or in a command. Split across two tests, the OUT half could pass
+  # because the predicate matches nothing at all — the vacuity this file exists to prevent.
+  mk_suite fireprose 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    "run classify 'patch scripts/handoff-fire.sh so the recycle inherits the goal'"
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireprose"
+  [ "$status" -eq 0 ] || { echo "prose mention was read as a reference:"; echo "$output"; false; }
+  [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
+
+  # ...and the IN half over the SAME path token, so the GREEN above cannot be a dead predicate.
+  mk_suite fireexec 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireexec"
+  [ "$status" -eq 1 ] || { echo "prose-stripping swallowed a REAL reference:"; echo "$output"; false; }
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
 @test "RULE 2 GREEN: the pin in setup() clears it — the prescribed fix actually works" {
   mk_suite firepin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_FIRE_CAPACITY_GATE=off' \
     'run bash ./scripts/handoff-fire.sh --dry-run'
