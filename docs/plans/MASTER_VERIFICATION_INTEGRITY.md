@@ -439,3 +439,58 @@ chokepoints) · `38ce5099d` offbox per-suite START marker · `e2d03d069` the ban
 | `782607797fc5` | **BLOCKED — operator** | Privileged signal trace. macOS exposes no unprivileged way to learn a signal's sender. Still live: the live layer converged by DEGRADED ADVANCE, not because postland recovered. |
 
 **Two of the ten are mine-and-filed and two are genuinely blocked, so the workable remainder is six.**
+
+## RESUME-HERE, RECYCLE #2 — 2026-08-13, effort 2 at **8** non-cloud rows (was 10)
+
+**Supersedes the list above on the row COUNT only.** Store this session: **442 → 445** — I closed 2
+and filed 0, so the **+3 is entirely sibling intake**. Report both ends; a close count alone reads as
+progress the store does not show.
+
+**Closed (2), both LANDED and content-verified:** `5456e4cba2b5` (`c787a099a`) · `86488ad1c966`
+(`3a30a7d6d`).
+
+### 🚨 THE LESSON OF THIS RECYCLE: a row's claim about what is ALREADY HANDLED is its least-tested sentence
+
+Both rows carried a reassurance, and **both reassurances were false in the direction that makes the
+fix look smaller than it is.** A filer measures the case that FAILED; the clause describing what is
+safe is written from impression, never from a probe. Test it first — it is where the scope hides.
+
+| Row | What it said was already handled | What was measured |
+|---|---|---|
+| `86488ad1c966` | *"the lint already suppresses a plain single-word case label; the ALTERNATION form is the gap"* — repeated verbatim in `tests/deploy-parity.bats:1049` | **No label suppression existed at all.** `launchd)` alone emitted identically. Single-word labels only LOOK handled because the usual ones (`githooks`, `start`, `*`) name no installed binary, so `installed_somewhere` discards them downstream. Any label naming a real binary — `install)`, `test)`, `find)`, `time)` — leaked the same. |
+| `86488ad1c966` | (implied) the defect is a false POSITIVE | The same missing state made the scanner wrong **both ways**: it reported LABELS and was **blind to every case BODY**. A bare binary invoked inside any `case` body was unreadable to this lint for its whole life. The silent half was the larger one. |
+| `5456e4cba2b5` | *"the detector should key on an INVOCATION position"* | Built and measured FIRST, then **rejected**. It drops 21 suites, one being `tests/spawn-presence.bats`, which EXTRACTS `capacity_gate` from the real script and runs it under `bash -c`. It is load-sensitive, pins with form 2, and cites the rule by name — an execution predicate leaves that pin unenforced by this lint *and* by the sibling `_fires` ratchet, which cannot see the indirection either. |
+
+**The asymmetry that decided `5456e4cba2b5`, and it generalises:** a false negative is a suite
+silently reading the live box; a false positive is one harmless `export`. So the fix stayed BROAD and
+subtracted only what is provably a SENTENCE (a name followed by two bare lowercase words). Exactly 4
+suites left scope, all prose-only, none executing anything. **When a narrowing and a subtraction both
+close a false positive, prefer the subtraction — it cannot manufacture a false negative.**
+
+**A vacuous fixture, caught by mutation and worth repeating.** `19a` was first spelled with the filed
+symptom's own words (`githooks|launchd)`). The hooks half is judged against `STOCK_PATH`, where
+`/usr/sbin/launchd` and `/usr/bin/osascript` both resolve — so that fixture is GREEN with or without
+the fix. Neutering the label state left it PASSING; only the real-tree case moved. Re-spelled with
+`shellcheck` (not on the stock floor) it discriminates. **A fixture built from the symptom's own
+vocabulary is the most likely one to be vacuous**, because the symptom's words were chosen by where
+it happened to fire, not by what the predicate keys on.
+
+**Two allowlist entries were bug residue.** `hooks/live-session-registry.sh:claude` and
+`hooks/session-start.sh:claude` — both `claude|claude-*)` case labels — existed ONLY because the
+scanner mis-read them. The stuck-entry alarm surfaced them the moment it stopped lying. **When a
+detector is fixed, read its ratchet immediately: entries minted by the defect are now stale, and the
+ratchet-only-shrinks rule makes deleting them part of landing the fix.**
+
+**THE 8 THAT REMAIN — 5 workable.** `5ef0dcb22aec` (NEXT: add `CC_ADMIT_GATE` as a second seam;
+scoping question now settled — reuse `strip_prose`, and note the naive "names a caller" scope puts
+**22 suites** in scope of which 17 are unpinned, so it ships RED on arrival unless it follows rule 5's
+idiom and grandfathers today's measured set) · `0f74f41042c5` (OBSERVED intermittent false RED on the
+landing path; `installed_somewhere` reads the caller's live `$PATH`) · `5d6dcbe8d462` (remedy
+CORRECTED earlier in this file — do NOT start from the row) · `b449e49f1438` · `cf440684e0e1` (perf,
+large). Not workable: `05ff1e5fabc0` + `782607797fc5` (mine/operator-blocked), `8efd655b0fe1`
+(instrumented; nothing to do until a cancellation happens).
+
+**Mechanics worth inheriting.** `ship-land.sh` takes **~15-20 min**; the `Bash` tool caps at 600 s and
+auto-backgrounds it — read the task output file, do not re-fire. Its smoke stage **gate-killed a suite
+on both lands** (`exit 124`, ZERO `not ok`): that is a NON-VERDICT by the gate's own words, not a red —
+run the suite yourself and carry your own verdict.
