@@ -64,6 +64,22 @@
 #      never read as one.
 # An entry here still costs coverage. Prefer fixing the suite; that is what cure (a) is for.
 
+# ── slow-fixture surface — a sweep whose REPORTED SHAPE depends on how fast the box is ──────────
+# run 31657575571: notok=1 (case 11) · also red in runs 31652700852 and 31645128003
+# MEASURED, not attributed. This suite builds 640 branches and asserts the stranded-sweep's own
+# verdict line ("on 40 of 641 local branch(es)"). It is GREEN on the operator's box and GREEN under
+# scripts/offbox-run.sh locally — the identical env -i runner — and RED on the hosted runner across
+# three consecutive runs, including after its stale-wording defect was genuinely fixed (c5f1d1d56).
+# So the off-box red survives the on-box cure, which is the definition of "does not yet produce a
+# usable off-box signal" in this file's own terms.
+# HINT (not verified): the sweep is bounded, and a bound sized on a fast box becomes a truncation on
+# a slower one, changing the line the case greps rather than failing loudly. Naming it here as a
+# hypothesis, not a cause — this list records measurements.
+# The land-time admission gate CANNOT see this class and says so in its own header: it reproduces
+# the environment axes on THIS box and not the machine axes. That is the gap this list exists for.
+# Filed for the real fix, with the hypothesis, rather than left as a permanent hole.
+tests/land-gate-cas.bats
+
 # ── terminal-emulator surface — these drive or assert a live iTerm2/kitty ────────────────────────
 # HINT (not verified): a hosted runner has no terminal application at all.
 # run 31362043861: notok=1
