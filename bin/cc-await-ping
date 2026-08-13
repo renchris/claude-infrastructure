@@ -24,9 +24,19 @@
 # (lib → mailbox_keyset). Hence the no-arg form is the one to advertise — it derives the same key
 # cc-notify resolves, then covers the rest.
 #
-# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out — the DESIGNED end of a watch that
-#           ran its term, echoed as `verdict=timeout` on stderr because the harness labels every
-#           non-zero background exit "failed" (see the exit path at the foot of this file);
+# EVERY exit says how long the watch actually held. Each verdict line on stderr carries
+# `verdict=<token> elapsed=<MEASURED wall seconds>s budget=<the --timeout you asked for>s`, and the
+# timeout path adds `term=full|short|unknown`. elapsed is a delta from a start stamp (see T0 below),
+# NEVER the configured value — it used to be $TIMEOUT, so a watcher that collapsed instantly and one
+# that held its term printed the identical string, and "was my wake path real, or was I deaf?" could
+# not be answered from this tool's own output (backlog e2903b01dfdc). `term=short` is the answer to
+# that question when it is bad news: the watch retired before its budget and you were deaf for the
+# rest. `elapsed=unknown` = no usable clock; never read it as a full term.
+#
+# Exit: 0 = new line(s) arrived (printed to stdout; `verdict=ping` on stderr); 2 = timed out — with
+#           `term=full` the DESIGNED end of a watch that ran its term, echoed as `verdict=timeout` on
+#           stderr because the harness labels every non-zero background exit "failed" (see the exit
+#           path at the foot of this file);
 #       3 = no uuid/role;
 #       4 = line(s) DELIVERED but the shared cursor could not be advanced (F9 — you WILL see this mail
 #           again; that is a dup, not a loss). Loud on purpose: a cursor-write failure that exits 0 is
@@ -47,6 +57,38 @@
 # docs/research/await-ping-exit-144-2026-08-07.md.
 # Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, CC_REGISTRY_DIR.
 set -uo pipefail
+
+# ── MEASURED, NEVER CONFIGURED (backlog e2903b01dfdc) ─────────────────────────────────────────────
+# Every verdict in this file reports `elapsed=` as a WALL-CLOCK DELTA from this stamp. It used to
+# print `elapsed=${TIMEOUT}s` — the value the CALLER PASSED IN — on the timeout path, which made the
+# one question an originator of a `--notify-back` wave actually needs answerable unanswerable from the
+# tool's own output: *was my wake path real, or was I deaf?* A watcher that collapsed instantly
+# printed the identical string as one that held for four hours, and the field is named `elapsed`, so
+# it READ as evidence the watch ran its term. MEASURED 2026-08-11: `--timeout 20` returned rc 2 after
+# 21 s wall — blocking IS genuine today and the label merely coincided. A coincidence is not
+# instrumentation, and backlog #127 records a REAL early-exit mode (exit 144 — the armed wake path
+# silently disarms), which is exactly the case the old string could not distinguish.
+#
+# Stamped HERE, before arg parsing and before the owner-guard oracles, so the delta covers the
+# watcher's WHOLE life — the same discipline scripts/worktree-gc.sh:135 stamps its own `elapsed=` by.
+# `date +%s`, not bash's SECONDS: bash 3.2-safe and unambiguously wall clock (this file already
+# shells out to `date` on every alarm path, so the fork is not new).
+T0="$(date +%s 2>/dev/null || echo 0)"
+case "$T0" in ''|*[!0-9]*) T0=0 ;; esac
+_elapsed_s() {   # MEASURED wall seconds since the stamp; -1 = unmeasurable (never a guess)
+  local now
+  [ "$T0" -gt 0 ] || { echo -1; return 0; }
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) echo -1; return 0 ;; esac
+  [ "$now" -ge "$T0" ] || { echo -1; return 0; }   # clock stepped backwards ⇒ say unknown, never lie
+  echo "$(( now - T0 ))"
+}
+# The field its readers grep. `elapsed=unknown` when no clock could answer — an unmeasurable duration
+# reported as a number is the defect this whole block exists to remove, so it is never printed as one.
+_elapsed_f() {
+  local e; e="$(_elapsed_s)"
+  if [ "$e" -lt 0 ]; then echo "elapsed=unknown"; else echo "elapsed=${e}s"; fi
+}
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
@@ -275,8 +317,8 @@ _wake_down_notice() {
   local box="$MAILBOX_DIR/${CUR_UUID}.md"
   [ -n "${CUR_UUID:-}" ] || return 0
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
-  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s) — it did NOT time out and consumed no ping. You are now DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" \
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping. You are now DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" \
     "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" \
     >> "$box" 2>/dev/null || true
   return 0
@@ -286,7 +328,7 @@ _sig_verdict() {   # <signame> <signum>
   trap - TERM HUP INT EXIT
   _unbeat
   _wake_down_notice "$1"
-  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
+  echo "cc-await-ping: verdict=killed signal=SIG$1 $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
   exit $(( 128 + $2 ))
 }
 trap '_sig_verdict TERM 15' TERM
@@ -502,7 +544,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
 
   # BEFORE any take: consuming is irreversible, so the orphan check has to gate it, not follow it.
   if _owner_dead; then
-    echo "cc-await-ping: the session that armed me [$CUR_UUID] is GONE (registry pid dead) — exiting WITHOUT consuming its mail, so the lines stay unacked for cc-inbox-guard to alarm on and for the successor's adoption to inherit" >&2
+    echo "cc-await-ping: verdict=orphaned $(_elapsed_f) budget=${TIMEOUT}s — the session that armed me [$CUR_UUID] is GONE (registry pid dead) — exiting WITHOUT consuming its mail, so the lines stay unacked for cc-inbox-guard to alarm on and for the successor's adoption to inherit" >&2
     exit 5
   fi
 
@@ -544,14 +586,24 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
             fi
           fi
         fi
-        echo "cc-await-ping: ⚠ delivered, but the shared cursor could NOT be advanced for $_HIT — you will see this mail again (a dup, never a loss); alarm recorded" >&2
+        echo "cc-await-ping: verdict=ping-cursorfail $(_elapsed_f) budget=${TIMEOUT}s — ⚠ delivered, but the shared cursor could NOT be advanced for $_HIT — you will see this mail again (a dup, never a loss); alarm recorded" >&2
         exit 4
       fi
+      # A DELIVERY IS ALSO A DURATION. The wake path's whole claim is that it was live between the arm
+      # and the ping; `elapsed=` is the only place that interval is ever stated, and a take used to say
+      # nothing at all — so a ping consumed 1 s after arming (an already-pending line, or a re-arm racing
+      # a peer) was indistinguishable from one that proved a four-hour watch. stderr, never stdout: the
+      # body on stdout is the payload and stays uncontaminated.
+      echo "cc-await-ping: verdict=ping key=$_HIT $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — mail delivered; the wake path was live for that long before it fired." >&2
       exit 0
     fi
   else
     cur="$(_lc)"
-    if [ "$cur" -gt "$baseline" ]; then tail -n +"$((baseline + 1))" "$MBOX"; exit 0; fi
+    if [ "$cur" -gt "$baseline" ]; then
+      tail -n +"$((baseline + 1))" "$MBOX"
+      echo "cc-await-ping: verdict=ping key=$CUR_UUID $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — mail delivered (no-lib line-count path); the wake path was live for that long before it fired." >&2
+      exit 0
+    fi
   fi
   sleep "$INTERVAL"
   elapsed=$((elapsed + INTERVAL))
@@ -569,7 +621,29 @@ done
 # cc-announce use for exactly this reason: the exit code is for shells, the token is for readers.
 #
 # NOT remapped to exit 0. rc 2 is load-bearing for cc-wait (:138 branches on it) and is already
-# overloaded with the usage errors at :46-52 — collapsing it would invert a contract and lose a
+# overloaded with the usage errors at :108-109 — collapsing it would invert a contract and lose a
 # distinction, to satisfy a classifier that would still be wrong about rc 3/4/5.
-echo "cc-await-ping: verdict=timeout elapsed=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived. This is the DESIGNED outcome of a watch that ran its full term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do)." >&2
+#
+# ── AND THE DURATION IS MEASURED, SO `term=` CAN BE FALSIFIED (backlog e2903b01dfdc) ───────────────
+# `elapsed=` is the wall delta from T0 (top of file), never $TIMEOUT — which is now reported beside it
+# as `budget=`, correctly labelled as the thing the caller asked for rather than the thing that
+# happened. `term=` is then a REAL discrimination between the two exits this path can be reached by:
+#   full  — the watch blocked for at least its budget. The healthy end of a 14400 s arm.
+#   short — the loop fell out having blocked for LESS. The counter driving the loop is a TICK
+#           ACCUMULATOR (+INTERVAL per pass, :609) which assumes every `sleep` slept; a sleep that
+#           returns early makes the accumulator run ahead of the clock, and the watch retires before
+#           its term with the wake path disarmed — the collapse class backlog #127 records. A caller
+#           who sees `short` was deaf for the difference and must RE-ARM.
+# The point is not the token, it is that the token is DERIVED FROM A MEASUREMENT: the old line would
+# have printed `elapsed=<budget>s` for a watcher that exited in the same second it started.
+_E="$(_elapsed_s)"
+_TERM=full
+if [ "$_E" -lt 0 ]; then _TERM=unknown; elif [ "$_E" -lt "$TIMEOUT" ]; then _TERM=short; fi
+_SHORT_NOTE=""
+if [ "$_TERM" = short ]; then
+  _SHORT_NOTE=" ⚠ term=short — this watch retired EARLY: it blocked for ${_E}s of a ${TIMEOUT}s budget, so the wake path was down for the remainder and this is an early exit wearing a timeout's clothes, NOT a completed watch. RE-ARM now, and if it repeats, the sleeps are being cut short (backlog #127's class)."
+elif [ "$_TERM" = unknown ]; then
+  _SHORT_NOTE=" ⚠ elapsed=unknown — no usable clock, so whether this watch held its term is NOT established by this line; treat it as unverified rather than as a full term."
+fi
+echo "cc-await-ping: verdict=timeout term=$_TERM $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived.${_SHORT_NOTE} A term=full outcome is the DESIGNED end of a watch that ran its term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do)." >&2
 exit 2
