@@ -465,3 +465,116 @@ unchanged; each needs operator credentials or a destructive-deletion ruling. Not
   skips. The real control is a **worktree** at the same sha, and the real cause was that the suite
   builds a fixture with a stub per anchored file — a new `@anchor` needs a new stub in the same
   commit, a coupling now documented in `tests/reaper-horizon-lint.bats` `setup()`.
+
+---
+
+## THE LOCAL DRAIN, 2026-08-13 — 8 live → 6, and BOTH closes refused the remedy their own row prescribed
+
+`filed 0 / closed 2` — net NEGATIVE, which is the bar this mission sets: filing is a deferral with a
+carrying cost, not a disposition. Condition claimed as ONE lease, so all 8 rows cost one slot.
+Non-cloud store **470 → 468** (start and end both re-derived, not quoted).
+
+| Row | Outcome |
+|---|---|
+| `412de404ecac` reaper-horizon-lint red on pristine trunk | ✅ closed — landed `846ef5661`, content-verified |
+| `f76e7d78aaac` engagement oracle | ✅ closed — landed `4ba91ad95`, content-verified |
+| `dc426ee8df11` WORKTREE MANAGEMENT V2 | ⏳ advanced (R-a + R-c landed `3554d4d7e`); its OWN falsifier still reads condition-present, so it stays open honestly |
+| `8ad4b02602dc` headless wake path | ⏳ open with a currency verdict — below |
+| 4 blocked rows | walls re-verified TODAY; **two of the four materially corrected** |
+
+🚨 **BOTH CLOSED ROWS PRESCRIBED A REMEDY THAT WAS ITSELF THE DEFECT** — the same shape twice, from
+unrelated subsystems, which is why it is the transferable finding of this pass:
+
+- `412de404ecac` asked for the two undeclared reapers to be **declared** with anchors. But
+  `reaper-horizon-lint.sh` records that exact lesson 20 lines above the site: declaring a non-reaper
+  "would have recorded two non-reapers as reviewed reapers, diluting the very list §1/§2 scan for
+  horizons". Both files only `rm` their own `mktemp` scratch while separately *reading* cc-registry.
+  §3's conjunction was over the FILE, never the delete's TARGET. Fixed per-SITE: a delete is
+  exonerated only when every path it names resolves to a `mktemp` this file assigns; literal paths,
+  unattributable variables and no-variable deletes still convict.
+- `f76e7d78aaac` asked for two named files to be wired to the oracle. `scripts/cc-upgrade-gate.sh`
+  **spawns no pane at all** (every probe is `gate_headless()` = `--print --output-format json`; zero
+  `handoff-fire`/`it2`/`osascript` sites), so wiring `cc_engaged_pane` would answer `no-registry-row`
+  and FAIL every healthy probe. `lr-fire-resume.sh` `exec expect`s at `:385` and BECOMES the session.
+  **`hooks/lib/engagement.sh`'s own header named the same wrong two files**, so the wrong target was
+  written down twice and each copy corroborated the other. The real gap was `lr-reset-poller.sh` — a
+  daemon that DOES survive its spawns and claims a **sid** before any pane exists, while the oracle
+  was **pane**-keyed. That key mismatch is the whole reason it was never wired.
+
+**Read a row's remedy as a hypothesis, never an instruction** — and when a subsystem's own source
+already argues against it, that argument outranks the row.
+
+### The measurement worth carrying past this effort (`3554d4d7e`)
+
+`tests/worktree-gc.bats` discarded `git worktree add`'s rc at **three** sites. Pointed at a
+nonexistent ref so every add fails, **22 of 79 tests still passed over a fixture that created
+nothing** — in a suite whose subject is a REAPER, where the REMOVE half asserts `[ ! -d "$p" ]` and
+an absent directory satisfies that for free.
+
+| fixture state | tests passing over a tree that creates NOTHING |
+|---|---|
+| pre-fix (all three sites swallowed) | 22 / 79 |
+| `wt()` fixed only | **17 / 79** ← the state a first commit called complete |
+| all three sites fixed | 8 / 79, all attributable |
+
+The surviving 8 build no worktree (kill-switch resolution, ref-only protection, a source-text check,
+argument-validation refusals). **A per-site defect needs a per-site fix; one site cured is not the
+class cured** — and that first commit's completeness claim had to be refuted by its own owed mutant.
+`trunk_add()` was the most dangerous of the three: it ADVANCES `origin/main`, so a silent failure
+there leaves trunk where the branches already are and every downstream "landed" predicate asserts
+against a world the test never built.
+
+### `8ad4b02602dc` — a currency verdict, not a close
+
+It IS gap #2 of the two that `CONCURRENCY_PROGRAM.md` §S6.7-MEASURED names as the reason the pty-less
+substrate was **declined**. Re-measured today: `hooks/mailbox-wake-arm.sh` already handles the ARMING
+side for stream-json (`:47-48`, `:89` — asyncRewake is dispatched when input is streaming), but no
+production WRITER exists; `mkfifo` appears in the tree only in probes and unrelated tools, never as a
+session-wake path. The gap is real and unstarted.
+
+Left open deliberately: its consumer is a **declined** substrate on a 7,461-line spawn surface the
+program itself flags as "strands real work box-wide if wrong", and building a prerequisite for
+deferred work is not a drain. **No falsifier was attached** — a probe naming the wrong future file
+would never fire and would leave the row permanently unretractable, which is the inert-mechanism
+class this effort already documents at § the content oracle. Sibling gap #1 (`cc-notify` returns
+`verdict=mailbox-only` for a LIVE headless session — a lie in the direction that retires a live
+session) is smaller and has blast radius TODAY, independent of Phase E; it is not this row.
+
+### Two blocked walls were CORRECTED, not merely re-stamped
+
+- **`1dca461d4b90` (Claude GitHub App) — its premise is no longer evidenced.** The box ships a
+  purpose-built one-directional oracle (`bin/cc-offload:104-128`): only a create that takes the
+  ~95 MiB bundle path proves the App absent, and nothing ever writes `present` from silence. Its
+  marker `~/.claude/autonomy/cloud/github-app.observed` is **absent today ⇒ state UNKNOWN, not
+  absent** — cc-offload's own comment records the operator installing the App on 2026-08-10, after
+  which a bundle-free create retracted the marker by design. The `gh api …/installation` probe the
+  prior pass ran returns 401 because that endpoint needs a GitHub App JWT: *a null from a blind
+  instrument, never an absence.* Settling it positively needs `cc-offload up`, which fires a CLOUD
+  create — out of the local drain's lane.
+- **`216f429128a2` (reso eslintcache) — the wall's stated basis is partly stale.** reso
+  `CLAUDE.md:420` still reads "push to main → auto-deploy", but
+  `aws amplify get-branch … --query branch.enableAutoBuild` returns **false** today, so the Amplify
+  half of the spend is already off. The Path F half is not resolvable from outside reso (webhook
+  626517047 active, delivered OK 04:20:39Z), and reso's own `release-status.sh` reports **DEGRADED**
+  — both regions drifted at `c8df9ba` vs expected `fa5c15b`, which is its own reason to hold. Routing
+  note: this is a reso change and belongs to `master-product-repos`; the semantic grouper joined it
+  here. (reso ships no `scripts/land-status.sh`, the tool global policy names — `deploy-status.sh` /
+  `release-status.sh` are the live ones.)
+
+The other two hold unchanged, independently re-measured: `8f4eae55a0c7` (0 rulesets, 0 in-tree
+`push --no-verify`) and `475b43aacbf2` (**73 registered vs 165 on-disk = 92 orphaned**, the same 92
+as 08-12's 79/171 — the magnitude drifts, the condition does not; `wt-pool-1`/`wt-pool-2` are
+unregistered yet hold **running** `next dev` + esbuild, so `git worktree prune` cannot reach them and
+an `rm` would kill live processes).
+
+### ⚠️ A sibling landed a competing fix for `412de404ecac` mid-flight, and the two COMPOSED
+
+`3e731e6a4` (declare-with-anchors) landed first; `846ef5661` (per-site) landed on top. `ship-land`'s
+backup-reap correctly **refused** to reap the backup ref, naming both files as "content DIFFERS from
+shipped" — which reads exactly like a rebase-drop and was not one. **Only a by-content read settles
+it:** the composed trunk carries `self_created_delete` AND the two declarations, its lint exits 0,
+and its suite is 13/13 green *on the landed tree*. This is the effort's own thesis arriving from the
+other direction — a count-shaped or warning-shaped signal said "stranded", and content said landed.
+The two declarations are now redundant and, on that file's own argument, a false review claim; left
+in place rather than re-litigated, and named here so a successor knows they are inert rather than
+load-bearing.
