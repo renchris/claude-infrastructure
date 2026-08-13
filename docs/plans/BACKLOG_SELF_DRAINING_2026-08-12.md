@@ -925,3 +925,50 @@ with its own README naming the one finding later corrected by measurement.
   SECOND reason and mutating the skip leaves the test green; and grinding the LAST commit grinds the
   one touching `bin/other-tool`, which the item does not cite, so the landed-diff conjunct rejects
   it whatever its digits. Only grinding the SUBJECT commit isolates the variable.
+
+---
+
+## THE BIGGEST SINGLE LEVER IS NOT AN EFFORT — it is the `re-land` generator (measured 2026-08-13, THE LOCAL DRAIN recycle #1)
+
+**Do not walk the ten master efforts smallest-first without reading this.** The effort order banks
+completed efforts early, which is right — but it is aimed at the wrong population. Measured against
+the live store while working effort 2:
+
+| Fact | Number |
+|---|---|
+| non-cloud open rows | **472** (was 470 at effort-2 start — it went UP while a drain was closing rows) |
+| open rows whose title starts `re-land ` | **60** — and **all 60 are non-cloud, i.e. entirely the drain's burden** |
+| distinct branches those 60 name | **26** ⇒ **34 rows are duplicates of a row already in the store** |
+| of those 26 branches, no longer existing on origin OR locally | **18** |
+| rows attributable to those 18 vanished branches | **46** |
+
+**`re-land` rows are ~12.7% of the entire non-cloud backlog, and 46 of them point at branches that
+are GONE.** For scale: the DoD is *fewer than 50 non-cloud rows total*, and this ONE auto-generated
+class is 60. **The target is arithmetically unreachable without addressing it**, however many master
+efforts get drained.
+
+**It is a live, self-feeding loop, not a historical pile.** `ship-land` mints a row on a FAILED
+sibling land, so the same stuck branch re-mints on every retry: `mcp-w3-no-inherit` ×6,
+`falsifier-emission` ×4, `claude/fire-20260812T172113Z-3600-1` ×4 (04:51 and again 05:43 while this
+was being written). In the 12 h to 2026-08-13T05:50Z, **10 of the 18 non-cloud filings were
+auto-minted re-land rows — 56%.** Lands fail because the box is saturated, so **load manufactures
+backlog faster than a drain closes it.** The predecessor measured the symptom (store 470→470 flat
+across 2 real closes); this is the generator behind it. The remedy row for the swallowed falsifier
+attach, `b15a2984d134` (`ship-land.sh:854`), is still open.
+
+🚨 **DO NOT BULK-CLOSE THE 46. "Branch GONE" has two opposite readings** and the store cannot tell
+them apart: gone-because-its-content-LANDED (the row is litter — close it) versus
+gone-because-the-work-was-LOST (the row is the only surviving pointer — closing it strands real work
+permanently, which is exactly the failure `re-land` exists to prevent). Adjudicate **per branch, by
+CONTENT**, never by a commit count and never by the branch's absence:
+`git log --all --diff-filter=A`, ref-containment, and `git ls-tree origin/main -- <paths>` per path
+(memories: `landedness-over-commits-is-blind-to-staged-content`,
+`search-branch-graveyard-before-building`, and this repo's own rule that a count reads 0 after a
+sibling rebase and proves nothing).
+
+**Recommended next action, ahead of resuming the master efforts:** (1) close the **34 duplicate**
+rows against their surviving sibling — that is pure store hygiene needing no content adjudication,
+only a same-branch match; (2) adjudicate the 18 GONE branches by content, closing the litter and
+KEEPING any whose work is genuinely unlanded; (3) only then fix the generator (`b15a2984d134`), so
+the class stops refilling. Steps 1-2 are worth up to ~46 rows — more than twice the whole of effort 2
+— and step 3 is what stops the store rising underneath every future effort.
