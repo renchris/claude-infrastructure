@@ -42,6 +42,19 @@ EOF
   # Deterministic box unless a case says otherwise: 10 cores, quiet, plenty of headroom.
   export CC_ADMIT_LOADAVG_OVERRIDE=1.0
   export CC_ADMIT_HEADROOM_OVERRIDE=64
+  # THE THIRD AMBIENT INPUT, and the two overrides above do not touch it. 450a47c50 added the
+  # operator RESERVE, which runs over an otherwise-ADMITTING box and refuses on `cc_sp_trees` — a
+  # live `ps -eo` census of session trees — plus the operator's presence. A fixtured $HOME does not
+  # absent it: _cc_admit_load_presence resolves spawn-presence.sh RELATIVE TO capacity-admit.sh's
+  # own directory first, so this suite loaded the REAL library and charged its verdicts against
+  # whatever the desk was doing. Measured 2026-08-13, two-sided: 20/20 ambient, and 17/20 under
+  # `CC_SP_TREES_OVERRIDE=999` (cases 13, 14 and P3 flip on the census alone). That is precisely the
+  # "every assertion here would flip with the mood of the machine" this file's header says the
+  # overrides exist to prevent — the header was written before the term existed and quietly stopped
+  # being true. The term is switched OFF rather than pinned because this suite has no reserve case
+  # to preserve: pinning the census instead would leave the presence read, which resolves partly off
+  # the WALL-CLOCK HOUR, so the suite would still be green at noon and unproven at 05:00.
+  export CC_ADMIT_RESERVE_TERM=off
 }
 
 # Run one evaluation in a fresh subshell so a case cannot inherit another's shell state.

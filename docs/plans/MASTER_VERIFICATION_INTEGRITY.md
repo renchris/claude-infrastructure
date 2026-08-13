@@ -494,3 +494,73 @@ large). Not workable: `05ff1e5fabc0` + `782607797fc5` (mine/operator-blocked), `
 auto-backgrounds it — read the task output file, do not re-fire. Its smoke stage **gate-killed a suite
 on both lands** (`exit 124`, ZERO `not ok`): that is a NON-VERDICT by the gate's own words, not a red —
 run the suite yourself and carry your own verdict.
+
+---
+
+## RECYCLE #3 — `5ef0dcb22aec` closed: the hermeticity lint's RULE 7 (the capacity-ADMIT gate)
+
+**What landed.** `scripts/test-hermeticity-lint.sh` gained a seventh rule — rule 2's twin at
+`scripts/lib/capacity-admit.sh` — with its own ratchet (`EMBEDDED_ADMIT_ALLOWLIST`), its own two env
+seams (`CC_HERM_ADMIT_ALLOWLIST`, `CC_HERM_ADMIT_RULE=off`), 15 new `--selftest` assertions (97 →
+112) and 13 new cases in `tests/test-hermeticity-lint.bats` (54 → 67). The shared `strip_prose` was
+generalised from a hardcoded `handoff-fire` to a parameter so the twins cannot drift.
+
+### The row's remedy was TRUE WHEN FILED and FALSE when worked — by two days
+
+The item (filed 2026-08-10) described the fix as porting rule 2's two sufficient forms with the
+names swapped: form 1 `CC_ADMIT_GATE=off`, form 2 `CC_ADMIT_LOADAVG_OVERRIDE` +
+`CC_ADMIT_HEADROOM_OVERRIDE`. `450a47c50` (2026-08-12) added a **third term** — the operator RESERVE
+— which runs over an otherwise-ADMITTING box and refuses on inputs neither override touches:
+`cc_sp_operator_state` (live presence) and `cc_sp_trees` (a live `ps -eo` census of session trees).
+A fixtured `$HOME` does not absent either: `_cc_admit_load_presence` resolves `spawn-presence.sh`
+**relative to `capacity-admit.sh`'s own directory FIRST**, so a suite pointing `$HOME` at a tmpdir
+still loads the real library.
+
+**Proven two-sided on the gate's own suite, which was in exactly the shape the row prescribed:**
+`bats tests/capacity-admit.bats` is **20/20** ambient and **17/20** under `CC_SP_TREES_OVERRIDE=999`
+(cases 13, 14 and P3 flip on the census alone). Porting form 2 verbatim would have certified the one
+suite whose subject IS this gate as PINNED while it read the live box — **a false negative minted by
+the rule that exists to prevent it.** Form 2 therefore has THREE clauses; the third is
+`CC_ADMIT_RESERVE_TERM=off` **or** `CC_SP_TREES_OVERRIDE` (the presence read behind it resolves from
+`CC_BEAT_DIR`, whose default is `$HOME`-rooted and therefore rule 1's business — rule 5's split).
+
+🚨 **This is the recycle-#2 lesson arriving through a new door, and the door is what generalises.**
+Recycle #2 found reassurance clauses that were false *as written*. This one was **true as written
+and expired**: nothing about the sentence was wrong, a sibling commit two days later made it
+incomplete, and the row has no mechanism to learn that. So the probe is not only *"is the clause
+true?"* but ***"what has the row's cited mechanism done SINCE the row was filed?"*** — one
+`git log -S <the term> --since <firstTs>` on the cited file. Same shape as
+`resident-policy-must-not-restate-perishable-facts`, one level down: a **backlog row** is also a
+resident restatement of a perishable fact.
+
+### Two corrections to this handover's own numbers, both from measuring rather than accepting
+
+| Handover said | Measured |
+|---|---|
+| 6 callers: `boot-resume-launch.sh`, `capacity-alarm.sh`, `lib/spawn-presence.sh`, `lib/worker-claim-gate.sh`, `lr-fire-resume.sh`, `hooks/agent-teams-enforce.sh` | **3 + 1.** `capacity-alarm.sh` and `lib/spawn-presence.sh` only SOURCE the library; `lib/worker-claim-gate.sh` names `CC_ADMIT_BUDGET` in a comment. None calls `cc_capacity_admit`. `handoff-fire.sh` also only sources it (for the shared `cc_hw_*` terms under `CC_FIRE_*`), so rule 2's and rule 7's populations are **disjoint by construction** — asserted in `tests/test-hermeticity-lint.bats`. |
+| "22 suites in scope, 17 unpinned — ships RED on arrival" | **20 in scope, 4 pinned, 16 violating.** The 22/17 came from the looser "names a caller" scope over the wrong caller set; a ratchet built from it would have shipped four lines no predicate could ever retire. |
+
+### The ratchet shipped at 15, not 16 — one was fixed instead
+
+`tests/capacity-admit.bats` is the one whose ambience was **measured** rather than inferred, and its
+own header already claimed the property it had lost (*"otherwise every assertion here would flip
+with the mood of the machine running the suite"* — written before the reserve term existed). One
+line (`export CC_ADMIT_RESERVE_TERM=off`) closes it: now **20/20 both ambient and under a saturated
+census**. Per the ratchet-only-shrinks rule, deleting its allowlist line was part of landing the fix.
+The other 15 are grandfathered — several are static text-analysis suites that `grep` a caller's
+SOURCE and execute nothing, a position neither `strip_comments` nor `strip_prose` can distinguish,
+and rule 2's settled asymmetry (a false negative is a suite silently reading the live box; a false
+positive is one harmless export) says keep them in and retire them one at a time.
+
+### Mutation-proved, one mutation per site
+
+| Mutant | Killed, by name |
+|---|---|
+| `references_admit` → always out of scope | 7 rule-7 assertions, zero rules-1-6 collateral |
+| rule 7 unwired from `lint_dir` | the same 7 |
+| **form 2 loses its reserve clause** (the row's remedy verbatim) | *"the two-variable form 2 counted as PINNED — the reserve term (450a47c50) is unguarded"* — **and the real-tree case independently**, which is corroborating evidence that `capacity-admit.bats` was genuinely in that state |
+| `strip_prose` → `cat` | *"a caller named only in PROSE pulled a suite INTO rule 7"* + the real-tree case |
+
+**The lint fires on its own /Users/chrisren/.claude/bin/cc-bats file** once that file names a caller — caught by the suite's own
+real-tree case, fixed the way this file fixes every such case: dogfood the pin in `setup()`, never
+grandfather the lint's own suite under its own rule.

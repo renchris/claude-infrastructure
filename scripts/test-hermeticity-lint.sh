@@ -280,6 +280,76 @@
 #   and which inherits all three: the rule caught a genuine new instance on its first run against a
 #   base it had never seen, which is the only demonstration that matters for a ratchet.
 #
+# RULE 7 (the capacity-ADMIT gate) — rule 2's TWIN at the other gate, and the same class arriving
+# through a seam rule 2 is blind to by construction. Rule 2 knows exactly one lever,
+# `CC_FIRE_CAPACITY_GATE`, because scripts/handoff-fire.sh's capacity_gate() is the only gate it was
+# written against. scripts/lib/capacity-admit.sh is a SECOND gate with its OWN namespace
+# (`CC_ADMIT_*`, deliberately separate — see that file's WHY ITS OWN NAMESPACE block), its own
+# callers, and the same failure: it reads live machine state and REFUSES with exit 9, so a suite
+# that reaches it without pinning decides its verdict on whatever the desk happens to be doing.
+#
+# THE INCIDENT THAT FILED IT (backlog 5ef0dcb22aec, 2026-08-10): tests/kitty-recovery-launch.bats
+# went red-by-LOAD three times inside a 228-test sweep and green in isolation. It drives
+# scripts/boot-resume-launch.sh, which calls cc_capacity_admit at :265. Rule 2 reported that suite
+# CLEAN throughout — it names no handoff-fire, so it was never in rule 2's scope, and rule 2's pin
+# predicate greps for a variable this gate does not read.
+#
+# 🚨 THE FILING'S REMEDY IS INCOMPLETE, AND THE GAP IS THE WHOLE REASON THIS RULE IS NOT THREE LINES
+# OF rule 2. The item describes the fix as adding `CC_ADMIT_GATE` as a second seam, i.e. rule 2's
+# two sufficient forms with the names swapped: form 1 the kill switch, form 2 the pair of
+# instrument overrides (`CC_ADMIT_LOADAVG_OVERRIDE` + `CC_ADMIT_HEADROOM_OVERRIDE`). That was TRUE
+# WHEN FILED and is false now. 450a47c50 (2026-08-12, two days later) added a THIRD term — the
+# operator RESERVE — which runs over an otherwise-ADMITTING box and can still refuse. It reads two
+# live instruments that neither override touches: cc_sp_operator_state (the operator's presence) and
+# cc_sp_trees (a live `ps -eo` census of session trees). A fixtured $HOME does not absent either;
+# _cc_admit_load_presence resolves spawn-presence.sh RELATIVE TO capacity-admit.sh's own directory
+# first, so a suite pointing $HOME at a tmpdir still loads the REAL library.
+#   Proven two-sided, on the gate's OWN suite, which pins exactly the two variables the filing names:
+#   `bats tests/capacity-admit.bats` is 20/20 green ambient, and 17/20 under
+#   `CC_SP_TREES_OVERRIDE=999` — tests 13, 14 and P3 flip on the census alone. Had form 2 been ported
+#   verbatim, this rule would have certified the one suite whose subject IS this gate as PINNED while
+#   it read the live box. That is a FALSE NEGATIVE minted by the rule that exists to prevent it, and
+#   it is the general lesson (memory reassurance-clause-is-the-untested-half): a filing's account of
+#   what is already handled is its least-tested sentence, and it errs toward making the fix look
+#   smaller.
+#
+#   A suite is compliant iff it does NOT name capacity-admit or one of its gate callers (out of
+#   scope — never flagged), or its setup()/setup_file() BODY closes the gate by one of two forms:
+#     FORM 1  `CC_ADMIT_GATE=off` — the kill switch, checked at capacity-admit.sh:373 before any
+#             term is evaluated, so one line closes all three.
+#     FORM 2  `CC_ADMIT_LOADAVG_OVERRIDE` AND `CC_ADMIT_HEADROOM_OVERRIDE` AND a reserve closure —
+#             either `CC_ADMIT_RESERVE_TERM=off` (skips the term outright) or `CC_SP_TREES_OVERRIDE`
+#             (pins the only live-machine probe inside it; the presence read behind it resolves from
+#             CC_BEAT_DIR, whose default is $HOME-rooted and therefore RULE 1's business, the same
+#             split rule 5 makes). Form 2 exists for rule 2's reason exactly: a suite whose SUBJECT
+#             is this gate cannot use form 1 without deleting what it tests. Three clauses, not two,
+#             and the third is the correction above.
+#   Per-test pinning does NOT count, for rule 1's reason verbatim.
+#
+#   SCOPE IS BARE-NAME AND DELIBERATELY BROAD, which is rule 2's settled asymmetry and not a fresh
+#   judgment: a false negative is a suite silently reading the live box, a false positive is one
+#   harmless export. So scope matches the STEM of the library or any of its three gate callers
+#   (scripts/boot-resume-launch.sh:265, scripts/limit-recover/lr-fire-resume.sh:318,
+#   hooks/agent-teams-enforce.sh:203) with comments and PROSE stripped — the shared strip_prose,
+#   which this rule generalised from rule 2's hardcoded `handoff-fire` to a parameter so the twins
+#   cannot drift. scripts/handoff-fire.sh SOURCES capacity-admit.sh but never calls the gate (it
+#   reuses only the shared cc_hw_* terms under CC_FIRE_*), so it is NOT a caller and the two rules'
+#   populations do not overlap by construction — checked, because a rule that silently duplicated
+#   rule 2's population would be measuring the same suites twice.
+#
+#   MEASURED AGAINST TRUNK before it was armed, out of this file's own predicates: 20 suites in
+#   scope, 4 pinned (3 by form 1, tests/spawn-presence.bats by form 2), 16 violating. ONE of those 16
+#   is FIXED in this diff rather than grandfathered — tests/capacity-admit.bats, because it is the
+#   one whose ambience was measured rather than inferred (20/20 green, 17/20 under
+#   CC_SP_TREES_OVERRIDE=999) and because its own header already claimed the property it had lost.
+#   The remaining 15 ship in EMBEDDED_ADMIT_ALLOWLIST under the same contract as rules 1-2 and 5 —
+#   ONLY EVER DELETE LINES.
+#   Grandfathered rather than fixed in the landing diff (rules 3, 4 and 6's better outcome) because
+#   15 suites is too wide a behavioural change to review inside a lint's own diff, and because
+#   several are static text-analysis suites that grep a caller's SOURCE and execute nothing — a
+#   position neither strip_comments nor strip_prose can distinguish, and the broad-scope asymmetry
+#   says keep them in and let the ratchet retire them one at a time.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
@@ -301,6 +371,8 @@
 #   CC_HERM_ENV_RULE=off       kill switch — disables rule 6 entirely, leaving rules 1-5 untouched
 #   CC_HERM_ENV_ROOT           overrides the repo root rule 6 derives its INHERITED-VALUE table from
 #                              (default: this script's ROOT), for CC_HERM_SEAM_ROOT's reason
+#   CC_HERM_ADMIT_ALLOWLIST    overrides rule 7's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_ADMIT_RULE=off     kill switch — disables rule 7 entirely, leaving rules 1-6 untouched
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -626,6 +698,44 @@ EMBEDDED_ENV_ALLOWLIST=""
 ENV_ALLOW="${CC_HERM_ENV_ALLOWLIST-$EMBEDDED_ENV_ALLOWLIST}"
 ENV_RULE="${CC_HERM_ENV_RULE:-on}"
 ENV_ROOT="${CC_HERM_ENV_ROOT:-$ROOT}"
+
+# ── RULE 7's ratchet: suites naming scripts/lib/capacity-admit.sh or one of its three gate callers,
+# without closing the gate in setup(). ONLY EVER DELETE LINES FROM THIS LIST. A FIFTH list rather
+# than a merge with rule 2's, for the reason rule 6's list records: the rules are independent, and
+# one shared list could only shrink when every rule was satisfied at once — and these two rules
+# genuinely disagree about several suites (tests/spawn-lineage.bats pins BOTH gates; the four `lr-*`
+# suites pin neither and are in only this one).
+# Derived AGAINST TRUNK at the last possible moment, out of this file's own predicates rather than
+# out of the survey that proposed the rule — rules 2-6's discipline, and it mattered here: a survey
+# scoped on "names a capacity-admit caller" reported 22 suites and 17 violations, against this
+# rule's measured 20 and 16, because it counted scripts/capacity-alarm.sh, scripts/lib/spawn-
+# presence.sh and scripts/lib/worker-claim-gate.sh as callers. All three merely SOURCE the library
+# or name CC_ADMIT_BUDGET in a comment; none calls cc_capacity_admit. A list built from the looser
+# instrument would have shipped four lines that no predicate can ever retire.
+EMBEDDED_ADMIT_ALLOWLIST="$(cat <<'ADMITALLOW'
+boot-resume-launch.bats
+capacity-admit-coverage.bats
+handoff-fire-capacity-gate.bats
+iterm2-appname-lint.bats
+lr-fire-resume-model-ssot.bats
+lr-handoff-close-source.bats
+lr-handoff-launcher-quoting.bats
+lr-reset-poller.bats
+lr-resume-answer-width.bats
+lr-resume-tombstone-guard.bats
+test-afunix-path-lint.bats
+typed-send-shared-discipline.bats
+unattended-path-lint.bats
+worker-claim-gate-coverage.bats
+worker-claim-gate.bats
+ADMITALLOW
+)"
+
+# Rule 7's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim —
+# lint_dir's ARITY is load-bearing on the own-scope seam. `-` not `:-`, so set-but-EMPTY means
+# "grandfather nothing".
+ADMIT_ALLOW="${CC_HERM_ADMIT_ALLOWLIST-$EMBEDDED_ADMIT_ALLOWLIST}"
+ADMIT_RULE="${CC_HERM_ADMIT_RULE:-on}"
 
 # THE EXTRACTOR'S ANCHOR, and it must exercise BOTH halves of the intersection or it cannot tell a
 # broken extractor from an empty tree. These two lines are read by nothing: the first is a literal
@@ -956,7 +1066,13 @@ code_lines() { strip_comments < "$1"; }
 # --terminal` survives (the hyphen breaks the second word), which is why spawn-lineage and
 # worker-claim-gate-coverage stay in. The bound is deliberately two words, not one: one lowercase
 # word after a path is a plausible subcommand, two is a sentence.
-strip_prose() { sed -E 's#handoff-fire(\.sh)?[[:punct:]]?[[:space:]]+[a-z]+[[:space:]]+[a-z]+#<prose>#g'; }
+#
+# PARAMETERISED as of rule 7 (2026-08-13), and by the argument this file has now made five times:
+# a hole patched in one twin and left in the other is how the fire half came to be hardened on its
+# pin side alone. Rule 7 needs the identical subtraction over four different names, and a private
+# copy of this sed is exactly the drift strip_comments exists to prevent. $1 is a lever STEM and is
+# interpolated into an ERE — every name this file passes is `[a-z-]+`, which carries no metachar.
+strip_prose() { sed -E "s#${1}(\\.sh)?[[:punct:]]?[[:space:]]+[a-z]+[[:space:]]+[a-z]+#<prose>#g"; }
 
 # Is this suite in scope for rule 2 at all? 0 = it references handoff-fire · 1 = it does not.
 # Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
@@ -981,7 +1097,7 @@ strip_prose() { sed -E 's#handoff-fire(\.sh)?[[:punct:]]?[[:space:]]+[a-z]+[[:sp
 # negative on tests/spawn-presence.bats.
 references_fire() {
   local rc code
-  code="$(code_lines "$1" 2>/dev/null | strip_prose)"
+  code="$(code_lines "$1" 2>/dev/null | strip_prose handoff-fire)"
   for _ in 1 2 3; do
     grep -qF 'handoff-fire' <<<"$code"; rc=$?
     case "$rc" in
@@ -1035,6 +1151,71 @@ is_fire_pinned() {
   done
   CHECK_FAILED=1
   echo "test-hermeticity-lint: ⛔ capacity-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
+# ── RULE 7's two predicates. Rule 2's pair with the other gate's names, the same 3-try retry, the
+# same CHECK_FAILED third state and the same two fail-SAFE directions — deliberately the same shape,
+# so the twins can be read side by side and a hole found in one can be checked for in the other.
+
+# The four stems rule 7 scopes on: the library plus its three GATE callers. Kept as one string so
+# the scope predicate and this file's header cannot drift about which callers exist. NOT
+# handoff-fire: it sources capacity-admit.sh for the shared cc_hw_* terms and evaluates them under
+# CC_FIRE_*, never calling cc_capacity_admit — that is rule 2's population, and overlapping the two
+# would double-count the same suites under two rules with two remedies.
+ADMIT_STEMS="capacity-admit boot-resume-launch lr-fire-resume agent-teams-enforce"
+
+# Is this suite in scope for rule 7 at all? 0 = it names the gate or a gate caller · 1 = it does not.
+# Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
+# COMMENT-STRIPPED and PROSE-STRIPPED through the SHARED filters, for references_fire()'s reasons
+# verbatim: a suite that only NAMES a tool in a comment executes nothing, and neither does one
+# handling the name inside a sentence. Textual by design, with rule 2's accepted floor — a suite
+# reaching the gate only through some other wrapper is not matched.
+references_admit() {
+  local rc code stem
+  code="$(code_lines "$1" 2>/dev/null)"
+  for stem in $ADMIT_STEMS; do code="$(printf '%s\n' "$code" | strip_prose "$stem")"; done
+  for _ in 1 2 3; do
+    grep -qE 'capacity-admit|boot-resume-launch|lr-fire-resume|agent-teams-enforce' <<<"$code"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ admit-scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate an AMBIENT violation
+}
+
+# 0 = closes the capacity-ADMIT gate in setup() · 1 = does not.
+# Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation. Comment-stripped through
+# setup_statements(), so a setup() that merely DOCUMENTS the pin does not read as pinned — the
+# prose-match regression rule 3 was proven vacuous by, and rule 2 was retrofitted against.
+#
+# THREE CLAUSES IN FORM 2, and the third is this rule's whole reason for existing separately from a
+# name-swap of is_fire_pinned — see RULE 7's header. The operator RESERVE term (450a47c50) runs over
+# an otherwise-admitting box and refuses on a live `ps` census that neither instrument override
+# touches. Either spelling closes it: CC_ADMIT_RESERVE_TERM=off skips the term before the presence
+# read, and CC_SP_TREES_OVERRIDE pins the census itself.
+is_admit_pinned() {
+  local rc st
+  for _ in 1 2 3; do
+    st="$(setup_statements "$1")"
+    printf '%s\n' "$st" | grep -qF 'CC_ADMIT_GATE=off'; rc=$?
+    if [ "$rc" -eq 1 ] \
+       && printf '%s\n' "$st" | grep -qF 'CC_ADMIT_LOADAVG_OVERRIDE=' \
+       && printf '%s\n' "$st" | grep -qF 'CC_ADMIT_HEADROOM_OVERRIDE=' \
+       && { printf '%s\n' "$st" | grep -qF 'CC_ADMIT_RESERVE_TERM=off' \
+            || printf '%s\n' "$st" | grep -qF 'CC_SP_TREES_OVERRIDE='; }; then rc=0; fi
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ admit-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
   return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
 }
 
@@ -1335,6 +1516,7 @@ lint_dir() {
   local seam_text="" seam_setup="" seam_why="" s_tool s_var s_cls s_def
   local env_allow="$ENV_ALLOW" env_leak=0 env_stuck=0
   local env_text="" env_setup="" env_why="" env_seen="" e_tool e_var
+  local admit_allow="$ADMIT_ALLOW" admit_leak=0 admit_stuck=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
@@ -1411,6 +1593,33 @@ lint_dir() {
           fire_leak=$((fire_leak + 1))
         else
           printf '  ambient? %s does not pin CC_FIRE_CAPACITY_GATE=off (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
+    # ── RULE 7, applied INDEPENDENTLY of rules 1-6 and placed HERE rather than after rule 6 so it
+    # sits beside the twin it was cloned from. ONLY to suites naming capacity-admit or a gate caller;
+    # a suite that never reaches that gate is out of scope and must never appear here — that scoping
+    # is the whole reason references_admit() exists. Rule 2's population and this one are disjoint by
+    # construction (handoff-fire is not a caller), so a suite listed under both is genuinely
+    # violating both, not double-counted.
+    if [ "$ADMIT_RULE" = on ] && references_admit "$f"; then
+      if is_admit_pinned "$f"; then
+        if in_allowlist "$base" "$admit_allow"; then
+          if in_own "$base" "$own" "$own_scoped"; then
+            printf '  RATCHET-ADM  %s closes the capacity-admit gate now — delete its ADMIT allowlist line\n' "$base"
+            admit_stuck=$((admit_stuck + 1))
+          else
+            printf '  ratchet-adm? %s closes the admit gate but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$admit_allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  AMBIENT  %s: setup() does not close capacity-admit — its gate reads live load, memory and session census\n' "$base"
+          admit_leak=$((admit_leak + 1))
+        else
+          printf '  ambient? %s does not close capacity-admit (NOT in your diff — advisory, not blocking)\n' "$base"
           other=$((other + 1))
         fi
       fi
@@ -1574,6 +1783,21 @@ EOF
     echo "test-hermeticity-lint: ⛔ $fire_stuck suite(s) above pin the capacity gate but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_FIRE_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
+  if [ "$admit_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $admit_leak suite(s) above reach scripts/lib/capacity-admit.sh against AMBIENT machine state."
+    echo "  WHY: that gate refuses with exit 9 above ${CC_ADMIT_MAX_LOAD_PER_CORE:-2.0}/core, below"
+    echo "       ${CC_ADMIT_MIN_HEADROOM_GB:-4}GB reclaimable, or — since 450a47c50 — when a LIVE \`ps\` census of"
+    echo "       session trees plus the operator's presence says autonomy must yield. This box trips all"
+    echo "       three, so the suite goes red-by-desk, not by its subject (backlog 5ef0dcb22aec:"
+    echo "       tests/kitty-recovery-launch.bats, red 3x in a 228-test sweep and green in isolation)."
+    echo "  Fix: in setup(), \`export CC_ADMIT_GATE=off\`. If the gate IS your subject, pin all three"
+    echo "       terms instead: CC_ADMIT_LOADAVG_OVERRIDE + CC_ADMIT_HEADROOM_OVERRIDE + either"
+    echo "       CC_ADMIT_RESERVE_TERM=off or CC_SP_TREES_OVERRIDE. Do NOT add to the admit allowlist."
+  fi
+  if [ "$admit_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $admit_stuck suite(s) above close the capacity-admit gate but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_ADMIT_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
   if [ "$orphan_leak" -gt 0 ]; then
     echo "test-hermeticity-lint: ⛔ $orphan_leak suite(s) above drive the orphaned-pane close leg against an AMBIENT arming lever."
     echo "  WHY: ~/.zshrc sources ~/.claude/autonomy/watchdog.env, which exports LCW_ORPHAN_CLOSE=1, so"
@@ -1614,7 +1838,7 @@ EOF
     echo "test-hermeticity-lint: ⛔ $env_stuck suite(s) above pin their inherited-value seams but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ENV_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck)) -eq 0 ] || return 1
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
   local fire_note orphan_note
@@ -1639,7 +1863,13 @@ EOF
   else
     env_note="inherited-value rule OFF (CC_HERM_ENV_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, 0 new leaks."
+  local admit_note
+  if [ "$ADMIT_RULE" = on ]; then
+    admit_note="$(printf '%s\n' "$admit_allow" | grep -c .) grandfathered (capacity-admit gate)"
+  else
+    admit_note="capacity-admit rule OFF (CC_HERM_ADMIT_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, $admit_note, 0 new leaks."
   return 0
 }
 
@@ -1814,6 +2044,100 @@ setup() {
 }
 # NOTE: unlike the watchdog, this suite never passes --close-panes.
 @test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  # ── RULE 7 fixtures. Rule 2's set with the other gate's names, and every one is $HOME-hermetic AND
+  # names no handoff-fire, so a rule-7 verdict can be neither rule 1 nor rule 2 leaking through: the
+  # only axis that varies is the capacity-admit reference and its closure. `noadmit` is byte-
+  # identical to `admitleak` MINUS the reference — the scope control, without which every assertion
+  # below would be consistent with a rule that reds on everything.
+  mkdir -p "$d/noadmit" "$d/admitleak" "$d/admitpin" "$d/admitform2" "$d/admitform2short" \
+           "$d/admitpertest" "$d/admitcomment" "$d/admitproseonly"
+  cat >"$d/noadmit/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/admitleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/boot-resume-launch.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/admitpin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ADMIT_GATE=off
+  SUBJECT="$REPO/scripts/boot-resume-launch.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  # FORM 2, complete: both instrument overrides AND a reserve closure. The suite whose SUBJECT is the
+  # gate cannot use form 1 without deleting what it tests, so this path has to exist and has to pass.
+  cat >"$d/admitform2/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0
+  export CC_ADMIT_HEADROOM_OVERRIDE=64
+  export CC_ADMIT_RESERVE_TERM=off
+  LIB="$REPO/scripts/lib/capacity-admit.sh"
+}
+@test "x" { run bash -c '. "$1"; cc_capacity_admit x y' _ "$LIB"; }
+F
+  # 🚨 THE CONTROL THAT PINS THIS RULE'S ONE CORRECTION, and the only assertion here whose absence
+  # would silently return rule 7 to the filing's remedy. This fixture is admitform2 MINUS the reserve
+  # closure — i.e. EXACTLY what backlog 5ef0dcb22aec prescribed, and exactly what
+  # tests/capacity-admit.bats does today. It must go RED. Measured, not argued: that real suite is
+  # 20/20 ambient and 17/20 under CC_SP_TREES_OVERRIDE=999, so a rule certifying this shape as pinned
+  # would mint a false negative on the one suite whose subject IS this gate. If a later hand
+  # "simplifies" form 2 back to two clauses to match the sibling rule, this is what stops it.
+  cat >"$d/admitform2short/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0
+  export CC_ADMIT_HEADROOM_OVERRIDE=64
+  LIB="$REPO/scripts/lib/capacity-admit.sh"
+}
+@test "x" { run bash -c '. "$1"; cc_capacity_admit x y' _ "$LIB"; }
+F
+  cat >"$d/admitpertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/boot-resume-launch.sh"
+}
+@test "a" { CC_ADMIT_GATE=off run bash "$SUBJECT" --dry-run; }
+@test "b" { run bash "$SUBJECT" --dry-run; }
+F
+  # Rule 2's PIN-side prose control, cloned: a setup() that merely DOCUMENTS the pin is not pinned.
+  cat >"$d/admitcomment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # NOTE: the admit gate is closed with CC_ADMIT_GATE=off — but this suite never does it.
+  SUBJECT="$REPO/scripts/boot-resume-launch.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  # SCOPE-side control for the shared strip_prose, now that it is parameterised. This suite drives
+  # some other tool and handles the caller's name only inside a SENTENCE it carries as data — the
+  # tests/cc-eligible-history.bats shape that convicted a suite for a fixture title. It must be OUT
+  # of scope, and it is the only fixture here that exercises the generalisation itself.
+  cat >"$d/admitproseonly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+  ROW_TITLE="patch boot-resume-launch so the resume inherits the goal"
+}
+@test "x" { run bash "$SUBJECT" --dry-run "$ROW_TITLE"; }
 F
   cat >"$d/firepertest/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
@@ -2290,6 +2614,13 @@ F
   # SUBSHELL, against the FIXTURE tool root, so nothing leaks either way.
   ENV_RULE=off
   ENV_ALLOW=""
+  # Rule 7's knobs, pinned ON+empty like its twin rule 2 rather than OFF like rules 5-6, and the
+  # difference is the same one that decided rules 2-3: rule 7's scope is four NAMED stems, and no
+  # rules-1-6 fixture names any of them, so an ON rule 7 cannot convict a fixture whose subject is
+  # another rule. Verified by running the selftest with this pin in place — the entrypoint cases
+  # therefore need no `CC_HERM_ADMIT_RULE=off` companion, unlike rules 5 and 6's.
+  ADMIT_RULE=on
+  ADMIT_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -2303,15 +2634,17 @@ F
   ORPHAN_ALLOW="$EMBEDDED_ORPHAN_ALLOWLIST"
   SEAM_RULE=on; SEAM_ALLOW="$EMBEDDED_SEAM_ALLOWLIST"; SEAM_ROOT="$ROOT"
   ENV_RULE=on; ENV_ALLOW="$EMBEDDED_ENV_ALLOWLIST"; ENV_ROOT="$ROOT"; ENV_TABLE_ROOT=""
+  ADMIT_ALLOW="$EMBEDDED_ADMIT_ALLOWLIST"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
   FIRE_ALLOW=""
   ORPHAN_ALLOW=""
   SEAM_RULE=off; SEAM_ALLOW=""
   ENV_RULE=off; ENV_ALLOW=""
+  ADMIT_ALLOW=""
   case "$rc_real" in
     0) ;;
     2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
-    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate, orphan-close and/or inherited-value) — the real tree is not clean"; fails=1 ;;
+    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate, orphan-close, inherited-value and/or capacity-admit) — the real tree is not clean"; fails=1 ;;
   esac
   # ── RULE 3's four-way discrimination. Each assertion is paired with the one that proves it fired
   # for the RIGHT reason: red without the scope control is a rule that reds on everything.
@@ -2431,6 +2764,44 @@ F
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   # (z) the kill switch turns rule 2 off — and ONLY rule 2 (rule 1 still judges the same tree).
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+
+  # ── RULE 7 (the capacity-ADMIT gate) — rule 2's discrimination set at the other gate, plus one
+  # case rule 2 has no analogue for: the SHORT form 2, which is the filing's own remedy and must go
+  # RED. Every RED below is paired with the GREEN that proves it fired for its own reason. ────────
+  # (a7) RED: a suite driving a capacity-admit caller without closing the gate. The rule is not inert.
+  lint_dir "$d/admitleak" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an UNPINNED capacity-admit suite did not go RED (rule 7 is inert)"; fails=1; }
+  # (b7) GREEN: form 1 — the identical suite plus the one-line kill switch. The fix the RED prescribes.
+  lint_dir "$d/admitpin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning CC_ADMIT_GATE=off in setup() did not go GREEN"; fails=1; }
+  # (c7) GREEN: form 2 complete — both instrument overrides AND a reserve closure.
+  lint_dir "$d/admitform2" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite closing all THREE admit terms did not go GREEN — form 2 is unreachable"; fails=1; }
+  # (d7) 🚨 RED: form 2 MINUS the reserve closure — backlog 5ef0dcb22aec's remedy verbatim, and what
+  #      tests/capacity-admit.bats does today. Proven ambient two-sided: that suite is 20/20 green and
+  #      17/20 under CC_SP_TREES_OVERRIDE=999. This is the one assertion whose loss returns rule 7 to
+  #      a false negative on the very suite whose subject is this gate.
+  lint_dir "$d/admitform2short" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: the two-variable form 2 counted as PINNED — the reserve term (450a47c50) is unguarded"; fails=1; }
+  # (e7) SCOPE CONTROL: byte-identical to admitleak minus the reference. Without it every case above
+  #      is consistent with a rule that reds on everything.
+  lint_dir "$d/noadmit" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite naming no capacity-admit caller went RED (rule 7 fires on everything)"; fails=1; }
+  # (f7) RED: a per-TEST close leaves every OTHER test reading the live box — rule 1's reason verbatim.
+  lint_dir "$d/admitpertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a per-TEST CC_ADMIT_GATE counted as pinned"; fails=1; }
+  # (g7) RED: a setup() COMMENT that merely names the pin — rule 3's prose regression, two rules on.
+  lint_dir "$d/admitcomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming CC_ADMIT_GATE=off counted as pinned — rule 7 is matching prose"; fails=1; }
+  # (h7) GREEN: the SCOPE half of the same discipline — a caller named only inside a sentence the
+  #      suite carries as DATA. This is the only case that exercises strip_prose's generalisation, so
+  #      it is also the proof that parameterising it did not silently disarm the subtraction.
+  lint_dir "$d/admitproseonly" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a caller named only in PROSE pulled a suite INTO rule 7 — strip_prose is not parameterised correctly"; fails=1; }
+  # (i7) the ratchet, both directions.
+  ADMIT_ALLOW="zz-fixture.bats"
+  lint_dir "$d/admitleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered unclosed admit suite did not go GREEN"; fails=1; }
+  lint_dir "$d/admitpin"  "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a closed-but-still-grandfathered suite did not go RED (admit ratchet is not shrinking)"; fails=1; }
+  ADMIT_ALLOW=""
+  # (j7) own-scope, both ways — a violation OUTSIDE the diff advises, INSIDE it blocks.
+  lint_dir "$d/admitleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an admit violation OUTSIDE the own-set blocked"; fails=1; }
+  lint_dir "$d/admitleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an admit violation INSIDE the own-set did not block"; fails=1; }
+  # (k7) entrypoint parity for both env seams, all three directions — rule 2's (y)/(z) verbatim.
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_ADMIT_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_ADMIT_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="zz-fixture.bats" CC_HERM_ADMIT_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ADMIT_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_ADMIT_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ADMIT_RULE=off did not disable rule 7"; fails=1; }
 
   # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
   # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
@@ -2618,7 +2989,7 @@ F
   ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="" CC_HERM_ENV_RULE=off "$SELF" "$d/r6leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ENV_RULE=off did not disable rule 6"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 97/97 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 112/112 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
