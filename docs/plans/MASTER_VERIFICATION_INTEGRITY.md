@@ -766,3 +766,78 @@ pass. When a fix's value is only visible across environments, do not look for on
 **Also fixed in passing:** the suite header restated "--selftest with 18 cases". It read 27 before
 this land. The number is now DELETED rather than updated — a resident restatement of a perishable
 fact has no path to learn it changed (memory: `resident-policy-must-not-restate-perishable-facts`).
+
+### `5d6dcbe8d462` — CLOSED (`da4054e3d`). What the corrected spec got right, and what it still got wrong
+
+The plan's AST spec was right to reject the `--check-anchors` port and right about both rot routes.
+**Both of its literal spellings were still wrong, and one command each disproved them:**
+
+| spec as written | measured | corrected |
+|---|---|---|
+| walk `g.<NAME>` attribute accesses | 1 of 66 is a **Store** — case 1 installs `g.assert_nothing_calls_me` on purpose | `ast.Load` context only ⇒ 65 reads, 0 stale |
+| `want` still appears in gen.py | **5 of 37** wants span an f-string interpolation (`found {n} of {m} vertices`) | match against literals **and f-string constant fragments**, in word order within one literal ⇒ 0 unreachable |
+
+Both would have shipped a check that convicts true cases on day one. **Measure a predicate against the
+real corpus before wiring it, even when the design is already agreed** — the spec is a hypothesis
+about the tree, and this tree falsified two of them.
+
+🚨 **THE FIND WORTH MORE THAN THE ROW — the census could not catch what it was built to catch, and
+DOCUMENTING the fix disarmed it.** `tests/anti-vacuity-contract.bats`'s CENSUS prints *"Each must be
+invoked by a case … not merely mentioned in a comment"* and then ran
+`grep -q -- "$b" "$BATS_TEST_FILENAME"` **over the whole file**. Measured: delete the new
+banner-gate-redproof case and the census stays **GREEN**, satisfied by the four comment mentions in
+the paragraph explaining the harness. The gradient is perverse and worth stating as a rule:
+
+> **The more carefully a harness is documented inside its own census file, the more thoroughly its
+> census entry is disarmed.** Prose about a subject is indistinguishable from wiring to any check
+> that greps the file rather than its executable lines.
+
+Cure: strip comment lines before the grep — which is only what the failure message already claimed.
+(memory: `contract-prose-can-understate-the-mechanism`, inverted — here the prose OVERSTATED it.)
+
+**And the hardening itself shipped as a silent NO-OP first.** The literal shell-escaping sequence
+`'"'"'` was written into the .bats file rather than used to build a command line, so grep's pattern
+became garbage, `grep -v` stripped nothing, and the census behaved exactly as before. It read as a
+fix, the suite stayed green, and only the mutant caught it. **A guard whose repair you cannot see
+fail has not been repaired.**
+
+**Mutation caught THREE distinct things this recycle** — a vacuous suite case, a mis-targeted mutant,
+and a no-op fix. None was visible from a green suite.
+
+### NEXT ROW — `b449e49f1438`, TRIAGED IN FULL, not started
+
+**Q2 answered, and it moved the work: the row's own list is STALE BY ONE.** Of the three "guarded,
+silently vacuous" siblings, `tests/session-start-mcp-probe.bats` **has already been fixed** (2 commits
+since `firstTs` 2026-08-11T19:20:09Z; its control now opens *"PINNED SHA, NOT `origin/main`. This
+control replayed origin/main, which MOVES…"*). Two remain:
+
+```
+tests/compressor-sentinel.bats:50    git -C "$REPO" show origin/main:scripts/compressor-sentinel.sh … || true
+tests/ignition-gate-census.bats:55   git -C "$REPO" show origin/main:bin/cc-ignition-gate > "$PRE" … || true
+```
+
+**The deferral reason has EXPIRED, and own-scoping is why.** The row parked itself because *"the lint
+would red 3 currently-green suites and block every concurrent lander in the live dispatch wave."*
+Every comparable lint in this repo is already own-scoped — `→ gate: X own-scope — blocking on N
+file(s) in this land's diff; others advisory` — so a lint built to that established pattern blocks
+nobody who does not touch these files, and the stated F1 downside simply does not arise. There are
+other live sessions (measured: `wt-pool-2`, `wave-w4-stranded`, `wt-pool-5`), so the concern was not
+imaginary; own-scope dissolves it rather than out-waiting it.
+
+**PRE-MEASURED FOR THE DETECTOR — the comment/code split the row names is NOT sufficient.** The
+census over `tests/*.bats` returns three hits, and the third is innocent for a reason the row does
+not anticipate:
+
+```
+tests/cc-dispatch-projects.bats:359   grep -q "git show origin/main:<path>" "$C/brief-proj-b-1.txt"
+```
+
+That is the moving-ref phrase **inside a string being asserted about**, on a fully executed line. So
+the discriminator is not comment-vs-code but **invocation vs mention**: the defect is `git … show
+<moving-ref>:<path>` in COMMAND position, not the characters appearing on an executed line. Build the
+detector against all three and require it to flag exactly two — a lint that flags 3 is as wrong as
+one that flags 0, and this file is the positive control for the too-wide direction.
+
+**Each of the two also needs the second half:** an immutable pin AND a **pre-fix MARKER assertion**.
+The pin alone still goes vacuous if the sha is ever re-pointed; the marker grep is precisely what made
+`capacity-alarm-permb` fail LOUDLY rather than silently.
