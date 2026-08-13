@@ -1325,13 +1325,15 @@ cmd_add() {
     # THREE THINGS IT WILL NOT TOUCH, each for its own reason:
     #   * a DONE row — its title is the history of finished work, and re-wording it would rewrite
     #     what the evidence above refers to. The loud warning stands and nothing is written.
-    #     SECOND REASON, measured, and it is why this exclusion must not later be "improved" away:
-    #     `bin/cc-value:179` folds status as the RAW EVENT (`.[$r.id] = {status: $r.event}`), so the
-    #     LAST event on a row IS its status to that reader, and `tasks_closed` counts only `done`.
-    #     An `update` on a done row would therefore delete it from the fleet's closed-work metric.
-    #     That defect is pre-existing and already filed — `venue` masks 241 done rows this way today
-    #     — but excluding done rows here means this event adds nothing to it (verified: 1 masked row
-    #     on the live store, from an earlier hand sweep, and 0 from this arm).
+    #     SECOND REASON — DISCHARGED 2026-08-13, recorded because it is the reason a future reader
+    #     will find in the plan docs and think still binds. `bin/cc-value`'s `tasks_closed` used to
+    #     fold status as the RAW EVENT (`.[$r.id] = {status: $r.event}`), so the LAST event on a row
+    #     WAS its status to that reader and an `update` on a done row would have deleted it from the
+    #     fleet's closed-work metric (`venue` was masking 241 rows that way). That fold now keys
+    #     status on `done|block|unblock|claim|reopen` and carries it — and the ts — through
+    #     otherwise, matching this arm, so a non-status record no longer masks anything.
+    #     THE EXCLUSION STAYS ON THE FIRST REASON ALONE, which never depended on cc-value: a done
+    #     row's title is the history its evidence refers to.
     #   * `project` and `condition` — both are IDENTITY (they are in the id hash). Changing either
     #     would mean this is a different row, and the caller must say so by using a different key.
     #   * a field the caller did not pass, or passed unchanged — an update that writes on every call

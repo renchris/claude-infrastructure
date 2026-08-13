@@ -173,11 +173,37 @@ commit_uuids() {
 tasks_closed() {
   local since_epoch="$1"
   [ -f "$BACKLOG" ] || { echo 0; return 0; }
-  # valid records only (has id+event); fold last-event-wins; keep done-in-window.
+  # valid records only (has id+event); fold last-STATUS-event-wins; keep done-in-window.
+  #
+  # THE STATUS IS A STATE MACHINE OVER A SUBSET OF THE EVENTS, NOT THE EVENT ITSELF. This fold used
+  # to read `.[$r.id] = {status: $r.event, ts: $r.ts}`, i.e. it took the raw event AS the status —
+  # so ANY later record on a done row (`link`, `venue`, `update`, `falsify`, `add`) overwrote "done"
+  # with a value that is not a status at all, and the row silently left the fleet's closed-work
+  # metric. Measured 2026-08-11 on the live store: 1311 counted vs 1312 real, and `venue` alone was
+  # masking 241 done rows. The other three folds in this repo (cc-backlog's `status:` arm,
+  # backlog-ratchet.sh, backlog-consolidation-trigger.sh) all carry status through an else-arm;
+  # only this one did not. The vocabulary below is cc-backlog's, deliberately, so the two folds
+  # diff cleanly — a new event member landing in someone's default arm is this repo's recurring
+  # defect, and here the default arm is the one that CARRIES STATE THROUGH.
+  #
+  # 🚨 THE `ts` MUST BE STAMPED BY THE SAME ARM, and fixing only the status half makes this metric
+  # WORSE, not better — verified before this change landed. `ts` is read below as THE DONE
+  # TRANSITION's clock ("done-ts ≥ since"). If a non-status record restamped it, then the moment
+  # status stopped being clobbered every one of those 241 venue-masked rows would read `done` with
+  # the VENUE SWEEP's timestamp — a pile of work finished months ago all landing in today's window
+  # at once. Under-count became over-count. So a non-status record carries the WHOLE prior entry
+  # forward, ts included: it is an annotation about the work, not something happening to it.
   jq -R 'fromjson? // empty' "$BACKLOG" 2>/dev/null | jq -s --argjson since "$since_epoch" '
     ( reduce .[] as $r ({};
         select($r|has("id") and has("event")) as $_ |
-        .[$r.id] = { status: $r.event, ts: ($r.ts // "") } ) )
+        ( .[$r.id] // {status: "open", ts: ""} ) as $p |
+        ( if   $r.event == "done"    then "done"
+          elif $r.event == "block"   then "blocked"
+          elif $r.event == "unblock" then "open"
+          elif $r.event == "claim"   then "claimed"
+          elif $r.event == "reopen"  then "open"
+          else null end ) as $st |
+        .[$r.id] = (if $st == null then $p else {status: $st, ts: ($r.ts // $p.ts)} end) ) )
     | [ to_entries[] | select(.value.status == "done")
         | (.value.ts | (fromdateiso8601? // 0)) | select(. >= $since) ]
     | length' 2>/dev/null || echo 0
@@ -362,6 +388,13 @@ run_selftest() {
     "$REPO" "$$" "$(( T - 60 ))" > "$TEL/uuid-AAA.json"
 
   # fixture backlog: one done in-window, one done-then-reopened (NOT closed), one done out-of-window.
+  #
+  # i4 and i5 are the two halves of the RAW-EVENT-AS-STATUS defect (see tasks_closed), and they must
+  # BOTH stay: each one is red against a different wrong fold, so together they pin the only correct
+  # one. i4 (done, then a `link`) reads NOT-closed under the old raw-event fold — the under-count.
+  # i5 (done long ago, then a `venue` sweep stamped today) reads closed-TODAY under a status-only
+  # half-fix that lets any record restamp `ts` — the over-count that replaces it. Expected tasks == 2
+  # (i1, i4): naive fold answers 1, status-only half-fix answers 3.
   local BL="$tmp/backlog.jsonl"
   {
     printf '{"id":"i1","event":"add","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
@@ -369,6 +402,10 @@ run_selftest() {
     printf '{"id":"i2","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i2","event":"reopen","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
     printf '{"id":"i3","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$OUT")"
+    printf '{"id":"i4","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i4","event":"link","ts":"%s","condition":"c"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i5","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$OUT")"
+    printf '{"id":"i5","event":"venue","ts":"%s","venuePlan":"local"}\n' "$(epoch_to_iso "$IN")"
   } > "$BL"
 
   # accounts fixture: 'next' at 20% 5h (spends), 'next3' at 12% 5h (spends, no commits → churn cand).
@@ -392,8 +429,10 @@ run_selftest() {
   check "2 in-window commits counted; OUT excluded"        '.fleet.commits==2'
   check "1 commit attributed to next (uuid join)"          '(.accounts[]|select(.acct=="next")|.commits)==1'
   check "1 commit left UNATTRIBUTED (trailerless)"          '.fleet.commits_unattributed==1'
-  check "1 task closed in-window (reopen+OUT excluded)"     '.fleet.tasks==1'
-  check "fleet value = commits+tasks = 3"                   '.fleet.value==3'
+  check "2 tasks closed in-window (reopen+OUT excluded)"     '.fleet.tasks==2'
+  check "done-then-link still reads CLOSED (raw-event fold ⇒ 1)"        '.fleet.tasks==2'
+  check "venue on an OLD done does NOT restamp into window (⇒ 3)"       '.fleet.tasks==2'
+  check "fleet value = commits+tasks = 4"                   '.fleet.value==4'
   check "value>0 ⇒ fleet NOT churn"                         '.fleet.churn==false'
   check "next3 spends 12% + 0 commits + 0 fleet? — NOT (fleet closed a task)"  '(.accounts[]|select(.acct=="next3")|.churn)==false'
   check "session uuid-AAA reads its own 1 commit"           '(.sessions[]|select(.sid=="uuid-AAA")|.commits)==1'
