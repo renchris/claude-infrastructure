@@ -1074,3 +1074,43 @@ will not follow.
 **Session totals:** closed **22**, reopened **1**, filed **1**. Non-cloud store **470 → 454**. Every
 surviving `re-land` row now carries a per-sha content verdict, and every close names the shas it
 rests on.
+
+### BUG #4 and the final verdict: 34 of the 43 remaining `re-land` rows protect GENUINELY UNLANDED work
+
+A fourth instrument bug was caught **before** it closed anything, and it is the subtlest of the four.
+The patch-equivalence arm was written as *"landed if `git cherry origin/main <sha> | grep -q '^-'`"* —
+i.e. **landed if ANY commit is upstream.** But `git cherry` lists **every** commit from the merge-base,
+marking each `-` (equivalent upstream) or `+` (missing). A five-commit branch with one landed commit
+would clear on the strength of that one. **Correct test: no `+` line at all.**
+
+Tightening it **flipped three branches from LANDED to UNLANDED** — `audit-tests` (2/2 missing),
+`wave-offbox-green` (3/4), `wt-6110fc45141e` (3/3) — which would have been **six more false closes**
+on top of the one already made and reopened.
+
+**The four bugs, as a checklist for anyone re-deriving this** (each returned a confident wrong answer):
+
+1. `for-each-ref 'refs/land/failed/*-<branch>'` — git's `*` does not cross `/` ⇒ slashed branches read as **no pins at all**.
+2. literal suffix match — the refs **sanitise `/`→`-`** ⇒ the literal name can never appear.
+3. checking only the **final** pinned head — a retry loop pins a different sha per attempt and an amend can orphan an earlier one ⇒ check **every distinct** sha.
+4. `git cherry … | grep '^-'` — clears a branch on ONE landed commit ⇒ require **no `+`**.
+
+Plus the gate that makes the whole thing trustworthy: **a POSITIVE CONTROL on the matcher** (a branch
+known to have pins must return >0) — because an empty match and a true absence are otherwise
+identical, which is what produced the false close.
+
+**FINAL VERDICT over the 43 rows / 19 branches:**
+
+| | Rows | Disposition |
+|---|---|---|
+| **LANDED** — every sha fully upstream | **9** | CLOSED (`claude/fire-20260812T040633Z-32515-1`, `deskless`, `land-arch-p0-selfmeasure`, `local-drain`) |
+| **UNLANDED** — at least one sha missing from trunk | **34** | 🚨 **KEPT.** These are not litter. They are the surviving pointers to real stranded work across 15 branches, including three live `claude/fire-*` branches carrying **14, 6 and 3** missing commits. |
+
+**So the class inverts the intuition it started with.** The opening hypothesis was *"60 auto-generated
+rows, mostly duplicate noise, worth ~46 easy closes."* Measured: **26 of 60 were litter and closed;
+34 remain and every one is protecting work that is genuinely not on trunk.** The `re-land` mechanism
+is doing its job — the store is **under**-reporting stranded work, not padding the count. The thing to
+fix is the generator's *precondition* (`b15a2984d134` — test containment before filing), not the rows.
+
+**Session totals:** closed **31**, reopened **1** (a false close, caught and retracted), filed **1**
+(operator-gated). Non-cloud store **470 → 446**. `re-land` rows **60 → 34**. Every close names the
+shas it rests on; not one rests on a count, a subject line, or a branch's absence.
