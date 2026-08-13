@@ -367,3 +367,40 @@ while the pre-existing cases still pass).
   Not implemented this session: it is a per-case AST pass plus a census-scope decision in a subsystem
   (banner/SVG build) this session had no other reason to touch, and half-building it would leave a
   flag that returns 0 unconditionally — worse than the current honest gap.
+
+- **2026-08-13 — `tests/autonomy-sweep.bats` HANGS, and it is ORDER-DEPENDENT. Narrowed here; not
+  fixed.** A postland page arrived on this session's own land
+  (`~/.claude/autonomy/pages/postland-hung-autonomy-sweep-0fcd40186b3c.page`, tree `0fcd40186b3c`,
+  sha `b7f77184815d`): *"wedged at 231/8845 completed — timeout:10800s"*, with
+  `proof: re-ran tests/autonomy-sweep.bats ALONE in this pristine detached worktree; wedged again:
+  true` and, importantly, **`NOT a cut: no signal reached this run`** — so this is NOT the
+  external-kill class that produces the 68 `KILLED by signal` events; it is a genuine hang.
+
+  **This is the SAME suite that is red in CI run 31586181611** (case 25, `D2 CONTROL`), filed as
+  `05ff1e5fabc0`. Two independent instruments now agree the suite is broken, by two different
+  symptoms.
+
+  **REPRODUCED and NARROWED this session:**
+  - A full-suite run wedges immediately **after test 34**, i.e. inside test 35
+    (`POSITIVE CONTROL: rung 1 REACHED short-circuits — no banner, records seen`, `:719`).
+  - 🚨 **But test 35 run ALONE passes, and so does test 34.** `bats -f` on each returns `ok 1`
+    immediately. **So the hang is ORDER- or STATE-dependent — it is not a property of test 35's
+    body**, and anyone who opens `:719` looking for a blocking call will find nothing and conclude
+    the page was wrong.
+
+  **RULED OUT — do not re-derive these:**
+  - **`osascript`** — the obvious suspect, because test 35 is the first to set
+    `CC_SWEEP_OS_CHANNEL=auto`. It is stubbed in `setup()` (`:79-85`, and `PATH` is exported there so
+    every test inherits it) **and** the subject invokes it as
+    `sweep_bounded 10 osascript - … <<'OSA'` (`autonomy-sweep.sh:941`) — bounded at 10s AND fed a
+    heredoc, so the stub's `cat >/dev/null` cannot block on an open stdin either. Both halves checked.
+  - **`it2`** — stubbed via `CC_IT2_BIN` + `CC_STUB_IT2_OUT` (`:93-99`), and the D4 cases set the
+    listing explicitly.
+  - **an external kill** — the page's own `NOT a cut` line, derived from the absence of a signal.
+
+  **WHERE TO LOOK NEXT:** accumulated state or a leaked background child from an EARLIER test that
+  only bites once test 35's `auto` channel opens. The suite writes into several exported dirs
+  (`CC_PAGES_DIR`, `CC_ANNOUNCE_ALARM_DIR`, `CC_SWEEP_SEEN_DIR`, `CC_IDL`, …) that persist across
+  tests within a `BATS_TEST_TMPDIR`, and `sweep_bounded` bounds the CHILD it forks but not a
+  grandchild it leaves behind. Bisect by running tests 1..35 and then 30..35 — the pair that
+  reproduces names the interaction, and neither member will reproduce alone.
