@@ -110,7 +110,12 @@ note(){ [ "$VERBOSE" -eq 1 ] && [ "$JSON" -eq 0 ] && printf '    %s\n' "$1"; ret
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 INERT=0                       # count of ASSERT stores whose owner is provably not running
 ROWS=''                       # newline-joined "store<TAB>kind<TAB>status<TAB>reaped<TAB>kept<TAB>detail"
-row() { ROWS="$ROWS$1	$2	$3	$4	$5	$6
+# PADDED at the emitter, because tab is IFS-WHITESPACE: an empty cell does not read back as empty,
+# it shifts every later column LEFT — silently, exit 0. Both readers below (`while IFS=$'\t' read`)
+# would then mis-name a store after its own verdict, or read a count into `detail`. The read side
+# cannot be repaired, so every non-LAST cell defaults to `-`; `detail` is last and may be empty.
+row() { local s="${1:-}" k="${2:-}" st="${3:-}" r="${4:-}" kept="${5:-}"
+        ROWS="$ROWS${s:--}	${k:--}	${st:--}	${r:--}	${kept:--}	${6:-}
 "; }
 
 # ── the LIVE set ──────────────────────────────────────────────────────────────────────────────
