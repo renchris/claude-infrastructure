@@ -155,3 +155,71 @@ fail-open on any read failure, IDL-logged.
 - Recon reports: `scratchpad/recon/report-{stopchain,seams,adversarial}.md` (this session's
   scratchpad); kitty/transcripts/census/ledgers/deaths reports pending — they refine W4/report,
   not W1-W3 shape.
+
+---
+
+## custody v1.1 — the discharge side (item `d29b73103189`, 2026-08-13)
+
+**Complication.** W2 shipped the debt side of the custody ledger and exactly ONE discharge path:
+a peer that reaches `handoff-fire.sh self-close`, which returns by MARKER off its own fired-peer
+stamp. Two consequences the W2 plan text already anticipated but did not build. (a) Its own
+Producers line — "mailbox-drain.sh on `HANDOFF-PING <slug>` call `cc-custody return`" — and its
+Consumers line — "operator-readout renders the custody line" — described code that did not exist;
+`bin/cc-custody`'s header asserted the first of them as fact. (b) Because self-close was the only
+exit, `cc-custody open` had to exclude `--no-self-retire` fires outright (review #5, recorded at
+`handoff-fire.sh:8936` as "until custody v1.1 adds the ping-receipt discharger"), and every peer
+that finished, pinged, and was then closed by an operator, a reaper or a crash left its
+originator's row open forever. An open row is 🔧 in `wrap-ledger.sh`, so a ledger that could only
+ever accumulate debt decays into the always-alarm the "no new rung for custody" decision above
+exists to prevent.
+
+**Solution.** Three changes, one per surface named in W2:
+
+- **`hooks/mailbox-drain.sh` — the ping-receipt discharger.** A received `HANDOFF-PING <slug>: …`
+  discharges the originator's open row for that slug. The slug is the only custody field echoed to
+  a peer (`handoff-fire.sh:7100`; `cloud-return.sh` mirrors the shape), so it is the only join key
+  a ping can carry. Scoped `--cwd` — unlike `cloud-return.sh`'s store-wide return, which holds a
+  globally-unique marker — because a slug is a prompt-file basename that two originators can
+  collide on, and the ping's recipient IS the originator by construction. Idempotent (an
+  already-discharged key is an rc-0 no-op, so the dup-biased delivery contract cannot double-count),
+  bounded (8 slugs/drain, behind a `grep -q` gate), fail-open, `CC_DRAIN_CUSTODY_RETURN=0`.
+- **`scripts/handoff-fire.sh` — the self-retire restriction lifted.** The guard now tests only
+  "was a return owed" (`NB_ARMED_TARGET` non-empty). Safe because the debt and the discharge key
+  are armed by the SAME condition: the trailer that writes `HANDOFF-PING <NB_SLUG>: …` is the
+  trailer that sets `NB_ARMED_TARGET`, so every row now opened names a key its own peer was told
+  to send back.
+- **`hooks/operator-readout.sh` — the custody line.** `wrap-ledger` ranks open custody ahead of
+  every remaining arm and short-circuits, so a custody 🔧 reached the renderer with `DIRTY_N=0`,
+  `GATE` fresh and `REMAINDER=0` and rendered "🔧 in progress — loose ends": the ledger computed
+  the one fact the operator needed and the renderer dropped it. Same class as the 🚀 dispatch
+  defect (new-enum-member-falls-into-fail-closed-default), and it survived because the fallback is
+  a TRUE sentence. Custody now LEADS `parts` and carries `cc-custody list --open --cwd .`. The
+  FIRE PREDICATE is deliberately untouched — a block that fired on every in-flight wave is exactly
+  the always-alarm the D-note above rejects.
+
+**DISPROOF — the item's second clause, taken literally, is refuted.** It was filed as
+"custody-open for `ENGAGE_VERIFY=0` fires", compressing two adjacent sentences at
+`handoff-fire.sh:8933-8937`. Only the self-retire half is real work. `ENGAGE_VERIFY` is 0 iff
+`RECYCLE` or `DRY` (`:7028`); a dry run fires nothing, and `--recycle` is *"same pane by
+definition"* (`:6386`) — net-zero panes, no dispatched peer. A row opened there keys the firing
+session's own cwd against its own pane: self-custody that no peer exists to discharge, blocking the
+originator's ✅ until it abandons a debt it owes itself. A default recycle arms no back-channel at
+all (`notify-back.bats:169`), and the one spelling that still does — an explicit
+`--recycle --notify-back <third-party>`, verified live — is worse, because the ping then goes
+somewhere that is not the originator, so even the new drain-side discharge could never run in the
+session holding the row. `ENGAGE_VERIFY=0` is therefore CORRECT to skip, not a residual gap; the
+comment at the call site now says so instead of flagging it as bounded-and-stated.
+
+**Considered and rejected: `fire_cleanup`'s live-pane branch.** A FIRE-FAILED fire whose pane
+survived is stamped, registered and left in its worktree "in case it engages late" — a live peer
+with no custody row, which is genuinely the wave-abandonment signature. Rejected because that path
+exits non-zero after telling the operator the fire failed: recording a debt there would make every
+failed fire block its originator's close until a human ran `cc-custody abandon`. That is the
+alarm-polarity failure again, on the one path where the operator has already been told to act.
+
+**Tests.** `mailbox-drain.bats` +8 (discharge · cwd-scoping control · both slug-less ping shapes ·
+unmatched slug · kill switch · cheap gate · dup no-double-count · RED-proof vs `origin/main`) ·
+`operator-readout.bats` +5 (named cause + command · CUSTODY_OPEN=0 control · absent-field control ·
+mixed-cause partition/ordering · RED-proof vs `origin/main`) · `notify-back.bats` +3 (the
+slug-bearing recipe on a `--no-self-retire` fire · the `--no-notify-back` control that opens no row
+· the guard pin with its RED control).

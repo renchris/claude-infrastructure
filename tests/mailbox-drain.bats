@@ -390,3 +390,143 @@ an embedded newline that must not leak into the operator line"
   [ "$status" -eq 0 ]
   [ -z "$output" ] || false        # RED: the arm nudge was unreachable with an empty box
 }
+
+# ── W2 CUSTODY — THE PING-RECEIPT DISCHARGER (custody v1.1, item d29b73103189) ────────────────────
+# WHAT IS PINNED: a received `HANDOFF-PING <slug>: …` discharges the originator's OPEN custody row
+# for that slug, scoped to the originator's OWN cwd; both slug-LESS ping shapes discharge nothing;
+# the kill switch and the cheap gate leave the store untouched; and both channels (model context +
+# operator systemMessage) report the discharge.
+#
+# HERMETICITY: CC_CUSTODY_DIR is pinned explicitly rather than relying on the fixtured $HOME above.
+# cc-custody's store defaults under $HOME, so the fixture alone would do — but this suite's own
+# header records why that is not the standard to hold: the seam that bites is the UNMASKED one, and
+# a store that a test can WRITE to is exactly the class of seam worth pinning by name.
+custody_setup() {
+  export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
+  CUSTODY="$REPO/bin/cc-custody"
+  ORIG_CWD="$BATS_TEST_TMPDIR/originator"; mkdir -p "$ORIG_CWD"
+  OTHER_CWD="$BATS_TEST_TMPDIR/other"; mkdir -p "$OTHER_CWD"
+}
+# Drive the drain with a stdin payload naming the originator's cwd — the field handoff-fire keyed
+# `cc-custody open` on, and the one the discharger reads.
+drain_at() { # $1 = cwd → runs `prompt` mode with that cwd in the payload
+  bash -c 'printf "{\"cwd\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$1"
+}
+
+@test "custody: a HANDOFF-PING carrying a slug DISCHARGES the originator's open row for that cwd" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 77 --marker M-PING-1 --slug wave5 --notify-back "$UUID"
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave5: landed 9da394a9c, self-closing"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'custody: 1 dispatched session(s) DISCHARGED' || false
+  printf '%s' "$ctx" | grep -q 'wave5' || false
+  # the OPERATOR half — a ledger state change must not be model-only (the v3 D11 rule this suite
+  # already enforces for delivery itself).
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q 'custody −1' || false
+}
+
+@test "custody CONTROL: the SAME slug open under a DIFFERENT cwd is NOT discharged (scoping)" {
+  custody_setup
+  "$CUSTODY" open --cwd "$OTHER_CWD" --target 78 --marker M-PING-2 --slug wave5
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave5: done"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  # a slug is a prompt-file basename, so two originators can collide on one; discharging store-wide
+  # would silently drop THIS cwd's custody, which is the failure direction the store designs against.
+  [ "$("$CUSTODY" count --open --cwd "$OTHER_CWD")" = 1 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  ! printf '%s' "$ctx" | grep -q 'DISCHARGED' || false
+}
+
+@test "custody: the two slug-LESS ping shapes discharge NOTHING (no join key exists to discharge on)" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 79 --marker M-PING-3 --slug wave7
+  # `HANDOFF-PING:` (cc-await-ping's bare shape) and sc_announce_before_retire's `(auto, …)` — both
+  # belong to the self-close path, which discharges by MARKER, so neither needs a key here.
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING: landed 9da394a9c, self-closing" \
+       "2026-08-13T10:01:00+0000 [peer] HANDOFF-PING (auto, unannounced retire): peer 79 is retiring NOW."
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
+@test "custody: a slug with NO open row leaves the store untouched and says nothing (rc 0, quiet)" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 80 --marker M-PING-4 --slug wave8
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave-that-was-never-fired: done"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'as CONTEXT' || false     # the mail itself still delivered
+  ! printf '%s' "$ctx" | grep -q 'DISCHARGED' || false
+}
+
+@test "custody KILL SWITCH: CC_DRAIN_CUSTODY_RETURN=0 delivers the mail and discharges nothing" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 81 --marker M-PING-5 --slug wave9
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave9: done"
+  CC_DRAIN_CUSTODY_RETURN=0 run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'as CONTEXT' || false
+}
+
+@test "custody: ordinary peer mail (no HANDOFF-PING) never reaches the discharger" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 82 --marker M-PING-6 --slug wave10
+  seed "2026-08-13T10:00:00+0000 [supervisor] wave10 is looking good"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
+@test "custody: dup-biased re-delivery cannot double-count — a second ping is an rc-0 no-op" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 83 --marker M-PING-7 --slug wave11
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave11: done"
+  run drain_at "$ORIG_CWD"
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  add "2026-08-13T10:05:00+0000 [peer] HANDOFF-PING wave11: done (re-surfaced dup)"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  ! printf '%s' "$ctx" | grep -q 'DISCHARGED' || false   # already discharged ⇒ nothing to report
+}
+
+@test "RED-PROOF: the pre-v1.1 drain from origin/main leaves an open custody row OPEN on a ping" {
+  custody_setup
+  local old="$BATS_TEST_TMPDIR/pre-custody"; mkdir -p "$old"
+  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
+  if grep -q 'cc-custody' "$old/hooks/mailbox-drain.sh"; then
+    skip "control is not pre-v1.1"
+  fi
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 84 --marker M-PING-8 --slug wave12
+  seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave12: landed, self-closing"
+  run bash -c 'printf "{\"cwd\":\"%s\"}" "$1" | "$0" prompt' "$old/hooks/mailbox-drain.sh" "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  # RED: the peer reported, the originator read the report, and the debt stayed on the books —
+  # 🔧 forever, because self-close was the only discharge path custody v1 had.
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
+@test "custody: the cloud ping shape (a slug carrying '/') discharges — the charset admits it" {
+  custody_setup
+  # scripts/cloud-return.sh wakes the originator with `HANDOFF-PING cloud/<id>: …` and records that
+  # same namespaced token as the custody key, so the slug charset has to admit `/` or the whole
+  # off-box return path is undischargeable from the drain.
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 90 --marker M-PING-9 --slug cloud/session_test
+  seed "2026-08-13T10:00:00+0000 [cloud] HANDOFF-PING cloud/session_test: LANDED+VERIFIED on main"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'cloud/session_test' || false
+}

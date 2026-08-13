@@ -21,6 +21,14 @@
 # PRODUCERS: scripts/handoff-fire.sh `open`s beside the fire (notify-back armed ⇒ a return is
 #   owed) and `return`s from sc_announce_before_retire; hooks/mailbox-drain.sh `return`s on a
 #   received HANDOFF-PING. All best-effort — custody bookkeeping must never break a fire or close.
+#   THE TWO DISCHARGE KEYS ARE NOT INTERCHANGEABLE, and which one a caller can use is fixed by what
+#   it can see (custody v1.1, item d29b73103189). self-close and cloud-return hold the MARKER —
+#   globally unique — so they discharge store-wide and may run from any cwd. The drain holds only
+#   the SLUG, because the slug is the sole custody field echoed to the peer (handoff-fire arms
+#   `HANDOFF-PING <slug>: …`; the marker is never sent), and a slug is a prompt-file basename that
+#   two originators can collide on — so that path discharges --cwd-scoped, which is safe because
+#   the ping's recipient IS the originator by construction. A store-wide slug discharge could drop
+#   a different cwd's custody silently, which is the direction the POLARITY note below rejects.
 # CONSUMERS: scripts/wrap-ledger.sh (CUSTODY_OPEN=), hooks/completion-assert.sh (a done-claim over
 #   open custody is a contradiction), hooks/session-continue.sh wake floor (idle + open custody +
 #   no armed watcher ⇒ arm the watcher), hooks/operator-readout.sh (renders the line).

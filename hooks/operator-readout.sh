@@ -497,7 +497,7 @@ render_block() {
   local esc_n; esc_n="$(escalation_unseen_count)"
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
-  local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts
+  local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts custody
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     wrap="${WRAP_LEDGER_BIN:-}"
@@ -544,11 +544,31 @@ render_block() {
         fi ;;
       "🔧")
         dirty_n="$(lf DIRTY_N)"; gate="$(lf GATE)"; remainder="$(lf REMAINDER)"
+        # W2 CUSTODY (custody v1.1, item d29b73103189) — the one 🔧 cause that is INVISIBLE in this
+        # cwd's git state. wrap-ledger ranks open custody ahead of every remaining arm and
+        # short-circuits the chain, so a custody-driven 🔧 arrives here with DIRTY_N=0, GATE fresh
+        # and REMAINDER=0 — every `parts` term empty — and rendered "🔧 in progress — loose ends":
+        # the ledger computed the only fact the operator needed and the renderer dropped it. Same
+        # shape as the 🚀 arm's own note above (MEMORY.md new-enum-member-falls-into-fail-closed-
+        # default), except the fallback here is a true-but-contentless string rather than an empty
+        # one, which is why it survived: nothing looked broken.
+        #
+        # It leads `parts` because it is the only term naming work that is not in this tree — the
+        # operator's next move (await it armed / collect it / abandon it) differs in kind from
+        # "commit what is dirty" — and it is the only one carrying a drivable listing command.
+        #
+        # This does NOT touch the FIRE PREDICATE, deliberately: a block that fired on every
+        # in-flight wave is exactly the always-alarm CLOSE_INTEGRITY's "no new rung for custody"
+        # decision rejected (await-with-armed-watcher is a LEGITIMATE end-of-turn). The custody
+        # cause is rendered when the block renders on its own terms, never as a new reason to fire.
+        custody="$(lf CUSTODY_OPEN)"; case "$custody" in ''|*[!0-9]*) custody=0 ;; esac
         parts=""
-        [ "${dirty_n:-0}" != "0" ] && parts="${dirty_n} file(s) uncommitted"
+        [ "$custody" != "0" ] && parts="${custody} dispatched session(s) NOT returned"
+        [ "${dirty_n:-0}" != "0" ] && parts="${parts:+$parts · }${dirty_n} file(s) uncommitted"
         [ "$gate" = "stale" ] && parts="${parts:+$parts · }gate stale on HEAD"
         [ "${remainder:-0}" != "0" ] && parts="${parts:+$parts · }${remainder} DoD item(s) open"
-        state="🔧 in progress — ${parts:-loose ends}" ;;
+        state="🔧 in progress — ${parts:-loose ends}"
+        [ "$custody" != "0" ] && state="${state} → cc-custody list --open --cwd ." ;;
       "✅")
         # WRITE TURN + ✅ ⇒ say SAFE TO CLOSE, in those words. "✅ live on trunk" is a fact about
         # the repo; the operator's standing question is a fact about THEM — "is there anything left

@@ -1124,3 +1124,92 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
     echo "$output" | grep -q '◆ 1 escalation record(s) unseen — cc-escalations list' || false
   done
 }
+
+# ── W2 CUSTODY on the 🔧 state line (custody v1.1, item d29b73103189) ────────────────────────────
+# wrap-ledger ranks OPEN CUSTODY ahead of every remaining arm and short-circuits the chain, so a
+# custody-driven 🔧 reaches this renderer with DIRTY_N=0, GATE fresh and REMAINDER=0 — every term
+# the 🔧 arm knew about empty — and rendered the contentless fallback "🔧 in progress — loose ends".
+# Same class as the 🚀 dispatch defect the stub_ledger block above exists for, with one difference
+# that is why it survived: the fallback here is a TRUE sentence, so nothing looked broken. A stub
+# ledger is again the right instrument — when the real ledger decides to emit a custody 🔧 is
+# tests/wrap-ledger.bats's question, not this renderer's.
+#
+# A stub of its own, rather than stub_ledger above: that one appends its extras AFTER the default
+# block, and `lf()` reads with `head -1`, so an extra naming a default key (DIRTY_N, REMAINDER) is
+# silently shadowed by the default. Harmless for the 🚀 cases, which only ever add NEW keys — but
+# these cases need to vary the incumbent terms in order to prove custody composes with them rather
+# than replacing them, so the overrides have to come FIRST.
+stub_ledger_over() { # $1=RUNG, rest = KEY=VALUE lines that WIN over the defaults
+  local rung="$1"; shift
+  local f="$BATS_TEST_TMPDIR/stub-ledger-over-$BATS_TEST_NUMBER.sh"
+  { printf '#!/bin/bash\n'
+    printf 'case "${1:-}" in --machine) ;; *) printf "stub\\n"; exit 0 ;; esac\n'
+    printf 'printf "RUNG=%s\\n"\n' "$rung"
+    local kv; for kv in "$@"; do printf 'printf "%s\\n"\n' "$kv"; done
+    printf 'printf "AHEAD=0\\nSHAS=\\nDIRTY_N=0\\nGATE=green\\nREMAINDER=0\\nUNLANDED=0\\n"\n'
+  } > "$f"
+  chmod +x "$f"; printf '%s' "$f"
+}
+custody_env() { # renders with a stub ledger; an activation step satisfies the fire predicate
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/14-custody-activate.sh"
+  env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" \
+    WRAP_LEDGER_BIN="$1" bash "${2:-$HOOK}" --render "$3"
+}
+
+@test "🔧 custody: dispatched sessions that have not returned are NAMED, with their listing command" {
+  w="$(mkrepo_landed custodyfix)"
+  run custody_env "$(stub_ledger "🔧" "CUSTODY_OPEN=2")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '2 dispatched session(s) NOT returned' \
+    || { echo "the custody cause was dropped: $output"; false; }
+  printf '%s' "$output" | grep -q 'cc-custody list --open --cwd .' \
+    || { echo "no drivable listing command: $output"; false; }
+  # the contentless fallback must be GONE, not merely accompanied
+  ! printf '%s' "$output" | grep -q 'in progress — loose ends' \
+    || { echo "still rendering the fallback: $output"; false; }
+}
+
+@test "🔧 custody CONTROL: CUSTODY_OPEN=0 leaves the existing 🔧 wording byte-for-byte alone" {
+  w="$(mkrepo_landed custodyzero)"
+  run custody_env "$(stub_ledger_over "🔧" "CUSTODY_OPEN=0" "DIRTY_N=3")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '🔧 in progress — 3 file(s) uncommitted' \
+    || { echo "the incumbent wording moved: $output"; false; }
+  ! printf '%s' "$output" | grep -q 'dispatched session' || { echo "invented custody: $output"; false; }
+  ! printf '%s' "$output" | grep -q 'cc-custody' || { echo "invented a custody command: $output"; false; }
+}
+
+@test "🔧 custody: a ledger with NO CUSTODY_OPEN field at all is a clean zero, never a malformed line" {
+  w="$(mkrepo_landed custodyabsent)"
+  run custody_env "$(stub_ledger_over "🔧" "DIRTY_N=1")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '🔧 in progress — 1 file(s) uncommitted' \
+    || { echo "an absent field corrupted the line: $output"; false; }
+  ! printf '%s' "$output" | grep -q 'dispatched session' || false
+}
+
+@test "🔧 custody: custody LEADS a mixed cause — the work not in this tree is named first" {
+  w="$(mkrepo_landed custodymixed)"
+  run custody_env "$(stub_ledger_over "🔧" "CUSTODY_OPEN=1" "DIRTY_N=2" "REMAINDER=4")" "$HOOK" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # every cause survives — a partition, not a replacement
+  printf '%s' "$output" | grep -q '1 dispatched session(s) NOT returned · 2 file(s) uncommitted · 4 DoD item(s) open' \
+    || { echo "wrong partition or ordering: $output"; false; }
+}
+
+@test "RED-PROOF: the pre-v1.1 renderer from origin/main drops a custody 🔧 to 'loose ends'" {
+  local old="$BATS_TEST_TMPDIR/pre-custody-hook"; mkdir -p "$old"
+  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
+  if grep -q 'CUSTODY_OPEN' "$old/hooks/operator-readout.sh"; then
+    skip "control is not pre-v1.1"
+  fi
+  w="$(mkrepo_landed custodyred)"
+  run custody_env "$(stub_ledger "🔧" "CUSTODY_OPEN=2")" "$old/hooks/operator-readout.sh" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # RED: the ledger computed the ONE fact the operator needed and the renderer said nothing about it.
+  printf '%s' "$output" | grep -q 'in progress — loose ends' \
+    || { echo "control did not reproduce the drop: $output"; false; }
+}
