@@ -22,6 +22,11 @@
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 REPO="${CC_REPO:-$HOME/Development/claude-infrastructure}"
+# launchd/staged/, NOT launchd/ — and the subdirectory is the whole safety property, so it is spelled
+# out here rather than left as a path. install.sh globs `launchd/*.plist`; a plist there would let a
+# routine install ARM this standing deleting job with no operator decision, which is the same reason
+# com.claude.relogin is staged out of that glob. Step 3 below is the only path that loads it.
+PLIST_SRC="launchd/staged/com.claude.cc-gc.plist"
 PLIST="com.claude.cc-gc.plist"
 NEW_SCRIPTS="cc-gc.sh"
 
@@ -38,13 +43,15 @@ echo "    Read the table before Step 3. Two things are worth checking by eye:"
 echo "      · scratchpad reaped=N — this is the 11 GB store; confirm the kept_live count looks sane."
 echo "      · any ASSERT row reading 'inert' — that store's OWNER is not running. cc-gc will not"
 echo "        fix that (it deliberately does not race another reaper); it is telling you a job"
-echo "        needs loading. 'events inert' clears once this deploys. 'session-index inert' is"
-echo "        EXPECTED and will persist: that store's retention leg is parked on branch"
-echo "        park/gc-session-index awaiting your ratification (it deletes index rows, so"
-echo "        ship-land refused to auto-land it — decision packet shipland-esc-ab66db8)."
+echo "        needs loading. MEASURED on the real box 2026-08-13: EVERY ASSERT row read 'ok' and"
+echo "        inert-owners=0 — including session-index, which this script previously predicted"
+echo "        would read 'inert' and PERSIST. It does not: session-index-sweep.sh had run within"
+echo "        24h, so that leg is healthy and its parked retention branch (park/gc-session-index,"
+echo "        decision packet shipland-esc-ab66db8) blocks nothing here. So treat ANY inert row as"
+echo "        real news rather than an expected reading — there is no longer a known-benign one."
 echo
 echo "Step 3 (class-C — a standing DELETING job):"
-echo "    cp $REPO/launchd/$PLIST ~/Library/LaunchAgents/"
+echo "    cp $REPO/$PLIST_SRC ~/Library/LaunchAgents/"
 echo "    launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST"
 echo "    launchctl list | grep cc-gc        # verify it registered"
 echo
