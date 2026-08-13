@@ -468,11 +468,28 @@ unchanged; each needs operator credentials or a destructive-deletion ruling. Not
 
 ---
 
-## THE LOCAL DRAIN, 2026-08-13 — 8 live → 6, and BOTH closes refused the remedy their own row prescribed
+## THE LOCAL DRAIN, 2026-08-13 — 8 live → 7, and BOTH closes refused the remedy their own row prescribed
 
-`filed 0 / closed 2` — net NEGATIVE, which is the bar this mission sets: filing is a deferral with a
-carrying cost, not a disposition. Condition claimed as ONE lease, so all 8 rows cost one slot.
-Non-cloud store **470 → 468** (start and end both re-derived, not quoted).
+`filed 1 / closed 2` — net negative **inside the effort**, which is the bar this mission sets: filing
+is a deferral with a carrying cost, not a disposition. Condition claimed as ONE lease, so all 8 rows
+cost one slot.
+
+🚨 **THE NON-CLOUD STORE WENT 470 → 470. FLAT. Two real closes bought nothing**, and both
+re-derivations are printed rather than computed from my own arithmetic:
+
+| | Δ |
+|---|---|
+| closed by this effort (`412de404ecac`, `f76e7d78aaac`) | **−2** |
+| minted by the ship-land filer during the window, from a SIBLING's failed land (`cdeb77e34952`) | +1 |
+| filed by this effort (`b15a2984d134`, below) | +1 |
+| **net** | **0** |
+
+That is the intake problem measured on a single effort in a single session, and the +1 that was not
+mine is the sharper half: **the generator this very effort documented is still running.** `cdeb77e34952`
+is a `re-land …` row keyed on ship-land exiting 143 (SIGTERM), filed by a sibling's land, and it
+arrived carrying **`falsifier: NONE`** — so it cannot self-retract and joins the permanently-live
+population S3 was built to stop. A drain that closes two rows while its own filer mints one is not
+draining; the arithmetic says so even when the work is right.
 
 | Row | Outcome |
 |---|---|
@@ -480,7 +497,31 @@ Non-cloud store **470 → 468** (start and end both re-derived, not quoted).
 | `f76e7d78aaac` engagement oracle | ✅ closed — landed `4ba91ad95`, content-verified |
 | `dc426ee8df11` WORKTREE MANAGEMENT V2 | ⏳ advanced (R-a + R-c landed `3554d4d7e`); its OWN falsifier still reads condition-present, so it stays open honestly |
 | `8ad4b02602dc` headless wake path | ⏳ open with a currency verdict — below |
+| `b15a2984d134` **NEW** — ship-land's falsifier attach is swallowed | ⏳ filed by this effort; the one filing, and it is the generator's own leak |
 | 4 blocked rows | walls re-verified TODAY; **two of the four materially corrected** |
+
+### `b15a2984d134` — S3's acceptance claim leaks at its own edge
+
+`scripts/ship-land.sh:854` attaches the retracting probe as
+`"$bl" falsify "$id" --probe "bash ${oracle} ${ref}" >/dev/null 2>&1 || true` — **output and rc both
+discarded**, so a refused attach files an unretractable row and reports nothing. § S3 acceptance
+above says "the filer's rows now auto-retract for the majority and fail safe for the rest", but a row
+that never GETS a probe is in neither bucket — and that 14/23 audit was taken over rows closed **by
+hand**, never over freshly minted ones. `cdeb77e34952` is the live counter-example.
+
+**Do not simply delete the `|| true`** — the attach must stay non-fatal to the land. Capture the rc
+and emit a parseable `verdict=` token into the land log so a refusal is visible and attributable
+(memory: `claimed-outcome-vs-checked-outcome`). The root cause is **not yet diagnosed**: candidates
+are `cc-backlog falsify` rc 5 (the probe exits 0 against a live row — the guarded RETRACTING
+direction) and an unresolvable `${oracle}` path under the desk-land temp worktree
+`/private/tmp/.desk-land-claude-fire-*`, which is exactly where that land ran. The logging fix is
+net-positive on its own because it makes the next occurrence diagnosable, but it is not the fix.
+
+⚠️ **Filing it took two commands, and the first one silently ate the title** — `cc-backlog add
+--condition master-stranded-work` re-keyed to the group row `0328e7cc5742`, which is DONE, so `add`
+returned that id early and discarded everything. This file already documents that trap ("file with
+`add` first, then `link --condition`"); it is recorded here a second time because the plan being
+right did not stop it happening, and the failure is silent (rc 0, an id echoed).
 
 🚨 **BOTH CLOSED ROWS PRESCRIBED A REMEDY THAT WAS ITSELF THE DEFECT** — the same shape twice, from
 unrelated subsystems, which is why it is the transferable finding of this pass:
