@@ -34,7 +34,14 @@ setup() {
   export CC_WTGC_INFRA_GC="$BIN/gc-stub.sh"
   export CC_WTGC_GIT="$BIN/git"
   stub_git 0
-  stub_gc 0 'worktree-gc: removed 3 worktree(s) · disposed 0 abandoned · kept 7 · deleted 41 branch(es) · 2 refusal(s)'
+  # ⚠️ THIS PAYLOAD IS THE JANITOR'S REAL CONTRACT AND MUST TRACK IT. It used to hold the pre-§9
+  # five-number summary (no `landed-dirt`), and because L1 stubs the janitor, that stale fixture is
+  # precisely why this suite could not see the wrapper's positional reader go off by one when the
+  # real janitor gained a sixth number. A stub frozen at an older format tests the wrapper against
+  # a world that no longer exists. Both lines below are copied from scripts/worktree-gc.sh's
+  # emitter: the human summary (six numbers now) AND the machine `counts` line the wrapper reads.
+  stub_gc 0 'worktree-gc: removed 3 worktree(s) · disposed 0 abandoned · 5 landed-dirt · kept 7 · deleted 41 branch(es) · 2 refusal(s)
+worktree-gc: counts removed=3 disposed=0 landed_dirt=5 kept=7 branches_deleted=41 refusals=2 elapsed=12s lock_staleness_window=3600s dry_run=0'
 
   LAST="$HOME/.claude/autonomy/worktree-gc-infra.last"
   DISABLED="$HOME/.claude/autonomy/worktree-gc-infra.disabled"
@@ -630,4 +637,51 @@ EOF
   [ ! -f "$GITARGV" ]
   grep -q 'stranded_patches=n-a' "$LAST"
   ! grep -q 'stranded_patches=0' "$LAST" || false
+}
+
+# ── the machine `counts` line, and the off-by-one it retired ────────────────────────────────────
+# The wrapper used to reduce the HUMAN summary with `tr -cd '0-9 \n'` and take five fields by
+# POSITION. That was correct until §9 inserted `landed-dirt` as the third number, after which
+# kept/branches/refusals each shifted one place left and the refusal count fell off the end —
+# silently, exit 0, in every nightly row. These pin the named reader that replaced it.
+
+@test "counts line is read BY NAME — every field lands in its own slot" {
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "ok" ]
+  [ "$(field removed)" = "3" ]
+  [ "$(field disposed)" = "0" ]
+  [ "$(field kept)" = "7" ]           # 7, NOT 5 — 5 is landed_dirt, which the old reader logged here
+  [ "$(field branches)" = "41" ]      # 41, NOT 7
+  [ "$(field refusals)" = "2" ]       # 2, NOT 41 — and it is not dropped
+  [ "$(field dirt)" = "5" ]
+}
+
+@test "RED PROOF: the exact shift the positional reader produced is now impossible" {
+  # Truth: removed=7 disposed=3 dirt=5 kept=11 branches=2 refusals=9.
+  # The old reader logged: kept=5 branches=11 refusals=2. Assert we get the TRUTH.
+  stub_gc 0 'worktree-gc: removed 7 worktree(s) · disposed 3 abandoned · 5 landed-dirt · kept 11 · deleted 2 branch(es) · 9 refusal(s)
+worktree-gc: counts removed=7 disposed=3 landed_dirt=5 kept=11 branches_deleted=2 refusals=9 elapsed=1128s lock_staleness_window=3600s dry_run=0'
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field kept)" = "11" ]
+  [ "$(field branches)" = "2" ]
+  [ "$(field refusals)" = "9" ]
+  [ "$(field elapsed)" = "1128s" ]
+}
+
+@test "a summary WITHOUT the counts line fails CLOSED — never a silent mis-parse" {
+  # An old janitor against this wrapper. The known-wrong positional path was deliberately NOT
+  # kept as a fallback: a wrong number that looks right is worse than a loud absent one.
+  stub_gc 0 'worktree-gc: removed 7 worktree(s) · disposed 3 abandoned · 5 landed-dirt · kept 11 · deleted 2 branch(es) · 9 refusal(s)'
+  run bash "$SUT"
+  [ "$(field verdict)" = "error" ]
+  [ "$(field reason)" = "no-counts-line" ]
+}
+
+@test "elapsed is carried into the row, and is n-a (never 0) when the janitor omits it" {
+  stub_gc 0 'worktree-gc: removed 0 worktree(s) · disposed 0 abandoned · 0 landed-dirt · kept 0 · deleted 0 branch(es) · 0 refusal(s)
+worktree-gc: counts removed=0 disposed=0 landed_dirt=0 kept=0 branches_deleted=0 refusals=0 dry_run=0'
+  run bash "$SUT"
+  [ "$(field elapsed)" = "n-a" ]      # unknown must not read as instantaneous
 }

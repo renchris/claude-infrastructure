@@ -132,6 +132,11 @@
 # bash 3.2-safe (macOS default): no associative arrays, no mapfile, no [[ -v ]].
 set -uo pipefail
 
+# Wall-clock start, for the `elapsed=` line at the bottom (plan §6 R-b). Stamped HERE, before arg
+# parsing and before the oracles, so it measures the whole pass — the liveness oracles are computed
+# once up front and are a real part of a sweep's duration.
+GC_T0="$(date +%s)"
+
 DRY_RUN=0
 PRUNE_BRANCHES=0
 DISPOSE_ABANDONED=0
@@ -1050,6 +1055,30 @@ fi
 
 SUFFIX=""; [ "$DRY_RUN" = "1" ] && SUFFIX="   [DRY-RUN — nothing was mutated]"
 echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abandoned · $N_DIRT_REMOVED landed-dirt · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
+# ── §6 R-b: the sweep's own wall-clock, against the mutex's staleness window ──────────────────────
+# F-9: the lock is a bare `mkdir "$LOCK_DIR"` whose staleness test reads the dir's OWN, never
+# refreshed, creation mtime (`find "$LOCK_DIR" -maxdepth 0 -mmin +60`). A pass that outruns 3,600 s
+# therefore has its live lock BROKEN by the next pass, and two concurrent passes mutate worktrees —
+# the GH #34645/#48927 data-loss class the mutex exists to prevent. R-b said the real duration "is
+# not answerable by reading", and it is not: it has to be measured, on the real population, which
+# only the scheduled sweep ever sees. So the janitor reports it and the nightly wrapper logs it.
+#
+# 🚨 ON ITS OWN LINE, DELIBERATELY. scripts/worktree-gc-infra-run.sh reduces the SUMMARY line
+# above with `tr -cd '0-9 \n'` and `set --`, i.e. it takes its five fields POSITIONALLY. Adding
+# `elapsed=` to that line would insert a sixth number and shift every field left of it — the
+# unpadded-emitter defect, in the one place where a silent column shift would corrupt the
+# fleet's own history. A new line cannot do that: the wrapper greps `-m1 '^worktree-gc: removed '`.
+GC_ELAPSED_S=$(( $(date +%s) - GC_T0 ))
+# ── THE MACHINE LINE. Named fields, so a reader can never be off by one. ─────────────────────────
+# The summary line above is for humans and MUST NOT be parsed: scripts/worktree-gc-infra-run.sh
+# used to reduce it with `tr -cd '0-9 \n'` and take five fields POSITIONALLY, and that reader had
+# been wrong since `$N_DIRT_REMOVED landed-dirt` was inserted as the third number (§9,
+# --dispose-landed-dirt). Measured on the real format: it logged landed-dirt AS kept, kept AS
+# branches, branches AS refusals, and dropped the refusal count entirely — three mislabelled
+# numbers in every nightly row, silently, exit 0. A positional reader over a human sentence makes
+# ADDING A FIELD a breaking change to history, which is the defect, not the symptom.
+# Every value is ASCII and whitespace-free so `k=v` splitting is total.
+echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN"
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
 # Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
 # whether or not it passed the flag that acts on it.

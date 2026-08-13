@@ -485,18 +485,39 @@ case "$rc" in
       fi
       verdict error 1 "stage=parse reason=no-summary-line"
     fi
-    # "removed N worktree(s) · disposed N abandoned · kept N · deleted N branch(es) · N refusal(s)"
-    # Strip everything that is not a digit or a separator and take the five numbers positionally.
-    # The word splitting is the POINT here, hence the disable.
-    # shellcheck disable=SC2046
-    set -- $(printf '%s\n' "$summary" | tr -cd '0-9 \n')
+    # ── READ THE MACHINE LINE BY NAME. Never the human summary, and never by position. ───────────
+    # This used to be `set -- $(printf '%s\n' "$summary" | tr -cd '0-9 \n')` — five fields taken
+    # POSITIONALLY out of a human sentence. It was correct when written and became wrong the day
+    # `$N_DIRT_REMOVED landed-dirt` was inserted as the THIRD number (§9, --dispose-landed-dirt):
+    # the line then carried SIX numbers, so kept/branches/refusals each shifted one place left and
+    # the real refusal count fell off the end. Reproduced on the exact format:
+    #   removed=7 disposed=3 dirt=5 kept=11 branches=2 refusals=9   (truth)
+    #   removed=7 disposed=3 kept=5 branches=11 refusals=2          (what this logged)
+    # Three mislabelled numbers per nightly row, exit 0, for as long as the field has existed —
+    # and no test could see it, because the wrapper's suite fixtures the janitor's output.
+    # Named fields make adding a field a NON-event; that is the whole point of the counts line.
+    _counts="$(printf '%s\n' "$out" | grep -m1 '^worktree-gc: counts ')"
+    if [ -z "$_counts" ]; then
+      # Fail CLOSED. The old positional path is NOT kept as a fallback: it is known-wrong, and a
+      # silent wrong number is worse than a loud absent one (the whole reason this block changed).
+      verdict error 1 "stage=parse reason=no-counts-line"
+    fi
+    _f() { printf '%s\n' "$_counts" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1; }
+    set -- "$(_f removed)" "$(_f disposed)" "$(_f kept)" "$(_f branches_deleted)" "$(_f refusals)"
     # THE EFFECT ASSERTION. Everything above this line is the janitor's own account of itself;
     # this is the only rung that reads the world. `removed=65 kept=126` was a true sentence on
     # 2026-08-06 and the population was 558 three days later, so the summary's numbers cannot
     # stand in for the count — they describe one sweep, and the count is a running balance.
     _pop_after="$(population)"
     _delta=$(( POP_BEFORE - _pop_after ))
-    _eff="pop_before=$POP_BEFORE pop_after=$_pop_after pop_delta=$_delta"
+    # §6 R-b: carry the janitor's own wall-clock into the log row, so the question "does a sweep
+    # outrun the mutex's 3,600 s staleness window?" is answered every night from the REAL
+    # population instead of from a synthetic repo. Read from its own line, never from the summary
+    # line above — that one is parsed positionally and must keep exactly five numbers.
+    # `n-a` (not 0) when the line is absent: an unmeasured duration is unknown, and unknown must
+    # not read as "instantaneous" to whoever later thresholds this field.
+    _el="$(_f elapsed)"
+    _eff="pop_before=$POP_BEFORE pop_after=$_pop_after pop_delta=$_delta elapsed=${_el:-n-a} dirt=$(_f landed_dirt)"
     _owned_after="$(population_owned)"
     if [ "$OBSERVE" = "0" ] && [ "$_owned_after" -gt "$CEILING" ]; then
       verdict over-ceiling 3 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
