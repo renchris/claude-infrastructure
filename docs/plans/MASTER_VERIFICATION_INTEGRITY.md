@@ -295,3 +295,33 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   The distinction generalises: **`✅ live` answers "are the bytes deployed", never "was the tree
   proved"**. Those are different questions with different instruments, and this session had them
   briefly conflated.
+
+## RESUME HERE — effort 2 state at the 2026-08-13 pause-point (15 non-cloud rows open)
+
+**Landed this session (all content-verified, and all four verified LIVE by content):** `3aecd1472`
+utc-stamp-lint non-verdict · `3bb7935b7` comm-split ×3 sites · `c78666902` test-walltime-lint
+non-verdict ×2 predicates · `b7f771848` ship-land 8 gate arms + permission-gate ratchet 15→9.
+Plus the docs/adjudication commits. **Closed from this condition: `918e9bac60b6`, `3309486727cf`,
+`4239f02465cb`, `09f087a7f3d8`, `6557a992d498`, `446fe07464e0`, `9183cbf21772`.**
+
+**THE METHOD THAT WORKED, use it:** triage each row INLINE with a content read (minutes), then fix.
+The 5-agent fan-out at the start of this effort delivered **0 findings through either channel** and
+had to be `TaskStop`ed; every close this session came from the lead reading the row's cited files.
+
+**THE RECURRING SHAPE, true of all four fixes:** the defect was in the CALLER, and the existing suite
+exercised the CALLEE — so the suite was green for the bug's entire life. Ask which layer the defect is
+in and put the guard THERE. Every fix here was mutant-proved (revert it, the new case fails BY NAME
+while the pre-existing cases still pass).
+
+**Per-row currency verdicts for what remains:**
+
+| Row | Verdict | Note for whoever takes it |
+|---|---|---|
+| `5456e4cba2b5` | **REAL, and subtler than the row states — read this before starting** | `references_fire()` (`test-hermeticity-lint.sh:944`) ALREADY strips comments; that was a prior fix for this same class (header `:936-943`: 71 suites matched the raw grep, 15 prose-only, 9 latent blockers). The residual gap is **string literals in code** — `tests/cc-eligible-history.bats:224` holds `handoff-fire` inside a fixture STRING, not an invocation. ✅ The correct shape already exists in the same file: **Rule 3 is scoped by the LEG the lever gates, "never by whether the suite happens to mention the lever"** (`:52-54`). ⚠️ **HAZARD:** narrowing mention→invocation risks a FALSE NEGATIVE (a suite that really does read ambient load going undetected), which is strictly worse than today's harmless pin. Demand a two-sided proof: a string-literal-only suite must go OUT of scope AND a real invocation must stay IN. |
+| `5ef0dcb22aec` | REAL | The AMBIENT check knows `handoff-fire`'s `CC_FIRE_CAPACITY_GATE` but not `scripts/lib/capacity-admit.sh`'s `CC_ADMIT_GATE`. Same rule-1 machinery; adding a second seam is mechanical once `5456e4cba2b5`'s scoping question is settled — **do that one first**, they touch the same predicate. |
+| `86488ad1c966` | REAL, NOT YET PINNED | The alternation-arm gap (`githooks\|launchd)`) was not located by static grep. Needs a constructed fixture in a `mktemp -d` run through the lint. **Absence of a grep hit is not absence of the defect** — this session proved that four separate ways. |
+| `0f74f41042c5` | REAL — **upgraded to OBSERVED** | Reproduced live this session: `ship-land` refused with `unattended-path RED` on a commit touching ONE markdown file, while the same lint standalone exited 0, and an immediate retry on a byte-identical tree landed. Intermittent false RED on the landing path, not merely a divergence risk. |
+| `f295605eec01` | REAL | Starfield twinkle has no VALUE gate (`assert_twinkle_tables_paired`, `gen.py:2319/:2329`, compares lengths only). Assertion band + red-proof are in this file's earlier entry. Note `5d6dcbe8d462` first — the harness it would extend is itself unwired. |
+| `5d6dcbe8d462` | REAL, premise re-verified | `banner-gate-redproof.py` is unwired: nightly globs `scripts/*gate*.sh` / `*lint*.sh` (`nightly-regression.sh:65-66`), a `.py` matches neither; `--check-anchors` does not exist (0 hits); `anti-vacuity-contract.bats`'s census is `tests/`-only and its mention of the harness is a COMMENT (`:25`), not a wiring. |
+| `79811022b6a4` · `b449e49f1438` · `cf440684e0e1` · `f8f1b2c16fa8` · `8efd655b0fe1` · `c6c5ef54881e` · `0711d9e18934` | NOT YET TRIAGED this session | `c6c5ef54881e` / `0711d9e18934` claim suites are RED on trunk and were **never actually run** — a refused `cc-bats` returns `ok=0 notok=0`, which is a NON-VERDICT, never a pass. Run them before believing either. |
+| `782607797fc5` · `05ff1e5fabc0` | FILED BY THIS SESSION | operator-gated signal trace; and the 3 CI-only reds from run 31586181611 (locale and OS platform already REFUTED — do not re-run those two hypotheses). |
