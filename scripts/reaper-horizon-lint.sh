@@ -343,8 +343,48 @@ done < <(grep -rnE 'CC_SUP_GC_S:-[0-9]+' $DECLARED 2>/dev/null)
 # diluting the very list §1/§2 scan for horizons. `grep -rn` makes the helper reachable. This opens
 # no false-NEGATIVE hole: a file whose only reference to an evidence artifact is a comment does not
 # touch that artifact at all, and a `rm -f` that is itself commented out deletes nothing.
+# AND BOTH LEGS OBSERVE THE TARGET, not merely that a delete exists. The conjunction above is over
+# the FILE (touches evidence ∧ deletes somewhere), never over what the delete REMOVES — so a script
+# that merely READS ~/.claude/cc-registry and separately cleans up its own `mktemp` scratch file is
+# convicted as an unreviewed reaper. Measured 2026-08-13 (item 412de404ecac): that was the whole of
+# §3's standing red on pristine origin/main, on two independent trees —
+# hooks/lib/peer-owned.sh (`rm -f "$porcf"`, porcf from mktemp at :405 and :587) and
+# scripts/deathwatch-watchfile.sh (`trap 'rm -f "$tmp"' EXIT`, tmp from mktemp at :79). Neither
+# deletes anything anyone could call evidence, and a permanently-red safety gate is a gate nobody
+# reads — the exact condition 48850a3b2 was written to end for four other reapers.
+#
+# 🚨 THE REMEDY THE ITEM PRESCRIBED — declare them — IS THE DEFECT, and this file already says so 20
+# lines up about the comment case: declaring a non-reaper "would have recorded two non-reapers as
+# reviewed reapers, diluting the very list §1/§2 scan for horizons". Same defect one level deeper.
+# The earlier fix taught leg 1 to observe code instead of prose; leg 2 still observed only that a
+# delete EXISTS. A declaration is a REVIEW claim, so declaring a file with nothing to review is not
+# a cheaper fix, it is a false entry in the list every other section trusts.
+#
+# FAIL-CLOSED, and that direction is deliberate. A site is exonerated ONLY when every path it names
+# resolves to a variable this same file assigns from `mktemp`. A literal path, an unattributable
+# variable, or a delete naming no variable at all still convicts. A real reaper cannot slip through:
+# it deletes something it did not create, so it has at least one site this cannot attribute.
+self_created_delete(){   # $1 = file · $2 = one comment-stripped delete line → 0 iff pure self-cleanup
+  local vars v
+  vars="$(printf '%s\n' "$2" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)"
+  [ -n "$vars" ] || return 1
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    grep -qE "^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?$v=[^=]*mktemp" "$1" || return 1
+  done <<EOF
+$vars
+EOF
+  return 0
+}
 has_code_delete(){
-  grep -nE -- '-delete|rm -f' "$1" 2>/dev/null | sed -E 's/^[0-9]+://; s/^[[:space:]]*//' | grep -qvE '^#'
+  local ln
+  while IFS= read -r ln; do
+    [ -n "$ln" ] || continue
+    self_created_delete "$1" "$ln" && continue
+    return 0
+  done < <(grep -nE -- '-delete|rm -f' "$1" 2>/dev/null \
+             | sed -E 's/^[0-9]+://; s/^[[:space:]]*//' | grep -vE '^#')
+  return 1
 }
 while IFS= read -r f; do
   [ -n "$f" ] || continue
