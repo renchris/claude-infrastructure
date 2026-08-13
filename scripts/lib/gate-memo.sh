@@ -176,6 +176,107 @@ memo_count() {  # $1=carried $2=run — the caller's own tally, folded into memo
   MEMO_RUNS=$(( MEMO_RUNS + $2 ))
 }
 
+# ---- BATCH per-file memo: the same verdict, at 1/50th the lookup cost ---------
+#
+# 🚨 WHY THIS EXISTS, AND IT IS THE MEASUREMENT THAT INVERTED THE PLAN. The per-file API above was
+# rolled onto test-hermeticity-lint and worked, so the obvious next step was to copy it onto the
+# three remaining ratchet arms. Timed first (this worktree, 2026-08-13, through `own_run` as
+# ship-land actually invokes them), that step is very nearly a NO-OP:
+#
+#   memo_file_hit, end to end                       16.8-17.1 ms/file   (3 forks: hash, hash, cat)
+#   git-identity-lint's per-file scan               18.5 ms/file        (727 files ⇒ 13.4s)
+#   pane-spawn-coverage-lint's per-file scan         19.5 ms/file        (404 files ⇒  7.3s)
+#
+# The memo would have cost 17 to save 19. Copying the proven pattern onto both arms would have
+# delivered ~2s of the ~21s they cost and read exactly like success. The bottleneck was never
+# "which lints lack the memo" — it is that the LOOKUP costs nearly as much as the check it replaces,
+# and nobody had measured that denominator. (Repo memory: read-the-diff-not-the-commit-subject, and
+# the recurring generator — a claim taken from a pattern's reputation rather than its measured cost.)
+#
+# WHERE THE 17 ms GOES, AND WHY BATCHING RETIRES IT. Three forks per lookup: `git hash-object` on
+# the file, `git hash-object --stdin` to mangle (salt, checker, blob) into one filename, and `cat`
+# to read the entry. Measured on this box, each fork is ~6 ms and everything else is free. So:
+#
+#   (a) memo_file_hit — 3 forks                                        16.8 ms/file
+#   (b) 1 fork (blob only) + `read` builtin                             7.2 ms/file
+#   (c) THIS: the population hashed in ONE fork, then pure builtins      0.33 ms/file
+#
+# `git hash-object -- f1 f2 f3 …` hashes a whole population in a single fork — 727 files in 0.156s,
+# 0.21 ms/file — so the per-file price becomes a `[ -r ]` and a `read`. That is what makes a memo
+# worth arming on an 18 ms/file check at all, and it also retires ~7.9s from test-hermeticity's
+# ALREADY-LANDED memo (468 suites x 16.8 ms), which the per-file API was quietly paying.
+#
+# 🚨 THE ONE NEW FAILURE MODE, AND ITS CONTROL. This API is INDEX-KEYED: blob i belongs to path i.
+# A batch that returned FEWER hashes than it was given would slide every later verdict onto the
+# wrong file — a stale-verdict generator, the one thing the invariant at the top of this file
+# forbids, and strictly worse than the cost it saves. Measured rather than assumed (four cases: a
+# missing path, an unreadable path, a directory, a dangling symlink): `git hash-object` ABORTS at
+# the first bad path with rc 128 and emits only the hashes BEFORE it. It never skips-and-continues,
+# so its output can only ever be a PREFIX — misalignment is unreachable today. The count is still
+# asserted ABSOLUTELY, because "unreachable today" is a property of this git, not of the contract:
+# a future one that skipped instead of aborting would silently produce exactly the misalignment.
+# A short count DISARMS the batch for the whole run (⇒ every lookup misses ⇒ today's behaviour).
+#
+# The entry is unchanged in strength. The per-checker digest moves from the FILENAME into a per-
+# checker DIRECTORY, the filename becomes the blob, and the body still RESTATES both components and
+# still requires an exact literal match — so a truncated write, a hand-edit or a collision reads as
+# a miss exactly as before. Only the arithmetic moved; nothing about what a hit means did.
+
+MEMO_B_OK=0        # 1 = the batch table is usable. 0 = every lookup misses, every record a no-op.
+MEMO_B_DIR=""      # per-checker directory
+MEMO_B_CK=""       # the checker digest, restated in every entry body
+MEMO_B_BLOBS=()    # INDEX-ALIGNED with the population the caller armed on
+
+memo_batch_arm() {  # $1=checker-id, then the EXACT ordered population → 0 = batch usable
+  MEMO_B_OK=0; MEMO_B_DIR=""; MEMO_B_CK=""; MEMO_B_BLOBS=()
+  [ "$MEMO_OK" = "1" ] || return 1
+  local ck="$1"; shift
+  [ "$#" -gt 0 ] || return 1                     # nothing to arm on ⇒ OFF, not a vacuous green
+  local ckdig n="$#" l
+  ckdig="$(printf '%s\nchecker=%s\n' "$MEMO_SALT" "$ck" | _memo_hash)" || return 1
+  [ -n "$ckdig" ] || return 1
+  MEMO_B_DIR="$MEMO_DIR/c-$ckdig"
+  mkdir -p "$MEMO_B_DIR" 2>/dev/null || return 1
+  [ -w "$MEMO_B_DIR" ] || return 1
+  # `< <(…)` and NOT a pipe: a pipe runs the loop in a subshell and the array would be discarded,
+  # leaving MEMO_B_BLOBS empty — which the count assertion below would then read as a short batch
+  # and disarm. Correct either way, but silently OFF is not the behaviour being shipped.
+  while IFS= read -r l; do MEMO_B_BLOBS[${#MEMO_B_BLOBS[@]}]="$l"; done \
+    < <(git hash-object -- "$@" 2>/dev/null)
+  # THE ALIGNMENT CONTROL — absolute, never a delta. See the block above.
+  if [ "${#MEMO_B_BLOBS[@]}" -ne "$n" ]; then MEMO_B_BLOBS=(); MEMO_B_DIR=""; return 1; fi
+  MEMO_B_CK="$ckdig"; MEMO_B_OK=1
+  return 0
+}
+
+memo_batch_hit() {  # $1=index into the armed population → 0 IFF that exact content is known-green
+  local b body
+  [ "$MEMO_B_OK" = "1" ] || return 1
+  b="${MEMO_B_BLOBS[$1]:-}"
+  [ -n "$b" ] || return 1
+  [ -r "$MEMO_B_DIR/$b" ] || return 1            # absent OR unreadable ⇒ miss ⇒ run the check
+  # `read` RETURNS 1 AT EOF-WITHOUT-A-NEWLINE, and the entry is written without one (matching
+  # _memo_put's format exactly). Consuming that rc as a verdict made every single lookup a miss —
+  # a memo that is silently OFF looks exactly like a memo with nothing to carry, so nothing but a
+  # positive control could have caught it, and the mutant case for the body check is what did.
+  # `body` is `local` and therefore empty if the read delivers nothing, so an unreadable or
+  # truncated entry still fails the exact match below rather than inheriting a stale value.
+  IFS= read -r body < "$MEMO_B_DIR/$b" 2>/dev/null || true
+  [ "$body" = "gate-memo v1 green $MEMO_B_CK $b" ]
+}
+
+memo_batch_record() {  # $1=index — only ever called on a PROVEN-green run
+  local b tmp
+  [ "$MEMO_B_OK" = "1" ] || return 0
+  b="${MEMO_B_BLOBS[$1]:-}"
+  [ -n "$b" ] || return 0
+  tmp="$MEMO_B_DIR/$b.$$.tmp"
+  printf 'gate-memo v1 green %s %s' "$MEMO_B_CK" "$b" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$MEMO_B_DIR/$b" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
 # ---- why the repo-wide RATCHET arms are NOT memoized here --------------------
 # P3's spec asks for a second mechanism beside this one: "cache each arm's verdict against lint-sha
 # + scanned-set state, or make the arm diff-incremental where that is SOUND. Where an arm cannot be
