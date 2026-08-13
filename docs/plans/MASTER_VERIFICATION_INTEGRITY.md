@@ -151,4 +151,62 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   concurrent slot and defeat the drain's single invariant. Purely additive (110 lines, 0 deleted); the
   historical `S` markers are preserved as the record of original scoping.
 
-  Rows closed so far this effort: **0**. Filed: **0**. Store: **470 → (re-derive at effort close)**.
+  **CLOSED THIS EFFORT (2), both on content, neither by running its row's remedy:**
+  - `918e9bac60b6` — ALREADY-DONE. A DISPROOF row whose disproof is CONFIRMED: `scripts/unattended-path-lint.sh`
+    exists (blob `808a895d82d16f77ec398852daf1089247acd3b3` on origin/main), its header cites its own
+    generator `cb6701bf2217` at `:26`, it IS wired into ship-land (`SHIP_LAND_UNATTENDED_LINT`,
+    `ship-land.sh:2558`, selftest guard `:2576`), and `--selftest` discriminates in both directions
+    (`:259`). **One correction that does not change the verdict:** the row cites the wiring at `:1757`
+    and smoke at `:1976`; live lines are `:2551-2576`. The row's line numbers were stale, the wiring is real.
+  - `3309486727cf` — DUPLICATE of `f295605eec01`, closed as store hygiene and explicitly NOT as fixed.
+    Both name one defect: `assert_twinkle_tables_paired` (`gen.py:2319`) compares only lengths
+    (`:2329`), blind to VALUE. `f295605eec01` survives because it is strictly richer — it carries the
+    assertion band (max floor ≤ .60, `STAR_TWINKLE_MAX` ≥ eligible low-field count,
+    `len(STAR_PERIODS)` ≥ 6) and the red-proof (restore .70/18/4).
+
+  **VERIFIED REAL, with its premise re-measured (do not re-triage):** `5d6dcbe8d462`. All three claims
+  hold — nightly's globs are `scripts/*gate*.sh` / `*lint*.sh` (`nightly-regression.sh:65-66`) and a
+  `.py` matches neither; `--check-anchors` does not exist (0 hits); `tests/anti-vacuity-contract.bats`
+  census is scoped to `tests/` (`:62`). ⚠️ **A naive grep says the harness IS referenced from that
+  suite — the reference is a COMMENT** (`:25`, *"OUT OF SCOPE, deliberately … Filed rather than
+  smuggled in here"*). Mention ≠ invocation; this is the same trap as row `5456e4cba2b5`, and it nearly
+  produced a false ALREADY-DONE here.
+
+  **THE DENOMINATOR IS SOUND — audited, because it looked vacuous.** `cc-backlog list --open --json`
+  returns **539** open rows with HETEROGENEOUS keys: `venuePlan` is present on only **340** (absent on
+  199, 37%), while `venue` is present on all 539. So the mission filter
+  `select((.venuePlan // "unlabelled") != "cloud")` defaults 199 rows to non-cloud, which reads like a
+  vacuous filter. **It is not.** Cross-tab: 271 `venue=local/plan=local` · 199 `venue=local/plan=absent`
+  · 45 `venue=local/plan=cloud` · 24 `venue=cloud/plan=cloud`. **Zero** rows are plan-absent AND
+  `venue=cloud`, so the default is safe. **Keep `venuePlan` (470). Do NOT switch to `venue` (515)** —
+  that wrongly adopts the 45 rows planned for the cloud venue.
+
+  **THE INTAKE LEAK HAS A MECHANISM, not just a rate.** Closed 2 + filed 1 should read 469; the store
+  read **470**. Measured cause: in 90 minutes siblings minted four rows, two of them AUTOMATICALLY by
+  the re-land generator on a FAILED sibling land — `cdeb77e34952` (ship-land exit 143/SIGTERM) and
+  `cfa642b48fc7` (exit 5). Lands fail because the box is saturated, so **load manufactures backlog
+  faster than a drain closes it**. This is the same cancellation the predecessor measured, now with the
+  generator visible. The predecessor's remedy row `b15a2984d134` (ship-land's falsifier attach is
+  swallowed) is still open.
+
+  **A SELF-FALSIFICATION worth keeping.** The box went to battery at 21:16 PDT (98%; now 38%), and an
+  already-`blocked` row `8177e9ba98e6` asks the operator to plug in, citing postland being unable to
+  stamp green. Tempting single cause — and **false**: postland's SIGKILLs began 2026-08-12T22:23:58Z =
+  **15:23 PDT, six hours BEFORE** the battery switch, with SIGTERM cuts back to 15:02 PDT, and `pmset`
+  records no thermal and no performance warning. Power will not clear the kill-loop. Filed
+  `782607797fc5` (privileged signal trace — genuinely operator-gated: macOS exposes no unprivileged way
+  to learn a signal's SENDER) stands as a SEPARATE cause from `8177e9ba98e6`. **Do not merge them.**
+
+  🚨 **TRIAGE FAN-OUT FAILED — 5 agents, 0 deliveries, BOTH channels.** Five named `Agent({name})`
+  triage agents were spawned over the 20 rows. They emitted `idle_notification` repeatedly and
+  delivered **nothing** by message, then nothing by file after being re-briefed with an explicit
+  Delivery path. `TaskStop` de-registered all five (`in_process_teammate`). **Both closes above came
+  from the lead verifying rows directly, in a fraction of the elapsed time.** Memory
+  `shutdown-request-is-not-an-actuator` already prescribes the Delivery-path field and records the file
+  channel at 4/4 vs SendMessage 0/4 — here even the file channel returned 0/5. **NEXT EFFORT: triage
+  the cheap rows inline first (a content read is minutes), and treat fan-out as optional
+  breadth, never as the critical path.** A named agent is a persistent teammate whose findings must be
+  REQUESTED, not awaited — and requesting them may still return nothing.
+
+  Rows closed this effort: **2**. Filed: **1** (`782607797fc5`, operator-gated). Condition non-cloud:
+  **20 → 19**. Store non-cloud: **470 → 470 (FLAT — sibling intake cancelled the net, as above).**
