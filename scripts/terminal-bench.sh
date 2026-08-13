@@ -164,7 +164,13 @@ done
 # and -f would also match every session merely discussing the app.
 if [ -z "$PID" ]; then
   for _p in $PROC_NAMES; do
-    PID="$(ps -eo pid=,comm= | awk -v want="$_p" '{n=split($2,a,"/"); if (a[n]==want) {print $1; exit}}')"
+    # comm= is the LAST column here, so its value runs to end-of-line and its SPACES are split like
+    # any other separator: $2 is only the first token of the path. An app installed under e.g.
+    # ".../Application Support/..." therefore basenamed to "Application", never matched, and the
+    # bench silently measured NOTHING while looking exactly like "the app isn't running". Rebuild
+    # $2..NF before splitting on "/". Exact here and only here, because comm= is last and nothing
+    # follows it to swallow (the rebuild proven in 273df7cd for scripts/compressor-sentinel.sh).
+    PID="$(ps -eo pid=,comm= | awk -v want="$_p" '{comm = $2; for (i = 3; i <= NF; i++) comm = comm " " $i; n = split(comm, a, "/"); if (a[n] == want) {print $1; exit}}')"
     [ -n "$PID" ] && break
   done
 fi

@@ -75,7 +75,12 @@ _cc_spawn_log_file() {
 _cc_spawn_ancestry() { # $1=start pid → echoes the chain, or nothing
   local start="${1:-$$}" max="${CC_SPAWN_ANCESTRY_MAX:-8}"
   ps -Ao pid=,ppid=,comm= 2>/dev/null | awk -v start="$start" -v max="$max" '
-    { pid=$1; ppid=$2; c=$3; sub(/.*\//, "", c); P[pid]=ppid; C[pid]=c }
+    # comm= is LAST, so it runs to end-of-line and its spaces split like any separator: $3 alone is
+    # the first token, so an executable under a path containing a space (".../Application Support/...")
+    # logged a TRUNCATED ancestry label. Rebuild $3..NF before basenaming. Sibling readers
+    # capacity-alarm.sh:731 and cc-ignition-gate:177 already carry this rebuild (273df7cd); this site
+    # and two others did not.
+    { pid=$1; ppid=$2; c=$3; for (i = 4; i <= NF; i++) c = c " " $i; sub(/.*\//, "", c); P[pid]=ppid; C[pid]=c }
     END {
       out=""; cur=start
       for (i = 0; i < max && cur != "" && cur != "0"; i++) {

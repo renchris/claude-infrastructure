@@ -409,7 +409,12 @@ ce_size() {
     # the column exactly, so this is a defect that PASSES a spot-check on one live pid and dies on the
     # next — the same silent-no-op shape as the dead column this signal replaces. awk splits on runs of
     # whitespace and ignores leading blanks, so the width can never matter.
-    line="$("${CC_CE_PS:-ps}" -o rss=,comm= -p "$pid" 2>/dev/null | awk 'NR==1{print $1" "$2}' || true)"
+    # comm= is LAST, so its value runs to end-of-line and its SPACES split: $2 is only the first
+    # token of the executable path. This one GATES A DECISION — the `grep -qE "$rx"` below turns a
+    # non-match into rss=0 ("unknown, not small") — so a binary living under a path with a space
+    # (".../Library/Application Support/...") yielded "/Users/.../Application", failed the match, and
+    # the signal silently read unknown for every such pid. Rebuild $2..NF. Same class as 273df7cd.
+    line="$("${CC_CE_PS:-ps}" -o rss=,comm= -p "$pid" 2>/dev/null | awk 'NR==1{c = $2; for (i = 3; i <= NF; i++) c = c " " $i; print $1" "c}' || true)"
     rss="${line%% *}"; comm="${line#* }"
     case "$rss" in ''|*[!0-9]*) rss=0 ;; esac
     rx="${CC_CE_RSS_COMM_RX:-claude}"
