@@ -58,6 +58,16 @@ setup() {
   # janitor that exits at line 1. Unset it here so each test states its own switch position. The
   # FILE half needs no unsetting: its default resolves under the fixtured $HOME set above.
   unset CC_WTGC_DISABLE CC_WTGC_DISABLE_FILE
+  # AND the runner's own re-entrancy marker, for the same reason one level out (R-c's sibling, R-a).
+  # `bin/cc-bats:397` exports CC_BATS_ACTIVE=1 and `:394` short-circuits the whole shim when it is
+  # already set, so this suite inherits a DIFFERENT environment depending on whether it was invoked
+  # as `bats` or as `cc-bats` — and the postland corpus and a developer's terminal do not agree on
+  # which. Sibling suites already unset it (tests/qos-chokepoint.bats:49). The subject reads no
+  # CC_BATS_* itself today, so this changes no assertion; it removes the invocation path as a
+  # variable, which is what stops a future PATH-shim edit from making the two runs disagree
+  # silently. (memory: hermetic-in-stubs-not-in-interpreter — an environment hypothesis is only
+  # tested at an environment you actually cleaned.)
+  unset CC_BATS_ACTIVE CC_BATS_SEEN CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET
 }
 
 # team <dir> <member> — record a team at <dir> (relative to TEAMS) whose roster names <member>.
@@ -69,9 +79,27 @@ team() {
 }
 
 # wt <name> <branch> — a clean, landed, idle worktree (the baseline REMOVE candidate).
+#
+# 🚨 THE ADD'S rc IS ASSERTED, AND THE DIRECTORY IS ASSERTED TO EXIST, because this suite's whole
+# REMOVE half reads `[ ! -d "$p" ]` — an assertion a fixture that never CREATED $p satisfies for
+# free. Until 2026-08-13 the `worktree add` below discarded its rc into `2>/dev/null` and echoed the
+# path unconditionally, so a fixture failure was indistinguishable from a correct disposal.
+# MEASURED, by pointing the add at a ref that does not exist so it fails every time: **22 of this
+# suite's 79 tests still passed** over a fixture that created nothing at all. The subject here is a
+# REAPER; a green suite that cannot tell "removed it" from "it was never there" is the exact shape
+# of the vacuous pass this corpus keeps re-learning (memory: verification-harness-vacuous-pass-traps).
+# Recorded as R-c in docs/plans/WORKTREE_MANAGEMENT_V2.md §6, which called an explicit fixture
+# assertion "worth" having; the measurement above is why it was not optional.
+#
+# `stderr` is no longer swallowed either — a silenced instrument failure is what made this
+# survivable. Fail LOUD and fail EARLY: returning 1 from a command substitution propagates under
+# bats' errexit, so a broken fixture reds its own test instead of certifying the subject.
 wt() {
-  git -C "$R" worktree add -q -b "$2" "$BATS_TEST_TMPDIR/$1" HEAD 2>/dev/null
-  echo "$BATS_TEST_TMPDIR/$1"
+  local p="$BATS_TEST_TMPDIR/$1"
+  git -C "$R" worktree add -q -b "$2" "$p" HEAD \
+    || { echo "wt: FIXTURE FAILED — 'worktree add -b $2 $p' returned $?" >&2; return 1; }
+  [ -d "$p" ] || { echo "wt: FIXTURE FAILED — $p absent after a successful add" >&2; return 1; }
+  echo "$p"
 }
 
 # abandoned_wt <name> <branch> — clean + idle past the abandon horizon + genuinely UNLANDED.
