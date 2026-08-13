@@ -51,10 +51,76 @@ setup() {
   export CC_EXPIRED_LEDGER="$BATS_TEST_TMPDIR/expired-unread.jsonl"
   export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/watchdog-teardown"
   export CC_CLOSE_ATTRIB_LOG="$BATS_TEST_TMPDIR/close-attrib.jsonl"
+  # 🚨 THE SAME RULE ONE LAYER OUT — a seam that reaches a live BINARY, not a live DIR. This one did
+  # not corrupt the operator's state; it WEDGED the suite, and post-land filed it HUNG (backlog
+  # 2d67e9dff07b, `tests/autonomy-sweep.bats wedged at 216/8624`).
+  #
+  # `cc-backlog add` force-spawns `cc-dispatch --decide` on every successful add (bin/cc-backlog
+  # `dispatch_kick`), and this file drives 74 sweep invocations per run — each one able to add via a
+  # class-B default, the ratchet's consumer, the grouping sweep, settings-drift, or a fixture. The
+  # spawn is `( "$bin" --decide >/dev/null 2>&1 </dev/null & )`, which LOOKS detached and is not:
+  # 0/1/2 are redirected and **fd 3 is not**, and fd 3 is bats' own TAP channel — so bats blocks
+  # until every spawned dispatch pass exits. Measured on this file, cc-dispatch executable on the
+  # box: 150 s and 9 REAL dispatch passes fired at the operator's live store, versus 29 s and 0 with
+  # the switch below. postland-verify runs the file alone under POSTLAND_FILE_TIMEOUT_S (300 s), so
+  # on a box where a dispatch pass is not a 120 s stub that is a hang with no verdict.
+  #
+  # THE REMEDY IS THE SEAM, NEVER KILLING THE SPAWNED PEERS. A `pkill cc-dispatch` from a test reaps
+  # the operator's REAL dispatch workers — a strictly worse bug than the hang it would hide.
+  #
+  # THREE LAYERS, because the kill switch alone is one deleted line from silently re-arming — and a
+  # re-arm is invisible here, since the spawn's own output goes to /dev/null:
+  #   KICK=off     the documented switch (bin/cc-backlog §6)
+  #   KICK_BIN     a stub, so a regressed switch still cannot reach ~/.claude/bin/cc-dispatch
+  #   KICK_MARKER  the debounce stamp — unexported it is the OPERATOR'S, so whether a given test
+  #                kicks at all depends on when they last filed an item by hand.
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/stub-dispatch"
+  cat > "$CC_BACKLOG_KICK_BIN" <<'SH'
+#!/bin/bash
+# Closes fd 3 FIRST: bats' TAP channel is what a background grandchild holds open, so a spawn that
+# ever slips past the switch above still cannot wedge the run — it logs argv and exits.
+exec 3>&- 2>/dev/null || true
+echo "$@" >> "$0.log"
+SH
+  chmod +x "$CC_BACKLOG_KICK_BIN"
+  # THE LAST TWO LIVE-STATE READS, found by running one sweep under a canary $HOME and listing every
+  # path it touched. Both are pure reads, so neither can corrupt anything — they are redirected
+  # because they make a test's COST and OUTCOME depend on the operator's machine, on all 74
+  # invocations, which is the same defect as the ratchet's state above.
+  #   CC_DRIFT_DIRS    settings-drift-assert.sh --file otherwise jq-diffs the five REAL config dirs
+  #                    ($HOME/.claude{,-next,-secondary,-tertiary,-quaternary}) — and on a box where
+  #                    they genuinely differ it FILES a row, i.e. one more add, i.e. one more kick.
+  #   CC_POSTLAND_DIR  cc-premise's postland arm otherwise reads $HOME/.claude/autonomy/postland.
+  #                    This suite runs FROM that verifier, so it would be reading the ledger of the
+  #                    very run executing it.
+  # Three identical dirs, not zero: the checker needs two readable ones to reach a verdict at all,
+  # and an unreadable set is a NON-VERDICT (rc 3) — a different journal field from the agreement
+  # this asserts, so an empty fixture would quietly move what `settings_drift_rc` means.
+  # Carried as an ARRAY and joined only for the env var: CC_DRIFT_DIRS is a space-separated list by
+  # the checker's own contract, so every use site would otherwise need a bare `$CC_DRIFT_DIRS` and a
+  # per-site SC2086 waiver. One join, no unquoted expansions.
+  local _cfg=("$BATS_TEST_TMPDIR/cfg-a" "$BATS_TEST_TMPDIR/cfg-b" "$BATS_TEST_TMPDIR/cfg-c")
+  export CC_DRIFT_DIRS="${_cfg[*]}"
+  export CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
+  # ⏱ AND THE BOUNDS THE SWEEP'S OWN ARMS RUN UNDER. The defaults (180 s per backlog-health arm,
+  # 420 s for the currency pass) are sized for a live store in the Background band; against these
+  # tmpdir fixtures every one of them is sub-second, so a bound that large is not a bound here — it
+  # is 180 s of headroom for the next un-stubbed seam to hide in, times 74. Sized to the band this
+  # actually runs in (memory: bound-must-fit-the-band-not-the-bench), and generous by ~30x.
+  export CC_SWEEP_BOUND_S="${CC_SWEEP_BOUND_S:-30}"
+  export CC_PREMISE_PASS_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-60}"
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
            "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR" \
-           "$CC_HANDOFF_ALARM_DIR" "$CC_TEARDOWN_DIR"
+           "$CC_HANDOFF_ALARM_DIR" "$CC_TEARDOWN_DIR" "$CC_POSTLAND_DIR" \
+           "${_cfg[@]}"
+  # identical on purpose — the drift checker's AGREEMENT path, so settings_drift_rc stays 0
+  local _d
+  for _d in "${_cfg[@]}"; do
+    printf '{"permissions":{"deny":["Bash(sudo:*)"],"ask":[],"allow":[]}}\n' > "$_d/settings.json"
+  done
   # stub cc-notify: log every call to <stub>.log, and emit a cc-notify-SHAPED verdict token on
   # STDERR — the real binary does, and the exit code alone is NOT the outcome (measured against a
   # dead pane: `verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997` at rc=0). A stub
@@ -1020,4 +1086,44 @@ SH
   [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")]|length')" = "1" ]
   # …and it carries its OWN falsifier, so it retires itself when coverage recovers.
   [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")][0]|.falsifier|length>0')" = "true" ]
+}
+
+# ── THE HANG'S OWN GUARD (backlog 2d67e9dff07b) ─────────────────────────────────────────────────
+# Asserting the setup() export would only assert that a line exists. What wedged the suite was a
+# BEHAVIOUR — an add spawning a live dispatch pass that holds bats' fd 3 — so this asserts the
+# behaviour, on the one arm that reliably reaches `cc-backlog add`: the ratchet's consumer.
+#
+# THE CONTROL IS NOT OPTIONAL. Without it "the stub was never called" passes just as well when the
+# add path is broken, when the ratchet never files, or when the stub is unreachable — three ways to
+# green with the mechanism absent, which is precisely this file's recorded trap
+# (memory: verification-harness-vacuous-pass-traps). The control re-runs the identical fixture with
+# the switch flipped and requires the kick to LAND, so this case can only pass while the spawn is
+# real and the switch is what stops it.
+@test "the suite never fires the live dispatcher — cc-backlog's kick is stubbed AND switched off" {
+  export CC_PREMISE_PASS_EVERY_S=99999
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/ratchet.json"
+  printf '{"coverage_high_water":"99.0","denominator_version":2,"recorded":"2020-01-01T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  "$CC_BACKLOG_BIN" add --title "kick guard fixture" --project probe --source test >/dev/null
+
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"ratchet_filed":"filed"' "$CC_IDL"          # the add really happened…
+  [ ! -f "$CC_BACKLOG_KICK_BIN.log" ]                  # …and nothing was spawned
+
+  # The kick bin must be OURS, never the operator's — the belt that survives a deleted switch.
+  case "$CC_BACKLOG_KICK_BIN" in "$BATS_TEST_TMPDIR"/*) ;; *) return 1 ;; esac
+
+  # POSITIVE CONTROL: same fixture, switch on ⇒ the kick lands, in the stub and not in ~/.claude/bin.
+  # `export` on its own line, not a `VAR=x run …` prefix — the prefixed form does not reach the
+  # subshell bats forks (the harness defect recorded on the W1 interval-gate case above).
+  rm -f "$CC_RATCHET_STATE"
+  printf '{"coverage_high_water":"99.0","denominator_version":2,"recorded":"2020-01-01T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  : > "$CC_IDL"
+  export CC_BACKLOG_KICK=on
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_BACKLOG_KICK_BIN.log" ]
 }
