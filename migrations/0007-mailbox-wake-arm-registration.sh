@@ -29,6 +29,13 @@
 # and wakes the model when it exits 2. Arming stops being a thing to remember and becomes a
 # declarative line of settings JSON. Proven live 2026-07-29; never wired anywhere until this diff.
 #
+# A/B'd live 2026-08-13 (docs/research/goal-asyncrewake-ab-2026-08-13/, backlog d9d0012229b7): the
+# claim that this registration wakes an idle session WITHOUT deferring an armed /goal was, until
+# then, a binary read. Three hermetic arms varying only HOW the same watcher is registered — 30
+# Stops, CC's own background_tasks recorded at each — split perfectly: 24 registry-empty Stops → 24
+# goal evaluations, 6 holding a parked shell → 0. The asyncRewake watcher was alive across 5 of the
+# empty-registry Stops and fired its wake in the same session, so both halves hold together.
+#
 # WHY A WRAPPER AND NOT `cc-await-ping` DIRECTLY. The two contracts are INVERTED — asyncRewake wakes
 # on exit 2, cc-await-ping exits 0 on mail-arrived and 2 on timeout. Registered as the 2026-07-29
 # remainder specifies, the hook would be silent on every delivered message and fire a spurious wake on

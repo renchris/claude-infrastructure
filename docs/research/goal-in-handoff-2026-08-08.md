@@ -617,7 +617,20 @@ deferrer any more**:
 | `session-continue.sh` WAKE FLOOR | **blocked the stop** and instructed the arm — the instruction-injector | fourth abstain state: a LIVE goal IS the wake path; stands down, spends no budget |
 | the model's own habit (CLAUDE.md § Agent Teams recipe) | armed it anyway | **chokepoint deny** in `validate-bash.sh`: background `cc-await-ping` under a LIVE goal is refused with the mechanism + the goal-safe alternative in the reason (command-position match, so a bg `rg cc-await-ping` is untouched; fail-open on any read failure) |
 | the model's own habit, **hand-rolled** (2026-08-11, backlog `0e021a9d68e3`) | **ungated — the asymmetry**: `cc-await-ping` was refused while a raw `Bash(run_in_background)` poller with the identical effect went straight through | the same deny, **widened from one tool to the park-by-construction CLASS**: an event-polling loop (`while`/`until` + `sleep`), a follow-mode `tail`, an explicit `sleep N` ≥ `CC_GOAL_BG_SLEEP_SECS` (120), or `cc-await-ping` in any segment's command position |
-| idle wake coverage | only the model-armed watcher | **migration 0007 registered**: `mailbox-wake-arm.sh` arms at birth as an asyncRewake hook — a hook-engine Promise, **not a task-registry entry** (read from the binary: `bip()` @237768400 tracks it in a module Set and wakes via a synthesized task-notification), so it wakes an idle session WITHOUT deferring the goal |
+| idle wake coverage | only the model-armed watcher | **migration 0007 registered**: `mailbox-wake-arm.sh` arms at birth as an asyncRewake hook — a hook-engine Promise, **not a task-registry entry** (read from the binary: `bip()` @237768400 tracks it in a module Set and wakes via a synthesized task-notification), so it wakes an idle session WITHOUT deferring the goal — **now MEASURED, not only read: `docs/research/goal-asyncrewake-ab-2026-08-13/`** |
+
+**Row 5 was the one claim in this table that rested on a code read alone, and it is now probed
+(2026-08-13, backlog `d9d0012229b7`).** Three hermetic arms on CC 2.1.231 held the goal, the
+watcher and the Stop hook fixed and varied only how the watcher was registered, with CC's own
+`background_tasks` array — the population its deferral predicate scans — recorded at every Stop:
+**30 Stops, 24 with an empty registry produced 24 evaluations, 6 holding one `shell/running` task
+produced 0.** In the asyncRewake arm the watcher was provably alive across 5 of those empty-registry
+Stops (`START` → `alive` polls → `FIRE poll=114`) and fired its wake in the same session, so both
+halves of the fix — *goal still evaluates* and *idle session still wakes* — are observed together
+rather than assembled from two separate proofs. The strongest single row is the `parked-long`
+control: 5 consecutive deferred Stops in a session whose first Stop had evaluated normally 20 s
+earlier, i.e. a WITHIN-session control where only registry occupancy moves. The Stop-side (W2)
+question is untouched by this and stays open — see `goal-safe-2way-comms-2026-08-13.md` §5.
 
 The goal-live predicate is `hooks/lib/goal-state.sh :: goal_live_condition` — last `goal_status`
 ATTACHMENT with `met==false` and not `failed` (the § sentinel dictionary; prose-decoy filtered).

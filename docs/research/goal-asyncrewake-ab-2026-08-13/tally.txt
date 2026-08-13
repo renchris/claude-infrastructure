@@ -1,0 +1,4 @@
+armB      registry-EMPTY stops=9   → evaluations=9   | registry-OCCUPIED stops=0   → evaluations=0
+armA      registry-EMPTY stops=14  → evaluations=14  | registry-OCCUPIED stops=1   → evaluations=0
+armA2     registry-EMPTY stops=1   → evaluations=1   | registry-OCCUPIED stops=5   → evaluations=0
+TOTAL     registry-EMPTY stops=24  → evaluations=24  | registry-OCCUPIED stops=6   → evaluations=0
