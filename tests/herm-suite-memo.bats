@@ -44,6 +44,14 @@ setup() {
 
   # Rules whose tables cost the fixed 10.4s; the seam/env roots would also point outside this repo.
   export CC_HERM_SEAM_RULE=off CC_HERM_ENV_RULE=off
+
+  # THIS SUITE'S SUBJECT IS THE LINT, and the lint carries both of its own anchors by construction —
+  # a shape-5a seam defaulting to a constant /tmp path, and an inherited value this repo injects
+  # into every pane it launches. A suite that names it and takes no position on either inherits
+  # them, so it would pass here and go red inside a fired pane. Its own rules 5 and 6 caught this
+  # at the gate, on this file, which is the ratchet working rather than an obstacle to it.
+  export CC_HERM_SEAM_SELFPROBE="$BATS_TEST_TMPDIR/seam-anchor"
+  export CC_HERM_ENV_SELFPROBE=0
 }
 
 run_lint() {  # → combined output of one whole-corpus run over the real slice
