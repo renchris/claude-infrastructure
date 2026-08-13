@@ -62,12 +62,47 @@ mkfixture() {
   git -C "$R" commit -qm seed
   printf 'fixed\n' >> "$R/bin/subject-tool"
   git -C "$R" commit -qam "the subject fix"
-  SHA_SUBJECT="$(git -C "$R" rev-parse --short=8 HEAD)"
+  SHA_SUBJECT="$(reroll_until_sha_shaped "$R" "the subject fix")"
   printf 'unrelated\n' >> "$R/bin/other-tool"
   git -C "$R" commit -qam "an unrelated fix"
-  SHA_OTHER="$(git -C "$R" rev-parse --short=8 HEAD)"
+  SHA_OTHER="$(reroll_until_sha_shaped "$R" "an unrelated fix")"
   git -C "$R" update-ref refs/remotes/origin/main HEAD
   export CC_PREMISE_REPO="$R"
+}
+
+# reroll_until_sha_shaped <repo> <message> — HEAD's --short=8 sha, guaranteed not to be all digits.
+#
+# 🚨 THIS FIXTURE WAS A COIN-FLIP, and it is the reason this suite was intermittently red off-box
+# (run 31652700852, 2026-08-12) while every local run looked fine. `bin/cc-premise`'s `cited_shas()`
+# skips an all-digit token BY DESIGN — `if tok.isdigit() ... continue` — because a bare number in
+# prose ("fixed 12345678 rows") is not a git sha, and RE_SHA `\b[0-9a-f]{7,40}\b` cannot tell the
+# two apart. That rule is CORRECT and is not what changed here. (Named by FUNCTION, not by line:
+# a line number in a comment rots on the next edit above it, and this one already did.)
+#
+# What was wrong is that this fixture generated a RANDOM subject and assumed it would always be
+# recognised. P(an 8-char hex sha is all digits) = (10/16)^8 = 2.33%, and this suite builds ~5
+# fixtures that assert the finding, so ~11% of runs lost it — measured 1/8, 1/6 and 1/12 through
+# scripts/offbox-run.sh against 0/40 outside bats. The failing TEST moved run to run (8, 13, 15),
+# which is exactly what an unseeded fixture looks like and exactly why it read as a load artifact.
+#
+# The re-roll varies the commit MESSAGE rather than amending in place: an `--amend --no-edit` inside
+# the same second can reproduce the identical sha and spin forever. Each attempt is an independent
+# 2.33%, so this terminates immediately in practice, and the sha stays a REAL resolvable commit —
+# the landed-diff conjunct is still exercised against real history rather than a stubbed token.
+#
+# BOTH shas are re-rolled, and SHA_OTHER matters as much as SHA_SUBJECT: the controls that assert
+# SILENCE use it, so an all-digit SHA_OTHER would make them pass because the token was skipped
+# rather than because the landed-diff conjunct rejected it — a vacuous control, which is the defect
+# this file's own header warns about (memory: sibling-guard-makes-the-fixture-vacuous).
+reroll_until_sha_shaped() { # <repo> <base message>
+  local r="$1" msg="$2" sha n=0
+  sha="$(git -C "$r" rev-parse --short=8 HEAD)"
+  while [ -z "${sha//[0-9]/}" ]; do
+    n=$((n + 1))
+    git -C "$r" commit -q --amend -m "$msg (reroll $n)"
+    sha="$(git -C "$r" rev-parse --short=8 HEAD)"
+  done
+  printf '%s' "$sha"
 }
 
 # add <id> <title> [ts] [source] — one well-formed `add` record. Ids are hand-chosen so the
@@ -324,4 +359,74 @@ refute_match() { [ "$(printf '%s' "$1" | grep -c "$2")" -eq 0 ]; }
   grep -q 's1s1s1s1s1s1' "$pfile"
   grep -q "$SHA_SUBJECT" "$pfile"
   grep -q 'ADJUDICATE BEFORE WORKING' "$pfile"
+}
+
+# ── THE FIXTURE'S OWN SUBJECT IS A RANDOM VARIABLE, AND THAT WAS A BUG ────────────────────────────
+# These two pin the mechanism that made this suite intermittently red off-box while every local run
+# looked healthy (run 31652700852, 2026-08-12; measured 1/8, 1/6, 1/12 through scripts/offbox-run.sh
+# against 0/40 outside bats). They are deterministic where the flake was not: the flake needed a
+# 2.33% sha, these force the token directly.
+
+@test "an ALL-DIGIT SUBJECT sha is skipped even though it IS a real landed commit" {
+  # bin/cc-premise `cited_shas()` skips an all-digit token BY DESIGN — a bare number in prose
+  # ("fixed 12345678 rows", a port, a duration) is not a git sha, and RE_SHA \b[0-9a-f]{7,40}\b
+  # cannot tell them apart. The rule is CORRECT; this pins it, and records why mkfixture must never
+  # mint such a sha for its own subject.
+  #
+  # 🚨 TWO WAYS TO WRITE THIS TEST VACUOUSLY, both of which I wrote before this one worked:
+  #   (a) a literal `12345678` — unresolvable, so the finding is absent for a SECOND reason and a
+  #       mutation of the skip leaves the test green.
+  #   (b) grinding the sha of the wrong commit — the fixture's LAST commit touches bin/other-tool,
+  #       which the item does not cite, so the landed-diff conjunct rejects it whatever its digits.
+  # It has to be the SUBJECT commit — the one touching the cited path — ground to an all-digit
+  # abbreviation. Then the only remaining difference from the passing case is the token's shape.
+  # Verified two-sided by mutating the skip in cited_shas: with it, silent; without it, the finding
+  # fires.
+  local r="$BATS_TEST_TMPDIR/digitrepo" i sha=""
+  mkdir -p "$r/bin"
+  printf 'seed\n' > "$r/bin/subject-tool"
+  printf 'seed\n' > "$r/bin/other-tool"
+  git -C "$r" init -q -b main .
+  git -C "$r" -c user.email=t@t -c user.name=t add -A
+  git -C "$r" -c user.email=t@t -c user.name=t commit -qm seed
+  printf 'fixed\n' >> "$r/bin/subject-tool"
+  git -C "$r" -c user.email=t@t -c user.name=t commit -qam "the subject fix"
+  # Grind the SUBJECT commit to an all-digit abbreviation. p=(10/16)^8 per attempt, so 800 tries
+  # miss ~1e-8 of the time; the abstain below is LOUD rather than a silent skip, because a miss
+  # would mean sha abbreviation changed, not that we were unlucky.
+  for i in $(seq 1 800); do
+    git -C "$r" -c user.email=t@t -c user.name=t commit -q --amend -m "grind $i"
+    sha="$(git -C "$r" rev-parse --short=8 HEAD)"
+    [ -z "${sha//[0-9]/}" ] && break
+    sha=""
+  done
+  [ -n "$sha" ] || { echo "could not grind an all-digit SUBJECT sha in 800 attempts"; false; }
+  printf 'unrelated\n' >> "$r/bin/other-tool"
+  git -C "$r" -c user.email=t@t -c user.name=t commit -qam "an unrelated fix"
+  git -C "$r" update-ref refs/remotes/origin/main HEAD
+  export CC_PREMISE_REPO="$r"
+
+  victim
+  done_at s1s1s1s1s1s1 2026-08-06T00:00:00Z "$sha — owned_wait_probe now keys on process cwd"
+  add s1s1s1s1s1s1 "the sibling stream's own filing of the same defect" 2026-08-04T00:00:00Z
+
+  run "$CP" contract v0v0v0v0v0v0
+  [ "$status" -eq 0 ]
+  [ -z "$(sup_lines "$output")" ]
+}
+
+@test "CONTROL: the SAME evidence with ONE hex digit in the token DOES fire" {
+  # The pair is what makes the case above evidence rather than a tautology: everything else is
+  # byte-identical, so only the token's shape can explain the difference. Without it, "silent" would
+  # also be satisfied by an arm that had simply stopped working.
+  victim
+  done_at s1s1s1s1s1s1 2026-08-06T00:00:00Z "$SHA_SUBJECT — owned_wait_probe now keys on process cwd"
+  add s1s1s1s1s1s1 "the sibling stream's own filing of the same defect" 2026-08-04T00:00:00Z
+
+  run "$CP" contract v0v0v0v0v0v0
+  [ "$status" -eq 0 ]
+  [ -n "$(sup_lines "$output")" ]
+  # …and the guarantee mkfixture now owes this control: its subject is never the skipped shape.
+  run bash -c '[ -n "${1//[0-9]/}" ]' _ "$SHA_SUBJECT"
+  [ "$status" -eq 0 ]
 }
