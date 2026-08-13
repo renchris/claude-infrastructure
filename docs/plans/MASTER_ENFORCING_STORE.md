@@ -71,8 +71,12 @@ removed in 2026-05).
 project+title+source and returns before writing — the `falsify` verb exists for exactly this and needs
 to be pointed at them. `cc-backlog falsify` screens "does the probe pass NOW" but not "did it ALREADY
 pass on the day the row was filed", which is the difference between a probe that retracts live work and
-one that never should have been stored. `cc-value tasks_closed` folds status as the RAW EVENT
-(`bin/cc-value:179-180`), so any non-`done` event reads as a status. Rows filed under the wrong project
+one that never should have been stored. ~~`cc-value tasks_closed` folds status as the RAW EVENT
+(`bin/cc-value:179-180`), so any non-`done` event reads as a status.~~ **DISCHARGED 2026-08-13** — that
+fold now keys status on `done|block|unblock|claim|reopen` and carries status *and* ts through
+otherwise, matching the three sibling folds; fixing only the status half was measured to trade the
+under-count for a worse over-count (the 241 venue-masked rows would all have read done-today), so both
+move together. Rows filed under the wrong project
 (code in claude-infrastructure, filed under `reso-management-app`) are unreachable by every dispatch
 scoped to their real tree. And three DISPROOF rows sit open with nothing consuming their refutations.
 
