@@ -272,3 +272,26 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   **NO LAND REGRESSION:** `ship-land.sh:2322` treats any non-zero as `gate_red`, so a could-not-run
   was red before (1) and is red now (2). What changed is that the lint is now HONEST, which is the
   prerequisite for `446fe07464e0` (9 of 15 ratchet arms still collapse exit 2 into `gate_red`).
+
+- **2026-08-13 — the live layer CONVERGED, and it is important not to misread why.** After
+  `b7f771848` the ledger reads `✅ Complete & live on trunk`, the shared checkout is at that sha, and
+  all four of this session's fixes are verified LIVE **by content** (`arm_nonverdict` ×9 in
+  `~/.claude/scripts/ship-land.sh`; the `$N..NF` rebuild in `~/.claude/hooks/lib/context-econ.sh`;
+  `CHECK_FAILED` ×9 in the live `test-walltime-lint.sh`; `nonverdict` ×3 in the live
+  `utc-stamp-lint.sh`). `deploy-live` also ran its three host-suite checks against the LIVE layer and
+  all passed — including `tests/test-walltime-lint.bats`, i.e. this session's own fix re-proved where
+  it actually executes.
+
+  🚨 **But the postland deadlock is NOT resolved, and a later reader must not conclude it was.** Every
+  postland stamp is still `cut` — **zero green in the preceding 6 hours, 68 cumulative kill events in
+  `runner.log`**, with a run in flight. The live layer advanced through the **DEGRADED-ADVANCE** path:
+  the converge budget expired, and `deploy-live` is built (dcf2f11a) to convert that standing refusal
+  into *advance + page* rather than an indefinite freeze — the exact design
+  `permission-gate-lint`'s header cites as the cure for the 545-refusal scar. **So trunk is live
+  WITHOUT a full-suite green proof behind it.** That is the system working as designed, not the
+  problem going away. Filed row `782607797fc5` (privileged signal trace to name the killer) remains
+  live and operator-gated; do not close it on the strength of a converged live layer.
+
+  The distinction generalises: **`✅ live` answers "are the bytes deployed", never "was the tree
+  proved"**. Those are different questions with different instruments, and this session had them
+  briefly conflated.
