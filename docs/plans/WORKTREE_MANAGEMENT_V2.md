@@ -282,6 +282,45 @@ designed, not built. Nothing in §5 may be reported met until its read is run an
   pool build logic lives in `scripts/handoff-fire.sh` (row 2's file, row 2 DONE). **Coordinator
   ping required before touching that file** — it is the campaign's live fire path.
 
+### §6-WORKED, 2026-08-13 — R-a and R-c CLOSED by measurement; R-b and R-d re-scoped, not done
+
+Worked by the LOCAL DRAIN session under `master-stranded-work` (row `dc426ee8df11`), commit
+`7f622a349`. §§0-5 and R-b/R-d above are untouched.
+
+**R-c was right, and understated its own severity.** It read as a hygiene note — "worth an
+explicit fixture assertion". Measured by pointing `wt()`'s `worktree add` at a ref that does not
+exist, so every add fails: **22 of this suite's 79 tests still passed over a fixture that created
+nothing at all.** The 30 `[ ! -d "$p" ]` REMOVE assertions are satisfied for free by a directory
+that was never made, so a fixture failure and a correct disposal were the same observation — in a
+suite whose subject is a REAPER. `wt()` now asserts the add's rc AND the directory's existence, and
+no longer swallows stderr; it returns 1, which propagates out of the command substitutions in
+`abandoned_wt()` and its siblings under bats' errexit. 79/79 green after.
+
+⚠️ **The line anchor in R-c had rotted** — it cites `wt()` at `:62-65`, which is now `team()`; the
+real site was `:72-75`. The finding survived the drift because it named the MECHANISM (swallowed
+rc), not only the position. Anchors age; mechanisms do not.
+
+**R-a: done, and the reason is sharper than "siblings do it".** `bin/cc-bats:397` exports
+`CC_BATS_ACTIVE=1` and `:394` short-circuits the whole shim when it is already set, so this suite
+inherited a DIFFERENT environment depending on whether it was invoked as `bats` or as `cc-bats` —
+and the postland corpus and a developer's terminal do not agree on which. `setup()` now unsets it
+and the other `CC_BATS_*` seams. The subject reads no `CC_BATS_*` today, so **no assertion changed**;
+this removes the invocation path as a variable before a future PATH-shim edit makes the two runs
+disagree silently. (R-a asked for "PATH-shim tracing" first — the cheaper and more durable answer is
+to make the question moot.)
+
+**R-b: NOT done, and its premise needs one correction before anyone spends a repo on it.** R-b wants
+the duration of a ~116-worktree sweep against the 60-min lock-staleness window. The live box now
+carries **165 directories under `~/Development/.worktrees` against 73 git-registered** (measured
+2026-08-13; the 08-12 reading was 171/79 — the same 92 orphaned both times). So the scale to build
+the throwaway repo at is ~165, not ~116, and it is drifting upward. Note also that a synthetic repo
+cannot reproduce the term that actually dominates: 99 of those dirs carry `node_modules`, and two
+unregistered ones (`wt-pool-1`, `wt-pool-2`) hold **running** `next dev` and esbuild processes, which
+is what makes the real sweep slow and `git worktree prune` insufficient.
+
+**R-d: unchanged and still correctly gated.** Not touched — `scripts/handoff-fire.sh` is the live
+fire path and R-d's coordinator ping has not been made. Recorded here rather than silently skipped.
+
 ---
 
 ## §7 — COORDINATOR RESCUE NOTE, 2026-08-07 (added on landing; §§0-6 above are untouched)
