@@ -9,12 +9,29 @@
 # carries the same zero bits as one that cannot). This CLI is both halves: `list` is the read,
 # `ack` is the humane off switch.
 #
-# STORES (four, each with its own env seam — the seam names are the PRODUCERS' own, so a test that
+# STORES (five, each with its own env seam — the seam names are the PRODUCERS' own, so a test that
 # redirects a producer redirects this reader with it):
 #   handoff-alarms/*.json    D1 handoff alarm records   class = the record's own "class" field
 #   cc-announce-alarms/*     cc-announce's alarm/degrade records   class = the filename prefix
 #   completion-push/*        terminal-completion pushes whose verdict is NOT "verified" (stuck)
 #   autonomy/pages/*.page    supervisor page stamps
+#   mailbox/dead-letter/*.md M3 close-path dead letters   class = mail-deadletter
+#
+# ── THE FIFTH STORE, and why it is one (SESSION_LIFECYCLE_V2 R-6, 2026-08-13) ─────────────────────
+# handoff-fire's M3 actuator (selfclose_mail_disposition) dead-letters undrained mail on a TERMINAL
+# close — one `<sid>.md` per closed session that still owed messages, plus a `.ran` append-log as the
+# store's existence evidence. Row 3's M3 contract (CROSS_SESSION_COMMS_V2 §4) requires that store be
+# "SURFACED on the operator board with existence evidence, NEVER a silent file", and until now it was
+# read by NOTHING — `grep -rn 'mailbox/dead-letter'` over bin/ hooks/ scripts/ found the WRITER and
+# its own suite, and no consumer at all. A dead-letter store nobody reads is the exact inertness the
+# D-series exists to end: the messages were DELIVERED, never READ, and then made unfindable.
+# Its records join here rather than in a store of their own because the D3 triad — this CLI (list +
+# ack), hooks/escalation-watch.sh (the SessionStart guaranteed reader) and hooks/operator-readout.sh
+# (the counted `◆` line) — is already the fleet's one surface for "durable record nothing drained".
+# A sixth renderer would have been a second surface for the same predicate.
+# ONE RECORD PER TERMINALLY-CLOSED SESSION, so the path-keyed seen marker is exactly right here: the
+# writer keys the file by the CLOSING session's sid, and a terminally-closed session never closes
+# again, so an acked record cannot silently re-accumulate behind its own marker.
 # The globs mirror autonomy-sweep.sh:101-116 EXACTLY (`*.page` for pages, bare `*` for the announce
 # and completion dirs) — this reader and that sweep must agree on what a record IS, or an ack could
 # silently miss the thing the sweep re-surfaces.
@@ -48,7 +65,8 @@
 # the completion-push store keeps it), else "-". An ABSENT sidecar is NOT rendered as success.
 #
 # Env seams (tests): CC_HANDOFF_ALARM_DIR · CC_ANNOUNCE_ALARM_DIR · CC_COMPLETION_RECORDS_DIR ·
-#   CC_PAGES_DIR · CC_SWEEP_SEEN_DIR.
+#   CC_PAGES_DIR · CC_SWEEP_SEEN_DIR · CC_MAILBOX_DIR (the WRITER's own seam — handoff-fire reads the
+#   same variable, so a suite that redirects the producer redirects this reader with it).
 # jq OPTIONAL — degrades to sed field extraction (this reader must work in the same dependency-free
 # envs the record WRITERS were built for). BSD+GNU portable, no eval, fail-loud.
 # Exit: 0 ok · 2 usage · 5 no such record.
@@ -59,6 +77,10 @@ ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
 COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
+# The M3 dead-letter store is DERIVED from the mailbox seam, never given a seam of its own: the
+# writer (handoff-fire.sh:selfclose_mail_disposition) composes it the same way, so the two cannot
+# drift apart and a test that redirects the mailbox redirects both ends at once.
+DEADLETTER_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/dead-letter"
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 JQ="$(command -v jq 2>/dev/null || true)"
@@ -139,6 +161,14 @@ records() { # → "<path>\t<class>" per outstanding record, store order then glo
     [ -f "$f" ] || continue
     printf '%s\t%s\n' "$f" "page"
   done
+  # M3 dead letters — `*.md` ONLY, so the store's `.ran` existence evidence is never mistaken for a
+  # record. The distinction is the whole point of that file: an empty store with a `.ran` line has
+  # run and found nothing, an empty store WITHOUT one has never run, and folding the evidence into
+  # the inventory would collapse the two back together (R4).
+  for f in "$DEADLETTER_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\n' "$f" "mail-deadletter"
+  done
 }
 
 cmd_list() { # [--json]
@@ -203,9 +233,9 @@ badp() { printf '  FAIL %-58s\n' "$1"; FAIL=$((FAIL + 1)); }
 st_env() { # <case-dir> — export the FULL seam surface; nothing may fall back to a $HOME default
   export CC_HANDOFF_ALARM_DIR="$1/handoff-alarms" CC_ANNOUNCE_ALARM_DIR="$1/announce" \
          CC_COMPLETION_RECORDS_DIR="$1/completion" CC_PAGES_DIR="$1/pages" \
-         CC_SWEEP_SEEN_DIR="$1/seen"
+         CC_SWEEP_SEEN_DIR="$1/seen" CC_MAILBOX_DIR="$1/mailbox"
   mkdir -p "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
-           "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
+           "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR" "$CC_MAILBOX_DIR/dead-letter"
 }
 
 # shellcheck disable=SC2317
@@ -228,7 +258,11 @@ selftest() {
     printf '{"kind":"announce-degrade"}\n' > "$d/full/announce/announce-degrade-1.json"
     printf '{\n  "verdict": "push-failed(cc-announce rc=5)"\n}\n' > "$d/full/completion/push-stuck.json"
     printf '{\n  "verdict": "verified"\n}\n' > "$d/full/completion/push-ok.json"
-    : > "$d/full/pages/p1.page" ) >/dev/null
+    : > "$d/full/pages/p1.page"
+    # M3 dead letter + the store's existence evidence, in the writer's own two shapes
+    printf '## from desk\nseam ruling you asked for\n' > "$d/full/mailbox/dead-letter/sid-dead.md"
+    printf '2026-08-13T00:00:00Z terminal-close sid=sid-dead pending=2\n' \
+      > "$d/full/mailbox/dead-letter/.ran" ) >/dev/null
   out="$( st_env "$d/full"; "$SELF" list )"
   printf '%s' "$out" | grep -q 'alarm-1.json .*husk-pane .*refused-rc3' \
     && okp "list: handoff class + verdict sidecar" || badp "list: handoff row wrong"
@@ -240,6 +274,11 @@ selftest() {
     && badp "list: VERIFIED completion record listed (must be excluded)" \
     || okp "list: verified completion record excluded (control above lists the stuck one)"
   printf '%s' "$out" | grep -q 'p1.page .*page' && okp "list: page row" || badp "list: page row missing"
+  printf '%s' "$out" | grep -q 'sid-dead.md .*mail-deadletter' \
+    && okp "list: M3 dead letter row (R-6)" || badp "list: dead-letter row missing"
+  printf '%s' "$out" | grep -q '\.ran' \
+    && badp "list: the store's .ran EVIDENCE was listed as a record" \
+    || okp "list: .ran evidence is not a record (control above lists the .md)"
 
   # 3. ACK one — BOTH marker conventions written, seen column flips
   ( st_env "$d/full"; "$SELF" ack alarm-1.json ) >/dev/null
@@ -254,7 +293,7 @@ selftest() {
 
   # 4. ACK --all — nothing unseen remains; a second --all is a 0-count no-op
   out="$("$SELF" ack --all)"
-  printf '%s' "$out" | grep -q 'acked 4 record(s)' && okp "ack --all: acked the 4 remaining" || badp "ack --all: $out"
+  printf '%s' "$out" | grep -q 'acked 5 record(s)' && okp "ack --all: acked the 5 remaining" || badp "ack --all: $out"
   out="$("$SELF" ack --all)"
   printf '%s' "$out" | grep -q 'acked 0 record(s)' && okp "ack --all: idempotent (0 on re-run)" || badp "ack --all re-run: $out"
 
@@ -264,7 +303,7 @@ selftest() {
 
   echo "cc-escalations --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "cc-escalations --selftest: GREEN"
+  echo "cc-escalations --selftest: GREEN — 5 stores · verified-filter · dual markers · ack --all idempotent."
 }
 
 case "${1:-}" in

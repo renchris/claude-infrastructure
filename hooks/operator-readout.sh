@@ -167,6 +167,10 @@ ESC_ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
 ESC_ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
 ESC_COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
 ESC_PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+# The FIFTH store (SESSION_LIFECYCLE_V2 R-6): M3 close-path dead letters, written by handoff-fire's
+# selfclose_mail_disposition on a TERMINAL close. Derived from the WRITER's own mailbox seam rather
+# than given a seam of its own, so the two ends cannot drift — same rule the other four follow.
+ESC_DEADLETTER_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/dead-letter"
 ESC_SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 # A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
 # states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
@@ -259,6 +263,9 @@ escalation_unseen_count() {
           for f in "$ESC_ANNOUNCE_DIR"/announce-degrade-*.json; do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
           for f in "$ESC_COMPLETION_DIR"/*.json;            do [ -f "$f" ] && printf 'c\t%s\n' "$f"; done
           for f in "$ESC_PAGES_DIR"/*.page;                 do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
+          # `*.md` ONLY — the store's `.ran` existence evidence is not a record (R4: an empty
+          # store that HAS run must stay distinguishable from one that never has).
+          for f in "$ESC_DEADLETTER_DIR"/*.md;              do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
           return 0; } \
         | SEEN_DIR="$ESC_SEEN_DIR" perl -MDigest::SHA=sha256_hex -ne '
             chomp; my ($k, $p) = split /\t/, $_, 2;

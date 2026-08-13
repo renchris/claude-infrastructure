@@ -56,9 +56,14 @@ setup() {
   export CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/announce-alarms"
   export CC_COMPLETION_RECORDS_DIR="$BATS_TEST_TMPDIR/completion-push"
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"
+  # The FIFTH store (R-6) rides the SAME hazard, and by a nastier route: its seam is the WRITER's
+  # mailbox variable, so an unexported CC_MAILBOX_DIR points the count at the operator's live
+  # ~/.claude/mailbox/dead-letter exactly as the four above once pointed at their live stores.
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   export CC_SWEEP_SEEN_DIR="$BATS_TEST_TMPDIR/sweep-seen"
   mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR" "$CC_HANDOFF_ALARM_DIR" \
-           "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
+           "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" \
+           "$CC_MAILBOX_DIR/dead-letter" "$CC_SWEEP_SEEN_DIR"
   : > "$CC_BACKLOG_FILE"
 }
 
@@ -69,6 +74,13 @@ mk_escalation() { # <n> — one undrained handoff-alarm record
 }
 mk_escalation_seen() { # <n> — …and the sweep's REAL marker for it (sha256 of the FULL path)
   : > "$CC_SWEEP_SEEN_DIR/$(printf '%s' "$CC_HANDOFF_ALARM_DIR/alarm-$1.json" | shasum -a 256 | cut -c1-32)"
+}
+mk_deadletter() { # <sid> — one M3 close-path dead letter, in handoff-fire's own shape
+  printf '## from desk\nthe seam ruling you asked for\n' > "$CC_MAILBOX_DIR/dead-letter/$1.md"
+}
+mk_deadletter_ran() { # <sid> — the store's EXISTENCE EVIDENCE, deliberately not a record (R4)
+  printf '2026-08-13T00:00:00Z terminal-close sid=%s pending=2\n' "$1" \
+    >> "$CC_MAILBOX_DIR/dead-letter/.ran"
 }
 
 hookrun() { # $1=cwd → run hook mode with stdin JSON; stdout in $output
@@ -1074,6 +1086,32 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '◆ 3 escalation record(s) unseen — cc-escalations list' || false
+}
+
+@test "ESCALATIONS: an M3 dead letter counts into the SAME ◆ line, its .ran evidence does not" {
+  # R-6. The M3 dead-letter store was written by handoff-fire and read by nothing, so its records
+  # could not reach the operator at all. It joins the existing count rather than getting a line of
+  # its own: one predicate — "a durable record nothing has drained" — must have ONE standing line.
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  mk_escalation 1
+  mk_deadletter 01998f3a-dead-4beef-9c21-000000000001
+  mk_deadletter_ran 01998f3a-dead-4beef-9c21-000000000001   # evidence, NOT a record
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  # 2, not 3: `.ran` must not inflate the count, or an empty-but-ran store would read as outstanding
+  # work forever — the exact collapse the writer created that file to prevent.
+  echo "$output" | grep -q '◆ 2 escalation record(s) unseen' || false
+}
+
+@test "ESCALATIONS: a dead letter drops out of the count once acked (the off switch reaches here too)" {
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  mk_deadletter dl-x
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 1 escalation record(s) unseen' || false     # positive control
+  : > "$CC_SWEEP_SEEN_DIR/$(printf '%s' "$CC_MAILBOX_DIR/dead-letter/dl-x.md" | shasum -a 256 | cut -c1-32)"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'escalation record' || false
 }
 
 @test "ESCALATIONS: zero records ⇒ the line is ABSENT (control for the assertion above)" {
