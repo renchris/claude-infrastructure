@@ -82,8 +82,25 @@ if [ -z "$SELECT" ]; then
 fi
 MAX_PER_WT="${CC_BOOT_RESUME_MAX_PER_WORKTREE:-1}"
 MAX_TOTAL="${CC_BOOT_RESUME_MAX_TOTAL:-4}"
+# ── the ~/.reso fallback, and why it now SPEAKS (backlog 8550b6129d9c, measured 2026-08-12) ──
+# resolve_bin's ladder is beside-script → ../bin → $CLAUDE_CONFIG_DIR/bin → ~/.claude/bin → PATH.
+# It never reaches ~/.reso/bin, so this second line is what actually resolved the keepalive on this
+# box — and for weeks it resolved to an UNTRACKED 2026-07-04 `#!/bin/zsh` copy with a frozen
+# worktree list, while the tracked, tested, shellchecked bin/reso-keepalive sat unlinked. The
+# landed fix could not execute and the buggy original ran at every boot, silently, because taking a
+# fallback looked exactly like taking the primary. install.sh now symlinks the tracked file to this
+# path, so the fallback normally resolves to repo code.
+# The WARN is the part that survives the next occurrence: a fallback to a path that is NOT a symlink
+# into the checkout means the deployed copy is nobody's output — outside the ship gate, the linters
+# and every reader that could see it rot. Loud, not fatal: resuming the fleet on an old keepalive
+# still beats not resuming it (this is a launchd job), so this degrades and says so.
 KEEPALIVE="$(resolve_bin "${CC_KEEPALIVE_BIN:-}" reso-keepalive)"
-[ -z "$KEEPALIVE" ] && [ -x "$HOME/.reso/bin/reso-keepalive" ] && KEEPALIVE="$HOME/.reso/bin/reso-keepalive"
+if [ -z "$KEEPALIVE" ] && [ -x "$HOME/.reso/bin/reso-keepalive" ]; then
+  KEEPALIVE="$HOME/.reso/bin/reso-keepalive"
+  if [ ! -L "$HOME/.reso/bin/reso-keepalive" ]; then
+    echo "boot-resume: ⚠ keepalive resolved to an UNTRACKED copy at $KEEPALIVE (not a symlink into the checkout) — it is outside the ship gate and may be arbitrarily stale. Run install.sh to link the tracked bin/reso-keepalive." >&2
+  fi
+fi
 LAUNCHCTL="${CC_LAUNCHCTL_BIN:-launchctl}"
 
 SYSCTL="${CC_SYSCTL_BIN:-sysctl}"
