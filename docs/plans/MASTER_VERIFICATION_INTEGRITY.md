@@ -1121,3 +1121,23 @@ an executable declaration — everything the verdict depends on that is not the 
 (iv) cache only "emitted nothing", never a finding; (v) veto on any could-not-run, absolutely;
 (vi) mutate each read-set element and each veto separately. Remaining heavy arms, gate-faithful:
 `git-identity` 13.3s, `unattended-path` 11.4s (+13.4s selftest), `pane-spawn` 7.7s.
+
+### The payoff, measured on the LAND PATH rather than a rig
+
+My synthetic timing script was invalidated twice by my own actions — first by committing while it
+ran (a commit dirties the tree, and a dirty tree disarms the memo *by design*), then by killing it
+to fire the land. The number that matters came from the gate itself, on the second land attempt:
+
+    test-hermeticity-lint: per-suite memo — 467 suite verdict(s) carried, 1 proven fresh.
+
+468 suites, one of them the file that land changed. **That is the re-round shape the row asked
+for**, and it is better evidence than the rig would have been: it is the production invocation,
+with the real own-set, inside the real gate. The lesson generalises — *when the subject already
+runs in production on a path you are about to exercise, read the number off that path.*
+
+**The gate caught two defects in my own new test file, which is the ratchet working.**
+(1) rules 5 and 6 flagged `herm-suite-memo.bats` for inheriting the lint's own two anchors —
+a suite whose SUBJECT is the lint names a tool carrying a shape-5a seam and an injected variable,
+so it would have passed on the desk and gone red inside a fired pane. (2) the `.bats` shellcheck
+ratchet blocked three `ls … | head` lines (SC2012). Both were fixed in `852eec7bf` and its follow-up
+rather than allowlisted.
