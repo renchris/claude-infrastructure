@@ -22,9 +22,23 @@
 # failure message. What is NOT covered — and it is stated rather than implied — is a subject that
 # keeps every anchored line but breaks the behaviour some OTHER way; only the full run catches that.
 #
-# OUT OF SCOPE, deliberately: scripts/banner-gate-redproof.py is the same class and equally unwired
-# (nightly's globs are scripts/*gate*.sh and scripts/*lint*.sh, and it is a .py), but it belongs to
-# the banner subsystem and has no --check-anchors mode. Filed rather than smuggled in here.
+# NOW IN SCOPE — the exclusion above was DISCHARGED, not overridden. This comment used to read:
+# "OUT OF SCOPE, deliberately: scripts/banner-gate-redproof.py is the same class and equally unwired
+# … but it belongs to the banner subsystem and has no --check-anchors mode. Filed rather than
+# smuggled in here." That reason had two clauses and only one was a preference. The operative clause
+# was MECHANISM — no self-check mode — and it is now false: the harness carries --check-cases
+# (backlog 5d6dcbe8d462). The remaining clause, subsystem membership, cannot survive on its own here,
+# because this file's contract is about RED-PROOFS AS A CLASS and not about a directory.
+#
+# Its check is NOT --check-anchors and must not be described as one. Those two harnesses are
+# declarative — anchors are literal lines in the subject, counted. This one is procedural: 37 cases
+# that mutate live module state, only 3 doing any text substitution, so there are no anchors to
+# count. --check-cases instead AST-derives each case's `g.<NAME>` reads and requires each to still
+# exist, and requires each case's `want` still to be emitted somewhere in gen.py's assertion
+# vocabulary. Same goal, different mechanism; the module docstring records why the port did not apply.
+#
+# So the CENSUS glob below now covers scripts/ as well as tests/ — stated here because a glob that
+# widens without its comment widening is how a scoping decision becomes an accident.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -59,7 +73,21 @@ setup() {
   [ "$n" -ge 10 ] || false
 }
 
-@test "CENSUS: every red-proof harness under tests/ is wired into THIS suite" {
+@test "banner-gate-redproof: every case still reaches gen.py, and every want is still emitted" {
+  run python3 "$REPO/scripts/banner-gate-redproof.py" --check-cases
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'cases live in tools/banner/gen.py' || false
+  # Floors, so a gutted CASES table or an AST walk that stopped seeing `g.<NAME>` cannot pass this
+  # by having nothing to check. The harness enforces its own floor too; this is the outer one.
+  n="$(echo "$output" | sed -n 's/.*: \([0-9]*\)\/[0-9]* cases live.*/\1/p')"
+  [ -n "$n" ] || false
+  [ "$n" -ge 30 ] || false
+  r="$(echo "$output" | sed -n 's/.* \([0-9]*\) module read(s) resolve.*/\1/p')"
+  [ -n "$r" ] || false
+  [ "$r" -ge 40 ] || false
+}
+
+@test "CENSUS: every red-proof harness under tests/ or scripts/ is wired into THIS suite" {
   # The recurrence guard. Wiring the two that exist today fixes today; the class reproduces the next
   # time someone writes a third harness and references it in a comment, which is precisely how these
   # two ended up unrun. Membership is by GLOB so a new harness is in scope on the day it is created,
@@ -67,15 +95,24 @@ setup() {
   cd "$REPO"
   seen=0
   unwired=""
-  for h in tests/*redproof*; do
+  for h in tests/*redproof* scripts/*redproof*; do
     [ -e "$h" ] || continue
     seen=$((seen + 1))
     b="$(basename "$h")"
-    grep -q -- "$b" "$BATS_TEST_FILENAME" || unwired="$unwired $h"
+    # COMMENT LINES ARE STRIPPED FIRST, because the failure message below promises exactly that —
+    # "invoked by a case, not merely mentioned in a comment" — and a whole-file grep does not
+    # deliver it. Measured 2026-08-13: deleting this suite's banner-gate-redproof CASE left the
+    # census GREEN, because the header paragraph explaining the harness names it four times. A guard
+    # whose prose states a stricter rule than its code enforces is the vacuous pass it exists to
+    # catch, one level up — and the more carefully a harness is documented here, the more thoroughly
+    # its own census entry was disarmed.
+    grep -v '^[[:space:]]*#' "$BATS_TEST_FILENAME" | grep -q -- "$b" || unwired="$unwired $h"
   done
   # A glob that matched nothing would make this test pass while asserting nothing — the exact
-  # vacuity the file is about. Two harnesses exist; require at least two.
-  [ "$seen" -ge 2 ] || false
+  # vacuity the file is about. Three harnesses exist; require at least three. A FLOOR and never an
+  # equality: `-eq 3` would go red on a fourth harness being written, which is the one direction
+  # nobody needs protecting from.
+  [ "$seen" -ge 3 ] || false
   if [ -n "$unwired" ]; then
     echo "UNWIRED red-proof harness(es) —$unwired"
     echo "Each must be invoked by a case in $BATS_TEST_FILENAME, not merely mentioned in a comment."
@@ -83,7 +120,7 @@ setup() {
   fi
 }
 
-@test "both harnesses REFUSE a stale anchor — the check can fail, on the real artifact" {
+@test "all three harnesses REFUSE a stale case — the check can fail, on the real artifact" {
   # Without this the two cases above would pass just as well for a --check-anchors that returns 0
   # unconditionally. Sabotage a real anchored line in a COPY of the tree and require the refusal.
   cp -R "$REPO/bin" "$REPO/tests" "$BATS_TEST_TMPDIR/"
@@ -116,4 +153,29 @@ PY
   [ "$status" -eq 1 ]
   echo "$output" | grep -q 'STALE ANCHOR' || false
   echo "$output" | grep -q 'close-drops-the-force-flag' || false
+
+  # banner-gate-redproof: no anchors to sabotage, so the equivalent damage is RENAMING a table the
+  # cases read. `--check-cases` must NAME the inert cases rather than pass over them. Without this
+  # arm the case above would pass just as well for a --check-cases wired to return 0 unconditionally
+  # — the same vacuity, one level up, that this whole file exists to prevent.
+  cp "$REPO/scripts/banner-gate-redproof.py" "$BATS_TEST_TMPDIR/scripts/"
+  mkdir -p "$BATS_TEST_TMPDIR/tools/banner"
+  cp "$REPO/tools/banner/gen.py" "$BATS_TEST_TMPDIR/tools/banner/gen.py"
+
+  # CONTROL FIRST: the untouched copy must PASS. A refusal with no passing control proves only that
+  # the copy is broken, not that the check discriminates.
+  run python3 "$BATS_TEST_TMPDIR/scripts/banner-gate-redproof.py" --check-cases
+  [ "$status" -eq 0 ]
+
+  python3 - "$BATS_TEST_TMPDIR/tools/banner/gen.py" <<'PYSAB'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+assert len(re.findall(r"\bWORLD_MOD\b", s)) > 0
+open(p, "w").write(re.sub(r"\bWORLD_MOD\b", "WORLD_MOD_RENAMED", s))
+PYSAB
+  run python3 "$BATS_TEST_TMPDIR/scripts/banner-gate-redproof.py" --check-cases
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'STALE CASE' || false
+  echo "$output" | grep -q 'READS g.WORLD_MOD, which gen.py no longer defines' || false
 }

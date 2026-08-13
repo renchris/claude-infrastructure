@@ -12,20 +12,52 @@ green build caught neither time. So this script proves BOTH halves for every gat
   * WIRED  — `assert_all_gates_wired` reads build()'s own source, and case 1 below proves that guard
              itself detects an unwired assertion.
 
-    scripts/banner-gate-redproof.py            # all cases
-    scripts/banner-gate-redproof.py --list     # just the case names
+    scripts/banner-gate-redproof.py                 # all cases
+    scripts/banner-gate-redproof.py --list          # just the case names
+    scripts/banner-gate-redproof.py --check-cases   # cheap ROT check, no render and no build
 
 Exit 0 = every gate fired for the right reason. Non-zero names the ones that did not.
+
+── WHY --check-cases IS NOT --check-anchors ─────────────────────────────────────────────────────
+This harness was filed as "the same class as tests/cc-queue-redproof.py and tests/cc-pane-redproof.sh
+— port their --check-anchors". The CLASS is the same (a red-proof nothing runs); the SHAPE is not,
+and porting the flag verbatim would have produced a check that checks nothing.
+
+Those two are DECLARATIVE: a case is `(name, anchor, replacement, must_break)` over the subject's
+SOURCE TEXT, so `--check-anchors` is just `src.count(anchor) != 1`. This one is PROCEDURAL: a case is
+`(name, want, fn)` and each `fn` mutates LIVE MODULE STATE — `g.WORLD_MOD["rAsk"] = (...)` — with
+only 3 of 37 doing any text substitution at all. THERE ARE NO ANCHORS TO COUNT.
+
+The rot this harness suffers instead has two routes, and both are checkable without a build:
+
+  1. A case reads `g.<NAME>` for a table that has since been RENAMED. Its sabotage then lands on
+     nothing and the case is silently inert. Derived by AST, and deliberately from Load context
+     ONLY — an attribute in Store context is the case CREATING state (case 1 installs
+     `g.assert_nothing_calls_me` on purpose), so counting writes reports a rename that never
+     happened. Measured 2026-08-13: 65 reads, of which the Store-inclusive spelling wrongly
+     convicted exactly 1.
+  2. A case's `want` is no longer emitted by any assertion, so it can never match and the case can
+     never fail. Matched against gen.py's string literals AND the constant fragments of its
+     f-strings, in word order within one literal — NOT as a plain substring. Five of the 37 wants
+     (`found 0 of 6 vertices`, `do not correspond to a star`, …) are split across interpolations, so
+     the obvious `want in src` spelling would have failed 5 true cases on the day it landed.
+
+Both rules were measured against the real tree BEFORE being wired, and both report zero on it — a
+ratchet that cannot be satisfied today cannot be gated on at all. Neither rule can prove a gate still
+FIRES; only the full run does that, and the failure message says so rather than implying otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import importlib.util
+import inspect
 import re
 import subprocess
 import sys
+import textwrap
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -562,14 +594,116 @@ def _hat_dissolve_overruns():
     g.build(v())
 
 
+def case_reads(fn) -> set[str]:
+    """Every `g.<NAME>` this case READS. Load context only — see the module docstring."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    return {
+        n.attr
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Attribute)
+        and isinstance(n.value, ast.Name)
+        and n.value.id == "g"
+        and isinstance(n.ctx, ast.Load)
+    }
+
+
+def gen_literal_groups() -> list[str]:
+    """gen.py's string literals, with each f-string collapsed to its constant fragments.
+
+    An f-string contributes ONE group joining its literal parts, so a `want` spanning an
+    interpolation (`found {n} of {m} vertices`) is still matchable while a want whose words are
+    scattered across unrelated literals is not.
+    """
+    tree = ast.parse(GEN.read_text())
+    groups: list[str] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.JoinedStr):
+            groups.append(
+                " ".join(
+                    p.value
+                    for p in n.values
+                    if isinstance(p, ast.Constant) and isinstance(p.value, str)
+                )
+            )
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            groups.append(n.value)
+    return groups
+
+
+def want_reachable(want: str, groups: list[str]) -> bool:
+    words = re.findall(r"[A-Za-z]+", want)
+    if not words:
+        return True
+    pat = r".*?".join(re.escape(w) for w in words)
+    return any(re.search(pat, gtext, re.S) for gtext in groups)
+
+
+def check_cases() -> int:
+    groups = gen_literal_groups()
+    stale: list[str] = []
+    reads_total = 0
+    for name, want, fn in CASES:
+        reads = case_reads(fn)
+        reads_total += len(reads)
+        for attr in sorted(reads):
+            if not hasattr(g, attr):
+                stale.append(
+                    f"{name}\n      READS g.{attr}, which gen.py no longer defines — "
+                    f"its sabotage lands on nothing, so this case is INERT"
+                )
+        if not want_reachable(want, groups):
+            stale.append(
+                f"{name}\n      WANT {want!r} is emitted by no assertion in gen.py — "
+                f"it can never match, so this case can never fail"
+            )
+
+    # A floor, so an emptied CASES table cannot pass this by having nothing to check. Deliberately a
+    # FLOOR and not an equality: an `-eq 37` here would go red on the suite's own GROWTH, which is
+    # the one direction nobody needs protecting from.
+    if len(CASES) < 30 or reads_total < 40:
+        print(
+            f"banner-gate-redproof --check-cases: REFUSING a near-empty census — "
+            f"{len(CASES)} case(s), {reads_total} module read(s). The table was gutted, "
+            f"or the AST walk stopped seeing `g.<NAME>`."
+        )
+        return 1
+
+    if stale:
+        print(
+            f"banner-gate-redproof --check-cases: STALE CASE — {len(stale)} of {len(CASES)} "
+            f"cases can no longer do their job:"
+        )
+        for s in stale:
+            print(f"  · {s}")
+        print(
+            "\n  This is the CHEAP half only. It proves no gate still FIRES — run the harness "
+            "with no flags for that."
+        )
+        return 1
+
+    print(
+        f"banner-gate-redproof --check-cases: {len(CASES)}/{len(CASES)} cases live in "
+        f"tools/banner/gen.py — {reads_total} module read(s) resolve, every want is emitted. "
+        f"(Cheap half: proves no gate FIRES.)"
+    )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
+    ap.add_argument(
+        "--check-cases",
+        action="store_true",
+        help="cheap ROT check: every case's module reads resolve and its want is still emitted",
+    )
     args = ap.parse_args()
     if args.list:
         for n, _w, _f in CASES:
             print(n)
         return 0
+    if args.check_cases:
+        return check_cases()
 
     print(f"banner-gate-redproof: {len(CASES)} gates, sabotaging each\n")
     bad = []
