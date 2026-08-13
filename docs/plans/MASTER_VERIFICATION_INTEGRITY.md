@@ -208,5 +208,24 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   breadth, never as the critical path.** A named agent is a persistent teammate whose findings must be
   REQUESTED, not awaited — and requesting them may still return nothing.
 
+  **CURRENCY VERDICTS — verified inline against source, implementable without re-triage.** All four
+  are **REAL** (premise holds today); each fix below is fully specified, so the next session writes
+  code rather than re-deriving.
+
+  | Row | Verified defect (file:line) | Fix, already proven elsewhere |
+  |---|---|---|
+  | `4239f02465cb` | `scripts/utc-stamp-lint.sh` — `lint_dir … \|\| rc=1` on **both** branches of the `CC_UTC_OWN` conditional collapses `lint_dir`'s return **2** (could-not-run) into `rc=1` (tree-red). | Discriminate 2. The same file already gets this right for the empty-target case (`scanned -eq 0` → "NOT a clean verdict"), so the concept is present and this site was missed. Port the 3-state shape from `scripts/test-hermeticity-lint.sh` (:92, :180). |
+  | `6557a992d498` | `scripts/test-walltime-lint.sh:92` `in_allowlist() { printf '%s\n' "$2" \| grep -qxF "$1"; }` — a bare grep, so a lost fork (rc≥2) reads as **"not in allowlist"** and FABRICATES a TIMEBOMB. `future_dates()` :99-102 is an unchecked 4-stage pipeline (`grep -vE \| grep -oE \| sort -u \| awk`). | Port **both** cited commits, and both are real: `afaf40deb` *"a check that could not RUN is a non-verdict, not a leak"* + `ed4e6c6a5` *"retry the pure predicates before condemning the run"*. **Consequence confirmed:** `tests/test-walltime-lint.bats` IS in `scripts/host-suites.manifest:172`, so `deploy-live` runs it and a false RED gets filed automatically. |
+  | `09f087a7f3d8` | `scripts/terminal-bench.sh:167` — `ps -eo pid=,comm= \| awk '{n=split($2,a,"/"); …}'`. `comm=` is **last**, so its value is complete and its **spaces split**; `$2` is only the first token. An fnm/Application-Support-installed binary is never found, and the bench **silently measures nothing**. | The `$2..NF` rebuild proven in `273df7cd6` *"the actuator's cohort test could not name a single real node process"*. ⚠️ Note the irony to avoid repeating: `:163-164` carries a careful comment citing `pgrep-f-matches-agent-briefs` — the author guarded one argv trap and fell into a neighbouring one. |
+  | `86488ad1c966` | **NOT YET LOCATED — partial.** The alternation-arm gap in `scripts/unattended-path-lint.sh` was not pinned by static grep; `:570` documents that a case label is noise-not-dependency, `:743` holds a `case`-based membership helper. | Needs a constructed fixture in a `mktemp -d` run through the lint to pin the arm that escapes. **Do not close on the greps above** — absence of a grep hit is not absence of the defect. |
+
   Rows closed this effort: **2**. Filed: **1** (`782607797fc5`, operator-gated). Condition non-cloud:
   **20 → 19**. Store non-cloud: **470 → 470 (FLAT — sibling intake cancelled the net, as above).**
+
+  **STATE AT THIS ENTRY (box on battery, 33% / ~52 min — everything below is landed, so power loss
+  costs context only).** Landed + content-verified this session: `bf3db4326`, `7ac98a6c1`, `9625360f4`.
+  Next actions in priority order for whoever resumes: (1) implement the three fully-specified fixes
+  above, each with a per-SITE mutant — `4239f02465cb` and `09f087a7f3d8` are near one-liners with the
+  rebuild already proven in a named commit; (2) pin `86488ad1c966` with a real fixture; (3) the two
+  RED-on-trunk rows `c6c5ef54881e` / `0711d9e18934` still need an actual `cc-bats` run — they were
+  never verified, and `ok=0 notok=0` from a refused run is a NON-VERDICT, never a pass.
