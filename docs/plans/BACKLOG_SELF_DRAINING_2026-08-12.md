@@ -1008,3 +1008,32 @@ have made all three rows KEEP.
 
 **Store effect, measured:** non-cloud **472 → 463**. First genuine net decrease of this mission — the
 predecessor's two real closes netted 470 → 470 because sibling intake cancelled them.
+
+### The generator files rescue rows for work that needs no rescue — measured on a row it minted the same hour
+
+Closing the surviving-branch cases produced a sharper indictment than the vanished-branch ones did.
+`cfa642b48fc7` was auto-minted at **2026-08-13T05:07:38Z** — during this very session — reading
+*"re-land w4/gc-activation-path … ship-land exited 5"*. Its branch tip is **`645b56ebd`**, which was
+`origin/main`'s **head** at that moment (it is the base this session's own land fast-forwarded from:
+`645b56ebd..9625360f4`). **The branch was identical to trunk when the row was filed.** There was
+nothing to re-land, and the row was stale before it was written.
+
+So the generator's precondition is *"my land exited non-zero"*, never *"is this content actually
+absent from trunk?"* — and a land can exit non-zero for reasons that have nothing to do with the
+content arriving (a sibling landed the same work first; a retry succeeded; the gate was cut; the
+process was SIGTERMed, `cdeb77e34952` exit 143). **Every one of those mints a row asserting work is
+stranded when it is not.** Three of the twelve re-land rows closed this session were of exactly this
+shape (`fix/smart-allowlist-narrow`, `w4/gc-activation-path`, `w4/gc-franchise-reland` — all
+local-only branches whose tips were already contained).
+
+**The one-line fix shape, for whoever takes `b15a2984d134`:** before filing, test
+`git merge-base --is-ancestor <branch tip> origin/main` and file NOTHING when it is contained. That is
+the same predicate this session used to adjudicate 26 branches, it is cheap, and it is the difference
+between a row that protects stranded work and a row that is litter on arrival. **Do not instead
+de-duplicate on branch name** — the retry loop legitimately pins DIFFERENT shas per attempt
+(`mcp-w3-no-inherit`'s six rows hold four distinct commits), so name-dedup would discard real
+pointers.
+
+**Session tally at this point:** closed **14** (2 effort-2 rows + 12 re-land rows), filed **1**
+(`782607797fc5`, operator-gated). Non-cloud store **470 → 460**. Every close carries per-sha content
+evidence; none was closed on a count, a subject line, or a branch's absence.
