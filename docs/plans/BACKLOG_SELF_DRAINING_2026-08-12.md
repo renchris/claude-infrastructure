@@ -1037,3 +1037,40 @@ pointers.
 **Session tally at this point:** closed **14** (2 effort-2 rows + 12 re-land rows), filed **1**
 (`782607797fc5`, operator-gated). Non-cloud store **470 → 460**. Every close carries per-sha content
 evidence; none was closed on a count, a subject line, or a branch's absence.
+
+### THREE STACKED INSTRUMENT BUGS, one FALSE CLOSE, and the corrected adjudicator — read this before touching another `re-land` row
+
+The adjudicator above was rebuilt **three times**, and *each broken version returned a confident,
+plausible, wrong answer.* One of them caused a **false close of a row protecting real unlanded work.**
+Recording the whole chain, because the failure is invisible by construction: a glob that matches
+nothing is indistinguishable from a branch that has no pins.
+
+| # | The instrument | What it reported | Why it was wrong |
+|---|---|---|---|
+| 1 | `git for-each-ref 'refs/land/failed/*-<branch>'` | 5 branches have **NO PIN AT ALL** — "the worst state, no pointer left" | **git's `*` does not match across `/`.** Every branch whose name contains a slash reported zero pins. Perfect correlation: all 5 "NO-PIN" branches were slashed, every cleanly-resolved branch was not. |
+| 2 | enumerate all refs, suffix-match the literal branch name | still **zero pins** for all 8 slashed branches | the refs **SANITISE `/` to `-`**: `fix/curl-gate-worktree-scope` pins as `refs/land/failed/<stamp>-<uuid>-fix-curl-gate-worktree-scope`. The literal name with its slash cannot appear. |
+| 3 | **normalise `/`→`-`, THEN suffix-match** ✅ | pins found for 7 of 8 | the working form. Also add the `git cherry` patch-equivalence arm — a sha can be absent from trunk yet already applied upstream under a different hash. |
+
+🚨 **THE FALSE CLOSE.** Under instrument #1, `fix/smart-allowlist-narrow` showed "all 1 sha(s)
+contained" — the *1* being its branch tip, because its pins were invisible. Its row `59a83d4983f9` was
+closed with evidence asserting *"every distinct pinned sha … was checked and all are contained."*
+**That sentence was vacuously true and materially false: the glob matched nothing, so nothing was
+checked.** Instrument #3 shows the branch has **2 pinned shas, `33b268d27` and `aa0e73958`, and
+NEITHER is contained nor patch-equivalent upstream.** The work is genuinely unlanded and that row was
+its only surviving pointer. **Reopened with `cc-backlog reopen … --force`.** The other two closes in
+that batch re-verify as correctly landed.
+
+**The transferable rule: an empty result from a matcher is not evidence of absence until the matcher
+has been shown capable of returning a hit.** A positive control costs one line — match a branch you
+*know* has pins — and it would have caught this at the first attempt instead of the third. Same class
+as this session's `grep -r` over `~/.claude` returning empty because those are per-file symlinks it
+will not follow.
+
+**Corrected verdicts over the 8 previously-unresolved branches:** LANDED (rows closed) —
+`feat/start-latency-router`, `fix/backlog-ratchet-readiness-w0`, `fix/curl-gate-worktree-scope`,
+`fix/resume-path-width-asis-tombstone`, `w4/gc-activation-path`, `w4/gc-franchise-reland`.
+**UNLANDED — KEEP** — `fix/smart-allowlist-narrow` (reopened), `feat/workflow-harvest` (`96bb204e5`).
+
+**Session totals:** closed **22**, reopened **1**, filed **1**. Non-cloud store **470 → 454**. Every
+surviving `re-land` row now carries a per-sha content verdict, and every close names the shas it
+rests on.
