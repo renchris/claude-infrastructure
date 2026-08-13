@@ -2335,6 +2335,52 @@ def assert_twinkle_tables_paired() -> None:
         )
 
 
+# The band below is not taste — every number is the measurement recorded in the STAR_TWINKLE header,
+# and 31ed0731's own subject says the machinery was never dead: "amplitude lost to size". The pairing
+# assert above compares table LENGTHS, so it is blind to VALUES by construction; the floors could
+# drift back to .70, the cap to 18 and the rates to 4 — the exact triple that made the field read as
+# still — and every structural gate would stay green, because a still star is a rendered star.
+# That is this repo's zero-ink class: an element that paints and says nothing passes every check that
+# asks whether it exists.
+TWINKLE_FLOOR_MAX = (
+    0.60  # a floor ABOVE this is a swing under a tenth of a level at 838 px
+)
+TWINKLE_MIN_ELIGIBLE = (
+    41  # the low field measured 41-54 eligible; a cap under it leaves stars out
+)
+TWINKLE_MIN_RATES = (
+    6  # four rates resolve into visibly synchronous groups at this field size
+)
+
+
+def assert_twinkle_amplitude_visible() -> None:
+    """The twinkle VALUES stay in the band that survives the 838 px render.
+
+    Guards the three levers 31ed0731 moved together, because any one of them alone is back under the
+    visibility threshold: AMPLITUDE (the floors), COUNT (the cap) and RATES (how many periods).
+    """
+    worst = max(floor for floor, *_ in STAR_TWINKLE)
+    if worst > TWINKLE_FLOOR_MAX:
+        raise SystemExit(
+            f"gen: the highest STAR_TWINKLE floor is {worst}, above {TWINKLE_FLOOR_MAX}. At the "
+            f"README's real 838 px column the canvas scales by 0.436, so a floor of .70 on a tier "
+            f"rendering at .34 opacity is an on-canvas swing of 0.34*(1-.70) = 0.10 — a tenth of a "
+            f"level, on one pixel. The field renders, and reads as still."
+        )
+    if STAR_TWINKLE_MAX < TWINKLE_MIN_ELIGIBLE:
+        raise SystemExit(
+            f"gen: STAR_TWINKLE_MAX is {STAR_TWINKLE_MAX}, below the {TWINKLE_MIN_ELIGIBLE} stars "
+            f"measured eligible in the low field. A cap under the eligible count silently excludes "
+            f"stars that are ALLOWED to scintillate — at 18 of 41-54, two thirds of them."
+        )
+    if len(STAR_PERIODS) < TWINKLE_MIN_RATES:
+        raise SystemExit(
+            f"gen: only {len(STAR_PERIODS)} twinkle rates, below {TWINKLE_MIN_RATES}. A field this "
+            f"size resolves into visibly synchronous groups when there are few enough rates to "
+            f"compare, which reads as a pulse rather than as scintillation."
+        )
+
+
 def starfield(
     art: Art, rng: random.Random
 ) -> tuple[str, list[tuple[float, float, int]]]:
@@ -5203,6 +5249,7 @@ def build(art: Art) -> str:
     assert_all_gates_wired()
     assert_texture_not_eventised()
     assert_twinkle_tables_paired()
+    assert_twinkle_amplitude_visible()
     assert_event_names_known(art)
     assert_every_beat_tells_a_story(art)
     assert_events_disjoint(art)
