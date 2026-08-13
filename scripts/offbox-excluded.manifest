@@ -168,8 +168,13 @@ tests/pool-floor.bats
 tests/rotate-autonomy-logs.bats
 # run 31369960469: notok=1
 tests/session-end-gc-lock.bats
-# run 31369960469: notok=1
-tests/tsv-field-collapse.bats
+# 2026-08-13: tests/tsv-field-collapse.bats REMOVED — the first entry this list has ever shed, and
+# the shrink arm named it rather than a human noticing. Its run-31369960469 measurement was notok=1
+# on case 25 (an unpadded TSV reader in bin/cc-offload), which has since been fixed; case 34 then
+# broke for an unrelated reason (0x1f is the gzip magic, so a vendored .gz fixture matched) and that
+# is fixed too. Re-measured through the producer's own runner: green, 34/34. Both recorded causes
+# are gone, so the line had lost its reason — and an exclusion nothing re-tests is a permanent hole,
+# which is exactly what this file's own header says the census arm exists to prevent.
 # run 31369960469: CUT at the 120s bound — a non-verdict, not a red. Excluded on COST, like
 # postland-verify.bats below, and re-admissible if it ever gets faster.
 tests/worktree-gc-infra.bats
