@@ -898,9 +898,10 @@ CHECK_FAILED=0
 # 0 = hermetic (fixtures $HOME in setup) · 1 = not · sets CHECK_FAILED if the check could not run
 # shellcheck disable=SC2016  # the pattern matches the LITERAL string $BATS…; expansion would break it
 is_hermetic() {
-  local rc
+  local rc bodies
   for _ in 1 2 3; do
-    setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'; rc=$?
+    bodies="$(setup_bodies "$1")"
+    grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)' <<< "$bodies"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -985,10 +986,10 @@ is_fire_pinned() {
   local rc st
   for _ in 1 2 3; do
     st="$(setup_statements "$1")"
-    printf '%s\n' "$st" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
+    grep -qF 'CC_FIRE_CAPACITY_GATE=off' <<< "$st"; rc=$?
     if [ "$rc" -eq 1 ] \
-       && printf '%s\n' "$st" | grep -qF 'CC_FIRE_SYSCTL=' \
-       && printf '%s\n' "$st" | grep -qF 'CC_FIRE_HEADROOM_OVERRIDE='; then rc=0; fi
+       && grep -qF 'CC_FIRE_SYSCTL=' <<< "$st" \
+       && grep -qF 'CC_FIRE_HEADROOM_OVERRIDE=' <<< "$st"; then rc=0; fi
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -1045,10 +1046,10 @@ setup_statements() { setup_bodies "$1" | strip_comments; }
 # `export`) or an `unset`, which is why the pattern is anchored rather than a substring match.
 # Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation.
 is_orphan_pinned() {
-  local rc
+  local rc st
   for _ in 1 2 3; do
-    setup_statements "$1" \
-      | grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?LCW_ORPHAN_CLOSE=|(^|[[:space:];&|(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+LCW_ORPHAN_CLOSE([[:space:]]|$)'; rc=$?
+    st="$(setup_statements "$1")"
+    grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?LCW_ORPHAN_CLOSE=|(^|[[:space:];&|(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+LCW_ORPHAN_CLOSE([[:space:]]|$)' <<< "$st"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -1068,9 +1069,37 @@ is_orphan_pinned() {
 # a `producer | grep -q` probe returns the PIPELINE's status: grep -q exits the instant it matches,
 # the producer takes SIGPIPE, and 141 is promoted — so a MATCH reads as rc>1, which these
 # predicates are built to interpret as "the check could not run". Measured elsewhere in this fleet
-# at 66% of runs on a hot pipe (memory: pipefail-inverts-early-exit-probe); the predicates above
-# pipe from awk over inputs small enough that it has never been observed, but rule 4's largest
+# at 66% of runs on a hot pipe (memory: pipefail-inverts-early-exit-probe); rule 4's largest
 # region is 502 lines and new code should not inherit a hazard it can trivially avoid.
+#
+# 🚨 **AND THE BET THIS NOTE MADE ABOUT THE OTHER PREDICATES LOST — 2026-08-13.** It used to read
+# "the predicates above pipe from awk over inputs small enough that it has never been observed",
+# and that clause is why rules 1-3 kept their pipes. **Observed.** `is_hermetic()` reported
+# `could not RUN` for 2-3 suites on EVERY run, at load **0.31** on an idle box, taking a `/ship`
+# to exit 9 (GATE-KILLED) three times in a row. The set varied run to run (cc-reaper,
+# postland-verify, cc-notify) — the signature of a pipe-buffer race, not of a loaded box.
+#
+# Head-to-head RED-proof, both forms over the same producer and the same suite, 40 trials each:
+#   OLD  `setup_bodies "$f" | grep -qE …`  → rc>1 on **36/40** (90%)
+#   NEW  `grep -qE … <<< "$bodies"`        → rc>1 on **0/40**
+# and the whole-tree effect of the one-line change: the lint went from exiting 2 with no rule-1
+# verdict at all, to `clean — 465 suite(s) … 0 new leaks` on 3 consecutive runs.
+#
+# Two things make this worse than the rule-4 hazard it was compared against:
+#   · **It fires BECAUSE the suite is correct.** grep exits early only when it MATCHES, i.e. only
+#     when the suite IS hermetic. The more compliant the tree, the likelier the non-verdict.
+#   · **The diagnostic sends you the wrong way.** CHECK_FAILED prints "Re-run when the box is
+#     quieter; do not 'fix' any suite" — advice that is exactly right for fork pressure and
+#     useless here, because there is nothing to wait for. Three honest re-runs bought nothing.
+#     The PREDICATE RETRY block above assumes "the failure being retried is transient by
+#     definition"; a SIGPIPE race on the same inputs is deterministic enough to exhaust all three.
+#
+# Whether the race is reachable depends on the platform's pipe buffering and on awk's write
+# pattern, which is why macOS never showed it and a Linux container shows it every run. That
+# asymmetry is the load-bearing part: **this gate arm is fail-fast and runs BEFORE the smoke, so
+# on any box where the race is reachable it makes the repo structurally unlandable** — no amount of
+# waiting, and no state of the tree, produces a verdict. Every CHECK_FAILED-bearing predicate in
+# this file is now a here-string; none of them pipes into `grep -q`.
 
 # Is this tool in scope for rule 4 at all? 0 = it ships an embedded selftest · 1 = it does not.
 # Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a tool INTO the rule.
@@ -1242,7 +1271,7 @@ is_env_pinned() {
 in_allowlist() {
   local rc
   for _ in 1 2 3; do
-    printf '%s\n' "$2" | grep -qxF "$1"; rc=$?
+    grep -qxF "$1" <<< "$2"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -1285,7 +1314,11 @@ in_allowlist() {
 in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
   [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
-  printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
+  # here-string, not a pipe: a `producer | grep -q` probe returns the PIPELINE status under
+  # `pipefail`, so a MATCH can read as 141 (see the HERE-STRINGS note above rule 4's predicates).
+  # This one's direction is fail-PERMISSIVE (141 ⇒ "not own" ⇒ excluded from blocking), so it could
+  # never fabricate a leak — it could only silently narrow the own-scope and MASK one.
+  grep -qxF "$1" <<< "$(sed 's:.*/::' <<< "$2")"
 }
 
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
