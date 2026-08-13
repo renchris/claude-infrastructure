@@ -228,6 +228,20 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     fi
   fi
 
+  # @test-name EVAL ratchet — same placement and same argument as the kill-guard block above: the
+  # author learns it HERE, while writing the test, rather than at the land. bats evals every test
+  # description, so a backtick / $( ) / $VAR in a NAME is substituted and that word is DELETED from
+  # the rendered TAP name; the silent variant (an unset var, or a word that IS a command) passes with
+  # no diagnostic. Strict and whole-corpus, nothing to grandfather — the baseline was swept to zero.
+  # The name is the only durable pointer into a suite (a TAP index shifts when anyone adds a test),
+  # so this protects the triage fallback, which is needed exactly when something else has gone wrong.
+  if [ -x "scripts/bats-testname-eval-lint.sh" ]; then
+    local tnout=""
+    if ! tnout="$(scripts/bats-testname-eval-lint.sh tests 2>&1)"; then
+      rc=1; summary="${summary}"$'\n'"[bats-testname-eval]"$'\n'"${tnout}"
+    fi
+  fi
+
   if [ "${#batsfiles[@]}" -gt 0 ]; then
     local uniq="" runbats=()
     uniq="$(printf '%s\n' "${batsfiles[@]}" | LC_ALL=C sort -u)"
