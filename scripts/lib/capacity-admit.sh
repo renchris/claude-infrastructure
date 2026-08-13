@@ -64,11 +64,21 @@
 # applies verbatim to all seven and is the whole reason
 # the field exists: this gate FAILS OPEN on an unreadable sysctl/vm_stat, so a dead probe otherwise
 # manufactures a 100%-admit population indistinguishable from a quiet box — the gate deleted,
-# reading as the gate healthy. SPLIT ON `basis` BEFORE BELIEVING ANY RATIO COMPUTED FROM THESE ROWS.
+# reading as the gate healthy. SPLIT ON `basis` AND `blind` BEFORE BELIEVING ANY RATIO COMPUTED FROM
+# THESE ROWS — `blind` is Wave D's addition and the amendment is explained at the terminal admit in
+# cc_capacity_admit: with four terms, one dead probe may no longer fail-open the three healthy ones,
+# so "could not read" became a PER-TERM state that `basis` alone can no longer express.
 #
 # ── Caller contract ────────────────────────────────────────────────────────────────────────────
 #   . scripts/lib/capacity-admit.sh
 #   cc_capacity_admit <caller> [what]     → 0 = ADMIT, 9 = REFUSE
+#       FOUR TERMS as of Wave D (backlog 1c45598a91be), each independently switchable, each naming
+#       itself in the row's `term` field on a refusal:
+#         load       loadavg per core            — off on the Agent-tool path (see below)
+#         headroom   reclaimable GB              — the term that fired 0 times in 127 refusals
+#         segments   compressor-segment %        — the memory term that CAN bind (§S6.6 item 2)
+#         active     sessions mid-turn           — the ~8 ceiling the design point rests on (item 1)
+#       plus the operator reserve's three: reserve-headroom · reserve-active · reserve-slots.
 #       <caller>  short stable id, [A-Za-z0-9._-] only. Keys the budget state file, so two callers
 #                 cannot spend each other's budget. An unusable id fails OPEN (recorded) rather
 #                 than refusing — a gate must not be able to convict on its own bad wiring.
@@ -80,9 +90,12 @@
 # capacity_gate() carries), so a term added later with a bare `return 0` goes RED.
 #
 # Env: CC_ADMIT_GATE(on) · CC_ADMIT_MAX_LOAD_PER_CORE(2.0) · CC_ADMIT_MIN_HEADROOM_GB(4) ·
+#      CC_ADMIT_MAX_SEGMENT_PCT(50) · CC_ADMIT_ACTIVE_CEILING(8) · CC_ADMIT_ACTIVE_RESERVE(1) ·
 #      CC_ADMIT_BUDGET(3) · CC_ADMIT_SYSCTL · CC_ADMIT_LOADAVG_OVERRIDE · CC_ADMIT_HEADROOM_OVERRIDE ·
+#      CC_ADMIT_SEGMENT_OVERRIDE · CC_SP_ACTIVE_OVERRIDE ·
 #      CC_ADMIT_STATE_DIR · CC_ADMIT_IDL · CC_ADMIT_NOTIFY_BIN ·
-#      CC_ADMIT_LOAD_TERM(on) · CC_ADMIT_HEADROOM_TERM(on)  — per-caller term selection
+#      CC_ADMIT_LOAD_TERM(on) · CC_ADMIT_HEADROOM_TERM(on) · CC_ADMIT_SEGMENT_TERM(on) ·
+#      CC_ADMIT_ACTIVE_TERM(on)  — per-caller term selection
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 
 # ══ THE HARDWARE TERMS — ONE IMPLEMENTATION, TWO POLICIES ══════════════════════════════════════
@@ -133,6 +146,8 @@ cc_hw_ready() {
   command -v cc_hw_headroom_verdict >/dev/null 2>&1 || return 1
   command -v cc_hw_resolve_sysctl   >/dev/null 2>&1 || return 1
   command -v cc_hw_budget_charge    >/dev/null 2>&1 || return 1
+  command -v cc_hw_compressor_segment_pct >/dev/null 2>&1 || return 1
+  command -v cc_hw_segment_verdict        >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -181,15 +196,107 @@ cc_hw_headroom_gb() { # → reclaimable GB to 2dp on stdout; rc 1 + no output wh
   return 0
 }
 
+# ── THE COMPRESSOR-SEGMENT TERM — the memory term that can actually BIND ───────────────────────
+# (Wave D re-term: backlog 1c45598a91be; DoD docs/research/scaling-bottlenecks-2026-08-09.md §5-P2,
+# specified by CONCURRENCY_PROGRAM.md §S6.6 item 2.)
+#
+# WHY THE HEADROOM TERM ABOVE IS NOT ENOUGH, MEASURED RATHER THAN ARGUED. `free + speculative +
+# inactive + purgeable >= 4 GB` has fired **0 times in 127 refusals** and *cannot* bind: it counts
+# dirty-anonymous inactive pages as free. Side by side on the quiet box the gate term read 40.55 GB
+# (ADMIT) while the segment term read 0.00%; AT THE PANIC the gate term read 29.79 GB — still ADMIT —
+# against segments at 100%. Every existing rung read a HEALTHY box at death while the kernel's own
+# memorystatus verdict already said `"compressor_exhausted": 1`.
+#
+# THE ARITHMETIC IS NOT INVENTED HERE. It is §7.7's cheap-sysctl recipe, which
+# scripts/compressor-sentinel.sh has computed every 10 s since 2026-08-05:
+#     in-core segments  = vm_stat "Pages occupied by compressor" / (segment_buffer / pagesize)
+#     swapped segments  = vm.swapusage used-bytes / segment_buffer   (EXACT — swap is allocated in
+#                         one-segment compressed chunks)
+#     pct               = 100 * (in-core + swapped) / vm.compressor_segment_limit
+# Swapped-out segments are INCLUDED on purpose and it is not double-counting: a swapped segment still
+# holds its descriptor against the limit, which is precisely the ceiling the 2026-07-30 panic hit
+# ("100% of segments limit") while only 33% of the compressed-PAGES limit was in use. The divisor is
+# DERIVED, never the literal 4 — four is right only at a 16 KiB page size, and a 4 KiB box needs 16.
+# `zprint`, the one instrument that reads the descriptor count directly, HANGS under the very storm
+# it measures and is banned from any hot path, this one included.
+#
+# ⚠️ WHAT THIS TERM IS NOT: a panic guard. §4a is explicit — the kernel's own edge signal fires at 98%
+# of the limit, which at the measured ramp is SEVEN POINT SIX SECONDS of warning, so "any actuator
+# keyed on the ceiling is too late by construction". That job belongs to the sentinel, which keys on
+# level AND RATE and can act. A single-sample gate has no rate term and must not pretend to: what
+# THIS term does is refuse to ADD a session's demand to a box already deep in a burst — the
+# sheddable, session-attributable direction §8.5.2's retraction asked for. The two are complements,
+# which is also why the headroom term stays: a steady-state session compresses nothing, so segments
+# alone would be blind to plain residency exhaustion.
+#
+# THIS IS A THIRD READER of vm_stat in the tree and that is deliberate, on the same rule the header
+# gives for scripts/capacity-alarm.sh: a gate, a monitor and a daemon are different INSTRUMENTS, and
+# sharing a parser would make one subject's tuning another's regression. What must not drift is the
+# ARITHMETIC, so tests/capacity-admit-active.bats runs THIS implementation and the sentinel's own
+# segs_in_core/segs_swapped over one fixture and asserts they agree — a behavioural control over the
+# shape that actually breaks, not a diff of two literals.
+cc_hw_swap_used_bytes() { # stdin: a vm.swapusage line → used bytes | rc 1
+  # The unit suffix is PARSED, never assumed to be M: a silent 1024x misread here would understate
+  # the half of the pool that lives on disk (compressor-sentinel.sh's parse_swap_used_bytes, same
+  # arithmetic, same reason).
+  awk '
+    { for (i = 1; i < NF; i++) if ($i == "used") { v = $(i + 2); break } }
+    END {
+      if (v == "") exit 1
+      u = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
+      m = (u == "G") ? 1073741824 : (u == "M") ? 1048576 : (u == "K") ? 1024 : 0
+      if (m == 0) exit 1
+      printf "%.0f", n * m
+    }' 2>/dev/null
+}
+
+cc_hw_compressor_segment_pct() { # $1=sysctl binary → "<pct> <segs> <limit>" | rc 1 + no output
+  local sb="${1:-}" lim buf swap_raw swap_b row pgsz pages
+  [ -n "$sb" ] || return 1
+  lim="$("$sb" -n vm.compressor_segment_limit 2>/dev/null)" || return 1
+  cc_hw_is_int "$lim" || return 1
+  [ "$lim" -gt 0 ] || return 1
+  buf="$("$sb" -n vm.compressor_segment_buffer_size 2>/dev/null)" || return 1
+  cc_hw_is_int "$buf" || return 1
+  [ "$buf" -gt 0 ] || return 1
+  # EVERY input is required. An absent one returns rc 1 so the caller can file a VISIBLE blind term:
+  # "could not measure" must never render as the healthy value — the exact defect capacity-alarm.sh
+  # ate on its launchd PATH, and the reason the sentinel SKIPS a tick rather than emitting a 0.
+  swap_raw="$("$sb" -n vm.swapusage 2>/dev/null)" || return 1
+  [ -n "$swap_raw" ] || return 1
+  swap_b="$(printf '%s\n' "$swap_raw" | cc_hw_swap_used_bytes)" || return 1
+  cc_hw_is_num "$swap_b" || return 1
+  # Page size from vm_stat's OWN header, never a hardcoded 4096 (16384 on Apple silicon; assuming
+  # 4096 understates 4x — the same trap cc_hw_headroom_gb documents two functions above).
+  row="$(vm_stat 2>/dev/null | awk '
+    NR == 1 { if (match($0, /page size of [0-9]+/)) {
+                s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); pg = s + 0 } }
+    /^Pages occupied by compressor:/ { c = $NF + 0; gsub(/[^0-9]/, "", c); seen = 1 }
+    END { if (pg > 0 && seen) printf "%d %d", pg, c }' 2>/dev/null)" || return 1
+  [ -n "$row" ] || return 1
+  pgsz="${row%% *}"; pages="${row##* }"
+  cc_hw_is_int "$pgsz" || return 1
+  cc_hw_is_int "$pages" || return 1
+  awk -v p="$pages" -v pg="$pgsz" -v buf="$buf" -v s="$swap_b" -v lim="$lim" 'BEGIN {
+    if (buf < pg) exit 1
+    segs = int(p / (buf / pg)) + int(s / buf)
+    printf "%.2f %d %d", 100 * segs / lim, segs, lim
+  }' 2>/dev/null || return 1
+  return 0
+}
+
 # ── the verdicts ───────────────────────────────────────────────────────────────────────────────
-# Both are pure awk over already-validated numbers, so they cannot fail and cannot record: WHAT to
-# do with a REFUSE is the policy each gate owns (refuse unboundedly, or spend a unit of budget).
+# All three are pure awk over already-validated numbers, so they cannot fail and cannot record: WHAT
+# to do with a REFUSE is the policy each gate owns (refuse unboundedly, or spend a unit of budget).
 cc_hw_load_verdict() { # $1=load $2=ncpu $3=ceiling → "REFUSE 2.72" | "ADMIT 0.10"
   awk -v l="$1" -v n="$2" -v c="$3" \
     'BEGIN { lpc = l / n; printf "%s %.2f", (lpc > c ? "REFUSE" : "ADMIT"), lpc }'
 }
 cc_hw_headroom_verdict() { # $1=reclaimable GB $2=floor GB → REFUSE | ADMIT
   awk -v h="$1" -v f="$2" 'BEGIN { print (h < f ? "REFUSE" : "ADMIT") }'
+}
+cc_hw_segment_verdict() { # $1=segment pct in use $2=ceiling pct → REFUSE | ADMIT
+  awk -v s="$1" -v c="$2" 'BEGIN { print (s > c ? "REFUSE" : "ADMIT") }'
 }
 
 # ── the validators ─────────────────────────────────────────────────────────────────────────────
@@ -271,16 +378,42 @@ _cc_admit_emit() { # $1=verdict admit|refuse  $2=basis  $3=caller  $4=what  $5=d
   # over these rows is meaningless unless the population can be split by what was actually evaluated.
   # An admit at reserve 0 (operator absent) and an admit at reserve 6 (operator present) are different
   # events, and without the field the only visible difference is the free text of `detail`.
+  # `terms` and `blind` ride on EVERY row for §9.5.1's reason, and they are what kept the shared
+  # `basis` vocabulary honest when Wave D added a third and fourth term. `basis` has four values that
+  # capacity_gate() also emits, and it can therefore only ever describe the load/headroom PAIR; once
+  # `segments` and `active` exist, a row reading `headroom-only` no longer tells a reader which terms
+  # were in force. So the switches' state is recorded explicitly:
+  #   terms  the terms ENABLED for this evaluation — not necessarily all evaluated, because the gate
+  #          short-circuits at the first refusal. This is the field to split a population on.
+  #   blind  the enabled terms whose instrument could not be read. A term that silently stopped
+  #          evaluating reads back as a healthy admit — the 222-dead-sysctl-rows shape — so its
+  #          blindness is named on the row rather than inferred from the absence of a number.
   jq -cn --arg ts "$ts" --arg disp "$( [ "$1" = admit ] && echo admitted || echo refused )" \
          --arg v "$1" --arg b "$2" --arg c "$3" --arg w "$4" --arg d "$5" --arg t "${6:-}" \
          --arg sid "${CC_ADMIT_SID:-?}" --arg pres "${CC_ADMIT_PRESENCE:-}" \
-         --arg rsv "${CC_ADMIT_RESERVE:-}" \
+         --arg rsv "${CC_ADMIT_RESERVE:-}" --arg tms "${CC_ADMIT_TERMS:-}" \
+         --arg bld "${CC_ADMIT_BLIND:-}" \
     '{ts:$ts,hook:"capacity-admit",sid:$sid,disposition:$disp,reason:"capacity",
       gate:"capacity-admit",verdict:$v,basis:$b,caller:$c,what:$w,detail:$d}
      + (if $t    == "" then {} else {term:$t} end)
      + (if $pres == "" then {} else {presence:$pres} end)
-     + (if $rsv  == "" then {} else {reserve:$rsv} end)' >> "$idl" 2>/dev/null || true
+     + (if $rsv  == "" then {} else {reserve:$rsv} end)
+     + (if $tms  == "" then {} else {terms:$tms} end)
+     + (if $bld  == "" then {} else {blind:$bld} end)' >> "$idl" 2>/dev/null || true
   return 0
+}
+
+# The enabled-term list and the blind-term list for ONE evaluation. Both are rebuilt at the top of
+# every call — a stale list carried across two evaluations in one process would attribute one
+# decision's blindness to another (memory init-state-is-not-runtime-state).
+CC_ADMIT_TERMS=""
+CC_ADMIT_BLIND=""
+_cc_admit_note_blind() { # $1=term name
+  case "$CC_ADMIT_BLIND" in
+    "")   CC_ADMIT_BLIND="$1" ;;
+    *"$1"*) : ;;
+    *)    CC_ADMIT_BLIND="${CC_ADMIT_BLIND},$1" ;;
+  esac
 }
 
 # ── THE PRESENCE CONSULT (§W3 item 1) ──────────────────────────────────────────────────────────
@@ -369,6 +502,16 @@ _cc_admit_page() { # $1=text
 cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   local caller="${1:-unknown}" what="${2:-spawn}"
   local ncpu load ceiling lpc verdict floor head_gb sysctl_bin budget detail
+  local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling
+
+  # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
+  # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
+  # which were in force, and a ratio computed without that split is the §9.5.1 defect.
+  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""
+  [ "${CC_ADMIT_LOAD_TERM:-on}"     = off ] || CC_ADMIT_TERMS="load"
+  [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}headroom"
+  [ "${CC_ADMIT_SEGMENT_TERM:-on}"  = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}segments"
+  [ "${CC_ADMIT_ACTIVE_TERM:-on}"   = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}active"
 
   if [ "${CC_ADMIT_GATE:-on}" = off ]; then
     # Recorded, never silent: an operator override or a pinned test suite must not read back later
@@ -393,33 +536,49 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   ceiling="${CC_ADMIT_MAX_LOAD_PER_CORE:-$CC_HW_DEFAULT_MAX_LOAD_PER_CORE}"
   budget="${CC_ADMIT_BUDGET:-3}"
 
-  if ! cc_hw_is_int "$ncpu"; then
-    CC_ADMIT_REASON="capacity-admit: hw.ncpu unreadable ('$ncpu') via $sysctl_bin -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "hw.ncpu unreadable ('$ncpu') via $sysctl_bin"
-    _cc_admit_reset "$caller"; return 0
-  fi
-  if ! cc_hw_is_num "$load"; then
-    CC_ADMIT_REASON="capacity-admit: vm.loadavg unreadable ('$load') via $sysctl_bin -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "vm.loadavg unreadable ('$load') via $sysctl_bin"
-    _cc_admit_reset "$caller"; return 0
-  fi
-  if ! cc_hw_is_num "$ceiling"; then
-    CC_ADMIT_REASON="capacity-admit: bad CC_ADMIT_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "bad CC_ADMIT_MAX_LOAD_PER_CORE ('$ceiling')"
-    _cc_admit_reset "$caller"; return 0
-  fi
   # A bad budget must fail to the side that keeps the gate BOUNDED — i.e. admit. A typo that made
   # this gate unbounded would re-create the §12.2 outage, so the unsafe direction is refusal.
   # NOT a shared term: the bound is this gate's own policy and capacity_gate() deliberately has none.
+  # Checked FIRST because it is the only validator that is not one term's own input.
   if ! cc_hw_is_int "$budget"; then
     CC_ADMIT_REASON="capacity-admit: bad CC_ADMIT_BUDGET ('$budget') -> ADMIT (fail-open)"
     _cc_admit_emit admit fail-open "$caller" "$what" "bad CC_ADMIT_BUDGET ('$budget') — bound unusable"
     _cc_admit_reset "$caller"; return 0
   fi
-  if [ "$ncpu" -le 0 ]; then
-    CC_ADMIT_REASON="capacity-admit: hw.ncpu=0 -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "hw.ncpu=0"
-    _cc_admit_reset "$caller"; return 0
+
+  # ── the LOAD TERM'S OWN INPUTS, validated only when that term is enabled ────────────────────────
+  # Until Wave D this block ran unconditionally, and that was invisible while the gate had two terms
+  # and both needed a live box. With four terms it is a deletion: `sysctl` lives in /usr/sbin, which
+  # a launchd PATH lacks, and that ONE miss is the most-measured failure in this file's history —
+  # 222 of 239 capacity rows over 2026-08-03..06 read `hw.ncpu unreadable ('')`. Returning fail-open
+  # there also deletes the headroom, segment, active and reserve terms, none of which asked about
+  # hw.ncpu; on the Agent-tool path, which turns the load term OFF on purpose, it deletes the whole
+  # gate over an input that path does not use. A term's unreadable input may only blind THAT term.
+  if [ "${CC_ADMIT_LOAD_TERM:-on}" != off ]; then
+    if ! cc_hw_is_int "$ncpu"; then
+      CC_ADMIT_REASON="capacity-admit: hw.ncpu unreadable ('$ncpu') via $sysctl_bin -> ADMIT (fail-open)"
+      _cc_admit_note_blind load
+      _cc_admit_emit admit fail-open "$caller" "$what" "hw.ncpu unreadable ('$ncpu') via $sysctl_bin"
+      _cc_admit_reset "$caller"; return 0
+    fi
+    if ! cc_hw_is_num "$load"; then
+      CC_ADMIT_REASON="capacity-admit: vm.loadavg unreadable ('$load') via $sysctl_bin -> ADMIT (fail-open)"
+      _cc_admit_note_blind load
+      _cc_admit_emit admit fail-open "$caller" "$what" "vm.loadavg unreadable ('$load') via $sysctl_bin"
+      _cc_admit_reset "$caller"; return 0
+    fi
+    if ! cc_hw_is_num "$ceiling"; then
+      CC_ADMIT_REASON="capacity-admit: bad CC_ADMIT_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)"
+      _cc_admit_note_blind load
+      _cc_admit_emit admit fail-open "$caller" "$what" "bad CC_ADMIT_MAX_LOAD_PER_CORE ('$ceiling')"
+      _cc_admit_reset "$caller"; return 0
+    fi
+    if [ "$ncpu" -le 0 ]; then
+      CC_ADMIT_REASON="capacity-admit: hw.ncpu=0 -> ADMIT (fail-open)"
+      _cc_admit_note_blind load
+      _cc_admit_emit admit fail-open "$caller" "$what" "hw.ncpu=0"
+      _cc_admit_reset "$caller"; return 0
+    fi
   fi
 
   # ── load term. Switchable PER CALLER, and the Agent-tool path turns it OFF deliberately — see
@@ -446,38 +605,117 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   #    session-attributable quantity §8.5.2's retraction asked for — unlike loadavg, a session's
   #    footprint IS reclaimable by closing it, so refusing here can actually change what it reads.
   if [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ]; then
-    if [ "${CC_ADMIT_LOAD_TERM:-on}" = off ]; then
-      # BOTH terms off = no term evaluated at all. This is `gate-off` however it was spelled, and it
+    if [ -z "$CC_ADMIT_TERMS" ]; then
+      # EVERY term off = no term evaluated at all. This is `gate-off` however it was spelled, and it
       # must record as such: a row reading `load-only` with the load term also off would count a
       # blind evaluation as a real one, which is the §9.5.1 population defect exactly.
-      CC_ADMIT_REASON="capacity-admit: ADMIT — both terms off, nothing evaluated"
-      _cc_admit_emit admit gate-off "$caller" "$what" "CC_ADMIT_LOAD_TERM=off and CC_ADMIT_HEADROOM_TERM=off"
+      # THE CONDITION IS `$CC_ADMIT_TERMS` EMPTY, not "load and headroom are off". Wave D added two
+      # more terms, and the old two-term test would have recorded a real segment/active evaluation as
+      # `gate-off` — the same defect this branch exists to prevent, arriving from the other side.
+      CC_ADMIT_REASON="capacity-admit: ADMIT — every term off, nothing evaluated"
+      _cc_admit_emit admit gate-off "$caller" "$what" \
+        "CC_ADMIT_LOAD_TERM/HEADROOM_TERM/SEGMENT_TERM/ACTIVE_TERM all off"
       _cc_admit_reset "$caller"; return 0
     fi
-    CC_ADMIT_REASON="capacity-admit: ADMIT (load only) — ${lpc}/core (ceiling ${ceiling}/core)"
-    _cc_admit_emit admit load-only "$caller" "$what" \
-      "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · headroom term off"
-    _cc_admit_reset "$caller"; return 0
-  fi
-  floor="${CC_ADMIT_MIN_HEADROOM_GB:-$CC_HW_DEFAULT_MIN_HEADROOM_GB}"
-  if [ -n "${CC_ADMIT_HEADROOM_OVERRIDE:-}" ]; then
-    head_gb="$CC_ADMIT_HEADROOM_OVERRIDE"
+    floor=""; head_gb=""
   else
-    head_gb="$(cc_hw_headroom_gb)" || head_gb=""
+    floor="${CC_ADMIT_MIN_HEADROOM_GB:-$CC_HW_DEFAULT_MIN_HEADROOM_GB}"
+    if [ -n "${CC_ADMIT_HEADROOM_OVERRIDE:-}" ]; then
+      head_gb="$CC_ADMIT_HEADROOM_OVERRIDE"
+    else
+      head_gb="$(cc_hw_headroom_gb)" || head_gb=""
+    fi
+    if ! cc_hw_is_num "$floor"; then
+      CC_ADMIT_REASON="capacity-admit: bad CC_ADMIT_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)"
+      _cc_admit_note_blind headroom
+      _cc_admit_emit admit fail-open "$caller" "$what" "bad CC_ADMIT_MIN_HEADROOM_GB ('$floor')"
+      _cc_admit_reset "$caller"; return 0
+    fi
   fi
-  if ! cc_hw_is_num "$floor"; then
-    CC_ADMIT_REASON="capacity-admit: bad CC_ADMIT_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "bad CC_ADMIT_MIN_HEADROOM_GB ('$floor')"
-    _cc_admit_reset "$caller"; return 0
+  if [ -n "$floor" ]; then
+    if ! cc_hw_is_num "$head_gb"; then
+      CC_ADMIT_REASON="capacity-admit: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)"
+      _cc_admit_note_blind headroom
+      _cc_admit_emit admit fail-open "$caller" "$what" "reclaimable headroom unreadable ('$head_gb')"
+      _cc_admit_reset "$caller"; return 0
+    fi
+    if [ "$(cc_hw_headroom_verdict "$head_gb" "$floor")" = REFUSE ]; then
+      detail="reclaimable ${head_gb}GB < floor ${floor}GB"
+      _cc_admit_spend "$caller" "$what" "$budget" "$detail" "headroom"; return $?
+    fi
   fi
-  if ! cc_hw_is_num "$head_gb"; then
-    CC_ADMIT_REASON="capacity-admit: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)"
-    _cc_admit_emit admit fail-open "$caller" "$what" "reclaimable headroom unreadable ('$head_gb')"
-    _cc_admit_reset "$caller"; return 0
+
+  # ── SEGMENT TERM (Wave D) — the memory term that can BIND ───────────────────────────────────────
+  # Runs after headroom because the two are complements, not alternatives: headroom answers "can a
+  # new session take its RAM without swapping", segments answers "is this box already IN the burst
+  # regime that kills it". A steady-state session compresses nothing, so segments alone is blind to
+  # plain residency exhaustion; and headroom alone is what fired 0 times in 127 refusals.
+  #
+  # THE CEILING IS THIS GATE'S OWN POLICY, like the budget — deliberately NOT a CC_HW_DEFAULT_*
+  # shared constant, because capacity_gate() does not carry this term and "a constant nothing reads
+  # is not a shared term, it is a comment" (coverage case 26's own doctrine).
+  #
+  # 50% IS PROVISIONAL AND SAYS SO. The sentinel's 15% is NOT reusable here: it is the LEVEL half of
+  # a level-AND-rate conjunction (>15% of limit AND >600 segments/s), and a single-sample gate that
+  # cannot take a rate would be importing half a predicate — this box "idles well under 15%", so 15
+  # alone would refuse on ordinary builds, the fail-closed-degradation-as-amplifier direction. 50 sits
+  # far above the measured idle band and far below the 100% observed at panic (the quiet-box control
+  # read 0.00%). Every row carries the measured pct, admits included, so the real distribution is
+  # re-derivable rather than argued — DO NOT quote this paragraph, re-derive:
+  #   cc-idl … | jq -rs 'map(select(.gate=="capacity-admit") | .detail | capture("segments (?<p>[0-9.]+)%") .p | tonumber) | sort'
+  if [ "${CC_ADMIT_SEGMENT_TERM:-on}" != off ]; then
+    seg_ceiling="${CC_ADMIT_MAX_SEGMENT_PCT:-50}"
+    if [ -n "${CC_ADMIT_SEGMENT_OVERRIDE:-}" ]; then
+      seg_pct="$CC_ADMIT_SEGMENT_OVERRIDE"; seg_segs="?"; seg_lim="?"
+    else
+      seg_row="$(cc_hw_compressor_segment_pct "$sysctl_bin")" || seg_row=""
+      seg_pct="${seg_row%% *}"; seg_segs="${seg_row#* }"; seg_lim="${seg_segs#* }"; seg_segs="${seg_segs%% *}"
+    fi
+    # A BLIND TERM IS A NOTE, NEVER AN EARLY RETURN. This is the one structural rule a term added
+    # after the fact must follow: failing open out of the function here would delete the active and
+    # reserve terms below over an input they never asked for — the same deletion the load-input block
+    # above was restructured to stop. Blindness is recorded (`blind`) so a window in which this term
+    # was not evaluating is greppable, never indistinguishable from a quiet box.
+    if ! cc_hw_is_num "$seg_pct" || ! cc_hw_is_num "$seg_ceiling"; then
+      _cc_admit_note_blind segments
+      seg_pct=""
+    elif [ "$(cc_hw_segment_verdict "$seg_pct" "$seg_ceiling")" = REFUSE ]; then
+      detail="compressor segments ${seg_pct}% of limit (${seg_segs} of ${seg_lim}) > ceiling ${seg_ceiling}%"
+      _cc_admit_spend "$caller" "$what" "$budget" "$detail" "segments"; return $?
+    fi
+  else
+    seg_pct=""
   fi
-  if [ "$(cc_hw_headroom_verdict "$head_gb" "$floor")" = REFUSE ]; then
-    detail="reclaimable ${head_gb}GB < floor ${floor}GB"
-    _cc_admit_spend "$caller" "$what" "$budget" "$detail" "headroom"; return $?
+
+  # ── ACTIVE-CONCURRENCY TERM (Wave D) — the ceiling the design point actually needs ──────────────
+  # "~10 active" was the arithmetic every capacity claim rested on and NOTHING enforced it: axis 13
+  # names that circularity outright ("the ranking assumes the outcome of the wave its own conclusion
+  # deprioritises"), and axis 10's F3 is the failure it produces — a fleet-wide wake turns 140 idle
+  # residents into 140 concurrent turns, which no spawn gate keyed on residency can even see.
+  #
+  # 8 is the top of the measured band. Axis 09: 2.5-5 runnable threads per genuinely-ACTIVE session
+  # (load1 27.4 -> 44.4 at 9 all-active) against the load-20 gate ⇒ ~4-8 concurrent actives, which is
+  # also what all 127/127 historic gate refusals correspond to. The TOP of the band is deliberate:
+  # this term refuses real work, so it must bind where the evidence is unambiguous, and the load and
+  # segment terms above already cover the middle of the band from their own directions.
+  #
+  # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
+  # this term under-refuses rather than refusing on unproven activity — the same direction rule the
+  # reserve follows. An unavailable library or an unreadable census is a NOTED blindness, not a
+  # deletion of the terms below it.
+  act=""
+  if [ "${CC_ADMIT_ACTIVE_TERM:-on}" != off ]; then
+    act_ceiling="${CC_ADMIT_ACTIVE_CEILING:-8}"
+    if _cc_admit_load_presence && command -v cc_sp_active >/dev/null 2>&1; then
+      act="$(cc_sp_active 2>/dev/null || true)"
+    fi
+    if ! cc_hw_is_int "$act" || ! cc_hw_is_int "$act_ceiling"; then
+      _cc_admit_note_blind active
+      act=""
+    elif [ $(( act + 1 )) -gt "$act_ceiling" ]; then
+      detail="${act} sessions mid-turn + 1 > active ceiling ${act_ceiling}"
+      _cc_admit_spend "$caller" "$what" "$budget" "$detail" "active"; return $?
+    fi
   fi
 
   # ── THE RESERVE (§W3 items 1/4/5) — the operator's floor, in the dimension the box binds on ────
@@ -499,12 +737,35 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # is the §9.5.1 population defect in miniature.
   if [ "$CC_ADMIT_PRESENCE" = self ] || [ "$CC_ADMIT_PRESENCE" = present ] \
   || [ "$CC_ADMIT_PRESENCE" = absent ] || [ "$CC_ADMIT_PRESENCE" = unknown ]; then
-    local eff_floor ceiling_n trees limit
-    if [ "$CC_ADMIT_RESERVE_GB" -gt 0 ] 2>/dev/null; then
+    local eff_floor ceiling_n trees limit act_limit act_reserve
+    if [ -n "$floor" ] && [ "$CC_ADMIT_RESERVE_GB" -gt 0 ] 2>/dev/null; then
       eff_floor="$(awk -v f="$floor" -v r="$CC_ADMIT_RESERVE_GB" 'BEGIN { printf "%.2f", f + r }')"
       if [ "$(cc_hw_headroom_verdict "$head_gb" "$eff_floor")" = REFUSE ]; then
         detail="reclaimable ${head_gb}GB < floor ${floor}GB + operator reserve ${CC_ADMIT_RESERVE_GB}GB = ${eff_floor}GB (operator ${CC_ADMIT_PRESENCE})"
         _cc_admit_spend "$caller" "$what" "$budget" "$detail" "reserve-headroom"; return $?
+      fi
+    fi
+    # ── reserve-active (Wave D) — the operator's slot in the dimension that binds FIRST ───────────
+    # Same law as reserve-headroom, in the ACTIVE dimension: `active` above means the box is out and
+    # the operator's own turn would contend too; `reserve-active` means there was room and autonomy
+    # yielded. Distinct terms because they have different cures.
+    #
+    # ITS OWN CONSTANT, and small (1). cc_sp_reserve_slots returns 2-6 — correct against a 54-session
+    # RESIDENT ceiling and absurd against an active ceiling of 8, where it would cut autonomy to two
+    # concurrent turns. And it applies ONLY on PROVEN presence: `absent`/`unknown` carry no base
+    # reserve here (unlike the slot reserve, whose base is 2), because this is already the tightest
+    # term on the gate and a standing base would permanently spend an eighth of the design point on a
+    # human who is provably not there. `self` reserves nothing — the operator spending their own
+    # capacity is the reserve's beneficiary, not its subject.
+    if [ -n "$act" ] && [ "$CC_ADMIT_PRESENCE" = present ]; then
+      act_reserve="${CC_ADMIT_ACTIVE_RESERVE:-1}"
+      if cc_hw_is_int "$act_reserve" && cc_hw_is_int "${act_ceiling:-}"; then
+        act_limit=$(( act_ceiling - act_reserve ))
+        [ "$act_limit" -lt 0 ] && act_limit=0
+        if [ $(( act + 1 )) -gt "$act_limit" ]; then
+          detail="${act} sessions mid-turn + 1 > active ceiling ${act_ceiling} − operator reserve ${act_reserve} = ${act_limit} (operator ${CC_ADMIT_PRESENCE})"
+          _cc_admit_spend "$caller" "$what" "$budget" "$detail" "reserve-active"; return $?
+        fi
       fi
     fi
     # The session-count ceiling — the ONE place `~15` is replaced by the measured 54-session floor
@@ -534,15 +795,47 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # `measured` means what a naive reader assumes "admit" means: EVERY ENABLED term read a live
   # instrument and cleared. A caller running one term gets `headroom-only`/`load-only` instead, so a
   # single-term window can never be counted as evidence that both were exercised.
+  #
+  # THOSE TWO NAMES DESCRIBE THE LOAD/HEADROOM PAIR ONLY, and that is not sloppiness: `basis` is the
+  # vocabulary SHARED with capacity_gate(), which carries exactly that pair, so it cannot grow a
+  # value per term without corrupting the field for the other gate (coverage case 27 is the ratchet:
+  # capacity_gate's vocabulary must stay a SUBSET of this one). `terms` is therefore the
+  # authoritative field for which terms were in force, and `blind` for which of them could not read.
+  #
+  # ⚠️ AMENDS §9.5.1's INSTRUCTION AT THE TOP OF THIS FILE: split on `basis` AND `blind`. Before
+  # Wave D a blind term was IMPOSSIBLE — any unreadable input fail-opened the whole gate and
+  # returned, so `measured` could promise that every enabled term read a live instrument. With four
+  # terms that return is itself the defect (one dead probe deleting three healthy terms), so
+  # blindness became a per-term state, and the promise moved to the conjunction: a row is evidence
+  # that a term was exercised only when `terms` names it and `blind` does not.
+  #
+  # The cleared terms' NUMBERS ride on the admit row, not just the refusal's: §9.5.1's rule is that
+  # an admit with no numbers is worse than a refusal with none, because nothing about it looks wrong.
+  # That is also what makes the provisional segment ceiling re-derivable from the ledger.
   if [ "${CC_ADMIT_LOAD_TERM:-on}" = off ]; then
-    CC_ADMIT_REASON="capacity-admit: ADMIT (headroom only) — reclaimable ${head_gb}GB (floor ${floor}GB)"
-    _cc_admit_emit admit headroom-only "$caller" "$what" \
-      "reclaimable ${head_gb}GB (floor ${floor}GB) · load term off"
-    _cc_admit_reset "$caller"; return 0
+    detail="load term off"
+  else
+    detail="load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)"
   fi
-  CC_ADMIT_REASON="capacity-admit: ADMIT — ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)"
-  _cc_admit_emit admit measured "$caller" "$what" \
-    "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)"
+  if [ -n "$floor" ]; then
+    detail="${detail} · reclaimable ${head_gb}GB (floor ${floor}GB)"
+  else
+    detail="${detail} · headroom term off"
+  fi
+  [ -n "$seg_pct" ] && detail="${detail} · segments ${seg_pct}% of limit (ceiling ${seg_ceiling}%)"
+  [ -n "$act" ]     && detail="${detail} · ${act} sessions mid-turn (active ceiling ${act_ceiling})"
+  [ -n "$CC_ADMIT_BLIND" ] && detail="${detail} · BLIND: ${CC_ADMIT_BLIND}"
+  CC_ADMIT_REASON="capacity-admit: ADMIT — ${detail}"
+  if [ "${CC_ADMIT_LOAD_TERM:-on}" = off ] && [ -n "$floor" ]; then
+    _cc_admit_emit admit headroom-only "$caller" "$what" "$detail"
+  elif [ "${CC_ADMIT_LOAD_TERM:-on}" != off ] && [ -z "$floor" ]; then
+    _cc_admit_emit admit load-only "$caller" "$what" "$detail"
+  else
+    # Both of the pair ran, or NEITHER did while a Wave D term carried the evaluation. `measured` is
+    # correct under its own definition either way — every enabled term cleared — and `terms` is what
+    # says which. There is deliberately no fifth basis value: see the paragraph above.
+    _cc_admit_emit admit measured "$caller" "$what" "$detail"
+  fi
   _cc_admit_reset "$caller"
   return 0
 }

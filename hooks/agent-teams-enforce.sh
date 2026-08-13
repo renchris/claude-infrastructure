@@ -195,6 +195,15 @@ done
 # pane removes it). Both new refusals arrive through cc_capacity_admit's existing budget, so a wave can
 # be throttled and can never be permanently blocked.
 #
+# WAVE D ADDED TWO MORE TERMS AND THIS PATH INHERITS BOTH BY DEFAULT (backlog 1c45598a91be), which
+# is deliberate rather than incidental: `segments` and `active` are switchable exactly like the load
+# term, and this is the ONE surface where leaving them ON matters most. The Agent tool is the
+# highest-volume spawn path on the box, and axis 10's F3 names the failure it produces — a wave that
+# fans out while other sessions are mid-turn is how "~10 active" gets breached, and no term keyed on
+# RESIDENCY can see it. The load term stays off here for the reason above; `active` is the honest
+# replacement for what the load term was reaching for, measured in the dimension that is
+# attributable to what is being spawned.
+#
 # CC_ADMIT_SID IS WHAT MAKES THE RESERVE FAIR, and it is why the session id is passed. The reserve is
 # waived entirely when the SPAWNING session is itself operator-driven (`presence:"self"`): an operator
 # fanning out is the operator spending their own slots, and a gate that refused that would be the
@@ -208,7 +217,7 @@ if command -v cc_capacity_admit >/dev/null 2>&1; then
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: ("MACHINE CAPACITY — subagent spawn refused. \($r). Read the term named in that sentence: `headroom` means the box is genuinely out of reclaimable memory (free+speculative+inactive+purgeable is what a new process can take WITHOUT swapping; below the floor the whole box swaps and every live session slows). `reserve-headroom` or `reserve-slots` means something different and more specific — the box had room, and this spawn is YIELDING to the operator, who is at the keyboard right now. That reserve is a floor of local capacity autonomy may never take (BACKLOG_SELF_DRAINING §W3): it is waived automatically for a session the operator is driving, so if you are seeing it, this session is autonomy. DO NOT retry in a loop — every refusal here is BOUNDED and releases itself after CC_ADMIT_BUDGET consecutive refusals (it then admits and pages), so a retry storm only spends the budget that protects you. Instead: shed first (close finished panes, let the running wave drain, reduce the fan-out width), then spawn. Run this work SERIALLY on the lead if it cannot wait — that is the correct answer while the operator is working. Override for one spawn: CC_ADMIT_GATE=off. Lower the bar: CC_ADMIT_MIN_HEADROOM_GB=<n>. Drop the reserve for one spawn: CC_ADMIT_RESERVE_TERM=off. Rule: MACHINE_CAPACITY_V2 §12.1 + §W3 (backlog 8ae4b508f274).")
+        permissionDecisionReason: ("MACHINE CAPACITY — subagent spawn refused. \($r). Read the term named in that sentence: `headroom` means the box is genuinely out of reclaimable memory (free+speculative+inactive+purgeable is what a new process can take WITHOUT swapping; below the floor the whole box swaps and every live session slows). `segments` means the VM compressor is already deep in a burst — the term that saw 100% of the segment limit at the panic while headroom still read 29.79 GB and admitted; adding a session there adds demand to the one dimension that actually kills the box. `active` means too many sessions are MID-TURN right now (ceiling 8): residency is nearly free, but 2.5-5 runnable threads arrive with every ACTIVE session, so this is the ceiling the whole design point rests on — the fix is to let the running turns finish, not to close panes. `reserve-headroom`, `reserve-active` or `reserve-slots` means something different and more specific — the box had room, and this spawn is YIELDING to the operator, who is at the keyboard right now. That reserve is a floor of local capacity autonomy may never take (BACKLOG_SELF_DRAINING §W3): it is waived automatically for a session the operator is driving, so if you are seeing it, this session is autonomy. DO NOT retry in a loop — every refusal here is BOUNDED and releases itself after CC_ADMIT_BUDGET consecutive refusals (it then admits and pages), so a retry storm only spends the budget that protects you. Instead: shed first (close finished panes, let the running wave drain, reduce the fan-out width), then spawn. Run this work SERIALLY on the lead if it cannot wait — that is the correct answer while the operator is working. Override for one spawn: CC_ADMIT_GATE=off. Lower the bar: CC_ADMIT_MIN_HEADROOM_GB=<n>, CC_ADMIT_MAX_SEGMENT_PCT=<n>, CC_ADMIT_ACTIVE_CEILING=<n>. Drop the reserve for one spawn: CC_ADMIT_RESERVE_TERM=off. Rule: MACHINE_CAPACITY_V2 §12.1 + §W3 (backlog 8ae4b508f274) + Wave D (backlog 1c45598a91be).")
       }
     }'
     exit 0
