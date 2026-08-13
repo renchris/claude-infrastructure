@@ -47,8 +47,22 @@ setup() {
   # THE PRE-FIX CONTROL. Every case in §5c must be able to FAIL, and the only artifact that proves
   # it is the REAL code as it stood before this diff — replayed from git, never a mutant of this
   # file (memory: control-must-replay-the-real-artifact). Extracted the same way as lib.sh.
-  git -C "$REPO" show origin/main:scripts/compressor-sentinel.sh 2>/dev/null \
-    | sed -n '/^[a-z_]*() {/,/^}/p' > "$D/prelib.sh" || true
+  #
+  # PINNED SHA, NOT `origin/main`. 808c09609 is 6dd3ea468^ — the last commit whose census still read
+  # `split($4, p, "/")` and whose selectors still took comm from the truncated `pid=,ppid=,rss=,
+  # comm=,args=` stream. `origin/main` MOVES: the moment 6dd3ea468 landed there, this replayed the
+  # POST-fix artifact and every §5c control below compared the fix to itself — GREEN, permanently,
+  # asserting nothing. A vacuous control is worse than a red one: a red control gets fixed, a
+  # vacuous one gets trusted. (memory: control-must-replay-the-real-artifact)
+  #
+  # AND THE MARKER, because the pin alone is not enough — a sha can be re-pointed, and a `git show`
+  # that fails silently leaves an EMPTY prelib whose functions are all missing rather than pre-fix.
+  # `exe_table` is the identifier 6dd3ea468 INTRODUCED, so its absence is what makes this artifact
+  # provably the older one. Measured: 0 occurrences at the pin, 3 at HEAD.
+  git -C "$REPO" show 808c09609:scripts/compressor-sentinel.sh 2>/dev/null \
+    | sed -n '/^[a-z_]*() {/,/^}/p' > "$D/prelib.sh"
+  [ -s "$D/prelib.sh" ] || skip "pre-fix commit 808c09609 unavailable (shallow clone?)"
+  ! grep -q 'exe_table' "$D/prelib.sh" || false
 
   export LOG="$D/cs.jsonl"
   export SNAPLOG="${LOG%.jsonl}-snap.log"

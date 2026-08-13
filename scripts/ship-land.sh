@@ -2261,6 +2261,43 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── moving-ref pre-fix-control ratchet (2026-08-13) ───────────────────────────────────────────
+  # Same own-scope contract as the ratchets around it, for a class whose two outcomes are BOTH bad
+  # and only one of them is visible: a control replayed from `git show origin/main:<path>` stops
+  # being a pre-fix artifact the instant the fix lands on origin/main. It then either reddens
+  # permanently (tests/capacity-alarm-permb.bats on 2026-08-11; tests/compressor-sentinel.bats cases
+  # 72/75/76, RED ON TRUNK since 6dd3ea468 and repaired in this same diff) or — worse — passes
+  # VACUOUSLY, because the post-fix artifact happens to answer the same way for an unrelated reason
+  # (tests/ignition-gate-census.bats: 9/9 green while replaying the fixed gate). A red control gets
+  # fixed; a vacuous one gets trusted.
+  #
+  # It belongs HERE for the reason its siblings document: enforced only by its own suite it is
+  # post-hoc DETECTION, and gate-select maps that suite from exactly one edge — the lint — so
+  # WRITING a new control never selects it (memory: enforcement-must-live-at-the-chokepoint). This
+  # is the THIRD instance of one greppable mistake and the memory carrying the rule since
+  # 2026-07-29 did not reach an author twelve days later; that is what makes it a gate, not a note.
+  # Sub-second, a pure awk, and it names file, line and the offending ref.
+  MOVINGREF_LINT="${SHIP_LAND_MOVINGREF_LINT:-scripts/moving-ref-control-lint.sh}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$MOVINGREF_LINT" ]]; then
+    local mown=""
+    if [[ "${SHIP_LAND_MOVINGREF_OWN_SCOPE:-on}" != "off" ]]; then
+      mown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
+    fi
+    echo "→ gate: moving-ref control ratchet (a pre-fix control replayed from a ref that advances)" >&2
+    own_run MOVINGREF CC_MOVINGREF_OWN "$mown" "$MOVINGREF_LINT" tests >&2; local mrc=$?
+    if [[ "$mrc" -eq 2 ]]; then
+      echo "⛔ gate: moving-ref-control-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
+      GATE_KILLED=1
+      return 1
+    elif [[ "$mrc" -ne 0 ]]; then
+      echo "✗ gate: MOVING-REF RED — a control THIS LAND CHANGES replays from a ref that will move past it." >&2
+      echo "  It will pass for you and then compare the fix to itself; the fix is named above." >&2
+      gate_red movingref
+      return 1
+    fi
+  fi
+
   # ── git-identity escape ratchet (2026-08-05) ──────────────────────────────────────────────────
   # Same own-scope contract as the two ratchets above, for a blocker class whose blast radius is the
   # widest of the three: `git -C ""` is a documented NO-OP, so a fixture doing
