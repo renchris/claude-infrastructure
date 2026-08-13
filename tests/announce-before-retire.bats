@@ -353,7 +353,7 @@ mutant_bare_awk() {  # → writes fn-noguard.sh
   [ ! -f "$BATS_TEST_TMPDIR/notify.log" ]
 }
 
-@test "ERREXIT MUTATION CONTROL: the same mutant is INVISIBLE to the bats `run` harness" {
+@test "ERREXIT MUTATION CONTROL: the same mutant is INVISIBLE to the bats \`run\` harness" {
   # Names the blindness rather than merely fixing it: driven through `run`, the unguarded function
   # passes every assertion the suite above makes. This is why the defect shipped.
   mutant_bare_awk
