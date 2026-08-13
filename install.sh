@@ -434,10 +434,24 @@ if $IS_GLOBAL; then
   # A copy here would restore exactly that: the deployed path is what boot-resume execs, so a copy
   # that fell behind would resume the fleet on stale code and say nothing. ~/.reso/bin stays the
   # deployed location because those four callers reference it by absolute path.
-  if [[ -f "$REPO_DIR/bin/reso-resume-one" ]]; then
+  # reso-keepalive joins it, and the gap it closes was SILENT for the same reason the paragraph
+  # above describes — measured 2026-08-12 (backlog 8550b6129d9c). bin/reso-keepalive is tracked,
+  # lint-covered and carries a 7-case suite, but NOTHING linked it anywhere: ~/.reso/bin/
+  # (that wording dodges the same trap the block above names — a comment whose first word after
+  # `#` is the linter's own name parses as a DIRECTIVE and aborts the file. It caught this edit.)
+  # reso-keepalive was a real file dated 2026-07-04, `#!/bin/zsh`, with ZERO hits for
+  # CC_KEEPALIVE_MARKERS — i.e. the pre-410f920c version, carrying the frozen 12-worktree list and
+  # WITHOUT the `${VAR:-} swallows an explicit empty` guard fix landed the same day.
+  # That made the landed fix unreachable and the buggy original what actually ran on every boot,
+  # because scripts/boot-resume.sh falls back to this exact path when resolve_bin comes up empty
+  # — and resolve_bin's ladder (beside-script, ../bin, ~/.claude/bin) never reaches ~/.reso/bin.
+  # A tracked file that no installer deploys is not "landed", it is a second copy of the truth with
+  # the live one winning. Same remedy, same reason: SYMLINK, never copy.
+  for _reso_tool in reso-resume-one reso-keepalive; do
+    [[ -f "$REPO_DIR/bin/$_reso_tool" ]] || continue
     mkdir -p "$HOME/.reso/bin"
-    link_file "$REPO_DIR/bin/reso-resume-one" "$HOME/.reso/bin/reso-resume-one"
-  fi
+    link_file "$REPO_DIR/bin/$_reso_tool" "$HOME/.reso/bin/$_reso_tool"
+  done
 
   # Accounts SSOT — symlink (repo = source of truth; the knowledge-layer mirror
   # shares ~/.claude/accounts.json into every alt config dir automatically).
