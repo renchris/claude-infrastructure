@@ -1046,11 +1046,16 @@ _filefix() {   # a stub cc-backlog that records its argv; nothing here can reach
     # githooks and launchd are COPY classes: they are asserted by the copy leg, which reads the repo
     # directly rather than through ls-files, and they must never enter the pathspec whose output
     # link_refresh turns into symlinks.
-    # Written as `[ = ]` rather than a `githooks|launchd)` case label deliberately:
-    # scripts/unattended-path-lint.sh reads the second arm of an ALTERNATION label as a command
-    # position and reported "`launchd` is unreachable on ... PATH (bare)" over this very line, which
-    # took the land gate red. The lint already suppresses a plain single-word case label; the
-    # alternation form is the gap. Filed rather than fixed here — that file has its own owner.
+    # Written as `[ = ]` rather than a `githooks|launchd)` case label because
+    # scripts/unattended-path-lint.sh read a label as a command position and reported "`launchd` is
+    # unreachable on ... PATH (bare)" over this very line, taking the land gate red. FIXED there
+    # 2026-08-13 (§ case_stack): labels are patterns in either arity, and a case BODY is now read at
+    # all — it never was. The detour is no longer required; the form below is kept only because it
+    # works and changing it buys nothing. Do not re-derive the old advice from this shape.
+    # NOTE the claim this comment used to make — "the lint already suppresses a plain single-word
+    # case label; the alternation form is the gap" — was FALSE in the reassuring direction. Nothing
+    # suppressed either; `launchd)` alone leaked identically. Single-word labels merely looked safe
+    # because the usual ones name no installed binary.
     if [ "$d" = githooks ] || [ "$d" = launchd ]; then
       grep -q "REPO/$d" "$ASSERT" || false
     else

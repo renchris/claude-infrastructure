@@ -214,7 +214,6 @@ hooks/completion-assert.sh:timeout
 hooks/lead-crash-watchdog.sh:cc-teardown
 hooks/lead-crash-watchdog.sh:gtimeout
 hooks/lead-crash-watchdog.sh:timeout
-hooks/live-session-registry.sh:claude
 hooks/teammate-auto-shutdown.sh:it2
 hooks/notify.sh:gtimeout
 hooks/notify.sh:timeout
@@ -226,7 +225,6 @@ hooks/pre-session-validate.sh:timeout
 hooks/session-register.sh:cc-backlog
 hooks/session-register.sh:timeout
 hooks/session-start.sh:agent-browser
-hooks/session-start.sh:claude
 hooks/waiting-recycle.sh:gtimeout
 hooks/waiting-recycle.sh:timeout
 scripts/autonomy-sweep.sh:gtimeout
@@ -304,6 +302,38 @@ def scan(text):
     at_cmd = True
     dq_depth = 0          # inside "..."
     sub_stack = []        # open $( / ` contexts
+    # Open `case` blocks, one entry each: "await_in" -> "label" -> "body" -> "label" ...
+    #
+    # WITHOUT THIS THE SCANNER READ A CASE STATEMENT EXACTLY BACKWARDS: it reported the LABELS as
+    # commands and was BLIND to the BODIES. Both halves are one missing state. A label word ends at
+    # `)`, which never opened command position, so the body's first command was never at_cmd — while
+    # `|` between two label arms DID reopen it, so the second arm was emitted as a command. Measured
+    # on `case "$d" in githooks|launchd) head -1 x | launchd --body ;; *) md5 y ;; esac`: the old
+    # scanner emitted `githooks launchd *` (three labels, one a glob) and NOT ONE of `head`,
+    # `launchd`, `md5`.
+    #
+    # The false POSITIVE is what got filed: `githooks|launchd)` reported "`launchd` is unreachable
+    # (bare)" and took the land gate red, so tests/deploy-parity.bats:1049 was written as
+    # `[ "$d" = githooks ] || [ "$d" = launchd ]` with a comment explaining the detour. Real code
+    # contorted around a scanner bug is the visible cost; the invisible one is larger.
+    #
+    # 🚨 THE ROW'S PREMISE WAS WRONG IN THE SAFE-LOOKING DIRECTION, and it matters. Both the filing
+    # and that comment say "the lint already suppresses a plain single-word case label; the
+    # ALTERNATION form is the gap." There was never any label suppression. `launchd)` on its own
+    # emits identically — verified against this scanner. Single-word labels merely LOOK handled
+    # because the usual ones (`githooks`, `start`, `*`) name no installed binary, so
+    # installed_somewhere drops them downstream as scanner noise. Any single-word label that happens
+    # to name a real binary — `install)`, `test)`, `find)`, `time)` — false-positives just the same.
+    # Fixing only the alternation arm would have left that live and looked complete.
+    #
+    # Corpus delta, measured over tests/*.bats + scripts/*.sh + hooks/*.sh: 11337 -> 10266 emissions.
+    # ~1100 removed are labels the downstream predicate was already discarding (`*`, `*[!0-9]*`, `0`,
+    # `/*`, `124`, `137`, `claude-*`) — noise this scanner should never have produced. 6 are newly
+    # visible because a case BODY is finally read: osascript x2, cat, touch, rm, and one local
+    # function. NONE becomes a finding — every one is reachable on STOCK_PATH — so this restores
+    # coverage without minting a single new red. A real pipeline is untouched: `head -1 x | launchd`
+    # still reports both, because that `|` is not between label arms.
+    case_stack = []
     out = []
 
     while i < n:
@@ -441,6 +471,24 @@ def scan(text):
             at_cmd = True
             continue
 
+        # A bare `)` closes a case LABEL and opens its BODY at command position. Gated on the label
+        # state, so a subshell's `)` and a `$(`/backtick close (handled above, which owns sub_stack)
+        # are unaffected.
+        if c == ")" and case_stack and case_stack[-1] == "label":
+            case_stack[-1] = "body"
+            at_cmd = True
+            i += 1
+            continue
+
+        # `;;` ends a body and returns to label position. Checked before the single-`;` arm below,
+        # which would otherwise consume the first `;` and leave the second to open a command
+        # position on the next label.
+        if c == ";" and text.startswith(";;", i) and case_stack and case_stack[-1] == "body":
+            case_stack[-1] = "label"
+            at_cmd = True
+            i += 2
+            continue
+
         if c in ";|&(){}":
             if c in ";|&({":
                 at_cmd = True
@@ -460,6 +508,25 @@ def scan(text):
         word = text[start:i]
         if not word:
             i += 1
+            continue
+
+        # ── the case-block state machine ──────────────────────────────────────────────────────────
+        # Driven from every word, not only command-position ones: `in` follows the case SUBJECT, so
+        # at_cmd is already closed by the time it is read. `case`/`esac`/`in` are all in KEYWORDS and
+        # so were never emitted — this reads them for their structure alone.
+        if word == "case":
+            case_stack.append("await_in")
+        elif word == "esac":
+            if case_stack:
+                case_stack.pop()
+        elif word == "in" and case_stack and case_stack[-1] == "await_in":
+            case_stack[-1] = "label"
+            at_cmd = False
+            continue
+
+        # A LABEL word is a pattern, never a command — whichever arm of an alternation it sits in.
+        if case_stack and case_stack[-1] == "label":
+            at_cmd = False
             continue
 
         if at_cmd:
@@ -1151,6 +1218,50 @@ PLIST
 reason="see \`x\` (tmux kill-pane) now"'
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t18" >/dev/null 2>&1 ); expect 0 "$?" 'prose after a nested $(( )) was reported as an invocation (the quote machine desynced)'
 
+  # 19a. GREEN — a case LABEL is a pattern, not a command, in EITHER arity. The filed symptom was
+  #      `githooks|launchd)` reporting "`launchd` is unreachable (bare)", which took the land gate
+  #      red and made tests/deploy-parity.bats:1049 write `[ "$d" = githooks ] || [ "$d" = launchd ]`
+  #      with a comment explaining the detour.
+  #      🚨 BOTH ARITIES ARE ASSERTED BECAUSE THE FILING'S PREMISE WAS WRONG. It, and that comment,
+  #      say the single-word label "is already suppressed" and only the ALTERNATION form leaks.
+  #      Nothing suppressed either: `launchd)` alone emitted identically. Single-word labels merely
+  #      LOOK handled because the usual ones (`githooks`, `start`, `*`) name no installed binary and
+  #      installed_somewhere drops them downstream — so any label that happens to name a real binary
+  #      (`install)`, `test)`, `find)`, `time)`) false-positived just the same. A fix scoped to the
+  #      alternation arm would have left that live and looked complete, which is why the one-arm
+  #      fixture is here and not folded into the two-arm one.
+  #      THE LABEL WORDS ARE `shellcheck`, NOT the `launchd` of the filed symptom, and that is the
+  #      difference between a case and a decoration. This half is judged against the STOCK floor,
+  #      where /usr/sbin/launchd and /usr/bin/osascript both resolve — so a fixture spelled with the
+  #      real symptom's words is GREEN whether or not the label state exists, and proves nothing.
+  #      Written that way first and caught by mutation: neutering the state left it passing. Only a
+  #      binary the stock floor CANNOT reach makes the label position load-bearing here.
+  newtree t19a
+  mk t19a hooks/a.sh 'case "$1" in
+  githooks|shellcheck) : ;;
+  shellcheck) : ;;
+esac'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19a" >/dev/null 2>&1 ); expect 0 "$?" 'a case LABEL (one-arm or alternation) was reported as an invocation'
+
+  # 19b. RED on the SAME shape — the case BODY is still read. This is the half that makes 19a mean
+  #      something, and it is not symmetry for its own sake: the missing state made the scanner wrong
+  #      in BOTH directions at once, and the silent direction was the worse one. A label ends at `)`,
+  #      which never opened command position, so the body's first command was never at_cmd — every
+  #      bare binary invoked inside any `case` body was INVISIBLE to this lint for its whole life.
+  #      Measured on the old scanner, this fixture reports nothing at all.
+  newtree t19b
+  mk t19b hooks/a.sh 'case "$1" in
+  githooks|launchd) shellcheck foo.sh ;;
+esac'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19b" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary inside a case BODY was not detected'
+
+  # 19c. RED — a REAL pipeline is untouched. The fix turns `|` transparent only BETWEEN LABEL ARMS;
+  #      an ordinary `foo | bar` must still put `bar` at command position, or 19a would have been
+  #      bought by blinding the scanner to every piped invocation in the tree.
+  newtree t19c
+  mk t19c hooks/a.sh 'head -1 x | shellcheck -'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t19c" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary after a real pipe was not detected'
+
   # 19. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
   #     or it cannot be wired into the gate at all.
   if [ -n "$ROOT" ] && [ -d "$ROOT/hooks" ]; then
@@ -1158,7 +1269,7 @@ reason="see \`x\` (tmux kill-pane) now"'
   fi
 
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, and on that binary reached through bats' own \`run\` wrapper; GREEN on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on the real tree."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on the real tree."
     exit 0
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."
