@@ -841,3 +841,98 @@ one that flags 0, and this file is the positive control for the too-wide directi
 **Each of the two also needs the second half:** an immutable pin AND a **pre-fix MARKER assertion**.
 The pin alone still goes vacuous if the sha is ever re-pointed; the marker grep is precisely what made
 `capacity-alarm-permb` fail LOUDLY rather than silently.
+
+---
+
+## RESUME-HERE, RECYCLE #6 — 2026-08-13, effort 2
+
+**Closed this recycle: `b449e49f1438` (`85fd75bc8`). Filed 0.** Store, non-cloud open: **445 → 444**
+(re-derive; state the population — `condition=master-verification-integrity` still holds 8 `cloud`
+rows that are outside this drain by construction, which is the denominator bug recycle #5 settled).
+
+**Remaining workable in this condition: ONE — `cf440684e0e1`** (perf, large; the row's own analysis
+says arm-level keying is NOT the answer). Untriaged. Give it the two-question reassurance probe
+first, and probe its own deferral reason the same way — that is what dissolved this row.
+
+### `b449e49f1438` — CLOSED. The triage was right about the work and WRONG about the diagnosis
+
+The RESUME-HERE handed over a complete triage and it held on every point that shaped the *work*: the
+list was stale by one, the deferral had expired, own-scoping dissolves it, the discriminator is
+invocation-vs-mention, and the detector must flag exactly 2 of 3. All confirmed, unchanged.
+
+🚨 **But the row's central claim — "they are GREEN NOW and that is why they are worse" — was true of
+only ONE of the two, and the other was the opposite failure.** Measured by replaying the pre-edit
+files:
+
+| site | row predicted | MEASURED |
+|---|---|---|
+| `tests/ignition-gate-census.bats` | silently vacuous | **9/9 GREEN** replaying the FIXED gate — vacuous, as claimed |
+| `tests/compressor-sentinel.bats` | silently vacuous | **cases 72/75/76 RED ON TRUNK**, and had been since `6dd3ea468` |
+
+So one of the two sites was a **standing trunk red** that every full run had been carrying, and the
+row filed it as a silent-green. The lesson is not that the row was careless — it is that **the two
+poles of this defect are produced by the SAME cause and are indistinguishable without running it**.
+Whether a moved ref reddens or goes vacuous depends entirely on what the control happens to assert:
+
+- compressor-sentinel asserts a pre-fix **VALUE** (`precensus` must read `1 1 878`), and the post-fix
+  artifact returns a different one ⇒ LOUD.
+- ignition-gate-census asserts the pre-fix gate reads **node_n=0**, and the post-fix gate ALSO reads
+  0 through `pregate` — which sets no `CC_IGNITION_EXE_FILE`, so the new name table names none of the
+  fixture's synthetic pids ⇒ 0 for an unrelated reason ⇒ SILENT.
+
+**Generalisable:** a control that asserts an ABSENCE (`-z`, `= 0`, "does not appear") can be
+satisfied by a second, unrelated cause; one that asserts a pre-fix VALUE cannot. When you cannot
+afford to find out which pole you are on, assert the value.
+
+### What shipped
+
+`scripts/moving-ref-control-lint.sh` (22-case `--selftest`) + `tests/moving-ref-control-lint.bats`
+(7 cases) + the `run_gate` arm in `scripts/ship-land.sh`, own-scoped with the three-state contract
+its siblings use. Both sites pin **`808c09609`** (=`6dd3ea468^`) and assert a marker.
+
+- **The MARKER had to be derived from the measured diff, and the obvious one was WRONG.** The
+  natural marker for the ignition gate is its pre-fix `ps` spelling `pid=,etime=,comm=,args=` —
+  which greps **1 on BOTH sides**, because the post-fix file names it in the comment explaining the
+  fix. `exe_rows` / `exe_table` (the identifiers the fix INTRODUCED) discriminate 0-vs-3. This is
+  the third consecutive recycle in which a marker/mutant spelled from the subject's VOCABULARY
+  rather than its MEASURED output was the defect.
+- **Quote-stripping is the discriminator**, not comment-vs-code. `cc-dispatch-projects.bats:359` is
+  a fully executed line whose phrase is a string being asserted about. Strip balanced quoted spans;
+  a **dangling** quote keeps the remainder RAW (fail-closed).
+- **The rule is a SUBTRACTION**: pinned ⇔ 7+ hex characters, everything else moves. No enumeration
+  of `origin/main | HEAD | main | …` to go stale. A ref that strips to an unreadable expansion is
+  flagged too — a pin that cannot be read from the file cannot be audited from the file.
+
+### 🚨 THE LESSON OF THIS RECYCLE — a mutant that never applied reads exactly like a blind test, and it happened TWICE IN ONE SESSION
+
+Recycle #5 already recorded this class ("a green suite under a mutant has two causes"). It recurred
+here in its most embarrassing form: **the mutation command itself failed and the run was green
+because nothing had changed.**
+
+- `sed -i '' 's|  \[ "${3:-0}" = "1" \] || return 0|…'` — the `||` inside the pattern is a **bad sed
+  delimiter**, so sed errored and the file was untouched. Verdict read `22/22`.
+- The perl retry with `\Q…\E` silently matched nothing for the same family of reasons. Verdict read
+  `22/22` again.
+
+Both would have been recorded as "the suite cannot see this mutation" — a fabricated coverage gap
+that costs real work to chase. **The cure is one line: make the mutator ASSERT its own precondition.**
+
+```python
+assert s.count(old) == 1, f"MUTANT NOT APPLICABLE: {s.count(old)} occurrences"
+```
+
+Every mutant after that printed `applied` before its verdict was read. Ten mutants ran under that
+discipline and **one found a real gap**: the fail-open variant of the dangling-quote branch left
+*every other case green*, so the documented fail-closed behaviour was unpinned. It is now case
+`dangling`. **A mutation harness needs a positive control exactly as much as a matcher does** — and
+the control is not "did the suite go red", it is "did the mutation happen at all".
+
+### Carry-forward for `cf440684e0e1` and beyond
+
+- Triage INLINE with a content read; the 5-agent fan-out that returned 0 findings has not been
+  re-tried and should not be.
+- The two-question reassurance probe keeps paying — question 2 (`git log --since <firstTs> -- <cited
+  file>`) removed a third of this row's work, and probing the row's own DEFERRAL reason removed the
+  rest of the reason it had been parked.
+- `ship-land.sh` now has one more gate arm. It is own-scoped and sub-second; a land that touches no
+  `tests/*.bats` never sees it.
