@@ -388,6 +388,54 @@ while [ -L "$SELF" ]; do
   esac
 done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+# ABSOLUTE, because $0 is routinely relative (`./scripts/test-hermeticity-lint.sh`) and the symlink
+# loop above preserves that. Anything that resolves $SELF from a DIFFERENT working directory — the
+# memo's own key, below — silently gets nothing from a relative one. ROOT is already absolutised
+# by its `cd … && pwd`; this is the same treatment for the file itself.
+#
+# Derived from $SELF's OWN directory, NOT as "$ROOT/scripts/$(basename …)". The second form assumes
+# this file sits in the scripts/ dir of its root, which is true of the checkout and false of every
+# copy — and the failure is silent, because a path that does not resolve simply makes the memo key
+# unobtainable and the memo turns itself off. Caught by tests/herm-suite-memo.bats, which proves a
+# revised lint invalidates its carried verdicts by running a COPY.
+SELF_ABS="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")"
+
+# ── THE PER-SUITE MEMO (land-arch P3 follow-on, backlog cf440684e0e1) ─────────────────────────────
+# This lint is the land gate's most expensive arm by a wide margin — 46.0s of the ~135s the fifteen
+# ratchet arms cost, measured 2026-08-13 with the own-set exported exactly as ship-land's own_run
+# does. Every optimistic round that a sibling invalidates (exit 42) re-pays all of it over a tree
+# that is byte-identical except for the sibling's delta.
+#
+# Measured shape, by scaling the corpus (ENV_ROOT is $ROOT regardless of the dir argument, so the
+# table build is a constant and the two costs separate): 10.4s fixed + 0.069s per suite, linear
+# across n=0/60/120/240/467. So 32s of the 46s is the per-suite loop below, and that is what this
+# memoizes. The fixed 10.4s is the seam/env table build over bin+scripts+hooks; caching a table's
+# CONTENT needs a value store, which scripts/lib/gate-memo.sh deliberately does not have (it stores
+# only "this green was earned"), so it is left alone rather than widened for.
+#
+# WHAT IS CACHED, AND WHY IT IS OWN-SET-INDEPENDENT. The cached fact is "this suite emitted
+# nothing" — no leak, no ratchet, no advisory, under all seven rules. Every printf in lint_dir sits
+# inside a finding branch, and in_own only chooses which WORDING a finding gets (LEAK vs leak?), so
+# a suite that emits nothing emits nothing for every land regardless of its own-set. That keeps
+# gate-memo's one invariant unwidened: only an earned green is ever stored, and a finding is never
+# replayed from a cache.
+#
+# THE READ SET, declared mechanically rather than asserted — this is the per-lint locality proof the
+# P3 note asks for, and HERM_READSET below is it in executable form. A suite's verdict is a function
+# of exactly: its own bytes · this script's own bytes (every predicate and every embedded allowlist)
+# · the six allowlists actually in force (the CC_HERM_*_ALLOWLIST overrides can change them without
+# changing this file) · the five rule switches · and the seam/env TABLES, which rules 5 and 6
+# consult per suite and which are built from bin+scripts+hooks, a different population entirely.
+# Rules 1, 2, 3, 4 and 7 are file-local; rule 4's per-file-ness is not assumed here — §5.P3 claimed
+# it was a CROSS-FILE rule and that claim was refuted by reading the scan (`for f in …`, both
+# predicates take ONE file; the "collides" wording is about two runs of the same tool).
+#
+# Kill switch: CC_HERM_MEMO=off. SHIP_LAND_MEMO=off also disables it, via memo_init.
+HERM_MEMO_OK=0
+if [ "${CC_HERM_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
 
 # ── the ratchet: suites grandfathered as non-hermetic. ONLY EVER DELETE LINES FROM THIS LIST. ──
 # ONE recorded exception to "only delete", and it is a RENAME, not an addition (2026-07-31):
@@ -1507,6 +1555,62 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
   printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
 }
 
+# ── HERM_READSET: the read-set declaration, in executable form ────────────────────────────────────
+# Everything a per-suite verdict depends on EXCEPT the suite's own bytes (memo_file_key adds that).
+# Called AFTER the seam/env tables are built, because they are part of the read set — building them
+# is exactly what makes rules 5 and 6 answerable, and a key computed before them would be keyed on
+# the empty string and would carry a verdict earned under a different table.
+#
+# ANY of these changing must miss. That is why the ALLOWLISTS are hashed by VALUE rather than left
+# to the script blob: `CC_HERM_SEAM_ALLOWLIST=…` changes six suites' verdicts without changing one
+# byte of this file, and a key that only fingerprinted the file would serve a stale green to the
+# next caller who set it. Same for the five rule switches and the two table roots.
+herm_memo_arm() {  # $1 = rule 1's allowlist text (the one lint_dir is called with)
+  HERM_MEMO_OK=0
+  [ "${CC_HERM_MEMO:-on}" != "off" ] || return 1
+  command -v memo_init >/dev/null 2>&1 || return 1
+  memo_init || return 1                    # dirty tree · no git dir · unwritable store ⇒ memo OFF
+  local selfblob readset
+  selfblob="$(git hash-object -- "$SELF_ABS" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  readset="$(
+    printf 'herm-readset/v1\n'
+    printf 'lint=%s\n'        "$selfblob"
+    printf 'rules=%s|%s|%s|%s|%s\n' "$FIRE_RULE" "$ORPHAN_RULE" "$SEAM_RULE" "$ENV_RULE" "$ADMIT_RULE"
+    printf 'allow=%s\n'       "$1"
+    printf 'fire_allow=%s\n'  "$FIRE_ALLOW"
+    printf 'orph_allow=%s\n'  "$ORPHAN_ALLOW"
+    printf 'seam_allow=%s\n'  "$SEAM_ALLOW"
+    printf 'env_allow=%s\n'   "$ENV_ALLOW"
+    printf 'admit_allow=%s\n' "$ADMIT_ALLOW"
+    printf 'seam_root=%s\n'   "$SEAM_ROOT"
+    printf 'env_root=%s\n'    "$ENV_ROOT"
+    printf 'seam_table=%s\n'  "$SEAM_TABLE"
+    printf 'env_table=%s\n'   "$ENV_TABLE"
+  )" || return 1
+  # The checker-id carries the read set, so gate-memo's audited per-file primitives can be reused
+  # unchanged: memo_file_key already folds in its own salt (the interpreters' versions) and the
+  # file's blob sha, and an exact literal match of the whole entry is already what a hit requires.
+  HERM_CHECKER="herm/$(printf '%s' "$readset" | git hash-object --stdin 2>/dev/null)"
+  [ "$HERM_CHECKER" != "herm/" ] || return 1
+  HERM_MEMO_OK=1
+  return 0
+}
+
+# THE EMIT DETECTOR. Every branch in lint_dir that prints a finding also increments exactly one of
+# these thirteen counters, so their sum is unchanged across a suite IFF that suite emitted nothing.
+# Two lines instead of an `emitted=1` on twenty printf sites — but it is only true while it stays
+# true, so --selftest pins a violating suite under EVERY rule as never-memoized (herm_memo cases
+# below). A new rule that prints without counting would be caught there, not here.
+herm_emit_sum() {
+  printf '%s' "$(( new_leak + stuck + other + fire_leak + fire_stuck + orphan_leak + orphan_stuck \
+                 + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck ))"
+}
+
+HERM_CHECKER=""
+HERM_MEMO_HITS=0
+HERM_MEMO_RAN=0
+
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
 lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base new_leak=0 stuck=0 seen=0 other=0
@@ -1517,6 +1621,7 @@ lint_dir() {
   local env_allow="$ENV_ALLOW" env_leak=0 env_stuck=0
   local env_text="" env_setup="" env_why="" env_seen="" e_tool e_var
   local admit_allow="$ADMIT_ALLOW" admit_leak=0 admit_stuck=0
+  local _herm_emit0=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
@@ -1549,9 +1654,21 @@ lint_dir() {
       return 2
     fi
   fi
+  # ARMED HERE, after both tables exist — they are part of the read set (see herm_memo_arm).
+  HERM_MEMO_HITS=0; HERM_MEMO_RAN=0
+  herm_memo_arm "$allow" || true
   for f in "$dir"/*.bats; do
     [ -e "$f" ] || continue
     seen=$((seen + 1)); base="$(basename "$f")"
+    # ── THE MEMO HIT: this exact content already emitted nothing under this exact read set. ──
+    # `seen` is incremented above regardless, so the census the run reports is the whole corpus and
+    # never the miss-list — a count that shrank with the cache would be the memo lying about scope.
+    if [ "$HERM_MEMO_OK" = "1" ] && memo_file_hit "$HERM_CHECKER" "$f"; then
+      HERM_MEMO_HITS=$((HERM_MEMO_HITS + 1))
+      continue
+    fi
+    _herm_emit0="$(herm_emit_sum)"
+    HERM_MEMO_RAN=$((HERM_MEMO_RAN + 1))
     if is_hermetic "$f"; then
       if in_allowlist "$base" "$allow"; then
         if in_own "$base" "$own" "$own_scoped"; then
@@ -1751,7 +1868,29 @@ EOF
         fi
       fi
     fi
+    # ── THE RECORD, and it is the ONLY place a green is earned. Two vetoes, both fail-safe: ──
+    # (1) the suite emitted something under some rule ⇒ it is a finding, and a finding is never
+    #     cached (gate-memo invariant 1) — it must re-print itself on every run, from the file.
+    # (2) CHECK_FAILED is set ⇒ a predicate somewhere in this run could not RUN. is_hermetic's third
+    #     state returns fail-SAFE 'hermetic' precisely so a dead grep cannot fabricate a leak, which
+    #     means a non-verdict LOOKS exactly like a clean suite here. Caching that would freeze a
+    #     could-not-check into a permanent green keyed on the file's content — the one way this memo
+    #     could turn "I don't know" into "green", which is the invariant it exists under.
+    #
+    #     🚨 ABSOLUTE, not a per-suite delta, and the difference is a bug this file shipped for one
+    #     iteration. A delta (`CHECK_FAILED != $_herm_cf0`) vetoes only the FIRST suite whose
+    #     predicate dies: every suite after it compares 1-to-1, comes out equal, and is recorded —
+    #     out of a run that exits 2 and whose whole point is that it produced no verdict. Selftest
+    #     case (a6) is what caught it, on the unmutated file.
+    if [ "$HERM_MEMO_OK" = "1" ] \
+       && [ "$(herm_emit_sum)" = "$_herm_emit0" ] \
+       && [ "$CHECK_FAILED" -eq 0 ]; then
+      memo_file_record "$HERM_CHECKER" "$f"
+    fi
   done
+  if [ "$HERM_MEMO_OK" = "1" ]; then
+    echo "test-hermeticity-lint: per-suite memo — $HERM_MEMO_HITS suite verdict(s) carried, $HERM_MEMO_RAN proven fresh." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
   # A run whose own predicates could not execute has no verdict to give. Exit 2 (unusable), the
@@ -2988,8 +3127,153 @@ F
   ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="zz-fixture.bats" CC_HERM_ENV_RULE=on "$SELF" "$d/r6leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ENV_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="" CC_HERM_ENV_RULE=off "$SELF" "$d/r6leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ENV_RULE=off did not disable rule 6"; fails=1; }
 
+  # ── (a) THE PER-SUITE MEMO (cf440684e0e1). Five cases, and (a1) is the one without which the
+  #      other four could every one of them pass vacuously: a memo that never HITS satisfies "no
+  #      stale green was served" and "the kill switch works" perfectly, while doing nothing at all.
+  #      An empty result from a matcher is not evidence of absence until the matcher is shown able
+  #      to return a hit (repo memory: control-must-replay-the-real-artifact, and the standing rule
+  #      that every detector needs a positive control on a REAL artifact).
+  #
+  #      The fixtures live in their OWN git repo because memo_init keys its store on the git common
+  #      dir and refuses on a dirty tree — so this exercises the real gate, not a stub, and cannot
+  #      write an entry into this checkout's store.
+  memo_repo="$d/memorepo"
+  mkdir -p "$memo_repo/tests"
+  # Multi-line setup() deliberately: setup_bodies() extracts a BLOCK, so the one-line brace form is
+  # invisible to it and a fixture written that way reads as a leak — which is how this case first
+  # failed, and a fixture the rule cannot see would have made (a1) assert the wrong number forever.
+  { echo '#!/usr/bin/env bats'
+    echo 'setup() {'
+    # shellcheck disable=SC2016  # the fixture must contain the LITERAL text; expansion would break it
+    echo '  export HOME="$BATS_TEST_TMPDIR/home"'
+    # shellcheck disable=SC2016  # ditto
+    echo '  mkdir -p "$HOME"'
+    echo '}'
+    echo '@test "clean" { true; }'; } > "$memo_repo/tests/zz-memo-clean.bats"
+  { echo '#!/usr/bin/env bats'
+    echo 'setup() {'
+    echo '  :'
+    echo '}'
+    echo '@test "leak" { true; }'; } > "$memo_repo/tests/zz-memo-leak.bats"
+  ( cd "$memo_repo" && git init -q . && git add -A \
+      && git -c user.email=selftest@example.invalid -c user.name=selftest commit -q -m fixture
+  ) >/dev/null 2>&1
+  # Only rule 1 is left on: the other five need roots outside this fixture repo, and a case that
+  # must isolate the MEMO should not also be re-testing five rules that have their own cases above.
+  memo_run() {  # $1=rule-1 allowlist → combined output; runs inside the fixture repo
+    ( cd "$memo_repo" || exit 2
+      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ENV_RULE=off; ADMIT_RULE=off
+      lint_dir tests "$1" 2>&1 )
+  }
+  # (a1) POSITIVE CONTROL — the memo can actually carry a verdict on a real, committed corpus.
+  memo_run "zz-memo-leak.bats" >/dev/null 2>&1
+  memo_a1="$(memo_run "zz-memo-leak.bats")"
+  case "$memo_a1" in
+    *"memo — 2 suite verdict(s) carried, 0 proven fresh"*) : ;;
+    *) echo "SELFTEST FAIL: the per-suite memo carried NOTHING on a second run of an unchanged committed corpus — every other memo case below can pass vacuously against a memo that never hits"; fails=1 ;;
+  esac
+  # (a2) A FINDING IS NEVER CACHED. The leak must re-print itself on the second run, from the file.
+  #      Both directions are failures: suppressed (the memo swallowed a live violation) and
+  #      replayed-from-cache (gate-memo invariant 1 — the operator never reads a cached finding).
+  memo_run "" >/dev/null 2>&1
+  memo_a2="$(memo_run "")"
+  case "$memo_a2" in
+    *"LEAK     zz-memo-leak.bats"*) : ;;
+    *) echo "SELFTEST FAIL: a suite with a live rule-1 finding did not report it on the memoized run — the memo cached a violation"; fails=1 ;;
+  esac
+  case "$memo_a2" in
+    *"memo — 1 suite verdict(s) carried"*) : ;;
+    *) echo "SELFTEST FAIL: the clean suite beside a violating one was not carried — the memo is all-or-nothing per RUN instead of per SUITE"; fails=1 ;;
+  esac
+  # (a3) THE READ SET BINDS. An allowlist change alters verdicts without touching one byte of any
+  #      scanned file or of this script, so a key that fingerprinted only file content would serve
+  #      the green earned in (a1) and the leak would vanish. This is the stale-verdict generator the
+  #      whole item exists to avoid, asserted rather than argued.
+  memo_run "zz-memo-leak.bats" >/dev/null 2>&1
+  memo_a3="$(memo_run "")"
+  case "$memo_a3" in
+    *"LEAK     zz-memo-leak.bats"*) : ;;
+    *) echo "SELFTEST FAIL: a green earned under one allowlist was served under a DIFFERENT allowlist — the read set does not bind the memo key"; fails=1 ;;
+  esac
+  # (a4) THE KILL SWITCH, with (a1) as its positive control: CC_HERM_MEMO=off must leave no memo.
+  memo_a4="$( CC_HERM_MEMO=off memo_run "zz-memo-leak.bats" )"
+  case "$memo_a4" in
+    *"per-suite memo"*) echo "SELFTEST FAIL: CC_HERM_MEMO=off did not disable the per-suite memo"; fails=1 ;;
+  esac
+  # (a6) A NON-VERDICT IS NEVER CACHED — the veto that matters most, and the one three mutants
+  #      showed was the only uncovered branch here. is_hermetic()'s third state returns fail-SAFE
+  #      'hermetic' so a dead grep cannot fabricate a LEAK, which means a suite whose predicate
+  #      COULD NOT RUN is byte-for-byte indistinguishable from a clean one at the record site.
+  #      Without the CHECK_FAILED veto the run below would freeze "I could not check this" into a
+  #      permanent green keyed on the file's content, and the real leak beside it would never be
+  #      reported again on any tree where those bytes recur — the memo turning "I don't know" into
+  #      "green", which is the single thing gate-memo.sh's invariant forbids.
+  #      The store is cleared first so the stubbed run is the one that would do the recording.
+  #      THE STUB IS NARROW ON PURPOSE. Killing grep outright kills in_allowlist() too, and its own
+  #      fail-SAFE ('allowlisted') then makes every suite print a RATCHET line — so the run emits,
+  #      the EMIT veto blocks the record, and the case passes for a reason that has nothing to do
+  #      with CHECK_FAILED. Verified: under a blanket stub, dropping the CHECK_FAILED veto changed
+  #      nothing. Only is_hermetic()'s predicate is failed here — its pattern is the one naming
+  #      BATS — so in_allowlist answers normally, the suite emits NOTHING, and the sole thing
+  #      standing between a could-not-check and a cached green is the veto this case is for.
+  rm -rf "$memo_repo/.git/ship-land-memo" 2>/dev/null
+  # shellcheck disable=SC2329  # invoked indirectly — it shadows the predicates' grep inside lint_dir
+  ( grep() {
+      case " $* " in *BATS*) return 2 ;; esac
+      command grep "$@"
+    }
+    memo_run "" >/dev/null 2>&1 )
+  memo_a6="$(memo_run "")"
+  case "$memo_a6" in
+    *"LEAK     zz-memo-leak.bats"*) : ;;
+    *) echo "SELFTEST FAIL: a suite whose predicate COULD NOT RUN was cached as green — a non-verdict became a permanent verdict and the live leak beside it is now invisible"; fails=1 ;;
+  esac
+  # (a7) THE CROSS-POPULATION TABLE IS IN THE KEY — the case the whole per-file design turns on.
+  #      Rules 1-4 and 7 are file-local, so for them a blob key is obviously exact. Rules 5 and 6
+  #      are not: they judge a suite against a TABLE extracted from bin+scripts+hooks, a population
+  #      no scanned suite belongs to. A key blind to that table would serve a rule-6 green earned
+  #      when no tool injected the variable, on a tree where one now does — the suite's bytes never
+  #      changed, and the violation would be invisible forever. Found by mutation: dropping
+  #      env_table from HERM_READSET left every other memo case green.
+  #      THE ROOT PATH IS HELD CONSTANT AND ONLY ITS CONTENTS MOVE. A first attempt used two
+  #      different root DIRECTORIES and passed while the mutant stayed green — env_root is in the
+  #      read set in its own right, so the keys differed by path and the table was never being
+  #      tested at all. Here the table changes because a THIRD file appears in a population the
+  #      suite is not part of: rule 6's table is an INTERSECTION (a variable some tool INJECTS and
+  #      the named tool READS), so a root holding only the reader yields an empty table and a clean
+  #      suite, and dropping the injector in convicts it — with the suite's bytes, the tool it
+  #      names, and the root path all byte-identical across the two runs.
+  mkdir -p "$memo_repo/tests6" "$d/memo_emptyroot/bin" "$d/memo_emptyroot/scripts" "$d/memo_emptyroot/hooks"
+  cp "$d/r6root/bin/zz-panetool" "$d/memo_emptyroot/bin/" 2>/dev/null
+  cp "$d"/r6leak/zz-fixture.bats "$memo_repo/tests6/" 2>/dev/null
+  ( cd "$memo_repo" && git add -A \
+      && git -c user.email=selftest@example.invalid -c user.name=selftest commit -q -m r6fixture
+  ) >/dev/null 2>&1
+  memo_run6() {  # $1=ENV_ROOT → combined output, rule 6 the only rule left on
+    ( cd "$memo_repo" || exit 2
+      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ADMIT_RULE=off
+      ENV_RULE=on; ENV_ROOT="$1"; ENV_TABLE_ROOT=""; ENV_ALLOW=""
+      lint_dir tests6 "" 2>&1 )
+  }
+  memo_run6 "$d/memo_emptyroot" >/dev/null 2>&1          # reader only ⇒ empty table ⇒ green earned
+  cp "$d/r6root/bin/zz-launcher" "$d/memo_emptyroot/bin/" 2>/dev/null   # the injector arrives
+  memo_a7="$(memo_run6 "$d/memo_emptyroot")"             # SAME root path — only its table moved
+  case "$memo_a7" in
+    *INHERIT*) : ;;
+    *) echo "SELFTEST FAIL: a rule-6 green earned under one inherited-value TABLE was served under a table that convicts the same suite — the cross-population read set does not bind the memo key"; fails=1 ;;
+  esac
+  # (a5) A DIRTY TREE DISABLES IT. memo_init hashes the COMMITTED tree for its population
+  #      fingerprint, so a worktree that does not match HEAD is exactly the state in which a cached
+  #      verdict could describe bytes nobody ran the check on.
+  echo '# dirty' >> "$memo_repo/tests/zz-memo-clean.bats"
+  memo_a5="$(memo_run "zz-memo-leak.bats")"
+  case "$memo_a5" in
+    *"per-suite memo"*) echo "SELFTEST FAIL: the per-suite memo stayed armed on a DIRTY worktree"; fails=1 ;;
+  esac
+  ( cd "$memo_repo" && git checkout -q -- tests/zz-memo-clean.bats ) >/dev/null 2>&1
+
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 112/112 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 120/120 — THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."

@@ -192,6 +192,20 @@ memo_count() {  # $1=carried $2=run — the caller's own tally, folded into memo
 #    test-hermeticity rule 4 asks whether two tools name the SAME scratch path — a property of a
 #    PAIR of files, so no per-file verdict for either one exists to cache.
 #
+#    🚨 CORRECTED 2026-08-13 (backlog cf440684e0e1). THE SECOND SENTENCE IS FALSE, and it was the
+#    only named obstacle on the path this file's closing paragraph calls "what WOULD reach the
+#    target". Rule 4's scan is `for f in …` and both of its predicates take ONE file; nothing in it
+#    compares two files. The misreading came from the arm's VOCABULARY — it prints `COLLIDES … two
+#    concurrent runs share it` — but the collision is between two runs of the SAME tool, which is a
+#    property of that one file. The header says so outright: "the compliant position is not
+#    'fixture $HOME' but 'make the path PER-RUN UNIQUE'".
+#
+#    What IS cross-population in that lint is rules 5 and 6, which judge a suite against a table
+#    extracted from bin+scripts+hooks. That does not defeat a per-file key either — it just has to
+#    be IN it. See test-hermeticity-lint.sh's HERM_READSET, which declares the table alongside the
+#    allowlists and the lint's own blob, and tests/herm-suite-memo.bats, which pins that a table
+#    change convicts a suite whose own bytes never moved.
+#
 # 3. THE ARM-LEVEL KEY THE SPEC PRESCRIBES HAS A MEASURED CEILING BELOW THE TARGET. Keying an arm
 #    on (lint blob + its scanned-set state) lets a re-round skip it only when the SIBLING's delta
 #    missed that arm's population entirely. Over the last 200 lands on origin/main that was true
@@ -214,6 +228,23 @@ memo_count() {  # $1=carried $2=run — the caller's own tally, folded into memo
 # (rule 4 above already fails it for one) and touches ~15 gate scripts, so it is a separate item,
 # not a silent widening of this one. Filed rather than chosen: see the P3 note in
 # docs/research/land-architecture-100p-2026-08-10.md.
+#
+# ── STATUS 2026-08-13: that item is STARTED, and the first lint is done ───────────────────────────
+# test-hermeticity-lint.sh now memoizes per suite, using this file's own memo_file_hit/record with a
+# checker-id that carries its read set. It was chosen by RE-MEASURING rather than from the numbers
+# above, which had decayed: the arms are now ~135s (not ~112s) and test-hermeticity alone is 46.0s
+# of it — 34%, and nothing else is close. Its shape is 10.4s fixed + 0.069s per suite, so the memo
+# retires the 32s per-suite loop on a re-round and leaves the fixed table build.
+#
+# ⚠️ MEASURE THE ARM THE WAY THE GATE INVOKES IT. Timing these lints by running them bare gives the
+# wrong answer for any arm whose own-set narrows the SCAN rather than just the blocking: measured
+# bare, bats-shellcheck-lint is 50.5s and looks like the biggest target in the gate; measured
+# through own_run as ship-land actually calls it, it is 0.07s.
+#
+# THE REMAINING ARMS ARE NOT BLOCKED ON A STANDARD. Reason 4 below is the prerequisite of the
+# ARM-LEVEL key in reason 3, and reason 3 is measured-insufficient, so it stays rejected. A per-file
+# memo is keyed on its own lint's inputs, so an unmemoized lint runs exactly as it does today — the
+# rollout is incomplete, never unsound, and no lint waits on any other.
 
 memo_summary() {  # one line for the gate's stderr — counters, not prose
   [[ "$MEMO_OK" = "1" ]] || { echo "→ gate: statics memo OFF (${SHIP_LAND_MEMO:-on}) — every static ran." >&2; return 0; }
