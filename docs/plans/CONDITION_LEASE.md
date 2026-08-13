@@ -1,10 +1,25 @@
 ---
-status: open
+status: complete
+created: 2026-08-07
+closed: 2026-08-13
 ---
 
 # CONDITION LEASE — one condition, one worker
 
 **Item:** backlog `0bded74c6fa2` (claude-infrastructure) · created 2026-08-07
+
+**CLOSED 2026-08-13 (backlog `01edea637633`).** P1–P6 are built, and every one of them is now
+reachable by something that runs: `link` and the claim-time lease by the actuator, `dups` by
+`backlog-consolidation-trigger.sh --fold` (dry-then-apply, from the autonomy sweep), and `backfill`
+by the sweep arm P6 added — the last zero-caller in the set. Suites:
+`tests/cc-backlog-condition-lease.bats` (21) · `tests/cc-backlog-dups-family.bats` (22) ·
+`tests/autonomy-sweep.bats` P6 (3, red-proofed against a pristine tree).
+
+**Deliberately NOT in this plan, and still open elsewhere.** (a) `backfill` proposes and does not
+write — the flip to `--apply` is a measurement the P6 arm now produces rather than a step this plan
+withheld; see P6 for the criterion. (b) The **mint side** of `b0b83b6c5845` — teaching
+`postland-verify.sh` to file with `--condition` — belongs to M-landgate-2 and is what would make the
+normalised-title key load-bearing again.
 
 **Scope (frozen):** the dispatcher leases the CONDITION, not the row, so two ledger rows naming one
 piece of work cannot both be dispatched.
@@ -178,6 +193,62 @@ a fixture replaying that incident sha for sha, not on the live store. **The mint
 `b0b83b6c5845` — teaching `postland-verify.sh` to file with `--condition` — is NOT done here;** it
 belongs to M-landgate-2 and is what would make that key load-bearing again.
 
+### P6 — the remedy for "nothing backfills" was itself backfilled by nothing (2026-08-13, backlog `01edea637633`)
+
+P5 diagnosed the reachability failure exactly right and then reproduced it one layer up. Its finding
+was *"`link` fires only when a human notices"* — seven link records in the ledger's whole history,
+six of them written inside eleven seconds by one hand-driven sweep. Its remedy was `cc-backlog
+backfill`, which proposes the joins that sweep would have made. Measured on trunk 2026-08-13:
+
+```
+callers of `cc-backlog backfill` anywhere in the repo: 0
+```
+
+Not in `scripts/autonomy-sweep.sh`, not in a plist, not in any script. The only two mentions are a
+comparison in `backlog-consolidation-trigger.sh`'s header and a line in `commands/compact-memory.md`.
+So the family key reached the lease exactly as often as before the fix — when a human happened to
+look — and P5's own measurement is what says how often that is. Its two named live orphans
+(`cf6eb3e47b12`, `152e9cacc8aa`) were still unjoined when P5 shipped, and nothing since could have
+joined them. (memory: `feature-durability-mechanism-not-memory`.)
+
+Every sibling key in this subsystem already had a caller: the mechanical fold runs dry-then-apply
+from `autonomy-sweep.sh` §2b-i, the semantic grouping sweep from §2b-ii. This one did not, which
+makes it the fifth zero-caller in the same subsystem — the shape the sweep's own comments call
+"this wave's own defect".
+
+**What is built:** the caller, at `autonomy-sweep.sh` §2b-i-b, journalling `backfill_rc`,
+`backfill_note`, `backfill_proposed`, `backfill_ambiguous` into the `backlog-health` IDL record
+beside the fold's fields.
+
+**It is a DRY RUN, and the fold's flip criterion deliberately does not transfer.** The fold writes
+unattended because it asserts CONSERVATION per run — a machine-checkable statement that its key did
+not merge across a distinction. `backfill` has no such assertion and cannot have one: its key is a
+scorer over a living corpus, and P5 above already fixed the position this caller must not quietly
+overturn — *2 hits in 182 orphans on ONE day's ledger is evidence for a review queue, not for an
+unattended writer*. The asymmetry is what prices it: a missed join costs one duplicate dispatch; a
+wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated, with
+nothing downstream reporting the move. **The flip is a measurement this arm now produces** — when
+`backfill_proposed` is small and stable across a run of sweeps and its named proposals have been
+spot-checked, add `--apply`. `backfill_note` must never read `no-verdict` on the sweep that flips.
+
+**It runs every sweep, and that is measured rather than assumed.** One `fold | jq` pass, no per-item
+forks: **0.43 s over a 2400-record / 600-item ledger** (0.21 s at 600 records), against the currency
+pass beside it that costs 106 s and had to buy a 6-hour interval gate. Sized on a store the size of
+the real one (memory: `bound-must-fit-the-band-not-the-bench`).
+
+**The verdict is parsed, never inferred from rc.** `backfill` exits 0 both on a clean store and on
+one it could not read past the bound, so the exit code cannot separate "nothing to join" from "no
+answer" — the exact conflation the fold arm next to it spent 10 of 10 runs paying for. A count that
+does not parse is `no-verdict`, which is its own state (memory: `claimed-outcome-vs-checked-outcome`).
+
+Verification lives in `tests/autonomy-sweep.bats`, three cases, all three red against a pristine
+`git archive HEAD scripts/` tree: the arm fires and journals a depth · **CONTROL — it joins nothing**
+(the orphan is still un-conditioned and zero `link` records exist, with a positive control proving
+the same fixture *does* join under `--apply`, so the case cannot pass because the key found nothing)
+· an unreadable answer is `no-verdict` and never a healthy zero. The control also asserts
+`backfill_note` is `ok`, without which it would pass vacuously on a tree that has no caller at all —
+which is the state it exists to prevent returning to.
+
 ## Considered and rejected: filtering sibling-held rows at the PULL
 
 A sibling-held row is admitted, wave-planned, and only then refused at the claim, so it consumes one
@@ -211,3 +282,8 @@ now would be invented.
   worktree is absent → the claim PROCEEDS. A lease that cannot be released is a permanent strand.
 - Linked pair, live sibling → rc 4, `verdict=sibling-held`, refusal names the sibling id.
 - `--force` overrides; a sibling in a different project does not lease; the digit guard refuses.
+
+`tests/cc-backlog-dups-family.bats` owns P5's two added keys and `backfill`; `tests/autonomy-sweep.bats`
+owns P6's caller. The controls that keep each from passing vacuously are named in their own headers —
+`--mode dodref` must find NOTHING over a dodRef-less fixture, both family floors are pinned in both
+directions, and the P6 dry-run case asserts the arm RAN before asserting it wrote nothing.
