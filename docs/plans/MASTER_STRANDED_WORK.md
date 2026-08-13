@@ -374,3 +374,94 @@ landed fix with a red-proved test, so the population stops growing.
   this session's own closes with it — see § S3 acceptance. **Recycled rather than finished**: 15 rows
   remain, all triaged above, and the box (cc-bats deferring at load 22) not context was the binding
   constraint for the last hour.
+
+---
+
+## W4-DRAIN outcome, 2026-08-13 — 14 open → 7, and the stranded branch was mostly a REVERT
+
+Successor session to the recycle above. Every row below closed against a **content-verified** land
+(`git ls-tree` present **and** `git diff` empty on each path, `ahead=0`), never a commit count.
+
+| Row | Outcome |
+|---|---|
+| `6cab0ab3cb2f` GC franchise | ✅ landed — but **not** as the rebase the brief specified; see below |
+| `175bce12e0e1` ship-land `--mine` | ✅ landed, 3 new cases, ship-land.bats 129/129 |
+| `8550b6129d9c` reso-keepalive symlink | ✅ landed — **row premise half-wrong**, see below |
+| `ed6d0716caa7` + `0328e7cc5742` L1 producer | ✅ landed, 9/9, agent half only |
+| `635eb82ef810` cc-version-audit 2.1.224 | ✅ HOLD verdict recorded in `~/.claude-versions/MANIFEST.jsonl` |
+| `d4c091a86fb8` zshrc stderr | ✅ done (untracked file — evidence is measurement + backup) |
+
+### The GC branch would have REVERTED trunk, and git said so out loud
+
+`w4/s5-gc-franchise` was described as "8 commits / ~1,931 lines stranded". Measured before touching
+anything: **6 of the 8 were already applied or superseded.** `git rebase` itself skipped two as
+"previously applied" and add/add-conflicted on a third — that message was the finding, not an
+obstacle to work around. The branch's `worktree-gc.sh` is **15,330 B against trunk's 63,719 B**; its
+`tests/worktree-gc.bats` 7,595 against 52,462; its `autonomy-sweep.sh` predates the D2 escalation
+ladder and the D4 author-death join *entirely*. Re-landing would have deleted all of it.
+
+Only the genuinely-absent franchise was landed. **Read `git rebase`'s skip messages as evidence
+about the population**, which is the same lesson § S1/S2 records one level up.
+
+One census correction, and it is the second instance this effort has hit:
+`launchd/com.claude.scratchpad-reaper.plist` read **ABSENT** to a path-keyed probe and is on trunk at
+`launchd/staged/`. A path is not a name (`caller-census-keyed-on-path-misses-the-name`).
+
+### Four real defects were found *in the stranded code* by the gates that let it in
+
+The branch predates four ratchets, and each caught something real rather than stylistic — worth
+recording because it is the argument against ever landing stranded work with `--no-verify`:
+
+1. **`tests/cc-gc.bats` ran against the operator's live `~/`** — and its subject is a REAPER.
+   Today's export list happens to cover all seven stores, so nothing was destroyed; the next store
+   added to `cc-gc.sh` would have defaulted to live `~/` with the suite green over it.
+2. **A bare `!` negation** guarded the "delegate gets `--apply` only on an apply run" claim — the
+   suite's most safety-relevant assertion was the one errexit could not reach.
+3. **An unpadded TSV emitter** — an empty cell would have shifted every later column left, silently.
+4. **Two unguarded `kill`s** — red only under load, i.e. only when it is hardest to attribute.
+
+### Triage for the three rows still open (all agent work, none operator-gated)
+
+**`f76e7d78aaac` — the premise is FALSE for one of its two files, and the remedy would BACKFIRE.**
+The row says both spawners need wiring to `hooks/lib/engagement.sh`. Measured:
+- **`cc-upgrade-gate.sh` already has an oracle, and a stronger one for its spawn shape.** Its probes
+  go through `gate_headless()` = `--print --output-format json` — **headless, no pane, no TUI**. The
+  entire failure class `engagement.sh` exists for (a blocking startup modal in a spawned pane) cannot
+  occur. Each probe already asserts a unique marker (`TEAMMATE_OK`) that can only appear if a real
+  assistant turn produced it, *plus* `modelUsage` for demotion. Wiring `cc_engaged_pane` here would
+  be worse than a no-op: it needs a paneUUID and a `cc-registry` row, which a headless run never
+  creates, so it would return `no-registry-row` and **FAIL every healthy probe**
+  (`prescribed-remedy-worse-than-the-bug`).
+- **`lr-fire-resume.sh` genuinely has no oracle, and cannot host one.** It `exec`s into `expect`, so
+  the spawning process *becomes* the session — there is no "after the spawn" left to check from, and
+  its own header says it runs in the pane that should own the resumed session. `bin/cc-wedge-watch`
+  is invoked per-pane **by the spawner**, which is exactly the role that no longer exists here. The
+  real work is arming the oracle in whatever DISPATCHES lr-fire-resume, in a pane that survives —
+  a different file and a design decision, not a wiring job. **Re-scope the row before working it.**
+
+**`8ad4b02602dc` — not started.** Substrate work (a stdin-FIFO writer for stream-json); it blocks
+S6.7 Phase E and was out of reach of this session's remaining budget. No new measurement.
+
+**`dc426ee8df11` — not started.** `docs/plans/WORKTREE_MANAGEMENT_V2.md` is alive and already carries
+§7-§9 of landed work; its §6 remainders (R-a…R-d) are the concrete next steps, and **R-d requires a
+coordinator ping before touching `scripts/handoff-fire.sh`** — the campaign's live fire path.
+
+### The four blocked rows stay blocked
+
+`8f4eae55a0c7` (GitHub ruleset) · `1dca461d4b90` (Claude GitHub App) · `475b43aacbf2` (worktree
+sprawl, destructive `rm`) · `216f429128a2` (reso eslintcache). Walls re-verified 2026-08-12 and
+unchanged; each needs operator credentials or a destructive-deletion ruling. Not faked closed.
+
+### Two corrections a successor should not re-derive
+
+- **`8550b6129d9c` was half wrong.** It reported both `reso-keepalive` and `reso-resume-one` as
+  unlinked, having probed `~/bin` and `~/.claude/bin`. `reso-resume-one` was **fine** — `install.sh`
+  symlinks it to `~/.reso/bin/`, which is neither path the row checked and is its deployed location
+  by design. Only `reso-keepalive` was real, and it was confirmed live: a 2026-07-04 `#!/bin/zsh`
+  file with **0** `CC_KEEPALIVE_MARKERS` against the repo's 4.
+- **A `git archive` extraction is not a valid control for a /Users/chrisren/.claude/bin/cc-bats suite.** Attributing a lint-suite
+  red, the suite read **9/9 green** on an extracted trunk and 6/9 on the branch — which looked like
+  proof the failures were mine. They were: but the extraction has no `.git`, so its "green" was
+  skips. The real control is a **worktree** at the same sha, and the real cause was that the suite
+  builds a fixture with a stub per anchored file — a new `@anchor` needs a new stub in the same
+  commit, a coupling now documented in `tests/reaper-horizon-lint.bats` `setup()`.
