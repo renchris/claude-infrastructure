@@ -216,7 +216,20 @@ com.claude.scratchpad-reaper      | staged | 21600 | auto | 11 | 18-fleet-activa
 # Fields are disk truth: interval 21600 = its StartInterval; `auto` is a REAL sensor — cc-gc.sh
 # prints its per-store table to stdout on every run, so StandardOutPath is written whenever it
 # fires. owner_row 11 (worktree/scratchpad disk hygiene), same PROVISIONAL routing as the row above.
-com.claude.cc-gc                  | staged | 21600 | auto | 11 | 40-cc-gc-activate.sh
+# ACTIVATED 2026-08-13 — `staged` -> `run`. The operator ran 40-cc-gc-activate.sh Step 3 after
+# reading the Step 2 rehearsal (dry-run: reaped=39 mailbox, 235/482 scratchpad candidates with
+# kept_live=247, inert-owners=0). Verified from launchd, not assumed: `launchctl list` shows
+# `-  0  com.claude.cc-gc` and print-disabled has no entry. The `-` pid is CORRECT, not a fault —
+# RunAtLoad is false and StartInterval is 21600, so it holds no process between ticks.
+# ⚠️ EXPECT ONE `S3 NEVER-RAN` ROW FOR UP TO 6 HOURS, and do not "fix" it: the job is loaded,
+# launchd's own counter says runs=0, and no evidence artifact exists until the first tick writes
+# ~/.claude/logs/cc-gc.out.log. That row is TRUE while it lasts and self-clears on the first run.
+# It was preferred over leaving the row `staged`, which would have been a permanently FALSE
+# declaration (the decision is made) reported forever as UNDECIDED — a temporary true row beats a
+# standing false one. If it is still NEVER-RAN after ~6h, that is the real signal.
+# NOT kickstarted deliberately: `launchctl kickstart` would run `cc-gc --apply`, i.e. a real
+# deletion, and choosing WHEN the first live reap happens is the operator's, not an agent's.
+com.claude.cc-gc                  | run    | 21600 | auto | 11 | 40-cc-gc-activate.sh
 
 # com.claude.qos-census — row 13 completion (M12): the QoS coverage claim decays without a cadence
 # (every qos-census.jsonl row before 2026-07-30 was a manual run). Same shape as capacity-alarm:
