@@ -190,10 +190,29 @@ idl_field() { # $1=jq path → newline-separated values, in order
   [ "$(idl_field '.term')" = "headroom" ]
 }
 
-@test "10 BOTH terms off records gate-off, never load-only — a blind eval is not a real one" {
-  run bash -c '. "$1"; CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off cc_capacity_admit c10 "s"' _ "$LIB"
+@test "10 EVERY term off records gate-off, never load-only — a blind eval is not a real one" {
+  # WIDENED 2026-08-13 BY WAVE D (backlog 1c45598a91be), and the widening is the point rather than
+  # bookkeeping. This case used to turn off the load and headroom terms and assert `gate-off`,
+  # because those were ALL the terms. The gate now carries four, so that same world leaves
+  # `segments` and `active` in force — and recording a real, refusal-capable evaluation as
+  # `gate-off` is the §9.5.1 population defect the case exists to prevent, arriving from the other
+  # side. The property is unchanged: `gate-off` means NOTHING was evaluated. Only the list did.
+  run bash -c '. "$1"
+               CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off \
+               CC_ADMIT_SEGMENT_TERM=off CC_ADMIT_ACTIVE_TERM=off cc_capacity_admit c10 "s"' _ "$LIB"
   [ "$status" -eq 0 ]
   [ "$(idl_field '.basis')" = "gate-off" ]
+  # and the row must not claim any term was in force
+  [ "$(idl_field '.terms // "none"')" = "none" ]
+}
+
+@test "10b the OLD pair off with a Wave D term still on is NOT gate-off" {
+  # The control for case 10's widening: without it, turning the two original terms off would read
+  # back as "the gate was off" while the segment and active terms were live and able to refuse.
+  run bash -c '. "$1"; CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off cc_capacity_admit c10b "s"' _ "$LIB"
+  [ "$status" -eq 0 ]
+  [ "$(idl_field '.basis')" != "gate-off" ]
+  [ "$(idl_field '.terms')" = "segments,active" ]
 }
 
 @test "11 ADMIT-COVERAGE — no 'return 0' in cc_capacity_admit without a preceding record" {

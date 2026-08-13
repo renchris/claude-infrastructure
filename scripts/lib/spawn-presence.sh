@@ -67,6 +67,9 @@
 #   . scripts/lib/spawn-presence.sh
 #   cc_sp_ready                        → 0 iff every symbol below is defined (one predicate, like cc_hw_ready)
 #   cc_sp_trees                        → live session TREE count on stdout; empty + rc 1 when unreadable
+#   cc_sp_active                       → live MID-TURN session count (the ACTIVE population, which is
+#                                        what the box binds on — see § THE ACTIVE POPULATION); empty
+#                                        + rc 1 when unmeasurable
 #   cc_sp_operator_state [sid]         → present | absent | unknown | self   (see above; `self` = the
 #                                        SPAWNING session is itself operator-driven, so the spawn is
 #                                        the operator spending their own slots — no reserve applies)
@@ -78,7 +81,7 @@
 #      CC_SP_RESERVE_OPERATOR_SLOTS(3) · CC_SP_RESERVE_WINDOW_SLOTS(1) · CC_SP_RESERVE_GB(0) ·
 #      CC_SP_RESERVE_OPERATOR_GB(4) · CC_SP_RESERVE_WINDOW_GB(2) ·
 #      CC_SP_WINDOW_START(10) · CC_SP_WINDOW_END(5) · CC_SP_NOW · CC_SP_HOUR · CC_SP_TREES_OVERRIDE ·
-#      CC_SP_BEAT_LIB
+#      CC_SP_ACTIVE_OVERRIDE · CC_SP_BEAT_LIB
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 
 # ══ THE CEILING — the ~15 folklore replaced by the MEASURED floor ══════════════════════════════════
@@ -114,6 +117,7 @@ CC_SP_DEFAULT_WINDOW_END=5
 cc_sp_ready() {
   [ -n "${CC_SP_DEFAULT_CEILING:-}" ] || return 1
   command -v cc_sp_trees              >/dev/null 2>&1 || return 1
+  command -v cc_sp_active             >/dev/null 2>&1 || return 1
   command -v cc_sp_operator_state     >/dev/null 2>&1 || return 1
   command -v cc_sp_in_operator_window >/dev/null 2>&1 || return 1
   command -v cc_sp_reserve_slots      >/dev/null 2>&1 || return 1
@@ -207,6 +211,112 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
     fi
   done
   return 1
+}
+
+# ══ THE ACTIVE POPULATION — the second census, and the one the box actually binds on ═══════════════
+# (Wave D re-term: backlog 1c45598a91be; DoD docs/research/scaling-bottlenecks-2026-08-09.md §5-P2.)
+#
+# WHY RESIDENCY IS THE WRONG DENOMINATOR FOR A SPAWN CEILING. cc_sp_trees counts RESIDENT sessions,
+# and residency is close to free: axis 01 measured static residency at 0.22% of the segment limit
+# with swap 0. What the box binds on is ACTIVITY — axis 09 measured load1 27.4 -> 44.4 across nine
+# sessions all-active, i.e. 2.5-5 runnable threads per genuinely ACTIVE session against the 1.6 that
+# a MIXED fleet averages to. At the program's design mix (150 resident / ~10 active) that puts the
+# load ceiling at ~4-8 concurrent actives and says nothing at all about the other 140. A ceiling
+# charged on residency cannot express that; and charging it on loadavg instead re-commits the proxy
+# §8.5.2 retracted (dominated by the TUI renderer, WindowServer and macOS scanning; §8.5.7 measured
+# it swinging 2.05x at CONSTANT session count).
+#
+# WHAT COUNTS AS ACTIVE, AND WHY IT IS THE BEAT'S `kind`. hooks/session-beat.sh writes at exactly the
+# two turn boundaries and labels them: `kind:"prompt"` at UserPromptSubmit, `kind:"stop"` at Stop. A
+# session whose LATEST beat is a prompt beat is therefore mid-turn BY CONSTRUCTION — the producer
+# already answers this question, it simply had no consumer. The alternative, an instantaneous-CPU
+# estimate, is unavailable here on purpose: it needs two samples separated by a sleep, and this
+# library's biggest caller is a PreToolUse hook that runs while a tool slot is HELD.
+#
+# IT IS A PROVEN LOWER BOUND, DELIBERATELY. The header above establishes the beat as a lower bound on
+# liveness (a session in a long turn correctly does not beat, and the busiest are the quietest); the
+# same applies to this count. That direction is the correct one for a REFUSING term: we tighten only
+# on a fact we hold, so an unrecorded turn under-refuses rather than refusing on unproven activity —
+# the same law the reserve follows ("only ever ADD protection on PROVEN presence"). A term that
+# guessed upward would refuse spawns for a reason nothing on disk could later explain.
+#
+# LIVENESS IS CHARGED, and it is not fastidiousness: a session that DIES mid-turn leaves its
+# `kind:"prompt"` beat on disk forever, so a census that counted beats alone would refuse a little
+# more with every crash until the ceiling became unreachable — a gate that tightens monotonically on
+# its own accidents. Identity is (pid,lstart), never pid alone (the reaper's S-4 pin and the beat
+# writer's own), so a RECYCLED pid cannot inherit a dead session's activity. A beat carrying no
+# lstart cannot be proven either way and is NOT counted — same direction rule.
+#
+# COST: one jq slurp (ONE process over the whole dir, not one per file — the hard requirement stated
+# at cc_sp_operator_state) plus at most one `ps`, and the `ps` is skipped entirely when no beat is
+# mid-turn. Measured on a 1,527-file fixture: the slurp is ~13 ms.
+cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasurable
+  if [ -n "${CC_SP_ACTIVE_OVERRIDE:-}" ]; then
+    cc_sp_is_int "$CC_SP_ACTIVE_OVERRIDE" || return 1
+    printf '%s' "$CC_SP_ACTIVE_OVERRIDE"; return 0
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  cc_sp_load_beat || return 1
+  local now live_max dir out line maxt pairs pids pid n
+  now="$(cb_now 2>/dev/null)" || now=""
+  cc_sp_is_int "$now" || return 1
+  live_max="${CC_BEAT_LIVE_MAX_S:-900}"
+  cc_sp_is_int "$live_max" || live_max=900
+  dir="$(cb_beat_dir)"
+  [ -d "$dir" ] || return 1
+
+  # ONE jq pass, emitting the existence-gate clock on the first line and one `P<pid> <lstart>` line
+  # per mid-turn beat. A torn or invalid file makes jq exit non-zero over the WHOLE slurp, which
+  # lands on rc 1 — never a parsed half-answer, exactly as cc_sp_operator_state treats it.
+  out="$(jq -rs '
+      (map(select((.t|type) == "number") | .t) | max) as $maxt
+      | ["T\($maxt)"]
+        + ( map(select(.kind == "prompt" and (.pid|type) == "number"
+                       and ((.lstart // "") | tostring | length) > 0))
+            | map("P\(.pid) \(.lstart)") )
+      | .[]' "$dir"/*.json 2>/dev/null)" || return 1
+
+  maxt=""; pairs=""; pids=""
+  while IFS= read -r line; do
+    case "$line" in
+      T*) maxt="${line#T}" ;;
+      P*) line="${line#P}"
+          pid="${line%% *}"
+          cc_sp_is_int "$pid" || continue
+          pairs="${pairs}${line}
+"
+          pids="${pids},${pid}" ;;
+    esac
+  done <<EOF
+$out
+EOF
+
+  # THE EXISTENCE GATE, cb_system_live's rule verbatim (the same one cc_sp_operator_state applies):
+  # with no beat younger than the live window the producer's world is not demonstrably producing, so
+  # "0 active" would be manufactured out of a dead sensor rather than measured. Two auditors over one
+  # population must share the state model (memory sibling-auditors-must-share-the-state-model).
+  cc_sp_is_int "$maxt" || return 1
+  if [ "$maxt" -le "$now" ] && [ "$(( now - maxt ))" -gt "$live_max" ]; then return 1; fi
+
+  # No candidate at all is a REAL zero, not a blind one: the existence gate above already proved the
+  # producer is live, and there is nothing for `ps` to adjudicate. Skipping the fork here is what
+  # keeps the common case (a quiet box) free.
+  [ -n "$pids" ] || { printf '0'; return 0; }
+
+  # ONE ps, with a POSITIVE CONTROL ON THE DENOMINATOR. Our own pid rides in the query and must come
+  # back: without it a `ps` that exec-denied, sandboxed or stopped answering returns no rows, every
+  # candidate reads as dead, and the census reports 0 — the actuator-cannot-see-its-population
+  # failure arriving as a deleted gate (memory positive-control-the-denominator). lstart is compared
+  # after the SAME normalisation hooks/session-beat.sh applies when it writes the field (squeeze
+  # runs of whitespace, trim both ends), so the two strings are comparable by construction.
+  n="$(printf '%s\n@@\n%s' "$(ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" "$pairs" | awk -v self="$$" '
+    function norm(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return s }
+    /^@@$/ { sec = 1; next }
+    sec == 0 { p = $1; $1 = ""; live[p] = norm($0); seen[p] = 1; next }
+    { p = $1; $1 = ""; if ((p in seen) && live[p] == norm($0)) n++ }
+    END { if (!(self in seen)) exit 1; printf "%d", n + 0 }' 2>/dev/null)" || return 1
+  cc_sp_is_int "$n" || return 1
+  printf '%s' "$n"
 }
 
 # ── presence ─────────────────────────────────────────────────────────────────────────────────────
