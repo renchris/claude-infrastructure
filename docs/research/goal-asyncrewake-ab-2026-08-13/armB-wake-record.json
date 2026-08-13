@@ -1,0 +1,32 @@
+[
+  {
+    "type": "queue-operation",
+    "operation": "enqueue",
+    "timestamp": "2026-08-13T14:54:10.359Z",
+    "sessionId": "c0660697-739b-43ba-8c77-08a36b28bb57",
+    "content": "<task-notification>\n<summary>📬 probe mail</summary>\n</task-notification>\n<system-reminder>\n📬 PROBE mail arrived while you were idle: PROBE-WAKE-LINE-B 2026-08-13T14:54:09+00:00\n\n</system-reminder>"
+  },
+  {
+    "parentUuid": "e8e7f2b8-56d1-4494-b67d-c487f200f318",
+    "isSidechain": false,
+    "promptId": "31eef053-dc8b-42f6-8bf3-feef5db3c963",
+    "type": "user",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<summary>📬 probe mail</summary>\n</task-notification>\n<system-reminder>\n📬 PROBE mail arrived while you were idle: PROBE-WAKE-LINE-B 2026-08-13T14:54:09+00:00\n\n</system-reminder>"
+    },
+    "uuid": "97f6e29a-f67c-45d3-b5b5-52909dbfe3e8",
+    "timestamp": "2026-08-13T14:54:10.365Z",
+    "permissionMode": "acceptEdits",
+    "origin": {
+      "kind": "task-notification"
+    },
+    "promptSource": "sdk",
+    "userType": "external",
+    "entrypoint": "remote",
+    "cwd": "/tmp/claude-0/-home-user-claude-infrastructure/792096c2-b208-50b0-bae9-c0b441b0a98e/scratchpad/probe/armB/work",
+    "sessionId": "c0660697-739b-43ba-8c77-08a36b28bb57",
+    "version": "2.1.231",
+    "gitBranch": "HEAD"
+  }
+]
