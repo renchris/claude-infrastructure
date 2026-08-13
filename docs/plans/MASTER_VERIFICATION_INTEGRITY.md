@@ -1073,3 +1073,51 @@ a counter-sum snapshot around each suite detects "emitted nothing" in two lines 
 true while it stays true, so the selftest must pin a violating suite as NEVER memoized, per rule.
 (2) `CHECK_FAILED` must veto recording: a suite whose predicate could not RUN has no verdict to
 cache, and caching its fail-SAFE 'hermetic' would convert a non-verdict into a permanent green.
+
+### BUILT: the per-suite memo in `test-hermeticity-lint.sh` (`c62c4a9cd`)
+
+`herm_memo_arm` declares the read set (`HERM_READSET`) and folds it into a checker-id, so
+gate-memo's audited `memo_file_hit` / `memo_file_record` are reused unchanged. The cached fact is
+**"this suite emitted nothing"**; the record site has two vetoes; `--selftest` grew from 112 to 120
+cases and `tests/herm-suite-memo.bats` (7 cases) covers the real corpus.
+
+**Four defects, and every one was found by a control rather than by review.**
+
+1. **`SELF` is relative** (`./scripts/…`) and the symlink loop preserves it, so `git hash-object
+   -- "$SELF"` returns nothing the moment anything resolves it from another directory — the memo
+   silently never armed. Caught by the positive control (a1).
+2. **`SELF_ABS` then assumed `$ROOT/scripts/`**, which is true of the checkout and false of every
+   copy — same silent-off failure. Caught by the /Users/chrisren/.claude/bin/cc-bats case that revises the lint by copying it.
+3. 🚨 **The `CHECK_FAILED` veto was a per-suite DELTA, and that is a real unsoundness I shipped for
+   one iteration.** A delta vetoes only the FIRST suite whose predicate dies; every suite after it
+   compares 1-to-1, comes out equal, and gets **recorded as green — out of a run that exits 2
+   precisely because it produced no verdict**. `is_hermetic`'s third state returns fail-SAFE
+   'hermetic' so a dead grep cannot fabricate a leak, which means a non-verdict is byte-identical
+   to a clean suite at the record site. It is now absolute (`CHECK_FAILED -eq 0`).
+4. **A test that passed for the wrong reason.** The read-set case for the rule-6 table used two
+   different ENV_ROOT *directories* — but `env_root` is in the read set in its own right, so the
+   keys differed by path and the table was never tested. It passed while its mutant stayed green.
+   Fixed by holding the root path constant and letting a third file appear inside it.
+
+**The mutants, all with the applied-assertion the last recycle mandated** (`assert s.count(old)==1`;
+every one printed `applied` before its verdict was read):
+
+| mutant | verdict |
+|---|---|
+| readset drops the allowlist | RED, 3 cases |
+| readset drops the env table | RED, 1 case — **green until defect 4 was fixed** |
+| record drops the emit veto | RED, 3 cases |
+| record drops the CHECK_FAILED veto | RED, 1 case — **green until defect 3 was fixed** |
+| hit ignores `HERM_MEMO_OK` | GREEN — **equivalent mutant, verified not assumed**: `memo_file_key` returns 1 on `MEMO_OK != 1` (gate-memo.sh:144), so the guard is redundant defence-in-depth |
+
+Two of the five mutants were green against a suite that already looked complete, and each pointed at
+a real bug rather than a missing case. **The pattern worth carrying: a mutant that stays green is
+either a coverage gap or an equivalent mutant, and the two are told apart by reading the code, never
+by adding a case until it goes red.**
+
+**For the next lint.** The shape is now proven and portable: (i) time the arm *through `own_run`*;
+(ii) split the cost into fixed vs per-item by scaling the corpus; (iii) write the read set down as
+an executable declaration — everything the verdict depends on that is not the item's own bytes;
+(iv) cache only "emitted nothing", never a finding; (v) veto on any could-not-run, absolutely;
+(vi) mutate each read-set element and each veto separately. Remaining heavy arms, gate-faithful:
+`git-identity` 13.3s, `unattended-path` 11.4s (+13.4s selftest), `pane-spawn` 7.7s.
