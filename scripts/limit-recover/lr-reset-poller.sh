@@ -161,6 +161,82 @@ for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.gener
 done
 acct_of_cfg() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
+# ── ENGAGEMENT AUDIT — did the sessions this daemon fired actually START? (DETECT-ONLY) ─────────
+# THE GAP THIS CLOSES. §2 below claims a sid, spawns, logs `RESUMED … pane opened` and moves on.
+# "Pane opened" is the only thing it ever verifies. A resume that opened a pane and then wedged on a
+# blocking startup modal is indistinguishable from a healthy one — SessionStart never fires behind a
+# dialog, so no session row and no transcript are ever written, and every ordinary liveness probe on
+# this box answers "fine" (docs/research/cc-startup-modals-2026-08-04.md §3). The claim then expires
+# on a pure wall-clock TTL (CLAIM_TTL_MIN above) and the sid is silently re-fired, with no record
+# anywhere that the FIRST fire never engaged. hooks/lib/engagement.sh exists for exactly that class.
+#
+# WHY IT IS WIRED HERE AND NOWHERE ELSE IN limit-recover (measured 2026-08-12, backlog f76e7d78aaac).
+# The filed remedy named lr-fire-resume.sh and scripts/cc-upgrade-gate.sh; both are refuted.
+# lr-fire-resume.sh `exec expect`s at :385, so the spawning process BECOMES the session and there is
+# no "after the spawn" left to check from. cc-upgrade-gate.sh spawns no pane at all (every probe is
+# `--print --output-format json`). This poller is the one component that both spawns AND survives
+# its spawns — and it holds a SID, never a pane id, which is why `cc_engaged_sid` exists.
+#
+# DETECT AND REPORT ONLY — deliberately. This arm does not re-fire, does not release or extend the
+# claim and does not touch the fire decision. Adding an actuator to a live unattended
+# limit-recovery daemon (LR_POLLER_AUTOFIRE=1 in the shipped plist) is a different decision with a
+# different blast radius. What this produces is the record whose absence is the defect.
+#
+# IT RUNS BEFORE §1b's fail-closed `exit 0`, on purpose: a missing lr-select must stop FIRING, but
+# it says nothing about fires already made, and an audit gated behind an unrelated precondition goes
+# quiet exactly when the daemon is already degraded.
+#
+# FAIL-OPEN, unlike bin/cc-wedge-watch, which exits 4 when this lib is missing. Judging engagement
+# IS that tool's whole job; this daemon's job is RECOVERING SESSIONS, and it must not stop
+# recovering because a library moved. Same three-rung resolution ladder (bin/cc-wedge-watch:136-142)
+# — symlink-resolved sibling, plain sibling, live layer — with the opposite failure direction.
+LR_ENGAGE_SETTLE_MIN="${LR_ENGAGE_SETTLE_MIN:-3}"
+ENGAGE_NOTED="$STATE/engage-noted"
+LRP_ENGAGE_MISSING="$STATE/engage-lib-missing.notified"
+LRP_ENGAGE_LIB=0
+_LRP_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+# shellcheck source=../../hooks/lib/engagement.sh
+for _elb in "$(dirname "$_LRP_SELF")/../../hooks/lib/engagement.sh" \
+            "$LR/../../hooks/lib/engagement.sh" \
+            "${HOME:-}/.claude/hooks/lib/engagement.sh"; do
+  # shellcheck disable=SC1090,SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -r "$_elb" ] && . "$_elb" 2>/dev/null && { LRP_ENGAGE_LIB=1; break; }
+done
+if [[ "$LRP_ENGAGE_LIB" != 1 ]] || ! command -v cc_engaged_sid >/dev/null 2>&1; then
+  # Log ONCE, then stay quiet: this runs every ~10 min forever, and a per-tick line would bury the
+  # very records this audit exists to write. The marker is cleared the moment the lib resolves
+  # again, so a LATER outage is a fresh line rather than a silence inherited from the first one.
+  if [[ ! -f "$LRP_ENGAGE_MISSING" ]]; then
+    : > "$LRP_ENGAGE_MISSING"
+    log "ENGAGE-SKIP hooks/lib/engagement.sh unavailable — engagement audit off (recovery UNAFFECTED)"
+  fi
+else
+  rm -f "$LRP_ENGAGE_MISSING" 2>/dev/null || true
+  mkdir -p "$ENGAGE_NOTED"
+  for cf in "$CLAIMS"/*; do
+    [[ -e "$cf" ]] || continue
+    esid="$(basename "$cf")"
+    # THE SETTLE WINDOW IS LOAD-BEARING. A claim is written BEFORE the launcher→expect→claude chain
+    # even starts, so a just-claimed sid has no transcript and no assistant turn BY CONSTRUCTION —
+    # asking immediately would report every healthy fire as not-engaged. Wall-clock, like the TTL
+    # beside it, and shorter than it so a fire is judged while its claim is still live.
+    [[ -n $(find "$cf" -mmin "+$LR_ENGAGE_SETTLE_MIN" 2>/dev/null) ]] || continue
+    if cc_engaged_sid "$esid"; then
+      # Re-arm: this sid engaged, so a FUTURE fire of the same session that wedges must still be
+      # able to report. A marker that is never cleared silences the second incident on any session
+      # that ever succeeded once.
+      rm -f "$ENGAGE_NOTED/$esid" 2>/dev/null || true
+      continue
+    fi
+    [[ -f "$ENGAGE_NOTED/$esid" ]] && continue     # notify ONCE per claim (no per-tick spam)
+    # --dry-run REPORTS but must never CLAIM the one report. Writing the damping marker under a
+    # preview flag would let an operator's look-first silence the real tick 10 minutes later — the
+    # same class as the --dry-run defect this file already carries a header about.
+    if (( DRY == 0 )); then : > "$ENGAGE_NOTED/$esid"; fi
+    log "NOT-ENGAGED $esid — claimed >${LR_ENGAGE_SETTLE_MIN}m ago, no assistant turn (why=${CC_ENGAGE_WHY:-unknown}); DETECT-ONLY, claim untouched"
+  done
+fi
+
 # account headroom: session_pct AND weekly_pct < 100 (never resume into a still-capped acct).
 # ⚠️ Blind-check fix (2026-07-15, caught by LR-c): the original captured the JSON into $j but ran
 # `python3 - <<PY`, whose sys.stdin.read() is EMPTY (stdin was already consumed as the program text)

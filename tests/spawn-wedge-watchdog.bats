@@ -226,6 +226,80 @@ EOF
   [ "$status" -eq 2 ]
 }
 
+# ── AXIS 4: the SID-keyed entry point (backlog f76e7d78aaac) ─────────────────────────────────────
+# cc_engaged_pane is keyed on a pane. scripts/limit-recover/lr-reset-poller.sh holds a SESSION ID
+# and never a pane id — it claims a sid BEFORE the launcher→expect→claude chain exists — so the
+# pane oracle was structurally unreachable from the one daemon in limit-recovery that survives its
+# own spawns. cc_engaged_sid is that entry point, EXTRACTED from cc_engaged_pane rather than
+# re-spelled beside it.
+
+@test "sid oracle: a content-bearing assistant turn in <sid>.jsonl reads ENGAGED" {
+  seed_engaged_transcript
+  # No registry row on purpose — the whole point of the sid path is that it needs none.
+  run bash -c '. "$1"; cc_engaged_sid "$2"; printf "rc=%s why=%s sid=%s proof=%s\n" \
+                 "$?" "$CC_ENGAGE_WHY" "$CC_ENGAGE_SID" "$CC_ENGAGE_PROOF"' _ "$LIB" "$SID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rc=0"* ]] || false
+  [[ "$output" == *"why=assistant-turn"* ]] || false
+  [[ "$output" == *"sid=$SID"* ]] || false
+  [[ "$output" == *"proof=transcript:$SID"* ]] || false
+}
+
+@test "sid oracle: birth is not engagement — a transcript with no assistant turn is NOT engaged" {
+  seed_born_but_silent_transcript
+  run bash -c '. "$1"; cc_engaged_sid "$2"; printf "rc=%s why=%s\n" "$?" "$CC_ENGAGE_WHY"' \
+      _ "$LIB" "$SID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rc=1"* ]] || false
+  [[ "$output" == *"why=transcript-without-assistant-turn"* ]] || false
+}
+
+@test "sid oracle: an EMPTY sid is a reasoned abstain, never a positive" {
+  # `find -name ".jsonl"` would otherwise sweep every account home for a file that cannot exist,
+  # and a caller reading only the rc would get the same 1 with no way to tell the two apart.
+  seed_engaged_transcript          # a real engaged session exists — the answer must still be no
+  run bash -c '. "$1"; cc_engaged_sid ""; printf "rc=%s why=%s\n" "$?" "$CC_ENGAGE_WHY"' _ "$LIB"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rc=1"* ]] || false
+  [[ "$output" == *"why=no-session-id"* ]] || false
+}
+
+@test "EXTRACTION: cc_engaged_pane CALLS cc_engaged_sid — the search exists exactly once" {
+  # memory: make-the-actuator-the-arbiter. Two spellings of "engaged" would diverge the day someone
+  # improves one of them, and nothing would name the other. Pinned structurally because a
+  # behavioural test cannot tell a call from a duplicated body.
+  local pane_body
+  pane_body="$(sed -n '/^cc_engaged_pane() {/,/^}/p' "$LIB")"
+  [ -n "$pane_body" ]
+  printf '%s' "$pane_body" | grep -q 'cc_engaged_sid'
+  run bash -c 'grep -c -- "-name \"\$sid.jsonl\"" "$1"' _ "$LIB"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 1 ]
+}
+
+@test "EXTRACTION control: a re-inlined duplicate of the search is CAUGHT" {
+  # Without this the count above passes vacuously the day the grep pattern stops matching at all
+  # (memory: control-must-replay-the-real-artifact).
+  local mutant="$BATS_TEST_TMPDIR/reinlined.sh"
+  { cat "$LIB"; printf '  find "$t" -name "$sid.jsonl" -type f 2>/dev/null\n'; } > "$mutant"
+  run bash -c 'grep -c -- "-name \"\$sid.jsonl\"" "$1"' _ "$mutant"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 2 ]
+}
+
+@test "PANE PATH UNCHANGED: proof still names the REGISTRY, not the transcript" {
+  # The extraction must not leak the sid path's provenance into the pane path. cc-wedge-watch
+  # prints CC_ENGAGE_PROOF verbatim (bin/cc-wedge-watch:276) and the operator reads it to know
+  # which evidence answered.
+  seed_registry_row; seed_engaged_transcript
+  run bash -c '. "$1"; cc_engaged_pane "$2"; printf "rc=%s proof=%s why=%s\n" \
+                 "$?" "$CC_ENGAGE_PROOF" "$CC_ENGAGE_WHY"' _ "$LIB" "$PANE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rc=0"* ]] || false
+  [[ "$output" == *"proof=registry:$SID"* ]] || false
+  [[ "$output" == *"why=assistant-turn"* ]] || false
+}
+
 # ── THE PARITY PIN: two spellings of one predicate may never diverge ─────────────────────────────
 
 @test "PARITY: assistant_turn_in in the lib is byte-identical to handoff-fire.sh's" {
