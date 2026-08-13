@@ -564,3 +564,91 @@ positive is one harmless export) says keep them in and retire them one at a time
 **The lint fires on its own /Users/chrisren/.claude/bin/cc-bats file** once that file names a caller — caught by the suite's own
 real-tree case, fixed the way this file fixes every such case: dogfood the pin in `setup()`, never
 grandfather the lint's own suite under its own rule.
+
+---
+
+## RESUME-HERE, RECYCLE #4 — 2026-08-13, effort 2 at **7** non-cloud rows
+
+**Closed this recycle (1), LANDED and content-verified:** `5ef0dcb22aec` (`88bf5cf1f`, 4 paths
+present + `git diff` empty on origin/main). Store: report BOTH ends — a close count alone reads as
+progress the store does not show.
+
+**THE LESSON OF THIS RECYCLE — the reassurance clause has a SECOND failure mode, and it is invisible
+to the recycle-#2 probe.** Recycle #2 found clauses false *as written*. `5ef0dcb22aec`'s was **true
+as written and EXPIRED**: nothing in the sentence was wrong, a sibling commit two days later
+(`450a47c50`) added a third term, and the row has no mechanism to learn that. So the probe is now two
+questions, and the second is new:
+
+1. *Is the clause true?* (recycle #2)
+2. ***What has the row's cited mechanism done SINCE `firstTs`?*** — one
+   `git log --since <firstTs> -- <the cited file>`, or `-S <the cited term>`. Cheap, and it is what
+   caught this one.
+
+A backlog row is a **resident restatement of a perishable fact** — the same class as
+`resident-policy-must-not-restate-perishable-facts`, one level down. The older the row, the more the
+reassurance is a claim about a tree that no longer exists. **Both rows still open from before
+2026-08-12 should get question 2 before any work starts.**
+
+### NEXT ROW — `0f74f41042c5`, already triaged INLINE this recycle; do not re-derive
+
+**The row's own reassurance** (in its title: *"blocking channel now closed by own-scoping the stuck
+ratchet, the divergence is not"*) was probed and is **TRUE** — `scripts/unattended-path-lint.sh:822`
+own-scopes the NEW-finding arm and `:970` the stuck-ratchet arm, and case 17b already pins the
+lean-caller direction (`/usr/sbin:/sbin` joined the static suffix). Question 2 also answered:
+`3a30a7d6d` (recycle #2's own fix) is the only change to that file since the row was filed, and it
+does not touch this.
+
+**THE RESIDUAL, stated precisely.** `installed_somewhere` (`:644`) searches `${PATH}` — the caller's
+LIVE inherited PATH — plus a static suffix, and a **NO DROPS the finding**. Both arms being
+own-scoped closes the *sibling-file* blocking channel but NOT this one: a file **in the author's own
+diff** whose finding exists only because the LANDING box has a binary the author's box lacks blocks
+that author on a red they cannot reproduce. This is verbatim the defect the SIBLING lint already
+names and solved — `test-hermeticity-lint.sh` RULE 5's header: *"A lint that resolved the operator's
+PATH to reach a verdict would be committing the defect it exists to catch — and it would also be
+wrong, since `timeout` is /usr/bin on one box and Homebrew coreutils on the next."*
+
+🚨 **MEASURED, and it kills the obvious fix.** Mutating `installed_somewhere` over the real tree
+(copies in scratch, tree untouched):
+
+| `installed_somewhere` | findings |
+|---|---|
+| real | **35** |
+| always-YES | **975** |
+| always-NO | **0** |
+
+It drops **940 of 975 (96.4%)** — it is the load-bearing noise filter, not a nicety. So *"skip the
+filter for files in the own-set"* — the tempting narrowing — floods the author with ~96% noise on
+their own files. **Rejected by measurement, not by argument.**
+
+**The design that survives, and it is a SUBTRACTION-shaped union rather than a narrowing** (the
+standing preference: a narrowing can manufacture a false negative, this cannot):
+
+```
+installed_somewhere(W)  ==  W ∈ CHECKED_IN_INVENTORY  ||  reachable_on(<today's union>)
+```
+
+A committed, tree-derived inventory of names known to be real binaries, unioned with today's live
+probe. It can only ever **ADD** a finding relative to today, never drop one, so it cannot manufacture
+a false negative in the direction that matters (a suite silently reading the live box). A box missing
+`gtimeout` now reports it anyway, so the author sees locally what the landing box will see. Same
+idiom as this repo's `EMBEDDED_*_ALLOWLIST` ratchets and RULE 5's tree-derived seam table.
+**Not yet built.** Open questions for whoever takes it: how the inventory is generated and
+re-generated (a `--emit-inventory` verb?), and whether it ratchets (only-grows, since a name that was
+ever a binary stays one).
+
+**Then:** `5d6dcbe8d462` (do NOT start from the row — the corrected AST spec is earlier in this
+file) · `b449e49f1438` · `cf440684e0e1` (perf, large; the row's own analysis says arm-level keying is
+NOT the answer). Not workable: `05ff1e5fabc0` + `782607797fc5` (mine/operator-blocked), `8efd655b0fe1`.
+
+**Live layer, unchanged and NOT yours.** `deploy-live.sh` still declines — *"no GREEN tree is a
+DESCENDANT of live HEAD"* — because the postland verifier is cut-loop-stuck (already filed,
+operator-gated, `782607797fc5`; do NOT re-file). Lag was 14 commits / 3h, inside the degrade budget
+(25 / 6h), but **2 NEW files from SIBLING commits are absent**, and an ADD gets no budget, so the
+ledger reads 🚀 for the whole box. Your own landed change is a MODIFY riding an existing per-file
+symlink and goes live on the next fast-forward. Never `deploy-live --force`.
+
+**Mechanics confirmed again.** `ship-land.sh` took ~13 min and auto-backgrounded; **do not pipe it
+through `tail`** — the pipe buffers, so the task output file stays 0 bytes and you cannot watch
+progress. Its smoke stage gate-killed `tests/ship-land.bats` for the THIRD consecutive land
+(`exit 124`, ZERO `not ok`) — a NON-VERDICT by the gate's own words, on a suite that was not in the
+diff. Run your own suites and carry your own verdict.
