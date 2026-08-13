@@ -259,6 +259,18 @@ EOF
   [ "$(sp cc_sp_active)" = 1 ]
 }
 
+@test "11b two mid-turn beats resolving to ONE claude ancestor count as ONE active unit" {
+  # session-beat.sh walks up to the nearest claude/claude.exe process, and subagents share their
+  # lead's — so a row-count would report two ACTIVE units for one session tree. cc_sp_trees one
+  # function above already carries this correction (it skips a process whose parent is in-family);
+  # the active census has to make it too, and in the same direction: a duplicate is not evidence of
+  # a second concurrent turn.
+  local ls; ls="$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  beat lead 999990 prompt "$$" "$ls"
+  beat sub  999989 prompt "$$" "$ls"
+  [ "$(sp cc_sp_active)" = 1 ]
+}
+
 @test "12 the ACTIVE term REFUSES at the ceiling and ADMITS one below it" {
   CC_SP_ACTIVE_OVERRIDE=8 CC_ADMIT_ACTIVE_CEILING=8 run admit act-a "spawn"
   [ "$status" -eq 9 ]

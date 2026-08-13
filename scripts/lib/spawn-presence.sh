@@ -309,12 +309,19 @@ EOF
   # failure arriving as a deleted gate (memory positive-control-the-denominator). lstart is compared
   # after the SAME normalisation hooks/session-beat.sh applies when it writes the field (squeeze
   # runs of whitespace, trim both ends), so the two strings are comparable by construction.
+  #
+  # COUNTED AS DISTINCT PIDS, NOT AS BEAT LINES, and this is the same correction cc_sp_trees already
+  # carries one function above (it counts TREES, skipping any process whose parent is in-family).
+  # Two beats can resolve to ONE claude ancestor — session-beat.sh walks up to the nearest
+  # claude/claude.exe process, and subagents share their lead's — so counting rows would report two
+  # ACTIVE units for one session tree. It would also be the wrong DIRECTION for this term: the whole
+  # census is a proven lower bound, and a duplicate is not evidence of a second concurrent turn.
   n="$(printf '%s\n@@\n%s' "$(ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" "$pairs" | awk -v self="$$" '
     function norm(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return s }
     /^@@$/ { sec = 1; next }
     sec == 0 { p = $1; $1 = ""; live[p] = norm($0); seen[p] = 1; next }
-    { p = $1; $1 = ""; if ((p in seen) && live[p] == norm($0)) n++ }
-    END { if (!(self in seen)) exit 1; printf "%d", n + 0 }' 2>/dev/null)" || return 1
+    { p = $1; $1 = ""; if ((p in seen) && live[p] == norm($0)) hit[p] = 1 }
+    END { if (!(self in seen)) exit 1; n = 0; for (p in hit) n++; printf "%d", n }' 2>/dev/null)" || return 1
   cc_sp_is_int "$n" || return 1
   printf '%s' "$n"
 }
