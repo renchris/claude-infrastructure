@@ -1662,6 +1662,24 @@ during the ramp, while the *gate* admits up to 50%. That is not a contradiction 
 predictor watched continuously by an instrument that can act, and the gate is a single-sample
 admission bar — but the two numbers must not be conflated in a later reading.
 
+🚨 **THE THREE NUMBERS ARE THE OPERATOR'S CALL, AND THE MERGE IS WHERE IT IS MADE.** §S6.6 opens with
+"both **operator's call** (they gate spawn box-wide)", and `backlog-consolidation-2026-08-09/
+OUT-memhooks.md` is sharper: *"this is the operator's value judgment — it adds a REFUSING term to the
+box-wide spawn path, G2, and stays a genuine STOP-ASK."* What was built is therefore the MECHANISM
+plus its evidence, shaped so the judgment stays available rather than pre-empted:
+
+- every threshold is an env seam with its default in one place (`CC_ADMIT_MAX_SEGMENT_PCT=50`,
+  `CC_ADMIT_ACTIVE_CEILING=8`, `CC_ADMIT_ACTIVE_RESERVE=1`);
+- each term switches off independently (`CC_ADMIT_SEGMENT_TERM` / `CC_ADMIT_ACTIVE_TERM`), and with
+  both off the gate is byte-for-byte the two-term gate that preceded this;
+- every refusal is budget-bounded and pages, exactly as the original two terms are — **no new way for
+  this gate to stand as a permanent refusal** (§9's law, the property §12.2's outage turns on);
+- every row carries the measured numbers, so the defaults can be re-derived from a day of the
+  fleet's own traffic instead of re-argued.
+
+If the operator's judgment is that 8 is too tight or 50 too loose, that is one env value, not a
+rebuild — and D7 is satisfied by the DECISION either way, which is what the criterion asks for.
+
 ### S6.7 · Phase E — render, and Phase F — the remainder
 
 - **E:** at 0.025 cores/pane, 150 visible panes is 3.7 cores. Keep **≤20 visible kitty panes**; the
