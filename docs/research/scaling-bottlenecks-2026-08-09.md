@@ -127,6 +127,12 @@ already exists, not render work.
 - **KMAX re-derivation**: key the router cap on ACTIVE sessions (its real risk), not resident
   count; today one integer refuses the 33rd session. Also fix `concurrency()` failing OPEN on ps
   timeout — it disarms both KMAX and heal()'s rotation gate (07).
+  **DONE 2026-08-13** → `docs/plans/ACCOUNT_ROUTING_V2.md` §15. `KMAX` is now the ACTIVE cap (8,
+  unchanged) and `KMAX_RESIDENT` (40) the resident one, selected per row by the INSTRUMENT that
+  charged it (`k_src` / `k_cap`, shared with the KF denominator). `concurrency()` returns `None`
+  on an unreadable `ps` and all three gates refuse on UNKNOWN — the third being
+  `handoff-fire.sh`'s pre-fire sweep, which re-spells the rotation gate as `(.k // 0)` and was not
+  in 07 §6.5's count.
 - **oauth herd**: jitter refresh within an account + let heal() run with live sessions (08).
 - **off-box**: the `git switch -c` payload fix + preflight call + 3-retry wrapper; then measure T3
   per-session draw before claiming any number above 10 (06).

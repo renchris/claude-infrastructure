@@ -484,6 +484,15 @@ apply_urgency() {
           | select(. != null)
           | select((.weekly_need_pct_per_day | type) == "number")
           | select((.burn_wk_ppd            | type) == "number")
+          # UNMEASURED concurrency makes NO urgency claim — same rule as a missing pace field
+          # below, and for a stronger reason. `k` is now null when the producer could not read
+          # `ps` (the None contract in claude-accounts concurrency), and `(.k // 0)` would read
+          # that null as an IDLE account: keff 0 ⇒ head = KMAX ⇒ the widest allowance this tool
+          # can grant, awarded on the one input nobody measured. Every degradation here is a
+          # WIDENING, so absence must reach the flat cap, never the ceiling.
+          # NB: no apostrophes in this comment — the jq program is a single-quoted shell string,
+          # and one would close it. That is exactly how this landed red the first time.
+          | select(((.k_work | type) == "number") or ((.k | type) == "number"))
           | select(.weekly_need_pct_per_day > .burn_wk_ppd)
           | [ .acct,
               (.weekly_need_pct_per_day * 10 | round / 10 | tostring),
@@ -900,6 +909,11 @@ STUB
   export URG_BEHIND='[{"acct":"acctA","k":1,"k_work":1,"k_phantom":0,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
   # Same accounts, same loads, NO pace fields — the shape a thin utilization series actually produces.
   export URG_NOFIELDS='[{"acct":"acctA","k":1},{"acct":"acctB","k":0}]'
+  # The BEHIND claim intact, but concurrency UNMEASURED — the shape the producer now emits when `ps`
+  # could not be read (claude-accounts concurrency() returns None ⇒ `k: null`). `(.k // 0)` used to
+  # read that null as an idle account and hand out head = KMAX − 0, i.e. the widest allowance this
+  # tool can grant, on the single input nobody measured. It must reach the FLAT cap instead.
+  export URG_UNMEASURED='[{"acct":"acctA","k":null,"k_work":null,"k_phantom":0,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":null,"k_work":null,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
   # Same urgency claim, but acctA's live charge is 5 (k_work 4 + 1 phantom) ⇒ KMAX−k_eff = 3 binds
   # BELOW the knob's 4. Both terms of k_eff are exercised: drop the phantom and the clamp reads 4.
   export URG_CLAMP='[{"acct":"acctA","k":5,"k_work":4,"k_phantom":1,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
@@ -920,6 +934,10 @@ STUB
     bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" CC_WAVE_MAX_PER_ACCT_URGENT=2 '$SELF' --items \"\$URG_IT5\""
   check "urgency: rows with NO pace fields make no claim -> same wave walls (fail-soft to flat)" 4 \
     bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_NOFIELDS\" '$SELF' --items \"\$URG_IT5\""
+  check "urgency: UNMEASURED concurrency (k null) makes no claim -> the wave walls, not widens" 4 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_UNMEASURED\" '$SELF' --items \"\$URG_IT5\""
+  check "urgency: …and it renders NOTHING — an unmeasured widening must not even be announced" 0 \
+    bash -c "! STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_UNMEASURED\" '$SELF' --items \"\$URG_IT5\" 2>&1 | grep -q urgency:"
   check "urgency: an unreadable SSOT (no KMAX) is NO bound -> no widening, the wave walls" 4 \
     bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" CLAUDE_ACCOUNTS_JSON='$tmp/nope.json' '$SELF' --items \"\$URG_IT5\""
   check "urgency: KMAX - k_eff CLAMPS the allowance to 3 (k_work 4 + phantom 1) -> 6 items wall" 4 \
@@ -934,7 +952,7 @@ STUB
     bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" '$SELF' --items \"\$URG_IT5\" --json 2>'$tmp/urg.err' | jq -e 'length==5' >/dev/null && grep -q 'urgency: acctA is BEHIND' '$tmp/urg.err'"
   check "urgency: the flat lane renders NOTHING (the alarm carries a bit only if it can be absent)" 0 \
     bash -c "! STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_NOFIELDS\" '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"}]' 2>&1 | grep -q urgency:"
-  unset URG_BEHIND URG_NOFIELDS URG_CLAMP URG_FULL URG_IT5 URG_IT6
+  unset URG_BEHIND URG_NOFIELDS URG_UNMEASURED URG_CLAMP URG_FULL URG_IT5 URG_IT6
 
   # (a) QUOTA CLIFF — rank empty, and wave-exceeds-capacity; both exit 4 with NO plan on stdout.
   check "cliff: empty rank -> exit 4" 4 bash -c "STUB_RANK='' '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"

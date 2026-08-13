@@ -283,10 +283,20 @@ print("OK", got)'
   [[ "$output" == *OK* ]] || false
 }
 
-@test "live-count: the ONE divergence is deliberate and stays pinned — ps failure" {
-  # concurrency() feeds an ALARM (all-zero, keep rendering); live_sessions() feeds a GATE (-1 =
-  # UNKNOWN, refuse). Opposite verdicts from one input, and both are correct for their consumer.
-  # Pinned so it stays a decision rather than becoming a fourth silent drift.
+@test "live-count: ps failure is UNKNOWN in BOTH implementations — the divergence is gone" {
+  # WAS PINNED AS A DELIBERATE DIVERGENCE, AND THE PREMISE WAS FALSE. This test used to assert
+  # `concurrency() -> {…: 0}` against `live_sessions() -> -1`, on the rationale that "concurrency()
+  # feeds an ALARM (all-zero, keep rendering); live_sessions() feeds a GATE (refuse)".
+  #
+  # concurrency() feeds BOTH. It has fed two GATES since heal()'s under-lock re-check was added:
+  # `_excluded`'s KMAX cap, and the rotation-safety gate `k_live > 0`. So the all-zero return did
+  # not merely keep a display honest — it fabricated the one value that disarms both, and did it
+  # under `ps` failure, i.e. under load. scaling-bottlenecks-2026-08-09/07 §6.5 measured the
+  # direction: KMAX stops binding AND a refresh token can be redeemed underneath live sessions,
+  # whose rotation race ends in a 400 invalid_grant — a logout manufactured by an unread `ps`.
+  #
+  # Both implementations now answer UNKNOWN (None / -1, each in its own vocabulary), and the
+  # DISPLAY is what degrades — at the renderer, which prints "?" rather than a count nobody took.
   run python3 -c "$LOADCA$LOADCR"'
 import subprocess
 def blow(mod):
@@ -296,8 +306,108 @@ def blow(mod):
         "SubprocessError": subprocess.SubprocessError})
     mod.HOME = "/Users/c"
 blow(ca); blow(cr)
-assert ca.concurrency({"accounts": [{"name": "next3", "config_dir": "/Users/c/.claude-tertiary"}]}) == {"next3": 0}
+ca.log_event = lambda *a, **k: None
+assert ca.concurrency({"accounts": [{"name": "next3", "config_dir": "/Users/c/.claude-tertiary"}]}) is None
 assert cr.live_sessions("/Users/c/.claude-tertiary") == -1
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "live-count: an unreadable ps REFUSES the heal — it can never redeem on an unproven gate" {
+  # The rotation-safety invariant is PROVEN or it is not held: "I could not look" is not "there is
+  # nobody there". Both arms are asserted — the pre-lock k_live gate and the under-lock re-check —
+  # because they are separate reads and the second is the one taken minutes into a sweep.
+  run python3 -c "$LOADCA"'
+import subprocess
+cfg = {"accounts": [{"name": "next3", "config_dir": "/Users/c/.claude-tertiary"}],
+       "claude_bin": "/nonexistent/claude"}
+ca.log_event = lambda *a, **k: None
+
+# (1) pre-lock: the sweep handed us an UNMEASURED count.
+ok, why = ca.heal(cfg, cfg["accounts"][0], "rt", None)
+assert ok is False and "UNMEASURABLE" in why, (ok, why)
+
+# (2) under-lock: the sweep measured 0, but the re-check cannot. Must still refuse. The binary is
+#     made to exist so the only thing that can stop the redeem is the gate under test.
+import os, tempfile
+d = tempfile.mkdtemp(); b = os.path.join(d, "claude")
+open(b, "w").close(); os.chmod(b, 0o755)
+cfg["claude_bin"] = b
+ca.concurrency = lambda _cfg: None
+ran = []
+ca.subprocess = type("S", (), {
+    "run": staticmethod(lambda *a, **k: ran.append(a) or (_ for _ in ()).throw(AssertionError(
+        "REDEEMED under an unmeasurable ps — the fail-open this test exists to catch"))),
+    "TimeoutExpired": subprocess.TimeoutExpired})
+ok, why = ca.heal(cfg, cfg["accounts"][0], "rt", 0)
+assert ok is False and "UNMEASURABLE" in why, (ok, why)
+assert not ran, ran
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "KMAX: the cap is derived from the INSTRUMENT that produced the charge, not one integer" {
+  # scaling-bottlenecks-2026-08-09 §5 P2. KMAX was sized against the PANE census and then charged
+  # against k_work (ACTIVE) by M7, so it was wrong for whichever question it was not answering —
+  # and the census is not the exotic path (k_eff falls back to it whenever the transcript walk goes
+  # over budget, i.e. precisely under load). The regression this pins: 4 accounts x KMAX 8 = 32
+  # resident sessions fleet-wide, then `kmax-concurrency` -> rc 2 -> handoff-fire HALTS.
+  run python3 -c "$LOADCA"'
+R = {"S_CUT": 0.85, "S_SOFT": 0.5, "SF_FLOOR": 0.05, "KMAX": 8, "KMAX_RESIDENT": 40,
+     "KFLOOR": 0.1, "MARGIN_H": 0.5, "EPS_H": 0.25, "WEEKLY_FLOOR": 0.005,
+     "FABLE_FLOOR": 0.02, "JB_BONUS": 1.25}
+def row(**kw):
+    r = {"acct": "next3", "session_pct": 10.0, "session_reset_h": 3.0, "weekly_pct": 20.0}
+    r.update(kw); return r
+
+# ACTIVE charge (k_work measured): the cap is KMAX. 8 active is still refused — that band is real.
+assert ca.k_src(row(k=30, k_work=7)) == "work"
+assert ca.k_cap(row(k=30, k_work=7), R) == 8
+assert ca._excluded(row(k=30, k_work=7), R, cliff=False) is None, "30 RESIDENT but 7 active = routable"
+assert ca._excluded(row(k=30, k_work=8), R, cliff=False) == "kmax-concurrency"
+
+# CENSUS charge (walk over budget -> k_work None): the cap is KMAX_RESIDENT. THE REGRESSION:
+# k=8 used to exclude here, which is what refused the 33rd session fleet-wide.
+assert ca.k_src(row(k=8, k_work=None)) == "panes"
+assert ca.k_cap(row(k=8, k_work=None), R) == 40
+assert ca._excluded(row(k=8, k_work=None), R, cliff=False) is None, "THE 33rd-SESSION WALL IS BACK"
+assert ca._excluded(row(k=39, k_work=None), R, cliff=False) is None
+assert ca._excluded(row(k=40, k_work=None), R, cliff=False) == "kmax-concurrency"
+
+# KF shares the denominator with the cap, or the soft gradient collapses before the hard gate.
+kf = lambda r: ca.clamp(1 - ca.k_eff(r) / ca.k_cap(r, R), R["KFLOOR"], 1.0)
+assert kf(row(k=8, k_work=None)) > R["KFLOOR"], "census KF pinned to the floor at 8 residents"
+assert abs(kf(row(k=8, k_work=None)) - 0.8) < 1e-9, kf(row(k=8, k_work=None))
+
+# NEITHER instrument measured: refuse, but as DATA (exit 3, callers may degrade) not policy
+# (exit 2, handoff-fire HALTS). The old all-zero ps return ADMITTED this row instead.
+assert ca.k_src(row(k=None, k_work=None)) == "unmeasured"
+assert ca._excluded(row(k=None, k_work=None), R, cliff=False) == "concurrency-unmeasured"
+assert ca.reason_class(row(k=None, k_work=None), "concurrency-unmeasured") == "data"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "KMAX: the SSOT carries both caps and the validator refuses an incoherent pair" {
+  # The two constants are hand-tuned in a JSON file. A resident cap BELOW the active cap would make
+  # the fallback stricter than the instrument it degrades FROM — the exact inversion k_cap removes.
+  run python3 -c "$LOADCA"'
+import json, os
+ssot = json.load(open(os.environ["SSOT"]))["router"]
+assert ssot["KMAX_RESIDENT"] >= ssot["KMAX"], ssot
+# OPTIONAL by contract: the code default must match, or a config older than the code (the symlink
+# lag during a land) silently routes on a different cap than the one that was reviewed.
+assert ca.KMAX_RESIDENT_DEFAULT == ssot["KMAX_RESIDENT"], (ca.KMAX_RESIDENT_DEFAULT, ssot)
+bad = dict(ssot); bad["KMAX_RESIDENT"] = 4
+try:
+    ca._validate_router({"router": bad})
+except SystemExit as e:
+    assert "KMAX_RESIDENT" in str(e), e
+else:
+    raise AssertionError("an incoherent KMAX_RESIDENT < KMAX was accepted")
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || false

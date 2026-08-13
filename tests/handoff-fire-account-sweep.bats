@@ -158,6 +158,24 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   echo "$output" | grep -q "stranded=1"
 }
 
+@test "token-invalid with an UNMEASURED live count (k null) → NOT eligible, and says so honestly" {
+  # The producer emits `k: null` when it could not read `ps` (claude-accounts concurrency returns
+  # None rather than an all-zero count). This sweep re-spells heal()'s rotation-safety gate, and
+  # `(.k // 0)` used to read that null as ZERO — the one value that UNLOCKS a headless token
+  # redeem. So an unread `ps` would have authorised exactly the rotation race the gate exists to
+  # prevent: the loser holds a retired token, i.e. a logout manufactured by a missing measurement.
+  rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":null}]}'
+  info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "healed via Phase-1" || false   # the redeem was NEVER attempted
+  ! echo "$output" | grep -q "FAILED" || false
+  echo "$output" | grep -q "UNMEASURABLE"
+  # ...and it must NOT claim a live session it never observed — unknown is its own reason.
+  ! echo "$output" | grep -q "unmeasured live session" || false
+  echo "$output" | grep -q "stranded=1"
+}
+
 @test "another heal/login in flight (lock held) → relogin DEFERRED, not counted stranded" {
   rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0}]}'
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
