@@ -1141,3 +1141,66 @@ a suite whose SUBJECT is the lint names a tool carrying a shape-5a seam and an i
 so it would have passed on the desk and gone red inside a fired pane. (2) the `.bats` shellcheck
 ratchet blocked three `ls … | head` lines (SC2012). Both were fixed in `852eec7bf` and its follow-up
 rather than allowlisted.
+
+## RESUME-HERE, RECYCLE #8 — 2026-08-13, effort 2
+
+**Store, non-cloud open: 444 → 444.** Closed 2, filed 1 — so the count is honest and flat, and the
+value of the recycle is the LANDED work, not the ledger delta. Custody clean, tree clean.
+
+- CLOSED `cf440684e0e1` — partly delivered, and its stated remedy REFUTED (below).
+- CLOSED `aa73e6fb7f33` — a `re-land` row the lander filed against my OWN gate-red attempt. The
+  re-land then succeeded, so the row was stale the moment it was written. **Check for one of these
+  after any gate-red land**: it is machine-filed, it counts against the drain, and nothing else will
+  ever close it.
+- FILED `c4d65e8933e1` — the remaining lints, re-stated without the refuted prerequisite.
+
+### Landed: `6105b51b4` (and `852eec7bf`, `c62c4a9cd`, `72152857e`, `c335a4992`)
+
+Per-suite memo inside `test-hermeticity-lint.sh`. **Production evidence, from the gate itself:**
+`per-suite memo — 467 suite verdict(s) carried, 1 proven fresh` over 468 suites — the one fresh
+suite being the file that land changed. Content-verified on trunk.
+
+### Take `c4d65e8933e1` next — the pattern is proven, three arms remain
+
+`git-identity` 13.3s · `unattended-path` 11.4s + 13.4s selftest · `pane-spawn` 7.7s. Each is
+independent: a per-file memo keys on its own lint's inputs, so an unmemoized lint runs exactly as
+today. **Copy the shape from `test-hermeticity-lint.sh`** — `herm_memo_arm` / `HERM_READSET` /
+`herm_emit_sum` / the two record vetoes — and `tests/herm-suite-memo.bats`.
+
+**The six steps, in the order that mattered:** (i) time the arm *through `own_run`*, never bare;
+(ii) split fixed vs per-item cost by scaling the corpus; (iii) write the read set as an executable
+declaration — everything the verdict depends on that is not the item's own bytes; (iv) cache only
+"emitted nothing", never a finding; (v) veto on any could-not-run, **absolutely, not as a delta**;
+(vi) mutate each read-set element and each veto separately.
+
+### 🚨 What this recycle actually teaches, and it is not the memo
+
+**Every one of the six defects was found by a control, and none by review.** Four were mine, two
+were the gate catching my own test file. Listed because the *shapes* recur:
+
+1. **Measured the wrong invocation.** Bare, `bats-shellcheck-lint` is 50.5s and looks like the top
+   target; through `own_run` it is 0.07s. Same generator as the last three recycles — I named the
+   cost from the invocation I typed rather than the one that runs.
+2. **`SELF` is relative**, so the memo key was unobtainable from any other directory and the memo
+   silently never armed. A memo that is OFF looks exactly like a memo with nothing to carry.
+3. **`SELF_ABS` then assumed `$ROOT/scripts/`** — true of the checkout, false of every copy.
+4. 🚨 **The could-not-run veto was a per-suite DELTA.** It vetoes only the FIRST suite whose
+   predicate dies; every later suite compares 1-to-1, comes out equal, and is **recorded green out
+   of a run that exits 2**. `is_hermetic`'s fail-SAFE third state makes a non-verdict byte-identical
+   to a clean suite at the record site, so nothing else could have caught it.
+5. **A test that passed for the wrong reason** — two ENV_ROOT *directories* differed by path, and
+   `env_root` is separately in the key, so the table under test was never exercised. It passed while
+   its mutant stayed green.
+6. **The gate red-flagged my own new suite twice** — inheriting the lint's two anchors (rules 5/6),
+   and three `ls | head` lines (SC2012). Both fixed, neither allowlisted.
+
+**The rule that produced most of that value:** *a mutant that stays green is either a coverage gap
+or an equivalent mutant, and the two are told apart by READING THE CODE, never by adding cases until
+it goes red.* Of five mutants, three went red, one was a real gap (defect 4), and one was equivalent
+— verified by reading `gate-memo.sh:144`, where `memo_file_key` already returns 1 on `MEMO_OK != 1`.
+
+**And a measurement hazard specific to this subject:** a commit dirties the tree, and a dirty tree
+disarms this memo *by design* — so committing while a timing rig runs silently invalidates it. I did
+that to myself. The number in this plan came off the **land path** instead, which was better
+evidence anyway: when the subject already runs in production on a path you are about to exercise,
+read the number off that path.
