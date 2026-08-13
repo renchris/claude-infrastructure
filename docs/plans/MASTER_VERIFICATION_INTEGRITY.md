@@ -20,6 +20,17 @@ reads a false verdict has not landed a fix.
 
 **EXECUTION LOCUS PER WAVE.** S = dispatched handoff session (the default) · T = in-session teammates · L = lead-inline.
 
+🚨 **SUPERSEDED FOR THE LOCAL DRAIN (2026-08-13): read every `S` below as `T`.** This table was
+authored under the one-session-per-wave model. The non-cloud backlog is now worked by THE LOCAL DRAIN —
+a single standing session whose entire purpose is that it occupies **one** of the ~15 concurrent slots
+for its whole life (`BACKLOG_SELF_DRAINING_2026-08-12.md:392`: *"One slot, indefinite duration — because
+the bottleneck is concurrent sessions (~15), not session length"*). Firing a dispatched session per wave
+spends a second slot and defeats the mission. Work every wave with **teammates INSIDE the drain session**
+(`Agent({name})`, worktree-isolated, ≤150-line briefs, each torn down with a structured
+`shutdown_request` — a plain-text broadcast leaves an orphaned pane and worktree), and recycle at the
+EFFORT boundary via `handoff-fire.sh --recycle` — same pane, fresh context, no new slot. The `S` markers
+below are left in place as the historical record of how these waves were originally scoped.
+
 | Wave | Execution locus | Deliverable | Depends on |
 |---|---|---|---|
 | **V1 · three states, not two** | **S** | could-not-run, signal-killed and failed are distinct everywhere | — |
