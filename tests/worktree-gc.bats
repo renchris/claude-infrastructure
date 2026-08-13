@@ -135,7 +135,26 @@ warrant() {
   printf '%s\t%s\t%s\n' "$p" "$2" "$3" >> "$WTS"
 }
 
-has_wt() { git -C "$R" worktree list --porcelain | grep -qF "worktree $1"; }
+# 🚨 THIS HELPER COULD NEVER RETURN 0, AND NOTHING NOTICED — the R-c control found it (plan §6).
+# Two independent defects, both invisible because all 14 call sites assert it NEGATIVELY:
+#   1. PATH FORM. git records a worktree by its RESOLVED physical path, but $BATS_TEST_TMPDIR is
+#      the symlinked form: on macOS git reports `/private/var/folders/…` where the fixture holds
+#      `/var/folders/…`. Measured — `grep -qF "worktree /var/…"` against a LIVE worktree: no match.
+#      So every `! has_wt "$p"` and every `run has_wt "$p"; [ "$status" -ne 0 ]` was passing
+#      because the instrument always failed, never because the janitor removed anything. That is
+#      the same vacuity R-c names for `[ ! -d "$p" ]`, one layer down and strictly worse: `! -d`
+#      at least reads the real filesystem. scripts/worktree-gc.sh has carried a canon() helper
+#      folding /private/tmp for exactly this reason since it was written.
+#   2. PREFIX COLLISION. A bare `grep -F "worktree $1"` matches a LONGER sibling path — `wt-1`
+#      matches the line for `wt-10` — so even with the path form fixed it could report a removed
+#      worktree as present. `-x` makes the comparison whole-line.
+# Fold /private off BOTH sides, then compare exactly. A removed worktree is absent from the list
+# either way, so the negative direction keeps working; the positive direction now works at all,
+# which is what the (R-c positive control) test below pins.
+has_wt() {
+  git -C "$R" worktree list --porcelain | sed -n 's/^worktree //p' | sed 's#^/private##' \
+    | grep -qxF "${1#/private}"
+}
 has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
 
 @test "clean + idle + landed → worktree removed, branch PRESERVED (default keeps branches)" {
@@ -1152,4 +1171,77 @@ trunk_add() {
   echo "$output" | grep -q "dispose-dirt  $p"
   run has_wt "$p"
   [ "$status" -ne 0 ]
+}
+
+# ── §6 R-c: the fixture helper itself, controlled ───────────────────────────────────────────────
+# Every REMOVE-half assertion in this suite is `[ ! -d "$p" ]`, and an ABSENT path satisfies that
+# exactly as well as a REAPED one. So `wt()`'s rc is not a nicety — it is the only thing standing
+# between "the janitor removed it" and "the fixture never built it". These two cases pin that.
+# They FAIL against the pre-R-c helper (which swallowed stderr, ignored the rc, and echoed the
+# path regardless), which is what makes them a control rather than a restatement.
+
+@test "(R-c control) wt() FAILS LOUD when 'worktree add' fails — a vacuous REMOVE assertion is impossible" {
+  wt wt-dup-a feat/dup >/dev/null            # takes the branch name
+  run wt wt-dup-b feat/dup                   # git refuses: branch already checked out
+  [ "$status" -ne 0 ]
+  # Keyed on the helper's own stable token, not on a phrase this test happens to like: two
+  # sessions fixed wt() independently and the surviving wording is the other one's.
+  echo "$output" | grep -q "FIXTURE FAILED"
+  # …and it must NOT have handed back a usable path: that string is what a caller would have
+  # assigned to $p and then asserted `[ ! -d "$p" ]` against, passing for the wrong reason.
+  [ ! -d "$BATS_TEST_TMPDIR/wt-dup-b" ]
+}
+
+@test "(R-c positive control) wt() still returns a REAL directory on the happy path" {
+  p="$(wt wt-happy feat/happy)"
+  [ -d "$p" ]                                 # the discriminator: not merely a non-empty string
+  [ "$p" = "$BATS_TEST_TMPDIR/wt-happy" ]
+  run has_wt "$p"
+  [ "$status" -eq 0 ]                         # git agrees it is a registered worktree
+}
+
+# ── the machine `counts` line — the janitor's half of the wrapper contract ──────────────────────
+# tests/worktree-gc-infra.bats stubs the janitor (its L1), so it can only ever assert what the
+# wrapper does with a payload the FIXTURE wrote. That is exactly how the wrapper's positional
+# reader went off by one unnoticed when `landed-dirt` was added. This is the other half: the REAL
+# janitor emitting the real line, so the two suites cannot drift into agreeing with each other
+# about a format neither one produces.
+
+@test "the janitor emits a machine counts line whose named fields match the human summary" {
+  wt wt-c1 feat/c1 >/dev/null
+  run_gc --dry-run
+  [ "$status" -eq 0 ]
+  line="$(printf '%s\n' "$output" | grep -m1 '^worktree-gc: counts ')"
+  [ -n "$line" ]
+  f() { printf '%s\n' "$line" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1; }
+  # every field the wrapper reads must be present and numeric (elapsed carries an `s` suffix)
+  for k in removed disposed landed_dirt kept branches_deleted refusals; do
+    v="$(f "$k")"
+    [ -n "$v" ] || { echo "missing field: $k"; false; }
+    case "$v" in ''|*[!0-9]*) echo "non-numeric $k=$v"; false ;; esac
+  done
+  case "$(f elapsed)" in *s) ;; *) echo "elapsed lacks its unit"; false ;; esac
+  [ "$(f lock_staleness_window)" = "3600s" ]
+  [ "$(f dry_run)" = "1" ]
+}
+
+@test "counts and the human summary agree — neither may drift from the other" {
+  # Two worktrees, one of which the janitor removes; the numbers must be the SAME on both lines.
+  wt wt-c2 feat/c2 >/dev/null
+  run_gc --dry-run
+  [ "$status" -eq 0 ]
+  human="$(printf '%s\n' "$output" | grep -m1 '^worktree-gc: removed ')"
+  counts="$(printf '%s\n' "$output" | grep -m1 '^worktree-gc: counts ')"
+  cf() { printf '%s\n' "$counts" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1; }
+  # pull the six numbers out of the human line positionally — here that is legitimate, because
+  # this test's whole job is to prove the two spellings carry the same values.
+  # shellcheck disable=SC2046
+  set -- $(printf '%s\n' "$human" | tr -cd '0-9 \n')
+  [ "$#" -eq 6 ]                       # if this trips, the human line gained/lost a field
+  [ "$1" = "$(cf removed)" ]
+  [ "$2" = "$(cf disposed)" ]
+  [ "$3" = "$(cf landed_dirt)" ]
+  [ "$4" = "$(cf kept)" ]
+  [ "$5" = "$(cf branches_deleted)" ]
+  [ "$6" = "$(cf refusals)" ]
 }

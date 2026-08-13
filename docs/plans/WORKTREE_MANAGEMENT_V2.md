@@ -537,3 +537,176 @@ git alone cannot do. The DIRT path removes directories and appends **nothing** �
 reads 11 rows after 32 disposals. Lower stakes than the abandoned class (branch preserved *and*
 content on trunk, so recovery is one `git worktree add`), but it is the same asymmetry. Filed
 separately rather than grown into this diff.
+
+---
+
+## §10 — §6's REMAINDERS CLOSED, 2026-08-13 (§§0-9 untouched; backlog `dc426ee8df11`)
+
+🚨 **§6-WORKED above and this section are TWO SESSIONS THAT CONVERGED ON THE SAME REMAINDERS, and
+that is recorded rather than tidied away.** §6-WORKED (commit `7f622a349`) closed R-a and R-c while
+this session was closing the same two independently; its versions of both fixes **won the rebase
+conflict and are the ones in the tree**, because its R-c justification carries a measurement mine
+did not — *22 of 79 tests still passed over a fixture that created nothing at all*. Read §6-WORKED
+first; everything below is what this session adds **on top of** it, plus one correction to its R-b
+note and one to my own.
+
+| Remainder | Verdict |
+|---|---|
+| **R-a** `CC_BATS_ACTIVE` unset | **CLOSED by §6-WORKED.** Nothing added here. |
+| **R-c** vacuous `[ ! -d "$p" ]` REMOVE assertions | **CLOSED by §6-WORKED — and its own control then exposed a SECOND, worse vacuity in `has_wt()`, which §6-WORKED did not reach.** |
+| **R-b** sweep duration vs the 60-min lock window | **MEASURED — 1128 s for 116 worktrees**, with §6-WORKED's caveat applied: this is a **floor**, not the real number. |
+| **R-d** warm-pool semantics in `handoff-fire.sh` | **CLOSED AS A SCOPE CORRECTION — 0 lines of code, and no ping was needed.** Supersedes §6-WORKED's "unchanged and still correctly gated". |
+
+### 10.0 What convergence cost, and the one thing it nearly hid
+
+Two sessions fixing R-c independently is cheap duplication — one rebase conflict, resolved by taking
+the better-evidenced side. But the duplication was **not** wasted, and the reason is the point:
+§6-WORKED fixed `wt()` and stopped there; this session fixed `wt()` **and wrote a positive control
+for it**, and the positive control is what failed and exposed `has_wt()` (§10.3). A fix without a
+control that can fail leaves the next instrument in the same file unexamined. Had only §6-WORKED
+landed, R-c would read CLOSED and 14 assertions would still be measuring nothing.
+
+### 10.1 R-a — the open question was answerable by grep, and the answer is "inert"
+
+*(Superseded by §6-WORKED, whose reasoning is better: the durable argument is not "the subject
+cannot read it today" but "the suite inherits a different environment depending on whether it was
+invoked as `bats` or `cc-bats`, and the two runs must not be able to disagree silently." Retained
+below only for the grep that establishes the inertness, which its account asserts without showing.)*
+
+`CC_BATS_ACTIVE` has exactly **one** consumer on the tree: `bin/cc-bats:394`, its own
+`exec "$REAL_BATS"` re-entrancy guard (set at `:397`). `scripts/worktree-gc.sh` never invokes
+`bats` or `cc-bats` — its only two mentions are prose — so the subject under test cannot read it,
+and the ambient value cannot change this suite's behaviour. No PATH-shim tracing was required.
+
+Unset anyway, beside the `CC_WTGC_DISABLE` pair, for parity with the four siblings that do
+(`qos-chokepoint`, `cc-bats-admission`, `postland-band-floor`, `account-cliff-routing`). The reason
+it is inert is a property of the subject's *current call set* — exactly the kind of premise that
+decays silently — and the cost of not relying on it is one word.
+
+### 10.2 R-b — 1128s against a 3600s window: F-9 is real, not yet reached, and thinner than it looks
+
+R-b said this "is not answerable by reading, and cannot be measured against real worktrees. Needs a
+throwaway repo scaled to ~116 worktrees." Both halves were right. Built one; measured:
+
+| Phase | 116 worktrees | vs the 3,600 s staleness window |
+|---|---|---|
+| `--dry-run` (classify only) | **81 s** | 2.3% |
+| real, mutating (all 116 removed) | **1128 s** (18.8 min) | **31%** |
+
+So a 116-worktree sweep does **not** outrun the mutex today — but the margin is ~3.2×, not the
+comfortable order of magnitude the phrase "safe by luck" implies, and removal (≈9.7 s/worktree)
+dominates classification (≈0.7 s/worktree) by 14×. The box was at load 18-40 during the run.
+
+🚨 **1128 s is a FLOOR, and §6-WORKED is why — its caveat is correct and it defeats the naive
+extrapolation I first wrote here.** A synthetic repo cannot reproduce the term that actually
+dominates a real sweep: on the live box **99 of the worktree directories carry `node_modules`**, and
+two unregistered ones hold *running* `next dev` and esbuild processes. My 116 fixtures were seed-file
+worktrees with nothing to unlink and no live process to contend with, so ≈9.7 s/worktree measures
+`git worktree remove` on an empty tree — not on a 300 MB `node_modules`. I originally wrote
+"linear extrapolation puts the crossing at ≈370 worktrees"; **that number is withdrawn.** It assumes
+a per-worktree cost the real population does not have, and it errs in the *unsafe* direction —
+reporting headroom that a `node_modules`-heavy sweep does not possess. The honest statement is:
+*classification is cheap and bounded (0.7 s/wt); removal is the whole cost and its per-worktree
+figure is content-dependent and unmeasured at real scale.* The scale to build at is also ~165, not
+~116 (§6-WORKED, measured 2026-08-13), and drifting upward.
+
+Which is exactly why the durable answer is §10.4's instrumentation rather than this benchmark: the
+nightly sweep runs over the real population, with the real `node_modules`, every night at 04:15.
+
+**The first measurement was invalid and is recorded because the error is the reusable lesson.** v1
+backdated the worktree *directories* and every worktree came back
+`KEEP — branch tip is 0m old (< 30m idle floor)`: the idle oracle reads the **branch tip's commit
+date**, never a directory mtime (`worktree-gc.sh:890`), so the sweep short-circuited before the
+landedness/dirtiness/ownership chain and never reached the removal path at all. Its 88 s was a lower
+bound on a sweep that classified nothing. v2 backdates the **seed commit** two days, which puts
+every worktree past the idle floor, inside the 72 h abandon horizon, and landed — the REMOVE class.
+A benchmark that never enters the expensive path measures the guard, not the work.
+
+**Two corrections to R-b's own framing.** (1) The "~116 worktrees" figure has drifted: this repo now
+reports 72 registered, and the last nightly row swept `pop_before=212 / pop_after=166` with 62
+owned. (2) A throwaway repo answers the question *once*; the **nightly cron sweeps the real
+population every night at 04:15** and was already the better instrument — it just never recorded a
+duration. It does now (§10.4), so R-b stays answered as the fleet grows instead of ageing into
+another figure someone has to re-derive.
+
+**F-9 itself is NOT closed** — the mutex still reads its own never-refreshed creation mtime, and no
+test covers the lock-*break* path (the only lock test, `:336`, covers contention). Closing it means
+a heartbeat or pid+`kill -0` liveness on a destructive path's serialization; `tests/session-end-gc-lock.bats`
+already has that exact design (dead-holder reclaimed, live holder respected, recycled-pid reclaimed)
+and is the thing to copy. Left as a separate decision, now with a number attached to it.
+
+### 10.3 R-c — the vacuity was real, and the control found a second one underneath it
+
+**The `wt()` half is §6-WORKED's and is the version in the tree** — mine lost the rebase conflict on
+the merits (its 22-of-79 measurement beats my site count). What follows is the part it did not
+reach, found by the control this session wrote for its own fix.
+
+**Then the positive control failed, and that is the actual finding.** `has_wt()` — the suite's other
+removal oracle, 14 sites — **could never return 0**. git records a worktree by its resolved physical
+path (`/private/var/folders/…`) while `$BATS_TEST_TMPDIR` is the symlinked form (`/var/folders/…`),
+so `grep -qF "worktree $p"` never matched a **live** worktree. Every `! has_wt "$p"` was passing
+because the instrument always failed, never because the janitor removed anything. It survived
+because **all 14 sites assert it negatively** — there was no positive assertion anywhere to notice.
+`scripts/worktree-gc.sh` has carried a `canon()` helper folding `/private/tmp` since it was written,
+for precisely this reason; the fixture never inherited it. A second latent defect in the same
+helper: bare `grep -F` matches a longer sibling path (`wt-1` matches the line for `wt-10`), so even
+with the path form fixed it could report a removed worktree as present — `-qxF` closes both.
+
+With the instrument repaired the 14 assertions became **real, and all 14 still pass**: the janitor
+was doing its job the whole time. That is the good outcome and it is worth stating plainly — the
+bug was in what we could see, not in what the code did.
+
+### 10.4 The wrapper's nightly row has been logging three wrong numbers, and the fix is why R-b's field is safe
+
+Adding an `elapsed=` field meant touching `scripts/worktree-gc-infra-run.sh`'s reader, which reduced
+the janitor's **human summary** with `tr -cd '0-9 \n'` and took five fields **positionally**. That
+was correct when written and became wrong the day §9 inserted `$N_DIRT_REMOVED landed-dirt` as the
+third number. Reproduced on the exact live format:
+
+```
+truth        : removed=7 disposed=3 dirt=5 kept=11 branches=2 refusals=9
+what it wrote: removed=7 disposed=3 kept=5  branches=11 refusals=2      ← and refusals=9 dropped
+```
+
+Three mislabelled numbers in every nightly row since, exit 0, unnoticed — and **unnoticeable from
+the suite**, because `tests/worktree-gc-infra.bats` stubs the janitor (its L1) and the stub was
+frozen at the pre-§9 five-number payload. A stub that does not track its subject's contract tests
+the wrapper against a world that no longer exists.
+
+Fixed by removing the prose parse entirely: the janitor now emits a machine line with **named**
+fields — `worktree-gc: counts removed=… disposed=… landed_dirt=… kept=… branches_deleted=…
+refusals=… elapsed=…s lock_staleness_window=3600s dry_run=…` — and the wrapper reads that by name.
+The known-wrong positional path is deliberately **not** kept as a fallback; a missing counts line is
+`verdict=error reason=no-counts-line`, because a wrong number that looks right is worse than a loud
+absent one. `elapsed` is `n-a`, never `0`, when absent: an unmeasured duration is unknown, and
+unknown must not read as instantaneous to whoever later thresholds it.
+
+This is also why `elapsed=` is on its own line rather than appended to the summary — adding it there
+would have inserted a seventh number and shifted the very reader it was meant to feed.
+
+Pinned on both sides so the two suites cannot drift into agreeing about a format neither produces:
+the wrapper suite gets the named-read, the exact-shift RED PROOF, the fail-closed case and the
+`n-a` case; `tests/worktree-gc.bats` gets the **real** janitor emitting the line, plus a
+human-vs-counts agreement test that trips if either spelling gains or loses a field.
+
+### 10.5 R-d — the premise is false three ways; `handoff-fire.sh` is not touched
+
+R-d asked for a coordinator ping before touching `scripts/handoff-fire.sh`. **No ping was needed,
+because nothing there should be touched.** Its factual premise has decayed in three independent ways:
+
+1. **"the pool build logic lives in `scripts/handoff-fire.sh`"** — false. The allocator is
+   `scripts/worktree-pool.sh`, which **does not exist in this repo**; it is reso's
+   (`~/Development/reso-management-app/scripts/worktree-pool.sh`). `handoff-fire.sh` only *calls* it
+   through a repo-relative path (`POOL="$REPO/scripts/worktree-pool.sh"`, `:7326`).
+2. **`wt-pool-3` / `wt-pool-7` are not this repo's worktrees.** Every slot's `--git-common-dir`
+   resolves to `reso-management-app`; this repo's `git worktree list --porcelain` contains **zero**
+   `wt-pool` entries. Since the janitor enumerates *only* from that porcelain list and never a
+   directory glob (§1.4), **the warm pool is structurally invisible to row 11's reaper.** The quoted
+   sizes have drifted too (286-289 MiB idle, 1.3-1.9 GiB claimed, not 3.71/3.88 GiB).
+3. **claude-infrastructure fires never use the pool at all.** `:7330` gates on `[ -x "$POOL" ]`;
+   with `$REPO` = this repo that path does not exist, so `POOL_ELIGIBLE` is permanently 0 and every
+   fire here takes the cold path.
+
+So R-d is **out of row 11's collector scope by construction**, and the correct disposition is this
+paragraph, not a diff. Recorded rather than deleted because the hazard rule at §0 `:33` is what made
+a decayed premise expensive to re-check — and the re-check is the deliverable.
