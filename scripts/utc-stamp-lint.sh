@@ -211,8 +211,22 @@ now(){ date -u +%s; }"
   done
   lint_dir "$d/nope" "" >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a missing scan dir did not exit 2 (LOUD)"; fails=1; }
 
+  # TOP-LEVEL non-verdict propagation (3 cases). The cases above all call lint_dir DIRECTLY, so they
+  # were green throughout the whole life of the bug they are meant to catch: the collapse lived in the
+  # caller (`lint_dir … || rc=1`), which turned lint_dir's 2 into a top-level 1 — a could-not-run
+  # reported as "your tree is bad". A guard has to sit where the defect is, so these three drive the
+  # SCRIPT, not the function (memory: enforcement-must-live-at-the-chokepoint,
+  # per-site-mutation-attributes-coverage).
+  mkdir -p "$d/emptydir"
+  "$0" "$d/emptydir" >/dev/null 2>&1
+  [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a target with no scannable files exited != 2 — could-not-run collapsed into a tree-red"; fails=1; }
+  "$0" "$d/scar" >/dev/null 2>&1
+  [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a REAL finding no longer exits 1 — the non-verdict arm swallowed a red"; fails=1; }
+  "$0" "$d/scar" "$d/emptydir" >/dev/null 2>&1
+  [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: finding + non-verdict did not yield 2 — a partially-judged run must not characterise the tree"; fails=1; }
+
   if [ "$fails" -eq 0 ]; then
-    echo "utc-stamp-lint --selftest: 17/17 — RED on the real b4e3c355 scar line + a naive-datetime Z + a stuck ratchet entry; GREEN on date -u, TZ=UTC, an explicit %z offset, a plain log prefix, a commented scar and an aware datetime; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent; bin+hooks+scripts clean; LOUD on a bad dir."
+    echo "utc-stamp-lint --selftest: 20/20 — RED on the real b4e3c355 scar line + a naive-datetime Z + a stuck ratchet entry; GREEN on date -u, TZ=UTC, an explicit %z offset, a plain log prefix, a commented scar and an aware datetime; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent; bin+hooks+scripts clean; LOUD on a bad dir; and at the TOP LEVEL a could-not-run exits 2, a finding still exits 1, and the two together exit 2."
     exit 0
   fi
   echo "utc-stamp-lint --selftest: FAILED — the lint does not discriminate."
@@ -231,19 +245,48 @@ else
   targets=("$ROOT/bin" "$ROOT/hooks" "$ROOT/scripts")
 fi
 scanned=0
+# A per-target NON-VERDICT is not a tree-red. `lint_dir` answers with THREE codes — 0 = clean,
+# 1 = findings, 2 = COULD NOT RUN (`not a directory` :95, `no scannable files under` :137) — and
+# `|| rc=1` collapsed 1 and 2 into the same "the tree is bad". So an unreadable or empty target
+# convicted a CLEAN tree, and the caller could not tell "I looked and found a violation" from
+# "I could not look". RED-PROVED before the fix: `utc-stamp-lint.sh <dir-with-no-scannable-files>`
+# exited 1, byte-identical to a real finding.
+#
+# This file already gets the same distinction right one branch below — `scanned -eq 0` exits 2 and
+# says "NOT a clean verdict" — so the fix is to extend that existing contract inward, not to invent
+# one. Sibling precedent: scripts/test-hermeticity-lint.sh:885 "keep 0 and 1 as answers, and make
+# >1 set CHECK_FAILED so the run exits 2 (LOUD, unusable)".
+#
+# Fail-closed direction, deliberately: a non-verdict DOMINATES a clean result (never reads as green),
+# and it also dominates a finding — because a run that could not judge every target has not earned
+# the right to characterise the tree at all. The findings are still printed; only the exit code is
+# withheld. (memory: enum-new-member-falls-into-fail-closed-default, threshold-must-separate-fatal-from-survived)
+nonverdict=0
 for target in "${targets[@]}"; do
   [ -d "$target" ] || continue
   scanned=$((scanned + 1))
   if [ -n "${CC_UTC_OWN+set}" ]; then
-    lint_dir "$target" "${CC_UTC_ALLOWLIST-$EMBEDDED_ALLOWLIST}" "$CC_UTC_OWN" || rc=1
+    lint_dir "$target" "${CC_UTC_ALLOWLIST-$EMBEDDED_ALLOWLIST}" "$CC_UTC_OWN"; drc=$?
   else
-    lint_dir "$target" "${CC_UTC_ALLOWLIST-$EMBEDDED_ALLOWLIST}" || rc=1
+    lint_dir "$target" "${CC_UTC_ALLOWLIST-$EMBEDDED_ALLOWLIST}"; drc=$?
   fi
+  case "$drc" in
+    0) ;;
+    1) rc=1 ;;
+    *) nonverdict=1
+       echo "utc-stamp-lint: ⛔ could not judge $target (lint_dir rc=$drc) — NOT a clean verdict, and NOT a finding about your tree" >&2 ;;
+  esac
 done
 # Scanning NOTHING is a non-verdict, not a pass — the fail-closed direction. Without this, a bad ROOT
 # or a mistyped path would print nothing and exit 0, which every caller would read as "clean".
 if [ "$scanned" -eq 0 ]; then
   echo "utc-stamp-lint: ⛔ no scannable target directories (looked at: ${targets[*]}) — NOT a clean verdict" >&2
+  exit 2
+fi
+# The non-verdict outranks both answers — see the loop header. Exit 2 is this file's ESTABLISHED
+# could-not-run code (the branch directly above already uses it), so no caller learns a new number.
+if [ "$nonverdict" -ne 0 ]; then
+  echo "utc-stamp-lint: ⛔ at least one target earned NO VERDICT — exiting 2 (could-not-run), never 1 (tree-is-bad)" >&2
   exit 2
 fi
 exit "$rc"

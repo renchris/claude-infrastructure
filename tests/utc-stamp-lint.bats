@@ -31,10 +31,15 @@ setup() {
 mkdirf() { mkdir -p "$FIX/$1"; }
 write() { printf '%s\n' "$2" > "$FIX/$1/probe.sh"; }
 
-@test "1: the lint's own --selftest passes (17/17, both directions)" {
+@test "1: the lint's own --selftest passes (20/20, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep -q '17/17' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
+  # 17/17 -> 20/20 on 2026-08-13, ratified deliberately as this assertion's own message demands.
+  # The three added cases drive the SCRIPT rather than lint_dir, pinning that a could-not-run exits 2,
+  # a real finding still exits 1, and the two together exit 2. They exist because all 17 earlier cases
+  # called lint_dir directly and so stayed green through the entire life of the caller-side collapse
+  # (`lint_dir … || rc=1`) that reported "I could not look" as "your tree is bad".
+  printf '%s' "$output" | grep -q '20/20' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
 @test "2: RED on a Z-stamp from a bare date (the b4e3c355 scar shape)" {
