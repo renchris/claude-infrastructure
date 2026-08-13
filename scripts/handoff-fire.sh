@@ -9205,12 +9205,30 @@ else
       # debt where the ORIGINATOR's ledger can count it (keyed on the FIRING cwd, not the target
       # worktree). This is the term that makes a dispatched wave a ledger fact instead of an
       # invisible in-flight state (generator G1; the census's wave-abandonment signature).
-      # ENGAGE_VERIFY=0 fires skip it — no confirmed pane reaches this branch there; bounded, stated.
-      # SELF-RETIRE fires only (review #5): a --no-self-retire peer has no stamp ⇒ no marker ⇒ can
-      # never reach the self-close discharge, so its row would be deterministically stale — until
-      # custody v1.1 adds the ping-receipt discharger, that debt is not recorded rather than
-      # recorded unretirably.
-      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ] && [ "${WANT_SELF_RETIRE:-0}" = 1 ]; then
+      #
+      # SELF-RETIRE RESTRICTION LIFTED (custody v1.1, item d29b73103189). This used to add
+      # `[ "$WANT_SELF_RETIRE" = 1 ]`, because a --no-self-retire peer writes no fired-peer stamp ⇒
+      # carries no marker ⇒ can never reach the self-close discharge, and review #5 chose "not
+      # recorded" over "recorded unretirably". hooks/mailbox-drain.sh now discharges on the
+      # HANDOFF-PING itself, keyed on the SLUG — and the slug is armed by exactly the same
+      # condition as the debt: NB_ARMED_TARGET is non-empty iff the back-channel trailer was
+      # written (:7038), and that trailer is what hands the peer `HANDOFF-PING <NB_SLUG>: …`
+      # (:7100). So every row this opens now names a key its own peer was told to send back,
+      # whether or not it self-retires. The remaining test is therefore just "was a return owed",
+      # which is what NB_ARMED_TARGET means.
+      #
+      # ENGAGE_VERIFY=0 fires still skip this, and that is CORRECT rather than a residual gap —
+      # see the disproof recorded in docs/plans/CLOSE_INTEGRITY_2026-08-10.md § custody v1.1.
+      # ENGAGE_VERIFY is 0 iff RECYCLE or DRY (:7028). A dry run fires nothing, and --recycle is
+      # "same pane by definition" (:6386) — net-zero panes, no dispatched peer — so a row opened
+      # there would key the firing session's own cwd against its own pane: self-custody that no
+      # peer exists to discharge, blocking the originator's ✅ until it abandoned a debt it owed
+      # itself. Recording it would manufacture the always-alarm this ledger is built to avoid.
+      # A recycle takes no back-channel by default (notify-back.bats pins the auto-exclusion), and
+      # the one spelling that still arms one — an EXPLICIT --recycle --notify-back <third-party> —
+      # is worse, not better: the ping goes somewhere that is not the originator, so even the new
+      # drain-side discharge could never run in the session holding the row.
+      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ]; then
         _hf_custody open --cwd "$PWD" --target "$SPAWNED_PANE" \
           --marker "${FIRE_MARKER:-}" --slug "${NB_SLUG:-}" \
           --notify-back "$NB_ARMED_TARGET" --originator-pane "${FIRING_SID:-}"

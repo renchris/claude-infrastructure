@@ -173,3 +173,54 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   ! printf '%s\n' "$output" | grep -q 'handoff-prompt-nb' || false # no trailer copy made — original used as-is
   ! printf '%s\n' "$output" | grep -q 'notify-back:' || false # no originator distinct from this pane
 }
+
+# ── W2 CUSTODY — the SELF-RETIRE restriction lifted (custody v1.1, item d29b73103189) ────────────
+# handoff-fire's `cc-custody open` used to also require WANT_SELF_RETIRE=1. The reason (review #5)
+# was sound at the time: a --no-self-retire peer writes no fired-peer stamp ⇒ carries no marker ⇒
+# can never reach the self-close discharge, so its row would be deterministically stale, and "not
+# recorded" beat "recorded unretirably". hooks/mailbox-drain.sh now discharges on the HANDOFF-PING
+# itself, keyed on the SLUG — so what these two cases pin is the JOIN that makes the lift safe:
+# every fire that arms a back-channel hands its peer a ping recipe carrying that same slug,
+# self-retiring or not. Without that, the lift would just re-create the stale rows review #5 refused.
+@test "custody join: a --no-self-retire fire STILL carries a slug-bearing HANDOFF-PING recipe" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-0000000000C1" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire \
+    --notify-back 1234ABCD-5678-90EF-1234-567890ABCDEF --dry-run
+  [ "$status" -eq 0 ]
+  copy="$(copy_of "$output")"
+  [ -n "$copy" ]; [ -f "$copy" ]
+  # the slug is `basename` of the prompt file sans extension — the exact token cc-custody `open`
+  # records as --slug, and the exact token the drain greps out of the received ping.
+  grep -q 'cc-notify 1234ABCD-5678-90EF-1234-567890ABCDEF "HANDOFF-PING prompt:' "$copy"
+  ! grep -q 'SELF-RETIRE' "$copy" || false      # the peer genuinely will not self-close
+}
+
+@test "custody join CONTROL: --no-notify-back arms no ping, and is the case that opens no row" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-0000000000C2" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire --no-notify-back --dry-run
+  [ "$status" -eq 0 ]
+  copy="$(cmd_prompt_of "$output")"
+  [ -n "$copy" ]; [ -f "$copy" ]
+  # NB_ARMED_TARGET is empty here, which is exactly the guard the custody `open` still tests: no
+  # back-channel ⇒ no return was ever owed ⇒ no debt to record. A one-way fire is not a lost wave.
+  ! grep -q 'HANDOFF-PING' "$copy" || false
+}
+
+@test "custody open: the guard tests only 'was a return owed', never self-retire (with RED control)" {
+  # A source pin, deliberately: the call site sits inside the engagement-confirmed branch, which
+  # cannot be reached without a real iTerm2 spawn (tests/handoff-fire-failed-cleanup.bats states the
+  # same constraint and extracts functions for the same reason). The BEHAVIOURAL half of this change
+  # is the join pinned above; this half pins that the guard actually stopped excluding those fires.
+  guard="$(grep -n 'NB_ARMED_TARGET:-' "$HF" | grep 'SPAWNED_PANE' | head -1)"
+  [ -n "$guard" ] || { echo "custody open guard not found in $HF"; false; }
+  ! printf '%s' "$guard" | grep -q 'WANT_SELF_RETIRE' \
+    || { echo "still gated on self-retire: $guard"; false; }
+  # RED control: the same line on origin/main DOES gate on it, so this assertion is falsifiable
+  # rather than merely satisfied by a grep that matches nothing.
+  old="$(git -C "$REPO" show origin/main:scripts/handoff-fire.sh 2>/dev/null \
+         | grep 'NB_ARMED_TARGET:-' | grep 'SPAWNED_PANE' | head -1)"
+  if [ -n "$old" ]; then
+    printf '%s' "$old" | grep -q 'WANT_SELF_RETIRE' \
+      || skip "control is not pre-v1.1"
+  fi
+}

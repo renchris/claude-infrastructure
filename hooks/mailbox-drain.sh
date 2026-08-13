@@ -44,7 +44,11 @@
 # stay in the model's context where they belong.
 #
 # FAIL-SAFE: missing uuid / jq / lib → exit 0 (deliver nothing; the guard backstops). Every path exits 0.
-# Env seams (tests): CC_MAILBOX_DIR · ITERM_SESSION_ID · CC_POSTTOOL_DRAIN_MIN_S · CC_POSTTOOL_DRAIN_MAX_LINES.
+# Env seams (tests): CC_MAILBOX_DIR · ITERM_SESSION_ID · CC_POSTTOOL_DRAIN_MIN_S ·
+# CC_POSTTOOL_DRAIN_MAX_LINES · CC_DRAIN_CUSTODY_RETURN (kill switch for the ping-receipt
+# discharger) · CC_CUSTODY_DIR (not read here — it reaches bin/cc-custody through the environment,
+# and a suite that seeds mail containing HANDOFF-PING should pin it rather than the $HOME it
+# defaults under).
 
 MODE="${1:-}"
 
@@ -318,6 +322,79 @@ if [ "$MAXLINES" -gt 0 ] && command -v mailbox_pending_count >/dev/null 2>&1; th
      (+$_left more pending — capped at $MAXLINES per mid-turn drain; the rest arrives at your next tool boundary. Nothing is lost.)"
 fi
 
+# ── W2 CUSTODY — THE PING-RECEIPT DISCHARGER (custody v1.1, item d29b73103189) ──────────────────
+# THE GAP THIS CLOSES. bin/cc-custody's own header names this hook as a producer of `return` rows,
+# and scripts/handoff-fire.sh:8936 defers a restriction to "custody v1.1 adds the ping-receipt
+# discharger" — but no such code existed, so custody v1 had exactly ONE discharge path: a peer that
+# reaches `handoff-fire.sh self-close`, which returns by MARKER off its own fired-peer stamp. Every
+# peer that finishes its work, pings back, and is then closed by the operator, by a reaper, or by a
+# crash left its originator's row OPEN FOREVER — and an open row is 🔧 in wrap-ledger, so the
+# originator could never reach ✅ again for that cwd. A ledger that only ever accumulates debt is a
+# ledger nobody can act on; it decays into an always-alarm, which is the polarity failure the whole
+# close-integrity design is built to avoid.
+#
+# THE JOIN KEY IS THE SLUG, because it is the only custody field a received ping actually carries:
+# handoff-fire arms the back-channel recipe as `cc-notify <originator> "HANDOFF-PING <slug>: …"`
+# (:7100) and cloud-return.sh mirrors that shape (`HANDOFF-PING cloud/<id>: …`). The marker is
+# never echoed to the peer, so it cannot be read off the wire. cc-custody's open-set derivation
+# accepts either (`return <marker-or-slug>`), so slug-keyed discharge needs no store change.
+#
+# WHY THIS HOOK. The originator is BY CONSTRUCTION the session that receives the ping — the
+# back-channel address is the firing pane — and this hook is the one place that sees the ping
+# text at all. Nothing is owed by the peer beyond the ping it was already told to send, which is
+# what makes this reach the crashed/reaped/operator-closed cases that self-close cannot.
+#
+# SCOPED TO OUR OWN cwd, deliberately, unlike cloud-return.sh's store-wide `return`. That caller
+# holds a MARKER (globally unique) and runs from a cwd that is not the originator's; here the token
+# is a SLUG — `basename` of a prompt file (:7087) — which two originators can collide on. A
+# store-wide discharge on a collided slug would silently drop a DIFFERENT cwd's custody, and the
+# store header is explicit that silently dropping custody is the failure direction to design
+# against. The cost of scoping is the converse: an originator that has since RECYCLED INTO A NEW
+# WORKTREE keys on a new cwd and its old rows stay open — an over-count, which costs a bounded
+# block and is the direction the polarity note already accepts.
+#
+# IDEMPOTENT + BOUNDED + FAIL-OPEN: a `return` against an already-discharged key is an rc-0 no-op
+# (the fold finds no open row), so the dup-biased delivery contract above cannot double-count;
+# slugs are deduped and capped at 8 per drain; the whole block is gated on a `grep -q` that the
+# overwhelming majority of drains fail; a missing binary, an unreadable store or a malformed line
+# all leave the drain exactly as it was. Kill switch: CC_DRAIN_CUSTODY_RETURN=0.
+_cust_n=0 _cust_slugs="" _cust_note=""
+if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && printf '%s\n' "$body" | grep -q 'HANDOFF-PING'; then
+  _cust_bin=""
+  for _c in "$_scd/../bin/cc-custody" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" \
+            "$HOME/.claude/bin/cc-custody"; do
+    [ -x "$_c" ] && { _cust_bin="$_c"; break; }
+  done
+  # The hook payload's cwd is the session's own — the same $PWD handoff-fire keyed `open` on. $PWD
+  # is the fallback, not the primary: a hook's process cwd is the harness's to choose, and keying
+  # custody on it without checking would silently address a different store.
+  _cust_cwd="$(printf '%s' "$_stdin_json" | jq -r '.cwd // empty' 2>/dev/null || true)"
+  { [ -n "$_cust_cwd" ] && [ -d "$_cust_cwd" ]; } || _cust_cwd="$PWD"
+  if [ -n "$_cust_bin" ]; then
+    # The slug charset stops at the first `:` and admits `/` for the cloud namespace. Both
+    # slug-LESS shapes are excluded by construction rather than by a filter: `HANDOFF-PING:` has no
+    # space, and sc_announce_before_retire's `HANDOFF-PING (auto, …)` opens on `(`. Neither carries
+    # a join key, and neither needs one — the self-close path they belong to discharges by marker.
+    while IFS= read -r _slug; do
+      [ -n "$_slug" ] || continue
+      # rc is 0 either way BY CONTRACT (an unmatched return must never fail a peer's close path),
+      # so the discharge/no-discharge verdict is read off stderr — empty means a row was matched.
+      # Any unexpected stderr therefore under-reports the note and never over-reports it.
+      if [ -z "$("$_cust_bin" return "$_slug" --cwd "$_cust_cwd" 2>&1 >/dev/null)" ]; then
+        _cust_n=$(( _cust_n + 1 ))
+        _cust_slugs="${_cust_slugs:+$_cust_slugs, }$_slug"
+      fi
+    done <<CUSTODYSLUGS
+$(printf '%s\n' "$body" \
+  | sed -n 's/.*HANDOFF-PING \([A-Za-z0-9][A-Za-z0-9._\/-]*\):.*/\1/p' \
+  | awk '!s[$0]++' | head -8)
+CUSTODYSLUGS
+  fi
+fi
+[ "$_cust_n" -gt 0 ] && _cust_note="
+     (custody: $_cust_n dispatched session(s) DISCHARGED by this ping — $_cust_slugs. Their work is
+      reported, not yet collected: land/synthesize it. Still out: cc-custody list --open --cwd .)"
+
 # ── BLOCK RENDERING (operator request 2026-07-28) ───────────────────────────────────────────────
 # Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
 # context. Render the bodies as a BLOCK behind a left rule so the channel is unmistakable at a
@@ -325,8 +402,8 @@ fi
 # PRESENTATION ONLY: every body line is reproduced verbatim, and the tokens the suites pin
 # ("as CONTEXT", "no watcher armed") are preserved.
 _block="$(printf '%s\n' "$body" | sed 's/^/  │ /')"
-ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s%s' \
-  "$n" "$plural" "$warn" "$_block" "$rest" "$nudge")"
+ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s%s%s' \
+  "$n" "$plural" "$warn" "$_block" "$rest" "$_cust_note" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
 # additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,
 # so until now every inbox delivery was invisible to the human. Operator-reported: "I can't see
@@ -354,6 +431,12 @@ if [ "$_sig" -gt 0 ]; then
   msg="${msg} — full text: cc-mail"
 else
   msg="📬 peer mail ◀ ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
+fi
+# A custody discharge is a LEDGER state change the operator's close surface reads, so it belongs on
+# the human line as well as the model's — appended to whichever digest was built, because a peer's
+# return ping can arrive alongside either real peer traffic or none.
+if [ "$_cust_n" -gt 0 ]; then
+  msg="${msg} · custody −${_cust_n} (returned: ${_cust_slugs})"
 fi
 jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
   '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}'
