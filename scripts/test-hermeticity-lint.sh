@@ -1565,10 +1565,11 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
 # to the script blob: `CC_HERM_SEAM_ALLOWLIST=…` changes six suites' verdicts without changing one
 # byte of this file, and a key that only fingerprinted the file would serve a stale green to the
 # next caller who set it. Same for the five rule switches and the two table roots.
-herm_memo_arm() {  # $1 = rule 1's allowlist text (the one lint_dir is called with)
+herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered suite population
   HERM_MEMO_OK=0
   [ "${CC_HERM_MEMO:-on}" != "off" ] || return 1
   command -v memo_init >/dev/null 2>&1 || return 1
+  command -v memo_batch_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
   memo_init || return 1                    # dirty tree · no git dir · unwritable store ⇒ memo OFF
   local selfblob readset
   selfblob="$(git hash-object -- "$SELF_ABS" 2>/dev/null)" || return 1
@@ -1593,6 +1594,12 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text (the one lint_dir is called wi
   # file's blob sha, and an exact literal match of the whole entry is already what a hit requires.
   HERM_CHECKER="herm/$(printf '%s' "$readset" | git hash-object --stdin 2>/dev/null)"
   [ "$HERM_CHECKER" != "herm/" ] || return 1
+  # THE BATCH: one `git hash-object` fork for all 468 suites instead of three forks per suite. The
+  # per-file API this replaces cost 16.8 ms per lookup against a 69 ms per-suite check — real, but
+  # it was quietly spending a quarter of what it saved. memo_batch_arm refuses (⇒ memo OFF ⇒
+  # today's behaviour) on an empty population or a short batch; see gate-memo.sh's alignment control.
+  shift
+  memo_batch_arm "$HERM_CHECKER" "$@" || return 1
   HERM_MEMO_OK=1
   return 0
 }
@@ -1610,6 +1617,7 @@ herm_emit_sum() {
 HERM_CHECKER=""
 HERM_MEMO_HITS=0
 HERM_MEMO_RAN=0
+HERM_FILES=()      # the suite population, built once per lint_dir call — see the note at its build
 
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
 lint_dir() {
@@ -1654,16 +1662,32 @@ lint_dir() {
       return 2
     fi
   fi
-  # ARMED HERE, after both tables exist — they are part of the read set (see herm_memo_arm).
-  HERM_MEMO_HITS=0; HERM_MEMO_RAN=0
-  herm_memo_arm "$allow" || true
+  # THE POPULATION, BUILT EXACTLY ONCE. The batch memo is INDEX-KEYED, so the list it arms on and
+  # the list this loop walks must be the same list — not two globs written to look alike. Building
+  # it twice is the only way this API can serve one suite's verdict for another, so it is built
+  # once and both the arm and the loop consume THIS array. (Repo memory: assertion-span-must-equal-
+  # its-subject — the span of the key has to equal the span of the walk.)
+  HERM_FILES=()
   for f in "$dir"/*.bats; do
     [ -e "$f" ] || continue
+    HERM_FILES[${#HERM_FILES[@]}]="$f"
+  done
+  # ARMED HERE, after both tables exist — they are part of the read set (see herm_memo_arm).
+  HERM_MEMO_HITS=0; HERM_MEMO_RAN=0
+  if [ "${#HERM_FILES[@]}" -gt 0 ]; then
+    herm_memo_arm "$allow" "${HERM_FILES[@]}" || true
+  fi
+  for f in ${HERM_FILES[@]+"${HERM_FILES[@]}"}; do
     seen=$((seen + 1)); base="$(basename "$f")"
     # ── THE MEMO HIT: this exact content already emitted nothing under this exact read set. ──
     # `seen` is incremented above regardless, so the census the run reports is the whole corpus and
     # never the miss-list — a count that shrank with the cache would be the memo lying about scope.
-    if [ "$HERM_MEMO_OK" = "1" ] && memo_file_hit "$HERM_CHECKER" "$f"; then
+    # THE INDEX IS `seen - 1`, DERIVED AND NEVER PARALLEL. `seen` is incremented exactly once per
+    # iteration, as the first statement of the body and before any `continue`, so it cannot drift
+    # from the position in HERM_FILES the way a second counter could. One counter, one source of
+    # truth — a separate index variable is the shape that eventually gets incremented in the wrong
+    # branch and quietly serves suite N's verdict for suite N+1.
+    if [ "$HERM_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
       HERM_MEMO_HITS=$((HERM_MEMO_HITS + 1))
       continue
     fi
@@ -1885,7 +1909,7 @@ EOF
     if [ "$HERM_MEMO_OK" = "1" ] \
        && [ "$(herm_emit_sum)" = "$_herm_emit0" ] \
        && [ "$CHECK_FAILED" -eq 0 ]; then
-      memo_file_record "$HERM_CHECKER" "$f"
+      memo_batch_record "$((seen - 1))"
     fi
   done
   if [ "$HERM_MEMO_OK" = "1" ]; then
