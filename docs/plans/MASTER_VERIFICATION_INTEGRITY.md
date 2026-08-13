@@ -222,6 +222,21 @@ scope, and each class fixed in this wave has a chokepoint that would refuse its 
   Rows closed this effort: **2**. Filed: **1** (`782607797fc5`, operator-gated). Condition non-cloud:
   **20 → 19**. Store non-cloud: **470 → 470 (FLAT — sibling intake cancelled the net, as above).**
 
+  **`0f74f41042c5` — REPRODUCED LIVE, accidentally, while landing an unrelated docs commit.** The row
+  says unattended-path-lint's finding set is a function of the caller's live `$PATH`
+  (`installed_somewhere`), so *"author's worktree green, landing box red"* is reachable from a
+  binary-inventory difference alone. **Observed, on a commit touching exactly ONE markdown file:**
+  `ship-land` refused with `✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by
+  bare name that is unreachable on the PATH it will actually run with` → `✗ ship-land: GATE RED — not
+  pushing`. The same lint run standalone in the same worktree, same second, exited **rc=0 with empty
+  output**; an immediate `ship-land` retry with a **byte-identical tree** then landed cleanly
+  (`387bb02c1`). So the gate is **nondeterministic across invocations with no tree change** — a land
+  verdict that flips on ambient state is exactly this effort's condition, and it blocked a real land.
+  **Upgrade the row from "reachable in principle" to "observed 2026-08-13"; it is no longer only a
+  divergence risk, it is an intermittent false RED on the landing path.** Note the diagnosis trap: the
+  RED names *"a file THIS LAND CHANGES"* while the only changed file was `.md`, so the message's own
+  scope claim is untrue in the failing case — check whether the judged population is the diff at all.
+
   **STATE AT THIS ENTRY (box on battery, 33% / ~52 min — everything below is landed, so power loss
   costs context only).** Landed + content-verified this session: `bf3db4326`, `7ac98a6c1`, `9625360f4`.
   Next actions in priority order for whoever resumes: (1) implement the three fully-specified fixes
