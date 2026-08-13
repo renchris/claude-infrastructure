@@ -51,9 +51,24 @@ setup() {
   export CC_IGNITION_WAIT_S=0
 
   # The pre-fix artifact, for the controls.
+  #
+  # PINNED SHA, NOT `origin/main`. 808c09609 is 6dd3ea468^ — the last commit whose ps_rows still read
+  # `pid=,etime=,comm=,args=` and whose TERM 2 basenamed that truncated comm. `origin/main` MOVES:
+  # once 6dd3ea468 landed there this replayed the POST-fix gate, so every `pregate` control below
+  # compared the fix to itself and went GREEN forever while asserting nothing. A red control gets
+  # fixed; a vacuous one gets trusted. (memory: control-must-replay-the-real-artifact)
+  #
+  # AND THE MARKER, because the pin alone is not enough — a sha can be re-pointed, and a failed
+  # `git show` leaves an empty file that `bash` runs as a no-op rather than as the old gate.
+  # `exe_rows` is the function 6dd3ea468 INTRODUCED, so its absence proves the replay is the older
+  # artifact. Measured: 0 occurrences at the pin, 3 at HEAD. The obvious marker — the pre-fix ps
+  # spelling `pid=,etime=,comm=,args=` — does NOT discriminate: the post-fix file still names it in
+  # the comment explaining the fix, so a grep for it is 1 on BOTH sides.
   PRE="$D/pre-gate"
-  git -C "$REPO" show origin/main:bin/cc-ignition-gate > "$PRE" 2>/dev/null || true
-  chmod +x "$PRE" 2>/dev/null || true
+  git -C "$REPO" show 808c09609:bin/cc-ignition-gate > "$PRE" 2>/dev/null
+  [ -s "$PRE" ] || skip "pre-fix commit 808c09609 unavailable (shallow clone?)"
+  ! grep -q 'exe_rows' "$PRE" || false
+  chmod +x "$PRE"
 
   FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installation/bin/node'
 }
