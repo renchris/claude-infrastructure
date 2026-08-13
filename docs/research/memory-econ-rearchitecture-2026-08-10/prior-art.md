@@ -271,8 +271,8 @@ live: `git log --all -- scripts/worktree-pool.sh` empty; 12 referencing files ou
 | `gu13c/qos` | 5 | M1-rev utility band + M7 Bash-boundary batch |
 | `gu13c/render` | 3 | M8 render census + iTerm2 knob parity |
 | `gu13c/wr` | 3 | M13 bounded waiting-recycle reads |
-| **`m3-fleet-footprint`** | **3** | 🚨 **`77d33bdc` sentinel-reads-the-kernel · `ea58210f` worktree-gc rungs · `fa2abe97` spawn-gate account-tree** — **THE MASTER M3 WAVE, STRANDED** |
-| **`crash-rootcause-2026-08-09`** | **1** | 🚨 **`c6ab83a8` arm devserver-gc (`DEVGC_ACT=1`) — OPERATOR-RATIFIED, packet `99637eaee7b9`, STRANDED** |
+| **`m3-fleet-footprint`** | **3** | `77d33bdc` sentinel-reads-the-kernel · `ea58210f` worktree-gc rungs · `fa2abe97` spawn-gate account-tree — ~~🚨 **THE MASTER M3 WAVE, STRANDED**~~ **✅ CONTENT ON TRUNK, content-verified 2026-08-13 (138/138 · 187/189 · 107/109 added lines present; all three test files blob-identical; the residue is trunk's own evolution forward). A rebase-land, exactly the C7 case the ⚠️ below warns about — and the warning applied to this row too. The verdict doc's §11 gated its whole M3 row on this branch; see `../memory-econ-rearchitecture-2026-08-10.md` §11b.** |
+| **`crash-rootcause-2026-08-09`** | **1** | `c6ab83a8` arm devserver-gc (`DEVGC_ACT=1`) — OPERATOR-RATIFIED, packet `99637eaee7b9` — ~~🚨 **STRANDED**~~ **✅ CONTENT ON TRUNK 2026-08-13: `launchd/com.claude.devserver-gc.plist:48` exports `DEVGC_ACT=1` and cites that same packet. The REPO-side arming is landed; what remains is the attended first RUN (`launchctl print` → `runs = 0`), which is operator-only and already filed as such in §11.** |
 | `scale-150` | — | S6 program lead session (read-only reference in `11-prior-art.md:11`) |
 
 ⚠️ The map's row-13 cell claims the gu13c/* content LANDED at trunk tip `a73d7e2f` (content-verified);
