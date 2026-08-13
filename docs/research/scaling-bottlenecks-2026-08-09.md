@@ -130,9 +130,17 @@ already exists, not render work.
 - **oauth herd**: jitter refresh within an account + let heal() run with live sessions (08).
 - **off-box**: the `git switch -c` payload fix + preflight call + 3-retry wrapper; then measure T3
   per-session draw before claiming any number above 10 (06).
-- **Wave D re-termed** (now evidence-backed): admission keys on ACTIVE concurrency (ceiling ~8)
-  with a memory term that can actually bind (compressor/swap-aware — 0 of 127 refusals ever came
-  from memory). The design point's "~10 active" finally gets its enforcement (09, 13, 07).
+- ✅ **DONE 2026-08-13** (`61e39ef3`, backlog `1c45598a91be`) — **Wave D re-termed** (now
+  evidence-backed): admission keys on ACTIVE concurrency (ceiling ~8) with a memory term that can
+  actually bind (compressor/swap-aware — 0 of 127 refusals ever came from memory). The design
+  point's "~10 active" finally gets its enforcement (09, 13, 07). Shipped as `segments` (50%,
+  provisional and re-derivable from its own rows) + `active` (8) + `reserve-active` (1, on proven
+  presence) in `scripts/lib/capacity-admit.sh`, with the mid-turn census in
+  `scripts/lib/spawn-presence.sh`; D7 closed by decision rather than by waiver. Details and the
+  three corrections the build produced: `docs/plans/CONCURRENCY_PROGRAM.md` §S6.6-LANDED. **This
+  closes the F3 half that a SPAWN gate can close and no more** — axis 10's thundering-herd path is
+  a *wake* of existing residents, which no spawn gate sees by construction, so wake-side damping
+  remains open and unowned.
 - Standing policy: **context stewardship IS capacity** — median turn context ~200K, 68% of quota
   cost is cache-read; halving context ≈ +50% sustainable active work (07).
 
