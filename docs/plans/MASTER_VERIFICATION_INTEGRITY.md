@@ -404,3 +404,38 @@ while the pre-existing cases still pass).
   tests within a `BATS_TEST_TMPDIR`, and `sweep_bounded` bounds the CHILD it forks but not a
   grandchild it leaves behind. Bisect by running tests 1..35 and then 30..35 — the pair that
   reproduces names the interaction, and neither member will reproduce alone.
+
+## RESUME-HERE, REFRESHED — 2026-08-13, effort 2 at **10** non-cloud rows (was 20)
+
+**Supersedes the earlier RESUME-HERE table above on the row LIST only** (that table's per-row analysis
+and hazards remain valid and are not repeated). Store this session: **470 → 442**.
+
+**Closed from this condition (10):** `918e9bac60b6` `3309486727cf` `4239f02465cb` `09f087a7f3d8`
+`6557a992d498` `446fe07464e0` `9183cbf21772` `c6c5ef54881e` `0711d9e18934` `f8f1b2c16fa8`
+`79811022b6a4` `f295605eec01` — several on MEASUREMENT rather than repair, which is a legitimate
+close when the row asserted a red that is no longer there (both RED-on-trunk rows had never actually
+been run; a refused `cc-bats` returns `ok=0 notok=0`, a NON-VERDICT that looks identical to unresolved
+forever).
+
+**Code landed this session (8), all content-verified and all verified LIVE by content:**
+`3aecd1472` utc-stamp-lint non-verdict · `3bb7935b7` comm-split ×3 sites · `c78666902`
+test-walltime-lint non-verdict ×2 predicates · `b7f771848` ship-land 8 gate arms + permission-gate
+ratchet 15→9 · `ec3202ec3` + `e779d6335` the @test-name eval chokepoint (new lint, wired at BOTH
+chokepoints) · `38ce5099d` offbox per-suite START marker · `e2d03d069` the banner twinkle value gate.
+
+**THE 10 THAT REMAIN, and what each actually needs:**
+
+| Row | State | Next action |
+|---|---|---|
+| `5456e4cba2b5` | REAL, hazard documented above | **Do this one FIRST** — `5ef0dcb22aec` touches the same predicate and should follow it. |
+| `5ef0dcb22aec` | REAL (blocked) | Add `CC_ADMIT_GATE` as a second seam to rule 1; mechanical once the scoping question above is settled. |
+| `86488ad1c966` | REAL, NOT PINNED | Needs a constructed fixture in `mktemp -d`; static grep did not locate the alternation arm. |
+| `0f74f41042c5` | REAL, **OBSERVED** | Reproduced live: an intermittent false RED on the landing path, not merely a divergence risk. |
+| `5d6dcbe8d462` | REAL, **remedy CORRECTED above** | Do NOT start from the row — its `--check-anchors` port does not apply (procedural vs declarative cases). Corrected spec is in this file. |
+| `b449e49f1438` | NOT TRIAGED | The row asks for its own serialized land; it would red 3 currently-green suites. |
+| `cf440684e0e1` | NOT TRIAGED, large | Perf; the row's own analysis says arm-level keying is NOT the answer. |
+| `8efd655b0fe1` | INSTRUMENTED, not solved | The START marker is landed (`38ce5099d`), so the NEXT cancellation names its culprit. Nothing more to do until one happens. Do not exclude the reaper suites on inference — the row forbids it and the streak is now broken (run 31586181611: `unreported 0`, 10/10 shards). |
+| `05ff1e5fabc0` | FILED (mine) | 3 CI-only reds. Locale and OS-platform hypotheses already REFUTED — do not re-run them. `autonomy-sweep` is additionally narrowed above (order-dependent hang). |
+| `782607797fc5` | **BLOCKED — operator** | Privileged signal trace. macOS exposes no unprivileged way to learn a signal's sender. Still live: the live layer converged by DEGRADED ADVANCE, not because postland recovered. |
+
+**Two of the ten are mine-and-filed and two are genuinely blocked, so the workable remainder is six.**
