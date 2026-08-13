@@ -154,3 +154,58 @@ setup() {
   echo "$output" | grep -q "300s"
   echo "$output" | grep -q "supervisor would MISS this evidence"
 }
+
+# ── §3: the delete's TARGET, not merely that a delete exists (item 412de404ecac) ────────────────
+# §3's conjunction was over the FILE. A script that READS the registry and separately removes its
+# own mktemp scratch was convicted, which is what held the gate permanently red on pristine trunk.
+# The four cases below are one exoneration and THREE fail-closed controls, because the danger of
+# any exoneration rule is that it exonerates too much: each control is a different way a delete can
+# fail to be attributable, and every one of them must still convict.
+
+@test "§3: a file that reads the registry and deletes only its OWN mktemp is NOT a reaper" {
+  # The live shape this fixes, copied from hooks/lib/peer-owned.sh: read cc-registry, mktemp a
+  # porcelain scratch, remove the scratch. Nothing here is evidence and nothing here is reaped.
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'porcf="$(mktemp "${TMPDIR:-/tmp}/po-porc.XXXXXX")" || return 2' \
+    'rm -f "$porcf" 2>/dev/null' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "clean"
+}
+
+@test "§3 control: the SAME file reaping a registry path is still convicted" {
+  # Failure-distinct against the case above: identical evidence-touch, identical mktemp, one extra
+  # delete of something it did not create. If the exoneration were per-FILE rather than per-SITE,
+  # this would pass and §3 would be blind to every reaper that also happens to use a scratch file.
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'porcf="$(mktemp "${TMPDIR:-/tmp}/po-porc.XXXXXX")" || return 2' \
+    'rm -f "$porcf" 2>/dev/null' \
+    'find "$reg_dir" -mmin +5 -delete' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "peer-thing.sh"
+}
+
+@test "§3 control: a delete naming NO variable is unattributable and still convicts" {
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'rm -f /var/tmp/cc-registry-cache' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "UNDECLARED reaper"
+}
+
+@test "§3 control: a variable assigned from something OTHER than mktemp still convicts" {
+  # The arm that makes this fail-closed rather than fail-open: the rule is not "the target is a
+  # variable", it is "the target is a variable THIS FILE created with mktemp". A registry path held
+  # in a variable is the commonest real reaper spelling there is.
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'victim="$reg_dir/$sid.json"' \
+    'rm -f "$victim"' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "UNDECLARED reaper"
+}
