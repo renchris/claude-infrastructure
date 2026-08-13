@@ -99,7 +99,7 @@ STUB
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 74 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 76 checks (a zero-check suite must not 'pass')" {
   # 29 → 63 → 74: the S3/S4 verdict + bounded-oracle cases, then W2-B's urgency pairs. Bound-dependent
   # checks print `skip` and are counted separately, so a box without timeout(1) reports fewer `ok`
   # lines rather than silently passing a hollow suite — hence a FLOOR, not an `-eq`: an exact count

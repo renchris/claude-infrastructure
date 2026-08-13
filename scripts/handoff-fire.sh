@@ -4889,7 +4889,13 @@ pre_fire_account_sweep() {
   # already re-invokes jq per broken account below. SKEW on line 1 when any row lacks the field.
   broken="$(printf '%s' "$json" | jq -r '
     if ([.rows[] | has("auth_actionable")] | all) then
-      .rows[] | select(.auth_actionable == true) | [.acct, .auth, (.k // 0)] | @tsv
+      # `.k` is null when the producer could not read `ps` (claude-accounts concurrency returns
+      # None rather than a fabricated all-zero count). `(.k // 0)` would render that null as 0 —
+      # and 0 is precisely what unlocks the Phase-1 relogin gate below, so an unread `ps` would
+      # authorise a headless token redeem underneath N live sessions. Emit the word instead: it
+      # is not "0", so the gate refuses and the account takes the operator bridge line.
+      .rows[] | select(.auth_actionable == true)
+      | [.acct, .auth, (if (.k | type) == "number" then .k else "unmeasured" end)] | @tsv
     else "SKEW" end' 2>/dev/null || true)"
   if [ "$broken" = SKEW ]; then
     echo "⚠ pre-fire account sweep: claude-accounts emits no .auth_actionable (version skew) — auth gate SKIPPED (fire proceeds)" >&2
@@ -4923,6 +4929,10 @@ pre_fire_account_sweep() {
     # that stamp the grant returns invalid_grant by construction, so Phase 1 would spend 90s
     # proving what the keychain already stated. Straight to the bridge line instead.
     rtexp="$(printf '%s' "$info" | jq -r '.refresh_token_expired // false' 2>/dev/null || echo false)"
+    # `$k` is "unmeasured" when the producer could not read `ps`. It is compared for EQUALITY to 0,
+    # so UNKNOWN refuses by construction — the same direction heal() takes under the same input.
+    # Defaulting it (`${k:-0}`) survives only for an ABSENT field (version skew), never for a
+    # measurement failure, which now has its own spelling.
     if [ "$hrt" = true ] && [ "$rtexp" != true ] && [ "$kstate" = present ] && [ "${k:-0}" = 0 ] && [ -n "$cfgdir$svc$cbin" ]; then
       rc=0; detail="$(phase1_relogin "$acct" "$cfgdir" "$svc" "$kca" "$cbin" "$scopes")" || rc=$?
       if [ "$rc" = 0 ]; then
@@ -4940,6 +4950,9 @@ pre_fire_account_sweep() {
     else
       why="no refresh token — headless relogin N/A"
       [ "${k:-0}" != 0 ] && why="$k live session(s) — token owned by a running CC (never relogin under it)"
+      # UNKNOWN is not "a running CC" — say which one it is, or the bridge line reports a live
+      # session nobody observed and the operator debugs the wrong thing.
+      [ "$k" = unmeasured ] && why="live-session count UNMEASURABLE (ps failed) — refusing to relogin on a gate that cannot be proven"
       stranded=$((stranded+1)); summary="$summary ⚠$acct($auth)"
       stranded_lines="$stranded_lines
 - $acct — $auth · $why · last-known $lastknown · fix: \`$CC_ACCOUNTS_BIN --relogin-info $acct\` → account-relogin skill (Phase 2, browser)"

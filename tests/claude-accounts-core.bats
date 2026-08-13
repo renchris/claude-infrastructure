@@ -95,7 +95,12 @@ assert ca._excluded(row(), R) is None
 assert ca._excluded(row(session_pct=86, session_reset_h=2.0), R) == "5h-cutoff"
 # grace: over the cutoff but the window rolls within EPS_H ⇒ still routable
 assert ca._excluded(row(session_pct=86, session_reset_h=0.1), R) is None
-assert ca._excluded(row(k=R["KMAX"]), R) == "kmax-concurrency"
+# The cap is per-INSTRUMENT (k_cap): `row()` sets `k` and no `k_work`, i.e. the PANE census,
+# whose cap is KMAX_RESIDENT. KMAX is the ACTIVE cap and binds the k_work-charged row below.
+assert ca._excluded(row(k=ca.k_cap(row(), R)), R) == "kmax-concurrency"
+assert ca._excluded(row(k=0, k_work=R["KMAX"]), R) == "kmax-concurrency"
+# NEITHER instrument measured (ps failed AND no k_work): refused, but as DATA not policy.
+assert ca._excluded(row(k=None), R) == "concurrency-unmeasured"
 assert ca._excluded(row(session_pct=None), R) == "no-session-data"
 assert ca._excluded(dict(acct="a", error="logged-out"), R) == "logged-out"
 print("OK")'
@@ -1581,12 +1586,20 @@ for v in ("CC_ROUTE_URGENCY_EXP", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE
 assert ca._excluded(row(k=28, k_work=2), R) is None
 # 8 WORKING sessions are the pile-up KMAX exists for
 assert ca._excluded(row(k=2, k_work=R["KMAX"]), R) == "kmax-concurrency"
-# an old cache row (no k_work) degrades to the STRICTER census, never to zero
-assert ca._excluded(row(k=R["KMAX"], k_work=None), R) == "kmax-concurrency"
+# An old cache row (no k_work) degrades to the census — the stricter COUNT, never to zero...
 assert ca.k_eff(row(k=5, k_work=None)) == 5
-# kill switch restores census charging even when k_work is present
+# ...but the census is measured against KMAX_RESIDENT, not KMAX (§5 P2 / 07 §6.2). Charging a
+# RESIDENT count against the ACTIVE integer is what capped the fleet at 4 x 8 = 32 sessions and
+# refused the 33rd with rc 2, i.e. a dispatch HALT — reachable at any moment, since this is the
+# branch every over-budget transcript walk takes.
+assert ca._excluded(row(k=R["KMAX"], k_work=None), R) is None, "the 33rd-session wall is back"
+assert ca._excluded(row(k=R.get("KMAX_RESIDENT", ca.KMAX_RESIDENT_DEFAULT), k_work=None), R) \
+       == "kmax-concurrency"
+# kill switch restores census charging even when k_work is present — and the census cap with it
 os.environ["CC_ROUTE_KWORK"] = "off"
-assert ca._excluded(row(k=R["KMAX"], k_work=0), R) == "kmax-concurrency"
+assert ca.k_src(row(k=2, k_work=0)) == "panes"
+assert ca._excluded(row(k=R["KMAX"], k_work=0), R) is None
+assert ca._excluded(row(k=ca.KMAX_RESIDENT_DEFAULT, k_work=0), R) == "kmax-concurrency"
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

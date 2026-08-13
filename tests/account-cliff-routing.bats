@@ -175,7 +175,12 @@ print("OK")'
 assert ca._excluded(dict(acct="a", error="logged-out", login_expires_h=1.0), R) == "logged-out"
 assert ca._excluded(row(session_pct=None, login_expires_h=1.0), R) == "no-session-data"
 assert ca._excluded(row(session_pct=86, session_reset_h=2.0, login_expires_h=1.0), R) == "5h-cutoff"
-assert ca._excluded(row(k=R["KMAX"], login_expires_h=1.0), R) == "kmax-concurrency"
+# The cap is derived from the INSTRUMENT that charged the row (k_cap, §5 P2), so the cause this
+# case needs is spelled per-instrument. `row()` sets `k` and no `k_work`, i.e. the PANE census —
+# whose cap is KMAX_RESIDENT. Asserting KMAX here would be asserting the conflation that item
+# removed: 4 accounts x KMAX 8 refused the 33rd RESIDENT session fleet-wide.
+assert ca._excluded(row(k=ca.k_cap(row(), R), login_expires_h=1.0), R) == "kmax-concurrency"
+assert ca._excluded(row(k=0, k_work=R["KMAX"], login_expires_h=1.0), R) == "kmax-concurrency"
 # ...and with none of those causes present, the cliff is what speaks.
 assert ca._excluded(row(login_expires_h=1.0), R) == "login-cliff-drain"
 print("OK")'

@@ -296,6 +296,7 @@ ROUTER_OPTIONAL_RANGES = {
     "DESK_W_FLOOR": (0.0, 1.0),         # weekly headroom must be AT/ABOVE this to be safe
     "DESK_HYST_MARGIN": (0.0, 1.0),     # fraction a rival must beat the incumbent by
     "DESK_HYST_TTL_MIN": (0.0, 10080.0),  # how long a launcher assignment names the incumbent
+    "KMAX_RESIDENT": (1.0, 10000.0),    # resident-session cap (see k_cap); KMAX is the ACTIVE one
 }
 
 
@@ -322,6 +323,14 @@ def _validate_router(cfg):
         problems.append(f"KMAX must be >= 1 (got {R['KMAX']})")
     if R["EPS_H"] <= 0:
         problems.append(f"EPS_H must be > 0 (got {R['EPS_H']})")
+    # A resident cap BELOW the active cap is incoherent — every active session is also resident,
+    # so it would make the census fallback stricter than the instrument it degrades FROM, which is
+    # the exact inversion k_cap exists to remove. Checked here rather than trusted at the call
+    # site, because the two constants are hand-tuned in a JSON file by an operator.
+    if "KMAX_RESIDENT" in R and isinstance(R["KMAX_RESIDENT"], (int, float)) \
+            and not isinstance(R["KMAX_RESIDENT"], bool) and R["KMAX_RESIDENT"] < R["KMAX"]:
+        problems.append(f"KMAX_RESIDENT ({R['KMAX_RESIDENT']}) must be >= KMAX ({R['KMAX']}): "
+                        "every active session is also resident")
     for key, (lo, hi) in ROUTER_OPTIONAL_RANGES.items():
         if key not in R:
             continue                    # optional by contract — the code default stands
@@ -414,11 +423,35 @@ ENV_TOK = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 
 def concurrency(cfg):
-    """Live interactive-session count per account. Counts processes whose argv[0] is the claude
-    binary (excludes expect wrappers and node/MCP children that inherit the env), attributed via
-    the CLAUDE_CONFIG_DIR env var that every launcher sets (ps -E appends env). A session with NO
-    CLAUDE_CONFIG_DIR — or ~/.claude, which is the stable `claude-prev` track's dir — counts
-    toward 'next': .claude mirrors .claude-next. Headless one-shots (-p/--print) are skipped."""
+    """Live interactive-session count per account, or None when it CANNOT BE MEASURED.
+
+    Counts processes whose argv[0] is the claude binary (excludes expect wrappers and node/MCP
+    children that inherit the env), attributed via the CLAUDE_CONFIG_DIR env var that every
+    launcher sets (ps -E appends env). A session with NO CLAUDE_CONFIG_DIR — or ~/.claude, which
+    is the stable `claude-prev` track's dir — counts toward 'next': .claude mirrors .claude-next.
+    Headless one-shots (-p/--print) are skipped.
+
+    THE None CONTRACT (was: an all-zero dict — scaling-bottlenecks-2026-08-09/07 §6.5).
+    A `ps` that times out or fails used to return every account at 0, and no caller could tell
+    that from a genuinely idle fleet. That fails OPEN in TWO directions at once:
+
+      · KMAX stops binding — `_excluded`'s cap is compared against a fabricated 0, so the router
+        admits an unbounded pile-on at exactly the moment the box is too loaded to run `ps`.
+      · heal()'s rotation-safety gate (`k_live > 0`) reads 0 and redeems a refresh token
+        underneath N live sessions. The loser of that rotation race holds a token the server has
+        retired — a 400 invalid_grant with the calendar cliff still weeks away, i.e. a LOGOUT
+        manufactured by an unmeasured `ps`.
+
+    tests/account-fact-derivation.bats used to PIN the all-zero return as a deliberate divergence
+    from cc-relogin's `live_sessions() -> -1`, on the rationale that "concurrency() feeds an ALARM
+    (keep rendering); live_sessions() feeds a GATE (refuse)". The premise was false when written:
+    this function has fed BOTH — the display AND the two gates above — since heal()'s under-lock
+    re-check (`:658`) was added. So the two implementations now agree on the UNKNOWN direction and
+    the display path is the one that degrades, explicitly, at the renderer.
+
+    Not currently at risk of firing (measured 67-95 ms / 118,665 B at 10 sessions, ~865 KB
+    projected at 150, against a 10 s timeout — ~10x headroom, 07 §6.5), which is why this is a
+    contract fix and not a redesign of the instrument."""
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     # rstrip("/") on the KEYS as well as on the observed dir. The observed side has always been
     # rstripped (below), the key side was not, so a config_dir written with a trailing slash in
@@ -436,8 +469,14 @@ def concurrency(cfg):
     try:
         out = subprocess.run(["ps", "-wwEo", "command="], capture_output=True, text=True,
                              timeout=10).stdout
-    except (subprocess.TimeoutExpired, OSError):
-        return counts
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # Logged, never silent — same contract as _kwork_unmeasured below. An instrument that
+        # changed mid-decision has to be answerable from disk afterwards.
+        log_event(f"concurrency: ps UNAVAILABLE ({type(e).__name__}: {e}) — live-session count "
+                  "UNMEASURED. The router charges 'unknown' (concurrency-unmeasured, a DATA "
+                  "exclusion -> exit 3) and heal() REFUSES to redeem any refresh token this "
+                  "sweep. Previously this returned all-zero, which disarmed both gates at once.")
+        return None
     for line in out.splitlines():
         toks = line.split()
         if not toks:
@@ -636,6 +675,10 @@ def heal(cfg, acct, refresh_token, k_live):
     the refresh grant AND persists the (possibly rotated) tokens to the same keychain item.
     Gated: only when the account has ZERO live sessions (no rotation race with a running CC) and
     under a per-account lock. Returns (ok, detail)."""
+    # `k_live is None` = the sweep's ps snapshot failed. Refuse BEFORE taking the lock, for the
+    # same reason the under-lock re-check refuses: this gate is proven or it is not held.
+    if k_live is None:
+        return False, "skipped: live-session count UNMEASURABLE (ps failed) — CC may own the token"
     if k_live > 0:
         return False, f"skipped: {k_live} live session(s) — CC owns the token lifecycle"
     if not refresh_token:
@@ -655,7 +698,15 @@ def heal(cfg, acct, refresh_token, k_live):
         # gate is the rotation-safety invariant — a refresh racing a running CC can rotate
         # the token out from under it, and a discarded rotation means logged out — so it
         # must be evaluated against current state, not a stale reading.
-        if concurrency(cfg).get(acct["name"], 0) > 0:
+        # UNKNOWN refuses. concurrency() returns None when `ps` could not be read, and this gate
+        # is an invariant that must be PROVEN, not assumed: "I could not look" is not "there is
+        # nobody there". The old all-zero return made an unreadable `ps` indistinguishable from a
+        # quiet fleet and let the redeem proceed into a live rotation race (07 §6.5).
+        live_now = concurrency(cfg)
+        if live_now is None:
+            return False, "skipped: live-session count UNMEASURABLE (ps failed) — refusing to " \
+                          "redeem a refresh token that may be rotating under live sessions"
+        if live_now.get(acct["name"], 0) > 0:
             return False, "skipped: a session started during the sweep — CC owns the token"
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = acct["config_dir"]
@@ -1122,7 +1173,11 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
 
 def collect(cfg, no_heal=False, prev=None):
     kc = cfg["keychain_account"]
+    # None (ps unreadable) rides through as None per row — NOT as 0. `.get(name, 0)` on an empty
+    # dict would re-fabricate the very zero the None contract exists to abolish, so the unmeasured
+    # case is spelled out rather than defaulted.
     counts = concurrency(cfg)
+    k_of_name = (lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
     # M7: the working census rides the sweep beside the pane census (same recorder-economics as
     # record_utilization — the sweep is already paid for). None = walk over budget → k_eff falls
     # back to the pane census for every row of this sweep.
@@ -1133,14 +1188,14 @@ def collect(cfg, no_heal=False, prev=None):
     for acct in cfg["accounts"]:
         name = acct["name"]
         try:
-            row, entry = probe_account(cfg, acct, kc, counts.get(name, 0), ledger, prev,
+            row, entry = probe_account(cfg, acct, kc, k_of_name(name), ledger, prev,
                                        no_heal)
         except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
             # Containment, not concealment — the traceback goes to the log so a real
             # regression is still discoverable rather than silently degrading forever.
             log_event(f"probe {name}: UNEXPECTED {type(e).__name__}: {e}\n{traceback.format_exc()}")
             row = {"acct": name, "email": acct.get("email"), "dia_profile": acct.get("dia_profile"),
-                   "launcher": acct.get("launcher"), "k": counts.get(name, 0),
+                   "launcher": acct.get("launcher"), "k": k_of_name(name),
                    "auth": "probe-error",
                    "error": f"probe failed: {type(e).__name__} (see claude-accounts.log)"}
             inherit_lastgood(row, ledger, prev)
@@ -1196,7 +1251,10 @@ def _soft(r, R):
     su = _su_projected(r, R)
     wu = (r.get("weekly_pct") or 0) / 100.0
     SF = clamp((R["S_CUT"] - su) / (R["S_CUT"] - R["S_SOFT"]), R["SF_FLOOR"], 1.0)
-    KF = clamp(1 - k_eff(r) / R["KMAX"], R["KFLOOR"], 1.0)
+    # Same denominator as the cap that actually applies (k_cap): a census-charged row measured
+    # against the ACTIVE integer would pin KF to KFLOOR at 8 residents while its real cap is 40,
+    # i.e. the soft gradient would collapse well before the hard gate it is supposed to precede.
+    KF = clamp(1 - k_eff(r) / k_cap(r, R), R["KFLOOR"], 1.0)
     CF = (1.0 if wu < 0.90 else 0.5) if r.get("credits_on") else 1.0
     return SF * KF * CF
 
@@ -1371,6 +1429,55 @@ def k_eff(r):
     kw = r.get("k_work")
     base = kw if (kw is not None and _term_on("CC_ROUTE_KWORK")) else r.get("k", 0)
     return (base or 0) + (r.get("k_phantom") or 0)
+
+
+KMAX_RESIDENT_DEFAULT = 40    # ceil(150/4) + headroom — see k_cap's docstring
+
+
+def k_src(r):
+    """WHICH instrument produced this row's concurrency charge: 'work' | 'panes' | 'unmeasured'.
+
+    One derivation, because the cap, the KF gradient, the exclusion reason and route-meta's
+    `k_src=` field all have to agree about it. They previously each re-spelled the same ternary."""
+    if r.get("k_work") is not None and _term_on("CC_ROUTE_KWORK"):
+        return "work"
+    return "panes" if r.get("k") is not None else "unmeasured"
+
+
+def k_cap(r, R):
+    """The concurrency cap that applies to THIS row's charge — derived from the INSTRUMENT that
+    produced it, never one integer serving both.
+
+    THE DEFECT (scaling-bottlenecks-2026-08-09 §5 P2 / 07 §6.1-6.2): `KMAX` is sized in
+    accounts.json's own note against the PANE census — "observed 5-6 live sessions on primary
+    accounts as deliberate operator practice" — i.e. it is a RESIDENT cap. M7 then re-keyed the
+    charge onto `k_work`, an ACTIVE census, and left the integer alone. So one number now answers
+    two different questions, and it is wrong for whichever one it is not answering:
+
+      · against k_work (ACTIVE): 8 is right — the measured infra-limiter band is 5-6 (GH#62426),
+        and residency itself costs ~0 quota (07 §4).
+      · against the pane census (RESIDENT): 8 x 4 accounts = 32, and the 33rd session fleet-wide
+        is refused `kmax-concurrency` -> rc 2 -> handoff-fire HALTS. The 150-resident design point
+        breaks 4.7x early, on one integer in one JSON file, on the path CLAUDE.md makes the
+        DEFAULT execution locus.
+
+    And the census is not the exotic path: `k_eff` falls back to it whenever the transcript walk
+    goes over budget — which `_kwork_unmeasured` itself notes means "the box is pathologically
+    loaded, i.e. exactly when the concurrency count matters most" — and whenever CC_ROUTE_KWORK is
+    off. So the resident wall is reachable at any moment, from a term nothing surfaces.
+
+    The split is 07 §6.2's table, unchanged: KMAX stays the ACTIVE gate at its current value (so
+    every other consumer of `.router.KMAX` — cc-wave-plan's urgency bound reads the same integer
+    and keeps the same meaning), and KMAX_RESIDENT is the resident gate at ceil(150/4)+headroom.
+    OPTIONAL by contract with a matching code default, like every M7/W1 addition, because
+    ~/.claude/accounts.json is a symlink into a checkout that is older than the code for as long
+    as a land takes to converge — a required-key addition fails CLOSED fleet-wide in that window.
+
+    'unmeasured' has no cap because it has no charge; `_excluded` refuses it before reaching here.
+    The value returned for it is the resident cap purely so KF cannot divide by a None."""
+    if k_src(r) == "work":
+        return R["KMAX"]
+    return R.get("KMAX_RESIDENT", KMAX_RESIDENT_DEFAULT)
 
 
 def k_eff_desk(r):
@@ -1702,7 +1809,13 @@ def _excluded(r, R, cliff=True, k_of=None):
     sr = r.get("session_reset_h")
     if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
         return "5h-cutoff"
-    if (k_of or k_eff)(r) >= R["KMAX"]:
+    # NEITHER instrument could measure this row's concurrency (ps failed AND the transcript walk
+    # was unusable). Refuse — but as DATA, not policy, so it exits 3 and callers may degrade to a
+    # proxy rather than reading a measurement failure as "the fleet is at capacity". The old
+    # all-zero `ps` return made this case admit instead, which is the fail-open direction.
+    if k_src(r) == "unmeasured":
+        return "concurrency-unmeasured"
+    if (k_of or k_eff)(r) >= k_cap(r, R):
         return "kmax-concurrency"
     # LAST of the exclusions, deliberately: a row with no live quota must still report its DATA
     # reason (that is what drives exit 3 rather than 2), and a genuinely capped account must still
@@ -1991,7 +2104,12 @@ def ranked(rows, cfg, win, kind):
 # Deliberately EXCLUDES "no-fable-limit": a missing scoped limit is an entitlement fact, not
 # a gap in our knowledge. Classifying it as data-unavailable would make cc-route hard-refuse
 # (RT-d) instead of taking its designed Opus down-tier when no account carries Fable.
-DATA_UNAVAILABLE = {"no-session-data", "no-weekly-data", "window-unknown"}
+# "concurrency-unmeasured" belongs here for the same reason: it says the INSTRUMENT failed, not
+# that policy refused. Classifying it as policy would turn an unreadable `ps` into rc 2, which
+# handoff-fire.sh:5266-5269 turns into a hard HALT — a measurement failure would then read exactly
+# like a fleet at capacity. As data it exits 3 and callers keep their designed degrade path.
+DATA_UNAVAILABLE = {"no-session-data", "no-weekly-data", "window-unknown",
+                    "concurrency-unmeasured"}
 
 
 def reason_class(row, why):
@@ -2827,7 +2945,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                 f"{pctc(r, 'fable_pct'):>{_NW_PCT}}  {wk_n:<{_NW_WKR}} {login_n}".rstrip())
         else:
             out.append("| " + " | ".join([
-                name, str(r.get("k", 0)), pctc(r, "session_pct"),
+                name, ("?" if r.get("k") is None else str(r["k"])), pctc(r, "session_pct"),
                 _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
                 pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
                 _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
@@ -3037,7 +3155,11 @@ def render_table(rows, cfg, win, cached, prev=None):
         pad = " " * max(0, 8 - len(label) - len(mark))
         name = (c(label, bold=True) if a in ("ok", "healed") else label) \
             + c(mark, CLAY, bold=True) + pad
-        k = c(f"{r.get('k', 0):>4}", GRAY, dim=(r.get("k", 0) == 0))
+        # `k` is None when `ps` could not be read (concurrency()'s None contract). The DISPLAY is
+        # the one consumer that may degrade — it renders "?" rather than a fabricated 0, so the
+        # board never shows an idle fleet it did not observe. It is NOT dimmed: unknown is news.
+        kv = r.get("k")
+        k = c(f"{'?' if kv is None else kv:>4}", GRAY, dim=(kv == 0))
         if "error" in r and not r.get("poll_throttled"):
             # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
             # error text prominent, plus the STRANDED last-known weekly when the ledger has it
@@ -3936,7 +4058,11 @@ def main():
                               # and kmax-concurrency, with nothing on disk saying the instrument
                               # had changed. `kwork_to` counts over-budget walks in THIS process
                               # (0 on a cache read, which is why k_src is reported too).
-                              f"k_src={'off' if not _term_on('CC_ROUTE_KWORK') else ('work' if w.get('k_work') is not None else 'panes')}",
+                              # k_src() is the ONE derivation (it also picks the cap and the KF
+                              # denominator); 'off' is reported separately because the kill switch
+                              # is a different fact from the walk having failed.
+                              f"k_src={'off' if not _term_on('CC_ROUTE_KWORK') else k_src(w)}",
+                              f"k_cap={k_cap(w, cfg['router'])}",
                               f"k_work={w.get('k_work') if w.get('k_work') is not None else '-'}",
                               f"k={w.get('k') if w.get('k') is not None else '-'}",
                               f"k_eff={k_eff(w)}",

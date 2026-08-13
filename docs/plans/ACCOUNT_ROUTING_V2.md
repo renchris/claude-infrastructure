@@ -1023,3 +1023,82 @@ to exhaust the others. Whether urgency should also bias placement ORDER (a load 
 a higher ceiling) is a separate change with its own kill switch. R14-2 exactly one account per plan
 may hold the allowance; a fleet with two accounts expiring inside the same day is not expressible
 today, and deliberately so — a second urgent account is a second widening and wants its own evidence.
+
+## §15 — KMAX split from the resident wall, and `concurrency()`'s None contract (2026-08-13)
+
+`docs/research/scaling-bottlenecks-2026-08-09.md` §5 P2 / `07-accounts-api.md` §6.1-6.2, §6.5.
+Two defects, one subsystem, one commit — both are "a number that says more than it measured".
+
+### The conflation M7 created and did not close
+
+M7 re-keyed the concurrency CHARGE onto `k_work` (an ACTIVE census) and left `KMAX` alone. But
+`KMAX`'s value is sized in `accounts.json`'s own note against the PANE census — *"observed 5-6 live
+sessions on primary accounts as deliberate operator practice"*. So one integer answered two
+questions and was wrong for whichever it was not answering:
+
+| charge | cap it was measured against | verdict |
+|---|---|---|
+| `k_work` (ACTIVE) | 8 | right — the measured infra-limiter band is 5-6 (GH#62426), and residency costs ~0 quota |
+| pane census (RESIDENT) | 8 | **4 accounts × 8 = 32 resident sessions FLEET-WIDE**, then `kmax-concurrency` → rc 2 → `handoff-fire.sh` HALTS |
+
+The census is not the exotic path: `k_eff` falls back to it whenever the transcript walk goes over
+budget — which `_kwork_unmeasured` itself notes means *"the box is pathologically loaded, i.e.
+exactly when the concurrency count matters most"* — and whenever `CC_ROUTE_KWORK=off`. The
+150-resident design point therefore broke at 32, 4.7× early, on the path CLAUDE.md makes the
+DEFAULT execution locus.
+
+**The split is 07 §6.2's table, implemented as one derivation** — `k_src(r)` names the instrument,
+`k_cap(r, R)` returns the cap that applies to it, and `_excluded` and the KF gradient both read it
+(a census-charged row measured against the ACTIVE integer would pin KF to `KFLOOR` at 8 residents
+while its real cap is 40, collapsing the soft gradient before the hard gate it is meant to precede).
+
+| gate | governs | value |
+|---|---|---|
+| `KMAX` | how many sessions may be **mid-turn** per account | 8 — unchanged, and it keeps its MEANING, so `bin/cc-wave-plan`'s urgency bound reads the same integer for the same reason |
+| `KMAX_RESIDENT` **(new)** | how many sessions may **exist** per account | 40 = `ceil(150/4)` + headroom |
+
+OPTIONAL with a matching code default (`KMAX_RESIDENT_DEFAULT`), per the standing reason: `~/.claude/accounts.json`
+is a symlink into a checkout that is older than the code for as long as a land takes to converge, so
+a required-key addition fails CLOSED fleet-wide inside that window. `_validate_router` additionally
+refuses `KMAX_RESIDENT < KMAX` — every active session is also resident, so the inverse would make
+the fallback stricter than the instrument it degrades FROM.
+
+### The fail-open: an unread `ps` fabricated the one value that disarms three gates
+
+`concurrency()` returned an all-zero dict on `ps` timeout/`OSError`, and no caller could tell that
+from a genuinely idle fleet. 07 §6.5 named the direction; it reaches further than that note
+assumed, because the count is re-spelled in a second consumer:
+
+- `_excluded`'s KMAX cap — compared against a fabricated 0, so the router admits an unbounded
+  pile-on at the exact moment the box is too loaded to run `ps`.
+- `heal()`'s rotation-safety gate (`k_live > 0`, both the pre-lock read and the under-lock
+  re-check) — redeems a refresh token underneath N live sessions. The loser of that rotation race
+  holds a token the server has retired: a 400 `invalid_grant` with the calendar cliff weeks away,
+  i.e. **a logout manufactured by a measurement nobody took**.
+- `scripts/handoff-fire.sh`'s pre-fire sweep, which re-spells the same gate as `[ "${k:-0}" = 0 ]`
+  over `(.k // 0)` — so it would have authorised the identical headless redeem.
+
+**`concurrency()` now returns `None`, and every gate treats UNKNOWN as refusing.** The invariant is
+proven or it is not held: *"I could not look"* is not *"there is nobody there"*. The router's
+refusal is classified **DATA** (`concurrency-unmeasured` ∈ `DATA_UNAVAILABLE` → exit 3, callers keep
+their degrade path), never POLICY — as policy it would exit 2 and a measurement failure would read
+exactly like a fleet at capacity. `bin/cc-wave-plan` drops the row from its urgency claim rather
+than reading `null` as an idle account and granting `KMAX − 0`, the widest allowance it can issue,
+on the one input nobody measured. The DISPLAY is the only consumer that degrades, and it prints
+`?` rather than a count it never took.
+
+`tests/account-fact-derivation.bats` used to PIN the all-zero return as a deliberate divergence from
+`cc-relogin`'s `live_sessions() → -1`, reasoning that *"concurrency() feeds an ALARM; live_sessions()
+feeds a GATE"*. **That premise was false when written** — this function has fed both since heal()'s
+under-lock re-check was added. The two implementations now agree on the UNKNOWN direction, and the
+test asserts the corrected contract with the history recorded in place.
+
+**Kill switches / blast radius:** no new env knob — `CC_ROUTE_KWORK=off` still selects the census,
+which now correctly reads the resident cap. `--route`/`--rank` stdout shapes and the 0/2/3
+classification are unchanged; `k_cap=` is added to route-meta beside `k_src=`, which is now the ONE
+derivation the cap, the KF denominator and the meta line all read.
+
+**Remainder:** `bin/cc-wave-plan`'s urgency bound still measures `k_eff` against `KMAX` regardless of
+instrument, so a census-charged account is bounded at 8 rather than 40. Left deliberately: that
+bound only ever WIDENS a per-wave allowance, and this file's own doctrine is that a widening taken
+on the softer number is a widening taken on a guess. Strict is the safe direction there.
