@@ -630,3 +630,85 @@ other direction — a count-shaped or warning-shaped signal said "stranded", and
 The two declarations are now redundant and, on that file's own argument, a false review claim; left
 in place rather than re-litigated, and named here so a successor knows they are inert rather than
 load-bearing.
+
+---
+
+## W4-DRAIN-2 outcome, 2026-08-13 — 8 open → 5, and two rows were smaller than their own text
+
+Successor to the W4-DRAIN session above. Four agent rows picked up; **three closed, one dispatched.**
+Every close is against a **content-verified** land (`git ls-tree` present, `git diff` empty, and the
+trunk blob grepped for a marker from the diff — see the `ahead=0` trap below).
+
+| Row | Outcome |
+|---|---|
+| `412de404ecac` reaper-horizon-lint RED on trunk | ✅ landed — **two** violations, not the one filed |
+| `dc426ee8df11` WORKTREE MANAGEMENT V2 §6 | ✅ landed — and its control found a broken oracle |
+| `f76e7d78aaac` engagement oracle | ✅ **closed as ALREADY DONE** — landed 2026-08-12, never closed |
+| `8ad4b02602dc` headless wake substrate | 📤 **dispatched** (pane 473, goal armed + verified) |
+
+### The row that was already done, and what it cost
+
+`f76e7d78aaac` was closed without a line of code: the real fix **landed on trunk as `4ba91ad95` on
+2026-08-12**, whose own subject says *"both filed remedies were refuted"* — the same two refutations
+the W4-DRAIN brief above derived, and the same two this session's recon derived a third time. Three
+independent parties spent analysis on a remedy that had been refuted and superseded, **because the
+row text still described the refuted remedy and the row was still open.**
+
+That is the generalisable failure: *an open row whose remedy is refuted keeps minting duplicate
+analysis until someone closes it.* The row is the thing agents read; a fix that lands elsewhere and
+does not close its row is invisible to the next reader. Closing costs seconds and this cost hours.
+
+**What was nearly shipped on top of it, and why it was reverted.** Having re-derived the refutations,
+this session began wiring `bin/cc-wedge-watch` into `lr-handoff.sh` and `lr-reset-poller.sh` — until
+reading `4ba91ad95`'s own header, which states the arm is **"DETECT AND REPORT ONLY — deliberately"**
+and that *"adding an actuator to a live unattended limit-recovery daemon (`LR_POLLER_AUTOFIRE=1` in
+the shipped plist) is a different decision with a different blast radius."* `cc-wedge-watch` **pages
+the desk** — it is exactly that actuator. Both edits were reverted. A deliberate deferral recorded in
+a header is a decision, not an omission to be tidied up by the next session that notices the gap; it
+is now filed on its own merits as `ff0b5cf4528b`.
+
+### `ahead=0` is not a land, and this session watched it lie
+
+`ship-land.sh` exited **5 — rebase conflict, rebase left in progress** — and in that state
+`git rev-list --count origin/main..HEAD` read **0** and `git diff origin/main HEAD -- <paths>` came
+back **empty**, because a mid-flight rebase had reset HEAD onto the new base. Both readings are the
+ones the W4-DRAIN brief above prescribes, and both said "landed" while the content was **not on
+trunk** — `git show origin/main:<path> | grep -c '<marker>'` returned 0 for every file. The brief's
+rule was right and its instruments were not sufficient: **grep the trunk blob for a string from your
+own diff.** A count and an empty diff are both satisfied by HEAD == origin/main, which is precisely
+what a rebase produces halfway through.
+
+### Sibling convergence is now routine here, and the merge rule that fell out of it
+
+`dc426ee8df11` collided with a sibling that fixed the *same* two remainders (§6-WORKED,
+`7f622a349`) while this session was fixing them. Its `wt()` justification carries a measurement this
+session's did not (*22 of 79 tests passed over a fixture that created nothing*), so **its side was
+taken on the merits** and §10 was rewritten to credit it rather than let two accounts of one fix
+stand. Rule: on a convergent conflict, take the better-evidenced side and integrate; never let the
+plan carry two authors' versions of the same finding.
+
+**But the duplication still paid, and the reason is the reusable part.** §6-WORKED fixed `wt()` and
+stopped. This session fixed `wt()` **and wrote a positive control for it** — and the control failed,
+exposing `has_wt()`, an oracle that **could never return 0** (git records resolved `/private/var/…`
+paths; the fixture holds symlinked `/var/…` ones) across 14 call sites that all assert it
+NEGATIVELY, so nothing could ever notice. Had only §6-WORKED landed, R-c would read CLOSED with 14
+assertions measuring nothing. *A fix without a control that can fail leaves the next instrument in
+the same file unexamined.*
+
+### Numbers worth carrying forward
+
+- **A 116-worktree sweep: 1128 s real / 81 s dry-run, against F-9's 3600 s lock-staleness window.**
+  Reported as a **floor**, not the number: a synthetic repo cannot reproduce the dominant term (99
+  real worktree dirs carry `node_modules`; two hold running dev servers). An extrapolation drawn
+  from it was **withdrawn** for erring toward headroom the real population lacks.
+- **The nightly worktree-gc row has logged three wrong numbers since §9** — the wrapper parsed the
+  janitor's human summary positionally and `landed-dirt` shifted every field after it. Replaced with
+  a named `counts` line; the off-by-one is pinned as a red proof.
+- **`premortem-gate` S-1 was permanently red on a pristine trunk** and is now met (8 met / 0 failed).
+
+### Still open, and whose they are
+
+`8ad4b02602dc` is with pane 473 (custody open, goal armed and verified from its own transcript) —
+awaiting that peer is the legitimate non-close state for this pane. `ff0b5cf4528b` is newly filed.
+The four operator-gated rows (`8f4eae55a0c7`, `1dca461d4b90`, `475b43aacbf2`, `216f429128a2`) were
+re-verified 2026-08-12 and are unchanged; none was faked closed.
