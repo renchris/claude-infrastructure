@@ -333,6 +333,67 @@ with its own README naming the one finding later corrected by measurement.
 
 ## Status log
 
+- **2026-08-13 02:5xZ — the two facts that reframe this whole plan, both raised by the operator and
+  both measured rather than argued. THE DRAIN IS NOT THE BOTTLENECK; INTAKE IS. AND CLOUD CANNOT
+  TAKE THIS PILE.** A successor reading only the earlier entries would get both of these wrong.
+
+  **1 · We are net-FILING, and the plan's framing hid it.** Every entry above measures closes. Nobody
+  measured the balance:
+
+  | day | filed | closed | net |
+  |---|---|---|---|
+  | 2026-08-09 | 373 | 68 | **+305** |
+  | 2026-08-10 | 172 | 231 | −59 |
+  | 2026-08-11 | 261 | 122 | **+139** |
+  | 2026-08-12 | 117 | 74 | **+43** |
+  | **5-day** | **1,129** | **503** | **+426** |
+
+  Filing outran closing on four of five days. **2026-08-12 was the largest drain day of the week** —
+  47 stranded rows closed on one lease, the first whole-store currency pass, four off-box suites
+  root-caused — **and it still ended +43.** The lead alone filed 7 of that day's 99 adds, then closed
+  by naming three more follow-ons.
+
+  **The mechanism: filing is frictionless and closing is not**, so "file it" is the cheaper branch at
+  every decision point. The Follow-On Gate (F1-F4) governs whether to *pursue* adjacent work and says
+  **nothing** about whether to *file* it — so the one disposition with no gate on it is the one that
+  grows the pile. A filed row is not a discharged obligation; it is a deferred one with a carrying
+  cost, and 426 of them accumulated in five days. **Treat `filed N / closed M` per effort as a
+  reported metric, and never close an effort net-positive.** (A per-session conservation rule —
+  file N, close ≥N — is the obvious mechanical form; it is NOT built, and it carries a real cost
+  worth weighing first: expensive filing means some findings get dropped instead of recorded, and
+  dropping a security finding to protect a counter is a bad trade.)
+
+  **2 · Cloud cannot drain this backlog, and the reason is structural, not a tuning problem.**
+
+  | | |
+  |---|---|
+  | live rows by venue | local **275** · unlabelled **195** · cloud **68** |
+  | cloud declarations | LANDED **6** · STALLED 17 · NOT-STARTED 17 · ABANDONED 7 · BOOTING 2 · ALIVE 2 |
+
+  **6 of 51 declarations ever landed (12%); 34 of 51 (67%) never did useful work.** And the
+  eligibility gate names its own refusals: `ineligible-box` (local-only state a VM cannot see),
+  `ineligible-spawn-rail` (verified only by a live fire on this box), `ineligible-visual`,
+  `ineligible-branch-banking` (the corpus exists only on this disk), `ineligible-github` (no `gh`
+  off-box), `ineligible-offbox-lane`. **This backlog is overwhelmingly ABOUT THIS MACHINE, and cloud
+  cannot see the machine.** Any plan that budgets on cloud absorbing the remainder is wrong at the
+  premise. 🚨 Do NOT respond by setting `CC_DISPATCH_VENUE_ONLY=cloud` — that parks the local
+  majority indefinitely (§3 W4 already records why).
+
+  **`cc-venue` was the producer with ZERO callers** — its own header quotes `cc-dispatch:470`,
+  *"`cc-backlog claim --venue local|cloud` shipped fully built and fully tested with ZERO
+  PRODUCERS"*. Ran it 2026-08-13: unlabelled **239 → 195**, cloud **56 → 68**, local **244 → 275**.
+  195 remain unlabelled and the dispatcher journals those `ready:false, reason:"venue-unlabelled"`,
+  i.e. routed nowhere. Re-run it on a schedule or the label rots as fast as the rows.
+
+  **CONSEQUENCE — THE LOCAL DRAIN (pane 463, `local-drain`, goal armed).** The operator's design, and
+  it is the correct one: *one* long-running local session for the **470 non-cloud rows**, walking the
+  ten `master-*` efforts **smallest-first**, claiming each CONDITION so one lease covers its rows,
+  using teammates only INSIDE itself, and **`--recycle`-ing at every effort boundary** instead of
+  stopping. One slot, indefinite duration — because the bottleneck is concurrent sessions (~15), not
+  session length, and every wave fired today took a slot and then retired. Brief: `/tmp/fire-local-drain.txt`.
+  Deliberately NOT re-keyed into one mega-condition: that would dissolve W2's ten efforts and each
+  effort's roadmap with them.
+
 - **2026-08-12 — W1 LANDED, all six items. Row `b585e86ea4e4`.** One commit (`cf0f11a4b`) across
   `bin/cc-backlog`, `bin/cc-premise`, `scripts/autonomy-sweep.sh`, `scripts/backlog-ratchet.sh`,
   plus `tests/backlog-freshness.bats` (25 cases) and 3 caller-proof cases in
