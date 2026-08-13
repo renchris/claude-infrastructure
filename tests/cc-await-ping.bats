@@ -589,3 +589,90 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   [ "$status" -eq 2 ]
   [ ! -f "$MB" ] || ! grep -q 'WAKE-PATH-DOWN' "$MB"
 }
+
+# ── e2903b01dfdc: `elapsed=` IS A MEASUREMENT, NOT THE ARGUMENT ECHOED BACK ────────────────────────
+# The timeout verdict printed `elapsed=${TIMEOUT}s` — the value the CALLER PASSED IN. The field is
+# named `elapsed`, so it read as evidence the watch ran its full term, while being a restatement of
+# the input: it would print the identical string for a watcher that exited instantly. That made the
+# one question a `--notify-back` originator actually needs answerable unanswerable from the tool's own
+# output — *was my wake path real, or was I deaf?* — and it matters because backlog #127 records a
+# REAL early-exit mode (exit 144, the armed wake path silently disarms).
+#
+# Every test below is RED against that line. The helper is shared so a future exit path can be held to
+# the same contract in one place.
+_verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `elapsed=<n>s` field
+  sed -n 's/.*elapsed=\([0-9][0-9]*\)s.*/\1/p' "${1:--}" | head -n1
+}
+
+@test "e2903b01dfdc: the timeout verdict reports MEASURED wall time, labelled apart from the budget" {
+  # --interval 3 with --timeout 2: the tick accumulator clears the budget after ONE sleep, so a
+  # truthful measurement necessarily OVERSHOOTS what was configured. The pre-fix line could only ever
+  # print 2 — so this asserts the two numbers are now separately sourced, not one value twice.
+  run "$AWAIT" "$UUID" --interval 3 --timeout 2
+  [ "$status" -eq 2 ]
+  # Ordered so the RED lands on the CLAIM, not on a new field's absence: pre-fix this reads 2.
+  local e; e="$(printf '%s\n' "$output" | _verdict_elapsed)"
+  [ -n "$e" ]
+  [ "$e" -ge 3 ]                                      # ≥ the one sleep it actually slept ⇒ measured
+  [[ "$output" == *"budget=2s"* ]] || false           # the configured value, now correctly LABELLED
+  [[ "$output" == *"term=full"* ]] || false           # it did hold its budget, and says which
+}
+
+@test "e2903b01dfdc RED-PROOF: a watch that COLLAPSES instantly says term=short, not a full term" {
+  # THE FALSIFICATION. The loop is driven by a TICK ACCUMULATOR (+INTERVAL per pass) that assumes
+  # every sleep slept; neuter `sleep` and the counter runs a full 60s term while the wall clock moves
+  # ~0 — a watcher that armed and retired in the same second, with the wake path down for the whole
+  # 60s its caller believed it was covered. That is backlog #127's class, and the pre-fix line
+  # reported it as `elapsed=60s`: character-for-character identical to a watch that held for a minute.
+  local shim="$BATS_TEST_TMPDIR/nosleep"; mkdir -p "$shim"
+  printf '#!/bin/bash\nexit 0\n' > "$shim/sleep"; chmod +x "$shim/sleep"
+  local t0; t0="$(date +%s)"
+  run env PATH="$shim:$PATH" "$AWAIT" "$UUID" --interval 30 --timeout 60
+  local wall=$(( $(date +%s) - t0 ))
+  [ "$status" -eq 2 ]
+  [ "$wall" -lt 10 ]                                  # positive control: it really did collapse
+  # FIRST, so the pre-fix RED is the LIE itself and not a missing field: that build prints this exact
+  # string for a watcher measured (above) to have lived under 10 seconds.
+  [[ "$output" != *"elapsed=60s"* ]] || false
+  [[ "$output" == *"term=short"* ]] || false           # …and the verdict names the collapse
+  [[ "$output" == *"budget=60s"* ]] || false
+  local e; e="$(printf '%s\n' "$output" | _verdict_elapsed)"
+  [ -n "$e" ]
+  [ "$e" -lt 10 ]                                      # the number tracks the clock, not the argument
+}
+
+@test "e2903b01dfdc: the KILLED verdict carries the measured slice of term it lost" {
+  # 143/144 is the early exit an originator most needs sized: how much of the arm was actually covered
+  # before something killed it. Both channels the death rides — stderr and the WAKE-PATH-DOWN inbox
+  # line — now carry it, because a reader of either one is deciding whether to re-arm.
+  local log="$BATS_TEST_TMPDIR/killed.log"
+  "$AWAIT" "$UUID" --interval 1 --timeout 300 >"$log" 2>&1 & local watcher=$!
+  sleep 3
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -q 'verdict=killed' "$log"
+  grep -q 'budget=300s' "$log"
+  local e; e="$(_verdict_elapsed "$log")"
+  [ -n "$e" ]
+  [ "$e" -ge 2 ]                                       # a real slice…
+  [ "$e" -lt 300 ]                                     # …never the budget echoed back
+  grep -q 'budget=300s' "$MB"                          # and the drainable inbox line says it too
+}
+
+@test "e2903b01dfdc: a DELIVERY states its duration, and never on the payload stream" {
+  # A take used to say nothing about time at all, so a ping consumed 1s after arming — an already
+  # pending line, or a re-arm racing a peer — was indistinguishable from one that proved a long watch.
+  # Streams asserted SEPARATELY (not via bats' merged $output): the body on stdout is the payload and
+  # a verdict leaking into it would corrupt every consumer that reads the mail.
+  local out="$BATS_TEST_TMPDIR/take.out" err="$BATS_TEST_TMPDIR/take.err" rc=0
+  printf '2026-07-10T09:00:00+0000 [peer] pending before the arm\n' > "$MB"
+  "$AWAIT" "$UUID" --interval 1 --timeout 900 >"$out" 2>"$err" || rc=$?
+  [ "$rc" -eq 0 ]
+  grep -q 'pending before the arm' "$out"
+  ! grep -q 'verdict=' "$out"                          # stdout is payload ONLY
+  grep -q 'verdict=ping' "$err"
+  grep -q 'budget=900s' "$err"
+  local e; e="$(_verdict_elapsed "$err")"
+  [ -n "$e" ]
+  [ "$e" -lt 10 ]                                      # fired at once ⇒ says so, never 900
+}
