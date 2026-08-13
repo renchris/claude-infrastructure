@@ -34,7 +34,10 @@ setup() {
   # one outcome a positive control exists to prevent.
   CORPUS="$BATS_TEST_TMPDIR/corpus"
   mkdir -p "$CORPUS/tests"
-  ls "$REPO"/tests/*.bats | head -40 | while IFS= read -r f; do cp "$f" "$CORPUS/tests/"; done
+  # Glob into an array and slice, never `ls | head`: a pipeline of those is one findings-bearing
+  # line per use and the gate's own .bats shellcheck ratchet blocks on lines this change wrote.
+  ALL_SUITES=( "$REPO"/tests/*.bats )
+  for f in "${ALL_SUITES[@]:0:40}"; do cp "$f" "$CORPUS/tests/"; done
   cd "$CORPUS" || exit 1
   git init -q .
   git config user.email tester@example.com
@@ -100,7 +103,7 @@ run_lint() {  # → combined output of one whole-corpus run over the real slice
 @test "editing one suite re-proves THAT suite and no other" {
   run_lint >/dev/null
   before="$(run_lint | sed -n 's/.*memo — \([0-9]*\) suite verdict(s) carried.*/\1/p')"
-  victim="$(ls tests/*.bats | head -1)"
+  corpus_suites=( tests/*.bats ); victim="${corpus_suites[0]}"
   printf '\n# touched by herm-suite-memo.bats\n' >> "$victim"
   git add -A
   git commit -q -m touch
@@ -140,7 +143,8 @@ run_lint() {  # → combined output of one whole-corpus run over the real slice
 
 @test "a dirty worktree disarms the memo entirely" {
   run_lint >/dev/null
-  printf '\n# uncommitted\n' >> "$(ls tests/*.bats | head -1)"
+  corpus_suites=( tests/*.bats )
+  printf '\n# uncommitted\n' >> "${corpus_suites[0]}"
   out="$(run_lint)"
   # memo_init's population fingerprint is computed off the COMMITTED tree, so a worktree that does
   # not match HEAD is exactly the state in which a carried verdict could describe bytes nobody
