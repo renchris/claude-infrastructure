@@ -208,6 +208,19 @@ run_list() {
       printf '%s\tmissing\t0\t0\t0\t0\n' "$suite" >> "$out"
       continue
     fi
+    # START MARKER — emitted BEFORE the run, and it is the only line that survives a shard the
+    # runner service kills mid-suite. Every other record here is written AFTER run_one returns, so a
+    # CANCELLED job's log ends with the last suite that FINISHED and says nothing about the one that
+    # was RUNNING. That gap is why backlog 8efd655b0fe1 could only name a CLASS ("the partition
+    # successor of the last logged suite") and never a culprit, across four measured cancellations
+    # (runs 31570936250 / 31565099014 / 31557716515 / 31548458767). The row explicitly forbids
+    # excluding the suspected suites on that inference and demands this marker first.
+    #
+    # To stderr, unbuffered, and NOT into "$out": the TSV is a per-suite RESULT table with a fixed
+    # 6-field header that the fold parses, so a start row would either need a state nothing consumes
+    # or would corrupt the count. The log is what a cancelled job leaves behind, and the log is where
+    # the question is asked.
+    printf '>>> RUNNING %s\n' "$suite" >&2
     line="$(run_one "$suite" "$tmo")"
     # shellcheck disable=SC2086
     set -- $line
