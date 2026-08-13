@@ -567,11 +567,36 @@ grandfather the lint's own suite under its own rule.
 
 ---
 
-## RESUME-HERE, RECYCLE #4 — 2026-08-13, effort 2 at **7** non-cloud rows
+## RESUME-HERE, RECYCLE #4 — 2026-08-13, effort 2 at **16** rows (NOT 8 — see the roster below)
 
 **Closed this recycle (1), LANDED and content-verified:** `5ef0dcb22aec` (`88bf5cf1f`, 4 paths
-present + `git diff` empty on origin/main). Store: report BOTH ends — a close count alone reads as
-progress the store does not show.
+present + `git diff` empty on origin/main). **Store: 445 → 446** — I closed 1 and filed 0, so the +2
+is entirely sibling intake. Report BOTH ends; a close count alone reads as progress the store does
+not show.
+
+### 🚨 THE ROSTER WAS WRONG BY 8, AND THE HANDOVER IS NOT THE STORE
+
+Recycle #3's brief (and recycle #2's RESUME-HERE) said *"THE 8 THAT REMAIN — 5 workable."* Measured
+at this boundary, `condition=master-verification-integrity` holds **16 open rows**, of which 15
+remain after this close. The 8 the brief never named are all vintage 2026-08-11/12 — the same dates
+as the rows it did name — so they were either linked into the condition by a sibling after it was
+written, or simply missed. **Do not carry a row count across a recycle: re-derive it, from the
+store, at every boundary.** Same class as the reassurance lesson below, applied to the handover
+itself.
+
+```
+cc-backlog list --open --json | jq -r '.[] | select(.condition=="master-verification-integrity")
+  | "\(.id)  \(.status)  \(.firstTs[0:10])  \(.title[0:80])"'
+```
+
+**Not workable (3):** `05ff1e5fabc0` (mine/filed) · `782607797fc5` (operator-blocked) ·
+`8efd655b0fe1` (instrumented; nothing to do until a cancellation happens).
+
+**Workable (12), and only the first two have been triaged — the other ten are UNREAD by any
+recycle so far, so give each one question 2 below before starting:** `0f74f41042c5` (triaged in
+full, see below) · `5d6dcbe8d462` (spec corrected earlier in this file — do NOT start from the row)
+· `b449e49f1438` · `cf440684e0e1` · `3ec6c070f52f` · `73583e2519d6` · `67a7d78c1134` ·
+`0be0bd2c0b65` · `c1a29f8ee045` · `57ff249657e0` · `2c5ab136d63f` · `b02e87582e96` · `e191b6801be5`.
 
 **THE LESSON OF THIS RECYCLE — the reassurance clause has a SECOND failure mode, and it is invisible
 to the recycle-#2 probe.** Recycle #2 found clauses false *as written*. `5ef0dcb22aec`'s was **true
