@@ -1627,6 +1627,41 @@ Two term changes, both evidence-backed, both **operator's call** (they gate spaw
    (`occupied_pages ÷ 4` + `swap_used ÷ 65536`, exact). ⚠️ It is a **burst guard, not a capacity
    term** — a steady-state session compresses nothing — so **both** terms are needed.
 
+#### S6.6-LANDED · both term changes are in the gate (2026-08-13, `61e39ef3`, backlog `1c45598a91be`)
+
+`scripts/lib/capacity-admit.sh` now carries **four** switchable terms, each budget-bounded exactly
+as the original two are, and each naming itself in the row's `term` field on a refusal:
+
+| Term | Predicate | Default | Where the number comes from |
+|---|---|---|---|
+| `segments` | in-core + swapped compressor segments as a % of `vm.compressor_segment_limit` | **50%** | §7.7's arithmetic, run verbatim (the divisor DERIVED from vm_stat's page size, never the literal 4 — that is only right at 16 KiB pages) |
+| `active` | sessions **mid-turn**, + 1 for the spawn | **8** | the top of axis 09's measured 4-8 band |
+| `reserve-active` | the same count against `ceiling − 1` when the operator is PROVEN present | reserve **1** | §W3's law in the dimension that binds first; waived for the operator's own session |
+
+Three corrections to the item as specified, each measured while building it:
+
+1. **The sentinel's 15% is NOT reusable as the gate's ceiling.** It is the LEVEL half of a
+   level-AND-rate conjunction (>15% AND >600 seg/s); a single-sample gate cannot take a rate, and
+   this box "idles well under 15%", so importing the bare 15 would refuse on ordinary builds — the
+   `fail-closed-degradation-as-amplifier` direction. 50% is **provisional and says so in the code**;
+   every row (admits included) carries the measured pct, so the real distribution is re-derivable
+   from the ledger within a day rather than argued.
+2. **`active` is a PROVEN LOWER BOUND, by construction.** It reads the beat's own `kind` (`prompt` =
+   a turn started, `stop` = it ended — the producer already answered this and had no consumer) and
+   charges `ps` for liveness on (pid,lstart), so a session that DIED mid-turn cannot tighten the
+   gate forever. A session mid-turn whose beat never landed is simply not counted: the term
+   under-refuses rather than refusing on unproven activity, which is the same direction rule the
+   reserve follows.
+3. **The item's framing — "replace the memory term" — is wrong and the code does not do it.** §S6.6
+   already says why in its own ⚠️: a steady-state session compresses nothing. `headroom` stays and
+   `segments` is added beside it. What the replacement framing would have produced is a gate blind
+   to plain residency exhaustion.
+
+D8's premise is unchanged by this and worth re-reading against it: D3/D8 both assert `seg_pct` < 15%
+during the ramp, while the *gate* admits up to 50%. That is not a contradiction — D3 is the crash
+predictor watched continuously by an instrument that can act, and the gate is a single-sample
+admission bar — but the two numbers must not be conflated in a later reading.
+
 ### S6.7 · Phase E — render, and Phase F — the remainder
 
 - **E:** at 0.025 cores/pane, 150 visible panes is 3.7 cores. Keep **≤20 visible kitty panes**; the
@@ -1881,7 +1916,7 @@ capability; D1 is the only criterion that cannot be satisfied by analysis.**
 | **D4** | **Load within the gate's ceiling** at 150 — or the gate re-termed (D7) and its new predicate green | `sysctl -n vm.loadavg` ÷ `hw.ncpu` |
 | **D5** | **Distinct in-use ptys < 450** of `kern.tty.ptmx_max`, **and the ratio re-measured under ACTIVE load** | `ps -axo tty= \| grep '^ttys' \| sort -u \| wc -l` — node-count is an upper bound, do not use it here |
 | **D6** | **Memory holds**: reclaimable never below the alarm floor; swap growth < 100 MB/s | `vm_stat`, `sysctl vm.swapusage` sampled through the ramp |
-| **D7** | **Wave D decided** — admission keys on ACTIVE concurrency and the memory term can actually bind — **or explicitly waived in writing** | `grep -c compressor_segment scripts/lib/capacity-admit.sh` > 0, or a recorded waiver |
+| **D7** | ✅ **SATISFIED 2026-08-13** (`61e39ef3`, backlog `1c45598a91be`) — **Wave D decided**, not waived: admission keys on ACTIVE concurrency and the memory term can actually bind | `grep -c compressor_segment scripts/lib/capacity-admit.sh` → **6**. Do not stop at the grep: `tests/capacity-admit-active.bats` case 17 also pins that the term is REACHED by the gate, because a criterion satisfiable by a definition nothing calls is the inertness generator in one line |
 | **D8** | **Wave C proven under a real cold compile** at ≥80 resident: `seg_pct` stays < 15% | deliberate `next dev` cold compile during the ramp |
 
 ### Abort and rollback
