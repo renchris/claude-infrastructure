@@ -285,7 +285,7 @@ mkbox() { # <key> <lines> <acked>
 @test "delegates receive --apply only on an apply run" {
   run bash "$GC" --store scratchpad
   echo "$output" | grep -q "stub-scratchpad"
-  ! echo "$output" | grep -q -- "--apply"
+  ! echo "$output" | grep -q -- "--apply" || false
   run bash "$GC" --store scratchpad --apply
   echo "$output" | grep -q -- "--apply"
 }
