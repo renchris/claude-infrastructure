@@ -415,6 +415,57 @@ still true, and both are facts about the enforcing store rather than about effor
    whose cure may already be on trunk is how a correct-looking change reverts trunk. **Docs-only was
    the only honestly-verifiable deliverable from that box; the eleven rows want a Mac session.**
 
+### 11b.1 · Two land-gate findings this dispatch produced by trying to land at all
+
+Recorded here rather than only in the backlog because the ledger (`~/.claude/autonomy/backlog.jsonl`)
+is **not tracked in this repo** and is unreachable from a cloud container — so trunk is the only
+durable carrier a cloud dispatch has. Both are about the *land path*, not about memory economy; they
+are here because this is the doc whose dispatch found them.
+
+**1 · A `/ship`-blocking bug, FIXED (`c2073d41`) — the hermeticity ratchet read a MATCH as "could not
+run".** `test-hermeticity-lint.sh`'s `is_hermetic()` probed `setup_bodies "$f" | grep -qE …` and
+captured the *pipeline* status under `set -o pipefail`. `grep -q` exits the instant it matches, the
+awk producer takes SIGPIPE, and 141 is promoted — **so the predicate failed exactly when the suite
+WAS hermetic.** 141 is neither 0 nor 1, so it fell through to `CHECK_FAILED`, the lint exited 2, and
+`ship-land` turned that into **exit 9 GATE-KILLED**. The arm is fail-fast and runs *before* the
+smoke, so while it was live **no land of any kind could complete from that box — a docs-only land
+included** (verified: the docs commit alone hit it too). Measured head-to-head over the same producer
+and suite, 40 trials each: **old form 36/40 false failures, here-string form 0/40**; the lint went
+from exit 2 with no rule-1 verdict at all to `clean — 465 suite(s) … 0 new leaks`.
+
+Three properties make it a nastier bug than its exit code suggests, and all three generalise:
+  · **it fires because the tree is CORRECT** — no match, no early exit, no SIGPIPE;
+  · **its own diagnostic misdirects** — `CHECK_FAILED` prints *"re-run when the box is quieter; do
+    not 'fix' any suite"*, which is right for the fork pressure it was written for and useless for a
+    deterministic race. Observed at load **0.31** on an idle box, three lands in a row;
+  · **the fix was already known and already written down in the same file.** Rule 4's predicates use
+    here-strings, and the note above them explains this exact SIGPIPE promotion — then bets that the
+    other predicates' inputs are *"small enough that it has never been observed"*. That clause is
+    what kept rules 1-3 on pipes. The bet lost, and it is corrected in place with the measurement.
+
+**2 · The ratchet built for this hazard class did not catch it — FILED, not fixed.**
+`scripts/pipefail-sigpipe-lint.sh` exists precisely to ratchet `producer | early-exit-consumer` under
+`pipefail`, with a shrink-only allowlist. It reported **clean** across all five defective sites,
+before and after. Cause is its rule clause 4, which counts a pipeline's status as *consumed* only in
+an `if`/`elif`/`while`/`until` condition, a `!` operand, or — **under `set -e`** — a bare pipeline or
+top-level `VAR=$(…)`. The defective form was `producer | grep -q …; rc=$?` in a file that sets
+`set -uo pipefail` and **not** `set -e`. So the single most explicit way to consume a pipeline's
+status — assigning it — is the one form the detector does not recognise. Left filed rather than
+fixed: it is not land-blocking, the current tree holds **one** other instance
+(`scripts/git-identity-lint.sh:235`, exempt anyway under clause 3 since its producer is a `printf` of
+a shell variable), and a false RED in a shared gate lint blocks *every* session's land — the wrong
+blast radius to accept from a box that cannot run the macOS half of the suite.
+
+**And the residual blocker is environmental, pre-existing, and not fixable from Linux.**
+`unattended-path-lint --selftest` fails **10 of 24** in a cloud container — verified identically on
+**pristine `origin/main`** (`a54569db`), so it is nothing this branch did. It is not a defect either:
+the lint asks *"will this bare name resolve for the job that runs it"* and answers by resolving
+against the live filesystem, and macOS's `/sbin/md5` · `/usr/sbin/sysctl` · `/usr/sbin/lsof` are
+simply absent on Linux, so its fixtures stop discriminating. Consequence for any cloud dispatch of
+this repo: **a land must carry the fix in finding 1 (or the hermeticity arm kills it), and carrying
+any `.sh` pulls this arm into own-scope where it is red — so the first land from a Linux box is a
+deadlock.** The branch is pushed and content-complete; landing it wants a macOS session.
+
 ## 12 · Open questions this wave could not settle (named, not hedged)
 
 1. ~~Spotlight~~ **SETTLED by axis I** (T8.3): dot-stores never indexed; the cost is
