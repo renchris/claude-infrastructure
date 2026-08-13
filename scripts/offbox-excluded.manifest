@@ -135,8 +135,6 @@ tests/handoff-fire-completion-push.bats
 # HINT (not verified): these assert a specific interpreter/tool layout on this box.
 # run 31362043861: notok=1
 tests/python-deps.bats
-# run 31362043861: notok=2
-tests/unattended-path-lint.bats
 # run 31362043861: notok=1
 tests/subshell-cleanup-lint.bats
 
