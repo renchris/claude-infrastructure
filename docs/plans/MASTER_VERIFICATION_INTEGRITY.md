@@ -677,3 +677,92 @@ through `tail`** — the pipe buffers, so the task output file stays 0 bytes and
 progress. Its smoke stage gate-killed `tests/ship-land.bats` for the THIRD consecutive land
 (`exit 124`, ZERO `not ok`) — a NON-VERDICT by the gate's own words, on a suite that was not in the
 diff. Run your own suites and carry your own verdict.
+
+---
+
+## RESUME-HERE, RECYCLE #5 — 2026-08-13, effort 2
+
+**Closed this recycle (1):** `0f74f41042c5` (`fb7d0591c`). Filed 0.
+
+### 🚨 THE ROSTER, AND WHY IT KEEPS READING DIFFERENTLY
+
+Recycle #4's brief said *"15 rows — 3 not-workable, 12 workable."* That count is right about the
+CONDITION and wrong about THIS SESSION's population, and the difference is not drift — it is a
+filter nobody had applied:
+
+```
+condition=master-verification-integrity, open : 15
+  of which venuePlan=cloud                    :  8   ← out of scope for the local drain
+  of which non-cloud                          :  7
+    blocked (782607797fc5, operator-gated)    :  1
+    not workable (05ff1e5fabc0 mine/filed,
+                  8efd655b0fe1 instrumented)  :  2
+    WORKABLE                                  :  4   ← 0f74f41042c5 (now closed), 5d6dcbe8d462,
+                                                       b449e49f1438, cf440684e0e1
+```
+
+So the "wrong by 8" of recycle #4 and the 8 cloud rows are the SAME EIGHT. Recycle #3 counted the
+non-cloud rows, recycle #4 counted every row in the condition, and each read the other's number as
+an error. **Both counts were correct; neither stated its denominator.** Re-derive with the venue
+filter, and say which population you counted — a bare row count is not a fact about anything.
+(memory: `positive-control-the-denominator`, one level down: police the denominator by NAMING it.)
+
+**Remaining workable (3):** `5d6dcbe8d462` (do NOT start from the row — corrected AST spec earlier in
+this file) · `b449e49f1438` · `cf440684e0e1` (perf, large; the row's own analysis says arm-level
+keying is NOT the answer). Give each the two-question reassurance probe first.
+
+### `0f74f41042c5` — CLOSED, and what the triage actually found
+
+The RESUME-HERE's triage was correct and its design survived contact. Two corrections worth carrying:
+
+1. **The residual was NARROWER than stated, and the narrowing is the good news.** The row's residual
+   reads as if `installed_somewhere` poisons the whole lint. It does not: the **ordering rule** at
+   all three call sites (`allowlist BEFORE installability`, `:852`) had already immunised the
+   STUCK-ratchet arm, with a comment naming this exact failure class and a suite case (14) pinning
+   it. Only the **new-finding** arm was left environment-sensitive. Read the call sites before
+   sizing a fix from the row's prose — the prose understated how much was already handled.
+2. **The defect reproduces in one command**, and this is the measurement to lead with next time:
+   ```
+   diff <(CC_UNATTENDED_ALLOWLIST="" lint tree) <(PATH=/usr/bin:/bin CC_UNATTENDED_ALLOWLIST="" lint tree)
+   ```
+   Before: 35 vs 31 findings, the 4 being `bun`/`cargo`/`ruff`/`agent-browser`, and `ONLY-IN-LEAN`
+   **empty** — the drop is strictly one-way, which is what makes a UNION the right shape. After:
+   byte-identical.
+
+**Built:** `EMBEDDED_BINARY_INVENTORY` (102 names) + `in_inventory()` + `--emit-inventory` +
+`CC_UNATTENDED_INVENTORY` seam. Both open questions from recycle #4 are answered: the verb unions
+and never subtracts, and it ratchets **UPWARD** — the opposite direction from `EMBEDDED_ALLOWLIST`,
+which is why it deliberately has NO stuck-entry check (retiring a name because today's box lacks it
+would restore the very environment-sensitivity the list removes).
+
+### 🚨 THE LESSON OF THIS RECYCLE — TWO vacuous fixtures, and the SECOND was a bad MUTANT, not a bad test
+
+The brief warns that a fixture spelled in the symptom's own vocabulary is the likeliest to be
+vacuous. It happened twice here, and the two have **opposite** remedies:
+
+1. **A genuinely vacuous test.** My first suite case asserted "under a stripped PATH the corpus still
+   reports binaries that PATH cannot reach". It passed under the reverted-arm mutant. Cause: the
+   control counted names unreachable on `$STOCK`, but `installed_somewhere` probes
+   STOCK ∪ Homebrew ∪ /usr/local ∪ …, so Homebrew binaries kept it green with the arm gone. **A
+   control must be keyed on the predicate's ACTUAL domain, not on the one the prose names.**
+2. **A MIS-TARGETED mutant that reads identically.** Its replacement seemed to fail the same way —
+   deleting `shellcheck` from the inventory left the suite green. But `shellcheck` is **not in the
+   corpus's finding set at all** (every site resolves it absolutely or hardens PATH), so the
+   mutation was invisible by construction. Re-targeted at `lsof` — measured to be in the finding set
+   — the case fails by name with its remedy printed. **A green suite under a mutant has two causes,
+   and they look the same: the test cannot see the defect, or the MUTANT never introduced one.
+   Derive the mutation target from the subject's measured output, never from its vocabulary.**
+   (memory: `control-must-replay-the-real-artifact`.)
+
+**And the durable structural finding:** the union arm's value is CROSS-BOX, so it is *provably
+untestable* against the real corpus on the box that generated the inventory — there, every name the
+inventory vouches for is also live, so no real-tree run can distinguish the arm from its absence.
+That is why the division of labour is: **`--selftest` owns the MECHANISM** (20a red via inventory
+only, 20b control, 20c whole-line matching — synthetic trees can fake a box that lacks a binary),
+and **the suite owns COVERAGE** (case 18: every name the real corpus reports must be in the
+inventory, else its finding is box-dependent). Asking either to do the other's job yields a vacuous
+pass. When a fix's value is only visible across environments, do not look for one test — split it.
+
+**Also fixed in passing:** the suite header restated "--selftest with 18 cases". It read 27 before
+this land. The number is now DELETED rather than updated — a resident restatement of a perishable
+fact has no path to learn it changed (memory: `resident-policy-must-not-restate-perishable-facts`).
