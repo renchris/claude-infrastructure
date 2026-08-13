@@ -167,8 +167,11 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   run bash "$CB" falsify "$ID" --probe "test -e $MISSING"
   [ "$status" -eq 4 ]
   [ "$(fals_of "$ID")" = "" ]
-  # …and the refusal must not have moved the item. cc-value folds `status: $r.event` over raw
-  # records, so a falsify record written after a done would make a closed item read as un-closed.
+  # …and the refusal must not have moved the item. This used to be justified by cc-value folding
+  # `status: $r.event` over raw records, so a falsify record after a done made a closed item read
+  # as un-closed; that fold was fixed 2026-08-13 and carries status through now. The assertion
+  # stays, on the stronger and reader-independent reason: a REFUSED operation appends nothing, so
+  # there is no record here for any fold to see.
   [ "$(status_of "$ID")" = "done" ]
 }
 
