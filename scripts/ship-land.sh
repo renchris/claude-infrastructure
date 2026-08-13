@@ -1982,8 +1982,27 @@ bats_sc_nonverdict() {
   GATE_KILLED=1
 }
 
+# THE GENERIC NON-VERDICT ARM. Every ratchet lint here answers with THREE codes — 0 clean, 1 findings,
+# 2 I-COULD-NOT-RUN — but nine of the sixteen arms consumed them with `if ! own_run …; then gate_red x`,
+# which collapses 2 into 1 and reports "your tree is bad" for a lint that never rendered a verdict.
+# Measured 2026-08-13 on this file: 9 collapse, 7 discriminate. GATE_KILLED yields exit 9 (retryable,
+# "re-run when the box is quieter"); gate_red yields exit 6 (author-fixable) and sends someone to fix a
+# file the lint may never even have read.
+#
+# Factored rather than copied nine times for the reason stated above bats_sc_nonverdict: a copy-paste
+# pair is how one of them ends up saying something else. That helper stays as-is — its text names an
+# install step this generic one cannot know.
+# shellcheck disable=SC2329  # invoked from run_gate's arms below.
+arm_nonverdict() {  # $1=lint label · $2=optional extra hint line
+  echo "⛔ gate: $1 could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+  echo "  Nothing is wrong with the files named above (if any) — the lint never reached a verdict." >&2
+  [ -n "${2:-}" ] && echo "  $2" >&2
+  echo "  Re-run /ship when the box is quieter." >&2
+  GATE_KILLED=1
+}
+
 run_gate() {  # $1=range → 0 green / 1 red
-  local range="$1" p rc=0 HERM_LINT SELFPATH_LINT
+  local range="$1" p rc=0 HERM_LINT SELFPATH_LINT _arm_rc=0
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
   # stamp_gate_green self-noops and the verifier stays the marker's only writer (§4.2).
   # GATE_RED_WHY resets WITH GATE_RED, never separately: the optimistic loop re-enters run_gate on
@@ -2193,7 +2212,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       wown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
     fi
     echo "→ gate: wall-clock time-bomb ratchet (future absolute dates in fixtures)" >&2
-    if ! own_run WALL CC_WALLTIME_OWN "$wown" "$WALL_LINT" tests >&2; then
+    own_run WALL CC_WALLTIME_OWN "$wown" "$WALL_LINT" tests >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "test-walltime-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: wall-clock RED — a fixture THIS LAND CHANGES seeds a future absolute date." >&2
       echo "  Seed relative to now instead; the file and dates are named above." >&2
       gate_red walltime
@@ -2319,7 +2340,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red utc-stamp-selftest
       return 1
     fi
-    if ! own_run UTC CC_UTC_OWN "$uown" "$UTC_LINT" >&2; then
+    own_run UTC CC_UTC_OWN "$uown" "$UTC_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "utc-stamp-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: UTC-stamp RED — a file THIS LAND CHANGES stamps a literal Z from a local clock." >&2
       echo "  Add -u to the date call (or emit %z instead of Z); the file and lines are named above." >&2
       gate_red utc-stamp
@@ -2483,7 +2506,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red self-path-selftest
       return 1
     fi
-    if ! own_run SELFPATH CC_SELFPATH_OWN "$spown" "$SELFPATH_LINT" >&2; then
+    own_run SELFPATH CC_SELFPATH_OWN "$spown" "$SELFPATH_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "self-path-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: self-path RED — a file THIS LAND CHANGES derives a path via '..' from an" >&2
       echo "  unresolved \$0/\$BASH_SOURCE. Resolve the symlinks first (_resolve_self above); the" >&2
       echo "  file and lines are named above." >&2
@@ -2529,7 +2554,9 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     # gate_bounded: THE AUTHOR'S OWN DIFF — see the marker above; CC_PSC_OWN carries the same
     # per-land scope into the lint, so an advisory finding outside the diff prints and never blocks.
-    if ! own_run PSPAWN CC_PSC_OWN "$psown" "$PSPAWN_LINT" >&2; then
+    own_run PSPAWN CC_PSC_OWN "$psown" "$PSPAWN_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "pane-spawn-coverage-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: pane-spawn coverage RED — a file THIS LAND CHANGES creates a terminal surface" >&2
       echo "  and never calls cc_log_pane_spawn (scripts/lib/pane-spawn-log.sh). Add the row, or the" >&2
       echo "  log's 'no row ⇒ not from this tree' inference is false; the lines are named above." >&2
@@ -2578,7 +2605,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red unattended-path-selftest
       return 1
     fi
-    if ! own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; then
+    own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "unattended-path-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
       echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
       echo "  PATH at the top of the file; the file, line and binary are named above." >&2
@@ -2632,7 +2661,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red permission-gate-selftest
       return 1
     fi
-    if ! own_run PERMGATE CC_PERMGATE_OWN "$pgown" "$PERMGATE_LINT" >&2; then
+    own_run PERMGATE CC_PERMGATE_OWN "$pgown" "$PERMGATE_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "permission-gate-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: permission-gate RED — a file THIS LAND CHANGES gained a guard-refusal on an" >&2
       echo "  actuation path with no declared bound (or its ratchet line is stale). Give the gate a" >&2
       echo "  budget whose expiry converts the standing state into an EVENT, then declare it with a" >&2
@@ -2671,7 +2702,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red chromium-bundle-selftest
       return 1
     fi
-    if ! own_run CHROMIUM CC_CHROMIUM_OWN "$cbown" "$CHROMIUM_LINT" >&2; then
+    own_run CHROMIUM CC_CHROMIUM_OWN "$cbown" "$CHROMIUM_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "chromium-bundle-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: chromium-bundle RED — a file THIS LAND CHANGES takes screenshots through the" >&2
       echo "  full Chromium.app bundle, which strobes the operator's Dock once per launch. Use" >&2
       echo "  resolve_headless_chrome from scripts/lib/cc-common.sh; the file is named above." >&2
@@ -2850,7 +2883,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red kill-guard-selftest
       return 1
     fi
-    if ! "$KILL_GUARD_LINT" tests >&2; then
+    "$KILL_GUARD_LINT" tests >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "bats-kill-guard-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
       echo "✗ gate: unguarded-kill RED — a kill above silences its stderr but not its exit status," >&2
       echo "  so a reaped child aborts the test body under load. Guard it: '|| true'." >&2
       gate_red kill-guard
