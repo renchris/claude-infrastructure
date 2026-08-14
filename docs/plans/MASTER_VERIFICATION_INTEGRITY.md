@@ -1204,3 +1204,88 @@ disarms this memo *by design* — so committing while a timing rig runs silently
 that to myself. The number in this plan came off the **land path** instead, which was better
 evidence anyway: when the subject already runs in production on a path you are about to exercise,
 read the number off that path.
+
+---
+
+## RESUME-HERE, RECYCLE #9 — 2026-08-13, effort 3
+
+**Store, non-cloud open: 444 → 444.** Closed 0, filed 1 (`91c6f91062ae`). Flat again, and the value
+is the landed work, not the ledger delta. Custody clean.
+
+### 🚨 The plan's own remedy was REFUTED by measuring the thing it prescribed
+
+Recycle #8 handed over a proven pattern and three arms to copy it onto. Timed first, **through
+`own_run` as ship-land actually invokes them**, that step is very nearly a no-op:
+
+| | ms per item |
+|---|---|
+| `memo_file_hit`, end to end (3 forks: hash, hash, `cat`) | **16.8–17.1** |
+| `git-identity-lint`'s per-file scan | 18.5 (727 files ⇒ 13.4s) |
+| `pane-spawn-coverage-lint`'s per-file scan | 19.5 (404 files ⇒ 7.3s) |
+
+**The memo would have paid 17 to save 19.** Copying the proven pattern onto both arms would have
+delivered ~2s of the ~21s they cost and read exactly like success. The bottleneck was never *which
+lints lack the memo* — it is that the LOOKUP costs nearly as much as the check it replaces, and
+nobody had measured that denominator. This is the same generator as the last four recycles, one
+level up: last time the false claim came from an arm's invocation, this time from a **pattern's
+reputation**. A mechanism that worked once is a claim about a RATIO, not a technique.
+
+### What was built instead, and it is strictly larger than what was asked
+
+`memo_batch_arm` / `memo_batch_hit` / `memo_batch_record` in `scripts/lib/gate-memo.sh`
+(`7bb7a9f82`). One `git hash-object` fork for the whole population, then pure builtins:
+
+| lookup variant | ms/file |
+|---|---|
+| (a) `memo_file_hit` — 3 forks | 16.8 |
+| (b) 1 fork + `read` builtin | 7.2 |
+| **(c) batched hash + `read` builtin** | **0.33** |
+
+**Measured, warm vs memo-off, on a clean tree:**
+
+- `test-hermeticity` **46.3s → 12.7s** (was 21.2s under the per-file API — batching alone retired
+  8.3s the ALREADY-LANDED memo had been quietly paying, 468 suites × 16.8 ms)
+- `git-identity` **15.0s → 6.0s** (`f4d7fc1d0`)
+
+### The one new failure mode, and why the control is absolute
+
+The batch API is **INDEX-KEYED**: a short batch would slide every later verdict onto the wrong file.
+Measured across four cases — missing path, unreadable path, directory, dangling symlink —
+`git hash-object` **ABORTS** at the first bad path (rc 128) and emits only the hashes before it. It
+never skips-and-continues, so its output can only be a PREFIX and misalignment is unreachable
+*today*. The count is asserted absolutely anyway, because that is a property of this git and not of
+the contract. **Both consuming lints now build their population ONCE and both arm on it and walk
+it**, so the keyed list and the iterated list cannot diverge, and the index is derived as `seen - 1`
+rather than kept in a parallel counter.
+
+### Every defect this recycle came from a control or the gate — none from review
+
+1. **`read` returns 1 at EOF-without-a-newline**, and the entry is written without one, so consuming
+   that rc made **every lookup a miss**. A memo that is silently OFF looks exactly like a memo with
+   nothing to carry; only the mutant case for the body check could distinguish them.
+2. **The `gitid-file-memo.bats` positive control fired on its first run** — the fixture copied the
+   lint but not `scripts/lib/gate-memo.sh`, so the memo was fail-closed OFF and three cases had been
+   passing while asserting nothing. *This is why the positive control is case 1 by construction.*
+3. **The gate convicted my own new suite**: it writes a file carrying the leaky shape as TEST INPUT,
+   so `git-identity-lint` flagged it. It joins `SELF_EXCLUDE` beside `git-identity-write-guard.bats`
+   — whose comment predicted exactly this arrival.
+4. **A red that was my TEST's expectation, not the code's behaviour.** `CHECK_FAILED` vetoes from
+   the failure ONWARD; files scanned *before* it had working predicates and their verdicts are real.
+   Breaking the LAST file leaves absolute and delta indistinguishable. **Breaking the FIRST separates
+   them completely** — absolute ⇒ 0 carried, delta ⇒ every other file carried. Read the code, then
+   fix the assertion.
+
+### Why `pane-spawn` was NOT memoized — filed `91c6f91062ae`, and it is a real gate gap
+
+The arm has **no could-not-run third state**. Its only exit-2 path is "scan root is not a directory"
+(`:246`); the per-file predicates are `grep -nE … || true` (`:150`) and `cat "$f" 2>/dev/null`
+(`:119`), both of which degrade a DEAD predicate into *"no primitive sites" / "no log call"* — i.e.
+indistinguishable from a clean file. Today that is a false green for ONE run. **Keyed on content by
+a memo it never re-runs.** Both sibling lints closed exactly this gap deliberately and each records
+the scar. Give pane-spawn the sentinel + retry + an ABSOLUTE veto FIRST, then the batch memo; the
+plumbing already exists, since ship-land routes exit 2 to `arm_nonverdict`.
+
+`unattended-path` (11.4s + 13.7s selftest) is **not** a per-file loop — corpus scaling is non-linear
+(25 files 0.05s · 75 files 0.06s · 225 files 2.18s) and it judges several populations plus
+cross-file tables (launchd targets, a runner table). It needs its own locality proof; do not assume
+this pattern transfers.
