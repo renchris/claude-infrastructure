@@ -129,7 +129,7 @@ drive() {
     memo_batch_hit 0 && { echo "HIT-WHILE-DISARMED"; exit 1; }
     echo CLEAN'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"OK=0 BLOBS=0"* ]]
+  [[ "$output" == *"OK=0 BLOBS=0"* ]] || false
   [[ "$output" == *CLEAN* ]]
 }
 
