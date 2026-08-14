@@ -1058,7 +1058,20 @@ CHECK_FAILED=0
 is_hermetic() {
   local rc
   for _ in 1 2 3; do
-    setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'; rc=$?
+    # HERE-STRING, not `setup_bodies "$1" | grep -q …` — see RULE 4's HERE-STRINGS block, whose
+    # hazard this predicate was believed too small to hit ("the predicates above pipe from awk over
+    # inputs small enough that it has never been observed"). That assumption is REFUTED: the trigger
+    # is WHERE the match sits, not how big the input is. grep -q exits at the FIRST match, so a
+    # suite whose setup() pins $HOME early leaves awk still writing — SIGPIPE, 141, promoted by
+    # `set -o pipefail` into the rc>1 the retry loop reads as "could not RUN".
+    #
+    # Measured on this tree, 5 consecutive probes per file: tests/cc-notify.bats 5/5 rc=141 ·
+    # tests/postland-verify.bats 5/5 rc=141 · tests/handoff-fire-kitty.bats 1/5. The first two are
+    # DETERMINISTIC, which is what makes this worse than a flake: the 3-try retry above cannot
+    # convert a permanent SIGPIPE into an answer, so CHECK_FAILED latches and ship-land exits 9
+    # GATE-KILLED on an unchanged tree — every run, on an idle box, while the banner blames load
+    # and says "re-run when the box is quieter". A land that can never be earned by waiting.
+    grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)' <<<"$(setup_bodies "$1")"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -1314,8 +1327,10 @@ setup_statements() { setup_bodies "$1" | strip_comments; }
 is_orphan_pinned() {
   local rc
   for _ in 1 2 3; do
-    setup_statements "$1" \
-      | grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?LCW_ORPHAN_CLOSE=|(^|[[:space:];&|(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+LCW_ORPHAN_CLOSE([[:space:]]|$)'; rc=$?
+    # HERE-STRING for is_hermetic()'s reason — same producer (`setup_bodies` via `setup_statements`),
+    # same early-exit match, same pipefail promotion. Not yet observed firing here only because the
+    # pin it looks for is rarer than a $HOME pin; the shape is identical and so is the fix.
+    grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?LCW_ORPHAN_CLOSE=|(^|[[:space:];&|(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+LCW_ORPHAN_CLOSE([[:space:]]|$)' <<<"$(setup_statements "$1")"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
