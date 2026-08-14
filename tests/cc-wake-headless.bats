@@ -41,17 +41,26 @@ teardown() {
     [ -d "$d" ] || continue
     p="$(sed -n 's/^pid=//p'    "$d/meta" 2>/dev/null | head -1)"
     h="$(sed -n 's/^holder=//p' "$d/meta" 2>/dev/null | head -1)"
-    [ -n "$p" ] && kill -9 "$p" 2>/dev/null
-    [ -n "$h" ] && kill -9 "$h" 2>/dev/null
+    [ -n "$p" ] && { kill -9 "$p" 2>/dev/null || true; }
+    [ -n "$h" ] && { kill -9 "$h" 2>/dev/null || true; }
   done
   return 0
 }
 
 # An agent that ECHOES every stdin line it receives into its own out.log. This is the oracle for
 # "the write was READ", which is the only thing a wake means.
+# Deliberately ARGUMENT-FREE, and the variant below is a separate function rather than a flag: an
+# optional-arg helper makes shellcheck read every bare call as a forgotten "$@" (SC2119/SC2120), and
+# the land gate blocks on those. Two named helpers say what each one is for anyway.
+# shellcheck disable=SC2016  # `$l` must reach the CHILD's shell unexpanded — it is the child's variable
+_READER_BODY='while IFS= read -r l; do printf "GOT %s\n" "$l"; done; printf "EOF\n"'
 _spawn_reader() {
-  "$DRV" spawn --cwd "$BATS_TEST_TMPDIR" "$@" -- \
-    /bin/bash -c 'while IFS= read -r l; do printf "GOT %s\n" "$l"; done; printf "EOF\n"'
+  "$DRV" spawn --cwd "$BATS_TEST_TMPDIR" -- /bin/bash -c "$_READER_BODY"
+}
+# The same reader with stdin at /dev/null: it hits EOF at once and the driver refuses the spawn.
+# That refusal IS W8's control, so this helper is expected to FAIL, never to mint an id.
+_spawn_reader_nofifo() {
+  "$DRV" spawn --cwd "$BATS_TEST_TMPDIR" --stdin null -- /bin/bash -c "$_READER_BODY"
 }
 
 _meta() { sed -n "s/^$2=//p" "$CC_PANE_HOME/$1/meta" 2>/dev/null | head -1; }
@@ -171,8 +180,8 @@ print("PARSED")
 @test "W4: a DEAD agent is rc 1 and nothing is written — a corpse is never reported woken" {
   local id; id="$(_spawn_reader)"
   local pid; pid="$(_meta "$id" pid)"
-  kill -9 "$pid" 2>/dev/null
-  sleep 0.3
+  kill -9 "$pid"          # an ASSERTION, not cleanup: a fixture whose agent is already dead
+  sleep 0.3               # would make the rc-1 below prove nothing, so let this one speak
   run "$WAKE" "$id"
   [ "$status" -eq 1 ]
   run grep -q "NOT live" <<< "$output"
@@ -261,7 +270,7 @@ print("PARSED")
   [ "$status" -ne 0 ]
   # CONTROL: the identical agent with stdin at /dev/null reaches EOF at once and exits — so the
   # driver refuses the spawn outright, and the proof is the preserved log in the dead- row.
-  run _spawn_reader --stdin null
+  run _spawn_reader_nofifo
   [ "$status" -ne 0 ]
   run grep -rl '^EOF$' "$CC_PANE_HOME"/dead-*/out.log
   [ "$status" -eq 0 ]
