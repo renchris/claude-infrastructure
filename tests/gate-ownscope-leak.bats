@@ -217,10 +217,22 @@ up_fixture() {
   local pairs bad="" arm v f code lint
   pairs="$(grep -oE 'own_run [A-Z_]+ CC_[A-Z_]*OWN' "$REPO/scripts/ship-land.sh" | sort -u)"
   [ -n "$pairs" ]
-  # thirteen env-scoped arms today; the two remaining ratchet arms (bats dead-assertion, which is
-  # scoped by ARGUMENT LIST, and unguarded-kill, which is deliberately strict whole-corpus) carry
-  # no CC_*_OWN and are correctly outside this rule.
-  [ "$(printf '%s\n' "$pairs" | grep -c .)" -eq 13 ]
+  # A FLOOR, not an equality — and the difference is the whole point of deriving the list above.
+  # This assertion exists for ONE failure: the grep stops matching (a renamed helper, a reformatted
+  # call site) and the census silently returns too little, so the per-arm loop below iterates over
+  # a truncated population and the test passes having checked almost nothing. A floor catches that.
+  #
+  # `-eq 13` instead made it a tripwire on its own subject's GROWTH. 85fd75bc8 added a FOURTEENTH
+  # env-scoped arm — own_run MOVINGREF CC_MOVINGREF_OWN — correctly, three-state presence test and
+  # all, and this line went red for it: not a regression, a sibling doing the right thing. Worse,
+  # bats aborts the test body at the failing line, so the per-arm loop that is the ACTUAL check
+  # never ran and the new arm went unjudged by the very test that was red about it. And because
+  # this suite is a land gate, an assertion that COUNTS blocked every land in the repo.
+  #
+  # So: floor here, TALLY below (memory: exact-count-assertion-tripwires-its-own-subject). The
+  # remaining ratchet arms — bats dead-assertion, scoped by ARGUMENT LIST, and unguarded-kill,
+  # deliberately strict whole-corpus — carry no CC_*_OWN and are correctly outside this rule.
+  [ "$(printf '%s\n' "$pairs" | grep -c .)" -ge 13 ]
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     arm="$(printf '%s' "$p" | awk '{print $2}')"
