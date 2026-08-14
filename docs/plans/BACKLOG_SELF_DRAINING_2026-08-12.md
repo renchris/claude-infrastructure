@@ -1219,3 +1219,74 @@ whoever files under a master effort: **`cc-backlog add --condition <slug>` re-ke
 REWRITES its title. That happened here to `3ec6c070f52f` and was restored from the append-only trail
 in the same minute. File without `--condition`; the master conditions were applied by `link`, not by
 `add`.
+
+### 2026-08-14 — THE LOCAL DRAIN recycle #3: the actuator the audit was missing, and the fix that landed but never reached the box
+
+Two things came out of `ff0b5cf4528b` (limit-recover's DETECT-ONLY engagement audit), and the
+second one is the more transferable.
+
+**1. THE ACTUATOR — landed `a346b6993`.** The row carried a deliberate deferral from `4ba91ad95`
+("adding an actuator to a live unattended limit-recovery daemon is a different decision with a
+different blast radius"), so the question was *which* direction, not whether. **The daemon's own
+log answers it.** 1,800 of `poller.log`'s lines are one identical `ERROR … resume spawn failed`;
+a failed spawn releases its claim immediately (so the 15-minute TTL never brakes it) and leaves
+the record PARKED, so the very next tick re-fires it — without bound. **The defect was never "a
+fire that did not work is not RETRIED"; it is "a fire that cannot work is retried forever."** So
+the safe actuator is the one that fires LESS, and this one counts consecutive failed fires per sid
+and drops the sid from CANDIDACY at 3, for 6 hours, reporting once.
+
+🚨 **The audit's population was EMPTY, and the reason generalises.** `NOT-ENGAGED` = 0 against
+`RESUMED` = 2 over 24 days. The audit walks CLAIMS, and the 1,800-strong failure mode **deletes
+its claim on the way out** — so the arm was structurally blind to the only failure that was
+actually happening (memory: `cap-whose-population-is-empty`). A detector wired to the surviving
+half of a lifecycle measures the half that does not fail.
+
+Two design notes worth keeping. **The filter is at candidacy, not at the fire**: `MAX_PER_WORKTREE`
+is 1, so a latched sid left in the pool takes its worktree's only slot and is *then* skipped —
+starving the worktree instead of braking one session. And §2 keeps a second check anyway, ahead of
+the winner test, because a sid filtered out of selection reaches `sel_reason`'s empty answer and
+would be retired as "not selected" — a misattribution, and a permanent one. **A mutant of EITHER
+site reds A9**, which is why that case exists.
+
+**One fix the counter forced:** `claim_sid` now re-arms the audit's once-per-fire damping marker.
+That marker was only ever cleared by an ENGAGEMENT — which a session that keeps wedging never
+reaches — so the second wedge of a sid was silent forever, and the count could never pass 1 on the
+wedge path. **A damping marker keyed on recovery cannot damp a thing that never recovers.**
+
+**2. 🚨 THE PREDECESSOR'S FIX LANDED AND THE BOX NEVER GOT IT — measured, not inferred.** The
+previous entry closed on "one live alarm silenced" (`b2f192698`, the tmux absolute-path ladder).
+It is not silenced: `poller.log` was still emitting the pre-fix line — *verbatim*, including the
+`no GUI and no tmux` text the fix REPLACED — at 09:25 today, ten minutes before this was written,
+and the ERROR count had moved 1,797 → 1,800.
+
+The chain is short and worth stating because every claim about this repo's "live" state runs
+through it. The LaunchAgent execs `~/.claude/scripts/limit-recover/lr-reset-poller.sh`, which is a
+**per-file symlink into the shared checkout's working tree** — so the live bytes are whatever
+`~/Development/claude-infrastructure` currently has checked out, and that tree was **5 commits
+behind `origin/main`**. `deploy-live.sh` declines to advance it ("already deployed … 5 un-stamped
+commit(s) above") because of the standing GREEN-stamp fail-closed `35190812890d`. So a land that
+edits a live daemon is **`🚀` in fact and `✅` on paper**: the file exists, the symlink resolves,
+every structural check passes, and the box runs last week's version of it.
+
+**The falsifier that settles it in one line, for any future claim of this shape** — do not compare
+commit counts, compare the BYTES the box will execute against the fix:
+
+```bash
+grep -c 'LRP_TMUX_BIN' "$(readlink -f ~/.claude/scripts/limit-recover/lr-reset-poller.sh)"
+```
+
+That is the generalisation of `conclusion-must-reach-the-enforcing-store`: for a repo whose live
+layer is a symlink farm into a *working tree*, **landing on `origin/main` is not deployment**, and
+the lag is invisible to `git log`, to the ledger's ADD-detector (no file was added), and to the
+alarm itself (which keeps printing, identically, and therefore looks like a fix that did not work
+rather than a fix that never arrived). Filed as the live-layer question the convergence-deadlock
+effort owns; this session did not widen scope into it.
+
+**State at this recycle.** `master-stranded-work` 6 → 5 live rows: 4 blocked (unchanged — the two
+web-gated operator-only ones `8f4eae55a0c7` / `1dca461d4b90`, reso's `.eslintcache`
+`216f429128a2`, the 122-orphan worktree sweep `475b43aacbf2`) and **1 open** — `8ad4b02602dc`
+(no wake path for an idle headless session; stream-json needs a stdin-FIFO writer). Effort order
+by size after this one is unchanged: `master-verification-integrity` (13) →
+`master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
+`master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
+`master-fire-gate` (58) → `master-convergence-deadlock` (84).
