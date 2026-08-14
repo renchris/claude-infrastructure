@@ -57,15 +57,58 @@
 #     treatment utc-stamp-lint.sh gives its own scar fixtures).
 #   • The ALLOWLIST below — one entry, with its reason stated in-band so it cannot rot silently.
 #
-# Exit: 0 = every site covered · 1 = an uncovered site · 2 = bad usage / unreadable scan dir
-#       (LOUD, never silent-green — an unreadable tree is not a clean tree)
+# ── COULD-NOT-RUN IS A THIRD STATE, NEVER A VERDICT (backlog 91c6f91062ae) ──────────────────────
+# Until 2026-08-13 this lint had exactly ONE exit-2 path — "scan root is not a directory" — and all
+# three of its per-file predicates were written to swallow their own failure:
+#
+#   `grep -nE … "$f" 2>/dev/null || true`   a grep that could not RUN (rc>=2) became "no sites"
+#   `cat "$f" 2>/dev/null`                  a read that failed became "no logger call anywhere"
+#   `sed -n "lo,hip" "$f" 2>/dev/null`      a failed context read became "no logger call nearby"
+#
+# Each of those degrades a DEAD predicate into a shape indistinguishable from a real answer, and
+# they degrade in BOTH directions: a dead grep reports a clean file (false green), while a dead cat
+# or sed reports a file with no coverage (a FABRICATED violation naming a file that is fine). Both
+# sibling lints closed exactly this gap deliberately and each records what it cost —
+# test-hermeticity's ratchet fabricated violations against clean files under fork exhaustion, which
+# is worse than a bare non-verdict because it reads as an attributable RED.
+#
+# The remedy here is theirs: every predicate retries 3x 1s apart (they are pure and cheap, so
+# re-running is free), reports failure IN BAND as the single record SCAN_SENTINEL — fail-SAFE, never
+# a fabricated finding — and the run is then condemned to exit 2 with no verdict at all. ship-land
+# already routes exit 2 to arm_nonverdict, so the plumbing was there and this arm simply never
+# used it.
+#
+# 🚨 AND IT IS THE PREREQUISITE FOR THE MEMO BELOW, not a tidy-up beside it. A false green that
+# lasts one run is a bad afternoon; a false green KEYED ON CONTENT by a memo that never re-runs the
+# file is permanent.
+#
+# ── THE PER-FILE MEMO ────────────────────────────────────────────────────────────────────────────
+# 19.5 ms/file over 404 files = 7.3s, measured through ship-land's own_run, re-paid in full on every
+# optimistic round a sibling invalidates (exit 42) over a tree identical but for the sibling's delta.
+# scripts/lib/gate-memo.sh's BATCH API (memo_batch_arm/hit/record) hashes the whole population in
+# ONE `git hash-object` fork and then answers from builtins at 0.33 ms/file — the per-file API's
+# 16.8 ms/file would have paid 17 to save 19, which is why the batch form exists at all.
+#
+# Only "this file emitted nothing" is ever cached (gate-memo invariant 1: a finding is never cached
+# and always re-prints itself), and only from a run in which no predicate failed. That second veto
+# is ABSOLUTE and never a per-file delta — see the record site.
+#
+# The batch API is INDEX-KEYED, so THE POPULATION IS BUILT EXACTLY ONCE and the same array is both
+# armed on and walked. Two globs written to look alike are the one way this API can serve one file's
+# verdict for another.
+#
+# Kill switch: CC_PSC_MEMO=off (SHIP_LAND_MEMO=off also disables it, via memo_init).
+#
+# Exit: 0 = every site covered · 1 = an uncovered site · 2 = bad usage / unreadable scan dir /
+#       a predicate that could not RUN (LOUD, never silent-green — an unreadable tree is not a
+#       clean tree, and a scan that could not run is not a verdict)
 #
 # Env seams: CC_PSC_WINDOW (proximity lines, default 12) · CC_PSC_ALLOWLIST (overrides the embedded
 # ratchet; set-EMPTY genuinely means "no exemptions", which `${VAR:-}` could not express) ·
-# CC_PSC_OWN (newline-separated repo-relative paths; only these may BLOCK, everything else prints
-# ADVISORY — this is what BOUNDS the gate at its ship-land.sh call site, so an uninstrumented
-# spawner someone else left cannot freeze every land by everyone. Set-EMPTY is honored verbatim:
-# a land that changed no scannable file blocks on nothing).
+# CC_PSC_MEMO=off (disarm the memo) · CC_PSC_OWN (newline-separated repo-relative paths; only these
+# may BLOCK, everything else prints ADVISORY — this is what BOUNDS the gate at its ship-land.sh call
+# site, so an uninstrumented spawner someone else left cannot freeze every land by everyone.
+# Set-EMPTY is honored verbatim: a land that changed no scannable file blocks on nothing).
 set -uo pipefail
 
 WINDOW="${CC_PSC_WINDOW:-12}"
@@ -73,7 +116,18 @@ WINDOW="${CC_PSC_WINDOW:-12}"
 # "--selftest" and the lint reports rc=2 on its own verification path.
 SELFTEST=0
 if [ "${1:-}" = "--selftest" ]; then SELFTEST=1; shift; fi
-ROOT="${1:-$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.." && pwd)}"
+# SELF is symlink-resolved and ABSOLUTE — ~/.claude reaches this file through a per-file symlink, so
+# an unresolved $0 keys the memo on a path that differs per caller for identical bytes, and
+# SELF_ROOT would land in ~/.claude rather than the checkout. The sibling lint shipped both of those
+# in one iteration (a relative SELF made the key unobtainable from any other directory, so the memo
+# silently never armed).
+SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+case "$SELF" in /*) ;; *) SELF="$(cd "$(dirname "$SELF")" && pwd)/$(basename -- "$SELF")" ;; esac
+# SELF_ROOT is where the LINT lives; ROOT is what it SCANS. They are the same in the gate and
+# deliberately different under --selftest, so the library must be sourced from SELF_ROOT — sourcing
+# it from the scan root would leave the memo fail-closed OFF on every synthetic corpus.
+SELF_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+ROOT="${1:-$SELF_ROOT}"
 
 # The ratchet. `path::reason` — the reason is REQUIRED and is printed on every run, so an exemption
 # has to keep justifying itself to whoever reads the gate output.
@@ -105,19 +159,144 @@ _covered_by() {
   grep -qE 'cc_log_pane_spawn|log_pane_spawn\(' <<<"$1"
 }
 
-rc=0 checked=0 flagged=0 noticed=0 advised=0
-SELF_BASE="$(basename -- "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")"
+rc=0 checked=0 flagged=0 noticed=0 advised=0 seen=0 _emit0=0
+SELF_BASE="$(basename -- "$SELF")"
 
-scan_dir() {
-  local d="$1" f rel line n ctx file_covered
-  [ -d "$ROOT/$d" ] || return 0
-  while IFS= read -r f; do
-    rel="${f#"$ROOT"/}"
-    case "$(basename -- "$f")" in "$SELF_BASE"|pane-spawn-log.sh) continue ;; esac
-    # Allowlisted?
-    if printf '%s\n' "$ALLOWLIST" | grep -qF -- "$rel::"; then continue ;fi
-    file_covered=0; _covered_by "$(cat "$f" 2>/dev/null)" && file_covered=1
-    while IFS=: read -r n line; do
+# ── COULD-NOT-RUN: every per-file predicate RETRIES, then reports IN BAND ────────────────────────
+# The sentinel is RETURNED rather than CHECK_FAILED being set inside these functions, and that is
+# forced rather than stylistic: every caller reads them through `$( )`, so an assignment made in one
+# would happen in a SUBSHELL and be discarded — the flag would read 0 in the parent and an
+# unrunnable scan would exit 0, silent-green, which is the exact conflation the third state exists
+# to prevent. Three tries 1s apart: these are pure reads, so re-running one is free.
+SCAN_SENTINEL='!SCAN-FAILED'
+CHECK_FAILED=0
+# TEST SEAM — the DELAY between tries, never the NUMBER of them. The three-try count is the safety
+# property (a transient failure must be re-asked before the run is condemned) and is fixed in the
+# code; --selftest sets this to 0 so nine real seconds of sleeping do not enter every land's gate,
+# and pins the count separately by COUNTING the shim's invocations. A seam that could change the
+# try count would let the harness collapse the state under test.
+PSC_RETRY_SLEEP="${CC_PSC_RETRY_SLEEP:-1}"
+PSC_SITE_RE='launch[[:space:]]+--type=|launch[[:space:]]+--location=|create tab with|create window with|split vertically with|split horizontally with|detach-window'
+
+# psc_body <file> — the file's bytes, for the file-level coverage question. An EMPTY file is an
+# ANSWER (rc 0, no output); only a read that could not run yields the sentinel.
+psc_body() {
+  local out rc
+  for _ in 1 2 3; do
+    out="$(cat "$1" 2>/dev/null)"; rc=$?
+    if [ "$rc" -eq 0 ]; then printf '%s\n' "$out"; return 0; fi
+    sleep "$PSC_RETRY_SLEEP"
+  done
+  echo "pane-spawn-coverage-lint: ⛔ could not READ $1 after 3 tries (cat rc=$rc)" >&2
+  printf '%s\n' "$SCAN_SENTINEL"   # fail-SAFE: a non-verdict, never "this file has no log call"
+}
+
+# psc_sites <file> — "<lineno>:<line>" per primitive occurrence. grep rc 1 is NO MATCH, which is an
+# ANSWER; only rc>=2 is a predicate that could not RUN. Collapsing the two under `|| true` is what
+# let a dead grep report a clean file, and it was the false-GREEN half of this gap.
+psc_sites() {
+  local out rc
+  for _ in 1 2 3; do
+    out="$(grep -nE "$PSC_SITE_RE" "$1" 2>/dev/null)"; rc=$?
+    if [ "$rc" -le 1 ]; then [ -n "$out" ] && printf '%s\n' "$out"; return 0; fi
+    sleep "$PSC_RETRY_SLEEP"
+  done
+  echo "pane-spawn-coverage-lint: ⛔ site scan could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  printf '%s\n' "$SCAN_SENTINEL"
+}
+
+# psc_context <file> <lineno> — the ±WINDOW window around a site. A dead sed here was the
+# FABRICATED-VIOLATION half: an empty context reads as "no log call nearby" and names a clean file.
+psc_context() {
+  local out rc lo hi
+  lo=$(( $2 > WINDOW ? $2 - WINDOW : 1 )); hi=$(( $2 + WINDOW ))
+  for _ in 1 2 3; do
+    out="$(sed -n "${lo},${hi}p" "$1" 2>/dev/null)"; rc=$?
+    if [ "$rc" -eq 0 ]; then printf '%s\n' "$out"; return 0; fi
+    sleep "$PSC_RETRY_SLEEP"
+  done
+  echo "pane-spawn-coverage-lint: ⛔ context read could not RUN for $1:$2 after 3 tries (sed rc=$rc)" >&2
+  printf '%s\n' "$SCAN_SENTINEL"
+}
+
+# THE EMIT DETECTOR. Every branch in scan_file that prints a finding increments exactly one of these
+# three, so their sum is unchanged across a file IFF that file emitted nothing. `checked` is
+# deliberately NOT in the sum: it counts SITES, and a file whose every site is covered increments it
+# while emitting nothing — which is precisely the cacheable case.
+psc_emit_sum() { printf '%s' "$(( flagged + noticed + advised ))"; }
+
+# ── the memo ────────────────────────────────────────────────────────────────────────────────────
+PSC_MEMO_OK=0 PSC_CHECKER="" PSC_MEMO_HITS=0 PSC_MEMO_RAN=0
+PSC_FILES=()
+if [ "${CC_PSC_MEMO:-on}" != "off" ] && [ -r "$SELF_ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$SELF_ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+
+psc_memo_arm() {  # $@ = the EXACT ordered population → 0 = armed
+  PSC_MEMO_OK=0
+  [ "${CC_PSC_MEMO:-on}" != "off" ] || return 1
+  command -v memo_init >/dev/null 2>&1 || return 1
+  command -v memo_batch_arm >/dev/null 2>&1 || return 1  # an older lib ⇒ memo OFF, today's behaviour
+  memo_init || return 1                    # dirty tree · no git dir · unwritable store ⇒ memo OFF
+  local selfblob readset
+  selfblob="$(git hash-object -- "$SELF" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  # THE READ SET, written as an executable declaration rather than described in prose. Everything
+  # that can change what "this file emitted nothing" means:
+  #   lint   — the detector itself, which carries both regexes, both tiers and every exclusion
+  #   window — CC_PSC_WINDOW decides tier 2 DIRECTLY; a wider window turns a NOTICE into silence
+  #   allow  — hashed BY VALUE, because CC_PSC_ALLOWLIST changes what this lint calls green without
+  #            changing one byte of it, and it also selects the population
+  #
+  # CC_PSC_OWN is deliberately ABSENT, and that is an argument rather than an oversight: own-scope
+  # decides only WHICH emission an uncovered site becomes — blocking, or ADVISORY. Both are
+  # emissions, so a file with an uncovered site is never recorded under either. "Emitted nothing"
+  # means every site was covered within the window, which no own-set can change. Pinned by the
+  # own-scope memo cases in tests/pane-spawn-memo.bats, in both directions.
+  readset="$(
+    printf 'psc-readset/v1\n'
+    printf 'lint=%s\n'   "$selfblob"
+    printf 'window=%s\n' "$WINDOW"
+    printf 'allow=%s\n'  "$ALLOWLIST"
+  )" || return 1
+  PSC_CHECKER="psc/$(printf '%s' "$readset" | git hash-object --stdin 2>/dev/null)"
+  [ "$PSC_CHECKER" != "psc/" ] || return 1
+  memo_batch_arm "$PSC_CHECKER" "$@" || return 1
+  PSC_MEMO_OK=1
+  return 0
+}
+
+# THE POPULATION, BUILT EXACTLY ONCE — see the batch-memo note in the header. BOTH skip filters (the
+# self/library exclusion and the allowlist) live HERE, so a file skipped for either reason is absent
+# from the armed list and the walked list alike, and the index cannot drift. Building it twice is
+# the only way this API can serve one file's verdict for another.
+collect_files() {
+  local d f rel
+  for d in bin scripts hooks commands; do
+    [ -d "$ROOT/$d" ] || continue
+    while IFS= read -r f; do
+      case "$(basename -- "$f")" in "$SELF_BASE"|pane-spawn-log.sh) continue ;; esac
+      rel="${f#"$ROOT"/}"
+      # Allowlisted?
+      if printf '%s\n' "$ALLOWLIST" | grep -qF -- "$rel::"; then continue ;fi
+      PSC_FILES[${#PSC_FILES[@]}]="$f"
+    done < <(find "$ROOT/$d" -type f \( -name '*.sh' -o -name '*.py' -o ! -name '*.*' \) 2>/dev/null)
+  done
+}
+
+scan_file() {
+  local f="$1" rel line n ctx file_covered body sites
+  rel="${f#"$ROOT"/}"
+  body="$(psc_body "$f")"
+  if [ "$body" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; return 0; fi
+  file_covered=0; _covered_by "$body" && file_covered=1
+  sites="$(psc_sites "$f")"
+  if [ "$sites" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; return 0; fi
+  [ -n "$sites" ] || return 0
+  # A heredoc, NOT `< <(grep …)`: the population is scanned once above so its failure can be seen,
+  # and re-running the grep here would be a second, unguarded predicate.
+  while IFS=: read -r n line; do
       [ -n "$n" ] || continue
       # Comment lines describe primitives; they do not issue them. Leading-# only, so an inline
       # trailing comment on a real launch still counts as the launch it is.
@@ -127,7 +306,8 @@ scan_dir() {
       # `detach-window` is a primitive ONLY without a target tab.
       case "$line" in *detach-window*) case "$line" in *--target-tab*) continue ;; esac ;; esac
       checked=$((checked + 1))
-      ctx="$(sed -n "$(( n > WINDOW ? n - WINDOW : 1 )),$(( n + WINDOW ))p" "$f" 2>/dev/null)"
+      ctx="$(psc_context "$f" "$n")"
+      if [ "$ctx" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; continue; fi
       _covered_by "$ctx" && continue
       if [ "$file_covered" = 1 ]; then
         printf 'NOTICE %s:%s: primitive not within %s lines of a log call (file IS instrumented):\n    %s\n' \
@@ -147,8 +327,44 @@ scan_dir() {
       printf '%s:%s: pane-spawn in a file with NO log call anywhere:\n    %s\n' \
         "$rel" "$n" "$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-120)" >&2
       flagged=$((flagged + 1)); rc=1
-    done < <(grep -nE 'launch[[:space:]]+--type=|launch[[:space:]]+--location=|create tab with|create window with|split vertically with|split horizontally with|detach-window' "$f" 2>/dev/null || true)
-  done < <(find "$ROOT/$d" -type f \( -name '*.sh' -o -name '*.py' -o ! -name '*.*' \) 2>/dev/null)
+  done <<EOF
+$sites
+EOF
+}
+
+# THE WALK. `seen` moves exactly once per iteration, as the first statement and before any
+# `continue`, so the index below is DERIVED as `seen - 1` rather than kept in a parallel counter
+# that eventually drifts from the position in PSC_FILES.
+scan_all() {
+  local f
+  for f in ${PSC_FILES[@]+"${PSC_FILES[@]}"}; do
+    seen=$((seen + 1))
+    if [ "$PSC_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      PSC_MEMO_HITS=$((PSC_MEMO_HITS + 1))
+      continue
+    fi
+    PSC_MEMO_RAN=$((PSC_MEMO_RAN + 1))
+    _emit0="$(psc_emit_sum)"
+    scan_file "$f"
+    # ── THE RECORD, the ONLY place a green is earned here. Two vetoes, both fail-safe: ──
+    # (1) this file emitted something ⇒ it is a finding, and a finding is NEVER cached (gate-memo
+    #     invariant 1) — it must re-print itself from the file on every run.
+    # (2) CHECK_FAILED is set ⇒ some predicate in this run could not RUN. Every unrunnable state
+    #     here is fail-SAFE — psc_body/psc_sites/psc_context each return a sentinel rather than a
+    #     fabricated answer — so a non-verdict looks EXACTLY like a clean file at this site.
+    #     Caching it would freeze a could-not-check into a permanent green keyed on content, the one
+    #     way a memo turns "I don't know" into "green".
+    #
+    #     🚨 ABSOLUTE, never a per-file delta. A delta vetoes only the FIRST file whose predicate
+    #     dies; every file after it compares equal to its own baseline and is RECORDED — out of a
+    #     run that exits 2 and whose whole point is that it produced no verdict. The sibling lint
+    #     shipped exactly that bug for one iteration and only its own control caught it.
+    if [ "$PSC_MEMO_OK" = "1" ] \
+       && [ "$(psc_emit_sum)" = "$_emit0" ] \
+       && [ "$CHECK_FAILED" -eq 0 ]; then
+      memo_batch_record "$((seen - 1))"
+    fi
+  done
 }
 
 if [ "$SELFTEST" = 1 ]; then
@@ -156,6 +372,13 @@ if [ "$SELFTEST" = 1 ]; then
   trap 'rm -rf "$T"' EXIT
   mkdir -p "$T/scripts"
   pass=0 total=0
+  # --selftest owns the DETECTOR on synthetic fixtures with no history; tests/pane-spawn-memo.bats
+  # owns the MEMO against a real committed corpus. That split is the repo's standing rule, and here
+  # it is also mechanical: memo_init keys off the CURRENT directory's git state, not $ROOT, so a
+  # selftest left memo-armed would write entries for /tmp fixtures into whatever repo the caller
+  # happens to be standing in. Asking either harness to do the other's job yields a vacuous pass.
+  export CC_PSC_MEMO=off
+  export CC_PSC_RETRY_SLEEP=0   # the DELAY only — the three-try count is pinned by counting below
   _case() { # $1=name $2=expected-rc $3=file-body
     total=$((total + 1))
     printf '%s\n' "$3" > "$T/scripts/case.sh"
@@ -235,8 +458,53 @@ kt launch --type=window --cwd=current'
   total=$((total + 1))
   ( "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")" "$T/definitely-not-here" >/dev/null 2>&1 )
   [ $? = 2 ] && pass=$((pass + 1)) || echo "  selftest FAIL: missing root should exit 2" >&2
+
+  # A root that IS a directory but holds no scannable file proved nothing about coverage. Without
+  # this it reports OK, which is one directory typo away from a green gate over an unscanned tree.
+  total=$((total + 1))
+  mkdir -p "$T/emptyroot"
+  ( "$SELF" "$T/emptyroot" >/dev/null 2>&1 )
+  [ $? = 2 ] && pass=$((pass + 1)) || echo "  selftest FAIL: a root with nothing to scan should exit 2, not report OK" >&2
+
+  # ── COULD-NOT-RUN, ONE CASE PER PREDICATE (backlog 91c6f91062ae) ────────────────────────────────
+  # Each case is a PATH shim that fails for exactly ONE file and execs the real tool otherwise, so
+  # only the predicate under test dies. That precision is what makes these cases mean anything: this
+  # lint also greps a HERESTRING (_covered_by), greps the allowlist with no path argument, and seds
+  # STDIN to trim leading space — a blanket "make grep fail" would kill those too and the case would
+  # go red for a reason it does not name.
+  #
+  # THE THREE MUTANTS ARE NOT THE SAME MUTANT. Before this fix each predicate degraded differently,
+  # and two of the three degraded toward a FABRICATED RED rather than a false green:
+  #   grep dead ⇒ "no primitive sites"     ⇒ rc 0, silent green over an unscanned file
+  #   cat dead  ⇒ "no logger call in file" ⇒ rc 1, a tier-1 block naming a file that is fine
+  #   sed dead  ⇒ "no logger call nearby"  ⇒ rc 1, the same fabricated block one tier down
+  # All three must now be rc 2 — a non-verdict — and each must have been RE-ASKED three times first.
+  REAL_GREP="$(command -v grep)"; REAL_CAT="$(command -v cat)"; REAL_SED="$(command -v sed)"
+  SHIM="$T/shim"; mkdir -p "$SHIM"
+  _deadcase() { # $1=tool $2=real-path $3=human name
+    total=$((total + 1))
+    printf 'kt launch --type=window --cwd=current\n' > "$T/scripts/case.sh"
+    rm -f "$SHIM/hits" "$SHIM/grep" "$SHIM/cat" "$SHIM/sed"
+    { echo '#!/bin/bash'
+      # shellcheck disable=SC2016  # authoring the shim: $a and $@ are read by the SHIM, not by us
+      printf 'for a in "$@"; do [ "$a" = "%s" ] && { echo x >> "%s"; exit 3; }; done\n' \
+        "$T/scripts/case.sh" "$SHIM/hits"
+      printf 'exec %s "$@"\n' "$2"
+    } > "$SHIM/$1"
+    chmod +x "$SHIM/$1"
+    ( PATH="$SHIM:$PATH" CC_PSC_ALLOWLIST="" "$SELF" "$T" >/dev/null 2>&1 )
+    local got=$? tries=0
+    [ -f "$SHIM/hits" ] && tries="$("$REAL_GREP" -c . "$SHIM/hits")"
+    if [ "$got" = 2 ] && [ "$tries" = 3 ]; then pass=$((pass + 1))
+    else echo "  selftest FAIL: $3 (want rc=2 after 3 tries, got rc=$got after $tries)" >&2; fi
+    rm -f "$SHIM/hits" "$SHIM/grep" "$SHIM/cat" "$SHIM/sed"
+  }
+  _deadcase grep "$REAL_GREP" "a dead SITE SCAN must be a non-verdict, not a clean file"
+  _deadcase cat  "$REAL_CAT"  "a dead FILE READ must be a non-verdict, not an uninstrumented file"
+  _deadcase sed  "$REAL_SED"  "a dead CONTEXT READ must be a non-verdict, not an uncovered site"
+
   if [ "$pass" = "$total" ]; then
-    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; LOUD on an unreadable root; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset."
+    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; LOUD on an unreadable root and on a root with nothing to scan; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset; and each of the three per-file predicates (site scan, file read, context read) is RE-ASKED 3x and then condemns the run to exit 2 rather than degrading into a clean file or a fabricated violation."
     exit 0
   fi
   echo "pane-spawn-coverage-lint --selftest: $pass/$total FAILED — the detector does not discriminate." >&2
@@ -250,9 +518,30 @@ if [ -n "$ALLOWLIST" ]; then
     [ -n "$a" ] && printf '  allowlisted: %s\n    reason: %s\n' "${a%%::*}" "${a#*::}" >&2
   done
 fi
-for d in bin scripts hooks commands; do scan_dir "$d"; done
+collect_files
+if [ "${#PSC_FILES[@]}" -gt 0 ]; then
+  psc_memo_arm "${PSC_FILES[@]}" || true
+fi
+scan_all
+if [ "$PSC_MEMO_OK" = "1" ]; then
+  echo "pane-spawn-coverage-lint: per-file memo — $PSC_MEMO_HITS verdict(s) carried, $PSC_MEMO_RAN proven fresh." >&2
+fi
+# NOTHING TO SCAN IS NOT A CLEAN TREE. A scan root that is a directory but holds no bin/, scripts/,
+# hooks/ or commands/ file proved nothing about coverage, and reporting OK over it is the same
+# silent-green this third state exists to close — one directory typo away from a green gate.
+if [ "$seen" -eq 0 ]; then
+  echo "pane-spawn-coverage-lint: ⛔ nothing to scan under $ROOT (no bin/, scripts/, hooks/ or commands/ file)" >&2
+  exit 2
+fi
+# CHECKED AFTER the findings are printed and BEFORE any verdict is reported. An unrunnable predicate
+# condemns the whole run: the lines above may be real, but the run as a whole has no verdict to give.
+if [ "$CHECK_FAILED" -ne 0 ]; then
+  echo "pane-spawn-coverage-lint: ⛔ UNUSABLE — a predicate could not RUN (see above); no verdict." >&2
+  echo "  This is NOT a coverage report. Re-run when the box is quieter; do not 'fix' any file on it." >&2
+  exit 2
+fi
 if [ "$rc" = 0 ]; then
-  echo "pane-spawn-coverage-lint: OK — $checked pane-spawn site(s); $noticed tier-2 notice(s), $advised advisory (outside this diff)." >&2
+  echo "pane-spawn-coverage-lint: OK — $checked pane-spawn site(s) across the $PSC_MEMO_RAN file(s) scanned this run ($PSC_MEMO_HITS of $seen carried by the memo); $noticed tier-2 notice(s), $advised advisory (outside this diff)." >&2
 else
   echo "pane-spawn-coverage-lint: RED — $flagged of $checked pane-spawn site(s) leave no row." >&2
   echo "  Every spawn must call cc_log_pane_spawn (scripts/lib/pane-spawn-log.sh), or the log's" >&2
