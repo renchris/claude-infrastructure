@@ -163,6 +163,68 @@ PANIC_SCAN="${CC_PANIC_SCAN:-on}"
 PANIC_HEAD_BYTES="${CC_PANIC_HEAD_BYTES:-16000000}"
 TICKS_PANIC_ONLY=0
 
+# ── FREEZE ATTRIBUTION (2026-08-13 — the deaths that write NO panic file) ─────────────────────────
+# THE GAP THIS CLOSES. panic_scan globs `*.panic`. On 2026-08-13 21:22:39 this box wedged hard
+# during active use and the operator recovered it by HOLDING THE POWER BUTTON 80 minutes later.
+# A forced power-off is a power cut from software's point of view: no panic string is written, no
+# SOCD data is stored (`DumpPanic` read the NVMe panic region at the next boot and found it all
+# zeros), and so panic_scan correctly reported `none` and the ledger recorded NOTHING. The single
+# worst stability event since the compressor panics left no row in the store built to make the next
+# death attributable, and re-deriving it by hand cost a whole session of log forensics.
+#
+# WHY A SIBLING READER AND NOT A WIDER GLOB. There is no file to widen the glob to. The panic
+# path's evidence is a report; this path's evidence is the ABSENCE of one, plus the machine's own
+# record that a human had to intervene physically. Different artifacts, read different ways — so
+# different functions writing different `kind`s into the one ledger.
+#
+# THE SIGNAL, AND WHY NOBODY CAN FAKE IT. macOS writes `ResetCounter-*.diag` on an abnormal boot,
+# carrying a `Boot faults:` line straight from the PMU. This box holds one verified sample of each
+# class and they discriminate cleanly:
+#     2026-08-13 (freeze, forced restart) → `Boot faults: btn_rst,finger_reset force_off`
+#     2026-08-09 (watchdog panic #6)      → `Boot faults: wdog,reset_in1`
+# `force_off`/`btn_rst` IS the power button. It is the hardware's own record that the OS stopped
+# answering and a person reached for the case — self-reported by nobody, which is exactly the
+# property every other rung in this repo has to work for. `wdog` always pairs with a panic report,
+# so that branch DEFERS to panic_scan rather than recording one death as two incidents.
+#
+# WHY THE .diag OUTRANKS THE SYSCTL. `kern.shutdownreason` on this box reads
+# `btn_rst,finger_reset force_off ap_panic` — it carries an `ap_panic` token on a boot where no
+# panic occurred and none was recoverable, so classifying on the sysctl alone would have called
+# tonight's freeze a panic. The dated `.diag` is per-incident, has a verified sample of BOTH
+# classes, and does not carry that token. The sysctl stays as a fallback for when no .diag exists,
+# and BOTH are recorded raw so a later reader can re-adjudicate instead of inheriting this reading
+# (memory: read-the-diff-not-the-commit-subject).
+#
+# WHAT MAKES THE ROW WORTH HAVING: THE DARK WINDOW. A freeze's whole difficulty is that the
+# evidence stops. But the samplers' LAST ROW is the pre-freeze state and it survives — on
+# 2026-08-13 capacity-alarm's final tick (04:22:39Z, to the second) carried load_1m 13.11 (up from
+# 9.35), ptys_used 9 (down from 16) and active_gb 13.79 (down 5.4 GB in 63 s): a mass session
+# teardown under a load spike, which is the only description of the trigger that exists anywhere.
+# So the row records where the darkness STARTS, how long it ran, and that last tick verbatim. §6
+# discriminator 4 already established the sampler's own death as the earliest machine-readable
+# distress signal on this box; this reads it deliberately instead of by hand, once, after the fact.
+#
+# THE STATES ARE KEPT DISTINCT, for panic_scan's reason — "the last shutdown was clean" and "I
+# could not tell" must never share a value:
+#   freeze     a forced power-off with no panic for this boot — recorded
+#   watchdog   the watchdog fired; panic_scan owns the detail — no row, deliberately
+#   clean      an abnormal-boot record was looked for and genuinely does not exist
+#   already    this boot is in the ledger — idempotent across daemon restarts
+#   unreadable the boot identity could not be read — we do NOT know, and say so (rc 3)
+FREEZE_SCAN="${CC_FREEZE_SCAN:-on}"
+# Colon-separated. Defaults to the two samplers that tick fast enough to bound a freeze: the 60 s
+# capacity report and this daemon's own 10 s loop. An absent or unreadable file is NAMED in
+# sampler_source rather than silently skipped.
+FREEZE_SAMPLERS="${CC_FREEZE_SAMPLERS:-$HOME/.claude/logs/capacity-alarm.jsonl:${CC_SENTINEL_LOG:-$HOME/.claude/logs/compressor-sentinel.jsonl}}"
+FREEZE_RESET_DIRS="${CC_FREEZE_RESET_DIRS:-$PANIC_DIRS}"
+# A fixed cost. The samplers tick at 60 s and 10 s, so 400 rows is hours of tail — and at daemon
+# startup every row in the file is pre-boot anyway. A runaway guard, not a working limit.
+FREEZE_TAIL_ROWS="${CC_FREEZE_TAIL_ROWS:-400}"
+# A ResetCounter is written seconds AFTER the boot it describes (measured: boot 22:42:29, file
+# 22:43:17), so the match window opens before boottime rather than at it.
+FREEZE_RESET_SLACK_S="${CC_FREEZE_RESET_SLACK_S:-120}"
+TICKS_FREEZE_ONLY=0
+
 while [ $# -gt 0 ]; do
   if   [ "$1" = "--ticks" ]; then
     TICKS="${2:-}"
@@ -170,6 +232,7 @@ while [ $# -gt 0 ]; do
     shift
   elif [ "$1" = "--once" ];  then TICKS=1
   elif [ "$1" = "--panic-scan" ]; then TICKS_PANIC_ONLY=1
+  elif [ "$1" = "--freeze-scan" ]; then TICKS_FREEZE_ONLY=1
   elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0
   else echo "compressor-sentinel.sh: unknown arg '$1'" >&2; exit 64
@@ -723,12 +786,202 @@ panic_scan() {
   return 0
 }
 
+# ── freeze attribution: the death that leaves no report, read from the boot that followed it ──────
+# Every reader below returns NON-ZERO rather than a value when its instrument is unreadable, and
+# none has a fallback — panic_scan's contract, kept.
+
+# kern.boottime → the epoch seconds of THIS boot. This is the row's identity: one boot, one row,
+# so the ledger stays an incident history rather than a boot history however often we restart.
+freeze_boot_epoch() {
+  local raw
+  raw="$(sysctl -n kern.boottime 2>/dev/null)" || return 1
+  # `{ sec = 1786686149, usec = 597125 }`.
+  # THE `^{` ANCHOR IS THE WHOLE POINT, and it cost a live run to learn. The first draft read
+  # `s/.*sec = \([0-9]*\)/\1/` — and `.*` is GREEDY, so it walked forward to the LONGEST match and
+  # captured `usec`, whose name ends in the very token being anchored on. Against the real sysctl
+  # that returned 597125 — the MICROSECONDS — as the boot epoch: a number that is well-formed, all
+  # digits, passes every type check, and is wrong by fifty-six years. Anchoring at `^{` makes `usec`
+  # unreachable, because there is only one `sec` immediately after the brace.
+  raw="$(printf '%s' "$raw" | sed -n 's/^{ *sec *= *\([0-9][0-9]*\).*/\1/p')"
+  case "$raw" in ''|*[!0-9]*) return 1 ;; esac
+  # AND A PLAUSIBILITY FLOOR, because the anchor above is a fix for the bug that was found and this
+  # is the guard for the next format change. 10^9 is 2001-09-09; no Mac boots before it. A parse
+  # that yields a number this small has misread the field, and REFUSING is the only safe answer —
+  # a bogus-but-numeric boot id would key a ledger row that no later run could ever match, silently
+  # re-recording the same boot forever.
+  [ "$raw" -ge 1000000000 ] 2>/dev/null || return 1
+  printf '%s' "$raw"
+}
+
+freeze_shutdown_reason() {
+  local v
+  v="$(sysctl -n kern.shutdownreason 2>/dev/null)" || return 1
+  v="$(printf '%s' "$v" | tr -s ' \t' ' ' | sed 's/^ *//; s/ *$//')"
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+# The `Boot faults:` line of the newest ResetCounter written for THIS boot. Empty (rc 1) when no
+# abnormal-boot record exists — which is itself the answer for a clean shutdown, not a failure.
+freeze_boot_faults() { # <boot_epoch>
+  local d floor newest rows="" line
+  floor=$(( $1 - FREEZE_RESET_SLACK_S ))
+  for d in ${FREEZE_RESET_DIRS//:/ }; do
+    [ -d "$d" ] || continue
+    rows="$rows$(
+      { find "$d" -maxdepth 1 -type f -name 'ResetCounter-*.diag' -exec stat -f '%m %N' {} + \
+          || find "$d" -maxdepth 1 -type f -name 'ResetCounter-*.diag' -exec stat -c '%Y %n' {} + ; } 2>/dev/null
+    )
+"
+  done
+  newest="$(printf '%s' "$rows" | grep -v '^$' | sort -rn | awk -v f="$floor" '$1 >= f {print; exit}')"
+  [ -n "$newest" ] || return 1
+  newest="$(printf '%s' "$newest" | cut -d' ' -f2-)"
+  [ -r "$newest" ] || return 1
+  line="$(grep -a -m1 '^Boot faults:' "$newest" 2>/dev/null | sed 's/^Boot faults: *//')"
+  [ -n "$line" ] || return 1
+  printf '%s\t%s' "$line" "$newest"
+}
+
+# The last row a sampler wrote BEFORE this boot — i.e. its final breath before the darkness. The
+# `< $b` filter matters: this runs at daemon startup, and a sampler that has already ticked once on
+# the new boot would otherwise hand back a post-boot row and silently erase the whole dark window.
+freeze_sampler_tail() { # <file> <boot_iso> → the row, or rc 1
+  local row
+  [ -r "$1" ] || return 1
+  row="$(tail -n "$FREEZE_TAIL_ROWS" "$1" 2>/dev/null \
+        | jq -c --arg b "$2" 'select(type == "object" and .ts != null and (.ts | tostring) < $b)' 2>/dev/null \
+        | tail -1)"
+  [ -n "$row" ] || return 1
+  printf '%s' "$row"
+}
+
+freeze_scan() {
+  mkdir -p "$(dirname "$PANIC_LEDGER")" 2>/dev/null || true
+
+  local boot
+  if ! boot="$(freeze_boot_epoch)"; then
+    printf 'freeze-scan: unreadable (kern.boottime)\n' >&2
+    return 3
+  fi
+
+  # Idempotent on the boot, not on a filename: the artifacts here are re-derived every start.
+  if [ -f "$PANIC_LEDGER" ] && grep -qF "\"boot\":$boot," "$PANIC_LEDGER" 2>/dev/null; then
+    printf 'freeze-scan: already recorded (boot %s)\n' "$boot" >&2
+    return 0
+  fi
+
+  local reason="" faults="" diagpath="" src sig raw
+  reason="$(freeze_shutdown_reason)" || reason=""
+  if raw="$(freeze_boot_faults "$boot")"; then
+    faults="${raw%%$'\t'*}"; diagpath="${raw#*$'\t'}"
+  fi
+
+  # The .diag wins when it exists; the sysctl is the fallback. Named, so a reader of the row knows
+  # which artifact the verdict came off — and both are stored raw regardless.
+  if [ -n "$faults" ]; then sig="$faults"; src="resetcounter"
+  elif [ -n "$reason" ]; then sig="$reason"; src="kern.shutdownreason"
+  else
+    printf 'freeze-scan: clean (no abnormal-boot record for boot %s)\n' "$boot" >&2
+    return 0
+  fi
+
+  # ORDER IS LOAD-BEARING. wdog is tested FIRST because a watchdog boot can also carry a button
+  # token, and a death that panicked belongs to panic_scan — recording it here too would make one
+  # event two incidents and inflate every count taken off this ledger.
+  case "$sig" in
+    *wdog*)
+      printf 'freeze-scan: watchdog boot (%s) — the panic reader owns this one\n' "$sig" >&2
+      return 0 ;;
+  esac
+  case "$sig" in
+    *force_off*|*btn_rst*) : ;;
+    *)
+      printf 'freeze-scan: clean (%s)\n' "$sig" >&2
+      return 0 ;;
+  esac
+
+  # A forced power-off that ALSO left a panic report is not this class: the box died, wrote its
+  # report, and the button was only how it got back. Defer, rather than double-count.
+  local newest_panic=""; newest_panic="$(panic_newest)"
+  if [ -n "$newest_panic" ] && [ -r "$newest_panic" ]; then
+    local pm; pm="$(stat -f%m "$newest_panic" 2>/dev/null || stat -c%Y "$newest_panic" 2>/dev/null || echo 0)"
+    case "$pm" in ''|*[!0-9]*) pm=0 ;; esac
+    if [ "$pm" -ge $(( boot - FREEZE_RESET_SLACK_S )) ]; then
+      printf 'freeze-scan: forced power-off WITH a panic report (%s) — the panic reader owns it\n' \
+        "$(basename "$newest_panic")" >&2
+      return 0
+    fi
+  fi
+
+  local boot_iso; boot_iso="$(date -u -r "$boot" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+  # THE DARK WINDOW, and EVERY sampler's final breath — not just the newest one.
+  # The boundary is the newest pre-boot row (darkness starts at the last evidence of life), but the
+  # PAYLOAD must be all of them, because the samplers carry disjoint fields and the informative one
+  # is not always the newest. Measured on this very incident: the sentinel's 04:22:54Z row won the
+  # boundary by 15 s, while the fact that actually describes the trigger — load_1m 13.11 (up from
+  # 9.35), ptys_used 9 (down from 16), active_gb down 5.4 GB in 63 s — lives only in capacity-alarm's
+  # 04:22:39Z row. Keeping the newest ALONE would have thrown away the only description of the
+  # trigger that survives, which is the entire reason this reader exists.
+  # "Could not read any" stays distinct from "the darkness was zero long" — sampler_source says which.
+  local f last_ts="" last_src="" ssrc="none-readable"
+  local ticksf="${TMPDIR:-/tmp}/cs-freeze-ticks.$$"; : > "$ticksf"
+  for f in ${FREEZE_SAMPLERS//:/ }; do
+    [ -e "$f" ] || continue
+    [ "$ssrc" = "none-readable" ] && ssrc="readable-no-preboot-row"
+    local row ts
+    row="$(freeze_sampler_tail "$f" "${boot_iso:-9999}")" || continue
+    ts="$(printf '%s' "$row" | jq -r '.ts // empty' 2>/dev/null)"
+    [ -n "$ts" ] || continue
+    jq -cn --arg k "$(basename "$f")" --argjson v "$row" '{key:$k,value:$v}' >> "$ticksf" 2>/dev/null
+    if [ -z "$last_ts" ] || [ "$ts" \> "$last_ts" ]; then
+      last_ts="$ts"; last_src="$f"; ssrc="$(basename "$f")"
+    fi
+  done
+  local ticks; ticks="$(jq -cs 'from_entries' "$ticksf" 2>/dev/null)"
+  case "$ticks" in ''|'null') ticks='{}' ;; esac
+  rm -f "$ticksf" 2>/dev/null || true
+
+  local dark_min="null"
+  if [ -n "$last_ts" ] && [ -n "$boot_iso" ]; then
+    local le; le="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$last_ts" +%s 2>/dev/null \
+                    || date -u -d "$last_ts" +%s 2>/dev/null || echo '')"
+    case "$le" in ''|*[!0-9]*) le="" ;; esac
+    [ -n "$le" ] && dark_min="$(awk -v a="$boot" -v b="$le" 'BEGIN{printf "%.1f", (a-b)/60}')"
+  fi
+
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+         --argjson boot "$boot" --arg biso "${boot_iso:-unknown}" \
+         --arg sig "$sig" --arg src "$src" --arg faults "${faults:-}" \
+         --arg reason "${reason:-}" --arg diag "${diagpath:-}" \
+         --arg lts "${last_ts:-}" --arg lsrc "${last_src:-}" --arg ssrc "$ssrc" \
+         --argjson dark "$dark_min" \
+         --argjson ticks "$ticks" \
+    '{ts:$ts,kind:"freeze",boot:$boot,booted_at:$biso,
+      signature:$sig,signature_source:$src,boot_faults:$faults,shutdown_reason:$reason,
+      reset_report:$diag,
+      dark_from:(if $lts == "" then null else $lts end),dark_to:$biso,dark_minutes:$dark,
+      sampler:(if $lsrc == "" then null else $lsrc end),sampler_source:$ssrc,
+      last_ticks:$ticks,
+      note:"forced power-off with no panic report: the OS stopped answering and a human held the button. last_ticks holds each sampler final pre-freeze row — the only description of the trigger that survives."}' \
+    >> "$PANIC_LEDGER" 2>/dev/null || return 3
+
+  printf 'freeze-scan: recorded FREEZE boot=%s dark=%s min from %s (%s)\n' \
+    "$boot" "$dark_min" "${last_ts:-<no sampler row>}" "$sig" >&2
+  return 0
+}
+
 if [ "$TICKS_PANIC_ONLY" = "1" ]; then
   panic_scan; exit $?
+fi
+if [ "$TICKS_FREEZE_ONLY" = "1" ]; then
+  freeze_scan; exit $?
 fi
 # NEVER let the post-mortem stop the sensor from starting: a reader for the LAST death must not
 # cost the evidence for the NEXT one.
 [ "$PANIC_SCAN" = "off" ] || panic_scan || true
+[ "$FREEZE_SCAN" = "off" ] || freeze_scan || true
 
 # ── main loop ─────────────────────────────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$LOG")" "$(dirname "$SNAP")" 2>/dev/null || true
