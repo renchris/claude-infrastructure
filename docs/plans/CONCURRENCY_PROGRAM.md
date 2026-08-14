@@ -1680,6 +1680,46 @@ plus its evidence, shaped so the judgment stays available rather than pre-empted
 If the operator's judgment is that 8 is too tight or 50 too loose, that is one env value, not a
 rebuild — and D7 is satisfied by the DECISION either way, which is what the criterion asks for.
 
+#### S6.6-RED · post-land RED `1047cb5061e6` — the premise does not hold at the sha it cites (2026-08-14)
+
+`postland-verify` filed *"post-land RED: tests/capacity-admit-active.bats::06 ARITHMETIC PARITY —
+this term and compressor-sentinel.sh agree on one fixture @ a61cfa6203db"*. **It does not reproduce,
+and `a61cfa6203db` cannot be its culprit.** Verified from a cloud container whose tree IS trunk
+(`61826e19`, `HEAD..origin/main` = 0):
+
+- **The artifact at the cited sha IS the artifact on trunk.** `git diff a61cfa6203db origin/main --
+  tests/capacity-admit-active.bats scripts/lib/capacity-admit.sh scripts/lib/spawn-presence.sh
+  scripts/compressor-sentinel.sh` is **empty** — so there is no landed cure to re-derive, and no
+  stale tree to be fooled by (the `6110fc45141e` trap the fire-time freshness gate exists for).
+- **Green replayed exactly as the producer replays it.** A pristine `git worktree add --detach
+  a61cfa6203db`, then `retry_once`'s own invocation — `bats -f "^<TAP name, metachars escaped>$"` —
+  passes. Whole suite at that sha and at trunk: **22/22**.
+- **Green under every awk the case can meet.** Beyond bash, `awk` is case 06's only external
+  dependency: it extracts `segs_in_core`/`segs_swapped` from the sentinel by regex range and runs
+  both real implementations over one fixture. 22/22 under mawk 1.3.4, gawk 5.2.1, **and one-true-awk
+  20260426 built from source** — the family macOS ships as `/usr/bin/awk`, which a Linux container
+  otherwise cannot speak for.
+- **The blamed commit's entire diff is +5/−1 lines inside case 09** (spending the SC2034 loop counter
+  into `"s$2"`). It touches no line case 06 executes.
+
+**The generalisable finding is in the title, not the test.** `red_actions` renders
+`culprit="$bisected"; [ -n "$culprit" ] || culprit="$sha"`, so when `do_bisect` comes back
+**undecidable** the *target* sha lands in the title's `@ <sha>` slot — the exact position a real
+blame occupies — and the page prints `culprit: <sha> (bisected from <last-green>)`, asserting a
+bisect that never decided. Neither a human nor a dispatched worker can tell the two apart, and here
+the sha is provably not a culprit. Same class as `claimed-outcome-vs-checked-outcome`, sitting in the
+one artifact of this pipeline that is durable.
+
+**Not established, and deliberately not guessed: why the operator's box saw it red.** The ladder's
+bar is `>=2/3` at `POSTLAND_RETRY_GRANULARITY=test`, so case 06 failed *alone*, twice. Nothing in the
+case varies across the three awks, and a Linux container cannot speak for `/bin/bash` 3.2 or the
+launchd PATH/locale the sweep actually runs under. A guessed cause here would prescribe a change to a
+test that is green on trunk, which is the one move that could turn a phantom red into a real one.
+
+**Disposition — closeable on evidence, not on a fix.** The ledger
+(`~/.claude/autonomy/backlog.jsonl`) is untracked and unreachable from a cloud container, so trunk is
+the durable carrier; `cc-backlog done 1047cb5061e6` needs a box that can reach the store.
+
 ### S6.7 · Phase E — render, and Phase F — the remainder
 
 - **E:** at 0.025 cores/pane, 150 visible panes is 3.7 cores. Keep **≤20 visible kitty panes**; the
