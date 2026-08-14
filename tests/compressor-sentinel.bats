@@ -1097,3 +1097,240 @@ FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installatio
   grep -qF 'actuator: SIGSTOPped 0 process(es)' "$SNAPLOG" || false   # impossible pid ⇒ kill fails
   grep -qF 'parent-break none — no eligible parent owns >= 3 of the 1 selected burst procs' "$SNAPLOG" || false
 }
+
+
+# ══ 6. THE FREEZE READER — the deaths that write NO panic file ════════════════════════════════════
+# WHY THIS SECTION EXISTS. On 2026-08-13 21:22:39 the box wedged during active use and was recovered
+# by holding the power button 80 minutes later. No panic string, no SOCD data, so panic_scan
+# correctly reported `none` and the ledger — the store built so the next death is attributable —
+# recorded NOTHING about the worst stability event since the compressor panics.
+#
+# WHAT EACH CASE HAS TO PROVE, and why a comment would not do:
+#   · THE DISCRIMINATOR IS REAL. `force_off` records, `wdog` defers. Both branches need a case, and
+#     the deferral needs a POSITIVE CONTROL beside it or "no row" proves only that nothing ran.
+#   · THE PARSE. The boot epoch is the row's identity. Its first draft captured `usec` and the
+#     live machine returned 597125 — a well-formed, all-digit, fifty-six-years-wrong boot id that
+#     every type check passes. That is pinned here, against the REAL sysctl format.
+#   · THE PAYLOAD IS EVERY SAMPLER. Keeping only the newest row threw away the one fact that
+#     describes the trigger. A test that only counted rows would not have seen it.
+#
+# The subject is driven through `--freeze-scan` (the real script, real wiring), never through an
+# extracted function — the panic reader's `scan()` idiom, for the same reason.
+
+fz() { CC_FREEZE_RESET_DIRS="$D/rc" CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/fz.jsonl" \
+       CC_FREEZE_SAMPLERS="$FZ_SAMPLERS" PATH="$STUB:$PATH" bash "$S" --freeze-scan; }
+
+# The real `kern.boottime` shape, verbatim from this box — `usec` included, because that token IS
+# the trap. BOOT_SEC/SHUTDOWN_REASON are the knobs; an empty BOOT_SEC makes the sysctl fail.
+# It DELEGATES rather than clobbers. A whole-daemon case needs both stubs — the compressor sysctls
+# from mkstubs and the kern.* pair from here — and the first draft simply overwrote $STUB/sysctl,
+# so `mkstubs; mkfreezestubs` silently removed kern.boottime and the reader failed for a reason
+# that had nothing to do with the case under test. Call mkstubs FIRST; this wraps whatever it wrote.
+mkfreezestubs() { # <boot_sec> <shutdown_reason>
+  export BOOT_SEC="$1" SHUTDOWN_REASON="$2"
+  mkdir -p "$D/rc" "$D/panics"
+  export FZ_SAMPLERS="${FZ_SAMPLERS:-$D/cap.jsonl:$D/sent.jsonl}"
+  if [ -f "$STUB/sysctl" ] && ! grep -q 'kern.boottime' "$STUB/sysctl"; then
+    mv "$STUB/sysctl" "$STUB/sysctl.inner"
+  fi
+  cat > "$STUB/sysctl" <<'SH'
+#!/bin/bash
+case "$2" in
+  kern.boottime)
+    [ -n "$BOOT_SEC" ] || exit 1
+    printf '{ sec = %s, usec = 597125 }\n' "$BOOT_SEC" ;;
+  kern.shutdownreason)
+    [ -n "$SHUTDOWN_REASON" ] || exit 1
+    printf '%s\n' "$SHUTDOWN_REASON" ;;
+  *)
+    [ -x "${0}.inner" ] || exit 1
+    exec "${0}.inner" "$@" ;;
+esac
+SH
+  chmod +x "$STUB/sysctl"
+}
+
+mkresetcounter() { # <name> <boot-faults-line> <mtime-YYYYMMDDhhmm>
+  printf 'Reset count: 0\nBoot failure count: 1\nBoot faults: %s\nBoot stage: 0x40\n' "$2" > "$D/rc/$1"
+  touch -t "$3" "$D/rc/$1"
+}
+
+BOOTS=1786686149          # 2026-08-14T05:42:29Z — tonight's real boot
+BOOTSTAMP=202608132242    # the same instant, in touch's format
+
+@test "freeze reader: a forced power-off with no panic is RECORDED as a freeze" {
+  mkfreezestubs "$BOOTS" "btn_rst,finger_reset force_off ap_panic"
+  mkresetcounter "ResetCounter-2026-08-13-224317.diag" "btn_rst,finger_reset force_off" "$BOOTSTAMP"
+  run fz
+  [ "$status" -eq 0 ] || false
+  jq -e '.kind == "freeze"' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.boot_faults == "btn_rst,finger_reset force_off"' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.signature_source == "resetcounter"' "$D/fz.jsonl" >/dev/null || false
+}
+
+# THE PARSE REGRESSION. `.*sec = ` is greedy and walks to `usec`; against the real sysctl that
+# returned the MICROSECONDS (597125) as the boot epoch. Numeric, well-formed, and wrong by decades.
+@test "freeze reader: the boot epoch is sec, NEVER usec — the greedy-match trap" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  run fz
+  [ "$status" -eq 0 ] || false
+  jq -e --argjson b "$BOOTS" '.boot == $b' "$D/fz.jsonl" >/dev/null || false
+  ! jq -e '.boot == 597125' "$D/fz.jsonl" >/dev/null || false
+}
+
+# The floor is the guard for the NEXT format change, not for the bug already fixed. A boot id that
+# is bogus-but-numeric would key a row no later run could match — re-recording the same boot forever.
+@test "freeze reader: an implausible boot epoch REFUSES rather than keying a row nothing can match" {
+  mkfreezestubs "597125" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  run fz
+  [ "$status" -eq 3 ] || false
+  [ ! -f "$D/fz.jsonl" ] || false
+}
+
+# A watchdog death already writes a .panic and panic_scan already records it. Recording it here too
+# would make ONE event TWO incidents and inflate every count taken off this ledger.
+@test "freeze reader: a wdog boot defers — and the SAME fixture without wdog records (control)" {
+  mkfreezestubs "$BOOTS" "wdog,reset_in1"
+  mkresetcounter "ResetCounter-2026-08-09-041902.diag" "wdog,reset_in1" "$BOOTSTAMP"
+  run fz
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$D/fz.jsonl" ] || false
+  printf '%s\n' "$output" | grep -q 'watchdog boot' || false
+  # POSITIVE CONTROL: identical run, faults line swapped for the button — a row appears.
+  mkresetcounter "ResetCounter-2026-08-09-041902.diag" "btn_rst,finger_reset force_off" "$BOOTSTAMP"
+  run fz
+  jq -e '.kind == "freeze"' "$D/fz.jsonl" >/dev/null || false
+}
+
+# THE `ap_panic` TRAP. kern.shutdownreason on this box carries an `ap_panic` token on a boot where
+# no panic occurred and none was recoverable. Classifying on the sysctl alone calls a freeze a panic.
+@test "freeze reader: the ResetCounter OUTRANKS kern.shutdownreason, whose ap_panic token lies" {
+  mkfreezestubs "$BOOTS" "btn_rst,finger_reset force_off ap_panic"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst,finger_reset force_off" "$BOOTSTAMP"
+  run fz
+  jq -e '.signature == "btn_rst,finger_reset force_off"' "$D/fz.jsonl" >/dev/null || false
+  # Both artifacts are stored RAW so a later reader can re-adjudicate this one's reading.
+  jq -e '.shutdown_reason | test("ap_panic")' "$D/fz.jsonl" >/dev/null || false
+}
+
+@test "freeze reader: a clean boot writes no row — the sysctl is consulted and says nothing" {
+  mkfreezestubs "$BOOTS" ""
+  run fz
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$D/fz.jsonl" ] || false
+  printf '%s\n' "$output" | grep -q 'clean' || false
+}
+
+# THE DARK WINDOW is the whole point of the row: a freeze's difficulty is that the evidence stops,
+# and the samplers' last row is where it stopped.
+@test "freeze reader: dark_from is the newest PRE-boot sampler row; post-boot rows are ignored" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  { echo '{"ts":"2026-08-14T04:20:30Z","load_1m":9.34}'
+    echo '{"ts":"2026-08-14T04:22:39Z","load_1m":13.11,"ptys_used":9}'
+    echo '{"ts":"2026-08-14T05:45:02Z","load_1m":122.13}'; } > "$D/cap.jsonl"   # last row is POST-boot
+  echo '{"ts":"2026-08-14T04:22:54Z","seg":225161}' > "$D/sent.jsonl"
+  run fz
+  jq -e '.dark_from == "2026-08-14T04:22:54Z"' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.dark_to == "2026-08-14T05:42:29Z"' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.dark_minutes > 79 and .dark_minutes < 80' "$D/fz.jsonl" >/dev/null || false
+  # the post-boot row must not be the one kept — that would erase the whole window
+  ! jq -e '.last_ticks["cap.jsonl"].load_1m == 122.13' "$D/fz.jsonl" >/dev/null || false
+}
+
+# Keeping only the NEWEST row loses the trigger. Measured on the real incident: the sentinel won the
+# boundary by 15 s, while load_1m 13.11 and ptys_used 9 — the only description of what was happening
+# — live in capacity-alarm's row. This case is why last_ticks is a map and not one object.
+@test "freeze reader: last_ticks holds EVERY sampler, not just the one that won the boundary" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  echo '{"ts":"2026-08-14T04:22:39Z","load_1m":13.11,"ptys_used":9}' > "$D/cap.jsonl"
+  echo '{"ts":"2026-08-14T04:22:54Z","seg":225161}' > "$D/sent.jsonl"
+  run fz
+  jq -e '.sampler_source == "sent.jsonl"' "$D/fz.jsonl" >/dev/null || false      # newest won
+  jq -e '.last_ticks["cap.jsonl"].load_1m == 13.11' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.last_ticks["cap.jsonl"].ptys_used == 9' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.last_ticks["sent.jsonl"].seg == 225161' "$D/fz.jsonl" >/dev/null || false
+}
+
+# "I could not read a sampler" and "the sampler had nothing before this boot" are different facts.
+@test "freeze reader: sampler_source names the blindness — absent vs present-but-no-preboot-row" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  run fz                                        # no sampler files exist at all
+  jq -e '.sampler_source == "none-readable"' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.dark_from == null and .dark_minutes == null' "$D/fz.jsonl" >/dev/null || false
+  jq -e '.last_ticks == {}' "$D/fz.jsonl" >/dev/null || false
+  rm -f "$D/fz.jsonl"
+  echo '{"ts":"2026-08-14T09:00:00Z","load_1m":1}' > "$D/cap.jsonl"   # exists, but POST-boot only
+  run fz
+  jq -e '.sampler_source == "readable-no-preboot-row"' "$D/fz.jsonl" >/dev/null || false
+}
+
+@test "freeze reader: one boot is recorded ONCE, however often the daemon restarts" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  fz >/dev/null 2>&1; fz >/dev/null 2>&1; fz >/dev/null 2>&1
+  [ "$(grep -c . "$D/fz.jsonl")" -eq 1 ] || false
+}
+
+@test "freeze reader: a NEW boot after a recorded one is appended (the paired act-rule)" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  fz >/dev/null 2>&1
+  mkfreezestubs "$((BOOTS + 86400))" "force_off"
+  mkresetcounter "ResetCounter-y.diag" "btn_rst force_off" "202608142242"
+  fz >/dev/null 2>&1
+  [ "$(grep -c . "$D/fz.jsonl")" -eq 2 ] || false
+}
+
+# A forced power-off that ALSO left a report is not this class: the box died, wrote its panic, and
+# the button was only how it got back.
+@test "freeze reader: force_off WITH a fresh panic report defers to the panic reader" {
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  : > "$D/panics/panic-full-now.panic"; touch -t "$BOOTSTAMP" "$D/panics/panic-full-now.panic"
+  run fz
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$D/fz.jsonl" ] || false
+  # POSITIVE CONTROL: the same run with that report aged OUT of this boot records the freeze.
+  touch -t 202608090419 "$D/panics/panic-full-now.panic"
+  run fz
+  jq -e '.kind == "freeze"' "$D/fz.jsonl" >/dev/null || false
+}
+
+# A reader for the LAST death must never cost the evidence for the NEXT one — panic_scan's rule.
+@test "freeze reader: a failing freeze scan cannot stop the sensor from starting" {
+  mkstubs 100000 0 0
+  # CC_PANIC_DIRS is pinned even though this case is about the FREEZE reader. Left unset, PANIC_DIRS
+  # falls back to the real /Library/Logs/DiagnosticReports and the sibling panic_scan reads the
+  # OPERATOR'S actual panic reports mid-suite — the unfixtured-sensor class this file's header bans.
+  # It was caught by the CC_FREEZE_SCAN=off case below, which asserted an absent ledger and got a
+  # genuine recorded panic in it instead: an absence assertion is what found the leak.
+  mkdir -p "$D/panics"
+  export CC_FREEZE_RESET_DIRS="$D/nonexistent" CC_PANIC_DIRS="$D/panics" BOOT_SEC="" SHUTDOWN_REASON=""
+  run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$D/s.jsonl" bash "$S" --once
+  [ "$status" -eq 0 ] || false
+  [ -s "$D/s.jsonl" ] || false     # positive control: the tick still produced a row
+}
+
+@test "freeze reader: CC_FREEZE_SCAN=off skips it entirely" {
+  mkstubs 100000 0 0                     # compressor sysctls FIRST; mkfreezestubs wraps them
+  mkfreezestubs "$BOOTS" "force_off"
+  mkresetcounter "ResetCounter-x.diag" "btn_rst force_off" "$BOOTSTAMP"
+  export CC_FREEZE_RESET_DIRS="$D/rc" CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/fz.jsonl" CC_FREEZE_SCAN=off
+  run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$D/s.jsonl" bash "$S" --once
+  [ ! -f "$D/fz.jsonl" ] || false
+  # POSITIVE CONTROL: the identical run with the reader ON writes the row — so the absence above is
+  # the switch working, not the fixture failing to reach the reader at all.
+  mkstubs 100000 0 0
+  mkfreezestubs "$BOOTS" "force_off"
+  # CC_FREEZE_SCAN=on is passed EXPLICITLY: the `export ...=off` above is still in this test's
+  # environment, so `env` would inherit it and the control would re-prove the off case — a control
+  # that cannot distinguish itself from the assertion it is controlling for.
+  run env PATH="$STUB:$PATH" CC_FREEZE_SCAN=on CC_FREEZE_RESET_DIRS="$D/rc" CC_PANIC_DIRS="$D/panics" \
+      CC_PANIC_LEDGER="$D/fz.jsonl" CC_SENTINEL_LOG="$D/s2.jsonl" bash "$S" --once
+  jq -e '.kind == "freeze"' "$D/fz.jsonl" >/dev/null || false
+}
