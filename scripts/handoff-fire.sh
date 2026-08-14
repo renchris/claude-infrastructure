@@ -179,9 +179,23 @@
 #                       peers pinged then idled on a deferred "heads-up"). Auto-OFF for --recycle
 #                       (the recycled pane IS the continuation). --no-self-retire opts out.
 #
+#   --allow-live-subagents
+#                       L1-b override. Both actuators that END this session — --recycle and
+#                       self-close — REFUSE (exit 4) while this session has Agent-tool subagents
+#                       IN FLIGHT. A subagent runs IN-PROCESS: /exit interrupts the turn and
+#                       SIGKILLs the process group, so it dies mid-run with its deliverable
+#                       unwritten, and (observed 2026-08-14, chris-resume) nothing anywhere records
+#                       that it existed — the successor found out because the OPERATOR remembered.
+#                       The refusal names each agent, its description, and the partial transcript
+#                       that survives on disk. This flag asserts the loss is deliberate; the fired
+#                       successor's brief then INHERITS those paths, so an abandoned subagent is at
+#                       worst legible rather than invisible. Kill switch for blind (hook/daemon)
+#                       callers that cannot read a refusal: CC_RECYCLE_SUBAGENT_GATE=off.
+#
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
 #              [--dirty-owner successor] [--successor-assume-engaged] [--allow-dirty] [--dry-run]
+#              [--allow-live-subagents]
 #              [--transplanted-source] [--source-pane UUID --source-session UUID]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
 #                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
@@ -411,6 +425,8 @@ NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROL
 WITH_MCP=0                                       # --with-mcp: opt back INTO project .mcp.json stdio servers
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 RECYCLE_REPICK_FROM=""                           # W2-A: set to the OLD account when a recycle re-picks
+ALLOW_LIVE_SA=0                                  # L1-b: 1 = recycle over IN-FLIGHT Agent-tool subagents
+RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, for the brief trailer
 # G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
 # WHICH TERMS capacity_gate() evaluates, so it is a gate input and must be parsed before the gate.
 CLOUD=0
@@ -588,6 +604,10 @@ _fire_gate_of() { # $1=refusal reason → gate name
     # every OTHER unmapped reason invisible behind it. Own gate name, for _fire_gate_of's own reason:
     # an argv refusal never measured the box or the payload, so it belongs in neither population.
     extra-*)           printf argv     ;;
+    # L1-b — the in-flight-subagent refusal measured neither the box, the payload nor the argv: it
+    # measured the PREDECESSOR'S OWN LIVE WORK. Its own gate name, for the same reason cloud-* has
+    # one — an admit ratio is only meaningful over a population one instrument measured.
+    live-subagents)    printf subagents ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
 }
@@ -3200,6 +3220,141 @@ live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
     }' < <(ps -Ao pid=,args= 2>/dev/null)
 }
 
+# ---- L1-b — LIVE IN-PROCESS SUBAGENTS (the oracle live_teammates_of is structurally blind to) --
+# An Agent-tool subagent is NOT a session: it runs IN-PROCESS, inside the lead's own node. It has no
+# pid, no argv, no tty and no registry row, so the ps oracle above cannot see it and never could —
+# `live_teammates_of` returns empty for a lead with ten subagents in flight. That blindness is the
+# whole of L1-b: a `--recycle` types /exit, which interrupts the turn and SIGKILLs the process
+# group, and every in-flight subagent dies mid-run with its deliverable unwritten. Observed
+# 2026-08-14 (chris-resume): the successor learned of the loss only because the OPERATOR remembered.
+#
+# WHAT IT DOES HAVE is a durable transcript Claude Code writes AS IT RUNS:
+#   <config>/projects/<slug>/<sid>/subagents/agent-<id>.jsonl   + a sibling agent-<id>.meta.json
+#   carrying {agentType, description, toolUseId}.
+# So the deliverable of a killed subagent is never truly zero — it is merely UNREACHABLE, because
+# nothing recorded that it existed. That asymmetry is what makes RECORD (not just REFUSE) the cure.
+#
+# THE COMPLETION DISCRIMINATOR IS stop_reason, and the two obvious candidates are both WRONG —
+# measured live 2026-08-14 on a session running four subagents, three finished and one still in
+# flight (positive and negative control in one sample):
+#   · THE MAIN TRANSCRIPT'S tool_result. Tempting, because a .meta.json carries the toolUseId that
+#     joins to it. But a BACKGROUND agent's tool_result is written at LAUNCH and never rewritten —
+#     `toolUseResult.status` reads "async_launched" forever, even minutes after the agent returned.
+#     Spawned-minus-resulted therefore reads EVERY background agent as finished the instant it
+#     starts, and background is the DEFAULT. A foreground agent's row does flip to "completed", so
+#     this signal is right for the half that does not matter and blind for the half that does.
+#   · MTIME. A subagent inside a long model call writes nothing for minutes, so age convicts the
+#     live and acquits nothing (memory: liveness-proxy-cannot-be-output-age).
+#   · THE MAIN TRANSCRIPT'S `<task-id>…</task-id>` + `<status>` NOTIFICATION. This one is REAL and is
+#     strictly better on the case below — the harness writes a terminal completed|failed|killed for
+#     every agent, so it retires a CORPSE that this predicate cannot. It is rejected anyway, and the
+#     reason is the direction it fails in: it is a SUBSTRING SCAN OVER A FILE THAT CONTAINS THE
+#     LEAD'S OWN TOOL OUTPUT. Measured while building this gate — a Bash call that grepped for these
+#     ids put `<task-id>…</task-id><status>completed</status>` into the very transcript the predicate
+#     reads, for an agent it did not describe (memory: pgrep-f-matches-agent-briefs, the same shape).
+#     A forged terminal status marks a LIVE agent finished, and the gate then admits the recycle that
+#     kills it — reconstructing the exact silent loss this exists to prevent. The predicate below can
+#     only ever fail the other way.
+# THE DIRECTION IS THE WHOLE ARGUMENT. This gate's failure budget is spent on over-refusing, never on
+# under-refusing: a false refusal costs one flag and is visible in the same breath, while a false
+# admit is unobservable by construction — nothing downstream ever learns the subagent existed.
+# What does discriminate: a FINISHED agent's last quoted stop_reason is "end_turn" — that IS the
+# stop. A live one's is "tool_use" (awaiting a tool result) or absent. `grep -o …| tail -1` takes
+# the LAST quoted one, which skips the streaming `"stop_reason":null` partials AND stays correct for
+# a RESUMED agent (its old end_turn is not the last). jq-free on purpose: the predicate must survive
+# PATH=/usr/bin:/bin (memory: hermetic-in-stubs-not-in-interpreter).
+#
+# FAILURE DIRECTION IS DELIBERATE. A subagent SIGKILLed earlier in this same session never wrote an
+# end_turn, so it reads in-flight forever and this gate over-refuses. That is the safe side — the
+# refusal NAMES each agent and its description, so an operator can see which one is the corpse — and
+# the override is one flag away. The opposite error is the one that cost the incident.
+live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) → "<id>\t<description>\t<path>"
+  local _d="${1:-}" _m _id _j _stop _desc
+  [ -n "$_d" ] && [ -d "$_d/subagents" ] || return 0
+  for _m in "$_d"/subagents/agent-*.meta.json; do
+    [ -f "$_m" ] || continue                       # unmatched glob
+    _id="${_m##*/agent-}"; _id="${_id%.meta.json}"
+    _j="$_d/subagents/agent-$_id.jsonl"
+    [ -f "$_j" ] || continue                       # meta with no transcript: nothing to lose or read
+    _stop=$(grep -o '"stop_reason":"[a-z_]*"' "$_j" 2>/dev/null | tail -1) || true
+    case "$_stop" in *'"end_turn"') continue ;; esac
+    # `awk 'NR<=1'`, never `head -1`: under `set -o pipefail` an early-exit consumer SIGPIPEs the
+    # producer, and the pipeline's status becomes the producer's death — so the command reads FALSE
+    # exactly when it MATCHED. awk drains instead of exiting (pipefail-sigpipe ratchet).
+    _desc=$(sed -n 's/.*"description":"\([^"]*\)".*/\1/p' "$_m" 2>/dev/null | awk 'NR<=1')
+    printf '%s\t%s\t%s\n' "$_id" "${_desc:-<undescribed>}" "$_j"
+  done
+}
+
+# The predecessor's transcript dir, from its CC session id. GLOBBED across the per-account config
+# roots rather than derived from the account we are firing INTO: a recycle may re-pick a different
+# account (recycle_repick), and the transcript being asked about belongs to the session that is
+# about to DIE, not to its successor. Same idiom and same test seam shape as CC_SESSIONS_DIRS
+# (:3162). A session id is unique across roots, so the first hit is the only hit.
+subagent_dir_for_sid() { # $1=CC session id → echoes the transcript dir, or nothing
+  local _sid="${1:-}" _d
+  [ -n "$_sid" ] || return 0
+  # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard that
+  # must expand across the per-account config dirs; quoting it would make the glob a literal path.
+  for _d in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}/*/"$_sid"; do
+    [ -d "$_d/subagents" ] || continue
+    printf '%s' "$_d"; return 0
+  done
+  return 0
+}
+
+# THE GATE ITSELF, ONE COPY FOR BOTH ACTUATORS. self-close and --recycle both end the session that
+# owns the subagents, so they are exposed to exactly the same loss and must refuse in exactly the
+# same words. Sets SUBAGENT_INFLIGHT (tab-separated lines) for the caller's successor-brief trailer.
+#   $1=CC session id  $2=allow-flag (0|1)  $3=actuator label (self-close|recycle)
+# → 0 proceed · 4 REFUSE (mirrors the live-teammate gate's exit 4: same class of loss, other door)
+SUBAGENT_INFLIGHT=""
+subagent_gate() {
+  local _sid="${1:-}" _allow="${2:-0}" _act="${3:-recycle}" _dir _n
+  SUBAGENT_INFLIGHT=""
+  case "${CC_RECYCLE_SUBAGENT_GATE:-on}" in
+    off|0|false|no) emit_gate_admit subagents gate-off "CC_RECYCLE_SUBAGENT_GATE=off — no in-flight check ran ($_act)"; return 0 ;;
+  esac
+  # FAIL-OPEN, BUT NEVER SILENT — the same ruling as the live-teammate gate at :5661. Without the CC
+  # session id there is no transcript to read, so the check cannot run; failing CLOSED would deadlock
+  # every recycle on a box whose registry is stale, which is a strictly worse outage than the loss
+  # this gate prevents. Announce, then proceed: a false alarm gets fixed, a silent all-clear is
+  # absorbed forever.
+  if [ -z "$_sid" ]; then
+    echo "⚠ WARN: in-flight-subagent check SKIPPED — no CC session id for this pane (missing/stale registry row). If this session has Agent-tool subagents running, $_act KILLS them mid-run." >&2
+    emit_gate_admit subagents unresolved "no CC session id — in-flight-subagent check could not run ($_act)"
+    return 0
+  fi
+  _dir="$(subagent_dir_for_sid "$_sid")"
+  if [ -z "$_dir" ]; then
+    # No subagents/ dir at all = this session never spawned one. That is the common case and it is a
+    # genuine all-clear, not an unresolved one — so it is silent and carries no admit row.
+    return 0
+  fi
+  SUBAGENT_INFLIGHT="$(live_subagents_of "$_dir")"
+  [ -n "$SUBAGENT_INFLIGHT" ] || return 0
+  _n=$(printf '%s\n' "$SUBAGENT_INFLIGHT" | grep -c .)
+  if [ "$_allow" = 0 ]; then
+    { echo "!! $_act REFUSED: $_n Agent-tool subagent(s) of session ${_sid:0:8} are still IN FLIGHT —"
+      printf '%s\n' "$SUBAGENT_INFLIGHT" | while IFS="$(printf '\t')" read -r _i _dsc _p; do
+        echo "!!     ${_i}  ${_dsc}"
+        echo "!!       partial transcript (survives this session): $_p"
+      done
+      echo "!! A subagent runs IN-PROCESS. Typing /exit interrupts the turn and SIGKILLs the process"
+      echo "!! group, so each one dies mid-run with its deliverable unwritten — and nothing observes it."
+      echo "!!   wait for them to return (a background agent notifies this session when it stops), then retry; or"
+      echo "!!   --allow-live-subagents   deliberate abandonment — their results are forfeit; the partial"
+      echo "!!                            transcripts above are named in the successor's brief"
+      echo "!!   CC_RECYCLE_SUBAGENT_GATE=off   disable the check entirely (blind callers only)"
+    } >&2
+    emit_fire_refusal live-subagents "$_n in-flight subagent(s) of ${_sid:0:8} would be killed by $_act"
+    return 4
+  fi
+  echo "⚠ $_act proceeding with $_n IN-FLIGHT subagent(s) — --allow-live-subagents asserted; they are being KILLED deliberately, their partial transcripts are named in the successor's brief" >&2
+  emit_gate_admit subagents override "--allow-live-subagents: $_n in-flight subagent(s) of ${_sid:0:8} killed deliberately ($_act)"
+  return 0
+}
+
 # ---- V2 §5.1 — THE THIRD SESSION CATEGORY -----------------------------------------------------
 # self-close modelled exactly TWO kinds of session: a FIRED PEER (has a stamp ⇒ may retire) and an
 # ORIGIN session (no stamp ⇒ never retires). An Agent-Team ASSIGNEE whose LEAD IS DEAD is NEITHER:
@@ -5063,7 +5218,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_LIVE_SA=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
   SC_SOURCE_PANE="" SC_SOURCE_SESSION="" SC_REMOTE_SOURCE=0 SC_SUBJ_CWD=""
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
@@ -5074,6 +5229,7 @@ if [ "${1:-}" = "self-close" ]; then
     --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
     --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
+    --allow-live-subagents) SC_ALLOW_LIVE_SA=1; shift ;;
     --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
     --orphaned-assignee) SC_ORPHANED_ASSIGNEE=1; shift ;;
     --transplanted-source) SC_TRANSPLANTED_SOURCE=1; shift ;;
@@ -5675,6 +5831,13 @@ USAGE
     fi
     echo "⚠ self-close proceeding with $SC_TM_N LIVE teammate(s) — --allow-live-teammates asserted; they are being ORPHANED deliberately" >&2
   fi
+  # ---- L1-b — IN-FLIGHT SUBAGENT GATE (blocking) ------------------------------------------------
+  # The gate above sees TEAMMATES (separate sessions, visible in ps). It is structurally blind to
+  # Agent-tool SUBAGENTS, which run in-process and die with this session. Same loss, worse: an
+  # orphaned teammate at least keeps running and can be harvested off disk later; a killed subagent
+  # stops mid-token. Runs here, beside its sibling, on the same fail-open-but-never-silent terms and
+  # with the same exit 4. Reuses SC_CC_SID resolved just above.
+  subagent_gate "$SC_CC_SID" "$SC_ALLOW_LIVE_SA" self-close || exit $?
   # Successor liveness gate — BEFORE any side effect: pane resolvable AND the successor's own CC
   # SESSION running on it. The irreversible step is gated on positive proof the survivor is alive
   # (same rule as the recycle watcher's armed-heartbeat: verify the EFFECT, never the intention).
@@ -6038,6 +6201,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --probe)       PROBE=1; shift ;;
   --cloud)       CLOUD=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
+  --allow-live-subagents) ALLOW_LIVE_SA=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
   --no-notify-back) NOTIFY_BACK_OPT_OUT=1; NOTIFY_BACK=""; shift ;;
@@ -6421,6 +6585,15 @@ if [ "$RECYCLE" = 1 ]; then
   # refuses. (Scope grown under Follow-On Gate F1-F4: same defect, same helper, same envelope.)
   verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
   SID="$HF_VERIFIED_PANE"
+  # ---- L1-b — IN-FLIGHT SUBAGENT GATE (blocking) ------------------------------------------------
+  # HERE, and not one line later: this is the original FOREGROUND process, $SID is verified, and
+  # nothing has side-effected yet. The point of no return is the `as_write "$SID" "/exit"` inside
+  # recycle_fire; the arming window opens earlier still, at the `detach … __recycle`. And the
+  # detached re-exec cannot refuse on our behalf — by the time it runs, the caller it would refuse
+  # to has already been SIGKILLed. RCY_SUBAGENT_SID is kept for the successor-brief trailer below,
+  # which needs the PREDECESSOR's sid after $SID has been reused by the new session.
+  RCY_SUBAGENT_SID="$(cc_sid_for_pane "$SID")"
+  subagent_gate "$RCY_SUBAGENT_SID" "$ALLOW_LIVE_SA" recycle || exit $?
   # Same-dir recycle only: relaunch stays in this pane's dir by definition, so CLAUDE_ISOLATION_SKIP=1
   # must stop the repo-root launcher auto-routing into a fresh worktree. A relocating recycle is
   # landing in an explicit dir and takes the ordinary --worktree/--cwd path (see RECYCLE_RELOC above).
@@ -7163,6 +7336,33 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
     # check pass on the dying predecessor's own transcript (recycle_engaged excludes it as a belt).
     RECYCLE_MARKER="${RCY_ENGAGE_MARKER:-HANDOFF-RECYCLE-$$-$(date +%s)-${RANDOM:-0}}"
     printf '\n<!-- handoff-fire recycle engagement marker: %s (ignore) -->\n' "$RECYCLE_MARKER" >> "$PF_NB"
+  fi
+  # ---- L1-b — THE INHERITANCE HALF: tell the successor what this recycle is about to kill --------
+  # Reached only when subagent_gate ADMITTED over live subagents (--allow-live-subagents or the env
+  # kill switch); a refusal exited long before this line, and the ordinary case leaves
+  # SUBAGENT_INFLIGHT empty and appends nothing. This is the part that is right whatever the
+  # disposition, because it cures the actual observed defect rather than the mechanism behind it:
+  # in the incident, the loss itself was survivable — the successor could have respawned the
+  # subagent in a minute — and what made it expensive was that NOTHING in the successor's world
+  # recorded that a subagent had ever existed. It learned only because the human happened to
+  # remember. A recycle destroys the lead's context BY DESIGN, so waiting cannot save an in-context
+  # result; but the partial transcript is a FILE, and a file outlives its lead. Naming those paths
+  # converts an invisible loss into a legible one, which is the whole of this plan's thesis.
+  if [ -n "$SUBAGENT_INFLIGHT" ]; then
+    { printf '\n## ⚠ SUBAGENTS KILLED BY THE RECYCLE THAT CREATED YOU\n'
+      printf 'Your predecessor had these Agent-tool subagents IN FLIGHT when it recycled. They ran\n'
+      printf 'in-process, so /exit killed them mid-run and their results were never returned to any\n'
+      printf 'context. Their PARTIAL transcripts survive on disk at the paths below — read one before\n'
+      printf 'respawning, so you repeat the work rather than the dead end.\n\n'
+      printf '%s\n' "$SUBAGENT_INFLIGHT" | while IFS="$(printf '\t')" read -r _sa_i _sa_d _sa_p; do
+        [ -n "$_sa_i" ] || continue
+        # shellcheck disable=SC2016  # the backticks are MARKDOWN code spans in the successor's
+        # brief, not command substitution — the format string must stay single-quoted so they
+        # reach the file literally.
+        printf -- '- **%s** — `%s`\n  partial transcript: `%s`\n' "$_sa_d" "$_sa_i" "$_sa_p"
+      done
+      printf '\n(predecessor session: %s)\n' "${RCY_SUBAGENT_SID:-unknown}"
+    } >> "$PF_NB"
   fi
   # THE AUTHOR'S PAYLOAD, kept for the payload gates. They exist to judge what a HUMAN/AGENT WROTE;
   # everything appended above is machine-generated and known-good. Linting the copy instead lets our
@@ -8612,6 +8812,14 @@ if [ "$DRY" = 1 ]; then
   echo "mcp:      ${MCP_REASON:-(undecided)}"
   if [ "$RECYCLE" = 1 ]; then
     echo "surface:  (recycle — this pane: $SID)"
+    # L1-b: a dry run that stays silent about a gate the real run enforces "describes a different
+    # decision than the real run". Reaching this line already means the gate ADMITTED (a refusal
+    # exits at the pre-pass, dry or not), so the only two truthful readings are clear or overridden.
+    if [ -n "$SUBAGENT_INFLIGHT" ]; then
+      echo "subagents: $(printf '%s\n' "$SUBAGENT_INFLIGHT" | grep -c .) IN FLIGHT — WOULD BE KILLED (--allow-live-subagents asserted); their partial transcripts are named in the successor's brief"
+    else
+      echo "subagents: none in flight"
+    fi
     echo "chain:    arm watcher (setsid-detached, heartbeat-verified) → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else
     echo "surface:  $SURFACE"
