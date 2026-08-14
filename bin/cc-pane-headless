@@ -96,7 +96,7 @@ pane_dir() { printf '%s/%s' "$HOME_DIR" "$1"; }
 
 # ── verbs ──────────────────────────────────────────────────────────────────────────────────────
 v_spawn() {
-  local cwd="" name="" id dir pid pstart fifo="" holder="" sid="" a prev=""
+  local cwd="" name="" id dir pid pstart fifo="" holder="" sid="" a prev="" stdin_src
   while [ $# -gt 0 ]; do
     case "$1" in
       --cwd)  cwd="${2:-}"; shift 2 ;;
@@ -188,10 +188,16 @@ v_spawn() {
     prev="$a"
   done
 
+  # ONE spawn site, with the stdin SOURCE chosen into a variable — never two copies of the subshell
+  # differing only in a redirect. Two copies also make shellcheck read the second `export
+  # CC_PANE_ID` as a subshell modification that might be lost (SC2030/SC2031), and the land gate
+  # blocks on it; the finding is spurious here but the duplication it points at was real.
+  stdin_src=/dev/null
+  [ -n "$fifo" ] && stdin_src="$fifo"
+  ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+      >"$dir/out.log" 2>&1 <"$stdin_src" &
+  pid=$!
   if [ -n "$fifo" ]; then
-    ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-        >"$dir/out.log" 2>&1 <"$fifo" &
-    pid=$!
     # THE HOLDER. Its only job is to keep a descriptor on the FIFO open for the agent's whole life,
     # because the instant the last writer closes, the agent reads EOF and the session ENDS. It must
     # therefore outlive every individual waker write, which is why the waker cannot be the holder.
@@ -204,10 +210,6 @@ v_spawn() {
     ( exec 9<>"$fifo" || exit 1
       while kill -0 "$pid" 2>/dev/null; do sleep "$HOLD_POLL_S"; done ) >/dev/null 2>&1 </dev/null &
     holder=$!
-  else
-    ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-        >"$dir/out.log" 2>&1 </dev/null &
-    pid=$!
   fi
   pstart="$(pstart_of "$pid")"
 
