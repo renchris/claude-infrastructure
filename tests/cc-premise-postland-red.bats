@@ -331,7 +331,10 @@ green_manifest() {
   run "$PREMISE" check "$id"
   [ "$status" -eq 0 ]
   [ "$(verdict "$output")" = clear ]
-  printf '%s' "$output" | grep -q "STILL LIVE"
+  # The STORED arm's own wording is the sentinel that it, and not the derived arm, did the render.
+  # `false` exits 1 — an ordinary "asked, answered no" — so the ordinary arm speaks (see
+  # tests/cc-premise-falsifier.bats for why non-zero is NOT REFUTED rather than a confirmation).
+  printf '%s' "$output" | grep -q "NOT REFUTED"
   refute_match "$output" "DERIVED FALSIFIER"
 }
 

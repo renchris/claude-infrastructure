@@ -8,9 +8,17 @@
 #
 # THE ASYMMETRY IS THE DESIGN, and every test below pins one half of it:
 #   exit 0   ⇒ the condition is GONE      ⇒ REFUSE the claim (verdict=falsified, rc 3)
-#   non-0    ⇒ the condition is STILL LIVE ⇒ allow, and carry the probe's output into the contract
+#   non-0    ⇒ the condition is NOT REFUTED ⇒ allow, and carry the probe's output into the contract
 #   unaskable ⇒ FAIL OPEN — a broken probe must never starve the queue, because an unread premise
 #              is "I could not tell", never "it is finished" (cc-premise's own header).
+#
+# AND THE RENDERED WORDING IS PART OF THAT CONTRACT, not decoration around it. Non-zero is exactly
+# "not refuted"; it is not "confirmed", and for a whole band of exit codes it means the probe never
+# answered at all. The renderer used to call every non-zero "STILL LIVE — this premise is current,
+# NOT MERELY UNREFUTED", which asserts the one thing a falsifier structurally cannot establish and
+# which cost a real dispatch slot (backlog f401935c0bd4: a post-land HUNG whose cure had landed two
+# hours after the accused tree, briefed to a worker as "current"). The last three cases pin the
+# correction, because a contract stated only in a docstring is a contract nothing enforces.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -54,7 +62,7 @@ add() { "$BACKLOG_BIN" add --project p --title "$1" ${2:+--falsifier "$2"} 2>/de
   # not propagate here, so it would assert nothing at all. The land gate's dead-assertion lint
   # caught exactly this on line 53 of the first draft — two claims that could never fail.
   printf '%s' "$output" | grep -q "TODAYS_SYMPTOM"
-  printf '%s' "$output" | grep -q "STILL LIVE"
+  printf '%s' "$output" | grep -q "NOT REFUTED"
 }
 
 @test "no falsifier stored -> behaviour is exactly as before" {
@@ -101,4 +109,43 @@ add() { "$BACKLOG_BIN" add --project p --title "$1" ${2:+--falsifier "$2"} 2>/de
   a="$("$BACKLOG_BIN" add --project p --title "same work" --falsifier "test -f /nope" 2>/dev/null)"
   b="$("$BACKLOG_BIN" add --project p --title "same work" --falsifier "test -f /also-nope" 2>/dev/null)"
   [ "$a" = "$b" ]
+}
+
+# ── THE RENDERER MAY NOT OVERSTATE THE PROBE (backlog f401935c0bd4) ──────────────────────────────
+# A falsifier can only ever REFUTE. The brief that dispatches a worker is the only place that
+# distinction is ever read, so it is the only place worth pinning it.
+
+@test "an ordinary non-zero is rendered as NOT REFUTED, never as a confirmation" {
+  id="$(add 'asked, answered no' 'exit 1')"
+  run "$PREMISE" check "$id"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "NOT REFUTED"
+  # THE REGRESSION ITSELF, negated. This exact sentence briefed a worker onto a cure that had
+  # already landed; if it ever returns, this case is the thing that says so.
+  #
+  # `grep -c … = 0`, never `grep -qv`: -v inverts LINE SELECTION, so on multi-line output it exits 0
+  # the moment ANY line differs — i.e. it would pass even with the banned sentence present. That is
+  # the dead-assertion shape this file's own line-53 comment records the land gate catching.
+  [ "$(printf '%s' "$output" | grep -c 'not merely unrefuted' || true)" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'this premise is current' || true)" -eq 0 ]
+}
+
+@test "a COULD-NOT-ASK exit says so, instead of reading as a live premise" {
+  # 127 = the probe never ran. The claim must still be ALLOWED (fail-open is unchanged), but the
+  # brief has to tell the worker the question went unanswered rather than that the answer was yes.
+  id="$(add 'probe that cannot run' 'this-binary-does-not-exist-anywhere')"
+  run "$PREMISE" check "$id"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "COULD NOT ASK"
+  printf '%s' "$output" | grep -q "UNVERIFIED, not confirmed"
+}
+
+@test "POSITIVE CONTROL: the two arms are actually distinguishable" {
+  # Without this, both greps above could pass against a renderer that emitted every string every
+  # time — the failure mode this repo keeps re-finding in its own guards.
+  live="$(add 'answered no' 'exit 1')"
+  run "$PREMISE" check "$live"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'COULD NOT ASK' || true)" -eq 0 ]
+  printf '%s' "$output" | grep -q "NOT REFUTED"
 }

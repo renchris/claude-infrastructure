@@ -182,6 +182,26 @@ BLOCKING = ("superseded", "self-duplicate", "falsified")
 FALSIFIER_TIMEOUT_S = int(os.environ.get("CC_PREMISE_FALSIFIER_TIMEOUT", "20"))
 FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_FALSIFIER", "on").lower() not in ("off", "0", "no")
 
+# ── THE EXIT CODES THAT MEAN "COULD NOT ASK" RATHER THAN "ASKED, ANSWERED NO" ────────────────────
+# Every non-zero exit is advisory (see run_falsifier's contract), but they do not all carry the same
+# MEANING to the human reading the brief, and rendering them identically is what let "the probe is
+# broken" read as "this premise is current" (backlog f401935c0bd4). These four are the ones that say
+# the question was never actually put:
+#
+#   2    postland-verify's `--falsify-red` reserves it for exactly this ("0 retracted · 1 still live
+#        · 2 could not ask") and its docstring says the split exists "for a human reading it by
+#        hand" — this renderer IS that human's surface. It coincides with grep(1), whose 2 likewise
+#        means an ERROR occurred as opposed to 1 "no match", and those two verbs are the dominant
+#        probe forms in this store.
+#   124  timeout(1) cut the probe. Distinct from our own subprocess timeout (which raises and fails
+#        open at the exception path) — this is a probe that bounded ITSELF and hit the bound.
+#   126  found but not executable.  127  not found at all. Both are "the probe never ran", the same
+#        meaning tests/cc-premise-falsifier.bats already pins for the unrunnable case.
+#
+# Anything else non-zero is treated as a genuine "asked, answered no" — still advisory, still never
+# a confirmation, but not evidence that the probe itself is broken.
+_FALSIFIER_UNASKABLE_RCS = frozenset((2, 124, 126, 127))
+
 # The plan-open arms (the DERIVED falsifier and the remaining-work snapshot below) share the
 # falsifier kill switch and timeout above — a derived probe is still a probe, and an operator who
 # turns falsification off must not be left with one still running. This second switch turns off ONLY
@@ -1067,9 +1087,52 @@ def run_falsifier(item_id, ent):
             "If you believe the probe is wrong, fix the PROBE — do not work around it, or the "
             "next reader inherits the same false verdict." % (item_id, cmd),
         ]
+    # ── NON-ZERO IS "NOT REFUTED". IT IS NOT "CONFIRMED", AND THE RENDERER MUST NOT SAY IT IS ──────
+    # This branch used to render every non-zero exit as "STILL LIVE — this premise is current, NOT
+    # MERELY UNREFUTED", which asserts the exact thing a falsifier structurally cannot establish.
+    # The contract 40 lines above already says so in its own words ("non-zero ⇒ STILL LIVE.
+    # ADVISORY ONLY"), and the asymmetry paragraph explains why: exit 0 is the only load-bearing
+    # answer, because an unread premise is "I could not tell" and never "finished". "Not merely
+    # unrefuted" denies precisely the thing that is true — non-zero IS merely unrefuted — so the one
+    # surface that renders the probe to a human contradicted the contract it implements.
+    #
+    # MEASURED, AND THE DISPATCHER IS THE VICTIM (backlog f401935c0bd4, 2026-08-14). That item is a
+    # post-land HUNG on tests/autonomy-sweep.bats, and its stored probe is postland-verify's
+    # `--falsify-red <suite> <sha>` — a verb that reads LAST-GREEN ANCESTRY and never runs the suite
+    # (it cannot: one suite alone does not fit cc-premise's 20 s bound). So its exit 1 means "trunk
+    # has not yet run a FULL-CORPUS green containing that commit", which is silent about whether the
+    # suite still wedges. The cure had in fact landed as 5f2f5431 two hours after the accused tree —
+    # and the brief still told the worker "this premise is current, not merely unrefuted. Start from
+    # this output, not from the filing-day description." A worker obeying that sentence writes a
+    # timeout-wrap diff on top of an already-wrapped file, i.e. a diff that REVERTS trunk — the
+    # stale-tree failure mode already filed as 6110fc45141e. One dispatch slot, spent on a false
+    # strengthening.
+    #
+    # AND THE SPLIT postland-verify DELIBERATELY MADE WAS BEING THROWN AWAY HERE. `verb_falsify_red`
+    # separates 1 (asked, answered no) from 2 (COULD NOT ASK) and says in its own docstring that the
+    # split is "legibility only ... for a human reading it by hand". cc-premise IS that human's
+    # surface, and it collapsed both into one sentence — so "the probe could not be evaluated"
+    # rendered as "this premise is current", which is not a weaker claim than the truth but the
+    # opposite one. The shell's own could-not-ask band belongs with it: 127 command-not-found, 126
+    # not-executable, 124 timeout(1) cut (tests already pin 127 as fail-open at the exception path,
+    # and this is the same meaning reached through a live exit code rather than an exception).
+    #
+    # Both arms keep the half of the old line that was RIGHT — start from today's output, not the
+    # filing-day text — because that was the useful intent and it survives the correction intact.
+    if p.returncode in _FALSIFIER_UNASKABLE_RCS:
+        return "clear", [
+            "Falsifier re-run just now: COULD NOT ASK (exit %d) — the probe did not answer, so this "
+            "premise is UNVERIFIED, not confirmed. Do not treat it as current: check it against "
+            "trunk yourself before acting on it, and fix the PROBE if it is the thing that is "
+            "broken." % p.returncode,
+            "  probe: %s" % cmd,
+            "  output: %s" % (out or "(silent)"),
+        ]
     return "clear", [
-        "Falsifier re-run just now: STILL LIVE (exit %d) — this premise is current, not merely "
-        "unrefuted. Start from this output, not from the filing-day description." % p.returncode,
+        "Falsifier re-run just now: NOT REFUTED (exit %d) — the probe declined to retract this item. "
+        "That is the safe direction, never a positive confirmation: a probe can only ever REFUTE, so "
+        "an unrefuted premise still has to be verified against trunk before you act on it. Start "
+        "from this output rather than the filing-day description." % p.returncode,
         "  probe: %s" % cmd,
         "  output: %s" % (out or "(silent)"),
     ]
