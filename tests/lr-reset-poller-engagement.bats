@@ -25,6 +25,7 @@ setup() {
   STATE="$HOME/.reso/limit-recover"
   CLAIMS="$STATE/fire-claims"
   NOTED="$STATE/engage-noted"
+  FF="$STATE/fire-fail"
   LOG="$STATE/poller.log"
   PROJ="$HOME/.claude/projects/slug"
   mkdir -p "$HOME/bin" "$STATE/parked" "$STATE/resumed" "$CLAIMS" "$PROJ"
@@ -229,4 +230,86 @@ _orphan_poller() {
   [ "$status" -eq 0 ]
   run grep -c "ENGAGE-SKIP" "$LOG"
   [ "$output" -eq 2 ]
+}
+
+# ── A: THE ACTUATOR — the fire-fail latch (backlog ff0b5cf4528b) ─────────────────────────────────
+#
+# 4ba91ad95 shipped the audit above DETECT-ONLY and deferred the actuator on blast-radius grounds.
+# The direction is settled by this daemon's own log: 1,800 identical `resume spawn failed` lines
+# over 24 days, one sid retried 380 times, because a failed spawn releases its claim and is re-fired
+# on the next tick without bound. So the actuator counts failed fires and stops CANDIDACY at a cap —
+# it can only ever fire LESS. These cases pin the counter's semantics; the fire-path half (a latched
+# sid is not spawned, the latch expires, a new fire re-arms the marker) is A5-A7 in
+# tests/lr-reset-poller.bats, where a parked fixture and the spawn stubs exist.
+
+# A NEW FIRE, in the two respects this suite can observe: a fresh claim, and the audit's
+# once-per-fire marker re-armed. Both are what production's claim_sid() does — pinned against the
+# real thing by A7 in tests/lr-reset-poller.bats, so this helper cannot drift into fiction.
+_refire() { rm -f "$NOTED/${1:-$SID}"; : > "$CLAIMS/${1:-$SID}"; touch -t 200001010000 "$CLAIMS/${1:-$SID}"; }
+
+_ff_count() { local n; n="$(cat "$FF/${1:-$SID}" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
+
+@test "A1: a wedged fire counts ONE strike, and a session that starts clears the count" {
+  _claim_old; _silent_transcript
+  run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  run _ff_count
+  [ "$output" -eq 1 ]
+  # POSITIVE CONTROL, same test: the clear only means something because the count was reachable.
+  _engaged_transcript
+  run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  [ ! -f "$FF/$SID" ]
+}
+
+@test "A2: strikes accumulate across FIRES, not ticks — and the cap is reported exactly once" {
+  _claim_old; _silent_transcript
+  run bash "$POLLER"; [ "$status" -eq 0 ]
+  run bash "$POLLER"; [ "$status" -eq 0 ]          # same fire, second tick: damped, no second strike
+  run _ff_count
+  [ "$output" -eq 1 ]
+  _refire; run bash "$POLLER"; [ "$status" -eq 0 ]
+  run _ff_count
+  [ "$output" -eq 2 ]
+  run grep -c "LATCHED $SID" "$LOG"                # still below the cap — nothing latched yet
+  [ "$status" -ne 0 ]
+  _refire; run bash "$POLLER"; [ "$status" -eq 0 ] # the crossing
+  run _ff_count
+  [ "$output" -eq 3 ]
+  run grep -c "LATCHED $SID" "$LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 1 ]
+  # PAST the cap the daemon must go quiet: a line per tick is the defect this arm exists to end.
+  _refire; run bash "$POLLER"; [ "$status" -eq 0 ]
+  run _ff_count
+  [ "$output" -eq 4 ]
+  run grep -c "LATCHED $SID" "$LOG"
+  [ "$output" -eq 1 ]
+}
+
+@test "A3: --dry-run REPORTS but does not spend a strike" {
+  # Same law as the damping marker above: a preview that silently latches a session out of recovery
+  # is worse than no preview at all.
+  _claim_old; _silent_transcript
+  run bash "$POLLER" --dry-run
+  [ "$status" -eq 0 ]
+  run grep -q "NOT-ENGAGED $SID" "$LOG"            # it DID report — the count is what it withheld
+  [ "$status" -eq 0 ]
+  [ ! -f "$FF/$SID" ]
+  run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  run _ff_count
+  [ "$output" -eq 1 ]
+}
+
+@test "A4: LR_FIRE_FAIL_MAX is honoured — a cap of ONE latches on the first strike" {
+  # The control that the DEFAULT is 3 is A2 above: three fires there, one LATCHED line. Junk and 0
+  # are the settings that would silently suppress every sid, and their fallback is only observable
+  # where a fire can be suppressed — pinned by A8 in tests/lr-reset-poller.bats, not here.
+  _claim_old; _silent_transcript
+  LR_FIRE_FAIL_MAX=1 run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  run grep -c "LATCHED $SID" "$LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 1 ]
 }
