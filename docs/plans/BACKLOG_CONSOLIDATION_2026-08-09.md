@@ -728,6 +728,46 @@ are where the next increment of trust lives.
 **Not this wave's, and not filed twice:** `deploy-live` still refuses (NO-GREEN-AHEAD, lag 24/1h,
 inside budget) — pre-existing, already filed 17× (`903e7ae67621` et al).
 
+### W2 re-dispatched 2026-08-14 — the deliverable had been on trunk for three days and the row never learned it
+
+Row `0e8a10c501af` fired again as a cloud dispatch on 2026-08-14. **Nothing was re-derived and
+`bin/cc-premise` is untouched: the cure was already there.** Verified against trunk `a61cfa620`,
+not against a working tree — `295f6240a` IS an ancestor of `origin/main`, and it is the commit that
+added both `tests/cc-premise-filing-day.bats` and `filing_day_screen` / the `screen` subcommand to
+`bin/cc-premise`. `bats tests/cc-premise-filing-day.bats` → **13/13 green**, including the two cases
+that pin the retro-scan's three-way tally and its report-only contract. All four of the brief's DoD
+lines were already recorded as met in the W2 section above.
+
+🚨 **The finding: a land does not close a row, and nothing checks that anybody did.** `ship-land.sh`
+files and retracts *re-land* rows; the work row's own `done` is the session's LAST verb — outside
+the gate, outside the land, and asserted by nothing. So this plan read *"W2 — LANDED 2026-08-11"*
+for three days while the ledger kept the row live and `reap` re-admitted it. That is this item's own
+subject one level up — **a record that reads as done in a store nothing enforces** — and it is the
+`🚀 landed ≠ live` split of the global close protocol applied to the ledger rather than to the
+filesystem. Anti-coverage convicts a probe that could never have failed; this convicts a *close* that
+was never asserted anywhere the dispatcher reads.
+
+⚠️ **The verification trap that nearly inverted the answer, and it is worth more than the item.** The
+cloud container clones **shallow** (50 commits, graft at `c787a099`). On that clone
+`git merge-base --is-ancestor 295f6240a origin/main` answered **NO** and
+`git log --diff-filter=A -- tests/cc-premise-filing-day.bats` named the *graft-boundary* commit as
+the file's author. Both are **wrong, and neither errors** — after `git fetch --deepen=500` they
+answer YES and `295f6240`. A shallow clone does not report ancestry as unknown; it reports it as
+false. This is `6110fc45141e`'s "a post-land RED reproduces faithfully in a stale tree" wearing a
+different hat: **deepen before reading ancestry, and never take a NO from a truncated graph.**
+
+**Environmental, not a regression — and it is the same wall `6394a353` hit.** Two macOS-only
+dependencies refuse this work from a Linux container, both proven against a PRISTINE `origin/main`
+worktree carrying none of this diff: 10 cases across the other `cc-premise` suites fail on `date -v`
+(BSD-only), and `scripts/unattended-path-lint.sh --selftest` fails **9 of 30** because it resolves
+`/sbin`-only binaries against the live filesystem — so `ship-land.sh` refuses with GATE RED and the
+land must happen on the box. The filing-day suite itself is portable and green.
+
+**Why this is recorded here rather than filed:** `~/.claude/autonomy/backlog.jsonl` is untracked and
+unreachable from a cloud container, so trunk is the durable carrier (precedent `6394a353`). The
+close — `cc-backlog done 0e8a10c501af --evidence 295f6240a` — runs on the box, either by hand or as
+`scripts/cloud-return.sh`'s own mark-done arm when it sweeps this dispatch.
+
 ## W1 — LANDED 2026-08-11 (`9dd6f7a4c` · `056f5d9d8` / `5ac7990d9`) · and the measurement says DO NOT enforce yet
 
 Readiness is now computed for each item the dispatcher is about to ADMIT, keyed on the trunk sha and
