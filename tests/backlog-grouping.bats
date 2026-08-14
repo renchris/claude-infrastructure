@@ -198,11 +198,17 @@ print('ok')"
   stub="$BATS_TEST_TMPDIR/stub-backlog"
   store="$BATS_TEST_TMPDIR/stub-store.json"
   printf '%s\n' '[{"id":"aaaaaaaaaaaa","status":"open","title":"t","project":"p","condition":""},{"id":"bbbbbbbbbbbb","status":"open","title":"u","project":"p","condition":""}]' > "$store"
+  # The stub speaks the BULK interface (`link --plan -`, ids on stdin), because that is the one
+  # call link.py now makes — a stub still answering the per-row form would be testing an interface
+  # nothing uses (memory: sibling-auditors-must-share-the-state-model).
   cat > "$stub" <<STUB
 #!/usr/bin/env bash
 case "\$1" in
   list) cat "$store" ;;
-  link) jq --arg i "\$2" 'map(select(.id != \$i))' "$store" > "$store.tmp" && mv "$store.tmp" "$store"; echo "\$2" ;;
+  link) while read -r i _; do
+          [ -n "\$i" ] || continue
+          jq --arg i "\$i" 'map(select(.id != \$i))' "$store" > "$store.tmp" && mv "$store.tmp" "$store"
+        done ;;
 esac
 STUB
   chmod +x "$stub"
@@ -242,11 +248,16 @@ WRAP
 @test "SPAN CONTROL — harming a row we linked is still FAILED, so 'unknown' is not an amnesty" {
   a=$(add "re-land probe-corpus: ship-land exited 6")
   wrap="$BATS_TEST_TMPDIR/cb-harm"
+  # `link` now arrives as `link --plan -` with the ids on stdin, so the wrapper reads the plan
+  # itself to learn which row to harm — it can no longer take the id from \$2.
   cat > "$wrap" <<WRAP
 #!/usr/bin/env bash
 if [ "\$1" = link ]; then
-  bash "$CB" "\$@"; rc=\$?
-  bash "$CB" block "\$2" --needs "harmed by the wrapper" >/dev/null 2>&1
+  plan="\$(cat)"
+  printf '%s\n' "\$plan" | bash "$CB" "\$@"; rc=\$?
+  printf '%s\n' "\$plan" | while read -r i _; do
+    [ -n "\$i" ] && bash "$CB" block "\$i" --needs "harmed by the wrapper" >/dev/null 2>&1
+  done
   exit \$rc
 fi
 exec bash "$CB" "\$@"

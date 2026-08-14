@@ -44,6 +44,23 @@ THREE POPULATIONS ARE SKIPPED, and the third one is a hazard rather than a nicet
     makes every sibling unclaimable for as long as the holder lives. Grouping exists
     to stop duplicate dispatch, not to freeze a subsystem behind one worker.
 
+── ONE WRITE, NOT N (2026-08-14, backlog aee48ef0ffcf) ─────────────────────────────
+This looped `cc-backlog link <id> --condition <c>`, and each of those calls asks the
+store two whole-ledger questions (`has_id`, then the full fold) — so applying a plan
+folded a ledger the plan's own records were growing. Measured 2026-08-12 on W2's
+418-row apply against a ~2400-line store: ~4 s per link at the start, ~20 s by the
+end, over an hour of wall clock to write one condition field onto 418 rows. It is the
+verb this file exists to drive, so the cost was this file's cost.
+
+`cc-backlog link --plan -` folds ONCE for the whole plan. Re-measured on a 3688-line
+fixture: 300 links in 0.61 s batched against 0.50 s PER LINK looped (~250x, and flat
+rather than climbing).
+
+THE PER-ROW OUTCOME IS RE-READ FROM THE FOLD, never parsed out of the writer's own
+report — same rule as read_store above: cc-backlog owns what a row's state is. That
+also means this file needs no output-format contract with the batch verb, so the two
+cannot drift over a printf.
+
 Dry by default; --run to execute.
 """
 
@@ -238,36 +255,67 @@ def main() -> int:
         return 0
 
     before = census(items)
+    stderr = ""
+    if plan:
+        p = subprocess.run(
+            [bin_path, "link", "--plan", "-"],
+            input="".join(f"{iid} {cond}\n" for iid, cond in plan),
+            capture_output=True,
+            text=True,
+        )
+        stderr = p.stderr
+        # rc 0 = every row landed · 5 = the batch ran and named its refusals · anything else = the
+        # plan was refused WHOLE and nothing written, which is a failure of this run, not of a row.
+        if p.returncode not in (0, 5):
+            sys.stderr.write(stderr)
+            print(
+                f"link.py: cc-backlog link --plan refused the plan "
+                f"(rc={p.returncode}) — NOTHING written",
+                file=sys.stderr,
+            )
+            return 1
+
+    after_items = read_store(bin_path)
+    after = census(after_items)
+    # THE STORE'S ANSWER, not the writer's. A row counts as linked when the FOLD says it carries the
+    # condition we asked for — which is also the only reading that survives a sibling linking it
+    # first (a `noop` to the writer, done work to us).
+    cond_now = {i.get("id"): (i.get("condition") or "") for i in after_items}
     ok = fail = 0
+    # WHOSE FATE IS OURS, for the conservation assertion below — every row that LANDED, plus every
+    # row that VANISHED. The second half is not symmetry: a refused row is one we did not touch and
+    # must not convict ourselves over (that is the span rule), but nothing legitimate removes a row
+    # from an append-only ledger's fold, so a gone row is damage whether or not its link was written.
+    # Scoring it as merely "refused" would let a writer that DESTROYS rows exit 0 — which is exactly
+    # the class the harmed() control exists to catch.
     written_ids: list[str] = []
     log = open(args.log, "w") if args.log else None
     try:
         for iid, cond in plan:
-            p = subprocess.run(
-                [bin_path, "link", iid, "--condition", cond],
-                capture_output=True,
-                text=True,
-            )
-            if p.returncode == 0:
+            landed = cond_now.get(iid) == cond
+            if iid not in cond_now:
+                written_ids.append(iid)
+            if landed:
                 ok += 1
                 written_ids.append(iid)
             else:
                 fail += 1
                 print(
-                    f"verdict=refused    {iid} -> {cond}: rc={p.returncode} "
-                    f"{p.stderr.strip()[:140]}",
+                    f"verdict=refused    {iid} -> {cond}: "
+                    f"fold reads condition={cond_now.get(iid, 'GONE')!r}",
                     file=sys.stderr,
                 )
             if log:
                 log.write(
-                    f"{'OK  ' if p.returncode == 0 else 'FAIL'} {iid} -> {cond}"
-                    f"{'' if p.returncode == 0 else ' :: ' + p.stderr.strip()[:160]}\n"
+                    f"{'OK  ' if landed else 'FAIL'} {iid} -> {cond}"
+                    f"{'' if landed else ' :: fold reads ' + repr(cond_now.get(iid, 'GONE'))}\n"
                 )
     finally:
         if log:
             log.close()
-    after_items = read_store(bin_path)
-    after = census(after_items)
+    if fail:
+        # The writer's own diagnosis of each refusal — kept for the human, never parsed.
+        sys.stderr.write(stderr)
     print(f"linked={ok} refused={fail}")
 
     bad = harmed(items, after_items, written_ids)

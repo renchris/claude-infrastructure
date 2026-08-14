@@ -550,6 +550,50 @@ with its own README naming the one finding later corrected by measurement.
   hour of wall clock to write one condition field per row. The next consolidation wave needs a batch
   verb; `link.py --plan` already emits exactly the input it would take.
 
+  **FIXED 2026-08-14 — `cc-backlog link --plan <file|->`, and W4 no longer has to budget an hour for
+  its grouping pass.** The quadratic term was the FOLD, not the append: the per-row verb asks the
+  store two whole-ledger questions (`has_id` over every raw record, then the full `fold`), so an
+  N-row plan folded a ledger that its own N link records were growing. `--plan` folds ONCE for the
+  whole plan; `link.py --run` now makes exactly one call instead of N. **Re-measured end-to-end on
+  this pass's own shape — 418 rows against a 2400-line store: 1.28 s, conservation=ok, idempotent
+  on re-run.** Against the >1 h original that is the difference between a grouping pass being a
+  wave and being a command.
+
+  Three decisions in it are worth carrying forward, because each one is a rule this store keeps
+  re-teaching:
+
+  * **The WRITE stayed per-row, deliberately.** Only the fold was batched. Bare `O_APPEND` is atomic
+    at these line lengths and that is what keeps ~14 concurrent writers coordination-free; batching
+    the write into one multi-KB block would buy nothing measurable and would hand a stdio flush the
+    chance to land mid-record. Optimise the term you measured, not the one next to it.
+  * **Failure classes split on whether they can RACE.** A malformed plan (an unstable slug, one id
+    asking for two conditions) is refused WHOLE before any write — knowable with no reference to the
+    store, identical on the re-run, and a half-applied plan cannot be told from a completed one. A
+    store refusal (unknown id, a row a sibling conditioned first) is per-row and never fatal (rc 5,
+    verdicts name each), because the ledger moves under any pass long enough to need this verb.
+  * **An EMPTY plan is rc 0, not a refusal — and getting that backwards is what the first cut did.**
+    "Nothing left to do" is the NORMAL end state of an idempotent writer, so refusing it turned every
+    re-run of `link.py` whose candidates were all already conditioned into an exit-1, and three
+    tests/backlog-grouping.bats suites went red. Unlike `validated --batch`, an empty pass here
+    erases nothing, so it needs no refusal to stay safe. A plan that carried LINES and could use none
+    of them is still rc 2 — that one is a producer bug.
+
+  ONE ARBITER (`link_apply`) owns every guard and the single-row form is a one-row plan through it,
+  so its published rc contract (3 unknown · 4 already-conditioned · echo the id otherwise) is a
+  rendering of that row's verdict rather than a second copy of the rules — the same
+  make-the-actuator-the-arbiter discipline that already makes `backfill --apply` delegate to `link`
+  instead of hand-rolling an append. Pinned by `tests/cc-backlog-link-plan.bats` (24 tests), and the
+  cost property is pinned **structurally, not by wall clock**: a shimmed `jq` counts the real folds,
+  so "3× the rows must not cost 3× the invocations" is deterministic on any hardware, red-proved by
+  re-introducing a per-row fold, and paired with a CONTROL asserting the per-row form still does pay
+  per row. A timing assertion on shared CI would flake, get muted, and defend nothing.
+
+  **Still per-row, and deliberately left so:** `cmd_backfill --apply` loops the single-row verb. It
+  halved (2 folds/row → 1) for free with this change and its population is bounded by the mechanical
+  fold's floors, so it never reached wave scale — but it is the same defect class and the same
+  `link_apply` is now sitting there to take it. Filed rather than folded in, to keep this diff inside
+  its frozen scope.
+
   **What each item actually cost, and the three things that came out different from the plan:**
 
   1. **`link.py` / `prune.py` promoted — and GENERALISED, because tracking alone would have left them
