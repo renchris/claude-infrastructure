@@ -106,6 +106,48 @@ skip_if_unrunnable() {
   skip "NON-VERDICT: the lint could not run a predicate on this box (exit 2) — a fact about the machine, not a claim about the tree"
 }
 
+# The --selftest twin of the above, and it exists because the three --selftest assertions below
+# asserted `-eq 0` against a script that could only ever exit 0 or 1. Its case (e) lints the REAL
+# tree, so a lost fork there set fails=1 and the whole selftest exited 1 — "the ratchet does not
+# discriminate" — which THIS FILE then filed as a HOST RED about the operator's clean tree, and
+# which postland-verify reads as INSTRUMENT-BROKEN (scan skipped, no green claimable). The lint now
+# separates that case and exits 2 saying so (backlog 2c5ab136d63f).
+#
+# NARROW BY CONSTRUCTION, on the same argument as its sibling: exit 2 alone is not enough, because
+# the selftest's OTHER exit-2 reason would be a structural one. It keys on the REMEDY's own marker
+# — the line the fix ADDED — never on the defect's spelling, which is how backlog 57ff249657e0's
+# probe died: it grepped `hits=`, the exact token its fix deleted, so it could never once retract.
+#
+# The DECISION is split out as a pure predicate so the control below can drive it on both shapes
+# without a full (>2 min) --selftest run, and so that control drives THE SAME code the skip uses —
+# a re-implemented predicate in the test would certify a rule production does not follow.
+selftest_is_nonverdict() { # <status> <output> → 0 = abstain, 1 = judge it
+  [ "$1" -eq 2 ] || return 1
+  printf '%s\n' "$2" | grep -q 'SELFTEST NON-VERDICT'
+}
+skip_if_selftest_nonverdict() {
+  selftest_is_nonverdict "$status" "$output" || return 0
+  skip "NON-VERDICT: --selftest could not run a predicate on this box (exit 2) — a fact about the machine, not a claim about the tree"
+}
+
+@test "the --selftest abstain is TWO-SIDED: the marker abstains, every other exit-2 still judges" {
+  # This guard only ever fires on a loaded box, so without a control it is dead code nobody has seen
+  # fire — and a skip helper that has never fired is indistinguishable from one that always does.
+  # Both halves matter: too narrow and the HOST RED this fixes comes back; too wide and it swallows
+  # the structural exit-2 reasons (a bad ROOT is exactly how f37a84cf was caught), which is the
+  # failure the lint's own --selftest cases (e2)/(e3) pin on the other side of the same split.
+  # NOT `fail` — this suite loads no bats-assert, so `fail` is `command not found` (status 127) and
+  # every diagnostic below would be replaced by that. Found by mutating the predicate: the control
+  # went red for the right reason with entirely the wrong message.
+  selftest_is_nonverdict 2 'test-hermeticity-lint: SELFTEST NON-VERDICT: a predicate could not RUN while scanning' \
+    || { echo "a real machine non-verdict was not abstained on — the HOST RED is back" >&2; return 1; }
+  selftest_is_nonverdict 2 'test-hermeticity-lint: ⛔ not a directory: /nope' \
+    && { echo "a bad ROOT was abstained on — the guard has grown over the structural failure it must not hide" >&2; return 1; }
+  selftest_is_nonverdict 1 'test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate.' \
+    && { echo "a genuine FAILED selftest was abstained on — the instrument check is now unfalsifiable" >&2; return 1; }
+  return 0
+}
+
 @test "the real tree is CLEAN (exit 0) — the embedded allowlist matches HEAD, nightly stays green" {
   # Rules 1-4 judge the tree here: 1-3 are on by default and rule 4 is switched on by name. Rules 5
   # and 6 stay OFF (setup() pins them, for the reason recorded there) — their real-tree guarantee is
@@ -144,6 +186,7 @@ skip_if_unrunnable() {
 
 @test "--selftest is GREEN and every discriminating case is exercised" {
   run bash "$LINT" --selftest
+  skip_if_selftest_nonverdict
   [ "$status" -eq 0 ]
   echo "$output" | grep -qE -e '--selftest: [0-9]+/[0-9]+'
 }
@@ -156,6 +199,7 @@ skip_if_unrunnable() {
   # 2026-07-26 by running the deployed copy immediately after landing it.
   ln -s "$LINT" "$FIX/linked-lint.sh"
   run bash "$FIX/linked-lint.sh" --selftest
+  skip_if_selftest_nonverdict
   [ "$status" -eq 0 ]
   echo "$output" | grep -qE -e '--selftest: [0-9]+/[0-9]+'
 }
@@ -171,6 +215,7 @@ skip_if_unrunnable() {
   # checkout, so this must still be GREEN — the assertion is that we do not fabricate a stale-allowlist
   # verdict out of a path problem.
   run bash "$FIX/noroot/scripts/test-hermeticity-lint.sh" --selftest
+  skip_if_selftest_nonverdict
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c 'allowlist is stale')" -eq 0 ]
 }
