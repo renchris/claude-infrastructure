@@ -1,5 +1,5 @@
 ---
-status: open
+status: superseded
 ---
 
 # Backlog consolidation — 460 items → 6 master efforts
@@ -801,3 +801,84 @@ cross-subject merges.**
 
 All 46 recurrences are `source:"needs"` — so R7's population and R6's turned out to be the same one,
 which neither the plan nor the briefs anticipated.
+
+---
+
+# CLOSED 2026-08-14 — SUPERSEDED. Every unit of work this plan tracks now lives in a plan of its own
+
+**This file held `status: open` for two days after it had nothing left to advance**, so `cc-discover`'s
+`plan-open` generator kept re-minting `86fd4c20dd44` ("advance Backlog consolidation") against a title
+whose work had either landed or moved. That is the exact `advance README hero banner` decay class this
+document's own § M2 follow-on describes, performed by the document describing it — the third time this
+plan has been the specimen of the defect it names.
+
+**The frontmatter was the stale thing, and nothing else was.** `plan-phase-scan.sh --falsify` read
+`exit 1` (still live) off clause (b) — 24 of 29 sections not marked DONE — while every one of those
+sections was a *record*, not a work item: a narrative diagnosis, a triage table, or a master
+description whose outcome was written into the separate § WAVE OUTCOMES table instead of onto its own
+heading. Clause (a) now short-circuits on `superseded` and the probe retracts, which is the mechanically
+correct end state.
+
+## Where each master went — the 1:1 spin-out, verified on trunk
+
+The six condition slugs in § Phase 0 map exactly onto six of the ten `docs/plans/MASTER_<SLUG>.md`
+files created by **`1b044624d`** (2026-08-12, *"ten master efforts, each with the Phase 0 wave table W4
+executes"*), whose path is *"derived mechanically from the condition slug"*. That commit is W2 of the
+successor plan, and it is what makes this document's 6-master grouping historical:
+
+| this plan | condition | now tracked in | state on trunk 2026-08-14 |
+|---|---|---|---|
+| M1 convergence deadlock | `master-convergence-deadlock` | `MASTER_CONVERGENCE_DEADLOCK.md` | fix landed `7693854c`; plan open |
+| M2 fire gate | `master-fire-gate` | `MASTER_FIRE_GATE.md` | landed `a7bf7068` + follow-ons; plan open |
+| M3 fleet footprint | `master-fleet-footprint` | `MASTER_FLEET_FOOTPRINT.md` | landed `77d33bdc`; plan open |
+| M4 stranded work | `master-stranded-work` | `MASTER_STRANDED_WORK.md` | **genuinely unfinished** — 50 live members |
+| M5 enforcing store | `master-enforcing-store` | `MASTER_ENFORCING_STORE.md` | **genuinely unfinished** — 34 live members |
+| M6 account facts | `master-account-facts` | `MASTER_ACCOUNT_FACTS.md` | landed `3be72af4`; plan open |
+| § Not master items — the operator pile | — | `MASTER_OPERATOR_GATED.md` | 42 rows, operator-gated by construction |
+
+🚨 **M4 and M5 are not being declared done here, and that distinction is the point of closing this
+file rather than deleting it.** § WAVE OUTCOMES left both at `running` on 2026-08-10 and nothing ever
+came back to this document to say otherwise. They are still open — but they are open **there**, with
+their own roadmaps and their own live member inventories. Leaving this plan open to "cover" them
+tracked them in two places at once, and only one of the two was being read.
+
+**The grouping itself was replaced, not merely re-filed.** `c221caa5` → `BACKLOG_SELF_DRAINING_2026-08-12.md`
+supersedes the 6-master partition with ten master efforts and a different execution model — the LOCAL
+DRAIN, one standing session holding one of ~15 concurrent slots, in place of one dispatched session per
+wave. `MASTER_STRANDED_WORK.md` records that flip explicitly: *"SUPERSEDED FOR THE LOCAL DRAIN
+(2026-08-13): read every `S` below as `T`."* So this document's § Phase 0 locus table is also stale, and
+a session firing from it would fire the wrong shape.
+
+## What this plan actually built, content-verified on trunk rather than taken from its own prose
+
+Checked with `git show origin/main:<path>` on 2026-08-14 — the repo's own standing rule is to verify a
+landing by CONTENT, never by a count, and § M2 follow-on's `ahead=0` finding is why:
+
+| deliverable | trunk evidence |
+|---|---|
+| M2 · `--falsifier` at write, re-run at claim | `bin/cc-backlog` carries the field + the `falsify` verb + `--clear`; `a7bf7068` · `3206c955` · `60a8f0cc` |
+| M2 · cluster / rank / worktree-freshness at the admit seam | `bin/cc-dispatch`; `94b054d1` on trunk |
+| W0 · the instrument | `scripts/backlog-ratchet.sh` carries `CC_RATCHET_MIN_N`, the `$probeable` exclusion and `denominator_version` — the dispatchable denominator, the floor guard and the re-baseline, all three |
+| W1 · readiness as a precondition of admission | `bin/cc-dispatch` `CC_DISPATCH_READY_GATE` (**still `advisory`**), `READY_SCAN`, `readyAt`; `5ac7990d9` |
+| W2 · the second screen | `bin/cc-premise` `DISCRIMINATING · ANTI-COVERAGE · UNDECIDABLE`; `295f6240a` |
+| W3 · the consolidation actuator | `scripts/backlog-consolidation-trigger.sh` `--fold` + `conservation=`; `8f1726cfb` |
+
+**Three shas this document cites do not exist as written** — `087d4198c594`, `9dd6f7a4c`, `056f5d9d8`.
+The features are on trunk (verified by content above); the shas are pre-rebase ids that `ship-land`
+rewrote on the way in. Recorded rather than corrected, because it is the same lesson as `ahead=0`: a sha
+written into a plan at authoring time is a claim about a commit that may not survive landing, and only
+the tree settles it.
+
+## The one thing that outlived this plan and is NOT filed anywhere as this plan's
+
+`CC_DISPATCH_READY_GATE` is still `advisory`. § W1's measurement is the reason — would-block was 60% on
+pass 2, and *"the cure is item CITATIONS, not a weaker gate"*. The advisory→enforce flip is gated on
+citation coverage, which is a ratchet target nobody has taken. That belongs to `MASTER_FIRE_GATE.md`
+(condition `master-fire-gate`) as the live owner of the admit seam, not to this closed file.
+
+## Verification of this close
+
+```
+scripts/plan-phase-scan.sh docs/plans/BACKLOG_CONSOLIDATION_2026-08-09.md --falsify   # → FALSIFIED, rc 0
+scripts/find-plan.sh --status docs/plans/BACKLOG_CONSOLIDATION_2026-08-09.md          # → superseded
+```
