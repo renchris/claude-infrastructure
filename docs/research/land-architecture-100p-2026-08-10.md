@@ -850,6 +850,39 @@ landed into:
 4. **`bats-assert-liveness` fails OPEN on every non-verdict** — ship-land reads its stdout, not its
    exit code, so a missing `python3` or a traceback reads as GREEN. Deliberate and commented, but
    it is the opposite direction from its four neighbours and worth an explicit decision.
+   **FIXED 2026-08-14, `f13ad84d` (backlog 73583e2519d6).** The explicit decision is fail-CLOSED,
+   for the reason the "deliberate and commented" framing understates: this arm did not mis-CLASSIFY
+   a non-verdict, it INVERTED it. An empty stdout is the lint's CLEAN verdict, so a missing
+   `python3`, an unreadable suite, a traceback and a SIGKILL all landed while the arm printed its
+   own "→ gate: bats dead-assertion ratchet" line as if it had checked — and the class this ratchet
+   exists to stop is defined by being invisible, so that green is indistinguishable from a real one
+   until postland-verify reds the corpus ~3.2 h later for everyone at once. Two legs, because
+   either alone still reads clean: the caller now discriminates on rc AND stdout (the lint's exit 1
+   is overloaded — an uncaught exception exits 1 with an empty stdout, which the code alone cannot
+   tell from findings) and stops swallowing stderr; the lint stops exiting 0 over a path it could
+   not READ, and converts any uncaught exception into its documented exit 2. Findings outrank both,
+   so a machine condition can never soften a verdict about the tree. `arm_nonverdict` grew an
+   optional exit code for it — a python lint's could-not-run arrives as 1 or 127, and a hardcoded
+   "(exit 2)" over a 127 sends the reader hunting for a usage error the lint never reported. Six
+   tests, four driving whole land pipelines through a stub lint. **Census after: 16 of 16 arms
+   discriminate**, and item 1's nine are now zero.
+
+   *Found while verifying it, and NOT fixed here — a live non-verdict in the arm two positions
+   above, plus the blind spot that hides it.* `test-hermeticity-lint.sh`'s `is_hermetic()` is
+   `setup_bodies "$1" | grep -qE …` under `set -o pipefail` — the exact shape §5.P2's own
+   pipefail/SIGPIPE ratchet exists to catch: `grep -q` exits at the match, the `awk` producer takes
+   SIGPIPE on its next write, and pipefail promotes 141 over grep's 0. `is_hermetic` reads that as
+   neither 0 nor 1, retries three times, and condemns the run — so the hermeticity arm GATE-KILLs
+   the whole gate (exit 9) with `grep rc=141`, before eleven arms downstream of it ever run. It
+   fires only where the producer's output exceeds the pipe buffer before grep's exit, which is why
+   it is invisible on the operator's box and deterministic on a Linux container: measured there on
+   an UNMODIFIED trunk, 3 of ~470 suites (`cc-notify`, `cc-reaper`, `postland-verify` — the largest
+   `setup()` bodies) killed every gate round. The sharper half is that
+   `scripts/pipefail-sigpipe-lint.sh` does **not** flag the site: its producer heuristic does not
+   recognise a shell FUNCTION as a streaming producer, so the ratchet is blind to every
+   `some_fn "$x" | grep -q …` in the tree. Two items, one root: widen the detector, then drain or
+   neutralise the sites it surfaces (`{ setup_bodies "$1" || true; } | grep -qE …` is this file's
+   own prescribed remedy).
 5. **`unattended-path-lint`'s finding set is a function of the caller's live `$PATH`** — with the
    stuck-ratchet now own-scoped its blocking channel is closed, but "author's worktree green,
    landing box red" remains reachable from an inventory difference alone.
