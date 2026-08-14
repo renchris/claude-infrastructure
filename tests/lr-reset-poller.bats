@@ -358,6 +358,56 @@ mk_spend_teammate_transcript() {
   rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-aaaa000m-*.sh
 }
 
+# ── LR-o: the tmux fallback must survive the LAUNCHD PATH, which is where it actually runs ───────
+# WHY THIS CASE EXISTS, AND WHY LR-j/LR-m COULD NOT CATCH IT. Both stub `tmux` onto $PATH, so both
+# ask "does the fallback work when tmux is on PATH" — which under launchd it never is.
+# com.reso.lr-reset-poller.plist sets no PATH, launchd's default is /usr/bin:/bin:/usr/sbin:/sbin,
+# and Homebrew is not on it, so `command -v tmux` MISSED on every real tick. MEASURED 2026-08-14 in
+# $HOME/.reso/limit-recover/poller.log: 1,797 of 2,211 lines (81%) are the identical
+# `resume spawn failed (LR_POLLER_SPAWN=auto; no GUI and no tmux)` across 11 sids over 24 days, one
+# sid retried 380 times — while /opt/homebrew/bin/tmux existed the whole time. So LR-m's contract
+# ("GUI unavailable → tmux rather than stranding the resume") had never once been honoured in
+# production, and the log line asserting "no tmux" was FALSE about the box.
+#
+# THE HARNESS MUST THEREFORE DROP THE STUB DIR FROM PATH — that is the whole point of the case, and
+# it is the one axis every sibling case pins the other way. `LR_POLLER_TMUX_CANDIDATES` stands in
+# for the absolute Homebrew locations a test cannot create.
+
+@test "LR-o: tmux resolves ABSOLUTELY when PATH cannot see it — the launchd floor, not the dev shell" {
+  mk_parked "aaaa000o-1111-2222-3333-444444444444" "$(past_iso)"
+  # The stock launchd PATH: no Homebrew, no stubs dir. `command -v tmux` cannot answer here.
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+      HOME="$HOME" TMUX_LOG="$TMUX_LOG" OSA_LOG="$OSA_LOG" CCD_LOG="$CCD_LOG" \
+      LR_POLLER_LAUNCH_DIR="$LR_POLLER_LAUNCH_DIR" IT2_WRAPPER_NO_KITTY=1 \
+      OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 \
+      LR_POLLER_TMUX_CANDIDATES="$BATS_TEST_TMPDIR/stubs/tmux" \
+      bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -q 'new-session' "$TMUX_LOG"                                  # the fallback CARRIED the resume
+  grep -q "lr-poller-launch-aaaa000o-" "$TMUX_LOG"
+  [ -f "$STATE/resumed/aaaa000o-1111-2222-3333-444444444444.json" ]
+  grep -qE 'RESUMED aaaa000o.*tmux' "$STATE/poller.log"
+  # …and the false diagnosis is gone: nothing claims "no tmux" on a box that has one.
+  ! grep -q 'no GUI and no tmux' "$STATE/poller.log" || false
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-aaaa000o-*.sh
+}
+
+@test "LR-o2: when tmux is GENUINELY absent the ERROR names WHICH mechanism was missing" {
+  # The positive control for LR-o, and the half that keeps the log honest. With no candidate and no
+  # PATH entry there really is no tmux, and the line must say so about the RESOLUTION, not assert a
+  # fact about the box it never checked.
+  mk_parked "aaaa00o2-1111-2222-3333-444444444444" "$(past_iso)"
+  run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+      HOME="$HOME" TMUX_LOG="$TMUX_LOG" OSA_LOG="$OSA_LOG" CCD_LOG="$CCD_LOG" \
+      LR_POLLER_LAUNCH_DIR="$LR_POLLER_LAUNCH_DIR" IT2_WRAPPER_NO_KITTY=1 \
+      OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 \
+      LR_POLLER_TMUX_CANDIDATES="$BATS_TEST_TMPDIR/nonexistent-tmux" \
+      bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -q 'tmux=unresolved' "$STATE/poller.log"
+  grep -q 'ERROR  aaaa00o2' "$STATE/poller.log"
+}
+
 @test "LR-n: teammate monthly-spend session → NO packet (lead-owned recovery), teammate-skip logged" {
   local now; now=$(date +%s)
   mk_spend_teammate_transcript "aaaa000n-1111-2222-3333-444444444444" "$((now-1800))"
