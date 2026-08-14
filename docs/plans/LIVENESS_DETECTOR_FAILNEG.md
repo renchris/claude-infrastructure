@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # LIVENESS DETECTOR FAIL-NEGATIVE — five measured instances of "it didn't happen" about things that did
@@ -83,7 +83,7 @@ is exactly the class this investigation exists to find.
 
 ---
 
-# W1 — THE DERIVATION (2026-08-11, completed)
+# W1 — THE DERIVATION (2026-08-11, DONE)
 
 ## The answer: ONE mechanism, and it is NOT the time window
 
@@ -220,7 +220,7 @@ calls, so the ✅-certificate path is safe; `mailbox_keyset`, `cc-await-ping`'s 
 
 ---
 
-# W2 — THE FIX (2026-08-11, landed with W1)
+# W2 — THE FIX (2026-08-11, DONE — landed with W1)
 
 Three detectors now return three verdicts. Per the constraints: **no timeout was lengthened**, no
 detector was made always-yes, each reads a durable artifact rather than a clock where one exists, and
@@ -290,8 +290,80 @@ defective and is what the D3 fix is justified by; the timeout test is kept as a 
 - `tests/cc-notify.bats` has one pre-existing failure on the `--cloud` sidecar path
   (`DECLARED + {ok:true}`). Verified red on pristine `HEAD` — not caused by this change.
 
+---
+
+# CLOSE-OUT VERIFICATION (2026-08-14, DONE)
+
+Re-verified from `origin/main` before closing, because two of this plan's own claims were
+filing-day snapshots that nothing had re-read: *"W2 landed"* and *"the top ones are filed"*.
+
+## Why the landed shas do not resolve, and what replaced them
+
+`6509abd2` (the W2 fix) and `ca50a87b` (plan creation) are **local-machine shas and are not
+ancestors of `origin/main`.** The GitHub trunk is a squashed import: `d3dda7b4` is a **root commit**
+(no parents, 1840 files, 535,646 insertions, 2026-08-13) that carries the whole tree as of that
+date, and trunk holds 50 commits total. So sha-matching is structurally impossible here and
+**content-verification is the only valid method** — which is what this repo's own `.claude/CLAUDE.md`
+already mandates (*"verify landings by CONTENT (`git ls-tree`), never by count"*), for a different
+reason that happens to bite the same way.
+
+## The three subjects, content-verified present on trunk
+
+| | Site on `origin/main` | The fix, observed |
+|---|---|---|
+| D1 | `bin/cc-notify` `_record_send` | signature is `<resolved-key> [<target-as-given>]`; writes both spellings, collapses whitespace, omits a redundant duplicate field. The 24-line header naming instance 1/4 is present. |
+| D2 | `scripts/handoff-fire.sh:2085,2122,2181,2252,2294` | `marker_in_user_record` exists; `engagement_seen` documents *"0 engaged / 1 none / 2 cannot-tell / 3 ingested-not-running"* and `return 3` is reached only via the user-record gate; `verify_engagement` returns `5`. |
+| D3 | `hooks/lib/session-writes.sh:289,299-306` | docstring *"rc: 0 mine · 1 not mine · 2 cannot-tell"*; every git read carries an explicit `|| return 2`. |
+
+All three landed. **The plan's frozen DoD is discharged** — `happened · did-not-happen · cannot-tell`
+are three distinct verdicts, with distinct exit codes and distinct messages, in all three detectors.
+
+## The prize list was a snapshot too — 6 of 10 are now fixed, 4 are still live
+
+The list was written as *"None is fixed here … the top ones are filed"*. Three days on, later waves
+had reached most of it. Re-measured on trunk, rank by rank:
+
+| Rank | Site | State on trunk 2026-08-14 |
+|---|---|---|
+| 1 | `comms-strand-report.sh` | **FIXED** — an `ORACLE` positive control now compares the *same key shape* the walk uses; `control-failed`/`unknown` ⇒ `verdict:"unknown"`, exit 3, and it refuses to report any strand number. |
+| 2 | `stranded-sweep.sh` | **FIXED** — `cherry_out="$(git cherry … 2>&1)"; cherry_rc=$?`, rc observable; `--mine` re-keyed onto identity that exists. |
+| 3 | `handoff-disposition.sh:129-136` | **FIXED** — uuid-scoped `pgrep` with a documented bare-`pgrep` fallback for the no-id-in-argv watcher form. |
+| 4 | `worktree-gc.sh:731-747` `recheck_live` | 🔴 **STILL LIVE** |
+| 5 | `wrap-ledger.sh:721-724` `LIVE_ADDS` | **FIXED** — the `"?"` non-verdict is now produced, and all six consumers guard `!= "?"` before comparing. |
+| 6 | `bin/it2-kitty` `deliver_argv` | **FIXED** — `pane_exists` rc 2 keeps waiting; the header cites the repo-wide indeterminate convention by name. |
+| 7 | `bin/cc-recover-safeguard:157-167` | **ADDRESSED** — no longer one silent branch: successor-refused and no-pane-registered are distinct, announced arms, and a failed re-fire preserves the blocked pane. The `--terminal` fallback for a slow-registering pane remains, but it is now visible. |
+| 8 | `worktree-gc-infra-run.sh:169-178` `stranded_scan` | 🔴 **STILL LIVE** |
+| 9 | `postland-verify.sh:975-979` `shell_files` | 🔴 **STILL LIVE** |
+| 10 | `hooks/lib/mailbox-pending.sh:376-381` `_mbx_strict_uuid` | 🔴 **STILL LIVE — but now argued.** The canonical 8-4-4-4-12 demand is unchanged; a header added since defends it as deliberate (a permissive check would route mail into a garbage box). That defence is sound and the consequence this plan named still holds: on kitty, pane ids are integers, so `.forward` remains structurally unwritable for them. It needs a decision — widen the address grammar or accept no forwarding on kitty — not a swallowed-rc repair. |
+
+**The four still-live sites are the same one-line shape this plan already fixed three times** — a
+command substitution inside a heredoc body, whose rc is discarded, feeding a `return`/print that
+reads as a healthy negative:
+
+- `worktree-gc.sh:741` — `done <<EOF` / `$(claude_cwds)`. Gates `git worktree remove` at `:829`,
+  `:954`, `:999`. **Highest blast radius of the four: it deletes directories**, including gitignored
+  content the script's own `log_disposal` header says git records nowhere else.
+- `worktree-gc-infra-run.sh:177` — `$(git worktree list --porcelain …)`. Prints `0 0`, and
+  `--assert` takes the numeric arm and reports healthy. The `n-a n-a` non-verdict already exists
+  four lines up for the *deadline* case and is simply bypassed by this path — the identical
+  structure rank 5 had before it was fixed.
+- `postland-verify.sh:978` — `$(git -C "$WORKTREE" ls-files …)`. Empty list ⇒ empty `SYNTAX_BAD` ⇒
+  the green-stamp producer stamps `verdict:"green"` over a tree it never read. No floor.
+
+**Not fixed here, deliberately, and this is the carry-forward.** Repairing them means changing what
+three consumers do at a `git worktree remove` and at the green stamp; the honest gate for that is
+their bats suites (`tests/worktree-gc.bats`, `tests/postland-verify.bats`; **`worktree-gc-infra-run`
+and `mailbox-pending` have no suite at all**), and shipping a verdict change without running its
+control is the exact defect this plan was opened to indict. They are named here with file:line and
+current-as-of-2026-08-14 state so a successor starts from measurement rather than from the
+2026-08-11 snapshot.
+
 ## Status log
 
+- **2026-08-14** — Close-out. W1 + W2 content-verified present on `origin/main`; frozen DoD
+  discharged; plan set `status: complete`. Prize list re-measured: ranks 1/2/3/5/6 fixed by later
+  waves, 7 addressed, **4/8/9/10 still live** and carried forward above. No code changed by this
+  close-out — it is a verification and a currency correction.
 - **2026-08-11** — Plan created from five measured instances. Not started. Related but distinct:
   `docs/research/codex-probe-screen-2026-08-10/screen-session-writes.md` independently indicts
   `hooks/completion-assert.sh:326` (`session_unlanded_mine`) for returning "not mine" where the
