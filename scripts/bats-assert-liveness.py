@@ -33,7 +33,9 @@ Usage:
   bats-assert-liveness.py [--format text|tsv|count] [--summary] [PATH ...]
 
 PATH defaults to tests/*.bats. Exit status: 0 = no dead assertions, 1 = findings,
-2 = usage/IO error. Intended to run in the commit gate, so 1 is a hard failure.
+2 = COULD-NOT-RUN (usage/IO error, or any uncaught exception — see the __main__ guard).
+Intended to run in the commit gate, so 1 is a hard failure and 2 is a non-verdict: the
+caller must not read an empty stdout as a clean tree without checking the code too.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ import glob
 import os
 import re
 import sys
+import traceback
 
 # ---------------------------------------------------------------- construct classes
 
@@ -558,11 +561,21 @@ def classify(code: str) -> str | None:
     return None
 
 
+# Files handed in that could not be read. THE SECOND HALF OF backlog 73583e2519d6: this list used
+# to be nowhere, so an unreadable suite printed one stderr line, contributed zero findings, and the
+# tool exited 0 — "no dead assertions" over a file it never opened. Reporting the skip is not the
+# same as declining to judge, and the land gate's own comment ("an unreadable file yields NO
+# verdict") was describing behaviour the code did not have. A clean exit now requires every path to
+# have been READ; anything else is exit 2, the could-not-run code.
+UNREADABLE: list[str] = []
+
+
 def analyze_file(path: str) -> list[dict]:
     try:
         text = open(path, encoding="utf-8", errors="replace").read()
     except OSError as exc:  # pragma: no cover - surfaced to caller
         print(f"{path}: cannot read: {exc}", file=sys.stderr)
+        UNREADABLE.append(path)
         return []
 
     lines = text.split("\n")
@@ -633,9 +646,23 @@ def main(argv: list[str]) -> int:
     for p in paths:
         findings.extend(analyze_file(p))
 
+    # A verdict outranks a non-verdict, in every format: findings that WERE found are real, whatever
+    # else could not be read. Only a scan with nothing to say AND a file it could not open is a 2.
+    def _rc() -> int:
+        if findings:
+            return 1
+        if UNREADABLE:
+            print(
+                f"bats-assert-liveness: COULD NOT RUN — {len(UNREADABLE)} path(s) unreadable "
+                f"({', '.join(UNREADABLE[:3])}) — exit 2 is a NON-VERDICT, not a clean tree",
+                file=sys.stderr,
+            )
+            return 2
+        return 0
+
     if args.format == "count":
         print(len(findings))
-        return 1 if findings else 0
+        return _rc()
 
     for f in findings:
         if args.format == "tsv":
@@ -659,8 +686,22 @@ def main(argv: list[str]) -> int:
         for p in sorted(by_file, key=lambda k: (-by_file[k], k)):
             print(f"   {by_file[p]:>4}  {os.path.basename(p)}", file=sys.stderr)
 
-    return 1 if findings else 0
+    return _rc()
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception:  # noqa: BLE001 — the point is that NOTHING escapes as an exit 1
+        # An uncaught exception exits 1 with an EMPTY stdout, which is byte-identical to this tool's
+        # "findings" code carrying no findings — so a caller reading the code cannot tell a crash
+        # from a verdict, and one reading stdout cannot tell it from CLEAN. The land gate read stdout
+        # and called it green for two weeks (backlog 73583e2519d6). Exit 2 is this tool's documented
+        # could-not-run, and the traceback goes to stderr where the caller now prints it.
+        traceback.print_exc()
+        print(
+            "bats-assert-liveness: COULD NOT RUN (traceback above) — exit 2 is a NON-VERDICT, "
+            "not a clean tree",
+            file=sys.stderr,
+        )
+        sys.exit(2)

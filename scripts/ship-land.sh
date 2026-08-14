@@ -2019,9 +2019,14 @@ bats_sc_nonverdict() {
 # Factored rather than copied nine times for the reason stated above bats_sc_nonverdict: a copy-paste
 # pair is how one of them ends up saying something else. That helper stays as-is — its text names an
 # install step this generic one cannot know.
+# $3 exists because ONE could-not-run does not arrive as a 2: the dead-assertion arm's lint is a
+# python program, and a python program that dies before its own handler runs exits 1 (uncaught
+# exception) or 127 (no interpreter). Printing a hardcoded "(exit 2)" over a 127 would send the
+# reader hunting for a usage error the lint never reported. Default stays 2 — every other caller is
+# consuming a lint whose could-not-run IS a 2, and none of them had to change.
 # shellcheck disable=SC2329  # invoked from run_gate's arms below.
-arm_nonverdict() {  # $1=lint label · $2=optional extra hint line
-  echo "⛔ gate: $1 could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+arm_nonverdict() {  # $1=lint label · $2=optional extra hint line · $3=optional exit code (default 2)
+  echo "⛔ gate: $1 could not RUN (exit ${3:-2}) — a NON-VERDICT, not a claim about your tree." >&2
   echo "  Nothing is wrong with the files named above (if any) — the lint never reached a verdict." >&2
   [ -n "${2:-}" ] && echo "  $2" >&2
   echo "  Re-run /ship when the box is quieter." >&2
@@ -2513,8 +2518,35 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     if [[ ${#dscan[@]} -gt 0 ]]; then
       echo "→ gate: bats dead-assertion ratchet (${#dscan[@]} changed suite(s))" >&2
-      # `|| true`: a missing python3 or an unreadable file yields NO verdict, never a fabricated one.
-      dfind="$(python3 "$DEAD_LINT" --format text "${dscan[@]}" 2>/dev/null || true)"
+      # THE DISCRIMINATOR IS rc PLUS stdout, and until 2026-08-14 (backlog 73583e2519d6) it was
+      # stdout ALONE — `… 2>/dev/null || true`, whose comment claimed it "yields NO verdict, never a
+      # fabricated one". It yielded the GREEN one. An empty stdout is this lint's clean verdict, and
+      # a missing python3, an unreadable suite, an uncaught traceback and a SIGKILL all produce an
+      # empty stdout too, so every could-not-run read as "no dead assertions" — while the arm
+      # printed its own "→ gate: bats dead-assertion ratchet" line as if it had checked.
+      #
+      # That is the OPPOSITE polarity from all fifteen neighbouring arms, which route could-not-run
+      # to GATE_KILLED (exit 9, retryable) — and it is the worse direction. Fail-closed costs one
+      # re-run on a noisy box; fail-open lets through exactly the class this ratchet exists to stop,
+      # and that class's whole signature is being invisible: the dead assertion lands, its suite
+      # passes, and the corpus goes red ~3.2h later in postland-verify, for everyone at once. The
+      # ratchet was moved to this chokepoint because detection-later was a treadmill; a green that
+      # means "the check did not run" puts it back on the treadmill silently.
+      #
+      #   rc 0                → clean
+      #   findings on stdout  → RED, whatever the rc — a real verdict outranks a non-verdict, as
+      #                         everywhere else in this gate (see run_scoped_suite)
+      #   rc 1, stdout EMPTY  → an uncaught exception: python exits 1 with nothing on stdout, so
+      #                         this shape is indistinguishable from "findings" by the CODE alone.
+      #                         It is why the stdout leg stays in the discriminator after the fix.
+      #   rc 2 / 127 / 128+n  → could-not-run: nothing readable to judge, no python3, killed.
+      #
+      # stderr is deliberately NOT swallowed any more: it carries the traceback that names WHY the
+      # lint could not run, and a non-verdict whose cause is hidden is a non-verdict nobody fixes.
+      # On a clean or a red run the lint writes nothing there (--summary is not passed), so this
+      # adds no noise to the gate log.
+      local drc=0
+      dfind="$(python3 "$DEAD_LINT" --format text "${dscan[@]}")" || drc=$?
       if [[ -n "$dfind" ]]; then
         printf '%s\n' "$dfind" >&2
         echo "✗ gate: dead-assertion RED — a test THIS LAND CHANGES asserts something errexit cannot reach." >&2
@@ -2526,6 +2558,12 @@ run_gate() {  # $1=range → 0 green / 1 red
         echo "  line named, file untouched) rather than guess at a shape it cannot prove. A decline is" >&2
         echo "  YOUR hand-edit: verify it in BOTH directions with a mutant, never by the analyzer alone." >&2
         gate_red dead-assertion
+        return 1
+      fi
+      if (( drc != 0 )); then
+        arm_nonverdict "bats-assert-liveness" \
+          "python3 exited $drc with NO finding on stdout — no python3 on this box, an unreadable tests/*.bats, or a traceback (printed above)." \
+          "$drc"
         return 1
       fi
     fi
