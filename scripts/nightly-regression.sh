@@ -155,6 +155,16 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
       esac
       printf '  CUT  %s (rc %d — NON-VERDICT: %s)\n' "$name" "$rc" "$_nv"
       TIMEOUTS+=("$name:rc$rc"); return 0 ;;
+    2)
+      # rc 2 is this repo's lint convention for "could not run", and it is MARKER-GATED here for the
+      # reason above — it is the one code in this case that a broken script can also produce by
+      # accident. scripts/test-hermeticity-lint.sh --selftest reaches this arm (backlog 2c5ab136d63f):
+      # its case (e) lints the REAL tree, so one lost fork on a loaded box used to make the whole
+      # selftest exit 1 and be scored here as a regression — a clean tree convicted by a busy box.
+      if ngr_nonverdict_marker "$out"; then
+        printf '  CUT  %s (rc 2 — NON-VERDICT: %s)\n' "$name" 'the check says it could not run a predicate'
+        TIMEOUTS+=("$name:rc2"); return 0
+      fi ;;
   esac
 
   # (2) COUNT-JUDGED — judge the failed-COUNT against its declared baseline, never the exit code.
@@ -348,6 +358,14 @@ is_library() { # a sourced file: not executable, or carrying no shebang
 # A readiness bar identifies ITSELF in its output, so this cannot rot the way a hardcoded list does:
 # a gate that reaches its bar stops emitting the marker and rejoins the regression set on its own.
 ngr_bar_marker() { grep -qE 'NOT READY|it is the bar' "$1" 2>/dev/null; }
+# Does the check SAY it reached no verdict? This exists because rc 2 cannot be added to the blanket
+# NON-VERDICT list in run_check_step4: `bash` itself exits 2 on a syntax error, so a bare `2)` arm
+# would turn a broken check into a silent CUT — fail-OPEN, the one direction that block must never
+# grow in. So the check has to announce it, and only our lints' two exit-2 announcements count. A
+# syntax error, an argv rejection and a bad-ROOT ("⛔ not a directory") print none of them and stay
+# RED. Both directions are proved in the selftest; the marker is the whole gate, so a widened regex
+# here is a silenced red.
+ngr_nonverdict_marker() { grep -qE '⛔ UNUSABLE|⛔ NON-VERDICT|SELFTEST NON-VERDICT' "$1" 2>/dev/null; }
 ngr_bar_failed() { # → failed-criteria count from the gate's own "N met · M failed" line
   grep -oE '[0-9]+ met · [0-9]+ failed' "$1" 2>/dev/null | tail -1 | awk '{print $4}'
 }
@@ -816,6 +834,25 @@ TORN
     [ "${#REDS[@]}" -eq 0 ] && [ "${#BARS[@]}" -eq 0 ] && [ "${#TIMEOUTS[@]}" -eq 1 ] ) \
     && okp "NV: rc 75 (cc-bats DEFERRAL) is a NON-VERDICT — never a bar, even when it prints one" \
     || badp "NV: a cc-bats deferral was scored as a bar or a RED"
+
+  # rc 2 — MARKER-GATED, and the pair is the point. Unlike 124/137/143/75, rc 2 is reachable by a
+  # merely BROKEN check (`bash` exits 2 on a syntax error), so the CUT must key on what the check
+  # SAYS, not on its code. Two fixtures differing ONLY in that line: without the pair, widening the
+  # arm to a bare `2)` would pass the first case and silence every syntax error in the fleet.
+  printf '#!/bin/bash\necho "test-hermeticity-lint: ⛔ UNUSABLE — a predicate failed to run (see above); no verdict."\nexit 2\n' \
+    > "$nvd/unusable-lint.sh"; chmod +x "$nvd/unusable-lint.sh"
+  ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0
+    run_check_step4 "unusable-lint.sh" unusable-lint.sh "$nvd/unusable-lint.sh" >/dev/null 2>&1
+    [ "${#REDS[@]}" -eq 0 ] && [ "${#BARS[@]}" -eq 0 ] && [ "${#TIMEOUTS[@]}" -eq 1 ] ) \
+    && okp "NV: rc 2 WITH a non-verdict marker is a NON-VERDICT, not a regression" \
+    || badp "NV: a lint that said it could not run was scored as a RED"
+  printf '#!/bin/bash\necho "test-hermeticity-lint: ⛔ not a directory: /nope"\nexit 2\n' \
+    > "$nvd/broken-lint.sh"; chmod +x "$nvd/broken-lint.sh"
+  ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0
+    run_check_step4 "broken-lint.sh" broken-lint.sh "$nvd/broken-lint.sh" >/dev/null 2>&1
+    [ "${#TIMEOUTS[@]}" -eq 0 ] && [ "${#REDS[@]}" -eq 1 ] ) \
+    && okp "NV: rc 2 WITHOUT the marker stays RED (a syntax error is not an abstain)" \
+    || badp "NV: rc 2 became a blanket CUT — every broken check is now silent"
 
   # The two rows measured 2026-08-08 must RESOLVE — same ratchet discipline as premortem above:
   # assert they parse to a number, never to one specific number, so tightening a bar stays legal.

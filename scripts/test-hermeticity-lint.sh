@@ -2155,6 +2155,40 @@ lint_selftests() {
   return 0
 }
 
+# ── THE --selftest's THIRD STATE, as two PURE functions.
+#
+# lint_dir exits 2 for FIVE reasons and they are not one class. FOUR are STRUCTURAL — not a
+# directory, no .bats suites under it, and the two extractors that cannot find their own anchor —
+# and each says something true about the tree or about the instrument, so each must stay a FAIL.
+# The FIFTH is CHECK_FAILED: a predicate could not RUN (a lost fork on a loaded box), which says
+# nothing whatever about the tree. Collapsing the fifth into the other four is what made a busy
+# box file a HOST RED against a clean tree — case (e) is the only assertion in this selftest that
+# judges the REAL tree, so it is the one a machine hiccup can break.
+#
+# CHECK_FAILED is readable by the caller ONLY because case (e) invokes lint_dir with a plain
+# REDIRECT. A redirect is not a subshell; `$( )` would be, and would discard the assignment before
+# anyone could read it — the exact defect this row's sibling was (backlog 57ff249657e0, where
+# `hits="$(scan)"` swallowed four honest `exit 2`s). The selftest case below pins that property
+# directly, so a future refactor to `$( )` reds here instead of silently re-conflating the states.
+#
+# Both are PURE and both are driven by the production arms AND by the cases that prove them, so a
+# test cannot drift from the arm it certifies (memory: make-the-actuator-the-arbiter).
+selftest_realtree_disposition() { # <lint_dir rc> <CHECK_FAILED read after it> → 0 clean · 1 FAIL · 2 NON-VERDICT
+  case "$1" in
+    0) return 0 ;;
+    2) if [ "$2" -ne 0 ]; then return 2; else return 1; fi ;;
+    *) return 1 ;;
+  esac
+}
+# A real FAIL outranks a NON-VERDICT. A discriminating case that actually failed is positive
+# evidence that the instrument is broken; a non-verdict is only the ABSENCE of evidence about the
+# box, and absence must never suppress a finding that is present.
+selftest_exit_code() { # <fails> <nonverdict> → 0 green · 1 FAIL · 2 NON-VERDICT
+  if [ "$1" -ne 0 ]; then return 1; fi
+  if [ "$2" -ne 0 ]; then return 2; fi
+  return 0
+}
+
 # ── --selftest: PROVE both RED paths fire and both GREEN paths don't (harness law: every assertion
 # traps). Case (e) lints the REAL tree with the REAL allowlist, so a stale ratchet is caught here too.
 if [ "${1:-}" = "--selftest" ]; then
@@ -2774,6 +2808,9 @@ echo "a lint that declares no inherited-value anchor at all"
 F
   cp "$SELF" "$d/r6anchor_ok/scripts/$(basename "$SELF")"
   fails=0
+  # Counted SEPARATELY from `fails` on purpose: a case that could not RUN is not a case that
+  # failed, and folding the two loses the only distinction the exit code exists to carry.
+  nonverdict=0
   # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
   # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
   # assertion below pass VACUOUSLY, which is the one way a discrimination proof can lie.
@@ -2832,16 +2869,49 @@ F
   ENV_RULE=on; ENV_ALLOW="$EMBEDDED_ENV_ALLOWLIST"; ENV_ROOT="$ROOT"; ENV_TABLE_ROOT=""
   ADMIT_ALLOW="$EMBEDDED_ADMIT_ALLOWLIST"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
+  # Read CHECK_FAILED on the very next line. It is a global that the NEXT lint_dir call resets, so
+  # anything between the call and this read is a chance to lose the one bit that tells a lost fork
+  # from a bad ROOT.
+  cf_real=$CHECK_FAILED
   FIRE_ALLOW=""
   ORPHAN_ALLOW=""
   SEAM_RULE=off; SEAM_ALLOW=""
   ENV_RULE=off; ENV_ALLOW=""
   ADMIT_ALLOW=""
-  case "$rc_real" in
-    0) ;;
-    2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
-    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate, orphan-close, inherited-value and/or capacity-admit) — the real tree is not clean"; fails=1 ;;
-  esac
+  selftest_realtree_disposition "$rc_real" "$cf_real"; disp_real=$?
+  if [ "$disp_real" -eq 2 ]; then
+    echo "SELFTEST NON-VERDICT: a predicate could not RUN while scanning $ROOT/tests — a fact about this BOX (a lost fork under load), NOT a claim about the tree or about either allowlist"
+    nonverdict=1
+  elif [ "$disp_real" -eq 1 ]; then
+    if [ "$rc_real" -eq 2 ]; then
+      echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1
+    else
+      echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate, orphan-close, inherited-value and/or capacity-admit) — the real tree is not clean"; fails=1
+    fi
+  fi
+  # ── (e2) and (e3): the two halves that keep case (e)'s third state DISCRIMINATING. A guard that
+  # only ever widens is how detection disappears with nothing naming the loss, so both directions
+  # are asserted — and each is asserted through selftest_realtree_disposition, the same function
+  # the arm above calls, so neither can certify a mapping the arm does not use.
+  #
+  # (e2) A PREDICATE THAT CANNOT RUN. A `grep` that exits 2 is exactly what fork exhaustion looks
+  # like to the pure predicates. Two things are proved at once: lint_dir answers 2, and CHECK_FAILED
+  # is still readable HERE, in the caller's shell — the property a `$( )` would silently destroy.
+  mkdir -p "$d/cfstub"
+  { echo '#!/bin/bash'; echo 'exit 2'; } > "$d/cfstub/grep"; chmod +x "$d/cfstub/grep"
+  cf_oldpath="$PATH"; PATH="$d/cfstub:$PATH"
+  lint_dir "$d/herm" "" >/dev/null 2>&1; rc_lost=$?
+  cf_lost=$CHECK_FAILED
+  PATH="$cf_oldpath"
+  [ "$rc_lost" -eq 2 ] && [ "$cf_lost" -ne 0 ] || { echo "SELFTEST FAIL: a predicate that could not RUN did not leave CHECK_FAILED readable in the caller's shell — case (e) can no longer tell a lost fork from a bad ROOT (a \$( ) around lint_dir does exactly this)"; fails=1; }
+  selftest_realtree_disposition "$rc_lost" "$cf_lost"; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a lost fork on the real-tree scan was not mapped to a NON-VERDICT — a busy box will file a HOST RED against a clean tree"; fails=1; }
+  # (e3) THE TOO-WIDE HALF, and the reason this is not simply "exit 2 ⇒ abstain". A bad ROOT also
+  # exits 2, for a STRUCTURAL reason that must stay a FAIL — f37a84cf shipped a `dirname "$0"` that
+  # resolved to ~/.claude, which has no tests/, and an abstain here would have hidden it.
+  lint_dir "$d/definitely-absent" "" >/dev/null 2>&1; rc_bad=$?
+  cf_bad=$CHECK_FAILED
+  [ "$rc_bad" -eq 2 ] && [ "$cf_bad" -eq 0 ] || { echo "SELFTEST FAIL: a bad ROOT did not exit 2 with CHECK_FAILED clear — the two exit-2 reasons are indistinguishable again"; fails=1; }
+  selftest_realtree_disposition "$rc_bad" "$cf_bad"; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a bad ROOT was excused as a NON-VERDICT — the abstain has grown over the structural failure it exists beside"; fails=1; }
   # ── RULE 3's four-way discrimination. Each assertion is paired with the one that proves it fired
   # for the RIGHT reason: red without the scope control is a rule that reds on everything.
   lint_dir "$d/orphleak" ""  >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a close-leg suite inheriting LCW_ORPHAN_CLOSE did not go RED"; fails=1; }
@@ -3329,8 +3399,28 @@ F
   esac
   ( cd "$memo_repo" && git checkout -q -- tests/zz-memo-clean.bats ) >/dev/null 2>&1
 
-  if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 120/120 — THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
+  # ── THE EXIT CODE ITSELF, all four combinations. This selftest cannot re-invoke itself to prove
+  # its own exit (one run is >2 minutes), so the arm below is a single call to a pure function and
+  # THESE are that function's cases — the same call, not a re-implementation of it. The one that
+  # matters is (0,1) ⇒ 2: before it, a lost fork left `fails=1` and this script exited 1, which
+  # tests/test-hermeticity-lint.bats reads as "the instrument is broken" and postland-verify reads
+  # as INSTRUMENT-BROKEN — a clean tree convicted by a busy box.
+  # Tested directly rather than through `$?` — the three cases below compare against 1 and 2, which
+  # `$?` is the only way to express, but a comparison against 0 is just the command's own status.
+  selftest_exit_code 0 0 || { echo "SELFTEST FAIL: a clean run did not exit 0"; fails=1; }
+  selftest_exit_code 0 1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a run whose ONLY blemish is a non-verdict did not exit 2 — the third state has no way out of this script"; fails=1; }
+  selftest_exit_code 1 0; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a real FAIL did not exit 1"; fails=1; }
+  selftest_exit_code 1 1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a real FAIL beside a non-verdict was reported as a non-verdict — absence of evidence suppressed evidence that was present"; fails=1; }
+
+  selftest_exit_code "$fails" "$nonverdict"; sx=$?
+  if [ "$sx" -eq 2 ]; then
+    echo "test-hermeticity-lint --selftest: ⛔ NON-VERDICT — a predicate could not RUN on this box and NO case failed." >&2
+    echo "  This says nothing about the tree or about either allowlist. Re-run when the box is quieter;" >&2
+    echo "  do not 'fix' a suite, a ratchet or this lint on the strength of it." >&2
+    exit 2
+  fi
+  if [ "$sx" -eq 0 ]; then
+    echo "test-hermeticity-lint --selftest: 128/128 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
