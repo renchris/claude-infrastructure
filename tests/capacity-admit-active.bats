@@ -231,7 +231,11 @@ EOF
     # process. A bare assignment leaves the stub on its default of 0 and the case then asserts a
     # bound over a box that was never over the ceiling — it would have passed for the wrong reason
     # in the other direction, which is how a bound test goes vacuous.
-    run bash -c 'export CC_ADMIT_BUDGET=1 STUB_COMPPAGES=1048576; . "$1"; cc_capacity_admit seg-bd "s"' _ "$LIB"
+    # The iteration rides into `what`, so the two evaluations are distinguishable in the ledger —
+    # the same shape tests/capacity-admit.bats case 04 uses. A loop counter this case never spends
+    # is also what SC2034 flags, and naming the spawn is the fix that leaves the assertion stronger
+    # rather than the warning silenced.
+    run bash -c 'export CC_ADMIT_BUDGET=1 STUB_COMPPAGES=1048576; . "$1"; cc_capacity_admit seg-bd "s$2"' _ "$LIB" "$i"
     rcs="$rcs$status,"
   done
   [ "$rcs" = "9,0," ]
