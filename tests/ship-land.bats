@@ -2694,6 +2694,71 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   echo "$output" | grep -qF 'LANDED'
 }
 
+# ── defect 2c: THE ATTACH'S REFUSAL WAS DISCARDED, so a row could be filed with NO probe ─────────
+# `falsify` has exactly two informative outcomes and the filer read neither: rc 0 stores the probe,
+# rc 5 REFUSES it because the probe already exits 0 — i.e. the oracle says this ref's content is
+# ALREADY on trunk, so the land died after its content landed and there is nothing to re-land. Both
+# went to /dev/null behind `|| true`, so the refusal filed a row carrying falsifier=NONE: it is in
+# neither of the retractor's buckets (it can never self-retract) and nothing reports it. MEASURED
+# 2026-08-13 on a live instance — row cdeb77e34952, `re-land claude/fire-20260812T172113Z-3600-1`,
+# ship-land exited 143/SIGTERM — filed with no probe and permanently live (item b15a2984d134).
+
+@test "P4 inbox: a REFUSED probe CLOSES the spurious row — it is never left unretractable" {
+  git checkout -q -b feat/inbox-refused main
+  mkdir -p scripts
+  # The oracle answers LANDED (exit 0), which is what makes `falsify` refuse. Stubbed rather than
+  # staged through a real second land, because the subject here is the FILER's handling of the
+  # oracle's verdict; the oracle's own correctness is land-content-verify.bats's job, and the
+  # round trip over the real script is the retract test above.
+  printf '#!/usr/bin/env bash\nexit 0\n' > scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad9.sh    # SC2164 → gate RED
+  git add -A && git commit -q -m "feat: bad9"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  bl="$BATS_TEST_TMPDIR/backlog.jsonl"
+  grep -q 're-land feat/inbox-refused' "$bl"
+  ! grep -q '"falsifier"' "$bl" || false         # the attach WAS refused — no probe was stored
+  # THE FIX, and it is the containment test the generator lacked: the refusal is acted on with the
+  # one oracle run `falsify` already pays for, so the row is closed at filing instead of joining
+  # the permanently-live population. cc-backlog's own refusal text prescribes exactly this.
+  grep -q '"event":"done"' "$bl"
+  grep -q 'land-content-verify' "$bl"            # the close names WHY, not just that
+  echo "$output" | grep -q 'CLOSED at filing'    # and it is REPORTED, not swallowed
+}
+
+@test "P4 inbox: an attach that fails for ANY other reason is REPORTED, not swallowed" {
+  # The second half of the same defect: rc 5 has a remedy, every other non-zero rc does not — but
+  # it leaves the same probe-less row, so the only thing that can help anyone is saying so. Driven
+  # through a stub cc-backlog because the real one's other refusals (rc 3 unknown id, rc 4 done
+  # row) are unreachable from a fresh fixture ledger, and an unreachable branch is untested code.
+  git checkout -q -b feat/inbox-attach-rc main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\nexit 1\n' > scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad10.sh
+  git add -A && git commit -q -m "feat: bad10"
+
+  stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
+  cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  needs)   echo "stubid00beef" ;;
+  falsify) echo "cc-backlog falsify: stubbed hard failure" >&2; exit 7 ;;
+  *)       exit 0 ;;
+esac
+STUB
+  chmod +x "$stub"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'WITHOUT a falsifier'
+  echo "$output" | grep -q 'stubid00beef'        # names the row, so it can be found by hand
+  echo "$output" | grep -q 'rc=7'                # and names what the store actually said
+}
+
 @test "P4 inbox: a SUCCESSFUL land files nothing (an inbox of every land is not an inbox)" {
   git checkout -q -b feat/inbox-green main
   printf '#!/usr/bin/env bash\necho ok\n' > good.sh

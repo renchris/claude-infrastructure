@@ -803,7 +803,7 @@ inflight_release() {  # idempotent · only ever removes a marker THIS process wr
 # conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
 # shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
 land_failure_inbox() {  # $1=exit code $2=cause word
-  local rc="$1" cause="$2" head name ref cmd bl id oracle
+  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc
   # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
   # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
   # visible feedback and filing them would drown the inbox in noise the author already read.
@@ -842,16 +842,43 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # land-content-verify.sh exits 0 exactly when the pinned ref's content is on trunk, which is the
   # RETRACTING direction, so `falsify` screens it before storing: at filing time the content is
   # genuinely not on trunk (exit 1) and it stores; a probe that already exits 0 is REFUSED (rc 5),
-  # which is the store telling us this row should never have been filed. Both outcomes are correct
-  # and both are swallowed — this runs from a trap handler, so it may not touch ship-land's exit
-  # code, and a land must never fail because a backlog row could not be annotated.
+  # which is the store telling us this row should never have been filed.
+  #
+  # 🚨 BOTH OUTCOMES ARE CORRECT; SWALLOWING THEM WAS NOT — and that is what this block used to do
+  # (`>/dev/null 2>&1 || true`, output AND rc discarded). A refusal leaves the row filed with NO
+  # probe, and a probe-less row is in NEITHER of the retractor's buckets: it cannot self-retract
+  # and nothing reports it, so it is permanently live. MEASURED 2026-08-13 on a live instance — row
+  # cdeb77e34952, `re-land claude/fire-20260812T172113Z-3600-1`, ship-land exited 143/SIGTERM —
+  # filed with falsifier=NONE (item b15a2984d134). What is still true is the exit-code discipline:
+  # this runs from a trap handler, so every branch below returns 0 and a land must never fail
+  # because a backlog row could not be annotated. Reading an rc is not touching one.
   #
   # No ref ⇒ no probe: a falsifier over `<unrecorded>` could only ever answer "cannot tell", and a
   # probe that cannot answer is worse than none (memory: sensor-default-off-makes-blindness-the-
   # shipping-path). Same for a checkout that predates the oracle.
   oracle="${REPO_ROOT}/scripts/land-content-verify.sh"
   if [[ -n "$id" && -n "$ref" && -x "$oracle" ]]; then
-    "$bl" falsify "$id" --probe "bash ${oracle} ${ref}" >/dev/null 2>&1 || true
+    fout="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref}" 2>&1)"; frc=$?
+    if [[ "$frc" -eq 5 ]]; then
+      # rc 5 ⇒ the probe exits 0 RIGHT NOW ⇒ the oracle says this ref's content is ALREADY on
+      # trunk: the land died AFTER its content landed, and there is nothing to re-land. So this is
+      # the generator's missing precondition — CONTAINMENT TESTED BEFORE THE ROW PERSISTS — paid
+      # for with the one oracle run `falsify` already makes, rather than a second pre-check ahead
+      # of the filing (this handler may be running under a signal; it must not double a fetch).
+      # Closing is cc-backlog's own prescription for this refusal: "the item is genuinely already
+      # finished. Then CLOSE it, do not probe it."
+      # `done` is QUOTED because it is a shell keyword: bare, shellcheck reads it as an unterminated
+      # loop body (SC1010) and the gate's own lint goes red on this file.
+      "$bl" "done" "$id" --evidence \
+        "auto-retracted at filing: ${oracle##*/} reports ${ref}'s content already on trunk, so this land died after its content landed and there is nothing to re-land (cc-backlog falsify REFUSED the probe, rc 5)" \
+        >/dev/null 2>&1 || true
+      printf '· ship-land: re-land row %s CLOSED at filing — %s is already on trunk\n' "$id" "$ref" >&2
+    elif [[ "$frc" -ne 0 ]]; then
+      # Every other non-zero has no remedy from here, but it leaves the same probe-less row — so
+      # saying so IS the fix. An unreported one is indistinguishable from a healthy filing.
+      printf '⚠ ship-land: re-land row %s was filed WITHOUT a falsifier (cc-backlog falsify rc=%s) — it cannot self-retract, so retract it by hand once %s is on trunk.\n  %s\n' \
+        "$id" "$frc" "$ref" "${fout:-<no output>}" >&2
+    fi
   fi
   return 0
 }
