@@ -96,9 +96,76 @@ ALLOW="${CC_GITID_ALLOWLIST-$EMBEDDED_ALLOWLIST}"
 # convicts a suite whose whole purpose is to refuse them. It landed on trunk from a sibling session
 # while this lint was in flight, which is exactly how a self-exclusion list acquires its entries:
 # not by foresight, but by a green tree going red on the next file that carries fixtures.
+#
+# gitid-file-memo.bats is the third, and it arrived the way this comment predicts: it exists to
+# prove this lint's own memo never replays a cached finding, so it has to WRITE a file carrying the
+# leaky shape and then assert the lint reports it TWICE. The violation is the test input. Caught by
+# the gate on the very commit that added the memo, not by review.
 SELF_EXCLUDE="git-identity-lint.sh
 git-identity-lint.bats
-git-identity-write-guard.bats"
+git-identity-write-guard.bats
+gitid-file-memo.bats"
+
+# ── THE PER-FILE MEMO ─────────────────────────────────────────────────────────────────────────────
+# This arm costs 18.5 ms per file over 727 files — 13.4s, measured through ship-land's own_run, and
+# essentially all of it is the one `awk` fork per file in scan_file. On a re-round (22-23% of lands)
+# every second of that re-proves a verdict about bytes that did not move.
+#
+# WHAT MAKES A PER-FILE KEY EXACT HERE, stated because the sibling lint's version needed a read-set
+# argument and this one genuinely does not: a file's verdict is a function of its own bytes, the
+# ratchet list, and the self-exclusion list — and nothing else. scan_file is one awk pass over ONE
+# file; it follows no include, reads no table, and compares this file to no other. There is no
+# analogue of rules 5-6 next door, where a table built from bin+scripts+hooks decides a suite's
+# verdict. So the read set is three values, and GITID_READSET below is it in executable form.
+#
+# The allowlists are hashed BY VALUE rather than left to the script blob: CC_GITID_ALLOWLIST changes
+# what this file calls green without changing one byte of it, and a key that only fingerprinted the
+# file would serve the next caller a green earned under a different list.
+#
+# Kill switch: CC_GITID_MEMO=off. SHIP_LAND_MEMO=off also disables it, via memo_init.
+GITID_MEMO_OK=0
+GITID_CHECKER=""
+GITID_FILES=()
+GITID_MEMO_HITS=0
+GITID_MEMO_RAN=0
+if [ "${CC_GITID_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+
+gitid_memo_arm() {  # $1 = the ratchet text lint_tree was called with · $2… = the EXACT population
+  GITID_MEMO_OK=0
+  [ "${CC_GITID_MEMO:-on}" != "off" ] || return 1
+  command -v memo_init >/dev/null 2>&1 || return 1
+  command -v memo_batch_arm >/dev/null 2>&1 || return 1  # an older lib ⇒ memo OFF, today's behaviour
+  memo_init || return 1                    # dirty tree · no git dir · unwritable store ⇒ memo OFF
+  local selfblob readset
+  # $SELF is already symlink-resolved above, and ABSOLUTE only because ROOT was derived from it by
+  # `cd`. Hash it by that resolved path rather than by "$ROOT/scripts/$(basename …)": the sibling
+  # lint shipped both of those bugs in one iteration — a relative SELF made the key unobtainable
+  # from any other directory (memo silently never armed), and the $ROOT/scripts/ reconstruction was
+  # true of the checkout and false of every copy.
+  selfblob="$(git hash-object -- "$SELF" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  readset="$(
+    printf 'gitid-readset/v1\n'
+    printf 'lint=%s\n'      "$selfblob"
+    printf 'allow=%s\n'     "$1"
+    printf 'selfexcl=%s\n'  "$SELF_EXCLUDE"
+  )" || return 1
+  GITID_CHECKER="gitid/$(printf '%s' "$readset" | git hash-object --stdin 2>/dev/null)"
+  [ "$GITID_CHECKER" != "gitid/" ] || return 1
+  shift
+  memo_batch_arm "$GITID_CHECKER" "$@" || return 1
+  GITID_MEMO_OK=1
+  return 0
+}
+
+# THE EMIT DETECTOR. Every branch in lint_tree that prints a finding increments exactly one of these
+# three counters, so their sum is unchanged across a file IFF that file emitted nothing. Two lines
+# rather than an `emitted=1` at each printf — but that is only true while it stays true, so
+# --selftest pins a violating file as never-memoized under both of its rules.
+gitid_emit_sum() { printf '%s' "$(( bad + stuck + other ))"; }
 
 # ── the scanner. One awk pass per file, emitting "<lineno><TAB><RULE><TAB><excerpt>" per violation.
 #
@@ -266,16 +333,42 @@ why_of() {  # $1=rule token → the human sentence
 # lint_tree <repo-root> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable root
 lint_tree() {
   local root="$1" allow="$2" own="${3:-}" own_scoped=0
-  local f base rel seen=0 bad=0 stuck=0 other=0 records n
+  local f base rel seen=0 bad=0 stuck=0 other=0 records n _gitid_emit0=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$root" ] || { echo "git-identity-lint: ⛔ not a directory: $root" >&2; return 2; }
+  # THE POPULATION, BUILT EXACTLY ONCE. The batch memo is INDEX-KEYED, so the list it arms on and
+  # the list this loop walks must be the SAME list — not two globs written to look alike. Both
+  # filters (the `-f` test and the self-exclusion) live here, so a file skipped for either reason is
+  # absent from both, and the index cannot drift. Building it twice is the only way this API can
+  # serve one file's verdict for another.
+  GITID_FILES=()
   for f in "$root"/tests/*.bats "$root"/scripts/*.sh "$root"/bin/*; do
     [ -f "$f" ] || continue
     base="$(basename "$f")"
     in_allowlist "$base" "$SELF_EXCLUDE" && continue
+    GITID_FILES[${#GITID_FILES[@]}]="$f"
+  done
+  GITID_MEMO_HITS=0; GITID_MEMO_RAN=0
+  if [ "${#GITID_FILES[@]}" -gt 0 ]; then
+    gitid_memo_arm "$allow" "${GITID_FILES[@]}" || true
+  fi
+  for f in ${GITID_FILES[@]+"${GITID_FILES[@]}"}; do
+    base="$(basename "$f")"
     rel="${f#"$root"/}"
     seen=$((seen + 1))
+    # THE MEMO HIT: this exact content already emitted nothing under this exact read set. `seen` is
+    # incremented above regardless, so the census this run reports is the whole population and never
+    # the miss-list — a count that shrank with the cache would be the memo lying about its scope.
+    # The index is `seen - 1`, DERIVED and never a parallel counter: `seen` moves exactly once per
+    # iteration, as the first statement and before any `continue`, so it cannot drift from the
+    # position in GITID_FILES the way a second variable eventually does.
+    if [ "$GITID_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      GITID_MEMO_HITS=$((GITID_MEMO_HITS + 1))
+      continue
+    fi
+    GITID_MEMO_RAN=$((GITID_MEMO_RAN + 1))
+    _gitid_emit0="$(gitid_emit_sum)"
     records="$(scan_file "$f")"
     if [ "$records" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; continue; fi
     n="$(printf '%s' "$records" | grep -c . )"
@@ -289,23 +382,47 @@ lint_tree() {
           other=$((other + 1))
         fi
       fi
-      continue
-    fi
-    in_allowlist "$base" "$allow" && continue
-    while IFS="$(printf '\t')" read -r lineno rule excerpt; do
-      [ -n "$lineno" ] || continue
-      if in_own "$base" "$own" "$own_scoped"; then
-        printf '  IDENTITY %s:%s: %s\n' "$rel" "$lineno" "$(why_of "$rule")"
-        printf '           %s\n' "$excerpt"
-        bad=$((bad + 1))
-      else
-        printf '  identity? %s:%s: %s (NOT in your diff — advisory, not blocking)\n' "$rel" "$lineno" "$(why_of "$rule")"
-        other=$((other + 1))
-      fi
-    done <<EOF
+    elif ! in_allowlist "$base" "$allow"; then
+      # Was `in_allowlist … && continue` before the memo: a grandfathered file with findings prints
+      # nothing and falls through. Inverted into an `elif` rather than left as a `continue` so that
+      # every green path reaches the ONE record site below — a `continue` past it would not be
+      # unsound, but it would silently exclude the grandfathered files from the cache forever.
+      while IFS="$(printf '\t')" read -r lineno rule excerpt; do
+        [ -n "$lineno" ] || continue
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  IDENTITY %s:%s: %s\n' "$rel" "$lineno" "$(why_of "$rule")"
+          printf '           %s\n' "$excerpt"
+          bad=$((bad + 1))
+        else
+          printf '  identity? %s:%s: %s (NOT in your diff — advisory, not blocking)\n' "$rel" "$lineno" "$(why_of "$rule")"
+          other=$((other + 1))
+        fi
+      done <<EOF
 $records
 EOF
+    fi
+    # ── THE RECORD, the ONLY place a green is earned here. Two vetoes, both fail-safe: ──
+    # (1) this file emitted something ⇒ it is a finding, and a finding is NEVER cached (gate-memo
+    #     invariant 1) — it must re-print itself from the file on every run.
+    # (2) CHECK_FAILED is set ⇒ some predicate in this run could not RUN. Both of this lint's
+    #     unrunnable states are fail-SAFE — scan_file returns a sentinel rather than a fabricated
+    #     violation, and in_allowlist answers 'present' — so a non-verdict looks EXACTLY like a
+    #     clean file at this site. Caching that would freeze a could-not-check into a permanent
+    #     green keyed on content, the one way a memo turns "I don't know" into "green".
+    #
+    #     🚨 ABSOLUTE, never a per-file delta. A delta vetoes only the FIRST file whose predicate
+    #     dies; every file after it compares equal and is recorded — out of a run that exits 2 and
+    #     whose whole point is that it produced no verdict. The sibling lint shipped exactly that
+    #     bug for one iteration and only its own selftest caught it.
+    if [ "$GITID_MEMO_OK" = "1" ] \
+       && [ "$(gitid_emit_sum)" = "$_gitid_emit0" ] \
+       && [ "$CHECK_FAILED" -eq 0 ]; then
+      memo_batch_record "$((seen - 1))"
+    fi
   done
+  if [ "$GITID_MEMO_OK" = "1" ]; then
+    echo "git-identity-lint: per-file memo — $GITID_MEMO_HITS verdict(s) carried, $GITID_MEMO_RAN proven fresh." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "git-identity-lint: ⛔ nothing to scan under $root (no tests/, scripts/ or bin/)" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "git-identity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
   # Checked AFTER the own-scope report, for lint_dir's reason: own-scope narrows WHICH violations
