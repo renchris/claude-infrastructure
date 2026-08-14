@@ -1166,3 +1166,56 @@ the land makes no full-suite claim and only the background `postland-verify` sta
 The lag is **2** and this diff ADDS no file, so it rides its existing per-file symlink inside the
 converge budget — `✅` with a note, not `🚀`. A land that ADDS a file gets no budget and would breach
 at a lag of 1.
+
+### 2026-08-14 (same session) — the drain walked into a LIVE 24-day false alarm, and the guard that should have caught it was scoped to a directory
+
+Reading `master-stranded-work`'s next row (`ff0b5cf4528b`, limit-recover's DETECT-ONLY engagement
+audit) meant reading the daemon's log, and the log was not saying what the row said. **1,797 of
+2,211 lines (81%) are one identical line** — `resume spawn failed (LR_POLLER_SPAWN=auto; no GUI and
+no tmux)` — across **11 sids over 24 days**, one sid retried **380 times**, still firing every ten
+minutes today. The detector `ff0b5cf4528b` is about has **never fired once**, because a spawn that
+fails releases its claim immediately and the engagement audit only ever sees claims that survive.
+
+**The line was false about the box.** `/opt/homebrew/bin/tmux` has been installed throughout.
+`com.reso.lr-reset-poller.plist` sets no PATH, launchd's default is `/usr/bin:/bin:/usr/sbin:/sbin`,
+and Homebrew is not on it — so `spawn_tmux`'s opening `command -v tmux || return 1` was always
+false. LR-m's contract, *"GUI unavailable → tmux rather than stranding the resume"*, had **never
+once been honoured in production** since it shipped.
+
+**Three things generalise, and the third is the one to carry:**
+
+1. **The guard is what hid it.** A bare `tmux` would have been a loud 127. `command -v tmux ||`
+   turns identical PATH blindness into a SILENT capability loss — which is exactly
+   `unattended-path-lint`'s own `guarded` finding class ("it will not crash, but the capability is
+   silently lost, which for a gate or an actuator is failing OPEN").
+2. **The same file had already learned this lesson and applied it to a different binary.**
+   `LRP_TIMEOUT_BIN` three lines above carries the absolute Homebrew ladder; `tmux` never got it
+   (memory: `corrected-instrument-can-lie-again`). The fix is that ladder, plus an ERROR line that
+   reports the RESOLUTION (`tmux=<path>` vs `tmux=unresolved`) instead of asserting a fact about the
+   box it never checked. Landed `b2f192698`.
+3. 🚨 **THE POPULATION, NOT THE RULE, IS THE HOLE.** `unattended-path-lint` exists for precisely
+   this class and runs clean. It enumerates **`"$root"/launchd/*.plist`** — 25 plists — and this
+   job's plist is committed at **`scripts/limit-recover/`**, tracked and live-loaded but outside the
+   directory the lint globs. Measured further: **12 LaunchAgents are installed with no plist in
+   `launchd/` at all** (`com.reso.*` ×5, `gl.reso.*` ×2, `com.claude.accounts-keepwarm` / `cc-gc` /
+   `relogin`, `com.chrisren.restic-claude-archive` / `verify-2114-archive`) — so the ENFORCING store
+   (`~/Library/LaunchAgents`) and the AUDITED store disagree by 12 jobs, and every one of them is
+   unjudged. Filed **`3f5ea840b296`**, with a falsifier that retracts when the lint's own `--list`
+   names this job. Deliberately NOT folded into the instance fix: widening a **land-blocking**
+   ratchet's population needs its own grandfather pass, which is a wave, not a follow-on.
+
+**Two land-gate lessons, both about the tests rather than the subject** (the ratchet caught both
+before trunk did): a bare `! grep -q …` is unreachable by errexit, and `A && false || true` is worse
+— the `and-absorbed` family, where BOTH branches reach true. `scripts/bats-assert-liveness-fix.py`
+emitted the right per-class form each time, and each was **mutant-proved in both directions** before
+being believed. Do not trust the analyzer alone; and **assert the mutant APPLIED** before reading
+its verdict — a `perl -0pi` substitution that silently matched nothing produced a green run that
+proved exactly nothing.
+
+**Session tally so far: closed 1 (`b15a2984d134`), filed 1 (`3f5ea840b296`), landed 3
+(`40613b786`, `e215abb6d`, `b2f192698`).** Net +0 on the store and one live alarm silenced. NOTE for
+whoever files under a master effort: **`cc-backlog add --condition <slug>` re-keys the id to
+`hash(project+condition)`**, so it lands on the effort's EXISTING row and appends an `update` that
+REWRITES its title. That happened here to `3ec6c070f52f` and was restored from the append-only trail
+in the same minute. File without `--condition`; the master conditions were applied by `link`, not by
+`add`.
