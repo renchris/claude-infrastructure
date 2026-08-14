@@ -46,8 +46,11 @@
 #                                                                  Idempotent, and --why is required.
 #                                                                  Producer: bin/cc-venue.
 #   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
-#                                                                  condition group (the lease's
-#                                                                  population); --force to re-key
+#           --plan <file|-> [--force]                              condition group (the lease's
+#                                                                  population); --force to re-key.
+#                                                                  --plan is the BULK form: ONE
+#                                                                  fold for the whole plan instead
+#                                                                  of two per row (see LINK PLAN).
 #   falsify <id> --probe "<cmd>" [--force] [--no-run]            → attach a re-run check to an
 #                                                                  EXISTING row. `add --falsifier`
 #                                                                  CANNOT: add returns early on a
@@ -2204,17 +2207,241 @@ cmd_needs() {
 #     release a lease that is holding a live worker off duplicated work, and nothing would say so.
 #   · IDEMPOTENT on the same slug: writes nothing, exits 0. A desk pass that re-links every tick
 #     must not grow the ledger.
+#
+# ── LINK PLAN — the BULK form, and why it had to exist (backlog aee48ef0ffcf) ──────────────────
+#
+# THE COST IS QUADRATIC, and it is the fold that makes it so. The single-row form above asks the
+# store two whole-ledger questions per row — `has_id` (a pass over every raw record) and
+# `item_json` (the full fold) — so linking N rows folds a ledger that N link records are themselves
+# growing. Measured 2026-08-12 during W2's 418-row apply against a ~2400-line store: ~4 s per link
+# at the start, ~20 s per link by the end, and one grouping pass took over an hour of wall clock to
+# write a single condition field onto 418 rows. Re-measured here on a 500-row fixture the same
+# curve is visible in miniature (0.121 s → 0.144 s across 200 links) — the shape, not the box.
+#
+# `--plan` folds ONCE for the whole plan and then appends. The write is still one record per row,
+# appended line-at-a-time, deliberately: bare O_APPEND is atomic at these line lengths and that is
+# what keeps ~14 concurrent writers coordination-free (see the compact-only mutex above). Batching
+# the WRITE into one multi-KB block would buy nothing measurable and would hand a stdio flush the
+# chance to land mid-record. The fold was the quadratic term; the append never was.
+#
+# TWO FAILURE CLASSES, SPLIT ON WHETHER THEY CAN RACE — and the split is the substantive design
+# decision here, not a convenience:
+#   · A MALFORMED PLAN is refused WHOLE, before anything is written (rc 2). A slug that breaks the
+#     digit rule, or one id asking for two different conditions, is a producer bug: it is knowable
+#     with no reference to the store, it will be exactly as wrong on the re-run, and writing 417 of
+#     418 rows would leave a half-applied plan that no one can tell from a completed one.
+#   · A STORE REFUSAL is per-row and never fatal (rc 5, verdicts name each). An unknown id or a row
+#     a sibling conditioned first are facts about a ledger the whole fleet appends to, which moves
+#     under any pass long enough to need this verb (memory: remediation-perturbs-its-own-population).
+#     Failing the batch on one would make the bulk path unusable on exactly the busy days it is for.
+#
+# ONE ARBITER, so the two forms cannot drift. `link_apply` below owns every guard; the single-row
+# form is a one-row plan through it, and its historical rc contract (3 unknown · 4 already-
+# conditioned · echo the id otherwise) is a rendering of that row's verdict rather than a second
+# copy of the rules (memory: make-the-actuator-the-arbiter — the same discipline that makes
+# `backfill --apply` delegate here instead of hand-rolling an append).
+
+# link_apply <force> — THE ARBITER. Reads NDJSON `{id, cond}` on stdin, folds the store ONCE,
+# appends a `link` record for every row that earns one, and emits NDJSON `{id, cond, verdict, prev}`
+# on stdout — one object per input row, in input order.
+#
+# Verdicts: `link` (written) · `noop` (already on that exact slug — writes nothing, so a desk pass
+# that re-links every tick cannot grow the ledger) · `unknown` (no such id) · `refused-conditioned`
+# (on another slug, no --force).
+#
+# rc 0 every row is now on its condition · 5 at least one row was refused · 2 the fold was unreadable.
+#
+# Callers pass slugs that have ALREADY passed `valid_condition`: the check is a pre-flight in both
+# entry forms because a bad slug must stop the batch before the first append, and a guard that runs
+# after the write is not a guard.
+link_apply() {
+  local force="${1:-0}"
+  ensure_file
+  local plan; plan="$(cat)"
+  [ -n "$plan" ] || return 0
+  # THE ONE FOLD. `condition` is the only field a link decision reads, and an id PRESENT in the fold
+  # is exactly `has_id`'s answer — the fold reduces over the same `valid_records` stream, so it
+  # cannot know a smaller id set than the existence check the single-row form used to run separately.
+  local known
+  known="$(fold 2>/dev/null | jq -c 'map({key:.id, value:(.condition // "")}) | from_entries' 2>/dev/null)"
+  [ -n "$known" ] || {
+    printf 'cc-backlog link: the ledger could not be folded — NOTHING written\n' >&2; return 2; }
+  local verdicts
+  verdicts="$(printf '%s\n' "$plan" | jq -c --argjson known "$known" --argjson force "$force" '
+      . as $row
+      | ($known[$row.id]) as $prev
+      | if   $prev == null      then $row + {verdict:"unknown",             prev:""}
+        elif $prev == $row.cond then $row + {verdict:"noop",                prev:$prev}
+        elif $prev != "" and $force == 0
+                                then $row + {verdict:"refused-conditioned", prev:$prev}
+        else                         $row + {verdict:"link",                prev:$prev} end' 2>/dev/null)" || {
+    printf 'cc-backlog link: the plan was not readable — NOTHING written\n' >&2; return 2; }
+  # ONE ts for the whole pass. A batch IS one event in the life of the store, and stamping 418 rows
+  # with 418 clock reads spreads a single bookkeeping pass across an hour of `lastTs` — the exact
+  # shape that made that field unreadable once already (see the RE-ADMISSION note in cmd_transition).
+  local ts; ts="$(now_iso)"
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line" >> "$BACKLOG"
+  done < <(printf '%s\n' "$verdicts" | jq -c --arg ts "$ts" --argjson force "$force" '
+      select(.verdict == "link")
+      | {id:.id, ts:$ts, event:"link", condition:.cond}
+        + (if $force == 1 then {force:true} else {} end)')
+  printf '%s\n' "$verdicts"
+  if printf '%s\n' "$verdicts" \
+     | jq -e -s 'any(.[]; .verdict == "unknown" or .verdict == "refused-conditioned")' >/dev/null 2>&1; then
+    return 5
+  fi
+  return 0
+}
+
+# link_plan_read <src> → NDJSON `{ok:true, id, cond}` / `{ok:false, line}` on stdout, one per
+# non-empty plan line. Malformed lines are REPORTED by the caller and skipped, never fatal.
+#
+# TWO SHAPES because the two producers are different, and they are the same two
+# scripts/backlog-consolidation/link.py already accepts, deliberately: a plan file must mean the
+# same thing to both readers or the writer that emits it has to know which one will consume it.
+# group.py emits a JSON array of pairs (it holds structured rows); a human at a terminal writes
+# `<id> <condition>` lines. `#` comments and blank lines are skipped so a plan can be reviewed
+# before it is run.
+link_plan_read() {
+  local src="$1" text head
+  if [ "$src" = "-" ]; then
+    text="$(cat)"
+  else
+    [ -r "$src" ] || { printf 'cc-backlog link: --plan file not readable: %s\n' "$src" >&2; return 2; }
+    text="$(cat "$src")"
+  fi
+  head="$(printf '%s' "$text" | head -c 256 | tr -d '[:space:]' | cut -c1)"
+  if [ "$head" = "[" ]; then
+    printf '%s' "$text" | jq -c '.[] | {ok:true, id:(.[0]|tostring), cond:(.[1]|tostring)}' 2>/dev/null && return 0
+    { printf 'cc-backlog link: --plan opens with "[" but is not an array of [id, condition] pairs\n'
+      printf '  Two shapes are accepted: that JSON array, or one "<id> <condition>" per line.\n'
+    } >&2
+    return 2
+  fi
+  printf '%s' "$text" | jq -Rc '
+    (sub("#.*"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; "")) as $l
+    | if $l == "" then empty
+      else ($l | split("[ \t]+"; "x")) as $p
+        | if ($p | length) >= 2 then {ok:true, id:$p[0], cond:$p[1]}
+          else {ok:false, line:$l} end
+      end'
+}
+
+# cmd_link_plan <src> <force> — the bulk entry point. Pre-flight, then ONE `link_apply`.
+cmd_link_plan() {
+  local src="$1" force="$2"
+  local rows; rows="$(link_plan_read "$src")" || return 2
+  local malformed=0 l
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    printf 'cc-backlog link: ignoring malformed plan line: %s\n' "$l" >&2
+    malformed=$((malformed + 1))
+  done < <(printf '%s\n' "$rows" | jq -r 'select(.ok == false) | .line' 2>/dev/null)
+  local good; good="$(printf '%s\n' "$rows" | jq -c 'select(.ok == true) | {id, cond}' 2>/dev/null)"
+  if [ -z "$good" ]; then
+    # AN EMPTY PLAN IS A NO-OP, A MALFORMED ONE IS A REFUSAL, and the split is load-bearing for the
+    # callers. A producer that filtered its plan down to nothing (every candidate row already
+    # conditioned, claimed, or closed) has done its job and must not have to special-case a failure
+    # rc for it — scripts/backlog-consolidation/link.py hits exactly that on a re-run. A plan that
+    # carried LINES and could not use one of them is a producer bug and stays rc 2. Nothing is
+    # written on either path, and unlike `validated --batch` an empty pass here erases nothing, so
+    # the empty case needs no refusal to stay safe.
+    if [ "$malformed" -gt 0 ]; then
+      printf 'cc-backlog link: --plan carried %s line(s) and no usable "<id> <condition>" row — nothing written\n' \
+        "$malformed" >&2
+      return 2
+    fi
+    printf 'cc-backlog link --plan: linked 0 · already 0 · unknown 0 · refused 0 (empty plan)\n' >&2
+    return 0
+  fi
+
+  # PRE-FLIGHT (a) — the digit rule, enforced by the SAME `valid_condition` the single-row form
+  # calls, never restated (memory: sibling-auditors-must-share-the-state-model). Whole-batch refusal:
+  # see TWO FAILURE CLASSES above.
+  # Accumulated as a NEWLINE-DELIMITED STRING, not an array: cc-backlog carries no array anywhere
+  # else, and `${#arr[@]}` on an EMPTY array is a fatal unbound-variable error under `set -u` on
+  # bash 3.2 — which is `/bin/bash` on the operator's box and what launchd runs (cf. bin/cc-decide's
+  # own 3.2 guard, bin/cc-close-attrib § PARSE SAFETY). A slug cannot contain whitespace (see
+  # valid_condition), so a newline list cannot be ambiguous here.
+  local bad_slugs="" n_bad=0 c
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    valid_condition "$c" || { bad_slugs="${bad_slugs}${c}
+"; n_bad=$((n_bad + 1)); }
+  done < <(printf '%s\n' "$good" | jq -r '.cond' | sort -u)
+  if [ "$n_bad" -gt 0 ]; then
+    { printf 'cc-backlog link: --plan REFUSED — %s condition(s) are not stable keys, NOTHING written:\n' \
+        "$n_bad"
+      printf '%s' "$bad_slugs" | sed 's/^/    /'
+      printf '  A condition names a recurring STATE, so it must hold still: lowercase letters and\n'
+      printf '  hyphens only, no digits. A slug carrying a measurement mints one GROUP per\n'
+      printf '  measurement, which is the same defect one layer down. Spell out a numeral a\n'
+      printf '  condition genuinely needs (opus-five-routing-drift).\n'
+    } >&2
+    return 2
+  fi
+
+  # PRE-FLIGHT (b) — one id may not ask for two conditions. Applying such a plan row-by-row would
+  # write both and let last-wins pick, i.e. the plan's own ORDER would silently decide which group a
+  # row lands in. Unanswerable, knowable before any write, and identical on the re-run: refuse whole.
+  local conflicts; conflicts="$(printf '%s\n' "$good" | jq -sr '
+      group_by(.id) | map(select((map(.cond) | unique | length) > 1))
+      | .[] | "    \(.[0].id) → \(map(.cond) | unique | join(", "))"' 2>/dev/null)"
+  if [ -n "$conflicts" ]; then
+    { printf 'cc-backlog link: --plan REFUSED — an id asks for more than one condition, NOTHING written:\n'
+      printf '%s\n' "$conflicts"
+      printf '  Row order would decide the group, silently. Fix the plan and re-run — this verb is\n'
+      printf '  idempotent, so a corrected re-run costs only the rows it has not already written.\n'
+    } >&2
+    return 2
+  fi
+
+  # Exact duplicates collapse here rather than at the write: the second copy would fold to `noop`
+  # anyway, and counting it as a row would make the summary disagree with the ledger.
+  good="$(printf '%s\n' "$good" | jq -sc 'unique_by(.id) | .[]')"
+
+  local verdicts rc
+  verdicts="$(printf '%s\n' "$good" | link_apply "$force")"; rc=$?
+  [ "$rc" -ne 2 ] || return 2
+  printf '%s\n' "$verdicts" | jq -r '"verdict=\(.verdict)\t\(.id) → \(.cond)" +
+      (if .prev != "" and .prev != .cond then " (was \(.prev))" else "" end)'
+  { printf 'cc-backlog link --plan: %s\n' \
+      "$(printf '%s\n' "$verdicts" | jq -sr '
+          [ "linked \(map(select(.verdict=="link")) | length)",
+            "already \(map(select(.verdict=="noop")) | length)",
+            "unknown \(map(select(.verdict=="unknown")) | length)",
+            "refused \(map(select(.verdict=="refused-conditioned")) | length)" ] | join(" · ")')"
+    [ "$malformed" -eq 0 ] || printf '  %s malformed plan line(s) skipped (reported above)\n' "$malformed"
+  } >&2
+  return "$rc"
+}
+
 cmd_link() {
-  local id="${1:-}"; [ $# -gt 0 ] && shift
-  local condition="" force=0
+  # `--plan` is looked for BEFORE the positional id is taken, so `link --plan f` cannot read as an
+  # id of "--plan". Everything else keeps the original parse exactly.
+  local plan=""
+  if [ "${1:-}" = "--plan" ]; then plan="${2:-}"; shift 2 2>/dev/null || shift $#; fi
+  local id="" condition="" force=0
+  if [ -z "$plan" ]; then id="${1:-}"; [ $# -gt 0 ] && shift; fi
   while [ $# -gt 0 ]; do
     case "$1" in
+      --plan)      shift; plan="${1:-}"; [ $# -gt 0 ] && shift ;;
       --condition) shift; condition="${1:-}"; [ $# -gt 0 ] && shift ;;
       --force)     force=1; shift ;;
       *) printf 'cc-backlog link: unknown arg %s\n' "$1" >&2; return 2 ;;
     esac
   done
-  [ -n "$id" ]        || { printf 'cc-backlog link: <id> is required\n' >&2; return 2; }
+  if [ -n "$plan" ]; then
+    [ -z "$id" ] || { printf 'cc-backlog link: --plan takes no <id> (ids come from the plan)\n' >&2; return 2; }
+    [ -z "$condition" ] || {
+      printf 'cc-backlog link: --plan takes no --condition (each plan row names its own)\n' >&2; return 2; }
+    cmd_link_plan "$plan" "$force"
+    return $?
+  fi
+  [ -n "$id" ]        || { printf 'cc-backlog link: <id> is required (or --plan <file|->)\n' >&2; return 2; }
   [ -n "$condition" ] || { printf 'cc-backlog link: --condition <slug> is required\n' >&2; return 2; }
   if ! valid_condition "$condition"; then
     { printf 'cc-backlog link: --condition "%s" is not a stable key.\n' "$condition"
@@ -2225,25 +2452,24 @@ cmd_link() {
     } >&2
     return 2
   fi
-  ensure_file
-  has_id "$id" || { printf 'cc-backlog link: unknown id %s\n' "$id" >&2; return 3; }
-  local cur prev
-  cur="$(item_json "$id")"
-  prev="$(printf '%s' "$cur" | jq -r '.condition // ""' 2>/dev/null)"
-  if [ "$prev" = "$condition" ]; then echo "$id"; return 0; fi
-  if [ -n "$prev" ] && [ "$force" -eq 0 ]; then
-    { printf 'cc-backlog link: REFUSED — %s is already on condition "%s"\n' "$id" "$prev"
-      printf '  Re-keying it to "%s" moves it out of a group whose lease may be holding a live\n' "$condition"
-      printf '  worker off duplicated work, and nothing downstream would report the move.\n'
-      printf '  To re-key deliberately:  cc-backlog link %s --condition %s --force\n' "$id" "$condition"
-    } >&2
-    return 4
-  fi
-  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg condition "$condition" \
-     --argjson force "$force" \
-     '{id:$id, ts:$ts, event:"link", condition:$condition}
-      + (if $force == 1 then {force:true} else {} end)' >> "$BACKLOG"
-  echo "$id"
+  local verdict prev
+  verdict="$(jq -nc --arg id "$id" --arg cond "$condition" '{id:$id, cond:$cond}' | link_apply "$force")"
+  case "$(printf '%s' "$verdict" | jq -r '.verdict // "error"' 2>/dev/null)" in
+    unknown)
+      printf 'cc-backlog link: unknown id %s\n' "$id" >&2; return 3 ;;
+    refused-conditioned)
+      prev="$(printf '%s' "$verdict" | jq -r '.prev')"
+      { printf 'cc-backlog link: REFUSED — %s is already on condition "%s"\n' "$id" "$prev"
+        printf '  Re-keying it to "%s" moves it out of a group whose lease may be holding a live\n' "$condition"
+        printf '  worker off duplicated work, and nothing downstream would report the move.\n'
+        printf '  To re-key deliberately:  cc-backlog link %s --condition %s --force\n' "$id" "$condition"
+      } >&2
+      return 4 ;;
+    link|noop)
+      echo "$id"; return 0 ;;
+    *)
+      printf 'cc-backlog link: %s could not be decided — NOTHING written\n' "$id" >&2; return 2 ;;
+  esac
 }
 
 # cmd_falsify <id> --probe "<sh one-liner>" [--force] [--no-run]
