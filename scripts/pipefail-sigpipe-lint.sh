@@ -302,9 +302,39 @@ allow_count() {
   awk -F'\t' -v p="$path" '$1==p { print $2+0; found=1 } END { if (!found) print 0 }' "$ALLOWLIST" | head -1
 }
 
+# ── the scan's non-verdict, and why it needs re-raising by hand ─────────────────────────────────
+# scan() guards four unusable states (dead ROOT, no awk, no git, an unparseable detector) and each
+# says `exit 2` — the honest non-verdict. But `exit` cannot leave a COMMAND SUBSTITUTION: it ends
+# the subshell and hands the status back to the caller, where `|| true` used to discard it. `hits`
+# was then EMPTY, which is indistinguishable from "the tree is clean" — and against a non-empty
+# allowlist that is not merely a lost non-verdict, it INVERTS into a positive claim: every
+# grandfathered file reads cur=0 < alw=N, so the ratchet's downward half fires and the lint exits 1
+# reporting 16 sites the operator never touched, then prescribes `--regen`, whose own scan is dead
+# the same way and which would write a HEADER-ONLY allowlist — destroying the grandfathered baseline
+# it was invoked to maintain. So the prescribed remedy was the destructive act.
+#
+# `--census` is the control that pins this to the subshell rather than to the exit: there scan runs
+# in THIS shell, and exit 2 leaves the script correctly (measured 2026-08-14, all three call sites).
+#
+# Read the status instead. Anything non-zero out of scan is a NON-VERDICT, never a tree claim: on a
+# healthy tree scan returns 0 (measured, 30 census lines / 16 regen rows), so this cannot false-fire.
+scan_or_nonverdict() { # $1=varname to fill with the scan output; returns 2 on a non-verdict
+  local __out __rc=0
+  __out="$(scan)" || __rc=$?
+  if [ "$__rc" -ne 0 ]; then
+    echo "⛔ $SELF_NAME: the scan could not RUN (exit $__rc — cause printed above)." >&2
+    echo "  This is a NON-VERDICT, not a claim about your tree: no file was judged, so nothing here" >&2
+    echo "  is evidence that anything is clean, newly broken, or newly fixed. Do NOT run --regen on" >&2
+    echo "  it — with no scan there is nothing to regenerate from, and it would empty the allowlist." >&2
+    return 2
+  fi
+  printf -v "$1" '%s' "$__out"
+  return 0
+}
+
 main_scan() {
   local hits rc=0
-  hits="$(scan)" || true
+  scan_or_nonverdict hits || return 2
 
   local -a over=() under=()
   local paths f cur alw
@@ -374,11 +404,20 @@ EOF
 }
 
 regen() {
+  # The scan is proven BEFORE the first header byte, and that ordering is the whole point. This is
+  # normally invoked as `--regen > scripts/pipefail-sigpipe-allow.txt`, so the shell has already
+  # TRUNCATED the destination before the script runs: whatever reaches stdout is the new allowlist.
+  # Piping a dead scan into awk (the old form) emitted four header lines and no rows, at exit 0 —
+  # a well-formed file declaring every grandfathered site fixed. Nothing downstream could tell that
+  # from a genuinely clean tree. Now a non-verdict writes NOTHING and exits 2, so the truncated file
+  # stays empty and `git diff` shows the whole allowlist deleted — loud, and one `git checkout` away.
+  local hits
+  scan_or_nonverdict hits || return 2
   printf '%s\n' "# pipefail-sigpipe-lint allowlist — <path><TAB><violation count>."
   echo "# Grandfathered sites only. This list may only SHRINK: the lint goes RED both when a file"
   echo "# GAINS a violation and when it LOSES one without the count being lowered."
   echo "# Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt"
-  scan | awk -F: 'NF{print $1}' | sort | uniq -c | awk '{ printf "%s\t%s\n", $2, $1 }' | sort
+  printf '%s\n' "$hits" | awk -F: 'NF{print $1}' | sort | uniq -c | awk '{ printf "%s\t%s\n", $2, $1 }' | sort
 }
 
 # ── selftest ─────────────────────────────────────────────────────────────────────────────────────
@@ -480,7 +519,8 @@ case "${1:---scan}" in
   -h|--help) usage; exit 0 ;;
   --selftest) selftest; exit $? ;;
   --census)   scan; exit 0 ;;
-  --regen)    regen; exit 0 ;;
+  --regen)    regen; exit $? ;;   # $? not 0: regen returns 2 on a non-verdict, and a hardcoded 0
+                                  # would re-swallow it at the last hop after all the work above.
   --scan)     main_scan; exit $? ;;
   *) usage >&2; exit 2 ;;
 esac

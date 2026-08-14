@@ -156,3 +156,58 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   run diff -u "$BATS_TEST_TMPDIR/committed.txt" "$BATS_TEST_TMPDIR/regen.txt"
   [ "$status" -eq 0 ] || { echo "committed allowlist is stale vs the tree:"; echo "$output"; false; }
 }
+
+# ── the scan's non-verdict must survive the COMMAND SUBSTITUTION (backlog 57ff249657e0) ──────────
+#
+# Test 12 above already proved a dead scan exits 2 — but only through `--census`, where scan() runs
+# in THIS shell. That is the one entry point where `exit 2` was never in danger, so it stood as a
+# vacuous guard for the two that were: `--scan` and `--regen` both read scan through `$( … )`, and
+# `exit` cannot leave a command substitution. It ends the subshell and hands back a status, which
+# `|| true` discarded. `hits` was then empty — indistinguishable from a clean tree.
+#
+# Measured on the pre-fix file, 2026-08-14, ROOT=/nonexistent: `--scan` exited 1 (a claim about the
+# tree) and named 16 grandfathered files as newly FIXED, none of which the operator had touched.
+
+@test "15: --scan on an unusable ROOT is a NON-VERDICT (exit 2), not a tree claim" {
+  run env CC_PIPEFAIL_ROOT=/nonexistent-scan-root bash "$LINT" --scan
+  [ "$status" -eq 2 ] || { echo "expected 2 (non-verdict), got $status: $output"; false; }
+  printf '%s' "$output" | grep -F 'NON-VERDICT' >/dev/null \
+    || { echo "the non-verdict was not announced: $output"; false; }
+}
+
+@test "16: a dead scan may never FABRICATE the ratchet's downward half" {
+  # The inversion, and the reason this is worse than a lost verdict: against a NON-EMPTY allowlist,
+  # empty hits read as cur=0 < alw=N for every grandfathered file, so the lint did not merely fail
+  # to judge — it asserted that 16 sites had been fixed, and exited 1 to make it stick.
+  run env CC_PIPEFAIL_ROOT=/nonexistent-scan-root bash "$LINT" --scan
+  if printf '%s' "$output" | grep -F 'was FIXED but its allowlist count was not lowered' >/dev/null; then
+    echo "a dead scan fabricated the downward half — it judged files it never read: $output"; false
+  fi
+}
+
+@test "17: --regen on an unusable ROOT writes NOTHING (it is invoked as > the allowlist)" {
+  # The destructive half, and the one the broken --scan report actively PRESCRIBED: its FIX line
+  # says "Regenerate with: … --regen > scripts/pipefail-sigpipe-allow.txt". The shell truncates the
+  # destination before the script runs, so on a dead scan the old form wrote four header lines and
+  # zero rows at exit 0 — a well-formed allowlist declaring every grandfathered site clean.
+  run env CC_PIPEFAIL_ROOT=/nonexistent-scan-root bash "$LINT" --regen
+  [ "$status" -eq 2 ] || { echo "expected 2 (non-verdict), got $status: $output"; false; }
+  # stdout is what lands in the file; stderr is diagnosis. `run` merges them, so assert on the
+  # stream that actually matters, captured on its own.
+  env CC_PIPEFAIL_ROOT=/nonexistent-scan-root bash "$LINT" --regen 2>/dev/null > "$BATS_TEST_TMPDIR/regen-dead.txt" || true
+  [ ! -s "$BATS_TEST_TMPDIR/regen-dead.txt" ] \
+    || { echo "a dead --regen still wrote an allowlist:"; cat "$BATS_TEST_TMPDIR/regen-dead.txt"; false; }
+}
+
+@test "18: CONTROL — the healthy tree is unmoved by the non-verdict plumbing" {
+  # A guard that could only ever return 2 would be indistinguishable from a broken lint. This pins
+  # the other direction: on the real tree, --scan still judges and --regen still reproduces the
+  # committed allowlist byte-for-byte (test 14 asserts the content; this asserts they still RUN).
+  run bash "$LINT" --scan
+  [ "$status" -eq 0 ] || { echo "healthy --scan is no longer green: $status $output"; false; }
+  run bash "$LINT" --regen
+  [ "$status" -eq 0 ] || { echo "healthy --regen no longer exits 0: $status $output"; false; }
+  printf '%s\n' "$output" | grep -v '^#' | awk 'NF' | grep -c . > "$BATS_TEST_TMPDIR/n.txt"
+  [ "$(cat "$BATS_TEST_TMPDIR/n.txt")" -gt 0 ] \
+    || { echo "healthy --regen produced no rows — the guard is firing on a good tree"; false; }
+}
