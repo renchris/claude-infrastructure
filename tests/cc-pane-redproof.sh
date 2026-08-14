@@ -201,6 +201,20 @@ check "list-trusts-the-registry-not-the-OS" bin/cc-pane-headless \
 # ── the child's identity (2026-08-10) ─────────────────────────────────────────────────────
 # Three mutants, because the fix has two INDEPENDENT halves plus a wrong-value case, and a single
 # mutant deleting the whole line would not tell us which half any test is actually holding.
+#
+# RE-ANCHORED 2026-08-14 (post-land RED on tests/anti-vacuity-contract.bats @ af0127d07ada; backlog
+# e8a5750bc5f4). All three share ONE anchor — the spawn line — and af0127d0 changed its tail from
+# `</dev/null &` to `<"$stdin_src" &` so the headless-wake FIFO can feed the agent's stdin. Three
+# anchors went to 0 matches at once, which is --check-anchors doing precisely its job: the subject
+# moved and the mutations would have silently applied nothing.
+#
+# WHY RE-ANCHOR RATHER THAN REVERT, which is what the auto-revert tried and could not do (rc 90,
+# conflict — the revert applied nothing and its branch carries zero commits). The redirect is the
+# ONLY thing that moved. `export CC_PANE_ID="$id"` and `unset ITERM_SESSION_ID` are both still on
+# that line, both claims still hold, and tests/cc-pane-headless.bats still names them — so the
+# assertions were never unproven, only unprovable-by-this-harness. Reverting would have deleted a
+# working feature to fix a stale literal. Verified by the FULL run, not just --check-anchors: all
+# three mutants still make their named test go red on the real artifact.
 
 # Half 1 gone: the agent is spawned with no identity of its own. CC_PANE_ID returns to being a key
 # that 21 files read and nothing ever writes.
