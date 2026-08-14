@@ -1,0 +1,203 @@
+#!/bin/bash
+# cc-wake-headless — THE WAKE PATH FOR A PANE-LESS SESSION (backlog 8ad4b02602dc, gap 2 of
+# docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md §2.4 B).
+#
+#   cc-wake-headless [--resolve] [--force] [--text T] [--timeout S] <sid|hdl-id>
+#
+# WHAT PROBLEM THIS SOLVES, stated so nobody re-derives the refuted answer. The fleet already has a
+# wake primitive, `cc-await-ping` — and its wake IS PROCESS EXIT: the mailbox file grows, the poll
+# sees the delta, the watcher exits, and the HARNESS's task-completion notification synthesises a
+# turn. Every link after that exit belongs to the harness. A resident headless agent
+# (`claude -p --input-format stream-json`) has no such harness link: NOTHING CONSUMES THE EXIT, so
+# an armed watcher fires perfectly and changes nothing. Arming a watcher inside a headless session
+# is defence in depth, never the wake.
+#
+# The wake must therefore terminate in a WRITE TO STDIN, and only the spawner owns that fd — which
+# is why this could not be fixed inside the hooks. `bin/cc-pane-headless` now gives every agent an
+# `in.fifo` plus a holder process that keeps it open for the agent's life, and publishes both in
+# `meta`. This tool is the one writer: it appends a single stream-json user line telling the model
+# to read its inbox. That line IS a turn.
+#
+# HONESTY RULES THIS FILE OBEYS (each is an indexed fleet failure):
+#   · claimed-outcome-vs-checked-outcome — every exit code below names something that was CHECKED.
+#     "I could not write" and "I wrote" are different codes; there is no optimistic path.
+#   · liveness is `(pid, pstart)` + non-zombie, and it is ARBITRATED BY cc-pane-headless ITSELF
+#     (`address`), never re-implemented here — make-the-actuator-the-arbiter. A second copy of a
+#     liveness predicate is how the zombie case ends up right in one file and wrong in the other.
+#   · the write is BOUNDED. A wedged agent that has stopped draining its FIFO must cost the caller
+#     a timeout, not a hang: at 150 sessions one wedged agent would otherwise hang its notifier.
+#
+# Exit: 0 woken · 1 not live / unknown id · 2 damped (a wake happened <CC_WAKE_MIN_S ago) ·
+#       3 usage · 4 no stdin endpoint (agent has no FIFO — predates it, or mkfifo failed) ·
+#       5 write blocked / timed out (agent is not draining its FIFO)
+# Seams: CC_PANE_HOME · CC_WAKE_MIN_S · CC_WAKE_WRITE_TIMEOUT_S · CC_MAILBOX_DIR
+# bash 3.2-safe (macOS system bash).
+
+set -uo pipefail
+
+RC_OK=0; RC_NO=1; RC_DAMPED=2; RC_USAGE=3; RC_NO_FIFO=4; RC_BLOCKED=5
+
+HOME_DIR="${CC_PANE_HOME:-$HOME/.claude/autonomy/panes}"
+MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+# 20s mirrors hooks/mailbox-drain.sh's post-tool floor. The damper is not politeness: a fleet
+# broadcast at 150 sessions is 150 concurrent model turns against an inference budget §S6.8 says
+# does not exist (03-headless-substrate.md §4 A3, "delivery burst").
+MIN_S="${CC_WAKE_MIN_S:-20}"
+WRITE_TIMEOUT_S="${CC_WAKE_WRITE_TIMEOUT_S:-5}"
+
+RESOLVE_ONLY=0; FORCE=0; TEXT=""; TARGET=""
+
+usage() {
+  cat >&2 <<'EOF'
+usage: cc-wake-headless [--resolve] [--force] [--text T] [--timeout S] <sid|hdl-id>
+  --resolve   print the hdl-id this address resolves to and exit (no write, no damp)
+  --force     wake even inside the CC_WAKE_MIN_S damp window
+  --text T    the user-message text to deliver (default: read-your-inbox)
+  --timeout S bound the FIFO write (default CC_WAKE_WRITE_TIMEOUT_S=5)
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --resolve) RESOLVE_ONLY=1; shift ;;
+    --force)   FORCE=1; shift ;;
+    --text)    TEXT="${2:-}"; shift 2 ;;
+    --timeout) WRITE_TIMEOUT_S="${2:-5}"; shift 2 ;;
+    -h|--help) usage; exit "$RC_USAGE" ;;
+    --)        shift; break ;;
+    -*)        printf 'cc-wake-headless: unknown option %s\n' "$1" >&2; usage; exit "$RC_USAGE" ;;
+    *)         TARGET="$1"; shift ;;
+  esac
+done
+[ -n "$TARGET" ] || { usage; exit "$RC_USAGE"; }
+
+meta_get() { # $1=dir $2=key
+  [ -f "$1/meta" ] || return 1
+  sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | head -1
+}
+
+# ── resolution: hdl-id first, then the DECLARED session id ────────────────────────────────────────
+# Shape-gate before touching the filesystem: the address arrives from cc-notify, i.e. ultimately
+# from a peer, and "$HOME_DIR/$TARGET" with an unvalidated TARGET is a path-traversal seam. A
+# non-matching address is not an error here — it falls through to the sid scan, and a sid is only
+# ever COMPARED against a meta field, never concatenated into a path.
+resolve_id() {
+  local t="$1" d
+  case "$t" in
+    hdl-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+      [ -d "$HOME_DIR/$t" ] && { printf '%s' "$t"; return 0; } ;;
+  esac
+  [ -d "$HOME_DIR" ] || return 1
+  for d in "$HOME_DIR"/hdl-*; do
+    [ -d "$d" ] || continue
+    [ "$(meta_get "$d" sid)" = "$t" ] && { basename "$d"; return 0; }
+  done
+  return 1
+}
+
+ID="$(resolve_id "$TARGET")" || {
+  [ "$RESOLVE_ONLY" = 1 ] && exit "$RC_NO"
+  printf 'cc-wake-headless: no headless agent addressed by %s (searched %s for a matching id or declared sid)\n' \
+    "$TARGET" "$HOME_DIR" >&2
+  exit "$RC_NO"
+}
+DIR="$HOME_DIR/$ID"
+[ "$RESOLVE_ONLY" = 1 ] && { printf '%s\n' "$ID"; exit "$RC_OK"; }
+
+# ── liveness: ask the driver, never a second copy of its predicate ────────────────────────────────
+DRV=""
+for _c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/cc-pane-headless" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-pane-headless" \
+          "$HOME/.claude/bin/cc-pane-headless"; do
+  [ -x "$_c" ] && { DRV="$_c"; break; }
+done
+if [ -n "$DRV" ]; then
+  "$DRV" address "$ID" >/dev/null 2>&1 || {
+    printf 'cc-wake-headless: %s is NOT live (the driver refuses to address it) — nothing written\n' "$ID" >&2
+    exit "$RC_NO"
+  }
+else
+  # The driver is the arbiter; with it absent we do NOT guess. Writing into the FIFO of a pid we
+  # cannot verify is exactly the recycled-pid hazard `pstart` exists to prevent.
+  printf 'cc-wake-headless: cannot find cc-pane-headless to arbitrate liveness — refusing to write blind\n' >&2
+  exit "$RC_NO"
+fi
+
+FIFO="$(meta_get "$DIR" fifo)"
+if [ -z "$FIFO" ] || [ ! -p "$FIFO" ]; then
+  # NOT laundered into a failure-to-wake-that-might-have-worked. This agent has no stdin endpoint:
+  # it was spawned before the FIFO existed, with CC_PANE_STDIN=null, or its mkfifo failed. Say which
+  # thing is true rather than reporting a generic error the caller cannot act on.
+  printf 'cc-wake-headless: %s has NO stdin endpoint (meta fifo=%s) — it cannot be woken; mail is recorded only\n' \
+    "$ID" "${FIFO:-<unset>}" >&2
+  exit "$RC_NO_FIFO"
+fi
+
+# ── damping ───────────────────────────────────────────────────────────────────────────────────────
+STAMP="$DIR/.wake"
+now="$(date +%s 2>/dev/null || echo 0)"
+if [ "$FORCE" = 0 ] && [ -f "$STAMP" ]; then
+  last="$(stat -f %m "$STAMP" 2>/dev/null || stat -c %Y "$STAMP" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ "$(( now - last ))" -lt "$MIN_S" ] 2>/dev/null; then
+    printf 'cc-wake-headless: %s was woken %ss ago (< CC_WAKE_MIN_S=%s) — DAMPED, no second turn queued\n' \
+      "$ID" "$(( now - last ))" "$MIN_S" >&2
+    exit "$RC_DAMPED"
+  fi
+fi
+
+# ── the payload ───────────────────────────────────────────────────────────────────────────────────
+# A wake DELIVERS NOTHING BY ITSELF — it points. The message body lives in the fleet mailbox, and a
+# pane-less session's box is keyed on its `hdl-` id (hooks/session-continue.sh derives $_ouid from
+# CC_PANE_ID, which cc-pane-headless exports). Naming the path makes the wake un-fakeable end to
+# end: the model can only echo a token it actually went and read.
+SID="$(meta_get "$DIR" sid)"
+BOX="$MAILBOX_DIR/$ID.md"
+if [ -z "$TEXT" ]; then
+  TEXT="📬 WAKE — a peer wrote to your inbox. Read it NOW with: cat '$BOX'"
+  [ -n "$SID" ] && [ -f "$MAILBOX_DIR/$SID.md" ] && \
+    TEXT="$TEXT (also check '$MAILBOX_DIR/$SID.md')"
+  TEXT="$TEXT — then act on it and continue. You are a pane-less session: this stdin write is your only wake path, so do not stop with the message unread."
+fi
+
+if command -v jq >/dev/null 2>&1; then
+  LINE="$(jq -nc --arg t "$TEXT" '{type:"user",message:{role:"user",content:[{type:"text",text:$t}]}}' 2>/dev/null)"
+else
+  # jq-absent degrade. Escape backslash FIRST then quote, or the quote-escape's own backslashes get
+  # double-escaped; drop control characters, which are unrepresentable raw inside a JSON string.
+  _esc="$(printf '%s' "$TEXT" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  LINE="{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$_esc\"}]}}"
+fi
+[ -n "$LINE" ] || { printf 'cc-wake-headless: could not build the stream-json line\n' >&2; exit "$RC_NO"; }
+
+# ── the BOUNDED write ─────────────────────────────────────────────────────────────────────────────
+# A plain background job, whose $! is genuinely ITS pid — never a process substitution
+# (procsub-pid-is-unreachable-own-the-pipe). Two ways this write can hang and both are real: the
+# agent has stopped draining and the pipe buffer is full, or its holder died and the reader is gone
+# so open(2) blocks. Either way the caller gets a bounded refusal, and the writer is killed rather
+# than left parked on a FIFO forever.
+{ printf '%s\n' "$LINE" > "$FIFO"; } 2>/dev/null &
+WPID=$!
+i=0
+while [ "$i" -lt "$WRITE_TIMEOUT_S" ]; do
+  kill -0 "$WPID" 2>/dev/null || break
+  sleep 1; i=$(( i + 1 ))
+done
+if kill -0 "$WPID" 2>/dev/null; then
+  kill -TERM "$WPID" 2>/dev/null; kill -KILL "$WPID" 2>/dev/null
+  wait "$WPID" 2>/dev/null
+  printf 'cc-wake-headless: write to %s BLOCKED for %ss — %s is not draining its stdin; NOT woken\n' \
+    "$FIFO" "$WRITE_TIMEOUT_S" "$ID" >&2
+  exit "$RC_BLOCKED"
+fi
+wait "$WPID" 2>/dev/null || {
+  printf 'cc-wake-headless: write to %s FAILED — %s NOT woken\n' "$FIFO" "$ID" >&2
+  exit "$RC_BLOCKED"
+}
+
+# Stamp only a write that HAPPENED. Stamping before the write would let a blocked attempt damp the
+# retry that could have succeeded — the damper would then be suppressing wakes on the strength of
+# an event that never occurred (record-WHY-at-source).
+: > "$STAMP" 2>/dev/null
+printf 'cc-wake-headless: woke %s (stream-json user line → %s)\n' "$ID" "$FIFO" >&2
+exit "$RC_OK"
