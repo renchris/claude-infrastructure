@@ -76,6 +76,44 @@ lrp_bounded() {
   "$LRP_TIMEOUT_BIN" -k 3 "$LRP_TIMEOUT_S" "$@"
 }
 
+# ── tmux gets the SAME absolute ladder, and it took 24 days of a false alarm to notice ────────────
+# `spawn_tmux` used to open with a bare `command -v tmux || return 1`. Under launchd that guard is
+# always FALSE: com.reso.lr-reset-poller.plist sets no PATH, so the job runs on the stock
+# /usr/bin:/bin:/usr/sbin:/sbin, and Homebrew is not on it. MEASURED 2026-08-14 in poller.log —
+# 1,797 of 2,211 lines (81%) are the identical `resume spawn failed (…; no GUI and no tmux)` across
+# 11 sids over 24 days, one sid retried 380 times — while /opt/homebrew/bin/tmux existed throughout.
+# So LR-m's whole contract ("GUI unavailable → tmux rather than stranding the resume") had never
+# once been honoured in production, and the line asserting "no tmux" was FALSE about the box.
+#
+# THE GUARD IS WHAT HID IT, and that is the part to carry forward. A bare `tmux` would have been a
+# loud 127; `command -v tmux ||` turns the same PATH blindness into a SILENT capability loss —
+# which scripts/unattended-path-lint.sh classifies as exactly its `guarded` finding ("it will not
+# crash, but the capability is silently lost, which for a gate or an actuator is failing OPEN").
+# That lint never reported this file, and the reason is a DIRECTORY: its launchd population is
+# `"$root"/launchd/*.plist`, while this job's plist is committed at
+# scripts/limit-recover/com.reso.lr-reset-poller.plist — tracked, live-loaded, and outside the set
+# the lint enumerates. So the population, not the rule, is what let this through.
+#
+# Resolution order mirrors LRP_TIMEOUT_BIN three lines up — the idiom was already in this file,
+# applied to `timeout` and not to `tmux` (memory: corrected-instrument-can-lie-again). CANDIDATES is
+# a seam because a test cannot create /opt/homebrew/bin; set-but-EMPTY means "no candidates", never
+# the default (`${VAR+set}`, the convention LRP_OSA_TIMEOUT_BIN documents above).
+if [ -n "${LR_POLLER_TMUX_CANDIDATES+set}" ]; then
+  _lrp_tmux_cands="$LR_POLLER_TMUX_CANDIDATES"
+else
+  _lrp_tmux_cands="/opt/homebrew/bin/tmux:/usr/local/bin/tmux"
+fi
+LRP_TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
+if [ -z "$LRP_TMUX_BIN" ] || [ ! -x "$LRP_TMUX_BIN" ]; then
+  LRP_TMUX_BIN=""
+  _lrp_oifs="$IFS"; IFS=':'
+  # shellcheck disable=SC2086  # deliberate IFS=':' split — CANDIDATES is a colon list, like PATH
+  for _c in $_lrp_tmux_cands; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { LRP_TMUX_BIN="$_c"; break; }
+  done
+  IFS="$_lrp_oifs"
+fi
+
 
 [[ -n "${LR_POLLER_DISABLED:-}" ]] && exit 0
 
@@ -392,8 +430,8 @@ spawn_gui() {
 }
 # spawn_tmux <launcher> <sid> — run the launcher in a DETACHED tmux session (headless PTY). 0 = created.
 spawn_tmux() {
-  command -v tmux >/dev/null 2>&1 || return 1
-  tmux new-session -d -s "lr-resume-${2:0:8}" "/bin/bash $1" >/dev/null 2>&1
+  [ -n "$LRP_TMUX_BIN" ] && [ -x "$LRP_TMUX_BIN" ] || return 1
+  "$LRP_TMUX_BIN" new-session -d -s "lr-resume-${2:0:8}" "/bin/bash $1" >/dev/null 2>&1
 }
 # spawn_resume <launcher> <sid> — echo the mechanism used (gui|tmux) on success; non-zero on failure.
 spawn_resume() {
@@ -695,7 +733,13 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
       mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
     else
       rm -f "$CLAIMS/$sid" 2>/dev/null || true   # spawn failed ⇒ release immediately, don't wait out the TTL
-      log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; no GUI and no tmux)"
+      # THE LINE MUST DESCRIBE THE RESOLUTION, NOT ASSERT A FACT ABOUT THE BOX. Its predecessor read
+      # "no GUI and no tmux" unconditionally, which was FALSE 1,797 times over 24 days — tmux was
+      # installed the whole time and only unreachable on the launchd PATH (see the LRP_TMUX_BIN
+      # ladder). `tmux=<path>` says the binary resolved and `new-session` itself refused;
+      # `tmux=unresolved` says we never found one. Those are different failures with different
+      # remedies, and collapsing them is what made this alarm unactionable for three weeks.
+      log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; tmux=${LRP_TMUX_BIN:-unresolved})"
     fi
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
     # The REMEDY must match WHY this branch was reached. Both strings said "Set LR_POLLER_AUTOFIRE=1"
