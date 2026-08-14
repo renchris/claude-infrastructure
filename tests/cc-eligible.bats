@@ -72,6 +72,27 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [[ "$output" == *"verdict=ineligible-branch-banking"* ]] || { echo "$output"; false; }
 }
 
+@test "BRANCH BANKING: the worktree named as a DIRECTORY, the way the fleet writes one" {
+  # Regression for backlog `4abcbbbbc997`, which was dispatched to a cloud VM and could not run
+  # there: it names its worktree only as `wt-bsm-gap` and spells no other listed word. The title is
+  # the real one, trimmed. Asserting the SPELLING and not just the token is what distinguishes this
+  # from the test above — that one already passes on the pre-fix list via `unpushed`.
+  local id; id="$(add bank "Retry the BSM land — 7 commits on research/bsm-world-class-gap (wt-bsm-gap), tree clean")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-branch-banking"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"wt-slug"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "CONTROL: a lookalike prefix is NOT a worktree — word boundaries hold leftward" {
+  # The paired lookalike every refusal arm in this suite carries. A pattern anchored on a substring
+  # rather than a word boundary would refuse these and every assertion above would still pass.
+  local id; id="$(add ctl "rewrite the swt-handler and the NEWT-parser; note the wt is unrelated")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
 @test "CONTROL: repo-only work is ELIGIBLE, exit 0" {
   # Without this the three arms above are satisfied by a classifier that refuses everything — which
   # kills the cloud tap and reads as a green board (memory: alarm-polarity-and-attention-budget).

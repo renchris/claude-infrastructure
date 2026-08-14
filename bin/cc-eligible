@@ -309,6 +309,26 @@ BANKING = [
     ("unlanded", r"\bunlanded\b"),
     ("stranded", r"\bstranded\b"),
     ("local-branch", r"\blocal(?:-only)? branch(?:es)?\b"),
+    # THE WORKTREE UNDER THE NAME A HUMAN ACTUALLY TYPES. `worktree` above catches the word; this
+    # catches the DIRECTORY, which is how the fleet refers to one in practice — the same argument
+    # `handoff-fire` already makes in SPAWN_RAIL, where the spaced form had to be added because
+    # `ce2bf742216d` was promoted to cloud by the hyphen-only pattern.
+    #
+    # MEASURED, because widening a denylist on a hunch is how the tap starves (this file's header).
+    # Over every docs/**/*.md line in this repo the pattern matches 198 distinct tokens, and ALL 198
+    # are worktree names — `wt-pool-1`, `wt-bsm-gap`, `wt-cc-225106-82355`, `wt-run-57191`. There is
+    # no second meaning for this prefix in the corpus, which is what makes a prefix pattern safe
+    # here when a bare-count one is not: `\d+ commits` was tested alongside it and REJECTED at 309
+    # hits, because "800 commits behind origin/main" is staleness prose, not a corpus on this disk.
+    #
+    # THE MISS THIS CLOSES, and it is not hypothetical. Backlog `4abcbbbbc997` ("Retry the BSM land
+    # on a QUIET machine … 7 commits on research/bsm-world-class-gap (wt-bsm-gap), tree clean")
+    # names its worktree ONLY as `wt-bsm-gap`, spells no other listed word, and so was classified
+    # `eligible` and dispatched to a cloud VM — where the reso-management-app repo, the branch, the
+    # worktree and the backlog store all do not exist, so the land it asks for is unreachable by
+    # construction. One burned worker slot per dispatch. Respell the same title with the word
+    # `worktree` and the pre-existing list already refuses it; that near-miss is the whole defect.
+    ("wt-slug", r"\bwt-[a-z0-9][a-z0-9-]*\b"),
 ]
 
 # Compiled once, in REFUSAL ORDER. Order decides which verdict a multi-class item reports, and it
