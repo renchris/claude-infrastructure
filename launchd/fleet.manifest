@@ -122,7 +122,21 @@ com.claude.session-search-backfill| run    | 0    | auto | 9  | 18-fleet-activat
 com.claude.caffeinate-floor       | staged | 3600 | auto | 12 | 05-pmset-caffeinate-activate.sh
 com.claude.power-policy-verify    | staged | 3600 | auto | 12 | 05-pmset-caffeinate-activate.sh
 com.claude.team-orphan-reaper     | staged | 600  | auto | 11 | 18-fleet-activate.sh
-com.claude.desk-invariant         | staged | 300  | auto | 5  | 06-desk-bootstrap-activate.sh
+# DECIDED 2026-08-14 (backlog ff6a95a1779b, DAEMON_FLEET_V2 §2.1 CORRECTION): desk-invariant is to
+# RUN. The "runaway session generator" prohibition that kept it staged is REFUTED — 266 fires / 41h
+# with 0 sessions created, a 2-per-6h budget that consumes on ATTEMPT (desk-invariant.sh:100-101,
+# :441-448), a live fleet ceiling it cannot bypass (handoff-fire.sh capacity_gate, on by default at
+# 2.0/core + memory headroom), and a not-opted-in branch that makes enabling on an unwired box a
+# provable no-op (6c72434c3). The row below is LEFT AT `staged` deliberately: install.sh bootstraps
+# every `expect = run` label unattended every 600s (install.sh:755-760), so flipping this field IS
+# the launchd mutation, and C10 puts that in the operator's hands. THE OPERATOR'S ONE LINE: change
+# `staged` to `run` below. It then converges on the next deploy-live tick, or immediately via
+# `bash docs/activation/pending-activation/18-fleet-activate.sh`.
+# `activate` retargeted 06-desk-bootstrap → 18-fleet in the same commit: 06 wires the desk BOOTSTRAP
+# (desk-register, /desk, the brief hook) and names this launchd label nowhere, so as a recover_cmd it
+# pointed at a script that cannot load the job. 06 remains the right companion for wiring the desk
+# itself; it is not this row's activator.
+com.claude.desk-invariant         | staged | 300  | auto | 5  | 18-fleet-activate.sh
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
