@@ -294,6 +294,86 @@ the amplifier, not the cause** — it converted 13 latent bits into 0 loaded job
 > have re-created the outage. Both generators are declared `staged`, and the platter touches only
 > `expect = run`, so the design refuses that guess *structurally*, not by remembering to.
 
+> **CORRECTION 2026-08-14 — the prohibition is REFUTED for `desk-invariant`. It stands, untested,
+> only for `boot-resume`.** (backlog `ff6a95a1779b`.) The paragraph above is kept verbatim: it is the
+> reasoning the platter and `install.sh`'s manifest gate were built from, and both are still right.
+> What does not survive is the word **generator** applied to `desk-invariant`, and the precondition
+> attached to it.
+>
+> 1. **It has never generated a session.** Its only production figure is **266 fire attempts over
+>    41 h** (2026-07-23T07:35Z → 2026-07-25T01:02Z), and **every one returned nonzero and created
+>    nothing** — the anchorless-refusal outage recorded in `scripts/desk-invariant.sh:221-227` and
+>    `:445`. At the 07-26 bootout its lifetime session count was **0**. It was collateral like the
+>    other 8, not one of the four jobs the shutdown header names.
+> 2. **The per-job ceiling already existed, and predates the shutdown.** `RESPAWN_MAX=2` /
+>    `RESPAWN_WINDOW_S=21600` (`:100-101`); exhaustion is **page-only, never a respawn loop**
+>    (`:439`); and the budget marker is written **before the attempt**, so a permanently-failing fire
+>    consumes budget (`:441-448`). That last fix landed **2026-07-25 — a day before the bootout**.
+>    The prohibition was written against the pre-fix script, where the 266 were possible precisely
+>    because failure was free. It cannot be re-derived from today's file.
+> 3. **The named precondition — a fleet concurrency ceiling — WAS built, and is live.**
+>    `capacity_gate()` (`scripts/handoff-fire.sh:4115`) is **on by default**
+>    (`CC_FIRE_CAPACITY_GATE:-on`), with `CC_FIRE_MAX_LOAD_PER_CORE` (default **2.0/core**) and the
+>    M10 memory-headroom term, **both** of which a **net-new** spawn must clear (`:6079`; only a
+>    recycle is exempt, because it is net-zero panes). `desk-invariant` fires through
+>    `handoff-fire.sh` with no `--recycle` (`:214-253`), so it is gated **by construction** — it
+>    cannot fire into a loaded box even when its own 2/6 h budget is intact. The **`UNMEASURABLE`**
+>    verdict in `CONCURRENCY_PROGRAM.md` (§S5-CEILING, §S5.2, §S5.4) is about a **different
+>    ceiling**: the off-box **cloud create quota** that `scripts/cloud-ceiling-probe.sh` cannot
+>    validate because its classifier has no calibration control. An unmeasurable *cloud* quota says
+>    nothing about an *on-box* load/memory gate that is measured, live, and demonstrably refusing.
+> 4. **Since `6c72434c3` (2026-08-07, D6) enabling it on an unwired box is a provable no-op.** The
+>    `not-opted-in` branch abstains with **zero** side effects — no page, no budget spend, no dedup
+>    marker — when the role file is ABSENT/EMPTY and `CC_DESK_OPTIN` is unset. A wired-**then**-broken
+>    desk still takes the page+fire path, which is the state the organ exists for.
+>
+> **One argument that did NOT survive either — recorded so it is not reused.** The filing's "3 of the
+> 4 generators run today with no ceiling" is false in all three parts: this doc names exactly **two**
+> generators and **both are `staged`**; `boot-resume` carries `CC_BOOT_RESUME_MAX_PER_WORKTREE=1` /
+> `CC_BOOT_RESUME_MAX_TOTAL=4` (`scripts/boot-resume.sh:83-84`); `com.claude.dispatcher` carries
+> `CC_DISPATCH_CEILING` (default **12**, `bin/cc-dispatch:368`) plus `free_slots` admission; and
+> `com.claude.discovery` creates **no sessions at all** — `bin/cc-discover` has **zero**
+> `handoff-fire` call sites and writes `cc-backlog` rows. The refutation above rests on none of it.
+>
+> **DECISION: `desk-invariant` is ENABLED by the C10 route below — not deleted.** A disabled
+> invariant asserts nothing, and this is the only asset in the repo that can CREATE or RE-ENGAGE a
+> desk from **outside** the API failure domain it watches (SO-6). Deleting it would remove the answer
+> to a stunned or dead desk and leave every terminal branch draining to an absent human.
+>
+> **The C10 route is ONE line, and it is the operator's.** `install.sh` bootstraps exactly the labels
+> the manifest declares `expect = run` (`install.sh:755-760` — the R-1 gate) and `deploy-live`
+> invokes it every 600 s; `18-fleet-activate.sh` `continue`s past every non-`run` label (`:134`). So
+> the manifest row **is** the activation switch, and an agent flipping it would be mutating launchd
+> by proxy. This session leaves the row at `staged` and files the step:
+>
+> ```
+> launchd/fleet.manifest:  com.claude.desk-invariant | staged | 300 | …   →   | run | 300 | …
+> ```
+>
+> After the flip, activation converges unattended within one `deploy-live` tick, or immediately via
+> `bash docs/activation/pending-activation/18-fleet-activate.sh`. The row's `activate` field is
+> retargeted to that script in the same commit as this correction: it previously named
+> `06-desk-bootstrap-activate.sh`, which wires the desk *bootstrap* (`desk-register`, `/desk`, the
+> brief hook) and contains **no reference to the launchd label at all** — so the `recover_cmd`
+> `cc-fleet` would print the moment the row went `run` pointed at a script that cannot turn the job
+> on. Retargeting `activate` changes no `expect` and activates nothing.
+>
+> **Expect the flip to be INERT at first, and read that as correct rather than broken.** As measured
+> 2026-08-09 (`backlog-consolidation-2026-08-09/OUT-dispatch.md:43`) `~/.claude/cc-roles/` held no
+> `desk` file at all — one 0-byte `orchestrator`. Against an ABSENT role file the D6 `not-opted-in`
+> branch abstains with zero side effects, so a freshly-`run` `desk-invariant` will log abstentions
+> and do nothing until a desk is registered (`desk-register`, already wired — `06`'s `.done` exists
+> in the live queue). That ordering is the fail-safe one and is why this decision does not need to
+> wait on the desk: the job cannot act before there is something for it to watch. Verify with
+> `ls -l ~/.claude/cc-roles/desk` and `jq -r 'select(.src=="desk-invariant")|.disposition'
+> ~/.claude/autonomy/idl.jsonl | tail` (the record's key is `src`, not `actor` —
+> `scripts/desk-invariant.sh:179`).
+>
+> **`boot-resume` is NOT covered by this correction** and stays `staged`. It genuinely fires per
+> ghost, its bound is a different one (above), and nobody has re-derived its incident attribution.
+> Do not read this correction as covering both generators — that is the same over-generalisation,
+> pointed the other way.
+
 | Delta | Value | Source |
 |---|---|---|
 | Enable event for dispatcher+discovery | **2026-07-29 12:22:34** by `/tmp/claude-dispatcher-enable.sh --enable` (the 11:06 plist mtime is only the `cp`) | override-db mtime; the script, still on disk |
