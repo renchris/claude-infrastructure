@@ -164,8 +164,12 @@ check_real_flag() {
 #
 # RESIDUAL COVERAGE IS DELIBERATE, because the compensating control already exists at the other
 # end: hooks/goal-inert-watch.sh fires at Stop, reads CC's OWN background_tasks payload, and says
-# so when an armed goal is actually being skipped. That watcher sees every parker including the
-# ones no static classifier can name. So this gate does not need to be exhaustive — it needs to be
+# so when an armed goal is actually being skipped. ⚠️ That payload NAMES only BACKGROUNDED parkers
+# — CC filters `isBackgrounded === false` out of it while its deferral gate counts any non-terminal
+# local_bash, so a FOREGROUND one is invisible there (goal-in-handoff-2026-08-08.md § The
+# foreground blind spot, 2026-08-14). The watcher's second arm catches those anyway, from the goal
+# going unevaluated across turns; it just cannot name them. Either way the skip is reported, which
+# is all this gate's residual coverage rests on: it does not need to be exhaustive — it needs to be
 # PRECISE, and to fail open into a Stop-side alarm rather than into silence.
 #
 # COMMAND-POSITION, not substring: a background `rg 'cc-await-ping' …` is a search that settles in

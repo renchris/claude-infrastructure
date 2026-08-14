@@ -557,6 +557,11 @@ entire observed cause.
 keying on the raw type name silences the fire case (M1), and removing the sentinel discrimination
 makes it nag a goal that is evaluating perfectly (M2).
 
+⚠️ **Superseded in one respect on 2026-08-14** — the claim above that the hook is "possible only
+because CC hands every Stop hook the very population its own predicate scans" is FALSE. The hook is
+handed a *subset* of that population. See **§ The foreground blind spot** at the end of this
+document; the hook now carries a second arm and the suite is 20/20 with a third mutation check.
+
 ### 2 · `migrations/0005-…` — the registration, STAGED (`68e3d7b4`)
 
 Declared `c10` because it edits `settings.json`; it is staged and never self-runs. It writes **every**
@@ -628,7 +633,8 @@ the guard rather than defaulted — **deny, not warn** (an advisory over every b
 would fire on 20-second builds where there is no action to take), and **shape, not existence**
 (duration is what governs but is unknowable at PreToolUse, so the predicate is the structural proxy
 for unbounded duration; residual parkers are deliberately left to the Stop-side
-`goal-inert-watch.sh`, which reads CC's own `background_tasks` and sees every one of them). One
+`goal-inert-watch.sh`, which reads CC's own `background_tasks` — ⚠️ **and sees every one of them
+only if it is BACKGROUNDED; see § The foreground blind spot, 2026-08-14**). One
 line on the second defect, which is not the guard's to fix: that monitor could never exit either —
 its predicate matched only the success token `^→ fired:` while the fire it watched wrote
 `!! FIRE FAILED`. A watcher whose exit predicate cannot match the failure path parks forever.
@@ -694,3 +700,90 @@ nag both directions) · `mailbox-wake-arm.bats` 15/15 (+3 headless-guard) ·
 `handoff-goal-arm.bats` 27/27 (+9 inheritance) · `claude-latest-stderr.bats` +1 (cap default +
 override).
 
+
+---
+
+# The foreground blind spot — 2026-08-14 (backlog `45a847846571`)
+
+**`background_tasks` is not the population CC's deferral gate scans. It is a strict SUBSET of it,
+and the missing rows are the FOREGROUND ones.** The 2026-08-09 write-up above said the hook was
+"possible only because CC hands every Stop hook the very population its own predicate scans". That
+sentence is the defect: the two sides were never read against each other.
+
+## The two reads, side by side (verified in 2.1.231)
+
+The **producer** filters. `cip` is `w1f` in this build; every task it emits passes `LR`
+(@283039039):
+
+```js
+function LR(e){ if(e.status!=="running" && e.status!=="pending")     return !1;
+                if("isBackgrounded" in e && e.isBackgrounded===!1)   return !1;
+                return !0 }
+```
+
+The **gate** does not. @284195995 the Stop handler runs `let Y=i.taskRegistry.all();
+if(kFe(Y)||vKo(Y)){ …remove the goal's Stop hook… }`, and `vKo` — the doc's `Tio` — is
+(@290802207):
+
+```js
+function vKo(e){ for(let t of Object.values(e))
+                 if(t.type==="local_bash" && !HH(t.status)) return !0; return !1 }
+```
+
+No `isBackgrounded` test appears anywhere in it. The gate reads the raw registry; the hook reads a
+backgrounded-only projection of it.
+
+**Every ordinary Bash tool call registers a foreground row.** @284278600 the local-shell task is
+constructed `{...Nk(a,"local_bash",o,r), status:"running", command:n, isBackgrounded:!1, …}`. And
+nothing sweeps foreground tasks at a turn boundary: `k6e` ("background them all") has exactly two
+call sites — the ctrl-b keybinding handler (@299414983, guarded by `iIn`) and the SDK
+`background_tasks` control request (@300414636, @293931698). Neither runs at Stop.
+
+So a `local_bash` row that is still `running`/`pending` when a Stop fires **defers the goal while
+being absent from the payload**, and the hook's fire predicate — which required ≥1 visible deferrer
+— resolved that to silence. A false all-clear on precisely the case the sensor exists to catch.
+
+## Why an empty list could never have meant "nothing is deferring"
+
+The relation is set-theoretic, not empirical: `reportable ⊂ deferring`. Reasoning from the subset's
+emptiness to the superset's emptiness is invalid whatever the reachability of any particular
+foreground row turns out to be. That is why the fix does not rest on proving a reachability path —
+it removes an inference that was never sound.
+
+## The fix — arm 3b, which proves the skip instead of naming the culprit
+
+The hook can never see a foreground task, so it cannot name one. What it *can* do is observe that
+the goal went unevaluated: the arm sentinel is still the most recent `goal_status` attachment after
+**≥2 real user turns**, which means at least one Stop came and went writing no evaluation record.
+The threshold is 2, not 1, because an INTERRUPTED turn produces a user message with no Stop at all;
+one interrupt must not fire the alarm. "Real" excludes tool results (`type:"user"` with ARRAY
+content) and system-injected turns (`isMeta`) — neither implies the session ever went idle.
+
+Arm 3b's message states only what it can prove, and offers the foreground bash as the *likely*
+cause rather than a certainty — so in the residual false-positive case (two consecutive interrupts)
+the headline is still true and only the attribution is soft.
+
+Three consequences worth recording:
+
+- **The `background_tasks` KEY, not its contents, is now the Stop-payload check.** An empty list is
+  a legitimate input that routes to arm 3b; absence of the key still abstains.
+- **The teammate / cloud-session abstention is recovered for free.** Arm 3b never claims which task
+  deferred the goal, so CC's `isIdle` / `isLongRunning` carve-outs — unknowable from the payload —
+  stop mattering: if the carve-out applied and CC *did* evaluate, the evaluation record makes arm 3b
+  abstain on its own.
+- **The transcript pass costs nothing on the hot path.** It runs only when the payload names no
+  deferrer, i.e. only where the hook was previously about to exit silent.
+
+`tests/goal-inert-watch.bats` — 20/20. New: the arm-3b fire case, the one-turn interrupt guard, the
+decoy test (tool_result + isMeta are not turns), the evaluating-goal override, the missing-key
+abstain, and **M3**, which restores the pre-fix `[ -n "$DEFERRERS" ] || abstain` as a one-line
+mutation and asserts the foreground case goes silent again.
+
+## The generalisable lesson
+
+Same shape as trap (a) three sections up, one level higher. There the hook was keyed on the raw
+type name where the payload carried the display name — a *field* read against the wrong contract.
+Here the hook was keyed on the whole payload where the gate read the registry — a *population*
+read against the wrong contract. Both produce a sensor that is clean, green and permanently silent.
+**When a sensor reproduces someone else's predicate, read BOTH the predicate and the feed it is
+given, and prove they range over the same set.** Reading only the predicate is what shipped this.

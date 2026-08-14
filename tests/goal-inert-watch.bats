@@ -10,8 +10,12 @@
 #       Keying on the raw name matches nothing and reports all-clear forever.
 #   M2  `grep goal_status` on a transcript also matches the assistant's own PROSE about goals.
 #       Dropping the `type=="attachment"` filter makes the hook fire on a session with NO goal.
+#   M3  an EMPTY `background_tasks` is not evidence that nothing is deferring: CC's payload is a
+#       backgrounded-only view (`isBackgrounded === false` is filtered out) while the deferral gate
+#       reads the raw registry. Treating empty as all-clear — the pre-2026-08-14 behaviour — makes
+#       the hook silent on exactly the case it exists to catch: a FOREGROUND bash.
 # Each neuters exactly one behaviour in a COPY of the real file and asserts the corresponding
-# positive test flips — so neither positive test can be passing vacuously.
+# positive test flips — so no positive test can be passing vacuously.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -42,6 +46,26 @@ mk_prose_only() {
 {"type":"user","message":{"role":"user","content":"explain goal_status and sentinel:true"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a goal_status record with sentinel true and met false is the arm marker"}]}}
 EOF
+  printf '%s' "$D/t.jsonl"
+}
+
+# ARMED, then turns go by with no evaluation record — the shape arm 3b proves a skip from when the
+# payload names no deferrer. The two decoys are load-bearing: a tool_result is also `type:"user"`
+# but carries ARRAY content, and a system-injected turn carries isMeta. Neither means the session
+# ever went idle, so neither may count as a turn. `$1` = how many REAL user turns to append.
+mk_armed_stale() {
+  mk_armed >/dev/null
+  cat >> "$D/t.jsonl" <<'EOF'
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"./slow.sh"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+{"type":"user","message":{"role":"user","content":"<system-reminder>ignore me</system-reminder>"},"isMeta":true}
+EOF
+  i=0
+  while [ "$i" -lt "${1:-2}" ]; do
+    printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}' >> "$D/t.jsonl"
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":"still going?"}}' >> "$D/t.jsonl"
+    i=$((i + 1))
+  done
   printf '%s' "$D/t.jsonl"
 }
 
@@ -124,6 +148,65 @@ EOF
   [ -z "$output" ]
 }
 
+# ── arm 3b: the FOREGROUND-bash blind spot ────────────────────────────────────────────────────────
+# CC's `cip()` filters `isBackgrounded === false` out of `background_tasks` (LR @283039039 in
+# 2.1.231) but its deferral gate counts ANY non-terminal local_bash (vKo @290802207). So the payload
+# can read EMPTY while a foreground bash holds the goal off. The hook cannot name such a task; what
+# it can do is prove the skip happened, from turns elapsed with no evaluation record.
+
+@test "FIRES BLIND: empty background_tasks, but the goal has gone unevaluated across 2 turns" {
+  t="$(mk_armed_stale 2)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "blind-2")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s' "$output" | jq -e '.systemMessage' >/dev/null
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q "NOT BEING EVALUATED"
+  # it must say WHY it cannot name the culprit, and not invent one
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q "FOREGROUND bash"
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q "isBackgrounded"
+}
+
+@test "SILENT BLIND: ONE turn is not enough — an interrupted turn produces no Stop at all" {
+  # The interrupt guard. A user message can appear with no Stop in between (Esc mid-turn), so a
+  # single elapsed turn is not proof that an evaluation was skipped. Two is.
+  t="$(mk_armed_stale 1)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "blind-1")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "SILENT BLIND: tool_results and isMeta turns are not turns" {
+  # mk_armed_stale 0 leaves exactly the two decoys after the sentinel and no real user message.
+  # If either were counted this would reach the threshold and fire.
+  t="$(mk_armed_stale 0)"
+  [ "$(grep -c '"type":"user"' "$t")" -ge 3 ]   # the fixture really does carry both decoys…
+  run bash -c "printf '%s' '$(payload "$t" '[]' "blind-0")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                              # …yet zero of them count
+}
+
+@test "SILENT BLIND: a stale-looking transcript whose goal IS evaluating stays silent" {
+  # Turns elapsed is only half of arm 3b — the evaluation record still overrides it. Without this,
+  # arm 3b would nag every long session with a healthy goal.
+  t="$(mk_armed_stale 3)"
+  cat >> "$t" <<'EOF'
+{"type":"attachment","timestamp":"2026-08-09T07:20:00Z","attachment":{"type":"goal_status","met":false,"condition":"land every leg of the migration","iterations":1,"reason":"not yet"}}
+EOF
+  run bash -c "printf '%s' '$(payload "$t" '[]' "blind-healthy")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "SILENT: a payload with NO background_tasks key at all is not a Stop payload" {
+  # Arm 3b keys off an EMPTY list, so the key's presence is what now separates a Stop payload from
+  # anything else. Without this check arm 3b would fire on every non-Stop event that ships a
+  # transcript_path.
+  t="$(mk_armed_stale 3)"
+  run bash -c "printf '{\"session_id\":\"nokey\",\"transcript_path\":\"$t\",\"hook_event_name\":\"Stop\"}' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "SILENT: a terminal-status task does not defer anything" {
   t="$(mk_armed)"
   run bash -c "printf '%s' '$(payload "$t" '[{"id":"b1","type":"shell","status":"completed","command":"echo hi"}]')' | '$H'"
@@ -198,6 +281,27 @@ EOF
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m2-mutant")' | '$m'"
   [ "$status" -eq 0 ]
   [ -n "$output" ]      # ← flipped: the mutant nags a goal that is evaluating fine
+}
+
+@test "MUTATION M3: treating an EMPTY background_tasks as all-clear re-blinds the foreground case" {
+  # The pre-2026-08-14 behaviour, restored as a one-line mutation: abstain the moment the payload
+  # names no deferrer. That is precisely the false all-clear — the deferring set is a SUPERSET of
+  # the reportable set, so "nothing reportable" never meant "nothing deferring".
+  t="$(mk_armed_stale 2)"
+
+  # control: the real hook FIRES on this transcript (same assertion as the arm-3b test above)
+  export CC_PAGE_DAMP_DIR="$D/damp-m3c"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "m3-control")' | '$H'"
+  [ -n "$output" ]
+
+  m="$D/mutant3.sh"
+  sed 's/^GI_ARM=named$/GI_ARM=named; [ -n "$DEFERRERS" ] || _gi_abstain/' "$H" > "$m"
+  chmod +x "$m"
+  grep -q 'GI_ARM=named; \[ -n "$DEFERRERS" \]' "$m"   # the mutation really applied
+  export CC_PAGE_DAMP_DIR="$D/damp-m3m"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "m3-mutant")' | '$m'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]      # ← flipped: blind again, exactly as it was before the fix
 }
 
 @test "the prose-only fixture really does carry the trap (a bare grep WOULD match it)" {
