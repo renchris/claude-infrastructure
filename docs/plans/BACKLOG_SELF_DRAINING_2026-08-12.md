@@ -1114,3 +1114,55 @@ fix is the generator's *precondition* (`b15a2984d134` — test containment befor
 **Session totals:** closed **31**, reopened **1** (a false close, caught and retracted), filed **1**
 (operator-gated). Non-cloud store **470 → 446**. `re-land` rows **60 → 34**. Every close names the
 shas it rests on; not one rests on a count, a subject line, or a branch's absence.
+
+### 2026-08-14 — THE LOCAL DRAIN recycle #2: the `re-land` generator's precondition is closed (`b15a2984d134`, landed `40613b786`)
+
+The previous entry ended by naming the one thing left in the class: *"the thing to fix is the
+generator's precondition — test containment before filing — not the rows."* That is now done, and
+the shape of the defect is worth keeping, because it is the third instance in this plan of an
+instrument whose answer was thrown away rather than wrong.
+
+`land_failure_inbox()` attached the content oracle with `>/dev/null 2>&1 || true`. `falsify` has two
+informative outcomes and the filer read **neither**. rc 5 is a REFUSAL — the probe already exits 0,
+so the oracle says the ref's content is ALREADY on trunk and the land died *after* its content
+landed. Discarded, that refusal still leaves the row filed carrying `falsifier=NONE`, and a
+probe-less row is in **neither** of the retractor's buckets: it can never self-retract and nothing
+reports it. So the S3 acceptance figure — "the retractor covers 14 of 23" — was measured over rows
+that HAD probes, and was blind to the population it was leaking.
+
+**The fix reads the rc.** rc 5 CLOSES the row with its evidence; every other non-zero is REPORTED by
+row id. Containment is therefore tested before the row persists, paid for with the **one oracle run
+`falsify` already makes** — deliberately not a second pre-check ahead of the filing, because this
+handler may be running under a signal and must not double a fetch. Exit-code discipline is
+unchanged: every branch returns 0.
+
+**Two things the land itself taught, both cheap to re-learn the hard way:**
+- The dead-assertion ratchet caught a defect in the NEW test, not the subject: `! grep -q …` is
+  unreachable by errexit, so the negative half of the new case could never have failed.
+  `scripts/bats-assert-liveness-fix.py` emitted the correct `! A || false`, and it was
+  **mutant-proved in both directions** before being believed (asserting the absence of a token that
+  IS present reds at exactly that line). A first mutant attempt via `perl -0pi` silently matched
+  nothing and the suite went green — the vacuous-pass trap, caught only because the substitution
+  printed no anchor. **Assert the mutant APPLIED before reading its verdict.**
+- `"$bl" done …` must be QUOTED: bare, shellcheck reads `done` as an unterminated loop body (SC1010)
+  and the gate reds on the file. Runtime is fine either way, which is precisely why it survives a
+  local test run and dies at the gate.
+
+**State at this recycle.** `master-stranded-work` 7 → 6 live rows: **4 blocked** (two genuinely
+operator-only and web-gated — the GitHub server-side author-email ruleset `8f4eae55a0c7` and the
+Claude GitHub App install `1dca461d4b90`; plus reso's worktree-local `.eslintcache` `216f429128a2`
+and the 122-orphan worktree sweep `475b43aacbf2`) and **2 open** — `ff0b5cf4528b` (limit-recover
+engagement is DETECT-ONLY; carries a deferred blast-radius decision, so read it for a ⛔ before
+coding) and `8ad4b02602dc` (no wake path for an idle headless session; stream-json needs a
+stdin-FIFO writer). Live store 528. Effort order by size is unchanged: after this one,
+`master-verification-integrity` (13) → `master-operator-gated` (25) → `master-account-facts` (26) →
+`master-enforcing-store` (32) → `master-session-lifecycle` (41) → `master-fleet-footprint` (56) →
+`master-product-repos` (57) → `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+**Live-layer note, so the next session does not re-diagnose it.** `deploy-live.sh` declines with
+*"already deployed — live layer is at the newest deployable commit `95a3caf82505` (2 un-stamped
+commit(s) above)"*. That is the standing GREEN-stamp fail-closed (`35190812890d`), not this diff:
+the land makes no full-suite claim and only the background `postland-verify` stamp moves the marker.
+The lag is **2** and this diff ADDS no file, so it rides its existing per-file symlink inside the
+converge budget — `✅` with a note, not `🚀`. A land that ADDS a file gets no budget and would breach
+at a lag of 1.
