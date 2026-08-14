@@ -1355,3 +1355,98 @@ Next by size: `master-verification-integrity` (13) → `master-operator-gated` (
 `master-fleet-footprint` (56) → `master-product-repos` (57) → `master-fire-gate` (58) →
 `master-convergence-deadlock` (84). Live store 539 (sibling intake ran +9 while this row was
 worked — the drain's own arithmetic is net-of-intake, never a raw total).
+
+### 2026-08-14 — THE LOCAL DRAIN recycle #4: `master-verification-integrity` opens, and two of its three closes cost no code at all
+
+`master-stranded-work` is drained, so this recycle took the next effort by size,
+`master-verification-integrity` (13 live rows). The brief's warning was the right one and it paid
+immediately: **of the first three rows touched, two were already fixed on trunk and open only
+because a LEASE expired.**
+
+- **`91c6f91062ae`** (pane-spawn-coverage has no could-not-run third state) — closed on
+  `c0e280a19`, content-verified: `SCAN_SENTINEL` ×8, the absolute `CHECK_FAILED` veto → exit 2, and
+  `memo_batch_record` ×1, i.e. both halves the row required. It was reopened at 05:59 by
+  `cc-backlog-reap` when its claimer's lease went stale — **two hours after the landing commit**. A
+  lease verdict is not a work verdict.
+- **`73583e2519d6`** (bats-assert-liveness fails OPEN) — closed on `4a33679c7`. Its own stored
+  falsifier **retracts**: run against `origin/main` it exits 0. Its `blocked` status was an
+  unresolvable worktree-occupancy oracle for a cloud claim — the claimer had read the DISPATCHER's
+  spent pid — so the block was about a probe, never about the work.
+
+**Read the falsifiers first.** Three of the class's rows carry probes; running all three against
+`origin/main` took one command and split the class before a line was written: one retracting (close
+it), two still failing (real work). That is the cheapest discriminator this store has.
+
+#### `57ff249657e0` — `exit` cannot leave a `$( )`, and the report it fabricated prescribed the act that destroys the ratchet
+
+Landed **`590c85187`** (in push `d2fe55adf`). `scan()` guards four unusable states and each says
+`exit 2`, the honest non-verdict — but `hits="$(scan)" || true` ended only the SUBSHELL and
+discarded the status. Empty `hits` against an EMPTY allowlist would be a lost verdict; against the
+real **16-row** one it **inverts into a positive claim**: every grandfathered file reads
+`cur=0 < alw=N`, so the ratchet's downward half fires. Measured on `origin/main` at
+`ROOT=/nonexistent`: **exit 1**, naming 16 sites as newly FIXED that nobody had touched.
+
+**The third victim the row did not name is the worst one.** That fabricated report's own FIX line
+says `--regen > scripts/pipefail-sigpipe-allow.txt`, and `regen` read `scan` through a PIPELINE —
+the same subshell. Measured: four header lines, zero rows, **exit 0**. A well-formed allowlist
+declaring every grandfathered site clean, written over the real one by a redirect the shell had
+already truncated. **The prescribed remedy was the destructive act** (memory:
+`prescribed-remedy-worse-than-the-bug`).
+
+Two things generalise:
+
+1. **`--census` is the control that names the mechanism.** There `scan` runs in THIS shell and
+   `exit 2` leaves the script correctly — measured 2 both before and after. So the defect is the
+   *subshell*, not the exit. It is also why the suite's existing **test 12 was a VACUOUS guard**: it
+   proved the exit-2 path through the one entry point that was never in danger, and stayed green on
+   the pre-fix file while 15/16/17 went red (memory: `sibling-guard-makes-the-fixture-vacuous`).
+2. **Prove the mutant applied, and prove it PER SITE.** Replaying the real pre-fix file from
+   `origin/main` reds 15+16+17 together, which credits no site. Two single-site mutants separate
+   them: `main_scan` alone reds 15+16 and leaves 17 green; `regen`+dispatcher alone reds 17 and
+   leaves 15+16 green. Test 18 (healthy path) is green under both mutants **and** the fix — a
+   control that discriminates nothing about the change is what makes the reds mean something.
+
+**A stale falsifier cannot retract, and this one now can't.** `57ff249657e0`'s probe greps `hits=`
+as its clause-1 precondition — the exact spelling the fix DELETED (0 occurrences on `origin/main`).
+It therefore returns 1 unconditionally and the row could never self-retract. Closed on content
+instead. Worth carrying: **a falsifier keyed on the defect's spelling dies at the moment it should
+fire**; key it on the REMEDY's marker.
+
+#### The sidecar: an `-eq 13` that blocked every land in the repo — and deleted its own verification
+
+The land gate red'd on `tests/gate-ownscope-leak.bats` test 16, which asserted the `own_run` census
+returns **exactly 13** pairs. `85fd75bc8` had correctly added a **14th** (`MOVINGREF`), presence
+test and all. **Reproduced on PRISTINE `origin/main` in a detached worktree** with a diff touching
+neither `ship-land.sh` nor any `CC_*_OWN` — so: not mine, and red for a sibling doing exactly what
+the test exists to require.
+
+The second-order damage is the part to remember. **bats aborts the test body at the failing line**,
+so the per-arm loop below — the ACTUAL check — never ran, and the new arm went **entirely unjudged
+by the very test that was red about it**. An exact-count assertion does not merely misfire; it
+deletes the verification standing behind it. (Confirmed afterwards that `moving-ref-control-lint.sh`
+carries two `${CC_MOVINGREF_OWN+set}` tests and zero two-state forms — a pure false red.)
+
+An `-eq N` here can only fire on GROWTH: a lint that LOSES its three-state test leaves the count at
+14 and is caught by the loop. So the count's real job is narrower — catching a grep that stopped
+matching and silently truncated the population. That is a **FLOOR** (`-ge 13`) with the loop as the
+TALLY (memory: `exact-count-assertion-tripwires-its-own-subject`). Mutant-proved: narrowing the
+census regex to 0 pairs still reds. Landed **`d2fe55adf`**.
+
+**State at this recycle.** `master-verification-integrity` **13 → 10 live rows** (7 open, 2 blocked,
+1 claimed); 3 closed, 0 filed, 2 commits landed (`590c85187`, `d2fe55adf`), net **−3** on the effort
+and net-negative on the store. Remaining open: `3ec6c070f52f` (the W4 master — **its first clause,
+the 9-of-15 arms, is already DONE via `446fe07464e0`/`b7f771848`; re-scope it against the other
+three clauses rather than re-deriving it**), `2c5ab136d63f` (hermeticity `--selftest` maps both
+exit-2 reasons onto one — the sibling of the row just closed, and the next one to take),
+`c1a29f8ee045`, `e191b6801be5`, `05ff1e5fabc0`, `8efd655b0fe1`, `b02e87582e96`.
+
+**Live layer: `🚀`, and the ADDs are a sibling's.** `deploy-live.sh` declines — *"already deployed …
+6 un-stamped commit(s) above"* — the standing GREEN-stamp fail-closed `35190812890d`, which is open
+and already filed (not re-filed here; an open row whose remedy keeps getting re-minted is its own
+defect). The ledger reads `🚀` on **2 NEW files absent from the live layer**, and both —
+`bin/cc-wake-headless`, `tests/cc-wake-headless.bats` — arrived on trunk from another session's
+land. **This diff adds no file**: all three paths are `M`, so they ride their existing per-file
+symlinks. Effort order after this one is unchanged: `master-operator-gated` (25) →
+`master-account-facts` (26) → `master-enforcing-store` (32) → `master-session-lifecycle` (41) →
+`master-fleet-footprint` (56) → `master-product-repos` (57) → `master-fire-gate` (58) →
+`master-convergence-deadlock` (84).
