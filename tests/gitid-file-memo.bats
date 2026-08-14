@@ -121,7 +121,7 @@ proven() {
   printf 'git -C "$d" config user.email a@b\n' > "$CORPUS/scripts/zz-leaky.sh"
   ( cd "$CORPUS" && git add -A && git -c user.email=t@e.x -c user.name=t commit -qm leak )
   first="$( cd "$CORPUS" && CC_GITID_ALLOWLIST="" CC_GITID_OWN="zz-leaky.sh" bash "$CORPUS/scripts/git-identity-lint.sh" "$CORPUS" 2>&1 || true )"
-  [[ "$first" == *"zz-leaky.sh"* ]]
+  [[ "$first" == *"zz-leaky.sh"* ]] || false
   second="$( cd "$CORPUS" && CC_GITID_ALLOWLIST="" CC_GITID_OWN="zz-leaky.sh" bash "$CORPUS/scripts/git-identity-lint.sh" "$CORPUS" 2>&1 || true )"
   # The finding must appear BOTH times — a cached red would print it once and go quiet.
   [[ "$second" == *"zz-leaky.sh"* ]]
@@ -166,7 +166,7 @@ proven() {
   out="$( cd "$CORPUS" || exit 2
           rm -rf "$(git rev-parse --git-common-dir)/ship-land-memo"
           PATH="$SHIM:$PATH" CC_GITID_OWN=x bash "$CORPUS/scripts/git-identity-lint.sh" "$CORPUS" 2>&1 || true )"
-  [[ "$out" == *"UNUSABLE"* ]]                          # the run really did produce no verdict
+  [[ "$out" == *"UNUSABLE"* ]] || false                 # the run really did produce no verdict
 
   # THE ASSERTION: with the scan restored, EVERY file must be proven fresh again. A single carried
   # verdict here means the unusable run banked one, which is the delta bug.
