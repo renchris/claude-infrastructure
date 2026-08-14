@@ -230,6 +230,7 @@ architecture needed one new *contract* (idle-scoped deferral), not new machinery
 | E3 | `session-continue.sh:427` encodes "the goal keeps it awake" without the cap qualifier | comment + the W2 closure; no behaviour change |
 | E4 | `goal-inert-watch.sh` will correctly fire on a §4 deferred idle (armed goal + non-terminal bash) — true but now-sanctioned | recognize the idle-scoped claim marker; downgrade that case to an info line so the alarm keeps its polarity (MEMORY: alarm-polarity-and-attention-budget) |
 | E5 | Evaluation-liveness has no oracle (§2): zero-eval vs healthy-deferral is unmeasurable after the fact | B5 below — surface non-sentinel eval count + last verdict in the wrap ledger (`◎ goal: N evals · last unmet@HH:MM`), which also gives closes an honest goal line |
+| E6 | A goal-armed session's own RESEARCH FAN-OUT is a starvation source with no alarm: named background Agent spawns are `in_process_teammate` tasks that defer the goal while they live, `goal-inert-watch` ABSTAINS on that type by design, and an agent briefed without a file-delivery contract leaves its report unharvestable if the return channel drops (see Addendum) | goal-armed sessions fan out research only with the research-subagents field-7 Delivery contract (each agent WRITES an artifact path) or synchronously; harvest = Read the file, then `TaskStop` the agent to un-starve the goal |
 
 ## 9 · Build list — filed, ordered, each independently landable
 
@@ -260,3 +261,34 @@ measurable) · a goal-armed idle session receives a 2nd and 3rd ping without an 
   already in the memory index.
 - **No change to `/goal` semantics or the cap** — 50 stays a runaway bound; §4 makes reaching it
   rare instead of routine.
+
+---
+
+## Addendum 2026-08-13 — the investigating session was its own specimen
+
+The session that wrote this doc armed the operator's `/goal` at birth, fanned out two named
+background research agents for corroboration breadth, landed §§1–10, and then sat idle 142 minutes.
+Its own transcript afterwards read **1 sentinel arm · 0 evaluations** — the starvation pole, live,
+in the author. Four measured observations, one of which sharpens A2:
+
+1. **Named background `Agent` spawns are `in_process_teammate` tasks** (the `TaskStop` receipts
+   name the type), not `local_bash` — so a goal-armed session's own research fan-out is a deferral
+   source the `validate-bash` chokepoint structurally cannot see (it gates Bash, not Agent).
+2. **The binary's `isIdle` exclusion did not exempt them once idle.** `_We` excludes
+   `in_process_teammate && isIdle`, and both agents had emitted `idle_notification` hours before
+   the session's last stop — yet that stop produced no evaluation (0 on disk, goal still armed, no
+   spin). Either the registry never carried `isIdle` for them or the exclusion did not reach this
+   path — UNKNOWN which; the B1 probe rig settles it cheaply (arm a fixture goal + one idle
+   teammate, count evaluations). Until then, treat an idle teammate as a live deferrer.
+3. **No alarm fired the whole time, correctly:** `goal-inert-watch` abstains on `teammate`-type
+   deferrers by design (`cip()` ships no idle flag). The doc's author spent its idle inside the
+   sensor's documented blind spot — under-reporting stays the right alarm polarity, but E6's rule
+   is what actually covers the gap.
+4. **The corroboration reports were unharvestable after the fact** — no completion notification,
+   no task-id lookup, no on-disk transcript, two `SendMessage` resumes unanswered — because the
+   spawn briefs said "your final message is the report" instead of the research-subagents skill's
+   field-7 Delivery contract (each agent WRITES an absolute artifact path; a subagent's prose is
+   invisible). Nothing load-bearing was lost — every §§1–10 claim traces to firsthand reads — but
+   under a live goal the cost of that omission compounds: the agent defers the goal while it lives
+   AND delivers nothing durable if the return channel drops. The E6 rule is the remedy, and ending
+   the fan-out with `TaskStop` is what un-starved this session's goal.
