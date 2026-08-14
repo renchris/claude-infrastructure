@@ -2307,6 +2307,110 @@ add_assert() {   # $1=branch $2=suite basename $3=the FIRST (non-final) statemen
   echo "$output" | grep -q 'smoke SKIPPED'               # the shed genuinely fired at this ceiling
   [ ! -s "$BATS_ARGV" ]                                  # …and no suite ran, in either land
 }
+
+# ---- the same ratchet's NON-VERDICT arm (backlog 73583e2519d6) ---------------------------------
+# THE POLARITY, and why it is worth four tests. The three above prove the ratchet reds on a dead
+# assertion. None of them can see what it does when the lint never rendered a verdict at all — and
+# until 2026-08-14 the answer was GREEN, in every such shape: the arm read the lint's STDOUT and
+# discarded its exit code, and an empty stdout is this lint's CLEAN verdict. A box without python3,
+# an unreadable suite, a traceback, a SIGKILL — each printed "→ gate: bats dead-assertion ratchet"
+# and landed. That is the opposite direction from all fifteen neighbouring arms (exit 9, retryable)
+# and it is the worse one: the class this ratchet exists to stop is defined by being invisible, so
+# a green that means "the check did not run" reads exactly like a green that means "checked".
+#
+# The stub is a real python file rather than a PATH shim on purpose: the arm invokes
+# `python3 "$DEAD_LINT"`, so a fixture lint exercises the caller's discriminator without stubbing an
+# interpreter every other gate arm also uses. `sys.exit(127)` reproduces the code bash reports for a
+# missing python3 — the shape that cannot be produced any other way from inside a test.
+dead_stub() {   # $1 = python body for a lint that answers with something other than a clean verdict
+  printf '%s\n' "import sys" "$1" > "$BATS_TEST_TMPDIR/dead-stub.py"
+  export SHIP_LAND_DEAD_LINT="$BATS_TEST_TMPDIR/dead-stub.py"
+}
+
+@test "dead-assertion: a lint that COULD NOT RUN (exit 2) is a NON-VERDICT → exit 9, never a green land" {
+  dead_fixture
+  dead_stub 'sys.exit(2)'
+  add_assert feat/nv2 nv.bats 'true'                     # a CLEAN suite: only the stub can speak here
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                    # 9 = no verdict, NOT 0 = clean
+  echo "$output" | grep -q 'bats-assert-liveness could not RUN' || false
+  echo "$output" | grep -q 'NON-VERDICT' || false
+  ! echo "$output" | grep -q 'dead-assertion RED' || false   # a could-not-run is never a claim
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/nv.bats)" ]   # fail-CLOSED: nothing landed
+}
+
+@test "dead-assertion: a lint that CRASHES (exit 1, empty stdout) is a NON-VERDICT, not a clean tree" {
+  # THE SHAPE THE EXIT CODE ALONE CANNOT SEE, and the reason the fix reads rc AND stdout. An
+  # uncaught exception exits 1 — byte-identical to the code for FINDINGS — while printing nothing on
+  # stdout, which is byte-identical to CLEAN. Only the pair discriminates. The stub raises before
+  # the analyzer's own __main__ guard can convert it, so this is the caller's leg, not the lint's.
+  dead_fixture
+  dead_stub 'raise RuntimeError("boom")'
+  add_assert feat/nv1 nv.bats 'true'
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q 'bats-assert-liveness could not RUN' || false
+  echo "$output" | grep -q 'boom' || false               # stderr is no longer swallowed: the CAUSE shows
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/nv.bats)" ]
+}
+
+@test "dead-assertion: NO python3 on the box (exit 127) is a NON-VERDICT, and the code is reported verbatim" {
+  # The rc that motivated arm_nonverdict's third parameter: a hardcoded "(exit 2)" over a 127 sends
+  # the reader hunting for a usage error the lint never reported.
+  dead_fixture
+  dead_stub 'sys.exit(127)'
+  add_assert feat/nv127 nv.bats 'true'
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q 'could not RUN (exit 127)' || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/nv.bats)" ]
+}
+
+@test "dead-assertion: a FINDING on stdout still reds (exit 6) — a verdict outranks a non-verdict" {
+  # The positive control for the three above, in BOTH directions. It prints a finding AND exits 2,
+  # so it fails if the arm ever lets a non-verdict soften a real verdict — and, without it,
+  # "non-verdict → 9" would pass just as well against a ratchet that had stopped blocking entirely.
+  dead_fixture
+  dead_stub 'print("tests/nv.bats:2: DEAD [cond-keyword] [[ 1 -eq 2 ]]"); sys.exit(2)'
+  add_assert feat/nvred nv.bats 'true'
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                    # 6 = your tree, NOT 9 = the box
+  echo "$output" | grep -q 'dead-assertion RED' || false
+  ! echo "$output" | grep -q 'could not RUN' || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/nv.bats)" ]
+}
+
+@test "dead-assertion: the analyzer itself exits 2 on a path it could not READ, never 0 = clean" {
+  # THE LINT'S HALF, on the REAL analyzer, and the half the caller's fix alone cannot reach: an
+  # unreadable file printed one stderr line, contributed zero findings, and exited 0 — so even a
+  # caller that reads the exit code correctly is told the tree is clean over a suite nobody opened.
+  # The gate arm's own comment asserted the opposite ("an unreadable file yields NO verdict"). A
+  # directory where a file is expected is the cheapest genuine OSError.
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  run python3 "$REPO/scripts/bats-assert-liveness.py" --format text "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 2 ]                                    # a NON-VERDICT code, never 0 and never 1
+  echo "$output" | grep -q 'COULD NOT RUN' || false
+  ! echo "$output" | grep -q ': DEAD \[' || false        # …and it fabricates no finding on the way out
+}
+
+@test "dead-assertion: a FINDING outranks an unreadable path — the analyzer still exits 1" {
+  # The direction the fix must NOT break: a scan that found something real reports 1 even when some
+  # other path could not be opened, so a machine condition can never SOFTEN a verdict about the tree.
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  printf '#!/usr/bin/env bats\n@test "x" {\n  [[ 1 -eq 2 ]]\n  true\n}\n' > "$BATS_TEST_TMPDIR/d.bats"
+  run python3 "$REPO/scripts/bats-assert-liveness.py" --format text \
+    "$BATS_TEST_TMPDIR/d.bats" "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'd.bats:3: DEAD' || false
+}
 # ════ LANE=v1 CORPUS — the kill switch, kept exercised so it cannot rot ════════════════════════
 # SHIP_LAND_LANE=v1 restores the pre-inversion full-corpus gate for one release. It is an ENV
 # switch rather than a revert because a revert would itself need the gate — the bootstrap deadlock
