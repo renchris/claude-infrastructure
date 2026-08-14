@@ -1290,3 +1290,68 @@ by size after this one is unchanged: `master-verification-integrity` (13) →
 `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
 `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
 `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+### 2026-08-14 — recycle #4: `master-stranded-work` has ZERO open rows, and the last one was sitting in a dead pane's working tree
+
+The effort's final open row (`8ad4b02602dc`, no wake path for an idle headless session) was marked
+**dispatched to pane 473** with custody ABANDONED — *"partial and unverified … no tests run …
+nothing is lost: the pane is alive and resumes the moment the prompt is answered."* Every clause of
+that was true when written and the conclusion had **expired**:
+
+- **The pane was gone.** Its custody remedy addresses `unix:/tmp/kitty-600`; that socket does not
+  exist. The live kitty answers on `/tmp/kitty-587` with 5 panes, max id **35** — a restarted
+  instance. That positive control is what makes "no 473" an absence rather than a null from a dead
+  instrument.
+- **The work was in exactly one place a reaper could take it.** `bin/cc-wake-headless` (new) and a
+  modified `bin/cc-pane-headless` sat **uncommitted** in `.worktrees/w4/headless-wake`, on a branch
+  **0 ahead of origin/main**. No process held that worktree. A `git log --all` for the file finds
+  only a PostToolUse *checkpoint* commit — the safety net worked, but nothing in the drain's normal
+  instruments (branch ahead-count, ledger, custody) could see the bytes.
+
+**So a park that is honest about the CODE can still be wrong about the WORLD.** The abandon note
+reasoned entirely about the work's readiness and not at all about the container's lifetime, and the
+container is what died. Committed verbatim first (`af0127d07`), before reading a line of it:
+**review cannot lose what it has not yet read.**
+
+**The gap itself was ONE redirect.** `cc-pane-headless` spawned every agent `</dev/null` — stdin
+closed at birth. `cc-await-ping` cannot substitute, because its wake IS process exit: the harness's
+task-completion notification synthesises the turn, and in `--input-format stream-json` **nothing
+consumes that exit**, so an armed watcher fires perfectly and changes nothing. Pane 473's design was
+right and is now landed (`a565f3b43`): a per-agent `in.fifo`, a **holder** process, and
+`cc-wake-headless` as the one writer.
+
+**The holder is the subtle part, and its comment is worth keeping.** `9<>` (O_RDWR), never `9>`:
+opening a FIFO write-only **blocks until a reader opens**, so a write-only holder makes spawn order
+load-bearing and one that loses the race leaves the agent wedged in `open(2)` **forever — live to
+every liveness probe, and permanently deaf.** And the holder cannot be the waker: the instant the
+last writer closes, the agent reads EOF and the session ends.
+
+🚨 **W9 is the reusable test lesson: a cleanup test whose subject also cleans up on its own is
+VACUOUS until the self-cleanup is made slower than the assertion.** The holder exits by itself once
+the agent dies, so at the suite's 1 s poll `close reaps the holder` passed whether `close` reaped it
+or not — **measured, by the mutant that deleted the reap and survived.** Pinned at
+`CC_PANE_HOLD_POLL_S=30`, only an explicit kill can end it inside the window, and the mutant now
+convicts. Six mutants total, each asserted APPLIED before its verdict was read.
+
+**Two land-gate lessons, both about the tests and neither about the subject.** An **optional-arg
+/Users/chrisren/.claude/bin/cc-bats helper** makes shellcheck read every bare call as a forgotten `"$@"` (SC2119/SC2120) — 8
+findings from one helper, and the fix is *two named helpers*, not eight annotations. And
+**duplicating a subshell so two branches differ only in a redirect** raises SC2030/SC2031 on the
+second copy's `export`; factoring to one spawn site with the stdin source in a variable removes both
+the finding and the duplication it was pointing at. The gate also cut the smoke suite at its 120 s
+budget — that is a **GATE-KILLED non-verdict, not a red**; `SHIP_LAND_SMOKE_BUDGET_S=420` earned a
+real green (3 suites / 166 s).
+
+**Effort state: `master-stranded-work` is DRAINED as far as an agent can take it — 0 open, 4
+blocked**, all four genuinely operator-gated and re-verified: `8f4eae55a0c7` (GitHub server-side
+author-email ruleset, web UI), `1dca461d4b90` (Claude GitHub App install — state UNKNOWN, not
+absent; settling it fires a CLOUD create), `216f429128a2` (reso worktree-local `.eslintcache`),
+`475b43aacbf2` (122-orphan worktree sweep). A fifth row closed as **moot** on the way past:
+`438b6f76343b` was the operator step "answer the permission prompt in pane 473", whose pane and
+whose purpose both expired.
+
+Next by size: `master-verification-integrity` (13) → `master-operator-gated` (25) →
+`master-account-facts` (26) → `master-enforcing-store` (32) → `master-session-lifecycle` (41) →
+`master-fleet-footprint` (56) → `master-product-repos` (57) → `master-fire-gate` (58) →
+`master-convergence-deadlock` (84). Live store 539 (sibling intake ran +9 while this row was
+worked — the drain's own arithmetic is net-of-intake, never a raw total).
