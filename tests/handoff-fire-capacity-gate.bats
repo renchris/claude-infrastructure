@@ -713,6 +713,10 @@ _fires() {
       # shipped unmapped and this case was RED on trunk over it, which also meant it could not report
       # any OTHER unmapped reason — a guard blocked by its own first finding sees nothing after it.
       extra-*)           printf '%s' "$mapped" | grep -q 'extra-\*'          || false ;;
+      # L1-b — the in-flight-subagent refusal (a --recycle or self-close that would SIGKILL this
+      # session's own Agent-tool subagents). Its own gate name for the same reason cloud-* has one:
+      # it measured the predecessor's live work, not the box, the payload or the argv.
+      live-subagents)    printf '%s' "$mapped" | grep -q 'live-subagents'    || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac
