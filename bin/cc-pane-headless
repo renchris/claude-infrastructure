@@ -24,7 +24,24 @@
 # this repo keeps paying for. Consumption is the queue front-end's job (plan P4, over
 # cc-permission-beacon.sh). An honest "delivered, not necessarily read" beats a fake "sent".
 #
-# Seams: CC_PANE_HOME · CC_PANE_KILL_WAIT_S
+# ⚠ WHY STDIN IS A FIFO AND NOT /dev/null (2026-08-13, backlog 8ad4b02602dc). Until this change the
+# child was spawned `</dev/null` — stdin CLOSED AT BIRTH — and that one redirect was the whole of
+# gap 2 in docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md: a resident
+# `claude -p --input-format stream-json` agent has NO wake path at all. The fleet's wake primitive
+# (`cc-await-ping`) wakes by EXITING — the harness's task-completion notification synthesises the
+# turn — and in stream-json NOTHING CONSUMES THAT EXIT, so the watcher fires correctly and changes
+# nothing. The wake must terminate in a WRITE TO STDIN, and only the spawner can own that fd. Hence:
+# an `in.fifo` per agent, a `holder` process keeping the write end open for the agent's whole life
+# (a closed write end is EOF, and EOF ends the session), and `bin/cc-wake-headless` as the one
+# writer. `meta` publishes `fifo=`/`holder=`/`sid=` so the waker needs no argv scraping.
+#
+# mkfifo + a PLAIN BACKGROUND JOB, never a process substitution: `$!` after `exec 9> >(cmd)` names
+# the wrong job (indexed fleet failure procsub-pid-is-unreachable-own-the-pipe; the working model
+# scripts/headless-precondition-probe.sh:105-111 states the same rule, and four production sites —
+# bin/cc-close-attrib:189, bin/cc-offload:443, bin/cc-relogin:536, scripts/capacity-ramp.sh:159 —
+# already use exactly this shape).
+#
+# Seams: CC_PANE_HOME · CC_PANE_KILL_WAIT_S · CC_PANE_STDIN (fifo|null) · CC_PANE_HOLD_POLL_S
 # bash 3.2-safe (macOS system bash).
 
 set -uo pipefail
@@ -33,6 +50,11 @@ RC_OK=0; RC_NO=1; RC_INDET=2; RC_USAGE=3
 
 HOME_DIR="${CC_PANE_HOME:-$HOME/.claude/autonomy/panes}"
 KILL_WAIT_S="${CC_PANE_KILL_WAIT_S:-5}"
+# fifo = the default (see the header). `null` restores the pre-2026-08-13 `</dev/null` shape for a
+# caller whose command must see EOF on stdin rather than block on a read — a real behaviour change
+# this flag exists to make REVERSIBLE without editing the driver.
+STDIN_MODE="${CC_PANE_STDIN:-fifo}"
+HOLD_POLL_S="${CC_PANE_HOLD_POLL_S:-5}"
 
 die_usage() { printf 'cc-pane-headless: %s\n' "$1" >&2; exit "$RC_USAGE"; }
 
@@ -74,11 +96,12 @@ pane_dir() { printf '%s/%s' "$HOME_DIR" "$1"; }
 
 # ── verbs ──────────────────────────────────────────────────────────────────────────────────────
 v_spawn() {
-  local cwd="" name="" id dir pid pstart
+  local cwd="" name="" id dir pid pstart fifo="" holder="" sid="" a prev=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --cwd)  cwd="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
+      --stdin) STDIN_MODE="${2:-fifo}"; shift 2 ;;
       --)     shift; break ;;
       -*)     die_usage "spawn: unknown option '$1'" ;;
       *)      break ;;
@@ -143,9 +166,49 @@ v_spawn() {
   #                               CC_PANE_ID supplies the right answer under the correct key.
   #
   # Both run INSIDE the subshell, so the parent's own environment is never mutated.
-  ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-      >"$dir/out.log" 2>&1 </dev/null &
-  pid=$!
+  # THE STDIN ENDPOINT (F1). A mkfifo that FAILS is a degrade, never a spawn failure: the agent
+  # falls back to the historical `</dev/null` and `meta` carries no `fifo=`, which is exactly how
+  # cc-wake-headless learns it cannot wake this one (it reports that, rather than claiming a wake
+  # — claimed-outcome-vs-checked-outcome).
+  if [ "$STDIN_MODE" = fifo ]; then
+    if mkfifo "$dir/in.fifo" 2>/dev/null; then fifo="$dir/in.fifo"; else
+      printf 'cc-pane-headless: mkfifo failed for %s — spawning with </dev/null (NO wake path)\n' "$id" >&2
+    fi
+  fi
+
+  # THE SESSION ID IS READ FROM ARGV, NEVER INJECTED. This driver's standing rule is that argv is
+  # exec'd verbatim and never re-parsed into a command — synthesising a `--session-id` we invented
+  # would break that and silently change what the caller asked to run. So: if the CALLER declared
+  # one, publish it in `meta` as a second address for the waker; if not, `sid=` is empty and the
+  # `hdl-` id remains the only address. A DECLARED marker, per the spec's own A6 (prefer the
+  # spawner's meta over an argv scrape at read time).
+  for a in "$@"; do
+    [ "$prev" = "--session-id" ] && { sid="$a"; break; }
+    case "$a" in --session-id=*) sid="${a#--session-id=}"; break ;; esac
+    prev="$a"
+  done
+
+  if [ -n "$fifo" ]; then
+    ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+        >"$dir/out.log" 2>&1 <"$fifo" &
+    pid=$!
+    # THE HOLDER. Its only job is to keep a descriptor on the FIFO open for the agent's whole life,
+    # because the instant the last writer closes, the agent reads EOF and the session ENDS. It must
+    # therefore outlive every individual waker write, which is why the waker cannot be the holder.
+    #
+    # `9<>` (O_RDWR), deliberately not `9>`: opening a FIFO write-only BLOCKS until a reader opens,
+    # so a write-only holder makes spawn order load-bearing and a holder that loses that race leaves
+    # the agent wedged in open(2) forever — live to is_live(), and permanently deaf. O_RDWR never
+    # blocks, so neither side can hang. The holder never READS, so every byte a waker writes is
+    # delivered to the agent and to nothing else.
+    ( exec 9<>"$fifo" || exit 1
+      while kill -0 "$pid" 2>/dev/null; do sleep "$HOLD_POLL_S"; done ) >/dev/null 2>&1 </dev/null &
+    holder=$!
+  else
+    ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+        >"$dir/out.log" 2>&1 </dev/null &
+    pid=$!
+  fi
   pstart="$(pstart_of "$pid")"
 
   { printf 'id=%s\n' "$id"
@@ -154,6 +217,9 @@ v_spawn() {
     printf 'cwd=%s\n' "$cwd"
     printf 'name=%s\n' "$name"
     printf 'created=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'fifo=%s\n' "$fifo"
+    printf 'holder=%s\n' "$holder"
+    printf 'sid=%s\n' "$sid"
   } > "$dir/meta"
   printf '%s\n' "$@" > "$dir/argv"
 
@@ -161,6 +227,9 @@ v_spawn() {
   # through the SAME is_live() every other verb uses, so the zombie case cannot be right in one
   # place and wrong in another.
   if ! is_live "$dir"; then
+    # The holder outlives the agent by up to one poll interval; a dead-on-arrival spawn must not
+    # leave one behind, or a suite that spawns `/usr/bin/false` leaks a process per test.
+    [ -n "$holder" ] && kill -TERM "$holder" 2>/dev/null
     # Preserve the evidence under a name the `hdl-*` live glob cannot see, so `list`'s reap-on-read
     # cannot race-delete the one log that explains the failure.
     mv "$dir" "$HOME_DIR/dead-${id#hdl-}" 2>/dev/null
@@ -187,10 +256,11 @@ v_send() {
 }
 
 v_close() {
-  local dir pid waited
+  local dir pid waited holder
   dir="$(pane_dir "$1")"
   [ -d "$dir" ] || return "$RC_NO"
   pid="$(meta_get "$dir" pid)"
+  holder="$(meta_get "$dir" holder)"
   if [ -n "$pid" ] && is_live "$dir"; then
     kill -TERM "$pid" 2>/dev/null
     waited=0
@@ -205,6 +275,9 @@ v_close() {
       return "$RC_NO"
     fi
   fi
+  # The holder polls and would exit on its own within CC_PANE_HOLD_POLL_S, but `close` promises a
+  # reap NOW; leaving a sleeper behind per closed agent is how 150 of them become a process leak.
+  [ -n "$holder" ] && kill -TERM "$holder" 2>/dev/null
   rm -rf "$dir" || return "$RC_NO"
 }
 
