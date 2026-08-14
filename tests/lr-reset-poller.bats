@@ -671,3 +671,123 @@ PY
   # exact sentence that was false for 12 days; keyed on the claim, not on incidental wording.
   ! grep -q '^# SAFETY — auto-spawn is OFF by default' "$POLLER"
 }
+
+# ── A5-A8: THE FIRE-FAIL LATCH — the fire-path half (backlog ff0b5cf4528b) ───────────────────────
+#
+# THE POPULATION THIS EXISTS FOR is in the daemon's own production log: 1,800 identical
+# `ERROR … resume spawn failed` lines over 24 days, one sid retried 380 times. A failed spawn
+# releases its claim immediately (so the TTL never brakes it) and the record stays PARKED, so the
+# very next tick re-fires it — forever. A5 is that loop end to end. The counter's arithmetic and
+# its --dry-run/damping semantics are A1-A4 in tests/lr-reset-poller-engagement.bats.
+
+FF_SID="aaaa000w-1111-2222-3333-444444444444"
+
+@test "A5: three failed spawns latch the sid — the next tick attempts NO spawn, and the record stays PARKED" {
+  mk_parked "$FF_SID" "$(past_iso)"
+  local i
+  for i in 1 2 3; do
+    OSA_FAIL=1 TMUX_FAIL=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+    [ "$status" -eq 0 ]
+  done
+  run cat "$STATE/fire-fail/$FF_SID"
+  [ "$output" -eq 3 ]
+  run grep -c "LATCHED $FF_SID" "$STATE/poller.log"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 1 ]
+  [ -f "$STATE/parked/$FF_SID.json" ]      # PARKED, not retired: the latch expires and it competes again
+  # THE ASSERTION THAT IS THE POINT — the fourth tick does not reach the spawn at all. Counted on
+  # the tmux stub's own log, which records one line per attempt, so this cannot pass by the spawn
+  # merely failing more quietly.
+  local before after errs_before errs_after
+  before="$(wc -l < "$TMUX_LOG")"
+  errs_before="$(grep -c 'resume spawn failed' "$STATE/poller.log")"
+  OSA_FAIL=1 TMUX_FAIL=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  after="$(wc -l < "$TMUX_LOG")"
+  errs_after="$(grep -c 'resume spawn failed' "$STATE/poller.log")"
+  [ "$before" -eq "$after" ]
+  [ "$errs_before" -eq "$errs_after" ]     # and the per-tick ERROR line stops too
+  run grep -c "LATCHED $FF_SID" "$STATE/poller.log"
+  [ "$output" -eq 1 ]                      # still ONCE — silence per tick is the whole point
+}
+
+@test "A6: the latch is a BRAKE, not a ban — it expires and the sid fires again" {
+  mk_parked "$FF_SID" "$(past_iso)"
+  mkdir -p "$STATE/fire-fail"
+  printf '3\n' > "$STATE/fire-fail/$FF_SID"          # the state three failed fires leave behind
+  # CONTROL FIRST: fresh, that latch suppresses the fire.
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -c "RESUMED $FF_SID" "$STATE/poller.log"
+  [ "$status" -ne 0 ]
+  [ -f "$STATE/fire-fail/$FF_SID" ]
+  # Now age the counter past the window — the mtime IS the clock (every strike rewrites the file).
+  touch -t 200001010000 "$STATE/fire-fail/$FF_SID"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -q "UNLATCHED $FF_SID" "$STATE/poller.log"
+  [ "$status" -eq 0 ]
+  run grep -q "RESUMED $FF_SID" "$STATE/poller.log"
+  [ "$status" -eq 0 ]
+  [ ! -f "$STATE/fire-fail/$FF_SID" ]
+  run grep -c "UNLATCHED $FF_SID" "$STATE/poller.log"
+  [ "$output" -eq 1 ]                      # expiry is cleared ONCE per tick, not once per caller
+}
+
+@test "A7: a NEW fire re-arms the engagement audit's once-per-fire marker" {
+  # Without this, the SECOND wedge of a sid is silent forever (the first spent the marker, and only
+  # an engagement clears it — which a session that keeps wedging never reaches), so the fire-fail
+  # counter could never pass 1 on the wedge path. _refire() in the engagement suite emulates exactly
+  # this; here it is the production claim_sid() doing it.
+  mk_parked "$FF_SID" "$(past_iso)"
+  mkdir -p "$STATE/engage-noted"
+  : > "$STATE/engage-noted/$FF_SID"                  # a previous fire's verdict, already reported
+  : > "$STATE/engage-noted/never-fired-control"      # CONTROL: an untouched sid keeps its marker
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -q "RESUMED $FF_SID" "$STATE/poller.log"  # positive anchor: a fire really happened
+  [ "$status" -eq 0 ]
+  [ ! -f "$STATE/engage-noted/$FF_SID" ]
+  [ -f "$STATE/engage-noted/never-fired-control" ]
+}
+
+@test "A8: LR_FIRE_FAIL_MAX=0 falls back to the default instead of suppressing every sid" {
+  # 0 and non-numeric are the two settings that would latch from the first strike while never
+  # LOGGING one (`n == 0` is false for every real count) — silent total suppression of recovery.
+  # This is where that guard is observable: with the fallback, one strike must still fire.
+  mk_parked "$FF_SID" "$(past_iso)"
+  mkdir -p "$STATE/fire-fail"
+  printf '1\n' > "$STATE/fire-fail/$FF_SID"
+  LR_FIRE_FAIL_MAX=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -q "RESUMED $FF_SID" "$STATE/poller.log"
+  [ "$status" -eq 0 ]
+}
+
+@test "A9: a latched sid is dropped from CANDIDACY, so it cannot take the per-worktree winner slot" {
+  # WHY THE FILTER IS AT SELECTION AND NOT AT THE FIRE. MAX_PER_WT=1: a latched sid left in the pool
+  # can win its worktree's only slot and then be skipped at the fire, which starves the worktree
+  # instead of braking one session. The selector's own decision record is the instrument — the
+  # latched sid must not appear in it in ANY role (winner, listed or filtered).
+  mk_parked "$FF_SID" "$(past_iso)"
+  # CONTROL FIRST: unlatched, this sid IS a candidate — otherwise the absence below proves nothing.
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -q "$FF_SID" "$STATE/last-selection.json"
+  [ "$status" -eq 0 ]
+  # Re-park it (the fire retired the event) and latch it. The claim the control fire wrote must go
+  # too — a fresh claim retires the record at the top of §2 before any of this is reached, which is
+  # exactly what the 15-minute TTL undoes in production.
+  rm -f "$STATE/resumed/$FF_SID.json" "$STATE/fire-claims/$FF_SID"
+  mk_parked "$FF_SID" "$(past_iso)"
+  : > "$STATE/last-selection.json"
+  mkdir -p "$STATE/fire-fail"; printf '3\n' > "$STATE/fire-fail/$FF_SID"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run grep -q "$FF_SID" "$STATE/last-selection.json"
+  [ "$status" -ne 0 ]
+  # …and it was not misattributed on the way out: LISTED would retire the record permanently.
+  run grep -q "LISTED $FF_SID" "$STATE/poller.log"
+  [ "$status" -ne 0 ]
+  [ -f "$STATE/parked/$FF_SID.json" ]
+}

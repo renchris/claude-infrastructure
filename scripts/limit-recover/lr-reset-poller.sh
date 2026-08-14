@@ -122,6 +122,11 @@ AUDIT="$LR/lr-audit.py"
 STATE="$HOME/.reso/limit-recover"
 PARKED="$STATE/parked"; RESUMED="$STATE/resumed"; LOG="$STATE/poller.log"
 CLAIMS="$STATE/fire-claims"
+# The audit's once-per-fire damping marker dir. Declared HERE rather than beside the audit block
+# below because claim_sid() re-arms it (see there), and a fire-lifecycle helper must not depend on
+# a variable that is only assigned further down the file.
+ENGAGE_NOTED="$STATE/engage-noted"
+FIRE_FAIL="$STATE/fire-fail"
 mkdir -p "$PARKED" "$RESUMED" "$CLAIMS"
 # Parse EVERY argument, not just $1. Until 2026-07-30 this read `[[ "${1:-}" == "--dry-run" ]] && DRY=1`,
 # so `--once --dry-run` silently ran FOR REAL and spawned live sessions — a preview flag that is
@@ -180,7 +185,76 @@ sid_claimed() { # $1=sid -> 0 if a FRESH claim exists
   fi
   return 0
 }
-claim_sid() { : > "$CLAIMS/${1:?claim_sid needs a sid}" 2>/dev/null || true; }
+claim_sid() {
+  : > "$CLAIMS/${1:?claim_sid needs a sid}" 2>/dev/null || true
+  # RE-ARM THE AUDIT'S ONCE-PER-FIRE DAMPING. The marker below means "the verdict for the CURRENT
+  # claim has been reported", and a new claim is a new fire with a new verdict to reach. Without
+  # this the SECOND wedge of a sid is silent forever — the first one spent the marker, and the
+  # marker was only ever cleared by an engagement that, for a session that keeps wedging, never
+  # comes. That also made the fire-fail counter below uncountable past 1 on the wedge path.
+  rm -f "$ENGAGE_NOTED/$1" 2>/dev/null || true
+}
+
+# ── FIRE-FAILURE LATCH — the actuator half of the engagement audit (backlog ff0b5cf4528b) ───────
+#
+# THE DEFERRED DECISION, MADE. 4ba91ad95 shipped the audit below DETECT-ONLY and said why: "adding
+# an actuator to a live unattended limit-recovery daemon is a different decision with a different
+# blast radius." The measurement that settles the DIRECTION is this daemon's own log: 1,800 of its
+# lines are one identical `ERROR … resume spawn failed`, across 11 sids over 24 days, one sid
+# retried 380 times — because a failed spawn releases its claim immediately (see §2) and is
+# re-fired on the very next tick, without bound. So the defect was never "a fire that did not work
+# is not RETRIED"; it is "a fire that cannot work is retried forever". The only safe actuator is
+# therefore the one that fires LESS, never the one that fires sooner.
+#
+# ONE COUNTER, BOTH FAILURE MODES, because they are one fact — this sid's fire did not produce a
+# working session:
+#   · spawn_resume returned non-zero           → no pane at all            (the 1,800-line class)
+#   · spawned, and the audit says NOT-ENGAGED  → a pane that never started (the wedge class)
+# An engaged sid CLEARS the counter, so a session that works is never latched by its own history,
+# and the count means CONSECUTIVE failures rather than lifetime ones.
+#
+# A BRAKE, NOT A BAN. At LR_FIRE_FAIL_MAX the sid stops being a candidate for LR_FIRE_LATCH_HOURS
+# and the daemon says so ONCE (log + notify); the latch then expires and it competes again. Worst
+# case is that ONE session is not auto-resumed for a few hours — the pre-autofire notify-only
+# posture, time-bounded and loudly reported — weighed against an unbounded spawn loop. This arm
+# cannot make the daemon fire MORE, cannot touch a claim, and cannot reach another sid.
+LR_FIRE_FAIL_MAX="${LR_FIRE_FAIL_MAX:-3}"
+LR_FIRE_LATCH_HOURS="${LR_FIRE_LATCH_HOURS:-6}"
+# Fail back to the defaults on junk rather than letting an unattended daemon do arithmetic on it:
+# a non-numeric max makes every `(( ))` below an error, and 0 would suppress every sid silently.
+[[ "$LR_FIRE_FAIL_MAX"     =~ ^[1-9][0-9]*$ ]] || LR_FIRE_FAIL_MAX=3
+[[ "$LR_FIRE_LATCH_HOURS"  =~ ^[1-9][0-9]*$ ]] || LR_FIRE_LATCH_HOURS=6
+mkdir -p "$FIRE_FAIL"
+
+fire_fail_count() { # $1=sid -> the consecutive-failure count (0 when absent, empty or malformed)
+  local n=""
+  [[ -r "$FIRE_FAIL/${1:?}" ]] && read -r n < "$FIRE_FAIL/$1"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s' "$n"
+}
+fire_fail_note() { # $1=sid $2=why — count ONE failed fire; report at the crossing, never per tick
+  local sid="${1:?}" why="${2:-unknown}" n
+  n=$(( $(fire_fail_count "$sid") + 1 ))
+  printf '%s\n' "$n" > "$FIRE_FAIL/$sid" 2>/dev/null || return 0
+  (( n == LR_FIRE_FAIL_MAX )) || return 0
+  log "LATCHED $sid — $n consecutive fires produced no working session (last: $why); not a candidate for ${LR_FIRE_LATCH_HOURS}h"
+  lrp_bounded osascript -e "display notification \"${sid:0:8} — $n resumes produced no working session; auto-resume paused ${LR_FIRE_LATCH_HOURS}h.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+}
+fire_fail_clear() { rm -f "$FIRE_FAIL/${1:?}" 2>/dev/null || true; }
+fire_latched() { # $1=sid -> 0 while this sid is suppressed; EXPIRES the latch in passing
+  local sid="${1:?}" f="$FIRE_FAIL/${1:?}"
+  [[ -f "$f" ]] || return 1
+  (( $(fire_fail_count "$sid") >= LR_FIRE_FAIL_MAX )) || return 1
+  # The window runs from the LAST failure, not the first: every note rewrites this file, so its
+  # mtime is the freshest failure. Expiry clears the counter here rather than in a sweep — a second
+  # caller in the same tick then finds no file and answers 1 without logging UNLATCHED twice.
+  if [[ -z $(find "$f" -mmin "-$(( LR_FIRE_LATCH_HOURS * 60 ))" 2>/dev/null) ]]; then
+    rm -f "$f" 2>/dev/null || true
+    log "UNLATCHED $sid — ${LR_FIRE_LATCH_HOURS}h latch expired; eligible to fire again"
+    return 1
+  fi
+  return 0
+}
 AUTOFIRE="${LR_POLLER_AUTOFIRE:-0}"
 RECENCY_MIN=$(( 48 * 60 ))          # only sessions touched in the last 48h
 MAX_PER_RUN=4                       # runaway guard (per TICK — see consolidation below)
@@ -229,7 +303,7 @@ acct_of_cfg() { cc_acct_name_for_dir_basename "${1##*/}"; }
 # recovering because a library moved. Same three-rung resolution ladder (bin/cc-wedge-watch:136-142)
 # — symlink-resolved sibling, plain sibling, live layer — with the opposite failure direction.
 LR_ENGAGE_SETTLE_MIN="${LR_ENGAGE_SETTLE_MIN:-3}"
-ENGAGE_NOTED="$STATE/engage-noted"
+# ENGAGE_NOTED is declared with CLAIMS at the top — claim_sid() re-arms it on every new fire.
 LRP_ENGAGE_MISSING="$STATE/engage-lib-missing.notified"
 LRP_ENGAGE_LIB=0
 _LRP_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
@@ -264,14 +338,17 @@ else
       # able to report. A marker that is never cleared silences the second incident on any session
       # that ever succeeded once.
       rm -f "$ENGAGE_NOTED/$esid" 2>/dev/null || true
+      fire_fail_clear "$esid"   # a session that STARTED carries no failure history into its next fire
       continue
     fi
     [[ -f "$ENGAGE_NOTED/$esid" ]] && continue     # notify ONCE per claim (no per-tick spam)
     # --dry-run REPORTS but must never CLAIM the one report. Writing the damping marker under a
     # preview flag would let an operator's look-first silence the real tick 10 minutes later — the
     # same class as the --dry-run defect this file already carries a header about.
-    if (( DRY == 0 )); then : > "$ENGAGE_NOTED/$esid"; fi
-    log "NOT-ENGAGED $esid — claimed >${LR_ENGAGE_SETTLE_MIN}m ago, no assistant turn (why=${CC_ENGAGE_WHY:-unknown}); DETECT-ONLY, claim untouched"
+    # The fire-fail count rides the SAME guard, and for the same reason: a preview must not spend a
+    # strike either. Both are once-per-fire because claim_sid() re-arms the marker.
+    if (( DRY == 0 )); then : > "$ENGAGE_NOTED/$esid"; fire_fail_note "$esid" not-engaged; fi
+    log "NOT-ENGAGED $esid — claimed >${LR_ENGAGE_SETTLE_MIN}m ago, no assistant turn (why=${CC_ENGAGE_WHY:-unknown}); claim untouched, counted toward the fire latch"
   done
 fi
 
@@ -635,6 +712,20 @@ for p in sorted(glob.glob(os.path.join(sys.argv[1],'*.json'))):
     if now < e: continue
     print('%s:%s:%s'%(d.get('acct',''),d.get('sid',''),d.get('cwd','')))
 " "$PARKED" "$now" 2>/dev/null)
+# DROP LATCHED SIDS FROM CANDIDACY, not from the fire. A latched sid left in the pool would take
+# the per-worktree winner slot (MAX_PER_WT=1) from a session that CAN come up, and then be skipped
+# at the fire — starving the worktree instead of braking one session. Filtering here is what keeps
+# the latch a brake on this sid alone. Format is acct:sid:cwd.
+if [[ -n "$sel_input" ]]; then
+  _kept=""
+  while IFS= read -r _c; do
+    [[ -n "$_c" ]] || continue
+    _csid="${_c#*:}"; _csid="${_csid%%:*}"
+    fire_latched "$_csid" && continue
+    _kept+="$_c"$'\n'
+  done <<< "$sel_input"
+  sel_input="${_kept%$'\n'}"
+fi
 if [[ -n "$sel_input" ]]; then
   sel_args=()
   while IFS= read -r c; do [[ -n "$c" ]] && sel_args+=(--candidate "$c"); done <<< "$sel_input"
@@ -676,6 +767,12 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  # LATCHED — leave it PARKED and say nothing. Silence per tick is deliberate: the one LATCHED line
+  # at the crossing and the UNLATCHED line at expiry are the whole story, and this daemon has
+  # already proved what a per-tick line costs. It must come BEFORE the winner check below, or the
+  # sid — filtered out of candidacy above — would fall through to `sel_reason`'s empty answer and be
+  # retired as "not selected", which is both a misattribution and a permanent one.
+  fire_latched "$sid" && continue
   # Not the winner for its worktree → LIST it and retire THIS limit event. Leaving it parked
   # would just re-elect it next tick once the winner is running (already-running filters the
   # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
@@ -733,6 +830,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
       mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
     else
       rm -f "$CLAIMS/$sid" 2>/dev/null || true   # spawn failed ⇒ release immediately, don't wait out the TTL
+      fire_fail_note "$sid" spawn-failed          # …but COUNT it: releasing is what makes this re-fire next tick
       # THE LINE MUST DESCRIBE THE RESOLUTION, NOT ASSERT A FACT ABOUT THE BOX. Its predecessor read
       # "no GUI and no tmux" unconditionally, which was FALSE 1,797 times over 24 days — tmux was
       # installed the whole time and only unreachable on the launchd PATH (see the LRP_TMUX_BIN
