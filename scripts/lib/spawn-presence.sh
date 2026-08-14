@@ -283,6 +283,12 @@ cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasura
       P*) line="${line#P}"
           pid="${line%% *}"
           cc_sp_is_int "$pid" || continue
+          # Darwin PID_MAX is 99998, and macOS ps does not skip an out-of-range pid — it ABORTS the
+          # WHOLE query ("ps: process id too large"), zero rows, so one corrupt beat would blind the
+          # census into permanent abstention (the positive control below then rc-1s every call, and
+          # the admit gate loses its ACTIVE term fleet-wide). An out-of-range pid cannot name a live
+          # session, so it is dead by definition: drop it from the query, never let it poison ps.
+          [ "$pid" -le 99998 ] || continue
           pairs="${pairs}${line}
 "
           pids="${pids},${pid}" ;;

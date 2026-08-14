@@ -183,11 +183,21 @@ beat() {
   # and the sentinel is the reference implementation (§7.7). A literal comparison would say nothing
   # about the ten other lines, so both real implementations are RUN over one input.
   local segs_ref pct_mine
-  segs_ref="$(bash -c '
-      eval "$(awk "/^segs_in_core\\(\\) \\{/,/^\\}/" "$1")"
-      eval "$(awk "/^segs_swapped\\(\\) \\{/,/^\\}/" "$1")"
-      i=$(segs_in_core 800000 16384 65536); s=$(segs_swapped 268435456 65536)
-      echo $(( i + s ))' _ "$SENTINEL")"
+  # The awk program lives in a FILE, deliberately. Inline, the two range patterns' braces form a
+  # matched {…,…} pair across the comma ("\{/,/^\}" and "[{]/,/^[}]" alike), and when the nested
+  # "$( )" quote state is lost — observed under BOTH plain /bin/bash-from-file and bats on this box
+  # — brace expansion fires and corrupts the program: "\{" reached awk as a bare "\", "[{]" as
+  # "[]". A -f file passes through no shell at all, so no quoting layer can eat it. The heredoc
+  # delimiter is quoted for the same reason. index()==1 is the faithful /^…/ translation.
+  cat > "$BATS_TEST_TMPDIR/extract.awk" <<'AWK'
+index($0, fn "() {") == 1, index($0, "}") == 1
+AWK
+  segs_ref="$(
+    eval "$(awk -v fn=segs_in_core -f "$BATS_TEST_TMPDIR/extract.awk" "$SENTINEL")"
+    eval "$(awk -v fn=segs_swapped -f "$BATS_TEST_TMPDIR/extract.awk" "$SENTINEL")"
+    i=$(segs_in_core 800000 16384 65536); s=$(segs_swapped 268435456 65536)
+    echo $(( i + s ))
+  )"
   # 200,000 in-core + 4,096 swapped
   [ "$segs_ref" = "204096" ]
   pct_mine="$(STUB_COMPPAGES=800000 STUB_SWAP=256.00 bash -c \
