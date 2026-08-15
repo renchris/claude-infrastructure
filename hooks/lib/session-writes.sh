@@ -275,7 +275,25 @@ EOF
     # Compare on the ABSOLUTE path: the transcript records absolute paths, porcelain records
     # repo-relative ones, and comparing the two forms directly is how an intersection silently
     # reads empty forever.
-    if printf '%s\n' "$mine" | grep -qxF "$abs"; then
+    # HERESTRING, NOT A PIPE — the sibling's shape at the `grep -qxF … <<<"$out"` below, adopted for
+    # the same reason and with the same one-line diff. `printf … | grep -qxF` SIGPIPEs its producer
+    # the instant grep matches, and every consumer of this function sets `-o pipefail`
+    # (completion-assert.sh, operator-readout.sh, teammate-auto-shutdown.sh), so the pipeline can
+    # return 141 FOR A MATCH THAT DID OCCUR — a dropped hit, i.e. a session told its own uncommitted
+    # writes are not its own. Fail-NEGATIVE, in the arm that decides exactly that.
+    #
+    # HONEST SCOPE OF THE MEASUREMENT, because the difference matters to whoever reads this next.
+    # The CONSTRUCT reproduces on this box: with the match on the first line, `printf "%s\n" "$big"
+    # | grep -qxF` returns 141 at 0/10 misses for 39 KB, 7/10 at 49 KB, 10/10 at 59 KB, and 141 at
+    # 269 KB under both /usr/bin/grep and the PATH grep. THIS CALL PATH was NOT made to exhibit it:
+    # driving session_dirty_mine under `set -o pipefail` with 3,001 written paths (269 KB of $mine,
+    # the dirty file first) returned the pipeline's rc as 0 every time, so a regression test written
+    # against this entry point passes pre-fix and was DELETED rather than shipped as coverage it
+    # does not provide. Treat this change as removing a known-hazardous construct and matching the
+    # shape already landed three lines below — not as a fix with a red-proof behind it. The
+    # deferral note at LIVENESS_DETECTOR_FAILNEG.md:286-289 rested on keeping 6509abd2's diff
+    # attributable, and that reason has expired.
+    if grep -qxF "$abs" <<<"$mine"; then
       printf '%s\n' "$rel"; hit=1
     fi
   done < "$tmpf"
