@@ -20,7 +20,7 @@
 # the autonomous write: this NUDGES, the model decides + the human reviews.
 #
 # APPEND-TIME BUDGET (2026-07-31). The index is loaded with a hard read limit
-# (24.4 KiB = 24985 B); past it the loader SILENTLY DROPS THE TAIL — the NEWEST
+# (24.4 KiB = 24985 B — superseded, see UNITS below); past it the loader SILENTLY DROPS THE TAIL — the NEWEST
 # entries, i.e. a rule written today may never load again, and no reader can tell.
 # Three manual compaction passes each re-inflated within days because nothing
 # measured the budget at the moment of APPEND; the "<=200-char" line in the nudge
@@ -29,6 +29,18 @@
 # live index every time it speaks and hands the model a byte budget it can act on,
 # plus the cardinality ceiling that a byte budget alone cannot express.
 # Every figure is computed at runtime: a hardcoded one decays against its subject.
+#
+# UNITS, CORRECTED 2026-08-15 (cc-backlog 7a56de4c54ab). Every figure below used to be RAW BYTES
+# of the file on disk. The loader does not count those: it strips YAML frontmatter and block HTML
+# comments, trims, and compares CHARACTERS (UTF-16 code units) against 25000 — plus a 200-LINE cap
+# this hook never measured at all. On a dense index of `—`/`⇒`/`·` entries under a `--- … ---`
+# header the raw read over-measures by a wide margin, so the alarm fired on a breach that had not
+# happened and the rotor it actuates archived entries that still fit. The derivation and the
+# safe-direction argument live in hooks/lib/memory-index-measure.sh, which is now the ONE measure
+# this hook, the PreToolUse gate and cc-memory-rotate all read. Constants tuned in bytes
+# (HOOK_TARGET, HEADROOM_TARGET) are now read as chars — they are advisory floors feeding a
+# runtime-derived allowance (see EFF_TARGET), so the ~10% change of meaning does not decide
+# anything the code asserts.
 set -euo pipefail
 
 INTERVAL="${MEMORY_NUDGE_INTERVAL:-12}"
@@ -100,13 +112,43 @@ if [ -z "$MEM" ]; then
 fi
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
-LIMIT="${MEMORY_INDEX_LIMIT:-24985}"   # 24.4 KiB harness read limit
+# shellcheck source=./lib/memory-index-measure.sh
+. "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh" 2>/dev/null \
+  || . "$CFG/hooks/lib/memory-index-measure.sh" 2>/dev/null || exit 0
+LIMIT=$(mim_limit) || exit 0            # chars of the loader-visible index, not bytes on disk
+LINE_LIMIT=$(mim_line_limit) || exit 0  # the OTHER cap: the loader truncates on either
 HOOK_TARGET="${MEMORY_HOOK_TARGET:-115}"  # the compact-memory 'one governing rule' length — a FLOOR, not a target (see EFF_TARGET)
 HEADROOM_TARGET="${MEMORY_HEADROOM_TARGET:-2500}"  # compact-memory's "done" = ~2.5 KB under the limit
+
+# _mn_stats <index> → "TOTAL LINES N ENTRY_U PFX_U DROPPED", every figure counted over the
+# EFFECTIVE content in the loader's own unit, so the advisory and the gate cannot disagree.
+#   DROPPED — entries whose own start offset already falls at/after the limit. Exact, not
+#   overage/mean-line: a real index is not uniform and its TAIL is exactly where an average is
+#   least true (measured 2026-08-08, the averaged form announced 6 where the exact count was 4).
+_mn_stats() {
+  jq -nr --rawfile c "$1" --argjson lim "$LIMIT" "$MIM_JQ_DEFS"'
+    def u: mim_units;
+    ($c | mim_effective) as $e
+    | ($e | split("\n")) as $L
+    | [$L[] | select(startswith("- ["))] as $E
+    | ([$E[] | (u + 1)] | add // 0) as $entry
+    | ([$E[] | sub("^(?<p>- \\[[^]]*\\]\\([^)]*\\) — ).*$"; "\(.p)") | (u + 1)] | add // 0) as $pfx
+    | (reduce $L[] as $l ({off:0, n:0};
+         {off: (.off + ($l | u) + 1),
+          n:   (.n + (if ($l | startswith("- [")) and (.off >= $lim) then 1 else 0 end))}) | .n) as $dropped
+    | "\($e | u) \($e | mim_lines) \($E | length) \($entry) \($pfx) \($dropped)"
+  ' 2>/dev/null
+}
+
 BUDGET_CTX=""
 if [ -n "$MEM" ] && [ -f "$MEM" ]; then
-  TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
-  N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
+  STATS=$(_mn_stats "$MEM") || STATS=""
+  TOTAL="${STATS%% *}"
+  LINES=$(printf '%s' "$STATS" | cut -d' ' -f2)
+  N=$(printf '%s' "$STATS" | cut -d' ' -f3)
+  case "${TOTAL:-x}" in ''|*[!0-9]*) TOTAL="" ;; esac
+  case "${LINES:-x}" in ''|*[!0-9]*) LINES=0 ;; esac
+  case "${N:-x}" in ''|*[!0-9]*) N=0 ;; esac
 
   # ── ACTUATE, then advise (2026-08-10). Twelve hand-compactions in 14 days proved advisory
   # text cannot hold this line: insertion is machine-speed (Edit appends, plus Bash `>>`
@@ -136,8 +178,13 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
           if [ "${RV#verdict=rotated}" != "$RV" ]; then
             ROTATE_NOTE=" AUTO-ROTATED to hold the read limit (${RV#verdict=rotated }): moved lines are VERBATIM in the cold record — restore = paste the line back."
           fi
-          TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
-          N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
+          STATS=$(_mn_stats "$MEM") || STATS=""
+          TOTAL="${STATS%% *}"
+          LINES=$(printf '%s' "$STATS" | cut -d' ' -f2)
+          N=$(printf '%s' "$STATS" | cut -d' ' -f3)
+          case "${TOTAL:-x}" in ''|*[!0-9]*) TOTAL="" ;; esac
+          case "${LINES:-x}" in ''|*[!0-9]*) LINES=0 ;; esac
+          case "${N:-x}" in ''|*[!0-9]*) N=0 ;; esac
           ;;
         *)
           # In the pressure band under the LIMIT an exhausted rotor is the designed steady
@@ -158,8 +205,10 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
   if [ -n "$TOTAL" ] && [ "${N:-0}" -gt 0 ] 2>/dev/null; then
     # Measure the ENTRY lines only: the file also carries a header/provenance block,
     # and folding that fixed cost into a per-entry average overstates every hook.
-    ENTRY_B=$(grep '^- \[' "$MEM" | wc -c | tr -d ' ')
-    PFX=$(grep '^- \[' "$MEM" | sed -E 's/^(- \[[^]]*\]\([^)]*\) — ).*/\1/' | wc -c | tr -d ' ')
+    # (_mn_stats counted these over the EFFECTIVE content, in the loader's unit, one newline
+    # per entry line included in both — so TOTAL = header + PFX + Sigma_hook holds exactly.)
+    ENTRY_B=$(printf '%s' "$STATS" | cut -d' ' -f4)
+    PFX=$(printf '%s' "$STATS" | cut -d' ' -f5)
     PFX_AVG=$(( PFX / N ))
     HOOK_AVG=$(( (ENTRY_B - PFX) / N ))
     # Cardinality ceiling: what the limit affords at a disciplined hook length.
@@ -179,12 +228,11 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       # exactly where the estimate is applied. Measured 2026-08-08 against the live
       # store it announced 6 dropped entries where the exact count was 4 — a number
       # the operator sizes a compaction pass from. Count instead the entries whose
-      # own start offset falls at/after the limit. LC_ALL=C so awk's length() is
-      # BYTES: this is a byte limit and the index carries multibyte punctuation
-      # (the same trap tests/memory-index-budget.bats pins for the gate).
-      DROPPED=$(LC_ALL=C awk -v lim="$LIMIT" \
-        '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' \
-        "$MEM" 2>/dev/null) || DROPPED=""
+      # own start offset falls at/after the limit — counted by _mn_stats over the
+      # EFFECTIVE content in the loader's unit, because an offset walked in raw
+      # bytes over the raw file names a different entry than the one the loader
+      # actually cuts (frontmatter and comments shift every offset after them).
+      DROPPED=$(printf '%s' "$STATS" | cut -d' ' -f6)
       # Over the limit means at least the final entry is cut, even when the overage
       # falls INSIDE that entry and no start offset is past the limit.
       case "$DROPPED" in ''|*[!0-9]*|0) DROPPED=1 ;; esac
@@ -214,13 +262,20 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       RECOVER=0
       [ "$HOOK_AVG" -gt "$EFF_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - EFF_TARGET) ))
       if [ "$RECOVER" -ge "$OVER" ]; then
-        LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} B against the ${EFF_TARGET} B allowance this index actually affords, so shortening the $N existing hooks recovers ~${RECOVER} B — more than the ${OVER} B needed, and it deletes no rules."
+        LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} chars against the ${EFF_TARGET} char allowance this index actually affords, so shortening the $N existing hooks recovers ~${RECOVER} chars — more than the ${OVER} needed, and it deletes no rules."
       elif [ "$RECOVER" -gt 0 ]; then
-        LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} B to the ${EFF_TARGET} B allowance recovers only ~${RECOVER} B of the ${OVER} B needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
+        LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} to the ${EFF_TARGET} char allowance recovers only ~${RECOVER} of the ${OVER} chars needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
       else
-        LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${EFF_TARGET} B allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
+        LEVER="hooks are already at ${HOOK_AVG} chars (at/under the ${EFF_TARGET} char allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} chars vs the ${LIMIT} char loader limit (over by ${OVER}).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} chars (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+    elif [ "$LINES" -gt "$LINE_LIMIT" ]; then
+      # THE OTHER CAP. The loader truncates on (chars > LIMIT) OR (lines > LINE_LIMIT), and on an
+      # index of one-line entries the LINE cap binds FIRST — an index can sit comfortably inside
+      # its char budget with its newest entries already invisible. Nothing here measured this
+      # before 2026-08-15, so this breach had no sensor at all. Only removing a LINE clears it;
+      # shortening hooks moves the char figure and nothing else.
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell, and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
@@ -237,7 +292,13 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       LINE_COST=$(( PFX_AVG + HOOK_AVG + 1 ))
       [ "$LINE_COST" -gt 0 ] || LINE_COST=1
       FITS=$(( HEADROOM / LINE_COST ))
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
+      # TWO caps, so runway is the SMALLER of them. Reporting char headroom alone would promise
+      # slots the line cap will not honour — the cap that binds first is the one to report.
+      LINE_SLOTS=$(( LINE_LIMIT - LINES ))
+      [ "$LINE_SLOTS" -lt 0 ] && LINE_SLOTS=0
+      BOUND=chars
+      if [ "$LINE_SLOTS" -lt "$FITS" ]; then FITS="$LINE_SLOTS"; BOUND=lines; fi
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} chars and ${LINES}/${LINE_LIMIT} lines across $N entries — ~${FITS} entry slots left, bound by ${BOUND} (${HEADROOM} chars of headroom at the ${LINE_COST} chars/line this index is ACTUALLY written at; ${SLOTS} char-slots only if every existing entry were first rewritten to the ${HOOK_TARGET} char target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} chars of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} chars (hard cap this append: ${LINE_BUDGET}). Past either cap the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
     fi
   fi
 fi

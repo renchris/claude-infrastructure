@@ -1,11 +1,41 @@
 ---
 name: compact-memory
-description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes the loader's read limit (~24,985 B — BYTES bind, not the 200-line cap). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
+description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes either loader cap (25,000 CHARS of the stripped, trimmed index, or 200 LINES — see THE UNIT). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion
 argument-hint: "[--apply-safe to apply the SAFE-AUTO archival; default = dry-run report only]"
 ---
 
 # /compact-memory — MEMORY.md curation (Hermes Curator analog)
+
+## 🚨 THE UNIT — read this before sizing any cut (corrected 2026-08-15)
+
+Everything below this section sizes cuts in **BYTES against 24,985**. That premise is dead, and it
+was wrong in three directions at once, all of them OVER-stating the index. Read out of the shipped
+bundle (Claude Code 2.1.233, cc-backlog `7a56de4c54ab`; derivation in
+`hooks/lib/memory-index-measure.sh`), the loader:
+
+1. **strips the YAML frontmatter** (`/^---\s*\n([\s\S]*?)---\s*\n?/`) — a `--- … ---` header
+   costs nothing;
+2. **strips block HTML comments** — including the `<!-- cold tier: … -->` pointer
+   `bin/cc-memory-rotate` writes into the index itself;
+3. **trims**, then compares **`String.length` — UTF-16 CODE UNITS, not bytes** — against
+   **25,000**, and the line count against **200**.
+
+Three consequences for a compaction pass:
+
+- **`—`, `⇒`, `·`, `≠` cost ONE each, not three.** A pass that "reclaimed 900 bytes" by trimming
+  multibyte punctuation reclaimed ~300. Measure with `hooks/lib/memory-index-measure.sh`
+  (`mim_measure_file <index>` → `"<chars> <lines>"`), never with `wc -c`.
+- **"BYTES bind, not the 200-line cap" is FALSE** — that line stood in this file's own description
+  until 2026-08-15. The loader truncates on *either* cap, and on an index of one-line entries the
+  LINE cap binds FIRST: 210 short entries breach it while sitting 20 KB inside the char budget.
+  Report both figures; name which one is binding.
+- **Only removing a LINE clears a line breach.** Shortening hooks moves the char figure and nothing
+  else, so the lever table below (§ WHICH LEVER) answers the char question only.
+
+Every formula below stays structurally correct with *bytes → chars* substituted and the line cap
+checked alongside. They are left as written rather than rewritten, because their DERIVATIONS and
+the incidents attached to them are the record; only the unit was wrong.
 
 Reduce the auto-loaded `MEMORY.md` index without losing information.
 **Archive-not-delete, PINNED-protected, INTEGRATE-never-overwrite.** Every lossy edit is
@@ -580,14 +610,17 @@ the first two cost nothing:
   reminder to our hook — the same template the RE-INFLATION bullet above already flags as not a live
   read (it repeated `20.9KB` unchanged across two size-changing edits). **The stale figure is the
   smaller one**, which is the dangerous direction: it understates urgency.
-- 🚨 **The answer to "which one does the loader apply" is NEITHER — it applies BYTES.** The enforced
-  quantity is `24985`, pinned in `tests/memory-nudge-budget.bats:29` and `tests/memory-index-budget.bats:32`
-  and asserted present in all three code paths (`hooks/memory-nudge.sh`, `hooks/lib/memory-index-budget.sh`,
-  `bin/cc-memory-rotate`). Every KB rendering — ours, theirs, `24.4KB`, `17.1KB` — is a lossy display
-  of a byte count, and `24.4 × 1024 = 24,985.6` is the only reason the product's label reconciles at
-  all. **Size a cut in bytes or do not size it.** Prior instance: item `eec945d6e2ec` hit this same
-  disagreement, wrote *"re-derive the true limit before cutting"*, and the question stayed open for
-  five days because nobody ran the division.
+- 🚨 **The answer to "which one does the loader apply" is NEITHER — and "it applies BYTES" was also
+  wrong.** This bullet asserted `24985` bytes, pinned it in two suites and asserted it present in all
+  three code paths; that made the three measurers agree with each other and with nothing else. The
+  enforced quantity is **25,000 UTF-16 code units of the stripped, trimmed index, plus 200 lines**
+  (see THE UNIT at the top), and it now has ONE spelling —
+  `hooks/lib/memory-index-measure.sh` — which the gate, the nudge and the rotor all read. `24.4 ×
+  1024 = 24,985.6` reconciled with the product's KB label by coincidence of magnitude, not because
+  the quantity was a byte count. **Size a cut in loader chars, and check the line count, or do not
+  size it.** Two prior instances of this same failure to re-derive: `eec945d6e2ec` wrote *"re-derive
+  the true limit before cutting"* and sat five days because nobody ran the division; this bullet
+  then ran the division and stopped one step short of asking what the number counted.
 
 🚨 **A CORRECTION that landed in the topic file and never reached the index is invisible to BOTH
 detectors — and it leaves a refuted rule on the auto-loaded surface.** The audit above is
