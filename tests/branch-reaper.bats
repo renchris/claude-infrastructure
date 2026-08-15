@@ -127,3 +127,48 @@ setup() {
   run git merge-base --is-ancestor "$sha" origin/main
   [ "$status" -eq 0 ]
 }
+
+# ── the three findings of screen-branch-reaper.md, re-verified in TRIAGE-2026-08-15 section 2 ─────
+# None had coverage: this suite always passed a value to every flag, never invoked -h, had no
+# timeout, and bound only to `skipped, has a worktree` and `would delete` — never the residual.
+
+@test "a value-taking flag given LAST exits instead of spinning forever" {
+  # `shift 2` with one positional left shifts nothing and returns non-zero, and nothing reads that
+  # status under `set -uo pipefail` with no `-e`. All three flags hung at 100% CPU; two of them are
+  # documented usage. The timeout is the assertion — without it this test IS the hang.
+  local f
+  for f in --trunk --keep --restore; do
+    run timeout 10 bash "$SCRIPT" "$f"
+    if [ "$status" -eq 124 ]; then echo "$f spun until the timeout killed it" >&2; return 1; fi
+    [ "$status" -eq 2 ] || { echo "$f: expected the usage refusal (2), got $status" >&2; return 1; }
+  done
+}
+
+@test "--help documents every flag the parser implements" {
+  # The usage block runs to the --keep line; --help printed a fixed 1,40p and stopped two lines
+  # short, hiding exactly the two flags most likely to be typed last and therefore to hang.
+  run bash "$SCRIPT" --help
+  [ "$status" -eq 0 ]
+  local f
+  for f in --confirm --include-named --restore --trunk --keep; do
+    printf '%s\n' "$output" | grep -qF -- "$f" || { echo "--help never mentions $f" >&2; return 1; }
+  done
+}
+
+@test "a --keep'd branch is counted as kept, NOT as 'NOT merged (untouched, holds work)'" {
+  # The NOT-merged line is a RESIDUAL, so a branch dropped by --keep with no bucket of its own was
+  # relabelled as still holding work — a merged, contentless ref reported as unlanded, with nothing
+  # about the branch having changed. Ground truth is git's own --no-merged count, which --keep
+  # cannot move.
+  local truth; truth="$(git branch --no-merged origin/main --format='%(refname:short)' | grep -c . || true)"
+  run bash "$SCRIPT"
+  local bare; bare="$(printf '%s\n' "$output" | sed -n 's/.*NOT merged.*: *//p')"
+  [ "$bare" = "$truth" ] || { echo "bare run: NOT-merged=$bare, ground truth=$truth" >&2; return 1; }
+
+  run bash "$SCRIPT" --keep '^wt-'
+  local kept_run; kept_run="$(printf '%s\n' "$output" | sed -n 's/.*NOT merged.*: *//p')"
+  [ "$kept_run" = "$truth" ] || {
+    echo "--keep moved NOT-merged to $kept_run; ground truth is still $truth" >&2; return 1; }
+  local keptn; keptn="$(printf '%s\n' "$output" | sed -n 's/.*--keep pattern: *//p')"
+  [ "${keptn:-0}" -ge 1 ] || { echo "--keep matched nothing, so this test proves nothing" >&2; return 1; }
+}
