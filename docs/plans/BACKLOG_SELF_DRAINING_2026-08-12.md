@@ -1564,3 +1564,126 @@ the drain's arithmetic is net-of-intake, never a raw total). Effort order after 
 unchanged: `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32)
 → `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
 `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+### 2026-08-15 — THE LOCAL DRAIN recycle #6: a ratchet whose "free" strictness rested on an invariant nothing re-asserted — and two trunk reds the land itself found
+
+`master-verification-integrity` **8 → 7 live rows** (2 open, 4 blocked, 1 claimed). One row closed;
+**three** commits landed as **`9a7818c38`**, content-verified on `origin/main` (eight markers
+present, `git diff origin/main` empty on all eight paths), `LANDED … sweep=clean`, rc 0.
+
+#### `e191b6801be5` — the unguarded-kill ratchet was strict whole-corpus on a RUNTIME premise
+
+The arm's design argument was explicit and, read once, sound: the commit that introduced it swept
+the corpus to zero, so *with a clean baseline the strictest rule is the free one* — no own-set to
+derive, no exemption list to rot. `land-architecture-100p §5.P2` audited all fifteen ratchet arms,
+found this one **"by design, not a leak"**, and declined to fix it because *weakening it would lower
+the bar*.
+
+**The premise is a RUNTIME fact and nothing re-asserted it.** From the first sibling site onward the
+arm refuses EVERY land in the fleet over a file the author never opened, printing a remedy that is
+not theirs to apply.
+
+**It is not the weakening P2 forbids, and the asymmetry is the whole argument:** the author who
+TYPES an unguarded kill has that suite in their own diff, so they are still hard-refused at the
+chokepoint · an ABSENT own-set still means strict, so `postland-verify` and a bare human run judge
+all 473 suites unchanged · an out-of-scope finding is still PRINTED (`kill-guard?`) and counted, so
+drift is legible on every land instead of once · and for the corpus to be non-zero at all, a site
+must have arrived by a route that never passed this gate — which strict whole-corpus never
+prevented and only charged forward to the next lander. The baseline invariant is now an EXECUTED
+assertion (the suite's ZERO-kills case, `env -u` so an inherited own-set cannot narrow the census)
+rather than a comment.
+
+**BOTH consumers took the fix in one diff.** `hooks/task-quality-gate.sh` runs the same lint at the
+earlier chokepoint and fires on EVERY task in the repo, so whole-corpus there made one sibling's
+kill a red for every author of every task. Its own-set is the suites the work CHANGED, captured at
+the collection loop — NOT `$batsfiles`, which the sibling mapping widens to `tests/<name>.bats` for
+any changed script (memory: `new-nonverdict-state-strands-its-consumers`).
+
+**`in_own`'s body is COPIED VERBATIM from the path-keyed siblings.** A fifth spelling would be a new
+latent basename-collapse vector wearing the same name — and `tests/gate-ownscope-leak.bats` pins the
+copies identical, which is what makes copying correct rather than duplication. Its arm census is
+derived from ship-land's own `own_run` call sites, so the new arm was covered without editing it
+(verified present: 6 of 15).
+
+**Ten single-site mutants, each asserted APPLIED (diff printed) before its verdict was read, control
+green under all.** Four pairs mutate ONE line in OPPOSITE directions and red DIFFERENT cases:
+`m1/m1b` (the ABSENCE test) · `m2/m2b` (SET-BUT-EMPTY) · `m3/m3c` (the PATH arm; m3c replays the real
+pre-fix basename collapse) · `m6/m6b` (UNREADABLE scoping); plus `m3b`, `m4`, `m5`, and `h1/h2` on
+the hook. Every new /Users/chrisren/.claude/bin/cc-bats case is attributed to a mutant that reds it ALONE: 3←m1, 4←m5, 5←m2b, 6←m4,
+7←m3c, 35←h1/h2.
+
+#### The land found TWO trunk reds that were not mine — and attribution, not driving, is what made them cheap
+
+Both were reproduced on a **pristine detached `origin/main` worktree** before a line was written.
+
+**1. `land-gate-cas.bats` case 11 — a stale MODE, not a stale wording.** It asserts the
+stranded-sweep's un-`--mine` verdict out of ship-land's own output. `a2de71b95` made ship-land pass
+`--mine "$CLAUDE_CODE_SESSION_ID"` whenever a sid exists, and `setup()` pins one for hermeticity —
+so every land in that suite now runs ATTRIBUTED, the fixture's 40 strands belong to no session, the
+sweep correctly reports CLEAN, and the asserted line became unreachable. `a2de71b95` (18:01) and
+`c5f1d1d56` (18:20) landed **19 minutes apart on sibling branches, neither an ancestor of the
+other** — a semantic conflict a clean rebase cannot see. The smoke lane selects that suite only for
+a diff touching `ship-land.sh`, so it sat red from 2026-08-12. Fixed by asserting the MODE: the
+walk/report numbers now come from a DIRECT sweep in the mode that renders them, with the attributed
+mode asserted BESIDE it over the same tree.
+
+**2. `SHIP_LAND_MEAS_ROUNDS` bleeds into every suite a re-gating land smokes** — the sharper one.
+`meas_export()` carries `SHIP_LAND_T0` + `MEAS_{ROUNDS,GATE_S,ARMS_S,STATICS_S}` across the locked
+re-exec, and `gate_bats` scrubbed the operator's TUNING but not this. So the moment an outer land
+takes the in-lock path, every fixture pipeline starts counting from the OUTER land's total: case 14
+asserts `"gate_rounds":2` and read 3. **Nobody has to set anything — the land sets these on
+itself**, so the poison appears only on lands that re-round. Measured: land #2 (no stale gate)
+passed case 14, land #3 (stale gate) failed it twice, and standalone it is 3-for-3 green even at
+load 25 — "flake under load" was the wrong reading. Reproduced deterministically with
+`SHIP_LAND_MEAS_ROUNDS=1 /Users/chrisren/.claude/bin/cc-bats -f 'P0 exit 42 attests' …`, same file, same line, same message. Fixed
+at the chokepoint (`gate_bats`) AND in both suites' unset lists, with the gate-boundary contract in
+`tests/ship-land.bats` extended to assert all five arrive unset.
+
+#### Three instrument lessons, all paid for this recycle
+
+1. 🚨 **A comment between a `\` and its command SILENTLY DELETES the command prefix.** My own scrub's
+   first draft put the explanatory block between `${pre[@]+"${pre[@]}"} \` and `env`, which ends the
+   continuation — so `timeout`/`nice` stopped wrapping the smoke entirely. Symptom on a fixture that
+   hangs 120s under a 3s budget: **`✓ gate: smoke green — 1 direct suite(s) in 120s`**. Not a
+   loosened bound — *no bound*. Caught only because `tests/ship-land.bats` pins the wall bound in
+   BOTH directions, and attributed to me (not the load) by an A/B against pristine origin/main. The
+   invariant now lives ON the line above the continuation.
+2. 🚨 **A `perl -0pi` mutant harness INTERPOLATES the subject's own `$2` / `${3:-0}`.** Three mutants
+   never applied and **two applied a DIFFERENT mutant than their label claimed** (`[ -n "$2" ]`
+   became `[ -n "" ]`), producing plausible verdicts for code never under test. The "DID NOT APPLY"
+   guard caught the first three; only reading the printed diff caught the silent two. Replaced with
+   a literal replacer asserting EXACTLY ONE matching site. **Print the diff AND assert the site
+   count** — a harness that can silently mutate something else fabricates evidence.
+3. **`bats … | tail -30` reports the PIPE's rc** (memory: `verification-harness-vacuous-pass-traps`,
+   hit again). The first `ship-land.bats` run "passed" with exit 0 while only its last 30 lines
+   existed. Re-run writing full TAP to a file: **137/137, real rc 0**.
+
+#### Operational notes the next recycle should not re-derive
+
+- 🚨 **A live CONDITION-lease sibling is not a stale lease.** `cc-backlog claim` refused this row
+  because `c1a29f8ee045` was held by a cloud dispatcher — and unlike last recycle the claimer was
+  NOT spent: `origin/claude/fire-20260815T031727Z-93323-1` carried that row's real work, updated 55
+  minutes after the claim. The `--force` was justified on **non-duplication**, measured: a different
+  row, a different subject file (`scripts/bats-kill-guard-lint.sh` appears nowhere in their branch),
+  and the one shared file touched ~600 lines apart. **Read the branch, not just the pid** — with a
+  live claim the question is overlap, not liveness.
+- **The smoke budget needed 3000s, not 900s.** Two lands were refused by a budget CUT (a GATE-KILLED
+  non-verdict) at 900s and 2700s while a sibling ran a full 400-suite postland corpus (load 25). The
+  cut is not a red, but ship-land counts it into "1 of N direct suites named a failure", so it still
+  refuses the land — budget UP rather than retry.
+- **`ship-backup-reap` keeping the backup ref with a "content DIFFERS" warning is BENIGN when the
+  differing file is one a sibling also changed.** Here `hooks/task-quality-gate.sh` differed between
+  the pre-rebase backup ref and the landed head; `git diff origin/main` on that path was empty and
+  my marker was present, i.e. the trunk carries mine *plus* the sibling's. Verify by CONTENT before
+  reading it as a drop.
+
+**State at this recycle.** `master-verification-integrity` **7 live**: open — `05ff1e5fabc0` (3
+CI-only reds on the hermetic corpus), `8efd655b0fe1` (a CI shard CANCELLED mid-run); claimed —
+`b02e87582e96` (triage 7 defective adversarial screens); blocked — `782607797fc5`, `67a7d78c1134`,
+`0be0bd2c0b65`, and `c1a29f8ee045` (now blocked, cloud-held). **Both remaining OPEN rows are
+CI-only** — they need a GitHub Actions run to judge, not a desk one, which is the first time this
+effort's residue has been off-box work. Live store 552 (sibling intake continues; the drain's
+arithmetic is net-of-intake, never a raw total). Effort order after this one is unchanged:
+`master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
+`master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
+`master-fire-gate` (58) → `master-convergence-deadlock` (84).
