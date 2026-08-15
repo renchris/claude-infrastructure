@@ -1357,7 +1357,7 @@ strictest rule the free one (`bats-kill-guard-lint` and `bats-testname-eval-lint
 same argument). All four `SELF_EXCLUDE` names map to exactly one real file, so **any** namesake is
 necessarily a collision, which is what makes the guard cover the whole reachable class.
 
-### Landed: `4d87fcc7` — the population-integrity precondition
+### Landed: `4b4e4734` — the population-integrity precondition
 
 `population_collisions()` + a block in `lint_tree` that runs **before the build loop**, because the
 build loop IS decision 3 and a colliding self-exclusion has deleted its own evidence by the time it
@@ -1440,7 +1440,7 @@ memo store lives in the **git dir**, not under `$HOME` — so bats' `HOME` fixtu
 it and the suite is red in any clean checkout. Distinct from the two reds `f7644beb` records
 (`land-gate-cas` case 11, `SHIP_LAND_MEAS_ROUNDS`).
 
-Fixed in **`2f4e1f10`** by giving case (h) a fixture unique to it, so the content-keyed memo cannot
+Fixed in **`9f473277`** by giving case (h) a fixture unique to it, so the content-keyed memo cannot
 hold a verdict for it — restoring what the case actually means, a COLD file whose scan cannot run.
 **Not** fixed with `CC_GITID_MEMO=off`, which would have made it pass while asserting strictly less.
 
