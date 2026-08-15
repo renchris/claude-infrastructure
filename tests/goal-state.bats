@@ -96,3 +96,111 @@ prose()     { printf '{"type":"assistant","message":{"role":"assistant","content
   probe "$D/t.jsonl"
   [ "$status" -eq 1 ]
 }
+
+# ══ THE LIVENESS ORACLE (E5, §9 B5) — goal_liveness ═══════════════════════════════════════════════
+#
+# Subject: hooks/lib/goal-state.sh :: goal_liveness. Consumer: scripts/wrap-ledger.sh (GOAL_* +
+# the ◎ line in --full/--goal). The question it answers is the one goal_live_condition CANNOT:
+# an armed goal that is never EVALUATED (the starvation pole, 47/84 sessions in §2) is
+# indistinguishable from a healthily-deferred one to a predicate that only asks "is it armed?".
+#
+# The load-bearing cases: 0 evals on a LIVE goal (the pole itself) · evaluations counted SINCE THE
+# LAST ARM, never over the file (a re-armed goal must not inherit the previous goal's count) ·
+# an unreadable transcript reads as a FAILURE (rc 1), never as `absent`, which is the positive
+# finding "this session never armed one".
+
+live_probe() { # <transcript-path> → runs the oracle in a clean bash
+  run bash -c ". '$LIB'; goal_liveness '$1'"
+}
+tsv_field() { printf '%s' "$1" | cut -f"$2"; }
+
+# timestamped variants — the oracle reads the ENVELOPE's .timestamp (that is where CC writes it)
+t_arm_rec()   { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"%s"}}\n' "$2" "$1"; }
+t_unmet_rec() { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":false,"condition":"%s"}}\n' "$2" "$1"; }
+t_met_rec()   { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":true,"condition":"%s"}}\n' "$2" "$1"; }
+
+@test "ORACLE: armed and never evaluated ⇒ live · 0 evals · last=arm (THE STARVATION POLE)" {
+  { prose; t_arm_rec "land it" "2026-08-15T12:31:04.123Z"; } > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(tsv_field "$output" 1)" = "live" ]
+  [ "$(tsv_field "$output" 2)" = "0" ]
+  [ "$(tsv_field "$output" 3)" = "arm" ]
+  [ "$(tsv_field "$output" 5)" = "land it" ]
+}
+
+@test "ORACLE: evaluations are counted, and the last verdict is reported" {
+  { t_arm_rec "land it" "2026-08-15T12:31:04.123Z"
+    t_unmet_rec "land it" "2026-08-15T13:00:00.000Z"
+    t_unmet_rec "land it" "2026-08-15T13:05:00.000Z"; } > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(tsv_field "$output" 1)" = "live" ]
+  [ "$(tsv_field "$output" 2)" = "2" ]
+  [ "$(tsv_field "$output" 3)" = "unmet" ]
+}
+
+@test "ORACLE: a RE-ARMED goal starts at 0 — the previous goal's evals are never inherited" {
+  { t_arm_rec "one" "2026-08-15T10:00:00.000Z"
+    t_unmet_rec "one" "2026-08-15T10:05:00.000Z"
+    t_met_rec "one" "2026-08-15T10:09:00.000Z"
+    t_arm_rec "two" "2026-08-15T11:00:00.000Z"; } > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$(tsv_field "$output" 1)" = "live" ]
+  [ "$(tsv_field "$output" 2)" = "0" ]      # NOT 2 — the count is since the LAST arm
+  [ "$(tsv_field "$output" 5)" = "two" ]
+}
+
+@test "ORACLE: met ⇒ cleared · failed ⇒ failed · /goal clear ⇒ cleared+clear" {
+  { arm_rec "x"; unmet_rec "x"; met_rec "x"; } > "$D/m.jsonl"
+  live_probe "$D/m.jsonl"
+  [ "$(tsv_field "$output" 1)" = "cleared" ]
+  [ "$(tsv_field "$output" 3)" = "met" ]
+  [ "$(tsv_field "$output" 2)" = "2" ]      # the met verdict IS an evaluation
+
+  { arm_rec "x"; fail_rec "x"; } > "$D/f.jsonl"
+  live_probe "$D/f.jsonl"
+  [ "$(tsv_field "$output" 1)" = "failed" ]
+  [ "$(tsv_field "$output" 3)" = "failed" ]
+
+  { arm_rec "x"; clear_rec "x"; } > "$D/c.jsonl"
+  live_probe "$D/c.jsonl"
+  [ "$(tsv_field "$output" 1)" = "cleared" ]
+  [ "$(tsv_field "$output" 3)" = "clear" ]
+}
+
+@test "ORACLE: the PROSE decoy is not a goal record — a goal-less transcript reads absent" {
+  { prose; prose; } > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(tsv_field "$output" 1)" = "absent" ]
+  [ "$(tsv_field "$output" 2)" = "0" ]
+}
+
+@test "ORACLE: unreadable ⇒ rc 1 (a FAILURE), never the positive finding 'absent'" {
+  live_probe "$D/nope.jsonl"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  run bash -c ". '$LIB'; goal_liveness ''"
+  [ "$status" -eq 1 ]
+}
+
+@test "ORACLE: fractional-second ISO stamps parse — the epoch is not silently 0" {
+  t_arm_rec "x" "2026-08-15T12:31:04.123Z" > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$(tsv_field "$output" 4)" -gt 1000000000 ]
+  # …and an unparseable stamp degrades to 0 (the consumer says "time unknown"), never to a wrong clock
+  printf '{"type":"attachment","timestamp":"not-a-date","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"x"}}\n' > "$D/u.jsonl"
+  live_probe "$D/u.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(tsv_field "$output" 4)" = "0" ]
+}
+
+@test "ORACLE: a TAB/newline in the condition cannot break the TSV contract" {
+  printf '{"type":"attachment","timestamp":"2026-08-15T12:31:04Z","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"a\\tb\\nc"}}\n' > "$D/t.jsonl"
+  live_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c .)" -eq 1 ]     # one line
+  [ "$(tsv_field "$output" 1)" = "live" ]
+  [ "$(tsv_field "$output" 5)" = "a b c" ]             # field 5 stays field 5
+}
