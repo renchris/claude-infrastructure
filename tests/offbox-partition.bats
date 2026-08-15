@@ -280,3 +280,98 @@ sys.exit(1 if bad else 0)
 PY
   [ "$status" -eq 0 ]
 }
+
+# ── THE NOTIFICATION CONTRACT (26-28) ───────────────────────────────────────────────────────────
+# WHY THESE EXIST. This producer may ACQUIT or say nothing; it may never CONVICT — the file header,
+# the `verdict` job's own comments, and `offbox-green-pull.sh`'s "this producer may acquit; it may
+# not convict" all say so. For its first ~4 days the implementation said otherwise: not-green was
+# `exit 1`, which is GitHub's error channel, so the null result was delivered to the operator as a
+# failure email ~22×/day (89 failures / 2 successes in 100 scheduled runs; 96/100 since birth). The
+# doctrine was right and unenforced, which is the only reason it could rot. These tests are the
+# enforcement — an O(1) invariant instead of noticing the O(n)th instance.
+#
+# The laws are checked by one helper so a mutant can be run through the SAME code path as the
+# shipped file; a control that cannot fail credits nothing.
+_notification_contract() {   # $1 = workflow path → exit 0 clean, 1 findings
+  python3 - "$1" "$REPO/scripts/offbox-green-pull.sh" <<'PY'
+import re, sys, yaml
+wf, puller = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(wf))
+jobs = d.get('jobs') or {}
+bad = []
+
+# L1 AGREEMENT. The puller reads ONE check-run by name; the workflow must publish a job by that
+# name. Two files that must agree and cannot check each other is this repo's recurring shape, so
+# the name is READ from the consumer rather than restated here.
+m = re.search(r'JOB_NAME="\$\{CC_OFFBOX_JOB:-([^}"]+)\}"', open(puller).read())
+if not m:
+    bad.append("could not read JOB_NAME out of %s — the contract's consumer half is unreadable" % puller)
+else:
+    name = m.group(1)
+    if name not in jobs:
+        bad.append("puller reads check-run %r but no such job exists in the workflow" % name)
+    else:
+        j = jobs[name]
+        # L2 ACQUIT-ONLY. The green job must be GATED on green — if it can run when the fold is not
+        # green, it publishes a success that is not one, which is a FALSE GREEN in the store.
+        cond = str(j.get('if') or '')
+        if "== 'green'" not in cond and '== "green"' not in cond:
+            bad.append("job %r is not gated on a green fold (if: %r) — it could mint a false green"
+                       % (name, cond))
+        # L3 NO-CONVICT. Nothing on the green path may exit non-zero to mean "not green"; that is
+        # the exact defect this contract exists to prevent recurring.
+        body = "\n".join(str(s.get('run') or '') for s in (j.get('steps') or []))
+        if re.search(r'^\s*exit\s+[1-9]', body, re.M):
+            bad.append("job %r exits non-zero — 'not green' must never be spelled as a failure" % name)
+
+# L3 again, on the fold: it runs unconditionally, so a non-zero exit there fails the RUN and emails.
+if 'fold' in jobs:
+    body = "\n".join(str(s.get('run') or '') for s in (jobs['fold'].get('steps') or []))
+    if re.search(r'^\s*exit\s+[1-9]', body, re.M):
+        bad.append("job 'fold' exits non-zero — the fold reports, it does not convict")
+
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PY
+}
+
+@test "26: the SHIPPED workflow satisfies the notification contract" {
+  run _notification_contract "$REPO/.github/workflows/hermetic.yml"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "27: CONTROL — restoring the exit-1 convict makes the contract RED" {
+  # The real pre-fix defect, replayed: the green job spelled "not green" as a failing exit.
+  local mut="$BATS_TEST_TMPDIR/mutant-exit1.yml"
+  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+d['jobs']['verdict']['steps'].append({'name': 'convict', 'run': 'exit 1'})
+yaml.safe_dump(d, open(sys.argv[2], 'w'))
+PY
+  grep -q 'exit 1' "$mut"            # anchor: the mutation actually applied
+  run _notification_contract "$mut"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"must never be spelled as a failure"* ]]
+}
+
+@test "28: CONTROL — un-gating the green job makes the contract RED (false-green half)" {
+  # The opposite failure the gate protects against: a `verdict` job that runs unconditionally would
+  # report success on every tree, and the puller would stamp an off-box green for a red partition.
+  local mut="$BATS_TEST_TMPDIR/mutant-ungated.yml"
+  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+d['jobs']['verdict'].pop('if', None)
+yaml.safe_dump(d, open(sys.argv[2], 'w'))
+PY
+  # anchor: the gate is genuinely gone. Spelled `run` + status rather than `! grep`, because
+  # bash exempts a `!`-negated command from errexit — the negated form is a DEAD assertion that
+  # passes whether or not the mutation applied, which is precisely the vacuous-anchor failure this
+  # control exists to avoid. (Caught by the land gate's dead-assertion ratchet, not by review.)
+  run grep -q "== 'green'" "$mut"
+  [ "$status" -ne 0 ]
+  run _notification_contract "$mut"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could mint a false green"* ]]
+}

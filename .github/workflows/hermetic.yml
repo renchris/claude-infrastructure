@@ -243,10 +243,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  verdict:
+  # THE FOLD DOES ALL THE WORK AND IS STRUCTURALLY INCAPABLE OF CONVICTING. Everything it publishes
+  # — the step summary, the release-candidate list, the offbox-verdict.json artifact — is unchanged.
+  # Only its EXIT STATUS changed, and its exit status was never read by any consumer in this repo:
+  # `scripts/offbox-green-pull.sh` reads the check-run named by $CC_OFFBOX_JOB (default `verdict`),
+  # which is now the separate job below. The one thing the old exit-1 reached was GitHub's notifier.
+  fold:
     needs: [partition, suite]
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.fold.outputs.verdict }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -380,12 +387,68 @@ jobs:
           path: offbox-verdict.json
           retention-days: 90
 
+      - name: report the fold, without convicting
+        run: |
+          # REPORTING ONLY — this step never fails, because "not green" is not an error. It is the
+          # ABSENCE of a green, and the producer's own doctrine (see the file header, and
+          # `offbox-green-pull.sh`'s "this producer may acquit; it may not convict") forbids it from
+          # publishing a claim it has no standing to make. The green itself is published by the
+          # `verdict` job below, in the only vocabulary GitHub actually gives us for "emitted
+          # nothing": a job that did not run.
+          v="${{ steps.fold.outputs.verdict }}"
+          if [ "$v" = "green" ]; then
+            echo "GREEN — the hermetic partition is clean off-box; the verdict job will publish it"
+          else
+            echo "NOT GREEN ($v) — no off-box green is produced for this tree"
+            echo "This never blocks a land and is never read as a red by the deploy lane."
+          fi
+          {
+            echo "### off-box conclusion"
+            echo ""
+            if [ "$v" = "green" ]; then
+              echo "**GREEN** — \`verdict\` runs and publishes a \`success\` check-run."
+            else
+              echo "**NOT GREEN (\`$v\`)** — \`verdict\` is skipped. No green is produced for this"
+              echo "tree, and no red is claimed about it. This run is not a failure."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── THE PRODUCER'S ENTIRE PUBLIC API, AND WHY IT IS A JOB AND NOT AN EXIT CODE ──────────────────
+  # `scripts/offbox-green-pull.sh` mints an off-box green iff the check-run NAMED by $CC_OFFBOX_JOB
+  # (default: `verdict`) reads `completed:success` on that commit. Nothing else about this workflow
+  # is consumed anywhere. So the contract is: **this job succeeds iff the partition is green.**
+  #
+  # It used to be one job that exited 1 on not-green. That satisfied the contract and cost the
+  # operator ~22 emails/day, because a non-zero exit is GitHub's ERROR channel and the error channel
+  # is wired to the inbox. Measured before this change: 89 failures / 2 successes in 100 scheduled
+  # runs (96/100 since the workflow was born) — and the file header had already named the hazard,
+  # "a check that is red on every commit carries the same zero bits as one that cannot fire".
+  # It was firing hourly and carrying nothing, because a producer that may only ACQUIT has no
+  # information to convey when it does not: "no green today" is the null result, not a fault.
+  #
+  # THE FIX IS TO SAY "NOTHING" IN A VOCABULARY GITHUB HAS. It has no `neutral` conclusion for a job
+  # (verified: it exists only for a self-created check-run), no per-workflow notification mute, and
+  # no way to un-wire failure from email at less than account-wide scope. What it does have is
+  # SKIPPING. Measured on probe runs 31913525656/31913525664 (branch `probe-conclusion-semantics`,
+  # since deleted) rather than assumed, because the docs do not state it:
+  #
+  #     a job skipped by an `if:` on a needs-output  →  check-run `completed:skipped`, RUN `success`
+  #     the same job when the gate passes            →  check-run `completed:success`, RUN `success`
+  #     (control) `continue-on-error` failing job    →  check-run `completed:failure`, RUN `success`
+  #
+  # `skipped` is not `success`, so the puller's `case` falls to its no-op arm and writes nothing —
+  # BYTE-IDENTICAL to what it did when this job exited 1. The consumer needs no change at all.
+  #
+  # THIS IS NOT A MUTE, AND THAT IS THE POINT. A genuine breakage still emails: if `fold` dies, or a
+  # `suite` job's runner fails, those jobs FAIL and the run fails with them. The only thing that went
+  # quiet is the non-event. An alarm that can still fire is the only kind worth having.
+  verdict:
+    needs: fold
+    if: needs.fold.outputs.verdict == 'green'
+    runs-on: ubuntu-latest
+    steps:
       - name: the conclusion IS the verdict
         run: |
-          # This job's success/failure is the whole API the on-box puller consumes
-          # (scripts/offbox-green-pull.sh reads it through the check-runs endpoint). It is BINARY on
-          # purpose: this producer may emit a green or emit nothing, and `red` vs `cut` is a
-          # distinction it has no standing to publish as a claim about the tree.
           # GREEN iff the fold says green — no second predicate. An earlier version also required
           # `event_name != workflow_dispatch`, meaning to stop a CENSUS minting a green; it instead
           # made every manual re-run unable to go green even when the partition was clean, which is
@@ -394,10 +457,4 @@ jobs:
           # not green. If a census ever DOES come back all-green, that is a superset of the
           # partition passing, which legitimately implies the subset passed — a real green, and the
           # signal that the exclusion list has rotted and should shrink.
-          if [ "${{ steps.fold.outputs.verdict }}" = "green" ]; then
-            echo "GREEN — the hermetic partition is clean off-box"
-            exit 0
-          fi
-          echo "NOT GREEN (${{ steps.fold.outputs.verdict }}) — no off-box green is produced for this tree"
-          echo "This never blocks a land and is never read as a red by the deploy lane."
-          exit 1
+          echo "GREEN — the hermetic partition is clean off-box"
