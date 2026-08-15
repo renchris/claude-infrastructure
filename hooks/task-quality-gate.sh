@@ -40,39 +40,35 @@ log() {
 
 log "Quality gate for task: $TASK_SUBJECT (teammate: $TEAMMATE_NAME, team: $TEAM_NAME)"
 
-# Phase 0 verification gate — forcing function for the 2026-04-17 routines-v1
-# incident where Phase 0 was marked complete with zero worktrees. If the
-# task subject contains "Phase 0", run verify-team.sh against the team and
-# block completion if it fails.
-if [[ "$TASK_SUBJECT" == *"Phase 0"* ]]; then
-  PROJECT_DIR="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "")"
-  VERIFY_SCRIPT="$PROJECT_DIR/scripts/team/verify-team.sh"
-  # Fallback to canonical location if we're not in the project root
-  [[ -x "$VERIFY_SCRIPT" ]] || VERIFY_SCRIPT="$HOME/Development/reso-management-app/scripts/team/verify-team.sh"
-  if [[ -x "$VERIFY_SCRIPT" ]]; then
-    log "Phase 0 task detected — running verify-team.sh for $TEAM_NAME"
-    # `VERIFY_OUTPUT=$(cmd || true); VERIFY_EXIT=$?` CANNOT FAIL: `|| true` makes the
-    # assignment itself succeed, so $? was always 0 and the rejection branch below was
-    # unreachable — a verify-team.sh exiting non-zero over missing worktrees logged
-    # "verify passed" and let the Phase 0 task complete. The if-form keeps the command's
-    # own status while still not tripping errexit.
-    if VERIFY_OUTPUT=$("$VERIFY_SCRIPT" "$TEAM_NAME" 2>&1); then
-      VERIFY_EXIT=0
-    else
-      VERIFY_EXIT=$?
-    fi
-    if [ "$VERIFY_EXIT" -ne 0 ]; then
-      log "PHASE 0 VERIFY FAILED for $TEAM_NAME (exit $VERIFY_EXIT) — blocking task"
-      echo "QUALITY GATE FAILED: Phase 0 verification failed for team $TEAM_NAME. Fix worktrees / settings / branches before marking Phase 0 task complete:" >&2
-      echo "" >&2
-      echo "$VERIFY_OUTPUT" | tail -40 >&2
-      exit 2
-    fi
-    log "Phase 0 verify passed for $TEAM_NAME"
-  else
-    log "verify-team.sh not found — skipping Phase 0 gate for $TEAM_NAME"
-  fi
-fi
+# PHASE 0 VERIFY ARM — REMOVED 2026-08-15. It could not fire, and its suite hid that.
+#
+# The arm existed for the 2026-04-17 routines-v1 incident (Phase 0 marked complete with zero
+# worktrees). It exec'd `scripts/team/verify-team.sh`, resolved from the git toplevel with a
+# fallback to `$HOME/Development/reso-management-app/scripts/team/verify-team.sh`. BOTH pointers
+# were dead, and this repo's OWN ruling already said so: skills/agent-teams/SKILL.md § Liveness
+# detection — "No packaged checker exists (`verify-team.sh` was a ghost pointer, removed
+# 2026-07-18)." So every Phase 0 completion took the else-branch, logged "verify-team.sh not
+# found — skipping", and passed. A gate that fails OPEN on its own precondition.
+#
+# WHY DELETED RATHER THAN REPAIRED. There is nothing to point it at. The skill's replacement is
+# deliberately NOT a script: liveness is pull-checked against the iTerm2 API / osascript on the
+# member's `tmuxPaneId`, cross-referenced with teammate-lifecycle.log and transcript age — and it
+# warns that `isActive` in teams/<team>/config.json must never be read as "alive now". Packaging
+# that as an exit-code gate is new design, not a repair, so it is FILED as follow-on rather than
+# invented here. A dormant `[ -x ]` probe for a file this repo documents as removed is not a
+# latent safety net; it is the "conclusion enforced by nothing" that MASTER_ENFORCING_STORE names.
+#
+# WHY ITS SUITE WENT WITH IT. tests/task-quality-gate-phase0.bats fixtured a FAKE verify-team.sh
+# into a temp project, so its 5 green tests proved the arm could reject a verifier the test had
+# just written — never that anything verified in production. Green tests over an unfirable gate are
+# worse than no gate: they answer "is this covered?" with yes. The one durable lesson it pinned —
+# `VERIFY_OUTPUT=$(cmd || true); VERIFY_EXIT=$?` cannot fail, because `|| true` makes the
+# ASSIGNMENT the thing whose status is read — survives it: that class is written up in
+# docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md:434 and gated by the bats-*-lint family. The
+# reachability fix itself landed as cb6314be, which cured the OTHER half of this same arm.
+#
+# Removing dead code is not the same as dropping the intent. The intent is now a filed row; see
+# docs/plans/MASTER_ENFORCING_STORE.md § Status log (2026-08-15).
 
 # Find the teammate's working directory by checking recent worktrees
 # Look for worktrees that match the teammate name.

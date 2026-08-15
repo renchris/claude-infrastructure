@@ -63,8 +63,24 @@ subject is the four-account fork; coordinate).
 `hooks/coldcompile-admit.sh` is unregistered. Staged migration 0007's preflight **refutes its own
 header** (asyncRewake is ABSENT from the installed 2.19/2.20 binaries) — so read the preflight before
 trusting the header. `com.claude.nightly-regression` has NEVER run from launchd: the label is in the
-user DISABLED list. `hooks/task-quality-gate.sh`'s Phase-0 arm is doubly dead (it execs a script
-removed in 2026-05).
+user DISABLED list. ~~`hooks/task-quality-gate.sh`'s Phase-0 arm is doubly dead (it execs a script
+removed in 2026-05).~~ **DISCHARGED 2026-08-15 — the arm is DELETED, and so is the suite that hid
+it.** Both deaths confirmed on trunk: death 1 (the `|| true` unreachable rejection branch) was
+already cured by `cb6314be`; death 2 was still live — both pointers to `scripts/team/verify-team.sh`
+resolved to nothing, so every Phase-0 completion took the else-branch, logged `verify-team.sh not
+found — skipping`, and passed. Fail-OPEN on the gate's own precondition. **Deleted rather than
+repaired because there is nothing to point it at:** this repo's own
+`skills/agent-teams/SKILL.md` § Liveness detection already rules *"No packaged checker exists
+(`verify-team.sh` was a ghost pointer, removed 2026-07-18)"* and prescribes a deliberately
+NON-script replacement (pull-check the iTerm2 API / osascript on the member's `tmuxPaneId`, crossed
+with `teammate-lifecycle.log` + transcript age, and never trust `isActive` as "alive now").
+`tests/task-quality-gate-phase0.bats` went with it: it fixtured a FAKE verifier into a temp project,
+so its 5 green tests proved the arm could reject a file the test had just written — coverage that
+answered "is this gated?" with yes over a gate that could not fire. Its one durable lesson (an
+`X=$(cmd || true)` assignment's status is the assignment's, never the command's) is already held by
+`docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md:434` and the `bats-*-lint` family. The surviving
+`tests/task-quality-gate.bats` is 10/10. Packaging the *intent* as a real gate is new design, not a
+repair — filed as follow-on, not invented here.
 
 ### E3 · Ledger integrity — the store that makes findings binding
 **The 430 pre-existing plan-open rows can never gain a falsifier**, because `add` is idempotent on
@@ -96,3 +112,55 @@ attach a probe to a pre-existing row and surface a refuted premise without a hum
 - **2026-08-12 — created by W2 of `BACKLOG_SELF_DRAINING_2026-08-12.md`.** 29 rows on this condition
   (4 pre-existing from the 2026-08-09 triage, 5 by its verdict replay, the rest semantic — including
   the ledger-hygiene family that this wave's remit was widened to own).
+- **2026-08-15 — E2's `task-quality-gate` Phase-0 arm discharged (see the strikethrough in § E2), and
+  the venue of this whole MASTER measured.** Worked from a CLOUD container, which turned out to be
+  the finding worth writing down: **most of this plan cannot be advanced off-box, and the ledger
+  already has the vocabulary to say so** (`cc-backlog venue` / the OFF-BOX ELIGIBILITY gate at claim
+  time). Measured absent in the container: `~/.claude-next` and the other three config dirs, `~/.claude/settings.json`, `launchctl`, `~/.claude/MEMORY.md`, any installed CC binary track, and the
+  backlog store itself (`list --all` → `[]`). So **E1 is entirely local-only** (its subject IS the
+  four-config-dir fork), **E4 is local-only** (both of its files live outside this repo — `MEMORY.md`
+  and `~/.claude/CLAUDE.md`; only the repo-side `CLAUDE.md` is reachable, and reconciling one side of
+  a divergence is not reconciliation), and **E2's registration half is local-only by construction** —
+  those migrations are c10, and c10's whole contract is that it edits `settings.json` and therefore
+  *stages and waits for a human*. Also unverifiable off-box: E2's claim that 0007's preflight refutes
+  its own header. The preflight (`0007:105-122`) greps installed tracks for `asyncRewake` and REFUSES
+  when absent, while the header says it re-read the binary on 2026-08-09 and found it consumed at the
+  dispatch call site — with no installed track in the container, neither side can be settled here.
+  Read it on the box before trusting either. **What IS off-box-eligible in this MASTER is the code:**
+  E2's dead arm (done, this entry) and E3's `cc-backlog falsify` retroactive screen — the
+  "did the probe ALREADY pass on the day the row was filed" half, which is `bin/cc-backlog` source
+  and needs no machine state. A future dispatch of this condition should route accordingly rather
+  than spend a cloud slot on E1/E4.
+
+  **AND THE LAND GATE ITSELF CANNOT PASS OFF-BOX — measure this before dispatching code work here
+  again.** `ship-land.sh --dry-run` exits 6 (GATE RED) in a Linux container on
+  `unattended-path-lint --selftest: FAILED (12 of 30)`. It is NOT a trunk defect and not the diff's:
+  the identical 12/30 reproduces on a pristine `origin/main` worktree with this entry's changes
+  absent. The cause is calibration, and it is worth knowing because it will recur on every cloud
+  land. The lint reports a bare binary only when it is UNREACHABLE under
+  `STOCK_PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and its RED fixtures invoke `shellcheck` and `tmux` —
+  which on the operator's macOS live in `/opt/homebrew/bin`, OFF that path, so they are detected and
+  the selftest is green. In a Debian container both live in `/usr/bin`, ON it, so the detector
+  correctly finds nothing and every "want 1, got 0" fires. The lint is right; the selftest is
+  macOS-shaped. Consequence for routing: a cloud session can produce a correct, gate-green-on-its-own-
+  diff commit for this repo and still be unable to LAND it, because the land gate fails for a reason
+  that has nothing to do with the diff. Treat "off-box-eligible" for claude-infrastructure as
+  *eligible to write*, not *eligible to land*, until that selftest is made portable.
+
+  **LEDGER REPLAY OWED — the bookkeeping for this entry could not be written from the cloud.** The
+  store is `~/.claude/autonomy/backlog.jsonl`, which is outside this repo and therefore outside the
+  container: it was a 0-byte file here and `cc-backlog done 70ec97ddb82b` answered `unknown id`. That
+  is a venue limit, not a refusal — the work landed, only its row could not be moved. On the box, replay:
+
+  ```sh
+  cc-backlog done 70ec97ddb82b --evidence "<the sha that landed this entry>"
+  cc-backlog add --condition master-enforcing-store \
+    --title "package the Phase-0 team-verify INTENT as a gate that can actually fire (successor to the arm deleted 2026-08-15)" \
+    --dod-ref docs/plans/MASTER_ENFORCING_STORE.md
+  ```
+
+  The second row is the follow-on this entry deliberately did NOT invent: the 2026-04-17 incident it
+  guarded (Phase 0 complete with zero worktrees) is still real, and the honest portable check is
+  worktree PRESENCE for the team, not the iTerm2 liveness pull-check the skill describes. Scoping
+  that is design work with a real over-blocking risk — a gate that exits 2 whenever it cannot verify
+  would wedge Phase-0 completion in every repo — so it wants its own row, not a rushed arm.
