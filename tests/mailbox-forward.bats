@@ -39,7 +39,11 @@ setup() {
   mailbox_write_forward "$C" "$A"        # close the loop
   run timeout 10 bash -c ". '$REPO/hooks/lib/mailbox-pending.sh'; mailbox_forward_of '$A'"
   [ "$status" -eq 0 ]                    # 124 would mean the timeout killed a spin
-  [ -n "$output" ]
+  # The VALUE, not merely non-emptiness. mailbox-pending.sh:398 breaks on the visited set BEFORE
+  # advancing, so the last good hop is exactly C — and `[ -n "$output" ]` passes just as happily on
+  # A, the fully-degraded result where the chain was not followed at all. The sibling bounded-hops
+  # test below pins its value, so the loose one was the outlier against this file's own header.
+  [ "$output" = "$C" ]
 }
 
 @test "chain depth is BOUNDED — a longer-than-max chain stops early, never walks forever" {
@@ -75,7 +79,14 @@ setup() {
   [ "$output" = "1" ]
   [ "$(grep -c '' "$CC_MAILBOX_DIR/$B.md")" -eq 1 ]
   grep -q '\[forwarded:AAAAAAAA\] l3' "$CC_MAILBOX_DIR/$B.md"
-  grep -qv 'l1' "$CC_MAILBOX_DIR/$B.md"          # consumed lines are NOT re-delivered
+  # COUNT, not `grep -qv`. `grep -qv PAT` exits 0 whenever ANY line fails to match, so over the
+  # exact regression fixture (migrate re-delivering from line 0, i.e. $B.md carrying all three
+  # forwarded lines) it exits 0 and the assertion passes — the same verdict as over the correct
+  # single-line output. Zero discriminating power: the only input that reds it is one where EVERY
+  # line matches, which this fixture cannot produce. A bare `! grep -q` would work here today only
+  # because this is the terminal statement of the body — an `!`-inverted status is errexit-exempt,
+  # so that form dies silently the moment anyone appends an assertion below it.
+  [ "$(grep -c 'l1' "$CC_MAILBOX_DIR/$B.md" || true)" -eq 0 ]   # consumed lines are NOT re-delivered
 }
 
 @test "migrate is IDEMPOTENT — a second call moves nothing (safe on every SessionStart)" {
