@@ -294,10 +294,41 @@ PY
 # shipped file; a control that cannot fail credits nothing.
 _notification_contract() {   # $1 = workflow path → exit 0 clean, 1 findings
   python3 - "$1" "$REPO/scripts/offbox-green-pull.sh" <<'PY'
-import re, sys, yaml
+import re, sys
 wf, puller = sys.argv[1], sys.argv[2]
-d = yaml.safe_load(open(wf))
-jobs = d.get('jobs') or {}
+
+# Split the `jobs:` mapping into per-job blocks BY INDENTATION, with no YAML library. The first
+# version of this helper imported PyYAML; the GitHub macOS runner does not have it, so all three
+# tests failed off-box and this suite became the single red in run 31914770411 — a contract check
+# that cannot run where its subject runs is not a check. Reproduced locally by hiding the module
+# (exactly 3 not-ok, matching the runner) before rewriting, so the cause was measured not guessed.
+def job_blocks(lines):
+    out, cur, name, in_jobs = {}, [], None, False
+    for ln in lines:
+        if not in_jobs:
+            if re.match(r'^jobs:\s*$', ln):
+                in_jobs = True
+            continue
+        if re.match(r'^\S', ln):          # a new top-level key ends the jobs mapping
+            break
+        m = re.match(r'^  ([A-Za-z_][\w-]*):\s*$', ln)
+        if m:
+            if name:
+                out[name] = cur
+            name, cur = m.group(1), []
+            continue
+        if name is not None:
+            cur.append(ln)
+    if name:
+        out[name] = cur
+    return out
+
+def convicts(block):
+    # Comments are skipped: the prose ABOVE a job documents the very defect being banned, and a
+    # lint that reads its own rationale as a violation is unshippable.
+    return any(re.match(r'^\s*exit\s+[1-9]\b', l) for l in block if not l.strip().startswith('#'))
+
+jobs = job_blocks(open(wf).read().splitlines())
 bad = []
 
 # L1 AGREEMENT. The puller reads ONE check-run by name; the workflow must publish a job by that
@@ -311,24 +342,20 @@ else:
     if name not in jobs:
         bad.append("puller reads check-run %r but no such job exists in the workflow" % name)
     else:
-        j = jobs[name]
+        block = jobs[name]
         # L2 ACQUIT-ONLY. The green job must be GATED on green — if it can run when the fold is not
         # green, it publishes a success that is not one, which is a FALSE GREEN in the store.
-        cond = str(j.get('if') or '')
-        if "== 'green'" not in cond and '== "green"' not in cond:
-            bad.append("job %r is not gated on a green fold (if: %r) — it could mint a false green"
-                       % (name, cond))
+        gate = [l for l in block if re.match(r'^\s*if:', l) and "== 'green'" in l]
+        if not gate:
+            bad.append("job %r is not gated on a green fold — it could mint a false green" % name)
         # L3 NO-CONVICT. Nothing on the green path may exit non-zero to mean "not green"; that is
         # the exact defect this contract exists to prevent recurring.
-        body = "\n".join(str(s.get('run') or '') for s in (j.get('steps') or []))
-        if re.search(r'^\s*exit\s+[1-9]', body, re.M):
+        if convicts(block):
             bad.append("job %r exits non-zero — 'not green' must never be spelled as a failure" % name)
 
 # L3 again, on the fold: it runs unconditionally, so a non-zero exit there fails the RUN and emails.
-if 'fold' in jobs:
-    body = "\n".join(str(s.get('run') or '') for s in (jobs['fold'].get('steps') or []))
-    if re.search(r'^\s*exit\s+[1-9]', body, re.M):
-        bad.append("job 'fold' exits non-zero — the fold reports, it does not convict")
+if 'fold' in jobs and convicts(jobs['fold']):
+    bad.append("job 'fold' exits non-zero — the fold reports, it does not convict")
 
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
@@ -343,13 +370,23 @@ PY
 @test "27: CONTROL — restoring the exit-1 convict makes the contract RED" {
   # The real pre-fix defect, replayed: the green job spelled "not green" as a failing exit.
   local mut="$BATS_TEST_TMPDIR/mutant-exit1.yml"
-  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" <<'PY'
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-d['jobs']['verdict']['steps'].append({'name': 'convict', 'run': 'exit 1'})
-yaml.safe_dump(d, open(sys.argv[2], 'w'))
+  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" verdict exit1 <<'PY'
+import re, sys
+lines = open(sys.argv[1]).read().splitlines()
+job, mode = sys.argv[3], sys.argv[4]
+start = next(k for k, l in enumerate(lines) if re.match(r'^  %s:\s*$' % job, l))
+end = len(lines)
+for k in range(start + 1, len(lines)):
+    if re.match(r'^  \S', lines[k]):
+        end = k
+        break
+if mode == 'exit1':
+    lines.insert(end, '          exit 1')
+else:                                  # 'ungate' — delete the job's own `if:` line
+    lines = [l for k, l in enumerate(lines) if not (start < k < end and re.match(r'^\s*if:', l))]
+open(sys.argv[2], 'w').write("\n".join(lines) + "\n")
 PY
-  grep -q 'exit 1' "$mut"            # anchor: the mutation actually applied
+  grep -q '^          exit 1$' "$mut"   # anchor: the mutation actually applied
   run _notification_contract "$mut"
   [ "$status" -eq 1 ]
   [[ "$output" == *"must never be spelled as a failure"* ]]
@@ -359,11 +396,21 @@ PY
   # The opposite failure the gate protects against: a `verdict` job that runs unconditionally would
   # report success on every tree, and the puller would stamp an off-box green for a red partition.
   local mut="$BATS_TEST_TMPDIR/mutant-ungated.yml"
-  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" <<'PY'
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-d['jobs']['verdict'].pop('if', None)
-yaml.safe_dump(d, open(sys.argv[2], 'w'))
+  python3 - "$REPO/.github/workflows/hermetic.yml" "$mut" verdict ungate <<'PY'
+import re, sys
+lines = open(sys.argv[1]).read().splitlines()
+job, mode = sys.argv[3], sys.argv[4]
+start = next(k for k, l in enumerate(lines) if re.match(r'^  %s:\s*$' % job, l))
+end = len(lines)
+for k in range(start + 1, len(lines)):
+    if re.match(r'^  \S', lines[k]):
+        end = k
+        break
+if mode == 'exit1':
+    lines.insert(end, '          exit 1')
+else:                                  # 'ungate' — delete the job's own `if:` line
+    lines = [l for k, l in enumerate(lines) if not (start < k < end and re.match(r'^\s*if:', l))]
+open(sys.argv[2], 'w').write("\n".join(lines) + "\n")
 PY
   # anchor: the gate is genuinely gone. Spelled `run` + status rather than `! grep`, because
   # bash exempts a `!`-negated command from errexit — the negated form is a DEAD assertion that
