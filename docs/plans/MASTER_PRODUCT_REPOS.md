@@ -40,6 +40,31 @@ spends a second slot and defeats the mission. Work every wave with **teammates I
 EFFORT boundary via `handoff-fire.sh --recycle` — same pane, fresh context, no new slot. The `S` markers
 below are left in place as the historical record of how these waves were originally scoped.
 
+🚨 **THE MASTER ROW IS NOT DISPATCHABLE TO A `claude-infrastructure` WORKER — CLOUD OR LOCAL
+(measured 2026-08-15).** Every open wave below edits `reso-management-app` or `doc_classifier`;
+this plan's home repo contributes no work at all. But the dispatch chain projects an item by the
+plan FILE's location, not by the trees its waves edit:
+
+`scripts/find-plan.sh:70 project_name_for()` derives the project from the path (`*/docs/plans/*` →
+basename of the repo dir) → `bin/cc-discover` C2 mints `advance <title>` under that project →
+`bin/cc-eligible:593 repo_for()` measures `~/Development/claude-infrastructure`, finds no
+local-only state named in the span fields (`title · dodRef · condition · source` — never the plan
+BODY, where every foreign tree is named), and returns `eligible` → a claude-infrastructure worker
+is fired at work in two trees it does not hold.
+
+Measured on a cloud fire of `8f59467c92b0`: the VM held exactly one checkout
+(`claude-infrastructure`), its GitHub scope was pinned to that one repo, and neither
+`~/Development/reso-management-app` nor `~/Development/doc_classifier` existed — so R1-R4 were
+**unreachable, not merely hard**. The gate is not wrong about what it measures; it measures the
+tree the LABEL names, and for a cross-repo master the label and the work disagree. This plan
+already states the governing rule two sections up — *"the tree it edits decides which wave can
+work it"* — and its own master row is the counter-example to it.
+
+**Until the routing fix lands, work these waves only from a session that HOLDS the target tree**
+(the local drain, per the SUPERSEDED note above), and treat the correctly-projected member rows as
+the real handles — they carry `reso-management-app` / `doc_classifier` and route correctly. The
+master row is a coordination header, not a unit of work; advancing it means advancing members.
+
 | Wave | Execution locus | Deliverable | Depends on |
 |---|---|---|---|
 | **R1 · reso: unblock the gate** | **S** (reso worktree) | `pnpm lint` green on `origin/main`; a fresh worktree can pass `ship-land` | — |
@@ -95,6 +120,20 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-15 — a cloud dispatch of the master row `8f59467c92b0` advanced nothing, and the
+  disproof is the ROUTING CHAIN, not the plan.** The waves are all still open and all still
+  correct; what is refuted is that this row can be worked by the venue it is fired at. Full
+  measurement + the four-tool chain that produces it → the 🚨 block in Phase 0 above. Nothing in
+  R1-R4 was touched, because nothing in R1-R4 was reachable: the worker held one checkout and the
+  two product trees were absent. **Filed as a decision for the desk, not fixed here** — the fix
+  shape is a choice between four mechanisms that `find-plan.sh`, `cc-discover`, `cc-eligible` and
+  `cc-dispatch` all read (a plan-frontmatter `project:` key · a `projectName` entry in the plan
+  index · a new `ineligible-foreign-tree` class in `cc-eligible` · a not-dispatchable plan list
+  beside `dispatch-projects.conf`), and a cross-repo master targets TWO trees, so the single-value
+  options cannot express it. A one-item worker should not pick that unilaterally. Note the fix is
+  NOT confined to `--venue cloud`: a *local* claude-infrastructure worker is equally unable to
+  edit these trees under the dedicated-worktree rail, so `cc-eligible` (which only answers "may
+  this go off-box?") is the narrowest of the four and probably the wrong one.
 - **2026-08-12 — created by W2 of `BACKLOG_SELF_DRAINING_2026-08-12.md`.** 58 rows joined by
   `group.py`: 44 `reso-management-app`, 15 `doc_classifier`, plus `reso`, `reso-qa-runner`,
   `lakehouse-lecture` and `agent-build-hackathon` singletons. The 2026-08-09 triage deliberately left
