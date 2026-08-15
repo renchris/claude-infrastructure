@@ -270,14 +270,34 @@ trap '_unbeat' EXIT
 # Best-effort and never fatal: we are already dying, and a failed append must not cost the verdict on
 # stderr or the marker cleanup. It is deliberately NOT filtered by the drain's fixture/noise grep, so
 # it counts as real traffic and cannot be crowded out.
+#
+# ── E1 (2026-08-15): THE NOTICE MUST NOT PRESCRIBE AN ACT THE CHOKEPOINT DENIES ────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1, from the operator screenshot that opened
+# that investigation. A session with a LIVE `/goal` killed its own pre-goal watcher — correct, and
+# the doctrine's own instruction — and this notice then told it to RE-ARM, which is the exact shape
+# hooks/validate-bash.sh:232 DENIES under a live goal (a parked background Bash makes CC skip goal
+# evaluation at every Stop). Three defects in one frame: the arm existed to be killed, the kill read
+# as `failed with exit code 144`, and the corpse's own advice pointed back at the denied act.
+#
+# WHY THE TEXT CARRIES BOTH BRANCHES RATHER THAN BRANCHING ON A PREDICATE HERE. This process cannot
+# see the goal: `goal_live_condition` needs a transcript path, which a watcher is never handed and
+# could only reach through a registry row → session id → project-slug lookup — i.e. a multi-MB grep
+# run inside a SIGTERM handler, the one place in this file that must not block. And it would answer a
+# READ-time question at WRITE time: this line then sits in the box until the next boundary drains it,
+# by which point the goal may have been armed, met, or cleared. The reader is not left guessing
+# either — hooks/mailbox-drain.sh evaluates the live predicate at that same boundary and emits its
+# own goal-aware nudge in the same block (its E2 arm names a goal-blocking watcher's pid outright),
+# so this line's whole job is to be CORRECT UNDER BOTH STATES rather than to contradict it.
+#
+# ONE LINE, no embedded newline: the mailbox is line-oriented and a line IS a message.
 # shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
 _wake_down_notice() {
   local box="$MAILBOX_DIR/${CUR_UUID}.md"
   [ -n "${CUR_UUID:-}" ] || return 0
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
-  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s) — it did NOT time out and consumed no ping. You are now DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s\n' \
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s) — it did NOT time out and consumed no ping. WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1.\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" \
-    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" \
+    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" \
     >> "$box" 2>/dev/null || true
   return 0
 }
@@ -286,7 +306,7 @@ _sig_verdict() {   # <signame> <signum>
   trap - TERM HUP INT EXIT
   _unbeat
   _wake_down_notice "$1"
-  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
+  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM — UNLESS a /goal is live in this session, in which case do NOT (a parked background Bash makes CC skip goal evaluation at every Stop; the goal forces the turns that drain your mail). The inbox line states both branches." >&2
   exit $(( 128 + $2 ))
 }
 trap '_sig_verdict TERM 15' TERM
@@ -571,5 +591,5 @@ done
 # NOT remapped to exit 0. rc 2 is load-bearing for cc-wait (:138 branches on it) and is already
 # overloaded with the usage errors at :46-52 — collapsing it would invert a contract and lose a
 # distinction, to satisfy a classifier that would still be wrong about rc 3/4/5.
-echo "cc-await-ping: verdict=timeout elapsed=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived. This is the DESIGNED outcome of a watch that ran its full term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do)." >&2
+echo "cc-await-ping: verdict=timeout elapsed=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived. This is the DESIGNED outcome of a watch that ran its full term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do), UNLESS a /goal is live in this session: a parked background Bash makes CC skip goal evaluation at every Stop, so re-arming under a live goal disables the goal instead of protecting a wake path you do not need (the goal blocks your stops, and mailbox-drain delivers at every boundary it forces)." >&2
 exit 2

@@ -390,3 +390,98 @@ an embedded newline that must not leak into the operator line"
   [ "$status" -eq 0 ]
   [ -z "$output" ] || false        # RED: the arm nudge was unreachable with an empty box
 }
+
+# ── E2: THE ARM THAT WAS ALREADY THERE WHEN THE GOAL ARRIVED (2026-08-15) ────────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2. The goal-aware nag above fires only when
+# the session is UNWATCHED, so it covers the arm that has not happened yet and misses the one that
+# already has: a watcher armed BEFORE `/goal` was typed defers that goal for its whole 4-hour term.
+# Nothing model-facing said so — hooks/goal-inert-watch.sh reports the same condition on
+# `systemMessage`, which reaches the operator and never the agent. Measured shape of the starvation
+# pole: 47 of 84 goal sessions, ZERO evaluations.
+
+goal_t() { # → a transcript path whose LAST goal_status attachment is a live arm sentinel
+  local t="$BATS_TEST_TMPDIR/goal-live.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"land P4 and content-verify"}}\n' > "$t"
+  printf '%s' "$t"
+}
+
+@test "E2: LIVE /goal + a parked PLAIN watcher ⇒ the drain NAMES the pid and hands over the kill" {
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [ "$ctx" != "null" ] || false
+  printf '%s' "$ctx" | grep -qF "kill $$" || false          # the ONE act that ends the deferral
+  printf '%s' "$ctx" | grep -qF "pid $$" || false           # named, not merely alluded to
+  printf '%s' "$ctx" | grep -q 'holding your LIVE /goal inert' || false
+  # it must NOT read as the arm nudge — the session is armed; that is the whole problem
+  ! printf '%s' "$ctx" | grep -q 'No inbox wake path armed' || false
+}
+
+@test "E2 DISCRIMINATOR: the SAME armed watcher with NO live /goal stays silent" {
+  # The condition is the CONJUNCTION. A report that fired on every armed watcher would tell every
+  # goal-less session to kill the wake path it was correctly told to arm.
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "E2 EXEMPTION: an idle-scoped watcher is SANCTIONED under a live goal ⇒ no kill notice" {
+  # B3 (§4 C1-C7): an idle-scoped watcher stands down on any new turn of its own session, so its
+  # deferral spans exactly the idle window and the goal is judged once per new-information event.
+  # Killing it would be the wrong advice, so the declaration in the marker suppresses the report.
+  printf 'pid=%s\nmode=idle-scoped\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "E2 EXEMPTION: the declaration is also honoured from the per-pid CLAIM file" {
+  # The marker has ONE owner slot and `_unbeat` hands it over to a live sibling whose mode it does
+  # not know; a watcher's own claim file is never handed over, so it is the sturdier declaration.
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  printf 'mode=idle-scoped\n' > "$CC_MAILBOX_DIR/.watchers/$UUID.$$"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "E2: a DEAD watcher pid under a live goal routes to the do-NOT-arm nag, never to a kill" {
+  # A stale marker is not a deferrer (the task is gone), so there is nothing to kill — and telling a
+  # session to kill a dead pid would spend a turn proving nothing. It is simply unwatched again.
+  printf 'pid=999999\n' > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'do NOT arm' || false
+  ! printf '%s' "$ctx" | grep -q 'kill ' || false
+}
+
+@test "E2: the report also rides a body-bearing drain (mail does not displace it)" {
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  seed "2026-08-15T10:00:00+0000 [peer] HANDOFF-PING: landed abc1234"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'landed abc1234' || false     # the mail still lands
+  printf '%s' "$ctx" | grep -qF "kill $$" || false           # and so does the report
+}
+
+@test "E2: post-tool never emits the report (it rides every tool call — one per turn, not per call)" {
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" post-tool' "$DRAIN" "$(goal_t)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "E2 RED-PROOF: the pre-fix drain from origin/main says NOTHING about a goal-blocking watcher" {
+  local old="$BATS_TEST_TMPDIR/pre-e2"; mkdir -p "$old"
+  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
+  if grep -q 'holding your LIVE /goal inert' "$old/hooks/mailbox-drain.sh"; then
+    skip "control is not pre-fix"
+  fi
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$old/hooks/mailbox-drain.sh" "$(goal_t)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false        # RED: the session was starving its own goal and was never told
+}
