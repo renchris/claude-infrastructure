@@ -133,7 +133,19 @@ ce_log_drop() {
 #   shadow-would-fire  Stage-2 composed everything and deliberately did NOT exec (damp-first)
 #   executed           a recycle actually ran (the ONLY value that means the context was replaced)
 #   nudged             the busy-medium pause-point advisory
+#   refused            the actuator WAS invoked and exited non-zero — nothing was recycled. This
+#                      record RETRACTS the immediately preceding `executed` for the same sid.
 # One token, one meaning (invariant R8). A consumer can finally count executions without inferring.
+#
+# THE ONE PAIRING A CONSUMER MUST HONOUR — `executed` is a CLAIM until no `refused` retracts it.
+# Count executions as `executed` MINUS the `refused` records that follow one for the same sid, never
+# as a bare `grep -c executed`. This is forced by the actuator, not chosen: a successful
+# `handoff-fire --recycle` types /exit, whose interrupt SIGKILLs the calling hook's process group, so
+# the caller cannot reliably write anything AFTER a success — the success record must precede the
+# call. A refusal returns normally (handoff-fire's recycle pre-pass refuses before any side effect),
+# so it can only be written after. Before `refused` existed, waiting-recycle.sh discarded that rc
+# entirely (`|| true`) and every refusal was banked here as a completed recycle — an ACTUATION LEDGER
+# that counted declarations, which is precisely the defect MASTER_SESSION_LIFECYCLE L4 exists to kill.
 #
 # Fail-soft at every seam, like every function here: no jq / unwritable dir / kill switch ⇒ return 0
 # and the caller is unaffected. Bounded (R7): pruned to half when it exceeds CC_RECYCLE_MAX.

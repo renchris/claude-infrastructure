@@ -133,6 +133,56 @@ never `/tmp`:** handoff-fire resolves its libs relative to its own path, so a `/
 RED that way and was measuring the copy's broken lib resolution, not the guard
 (`prescribed-repro-weaker-than-the-harness`).
 
+#### L1-c — RESOLVED 2026-08-15 (`hooks/waiting-recycle.sh`, `hooks/lib/context-econ.sh`, `tests/waiting-recycle-fire-rc.bats`)
+
+**The blind caller flagged at the end of L1-b's write-up — closed.** `hooks/waiting-recycle.sh` fired
+the Stage-2 actuator as `… >/dev/null 2>&1 || true` and then told the model
+*"⟳ DETERMINISTIC RECYCLE FIRED … Do NOT run handoff-fire yourself."* handoff-fire's recycle pre-pass
+refuses on at least four inputs — **exit 4** (L1-b's own in-flight-subagent gate), **exit 2**
+(`verify_self_pane` disproved this pane's identity), **exit 1** (dirty tree / no resolvable pane /
+underivable account) — and every one of them was swallowed. One poll produced three falsehoods:
+
+| | The claim | What was true |
+|---|---|---|
+| to the MODEL | "RECYCLE FIRED … do not run handoff-fire yourself" | nothing recycled, and the one command that would have saved it was waved off |
+| to the LEDGER | `ce_record_recycle … executed` — *"the ONLY value that means the context was replaced"* | the context was never replaced. **This is L4's defect reached through L4's own instrument**: the actuation ledger counting a declaration |
+| to the MECHANISM | `firedf` latched + the cooldown anchored "on the FIRE" | a one-fire-per-SID latch spent on a non-event, so the desk rode on at high fill and the eventual wedge page blamed *"the exec is not armed"* — the one diagnosis that is definitely wrong when the exec ran and was turned away |
+
+**Shipped disposition — CLAIM FIRST, RETRACT ON rc≠0.** The ordering is the actuator's, not a choice:
+a *successful* `--recycle` types `/exit`, whose interrupt SIGKILLs the calling hook's process group, so
+nothing after the call is reliably reachable and the success record MUST precede it. A *refusal*
+returns normally (the pre-pass refuses before any side effect), so the retraction can only be written
+after. Hence a new closed-enum verdict **`refused`**, documented at `ce_record_recycle` with the one
+pairing a consumer must honour: **count executions as `executed` minus the `refused` that follows one
+for the same sid — never a bare `grep -c executed`.** On rc≠0 the hook also: restores the fire's
+cooldown anchor to its pre-fire value (no recycle happened ⇒ no loop to break — restored, never
+deleted, since a Stage-1 advisory's stamp is a real pacer and clearing it is the documented panel
+landmine); writes a `refused-<sid>` sentinel so the **next wedge page names the refusal + its rc**
+instead of the wrong cause; logs `escalated stage2-refused` with the rc and the actuator's own refusal
+line; pages out-of-band (OS + Pushover); and hands the model an `⛔ RECYCLE REFUSED` message that maps
+each rc to its clearing action and tells it to run `/handoff` **itself**.
+
+**`firedf` deliberately stays latched.** Un-latching would let every subsequent poll re-exec the
+actuator while the refusing condition persists — a hammer. The cure for a refusal is an ACTION (commit
+the tree, let the subagents finish), not a retry; the paced wedge page + the capped advisories are what
+recur. Same false-negative-over-false-positive bias the rest of this hook is built on.
+
+**Captured output is bounded and JSON-safe** (`refusal_line`): 200 chars, control/quote/backtick/`$`
+stripped, prefer the actuator's own `!! …` line. It lands in a model-facing message *and* an
+`osascript` argument — an unbounded tail of someone else's stderr is how a diagnostic becomes a payload.
+
+**Test:** `tests/waiting-recycle-fire-rc.bats`, 10 cases, 0 failures. RED-proof vs pristine `2d7b125d`:
+**8 red** (1–7, 10); case 8 is the POSITIVE CONTROL (rc 0 unchanged — green on both trees) and case 9
+asserts an ABSENCE so it passes on pristine **vacuously** — both named in the file header so nobody
+later reads their green as evidence. Regression, my tree vs pristine, identical on both:
+`waiting-recycle.bats` 106/108 · `waiting-recycle-bounded-read.bats` 11/12 (all three failures
+pre-existing on trunk, S4-mailbox + a 400 KB-record case) · `waiting-recycle-memo` 5/5 ·
+`ctx-recycle-record` 12/12 · `handoff-fire-live-subagents` 8/8.
+
+**Still open, and deliberately not widened into here:** `bin/cc-pane` / `bin/cc-teardown` close panes
+via `it2 session close` (L1-b's named second door), and the other two rails' callers have not been
+audited for the same swallow.
+
 ### L2 · The channel
 `bin/cc-bus emit` interpolates `CC_BUS_ACTOR` RAW into the record — invalid JSON, and the same value
 becomes a shard FILENAME. `cc-announce`'s LOUD alarm drops the message it failed to deliver.
@@ -173,3 +223,14 @@ recorded firing in the enforcing store. A member row closes only when its silenc
   rejected fifth signal in § L1-b above. **Follow-on, filed not done:** `hooks/waiting-recycle.sh`
   fires `--recycle` blind (`|| true`, output to /dev/null) and then tells the model the recycle
   fired — a refusal there is a wedge; it needs to capture its own rc.
+- **2026-08-15 — L1-c LANDED** (that follow-on, closed). The Stage-2 fire is now OUTCOME-bound: rc
+  captured, `refused` added to the recycle-verdict enum as an explicit RETRACTION of the pre-call
+  `executed`, cooldown anchor restored on refusal, a `refused-<sid>` sentinel so the follow-on wedge
+  page names the real cause, out-of-band page, and a model-facing `⛔ RECYCLE REFUSED` that maps each
+  rc to its clearing action. `tests/waiting-recycle-fire-rc.bats` — 10 cases, 8 RED against pristine
+  `2d7b125d`, 1 positive control, 1 documented-vacuous. Full reasoning + the claim-first/retract
+  ordering argument in § L1-c above. **The sharpest finding: this defect was L4's own failure mode
+  reached through L4's own instrument** — the ledger built to prove that recycles FIRE was banking
+  every refusal as `executed`, so the one number that could have exposed the silence was itself the
+  thing telling the lie. Any future actuation-proof work must read that store with the retraction
+  pairing applied, not as a raw count.

@@ -125,6 +125,22 @@
 # The tool has ALREADY run at PostToolUse, so a fire can NEVER break the recycle machinery it triggers
 # (unlike a PreToolUse deny). Exit 0 ALWAYS — a PostToolUse hook must never cost a session.
 #
+# THE FIRE IS OUTCOME-BOUND, NOT ANNOUNCEMENT-BOUND (master-session-lifecycle L1/L4, 2026-08-15).
+# Stage 2 reads handoff-fire's EXIT CODE and reports what actually happened. Three outcomes, three
+# distinct records + three distinct model-facing messages — never one message for all of them:
+#   rc 0    → `⟳ DETERMINISTIC RECYCLE FIRED`, ce verdict `executed`, IDL `fired stage2-live`.
+#   rc ≠ 0  → `⛔ RECYCLE REFUSED`, ce verdict `refused` (which RETRACTS the pre-call `executed` —
+#             see the pairing note at ce_record_recycle), IDL `escalated stage2-refused` carrying the
+#             rc + the actuator's own refusal line, an OS notification, a Pushover page, a $refused_for
+#             sentinel so the next wedge page names the real cause, and the fire's cooldown anchor
+#             RESTORED to its pre-fire value (no recycle happened ⇒ no loop to break).
+#   SIGKILL → the success case usually never returns at all (the /exit interrupt kills this process
+#             group), which is exactly why the `executed` claim is written BEFORE the call.
+# This replaced `>/dev/null 2>&1 || true`, under which all four of handoff-fire's recycle refusals
+# (exit 4 in-flight subagents · exit 2 unverified pane identity · exit 1 dirty tree / no pane / no
+# account) were reported to the model as a successful recycle, banked in the actuation ledger as
+# `executed`, and left the desk riding at high fill behind a one-fire-per-SID latch.
+#
 # Agent/operator CLI (run from the desk's worktree):
 #   waiting-recycle.sh arm      # opt IN this desk (keyed by cwd) — also removes a prior `clear` disarm
 #   waiting-recycle.sh clear    # opt OUT this desk (per-desk kill-switch: writes a durable disarm marker
@@ -300,6 +316,10 @@ live_for()     { sentinel_for live      "$1"; } # cwd-keyed: live-fire opt-in (e
 brief_for()    { sentinel_for brief     "$1"; } # cwd-keyed: standing successor-brief template
 disarm_for()   { sentinel_for disarm    "$1"; } # cwd-keyed: per-desk opt-out (suppresses arm-by-default, G-P11-7)
 escalated_for(){ printf '%s/escalated-%s' "$STATE_DIR" "$1"; }             # SID-keyed: T-P1-8 wedge page-once pacer
+# SID-keyed: the Stage-2 actuator was invoked and REFUSED (rc≠0). Two lines: rc, then the refusal line.
+# Read by the wedge branch so a subsequent page names the REAL cause instead of the default
+# "a SHADOW would-fire is latched" — which, after a refused LIVE fire, is simply false.
+refused_for()  { printf '%s/refused-%s'   "$STATE_DIR" "$1"; }
 # Tiered-refresh state (4ce6ffc0194f, 2026-07-19):
 idlewatch_for(){ printf '%s/idlewatch-%s' "$STATE_DIR" "$1"; }             # SID-keyed: first sub-T_IDLE fresh poll (adaptive-decay clock)
 queued_for()   { printf '%s/queued-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: Tier-2 refresh-queued marker (busy@medium wants a refresh)
@@ -450,6 +470,28 @@ wr_os_notify() { # $1=title $2=msg — OS notification (osascript, or a stub in 
 wr_push_page() { # $1=msg — Pushover break-through; no-op (return 0) when the hook is missing/INERT
   [ -x "$PUSH_BIN" ] || return 0
   jq -cn --arg m "$1" --arg c "$CWD" '{message:$m,cwd:$c}' | "$PUSH_BIN" >/dev/null 2>&1 || true
+}
+# refusal_line <file> — the ONE most informative line of a refused actuator's captured output, made
+# safe to embed in a JSON string and in an OS-notification argument. handoff-fire prints its refusals
+# as `!! …`; prefer those, else the last non-empty line. Bounded to 200 chars because this lands in a
+# model-facing message and an osascript arg, and an unbounded tail of someone else's stderr is how a
+# diagnostic becomes a payload. Empty output ⇒ a stated absence, never a blank that reads as "no reason".
+refusal_line() {
+  local f="${1:-}" l=""
+  [ -s "$f" ] && {
+    l="$(grep -m1 -e '^!!' -e '^⛔' -e '^✋' "$f" 2>/dev/null || true)"
+    [ -n "$l" ] || l="$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n1 || true)"
+  }
+  [ -n "$l" ] || l="(no output — the actuator refused silently)"
+  # Neutralise the four characters that make a captured string dangerous DOWNSTREAM rather than here:
+  # `"` and `\` can break a jq --arg round-trip's consumer, and `` ` `` / `$` are live in the
+  # osascript string wr_os_notify builds. Parameter expansion, not `tr`, deliberately — a tr delete-set
+  # containing a backslash inside single quotes is the SC1003 trap, and the escaping is unreadable
+  # exactly where being readable is the whole point. Control characters go through tr, whose
+  # `[:cntrl:]` class needs no escape at all.
+  l="${l//\\/ }"; l="${l//\"/\'}"; l="${l//\`/ }"; l="${l//\$/ }"
+  l="$(printf '%s' "$l" | tr -d '[:cntrl:]')"
+  printf '%s' "${l:0:200}"
 }
 
 # ── BATS-POLLUTION GC ─────────────────────────────────────────────────────────────────────────────
@@ -1114,10 +1156,18 @@ if [ "$stage2_pending" = 1 ]; then
     elif [ -f "$(busyforce_for "$CWD")" ] || [ "${CC_WR_BUSY_FORCE:-}" = on ]; then exec_ok=1; fi
   fi
   if [ "$exec_ok" = 1 ]; then
+    cd_prev="$(cat "$cf" 2>/dev/null || true)"                # remembered so a REFUSAL can un-anchor it (below)
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
     # M-3: `executed` — the ONLY verdict that means a context was actually replaced. Measured across
     # the whole live IDL before this landed: ZERO stage2-live records in 32,075 evaluations. This
     # record is what makes that number readable instead of inferred from an overloaded token.
+    #
+    # WHY THE CLAIM IS STILL WRITTEN *BEFORE* THE CALL (and how the refusal path below repairs it):
+    # a SUCCESSFUL --recycle types /exit, whose interrupt SIGKILLs this hook's process group — so the
+    # line after the actuator may never run, and a post-hoc `executed` would be LOST on exactly the
+    # outcome it exists to record. A REFUSAL, by contrast, returns normally (handoff-fire's recycle
+    # pre-pass refuses BEFORE any side effect), so the retraction can only be written after. The
+    # asymmetry is the mechanism's, not a choice: claim first, retract on rc≠0.
     command -v ce_record_recycle >/dev/null 2>&1 && \
       ce_record_recycle "$tel" executed "$used" "$tk" "$fire_mode" || true
     log_idl fired "stage2-live" \
@@ -1126,8 +1176,46 @@ if [ "$stage2_pending" = 1 ]; then
           '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1),extended_grace:($eg==1)}')"
     # Sanctioned actuator: it arms a DETACHED watcher BEFORE typing /exit (order load-bearing), so the
     # recycle completes even when the /exit interrupt SIGKILLs this hook's process group.
-    "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >/dev/null 2>&1 || true
-    fmsg="⟳ DETERMINISTIC RECYCLE FIRED (${trig}) — the desk did not self-recycle within the ${GRACE_S}s grace, so waiting-recycle fired handoff-fire.sh --recycle. The successor is launching in this pane with the frozen DoD + a re-derive-from-disk brief. Do NOT run handoff-fire yourself."
+    #
+    # ── THE RC IS CAPTURED, NOT DISCARDED (master-session-lifecycle L1, the plan's own filed follow-on) ──
+    # This line shipped as `>/dev/null 2>&1 || true`. handoff-fire's recycle pre-pass REFUSES on at
+    # least four inputs — exit 4 (L1-b: in-flight Agent-tool subagents), exit 2 (verify_self_pane
+    # disproved this pane's identity), exit 1 (dirty tree / no resolvable pane / unresolvable account)
+    # — and every one of them landed here as a silent no-op that then told the model
+    # "RECYCLE FIRED … Do NOT run handoff-fire yourself". Three lies in one poll: the ledger got an
+    # `executed` record for a context that was never replaced (the exact declaration-over-event defect
+    # L4 exists to kill), the desk kept riding at high fill behind a one-fire-per-SID latch, and the
+    # model was told not to do the one thing that would have saved it. That is this condition's whole
+    # failure class — nothing observes the absence — reached through the mechanism built to cure it.
+    errf="$FIRE_DIR/wr-fire-${SID}.err"; fire_rc=0
+    "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >"$errf" 2>&1 || fire_rc=$?
+    if [ "$fire_rc" != 0 ]; then
+      # ── REFUSED — retract the claim, un-anchor, page, and tell the model the TRUTH ──────────────
+      hf_why="$(refusal_line "$errf")"
+      # The loop-breaker anchors "a recycle happened here". None did, so restore the pre-fire value
+      # (never delete: a Stage-1 advisory's stamp is a real pacer, and clearing it is the documented
+      # panel landmine). Strictly more permissive than leaving the false anchor, and it cannot spin —
+      # $firedf stays latched, so Stage 2 can no longer EXEC for this SID; only the (paced) wedge page
+      # and the (capped) advisories recur. Deliberate: retrying the actuator every poll while the
+      # refusing condition persists would hammer it, and the fix for a refusal is an ACTION (commit
+      # the tree, let the subagents finish), not a retry.
+      if [ -n "$cd_prev" ]; then printf '%s' "$cd_prev" > "$cf" 2>/dev/null || true
+      else                       rm -f "$cf" 2>/dev/null || true; fi
+      printf '%s\n%s\n' "$fire_rc" "$hf_why" > "$(refused_for "$SID")" 2>/dev/null || true
+      command -v ce_record_recycle >/dev/null 2>&1 && \
+        ce_record_recycle "$tel" refused "$used" "$tk" "$fire_mode" || true
+      log_idl escalated "stage2-refused" \
+        "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" \
+            --argjson rc "$fire_rc" --arg why "$hf_why" --arg err "$errf" \
+            '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,fire_rc:$rc,refusal:$why,stderr_file:$err,executed:false}')"
+      wr_os_notify "Claude desk RECYCLE REFUSED" "desk ${UUID:-$SID} at ${used}% — handoff-fire exited ${fire_rc}: ${hf_why}"
+      wr_push_page "RECYCLE REFUSED (${DESK_ROLE}) ${used}% ctx: handoff-fire rc=${fire_rc} — ${hf_why}. Desk is NOT recycled and NOT latched to retry."
+      rmsg="⛔ RECYCLE REFUSED — waiting-recycle fired handoff-fire.sh --recycle (${trig}) and it EXITED ${fire_rc} WITHOUT recycling: ${hf_why}. Your context was NOT replaced and no successor is launching — you are still the same session, still at ${used}%, and this SID will not auto-fire again. ACT NOW, in this order: (1) CLEAR the refusal — rc 4 = in-flight Agent-tool subagents (wait for them, or re-fire with --allow-live-subagents to abandon them deliberately); rc 2 = this pane's identity could not be verified (do NOT retry blind — a stale pane id types /exit into a stranger's session); rc 1 = a dirty tree, an unresolvable pane, or an underivable account (commit or stash, then retry). Full output: ${errf}. (2) THEN recycle yourself with /handoff. Do NOT assume the recycle is merely late — it did not happen. Kill-switch: \`waiting-recycle.sh clear\`."
+      jq -nc --arg r "$rmsg" '{decision:"block",reason:$r,systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
+      exit 0
+    fi
+    rm -f "$errf" 2>/dev/null || true                         # rc 0: nothing to explain (best-effort — we may be SIGKILLed first)
+    fmsg="⟳ DETERMINISTIC RECYCLE FIRED (${trig}) — the desk did not self-recycle within the ${GRACE_S}s grace, so waiting-recycle fired handoff-fire.sh --recycle (exit 0). The successor is launching in this pane with the frozen DoD + a re-derive-from-disk brief. Do NOT run handoff-fire yourself."
     jq -nc --arg r "$fmsg" '{decision:"block",reason:$r,systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
     exit 0
   fi
@@ -1160,12 +1248,24 @@ fi
 if [ "$wedged" = 1 ]; then
   date +%s > "$(escalated_for "$SID")" 2>/dev/null || true   # stamp the page-once pacer FIRST (at-most-once/window)
   livearm="--live"; [ "$fire_mode" = busy ] && livearm="--live --busy-force"
-  if [ "$capped" = 1 ]; then why="advisory budget exhausted (${N}/${MAX}), no recycle"
+  # A REFUSED live fire outranks both legacy shapes as an explanation: it latched $firedf (so
+  # shadow_fired reads 1) without any shadow having occurred, and reporting it as "the exec is not
+  # armed" would page the operator with the one diagnosis that is definitely wrong — the exec IS
+  # armed, it ran, and it was turned away. Names the rc + the actuator's own refusal line.
+  rcf="$(refused_for "$SID")"; refused_fire=0
+  if [ -s "$rcf" ]; then
+    refused_fire=1
+    ref_rc="$(sed -n 1p "$rcf" 2>/dev/null)"; case "$ref_rc" in ''|*[!0-9]*) ref_rc='?' ;; esac
+    ref_why="$(sed -n 2p "$rcf" 2>/dev/null)"; [ -n "$ref_why" ] || ref_why="(reason not captured)"
+  fi
+  if   [ "$refused_fire" = 1 ]; then why="the deterministic fire RAN and was REFUSED by handoff-fire (exit ${ref_rc}: ${ref_why}) — nothing was recycled"
+  elif [ "$capped" = 1 ]; then why="advisory budget exhausted (${N}/${MAX}), no recycle"
   else                        why="a SHADOW would-fire is latched but the exec is not armed ${livearm}"; fi
   state_phrase="clean tree + no open decision"; [ "$fire_mode" = busy ] && state_phrase="mid-work (${hold_reason})"
   log_idl escalated "wedge:${why}" \
     "$(jq -cn --argjson used "$used" --arg why "$why" --arg mode "$fire_mode" --argjson capped "$capped" --argjson shadow "$shadow_fired" \
-        '{used_pct:$used,why:$why,mode:$mode,capped:($capped==1),shadow_fired:($shadow==1)}')"
+        --argjson refused "$refused_fire" \
+        '{used_pct:$used,why:$why,mode:$mode,capped:($capped==1),shadow_fired:($shadow==1),refused_fire:($refused==1)}')"
   wr_os_notify "Claude desk WEDGED" "desk ${UUID:-$SID} at ${used}% can't self-recycle — ${why}"
   wr_push_page "WEDGED DESK (${DESK_ROLE}) ${used}% ctx: ${why} — /handoff now or arm ${livearm}"
   emsg="⚠ WEDGED — quiet monitoring boundary (${trig}), ${state_phrase}, but ${why}: you are RIDING toward the 90% auto-compact wall with NO recycle. ACT NOW: run /handoff to self-recycle, or (operator) arm the deterministic exec — desk-arm-live.sh (or waiting-recycle.sh arm --brief <file> ${livearm}). Re-pages every ${ESCALATE_DEDUP_S}s until resolved. Kill-switch: waiting-recycle.sh clear (this desk) / kill (global)."
