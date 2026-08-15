@@ -51,7 +51,15 @@ setup() {
         SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
         SHIP_LAND_BACKUP_REF SHIP_BACKUP_REAP \
+        SHIP_LAND_T0 SHIP_LAND_MEAS_ROUNDS SHIP_LAND_MEAS_GATE_S \
+        SHIP_LAND_MEAS_ARMS_S SHIP_LAND_MEAS_STATICS_S \
         2>/dev/null || true
+  # The P0 MEASUREMENT carriers join for a sharper reason than tuning: meas_export() hands them to
+  # the locked re-exec, so a land that took the in-lock path leaves every suite it smokes with the
+  # OUTER land's round count and clock already on the meter. This suite's own attest cases read
+  # total_s and the gate_rounds/gate_s/arms/statics split, so an inherited value does not fail them
+  # loudly — it makes them assert the wrong land's numbers. (tests/land-gate-cas.bats hit the loud
+  # half: `gate_rounds:2` read 3 and red a tree that was fine.)
   # LOAD SHEDDING OFF for the whole suite. In v2 CC_GATE_MAX_LOAD=0 is the never-shed kill switch,
   # so every fixture's smoke RUNS. Left inherited, whether a pipeline smoked at all would depend on
   # the ambient load of the box the suite happens to run on — a test verdict decided by `uptime`.
@@ -2053,6 +2061,9 @@ printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[
   "${SHIP_LAND_GATE_SCOPE-unset}" "${LAND_LOCK_WAIT-unset}" "${LAND_LOCK_TTL-unset}" \
   "${CC_GATE_MAX_LOAD-unset}" "${SHIP_LAND_LANE-unset}" "${SHIP_LAND_SMOKE_BUDGET_S-unset}" \
   "${SHIP_LAND_TIMEOUT_BIN-unset}" "$*"
+printf 'T0=[%s] MROUNDS=[%s] MGATE=[%s] MARMS=[%s] MSTAT=[%s]\n' \
+  "${SHIP_LAND_T0-unset}" "${SHIP_LAND_MEAS_ROUNDS-unset}" "${SHIP_LAND_MEAS_GATE_S-unset}" \
+  "${SHIP_LAND_MEAS_ARMS_S-unset}" "${SHIP_LAND_MEAS_STATICS_S-unset}"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/bats"
 
@@ -2067,6 +2078,8 @@ STUB
       SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_VERIFY_RETRIES=9 SHIP_LAND_GATE_SCOPE=full \
       LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 \
       SHIP_LAND_LANE=v1 SHIP_LAND_SMOKE_BUDGET_S=1 SHIP_LAND_TIMEOUT_BIN= \
+      SHIP_LAND_T0=1 SHIP_LAND_MEAS_ROUNDS=1 SHIP_LAND_MEAS_GATE_S=99 \
+      SHIP_LAND_MEAS_ARMS_S=99 SHIP_LAND_MEAS_STATICS_S=99 \
       bash "$BATS_TEST_TMPDIR/probe.sh"
   [ "$status" -eq 0 ]
   # every LANDER knob the tests assert against arrives UNSET, whatever the operator set
@@ -2088,6 +2101,17 @@ STUB
   # always runs. Inherited, whether a nested pipeline smoked at all would depend on the ambient
   # load of the box the suite happens to run on — a test verdict decided by `uptime`.
   echo "$output" | grep -q 'MAXLOAD=\[0\]'      || false
+  # THE P0 MEASUREMENT CARRIERS — sharper than any knob above, because they are not tuning at all
+  # but the outer land's accumulated STATE, handed to its locked re-exec by meas_export(). Once a
+  # land takes the in-lock path, every suite it smokes would start counting from the outer's total:
+  # tests/land-gate-cas.bats asserts `gate_rounds:2` and read 3, so a green tree went red as a
+  # function of whether a sibling moved the trunk during the land that ran it. Unlike the knobs
+  # above, nobody has to SET these for the bleed to happen — the land sets them on itself.
+  echo "$output" | grep -q 'T0=\[unset\]'       || false
+  echo "$output" | grep -q 'MROUNDS=\[unset\]'  || false
+  echo "$output" | grep -q 'MGATE=\[unset\]'    || false
+  echo "$output" | grep -q 'MARMS=\[unset\]'    || false
+  echo "$output" | grep -q 'MSTAT=\[unset\]'    || false
   # and the scrub must not eat the arguments
   echo "$output" | grep -q 'ARGS=\[tests/foo.bats\]' || false
 }

@@ -1523,10 +1523,32 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
     # keeps a land from being the thing that pushes an interactive box over.
     [[ -n "$NICE_BIN" && -x "$NICE_BIN" ]] && pre+=("$NICE_BIN" -n "${SHIP_LAND_SMOKE_NICE:-10}")
   fi
+  # THE P0 MEASUREMENT CARRIERS SCRUB HERE TOO, and they are the sharpest members of this list
+  # because they are not tuning at all — they are STATE this land is mid-way through accumulating.
+  # meas_export() hands them to the locked re-exec, so once a land takes the in-lock path every
+  # suite it then smokes inherits a non-zero round count and a running clock. A fixture pipeline
+  # starts counting from the OUTER land's total: tests/land-gate-cas.bats's stale-round case asserts
+  # `gate_rounds:2` and got 3, i.e. a suite that is green everywhere else goes red as a function of
+  # whether a sibling happened to move the trunk during the land that ran it (reproduced exactly:
+  # `SHIP_LAND_MEAS_ROUNDS=1 bats -f 'P0 exit 42 attests' …` fails on the same line the land did).
+  # Scrubbed at the gate rather than only in the two suites' setups, because the poison is available
+  # to EVERY suite this function runs and a per-suite fix is a list someone must remember to join
+  # (memory: enforcement-must-live-at-the-chokepoint). SHIP_LAND_T0 rides along: it carries the
+  # end-to-end clock, so an inherited one makes a fixture's `total_s` the outer land's age.
+  #
+  # 🚨 NOTHING MAY COME BETWEEN THE `\` BELOW AND `env` — NOT EVEN A COMMENT. A comment line after a
+  # line-continuation ENDS the continuation: `${pre[@]+…}` then runs as its own command and `env …
+  # bats` as another, so the timeout/nice prefix silently stops wrapping the suite. Measured while
+  # writing the scrub above: the comment block sat between the two lines, and the bounded-smoke
+  # cases went red with `smoke green — 1 direct suite(s) in 120s` over a fixture that hangs for 120s
+  # under a 3s budget. The bound had not loosened; it was not there at all — and the only reason
+  # this was caught is that tests/ship-land.bats pins the wall bound in both directions.
   ${pre[@]+"${pre[@]}"} \
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
+      -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
+      -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
 }
 
