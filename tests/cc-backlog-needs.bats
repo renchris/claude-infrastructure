@@ -63,15 +63,78 @@ blocked_json() { bash "$CB" list --blocked --json | jq -c --arg i "$1" 'map(sele
   [ "$(blocked_json "$id" | jq -r '.source')" = needs ]
 }
 
-@test "needs appends exactly the SAME two records the add→block path would (no third writer)" {
+@test "needs appends exactly the SAME records the add→block path would (no third writer)" {
   id=$(bash "$CB" needs "restart Cursor" --project "$P")
-  [ "$(jq -rs 'length' "$CC_BACKLOG_FILE")" = 2 ]
+  # add → block → link. The third record is the operator-gate keying (2026-08-15, O3 of
+  # MASTER_OPERATOR_GATED.md); it is written by cmd_link on the `block` transition, which is why it
+  # is still not a third WRITER — the assertion below proves that by producing the identical trail
+  # from the two-command path.
+  [ "$(jq -rs 'length' "$CC_BACKLOG_FILE")" = 3 ]
   [ "$(jq -rs '.[0].event' "$CC_BACKLOG_FILE")" = add ]
   [ "$(jq -rs '.[0].id'    "$CC_BACKLOG_FILE")" = "$id" ]
   [ "$(jq -rs '.[0].title' "$CC_BACKLOG_FILE")" = "restart Cursor" ]
   [ "$(jq -rs '.[1].event' "$CC_BACKLOG_FILE")" = block ]
   [ "$(jq -rs '.[1].id'    "$CC_BACKLOG_FILE")" = "$id" ]
   [ "$(jq -rs '.[1].needs' "$CC_BACKLOG_FILE")" = "restart Cursor" ]
+  [ "$(jq -rs '.[2].event'     "$CC_BACKLOG_FILE")" = link ]
+  [ "$(jq -rs '.[2].id'        "$CC_BACKLOG_FILE")" = "$id" ]
+  [ "$(jq -rs '.[2].condition' "$CC_BACKLOG_FILE")" = master-operator-gated ]
+
+  # THE COMPOSITION ITSELF, asserted rather than described: drive the two-command path cc-dispatch
+  # prints into every worker brief, in a second store, and require the event sequence to be
+  # identical. This is what "no third writer" means — `needs` reaches cmd_add and cmd_transition, it
+  # does not hand-roll records, so a future edit to either path cannot make the two diverge silently.
+  local two="$BATS_TEST_TMPDIR/two.jsonl"
+  CC_BACKLOG_FILE="$two" bash "$CB" add --title "restart Cursor" --source needs --project "$P" >/dev/null
+  CC_BACKLOG_FILE="$two" bash "$CB" block "$id" --needs "restart Cursor" >/dev/null
+  [ "$(jq -rs '[.[].event] | join(",")' "$two")" = "$(jq -rs '[.[].event] | join(",")' "$CC_BACKLOG_FILE")" ]
+  [ "$(jq -rs '[.[].id]    | unique | join(",")' "$two")" = "$id" ]
+}
+
+@test "block keys the row into the operator-gated group at FILING time (not by a later sweep)" {
+  id=$(bash "$CB" add --title "the launchd dispatcher needs a bootout" --project "$P")
+  # An ordinary add is UNGROUPED — the negative control, without which the assertion below would
+  # also pass on a store that keys every row it ever sees.
+  [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.condition // ""')" = "" ]
+  run bash "$CB" block "$id" --needs "launchctl bootout the dispatcher"
+  [ "$status" -eq 0 ]
+  [ "$(blocked_json "$id" | jq -r '.condition')" = master-operator-gated ]
+}
+
+@test "the keying is NON-FORCE: a row already grouped elsewhere keeps its condition, and says so" {
+  id=$(bash "$CB" add --title "re-land the stranded wt-foo patch" --project "$P")
+  bash "$CB" link "$id" --condition master-stranded-work >/dev/null
+  run bash "$CB" block "$id" --needs "the operator must approve the lossy re-land"
+  # The STEP is filed regardless — losing the group costs a place in the rendered batch; failing the
+  # transition would lose the operator's step, which is the worse outcome by construction.
+  [ "$status" -eq 0 ]
+  [ "$(blocked_json "$id" | jq -r '.condition')" = master-stranded-work ]
+  [ "$(blocked_json "$id" | jq -r '.needs')" = "the operator must approve the lossy re-land" ]
+  # …and the caller is TOLD, in one line, rather than being handed cmd_link's four-line re-key
+  # instructions for a move it never asked for.
+  echo "$output" | grep -q 'NOT in the "master-operator-gated" batch'
+  ! echo "$output" | grep -q 'To re-key deliberately' || false
+  # No `force` record was written — O1's demotions have to stick.
+  [ "$(jq -rs '[.[] | select(.event=="link" and (.force // false))] | length' "$CC_BACKLOG_FILE")" = 0 ]
+}
+
+@test "CC_BACKLOG_OPERATOR_CONDITION=off disables the keying; the block itself is untouched" {
+  id=$(bash "$CB" add --title "paste the API key" --project "$P")
+  run env CC_BACKLOG_OPERATOR_CONDITION=off bash "$CB" block "$id" --needs "paste the API key"
+  [ "$status" -eq 0 ]
+  [ "$(blocked_json "$id" | jq -r '.condition // ""')" = "" ]
+  [ "$(blocked_json "$id" | jq -r '.needs')" = "paste the API key" ]
+  [ "$(jq -rs '[.[] | select(.event=="link")] | length' "$CC_BACKLOG_FILE")" = 0 ]
+}
+
+@test "an INVALID operator-condition slug is a no-op, never a refused block (fail-open)" {
+  id=$(bash "$CB" add --title "rotate the token" --project "$P")
+  # A digit is exactly what valid_condition bans — a measurement is not a state. The arm must fall
+  # through silently rather than refuse a transition that is already carrying the operator's step.
+  run env CC_BACKLOG_OPERATOR_CONDITION=master-operator-gated-2 bash "$CB" block "$id" --needs "rotate the token"
+  [ "$status" -eq 0 ]
+  [ "$(blocked_json "$id" | jq -r '.condition // ""')" = "" ]
+  [ "$(blocked_json "$id" | jq -r '.needs')" = "rotate the token" ]
 }
 
 @test "--run survives the fold to list --blocked --json as .run (fold-whitelist regression)" {
