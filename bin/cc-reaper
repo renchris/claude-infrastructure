@@ -299,8 +299,49 @@ _rp_bounded() { # <secs> <cmd...> — run bounded; rc 124 = the bound fired
 # Seams (tests): CC_REAPER_GARBAGE_PS_A/_PS_B fixture files replace the live snapshots;
 # CC_REAPER_GARBAGE_KILL replaces kill(1) with a collector; CC_REAPER_WATCHDOG_DIR relocates the
 # watchdog pid-file store.
+#
+# ── NEVER AN ANCESTOR OF THIS SWEEP (2026-08-15, backlog 8efd655b0fe1). The kill discipline above
+# enumerates what must not be touched by IDENTITY — claude, kitty, iTerm2, a whitelisted daemon —
+# and every clause is about somebody else's process. It has no clause about OURS, and the classifier
+# selects on SHAPE: `orphan-bash` is any launchd-parented bash older than 600s whose args miss the
+# whitelist. A GitHub Actions macOS runner starts its service as exactly that — `/bin/bash
+# .../runsvc.sh`, reparented to launchd — so a sweep running inside a CI job classifies the process
+# tree it is running in as garbage and TERMs it. MEASURED, 6 of 6 cut shards in the hermetic
+# workflow (runs 31879973156 / 31882316087 / 31885942191 / 31890394871 / 31896109392 / 31898668582):
+# `##[error]The runner has received a shutdown signal` arrives 0.4-0.7s after
+# `>>> RUNNING tests/reap-sweep-bounds.bats`, destroying ~43 suites of evidence each time; and the
+# runner-shaped fixture below reproduces the classification deterministically off-CI.
+#
+# The guard is an INVARIANT, not a platform exception: a process this sweep is descended from is by
+# construction alive and holding the sweep, so it can never be the residue of a dead session that
+# this arm exists to collect. It is placed at the ACTUATOR rather than in the classifier so that it
+# covers all three call sites at once — the TERM pass, the KILL escalation, and the watchdog branch
+# whose candidates never pass through the awk — and BEFORE the collector seam so a test can observe
+# the refusal. Cost: one /bin/ps per ancestor, computed once per sweep (depth 3 from the launchd
+# daemon on the operator's box), against an arm the header calls deliberately cheap.
+_GS_ANCESTORS=""
+_gs_ancestors_init() { # cache the pid chain of THIS process, self included. Live ps, never the
+  # snapshot: under a fixtured snapshot the sweep's own pid is absent by construction, so a
+  # snapshot-derived chain would be empty in exactly the tests that must exercise this guard.
+  local p="$$" n=0
+  _GS_ANCESTORS=""
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$n" -lt 64 ]; do
+    _GS_ANCESTORS="$_GS_ANCESTORS,$p"
+    p="$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')"
+    n=$((n+1))
+  done
+  _GS_ANCESTORS="${_GS_ANCESTORS#,}"
+}
+_gs_is_ancestor() { # <pid> — 0 iff pid is this sweep or one of its ancestors
+  case ",${_GS_ANCESTORS}," in *",${1},"*) return 0 ;; esac
+  return 1
+}
 _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> — re-verify comm, then signal. rc 0 = signalled
   local pid="$1" re="$2" sig="$3" c
+  if _gs_is_ancestor "$pid"; then
+    log "garbage: REFUSED $sig $pid — this sweep is running inside it (ancestor)"
+    return 1
+  fi
   if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig"; return $?; fi
   c="$(/bin/ps -p "$pid" -o ucomm= 2>/dev/null | sed 's/^ *//;s/ *$//')"
   [ -n "$c" ] || return 1
@@ -311,6 +352,7 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
   [ "${CC_REAPER_GARBAGE:-1}" = 1 ] || { log "garbage: disabled (CC_REAPER_GARBAGE=0)"; return 0; }
   local reap="${1:-0}" snapA snapB list cls pid re age desc
   local nA=0 nkill=0 termed=""
+  _gs_ancestors_init
   if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] && [ -n "${CC_REAPER_GARBAGE_PS_B:-}" ]; then
     snapA="$(cat "$CC_REAPER_GARBAGE_PS_A" 2>/dev/null)" || snapA=""
     snapB="$(cat "$CC_REAPER_GARBAGE_PS_B" 2>/dev/null)" || snapB=""
@@ -374,6 +416,10 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     nA=$((nA+1))
     if [ "$reap" = 1 ]; then
       _gs_verify_kill "$pid" "$re" TERM && { nkill=$((nkill+1)); termed="$termed $pid:$re"; }
+    elif _gs_is_ancestor "$pid"; then
+      # DRY-RUN must report what REAP would do. Without this the two modes disagree: the actuator
+      # refuses an ancestor, and a dry run would still print it as a candidate to be reaped.
+      say "  garbage (REFUSED — this sweep runs inside it): $cls pid=$pid age=${age}s $desc"
     else
       say "  garbage (would reap): $cls pid=$pid age=${age}s $desc"
     fi

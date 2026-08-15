@@ -33,6 +33,19 @@ setup() {
   # live ~/ and could read (or act on) a REAL pane. Hermeticity is also a landing-gate ratchet.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
 
+  # …AND FIXTURE THE PROCESS TABLE, which $HOME does not reach. Every test below runs a real
+  # `sweep --reap`, and the sweep's FIRST arm is garbage_sweep: unpinned, it forks two live
+  # `/bin/ps -Ax` and issues real TERM/KILL to whatever the host happens to be running. That is not
+  # a hypothetical — it is the measured cause of backlog 8efd655b0fe1: on a GitHub Actions macOS
+  # runner the service is a launchd-parented `/bin/bash .../runsvc.sh`, the classifier's
+  # `orphan-bash` shape selects it, and this suite killed the runner out from under its own job in
+  # 6 of 6 cut shards, costing ~43 suites of evidence each. cc-reaper now refuses to signal an
+  # ancestor of its own sweep, which is the invariant; this pin is the other half, because a suite
+  # that tests classify/checkpoint/teardown BOUNDS has no business reading the live process table
+  # at all. /dev/null is the spelling tests/cc-reaper.bats:98 already uses for the same reason: an
+  # empty snapshot makes the arm skip fail-open before either ps fork.
+  export CC_REAPER_GARBAGE_PS_A=/dev/null CC_REAPER_GARBAGE_PS_B=/dev/null
+
   # A landed, idle, reapable candidate — so a sweep that is NOT blocked reaches teardown. Anything
   # this suite observes short of that is attributable to a bound and nothing else.
   mkdir -p "$D/clean"; git -C "$D/clean" init -q
@@ -99,6 +112,17 @@ EOF
   run grep -c 'timeout ' "$REPO/bin/cc-reaper"
   [ "$status" -eq 0 ]
   [ "$output" -gt 0 ]
+}
+
+@test "HERMETICITY: every sweep here skips the garbage arm — this suite never reads the live process table" {
+  # The pin in setup() is only worth having if its removal is LOUD. Unpinned, the sweep's first arm
+  # forks two live `/bin/ps -Ax` and TERMs whatever the host is running under a launchd parent —
+  # which is how this suite killed the GitHub Actions runner service in 6 of 6 cut shards
+  # (backlog 8efd655b0fe1). Asserted on the arm's own log line rather than on the absence of a
+  # kill, because absence is exactly what a fixture that reaches nothing also produces.
+  run "$R" sweep --reap
+  run grep -c 'garbage: snapshot unavailable' "$D/reaper.log"
+  [ "$output" -ge 1 ] || { echo "the garbage arm ran against the LIVE process table: $(grep garbage "$D/reaper.log")" >&2; return 1; }
 }
 
 @test "every foreign invocation in the sweep goes through the bounded helper (none left bare)" {
