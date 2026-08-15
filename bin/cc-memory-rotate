@@ -190,12 +190,22 @@ while :; do
   # `](...)` group — a greedy match extracts prose from any hook that contains parentheses
   # (measured on this live index: 42 of 105 lines would mis-parse; the trap
   # commands/compact-memory.md documents for E2 harvesting).
+  #
+  # THE REGEX LIVES IN A VARIABLE, AND THAT IS LOAD-BEARING (fixed 2026-08-15). Written inline
+  # it matched NOTHING: inside `[[ ]]` an unescaped `(` is the shell's own expression-grouping
+  # operator, so the capture group was consumed by the PARSER before the regex engine saw it and
+  # `[[ $l =~ ^- \[…\]\(([A-Za-z0-9]…) ]]` was simply false for every well-formed entry. The
+  # rotor therefore classified all N entries `unparseable` and returned verdict=exhausted on
+  # every run — an actuator that could not act, reporting a protection reason for its own parse
+  # bug. Measured on a 20-entry fixture: unparseable=19, tail=1, moved=0. An unquoted variable
+  # expansion is the portable idiom (the pattern reaches the engine intact on every bash).
+  ENTRY_RX='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
   ENTRY_LNO=""; ENTRY_FILES=""; NENT=0
   i=0
   while [ "$i" -lt "$NL" ]; do
     case "${LINES[$i]}" in
       "- ["*)
-        if [[ "${LINES[$i]}" =~ ^-\ \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\) ]]; then
+        if [[ "${LINES[$i]}" =~ $ENTRY_RX ]]; then
           ENTRY_FILES="$ENTRY_FILES${BASH_REMATCH[1]}$TAB"
         else
           ENTRY_FILES="$ENTRY_FILES$TAB"
