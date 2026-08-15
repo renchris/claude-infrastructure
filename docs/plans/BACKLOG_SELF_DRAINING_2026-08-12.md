@@ -1696,3 +1696,155 @@ arithmetic is net-of-intake, never a raw total). Effort order after this one is 
 `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
 `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
 `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+### 2026-08-15 — THE LOCAL DRAIN recycle #7: the CI shard that "GitHub cancelled" was killed by our own corpus, and a bound rule that guarded the bug it was written beside
+
+`master-verification-integrity` **7 → 6 live rows** (2 open, 4 blocked). **Three rows closed, two
+filed**; three commits landed and content-verified on `origin/main` — **`910f53fcb`** (the reaper
+fix), **`30494ba09`** (a trunk red the land found), **`cf4160fa7`** (the manifest entry), each
+`land-verify: path(s) present + content-identical`, `git diff origin/main` empty, 0 unlanded.
+
+**The brief's fallback did not apply, and checking that took one command.** It said: if both open
+rows are genuinely off-box, say so and move to the next effort. `gh auth status` is authenticated
+and `hermetic.yml` accepts `workflow_dispatch`, so CI evidence is reachable from the desk —
+`gh run view --job … --log`, `gh run download`, `gh workflow run`. **Neither row was off-box.** The
+repo is PUBLIC, so Actions minutes (macOS included) are free and a confirmation run costs nothing
+but wall time. Do not re-derive this: the desk can read and drive this CI.
+
+#### `8efd655b0fe1` — the runner did not shut down; `tests/reap-sweep-bounds.bats` TERMed it
+
+The row's START HERE was *"emit a per-suite START marker so the log names the suite that was
+RUNNING rather than the last one that finished"* — **that marker already exists**, and reading it
+named the culprit in one grep. Across all six cut runs in the last twelve
+(`31879973156 · 31882316087 · 31885942191 · 31890394871 · 31896109392 · 31898668582`),
+`##[error]The runner has received a shutdown signal` arrives **0.4–0.7 s after
+`>>> RUNNING tests/reap-sweep-bounds.bats`**, always shard 2, taking ~43 suites of evidence with it.
+The row's strong lead — *successor-of-last-logged-suite* — pointed at the same file for the wrong
+reason; the marker made it a measurement instead of an inference, which is exactly what the row
+demanded before anyone acted.
+
+**The mechanism.** That suite runs a real `sweep --reap` with the process table UNPINNED, so the
+sweep's first arm (`garbage_sweep`) forks two live `/bin/ps -Ax` and issues real TERM/KILL. Its
+`orphan-bash` shape is *launchd-parented bash, age ≥600 s, args off the whitelist* — which is
+precisely what a GitHub Actions macOS runner service is: `/bin/bash …/runsvc.sh`. Reproduced
+deterministically off-CI with a runner-shaped fixture snapshot: **2 candidates, 2 TERMed, one of
+them runsvc.sh**.
+
+🚨 **The obvious discriminator is NOT the explanation — check it before you publish it.** In-job
+elapsed at that suite is **263–322 s on the cut shards and 258–313 s on the survivors**, fully
+overlapping. So the ~50% coin flip is pre-job *runner uptime* crossing the 600 s age threshold, not
+anything the job does. "Elapsed explains it" was a clean story that the data refuses, and the desk
+never sees the effect at all (no ≥600 s orphaned bash here — the collector run caught zero).
+
+**The row's own prescription would have made things worse** (memory:
+`prescribed-remedy-worse-than-the-bug`). It offered *"scope the reaper's process selection by cwd"*
+— but that arm is deliberately machine-wide: it collects the residue of DEAD sessions across the box
+(the load-781 incident, 3,599 processes). Two narrower fixes instead:
+
+1. **NEVER AN ANCESTOR OF THIS SWEEP.** The kill discipline enumerated what must not be touched by
+   IDENTITY — claude, kitty, iTerm2, a whitelisted daemon — and **every clause names somebody
+   else's process**. Nothing said *not the tree we are running inside*, while the classifier selects
+   on SHAPE. A process this sweep descends from is by construction alive and holding the sweep, so
+   it can never be the residue this arm collects. Placed at the **actuator** (memory:
+   `make-the-actuator-the-arbiter`) so one guard covers the TERM pass, the KILL escalation and the
+   watchdog branch whose candidates never pass through the awk — and BEFORE the collector seam, so
+   a test can observe the refusal. The chain comes from live `ps`, never the snapshot: under a
+   fixtured snapshot the sweep's own pid is absent by construction, so a snapshot-derived chain
+   would be empty in exactly the tests that must exercise the guard.
+2. **Fixture the process table in the suite** — the half `$HOME` does not reach. `/dev/null` is the
+   spelling `tests/cc-reaper.bats:98` already used for this reason; that sibling was pinned and this
+   one never was. Census: 41 suites name cc-reaper, exactly **2** execute a reaping verb, and both
+   are now pinned.
+
+**The pre-existing exact-set case asserted a TERM on `$$`** — the test's own pid, an ancestor of the
+sweep it runs. It now uses a spawned child, with the ancestor asserted REFUSED beside it: one
+mechanism, both directions, identical candidate shape.
+
+#### The land refused twice, and both refusals were worth more than the diff
+
+**1. The dead-assertion ratchet caught MY new case.** `A && { echo …; return 1; }` is unreachable
+under errexit; `bats-assert-liveness-fix.py` **DECLINED** the shape (*"not a single scannable AND-OR
+list"*) rather than guess, which makes the repair a hand-edit that must be proved. Rewritten as an
+`if`, then proved live by a mutant that makes the ancestor branch print **both** strings — so the
+positive half still matches and only the negative half can red. A decline is not a failure of the
+fixer; it is the fixer refusing to fabricate.
+
+**2. `tests/watchdog-census.bats` case 18 was RED ON TRUNK** — reproduced on a pristine detached
+`origin/main` worktree before a line was written (the attribution step earns its keep every
+recycle). `hook: every external call on the death path is time-bounded` requires
+`lcw_bounded … ps aux` in `hooks/lead-crash-watchdog.sh`. **The hook executes no `ps aux`** — its
+concurrency probe is `pgrep -x`, and the walk survives only inside the comment recording why it left
+(load-781: 10–30 s per scan × ~20 concurrent scans feeding the load they were measuring). Both
+halves came from the **same commit** (`dd7ddb528`), so the case was **born unsatisfiable in the one
+direction that matters**: the only way to make it pass was to re-introduce the walk. A stale term
+does not merely fail to guard — **it guards the bug** (memory:
+`stale-assertion-becomes-an-inverted-guard`).
+
+**Why nobody noticed: the suite is in `scripts/offbox-excluded.manifest`, so the off-box producer
+never judges it** — and the on-box verifier runs in the shared checkout, whose tree diverges from
+trunk (`4e39debcf`). A suite both producers are blind to is red for as long as it likes.
+
+🚨 **And fixing the stale term exposed that the rule could not fail per site.** It asked whether the
+file held SOME bounded occurrence of each NAME, so with two `pgrep` probes on the death path,
+unbinding one left the case **GREEN** — proved by mutation (m7), which is the only reason it was
+found. The rule is now per site, keyed on **invocation shapes** rather than bare names, because
+`[[ -n "$tdbin" ]]` is a test and a bare-name rule would red the three guards surrounding the one
+real call. m7 and m9 both red it now; each shape must still EXIST, so it cannot pass by deletion. A
+third case pins the load-781 cure itself, which had **no guard at all** — the only assertion in the
+area pointed the other way.
+
+#### `05ff1e5fabc0` — all three named reds are RETRACTED, and the class had moved
+
+Zero of the three (`lr-resume-answer-width`, `autonomy-sweep:534`, `boundary-handoff:369`) appear in
+**twelve consecutive folds**. Not a hole either: they live in shards 1, 4 and 5, never the dead
+shard 2, so their absence from `failing` is genuine greenness. **Do not spend another session on
+TERM/COLUMNS or expect(1)** — the row's live hypotheses died with its symptom.
+
+The class had a different, deterministic member: **`tests/unattended-path-lint.bats`, red in 12 of
+12 and green 18/18 here** — the only suite red in every one, i.e. the single line standing between
+the producer and a green all day, while `deploy-live`'s consumer wants a recent green. Cause named
+by content, not hinted: the lint asks whether a bare name resolves on the PATH a launchd job runs
+under, which is **a fact about which binaries the machine has**. The runner ships none of
+`tmux · kitty · pnpm · yarn · uv`; the desk resolves all five *inside the hardened PATH itself*.
+Manifest-excluded with that measurement, following its own sibling `unattended-sysctl-path.bats`.
+**Teaching the lint to excuse "absent from this host" was rejected**: it would weaken the desk
+verdict — the only one that means anything here — to buy an off-box opinion that never can.
+
+#### `b02e87582e96` — a peer discharged it in full, and its follow-on could not reach the store
+
+`ba9141f11` re-verified all 7 screens with 7 independent verifiers, none reviewing its own screen:
+**20 of 21 findings live, no verdict overturned**. The row is closed on that evidence. But its
+closing paragraph is the finding: *"Not filed to cc-backlog: the store is machine-local and absent
+in a cloud container, so filing would have written to a store that evaporates."* **The analysis is
+durable and the work was unreachable by `cc-dispatch`.** Filed as ONE pointer row (`c60963776f2e`),
+not six — six rows to close one is the arithmetic this drain exists to avoid, and the triage doc
+already ranks them (gate-memo first: a red lands green in the land gate, reproduced end-to-end).
+🚨 **A cloud peer cannot file. Harvest its commit message, or the wave is lost.**
+
+#### Two things the next recycle should not re-derive
+
+- **`782607797fc5`'s premise is stale** (it is BLOCKED; this is a note, not an action). It asks the
+  operator to authorize a privileged signal trace because *"With every run cut, NO GREEN STAMP CAN
+  EVER EXIST, so deploy-live refuses forever."* `~/.claude/autonomy/postland/runner.log` records
+  **`GREEN ba9141f110f8 … run_s=2299 retries=2 flakes=1` at 2026-08-15T13:57:42Z**, and the cut
+  before it names its own cause (*"our own 5400s bound fired"*), not an external sender. `deploy-live`
+  still refuses — for the **divergence**, not the absence: `target ba9141f110f8 is not a descendant of
+  live HEAD 4e39debcfb3f`. Re-verify the wall before spending the operator on it (memory:
+  `parked-blocker-obsoleted-by-later-fix`).
+- **A land advisory now names `tests/watchdog-census.bats` as a shrink candidate** (*"green off-box
+  now — delete its line from `scripts/offbox-excluded.manifest`"*). It was red for the reason fixed
+  above, so the candidacy is plausible — but a partition run **cannot speak** for an excluded suite
+  by construction. Confirm on a CENSUS run (`workflow_dispatch` with `census: true`, free) before
+  deleting the line.
+
+**State at this recycle.** `master-verification-integrity` **6 live**: open — `6a7eb069e703` (the
+intermittent `cc-close-attrib` exit-code race, 3 of 12 — a RACE, not the host-coupling class, so it
+must not be manifest-excluded on the intermittency), `c60963776f2e` (the 6-cluster triage wave);
+blocked — `782607797fc5`, `67a7d78c1134`, `0be0bd2c0b65`, `c1a29f8ee045`. Confirmation of the reaper
+fix is in flight: **`workflow_dispatch` run `31907405089`, pinned to `30494ba09`** (the first sha
+carrying it) — read its shard 2 and its fold's `unreported`; the scheduled run `31907172661` is
+pinned to the pre-fix `ba9141f11` and is the control. Live store 569 (sibling intake continues; the
+drain's arithmetic is net-of-intake, never a raw total). Effort order after this one is unchanged:
+`master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
+`master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
+`master-fire-gate` (58) → `master-convergence-deadlock` (84).
