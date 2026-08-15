@@ -1848,3 +1848,134 @@ drain's arithmetic is net-of-intake, never a raw total). Effort order after this
 `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32) →
 `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
 `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+---
+
+### 2026-08-15 — THE LOCAL DRAIN recycle #8: the reaper fix holds, the exclusion list SHRANK for the first time, and the flake nobody has ever observed stayed unobserved through 658 runs
+
+`master-verification-integrity` **6 live, unchanged** (2 open, 4 blocked) — and that number is the
+honest one: **six commits landed and content-verified**, but they retire 3 of `c60963776f2e`'s 6
+clusters, and a row with half its wave left is not a close. Landed, each `land-verify: path(s)
+present + content-identical` with `git diff origin/main` empty: **`0364d24c8`** + **`b3110a79f`**
+(gate-memo), **`e6c8e723d`** (cc-recover-safeguard), **`c68c7ea0d`** (the manifest shrink),
+**`543a0d841`** (worktree-memory-link), **`70b8c7797`** (lead-supervisor). 0 unlanded at close.
+
+#### The verdict recycle #7 left in flight: the fold is WHOLE, and `8efd655b0fe1` stays closed
+
+Run `31907405089` never produced one — a `workflow_dispatch` shares a concurrency group with other
+dispatches, so dispatching a run at current trunk **cancelled it**. Read that as a rule, not an
+accident: *do not dispatch on `main` while a pinned dispatch is pending; the schedule is a
+different group and is never cancelled.* The replacement is strictly better evidence anyway —
+**`31908006223` at `4e21050b5`**, which carries the reaper fix AND `cf4160fa7`: **`unreported: 0`,
+all ten shard artifacts present, no cut.** Against a measured pre-fix base rate of **6 cuts in 12
+folds (50%)**, and with the mechanism named and reproduced off-CI, that is corroboration, not
+proof-by-one-run — but nothing says reopen. `tests/unattended-path-lint.bats` is also gone from the
+failing set, which is `cf4160fa7` working.
+
+**Two suites reds appeared that were in none of the previous twelve folds** (`tests/cc-gc.bats`,
+`tests/deathwatch-watchfile.bats`, plus a `completion-assert` cut at the 300 s bound). They are NOT
+ours and it took one command to say so: `30494ba09` touches only `tests/watchdog-census.bats` and
+`cf4160fa7` only the manifest, so neither can red a third suite. Both are spawn-then-kill,
+dead-pid-observation shaped — the same family as `6a7eb069e703`, which is worth noticing.
+
+#### The exclusion manifest shrank — the first time its cure arm has ever deleted a line
+
+`c68c7ea0d` delists `tests/watchdog-census.bats`. The file calls itself *"RE-MEASURED, NOT
+CURATED"* and names the census as the arm that stops an entry becoming permanent; that arm had
+never removed anything, because growth was mechanised and the cure was a human remembering to tick
+a box. The bar used, and the one to reuse: **a named mechanism PLUS a census green.** `30494ba09`
+is the mechanism; census run **`31909362400`** ran the suite at **20 ok / 0 notok / 4 s** (the desk
+reproduces it identically). The same census re-confirms what it does NOT delist —
+`unattended-path-lint` red at 15 ok / 3 notok, exactly the runner-package-set class it was excluded
+for. Partition 426 → 427.
+
+#### `6a7eb069e703` — STILL OPEN, and the next attempt should not start where the row says
+
+**658 runs, zero reproductions.** The row's own START HERE is now refuted twice over, and that is
+the deliverable:
+
+- *"the wrapper reads the child status after redirecting through a `>(tee)` process
+  substitution"* — **that construct is gone.** `bin/cc-close-attrib:169-198` replaced it with an
+  explicit FIFO plus a backgrounded `tee` whose pid is held, deliberately, in the 2026-08-07
+  load-781 fix. The named mechanism does not exist in the subject.
+- *"Reproduce with the suite under artificial load on the desk"* — **measured, and it does not.**
+  Desk, 410 green / 0 red across five shapes: 40 direct-wrapper · 150 under 8-way CPU load · 120
+  under 4× oversubscription + a fork storm · 60 under `bats` · 40 under the faithful
+  `offbox-run.sh suites` invocation (`env -i`, `LC_ALL=C`, `TERM=dumb`, stdin `/dev/null`, under
+  `timeout -k 10 300`). Both boxes are **bash 3.2.57 arm64**, so the interpreter was never the
+  variable.
+
+So the machine was ruled out on the machine that fails. A throwaway probe branch (`probe-**`, its
+own workflow, never `wt-**`/`offbox-**` so it cannot spend the hermetic concurrency) ran the real
+thing on `macos-latest`:
+
+| probe | shape | result |
+|---|---|---|
+| `31909730457` reps 3, 5 | case 1 alone ×240, plus the whole suite ×12 immediately after its real shard-8 predecessor `tests/cc-backlog.bats` | **all green** |
+| `31910734148` ×8 | the real `offbox-run.sh shard 8 10` — 43 suites, end to end, suite instrumented in place | **all green, and all 8 shards fully green** |
+
+The instrumentation was positive-controlled before it was trusted (a `code+1` mutant made it print
+`PROBE-OBSERVED status=34` beside the close-record's own `exit_code:33` — the field that
+discriminates "wrapper returned the wrong code" from "`wait` returned the wrong code"). It never
+fired. `P(0 fails | p=0.25, n=8) ≈ 0.10`, so this does not *refute* the rate; it says the trigger
+is not in the suite, the case, the predecessor, the shard sequence, or the image.
+
+**Do not attribute it to `910f53fcb`** — that was checked and is false. The reaper suite that TERMed
+the runner is `tests/reap-sweep-bounds.bats` in **shard 2**, `cc-reaper` is **shard 1**, and
+`cc-close-attrib` is **shard 8 position 7 of 43** whose only reaper-ish suite (`team-orphan-reaper`)
+runs at position 41, *after* it — different runner VMs entirely. Two of the three failures
+coincided with cut runs and one (`31893067668`) did not.
+
+**The one hypothesis the data still supports** is the one that commit measured for the cut: **runner
+STATE, not tree state** — there, the coin flip was pre-job runner uptime crossing a 600 s age
+threshold, which is invisible to any number of fresh-runner reps. Next attempt starts there
+(correlate failures against runner uptime / warm-vs-cold VM), not at the desk and not at the
+wrapper. The row must still not be manifest-excluded: 3-of-12 is a race, and an entry there needs a
+measurement of MACHINE coupling.
+
+#### `c60963776f2e` — 3 of 6 clusters retired, ranked order held
+
+- **`gate-memo` (rank 1, "a red lands green").** The salt hashed four interpreter versions and no
+  configuration, while `ship-land` invokes the analyser with **no `--norc`** — so `.shellcheckrc`,
+  which waives two codes by name and calls itself *"a FLOOR"*, decides verdicts the memo stores.
+  Reproduced on trunk's own lib: identical blob **and** identical salt across an `rc=0 → rc=1` flip.
+  Fixed by folding the rc into the salt by value (`HERM_READSET`'s shape), and `b3110a79f` then
+  corrects three comments citing a `git ls-tree` this file has never called.
+- **`cc-recover-safeguard` (rank 2).** All four live. The load-bearing one: both `self-close` arms
+  ended `|| true` and nothing re-read them, so a REFUSED close (exit 2 is the *ordinary* answer when
+  a third process drives `self-close --session-id`) produced "recovery complete: … closed", a ✅
+  page, and exit 0. The re-fire's status was checked rigorously and the **destructive** half was not
+  checked at all.
+- **`worktree-memory-link` (rank 3).** `encode()` mapped only `/` and `.` beneath a comment
+  certifying *"Verified 2026-07-31 against ground truth … not inferred"* — the verification was
+  real and its **span was two characters wide**. Re-measured against the live fleet rather than the
+  triage's single container build (which pinned CLI 2.1.42 while the fleet runs 2.1.183/2.1.220):
+  **1,661 project dirs across four config roots, zero containing `_` or `.`**, with a positive
+  control that makes the zero non-vacuous — `~/Development/doc_classifier` exists and is keyed
+  `-Users-chrisren-Development-doc-classifier` in all four roots (227 session files), while the
+  narrow rule's slug exists nowhere. `70b8c7797` then fixes the same rule in `lead-supervisor.sh`,
+  where its fail direction is a **false `STALL?` page at a healthy session**.
+
+**Remaining, in the triage's own order:** `session-writes:278` SIGPIPE (1 line; deferral already on
+the record at `LIVENESS_DETECTOR_FAILNEG.md:286-289`) · `cc-config-slot` ×3 · `branch-reaper` ×3 ·
+`mailbox-forward` ×2.
+
+#### The method note worth carrying: a mid-body `! cmd` asserts NOTHING
+
+Building the safeguard tests, the class-not-spelling case **passed against the pre-fix script**. The
+cause is not /Users/chrisren/.claude/bin/cc-bats but bash: a command whose status is inverted with `!` is **exempt from errexit**,
+so only the LAST line of a test body is load-bearing in that form — `shellcheck` says the same thing
+as **SC2314**. Every negative in the new tests is an `if … return 1`. This is the executable half of
+blocked row **`67a7d78c1134`** (bare mid-body `[[ ]]`, 2,561 sites): the same defect, a different
+spelling, and the reason a suite can be green over a live bug. **Every new assertion this recycle
+was mutant-proved per site** — safeguard 13 ok / 5 not ok pre-fix (the 5 being exactly its four
+findings), worktree-memory-link 13 / 3, gate-memo 10 / 1, lead-supervisor 98 / 1 — with an always-on
+control green in both worlds each time.
+
+**State at this recycle.** `master-verification-integrity` **6 live**: open — `6a7eb069e703` (see
+above; do not restart at the desk), `c60963776f2e` (3 of 6 clusters remain); blocked —
+`782607797fc5`, `67a7d78c1134`, `0be0bd2c0b65`, `c1a29f8ee045`. The throwaway `probe-close-attrib`
+branch and its workflow are deleted; they never touched `main`. Effort order after this one is
+unchanged: `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store`
+(32) → `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos`
+(57) → `master-fire-gate` (58) → `master-convergence-deadlock` (84).
