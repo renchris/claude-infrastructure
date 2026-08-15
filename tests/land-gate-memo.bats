@@ -154,6 +154,33 @@ sc_last() { tail -1 "$SC_ARGV" 2>/dev/null; }
   [[ "$(sc_last)" == *"c.sh"* ]]
 }
 
+@test "INVALIDATES on configuration change: a committed .shellcheckrc re-checks everything" {
+  git checkout -q -b feat/rc main
+  printf 'disable=SC2001\n' > .shellcheckrc
+  git add .shellcheckrc
+  git commit -q -m "rc: waive one code"
+  landable r.sh rho
+  gate_once
+  [ "$status" -eq 0 ]
+  local before; before="$(sc_invocations)"
+  gate_once                                   # carried, as the first test pins
+  [ "$(sc_invocations)" -eq "$before" ]
+
+  # A SIBLING COMMITS A TIGHTENED POLICY — the case the version axis above cannot reach. The tree
+  # stays CLEAN, so memo_init's dirty-tree guard never fires; r.sh's blob is untouched, so the
+  # content axis cannot notice; and the analyser's version is unchanged, so the version axis cannot
+  # either. But the statics arm invokes it with no `--norc`, so this file decides verdicts: a memo
+  # blind to it replays a green earned under the looser policy, which is a red landing green.
+  # Measured pre-fix on the file's own re-round scenario — identical blob AND identical salt across
+  # an rc=0 → rc=1 flip.
+  printf '# tightened\n' > .shellcheckrc
+  git commit -q -am "rc: tighten"
+  gate_once
+  [ "$status" -eq 0 ]
+  [ "$(sc_invocations)" -gt "$before" ]
+  [[ "$(sc_last)" == *"r.sh"* ]]
+}
+
 # ---- failure direction: every unknown re-runs, none returns green -----------
 
 @test "a CORRUPT entry re-runs the check and cannot pass a red file" {

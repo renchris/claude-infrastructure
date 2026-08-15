@@ -90,12 +90,31 @@ memo_init() {  # 0 = memo usable · 1 = memo OFF (and every later call degrades 
   # linter's own name: a comment whose first word is that name is parsed as a directive, and a
   # malformed one aborts the whole file — the lint then reads NOTHING and reports clean. Repo
   # memory: lint-blindness-composes-and-hides-the-next-defect.)
+  # CONFIGURATION DECIDES A VERDICT TOO, so it belongs in the identity beside the versions.
+  # ship-land.sh's statics arm invokes the analyser with no `--norc`, so this repo's
+  # `.shellcheckrc` — which waives two codes BY NAME and calls itself "a FLOOR", i.e. written to be
+  # tightened later — is in force for every verdict this memo stores. Without the line below the
+  # completeness claim above is false: a sibling can COMMIT a tightened rc mid-round, which leaves
+  # the tree CLEAN so the dirty-tree guard never fires and leaves every blob untouched so every key
+  # is unchanged, and each entry earned under the looser policy stays honourable forever. MEASURED
+  # on the file's own re-round scenario: identical blob + identical salt across an rc=0 → rc=1
+  # flip, i.e. a red lands green. Hashed BY VALUE, the same shape HERM_READSET and GITID_CHECKER
+  # already use, and resolved against the repo root rather than $PWD so a caller's cwd cannot move
+  # which policy is measured. An absent file contributes empty, so present and absent key
+  # differently rather than colliding. Correctly scoped to the one analyser: `bash -n` and
+  # py_compile read no configuration, so the interpreter versions genuinely cover them.
+  #
+  # No `gate-memo/v1` bump is needed to retire the entries earned before this line existed: adding
+  # a field CHANGES the salt, so they are all invalidated by construction.
+  local _rcpath
+  _rcpath="$(git rev-parse --show-toplevel 2>/dev/null)/.shellcheckrc"
   MEMO_SALT="$(
     printf 'gate-memo/v1\n'
     printf 'shellcheck=%s\n' "$(shellcheck --version 2>/dev/null | awk '/^version:/{print $2}' || true)"
     printf 'bash=%s\n'       "$(bash --version 2>/dev/null | head -1 || true)"
     printf 'python3=%s\n'    "$(python3 --version 2>&1 || true)"
     printf 'git=%s\n'        "$(git --version 2>/dev/null || true)"
+    printf 'shellcheckrc=%s\n' "$(git hash-object -- "$_rcpath" 2>/dev/null || true)"
   )" || return 1
 
   MEMO_OK=1
