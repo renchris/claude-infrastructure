@@ -182,3 +182,48 @@ See `docs/research/ci-notification-flap-2026-08-15/A-crossrepo-census.md` for th
 failed-runs-per-day table across every repo. Prior task #157 fixed the `diagrams` source durably
 (15/15 green) but never touched `hermetic`, and closed anyway — which is why the symptom outlived
 its own fix.
+
+**Only 4 of 114 repos produce any Actions run at all** (110, including all 24 forks, are
+mechanically incapable of emailing). Ranked by failed runs/day:
+
+| producer | /day | verdict | disposition |
+|---|---|---|---|
+| `claude-infrastructure` **hermetic** | **8.29** | the null-result-as-error defect | **FIXED** here |
+| `claude-infrastructure` diagrams | 4.07 | REAL content-drift catches; last 20 runs all green | none — the gate is working |
+| `lakehouse-lecture` pages-build-deployment | 1.57 | GitHub's own Pages Liquid parser on literal `{%…%}` | filed `54d7aff8ed8d` |
+| `doc_classifier` nightly | 1.07 | 15/15 red, `make scale-run SCALE_POINT=proving` | filed `9333991e4544` |
+| `reso` soketi-image-cve-scan | 0.14 | **TRUE positive** — green until 2026-06-29, red since on unpatched CVE-2026-59874 | filed `e3f988b489c3`; should stay red until patched |
+| `reso` tenant-drift | 0.14 | dies at `pnpm/action-setup`; **has never once reached its own check** since 2026-05-24 | filed `485f8f87eb5f` |
+
+`hermetic` alone was more than every other workflow combined, which is why the perceived cadence was
+"every 30 minutes". The reso `tenant-drift` row is the one worth reading twice: a config-drift check
+that has been dead for ~3 months while still rendering as a run in the Actions tab — the failure mode
+where a broken alarm is *worse* than no alarm, because it also manufactures the belief of coverage.
+
+---
+
+## 6. Live verification — run `31914770411`, on the landed tree
+
+Dispatched on `db942f294` (trunk had advanced past the land; the workflow file there was
+content-verified to carry the fix before reading anything from the run).
+
+| signal | before | after | meaning |
+|---|---|---|---|
+| RUN conclusion | `failure` | **`success`** | the email stops |
+| `verdict` check-run | `completed:failure` | **`completed:skipped`** | not `success` ⇒ puller writes nothing |
+| fold verdict | `red` | `red` | unchanged — no green was manufactured |
+
+Both halves hold simultaneously, which is the whole claim: **the run stopped failing without the
+producer starting to lie.**
+
+### What the same run then exposed
+
+Its one failing suite was `tests/offbox-partition.bats` — the suite added *by this change*. Tests
+26-28 imported PyYAML, which the GitHub macOS runner does not have, so the contract check convicted
+the partition it exists to protect. Reproduced locally by hiding the module (exactly 3 not-ok,
+matching the runner's `ok=26 notok=3`), then rewritten onto stdlib `re` only and re-verified with
+PyYAML present *and* hidden: identical, all green, both controls still red on their mutants.
+Fixed in `6e73c5089`.
+
+The irony is worth keeping: a test asserting "a check must be able to run where its subject runs"
+was itself unable to.
