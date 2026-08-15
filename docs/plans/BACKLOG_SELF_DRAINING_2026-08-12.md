@@ -2016,3 +2016,47 @@ branch and its workflow are deleted; they never touched `main`. Effort order aft
 unchanged: `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store`
 (32) → `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos`
 (57) → `master-fire-gate` (58) → `master-convergence-deadlock` (84).
+
+#### After the wave: two more efforts touched, and both moves were AUDITS rather than diffs
+
+**`master-operator-gated` 25 → 24, by its own O1 (`f3f2f0805807`).** The deliverable there is *demote
+every row an agent could actually do* — an operator-only step is not an escape hatch. All 24 blocked
+rows were read; **21 are unambiguous gates** (credentials, OAuth consent clicks, an external human at
+KPMG, taste calls on motion and menus) and three were checked one by one:
+
+- `5436396f405c` → **`master-enforcing-store`, unblocked.** Its own title says *"the fix is that
+  sessions work in their own worktree, not a command to run"* — which conflates *no command for the
+  OPERATOR* with *nothing to build*. Measured: **no guard on `git pull`/`git merge` exists anywhere
+  in `hooks/`**, and `validate-bash.sh`'s 40 deny arms cover other classes. A norm nothing enforces
+  is the repo's own `enforcement-must-live-at-the-chokepoint` memory, and building that guard is
+  agent work.
+- `1cc794cbc6c4` → **`master-product-repos`.** Not operator-gated at all: `by=cc-backlog-reap`, i.e.
+  the STALE-CLAIM REAPER blocked it defensively when a worktree-occupancy oracle could not resolve
+  for a cloud-venue worker. Its actual work is a `source_type` ruling in `doc_classifier`.
+- `bd3a486fa469` → **kept.** Redirecting the machine's own first-party telemetry for ~6 h is exactly
+  the operator's call, and the row says so.
+
+🚨 **`--force` on a condition re-key needs a MEASUREMENT, and here it had one.** `cc-backlog link`
+refuses without it because a re-key can move a row out from under a live worker's lease. Measured
+before forcing: **no row in the group has a claimer** (`1cc794cbc6c4`'s `by` is the reaper's own
+bookkeeping stamp, not a worker), **no remote branch carries either row**, and the group's own plan
+defines it as the one condition *"no session is ever fired at"*. Both ids survived the re-key.
+
+**`master-account-facts` 26 → 25, and the win was re-measuring a dated title — but only after
+measuring the RIGHT population.** `6a428f48fd2e` claims account 1 configures 69 hook commands vs 74
+elsewhere. The first re-measurement said all four dirs were equal at 82 and the row was refuted —
+**and it was measuring `~/.claude`, the live layer, not `~/.claude-next`, which `accounts.json` names
+as account 1.** Against the correct four the row STILL HOLDS with drifted numbers: **77 vs 82, the
+same gap of 5** (four scripts; `session-beat.sh` counts twice, prompt+stop). Both sides had grown by
+8, so the gap never closed — it moved. *A dated measurement must be re-taken against the population
+the SSOT names, or a refutation is just a different question answered correctly.*
+
+The remedy turned out to be **already built**: `migrations/0009-claude-next-guardrail-parity.sh`,
+class `c10`, citing the predecessor row `4ce34a4f703c` (**done** — closed on the build). Its own
+`migration-verify` returns 1 (un-run) and its `migration-conflict` returns 0 — the **OVERRIDDEN**
+state, confirmed directly: `~/.claude-next/hooks` is a forked REAL directory (53 entries vs 77 in
+`~/.claude/hooks`) missing 3 of the 4 targets, so a settings-only edit would make it WORSE and the
+migration's links-first ordering is load-bearing. So the row was BLOCKED with that measurement and
+routed to the operator batch — the agent half is done, and only the C10 activation is left (the
+'operator CAN REVERT' rescope, `b09f54e9e080`, is unratified, so the operator still RUNS every
+activation).
