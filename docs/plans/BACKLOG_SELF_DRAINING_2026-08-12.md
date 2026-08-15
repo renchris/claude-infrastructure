@@ -468,6 +468,47 @@ with its own README naming the one finding later corrected by measurement.
   a consumer rather than being only a JSON field. Driving coverage back up is the generators' job
   (master M2), not this wave's.
 
+  ⚠️ **2026-08-15 — that "true regression" reading was PARTLY WRONG, and the wrong part was the
+  instrument** (item `e08ad9ab1ff6`, the row this ratchet's own RED files). The numerator counted
+  `select(.falsifier != "")` — the STORED field alone — while the consumer that actually re-checks a
+  row, cc-premise `assess`, composes THREE arms and records which fired in `probe_kind`: `stored`,
+  `derived-plan`, `derived-postland`. Two auditors, one population, one question, different answers
+  (memory: `sibling-auditors-must-share-the-state-model`).
+
+  **It inverted the alarm rather than merely blurring it.** `post-land RED:` rows store no probe ON
+  PURPOSE — cc-premise derives that predicate, and postland-verify's `--falsify-red` header records
+  that storing an equal probe there would "shadow a tested, documented arm and buy nothing but a
+  second implementation to keep in sync". postland-verify is also the fleet's highest-volume
+  generator (one row per failing suite per red run, cap 25). Those rows sat in the DENOMINATOR and
+  could never reach the NUMERATOR, so **every red trunk mechanically depressed coverage** with no row
+  anywhere losing the ability to re-check itself — and `--assert` went RED on that. Its remediation
+  line then said *"Add `--falsifier` to the generator that regressed"*, which for that population is
+  precisely the change its sibling documents as harmful. Measured on a 50-row fixture (25 postland +
+  25 stored): the ratchet read **50.0% — "25 of 50 can re-check themselves"** while `cc-premise
+  check` returned `verdict=falsified` for those same 25 rows, having actually retracted them.
+
+  **Fixed by the cure this file already applied once:** ONE ARBITER PER FACT. The `freshness` block
+  asks cc-backlog rather than re-deriving the fold; coverage now asks the new `cc-premise coverage`
+  (capability census — classifies by arm and by source, executes no probe, shells out to nothing)
+  rather than re-deriving the predicate. `denominator_version` → **3**, because the NUMERATOR changed
+  and a v2 mark measures a different thing. The RED now **names the generator** whose rows are
+  uncovered, and says that a generator absent from that list must NOT be handed a stored probe.
+  Fail-open is to **UNKNOWN, never to the stored-only count** — that number is lower by construction,
+  so a silent fallback would red against a mark recorded from the composed one and be
+  indistinguishable from a true regression (memory:
+  `sensor-default-off-makes-blindness-the-shipping-path`).
+
+  **Red-proof:** 3 mutants, each killed — numerator reverted to stored-only (5 cases across both
+  suites), status folded from `build_index` instead of cc-backlog (3 cases — the third-auditor bug
+  the first draft of the fix actually shipped and the suite caught), and the ratchet silently falling
+  back to stored-only instead of UNKNOWN (1 case). 12 new cases in `tests/cc-premise-coverage.bats`,
+  5 in `tests/backlog-ratchet.bats`.
+
+  **Still the generators' job (master M2), unchanged:** rows filed by an agent at a hook's prompt
+  (`dispatch-assert.sh`, `completion-assert.sh`) carry no probe and no arm derives one for them.
+  Those are genuinely uncovered and the per-source breakdown now names them instead of leaving the
+  reader to find them.
+
 - **2026-08-12 12:50Z — the live layer's no-budget door is T1H, its producer has been dead two days,
   and exactly TWO suites are holding it shut.** This supersedes the framing of every entry below that
   treats convergence as "wait for a green stamp or wait for the clock". `deploy-live.sh` has a

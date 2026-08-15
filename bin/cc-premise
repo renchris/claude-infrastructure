@@ -39,6 +39,14 @@ Verbs:
   check <id>       one-line `verdict=<token>` + the contract on stderr. exit 3 iff superseded.
   contract <id>    the brief-injectable block, or nothing at all. always exit 0.
   sweep [--json]   the whole-store triage report (§S3 "mechanical first").
+  coverage [--json]
+                   how many LIVE rows CAN re-check themselves, split by ARM (stored ·
+                   derived-plan · derived-postland) and by SOURCE. CAPABILITY, not execution:
+                   it EXECUTES NO PROBE (its only subprocess is the cc-backlog fold). This is the number
+                   scripts/backlog-ratchet.sh publishes — it asks here rather than re-deriving
+                   it, because a numerator counting only STORED probes reads every
+                   derived-covered row as uncovered (see probe_capability). exit 0, or 2 iff the
+                   fold cannot be read — which the ratchet turns into an explicit UNKNOWN.
   screen <id> [--probe <cmd>] [--json]
                    THE SECOND SCREEN — would this item's stored probe have FAILED on the day the
                    item was filed? DISCRIMINATING · ANTI-COVERAGE · UNDECIDABLE. `--probe` screens
@@ -1788,6 +1796,60 @@ def run_derived_postland_falsifier(item_id, ent):
     ]
 
 
+def probe_capability(ent):
+    """Which arm WOULD be asked about this row: "stored" | "derived-plan" | "derived-postland" |
+    "none". SUBJECT IDENTIFICATION ONLY — this NEVER executes a probe, and reads nothing but the
+    row's own fields (one `os.path.isfile` for the plan arm; no git, no subprocess).
+
+    WHY THIS FUNCTION EXISTS, and it is a measurement defect rather than a new feature. `assess`
+    composes THREE probe arms and records which one fired in `out["probe_kind"]`, but the auditor
+    that publishes coverage — `scripts/backlog-ratchet.sh` — computed its own numerator as
+    `select(.falsifier != "")`, i.e. the STORED field alone. So the two disagreed about the one
+    question they both claim to answer, over one population: the ratchet's own header defines
+    coverage as "what fraction of open items CAN re-check themselves", while its implementation
+    could only ever see one of the three ways a row does that.
+
+    THE CONSEQUENCE WAS NOT COSMETIC, it inverted the alarm. `post-land RED:` rows are minted by
+    postland-verify — the highest-volume generator in the fleet, one row per failing suite per red
+    run — and they deliberately store NO probe, because `run_derived_postland_falsifier` already
+    computes that predicate and cc-premise's composition rule is that a stored probe outranks a
+    derived one (see that function, and postland-verify.sh's `--falsify-red` header: storing an
+    equal probe there "would shadow a tested, documented arm and buy nothing but a second
+    implementation to keep in sync"). Those rows therefore landed in the ratchet's DENOMINATOR and
+    were structurally unable to reach its NUMERATOR — so every red trunk mechanically DEPRESSED
+    coverage, with no regression whatsoever in any row's ability to re-check itself, and `--assert`
+    went RED on the wrong event. Its remediation line then told the reader to "add --falsifier to
+    the generator that regressed", which for that population is precisely the change its sibling
+    documents as harmful. An alarm that fires on the wrong event and prescribes a forbidden cure is
+    the failure mode that file's own header exists to prevent (memory:
+    alarm-polarity-and-attention-budget), and the fix is the one this repo has already paid for
+    twice: ONE ARBITER PER FACT (memory: sibling-auditors-must-share-the-state-model). The ratchet
+    already asks cc-backlog for `freshness` rather than re-deriving the fold; it now asks here for
+    coverage rather than re-deriving the predicate.
+
+    CAPABILITY, NOT EXECUTION, and the split is deliberate. A row is covered when an arm RECOGNISES
+    it as its population — a property of the ROW, which is what the ratchet says it measures. It is
+    NOT conditioned on whether the machinery could run just now (git unreadable, `find-plan.sh`
+    missing, a timeout): those are environment facts, and folding them in would make coverage lurch
+    on a broken box and silently re-baseline the high-water mark to it. Whether a probe actually RAN
+    is the separate, already-published number (`cc-premise sweep --record` → never-validated), and
+    keeping the two apart is the whole reason the ratchet reports both.
+
+    PRECEDENCE MIRRORS `assess` EXACTLY — stored, then derived-plan, then derived-postland. Two
+    orders would be two answers to "which arm speaks for this row", which is the defect above in a
+    new place.
+    """
+    if (ent.get("falsifier") or "").strip():
+        return "stored"
+    if _plan_dodref(ent) is not None:
+        return "derived-plan"
+    # Scoped exactly as the arm itself scopes: a cross-project item cites another checkout's shas,
+    # and this arm's git reads only ever speak about THIS repo.
+    if _postland_red(ent) is not None and (ent.get("project") or "") in ("", "claude-infrastructure"):
+        return "derived-postland"
+    return "none"
+
+
 def plan_remaining_lines(ent):
     """A STILL-OPEN plan's not-DONE sections, read just now. Advisory only; [] when it cannot ask.
 
@@ -2514,12 +2576,103 @@ def cmd_sweep(as_json, record=False, close_cap=0):
     sys.exit(0)
 
 
+def cmd_coverage(as_json):
+    """The falsifier-coverage census, BY ARM and BY SOURCE. exit 0, or 2 iff the fold is unreadable.
+
+    THE STATUS FOLD COMES FROM cc-backlog, never from `build_index` — ONE ARBITER PER FACT, the same
+    rule `_folded_items` exists to enforce and the same rule this verb was written to restore. It is
+    worth stating why, because the first draft of this function got it wrong in exactly the way it
+    was fixing: `build_index` folds an item's TEXT and its probe fields and deliberately does not
+    fold `status` at all, so `ent.get("status") or "open"` read every closed row as live and this
+    census reported 2 probeable where the ratchet's own fold said 1. That is a third auditor,
+    invented inside the fix for two auditors disagreeing (memory:
+    sibling-auditors-must-share-the-state-model). The probe fields still come from `build_index`'s
+    entry because `probe_capability` must see them exactly as `assess` does.
+
+    THE POPULATION IS THE RATCHET'S, STATED HERE ONCE so the two cannot drift: live = open OR
+    claimed (blocked rows excluded — they are not in the wave), minus `source=="needs"`, whose
+    `--run` PERFORMS the operator step it would be probing and so has no machine oracle by design.
+    That is `backlog-ratchet.sh`'s `$probeable` verbatim.
+
+    EXIT 2 WHEN THE FOLD CANNOT BE READ, rather than reporting over a partial population. A coverage
+    number computed from an unreadable store is not a weaker measurement, it is a wrong one — and
+    the ratchet is built to turn this rc into an explicit UNKNOWN that refuses to latch or to judge
+    (memory: sensor-default-off-makes-blindness-the-shipping-path).
+
+    BY SOURCE is not decoration — it is what makes the RED actionable. The ratchet could say only
+    "coverage FELL" and then name no generator, so a reader had to go find which producer regressed
+    and, for the postland population, the honest answer was "none of them, the numerator is blind".
+    Reporting the uncovered count per source names the actual culprit, and shows a generator whose
+    rows are covered by a DERIVED arm as covered rather than as a target for a stored probe it must
+    not be given.
+    """
+    items = _folded_items()
+    if items is None:
+        sys.stderr.write("cc-premise coverage: cannot read the fold (cc-backlog list --all --json) "
+                         "— reporting nothing rather than a number over a partial population\n")
+        sys.exit(2)
+    idx = build_index(load_records())
+    by_arm, by_source = {}, {}
+    total = 0
+    for it in items:
+        if (it.get("status") or "") not in ("open", "claimed"):
+            continue
+        if (it.get("source") or "") == "needs":
+            continue
+        # The probe fields as `assess` sees them; fall back to the fold's own row when an id somehow
+        # has no ledger entry, so a row can never vanish from the denominator unnoticed.
+        ent = idx.get(it.get("id")) or it
+        kind = probe_capability(ent)
+        total += 1
+        by_arm[kind] = by_arm.get(kind, 0) + 1
+        src = (it.get("source") or "(unset)")
+        rec = by_source.setdefault(src, {"total": 0, "covered": 0})
+        rec["total"] += 1
+        if kind != "none":
+            rec["covered"] += 1
+    covered = total - by_arm.get("none", 0)
+    pct = round((covered * 100.0) / total, 1) if total else 0.0
+    report = {
+        "probeable": total,
+        "covered": covered,
+        "uncovered": by_arm.get("none", 0),
+        "coverage_pct": pct,
+        "by_arm": {k: by_arm.get(k, 0)
+                   for k in ("stored", "derived-plan", "derived-postland", "none")},
+        "by_source": by_source,
+    }
+    if as_json:
+        sys.stdout.write(json.dumps(report) + "\n")
+        sys.exit(0)
+    w = sys.stdout.write
+    w("cc-premise coverage — how many LIVE rows can re-check themselves, by ARM\n")
+    w("  probeable   : %d  (live open|claimed, minus the needs class)\n" % total)
+    w("  covered     : %d  (%.1f%%)\n" % (covered, pct))
+    for arm in ("stored", "derived-plan", "derived-postland"):
+        w("    %-16s %d\n" % (arm, by_arm.get(arm, 0)))
+    w("  UNCOVERED   : %d  — no arm speaks for these rows\n" % by_arm.get("none", 0))
+    if by_source:
+        w("\n  uncovered by source (the generator to fix, largest first):\n")
+        gaps = sorted(((v["total"] - v["covered"], s, v) for s, v in by_source.items()),
+                      key=lambda t: (-t[0], t[1]))
+        for gap, src, v in gaps:
+            if gap == 0:
+                continue
+            # The source is NOT truncated to the column: it is the name a reader will go fix, and a
+            # clipped identifier is one they have to guess at. The column widens instead.
+            w("    %-28s %d of %d uncovered\n" % (src, gap, v["total"]))
+        if all(g == 0 for g, _, _ in gaps):
+            w("    (none — every live row is spoken for)\n")
+    sys.exit(0)
+
+
 def cmd_screen(rest):
     """The second screen, per item or over the whole store. Always exit 0 — this REPORTS.
 
     Exit 0 unconditionally, including on ANTI-COVERAGE, and that is deliberate: the ratchet
-    (`backlog-ratchet.sh`) counts a stored probe as coverage, and a non-zero here would invite a
-    caller to wire this into a gate that clears probes automatically. The CURRENCY pass earned the
+    (`backlog-ratchet.sh`) counts a probe as coverage — a stored one, or a derived arm's claim on the
+    row, via `coverage` above — and a non-zero here would invite a caller to wire this into a gate
+    that clears probes automatically, which would LOWER coverage as its normal mode of operation. The CURRENCY pass earned the
     opposite rule — 16 of 26 "checked" probes did not survive a reader briefed to refute them, so
     the deliverable of a screen is the EVIDENCE, and the retirement is a human's call through
     `cc-backlog falsify --clear`.
@@ -2648,6 +2801,8 @@ def main():
                 sys.stderr.write("cc-premise sweep: --close-falsified cap must be >= 0\n")
                 sys.exit(2)
         cmd_sweep("--json" in rest, record="--record" in rest, close_cap=cap)
+    elif verb == "coverage":
+        cmd_coverage("--json" in rest)
     elif verb == "screen":
         cmd_screen(rest)
     else:
