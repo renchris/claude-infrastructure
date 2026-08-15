@@ -797,7 +797,27 @@ lint spelling its presence test `${CC_X_OWN:-}` cannot express it.
 | 12 | chromium-bundle | **LEAKED — FIXED** | `${CC_CHROMIUM_OWN:-}` (`:90`) — two-state, same defect as arm 6. Its own `--selftest` **encoded the defect**: the harness defaulted the own-set to `""` and set the variable unconditionally, so every case labelled "strict" was in fact running SET-BUT-EMPTY and passing only because the lint conflated them the same way. A control that encodes the defect cannot catch it |
 | 13 | TSV field-collapse | does not leak | `bad`/`stuck` inside `in_own`; verdict `:258`. Its basename leg is deliberately over-wide and documented (`:64-67`) — that direction costs a loud nameable refusal, not a silent pass |
 | 14 | .bats shellcheck | does not leak | LINE-scoped; `bad` inside `in_own` and the scanned set is pre-narrowed to suites carrying an own line (`:627-641`). Its one file-scoped path — an UNANALYZABLE suite whose shellcheck run aborted — is argued at `:62-71` and is a deliberate exception, not a leak |
-| 15 | unguarded-kill | **by design, not a leak** | strict whole-corpus, no own-set. Declared at `ship-land.sh:2425-2429` with its reason (the introducing commit swept the corpus to zero, so the strictest rule is the free one) and a named release. Its correctness rests on an unenforced runtime invariant — baseline stays 0 — which is filed, not fixed: weakening it would lower the bar, which P2 forbids |
+| 15 | unguarded-kill | **was by-design; NOW OWN-SCOPED (2026-08-15, backlog e191b6801be5)** | strict whole-corpus was declared with its reason (the introducing commit swept the corpus to zero, so the strictest rule is the free one) and a named release — but the reason was a RUNTIME invariant nothing re-asserted. It now carries `CC_KILLGUARD_OWN` on the same three-state contract as its neighbours, and the baseline invariant is an executed assertion (`tests/bats-kill-guard-lint.bats`, "the real corpus carries ZERO unguarded kills") rather than a comment. See below for why this is not the weakening P2 forbids |
+
+**Arm 15 own-scoped — and why that is not lowering the bar.** The objection this row used to record
+is the right one to answer: an own-set exists to stop a lander being refused over another author's
+file, and if the class could then ACCUMULATE, the ratchet would have been traded for a report.
+It cannot, and the asymmetry is what makes this safe:
+
+- **The author who types an unguarded kill is still blocked.** Their suite is in their own diff, so
+  it is in their own-set. Every normal route by which a site could enter the corpus still meets a
+  hard refusal at the chokepoint — which is the bar, and it is untouched.
+- **The strict reading is what ABSENCE still means.** `postland-verify` and a bare human run set no
+  own-set, so they judge all 473 suites and fail closed exactly as before. Nothing that used to be
+  seen stopped being seen.
+- **Advisory is not silent.** An out-of-scope finding is printed as `kill-guard?` and counted in the
+  summary on every land that scans it, so drift is legible continuously — where the old design
+  surfaced it exactly once, in the refusal of whoever landed next.
+- **The only lands the change releases are the ones that were misattributed.** For the corpus to be
+  non-zero at all, a site must have arrived by a route that did NOT pass this gate (a cloud land, a
+  cherry-pick, a run with the declared `SHIP_LAND_KILL_GUARD_LINT=/nonexistent` release). Strict
+  whole-corpus never prevented that; it only charged the next innocent lander for it, with a remedy
+  they could not apply to a file they had not opened.
 
 **The caller side had a fourteenth defect, and it was the escape hatch itself.** All thirteen
 env-scoped arms read `[[ "${SHIP_LAND_<ARM>_OWN_SCOPE:-on}" != "off" ]]` to decide whether to

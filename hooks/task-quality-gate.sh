@@ -154,12 +154,16 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     git ls-files --others --exclude-standard 2>/dev/null
   } | LC_ALL=C sort -u > "$list"
 
-  local shellfiles=() batsfiles=() p base
+  local shellfiles=() batsfiles=() p base kgown=""
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     [ -e "$p" ] || continue                    # skip deletions / vanished paths (belt-and-suspenders)
     is_shell_file "$p" && shellfiles+=("$p")
-    case "$p" in tests/*.bats) batsfiles+=("$p") ;; esac
+    # kgown accumulates the suites THIS WORK CHANGED, captured here rather than from $batsfiles,
+    # because the sibling mapping below adds suites the author never opened (tests/<name>.bats for a
+    # changed script). Those must still RUN, but they must not be able to BLOCK on a kill someone
+    # else typed — which is the whole distinction this own-set carries (backlog e191b6801be5).
+    case "$p" in tests/*.bats) batsfiles+=("$p"); kgown="${kgown}${p}"$'\n' ;; esac
   done < "$list"
   rm -f "$list"
 
@@ -213,13 +217,19 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
   # unguarded-kill ratchet — the same class ship-land's gate now blocks, at the earlier chokepoint,
   # so an author learns it here rather than at the land. A kill whose stderr is silenced but whose
   # exit status is not: once the child is REAPED it returns 1 and bats' errexit aborts the body, so a
-  # test that passed on its own merits goes red under load. Strict and whole-corpus (the baseline is
-  # zero), so no own-set is derived here — unlike the shellcheck block above, this one has nothing to
-  # grandfather. Unconditional on batsfiles: the class can be introduced by any land, and the scan is
-  # ~0.2s over the whole corpus.
+  # test that passed on its own merits goes red under load. Nothing to grandfather — the baseline is
+  # zero — but "the baseline is zero" is a RUNTIME invariant nothing re-asserts, and this hook fires
+  # on EVERY task in the repo, so a whole-corpus block turned one sibling's kill into a red for every
+  # author of every task, over a file they never opened (backlog e191b6801be5; ship-land's arm took
+  # the same fix in the same diff — a remedy that reaches one consumer of an invariant and not the
+  # other has only moved the failure). The own-set is the suites THIS WORK CHANGED: those block, the
+  # rest are still SCANNED and REPORTED advisory, so drift stays visible here too. No changed suite ⇒
+  # SET-BUT-EMPTY ⇒ nothing blocks, which is the correct reading of "this task wrote no test".
+  # Unconditional on batsfiles, unchanged: the scan is ~0.2s over the whole corpus and its advisory
+  # half is worth printing either way.
   if [ -x "scripts/bats-kill-guard-lint.sh" ]; then
     local kgout=""
-    if ! kgout="$(scripts/bats-kill-guard-lint.sh tests 2>&1)"; then
+    if ! kgout="$(CC_KILLGUARD_OWN="$kgown" scripts/bats-kill-guard-lint.sh tests 2>&1)"; then
       rc=1; summary="${summary}"$'\n'"[bats-kill-guard]"$'\n'"${kgout}"
     fi
   fi

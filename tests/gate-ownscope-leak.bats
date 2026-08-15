@@ -229,9 +229,14 @@ up_fixture() {
   # never ran and the new arm went unjudged by the very test that was red about it. And because
   # this suite is a land gate, an assertion that COUNTS blocked every land in the repo.
   #
-  # So: floor here, TALLY below (memory: exact-count-assertion-tripwires-its-own-subject). The
-  # remaining ratchet arms — bats dead-assertion, scoped by ARGUMENT LIST, and unguarded-kill,
-  # deliberately strict whole-corpus — carry no CC_*_OWN and are correctly outside this rule.
+  # So: floor here, TALLY below (memory: exact-count-assertion-tripwires-its-own-subject). The one
+  # remaining ratchet arm outside this rule is bats dead-assertion, scoped by ARGUMENT LIST.
+  #
+  # unguarded-kill USED to sit beside it, "deliberately strict whole-corpus" — and that exemption is
+  # gone (backlog e191b6801be5): its strictness rested on the UNENFORCED runtime invariant that the
+  # corpus baseline stays zero, so one sibling's unguarded kill refused every land in the fleet. It
+  # now carries CC_KILLGUARD_OWN and is covered by the per-arm loop below like any other; its own
+  # three-state behaviour is pinned in tests/bats-kill-guard-lint.bats.
   [ "$(printf '%s\n' "$pairs" | grep -c .)" -ge 13 ]
   while IFS= read -r p; do
     [ -n "$p" ] || continue

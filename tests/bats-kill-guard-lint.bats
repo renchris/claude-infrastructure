@@ -14,7 +14,11 @@
 # e90476e6 six, f676d2f6 one. Nothing looked for the tenth. By 2026-08-09 eleven sites had
 # re-accumulated, three of them in cc-await-ping.bats, a suite written AFTER the sweep — which is the
 # whole argument: a sweep is a snapshot, and this class regenerates because the defective spelling is
-# the natural one to type. The corpus is at zero as of this suite, so the lint runs STRICT.
+# the natural one to type. The corpus is at zero as of this suite, and an ABSENT own-set still means
+# STRICT — but the arm no longer BLOCKS whole-corpus (backlog e191b6801be5): "the baseline is zero"
+# is a runtime invariant nothing re-asserts, so under the old reading the first sibling to land an
+# unguarded kill refused every land in the fleet over a file its author never opened. Own-scope moved
+# the refusal onto the author who typed the kill; every finding is still reported.
 #
 # Hermetic: every fixture lives in $BATS_TEST_TMPDIR and $HOME is fixtured. The three cases that
 # touch the real tree read it only (the corpus scan and two wiring greps).
@@ -36,14 +40,60 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   echo "$output" | grep -q 'all cases pass' || false
 }
 
-# ── THE CORPUS INVARIANT. This is the assertion that makes a tenth site impossible, and it is why
-# the lint is strict rather than own-scoped: there is nothing to grandfather. Stated as ZERO, which
-# unlike a count of sites cannot tripwire on the corpus merely GROWING
-# (memory: exact-count-assertion-tripwires-its-own-subject).
+# ── THE CORPUS INVARIANT, and the reason it is an ASSERTION rather than an assumption. There is
+# nothing to grandfather here, so the rule can be the strictest one — but a rule whose correctness
+# rests on a runtime fact must have something that re-asserts that fact, or it silently becomes a
+# fleet-wide hard stop the day the fact stops holding (backlog e191b6801be5). This is that
+# something. Stated as ZERO, which unlike a count of sites cannot tripwire on the corpus merely
+# GROWING (memory: exact-count-assertion-tripwires-its-own-subject).
+#
+# `env -u` because the assertion is about the STRICT reading: an inherited CC_KILLGUARD_OWN from the
+# caller's environment would scope this run and the census would silently narrow to it.
 @test "the real corpus carries ZERO unguarded kills — the ratchet's baseline" {
-  run "$L" "$REPO/tests"
+  run env -u CC_KILLGUARD_OWN "$L" "$REPO/tests"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '0 unguarded kill' || false
+}
+
+# ── OWN-SCOPE at the ENTRYPOINT — the three states ship-land actually meets ───────────────────────
+# The lint's --selftest proves the same states against lint_files directly; these prove the seam that
+# carries them, because `${CC_KILLGUARD_OWN:-}` would pass every internal case and still collapse
+# ABSENT into SET-BUT-EMPTY here (memory: init-state-is-not-runtime-state).
+@test "own-scope: an ABSENT own-set is STRICT — the postland net and a bare human run are unchanged" {
+  mkb red 'teardown() { kill "$p" 2>/dev/null; }'
+  run env -u CC_KILLGUARD_OWN "$L" "$D/red.bats"
+  [ "$status" -eq 1 ]
+}
+
+@test "own-scope: a SET-BUT-EMPTY own-set blocks on NOTHING — a land touching no suite is not judged" {
+  mkb red 'teardown() { kill "$p" 2>/dev/null; }'
+  run env CC_KILLGUARD_OWN="" "$L" "$D/red.bats"
+  [ "$status" -eq 0 ]
+}
+
+@test "own-scope: a violation INSIDE the own-set still blocks — the ratchet was not disabled" {
+  mkb red 'teardown() { kill "$p" 2>/dev/null; }'
+  run env CC_KILLGUARD_OWN="red.bats" "$L" "$D/red.bats"
+  [ "$status" -eq 1 ]
+}
+
+@test "own-scope: a violation OUTSIDE the own-set is ADVISORY — and is still reported by name" {
+  # THE DEFECT ITSELF (e191b6801be5): under the old whole-corpus reading this exit status was 1, and
+  # every land in the fleet was refused over one sibling's kill. Not-blocking must not become
+  # not-shown, so the finding is asserted PRESENT in the output as well.
+  mkb red 'teardown() { kill "$p" 2>/dev/null; }'
+  run env CC_KILLGUARD_OWN="tests/some-other-suite.bats" "$L" "$D/red.bats"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -F 'kill-guard?' >/dev/null || { echo "an out-of-scope finding was not reported at all" >&2; return 1; }
+  printf '%s\n' "$output" | grep -F 'red.bats' >/dev/null || { echo "the advisory finding did not name the file" >&2; return 1; }
+}
+
+@test "own-scope: the same basename under a DIFFERENT directory does not block (the collapse control)" {
+  # Pairs with the case above it: the two own-sets differ only in the entry's DIRECTORY, which is the
+  # whole rule and would be decoration if the own-set were basenamed (backlog c1a29f8ee045).
+  mkb red 'teardown() { kill "$p" 2>/dev/null; }'
+  run env CC_KILLGUARD_OWN="scripts/red.bats" "$L" "$D/red.bats"
+  [ "$status" -eq 0 ]
 }
 
 # ── THE RULE, both directions, on the REAL artifacts ──────────────────────────────────────────────
@@ -270,7 +320,28 @@ EOF
   grep -q 'gate_red kill-guard' "$REPO/scripts/ship-land.sh" || false
 }
 
+@test "WIRING: the arm hands its own-set over through own_run, not by exporting it directly" {
+  # own_run is the ONE place the =off kill switch is read, and it is the only form that can produce
+  # the ABSENT state: a bare `CC_KILLGUARD_OWN="$kgown" "$LINT"` sets the variable even when the
+  # switch says strict, so the switch would DISABLE the arm instead of tightening it — the exact
+  # inversion own_run() was written to end (memory: prescribed-remedy-worse-than-the-bug).
+  grep -q 'own_run KILL_GUARD CC_KILLGUARD_OWN' "$REPO/scripts/ship-land.sh" || false
+  # …and the own-set must come from the land's own diff, over the population this lint judges.
+  grep -q "kgown=\"\$(git diff --name-only \"\$range\" -- 'tests/\*.bats'" "$REPO/scripts/ship-land.sh" || false
+}
+
 @test "WIRING: the task-quality-gate hook invokes it too, at the earlier chokepoint" {
   grep -q 'bats-kill-guard-lint.sh' "$REPO/hooks/task-quality-gate.sh" || false
   grep -q 'bats-kill-guard' "$REPO/hooks/task-quality-gate.sh" || false
+}
+
+@test "WIRING: the hook is own-scoped too — an invariant's OTHER consumer takes the same fix" {
+  # This hook fires on every task in the repo, so a whole-corpus block here made one sibling's kill a
+  # red for every author of every task — the same misattribution as the land arm, at an earlier
+  # chokepoint. A remedy that reaches one consumer of an invariant and not the other has only moved
+  # the failure (memory: new-nonverdict-state-strands-its-consumers).
+  grep -q 'CC_KILLGUARD_OWN="$kgown" scripts/bats-kill-guard-lint.sh' "$REPO/hooks/task-quality-gate.sh" || false
+  # …and the own-set is the suites THIS WORK CHANGED, captured at the collection loop — NOT $batsfiles,
+  # which the sibling mapping widens to suites the author never opened.
+  grep -q 'kgown="${kgown}${p}"' "$REPO/hooks/task-quality-gate.sh" || false
 }
