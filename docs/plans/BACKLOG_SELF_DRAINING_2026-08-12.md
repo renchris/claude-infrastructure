@@ -1851,14 +1851,19 @@ drain's arithmetic is net-of-intake, never a raw total). Effort order after this
 
 ---
 
-### 2026-08-15 — THE LOCAL DRAIN recycle #8: the reaper fix holds, the exclusion list SHRANK for the first time, and the flake nobody has ever observed stayed unobserved through 658 runs
+### 2026-08-15 — THE LOCAL DRAIN recycle #8: the 7-cluster triage wave is retired, the exclusion list SHRANK for the first time, and the flake nobody has ever observed stayed unobserved through 658 runs
 
-`master-verification-integrity` **6 live, unchanged** (2 open, 4 blocked) — and that number is the
-honest one: **six commits landed and content-verified**, but they retire 3 of `c60963776f2e`'s 6
-clusters, and a row with half its wave left is not a close. Landed, each `land-verify: path(s)
-present + content-identical` with `git diff origin/main` empty: **`0364d24c8`** + **`b3110a79f`**
-(gate-memo), **`e6c8e723d`** (cc-recover-safeguard), **`c68c7ea0d`** (the manifest shrink),
-**`543a0d841`** (worktree-memory-link), **`70b8c7797`** (lead-supervisor). 0 unlanded at close.
+`master-verification-integrity` **6 live** (2 open, 4 blocked) — and the count is flat for an honest
+reason: **`c60963776f2e` is CLOSED, its whole seven-item wave retired**, and the one genuinely new
+thing this recycle measured was filed in its place (`ff3f38d6eeed`). One closed, one filed: net
+zero, never net-positive.
+
+**Ten commits landed and content-verified**, each `land-verify: path(s) present + content-identical`
+with `git diff origin/main` empty on every path at close, 0 unlanded:
+**`0364d24c8`** + **`b3110a79f`** (gate-memo), **`e6c8e723d`** (cc-recover-safeguard),
+**`c68c7ea0d`** (the manifest shrink), **`543a0d841`** (worktree-memory-link), **`70b8c7797`**
+(lead-supervisor), **`6f81a4185`** (this entry), **`97769f24e`** (session-writes), **`af9ba29a7`**
+(cc-config-slot), **`4561aab18`** (branch-reaper), **`e78aef3c4`** (mailbox-forward).
 
 #### The verdict recycle #7 left in flight: the fold is WHOLE, and `8efd655b0fe1` stays closed
 
@@ -1933,7 +1938,7 @@ threshold, which is invisible to any number of fresh-runner reps. Next attempt s
 wrapper. The row must still not be manifest-excluded: 3-of-12 is a race, and an entry there needs a
 measurement of MACHINE coupling.
 
-#### `c60963776f2e` — 3 of 6 clusters retired, ranked order held
+#### `c60963776f2e` — CLOSED: all seven ranked items retired, in the triage's own order
 
 - **`gate-memo` (rank 1, "a red lands green").** The salt hashed four interpreter versions and no
   configuration, while `ship-land` invokes the analyser with **no `--norc`** — so `.shellcheckrc`,
@@ -1956,9 +1961,28 @@ measurement of MACHINE coupling.
   narrow rule's slug exists nowhere. `70b8c7797` then fixes the same rule in `lead-supervisor.sh`,
   where its fail direction is a **false `STALL?` page at a healthy session**.
 
-**Remaining, in the triage's own order:** `session-writes:278` SIGPIPE (1 line; deferral already on
-the record at `LIVENESS_DETECTOR_FAILNEG.md:286-289`) · `cc-config-slot` ×3 · `branch-reaper` ×3 ·
-`mailbox-forward` ×2.
+- **`session-writes:278` (rank 4).** Converted to the herestring its sibling three lines below
+  already uses. **The honest scope is in the diff**: the CONSTRUCT reproduces here (141 at ≥49 KB,
+  and at 269 KB under both greps), but `session_dirty_mine` driven under pipefail with 3,001 written
+  paths returned the pipeline rc as 0 every time — so a regression test written against that entry
+  point PASSES PRE-FIX, and it was **deleted rather than shipped**. A green assertion over an
+  unreached mechanism is worse than none. That refines the row: its reproduction is a top-level one.
+- **`cc-config-slot` (rank 5).** Three error paths that crashed, mislabelled, or raised out of
+  themselves — including one the screen missed: the unknown-account handler called `load_accounts()`
+  a second time INSIDE its own `except`, so a record missing `name` threw an uncaught traceback out
+  of the arm whose job is to report the problem. Also `except (…, json.JSONDecodeError, …)` missing
+  `UnicodeDecodeError`, which crashed a resolver that sits in the launch path of every session.
+- **`branch-reaper` (rank 6).** `--trunk` / `--keep` / `--restore` typed LAST spun the parse loop
+  forever at 100% CPU (`shift 2` shifts nothing and returns non-zero; nothing reads it) — all three
+  exit 124 under `timeout 6` on the trunk copy. And the "NOT merged (untouched, holds work)" line is
+  a RESIDUAL, so `--keep` relabelled merged contentless refs as unlanded: 1 → 3 on a fixture whose
+  ground truth stays 1.
+- **`mailbox-forward` (rank 7, test-only).** `grep -qv 'l1'` returns the SAME verdict on the
+  regression and on the fix. **Measuring that needed care**: on this desk `grep` is ugrep, whose
+  `-qv` exits 1 where `/usr/bin/grep` exits 0 on byte-identical `-v` output — so the assertion
+  accidentally discriminates under ugrep and is vacuous under the portable grep the runner has. **A
+  desk check would have exonerated it.** Replaced with a `grep -c` count, which separates the two
+  under both.
 
 #### The method note worth carrying: a mid-body `! cmd` asserts NOTHING
 
@@ -1973,8 +1997,11 @@ findings), worktree-memory-link 13 / 3, gate-memo 10 / 1, lead-supervisor 98 / 1
 control green in both worlds each time.
 
 **State at this recycle.** `master-verification-integrity` **6 live**: open — `6a7eb069e703` (see
-above; do not restart at the desk), `c60963776f2e` (3 of 6 clusters remain); blocked —
-`782607797fc5`, `67a7d78c1134`, `0be0bd2c0b65`, `c1a29f8ee045`. The throwaway `probe-close-attrib`
+above; do not restart at the desk) and `ff3f38d6eeed` (NEW, the harvested lint-exemption finding —
+filed as ONE pointer row, with its threshold measured so nobody re-derives it); blocked —
+`782607797fc5`, `67a7d78c1134`, `0be0bd2c0b65`, `c1a29f8ee045`. `c60963776f2e` is **closed**. The
+next recycle's cheapest read is `ff3f38d6eeed`, because it is the reason `session-writes:278` was
+never on the ratchet's allowlist in the first place. The throwaway `probe-close-attrib`
 branch and its workflow are deleted; they never touched `main`. Effort order after this one is
 unchanged: `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store`
 (32) → `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos`
