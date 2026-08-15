@@ -109,8 +109,12 @@ tests/qos-rewrite.bats
 tests/boot-resume.bats
 # run 31362043861: notok=2
 tests/unattended-sysctl-path.bats
-# run 31362043861: notok=1
-tests/watchdog-census.bats
+# tests/watchdog-census.bats DELISTED 2026-08-15 — the SHRINK direction this file declares itself
+# subject to ("RE-MEASURED, NOT CURATED"). Admitted on run 31362043861 at notok=1; the cause was
+# then found and fixed in 30494ba09 (a death-path bound rule that guarded the bug it was written
+# beside). CENSUS run 31909362400 — the arm that exists to re-measure an exclusion in this
+# direction — ran it at 20 ok / 0 notok / 4s. A named mechanism PLUS a census green is the whole
+# bar, so the line goes rather than ageing into a permanent exemption nobody re-checks.
 
 # ── the operator's live state — sessions, panes, inbox, dispatch, accounts ───────────────────────
 # HINT (not verified): these read a running fleet; a runner has none.
