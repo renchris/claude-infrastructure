@@ -164,6 +164,17 @@ EOF
   # ── T-P3-4 fired-peer markers: hermetic dir, EMPTY by default so every pre-existing test runs
   #    unmarked (⇒ operator ⇒ never promoted). Tests opt in with mark_fired. ──
   export CC_FIRED_DIR="$D/fired"
+  # THE KILL SWITCH IS AMBIENT BY DESIGN (P3, 2026-08-15) — an operator who has stopped the reaper
+  # has it exported in the shell they run this suite from, and every test below would then pass
+  # VACUOUSLY against a program that exits at its own line 100. Unset it so each test states its
+  # own switch position. The FILE half needs no unsetting: its default resolves under the
+  # fixtured $HOME set at the top of setup().
+  unset CC_REAPER_DISABLE CC_REAPER_DISABLE_FILE
+  # The worktree-removal bound and its ledger, pinned for the same reason: an ambient
+  # CC_REAPER_WT_REMOVE_MAX=0 would make every removal assertion in this file vacuous, and an
+  # unpinned ledger would append the operator's real disposal record from a test fixture.
+  export CC_REAPER_WT_REMOVE_MAX=4
+  export CC_WTGC_DISPOSAL_LOG="$D/worktree-disposals.jsonl"
 }
 # Pane UUIDs must be UUID-SHAPED ([0-9A-Fa-f-]) — cc-reaper's fired_peer refuses anything else as a
 # path fragment, so the legacy "PANE-A" labels deliberately cannot carry a marker.
@@ -599,6 +610,211 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   td_called                                          # pane reaped
   echo "$output" | grep -q 'LEFT INTACT'
   [ -f "$D/.worktrees/wt-litter/REPORT.md" ]         # the work survives
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# P3 (docs/plans/MASTER_FLEET_FOOTPRINT.md · 2026-08-15) — the highest-blast-radius unattended
+# actuator on the box: launchd-LOADED, kills processes, tears down panes, removes worktrees. It had
+# per-ARM switches (CC_REAPER_GARBAGE, CC_WATCHDOG_CENSUS) and no way to stop the program, so
+# "disable the reaper" meant knowing a launchctl label. Three mechanisms, each red-proofed by a
+# DISCRIMINATOR PAIR — switch on KEEPS, switch off REAPS THE SAME FIXTURE — because a subject that
+# had simply stopped reaping would pass every disabled-half on its own.
+#
+# 🚨 THESE FIXTURES DRIVE handed-off-lead, NOT finished-teammate, and that is deliberate. The
+# `finished*` causes additionally require a fired-peer stamp whose TENANCY check parses `firedAt`
+# with `TZ=UTC date -j -f` (bin/cc-reaper:577) — a BSD/macOS-only invocation. On GNU date it fails,
+# the stamp reads INVALID, and the reap is refused, so every `mark_fired` test in this file is
+# structurally unrunnable off macOS (measured: the whole td_called family reds on Linux, against an
+# unmodified subject). handed-off-lead reaches the SAME teardown → worktree_cleanup path with no
+# stamp and no date parsing, so these gates are verifiable wherever the suite is run. The stamp
+# path is not what P3 is about, and a gate that can only be checked on one machine is half a gate.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+HS1="5CC00000-1111-4222-8333-44445555AAA1"
+HS2="5CC00000-1111-4222-8333-44445555AAA2"
+
+# mock_classify_handoffs <cwd1> [<cwd2>] — one or two handed-off leads, each with its own LIVE
+# successor row (the reaper's Gap-2 leg requires the named successor to be live in the same
+# enumerated set). Successors sit in a NEUTRAL cwd, never in the worktree under test, so nothing
+# about the removal depends on where they happen to live.
+mock_classify_handoffs() {
+  local rows
+  rows="{name:\"lead1\",paneUUID:\"PANE-L1\",account:\"next\",cwd:\"$1\",cause:\"handed-off-lead\",idle_s:999,work_landed:\"yes\",successor:\"$HS1\",detail:\"x\"},
+        {name:\"succ1\",paneUUID:\"$HS1\",account:\"next\",cwd:\"$D/clean\",cause:\"active\",idle_s:5,work_landed:\"no\",successor:null,pid:$$,detail:\"x\"}"
+  if [ -n "${2:-}" ]; then
+    rows="$rows,
+        {name:\"lead2\",paneUUID:\"PANE-L2\",account:\"next\",cwd:\"$2\",cause:\"handed-off-lead\",idle_s:999,work_landed:\"yes\",successor:\"$HS2\",detail:\"x\"},
+        {name:\"succ2\",paneUUID:\"$HS2\",account:\"next\",cwd:\"$D/clean\",cause:\"active\",idle_s:5,work_landed:\"no\",successor:null,pid:$$,detail:\"x\"}"
+  fi
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[$rows]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+}
+
+@test "KILL SWITCH: CC_REAPER_DISABLE=1 classifies nothing, tears down nothing, removes nothing" {
+  mkworktree "$D/main-ks" "$D/.worktrees/wt-ks"
+  mock_classify_handoffs "$D/.worktrees/wt-ks"
+  CC_REAPER_DISABLE=1 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled env=CC_REAPER_DISABLE'
+  ! td_called || false                               # the pane is untouched
+  [ -d "$D/.worktrees/wt-ks" ]                       # and so is the tree
+  # It is a switch on the PROGRAM, not on one arm: the sweep's other unattended writers — reconcile,
+  # the backlog reap — never ran either.
+  [ ! -f "$D/reconcile-calls" ]
+  [ ! -f "$D/backlog-calls" ]
+}
+
+@test "KILL SWITCH RED-PROOF: CC_REAPER_DISABLE=0 is ENABLED — the same fixture IS reaped" {
+  mkworktree "$D/main-ks" "$D/.worktrees/wt-ks"
+  mock_classify_handoffs "$D/.worktrees/wt-ks"
+  CC_REAPER_DISABLE=0 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'verdict=disabled' || false
+  td_called
+  [ ! -d "$D/.worktrees/wt-ks" ]
+}
+
+@test "KILL SWITCH: the FILE half disables a run that exports nothing (the launchd path)" {
+  # The half that matters. A launchd job inherits no shell environment, so the env switch cannot
+  # reach the loaded job at all — it would stop the reaper everywhere EXCEPT where it runs
+  # unattended. $HOME is fixtured, so this writes the DEFAULT path, not a seam.
+  mkworktree "$D/main-ksf" "$D/.worktrees/wt-ksf"
+  mock_classify_handoffs "$D/.worktrees/wt-ksf"
+  mkdir -p "$HOME/.claude/autonomy"; : > "$HOME/.claude/autonomy/cc-reaper.disabled"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled file='
+  ! td_called || false
+  [ -d "$D/.worktrees/wt-ksf" ]
+  # ...and removing the file re-arms it, with nothing else changed.
+  rm -f "$HOME/.claude/autonomy/cc-reaper.disabled"
+  run "$R" sweep --reap
+  td_called
+  [ ! -d "$D/.worktrees/wt-ksf" ]
+}
+
+@test "KILL SWITCH: any value but unset/0 disables — a typo'd switch must never stay armed" {
+  mkworktree "$D/main-kt" "$D/.worktrees/wt-kt"
+  mock_classify_handoffs "$D/.worktrees/wt-kt"
+  CC_REAPER_DISABLE=false run "$R" sweep --reap     # reads as ENABLED under any truthiness rule
+  echo "$output" | grep -q 'verdict=disabled'
+  [ -d "$D/.worktrees/wt-kt" ]
+}
+
+@test "KILL SWITCH: CC_REAPER_DISABLE_FILE= (explicitly empty) ignores the file half" {
+  mkworktree "$D/main-ke" "$D/.worktrees/wt-ke"
+  mock_classify_handoffs "$D/.worktrees/wt-ke"
+  mkdir -p "$HOME/.claude/autonomy"; : > "$HOME/.claude/autonomy/cc-reaper.disabled"
+  CC_REAPER_DISABLE_FILE='' run "$R" sweep --reap
+  ! echo "$output" | grep -q 'verdict=disabled' || false
+  [ ! -d "$D/.worktrees/wt-ke" ]
+}
+
+@test "KILL SWITCH does not launder a typo'd COMMAND — argv validation still wins" {
+  # A disabled reaper answering `sweeep` with exit 0 would turn the switch into a way to hide a
+  # mistake: the operator sees a clean exit and believes the reaper is merely off.
+  CC_REAPER_DISABLE=1 run "$R" sweeep
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "unknown command"
+}
+
+@test "KILL SWITCH leaves --help reachable — it is where the switch is documented" {
+  CC_REAPER_DISABLE=1 run "$R" --help
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'KILL SWITCH'
+  echo "$output" | grep -q 'cc-reaper.disabled'
+}
+
+@test "KILL SWITCH also stops the GARBAGE arm — it is a switch on the program, not on a leg" {
+  CC_REAPER_DISABLE=1 run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled'
+  ! echo "$output" | grep -q 'reap commands' || false
+}
+
+@test "RUNAWAY BOUND: past CC_REAPER_WT_REMOVE_MAX the sweep stops REMOVING and says so" {
+  # Every gate above this one judges ONE worktree. The failure class P3 exists for is a sweep whose
+  # judgment is systematically wrong — a moved trunk, stale classify evidence — and per-item
+  # correctness cannot bound that. Only a count can.
+  mkworktree "$D/main-b" "$D/.worktrees/wt-b1"
+  git -C "$D/main-b" worktree add -q "$D/.worktrees/wt-b2" -b wt-branch2 >/dev/null 2>&1
+  mock_classify_handoffs "$D/.worktrees/wt-b1" "$D/.worktrees/wt-b2"
+  CC_REAPER_WT_REMOVE_MAX=1 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'worktree removal BOUND HIT'
+  echo "$output" | grep -q 'removal bound 1 reached this sweep'
+  # Exactly one survives — and BOTH panes were still torn down: this is a brake on destruction,
+  # never a stop on the reap. A directory left on disk is recoverable; that is the whole trade.
+  n=0
+  [ -d "$D/.worktrees/wt-b1" ] && n=$((n+1))
+  [ -d "$D/.worktrees/wt-b2" ] && n=$((n+1))
+  [ "$n" -eq 1 ]
+  [ "$(grep -c . "$D/td-calls")" -ge 2 ]
+}
+
+@test "RUNAWAY BOUND RED-PROOF: raise it by one and BOTH of the same worktrees go" {
+  mkworktree "$D/main-b" "$D/.worktrees/wt-b1"
+  git -C "$D/main-b" worktree add -q "$D/.worktrees/wt-b2" -b wt-branch2 >/dev/null 2>&1
+  mock_classify_handoffs "$D/.worktrees/wt-b1" "$D/.worktrees/wt-b2"
+  CC_REAPER_WT_REMOVE_MAX=2 run "$R" sweep --reap
+  ! echo "$output" | grep -q 'BOUND HIT' || false
+  [ ! -d "$D/.worktrees/wt-b1" ]
+  [ ! -d "$D/.worktrees/wt-b2" ]
+}
+
+@test "RUNAWAY BOUND: an unparseable value falls back to the DEFAULT, never to unbounded" {
+  # A typo must not widen a destructive budget. `-1` is the one accepted opt-out and it is spelled
+  # out; `abc` is not a request for unlimited removals.
+  mkworktree "$D/main-bv" "$D/.worktrees/wt-bv"
+  mock_classify_handoffs "$D/.worktrees/wt-bv"
+  CC_REAPER_WT_REMOVE_MAX=abc run "$R" sweep --reap
+  [ ! -d "$D/.worktrees/wt-bv" ]                     # default 4 > 1 removal ⇒ this one still goes
+  ! echo "$output" | grep -q 'BOUND HIT' || false
+}
+
+@test "the DISPOSAL LEDGER records every removal, and the gitignored bytes it destroyed" {
+  # `git status --porcelain` — the untracked guard above — cannot see ignored content, and
+  # `git worktree remove` deletes it anyway at exit 0. Nothing refuses on it (the live population is
+  # dominated by node_modules), so the record is the ONLY trace those bytes ever existed.
+  mkworktree "$D/main-l" "$D/.worktrees/wt-l"
+  printf 'secrets.env\n' > "$D/.worktrees/wt-l/.gitignore"
+  git -C "$D/.worktrees/wt-l" add .gitignore
+  git -C "$D/.worktrees/wt-l" commit -qm ignore
+  echo 'TOKEN=live' > "$D/.worktrees/wt-l/secrets.env"     # invisible to --porcelain, deleted anyway
+  # The worktree is now 1 commit ahead of trunk; land it so work_landed still holds.
+  git -C "$D/main-l" update-ref refs/remotes/origin/main "$(git -C "$D/.worktrees/wt-l" rev-parse HEAD)"
+  mock_classify_handoffs "$D/.worktrees/wt-l"
+  run "$R" sweep --reap
+  [ ! -d "$D/.worktrees/wt-l" ]
+  echo "$output" | grep -q 'gitignored content destroyed with it'
+  # One JSON line, in the SAME ledger scripts/worktree-gc.sh writes — the operator's question is
+  # "what was in that directory", never "which of my two reapers removed it". `actor` separates them.
+  [ -s "$CC_WTGC_DISPOSAL_LOG" ]
+  run jq -r '.actor + " " + .event + " " + .destroyed_ignored' "$CC_WTGC_DISPOSAL_LOG"
+  [ "$output" = "cc-reaper worktree-disposed secrets.env" ]
+}
+
+@test "a REFUSED removal writes no disposal record — the ledger states facts, not intentions" {
+  # The pair for the test above: a record written before the removal succeeded would make the
+  # ledger's whole purpose (what was destroyed) unfalsifiable.
+  mkworktree "$D/main-r" "$D/.worktrees/wt-r"
+  echo litter > "$D/.worktrees/wt-r/stray.md"        # untracked ⇒ the guard leaves it intact
+  mock_classify_handoffs "$D/.worktrees/wt-r"
+  run "$R" sweep --reap
+  [ -d "$D/.worktrees/wt-r" ]
+  [ ! -s "$CC_WTGC_DISPOSAL_LOG" ]
+}
+
+@test "the no-force discipline is in the SOURCE — this reaper no longer overrides git's refusal" {
+  # The law is audit §8-H and tests/worktree-gc.bats guards the janitor's source for it; cc-reaper
+  # was the one actuator still forcing, and it is the one that runs with nobody to ask. `--force`
+  # discards git's own second opinion on OUR evidence, on a tree we have already proven clean — so
+  # it could only ever override a refusal we had not anticipated.
+  body="$(grep -v '^[[:space:]]*#' "$R")"
+  ! printf '%s\n' "$body" | grep -qE 'worktree[[:space:]]+remove[^;]*--force' || false
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────

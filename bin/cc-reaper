@@ -18,6 +18,15 @@
 #                              Two positive controls per run. Off: CC_WATCHDOG_CENSUS=off
 #   cc-reaper selftest         RED-proof the disposition + the never-reap guarantees (no real session)
 #
+#   KILL SWITCH — this program kills processes, tears down panes and removes worktrees, from a
+#   LOADED launchd job. Stop all of it without a `launchctl bootout`:
+#     CC_REAPER_DISABLE=1 cc-reaper sweep --reap    # env half — a shell, a script, a test
+#     touch ~/.claude/autonomy/cc-reaper.disabled   # FILE half — the ONLY one launchd can see
+#   Unset or `0` is the only ENABLED reading. `rm` the file / set `0` to re-arm. Worktree removals
+#   are additionally bounded per sweep (CC_REAPER_WT_REMOVE_MAX, default 4; -1 unbounded) and every
+#   one appends a record — including the gitignored bytes it destroyed — to the shared ledger at
+#   ~/.claude/autonomy/worktree-disposals.jsonl.
+#
 # SURFACE PAGING (T-P3-3 — surfaced ≠ acted, the FM2 gap G-P3-3): a never-reap cause that needs a HUMAN
 # (coordination-hang / crashed / finished-shared-review) was only `say`'d to stdout+log and NOTHING
 # consumed it — the desk was never told. Now `--reap` emits a best-effort cc-notify PAGE to the desk
@@ -102,6 +111,70 @@ PROJECT_ROOTS="${CC_REAPER_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-s
 LOCKDIR="${CC_REAPER_LOCKDIR:-$HOME/.claude/autonomy/cc-reaper.sweep.lock.d}"
 LOCK_MAX_AGE_S="${CC_REAPER_LOCK_MAX_AGE_S:-3600}"       # a sweep still holding past this is hung, not working
 LOCK_STAMP_GRACE_S="${CC_REAPER_LOCK_STAMP_GRACE_S:-5}"  # mkdir → pid-stamp window; below it, assume a racer
+
+# ── KILL SWITCH (P3, docs/plans/MASTER_FLEET_FOOTPRINT.md · 2026-08-15) ─────────────────────────
+# cc-reaper is launchd-LOADED, kills processes, tears down panes and removes worktrees, and until
+# now the only way to stop it was to `launchctl bootout` the job — a step the operator has to
+# remember the label for, at the moment they least want to look one up. Every other destructive
+# actuator in this fleet grew a switch first (scripts/worktree-gc.sh:188, CC_REAPER_GARBAGE,
+# CC_WATCHDOG_CENSUS); the one with the largest blast radius had per-ARM switches and no way to
+# stop the whole thing. `sweep --reap` with every arm individually disabled still classifies,
+# still tears down panes and still removes worktrees — the arms are not the reaper.
+#
+# TWO HALVES, for the same reason worktree-gc.sh has two: **launchd jobs inherit no shell
+# environment**, so `export CC_REAPER_DISABLE=1` in the operator's terminal does not reach the
+# loaded job at all — it would disable the reaper everywhere EXCEPT where it actually runs
+# unattended, which is the only place a kill switch matters. The FILE half is the one that works
+# on the launchd path; the env half is the one that works in a test and a one-off invocation.
+#
+# UNSET OR `0` IS THE ONLY ENABLED READING. Any other value disables, including `false`, `no` and
+# a typo: an operator who reached for this wants it OFF, and a switch that silently stays armed
+# because they wrote the wrong word is worse than no switch.
+#
+# CHECKED HERE — above `mkdir`, above every seam resolution, above the sweep lock — because
+# "disabled" must mean this program did nothing at all, not that it did its setup and then
+# declined to act. It is BELOW argv validation only in the sense that an unknown command still
+# exits 2 (see the dispatch at the foot of this file): a disabled reaper must not answer `sweep`
+# and `sweeep` the same way, or the switch becomes a way to hide a typo.
+REAPER_DISABLE_FILE="${CC_REAPER_DISABLE_FILE-$HOME/.claude/autonomy/cc-reaper.disabled}"
+REAPER_DISABLED_BY=""
+case "${CC_REAPER_DISABLE:-}" in
+  ''|0) ;;
+  *)    REAPER_DISABLED_BY="env=CC_REAPER_DISABLE" ;;
+esac
+if [ -z "$REAPER_DISABLED_BY" ] && [ -n "$REAPER_DISABLE_FILE" ] && [ -e "$REAPER_DISABLE_FILE" ]; then
+  REAPER_DISABLED_BY="file=$REAPER_DISABLE_FILE"
+fi
+if [ -n "$REAPER_DISABLED_BY" ]; then
+  case "${1:-}" in
+    # `-h`/`--help` is how an operator LEARNS this switch exists, and `selftest` is what proves it
+    # works — refusing either would make a disabled reaper undiagnosable. Neither classifies,
+    # kills, tears down or removes anything.
+    -h|--help|""|selftest) ;;
+    sweep|garbage|watchdog-census|--watchdog-census)
+      # printf, not say()/log() — those are defined BELOW, and this block deliberately sits above
+      # every definition it does not strictly need. The log write is best-effort for the same
+      # reason: a switch that could fail because a log directory is missing is not a kill switch.
+      printf '%s\n' "cc-reaper: verdict=disabled $REAPER_DISABLED_BY — nothing classified, killed, torn down or removed."
+      printf '%s\n' "cc-reaper: re-enable with  CC_REAPER_DISABLE=0  (env) or  rm -f '$REAPER_DISABLE_FILE'  (file)."
+      printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" \
+        "verdict=disabled $REAPER_DISABLED_BY (argv: $*)" >> "$LOG_FILE" 2>/dev/null || true
+      exit 0 ;;
+    # An unknown command still falls through to the dispatch's exit 2.
+  esac
+fi
+
+# ── worktree removal: the runaway bound + the disposal ledger (P3, see worktree_cleanup) ────────
+# The cap counts REMOVALS, not candidates, and resets with the process — one sweep, one budget.
+# `-1` means unbounded and is a deliberate opt-out, not the default: the default has to be a number
+# an operator would notice being exceeded. 4 is above every observed healthy sweep (a sweep reaps
+# the panes that finished since the last tick, minutes ago) and far below a runaway.
+WT_REMOVE_MAX="${CC_REAPER_WT_REMOVE_MAX:-4}"
+# `-1` is the only accepted non-number and it is the explicit opt-out; anything else unparseable
+# falls back to the DEFAULT rather than to unbounded. A typo must never widen a destructive budget.
+case "$WT_REMOVE_MAX" in -1) ;; ''|*[!0-9]*) WT_REMOVE_MAX=4 ;; esac
+WT_REMOVED_THIS_SWEEP=0
+WT_DISPOSAL_LOG="${CC_WTGC_DISPOSAL_LOG:-$HOME/.claude/autonomy/worktree-disposals.jsonl}"
 
 command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
@@ -629,14 +702,74 @@ worktree_cleanup() { # <cwd> — remove a LINKED worktree after a confirmed tear
   # output nothing ever committed. HERE — and only here, where deletion is real — untracked counts
   # as dirty: leave the tree on disk and say so. The PANE is still reaped either way.
   if [ -n "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ]; then
-    say "    worktree LEFT INTACT (untracked files present — --force would delete them): $cwd"
+    say "    worktree LEFT INTACT (untracked files present — removal would delete them): $cwd"
     log "worktree left intact (untracked present): $cwd"; return 0
   fi
-  if "$GIT_BIN" -C "$main" worktree remove --force "$cwd" 2>/dev/null; then
-    say "    worktree removed: $cwd"; log "worktree removed: $cwd"
-  else
-    say "    worktree remove FAILED (left intact): $cwd"; log "worktree remove failed: $cwd"
+  # ── RUNAWAY BOUND (P3, 2026-08-15) ───────────────────────────────────────────────────────────
+  # The per-sweep cap is what makes an unattended destructive actuator survivable. Every gate
+  # above is a judgment about ONE worktree, and the whole class of failure that put this file in
+  # MASTER_FLEET_FOOTPRINT §P3 is a sweep in which that judgment is systematically wrong — a
+  # trunk that moved, a classify verdict built on stale evidence, a `$TRUNK` that resolves
+  # somewhere unexpected. Per-item correctness cannot bound a systematic error; only a count can.
+  # Past the cap the reaper stops REMOVING and says so, loudly, once. Panes are still torn down:
+  # a directory left on disk is recoverable by definition, and this is a brake, not a stop.
+  WT_REMOVED_THIS_SWEEP=$((WT_REMOVED_THIS_SWEEP + 1))
+  if [ "$WT_REMOVE_MAX" -ge 0 ] && [ "$WT_REMOVED_THIS_SWEEP" -gt "$WT_REMOVE_MAX" ]; then
+    if [ "$WT_REMOVED_THIS_SWEEP" = "$((WT_REMOVE_MAX + 1))" ]; then
+      say "    ⚠️ worktree removal BOUND HIT ($WT_REMOVE_MAX this sweep) — every further tree is LEFT INTACT."
+      say "       A sweep that wants to remove more than $WT_REMOVE_MAX worktrees is making a systematic"
+      say "       judgment, not $WT_REMOVE_MAX individual ones. Inspect before raising CC_REAPER_WT_REMOVE_MAX."
+      log "worktree removal bound hit: max=$WT_REMOVE_MAX — refusing further removals this sweep"
+    fi
+    say "    worktree LEFT INTACT (removal bound $WT_REMOVE_MAX reached this sweep): $cwd"
+    log "worktree left intact (bound $WT_REMOVE_MAX): $cwd"
+    return 0
   fi
+  # ── THE BLAST RADIUS, READ BEFORE THE REMOVAL ────────────────────────────────────────────────
+  # `git status --porcelain` — the guard directly above — is BLIND to ignored content, and
+  # `git worktree remove` deletes it anyway, at exit 0, with no --force and no warning (measured
+  # 2026-07-30 in scripts/worktree-gc.sh:ignored_inventory — a worktree holding only `secrets.env`
+  # removes clean and the file is gone). It is not refused on, for the reason recorded there: the
+  # live population is dominated by `node_modules`/`__pycache__`/`.claude-plans`, so refusing
+  # would make this arm inert by construction. It is NAMED instead — read here, before removal,
+  # because afterwards the answer is unrecoverable, which is exactly why nothing has ever
+  # accounted for it. This is the ONE trace that these bytes existed.
+  local ignored head branch
+  ignored="$("$GIT_BIN" -C "$cwd" status --porcelain --ignored 2>/dev/null \
+             | sed -n 's/^!! //p' | sort | tr '\n' ',' | sed 's/,$//')"
+  head="$("$GIT_BIN" -C "$cwd" rev-parse HEAD 2>/dev/null)"
+  branch="$("$GIT_BIN" -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  # NO --force (P3, 2026-08-15). It shipped here and nowhere else: scripts/worktree-gc.sh removes
+  # on three separate paths and never forces, its test suite guards the SOURCE against forcing
+  # (tests/worktree-gc.bats "the no-force / no-D discipline is in the source"), and audit §8-H is
+  # the ruling — git's refusal is a second gate on OUR evidence, and forcing discards it. The tree
+  # is proven clean four lines up, so --force overrode nothing here except git's own opinion, on
+  # the one actuator that runs unattended and therefore has nobody to ask.
+  if "$GIT_BIN" -C "$main" worktree remove "$cwd" 2>/dev/null; then
+    say "    worktree removed: $cwd"; log "worktree removed: $cwd"
+    [ -n "$ignored" ] && say "      └ gitignored content destroyed with it (git records this nowhere else): $ignored"
+    log_worktree_disposal "$cwd" "$branch" "$head" "$ignored"
+  else
+    say "    worktree remove REFUSED by git (left intact — it changed since the gates ran): $cwd"
+    log "worktree remove refused: $cwd"
+  fi
+}
+
+log_worktree_disposal() { # <path> <branch> <head> <ignored-csv>
+  # Appends to the SAME ledger scripts/worktree-gc.sh writes, deliberately: the operator's question
+  # months later is "what was in that directory", never "which of my two reapers removed it", and
+  # two ledgers would answer it only if you already knew which to open. `actor` is what tells them
+  # apart. Best-effort by construction — a removal that already happened must never be un-recorded
+  # because a log directory was missing, so this can only ever fail silently, never block.
+  local dir esc_path esc_branch esc_ign
+  dir="$(dirname "$WT_DISPOSAL_LOG")"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  esc_path="$(printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  esc_branch="$(printf '%s' "${2:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  esc_ign="$(printf '%s' "${4:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  printf '{"ts":"%s","event":"worktree-disposed","actor":"cc-reaper","path":"%s","branch":"%s","head":"%s","owner_proof":"teardown-verified+work-landed","preserved_at":"refs/heads/%s","destroyed_ignored":"%s"}\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$esc_path" "$esc_branch" "${3:-}" "$esc_branch" "$esc_ign" \
+    >> "$WT_DISPOSAL_LOG" 2>/dev/null || true
 }
 
 # ── T-P3-3: page the desk on a never-reap-but-surface cause (damped). Prints the reaper's per-session line. ──
@@ -1493,9 +1626,12 @@ case "${1:-}" in
   # command an operator wants DURING the overload a locked sweep is stuck in.
   garbage)      if [ "${2:-}" = "--reap" ]; then garbage_sweep 1; else garbage_sweep 0; fi ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
-  # 2,30 not 2,25: the garbage entry above added 5 header lines, and a fixed window would
-  # have silently pushed that much of the existing help off the end (same bump the
-  # watchdog-census entry forced before it).
-  -h|--help|"") sed -n '2,30p' "$0"; exit 0 ;;
+  # 2,29 — the command list plus the KILL SWITCH block, ending on its closing blank comment. The
+  # window has been bumped by every header addition (2,25 → 2,30 for the garbage entry, before
+  # that for watchdog-census); this one re-anchors it on a real boundary instead, so the next
+  # addition truncates the SURFACE PAGING prose that follows rather than the switch a reader came
+  # here to find. Help is where an operator LEARNS the reaper can be stopped — it goes above the
+  # design notes, not below them.
+  -h|--help|"") sed -n '2,29p' "$0"; exit 0 ;;
   *)            echo "cc-reaper: unknown command '$1' (sweep | garbage | watchdog-census | selftest)" >&2; exit 2 ;;
 esac
