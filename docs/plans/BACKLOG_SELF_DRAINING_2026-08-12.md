@@ -1450,3 +1450,117 @@ symlinks. Effort order after this one is unchanged: `master-operator-gated` (25)
 `master-account-facts` (26) → `master-enforcing-store` (32) → `master-session-lifecycle` (41) →
 `master-fleet-footprint` (56) → `master-product-repos` (57) → `master-fire-gate` (58) →
 `master-convergence-deadlock` (84).
+
+### 2026-08-15 — THE LOCAL DRAIN recycle #5: the selftest that had no third state, and a master row whose four clauses had all already landed
+
+`master-verification-integrity` **10 → 8 live rows** (4 open, 3 blocked, 1 claimed): one code fix
+landed (`26ccbb3a8`) and one master row closed on measurement alone.
+
+#### `2c5ab136d63f` — `--selftest` could only ever exit 0 or 1, so one lost fork convicted a clean tree
+
+Landed **`26ccbb3a8`**, content-verified on `origin/main` (six markers present, `git diff origin/main`
+empty on all three paths).
+
+`lint_dir` answers **2 for five different reasons** and they are not one class. Four are STRUCTURAL —
+not a directory, no `.bats` suites under it, and the two extractors that cannot find their own anchor
+— and each says something true, so each must stay a FAIL. The fifth is `CHECK_FAILED`: a predicate
+that could not RUN, which on this box means a lost fork under load and is **not a claim about the
+tree at all**. Case (e) is the only assertion in the whole selftest that lints the REAL tree, so it
+is precisely the one a busy box can break — and all five collapsed onto one `fails=1`.
+
+The damage was three-way and none of it was about the tree: `tests/test-hermeticity-lint.bats`
+asserted `-eq 0` in three places · `postland-verify` reads exit 1 as **INSTRUMENT-BROKEN**, skipping
+the scan so no green is claimable · `nightly-regression` scored it a plain regression.
+
+**The enabling property is a redirect, and it is one character from being destroyed.** `CHECK_FAILED`
+is readable by the caller ONLY because case (e) calls `lint_dir` with a plain redirect — *a redirect
+is not a subshell*. `$( )` would be, and would discard the assignment before anyone could read it:
+exactly the sibling row `57ff249657e0`, where `hits="$(scan)"` swallowed four honest `exit 2`s. So
+the property is now **pinned by its own case (e2)**, not left as a comment — mutant m1 wraps that one
+call in `( )` and reds.
+
+**Consumers were re-verified, not assumed, and one genuinely needed the same diff.**
+`postland-verify` already routes any non-1 nonzero to *"instrument unproven, scanning anyway"*, so it
+needs nothing and strictly improves. `ship-land` does not run this selftest. But
+`nightly-regression`'s NON-VERDICT class is `124|137|143|75` — exit 2 fell straight through to the
+plain-regression arm (memory: `new-nonverdict-state-strands-its-consumers`). Fixed here,
+**MARKER-GATED**: `bash` itself exits 2 on a syntax error, so a bare `2)` would turn every broken
+check in the fleet into a silent CUT — fail-OPEN, the one direction that block must never grow in.
+
+**The mutant matrix, one single-site mutant per site, each asserted APPLIED (diff printed) before its
+verdict was read, against a control green under all of them:**
+
+| | mutant | reds |
+|---|---|---|
+| ctl | none | **nothing (rc 0)** |
+| m1 | `$( )` around case (e2)'s `lint_dir` | (e2) only — `CHECK_FAILED` unreadable |
+| m2 | collapse exit-2 → FAIL (**the pre-fix code**) | (e2) only; (e3) stays green |
+| m3 | abstain on every exit-2 (too wide) | (e3) only; (e2) stays green |
+| m4 | non-verdict → exit 1 | `selftest_exit_code (0,1)` only |
+| m5 | precedence flipped | `selftest_exit_code (1,1)` only |
+| N1/N2 | nightly: drop marker gate / delete arm | one nightly case each |
+| W1/W2 | wrapper guard too wide / too narrow | its own assertion each |
+
+🚨 **m2 and m3 mutate THE SAME LINE in opposite directions and red DIFFERENT cases.** That, not the
+count, is what proves the discrimination is two-sided and neither branch vacuous.
+
+**Two instrument lessons, both found by mutating rather than reading.**
+
+1. 🚨 **A pre-commit `shellcheck -S warning` is BLIND to the severity the land gate enforces.** The
+   gate red'd on a single **SC2181 (style)** — `selftest_exit_code 0 0; [ "$?" -eq 0 ]` — that my own
+   pre-commit check could not see, because I had run it at `-S warning`. Note *why* only that one
+   line: SC2181 fires on a comparison against **0** (which is just the command's own status) and not
+   on `-eq 1`/`-eq 2`, which `$?` is the only way to express — which is why the file's many existing
+   `[ "$?" -eq 1 ]` lines are clean. This is `prescribed-repro-weaker-than-the-harness` with
+   *severity* as the axis: **a pre-check run at a weaker setting than the gate can only ever
+   exonerate.** Run the gate's own invocation, with no `-S`.
+2. **W1 caught a vacuous-pass trap in the new wrapper control itself.** This suite loads no
+   bats-assert, so `fail` is `command not found` (status 127). The control went red for the right
+   reason with **entirely the wrong message** — and on the healthy path `fail` is never invoked, so
+   nothing would have revealed it. Replaced with an explicit `echo >&2; return 1`.
+
+#### `3ec6c070f52f` (the W4 master) — closed on measurement: all FOUR clauses had already landed
+
+The brief said to re-scope it rather than work it, and the re-scope closed it outright. Measured, not
+inferred:
+
+- **9 of 15 ratchet arms collapse exit 2 into gate_red** → `b7f771848` ("8 gate arms collapsed a
+  lint's exit 2 into gate_red — route could-not-run to GATE_KILLED"), on trunk, closed as
+  `446fe07464e0`.
+- **A SIGKILLed bats run reads as GATE RED** → `tests/ship-land.bats:1904` asserts a SIGNAL-killed
+  corpus exits **9, not 6**, and greps that GATE RED is *absent*. It ran GREEN inside this session's
+  own land (`ok 84`).
+- **bats-assert-liveness fails OPEN** → `4a33679c7`, closed last recycle — and **live-confirmed here
+  by accident**: run against a directory it printed *"COULD NOT RUN … exit 2 is a NON-VERDICT, not a
+  clean tree"*. The fix demonstrating itself is better evidence than the commit.
+- **89 non-final bare-`!` assertions across 28 files** → `bats-assert-liveness.py` over all **473**
+  suites: **exit 0, zero findings**.
+
+An open row whose remedy has already landed keeps minting duplicate analysis (memory:
+`refuted-open-row-remints-its-own-analysis`); closing it is part of landing the fix.
+
+#### Two operational facts the next recycle should not re-derive
+
+- 🚨 **A CONDITION lease can block a row that is not the one being worked.** `cc-backlog claim`
+  refused `2c5ab136d63f` because a SIBLING in the same condition (`0be0bd2c0b65`) was held live by a
+  **cloud dispatcher**. `--force` was justified on three measurements, not impatience: the
+  dispatcher's pid was spent (expected for a cloud claim, so worthless either way), **0 of 49 remote
+  branches carried that row's work** 71 minutes after the claim, and the two rows touch *different
+  files*. Do not touch `0be0bd2c0b65` itself.
+- 🚨 **`ship-land` must be a HARNESS-OWNED background task, never `nohup … &` from a tool call.** Two
+  full runs (~20 min each) were lost mid-gate with no verdict line — the process group dies with the
+  tool call (memory: `nohup-from-a-tool-call-is-not-detached`). The third run, launched as a plain
+  backgrounded command the harness tracks, reached `✓ ship-land: LANDED`. Also: the smoke's budget
+  cut is a **GATE-KILLED non-verdict, not a red** — `SHIP_LAND_SMOKE_BUDGET_S=900` earned a full
+  verdict here.
+
+**State at this recycle.** `master-verification-integrity` **8 live**: open — `05ff1e5fabc0` (3
+CI-only reds on the hermetic corpus), `8efd655b0fe1` (a CI shard CANCELLED mid-run, ~41 suites of
+evidence lost per run), `b02e87582e96` (triage 7 defective adversarial screens), `e191b6801be5`
+(unguarded-kill ratchet has no own-set — **its falsifier still fails against `origin/main`, so it is
+real work**); claimed — `c1a29f8ee045` (own-set basename collapse, also still failing its falsifier);
+blocked — `782607797fc5`, `67a7d78c1134`, `0be0bd2c0b65`. Live store 547 (sibling intake continues;
+the drain's arithmetic is net-of-intake, never a raw total). Effort order after this one is
+unchanged: `master-operator-gated` (25) → `master-account-facts` (26) → `master-enforcing-store` (32)
+→ `master-session-lifecycle` (41) → `master-fleet-footprint` (56) → `master-product-repos` (57) →
+`master-fire-gate` (58) → `master-convergence-deadlock` (84).
