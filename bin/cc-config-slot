@@ -71,11 +71,29 @@ def _accounts_json_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "accounts.json")
 
 
+class MalformedAccounts(ValueError):
+    """The accounts SSOT parsed as JSON but a record in it is not usable.
+
+    A DISTINCT type because `KeyError` is this file's sentinel for "unknown account", and a
+    malformed record used to raise the same thing — so a record that was PRESENT but missing a
+    field was reported as absent, naming the account unknown while listing it as known. A
+    ValueError subclass so the existing "cannot read the SSOT" arms keep catching it if a future
+    caller forgets to name it.
+    """
+
+
 def load_accounts() -> dict[str, dict[str, Any]]:
     """Account name -> record, from the accounts.json SSOT."""
     with open(_accounts_json_path()) as fh:
         cfg = json.load(fh)
-    return {a["name"]: a for a in cfg.get("accounts", [])}
+    out: dict[str, dict[str, Any]] = {}
+    for rec in cfg.get("accounts", []):
+        try:
+            name = rec["name"]
+        except (KeyError, TypeError) as exc:
+            raise MalformedAccounts(f"account record without a usable 'name': {rec!r}") from exc
+        out[name] = rec
+    return out
 
 
 def desharing_enabled() -> bool:
@@ -88,7 +106,13 @@ def desharing_enabled() -> bool:
     try:
         with open(FLAG_FILE) as fh:
             return json.load(fh).get("enabled") is True
-    except (OSError, json.JSONDecodeError, AttributeError):
+    # ValueError, not json.JSONDecodeError: the docstring above promises the CLASS "missing,
+    # unreadable, or malformed", and the enumeration missed UnicodeDecodeError — which is what
+    # json.load raises on a non-UTF-8 flag file, so a binary file crashed this resolver in the
+    # launch path of every session (and crashed --status, the command the docstring tells the
+    # operator to run to inspect the flag). Both JSONDecodeError and UnicodeDecodeError are
+    # ValueError subclasses, so this widening is strictly additive and is exactly the named class.
+    except (OSError, ValueError, AttributeError):
         return False
 
 
@@ -106,7 +130,12 @@ def resolve(acct: str, class_name: str = DEFAULT_CLASS) -> dict[str, Any]:
     rec = accounts.get(acct)
     if rec is None:
         raise KeyError(acct)
-    canonical = os.path.expanduser(rec["config_dir"])
+    try:
+        canonical = os.path.expanduser(rec["config_dir"])
+    except (KeyError, TypeError) as exc:
+        # Same overload as the missing-name case: without this, a record PRESENT in the SSOT
+        # but missing config_dir raised the unknown-account sentinel.
+        raise MalformedAccounts(f"account {acct!r} has no usable 'config_dir'") from exc
     enabled = desharing_enabled()
     if not enabled:
         # The provable no-op: byte-identical to today's launcher behaviour.
@@ -143,7 +172,17 @@ def main() -> int:
         return 0 if args else 2
     as_json = "--json" in args
     if "--status" in args:
-        st = status()
+        # Guarded for the same reason the resolver is: this is the command the docstring tells the
+        # operator to run to INSPECT the configuration, so it is the one command that must survive a
+        # corrupt one. It crashed on both a non-UTF-8 flag file and a record missing a field.
+        try:
+            st = status()
+        except MalformedAccounts as exc:
+            print(f"cc-config-slot: accounts SSOT is malformed: {exc}", file=sys.stderr)
+            return 1
+        except (OSError, ValueError) as exc:
+            print(f"cc-config-slot: cannot read accounts SSOT: {exc}", file=sys.stderr)
+            return 1
         if as_json:
             print(json.dumps(st, indent=2))
         else:
@@ -168,11 +207,22 @@ def main() -> int:
         class_name = args[i + 1]
     try:
         res = resolve(acct, class_name)
+    except MalformedAccounts as exc:
+        # BEFORE the ValueError arm below (it is a subclass) and before KeyError, so a malformed
+        # record reports as an SSOT error at rc 1 rather than as an unknown account at rc 2.
+        print(f"cc-config-slot: accounts SSOT is malformed: {exc}", file=sys.stderr)
+        return 1
     except KeyError:
-        known = "|".join(sorted(load_accounts()))
+        # The re-read is GUARDED. Unguarded it called load_accounts() a second time inside the
+        # handler, so a malformed SSOT raised out of the error path itself — an uncaught traceback
+        # from the arm whose whole job is to report the problem legibly.
+        try:
+            known = "|".join(sorted(load_accounts()))
+        except (OSError, ValueError):
+            known = "?"
         print(f"cc-config-slot: unknown account: {acct} ({known})", file=sys.stderr)
         return 2
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"cc-config-slot: cannot read accounts SSOT: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(res, indent=2) if as_json else res["config_dir"])
