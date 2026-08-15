@@ -83,7 +83,15 @@
 #           [--self-release spawn-fail|compose-fail|worktree-fail]  → the CLAIMER releasing a claim
 #                                                                  it never started work on; NOT
 #                                                                  counted as thrash (see SELF-RELEASE)
-#   block   <id> --needs "<operator-only step>"                  → status "blocked"
+#   block   <id> --needs "<operator-only step>"                  → status "blocked", AND the row
+#                                                                  joins the operator-gated condition
+#                                                                  group at filing time — non-force,
+#                                                                  so it only ever fills an EMPTY
+#                                                                  condition (see THE OPERATOR GATE
+#                                                                  IS KEYED AT FILING TIME in
+#                                                                  cmd_transition).
+#                                                                  CC_BACKLOG_OPERATOR_CONDITION
+#                                                                  names the slug; `off` disables.
 #   unblock <id> [--by <sid>] [--force]                          → back to "open"; REFUSED on a
 #                                                                 done-latched item or a live claim,
 #                                                                 exactly as `reopen` is
@@ -96,6 +104,8 @@
 #                                                                  instead of minting a sibling.
 #                                                                  CC_BACKLOG_NEEDS_BRAKE=off opts
 #                                                                  out (see MECHANICAL FOLD).
+#                                                                  Composes on `block`, so it inherits
+#                                                                  the operator-gate keying above.
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
 #
@@ -770,6 +780,12 @@ IDL="${CC_BACKLOG_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 # `done` record carrying the probe and the sha as its evidence, so the audit trail of every state
 # change is still the append-only ledger and nothing about it moved.
 VALIDATED="${CC_BACKLOG_VALIDATED:-$HOME/.claude/autonomy/backlog-validated.json}"
+
+# THE OPERATOR-GATE CONDITION — the group every blocked-on-operator row joins AT FILING TIME.
+#
+# See THE OPERATOR GATE IS KEYED AT FILING TIME in cmd_transition. `off` disables the auto-link;
+# any other value must satisfy valid_condition, or the arm is a no-op (fail-open, never a refusal).
+OPERATOR_CONDITION="${CC_BACKLOG_OPERATOR_CONDITION:-master-operator-gated}"
 
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
@@ -2047,6 +2063,71 @@ cmd_transition() {
           fi
         } >&2
       fi
+    fi
+  fi
+
+  # ── (8) THE OPERATOR GATE IS KEYED AT FILING TIME ───────────────────────────────────────────────
+  # (2026-08-15, O3 of docs/plans/MASTER_OPERATOR_GATED.md, backlog 4013dda07841.)
+  #
+  # A `block --needs` record IS the statement "the next step here belongs to the operator" — that is
+  # not an inference about the row, it is the verb's own required payload, refused two hundred lines
+  # up when it is missing. So the row's membership in the operator-gated group is KNOWN AT THE MOMENT
+  # IT IS WRITTEN, and until now nothing wrote it down.
+  #
+  # WHAT USED TO ASSIGN IT, AND WHY THAT WAS THE WRONG PLACE. scripts/backlog-consolidation/group.py
+  # recovers the membership AFTER the fact, by running an ordered taxonomy of regexes over the row's
+  # own title (its first rule, deliberately, because who-can-act outranks both the subsystem and the
+  # repo). A regex over prose is the right tool for the 42 rows that were already in the store when
+  # the taxonomy was written; it is the wrong tool for every row filed since, because it can only
+  # ever recover what the filer already knew and did not record. It also mis-recovers by
+  # construction: `--needs "collect the live output of X"` matches the imperative rule and lands
+  # correctly, while `--needs "the operator must paste the key"` matches nothing and is routed by
+  # SUBSYSTEM into a wave that can only skip it — the exact "burn a slot to discover it cannot act"
+  # the plan file exists to stop.
+  #
+  # ONE ARM COVERS BOTH FILING PATHS, because `needs` composes on this transition rather than
+  # hand-rolling records (see cmd_needs). The two-command path cc-dispatch prints into every worker
+  # brief — `cc-backlog add …` then `cc-backlog block <id> --needs "<step>"` — is the same path, so
+  # neither can drift from the other and there is still ONE writer of the `block` record.
+  #
+  # NON-FORCE, AND THAT IS THE LOAD-BEARING HALF. cmd_link REFUSES to re-key a row that already
+  # carries a condition (rc 4) precisely because re-keying moves it out of a group whose lease may be
+  # holding a live worker off duplicated work. This arm never passes --force, so it can only ever
+  # FILL AN EMPTY condition. Two consequences, both wanted:
+  #   · O1's demotions stick. A row an agent CAN work, re-keyed out of this group by hand with
+  #     `link --force`, is not silently dragged back the next time somebody blocks it.
+  #   · A row already grouped by subsystem stays there. It is `blocked`, so cc-dispatch excludes it
+  #     from the wave by construction and the slot is not burned either way; what it loses is a place
+  #     in the rendered operator batch, which is worth ONE line of stderr, not a re-key.
+  #
+  # WHAT THIS DOES *NOT* CHANGE, stated because a reader will reach for it: `unblock` does not clear
+  # the condition, so a row the operator has discharged returns to the wave still grouped, and its
+  # siblings then serialize behind one lease. That property is not introduced here — it has held for
+  # the whole swept population since group.py ran on 2026-08-12, and it is what "N rows sharing one
+  # condition cost ONE session" means. Serialized is not deadlocked: guard (6) refuses only while a
+  # sibling is CLAIMED-AND-LIVE, and releases with it. A row whose remaining work is genuinely an
+  # agent's is meant to leave this group by O1's demotion (`link --force`, said out loud), not by a
+  # silent side effect of the operator finishing their half.
+  #
+  # ADVISORY, AFTER THE APPEND, FAIL-OPEN IN EVERY DIRECTION — the same contract as (7) above and for
+  # the same reason, with the stakes stated plainly: the operator step is already durable by the time
+  # this runs. Losing its group costs it a place in a batch; failing the transition would lose the
+  # STEP, which is the one outcome worse than an ungrouped row.
+  if [ "$event" = block ] && [ "$OPERATOR_CONDITION" != off ] && valid_condition "$OPERATOR_CONDITION"; then
+    local olerr olrc=0
+    # stderr captured, stdout dropped: cmd_link echoes the id on success and stdout here is the
+    # `echo "$id"` contract every caller captures. rc 4 is the already-conditioned case above and is
+    # reported as ONE line, not as cmd_link's four-line re-key instructions — the caller filed a
+    # step, it did not ask to move a row.
+    olerr="$(cmd_link "$id" --condition "$OPERATOR_CONDITION" 2>&1 >/dev/null)" || olrc=$?
+    if [ "$olrc" -eq 4 ]; then
+      printf 'cc-backlog block: %s stays on its existing condition; it is NOT in the "%s" batch\n' \
+        "$id" "$OPERATOR_CONDITION" >&2
+    elif [ "$olrc" -ne 0 ]; then
+      { printf 'cc-backlog block: %s could not join "%s" (rc %s) — the step is filed, the group is not\n' \
+          "$id" "$OPERATOR_CONDITION" "$olrc"
+        [ -n "$olerr" ] && printf '%s\n' "$olerr" | sed 's/^/  /'
+      } >&2
     fi
   fi
   echo "$id"

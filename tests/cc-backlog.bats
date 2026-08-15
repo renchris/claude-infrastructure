@@ -474,15 +474,20 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   echo "$output" | jq -e --arg i "$b" 'length==1 and (.[0].id==$i) and (.[0].needs=="operator: set the API key")'
 }
 
-@test "append-only: add → block → unblock leaves 3 records; the trail is legible" {
+@test "append-only: add → block → unblock leaves 4 records; the trail is legible" {
   id=$(bash "$CB" add --project /r --title T --source S)
   bash "$CB" block "$id" --needs step >/dev/null
   bash "$CB" unblock "$id" >/dev/null
-  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq 3 ]
+  # add · block · link · unblock. The `link` is the operator-gate keying `block` now writes at filing
+  # time (2026-08-15, O3 of MASTER_OPERATOR_GATED.md) — nothing is rewritten, so the record ORDER is
+  # what this test is really about and the count follows from it.
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq 4 ]
   run cat "$CC_BACKLOG_FILE"
   echo "$output" | sed -n '2p' | grep -q '"event":"block"'
   echo "$output" | sed -n '2p' | grep -q '"needs":"step"'
-  echo "$output" | sed -n '3p' | grep -q '"event":"unblock"'
+  echo "$output" | sed -n '3p' | grep -q '"event":"link"'
+  echo "$output" | sed -n '3p' | grep -q '"condition":"master-operator-gated"'
+  echo "$output" | sed -n '4p' | grep -q '"event":"unblock"'
 }
 
 @test "list --project filters to one project" {

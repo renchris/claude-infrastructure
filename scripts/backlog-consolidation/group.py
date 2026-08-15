@@ -67,6 +67,19 @@ from collections import Counter
 #     the whole pile into one operator batch, which is what the close-time `👤`
 #     rung and cc-do already render. Measured: this is the largest single family
 #     after the re-lands.
+#
+#     THIS RULE IS NOW THE BACKFILL, NOT THE PRODUCER (2026-08-15, O3 of
+#     docs/plans/MASTER_OPERATOR_GATED.md). `cc-backlog block --needs` keys the
+#     row into master-operator-gated at FILING time — non-force, so it only ever
+#     fills an EMPTY condition — which means every row minted since carries the
+#     membership before any sweep can see it and this rule matches nothing new.
+#     It stays for the rows filed BEFORE that landed, and as the record of why a
+#     regex here was always the weaker instrument: it is strictly recovering a
+#     fact the FILER already had. It lands `--needs "collect the live output of
+#     X"` correctly on the imperative and misses `--needs "the operator must
+#     paste the key"` entirely, routing it by subsystem into a wave that can only
+#     skip it — the burn-a-slot-to-discover-it-cannot-act the plan file exists to
+#     stop. Enforcement belongs at the chokepoint; this is the sweep it replaced.
 #  2. THE REPO OUTRANKS THE SUBSYSTEM, so the project test comes SECOND. A
 #     reso-management-app row reading "pnpm lint is RED on origin/main" is a reso
 #     effort, not a claude-infrastructure verification effort: the tree it edits
