@@ -125,13 +125,48 @@ rather than restated.
 Both controls are anchor-checked: the mutation is asserted to have applied before the check runs, so
 a green cannot come from a mutant that was never built.
 
+**Test 28's anchor was itself dead on first write, and the land gate caught it.** It was spelled
+`! grep -q …`, and bash exempts a `!`-negated command from errexit — so the anchor passed whether or
+not the mutation applied. A vacuous anchor on a control is the precise failure the control exists to
+prevent, one level up. Re-spelled as `run` + `[ "$status" -ne 0 ]` and verified in BOTH directions:
+the new form fails on an unmutated file, the old form passes on one. (The repo's own
+`bats-assert-liveness-fix.py` is known to emit repairs that fail on both branches — board #100 — so
+this was hand-fixed and mutant-verified rather than auto-repaired.)
+
 ---
 
 ## 4. Known-open, deliberately not laundered
 
-Silencing the notification does **not** make the partition green. Whether the underlying `red` is a
-true statement about the tree is tracked separately — see
-`docs/research/ci-notification-flap-2026-08-15/C-is-the-red-true.md`. The fix above changes only
+### The partition is structurally red, and that is a SEPARATE problem — backlog `ea3ea8f145f9`
+
+Measured 2026-08-15 from the `offbox-verdict` artifacts of four consecutive runs. Exactly **one
+suite fails per run, and its identity rotates**:
+
+| run | failing | suites |
+|---|---|---|
+| 31912550182 (22:35) | `tests/deathwatch-watchfile.bats` | 427 |
+| 31909790008 (21:34) | `tests/cc-close-attrib.bats` | 426 |
+| 31907172661 (20:37) | `tests/unattended-path-lint.bats` | 427 |
+| 31904202657 (19:32) | `tests/unattended-path-lint.bats` | 427 |
+
+**Why this matters for the remedy, and why nothing was excluded.** The research pass concluded the
+red "reduces to exactly two suites" and proposed excluding them. Re-reading the artifacts directly
+refuted it: a third suite had already appeared in the newest run. The axis is not *which* suites —
+it is **per-run flake probability across 427 of them**. Excluding today's names is O(n) whack-a-mole
+that would go green for one hour and re-red on a different name, while permanently shrinking the
+partition for a reason that was never machine-coupling. So the exclusion manifest was deliberately
+**left untouched**.
+
+This is the same shape this repo already measured for the on-box monolith — P(green) 2.3%, which is
+why the full-suite verdict moved off the land path entirely. It is a real problem and it is not this
+one.
+
+It also **retroactively justifies the fix above**: a producer that is red most of the time for
+structural reasons is exactly a producer whose "not green" must never be an error email.
+
+### The rest
+
+Silencing the notification does **not** make the partition green. The fix above changes only
 *how a non-green is reported*, never *whether the tree is green*, and no green is minted that was
 not minted before.
 
