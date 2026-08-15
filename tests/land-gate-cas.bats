@@ -70,7 +70,17 @@ setup() {
         SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD \
         SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
+        SHIP_LAND_T0 SHIP_LAND_MEAS_ROUNDS SHIP_LAND_MEAS_GATE_S \
+        SHIP_LAND_MEAS_ARMS_S SHIP_LAND_MEAS_STATICS_S \
         2>/dev/null || true
+  # THE MEAS_* / T0 CARRIERS ARE NOT TUNING — they are the outer land's accumulated measurement,
+  # handed to its locked re-exec by meas_export(). Once an outer land takes the in-lock path, every
+  # suite it smokes inherits a non-zero round count, so the stale-round case below asserts
+  # `gate_rounds:2` against a fixture that starts at the outer's total and reports 3. Reproduced
+  # exactly with `SHIP_LAND_MEAS_ROUNDS=1 bats -f 'P0 exit 42 attests' …`, which fails on the same
+  # line the land did — i.e. this suite's verdict was a function of whether a sibling moved the
+  # trunk during the land that ran it. gate_bats scrubs the same set at the chokepoint; this half is
+  # what also holds when someone runs bats directly.
   export CC_GATE_MAX_LOAD=0            # never shed: a fixture's smoke must not depend on `uptime`
   # THIS SUITE MEASURES LOCK TOPOLOGY, AND ITS INSTRUMENT IS A shellcheck-INVOCATION COUNTER.
   # The P3 statics memo (scripts/lib/gate-memo.sh) deliberately stops re-invoking shellcheck on a
