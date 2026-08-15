@@ -252,9 +252,48 @@ setup() {
   # The daemon is the last thing running for a dead session and nothing supervises IT: an unbounded
   # call here strands every teammate the crash handler exists to notify.
   grep -qE 'lcw_bounded\(\)' "$HOOK" || { echo "no lcw_bounded helper"; false; }
-  for call in 'LCW_PYTHON_BIN' 'memory_pressure' 'ps aux' '"\$tdbin"'; do
-    grep -qE "lcw_bounded [^|]*$call" "$HOOK" || { echo "unbounded death-path call: $call"; false; }
+  # `pgrep -x`, NOT `ps aux`. This list named `ps aux` from the day it was written (dd7ddb528) and
+  # the same commit's hook stopped executing one — the concurrency probe is `pgrep -x` and the walk
+  # survives only inside the comment explaining its removal. So the assertion was born unsatisfiable
+  # in the one direction that matters: the only way to make it pass was to RE-INTRODUCE the
+  # full-table walk that the load-781 incident measured at 10-30s × ~20 concurrent scans, feeding
+  # the very load it was measuring. A stale term here does not merely fail to guard — it guards the
+  # bug (memory: stale-assertion-becomes-an-inverted-guard). Nothing else in the corpus ran it: the
+  # suite is in scripts/offbox-excluded.manifest, so the off-box producer never judged it.
+  # PER SITE, not once per name. The original form asked only whether the file contained SOME
+  # bounded occurrence of each name, so with two pgrep probes on the death path, unbinding one was
+  # invisible — proved by mutation: dropping lcw_bounded from the first probe left this case green.
+  # A rule called "every external call" has to be able to fail on one of them
+  # (memory: per-site-mutation-attributes-coverage). The patterns are INVOCATION shapes rather than
+  # bare names, because `[[ -n "$tdbin" ]]` is a test, not a call, and a per-line rule keyed on the
+  # bare name would red the three guards that legitimately surround the one invocation.
+  for call in '"\$\{LCW_PYTHON_BIN:-python3\}"' '/usr/bin/memory_pressure' '/usr/bin/pgrep' '"\$tdbin" "'; do
+    sites="$(grep -vE '^[[:space:]]*#' "$HOOK" | grep -E "$call" || true)"
+    [ -n "$sites" ] || { echo "death-path call vanished (the rule cannot pass by deletion): $call"; return 1; }
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "$line" in
+        *lcw_bounded*) ;;
+        *) echo "unbounded death-path call: $call"; echo "  $line"; return 1 ;;
+      esac
+    done <<EOF_SITES
+$sites
+EOF_SITES
   done
+}
+
+@test "hook: the concurrency probe stays pgrep -x — the full-table walk must not come back" {
+  # The load-781 cure had no guard of its own, and the assertion above pointed the other way. An
+  # executable `ps aux` on the death path is the regression; the comment that explains why it left
+  # is not, so the scan is of code lines only.
+  if grep -vE '^\s*#' "$HOOK" | grep -qE '(^|[^-])\bps\b[^|]*\baux\b'; then
+    echo "the full-table walk is back on an executable line:"
+    grep -vE '^\s*#' "$HOOK" | grep -nE '(^|[^-])\bps\b[^|]*\baux\b'
+    return 1
+  fi
+  # …and the probe it was replaced by is still there, so this case cannot pass by the hook simply
+  # losing the probe altogether.
+  grep -qE "lcw_bounded [^|]*pgrep -x" "$HOOK" || { echo "the pgrep -x probe is gone entirely"; return 1; }
 }
 
 @test "hook: a cut teardown is a THIRD state, never counted as a verdict" {
