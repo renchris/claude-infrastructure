@@ -4,8 +4,9 @@
 # VERBATIM to the cold record, restoring headroom with no model and no human in the loop.
 #
 # ── WHY AN ACTUATOR, NOT A BETTER NAG ────────────────────────────────────────────────────────
-# The loader reads MEMORY.md up to a hard byte limit (24,985 B) and SILENTLY DROPS THE TAIL —
-# the newest entries. Between 2026-07-25 and 2026-08-07 this index was hand-compacted at least
+# The loader reads MEMORY.md up to a hard limit (25,000 CHARS of the stripped, trimmed content —
+# not the 24,985 raw bytes this file assumed until 2026-08-15; see THE UNIT below) and SILENTLY
+# DROPS THE TAIL — the newest entries. Between 2026-07-25 and 2026-08-07 this index was hand-compacted at least
 # TWELVE times (memory/archive/ holds every pre-compaction snapshot, size in the filename) and
 # re-breached every time. The reason is arithmetic, not discipline: insertion is machine-speed
 # (sessions mint 7–19 entries/day at ~244 B/line, through Edit AND through Bash `>>` appends
@@ -58,13 +59,14 @@
 # verdict=error with the index untouched.
 #
 # Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
-# Env:   MEMORY_INDEX_LIMIT (24985) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
+# Env:   MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
 #        (LIMIT-4000) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
 #        MEMORY_ROTATE_MIN_AGE_DAYS (7) · MEMORY_ROTATE_TEST_PRE_COMMIT (test seam, eval'd
 #        before each commit attempt's stat re-check — lets a suite exercise the contended path)
 # Exit:  0 noop/rotated/dry-run · 2 error · 3 locked/contended · 4 exhausted
 set -euo pipefail
-export LC_ALL=C   # byte semantics everywhere: ${#s}, wc -c, sort — the loader limit is BYTES
+export LC_ALL=C   # byte semantics everywhere: ${#s}, wc -c, sort — self-consistent accounting,
+                  # reconciled to the loader's char limit by the threshold shift (see THE UNIT)
 
 VERBOSE=0; DRYRUN=0; INDEX=""
 for a in "$@"; do
@@ -90,7 +92,25 @@ fi
 DIR=$(cd "$(dirname "$INDEX")" && pwd -P)
 INDEX="$DIR/MEMORY.md"
 
-LIMIT="${MEMORY_INDEX_LIMIT:-24985}"
+# ── THE UNIT THIS FILE COUNTS IN, AND THE ONE THE LOADER COUNTS IN ───────────────────────────
+# Everything below is BYTES (LC_ALL=C, `wc -c`, `${#s}`) and internally consistent: it decides
+# which lines to move by their byte cost. The LOADER is not counting those bytes. It strips YAML
+# frontmatter and block HTML comments, trims, then compares CHARACTERS against 25000 — including
+# stripping the `<!-- cold tier: … -->` pointer THIS SCRIPT writes, so the rotor was budgeting
+# against its own bookkeeping. Derivation: hooks/lib/memory-index-measure.sh (cc-backlog
+# 7a56de4c54ab, read out of the 2.1.233 bundle).
+#
+# Rather than convert the per-line arithmetic — and risk a unit-mixed projection deciding how
+# many of the operator's memories to archive — the THRESHOLDS move instead: raise each by the
+# measured gap between what the file weighs and what the loader counts, and every comparison
+# below becomes an effective-size comparison with the accounting untouched. The gap shrinks a
+# little as lines leave, so holding it fixed across one rotation over-estimates the projection:
+# the rotor archives a touch more than strictly needed, never less.
+_ccmr_lib="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../hooks/lib/memory-index-measure.sh"
+# shellcheck source=../hooks/lib/memory-index-measure.sh
+if [ -r "$_ccmr_lib" ]; then . "$_ccmr_lib"; fi
+
+LIMIT="${MEMORY_INDEX_LIMIT:-25000}"
 case "$LIMIT" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-limit\n'; exit 2 ;; esac
 ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
 TARGET="${MEMORY_ROTATE_TARGET:-$(( LIMIT - 4000 ))}"
@@ -107,6 +127,19 @@ fi
 fsize() { wc -c <"$1" | tr -d ' '; }
 fstat() { stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1"; }
 fmtime() { stat -f %m -- "$1" 2>/dev/null || stat -c %Y -- "$1" 2>/dev/null || echo ""; }
+
+# The threshold shift described above. An unresolvable lib leaves it at 0, which is exactly the
+# pre-2026-08-15 behaviour: measuring raw bytes against the cap over-states the index and rotates
+# EARLIER than needed. A side-car degrading to "too eager" is the direction to fail in.
+OVERHEAD=0
+if command -v mim_overhead >/dev/null 2>&1; then
+  OVERHEAD=$(mim_overhead "$INDEX" 2>/dev/null) || OVERHEAD=0
+  case "$OVERHEAD" in ''|*[!0-9]*) OVERHEAD=0 ;; esac
+fi
+if [ "$OVERHEAD" -gt 0 ]; then
+  LIMIT=$(( LIMIT + OVERHEAD )); ROTATE_AT=$(( ROTATE_AT + OVERHEAD )); TARGET=$(( TARGET + OVERHEAD ))
+  vlog "loader-vs-disk overhead ${OVERHEAD} B — thresholds shifted to limit=$LIMIT rotate_at=$ROTATE_AT target=$TARGET"
+fi
 
 SIZE=$(fsize "$INDEX")
 if [ "$SIZE" -lt "$ROTATE_AT" ]; then
