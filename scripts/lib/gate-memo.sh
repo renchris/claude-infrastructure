@@ -43,7 +43,7 @@
 #
 # WHY NOTHING HERE IS HEAVY, AND WHY THAT MATTERS. P1 (145fab7d) just emptied the mutex — measured
 # hold 72s -> 3s — and the in-lock fallback lane re-enters run_gate. So the memo's own cost has to
-# be negligible even there. Per arm it is: one `git ls-tree` over the arm's population and one
+# be negligible even there. Per arm it is: one `git hash-object` over the arm's population and one
 # `git hash-object --stdin` (two forks, no per-file disk walk), then a single small read or write.
 # The salt is computed ONCE per process. Nothing here loops over the tree file-by-file.
 #
@@ -63,13 +63,19 @@ memo_init() {  # 0 = memo usable · 1 = memo OFF (and every later call degrades 
 
   [[ "${SHIP_LAND_MEMO:-on}" = "off" ]] && return 1
 
-  # A DIRTY TREE DISABLES THE MEMO, and this is load-bearing rather than tidy. The population
-  # fingerprint below is computed with `git ls-tree HEAD` — the COMMITTED tree — because hashing
-  # ~600 files individually would cost more than the checks it saves. That is only equal to what
-  # the linters actually read if the worktree matches HEAD. main_outer already refuses a dirty tree
-  # (ship-land.sh, "dirty-tree refusal"), so in the real lander this is always true; asserting it
-  # here anyway means a test harness, a future caller, or a mid-gate edit can never silently turn
-  # `ls-tree` into a stale-verdict generator. One `git status` call, once per process.
+  # A DIRTY TREE DISABLES THE MEMO — retained deliberately, but NOT for the reason this comment
+  # used to give. It claimed the population fingerprint was computed with `git ls-tree HEAD`, the
+  # COMMITTED tree, and that the guard was therefore what kept the key equal to the bytes the
+  # linters actually read. No arm has ever done that: `ls-tree` appears nowhere in this file's
+  # code, and every key is built with `git hash-object` over the FILE ON DISK (memo_file_key below,
+  # and memo_batch_arm's population hash), which is precisely what the checkers open. The key is
+  # exact whether or not the tree is clean, so the guard cannot be what makes it so.
+  #
+  # What the guard actually does is disable the memo MORE OFTEN, which is the safe direction, and
+  # main_outer already refuses a dirty tree (ship-land.sh, "dirty-tree refusal") so in the real
+  # lander it never fires at all. It stays because a test harness, a future caller, or a mid-gate
+  # edit should fall back to RUNNING the check rather than trusting a memo nobody re-reasoned
+  # about. tests/land-gate-memo.bats pins it. One `git status` call, once per process.
   [[ -n "$(git status --porcelain 2>/dev/null)" ]] && return 1
 
   local gd
