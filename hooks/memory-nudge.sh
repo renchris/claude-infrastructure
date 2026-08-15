@@ -112,11 +112,19 @@ if [ -z "$MEM" ]; then
 fi
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
+# An unresolvable measure, or a cap this hook cannot read, costs the BUDGET half and nothing
+# else: the crystallization nudge is the reason this hook exists and does not depend on either.
+# Exiting here instead would let a missing side-car silence the primary duty — a side-car
+# failing wider than itself, which is the one thing this whole subsystem refuses to do.
+MEASURE_OK=1
 # shellcheck source=./lib/memory-index-measure.sh
 . "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh" 2>/dev/null \
-  || . "$CFG/hooks/lib/memory-index-measure.sh" 2>/dev/null || exit 0
-LIMIT=$(mim_limit) || exit 0            # chars of the loader-visible index, not bytes on disk
-LINE_LIMIT=$(mim_line_limit) || exit 0  # the OTHER cap: the loader truncates on either
+  || . "$CFG/hooks/lib/memory-index-measure.sh" 2>/dev/null || MEASURE_OK=0
+LIMIT=""; LINE_LIMIT=""
+if [ "$MEASURE_OK" -eq 1 ]; then
+  LIMIT=$(mim_limit) || MEASURE_OK=0            # chars of the loader-visible index, not disk bytes
+  LINE_LIMIT=$(mim_line_limit) || MEASURE_OK=0  # the OTHER cap: the loader truncates on either
+fi
 HOOK_TARGET="${MEMORY_HOOK_TARGET:-115}"  # the compact-memory 'one governing rule' length — a FLOOR, not a target (see EFF_TARGET)
 HEADROOM_TARGET="${MEMORY_HEADROOM_TARGET:-2500}"  # compact-memory's "done" = ~2.5 KB under the limit
 
@@ -141,7 +149,7 @@ _mn_stats() {
 }
 
 BUDGET_CTX=""
-if [ -n "$MEM" ] && [ -f "$MEM" ]; then
+if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
   STATS=$(_mn_stats "$MEM") || STATS=""
   TOTAL="${STATS%% *}"
   LINES=$(printf '%s' "$STATS" | cut -d' ' -f2)

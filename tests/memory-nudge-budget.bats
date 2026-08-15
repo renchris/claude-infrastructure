@@ -242,6 +242,36 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   done
 }
 
+@test "an unresolvable measure lib costs the BUDGET half only, never the nudge itself" {
+  # A side-car must never fail wider than itself. The budget block is the side-car here; the
+  # crystallization nudge is the reason the hook exists. A copy of the hook with no lib beside
+  # it must still speak — the shape that would otherwise let a missing ADD silence the primary
+  # duty fleet-wide the moment it landed (LIVE_ADDS).
+  bare="$BATS_TEST_TMPDIR/bare"; mkdir -p "$bare"
+  cp "$HOOK" "$bare/memory-nudge.sh"                      # a COPY, not a symlink: no lib to deref
+  idx="$(mkindex 100 250)"
+  out=""
+  for _ in $(seq 1 12); do
+    out="$(printf '{"session_id":"s-nolib","cwd":"/x"}' \
+      | HOME="$BATS_TEST_TMPDIR/home" MEMORY_INDEX_PATH="$idx" bash "$bare/memory-nudge.sh" || true)"
+  done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'MEMORY CHECK (periodic)'
+  hasnt "$ctxout" 'MEMORY INDEX BUDGET'
+  hasnt "$ctxout" '🚨'
+}
+
+@test "a cap this hook cannot read also costs the BUDGET half only" {
+  idx="$(mkindex 100 250)"
+  out=""
+  for _ in $(seq 1 12); do
+    out="$(MEMORY_INDEX_LIMIT=abc fire s-badlimit "$idx" || true)"
+  done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'MEMORY CHECK (periodic)'
+  hasnt "$ctxout" '🚨'
+}
+
 @test "malformed stdin and a missing session_id exit 0 silently" {
   run bash -c "printf 'not json' | bash '$HOOK'"
   [ "$status" -eq 0 ]; [ -z "$output" ]
