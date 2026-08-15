@@ -716,9 +716,41 @@ F
   # (h) COULD-NOT-CHECK is a NON-VERDICT (exit 2) and must never print a line naming a file nobody
   #     was able to check. The output test is a `case`, not a grep: awk is what is stubbed, but the
   #     same discipline applies — an assertion must not be built out of the thing under stub.
+  #
+  #     🚨 IT MUST SCAN A COLD FIXTURE, AND THAT IS THE WHOLE CASE. This read `lint_tree "$d/guarded"`
+  #     until 2026-08-15, and `guarded` is scanned by the rule-1 case above — which RECORDS it in the
+  #     per-file memo. Case (h) then took a memo HIT, `scan_file` was never called, the stubbed awk
+  #     was never reached, CHECK_FAILED was never set, and the assertion that proves "could-not-run
+  #     is a NON-VERDICT" failed with rc 0. Measured on a pristine detached origin/main worktree:
+  #     `--selftest` exits 1 with the memo armable and 0 under CC_GITID_MEMO=off, so this was a
+  #     TRUNK RED — and `tests/git-identity-lint.bats` case 1 asserts this selftest exits 0, so the
+  #     suite was red in any clean checkout too. (The memo store lives in the GIT DIR, not under
+  #     $HOME, so bats' HOME fixturing does not disarm it.)
+  #
+  #     The fixture below is UNIQUE to this case, so the content-keyed memo cannot hold a verdict
+  #     for it. That restores the case's meaning — a cold file whose scan cannot run — rather than
+  #     hiding the collision behind CC_GITID_MEMO=off, which would have made the case pass while
+  #     asserting strictly less. A run that ends CHECK_FAILED is never recorded, so it stays cold
+  #     across runs by construction.
+  mk unrunnable <<'F'
+@test "cold fixture, scanned only by the unrunnable-scan case" {
+  git -C "${scan_root:?repo path required}" config user.email t@t
+}
+F
+  #     THE PAIRED CONTROL, and it is load-bearing rather than decorative: a root with nothing
+  #     scannable ALSO exits 2 (case (i)). So if `mk` above ever silently failed, case (h) would go
+  #     green through the missing-fixture path while asserting nothing about the stub at all. Proving
+  #     the SAME root reads cleanly UNSTUBBED is what attributes the 2 below to the stub alone.
+  #     IT RUNS WITH THE MEMO OFF, and that is not incidental. A normal control run would SCAN this
+  #     fixture cleanly and therefore RECORD it — handing case (h) below the very cache hit this
+  #     whole fix exists to remove. (Written that way first; it reproduced the trunk red exactly.)
+  #     Worse, the memo is keyed on CONTENT, not path, so recording it once would poison every
+  #     LATER selftest run even though `$d` is a fresh mktemp each time — green on run 1, red
+  #     forever after. A memo-off run proves scannability and records nothing, on every run.
+  ( CC_GITID_MEMO=off lint_tree "$d/unrunnable" "" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: the unrunnable-scan fixture is not a scannable, clean root — case (h)'s exit 2 would prove nothing"; fails=1; }
   # shellcheck disable=SC2329  # invoked INDIRECTLY — scan_file's `awk` resolves to this stub
   ( awk() { return 2; }
-    out="$(lint_tree "$d/guarded" "" 2>&1)"; rc=$?
+    out="$(lint_tree "$d/unrunnable" "" 2>&1)"; rc=$?
     [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable scan did not exit 2 (got $rc)"; exit 1; }
     case "$out" in *IDENTITY*) echo "SELFTEST FAIL: an unrunnable scan still fabricated an IDENTITY line"; exit 1 ;; esac
     exit 0
