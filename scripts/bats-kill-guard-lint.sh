@@ -81,6 +81,30 @@
 # ANYWHERE — and it leaves no exemption list to rot silently (the failure mode
 # test-hermeticity-lint's own comment warns a ratchet must never become).
 #
+# …BUT "THE BASELINE IS ZERO" IS A RUNTIME INVARIANT, AND NOTHING RE-ASSERTS IT (backlog
+# e191b6801be5; land-arch §5.P2). The argument above is sound only for as long as the corpus stays
+# clean, and the whole-corpus rule has no way to notice that it stopped being true. It is enforced
+# at the land gate, which is the one place the corpus is NOT the lander's: the moment ONE sibling
+# lands an unguarded kill — or a fixture whose unterminated string makes some suite UNREADABLE —
+# every subsequent land in the fleet is refused over a file its author never opened, and the refusal
+# names a remedy that is not theirs to apply. That is the trunk-wide-debt-taxing-innocent-lands
+# class this repo's four own-scoped ratchets already removed, arriving here through an ASSUMPTION
+# rather than through a missing feature. The strict reading is not weakened: it is what an ABSENT
+# own-set still means, so the postland verifier and a bare human run judge the whole corpus exactly
+# as before.
+#
+# OWN-SCOPE — which violations may BLOCK, as distinct from which are REPORTED. Identical contract to
+# git-identity-lint's and test-hermeticity-lint's in_own(), including the THREE states `${VAR:-}`
+# cannot express: an own-set that is ABSENT means "strict, judge the whole corpus"; an own-set that
+# is PRESENT BUT EMPTY means "this land changes nothing in scope", so NOTHING may block; a SET
+# own-set blocks on those files and reports the rest advisory. Presence is carried by an explicit
+# arity flag in lint_files() (its file list is variadic, so it cannot be carried by argument count
+# the way the siblings do) and by `${CC_KILLGUARD_OWN+set}` at the entrypoint.
+#
+# EVERY FINDING IS STILL PRINTED. Advisory is not silent: a site outside the own-set is reported as
+# `kill-guard?` and counted in the summary, so the class stays visible to whoever DID touch it, and
+# a corpus drifting off zero is legible on every land rather than discovered by one unlucky author.
+#
 # Exit: 0 = clean · 1 = a violation OR an UNREADABLE file · 2 = bad usage / nothing scannable (LOUD,
 # never silent-green — a lint that could not run must not read like a lint that found nothing). The
 # third state is why 1 covers both: a file the scanner could not read to the end yields no verdict at
@@ -88,6 +112,10 @@
 #
 # Env seams: CC_BATS_KILL_GUARD=off disables it entirely (the repo's standard kill switch, with a
 # positive control in --selftest so "off" can never be what a green verdict means).
+# CC_KILLGUARD_OWN — newline-delimited names (paths or bare basenames) the caller is answerable for;
+# see OWN-SCOPE above. `${CC_KILLGUARD_OWN+set}` at the entrypoint is the only test that separates
+# ABSENT from SET-BUT-EMPTY; `${CC_KILLGUARD_OWN:-}` would collapse them and silently reinstate the
+# fleet-wide hard stop this seam exists to remove.
 # Every fixture below is /Users/chrisren/.claude/bin/cc-bats SOURCE written literally, so the un-expanded `$p` / `${PROBE_PID:-}`
 # are the defects under test and the single quotes are load-bearing. Declared once at file level
 # rather than annotated twenty-one times; the sibling .bats ratchet excludes the same code for
@@ -361,9 +389,39 @@ collect_bats() {
   done
 }
 
-# lint_files <file>... → 0 clean · 1 violation · 2 nothing scannable
+# in_own <path the lint knows> <own-set text> <1 if an own-set was supplied at all> → 0 if it may block
+#
+# Body shared VERBATIM with git-identity-lint / test-hermeticity-lint / utc-stamp-lint / tsv-pad-lint
+# (backlog c1a29f8ee045 keyed all four on the PATH after `sed 's:.*/::'` basenamed the own-set, so an
+# entry `scripts/foo.bats` matched a judged `tests/foo.bats` — a land blocking over a file it never
+# touched). Copying that body rather than inventing a fifth spelling is deliberate:
+# tests/gate-ownscope-leak.bats pins the copies identical precisely so a fix to one cannot miss the
+# others, and a lint whose own-set matched differently from its neighbours would be a new latent
+# vector wearing the same name. A PATH-form entry matches the judged path (whole or as a suffix at a
+# `/` boundary); a BARE entry matches in any directory, because sibling callers still pass basenames.
+in_own() {
+  [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
+  [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */*) [ "$1" = "$e" ] && return 0
+           case "$1" in */"$e") return 0 ;; esac ;;
+      *)   [ "${1##*/}" = "$e" ] && return 0 ;;
+    esac
+  done <<< "$2"
+  return 1
+}
+
+# lint_files <own_scoped:0|1> <own-set text> <file>... → 0 clean · 1 violation · 2 nothing scannable
+#
+# The own-set arrives as two LEADING parameters rather than by argument count, because the file list
+# is variadic and a trailing optional argument could not be told from another file. The flag is the
+# arity check the siblings get for free; what matters is only that it can express all three states.
 lint_files() {
-  local f out bad=0 seen=0 unreadable=0
+  local own_scoped="$1" own="$2"; shift 2
+  local f out bad=0 seen=0 unreadable=0 advisory=0 adv_unreadable=0
   local files=()
   for f in "$@"; do [ -f "$f" ] || continue; files+=("$f"); seen=$((seen + 1)); done
   [ "$seen" -gt 0 ] || { echo "bats-kill-guard-lint: ⛔ no .bats file to scan" >&2; return 2; }
@@ -373,17 +431,38 @@ lint_files() {
     [ -n "$line" ] || continue
     case "$line" in
       UNBALANCED*)
-        printf '  UNREADABLE %s — ends inside an unterminated string; nothing after that point was scanned\n' "${line#UNBALANCED	}"
-        unreadable=$((unreadable + 1))
+        # The path is the whole record here; a violation record is `path:line:col: source`, so its
+        # path is everything before the first colon.
+        if in_own "${line#UNBALANCED	}" "$own" "$own_scoped"; then
+          printf '  UNREADABLE %s — ends inside an unterminated string; nothing after that point was scanned\n' "${line#UNBALANCED	}"
+          unreadable=$((unreadable + 1))
+        else
+          printf '  unreadable? %s — outside this land'"'"'s diff; reported, not blocking\n' "${line#UNBALANCED	}"
+          adv_unreadable=$((adv_unreadable + 1))
+        fi
         ;;
       *)
-        printf '  KILL-GUARD %s\n' "$line"
-        bad=$((bad + 1))
+        if in_own "${line%%:*}" "$own" "$own_scoped"; then
+          printf '  KILL-GUARD %s\n' "$line"
+          bad=$((bad + 1))
+        else
+          printf '  kill-guard? %s — outside this land'"'"'s diff; reported, not blocking\n' "$line"
+          advisory=$((advisory + 1))
+        fi
         ;;
     esac
   done <<EOF
 $out
 EOF
+
+  # ADVISORY IS NOT SILENT. A corpus drifting off the zero baseline is stated on every land that
+  # sees it, so the class stays legible to whoever DID touch those files — the alternative is a
+  # finding that exists only in the one refused land that happened to be strict.
+  if [ "$((advisory + adv_unreadable))" -gt 0 ]; then
+    echo "bats-kill-guard-lint: $advisory unguarded kill(s) and $adv_unreadable unreadable file(s) above are"
+    echo "  OUTSIDE this land's diff — reported, not blocking. They are still real: whoever owns those"
+    echo "  files owes the same '|| true'. The corpus baseline for this rule is meant to be ZERO."
+  fi
 
   # An UNREADABLE file is a NON-VERDICT, and it fails CLOSED. The clean line below would otherwise be
   # asserting "no unguarded kill" over a file whose second half was never read — the same shape as a
@@ -409,7 +488,14 @@ EOF
     return 1
   fi
   [ "$unreadable" -eq 0 ] || return 1
-  echo "bats-kill-guard-lint: clean — $seen suite(s) scanned, 0 unguarded kill(s), 0 unreadable."
+  # The clean line states the BLOCKING census and, when they exist, the advisory ones beside it — a
+  # bare "0 unguarded kill(s)" over a corpus carrying two outside the diff would be the summary
+  # contradicting the findings printed three lines above it.
+  if [ "$((advisory + adv_unreadable))" -gt 0 ]; then
+    echo "bats-kill-guard-lint: clean IN SCOPE — $seen suite(s) scanned, 0 blocking; $advisory advisory kill(s), $adv_unreadable advisory unreadable."
+  else
+    echo "bats-kill-guard-lint: clean — $seen suite(s) scanned, 0 unguarded kill(s), 0 unreadable."
+  fi
   return 0
 }
 
@@ -422,7 +508,10 @@ if [ "${1:-}" = "--selftest" ]; then
   # green fixture (the fixture-shape-parity scar).
   mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$d/$1.bats"; }
   chk() { # <fixture> <expected-rc> <message>
-    local rc; lint_files "$d/$1.bats" >/dev/null 2>&1; rc=$?
+    # own_scoped=0 — every case below judges the STRICT reading, which is what an absent own-set
+    # still means. The own-scoped states get their own cases at the bottom, where the own-set is the
+    # subject rather than a constant.
+    local rc; lint_files 0 "" "$d/$1.bats" >/dev/null 2>&1; rc=$?
     [ "$rc" -eq "$2" ] || { echo "SELFTEST FAIL: $3 (rc $rc, expected $2)"; fails=1; }
   }
 
@@ -558,7 +647,7 @@ EOF
   printf '#!/usr/bin/env bats\n@test "x" {\n  echo "closed"\n  run true\n' > "$d/read.bats"
   chk unread 1 "a file ending INSIDE an unterminated string passed — a clean verdict over unscanned lines"
   chk read   0 "the same fixture with the string closed went red — the third state is over-firing"
-  out_unread="$(lint_files "$d/unread.bats" 2>&1)"
+  out_unread="$(lint_files 0 "" "$d/unread.bats" 2>&1)"
   case "$out_unread" in
     *UNREADABLE*) ;;
     *) echo "SELFTEST FAIL: the unreadable file was not NAMED — it must never be silently folded into the kill count"; fails=1 ;;
@@ -572,8 +661,49 @@ EOF
     echo "SELFTEST FAIL: POSITIVE CONTROL — the identical run WITHOUT the kill switch was also green"; fails=1
   fi
 
+  # ── OWN-SCOPE, in every reachable state and in BOTH directions ────────────────────────────────
+  # A scope that can only PASS is not a scope: each case below is paired with the one that must
+  # still BLOCK, so an own-set that matched everything (or nothing) fails here rather than shipping
+  # as a silently disabled ratchet. The subject is the SAME red fixture throughout — only the
+  # own-set moves — which is what makes the own-set the thing under test.
+  own_chk() { # <own_scoped> <own-set> <expected-rc> <message>
+    local rc; lint_files "$1" "$2" "$d/red_deadpid.bats" >/dev/null 2>&1; rc=$?
+    [ "$rc" -eq "$3" ] || { echo "SELFTEST FAIL: $4 (rc $rc, expected $3)"; fails=1; }
+  }
+  own_chk 0 ""                        1 "an ABSENT own-set did not block — strict is what absence must still mean (the postland net, a bare human run)"
+  own_chk 1 ""                        0 "a SET-BUT-EMPTY own-set blocked — a land touching no .bats in this rule's scope must block on nothing"
+  own_chk 1 "$d/red_deadpid.bats"     1 "an own-set naming the judged file (full path) did not block"
+  own_chk 1 "red_deadpid.bats"        1 "a BARE own-set entry did not match — ship-land hands over paths, but callers elsewhere pass basenames"
+  own_chk 1 "tests/other-suite.bats"  0 "a violation OUTSIDE the own-set blocked — this is the whole defect (backlog e191b6801be5): one sibling's kill refusing every land"
+  # …the COLLAPSE control (backlog c1a29f8ee045). Same basename, different directory: an author who
+  # changed scripts/red_deadpid.bats named a DIFFERENT file and must not be refused over this one.
+  # This case and the full-path case above differ only in the entry's directory, which is the whole
+  # rule — and would be decoration if either side were basenamed.
+  own_chk 1 "scripts/red_deadpid.bats" 0 "an own-set naming the same basename under ANOTHER directory blocked — the basename collapse is back"
+  # …and the advisory finding is still PRINTED. An own-scoped run that went quiet would have moved
+  # the defect out of sight rather than off the wrong author (memory: alarm-polarity-and-attention-budget).
+  out_adv="$(lint_files 1 "tests/other-suite.bats" "$d/red_deadpid.bats" 2>&1)"
+  case "$out_adv" in
+    *kill-guard\?*) ;;
+    *) echo "SELFTEST FAIL: an out-of-scope violation was not reported at all — advisory must mean not-blocking, never not-shown"; fails=1 ;;
+  esac
+  # …and the UNREADABLE non-verdict takes the same scope, in both directions. It fails closed inside
+  # the diff and stays advisory outside it; without this pair one unterminated string in a sibling's
+  # fixture would keep the fleet-wide hard stop the rest of this seam removes.
+  lint_files 1 "tests/other-suite.bats" "$d/unread.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an UNREADABLE file outside the own-set blocked"; fails=1; }
+  lint_files 1 "$d/unread.bats" "$d/unread.bats" >/dev/null 2>&1
+  [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an UNREADABLE file INSIDE the own-set did not block — the non-verdict stopped failing closed"; fails=1; }
+  # …and the three states are readable AT THE ENTRYPOINT, which is where ship-land actually meets
+  # them: `${CC_KILLGUARD_OWN:-}` would pass every case above and still collapse ABSENT into
+  # SET-BUT-EMPTY here (memory: init-state-is-not-runtime-state).
+  ( unset CC_KILLGUARD_OWN; "$SELF" "$d/red_deadpid.bats" >/dev/null 2>&1 )
+  [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_KILLGUARD_OWN unset did not block at the entrypoint"; fails=1; }
+  ( CC_KILLGUARD_OWN="" "$SELF" "$d/red_deadpid.bats" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_KILLGUARD_OWN set-but-empty blocked at the entrypoint"; fails=1; }
+  ( CC_KILLGUARD_OWN="red_deadpid.bats" "$SELF" "$d/red_deadpid.bats" >/dev/null 2>&1 )
+  [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_KILLGUARD_OWN naming the file did not block at the entrypoint"; fails=1; }
+
   if [ "$fails" -eq 0 ]; then
-    echo "bats-kill-guard-lint --selftest: all cases pass (RED fires, GREEN does not, both exemptions bounded)"
+    echo "bats-kill-guard-lint --selftest: all cases pass (RED fires, GREEN does not, both exemptions bounded, own-scope proved in all three states + the basename-collapse control)"
     exit 0
   fi
   exit 1
@@ -594,4 +724,12 @@ $(collect_bats "${targets[@]}")
 EOF
 
 [ "${#mapfile_bats[@]}" -gt 0 ] || { echo "bats-kill-guard-lint: ⛔ no .bats file under: ${targets[*]}" >&2; exit 2; }
-lint_files "${mapfile_bats[@]}"
+
+# THE THREE STATES, decided HERE and nowhere else. `${CC_KILLGUARD_OWN+set}` is the only test that
+# separates ABSENT (strict, the whole corpus may block — the postland net and a bare human run) from
+# SET-BUT-EMPTY (a caller scoped this land and owns nothing here, so nothing may block).
+if [ -n "${CC_KILLGUARD_OWN+set}" ]; then
+  lint_files 1 "$CC_KILLGUARD_OWN" "${mapfile_bats[@]}"
+else
+  lint_files 0 "" "${mapfile_bats[@]}"
+fi

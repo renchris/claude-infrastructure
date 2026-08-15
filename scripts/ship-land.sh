@@ -2959,10 +2959,16 @@ run_gate() {  # $1=range → 0 green / 1 red
   # retry's extra executed count tripped the 1614≠1613 plan mismatch). Four commits fixed nine sites
   # by hand; nothing ever stopped the tenth, and eleven had re-accumulated by 2026-08-09.
   #
-  # STRICT AND WHOLE-CORPUS, unlike its four own-scoped neighbours above. They grandfather because
-  # their corpora carry inherited debt; this one does not, because the commit that introduced it
-  # swept the corpus to zero first. With a clean baseline the strictest rule is the free one — no
-  # own-set to derive, no exemption list to rot — and it is ~0.2s over 355 suites.
+  # NO GRANDFATHER LIST, unlike its four own-scoped neighbours above: they carry inherited debt, this
+  # one does not, because the commit that introduced it swept the corpus to zero first. It was also
+  # STRICT WHOLE-CORPUS on that basis — and that half is now gone (backlog e191b6801be5). "The
+  # baseline is zero" is a RUNTIME invariant nothing re-asserts, so the argument held only until the
+  # first sibling landed an unguarded kill; from that moment the arm refuses EVERY land in the fleet
+  # over a file the author never opened, naming a remedy that is not theirs. It now takes the same
+  # three-state own-set as its neighbours — absent ⇒ strict (postland, a bare human run), set-but-
+  # empty ⇒ nothing blocks, set ⇒ those files block and the rest are REPORTED advisory — so the
+  # class stays visible without taxing an innocent lander. Still no exemption list to rot, and still
+  # ~0.2s over 355 suites.
   KILL_GUARD_LINT="${SHIP_LAND_KILL_GUARD_LINT:-scripts/bats-kill-guard-lint.sh}"
   # gate_bounded: EVENT-ON-FIRST-LAND, DIFF-SCOPED, ONE-TOKEN-CLEARABLE — neither refusal below can
   # become a standing state nobody is told about (the 545-refusal scar, inertness-generator §2.3).
@@ -2985,11 +2991,21 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red kill-guard-selftest
       return 1
     fi
-    "$KILL_GUARD_LINT" tests >&2; _arm_rc=$?
+    local kgown=""
+    if [[ "${SHIP_LAND_KILL_GUARD_OWN_SCOPE:-on}" != "off" ]]; then
+      # The pathspec is the arm's whole population: this lint judges .bats suites and nothing else,
+      # so widening it would hand over names the lint can never match and narrowing it would let a
+      # land ADD an unguarded kill that the arm then reports advisory — detection, not a gate
+      # (memory: enforcement-must-live-at-the-chokepoint). A docs-only land yields an EMPTY own-set
+      # and blocks on nothing, which is the point.
+      kgown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
+      [[ -n "$kgown" ]] && echo "→ gate: kill-guard own-scope — blocking on $(printf '%s\n' "$kgown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    own_run KILL_GUARD CC_KILLGUARD_OWN "$kgown" "$KILL_GUARD_LINT" tests >&2; _arm_rc=$?
     if (( _arm_rc == 2 )); then arm_nonverdict "bats-kill-guard-lint"; return 1; fi
     if (( _arm_rc != 0 )); then
-      echo "✗ gate: unguarded-kill RED — a kill above silences its stderr but not its exit status," >&2
-      echo "  so a reaped child aborts the test body under load. Guard it: '|| true'." >&2
+      echo "✗ gate: unguarded-kill RED — a kill in a suite THIS LAND CHANGES silences its stderr but" >&2
+      echo "  not its exit status, so a reaped child aborts the test body under load. Guard it: '|| true'." >&2
       gate_red kill-guard
       return 1
     fi
