@@ -1,19 +1,27 @@
 #!/usr/bin/env bats
 # cc-memory-rotate — the deterministic actuator for the MEMORY.md loader budget.
 #
-# The defect this pins: the auto-loaded index re-breached its 24,985 B read limit after
+# The defect this pins: the auto-loaded index re-breached its read limit after
 # TWELVE hand-compactions in 14 days, because insertion is machine-speed (Edit appends plus
 # Bash `>>` appends the PreToolUse gate never sees) while removal was human-speed. The rotor
 # mechanizes the operator-approved cold split (2026-07-30): oldest eligible lines move
 # VERBATIM to archive/…-COLD.md until the index is back under target.
 #
-# RED-proof coverage: the noop/rotate decision is selected by byte arithmetic on small
+# RED-proof coverage: the noop/rotate decision is selected by arithmetic on small
 # hand-countable fixtures, never asserted; every protection class (tail, type, prefix,
 # PINNED, marker, hub, young, dangling) is pinned by an entry that must SURVIVE a rotation
-# that succeeds around it; the byte measure is pinned by a fixture over the threshold in
-# bytes and under it in codepoints; the contended path is exercised through a real seam that
-# mutates the index between read and commit; and a mutation control proves the
-# type-protection assertion has teeth (a mutant without it rotates the operator directive).
+# that succeeds around it; the UNIT is pinned by a fixture over the threshold in bytes and
+# under it in loader chars, which must NOT rotate (see below); the contended path is
+# exercised through a real seam that mutates the index between read and commit; and a
+# mutation control proves the type-protection assertion has teeth (a mutant without it
+# rotates the operator directive).
+#
+# THE UNIT WAS INVERTED HERE UNTIL 2026-08-15 (cc-backlog 7a56de4c54ab). This suite asserted
+# "bytes bind, not codepoints" and pinned a fixture over the threshold in BYTES to rotate. The
+# loader counts neither: it strips YAML frontmatter and block HTML comments, trims, and compares
+# UTF-16 code units, so that fixture is UNDER its cap and rotating it archived entries that still
+# fit. The test below is the same fixture with the verdict inverted, which is what makes it a
+# control on the correction rather than on the bug.
 #
 # Assertions are simple commands only. bash exempts `[[ ]]` from errexit, so a non-final
 # `[[ ]]` in a bats body evaluates and DISCARDS its result (scripts/bats-assert-liveness.py).
@@ -29,15 +37,18 @@ setup() {
   export MEMORY_ROTATE_MIN_KEEP=2
   export MEMORY_ROTATE_TAIL_GUARD=1
   export MEMORY_ROTATE_MIN_AGE_DAYS=7
-  # `wc -m` counts CODEPOINTS only under a multibyte LC_CTYPE; under C/POSIX, BSD wc -m
-  # degrades to counting BYTES. scripts/offbox-run.sh pins LC_ALL=C for every off-box suite,
-  # so the "bytes bind, not codepoints" fixture below was comparing bytes to bytes there and
-  # failing at 1560 — the one test whose entire subject is the byte/codepoint distinction was
-  # the one that could not make it. The pin is on the test's MEASURING INSTRUMENT only:
-  # bin/cc-memory-rotate exports its own LC_ALL=C, so the subject's semantics are untouched.
-  unset LC_ALL; export LC_CTYPE=en_US.UTF-8
+  # The unit fixture below used to measure itself with `wc -m`, which counts codepoints only
+  # under a multibyte LC_CTYPE and degrades to BYTES under C/POSIX — so the one test whose
+  # entire subject is the unit distinction was the one that could not survive
+  # scripts/offbox-run.sh's LC_ALL=C. It now measures with the same library the subject reads,
+  # which has no locale dependency at all, so no locale pin is needed here.
+  # shellcheck source=../hooks/lib/memory-index-measure.sh
+  . "$REPO/hooks/lib/memory-index-measure.sh"
   OLD=202601011200   # touch -t stamp far past MIN_AGE_DAYS
 }
+
+# The size the LOADER checks, which is what every threshold in the subject is denominated in.
+eff() { m="$(mim_measure_file "$1")"; printf '%s' "${m%% *}"; }
 
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 hasnt() { if printf '%s' "$1" | grep -qF -- "$2"; then return 1; fi; }
@@ -153,17 +164,43 @@ mkbulk() {
   grep -qF -- '(fresh.md)' "$d/MEMORY.md"
 }
 
-@test "bytes bind, not codepoints: an index over threshold only in BYTES still rotates" {
+@test "LOADER CHARS bind, not disk bytes: an index over threshold only in BYTES does NOT rotate" {
   d="$(mkmem utf8)"
-  # 6 entries, hooks of 80 em-dashes (3 B each): ~1560 B over the 1500 threshold,
-  # while the codepoint count sits far under it. A length()-based rotor noops here.
+  # 6 entries, hooks of 80 em-dashes: ~1560 B on disk, over the 1500 threshold — but 3x fewer
+  # chars, so the loader sees it comfortably inside its budget and nothing is at risk. A rotor
+  # measuring `wc -c` archives the operator's memories here for no reason at all.
   dashes="$(printf '%.0s—' $(seq 1 80))"
   local i
   for i in 1 2 3 4 5 6; do addentry "$d" "u$i.md" project old "$dashes"; done
   [ "$(wc -c <"$d/MEMORY.md" | tr -d ' ')" -ge 1500 ]
-  [ "$(wc -m <"$d/MEMORY.md" | tr -d ' ')" -lt 1500 ]
+  [ "$(eff "$d/MEMORY.md")" -lt 1500 ]
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=noop'
+  hasnt "$output" 'verdict=rotated'
+}
+
+@test "...and the SAME fixture in ASCII, where bytes and chars agree, DOES rotate" {
+  # The polarity control for the test above: without it, a rotor that had simply stopped
+  # rotating anything would pass. Identical shape, single-byte hooks.
+  d="$(mkmem ascii)"
+  local i
+  for i in 1 2 3 4 5 6; do addentry "$d" "u$i.md" project old "$(pad 240)"; done
+  [ "$(eff "$d/MEMORY.md")" -ge 1500 ]
   run "$SCRIPT" "$d/MEMORY.md"
   has "$output" 'verdict=rotated'
+}
+
+@test "the cold-tier POINTER the rotor writes is free — the loader strips block comments" {
+  # The rotor adds `<!-- cold tier: … -->` to the index and used to budget for its own
+  # bookkeeping line. The loader removes it before measuring, so it must cost 0 chars.
+  d="$(mkmem ptr)"; mkbulk "$d"
+  before="$(eff "$d/MEMORY.md")"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF 'archive/MEMORY_ARCHIVE' "$d/MEMORY.md"
+  after="$(eff "$d/MEMORY.md")"
+  [ "$after" -lt "$before" ]
+  [ "$after" -le 1000 ]
 }
 
 @test "exhausted: nothing eligible leaves the file byte-identical with the kept census" {
