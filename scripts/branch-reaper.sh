@@ -60,10 +60,18 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --confirm) CONFIRM=1; shift;;
     --include-named) INCLUDE_NAMED=1; shift;;
-    --restore) RESTORE="${2:-}"; shift 2;;
-    --trunk) TRUNK="${2:-}"; shift 2;;
-    --keep) KEEP_EXTRA+=("${2:-}"); shift 2;;
-    -h|--help) sed -n '1,40p' "$0"; exit 0;;
+    # EVERY value-taking flag CHECKS that its value is there. `shift 2` with one positional left
+    # shifts NOTHING and returns non-zero, and under `set -uo pipefail` with no `-e` nothing looks
+    # at that status — so `--trunk` / `--keep` / `--restore` as the LAST argument span this loop
+    # forever at 100% CPU. Measured on the trunk copy: `timeout 6 bash … --trunk` exits 124, and the
+    # `bash -x` trace repeats TRUNK= / shift 2 / [ 1 -gt 0 ] without end. Two of the three are
+    # documented usage above, and the truncated --help below hid both of them.
+    --restore) [ $# -ge 2 ] || die "--restore requires a manifest path" 2; RESTORE="$2"; shift 2;;
+    --trunk)   [ $# -ge 2 ] || die "--trunk requires a ref" 2;            TRUNK="$2";   shift 2;;
+    --keep)    [ $# -ge 2 ] || die "--keep requires a regex" 2;           KEEP_EXTRA+=("$2"); shift 2;;
+    # 1,42p — the usage block ends at the --keep line (:42). At 1,40p the two flags most likely to
+    # be typed last, and therefore to hang, were the two the help did not mention.
+    -h|--help) sed -n '1,42p' "$0"; exit 0;;
     *) die "unknown arg: $1" 2;;
   esac
 done
@@ -105,12 +113,17 @@ is_kept() {
   return 1
 }
 
-cand_auto=(); cand_named=(); skipped_wt=0; skipped_prot=0
+cand_auto=(); cand_named=(); skipped_wt=0; skipped_prot=0; skipped_keep=0
 while IFS= read -r b; do
   [ -n "$b" ] || continue
   if printf '%s' "$b" | grep -qE "$PROTECTED"; then skipped_prot=$((skipped_prot+1)); continue; fi
   if printf '%s\n' "$worktree_branches" | grep -qxF "$b"; then skipped_wt=$((skipped_wt+1)); continue; fi
-  is_kept "$b" && continue
+  # COUNTED, not merely skipped. The "NOT merged" line below is a RESIDUAL, so a branch dropped
+  # here without a bucket of its own was silently relabelled "untouched, holds work" — a merged,
+  # contentless ref reported as one that still holds work, with no branch changing state. Measured
+  # on a 5-ref fixture whose ground-truth `--no-merged` count is 1: bare dry-run said 1, and
+  # `--keep '^wt-'` said 3.
+  if is_kept "$b"; then skipped_keep=$((skipped_keep+1)); continue; fi
   if printf '%s' "$b" | grep -qE "$AUTO_RE"; then cand_auto+=("$b"); else cand_named+=("$b"); fi
 done < <(git branch --merged "$TRUNK" --format='%(refname:short)')
 
@@ -123,7 +136,8 @@ printf '  merged & machine-minted (in scope):      %s\n' "${#cand_auto[@]}"
 printf '  merged & human-named   (%s): %s\n' "$([ "$INCLUDE_NAMED" = 1 ] && echo 'IN scope  ' || echo 'out of scope')" "${#cand_named[@]}"
 printf '  skipped, has a worktree:                 %s\n' "$skipped_wt"
 printf '  skipped, protected:                      %s\n' "$skipped_prot"
-printf '  NOT merged (untouched, holds work):      %s\n' "$(( total_refs - ${#cand_auto[@]} - ${#cand_named[@]} - skipped_wt - skipped_prot ))"
+printf '  skipped, --keep pattern:                 %s\n' "$skipped_keep"
+printf '  NOT merged (untouched, holds work):      %s\n' "$(( total_refs - ${#cand_auto[@]} - ${#cand_named[@]} - skipped_wt - skipped_prot - skipped_keep ))"
 printf '  => would delete:                         %s\n' "${#targets[@]}"
 
 [ "${#targets[@]}" -eq 0 ] && { printf 'branch-reaper: nothing to do.\n'; exit 0; }
