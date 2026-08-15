@@ -179,7 +179,7 @@ have opposite responses to raising the number.
 
 ## 3 · The waves
 
-### W1 · Freshness — a currency verdict for every row, on a schedule ✅ DONE (`cf0f11a4b`)
+### W1 · Freshness — a currency verdict for every row, on a schedule ✅ DONE (`044a3ebb`)
 
 **Outcome: never-validated 536 → 387 on the live store, 18 falsified rows retired, decay now readable
 in commits (p50 402) as well as days (p50 2.0).** All six items landed and content-verified; the full
@@ -394,10 +394,19 @@ with its own README naming the one finding later corrected by measurement.
   Deliberately NOT re-keyed into one mega-condition: that would dissolve W2's ten efforts and each
   effort's roadmap with them.
 
-- **2026-08-12 — W1 LANDED, all six items. Row `b585e86ea4e4`.** One commit (`cf0f11a4b`) across
+- **2026-08-12 — W1 LANDED, all six items. Row `b585e86ea4e4`.** One commit (`044a3ebb`) across
   `bin/cc-backlog`, `bin/cc-premise`, `scripts/autonomy-sweep.sh`, `scripts/backlog-ratchet.sh`,
   plus `tests/backlog-freshness.bats` (25 cases) and 3 caller-proof cases in
-  `tests/autonomy-sweep.bats`.
+  `tests/autonomy-sweep.bats`. Test hardening followed in `4059094a` (six assertions were
+  decorative — a bare `[[ ]]` off the last line is not reached by errexit).
+
+  ⚠️ **This entry cited `cf0f11a4b` until 2026-08-15, and that sha is not on trunk and never was** —
+  it was the pre-land sha on the wave branch, which `/ship`'s rebase replaced with `044a3ebb`. A
+  successor auditing this row could not resolve the cited object at any fetch depth, which is the
+  exact dead end the dispatch brief's FIRST STEP warns about (*"check the cited sha against
+  origin/main"*). **Cite the LANDED sha, never the one your own branch produced** — verify with
+  `git merge-base --is-ancestor <sha> origin/main` after the land, not before it. W2's `1b044624d`
+  resolves fine, so this was W1's marker specifically, not a convention-wide defect.
 
   **DoD met, two readings on the live store: never-validated 536 → 387, falling.** `cc-backlog
   freshness` is the command that prints it (`--never` prints the bare integer). The pass probed 150
