@@ -1996,6 +1996,16 @@ was mutant-proved per site** — safeguard 13 ok / 5 not ok pre-fix (the 5 being
 findings), worktree-memory-link 13 / 3, gate-memo 10 / 1, lead-supervisor 98 / 1 — with an always-on
 control green in both worlds each time.
 
+**Blast radius of `ff3f38d6eeed`, measured before filing it as work rather than as a fix.** A rule
+widened the obvious way — *a builtin producer fed a VARIABLE is not exempt* — matches **262 sites
+across 96 files** (non-test paths). The allowlist may only SHRINK, so that is not a regeneration,
+it is a project. And most of those 262 are genuinely safe: the hazard is not "the producer is a
+variable", it is "the variable can grow WITHOUT BOUND" — a session's whole path list, a whole file,
+a whole ref list — which is not statically decidable from the pipeline alone. So the next attempt
+should not start by widening the detector; it should start by asking whether the rule can key on
+the variable's SOURCE (a file read, a `git for-each-ref`, a transcript scan) rather than on its
+being a variable. Do not re-run the 262 count; it is here.
+
 **State at this recycle.** `master-verification-integrity` **6 live**: open — `6a7eb069e703` (see
 above; do not restart at the desk) and `ff3f38d6eeed` (NEW, the harvested lint-exemption finding —
 filed as ONE pointer row, with its threshold measured so nobody re-derives it); blocked —
