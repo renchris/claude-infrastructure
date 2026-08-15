@@ -125,8 +125,34 @@ if [ "$TARGET" -ge "$ROTATE_AT" ]; then
 fi
 
 fsize() { wc -c <"$1" | tr -d ' '; }
-fstat() { stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1"; }
-fmtime() { stat -f %m -- "$1" 2>/dev/null || stat -c %Y -- "$1" 2>/dev/null || echo ""; }
+
+# BSD-first with a GNU fallback, but the BSD attempt's STDOUT is captured and validated rather
+# than let through. `stat -f` means "format" on BSD and "--file-system" on GNU, and GNU does not
+# take a format operand: `stat -f '%m %z' -- f` treats the format as a missing filename, exits 1
+# — so the `||` fallback fires as intended — while ALSO printing a filesystem block ("File: …",
+# "Block size: …") to STDOUT, which 2>/dev/null does not touch. The old form concatenated that
+# block with the GNU answer, so fmtime returned multiline junk and the caller's `$(( NOW - mt ))`
+# died with `File: unbound variable` under set -u. Validating that the BSD attempt produced the
+# EXPECTED SHAPE — digits, and two of them for fstat — is what makes this correct on both, and it
+# leaves the BSD path byte-identical whenever it genuinely succeeds.
+fstat() {
+  local v
+  v=$(stat -f '%m %z' -- "$1" 2>/dev/null) || v=""
+  case "$v" in
+    *[!0-9\ ]*|'') v="" ;;
+  esac
+  if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  stat -c '%Y %s' -- "$1" 2>/dev/null
+}
+fmtime() {
+  local v
+  v=$(stat -f %m -- "$1" 2>/dev/null) || v=""
+  case "$v" in
+    *[!0-9]*|'') v="" ;;
+  esac
+  if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  stat -c %Y -- "$1" 2>/dev/null || echo ""
+}
 
 # The threshold shift described above. An unresolvable lib leaves it at 0, which is exactly the
 # pre-2026-08-15 behaviour: measuring raw bytes against the cap over-states the index and rotates
@@ -233,6 +259,16 @@ while :; do
   # bug. Measured on a 20-entry fixture: unparseable=19, tail=1, moved=0. An unquoted variable
   # expansion is the portable idiom (the pattern reaches the engine intact on every bash).
   ENTRY_RX='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
+  #
+  # AND A SECOND, INDEPENDENT MECHANISM FOR THE SAME SYMPTOM (measured 2026-08-15). Written
+  # inline and unquoted, its `\ ` (backslash-space) matches under bash 3.2 — the macOS system
+  # bash this was authored against — and matches NOTHING under bash 5.2. Measured 2026-08-15 on
+  # 5.2.21: the identical pattern hoisted to a variable resolves `e00.md` where the inline form
+  # returns no match at all. The failure is silent and maximally misleading — every entry falls
+  # to the `unparseable` keep class, so the rotor reports a healthy `verdict=exhausted` census
+  # and rotates nothing, on every Linux host in the fleet including the cloud session containers.
+  # tests/cc-memory-rotate.bats was 3-of-21 green there for exactly this reason.
+  
   ENTRY_LNO=""; ENTRY_FILES=""; NENT=0
   i=0
   while [ "$i" -lt "$NL" ]; do
