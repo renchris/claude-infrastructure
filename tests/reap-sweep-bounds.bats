@@ -89,6 +89,29 @@ EOF
   export CC_REAPER_TRUNK=origin/main
   export CC_REAPER_LOG="$D/reaper.log"
   export CC_REAPER_LOCKDIR="$D/sweep.lock.d"
+  # ── HERMETIC GARBAGE ARM — the residue of backlog a3a070520f3d, which 46a57a1d fixed in
+  # tests/cc-reaper.bats ONLY. Same defect, same binary, different suite, and it survived the fix
+  # because that one was filed against a single file: the audit was never widened to the other
+  # callers of `sweep`. This suite is the whole remainder — it and cc-reaper.bats are the only two
+  # in tests/ that run the real `"$R" sweep`.
+  # sweep() calls garbage_sweep "$reap" FIRST (bin/cc-reaper:814), so each of the 9
+  # `run "$R" sweep --reap` cases below ran the DESTRUCTIVE arm. Unset, its snapshot seams take the
+  # `else` leg at bin/cc-reaper:318-320 and exec the LIVE `/bin/ps -Ax` table; every ppid-1 process
+  # matching :344-349 is then TERMed, and -KILLed 3 s later. `orphan-bash` is any ppid-1 bash older
+  # than 600 s whose argv misses the :339 whitelist, and `bats` is not on it. This suite is NOT in
+  # scripts/host-suites.manifest, so the postland corpus runs it — the tree verifier signalling live
+  # processes as a side effect of verifying the tree, on the box that also runs the operator's
+  # sessions. CC_REAPER_LOG above is redirected into $D, so nothing on the machine records who did
+  # it; that blindness is what let the same shape survive twice.
+  # Nothing here asserts on the garbage arm, so pinning it is inert to what this suite measures:
+  # these tests discriminate on BOUNDS (reconcile/inbox-guard/classify/backlog marker files).
+  # /dev/null is the documented fail-open seam (`snapshot unavailable — arm skipped`,
+  # bin/cc-reaper:321), so INERT becomes the default here as it is there.
+  export CC_REAPER_GARBAGE_PS_A=/dev/null CC_REAPER_GARBAGE_PS_B=/dev/null
+  # Pinned too, though the fail-open return at :321 precedes the watchdog loop today: that loop
+  # `kill -0`s real pids and can add real victims, and rule 5 of the hermeticity lint disclaims a
+  # $HOME-rooted default as rule 1's business — so the fixtured $HOME above is not a defence to rely on.
+  mkdir -p "$D/gs-wd"; export CC_REAPER_WATCHDOG_DIR="$D/gs-wd"
   # The fired-peer stamp the finished-teammate cause requires at act time.
   export CC_FIRED_DIR="$D/fired"; mkdir -p "$D/fired"
   printf '{"firedAt":"%s"}' "$FIRED_ISO" > "$D/fired/2BE82E97-1111-4222-8333-444455556666.json"
