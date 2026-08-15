@@ -79,6 +79,35 @@
 # makes the reset an explicit, dated event: a version bump resets the mark and SAYS SO, while a fall
 # under an unchanged version still reds exactly as before.
 #
+# ── 2026-08-15 · THE NUMERATOR COULD NOT SEE TWO OF THE THREE PROBE ARMS (item e08ad9ab1ff6) ─────
+# The header above defines coverage as "what fraction of open items CAN re-check themselves" and
+# calls it "a property of the ROW". The implementation counted `select(.falsifier != "")` — the
+# STORED field alone — while the consumer that actually re-checks a row, cc-premise `assess`,
+# composes THREE arms and records which fired in `probe_kind`: stored, derived-plan,
+# derived-postland. So this file and cc-premise disagreed about the one question both claim to
+# answer, over one population.
+#
+# THAT INVERTED THE ALARM RATHER THAN MERELY BLURRING IT. `post-land RED:` rows store no probe ON
+# PURPOSE — cc-premise derives that predicate, and postland-verify's own `--falsify-red` header
+# records that storing an equal probe there would "shadow a tested, documented arm and buy nothing
+# but a second implementation to keep in sync". postland-verify is also the highest-volume generator
+# in the fleet: one row per failing suite per red run. Those rows sat in the DENOMINATOR and could
+# never reach the NUMERATOR, so **every red trunk mechanically depressed coverage** even though no
+# row had lost any ability to re-check itself — and `--assert` went RED on exactly that. Its
+# remediation line then said "Add --falsifier to the generator that regressed", which for that
+# population is the one change its sibling documents as harmful. An alarm firing on the wrong event
+# and prescribing a forbidden cure is what this file's own header exists to prevent
+# (memory: alarm-polarity-and-attention-budget).
+#
+# THE FIX IS THE ONE THIS REPO HAS ALREADY PAID FOR TWICE: ONE ARBITER PER FACT. The `freshness`
+# block below is this file applying it once already — cc-backlog owns the fold, so the ratchet asks
+# it rather than re-deriving. Coverage now does the same and asks `cc-premise coverage`, which
+# classifies each live row by ARM and by SOURCE without executing anything. `denominator_version`
+# goes to 3, because the NUMERATOR changed and a v2 mark measures a different thing.
+#
+# The RED also NAMES THE GENERATOR now. It used to say "the generator that regressed" and name none,
+# leaving the reader to find it — and, for the postland population, to find that none had.
+#
 # Usage:
 #   backlog-ratchet.sh              census to stdout, always exit 0
 #   backlog-ratchet.sh --json       machine-readable, for a hook or a dashboard
@@ -211,16 +240,79 @@ EOF
     [ -f "$VALIDATED" ] && validated_src="present"
   fi
 fi
-if [ "$probe_n" -gt 0 ]; then
+# ── THE NUMERATOR IS ASKED, NOT RE-DERIVED (item e08ad9ab1ff6 — full account in the header) ──────
+# The jq fold above still owns the LIVE population and the close-age percentiles. It no longer owns
+# the numerator: counting `select(.falsifier != "")` sees only the STORED arm, while cc-premise
+# `assess` composes three. ONE ARBITER PER FACT — the `freshness` block right above is this file
+# already applying that rule, and coverage now follows it.
+#
+# FAIL-OPEN TO UNKNOWN, NEVER TO THE OLD NUMBER. If cc-premise cannot be asked, this does NOT fall
+# back to the stored-only count: that number is systematically LOWER, so a silent fallback would
+# compare a stored-only reading against a high-water mark recorded from the composed one and go RED
+# on the sensor being broken rather than on the store regressing — a false alarm indistinguishable
+# from the true one. Unmeasured coverage is reported as UNKNOWN and `--assert` declines to judge
+# (memory: sensor-default-off-makes-blindness-the-shipping-path).
+cov_src="premise"; cov_note=""
+# The FOLD's own probeable count, kept before the arbiter's may replace it: the `needs`-exclusion
+# line below is a statement about THIS file's fold and would go wrong (or negative) if it subtracted
+# a denominator computed elsewhere.
+fold_probe_n="$probe_n"
+_pbin="${CC_RATCHET_PREMISE_BIN:-$(cd "$(dirname "$_rself")/.." 2>/dev/null && pwd)/bin/cc-premise}"
+cov_arms=""; cov_gaps=""
+if [ -x "$_pbin" ] && command -v jq >/dev/null 2>&1; then
+  _cov="$("$_pbin" coverage --json 2>/dev/null)" || _cov=""
+  if [ -n "$_cov" ]; then
+    read -r p_probe p_cov <<EOF
+$(printf '%s' "$_cov" | jq -r '"\(.probeable) \(.covered)"' 2>/dev/null || echo "x x")
+EOF
+    case "${p_probe:-}" in ''|*[!0-9]*) p_probe="" ;; esac
+    case "${p_cov:-}"   in ''|*[!0-9]*) p_cov=""   ;; esac
+    if [ -n "$p_probe" ] && [ -n "$p_cov" ]; then
+      # BOTH denominators are kept and the divergence is PRINTED rather than reconciled silently —
+      # the same positive control the `needs` exclusion earned (memory:
+      # positive-control-the-denominator). The arbiter's denominator is the one the ratio uses.
+      [ "$p_probe" -ne "$probe_n" ] && \
+        cov_note=" · ⚠ denominator differs: ratchet fold ${probe_n}, cc-premise ${p_probe} (ratio uses cc-premise)"
+      probe_n="$p_probe"; fals_n="$p_cov"
+      cov_arms="$(printf '%s' "$_cov" | jq -r '"\(.by_arm.stored) stored · \(.by_arm["derived-plan"]) derived-plan · \(.by_arm["derived-postland"]) derived-postland"' 2>/dev/null || true)"
+      # The generators actually missing a probe, largest gap first — so a RED names the producer to
+      # fix instead of leaving the reader to find it, and so a derived-covered generator is never
+      # mistaken for one.
+      # TOP 3, AND IT SAYS SO WHEN IT TRUNCATES. A silent cap reads as "this is everything", which is
+      # the same defect as postland-verify's FAILING[0] filing and as any bounded report that hides
+      # its own bound — the tail generators would then be invisible precisely while someone worked
+      # the list (memory: no-silent-caps).
+      cov_gaps="$(printf '%s' "$_cov" | jq -r '
+        [.by_source | to_entries[] | {s:.key, gap:(.value.total - .value.covered), t:.value.total}]
+        | map(select(.gap > 0)) | sort_by(-.gap, .s) as $g
+        | ($g | length) as $n
+        | ($g | .[:3] | map("\(.s) (\(.gap) of \(.t))") | join(" · "))
+          + (if $n > 3 then " · +\($n - 3) more generator(s) not shown" else "" end)' 2>/dev/null || true)"
+    else
+      cov_src="unknown"
+    fi
+  else
+    cov_src="unknown"
+  fi
+else
+  cov_src="unknown"
+fi
+
+if [ "$cov_src" = unknown ]; then
+  coverage="0.0"
+elif [ "$probe_n" -gt 0 ]; then
   coverage=$(awk -v a="$fals_n" -v b="$probe_n" 'BEGIN{printf "%.1f", (a*100)/b}')
 else
   coverage="0.0"
 fi
 
 # DENOM_VERSION is bumped whenever WHAT IS COUNTED changes. v2 (2026-08-11) excluded the `needs`
-# class from the denominator; a mark recorded under v1 is a number about a different population, so
-# comparing them would red or green for a reason unrelated to the store's health.
-DENOM_VERSION=2
+# class from the denominator; v3 (2026-08-15) changed the NUMERATOR to the composed
+# stored-or-derived count cc-premise owns. A mark recorded under an older version is a number about
+# a different measurement, so comparing them would red or green for a reason unrelated to the
+# store's health — v3 marks are strictly higher, so carrying a v2 mark forward would be harmless
+# while carrying a v3 mark BACK would red forever.
+DENOM_VERSION=3
 MAX_HW="${CC_RATCHET_MAX_HW:-95.0}"
 MIN_N="${CC_RATCHET_MIN_N:-20}"
 
@@ -250,8 +342,13 @@ fi
 #             could only ever be red, for 3-of-3 of every verdict it ever journalled.
 #   FLOOR   — a denominator under MIN_N is a degenerate read (a fixture, a half-written store, a
 #             transient). 1-of-1 is 100% and must never become the fleet's standing target.
+#   UNKNOWN — cc-premise could not be asked, so `coverage` is not a measurement at all. Latching it
+#             would record 0.0% (or a stored-only reading) as the fleet's target and permanently
+#             re-baseline the ratchet to a sensor failure, which is the one thing it must never do.
 hw_block=""
-if awk -v c="$coverage" -v m="$MAX_HW" 'BEGIN{exit !(c > m)}'; then
+if [ "$cov_src" = unknown ]; then
+  hw_block="coverage NOT MEASURED (cc-premise unavailable)"
+elif awk -v c="$coverage" -v m="$MAX_HW" 'BEGIN{exit !(c > m)}'; then
   hw_block="ceiling ${MAX_HW}%"
 elif [ "$probe_n" -lt "$MIN_N" ]; then
   hw_block="denominator ${probe_n} < floor ${MIN_N}"
@@ -280,7 +377,7 @@ case "$MODE" in
     jq -nc --arg open "$open_n" --arg probe "$probe_n" --arg cov "$coverage" --arg covered "$fals_n" \
        --arg closed "$closed_n" --arg med "$median_age" --arg p75 "$p75_age" --arg hw "$prev" \
        --arg valn "$validated_n" --arg nevn "$never_n" --arg vsrc "$validated_src" \
-       --arg ndn "$nondone_n" \
+       --arg ndn "$nondone_n" --arg csrc "$cov_src" \
        --argjson dv "$DENOM_VERSION" \
        '{live_items:($open|tonumber), probeable_items:($probe|tonumber),
          falsifier_covered:($covered|tonumber),
@@ -289,25 +386,61 @@ case "$MODE" in
          non_done_items:($ndn|tonumber),
          validated_items:($valn|tonumber), never_validated_items:($nevn|tonumber),
          validation_snapshot:$vsrc,
+         # "premise" = the composed stored-or-derived count cc-premise owns; "unknown" = the sensor
+         # could not be asked, and then coverage_pct is NOT a measurement. A consumer must branch on
+         # this rather than read 0.0 as a floor (memory: lookup-miss-is-not-absence).
+         coverage_source:$csrc,
          coverage_high_water:($hw|tonumber), denominator_version:$dv}'
     ;;
   assert)
+    if [ "$cov_src" = unknown ]; then
+      # NOT a pass and not a fail — the sensor did not read. Exiting 0 keeps a broken helper from
+      # starving the gate, and saying so keeps it from reading as health.
+      printf 'backlog-ratchet: coverage NOT MEASURED — cc-premise could not be asked (%s). No verdict.\n' \
+        "$_pbin" >&2
+      exit 0
+    fi
     printf 'backlog-ratchet: coverage %s%% (%s of %s probeable; %s live) · close median %sd p75 %sd over %s · %s\n' \
       "$coverage" "$fals_n" "$probe_n" "$open_n" "$median_age" "$p75_age" "$closed_n" "$prev_note"
     if awk -v c="$coverage" -v p="$prev" 'BEGIN{exit !(c < p)}'; then
       printf 'backlog-ratchet: RED — falsifier coverage FELL from %s%% to %s%%.\n' "$prev" "$coverage" >&2
       printf '  Items are being filed that cannot re-check themselves, so the store is going back\n' >&2
-      printf '  to being believed rather than measured. Add --falsifier to the generator that regressed.\n' >&2
+      printf '  to being believed rather than measured.\n' >&2
+      # NAME THE GENERATOR. This line used to read "Add --falsifier to the generator that regressed"
+      # and named none — so the reader had to go find it, and for the postland population the honest
+      # answer was that no generator had regressed at all. cc-premise reports the gap per source;
+      # a generator absent from this list is already covered (possibly by a DERIVED arm) and must
+      # NOT be handed a stored probe.
+      # No backticks in these format strings: shellcheck reads a backtick inside single quotes as an
+      # unexpanded command substitution (SC2016) and the land gate treats that as RED — the same
+      # constraint the census render below already carries.
+      if [ -n "$cov_gaps" ]; then
+        printf '  Uncovered rows by generator (fix these, largest first): %s\n' "$cov_gaps" >&2
+        printf '  A generator NOT listed here is already covered — run cc-premise coverage before\n' >&2
+        printf '  adding a stored probe, which would shadow a derived arm rather than add anything.\n' >&2
+      else
+        printf '  No generator has uncovered rows — the fall is a change of POPULATION, not of\n' >&2
+        printf '  filing discipline. Compare cc-premise coverage against the recorded mark.\n' >&2
+      fi
       exit 1
     fi
     ;;
   *)
     printf 'backlog-ratchet — the two standing numbers\n'
-    printf '  falsifier coverage : %s%% (%s of %s probeable items can re-check themselves)\n' "$coverage" "$fals_n" "$probe_n"
+    if [ "$cov_src" = unknown ]; then
+      printf '  falsifier coverage : UNKNOWN — cc-premise could not be asked at %s.\n' "$_pbin"
+      printf '                       NOT reported as the stored-only count: that number is lower by\n'
+      printf '                       construction and would read as a regression that never happened.\n'
+    else
+      printf '  falsifier coverage : %s%% (%s of %s probeable items can re-check themselves)\n' "$coverage" "$fals_n" "$probe_n"
+      [ -n "$cov_arms" ] && printf '                       by arm: %s\n' "$cov_arms"
+      [ -n "$cov_gaps" ] && printf '                       uncovered by generator: %s\n' "$cov_gaps"
+    fi
     # No backticks in this format string: shellcheck reads a backtick inside single quotes as an
     # unexpanded command substitution (SC2016), and the land gate treats that as RED.
     printf '  denominator         : %s live minus %s needs-class (no machine oracle by design) = %s probeable\n' \
-      "$open_n" "$((open_n - probe_n))" "$probe_n"
+      "$open_n" "$((open_n - fold_probe_n))" "$fold_probe_n"
+    [ -n "$cov_note" ] && printf '                       %s\n' "${cov_note# · }"
     printf '  days to close       : median %s · p75 %s (over %s closed items)\n' "$median_age" "$p75_age" "$closed_n"
     if [ "$validated_src" = absent ]; then
       printf '  probes ever RUN     : UNKNOWN — no currency snapshot at %s.\n' "$VALIDATED"
@@ -322,9 +455,12 @@ case "$MODE" in
       printf '                         puts straight back in the wave)\n'
     fi
     printf '  %s\n' "$prev_note"
-    if awk -v c="$coverage" 'BEGIN{exit !(c < 1)}'; then
-      printf '\n  Coverage is near zero because --falsifier landed in a7bf7068 and no generator emits\n'
-      printf '  one yet (master M2 wires that). This is a CENSUS until it does — see the header.\n'
+    # GUARDED ON cov_src, or it fires on the UNKNOWN path too — where coverage is 0.0 only because
+    # nothing was measured, and this note would explain a real near-zero reading that does not exist.
+    if [ "$cov_src" != unknown ] && awk -v c="$coverage" 'BEGIN{exit !(c < 1)}'; then
+      printf '\n  Coverage is near zero. Generators DO emit probes now (and cc-premise derives one for\n'
+      printf '  the plan-open and post-land RED classes), so a near-zero reading here is a real gap —\n'
+      printf '  see the per-generator breakdown above for which producer to fix.\n'
     fi
     ;;
 esac

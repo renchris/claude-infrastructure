@@ -1061,7 +1061,12 @@ SH
   export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
   export CC_RATCHET_STATE="$BATS_TEST_TMPDIR/ratchet.json"
   # A high-water the current store cannot meet ⇒ --assert returns 1, which is the real red path.
-  printf '{"coverage_high_water":"99.0","denominator_version":2,"recorded":"2020-01-01T00:00:00Z"}\n' \
+  # The version must be the ratchet's CURRENT denominator_version (3 since 2026-08-15, when the
+  # numerator became the composed stored-or-derived count cc-premise owns). A stale version here is
+  # not a harmless fixture detail: a mismatch triggers the ratchet's deliberate high-water RESET, the
+  # mark drops to 0.0, no fall is possible, and this case would then pass or fail on the reset path
+  # rather than on the red path it is written to prove.
+  printf '{"coverage_high_water":"99.0","denominator_version":3,"recorded":"2020-01-01T00:00:00Z"}\n' \
     > "$CC_RATCHET_STATE"
   "$CC_BACKLOG_BIN" add --title "w1 ratchet fixture" --project probe --source test >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"

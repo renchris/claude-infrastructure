@@ -176,14 +176,99 @@ done_() { printf '{"id":"%s","ts":"%s","event":"done"}\n' "$1" "$2" >> "$CC_BACK
   add a 2026-08-01T00:00:00Z "true"
   add b 2026-08-01T00:00:00Z
   run "$SUT" --assert
-  [ "$status" -eq 0 ]                                  # the stale v1 mark must not red the new v2
-  printf '%s' "$output" | grep -q "v1→v2"
-  grep -q '"denominator_version":2' "$CC_RATCHET_STATE"
+  [ "$status" -eq 0 ]                                  # the stale v1 mark must not red the new v3
+  printf '%s' "$output" | grep -q "v1→v3"
+  grep -q '"denominator_version":3' "$CC_RATCHET_STATE"
   ! grep -q '"coverage_high_water":"100.0"' "$CC_RATCHET_STATE" || false
   # …and the reset must be ONE event: a second run re-announces nothing.
   run "$SUT" --assert
-  printf '%s' "$output" | grep -qv "v1→v2" || true
+  printf '%s' "$output" | grep -qv "v1→v3" || true
   ! printf '%s' "$output" | grep -q "RESET from"
+}
+
+# ── THE NUMERATOR SEES ALL THREE PROBE ARMS (item e08ad9ab1ff6) ─────────────────────────────────
+# The regression these pin: coverage counted only the STORED `falsifier` field while cc-premise
+# `assess` composes stored + derived-plan + derived-postland. `post-land RED:` rows store no probe
+# ON PURPOSE (cc-premise derives it; postland-verify's --falsify-red header says storing an equal
+# probe would shadow a tested arm), and postland-verify is the highest-volume generator — so every
+# red trunk mechanically depressed coverage with no row losing any ability to re-check itself, and
+# --assert went RED on that. A mutant that reverts the numerator to stored-only must kill case 1.
+
+# postland_row <id> <suite> — a row of the class that is DERIVED-covered and stores nothing.
+postland_row() {
+  printf '{"id":"%s","ts":"2026-08-01T00:00:00Z","event":"add","project":"claude-infrastructure","source":"postland-verify","title":"post-land RED: tests/%s.bats::a test @ abcdef1234567"}\n' \
+    "$1" "$2" >> "$CC_BACKLOG_FILE"
+}
+
+@test "a DERIVED-covered row counts as covered — the stored field is not the whole numerator" {
+  add a 2026-08-01T00:00:00Z "true"
+  postland_row r1 alpha
+  postland_row r2 beta
+  run "$SUT" --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"probeable_items":3'
+  # 3, not 1: the two postland rows are spoken for by run_derived_postland_falsifier.
+  printf '%s' "$output" | grep -q '"falsifier_covered":3'
+  printf '%s' "$output" | grep -q '"falsifier_coverage_pct":100'
+  printf '%s' "$output" | grep -q '"coverage_source":"premise"'
+}
+
+@test "a red trunk must NOT depress coverage — the defect that made --assert fire on the wrong event" {
+  # Seed a mark, then file the burst of post-land RED rows a red trunk produces. Under the
+  # stored-only numerator this fell from 100% to 25% and went RED; nothing about the store's
+  # self-checking ability changed.
+  add a 2026-08-01T00:00:00Z "true"
+  printf '{"coverage_high_water":"100.0","denominator_version":3,"recorded":"2026-08-14T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  postland_row r1 alpha
+  postland_row r2 beta
+  postland_row r3 gamma
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q "RED"
+}
+
+@test "the census reports coverage BY ARM, so a derived-covered store is not read as unprobed" {
+  add a 2026-08-01T00:00:00Z "true"
+  postland_row r1 alpha
+  run "$SUT"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "1 stored"
+  printf '%s' "$output" | grep -q "1 derived-postland"
+}
+
+@test "a RED NAMES the generator whose rows are uncovered, instead of a generic instruction" {
+  # The old text said "Add --falsifier to the generator that regressed" and named none — which for
+  # the postland population also prescribed the change its sibling documents as harmful.
+  printf '{"coverage_high_water":"90.0","denominator_version":3,"recorded":"2026-08-14T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  add a 2026-08-01T00:00:00Z "true"
+  printf '{"id":"u1","ts":"2026-08-01T00:00:00Z","event":"add","project":"p","title":"t","source":"sess-abc"}\n' >> "$CC_BACKLOG_FILE"
+  printf '{"id":"u2","ts":"2026-08-01T00:00:00Z","event":"add","project":"p","title":"t","source":"sess-abc"}\n' >> "$CC_BACKLOG_FILE"
+  run "$SUT" --assert
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q "sess-abc (2 of 2)"
+  ! printf '%s' "$output" | grep -q "the generator that regressed"
+}
+
+@test "an UNASKABLE cc-premise reports UNKNOWN and declines to judge — never the stored-only count" {
+  # THE LOAD-BEARING FAIL-OPEN. The stored-only number is systematically LOWER, so falling back to
+  # it would compare it against a mark recorded from the composed count and go RED on the sensor
+  # being broken — a false alarm indistinguishable from a true one
+  # (MEMORY.md: sensor-default-off-makes-blindness-the-shipping-path).
+  export CC_RATCHET_PREMISE_BIN="$BATS_TEST_TMPDIR/no-such-cc-premise"
+  printf '{"coverage_high_water":"90.0","denominator_version":3,"recorded":"2026-08-14T00:00:00Z"}\n' \
+    > "$CC_RATCHET_STATE"
+  add a 2026-08-01T00:00:00Z "true"
+  add b 2026-08-01T00:00:00Z
+  add c 2026-08-01T00:00:00Z
+  run "$SUT" --assert
+  [ "$status" -eq 0 ]                                   # NOT a RED — nothing was measured
+  printf '%s' "$output" | grep -q "NOT MEASURED"
+  # …and it must not latch anything, or one broken run re-baselines the fleet's target.
+  grep -q '"coverage_high_water":"90.0"' "$CC_RATCHET_STATE"
+  run "$SUT" --json
+  printf '%s' "$output" | grep -q '"coverage_source":"unknown"'
 }
 
 @test "the \`needs\` class is excluded from the denominator, and the exclusion is PRINTED" {
