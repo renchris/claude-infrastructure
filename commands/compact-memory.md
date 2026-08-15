@@ -1,6 +1,6 @@
 ---
 name: compact-memory
-description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes the loader's read limit (~24,985 B — BYTES bind, not the 200-line cap). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
+description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes either half of the loader's read limit (the first 200 LINES or ~24,985 B, whichever comes first — which cap binds depends on the index's density). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion
 argument-hint: "[--apply-safe to apply the SAFE-AUTO archival; default = dry-run report only]"
 ---
@@ -588,6 +588,19 @@ the first two cost nothing:
   all. **Size a cut in bytes or do not size it.** Prior instance: item `eec945d6e2ec` hit this same
   disagreement, wrote *"re-derive the true limit before cutting"*, and the question stayed open for
   five days because nobody ran the division.
+  - ⚠️ **AMENDED 2026-08-15 (backlog `16a60c2431cc`): the byte quantity above is right, "it applies
+    BYTES" full stop is not.** Anthropic documents the load as *"The first 200 lines or 25KB,
+    whichever comes first"* (code.claude.com/docs/en/context-window → /en/memory#auto-memory), so
+    there are TWO caps and the loader stops at whichever it reaches first. Everything above about
+    `24985` and about KB renderings being lossy still holds — the amendment is only that the byte
+    cap is not the ONLY one. **Which cap binds is a property of DENSITY, not a constant:** bytes
+    bind above 24985/200 = 124 B/line, lines bind below it. This index sat near 244 B/line, which
+    is why bytes bound here and why the generalization got made — but the gate, the nudge and the
+    rotor all run over every project's index, and on a terse one they were measuring the cap that
+    was not cutting. All three now enforce both (`MEMORY_INDEX_LINE_LIMIT`, default 200), a breach
+    is the union, and the advisory names the binding cap because the LEVER differs: shortening
+    hooks buys bytes and buys nothing at all against a line count. **Size a cut against whichever
+    cap is binding, and check which one that is rather than assuming.**
 
 🚨 **A CORRECTION that landed in the topic file and never reached the index is invisible to BOTH
 detectors — and it leaves a refuted rule on the auto-loaded surface.** The audit above is

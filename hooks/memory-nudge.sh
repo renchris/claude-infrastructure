@@ -19,6 +19,19 @@
 # Adapted from hermes-agent agent/background_review.py (nudge_interval=10), minus
 # the autonomous write: this NUDGES, the model decides + the human reviews.
 #
+# TWO CAPS (2026-08-15). Anthropic documents the auto-memory load as "The first 200
+# lines or 25KB, whichever comes first". This hook measured only the byte half for
+# two weeks, and commands/compact-memory.md asserted outright that "BYTES bind, not
+# the 200-line cap". That was true of ONE index at ONE density and does not
+# generalize: bytes bind only while the mean line exceeds 24985/200 = 124 B. The live
+# index sits near 244 B/line so it did bind there — but this hook fires fleet-wide
+# over every project's index, and a TERSE index inverts it (200 lines at 100 B/line
+# is 20 KB, under every byte threshold here). On such an index every figure below
+# read HEALTHY while the loader dropped everything past line 200. Both caps are now
+# measured, the breach is their union, and the advisory names which one binds —
+# because the lever differs: shortening hooks buys bytes and buys NOTHING against the
+# line cap, where a shorter entry is still one line.
+#
 # APPEND-TIME BUDGET (2026-07-31). The index is loaded with a hard read limit
 # (24.4 KiB = 24985 B); past it the loader SILENTLY DROPS THE TAIL — the NEWEST
 # entries, i.e. a rule written today may never load again, and no reader can tell.
@@ -101,11 +114,14 @@ fi
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
 LIMIT="${MEMORY_INDEX_LIMIT:-24985}"   # 24.4 KiB harness read limit
+LINE_LIMIT="${MEMORY_INDEX_LINE_LIMIT:-200}"   # the co-equal line cap — "whichever comes first"
 HOOK_TARGET="${MEMORY_HOOK_TARGET:-115}"  # the compact-memory 'one governing rule' length — a FLOOR, not a target (see EFF_TARGET)
 HEADROOM_TARGET="${MEMORY_HEADROOM_TARGET:-2500}"  # compact-memory's "done" = ~2.5 KB under the limit
 BUDGET_CTX=""
 if [ -n "$MEM" ] && [ -f "$MEM" ]; then
   TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
+  # awk NR, not `wc -l`: NR counts a final unterminated line, which the loader still reads.
+  TOTAL_L=$(LC_ALL=C awk 'END{print NR+0}' "$MEM" 2>/dev/null) || TOTAL_L=""
   N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
 
   # ── ACTUATE, then advise (2026-08-10). Twelve hand-compactions in 14 days proved advisory
@@ -119,8 +135,16 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
   # branch means rotation COULD NOT clear it — an alarm that fires on breaches it could have
   # fixed itself carries no bits (MEMORY.md alarm-polarity-and-attention-budget).
   ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
+  # Line pressure arms the rotor on the same proportional band the byte threshold uses (1500/24985
+  # = 6%; 12/200 = 6%). Without this the gate could refuse a line-cap write while the only
+  # fleet-wide remedy never fired — a gate whose cure is unreachable is the wedge this subsystem
+  # is explicitly built not to create.
+  ROTATE_AT_LINES="${MEMORY_ROTATE_AT_LINES:-$(( LINE_LIMIT - 12 ))}"
   ROTATE_NOTE=""
-  if [ -n "$TOTAL" ] && [ "$TOTAL" -ge "$ROTATE_AT" ] 2>/dev/null; then
+  PRESSURED=0
+  if [ -n "$TOTAL" ] && [ "$TOTAL" -ge "$ROTATE_AT" ] 2>/dev/null; then PRESSURED=1; fi
+  if [ -n "$TOTAL_L" ] && [ "$TOTAL_L" -ge "$ROTATE_AT_LINES" ] 2>/dev/null; then PRESSURED=1; fi
+  if [ "$PRESSURED" -eq 1 ]; then
     RB="${MEMORY_ROTATE_BIN:-}"
     if [ -z "$RB" ]; then
       for c in "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/../bin/cc-memory-rotate" \
@@ -129,6 +153,12 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       done
     fi
     PRE_TOTAL="$TOTAL"
+    # "Was it actually breached before we rotated?" is now a two-cap question — an index over on
+    # LINES alone is just as breached as one over on bytes, and an exhausted rotor there is a real
+    # failure to report rather than the designed band-pressure steady state.
+    PRE_BREACH=0
+    if [ "$PRE_TOTAL" -ge "$LIMIT" ] 2>/dev/null; then PRE_BREACH=1; fi
+    if [ -n "$TOTAL_L" ] && [ "$TOTAL_L" -gt "$LINE_LIMIT" ] 2>/dev/null; then PRE_BREACH=1; fi
     if [ -n "$RB" ] && [ -x "$RB" ]; then
       RV=$("$RB" "$MEM" 2>/dev/null) || RV="${RV:-verdict=error}"
       case "$RV" in
@@ -137,19 +167,20 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
             ROTATE_NOTE=" AUTO-ROTATED to hold the read limit (${RV#verdict=rotated }): moved lines are VERBATIM in the cold record — restore = paste the line back."
           fi
           TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
+          TOTAL_L=$(LC_ALL=C awk 'END{print NR+0}' "$MEM" 2>/dev/null) || TOTAL_L=""
           N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
           ;;
         *)
-          # In the pressure band under the LIMIT an exhausted rotor is the designed steady
+          # In the pressure band under either cap an exhausted rotor is the designed steady
           # state (stage 2 arms only at breach) — not a failure; note it only when the index
           # is actually breached and rotation was its remedy.
-          if [ "$PRE_TOTAL" -ge "$LIMIT" ] 2>/dev/null; then
+          if [ "$PRE_BREACH" -eq 1 ]; then
             ROTATE_NOTE=" Auto-rotation ran and could NOT clear it (${RV:-no verdict})."
           fi
           ;;
       esac
     else
-      if [ "$PRE_TOTAL" -ge "$LIMIT" ] 2>/dev/null; then
+      if [ "$PRE_BREACH" -eq 1 ]; then
         ROTATE_NOTE=" Auto-rotation unavailable: cc-memory-rotate not resolvable from this hook."
       fi
     fi
@@ -172,8 +203,12 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
     # mints happened at 20.5 KB and 22.5 KB — under this limit, off the harness's own product-side
     # "approaching the limit" reminder — so a form that only spoke when breached would miss most.
     FILING="FILING: if you file this as work it is ONE standing condition, not a new item per measurement — \`cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\"\`. The size belongs in the title; putting it in the key is what minted 21 items for this one condition."
-    if [ "$TOTAL" -ge "$LIMIT" ]; then
+    BREACH_B=0; BREACH_L=0
+    if [ "$TOTAL" -ge "$LIMIT" ]; then BREACH_B=1; fi
+    if [ -n "$TOTAL_L" ] && [ "$TOTAL_L" -gt "$LINE_LIMIT" ] 2>/dev/null; then BREACH_L=1; fi
+    if [ "$BREACH_B" -eq 1 ] || [ "$BREACH_L" -eq 1 ]; then
       OVER=$(( TOTAL - LIMIT ))
+      OVER_L=$(( ${TOTAL_L:-0} - LINE_LIMIT ))
       # EXACT, not averaged. The old form (OVER / mean-line-cost) reads the index as
       # though every entry were mean-length; a real index is not, and its TAIL is
       # exactly where the estimate is applied. Measured 2026-08-08 against the live
@@ -182,8 +217,12 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       # own start offset falls at/after the limit. LC_ALL=C so awk's length() is
       # BYTES: this is a byte limit and the index carries multibyte punctuation
       # (the same trap tests/memory-index-budget.bats pins for the gate).
-      DROPPED=$(LC_ALL=C awk -v lim="$LIMIT" \
-        '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' \
+      # BOTH caps cut the same tail, so the dropped set is their UNION: an entry is gone if its
+      # start offset is past the byte cap OR its line number is past the line cap. Counting only
+      # the byte side under-reports exactly on a terse index, where the line cap is the one doing
+      # the cutting and the byte count says nothing was lost at all.
+      DROPPED=$(LC_ALL=C awk -v lim="$LIMIT" -v llim="$LINE_LIMIT" \
+        '{ if (substr($0,1,3)=="- [" && (off>=lim || NR>llim)) n++; off+=length($0)+1 } END{ print n+0 }' \
         "$MEM" 2>/dev/null) || DROPPED=""
       # Over the limit means at least the final entry is cut, even when the overage
       # falls INSIDE that entry and no start offset is past the limit.
@@ -213,14 +252,28 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       [ "$DERIVED" -gt "$EFF_TARGET" ] 2>/dev/null && EFF_TARGET="$DERIVED"
       RECOVER=0
       [ "$HOOK_AVG" -gt "$EFF_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - EFF_TARGET) ))
-      if [ "$RECOVER" -ge "$OVER" ]; then
+      if [ "$BREACH_L" -eq 1 ]; then
+        # A LINE breach is CARDINALITY by construction, whatever the byte arithmetic says. The
+        # three byte diagnoses below all trade on hook length, and hook length is exactly the
+        # quantity a line cap does not measure — reporting "shortening recovers N B" here would
+        # hand over a lever that provably cannot move the number that is cutting the tail.
+        LEVER="this is CARDINALITY and the LINE cap is what binds: ${TOTAL_L} lines against the ${LINE_LIMIT}-line loader cap (${OVER_L} over), so shortening CANNOT reach the limit — a shorter entry is still one line. Archiving under the DURABILITY criterion is the only non-lossy lever (the index holds $N entries; the byte-side ceiling is ~${MAXN})."
+      elif [ "$RECOVER" -ge "$OVER" ]; then
         LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} B against the ${EFF_TARGET} B allowance this index actually affords, so shortening the $N existing hooks recovers ~${RECOVER} B — more than the ${OVER} B needed, and it deletes no rules."
       elif [ "$RECOVER" -gt 0 ]; then
         LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} B to the ${EFF_TARGET} B allowance recovers only ~${RECOVER} B of the ${OVER} B needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
       else
         LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${EFF_TARGET} B allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      if [ "$BREACH_B" -eq 1 ]; then
+        HEADLINE="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B)."
+        if [ "$BREACH_L" -eq 1 ]; then
+          HEADLINE="${HEADLINE} It is over BOTH caps: also ${TOTAL_L} lines vs the ${LINE_LIMIT}-line limit (over by ${OVER_L})."
+        fi
+      else
+        HEADLINE="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL_L} lines vs the ${LINE_LIMIT}-line loader limit (over by ${OVER_L} lines). BYTES ARE HEALTHY at ${TOTAL}/${LIMIT} B: the loader reads the first ${LINE_LIMIT} lines or ${LIMIT} B, WHICHEVER COMES FIRST, and here the line cap came first."
+      fi
+      BUDGET_CTX="${HEADLINE}${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under BOTH caps — ${LIMIT} B and ${LINE_LIMIT} lines (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
@@ -237,7 +290,15 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       LINE_COST=$(( PFX_AVG + HOOK_AVG + 1 ))
       [ "$LINE_COST" -gt 0 ] || LINE_COST=1
       FITS=$(( HEADROOM / LINE_COST ))
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
+      # Runway is the MINIMUM over both caps, and the binding one is named. Every new entry costs
+      # one line as surely as it costs its bytes, so a byte-only figure overstates the room on any
+      # index written below ~124 B/line — and overstating runway is what lets a session append
+      # straight into the invisible tail believing it had slots.
+      LINE_SLOTS=$(( LINE_LIMIT - ${TOTAL_L:-0} ))
+      [ "$LINE_SLOTS" -lt 0 ] && LINE_SLOTS=0
+      BINDS="the ${LIMIT} B cap"
+      if [ "$LINE_SLOTS" -lt "$FITS" ]; then FITS="$LINE_SLOTS"; BINDS="the ${LINE_LIMIT}-line cap"; fi
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B and ${TOTAL_L:-?}/${LINE_LIMIT} lines across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left, bound by ${BINDS}, at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B or ${LINE_LIMIT} lines — whichever comes first — the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
     fi
   fi
 fi

@@ -82,6 +82,11 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
 }
 
 @test "diagnosis: hooks already at target ⇒ CARDINALITY, shortening cannot reach it" {
+  # Subject: the BYTE arithmetic that selects cardinality. `mkindex 600 40` is also 600 LINES, so
+  # once the line cap is enforced it preempts the byte diagnosis and this test would keep passing
+  # while pinning nothing about the arithmetic it is named for. Lift the line cap out of the way
+  # to isolate the dimension under test; the line-cap diagnosis has its own test below.
+  export MEMORY_INDEX_LINE_LIMIT=1000
   run fire s-lev2 "$(mkindex 600 40)"
   out="$(printf '%s' "$output" | ctx)"
   has "$out" 'CARDINALITY'
@@ -273,6 +278,11 @@ mkskewed() {
 }
 
 @test "dropped count is the entries that START past the limit, not overage/mean-line" {
+  # Subject: exact-vs-averaged on the BYTE cap. This fixture is 206 lines, so the line cap would
+  # cut at line 200 — BEFORE the byte cap — and drive the count itself, masking the estimator
+  # distinction this test exists to pin. Isolate the byte dimension; the union of the two caps is
+  # pinned separately below.
+  export MEMORY_INDEX_LINE_LIMIT=1000
   idx="$(mkskewed 200 100 6 900)"
   total="$(wc -c <"$idx" | tr -d ' ')"
   [ "$total" -gt "$LIMIT" ]
@@ -307,6 +317,73 @@ mkskewed() {
   has "$out" "the NEWEST 1 entries begin past the limit"
 }
 
+# ── the LINE cap: "the first 200 lines OR 25KB, whichever comes first" ────────
+#
+# Every fixture above is written at 100-900 B/hook, where bytes bind first — which is precisely how
+# the line cap went unmeasured for two weeks, and why commands/compact-memory.md asserted outright
+# that "BYTES bind, not the 200-line cap". That holds only above 24985/200 = 124 B/line. These
+# fixtures are TERSE (~25 B/line), so bytes are nowhere near their cap and the line count is the
+# only thing that can be cutting the tail. On the pre-fix hook every one of them reads HEALTHY.
+
+@test "a LINE-cap breach raises the alarm while bytes are healthy" {
+  idx="$(mkindex 210 8)"
+  [ "$(wc -c <"$idx" | tr -d ' ')" -lt "$LIMIT" ]     # bytes genuinely, hugely healthy
+  run fire s-lineonly "$idx"
+  [ "$status" -eq 0 ]
+  out="$(printf '%s' "$output" | ctx)"
+  starts "$out" '🚨'
+  has "$out" '210 lines vs the 200-line loader limit'
+  has "$out" 'BYTES ARE HEALTHY'
+  has "$out" 'WHICHEVER COMES FIRST'
+}
+
+@test "a LINE-cap breach names CARDINALITY — shortening cannot move a line count" {
+  # The three byte diagnoses all trade on hook length, and hook length is the one quantity a line
+  # cap does not measure. Reciting "shortening recovers N B" here hands over a lever that provably
+  # cannot clear the cap that is doing the cutting.
+  idx="$(mkindex 210 8)"
+  run fire s-linelever "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" 'CARDINALITY'
+  has "$out" 'shortening CANNOT reach the limit'
+  has "$out" 'a shorter entry is still one line'
+  hasnt "$out" 'binding lever'
+}
+
+@test "the dropped count is the UNION of both caps, not the byte side alone" {
+  # No entry on this index STARTS past the byte cap, so the byte-only count is 0 — the alarm would
+  # fire and then claim nothing had been lost, while the loader cut ten entries at line 200.
+  idx="$(mkindex 210 8)"
+  starts_past="$(LC_ALL=C awk -v lim="$LIMIT" \
+    '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' "$idx")"
+  [ "$starts_past" -eq 0 ]
+  run fire s-lineunion "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" 'the NEWEST 10 entries begin past the limit'
+}
+
+@test "runway is the MINIMUM over both caps, and it names the one that binds" {
+  # 185 terse entries: ~4.6 KB, so the byte side alone reports hundreds of free slots while only
+  # 15 lines remain before the loader starts cutting. An overstated runway is exactly what lets a
+  # session append into the invisible tail believing it had room.
+  idx="$(mkindex 185 8)"; out=""
+  [ "$(wc -c <"$idx" | tr -d ' ')" -lt "$LIMIT" ]
+  for _ in $(seq 1 12); do out="$(fire s-linerunway "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  hasnt "$ctxout" '🚨'                               # polarity: healthy, just narrow
+  has "$ctxout" '~15 entry slots left'
+  has "$ctxout" 'bound by the 200-line cap'
+}
+
+@test "a healthy index bound by BYTES still says so — the line cap does not capture every message" {
+  # Polarity control on the binding-cap verdict itself: an index written long enough that bytes
+  # bind must keep reporting the byte cap, or "which cap binds" carries no information.
+  idx="$(mkindex 40 250)"; out=""
+  for _ in $(seq 1 12); do out="$(fire s-bytebind "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" "bound by the $LIMIT B cap"
+}
+
 # ── the limit is ONE number, however many files read it ───────────────────────
 
 @test "the gate and the nudge default to the SAME limit, and nothing else spells it" {
@@ -324,6 +401,26 @@ mkskewed() {
   # with `grep -vc`: grep exits 1 on a zero count, so the healthy case would abort the
   # test under errexit and read as a failure of the thing it is asserting is fine.
   list="$(grep -rl 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks" "$REPO/bin" "$REPO/scripts" 2>/dev/null || true)"
+  others=0
+  for f in $list; do
+    case "$f" in
+      */memory-nudge.sh|*/memory-index-budget.sh|*/cc-memory-rotate) ;;
+      *) others=$(( others + 1 )) ;;
+    esac
+  done
+  [ "$others" -eq 0 ]
+}
+
+@test "the LINE cap is ONE number too, spelled once in each of the same three files" {
+  # Same argument as the byte knob above: three separate literals are safe only while something
+  # fails when they drift, and the line cap now decides refusals in all three.
+  nudge="$(grep -c 'MEMORY_INDEX_LINE_LIMIT:-200' "$REPO/hooks/memory-nudge.sh")"
+  gate="$(grep -c 'MEMORY_INDEX_LINE_LIMIT:-200' "$REPO/hooks/lib/memory-index-budget.sh")"
+  rotor="$(grep -c 'MEMORY_INDEX_LINE_LIMIT:-200' "$REPO/bin/cc-memory-rotate")"
+  [ "$nudge" -eq 1 ]
+  [ "$gate" -eq 1 ]
+  [ "$rotor" -eq 1 ]
+  list="$(grep -rl 'MEMORY_INDEX_LINE_LIMIT:-' "$REPO/hooks" "$REPO/bin" "$REPO/scripts" 2>/dev/null || true)"
   others=0
   for f in $list; do
     case "$f" in

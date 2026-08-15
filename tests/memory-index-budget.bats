@@ -54,6 +54,108 @@ edit_grow() { jq -nc --arg f "$1" --arg n "TAIL$(head -c "$2" /dev/zero | tr '\0
 edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
                 '{file_path:$f, old_string:$o, new_string:$n}'; }
 
+# ── the LINE cap: the co-equal half of "the first 200 lines or 25KB, whichever comes first" ──
+#
+# Every fixture above is ONE line, so it can only ever exercise the byte cap — which is exactly how
+# the line cap went unenforced. These fixtures invert it: short lines, so the byte cap is nowhere
+# near, and the ONLY thing that can refuse them is the line count.
+
+# An index fixture of exactly $1 LINES, each short, ending in a targetable `TAIL` line.
+mklines() {
+  local lines="$1" name="${2:-lidx}" d f i
+  d="$BATS_TEST_TMPDIR/$name/memory"; mkdir -p "$d"; f="$d/MEMORY.md"
+  : >"$f"
+  i=1
+  while [ "$i" -lt "$lines" ]; do
+    printf -- '- [T%s](t%s.md) — h\n' "$i" "$i" >>"$f"
+    i=$(( i + 1 ))
+  done
+  printf 'TAIL\n' >>"$f"
+  printf '%s' "$f"
+}
+
+# tool_input for an Edit that replaces the final TAIL with TAIL plus $2 additional LINES.
+edit_addlines() {
+  local f="$1" n="$2" add="" i=0
+  while [ "$i" -lt "$n" ]; do
+    add="$add
+- [N$i](n$i.md) — h"
+    i=$(( i + 1 ))
+  done
+  jq -nc --arg f "$f" --arg n "TAIL$add" '{file_path:$f, old_string:"TAIL", new_string:$n}'
+}
+
+@test "a write that crosses the LINE cap is REFUSED while the byte cap is nowhere near" {
+  # THE DEFECT THIS PINS. Anthropic documents the load as "The first 200 lines or 25KB, whichever
+  # comes first"; this gate enforced only the byte half, so a terse index sailed past 200 lines
+  # with the loader silently dropping its tail and every measurement in the subsystem reading
+  # healthy. RED against the pre-fix gate, which allows this write.
+  idx="$(mklines 200 linecap)"
+  [ "$(wc -c <"$idx")" -lt 5000 ]                # bytes are not remotely the binding cap
+  run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 5)"
+  [ "$status" -eq 0 ]                            # 0 = deny
+  has "$output" "MEMORY INDEX WRITE REFUSED"
+  has "$output" "5 lines over its read limit"
+  has "$output" "BYTES ARE NOT THE BINDING CAP HERE"
+}
+
+@test "the line boundary is the cap itself: landing exactly ON 200 is allowed, 201 is not" {
+  idx="$(mklines 199 lbound)"
+  run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 1)"     # → exactly 200 lines
+  [ "$status" -eq 1 ]
+  run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 2)"     # → 201 lines
+  [ "$status" -eq 0 ]
+}
+
+@test "the line cap hands over the remedy that can actually move it, not hook-shortening" {
+  # Bytes are freed by shortening; LINES are not — a shorter entry is still one line. A refusal
+  # that recites the byte remedy here would hand over a lever that provably cannot clear the cap.
+  idx="$(mklines 205 lremedy)"
+  run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 1)"
+  [ "$status" -eq 0 ]
+  has "$output" "SHORTENING WILL NOT CLEAR THE LINE CAP"
+  has "$output" "ONE-IN-ONE-OUT"
+}
+
+@test "an already-OVER-lines index still accepts a LINE-shrinking edit — the cure is never blocked" {
+  # The no-wedge asymmetry has to hold on EACH cap separately, not just on whichever one is
+  # binding today; otherwise an over-lines index could not be compacted back through this gate.
+  idx="$(mklines 260 lshrink)"
+  run mib_verdict Edit "$idx" "$(edit_raw "$idx" "- [T1](t1.md) — h
+" "")"
+  [ "$status" -eq 1 ]
+}
+
+@test "a line-NEUTRAL edit on an over-lines index is allowed" {
+  idx="$(mklines 260 lneutral)"
+  run mib_verdict Edit "$idx" "$(edit_raw "$idx" "TAIL" "LIAT")"
+  [ "$status" -eq 1 ]
+}
+
+@test "the caps are judged SEPARATELY: growing bytes on an over-lines index is not refused for lines" {
+  # A byte-growing, line-neutral write on an index that is already over on LINES must be allowed:
+  # it worsens neither cap past its own threshold. Folding the two into one "is the file over?"
+  # test would refuse it and wedge exactly the edits that shorten an over-lines index.
+  idx="$(mklines 260 lsep)"
+  run mib_verdict Edit "$idx" "$(edit_grow "$idx" 100)"
+  [ "$status" -eq 1 ]
+}
+
+@test "a non-numeric MEMORY_INDEX_LINE_LIMIT allows rather than guessing" {
+  idx="$(mklines 260 lbad)"
+  MEMORY_INDEX_LINE_LIMIT=abc run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 5)"
+  [ "$status" -eq 1 ]
+}
+
+@test "the line cap is the same knob memory-nudge.sh and the rotor read, and it is honoured" {
+  idx="$(mklines 50 lknob)"
+  MEMORY_INDEX_LINE_LIMIT=52 run mib_verdict Edit "$idx" "$(edit_addlines "$idx" 5)"
+  [ "$status" -eq 0 ]
+  grep -q 'MEMORY_INDEX_LINE_LIMIT:-200' "$REPO/hooks/memory-nudge.sh"
+  grep -q 'MEMORY_INDEX_LINE_LIMIT:-200' "$LIB"
+  grep -q 'MEMORY_INDEX_LINE_LIMIT:-200' "$REPO/bin/cc-memory-rotate"
+}
+
 # ── the refusal, and that arithmetic selects it ───────────────────────────────
 
 @test "an Edit that would cross the limit is REFUSED" {
