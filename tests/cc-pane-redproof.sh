@@ -206,24 +206,24 @@ check "list-trusts-the-registry-not-the-OS" bin/cc-pane-headless \
 # that 21 files read and nothing ever writes.
 check "identity-never-exported" bin/cc-pane-headless \
   '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-      >"$dir/out.log" 2>&1 </dev/null &' \
-  '( cd "$cwd" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+      >"$dir/out.log" 2>&1 <"$stdin_src" &' \
+  '( cd "$cwd" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 <"$stdin_src" &' \
   'EXPORTS CC_PANE_ID'
 
 # Half 2 gone: the spawner's pane id leaks into the agent again, so every class-B scraper resolves
 # a headless agent to the SPAWNER's pane — and teammate-auto-shutdown resolves a pane to CLOSE it.
 check "spawner-pane-leaks-into-the-agent" bin/cc-pane-headless \
   '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-      >"$dir/out.log" 2>&1 </dev/null &' \
-  '( cd "$cwd" && export CC_PANE_ID="$id" && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+      >"$dir/out.log" 2>&1 <"$stdin_src" &' \
+  '( cd "$cwd" && export CC_PANE_ID="$id" && exec "$@" ) >"$dir/out.log" 2>&1 <"$stdin_src" &' \
   'does NOT leak the SPAWNER'
 
 # Exported, but NOT the child's own id. Pins that the test compares against the RETURNED id rather
 # than merely asserting the variable is non-empty — non-emptiness is not provenance.
 check "identity-exported-but-wrong-value" bin/cc-pane-headless \
   '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
-      >"$dir/out.log" 2>&1 </dev/null &' \
-  '( cd "$cwd" && export CC_PANE_ID="hdl-0000000000000000" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+      >"$dir/out.log" 2>&1 <"$stdin_src" &' \
+  '( cd "$cwd" && export CC_PANE_ID="hdl-0000000000000000" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 <"$stdin_src" &' \
   'it is the child'"'"'s OWN id'
 
 # NOT A MUTANT, and the reason is recorded in tests/cc-pane-headless.bats next to the test it
