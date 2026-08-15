@@ -60,10 +60,30 @@ EMBEDDED_ALLOWLIST=""
 # own-set ABSENT ⇒ strict whole-tree · SET-BUT-EMPTY ⇒ "I change no file" ⇒ nothing blocks · SET ⇒
 # block on those only. `${VAR:-}` cannot express that, so presence rides on argument count here and
 # on `${CC_UTC_OWN+set}` at the entry point.
-in_own() {  # $1=path · $2=own-set text · $3=1 if an own-set was supplied at all
-  [ "${3:-0}" = "1" ] || return 0
-  [ -n "$2" ] || return 1
-  printf '%s\n' "$2" | grep -qxF "$1"
+#
+# THE BASENAME COLLAPSE, FIXED (2026-08-15, backlog c1a29f8ee045; land-arch §5.P2 arm 5 filed it as
+# the "separate defect"). This arm's collapse lived in the CALLER, not here: the lint scans bin/,
+# hooks/ and scripts/ as three separate roots and reported `rel` relative to EACH, so the only way
+# to make a repo-relative own-set match was ship-land stripping the leading component
+# (`sed 's:^[^/]*/::'`). That strip merged the three namespaces — `bin/cc-foo` and `scripts/cc-foo`
+# both became `cc-foo` — so a diff touching one blocked over the other. The strip is gone; this side
+# now matches against the FULL scanned path (`$f`, not `$rel`), which carries the directory the
+# entry names. Body shared VERBATIM with test-hermeticity-lint / git-identity-lint / tsv-pad-lint;
+# the contract is stated in full at test-hermeticity-lint.sh's in_own, and
+# tests/gate-ownscope-leak.bats pins the four copies identical.
+in_own() {  # $1=path the lint knows · $2=own-set text · $3=1 if an own-set was supplied at all
+  [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
+  [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */*) [ "$1" = "$e" ] && return 0
+           case "$1" in */"$e") return 0 ;; esac ;;
+      *)   [ "${1##*/}" = "$e" ] && return 0 ;;
+    esac
+  done <<< "$2"
+  return 1
 }
 
 in_allowlist() { printf '%s\n' "$2" | grep -qxF "$1"; }
@@ -114,7 +134,7 @@ lint_dir() {
     if [ -n "$hits" ]; then
       if in_allowlist "$rel" "$allow"; then
         continue
-      elif in_own "$rel" "$own" "$own_scoped"; then
+      elif in_own "$f" "$own" "$own_scoped"; then
         printf '  LYING-Z %s\n' "$rel"
         printf '%s\n' "$hits" | sed 's/^/            /'
         bad=$((bad + 1))
@@ -123,7 +143,7 @@ lint_dir() {
         other=$((other + 1))
       fi
     elif in_allowlist "$rel" "$allow"; then
-      if in_own "$rel" "$own" "$own_scoped"; then
+      if in_own "$f" "$own" "$own_scoped"; then
         printf '  RATCHET %s is clean now — delete its allowlist line\n' "$rel"
         stuck=$((stuck + 1))
       else
@@ -176,6 +196,13 @@ now(){ date -u +%s; }"
   mkpy pynaive "stamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')"
   mkpy pyaware "stamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')"
 
+  # THE PATH-FORM own-scope fixture, under a directory actually NAMED `bin` — this lint scans bin/,
+  # hooks/ and scripts/ as three SEPARATE roots, which is the whole reason its own-set entries have
+  # to carry a directory at all (backlog c1a29f8ee045). The flat $d/scar fixture above can only
+  # exercise the bare form, so it was green for the entire life of the caller-side collapse.
+  mkdir -p "$d/scarpath/bin"
+  cp "$d/scar/probe.sh" "$d/scarpath/bin/probe.sh"
+
   fails=0
   chk() { # <dir> <expected-rc> <message>
     lint_dir "$d/$1" "" >/dev/null 2>&1; local rc=$?
@@ -199,6 +226,11 @@ now(){ date -u +%s; }"
   lint_dir "$d/scar" "" "probe.sh"  >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a violation INSIDE the own-set did not block — own-scope disabled the rule"; fails=1; }
   lint_dir "$d/scar" "" ""          >/dev/null 2>&1 || { echo "SELFTEST FAIL: an EMPTY own-set blocked — set-empty collapsed into unset"; fails=1; }
   lint_dir "$d/scar" ""             >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an ABSENT own-set did not block — strict default lost"; fails=1; }
+  # …and the PATH form, both directions. ship-land now passes repo-relative paths unstripped, so the
+  # matching entry carries the directory the file is actually in; the same basename under a
+  # DIFFERENT directory must not block (that is the collapse the leading-component strip created).
+  lint_dir "$d/scarpath/bin" "" "bin/probe.sh"     >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PATH-form own-set entry did not match the judged path — ship-land's unstripped own-set would block on nothing"; fails=1; }
+  lint_dir "$d/scarpath/bin" "" "scripts/probe.sh" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an own-set naming the same basename under ANOTHER scan root blocked — the basename collapse is back"; fails=1; }
 
   # the real tree must be clean, and a bad dir is a NON-VERDICT (2), never a false all-clear
   for real in bin hooks scripts; do
@@ -226,7 +258,7 @@ now(){ date -u +%s; }"
   [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: finding + non-verdict did not yield 2 — a partially-judged run must not characterise the tree"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "utc-stamp-lint --selftest: 20/20 — RED on the real b4e3c355 scar line + a naive-datetime Z + a stuck ratchet entry; GREEN on date -u, TZ=UTC, an explicit %z offset, a plain log prefix, a commented scar and an aware datetime; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent; bin+hooks+scripts clean; LOUD on a bad dir; and at the TOP LEVEL a could-not-run exits 2, a finding still exits 1, and the two together exit 2."
+    echo "utc-stamp-lint --selftest: 22/22 — RED on the real b4e3c355 scar line + a naive-datetime Z + a stuck ratchet entry; GREEN on date -u, TZ=UTC, an explicit %z offset, a plain log prefix, a commented scar and an aware datetime; own-scope blocks INSIDE / advises OUTSIDE / passes set-empty / stays strict when absent / matches a PATH-form entry against the judged path and NOT the same basename under another scan root (the collapse control); bin+hooks+scripts clean; LOUD on a bad dir; and at the TOP LEVEL a could-not-run exits 2, a finding still exits 1, and the two together exit 2."
     exit 0
   fi
   echo "utc-stamp-lint --selftest: FAILED — the lint does not discriminate."

@@ -316,10 +316,28 @@ in_allowlist() {
 # that is ABSENT means "strict, judge the whole tree" (the postland net, a bare human run); an
 # own-set that is PRESENT BUT EMPTY means "this land changes nothing in scope", so NOTHING may block.
 # Presence is carried by ARGUMENT COUNT here and by `${CC_GITID_OWN+set}` at the entrypoint.
-in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied at all
+#
+# THE BASENAME COLLAPSE, FIXED (2026-08-15, backlog c1a29f8ee045; land-arch §5.P2 arm 4 filed it as
+# latent, "same latent basename vector as arm 1"). `sed 's:.*/::'` basenamed the own-set, and the
+# call site handed it a basename too, so an own-set entry `scripts/foo.sh` matched a judged
+# `tests/foo.sh` — a land blocking over a file it never touched, which is the fleet-wide hard stop
+# this mechanism exists to remove. The body below is shared VERBATIM with test-hermeticity-lint /
+# utc-stamp-lint / tsv-pad-lint; its contract is stated in full at test-hermeticity-lint.sh's
+# in_own, and tests/gate-ownscope-leak.bats pins the four copies identical so a fix to one cannot
+# silently miss the others. Callers pass the PATH ($rel here), never the basename.
+in_own() {  # $1=path the lint knows · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
   [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
-  printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "$1"
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */*) [ "$1" = "$e" ] && return 0
+           case "$1" in */"$e") return 0 ;; esac ;;
+      *)   [ "${1##*/}" = "$e" ] && return 0 ;;
+    esac
+  done <<< "$2"
+  return 1
 }
 
 why_of() {  # $1=rule token → the human sentence
@@ -374,7 +392,7 @@ lint_tree() {
     n="$(printf '%s' "$records" | grep -c . )"
     if [ "$n" -eq 0 ]; then
       if in_allowlist "$base" "$allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$rel" "$own" "$own_scoped"; then
           printf '  RATCHET  %s writes no escaping identity now — delete its allowlist line\n' "$base"
           stuck=$((stuck + 1))
         else
@@ -389,7 +407,7 @@ lint_tree() {
       # unsound, but it would silently exclude the grandfathered files from the cache forever.
       while IFS="$(printf '\t')" read -r lineno rule excerpt; do
         [ -n "$lineno" ] || continue
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$rel" "$own" "$own_scoped"; then
           printf '  IDENTITY %s:%s: %s\n' "$rel" "$lineno" "$(why_of "$rule")"
           printf '           %s\n' "$excerpt"
           bad=$((bad + 1))
@@ -619,9 +637,18 @@ F
   # (f) the ratchet is consulted in BOTH directions: grandfathered ⇒ green, fixed-but-listed ⇒ red.
   lint_tree "$d/bare_var" "zz-fixture.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered violation did not go GREEN"; fails=1; }
   lint_tree "$d/guarded"  "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a clean-but-still-grandfathered file did not go RED (the ratchet is not shrinking)"; fails=1; }
-  # (g) own-scope: advisory OUTSIDE the lander's diff, blocking INSIDE it (path form accepted).
+  # (g) own-scope: advisory OUTSIDE the lander's diff, blocking INSIDE it (path + bare forms, and
+  #     the collapse control that separates them).
   lint_tree "$d/bare_var" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a violation OUTSIDE the own-set blocked"; fails=1; }
   lint_tree "$d/bare_var" "" "tests/zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a violation INSIDE the own-set did not block"; fails=1; }
+  # …and the collapse direction (backlog c1a29f8ee045). The judged file is tests/zz-fixture.bats;
+  # this lint's population spans tests/, scripts/ AND bin/, so an author who changed
+  # scripts/zz-fixture.bats named a different file and must not be refused over this one. The pair
+  # above and this one differ only in the DIRECTORY of the entry — which is the whole rule, and was
+  # decoration before the fix because both sides were basenamed. RED pre-fix.
+  lint_tree "$d/bare_var" "" "scripts/zz-fixture.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an own-set naming the same basename under ANOTHER directory blocked — the basename collapse is back"; fails=1; }
+  # …while a BARE entry stays deliberately wide: no directory was spelled, so it matches in any.
+  lint_tree "$d/bare_var" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a BARE own-set entry did not match — sibling callers still pass basenames"; fails=1; }
   # (h) COULD-NOT-CHECK is a NON-VERDICT (exit 2) and must never print a line naming a file nobody
   #     was able to check. The output test is a `case`, not a grep: awk is what is stubbed, but the
   #     same discipline applies — an assertion must not be built out of the thing under stub.
@@ -652,7 +679,7 @@ F
   ( CC_GITID_ALLOWLIST="" CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/bare_var" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_GITID_OWN naming the file did not block at the entrypoint"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "git-identity-lint --selftest: 29/29 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd and an &&-chained cd to a NON-EMPTIABLE path, and on a ||-guarded cd to a PROVEN variable — but RED on the ||-guarded AND the &&-chained form of a BARE expansion, because \`cd \"\"\` returns 0 so neither chain ever fires and the guard is INERT, which is what pins rule 2 to the ARGUMENT rather than to the presence of a guard; GREEN on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (path form accepted); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
+    echo "git-identity-lint --selftest: 31/31 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd and an &&-chained cd to a NON-EMPTIABLE path, and on a ||-guarded cd to a PROVEN variable — but RED on the ||-guarded AND the &&-chained form of a BARE expansion, because \`cd \"\"\` returns 0 so neither chain ever fires and the guard is INERT, which is what pins rule 2 to the ARGUMENT rather than to the presence of a guard; GREEN on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (a PATH-form entry matched against the judged path, a BARE entry matched in any directory, and the same basename under a DIFFERENT directory proved NOT to block — the collapse control); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
     exit 0
   fi
   echo "git-identity-lint --selftest: FAILED — the ratchet does not discriminate."

@@ -36,8 +36,32 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"      # hermeticity: never the operator's live ~
   mkdir -p "$HOME"
+  # DOGFOOD rules 5 and 6 of test-hermeticity-lint, which this file came into scope for the moment
+  # the basename-collapse cases below started EXECUTING that lint by path. Both variables are that
+  # lint's own extractor anchors — it declares CC_HERM_SEAM_SELFPROBE with an absolute /tmp default
+  # (rule 5, shape 5a) and CC_HERM_ENV_SELFPROBE as both an injection and a read (rule 6) — so a
+  # suite naming its path must take a position on each. tests/test-hermeticity-lint.bats pins the
+  # identical pair for the identical reason. A lint's caller sitting on that lint's exemption list
+  # is the rot this repo is killing.
+  export CC_HERM_SEAM_SELFPROBE="$BATS_TEST_TMPDIR/absent-seam-anchor"
+  export CC_HERM_ENV_SELFPROBE=0
   FIX="$BATS_TEST_TMPDIR/fix"
   mkdir -p "$FIX"
+}
+
+# mk_gid_leak <path> — a fixture carrying ONE git-identity violation: a bare `-C` expansion on an
+# identity write.
+#
+# THE SHAPE IS ASSEMBLED, NEVER WRITTEN — the same idiom scripts/tsv-pad-lint.sh takes for its scan
+# marker, and for the same reason. Spelled literally, this line would itself be a git-identity
+# violation, and the land gate would refuse the very file that proves that arm's own-scope works.
+# (Measured: the precheck reds on it.) The lint keys on a contiguous `user.email` / `user.name`, so
+# splitting the key across two printf arguments keeps a TRUE violation on disk while no source line
+# here carries the shape. Text is never evidence — what makes this a valid control is the file
+# written, not the file writing it.
+mk_gid_leak() {  # $1 = path of the .bats fixture to write
+  mkdir -p "${1%/*}"
+  printf '@test "x" {\n  git -C "$dir" config %s%s t@t\n}\n' 'user.' 'email' > "$1"
 }
 
 # ── arm 1/15: chromium-bundle ────────────────────────────────────────────────────────────────────
@@ -189,6 +213,124 @@ up_fixture() {
   # discriminator is the reported scope line, not the exit code.
   run env CC_TSVPAD_OWN="" bash "$REPO/scripts/tsv-pad-lint.sh" "$REPO"
   [ "$status" -eq 0 ]
+}
+
+# ── THE BASENAME COLLAPSE — the second half of the own-set contract (backlog c1a29f8ee045) ───────
+#
+# THE THREE STATES above answer "did a caller scope this run?". They say nothing about WHICH files
+# an own-set names, and that is where §5.P2's audit left two arms filed-not-fixed: it recorded
+# arms 1 and 4 as carrying a latent basename collapse and closed the row with "no basename
+# collisions exist in the tree today". That is a property of the TREE, checked by hand on one day,
+# not a property of the code — the first `bin/x.sh` + `scripts/x.sh` pair anyone adds re-opens it,
+# and nothing in the gate would notice.
+#
+# WHAT COLLAPSED. All four matchers basenamed the own-set (`sed 's:.*/::'`) and compared it to a
+# basename, so an entry `scripts/foo.sh` matched a judged `tests/foo.sh`: the land is refused over a
+# file it never touched, which is the fleet-wide hard stop this whole mechanism exists to remove,
+# re-entering through the MATCHER rather than through the scope. utc-stamp's copy carried the same
+# defect one level out — it matches paths, but the lint scans bin/, hooks/ and scripts/ as three
+# separate roots, so ship-land stripped the leading component to make the two sides meet and merged
+# the three namespaces doing it.
+#
+# THE CONTRACT NOW, one body shared by four files:
+#   a PATHED entry (contains `/`) matches the judged path exactly or as a suffix on a COMPONENT
+#     boundary — `tests/foo.bats` matches `<root>/tests/foo.bats` and never `scripts/foo.bats`;
+#   a BARE entry (no `/`) is a basename and still matches in any directory — deliberately wide,
+#     because callers pass bare names and the too-narrow direction lets a real violation land.
+# Each lint's own --selftest proves both directions on its own fixtures. These tests are the
+# BLACK-BOX half, driven through the real entrypoints and their real CC_*_OWN seams, plus the
+# structural pin below that stops the four copies drifting apart.
+
+@test "basename collapse: a PATHED own-entry blocks its own path and NOT the same name elsewhere" {
+  # One fixture tree per lint, each carrying that lint's violation under a REAL directory name, so
+  # the entry's directory component is load-bearing rather than decoration.
+  #
+  # git-identity: the judged file is tests/zz-probe.bats. `scripts/zz-probe.bats` is a different
+  # file, so it must not block; `tests/zz-probe.bats` is this one, so it must.
+  mk_gid_leak "$FIX/bc_gid/tests/zz-probe.bats"
+  run env CC_GITID_ALLOWLIST="" CC_GITID_OWN="tests/zz-probe.bats" bash "$REPO/scripts/git-identity-lint.sh" "$FIX/bc_gid"
+  [ "$status" -eq 1 ]
+  run env CC_GITID_ALLOWLIST="" CC_GITID_OWN="scripts/zz-probe.bats" bash "$REPO/scripts/git-identity-lint.sh" "$FIX/bc_gid"
+  [ "$status" -eq 0 ]
+
+  # test-hermeticity: same shape on a $HOME leak. Rule 4 is pinned off — it scans the real tool
+  # dirs under the given root, and a rule-4 verdict about the fixture would become this assertion's
+  # answer (the lint's own selftest records the same trap at case (m)).
+  mkdir -p "$FIX/bc_herm/tests"
+  printf '#!/usr/bin/env bats\nsetup() {\n  REPO="$(pwd)"\n}\n@test "x" { true; }\n' > "$FIX/bc_herm/tests/zz-probe.bats"
+  run env CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_RULE=off \
+      CC_HERM_OWN="tests/zz-probe.bats" bash "$REPO/scripts/test-hermeticity-lint.sh" "$FIX/bc_herm/tests"
+  [ "$status" -eq 1 ]
+  run env CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_RULE=off \
+      CC_HERM_OWN="scripts/zz-probe.bats" bash "$REPO/scripts/test-hermeticity-lint.sh" "$FIX/bc_herm/tests"
+  [ "$status" -eq 0 ]
+}
+
+@test "basename collapse: utc-stamp matches the repo-relative path ship-land now passes UNSTRIPPED" {
+  # This arm's collapse was in the CALLER. The lint scans bin/ hooks/ scripts/ as three roots, so
+  # ship-land used to strip the leading component off `git diff --name-only` to make an own-set
+  # entry meet the lint's per-root `rel` — and `bin/cc-x` and `scripts/cc-x` both became `cc-x`.
+  # The strip is gone and the lint matches the full scanned path, so BOTH halves have to hold: the
+  # unstripped entry must still block (or every land would block on nothing, which is the
+  # fail-permissive direction and would have gone unnoticed), and the sibling root must not.
+  mkdir -p "$FIX/bc_utc/bin" "$FIX/bc_utc/scripts"
+  printf '#!/bin/bash\nlog(){ printf "[%%s]\\n" "$(date \x27+%%Y-%%m-%%dT%%H:%%M:%%SZ\x27)"; }\n' > "$FIX/bc_utc/bin/zz-probe.sh"
+  printf '#!/bin/bash\necho fine\n' > "$FIX/bc_utc/scripts/zz-probe.sh"
+  run env CC_UTC_ALLOWLIST="" CC_UTC_OWN="bin/zz-probe.sh" bash "$REPO/scripts/utc-stamp-lint.sh" "$FIX/bc_utc/bin"
+  [ "$status" -eq 1 ]
+  run env CC_UTC_ALLOWLIST="" CC_UTC_OWN="scripts/zz-probe.sh" bash "$REPO/scripts/utc-stamp-lint.sh" "$FIX/bc_utc/bin"
+  [ "$status" -eq 0 ]
+
+  # …and the caller half, asserted on ship-land's source: a re-introduced strip would silently put
+  # the collapse back with every lint here still passing, because the lints never see the caller.
+  run grep -n "uown=\"\$(git diff --name-only" "$REPO/scripts/ship-land.sh"
+  [ "$status" -eq 0 ]
+  case "$output" in *"sed 's:^[^/]*/::'"*) echo "ship-land strips the leading component off the utc own-set again — the three scan roots are merged" >&2; return 1 ;; esac
+}
+
+@test "basename collapse: a BARE own-entry is still wide — it matches in any directory" {
+  # The width of the bare form is deliberate and load-bearing: callers do pass bare names, and the
+  # too-narrow direction reports a real violation as "not in your diff — advisory" and lets it
+  # land. Without this half, "tighten the matcher" reads as "tighten it everywhere", which is the
+  # direction that turns a gate into detection (memory: gate-default-decides-failure-direction).
+  mk_gid_leak "$FIX/bc_bare/tests/zz-probe.bats"
+  run env CC_GITID_ALLOWLIST="" CC_GITID_OWN="zz-probe.bats" bash "$REPO/scripts/git-identity-lint.sh" "$FIX/bc_bare"
+  [ "$status" -eq 1 ]
+}
+
+@test "the four in_own copies are ONE body — a fix to any of them cannot miss the others" {
+  # These four lints source nothing (utc-stamp and tsv-pad source nothing at all; the other two take
+  # gate-memo through an optional `. … || true`), so the shared predicate is four literal copies.
+  # That is deliberate — a correctness-critical matcher arriving through an optional source degrades
+  # SILENTLY when the live layer has not converged on the new lib file, and this repo IS the live
+  # layer's source. The cost of copies is drift, and drift is what this pins: all four bodies must
+  # be byte-identical below the signature line. The signature comment differs by design (each names
+  # its own caller), so the comparison starts after it.
+  #
+  # This is the same lesson as the three-state test below it: one defect copied between neighbours
+  # needs a rule, not N patches. §5.P2 fixed three arms of that defect and left two arms of THIS one
+  # filed as latent — the pin is what makes "latent" a state the gate can see.
+  local first="" body f n=0 bad=""
+  for f in test-hermeticity git-identity utc-stamp tsv-pad; do
+    body="$(sed -n '/^in_own() {/,/^}/p' "$REPO/scripts/$f-lint.sh" | sed '1d')"
+    [ -n "$body" ] || { bad="$bad$f-lint.sh: no in_own() body found — the extractor stopped matching
+"; continue; }
+    n=$((n + 1))
+    if [ -z "$first" ]; then first="$body"
+    elif [ "$body" != "$first" ]; then
+      bad="$bad$f-lint.sh's in_own has drifted from test-hermeticity-lint.sh's
+"
+    fi
+  done
+  [ "$n" -eq 4 ] || { echo "expected 4 in_own bodies, extracted $n" >&2; return 1; }
+  [ -z "$bad" ] || { printf '%s' "$bad" >&2; return 1; }
+  # POSITIVE: the body must actually implement the two-form rule, not merely agree with itself —
+  # four identical copies of a re-introduced `sed 's:.*/::'` would pass the comparison above.
+  case "$first" in
+    *"sed 's:.*/::'"*) echo "in_own basenames the own-set again — the collapse is back in all four" >&2; return 1 ;;
+  esac
+  printf '%s' "$first" | grep -qF '*/"$e") return 0' || { echo "in_own no longer matches a PATHED entry on a component boundary" >&2; return 1; }
+  printf '%s' "$first" | grep -qF '${1##*/}' || { echo "in_own no longer matches a BARE entry as a basename" >&2; return 1; }
 }
 
 # ── THE STRUCTURAL RATCHET — what stops the next arm inheriting the defect ────────────────────────

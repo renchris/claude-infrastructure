@@ -31,15 +31,19 @@ setup() {
 mkdirf() { mkdir -p "$FIX/$1"; }
 write() { printf '%s\n' "$2" > "$FIX/$1/probe.sh"; }
 
-@test "1: the lint's own --selftest passes (20/20, both directions)" {
+@test "1: the lint's own --selftest passes (22/22, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  # 17/17 -> 20/20 on 2026-08-13, ratified deliberately as this assertion's own message demands.
+  # 17/17 -> 20/20 on 2026-08-13 -> 22/22 on 2026-08-15, each ratified deliberately as this
+  # assertion's own message demands. The two newest cases pin the OWN-SET basename collapse
+  # (backlog c1a29f8ee045): a PATH-form entry matched against the judged path, and the same
+  # basename under another scan root proved NOT to block. They need a fixture under a directory
+  # really named `bin`, which is why the flat $d/scar tree could not state them.
   # The three added cases drive the SCRIPT rather than lint_dir, pinning that a could-not-run exits 2,
   # a real finding still exits 1, and the two together exit 2. They exist because all 17 earlier cases
   # called lint_dir directly and so stayed green through the entire life of the caller-side collapse
   # (`lint_dir … || rc=1`) that reported "I could not look" as "your tree is bad".
-  printf '%s' "$output" | grep -q '20/20' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
+  printf '%s' "$output" | grep -q '22/22' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
 @test "2: RED on a Z-stamp from a bare date (the b4e3c355 scar shape)" {

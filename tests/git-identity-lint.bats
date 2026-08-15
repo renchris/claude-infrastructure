@@ -38,13 +38,16 @@ fixture() {
   echo "$FIX/$1"
 }
 
-@test "1: the lint's own --selftest passes (29/29, both directions)" {
+@test "1: the lint's own --selftest passes (31/31, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # 22 → 29 (2026-08-06): the selftest grew rule-1 scope cases and the three proof-mutants; the
   # assertion was left at 22, so this test was RED on trunk. Updating it is the deliberate act the
   # message below asks for — the pin is here to force that choice, not to be silently loosened.
-  printf '%s' "$output" | grep -q '29/29' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
+  # 29 → 31 (2026-08-15): the own-scope pair grew its collapse control and its bare-form control
+  # (backlog c1a29f8ee045) — an own-set entry naming the same basename under a DIFFERENT directory
+  # must not block, while a bare entry still matches anywhere.
+  printf '%s' "$output" | grep -q '31/31' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
 # ── THE POSITIVE CONTROL. If the lint were a no-op these two tests are the ones that fail. ────────

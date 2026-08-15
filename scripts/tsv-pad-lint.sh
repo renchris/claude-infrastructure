@@ -61,10 +61,11 @@
 # own-set ABSENT ⇒ strict whole-tree; SET-BUT-EMPTY ⇒ "I change none of these" ⇒ nothing blocks;
 # SET ⇒ block on those only, everything else advisory. `${VAR:-}` cannot express that, so presence
 # rides on argument count here and on `${CC_TSVPAD_OWN+set}` at the entry point.
-# Own-matching accepts an exact repo-relative path OR a bare basename, and the WIDTH is deliberate:
-# too-narrow matching reports a file the author just added as "not in your diff — advisory" and the
-# land goes through, which is precisely the hole this lint exists to close. Too-wide costs a loud,
-# nameable refusal. (memory: gate-default-decides-failure-direction)
+# Own-matching accepts an exact repo-relative path OR a bare basename, and the width of the BARE
+# form is deliberate: too-narrow matching reports a file the author just added as "not in your diff
+# — advisory" and the land goes through, which is precisely the hole this lint exists to close.
+# Too-wide costs a loud, nameable refusal. (memory: gate-default-decides-failure-direction)
+# A PATHED entry is NOT widened, though — see in_own's header.
 #
 # KNOWN LIMITS, stated rather than hidden. It scans bin/ hooks/ scripts/ only — the same population
 # the §3 guard scans; a .bats fixture reading TSV is test code and out of scope. It keys on the
@@ -165,11 +166,26 @@ discharged() {
   return 1
 }
 
-in_own() { # $1=repo-relative path · $2=own-set text · $3=1 if an own-set was supplied at all
-  [ "${3:-0}" = "1" ] || return 0                        # ABSENT ⇒ strict: anything may block
-  [ -n "$2" ] || return 1                                # SET-BUT-EMPTY ⇒ nothing of mine is here
-  printf '%s\n' "$2" | grep -qxF "$1" && return 0        # exact repo-relative path
-  printf '%s\n' "$2" | sed 's:.*/::' | grep -qxF "${1##*/}"   # …or a bare basename (see OWN-SCOPE)
+# THE BASENAME COLLAPSE, FIXED (2026-08-15, backlog c1a29f8ee045; land-arch §5.P2 arm 13 called the
+# width deliberate, which it was — but the SECOND leg basenamed the OWN-SET too, so a PATHED entry
+# `bin/z.sh` also matched a judged `scripts/z.sh`. That is not width in the direction the paragraph
+# above argues for: a caller who spelled the directory said which file is theirs. The bare-entry leg
+# is unchanged and still deliberately wide. Body shared VERBATIM with test-hermeticity-lint /
+# git-identity-lint / utc-stamp-lint; contract in full at test-hermeticity-lint.sh's in_own, and
+# tests/gate-ownscope-leak.bats pins the four copies identical.
+in_own() { # $1=path the lint knows · $2=own-set text · $3=1 if an own-set was supplied at all
+  [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
+  [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */*) [ "$1" = "$e" ] && return 0
+           case "$1" in */"$e") return 0 ;; esac ;;
+      *)   [ "${1##*/}" = "$e" ] && return 0 ;;
+    esac
+  done <<< "$2"
+  return 1
 }
 
 # lint_tree <root> <exemption-text> [<own-set>] → 0 clean · 1 violation · 2 NON-VERDICT
@@ -324,6 +340,11 @@ if [ "${1:-}" = "--selftest" ]; then
   chk 0 bare "" "a violation OUTSIDE the own-set blocked — a lander refused over a file they never touched" "scripts/other.sh"
   chk 1 bare "" "a violation INSIDE the own-set did not block — own-scope disabled the rule"              "scripts/z.sh"
   chk 1 bare "" "an own-set naming only the BASENAME did not block — the widening is inert"               "z.sh"
+  # THE COLLAPSE CONTROL (backlog c1a29f8ee045). The judged file is scripts/z.sh; an author who
+  # changed bin/z.sh spelled a DIFFERENT file and must not be refused over this one. RED pre-fix,
+  # because the second matching leg basenamed the own-set as well as the path. The case above and
+  # this one differ only in whether the entry carries a `/` — which is exactly the rule.
+  chk 0 bare "" "an own-set naming the same basename under ANOTHER dir blocked — the basename collapse" "bin/z.sh"
   chk 0 bare "" "an EMPTY own-set blocked — set-empty collapsed into unset"                               ""
   # NON-VERDICTS — never dressed up as a claim about the tree
   chk 2 nodir    "" "a tree with no scan dir did not exit 2 (LOUD)"
@@ -332,7 +353,7 @@ if [ "${1:-}" = "--selftest" ]; then
   [ "$?" = 2 ] || { echo "SELFTEST FAIL: a missing root did not exit 2 (LOUD)"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "tsv-pad-lint --selftest: 19/19 — RED on a bare unpadded reader, on a reasonless exemption, and on both stale-exemption shapes; GREEN on all eight recognizer spellings and on a reviewed exemption; own-scope blocks INSIDE / advises OUTSIDE / matches a bare basename / passes set-empty; LOUD (exit 2) on a missing root, a tree with no scan dir, and a scan that matched nothing."
+    echo "tsv-pad-lint --selftest: 20/20 — RED on a bare unpadded reader, on a reasonless exemption, and on both stale-exemption shapes; GREEN on all eight recognizer spellings and on a reviewed exemption; own-scope blocks INSIDE / advises OUTSIDE / matches a bare basename / does NOT match the same basename under another directory (the collapse control) / passes set-empty; LOUD (exit 2) on a missing root, a tree with no scan dir, and a scan that matched nothing."
     exit 0
   fi
   echo "tsv-pad-lint --selftest: FAILED — the lint does not discriminate."
