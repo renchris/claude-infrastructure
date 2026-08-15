@@ -11,6 +11,7 @@
 #   wrap-ledger.sh            → one-line human readout (the worst-open rung sentence)   [default]
 #   wrap-ledger.sh --machine  → KEY=value lines for hooks (RUNG=… DIRTY=… UNLANDED=… …)
 #   wrap-ledger.sh --full     → the dense SESSION LEDGER block (per CLAUDE.md §Session Close)
+#   wrap-ledger.sh --goal     → the ◎ goal-liveness line ALONE, or nothing (see § GOAL)
 #
 # ── RUNG (worst-open, priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅) ──
 #   This ledger computes SIX rungs {⛔, 🔧, 📦, 🚀, 👤, ✅}. Only 📤 (out-of-context) remains
@@ -114,6 +115,27 @@
 #   order branch → trunk → live, so 🚀 sits directly below 📦. 👤 asks a different question (the
 #   OPERATOR's queue) and ranks below both.
 #
+# ── § GOAL — the liveness ORACLE (E5, docs/research/goal-safe-2way-comms-2026-08-13.md §8/§9 B5) ──
+#   REPORTED, NEVER A RUNG. A live `/goal` is a normal state of a working session, so a rung on it
+#   would fire at every close of every goal-armed session — the alarm-polarity law that already
+#   bounds 👤, ⛔ and 🚀 here. What was missing is not a verdict but a MEASUREMENT: §2 measured
+#   84 goal sessions, 47 of them with ZERO evaluations, and could not decompose that class —
+#   "a goal deferred behind a REAL subagent/build is A2 working as designed", a goal starved behind
+#   a parked 4-hour watcher is the defect, and NOTHING ON DISK told them apart. Evaluation-liveness
+#   had no oracle, so neither the residual nor any fix to it could be measured. Two fields answer
+#   it: how many NON-SENTINEL `goal_status` attachments (evaluations) exist since the last arm, and
+#   what the most recent one said. `0 evals · armed 142m ago` IS the starvation pole, at the close
+#   where it can still be acted on, instead of in a 3-day corpus sweep that comes too late.
+#   Fields: GOAL_SRC (none · error · absent · live · cleared · failed) · GOAL_EVALS · GOAL_LAST
+#   (none · arm · unmet · met · clear · failed) · GOAL_LAST_T (HH:MM local, `-` if unparseable) ·
+#   GOAL_AGE_MIN · GOAL_LINE (the ◎ line; NON-EMPTY only for a LIVE goal, per the same law).
+#   The record dictionary is NOT re-implemented here — hooks/lib/goal-state.sh::goal_liveness owns
+#   it, shared with goal_live_condition's consumers, so two readers of the same records cannot
+#   drift (MEMORY.md make-the-actuator-the-arbiter).
+#   FAIL DIRECTION: no transcript ⇒ `none`; unreadable/no-jq/lib-too-old ⇒ `error`; readable with
+#   no goal records ⇒ `absent`. `absent` is a POSITIVE finding and is never manufactured from a
+#   read that did not happen — the same law as YOURS_SRC=none and LIVE_SRC=unknown.
+#
 # ── LAW ── fail-LOUD, never fail-silent-open: outside a git repo (or on a read error) this exits
 #   non-zero with a stderr note and NEVER prints RUNG=✅. A consumer that can't get a ledger must
 #   treat that as "cannot confirm", not as "complete". Pure-read of the REPO: the only bytes this
@@ -124,6 +146,7 @@
 #                    WRAP_SESSION_ID · CC_BACKLOG_BIN · CC_DECIDE_BIN · WRAP_LIVE_REPO ·
 #                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
 #                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
+#                    WRAP_GOAL_TIMEOUT_S · WRAP_PROJECT_ROOTS ·
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
 #                    WRAP_CACHE_LOCK_STALE_S
 set -uo pipefail
@@ -135,12 +158,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --machine) MODE="machine" ;;
     --full)    MODE="full" ;;
+    --goal)    MODE="goal" ;;
     --readout|"") MODE="readout" ;;
     --session) shift; SESSION_FLAG="${1:-}" ;;
     --session=*) SESSION_FLAG="${1#--session=}" ;;
     --transcript) shift; TRANSCRIPT_FLAG="${1:-}" ;;
     --transcript=*) TRANSCRIPT_FLAG="${1#--transcript=}" ;;
-    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout] [--session <sid>] [--transcript <path>]\n'; exit 0 ;;
+    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout|--goal] [--session <sid>] [--transcript <path>]\n'; exit 0 ;;
     *) printf 'wrap-ledger: unknown arg: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -213,6 +237,13 @@ done
 # Kill switch: WRAP_CACHE=off|0|no ⇒ never read, never write (the benchmark's control arm).
 WL_KEY=""; WL_FILE=""; WL_LOCK=""; WL_DIR=""; WL_LOCK_HELD=0
 WL_TRANSCRIPT="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
+# The transcript as an INPUT, kept out of the cache kill-switch's reach. $WL_TRANSCRIPT is a
+# CACHE-KEY variable and `WRAP_CACHE=off` BLANKS it (below) — so a term that read the transcript
+# through it would answer a different question under the benchmark's control arm than under the
+# ordinary one, which tests/wrap-ledger-memo.bats §2 catches as a byte-difference between the
+# cached and uncached ledgers. Caching is about how often a fact is recomputed, never about which
+# facts exist.
+GOAL_TRANSCRIPT="$WL_TRANSCRIPT"
 
 # "<mtime> <size>" for $1, or EMPTY when that cannot be read as exactly two integers. BSD stat
 # first (this fleet is macOS), GNU second — and VALIDATED rather than trusted, because GNU `stat -f`
@@ -505,6 +536,98 @@ SID_SRC="flag"
 [ -n "$SID" ] || { SID="${CLAUDE_SESSION_ID:-}"; SID_SRC="CLAUDE_SESSION_ID"; }
 [ -n "$SID" ] || SID_SRC=""
 
+# ── ◎ GOAL LIVENESS — is the armed /goal being EVALUATED? (E5; §9 B5) ───────────────────────────
+# REPORTED, NEVER A RUNG. See the header's § GOAL for why, what each field means, and the fail
+# directions. Everything below is mechanism.
+#
+# Transcript: the seven Stop-hook callers export $WRAP_TRANSCRIPT (they already do — it is the
+# memo key), so the hot path costs one grep + one jq over a file goal-inert-watch.sh already
+# greps at the same Stop, and it is memoized per event like every other field. The PULL path
+# (/wrap, CLI) passes nothing, so it resolves the transcript from a session id — but ONLY there:
+# a `find` across four account roots must never land on the Stop path.
+GOAL_SRC="none"; GOAL_EVALS=0; GOAL_LAST="none"; GOAL_LAST_T="-"; GOAL_AGE_MIN=0
+GOAL_COND=""; GOAL_LINE=""; GOAL_TP=""
+
+# HH:MM local for an epoch, or "" — the same BSD-then-GNU ladder (and the same reason) as
+# _wl_stat_ms: this fleet is macOS, the suites run on both.
+_wl_hhmm() {
+  local e="$1" o
+  case "$e" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$e" -gt 0 ] || return 1
+  o="$(date -r "$e" +%H:%M 2>/dev/null || true)"
+  [ -n "$o" ] || o="$(date -d "@$e" +%H:%M 2>/dev/null || true)"
+  [ -n "$o" ] || return 1
+  printf '%s' "$o"
+}
+
+# The session id that names a transcript is NOT necessarily the one that names operator steps:
+# $CLAUDE_CODE_SESSION_ID is set in a tool-call shell where $CLAUDE_SESSION_ID is not (measured
+# 2026-08-15). It is used HERE and nowhere else — the 👤/⛔ rungs keep their own ladder, because a
+# wrong id there attributes a SIBLING's operator steps to you (commands/wrap.md states that rule),
+# while here a wrong id can only name a transcript that does not exist ⇒ GOAL_SRC=none.
+_wl_find_transcript() {
+  local sid="$1" r f
+  [ -n "$sid" ] || return 1
+  for r in ${WRAP_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects \
+                                 $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}; do
+    [ -d "$r" ] || continue
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+
+compute_goal_liveness() {
+  local lib tsv state evals last epoch cond now age hhmm
+  GOAL_TP="$GOAL_TRANSCRIPT"
+  if [ -z "$GOAL_TP" ] && [ "$MODE" != "machine" ]; then
+    GOAL_TP="$(_wl_find_transcript "${SID:-${CLAUDE_CODE_SESSION_ID:-}}" || true)"
+  fi
+  [ -n "$GOAL_TP" ] || { GOAL_SRC="none"; return 0; }
+
+  # ONE arbiter for the record dictionary — hooks/lib/goal-state.sh, shared with every other
+  # goal-reading surface. Re-implementing the sentinel/met/failed table here is how two readers
+  # of the same records start disagreeing (MEMORY.md make-the-actuator-the-arbiter).
+  lib="$(dirname "$0")/../hooks/lib/goal-state.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/goal-state.sh"
+  [ -f "$lib" ] || { GOAL_SRC="error"; return 0; }
+  # shellcheck source=../hooks/lib/goal-state.sh
+  # shellcheck disable=SC1090,SC1091
+  . "$lib" 2>/dev/null || { GOAL_SRC="error"; return 0; }
+  command -v goal_liveness >/dev/null 2>&1 || { GOAL_SRC="error"; return 0; }
+
+  # An unreadable transcript is `error`, never `absent` — absent is the POSITIVE finding "this
+  # session never armed a goal", and a read that never happened must not launder into it.
+  # Bounded like every other store read on this path — and `timeout` takes a COMMAND, not a shell
+  # function, so the read runs in a child that sources the lib itself. The single quotes are the
+  # point: $1/$2 are that child's positional parameters (the lib path and the transcript), passed
+  # as arguments so no value is ever re-parsed as script text.
+  # shellcheck disable=SC2016
+  tsv="$(_bounded "${WRAP_GOAL_TIMEOUT_S:-5}" bash -c '. "$1"; goal_liveness "$2"' _ "$lib" "$GOAL_TP" 2>/dev/null)" \
+    || { GOAL_SRC="error"; return 0; }
+  IFS=$'\t' read -r state evals last epoch cond <<< "$tsv"
+  case "${evals:-}" in ''|*[!0-9]*) evals=0 ;; esac
+  case "${epoch:-}" in ''|*[!0-9]*) epoch=0 ;; esac
+  GOAL_SRC="${state:-error}"; GOAL_EVALS="$evals"; GOAL_LAST="${last:-none}"; GOAL_COND="$cond"
+
+  hhmm="$(_wl_hhmm "$epoch" || true)"; [ -n "$hhmm" ] && GOAL_LAST_T="$hhmm"
+  now="$(date +%s 2>/dev/null || echo 0)"; case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  if [ "$epoch" -gt 0 ] && [ "$now" -gt "$epoch" ]; then age=$(((now - epoch) / 60)); else age=0; fi
+  GOAL_AGE_MIN="$age"
+
+  # THE LINE — emitted for a LIVE goal only. A met/cleared/failed goal keeps its FIELDS (that is
+  # what makes the pole measurable after the fact) but spends no line: a "goal met" note repeated
+  # at every close for the rest of the session is an alarm that always fires, and carries exactly
+  # as many bits as one that cannot (MEMORY.md alarm-polarity).
+  [ "$GOAL_SRC" = "live" ] || return 0
+  local when="@${GOAL_LAST_T}"; [ "$GOAL_LAST_T" = "-" ] && when=" (time unknown)"
+  if [ "$GOAL_EVALS" -eq 0 ]; then
+    GOAL_LINE="◎ goal: 0 evals · armed${when} (${GOAL_AGE_MIN}m ago) — armed but NEVER judged; if background work is parked, that is what is deferring it"
+  else
+    GOAL_LINE="◎ goal: ${GOAL_EVALS} eval(s) · last ${GOAL_LAST}${when} (${GOAL_AGE_MIN}m ago)"
+  fi
+}
+
 # cc-backlog resolution: env seam first (test stub), then the sibling search order.
 _resolve_backlog_bin() {
   if [ -n "${CC_BACKLOG_BIN:-}" ]; then printf '%s' "$CC_BACKLOG_BIN"; return 0; fi
@@ -779,6 +902,10 @@ compute_live_layer() {
 # close. Nothing here weakens a rung the session can actually act on: dirty tree, DoD remainder and
 # unlanded commits are unchanged and still outrank ✅.
 RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing to do."
+# The goal term is computed BEFORE the ladder and consumed by NONE of it — it is a report, not a
+# rung (§ GOAL). Unconditional like ⛔'s read, and for the opposite reason: ⛔ cannot ride the
+# ✅-eligible path because it outranks everything, this one cannot because it ranks nowhere at all.
+compute_goal_liveness
 # ⛔ IS CHECKED FIRST AND UNCONDITIONALLY — it outranks every rung below, so unlike 👤 and 🚀 it
 # cannot ride the ✅-eligible path where a worse rung has already decided the answer. That costs ONE
 # bounded fork on every turn close (this is a Stop-hook path) and it is the price of a rung that
@@ -884,6 +1011,12 @@ emit_machine() {
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
   printf 'BLOCKED=%s\n' "$BLOCKED"
   printf 'BLOCKED_SRC=%s\n' "$BLOCKED_SRC"
+  printf 'GOAL_SRC=%s\n' "$GOAL_SRC"
+  printf 'GOAL_EVALS=%s\n' "$GOAL_EVALS"
+  printf 'GOAL_LAST=%s\n' "$GOAL_LAST"
+  printf 'GOAL_LAST_T=%s\n' "$GOAL_LAST_T"
+  printf 'GOAL_AGE_MIN=%s\n' "$GOAL_AGE_MIN"
+  printf 'GOAL_LINE=%s\n' "$GOAL_LINE"
   printf 'TRUNK=%s\n' "${TRUNK:-none}"
   printf 'SHAS=%s\n' "$SHAS"
 }
@@ -946,6 +1079,26 @@ emit_full() {
            else                            blocked_disp="none — no decision of mine is open"; fi ;;
   esac
   printf 'Blocked on you: %s\n' "$blocked_disp"
+  # ◎ The goal row. Reported for EVERY state, unlike the ◎ line — the row is the oracle itself
+  # (zero-eval vs healthy-deferral, § GOAL), and a row that vanished on the cleared/absent cases
+  # would answer "is this session's goal being judged?" with silence in exactly the cases where
+  # silence is indistinguishable from a broken reader.
+  local goal_disp cond_disp
+  cond_disp="$GOAL_COND"; [ "${#cond_disp}" -gt 60 ] && cond_disp="${cond_disp:0:57}..."
+  case "$GOAL_SRC" in
+    live)    if [ "$GOAL_EVALS" -eq 0 ]; then
+               goal_disp="LIVE · 0 evaluations since arm@${GOAL_LAST_T} (${GOAL_AGE_MIN}m) — NEVER judged"
+             else
+               goal_disp="LIVE · ${GOAL_EVALS} evaluation(s) · last ${GOAL_LAST}@${GOAL_LAST_T} (${GOAL_AGE_MIN}m)"
+             fi
+             [ -n "$cond_disp" ] && goal_disp="${goal_disp} · \"${cond_disp}\"" ;;
+    cleared) goal_disp="cleared (${GOAL_LAST}@${GOAL_LAST_T}) after ${GOAL_EVALS} evaluation(s)" ;;
+    failed)  goal_disp="FAILED — the evaluator judged it impossible@${GOAL_LAST_T}; CC cleared it" ;;
+    absent)  goal_disp="none armed in this session" ;;
+    error)   goal_disp="unknown — transcript/lib unreadable (not counted)" ;;
+    *)       goal_disp="unknown — no transcript on this path (not counted)" ;;
+  esac
+  printf 'Goal (◎):       %s\n' "$goal_disp"
   printf 'Rung:           %s\n' "$RUNG"
   printf 'Next:           %s\n' "$(rung_next)"
 }
@@ -982,6 +1135,11 @@ case "$MODE" in
     fi
     ;;
   full)    emit_full ;;
+  # The ◎ line ALONE, so a pull surface can print it beside the rung without the rung line growing
+  # a second clause (the default readout is ONE line — tests/wrap-ledger.bats pins that, and a
+  # close's line 1 is the rung, unhedged, per CLAUDE.md §Session Close). Nothing to say ⇒ NOTHING
+  # printed, rc 0: a `/wrap` in a goal-less session must not gain a line of chrome.
+  goal)    [ -n "$GOAL_LINE" ] && printf '%s\n' "$GOAL_LINE" ;;
   *)       printf '%s\n' "$READOUT" ;;
 esac
 _wl_lock_release

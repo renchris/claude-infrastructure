@@ -12,6 +12,7 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 ## Run
 
 - Default (one-line readout): !`scripts/wrap-ledger.sh 2>&1 || true`
+- Goal liveness (◎ — prints NOTHING unless a `/goal` is live): !`scripts/wrap-ledger.sh --goal 2>&1 || true`
 - Full ledger (with `--full`): !`[ "$ARGUMENTS" = "--full" ] && scripts/wrap-ledger.sh --full 2>&1 || true`
 - Operator steps (silver-platter block): !`hooks/operator-readout.sh --render 2>&1 || true`
 
@@ -60,6 +61,40 @@ ADDS has no link and is in no tree the box can reach: every `[ -f x ] && . x` / 
 silently skips, and the feature is a no-op rather than a stale one. `LIVE_ADDS` > 0 therefore breaches
 at lag 1 (2026-08-09, backlog `99b715f31a98` — measured on `scripts/lib/pane-spawn-log.sh`, where this
 ledger read "BEHIND 7, within budget (25)" over a feature that was doing nothing at all).
+
+## ◎ Goal liveness — is your `/goal` actually being EVALUATED?
+
+**Not a rung, and deliberately so.** A live `/goal` is a normal state of a working session, so a
+rung on it would fire at every close of every goal-armed session (the alarm-polarity law that
+bounds `👤`/`⛔`/`🚀`). What the `◎` line adds is a MEASUREMENT nothing else on disk carried:
+`/goal` registers a `type:"prompt"` Stop hook, and CC deletes it for the duration of any Stop where
+the task registry holds non-terminal background work — restoring it in a `finally`, so the registry
+reads healthy before and after and is wrong only *during*. Measured across 84 goal sessions, **47
+had ZERO evaluations**, and that class could not be decomposed after the fact: a goal deferred
+behind a real subagent or build is the mechanism working as designed, a goal starved for hours
+behind a parked 4-hour `cc-await-ping` is the defect, and nothing distinguished them
+(`docs/research/goal-safe-2way-comms-2026-08-13.md` §2, E5 → §9 B5).
+
+The oracle is two facts, both already in the transcript — how many NON-SENTINEL `goal_status`
+attachments (evaluations) exist **since the last arm**, and what the most recent one said:
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `◎ goal: 0 evals · armed@12:31 (142m ago) — armed but NEVER judged` | the **starvation pole**: the goal has been live for over two hours and the evaluator has never run | look for the parked background task deferring it (`goal-inert-watch` names it when it can); kill it, or keep the session going with `~/.claude/hooks/session-continue.sh set "<next step>"`, which the deferral cannot touch |
+| `◎ goal: 3 eval(s) · last unmet@14:07 (12m ago)` | healthy — the goal is being judged, and it is not met yet | nothing; the count is the evidence the mechanism is live |
+| a high count over a world that has not changed | the **spin pole** (measured worst case: 90 unmet evaluations in 76 minutes, one forced turn every ~51s) | 82% of met goals are met on evaluation #1 and the met rate falls to 27% at ≥10 — re-judging an unchanged world is grinding, not converging. Re-scope the condition or clear it |
+| *(nothing printed)* | no `/goal` is live in this session | nothing |
+
+`--full` carries the same fact as a `Goal (◎):` row in **every** state — including `none armed in
+this session` and `unknown` — because a row that vanished on the quiet cases would answer "is this
+being judged?" with a silence indistinguishable from a broken reader. `--machine` emits
+`GOAL_SRC` / `GOAL_EVALS` / `GOAL_LAST` / `GOAL_LAST_T` / `GOAL_AGE_MIN` / `GOAL_LINE`.
+
+Unlike `👤`, this **is** computed on the pull path: with no `--transcript`, the ledger resolves one
+from `$CLAUDE_CODE_SESSION_ID` (set in a tool-call shell, where `$CLAUDE_SESSION_ID` is not). That
+is not the `.last-session-id` guess rejected above — the harness names the calling session itself,
+and a miss can only fail to find a file, never attribute a sibling's goal to you. The Stop path
+never does that search: it uses the `$WRAP_TRANSCRIPT` it already exports for the memo key.
 
 Two rungs the ledger CANNOT derive from git — they are model-state you overlay when true, and
 they dominate the fact rung:
