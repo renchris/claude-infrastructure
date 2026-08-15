@@ -76,6 +76,15 @@ The shape a desk-side fix would take (one comparison, before the four questions)
   handles: its `verdict=cloud-ineligible` arm treats such a row as a **skip, not a failure** — the
   item stays `open` and claims locally untouched, which is exactly the desired end state.
 
+🚨 **That comparison is necessary and NOT sufficient — measured 2026-08-15, one day later.** Item
+`9333991e4544` is labelled project `claude-infrastructure`, which *is* the repo a cloud fire
+attaches, so the conjunct above passes — and its subject is doc_classifier's nightly scale-run, so
+the item was unworkable on arrival exactly as this one was. The label is not the subject. The
+discriminator that refuses both is the project named in the item's own TEXT versus its `project`
+field, both already on the row; the measurement, the two `cc-eligible` resolutions, and the caveats
+are in `venue-foreign-subject-repo-2026-08-15.md`. Implement the conjunct from the text, not from
+the label alone.
+
 ## The item itself
 
 `1cc794cbc6c4` is **not adjudicated**. Its premise — authored `FrozenFile.source_type` disagreeing
