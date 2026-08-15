@@ -412,10 +412,21 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   [ "$status" -eq 0 ]
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved: gates ran, reap proceeded
   grep -q "is SHARED by 2 members" "$LOGF"                   # and it was classified as shared
-  sleep 0.5
+  # BOUNDED POLL, not a fixed sleep — the only timing assumption in this suite, and it was load-
+  # sensitive. The reap writes this line asynchronously; `sleep 0.5` holds on an idle desk and fails
+  # inside the land gate's smoke, which runs 74 suites concurrently (observed 2026-08-15: RED here,
+  # then GREEN on the gate's own exoneration re-run — intermittence with no behaviour change, which
+  # ship-land correctly refuses to treat as a flake). Nothing is weakened: the assertions below are
+  # byte-identical and still REQUIRE the line: the poll only replaces a guess about how long to wait.
+  for ((_i = 0; _i < 100; _i++)); do
+    if grep -q "worktree kept (shared, not owned" "$LOGF"; then break; fi
+    sleep 0.1
+  done
   [ -d "$shared" ]                                           # ← the guard: tree SURVIVES the reap
-  grep -q "worktree kept (shared, not owned" "$LOGF"
-  ! grep -q "worktree removed: $shared" "$LOGF"
+  grep -q "worktree kept (shared, not owned" "$LOGF" || false
+  # `|| false` REVIVES the negation: bash exempts a `!`-inverted command from errexit, so without it
+  # this line can never fail and the data-loss guard it names is asserted only in appearance.
+  ! grep -q "worktree removed: $shared" "$LOGF" || false
 }
 
 # (B2) a config cwd recorded for a SOLE occupant is genuinely that member's ⇒ owned ⇒ removable.
