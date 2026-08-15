@@ -783,11 +783,11 @@ lint spelling its presence test `${CC_X_OWN:-}` cannot express it.
 
 | # | arm | verdict | evidence |
 |---|---|---|---|
-| 1 | test-hermeticity | does not leak | all ten blocking counters increment inside `in_own`; verdict is their sum (`:1580`). Latent: the own-set is basenamed (`:1289`), so a same-named file in another dir would block — **no basename collisions exist in the tree today** (checked across `bin/ scripts/ hooks/ tests/`) |
+| 1 | test-hermeticity | does not leak | all ten blocking counters increment inside `in_own`; verdict is their sum (`:1580`). ~~Latent: the own-set is basenamed (`:1289`), so a same-named file in another dir would block — **no basename collisions exist in the tree today** (checked across `bin/ scripts/ hooks/ tests/`)~~ — **FIXED 2026-08-15, backlog `c1a29f8ee045`; see §5.P2b below** |
 | 2 | wall-clock | does not leak | `bombs`/`stuck` inside `in_own`; verdict `:153`. Own-set population = judged population = `tests/*.bats`, so the basename collapse is 1:1 |
 | 3 | AF_UNIX | does not leak | `bad`/`stuck` inside `in_own`; verdict `:175`. Same 1:1 population |
-| 4 | git-identity | does not leak | `bad`/`stuck` inside `in_own`; verdict `:335`. Same latent basename vector as arm 1, no live collisions |
-| 5 | UTC-stamp | does not leak | `bad`/`stuck` inside `in_own`; verdict `:155`. Matches the PATH, not the basename — which is why ship-land strips the leading component (`:1904`). Separate defect filed, see below |
+| 4 | git-identity | does not leak | `bad`/`stuck` inside `in_own`; verdict `:335`. ~~Same latent basename vector as arm 1, no live collisions~~ — **FIXED 2026-08-15, backlog `c1a29f8ee045`; see §5.P2b** |
+| 5 | UTC-stamp | does not leak | `bad`/`stuck` inside `in_own`; verdict `:155`. Matches the PATH, not the basename — which is why ship-land ~~strips~~ **stripped** the leading component (`:1904`). Separate defect filed, see below — **FIXED 2026-08-15, backlog `c1a29f8ee045`, and the strip is gone; see §5.P2b** |
 | 6 | pipefail-SIGPIPE | **LEAKED — FIXED** | `${CC_PIPEFAIL_OWN:-}` (`:327`) — two-state. Measured pre-fix: empty own-set ⇒ rc 1 over a sibling's file |
 | 7 | /Users/chrisren/.claude/bin/cc-bats dead-assertion | does not leak | no own-set at all: ship-land hands it an explicit file list, and the lint cannot judge a file it was not given. The tightest of the fifteen |
 | 8 | script-dir self-path | does not leak | `bad` AND the stuck-ratchet half both inside `in_own` (`:346-365`); verdict `:400` |
@@ -795,7 +795,7 @@ lint spelling its presence test `${CC_X_OWN:-}` cannot express it.
 | 10 | unattended-PATH | **LEAKED — FIXED** | the stuck-ratchet `return 1` (`:896`) consulted neither `$own` nor `$have_own`. Measured pre-fix: rc 1 in **all three** own-states, including one naming a different file |
 | 11 | permission-gate | does not leak | `bad`/`stuck` inside `in_own`; verdict `:475` |
 | 12 | chromium-bundle | **LEAKED — FIXED** | `${CC_CHROMIUM_OWN:-}` (`:90`) — two-state, same defect as arm 6. Its own `--selftest` **encoded the defect**: the harness defaulted the own-set to `""` and set the variable unconditionally, so every case labelled "strict" was in fact running SET-BUT-EMPTY and passing only because the lint conflated them the same way. A control that encodes the defect cannot catch it |
-| 13 | TSV field-collapse | does not leak | `bad`/`stuck` inside `in_own`; verdict `:258`. Its basename leg is deliberately over-wide and documented (`:64-67`) — that direction costs a loud nameable refusal, not a silent pass |
+| 13 | TSV field-collapse | does not leak | `bad`/`stuck` inside `in_own`; verdict `:258`. Its basename leg is deliberately over-wide and documented (`:64-67`) — that direction costs a loud nameable refusal, not a silent pass. **Half-narrowed 2026-08-15 (`c1a29f8ee045`): the BARE leg keeps its width; the PATHED leg no longer basenames the own-set. See §5.P2b** |
 | 14 | .bats shellcheck | does not leak | LINE-scoped; `bad` inside `in_own` and the scanned set is pre-narrowed to suites carrying an own line (`:627-641`). Its one file-scoped path — an UNANALYZABLE suite whose shellcheck run aborted — is argued at `:62-71` and is a deliberate exception, not a leak |
 | 15 | unguarded-kill | **by design, not a leak** | strict whole-corpus, no own-set. Declared at `ship-land.sh:2425-2429` with its reason (the introducing commit swept the corpus to zero, so the strictest rule is the free one) and a named release. Its correctness rests on an unenforced runtime invariant — baseline stays 0 — which is filed, not fixed: weakening it would lower the bar, which P2 forbids |
 
@@ -827,6 +827,57 @@ own, since an undefined `own_run` there is a command-not-found swallowed by the 
   population ⊆ ship-land pathspec was verified for all fifteen under the default environment.
   Two unread widening SEAMS would break that if anyone ever set them — `CC_PERMGATE_SET` and
   `CC_TSVPAD_DIRS` move a judged population without moving the pathspec. Filed.
+
+### §5.P2b — the own-set BASENAME COLLAPSE, closed
+
+*(Implementation note, 2026-08-15, backlog `c1a29f8ee045`. INTEGRATE-only: §5.P2's audit table
+above is amended in place; this records what the four arms now do and why the row's own reasoning
+was not enough to leave it filed.)*
+
+**Why a "latent" row was worth re-opening.** The audit closed arms 1 and 4 with *"no basename
+collisions exist in the tree today (checked across `bin/ scripts/ hooks/ tests/`)"* — a hand check,
+on one day, of a property of the **tree**. Nothing in the gate re-checks it, so the first
+`bin/x.sh` + `scripts/x.sh` pair anyone adds re-opens the defect silently, and its failure mode is
+the exact one P2 exists to remove: a land refused over a file it never touched. The audit measured
+that class at 66% → 30% land rate. A guard that depends on nobody choosing a name twice is not a
+guard; it is a coincidence with a date on it.
+
+**What collapsed, in each of the four.** Arms 1, 4 and 13 basenamed the own-set (`sed 's:.*/::'`)
+and compared it to a basename, so an entry `scripts/foo.sh` matched a judged `tests/foo.sh`. Arm 5
+had the same defect one level out: it matches paths correctly, but scans `bin/`, `hooks/` and
+`scripts/` as three separate roots and reported `rel` relative to EACH, so `ship-land.sh` stripped
+the leading component (`sed 's:^[^/]*/::'`) to make the two sides meet — merging the three
+namespaces on the way, so `bin/cc-foo` and `scripts/cc-foo` became the same entry.
+
+**The contract now, one body shared verbatim by all four lints:** a PATHED entry (contains `/`)
+matches the judged path exactly or as a suffix on a **component boundary**; a BARE entry (no `/`)
+is a basename and still matches in any directory. The bare form's width is deliberate and
+unchanged — callers do pass bare names, and the too-narrow direction reports a real violation as
+advisory and lets it land (arm 13's `:64-67` argument, which was right about the BARE leg and
+over-general about the pathed one). ship-land's utc strip is gone, so all four arms now receive the
+same unstripped repo-relative own-set `git diff --name-only` produces; the two halves are one fix.
+
+**Four copies, deliberately, and now pinned.** These lints source nothing correctness-critical:
+utc-stamp and tsv-pad source nothing at all, and the other two take `gate-memo` through an optional
+`. … || true`. A shared `scripts/lib/` predicate would arrive through that same optional path and
+degrade **silently** on a box whose live layer has not converged on the new file — and this repo IS
+the live layer's source, where an ADDED file gets no converge budget at all. So the body is four
+literal copies, and `tests/gate-ownscope-leak.bats` pins them byte-identical (plus two positive
+assertions, so four identical copies of a re-introduced `sed 's:.*/::'` cannot pass the comparison).
+
+**What the controls used to prove, and now do.** Every own-scope case in the four suites passed
+ship-land's real own-set form — `tests/zz-fixture.bats` — against a fixture that lived in
+`$FIX/leak/` or `$d/leak/`. They were green because the matcher basenamed both sides, so the
+directory in the entry was decoration and `scripts/zz-fixture.bats` would have passed identically:
+**a control that cannot tell the two apart cannot catch a matcher that cannot either.** The
+fixtures now sit under directories really named `tests`/`bin`, and each arm carries the paired
+negative. All four go RED against their own pre-fix bodies (verified per arm), which is what makes
+them controls rather than decoration. Selftest counts moved deliberately: hermeticity 120→123,
+git-identity 29→31, utc-stamp 20→22, tsv-pad 19→20.
+
+**A side effect worth naming.** The old body cost three forks per call (`printf | sed | grep`), and
+hermeticity calls it ten times per suite. The replacement is pure bash with no pipe — which also
+retires the paragraph that arm's copy carried about `pipefail` turning a MATCH into 141.
 
 **What the fix does NOT claim.** The spec's "gate-red ≤10%/day within two weeks" is a trailing
 outcome no single session can observe, and it is not claimed here. What is claimed is mechanism

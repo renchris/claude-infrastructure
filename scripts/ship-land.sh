@@ -2398,8 +2398,15 @@ run_gate() {  # $1=range → 0 green / 1 red
   if [[ -x "$UTC_LINT" ]]; then
     local uown=""
     if [[ "${SHIP_LAND_UTC_OWN_SCOPE:-on}" != "off" ]]; then
-      # Paths are matched relative to the scan root, which is how the lint reports them.
-      uown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null | sed 's:^[^/]*/::' || true)"
+      # REPO-RELATIVE, and the `| sed 's:^[^/]*/::'` that used to strip the leading component is
+      # GONE (2026-08-15, backlog c1a29f8ee045). The lint scans bin/, hooks/ and scripts/ as three
+      # separate roots, so the strip was how a repo-relative path was made to match what the lint
+      # reported — and it MERGED the three namespaces on the way: `bin/cc-foo` and `scripts/cc-foo`
+      # both became `cc-foo`, so a diff touching one blocked the land over the other. Latent only
+      # because no basename collides across those dirs today, which is a property of the tree.
+      # utc-stamp-lint's in_own now matches the FULL scanned path on a component boundary, so the
+      # unstripped path is what it wants; the two changes are one fix and must land together.
+      uown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
       [[ -n "$uown" ]] && echo "→ gate: utc-stamp own-scope — blocking on $(printf '%s\n' "$uown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: UTC timestamp-contract ratchet (a Z suffix from a non-UTC clock)" >&2
