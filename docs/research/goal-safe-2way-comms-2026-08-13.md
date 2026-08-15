@@ -261,7 +261,7 @@ architecture needed one new *contract* (idle-scoped deferral), not new machinery
 | B2 | `3118d712f668` | ~~Register W2 (same hook, Stop, `asyncRewake:true`) as a c10 migration across all five config dirs, claim-guarded~~ **DONE 2026-08-16** → `migrations/0012-…` + `_armed_already` | B1 green ✓ |
 | B3 | `6290f0ee6b52` | `cc-await-ping --idle-scoped` (C1–C5) + the `validate-bash` carve-out (C6) + producer messaging flips (C7: drain nudge, deny text, wake floor) + suites — red-proof BOTH poles: a mutant that never self-cancels must starve a fixture goal; a mutant that never defers must spin one | none |
 | B4 | `b33f424c747b` | E1 + E2 message fixes | none (E1 standalone; E2's final text references B3's form) |
-| B5 | `b0ce82d745be` | Goal-liveness oracle in `wrap-ledger.sh` + `/wrap` (E5) | none |
+| B5 | `b0ce82d745be` | Goal-liveness oracle in `wrap-ledger.sh` + `/wrap` (E5) | none — **BUILT 2026-08-15, `78791cd8`** |
 
 Acceptance for the whole architecture, as disk-truth reads: in a fixture wave, non-sentinel
 evaluations per session ≈ external events ± 1 (today: 90 for ~2 events) · fleet p95 longest-unmet-run
@@ -269,6 +269,25 @@ evaluations per session ≈ external events ± 1 (today: 90 for ~2 events) · fl
 holding a goal ≥30 min with ≥1 clean Stop → explained by A2-legitimate work or ~0 (needs B5 to be
 measurable) · a goal-armed idle session receives a 2nd and 3rd ping without an operator keystroke
 (today: guaranteed deaf after the birth watcher is spent).
+
+**B5 BUILT — 2026-08-15, `78791cd8`.** The acceptance clause above says the zero-eval class needs
+B5 "to be measurable"; it now is, per SESSION and at the CLOSE rather than only in a corpus sweep.
+`hooks/lib/goal-state.sh::goal_liveness` counts the non-sentinel `goal_status` attachments **since
+the last arm** and reports the last verdict; `scripts/wrap-ledger.sh` emits
+`GOAL_SRC/EVALS/LAST/LAST_T/AGE_MIN/LINE` (`--machine`), a `Goal (◎):` row (`--full`) and the ◎
+line alone (`--goal`), which `/wrap` prints on its default path. Three design points worth keeping:
+
+- **Reported, never a rung.** A live goal is a normal state, so a rung would fire at every close of
+  every goal-armed session (the alarm-polarity law that bounds 👤/⛔/🚀 in that ledger). The ◎ LINE
+  is emitted for a LIVE goal only, for the same reason; the FIELDS are emitted in every state,
+  because the fields ARE the measurement §2 lacked.
+- **Since the last arm, never over the file.** A session that armed, met and re-armed a goal is on
+  its second goal; carrying the first's evaluations into the second's count reports a healthy
+  number over a goal that has never been judged — the exact false negative this closes.
+- **The pole is now visible where it can be acted on**: `◎ goal: 0 evals · armed@12:31 (142m ago)
+  — armed but NEVER judged` at a close, instead of "47 of 84, decomposition unknowable" three days
+  later. The remaining acceptance rows still need B3; this one is now readable per session.
+  (E5's own row in §8 is thereby closed; E1/E2/E3/E4 remain open under B4.)
 
 ## 10 · What was deliberately NOT designed
 
