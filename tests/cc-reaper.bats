@@ -1322,23 +1322,70 @@ EOF
 @test "garbage --reap: exactly the residue dies — orphan ps/zsh/bash + stuck wrapper; nothing protected" {
   mk_garbage_fixtures
   # dead-lead watchdog: lead 999999 is dead by construction; the daemon pid must be LIVE for the
-  # arm to bother, so use OUR OWN pid (fixture-kill mode skips the args identity check).
-  printf '%s' "$$" > "$D/gs-wd/sid-a.daemon"; printf '999999' > "$D/gs-wd/sid-a.pid"
+  # arm to bother. A CHILD we spawn, never "$$": this test's own pid is an ANCESTOR of the sweep it
+  # is about to run, and the arm now refuses those outright (see the ancestor case below), so
+  # asserting a TERM on "$$" would from here on assert the guard is broken.
+  sleep 120 & GSPID=$!
+  printf '%s' "$GSPID" > "$D/gs-wd/sid-a.daemon"; printf '999999' > "$D/gs-wd/sid-a.pid"
   # a watchdog whose daemon is ALREADY dead must be ignored (nothing to reap)
   printf '999998' > "$D/gs-wd/sid-b.daemon"; printf '999997' > "$D/gs-wd/sid-b.pid"
   run "$R" garbage --reap
+  kill "$GSPID" 2>/dev/null || true
   [ "$status" -eq 0 ]
   # exact TERM set over the closed world:
   #   90001 orphan-ps (25:00 ≥ 60s) · 90003 orphan-zsh (no claude below) ·
-  #   90006 orphan-bash (not whitelisted) · 90007 stuck-wrapper (no live claude child) · $$ dead-lead watchdog
+  #   90006 orphan-bash (not whitelisted) · 90007 stuck-wrapper (no live claude child) · the child watchdog
   # and the protections each have a twin candidate that must NOT appear:
   #   90002 too-young ps · 90004 zsh WITH a live claude child · 90005 whitelisted daemon ·
   #   90008 wrapper WITH a live claude child · 90013 the watchdog class is file-driven, never argv-driven
   got_terms="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
-  want_terms="$(printf '%s\n' 90001 90003 90006 90007 "$$" | sort -n | tr '\n' ' ')"
+  want_terms="$(printf '%s\n' 90001 90003 90006 90007 "$GSPID" | sort -n | tr '\n' ' ')"
   [ "$got_terms" = "$want_terms" ]
-  # the KILL escalation reached only the one pid that truly exists (ours)
-  ! awk '$1=="KILL"{print $2}' "$KLOG" | grep -qvx "$$"
+  # the KILL escalation reached only the one pid that truly exists (the child)
+  ! awk '$1=="KILL"{print $2}' "$KLOG" | grep -qvx "$GSPID"
+}
+
+# ── THE ANCESTOR GUARD (2026-08-15, backlog 8efd655b0fe1). The kill discipline enumerates what must
+# not be touched by IDENTITY — claude, kitty, a whitelisted daemon — and every clause names somebody
+# else. Nothing said "not the tree we are running inside", and the classifier selects on SHAPE: on a
+# GitHub Actions macOS runner the service is a launchd-parented `/bin/bash .../runsvc.sh`, i.e.
+# textbook `orphan-bash`, and tests/reap-sweep-bounds.bats killed the runner out from under its own
+# job in 6 of 6 cut shards. The pair below is one mechanism proved in both directions: identical
+# candidate shape, and the ONLY difference is whether the pid is in this sweep's own pid chain.
+@test "garbage: an ANCESTOR of the sweep is REFUSED, and a same-shaped non-ancestor is not" {
+  mk_garbage_fixtures
+  # sid-anc: this test's pid — an ancestor of the cc-reaper the next line runs. MUST be refused.
+  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '999999' > "$D/gs-wd/sid-anc.pid"
+  # sid-ctl: a child we spawn — same class, same fixture shape, NOT an ancestor. MUST be signalled.
+  sleep 120 & GSPID=$!
+  printf '%s' "$GSPID" > "$D/gs-wd/sid-ctl.daemon"; printf '999998' > "$D/gs-wd/sid-ctl.pid"
+  run "$R" garbage --reap
+  kill "$GSPID" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  # the control fired — without this the refusal below could be a fixture that reaches nothing
+  awk '$1=="TERM"{print $2}' "$KLOG" | grep -qx "$GSPID" || {
+    echo "the NON-ancestor control was never signalled — the fixture proves nothing"; return 1; }
+  # and the ancestor never reached the actuator's collector at all
+  if awk '{print $2}' "$KLOG" | grep -qx "$$"; then
+    echo "the sweep signalled its own ancestor $$ — the CI-runner kill is back"; return 1
+  fi
+}
+
+@test "garbage DRY-RUN reports the refusal too — the two modes may not disagree" {
+  mk_garbage_fixtures
+  printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '999999' > "$D/gs-wd/sid-anc.pid"
+  run "$R" garbage
+  [ "$status" -eq 0 ]
+  # A dry run that printed "would reap" over a pid REAP refuses is a false report of what happens.
+  echo "$output" | grep -q "REFUSED — this sweep runs inside it.*pid=$$" || {
+    echo "dry-run did not mark the ancestor as refused: $output"; return 1; }
+  # An `A && { …; return 1; }` here is DEAD under errexit (the gate's dead-assertion ratchet names
+  # it [and-absorbed], and bats-assert-liveness-fix.py declines this shape rather than guess), so
+  # the negative half is written as an if-statement, which consumes the status instead of absorbing
+  # it. Proven live in both directions by a mutant that prints BOTH strings — see the commit.
+  if echo "$output" | grep -q "would reap.*pid=$$"; then
+    echo "dry-run still offers to reap the ancestor"; return 1
+  fi
 }
 
 @test "garbage DRY-RUN: prints the would-reap set, kills nothing" {
