@@ -21,6 +21,13 @@
 # recovery), then closes the blocked pane from its OWN cwd (so self-close's dirty-guard checks the right
 # tree). When the re-fire yields a live new pane it closes with --successor <new> --dirty-owner successor
 # (legible continuation); otherwise --terminal (the honest succession for a DOA session that ran nothing).
+#
+# EXIT CODES: 0 recovered · 2 usage/refused arg · 3 pane unresolvable · 4 no brief found ·
+# 5 the re-fire FAILED (blocked pane preserved, nothing closed) · 6 the re-fire SUCCEEDED but every
+# sanctioned close was REFUSED (the blocked pane is still open). 6 is deliberately distinct from 5:
+# 5 means nothing happened, 6 means half of it did and the half that did not is the destructive
+# half. bin/cc-reaper's opt-in auto-recover arm treats any non-zero as FAILED, the right reading
+# for both.
 set -uo pipefail
 
 BLOCKED="" MODEL="" MODE="dry-run" ORIGINATOR=""
@@ -88,10 +95,44 @@ if [ -n "$TJ" ] && [ -f "$TJ" ]; then
 fi
 
 # ── target model (the SWAP): never the model that was refused ──
+# THE GUARD IS THE CLASS `TARGET == BLOCKED_MODEL`, NOT ONE SPELLING OF IT. This used to be
+# `case $BLOCKED_MODEL in *opus*) TARGET=sonnet ;; esac` — an enumeration of a single family that
+# happened to match the single default. It cannot fire for any other pair, and the file's own
+# contract ("Never re-fires on the model that was refused") is stated twice as an inequality. Via
+# the env seam at DEFAULT_MODEL: `CC_RECOVER_DEFAULT_MODEL=sonnet` against a Sonnet-blocked pane
+# re-fired the identical brief on the model that had just refused it — the one outcome this tool
+# exists to prevent. Compared by family containment because the refusal text carries a versioned
+# name ("Opus 4.8", "Fable 5") while a target is the bare launcher token ("opus").
+_lc() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
+same_model() {  # $1=target token  $2=blocked-model text → 0 IFF the target names the blocked model
+  local t b; t="$(_lc "${1:-}")"; b="$(_lc "${2:-}")"
+  [ -n "$t" ] && [ -n "$b" ] || return 1        # unknown on either side ⇒ NOT a proven match
+  case "$b" in *"$t"*) return 0 ;; esac
+  return 1
+}
+FALLBACK_MODELS="${CC_RECOVER_FALLBACK_MODELS:-opus sonnet haiku}"
 TARGET="$MODEL"
 if [ -z "$TARGET" ]; then
   TARGET="$DEFAULT_MODEL"
-  case "$(printf '%s' "$BLOCKED_MODEL" | tr '[:upper:]' '[:lower:]')" in *opus*) TARGET=sonnet ;; esac   # opus blocked ⇒ swap off opus
+  if same_model "$TARGET" "$BLOCKED_MODEL"; then
+    for _m in $FALLBACK_MODELS; do
+      if ! same_model "$_m" "$BLOCKED_MODEL"; then TARGET="$_m"; break; fi
+    done
+  fi
+fi
+
+# ── the inequality, COMPUTED rather than asserted ──
+# `(≠ blocked)` was a literal printed beside the target unconditionally. It is a claim ABOUT TWO
+# VALUES, and both live paths could falsify it: an explicit `--model opus` on an Opus-blocked pane
+# printed it, and when neither refusal pattern above matched, `blocked model:  ?` printed one line
+# up while this line still certified an inequality against a value the script does not have. A
+# claim nothing computes is worth less than no claim, because a reader trusts it.
+if [ -z "$BLOCKED_MODEL" ]; then
+  TARGET_NOTE="(blocked model UNKNOWN — inequality NOT verified)"
+elif same_model "$TARGET" "$BLOCKED_MODEL"; then
+  TARGET_NOTE="(⚠ SAME as the blocked model — this would re-fire on the model that refused)"
+else
+  TARGET_NOTE="(≠ blocked)"
 fi
 
 # ── brief source (verbatim): persisted fired brief, else the transcript's first user message ──
@@ -125,7 +166,7 @@ if [ "$MODE" = dry-run ]; then
   echo "cwd:            $CWD"
   echo "account:        ${ACCOUNT:-?}"
   echo "blocked model:  ${BLOCKED_MODEL:-?}"
-  echo "target model:   $TARGET  (≠ blocked)"
+  echo "target model:   $TARGET  $TARGET_NOTE"
   echo "brief source:   ${BRIEF_SRC:-?}"
   echo "reworded brief: $REWORDED"
   echo "── 1. RE-FIRE (different model): ──"
@@ -139,13 +180,32 @@ fi
 
 # ── EXECUTE — re-fire FIRST (never destroy the blocked pane until the replacement launches) ──
 echo "→ re-firing the brief on $TARGET in $CWD (blocked pane $BLOCKED closes only on a successful re-fire)"
-before_json="$("$SESSIONS_BIN" --json 2>/dev/null | jq -c --arg c "$CWD" '[.[] | select(.cwd==$c) | .paneUUID]' 2>/dev/null || echo '[]')"
+same_model "$TARGET" "$BLOCKED_MODEL" && \
+  echo "⚠ cc-recover-safeguard: target '$TARGET' names the BLOCKED model ('$BLOCKED_MODEL') — re-firing on the model that refused this brief." >&2
+
+# THE BEFORE-SNAPSHOT MUST DISTINGUISH "NO PANES" FROM "COULD NOT ASK". This was
+# `… || echo '[]'`, which collapses both onto the empty set — and the empty set is the value that
+# makes every pre-existing pane in $CWD look NEW. With the session lister failing on this one call
+# and an unrelated pane already live in $CWD, that stranger was adopted as $NEW and written into
+# the mandatory succession statement as `--dirty-owner successor`, asserting to handoff-fire that
+# somebody else's session owns the closing session's tree. An unavailable snapshot is a
+# NON-VERDICT: it cannot identify a new pane, so the successor path is not entitled to run.
+SNAPSHOT_OK=1
+before_json=""
+if _sess_before="$("$SESSIONS_BIN" --json 2>/dev/null)" && [ -n "$_sess_before" ]; then
+  before_json="$(printf '%s' "$_sess_before" | jq -c --arg c "$CWD" '[.[] | select(.cwd==$c) | .paneUUID]' 2>/dev/null || true)"
+fi
+[ -n "$before_json" ] || { SNAPSHOT_OK=0; before_json='[]'; }
 if ! "${REFIRE[@]}"; then
   echo "!! cc-recover-safeguard: re-fire FAILED — the blocked pane $BLOCKED is PRESERVED for manual recovery (nothing closed)" >&2
   rm -f "$REWORDED" 2>/dev/null; exit 5
 fi
 # find the NEW pane in the cwd (distinct from the blocked pane and everything present before the fire)
 NEW="" tries=0
+[ "$SNAPSHOT_OK" = 1 ] || {
+  echo "→ the pre-fire session snapshot was UNAVAILABLE — cannot tell a new pane from one that was already there, so no successor is claimed" >&2
+  tries="$WAIT_TRIES"
+}
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
   NEW="$("$SESSIONS_BIN" --json 2>/dev/null | jq -r --arg c "$CWD" --arg b "$BLOCKED" --argjson seen "${before_json:-[]}" '
       first(.[] | select(.cwd==$c) | .paneUUID as $pu | select($pu != $b and (($seen | index($pu)) == null)) | $pu) // ""' 2>/dev/null || true)"
@@ -153,22 +213,45 @@ while [ "$tries" -lt "$WAIT_TRIES" ]; do
   tries=$((tries + 1)); [ "$WAIT_S" -gt 0 ] 2>/dev/null && sleep "$WAIT_S"
 done
 
-# close the blocked pane from ITS OWN cwd so self-close's dirty-guard checks the right tree
+# close the blocked pane from ITS OWN cwd so self-close's dirty-guard checks the right tree.
+#
+# THE CLOSE'S STATUS IS READ. Both arms below used to end `|| true` and nothing re-read them, so a
+# REFUSED close — `verify_self_pane`'s exit 2 is the ordinary one, reached whenever a third process
+# drives `self-close --session-id` — fell straight through to the ✅ page and `exit 0`. Measured
+# against a stub refusing every close: two refusals printed, then "recovery complete: … closed",
+# "✅ SAFEGUARD-RECOVERED — blocked peer … closed", exit 0. The asymmetry was the defect: the
+# re-fire's status is checked rigorously (exit 5 below), and the DESTRUCTIVE half was not checked
+# at all, which is the wrong way round. `set -uo pipefail` carries no `-e`, so deleting `|| true`
+# would not have been enough — the status has to be captured and branched on.
+CLOSED=0
 if [ -n "$NEW" ]; then
   echo "→ new session pane $NEW is up — closing blocked pane $BLOCKED with succession → $NEW"
-  if ! ( cd "$CWD" && "$HANDOFF_BIN" self-close --session-id "$BLOCKED" --successor "$NEW" --dirty-owner successor ); then
+  if ( cd "$CWD" && "$HANDOFF_BIN" self-close --session-id "$BLOCKED" --successor "$NEW" --dirty-owner successor ); then
+    CLOSED=1
+  else
     echo "→ --successor close refused (new pane not yet live?) — falling back to --terminal" >&2
-    ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ) || true
+    if ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ); then CLOSED=1; fi
   fi
 else
-  echo "→ new pane did not register in time — closing blocked pane $BLOCKED as --terminal (the re-fire is separately visible)"
-  ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ) || true
+  echo "→ no successor pane to name — closing blocked pane $BLOCKED as --terminal (the re-fire is separately visible)"
+  if ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ); then CLOSED=1; fi
 fi
 
-# announce the recovery to the originator (best-effort; the re-fired brief also carries its own back-channel)
+# announce the recovery to the originator (best-effort; the re-fired brief also carries its own
+# back-channel). The page states what HAPPENED, so a refused close cannot page a ✅.
 DEST_ORIG="${ORIGINATOR:-$(jq -r '.firedBy // ""' "$FIRED_DIR/$BLOCKED.json" 2>/dev/null || true)}"
+if [ "$CLOSED" = 1 ]; then
+  RECOVER_MSG="✅ SAFEGUARD-RECOVERED — blocked peer $BLOCKED closed; brief re-fired on $TARGET in $CWD${NEW:+ (new pane $NEW)}."
+else
+  RECOVER_MSG="⚠️ SAFEGUARD-PARTIAL — brief re-fired on $TARGET in $CWD${NEW:+ (new pane $NEW)}, but every sanctioned close of blocked pane $BLOCKED was REFUSED — that pane is STILL OPEN and needs a look."
+fi
 if [ -n "$DEST_ORIG" ] && command -v "$NOTIFY_BIN" >/dev/null 2>&1; then
-  "$NOTIFY_BIN" "$DEST_ORIG" "✅ SAFEGUARD-RECOVERED — blocked peer $BLOCKED closed; brief re-fired on $TARGET in $CWD${NEW:+ (new pane $NEW)}." >/dev/null 2>&1 || true
+  "$NOTIFY_BIN" "$DEST_ORIG" "$RECOVER_MSG" >/dev/null 2>&1 || true
 fi
 rm -f "$REWORDED" 2>/dev/null
+if [ "$CLOSED" != 1 ]; then
+  echo "!! cc-recover-safeguard: the re-fire SUCCEEDED but every sanctioned close of $BLOCKED was REFUSED — the pane is STILL OPEN." >&2
+  echo "   Nothing was forced: a raw it2 close / hand-typed /exit is never this tool's move. Investigate the refusal, or close it yourself." >&2
+  exit 6
+fi
 echo "→ recovery complete: re-fired on $TARGET; blocked pane $BLOCKED closed."
