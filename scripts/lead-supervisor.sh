@@ -560,7 +560,16 @@ reap_clean(){ # $1=sid $2=cwd
 transcript_age(){ # $1=cwd $2=config_dir $3=sid → prints age_s (999999999 = unresolved ⇒ cold)
   local cwd="$1" cfg="$2" sid="$3" slug tp mt
   { [ -n "$cwd" ] && [ -n "$cfg" ] && [ -n "$sid" ]; } || { printf '%s' 999999999; return; }
-  slug="$(printf '%s' "$cwd" | sed 's|[/.]|-|g')"          # CC projects/ dir mangling: every '/' and '.' → '-'
+  # CC projects/ dir mangling: EVERY character outside [a-zA-Z0-9] → '-'. This read `sed 's|[/.]|-|g'`
+  # under the comment "every '/' and '.' → '-'", which is narrower than the encoder
+  # (`A.replace(/[^a-zA-Z0-9]/g,"-")`, and 1,661 live project dirs all match ^[-a-zA-Z0-9]+$). The
+  # direction matters here: a narrow slug names a directory that CANNOT exist, so the `[ -f "$tp" ]`
+  # below misses, transcript_age returns its unresolved sentinel — which this caller reads as COLD —
+  # and a demonstrably-alive session with a fresh transcript is paged STALL? anyway. The warm-transcript
+  # exemption at the call site is exactly what stops that, and it was unreachable for any cwd holding
+  # a character other than '/', '.', '-' or alphanumerics (e.g. ~/Development/doc_classifier, a real
+  # repo on this box). Fail direction: a FALSE page about a healthy session.
+  slug="$(printf '%s' "$cwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
   tp="$cfg/projects/$slug/$sid.jsonl"
   [ -f "$tp" ] || { printf '%s' 999999999; return; }
   mt="$(stat -f %m "$tp" 2>/dev/null || stat -c %Y "$tp" 2>/dev/null || echo 0)"   # BSD stat, then GNU fallback

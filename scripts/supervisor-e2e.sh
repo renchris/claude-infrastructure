@@ -273,15 +273,36 @@ idl_has '/x/secret.ts' && ok "a Write prompt renders its file_path" || no "file_
 echo "T20 WARM-TRANSCRIPT EXEMPTION — live pid + stale telemetry but a FRESH transcript ⇒ NOT a STALL? candidate (item 1c324d9fcc32)"
 # the idle-live ROOT fix: telemetry goes stale (the statusline stops emitting for a backgrounded / long-
 # turn pane) while the session keeps appending its transcript — a warm transcript ⇒ demonstrably alive ⇒
-# exempt. Transcript path = <config_dir>/projects/<slug(cwd)>/<sid>.jsonl (CC '/'+'.'→'-' mangling).
+# exempt. Transcript path = <config_dir>/projects/<slug(cwd)>/<sid>.jsonl, where the mangling maps
+# EVERY character outside [a-zA-Z0-9] to '-' (this fixture said "'/'+'.'" and computed it that way,
+# which agrees with the real rule only for paths that happen to contain nothing else — see T20b).
+slug(){ printf '%s' "$1" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'; }
 reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
-WCFG="$SBX/warmcfg"; WSLUG="$(printf '%s' "$REPO" | sed 's|[/.]|-|g')"
+WCFG="$SBX/warmcfg"; WSLUG="$(slug "$REPO")"
 mkdir -p "$WCFG/projects/$WSLUG"
 : > "$WCFG/projects/$WSLUG/warm1.jsonl"                            # mtime = now ⇒ warm
 mktel warm1 40 100 "$ALIVE" "$REPO" "$WCFG"                       # telemetry 100s stale (≥ STALL_S=5), pid alive
 once
 paged warm1 && no "paged a warm-transcript session (exemption FAILED — idle-live false positive)" || ok "warm transcript exempts STALL? candidacy"
 idl_has '"state":"STALL?"' && no "STALL? finding emitted for a warm-transcript session" || ok "no STALL? finding for a warm transcript"
+
+echo "T20b WARM-TRANSCRIPT ON A cwd THE OLD SLUG COULD NOT SPELL — the exemption must survive a path holding a character other than '/' '.' '-' or alphanumerics"
+# T20 above cannot see this: $REPO contains only characters on which the old two-character rule and
+# the real encoder AGREE, so the fixture and the subject were wrong together and the check passed
+# either way. Here the cwd carries '_' and a space — characters the real encoder maps to '-' and the
+# old rule kept verbatim. Under the old rule transcript_age looks in a directory that cannot exist,
+# returns its unresolved sentinel, the caller reads that as COLD, and this demonstrably-alive
+# session with a FRESH transcript is paged STALL? — a false page about a healthy session, which is
+# precisely the idle-live false positive T20 exists to prevent.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+UCWD="$SBX/under_score dir"; mkdir -p "$UCWD"
+USLUG="$(slug "$UCWD")"
+mkdir -p "$WCFG/projects/$USLUG"
+: > "$WCFG/projects/$USLUG/warm2.jsonl"                            # mtime = now ⇒ warm
+mktel warm2 40 100 "$ALIVE" "$UCWD" "$WCFG"                        # telemetry stale, pid alive
+once
+paged warm2 && no "paged a warm-transcript session whose cwd holds '_'/space (the slug could not name its transcript)" || ok "warm-transcript exemption survives a cwd outside [-a-zA-Z0-9]"
+case "$USLUG" in *[!-a-zA-Z0-9]*) no "the computed slug is outside the alphabet the encoder can emit: $USLUG" ;; *) ok "slug stays inside ^[-a-zA-Z0-9]+$" ;; esac
 
 echo "T21 COLD-TRANSCRIPT — live pid + stale telemetry + a STALE transcript ⇒ STILL a STALL? candidate (a warmth check, not has-transcript)"
 reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
