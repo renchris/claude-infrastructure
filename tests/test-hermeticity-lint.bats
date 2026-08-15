@@ -77,6 +77,22 @@ mk_suite() {
     > "$FIX/$1/zz-fixture.bats"
 }
 
+# mk_suite_in_tests — the SAME suite, laid out under a directory really named `tests`, and the scan
+# dir is that directory (callers pass "$FIX/<name>/tests").
+#
+# WHY IT HAS TO EXIST (backlog c1a29f8ee045). Every own-scope case below passes ship-land's real
+# own-set form — a repo-relative path like `tests/zz-fixture.bats` — against a fixture that lived in
+# `$FIX/leak/`. They passed because the matcher basenamed BOTH sides, so the directory in the entry
+# was decoration and `scripts/zz-fixture.bats` would have passed identically. That is precisely the
+# collapse: the control could not tell the two apart, so it could not catch a matcher that could
+# not either. With a real `tests` directory the entry matches on a component boundary and the
+# assertion means what its name says.
+mk_suite_in_tests() {
+  mkdir -p "$FIX/$1/tests"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo "  $2"; echo '}'; echo "@test \"x\" { ${3:-true}; }"; } \
+    > "$FIX/$1/tests/zz-fixture.bats"
+}
+
 # THE THIRD STATE, for the two cases below that lint the REAL tree. The lint answers 0 (clean) and
 # 1 (a leak / a stuck ratchet) — and 2, which is not an answer at all: "UNUSABLE — a predicate
 # failed to run … Re-run when the box is quieter; do not 'fix' any suite on it." Asserting `-eq 0`
@@ -280,10 +296,18 @@ skip_if_selftest_nonverdict() {
 }
 
 @test "own-scope: the SAME leak INSIDE the lander's diff still blocks (the rule is intact)" {
-  mk_suite leak 'REPO=x'
-  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak"
+  # Laid out under a real `tests` dir so the PATH form is genuinely exercised — see mk_suite_in_tests.
+  mk_suite_in_tests leak 'REPO=x'
+  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak/tests"
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'LEAK' || false
+  # …and the collapse control it is paired with: the same basename under a DIFFERENT directory is a
+  # different file, so it must NOT block (backlog c1a29f8ee045). RED before the fix.
+  CC_HERM_OWN="scripts/zz-fixture.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak/tests"
+  [ "$status" -eq 0 ] || false
+  # …while a BARE entry stays deliberately wide and still blocks anywhere.
+  CC_HERM_OWN="zz-fixture.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak/tests"
+  [ "$status" -eq 1 ] || false
 }
 
 # THE case the fix exists for, and the one a `${VAR:-}` collapse silently breaks: a land that
@@ -302,10 +326,10 @@ skip_if_selftest_nonverdict() {
 }
 
 @test "own-scope: a stuck ratchet entry outside the diff is advisory; inside it still blocks" {
-  mk_suite herm 'export HOME="$BATS_TEST_TMPDIR/home"'
-  CC_HERM_OWN="tests/other.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm"
+  mk_suite_in_tests herm 'export HOME="$BATS_TEST_TMPDIR/home"'
+  CC_HERM_OWN="tests/other.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm/tests"
   [ "$status" -eq 0 ] || false
-  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm"
+  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm/tests"
   [ "$status" -eq 1 ] || false
 }
 
@@ -440,11 +464,11 @@ skip_if_selftest_nonverdict() {
 }
 
 @test "RULE 2 own-scope: an AMBIENT violation outside the diff is advisory, inside it blocks" {
-  mk_suite fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
-  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/fireleak"
+  mk_suite_in_tests fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/fireleak/tests"
   [ "$status" -eq 0 ] || false
   echo "$output" | grep -q 'advisory, not blocking' || false
-  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/fireleak"
+  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/fireleak/tests"
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'AMBIENT' || false
 }
@@ -967,11 +991,11 @@ echo "$MODE"'
 }
 
 @test "RULE 7 own-scope: an AMBIENT violation outside the diff is advisory, inside it blocks" {
-  mk_suite admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
-  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/admitleak"
+  mk_suite_in_tests admitleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/boot-resume-launch.sh --dry-run'
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/admitleak/tests"
   [ "$status" -eq 0 ] || false
   echo "$output" | grep -q 'advisory, not blocking' || false
-  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/admitleak"
+  CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/admitleak/tests"
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'AMBIENT' || false
 }

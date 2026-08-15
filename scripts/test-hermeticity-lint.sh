@@ -1594,14 +1594,40 @@ in_allowlist() {
 # so NOTHING may block — the docs-only land that motivated the fix. Collapsing them with `${3:-}`
 # reinstates the exact hard stop being removed, silently and only for the docs-only case. Presence
 # is therefore carried by ARGUMENT COUNT here and by `${CC_HERM_OWN+set}` at the entrypoint.
-in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied at all
+#
+# THE BASENAME COLLAPSE, FIXED (2026-08-15, backlog c1a29f8ee045; land-arch §5.P2 arm 1 filed it as
+# latent). The old body was `grep -qxF "$1" <<< "$(sed 's:.*/::' <<< "$2")"`: it BASENAMED both
+# sides, so an own-set entry `scripts/foo.sh` matched a judged `tests/foo.sh` and the land blocked
+# over a file it never touched — the exact fleet-wide-hard-stop direction this whole mechanism
+# exists to remove, arriving through the matcher instead of through the scope. Latent only because
+# no basename collides across bin/ scripts/ hooks/ tests/ TODAY, which is a property of the tree and
+# not of the code (memory: latent-defect-guarded-only-by-a-tree-property).
+#
+# THE CONTRACT, shared verbatim by test-hermeticity / git-identity / utc-stamp / tsv-pad (four
+# copies, one body — they source nothing, and a lint whose correctness-critical predicate arrives
+# through an optional `. lib/… || true` degrades SILENTLY when the live layer has not converged):
+#   a PATHED entry (contains `/`) matches the judged path exactly, or as a suffix on a COMPONENT
+#     boundary — so `tests/foo.bats` matches `/abs/root/tests/foo.bats` and `tests/foo.bats`, and
+#     never `scripts/foo.bats`;
+#   a BARE entry (no `/`) is a basename by construction and matches in any directory — the width is
+#     deliberate and is what callers who pass bare names still rely on.
+# Callers therefore pass the PATH, never the basename. Direction on a miss is unchanged and
+# fail-PERMISSIVE (not own ⇒ excluded from blocking ⇒ advisory), so this can never fabricate a leak.
+# No fork, no pipe: the old spelling paid three processes per call — and per call is ten times per
+# suite here — and needed a paragraph about `pipefail` turning a MATCH into 141.
+in_own() {  # $1=path the lint knows · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0          # no own-set supplied ⇒ everything is own ⇒ strict
   [ -n "$2" ] || return 1                  # supplied but empty ⇒ nothing is own ⇒ nothing blocks
-  # here-string, not a pipe: a `producer | grep -q` probe returns the PIPELINE status under
-  # `pipefail`, so a MATCH can read as 141 (see the HERE-STRINGS note above rule 4's predicates).
-  # This one's direction is fail-PERMISSIVE (141 ⇒ "not own" ⇒ excluded from blocking), so it could
-  # never fabricate a leak — it could only silently narrow the own-scope and MASK one.
-  grep -qxF "$1" <<< "$(sed 's:.*/::' <<< "$2")"
+  local e
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */*) [ "$1" = "$e" ] && return 0
+           case "$1" in */"$e") return 0 ;; esac ;;
+      *)   [ "${1##*/}" = "$e" ] && return 0 ;;
+    esac
+  done <<< "$2"
+  return 1
 }
 
 # ── HERM_READSET: the read-set declaration, in executable form ────────────────────────────────────
@@ -1744,7 +1770,7 @@ lint_dir() {
     HERM_MEMO_RAN=$((HERM_MEMO_RAN + 1))
     if is_hermetic "$f"; then
       if in_allowlist "$base" "$allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  RATCHET  %s is hermetic now — delete its allowlist line\n' "$base"
           stuck=$((stuck + 1))
         else
@@ -1753,7 +1779,7 @@ lint_dir() {
         fi
       fi
     elif ! in_allowlist "$base" "$allow"; then
-      if in_own "$base" "$own" "$own_scoped"; then
+      if in_own "$f" "$own" "$own_scoped"; then
         # shellcheck disable=SC2016  # "$HOME" is prose here — the message names the variable, not its value
         printf '  LEAK     %s: setup() does not fixture $HOME — it runs against the live ~/\n' "$base"
         new_leak=$((new_leak + 1))
@@ -1769,7 +1795,7 @@ lint_dir() {
     if [ "$FIRE_RULE" = on ] && references_fire "$f"; then
       if is_fire_pinned "$f"; then
         if in_allowlist "$base" "$fire_allow"; then
-          if in_own "$base" "$own" "$own_scoped"; then
+          if in_own "$f" "$own" "$own_scoped"; then
             printf '  RATCHET-CAP  %s pins the capacity gate now — delete its FIRE allowlist line\n' "$base"
             fire_stuck=$((fire_stuck + 1))
           else
@@ -1778,7 +1804,7 @@ lint_dir() {
           fi
         fi
       elif ! in_allowlist "$base" "$fire_allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  AMBIENT  %s: setup() does not pin CC_FIRE_CAPACITY_GATE=off — its fires read live machine load\n' "$base"
           fire_leak=$((fire_leak + 1))
         else
@@ -1796,7 +1822,7 @@ lint_dir() {
     if [ "$ADMIT_RULE" = on ] && references_admit "$f"; then
       if is_admit_pinned "$f"; then
         if in_allowlist "$base" "$admit_allow"; then
-          if in_own "$base" "$own" "$own_scoped"; then
+          if in_own "$f" "$own" "$own_scoped"; then
             printf '  RATCHET-ADM  %s closes the capacity-admit gate now — delete its ADMIT allowlist line\n' "$base"
             admit_stuck=$((admit_stuck + 1))
           else
@@ -1805,7 +1831,7 @@ lint_dir() {
           fi
         fi
       elif ! in_allowlist "$base" "$admit_allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  AMBIENT  %s: setup() does not close capacity-admit — its gate reads live load, memory and session census\n' "$base"
           admit_leak=$((admit_leak + 1))
         else
@@ -1820,7 +1846,7 @@ lint_dir() {
     if [ "$ORPHAN_RULE" = on ] && references_close_leg "$f"; then
       if is_orphan_pinned "$f"; then
         if in_allowlist "$base" "$orphan_allow"; then
-          if in_own "$base" "$own" "$own_scoped"; then
+          if in_own "$f" "$own" "$own_scoped"; then
             printf '  RATCHET-ORPH %s pins LCW_ORPHAN_CLOSE now — delete its ORPHAN allowlist line\n' "$base"
             orphan_stuck=$((orphan_stuck + 1))
           else
@@ -1829,7 +1855,7 @@ lint_dir() {
           fi
         fi
       elif ! in_allowlist "$base" "$orphan_allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  AMBIENT  %s: setup() does not pin LCW_ORPHAN_CLOSE — its close leg inherits this box'"'"'s arming\n' "$base"
           orphan_leak=$((orphan_leak + 1))
         else
@@ -1871,7 +1897,7 @@ EOF
       fi
       if [ -z "$seam_why" ]; then
         if in_allowlist "$base" "$seam_allow"; then
-          if in_own "$base" "$own" "$own_scoped"; then
+          if in_own "$f" "$own" "$own_scoped"; then
             # shellcheck disable=SC2016  # "$HOME" is prose here — the message names the variable, not its value
             printf '  RATCHET-SEAM %s pins its non-$HOME seams now — delete its SEAM allowlist line\n' "$base"
             seam_stuck=$((seam_stuck + 1))
@@ -1881,7 +1907,7 @@ EOF
           fi
         fi
       elif ! in_allowlist "$base" "$seam_allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           # shellcheck disable=SC2016  # ditto — prose naming the variable, not an expansion
           printf '  SEAM     %s: setup() leaves a non-$HOME seam unpinned — %s\n' "$base" "$seam_why"
           seam_leak=$((seam_leak + 1))
@@ -1923,7 +1949,7 @@ EOF
       fi
       if [ -z "$env_why" ]; then
         if in_allowlist "$base" "$env_allow"; then
-          if in_own "$base" "$own" "$own_scoped"; then
+          if in_own "$f" "$own" "$own_scoped"; then
             printf '  RATCHET-ENV  %s pins its inherited-value seams now — delete its ENV allowlist line\n' "$base"
             env_stuck=$((env_stuck + 1))
           else
@@ -1932,7 +1958,7 @@ EOF
           fi
         fi
       elif ! in_allowlist "$base" "$env_allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  INHERIT  %s: setup() takes no position on a variable its subject READS and this repo INJECTS into every pane — %s\n' "$base" "$env_why"
           env_leak=$((env_leak + 1))
         else
@@ -2112,7 +2138,7 @@ lint_selftests() {
     fi
     if [ -z "$why" ]; then
       if in_allowlist "$base" "$allow"; then
-        if in_own "$base" "$own" "$own_scoped"; then
+        if in_own "$f" "$own" "$own_scoped"; then
           printf '  RATCHET-SELF %s confines its selftest now — delete its SELFTEST allowlist line\n' "$base"
           stuck=$((stuck + 1))
         else
@@ -2121,7 +2147,7 @@ lint_selftests() {
         fi
       fi
     elif ! in_allowlist "$base" "$allow"; then
-      if in_own "$base" "$own" "$own_scoped"; then
+      if in_own "$f" "$own" "$own_scoped"; then
         printf '  COLLIDES %s: its embedded selftest %s — two concurrent runs share it\n' "$base" "$why"
         collide=$((collide + 1))
       else
@@ -2217,6 +2243,14 @@ setup() {
 }
 @test "x" { true; }
 F
+  # THE PATH-FORM own-scope fixture, and it has to live under a directory actually NAMED `tests`.
+  # Case (j) used to lint $d/leak with the own-set `tests/zz-fixture.bats` and pass — because the
+  # matcher basenamed both sides, so the directory in the entry was decoration. That is the whole
+  # defect (backlog c1a29f8ee045): a control that cannot tell `tests/x` from `scripts/x` cannot
+  # catch a matcher that cannot either. With the real directory in place, (j) proves the path form
+  # matches and (j2) proves a DIFFERENT directory does not.
+  mkdir -p "$d/pathown/tests"
+  cp "$d/leak/zz-fixture.bats" "$d/pathown/tests/zz-fixture.bats"
   cat >"$d/herm/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
 setup() {
@@ -2956,8 +2990,18 @@ F
   # (i) a stuck ratchet entry outside the own-set is advisory; inside it still blocks.
   lint_dir "$d/herm" "zz-fixture.bats" "other.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a stuck entry OUTSIDE the own-set blocked"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a stuck entry INSIDE the own-set did not block"; fails=1; }
-  # (j) an own-set given as a PATH must match by basename — ship-land passes `tests/x.bats`.
-  lint_dir "$d/leak" "" "tests/zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: own-set given as a path did not match by basename"; fails=1; }
+  # (j) an own-set given as a PATH must match that path — ship-land passes `tests/x.bats`, and the
+  #     suite really is under a directory named `tests`, so the entry matches on a component
+  #     boundary (the scan dir is a temp prefix; the entry is its suffix).
+  lint_dir "$d/pathown/tests" "" "tests/zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: own-set given as a path did not match the judged path"; fails=1; }
+  # (j2) THE BASENAME COLLAPSE, and it is the direction (j) alone cannot see. The SAME basename under
+  #      a DIFFERENT directory must NOT block: the author who changed scripts/zz-fixture.bats is not
+  #      answerable for tests/zz-fixture.bats, and convicting them is the fleet-wide hard stop
+  #      own-scope exists to remove, re-entering through the matcher. RED before the fix.
+  lint_dir "$d/pathown/tests" "" "scripts/zz-fixture.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an own-set naming the SAME basename in ANOTHER directory blocked — the basename collapse is back"; fails=1; }
+  # (j3) …and a BARE entry is still deliberately wide: no directory was spelled, so it matches in
+  #      any. (j2) and (j3) differ only in whether the entry carries a `/`, which is the whole rule.
+  lint_dir "$d/pathown/tests" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a BARE own-set entry did not match — the basename form is not optional, ship-land's siblings pass it"; fails=1; }
   # (k) THE DOCS-ONLY CASE — an own-set SUPPLIED BUT EMPTY means "I change no suite": nothing may
   #     block. This is the whole point of the fix and the one `${VAR:-}` would silently break.
   lint_dir "$d/leak" "" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an EMPTY own-set blocked — set-empty was collapsed into unset, docs-only lands still hard-stop"; fails=1; }
@@ -3127,7 +3171,11 @@ F
   lint_selftests "$d/s_ok" "zz-tool" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a confined-but-still-grandfathered tool did not go RED (rule-4 ratchet not shrinking)"; fails=1; }
   # (i4) own-scope governs rule 4 too: advisory OUTSIDE the lander's diff, blocking INSIDE it.
   lint_selftests "$d/s_collide" "" "some-other-tool" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a COLLIDES violation OUTSIDE the own-set blocked"; fails=1; }
-  lint_selftests "$d/s_collide" "" "bin/zz-tool"    >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a COLLIDES violation INSIDE the own-set did not block (path form not matched by basename)"; fails=1; }
+  lint_selftests "$d/s_collide" "" "bin/zz-tool"    >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a COLLIDES violation INSIDE the own-set did not block (path form not matched against the judged path)"; fails=1; }
+  # (i4b) …and the collapse direction, which rule 4 can state more sharply than rule 1 because its
+  #       population really does span three directories: the tool is bin/zz-tool, so an author who
+  #       changed scripts/zz-tool must NOT be refused over it (backlog c1a29f8ee045). RED pre-fix.
+  lint_selftests "$d/s_collide" "" "scripts/zz-tool" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an own-set naming the same tool basename under ANOTHER dir blocked — the basename collapse is back"; fails=1; }
   # (j4) COULD-NOT-CHECK survives rule 4: a NON-VERDICT (exit 2) and no COLLIDES line naming a tool
   #      nobody was able to check. The output test is a `case`, not a grep — grep is what is stubbed.
   ( grep() { return 2; }
@@ -3436,14 +3484,17 @@ F
     exit 2
   fi
   if [ "$sx" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 128/128 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 128/128 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (the PATH form matched against the judged path, a BARE entry matched in any directory, and the SAME basename under a DIFFERENT directory proved NOT to block — the collapse control), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form and its collapse control (the same tool basename under another dir must not block), NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
   exit 1
 fi
 
-# CC_HERM_OWN — newline-delimited suite names (basenames or paths) the caller is answerable for.
+# CC_HERM_OWN — newline-delimited suite names the caller is answerable for. A PATHED entry
+# (`tests/x.bats`, which is what ship-land's `git diff --name-only` produces) is matched against the
+# judged path on a component boundary; a BARE entry (`x.bats`) is matched as a basename in any
+# directory. See in_own's header for why the two forms are not the same thing (backlog c1a29f8ee045).
 # UNSET ⇒ strict whole-tree blocking, exactly as before. SET (including set to EMPTY) ⇒ own-scope,
 # where an empty value legitimately means "I change no suite, so nothing may block me". `+set` is
 # the only test that separates those; `${CC_HERM_OWN:-}` would collapse them and silently reinstate
