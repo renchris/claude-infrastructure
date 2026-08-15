@@ -413,19 +413,39 @@ EOF
 
   # NON-VACUITY. Every assertion above would also pass if the sweep had silently not run at all —
   # which is precisely how a "we moved it out" change could pass by deleting it instead. The
-  # sweep's own verdict line carries BOTH numbers this fixture built, so assert both:
+  # sweep's own verdict line carries BOTH numbers this fixture built:
   #   ✗ stranded-sweep: 40 commit(s) hold content not on origin/main, on 40 of 641 local branch(es)
   # The denominator proves the WALK (all ~640 refs); the 40 proves the REPORTING path (the class
   # whose paths are all absent from the trunk) — a sweep that walked nothing can satisfy neither.
-  # Wording note: pre-`ec357997b` that line read "…, across 641 branch(es)." and this assertion
-  # greped `across 6[0-9][0-9] branch\(es\)`. The 2026-08-12 damping commit re-shaped the
-  # un-`--mine` verdict into "on N of M local branch(es)" and did not carry this fixture with it,
-  # so the grep went red while the sweep was working perfectly — a stale assertion, not a
-  # regression. It is re-pointed at the current text and STRENGTHENED (two numbers, not one)
-  # rather than relaxed: relaxing it is the exact defect it exists to prevent.
-  echo "$output" | grep -qE 'on 40 of 6[0-9][0-9] local branch\(es\)'  # it really walked the 640…
-  echo "$output" | grep -qE '40 commit\(s\) hold content not on'       # …and flagged all 40 strands
-  grep -q '"sweep":"review"' "$LAND_LOG"       # …and the attestation field still populates
+  #
+  # THE MODE IS PART OF THE ASSERTION, and this is the second time that lesson has been paid for
+  # here. Pre-`ec357997b` the line read "…, across 641 branch(es)" and the grep matched that
+  # WORDING; `ec357997b` re-shaped it and the fixture was re-pointed (see git history). The 2026-
+  # 08-12 pair went further: `a2de71b95` made ship-land pass `--mine "$CLAUDE_CODE_SESSION_ID"`
+  # whenever a sid exists, and setup() above pins one for hermeticity — so every land in THIS suite
+  # now runs ATTRIBUTED, the fixture's 40 strands belong to no session, and the sweep correctly
+  # reports CLEAN. The un-`--mine` verdict became unreachable from `$output` and this case went red
+  # over a sweep that was, again, working perfectly. `a2de71b95` and `c5f1d1d56` landed 19 minutes
+  # apart on sibling branches, neither an ancestor of the other: a semantic conflict a clean rebase
+  # cannot see, and the smoke lane only selects this suite for a diff touching ship-land.sh, so it
+  # sat red on trunk from 2026-08-12.
+  #
+  # So the walk/report numbers are now asserted against a DIRECT sweep in the mode that renders
+  # them, and the attributed mode is asserted BESIDE it on the same tree. That pairing is stronger
+  # than the single grep it replaces: it pins the walk, the reporting path, AND the attribution
+  # filter that suppressed it — and either mode alone would pass against a sweep that had stopped
+  # walking (memory: guard-proxy-fails-in-both-directions).
+  run env -u CLAUDE_CODE_SESSION_ID bash "$REPO/scripts/stranded-sweep.sh" main
+  [ "$status" -ne 0 ]                                                   # strands exist ⇒ REVIEW
+  echo "$output" | grep -qE 'on 40 of 6[0-9][0-9] local branch\(es\)'   # it really walked the 640…
+  echo "$output" | grep -qE '40 commit\(s\) hold content not on'        # …and flagged all 40 strands
+  run bash "$REPO/scripts/stranded-sweep.sh" --mine "$CLAUDE_CODE_SESSION_ID" main
+  [ "$status" -eq 0 ]                          # …and NONE of the 40 is this session's drop
+  # …which is why the land above attested `clean`: the live call site is the attributed one. Both
+  # field values keep their own coverage in tests/ship-land.bats (`review` at the peer-drop case,
+  # `clean` at the attributed one), so this line pins the value THIS path produces, not a value
+  # that only a sid-less land could reach.
+  grep -q '"sweep":"clean"' "$LAND_LOG"        # …and the attestation field still populates
 
   # The reap is post-release too, and still discharges the rollback ref.
   run git show-ref --verify --quiet "refs/heads/$backup"
