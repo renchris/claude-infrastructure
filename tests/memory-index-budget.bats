@@ -2,18 +2,21 @@
 # memory-index-budget.sh — the APPEND-TIME CHOKEPOINT for the MEMORY.md loader read limit,
 # and its wiring inside the already-live hooks/backup-before-write.sh PreToolUse chain.
 #
-# The defect this pins: the index is auto-loaded with a hard byte limit (24985 B) past which the
-# loader SILENTLY DROPS ITS TAIL — the NEWEST entries. `hooks/memory-nudge.sh` has measured that
+# The defect this pins: the index is auto-loaded with hard caps past which the loader SILENTLY
+# DROPS ITS TAIL — the NEWEST entries. Two caps, and NEITHER is a byte count (corrected 2026-08-15,
+# cc-backlog 7a56de4c54ab, read out of the 2.1.233 bundle): 25000 CHARS and 200 LINES, measured
+# after YAML frontmatter and block HTML comments are stripped and the result trimmed. `hooks/memory-nudge.sh` has measured that
 # budget correctly since 2026-07-31 and only ADVISES; between 07-25 and 08-06 the index was
 # compacted twelve times (every pre-compaction snapshot is still in memory/archive/ with its size in
 # the filename) and went back over every time, and the ledger opened FOUR items for one condition.
 # Advisory text is exactly what a gate exists to not rely on.
 #
-# RED-proof coverage: the refusal is SELECTED by arithmetic on the resulting byte size, not asserted;
+# RED-proof coverage: the refusal is SELECTED by arithmetic on the resulting size, not asserted;
 # the shrink-always-allowed asymmetry is proven from an already-over-limit fixture (a gate that
-# refused its own cure would wedge the memory system); the byte measure is pinned by a fixture that
-# is UNDER the limit in codepoints and OVER it in bytes, so a `length`-based implementation fails
-# here rather than in production; every fail-open path is asserted to allow; and the end-to-end leg
+# refused its own cure would wedge the memory system); the MEASURE is pinned in all four directions
+# it can be got wrong — frontmatter and block comments must NOT count, an em-dash must count ONE
+# (a `utf8bytelength` implementation fails here rather than in production) and an astral emoji must
+# count TWO (a codepoint `length` implementation fails here); every fail-open path is asserted to allow; and the end-to-end leg
 # runs the host hook through a SYMLINK, because a lib the host cannot resolve fails open silently
 # and reads as landed while inert (MEMORY.md self-deploying-fix-inert-for-its-own-deploy).
 #
@@ -29,7 +32,8 @@ setup() {
   # suite would litter the operator's live config dir.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR"
-  LIMIT=24985
+  LIMIT=25000        # hooks/lib/memory-index-measure.sh mim_limit default, in loader chars
+  LINE_LIMIT=200
   # shellcheck source=../hooks/lib/memory-index-budget.sh
   . "$LIB"
 }
@@ -37,7 +41,8 @@ setup() {
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 hasnt() { if printf '%s' "$1" | grep -qF -- "$2"; then return 1; fi; }
 
-# An index fixture of exactly $1 bytes, ending in a targetable `TAIL` marker.
+# An index fixture of exactly $1 chars (ASCII, so chars == bytes here), ending in a targetable
+# `TAIL` marker.
 # $2 names the fixture so several can coexist in one test.
 mkindex() {
   local bytes="$1" name="${2:-idx}" d f pad
@@ -70,7 +75,7 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
   [ -z "$output" ]
 }
 
-@test "the boundary is the limit itself: landing exactly ON it is allowed, one byte past is not" {
+@test "the boundary is the limit itself: landing exactly ON it is allowed, one char past is not" {
   idx="$(mkindex $(( LIMIT - 10 )))"
   run mib_verdict Edit "$idx" "$(edit_grow "$idx" 10)"     # → exactly LIMIT
   [ "$status" -eq 1 ]
@@ -81,10 +86,10 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
 @test "the reason states current, resulting, limit and overage — all four, computed" {
   idx="$(mkindex $(( LIMIT - 50 )))"
   run mib_verdict Edit "$idx" "$(edit_grow "$idx" 100)"
-  has "$output" "now $(( LIMIT - 50 )) B"
-  has "$output" "after this write $(( LIMIT + 50 )) B"
-  has "$output" "limit $LIMIT B"
-  has "$output" "50 B over its read limit"
+  has "$output" "now $(( LIMIT - 50 )) chars"
+  has "$output" "after this write $(( LIMIT + 50 )) chars"
+  has "$output" "limit $LIMIT chars"
+  has "$output" "50 chars over its read limit"
 }
 
 @test "the reason hands over the ONE-IN-ONE-OUT remedy, not just a complaint" {
@@ -131,15 +136,74 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
   has "$output" "MEMORY INDEX WRITE REFUSED"
 }
 
-# ── BYTES, never codepoints (positive control on the measure itself) ──────────
+# ── the MEASURE: UTF-16 code units of the STRIPPED, TRIMMED content ──────────
+#
+# Every one of these four fails a plausible wrong implementation, and each wrong implementation
+# passes every other test in this file. This block is the whole point of the 2026-08-15 fix.
 
-@test "the measure is UTF-8 BYTES: an append under the limit in characters but over it in bytes is REFUSED" {
+@test "the measure is CHARS, not bytes: 4 em-dashes cost 4, not 12" {
   idx="$(mkindex $(( LIMIT - 10 )))"
-  # 4 em-dashes = 4 codepoints (→ LIMIT-6, allowed) but 12 bytes (→ LIMIT+2, refused).
-  # A jq `length` implementation passes every other test in this file and fails exactly here.
+  # 4 em-dashes = 4 UTF-16 units (→ LIMIT-6, ALLOWED) but 12 UTF-8 bytes (→ LIMIT+2). The
+  # pre-2026-08-15 `utf8bytelength` gate refused this write; the loader never would have.
   run mib_verdict Edit "$idx" "$(edit_raw "$idx" "TAIL" "TAIL————")"
+  [ "$status" -eq 1 ]
+  # ...and the same append 7 chars later DOES cross, so this passes on arithmetic, not on a
+  # gate that has simply stopped refusing anything.
+  idx2="$(mkindex $(( LIMIT - 3 )) idx2)"
+  run mib_verdict Edit "$idx2" "$(edit_raw "$idx2" "TAIL" "TAIL————")"
   [ "$status" -eq 0 ]
-  has "$output" "after this write $(( LIMIT + 2 )) B"
+  has "$output" "after this write $(( LIMIT + 1 )) chars"
+}
+
+@test "an astral codepoint costs TWO units, as UTF-16 counts it" {
+  idx="$(mkindex $(( LIMIT - 1 )))"
+  # One 🚨 = 1 codepoint, 2 UTF-16 units, 4 bytes. A jq `length` (codepoints) implementation
+  # lands on the limit and allows; the loader counts 2 and truncates.
+  run mib_verdict Edit "$idx" "$(edit_raw "$idx" "TAIL" "TAIL🚨")"
+  [ "$status" -eq 0 ]
+  has "$output" "after this write $(( LIMIT + 1 )) chars"
+}
+
+@test "YAML frontmatter does not count — the loader strips it before measuring" {
+  d="$BATS_TEST_TMPDIR/fm/memory"; mkdir -p "$d"; f="$d/MEMORY.md"
+  # 300 chars of frontmatter + a body that lands exactly ON the limit. Raw bytes are 300 over.
+  { printf -- '---\n'; head -c 293 /dev/zero | tr '\0' k; printf -- '\n---\n'; \
+    head -c $(( LIMIT - 4 )) /dev/zero | tr '\0' x; printf 'TAIL'; } >"$f"
+  [ "$(wc -c <"$f" | tr -d ' ')" -gt "$LIMIT" ]        # over the limit on disk
+  run mib_verdict Edit "$f" "$(edit_grow "$f" 1)"      # body → LIMIT+1: refused on the BODY alone
+  [ "$status" -eq 0 ]
+  has "$output" "after this write $(( LIMIT + 1 )) chars"
+  has "$output" "now $LIMIT chars"                     # the header contributed nothing
+}
+
+@test "a block HTML comment does not count — including the rotor's own cold-tier pointer" {
+  d="$BATS_TEST_TMPDIR/cm/memory"; mkdir -p "$d"; f="$d/MEMORY.md"
+  { printf '<!-- cold tier: archive/MEMORY_ARCHIVE_2026-H2-COLD.md — auto-rotated -->\n\n'; \
+    head -c $(( LIMIT - 4 )) /dev/zero | tr '\0' x; printf 'TAIL'; } >"$f"
+  run mib_verdict Edit "$f" "$(edit_grow "$f" 1)"
+  [ "$status" -eq 0 ]
+  has "$output" "now $LIMIT chars"
+}
+
+# ── the OTHER cap: 200 lines, which binds first on an index of one-line entries ──
+
+@test "an edit that crosses the 200-LINE cap is REFUSED even though the char budget is fine" {
+  d="$BATS_TEST_TMPDIR/lc/memory"; mkdir -p "$d"; f="$d/MEMORY.md"
+  for i in $(seq 1 "$LINE_LIMIT"); do printf -- '- [e%s](e%s.md) — h\n' "$i" "$i"; done >"$f"
+  run mib_verdict Edit "$f" "$(edit_raw "$f" "- [e1](e1.md) — h" "- [e1](e1.md) — h"$'\n'"- [x](x.md) — h")"
+  [ "$status" -eq 0 ]
+  has "$output" "1 line(s) over its read limit"
+  has "$output" "CARDINALITY cap"
+  hasnt "$output" "chars over its read limit"
+}
+
+@test "the line cap keeps the same shrink asymmetry — an over-cap index can still be repaired" {
+  d="$BATS_TEST_TMPDIR/lc2/memory"; mkdir -p "$d"; f="$d/MEMORY.md"
+  for i in $(seq 1 $(( LINE_LIMIT + 40 ))); do printf -- '- [e%s](e%s.md) — h\n' "$i" "$i"; done >"$f"
+  run mib_verdict Edit "$f" "$(edit_raw "$f" "- [e1](e1.md) — h"$'\n' "")"   # removes a line
+  [ "$status" -eq 1 ]
+  run mib_verdict Edit "$f" "$(edit_raw "$f" "- [e1](e1.md) — h" "- [e1](e1.md) — hh")"  # neutral
+  [ "$status" -eq 1 ]
 }
 
 # ── the edit is APPLIED, not approximated ────────────────────────────────────
@@ -176,7 +240,7 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
            '{file_path:$f, content:$c}')"
   run mib_verdict Write "$idx" "$big"
   [ "$status" -eq 0 ]
-  has "$output" "after this write $(( LIMIT + 200 )) B"
+  has "$output" "after this write $(( LIMIT + 200 )) chars"
 }
 
 # ── scope: this gate touches the auto-loaded index and nothing else ───────────
@@ -226,12 +290,16 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
   [ "$status" -eq 1 ]
 }
 
-@test "the limit is the same knob memory-nudge.sh reads, and it is honoured" {
+@test "the limit is honoured, and its default is spelled in exactly ONE place" {
   idx="$(mkindex 5000)"
   MEMORY_INDEX_LIMIT=5050 run mib_verdict Edit "$idx" "$(edit_grow "$idx" 100)"
   [ "$status" -eq 0 ]
-  grep -q 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/memory-nudge.sh"
-  grep -q 'MEMORY_INDEX_LIMIT:-24985' "$LIB"
+  # SSOT. Before 2026-08-15 the default was re-spelled in the gate, the nudge and the rotor, and
+  # a fix to one of the three could silently leave the other two measuring a different index.
+  n="$(grep -rc 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/lib/memory-index-measure.sh")"
+  [ "$n" -eq 1 ]
+  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$LIB")" -eq 0 ]
+  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/memory-nudge.sh")" -eq 0 ]
 }
 
 # ── end-to-end through the host hook, invoked the way the harness invokes it ──

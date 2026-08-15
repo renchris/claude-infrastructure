@@ -2,10 +2,16 @@
 # memory-nudge.sh — UserPromptSubmit hook: periodic crystallization nudge + the
 # APPEND-TIME BUDGET that keeps MEMORY.md under the harness read limit.
 #
-# The defect this pins: the index is loaded with a hard limit (24985 B) past which
-# the loader SILENTLY DROPS THE TAIL — the newest entries. Three manual compaction
-# passes each re-inflated within days because nothing measured the budget at the
-# moment of APPEND. Measured 2026-07-31: 27796 B / 96 entries, ~2811 B over.
+# The defect this pins: the index is loaded with hard caps past which the loader SILENTLY
+# DROPS THE TAIL — the newest entries. Three manual compaction passes each re-inflated within
+# days because nothing measured the budget at the moment of APPEND. Measured 2026-07-31:
+# 27796 B / 96 entries, ~2811 B over.
+#
+# UNITS, CORRECTED 2026-08-15 (cc-backlog 7a56de4c54ab). The caps are 25000 CHARS and 200 LINES
+# of the content AFTER YAML frontmatter and block HTML comments are stripped and the result
+# trimmed — never the raw bytes on disk. Every expected figure below is therefore DERIVED from
+# hooks/lib/memory-index-measure.sh at test time rather than hand-computed in bytes, so a fixture
+# whose punctuation changes cannot quietly stop discriminating.
 #
 # RED-proof coverage: the over-limit gate fires on the FIRST prompt (not the
 # periodic slot); each of the three diagnoses (hook-length / both / cardinality)
@@ -26,8 +32,14 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
-  LIMIT=24985
+  # shellcheck source=../hooks/lib/memory-index-measure.sh
+  . "$REPO/hooks/lib/memory-index-measure.sh"
+  LIMIT="$(mim_limit)"
+  LINE_LIMIT="$(mim_line_limit)"
 }
+
+# The size the LOADER checks — what every figure in this suite is denominated in.
+eff()  { m="$(mim_measure_file "$1")"; printf '%s' "${m%% *}"; }
 
 # ── errexit-live assertion helpers (function calls are ordinary simple commands) ──
 has()    { printf '%s' "$1" | grep -qF -- "$2"; }
@@ -55,18 +67,21 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
 
 @test "over-limit index raises the alarm on the FIRST prompt, not the periodic slot" {
   idx="$(mkindex 100 250)"
-  [ "$(wc -c <"$idx")" -gt "$LIMIT" ]           # fixture really is over
+  [ "$(eff "$idx")" -gt "$LIMIT" ]              # fixture really is over
   run fire s-first "$idx"
   [ "$status" -eq 0 ]
   starts "$(printf '%s' "$output" | ctx)" '🚨'
 }
 
 @test "alarm reports the true overage and that the NEWEST entries were dropped" {
-  idx="$(mkindex 100 250)"; total="$(wc -c <"$idx" | tr -d ' ')"
+  idx="$(mkindex 100 250)"; total="$(eff "$idx")"
   run fire s-num "$idx"
   out="$(printf '%s' "$output" | ctx)"
-  has "$out" "$total B vs the $LIMIT B loader limit"
-  has "$out" "over by $((total - LIMIT)) B"
+  # RAW bytes are 201 higher here (100 em-dashes at 3 bytes / 1 unit, plus the trailing
+  # newline the loader trims). A hook that reported the file size fails on both lines.
+  [ "$(wc -c <"$idx" | tr -d ' ')" -gt "$total" ]
+  has "$out" "$total chars vs the $LIMIT char loader limit"
+  has "$out" "over by $((total - LIMIT))"
   has "$out" "NEWEST"
   has "$out" "no reader can tell"
 }
@@ -103,27 +118,59 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
 # The recoverable-bytes figure must be DERIVED from the live file, never measured against the
 # hardcoded 115. 1676a681 fixed this one position over (the CEILING); the LEVER kept the constant,
 # so it over-claimed recovery on exactly the branch that fires when the index is already breached.
-# 100 entries x 250 B hooks: the allowance this index affords is 204 B, so the honest recovery is
-# 100 x (250-204) = 4600 B, not the 100 x (250-115) = 13500 B the constant reports. RED on the
-# pre-fix hook, which emits '115 B one-governing-rule target' and '~13500 B' for this same fixture.
-@test "recoverable bytes are DERIVED from the live index, not measured against the 115 constant" {
+# 100 entries x 250-char hooks: the allowance this index affords is 206, so the honest recovery is
+# 100 x (250-206) = 4400, not the 100 x (250-115) = 13500 the constant reports. RED on the pre-fix
+# hook, which emits '115 B one-governing-rule target' and '~13500 B' for this same fixture.
+@test "recoverable budget is DERIVED from the live index, not measured against the 115 constant" {
   run fire s-derived "$(mkindex 100 250)"
   out="$(printf '%s' "$output" | ctx)"
-  has "$out" '204 B allowance this index actually affords'
-  has "$out" 'recovers ~4600 B'
+  has "$out" '206 char allowance this index actually affords'
+  has "$out" 'recovers ~4400 chars'
   hasnt "$out" '115 B one-governing-rule target'
   hasnt "$out" '13500'
 }
 
 # The 115 constant is not deleted — it is demoted to a FLOOR, so it still governs a CROWDED index
-# where the derived allowance falls below one governing rule. 190 x 130 B derives 96 B; claiming
-# recovery down to 96 B would promise hooks shorter than a sentence, so the floor holds at 115 and
+# where the derived allowance falls below one governing rule. 190 x 130 derives 98; claiming
+# recovery down to 98 would promise hooks shorter than a sentence, so the floor holds at 115 and
 # the verdict stays BOTH-levers (pinned by s-lev3 above). This asserts the floor is what bound it.
 @test "the 115 target survives as a FLOOR when the derived allowance falls below it" {
   run fire s-floor "$(mkindex 190 130)"
   out="$(printf '%s' "$output" | ctx)"
-  has "$out" '115 B allowance'
-  hasnt "$out" '96 B allowance'
+  has "$out" '115 char allowance'
+  hasnt "$out" '98 char allowance'
+}
+
+# ── the OTHER cap, and the strips: nothing here measured either before 2026-08-15 ──
+
+@test "the 200-LINE cap raises its own alarm, and names cardinality rather than size" {
+  # An index can sit deep inside its char budget with its newest entries already invisible:
+  # 210 short entries is 4 KB against a 25000 cap and 10 lines past the line cap. Before the
+  # correction this branch did not exist, so this breach had no sensor at all.
+  idx="$(mkindex $(( LINE_LIMIT + 10 )) 5)"
+  [ "$(eff "$idx")" -lt "$LIMIT" ]               # comfortably inside the SIZE cap...
+  run fire s-lines "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  starts "$out" '🚨'                             # ...and still breached
+  has "$out" "OVER ITS LINE LIMIT"
+  has "$out" "$(( LINE_LIMIT + 10 )) lines vs the ${LINE_LIMIT}-line loader limit"
+  has "$out" 'CARDINALITY cap, not the size one'
+  hasnt "$out" 'OVER ITS READ LIMIT'
+}
+
+@test "frontmatter and a block comment are not counted — the budget reports the loaded size" {
+  # The rotor writes a `<!-- cold tier: … -->` pointer into the index and topic-style indexes
+  # carry a `--- … ---` header; the loader strips both. A raw-byte hook reports a size the
+  # operator cannot act on, and at the margin declares a breach that has not happened.
+  base="$(mkindex 40 250)"; d="$BATS_TEST_TMPDIR/fm/memory"; mkdir -p "$d"
+  { printf -- '---\nname: idx\ntype: reference\n---\n'; \
+    printf '<!-- cold tier: archive/MEMORY_ARCHIVE_2026-H2-COLD.md -->\n'; \
+    cat "$base"; } >"$d/MEMORY.md"
+  [ "$(wc -c <"$d/MEMORY.md" | tr -d ' ')" -gt "$(wc -c <"$base" | tr -d ' ')" ]
+  [ "$(eff "$d/MEMORY.md")" -eq "$(eff "$base")" ]      # the additions cost nothing
+  out=""
+  for _ in $(seq 1 12); do out="$(fire s-strip "$d/MEMORY.md" || true)"; done
+  has "$(printf '%s' "$out" | ctx)" "$(eff "$base")/$LIMIT chars"
 }
 
 @test "alarm carries the one-in-one-out rule and keeps the lossy half human-gated" {
@@ -159,20 +206,20 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
 }
 
 @test "runway is counted at the OBSERVED density, not the target-length ceiling" {
-  # 40 entries x 250 B hooks: healthy (10820 B), but written 2.2x longer than the
-  # 115 B target. The target-based ceiling leaves 145 slots; only 52 lines of the
+  # 40 entries x 250-char hooks: healthy (10739 chars), but written 2.2x longer than
+  # the 115 target. The target-based ceiling leaves 147 slots; only 53 lines of the
   # length this index is actually written at fit in the headroom. Leading with 145
   # tells a caller it has 2.8x the room it has. Measured live 2026-08-06 as 37 vs
   # 11, and that inflated figure had already reached a backlog item's premise as
   # "37 free cardinality slots" — framing a cardinality-bound index as length-bound.
   idx="$(mkindex 40 250)"; out=""
-  [ "$(wc -c <"$idx")" -lt "$LIMIT" ]            # fixture is healthy, not over
+  [ "$(eff "$idx")" -lt "$LIMIT" ]               # fixture is healthy, not over
   for _ in $(seq 1 12); do out="$(fire s-runway "$idx" || true)"; done
   ctxout="$(printf '%s' "$out" | ctx)"
-  has "$ctxout" '~52 entry slots left'           # observed 271 B/line
+  has "$ctxout" '~53 entry slots left'           # observed 269 chars/line
   has "$ctxout" 'ACTUALLY written at'
-  has "$ctxout" '(145 only if'                   # ceiling kept, marked conditional
-  hasnt "$ctxout" '~145 entry slots left'        # the pre-fix wording this pins
+  has "$ctxout" '147 char-slots only if'         # ceiling kept, marked conditional
+  hasnt "$ctxout" '~147 entry slots left'        # the pre-fix wording this pins
 }
 
 # ── fail-safe: a side-car must fail no wider than itself ──────────────────────
@@ -274,15 +321,27 @@ mkskewed() {
 
 @test "dropped count is the entries that START past the limit, not overage/mean-line" {
   idx="$(mkskewed 200 100 6 900)"
-  total="$(wc -c <"$idx" | tr -d ' ')"
+  total="$(eff "$idx")"
   [ "$total" -gt "$LIMIT" ]
-  # The exact answer, computed independently of the hook and in the same unit (bytes).
-  exact="$(LC_ALL=C awk -v lim="$LIMIT" \
-    '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' "$idx")"
+  # The exact answer, computed independently of the hook and in the LOADER's unit — UTF-16
+  # code units of the effective content. Walked in raw BYTES over the raw file it names a
+  # different entry (every offset past a multibyte char is shifted), which is the 2026-08-15
+  # correction. In python, not awk: this box's awk is mawk, whose length() is bytes whatever
+  # the locale says, so an awk control would silently re-introduce the bug it is checking for.
+  read -r exact entry_b <<<"$(mim_effective_file "$idx" | python3 -c '
+import sys
+def u(s): return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
+lines = sys.stdin.read().split("\n")
+lim, off, dropped, entry = '"$LIMIT"', 0, 0, 0
+for l in lines:
+    if l.startswith("- ["):
+        if off >= lim: dropped += 1
+        entry += u(l) + 1
+    off += u(l) + 1
+print(dropped, entry)')"
   # The averaged answer the old implementation produced. The fixture is only a valid
   # control if the two DISAGREE — otherwise this test passes against either one.
   n="$(grep -c '^- \[' "$idx")"
-  entry_b="$(grep '^- \[' "$idx" | wc -c | tr -d ' ')"
   # Kept flat: a nested `((` inside `$(( ))` reads as an arithmetic ASSERTION to
   # scripts/bats-assert-liveness.py, whose lookbehind only exempts the `$((` opener.
   mean_line=$(( entry_b / n ))
@@ -309,17 +368,18 @@ mkskewed() {
 
 # ── the limit is ONE number, however many files read it ───────────────────────
 
-@test "the gate and the nudge default to the SAME limit, and nothing else spells it" {
-  # They are separate literals in separate files (single-sourcing was rejected: a
-  # sourced lib the host cannot resolve fails open SILENTLY and reads as landed while
-  # inert — tests/memory-index-budget.bats pins that trap for the gate). Two literals
-  # are safe only while something fails when they drift. This is that something.
-  nudge="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/memory-nudge.sh")"
-  gate="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/lib/memory-index-budget.sh")"
-  rotor="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/bin/cc-memory-rotate")"
-  [ "$nudge" -eq 1 ]
-  [ "$gate" -eq 1 ]
-  [ "$rotor" -eq 1 ]
+@test "the three measurers share ONE limit literal, and nothing else spells it" {
+  # These used to be three separate literals in three files (single-sourcing was rejected: a
+  # sourced lib the host cannot resolve fails open SILENTLY and reads as landed while inert —
+  # tests/memory-index-budget.bats pins that trap for the gate, and both the nudge and the rotor
+  # now carry the same deref-and-degrade shape). Three literals held only while something failed
+  # when they drifted, and on 2026-08-15 all three were wrong TOGETHER in the same direction —
+  # a drift test cannot see a shared error. So the default now lives in ONE file and the other
+  # two read it; this asserts that, and that no fourth spelling has appeared.
+  n="$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/lib/memory-index-measure.sh")"
+  [ "$n" -eq 1 ]
+  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/memory-nudge.sh")" -eq 0 ]
+  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/lib/memory-index-budget.sh")" -eq 0 ]
   # And no THIRD spelling anywhere in the executable surface. Counted in a loop, not
   # with `grep -vc`: grep exits 1 on a zero count, so the healthy case would abort the
   # test under errexit and read as a failure of the thing it is asserting is fine.
@@ -327,7 +387,7 @@ mkskewed() {
   others=0
   for f in $list; do
     case "$f" in
-      */memory-nudge.sh|*/memory-index-budget.sh|*/cc-memory-rotate) ;;
+      */memory-index-measure.sh|*/cc-memory-rotate) ;;
       *) others=$(( others + 1 )) ;;
     esac
   done

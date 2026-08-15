@@ -39,23 +39,45 @@
 # index that the next pass fixes; the cost of a false deny is a session that cannot write memory at
 # all. Those are not symmetric, so the default is not a concession — it is the sized one.
 #
-# ── BYTES, NEVER CHARACTERS ──────────────────────────────────────────────────────────────────────
-# The loader limit is a BYTE limit and this index is dense UTF-8: every entry carries `—`, `⇒`, `·`,
-# `≠` (3 bytes each). jq's `length` on a string counts CODEPOINTS and would under-measure a typical
-# index line by ~10%, which is precisely the margin that decides a breach. `utf8bytelength` is the
-# only correct measure and `tests/memory-index-budget.bats` pins it with a fixture that is under the
-# limit in characters and over it in bytes.
+# ── MEASURE WHAT THE LOADER MEASURES, NOT WHAT THE FILE WEIGHS ───────────────────────────────────
+# This section used to read "BYTES, NEVER CHARACTERS — the loader limit is a BYTE limit … jq's
+# `length` counts CODEPOINTS and would under-measure … `utf8bytelength` is the only correct
+# measure", and a test pinned it with a fixture under the limit in characters and over it in bytes.
+# The reasoning was sound; its premise is not. Read out of the shipped binary (2.1.233, 2026-08-15,
+# cc-backlog 7a56de4c54ab), the loader strips YAML frontmatter and block HTML comments, trims, and
+# then compares `String.length` — UTF-16 CODE UNITS — against 25000, plus a 200-LINE cap this gate
+# did not know about at all. So `—` costs 1 against the cap and 3 on disk, a `---` header and the
+# rotor's own `<!-- cold tier … -->` pointer cost NOTHING, and a raw-byte read of the file
+# over-measures in three independent directions at once.
+#
+# The whole derivation, the safe-direction argument for each approximation, and the version
+# boundary live in hooks/lib/memory-index-measure.sh, which is now the single measurement for this
+# gate, hooks/memory-nudge.sh and bin/cc-memory-rotate — three measurers that must never disagree
+# about whether the same file is over budget.
+_mib_here="${BASH_SOURCE[0]}"
+# Deref like backup-before-write.sh's _mib_deref: live, this lib is reached through a per-file
+# symlink into the checkout, and an underefed dirname would miss a newly-ADDED sibling until a
+# deploy links it — failing open silently while reading as landed (LIVE_ADDS).
+if command -v readlink >/dev/null 2>&1; then
+  _mib_real="$(readlink -f "$_mib_here" 2>/dev/null || printf '%s' "$_mib_here")"
+else
+  _mib_real="$_mib_here"
+fi
+# shellcheck source=./memory-index-measure.sh
+. "$(dirname "$_mib_real")/memory-index-measure.sh"
+unset _mib_here _mib_real
 
-# mib_resulting_size <tool_name> <file_path> <tool_input_json>
-#   Echoes the byte size the file would have AFTER this tool call, or nothing when it cannot be
-#   determined. Applies the edit literally rather than estimating a delta, so replace_all and
-#   MultiEdit are exact instead of approximated.
-mib_resulting_size() {
+# mib_resulting_measure <tool_name> <file_path> <tool_input_json>
+#   Echoes "<units> <lines>" — the size the loader would check AFTER this tool call — or nothing
+#   when it cannot be determined. Applies the edit literally rather than estimating a delta, so
+#   replace_all and MultiEdit are exact instead of approximated, and measures the RESULT through
+#   the same strip/trim the loader applies.
+mib_resulting_measure() {
   local tool="$1" file="$2" input="$3"
   [ -r "$file" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
 
-  jq -n --rawfile cur "$file" --arg tool "$tool" --argjson ti "$input" '
+  jq -nr --rawfile cur "$file" --arg tool "$tool" --argjson ti "$input" "$MIM_JQ_DEFS"'
     # split/1 is a LITERAL split in jq (split/2 is the regex form), so these do a literal
     # find-and-replace with no metacharacter surprises from a hook or a code span in the index.
     def apply($old; $new; $all):
@@ -79,7 +101,9 @@ mib_resulting_size() {
           end )
       else null end
     ) as $result
-    | if ($result | type) != "string" then empty else ($result | utf8bytelength) end
+    | if ($result | type) != "string" then empty
+      else ($result | mim_effective) as $e | "\($e | mim_units) \($e | mim_lines)"
+      end
   ' 2>/dev/null
 }
 
@@ -99,29 +123,54 @@ mib_is_memory_index() {
 #   ALLOW → prints nothing, returns 1   (every fail-open path lands here)
 mib_verdict() {
   local tool="$1" file="$2" input="$3"
-  local limit cur new over
+  local limit line_limit curm newm cur curl new newl over dim
 
-  limit="${MEMORY_INDEX_LIMIT:-24985}"   # 24.4 KiB — the same knob memory-nudge.sh reads
-  case "$limit" in ''|*[!0-9]*) return 1 ;; esac
+  # Both caps are the same knobs memory-nudge.sh and cc-memory-rotate read. Either one
+  # non-numeric is a fail-open: a gate that cannot read its own limit must not guess one.
+  limit=$(mim_limit) || return 1
+  line_limit=$(mim_line_limit) || return 1
 
   mib_is_memory_index "$file" || return 1
   [ -f "$file" ] || return 1
 
-  cur=$(wc -c <"$file" 2>/dev/null | tr -d ' ') || return 1
-  case "$cur" in ''|*[!0-9]*) return 1 ;; esac
+  curm=$(mim_measure_file "$file") || return 1
+  cur="${curm%% *}"; curl="${curm##* }"
 
-  new=$(mib_resulting_size "$tool" "$file" "$input") || return 1
-  case "$new" in ''|*[!0-9]*) return 1 ;; esac
+  newm=$(mib_resulting_measure "$tool" "$file" "$input") || return 1
+  case "$newm" in ''|*[!0-9\ ]*) return 1 ;; esac
+  new="${newm%% *}"; newl="${newm##* }"
+  case "$new$newl" in ''|*[!0-9]*) return 1 ;; esac
 
-  # Under the limit, or shrinking/neutral: allowed. The second clause is what keeps every remedy
-  # — and every recovery from an already-breached index — reachable through this gate.
-  [ "$new" -le "$limit" ] && return 1
-  [ "$new" -le "$cur" ] && return 1
+  # TWO caps, one asymmetry. The loader truncates on EITHER (units > 25000 OR lines > 200), and
+  # on a dense index of one-line entries the LINE cap binds first — so a gate that watched only
+  # size would bless an index whose tail is already being dropped. Each cap is judged on its own
+  # dimension, and each keeps the shrink clause: under the cap, or not growing THAT dimension, is
+  # allowed. That is what keeps every remedy — and every recovery from an already-breached index
+  # — reachable through this gate.
+  dim=""
+  if [ "$new" -gt "$limit" ] && [ "$new" -gt "$cur" ]; then
+    dim=size
+  elif [ "$newl" -gt "$line_limit" ] && [ "$newl" -gt "$curl" ]; then
+    dim=lines
+  fi
+  [ -n "$dim" ] || return 1
 
-  over=$(( new - limit ))
-  printf '%s' "MEMORY INDEX WRITE REFUSED — this edit would put the auto-loaded index ${over} B over its read limit (now ${cur} B; after this write ${new} B; limit ${limit} B).
+  if [ "$dim" = lines ]; then
+    over=$(( newl - line_limit ))
+    printf '%s' "MEMORY INDEX WRITE REFUSED — this edit would put the auto-loaded index ${over} line(s) over its read limit (now ${curl} lines; after this write ${newl} lines; limit ${line_limit} lines).
 
-Past ${limit} B the loader SILENTLY DROPS THE TAIL — the NEWEST entries — so the line you are adding would very likely never load again, and no reader could tell. That has already happened; it is why this is a refusal and not another warning.
+Past ${line_limit} lines the loader SILENTLY DROPS THE TAIL — the NEWEST entries — so the line you are adding would very likely never load again, and no reader could tell. That has already happened; it is why this is a refusal and not another warning.
+
+Note the unit: this is the CARDINALITY cap, not the size one (the index is ${cur}/${limit} chars, so shortening hooks cannot reach it — only removing a line can)."
+  else
+    over=$(( new - limit ))
+    printf '%s' "MEMORY INDEX WRITE REFUSED — this edit would put the auto-loaded index ${over} chars over its read limit (now ${cur} chars; after this write ${new} chars; limit ${limit} chars).
+
+Past ${limit} chars the loader SILENTLY DROPS THE TAIL — the NEWEST entries — so the line you are adding would very likely never load again, and no reader could tell. That has already happened; it is why this is a refusal and not another warning.
+
+Note the unit: the loader counts the index AFTER stripping YAML frontmatter and block HTML comments, and it counts CHARACTERS, not bytes — so ${file##*/} is larger on disk than this figure, and trimming multibyte punctuation buys nothing."
+  fi
+  printf '%s' "
 
 APPLY ONE-IN-ONE-OUT — make room in the SAME edit:
   1. Pick an entry to demote using the DURABILITY criterion (a one-time verdict or a closed incident, NEVER a live rule).
@@ -132,6 +181,6 @@ Run /compact-memory for the full procedure; its lossy half (shortening, dedupe) 
 
 If you file this as backlog work instead of fixing it here, it is ONE standing condition, not a new item per measurement: cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\". The size belongs in the title; putting it in the key is what minted 21 items for this one condition.
 
-Any write that SHRINKS or does not grow this file is always allowed, including while it is over the limit — so compaction, archiving and repair are never blocked by this gate."
+Any write that SHRINKS the index — or leaves the breached dimension no larger than it already is — is always allowed, including while it is over the limit, so compaction, archiving and repair are never blocked by this gate."
   return 0
 }
