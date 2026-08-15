@@ -135,6 +135,16 @@ tests/handoff-fire-completion-push.bats
 # HINT (not verified): these assert a specific interpreter/tool layout on this box.
 # run 31362043861: notok=1
 tests/python-deps.bats
+# runs 31877495900 … 31904202657: notok=3 on TWELVE consecutive runs — the only suite red in every
+# one of them, so this single entry is what has stood between the producer and a green all day.
+# MEASURED, not a hint, and the cause is named: the lint asks whether a bare command name resolves
+# on the PATH a launchd job or hook actually runs under, and the answer is a fact about WHICH
+# BINARIES THE MACHINE HAS. The runner image ships none of tmux, kitty, pnpm, yarn, uv; the box the
+# daemons run on resolves all five inside the hardened PATH itself (/opt/homebrew/bin ×4,
+# /usr/local/bin/yarn), which is why it is 18/18 green here and 15-ok/3-notok there. An off-box
+# verdict on this suite is a claim about the runner's package set, never about our tree. Its own
+# sibling tests/unattended-sysctl-path.bats has been excluded for this class since the seed run.
+tests/unattended-path-lint.bats
 # run 31362043861: notok=1
 tests/subshell-cleanup-lint.bats
 
