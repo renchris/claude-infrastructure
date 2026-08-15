@@ -47,7 +47,20 @@ setup() {
   export CC_DECIDE_BIN="$BATS_TEST_TMPDIR/absent-cc-decide"
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # ◎ goal term: same hermetic discipline. On the PULL path (--full/--readout/--goal) the ledger
+  # resolves a transcript from a session id when none is passed — and $CLAUDE_CODE_SESSION_ID IS
+  # set in an ordinary tool-call shell, so without these two lines every --full test on the
+  # operator's box would fork a find and read that session's REAL transcript (the
+  # suite-is-a-function-of-who-runs-it class). An empty roots dir = nothing to find = GOAL_SRC=none.
+  unset CLAUDE_CODE_SESSION_ID
+  export WRAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/projects"
 }
+
+# goal_status transcript fixtures — the record dictionary is hooks/lib/goal-state.sh's header.
+g_arm()   { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"%s"}}\n' "$2" "$1"; }
+g_unmet() { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":false,"condition":"%s"}}\n' "$2" "$1"; }
+g_met()   { printf '{"type":"attachment","timestamp":"%s","attachment":{"type":"goal_status","met":true,"condition":"%s"}}\n' "$2" "$1"; }
+g_now()   { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
 
 # read a KEY=value field from --machine output
 field() { printf '%s' "$1" | grep -E "^$2=" | head -1 | cut -d= -f2-; }
@@ -1260,4 +1273,129 @@ _cust_stub() { # $1=name $2=body-line → echoes an executable stub path
   [ "$status" -eq 0 ]
   [ "$(field "$output" LANDING)" = "0" ]
   printf '%s' "$output" | grep -q "/ship to land it"
+}
+
+# ══ ◎ GOAL LIVENESS (E5, docs/research/goal-safe-2way-comms-2026-08-13.md §9 B5) ═════════════════
+#
+# The oracle that makes zero-eval-vs-healthy-deferral measurable AT THE CLOSE. Two properties are
+# load-bearing and each has a mutation control below:
+#   1. it is REPORTED, NEVER A RUNG — a live goal is a normal state, and a rung on it would fire at
+#      every close of every goal-armed session (the alarm-polarity law that bounds 👤/⛔/🚀 here);
+#   2. the STOP PATH never forks a `find` — machine mode uses the exported $WRAP_TRANSCRIPT or
+#      reports `none`; only the pull surfaces (/wrap) resolve a transcript from a session id.
+
+@test "goal: armed + never evaluated ⇒ GOAL_SRC=live, GOAL_EVALS=0 (the starvation pole)" {
+  g_arm "land the wave" "$(g_now)" > "$BATS_TEST_TMPDIR/t.jsonl"
+  run bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" GOAL_SRC)" = "live" ]
+  [ "$(field "$output" GOAL_EVALS)" = "0" ]
+  [ "$(field "$output" GOAL_LAST)" = "arm" ]
+  printf '%s' "$output" | grep -q "^GOAL_LINE=◎ goal: 0 evals"
+  printf '%s' "$output" | grep -q "NEVER judged"
+}
+
+@test "goal: evaluations counted + last verdict reported" {
+  { g_arm "land the wave" "$(g_now)"; g_unmet "land the wave" "$(g_now)"
+    g_unmet "land the wave" "$(g_now)"; } > "$BATS_TEST_TMPDIR/t.jsonl"
+  run bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  [ "$(field "$output" GOAL_EVALS)" = "2" ]
+  [ "$(field "$output" GOAL_LAST)" = "unmet" ]
+  printf '%s' "$output" | grep -q "^GOAL_LINE=◎ goal: 2 eval(s) · last unmet@"
+}
+
+@test "goal: a LIVE goal NEVER moves the rung (it reports, it does not rank)" {
+  # An otherwise-✅ tree: clean, landed, DoD present with nothing unchecked. The goal is live and
+  # unjudged — the loudest state this term has — and the rung must still read ✅. THE CONTROL for
+  # property 1: if the goal ever became a rung, this goes red.
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/dod.md"; printf -- '- [x] done\n' > "$WRAP_DOD_FILE"
+  g_arm "land the wave" "$(g_now)" > "$BATS_TEST_TMPDIR/t.jsonl"
+  run bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" GOAL_SRC)" = "live" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  printf '%s' "$output" | grep -q "^READOUT=✅"
+}
+
+@test "goal: the default readout stays ONE line — the rung — with a live goal" {
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/dod.md"; printf -- '- [x] done\n' > "$WRAP_DOD_FILE"
+  g_arm "land the wave" "$(g_now)" > "$BATS_TEST_TMPDIR/t.jsonl"
+  run bash "$LEDGER" --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  ! printf '%s' "$output" | grep -q "◎"
+}
+
+@test "goal: --goal prints the ◎ line for a LIVE goal and NOTHING otherwise (rc 0 either way)" {
+  g_arm "land the wave" "$(g_now)" > "$BATS_TEST_TMPDIR/live.jsonl"
+  run bash "$LEDGER" --goal --transcript "$BATS_TEST_TMPDIR/live.jsonl"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^◎ goal: 0 evals"
+
+  # met ⇒ the FIELDS survive (that is the measurement) but the line does not — a "goal met" note
+  # re-printed at every close for the rest of the session is an alarm that always fires.
+  { g_arm "x" "$(g_now)"; g_met "x" "$(g_now)"; } > "$BATS_TEST_TMPDIR/met.jsonl"
+  run bash "$LEDGER" --goal --transcript "$BATS_TEST_TMPDIR/met.jsonl"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  run bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/met.jsonl"
+  [ "$(field "$output" GOAL_SRC)" = "cleared" ]
+  [ "$(field "$output" GOAL_EVALS)" = "1" ]
+
+  # and a goal-less session gains no chrome at all
+  printf '{"type":"user","message":{"content":"hi"}}\n' > "$BATS_TEST_TMPDIR/none.jsonl"
+  run bash "$LEDGER" --goal --transcript "$BATS_TEST_TMPDIR/none.jsonl"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "goal: --full carries the ◎ row in every state, including 'none armed'" {
+  printf '{"type":"user","message":{"content":"hi"}}\n' > "$BATS_TEST_TMPDIR/none.jsonl"
+  run bash "$LEDGER" --full --transcript "$BATS_TEST_TMPDIR/none.jsonl"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^Goal (◎): *none armed in this session"
+
+  { g_arm "land the wave" "$(g_now)"; g_unmet "land the wave" "$(g_now)"; } > "$BATS_TEST_TMPDIR/t.jsonl"
+  run bash "$LEDGER" --full --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  printf '%s' "$output" | grep -q "^Goal (◎): *LIVE · 1 evaluation(s) · last unmet@"
+  printf '%s' "$output" | grep -q '"land the wave"'
+}
+
+@test "goal: an UNREADABLE transcript is 'error', never the positive finding 'absent'" {
+  run bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/does-not-exist.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" GOAL_SRC)" = "error" ]
+  [ "$(field "$output" GOAL_EVALS)" = "0" ]
+  [ -z "$(field "$output" GOAL_LINE)" ]
+  run bash "$LEDGER" --full --transcript "$BATS_TEST_TMPDIR/does-not-exist.jsonl"
+  printf '%s' "$output" | grep -q "^Goal (◎): *unknown"
+}
+
+@test "goal: MACHINE mode never forks the pull-path find — no transcript ⇒ none" {
+  # THE CONTROL for property 2. The fixture is discoverable BY THE PULL PATH (same roots, same
+  # sid), so a machine-mode read that reported `live` here would prove the Stop path had gone
+  # looking — seven callers × one find across four account roots, per close, forever.
+  mkdir -p "$WRAP_PROJECT_ROOTS/proj"
+  g_arm "land the wave" "$(g_now)" > "$WRAP_PROJECT_ROOTS/proj/$SID.jsonl"
+  export WRAP_SESSION_ID="$SID"
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" GOAL_SRC)" = "none" ]
+
+  # …while the PULL path finds exactly that transcript and reports the pole.
+  run bash "$LEDGER" --goal
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^◎ goal: 0 evals"
+}
+
+@test "goal: WRAP_CACHE=off must not change the ANSWER — only how often it is computed" {
+  # The memo kill-switch blanks $WL_TRANSCRIPT (it is a cache-KEY variable), so a term reading the
+  # transcript through it answers a different question under the benchmark's control arm. Caught
+  # by tests/wrap-ledger-memo.bats §2 as a cached-vs-uncached byte difference; pinned here at the
+  # field that caused it, so the next reader of $WL_TRANSCRIPT sees why it is not the input.
+  g_arm "land the wave" "$(g_now)" > "$BATS_TEST_TMPDIR/t.jsonl"
+  run env WRAP_CACHE=off bash "$LEDGER" --machine --transcript "$BATS_TEST_TMPDIR/t.jsonl"
+  [ "$(field "$output" GOAL_SRC)" = "live" ]
+  [ "$(field "$output" GOAL_EVALS)" = "0" ]
 }
