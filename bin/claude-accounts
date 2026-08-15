@@ -3588,7 +3588,116 @@ def _provider_pin(pr):
         return None
 
 
-def probe_provider(pr, timeout_s=8.0):
+# ---- provider probe cache ----------------------------------------------------------------------
+#
+# probe_provider() measured 3.68s of a 3.7s `claude-accounts --json` against the live registry (6
+# providers, 8 child CLI processes), and every consumer re-paid it on every invocation —
+# bin/cc-context, bin/cc-value, bin/cc-board, bin/cc-wave-plan, bin/cc-blockers.
+#
+# WHAT IS MEMOISED IS ONLY THE CHILD PROCESSES, never probe_provider() itself, and that is an
+# invariant rather than an implementation detail. `pinned_model` is read from the provider's OWN
+# config precisely so that a config file governs and a remembered value does not (_provider_pin's
+# docstring), and `installed` must answer for the PATH as it is right now. A whole-probe cache
+# would turn both into remembered values — the very defect the pin-proof rule exists to prevent.
+# The suite already pins it: "the model pin is read from the provider's OWN config" edits a
+# provider's settings.json between two runs and demands the render change, with the registry
+# untouched. That test is this cache's standing control; it must stay green.
+#
+# The key carries everything that can change a child's answer: the argv, the resolved binary's
+# identity (realpath + mtime + size, so an upgrade or reinstall invalidates), and the registry's
+# own mtime + size (so editing providers.json invalidates every probe — the invalidation the work
+# item asked for, and the reason a registry edit is visible on the very next call).
+PROVIDER_CACHE_TTL_S = 900
+# A FAILED probe expires far sooner than a good one. Caching failures at all is deliberate: a
+# provider whose CLI hangs costs its full `timeout_s` on EVERY invocation, which is most of what
+# this cache exists to remove. But a transient failure must not pin a wrong auth_state for a
+# quarter of an hour, so recovery is visible within about one sweep instead.
+PROVIDER_CACHE_FAIL_TTL_S = 60
+
+
+def _provider_cache_path():
+    """Where the memo lives. HOME-derived, so a fixtured $HOME is isolated by construction —
+    the suite pins HOME before it pins anything else, and a cache keyed off /tmp would have made
+    every provider test a function of the operator's real registry."""
+    return os.environ.get("CC_PROVIDER_CACHE") or os.path.join(
+        HOME, ".claude", "cache", "provider-probe.json")
+
+
+def _provider_cache_key(argv):
+    parts = ["\x00".join(argv)]
+    reg = os.path.expanduser(os.environ.get("CC_PROVIDERS_JSON") or PROVIDERS_JSON_DEFAULT)
+    for p in ((argv[0] if argv else ""), reg):
+        try:
+            st = os.stat(p)
+            parts.append(f"{os.path.realpath(p)}|{st.st_mtime_ns}|{st.st_size}")
+        except OSError:
+            parts.append("absent")
+    return sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _provider_cache_load():
+    """Malformed, unreadable, or valid-JSON-but-not-an-object ⇒ {}, never an exception. Same
+    discipline as cache_read: an accessory store must degrade to a miss, never wedge the tool."""
+    try:
+        with open(_provider_cache_path()) as f:
+            c = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
+def _provider_cache_store(entries):
+    path = _provider_cache_path()
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(tmp, "w") as f:
+            json.dump(entries, f)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _provider_cmd(argv, timeout_s, fresh=False):
+    """A provider's own CLI, run at most once per TTL. → (rc, stdout, stderr, ran).
+
+    `ran` is False when the child could not be run to completion at all (what the callers' except
+    arms used to see). It is a returned FIELD rather than a raised exception so that a failure is
+    cacheable in its own right, at its own shorter TTL.
+    """
+    argv = list(argv)
+    key = _provider_cache_key(argv)
+    entries = _provider_cache_load()
+    if not fresh:
+        e = entries.get(key)
+        if isinstance(e, dict) and isinstance(e.get("ts"), (int, float)):
+            ttl = PROVIDER_CACHE_TTL_S if e.get("ran") else PROVIDER_CACHE_FAIL_TTL_S
+            # The lower bound rejects an entry stamped in the FUTURE: a clock step backwards
+            # would otherwise pin it until the clock caught up, which for a 900s TTL can be
+            # arbitrarily long.
+            if 0 <= time.time() - e["ts"] <= ttl:
+                return e.get("rc"), e.get("stdout") or "", e.get("stderr") or "", bool(e.get("ran"))
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s)
+        res = {"rc": r.returncode, "stdout": r.stdout or "", "stderr": r.stderr or "", "ran": True}
+    except (OSError, subprocess.SubprocessError):
+        res = {"rc": None, "stdout": "", "stderr": "", "ran": False}
+    entries[key] = dict(res, ts=time.time())
+    # Bounded on the way out. Every key rotates whenever the argv, the binary, or the registry
+    # changes, so an upgraded binary would otherwise leave its predecessor's row behind forever;
+    # dropping anything past the longer TTL keeps the store the size of the live registry.
+    cutoff = time.time() - PROVIDER_CACHE_TTL_S
+    entries = {k: v for k, v in entries.items()
+               if isinstance(v, dict) and isinstance(v.get("ts"), (int, float))
+               and v["ts"] >= cutoff}
+    _provider_cache_store(entries)
+    return res["rc"], res["stdout"], res["stderr"], res["ran"]
+
+
+def probe_provider(pr, timeout_s=8.0, fresh=False):
     """One provider → its LIVE state, merged onto its registry facts.
 
     Three separate questions, deliberately not collapsed (see providers.json _the_detection_rule):
@@ -3610,12 +3719,12 @@ def probe_provider(pr, timeout_s=8.0):
         out["auth_state"] = "absent"
         return out
 
-    try:
-        r = subprocess.run([exe] + list(pr.get("version_args") or ["--version"]),
-                           capture_output=True, text=True, timeout=timeout_s)
-        lines = [ln.strip() for ln in ((r.stdout or "") + (r.stderr or "")).splitlines() if ln.strip()]
+    _, vso, vse, vran = _provider_cmd([exe] + list(pr.get("version_args") or ["--version"]),
+                                      timeout_s, fresh=fresh)
+    if vran:
+        lines = [ln.strip() for ln in (vso + vse).splitlines() if ln.strip()]
         out["version"] = lines[0] if lines else None
-    except (OSError, subprocess.SubprocessError):
+    else:
         out["version"] = None
 
     a = pr.get("auth")
@@ -3646,14 +3755,20 @@ def probe_provider(pr, timeout_s=8.0):
         if not exe2:
             out["auth_state"] = "absent"
         else:
-            try:
-                r = subprocess.run([exe2] + cmd[1:], capture_output=True, text=True,
-                                   timeout=timeout_s)
-                j = json.loads((r.stdout or "").strip() or "{}")
-                st = j.get("status")
-                out["auth_state"] = "ok" if st == "ready" else (j.get("reason") or st or "not-ready")
-            except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            _, aso, _ase, aran = _provider_cmd([exe2] + cmd[1:], timeout_s, fresh=fresh)
+            if not aran:
                 out["auth_state"] = "unreadable"
+            else:
+                try:
+                    j = json.loads(aso.strip() or "{}")
+                    st = j.get("status")
+                    out["auth_state"] = ("ok" if st == "ready"
+                                         else (j.get("reason") or st or "not-ready"))
+                # AttributeError: valid JSON that is not an OBJECT (a bare list or string) reached
+                # .get() and raised out of a probe whose whole job is to report a state — the same
+                # non-dict hazard cache_read was fixed for.
+                except (json.JSONDecodeError, AttributeError):
+                    out["auth_state"] = "unreadable"
     else:
         out["auth_state"] = "unknown"
     return out
@@ -3731,7 +3846,11 @@ def main():
     # which is exactly how a hermetic test found it — a provider question depending on Claude
     # config is a coupling, not a convenience.
     if "--agents" in args:
-        provs = [probe_provider(p) for p in load_providers()]
+        # `"--fresh" in args` spelled inline at all three provider call sites rather than read from
+        # the `fresh` local: this branch deliberately returns BEFORE that local is bound (it must
+        # answer without load_cfg()), and one spelling that works everywhere beats two that differ
+        # by position in the file.
+        provs = [probe_provider(p, fresh="--fresh" in args) for p in load_providers()]
         if "--json" in args:
             print(json.dumps({"providers": provs}, indent=2))
             return
@@ -3926,7 +4045,8 @@ def main():
         # consumer that has never heard of providers is unaffected by an extra sibling key.
         print(json.dumps({"window": wj, "cached": cached,
                           "s_cut": cfg["router"]["S_CUT"], "rows": rows,
-                          "providers": [probe_provider(p) for p in load_providers()]}, indent=2))
+                          "providers": [probe_provider(p, fresh="--fresh" in args)
+                                        for p in load_providers()]}, indent=2))
         return
 
     if "--login-status" in args:
@@ -4097,7 +4217,8 @@ def main():
         # Suppressed under --narrow: render_providers builds to its own ~82-col budget, so
         # appending it would breach the board's width on a surface that cannot scroll sideways.
         if "--no-agents" not in args and not narrow:
-            lines = render_providers([probe_provider(p) for p in load_providers()])
+            lines = render_providers([probe_provider(p, fresh="--fresh" in args)
+                                      for p in load_providers()])
             if lines:
                 print("\n".join(lines))
         return

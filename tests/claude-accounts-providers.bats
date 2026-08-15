@@ -51,6 +51,11 @@ setup() {
   export PATH="$FAKEBIN:/usr/bin:/bin"
 
   export CC_PROVIDERS_JSON="$BATS_TEST_TMPDIR/providers.json"
+
+  # --- where a counting fakebin records its invocations. The provider memo is counted by having
+  #     the child ITSELF leave a mark, never by wall-clock: a timing assertion would be the
+  #     flakiest possible way to ask "was this spawned twice?".
+  export COUNTER="$BATS_TEST_TMPDIR/spawns"
 }
 
 # Write a scratch registry from a JSON array passed as $1.
@@ -68,6 +73,28 @@ PY
 _fakebin() {
   printf '#!/bin/sh\necho "%s"\n' "$2" > "$FAKEBIN/$1"
   chmod +x "$FAKEBIN/$1"
+}
+
+# Same, but it appends one line to $COUNTER every time it is executed. `_count` is how many child
+# processes the tool actually spawned.
+_countbin() {
+  printf '#!/bin/sh\nprintf "x\\n" >> "%s"\necho "%s"\n' "$COUNTER" "$2" > "$FAKEBIN/$1"
+  chmod +x "$FAKEBIN/$1"
+}
+
+_count() {
+  if [ -f "$COUNTER" ]; then
+    wc -l < "$COUNTER" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+# The one registry every memo test uses. Held in a helper so a test that must EDIT the registry
+# can be read as "the same thing, with one field changed".
+_memo_registry() {
+  _registry '[{"name":"h","label":"'"${1:-H}"'","bin":"harness","headless":"harness -p",
+               "in_scope":true,"plan":"HeldPlan","bills_outside_plan":false}]'
 }
 
 @test "registry: absent or malformed degrades to NO provider section, never an exception" {
@@ -252,4 +279,134 @@ assert p['installed'] is True, p
 assert p['routable'] is True, p
 assert p['version'] == '1.2.3', p
 "
+}
+
+# ---- the provider probe memo --------------------------------------------------------------------
+#
+# probe_provider() was 3.68s of a 3.7s `claude-accounts --json` on the live registry, re-paid by
+# cc-context, cc-value, cc-board, cc-wave-plan and cc-blockers on every invocation. What costs the
+# time is exclusively the CHILD PROCESSES, so those — and only those — are memoised.
+#
+# The invariant these tests sit next to, and must never be read as relaxing: "the model pin is read
+# from the provider's OWN config" (above) edits a provider's settings.json between two runs with
+# the registry untouched, and demands the render change. It is this memo's standing control — it
+# passes in both worlds precisely because a whole-probe cache would break it.
+
+@test "memo: a provider's CLI is spawned ONCE per TTL, not once per invocation" {
+  _countbin harness "1.2.3"
+  _memo_registry "H"
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1.2.3"* ]] || false
+  cold="$(_count)"
+  if [ "$cold" -ne 1 ]; then
+    echo "expected exactly 1 spawn on the cold call, counted $cold" >&2
+    return 1
+  fi
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  # The RENDER must be unchanged. A cache that changes what the surface says is a bug wearing a
+  # speed-up's clothes, so the version assertion is repeated rather than assumed.
+  [[ "$output" == *"1.2.3"* ]] || false
+  warm="$(_count)"
+  if [ "$warm" -ne 1 ]; then
+    echo "the second call re-spawned the provider CLI: $warm spawns total, expected 1" >&2
+    return 1
+  fi
+}
+
+@test "memo: editing the registry invalidates it on the very next call" {
+  _countbin harness "1.2.3"
+  _memo_registry "H-before"
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  warm="$(_count)"
+  if [ "$warm" -ne 1 ]; then
+    echo "precondition failed: expected a memo HIT before the edit, counted $warm spawns" >&2
+    return 1
+  fi
+
+  # ONLY the label changes — nothing in the probe's argv, nothing about the binary. So the sole
+  # thing that can invalidate here is the registry's own mtime/size, which is exactly the claim.
+  _memo_registry "H-after-a-longer-label"
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"H-after-a-longer-label"* ]] || false
+  after="$(_count)"
+  if [ "$after" -ne 2 ]; then
+    echo "a registry edit did not invalidate the memo: expected 2 spawns, counted $after" >&2
+    return 1
+  fi
+}
+
+@test "memo: --fresh bypasses it, exactly as it bypasses the account cache" {
+  _countbin harness "1.2.3"
+  _memo_registry "H"
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  warm="$(_count)"
+  if [ "$warm" -ne 1 ]; then
+    echo "precondition failed: expected a memo HIT, counted $warm spawns" >&2
+    return 1
+  fi
+
+  run "$CA_BIN" --agents --fresh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1.2.3"* ]] || false
+  after="$(_count)"
+  if [ "$after" -ne 2 ]; then
+    echo "--fresh was served from the memo: expected 2 spawns, counted $after" >&2
+    return 1
+  fi
+}
+
+@test "memo: a corrupt store degrades to a miss AND is replaced, never a traceback" {
+  export CC_PROVIDER_CACHE="$BATS_TEST_TMPDIR/provider-probe.json"
+  printf '{ this is not json' > "$CC_PROVIDER_CACHE"
+  _countbin harness "1.2.3"
+  _memo_registry "H"
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Traceback"* ]] || false
+  [[ "$output" == *"1.2.3"* ]] || false
+
+  # Degrading is only half of it: a store that stays corrupt costs a spawn on every call forever,
+  # so the same pass must repair it.
+  run python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d, dict) and len(d) == 1 else 1)' "$CC_PROVIDER_CACHE"
+  if [ "$status" -ne 0 ]; then
+    echo "corrupt memo was not replaced with a valid one-entry store" >&2
+    return 1
+  fi
+}
+
+@test "memo: replacing the BINARY invalidates it, with the registry untouched" {
+  # MUTANT-PROVEN, not pre-fix-proven: this one passes against the un-memoised subject too,
+  # because an absent cache is trivially never stale. Its control is a WEAKER memo — one keyed on
+  # the registry alone, as the work item literally proposed — under which the second render serves
+  # the OLD version string and this test reds. That is why the key carries the resolved binary's
+  # realpath + mtime + size and not just providers.json's.
+  _countbin harness "1.2.3"
+  _memo_registry "H"
+
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1.2.3"* ]] || false
+
+  _countbin harness "9.9.9"
+  run "$CA_BIN" --agents
+  [ "$status" -eq 0 ]
+  if [[ "$output" != *"9.9.9"* ]]; then
+    echo "an upgraded provider binary was reported at its OLD version from the memo" >&2
+    return 1
+  fi
+  [[ "$output" != *"1.2.3"* ]]
 }
