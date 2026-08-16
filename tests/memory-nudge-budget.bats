@@ -32,7 +32,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
-  # shellcheck source=../hooks/lib/memory-index-measure.sh
+  # shellcheck source=/dev/null
   . "$REPO/hooks/lib/memory-index-measure.sh"
   LIMIT="$(mim_limit)"
   LINE_LIMIT="$(mim_line_limit)"

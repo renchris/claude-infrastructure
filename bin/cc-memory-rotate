@@ -107,7 +107,7 @@ INDEX="$DIR/MEMORY.md"
 # little as lines leave, so holding it fixed across one rotation over-estimates the projection:
 # the rotor archives a touch more than strictly needed, never less.
 _ccmr_lib="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../hooks/lib/memory-index-measure.sh"
-# shellcheck source=../hooks/lib/memory-index-measure.sh
+# shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
 if [ -r "$_ccmr_lib" ]; then . "$_ccmr_lib"; fi
 
 LIMIT="${MEMORY_INDEX_LIMIT:-25000}"

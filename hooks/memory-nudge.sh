@@ -117,7 +117,7 @@ fi
 # Exiting here instead would let a missing side-car silence the primary duty — a side-car
 # failing wider than itself, which is the one thing this whole subsystem refuses to do.
 MEASURE_OK=1
-# shellcheck source=./lib/memory-index-measure.sh
+# shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
 . "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh" 2>/dev/null \
   || . "$CFG/hooks/lib/memory-index-measure.sh" 2>/dev/null || MEASURE_OK=0
 LIMIT=""; LINE_LIMIT=""

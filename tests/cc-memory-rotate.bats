@@ -42,7 +42,7 @@ setup() {
   # entire subject is the unit distinction was the one that could not survive
   # scripts/offbox-run.sh's LC_ALL=C. It now measures with the same library the subject reads,
   # which has no locale dependency at all, so no locale pin is needed here.
-  # shellcheck source=../hooks/lib/memory-index-measure.sh
+  # shellcheck source=/dev/null
   . "$REPO/hooks/lib/memory-index-measure.sh"
   OLD=202601011200   # touch -t stamp far past MIN_AGE_DAYS
 }

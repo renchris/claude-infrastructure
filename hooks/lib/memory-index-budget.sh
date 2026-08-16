@@ -63,7 +63,7 @@ if command -v readlink >/dev/null 2>&1; then
 else
   _mib_real="$_mib_here"
 fi
-# shellcheck source=./memory-index-measure.sh
+# shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
 . "$(dirname "$_mib_real")/memory-index-measure.sh"
 unset _mib_here _mib_real
 
