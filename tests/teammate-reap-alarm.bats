@@ -254,6 +254,16 @@ stub_world() { # stub_world <token-tail…>
   [ -f "$A" ]
   run bash -n "$A"
   [ "$status" -eq 0 ]
+  # SAMPLE THE LOAD STATE FIRST. The final assertion used to be `[ "$status" -ne 0 ]` on a bare
+  # `launchctl print` — i.e. "this service is not loaded", which is a statement about the BOX, not
+  # about the dry run. Once the alarm is genuinely activated here (it is, today) that assertion is
+  # false no matter how perfectly the dry run behaves: the suite reds on pristine origin/main, and
+  # it takes down any land whose diff merely touches launchd/fleet.manifest. The subject is "the dry
+  # run did not ACT", so the assertion has to be UNCHANGED-ness across the call, which is true on a
+  # box where the service is loaded and on one where it is not (memory:
+  # assertion-span-must-equal-its-subject).
+  local before after
+  /bin/launchctl print "gui/$(id -u)/com.claude.teammate-reap-alarm" >/dev/null 2>&1 && before=loaded || before=absent
   run env CC_REPO="$REPO" bash "$A"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "dry run"
@@ -262,6 +272,7 @@ stub_world() { # stub_world <token-tail…>
   if printf '%s\n' "$output" | grep -q "bootstrap failed\|Load failed"; then
     echo "the dry run touched launchctl" >&2; false
   fi
-  run /bin/launchctl print "gui/$(id -u)/com.claude.teammate-reap-alarm"
-  [ "$status" -ne 0 ]
+  /bin/launchctl print "gui/$(id -u)/com.claude.teammate-reap-alarm" >/dev/null 2>&1 && after=loaded || after=absent
+  [ "$after" = "$before" ] || {
+    echo "the dry run CHANGED the load state: $before -> $after" >&2; false; }
 }
