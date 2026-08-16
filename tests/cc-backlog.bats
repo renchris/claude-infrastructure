@@ -400,6 +400,41 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   refute_imatch "$output" 'already done'
 }
 
+# ── done WITHOUT --evidence: warn, never refuse (BACKLOG_DRAIN_24_7 §4 C3) ──────
+# 27 of 628 dones in the 7d to 2026-08-16 carried EMPTY evidence, so the ledger holds 27 closes
+# whose only claim is that somebody ran the verb. The store's whole contract is that "done" means
+# CONTENT, adjudicated (§6: "the unit of done is CONTENT ON TRUNK, never a count, never a stamp"),
+# and an empty `evidence` field is indistinguishable from a close that never checked.
+#
+# WARN, DO NOT REFUSE — and the asymmetry is the point, not timidity. Every automated closer in the
+# fleet (ship-land's auto-retraction, cc-backlog reap, cloud-return) closes rows unattended; a
+# fail-CLOSED write here would strand those paths mid-recovery, which is strictly worse than an
+# unevidenced close (memory: add-on-failure-exceeds-its-blast-radius). The ratchet comes later, off
+# the counter this warning emits — plan §4 C3 names that sequence explicitly.
+@test "done with NO --evidence WARNS on stderr, names the id, and still exits 0" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash -c "bash '$CB' 'done' '$id' 2>&1 >/dev/null"
+  [ "$status" -eq 0 ]                                    # rc 0: automated closers branch on it
+  printf '%s' "$output" | grep -q 'verdict=done-without-evidence'
+  printf '%s' "$output" | grep -q "$id"                  # the row, not just the class
+  [ "$(st_of "$id")" = "done" ]                          # the close still HAPPENED (quoted: SC1010)
+}
+
+@test "done WITH --evidence stays silent (the warning must be able to not fire)" {
+  id=$(bash "$CB" add --project /r --title T2 --source S)
+  run bash -c "bash '$CB' 'done' '$id' --evidence '6488617 content on trunk' 2>&1 >/dev/null"
+  [ "$status" -eq 0 ]
+  refute_imatch "$output" 'done-without-evidence'
+}
+
+@test "the empty-evidence warning is scoped to done — claim/reopen/block do not emit it" {
+  id=$(bash "$CB" add --project /r --title T3 --source S)
+  run bash -c "bash '$CB' claim '$id' --by tester 2>&1 >/dev/null"
+  refute_imatch "$output" 'done-without-evidence'
+  run bash -c "bash '$CB' reopen '$id' --by tester 2>&1 >/dev/null"
+  refute_imatch "$output" 'done-without-evidence'
+}
+
 # ── blocked-on-operator (parks an item OUT of the dispatch wave) ────────────────
 @test "block sets status blocked + carries needs; unblock returns to open" {
   id=$(bash "$CB" add --project /r --title T --source S)
