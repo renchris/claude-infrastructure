@@ -85,6 +85,31 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   the 1 regex-missed MERGE (e27d37eac4cd) was later captured by grouping). M1-M6 all reached
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
+## §2.1 Execution log (INTEGRATE-only; newest first)
+
+- **2026-08-16 ~09:30Z — waves fired.** W-P1/S1 (inflow C1+C2+C3) → pane 105, branch
+  fix/backlog-inflow-c123; W-P1/S2 (C4 premise-pass + A1 dispatcher un-wedge) → pane 104, branch
+  fix/backlog-machinery-c4a1; W-R2 (recovery) → pane 106, branch fix/backlog-recovery-r2. All
+  next3, goals armed+verified, notify-back custody to pane 102 (lead). First fire attempt was
+  REFUSED by the capacity gate at 2.12/core — the fleet's load is system indexing + daemon
+  fork-storms, and the wedged dispatcher is part of it; admitted at 1.94-1.99/core.
+- **2026-08-16 — W-R1 lead ops done:** stale-claim `reap` ran (0 reopened — the one dead-PID
+  claim 1d25b0e07668 is venue=cloud, so host-local oracles correctly decline it; lapses on lease
+  TTL). b59eb997d035 re-asserted done with CORRECTED evidence (the case is not "gone" — it lives
+  rewritten at tests/test-hermeticity-lint.bats:151 citing the row; substance stood, prose was
+  false). **A3 done:** `cc-venue run --apply` over all 269 open rows — **10 cloud / 259 local**
+  (160 ineligible-box · 23 spawn-rail · 22 branch-banking · 18 offbox-lane · 17 visual ·
+  12 deep-history · 5 premise-suspect · 1 github · 1 premise-superseded). The cloud lane's real
+  slice of TODAY'S pile is 10 rows (3.7%), not the planning-era 8-14%: Lane B is the drain.
+- **2026-08-16 — stranded-work enumeration complete** (9th forensics agent): 543
+  refs/land/failed pins → 333 landed-by-content · 131 REAL-UNLANDED collapsing to **7 fire
+  branches** · 79 ambig. **12 claude/fire-* branches carry ~2,000 genuinely-unlanded lines**;
+  5 of them have NO protecting row; 14 blocked rows guard already-landed content; 1
+  false-retraction (93323-1: rows auto-closed on a retraction a LATER amend invalidated).
+  Live bleed: every retry dies uniformly `SIGTERM-143` (fresh pins 08:35-08:55Z today) —
+  hypothesis: bin/cc-reaper's orphan-bash arm (ppid-1 bash ≥600s off-whitelist) kills detached
+  lands that take 20-80 min. W-R2's T1 verifies against the reaper log before fixing.
+
 ## §3 Reconciliation worklist (W-R1 + W-R2) — zero lost work
 
 R1 (**L**, ledger ops):
@@ -149,6 +174,33 @@ The proven local-drain design (9 recycles) plus the one missing property — sel
 - B5 **Conservation**: each recycle reports filed vs closed and must close ≥ it files
   (42d27a758's named-but-never-implemented rule) — enforced in the recycle brief + goal
   constraint ("do not end the recycle net-positive on filings").
+
+### §4.1 Lane B recycle-fire template (SSOT — the drain session regenerates its per-recycle brief from THIS)
+
+Fire command (from any claude-infrastructure checkout; the drain session runs this ON ITSELF at
+every pause-point — end of effort, ~60% context fill, or any natural seam):
+
+    bash scripts/handoff-fire.sh --recycle --prompt-file /tmp/fire-drain-recycle<N>.txt \
+      --account auto \
+      --goal '<effort E> reaches 0 open rows (blocked tail reported, not hidden) — proven by
+      cc-backlog list --open --json | jq output printed showing 0 open for condition <E>, plus the
+      filed-vs-closed tally for this recycle (closed >= filed); then recycle #<N+1> is FIRED
+      (handoff-fire --recycle) as the LAST action and its engagement line is printed; do not end
+      the recycle net-positive on filings and do not close any row without same-moment content
+      evidence'
+
+Brief body invariants (regenerate the specifics each recycle; never drop these):
+1. Pick the smallest live master-* effort from the CURRENT fold (never a remembered order);
+   claim its CONDITION (one lease covers the group).
+2. Per row: run the stored falsifier against a pristine origin/main worktree FIRST (exit 0 =
+   retracting → close on that evidence); re-measure dated titles; landedness by CONTENT.
+3. Close line format: `<effort>: N open / M blocked (K operator-gated)` — a zero without its
+   blocked tail is the exact defect that produced this plan (§1.1).
+4. Conservation: close ≥ file, printed in the close.
+5. Operator-gated rows: platter via the cc-do/operator-readout rail, never burn turns on them.
+6. THE CHAIN IS THE DELIVERABLE: firing recycle #N+1 (or, at true zero live rows, writing the
+   chain-complete entry in this plan) outranks finishing one more row. A recycle that runs out
+   of context mid-effort still fires its successor with the effort in-flight.
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
