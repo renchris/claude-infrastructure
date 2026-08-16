@@ -87,6 +87,33 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-16 ~20:30Z — W-P1 returns collected; convergence is the last gate; S3 fired.**
+  S1 COMPLETE: C1 `46a86deb7` (re-land retry runs TRUNK's pipeline via throwaway origin/main
+  worktree — extract-to-temp and checkout-into-tree both proven unworkable), C2 `944abba49`
+  (cc-discover screens plan-open candidates through plan-phase-scan --falsify pre-mint,
+  fail-open), C3 `672f34757` (done-with-empty-evidence warns, `verdict=done-without-evidence`);
+  7 regression cases red→green; conservation 0 filed / 1 closed.
+  S2 COMPLETE with BOTH production proofs: premise pass beat
+  `premise_rows_validated:138, closed:5` — first non-zero in its production history (root cause
+  refuted the brief: the pass runs at UTILITY, and 'unparsed' was `_die_open` exiting 0 with
+  `verdict=unknown` on stdout); dispatcher no-reclaim proven on two consecutive LIVE passes,
+  zero claim→release on the 3 wedged ids, "refusing to fire" lines gone (works while live layer
+  is stale because `blocked` is a STORE state). The two content-holding worktrees are BLOCKED
+  with exact salvage commands (row `925d843f6665`); wt-c07fb00eb9b6 was ff'd + fired in prod.
+  R2 T1 LANDED `a87f32c66` — the SIGTERM-143 land killer was cc-reaper's garbage arm (land path
+  not whitelisted + a vacuous `^bash$` kill-time re-check defeated by 41-min PID wraps), 39×
+  reaper-shadow correlation on lands. **T1 also REFUTED the lead's postland hypothesis**: the
+  postland cuts are 21 reaper / 17 sig9 / 18 machine-pressure / 35 unnamed / **16 = postland's
+  OWN 5400s ladder bound firing on tests/autonomy-sweep.bats re-runs — including the last 5
+  consecutive cuts**. That ONE suite-vs-bound mismatch is now the sole gate on convergence
+  (live layer 25+ behind, every fix above landed-but-not-live). → **S3 fired** (pane 111,
+  branch fix/postland-ladder-bound): reproduce the ladder's exact re-run, name the tail cases,
+  fix by mechanism, prove one REAL postland verdict + a deploy-live advance.
+  R2 T2 in flight: `1817ca740` (40416-1) + `b4d0a3d0f` (64880-1) landed, 7 branches to go.
+  Custody: this cwd holds only fire-r2-recovery open; ~10 stale `cloud-session_*` debts from
+  the dispatcher's old cwd are A2 evidence (cloud sessions that never returned) — cloud-lane
+  cleanup item, not this session's.
+
 - **2026-08-16 ~09:30Z — waves fired.** W-P1/S1 (inflow C1+C2+C3) → pane 105, branch
   fix/backlog-inflow-c123; W-P1/S2 (C4 premise-pass + A1 dispatcher un-wedge) → pane 104, branch
   fix/backlog-machinery-c4a1; W-R2 (recovery) → pane 106, branch fix/backlog-recovery-r2. All
