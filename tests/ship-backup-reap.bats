@@ -197,3 +197,157 @@ land() { # rebase onto the fetched trunk, push, and record what landed
   [ "$status" -eq 3 ]
   echo "$output" | grep -q "unknown mode"
 }
+
+# ── sweep: the accumulated population (backlog d88c1640550f) ───────────────────────────────────
+# The refs that SURVIVE today are the ones whose land did not succeed — a stuck fire tip, whose
+# branch is still parked at the very commit the rollback ref names. `start_change` already builds
+# exactly that shape, so these tests differ from the ones above mainly in what they DON'T call:
+# `land`. Harness laws as above; the sweep's negatives are chosen so that a carrier-set bug, a
+# namespace bug, and a content-predicate relapse each go red on a DIFFERENT test.
+
+stuck_fire() { # <branch> <file> <content> — a land that never succeeded; sets BACKUP
+  git checkout -q -b "$1" main
+  printf '%s\n' "$3" > "$2"
+  git add "$2"
+  git commit -q -m "wip $2"
+  BACKUP="ship/backup-$(git rev-parse --short HEAD)"
+  git branch -f "$BACKUP" HEAD
+  git checkout -q main
+}
+
+@test "sweep --apply reaps a stuck fire's rollback ref and leaves the fire branch itself alone" {
+  stuck_fire fire-a a.txt alpha
+  # controls: the ref exists, and it is NOT on the trunk — so patch-id landedness and any
+  # trunk-content predicate both refuse it, which is exactly why this population accumulated.
+  [ -n "$(git branch --list "$BACKUP")" ]
+  run git merge-base --is-ancestor "$BACKUP" origin/main
+  [ "$status" -ne 0 ]
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -z "$(git branch --list "$BACKUP")" ]
+  [ -n "$(git branch --list fire-a)" ]
+  echo "$output" | grep -q "contained in fire-a"
+}
+
+@test "KEEPS a rollback ref whose fire branch is gone — on this disk it is the sole holder" {
+  stuck_fire fire-b b.txt beta
+  git branch -D fire-b            # the branch was cleaned up; only the rollback ref holds the work
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "SOLE holder"
+}
+
+@test "sweep without --apply is a DRY RUN — it reports the reap and deletes nothing" {
+  stuck_fire fire-c c.txt gamma
+  run "$REAP" sweep
+  [ "$status" -eq 0 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "DRY-RUN"
+  echo "$output" | grep -q "would reap"
+}
+
+# The carrier-set invariant. Two rollback refs can stand in an ancestor relation; if the namespace
+# were allowed into the carrier set, one sweep would delete BOTH — the carrier last, by which point
+# its own authority is already destroyed and the commits are on no ref at all.
+@test "a backup ref may NEVER vouch for another — an ancestor chain with no live carrier keeps BOTH" {
+  git checkout -q -b fire-d main
+  printf 'one\n' > d.txt; git add d.txt; git commit -q -m d1
+  B1="ship/backup-$(git rev-parse --short HEAD)"; git branch -f "$B1" HEAD
+  printf 'two\n' >> d.txt; git add d.txt; git commit -q -m d2
+  B2="ship/backup-$(git rev-parse --short HEAD)"; git branch -f "$B2" HEAD
+  git checkout -q main
+  git branch -D fire-d            # the only non-backup carrier is gone
+  # control: the chain is real, so a namespace-blind carrier set WOULD delete both.
+  run git merge-base --is-ancestor "$B1" "$B2"
+  [ "$status" -eq 0 ]
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -n "$(git branch --list "$B1")" ]
+  [ -n "$(git branch --list "$B2")" ]
+}
+
+# Trunk is tried BEFORE local branches, so a landed ref is never attributed to some session branch
+# that merely also contains it. `feat` is deliberately left in place as the competing carrier.
+@test "a rollback ref contained in the trunk is reaped and attributed to the trunk, not to a branch" {
+  start_change e.txt epsilon
+  land
+  git checkout -q main
+  [ -n "$(git branch --list feat)" ]
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -z "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "contained in origin/main"
+}
+
+@test "the sweep never touches a ref outside the backup namespace, however redundant" {
+  git checkout -q -b fire-f main
+  printf 'f\n' > f.txt; git add f.txt; git commit -q -m f
+  git branch -f dup-of-fire-f HEAD    # a perfect duplicate — and NOT in the namespace
+  git checkout -q main
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -n "$(git branch --list dup-of-fire-f)" ]
+  [ -n "$(git branch --list fire-f)" ]
+}
+
+@test "every sweep disposal writes a record naming the carrier that authorised it" {
+  stuck_fire fire-g g.txt gamma
+  LOG="$BATS_TEST_TMPDIR/disposals.jsonl"
+  export CC_SHIP_BACKUP_DISPOSAL_LOG="$LOG"
+  SHA="$(git rev-parse "$BACKUP")"
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -f "$LOG" ]
+  grep -q "\"ref\":\"$BACKUP\"" "$LOG"
+  grep -q "\"sha\":\"$SHA\"" "$LOG"
+  grep -q "\"authority\":\"fire-g\"" "$LOG"
+  grep -q '"mode":"sweep"' "$LOG"
+}
+
+@test "the land-time reap records its disposal too — one deletion site, one record site" {
+  start_change a.txt alpha
+  sibling_lands other.txt peer-content
+  land
+  LOG="$BATS_TEST_TMPDIR/disposals.jsonl"
+  export CC_SHIP_BACKUP_DISPOSAL_LOG="$LOG"
+
+  run "$REAP" reap "$BACKUP" "$LANDED"
+  [ "$status" -eq 0 ]
+  grep -q '"mode":"reap"' "$LOG"
+}
+
+@test "SHIP_BACKUP_REAP=off is a kill switch for the sweep too, not just the land hook" {
+  stuck_fire fire-h h.txt eta
+  export SHIP_BACKUP_REAP=off
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "SKIPPED"
+}
+
+# The relapse guard. If a future edit reached for land-verify here, this ref would be KEPT forever:
+# the trunk has moved over the very path it touches, which is the decay that made a content-based
+# sweep undecidable (437 of 739). Ancestry has no drift term, so it still decides.
+@test "the sweep decides by ANCESTRY, not content — a ref the trunk has drifted over is still reaped" {
+  stuck_fire fire-i i.txt iota
+  sibling_lands i.txt trunk-version-of-i
+  [ -n "$(git diff --name-only "$BACKUP" origin/main -- i.txt)" ]
+
+  run "$REAP" sweep --apply
+  [ "$status" -eq 0 ]
+  [ -z "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "contained in fire-i"
+}
+
+@test "sweep refuses an unknown option rather than silently sweeping with defaults" {
+  run "$REAP" sweep --frobnicate
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q "unknown option"
+}
