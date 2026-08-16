@@ -260,13 +260,35 @@ Only **`next3`** is genuinely stranding: 118.4 h into a 168 h window at 18%, i.e
 0.26** — exactly the quantity §3.2 makes the headline metric, and exactly the case a raw percentage
 cannot distinguish from a healthy window that just reset.
 
-🚨 **And the cause is mechanical, not a shortage of work.** The autonomous dispatcher has parked
-**254 of 261 dispatchable items behind a cloud-only venue filter since 2026-08-11** and fires only
-~17 sessions/day; fleet burn fell to **38% then 21%** of its own demonstrated daily capacity on
-08-14 and 08-15. So the answer to scope item (a) is not "find more work" and not "route better" —
-**it is a stuck filter holding 97% of the queue**, which the burn-ratio metric would have surfaced
-within a day of it engaging. Fixing that is the single largest utilization lever, and it is a
-**Q2 win** (more quality work into quota that would otherwise expire), not a Q1 saving.
+**A mechanical cause exists — but it is NOT the top lever, and the paragraph that said so was
+wrong.** The autonomous dispatcher has parked **254 of 261 dispatchable items behind a cloud-only
+venue filter since 2026-08-11**, firing ~17 sessions/day while fleet burn fell to **38% then 21%**
+of demonstrated daily capacity on 08-14/08-15. This plan originally called that "the single largest
+utilization lever … a Q2 win".
+
+> 🚨 **REFUTED BY A2's SKEPTIC, AND THE ERROR WAS THE LEAD'S OWN INCONSISTENCY.** The four most
+> recent *complete* weekly windows finished at **91 / 85 / 92 / 100 — 368 of 400 points, i.e. 92%
+> of the fleet's entire weekly allowance already consumed** (Anthropic's own meter, 1,257 samples
+> per account over six days). `next3` sat at **exactly 100% for 11.2 hours** before its reset.
+> **There is no utilization crisis to solve**, and a venue filter cannot be "the binding constraint"
+> on a resource the fleet already spends 92% of.
+>
+> Measured against that headroom, releasing the parked queue wholesale would consume **26–74× the
+> entire remaining weekly allowance**, exhausting every window in 1.5–2 days and leaving the fleet
+> **walled for 4–5 days a week**. Under §0 that is not a Q2 utilization win — it is **Q3, quality-
+> destroying**, and is REJECTED in that form.
+>
+> **The inconsistency was mine, not A2's alone.** §2.3 established near-saturation and then this
+> section endorsed a recommendation premised on abundant headroom, in the same document. Both
+> halves cannot be true. Kept visible rather than quietly rewritten, because it is the exact trap
+> §3.2 exists to prevent: *a throughput lever priced without its denominator*.
+
+**The resolution — and it reverses the build order.** The filter is still a real defect, but it is a
+**demand** lever pointed at a **nearly-exhausted supply**, so it must never be released
+un-governed. **M3 (burn ratio + wall alarm) therefore ships BEFORE M1**, and M1 is re-scoped from
+"unblock the queue" to "admit work against measured headroom": the dispatcher fires while the burn
+ratio is below pace and throttles as it approaches 1.0, so the queue drains into *whatever headroom
+genuinely exists* instead of into a wall. That ordering is now reflected in §4.
 
 ### §2.7 The incumbent: the quota half is good, the token half is near-empty
 
@@ -396,9 +418,21 @@ Every item is Q1 (free win) or Q2 (utilization win) under §0. **No Q3 appears a
   right for *rot* and for the hard context ceiling; it is no longer a cost argument.
 - **The Fable 50% arbitrage** — refuted by A6: Fable draws weekly quota in proportion to its list
   price and costs ~3.1× an Opus turn realized.
-- **Effort downgrades** — A6: effort moves only output tokens within a turn whose cost is dominated by
-  conversation cache; the ladder spans 5.6× in thinking for a 14-point cost band. A downgrade buys
-  little and risks quality — a Q3, therefore rejected outright.
+- **Effort downgrades** — effort moves output tokens within a turn whose cost is dominated by
+  conversation cache, so a downgrade buys little and risks quality: a Q3, rejected outright. *(A6's
+  supporting numbers were corrected by its skeptic — output is 10.8% not 13.1% of an Opus-5@high
+  message, rising to ~19–32% once you account for a persisted output token being re-read as cache on
+  every later turn. The conclusion is unchanged; the margin is narrower than A6 claimed.)*
+- **Effort UPGRADES — A6's own recommendation R3 (raise the floor to `xhigh`) is also REJECTED.**
+  Its evidence was the "5.6× thinking-token ladder", which **does not reproduce**: it was an artifact
+  of counting one API response as up to 8 turns *and* excluding 51% of the corpus. Deduped over the
+  full corpus the ladder is **non-monotone** — `xhigh` yields *fewer* output tokens than `high`.
+  So this data justifies neither raising nor lowering the effort floor, and the honest position is
+  that **the effort question is open**, not settled in either direction. Filed as such rather than
+  answered. *(Noted with some irony: this session itself runs at `xhigh`.)*
+- **The Fable 50% arbitrage** — refuted twice, and harder on the second pass: the skeptic's
+  independent estimator puts Fable's quota draw per list-dollar at **1.79× Opus** (90% CI
+  [1.67, 1.90], P(ratio < 0.75) = 0.000). There is no discounted lane to exploit.
 - **Cutting telemetry to save tokens** — it is 0.6–1.2% of throughput, and the two defects found are
   quality failures, not cost ones.
 
@@ -408,18 +442,31 @@ Every item is Q1 (free win) or Q2 (utilization win) under §0. **No Q3 appears a
 global default. Each fires with `--goal` naming a measurable end state and the command that proves
 it, because the goal evaluator is tool-less and can only judge what the session *prints*.
 
-W3.1 and W3.4 are independent of everything else and are the two highest-value items; fire them
-first and in parallel.
+🚨 **ORDER REVISED after A2's skeptic (see §2.3).** M1 was originally first. It is a **demand**
+lever aimed at a supply the fleet already consumes 92% of, so released un-governed it would wall
+every account in 1.5–2 days. **M3 now ships first and M1 depends on it.** M2 is independent of both
+and can fire in parallel with M3.
 
 | id | wave | locus | end state (the `--goal` condition) | why it ranks here |
 |---|---|---|---|---|
-| **M1** | **Unblock the dispatcher** — 254 of 261 dispatchable items parked behind a cloud-only venue filter since 2026-08-11 | S | `cc-backlog`/dispatcher prints a dispatchable count where local-venue items are ≥90% of the eligible set, and daily fire count returns to the demonstrated ~40+/day capacity; do not widen quota exposure by disabling any safety gate | **The largest lever in the plan and the real answer to scope (a).** Q2: converts quota that expires into delivered work |
+| **M1** | **Govern the dispatcher** — 254 of 261 items are parked behind a cloud-only venue filter since 2026-08-11; admit them **against measured headroom**, never wholesale | S — **blockedBy M3** | the dispatcher fires while its account's burn ratio is below pace and throttles as it approaches 1.0; over one full weekly window no account exceeds 100% and the parked count falls; do not release the queue un-governed, and do not disable any safety gate to do it | Re-scoped from "unblock" to "admit against headroom". **Un-governed it is Q3** — 26–74× the remaining allowance, 4–5 walled days/week |
 | **M2** | **Fix the DoD truncation** — `dod-persist.sh` concatenates a frozen legacy store, overflows the ~9,200 B cap, and delivers the *oldest* scope | S | a session in this repo shows the NEWEST `Scope (frozen):` line inline in `hook_additional_context`, with no `<persisted-output>` stub, on 3 consecutive starts | **Quality restoration.** 51% of injections currently carry a superseded contract — the frozen-DoD mechanism is silently not working |
 | **M3** | **The burn-ratio instrument** — add `burn_ratio` and `projected_end_pct` to `claude-accounts --readout`; wall-proximity alarm; raise `account-utilization.jsonl` retention past 6 days | S | `claude-accounts --readout` prints a burn ratio per account and flags any account whose projected end-of-window pct ≥100; `next3` renders 0.26 today | Closes the error class that inverted this plan's own premise (§1) |
 | **M4** | **The price list as code** — `cc-quota-price`: re-fit tokens→pp on a schedule from `account-utilization.jsonl` × deduped transcripts, with the **`message.id` dedup as a tested invariant** | S | `cc-quota-price --selftest` passes, including a RED-proof case that a non-deduping extractor inflates output tokens ≥2× | Without it, every later cost claim is unpriced — and the dedup bug silently corrupted a keystone number in this very wave |
-| **M5** | **De-duplicate `./CLAUDE.md`** — byte-identical to the global copy on all 5 load paths; move the versioned source to a path Claude Code does not auto-load | **L** *(one file move + a pointer; briefing a session costs more than doing it)* | a session in this repo loads the global CLAUDE.md exactly once; `md5` of the versioned source still matches `~/.claude/CLAUDE.md` | Q1 free win, ~5 pp/week fleet, zero informational loss |
+| **M5** | **De-duplicate `./CLAUDE.md`** — byte-identical to the global copy on all 5 load paths; move the versioned source to a path Claude Code does not auto-load | **S** *(reclassified — see below)* | a session in this repo loads the global CLAUDE.md exactly once; the deploy gate still asserts repo↔live parity from the new path; `install.sh` still reports the line count | Q1 free win, ~5 pp/week fleet, zero informational loss |
 | **M6** | **Enable OTel** in all 5 config dirs + a local collector | S | `claude_code.token.usage` rows land in the collector for a live session, and `grep ENABLE_TELEMETRY` finds it in 5/5 settings.json | The token-free numerator; scope (c) satisfied by construction |
 | **M7** | **Disconnect or repair `cc-value`'s extinct join** — it joins on a git trailer this repo measured extinct 4 days ago | S | `cc-value` either reports ABSTAIN with a named reason, or joins on a key with >0 coverage proven in its output | An instrument silently reporting over an empty join is worse than no instrument |
+
+**M5's blast radius, recorded because it caught the lead out.** M5 was first written as `L` — "one
+file move, briefing a session costs more than doing it". A reference sweep before touching anything
+showed that is false: `./CLAUDE.md` is not merely a duplicate, it is the **deployed source** of the
+global instructions. `install.sh:660-676` copies it to `~/.claude/CLAUDE.md` and prints its line
+count; `deploy-parity-assert.sh:733-752` runs a whole gate class (`CLAUDE.md (copy)`) asserting
+repo↔live parity and reports `NOVERDICT` if the diff cannot run; `deploy-link-parity.sh:21` and
+`scripts/gate-select.sh:192` name it too. Moving it is a ≥4-file change **that modifies a deploy
+gate**, which is exactly the shape the default locus exists for. *Generalisable: "it's one file" is
+a claim about the edit, not about the blast radius — sweep the references before choosing the
+locus.*
 
 **Not scheduled, deliberately.** Cache-scope consolidation (Anthropic scopes the prompt cache
 per-directory, worktrees included; 381 project dirs, 80 touched in 7 days) is a real
