@@ -3124,3 +3124,61 @@ STUB
   echo "$output" | grep -q "unknown SHIP_LAND_LANE"
   [ ! -s "$LAND_LOG" ]
 }
+
+# ── the re-land row's IDENTITY: one stuck branch is ONE job, however many retries notice ────────
+#
+# MEASURED 2026-08-16 on the live store: `claude/fire-20260812T172113Z-3600-1` held **41 rows**,
+# 9 of them filed that day, every one naming the identical operator step. cc-backlog's recurrence
+# brake keys on the title ("same prose, same subject modulo digits"), and the old title embedded
+# three per-attempt facts — the PID-suffixed sandbox `(/private/tmp/.desk-land-<branch>-<pid>)`,
+# `exited 143 (SIGTERM)` vs `exited 6 (exit)`, and the pinned ref. Digits normalise; a different
+# path segment and a different signal NAME do not. So every retry minted a sibling, and one stuck
+# branch became a large share of a blocked pile that nothing drains.
+#
+# The three arms are the whole contract, and the third is what stops the fix from over-correcting:
+# fold retries of ONE branch, never fold two different branches into one row.
+
+_reland_title() { printf 're-land %s: ship-land could not complete and its author'"'"'s pane may be gone' "$1"; }
+
+@test "re-land rows: two retries of the SAME branch fold onto one row" {
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/bl.jsonl"; : > "$CC_BACKLOG_FILE"
+  bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+  [ -x "$bl" ] || skip "cc-backlog not installed"
+  t="$(_reland_title claude/fire-20260812T172113Z-3600-1)"
+  a="$("$bl" needs "$t" --run "cd /main && x  # last attempt: rc=143 (SIGTERM)")"
+  b="$("$bl" needs "$t" --run "cd /main && x  # last attempt: rc=6 (exit)")"
+  [ -n "$a" ]
+  [ "$a" = "$b" ]
+}
+
+@test "re-land rows: the OLD volatile title is what did NOT fold (the defect, pinned)" {
+  # The control. Without it, arm 1 could pass because the brake folds EVERYTHING, and this suite
+  # would certify a store that had simply stopped distinguishing rows.
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/bl.jsonl"; : > "$CC_BACKLOG_FILE"
+  bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+  [ -x "$bl" ] || skip "cc-backlog not installed"
+  br=claude/fire-20260812T172113Z-3600-1
+  a="$("$bl" needs "re-land $br (/private/tmp/.desk-land-x-7180): ship-land exited 143 (SIGTERM) and its author's pane may be gone — head pinned at refs/land/failed/a" --run "cd /x && true")"
+  b="$("$bl" needs "re-land $br (/private/tmp/.desk-land-x-44893): ship-land exited 6 (exit) and its author's pane may be gone — head pinned at refs/land/failed/b" --run "cd /x && true")"
+  [ "$a" != "$b" ]
+}
+
+@test "re-land rows: two DIFFERENT branches still get their own rows" {
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/bl.jsonl"; : > "$CC_BACKLOG_FILE"
+  bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+  [ -x "$bl" ] || skip "cc-backlog not installed"
+  a="$("$bl" needs "$(_reland_title claude/fire-20260812T172113Z-3600-1)" --run "cd /main && x")"
+  b="$("$bl" needs "$(_reland_title claude/fire-OTHER-9)"                  --run "cd /main && x")"
+  [ "$a" != "$b" ]
+}
+
+@test "re-land rows: the filed title carries NO per-attempt sandbox path or exit code" {
+  # Structural, against the real source: the generator is inside a function this suite cannot call
+  # without a full failing land, so assert the emitted title's SHAPE at the call site.
+  run sed -n '/^    "re-land /p' "$SHIPLAND"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  [[ "$output" != *'REPO_ROOT'* ]] || { echo "sandbox path is back in the title: $output"; false; }
+  [[ "$output" != *'${rc}'* ]] || { echo "exit code is back in the title: $output"; false; }
+  [[ "$output" == *'${BRANCH}'* ]]
+}
