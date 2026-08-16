@@ -32,6 +32,7 @@
 #   CC_DISCOVER_GATES            C4 sources (space-sep list) (default: "never-stuck-gate.sh premortem-gate.sh")
 #   CC_DISCOVER_PROJECT          project string for C1/C3/C4 (default: basename $PWD)
 #   CC_DISCOVER_PLAN_SCOPE       C2 reach: project (default — only $PROJECT rows) | all (L4 cross-project)
+#   CC_DISCOVER_PHASE_SCAN       C2 PRE-MINT re-check        (default: plan-phase-scan.sh; unresolvable ⇒ fail-OPEN)
 #
 # BSD+GNU portable, no eval, fail-loud. Exit: 0 normal · 3 config-fail LOUD · 2 usage.
 set -uo pipefail
@@ -39,6 +40,7 @@ set -uo pipefail
 SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 FRONTIER_LEDGER="${CC_DISCOVER_FRONTIER_LEDGER:-docs/research/FRONTIER_HOLES.md}"
 FINDPLAN_RAW="${CC_DISCOVER_FINDPLAN:-find-plan.sh}"
+PHASESCAN_RAW="${CC_DISCOVER_PHASE_SCAN:-plan-phase-scan.sh}"
 GATES="${CC_DISCOVER_GATES:-never-stuck-gate.sh premortem-gate.sh}"
 IDL="${CC_DISCOVER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 BACKLOG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
@@ -190,8 +192,16 @@ critic_frontier_hole() {
 # `find-plan.sh --list-open` emits `STATUS | PROJECT | PATH | TITLE` (space-pipe-space).
 # Unresolvable find-plan → abstain (a missing source, never a fabricated candidate).
 critic_plan_open() {
-  local added=0 cands=0 line proj path title rc bin
+  local added=0 cands=0 line proj path title rc bin scan
   bin="$(resolve_helper "$FINDPLAN_RAW")" || { abstain plan-open "find-plan absent: $FINDPLAN_RAW"; return 0; }
+  # THE PRE-MINT RE-CHECK (2026-08-16, BACKLOG_DRAIN_24_7 §4 C2). Resolved ONCE per run, outside the
+  # loop: an unresolvable scanner is a property of the deployment, not of a plan, and re-asking it per
+  # row would fork a `command -v` walk per candidate for an answer that cannot change mid-loop.
+  # Unresolvable ⇒ empty ⇒ every row mints, exactly as before this change (see the fail-OPEN note in
+  # the loop). It is NOT an `abstain`: find-plan is this critic's SOURCE and its absence means there
+  # is nothing to say, while this is a SCREEN over a source that answered — losing the screen must
+  # degrade to the prior behaviour, never to silence.
+  scan="$(resolve_helper "$PHASESCAN_RAW" 2>/dev/null || true)"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     proj="$(printf  '%s' "$line" | awk -F ' \\| ' '{print $2}' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -231,6 +241,35 @@ critic_plan_open() {
     # (measured 2026-08-11, in this change's own convergence window). Requiring the affirmative token
     # makes an older binary answer "still live" — the safe direction — instead of retracting the item
     # it just minted.
+    # 🚨 ASK THE FALSIFIER *BEFORE* MINTING, NOT ONLY AFTER (2026-08-16, plan §4 C2). Everything
+    # below this line already stored the right question; what was missing is that nothing asked it at
+    # FILING time. `find-plan.sh --list-open` decides openness from YAML frontmatter alone, so a plan
+    # that finished without anyone editing its header stays "open" forever and this critic re-minted
+    # `advance <plan>` against it every pass — measured on 096b75d15d9f, four days running, ended
+    # only when bade951f0 flipped the frontmatter BY HAND. That is a generator whose premise decayed
+    # while its output kept accruing, which is exactly the shape memory:
+    # discovery-critic-premise-goes-stale prescribes for: re-check at CONSUMPTION, fail-OPEN.
+    #
+    # The SAME probe, one run earlier — deliberately not a second, looser status reader. There are
+    # already three copies of plan_status() in this tree and the third disagrees with the other two
+    # (find-plan.sh's own header says so); a fourth signal invented here would be a fourth answer to
+    # "is this plan finished", and the probe and the report would start drifting the moment either
+    # was touched. `--falsify` is a strict superset of the frontmatter read — clause (a) IS the
+    # status word, clause (b) adds the plan's remaining sections — so this screen can only ever be
+    # at least as informed as the source it screens.
+    #
+    # FAIL-OPEN, ON THE AFFIRMATIVE TOKEN ONLY. Every answer that is not literally `FALSIFIED` mints:
+    # a missing scanner, an unreadable plan, a parse that found no sections, an older deployed copy
+    # that ignores the verb and dumps JSON at exit 0 (the version-skew hole plan-phase-scan.sh's own
+    # header documents — which is why this tests the WORD and not the exit code, in lockstep with the
+    # stored probe below). A screen that suppressed on "could not tell" would silently delete this
+    # critic the first time a symlink lagged a land, and a discovery feed that has stopped filing
+    # looks precisely like a backlog with nothing left in it.
+    if [ -n "$scan" ] && [ "$("$scan" "$path" --falsify 2>/dev/null)" = FALSIFIED ]; then
+      printf 'skip [plan-open] %s — the plan itself reports no work remaining (pre-mint falsifier)\n' "$title"
+      idl_log plan-open skipped "falsified at mint: $path"
+      continue
+    fi
     add_candidate "advance $title" "$proj" "$path" "plan-open" \
       "[ \"\$(\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify 2>/dev/null)\" = FALSIFIED ]"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))

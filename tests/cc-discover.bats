@@ -20,6 +20,13 @@ setup() {
   export CC_DISCOVER_FINDPLAN="$C/absent-findplan"
   export CC_DISCOVER_GATES="$C/absent-gate"
   export CC_DISCOVER_PROJECT="batscase"
+  # C2's PRE-MINT screen. NOT pointed at an absent path like the sources above, because it is not a
+  # source — it is a SCREEN over one, and an absent screen fails OPEN (every row mints), which is the
+  # pre-change behaviour and would make the suppression tests below vacuous. Pinned to THIS TREE's
+  # scanner instead: the bare-name default resolves off the operator's PATH and $HOME/.claude/scripts
+  # (hermeticity-lint seam 5b), so an unpinned suite would screen its fixtures with whatever copy the
+  # box deploys. One test overrides this to an absent path on purpose, to pin the fail-open direction.
+  export CC_DISCOVER_PHASE_SCAN="$REPO/scripts/plan-phase-scan.sh"
 }
 
 # count add-records of a given source in the backlog store (0 if the store is absent).
@@ -90,6 +97,78 @@ EOF
   run "$CD" --once
   [ "$status" -eq 0 ]
   [ "$(count_src plan-open)" -eq 2 ]
+}
+
+# ── C2 the PRE-MINT re-check (BACKLOG_DRAIN_24_7 §4 C2) ──────────────────────
+# find-plan.sh's `--list-open` decides openness from YAML frontmatter ALONE, so a plan that finished
+# without anyone editing its header keeps being reported open, and this critic kept minting "advance
+# <plan>" against it — measured on 096b75d15d9f, four days, until bade951f0 flipped the frontmatter
+# by hand. The row's own falsifier already asks the right question, but only ever AFTER the row
+# exists (cc-premise re-runs it at claim time), which is too late to stop the filing.
+#
+# So the check moves to the chokepoint that MINTS (memory: discovery-critic-premise-goes-stale —
+# re-check at CONSUMPTION, fail-OPEN). Same probe, one run earlier. These three cases pin the two
+# directions plus the fail-open default; a suppressor that cannot be shown to NOT suppress would
+# read identically to a critic that had simply stopped working.
+_c2_plan() {  # <path> <trailing-token-for-section-2> — the measured shape: frontmatter says open
+  cat > "$1" <<EOF
+---
+status: open
+---
+
+# Ship the widget
+
+## Question — does the widget ship? (DONE)
+
+Answered: it shipped in 6488617.
+
+## Rollout$2
+
+Recorded.
+EOF
+}
+
+@test "C2 plan-open: frontmatter says open but the BODY is answered ⇒ no row is minted" {
+  _c2_plan "$C/answered.md" " (DONE)"
+  cat > "$C/findplan" <<EOF
+#!/bin/bash
+[ "\$1" = "--list-open" ] || exit 0
+printf '%s\n' "OPEN | batscase | $C/answered.md | Ship the widget"
+EOF
+  chmod +x "$C/findplan"
+  export CC_DISCOVER_FINDPLAN="$C/findplan"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src plan-open)" -eq 0 ]
+}
+
+@test "C2 plan-open: a plan with work REMAINING still mints (the suppressor can not-fire)" {
+  _c2_plan "$C/live.md" ""
+  cat > "$C/findplan" <<EOF
+#!/bin/bash
+[ "\$1" = "--list-open" ] || exit 0
+printf '%s\n' "OPEN | batscase | $C/live.md | Ship the widget"
+EOF
+  chmod +x "$C/findplan"
+  export CC_DISCOVER_FINDPLAN="$C/findplan"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src plan-open)" -eq 1 ]
+}
+
+@test "C2 plan-open: an UNRESOLVABLE phase-scan fails OPEN — the row is still minted" {
+  _c2_plan "$C/answered2.md" " (DONE)"
+  cat > "$C/findplan" <<EOF
+#!/bin/bash
+[ "\$1" = "--list-open" ] || exit 0
+printf '%s\n' "OPEN | batscase | $C/answered2.md | Ship the widget"
+EOF
+  chmod +x "$C/findplan"
+  export CC_DISCOVER_FINDPLAN="$C/findplan"
+  export CC_DISCOVER_PHASE_SCAN="$C/absent-phase-scan"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src plan-open)" -eq 1 ]
 }
 
 # ── C3 wiring-inert (CLI-level) ──────────────────────────────────────────────
