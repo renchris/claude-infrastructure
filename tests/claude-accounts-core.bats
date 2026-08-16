@@ -1933,6 +1933,59 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "router desk: the weekly floor RAMPS with the horizon — the tail is not abandoned (W2)" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_DESK_W_RAMP",
+          "CC_ROUTE_DESK_W_FULL_H", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+# THE MEASURED REGRESSION, replayed as a unit. `next` sat at 86% weekly (headroom 0.14) with 11.1h
+# to its reset — ONE point under the flat 0.15 floor — fell to DESK_TIER_5H, and the desk left it
+# for an account six days from its own reset. It expired with 9pp unused. The floor now scales to
+# what the wall would COST, so 11h out that row is back in the safe set.
+tail = row(acct="tail", session_pct=10, weekly_pct=86, weekly_reset_h=11.1)
+assert ca.desk_keys(tail, cfg)[2] == ca.DESK_TIER_SAFE, ca.desk_keys(tail, cfg)
+# ...and it is preferred over a roomy account whose reset is days away — the whole point.
+roomy = row(acct="roomy", session_pct=10, weekly_pct=3, weekly_reset_h=160.0)
+out, _ = ca.ranked([roomy, tail], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out] == ["tail", "roomy"], out
+# THE GUARD SURVIVES AT DISTANCE: the same headroom, days out, is still demoted. This is the case
+# the floor exists for — a weekly wall there is unrecoverable for the rest of the week.
+assert ca.desk_keys(row(weekly_pct=86, weekly_reset_h=160.0), cfg)[2] == ca.DESK_TIER_5H
+# MONOTONE in the horizon, and never above the flat floor. The scale is HORIZON-hours, not raw
+# reset_h — horizon() nets off MARGIN_H — so saturation lands at FULL_H + MARGIN_H, and the floor
+# is a hair under the flat one at exactly FULL_H. That is the shared contract, not a rounding slip.
+f = [ca.desk_w_floor_at(R, t) for t in (0.5, 6.0, 12.0, 24.0, 48.0, 168.0)]
+assert f == sorted(f), f
+assert f[-1] == f[-2] == ca.desk_w_floor(R), f          # saturates AT the full floor, never above
+assert f[0] < 0.01, f                                   # at the reset itself ~nothing is reserved
+assert f[3] < ca.desk_w_floor(R), f                     # FULL_H exactly ⇒ still ramping (MARGIN_H)
+# UNKNOWN TIMING KEEPS THE FULL FLOOR — horizon() reads absent, zero and elapsed alike as FAR
+# AWAY, so bad data can never talk the desk into draining an account. This is the fail-safe
+# direction and it is inherited, not re-implemented.
+assert ca.desk_w_floor_at(R, None) == ca.desk_w_floor(R)
+assert ca.desk_w_floor_at(R, 0.0) == ca.desk_w_floor(R)
+assert ca.desk_w_floor_at(R, -5.0) == ca.desk_w_floor(R)
+# KILL SWITCH restores the flat floor at every horizon (the pre-W2 behaviour), and a NUMBER moves
+# the ramp. Malformed ⇒ the default stands, like every other knob here.
+os.environ["CC_ROUTE_DESK_W_RAMP"] = "off"
+assert ca.desk_w_floor_at(R, 1.0) == ca.desk_w_floor(R)
+assert ca.desk_keys(tail, cfg)[2] == ca.DESK_TIER_5H            # the regression, reproduced
+os.environ.pop("CC_ROUTE_DESK_W_RAMP")
+os.environ["CC_ROUTE_DESK_W_FULL_H"] = "4"
+assert ca.desk_w_floor_at(R, 11.1) == ca.desk_w_floor(R)        # saturated well before 11.1h...
+assert ca.desk_keys(tail, cfg)[2] == ca.DESK_TIER_5H            # ...so 0.14 < 0.15 demotes again
+os.environ["CC_ROUTE_DESK_W_FULL_H"] = "not-a-number"
+assert abs(ca.desk_w_floor_at(R, 12.0)
+           - ca.desk_w_floor(R) * (12.0 - R["MARGIN_H"]) / ca.DESK_W_FLOOR_FULL_H) < 1e-9
+os.environ.pop("CC_ROUTE_DESK_W_FULL_H")
+# the SSOT constant is the one the code ships
+assert R.get("DESK_W_FLOOR_FULL_H", ca.DESK_W_FLOOR_FULL_H) == ca.DESK_W_FLOOR_FULL_H
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "router desk: hysteresis keeps the incumbent unless beaten by the margin, and is switchable" {
   run python3 -c "$LOAD"'
 import json, os, time

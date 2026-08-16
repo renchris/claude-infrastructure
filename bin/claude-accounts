@@ -294,6 +294,7 @@ ROUTER_KEYS = ("S_CUT", "S_SOFT", "SF_FLOOR", "KMAX", "KFLOOR", "MARGIN_H", "EPS
 ROUTER_OPTIONAL_RANGES = {
     "DESK_5H_FLOOR": (0.0, 1.0),        # projected 5h utilisation must be BELOW this to be safe
     "DESK_W_FLOOR": (0.0, 1.0),         # weekly headroom must be AT/ABOVE this to be safe
+    "DESK_W_FLOOR_FULL_H": (0.0, 168.0),  # hours-to-reset at which DESK_W_FLOOR applies in full
     "DESK_HYST_MARGIN": (0.0, 1.0),     # fraction a rival must beat the incumbent by
     "DESK_HYST_TTL_MIN": (0.0, 10080.0),  # how long a launcher assignment names the incumbent
     "KMAX_RESIDENT": (1.0, 10000.0),    # resident-session cap (see k_cap); KMAX is the ACTIVE one
@@ -1384,12 +1385,16 @@ PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the wi
 
 # ---- the DESK lane's own terms (DESK_ROUTER_AND_STARTUP_V1 W1, R2 §7(ii)/§10) -------------------
 # The desk lane is a two-key SORT, not a product of factors (see score_interactive), so it needs
-# three constants the other lanes do not have. All optional in the SSOT, all kill-switched, all
+# four constants the other lanes do not have. All optional in the SSOT, all kill-switched, all
 # range-validated by _validate_router when present.
 #   DESK_5H_FLOOR       projected 5h utilisation below which an account is "5h-safe".
 #                       Kill: CC_ROUTE_DESK_5H_FLOOR=off (a NUMBER moves the floor; see below).
 #   DESK_W_FLOOR        weekly headroom at/above which an account is "weekly-safe".
 #                       Kill: CC_ROUTE_DESK_W_FLOOR=off.
+#   DESK_W_FLOOR_FULL_H hours-to-weekly-reset at/above which DESK_W_FLOOR applies IN FULL; below it
+#                       the floor ramps linearly to 0 (W2 — see desk_w_floor_at). Kill:
+#                       CC_ROUTE_DESK_W_RAMP=off restores the flat floor at every horizon;
+#                       CC_ROUTE_DESK_W_FULL_H overrides the value.
 #   DESK_HYST_MARGIN    fraction by which a rival must beat the INCUMBENT desk account to take it
 #                       (D-B, START_LATENCY_ROUTER.md:82-83 — specified, never built until now).
 #                       Kill: CC_ROUTE_DESK_HYST=off; CC_ROUTE_DESK_HYST_MARGIN overrides the value.
@@ -1399,6 +1404,7 @@ PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the wi
 #                       anything to do with the session the operator is sitting in.
 DESK_5H_FLOOR = 0.60
 DESK_W_FLOOR = 0.15
+DESK_W_FLOOR_FULL_H = 24.0
 DESK_HYST_MARGIN = 0.15
 DESK_HYST_TTL_MIN = 300.0
 # `--src` values whose phantom charge the DESK lane does not pay (W1.5). A launcher assignment is
@@ -1871,6 +1877,60 @@ def desk_w_floor(R):
     return _desk_floor("CC_ROUTE_DESK_W_FLOOR", R, "DESK_W_FLOOR", DESK_W_FLOOR, 0.0)
 
 
+def desk_w_floor_full_h(R):
+    """Horizon at which DESK_W_FLOOR applies in full. 0 disables the ramp (flat floor)."""
+    if not _term_on("CC_ROUTE_DESK_W_RAMP"):
+        return 0.0
+    return max(0.0, _cliff_env("CC_ROUTE_DESK_W_FULL_H",
+                               R.get("DESK_W_FLOOR_FULL_H", DESK_W_FLOOR_FULL_H)))
+
+
+def desk_w_floor_at(R, weekly_reset_h):
+    """DESK_W_FLOOR scaled by how much the weekly wall it guards against would actually COST (W2).
+
+    ── Why the flat floor stranded quota (measured 2026-08-16, 1,251 sweeps / 5 resets) ──────────
+    DESK_W_FLOOR exists to stop a pure earliest-reset sort handing the desk "an account with 2% of
+    its week left and 3 hours to reset (a WEEKLY wall, the unrecoverable one)" — desk_keys' words.
+    But it was a CONSTANT, so it fired identically whether the reset was six days away or six hours
+    away, and the wall's cost is precisely the time until that reset. So it abandoned the tail:
+
+      acct   headroom when demoted   hours to reset   stranded at reset
+      next            0.14                 11.1              9 pp
+      next2           0.09                  7.9              8 pp
+
+    `next` is the clean instance — 0.14 against a 0.15 floor, ONE point below, eleven hours out.
+    It fell to DESK_TIER_5H, the desk went to an account six days from its own reset, and it never
+    came back: 0/112 sweeps on target across its final 12 hours. The general lane, which has no
+    such floor, kept naming the same accounts down to the final hour (`w_rem / T**2` — the two
+    lanes disagreed for the entire endgame and the desk was the wrong one). Weekly quota has no
+    recovery, so those 17 pp are gone.
+
+    ── The rule ──────────────────────────────────────────────────────────────────────────────────
+    Reserve headroom in proportion to what a wall would cost: full floor at DESK_W_FLOOR_FULL_H
+    hours out, ramping linearly to 0 at the reset. Equivalently — and this is the calibration that
+    picked the constant — the floor is "what you could plausibly still BURN before the reset", at
+    0.15/24h = 0.63 pp/h, inside the observed per-account range (0.45 pp/h on `next`, 1.9 pp/h on
+    `next4`). Reserving more than you can spend protects nothing and strands the difference.
+
+    Replayed over the same series, desk-time on an about-to-reset account holding headroom went
+    24.7% -> 67.4% of its final-12h sweeps, with weekly-wall exposure flat at 0 sweeps for every
+    FULL_H in {8, 12, 18, 24, 36, 48}. 24h is the SMALLEST value on the capture plateau (18h loses
+    1.1 pt, 12h loses 6.9), i.e. full capture while retaining the guard over the longest horizon —
+    the same "sized by argument, not by insensitivity" reasoning DESK_5H_FLOOR is stated under, and
+    it carries the same caveat: the plateau is flat because the guard rarely binds, which is an
+    absence of evidence about the far end, not evidence of robustness there.
+
+    The horizon comes from horizon(), NOT the raw field, so this inherits one contract already
+    relied on fleet-wide: an absent or elapsed reset reads as FAR AWAY, never imminent. That is the
+    conservative direction here — unknown timing keeps the FULL floor, so bad data can never talk
+    this into draining an account."""
+    base = desk_w_floor(R)
+    full_h = desk_w_floor_full_h(R)
+    if base <= 0.0 or full_h <= 0.0:
+        return base
+    return base * clamp(horizon(weekly_reset_h, R) / full_h, 0.0, 1.0)
+
+
 def desk_hyst_margin(R):
     if not _term_on("CC_ROUTE_DESK_HYST"):
         return 0.0
@@ -1885,7 +1945,8 @@ def desk_keys(r, cfg):
     fire (W1.1). Every ELIGIBLE row lands on exactly one rung, so the candidate set cannot be
     emptied by these keys — that is the property, and it is structural, not lucky:
 
-      tier 2  SAFE SET  projected 5h utilisation < DESK_5H_FLOOR  AND  weekly headroom >= DESK_W_FLOOR
+      tier 2  SAFE SET  projected 5h utilisation < DESK_5H_FLOOR  AND  weekly headroom >= the
+                        horizon-scaled weekly floor, desk_w_floor_at() (W2)
       tier 1  5H-SAFE   the 5h key holds; the weekly-headroom key does not
       tier 0  ELIGIBLE  neither key holds — still routable, still ranked
 
@@ -1894,6 +1955,10 @@ def desk_keys(r, cfg):
     3 hours to reset (a WEEKLY wall, the unrecoverable one). The 5h key degrades second because a
     5-hour wall self-heals in <=5 h and has three escapes. Below both, the ladder still ranks by the
     objective; it never answers "none" while an eligible account exists.
+
+    ⚠️ The weekly floor is a FUNCTION OF THE HORIZON, not a constant — desk_w_floor_at() carries
+    the measurement. Read it before tuning DESK_W_FLOOR: as a constant this key strands the tail of
+    every account it is supposed to protect, which is the defect it was changed to fix.
 
     (su, None, tier 0) when weekly_pct is absent — the caller's own data gate rejects that row
     before the tier is used; the tier is defined here anyway so route-meta can never index None.)"""
@@ -1904,7 +1969,8 @@ def desk_keys(r, cfg):
         return su, None, DESK_TIER_ANY
     w_rem = max(0.0, (0.98 if r.get("credits_on") else 1.00) - wp / 100.0)
     if su < desk_5h_floor(R):
-        return su, w_rem, (DESK_TIER_SAFE if w_rem >= desk_w_floor(R) else DESK_TIER_5H)
+        w_floor = desk_w_floor_at(R, r.get("weekly_reset_h"))
+        return su, w_rem, (DESK_TIER_SAFE if w_rem >= w_floor else DESK_TIER_5H)
     return su, w_rem, DESK_TIER_ANY
 
 
@@ -1968,6 +2034,17 @@ def score_interactive(r, cfg, cliff=True):
     earliest-reset sort would hand the operator a capped desk) and never on ordinary load. The
     weekly floor made no difference at all on this data (0/324) and is kept for the same reason.
     Re-run the replay after >=2 full weekly cycles before treating either number as durable.
+
+    ⚠️ THE WEEKLY-FLOOR HALF OF THAT PARAGRAPH IS NOW MEASURED FALSE (W2, 2026-08-16), and the
+    instruction above is the reason it was caught: "made no difference at all on this data (0/324)"
+    was true of the W1 window and false of the very next one. Over 1,254 sweeps / 5 resets the FLAT
+    floor was the largest single source of stranded weekly quota — it abandoned `next` at 0.14
+    headroom with 11.1h to its reset (0/112 sweeps on target thereafter; 9pp expired), while the
+    general lane, which has no such floor, kept naming that same account down to the final hour.
+    The floor is now horizon-scaled: desk_w_floor_at() carries the measurement and the calibration.
+    The replay is no longer something you must rebuild in order to run it —
+    `scripts/desk-strand-replay.py` (`--sweep` for the plateau, `--flat` for the counterfactual).
+    Full record: docs/research/R9-desk-weekly-strand.md.
 
     KEPT from the shipped lane, unchanged: every exclusion is shared with general (_excluded, C6 —
     a different objective over the same eligibility, never a second opinion about who is eligible),
@@ -2205,6 +2282,15 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     continue                    # a failed probe carries no measurement
                 f.write(json.dumps({
                     "ts": ts, "acct": r.get("acct"), "k": r.get("k"),
+                    # WHICH INSTRUMENT measured k, and the active count beside the resident one.
+                    # Without these a replay cannot tell which CAP applied — k_cap is KMAX (8) for
+                    # a work-charged row and KMAX_RESIDENT (40) for a pane-charged one, so the
+                    # exclusion threshold differs 5x and `kmax-concurrency` becomes unattributable.
+                    # That is not hypothetical: the W2 replay (2026-08-16) had to assume "work" for
+                    # every row, which is the strict end, and so could not settle whether next4's
+                    # 15pp strand was a real concurrency lockout or an artifact of that assumption.
+                    # Free to record — same sweep, same row, both fields already on it.
+                    "k_work": r.get("k_work"), "k_src": k_src(r),
                     "session_pct": r.get("session_pct"), "weekly_pct": r.get("weekly_pct"),
                     "fable_pct": r.get("fable_pct"),
                     "session_reset_at": r.get("session_reset_at"),
