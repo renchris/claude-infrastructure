@@ -183,6 +183,38 @@ short-phrase anchor would have failed.
 Nothing durable is written by the second change: no account `settings.json`, no `.claude.json`, no
 repo file. A later operator session in the same repo sees exactly what it saw before.
 
+### END-TO-END against the LIVE layer, after the converge
+
+The arms above test the *mechanism*. This tests **the line the deployed `handoff-fire.sh` actually
+emits**: `scripts/mcp-modal-e2e-probe.py` takes the live fire's own composition for a cwd carrying
+`.mcp.json` and runs it in a pty, against the arm with `--settings` stripped — i.e. the pre-fix
+shape, which is the positive control.
+
+| Arm | dialog on screen? | bytes |
+|---|---|---|
+| **B — CONTROL: the pre-fix line** (isolation flags, no decision) | **YES** | 1,044 — dead at the dialog, the operator's screenshot reproduced |
+| **A — what the live fire composes today** | **no** | 11,123 — ~10× the output, i.e. startup continued past where B stopped |
+
+Both arms report `reached_ui=no` because the probe kills at 30 s, before the composer footer paints;
+the discriminator is the dialog plus the byte count, not the footer. Stated rather than glossed —
+the footer check is the one assertion in this probe that does *not* carry weight.
+
+**Provenance of the live layer this was run against.** `deploy-live.sh` refused the ordinary advance
+(*"no GREEN tree is a DESCENDANT of live HEAD"*), and the operator authorised `--force` on
+2026-08-15, taking live `3aa96304 → f51f6641`. Consequences worth recording:
+
+- The land (`320289012`) is an ancestor of live HEAD, and both halves are live **by content** — the
+  decision call at `~/.claude/scripts/handoff-fire.sh:7105`, and exactly one unguarded `pre_trust`
+  in the recycle branch.
+- The post-deploy host check reds `tests/deploy-parity-live.bats`, and the assert names the cause
+  itself: **PROVENANCE, not content** — *"Nothing above is a content difference"*, with all 20
+  parity classes `ok` (`scripts/*.sh` 168 tracked · 168 live · 0 missing). It is the `--force`
+  reporting itself, and it clears when the verifier stamps a green at or above live HEAD.
+- `scripts/mcp-modal-probe.py` and this e2e probe are **not** symlinked into `~/.claude` — the repo
+  has no `scripts/*.py` deploy class (only `scripts/backlog-consolidation/*.py`). That is the
+  existing convention for every `scripts/*.py` here (`bats-assert-liveness-fix.py`, the banner
+  tools), not a gap: run them from the checkout.
+
 **Why not the alternatives** — each rejected for a named reason, so the next reader does not re-open
 them: `enableAllProjectMcpServers` in an account settings file is a forever-grant to every repo that
 ever declares a server (the MUST-REACH-OPERATOR classification exists to keep it out);
