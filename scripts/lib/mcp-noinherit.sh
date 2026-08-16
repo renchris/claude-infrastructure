@@ -146,3 +146,99 @@ cc_mcp_noinherit_args() {
     CC_MCP_NOINHERIT_ARGS="--strict-mcp-config"
   fi
 }
+
+# cc_mcp_project_decision_args LAUNCH_DIR MODE  —  answer the project `.mcp.json` APPROVAL question
+# on the fire's own command line, so an interactive fired session never stalls at the modal.
+#
+# THE STALL THIS EXISTS TO REMOVE (2026-08-15, operator screenshot). A recycled pane in
+# ~/Development/personal came up at "2 new MCP servers found in this project / Select any you wish
+# to enable" with the brief unread behind it. It had been launched with `--strict-mcp-config`, i.e.
+# it had ALREADY guaranteed those servers would not load — and was asked to approve them anyway. A
+# spawned session stopped at a modal never runs its brief and nothing upstream notices: the pane is
+# alive, the process is alive, no hook fires.
+#
+# WHY THIS IS NOT THE SAME QUESTION `--strict-mcp-config` ANSWERS. That flag governs which servers
+# LOAD. Approval is a separate axis, read out of the 2.1.220 binary:
+#
+#   function SZr(e){ let t=us();                                   // us = eo = MERGED settings
+#     if(t?.disabledMcpjsonServers?.some(r=>f4r(r,e))) return "rejected";      // ← checked FIRST
+#     if(!wB()) return ny_(e)?"approved":"pending";                // wB = workspace trusted?
+#     if(t?.enabledMcpjsonServers?.some(...)||t?.enableAllProjectMcpServers) return "approved";
+#     return "pending" }                                           // "pending" ⇒ the modal
+#
+# `pending` is what the fire hit. Three consequences decide this function's shape:
+#   1. `disabledMcpjsonServers` is consulted BEFORE the trust branch and returns "rejected" — so a
+#      REJECTION silences the question while granting nothing. That is the polarity a no-inherit
+#      fire has already chosen, stated in the one place the vendor reads it.
+#   2. The store is the MERGED SETTINGS, not `.claude.json`'s `projects[<cwd>]` entry. Those
+#      per-project `enabledMcpjsonServers` / `disabledMcpjsonServers` keys exist on disk and this
+#      gate never reads them — an obvious-looking seed there would have been a silent no-op.
+#   3. `wC()` unconditionally adds `flagSettings` to the allowed sources (`t.add("flagSettings")`),
+#      and `--settings <file-or-json>` IS that source. So the decision rides the launch, exactly
+#      like the `--mcp-config` passthrough above: nothing durable is written, no other account or
+#      later session inherits it, and the operator's own sessions in that repo are untouched.
+#
+# WHY NOT THE ALTERNATIVES, each rejected for a named reason:
+#   · `enableAllProjectMcpServers` in an account settings.json — a forever-grant to every repo that
+#     ever declares a server; docs/research/cc-startup-modals-2026-08-04.md §1 classifies `.mcp.json`
+#     approval as MUST-REACH-OPERATOR precisely to keep that key out.
+#   · `disabledMcpjsonServers` in an account settings.json — account-global, so it would blind that
+#     account to a server NAME in every repo.
+#   · writing the launch dir's own `.claude/settings.local.json` — that file is shared by all five
+#     accounts, so a decision taken for one fired agent session would leak into the operator's own.
+#
+# POLARITY FOLLOWS THE FIRE, NEVER A FIXED VALUE. MODE=off (the `--strict-mcp-config` default)
+# rejects; MODE=on (`--with-mcp`, or a brief that disarmed no-inherit by naming MCP work) approves.
+# A fixed "reject" would silently hide a server the fire itself was launched to use — the same class
+# as the ms365 disappearance in docs/plans/MS365_MCP_ALL_ACCOUNTS.md, and the reason the scope-blind
+# stdio filter above needed an allowlist.
+#
+# Sets CC_MCP_DECISION_ARGS (possibly empty) and CC_MCP_DECISION_REASON — globals, for the same
+# subshell reason documented in this file's header.
+# shellcheck disable=SC2034  # CC_MCP_DECISION_ARGS/REASON are the RETURN VALUES — read by the caller.
+cc_mcp_project_decision_args() {
+  local dir="${1:-}" mode="${2:-off}"
+  CC_MCP_DECISION_ARGS=""
+  CC_MCP_DECISION_REASON=""
+
+  if [ "${CC_MCP_DECIDE:-on}" = off ]; then
+    CC_MCP_DECISION_REASON="disabled by CC_MCP_DECIDE=off"
+    return 0
+  fi
+  [ -n "$dir" ] && [ -f "$dir/.mcp.json" ] || return 0     # no project file ⇒ no question ⇒ no flag
+  command -v jq >/dev/null 2>&1 || {
+    CC_MCP_DECISION_REASON="jq absent — project .mcp.json approval left to the modal (a fired pane may stall)"
+    return 0
+  }
+
+  local key names json out tmp n
+  case "$mode" in
+    on) key="enabledMcpjsonServers"  ;;
+    *)  key="disabledMcpjsonServers" ;;
+  esac
+  # Names come from the launch dir's OWN file, so the answer covers exactly the servers the modal
+  # would enumerate. `// {}` keeps a malformed/serverless file from failing the whole expression —
+  # empty names then return below rather than emitting `{"...":[]}`, which decides nothing and would
+  # cost a flag for no effect.
+  json="$(jq -c --arg k "$key" '{($k): ((.mcpServers // {}) | keys)}' "$dir/.mcp.json" 2>/dev/null)" || return 0
+  n="$(printf '%s' "$json" | jq -r --arg k "$key" '.[$k] | length' 2>/dev/null || echo 0)"
+  [ "${n:-0}" -gt 0 ] || return 0
+
+  # Keyed on the dir so two fires into DIFFERENT repos never share a file, and on the mode so an
+  # `--with-mcp` fire cannot read a rejection a no-inherit fire left behind. temp + mv because
+  # concurrent fires into one dir race here by construction (same discipline as the passthrough).
+  local slug; slug="$(printf '%s' "$dir" | tr -c 'A-Za-z0-9' '-')"
+  out="${TMPDIR:-/tmp}/cc-mcp-decision-${mode}-${slug}.json"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cc-mcp-decision.XXXXXX" 2>/dev/null)" || return 0
+  if printf '%s\n' "$json" > "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$out" 2>/dev/null; then
+    # `--settings=<path>`, not the space form — the same variadic-swallow hazard the passthrough
+    # documents above. `--settings` takes one value today, but the `=` form is immune either way and
+    # costs nothing.
+    CC_MCP_DECISION_ARGS="--settings=$out"
+    local verdict=rejected; [ "$mode" = on ] && verdict=approved
+    CC_MCP_DECISION_REASON="project .mcp.json: ${n} server(s) pre-${verdict} for THIS launch via $out (no approval modal; nothing written to any config)"
+  else
+    rm -f "$tmp" 2>/dev/null
+    CC_MCP_DECISION_REASON="could not write the per-launch approval decision — a fired pane may stall at the MCP modal"
+  fi
+}

@@ -314,3 +314,115 @@ print(n)"
   isolated="$(live_probe "--strict-mcp-config")"
   [ "$isolated" -eq 0 ]
 }
+
+# ── layer 4: the project .mcp.json APPROVAL decision (cc_mcp_project_decision_args) ─────────────
+#
+# A SEPARATE AXIS from everything above. The flags above decide which servers LOAD; these decide
+# whether the fired session is ASKED. On 2026-08-15 a recycled pane carrying --strict-mcp-config
+# still stalled at "2 new MCP servers found in this project" — asked to approve servers it had
+# already guaranteed would not run — with its brief unread behind the modal.
+#
+# THE VENDOR CONTRACT THESE TESTS ENCODE, read out of the 2.1.220 binary and then MEASURED against
+# it (cwd /private/tmp/mcp-decide-probe, a .mcp.json with two fake stdio servers, config dir
+# .claude-tertiary):
+#   no flag                                    → both "⏸ Pending approval"   ← the modal's state
+#   --settings '{"disabledMcpjsonServers":…}'  → both ABSENT from mcp list, no process spawned
+#   --settings '{"enabledMcpjsonServers":…}'   → both approved and actually connected to
+# The first line is the positive control: without it a green negative arm would prove nothing.
+# Full derivation (SZr/ny_/wB and the three rejected alternatives):
+# docs/research/mcp-modal-fire-stall-2026-08-15.md and the library's own header.
+
+_mcp_proj() {   # $1=dir — write a two-server project .mcp.json
+  cat > "$1/.mcp.json" <<'JSON'
+{"mcpServers": {"srvA": {"command": "/bin/echo"}, "srvB": {"type": "stdio", "command": "/bin/echo"}}}
+JSON
+}
+
+@test "decision: a dir with NO .mcp.json costs no flag at all" {
+  source "$LIB"
+  mkdir -p "$WORK/nomcp"
+  cc_mcp_project_decision_args "$WORK/nomcp" off
+  [ -z "$CC_MCP_DECISION_ARGS" ]
+}
+
+@test "decision: MODE=off pre-REJECTS every declared server (grants nothing)" {
+  source "$LIB"
+  mkdir -p "$WORK/proj-off"; _mcp_proj "$WORK/proj-off"
+  cc_mcp_project_decision_args "$WORK/proj-off" off
+  [[ "$CC_MCP_DECISION_ARGS" == "--settings="* ]] || false
+  f="${CC_MCP_DECISION_ARGS#--settings=}"
+  [ -f "$f" ]
+  run jq -r '.disabledMcpjsonServers | join(",")' "$f"
+  [ "$output" = "srvA,srvB" ]
+  # The polarity is the whole point: a rejection may never be written as an approval, or the fire
+  # would GRANT a repo's servers while claiming to have isolated them.
+  run jq -r 'has("enabledMcpjsonServers")' "$f"
+  [ "$output" = "false" ]
+}
+
+@test "decision: MODE=on pre-APPROVES them (the --with-mcp / MCP-brief case)" {
+  source "$LIB"
+  mkdir -p "$WORK/proj-on"; _mcp_proj "$WORK/proj-on"
+  cc_mcp_project_decision_args "$WORK/proj-on" on
+  f="${CC_MCP_DECISION_ARGS#--settings=}"
+  run jq -r '.enabledMcpjsonServers | join(",")' "$f"
+  [ "$output" = "srvA,srvB" ]
+  run jq -r 'has("disabledMcpjsonServers")' "$f"
+  [ "$output" = "false" ]
+}
+
+@test "decision: the two modes never share a file (an --with-mcp fire cannot read a rejection)" {
+  source "$LIB"
+  mkdir -p "$WORK/proj-both"; _mcp_proj "$WORK/proj-both"
+  cc_mcp_project_decision_args "$WORK/proj-both" off; off_f="${CC_MCP_DECISION_ARGS#--settings=}"
+  cc_mcp_project_decision_args "$WORK/proj-both" on;  on_f="${CC_MCP_DECISION_ARGS#--settings=}"
+  [ "$off_f" != "$on_f" ]
+  run jq -r 'has("disabledMcpjsonServers")' "$off_f"; [ "$output" = "true" ]
+  run jq -r 'has("enabledMcpjsonServers")'  "$on_f";  [ "$output" = "true" ]
+}
+
+@test "decision: a serverless or malformed .mcp.json emits nothing (never an empty-list flag)" {
+  source "$LIB"
+  mkdir -p "$WORK/proj-empty"; printf '{"mcpServers":{}}\n' > "$WORK/proj-empty/.mcp.json"
+  cc_mcp_project_decision_args "$WORK/proj-empty" off
+  [ -z "$CC_MCP_DECISION_ARGS" ]
+  mkdir -p "$WORK/proj-bad"; printf 'not json at all\n' > "$WORK/proj-bad/.mcp.json"
+  cc_mcp_project_decision_args "$WORK/proj-bad" off
+  [ -z "$CC_MCP_DECISION_ARGS" ]
+}
+
+@test "decision: CC_MCP_DECIDE=off restores the pre-change behaviour and SAYS so" {
+  source "$LIB"
+  mkdir -p "$WORK/proj-ks"; _mcp_proj "$WORK/proj-ks"
+  CC_MCP_DECIDE=off cc_mcp_project_decision_args "$WORK/proj-ks" off
+  [ -z "$CC_MCP_DECISION_ARGS" ]
+  [[ "$CC_MCP_DECISION_REASON" == *"CC_MCP_DECIDE=off"* ]] || false
+}
+
+@test "E2E: a fire into a dir carrying .mcp.json puts --settings= on the typed command" {
+  mkdir -p "$WORK/e2e"; _mcp_proj "$WORK/e2e"
+  printf 'x\n' > "$WORK/p.txt"
+  run env CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off \
+      bash "$FIRE" --prompt-file "$WORK/p.txt" --cwd "$WORK/e2e" --in-place --account next2 --dry-run
+  [ "$status" -eq 0 ]
+  cmd="$(printf '%s\n' "$output" | sed -n 's/^command:  //p')"
+  [[ "$cmd" == *"--settings="* ]] || { echo "no --settings on: $cmd"; false; }
+  # `--settings=VALUE`, never the space form — same variadic-swallow hazard --mcp-config documents.
+  [[ "$cmd" != *"--settings "* ]] || false
+  f="$(printf '%s' "$cmd" | sed -n 's/.*--settings=\([^ ]*\).*/\1/p')"
+  run jq -r '.disabledMcpjsonServers | join(",")' "$f"
+  [ "$output" = "srvA,srvB" ]
+}
+
+@test "E2E: --with-mcp flips the SAME fire to an approval, not a rejection" {
+  mkdir -p "$WORK/e2e-on"; _mcp_proj "$WORK/e2e-on"
+  printf 'x\n' > "$WORK/p2.txt"
+  run env CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off \
+      bash "$FIRE" --prompt-file "$WORK/p2.txt" --cwd "$WORK/e2e-on" --in-place --account next2 --with-mcp --dry-run
+  [ "$status" -eq 0 ]
+  cmd="$(printf '%s\n' "$output" | sed -n 's/^command:  //p')"
+  f="$(printf '%s' "$cmd" | sed -n 's/.*--settings=\([^ ]*\).*/\1/p')"
+  [ -n "$f" ] || { echo "--with-mcp fire carried no decision — it is the arm whose servers REACH the approval gate"; false; }
+  run jq -r '.enabledMcpjsonServers | join(",")' "$f"
+  [ "$output" = "srvA,srvB" ]
+}
