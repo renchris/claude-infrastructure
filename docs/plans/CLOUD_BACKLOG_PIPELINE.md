@@ -1207,3 +1207,62 @@ that pile.
 - **1 gate-red**: `04010b4c8074` → `e4d0d508a`, arm `dead-assertion`.
 - **115 of 115 falsifier probes were re-run**; only 2 retracted. **The backlog is not stale — it is
   live work.** Do not plan a drain around finding rot; there is very little.
+
+## A7 · TWO MORE DETERMINISTIC WALLS, BOTH INVISIBLE UNTIL THE PUSH, BOTH OUTSIDE THE GATE ARMS
+
+*Found 2026-08-16 landing the stalled cloud work, after A6's drain. Both are A5-class generators —
+the retry is a copy — and neither is a gate ARM, so `--precheck` reports GREEN and the land still
+fails. Check both BEFORE spending a land on any cloud-authored commit.*
+
+### A7.1 · A cloud commit cannot land unamended — it is authored `Claude <noreply@anthropic.com>`
+
+The pre-push identity gate requires `ren.chris@outlook.com` (the only address resolving to
+@renchris). A cloud VM commits as `Claude <noreply@anthropic.com>`, so **the push is refused after
+the whole gate has already run green** — `--precheck` cannot see it, because the identity check is
+at push time, not in `run_gate()`.
+
+Measured across the remaining stranded cloud tips: **8 of 9 are `noreply@anthropic.com`**, and the
+ninth is `chris.claudecode@outlook.com` — a THIRD identity that also fails. By contrast **200 of 200
+sampled `refs/land/failed/*` pins are `ren.chris@outlook.com`**, so this is specifically a CLOUD
+authorship problem, not a general one — which is exactly why it stayed invisible while local
+re-lands were being triaged.
+
+The gate names its own cure and it is the right one:
+
+```
+git rebase origin/main --exec 'git commit --amend --no-edit --reset-author'
+```
+
+Never `--no-verify`: a commit pushed under another identity renders as an unattributed grey user on
+GitHub permanently, and only a history rewrite undoes it. *(The M3 land in A6.2 succeeded without
+this only because `405bcdec3` happened to carry the right author already — do not read that as the
+rule.)*
+
+### A7.2 · The gate goes NON-VERDICT when the session's PATH lacks Homebrew
+
+After the transplant to another account, `shellcheck` and `timeout` vanished from PATH
+(`/opt/homebrew/bin` absent), and the land printed
+`⛔ gate: shellcheck is NOT INSTALLED — a NON-VERDICT, not a claim about your tree`. Both binaries
+were installed the whole time. **A per-account PATH difference is indistinguishable from a missing
+tool** unless you look. Export it before landing:
+
+```
+export PATH="/opt/homebrew/bin:$HOME/.claude/bin:$PATH"
+```
+
+### A7.3 · `cmd | tail` reports TAIL's exit code, and a failed land read as success
+
+`bash scripts/ship-land.sh 2>&1 | tail -12` returned **0** while ship-land had exited non-zero on
+the identity refusal — the harness dutifully reported "completed (exit code 0)" and the land looked
+done. The failure was found only because a later content check showed the commits absent from trunk.
+**Redirect to a file and echo `$?` on its own line; never read a land's verdict through a pipe.**
+(This is `MEMORY.md` *Vacuous-pass traps* — `bats|tail` is the PIPE's rc — recurring in a new costume,
+which is the point: the trap is the shape, not the tool.)
+
+### A7.4 · A land verdict must be read by CONTENT, and ancestry is the wrong test here
+
+`git merge-base --is-ancestor <sha> origin/main` returns FALSE for almost every cloud commit that
+DID land, because it lands re-authored and rebased under a new sha. One evidence line written this
+session cited `0d173af4b` as "on trunk" on that basis and had to be corrected in an append. Ask
+whether trunk carries the CONTENT (A6.1's instrument), or grep trunk for the subject and read that
+commit's diff — never ancestry.
