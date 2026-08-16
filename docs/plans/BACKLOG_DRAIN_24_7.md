@@ -87,6 +87,39 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-16 ~21:53Z — W-P1/S3 landed: the verifier was blocked by a FALSE prelint red, not by
+  the ladder bound this wave was briefed against.** Landed `6ce67de91` · `e334bf6c1` · `2f84bf743`
+  (content-verified on origin/main, 3 paths). The next sweep ran the corpus at 21:56:12Z —
+  475 suites at `2f84bf7437fb` — the first corpus since 11:35Z.
+  - **Root cause.** From 11:35Z every sweep logged `corpus SKIPPED — pre-corpus whole-tree lint(s)
+    already red`, so **no GREEN stamp could exist at all**, deploy-live fell back to its degraded
+    age-authorised path, and the bisect elected innocent lands as culprits (backlog `354c73ebd400`).
+    The single finding was `ship-land.sh:3680 BRANCH — assigned inside a $( ) child`, chained to
+    write_decision_packet ":584 assigns BRANCH". Line 584 is `ID="$id" BRANCH="$branch" … python3`
+    — a command-PREFIX env assignment, which bash discards after the command returns (MEASURED for
+    an external command AND for a function: `f(){ :; }; V=inside f` leaves V unset). It assigns no
+    global; the trap's BRANCH was never stale. The lint's prescribed remedy — "return through a
+    global out-parameter" — would have introduced the very global the lint exists to forbid.
+  - **The brief's premise was refuted by measurement, twice.** `ladder UNPROVEN for
+    tests/autonomy-sweep.bats — our own 5400s bound fired` preceded 16 cuts, but retry_once has
+    TWO bounds (FILE_TO=300s per named test · RETRY_TO=5400s whole-file fallback), rc 124 is
+    identical from either, and the message named RETRY_TO unconditionally. **A 5400s bound cannot
+    fire in the runs that logged it — `run_s=3364` and `run_s=3538`.** The suite is not slow: at
+    the ladder's exact band (`nice -n 5`, `taskpolicy -c utility`) it measures **77.09s /
+    55-of-55** in-worktree and **69.79s / 55-of-55 in a PRISTINE detached worktree at origin/main
+    under live contention**, slowest case 4159ms. A whole session was dispatched against a
+    90-minute suite that does not exist. The bound is now an out-parameter named per leg, with one
+    test per leg (anchor-checked: both fail against the pre-fix line, pass after).
+  - **Also on the critical path:** `--mutants` scored the detector BLIND for obeying its own
+    contract — its picker chooses a global the trap READS, while the detector also requires a
+    DESTRUCTIVE use — making tests/subshell-cleanup-lint.bats a permanent red the corpus could
+    never clear. The lint now arbitrates its own case through `--loose`; blind 2 → 0, testable
+    10 → 11.
+  - **Learning (generalisable).** A guessed figure in a cut message is not cosmetic — it is the
+    rung the next reader stands on, and here it set an entire wave's brief. Ask WHOSE bound fired
+    before sizing it (memory: *exoneration-bound-must-fit-what-it-bounds*,
+    *repeat-verdict-indicts-the-diagnosis*). And a lint whose prescribed remedy manufactures its
+    own defect class is worse than a silent one.
 - **2026-08-16 ~20:30Z — W-P1 returns collected; convergence is the last gate; S3 fired.**
   S1 COMPLETE: C1 `46a86deb7` (re-land retry runs TRUNK's pipeline via throwaway origin/main
   worktree — extract-to-temp and checkout-into-tree both proven unworkable), C2 `944abba49`
