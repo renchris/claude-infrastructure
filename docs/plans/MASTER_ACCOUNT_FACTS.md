@@ -124,6 +124,34 @@ corpora and for `pyramid-principle-full`, a distillation of a copyrighted book. 
 now carries a falsifier that exits 0 only when every live skill is either tracked on origin/main or
 declares itself local-only.
 
+#### The triage decision, made 2026-08-15 — execute it, do not re-derive it
+
+**DECLARE LOCAL-ONLY (5).** Third-party or copyrighted content whose value is the corpus, not our
+authorship; tracking them would put someone else's text in this repo's history for no gain:
+`react-best-practices` (296 KB / 59 files, a vendor rules corpus) · `vercel-design-guidelines` ·
+`motion` (the Motion codex, 10 files) · `pyramid-principle-full` (116 KB / 11 files) and
+`pyramid-principle` — both distillations of a copyrighted book via the `corpus-to-skill` pipeline.
+
+**TRACK + SYMLINK (13).** Our own authorship, small, and exactly what "untracked, unlandable, no
+`/ship` path, invisible to deploy-parity-assert" is about: `agent-browser` ·
+`autonomous-authenticated-web-access` · `beautiful-mermaid-docs` · `corpus-to-skill` · `dia-agent` ·
+`frontend-design-vue` · `frontier-campaign` · `frontier-hole` · `frontier-run` · `grok-wiki-cli` ·
+`grok-wiki-custom` · `model-upgrade` · `outlook-cleanup`.
+
+🚨 **THE TRACK HALF IS BLOCKED, AND BOTH BLOCKERS WERE MEASURED — do not attempt it until they
+clear.** Tracking without the symlink conversion CREATES the fork this row wrongly claimed, and the
+only thing that converts is `install.sh`:
+1. `install.sh` **REFUSES a global install from a linked worktree** (`install.sh:38-81`) — which is
+   where the drain session works — because a worktree "is entitled to be deleted" and pointing the
+   live layer at one would be the catastrophe the guard exists to prevent.
+2. The shared checkout, the only non-worktree place it could legitimately run, is **62 commits
+   behind `origin/main`** (1 ahead), so installing there copies pre-trunk content into `~/.claude`
+   while printing success — the 2026-08-01 failure that same guard was built for.
+
+So this is the convergence deadlock again (`3df911c0470e`), not a second problem. The declare-half
+needs neither install nor convergence and can be done at any time; it shrinks the falsifier's count
+from 18 to 13 without closing the row.
+
 ## Definition of done
 Every account fact the fleet routes on is produced by a probe that runs on a schedule and records that
 it ran; the router is wired; a forced logout appears in a time series rather than in a surprise; and no
