@@ -803,7 +803,7 @@ inflight_release() {  # idempotent · only ever removes a marker THIS process wr
 # conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
 # shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
 land_failure_inbox() {  # $1=exit code $2=cause word
-  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc
+  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc land_root _lgcd _lmain
   # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
   # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
   # visible feedback and filing them would drown the inbox in noise the author already read.
@@ -815,7 +815,21 @@ land_failure_inbox() {  # $1=exit code $2=cause word
     ref="refs/land/failed/${name}"
     git update-ref "$ref" "$head" 2>/dev/null || true
   fi
-  cmd="cd ${REPO_ROOT} && git checkout ${BRANCH} && bash scripts/ship-land.sh"
+  # THE RE-LAND COMMAND MUST OUTLIVE THE ATTEMPT THAT FILED IT. $REPO_ROOT is frequently the
+  # per-attempt sandbox (`/private/tmp/.desk-land-<branch>-<pid>`), which is reaped — so a row whose
+  # `--run` cd's there is unrunnable by the time anyone reads it, and now that the recurrence brake
+  # folds these rows (below) the FIRST attempt's path would be cemented for every later one.
+  # Resolve the durable main checkout the same way handoff-fire's recycle fallback does.
+  land_root="$REPO_ROOT"
+  case "$REPO_ROOT" in
+    /tmp/*|/private/tmp/*|/var/folders/*)
+      _lgcd="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+      if [[ -n "$_lgcd" ]]; then
+        _lmain="${_lgcd%/worktrees/*}"; _lmain="${_lmain%/.git}"
+        [[ -d "$_lmain" ]] && land_root="$_lmain"
+      fi ;;
+  esac
+  cmd="cd ${land_root} && git checkout ${BRANCH} && bash scripts/ship-land.sh"
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own
@@ -830,9 +844,23 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # The id is CAPTURED now (it used to go to /dev/null) because the row needs a falsifier, and
   # `falsify` is the only door to one: `needs --falsifier` reaches cmd_add, which returns early on a
   # known id, so it is a silent no-op on any row the recurrence brake folds onto.
+  # 🚨 THE TITLE IS THE IDENTITY, SO IT MUST HOLD ONLY WHAT IS STABLE ACROSS ATTEMPTS (2026-08-16).
+  # This title used to embed three per-attempt facts — the sandbox path `(${REPO_ROOT})`, the exit
+  # `${rc} (${cause})`, and the pinned `${ref}` — and cc-backlog's recurrence brake keys on the
+  # title ("same prose, same subject modulo digits"). Digits normalise; a different PID-suffixed
+  # /private/tmp path does not, and neither does `143 (SIGTERM)` vs `6 (exit)`. So every retry
+  # minted a SIBLING instead of folding, and one stuck branch became a population:
+  # `claude/fire-20260812T172113Z-3600-1` had **41 rows** in the live store on 2026-08-16, 9 of
+  # them filed that day, all naming the identical operator step. That is not inflow — it is one
+  # failure re-counted 41 times, and it is a large share of a blocked pile nothing drains.
+  #
+  # The branch IS the identity: one stuck branch is one job to do, however many times the retry
+  # loop notices. The volatile diagnostics move to the `--run` command, which cc-do renders
+  # verbatim, so nothing an operator needs to act is lost — only the false distinctness is.
   id="$("$bl" needs \
-    "re-land ${BRANCH} (${REPO_ROOT}): ship-land exited ${rc} (${cause}) and its author's pane may be gone — head pinned at ${ref:-<unrecorded>}" \
-    --run "$cmd" --session "${CLAUDE_CODE_SESSION_ID:-}" 2>/dev/null || true)"
+    "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone" \
+    --run "$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}" \
+    --session "${CLAUDE_CODE_SESSION_ID:-}" 2>/dev/null || true)"
   # THE FALSIFIER — the half that was missing, and the reason this population rotted. A row filed
   # here measures ONE thing: that ship-land exited non-zero. It never re-asks, so it is a PREDICTION
   # about content, and the prediction is usually wrong within a day: censused 2026-08-12, 24 of the
