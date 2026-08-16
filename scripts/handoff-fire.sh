@@ -8907,7 +8907,10 @@ if [ "$DRY" = 1 ]; then
     [ -n "$AS_ROLE" ] && echo "role:      --as-role $AS_ROLE → $CC_ROLES_DIR/$AS_ROLE = <fired pane> (P0-15)"
     payload_lint_gate "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" preview   # T-P2-5: preview the back-channel lint. ORIG keeps this the PRE-trailer payload — which the comment always claimed, but stopped being true for a dry run the moment the back-channel became the default (a dry run now makes a copy, because NOTIFY_BACK is set even when DRY=1).
   fi
-  [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
+  # Printed for a recycle too since 2026-08-15 — the recycle path now pre-trusts unconditionally
+  # (see the block below), and a dry run that stayed silent about it would understate what the real
+  # run writes.
+  echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
   # P0-15: the recycled pane IS the continuation (same UUID) — keep any role naming it current,
@@ -8923,9 +8926,23 @@ elif [ "$RECYCLE" = 1 ]; then
   # W2-A re-pick keeps the dir and changes the account, so the trust record the incumbent session
   # proves lives in the OLD account's .claude.json and the successor reads the NEW one — the same
   # stall, reached from the other axis. Either half of the change needs the write.
-  if [ "$RECYCLE_RELOC" = 1 ] || [ -n "${RECYCLE_REPICK_FROM:-}" ]; then
-    pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
-  fi
+  #
+  # 🚨 …AND IT DOES NOT PROVE IT EVEN THEN (2026-08-15). The premise above is that a session running
+  # in a dir implies that dir is recorded trusted for its account. MEASURED FALSE:
+  # `.claude-tertiary/.claude.json` records `/Users/chrisren/Development/personal` as
+  # `hasTrustDialogAccepted:false` — with no `hasCompletedProjectOnboarding` key at all, so pre_trust
+  # provably never wrote it — while that very entry's `lastDuration` shows a session ran there for
+  # 2.3 h on that account. A running session is evidence about a PROCESS, never about a RECORD.
+  # The cost is not the trust dialog (that one did not fire); it is that from v2.1.196 Claude Code
+  # DROPS project-scoped settings in a folder its config dir has not recorded as trusted — so the
+  # repo's own `.claude/settings.local.json`, which already approved both of that project's
+  # `.mcp.json` servers, was inert, and the recycled pane stalled at "2 new MCP servers found in this
+  # project" with the brief unread behind it. Exactly the failure mode this block exists to prevent,
+  # reached through a THIRD axis: the dir and the account both unchanged, and the record simply never
+  # written. Trusting unconditionally costs one idempotent no-op on the common path (pre_trust
+  # returns early when the dir is already trusted) and removes the premise entirely.
+  # Evidence: docs/research/mcp-modal-fire-stall-2026-08-15.md § The root-cause chain.
+  pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   recycle_fire
 else
   # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).
