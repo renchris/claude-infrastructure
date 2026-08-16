@@ -33,8 +33,25 @@ setup() {
   SHIMOUT="$BATS_TEST_TMPDIR/notify.json"; echo '[]' > "$SHIMOUT"
   SHIM="$BATS_TEST_TMPDIR/cc-notify"
   printf '#!/usr/bin/env bash\ncat %s\n' "$SHIMOUT" > "$SHIM"; chmod +x "$SHIM"
+  # STUB doubles as BOTH process-oracle binaries, and since 2026-08-15 it has to model an oracle
+  # that ANSWERS rather than one that is merely present — the subject now reads absence as proof
+  # only from a probe that passed its own positive control (scripts/worktree-gc.sh:claude_cwds).
+  #   · as `pgrep`: rc 1, no output — the real binary's documented "nothing matched", which is an
+  #     ANSWER. (It shipped as `exit 0` with no output, which no real pgrep can ever emit.)
+  #   · as `lsof`:  answers the control query for the caller's own pid with a cwd that is not any
+  #     fixture worktree, so the harvest is still empty and every REMOVE assertion below still
+  #     drives the real removal path.
+  # MEASURED when the subject's control landed against the OLD stub: 33 of 83 tests went red,
+  # i.e. a third of this suite had been proving removals over an lsof that could not see a single
+  # process's cwd. That is the whole defect, reproduced inside the harness that was meant to catch
+  # it — an instrument that answers nothing must not be able to certify an absence.
   STUB="$BATS_TEST_TMPDIR/nullbin"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB"; chmod +x "$STUB"
+  cat > "$STUB" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do [ "$a" = cwd ] && { printf 'p%s\nn/\n' "$$"; exit 0; }; done
+exit 1
+SH
+  chmod +x "$STUB"
   REG="$BATS_TEST_TMPDIR/registry"; mkdir -p "$REG"
   LOCK="$BATS_TEST_TMPDIR/gc.lock"
 
@@ -398,6 +415,126 @@ has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
   [ -d "$p" ]
 }
 
+# ── ANSWERABILITY (P1, docs/plans/MASTER_FLEET_FOOTPRINT.md · 2026-08-15) ─────────────────────
+# The gate above covers the oracle set being ABSENT. The class that actually swept an occupied
+# worktree is the oracle set being PRESENT AND BLIND: `command -v lsof` succeeds, so the process
+# oracle counted, and every query it answered with silence was read as "nobody is here". Every
+# test below is a DISCRIMINATOR PAIR — blind instrument KEEPS, answering instrument REMOVES THE
+# SAME WORKTREE — because a subject that simply stopped removing anything would pass the KEEP
+# halves alone, and that is the shape of every vacuous pass this corpus has had to re-learn.
+#
+# blind_lsof — present, executable, exits 0, and cannot report a cwd for anyone. This is a
+# sandboxed / permission-denied / wrong-flavour lsof, and it is indistinguishable from an idle
+# machine to any consumer that reads only stdout.
+blind_lsof() {
+  local b="$BATS_TEST_TMPDIR/lsof-blind"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$b"; chmod +x "$b"
+  echo "$b"
+}
+
+@test "a PRESENT but BLIND lsof does not count as an oracle — exit 3, never a blind reap" {
+  # The load-bearing half. With cc-notify gone, the process oracle is the ONLY candidate; before
+  # the answerability control it counted on `command -v` alone, so ORACLES reached 1 on a probe
+  # that could not see a single cwd and the "cannot prove idle ⇒ refuse" floor was satisfied by
+  # an instrument that proves nothing.
+  p="$(wt wt-blind feat/blind)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY=/nonexistent/cc-notify \
+      CC_WTGC_LSOF="$(blind_lsof)" CC_WTGC_PGREP="$STUB" \
+      CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" bash "$GC"
+  [ "$status" -eq 3 ]
+  [ -d "$p" ]
+}
+
+@test "RED PROOF: the same worktree IS removed once lsof can answer its own control" {
+  p="$(wt wt-blind feat/blind)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY=/nonexistent/cc-notify \
+      CC_WTGC_LSOF="$STUB" CC_WTGC_PGREP="$STUB" \
+      CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" bash "$GC"
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+}
+
+@test "a blind lsof KEEPS at act time even when cc-notify carries the pass, and NAMES why" {
+  # cc-notify answers, so ORACLES is 1 and the sweep runs to the act gate. recheck_live() skips
+  # cc-notify by design (its registry is derived from these same processes) and the sessions it
+  # exists to catch are exactly the UNREGISTERED ones — so a blind process probe there leaves the
+  # last gate before `worktree remove` with nothing but a record's silence. It must fail CLOSED.
+  p="$(wt wt-actblind feat/actblind)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$(blind_lsof)" \
+      CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  # The two readings must never share a line: this is an unknown, not an occupancy.
+  echo "$output" | grep -q "LIVE at act time (occupancy UNPROVEN"
+  echo "$output" | grep -q "lsof cannot read the cwd of this very process"
+  ! echo "$output" | grep -q "a session started inside the classify window" || false
+  # ...and the degraded oracle is announced at the top, not only per-worktree.
+  echo "$output" | grep -q "process-cwd oracle UNAVAILABLE"
+}
+
+@test "RED PROOF: with cc-notify unchanged, an ANSWERING lsof removes that same worktree" {
+  p="$(wt wt-actblind feat/actblind)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$STUB" \
+      CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  ! echo "$output" | grep -q "process-cwd oracle UNAVAILABLE" || false
+}
+
+@test "pgrep rc 1 is an ANSWER (nothing matched); rc 2 is a failure to read the process table" {
+  # The asymmetry is the point. `pgrep` documents 1 as "no processes matched" — a finding — and
+  # reserves ≥2 for an error, which is not. Collapsing them would either wedge the janitor on
+  # every idle box (if 1 refused) or restore the original defect (if 2 were trusted).
+  PG2="$BATS_TEST_TMPDIR/pgrep-err"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$PG2"; chmod +x "$PG2"
+  p="$(wt wt-pgerr feat/pgerr)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$STUB" \
+      CC_WTGC_PGREP="$PG2" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"
+  [ -d "$p" ]
+  echo "$output" | grep -q "pgrep exited 2 — the process table was not read"
+  # Discriminator: rc 1 on the same fixture is an answered-empty machine and the worktree goes.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$PG2"; chmod +x "$PG2"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$STUB" \
+      CC_WTGC_PGREP="$PG2" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"
+  [ ! -d "$p" ]
+}
+
+@test "the control is not satisfied by output about SOMEONE ELSE — it reads the caller's own pid" {
+  # A control that any output satisfies is not a control. This shim is chatty: it answers the
+  # per-claude harvest query for pid 1 in full, and is silent only about the caller. If the
+  # subject accepted "lsof said something" it would sail through; the KEEP below is what proves
+  # it accepts nothing but a cwd line for the pid it can independently vouch for.
+  SEL="$BATS_TEST_TMPDIR/lsof-selective"
+  cat > "$SEL" <<'SH'
+#!/usr/bin/env bash
+pid=""; prev=""; q=0
+for a in "$@"; do [ "$prev" = "-p" ] && pid="$a"; [ "$a" = "cwd" ] && q=1; prev="$a"; done
+[ "$q" = 1 ] || exit 1
+[ -z "$ANSWER_FOR" ] || [ "$pid" = "$ANSWER_FOR" ] || exit 0   # silent about every other pid
+printf 'p%s\nn/tmp\n' "$pid"
+SH
+  chmod +x "$SEL"
+  PG1="$BATS_TEST_TMPDIR/pgrep-one"
+  printf '#!/usr/bin/env bash\necho 1\n' > "$PG1"; chmod +x "$PG1"
+  p="$(wt wt-selective feat/selective)"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$SEL" \
+      CC_WTGC_PGREP="$PG1" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" ANSWER_FOR=1 bash "$GC"
+  [ -d "$p" ]
+  echo "$output" | grep -q "process-cwd oracle UNAVAILABLE"
+  echo "$output" | grep -q "LIVE at act time (occupancy UNPROVEN"
+  # Discriminator: make the SAME shim answer every pid — including the caller's — and the same
+  # worktree is removed. Only the control's subject changed; nothing else about the run did.
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$SEL" \
+      CC_WTGC_PGREP="$PG1" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" ANSWER_FOR= bash "$GC"
+  [ ! -d "$p" ]
+}
+
 @test "--prune (the invocation git-worktree-guard.sh prints) is accepted; junk flags exit 2" {
   p="$(wt wt-alias feat/alias)"
   run_gc --prune
@@ -594,17 +731,27 @@ SH
   # LIVE_CWDS is computed once at startup; a 65-worktree sweep takes minutes. The pre-mutation
   # re-check reads process truth again at ACT time — the 2026-06-12 incident class.
   # No production test-seam: the lsof shim is simply STATEFUL — the startup cwd sweep sees an
-  # empty machine, the act-time sweep (the very next `-d cwd` call) sees the new session. That
-  # is the real code path, driven only through the oracle seams the suite already uses.
+  # empty machine, the act-time sweep (the very next `-d cwd` call for the CLAUDE pid) sees the
+  # new session. That is the real code path, driven only through the oracle seams the suite
+  # already uses.
+  #
+  # The counter is keyed on the pid pgrep names (1), NOT on every `-d cwd` call, because the
+  # subject now opens each probe with an answerability control against its OWN pid. Counting that
+  # control would make the shim's state depend on a query that is about the instrument rather than
+  # about the machine — the born session would appear one probe early. The control is answered
+  # unconditionally here: this test is about a session being BORN, not about a blind lsof, and
+  # that distinction is exactly what the subject now keeps apart.
   p="$(wt wt-born feat/born)"
   CNT="$BATS_TEST_TMPDIR/lsof.n"
   BORN="$BATS_TEST_TMPDIR/lsof-born"
   cat > "$BORN" <<'SH'
 #!/usr/bin/env bash
-q=0; for a in "$@"; do [ "$a" = "cwd" ] && q=1; done
-[ "$q" = 1 ] || exit 0
+q=0; pid=""; prev=""
+for a in "$@"; do [ "$prev" = "-p" ] && pid="$a"; [ "$a" = "cwd" ] && q=1; prev="$a"; done
+[ "$q" = 1 ] || exit 1
+[ "$pid" = 1 ] || { printf 'p%s\nn/\n' "$pid"; exit 0; }   # the control: always answerable
 n=$(( $(cat "$LSOF_N" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$LSOF_N"
-[ "$n" -gt 1 ] && printf 'p1\nn%s\n' "$BORN_CWD" || false
+[ "$n" -gt 1 ] && printf 'p1\nn%s\n' "$BORN_CWD"
 exit 0
 SH
   chmod +x "$BORN"
@@ -615,15 +762,13 @@ SH
       CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" \
       LSOF_N="$CNT" BORN_CWD="$p" bash "$GC"
   [ -d "$p" ]
-  echo "$output" | grep -q "LIVE at act time"
-  # Discriminator: with a machine that is empty at BOTH reads, the same worktree is removed.
-  echo 99 > "$CNT"; : > "$CNT"
+  echo "$output" | grep -q "LIVE at act time (a session started inside the classify window)"
+  # Discriminator: with a machine that is empty at BOTH reads — pgrep names no claude at all, and
+  # lsof still answers its control — the same worktree is removed. The emptiness has to come from
+  # pgrep, not from a silent lsof: a silent lsof is now UNANSWERABLE, which is a KEEP for a
+  # different reason, and a discriminator that passes for the wrong reason discriminates nothing.
   rm -f "$CNT"
-  cat > "$BORN" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$BORN"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$PGB"; chmod +x "$PGB"
   run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$BORN" \
       CC_WTGC_PGREP="$PGB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
       CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"

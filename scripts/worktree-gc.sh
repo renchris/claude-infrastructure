@@ -17,7 +17,10 @@
 #   3. `git status --porcelain` is empty (dirty ⇒ removal would need --force ⇒ data loss),
 #   4. no live session: union of `cc-notify --list --json` cwds, live `claude` proc cwds
 #      (lsof -d cwd), any process holding files open under it, and the live-session registry
-#      PID — over-matching is SAFE here, it can only ever cause a KEEP,
+#      PID — over-matching is SAFE here, it can only ever cause a KEEP. Each oracle counts on
+#      its ANSWER, never on its presence: the process-cwd probe opens with a positive control
+#      against the caller's own pid, and a probe that cannot answer that makes gate 4 UNKNOWN
+#      rather than clear (§ claude_cwds — a present-but-blind lsof used to read as an idle box),
 #   5. idle > 30 min measured by the BRANCH TIP COMMITTER DATE, never directory mtime (a
 #      `git status` sweep rewrites .git/worktrees/<n>/index, so admin-dir mtime is not a
 #      freshness signal — audit §8-B),
@@ -125,7 +128,9 @@
 #                         cannot, so it must not inherit their `jq` dependency.
 #   CC_WTGC_DISPOSAL_LOG  append-only disposal ledger
 #                         (default: ~/.claude/autonomy/worktree-disposals.jsonl)
-#   CC_WTGC_CC_NOTIFY / CC_WTGC_LSOF / CC_WTGC_PGREP / CC_WTGC_JQ    oracle binaries
+#   CC_WTGC_CC_NOTIFY / CC_WTGC_LSOF / CC_WTGC_PGREP / CC_WTGC_JQ    oracle binaries. Pointing one
+#                         at a binary that RUNS but cannot answer is not a way to disable a gate:
+#                         an unanswerable probe is refused, not believed. Use CC_WTGC_DISABLE.
 #   CC_WTGC_REGISTRY_DIR  live-session registry (default: ~/.reso/live-sessions)
 #   CC_WTGC_LOCK          mutex dir (default: ~/.claude/state/worktree-gc.lock)
 #
@@ -352,13 +357,57 @@ fi
 # so the pre-mutation re-check can re-read the SAME truth: the classify→act window is minutes
 # wide on a 65-worktree sweep, and a session that starts inside it would otherwise be reaped
 # from under (the 2026-06-12 incident that git-worktree-guard.sh exists for).
+#
+# 🚨 THE EXIT STATUS IS THE ANSWERABILITY CHANNEL, and it is the whole contract:
+#     0 → the probe ANSWERED. stdout may legitimately be empty: "no claude process holds a cwd".
+#     2 → the probe COULD NOT ANSWER. stdout is meaningless and absence proves NOTHING.
+# Until 2026-08-15 there was no second reading. Both `command -v` guards `return 0`, every failure
+# inside the loop went to /dev/null, and the function's only output channel was stdout — so "no
+# live claude" and "lsof could not answer" were literally the same value, and the two consumers
+# both read that value as PROOF OF ABSENCE and removed a directory on it. That collapse swept an
+# OCCUPIED worktree mid-session on 2026-08-11 (`close-integrity`, 01:50) and is what
+# docs/plans/MASTER_FLEET_FOOTPRINT.md §P1 names as the defect: **a probe that ACTS on absence must
+# confirm the safe state** (memory: probe-that-acts-on-absence-must-confirm-presence).
+#
+# Confirming it needs a POSITIVE CONTROL, not more error-swallowing, because the failures that
+# matter here are SILENT ones — a sandboxed lsof, a seatbelt denial, a Linux lsof built without
+# the flags, a pgrep that matches nothing because it is blind rather than because the box is idle.
+# None of those set an exit code we can trust. So the probe is asked a question whose answer we
+# already know: **read the cwd of our OWN pid**. We own that process, it provably exists, and it
+# provably has a cwd — an lsof that cannot report it cannot report anyone's, and its silence about
+# `claude` is therefore not evidence. The control's OUTPUT is discarded; only that it answered at
+# all is the finding. pgrep gets the weaker treatment it can support: rc 1 is a real ANSWER (the
+# binary's documented no-match), rc ≥ 2 is a failure to read the process table at all.
+#
+# The reason lives in a FILE, not a variable, because every caller reads this function through a
+# command substitution and a subshell cannot assign to its parent. A refusal nobody can attribute
+# is the same defect one layer up — it would put "occupancy unknown" and "occupied" on one line.
+CWDS_WHY_FILE="${TMPDIR:-/tmp}/worktree-gc.cwdswhy.$$"
+cwds_why() { cat "$CWDS_WHY_FILE" 2>/dev/null; }
+_cwds_unanswerable() { printf '%s\n' "$1" > "$CWDS_WHY_FILE" 2>/dev/null; return 2; }
 claude_cwds() {
-  command -v "$PGREP_BIN" >/dev/null 2>&1 || return 0
-  command -v "$LSOF_BIN"  >/dev/null 2>&1 || return 0
-  local cpid
-  for cpid in $("$PGREP_BIN" -f claude 2>/dev/null | sort -u); do
+  local cpid pids rc ctl
+  : > "$CWDS_WHY_FILE" 2>/dev/null
+  command -v "$PGREP_BIN" >/dev/null 2>&1 \
+    || _cwds_unanswerable "pgrep ($PGREP_BIN) is not executable here" || return 2
+  command -v "$LSOF_BIN" >/dev/null 2>&1 \
+    || _cwds_unanswerable "lsof ($LSOF_BIN) is not executable here" || return 2
+  # The control runs FIRST: an unanswerable probe must never look like a harvest that came up dry.
+  # Drained through `sed`, never `grep -q`: -q closes the pipe on its first match, lsof dies of
+  # SIGPIPE, and under `pipefail` a SUCCESSFUL control would report 141 — a positive control that
+  # fails precisely when it passes is worse than none at all.
+  ctl="$("$LSOF_BIN" -a -p "$$" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+  [ -n "$ctl" ] \
+    || _cwds_unanswerable "lsof cannot read the cwd of this very process (pid $$) — it cannot see any process's cwd, so its silence about claude is not evidence" \
+    || return 2
+  pids="$("$PGREP_BIN" -f claude 2>/dev/null)"; rc=$?
+  [ "$rc" -le 1 ] \
+    || _cwds_unanswerable "pgrep exited $rc — the process table was not read" || return 2
+  for cpid in $(printf '%s\n' "$pids" | sort -u); do
+    case "$cpid" in ''|*[!0-9]*) continue ;; esac
     "$LSOF_BIN" -a -p "$cpid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
   done
+  return 0
 }
 
 # ── Mutex: serialize every MUTATING pass (audit §8-D — cc-reaper:267, desk-land.sh,
@@ -366,7 +415,7 @@ claude_cwds() {
 #    concurrent worktree mutation is the GH #34645/#48927 data-loss class). ────────────
 LOCK_HELD=0
 # shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT` (shellcheck can't see traps)
-cleanup() { [ "$LOCK_HELD" = "1" ] && rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$REMOVED_BR" 2>/dev/null; }
+cleanup() { [ "$LOCK_HELD" = "1" ] && rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$REMOVED_BR" "$CWDS_WHY_FILE" 2>/dev/null; }
 REMOVED_BR="${TMPDIR:-/tmp}/worktree-gc.removed.$$"
 trap cleanup EXIT
 if [ "$DRY_RUN" = "0" ]; then
@@ -399,10 +448,21 @@ if [ -x "$CC_NOTIFY_BIN" ] && command -v "$JQ_BIN" >/dev/null 2>&1; then
 fi
 # (b) process-level cwd sweep — catches panes that never registered (session-register.sh was
 #     only wired ~2026-07-18 and SessionStart is write-once: memory reaper-blindness-...).
+#
+# COUNTED ON ITS ANSWER, NEVER ON ITS PRESENCE. The predicate here used to be `command -v pgrep &&
+# command -v lsof` — i.e. the oracle counted because its binaries EXIST. A present-but-blind lsof
+# then satisfied the ORACLES floor below all by itself, so a box where nothing could read a cwd
+# passed the "cannot prove idle ⇒ refuse" gate and swept every worktree as idle. Existence is not
+# an answer; only an answer is.
 CLAUDE_CWDS=""
-if command -v "$PGREP_BIN" >/dev/null 2>&1 && command -v "$LSOF_BIN" >/dev/null 2>&1; then
+PROC_ORACLE_WHY=""
+if CLAUDE_CWDS="$(claude_cwds)"; then
   ORACLES=$((ORACLES + 1))
-  CLAUDE_CWDS="$(claude_cwds)"
+else
+  PROC_ORACLE_WHY="$(cwds_why)"
+  CLAUDE_CWDS=""
+  echo "worktree-gc: process-cwd oracle UNAVAILABLE — ${PROC_ORACLE_WHY:-it could not answer}."
+  echo "worktree-gc: unregistered sessions are INVISIBLE this pass; every removal will be refused at act time."
 fi
 LIVE_CWDS="$(printf '%s\n%s\n' "$NOTIFY_CWDS" "$CLAUDE_CWDS" | while IFS= read -r c; do
   [ -n "$c" ] || continue
@@ -728,21 +788,40 @@ owner_terminal() { # <basename> <canon-path> <branch> → 0 iff ANY oracle prove
   return 1
 }
 
-recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, right now
+# RECHECK_WHY — why the act-time gate said LIVE. Two readings that must never share a line:
+# "a session started inside the classify window" (occupancy PROVEN) and "the probe could not
+# answer" (occupancy UNKNOWN). Both KEEP, but only the first is a normal Tuesday; the second is a
+# broken instrument on a box that is still being swept, and an operator who cannot see the
+# difference cannot fix it.
+RECHECK_WHY=""
+recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, right now, OR unprovable
   # Re-read at ACT time, not classify time. Deliberately narrower than the startup union (it
   # skips cc-notify, whose registry is derived from these same processes) — it exists to catch a
   # session BORN inside the classify→act window, and over-matching here can only cause a KEEP.
-  local path="$1" cpath="$2" c
+  #
+  # FAILS CLOSED. This is the LAST gate before a directory is destroyed, so its "not live" has to
+  # mean the probe LOOKED and saw nobody — never that it could not look. `registry_live` alone is
+  # not a substitute: it reads a written record, and the sessions this exists to catch are exactly
+  # the ones that never wrote one, so a pass with cc-notify as its only working oracle would sail
+  # through here on a record's silence about a session that was never in it.
+  local path="$1" cpath="$2" c cwds rc
+  RECHECK_WHY="a session started inside the classify window"
   registry_live "$(basename "$path")" "$cpath" && return 0
+  cwds="$(claude_cwds)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    RECHECK_WHY="occupancy UNPROVEN — $(cwds_why)"
+    return 0
+  fi
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     [ "$(canon "$c")" = "$cpath" ] && return 0
   done <<EOF
-$(claude_cwds)
+$cwds
 EOF
   if command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
     return 0
   fi
+  RECHECK_WHY=""
   return 1
 }
 
@@ -827,7 +906,7 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
     return 0
   fi
   if recheck_live "$path" "$cpath"; then
-    echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+    echo "KEEP    $path [$branch] — LIVE at act time ($RECHECK_WHY)"
     N_KEPT=$((N_KEPT + 1))
     return 0
   fi
@@ -952,7 +1031,7 @@ process_record() {
       return 0
     fi
     if recheck_live "$path" "$cpath"; then
-      echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+      echo "KEEP    $path [$branch] — LIVE at act time ($RECHECK_WHY)"
       N_KEPT=$((N_KEPT + 1))
       return 0
     fi
@@ -997,7 +1076,7 @@ process_record() {
     return 0
   fi
   if recheck_live "$path" "$cpath"; then
-    echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+    echo "KEEP    $path [$branch] — LIVE at act time ($RECHECK_WHY)"
     N_KEPT=$((N_KEPT + 1))
     return 0
   fi
