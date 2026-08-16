@@ -148,6 +148,31 @@ cwd `/private/tmp/mcp-decide-probe`, a `.mcp.json` declaring two fake stdio serv
 The control matters: without the first row, a green second row would prove only that the probe could
 not see anything.
 
+### …and `mcp list` is not the modal — the LIVE TUI arm
+
+The table above reports the *status the gate computes*. It does not prove what the interactive UI
+draws, and the whole defect is a drawn dialog. `scripts/mcp-modal-probe.py` closes that: it builds
+its own fixture, launches a real TUI on a pty, reads the screen, kills it, and asserts three arms.
+Re-runnable after any binary upgrade (`PROBE_CLI` / `PROBE_CFG` / `PROBE_DIR` override).
+
+| Arm | dialog on screen? |
+|---|---|
+| **no flag** (positive control) | **YES** — captured verbatim: *"2 new MCP servers found in this project / Select any you wish to enable."* |
+| **`--strict-mcp-config` alone** | **YES** — the operator's screenshot, reproduced. The isolation flag does not suppress the question it has already answered. |
+| **`--settings '{"disabledMcpjsonServers":…}'`** (the fix) | **no** — and the session emitted 3× the bytes of the two blocked arms, i.e. it got *past* the dialog into startup rather than dying earlier. |
+
+Arm 3 is what makes arm 2 mean something: it proves the detector still fires when the dialog is
+there, so arm 2's silence is the dialog's absence and not the instrument's.
+
+🚨 **The first version of this probe reported `modal=no` on ALL THREE arms** — including the control.
+The Ink TUI renders the dialog one word at a time with a cursor-column escape between every word
+(`2\x1b[5Gnew\x1b[9GMCP\x1b[13Gservers…`), so a grep for the literal sentence matches nothing while
+the dialog is plainly on screen. Had the control been omitted, that run would have read as *"the fix
+works"* — from an instrument that could not have seen a failure. The detector now strips escapes and
+collapses whitespace before matching. Same family as the standing lesson that a literal TUI phrase is
+a width-dependent anchor — except the breakage here is per-WORD, not per-wrap, so even a
+short-phrase anchor would have failed.
+
 ## What shipped
 
 | Commit | Change |
