@@ -2770,6 +2770,76 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   ! grep -q '"falsifier"' "$BATS_TEST_TMPDIR/backlog.jsonl"
 }
 
+# ── defect 2c: THE RETRY RAN THE BRANCH'S OWN PIPELINE (BACKLOG_DRAIN_24_7 §4 C1) ────────────────
+# The re-land command used to end `git checkout $BRANCH && bash scripts/ship-land.sh` — a RELATIVE
+# path, resolved inside the branch that just failed. So every retry of an old branch executed that
+# branch's ship-land.sh, and each brake landed on trunk since the branch was cut was structurally
+# unreachable from the retry: aa1886a5e's one-row-per-stuck-branch title fold and 40613b786's rc-5
+# "content already on trunk" screen both live in the pipeline, and the pipeline is what the retry
+# replaced with an older copy of itself. Measured leak: row accec6d1f40c (2026-08-16T08:26Z)
+# postdates aa1886a5e by fifteen minutes and still carries the pre-fold title format.
+#
+# The sentinel is what makes this assertable: both copies of scripts/ship-land.sh here are stubs
+# that print WHICH BYTES RAN, so the test reads the answer directly instead of inferring it from a
+# behaviour that both versions could produce (memory: control-must-replay-the-real-artifact — the
+# mutant is the real pre-fix shape, pinned, not a paraphrase of it).
+_reland_run_of() { # <backlog-store> → the filed row's --run command
+  jq -r '[.[]|select(.run)][0].run' < <(jq -s '.' "$1") 2>/dev/null
+}
+
+@test "P4 inbox: the re-land retry executes TRUNK's ship-land, not the stuck branch's copy" {
+  # TRUNK carries the sentinel that must win.
+  git checkout -q main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\necho RAN-TRUNK-BYTES\n' > scripts/ship-land.sh
+  chmod +x scripts/ship-land.sh
+  git add -A && git commit -q -m "chore: trunk pipeline"
+  git push -q origin main
+
+  # THE STUCK BRANCH carries a MUTATED pipeline — this is the pre-fix artifact, and if the retry
+  # runs it the fix is absent by construction.
+  git checkout -q -b feat/reland-bytes main
+  printf '#!/usr/bin/env bash\necho RAN-BRANCH-BYTES\n' > scripts/ship-land.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad4.sh     # SC2164 → the land fails, rc 6
+  git add -A && git commit -q -m "feat: bad4"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false # the row exists, so the assertions below have a subject
+
+  run bash -c "$cmd"
+  printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'
+  ! printf '%s' "$output" | grep -q 'RAN-BRANCH-BYTES'
+}
+
+@test "P4 inbox: the retry leaves no worktree behind (its trunk checkout is throwaway)" {
+  git checkout -q main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\necho RAN-TRUNK-BYTES\n' > scripts/ship-land.sh
+  chmod +x scripts/ship-land.sh
+  git add -A && git commit -q -m "chore: trunk pipeline"
+  git push -q origin main
+
+  git checkout -q -b feat/reland-gc main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad5.sh
+  git add -A && git commit -q -m "feat: bad5"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+  before="$(git worktree list | wc -l | tr -d ' ')"
+  run bash -c "$cmd"
+  # A retry that accumulates a worktree per attempt is a second minter wearing a fix's clothes —
+  # the stuck branch this exists for is precisely the one that gets retried dozens of times.
+  [ "$(git worktree list | wc -l | tr -d ' ')" -eq "$before" ]
+}
+
 # ── defect 2b: THE ROW WAS A PREDICTION NOTHING EVER RE-ASKED ────────────────────────────────────
 # The row above measures ONE fact — ship-land exited non-zero — and nothing re-asks by content, so
 # it decays as the work lands under a different sha. Censused 2026-08-12: 24 of the 25 `re-land …`
