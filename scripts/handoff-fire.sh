@@ -7041,13 +7041,17 @@ ARGS=""
 # seeing at the end of the line stay at the end. The reason string is printed by the dry run and by
 # the fire itself — a control that changes what a session can reach must never be silent.
 MCP_ARGS=""
+# Sourced OUTSIDE the WITH_MCP branch since 2026-08-15. The same library now also carries
+# cc_mcp_project_decision_args, which a `--with-mcp` fire needs MORE than a no-inherit one: with
+# the isolation flags off, that session is exactly the one whose project servers reach the approval
+# gate, so leaving the lib unsourced on that branch would have left the stall in place for it.
+# shellcheck source=/dev/null
+for _CC_MNI in "$(dirname "$0")/lib/mcp-noinherit.sh" "$HOME/.claude/scripts/lib/mcp-noinherit.sh"; do
+  [ -f "$_CC_MNI" ] && { . "$_CC_MNI"; break; }
+done
 if [ "$WITH_MCP" = 1 ]; then
   MCP_REASON="--with-mcp: project .mcp.json servers left ON"
 else
-  # shellcheck source=/dev/null
-  for _CC_MNI in "$(dirname "$0")/lib/mcp-noinherit.sh" "$HOME/.claude/scripts/lib/mcp-noinherit.sh"; do
-    [ -f "$_CC_MNI" ] && { . "$_CC_MNI"; break; }
-  done
   if command -v cc_mcp_noinherit_args >/dev/null 2>&1; then
     # $CHOSEN is an account name on every routed fire, but reads "(explicit launcher)" when the
     # caller pinned one — a value cfg_dir cannot resolve. Falling back to THIS session's config dir
@@ -7069,6 +7073,35 @@ else
   fi
 fi
 [ -n "$MCP_ARGS" ] && ARGS="$ARGS $MCP_ARGS"
+
+# ---- project .mcp.json APPROVAL — the fire answers its own question (2026-08-15) --------------
+# Separate axis from the flags above: those decide which servers LOAD, this decides whether the
+# fired session is ASKED. A recycled pane in ~/Development/personal came up at "2 new MCP servers
+# found in this project" holding `--strict-mcp-config` — asked to approve servers it had already
+# guaranteed would not run — with the brief unread behind it. Mechanism, polarity rule and the
+# three rejected alternatives: scripts/lib/mcp-noinherit.sh § cc_mcp_project_decision_args, and
+# docs/research/mcp-modal-fire-stall-2026-08-15.md.
+#
+# The dir is resolved HERE rather than reusing $LAUNCH_DIR because that is assigned ~600 lines
+# below, after every CMD is composed — this must be inside $ARGS before the first one. The arms
+# mirror it exactly, with ONE deliberate substitution: a `--worktree` fire uses $REPO, because $WT
+# may not exist yet at this point and a fresh worktree of $REPO carries that repo's TRACKED
+# `.mcp.json`. The failure direction of that substitution is safe — an over-declared name has
+# nothing to decide about, an under-declared one would restore the stall — and it is only wrong for
+# an untracked `.mcp.json` in the main checkout, which no worktree would have had either.
+_MCP_DEC_DIR="$PWD"
+[ -n "$WORKTREE" ] && _MCP_DEC_DIR="$REPO"
+[ -n "$CWD" ]      && _MCP_DEC_DIR="$CWD"
+if command -v cc_mcp_project_decision_args >/dev/null 2>&1; then
+  # off/on follows the fire's OWN decision: the isolation flags mean the project servers do not
+  # load, so the honest answer is "rejected". Their absence — `--with-mcp`, or a brief that
+  # disarmed no-inherit by naming MCP work — means the session wants them, so it is "approved".
+  _MCP_DEC_MODE=on
+  case "$MCP_ARGS" in *--strict-mcp-config*) _MCP_DEC_MODE=off ;; esac
+  cc_mcp_project_decision_args "$_MCP_DEC_DIR" "$_MCP_DEC_MODE"
+  [ -n "${CC_MCP_DECISION_ARGS:-}" ] && ARGS="$ARGS $CC_MCP_DECISION_ARGS"
+  [ -n "${CC_MCP_DECISION_REASON:-}" ] && MCP_REASON="${MCP_REASON:+$MCP_REASON; }${CC_MCP_DECISION_REASON}"
+fi
 if [ -n "$MODEL" ]; then
   if [ "$EXPLICIT_LAUNCHER" = 1 ]; then
     # Explicit launcher may pin a different model (e.g. the stable `claude-prev` track) — always
