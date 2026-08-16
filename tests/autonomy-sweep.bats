@@ -1022,8 +1022,48 @@ SH
   [ "$(jq -r --arg i "$id" '.rows[$i].verdict // "MISSING"' "$CC_BACKLOG_VALIDATED")" = "falsified" ]
 }
 
+@test "C4 · a fail-open ABORT journals WHY, instead of exiting 0 with a body the beat cannot parse" {
+  # THE PRODUCTION SHAPE THIS PINS (plan §4 C4 defect 2). Five production runs of the currency pass
+  # exist: four rc 124, and one — 2026-08-15T22:15:38Z — that journalled
+  # `premise_pass_rc:"0"` + `premise_pass_note:"unparsed"` + `premise_rows_validated:0`. That reads as
+  # a broken parser, and the parser was fine. cc-premise had aborted fail-open on an unreadable store
+  # and announced it by writing the bare line `verdict=unknown` to STDOUT while exiting 0 — a
+  # non-answer wearing a success exit, with the reason on a stderr this caller sends to /dev/null.
+  # `jq -r '.validated_note // "unparsed"'` then fell through to its own fallback, and the fallback
+  # blamed the reader for the producer's silence (memory: null-result-must-not-use-the-error-channel).
+  #
+  # The abort is still fail-open and still exits 0 — that contract gates claims and must not change
+  # (memory: new-nonverdict-state-strands-its-consumers). What changed is that the failure now answers
+  # in the caller's own shape and carries the reason in the field the caller already reads.
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"
+  export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
+  export CC_PREMISE_PASS_EVERY_S=0                      # due now
+  export CC_PREMISE_REPO="$REPO"
+  # the one lever that reproduces the real abort: cc-premise cannot read the store at all.
+  export CC_PREMISE_BACKLOG_BIN="$BATS_TEST_TMPDIR/no-such-backlog"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # rc 0 is CORRECT and is deliberately still asserted — fail-open is the contract, so the fix cannot
+  # be "make it non-zero". The whole difference has to live in the note.
+  grep -q '"premise_pass_rc":"0"' "$CC_IDL"
+  grep -q '"premise_pass_note":"read-failed:' "$CC_IDL"
+  # …and specifically NOT the fallback, which is the pre-fix reading and the thing that misdirected
+  # a whole session's diagnosis.
+  ! grep -q '"premise_pass_note":"unparsed"' "$CC_IDL" || false
+  grep -q '"premise_rows_validated":0' "$CC_IDL"
+
+  # POSITIVE CONTROL: the identical sweep, with the store readable again, still reaches `ok`. Without
+  # this the case would also pass against a sweep whose premise block had simply stopped working.
+  : > "$CC_IDL"; rm -f "$CC_PREMISE_PASS_STAMP"
+  unset CC_PREMISE_BACKLOG_BIN
+  "$CC_BACKLOG_BIN" add --title "c4 fail-open control" --project probe --source test \
+    --falsifier "true" >/dev/null
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  grep -q '"premise_pass_note":"ok"' "$CC_IDL"
+}
+
 @test "W1 · the interval gate HOLDS the pass off the 5-minute path" {
-  # The sweep fires at StartInterval 300; the pass costs 106 s measured. Without this gate it would
+  # The sweep fires at StartInterval 300; the pass costs 265.81 s measured. Without this gate it would
   # spend a third of the box's sweep budget re-asking questions that move on the scale of a landing.
   export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"
   export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
