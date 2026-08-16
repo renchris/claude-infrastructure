@@ -1,0 +1,20 @@
+=== PHASE 0: baseline (null control) ===
+2026-08-16T21:17:57.673115+00:00	2	2
+=== PHASE 1: build the large context ===
+context bytes:  1421981
+arm session: 678967AD-6EB9-4D63-B02A-21EA085E60D1
+load rc=0 out= for your actual request — this turn carried only reference material.LOADED
+=== PHASE 2: 45 resumed turns (the cache_read arm) ===
+turn 1/45 rc=0 elapsed=55s
+2026-08-16T21:19:48.063627+00:00	2	4
+turn 10/45 rc=0 elapsed=443s
+2026-08-16T21:26:39.500904+00:00	2	4
+turn 20/45 rc=0 elapsed=1225s
+2026-08-16T21:39:32.736892+00:00	2	4
+turn 30/45 rc=0 elapsed=1508s
+2026-08-16T21:44:54.979809+00:00	2	4
+turn 40/45 rc=0 elapsed=2120s
+2026-08-16T21:54:29.081124+00:00	3	6
+=== PHASE 3: final read ===
+2026-08-16T22:02:02.567463+00:00	3	6
+=== DONE in 2597s ===
