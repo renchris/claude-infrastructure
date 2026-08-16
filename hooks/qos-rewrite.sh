@@ -158,11 +158,36 @@ if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
     #   bats                 the literal, and nothing else
     #   ([[:space:]]|$)      the token ends a word; `$` inside the group anchors correctly here
     # /g so a wrapper form (`timeout 90 <path>/bats`, `env FOO=1 <path>/bats`) is covered without
-    # having to know the wrapper. Accepted narrowing: a bare `bats` used as DATA (`echo bats`)
-    # is rewritten too. The result is still a valid command naming a real executable, so the
-    # blast radius is a surprising echo, never a broken tool call.
+    # having to know the wrapper.
+    #
+    # THE BARE TOKEN IS DROPPED WHEN A PATH SHIM ALREADY COVERS IT (backlog 1d20ff5ee344).
+    # The "accepted narrowing" this comment used to declare — that a bare `bats` used as DATA is
+    # rewritten too, blast radius "a surprising echo" — was measured and it is not that small: the
+    # substitution is /g over the WHOLE command text with only whitespace boundaries, so it also
+    # rewrites inside quoted literals and heredoc BODIES. It corrupted a tests/ literal and an
+    # operator's transplant file. Reproduced 2026-08-15: `echo hello bats world` came back as
+    # `echo hello <path>/cc-bats world`.
+    #
+    # What makes it droppable rather than merely regrettable is that the bare case is now REDUNDANT.
+    # A `bats` shim is installed beside this target (`~/.claude/bin/bats` → the repo's bin/cc-bats)
+    # and `~/.claude/bin` is FIRST on the PATH every agent Bash call runs with, so a bare token that
+    # is actually EXECUTED resolves to the wrapper through PATH — in any position, including under
+    # `timeout`/`env`, because execution consults PATH regardless of what precedes the word. What
+    # PATH cannot intercept is an ABSOLUTE spelling of some other bats, and that is exactly the arm
+    # kept below.
+    #
+    # Conditional, and fail-safe in the direction that matters: with no shim beside the target the
+    # pattern is unchanged, so this can only ever rewrite LESS than before, never differently. A
+    # miss costs a bats run its QoS band; it can never corrupt a command. Compared with `-ef` (same
+    # device+inode, symlinks followed) rather than by path, because the shim IS a symlink.
+    _SHIM="${CC_BATS_TARGET%/*}/bats"
+    if [ -x "$_SHIM" ] && [ "$_SHIM" -ef "$CC_BATS_TARGET" ]; then
+      _PFX='(/[^[:space:]]*/)'      # absolute spellings only — PATH owns the bare token
+    else
+      _PFX='(/[^[:space:]]*/)?'     # no shim: the bare token still has no other chokepoint
+    fi
     NEWCMD=$(printf '%s' "$CMD" \
-      | sed -E "s%(^|[[:space:]])(/[^[:space:]]*/)?bats([[:space:]]|\$)%\\1${REPL}\\3%g" 2>/dev/null) \
+      | sed -E "s%(^|[[:space:]])${_PFX}bats([[:space:]]|\$)%\\1${REPL}\\3%g" 2>/dev/null) \
       || NEWCMD=""
     if [ -n "$NEWCMD" ] && [ "$NEWCMD" != "$CMD" ]; then
       emit "$NEWCMD"
