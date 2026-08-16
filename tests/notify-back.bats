@@ -215,12 +215,30 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   [ -n "$guard" ] || { echo "custody open guard not found in $HF"; false; }
   ! printf '%s' "$guard" | grep -q 'WANT_SELF_RETIRE' \
     || { echo "still gated on self-retire: $guard"; false; }
-  # RED control: the same line on origin/main DOES gate on it, so this assertion is falsifiable
-  # rather than merely satisfied by a grep that matches nothing.
-  old="$(git -C "$REPO" show origin/main:scripts/handoff-fire.sh 2>/dev/null \
+  # RED control: the same line pre-fix DOES gate on it, so this assertion is falsifiable rather
+  # than merely satisfied by a grep that matches nothing.
+  #
+  # 🚨 A LITERAL SHA, NEVER origin/main. This control replayed `origin/main:scripts/handoff-fire.sh`,
+  # and that ref ADVANCES past this very fix the moment it lands — after which the control compares
+  # the fix to itself, the marker grep stops matching, and the `skip` below turned that into a
+  # PERMANENTLY VACUOUS pass. It is also why this commit could never land: moving-ref-control-lint
+  # refuses a control the land itself changes, so every re-land attempt hit the same gate, pinned a
+  # new refs/land/failed/<ts>-…-31568-1 and minted another blocked re-land row — ~11 of them on
+  # 2026-08-16 alone. 764f96963 is 0c48b3cb0^, the immutable parent of this fix; it cannot move.
+  #
+  # THE MARKER'S POLARITY IS INVERTED HERE, deliberately, because this fix is a REMOVAL. The lint's
+  # stock advice is "an identifier the FIX introduced must be ABSENT from the replay"; the symmetric
+  # proof for a deletion is that the identifier the fix DELETED is PRESENT in the replay. Derived
+  # from the measured diff of 764f96963..0c48b3cb0 on that line, never from prose: the guard read
+  # `… && [ "${WANT_SELF_RETIRE:-0}" = 1 ]` before and drops that clause after.
+  #
+  # AND IT FAILS RATHER THAN SKIPS. Against a moving ref a skip was arguably defensible — the
+  # artifact could legitimately drift. Against a literal sha the artifact is immutable, so a missing
+  # marker can only mean the control itself is broken, and skipping would hide exactly the breakage
+  # this block exists to expose (memory: control-calibrated-to-implementation-decays).
+  old="$(git -C "$REPO" show 764f96963:scripts/handoff-fire.sh 2>/dev/null \
          | grep 'NB_ARMED_TARGET:-' | grep 'SPAWNED_PANE' | head -1)"
-  if [ -n "$old" ]; then
-    printf '%s' "$old" | grep -q 'WANT_SELF_RETIRE' \
-      || skip "control is not pre-v1.1"
-  fi
+  [ -n "$old" ] || { echo "control unrecoverable: 764f96963:scripts/handoff-fire.sh has no NB_ARMED_TARGET/SPAWNED_PANE guard line"; false; }
+  printf '%s' "$old" | grep -q 'WANT_SELF_RETIRE' \
+    || { echo "control is not pre-v1.1 — 764f96963 must still gate on WANT_SELF_RETIRE: $old"; false; }
 }
