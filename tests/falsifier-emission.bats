@@ -54,6 +54,11 @@ setup() {
   # minutes before it was pinned.
   export CC_DISCOVER_FRONTIER_LEDGER="$BATS_TEST_TMPDIR/absent-ledger.md"
   export CC_DISCOVER_GATES="$BATS_TEST_TMPDIR/absent-gate"
+  # C2's PRE-MINT screen, pinned to THIS TREE's scanner rather than left to its bare-name default.
+  # The default resolves off the operator's PATH and $HOME/.claude/scripts, which is seam 5b of the
+  # hermeticity lint: the suite would then screen its own fixtures with whatever copy the box happens
+  # to deploy, and a version-skewed one would silently change which rows this file gets to assert on.
+  export CC_DISCOVER_PHASE_SCAN="$PLANSCAN"
 }
 
 fals_of() { # <id> → the stored falsifier string, or empty
@@ -111,7 +116,12 @@ EOF
 
 @test "plan-open: a plan path containing a space survives the probe's SECOND parse" {
   d="$BATS_TEST_TMPDIR/c2 spaced"; mkdir -p "$d"
-  printf -- '---\nstatus: open\n---\n\n# A Plan\n\n## Phase 1 DONE\n' > "$d/PLAN.md"
+  # THE PLAN MUST STILL CARRY WORK AT MINT TIME, then lose it — the same two-phase shape the test
+  # above uses, and for a reason that is now mechanical rather than stylistic: cc-discover screens
+  # every candidate through this very probe BEFORE filing (plan §4 C2), so an all-DONE plan mints no
+  # row at all and there would be no stored falsifier left to parse. The subject here is the PATH's
+  # quoting surviving a second shell parse, so the fixture has to reach the store first.
+  printf -- '---\nstatus: open\n---\n\n# A Plan\n\n## Phase 1\n' > "$d/PLAN.md"
   cat > "$BATS_TEST_TMPDIR/findplan-sp" <<EOF
 #!/bin/sh
 [ "\$1" = "--list-open" ] || exit 2
@@ -121,8 +131,10 @@ EOF
   CC_DISCOVER_PROJECT=proj CC_DISCOVER_FINDPLAN="$BATS_TEST_TMPDIR/findplan-sp" \
     "$DISCOVER" --once >/dev/null 2>&1
   probe="$("$BACKLOG_BIN" list --all --json | jq -r '[.[]|select(.source=="plan-open")][0].falsifier')"
+  [ -n "$probe" ] && [ "$probe" != null ] || false # the row exists, so the assertion below has a subject
   ln -sf "$PLANSCAN" "$HOME/.claude/scripts/plan-phase-scan.sh"
   ln -sf "$REPO/scripts/find-plan.sh" "$HOME/.claude/scripts/find-plan.sh"
+  printf -- '---\nstatus: open\n---\n\n# A Plan\n\n## Phase 1 DONE\n' > "$d/PLAN.md"
   run /bin/sh -c "$probe"
   # WITHOUT the quoting this is rc 2 ("file not found") — a truncated path answering confidently.
   [ "$status" -eq 0 ]
