@@ -2228,3 +2228,54 @@ plans, not rows, and each wants its own dispatched session rather than an inline
 (triage above), `37a0b651bcce` (the parked `fix/accounts-eval-bin-resolver` branch, which exists at
 `1a2c536ac`, is on NO remote, and is not an ancestor of origin/main), `1d20ff5ee344`,
 `f272b30e66f5`, `66be078a3f50` and `492b95cbac72`.
+
+#### Recycle #9 outcome: `master-account-facts` reached **0 open** — 16 → 0, and only three rows needed a diff
+
+Final state **0 open / 17 blocked**, every row either landed on origin/main and closed, or blocked
+with a named operator-only step. The distribution is the finding: **three rows needed code**, three
+were closed by re-measuring a dated claim, one was a duplicate, and **ten were already finished or
+already operator-gated and nobody had said so.**
+
+**Landed** — `fb1ea5d43` (provider-probe memo), `bfe2b5daf` (the cost guard's leading indicator),
+`27772ede4` (the qos-rewrite narrowing).
+
+**Closed by re-measurement, zero code** — `37a0b651bcce` (the two eval-bin spellings both exist, but
+the second is a DELEGATOR and four tests pin the agreement), `f272b30e66f5` (the instrument exists
+and its line 2 names the row), `096b75d15d9f` (the probe answered on 2026-08-11; only the FRONTMATTER
+said otherwise). `492b95cbac72` folded into `48e14163e78a`.
+
+**The generator behind the biggest single win.** `096b75d15d9f` sat open for four days because
+`plan-phase-scan.sh --falsify` reads YAML frontmatter, the plan's status log said "PROBE CLOSED —
+status: answered", and **the frontmatter still said `open`**. One three-word edit retracted the row,
+verified by running its own stored falsifier (now prints `FALSIFIED`, exit 0) against a control that
+still exits 1. **A plan whose machine-readable status is stale re-mints an "advance" row forever.**
+Worth a sweep of every `plan-open` row in the store against its plan's own status log.
+
+**The other seven closed as blocked, and each names a step only the operator can take** — the C10
+launcher flip `claude` → `claude1` (D-A, which gates BOTH `180d38b29912` and `48e14163e78a`), the
+auth-recorder activation, the Gemini plan-tier check, the heal()-with-live-sessions ruling, the
+concurrency/subscription call, the Dia CDP security envelope, and the convergence circle.
+
+**Two defects surfaced that nobody was looking for.** (1) `com.claude.auth-timeseries` is
+bootstrapped with a MISSING target and has failed **468 times** — `launchctl list` shows it loaded,
+last exit 126, while the activation script that creates its symlink *and refuses to arm without it*
+was bypassed. It has looked armed while recording nothing. Filed `85fc4f3216a7` with the runnable
+activation. (2) The "19 forked skills" row is **half refuted**: five config roots share ONE inode, so
+nothing has forked; the untracked half holds at 18.
+
+**Method, and all three failures were the same shape — an instrument answering a question nobody
+asked.** The handoff said no row here carries a falsifier; **six do**, and five of those answer
+"still live" by printing NOTHING and exiting 1, which reads exactly like a broken probe (the
+affirmative token is deliberate, so an older deployed copy cannot forge a retraction). A falsifier
+keyed on whether a BRANCH landed can only ever say "live" once the fix arrives by another route —
+which is also why five shas cited as shipped RESOLVE but are not ancestors of trunk, and why every
+landedness claim here was settled by CONTENT. And the first reproduction probe for `1d20ff5ee344`
+was **VACUOUS and said the opposite**: its command text contained `cc-bats`, tripping that hook's own
+idempotency guard, so the probe disabled the mechanism it was testing while its control cheerfully
+confirmed the file had been written.
+
+**Next effort by size:** `master-enforcing-store` (33) → `master-session-lifecycle` (41) →
+`master-fleet-footprint` (56) → `master-product-repos` (58) → `master-fire-gate` (58) →
+`master-convergence-deadlock` (84). 🚨 **Read `master-convergence-deadlock` before the others** — it
+is last by size but it is the blocker under `3e2358f03e23`, `6f183f5df5b9`, `48e14163e78a` and the
+skills track-half, so draining it unblocks work across every effort above it.
