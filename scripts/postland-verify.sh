@@ -1532,7 +1532,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   # function cannot tell a failure of the tree from a run we killed ourselves. Defaults to 1 (bats'
   # "something failed") so an omitted argument can only ever preserve the old convicting behaviour,
   # never invent a cut.
-  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC ABSTAIN_BOUND arc why tap_rc="${2:-1}"
+  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC ABSTAIN_BOUND ABSTAIN_EL arc why abnd ael aleg rt0 rtel tap_rc="${2:-1}"
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   # $TAP_NOTOK_RE, never a re-spelling: this arming pattern was the LOOSEST of the three readers
   # (`/^not ok /`, no <N> at all), so a torn line armed `p` and paired the NEXT `#` line's filename
@@ -1600,7 +1600,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
-    fails=1; rc=1; abstain=0; ABSTAIN_RC=124; ABSTAIN_BOUND=""   # RESET per file: a stale rc/bound would misname the cut
+    fails=1; rc=1; abstain=0; ABSTAIN_RC=124; ABSTAIN_BOUND=""; ABSTAIN_EL=0; rtel=0   # RESET per file: a stale rc/bound/elapsed would misname the cut
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
       # NO ADMISSION WAIT before a retry (v1 slept here, per file, per attempt — the ~12-call ×
       # 600s budget that made a run 2h of sleeping). Waiting was never the cheap half of that
@@ -1618,7 +1618,22 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       tdir="$(mktemp -d "$RUN_TMP/retry.XXXXXX")"
       # BOUNDED for the same reason the full suite is: a file that WEDGES would hold the ladder —
       # and this runner's mutex — open forever, turning one hung test into a dead post-land net.
+      # TIME IT. `timeout` reports 124 when IT cuts, and a CHILD that exits 124 on its own is
+      # byte-identical in rc — so 124 alone cannot say whose it is, and the message has been
+      # asserting the bound for both. ELAPSED is what separates them, and it needs no new
+      # cooperation from anything: a 124 that arrives in seconds is the child's, because our bound
+      # had not yet come due. MEASURED 2026-08-16 against the live ladder's own failing case: the
+      # corpus's pair is consistently tests/autonomy-sweep.bats / "nothing new → abstain, zero
+      # notifies", and re-running EXACTLY that under the daemon's own environment (its PATH, a
+      # pristine detached worktree, nice -n 5 + taskpolicy -c utility) costs 3.56s against a 300s
+      # bound — 84x headroom, planning 1 and passing. So the sixteen consecutive `ladder UNPROVEN`
+      # cuts cannot be this bound firing, and every one of them said it was. cc-bats documents a
+      # sustained `rc 124, zero output` of its own (a shim exec chain, bin/cc-bats §"THE 2-CYCLE
+      # IS STILL LIVE"), which is what a non-slow 124 looks like. Name the elapsed and the reader
+      # can tell the two apart in one line instead of dispatching a session at the wrong one.
+      rt0="$(now_epoch)"
       retry_once "$f" "$t" "$tdir"; rc=$?
+      rtel=$(( $(now_epoch) - rt0 ))
       RETRIES=$((RETRIES+1)); rm -rf "$tdir"
       # OUR OWN BOUND IS NOT EVIDENCE ABOUT THE TREE (C23) — the rule every other 124 site in this
       # file already follows (prelint ⇒ cut, confirm_hang ⇒ the HUNG discriminator, classify_hang case
@@ -1650,7 +1665,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       case "$rc" in
         0|1) ;;                                  # the only two codes that speak about the tree
         # ABSTAIN_BOUND is captured HERE, beside the rc it belongs to — never re-read at the message.
-        *)   abstain=1; ABSTAIN_RC="$rc"; ABSTAIN_BOUND="$RETRY_BOUND_S"; break ;;   # 124 / >128 / 126 / 127 ⇒ nothing proven
+        *)   abstain=1; ABSTAIN_RC="$rc"; ABSTAIN_BOUND="$RETRY_BOUND_S"; ABSTAIN_EL="$rtel"; break ;;   # 124 / >128 / 126 / 127 ⇒ nothing proven
       esac
       [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
@@ -1665,7 +1680,19 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       # code; now that a signal kill also abstains, a fixed message would misattribute a SIGKILL to
       # our timeout and send the next reader hunting a slow test that was never slow.
       arc="${ABSTAIN_RC:-124}"
-      if   [ "$arc" -eq 124 ]; then why="our own ${ABSTAIN_BOUND:-$RETRY_TO}s bound fired on the re-run ($([ "${ABSTAIN_BOUND:-$RETRY_TO}" = "$FILE_TO" ] && printf 'the single named test' || printf 'the whole file'))"
+      # 124 IS TWO FINDINGS, and only the elapsed separates them. Our bound firing means the re-run
+      # really did run for the whole bound; a 124 that arrives well inside it was the CHILD's own
+      # exit code, and the two send a reader to opposite places (a slow test vs. a runner that never
+      # ran). The split is at half the bound: comfortably above any real cut, comfortably below the
+      # seconds a non-slow 124 takes.
+      if   [ "$arc" -eq 124 ]; then
+        abnd="${ABSTAIN_BOUND:-$RETRY_TO}"; ael="${ABSTAIN_EL:-0}"
+        aleg="$([ "$abnd" = "$FILE_TO" ] && printf 'the single named test' || printf 'the whole file')"
+        if [ "$ael" -ge $(( abnd / 2 )) ]; then
+          why="our own ${abnd}s bound fired on the re-run of ${aleg} (ran ${ael}s)"
+        else
+          why="the re-run of ${aleg} exited 124 after only ${ael}s — our bound is ${abnd}s and had not come due, so this is the CHILD's own exit code, NOT a slow test (cc-bats documents a sustained rc-124 shim chain; check what \`bats\` resolves to on this PATH)"
+        fi
       elif [ "$arc" -gt 128 ]; then why="the re-run was KILLED by signal $(( arc - 128 )) (machine pressure, not the tree)"
       elif [ "$arc" -eq 126 ] || [ "$arc" -eq 127 ]; then why="the re-run could not execute (rc $arc)"
       # 75 = cc-bats' EX_TEMPFAIL deferral. It is the ONLY abstaining code that means "nothing was even

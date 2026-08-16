@@ -2947,8 +2947,15 @@ esac
 printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
 exit 1"
 }
+stub_ladder_slow() {   # the -f leg PLANS, then outlives the bound ⇒ OUR timeout really does cut it
+  stub_bats "ladderslow" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+case \"\$*\" in *probe.bats*) printf '1..1\n'; sleep 30 ;; esac
+printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+exit 1"
+}
 
-@test "the ladder's cut names the bound that FIRED: the per-TEST bound on the test leg" {
+@test "the ladder's cut names the LEG, and a fast 124 is the CHILD's code, not our bound" {
   b="$(stub_ladder_124 1)"
   export CC_POSTLAND_BATS="$b"
   tree="$(origin_tree)"
@@ -2956,14 +2963,15 @@ exit 1"
   [ "$status" -eq 0 ]
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "cut" ]                                        # unchanged: 124 still proves nothing
-  grep -q 'our own 300s bound fired' "$CC_POSTLAND_DIR/runner.log"
   grep -q 'the single named test' "$CC_POSTLAND_DIR/runner.log"
-  # THE REGRESSION, pinned as an absence: the file bound never ran, so it may not be named.
-  run grep -q 'our own 5400s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  grep -q "CHILD's own exit code" "$CC_POSTLAND_DIR/runner.log"
+  # THE REGRESSION, pinned as an absence: our bound never came due, so it may not be claimed —
+  # and the 5400s file bound never ran at all. Sixteen live cuts asserted exactly that sentence.
+  run grep -qE 'our own (300|5400)s bound fired' "$CC_POSTLAND_DIR/runner.log"
   [ "$status" -ne 0 ]
 }
 
-@test "the ladder's cut names the bound that FIRED: the FILE bound once the test leg falls through" {
+@test "the ladder's cut names the LEG: the FILE leg once the test leg falls through" {
   b="$(stub_ladder_124 0)"                                     # `1..0` ⇒ no verdict ⇒ fall through
   export CC_POSTLAND_BATS="$b"
   tree="$(origin_tree)"
@@ -2971,9 +2979,24 @@ exit 1"
   [ "$status" -eq 0 ]
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "cut" ]
-  grep -q 'our own 5400s bound fired' "$CC_POSTLAND_DIR/runner.log"
   grep -q 'the whole file' "$CC_POSTLAND_DIR/runner.log"
-  run grep -q 'our own 300s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  run grep -q 'the single named test' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]
+}
+
+@test "…and when our bound REALLY fires, it is claimed — with the elapsed that earns the claim" {
+  # The other half of the discriminator. Without this case the two above are satisfied by a message
+  # that can never claim the bound at all, which would be the same blindness pointing the other way.
+  b="$(stub_ladder_slow)"
+  export CC_POSTLAND_BATS="$b"
+  export POSTLAND_FILE_TIMEOUT_S=2                             # so the cut costs 2s, not 300
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]
+  grep -q 'our own 2s bound fired on the re-run of the single named test' "$CC_POSTLAND_DIR/runner.log"
+  run grep -q "CHILD's own exit code" "$CC_POSTLAND_DIR/runner.log"
   [ "$status" -ne 0 ]
 }
 
