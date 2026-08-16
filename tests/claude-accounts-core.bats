@@ -1332,6 +1332,68 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "--readout: an unsanctioned extra-usage TOGGLE is surfaced before any money moves" {
+  # THE LEADING INDICATOR. ¢ keys on spend, so the earliest a ¢ line can fire is after the money
+  # is gone. The standing cost guard's ask is that the toggle stay OFF — with it on, hitting a
+  # plan limit BILLS instead of stopping the session. render_table has surfaced this all along;
+  # this readout said nothing and still routed the desk to that account.
+  run python3 -c "$LOAD"'
+import io, contextlib, json
+def rd(rows, c=None):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, c or cfg, WIN_OPEN, False)
+    return buf.getvalue()
+
+# The fixture cfg carries no `spend` block at all, which is the ABSENT-config case — and it must
+# read as unauthorized, so a missing standing answer warns rather than goes quiet about money.
+on_zero = rd([row(acct="armed", credits_on=True, credits_used=0.0)])
+assert "⚠" in on_zero, on_zero
+assert "armed" in on_zero, on_zero
+assert "ON" in on_zero, on_zero
+assert not on_zero.count("¢"), on_zero          # still not a spend claim — no money has moved
+
+# POSITIVE CONTROL x2: the line must be a function of the toggle AND of the standing answer, not
+# something that renders for every account. Without these, an always-on line satisfies the above.
+off_zero = rd([row(acct="quiet", credits_on=False, credits_used=0.0)])
+assert "⚠" not in off_zero, off_zero            # toggle off ⇒ nothing to say
+
+authorized = json.loads(json.dumps(cfg))
+authorized["spend"] = {"usage_credits_authorized": True}
+sanctioned = rd([row(acct="armed", credits_on=True, credits_used=0.0)], authorized)
+assert "⚠" not in sanctioned, sanctioned        # operator said yes ⇒ not a breach
+print("OK")'
+  # Spelled as an `if` rather than the file's older `A && B || { …; false; }`: the liveness
+  # analyzer classes that form and-absorbed, and its fixer DECLINES to rewrite it rather than
+  # guess, so the correct shape is the caller's to write.
+  if [ "$status" -ne 0 ] || [[ "$output" != *OK* ]]; then
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "--readout: a SPENDING account gets the loud spend line and never also the toggle line" {
+  # MUTANT-PROVEN, not pre-fix-proven: with no toggle line in the tree at all this passes
+  # trivially. Its control is the `elif` demoted to `if`, under which a spending account with the
+  # toggle on renders BOTH — the same breach reported twice, at two different severities, which
+  # is how an operator learns to skim the quieter one.
+  run python3 -c "$LOAD"'
+import io, contextlib
+def rd(rows):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, WIN_OPEN, False)
+    return buf.getvalue()
+out = rd([row(acct="spending", credits_on=True, credits_used=17691.0, credits_used_usd=176.91)])
+assert "🚨" in out, out
+assert "$176.91" in out, out
+if "⚠" in out:
+    raise AssertionError("spend line and toggle line both rendered for one account: " + out)
+print("OK")'
+  if [ "$status" -ne 0 ] || [[ "$output" != *OK* ]]; then
+    echo "$output" >&2
+    return 1
+  fi
+}
+
 @test "--readout: a permanent Fable window is never given a countdown, and nulls read as —" {
   run python3 -c "$LOAD"'
 import io, contextlib

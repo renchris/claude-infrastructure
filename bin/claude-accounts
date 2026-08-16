@@ -2991,6 +2991,19 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                              f"authorized** (accounts.json:spend.usage_credits_authorized=false; "
                              f"toggle currently {'on' if r.get('credits_on') else 'off'}). This "
                              f"is the four-subscription pool being spent past, as money.")
+        # THE LEADING INDICATOR — the same guard one step earlier, and deliberately NOT a ¢ line.
+        # ¢ keys on SPEND because spend is the reliable signal (an account read credits_on=false
+        # with $176.91 already gone), and this readout is pinned silent at zero spend. But the
+        # standing guard's actual ask is that the TOGGLE stay off: with it on, hitting a plan limit
+        # BILLS instead of stopping the session, so by the time a ¢ line can fire the money has
+        # already moved. render_table has surfaced the toggle at zero spend all along; this readout
+        # — the operator-facing one — said nothing, and still routed the desk to that account.
+        # `elif` so a spending account gets the louder 🚨 line and never both.
+        elif r.get("credits_on") and not bool((cfg.get("spend") or {}).get(
+                "usage_credits_authorized")):
+            notes.append(f"⚠ `{acct}` — extra-usage toggle is **ON** and not authorized "
+                         f"(accounts.json:spend.usage_credits_authorized=false). No spend yet: "
+                         f"a plan limit will now BILL instead of stopping the session.")
         if a not in ("ok", None):
             notes.append(f"○ `{acct}` — auth `{a}`"
                          + (f" → {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
