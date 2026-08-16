@@ -774,7 +774,7 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   [ "$status" -eq 0 ]
   [[ "$output" == *"PENDING"* ]] || false
   [[ "$output" == *"is not the link YET"* ]] || false
-  [[ "$output" != *"STALE"* ]]
+  [[ "$output" != *"STALE"* ]] || false
   [[ "$output" != *"UNLINKED"* ]]
 }
 
@@ -788,8 +788,8 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   _track
   run "$ASSERT"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"STALE"* ]]
-  [[ "$output" != *"UNLINKED"* ]]
+  [[ "$output" != *"STALE"* ]] || false
+  [[ "$output" != *"UNLINKED"* ]] || false
   printf '%s\n' "$output" | grep -qE '^  ok +root SSOT \(link\) +1 tracked · 1 live · 0 missing$'
 }
 
