@@ -212,10 +212,21 @@ Both were caught only by asking whether the instrument had actually run.
    sleeps — plus a `log_event` on the 429 branch, which today emits nothing at all (5,413 log lines,
    zero throttle entries, because the instrument does not exist). Off the interactive critical path,
    which is why it is not in this land.
-2. **Provider-probe cache.** `probe_provider` is **4.31s of a 4.37s warm `--json` call** — 6
-   providers, 8 child CLI processes, uncached and TTL-free, re-run every invocation. Consumers:
-   `cc-context`, `cc-value`, `cc-board`, `cc-wave-plan`, `cc-blockers`. Not on the `--route` path, so
-   outside this DoD, but it is the larger win on `--json`.
+2. **Provider-probe cache.** ~~`probe_provider` is **4.31s of a 4.37s warm `--json` call**~~ —
+   **DONE 2026-08-15, landed `fb1ea5d43`** (backlog `d1068fdf9b6a`). Re-measured before building:
+   **3.68s of a 3.7s** run, same shape. Warm `--agents` **0.068s vs 3.24s cold**, `--json` **1.5s vs
+   ~4.4s**, render byte-identical cached vs `--fresh`.
+
+   🚨 **The remedy proposed here — "a ~900s cache invalidated on providers.json mtime" — is wrong as
+   literally stated, and the mutant proves it.** It reads as caching `probe_provider()`, which cannot
+   be done: `pinned_model` is read from the provider's OWN config precisely so a config file governs
+   and a remembered value does not, and `installed` must answer for the PATH as it is now. A
+   whole-probe cache reds `tests/claude-accounts-providers.bats` "the model pin is read from the
+   provider's OWN config", which edits a provider's settings.json between two runs with the registry
+   untouched. Only the CHILD PROCESSES are memoised. And keying on providers.json alone — the
+   invalidation this bullet names — is also too weak: that mutant reds the binary-identity test,
+   reporting an upgraded provider at its old version. The key carries argv + the resolved binary's
+   realpath/mtime/size + the registry's mtime/size, with failures at a 60s TTL rather than 900s.
 
 ## Open at time of writing
 
