@@ -235,8 +235,14 @@ STUB
   printf '%s\n' "$branch" | grep -qE '^  pre_trust "\$LAUNCH_DIR"' \
     || { echo "pre_trust is not called at the recycle branch's top level:"; printf '%s\n' "$branch"; return 1; }
   # The guard that used to wrap it. Its return would silently restore the 2026-08-15 stall.
-  printf '%s\n' "$branch" | grep -qE 'if \[ "\$RECYCLE_RELOC" = 1 \]' \
-    && { echo "pre_trust is guarded again by RECYCLE_RELOC/REPICK — the plain recycle is unprotected"; return 1; }
+  # BLOCK FORM, not `A && { …; return 1; }` — that spelling is dead under bats errexit and the
+  # dead-assertion ratchet reds the land for it (it caught this very line). Verified in BOTH
+  # directions with a mutant: re-wrapping pre_trust in the old `if [ "$RECYCLE_RELOC" = 1 ]` guard
+  # makes this test fail, and the unguarded tree passes it.
+  if printf '%s\n' "$branch" | grep -qE 'if \[ "\$RECYCLE_RELOC" = 1 \]'; then
+    echo "pre_trust is guarded again by RECYCLE_RELOC/REPICK — the plain recycle is unprotected"
+    return 1
+  fi
   return 0
 }
 
