@@ -59,6 +59,36 @@ mktable() {
   [ "$(cmd_of "$output")" = "$CCBATS tests/qos-rewrite.bats" ]
 }
 
+# ── the bare token is dropped once a PATH shim covers it (backlog 1d20ff5ee344) ─────────────────
+# The three tests above run WITHOUT a shim beside the fixture cc-bats, which is the no-shim arm and
+# is why they are unchanged. These two install one and pin the other arm.
+#
+# Why this matters: the substitution is /g over the whole command text with only whitespace
+# boundaries, so a bare token is rewritten wherever it appears — including inside quoted literals
+# and heredoc BODIES, which corrupted a tests/ literal and an operator's transplant file. The bare
+# case is redundant once `bats` on PATH IS the wrapper, because execution consults PATH regardless
+# of what precedes the word; an ABSOLUTE spelling of some other bats is what PATH cannot intercept.
+_install_shim() { ln -sfn "$CCBATS" "$D/bin/bats"; }
+
+@test "shim present: a bare bats used as DATA is left alone — no heredoc or literal corruption" {
+  _install_shim
+  run run_hook "echo hello bats world"
+  [ "$status" -eq 0 ]
+  if [ -n "$output" ]; then
+    echo "a data-position token was rewritten: $(cmd_of "$output")" >&2
+    return 1
+  fi
+}
+
+@test "shim present: an ABSOLUTE-path bats is STILL rewritten — PATH cannot intercept that one" {
+  # The positive control for the test above. Without it, a hook that had simply stopped rewriting
+  # anything at all would satisfy the negative and look like the fix.
+  _install_shim
+  run run_hook "timeout 90 /opt/homebrew/bin/bats t.bats"
+  [ "$status" -eq 0 ]
+  [ "$(cmd_of "$output")" = "timeout 90 $CCBATS t.bats" ]
+}
+
 # The guard that makes the token pattern safe: an ABSOLUTE .bats FILE is an argument, not the tool.
 # Without the "prefix must end in /" rule, `/a/b/tests/x.bats` matches as `/a/b/tests/x.` + `bats`.
 @test "an absolute .bats file ARGUMENT is not rewritten — only the command token is" {
