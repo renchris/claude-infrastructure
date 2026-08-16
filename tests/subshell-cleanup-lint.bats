@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # subshell-cleanup-lint — the controls that make its CLEAN verdict mean something.
 #
-# The shape-level discrimination cases live in the script's own `--selftest` (12 of them, both
+# The shape-level discrimination cases live in the script's own `--selftest` (15 of them, both
 # directions) and are asserted here as one test rather than duplicated. What this suite adds is the
 # thing a hand-written fixture cannot give: the REAL pre-fix artifact. The previous, one-level
 # detector for this class passed hand-made cases, swept the repo clean, and then failed its positive
@@ -89,7 +89,7 @@ setup() {
 
 # ── the detector's own discrimination + contract ──────────────────────────────────────────────────
 
-@test "--selftest passes: 12 shape cases, each proving a RED fires or a GREEN does not" {
+@test "--selftest passes: 15 shape cases, each proving a RED fires or a GREEN does not" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ]
   [[ "$output" == *"--selftest PASS"* ]] || false

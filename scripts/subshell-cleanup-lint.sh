@@ -255,6 +255,48 @@ function assigns_in(txt, arr,   t, name) {
     t = substr(t, RSTART + RLENGTH)
   }
 }
+# A COMMAND-PREFIX assignment (`VAR=v cmd …`) is NOT an assignment to the shell's variable: bash
+# scopes it to that one command's environment and leaves the parent's copy untouched. So it can
+# never be the source of a stale trap read — the class this lint detects is IMPOSSIBLE through it,
+# whatever depth of substitution it sits under. Blanking those runs before assigns_in() sees them is
+# a SOUNDNESS fix, not a suppression: a word at command position after a `NAME=` run makes the run a
+# prefix BY DEFINITION, so nothing real can be hidden here. (Found the hard way — ship-land.sh:584
+# feeds a python3 heredoc through `ID=… BRANCH="$branch" … python3 -`, and the lint read `BRANCH` as
+# a global assigned two frames under `$(write_decision_packet …)`, complete with a chain and a fix
+# instruction for a defect that the shell's own scoping rules make unconstructable. A detector that
+# manufactures a finding costs exactly what a blind one does: its verdict stops meaning anything.)
+#
+# `tail` is the lookahead a LINE CONTINUATION makes necessary and is the whole reason this cannot be
+# a one-line regex: the run and its command word are routinely on different lines (:584 puts five
+# assignments on the first line and `python3` on the third), so a per-line test sees a run followed
+# by nothing and keeps it. contail() supplies the joined code of the continued lines.
+function strip_env_prefix(txt, tail,   t, out, run, rest, look) {
+  t = txt; out = ""
+  while (t != "") {
+    # at a statement start: the greedy run of `NAME=value` words, each followed by whitespace
+    if (match(t, /^[ \t]*([A-Za-z_][A-Za-z0-9_]*\+?=[^ \t;&|<>()]*[ \t]+)+/)) {
+      run = substr(t, 1, RLENGTH); rest = substr(t, RLENGTH + 1)
+      look = rest; sub(/^[ \t]+/, "", look)
+      if (look == "") { look = tail; sub(/^[ \t]+/, "", look) }
+      # the run may continue across the join — step over any further assignments before judging
+      while (match(look, /^[A-Za-z_][A-Za-z0-9_]*\+?=[^ \t;&|<>()]*[ \t]+/)) look = substr(look, RLENGTH + 1)
+      # a real word follows ⇒ command prefix. A separator, a redirect, or nothing ⇒ a real assignment.
+      if (look != "" && look !~ /^[;&|<>)}#]/) gsub(/[^ \t]/, " ", run)
+      out = out run; t = rest
+    }
+    if (t == "") break
+    if (!match(t, /[;&|(){}!]/)) { out = out t; break }
+    out = out substr(t, 1, RSTART); t = substr(t, RSTART + 1)
+  }
+  return out
+}
+# The code of the lines that continue line i, joined — "" when line i ends no continuation. Bounded
+# because only the first word after the assignment run is ever consulted.
+function contail(i,   j, n, out) {
+  out = ""; j = i; n = 0
+  while (n < 6 && j < NL && TXT[j] ~ /\\[ \t]*$/) { j++; out = out " " SOUT[j]; n++ }
+  return out
+}
 function locals_in(txt, arr,   t, rest, i, n, parts, w) {
   t = txt
   while (match(t, /(^|[ \t;&|(){}])(local|declare|typeset|readonly)[ \t]+/)) {
@@ -352,7 +394,8 @@ function scan_cached(i,   a, v, key, first, body, pipetxt, scope, txt, k, rl, cl
   k = ++FCOUNT[scope]
   if (txt ~ DESTR || txt ~ DESTR2) { DFN[scope] = 1; LD[scope, k] = 1 }
 
-  split("", a); assigns_in(SOUT[i], a); assigns_in(SIN[i], a)
+  split("", a); assigns_in(strip_env_prefix(SOUT[i], contail(i)), a)
+  assigns_in(strip_env_prefix(SIN[i], ""), a)
   for (v in a) {
     key = scope SUBSEP v
     if (!(key in ASSIGN)) { ASSIGN[key] = 1; ASSIGNLN[key] = i; AVARS[scope] = AVARS[scope] " " v }
@@ -664,6 +707,41 @@ trap cleanup EXIT
 doc() { echo "  the canonical loop is G=\"\$(cd x)\" — as DATA"; }
 r="$(doc)"'
   ck stringdata 0 'an assignment inside a quoted string is data, not an assignment'
+
+  # GREEN: a COMMAND-PREFIX assignment is scoped to that command's environment — the parent's copy,
+  # which is the one the trap reads, is never written. The class cannot exist through this shape.
+  mk envprefix 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { G="/tmp/env" python3 -c pass; }
+r="$(mint)"'
+  ck envprefix 0 'a command-prefix `VAR=v cmd` is env scope, not an assignment to the shell'
+
+  # GREEN: the same shape SPLIT ACROSS A CONTINUATION — the real one (ship-land.sh:584). A per-line
+  # test sees the run followed by nothing and keeps it, so this is the case that decides.
+  # (`{ :` rather than a bare `{` at end of line is deliberate: --mutants derives its per-file
+  # control by grepping for a MULTI-LINE function opener, and this file's fixtures are string data
+  # that looks exactly like one. A bare opener here makes THIS file "testable", the harness injects
+  # into a single-quoted fixture the scanner correctly ignores, and it reports the lint BLIND on a
+  # control that was never real — the fabricated-control failure the harness's own header warns of.)
+  mk envprefixcont 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { :
+  A="1" G="/tmp/env" \
+  B="2" \
+    python3 -c pass
+}
+r="$(mint)"'
+  ck envprefixcont 0 'a prefix run continued onto later lines is still env scope, not an assignment'
+
+  # RED: the suppression must not swallow a REAL assignment sharing the line with a prefix one.
+  mk envprefixreal 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { G="/tmp/env" python3 -c pass; G="/tmp/real"; }
+r="$(mint)"'
+  ck envprefixreal 1 'a real assignment beside a prefix one is still found — the suppression is narrow'
 
   # PIPELINE shape: off by default, on under --shapes all. Both directions, so neither is inert.
   mk piped 'G=""
