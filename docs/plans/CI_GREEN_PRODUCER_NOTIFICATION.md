@@ -1,6 +1,13 @@
 ---
-status: in-progress
+status: complete
 ---
+
+> **DONE 2026-08-15.** The notification defect is fixed, landed (`e5b82629a`, `6e73c5089`,
+> `23f6bef80`) and verified on the production cron: scheduled runs went `failure · failure ·
+> failure · **success**`, with `verdict` skipped and the fold still honestly `red`. The separate
+> "the partition emits no greens" problem is filed as `ea3ea8f145f9`, and the other repos'
+> producers as `485f8f87eb5f` · `9333991e4544` · `54d7aff8ed8d` · `e3f988b489c3`. This plan is
+> closed; those ids carry the remainder.
 
 # CI green-producer notification — "Run failed" every hour, forever
 
