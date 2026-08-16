@@ -1118,6 +1118,43 @@ SH
   [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-ratchet-coverage-regression")][0]|.falsifier|length>0')" = "true" ]
 }
 
+@test "§6 · the drain-chain check RUNS from the sweep and files a dead chain" {
+  # BACKLOG_DRAIN_24_7 §6 says the chain's liveness is "checked by autonomy-sweep". A grep for the
+  # filename proves a string; this proves the CALLER — the distinction the repo keeps paying for
+  # (a tracked script whose caller does not exist is inert, which is what backlog-grouping-sweep.sh
+  # and `cc-backlog backfill` each were before their arms landed).
+  export CC_PREMISE_PASS_EVERY_S=99999                   # keep this case about the drain arm alone
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  # No brief anywhere and no claim ⇒ both disjuncts fail. The glob points at an empty dir rather
+  # than being left at its /tmp default: a sibling session's real recycle brief would otherwise
+  # prove the chain alive and this case would pass vacuously on a busy box.
+  export CC_DRAIN_BRIEF_GLOB="$BATS_TEST_TMPDIR/no-briefs/fire-drain-recycle*.txt"
+  "$CC_BACKLOG_BIN" add --title "drain-chain fixture row" --project probe --source test >/dev/null
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"drain_chain_rc":"0"' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --open --json
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="local-drain-chain-dead")]|length')" = "1" ]
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="local-drain-chain-dead")][0]|.falsifier|length>0')" = "true" ]
+}
+
+@test "§6 CONTROL · a fresh recycle brief keeps the sweep silent" {
+  # The other half, and the one that decides whether this is a detector or a generator: the sweep
+  # runs the check every 300 s tick, so an arm that filed regardless of verdict would mint 288 rows
+  # a day into the very store this program exists to drain.
+  export CC_PREMISE_PASS_EVERY_S=99999
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  mkdir -p "$BATS_TEST_TMPDIR/briefs"
+  : > "$BATS_TEST_TMPDIR/briefs/fire-drain-recycle10.txt"
+  export CC_DRAIN_BRIEF_GLOB="$BATS_TEST_TMPDIR/briefs/fire-drain-recycle*.txt"
+  "$CC_BACKLOG_BIN" add --title "drain-chain control row" --project probe --source test >/dev/null
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"drain_chain_rc":"0"' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --open --json
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="local-drain-chain-dead")]|length')" = "0" ]
+}
+
 # ── THE BOUND ITSELF (post-land HUNG, backlog 6b42d1f49770) ──────────────────────────────────────
 # A wrapper that is present in the file and never fires reads exactly like no wrapper at all — this
 # subsystem's own recurring defect, and the reason the W1 cases above exist. So the bound gets the
