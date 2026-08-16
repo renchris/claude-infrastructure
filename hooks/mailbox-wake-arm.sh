@@ -2,11 +2,24 @@
 # mailbox-wake-arm.sh — arm this session's inbox watcher BY CONSTRUCTION, at birth, with no model
 # action and no operator action.
 #
-# Registered as a SessionStart hook with `"asyncRewake": true`. The harness then launches it in the
-# BACKGROUND at session birth, does not block the birth turn, does not reap it at the end of that
-# turn, and — when it exits 2 — synthesizes a turn and wakes the model with this script's STDERR.
+# Registered on `SessionStart` (migration 0007, W1) AND on `Stop` (migration 0012, W2), both with
+# `"asyncRewake": true`. The harness then launches it in the BACKGROUND, does not block the turn it
+# fires on, does not reap it at the end of that turn, and — when it exits 2 — synthesizes a turn and
+# wakes the model with this script's STDERR.
 # Proven live on CC 2.1.219 and re-verified on 2.1.220 (the binary this fleet runs):
 # docs/research/mechanical-wake-asyncrewake-2026-07-29.md · docs/plans/CROSS_SESSION_COMMS_V2.md §10.
+# The Stop half is proven separately (P-W2a–d): docs/research/w2-stop-rewake-proof/.
+#
+# ── WHY BOTH EVENTS, AND WHY THE STOP ONE NEEDS A GUARD ──────────────────────────────────────────
+# SessionStart arms ONCE. The watcher is self-disarming by design (it exits on the first ping, or at
+# term), and SessionStart does not recur mid-session — so a long-lived session is deaf from the
+# moment its birth watcher is spent until someone types. Stop is the only boundary that recurs at
+# every idle, so re-arming there is what makes the wake path a settings fact rather than something a
+# model must remember (goal-safe-2way-comms-2026-08-13.md §5).
+#
+# But the harness dedupes NOTHING: measured in the P-W2d probe, two Stops in one session launched two
+# watchers, both fired on the SAME mail line, and each burned its own model turn. So the recurrence
+# has to be idempotent HERE — the claim guard below — not in the registration.
 #
 # ── WHY THIS FILE EXISTS AT ALL (the spec said "just register cc-await-ping") ────────────────────
 # The 2026-07-29 remainder specifies W1 as "a SessionStart hook asyncRewake:true running
@@ -121,6 +134,41 @@ if [ -z "$_key" ]; then
          >> "$_mdir/.unaddressable" 2>/dev/null || true
   exit 0
 fi
+
+# ── CLAIM GUARD (W2) — a no-op whenever a LIVE watcher already covers this inbox ─────────────────
+# Registered on Stop, this hook fires at EVERY idle boundary, and the harness starts a fresh process
+# each time. Without a guard a session accumulates one watcher per stop, all watching the same box:
+# measured in the P-W2d probe as two `exit 2`s on one mail line and two synthesized turns. A wake
+# costs a model turn, so a duplicate wake is a duplicate turn — the alarm-polarity failure of a
+# mechanism that is supposed to make idleness cheap.
+#
+# The predicate is the lib's `mailbox_wake_armed` (SSOT — hooks/lib/mailbox-pending.sh), the same one
+# cc-notify, mailbox-drain and the wake floor read: fresh heartbeat AND a live pid. Re-deriving it
+# here would be the fourth copy of a definition whose whole point is that its readers cannot disagree.
+# It is asked over the KEYSET, not the single key, because the birth watcher may have armed on the
+# pane while a resumed stop resolves the session id (or the reverse) — one key answers one of those
+# and not the other, which is exactly the half-coverage cc-await-ping beats every key to abolish.
+#
+# FAIL DIRECTION — cannot tell ⇒ ARM. Inverted from the headless guard above, and deliberately: there
+# the unknown risks WEDGING a session for hours, here it risks one duplicate reminder. This substrate
+# is dup-biased throughout ("a visible dup over a silent loss"), and a guard that suppressed the arm
+# on a missing lib would turn a packaging slip into fleet-wide deafness.
+_armed_already() {   # <key> → 0 = a live watcher already covers this inbox, 1 = arm
+  local _lib _k
+  _lib="$(dirname "$0")/lib/mailbox-pending.sh"
+  [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
+  [ -f "$_lib" ] || _lib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+  [ -f "$_lib" ] || return 1
+  # shellcheck source=lib/mailbox-pending.sh
+  # shellcheck disable=SC1091
+  . "$_lib" 2>/dev/null || return 1
+  command -v mailbox_wake_armed >/dev/null 2>&1 || return 1
+  for _k in $(mailbox_keyset "$1" 2>/dev/null || printf '%s\n' "$1"); do
+    mailbox_wake_armed "$_k" && return 0
+  done
+  return 1
+}
+if _armed_already "$_key"; then exit 0; fi
 
 # ── locate the watcher ───────────────────────────────────────────────────────────────────────────
 # Same candidate order every hook here uses. A brand-new tracked file is not symlinked into the live
