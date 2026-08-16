@@ -255,6 +255,66 @@ function assigns_in(txt, arr,   t, name) {
     t = substr(t, RSTART + RLENGTH)
   }
 }
+# ── COMMAND-PREFIX ASSIGNMENTS ARE NOT ASSIGNMENTS (2026-08-16) ───────────────────────────────────
+# `VAR=v cmd` sets VAR in cmd's ENVIRONMENT and nowhere else — MEASURED on this bash, for an external
+# command AND for a shell function (`f(){ :; }; V=inside f` leaves V unset after), so the caller's
+# global is never written and no trap can read a stale copy through one. assigns_in cannot see the
+# difference: it matches `NAME=` after whitespace, which is the same byte pattern either way.
+#
+# The cost of not separating them was a FALSE RED that blocked the whole post-land corpus. From
+# 2026-08-16T11:35Z every sweep read `corpus SKIPPED — pre-corpus whole-tree lint(s) already red`
+# over ONE finding: ship-land.sh:3680 `pkt="$(write_decision_packet …)"`, chained to
+# write_decision_packet ":584 assigns BRANCH". Line 584 is
+#     ID="$id" BRANCH="$branch" RANGE="$range" HITS="$hits" SID="…" \
+#     CREATED="$(date …)" \
+#       python3 - "$dir/$id.json" <<'PY'
+# — an env prefix on python3. It assigns nothing, the trap's BRANCH was never stale, and the
+# prescribed fix (return through a global out-parameter) would have introduced the very global the
+# lint exists to forbid. A lint whose remedy manufactures its own defect class is worse than silent.
+#
+# WHY THE CONTINUATION WALK. The prefix run above spans THREE lines, and only the third carries the
+# command word. A line-local test sees line 584 as assignments-only and keeps them, so the finding
+# survives — which is exactly how this shape stayed invisible. The walk follows `\` continuations
+# and marks every line the run spans.
+#
+# DELIBERATELY NARROW, because the dangerous direction is the other one. Only a LEADING run at the
+# start of a command counts, only when a non-assignment word actually follows it in that same
+# command, and the exclusion is applied ONLY to the S_out (outer) set — an assignment inside a
+# `$( )` on the same line is still collected, since that is the class this lint exists to find.
+# `G=/tmp/x; mkdir "$G"` keeps G (the `;` ends the command before any word follows), and so does a
+# bare `G=/tmp/x` — both are pinned as selftest controls, in both directions.
+# THE DISCRIMINATOR, stated as the shell states it: within ONE command, a `NAME=value` word assigns
+# the caller's variable only when the command consists of NOTHING BUT such words. The moment a
+# command word appears anywhere in it, every `NAME=value` in that command is either the env prefix
+# before it or an argument to it (`make CFLAGS=-O2 all`) — and neither writes the shell. That is one
+# rule for both, and it needs no guess about which side of the command word the token sat on.
+# Declaration builtins are the documented exception (`export A=1` DOES assign), so a segment they
+# lead is never exempted. A leading run of KEYWORDS is skipped first, so `then G=/tmp` still assigns.
+function mark_env_prefix(   i, j, k, m, n, ns, J, segs, parts, w, nm, names, hascmd, first) {
+  for (i = 1; i <= NL; i++) {
+    if (INHD[i] == 1 || INHD[i] == 3) continue
+    if (i > 1 && RAW[i-1] ~ /\\[ \t]*$/) continue        # a continuation line: its run started above
+    J = SOUT[i]; j = i
+    while (j < NL && RAW[j] ~ /\\[ \t]*$/) { j++; J = J " " SOUT[j] }
+    ns = split(J, segs, /[;&|(){}]+/)                    # one entry per command on the logical line
+    for (m = 1; m <= ns; m++) {
+      n = split(segs[m], parts, /[ \t]+/)
+      names = ""; hascmd = 0; first = 1
+      for (k = 1; k <= n; k++) {
+        w = parts[k]
+        if (w == "") continue
+        if (first && w ~ /^(then|do|else|elif|time|!)$/) continue          # a keyword, not the command
+        if (first && w ~ /^(export|declare|typeset|readonly|local)$/) { names = ""; hascmd = 0; break }
+        first = 0
+        if (w ~ /^[A-Za-z_][A-Za-z0-9_]*\+?=/) { nm = w; sub(/\+?=.*$/, "", nm); names = names " " nm; continue }
+        hascmd = 1                                        # a command word ⇒ nothing here assigns
+      }
+      if (!hascmd || names == "") continue
+      for (k = i; k <= j; k++) PFX[k] = PFX[k] names " "
+    }
+  }
+}
+function is_env_prefix(ln, v) { return (PFX[ln] != "" && index(PFX[ln], " " v " ") > 0) }
 function locals_in(txt, arr,   t, rest, i, n, parts, w) {
   t = txt
   while (match(t, /(^|[ \t;&|(){}])(local|declare|typeset|readonly)[ \t]+/)) {
@@ -284,7 +344,7 @@ function reset_file() {
   split("", RS_NAME); split("", RS_KIND); split("", RS_LINE); split("", RS_SCOPE); split("", RS_TEXT)
   split("", SEENF); split("", RAW); split("", AVARS); split("", RVARS)
   split("", TXT); split("", SOUT); split("", SIN); split("", INHD); split("", SCOPE)
-  split("", LR); split("", LD); split("", LC); split("", FCOUNT)
+  split("", LR); split("", LD); split("", LC); split("", FCOUNT); split("", PFX)
   NS = 0; CS = 0; BT = 0; FOUND_F = 0
 }
 function cur_scope() { return (CUR == "") ? "@global" : CUR }
@@ -343,6 +403,7 @@ function analyze(   i, raw, txt, code, nm, ind, no, nc, t) {
     } else if (code ~ ("^" IND "\\}")) { FNEND[CUR] = i; CUR = "" }
     t = hd_term(txt); if (t != "") { HD = t; HDQ = HD_QUOTED }
   }
+  mark_env_prefix()                          # needs the whole file cached; must precede the scan
   for (i = 1; i <= NL; i++) if (INHD[i] != 1 && INHD[i] != 3) scan_cached(i)
   build_adj(); resolve(); report(); reset_file()
 }
@@ -352,7 +413,10 @@ function scan_cached(i,   a, v, key, first, body, pipetxt, scope, txt, k, rl, cl
   k = ++FCOUNT[scope]
   if (txt ~ DESTR || txt ~ DESTR2) { DFN[scope] = 1; LD[scope, k] = 1 }
 
-  split("", a); assigns_in(SOUT[i], a); assigns_in(SIN[i], a)
+  split("", a); assigns_in(SOUT[i], a)
+  # ONLY the outer set is filtered — see mark_env_prefix. A `$( )` body's assignments are the class.
+  for (v in a) if (is_env_prefix(i, v)) delete a[v]
+  assigns_in(SIN[i], a)
   for (v in a) {
     key = scope SUBSEP v
     if (!(key in ASSIGN)) { ASSIGN[key] = 1; ASSIGNLN[key] = i; AVARS[scope] = AVARS[scope] " " v }
@@ -681,6 +745,52 @@ trap cleanup EXIT
 mint() { G="/tmp/cell"; }
 mint || true'
   ck shortcircuit 0 '`||` is not a pipe: no phantom pipeline finding' --shapes all
+
+  # GREEN: a COMMAND-PREFIX assignment writes the command's environment, never the caller's global.
+  # This is ship-land.sh:3680's shape reduced — the false red that skipped the whole post-land corpus.
+  mk envprefix 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { G="/tmp/cell" /usr/bin/true; }
+r="$(mint)"'
+  ck envprefix 0 'a command-PREFIX assignment is the command environment, not the caller global'
+
+  # GREEN: the same, spanning `\` continuations — the line-local test kept these, which is exactly
+  # how the real shape survived. The command word is on the THIRD line.
+  # The closing `}` sits at the OPENER's indentation on purpose: this fixture lives inside this very
+  # file, which the lint scans, and a function opened by a continuation line that never closes at its
+  # own indent swallows every later line into that scope (that is analyze()'s documented rule, and it
+  # made this file report a finding against its own `d`). A control must not perturb the corpus it
+  # is embedded in.
+  mk envprefixcont 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() {
+A="1" G="/tmp/cell" \
+  B="2" \
+  /usr/bin/env true
+}
+r="$(mint)"'
+  ck envprefixcont 0 'a prefix run spanning \ continuations is still a prefix'
+
+  # RED — THE TOO-WEAK HALF, and the reason the two above cannot be bought with a blanket skip: a
+  # REAL assignment on a line that ALSO runs a command must still be found. `;` ends the command
+  # before any word follows, so the run is not a prefix.
+  mk prefixthenreal 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { X="1" /usr/bin/true; G="/tmp/cell"; mkdir -p "$G"; }
+r="$(mint)"'
+  ck prefixthenreal 1 'a REAL assignment beside a prefix run is still reported'
+
+  # RED: a prefix on the SUBSTITUTION side is not exempted — only the outer set is filtered.
+  mk prefixinsub 'G=""
+cleanup() { rm -rf "$G"; }
+trap cleanup EXIT
+mint() { G="/tmp/cell"; }
+outer() { X="1" /usr/bin/true; mint; }
+r="$(outer)"'
+  ck prefixinsub 1 'the exemption does not leak into the call tree it enters'
 
   # A file with no trap at all is skipped by the population filter — and must stay clean, not error.
   mk notrap 'G=""
