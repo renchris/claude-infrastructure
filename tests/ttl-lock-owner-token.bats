@@ -84,6 +84,20 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ "$status" -eq 0 ] || { echo "a dead holder still blocked acquisition for its full TTL"; false; }
 }
 
+@test "5b: mailbox — _mbx_mtime reads a REAL mtime here (the stat-flag-order trap under test 3)" {
+  # Test 3 above is the behavioural half; this is the direct one, because the two failures look
+  # nothing alike. `stat -f %m` is BSD mtime and GNU --file-system: on Linux the old macOS-first
+  # idiom exited 0 printing an inode report, the digit guard read it as 0, and every freshness
+  # question in the lib answered "ancient" forever — a live holder's lock stolen on the first poll,
+  # a live watcher's heartbeat reported unarmed. Pin that the helper returns a plausible NOW, so a
+  # future "simplification" back to the wrong flag order is caught as itself, not as a lock bug.
+  local f="$CC_MAILBOX_DIR/mtime-probe" now mt
+  : > "$f"; now="$(date +%s)"; mt="$(_mbx_mtime "$f")"
+  [ "$mt" -gt 0 ] || { echo "_mbx_mtime returned '$mt' for a file that exists"; false; }
+  [ "$(( now - mt ))" -lt 60 ] || { echo "_mbx_mtime returned $mt, now is $now — not this file's mtime"; false; }
+  [ "$(_mbx_mtime "$CC_MAILBOX_DIR/does-not-exist")" = "0" ]
+}
+
 @test "5: mailbox — an untokened dir (pre-fix holder) is still released, never leaked" {
   mkdir -p "$MLD"                             # no owner file, as a pre-fix holder would leave
   _mbx_unlock "$U"
