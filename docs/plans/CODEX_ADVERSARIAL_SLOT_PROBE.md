@@ -1,6 +1,15 @@
 ---
-status: open
+status: complete
 ---
+
+<!-- CLOSED 2026-08-11 (W4), frontmatter corrected 2026-08-15. The status log below already read
+     "PROBE CLOSED — status: answered", but this frontmatter still said `open` — and it is the
+     machine-readable SSOT that scripts/find-plan.sh and every `plan-open` falsifier read. So the
+     plan kept minting an "advance CODEX ADVERSARIAL SLOT PROBE" backlog row four days after the
+     probe had answered its question. The verdict is a REJECT, and on a REJECT the encoding IS the
+     written rejection: model-config.yaml is deliberately untouched and roles.research_adversarial
+     stays claude-fable-5. Uncertified means unrouted. -->
+
 
 # CODEX ADVERSARIAL SLOT PROBE — certify (or reject) `gpt-5.6-sol` for `research_adversarial`
 
