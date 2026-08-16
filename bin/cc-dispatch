@@ -2217,12 +2217,61 @@ dispatch() { # <dry|run|decide>
         fi
         git -C "$wrepo" fetch origin -q 2>/dev/null || true
         wstate="$(wt_base_state "$wcwd" HEAD "$wbase")"
+        # A1 — THE REFUSAL WAS A LOOP, NOT A GUARD (docs/plans/BACKLOG_DRAIN_24_7.md §4 A1).
+        # The guard above is correct and the refusal is right; what followed it was not. `self_release`
+        # reopens the row, so the very next pass re-ranks it, re-claims it, re-probes the same
+        # never-rebased directory and refuses again — forever, because nothing in the cycle can change
+        # the tree. Measured over 24 h: 141 claims / 129 reopens / 73 done, with ee1ac85c6ff6 alone at
+        # 50 claims / 48 releases; fleet-wide 63% of 2,462 claims ended in a release. Every one of those
+        # cycles burned an admission slot that a fireable row could have had, so the cost is not the
+        # noise in the log — it is the work that never got dispatched behind it.
+        #
+        # TWO EXITS, AND THE SAFE ONE IS THE DEFAULT. warm_worktree already settled this policy one
+        # branch over (see its two sub-cases): a leftover carrying nothing is fast-forwarded, and a tree
+        # carrying work is never touched by an unattended dispatcher. This site now applies the same
+        # rule to the directory warm_worktree never sees:
+        #   · PRISTINE (clean tree AND no commits of its own) ⇒ nothing can be lost, so `merge --ff-only`
+        #     it onto the freshly-fetched base and re-probe. If it comes back fresh we fall through and
+        #     fire on THIS pass — that is the "retry once", and it costs the queue nothing.
+        #   · ANYTHING ELSE ⇒ the row is BLOCKED, not reopened. `blocked` is the operator-only state and
+        #     cc-dispatch excludes it from the wave by construction, so the row leaves the claim pool
+        #     instead of returning to it. That is the whole fix: the loop needs an exit that is not the
+        #     entrance.
+        # `--needs` carries the worktree AND the one command that clears it, because a blocked row whose
+        # remedy is not written down is just a quieter stall.
+        #
+        # FAIL TOWARD BLOCKING, NEVER TOWARD THE FF. Staged and untracked bytes count as work here: two
+        # of the three thrashing worktrees measured clean by `rev-list --count` and were holding real
+        # unlanded content anyway — ee1ac85c6ff6 carried 4 files absent from trunk entirely, staged and
+        # never committed (memory: landedness-over-commits-is-blind-to-staged-content). `status
+        # --porcelain` sees all three populations; a `rev-list` alone would have fast-forwarded over it.
         if [ "$wstate" = stale ]; then
-          echo "cc-dispatch: refusing to fire into $wcwd — its HEAD does not contain $wbase (pre-existing worktree, never re-based)" >&2
-          local wsr2; wsr2="$(self_release "$id" worktree-fail)"
-          FAILED=$((FAILED + 1))
-          idl failed "$id: pre-existing worktree $wcwd is behind $wbase — not fired (reopened${wsr2})"
-          continue
+          local wdirty wahead
+          wdirty="$(git -C "$wcwd" status --porcelain 2>/dev/null | head -1)"
+          wahead="$(git -C "$wcwd" rev-list --count "$wbase..HEAD" 2>/dev/null || echo unknown)"
+          if [ -z "$wdirty" ] && [ "$wahead" = 0 ] \
+             && git -C "$wcwd" merge -q --ff-only "$wbase" >/dev/null 2>&1 \
+             && [ "$(wt_base_state "$wcwd" HEAD "$wbase")" = fresh ]; then
+            echo "cc-dispatch: $wcwd was behind $wbase with nothing of its own — fast-forwarded, firing" >&2
+          else
+            echo "cc-dispatch: refusing to fire into $wcwd — its HEAD does not contain $wbase (pre-existing worktree, never re-based)" >&2
+            local wsr2 wnote wblocked
+            wsr2="$(self_release "$id" worktree-fail)"
+            wnote="pre-existing worktree $wcwd is behind $wbase and cannot be fast-forwarded"
+            [ -n "$wdirty" ] && wnote="$wnote (uncommitted/staged content)"
+            [ "$wahead" != 0 ] && wnote="$wnote (carries $wahead commit(s) of its own)"
+            # Blocked AFTER the release, never before: status folds last-event-wins, so this ordering
+            # clears the claim and still leaves the row `blocked`. If the block itself fails we are
+            # exactly at the incumbent behaviour — a reopened row — which is a thrash, but a thrash is
+            # strictly better than a row silently stranded as `claimed` with no owner.
+            wblocked=reopened
+            if [ -n "$backlog" ] && [ -x "$backlog" ] \
+               && "$backlog" block "$id" --needs "$wnote. Salvage or retire it, then unblock: inspect with \`git -C $wcwd status --porcelain && git -C $wcwd log $wbase..HEAD\`; if there is nothing to keep, \`git -C $wrepo worktree remove --force $wcwd\` — then \`cc-backlog unblock $id\`." >/dev/null 2>&1
+            then wblocked=blocked; fi
+            FAILED=$((FAILED + 1))
+            idl failed "$id: $wnote — not fired ($wblocked${wsr2})"
+            continue
+          fi
         fi
       fi
     fi

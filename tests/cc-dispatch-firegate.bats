@@ -52,10 +52,23 @@ case "\$1" in
         jq -cs --argjson n "\${STUB_LIVE:-0}" \
           '.[0] + [range(\$n) | {id:"c\(.)", project:"proj", status:"claimed", title:"held"}]' \
           "$C/all.json" ;;
-      *) cat "$C/items.json" ;;
+      # The default (\`--open\`) list EXCLUDES anything this run blocked, because the real cc-backlog
+      # does: \`block\` folds to status "blocked" and cc-dispatch's wave predicate is status=="open".
+      # Modelled here rather than asserted away, so a two-pass test can prove the A1 property that
+      # actually matters — the row does not come BACK — instead of only proving a record was written.
+      *) jq -c --slurpfile b "$C/blocked.json" '[ .[] | select((.id|tostring) as \$i | (\$b[0]|index(\$i))==null) ]' "$C/items.json" ;;
     esac ;;
   claim)  printf 'claim %s\n'  "\$2" >> "$C/backlog.log"; echo "\$2" ;;
   reopen) printf 'reopen %s\n' "\$2" >> "$C/backlog.log"; echo "\$2" ;;
+  # \`block\` is the A1 exit from the claim→release loop, so the stub must be able to RECORD it and to
+  # REFUSE it. Recording it is what lets a test tell "left the pool" from "went round again"; refusing
+  # it (STUB_BLOCK_RC) is what pins the fail-open half — a store that will not block must degrade to
+  # the incumbent reopen, never strand the row as \`claimed\` with no owner.
+  block)  printf 'block %s\n'  "\$2" >> "$C/backlog.log"
+          [ -n "\${STUB_BLOCK_RC:-}" ] && exit "\$STUB_BLOCK_RC"
+          jq -c --arg i "\$2" '. + [\$i] | unique' "$C/blocked.json" > "$C/blocked.tmp" \
+            && mv "$C/blocked.tmp" "$C/blocked.json"
+          echo "\$2" ;;
 esac
 exit 0
 EOF
@@ -86,6 +99,9 @@ EOF
          CC_DISPATCH_MAX_SPAWN=9 \
          CC_DISPATCH_SID="bats"
   : > "$C/items.json"; echo '[]' > "$C/items.json"; echo '[]' > "$C/all.json"
+  # NOT reset by fresh(): a block must SURVIVE into the next pass or the two-pass no-reclaim test
+  # would be measuring the harness rather than the fix.
+  echo '[]' > "$C/blocked.json"
 }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────────────────────────
@@ -347,24 +363,106 @@ advance_trunk() {
   mkdir -p "$C/wt"
   git -C "$C/repos/proj" worktree add -q "$C/wt/wt-pre" wt-pre
   advance_trunk "$C/repos/proj"
+  local stale; stale="$(git -C "$C/wt/wt-pre" rev-parse HEAD)"
 
   items '[{"id":"pre","project":"proj","status":"open","title":"a piece of work to be done"}]'
-  # the directory already exists, so warm_worktree is never called — this is a second, independent
-  # hole and needs its own guard.
+  # The directory already exists, so warm_worktree is never called — this is a second, independent
+  # hole and needs its own guard. THE GUARD IS PROVEN BY THE TREE MOVING, not by a refusal: A1 gave
+  # this site warm_worktree's own resolution for the case where nothing can be lost, so a clean
+  # worktree carrying nothing is fast-forwarded IN PLACE and the work fires on this same pass.
+  # (Before A1 this asserted zero spawns + a reopen; that refusal was correct about the tree and
+  # wrong about the exit — the row went straight back into the pool it had just been pulled from.)
+  fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
+  [ "$(git -C "$C/wt/wt-pre" rev-parse HEAD)" = "$(git -C "$C/repos/proj" rev-parse origin/main)" ] || false
+  [ "$(spawns)" -eq 1 ] || false
+  # …and it fired because it was made fresh, never because the check was skipped: no block, no reopen.
+  ! grep -q 'block pre'  "$C/backlog.log" || false
+  ! grep -q 'reopen pre' "$C/backlog.log" || false
+
+  # RED: the pristine tree fires into the stale pre-existing tree without looking at it — the tree
+  # never moves, which is exactly the difference this test exists to name.
+  git -C "$C/wt/wt-pre" reset -q --hard "$stale"
+  fresh; CC_DISPATCH_CEILING=9 "$PRISTINE" --once >/dev/null 2>&1
+  [ "$(git -C "$C/wt/wt-pre" rev-parse HEAD)" = "$stale" ] || false
+  [ "$(spawns)" -eq 1 ] || false
+}
+
+# ══ A1 — THE REFUSAL NEEDED AN EXIT (docs/plans/BACKLOG_DRAIN_24_7.md §4 A1) ══════════════════════
+# The M2 guard above refuses correctly and then `self_release`s, so the row returns to the pool, is
+# re-ranked, re-claimed, re-probed against the same unchanged directory and refused again. Nothing in
+# that cycle can make the tree fresh, so it is unbounded: 141 claims / 129 reopens in 24 h, one id at
+# 50 claims / 48 releases. These three tests pin the exit — BLOCKED, which cc-dispatch excludes from
+# the wave — and the safety rule that decides which rows may take the fast-forward instead.
+
+@test "A1: a pre-existing worktree CARRYING COMMITS is blocked, not reopened — and a second pass does not re-claim it" {
+  mk_repo "$C/repos/proj"
+  git -C "$C/repos/proj" branch "wt-own" origin/main
+  mkdir -p "$C/wt"
+  git -C "$C/repos/proj" worktree add -q "$C/wt/wt-own" wt-own
+  echo mine > "$C/wt/wt-own/mine"; git -C "$C/wt/wt-own" add mine
+  git -C "$C/wt/wt-own" -c user.email=t@t -c user.name=t commit -qm mine
+  local mine; mine="$(git -C "$C/wt/wt-own" rev-parse HEAD)"
+  advance_trunk "$C/repos/proj"
+
+  items '[{"id":"own","project":"proj","status":"open","title":"a piece of work to be done"}]'
+  fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
+  # not fired, and the work is untouched — an unattended dispatcher may not rebase or delete a tree
+  # it did not create.
+  [ "$(spawns)" -eq 0 ] || false
+  [ "$(git -C "$C/wt/wt-own" rev-parse HEAD)" = "$mine" ] || false
+  grep -q 'block own' "$C/backlog.log" || false
+  jq -rs '[.[]|select(.action=="failed")]|length' "$C/idl.jsonl" | grep -qx 1 || false
+
+  # THE PROPERTY THAT MATTERS: the next pass does not claim it again. A refusal that reopens is a
+  # loop; a refusal that blocks is an exit. Without this half the test would pass on the incumbent
+  # behaviour too, since that also spawns nothing on the first pass.
+  fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
+  ! grep -q 'claim own' "$C/backlog.log" || false
+  [ "$(spawns)" -eq 0 ] || false
+
+  # RED: the pristine tree never blocks anything — it reopens, which is the loop.
+  echo '[]' > "$C/blocked.json"
+  fresh; CC_DISPATCH_CEILING=9 "$PRISTINE" --once >/dev/null 2>&1
+  ! grep -q 'block own' "$C/backlog.log" || false
+}
+
+@test "A1: STAGED-only content blocks the row — a rev-list count alone would have fast-forwarded over it" {
+  mk_repo "$C/repos/proj"
+  git -C "$C/repos/proj" branch "wt-stg" origin/main
+  mkdir -p "$C/wt"
+  git -C "$C/repos/proj" worktree add -q "$C/wt/wt-stg" wt-stg
+  advance_trunk "$C/repos/proj"
+  # The exact shape measured on wt-ee1ac85c6ff6: ZERO commits of its own, so every commit-counting
+  # probe reads it as an empty leftover — while it holds four files that exist nowhere on trunk,
+  # staged and never committed (memory: landedness-over-commits-is-blind-to-staged-content).
+  echo novel > "$C/wt/wt-stg/novel"; git -C "$C/wt/wt-stg" add novel
+  [ "$(git -C "$C/wt/wt-stg" rev-list --count origin/main..HEAD)" -eq 0 ] || false
+
+  items '[{"id":"stg","project":"proj","status":"open","title":"a piece of work to be done"}]'
   fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
   [ "$(spawns)" -eq 0 ] || false
-  grep -q 'reopen pre' "$C/backlog.log" || false
+  grep -q 'block stg' "$C/backlog.log" || false
+  # the staged bytes are still there, and the tree was NOT fast-forwarded out from under them
+  git -C "$C/wt/wt-stg" diff --cached --name-only | grep -qx novel || false
+  [ "$(git -C "$C/wt/wt-stg" rev-parse HEAD)" != "$(git -C "$C/repos/proj" rev-parse origin/main)" ] || false
+}
 
-  # POSITIVE CONTROL: bring the same worktree up to the base and the same fixture DOES fire. Without
-  # this, "zero spawns" would also be satisfied by a harness that never spawns at all.
-  git -C "$C/wt/wt-pre" merge -q --ff-only origin/main
-  fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
-  [ "$(spawns)" -eq 1 ] || false
+@test "A1 fail-open: a store that REFUSES the block degrades to the incumbent reopen, never a stranded claim" {
+  mk_repo "$C/repos/proj"
+  git -C "$C/repos/proj" branch "wt-fo" origin/main
+  mkdir -p "$C/wt"
+  git -C "$C/repos/proj" worktree add -q "$C/wt/wt-fo" wt-fo
+  echo mine > "$C/wt/wt-fo/mine"; git -C "$C/wt/wt-fo" add mine
+  git -C "$C/wt/wt-fo" -c user.email=t@t -c user.name=t commit -qm mine
+  advance_trunk "$C/repos/proj"
 
-  # RED: the pristine tree fires into the stale pre-existing tree without looking at it.
-  git -C "$C/wt/wt-pre" reset -q --hard HEAD~1
-  fresh; CC_DISPATCH_CEILING=9 "$PRISTINE" --once >/dev/null 2>&1
-  [ "$(spawns)" -eq 1 ] || false
+  items '[{"id":"fo","project":"proj","status":"open","title":"a piece of work to be done"}]'
+  # A block that cannot be written is a thrash — the incumbent behaviour, and strictly better than a
+  # row left `claimed` with no owner and no session, which nothing but the reap sweep would ever free.
+  fresh; STUB_BLOCK_RC=1 CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>&1
+  [ "$(spawns)" -eq 0 ] || false
+  grep -q 'reopen fo' "$C/backlog.log" || false
+  jq -rs '[.[]|select(.action=="failed" and (.detail|test("reopened")))]|length' "$C/idl.jsonl" | grep -qx 1 || false
 }
 
 @test "freshness: three states, not two — an UNANSWERABLE base proceeds, and the kill switch restores the incumbent" {
