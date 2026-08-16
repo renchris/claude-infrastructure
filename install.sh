@@ -475,6 +475,28 @@ if $IS_GLOBAL; then
   # and the whole point of the registry is that a SKIP stays skipped for a recorded reason.
   echo "Provider registry → $CONFIG_DIR/providers.json"
   link_file "$REPO_DIR/providers.json" "$CONFIG_DIR/providers.json"
+
+  # MS365 / Microsoft Graph MCP server → every account's user-scope config.
+  # NOT a symlink like the three above, and NOT the knowledge-layer mirror: `mcpServers` lives in
+  # `.claude.json`, which is in the isolate-set of all four account dirs (lib/config-mirror.zsh)
+  # because it races between concurrent Claude Code processes. So it can only be an idempotent
+  # per-dir MERGE — and that merge has to re-run on every install, because a hand-copy is exactly
+  # how ms365 came to exist in 1 account dir of 4. Diagnosis: docs/plans/MS365_MCP_ALL_ACCOUNTS.md.
+  echo ""
+  echo "MS365 MCP server → all account config dirs"
+  if [[ ! -x "$REPO_DIR/scripts/ms365-mcp-wire.sh" ]]; then
+    echo "  ⚠ scripts/ms365-mcp-wire.sh missing or not executable"
+    warnings=$((warnings + 1))
+  elif $DRY_RUN; then
+    # Read-only preview: --check reports per-dir state and wires nothing. (`run` is not usable —
+    # it would echo the command but execute nothing, losing the preview's actual value, which is
+    # reporting what is currently unwired. Same reasoning as the kitty step below.)
+    echo "  [dry-run] would run scripts/ms365-mcp-wire.sh — current state:"
+    "$REPO_DIR/scripts/ms365-mcp-wire.sh" --check 2>&1 | sed 's/^/  /' || true
+  elif ! "$REPO_DIR/scripts/ms365-mcp-wire.sh"; then
+    echo "  ⚠ ms365 not fully wired — re-run: scripts/ms365-mcp-wire.sh --check"
+    warnings=$((warnings + 1))
+  fi
 fi
 
 # --- Scripts ---

@@ -88,6 +88,115 @@ teardown() {
   [ "$output" = "motion,motion-plus" ]
 }
 
+@test "an ALLOWLISTED user-scope stdio server survives the passthrough (the ms365 case)" {
+  # ms365 is user-scope stdio. Before the allowlist, `select(.value.command == null)` dropped it,
+  # so a session launched with --strict-mcp-config could never see it however correctly it was
+  # configured in .claude.json — the bug in docs/plans/MS365_MCP_ALL_ACCOUNTS.md § Status log.
+  cat > "$CFG/.claude.json" <<'JSON'
+{
+  "mcpServers": {
+    "motion":     {"type": "http", "url": "https://example.invalid/a"},
+    "ms365":      {"type": "stdio", "command": "/bin/echo", "args": []},
+    "some-stdio": {"command": "/bin/echo", "args": ["hi"]}
+  }
+}
+JSON
+  # shellcheck source=/dev/null
+  source "$LIB"
+  cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
+  pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config=}"
+  [ -f "$pass" ]
+  run jq -r '.mcpServers | keys | join(",")' "$pass"
+  # ms365 survives; the UNlisted stdio server does not — so this is an allowlist, not a blanket
+  # "stdio is fine now", and the http server is untouched.
+  [ "$output" = "motion,ms365" ]
+}
+
+@test "CONTROL: with an empty allowlist the stdio server is filtered out again" {
+  # The mutant that must fail. `CC_MCP_USERSCOPE_STDIO_ALLOW=` reproduces the pre-2026-08-15 filter
+  # exactly, pinning that the allowlist — and nothing else — is what lets ms365 through. Without
+  # this case, a test asserting only "ms365 survives" would stay green if someone deleted the stdio
+  # filter wholesale, which is the design this change deliberately rejected: a user-scope stdio
+  # server costs ~139 MB resident per session, so the default must stay "named servers only".
+  cat > "$CFG/.claude.json" <<'JSON'
+{
+  "mcpServers": {
+    "motion": {"type": "http", "url": "https://example.invalid/a"},
+    "ms365":  {"type": "stdio", "command": "/bin/echo", "args": []}
+  }
+}
+JSON
+  # shellcheck source=/dev/null
+  source "$LIB"
+  # Set-but-EMPTY, on its own line. The `VAR= cmd` prefix form reads as a typo to shellcheck
+  # (SC1007) and, for a shell FUNCTION rather than an external command, its persistence is
+  # shell-dependent — so state the intent plainly instead. The lib reads `${VAR-ms365}` with `-`,
+  # which distinguishes set-empty (allow nothing) from unset (the ms365 default).
+  # shellcheck disable=SC2034  # read by the SOURCED lib, which shellcheck cannot follow
+  CC_MCP_USERSCOPE_STDIO_ALLOW=""
+  cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
+  pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config=}"
+  [ -f "$pass" ]
+  run jq -r '.mcpServers | keys | join(",")' "$pass"
+  [ "$output" = "motion" ]
+}
+
+@test "the allowlist jq must not break the http passthrough (empty-passthrough regression)" {
+  # REGRESSION, caught by RUNNING the expression rather than reading it. Written as
+  # `($a | index(.key))` the pipe rebinds `.` to the ARRAY, so `.key` indexes an array with a
+  # string; jq dies "Cannot index array with string", the whole filter fails, `pass` stays empty,
+  # and the composer falls through to BARE --strict-mcp-config — which drops every server,
+  # including the http ones the passthrough exists to save. The symptom is therefore not "ms365 is
+  # missing", it is "motion is missing too", so assert the flag and the http servers together.
+  # shellcheck source=/dev/null
+  source "$LIB"
+  cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]] || false
+  pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config=}"
+  [ -f "$pass" ]
+  run jq -r '.mcpServers | length' "$pass"
+  [ "$output" -ge 2 ]
+}
+
+@test "ms365 is wired into every account config dir, and the wiring is idempotent" {
+  # The other half of the fix: the allowlist only matters if the server is actually IN each
+  # account's user-scope config. Runs against the fixtured $HOME, so it asserts the merge semantics
+  # — adds one key, preserves everything else — without touching the real account dirs.
+  WIRE="$REPO/scripts/ms365-mcp-wire.sh"
+  [ -x "$WIRE" ]
+
+  mkdir -p "$HOME/.claude" "$HOME/.claude-tertiary"
+  cat > "$HOME/.claude/accounts.json" <<'JSON'
+{"accounts":[{"name":"next","config_dir":"~/.claude-secondary","launcher":"claude"},
+             {"name":"next3","config_dir":"~/.claude-tertiary","launcher":"claude3"}]}
+JSON
+  # .claude-secondary already carries state that MUST survive the merge; .claude-tertiary is bare.
+  cat > "$HOME/.claude-secondary/.claude.json" <<'JSON'
+{"numStartups": 42, "mcpServers": {"motion": {"type": "http", "url": "https://example.invalid/a"}}}
+JSON
+  echo '{}' > "$HOME/.claude-tertiary/.claude.json"
+  echo '{}' > "$HOME/.claude/.claude.json"
+
+  run bash "$WIRE"
+  [ "$status" -eq 0 ]
+
+  # present in both account dirs…
+  run jq -r '.mcpServers.ms365.type' "$HOME/.claude-secondary/.claude.json"
+  [ "$output" = "stdio" ]
+  run jq -r '.mcpServers.ms365.type' "$HOME/.claude-tertiary/.claude.json"
+  [ "$output" = "stdio" ]
+  # …the pre-existing server and the unrelated per-account counter both survive (merge, not write)…
+  run jq -r '.mcpServers.motion.url' "$HOME/.claude-secondary/.claude.json"
+  [ "$output" = "https://example.invalid/a" ]
+  run jq -r '.numStartups' "$HOME/.claude-secondary/.claude.json"
+  [ "$output" = "42" ]
+
+  # …and a second run is a no-op reporting success, which is what makes it safe inside install.sh.
+  run bash "$WIRE" --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already correct"* ]] || false
+}
+
 @test "the passthrough uses --mcp-config=VALUE — the space form eats the prompt" {
   # REGRESSION, not styling. `--mcp-config` is variadic: `--mcp-config <path> "<prompt>"` consumes
   # the prompt as a second config path, and a real fire died on it with ENAMETOOLONG while every
