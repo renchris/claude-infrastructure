@@ -2104,3 +2104,127 @@ migration's links-first ordering is load-bearing. So the row was BLOCKED with th
 routed to the operator batch — the agent half is done, and only the C10 activation is left (the
 'operator CAN REVERT' rescope, `b09f54e9e080`, is unratified, so the operator still RUNS every
 activation).
+
+### 2026-08-15 — THE LOCAL DRAIN recycle #9: `master-account-facts` opened, two rows landed, and the row that read "forked" turned out to have one inode behind five paths
+
+**State: `master-account-facts` 16 open → 12 open** (11 blocked, unchanged in count — two were added
+here and two of the old ones are unrelated). Two rows LANDED AND CLOSED, two BLOCKED on named
+operator value-calls, and one re-measured hard enough to change what its remedy should be.
+
+#### The correction the next recycle needs FIRST: the brief's "RUN: none on every one" is FALSE
+
+Recycle #8's handoff said this effort's rows carry no falsifiers, so the row TITLE was the only
+discriminator. Measured: **six of the sixteen carry one** — `37a0b651bcce` (a `merge-base
+--is-ancestor` on a parked branch) and all five `advance <PLAN>` rows (`plan-phase-scan.sh <plan>
+--falsify`). Running them first is still the right instinct; the premise that there was nothing to
+run was simply wrong.
+
+🚨 **And reading one of them nearly produced a false finding.** All five plan falsifiers exit **1
+with completely empty output**, which reads exactly like a broken probe — that was the first
+conclusion, and it was wrong. `scripts/plan-phase-scan.sh` prints the affirmative token `FALSIFIED`
+**only on success** and says "this plan still holds work" by exiting non-zero and printing nothing.
+Empty output is the DESIGNED live answer, not a failure to run. The probe even documents why it is
+shaped that way: this script's second positional is a FORMAT with a silent default, so an older
+deployed copy handed `--falsify` would print a section dump and exit 0 — and under the falsifier
+contract exit 0 means "premise gone, refuse the claim". The affirmative token is what makes the
+answer unforgeable by an older binary. **Read the probe's contract before calling it broken**; the
+"ANDed clause one is false" warning has a twin, which is "silence is the answer".
+
+#### `d1068fdf9b6a` — LANDED `fb1ea5d43`. The row's own remedy would have broken an invariant
+
+`probe_provider()` measured **3.68s of a 3.7s `claude-accounts --json`** (6 providers, 8 child CLI
+processes), re-paid by cc-context, cc-value, cc-board, cc-wave-plan and cc-blockers on every
+invocation. Warm `--agents` is now **0.068s against 3.24s cold**, `--json` 1.5s against ~4.4s, and
+the rendered table is byte-identical cached vs `--fresh`.
+
+**The row asked for "a ~900s cache invalidated on providers.json mtime", and that literal remedy is
+wrong.** It reads naturally as caching `probe_provider()`, which cannot be done: `pinned_model` is
+read from the provider's OWN config precisely so that a config file governs and a remembered value
+does not, and `installed` must answer for the PATH as it is now. Both become remembered values
+under a whole-probe cache. This was not reasoned, it was RUN — the whole-probe mutant reds test 9,
+"the model pin is read from the provider's OWN config", which edits a provider's settings.json
+between two runs with the registry untouched. That test is now the memo's standing control.
+
+So only the CHILD PROCESSES are memoised. The key carries the argv, the resolved binary's
+realpath+mtime+size, and the registry's mtime+size — and the binary's identity is in there for a
+measured reason: **the weaker key the row literally proposed (registry alone) reds test 15 and
+nothing else**, reporting an upgraded provider at its old version. Failures cache at 60s rather than
+900s, because a provider whose CLI hangs costs its full timeout on every call, but a transient
+failure must not pin a wrong `auth_state` for a quarter of an hour.
+
+**The dead-assertion gate caught one of mine, and the lesson is narrower than the one #8 recorded.**
+Every negative was written as `if …; then echo >&2; return 1; fi` to avoid the mid-body `! cmd`
+errexit exemption — and one test still carried a bare mid-body `[[ "$output" != *"Traceback"* ]]`,
+**copied from a sibling test where it is the LAST line of the body and therefore load-bearing**.
+The defect is not the spelling, it is the MOVE: the same characters assert something in one position
+and nothing in another. Revived with `scripts/bats-assert-liveness-fix.py`, then proven live in both
+directions.
+
+#### `e9245cc24dff` — LANDED `bfe2b5daf` → `313d83050`. A guard that could only fire after the money moved
+
+The standing cost guard asks that extra-usage stay OFF on all four accounts. Everything built for it
+keyed on SPEND: the SSOT field `accounts.json:spend.usage_credits_authorized`, and `render_readout`'s
+¢/🚨 lines on `credits_used > 0`. Spend is the right BREACH signal — an account read
+`credits_on=false` with $176.91 already gone — but the earliest a spend-keyed line can fire is after
+the money is gone.
+
+**Measured, not assumed:** `render_readout` with `credits_on=True` and zero spend emitted nothing
+about the toggle at all, and still routed the desk to that account. `render_table` has surfaced it
+all along, pinned with a positive control. **Two renderers, and the silent one was the
+operator-facing surface.** Fixed with a distinct `⚠` marker (never `¢`, so the existing "no ¢ at
+zero spend" assertion needed no edit) as an `elif`, so a spending account gets the louder line and
+never both. Fails safe on absent config: the fixture cfg has no `spend` block at all, and a missing
+standing answer reads as unauthorized. It cannot fire today — all four accounts read
+`credits_on=False`, `credits_used=0.0` — which is the polarity you want.
+
+#### `3e2358f03e23` — HALF REFUTED, and the refuted half is the one that made it urgent
+
+The row: "19 skills live in `~/.claude/skills` with NO tracked source — untracked, unlandable, and
+**forked across config dirs** … REAL FILES, duplicated independently in `~/.claude` and
+`~/.claude-secondary` with nothing keeping them in sync — so an edit to one silently forks the
+other."
+
+- **The untracked half HOLDS, with drift: 19 → 18.** `cc-version-audit` has since been tracked.
+- **The FORK half is REFUTED.** Every other config root's `skills/` is a **symlink to
+  `~/.claude/skills`** — `.claude-next`, `.claude-secondary`, `.claude-tertiary`, `.claude-quaternary`
+  all of them. `SKILL.md` reaches **inode 362553914 through every path**. There is ONE copy on disk,
+  so an edit cannot fork what does not exist twice, and `diff -rq` reports all 18 identical for the
+  trivial reason that they are the same file. *A harm claim about duplication has to be measured on
+  inodes, not on paths.*
+
+The row had **no falsifier**; one is now attached and controlled in both directions (exit 0 only when
+every live skill is either tracked on origin/main or declares itself local-only; it names the 18
+today, and a fixture with a `local-only` declaration flips it to 0).
+
+🚨 **A trap for whoever picks this up: landing the sources WITHOUT converging the live layer would
+CREATE the fork this row wrongly claimed.** `install.sh:598-608` already does the right thing — for
+each skill name present in the repo it makes the live dir real and per-file symlinks into the
+checkout, leaving unknown skills untouched — but until that runs, a tracked copy plus an untracked
+live copy is two files where there is currently one. So the tracking and the symlink conversion are
+ONE operation, not two. The remaining work is 18 judgment calls (**768 KB total**, dominated by
+`react-best-practices` 296 KB/59 files, `pyramid-principle-full` 116 KB/11, `outlook-cleanup` and
+`frontend-design-vue` 84 KB each), and the row itself allows "declare local-only IN the skill" as a
+valid disposition — which is the right answer for the vendor corpora and for
+`pyramid-principle-full`, a distillation of a copyrighted book.
+
+#### Two rows BLOCKED on operator value-calls that the rows themselves already named
+
+- **`f3e662d4e2a8`** — the target concurrent-session count is a SUBSCRIPTION question, not a compute
+  one: cloud is free but shares the same rate-limit pool, so the ceiling is accounts × limits. The
+  answer is how many Max subscriptions the operator authorizes holding. And upstream it is not even
+  measurable right now: `CONCURRENCY_PROGRAM.md` § S5-CEILING records the cloud create as intermittent
+  (1 of 4 in a 15-minute window, three falling back to bundle mode), so a ramp would measure
+  flakiness rather than a limit.
+- **`e09a075539f5`** — may `cc-url-open` hold a PERSISTENT CDP connection to Dia? That is the fix for
+  the consent-dialog fallback, and it is exactly what the dia-agent skill's no-daemonization rule
+  forbids. A security-envelope tradeoff; the current fallback is safe, so this is reliability only.
+
+#### Where the effort stands
+
+`master-account-facts` **12 open / 11 blocked**. Of the 12 open, **five are `advance <PLAN>`
+pointer rows** whose falsifiers all correctly report their plans still hold work — those are whole
+plans, not rows, and each wants its own dispatched session rather than an inline pass. One
+(`b22e519e06cb`) is the W4 wave roster. The genuinely row-shaped remainder is `3e2358f03e23`
+(triage above), `37a0b651bcce` (the parked `fix/accounts-eval-bin-resolver` branch, which exists at
+`1a2c536ac`, is on NO remote, and is not an ancestor of origin/main), `1d20ff5ee344`,
+`f272b30e66f5`, `66be078a3f50` and `492b95cbac72`.
