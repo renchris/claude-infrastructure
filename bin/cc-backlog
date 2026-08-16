@@ -3297,6 +3297,7 @@ cmd_venue() {
 #
 #   cc-backlog validated <id> --verdict <v> [--sha <sha>]     one row
 #   cc-backlog validated --batch [--sha <sha>]  < JSONL       the whole population, one rewrite
+#   cc-backlog validated --batch --merge …      < JSONL       a SHARD of a pass, merged over the last
 #
 # THE PROBLEM THIS EXISTS FOR. `run_falsifier` had exactly ONE call site — the claim path — so a row
 # nobody ever tried to claim had never had its probe executed, and 205 of 327 live rows were in that
@@ -3321,12 +3322,31 @@ cmd_venue() {
 # would make the stamp file unwritable exactly on the busy days. Dropping silently would be worse —
 # a shrinking population reads as a falling never-validated count, which is this wave's own headline
 # number moving for the wrong reason — so the drop is reported on stderr every time it is non-zero.
+#
+# --merge IS THE SHARD FORM, and it exists because the snapshot rule above stops being protective
+# the moment the producer stops being whole-store. `cc-premise sweep --limit N` probes N capable rows
+# per pass and defers the rest (backlog d23f3a444984, filed because 141 probes cost 265.81 s against
+# a 3.30 s fold). Under snapshot semantics each shard would ERASE every stamp the other shards wrote,
+# so `never_validated` would snap back to the whole store on every pass — the identical false-
+# staleness reading the snapshot rule was written to prevent, reached from the other side. Merge
+# keeps each row's own last measurement, which is what the field has always meant: the stamp is a
+# PER-ROW fact, and only the pass that happened to write it whole ever made it look like a pass fact.
+#
+# THE PRUNE IS PART OF THE MERGE. Carried-over rows are filtered through the live fold, so a row
+# that has closed leaves the file instead of accumulating in it forever — the one property the
+# rewrite got for free and a naive merge would lose.
+#
+# ⚠️ UNDER --merge, THE FILE-LEVEL `pass_ts`/`pass_sha` DESCRIBE THE LAST SHARD, NOT EVERY ROW. They
+# have no readers today (`freshness` ages each row off its OWN `.ts`/`.sha`, which is what makes the
+# merge honest), and they must not acquire one that reads them as a whole-store measurement — that
+# would restate the false-freshness bug at the file level after the per-row fix removed it.
 cmd_validated() {
-  local id="" verdict="" sha="" batch=0
+  local id="" verdict="" sha="" batch=0 merge=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --batch)   batch=1 ;;
+      --merge)   merge=1 ;;
       --verdict) verdict="${1:-}"; [ $# -gt 0 ] && shift ;;
       --sha)     sha="${1:-}";     [ $# -gt 0 ] && shift ;;
       -*) printf 'cc-backlog validated: unknown arg %s\n' "$key" >&2; return 2 ;;
@@ -3341,6 +3361,12 @@ cmd_validated() {
   if [ "$batch" -eq 1 ] && [ -n "$id" ]; then
     printf 'cc-backlog validated: --batch takes no <id> (ids come from stdin)\n' >&2; return 2
   fi
+  # The single-row form is ALREADY a merge, so `--merge` there is not a no-op to wave through — it
+  # is a caller who believes they are batching. Refuse rather than silently do something adjacent.
+  if [ "$merge" -eq 1 ] && [ "$batch" -eq 0 ]; then
+    printf 'cc-backlog validated: --merge applies to --batch only (the single-row form always merges)\n' >&2
+    return 2
+  fi
   command -v jq >/dev/null 2>&1 || {
     printf 'cc-backlog validated: jq missing — cannot record (nothing written)\n' >&2; return 2; }
   ensure_file
@@ -3354,9 +3380,18 @@ cmd_validated() {
     printf 'cc-backlog validated: could not create a temp file beside %s\n' "$VALIDATED" >&2; return 2; }
 
   if [ "$batch" -eq 1 ]; then
-    local known kept
-    known="$(fold 2>/dev/null | jq -c 'map(.id)' 2>/dev/null)"
+    local known kept live
+    # ONE fold, TWO populations. `known` is every id the store has ever held and gates the BATCH,
+    # unchanged: a row that closed while the producer was sweeping must still be recordable, which
+    # is why this was never narrowed to the live set. `live` is the non-done ids and gates only the
+    # rows a `--merge` CARRIES FORWARD — the stamp is read exclusively about live rows, so carrying a
+    # closed row's stamp would grow the file forever with entries nothing can consult, and it is the
+    # one property the whole-file rewrite got for free.
+    local _f; _f="$(fold 2>/dev/null)"
+    known="$(printf '%s' "$_f" | jq -c 'map(.id)' 2>/dev/null)"
+    live="$( printf '%s' "$_f" | jq -c '[.[] | select(.status != "done") | .id]' 2>/dev/null)"
     [ -n "$known" ] || known='[]'
+    [ -n "$live" ]  || live='[]'
     # ONE jq pass: slurp the batch, drop ids the fold does not know, index by id. `--slurpfile` is
     # not used for the batch itself because it arrives on stdin, which is where a producer streams it.
     if ! jq -sc --argjson known "$known" --arg ts "$ts" --arg sha "$sha" '
@@ -3381,9 +3416,48 @@ cmd_validated() {
       printf '  An empty snapshot cannot be told apart from a store nothing has ever validated.\n' >&2
       return 3
     fi
+    # THE MERGE IS A SECOND, SEPARABLE STEP over the snapshot just built — deliberately, so the
+    # default path above stays byte-for-byte what it was and the empty-batch refusal still fires on
+    # the SHARD rather than on the merged total (a shard that matched nothing must leave the
+    # standing stamps alone, exactly as a whole pass that matched nothing does).
+    local total="$kept"
+    if [ "$merge" -eq 1 ]; then
+      local prior tmp2
+      prior='{}'
+      if [ -s "$VALIDATED" ]; then
+        # UNREADABLE ⇒ REFUSE, never fall back to an empty prior. Treating a corrupt stamp file as
+        # "no prior stamps" would let one bad read quietly discard every other shard's measurement
+        # and report the store as never-validated — the exact catastrophe the empty-batch refusal
+        # above exists for, with a different cause. The single-row form refuses for this reason too.
+        if ! prior="$(jq -c '(.rows // {})' "$VALIDATED" 2>/dev/null)" || [ -z "$prior" ]; then
+          rm -f "$tmp"
+          printf 'cc-backlog validated: %s is not readable JSON — NOTHING written (--merge needs the standing snapshot)\n' \
+            "$VALIDATED" >&2
+          return 2
+        fi
+      fi
+      tmp2="$(mktemp "${VALIDATED}.XXXXXX")" || { rm -f "$tmp"; return 2; }
+      # `$carried + .rows` — the RIGHT operand wins in jq, so this pass's fresh measurement always
+      # overwrites the carried one for a row it just probed, and never the other way round.
+      if ! jq -c --argjson prior "$prior" --argjson live "$live" '
+             ($live | map({(.): true}) | add // {}) as $k
+             | .rows = (($prior | with_entries(select($k[.key] // false))) + .rows)' \
+             "$tmp" > "$tmp2" 2>/dev/null; then
+        rm -f "$tmp" "$tmp2"
+        printf 'cc-backlog validated: could not merge the shard into %s — NOTHING written\n' "$VALIDATED" >&2
+        return 2
+      fi
+      total="$(jq -r '.rows | length' "$tmp2" 2>/dev/null || echo "$kept")"
+      mv -f "$tmp2" "$tmp" || { rm -f "$tmp" "$tmp2"; return 2; }
+    fi
     mv -f "$tmp" "$VALIDATED" || { rm -f "$tmp"; return 2; }
-    printf 'cc-backlog validated: recorded %s row(s) at %s%s\n' \
-      "$kept" "$ts" "${sha:+ against ${sha}}" >&2
+    if [ "$merge" -eq 1 ]; then
+      printf 'cc-backlog validated: merged %s row(s) at %s%s — %s row(s) stamped in total\n' \
+        "$kept" "$ts" "${sha:+ against ${sha}}" "$total" >&2
+    else
+      printf 'cc-backlog validated: recorded %s row(s) at %s%s\n' \
+        "$kept" "$ts" "${sha:+ against ${sha}}" >&2
+    fi
     return 0
   fi
 

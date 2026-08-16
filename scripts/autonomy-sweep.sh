@@ -630,6 +630,7 @@ if [ -x "$_grouping" ]; then _bounded bash "$_grouping" --file >/dev/null 2>&1; 
 # 5 minutes is a self-inflicted load spiral. Claim-then-run means a broken pass costs one interval,
 # not the box.
 _prem_rc="skipped"; _prem_note="not-due"; _prem_closed=0; _prem_recorded=0
+_prem_deferred=0; _prem_pending=0
 _premise="$(cd "$_SWEEP_DIR/.." 2>/dev/null && pwd)/bin/cc-premise"
 _prem_stamp="${CC_PREMISE_PASS_STAMP:-$HOME/.claude/autonomy/premise-pass.stamp}"
 _prem_every="${CC_PREMISE_PASS_EVERY_S:-21600}"
@@ -661,26 +662,54 @@ if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
     # at utility — so it is a real ceiling against a hung probe (the pathological tail is still
     # 141 x 20 s = ~47 min above it) and not a fixed cost the pass pays every time.
     #
-    # THE DURABLE FIX IS SHARDING, AND IT IS FILED, NOT DONE HERE. Because the fixed overhead is only
-    # 3.3 s, a `--limit N` + cursor arm would genuinely cap per-run cost and stop this bound rotting
-    # again on the next 2.5x. It is not in this commit because the deferred rows must NOT fold into
-    # `unprobed` — that field is the coverage ratchet's own input, and inflating it would file a
-    # coverage-regression row every pass, i.e. a half-built shard is worse than none (memory:
-    # span-must-equal-subject). Re-size until then, and re-measure rather than trusting this number:
-    # it has a four-day half-life (memory: published-figure-decays-with-its-source).
+    # THE DURABLE FIX IS SHARDING, AND IT HAS NOW LANDED (backlog d23f3a444984) — see `--limit`
+    # below. Because the fixed overhead is only 3.3 s, capping the number of PROBES per pass caps
+    # per-run cost outright, so this bound stops needing a re-measurement every time the store grows.
+    # The thing that had to be got right first, and the reason the arm was filed rather than written
+    # inline here: deferred rows must NOT fold into `unprobed`, which is the coverage ratchet's own
+    # input — inflating it would file a coverage-regression row every pass, out of an alarm whose
+    # subject never moved (memory: span-must-equal-subject). `sweep` now reports `deferred` as a
+    # sibling of `unprobed`, and `--record` merges its shard instead of replacing the snapshot.
+    # Re-measure rather than trusting the number above regardless: it has a four-day half-life
+    # (memory: published-figure-decays-with-its-source).
     #
     # --record ALWAYS; --close-falsified CAPPED AT 5. A falsified row refuses every claim and nothing
     # closes it, so it is permanently live and permanently unfireable — 20 rows are in that state
     # today. The cap is what keeps a probe-corrupting tree change from emptying the store in one
     # pass, and cc-premise re-asks each row immediately before it closes it (see _close_falsified).
+    #
+    # --limit 150 IS DELIBERATELY ABOVE TODAY'S POPULATION (141 probe-capable rows on 2026-08-16),
+    # so this commit changes NOTHING about today's pass — same rows, same cost, same currency
+    # cadence — and starts binding the moment the store grows past it. That is the whole point: the
+    # acute problem (rc 124 against a 420 s bound) was already fixed by re-sizing the bound to
+    # 1500 s; the CHRONIC one is that a 2.5x-per-four-days probe count reaches 1500 s again in about
+    # a week and every re-size buys one more week. A cap of 150 pins per-pass cost at ~285 s
+    # permanently, and the growth lands on CURRENCY CADENCE instead — a full cycle stretching from
+    # one pass (6 h) to two (12 h) to three (18 h) — which degrades gracefully and visibly
+    # (`shard_pending` in the beat) rather than by killing the pass outright at the bound.
+    #
+    # RAISING THIS IS NOT FREE AND LOWERING IT IS NOT SAFE-BY-DEFAULT. Above ~700 the 1500 s bound
+    # binds again; below the population the cycle lengthens, and a cycle longer than the interval
+    # between the tree changes a probe answers about makes the stamp report currency it does not
+    # have. Re-measure the per-probe cost before moving it in either direction.
     _prem_out="$(CC_SWEEP_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-1500}" \
                  _bounded python3 "$_premise" sweep --json --record \
+                   --limit "${CC_PREMISE_PASS_LIMIT:-150}" \
                    --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}" 2>/dev/null)"; _prem_rc=$?
     _prem_recorded="$(printf '%s' "$_prem_out" | jq -r '.validated_recorded // 0' 2>/dev/null)"
     _prem_closed="$(  printf '%s' "$_prem_out" | jq -r '.closed_falsified   // 0' 2>/dev/null)"
     _prem_note="$(    printf '%s' "$_prem_out" | jq -r '.validated_note     // "unparsed"' 2>/dev/null)"
+    # THE SHARD'S TWO NUMBERS, journalled beside the pass's own. `deferred` is what the limit held
+    # back and `shard_pending` is what the CYCLE still owes after this pass — read together they say
+    # whether currency is keeping up, which is the axis the cap trades cost against. A pass reporting
+    # a pending count that never reaches 0 is a cycle longer than the store's own churn, and that is
+    # the reading that should move CC_PREMISE_PASS_LIMIT, not the wall-clock.
+    _prem_deferred="$(printf '%s' "$_prem_out" | jq -r '.deferred       // 0' 2>/dev/null)"
+    _prem_pending="$( printf '%s' "$_prem_out" | jq -r '.shard_pending  // 0' 2>/dev/null)"
     case "${_prem_recorded:-}" in ''|*[!0-9]*) _prem_recorded=0 ;; esac
     case "${_prem_closed:-}"   in ''|*[!0-9]*) _prem_closed=0   ;; esac
+    case "${_prem_deferred:-}" in ''|*[!0-9]*) _prem_deferred=0 ;; esac
+    case "${_prem_pending:-}"  in ''|*[!0-9]*) _prem_pending=0  ;; esac
     [ -n "$_prem_note" ] || _prem_note="unparsed"
     # rc 124 HERE MEANS THE BOUND WAS WRONG, and it is journalled as its own note rather than folded
     # into "the pass failed" — that collapse is exactly what hid the fold's unreachable criterion for
@@ -736,13 +765,15 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
   --arg fa "$_fold_applied" --arg fw "$_fold_written" --arg g "$_grp_rc" \
   --arg pr "$_prem_rc" --arg pn "$_prem_note" --arg pv "$_prem_recorded" \
-  --arg pc "$_prem_closed" --arg rf "$_rat_filed" \
+  --arg pc "$_prem_closed" --arg pd "$_prem_deferred" --arg pp "$_prem_pending" \
+  --arg rf "$_rat_filed" \
   '{consolidation_trigger_rc:$t, ratchet_rc:$r, ratchet_filed:$rf,
     fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
     fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
     premise_pass_rc:$pr, premise_pass_note:$pn,
     premise_rows_validated:($pv|tonumber), premise_rows_closed:($pc|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
+    premise_rows_deferred:($pd|tonumber), premise_shard_pending:($pp|tonumber),
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
