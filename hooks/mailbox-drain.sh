@@ -276,13 +276,33 @@ _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-144
 # background Bash makes CC skip /goal evaluation at every Stop, silently. A goal-driven session is
 # not deaf unarmed either — an unmet evaluation blocks the stop, so the session keeps taking turns
 # and this very hook drains its mail at each boundary. So: warn AGAINST arming instead of for it.
+#
+# ── FLIPPED FROM "DO NOT ARM" TO "ARM THIS ONE" (2026-08-16, goal-safe-2way-comms §4 C7) ──────────
+# The 08-10 text is right about the shape and incomplete about the STATE. It closed the starvation
+# pole and left the session in the other one: a lead whose goal's truth lives in its peers' progress
+# stays bare, blocks every stop, and re-judges an unchanged world — measured at 90 unmet evaluations
+# in 76 minutes, one evaluator call and one forced turn every ~51 s, all carrying no information
+# (82% of met goals are met on evaluation #1). Neither pole is idle, and the model cannot invent the
+# third mode from a prohibition. `--idle-scoped` IS the third mode, and this hook is one of the
+# three places the model is holding the question, so it is where the form gets taught.
+#
+# WITH THE SID, ALWAYS. The mode's exit condition is this session's turn beat, so an arm that cannot
+# name its own sid is refused at the tool (cc-await-ping exit 6) — a nag that instructed the
+# unqualified form would be teaching a command that fails. This hook is one of the few surfaces that
+# holds both the goal state and the session id at once; where the id is missing (the pane-keyed
+# degrade at :101) it says so rather than emitting a form it knows to be incomplete.
 _goal_cond=""
 if command -v goal_live_condition >/dev/null 2>&1; then
   _goal_cond="$(goal_live_condition "$own_tp" 2>/dev/null)" || _goal_cond=""
 fi
 if [ -n "$_goal_cond" ]; then
+  if [ -n "$own_sid" ]; then
+    _idlecmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid $own_sid"
+  else
+    _idlecmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid <this session's id>"
+  fi
   [ "$_watched" = 1 ] || nudge="
-(correct here — do NOT arm one: a /goal is LIVE, and Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, so a parked cc-await-ping would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces.)"
+(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
 else
   [ "$_watched" = 1 ] || nudge="
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"

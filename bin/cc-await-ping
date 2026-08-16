@@ -15,6 +15,13 @@
 #                   EVERY poll cycle — follows a recycle that re-points the role file.
 #                   On a mid-wait switch the new mailbox baselines at 0 (never miss the
 #                   ping; a rare replay-wake is benign). Mutually exclusive with <uuid>.
+#   --idle-scoped   THE ONE SHAPE THAT IS SAFE UNDER A LIVE /goal (see § IDLE-SCOPED below):
+#                   additionally terminates on any NEW TURN of its own session, so the
+#                   deferral it creates spans exactly the idle window. Defaults --timeout
+#                   3600 and --interval 5 (both still overridable).
+#   --sid <id>      this session's Claude session id — the key of its turn-boundary beat
+#                   (~/.claude/cc-beats/<sid>.json). Required by --idle-scoped in practice;
+#                   omitted, the mode resolves it by pane and REFUSES if it cannot.
 #   --timeout <s>   give up after S seconds (default 1800; exit 2)
 #   --interval <s>  poll cadence in seconds (default 15)
 #   -h, --help
@@ -33,6 +40,43 @@
 #           indistinguishable from a clean take.
 #       5 = ORPHANED — the session that armed this watcher is provably gone. Exits WITHOUT consuming,
 #           leaving the mail unacked (see the owner guard below for why that is the whole point).
+#       6 = REFUSED TO ARM (--idle-scoped only) — a precondition of the safe shape does not hold, so
+#           NOTHING was parked and no deferral was created. `verdict=refused reason=<token>` on
+#           stderr names which one and what to do instead. Refusal is the SAFE direction here: the
+#           mode's whole licence to park under a live /goal is that it self-cancels, so a mode that
+#           cannot prove it will self-cancel must not park at all.
+#
+# ── § IDLE-SCOPED — why this mode exists ──────────────────────────────────────────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §§3-4. A session has two idle modes and needs a
+# third. With a background task parked, CC defers /goal evaluation indefinitely (the STARVATION pole:
+# measured 47 of 84 goal sessions never evaluated once); with the registry quiet, an unmet goal blocks
+# every stop until the cap (the SPIN pole: one session burned 90 unmet evaluations in 76 minutes
+# re-judging a world in which nothing had changed). Neither is idle.
+#
+# The missing primitive is an awaiter whose deferral is IDLE-SCOPED — it dies on peer mail AND on any
+# new turn of its own session. Then CC's deferral (which is correct: A2) spans exactly the window in
+# which nothing has changed, and the goal is judged ONCE PER NEW-INFORMATION EVENT rather than 90
+# times while waiting or 0 times forever. Measured economics say that is where all the verdict value
+# lives: 82% of met goals were met on evaluation #1, and the met rate falls to 27% at ≥10.
+#
+# The mode is therefore two exit conditions and a fail-closed arm gate:
+#   C1 exit-on-mail   unchanged — the wake half of 2-way comms.
+#   C2 exit-on-turn   a UserPromptSubmit-kind beat newer than the baseline taken at arm ⇒ the session
+#                     was woken by something else, so this awaiter's job is over: exit 0 SILENTLY
+#                     (verdict=stood-down), leaving the next natural Stop registry-quiet.
+#   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
+#   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
+#                     arming would defer the judgment of state you ALREADY hold.
+#   C5 bounded        --timeout defaults to 3600 here (not 14400): the timeout exit is itself a task
+#                     completion, so it is the "re-look at the world" floor and the in-session
+#                     deadline check for a peer that will never ping.
+# The arm gate additionally refuses when the beat oracle C2 depends on cannot be read (unresolvable
+# sid, absent or stale beat file, no mailbox lib). That refusal is the mode's keystone, not a
+# nicety: an idle-scoped watcher that cannot self-cancel IS the starvation pole, armed deliberately
+# and blessed by a flag.
+#
+# Env overrides (tests): CC_BEAT_DIR · CC_AWAIT_BEAT_FRESH_S (arm-time beat staleness bound, default
+# 900s) — plus the CC_MAILBOX_DIR / CC_ROLES_DIR / CC_COMMS_ALARM_DIR / CC_REGISTRY_DIR seams below.
 #
 # CODES THE HARNESS SYNTHESIZES — NOT OURS, AND NOT 128+signal. If you see this watcher reported as
 # `failed with exit code 143` or `144`, it never reached any exit above; it was SIGTERMed, and the
@@ -54,22 +98,42 @@ TIMEOUT=1800
 INTERVAL=15
 UUID=""
 ROLE=""
+IDLE_SCOPED=0
+SID=""
+_TIMEOUT_SET=0
+_INTERVAL_SET=0
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^# Watches EVERY key/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --role)     ROLE="${2:?--role needs a value}"; shift 2 ;;
-    --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
-    --interval) INTERVAL="${2:?--interval needs a value}"; shift 2 ;;
-    -h|--help)  usage; exit 0 ;;
-    --*)        echo "cc-await-ping: unknown option '$1'" >&2; usage >&2; exit 2 ;;
-    *)          if [ -z "$UUID" ]; then UUID="$1"; shift; else echo "cc-await-ping: too many arguments" >&2; exit 2; fi ;;
+    --role)         ROLE="${2:?--role needs a value}"; shift 2 ;;
+    --timeout)      TIMEOUT="${2:?--timeout needs a value}"; _TIMEOUT_SET=1; shift 2 ;;
+    --interval)     INTERVAL="${2:?--interval needs a value}"; _INTERVAL_SET=1; shift 2 ;;
+    --idle-scoped)  IDLE_SCOPED=1; shift ;;
+    --sid)          SID="${2:?--sid needs a value}"; shift 2 ;;
+    -h|--help)      usage; exit 0 ;;
+    --*)            echo "cc-await-ping: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+    *)              if [ -z "$UUID" ]; then UUID="$1"; shift; else echo "cc-await-ping: too many arguments" >&2; exit 2; fi ;;
   esac
 done
 
 if [ -n "$ROLE" ] && [ -n "$UUID" ]; then
   echo "cc-await-ping: --role and <uuid> are mutually exclusive" >&2; exit 2
+fi
+
+# C5: the mode's own defaults, applied ONLY where the caller did not state one. 3600 rather than the
+# 14400 the bare form is nagged with, because here the timeout is a FEATURE — its exit is a task
+# completion, i.e. a periodic "re-look at the world" and the in-session deadline check for a peer
+# that will never ping. 5s rather than 15s because the added poll is one stat of a small beat file,
+# and the interval is what bounds the known race (a wake turn that ends before the next poll costs
+# exactly one bounce turn, never a periodic cost).
+if [ "$IDLE_SCOPED" = 1 ]; then
+  [ "$_TIMEOUT_SET" = 1 ]  || TIMEOUT="${CC_AWAIT_IDLE_TIMEOUT_S:-3600}"
+  [ "$_INTERVAL_SET" = 1 ] || INTERVAL="${CC_AWAIT_IDLE_INTERVAL_S:-5}"
+fi
+if [ "$IDLE_SCOPED" = 0 ] && [ -n "$SID" ]; then
+  echo "cc-await-ping: --sid is only meaningful with --idle-scoped (the beat oracle is that mode's exit condition)" >&2; exit 2
 fi
 
 resolve_uuid() {
@@ -128,7 +192,11 @@ done
 MBOX="$MAILBOX_DIR/$CUR_UUID.md"
 _lc() { if [ -f "$MBOX" ]; then grep -c '' "$MBOX" 2>/dev/null; else echo 0; fi; }   # grep -c '' — matches the lib (F1)
 baseline="$(_lc)"
-echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'private cursor, seeded from .seen' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
+_banner="cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'private cursor, seeded from .seen' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)"
+# Held back in idle-scoped mode until the arm gate has passed: announcing a watch that is then
+# REFUSED tells its reader the opposite of what happened, and this stderr is the one stream the
+# harness's task notification carries.
+[ "$IDLE_SCOPED" = 1 ] || echo "$_banner" >&2
 
 # Wake-path HEARTBEAT (critique F5): touch <uuid>.watching each poll so cc-notify/cc-announce can tell a
 # live session that WILL be woken (a fresh watcher heartbeat) from a live-but-idle one that only drains on
@@ -185,7 +253,14 @@ _claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this
     p="${c##*.}"
     case "$p" in ''|*[!0-9]*) continue ;; esac
     [ "$p" = "$$" ] && continue                   # my own claim proves nothing about a survivor
-    mt="$(stat -f %m "$c" 2>/dev/null || stat -c %Y "$c" 2>/dev/null || echo 0)"
+    # GNU FIRST, then BSD — the reverse of the idiom used elsewhere in this repo, because that order
+    # is silently WRONG on GNU rather than merely unportable: `stat -f %m <file>` on coreutils reads
+    # `-f` as --file-system and `%m` as a FILE, so it prints a filesystem block to stdout and exits
+    # 1. The `||` fallback then runs and APPENDS the epoch to that block, so the substitution yields
+    # multi-line garbage, the `*[!0-9]*` guard below clamps it to 0, and every claim reads STALE —
+    # i.e. C3 would refuse nothing at all. `stat -c` is an illegal option on BSD (rc 1, no stdout),
+    # so this order degrades cleanly in the direction the other does not. Measured both ways.
+    mt="$(stat -c %Y "$c" 2>/dev/null || stat -f %m "$c" 2>/dev/null || echo 0)"
     case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
     if [ "$(( now - mt ))" -le "${CC_WATCH_FRESH_S:-90}" ] && kill -0 "$p" 2>/dev/null; then
       printf '%s\n' "$p"; return 0
@@ -224,6 +299,113 @@ _unbeat() {
     rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
   done
 }
+# ── THE IDLE-SCOPED ARM GATE — refuse rather than park, whenever the safe shape cannot be proven ──
+# Placed BEFORE `trap '_unbeat' EXIT` deliberately: a refusal must park nothing and disturb no
+# marker, so it must not run the EXIT cleanup of a watcher that never existed.
+#
+# THE THREE REFUSALS ARE NOT SYMMETRIC WITH THE EXITS. An exit is a watch that did its job; a
+# refusal is a watch that was never safe to start. They are separated by an exit code (6) because
+# their READER differs: an exit re-invokes the model with a result, whereas a refusal re-invokes it
+# with an instruction about the state it is actually in. Collapsing them would make "your peer
+# answered" and "you already have unread mail" the same event.
+BEAT_DIR="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
+BEAT_FRESH_S="${CC_AWAIT_BEAT_FRESH_S:-900}"
+BEAT_BASE_SEQ=0
+BEAT_STOP_ALLOWANCE=0
+
+_beat_field() {  # <sid> <jq-path> → field value on stdout; empty on any failure
+  local s="$1" p="$2"
+  [ -n "$s" ] || return 1
+  [ -f "$BEAT_DIR/$s.json" ] || return 1
+  jq -r "$p // empty" "$BEAT_DIR/$s.json" 2>/dev/null
+}
+
+_resolve_sid() {  # --sid > $CC_AWAIT_SID > the freshest beat whose pane is OURS; empty = unresolvable
+  local pane f p t best_t=0 best=""
+  [ -n "$SID" ] && { printf '%s' "$SID"; return 0; }
+  if [ -n "${CC_AWAIT_SID:-}" ]; then printf '%s' "$CC_AWAIT_SID"; return 0; fi
+  # PANE FALLBACK, and it is only a fallback: a pane can host a succession of sessions, so the
+  # freshest beat carrying our pane is a good guess and never a proof. It is still safe, because the
+  # freshness bound below is what actually gates arming — a guess that resolves to a retired
+  # session's stale beat is REFUSED, not silently parked against.
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  [ -n "$pane" ] || return 1
+  for f in "$BEAT_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.pane // empty' "$f" 2>/dev/null)" = "$pane" ] || continue
+    t="$(jq -r '.t // 0' "$f" 2>/dev/null)"; case "$t" in ''|*[!0-9]*) t=0 ;; esac
+    if [ "$t" -gt "$best_t" ]; then best_t="$t"; p="${f##*/}"; best="${p%.json}"; fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}
+
+_refuse() {  # <token> <what-to-do-instead>
+  echo "cc-await-ping: verdict=refused reason=$1 uuid=${CUR_UUID} — NOTHING was parked, so no /goal deferral was created by this call. $2" >&2
+  exit 6
+}
+
+if [ "$IDLE_SCOPED" = 1 ]; then
+  # (0) THE ORACLE ITSELF. Without a readable, FRESH beat for this session there is no way to know a
+  #     new turn happened, so C2 can never fire and this watcher would be an ordinary parked task
+  #     wearing the safe mode's name — the starvation pole, armed on purpose. Fail closed.
+  if [ "$_have_lib" != 1 ]; then
+    _refuse no-mailbox-lib "The mode's refusals are evaluated over the WHOLE keyset (pane box AND session box), and without hooks/lib/mailbox-pending.sh only one key is visible. A partially-evaluated refusal is worse than none. Use the bare form under no goal, or repair the lib."
+  fi
+  SID="$(_resolve_sid 2>/dev/null || true)"
+  if [ -z "$SID" ]; then
+    _refuse no-session-id "Pass --sid <your session id> (the hooks that instruct this arm interpolate it for you). Without it the beat file that proves 'a new turn happened' cannot be found, and this watcher could never stand itself down."
+  fi
+  _bt="$(_beat_field "$SID" '.t')"; case "$_bt" in ''|*[!0-9]*) _bt="" ;; esac
+  if [ -z "$_bt" ]; then
+    _refuse no-beat "No readable turn-boundary beat at $BEAT_DIR/$SID.json. hooks/session-beat.sh is what writes it, on UserPromptSubmit and Stop; if it is not wired in this config dir, the idle-scoped exit condition has no oracle and this mode must not be used here."
+  fi
+  _now="$(date +%s 2>/dev/null || echo 0)"
+  if [ "$(( _now - _bt ))" -gt "$BEAT_FRESH_S" ] 2>/dev/null; then
+    _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
+  fi
+  BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
+  # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather
+  # than a kind filter. The beat file holds only the LATEST boundary, so a filter on `kind` alone has
+  # a sampling hole: a whole turn (prompt beat, then stop beat) can complete inside one poll
+  # interval, leaving us looking at a Stop-kind beat whose prompt predecessor we never saw — and a
+  # watcher that ignores it stays parked over a session that HAS moved on. That is the starvation
+  # pole re-entering through the oracle. Turns alternate, so any beat more than one past the arm
+  # baseline PROVES a prompt beat occurred in between, whether or not we sampled it. The offset says
+  # exactly that: the arm turn's own trailing Stop (baseline+1) is excluded, and nothing else is.
+  # Erring toward standing down early costs one bounce turn; erring the other way costs the goal.
+  [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && BEAT_STOP_ALLOWANCE=1
+  # (C4) MAIL ALREADY PENDING = you have work. Arming here would defer the judgment of state the
+  #      session already holds, which is the deferral this mode exists to make impossible.
+  for _k in $(_keys); do
+    if mailbox_has_pending "$_k" 2>/dev/null; then
+      _refuse pending-mail "Unread mail is waiting on key [$_k]. Read it (it surfaces at your next boundary, or: cc-mail), act on it, and arm only once your inbox is quiet — a watcher armed over pending mail defers a /goal evaluation of state you are already holding."
+    fi
+  done
+  # (C3) SINGLE INSTANCE. Overlapping awaiters are how a deferral outlives the idle that justified
+  #      it: watcher B keeps the registry non-terminal across the very wake that stood A down.
+  for _k in $(_keys); do
+    if _sib="$(_claim_live "$_k")"; then
+      _refuse sibling-watcher "A live watcher (pid $_sib) already claims key [$_k]. It is your wake path; a second one would keep the task registry non-terminal across the wake that stands the first one down, which is exactly the permanent deferral this mode prevents."
+    fi
+  done
+  echo "$_banner" >&2
+  echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+fi
+
+# ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
+# Consulted every poll, AFTER the mail check: if a ping and a new turn both happened, the ping is the
+# thing the session must not lose, and delivering it also ends the watch.
+_turn_moved() {  # 0 iff this session has taken a new turn since the arm baseline
+  local seq
+  [ "$IDLE_SCOPED" = 1 ] || return 1
+  seq="$(_beat_field "$SID" '.seq')"; case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  # A Stop-kind beat at exactly baseline+1 is the arm turn's OWN trailing stop — never a new turn.
+  if [ "$seq" -gt "$(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE ))" ]; then return 0; fi
+  [ "$seq" -gt "$BEAT_BASE_SEQ" ] && [ "$(_beat_field "$SID" '.kind')" = "prompt" ] && return 0
+  return 1
+}
+
 trap '_unbeat' EXIT
 
 # ── A KILLED WATCHER MUST NOT DIE SILENT (G10, backlog 5b77e20d9db6) ──────────────────────────────
@@ -553,6 +735,16 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     cur="$(_lc)"
     if [ "$cur" -gt "$baseline" ]; then tail -n +"$((baseline + 1))" "$MBOX"; exit 0; fi
   fi
+
+  # C2 — the session moved on without us. Exit 0 SILENTLY: there is no body to deliver, and the
+  # completion notification this exit rides is itself harmless to a session that is by definition
+  # already awake. What it buys is the next natural Stop being registry-quiet, so the /goal judges
+  # the NEW state exactly once instead of never (parked) or ninety times (bare).
+  if _turn_moved; then
+    echo "cc-await-ping: verdict=stood-down uuid=${CUR_UUID} sid=${SID} — this session took a new turn, so the idle window this watcher was scoped to is over. Nothing was missed and no ping was consumed: mail that arrives now surfaces at your turn boundaries, and any /goal you hold evaluates at your next stop. If you go idle again with an empty inbox, arm a fresh one." >&2
+    exit 0
+  fi
+
   sleep "$INTERVAL"
   elapsed=$((elapsed + INTERVAL))
 done

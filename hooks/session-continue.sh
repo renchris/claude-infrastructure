@@ -406,15 +406,33 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   # goal-driven session is not deaf while unarmed either: an unmet evaluation blocks the stop, the
   # session keeps taking turns, and mailbox-drain delivers pending mail at every boundary those
   # turns produce. Placed before the state-file write: an abstain must not consume a budget attempt.
+  #
+  # ── FLIPPED FROM ABSTAIN TO "INSTRUCT THE SAFE FORM" (2026-08-16, goal-safe-2way-comms §4 C7) ────
+  # The abstain above closed the starvation pole and left the session in the SPIN one: bare, blocking
+  # every stop on an unmet goal, re-judging a world nothing has changed — 90 consecutive unmet
+  # evaluations in 76 minutes on the type specimen, and 15 cap force-idles fleet-wide in three days.
+  # It also assumed the goal keeps the session awake, which holds only BELOW the block cap; above it
+  # the harness force-idles and the session is deaf until someone types. So a live goal is no longer
+  # a reason for this floor to say nothing — it is a reason to instruct a DIFFERENT arm.
+  #
+  # STILL BUDGETED, STILL TTL'd, STILL KILL-SWITCHED — this returns into the ordinary floor below
+  # rather than growing a second policy. The only thing the goal changes is WHICH command the block
+  # names. The mode's own arm gate is what keeps that safe: if this session in fact has pending mail,
+  # a live sibling watcher, or no readable turn beat, cc-await-ping REFUSES (exit 6) and parks
+  # nothing, so the worst case of a wrongly-instructed arm is a loud no-op, never a disabled goal.
+  #
+  # PENDING MAIL IS THE ONE CASE THAT STILL ABSTAINS: with mail waiting the session HAS work, the
+  # idle-scoped arm would be refused for exactly that reason, and the goal-forced turns deliver it —
+  # so blocking to demand an arm that is designed to fail would be a pure round-trip.
+  local _wf_goal=""
   if command -v goal_live_condition >/dev/null 2>&1; then
-    local _wf_tp _wf_goal=""
+    local _wf_tp
     _wf_tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
-    if _wf_goal="$(goal_live_condition "$_wf_tp" 2>/dev/null)" && [ -n "$_wf_goal" ]; then
-      printf 'session-continue: wake floor ABSTAINS (a /goal is LIVE — a parked watcher would make CC skip its evaluation; the goal itself keeps this session awake).\n' >&2
-      if [ "$pend" -gt 0 ]; then
-        jq -nc --arg m "ℹ Wake floor stood down (a /goal is live — a parked background watcher would disable it); ${pend} pending message(s) will surface at the next turn boundary the goal forces." \
-          '{systemMessage:$m}' 2>/dev/null || true
-      fi
+    _wf_goal="$(goal_live_condition "$_wf_tp" 2>/dev/null)" || _wf_goal=""
+    if [ -n "$_wf_goal" ] && [ "$pend" -gt 0 ]; then
+      printf 'session-continue: wake floor ABSTAINS (a /goal is LIVE and mail is already pending — the goal-forced turns deliver it, and the idle-scoped arm would refuse over pending mail anyway).\n' >&2
+      jq -nc --arg m "ℹ Wake floor stood down (a /goal is live); ${pend} pending message(s) will surface at the next turn boundary the goal forces." \
+        '{systemMessage:$m}' 2>/dev/null || true
       return 0
     fi
   fi
@@ -486,6 +504,18 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   # rather than by two hooks agreeing. The armed-check above stays keyed on $_ouid and still works:
   # the watcher writes a .watching marker under EVERY key of the set, so either question answers true.
   armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-14400} --interval 15"
+  # UNDER A LIVE GOAL, a DIFFERENT command (C7). Not a longer sentence about the same one: the bare
+  # form is denied at the chokepoint (hooks/validate-bash.sh) under a live goal, so instructing it
+  # here would hand the model a command its own guard refuses — the exact loop the E1 notice defect
+  # is made of. The sid is mandatory, because the idle-scoped exit condition IS this session's turn
+  # beat; without a resolvable id the tool refuses rather than parking blind.
+  if [ -n "$_wf_goal" ]; then
+    if [ -n "$cur_sid" ]; then
+      armcmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid $cur_sid"
+    else
+      armcmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid <this session's id>"
+    fi
+  fi
 
   # Budget exhausted → do NOT block. Say it where a human can see it, then allow the stop.
   if [ "$cnt" -ge "$maxa" ]; then
@@ -514,6 +544,11 @@ Arm your inbox watcher NOW, then stop. Run it as a Bash tool call with run_in_ba
 It blocks until a line lands in your inbox, prints it, and exits — and that exit rides the harness's task-completion notification back into you. That IS the wake; it is the only way an external write can reach an idle session.
 
 Re-arm after every wake: the watcher removes its own heartbeat when it exits, so once it has woken you, you are deaf again until you arm a new one."
+  [ -n "$_wf_goal" ] && reason="${reason}
+
+A /goal is LIVE here, which is why the command above is the --idle-scoped form and not the ordinary 4-hour arm (that one is denied under a live goal — it would make Claude Code skip your goal's evaluation at every Stop, silently, for as long as it runs). The idle-scoped watcher additionally stands itself down the moment this session takes another turn, so it defers your goal for exactly as long as you are genuinely idle and no longer: your goal is then judged once per new-information event instead of never (parked) or ninety times over an unchanged world (bare).
+
+Arm it as your LAST action, on a clean committed state. It REFUSES to arm (exit 6, which the harness will label 'failed' — read the verdict) if mail is already pending, if a sibling watcher is already live, or if it cannot read this session's turn beat. Each of those means 'you are not actually idle-and-safe yet', not 'something broke'."
   [ "$pend" -gt 0 ] && reason="📬 ${pend} message(s) are pending in your inbox RIGHT NOW.
 
 ${reason}"
