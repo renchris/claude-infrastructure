@@ -196,6 +196,50 @@ STUB
   printf '%s\n' "$output" | grep -qF 'pre-trust: /tmp/somedir → .claude-quaternary'
 }
 
+# The PLAIN recycle — no relocation, no account re-pick — used to be the one fire path that skipped
+# pre_trust entirely, on the premise that "the running session in that dir already proves it is
+# trusted". Measured FALSE on 2026-08-15: `.claude-tertiary` recorded
+# /Users/chrisren/Development/personal as hasTrustDialogAccepted:false (and carried no
+# hasCompletedProjectOnboarding key, so pre_trust had provably never written it) while that same
+# entry's lastDuration showed a 2.3 h session had run there on that account. The consequence is not
+# the trust dialog — it is that Claude Code drops project-scoped SETTINGS in a folder its config dir
+# has not recorded as trusted (v2.1.196+), so the repo's own settings.local.json approval of its
+# .mcp.json servers went inert and the recycled pane stalled at "2 new MCP servers found in this
+# project" with the brief unread behind it.
+#
+# `--session-id` + `env -u ITERM_SESSION_ID` is what makes this hermetic: without it the recycle
+# resolves its target from the firing pane, so the test would pass at a desk and abort under
+# launchd. `CC_RECYCLE_REPICK=off` is load-bearing in the other direction — a re-pick sets
+# RECYCLE_REPICK_FROM, which reaches pre_trust through the OLD branch, so without the kill switch
+# this test could pass while the plain path stayed broken.
+@test "dry-run: a PLAIN recycle (no reloc, no re-pick) still pre-trusts the launch dir" {
+  printf 'x\n' > "$BATS_TEST_TMPDIR/p.txt"
+  run env -u ITERM_SESSION_ID CC_RECYCLE_REPICK=off \
+      bash "$HF" --recycle --session-id FAKE-0000-0000-0000-000000000001 \
+                 --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qE '^pre-trust: .+ → \.claude'
+}
+
+# …and the test above alone is NOT enough, because the dry-run ANNOUNCEMENT and the real pre_trust
+# CALL are two different lines in two different branches. A revert that re-guarded only the call
+# would leave the announcement unconditional and that test green — an assertion whose span is
+# narrower than its subject. The call site itself lives in top-level dispatch code that cannot be
+# sourced without running a fire, so this pins it structurally: within the `elif [ "$RECYCLE" = 1 ]`
+# branch, pre_trust must not sit inside a conditional. Deliberately narrow — it asserts only the
+# absence of a guard, so ordinary edits to that branch do not trip it.
+@test "the recycle branch calls pre_trust UNCONDITIONALLY (the dry-run echo is not the subject)" {
+  local branch
+  branch="$(sed -n '/^elif \[ "\$RECYCLE" = 1 \]; then/,/^  recycle_fire$/p' "$HF")"
+  [ -n "$branch" ] || { echo "could not locate the recycle dispatch branch in $HF" >&2; return 1; }
+  printf '%s\n' "$branch" | grep -qE '^  pre_trust "\$LAUNCH_DIR"' \
+    || { echo "pre_trust is not called at the recycle branch's top level:"; printf '%s\n' "$branch"; return 1; }
+  # The guard that used to wrap it. Its return would silently restore the 2026-08-15 stall.
+  printf '%s\n' "$branch" | grep -qE 'if \[ "\$RECYCLE_RELOC" = 1 \]' \
+    && { echo "pre_trust is guarded again by RECYCLE_RELOC/REPICK — the plain recycle is unprotected"; return 1; }
+  return 0
+}
+
 # ---- P0-15 role indirection (SO-1 ping-to-dead-pane break) -----------------------------------
 
 @test "write_role: writes the pane uuid to cc-roles/<role>" {
