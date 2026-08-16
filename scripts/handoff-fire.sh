@@ -424,7 +424,6 @@ SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLAC
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 WITH_MCP=0                                       # --with-mcp: opt back INTO project .mcp.json stdio servers
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
-RECYCLE_REPICK_FROM=""                           # W2-A: set to the OLD account when a recycle re-picks
 ALLOW_LIVE_SA=0                                  # L1-b: 1 = recycle over IN-FLIGHT Agent-tool subagents
 RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, for the brief trailer
 # G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
@@ -6607,7 +6606,12 @@ if [ "$RECYCLE" = 1 ]; then
     # this point (launcher_for, config_dir_for_launcher, ARGS, CMD) reads $ACCOUNT through the
     # generated SSOT map, so swapping the NAME here is the whole change: no launch line is composed.
     _repick="$(recycle_repick "$ACCOUNT" || true)"
-    if [ -n "$_repick" ]; then RECYCLE_REPICK_FROM="$ACCOUNT"; ACCOUNT="$_repick"; fi
+    # `RECYCLE_REPICK_FROM` used to be set here. Its ONLY reader was the pre_trust guard below,
+    # and that guard is gone (2026-08-15): the recycle branch now pre-trusts unconditionally, so a
+    # re-pick no longer needs to announce itself to reach the write. Keeping the assignment would
+    # leave a variable nothing reads — which shellcheck SC2034 correctly reds the land for. The
+    # re-pick is still announced to the operator by recycle_repick's own "♻ recycle RE-PICK" line.
+    if [ -n "$_repick" ]; then ACCOUNT="$_repick"; fi
   fi
 fi
 
