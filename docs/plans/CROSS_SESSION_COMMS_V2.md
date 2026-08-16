@@ -545,7 +545,14 @@ architecture: `docs/research/goal-safe-2way-comms-2026-08-13.md` — one new inv
 must be idle-scoped**: a background task under a live goal must terminate on every wake of its
 session, including wakes it did not cause; the `cc-beats` file is the oracle), enforced by
 `cc-await-ping --idle-scoped` (the `validate-bash` chokepoint admits it as the one sanctioned
-shape), with **W2 as the mechanical safety net** — this plan's re-arm item, still gated on the
-Stop-dispatch probe, still unbuilt. Filed: probe `62e0b88a58b5` · W2 registration `3118d712f668` ·
+shape), with **W2 as the mechanical safety net** — this plan's re-arm item, ~~still gated on the
+Stop-dispatch probe, still unbuilt~~ **PROBED AND BUILT 2026-08-16**: the Stop-dispatch probe ran
+green on all four arms (`docs/research/w2-stop-rewake-proof/` — a Stop `asyncRewake` hook is
+backgrounded, its `exit 2` synthesizes a wake rather than a Stop block, and it coexists with a
+same-Stop `decision:"block"`), and W2 landed as `migrations/0012-mailbox-wake-arm-stop-rearm.sh`
+(c10, staged) plus the `_armed_already` claim guard in `hooks/mailbox-wake-arm.sh` — which the probe
+proved is load-bearing, not belt-and-braces: the harness dedupes nothing, so two Stops produced two
+watchers that each woke the model on the same mail line.
+Filed: probe `62e0b88a58b5` ✓ · W2 registration `3118d712f668` ✓ ·
 idle-scoped mode `6290f0ee6b52` · notice/messaging fixes `b33f424c747b` · goal-liveness oracle
 `b0ce82d745be`.

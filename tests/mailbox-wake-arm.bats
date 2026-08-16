@@ -31,9 +31,13 @@ setup() {
   # A fixtured tree shaped like the repo, so the adapter's FIRST candidate path
   # ($(dirname $0)/../bin/cc-await-ping) resolves to our fake rather than the live watcher.
   FAKE="$BATS_TEST_TMPDIR/tree"
-  mkdir -p "$FAKE/hooks" "$FAKE/bin"
+  mkdir -p "$FAKE/hooks/lib" "$FAKE/bin"
   cp "$REPO/hooks/mailbox-wake-arm.sh" "$FAKE/hooks/"
   chmod +x "$FAKE/hooks/mailbox-wake-arm.sh"
+  # The claim guard's predicate lives in the lib, and the live layer always carries it beside the
+  # adapter. Fixturing it here means every case below runs the SAME guard path production runs —
+  # the "lib absent" branch is a named test, never the silent default.
+  cp "$REPO/hooks/lib/mailbox-pending.sh" "$FAKE/hooks/lib/"
   ARM="$FAKE/hooks/mailbox-wake-arm.sh"
   ARGV="$BATS_TEST_TMPDIR/argv"
 
@@ -191,4 +195,73 @@ run_arm() { # [session_id]
   run run_arm "$SESS"
   [ "$status" -eq 0 ]
   [ ! -f "$ARGV" ]
+}
+
+# ── CLAIM GUARD (W2) ─────────────────────────────────────────────────────────────────────────────
+# Registered on Stop as well as SessionStart, this hook fires at EVERY idle boundary and the harness
+# dedupes nothing — measured in the P-W2d probe as two watchers, two `exit 2`s on one mail line, and
+# two synthesized turns (docs/research/w2-stop-rewake-proof/README.md). Idempotence is therefore this
+# file's job. The predicate is the lib's mailbox_wake_armed: FRESH heartbeat AND a LIVE pid, both
+# required — the three cases below are exactly its three ways of saying "not armed", and each must
+# still arm, or a spent watcher would suppress its own replacement forever.
+
+mark_watching() { # <key> <pid>  — the pid-bearing heartbeat cc-await-ping writes each poll
+  printf 'pid=%s\n' "$2" > "$CC_MAILBOX_DIR/$1.watching"
+}
+
+@test "CLAIM GUARD: a FRESH marker naming a LIVE pid makes the arm a no-op — no second watcher" {
+  fake_ping 0 "mail that a live watcher is already going to deliver"
+  mark_watching "$PANE" "$$"          # $$ is the bats process: provably alive
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "CLAIM GUARD: a STALE marker does NOT suppress the arm — a spent watcher must be replaced" {
+  fake_ping 2 ""
+  mark_watching "$PANE" "$$"
+  touch -t 202001010000 "$CC_MAILBOX_DIR/$PANE.watching"   # far outside CC_WATCH_FRESH_S
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+}
+
+@test "CLAIM GUARD: a marker naming a DEAD pid does NOT suppress the arm (the SIGKILL leftover)" {
+  fake_ping 2 ""
+  sleep 30 & local dead=$!
+  kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
+  mark_watching "$PANE" "$dead"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+}
+
+@test "CLAIM GUARD: asked over the KEYSET — a watcher on the aliased SESSION key covers the pane" {
+  fake_ping 0 "mail the session-keyed watcher already owns"
+  mkdir -p "$CC_MAILBOX_DIR/.alias"
+  printf '2026-08-16T09:00:00-0700 %s\n' "$SESS" > "$CC_MAILBOX_DIR/.alias/$PANE"
+  mark_watching "$SESS" "$$"          # armed under the SESSION key; we resolve to the PANE
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "CLAIM GUARD: an UNRELATED key's live watcher never suppresses this session's arm" {
+  fake_ping 2 ""
+  mark_watching "99999999-9999-9999-9999-999999999999" "$$"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+}
+
+@test "CLAIM GUARD: with the lib absent it ARMS — a visible dup beats a silent deaf" {
+  # Inverted fail direction from the headless guard, deliberately: an unknown there risks WEDGING a
+  # session for hours, an unknown here risks one duplicate reminder. A packaging slip must not be
+  # able to turn into fleet-wide deafness.
+  rm -f "$FAKE/hooks/lib/mailbox-pending.sh"
+  fake_ping 2 ""
+  mark_watching "$PANE" "$$"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
 }

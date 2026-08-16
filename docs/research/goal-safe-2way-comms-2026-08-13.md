@@ -175,6 +175,27 @@ prior W2 instance) already covers the keyset.** Every idle boundary then re-esta
 path mechanically — settings fact, not model memory — and it never enters the task registry (A4),
 so it never defers the goal.
 
+**UPDATE 2026-08-16 — the probe RAN and W2 is BUILT.** All four arms green on CC 2.1.233:
+`docs/research/w2-stop-rewake-proof/`. The registration is `migrations/0012-mailbox-wake-arm-stop-rearm.sh`
+(c10 — staged, awaiting the operator, like every settings.json migration in this repo), and the
+claim guard is `_armed_already` in `hooks/mailbox-wake-arm.sh` (21/21 in `tests/mailbox-wake-arm.bats`,
+22/22 in `tests/mailbox-wake-arm-migration.bats`).
+
+**One assumption in the paragraph above was WRONG and the probe caught it.** This section says the
+hook is "guarded by the pid-bearing `.watching` claim so it is a no-op whenever any live watcher …
+already covers the keyset", which reads as a property the marker supplies. It is not: P-W2c measured
+the harness deduping **nothing** — every Stop launches another watcher, and in phase C two of them
+fired on the SAME mail line and burned TWO model turns. Only the hook can decline, so the guard is
+code in the subject (asked over the whole keyset, fresh heartbeat AND live pid, failing OPEN to
+arming when it cannot tell), and `0012` refuses to register against a subject that lacks it.
+
+Building it also uncovered that the guard's own predicate was inert on Linux — `stat -f %m` is BSD
+mtime and GNU `--file-system`, so `mailbox_wake_armed` read every live watcher as dead on a cloud
+worker. Fixed in `hooks/lib/mailbox-pending.sh` (`_mbx_mtime`); the other 51 sites carrying that
+idiom are filed, not touched.
+
+*The original gate, kept for the record:*
+
 **Gated on one probe, still un-run** (the spec's own §2 note, restated with today's knowledge):
 
 - P-W2a: a Stop-declared `asyncRewake:true` hook is dispatched ASYNC (the A4 gate is per-hook and
@@ -236,8 +257,8 @@ architecture needed one new *contract* (idle-scoped deferral), not new machinery
 
 | id | backlog | Item | Gate |
 |---|---|---|---|
-| B1 | `62e0b88a58b5` | **Run the W2 probe** (P-W2a–d, §5), commit artifacts like W0 | none — read-only probe |
-| B2 | `3118d712f668` | Register W2 (same hook, Stop, `asyncRewake:true`) as a c10 migration across all five config dirs, claim-guarded | B1 green |
+| B1 | `62e0b88a58b5` | ~~**Run the W2 probe** (P-W2a–d, §5), commit artifacts like W0~~ **DONE 2026-08-16** → `docs/research/w2-stop-rewake-proof/` | none — read-only probe |
+| B2 | `3118d712f668` | ~~Register W2 (same hook, Stop, `asyncRewake:true`) as a c10 migration across all five config dirs, claim-guarded~~ **DONE 2026-08-16** → `migrations/0012-…` + `_armed_already` | B1 green ✓ |
 | B3 | `6290f0ee6b52` | `cc-await-ping --idle-scoped` (C1–C5) + the `validate-bash` carve-out (C6) + producer messaging flips (C7: drain nudge, deny text, wake floor) + suites — red-proof BOTH poles: a mutant that never self-cancels must starve a fixture goal; a mutant that never defers must spin one | none |
 | B4 | `b33f424c747b` | E1 + E2 message fixes | none (E1 standalone; E2's final text references B3's form) |
 | B5 | `b0ce82d745be` | Goal-liveness oracle in `wrap-ledger.sh` + `/wrap` (E5) | none |
