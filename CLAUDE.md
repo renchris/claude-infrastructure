@@ -120,6 +120,12 @@ Browser automation — navigate / click / fill / screenshot / extract — uses t
 
 ---
 
+## Personal Message History
+
+The operator's **entire iPhone message history — 213,995 messages, 2016-06 → present, no gap** — is queryable via the **`msg`** command (on PATH; source `~/Development/personal/bin/msg`). Use it whenever a task needs his texts/iMessages: `msg search "<term>"` (FTS5; `--rank` BM25, `--raw` FTS operators, `--current` excludes recovered deleted threads) · `msg with "<phone|email>"` · `msg stats` · `msg sql "<SELECT>"`. It unions three read-only stores (13 Pro archive + 16e extract + live `chat.db`) deduplicated on `message.guid`; **never merge them**, and never write to `~/Library/Messages/chat.db` or anything under `MobileSync/`. Full runbook: `~/Development/personal/iphone-messages-mcp-setup.md`.
+
+---
+
 ## Agent Teams Reinforcement (All Projects)
 
 **Agent Teams are the DEFAULT for all implementation work.** This applies globally.
