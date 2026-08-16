@@ -667,6 +667,7 @@ load1() { # 1-min loadavg on stdout, or EMPTY when the instrument cannot be read
 }
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+RETRY_BOUND_S=""   # retry_once's out-parameter: WHICH of the two bounds that call ran under
 # INDEX-ALIGNED with FAILING: the failing TEST name for FAILING[i], so every filed item is
 # actionable and not just the first. FAILTEST (one name, the first) is unchanged and still what the
 # page/notify render; this is the per-file version red_actions needs to file the whole list. Every
@@ -1449,9 +1450,22 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
   # an INTRA-file ordering dependence now reads as a flake rather than a red. The ladder already
   # dropped cross-FILE ordering by re-running the file alone; this widens that same assumption by one
   # level, and a suite that can never be exonerated (0 green in 33 stamps) is the worse failure.
+  # RETRY_BOUND_S is an OUT-PARAMETER: which of the two bounds this call actually ran under. There
+  # are two, they differ by 18x, and rc 124 alone cannot say which fired — so the ladder's cut
+  # message named RETRY_TO unconditionally and was WRONG on the common path. MEASURED 2026-08-16:
+  # sixteen consecutive cuts logged "our own 5400s bound fired on the re-run" for
+  # tests/autonomy-sweep.bats inside runs whose OWN total was run_s=3364 and run_s=3538 — a 5400s
+  # bound cannot fire in a 3364s run, so every one of those lines named a bound that never ran. The
+  # figure is what the diagnosis is built on: 5400s says "a suite far too slow to re-run", 300s says
+  # "one test overran", and only the second is compatible with this suite measuring 77s / 55 green
+  # at this exact band (nice -n 5, taskpolicy -c utility). A guessed number in a cut message is not
+  # cosmetic — it is the whole rung the next reader stands on, and it sent a session hunting a
+  # 90-minute suite that does not exist.
   local f="$1" t="$2" td="$3" rc=0 out filt
+  RETRY_BOUND_S="$RETRY_TO"
   if [ "${POSTLAND_RETRY_GRANULARITY:-test}" = "test" ] && [ -n "$t" ]; then
     out="$td/tap"
+    RETRY_BOUND_S="$FILE_TO"
     # `bats -f` takes a REGEX: escape every metachar in the TAP-reported name, then anchor it.
     filt="$(printf '%s' "$t" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
     ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${RETRY_QOS[@]}" \
@@ -1460,6 +1474,7 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
     # for free. Only trust this run if it actually PLANNED a test; otherwise fall through to the file.
     [ "$(tap_plan "$out")" -gt 0 ] && { rm -f "$out"; return "$rc"; }
     rm -f "$out"; rc=0
+    RETRY_BOUND_S="$RETRY_TO"          # fell through: the bound that decides is now the file's
   fi
   # FALLBACK: the whole file, under the bound sized for a whole file.
   ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${RETRY_QOS[@]}" "$BATS_BIN" "$f" ) </dev/null >/dev/null 2>&1 || rc=$?
@@ -1517,7 +1532,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   # function cannot tell a failure of the tree from a run we killed ourselves. Defaults to 1 (bats'
   # "something failed") so an omitted argument can only ever preserve the old convicting behaviour,
   # never invent a cut.
-  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC arc why tap_rc="${2:-1}"
+  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC ABSTAIN_BOUND arc why tap_rc="${2:-1}"
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   # $TAP_NOTOK_RE, never a re-spelling: this arming pattern was the LOOSEST of the three readers
   # (`/^not ok /`, no <N> at all), so a torn line armed `p` and paired the NEXT `#` line's filename
@@ -1585,7 +1600,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
-    fails=1; rc=1; abstain=0; ABSTAIN_RC=124   # RESET per file: a stale rc would misname the cut
+    fails=1; rc=1; abstain=0; ABSTAIN_RC=124; ABSTAIN_BOUND=""   # RESET per file: a stale rc/bound would misname the cut
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
       # NO ADMISSION WAIT before a retry (v1 slept here, per file, per attempt — the ~12-call ×
       # 600s budget that made a run 2h of sleeping). Waiting was never the cheap half of that
@@ -1634,7 +1649,8 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       # nothing. Unproven is not silent: it takes the CUT path below and is retried next sweep.
       case "$rc" in
         0|1) ;;                                  # the only two codes that speak about the tree
-        *)   abstain=1; ABSTAIN_RC="$rc"; break ;;   # 124 / >128 signal / 126 / 127 ⇒ nothing proven
+        # ABSTAIN_BOUND is captured HERE, beside the rc it belongs to — never re-read at the message.
+        *)   abstain=1; ABSTAIN_RC="$rc"; ABSTAIN_BOUND="$RETRY_BOUND_S"; break ;;   # 124 / >128 / 126 / 127 ⇒ nothing proven
       esac
       [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
@@ -1649,7 +1665,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       # code; now that a signal kill also abstains, a fixed message would misattribute a SIGKILL to
       # our timeout and send the next reader hunting a slow test that was never slow.
       arc="${ABSTAIN_RC:-124}"
-      if   [ "$arc" -eq 124 ]; then why="our own ${RETRY_TO}s bound fired on the re-run"
+      if   [ "$arc" -eq 124 ]; then why="our own ${ABSTAIN_BOUND:-$RETRY_TO}s bound fired on the re-run ($([ "${ABSTAIN_BOUND:-$RETRY_TO}" = "$FILE_TO" ] && printf 'the single named test' || printf 'the whole file'))"
       elif [ "$arc" -gt 128 ]; then why="the re-run was KILLED by signal $(( arc - 128 )) (machine pressure, not the tree)"
       elif [ "$arc" -eq 126 ] || [ "$arc" -eq 127 ]; then why="the re-run could not execute (rc $arc)"
       # 75 = cc-bats' EX_TEMPFAIL deferral. It is the ONLY abstaining code that means "nothing was even
