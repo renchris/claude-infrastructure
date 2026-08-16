@@ -1089,3 +1089,121 @@ DETERMINISTIC gate is an infinite generator: the retry is not a chance, it is a 
 re-mints faster than any closer retires), then close the already-upstream rows in bulk by patch-id,
 then land the genuinely-stranded commits, then the 50 sensor-timeout rows. Closing rows ahead of
 fixing the generator is pouring water into a bucket whose hole you have measured.
+
+## A6 · THE DRAIN RAN — 115 BLOCKED ROWS RETIRED, AND THE REAL GENERATOR IS UPSTREAM OF ALL OF THEM
+
+*Executed 2026-08-16, the session after A5. Numbers are live reads, not estimates:*
+`blocked 279 → 164` · `done 1644 → 1765`. **Every row closed on content evidence; none by fiat.**
+
+### A6.1 · The instrument that made bulk closure honest
+
+`git cherry` was the wrong tool and A5's own advice was too weak. A rebase changes the patch-id, so
+`+` means "different bytes", not "not landed" — and **29 of 32 stranded commits read `+` while
+being fully present on trunk**. The instrument that works compares CONTENT: for each added line of
+length ≥25, ask whether it appears anywhere in `origin/main`'s version of the SAME file, and report
+`ABSENT/TOTAL`.
+
+It separates cleanly and it is controlled BOTH ways (a known-upstream commit reads `ABSENT=0`, a
+known-stranded one reads `ABSENT=299/313`). Real verdicts cluster at **≤8%** (revision drift — the
+change is upstream in a later or differently-spelled revision) or **≥17%** (genuinely stranded).
+Nothing landed in between. Script: the session scratchpad's `content-check.sh`; re-derive it, it is
+20 lines.
+
+🚨 **A high ratio is a QUESTION, not a verdict.** Two commits read 47% and 100% absent and were
+still upstream: `73e2ac8ce` (trunk hoists the producer into a variable — `bodies="$(setup_bodies)"`
+then `grep <<< "$bodies"` — where the branch inlined the here-string; the pipe is removed either
+way, which is the whole fix) and `94b6fe955` (trunk's `af8be7c93` fixes the same defect with an
+external `extract.awk`, strictly better). **Read the trunk commit's diff before convicting.**
+
+⚠️ **Trunk moves under a long analysis.** `606a6ee4d` measured `ABSENT=383/383` and a subject grep
+said NOT-ON-TRUNK; twenty minutes later a sibling had landed it byte-identically as `40d574617` and
+the same check read `ABSENT=2/266`. **Re-fetch before every verdict**, and treat any figure older
+than one land as unread.
+
+### A6.2 · What the 77 re-land rows actually were — 52 closed, ONE needed a land
+
+| n | disposition | evidence |
+|---|---|---|
+| 42 | already upstream by content | a named trunk sha per branch |
+| 9 | the M3 dead-letter store | landed as `71c59d995` (below) |
+| 1 | superseded by a better trunk fix | `af8be7c93` |
+
+**The M3 land is the whole A5 thesis in one commit.** `405bcdec3` (408 insertions) had failed ~9
+times, always deterministically. `--precheck` — same `run_gate()`, no lock, no ref, ~2 minutes —
+named the arm in the first run: `bash-n:hooks/operator-readout.sh`. The cause was not in the logic
+the commit adds. Its new comment sits INSIDE the `$( )` that feeds `escalation_unseen_count` and
+read *"the store's `.ran` evidence"*. **bash 3.2 does not skip comments when scanning for a command
+substitution's closing paren**, so that lone apostrophe opened a quote that swallowed forward to the
+next `'` and desynced the parse — surfacing as a syntax error **~260 lines downstream**, at an
+unrelated `case` arm's `commit(s)`. That distance is why nine attempts never pointed at the cause.
+Reworded, gate green, landed as `71c59d995`.
+
+**Use `--precheck` FIRST, always.** It reads the land gate's own verdict in ~2 minutes without
+taking the lock, touching a ref, or writing a `land.log` row. A blind re-land costs 15+ minutes and
+returns the same exit 6. *(Generalisable: `bash -n`'s reported line is where the parse DIED, not
+where it broke — bisect the file, never trust the line number.)*
+
+### A6.3 · The 50 "occupancy oracle" rows were one missing oracle, and all 50 were answerable
+
+Not a timeout — **NON-COVERAGE, by design**. `owned_wait()` (`bin/cc-backlog:4238`) returns rc 2 for
+any `venue != local`, correctly, because a cloud worker has no local worktree. But `claimer_live`
+only ever sees the DISPATCHER's spent pid. So for a cloud item **no oracle can speak at all**, the
+reap abstains until `unresolvedmax`, and then blocks — permanently, on a row no operator can action.
+
+**The missing oracle already exists.** `bin/cc-cloud` carries a per-session state function
+(`list --json --state`), and `cc-dispatch` already writes the join key — it fires
+`cc-cloud declare --id <sid> --branch <b> --item <backlog-id>`. **All 49 live rows had a
+declaration.** Their verdicts:
+
+| state | n | what it means | disposition taken |
+|---|---|---|---|
+| LANDED | 19 | content present on origin/main | **closed** — independently re-verified, all 19 `ABSENT=0` |
+| STALLED | 19 | pushed a ref, then froze | 9 **closed** (work reached trunk anyway), 10 hold real content |
+| NOT-STARTED | 11 | no ref after 1–4d, against a 15m boot budget | **reopened** — a worker that never booted is not an operator gate |
+
+**THE FIX THAT RETIRES THE CLASS** (not yet built — `bin/cc-backlog` has active siblings): in
+`owned_wait()`, replace the unconditional `return 2` on a non-local venue with a `cc-cloud` lookup
+by `--item`. LANDED/ALIVE ⇒ rc 0 · retired/dark ⇒ rc 1 (a real answer, so the dead-worker reopen
+path becomes reachable) · no declaration ⇒ rc 2, abstaining exactly as today. Strictly more
+evidence, and it never weakens the fail-closed direction the abstention exists to protect.
+
+### A6.4 · The dominant inflow is upstream of every class above: cloud dispatch delivers 36%
+
+Measured over **all 112** `cc-cloud` declarations — filed as backlog `42ab9ce1a2e7`:
+
+```
+40 LANDED (36%) · 32 STALLED (29%) · 32 NOT-STARTED (29%) · 7 ABANDONED · 1 BOOTING
+```
+
+**Two of every three dispatches are pure backlog inflow.** The 29% that NOT-START never produce a
+ref at all — oldest 203h against a 15m boot budget — and it is **not account-specific** (spans
+next2/next3/next4) and **not a push problem** (every one reads `base_probe=ok`, so the branch was
+pushed and observable). No closer can outrun this; it is the generator behind A5's generator.
+`cc-cloud` records `url=https://claude.ai/code/<sid>` for each — **open three and read what the
+session shows before touching the fire path.**
+
+### A6.5 · The blocked tail is 100 rows the agent structurally cannot close
+
+Full triage of the 179 non-re-land, non-oracle blocked rows →
+`docs/research/blocked-tail-triage-2026-08-16.md`. **53 closed this session** (38 STALE + 15
+duplicates); the STALE verdicts were re-verified independently, not taken on report: all 17 named
+deploy-lag shas test ancestor of the live-layer HEAD `8969739161f1`, the shared checkout is 0 ahead
+/ 0 dirty TRACKED, pid 43305 is gone, and live kitty windows are `2 82 88 100-120` only, so panes
+72/147/431 are absent.
+
+**The residue is a wall, and it should be stated as one:** 100 rows are TRULY-OPERATOR — 34 value
+forks, 18 credential/OAuth mints, 16 C10 activations, 11 GUI-only or physical, 10 human contact, 5
+permission grants, 5 production deploys with no agent land rail, 1 sudo. **"Zero blocked" is not an
+agent-reachable state.** The honest target is *zero rows that are not genuinely the operator's*, and
+the 24 rows the triage found MIS-FILED as blocked (agent-doable) are the remaining agent work in
+that pile.
+
+### A6.6 · What is left, named
+
+- **8 stalled cloud branches hold real unlanded content and REBASE-CONFLICT** on 2–4 days of drift
+  (`d23f3a444984` `b33f424c747b` `c9771c467a91` `6290f0ee6b52` `75869b41c9d9` `04010b4c8074`
+  `16a60c2431cc` `6ee23081b34c`, plus `28a2c9cf6a24`). Per-branch conflict resolution — a wave, not
+  a sweep. Gate verdicts are cached at `/tmp/gate-batch-results.tsv`.
+- **1 gate-red**: `04010b4c8074` → `e4d0d508a`, arm `dead-assertion`.
+- **115 of 115 falsifier probes were re-run**; only 2 retracted. **The backlog is not stale — it is
+  live work.** Do not plan a drain around finding rot; there is very little.
