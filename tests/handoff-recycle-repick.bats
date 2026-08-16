@@ -226,15 +226,27 @@ called() { # $1 = a substring of an expected invocation
   [ -n "$output" ]
   printf '%s\n' "$output" | grep -q 'ACCOUNT="\$(env_account)"'
   printf '%s\n' "$output" | grep -q '_repick="\$(recycle_repick "\$ACCOUNT" || true)"'
-  printf '%s\n' "$output" | grep -q 'RECYCLE_REPICK_FROM="\$ACCOUNT"; ACCOUNT="\$_repick"'
+  printf '%s\n' "$output" | grep -q 'ACCOUNT="\$_repick"'
 }
 
 @test "a re-picked recycle pre-trusts its launch dir under the NEW account's config dir" {
   # Same-dir recycles skip pre_trust because the running session proves the dir is trusted — but
   # that proof lives in the OLD account's .claude.json, so a re-pick needs the write or the
   # successor stalls at the workspace-trust dialog with the brief unread behind it.
-  run grep -n 'RECYCLE_RELOC" = 1 \] || \[ -n "\${RECYCLE_REPICK_FROM:-}" \]' "$REPO/scripts/handoff-fire.sh"
+  #
+  # 2026-08-15 — THIS ASSERTION WAS PINNING THE GUARD, NOT THE GUARANTEE. It grepped for
+  # `[ "$RECYCLE_RELOC" = 1 ] || [ -n "${RECYCLE_REPICK_FROM:-}" ]` — the condition under which
+  # pre_trust ran. That condition is gone, because the premise in the paragraph above was measured
+  # FALSE: `.claude-tertiary` recorded ~/Development/personal as hasTrustDialogAccepted:false while
+  # that same entry showed a 2.3 h session had run there on that account. The recycle branch now
+  # pre-trusts UNCONDITIONALLY, and RECYCLE_REPICK_FROM — whose only reader was that guard — no
+  # longer exists. Left as written, this test would have red-flagged the change that made its own
+  # guarantee strictly stronger. The guarantee is unchanged and is what is asserted now.
+  # Evidence: docs/research/mcp-modal-fire-stall-2026-08-15.md.
+  run sed -n '/^elif \[ "\$RECYCLE" = 1 \]; then/,/^  recycle_fire$/p' "$REPO/scripts/handoff-fire.sh"
   [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s\n' "$output" | grep -qE '^  pre_trust "\$LAUNCH_DIR"'
 }
 
 @test "the M7 fire-time assign still skips recycles, so a re-pick is charged exactly once" {
