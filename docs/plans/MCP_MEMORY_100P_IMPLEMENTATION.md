@@ -1,6 +1,24 @@
 ---
-status: open
+status: complete
 ---
+
+<!-- COMPLETE 2026-08-15. W5 (2026-08-11) closed all seven ids with real shas and recorded exactly
+     one thing outstanding: "the program is LANDED, and NOT LIVE for one shared reason" — the
+     bootstrap circle in which ~/.claude/scripts/postland-verify.sh symlinked into a shared checkout
+     that was behind trunk, so the LIVE runner was the pre-C29 one, kept false-redding, and no green
+     stamp could ever appear for deploy-live to advance to.
+
+     That circle is BROKEN. The operator reset the shared checkout to origin/main (2026-08-15); it
+     now reads 0 behind / 0 ahead, the live postland-verify.sh is byte-identical to trunk, and
+     deploy-live reports "at trunk tip — nothing above the live layer to deploy". The inertness this
+     plan named as its proof is gone: ~/.claude/scripts/compressor-sentinel.sh greps 6 for
+     `exe_table` where W5 measured 0 live against 6 on trunk. Both downstream rows (3df911c0470e,
+     b3093462ed6c) are done.
+
+     Flipped because this frontmatter is the machine-readable SSOT scripts/find-plan.sh and every
+     plan-open falsifier read — a finished plan left at `open` re-mints an "advance" row forever,
+     which is exactly what CODEX_ADVERSARIAL_SLOT_PROBE.md did for four days. -->
+
 
 # MCP MEMORY 100P — implementation plan (research → deployed-and-live)
 
