@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/blocker.sh",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/watcher.sh",
+            "asyncRewake": true,
+            "timeout": 600,
+            "rewakeMessage": "W2 PROBE — your mailbox watcher fired. Incoming peer mail:",
+            "rewakeSummary": "W2 probe: mailbox wake"
+          }
+        ]
+      }
+    ]
+  }
+}
