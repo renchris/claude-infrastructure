@@ -1,0 +1,96 @@
+09:43:37 START pid=24257 ppid=24256 cwd=/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/work-c
+09:43:37 BLOCKER fired (first stop only)
+09:43:37 baseline=0
+09:43:37 alive poll=0
+09:43:37 alive poll=50
+09:43:42 START pid=24292 ppid=24290 cwd=/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/work-c
+09:43:42 baseline=0
+09:43:42 alive poll=0
+09:43:43 FIRE body=[W2-PROBE-D-MAIL 09:43:42 ] — exiting 2 now
+09:43:44 FIRE body=[W2-PROBE-D-MAIL 09:43:42 ] — exiting 2 now
+09:43:46 START pid=24334 ppid=24333 cwd=/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/work-c
+09:43:46 baseline=1
+09:43:46 alive poll=0
+09:43:47 alive poll=55
+09:43:49 START pid=24356 ppid=24354 cwd=/tmp/claude-0/-home-user-claude-infrastructure/c2fd69c8-bfa1-5c16-ad4b-aa2115a3feef/scratchpad/w2probe/work-c
+09:43:49 baseline=1
+09:43:49 alive poll=0
+09:43:56 alive poll=5
+09:43:57 alive poll=60
+09:43:59 alive poll=5
+09:44:06 alive poll=10
+09:44:07 alive poll=65
+09:44:09 alive poll=10
+09:44:16 alive poll=15
+09:44:17 alive poll=70
+09:44:19 alive poll=15
+09:44:26 alive poll=20
+09:44:27 alive poll=75
+09:44:29 alive poll=20
+09:44:36 alive poll=25
+09:44:37 alive poll=80
+09:44:39 alive poll=25
+09:44:46 alive poll=30
+09:44:47 alive poll=85
+09:44:49 alive poll=30
+09:44:56 alive poll=35
+09:44:57 alive poll=90
+09:44:59 alive poll=35
+09:45:06 alive poll=40
+09:45:07 alive poll=95
+09:45:09 alive poll=40
+09:45:16 alive poll=45
+09:45:17 alive poll=100
+09:45:19 alive poll=45
+09:45:26 alive poll=50
+09:45:27 alive poll=105
+09:45:29 alive poll=50
+09:45:36 alive poll=55
+09:45:37 alive poll=110
+09:45:39 alive poll=55
+09:45:46 alive poll=60
+09:45:47 alive poll=115
+09:45:49 alive poll=60
+09:45:56 alive poll=65
+09:45:57 alive poll=120
+09:45:59 alive poll=65
+09:46:06 alive poll=70
+09:46:07 alive poll=125
+09:46:09 alive poll=70
+09:46:16 alive poll=75
+09:46:17 alive poll=130
+09:46:19 alive poll=75
+09:46:26 alive poll=80
+09:46:27 alive poll=135
+09:46:29 alive poll=80
+09:46:36 alive poll=85
+09:46:37 alive poll=140
+09:46:39 alive poll=85
+09:46:47 alive poll=90
+09:46:47 alive poll=145
+09:46:49 alive poll=90
+09:46:57 alive poll=95
+09:46:57 TIMEOUT after 150 polls — no mail arrived
+09:46:59 alive poll=95
+09:47:07 alive poll=100
+09:47:09 alive poll=100
+09:47:17 alive poll=105
+09:47:19 alive poll=105
+09:47:27 alive poll=110
+09:47:29 alive poll=110
+09:47:37 alive poll=115
+09:47:39 alive poll=115
+09:47:47 alive poll=120
+09:47:49 alive poll=120
+09:47:57 alive poll=125
+09:47:59 alive poll=125
+09:48:07 alive poll=130
+09:48:09 alive poll=130
+09:48:17 alive poll=135
+09:48:19 alive poll=135
+09:48:27 alive poll=140
+09:48:29 alive poll=140
+09:48:37 alive poll=145
+09:48:39 alive poll=145
+09:48:47 TIMEOUT after 150 polls — no mail arrived
+09:48:49 TIMEOUT after 150 polls — no mail arrived
