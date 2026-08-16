@@ -230,9 +230,13 @@ already there. One output token costs the quota of **12.2** cache-creation token
 
 Three consequences that change standing practice:
 
-1. **Shrinking context to save quota optimizes the free class.** Recycling, `/compact`, and
-   aggressive context trimming are justified by *rot* and by the hard context ceiling — both real —
-   but **not** by quota. They should never again be argued on cost grounds.
+1. **Shrinking context to save quota probably optimizes the free class — but this is the ONE
+   consequence the critic put back in doubt, so it is stated conditionally.** *If* cache_read is
+   ~free, recycling and context-trimming are justified by *rot* and by the hard context ceiling —
+   both real and unaffected — but **not** by quota. *If* cache_read carries its list-price weight
+   instead, context re-read is 58–66% of the bill and trimming is the largest lever there is. §2.8
+   shows the fleet **cannot currently tell these apart**. **Do not argue context economy on quota
+   grounds in either direction until §2.8's experiment is run.**
 2. **Verbosity is the primary quota lever, worth 61% of the bill.** The existing CLAUDE.md
    § Communication Discipline rule ("Opus 5 runs long by default … it has to be prompted for") is
    therefore not a style preference — it is the single largest cost control this fleet has. And it is
@@ -346,6 +350,49 @@ that lives only behind `api/oauth/usage`, which `account-utilization.jsonl` alre
 utilization series for the denominator.** `/usage` additionally exposes per-skill, per-subagent,
 per-plugin and per-MCP attribution that nothing here reads.
 
+### §2.8 🚨 The meter is NOT identified — the wave's own critic, and it qualifies §2.2
+
+**Nine axes measured what tokens the fleet moves; none measured what the operator actually spends.**
+Every artifact except A1 and A2 prices work in **API list dollars**, while the operator pays in
+`weekly_pct` on four Max subscriptions. That bridge is crossed by a "therefore" in A3, A5, A6, A7
+and the lead's own A0, and is graded MEASURED in most of them. It is **ASSUMED**.
+
+Two attempts to settle it, both inconclusive:
+
+- A1's NNLS returned a **boundary** solution for cache_read whose unconstrained sign is negative —
+  i.e. the fit hit the zero wall, which is not evidence of zero.
+- A6's skeptic ran the discriminating regression and found the fleet has **no instrument that can
+  separate the candidate meters**: cumulative R² 0.945 (priced dollars) vs 0.953 (output-only), and
+  a *properly differenced* form yields only 11 movement windows in 6 days at R² 0.13–0.16 for **all
+  four** hypotheses.
+
+**This qualifies the lead's §2.2 model comparison** (R² 0.827 cache_read-free vs 0.717 list-price on
+67 buckets). That comparison is real, but it is a *level*-fit over few, highly collinear buckets
+(`corr(output, cache_read) = +0.909`), and the properly-differenced form the skeptic ran does not
+reproduce its separation. **What survives is the ordering — output is the dearest class per token,
+cache_read the cheapest. What does NOT survive is the 51–57 / 42–48 / ≈0 split as a measured
+quantity**, and with it the unconditional form of §2.2's consequence #1.
+
+**The hinge, stated plainly:** if cache_read ≈ 0, context re-read is free and recycling is
+quota-*negative*; if cache_read carries 0.1× input, context re-read is 58–66% of the bill and
+recycling is the largest lever there is. **Two of this wave's biggest recommendations point in
+opposite directions on that one undecided coefficient, and neither author noticed** — they ran in
+parallel and neither cites the other.
+
+**The settling experiment exists, costs ~3 pp of one account's quota, and nobody ran it.** It is
+now the highest-priority open item — **M0, ahead of everything in §4** — because every cost claim
+in this plan is conditional on its outcome. Design it to move ONE class at a time against a quiet
+account and read the meter: the only reason it was not run here is that the fleet is at 92% weekly
+consumption (§2.3), which makes 3 pp a real cost rather than a rounding error. That is a scheduling
+constraint, not a reason to skip it — run it in the first hours of a fresh window.
+
+**Also corrected by the critic:** five artifacts price cache-creation at **×1.25** (the 5-minute-TTL
+write rate). This fleet is on the **1-hour TTL** (§2.4), whose write multiplier is **×2**. Every
+dollar-side figure in A3, A5, A6, A7 and A0 is understated on that term. The correct value was in a
+durably recorded field nobody read.
+
+---
+
 ## §3 Design
 
 ### §3.1 Three layers, and the join is the whole product
@@ -449,6 +496,7 @@ and can fire in parallel with M3.
 
 | id | wave | locus | end state (the `--goal` condition) | why it ranks here |
 |---|---|---|---|---|
+| **M0** | **Identify the meter** (§2.8) — a controlled experiment that moves ONE token class at a time against a quiet account and reads `weekly_pct`, settling whether cache_read carries weight | S | the experiment prints, per class, the measured Δ`weekly_pct` for a known token volume, with a null-move control; the result is written to the price list and the losing hypothesis is named; do NOT run it on an account above ~40% weekly, and stop at 5 pp total | **FIRST — every cost claim in this plan is conditional on it.** Costs ~3 pp of one account; schedule it in the first hours of a fresh window |
 | **M1** | **Govern the dispatcher** — 254 of 261 items are parked behind a cloud-only venue filter since 2026-08-11; admit them **against measured headroom**, never wholesale | S — **blockedBy M3** | the dispatcher fires while its account's burn ratio is below pace and throttles as it approaches 1.0; over one full weekly window no account exceeds 100% and the parked count falls; do not release the queue un-governed, and do not disable any safety gate to do it | Re-scoped from "unblock" to "admit against headroom". **Un-governed it is Q3** — 26–74× the remaining allowance, 4–5 walled days/week |
 | **M2** | **Fix the DoD truncation** — `dod-persist.sh` concatenates a frozen legacy store, overflows the ~9,200 B cap, and delivers the *oldest* scope | S | a session in this repo shows the NEWEST `Scope (frozen):` line inline in `hook_additional_context`, with no `<persisted-output>` stub, on 3 consecutive starts | **Quality restoration.** 51% of injections currently carry a superseded contract — the frozen-DoD mechanism is silently not working |
 | **M3** | **The burn-ratio instrument** — add `burn_ratio` and `projected_end_pct` to `claude-accounts --readout`; wall-proximity alarm; raise `account-utilization.jsonl` retention past 6 days | S | `claude-accounts --readout` prints a burn ratio per account and flags any account whose projected end-of-window pct ≥100; `next3` renders 0.26 today | Closes the error class that inverted this plan's own premise (§1) |
