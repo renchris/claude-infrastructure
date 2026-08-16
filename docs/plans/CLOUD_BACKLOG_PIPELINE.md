@@ -1035,3 +1035,57 @@ Three further properties to accept or design against, none of them blocking:
 - **Parity lint reds on any hand-edited live plist** (`scripts/launchd-parity-lint.sh`, run bare by
   `nightly-regression.sh`): a plist change must land in the repo *and* reach `~/Library/LaunchAgents`
   through `install.sh`. Header XML comments are exempt.
+
+## A5 · THE BLOCKED PILE IS MOSTLY MACHINE FAILURE, AND THE RE-LAND CLASS IS A SELF-FEEDING LOOP
+
+*Measured 2026-08-16 while driving "zero backlog". Recorded here because the classification is the
+expensive part; re-deriving it costs a dozen jq passes and the loop diagnosis costs a failed land.*
+
+**The store is not one pile, it is two, and the smaller one is the drainable one.**
+
+```
+1612 done · 305 blocked · 265 open · 1 claimed          net +114 over 8 days (inflow > drain)
+```
+
+`blocked` is the OPERATOR-ONLY state and `cc-dispatch` excludes it from the wave by construction, so
+those 305 rows are not merely unworked — they are unreachable by the pipeline. **44% of them are
+machine failure, not operator work:**
+
+| n | class (grouped on the `needs` text) |
+|---|---|
+| 77 | `re-land <branch>` — a land that failed, re-filed per ATTEMPT |
+| 50 | "the worktree occupancy oracle could not be RESOLVED past the <n>s ceiling" — a sensor timeout |
+| 6 | "dead-worker stall after <n> dispatch attempt(s)" |
+| 2 | "pre-existing worktree … is behind origin/main" — the A1 class, working as designed |
+| ~170 | genuine operator tail, mostly one-offs |
+
+**The 77 re-land rows are only 27 distinct branches** — the row is minted per failed ATTEMPT, not per
+unlanded change, so one branch had 12 rows and another 8. Classify by CONTENT before touching any of
+them (`git cherry origin/main <ref>`; a subject is intent, the diff is the change):
+
+- **4 branches were already upstream** (patch-id `-`, or 0 ahead) ⇒ 16 rows closed with evidence, no
+  work to do. This is the majority of the row count for a minority of the branches.
+- **4 branches hold genuinely unlanded commits** — real value, ~1200 insertions, including
+  `fix(cc-premise): every non-zero falsifier exit was rendered as "this premise is current"`.
+- **18 branches are GONE**, and that is NOT a write-off: the land machinery pins every failed head at
+  `refs/land/failed/<ts>-<uuid>-<branch>` — **616 of them exist**. The work is recoverable from the
+  pin even when the branch is deleted. Never close a `re-land` row as "branch gone, work lost"
+  without looking there (memory: search-branch-graveyard-before-building).
+
+**WHY THE LOOP NEVER ENDS, and it is deterministic rather than flaky.** `claude/fire-20260813T214112Z-31568-1`
+(custody v1.1, 489 insertions, stranded since 08-13) re-failed **~11 times on 2026-08-16 alone**. Each
+attempt pinned a new `refs/land/failed/…-31568-1` and minted another blocked row. The cause is a gate
+doing its job: the commit's own new test replayed its pre-fix control from **`origin/main`**, and
+`moving-ref-control-lint` refuses a control that the land itself changes — because that ref advances
+past the fix the instant it lands, after which the control compares the fix to itself. So the land
+could never succeed, and nothing in the retry could change that. **A re-land row whose branch fails a
+DETERMINISTIC gate is an infinite generator: the retry is not a chance, it is a copy.** Fixed in
+`2736cb6e5` (literal-sha pin + a marker whose polarity is inverted because the fix is a REMOVAL).
+
+**Three more branches show the same repeated-failure signature today** (`…-40705-1`, `…-84790-1`,
+`…-79031-1`): triage each by running the land ONCE and reading the gate, never by re-queueing it.
+
+**The drain order that follows from this:** fix the generator first (a deterministic gate failure
+re-mints faster than any closer retires), then close the already-upstream rows in bulk by patch-id,
+then land the genuinely-stranded commits, then the 50 sensor-timeout rows. Closing rows ahead of
+fixing the generator is pouring water into a bucket whose hole you have measured.
