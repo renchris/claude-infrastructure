@@ -829,7 +829,44 @@ land_failure_inbox() {  # $1=exit code $2=cause word
         [[ -d "$_lmain" ]] && land_root="$_lmain"
       fi ;;
   esac
-  cmd="cd ${land_root} && git checkout ${BRANCH} && bash scripts/ship-land.sh"
+  # 🚨 THE RETRY RUNS TRUNK'S PIPELINE AGAINST THE BRANCH — NEVER THE BRANCH'S OWN COPY OF IT
+  # (2026-08-16, BACKLOG_DRAIN_24_7 §4 C1). This line used to end `bash scripts/ship-land.sh`: a
+  # RELATIVE path, resolved inside the branch that had just been checked out. So retrying a stuck
+  # branch executed THAT BRANCH'S ship-land.sh, and every brake landed on trunk since the branch was
+  # cut was structurally unreachable from the one code path that most needs them — the retry of an
+  # OLD branch is by definition the case where the branch's pipeline is most out of date. Both of
+  # this generator's own brakes were in that blind spot: aa1886a5e's one-row-per-stuck-branch title
+  # fold and 40613b786's rc-5 content-already-on-trunk screen, i.e. the two fixes that exist to stop
+  # this very function minting duplicates. Measured leak: row accec6d1f40c (2026-08-16T08:26Z)
+  # postdates aa1886a5e by fifteen minutes and still carries the pre-fold title format.
+  #
+  # THE MECHANISM IS A SEPARATION THIS FILE ALREADY RELIES ON, not a new one. SCRIPT_DIR is resolved
+  # from $SELF (see _resolve_self above) and supplies the PIPELINE — land-lock, land-verify,
+  # gate-select, gate-policy, gate-memo, postland-verify; REPO_ROOT and BRANCH come from the CWD and
+  # supply the TREE BEING LANDED. The lint paths a few hundred lines down are deliberately resolved
+  # repo-root-relative rather than from SCRIPT_DIR for exactly this reason ("the tree being landed
+  # must be gated by its own"). So running trunk's ship-land.sh from inside the branch checkout is
+  # not a trick — it is the split this script is already built around, finally used on the retry.
+  #
+  # WHY A THROWAWAY WORKTREE AND NOT THE TWO OBVIOUS ALTERNATIVES, both of which were tried:
+  #   · `git show origin/main:scripts/ship-land.sh > /tmp/x && bash /tmp/x` — SCRIPT_DIR becomes
+  #     /tmp and EVERY sibling above resolves to nothing. gate-select absent is not an error, it is
+  #     the documented fail-closed FULL-corpus branch, i.e. the 2026-07-26 gate-runaway amplifier.
+  #   · `git checkout origin/main -- scripts/` into the branch tree — that dirties the working tree,
+  #     and a dirty tree is a ship-land PREFLIGHT REFUSAL. The retry would never start.
+  # A detached worktree at origin/main is the only variant where trunk's bytes AND all their siblings
+  # resolve while the branch checkout stays clean. It is removed unconditionally afterwards: the
+  # branch this exists for is precisely the one retried dozens of times, and a retry that accumulates
+  # a worktree per attempt would be a second minter wearing a fix's clothes.
+  #
+  # The teardown is guarded on $_tw being set rather than sharing the `&&` chain, because a `;`
+  # teardown still runs when its setup failed (memory: destructive-cleanup-runs-after-its-setup-
+  # failed) — here that would hand `git worktree remove --force` an empty path. The static half is
+  # SINGLE-quoted so `$_tw`/`$_rc` survive to run time; only land_root and BRANCH interpolate now.
+  # shellcheck disable=SC2016  # the single quotes are the POINT — $_tw/$_rc must survive unexpanded
+  # into the stored command and be evaluated by the shell that RUNS it, not by this one. Expanding
+  # them here would bake this trap handler's own (empty) values into an operator's re-land step.
+  cmd="cd ${land_root} && git checkout ${BRANCH} && "'_tw="$(mktemp -d)/trunk" && git fetch origin --quiet && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; exit $_rc'
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own
