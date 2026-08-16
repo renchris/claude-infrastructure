@@ -757,15 +757,20 @@ r="$(mint)"'
 
   # GREEN: the same, spanning `\` continuations — the line-local test kept these, which is exactly
   # how the real shape survived. The command word is on the THIRD line.
-  # The closing `}` sits at the OPENER's indentation on purpose: this fixture lives inside this very
-  # file, which the lint scans, and a function opened by a continuation line that never closes at its
-  # own indent swallows every later line into that scope (that is analyze()'s documented rule, and it
-  # made this file report a finding against its own `d`). A control must not perturb the corpus it
-  # is embedded in.
+  # TWO shapes here are load-bearing against THIS FILE, because the fixture lives inside the very
+  # corpus the lint and its mutant harness scan — a control must not perturb the corpus it is
+  # embedded in, and both ways of getting that wrong were observed while writing it:
+  #   · the closing `}` sits at the OPENER's indentation, because a function opened by a
+  #     continuation line that never closes at its own indent swallows every later line into that
+  #     scope (analyze()'s documented rule) — which made this file report a finding against its own
+  #     `d`, on a fixture that is not code at all.
+  #   · the opener carries `:` so it is not a BARE `mint() {` line, which is exactly the shape
+  #     --mutants' picker scans for. A bare opener made the harness choose this file's fixture text
+  #     as its mutation site and report the lint BLIND against a string.
   mk envprefixcont 'G=""
 cleanup() { rm -rf "$G"; }
 trap cleanup EXIT
-mint() {
+mint() { :
 A="1" G="/tmp/cell" \
   B="2" \
   /usr/bin/env true
@@ -861,8 +866,23 @@ if [ "$MUTANTS" = 1 ]; then
       !d && $0 ~ ("^[ \t]*" fn "[ \t]*\\(\\)[ \t]*\\{[ \t]*$") { print; printf "  %s=\"/tmp/mutant\"\n", g; d=1; next }
       { print }' "$sf" > "$mf"
     if bash "$_self" "$mf" >/dev/null 2>&1; then
-      printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "BLIND — mutant NOT caught"
-      blind=$((blind + 1))
+      # STRICT missed it — but "missed" has TWO causes and only one is blindness. The picker above
+      # chooses the first global the trap handler READS; the detector additionally requires that the
+      # handler use it DESTRUCTIVELY, which is the whole `logpath` control ("a trap-read global with
+      # no destructive use is not a cleanup record"). cc-notify's `_on_signal` only ECHOES $CLOUD_ID,
+      # so its mutant is uncatchable BY DESIGN and calling that BLIND indicted the detector for
+      # obeying its own contract — a permanent red the corpus can never clear.
+      # The LINT ITSELF is the arbiter of which case this is, never a second copy of its predicate
+      # here: --loose drops exactly the destructive-use requirement. --loose catches it ⇒ the global
+      # is a log path and strict is CORRECT to stay silent (not testable). --loose misses it too ⇒
+      # nothing about destructiveness explains the miss, and that is genuine blindness.
+      if bash "$_self" --loose "$mf" >/dev/null 2>&1; then
+        printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "BLIND — mutant NOT caught"
+        blind=$((blind + 1))
+      else
+        printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "not testable (trap READS it, never destroys with it)"
+        skip=$((skip + 1))
+      fi
     else
       printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "ok"
       ok=$((ok + 1))
