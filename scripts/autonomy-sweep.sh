@@ -619,14 +619,14 @@ if [ -x "$_grouping" ]; then _bounded bash "$_grouping" --file >/dev/null 2>&1; 
 # claimed. Re-validation was demand-driven, and 63% of the store generated no demand.
 #
 # ⚠️ IT DOES NOT RUN EVERY SWEEP, and the interval gate is the load-bearing part of this block. This
-# script fires at StartInterval 300 — every 5 minutes — and a full pass costs 106 s MEASURED at
-# utility over 564 rows (see the bound below). Running it every pass would spend a third of this
+# script fires at StartInterval 300 — every 5 minutes — and a full pass costs 265.81 s MEASURED at
+# utility over 567 rows (see the bound below). Running it every pass would spend a third of this
 # box's sweep budget re-asking questions whose answers change on the scale of a landing, and would
 # rewrite the stamp file 288 times a day for nothing. CC_PREMISE_PASS_EVERY_S defaults to 6 h, so
 # "a currency verdict no older than one sweep" means one CURRENCY sweep — four a day.
 #
 # THE STAMP IS CLAIMED BEFORE THE PASS RUNS, NOT AFTER. Writing it after would let a pass that dies
-# (or is killed by the bound) re-fire on the very next 5-minute tick, and a failing 106 s pass every
+# (or is killed by the bound) re-fire on the very next 5-minute tick, and a failing 265 s pass every
 # 5 minutes is a self-inflicted load spiral. Claim-then-run means a broken pass costs one interval,
 # not the box.
 _prem_rc="skipped"; _prem_note="not-due"; _prem_closed=0; _prem_recorded=0
@@ -642,19 +642,38 @@ if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
   if [ "$((_prem_now - _prem_last))" -ge "$_prem_every" ]; then
     mkdir -p "$(dirname "$_prem_stamp")" 2>/dev/null; : > "$_prem_stamp"
     # 🚨 ITS OWN BOUND, NOT CC_SWEEP_BOUND_S. The shared 180 s bound above is sized for the `--file`
-    # and `--assert` reads beside it; this pass MEASURED 106 s at utility over 564 rows on 2026-08-12
-    # — it COMPLETES, so a bound is a bound here and not a fixed cost (the trap W0 paid for: 10 of 10
-    # runs at rc 124, an unreachable flip criterion, and no instrument on the box could see it).
-    # 420 s is 4x the measured cost, so it absorbs store growth and a slow probe or two while staying
-    # far below the pathological tail (149 stored probes x the 20 s FALSIFIER_TIMEOUT_S = ~50 min, if
-    # every probe hung). Sized in the BAND it runs in: _bounded already runs at utility, which is
-    # where the 106 s was measured — not in a foreground shell (memory: bound-must-fit-the-band).
+    # and `--assert` reads beside it; this pass is a different order of work entirely.
+    #
+    # RE-MEASURED 2026-08-16, IN THE BAND, AND THE OLD SIZING WAS STALE — 420 s came from a 106 s
+    # measurement taken 2026-08-12 over 564 rows. Same command, same band, four days later:
+    #     265.81 s real (user 122.94 · sys 42.63), read-only, 567 non-done rows, 141 probed
+    # `/usr/bin/time -p taskpolicy -c utility python3 bin/cc-premise sweep --json`. The cost 2.5x'd in
+    # four days, so the "4x the measured cost" headroom the old comment claimed had quietly become
+    # ~1.6x — and the FULL production pass is strictly dearer than the read-only one measured here:
+    # `--record` adds a batch write and `--close-falsified 5` adds up to 5 re-run probes at
+    # FALSIFIER_TIMEOUT_S=20 s apiece. That lands the real pass at the bound, which is exactly what
+    # the record shows: 5 production runs ever, 4 of them rc 124 bound-exceeded.
+    #
+    # WHERE THE TIME ACTUALLY GOES, measured rather than assumed, because it decides the shape of the
+    # fix: the whole-store fold is NOT the floor. `cc-backlog list --all --json` over all 2,149 rows
+    # runs in 3.30 s at utility. The other ~262 s is the 141 falsifier probes themselves, ~1.9 s each.
+    # 1500 s is 5.6x the measured read-only cost and ~3.7x a full pass, on a job that fires every 6 h
+    # at utility — so it is a real ceiling against a hung probe (the pathological tail is still
+    # 141 x 20 s = ~47 min above it) and not a fixed cost the pass pays every time.
+    #
+    # THE DURABLE FIX IS SHARDING, AND IT IS FILED, NOT DONE HERE. Because the fixed overhead is only
+    # 3.3 s, a `--limit N` + cursor arm would genuinely cap per-run cost and stop this bound rotting
+    # again on the next 2.5x. It is not in this commit because the deferred rows must NOT fold into
+    # `unprobed` — that field is the coverage ratchet's own input, and inflating it would file a
+    # coverage-regression row every pass, i.e. a half-built shard is worse than none (memory:
+    # span-must-equal-subject). Re-size until then, and re-measure rather than trusting this number:
+    # it has a four-day half-life (memory: published-figure-decays-with-its-source).
     #
     # --record ALWAYS; --close-falsified CAPPED AT 5. A falsified row refuses every claim and nothing
-    # closes it, so it is permanently live and permanently unfireable — 19 rows are in that state
+    # closes it, so it is permanently live and permanently unfireable — 20 rows are in that state
     # today. The cap is what keeps a probe-corrupting tree change from emptying the store in one
     # pass, and cc-premise re-asks each row immediately before it closes it (see _close_falsified).
-    _prem_out="$(CC_SWEEP_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-420}" \
+    _prem_out="$(CC_SWEEP_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-1500}" \
                  _bounded python3 "$_premise" sweep --json --record \
                    --close-falsified "${CC_PREMISE_CLOSE_CAP:-5}" 2>/dev/null)"; _prem_rc=$?
     _prem_recorded="$(printf '%s' "$_prem_out" | jq -r '.validated_recorded // 0' 2>/dev/null)"
@@ -723,7 +742,7 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
     premise_pass_rc:$pr, premise_pass_note:$pn,
     premise_rows_validated:($pv|tonumber), premise_rows_closed:($pc|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 106 s measured at utility while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 420 s bound needs re-measuring in the band, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed

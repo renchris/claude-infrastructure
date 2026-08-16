@@ -188,6 +188,10 @@ BLOCKING = ("superseded", "self-duplicate", "falsified")
 # question ("does this file still exist", "is this suite still red"); anything slower is not a
 # probe and must not hold a claim hostage. On timeout we fail OPEN — see run_falsifier.
 FALSIFIER_TIMEOUT_S = int(os.environ.get("CC_PREMISE_FALSIFIER_TIMEOUT", "20"))
+# The whole-store read in _folded_items — see the sizing note there. Deliberately ABOVE the caller's
+# own bound so the outer cut wins and the beat stays legible; 120 s was the old value and it aborted
+# passes that were going to succeed.
+LIST_TIMEOUT_S = int(os.environ.get("CC_PREMISE_LIST_TIMEOUT_S", "900"))
 FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_FALSIFIER", "on").lower() not in ("off", "0", "no")
 
 # ── THE EXIT CODES THAT MEAN "COULD NOT ASK" RATHER THAN "ASKED, ANSWERED NO" ────────────────────
@@ -366,10 +370,48 @@ RE_PATH = re.compile(
 )
 
 
+# THE FAIL-OPEN CHANNEL MUST SPEAK THE CALLER'S LANGUAGE (plan §4 C4 defect 2).
+# `_die_open` is right to exit 0 — a failure to READ may never block a claim, and that is the whole
+# contract of this file. What it got wrong is the BODY: it wrote the bare line `verdict=unknown` on
+# stdout no matter what the caller had asked for. To a `--json` caller that is not a degraded answer,
+# it is a NON-ANSWER WEARING A SUCCESS EXIT — rc 0 with an unparseable body, which is the one shape a
+# consumer cannot tell from a clean run.
+#
+# It cost exactly that. autonomy-sweep's premise pass reads
+# `jq -r '.validated_note // "unparsed"'`, so the single production run that ever reached this line
+# (2026-08-15T22:15:38Z) journalled `premise_pass_rc:"0"` — healthy — beside `note:"unparsed"` and
+# `premise_rows_validated:0`, and it read as "the parser is broken". The parser was fine. The pass
+# had aborted at `cc-backlog list failed — cannot sweep` (the 120 s read below, against a store whose
+# `list --all --json` fold now runs into minutes) and said so ONLY on a stderr the caller sends to
+# /dev/null. Four rc-124 runs and this one are the entire production history of this pass: zero rows
+# validated, and the one run that exited 0 was the least honest of the five.
+#
+# So the failure now answers in the caller's own shape, carrying the SAME keys the consumer reads —
+# `validated_note` says what went wrong instead of defaulting to a word that blames the reader
+# (memory: null-result-must-not-use-the-error-channel; claimed-outcome-vs-checked-outcome).
+#
+# EXIT 0 IS DELIBERATELY UNCHANGED. A new non-zero here would strand every existing consumer of the
+# fail-open contract — `check`/`contract` gate claims on it — and would convert a read failure into a
+# claim refusal, which is precisely the inversion this function exists to prevent (memory:
+# new-nonverdict-state-strands-its-consumers). The verdict travels in the BODY, where a reader can
+# act on it, not in a status code that changes what every caller does.
+_AS_JSON = False   # set by main() from the caller's own argv; read only by _die_open
+
+
 def _die_open(msg):
     """Any failure to READ is fail-open: say so on stderr, verdict unknown, exit 0."""
     sys.stderr.write("cc-premise: %s\n" % msg)
-    sys.stdout.write("verdict=unknown\n")
+    if _AS_JSON:
+        sys.stdout.write(json.dumps({
+            "fail_open": True,
+            "validated_recorded": 0,
+            "validated_note": "read-failed: %s" % msg,
+            "closed_falsified": 0,
+            "close_skipped": 0,
+            "assessed": 0,
+        }) + "\n")
+    else:
+        sys.stdout.write("verdict=unknown\n")
     sys.exit(0)
 
 
@@ -2216,12 +2258,25 @@ def _folded_items():
     exe = os.environ.get("CC_PREMISE_BACKLOG_BIN") or os.path.join(
         os.path.dirname(os.path.realpath(__file__)), "cc-backlog"
     )
+    # THE READ THAT ACTUALLY FIRED (plan §4 C4 defect 2). This is the call behind the one
+    # `_die_open("cc-backlog list failed — cannot sweep")` in production: `list --all --json` folds
+    # the whole store through a single large jq, and that fold has grown into the minutes — measured
+    # live at 2m12s for one such fold while this pass ran. A 120 s ceiling on it therefore aborts
+    # passes that were going to succeed, and because the abort is fail-open it does so while exiting
+    # 0. The bound is not wrong in kind — an unbounded read here could hang the sweep — it is wrong
+    # in SIZE, and it was sized against a store that no longer exists.
+    #
+    # It is also the WRONG PLACE to be the binding constraint: the caller already carries a bound
+    # (autonomy-sweep's CC_PREMISE_PASS_BOUND_S), and that one is visible in the beat as rc 124 with
+    # its own note. An inner ceiling that fires first converts a legible timeout into an illegible
+    # one, so this is raised to sit ABOVE the outer bound and let the outer cut win — the reading
+    # stays diagnosable either way (memory: exoneration-bound-must-fit-what-it-bounds).
     try:
         p = subprocess.run(
             [exe, "list", "--all", "--json"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=LIST_TIMEOUT_S,
         )
         if p.returncode != 0:
             return None
@@ -2771,6 +2826,12 @@ def main():
         sys.stdout.write(__doc__)
         sys.exit(0)
     verb, rest = argv[0], argv[1:]
+    # Set BEFORE any work, so every fail-open path — including the catch-all around main() — answers
+    # in the shape the caller asked for. Read off the caller's own argv rather than threaded through
+    # each cmd_*: the exception handler is outside all of them and is exactly where an unforeseen
+    # failure lands, so a parameter would have missed the case that matters most.
+    global _AS_JSON
+    _AS_JSON = "--json" in rest
     if verb == "check":
         if not rest:
             sys.stderr.write("cc-premise check: <id> is required\n")
