@@ -22,11 +22,17 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/hooks/lib/memory-index-measure.sh"
-  # shellcheck source=../hooks/lib/memory-index-measure.sh
+  # Fixture $HOME. Nothing in this subject reads it today — every fixture below lives under
+  # $BATS_TEST_TMPDIR — but an unfixtured suite is one edit away from touching the operator's
+  # live ~/, and the ratchet refuses the shape rather than the incident.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # shellcheck source=/dev/null
   . "$LIB"
 }
 
 # write <name> <content…> → path; content is passed to printf so \n works.
+# shellcheck disable=SC2059  # the format string IS the argument: these fixtures are written as
+# printf formats so \n, \t and \xNN escapes produce the bytes the loader would actually read.
 write() { local f="$BATS_TEST_TMPDIR/$1"; shift; printf "$@" >"$f"; printf '%s' "$f"; }
 units() { local m; m="$(mim_measure_file "$1")"; printf '%s' "${m%% *}"; }
 lines() { local m; m="$(mim_measure_file "$1")"; printf '%s' "${m##* }"; }
