@@ -99,3 +99,68 @@ ago. A decision recorded yesterday does not cover a server added today — which
    or not, and did the servers actually spawn.
 
 Findings land in the sections below as they arrive.
+
+## RESOLVED — the gate, read out of 2.1.220 and then measured against it
+
+Three functions decide everything (`claude.exe`, offsets ~231.83M / ~238.15M):
+
+```js
+function Dpr(e){ let t=Uon(e); return Rt().projects?.[t]?.hasTrustDialogAccepted===!0 }
+function wB(e){ return Dpr(e??gn()) }                      // is THIS cwd trusted, per .claude.json
+
+function ny_(e){ …
+  let r=!ynt(), n=yTe({onIndeterminate:"tracked"});
+  for(let o of wC()){
+    if(o==="projectSettings"&&r)continue;                  // ← project settings SKIPPED
+    if(o==="localSettings"&&n)continue;                    // ← settings.local.json SKIPPED
+    let i=Hr(o); if(!i)continue;
+    if(i.enableAllProjectMcpServers)return!0;
+    if(i.enabledMcpjsonServers?.some((s)=>f4r(s,e)))return!0 }
+  return!1 }
+
+function SZr(e){ let t=us();                               // us = eo = MERGED settings
+  if(t?.disabledMcpjsonServers?.some((r)=>f4r(r,e)))return"rejected";   // ← FIRST, before trust
+  if(!wB())return ny_(e)?"approved":"pending";
+  if(t?.enabledMcpjsonServers?.some(…)||t?.enableAllProjectMcpServers)return"approved";
+  return"pending" }                                        // "pending" ⇒ the modal
+```
+
+Four load-bearing consequences — and V2 corrects a working assumption of this document's first draft:
+
+| # | Verdict | |
+|---|---|---|
+| V1 | **Trust gates the approval sources.** `wB()` false ⇒ `ny_()`, which skips `localSettings`. That is exactly why M5's approval was inert under M6's untrusted record — the root-cause chain above, now read rather than inferred. | [M] binary |
+| V2 | **The store is the MERGED SETTINGS, not `.claude.json`.** `us()` = `eo()` = `Aoe().settings`. The `enabledMcpjsonServers` / `disabledMcpjsonServers` keys that exist inside `.claude.json`'s `projects[<cwd>]` entries — the ones M2 measured as empty — **are never read by this gate**. A seed there, which is what the fix's first design proposed, would have been a silent no-op. | [M] binary |
+| V3 | **A rejection silences the question and grants nothing.** `disabledMcpjsonServers` is checked *before* the trust branch and returns `"rejected"` outright. So "decided, and the answer is no" is expressible — precisely the answer a `--strict-mcp-config` fire has already given. | [M] binary + probe |
+| V4 | **`flagSettings` is always an allowed source** (`wC()` does `t.add("flagSettings")` unconditionally), and `--settings <file-or-json>` IS that source. So the decision can ride the launch instead of being written to any config. | [M] binary + `--help` |
+
+### The A/B, with a positive control
+
+cwd `/private/tmp/mcp-decide-probe`, a `.mcp.json` declaring two fake stdio servers, config dir
+`.claude-tertiary`, binary 2.1.220:
+
+| Arm | `claude mcp list` | Server processes spawned |
+|---|---|---|
+| **no flag** (positive control) | both `⏸ Pending approval (run \`claude\` to approve)` | — |
+| `--settings '{"disabledMcpjsonServers":["probeA","probeB"]}'` | **both absent entirely**; the account's five user-scope servers still listed and connected | **none** |
+| `--settings '{"enabledMcpjsonServers":["probeA","probeB"]}'` | both approved, real connection attempted (`connection timed out` — the fake speaks no MCP, which is the point: the approval path reached the wire) | yes |
+
+The control matters: without the first row, a green second row would prove only that the probe could
+not see anything.
+
+## What shipped
+
+| Commit | Change |
+|---|---|
+| `0d8973832` | **The plain recycle now pre-trusts.** It was the one fire path that skipped `pre_trust`, on the premise M6/M7 refutes. Two tests — the dry-run announcement, plus a structural one pinning the real call site, because the announcement and the call live in different branches and the first alone would pass a revert. |
+| `7f3cd743` | **`cc_mcp_project_decision_args`** (`scripts/lib/mcp-noinherit.sh`) composes `--settings=<per-launch file>` naming every server the launch dir's `.mcp.json` declares, with the polarity of the fire's own MCP mode: `--strict-mcp-config` ⇒ rejected, `--with-mcp` (or a brief that disarmed no-inherit) ⇒ approved. Wired into `handoff-fire.sh` beside the existing MCP flags; the library is now sourced on BOTH branches, since a `--with-mcp` fire is the one whose servers actually reach the approval gate. Kill switch `CC_MCP_DECIDE=off`. 8 tests. |
+
+Nothing durable is written by the second change: no account `settings.json`, no `.claude.json`, no
+repo file. A later operator session in the same repo sees exactly what it saw before.
+
+**Why not the alternatives** — each rejected for a named reason, so the next reader does not re-open
+them: `enableAllProjectMcpServers` in an account settings file is a forever-grant to every repo that
+ever declares a server (the MUST-REACH-OPERATOR classification exists to keep it out);
+`disabledMcpjsonServers` in an account settings file is account-global, blinding that account to a
+server *name* in every repo; writing the launch dir's own `.claude/settings.local.json` leaks the
+decision into the operator's own account, because that file is shared by all five.
