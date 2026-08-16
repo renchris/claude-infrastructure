@@ -339,6 +339,7 @@ JSON
 }
 
 @test "decision: a dir with NO .mcp.json costs no flag at all" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/nomcp"
   cc_mcp_project_decision_args "$WORK/nomcp" off
@@ -346,6 +347,7 @@ JSON
 }
 
 @test "decision: MODE=off pre-REJECTS every declared server (grants nothing)" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/proj-off"; _mcp_proj "$WORK/proj-off"
   cc_mcp_project_decision_args "$WORK/proj-off" off
@@ -361,6 +363,7 @@ JSON
 }
 
 @test "decision: MODE=on pre-APPROVES them (the --with-mcp / MCP-brief case)" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/proj-on"; _mcp_proj "$WORK/proj-on"
   cc_mcp_project_decision_args "$WORK/proj-on" on
@@ -372,6 +375,7 @@ JSON
 }
 
 @test "decision: the two modes never share a file (an --with-mcp fire cannot read a rejection)" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/proj-both"; _mcp_proj "$WORK/proj-both"
   cc_mcp_project_decision_args "$WORK/proj-both" off; off_f="${CC_MCP_DECISION_ARGS#--settings=}"
@@ -382,6 +386,7 @@ JSON
 }
 
 @test "decision: a serverless or malformed .mcp.json emits nothing (never an empty-list flag)" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/proj-empty"; printf '{"mcpServers":{}}\n' > "$WORK/proj-empty/.mcp.json"
   cc_mcp_project_decision_args "$WORK/proj-empty" off
@@ -392,6 +397,7 @@ JSON
 }
 
 @test "decision: CC_MCP_DECIDE=off restores the pre-change behaviour and SAYS so" {
+  # shellcheck source=/dev/null
   source "$LIB"
   mkdir -p "$WORK/proj-ks"; _mcp_proj "$WORK/proj-ks"
   CC_MCP_DECIDE=off cc_mcp_project_decision_args "$WORK/proj-ks" off
