@@ -302,7 +302,7 @@ pv_stub() { # <name> <body…> → an executable stand-in for postland-verify.sh
   run nightly "$BATS_TEST_TMPDIR/no-such-postland"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "skip postland-verify.sh --selftest"
-  ! echo "$output" | grep -q "ok   postland-verify.sh --selftest"
+  ! echo "$output" | grep -q "ok   postland-verify.sh --selftest" || false
   grep -q "postland-verify.sh:kill-switched" "$BATS_TEST_TMPDIR/reg.log"
 }
 
