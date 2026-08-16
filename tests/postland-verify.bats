@@ -2924,6 +2924,59 @@ exit 0"
   [ "$(pages_n)" = "0" ]
 }
 
+# ── THE CUT MESSAGE MUST NAME THE BOUND THAT ACTUALLY FIRED (2026-08-16) ─────────────────────────
+# retry_once runs under TWO bounds — FILE_TO (300 s) for the single named test, RETRY_TO (5400 s)
+# for the whole-file fallback — and rc 124 is identical from either. The message named RETRY_TO
+# unconditionally, so on the common path it reported a bound that had never run: sixteen consecutive
+# live cuts logged "our own 5400s bound fired" for tests/autonomy-sweep.bats inside runs whose OWN
+# totals were run_s=3364 and run_s=3538. A 5400 s bound cannot fire in a 3364 s run, and the wrong
+# figure is not cosmetic — 5400 s says "a suite far too slow to re-run" and sent a session hunting a
+# 90-minute suite that measures 77 s / 55 green at that exact band, while 300 s says "one test
+# overran", which is a different investigation entirely.
+#
+# TWO cases, because ONE would pass against a constant just as well as against the out-parameter.
+# The stubs differ in exactly one property — whether the `-f` leg PLANS a test — which is precisely
+# what decides whether retry_once returns on the test leg or falls through to the file leg.
+stub_ladder_124() {   # $1=plan-on-filter (1 = the -f leg returns a verdict, 0 = it falls through)
+  stub_bats "ladder124$1" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+case \"\$*\" in
+  *-f*probe.bats*) [ '$1' = 1 ] && printf '1..1\n'; exit 124 ;;
+  *probe.bats*)    exit 124 ;;
+esac
+printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+exit 1"
+}
+
+@test "the ladder's cut names the bound that FIRED: the per-TEST bound on the test leg" {
+  b="$(stub_ladder_124 1)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                                        # unchanged: 124 still proves nothing
+  grep -q 'our own 300s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  grep -q 'the single named test' "$CC_POSTLAND_DIR/runner.log"
+  # THE REGRESSION, pinned as an absence: the file bound never ran, so it may not be named.
+  run grep -q 'our own 5400s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]
+}
+
+@test "the ladder's cut names the bound that FIRED: the FILE bound once the test leg falls through" {
+  b="$(stub_ladder_124 0)"                                     # `1..0` ⇒ no verdict ⇒ fall through
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]
+  grep -q 'our own 5400s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  grep -q 'the whole file' "$CC_POSTLAND_DIR/runner.log"
+  run grep -q 'our own 300s bound fired' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]
+}
+
 stub_ladder_admit75() {   # refuses with 75 on the RETRY whatever the environment says
   # A HELPER, not an inline heredoc in the test body, for a mechanical reason: the stub's own source
   # contains `n=$((n+1))`, and the bats dead-assertion ratchet reads any arithmetic inside an @test
