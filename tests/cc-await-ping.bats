@@ -601,7 +601,16 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
 # Every test below is RED against that line. The helper is shared so a future exit path can be held to
 # the same contract in one place.
 _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `elapsed=<n>s` field
-  sed -n 's/.*elapsed=\([0-9][0-9]*\)s.*/\1/p' "${1:--}" | head -n1
+  # NO `-` OPERAND. `"${1:--}"` spelled stdin the GNU way and this box is BSD, where sed reads `-`
+  # as a literal FILENAME and dies `sed: -: No such file or directory`. So `$e` came back EMPTY and
+  # both piped call sites failed on `[ -n "$e" ]` — the helper measured nothing, in the two cases
+  # whose whole subject is a MEASURED elapsed. Omitting the operand is the portable spelling of
+  # stdin, and it is exactly what those call sites need.
+  if [ -n "${1:-}" ] && [ "$1" != "-" ]; then
+    sed -n 's/.*elapsed=\([0-9][0-9]*\)s.*/\1/p' "$1" | head -n1
+  else
+    sed -n 's/.*elapsed=\([0-9][0-9]*\)s.*/\1/p' | head -n1
+  fi
 }
 
 @test "e2903b01dfdc: the timeout verdict reports MEASURED wall time, labelled apart from the budget" {
@@ -669,7 +678,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   "$AWAIT" "$UUID" --interval 1 --timeout 900 >"$out" 2>"$err" || rc=$?
   [ "$rc" -eq 0 ]
   grep -q 'pending before the arm' "$out"
-  ! grep -q 'verdict=' "$out"                          # stdout is payload ONLY
+  ! grep -q 'verdict=' "$out" || false                 # stdout is payload ONLY
   grep -q 'verdict=ping' "$err"
   grep -q 'budget=900s' "$err"
   local e; e="$(_verdict_elapsed "$err")"
