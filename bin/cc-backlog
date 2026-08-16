@@ -1931,6 +1931,37 @@ cmd_transition() {
       + (if $force == 1     then {force:true}         else {} end)
       + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
+  # (6b) THE UNEVIDENCED CLOSE (2026-08-16, BACKLOG_DRAIN_24_7 §4 C3). A `done` carrying no
+  # `--evidence` writes a record whose entire claim is that somebody ran the verb. That is not what
+  # this store means by done — §6's operating invariant is "the unit of done is CONTENT ON TRUNK
+  # (ls-tree/diff), never a count, never a stamp" — and the field is the only place that content is
+  # ever named. Measured over the 7d to 2026-08-16: 27 of 628 dones landed with it empty, i.e. 27
+  # rows whose closure nothing can re-derive and no later reader can audit.
+  #
+  # 🚨 WARN, NEVER REFUSE, AND THAT ASYMMETRY IS DELIBERATE. Fail-closed is the reflex here and it is
+  # wrong: the fleet's unattended closers — ship-land's auto-retraction at filing (scripts/ship-land.sh
+  # land_failure_inbox), `reap`'s dead-worker returns, cloud-return's auto-land — all close rows with
+  # no human in the loop, and a refusal would strand them MID-RECOVERY holding a row they can neither
+  # close nor hand back. A recovery path a sensor can wedge is the defect, not the cure (memory:
+  # addon-failure-exceeds-its-blast-radius). So this runs AFTER the append, exits nothing, and the
+  # transition is already durable by the time it prints.
+  #
+  # THE COUNTER IS THE POINT OF THE WARNING, not the prose. `verdict=done-without-evidence` on LINE 1
+  # is this file's established machine-readable shape (see `verdict=done-latched`, `verdict=reclaimed`)
+  # and it is what lets backlog-ratchet ratchet the rate later without re-deriving the population from
+  # the store — plan §4 C3 names that sequence: warn now, ratchet on the counter, refuse only once the
+  # rate is provably at zero. A warning with no parseable token is a message nobody can count
+  # (memory: claimed-outcome-vs-checked-outcome).
+  # `done` is QUOTED because it is a shell keyword: bare, shellcheck reads it as an unterminated loop
+  # body (SC1010) and the land gate's own lint goes red on this file. Same discipline as every other
+  # `= "done"` comparison here, and as scripts/ship-land.sh's quoted `"$bl" "done"` call.
+  if [ "$event" = "done" ] && [ -z "$evidence" ]; then
+    { printf 'cc-backlog done: verdict=done-without-evidence %s closed with an EMPTY --evidence\n' "$id"
+      printf '  A close is a claim about CONTENT, and this row now carries no way to re-derive it.\n'
+      printf '  Cite what discharged it — a landed sha, a probe run, the file that proves it:\n'
+      printf '      cc-backlog done %s --evidence "<sha / probe output / path proving it>"\n' "$id"
+    } >&2
+  fi
   # (7) THE RE-ADMISSION RE-READ (2026-08-10, backlog f46261b23ec2). `unblock` is the one transition
   # that returns an item to cc-dispatch's fire predicate with nothing re-reading what it says. That
   # would be survivable if a block were a neutral pause. It is the opposite: blocked items sit
