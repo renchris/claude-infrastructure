@@ -117,9 +117,26 @@ fi
 # Exiting here instead would let a missing side-car silence the primary duty — a side-car
 # failing wider than itself, which is the one thing this whole subsystem refuses to do.
 MEASURE_OK=1
-# shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
-. "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh" 2>/dev/null \
-  || . "$CFG/hooks/lib/memory-index-measure.sh" 2>/dev/null || MEASURE_OK=0
+# 🚨 THE `||` GUARD ABOVE WAS INERT, AND THE COMMENT ABOVE DESCRIBED SOMETHING THAT DID NOT HAPPEN.
+# This read `. <lib> 2>/dev/null || . "$CFG/…" 2>/dev/null || MEASURE_OK=0`, which LOOKS fail-safe
+# and is not: `.` is a POSIX SPECIAL BUILTIN, and a special builtin that fails terminates a
+# non-interactive shell — before the `||` is ever consulted. So a copy of this hook with no lib
+# beside it exited at this line and printed NOTHING: not the budget block it is allowed to lose,
+# but the crystallization nudge that is the whole reason the hook exists. Exactly the side-car
+# failing wider than itself that the paragraph above swears off (memory:
+# addon-failure-exceeds-its-blast-radius), and the LIVE_ADDS shape too — until the converger runs,
+# a landed ADD is absent, so this silenced the primary duty fleet-wide the moment it shipped.
+# Measured: `set -euo pipefail; . /nonexistent || echo fallback; echo after` prints neither
+# `fallback` nor `after` and exits 1, while the `[ -r ]` form below prints both.
+# Testing readability FIRST is what makes the fallback reachable at all.
+_mn_lib="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh"
+[ -r "$_mn_lib" ] || _mn_lib="$CFG/hooks/lib/memory-index-measure.sh"
+if [ -r "$_mn_lib" ]; then
+  # shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
+  . "$_mn_lib" 2>/dev/null || MEASURE_OK=0
+else
+  MEASURE_OK=0
+fi
 LIMIT=""; LINE_LIMIT=""
 if [ "$MEASURE_OK" -eq 1 ]; then
   LIMIT=$(mim_limit) || MEASURE_OK=0            # chars of the loader-visible index, not disk bytes
