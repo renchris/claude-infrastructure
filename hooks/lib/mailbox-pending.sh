@@ -126,6 +126,35 @@ _mbx_valid_uuid() {
 mailbox_file() { printf '%s/%s.md' "$(_mbx_dir)" "${1:-}"; }
 _mbx_int() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 
+# ── PORTABLE MTIME, and why the ORDER is the whole fix ───────────────────────────────────────────
+# The idiom this file used — `stat -f %m … || stat -c %Y … || echo 0` — is macOS-first with a Linux
+# fallback, and on Linux the fallback IS NEVER REACHED: GNU `stat -f` is not "BSD mtime", it is
+# --file-system, so it exits 0 printing a filesystem report ("Inodes: Total: … Free: …"). The digit
+# guard downstream then reads that as unparseable and yields 0 — an mtime of the epoch. Every
+# freshness question in this file therefore answered "ancient" on Linux, permanently:
+# `mailbox_wake_armed` said NOT ARMED over a live watcher's fresh heartbeat, and `_mbx_lock` treated
+# every held lock as stale and stole it on the first poll. Measured 2026-08-16 on a Linux worker
+# while building the W2 claim guard, whose entire job is that predicate.
+#
+# Reversing the order fixes it because the failure is asymmetric: BSD `stat` has no `-c` and exits
+# non-zero on it, so the fallback fires; GNU `stat` has a `-f` that SUCCEEDS at something else, so it
+# never does. Try the flag whose wrong-platform behaviour is an ERROR first. Behaviour on macOS — the
+# fleet — is unchanged by construction: `-c` fails there exactly as `-f` failed here.
+#
+# SCOPE. 51 further call sites carry the same idiom and the same latent bug — enumerate them with
+#   grep -rn 'stat -f %m' hooks/ bin/ scripts/
+# (`hooks/session-continue.sh:328` and `bin/cc-idl:52` are the two with live suite reds behind them:
+# wake-floor 27/28 and ttl-lock-owner-token 7). They are NOT touched here, and NOT yet in the
+# backlog — the worker that found this had no reachable store. This helper exists so the four readers of
+# the wake-path predicate — cc-notify, mailbox-drain, the wake floor, and the wake-arm claim guard —
+# cannot disagree about it, which is the invariant that made this file the SSOT in the first place.
+_mbx_mtime() { # <path> → epoch seconds, 0 when unknowable
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)"
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
+}
+
 # ── portable mkdir lock (macOS-safe; flock is Linux-only) ─────────────────────────────────────────
 # OWNER TOKEN (a15/D4). The 2 s give-up and the mtime-TTL self-break below are DELIBERATE — this
 # channel picks a benign duplicate over a hung hook, and that contract is unchanged here. What was
@@ -150,7 +179,7 @@ _mbx_lock() { # <uuid> → 0 acquired, 1 gave up (caller proceeds lock-free: dup
       ''|*[!0-9]*) ;;                                        # no/odd token → fall through to TTL
       *) kill -0 "$htok" 2>/dev/null || { rm -rf "$ld" 2>/dev/null; continue; } ;;
     esac
-    mt="$(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0)"
+    mt="$(_mbx_mtime "$ld")"
     now="$(date +%s 2>/dev/null || echo 0)"; age=$(( now - $(_mbx_int "$mt") ))
     [ "$age" -ge "$stale" ] 2>/dev/null && { rm -rf "$ld" 2>/dev/null; continue; }   # holder died → break
     [ "$waited" -ge "$max" ] && return 1
@@ -257,7 +286,7 @@ mailbox_receipt() { # <uuid> <line> → echoes unread|surfaced|read; exit 0 iff 
 mailbox_wake_armed() { # <uuid> → 0 = a live watcher will wake this session, 1 = it will not
   local u="${1:-}" wf mt now wpid
   wf="$(_mbx_dir)/$u.watching"; [ -f "$wf" ] || return 1
-  mt="$(stat -f %m "$wf" 2>/dev/null || stat -c %Y "$wf" 2>/dev/null || echo 0)"
+  mt="$(_mbx_mtime "$wf")"
   now="$(date +%s 2>/dev/null || echo 0)"
   case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
   [ "$(( now - mt ))" -le "${CC_WATCH_FRESH_S:-90}" ] 2>/dev/null || return 1
