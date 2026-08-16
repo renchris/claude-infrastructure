@@ -230,13 +230,12 @@ already there. One output token costs the quota of **12.2** cache-creation token
 
 Three consequences that change standing practice:
 
-1. **Shrinking context to save quota probably optimizes the free class — but this is the ONE
-   consequence the critic put back in doubt, so it is stated conditionally.** *If* cache_read is
-   ~free, recycling and context-trimming are justified by *rot* and by the hard context ceiling —
-   both real and unaffected — but **not** by quota. *If* cache_read carries its list-price weight
-   instead, context re-read is 58–66% of the bill and trimming is the largest lever there is. §2.8
-   shows the fleet **cannot currently tell these apart**. **Do not argue context economy on quota
-   grounds in either direction until §2.8's experiment is run.**
+1. **Shrinking context to save quota optimizes the free class.** ✅ **Experimentally confirmed** —
+   this consequence was suspended by the critic and is now restored: 31.7M cache_read tokens moved
+   the weekly meter at most 2 points where list pricing demanded 4.62 (§2.8, `meter-experiment.md`).
+   Recycling, `/compact`, and aggressive context trimming remain justified by **rot** and by the
+   hard **context ceiling** — both real and untouched by this — but **not** by quota. They should
+   never again be argued on cost grounds.
 2. **Verbosity is the primary quota lever, worth 61% of the bill.** The existing CLAUDE.md
    § Communication Discipline rule ("Opus 5 runs long by default … it has to be prompted for") is
    therefore not a style preference — it is the single largest cost control this fleet has. And it is
@@ -350,7 +349,30 @@ that lives only behind `api/oauth/usage`, which `account-utilization.jsonl` alre
 utilization series for the denominator.** `/usage` additionally exposes per-skill, per-subagent,
 per-plugin and per-MCP attribution that nothing here reads.
 
-### §2.8 🚨 The meter is NOT identified — the wave's own critic, and it qualifies §2.2
+### §2.8 ✅ RESOLVED — the meter WAS identified, by experiment (2026-08-16)
+
+> **The doubt below stood for about two hours and is now settled by measurement, not argument.**
+> M0 ran on `next2`: one session, 45 resumed turns, **31,726,824 cache_read tokens against 208
+> output** (a 152,533:1 ratio no observational sample of this fleet contains). List-price weighting
+> predicted **4.62** weekly points and **11.19** five-hour points; the meters moved **1** and **4**.
+> Over-predicted 3–4× on two independent meters.
+>
+> **Under all four attribution assumptions, list-price weighting for cache_read is REFUTED** (by
+> 1.3× to 10.3×), and on the best-supported reading — the 5-hour meter with calibrated coefficients
+> — `cache_creation` **alone** explains 4.43 pp of a 3–5 pp move, leaving **nothing** for
+> cache_read. Bound: **≤0.018–0.049 pp per million tokens, i.e. at most a quarter of list-price
+> weight and plausibly zero.**
+>
+> ⇒ **§2.2's consequence #1 is restored to its unconditional form**, and the wave's central
+> inversion survives its own critic. Cost: 1 weekly point on an account at 2%. Full method, bounds,
+> and the two instrument failures found on the way (one of which would have produced a confident
+> null from an *empty* arm):
+> [`meter-experiment.md`](../research/usage-telemetry-100p-2026-08-16/meter-experiment.md).
+>
+> *The reasoning that motivated the experiment is retained verbatim below — it is why the experiment
+> was run, and the two hypotheses it names are what the arm was designed to separate.*
+
+#### (superseded) The meter is NOT identified — the wave's own critic, and it qualifies §2.2
 
 **Nine axes measured what tokens the fleet moves; none measured what the operator actually spends.**
 Every artifact except A1 and A2 prices work in **API list dollars**, while the operator pays in
@@ -496,7 +518,7 @@ and can fire in parallel with M3.
 
 | id | wave | locus | end state (the `--goal` condition) | why it ranks here |
 |---|---|---|---|---|
-| **M0** | **Identify the meter** (§2.8) — a controlled experiment that moves ONE token class at a time against a quiet account and reads `weekly_pct`, settling whether cache_read carries weight | S | the experiment prints, per class, the measured Δ`weekly_pct` for a known token volume, with a null-move control; the result is written to the price list and the losing hypothesis is named; do NOT run it on an account above ~40% weekly, and stop at 5 pp total | **FIRST — every cost claim in this plan is conditional on it.** Costs ~3 pp of one account; schedule it in the first hours of a fresh window |
+| ~~**M0**~~ | ✅ **DONE 2026-08-16 — Identify the meter** (§2.8). Ran on `next2`: 31.7M cache_read vs 208 output; list pricing predicted 4.62 weekly pp, meter moved 1. **cache_read weight ≤0.018–0.049 pp/Mtok — at most a quarter of list price, plausibly zero.** | L (ran inline) | met — `meter-experiment.md` carries the arm, both meters, the bound under 4 attribution assumptions, and the 2 instrument failures caught en route | Cost **1 weekly pp**, 43 min — under the 3 pp estimate because the meter moved, making the staged positive control unnecessary |
 | **M1** | **Govern the dispatcher** — 254 of 261 items are parked behind a cloud-only venue filter since 2026-08-11; admit them **against measured headroom**, never wholesale | S — **blockedBy M3** | the dispatcher fires while its account's burn ratio is below pace and throttles as it approaches 1.0; over one full weekly window no account exceeds 100% and the parked count falls; do not release the queue un-governed, and do not disable any safety gate to do it | Re-scoped from "unblock" to "admit against headroom". **Un-governed it is Q3** — 26–74× the remaining allowance, 4–5 walled days/week |
 | **M2** | **Fix the DoD truncation** — `dod-persist.sh` concatenates a frozen legacy store, overflows the ~9,200 B cap, and delivers the *oldest* scope | S | a session in this repo shows the NEWEST `Scope (frozen):` line inline in `hook_additional_context`, with no `<persisted-output>` stub, on 3 consecutive starts | **Quality restoration.** 51% of injections currently carry a superseded contract — the frozen-DoD mechanism is silently not working |
 | **M3** | **The burn-ratio instrument** — add `burn_ratio` and `projected_end_pct` to `claude-accounts --readout`; wall-proximity alarm; raise `account-utilization.jsonl` retention past 6 days | S | `claude-accounts --readout` prints a burn ratio per account and flags any account whose projected end-of-window pct ≥100; `next3` renders 0.26 today | Closes the error class that inverted this plan's own premise (§1) |
