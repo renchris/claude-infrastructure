@@ -1371,6 +1371,75 @@ EOF
   fi
 }
 
+# ── THE LAND PATH IS NEVER GARBAGE (2026-08-16, the SIGTERM-143 land bleed). `ship-land.sh` reported
+# `verdict=killed signal=SIGTERM` on every re-land retry of 6 branches for 5 days — 543
+# refs/land/failed pins since 2026-08-10 — and the killer was this arm: a backgrounded
+# `handoff-fire.sh land …` is a launchd-parented bash that outruns the 600 s floor on any real gate,
+# and neither land script carried a whitelist token. The pair below is the mechanism in both
+# directions in ONE closed world, so the exemption cannot quietly widen into "the arm collects
+# nothing": the two land shapes must survive AND the unrelated orphan beside them must still die.
+@test "garbage: an in-progress land is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90101 1 45:00 bash
+90102 1 45:00 bash
+90103 1 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90101 bash scripts/ship-land.sh
+90102 /bin/bash /Users/x/.claude/scripts/desk-land.sh --branch claude/fire-20260812T120520Z-80623-1
+90103 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # the control (90103) fired, so the fixture reaches the actuator; the two lands did not.
+  [ "$got" = "90103 " ]
+}
+
+# ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
+# orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
+# classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
+# was a bash, and every recycled pid running a shell script answered yes. This box allocates ~40
+# pids/s and wraps the whole 99999-pid space in ~41 min while a sweep forks a `/bin/ps -p` per
+# candidate between snapshot and signal, which is how lands died at 7 s under a 600 s floor.
+#
+# These two run the REAL actuator — CC_REAPER_GARBAGE_KILL is unset, because the collector seam
+# short-circuits ahead of the argv check and a test that kept it would assert nothing. One closed
+# world, one live victim, and the ONLY difference between the pair is whether the recorded argv is
+# still the argv the pid carries.
+@test "garbage: a candidate whose argv changed under it (pid reuse) is REFUSED, not signalled" {
+  mk_garbage_fixtures
+  unset CC_REAPER_GARBAGE_KILL
+  : > "$CC_REAPER_LOG"
+  bash -c 'sleep 300; true' & VICTIM=$!
+  printf '%s 1 45:00 bash\n' "$VICTIM" > "$GA"
+  printf '%s /bin/bash /Users/x/.claude/a-long-dead-orphan.sh\n' "$VICTIM" > "$GB"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  alive=0; kill -0 "$VICTIM" 2>/dev/null || alive=1
+  kill "$VICTIM" 2>/dev/null || true
+  [ "$alive" -eq 0 ]                      # it SURVIVED — the wrong process was not killed
+  grep -q "REFUSED TERM $VICTIM — argv no longer matches" "$CC_REAPER_LOG"
+}
+
+@test "garbage: …and the same candidate carrying its REAL argv is still signalled (control)" {
+  mk_garbage_fixtures
+  unset CC_REAPER_GARBAGE_KILL
+  bash -c 'sleep 300; true' & VICTIM=$!
+  printf '%s 1 45:00 bash\n' "$VICTIM" > "$GA"
+  printf '%s %s\n' "$VICTIM" "$(/bin/ps -p "$VICTIM" -o args= | sed 's/^ *//')" > "$GB"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  # give the TERM a moment to be delivered before asking. `alive` is assigned through `||` rather
+  # than from `$?`: under bats a bare failing command IS the test failure, so `kill -0` on the
+  # corpse this test wants would abort before the assertion it exists to make.
+  sleep 1
+  alive=0; kill -0 "$VICTIM" 2>/dev/null || alive=1
+  kill -9 "$VICTIM" 2>/dev/null || true
+  [ "$alive" -eq 1 ]                      # it DIED — so the refusal above is a real discrimination
+}
+
 @test "garbage DRY-RUN reports the refusal too — the two modes may not disagree" {
   mk_garbage_fixtures
   printf '%s' "$$" > "$D/gs-wd/sid-anc.daemon"; printf '999999' > "$D/gs-wd/sid-anc.pid"
