@@ -332,6 +332,58 @@ artifacts classify into four causes, and **none is a cloud-return defect**:
 | 5 | 70 | `mktemp: mkstemp failed on …/postland-run.VRdnYH/…` — the re-author step inherited a **TMPDIR pointing at a reaped postland-verify scratch dir**, so `cloud-reconcile.sh:424` could not compose the rewritten messages | a real, separate bug: the re-author must not trust an inherited TMPDIR |
 | 1 | 143 | killed from outside — already handled as a non-verdict | — |
 
+**Then the instrument fired, and both remaining causes named themselves within the hour.**
+
+**(1) The abstain is an EXPIRED OAuth ACCESS TOKEN on one account — not the daemon's
+environment.** The first live abstain after the fix landed, verbatim from `return.jsonl`:
+
+```json
+{"ts":"2026-08-17T07:58:12Z","id":"session_018in35KSYj7iLV7jZCNuCnj","outcome":"abstain",
+ "why":"control plane unreadable",
+ "err":"cloud-create-api: HTTP 401 from /v1/code/sessions/session_018in35KSYj7iLV7jZCNuCnj
+        {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",
+        \"message\":\"OAuth access token has expired. Re-authenticate to continue.\"}}",
+ "rc":"4","account":"next"}
+```
+
+Discriminator, same call, same second, four accounts: **`next` → 401; `next2`/`next3`/`next4` →
+404** (authenticated, and correctly reporting a session that is not theirs). So this is one
+account's token, not a daemon-environment property — which is what every earlier hypothesis had
+assumed. It also explains the bursty, all-account, self-clearing history: **the cloud lane's
+token is refreshed only when a LOCAL Claude Code session on that account happens to take a turn**,
+so an account whose session sits idle starves the cloud reads until something wakes it.
+`cc-relogin next` REFUSES, and the refusal is principled — `next` has a live session, and a
+relogin that rotates the token out from under a running CC has its rotation discarded, which *is*
+a logout. Filed for the operator as `8636b8f829fe`, together with the second-order gap it exposes:
+**cc-relogin's health gate keys on the LOGIN deadline (319 h away ⇒ "healthy") and is blind to an
+expired ACCESS token**, so the board will keep prescribing "no re-auth needed" while every cloud
+read 401s. **A2 is therefore blocked on exactly one named thing**, and the ledger says so itself
+rather than needing this analysis re-derived.
+
+**(2) The pass writing to the live store was never the daemon — it was postland-verify's
+throwaway worktree.** Caught in the act at 2026-08-17T07:56Z, holding the live `.return.lock`:
+
+```
+RUNNING: /Users/chrisren/.claude/autonomy/postland/wt-run-61088/scripts/cloud-return.sh
+```
+
+The gate meant to stop exactly this read `case "$0" in "$_cc_cfg"/*`. postland-verify mints its
+worktrees **under the config dir** (`$_cc_cfg/autonomy/postland/wt-run-NNNNN/`), so a verifier
+copy's `$0` matches that prefix just as well as the deployed copy's does — the discriminator could
+not discriminate, and **every postland run of this suite has been landing branches, closing backlog
+rows and spending quota against live state.** This is the *same* incident the guard's own comment
+records from 2026-08-11 (four concurrent passes out of `wt-run-54668`); it was never actually
+closed, because the guard written to close it tested a prefix that contains its own harness
+(memory: `guard-refusal-fires-on-its-own-harness`).
+
+Three previously-loose facts collapse into this one cause: the refusal artifacts dying on
+`mkstemp … postland-run.VRdnYH/…` (a verifier's private TMPDIR, reaped when its run ended); the
+**absence of any `cloud-return` row in the sweep's own IDL journal** while `return.jsonl` filled up;
+and the bursty, non-300s cadence of the ledger. The arm that should have caught it was a **grep for
+`case "$0" in` over the source text**, which stayed green the whole time — text cannot show which
+paths a pattern admits. The gate is now an exact-path comparison, and the behavioural arm runs the
+real script from both locations with a recording stub plus a positive control.
+
 **Landed this session** (`54aa27cd6`, content-verified on `origin/main`): the abstain row now
 names its cause. `worker_status()` ran the status bin under `2>/dev/null` and folded every
 failure into rc 2, so **384 rows read exactly `{"why":"control plane unreadable"}`** and could
