@@ -145,3 +145,12 @@ Until one of those ships, **every** non-`claude-infrastructure` item fired via `
 this checkout burns a cloud session that cannot reach its own subject. The dispatch set currently
 lists two such projects (`scripts/dispatch-projects.conf`): `doc_classifier` and
 `reso-management-app`.
+
+---
+
+🚨 **CONFIRMED 2026-08-17, on the second of those two projects.** `c33f3b1cb278` (project
+`reso-management-app`) was fired into a `claude-infrastructure` VM and was unworkable on arrival —
+~24h after this paragraph was written, and the first occurrence on `reso-management-app` rather than
+`doc_classifier`. The prediction is now observed, not argued, and the §3 decision — **(a) fail
+closed vs (b) route by project** — carries a fourth datapoint of cost.
+`venue-foreign-repo-recurrence-2026-08-17.md`.
