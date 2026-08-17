@@ -26,7 +26,20 @@
 
 set -u
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve every symlink hop BEFORE deriving the repo root. ~/.claude/scripts/ is per-file symlinks
+# into the checkout, so an unresolved `dirname $0/..` yields ~/.claude — no tests/, no fixtures —
+# and this harness would silently measure nothing on the live path. Canonical loop, copied from
+# scripts/ship-land.sh:199 (no `readlink -f`: GNU-only, and this box is BSD).
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [[ -L "$p" ]]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+HERE="$(cd "$(dirname "$(_resolve_self "${BASH_SOURCE[0]:-$0}")")/.." && pwd)"
 HOOK="${CC_DIFF_HOOK:-$HERE/hooks/validate-bash.sh}"
 SITES="${CC_DIFF_SITES:-$HERE/tests/fixtures/validate-bash-sites.tsv}"
 CORPUS="${CC_DIFF_CORPUS:-$HERE/tests/fixtures/validate-bash-corpus.txt}"
