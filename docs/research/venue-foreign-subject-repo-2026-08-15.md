@@ -65,6 +65,11 @@ leaves an item exactly where it is, a wrong ELIGIBLE burns a slot and invites a 
 about invisible state. And it is a **spelling**, not the class — same standing caveat as the keyword
 list it would join.
 
+🚨 **Neither form had reached an enforcing store by 2026-08-17**, when `c33f3b1cb278` (project
+`reso-management-app`) was dispatched to cloud and was unworkable on arrival — the third occurrence
+in four days, and the first *repeat* of the 08-14 route rather than a new one. Both discriminators
+above would have refused it. `venue-foreign-repo-recurrence-2026-08-17.md`.
+
 ## Not fixed here, deliberately
 
 `bin/cc-venue`'s header forbids a cloud VM from building or running the venue rule: it would be

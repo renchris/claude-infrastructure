@@ -85,6 +85,11 @@ field, both already on the row; the measurement, the two `cc-eligible` resolutio
 are in `venue-foreign-subject-repo-2026-08-15.md`. Implement the conjunct from the text, not from
 the label alone.
 
+🚨 **This route RECURRED on 2026-08-17** — `c33f3b1cb278`, project `reso-management-app`, dispatched
+to cloud and unworkable on arrival. The conjunct proposed above would have refused it on the label
+alone; it was never implemented, so the cost repeated. Third occurrence in four days, first repeat
+of *this* route: `venue-foreign-repo-recurrence-2026-08-17.md`.
+
 ## The item itself
 
 `1cc794cbc6c4` is **not adjudicated**. Its premise — authored `FrozenFile.source_type` disagreeing
