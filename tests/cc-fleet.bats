@@ -603,8 +603,18 @@ STUB
   # which leaves this hand-copied count as the ONLY leg that can notice it. That is the whole reason
   # the block above refuses to derive `n` from disk, and it is why this entry had to move with the
   # addition rather than be left for postland-verify — for a staged plist there is no second net.
-  if [ "$n" != 31 ]; then
-    echo "manifest declares $n labels, expected 31 — if a plist was legitimately added or retired,"
+  # 32 since 2026-08-17: com.claude.browser-spin-guard. The capacity-alarm/scratchpad-reaper/
+  # devserver-gc shape a FOURTH time — a plist landed (438883e365ec) with no manifest row, so the
+  # coverage loop below went RED on trunk for every lander after it, and postland-verify bisected it
+  # to that commit. Repaired forward, count moving WITH the repair as every entry above did.
+  # Worth one line on WHY the lander missed it, since the comments above keep noting the recurrence:
+  # nothing in the land gate reads this file. cc-fleet.bats is a `--direct` suite of any diff that
+  # touches launchd/, but the land's smoke is load-shed on a busy box (R7) — and that box was at load
+  # 244 at the time, from the very wedge the new plist exists to catch. So the one land most likely
+  # to add a plist was also the one least able to test it. That is an argument for the §4.4 chokepoint
+  # lint, not for deriving `n` from disk, which the block above has already ruled out twice.
+  if [ "$n" != 32 ]; then
+    echo "manifest declares $n labels, expected 32 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
