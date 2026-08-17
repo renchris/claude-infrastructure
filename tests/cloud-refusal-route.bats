@@ -756,10 +756,19 @@ $(desk_tail 6)"
   # briefs sent to one machine.
   local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
   [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  #
+  # 🚨 STRUCTURAL, AND THAT IS ITS LIMIT — it stayed green while the guard was defeated. The prefix
+  # form it used to pin (`case "$0" in "$_cc_cfg"/*`) admits
+  # `$_cc_cfg/autonomy/postland/wt-run-NNNNN/scripts/autonomy-sweep.sh`, because postland-verify
+  # mints its worktrees UNDER the config dir; caught in the act 2026-08-17T07:56Z. A grep over
+  # source text cannot see which paths a pattern admits. The behavioural arm — which asserts THIS
+  # call's stub is never invoked from a verifier copy — is in tests/autonomy-sweep.bats
+  # ("a VERIFIER COPY UNDER the config dir may NOT land").
   local gate_line rfz_line
   # The gate keys on the UNRESOLVED $0: the deployed path is a SYMLINK into the checkout, so a
-  # resolved path is identical in both cases and the discriminator disappears.
-  gate_line="$(grep -n 'case "\$0" in' "$sweep" | head -1 | cut -d: -f1)"
+  # resolved path is identical in both cases and the discriminator disappears. It must also be an
+  # EXACT comparison — a prefix is what failed.
+  gate_line="$(grep -n '\[ "\$0" = "\$_cc_cfg/scripts/autonomy-sweep.sh" \]' "$sweep" | head -1 | cut -d: -f1)"
   rfz_line="$(grep -n '_cloudrfz" --sweep' "$sweep" | head -1 | cut -d: -f1)"
   [ -n "$gate_line" ] && [ -n "$rfz_line" ] || false
   [ "$gate_line" -lt "$rfz_line" ]

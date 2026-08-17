@@ -896,11 +896,27 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
 # absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
-_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-case "$0" in
-  "$_cc_cfg"/*) _cloudret_deployed=1 ;;
-  *)            _cloudret_deployed=0 ;;
-esac
+_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _cc_cfg="${_cc_cfg%/}"
+# 🚨 EXACT PATH, NOT A PREFIX — and the prefix form was defeated by the very harness it was written
+# to exclude. Caught in the act 2026-08-17T07:56Z:
+#   RUNNING: /Users/chrisren/.claude/autonomy/postland/wt-run-61088/scripts/cloud-return.sh
+# holding the live `.return.lock` and sweeping the operator's real declaration store. postland-verify
+# mints its throwaway worktrees UNDER the config dir (`$_cc_cfg/autonomy/postland/wt-run-XXXXX/`), so
+# a verifier copy's `$0` matches `"$_cc_cfg"/*` exactly as well as the deployed copy's does. The
+# discriminator could not discriminate: EVERY postland run of this suite has been landing branches,
+# marking backlog rows done and spending quota against live state — which is the same incident the
+# comment above records from 2026-08-11 (four concurrent passes out of `wt-run-54668`), never
+# actually closed, because the guard that closed it tested a prefix that contains its own harness
+# (memory: guard-refusal-fires-on-its-own-harness).
+# Two live symptoms were downstream of this and are now explained: the refusal artifacts whose land
+# failed on `mkstemp … postland-run.VRdnYH/…` (a verifier's private TMPDIR, reaped when its run
+# ended — fixed on the other side in cloud-reconcile too), and the absence of any `cloud-return` row
+# in the sweep's own IDL journal while `return.jsonl` filled up: the launchd sweep was not the writer.
+# There is exactly ONE deployed path and it is nameable, so name it. `$0` stays UNRESOLVED for the
+# reason above — resolving it follows the deployed symlink into the checkout and erases the only
+# difference there is.
+_cloudret_deployed=0
+[ "$0" = "$_cc_cfg/scripts/autonomy-sweep.sh" ] && _cloudret_deployed=1
 if [ "$_cloudret_deployed" != 1 ]; then
   _cloudret_rc="skipped-not-deployed"
 elif [ -x "$_cloudret" ]; then
