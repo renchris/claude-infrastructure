@@ -16,8 +16,12 @@
 #   2. the directory exists and is not excluded (CC_WTGC_EXCLUDE) / locked / .teammate-busy,
 #   3. `git status --porcelain` is empty (dirty ⇒ removal would need --force ⇒ data loss),
 #   4. no live session: union of `cc-notify --list --json` cwds, live `claude` proc cwds
-#      (lsof -d cwd), any process holding files open under it, and the live-session registry
-#      PID — over-matching is SAFE here, it can only ever cause a KEEP. Each oracle counts on
+#      (lsof -d cwd), any process holding files open under it, the live-session registry
+#      PID, the SESSION-CWD REGISTRY read straight off disk (~/.claude/cc-registry/*.json,
+#      prefix-matched so a session cwd'd in a SUBDIRECTORY still counts), and RECENT UNTRACKED
+#      WRITES — the one signal that needs no live process at all, and so the only one that can
+#      see a worktree a session holds through its Bash tool's `cd` (backlog 63484cfeab2a).
+#      Over-matching is SAFE here, it can only ever cause a KEEP. Each oracle counts on
 #      its ANSWER, never on its presence: the process-cwd probe opens with a positive control
 #      against the caller's own pid, and a probe that cannot answer that makes gate 4 UNKNOWN
 #      rather than clear (§ claude_cwds — a present-but-blind lsof used to read as an idle box),
@@ -241,6 +245,13 @@ LSOF_BIN="${CC_WTGC_LSOF:-lsof}"
 PGREP_BIN="${CC_WTGC_PGREP:-pgrep}"
 CC_NOTIFY_BIN="${CC_WTGC_CC_NOTIFY:-$HOME/.claude/bin/cc-notify}"
 REGISTRY_DIR="${CC_WTGC_REGISTRY_DIR:-$HOME/.reso/live-sessions}"
+# The cross-session comms registry — ~/.claude/cc-registry/<paneUUID>.json, one row per session,
+# written by the session-register.sh SessionStart hook and swept by cc-sessions. Read DIRECTLY
+# here, never through cc-notify: oracle (a) below reaches this same store, but only if the
+# cc-notify BINARY and jq are both present and the it2-backed call succeeds — three ways for a
+# session-occupancy read to go silently empty on a box that is still being swept.
+SESSION_REG_DIR="${CC_WTGC_SESSION_REGISTRY:-${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}}"
+ACTIVE_MIN="${CC_WTGC_ACTIVE_MIN:-30}"
 TRUNK="${CC_WTGC_TRUNK:-origin/main}"
 IDLE_MIN="${CC_WTGC_IDLE_MIN:-30}"
 LOCK_DIR="${CC_WTGC_LOCK:-$HOME/.claude/state/worktree-gc.lock}"
@@ -488,6 +499,101 @@ registry_live() { # <basename> <canon-path> → 0 iff a registered session PID i
   # only honour the row when its recorded cwd is this worktree (or was never recorded).
   [ -z "$rcwd" ] && return 0
   [ "$(canon "$rcwd")" = "$path" ]
+}
+
+# ── Occupancy signal: the SESSION-CWD REGISTRY, read straight off disk. ──────────────────
+# WHY A SECOND READ OF A STORE ORACLE (a) ALREADY TOUCHES (backlog 63484cfeab2a, the 2026-08-10
+# 01:50 sweep of an occupied worktree): oracle (a) reaches ~/.claude/cc-registry only via
+# `cc-notify --list --json`, which needs the cc-notify binary, jq, and a successful call. Miss any
+# one and NOTIFY_CWDS is the empty string — indistinguishable, at every consumer below, from "the
+# registry says nobody is here". The process-cwd oracle then carries the pass alone, and it is
+# blind to exactly the session this store exists to record. Reading the files decorrelates the
+# session signal from cc-notify's availability, from jq's, and from the it2 IPC hop.
+#
+# It also matches WIDER, which is the second half of the gap: `is_live_cwd` is `grep -qxF`, an
+# EXACT path equality, so a session registered at a SUBDIRECTORY of a worktree does not mark the
+# worktree occupied. That is not hypothetical — measured on the live box 2026-08-17, 1 of 11
+# registered cwds was a subdirectory of a repo another row already named. Here a registered cwd
+# that IS the worktree or lies UNDER it is OCCUPIED, full stop; over-matching can only ever KEEP.
+#
+# Three outcomes, and the third is why this is not a boolean:
+#   0 → OCCUPIED (a live row's cwd is at or under <canon-path>), SESSION_OCC_WHY says so
+#   1 → the store ANSWERED and named nobody here
+#   2 → the store is PRESENT but could not be read ⇒ occupancy UNPROVEN, SESSION_OCC_WHY says so
+# An ABSENT store is not outcome 2. A box that never registered a session has no store at all, and
+# treating that as a broken instrument would make this janitor permanently inert everywhere the
+# feature is not installed; treating an UNREADABLE store as an answer is the bug this fixes.
+# ABSENT ≠ STALE (memory: liveness-free-channel-never-gated-behind-liveness).
+SESSION_OCC_WHY=""
+session_registry_occupied() { # <canon-path>
+  local cpath="$1" f cwd pid ccwd found=0 read_any=0
+  SESSION_OCC_WHY=""
+  [ -d "$SESSION_REG_DIR" ] || return 1          # absent ⇒ no contribution, never a false alarm
+  for f in "$SESSION_REG_DIR"/*.json; do
+    [ -e "$f" ] || { read_any=1; break; }        # glob did not expand: an EMPTY store is an answer
+    if [ ! -r "$f" ]; then
+      SESSION_OCC_WHY="occupancy UNPROVEN — a session-registry row ($f) is unreadable; a registered session could be sitting here and this pass cannot tell"
+      return 2
+    fi
+    read_any=1
+    cwd="$(sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$f" 2>/dev/null | head -1)"
+    [ -n "$cwd" ] || continue
+    pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
+    # FAIL-CLOSED on the pid: a row with no readable pid is a row we cannot call dead. `kill -0`
+    # is cc-sessions' own authoritative liveness test, and it is the ONLY thing that retires a row.
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then continue; fi
+    # canon() cd's into the path, so it silently returns the RAW string for a cwd that no longer
+    # exists. That is the safe direction here (an unresolvable cwd can still prefix-match) and it
+    # is why the raw form is compared too.
+    ccwd="$(canon "$cwd")"
+    case "$ccwd" in "$cpath"|"$cpath"/*) found=1 ;; esac
+    case "$cwd"  in "$cpath"|"$cpath"/*) found=1 ;; esac
+    if [ "$found" = "1" ]; then
+      SESSION_OCC_WHY="LIVE — a registered session (pid ${pid:-unknown}) has its cwd at $cwd"
+      return 0
+    fi
+  done
+  [ "$read_any" = "1" ] || return 1
+  return 1
+}
+
+# Both KEEP, and they must never share a line — one is a session that is provably here, the other
+# is an instrument that could not look. The reason string carries the difference; this wrapper only
+# folds the two non-clear outcomes into the one boolean the gate ladder can consume.
+session_occupancy_keep() { # <canon-path> → 0 iff the session registry says KEEP
+  local rc
+  session_registry_occupied "$1"; rc=$?
+  [ "$rc" = "0" ] || [ "$rc" = "2" ]
+}
+
+# ── Occupancy signal: RECENT WRITES. Liveness-free by construction. ──────────────────────
+# The case that motivated the backlog row is a worktree a session holds ONLY through its Bash
+# tool's `cd` — the tool call ends, the subshell dies, and between commands there is no resident
+# process AND no registry row naming this path (the row records where the session LAUNCHED).
+# MEASURED 2026-08-17 on a worktree being actively written by an agent: `lsof -a -d cwd <path>`
+# named nobody and no cc-registry row pointed at it — both liveness oracles read UNOCCUPIED while
+# the work was in flight. So the registry read above, on its own, would NOT have stopped that
+# sweep, and this rung is not a fallback for it: it is a SEPARATE axis, evaluated on its own, never
+# nested behind a liveness gate.
+#
+# What counts as a write: a file modified inside ACTIVE_MIN that git does NOT track. Tracked files
+# are excluded deliberately — a fresh `git worktree add` stamps every checked-out file with the
+# CHECKOUT time, so counting them would read a pristine 2-minute-old worktree as "active" forever.
+# A recent write to a tracked file makes the tree dirty, and gate 3 already keeps that. What is
+# left — scratch, logs, build output, editor droppings, ignored state — is precisely the residue a
+# session at work leaves and an abandoned worktree does not.
+recently_active() { # <path> → 0 iff an untracked/ignored file here was modified within ACTIVE_MIN
+  local path="$1" f rel
+  case "$ACTIVE_MIN" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ACTIVE_MIN" -gt 0 ] || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rel="${f#"$path"/}"
+    "$GIT_BIN" -C "$path" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || return 0
+  done <<EOF
+$(find "$path" -path "$path/.git" -prune -o -type f -mmin "-$ACTIVE_MIN" -print 2>/dev/null | head -40)
+EOF
+  return 1
 }
 
 landed() { # <branch> → 0 iff every commit since the merge-base is on the trunk by patch-id
@@ -795,9 +901,14 @@ owner_terminal() { # <basename> <canon-path> <branch> → 0 iff ANY oracle prove
 # difference cannot fix it.
 RECHECK_WHY=""
 recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, right now, OR unprovable
-  # Re-read at ACT time, not classify time. Deliberately narrower than the startup union (it
-  # skips cc-notify, whose registry is derived from these same processes) — it exists to catch a
-  # session BORN inside the classify→act window, and over-matching here can only cause a KEEP.
+  # Re-read at ACT time, not classify time. It skips the cc-notify FORK (a subprocess + an IPC hop
+  # per candidate) but NOT the store behind it — `session_registry_occupied` reads those same files
+  # straight off disk, cheaply, right here. The line this replaces claimed cc-notify's registry "is
+  # derived from these same processes"; it is not. Those rows are written by the session-register.sh
+  # SessionStart hook and retired by `kill -0`, so a session that registered and is sitting between
+  # tool calls is IN the store and absent from every process cwd — the exact case this gate is last
+  # in line to catch. It exists to catch a session BORN inside the classify→act window, and
+  # over-matching here can only cause a KEEP.
   #
   # FAILS CLOSED. This is the LAST gate before a directory is destroyed, so its "not live" has to
   # mean the probe LOOKED and saw nobody — never that it could not look. `registry_live` alone is
@@ -807,6 +918,9 @@ recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, righ
   local path="$1" cpath="$2" c cwds rc
   RECHECK_WHY="a session started inside the classify window"
   registry_live "$(basename "$path")" "$cpath" && return 0
+  session_registry_occupied "$cpath"; rc=$?
+  if [ "$rc" = "0" ] || [ "$rc" = "2" ]; then RECHECK_WHY="$SESSION_OCC_WHY"; return 0; fi
+  recently_active "$path" && { RECHECK_WHY="an untracked file here was written within ${ACTIVE_MIN}m"; return 0; }
   cwds="$(claude_cwds)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     RECHECK_WHY="occupancy UNPROVEN — $(cwds_why)"
@@ -959,6 +1073,8 @@ process_record() {
   elif op_in_progress "$path";                               then reason="a git operation is parked here ($OP_KIND) — removal would discard it"
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
+  elif session_occupancy_keep "$cpath";                      then reason="$SESSION_OCC_WHY"
+  elif recently_active "$path";                              then reason="ACTIVE — an untracked file here was written within ${ACTIVE_MIN}m (a session holding a worktree through its Bash tool leaves no resident process between commands)"
   elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
                                                                   reason="open by a live process"
   elif [ "$detached" = "1" ] || [ -z "$branch" ];            then reason="detached HEAD (manual review — no branch records where the work went)"
