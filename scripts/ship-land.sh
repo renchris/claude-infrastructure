@@ -961,7 +961,30 @@ _land_sig_verdict() {  # <signame> <signum>
     land_failure_inbox "$rc" "SIG$1"
     inflight_release
   fi
-  echo "✗ ship-land: verdict=killed signal=SIG$1 role=${LIFECYCLE_ROLE} branch=${BRANCH:-?} — this land was TERMINATED from outside; it did not fail a gate and nothing was proven about the tree. The tree is clean and the work is still on ${BRANCH:-the branch}; re-run ship-land when the box is quieter." >&2
+  # ── NAME WHAT WE CAN SEE OF THE SENDER (2026-08-17). This line asserted "TERMINATED from outside"
+  # for every TERM — a claim about an ACTOR the handler never looked for, and wrong often enough to
+  # matter: a caller's own `timeout`/`gtimeout` wrapper produces exactly this signal, and 2 of the
+  # 11 residual kills in the 2026-08-17 census were the investigator's own bound while the banner
+  # blamed a peer. A verdict that cannot separate "a peer killed us" from "our own bound fired"
+  # sends every reader to the wrong fix (memory: timeout-rc-collides-with-the-childs-own-rc — 124
+  # has two authors, and so does 143).
+  #
+  # Three facts, read AT SIGNAL TIME because none of them survives the exit: our ELAPSED (a bound
+  # fires at a round number, a peer does not), whether we are ORPHANED (ppid 1 is the shape every
+  # cc-reaper orphan class selects on), and whether a `timeout` sits in our OWN ancestry (if it
+  # does, the likeliest sender is ours). Best-effort throughout — this runs from a signal handler
+  # and must never fail the exit it is annotating (memory: addon-failure-exceeds-its-blast-radius).
+  local _sv_el _sv_pp _sv_anc="" _sv_p _sv_n=0 _sv_src="sender UNKNOWN"
+  _sv_el=$(( $(date +%s) - ${LAND_T0:-$(date +%s)} ))
+  _sv_pp="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"; [ -n "$_sv_pp" ] || _sv_pp="?"
+  _sv_p="$_sv_pp"
+  while [ -n "$_sv_p" ] && [ "$_sv_p" -gt 1 ] 2>/dev/null && [ "$_sv_n" -lt 12 ]; do
+    _sv_anc="$_sv_anc $(ps -o ucomm= -p "$_sv_p" 2>/dev/null | tr -d ' ')"
+    _sv_p="$(ps -o ppid= -p "$_sv_p" 2>/dev/null | tr -d ' ')"; _sv_n=$(( _sv_n + 1 ))
+  done
+  case "$_sv_anc" in *timeout*) _sv_src="a TIMEOUT is in our OWN ancestry — the likeliest sender is our own bound, not a peer" ;; esac
+  [ "$_sv_pp" = "1" ] && _sv_src="we are ORPHANED (ppid 1) — the shape every cc-reaper orphan class selects on"
+  echo "✗ ship-land: verdict=killed signal=SIG$1 role=${LIFECYCLE_ROLE} branch=${BRANCH:-?} elapsed=${_sv_el}s ppid=${_sv_pp} ancestry=[${_sv_anc# }] — ${_sv_src}. This land did not fail a gate and nothing was proven about the tree; the work is still on ${BRANCH:-the branch}." >&2
   exit "$rc"
 }
 
