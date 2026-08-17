@@ -87,6 +87,72 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~17:30Z — recycle #16: `master-session-lifecycle` 32 open → `27 open / 1 blocked
+  (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 0 / closed 5. Six commits, ONE land,
+  `ef98781de`; content-verified on `origin/main` (`git diff` empty on all 9 paths).**
+  The effort is an order of magnitude larger than #14's and #15's, so this is a multi-recycle
+  effort as briefed; five rows closed is the advance, not the finish.
+
+  **THE FINDING THAT SHOULD CHANGE HOW #17 READS A ROW: A ROW CAN NAME THE RIGHT BUG AND THE WRONG
+  CAUSE, AND THE WRONG CAUSE HIDES THE DANGEROUS HALF.** Row `567a4d90ca89` said validate-bash
+  *"convicts a benign rm because an unrelated `$HOME/.claude` string sits elsewhere in the same
+  command."* The bug is real. The cause is not the string — it is the **separator**. `rm_argv_scan`
+  split clauses on a PIPELINE_OPS set that included `;`, but tokenized with `shlex.split()`, a WORD
+  splitter, which only ever sees an operator the writer surrounded with whitespace. `&&` and `|` are
+  conventionally spaced and worked; `;` is conventionally **glued** to the word before it, was never
+  a token, and so the entire next clause became targets of the rm. That failed in BOTH directions:
+  the filed false positive (a build-artifact delete refused because a later clause names `$HOME`)
+  **and an unfiled false NEGATIVE — a recursive delete of `~` glued to `; echo hi` was DOWNGRADED
+  out of the deny to ASK.** Spelled with a space before the `;`, the identical command DENIES. The
+  row would never have found that; only probing the row's claim in the opposite direction did
+  (memory `guard-proxy-fails-in-both-directions`). **So: reproduce a row's SYMPTOM, then re-derive
+  its CAUSE yourself, then ask what the corrected cause predicts that the row never claimed.**
+
+  Same shape twice more, both times caught by a test rather than by reading:
+  - **A KEEP that passes for the wrong reason is indistinguishable from a KEEP that works.** Writing
+    the worktree-gc control, the recent-write signal appeared green twice while never being
+    consulted: a plain untracked file trips the *dirty-tree* gate, and committing a `.gitignore`
+    inside the worktree leaves the branch *unlanded* — two OTHER gates held the tree. Only the
+    REMOVE half of each discriminator pair exposed it. Write the REMOVE half first.
+  - **An arm with no test seam cannot be tested, and reads as tested.** The custody floor probed
+    `$(dirname $0)/../bin/cc-custody` and so resolved the REAL binary out of the checkout — a suite
+    could only ever exercise it against the operator's LIVE store. Before the `CC_CUSTODY_BIN` seam,
+    the three "must block" cases failed and the two "must NOT block" cases passed **vacuously**.
+    That asymmetry is the signature: if the negative half of a pair is the only half passing, the
+    subject is not being reached.
+
+  **A CORRECTED MEASUREMENT CLOSED A ROW WITHOUT THE FIX IT ASKED FOR.** `22705859d07d` filed two
+  halves. The performance half is **REFUTED**: `d31fee77f` landed 2026-08-11 14:42, the same day the
+  row was measured, and `find_active_list` now runs 0.11 s on the live 2,640-dir store, so the 5 s
+  hook timeout cannot fire and `rc=124` — the mechanism the row named — is unreachable. Its stored
+  falsifier cannot see this either way (it greps for a per-directory loop that is still present and
+  now pure-bash). The **correctness** half survived that fix untouched, because it was never about
+  the timeout: a missing index, an unparseable index and a genuinely-unmapped project were
+  byte-identical AND rc-identical, so every consumer read "no task list" off a question never
+  answered — and `setup-task-symlinks.sh` DELETES a good `_current` symlink on that verdict. Fixed
+  three-state on the **exit-status** channel, the only one that survives the command substitution
+  every caller wraps the function in.
+
+  **OPERATIONAL, FOR #17 — the wave died to the ROUTE, not to itself.** Five teammates were briefed;
+  the spawn gate deterministically refused two of them ("Background subagents cannot write code"),
+  and the surviving three all died within two minutes of each other on
+  `API Error: Unable to connect to API (ENOTFOUND)` — the local-route signature
+  (memory `mass-tls-hostname-mismatch-indicts-the-local-route`), which also cost this session ~3.75 h
+  of wall clock. Two of the three had COMMITTED before dying and lost nothing; the third had 111
+  lines uncommitted, recovered only because the lead banked it. **Keep telling teammates to commit
+  early — it is what makes a network death survivable.** Both refused rows were then done by the
+  lead, so the refusal cost time, not scope.
+
+  Rows closed: `567a4d90ca89` (validate-bash tokenizer) · `63484cfeab2a` (worktree-gc occupancy,
+  two signals, decorrelation measured not assumed) · `9581119669f9` (custody floor attributed by
+  `originatorPane`/`notifyBack`, not cwd) · `2d0074dae889` (`clear` reports what it actually did) ·
+  `22705859d07d` (task-helpers three-state verdict + perf half refuted).
+  Suites run by the lead this turn, because the land's smoke gate answered **FULL** (its fail-closed
+  "cannot decide") and made no direct-suite claim: `rm-argv-normalize` 1..15 · `worktree-gc` 1..97
+  (was 1..89) · `wake-floor` 1..43 · `session-continue` 1..27 · `task-helpers-verdict` 1..9 ·
+  `rm-safe-allowlist` · `validate-bash-{payload-parse,differential,audit-log,goal-guard}` — all
+  green, every plan line present.
+
 - **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
   (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
   `6644273f3`; content-verified on `origin/main`.**
