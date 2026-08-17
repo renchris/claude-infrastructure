@@ -164,6 +164,20 @@ com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alar
 # daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which
 # it writes every 10 s by design (never --quiet). `staged` until 31-compressor-sentinel-activate.sh.
 com.claude.compressor-sentinel    | run    | 10   | ~/.claude/logs/compressor-sentinel.jsonl | — | 31-compressor-sentinel-activate.sh
+# ── com.claude.browser-spin-guard (2026-08-17) ─────────────────────────────────────────────────────
+# The CPU twin of the sentinel above, and the pair is the point: the sentinel samples pcpu but
+# adjudicates MEMORY, while cc-reaper's snapshot has no CPU field at all, so a process that is alive
+# and burning a core was invisible to BOTH. Measured: a wedged agent-browser Chrome held 761% of this
+# box's 1000% for 1d15h (load 244, 0.0% idle) and nothing ever said so.
+# UNLIKE the sentinel this is a periodic StartInterval job, not a KeepAlive loop — its instrument is
+# `ps -o pcpu`, a whole-lifetime average, so one sample past an age floor already means "pegged for
+# all of it" and there is no rate baseline to carry between reads. interval_s below is therefore a
+# REAL StartInterval, not an internal tick.
+# EVIDENCE IS AN EXPLICIT PATH per the rule at the top of this block, though for the opposite reason
+# to capacity-alarm's: this job is NOT --quiet and does write its StandardOutPath every tick, so
+# `auto` would age correctly — but that file lives in /tmp and is wiped on reboot, while the script
+# appends one line to the log below on EVERY run (clean and spin alike), which is the durable stream.
+com.claude.browser-spin-guard     | run    | 300  | ~/.claude/logs/browser-spin-guard.log | — | 41-browser-spin-guard-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
