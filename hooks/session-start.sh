@@ -184,8 +184,17 @@ _mcp_spawn_refresh() {
   fi
   mkdir "$MCP_CACHE_LOCK" 2>/dev/null || return 0
   # Same script, same probe code — one implementation, two entry points.
+  #
+  # 🚨 The redirect on the SUBSHELL is load-bearing, and redirecting only the inner `bash` is not
+  # enough (that was the bug, 2026-08-16). The harness reads a hook's stdout to EOF, and EOF does
+  # not arrive while ANY descendant still holds fd 1. With the inner command redirected but the
+  # enclosing `( … ) &` inheriting the pipe, this "detached" refresher blocked the input pipeline
+  # for its full run: process-exit 83 ms vs pipe-EOF 3 096 ms on the same hook (n=5), and a pty A/B
+  # measured `( sleep 6 ) &` → /help at 6.4 s vs `( sleep 6 ) >/dev/null 2>&1 &` → 1.4 s. The
+  # configured `timeout: 10` does NOT cap it, because the hook process itself has already exited.
+  # Measured cost of the leak: +2.2 s p50 / +4.2 s p90 of BLOCKED INPUT on 54.4% of session starts.
   ( bash "${BASH_SOURCE[0]}" --refresh-mcp-cache >/dev/null 2>&1
-    rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true ) &
+    rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true ) >/dev/null 2>&1 &
 }
 
 # Resolve the binary the RUNNING session is, in strictly-decreasing authority. Deliberately no bare
