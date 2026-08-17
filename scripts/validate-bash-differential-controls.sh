@@ -2,7 +2,18 @@
 # Mutation controls for scripts/validate-bash-differential.sh — proves the harness CAN fail.
 # Each mutant perturbs exactly ONE thing and asserts a non-zero exit. Run from the repo root.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Symlink hops resolved before the root is derived — see scripts/ship-land.sh:199 for the canonical
+# loop and scripts/validate-bash-differential.sh for why an unresolved $0 reads the wrong tree.
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [[ -L "$p" ]]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+ROOT="$(cd "$(dirname "$(_resolve_self "${BASH_SOURCE[0]:-$0}")")/.." && pwd)"
 SRC="$ROOT/tests/fixtures/validate-bash-sites.tsv"
 [[ -r "$SRC" ]] || { printf 'controls cannot run: %s unreadable\n' "$SRC"; exit 2; }
 TMP="$(mktemp -d)"

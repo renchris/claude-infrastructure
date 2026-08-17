@@ -67,7 +67,21 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Symlink hops resolved before the root is derived. ~/.claude/scripts/ is per-file symlinks into the
+# checkout, so an unresolved `dirname $0/..` yields ~/.claude — which has no tests/fixtures, so the
+# census would find no corpus and report nothing rather than fail. Canonical loop: ship-land.sh:199
+# (no `readlink -f` — GNU-only, this box is BSD).
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [[ -L "$p" ]]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF_PATH="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+REPO_ROOT="$(cd "$(dirname "$SELF_PATH")/.." && pwd)"
 RUNS=40
 CORPUS="$REPO_ROOT/tests/fixtures/hook-fork-census-corpus.tsv"
 HOOK="$REPO_ROOT/hooks/validate-bash.sh"
