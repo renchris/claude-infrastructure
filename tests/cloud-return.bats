@@ -162,6 +162,49 @@ seen_at() { # <epoch>
   ! grep -q reconcile "$CALLS" || false
 }
 
+@test "the abstain NAMES ITS CAUSE — the callee's stderr and rc reach the ledger, not a bare 'unreadable'" {
+  # The defect this pins, measured on the live box 2026-08-17: 384 abstain rows, every one of them
+  # exactly `{"why":"control plane unreadable"}`, and not one able to tell a locked keychain from a
+  # missing python3 from an expired grant — three failures with three unrelated repairs. TWO things
+  # had to be true for that: the sensor muted its callee with `2>/dev/null`, AND its caller invoked
+  # it inside a command substitution, so any diagnostic it set would have died in that subshell
+  # regardless. Both halves are asserted here, because fixing either one alone changes nothing.
+  declare_managed
+  seen_at 1000
+  export CC_RETURN_LEDGER="$BATS_TEST_TMPDIR/ledger.jsonl"
+  STATUS_FAIL=1 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+
+  row="$(jq -c 'select(.outcome=="abstain")' "$CC_RETURN_LEDGER" | head -1)"
+  [ -n "$row" ] || false
+  # the callee's OWN stderr survived the subshell — the stub writes its argv there, which is the
+  # slot a real cloud-create-api.py `die()` line ("keychain item … unreadable (rc N)") occupies
+  [[ "$(printf '%s' "$row" | jq -r '.err')" == *"--verify"* ]] || false
+  # the rc, which is the field that separates the three repairs above
+  [ "$(printf '%s' "$row" | jq -r '.rc')" = 1 ]
+  # and the account, because a session id is only readable through the account that created it
+  [ "$(printf '%s' "$row" | jq -r '.account')" = next3 ]
+  # the operator-facing line carries it too — a diagnosis only the ledger holds is one nobody reads
+  [[ "$output" == *"rc 1"* ]] || false
+}
+
+@test "a declaration with NO account abstains on THAT, and never on a generic 'unreadable'" {
+  # The sensor's first refusal is local and costs no network. It must stay distinguishable from an
+  # API failure: "nobody recorded an account" and "the control plane refused us" share no repair.
+  "$CCLOUD" declare --id session_noacct --branch claude/vm --remote "$REMOTE" --repo "$WORK" \
+    --trunk trunkref --custody session_noacct --notify-back P >/dev/null 2>&1
+  push_vm
+  { printf 'sha=%s\n' "$(git -C "$WORK" rev-parse refs/heads/claude/vm)"; printf 'since=1000\n'; } \
+    >"$CC_CLOUD_STATE/session_noacct.seen"
+  export CC_RETURN_LEDGER="$BATS_TEST_TMPDIR/ledger.jsonl"
+  CC_RETURN_NOW=999999 run "$SUT" --id session_noacct
+  [ "$status" -eq 0 ]
+  row="$(jq -c 'select(.id=="session_noacct" and .outcome=="abstain")' "$CC_RETURN_LEDGER" | head -1)"
+  [ -n "$row" ] || false
+  [ "$(printf '%s' "$row" | jq -r '.rc')" = no-account ]
+  [[ "$(printf '%s' "$row" | jq -r '.err')" == *"records no account"* ]] || false
+}
+
 @test "a session that has pushed NOTHING is not a return candidate" {
   "$CCLOUD" declare --id session_nopush --branch claude/never --remote "$REMOTE" --repo "$WORK" \
     --trunk trunkref --account next3 --custody session_nopush --notify-back P >/dev/null 2>&1

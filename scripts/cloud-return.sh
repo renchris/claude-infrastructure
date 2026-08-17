@@ -145,21 +145,48 @@ lock_acquire() {
 lock_release() { rm -rf "$LOCK" 2>/dev/null || true; }
 
 # ── the control-plane sensor ─────────────────────────────────────────────────────────────────────
-# Returns the worker_status on stdout, rc 0. rc 2 = COULD NOT LOOK, which is never read as "done"
+# Returns the worker_status in WS_STATUS, rc 0. rc 2 = COULD NOT LOOK, which is never read as "done"
 # (the one rule the whole cloud subsystem is organised around). The account is required: a session
 # id is scoped to the account that created it, and the wrong account's read is indistinguishable
 # from a deleted session (bin/cc-offload's `open` carries the same warning).
-worker_status() { # <account> <id> → 0 + status · 2 cannot look
-  local acct="$1" id="$2" out
-  [ -n "$acct" ] || return 2
-  [ -f "$STATUS_BIN" ] || return 2
-  out="$(python3 "$STATUS_BIN" --account "$acct" --verify "$id" 2>/dev/null)" || {
+#
+# 🚨 IT ANSWERS THROUGH GLOBALS, NOT STDOUT, AND THAT IS THE WHOLE POINT OF THE 2026-08-17 REWRITE.
+# The first cut returned the status on stdout, so its caller wrote `ws="$(worker_status …)"` — a
+# COMMAND SUBSTITUTION, i.e. a subshell. Any diagnostic this function set would have died with that
+# subshell, which is why the failure could only ever be recorded as the bare, unactionable
+# `{"why":"control plane unreadable"}`: 384 such rows on this box, not one naming a cause. Stdout is
+# the only channel a subshell preserves and it was already spoken for by the answer, so the answer
+# had to move off it before the diagnosis could exist at all.
+#
+# The callee was muted twice over. `2>/dev/null` threw the status bin's own words away — and those
+# words are the diagnosis, because cloud-create-api.py's `die()` prints exactly which precondition
+# failed (`keychain item 'X' unreadable (rc N) — try /relogin`, `account 'X' not in accounts.json`,
+# an HTTP status). rc was discarded too, and rc 127 (python3 not on the daemon's PATH) is a wholly
+# different repair from rc 3 (a locked keychain) which is a wholly different repair from rc 1 (a 401
+# on an expired grant). One caller's `2>/dev/null` erased the difference between all three
+# (memory: callers-dependency-probe-mutes-the-callees-non-verdict).
+WS_STATUS="" WS_ERR="" WS_RC=""
+worker_status() { # <account> <id> → 0 + WS_STATUS · 2 cannot look (WS_ERR/WS_RC carry why)
+  local acct="$1" id="$2" out rc errf
+  WS_STATUS="" WS_ERR="" WS_RC=""
+  [ -n "$acct" ] || { WS_ERR="the declaration records no account, and a session id is only readable through the account that created it"; WS_RC="no-account"; return 2; }
+  [ -f "$STATUS_BIN" ] || { WS_ERR="the status bin is absent at $STATUS_BIN"; WS_RC="no-status-bin"; return 2; }
+  errf="$(mktemp -t ccret-ws.XXXXXX 2>/dev/null || printf '/tmp/ccret-ws.%s' "$$")"
+  out="$(python3 "$STATUS_BIN" --account "$acct" --verify "$id" 2>"$errf")"; rc=$?
+  WS_RC="$rc"
+  # Sanitised and bounded: this string goes into a jq --arg and then into an append-only ledger, so
+  # a stray newline or control byte must not be able to shape the row it is evidence in.
+  WS_ERR="$(tr '\n\t' '  ' <"$errf" 2>/dev/null | tr -cd '\40-\176' | tail -c 300)"
+  rm -f "$errf" 2>/dev/null || true
+  if [ -z "$out" ]; then
     # --verify exits 5 when the ACCEPTANCE PAIR fails, which is a statement about how the session
-    # was created and not about whether it is running. If it printed a record, read the record.
-    [ -n "$out" ] || return 2
-  }
-  [ -n "$out" ] || return 2
-  printf '%s' "$out" | jq -r '.worker_status // empty' 2>/dev/null
+    # was created and not about whether it is running. If it printed a record, read the record —
+    # so only an EMPTY record is a non-verdict, whatever the rc was.
+    [ -n "$WS_ERR" ] || WS_ERR="the status bin exited $rc and printed nothing on either stream"
+    return 2
+  fi
+  WS_STATUS="$(printf '%s' "$out" | jq -r '.worker_status // empty' 2>/dev/null)"
+  WS_ERR=""
   return 0
 }
 
@@ -249,11 +276,15 @@ handle() { # <row-json> → prints outcome lines
   esac
 
   # 2. IS THE WORKER STILL RUNNING? The trigger, and only the trigger.
+  # Called BARE — never `$(worker_status …)`. The diagnosis it sets lives in globals, and a command
+  # substitution would run it in a subshell and discard every one of them (see the sensor above).
   local ws wrc=0
-  ws="$(worker_status "$acct" "$id")" || wrc=$?
+  worker_status "$acct" "$id" || wrc=$?
+  ws="$WS_STATUS"
   if [ "$wrc" -ne 0 ]; then
-    say "? $id — the control plane could not be read (account '${acct:-unset}'); abstaining rather than guessing it is finished"
-    ledger "$id" abstain '{"why":"control plane unreadable"}'
+    say "? $id — the control plane could not be read (account '${acct:-unset}', rc ${WS_RC:-?}: ${WS_ERR:-no diagnostic}); abstaining rather than guessing it is finished"
+    ledger "$id" abstain "$(jq -cn --arg e "$WS_ERR" --arg r "$WS_RC" --arg a "$acct" \
+      '{why:"control plane unreadable", err:$e, rc:$r, account:$a}')"
     return 0
   fi
   case "$ws" in
