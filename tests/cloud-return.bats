@@ -442,12 +442,21 @@ EOF
   # and re-pinged the originator. Every other block in that script is a pure read; this one acts.
   local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
   [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  #
+  # 🚨 THIS ARM IS STRUCTURAL AND THAT IS ITS LIMIT — it stayed green for six days while the guard
+  # it describes was defeated. The prefix test it used to pin (`case "$0" in "$_cc_cfg"/*`) admits
+  # `$_cc_cfg/autonomy/postland/wt-run-NNNNN/scripts/autonomy-sweep.sh`, because postland-verify
+  # mints its worktrees UNDER the config dir; caught in the act 2026-08-17T07:56Z holding the live
+  # `.return.lock`. A grep over source text cannot see that, so the BEHAVIOURAL arm now lives in
+  # tests/autonomy-sweep.bats ("a VERIFIER COPY UNDER the config dir may not land") and this one is
+  # kept only as the cheap ordering check it always really was.
   grep -q 'CLAUDE_CONFIG_DIR' "$sweep"
   grep -q 'skipped-not-deployed' "$sweep"
   # The gate must key on the UNRESOLVED $0: the deployed path is a SYMLINK into the checkout, so a
-  # resolved path is identical in both cases and the discriminator disappears.
+  # resolved path is identical in both cases and the discriminator disappears. It must also be an
+  # EXACT comparison — a prefix is what failed.
   local gate_line res_line
-  gate_line="$(grep -n 'case "\$0" in' "$sweep" | head -1 | cut -d: -f1)"
+  gate_line="$(grep -n '\[ "\$0" = "\$_cc_cfg/scripts/autonomy-sweep.sh" \]' "$sweep" | head -1 | cut -d: -f1)"
   [ -n "$gate_line" ]
   # …and it must precede the invocation it guards.
   res_line="$(grep -n 'cloud-return.sh --sweep' "$sweep" | head -1 | cut -d: -f1)"

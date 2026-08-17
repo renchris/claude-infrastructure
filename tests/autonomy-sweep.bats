@@ -1226,3 +1226,51 @@ STUB
   # exactly what the journal's own note tells a consumer to do.
   ! grep -q '"backfill_note":"ok"' "$CC_IDL"
 }
+
+@test "a VERIFIER COPY UNDER the config dir may NOT land — the deployed-copy gate is an exact path" {
+  # THE ARM THAT WAS MISSING, AND ITS ABSENCE COST SIX DAYS. The gate meant to keep a suite copy
+  # from landing branches read `case "$0" in "$_cc_cfg"/*`. postland-verify mints its throwaway
+  # worktrees at `$_cc_cfg/autonomy/postland/wt-run-NNNNN/`, so a VERIFIER copy's $0 matches that
+  # prefix exactly as well as the deployed copy's does — the discriminator could not discriminate.
+  # Caught in the act 2026-08-17T07:56Z:
+  #   RUNNING: /Users/chrisren/.claude/autonomy/postland/wt-run-61088/scripts/cloud-return.sh
+  # holding the live `.return.lock` and sweeping the operator's real declaration store. The
+  # structural arm in tests/cloud-return.bats stayed green throughout, because a grep over source
+  # text cannot see which paths a pattern admits. This one runs the real script from both locations.
+  local cfg="$BATS_TEST_TMPDIR/cfg"
+  local deployed="$cfg/scripts"
+  local verifier="$cfg/autonomy/postland/wt-run-99999/scripts"
+  mkdir -p "$deployed" "$verifier"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate"; mkdir -p "$CC_CLOUD_STATE"
+
+  local marker="$BATS_TEST_TMPDIR/cloud-return-invocations"
+  : >"$marker"
+  local d
+  for d in "$deployed" "$verifier"; do
+    cp "$SWEEP" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+    # the stubs stand where the two real acting tools stand, so an invocation is RECORDED rather
+    # than acted on — this suite must never be the thing that lands a branch or briefs a VM, which
+    # is the whole point. BOTH are covered: they share `_cloudret_deployed`, and the refusal router
+    # is the stricter of the two (it spends quota on a remote machine and hands it a brief).
+    local t
+    for t in cloud-return cloud-refusal-route; do
+      cat >"$d/$t.sh" <<STUB
+#!/bin/bash
+echo "invoked=$t from=$d \$*" >>"$marker"
+STUB
+      chmod +x "$d/$t.sh"
+    done
+  done
+
+  # THE SUBJECT: a verifier copy, living under the config dir, must skip — both tools.
+  "${SWEEP_TO[@]}" bash "$verifier/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  ! grep -q "from=$verifier" "$marker" || false
+
+  # THE POSITIVE CONTROL, same script, same stubs, one axis moved — the path. Without it, a gate
+  # that refused EVERYTHING would pass the assertion above and silently disable the whole return
+  # rail (memory: positive-control-the-denominator).
+  "${SWEEP_TO[@]}" bash "$deployed/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -q "invoked=cloud-return from=$deployed --sweep" "$marker" || false
+  grep -q "invoked=cloud-refusal-route from=$deployed --sweep" "$marker" || false
+}
