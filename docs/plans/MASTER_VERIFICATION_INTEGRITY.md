@@ -1289,3 +1289,123 @@ plumbing already exists, since ship-land routes exit 2 to `arm_nonverdict`.
 (25 files 0.05s · 75 files 0.06s · 225 files 2.18s) and it judges several populations plus
 cross-file tables (launchd targets, a runner table). It needs its own locality proof; do not assume
 this pattern transfers.
+
+## RECYCLE #10 — 2026-08-15, a CLOUD dispatch. Three of the four sub-waves measured CLOSED
+
+**Venue note, because it changes what this entry can and cannot claim.** This ran on a cloud VM, not
+the desk. The backlog store is `~/.claude/autonomy/backlog.jsonl` and it **does not exist in that
+container**, so `cc-backlog list` returns `[]` and no roster could be read, no row closed, and no
+lease taken. Every number below is measured from the TREE, which is the only store a cloud dispatch
+can reach (same constraint `6394a353` recorded). `bats` and `shellcheck` are also absent there — see
+the not-run note at the end, and do not read this entry as a full-gate green.
+
+### 🚨 The handover's NEXT was already landed — by two days, again
+
+RECYCLE #9 handed over `91c6f91062ae` (pane-spawn's missing could-not-run third state) with a full
+spec. It landed as **`c0e280a1`**, *"a dead grep read as a clean file, and a memo would have frozen
+it"*, before this session opened. The plan doc's last commit is `caa922d2` and trunk is **49 commits
+past it**, so the whole RESUME-HERE stack is stale by construction. This is the fourth consecutive
+recycle whose named next-row was finished before it was picked up — the generator is not the rows,
+it is that **the handover is written into the plan and the work is recorded in git, and nothing
+reconciles the two.** Read `git log <plan-sha>..origin/main` FIRST, before believing any NEXT.
+
+### The three sub-waves, re-measured against trunk rather than against the header
+
+The header's headline numbers are all now false, and each in the good direction:
+
+| Claim, as written at filing | Measured on trunk 2026-08-15 |
+|---|---|
+| "9 of 15 land-gate ratchet arms collapse exit 2 into `gate_red`" | **0 of 18.** All 18 arms discriminate — 10 via `arm_nonverdict`, 8 via an inline `-eq 2` leg reaching `GATE_KILLED`/`bats_sc_nonverdict`. V1 is CLOSED. |
+| "89 non-final bare-`!` assertions structurally dead across 28 test files" | **0**, across all **473** suites (`bats-assert-liveness.py`, 2.9s). V2's corpus is de-vacuumed. |
+| "There is NO CHOKEPOINT for the unescaped-backtick `@test` name class" | `scripts/bats-testname-eval-lint.sh` exists, is wired at BOTH chokepoints (`ship-land.sh:3006`, `hooks/task-quality-gate.sh`), and reports 473 suites clean. V4's named member is CLOSED. |
+
+Two `GAP`s my first automated pass flagged (`bats-assert-liveness`, `bats-shellcheck-lint`) were
+**false positives of my own heuristic** — both route exit 2 correctly, one through `arm_nonverdict`
+and one through the factored `bats_sc_nonverdict`. Recorded because it is the same trap this plan
+keeps naming: a scan whose predicate is subtly wrong reads exactly like a finding.
+
+### V3 is where the wave still lives — and it is a REACHABILITY question, not a defect count
+
+The plan says *"the own-set is keyed on basenames, so a file's namesake **exempts** it."* Measured,
+the own-set half of that is **refuted**: `in_own` returning true means BLOCKING and false means
+advisory, so a basename collapse WIDENS the own-set. It can only over-block, never exempt — which is
+the direction `tsv-pad-lint.sh:64` already argues is the correct one to fail in.
+
+The exempting direction is real, but it is in the **other two consumers**, and it is worst in the one
+nobody had named:
+
+| consumer | key | what a namesake does |
+|---|---|---|
+| `in_own` | basename | over-blocks (safe direction) |
+| `in_allowlist` | basename | **exempts** the namesake's findings |
+| **`SELF_EXCLUDE`** (`git-identity-lint.sh:349`) | basename | **DROPS the file from the population entirely** |
+
+The third is not an exemption. The file is never scanned, never reported, not advisory, and absent
+even from the census. Measured on a synthetic root whose `bin/git-identity-lint.sh` carries a real
+escaping identity write:
+
+```
+git-identity-lint: clean — 1 file(s); 0 grandfathered, 0 escaping identity writes.    rc 0
+```
+
+Note the **`1 file(s)`**. `bin/` carries no extension constraint, so one namesake is enough.
+
+**But it is currently UNREACHABLE, and saying so is the point.** Measured across both lints' exact
+globs: **0 colliding basenames**. This is a latent hole, not a live outage, and the honest form of
+that finding is a guard rather than a rewrite — the clean baseline is exactly what makes the
+strictest rule the free one (`bats-kill-guard-lint` and `bats-testname-eval-lint` each record the
+same argument). All four `SELF_EXCLUDE` names map to exactly one real file, so **any** namesake is
+necessarily a collision, which is what makes the guard cover the whole reachable class.
+
+### Landed: `4d87fcc7` — the population-integrity precondition
+
+`population_collisions()` + a block in `lint_tree` that runs **before the build loop**, because the
+build loop IS decision 3 and a colliding self-exclusion has deleted its own evidence by the time it
+ends. Blocks with **rc 1, deliberately not the rc-2 non-verdict**: ship-land routes 2 to
+`GATE_KILLED` ⇒ exit 9 *"retryable, re-run when the box is quieter"*, and no retry ever clears a
+collision. It is author-fixable, so it takes the author-fixable code. Own-scoped like every other
+finding, so it gates the land that ADDS the namesake instead of the fleet.
+
+Selftest 29/29 → **34/34**; `tests/git-identity-lint.bats` +5 cases (19-23), its `29/29` pin updated
+deliberately as its own comment demands.
+
+### Mutation-proved per SITE, with the control that the last three recycles kept needing
+
+Against an **unmutated executable copy** as case 1 (0 failures — and the executable bit matters: a
+`sed >` mutant is non-executable, and its `$SELF` re-invocations then fail with 126 and fabricate
+four failures that have nothing to do with the mutation; that artifact cost a full cycle here too):
+
+| mutant | site | selftest failures |
+|---|---|---|
+| M1 | detection — `population_collisions` returns 1 | **3**, incl. "blocked without naming itself COLLIDE" |
+| M2 | verdict — `collide` dropped from the return | **2**; the COLLIDE line still prints |
+| M3 | own-scope — `in_own` forced true | **1**, and only the advisory case |
+
+Three DISTINCT failure sets, so each case pins its own site rather than the feature as a whole.
+
+### The gate convicted this commit's own test code, which is the entry's best evidence
+
+Both new bats assertions were written `printf … | grep -q X && { echo …; false; }` — the
+**`and-absorbed`** shape, V2's exact class — and `bats-assert-liveness.py` caught them DEAD on the
+commit that wrote them. Revived with `bats-assert-liveness-fix.py` (`! A || { …; false; }`). The
+V2 ratchet is not merely clean; it is actively catching new instances at the chokepoint.
+
+### NOT RUN — do not read this as a full-gate green
+
+`bats` and `shellcheck` are absent from the cloud container. What DID run: `bash -n`; the lint's own
+`--selftest` (34/34, which exercises the same five cases as bats 19-23); `bats-assert-liveness.py`
+on the changed suite (clean); `bats-kill-guard-lint` and `bats-testname-eval-lint` (clean, 473
+suites); and the lint over the real tree (clean, 729 files). **Pre-existing and NOT mine:**
+`moving-ref-control-lint --selftest` exits 1 on **pristine trunk** — verified by stashing this diff,
+so it is not attributable to it. Worth a row.
+
+### Next, for whoever picks this up
+
+1. `git log caa922d2..origin/main` before trusting any NEXT above.
+2. The two remaining V3 members not yet measured: `gate-select`'s D/R/C rung still keying on
+   `is_prose` (so DELETING prose outside `docs/` answers the wrong question), and
+   `CC_PERMGATE_SET` / `CC_TSVPAD_DIRS` moving a lint's judged population without moving its stated
+   scope. Neither was touched here.
+3. The same basename-bijection question is open for `test-hermeticity-lint`'s **rule-4** population
+   (`bin/* scripts/*.sh hooks/*.sh`, also 0 collisions today). Its rules 1-3 population is a single
+   flat `tests/*.bats` glob where basename IS a bijection by construction — do not "fix" that half.
