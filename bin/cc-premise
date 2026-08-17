@@ -593,13 +593,19 @@ def self_duplicate_of(item_id, idx):
     return None
 
 
-def _git(args):
-    """A bounded git read. Any failure is None — never an exception, never a block."""
-    if not REPO:
+def _git_at(repo, args):
+    """A bounded git read AGAINST A NAMED CHECKOUT. Any failure is None — never an exception.
+
+    Split out of `_git` (which is now this, bound to REPO) because the sha arm has to put its
+    question to a repo that is NOT this one: a claude-infrastructure item can legitimately cite a
+    reso-management-app sha, and asking only this checkout can answer nothing but "absent".
+    `_sibling_repos` below is where that candidate set comes from.
+    """
+    if not repo:
         return None
     try:
         p = subprocess.run(
-            ["git", "-C", REPO] + args,
+            ["git", "-C", repo] + args,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -607,6 +613,11 @@ def _git(args):
     except (OSError, subprocess.SubprocessError):
         return None
     return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else None
+
+
+def _git(args):
+    """A bounded git read of THIS repo. Any failure is None — never an exception, never a block."""
+    return _git_at(REPO, args)
 
 
 def _git_rc(args):
@@ -661,6 +672,132 @@ def _git_usable():
             bool(REPO) and _git(["rev-parse", "--verify", "origin/main"]) is not None
         )
     return _GIT_USABLE[0]
+
+
+# THE FLEET IS MORE THAN ONE CHECKOUT, and the sha arm above was written as if it were not. Its
+# guard asks "is this ITEM ours?" and then resolves every cited sha against THIS repo — two
+# different questions that diverge for the whole standing class of meta-items: a
+# claude-infrastructure row that discusses another project's work (cross-project standdown, dedupe,
+# DROP). MEASURED (item cdbfe751ccc5, 2026-08-11): verdict flipped to `suspect` on
+# "CITED SHA d8329e766: no such object here (absent)" for a sha that is REAL and an ancestor of
+# origin/main — in reso-management-app. The item's own project IS claude-infrastructure, so
+# `own_repo` waved it straight through to a checkout that could never hold that object.
+#
+# WHY THE SIBLING ROW'S FIX IS NOT THIS ONE (42fd907d1459, closed): "require the token to resolve
+# as a git object in ANY ref" is still scoped to THIS checkout, so a sibling-repo sha fails it too
+# and the same false line is emitted. Absence has to be asked of every repo the item could
+# plausibly mean, or it is not absence — it is a lookup miss (memory: lookup-miss-is-not-absence).
+#
+# THE CANDIDATE SET IS THE DISPATCH SSOT, never a scan of ~/Development and never a hardcoded list:
+# scripts/dispatch-projects.conf already IS the map from project label to checkout, is already read
+# by two consumers (cc-dispatch, cc-backlog), and a project added there is dispatchable — i.e. its
+# shas become citable — in the same edit. Same `CC_DISPATCH_PROJECTS_CONF` override those two honor,
+# and the same realpath-first resolution `_default_repo` uses, so a deployed symlink reads the
+# checkout's conf rather than finding nothing under ~/.claude/scripts (memory: deploy-lag).
+def _default_projects_conf():
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    except OSError:
+        return ""
+    return os.path.join(root, "scripts", "dispatch-projects.conf")
+
+
+# EXPLICIT-EMPTY DISABLES, matching CC_PREMISE_REPO: a suite that must pin the arm to this repo
+# alone sets it empty, and gets no widening at all rather than the operator's live checkouts.
+PROJECTS_CONF = (
+    os.environ["CC_DISPATCH_PROJECTS_CONF"]
+    if "CC_DISPATCH_PROJECTS_CONF" in os.environ
+    else _default_projects_conf()
+)
+
+# Bounds. The sha loop is already capped at 20; these cap the OTHER axis, so a conf that grows to
+# twenty projects cannot turn one premise check into hundreds of git execs. Exhausting either
+# budget is NOT an absence proof — it is one more "could not ask", and it degrades exactly that way.
+_SIBLING_REPO_MAX = 6
+_WIDEN_CALL_MAX = 60
+
+_SIBLING_REPOS = []      # one-slot cache: [(label, path), …]
+_REPO_USABLE = {}        # path → bool, the per-repo positive control
+_SHA_ELSEWHERE = {}      # sha → verdict tuple; a token cited twice costs one lookup
+_WIDEN_CALLS = [0]
+
+
+def _sibling_repos():
+    """The OTHER checkouts an item here could legitimately cite — `repo=` rows, minus this one.
+
+    A `skip=` row is deliberately NOT a candidate: it declares a label with no checkout, so there is
+    nothing to ask. A `repo=` row whose checkout is missing IS kept — dropping it here would let a
+    vanished sibling read as "asked and answered no", which is the same fabrication one level out.
+    `_repo_usable` is what separates those two, per repo.
+    """
+    if not _SIBLING_REPOS:
+        rows, here = [], os.path.realpath(REPO) if REPO else ""
+        try:
+            with open(PROJECTS_CONF, "r") as fh:
+                raw = fh.read().splitlines()
+        except (OSError, IOError):
+            raw = []
+        for line in raw:
+            line = re.sub(r"\s+#.*$", "", line).strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2 or not parts[1].startswith("repo="):
+                continue
+            val = parts[1][len("repo="):].strip()
+            if not val:                       # `repo=` with an empty value is not a declaration
+                continue
+            path = os.path.expanduser(val)
+            if here and os.path.realpath(path) == here:
+                continue                      # this checkout is already the first question asked
+            rows.append((parts[0], path))
+        _SIBLING_REPOS.append(rows[:_SIBLING_REPO_MAX])
+    return _SIBLING_REPOS[0]
+
+
+def _repo_usable(path):
+    """Does THIS checkout answer git at all? One cheap probe per repo, cached.
+
+    `rev-parse --git-dir` and not `origin/main`: the sibling is only ever asked whether an OBJECT
+    exists, so requiring a particular ref would report a perfectly readable repo as unaskable.
+    """
+    if path not in _REPO_USABLE:
+        _REPO_USABLE[path] = _git_at(path, ["rev-parse", "--git-dir"]) is not None
+    return _REPO_USABLE[path]
+
+
+def sha_elsewhere(sha):
+    """Does this token resolve in some OTHER checkout? → (label | None, [labels not askable]).
+
+    Three states, kept apart on purpose (memory: lookup-miss-is-not-absence):
+      (label, …)   it resolves there — this repo's "absent" describes a pointer into a sibling, and
+                   the honest output is silence.
+      (None, [])   every candidate ANSWERED, and answered no. Only this earns "absent".
+      (None, [x])  x could not be asked. Still absent HERE, but not proven absent anywhere — so the
+                   line concedes it and the verdict does not move.
+    """
+    if sha in _SHA_ELSEWHERE:
+        return _SHA_ELSEWHERE[sha]
+    unaskable = []
+    found = None
+    for label, path in _sibling_repos():
+        if _WIDEN_CALLS[0] >= _WIDEN_CALL_MAX:
+            unaskable.append(label)
+            continue
+        if not _repo_usable(path):
+            unaskable.append(label)
+            continue
+        _WIDEN_CALLS[0] += 1
+        # ANY object type counts, and an ambiguous prefix counts too. The question here is not
+        # "what did this cite" but "is this token a dead pointer" — and a token that names
+        # something real over there is not one, whatever it names.
+        if _git_at(path, ["cat-file", "-t", sha]) is not None or _git_at(
+            path, ["rev-parse", "--disambiguate=" + sha]
+        ):
+            found = label
+            break
+    _SHA_ELSEWHERE[sha] = (found, unaskable)
+    return _SHA_ELSEWHERE[sha]
 
 
 def cited_shas(text, known_ids):
@@ -2141,6 +2278,12 @@ def assess(item_id, idx, out=None, run_probes=True):
     # doc_classifier cites THAT repo's shas and paths, which are correctly absent here — resolving
     # them against this checkout manufactures a dead-pointer finding for every cross-project item
     # (20 of 209 cited shas were verified present in a sibling repo). Silence is the honest answer.
+    #
+    # …AND THAT GUARD IS NECESSARY BUT NOT SUFFICIENT, because it proxies "is this SHA ours?" with
+    # "is this ITEM ours?". The two diverge for every meta-item filed HERE that discusses another
+    # project's work, which is a standing class (cross-project standdown / dedupe / DROP): the item
+    # passes `own_repo` and its cited sha is then resolved against a checkout that never held it.
+    # The widening that closes it lives at the miss, in `sha_elsewhere` — see its block above.
     own_repo = ent.get("project") in ("", "claude-infrastructure")
 
     # …and they only speak when git is ANSWERING. `_git_usable()` is the difference between "absent"
@@ -2150,10 +2293,20 @@ def assess(item_id, idx, out=None, run_probes=True):
         bad = []
         for sha in cited_shas(text, known)[:20]:  # bounded: the 21st sha adds no clarity
             state = resolve_sha(sha)
-            if state in ("absent", "ambiguous"):
-                bad.append((sha, state))
+            if state not in ("absent", "ambiguous"):
+                continue
+            # THIS REPO FIRST, AND ONLY THEN THE OTHERS. The common item cites its own repo's shas
+            # and they resolve above, so the single-repo case never pays for the cross-repo one —
+            # the widening runs on the miss, which is exactly where the false finding was minted.
+            found, unaskable = sha_elsewhere(sha)
+            if found:
+                continue          # a live object in a sibling checkout — silence is the answer
+            bad.append((sha, state, unaskable))
         if bad:
-            if verdict == "clear":
+            # A verdict needs a PROOF of absence, and only a sha every candidate repo answered
+            # "no" to is one. One such sha is enough; a body of nothing but could-not-ask shas
+            # still prints its lines but leaves the verdict where it was.
+            if verdict == "clear" and any(not un for _, _, un in bad):
                 verdict = "suspect"
             # TWO SENTENCES, BECAUSE "IT IS A SHA" IS ITSELF A CLAIM. `cited_shas` has already
             # dropped the tokens provably belonging to another id space; what survives is a mix of
@@ -2161,21 +2314,31 @@ def assess(item_id, idx, out=None, run_probes=True):
             # kind a SHA is the false signal this arm was reported for. The confident wording is
             # earned by an adjacent git word and the fallback concedes what it does not know —
             # both carry the rebase advice, which was correct all along.
-            for sha, state in bad:
+            for sha, state, unaskable in bad:
+                # The concession is per SHA, because askability is per repo and per token: one
+                # unreadable sibling must weaken the sentence about the token it could have held,
+                # not every sentence in the block.
+                if unaskable:
+                    scope, hedge = "", (
+                        " NOT PROVEN ABSENT: %s could not be asked, so this token may resolve "
+                        "there." % ", ".join(unaskable)
+                    )
+                else:
+                    scope, hedge = ", and in no sibling checkout either", ""
                 if sha_context(text, sha):
                     lines.append(
-                        "CITED SHA %s: no such object here (%s). This repo lands by REBASE, so a "
+                        "CITED SHA %s: no such object here (%s)%s. This repo lands by REBASE, so a "
                         "dead pointer does NOT mean the change is undone — check whether the "
-                        "described change is on trunk by CONTENT before concluding anything."
-                        % (sha, state)
+                        "described change is on trunk by CONTENT before concluding anything.%s"
+                        % (sha, state, scope, hedge)
                     )
                 else:
                     lines.append(
-                        "CITED HEX TOKEN %s does not resolve as a commit here (%s) — if it is a "
+                        "CITED HEX TOKEN %s does not resolve as a commit here (%s)%s — if it is a "
                         "session, task or backlog id rather than a sha, IGNORE THIS LINE. If it "
                         "is a sha: this repo lands by REBASE, so a dead pointer does NOT mean the "
                         "change is undone — check whether the described change is on trunk by "
-                        "CONTENT before concluding anything." % (sha, state)
+                        "CONTENT before concluding anything.%s" % (sha, state, scope, hedge)
                     )
 
         gone, present = [], []

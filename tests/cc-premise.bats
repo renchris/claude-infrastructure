@@ -40,6 +40,15 @@ setup() {
   # on that repo's history. Empty is the explicit "no repo" that keeps the refutation tests
   # hermetic. The git arms are exercised below against a fixture repo this suite builds and owns.
   export CC_PREMISE_REPO=
+  # …and the SECOND repo axis is pinned the same way, for the same reason. The sha arm no longer
+  # asks only this checkout: on a miss it widens to the `repo=` rows of scripts/dispatch-projects.conf,
+  # so that an item filed here about reso work is not convicted of citing a dead pointer. Unpinned,
+  # this suite would widen into the operator's REAL checkouts — and it measurably did: `7868b45e`,
+  # chosen here as a token that resolves nowhere, resolves in one of them, so the "unbound twin
+  # still speaks" control flipped green-to-red with no change to its subject
+  # (memory: unfixtured-sensor-executes-the-deployed-subject). EXPLICIT-EMPTY disables the widening;
+  # tests/cc-premise-sibling-sha.bats owns it, against sibling checkouts that file builds itself.
+  export CC_DISPATCH_PROJECTS_CONF=
   : > "$CC_BACKLOG_FILE"
 }
 
