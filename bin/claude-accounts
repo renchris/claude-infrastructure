@@ -1773,6 +1773,18 @@ def apply_burn(rows, cfg, samples=None):
                 if d >= 0:
                     r["burn_wk_ppd"] = d / (dh / 24.0)
 
+    # Window-phase view, exported so consumers ROUTE on it instead of re-deriving it from a raw
+    # percentage (the governed dispatcher, USAGE_TELEMETRY_100P §4 M1, admits work against this).
+    # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
+    # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
+    # inversion this metric exists to prevent.
+    for r in rows:
+        ratio, proj = wall_projection(r)
+        if ratio is not None:
+            r["burn_ratio"] = ratio
+            r["proj_end_pct"] = proj
+            r["wall_risk"] = proj >= 100.0
+
 
 def pace_need_ppd(r):
     """%/day the weekly bucket must burn from NOW to reach 100% by its reset — the goal's own
@@ -1785,20 +1797,66 @@ def pace_need_ppd(r):
     return max(0.0, 100.0 - r["weekly_pct"]) / (wrh / 24.0)
 
 
+WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
+MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+
+
+def wall_projection(r):
+    """burn_ratio and projected end-of-window pct, or (None, None) when neither is honest.
+
+    WHY THIS EXISTS (USAGE_TELEMETRY_100P §1). A point-in-time percentage against a
+    periodically RESETTING counter is dominated by where you are in the window, not by how you
+    are using it. On 2026-08-16 this renderer showed three accounts at 1-3% weekly and every
+    `pace to 100%` line reading BEHIND, which reads as gross under-utilisation; the previous
+    complete windows had closed at 91/92/100/85%. The readings were three windows that had just
+    reset. Every figure was correct and the obvious interpretation was inverted.
+
+      burn_ratio = (weekly_pct/100) / elapsed_fraction    1.0 = exactly on pace to end at 100%
+      proj_end   = weekly_pct / elapsed_fraction          where the window lands if nothing changes
+
+    ABSTAIN below MIN_ELAPSED_FRAC. This is the whole point rather than a nicety: at 1 h elapsed
+    a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
+    manufacturing the very false alarm the metric exists to remove. Returning None is the honest
+    answer to "too early to say", per the repo's abstain-never-impute rule.
+    """
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    if wp is None or not isinstance(wrh, (int, float)):
+        return None, None
+    if not (0 < wrh <= WEEK_H):          # a stamp outside the bucket is bad data, not a signal
+        return None, None
+    frac = (WEEK_H - wrh) / WEEK_H
+    if frac < MIN_ELAPSED_FRAC:
+        return None, None
+    return (wp / 100.0) / frac, wp / frac
+
+
 def pace_line(rows):
-    """One footer line, soonest reset first: the burn each account needs to finish its week at
-    100%, beside the measured recent rate (BEHIND flagged only when the series can actually
-    say — measured < needed, never a guessed threshold)."""
+    """One footer line, soonest reset first. Reports each account's BURN RATIO against elapsed
+    window and where the window is projected to land — with `⚠ WALL` when that projection reaches
+    100%, because an account that hits its weekly limit is DOWN until reset (next3 sat at exactly
+    100% for 11.2 h on 2026-08-11). The older `%/day needed` figure is retained beside it: it
+    still answers "how hard would I have to push", which the ratio does not.
+
+    NB 100% is the WALL, not the target. This line used to be captioned `pace to 100%`, which
+    framed the failure mode as the goal."""
     parts = []
     for r in sorted((x for x in rows if pace_need_ppd(x) is not None),
                     key=lambda x: x.get("weekly_reset_h") or float("inf")):
         need = pace_need_ppd(r)
-        p = f"{r['acct']} {need:.0f}%/d over {fmt_h(r['weekly_reset_h'], narrow=True)}"
+        ratio, proj = wall_projection(r)
+        if ratio is None:
+            p = (f"{r['acct']} too early to project "
+                 f"({fmt_h(r['weekly_reset_h'], narrow=True)} left)")
+        else:
+            p = f"{r['acct']} burn {ratio:.2f}× → ~{proj:.0f}% by reset"
+            if proj >= 100.0:
+                p += " ⚠ WALL"
+            p += f", needs {need:.0f}%/d over {fmt_h(r['weekly_reset_h'], narrow=True)}"
         b = r.get("burn_wk_ppd")
         if isinstance(b, (int, float)):
-            p += f" (recent {b:.0f}%/d{' — BEHIND' if b < need else ''})"
+            p += f" (recent {b:.0f}%/d)"
         parts.append(p)
-    return ("pace to 100%: " + " · ".join(parts)) if parts else ""
+    return ("weekly burn (1.00× = lands exactly at the 100% wall): " + " · ".join(parts)) if parts else ""
 
 
 def _excluded(r, R, cliff=True, k_of=None):
