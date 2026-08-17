@@ -793,6 +793,31 @@ VALIDATED="${CC_BACKLOG_VALIDATED:-$HOME/.claude/autonomy/backlog-validated.json
 # any other value must satisfy valid_condition, or the arm is a no-op (fail-open, never a refusal).
 OPERATOR_CONDITION="${CC_BACKLOG_OPERATOR_CONDITION:-master-operator-gated}"
 
+# THE REAP'S OWN BLOCKS ARE NOT OPERATOR STEPS — the one exception to the arm above, and it lives
+# in this file (2026-08-17, drain recycle #11).
+#
+# The arm's stated premise is that "a `block --needs` record IS the statement 'the next step here
+# belongs to the operator' — not an inference about the row, but the verb's own required payload".
+# That is true of every EXTERNAL caller and false of exactly three callers, all of them 2,300 lines
+# below the arm, inside cmd_reap: rules B (persistent thrash), wedged-live-worker, and the
+# dead-worker/unresolved-oracle stall all file `block --needs "<machine diagnostic>"`. Their payload
+# is not a step the operator can take — it is the sweep saying it could not decide, and each one
+# NAMES ITS OWN NEXT ACTOR in its last sentence: *"Investigate the root cause, then `cc-backlog
+# unblock <id>`."* That is agent work. Keyed into the operator batch it becomes the exact defect
+# MASTER_OPERATOR_GATED.md exists to stop, inverted: instead of an agent burning a slot on a row it
+# cannot act on, a HUMAN is handed a row no human should ever see.
+#
+# Measured before the fix: 2 of the 30 live members of master-operator-gated were reap-authored
+# (70f0001c657b, c33f3b1cb278) — and one of them is the drain's own SSOT plan row.
+#
+# INTERNAL, NOT A `--by` MATCH. The reap identifies itself in the durable record as
+# `--by cc-backlog-reap`, and keying off that string would work today — but it would also mean an
+# external caller passing that spelling silently loses its group, and it is a denylist of one
+# spelling rather than the class (memory: denylist-enumerates-spellings-not-the-class). The class is
+# "a block this process wrote as part of its own maintenance sweep", which is structural: set here,
+# set only by cmd_reap, unreachable from argv.
+REAP_INTERNAL_BLOCK=0
+
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
 }
@@ -2119,7 +2144,13 @@ cmd_transition() {
   # the same reason, with the stakes stated plainly: the operator step is already durable by the time
   # this runs. Losing its group costs it a place in a batch; failing the transition would lose the
   # STEP, which is the one outcome worse than an ungrouped row.
-  if [ "$event" = block ] && [ "$OPERATOR_CONDITION" != off ] && valid_condition "$OPERATOR_CONDITION"; then
+  if [ "$event" = block ] && [ "$REAP_INTERNAL_BLOCK" -eq 1 ]; then
+    # LOUD, not silent. The reap prints one line per blocked row already, so one more keeps the
+    # mechanism observable in operation — an arm that silently stopped firing would look exactly
+    # like an arm that was never reached (memory: liveness-proxy-cannot-be-output-age).
+    printf 'cc-backlog block: %s is a reap NON-VERDICT, not an operator step — NOT keyed into "%s"\n' \
+      "$id" "$OPERATOR_CONDITION" >&2
+  elif [ "$event" = block ] && [ "$OPERATOR_CONDITION" != off ] && valid_condition "$OPERATOR_CONDITION"; then
     local olerr olrc=0
     # stderr captured, stdout dropped: cmd_link echoes the id on success and stdout here is the
     # `echo "$id"` contract every caller captures. rc 4 is the already-conditioned case above and is
@@ -4586,6 +4617,11 @@ idl_verdict() {
 #   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
 #   CC_BACKLOG_IDL              (~/.claude/autonomy/idl.jsonl)  the verdict journal (see idl_verdict)
 cmd_reap() {
+  # Every `block` this sweep writes carries a MACHINE NON-VERDICT, never an operator step — see
+  # THE REAP'S OWN BLOCKS ARE NOT OPERATOR STEPS at the top of this file. Set once for the whole
+  # verb rather than at each of the three call sites, because that is exactly the claim (three
+  # sites would be three places to drift), and cmd_reap is terminal — nothing runs after it.
+  REAP_INTERNAL_BLOCK=1
   local dry=0
   while [ $# -gt 0 ]; do
     case "$1" in
