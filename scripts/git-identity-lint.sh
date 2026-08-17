@@ -822,7 +822,7 @@ F
   mkdir -p "$d/coll/tests" "$d/coll/scripts" "$d/coll/bin"
   printf '@test "x" {\n  : ok\n}\n' > "$d/coll/tests/zz-fixture.bats"
   printf '#!/bin/bash\n: ok\n' > "$d/coll/scripts/foo.sh"
-  lint_tree "$d/coll" "" >/dev/null 2>&1; [ "$?" -eq 0 ] || { echo "SELFTEST FAIL: a collision-FREE population did not read clean — the guard fires on everything"; fails=1; }
+  if ! lint_tree "$d/coll" "" >/dev/null 2>&1; then echo "SELFTEST FAIL: a collision-FREE population did not read clean — the guard fires on everything"; fails=1; fi
   #     The positive: one basename, two files, two directories.
   printf '#!/bin/bash\n: ok\n' > "$d/coll/bin/foo.sh"
   out="$(lint_tree "$d/coll" "" 2>&1)"; rc=$?
@@ -835,8 +835,11 @@ F
   #     makes this guard cover the whole reachable class rather than a sample of it.
   rm -f "$d/coll/bin/foo.sh"
   printf '#!/bin/bash\n: ok\n' > "$d/coll/scripts/git-identity-lint.sh"
+  # shellcheck disable=SC2016  # the single quotes are the POINT — the fixture must carry the
+  # leaky shape UNEXPANDED; expanding it here would write a DIFFERENT file than the one under test
   printf '#!/bin/bash\ngit -C "$1" config user.email t@t\n' > "$d/coll/bin/git-identity-lint.sh"
-  lint_tree "$d/coll" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a leaky namesake of a SELF_EXCLUDE entry was swallowed — the silent-green this guard exists to stop"; fails=1; }
+  _coll_rc=0; lint_tree "$d/coll" "" >/dev/null 2>&1 || _coll_rc=$?
+  [ "$_coll_rc" -eq 1 ] || { echo "SELFTEST FAIL: a leaky namesake of a SELF_EXCLUDE entry was swallowed — the silent-green this guard exists to stop"; fails=1; }
   #     Own-scoped like every other finding: the land that ADDS the namesake is refused, everyone
   #     else reads one advisory line. Without this, the guard is a fleet-wide hard stop.
   ( CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/coll" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: a collision OUTSIDE the diff blocked — own-scope is not taking"; fails=1; }
