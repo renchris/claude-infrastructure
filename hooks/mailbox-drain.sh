@@ -303,18 +303,57 @@ _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-144
 # unqualified form would be teaching a command that fails. This hook is one of the few surfaces that
 # holds both the goal state and the session id at once; where the id is missing (the pane-keyed
 # degrade at :101) it says so rather than emitting a form it knows to be incomplete.
+
+# ── E2 (2026-08-15) — THE ARM THAT WAS ALREADY THERE WHEN THE GOAL ARRIVED ────────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2. The branch above only ever fires when the
+# session is UNWATCHED, so it covers the arm that has not happened yet — and misses the one that
+# already has. A watcher armed BEFORE `/goal` was typed defers that goal for the rest of its 4-hour
+# term, and NOTHING model-facing said so: hooks/goal-inert-watch.sh reports the same condition on
+# `systemMessage`, which reaches the operator and never the agent. In the screenshot that opened this
+# investigation the session knew only by luck, and it is the measured shape of the starvation pole
+# (47 of 84 goal sessions, ZERO evaluations).
+#
+# This hook is where it belongs: it already sources the goal predicate, already reads the wake
+# marker, and already runs at every boundary — so the report costs one extra marker read on a path
+# that just did one. It NAMES THE PID and hands over the single act that ends the deferral, because
+# "a background task is disabling your goal" is unactionable when the agent cannot see the registry.
+#
+# SELF-LIMITING, not damped: it stops the moment the watcher is gone, exactly like the arm nudge
+# above (whose hoist note argues the case). `post-tool` cannot repeat it per tool call — that mode
+# exits at the empty-inbox path below, and its pre-gate exits before the take when nothing is pending.
+#
+# EXEMPTION: an idle-scoped watcher (B3, §4 C1-C7) is SANCTIONED under a live goal — it stands down
+# on any new turn of its own session, so its deferral spans exactly the idle window. It declares
+# itself in the marker/claim; mailbox_wake_idle_scoped is the reader, and its absence means "plain",
+# which is what every watcher in the fleet is today.
 _goal_cond=""
 if command -v goal_live_condition >/dev/null 2>&1; then
   _goal_cond="$(goal_live_condition "$own_tp" 2>/dev/null)" || _goal_cond=""
 fi
+_hdr="🔔 No inbox wake path armed."
 if [ -n "$_goal_cond" ]; then
   if [ -n "$own_sid" ]; then
     _idlecmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid $own_sid"
   else
     _idlecmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid <this session's id>"
   fi
-  [ "$_watched" = 1 ] || nudge="
+  if [ "$_watched" = 1 ]; then
+    _wpid=""
+    if command -v mailbox_wake_pid >/dev/null 2>&1 \
+       && ! { command -v mailbox_wake_idle_scoped >/dev/null 2>&1 && mailbox_wake_idle_scoped "$own_uuid"; }; then
+      _wpid="$(mailbox_wake_pid "$own_uuid" 2>/dev/null || true)"
+      case "$_wpid" in ''|*[!0-9]*) _wpid="" ;; esac
+    fi
+    if [ -n "$_wpid" ]; then
+      _hdr="🚨 A parked watcher is holding your LIVE /goal inert."
+      nudge="
+(pid $_wpid is a cc-await-ping parked in this session's task registry, and a /goal is LIVE (\"$(printf '%s' "$_goal_cond" | cut -c1-120)\"). Claude Code SKIPS /goal evaluation at every Stop where a non-terminal background Bash exists — restoring the hook afterwards, so nothing ever looks wrong — which means that watcher is silently making your goal inert. It was almost certainly armed BEFORE the goal. End the deferral as your next Bash tool call: kill $_wpid
+You lose nothing by killing it: the goal blocks your stops, so you keep taking turns and this drain delivers peer mail at every boundary the goal forces. Its death writes a WAKE-PATH-DOWN line into this inbox — that is the designed receipt, not a fault, and the harness will render the kill as 'failed with exit code 143/144'. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2.)"
+    fi
+  else
+    nudge="
 (a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
+  fi
 else
   [ "$_watched" = 1 ] || nudge="
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
@@ -323,16 +362,24 @@ fi
 # EMPTY INBOX — nothing to deliver, but this is still a boundary at which we can see the session has
 # no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
 # additionalContext only: this fires on every prompt, and a systemMessage per turn would bury the
-# operator's own output. When a watcher IS armed there is nothing to say, so we exit silently.
+# operator's own output. With nothing to say we exit silently.
+#
+# GATED ON THE NUDGE, NOT ON `_watched` (E2, 2026-08-15). This used to exit whenever a watcher was
+# armed, on the reasoning that an armed session has nothing to be told — true while the only message
+# here was "arm one". E2 added the opposite message: under a live goal an armed watcher is the
+# defect, and it is reported at exactly this boundary — the idle one, where the session is about to
+# stop and have its goal skipped. Keying the exit on the presence of a message instead of on the
+# state that used to imply it keeps every prior path byte-identical (armed + no goal ⇒ empty nudge
+# ⇒ exit 0) while letting the new one through.
 #
 # post-tool (v3 D5) NEVER takes this path: it rides EVERY tool call, so one nudge here would repeat
 # tens of times per turn — the exact burial this comment warns about, amplified. The mode's own
 # only-when-pending pre-gate (:108) already exits before the take, so this is the local re-assert of
 # that invariant rather than a second policy — a lost race on the take must stay silent, not nudge.
 if [ -z "$body" ]; then
-  [ "$_watched" = 1 ] && exit 0
+  [ -z "$nudge" ] && exit 0
   [ "$MODE" = "post-tool" ] && exit 0
-  jq -nc --arg e "$EVENT" --arg c "🔔 No inbox wake path armed.${nudge}" \
+  jq -nc --arg e "$EVENT" --arg c "${_hdr}${nudge}" \
     '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
   exit 0
 fi

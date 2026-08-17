@@ -947,3 +947,61 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   [ "$after" -eq 4 ]
   [ "$(( before + after ))" -eq 7 ]                     # 7 evaluations, 1 event — the spin pole
 }
+
+# ── E1: THE CORPSE MUST NOT PRESCRIBE THE ACT THE CHOKEPOINT DENIES (2026-08-15) ──────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1. The screenshot that opened that
+# investigation: a session with a LIVE /goal killed its own pre-goal watcher (correct), and this
+# notice told it to RE-ARM — the exact shape hooks/validate-bash.sh DENIES under a live goal, because
+# a parked background Bash makes CC skip goal evaluation at every Stop. The watcher cannot read the
+# goal (no transcript path, and a multi-MB grep inside a SIGTERM handler is not an option), and the
+# state can change between this WRITE and the boundary that READS it — so the line must be correct
+# under BOTH states rather than pick one.
+
+@test "E1: the WAKE-PATH-DOWN line names the LIVE-/goal branch and tells it NOT to re-arm" {
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -q 'A /goal IS LIVE' "$MB"
+  grep -q 'do NOT re-arm' "$MB"
+  # ...and it says WHY, so the reader is not asked to take the refusal on faith
+  grep -q 'skips /goal evaluation at every Stop' "$MB"
+}
+
+@test "E1: the no-goal branch still carries the exact re-arm command (the fix is not a deletion)" {
+  # The failure mode of a goal-aware rewrite is over-correction: a session with NO goal that is told
+  # nothing is deaf until someone types at it, which is the defect the notice existed to prevent.
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -q 'NO live /goal' "$MB"
+  grep -qF 'cc-await-ping --timeout 14400 --interval 15' "$MB"
+}
+
+@test "E1: the notice is still ONE mailbox line (a line IS a message on this substrate)" {
+  # Both branches in one message, not two: the box is line-oriented, so a second line would be
+  # delivered as a second peer message — counted separately, cursor-advanced separately, and
+  # attributable to nobody if it lost the `<ISO> [from]` prefix the drain parses.
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  [ "$(grep -c '' "$MB")" -eq 1 ]
+  [ "$(grep -c 'WAKE-PATH-DOWN' "$MB")" -eq 1 ]
+}
+
+@test "E1 RED-PROOF: the pre-fix watcher from origin/main instructs RE-ARM with no /goal branch" {
+  local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
+  git -C "$REPO" archive origin/main bin/cc-await-ping | tar -x -C "$old" || skip "origin/main unavailable"
+  if grep -q 'A /goal IS LIVE' "$old/bin/cc-await-ping"; then
+    skip "control is not pre-fix"
+  fi
+  "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -q 'WAKE-PATH-DOWN' "$MB"                     # positive control: the control DID write a notice
+  ! grep -q 'do NOT re-arm' "$MB" || false           # RED: its only instruction was the denied one
+}
