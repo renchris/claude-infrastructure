@@ -1,0 +1,41 @@
+# Corpus for scripts/hook-fork-census.sh — executed-path fork census of hooks/validate-bash.sh
+#
+# FORMAT (tab-separated, 3 fields):   class <TAB> run_in_background <TAB> command
+#
+# 🚨 EVERY DANGER STRING LIVES IN THIS FILE AND NOWHERE ELSE. The live validate-bash.sh hook
+# fires on every Bash tool call, so a literal danger pattern typed into a tool call gets the
+# agent's OWN call denied. The census feeds the hook from this file; no danger literal is ever
+# an argument to a command. Do not inline these anywhere else.
+#
+# Command lengths are calibrated to the real fleet distribution, measured 2026-08-17 over the
+# last 4000 lines of ~/.claude/logs/bash-commands.log:
+#   min=0  p25=18  median=55  p75=100  p95=199  max=1267 characters.
+# (Caveat: that logger writes heredoc bodies as their own lines, so the tail is inflated by
+# body text; the central percentiles are the trustworthy part and are what the corpus targets.)
+#
+# CLASSES — one per distinct executed path through the hook:
+#   safe-short     ordinary safe command, ~median length      → runs the FULL gauntlet, no deny
+#   safe-median    ordinary safe command at the p50 length    → full gauntlet
+#   safe-long      ordinary safe command near p95             → full gauntlet, longer subject
+#   git-command    a git command that is NOT denied           → full gauntlet + git terms
+#   rm-safe        rm present, target safe                    → arms the rm argv scan, allows
+#   bg-benign      run_in_background, self-terminating        → goal-guard shape scan, allows
+#   bg-park        run_in_background poll loop                → goal-guard DENY (early return)
+#   pane-spawn     a pane-spawn command                       → sources the lease + lineage libs
+#   deny-early     first hard-deny pattern in the file        → shortest deny path
+#   deny-flag      a real-flag deny (shlex path)              → is-true-flag.sh library path
+#   deny-ddl       DDL deny                                   → mid-file deny
+#   deny-rm        catastrophic rm target                     → rm argv scan then deny
+#
+safe-short	false	ls -la
+safe-median	false	cd /Users/chrisren/Development/claude-infrastructure && git status --short
+safe-long	false	cd /Users/chrisren/Development/.worktrees/drain/r15-forkcensus && printf '%s\n' "checking the census harness end to end" && wc -l hooks/validate-bash.sh hooks/lib/is-true-flag.sh && echo done
+git-command	false	git log --oneline -20 --no-decorate
+rm-safe	false	rm -f /tmp/fc-scratch-file.txt
+bg-benign	true	pnpm build
+bg-park	true	until grep -q done /tmp/fc-flag; do sleep 10; done
+pane-spawn	false	scripts/handoff-fire.sh --prompt-file /tmp/fire-x.txt --worktree wave-x --account auto
+deny-early	false	sudo rm /etc/hosts
+deny-flag	false	git commit --no-verify -m "wip"
+deny-ddl	false	sqlite3 app.db "alter table users add column x text"
+deny-rm	false	rm -rf $HOME
