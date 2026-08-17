@@ -1,6 +1,6 @@
 {
   "_comment": "Reproducible Claude Code config template \u2014 the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset \u2014 that is the whole point of this capture.",
-  "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off — and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire — that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
+  "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off \u2014 and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire \u2014 that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
   "env": {
     "MCP_TIMEOUT": "30000",
     "MCP_TOOL_TIMEOUT": "60000",
@@ -365,7 +365,7 @@
         ]
       },
       {
-        "_comment": "The /accounts board at session start, at ZERO model tokens: it emits a TOP-LEVEL systemMessage (the only one of the three SessionStart channels that reaches the terminal without entering model context — hookSpecificOutput.systemMessage is silently ignored and additionalContext is billed; proven in docs/research/R5b-sessionstart-render-probe.py). It is a file read (~65ms), never a claude-accounts call: --readout measures 5.33s, over this timeout. The board is pre-rendered by the com.claude.accounts-keepwarm launchd job (claude-accounts --keepwarm), and the hook labels or withholds it by age.",
+        "_comment": "The /accounts board at session start, at ZERO model tokens: it emits a TOP-LEVEL systemMessage (the only one of the three SessionStart channels that reaches the terminal without entering model context \u2014 hookSpecificOutput.systemMessage is silently ignored and additionalContext is billed; proven in docs/research/R5b-sessionstart-render-probe.py). It is a file read (~65ms), never a claude-accounts call: --readout measures 5.33s, over this timeout. The board is pre-rendered by the com.claude.accounts-keepwarm launchd job (claude-accounts --keepwarm), and the hook labels or withholds it by age.",
         "hooks": [
           {
             "type": "command",
@@ -503,6 +503,10 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/handed-off-session-guard.sh"
+          },
           {
             "type": "command",
             "command": "~/.claude/hooks/cache-expiry-warning.sh",
