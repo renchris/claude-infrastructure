@@ -790,6 +790,160 @@ while IFS= read -r gid_clause; do
 done <<<"$GID_CLAUSES"
 fi
 
+# ── FF-GATE BEGIN — ungated advance of the SHARED CHECKOUT (backlog 8c6606b6f048) ────────────────
+# The class was DETECTED and enforced by NOTHING. `scripts/deploy-parity-assert.sh` (third leg,
+# :755-830) scores an ungated advance UNGATED *after the fact*, and `.claude/commands/ship.md:120`
+# states the doctrine in prose — but prose advises and a post-hoc check reports; neither can stop
+# the advance. Measured over the shared checkout's full reflog window (2026-08-01 → 2026-08-17):
+# 42 `merge origin/main` + 8 `pull --ff-only …` ungated advances against the sanctioned lane.
+#
+# WHY THE ADVANCE IS THE HARM: `~/.claude/{hooks,commands,scripts,bin,skills}` are real directories
+# of PER-FILE symlinks, so a bare fast-forward advances the FILES and creates NO link for any newly
+# tracked file — the feature lands absent, not stale, and every `[ -f x ]` / `command -v` consumer
+# guard silently skips it. It also skips the green-stamp gate entirely. And it leaves live and
+# checkout in PERFECT agreement, so both parity legs above it are structurally blind to it.
+#
+# WHY THIS HOOK IS THE CHOKEPOINT, verified rather than assumed: of the three advance paths
+# inventoried in docs/research/land-architecture-100p-2026-08-10/E-live.md §1.2, path A is the
+# sanctioned launchd tick, path C (deploy-now.sh's own raw ff) was deleted by 5626e682f, and the
+# surviving ungated path is **B — an agent session typing the command**, recorded there as a
+# verbatim tool call (`git pull --ff-only -q origin main`, session d3b1290e). No tracked script
+# contains that string. An agent-typed Bash call is exactly what PreToolUse sees, and nothing else
+# does (MEMORY.md enforcement-must-live-at-the-chokepoint: gate the event that IS the act).
+#
+# THE DISCRIMINATOR IS REUSED, NOT INVENTED — deploy-parity-assert.sh:813-822, proven in the field:
+# deploy-live.sh resolves its target with rev-parse BEFORE merging (`merge --ff-only "$TARGET"`),
+# so a sanctioned advance always names a resolved OBJECT NAME. Every ungated path either names a
+# REF or is not a merge at all. So the rule is structural, not a list of spellings
+# (MEMORY.md denylist-enumerates-spellings-not-the-class): in the shared checkout, a `git merge`
+# whose target is not an object name, and any `git pull`, is an ungated advance. `origin/main`,
+# `origin main`, `@{u}`, a branch name and a bare `git merge` are all the same member of one class.
+#
+# SCOPE, deliberately narrow on both axes:
+#   · REPO — only the shared checkout itself (and paths beneath it). A linked worktree is a
+#     DIFFERENT directory, so the ordinary `git pull --ff-only` a session runs in its own worktree
+#     is untouched by construction — that is the innocent population, and a guard that fired on it
+#     would be worse than none (MEMORY.md alarm-polarity-and-attention-budget).
+#   · MECHANISM — merge/pull only. `reset`/`checkout` also appear in the reflog, but every innocent
+#     spelling of `git reset` outnumbers the guilty one and no predicate here separates them; that
+#     member is named and NOT claimed rather than guessed at. `git fetch` is untouched: refreshing
+#     refs is not advancing HEAD, and it is what the operator wants before deploying.
+# Fails OPEN on anything undecidable (an all-expansion path or target, an unresolvable directory):
+# this hook reads commands BEFORE the shell expands them, and a false deny in the deploy lane would
+# strand the very sessions that keep the live layer converged.
+#
+# The BEGIN/END markers above and below are load-bearing: tests/validate-bash-ff-gate.bats builds
+# its mutation control by deleting exactly this span, so a green suite credits this block and not
+# the fixture (MEMORY.md control-must-replay-the-real-artifact, per-site-mutation-attributes-coverage).
+#
+# Builtin fast pass-through, fork-free — this hook runs on EVERY Bash tool call in the fleet.
+if [[ "$CMD" == *merge* || "$CMD" == *pull* ]]; then
+FFG_SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
+FFG_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+[[ -n "$FFG_CWD" ]] || FFG_CWD="$PWD"
+
+# _ffg_scan <clause> — positional walk setting FFG_SUB / FFG_TGT / FFG_DIR / FFG_CD. Only argv
+# POSITION distinguishes the git SUBCOMMAND `merge` from the same eight characters inside
+# `git log --merges`, `git branch --merged`, or a commit message — which is why this is a walk and
+# not a regex, the same lesson _gid_target_of above already encodes.
+#
+# It returns through GLOBALS rather than a delimited line, and that is a correction, not a style
+# choice: the first build printed "sub\ttgt\tdir" and read it back under `IFS=$'\t'`. Tab is an IFS
+# WHITESPACE character, so bash collapses runs of it and drops leading ones — a cd-only clause,
+# whose first three fields are empty, arrived as ONE field and landed in `sub`. Globals also mean
+# no command substitution, i.e. no subshell fork per clause on a hook that runs on every Bash call.
+_ffg_scan() {
+  # IFS pinned LOCALLY: the walk's word-splitting must not inherit whatever a caller left set.
+  local tok prev="" c="" g="" d="" sub="" tgt="" state=pre IFS=$' \t\n'
+  set -f  # a command containing `*` must not glob against the cwd during the walk
+  for tok in $1; do
+    case "$prev" in
+      -C) [ -n "$c" ] || c="$tok"; prev="$tok"; continue ;;  # `-C <dir>` — value never a subcommand
+      -c) prev="$tok"; continue ;;                            # `git -c k=v …` — same
+      # A `cd` GOVERNS only what comes after it, so one found past the subcommand
+      # (`git merge x && cd /tmp`) is not this command's directory and is not recorded.
+      cd) [ -n "$d" ] || [ -n "$sub" ] || d="$tok" ;;
+    esac
+    case "$tok" in --git-dir=*) [ -n "$g" ] || g="${tok#--git-dir=}" ;; esac
+    # A chain operator ENDS the current command. With the answer already in hand, stop; otherwise
+    # rewind to `pre` so the NEXT git in the chain gets a full walk of its own — without this,
+    # `git fetch && git merge origin/main` parked in state `done` and the merge was never seen.
+    case "$tok" in
+      '&&'|'||'|'&') if [ -n "$sub" ]; then break; else state=pre; prev="$tok"; continue; fi ;;
+    esac
+    case "$state" in
+      pre)  case "$tok" in git|*/git) state=opts ;; esac ;;
+      opts) case "$tok" in
+              -*) ;;                                  # a git GLOBAL option, keep looking
+              merge|pull) sub="$tok"; state=args ;;
+              *) state=pre ;;                         # another subcommand — rewind, keep walking
+            esac ;;
+      args) case "$tok" in -*) ;; *) [ -n "$tgt" ] || tgt="$tok" ;; esac ;;
+    esac
+    prev="$tok"
+  done
+  set +f
+  FFG_SUB="$sub"; FFG_TGT="$tgt"; FFG_DIR="${c:-$g}"; FFG_CD="$d"
+}
+
+# _ffg_resolve <named-dir> — canonical directory the clause would act in, empty when undecidable.
+_ffg_resolve() {
+  local n="$1"
+  [ -n "$n" ] || n="$FFG_CWD"
+  case "$n" in *'$'*|*'`'*) return 0 ;; esac   # computed at runtime — undecidable, fail open
+  n="$(printf '%s' "$n" | tr -d "\"'")"
+  # `\~` and `\~/*` are case PATTERNS matched literally — a `cd ~/…` typed by an agent reaches this
+  # hook unexpanded, so the tilde has to be expanded here or the path resolves nowhere.
+  case "$n" in \~) n="$HOME" ;; \~/*) n="$HOME/${n#\~/}" ;; esac
+  ( cd "$FFG_CWD" 2>/dev/null && cd "$n" 2>/dev/null && pwd -P ) || true
+}
+
+# Split on `;` and `|` but NEVER on `&&`: `cd <repo> && git merge …` is one act, and splitting
+# there would drop the `cd` that names the target — the same reasoning the identity walk states.
+FFG_CLAUSES="$(printf '%s' "$CMD" | tr ';|' '\n')"
+while IFS= read -r ffg_clause; do
+  # Cheap builtin filter — a clause with neither a `git` nor a `cd` in it can decide nothing.
+  case "$ffg_clause" in *git*|*cd*) ;; *) continue ;; esac
+  _ffg_scan "$ffg_clause"
+  ffg_sub="$FFG_SUB"; ffg_tgt="$FFG_TGT"; ffg_dir="$FFG_DIR"; ffg_cd="$FFG_CD"
+  # A `cd` PERSISTS for the rest of the tool call, so it governs later LINES too — and the
+  # measured incident is exactly that shape: `cd /Users/…/claude-infrastructure` on one line,
+  # `git pull --ff-only -q origin main` on the next (E-live.md §1.2 path B, verbatim). Tracking it
+  # only within a single `&&` clause would have missed the one command this guard exists to stop.
+  if [ -n "$ffg_cd" ]; then
+    ffg_moved="$(_ffg_resolve "$ffg_cd")"
+    [ -n "$ffg_moved" ] && FFG_CWD="$ffg_moved"
+  fi
+  [ -n "$ffg_sub" ] || continue
+
+  if [ "$ffg_sub" = merge ]; then
+    ffg_bare="$(printf '%s' "$ffg_tgt" | tr -d "\"'")"
+    # An all-expansion target is deploy-live.sh's own spelling (`merge --ff-only "$TARGET"`) and
+    # appears nowhere in the measured ungated population, every member of which names a literal
+    # ref. Undecidable here, and allowing it keeps the sanctioned lane's exact line runnable.
+    case "$ffg_bare" in *'$'*|*'`'*) continue ;; esac
+    # Hex-only and >= 7 chars ⇒ an object name, i.e. the sanctioned resolved-SHA advance. Every ref
+    # spelling this repo uses carries a character outside [0-9a-f], so a ref cannot launder as one.
+    case "$ffg_bare" in
+      ""|*[!0-9a-f]*) ;;
+      *) [ "${#ffg_bare}" -ge 7 ] && continue ;;
+    esac
+  fi
+
+  ffg_at="$(_ffg_resolve "$ffg_dir")"
+  [ -n "$ffg_at" ] || continue
+  ffg_shared="$( cd "$FFG_SHARED" 2>/dev/null && pwd -P )" || ffg_shared=""
+  [ -n "$ffg_shared" ] || continue
+  case "$ffg_at" in
+    "$ffg_shared"|"$ffg_shared"/*) ;;
+    *) continue ;;                              # a worktree or another repo — never this guard's business
+  esac
+
+  deny "Ungated advance of the SHARED CHECKOUT blocked: 'git $ffg_sub${ffg_tgt:+ $ffg_tgt}' in $ffg_at. That fast-forward advances the FILES but creates no symlinks — ~/.claude/{hooks,commands,scripts,bin,skills} are per-file symlinks, so every newly tracked file lands UNLINKED and silently does nothing (hooks/lib/cc-interactive.sh shipped that way and disabled an operator hold) — and it skips the green-stamp gate, so unverified trunk goes live for the whole fleet. It is also invisible afterwards: it leaves live and checkout in perfect agreement, which is why deploy-parity-assert's provenance leg has to read the reflog to see it at all (42 merge origin/main + 8 pull --ff-only ungated advances, 2026-08-01..08-17). Run the one sanctioned advance instead — it is green-gated and runs install.sh, which is what actually creates the links: bash $ffg_shared/scripts/deploy-live.sh . (--force is the deliberate escape hatch; 'git fetch' to refresh refs is fine and is not what this blocks; the same command in YOUR worktree is untouched.)"
+done <<<"$FFG_CLAUSES"
+fi
+# ── FF-GATE END ─────────────────────────────────────────────────────────────────────────────────
+
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 
 # git reset --hard — can destroy uncommitted work
