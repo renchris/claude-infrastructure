@@ -112,6 +112,49 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   real return rows; the running session is the live A2 end-to-end probe. Also shed: two
   pane-less claude processes of completed S2/R2 sessions (TERMed after the reap-safe
   certificate: complete + custody discharged + pane gone + work content-verified).
+- **2026-08-17 ~07:40Z — recycle #12 closed master-stranded-work at 0 open / 5 blocked (5
+  operator-gated). Filed 2 / closed 4.** The live retry burn is DIAGNOSED and its cause is
+  landed, after 789 `refs/land/failed/*` pins that had only ever been COUNTED.
+  **Cause 1 — the lander threw away a resolution git had already applied (fixed, `b5f685081`).**
+  Every retry died at ship-land **exit 5 = rebase conflict**, in 2-4 s, `head:"?"` (land.log,
+  06:18Z batch); the driver is `cloud-reconcile.sh:559`, which relaxes
+  `SHIP_LAND_SESSION_BRANCH_RE` so `claude/*` gets past desk-land's session-branch guard.
+  Replaying one by hand showed why the count grew instead of the queue draining: `git rebase`
+  exits non-zero the moment a conflict STOPS it, *including* when `rerere.autoupdate` (a global
+  setting here, and referenced in NO script in the tree before this) has already replayed a
+  recorded resolution and staged every path. `claude/fire-20260816T094145Z-41172-1` stopped with
+  both conflicts staged, **zero unmerged paths and zero markers, and rebased clean in ONE
+  `--continue`.** A retry can never re-apply a resolution the lander discards — which is exactly
+  why 112 attempts on one branch changed nothing. `rebase_onto_trunk()` now asks whether anything
+  is ACTUALLY unresolved instead of reading the exit code, and refuses in BOTH directions
+  (unmerged paths keep exit 5; staged conflict markers refuse rather than land `<<<<<<<` on
+  trunk). Measured while writing it: rerere itself *cannot* reach that second arm — it records
+  ZERO postimages when markers remain — so the arm is fail-closed cover for a non-rerere stager
+  and `tests/land-rerere-continue.bats` pins the reachable population instead
+  (memory: cap-whose-population-is-empty). Mutant-attributed: only the rerere case reds.
+  **Cause 2 — the queue was re-landing work that had already landed better.** All three demoted
+  re-land rows retract on same-moment content evidence, none of them by commit count:
+  `e96021115661` SUPERSEDED (trunk carries `--idle-scoped` ×5 and `mailbox_wake_idle_scoped` ×2,
+  and trunk's files are LARGER than the branch's — 864/767, 518/380); `12f5beab9361` SUPERSEDED
+  (trunk has the `wt-slug` pattern, the SIGPIPE fix as a variable capture at
+  `test-hermeticity-lint.sh:1074` with the branch's own rationale at `:1061`, and now a
+  systematic `scripts/pipefail-sigpipe-lint.sh` ratchet for the whole class); `1201e5884d2c`
+  ALREADY LANDED 06:19:16Z, head `55e473a8` verified an ancestor of origin/main. **`git cherry`
+  printed `+` for all of them** — it compares patch-ids and is blind to a superseding LARGER
+  version (memory: landedness-over-commits-is-blind-to-staged-content), which is how #11's
+  content adjudication could be right about the commit and wrong about the work.
+  **Question 2 stays the operator's, and NOT because it is a value call in the abstract.**
+  `ship-land.sh:897` files via the `needs` verb, which files ALREADY BLOCKED, so the row lands on
+  the operator platter; these rows need a rebase, a supersession check or a gate fix — no
+  credential, no GUI, nothing physical — so they fail CLAUDE.md's operator-step test and *should*
+  be agent work. The one-verb fix is a TRAP: the recurrence brake that collapses one stuck branch
+  into one row lives in `needs` **and nowhere else** (`cc-backlog --help`:462), so swapping in
+  `add` would drop it and resurrect the 41-rows-for-one-branch explosion the brake exists to
+  stop. Blocked as `981a403a05fa` with both options and the recommendation: **`needs --role
+  agent`** — keep the brake, change the audience.
+  Also filed: `44750ff72ae7` — `validate-bash`'s `git add -f` rule DENIED a plain
+  `git add f.txt` in a fixture repo mid-investigation; same denylist-by-spelling class the
+  memory of that name already records, and it now has a concrete innocent to pin as a control.
 
 - **2026-08-17 ~05:30Z — W-P2 GO-LIVE: the drain chain is running.** (S3's own landed entry
   below carries the full root cause; this entry is the go-live record.) **First GREEN since
