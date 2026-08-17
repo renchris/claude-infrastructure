@@ -197,6 +197,16 @@ link_file() {
     skipped=$((skipped + 1))
     return
   fi
+  # A REAL file at $dest whose content DIFFERS from $src is unversioned work: `ln -sf` below
+  # replaces it and it is gone with no git path back. Back it up first — the same one-time
+  # migration guard DEPLOY-NOW.sh hand-rolls below, hoisted to the chokepoint because the skills
+  # loop now recurses (see "--- Skills ---") and so reaches nested REAL files that predate the
+  # per-file symlink model. Inert wherever the invariant already holds: identical content, an
+  # existing symlink, and a fresh path all skip it, so no established path changes behaviour.
+  if [[ -f "$dest" && ! -L "$dest" ]] && ! diff -q "$src" "$dest" >/dev/null 2>&1; then
+    run cp -a "$dest" "$dest.pre-link.bak"
+    echo "  ⚠ $dest was an unversioned real file that differs from $src — saved to $dest.pre-link.bak"
+  fi
   run ln -sf "$src" "$dest"
   echo "  ✓ $dest → $src"
   installed=$((installed + 1))
@@ -618,6 +628,24 @@ fi
 # --- Skills ---
 # Same symlink model as hooks/commands: version each repo skill dir and deploy it live.
 # Only touches skill NAMES present in the repo — other ~/.claude/skills are left untouched.
+#
+# RECURSIVE since 2026-08-16 (backlog 3e2358f03e23). This loop was `for f in "$skilldir"*` with a
+# `-f` test: TOP LEVEL ONLY, and a nested file was not skipped loudly, it was invisible. The victim
+# was already on trunk — all 23 tracked skills/kpmg-deck/{assets,examples,references,scripts}/*
+# files existed live as REAL FILES rather than symlinks, so every one of them was outside the
+# converger: `deploy-live.sh` merges and re-runs this installer, and this installer never named
+# them. They happened to match origin/main the day this was measured, which is exactly why it was
+# silent — nothing kept them that way and the next repo-side edit would simply not have shipped.
+# It also blocked TRACKING any nested skill at all: converting one would have produced a
+# half-linked skill (top level symlinked, nested files still unversioned reals), which is a worse
+# state than leaving it untracked.
+#
+# `find -type f` (not a glob) is the fix, and the mkdir must precede each link because a nested
+# path's parent may not exist live yet. Note this is still the PER-FILE model, not the dir-symlink
+# one used for vendor/ below: skill dirs legitimately accumulate live-only siblings (.git,
+# .ruff_cache, generated output) that a dir symlink would obliterate. The brand-new-file hazard
+# vendor/'s comment describes is answered instead by re-globbing on EVERY run — a file added to the
+# repo is linked by the next install.sh, which deploy-live.sh always runs.
 if [[ -d "$REPO_DIR/skills" ]]; then
   echo ""
   echo "Skills → $CONFIG_DIR/skills/"
@@ -625,10 +653,11 @@ if [[ -d "$REPO_DIR/skills" ]]; then
     [[ -d "$skilldir" ]] || continue
     name="$(basename "$skilldir")"
     ensure_real_dir "$CONFIG_DIR/skills/$name"
-    for f in "$skilldir"*; do
-      [[ -f "$f" ]] || continue
-      link_file "$f" "$CONFIG_DIR/skills/$name/$(basename "$f")"
-    done
+    while IFS= read -r f; do
+      rel="${f#"$skilldir"}"
+      [[ "$rel" == */* ]] && ensure_real_dir "$CONFIG_DIR/skills/$name/${rel%/*}"
+      link_file "$f" "$CONFIG_DIR/skills/$name/$rel"
+    done < <(find "$skilldir" -type f | sort)
   done
 fi
 
