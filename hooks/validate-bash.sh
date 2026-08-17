@@ -1005,8 +1005,26 @@ fi
 # 13 MB log with no attribution and no line anchor: nothing was greppable by session, and a
 # multi-line command shredded the line structure with no way to tell a continuation line from a
 # new entry. `.session_id` comes from stdin (never CLAUDE_SESSION_ID — CC does not export it, D-9).
-SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
+#
+# ONE jq for BOTH fields, and no unconditional `mkdir` (fork census 2026-08-17,
+# docs/research/validate-bash-fork-census-2026-08-17.md §6 levers 2-3). These four lines forked
+# jq + mkdir + date on EVERY invocation — 7.2 ms, 10% of the modal path's 71.9 ms, to append one
+# audit line. `todateiso8601` is byte-identical to `date -u '+%Y-%m-%dT%H:%M:%SZ'` (verified), and
+# bash 3.2.57 here has no `printf '%(...)T'`, so jq is the only fork-free source of the stamp.
+# Nothing above this point is touched: every deny/ask decision is already made, so a fault here
+# can lose an audit line but can never open the gate.
+LOGMETA=$(printf '%s' "$INPUT" | jq -r '[(.session_id // "-"), (now|todateiso8601)] | @tsv' 2>/dev/null)
+if [[ "$LOGMETA" == *$'\t'* ]]; then
+  SID=${LOGMETA%%$'\t'*}
+  TS=${LOGMETA#*$'\t'}
+else
+  # jq absent, or a payload it could not read: keep the OLD shape exactly, forking `date` only here.
+  SID="-"
+  TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+fi
 [ -n "$SID" ] || SID="-"
-mkdir -p ~/.claude/logs
-echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD" >> ~/.claude/logs/bash-commands.log
+[ -n "$TS" ] || TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# `[ -d ]` is a builtin; the directory exists on every call after the first, so the fork was pure loss.
+[ -d ~/.claude/logs ] || mkdir -p ~/.claude/logs
+echo "[$TS] [$SID] $CMD" >> ~/.claude/logs/bash-commands.log
 exit 0
