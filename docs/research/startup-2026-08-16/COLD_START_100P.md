@@ -655,7 +655,7 @@ here is worth as much as the fixes above — and because each has an obvious re-
 | Ruled out | Claimed | Actual | Why it looked true |
 | --- | --- | --- | --- |
 | **`~/bin/claude-latest` costs ~1.3 s of every launch** | 1 300 ms BLOCKING | **0 ms** — not on the `claude` path at all (C1); and the 1.3 s is the npm cache-**miss** path (warm 0.18–0.21 s, n=11) | The timing replicates perfectly. The inference does not: **no session runs that command.** Today's log entries "proving" it runs are the measurement probes themselves — the instrument created the evidence for its own premise. |
-| **`session-start.sh` SWR detaching a second CLI is a hotspot** (3 974 ms) | 3 974 ms | Hook returns in **69 ms** with the refresh lock still held. `mkdir` test-and-set proved 8 concurrent starts → **exactly 1** refresher; real logs show max 1/second, 74–85% of probes suppressed | 3 974 ms is a real wall-clock — of a process **nothing blocks on**. Pricing a hotspot at the duration of detached work is the wrong unit. Its distribution is 0.9–31.6 s, not a point. **Keep the SWR.** |
+| ~~**`session-start.sh` SWR detaching a second CLI is a hotspot** (3 974 ms)~~ **← OVERTURNED, see R1 below** | 3 974 ms | ~~Hook returns in **69 ms** with the refresh lock still held~~ — true of the PROCESS, false of the PIPE | ~~3 974 ms is a real wall-clock — of a process **nothing blocks on**.~~ Something does block on it: the harness. **Keep the SWR** — that half stands. |
 | **`session-start.sh` cold/`MAX_AGE` inline probe** (2 655 ms) | 2 655 ms BLOCKING | Number **reproduced** (2 513–2 672 ms) but the branch is reachable ~once per config dir per >24 h idle spell ⇒ **~10 ms/start amortised**, and warm it contributes **0 ms** because `activation-watch` (~207 ms) is the group max | The code reading is correct; only the ranking is wrong. Fix the **semantics** as a T4 invariant (M4), not for milliseconds — and note the proposed "serve UNKNOWN" must still detach a probe, or a first-ever dir gets a permanently blind sensor, which the hook's own header rejects in writing. |
 | **`mac-messages` costs 1 120 ms** | 1 120 ms | median **353–362 ms** (n=13, max 903–949); removing it moved time-to-usable-prompt **+14 ms** | One sample from a 4-way simultaneous spawn at load ~24. The last-connect in a 5-server config is **uidotsh** (492–2 296 ms), never mac-messages. Memory finding survives and is understated. |
 | **`ms365` costs 971 ms** | 971 ms | **0 ms** — the arm *with* ms365 was 7 ms **faster**; and in 6/6 instrumented boots ms365 **never completed** its connect while paint was unaffected | Even in the original run, `mac-messages` (1 120 ms) was the group max in the *same* run — under max-of-parallel its marginal cost was already 0 before anyone re-measured. |
@@ -740,3 +740,77 @@ double-source artifact; real interactive startup 190–215 ms) · the rc's own h
 - **U10 — Behaviour under a coordinated 10-session wave.** All figures were taken under ambient load
   14–24 but no wave. The fork-heavy items (`_cc_tlid`, the 20-fork exhausted-pool scan, the alias
   walk) degrade superlinearly there and were not measured in that regime.
+
+---
+
+## R1 — Recovery addendum (2026-08-16, post-transplant): the SWR ruling is overturned, and the fix is one line
+
+This section is APPENDED, not merged into §6 — the original ruling stays visible above with its
+reasoning intact, because *how* it was wrong is the transferable part.
+
+The verifier slot for this claim died three times (session limit, then `ECONNRESET` ×2 during an
+operator connectivity drop) and was the only genuinely unfinished unit in the wave. It was re-run
+from its salvaged prompt. Its verdict inverts §6 row 2.
+
+**What §6 got right:** there is no "drift". The claimed 45% growth in deferred MCP work is an
+instrument artifact — `sessions.log` pairs start/answer for n=313 real probes since the fix and the
+median is 3.0 s on *every* day 08-11 → 08-15; a same-composition split is 3.23 → 3.07 (*down*).
+Duration tracks server count, not date. The keep-warm cadence change (60→180 s) is likewise a
+non-issue: the launcher reads `--max-age 600`, so a 180 s cache is always a hit.
+
+**What §6 got wrong, and it is the load-bearing half.** "A process nothing blocks on" measured the
+wrong terminus. The harness reads a hook's stdout **to EOF**, and EOF does not arrive while any
+descendant still holds fd 1. `_mcp_spawn_refresh` redirected the inner `bash` but not the enclosing
+`( … ) &`, so the subshell inherited the harness pipe:
+
+| clock, same hook, n=5 | result |
+| --- | --- |
+| process exit (what §6 measured) | **83 ms** |
+| pipe EOF (what the harness waits on) | **3 096 ms** |
+
+pty A/B, n=3/arm, isolating the mechanism: `( sleep 6 ) &` → `/help` at 6.42/6.44/6.55 s;
+`( sleep 6 ) >/dev/null 2>&1 &` → 1.39/1.40/1.40 s. End-to-end on the real hook, stale cache
+3.514/3.594/3.701 s vs fresh 1.373/1.389/1.403 s = **+2.2 s**. The configured `timeout: 10` does
+**not** cap it, because the hook process itself has already exited (12 s fixture → 12.48 s blocked).
+
+**Corrected classification: BLOCKING** (input pipeline — same class as `mailbox-drain`), **+2.2 s
+p50 / +4.2 s p90, unbounded tail, on the 54.4% of starts that run a probe.** The wave's unexplained
+"31.6 s cold tail" is now readable: 31.6 s of *blocked input*, aggravated on hosts where
+`timeout`/`gtimeout` is unresolvable (PATH lacking `/opt/homebrew/bin` — reproduced independently
+in this session), which makes the hook's own `PROBE_TIMEOUT` inert.
+
+**Why this changes scheduling, not just the ledger.** On reused panes this stall was *masked* by
+`mailbox-drain`'s 5 s reap. Fix `mailbox-drain` alone and this becomes the new group max —
+**halving S1's promised ~4 s win on ~54% of starts.** The two fixes are therefore a single unit of
+work, and shipping S1 without this one would have produced a real improvement that looked like a
+disappointing one, with no obvious culprit.
+
+### Landed (this session, commit `55e7ffb0d`)
+
+| # | Change | Measured |
+| --- | --- | --- |
+| R1 | `session-start.sh:187` — redirect the **subshell**, not just the inner `bash` | minimal repro 4.05 s → **0.04 s** to pipe-EOF (n=3/arm) |
+| S1 | `mailbox-pending.sh:548` — memoised one-pass tip set | **5.54–5.89 s → 0.04–0.05 s** (~120×), n=5; set-equivalence vs the old scan on the live store: 1,296 tips both ways, **0 missing, 0 extra** |
+| D2 | `mailbox-drain.sh:244` — bounded adoption take (`CC_MBX_ADOPT_MAX_LINES`, default 200) | prevents a 2.26 MB / ~566K-token box entering turn-1 context once S1 makes adoption complete |
+
+Green: `mailbox-{session-key,drain,cover-pane,forward,midturn}.bats`, 97 tests, exit 0.
+**Not landed:** S2–S5 (shell trim, ~135 ms) and the `.alias` prune (red-team D5 — destructive,
+needs the never-delete-a-live-tip rule and a dry-run first). Both remain open work.
+
+### The generalisable lesson, which outranks the milliseconds
+
+Three separate measurements of this hook were correct and useless, each because the instrument
+excluded the thing being measured:
+
+1. R4/R6 benchmarked `mailbox-drain` under `env -u ITERM_SESSION_ID` — its exact early-exit guard.
+   **0.02 s recorded for a 15–22 s hook.**
+2. §6 above timed the SWR refresher to *process exit* when the harness waits on *pipe EOF*.
+   **83 ms recorded for a 3,096 ms stall.**
+3. The 15–22 s figures were taken against a *copy* of the mailbox to exclude flock contention, so
+   the post-fix residual still carries an acknowledged error term in the unsafe direction.
+
+In every case the number was reproducible and the *terminus* was wrong. A latency measurement is
+only as good as its definition of "done", and on this box "done" has repeatedly meant something
+different to the harness than to the process. Prefer end-to-end, harness-visible acceptance
+(`T_help` on a **reused** pane) over any component timing — which is why the red-team replaced the
+absolute gate with the instrument-independent delta `T_help_render − T_help_typed ≤ 250 ms`.
