@@ -299,6 +299,49 @@ cloud-refusal-route.sh. Fixes required before it counts as a lane:
   majority is Lane B's job — the 42d27a758 warning is answered by Lane B existing, not by
   flipping the daemon to local and colliding with the drain session's leases).
 
+#### A2 forensics 2026-08-17 — the return path is NOT the blocker; the LAND is (W-P2/S4)
+
+**The premise this session was fired on is refuted, and the refutation is the finding.** The
+brief read *"every daemon poll abstains"* and posed the question as a daemon-environment defect
+— keychain unreadable from launchd, PATH/python3 divergence, config-dir resolution. All three
+are false, and the ledger the brief quoted is what falsifies them:
+
+| Hypothesis | Discriminating measurement | Verdict |
+|---|---|---|
+| the daemon's env cannot read the control plane | a probe launchd job with the sweep's OWN `ProgramArguments` (`/bin/zsh -lc`, `ProcessType Background`, same PATH export) ran the exact `cloud-create-api.py --account next4 --verify …` call: **rc=0**, `{"worker_status":"idle"}` | **REFUTED** |
+| the login keychain locks under launchd | `security show-keychain-info login.keychain-db` → **`no-timeout`** — it never auto-locks | **REFUTED** |
+| every poll abstains | `return.jsonl` by hour: 2026-08-17T00 = **109 real rows vs 6 abstains**; T05 = 73 vs 0; T06 = 14 vs 13. Abstains and real reads **interleave inside the same hour** | **REFUTED** — the brief sampled one abstain burst at the file's tail |
+| the abstain bursts are a box-wide network loss | the two abstain classes (`control plane unreadable` / `state UNKNOWN` = `ls-remote failed`) occur in **disjoint minutes**, never the same pass | **REFUTED** |
+
+What the bursts *are* stays open, and is now self-naming rather than re-derivable: 13 abstains
+spanned ≤2 s ⇒ **~0.11 s each against a measured 0.52 s for a real API round trip**, i.e. an
+instant local failure, hitting all four accounts at once and self-clearing by the next pass.
+That is as far as history can be read, because the sensor recorded no cause — which is A2's
+first fix and is landed (below).
+
+**What actually blocks A2: 39 sessions are stuck in LAND REFUSAL, re-refused every pass.** The
+sweep reads the control plane, computes RETURN-READY, calls the lander, and the lander says no —
+which is why ~10 custody debts sit open for days (custody stays OPEN on an unlanded result *by
+design*) and why `land-refused` is the ledger's dominant outcome (102 rows in one hour). The 39
+artifacts classify into four causes, and **none is a cloud-return defect**:
+
+| n | rc | cause | owner |
+|---|---|---|---|
+| 15 | 65 | the cloud branch is **CHECKED OUT in a stale worktree** (e.g. `/private/tmp/wt-land-31568-1`) — cloud-reconcile refuses to force, correctly | **A1** (reap the stale `wt-land-*` worktrees) |
+| 18 | 70 | **rebase CONFLICT** on a plan doc the VM edited days ago (e.g. `BACKLOG_SELF_DRAINING_2026-08-12.md`) | **W3** refusal routing — a genuine conflict a VM must resolve |
+| 5 | 70 | `mktemp: mkstemp failed on …/postland-run.VRdnYH/…` — the re-author step inherited a **TMPDIR pointing at a reaped postland-verify scratch dir**, so `cloud-reconcile.sh:424` could not compose the rewritten messages | a real, separate bug: the re-author must not trust an inherited TMPDIR |
+| 1 | 143 | killed from outside — already handled as a non-verdict | — |
+
+**Landed this session** (`54aa27cd6`, content-verified on `origin/main`): the abstain row now
+names its cause. `worker_status()` ran the status bin under `2>/dev/null` and folded every
+failure into rc 2, so **384 rows read exactly `{"why":"control plane unreadable"}`** and could
+not tell rc 127 (no python3) from rc 3 (a locked keychain) from rc 1 (an expired grant) — three
+unrelated repairs. Capturing stderr alone would have changed nothing: the caller wrote
+`ws="$(worker_status …)"`, a command substitution, so any global the sensor set died with that
+subshell. The answer therefore moved to `WS_STATUS` and the sensor is now called **bare**, which
+is what makes `WS_ERR`/`WS_RC` reachable at all. Rows carry `err`, `rc` and `account`; two bats
+arms pin it, both verified to fail against the pre-fix artifact replayed from git.
+
 **Lane B — ONE local self-recycling goal-armed session, 24/7, for everything else.**
 The proven local-drain design (9 recycles) plus the one missing property — self-perpetuation:
 - B1 **Chained recycle, no terminal goal.** Per recycle: goal = effort-scoped, provable,
