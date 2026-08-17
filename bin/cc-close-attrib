@@ -63,8 +63,21 @@ STDERR_KEEP="${CC_STDERR_LOG_KEEP:-200}"   # defensive bound; crashes are rare
 mkdir -p "$RECORDS_DIR" 2>/dev/null || true
 # self-GC: drop close-records >30 days and any orphaned stderr temp >1 day (a temp is only
 # leaked when the wrapper itself was force-killed before it could unlink one). Best-effort.
-find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.json'   -mtime +30 -delete 2>/dev/null || true
-find "$RECORDS_DIR" -maxdepth 1 -type f -name '.stderr.*' -mtime +1  -delete 2>/dev/null || true
+#
+# DAILY-STAMPED (2026-08-16). These two sweeps walk the whole directory — 1,348 files / 5.0 MB
+# today, and it only grows — on EVERY launch, to collect litter that accrues once a day. That is
+# ~30 ms on 100% of launches, on the pre-exec critical path, for work that cannot possibly have
+# anything new to do since the last launch seconds earlier. Gate them behind a daily stamp using
+# this file's own idiom (see the $VER_CACHE block two blocks below): one `find` against a single
+# stamp file instead of two full-directory walks. Retention is unchanged — >30 d and >1 d still
+# go, just checked daily rather than per-launch. Fail-open like everything else here: if the
+# stamp cannot be written the sweeps simply run again next launch.
+GC_STAMP="$RECORDS_DIR/.gc_stamp"
+if [[ ! -e "$GC_STAMP" ]] || [[ -n "$(find "$GC_STAMP" -mtime +1 2>/dev/null)" ]]; then
+  find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.json'   -mtime +30 -delete 2>/dev/null || true
+  find "$RECORDS_DIR" -maxdepth 1 -type f -name '.stderr.*' -mtime +1  -delete 2>/dev/null || true
+  : > "$GC_STAMP" 2>/dev/null || true
+fi
 
 # version — best-effort, CACHED, and NEVER blocking start. Fire `--version` fully detached
 # and only when the cache is missing or stale (>1 day); the record reader picks up whatever
