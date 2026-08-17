@@ -2404,3 +2404,65 @@ does not exist here. Off-box sessions can advance this plan's *documents*; they 
 **State at this close.** W0/W1/W2/W3 all landed and content-verified; **W4 is the sole open wave**,
 its per-effort order unchanged from the recycle-#3 entry above. This item's own closure and the
 filing of the scanner finding are operator-gated on store access.
+
+## THE LOCAL DRAIN — recycle #10 (2026-08-16, `master-account-facts`)
+
+Chain restarted after #9 died with an effort-scoped goal and no successor clause. Effort picked by
+live count, not by remembered order: `master-account-facts` at **1 open / 15 blocked** was the
+smallest live `master-*` (tied on open with `master-operator-gated`, broken on total — 16 vs 27 —
+and because that group's rows are the operator's by construction). `master-stranded-work` was
+skipped: 0 open, and `cc-custody` shows `fire-r2-recovery` pane 106 still holding it with no return.
+
+**Closed the effort's only open row's mechanism, not the row.** `3e2358f03e23` — "19 skills live in
+`~/.claude/skills` with NO tracked source" — survived its stored falsifier (rc 1, n=18) against a
+pristine `origin/main` worktree, so it got real work. Landed `9d8965faa`, content-verified over 32
+paths: 13 skills tracked (9 flat + the 4 nested), 4 declared local-only, `install.sh` taught to
+recurse. Falsifier **18 → 1**.
+
+**The blocker was not the skills, it was the installer, and it already had a victim on trunk.**
+`install.sh`'s skills loop was `for f in "$skilldir"*` with a `-f` test — top level only, and a
+nested file was not skipped loudly, it was *invisible*. Consequence nobody had looked for: all 23
+tracked `skills/kpmg-deck/{assets,examples,references,scripts}/**` files existed live as **REAL
+FILES**, outside the converger entirely — `deploy-live.sh` merges then re-runs `install.sh`, and
+`install.sh` never named those paths. Measured drift was 0, which is exactly why it stayed silent;
+nothing held them there and the next repo-side edit would simply not have shipped. That is also why
+this row had stalled: tracking a nested skill before fixing this produces a half-linked skill (top
+level symlinked, nested files still unversioned reals), which is worse than untracked.
+`find -type f` is the fix; `tests/install-skills-nested.bats` (7 cases) replays 5 red against the
+pre-fix artifact at `d6db0107f`. Recursion newly lets `link_file` reach real files that predate the
+symlink model, so the one-off `DEPLOY-NOW.sh` backup guard was hoisted into `link_file`, with case 6
+as its inertness control.
+
+**Two of the row's premises did not survive measurement — recorded so neither is re-derived from the
+title.** (1) *"duplicated independently in `~/.claude` and `~/.claude-secondary`, nothing keeping
+them in sync, so an edit to one silently forks the other"* is **false**: there is exactly one skills
+tree — `~/.claude-secondary/skills` and `~/.claude-tertiary/skills` are **directory symlinks** to
+`~/.claude/skills`, and every file checked resolves to one inode across all three. A config-dir fork
+cannot happen. The row's other claims — no history, no `/ship` path, invisible to
+`deploy-parity-assert` — stand, and are what tracking fixes. (2) *"19 … these are REAL FILES"* is 18,
+and one is not a real file. Full triage → `skills/LOCAL_ONLY.md`.
+
+**Why the row is BLOCKED rather than DONE, and why the falsifier was left alone.** The 18th,
+`pyramid-principle`, is not sourceless: its `SKILL.md` is a symlink to
+`~/Development/convert-pdf-to-md/pyramid-principle-prompt.md`, **tracked there**, on `main`, behind a
+private GitHub remote with no `CLAUDE.md`. Declaring it means committing to another project's
+default branch; deciding it is ours instead is a call about third-party Minto-derived text. Either
+way it is a value judgment, so the row is `block --needs` with both options spelled out. The
+falsifier was deliberately **not** narrowed to exclude it — `cc-backlog falsify` refuses a probe
+that exits 0 against a live row (rc 5) precisely to stop a worker retiring its own row by
+redefinition, and the same discipline applies to a worker who could argue the residue away. A note
+was written into that foreign repo during the pass and **reverted**; its tree was left clean.
+
+**Stale premise found in a NEIGHBOURING condition, not claimed, handed forward.** `deploy-live`
+refused this land — *"already deployed … 18 un-stamped commit(s) above"* — and the open row
+`deploy-live-frozen` explains it as `postland-verify.sh` "not running". **That half is now false:**
+`com.claude.postland-verify` is live under launchd (PID 15932 at this close), executing the full
+bats corpus at background QoS under a 10800 s timeout. The freeze is a verifier mid-run, not a dead
+one. Not claimed here — different condition, and the lease taken was `master-account-facts` — but
+recycle #11 should re-measure that row before treating the live layer as frozen.
+
+**Close line.** `master-account-facts: 0 open / 16 blocked (16 operator-gated)` — every one of the
+16 carries a `needs` step. The three `advance <PLAN>` rows were re-run through
+`plan-phase-scan.sh --falsify`: all three legitimately "not falsified" (the script prints only on
+success, so an empty verdict is an answer here, not a blind instrument). **filed 0 / closed 0** —
+this recycle landed a mechanism fix and drove a row from open to operator-gated; it minted nothing.
