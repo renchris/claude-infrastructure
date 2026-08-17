@@ -360,6 +360,33 @@ if [ "${1:-}" = "--selftest" ]; then
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# Honours CC_TSVPAD_DIRS exactly as lint_tree does. `<dir>/*` is EXACT rather than approximate here:
+# the scan is `grep -rlF … $dirs`, i.e. recursive over each dir, and a git pathspec's `*` matches `/`
+# unless `:(glob)` magic is asked for — so the two cover the same file set.
+#
+# WHY IT EXISTS (backlog 0be0bd2c0b65) — the same seam scripts/permission-gate-lint.sh --print-scope
+# documents at length, one lint over. ship-land built this lint's own-scope set from a hardcoded
+# `-- 'bin/*' 'hooks/*' 'scripts/*'` and a comment saying the pathspec "must list every population
+# the lint judges". A comment is not a mechanism, and the drift fails SILENTLY toward advisory: a
+# land adding an unpadded reader under a dir the stale pathspec misses yields an own-set without it,
+# the lint reports it advisory, and the rule is detection again.
+#
+# THE FALLBACK IS `:-`, DELIBERATELY — the same operator lint_tree uses, so the two can never
+# disagree about what an unset-or-empty CC_TSVPAD_DIRS means (both fall back to "bin hooks scripts").
+# Measured: `CC_TSVPAD_DIRS= --print-scope` prints the 3 embedded dirs, not zero.
+# The consumer's NON-VERDICT is therefore reached by an UNRUNNABLE lint — a missing file, or an
+# older copy that does not know this flag and exits 2 with empty stdout — never by an empty var here.
+case "${1:-}" in
+  --print-scope)
+    _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+    set -f
+    # shellcheck disable=SC2086  # deliberate word-split of the dir list; globbing is off for exactly this
+    for _ps_d in ${CC_TSVPAD_DIRS:-bin hooks scripts}; do printf '%s/*\n' "$_ps_d"; done
+    [ "$_ps_restore_f" -eq 1 ] || set +f
+    exit 0 ;;
+esac
+
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
 if [ -n "${CC_TSVPAD_OWN+set}" ]; then
