@@ -51,7 +51,14 @@
 # construction, so scanning them could only ever produce a self-report. Same self-exclusion
 # scripts/utc-stamp-lint.sh takes, and for the same reason.
 #
-# Exit: 0 = clean · 1 = violation · 2 = bad usage / unusable scan root (LOUD, never silent-green)
+# POPULATION INTEGRITY: self-exclusion, the grandfather ratchet and own-scope all key on a file's
+# BASENAME over a population spanning three directories, so they are sound only while basename is a
+# bijection with path. That precondition is now CHECKED rather than assumed — see the header above
+# population_collisions() for the three decisions it protects and why a collision blocks (rc 1)
+# instead of reporting a non-verdict.
+#
+# Exit: 0 = clean · 1 = violation or a colliding basename · 2 = bad usage / unusable scan root
+#       (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
 #   CC_GITID_ALLOWLIST  overrides the embedded grandfather list (set-but-empty = grandfather nothing)
@@ -348,13 +355,85 @@ why_of() {  # $1=rule token → the human sentence
   esac
 }
 
+# ── POPULATION INTEGRITY: this lint keys THREE decisions on a file's BASENAME ─────────────────────
+# The population is `tests/*.bats` + `scripts/*.sh` + `bin/*` — THREE directories, one flat glob
+# each — and a file's basename is the key for all of:
+#
+#   1. SELF-EXCLUSION (lint_tree's build loop)  a match DROPS the file from the population outright.
+#      It is never scanned, never reported, not even advisory: the file simply is not there.
+#   2. THE GRANDFATHER RATCHET (in_allowlist)   a match EXEMPTS the file's findings.
+#   3. OWN-SCOPE (in_own)                       a match decides BLOCKING versus advisory.
+#
+# All three are sound only while basename is a BIJECTION with path across that population — an
+# assumption nothing stated and nothing checked. `bin/` carries no extension constraint, so
+# `bin/git-identity-lint.sh` is enough to make SELF_EXCLUDE swallow a real file whole, and the two
+# fail-GREEN directions (1 and 2) are exactly the class this lint exists to catch: a verdict that
+# reads clean because the instrument never looked.
+#
+# MEASURED 2026-08-15 ON THIS TREE: **0 colliding basenames** across all three globs. That clean
+# baseline is what makes the strictest rule the free one — the same argument bats-kill-guard-lint
+# and bats-testname-eval-lint each record, and the reason this is a guard rather than a rewrite of
+# the three keys into paths. Nothing is grandfathered because nothing needs to be.
+#
+# WHY BLOCKING (rc 1) AND NOT A NON-VERDICT (rc 2): ship-land routes 2 to GATE_KILLED ⇒ exit 9,
+# "retryable, re-run when the box is quieter". A collision is not transient and re-running never
+# clears it; it is author-fixable — rename the file, or promote the three keys to paths. Sending it
+# down the retry path would loop forever on a condition no retry can touch.
+#
+# It is OWN-SCOPED like every other finding here, which is what makes it a chokepoint rather than a
+# fleet-wide hard stop: the land that ADDS the namesake is refused, and everyone else reads one
+# advisory line naming it (memory: enforcement-must-live-at-the-chokepoint).
+#
+# population_collisions <root> → one "<basename>\t<path>, <path>[, …]" line per colliding basename.
+# rc 1 = no collisions (or nothing to scan) — the common case, and it prints nothing.
+population_collisions() {
+  local root="$1" f list="" dups b paths
+  for f in "$root"/tests/*.bats "$root"/scripts/*.sh "$root"/bin/*; do
+    [ -f "$f" ] || continue
+    list="$list${list:+
+}${f#"$root"/}"
+  done
+  [ -n "$list" ] || return 1
+  # A full pipeline, not a `| grep -q` probe: `uniq` drains its input, so there is no early-exit
+  # consumer and no SIGPIPE 141 to be misread under `pipefail` (see the here-string note above).
+  dups="$(printf '%s\n' "$list" | sed 's:.*/::' | sort | uniq -d)"
+  [ -n "$dups" ] || return 1
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    paths="$(printf '%s\n' "$list" | awk -F/ -v b="$b" '$NF == b { printf "%s%s", (n++ ? ", " : ""), $0 }')"
+    printf '%s\t%s\n' "$b" "$paths"
+  done <<EOF
+$dups
+EOF
+  return 0
+}
+
 # lint_tree <repo-root> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable root
 lint_tree() {
   local root="$1" allow="$2" own="${3:-}" own_scoped=0
-  local f base rel seen=0 bad=0 stuck=0 other=0 records n _gitid_emit0=0
+  local f base rel seen=0 bad=0 stuck=0 other=0 collide=0 records n _gitid_emit0=0
+  local _c_base _c_paths
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$root" ] || { echo "git-identity-lint: ⛔ not a directory: $root" >&2; return 2; }
+  # THE PRECONDITION, CHECKED BEFORE ANY BASENAME-KEYED DECISION IS TRUSTED — see the header note
+  # above population_collisions. It runs ahead of the build loop deliberately: the build loop is
+  # itself decision (1), so a collision that involves a SELF_EXCLUDE entry has already deleted its
+  # own evidence by the time the loop ends.
+  while IFS="$(printf '\t')" read -r _c_base _c_paths; do
+    [ -n "$_c_base" ] || continue
+    if in_own "$_c_base" "$own" "$own_scoped"; then
+      printf '  COLLIDE  %s names %s\n' "$_c_base" "$_c_paths"
+      printf '           self-exclusion, the ratchet and own-scope all key on the BASENAME, so a\n'
+      printf '           verdict for either file is silently a verdict for both.\n'
+      collide=$((collide + 1))
+    else
+      printf '  collide? %s names %s (NOT in your diff — advisory, not blocking)\n' "$_c_base" "$_c_paths"
+      other=$((other + 1))
+    fi
+  done <<EOF
+$(population_collisions "$root")
+EOF
   # THE POPULATION, BUILT EXACTLY ONCE. The batch memo is INDEX-KEYED, so the list it arms on and
   # the list this loop walks must be the SAME list — not two globs written to look alike. Both
   # filters (the `-f` test and the self-exclusion) live here, so a file skipped for either reason is
@@ -467,7 +546,19 @@ EOF
     echo "git-identity-lint: ⛔ $stuck file(s) above are fixed but still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((bad + stuck)) -eq 0 ] || return 1
+  if [ "$collide" -gt 0 ]; then
+    echo "git-identity-lint: ⛔ $collide basename(s) above name more than one file in this lint's scan population."
+    echo "  WHY: the population is tests/*.bats + scripts/*.sh + bin/* — three directories — and this"
+    echo "       lint keys THREE decisions on the basename alone: self-exclusion (which DROPS a file"
+    echo "       from the scan entirely), the grandfather ratchet (which EXEMPTS its findings), and"
+    echo "       own-scope (which decides blocking vs advisory). With two files to one name, each of"
+    echo "       those answers the wrong question silently — a namesake of an excluded or"
+    echo "       grandfathered file is never really checked, and reads exactly like a clean one."
+    echo "  Fix: rename one of the files so the basename is unique. The population has been collision-"
+    echo "       free since this guard landed, which is why the rule is strict and carries no"
+    echo "       allowlist — there is nothing to grandfather."
+  fi
+  [ $((bad + stuck + collide)) -eq 0 ] || return 1
   echo "git-identity-lint: clean — $seen file(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered, 0 escaping identity writes."
   return 0
 }
@@ -677,9 +768,34 @@ F
   #     the bug this shape exists to prevent.
   ( CC_GITID_ALLOWLIST="" CC_GITID_OWN="" "$SELF" "$d/bare_var" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_GITID_OWN set-but-EMPTY blocked — a diff touching nothing in scope must never block"; fails=1; }
   ( CC_GITID_ALLOWLIST="" CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/bare_var" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_GITID_OWN naming the file did not block at the entrypoint"; fails=1; }
+  # (m) POPULATION INTEGRITY — the basename bijection this lint's three keys all assume.
+  #     The CONTROL IS CASE 1 BY CONSTRUCTION: a collision-free root must stay clean, or every
+  #     assertion below passes for the wrong reason (the sibling's gitid-file-memo.bats shipped
+  #     exactly that — three cases green against a fail-closed-OFF mechanism).
+  mkdir -p "$d/coll/tests" "$d/coll/scripts" "$d/coll/bin"
+  printf '@test "x" {\n  : ok\n}\n' > "$d/coll/tests/zz-fixture.bats"
+  printf '#!/bin/bash\n: ok\n' > "$d/coll/scripts/foo.sh"
+  lint_tree "$d/coll" "" >/dev/null 2>&1; [ "$?" -eq 0 ] || { echo "SELFTEST FAIL: a collision-FREE population did not read clean — the guard fires on everything"; fails=1; }
+  #     The positive: one basename, two files, two directories.
+  printf '#!/bin/bash\n: ok\n' > "$d/coll/bin/foo.sh"
+  out="$(lint_tree "$d/coll" "" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] || { echo "SELFTEST FAIL: a colliding basename did not block (got $rc)"; fails=1; }
+  case "$out" in *COLLIDE*) ;; *) echo "SELFTEST FAIL: a colliding basename blocked without naming itself COLLIDE"; fails=1 ;; esac
+  #     THE ONE THAT MATTERS: a namesake of a SELF_EXCLUDE entry is DROPPED from the population
+  #     outright — not exempted, dropped — so a real escaping write in it was reported as
+  #     "clean — N file(s)" with the file absent from the census. Every SELF_EXCLUDE name maps to
+  #     exactly one real file in this repo, so a namesake is necessarily a collision, which is what
+  #     makes this guard cover the whole reachable class rather than a sample of it.
+  rm -f "$d/coll/bin/foo.sh"
+  printf '#!/bin/bash\n: ok\n' > "$d/coll/scripts/git-identity-lint.sh"
+  printf '#!/bin/bash\ngit -C "$1" config user.email t@t\n' > "$d/coll/bin/git-identity-lint.sh"
+  lint_tree "$d/coll" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a leaky namesake of a SELF_EXCLUDE entry was swallowed — the silent-green this guard exists to stop"; fails=1; }
+  #     Own-scoped like every other finding: the land that ADDS the namesake is refused, everyone
+  #     else reads one advisory line. Without this, the guard is a fleet-wide hard stop.
+  ( CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/coll" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: a collision OUTSIDE the diff blocked — own-scope is not taking"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "git-identity-lint --selftest: 31/31 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd and an &&-chained cd to a NON-EMPTIABLE path, and on a ||-guarded cd to a PROVEN variable — but RED on the ||-guarded AND the &&-chained form of a BARE expansion, because \`cd \"\"\` returns 0 so neither chain ever fires and the guard is INERT, which is what pins rule 2 to the ARGUMENT rather than to the presence of a guard; GREEN on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (a PATH-form entry matched against the judged path, a BARE entry matched in any directory, and the same basename under a DIFFERENT directory proved NOT to block — the collapse control); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
+    echo "git-identity-lint --selftest: 36/36 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd and an &&-chained cd to a NON-EMPTIABLE path, and on a ||-guarded cd to a PROVEN variable — but RED on the ||-guarded AND the &&-chained form of a BARE expansion, because \`cd \"\"\` returns 0 so neither chain ever fires and the guard is INERT, which is what pins rule 2 to the ARGUMENT rather than to the presence of a guard; GREEN on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (a PATH-form entry matched against the judged path, a BARE entry matched in any directory, and the same basename under a DIFFERENT directory proved NOT to block — the collapse control); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint; and POPULATION INTEGRITY — the basename bijection that self-exclusion, the ratchet and own-scope all silently assume — with a collision-FREE root as the control, a colliding basename blocking and naming itself COLLIDE, a leaky namesake of a SELF_EXCLUDE entry REPORTED rather than swallowed (it was previously dropped from the population outright and read as 'clean'), and a collision outside the diff staying advisory."
     exit 0
   fi
   echo "git-identity-lint --selftest: FAILED — the ratchet does not discriminate."
