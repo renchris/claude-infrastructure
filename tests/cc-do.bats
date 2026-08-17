@@ -260,6 +260,56 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   echo "$output" | grep -q 'paste the API key into SSM' || false   # POSITIVE CONTROL
 }
 
+# ── a blocked row's own `run` reaches the board ───────────────────────────────────────────────────
+# `cc-backlog needs --run "<cmd>"` records the exact command that discharges the step, and this
+# emitter used to hardcode the generic pointer for every row and drop it. Measured on the live store
+# 2026-08-17: 51 of 130 blocked rows carried a command and the board showed none of them.
+
+@test "a blocked row's own --run is the command shown under it in --list" {
+  id="$("$BACKLOG" needs "rotate the signing key" --run 'op item edit signing-key' --project p)"
+  run "$DO" --list </dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'op item edit signing-key' || false
+  # …and it is the ROW's line it hangs under, not a stray line somewhere on the board.
+  echo "$output" | grep -A1 -- "$id" | grep -q 'op item edit signing-key' || false
+  # NEGATIVE CONTROL, same store: a row with NO --run still shows the generic pointer and gains no
+  # command line of its own. Without this, "the command is present" would also pass on a renderer
+  # that printed something under every row.
+  bare="$("$BACKLOG" needs "decide the menu direction" --project p)"
+  run "$DO" --list </dev/null
+  echo "$output" | grep -A1 -- "$bare" | grep -qv 'op item edit' || false
+  run bash -c 'echo "$1" | grep -A1 -- "$2" | grep -c "^           "' _ "$output" "$bare"
+  [ "$output" -eq 0 ]
+}
+
+@test "a row's --run is NOT promoted to runnable — it is never counted, never executed" {
+  # The hazard this design refuses. The live population includes a production-token revoke, an
+  # `rm -i`, and `brew services stop postgresql@14`; the bulk Enter must never reach any of them.
+  # The fixture is the strongest probe available: if cc-do ever ran a backlog `run`, the sentinel
+  # would exist.
+  # VACUOUS PRE-FIX BY NATURE, and named as such rather than counted as evidence: before this diff
+  # no backlog row carried a command near the runnable set, so it passes at both shas. It is not
+  # proof of the diff — it is the pin that stops the NEXT reader "finishing the job" by promoting
+  # `run` to ▶, which is what would put the token revoke one Enter away.
+  printf '#!/bin/bash\ntouch "%s"\n' "$SENT" > "$BATS_TEST_TMPDIR/blg.sh"
+  chmod +x "$BATS_TEST_TMPDIR/blg.sh"
+  "$BACKLOG" needs "destroy the staging database" --run "bash $BATS_TEST_TMPDIR/blg.sh" --project p >/dev/null
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -f "$SENT" ]
+  echo "$output" | grep -q '0 runnable' || false
+  # POSITIVE CONTROL — the identical script staged as an ACTIVATION does fire, so the assertion
+  # above is about the CLASS, not about a script that could never have run.
+  cp "$BATS_TEST_TMPDIR/blg.sh" "$CC_ACTIVATION_DIR/05-same.sh"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ]
+  # …and the json still marks it judgment, so no consumer can read it as runnable either.
+  run "$DO" --json </dev/null
+  run bash -c 'printf "%s" "$1" | jq -r ".[] | select(.class==\"backlog\") | .mark" | sort -u' _ "$output"
+  [ "$output" = "◆" ]
+}
+
 # ── deploy: ordered first, and the platter is existence-checked ──────────────────────────────────
 
 @test "deploy-lag renders FIRST and falls back to the repo copy when CC_DEPLOY_SCRIPT is absent" {

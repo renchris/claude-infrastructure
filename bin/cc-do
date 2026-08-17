@@ -195,6 +195,30 @@ collect() {
   fi
 
   # 4 · blocked backlog (JUDGMENT): each carries the operator-only step that unblocks it.
+  #
+  # THE ROW'S OWN COMMAND GOES IN THE `cmd` SLOT (2026-08-17, O2 of MASTER_OPERATOR_GATED.md).
+  # `cc-backlog needs --run "<cmd>"` exists so the filer can record the exact command that
+  # discharges the step, it survives the fold (tests/cc-backlog-needs.bats pins that as a
+  # fold-whitelist regression), and it reaches `list --blocked --json` intact — and then this
+  # emitter threw it away, hardcoding the generic pointer `cc-backlog list --blocked` for all of
+  # them. Measured 2026-08-17: 51 of 130 blocked rows carry a command, and the board rendered every
+  # one as "go read a list". That is the operator's own complaint about this surface, verbatim —
+  # *"I had to comb through the entire return body to fish out which is the command to copy and
+  # paste"* — reproduced by the renderer built to end it.
+  #
+  # STILL JUDGMENT, AND THAT IS NOT A COMPROMISE — it is what the population requires. `mark` stays
+  # ◆ and `path` stays `-`, so these are never counted into NRUN, never reached by the bulk Enter,
+  # and structurally unexecutable (execution reads `path`, never `cmd`, precisely so it never needs
+  # eval). The doctrine at the top of this file says RUNNABLE means "a machine step with one correct
+  # outcome"; a backlog `run` is nothing so uniform. Today's 51 include
+  # `turso auth api-tokens revoke reso-provisioning`, `rm -i …`, `brew services stop postgresql@14`,
+  # `/ship` and `/compact-memory` (slash commands, not shell at all), and a bare `sed -n '78,82p'`
+  # that is a READ someone filed as a step. Promoting that set to RUN would put a production-token
+  # revoke one Enter away from an operator answering a prompt about activations. The gap was never
+  # that these should run — it is that the operator could not SEE the command without going to
+  # fish for it.
+  #
+  # Absent `run` ⇒ the generic pointer exactly as before, so a row with nothing to show is unchanged.
   blg="${CC_BACKLOG_BIN:-}"
   if [ -z "$blg" ]; then
     for c in "$SCRIPT_DIR/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
@@ -206,7 +230,11 @@ collect() {
       .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
-      | "backlog\t◆\t\(.id // "?")\tcc-backlog list --blocked\tbacklog: \($t) — needs: \($n)\t-"
+      # Same gsub as $t/$n: a tab inside `run` would shift every later column and silently re-point
+      # the fields (memory: tsv-field-collapse). NOT truncated — a half command is worse than none.
+      | ((.run // "") | gsub("[\n\t]"; " ")) as $r
+      | (if $r == "" then "cc-backlog list --blocked" else $r end) as $cmd
+      | "backlog\t◆\t\(.id // "?")\t\($cmd)\tbacklog: \($t) — needs: \($n)\t-"
     ' 2>/dev/null >> "$STEPS"
   fi
 }
@@ -215,11 +243,18 @@ cls_count() { grep -c "^$1$TABC" "$STEPS" 2>/dev/null || true; }
 
 # ── rendering ─────────────────────────────────────────────────────────────────────────────────────
 itemize_class() {
-  local want="$1" cls mark name cmd label path
+  # $2 (optional) = the class's GENERIC pointer. A row whose `cmd` differs from it carries its OWN
+  # command, and that command is printed under the row — the whole point of recording it. Compared
+  # against the pointer rather than flagged with a field so there is no fifth thing to keep in sync:
+  # the emitter already decides this by choosing what to put in `cmd`.
+  local want="$1" generic="${2:-}" cls mark name cmd label path
   while IFS="$TABC" read -r cls mark name cmd label path; do
     [ "$cls" = "$want" ] || continue
     [ "$path" = "$PAD" ] && path=""
     printf '         %s %-22s %s\n' "$mark" "$name" "$label"
+    # No marker glyph and no `$` prompt on this line: it is the row's paste target, and both would
+    # land inside a click-drag selection and corrupt the command.
+    [ -n "$generic" ] && [ "$cmd" != "$generic" ] && printf '           %s\n' "$cmd"
   done < "$STEPS"
 }
 
@@ -242,9 +277,9 @@ render() { # $1 = "list" → also itemize judgment classes and show each runnabl
   done < "$STEPS"
   # count + text share the RUN lines' name column, so the two kinds of row align at 10 chars in
   [ "$NDEC" -gt 0 ] && printf '  YOURS   %-22s %s\n' "$NDEC open decision(s)" 'cc-decide list --open'
-  [ "$itemize" = list ] && itemize_class decision
+  [ "$itemize" = list ] && itemize_class decision 'cc-decide list --open'
   [ "$NBLG" -gt 0 ] && printf '  YOURS   %-22s %s\n' "$NBLG blocked backlog" 'cc-backlog list --blocked'
-  [ "$itemize" = list ] && itemize_class backlog
+  [ "$itemize" = list ] && itemize_class backlog 'cc-backlog list --blocked'
   return 0
 }
 
