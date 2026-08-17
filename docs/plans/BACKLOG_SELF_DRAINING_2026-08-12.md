@@ -2466,3 +2466,64 @@ recycle #11 should re-measure that row before treating the live layer as frozen.
 `plan-phase-scan.sh --falsify`: all three legitimately "not falsified" (the script prints only on
 success, so an empty verdict is an answer here, not a blind instrument). **filed 0 / closed 0** —
 this recycle landed a mechanism fix and drove a row from open to operator-gated; it minted nothing.
+
+### 2026-08-17 — `67a7d78c1134` closes on measurement: the cure landed 18 days BEFORE the row was filed, and the row's own metric counts the cure as the defect
+
+Row `67a7d78c1134` — *"a bare `[[ ]]` mid-test-body is a NO-OP — measured, 2,561 sites in
+`tests/*.bats`"* — fired as a cloud dispatch on 2026-08-17. **Nothing was re-derived and no
+`tests/*.bats` file is touched: the corpus holds ZERO dead assertions, and held zero before the row
+existed.**
+
+**Verified against trunk, not a working tree.** The container clones shallow (50 commits), so — per
+the `0e8a10c501af` precedent above — `--diff-filter=A` named the graft boundary as every file's
+author until `git fetch --unshallow` (2,988 commits). Only then:
+
+| what | when |
+|---|---|
+| `scripts/bats-assert-liveness.py` + `-fix.py` + `tests/bats-assert-liveness.bats` | born `f1b813f6`, **2026-07-25** |
+| the ratchet becomes a LAND gate (`SHIP_LAND_DEAD_LINT`, exit 6) | `4a33679c`, **2026-07-31** |
+| the row was filed | **2026-08-12** |
+
+`python3 scripts/bats-assert-liveness.py --summary` on trunk → **`0 dead assertion(s) in 0 of 478
+file(s)`**. Re-run against the tree at the row's own filing commit `1b044624` → **`0 of 455`**. The
+row was not true on the day it was written.
+
+🚨 **The premise defect, and it is the reusable half: `2,561` counts `[[` OCCURRENCES, not DEAD ones
+— and the cure idiom `[[ … ]] || false` matches the very same grep.** Today's raw count is **3,264**,
+of which **1,916 carry `|| false`** (that IS the fix), **2,247** sit in an `&&`/`||` list, and 14 are
+in `if`/`while` condition position, where a conditional is not an assertion at all. Only **547** are
+bare statement-position occurrences, and every one is the FINAL command of its body — the live
+position. Hand-checked a sample (`accounts-board:138`, `:355`, `backlog-freshness:328`,
+`capacity-admit-coverage:127`): each is followed immediately by `}`. **A metric that counts the fix
+cannot reach zero, so a row keyed on it can never close by being worked — only by being
+re-measured.** That is `6110fc45141e` one level up: not a stale TREE, a stale METRIC.
+
+**The analyzer is not blind, and that was proved before it was trusted.** A mutant carrying one dead
+site per class returns all three (`cond-keyword`, `arith`, `negation`) at rc 1, and correctly leaves
+a FINAL `[[ ]]` unflagged. Deadness is a function of BLOCK POSITION, which is exactly why `grep`
+cannot answer this question and the analyzer exists.
+
+⚠️ **Refinement measured against a real bats oracle — the three classes are NOT equally version-
+dependent, and "a mid-body `! cmd` asserts NOTHING" above is the durable one.** Under **bats 1.14.0
+/ bash 5.2.21**, a mid-body `[[ 1 == 2 ]]` and `(( 1 == 2 ))` **DO fail the test**; only `! true`
+still passes vacuously. `docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md` already anticipates this
+— *"bash 3.2 is what was measured. Bash ≥4.1 narrows some of these exemptions … `|| false` is
+correct under both"* — so this **confirms** the model rather than amending it. Operationally: on the
+macOS bash 3.2 the suite actually runs under, all three classes are exempt and the analyzer's
+conservative model is the right one; the `! cmd` class is the only one that survives a bash upgrade,
+which is why it is the spelling that keeps coming back.
+
+**Why this is recorded here rather than filed.** `~/.claude/autonomy/backlog.jsonl` is untracked and
+unreachable from a cloud container (`scripts/cloud-reconcile.sh`: no `~/.claude`, no local `/ship`),
+so trunk is the durable carrier (precedent `6394a353`, `3a072159`). The row is currently **blocked**
+under `master-verification-integrity`; it should be **closed**, not unblocked — the close verb runs
+on the box:
+
+    cc-backlog done 67a7d78c1134 --evidence f1b813f6
+
+**Do not re-file this row from a `grep -c '\[\['` reading.** The only sound measure is
+`python3 scripts/bats-assert-liveness.py --summary`, and it is already enforced at two chokepoints:
+`gate-select.sh` clause (g) selects the repo-wide ratchet on ANY `.bats` edit (a changed suite
+selecting only itself would land green, since a dead assertion is discarded rather than failed), and
+`ship-land.sh` blocks the land own-scope at exit 6 — fail-CLOSED on rc since `73583e2519d6`
+(2026-08-14), where an empty stdout from a missing `python3` had been reading as the clean verdict.
