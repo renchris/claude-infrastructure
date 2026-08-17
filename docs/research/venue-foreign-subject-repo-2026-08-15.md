@@ -65,10 +65,13 @@ leaves an item exactly where it is, a wrong ELIGIBLE burns a slot and invites a 
 about invisible state. And it is a **spelling**, not the class — same standing caveat as the keyword
 list it would join.
 
-🚨 **Neither form had reached an enforcing store by 2026-08-17**, when `c33f3b1cb278` (project
-`reso-management-app`) was dispatched to cloud and was unworkable on arrival — the third occurrence
-in four days, and the first *repeat* of the 08-14 route rather than a new one. Both discriminators
-above would have refused it. `venue-foreign-repo-recurrence-2026-08-17.md`.
+🚨 **The placement moved on 08-16, and this class recurred on 08-17.** `cloud-venue-project-repo-
+mismatch-2026-08-16.md` §2-3 locates the mechanism at `bin/cc-offload:84` — the attached repo comes
+from the FIRING checkout — and argues the discriminator belongs at the *fire*, not in
+`bin/cc-eligible`'s spelling lists, whose widening it explicitly rejects. That does not retract the
+subject-foreign route this file found; it relocates where the comparison should run. On 08-17
+`c33f3b1cb278` (project `reso-management-app`) recurred on the 08-14 route: fourth in four days,
+first on `reso-management-app`. `venue-foreign-repo-recurrence-2026-08-17.md`.
 
 ## Not fixed here, deliberately
 
