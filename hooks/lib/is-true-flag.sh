@@ -268,8 +268,9 @@ import sys
 
 CMD = os.environ.get("CMD", "")
 
-PIPELINE_OPS = {"|", "||", "&&", ";", ";;", "&"}
+PIPELINE_OPS = {"|", "||", "&&", ";", ";;", "&", "(", ")"}
 SHELL_HEADS = {"bash", "sh", "zsh", "ksh", "dash"}
+PUNCT = "();<>|&"
 
 
 def parse_rm(argv):
@@ -277,7 +278,28 @@ def parse_rm(argv):
     recursive = force = False
     targets = []
     end_of_flags = False
-    for tok in argv[1:]:
+    skip_next = False
+    rest = argv[1:]
+    for idx, tok in enumerate(rest):
+        # A redirect's filename is written to, never deleted — `rm -rf dist > /dev/null` has ONE
+        # target. Before the splitter above learned punctuation this was invisible (`>` arrived
+        # glued or spaced but the filename read as just another word), and it cost a standing false
+        # ASK on the commonest quiet-delete idiom there is. Dropping it cannot hide a DENY either:
+        # the shell does not delete a redirect target, so a catastrophic path in that position is
+        # not an rm of it.
+        if skip_next:
+            skip_next = False
+            continue
+        if tok and all(c in PUNCT for c in tok) and ("<" in tok or ">" in tok):
+            skip_next = True
+            continue
+        # `2>&1` splits as ['2', '>&', '1'] — the leading `2` is a FILE DESCRIPTOR, not a path, and
+        # it is only recognisable by what follows it. Without this the commonest quiet-delete idiom
+        # of all still warned, on a "target" named `2`.
+        if tok.isdigit() and idx + 1 < len(rest):
+            nxt = rest[idx + 1]
+            if nxt and all(c in PUNCT for c in nxt) and ("<" in nxt or ">" in nxt):
+                continue
         if not end_of_flags and tok == "--":
             end_of_flags = True
             continue
@@ -294,6 +316,11 @@ def parse_rm(argv):
                     recursive = True
                 elif ch == "f":
                     force = True
+            continue
+        # A bare operator run (`>`, `>>`, `2>&1`'s `>&`) is punctuation the splitter handed back,
+        # never a path. Dropping it cannot hide a DENY: no catastrophic target (`/`, `~`, `$HOME…`)
+        # is built from PUNCT, so this can only remove WARN noise.
+        if tok and all(c in PUNCT for c in tok):
             continue
         targets.append(tok)
     return (recursive, force, targets)
@@ -314,7 +341,27 @@ def scan(src, depth=0):
     out = []
     if depth > 3:                          # bounded: `bash -c "bash -c …"` cannot recurse forever
         return out
-    tokens = shlex.split(src, comments=True, posix=True)
+    # `shlex.split()` does NOT treat shell control operators as tokens — it is a WORD splitter, so
+    # an operator is only ever seen when the writer happened to surround it with whitespace. `&&`
+    # and `|` are conventionally spaced and therefore worked; `;` is conventionally GLUED to the
+    # word before it, and `rm -rf dist; echo "$HOME"` tokenized as
+    #     ['rm', '-rf', 'dist;', 'echo', '$HOME']
+    # so PIPELINE_OPS never fired, the whole next clause became TARGETS OF THE rm, and the rule
+    # failed in BOTH directions (measured on the shipped hook, 2026-08-17):
+    #     rm -rf dist; echo "$HOME"   DENY   ← false positive: a build-artifact delete refused
+    #                                          because an unrelated clause mentions $HOME
+    #     rm -rf ~; echo hi           ASK    ← false NEGATIVE, the dangerous half: a home wipe
+    #                                          DOWNGRADED out of the deny, purely because `~;` is
+    #                                          not `~`. The same command spelled `~ ;` DENIES.
+    # This is the identical spelling-blindness the flag half of this scanner was written to end,
+    # one layer out: there it was WHICH FLAGS, here it is WHERE THE COMMAND ENDS. So the fix is the
+    # same shape — stop pattern-matching the spelling, tokenize with the operator set the shell
+    # actually has. `punctuation_chars=True` is stdlib shlex's own answer (it also groups runs, so
+    # `&&` and `;;` still arrive whole, and it adds `~-./*?=` to wordchars so paths stay intact).
+    lex = shlex.shlex(src, posix=True, punctuation_chars=PUNCT)
+    lex.whitespace_split = True
+    lex.commenters = "#"                   # what shlex.split(comments=True) meant
+    tokens = list(lex)
     clauses = [[]]
     for tok in tokens:
         if tok in PIPELINE_OPS:
@@ -350,6 +397,12 @@ def scan(src, depth=0):
 try:
     results = scan(CMD)
 except ValueError:                         # unbalanced quotes → the caller must fall back
+    sys.exit(3)
+except TypeError:                          # shlex without punctuation_chars (pre-3.6)
+    # Do NOT silently fall back to shlex.split() here: that is the exact tokenizer whose glued-`;`
+    # blindness DOWNGRADES `rm -rf ~; …` out of the deny. Exit UNCLEAR instead, which routes the
+    # caller to its text fallback — that path over-blocks message bodies, but it never under-blocks,
+    # and under-blocking is the only one of the two that loses a home directory.
     sys.exit(3)
 
 for recursive, force, targets in results:
