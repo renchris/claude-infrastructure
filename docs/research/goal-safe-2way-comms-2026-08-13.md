@@ -157,6 +157,51 @@ a clean, committed state, which the close protocol already demands.
 nothing to starve, and the parked watcher is the idle wake. The two modes are selected by the same
 `goal_live_condition` predicate every producer already sources (`hooks/lib/goal-state.sh`).
 
+### 4.1 · As built (B3, landed 2026-08-16) — the four deltas from the spec above
+
+C1–C7 shipped as written. Four things the build settled that the spec left open, each measured:
+
+1. **A FOURTH refusal, and it is the keystone: the ORACLE ITSELF.** C2 reads
+   `~/.claude/cc-beats/<sid>.json`, so an arm that cannot resolve its sid, or finds no beat, or finds
+   one older than `CC_AWAIT_BEAT_FRESH_S` (900 s), is REFUSED (`reason=no-session-id|no-beat|
+   stale-beat`; `no-mailbox-lib` likewise, since C3/C4 must be judged over the whole keyset). Without
+   it the flag would be a licence to park with no self-cancel — *the starvation pole, armed
+   deliberately and blessed by a flag* — which is precisely the shape the chokepoint is being asked
+   to admit on trust. Refusals exit **6**, park nothing, and disturb no marker.
+2. **The sid is part of the instructed command, not an optional extra.** All three C7 producers
+   interpolate `--sid <session_id>` (they each hold it already: `mailbox-drain.sh:83`,
+   `session-continue.sh:133`, and the PreToolUse payload for the deny). A producer that cannot
+   resolve one emits the placeholder and says so, rather than teaching a form the tool refuses.
+3. **C2 is an OFFSET, not a `kind` filter.** The beat file holds only the LATEST boundary, so a whole
+   turn can complete inside one poll and leave the watcher looking at a Stop-kind beat whose prompt
+   predecessor it never sampled — and a watcher that ignores that stays parked over a session that
+   has moved on, i.e. the starvation pole re-entering through the oracle. Turns alternate, so
+   `seq > baseline + allowance` (allowance 1 iff the baseline beat was prompt-kind) excludes exactly
+   the arm turn's own trailing Stop and nothing else. Erring toward standing down early costs one
+   bounce turn; erring the other way costs the goal.
+4. **The wake floor now BLOCKS under a live goal instead of abstaining.** The 08-10 abstain rested on
+   "the goal itself keeps this session awake", which holds only BELOW the block cap — and the 15
+   measured cap force-idles are exactly the population above it. It stays budgeted, TTL'd and
+   kill-switched; the only thing the goal changes is WHICH command the block names. **One case still
+   abstains: mail already pending** — the session has work, C4 would refuse the arm for that very
+   reason, and the goal-forced turns deliver it, so blocking would be a pure round-trip.
+
+Also fixed in passing, because C3 rested on it: `_claim_live`'s mtime read used the repo's usual
+`stat -f %m … || stat -c %Y …` order, which is silently WRONG on coreutils (`-f` is `--file-system`
+and `%m` parses as a FILE, so it prints a filesystem block to stdout and exits 1; the fallback then
+appends the epoch to that block and the `*[!0-9]*` guard clamps the result to 0). Every claim read
+STALE, so C3 would have refused nothing. GNU-first is the order that degrades cleanly both ways.
+
+Suites: `tests/cc-await-ping.bats` (C1–C5, all four refusals + their discriminators, and the
+two-pole red-proof against a fixture goal that models only A2 and A3) · `tests/wake-floor.bats` ·
+`tests/mailbox-drain.bats` · `tests/validate-bash-goal-guard.bats` (17–23: the carve-out, its
+per-segment scope, and that the loop shape still swallows it).
+
+**Still open after B3, and now reachable:** E4 — `goal-inert-watch.sh` will fire on a *sanctioned*
+idle-scoped deferral, which is an alarm losing its polarity rather than a wrong verdict. Filed
+separately; the fix is the one §8 already names (recognise the idle-scoped claim, downgrade to an
+info line).
+
 ## 5 · The safety net: W2 — re-arm the asyncRewake watcher at every Stop
 
 The birth watcher (migration 0007) is **one-shot**: consumed by its first fire, or expired at
@@ -259,7 +304,7 @@ architecture needed one new *contract* (idle-scoped deferral), not new machinery
 |---|---|---|---|
 | B1 | `62e0b88a58b5` | ~~**Run the W2 probe** (P-W2a–d, §5), commit artifacts like W0~~ **DONE 2026-08-16** → `docs/research/w2-stop-rewake-proof/` | none — read-only probe |
 | B2 | `3118d712f668` | ~~Register W2 (same hook, Stop, `asyncRewake:true`) as a c10 migration across all five config dirs, claim-guarded~~ **DONE 2026-08-16** → `migrations/0012-…` + `_armed_already` | B1 green ✓ |
-| B3 | `6290f0ee6b52` | `cc-await-ping --idle-scoped` (C1–C5) + the `validate-bash` carve-out (C6) + producer messaging flips (C7: drain nudge, deny text, wake floor) + suites — red-proof BOTH poles: a mutant that never self-cancels must starve a fixture goal; a mutant that never defers must spin one | none |
+| B3 | `6290f0ee6b52` | **LANDED 2026-08-16** — `cc-await-ping --idle-scoped` (C1–C5) + the `validate-bash` carve-out (C6) + producer messaging flips (C7: drain nudge, deny text, wake floor) + suites — red-proof BOTH poles: a mutant that never self-cancels must starve a fixture goal; a mutant that never defers must spin one | none |
 | B4 | `b33f424c747b` | E1 + E2 message fixes | none (E1 standalone; E2's final text references B3's form) |
 | B5 | `b0ce82d745be` | Goal-liveness oracle in `wrap-ledger.sh` + `/wrap` (E5) | none — **BUILT 2026-08-15, `78791cd8`** |
 

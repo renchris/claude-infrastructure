@@ -353,17 +353,35 @@ an embedded newline that must not leak into the operator line"
 # (docs/research/goal-in-handoff-2026-08-08.md § RESOLVED). The cc-await-ping arm this nag used to
 # hand every unwatched session is exactly such a task — so with a goal live, the nudge must WARN
 # AGAINST arming, and must not carry a pasteable arm command at all.
+#
+# ── C7 FLIP (2026-08-16, goal-safe-2way-comms §4) ────────────────────────────────────────────────
+# "No arm command at all" was the 08-10 contract and it is now the wrong one: it left the goal-armed
+# session with no idle mode, i.e. in the SPIN pole (90 unmet evaluations over an unchanged world).
+# The nudge must still refuse the PARKED form and must now name the IDLE-SCOPED one — with the sid,
+# because an arm that cannot name its session is refused at the tool. The pair of assertions below
+# is the discrimination: the denied spelling absent, the admitted spelling present.
 
-@test "goal-aware: LIVE /goal ⇒ the nudge warns AGAINST arming (no arm command, no run_in_background)" {
+@test "goal-aware: LIVE /goal ⇒ the nudge refuses the PARKED arm and teaches the idle-scoped one" {
   T="$BATS_TEST_TMPDIR/goal-t.jsonl"
   printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish the rollout"}}\n' > "$T"
-  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  run bash -c 'printf "{\"transcript_path\":\"%s\",\"session_id\":\"abc-123-def\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
   [ "$status" -eq 0 ]
   ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
   [ "$ctx" != "null" ] || false
-  printf '%s' "$ctx" | grep -q 'do NOT arm' || false
-  ! printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
+  printf '%s' "$ctx" | grep -q 'do NOT park the ordinary 4-hour watcher' || false
+  # the DENIED spelling must never appear — the chokepoint refuses it, so instructing it would hand
+  # the model a command its own guard rejects
   ! printf '%s' "$ctx" | grep -q 'cc-await-ping --timeout' || false
+  # …and the ADMITTED one must, carrying THIS session's id (without it the tool refuses, exit 6)
+  printf '%s' "$ctx" | grep -q 'cc-await-ping --idle-scoped --sid abc-123-def' || false
+}
+
+@test "goal-aware: no session_id ⇒ the nudge says so rather than emitting a form the tool refuses" {
+  T="$BATS_TEST_TMPDIR/goal-t.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish the rollout"}}\n' > "$T"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q -- "--sid <this session's id>" || false
 }
 
 @test "goal-aware DISCRIMINATOR: a MET goal restores the ordinary arm nudge (last record wins)" {
