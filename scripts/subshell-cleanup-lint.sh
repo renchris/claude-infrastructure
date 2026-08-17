@@ -841,7 +841,18 @@ if [ "$MUTANTS" = 1 ]; then
           for (i=1;i<=NR;i++) {
             if (L[i] ~ ("^[ \t]*" h "[ \t]*\\(\\)[ \t]*\\{")) inb=1
             else if (inb && L[i] ~ /^[ \t]*\}/) inb=0
-            if (!inb || L[i] !~ /(rm[ \t]+-|rmdir|kill|worktree[ \t]+remove|close-window|bootout)/) continue
+            # NB: single-quoted awk program — no apostrophes in these comments, they end the string.
+            # `kill` is WORD-BOUNDED here, and the boundary is the whole difference between a control
+            # and a fabricated one. Unbounded, it matched the word "killed" inside the cc-notify
+            # signal message (echo "cc-notify: killed by a signal ..."), so this harness picked
+            # CLOUD_ID — a variable naming a send target in a log line — as that file cleanup
+            # record, injected it, and reported the lint BLIND for declining to flag it. The lint was
+            # right: _on_signal destroys nothing, CLOUD_ID is no cleanup record, and the class is
+            # absent from that file. That is exactly the fabricated control the header above warns
+            # about ("a wrong control reads exactly like a blind detector"), reached the second way:
+            # by DERIVING the wrong name rather than hand-listing one. A control that selects a
+            # variable the engine could never report is not a measurement of the engine.
+            if (!inb || L[i] !~ /(rm[ \t]+-|rmdir|(^|[ \t;&|(){}])kill([ \t]|$)|worktree[ \t]+remove|close-window|bootout)/) continue
             t=L[i]
             while (match(t, /\$\{?[A-Za-z_][A-Za-z0-9_]*/)) {
               v=substr(t,RSTART,RLENGTH); sub(/^\$\{?/,"",v)
