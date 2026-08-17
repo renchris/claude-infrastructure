@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
+  (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
+  `6644273f3`; content-verified on `origin/main`.**
+  The condition's last row was `8942f3b1506d` (R-3, HOOK_CHAIN_COST): *"validate-bash.sh does 12
+  grep forks bash can do natively (~42 ms) — BLOCKED on a differential corpus proving identical
+  verdicts on every DANGER pattern first."*
+
+  **The row was ADJUDICATED, not implemented, and that was its own instruction.** The corpus is
+  what the row blocks itself on, so the corpus is the deliverable and the optimization was only
+  ever whatever the corpus authorized. Built
+  (`scripts/validate-bash-differential.sh`, `tests/validate-bash-differential.bats`, 31 site rows ×
+  66 cases = **1,672 scored pairs, 56 diverging**), it authorizes almost nothing: **10 of 30 sites
+  are safe to convert, 20 are not, and on the modal path exactly 1 of the 10 always-executed greps
+  is convertible** — a ~2.6 ms prize, not 42 ms, against a gate carrying the
+  `denylist-enumerates-spellings` scar.
+
+  🚨 **THE TRANSFERABLE FINDING: the blocker was not subtlety, it was a SILENT SEMANTIC INVERSION,
+  and it fails in BOTH directions.** `\b` is a word boundary in the BSD grep this hook resolves and
+  a **literal `b`** in bash's `=~`, whose `regcomp` has no such escape and drops the backslash.
+  Measured with every other axis held out, plus a control:
+  `'\bconfig\b'` vs `git config --get x` → grep MATCH, bash **no** (*the guard goes silent*) ·
+  vs `git bconfigb --get x` → grep no, bash **MATCH** (*the guard fires on noise*) ·
+  and `'config'` vs the same input → both MATCH (control: without `\b` they agree). **13 of 27
+  predicate sites carry one.** Second cause: `grep` anchors `^`/`$` **per line**, bash `=~` over the
+  **whole string**, and `$CMD` is routinely multi-line here — which is exactly why `61826e193`
+  (heredoc bodies are stdin, not argv) had to exist. *An equivalence you can only check by reading
+  is one you have not checked; both causes are invisible in a diff and loud in a corpus.*
+
+  **The premise decayed in BOTH directions AT ONCE — this sharpens #14's lesson rather than
+  repeating it.** #14 found the UNIT decays before the VALUE. Here the count decayed **upward**
+  (12 → **14** grep forks) while the ms decayed **downward** (42 → **36.7**), so the two errors
+  partly cancel and the headline scalar still looks about right. It is not: 4 of the 14 live in
+  `hooks/lib/is-true-flag.sh`, a file the row never names and its stated precondition does not
+  cover. **The durable unit is the exec count, not the millisecond** — counts were byte-identical
+  across three independent runs while the wall clock moved with load inside ten minutes.
+
+  **Three things larger than R-3 that R-3 did not contain**, all from the census
+  (`docs/research/validate-bash-fork-census-2026-08-17.md`): `grep` is **51%** of the modal path,
+  not the whole story (24 externals, 14 of them grep) · one `python3` exec is **24.45 ms, 9.3× a
+  grep**, the most expensive fork in the file · and the hook parsed **the same stdin payload three
+  times**. The last one was filed (`054499f0c342`) and then **done** in the same recycle:
+  **+7.02 ms median paired, 113/120 pairs**, plus the audit logger's own `mkdir`+`date`
+  (**+2.28 ms, 96/120**) — **~9.3 ms off a 71.9 ms modal path, 13%**, with no danger pattern
+  touched.
+
+  🚨 **A NULL RESULT WAS AN ARTEFACT OF THE EXPERIMENTAL DESIGN, not of the change.** The logger
+  lever first measured **blocked A-then-B at n=41: 67.36 vs 67.59 ms — no saving, nominally
+  slower**, and would have been reported as a refutation of my own work. **Interleaved paired** runs
+  at n=120 resolve the same change at **+2.28 ms, 80% paired wins**. Load drifts over minutes and a
+  blocked design charges that drift to whichever variant ran second. *At small effect sizes the
+  DESIGN, not the sample size, decides whether the effect is visible at all — and a null from a
+  design that cannot resolve the effect is not evidence of absence.*
+
+  **A guard that could not fire, caught only by a mutant.** The TSV arity guard added for the
+  field-collapse ratchet first lived inside `build_payloads`, whose one caller is
+  `NCASES="$(build_payloads)"` — a **command substitution, i.e. a subshell** — so its `exit 2` ended
+  the subshell and the parent ran on with `NCASES` empty. A deliberately malformed corpus produced a
+  **full clean run at exit 0**. Hoisted to top level; both guards now proven in both directions.
+  Same family as `dispatching-alarm-can-be-the-defect`: *ask where the guard's exit actually lands.*
+
+  **FIVE ratchets fired across four land attempts, every one a real bug in this land's own diff** —
+  budget for this, it is the norm, not bad luck. shellcheck (SC2004; three SC2016 hits were
+  intentional and took reasoned disables) · test-hermeticity (`validate-bash-differential.bats`
+  ran against the operator's live `~/`) · bats dead-assertion (**9** assertions errexit could not
+  reach; fixed with `scripts/bats-assert-liveness-fix.py`, never by hand) · self-path (all three new
+  harnesses derived a root from an unresolved `$0`; through the live per-file symlinks they would
+  have read `~/.claude`, found no fixtures, and **reported nothing rather than failed**) · TSV
+  field-collapse. **The self-path gate's own message read `--selftest FAILED — the detector no
+  longer discriminates`, which reads as a broken lint. It was not**: the selftest's last arm asserts
+  GREEN on the real tree, and the real tree was dirty *because of my diff*. Attribute before you
+  drive — and a gate accusing itself may be accusing you.
+
+  **The corpus caught ME, which is the point of building it.** Collapsing the payload parse shifted
+  every line below it by +28, and the differential's coverage and drift assertions **refused to
+  score** until the site inventory was re-pinned. Three of my own controls also failed first: a
+  `sed` whose `|` delimiter collided with a `|` in its replacement; two anchors that correctly
+  detected the stamp had MOVED to the new top-of-file parse; and an anti-vacuous mutant that deleted
+  the stamp instead of freezing it — **the fallback silently repaired it, so the control was
+  measuring the fallback, not the change**. Each failure was a real defect in the control.
+
+  **Blocked tail, stated by stratum** (`zero-claim-must-name-its-excluded-strata`): 8 are
+  `source: needs` operator-platter rows, 1 needs root (`memorystatus_control`), 1 needs a `launchctl
+  enable` in the user domain — **10 operator-gated** — and **1 is a cloud-venue build item**
+  (`02ba4e52389a`), which is outside this lane's non-cloud contract. #14's close said "11
+  operator-gated"; that was one too generous. Also noted, not closed: `5436396f405c`'s agent-typed
+  half is now enforced live by #14's FF-GATE (`17ecae6c6`), but a human-typed advance remains
+  unhooked, so its `needs` row stands.
+
 - **2026-08-17 ~11:30Z — recycle #14: `master-enforcing-store` 17 open → `1 open / 11 blocked
   (11 operator-gated)`. filed 0 / closed 16 (15 done + 1 blocked). Nine commits, one land,
   `7c08a4bbf` + the row-6 doc; content-verified on `origin/main`.**
