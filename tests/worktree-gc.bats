@@ -139,8 +139,25 @@ run_gc() {
       CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
       CC_WTGC_BACKLOG="${BACKLOG:-$BL}" CC_WTGC_DISPOSAL_LOG="$DLOG" \
       CC_WTGC_TEAMS_DIR="${TEAMSDIR:-$TEAMS}" CC_WTGC_WARRANTS="${WARRANTS:-$WTS}" \
-      CC_WTGC_EXCLUDE="${EXCLUDE:-}" bash "$GC" "$@"
+      CC_WTGC_EXCLUDE="${EXCLUDE:-}" \
+      CC_WTGC_SESSION_REGISTRY="${SESSREG:-$BATS_TEST_TMPDIR/no-session-registry}" \
+      CC_WTGC_ACTIVE_MIN="${ACTIVEMIN:-0}" bash "$GC" "$@"
 }
+# The two seams above are the 2026-08-17 occupancy signals (backlog 63484cfeab2a), and both are
+# NEUTRALISED by default here — deliberately, and this needs its reason on the record.
+#
+# SESSREG: the session-cwd registry defaults to a path under the real ~/.claude, so an unshimmed
+# read would consult the OPERATOR'S live sessions from a fixture. Pointed at a nonexistent dir,
+# which the subject treats as "no store" (not as a broken instrument) and contributes nothing.
+#
+# ACTIVEMIN=0: the recent-untracked-write signal is LIVENESS-FREE — it fires on any untracked file
+# younger than the window, and a bats fixture writes every one of its files SECONDS ago. Left at
+# the shipped 30, it would mark literally every fixture worktree occupied and the whole suite would
+# assert KEEP against a janitor that can no longer remove anything — the vacuous pass this file's
+# discriminator-pair discipline exists to prevent. So the 89 tests about the OTHER gates stay about
+# those gates, and the new axis is pinned in BOTH directions by its own pair below, which sets
+# ACTIVEMIN explicitly. A default of 0 here is therefore not a narrowing: it is the only value at
+# which those tests still test what their names say.
 
 # warrant <path> <sha> <reason> — hand-write oracle 3's TSV record, so a test can fixture a
 # MALFORMED or STALE warrant that the --warrant writer would refuse to produce. The path is
@@ -1389,4 +1406,135 @@ trunk_add() {
   [ "$4" = "$(cf kept)" ]
   [ "$5" = "$(cf branches_deleted)" ]
   [ "$6" = "$(cf refusals)" ]
+}
+
+# ════ THE TWO 2026-08-17 OCCUPANCY SIGNALS (backlog 63484cfeab2a) ════════════════════════════════
+#
+# WHAT WAS SWEPT: an OCCUPIED worktree, mid-session, 2026-08-10 01:50. Every oracle above keys on a
+# LIVE PROCESS — cc-notify's cwd list, `lsof -d cwd`, open files, the registry PID. A worktree a
+# session holds only through its Bash tool's `cd` has NO resident process between commands, so all
+# four read UNOCCUPIED while work is in flight. The two signals below are the ones that can see it.
+#
+# They are pinned SEPARATELY and each with its own REMOVE half, because they are separate axes and
+# a shared pair would let either one carry the other (memory: sibling-guard-makes-the-fixture-vacuous).
+
+@test "session-cwd registry: a live session registered AT the worktree → KEPT" {
+  p="$(wt wt-sessreg feat/sessreg)"
+  SESSREG="$BATS_TEST_TMPDIR/sessreg"; mkdir -p "$SESSREG"
+  printf '{"pid":%s,"cwd":"%s"}\n' "$$" "$p" > "$SESSREG/pane-1.json"
+  run_gc
+  [ -d "$p" ]
+}
+
+@test "session-cwd registry REMOVE half: the same worktree goes once the row names somewhere else" {
+  # Without this, a subject that never removes anything would pass the KEEP test above.
+  p="$(wt wt-sessreg2 feat/sessreg2)"
+  SESSREG="$BATS_TEST_TMPDIR/sessreg2"; mkdir -p "$SESSREG"
+  printf '{"pid":%s,"cwd":"%s"}\n' "$$" "$p" > "$SESSREG/pane-1.json"
+  run_gc
+  [ -d "$p" ]
+  printf '{"pid":%s,"cwd":"%s"}\n' "$$" "$BATS_TEST_TMPDIR" > "$SESSREG/pane-1.json"
+  run_gc
+  [ ! -d "$p" ]
+}
+
+@test "session-cwd registry: a row whose PID is DEAD does not keep the worktree alive" {
+  # The store is swept by liveness, so a stale row must not be able to make a worktree immortal —
+  # the failure mode where a crashed session's registry file pins its worktree forever.
+  p="$(wt wt-sessdead feat/sessdead)"
+  SESSREG="$BATS_TEST_TMPDIR/sessdead"; mkdir -p "$SESSREG"
+  # PID 2^22 is above every kernel pid_max here, so it is reliably unallocated.
+  printf '{"pid":4194304,"cwd":"%s"}\n' "$p" > "$SESSREG/pane-1.json"
+  run_gc
+  [ ! -d "$p" ]
+}
+
+@test "session-cwd registry: a session cwd'd in a SUBDIRECTORY still occupies the worktree" {
+  # `is_live_cwd` is an EXACT match, so a session that cd'd one level in was invisible to it.
+  p="$(wt wt-sessdeep feat/sessdeep)"
+  mkdir -p "$p/sub/dir"
+  SESSREG="$BATS_TEST_TMPDIR/sessdeep"; mkdir -p "$SESSREG"
+  printf '{"pid":%s,"cwd":"%s/sub/dir"}\n' "$$" "$p" > "$SESSREG/pane-1.json"
+  run_gc
+  [ -d "$p" ]
+}
+
+# ignored_scratch <worktree> — commit a .gitignore (backdated, so it cannot revive the idle clock)
+# and drop an IGNORED scratch file in the tree.
+#
+# It must be IGNORED, not merely untracked, and the REMOVE half below is what proved it: a plain
+# untracked file shows in `git status --porcelain` as `??`, so gate 3 keeps the worktree and the
+# KEEP half passes without the new signal ever being consulted — green for the wrong reason, which
+# is the one outcome a discriminator pair exists to catch. Ignored content is the case where gate 3
+# is genuinely blind (the BLAST RADIUS block above), so a KEEP here can only come from this axis.
+# The .gitignore goes on TRUNK, not into a commit in the worktree. Committing it locally was the
+# second wrong-reason green: it left the branch UNLANDED, so the "unlanded → KEEP" gate held the
+# tree and the REMOVE half could never fire no matter how stale the file got. Two gates masked this
+# axis before the pair isolated it, which is the whole argument for writing the REMOVE half first.
+# The ignore rule must be on the BRANCH the worktree checks out AND on trunk. `trunk_add` only
+# moves refs/remotes/origin/main, while `wt` branches from R's HEAD, so using it alone left the
+# scratch file merely untracked — porcelain non-empty, gate 3 keeping the tree, this axis untested
+# again. Committing it into the worktree instead left the branch UNLANDED and that gate kept it.
+# Both wrong-reason greens were caught by the REMOVE half rather than by reading the code.
+ignore_on_trunk() {
+  printf 'agent-scratch.log\n' > "$R/.gitignore"
+  git -C "$R" add .gitignore
+  GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" \
+    git -C "$R" commit -qm "ignore scratch"
+  git -C "$R" update-ref refs/remotes/origin/main HEAD
+}
+
+ignored_scratch() {
+  local p="$1"
+  printf 'scratch\n' > "$p/agent-scratch.log"
+  [ -z "$(git -C "$p" status --porcelain)" ]        # gate 3 is BLIND — the KEEP is this axis alone
+}
+
+@test "recent ignored write → KEPT, with NO live process anywhere (the liveness-free axis)" {
+  # This is the signal that would actually have stopped the 01:50 sweep: no process, no registry
+  # row, nothing for a liveness oracle to find — only the residue of work in flight.
+  ignore_on_trunk
+  p="$(wt wt-active feat/active)"
+  ignored_scratch "$p"
+  ACTIVEMIN=30 run_gc
+  [ -d "$p" ]
+}
+
+@test "recent-write REMOVE half: backdate that same file past the window and it is swept" {
+  ignore_on_trunk
+  p="$(wt wt-active2 feat/active2)"
+  ignored_scratch "$p"
+  ACTIVEMIN=30 run_gc
+  [ -d "$p" ]                                       # KEPT while the write is recent
+  touch -t 200001010000 "$p/agent-scratch.log"      # …now it is 26 years stale
+  ACTIVEMIN=30 run_gc
+  [ ! -d "$p" ]
+}
+
+@test "recent-write: a TRACKED file's mtime does NOT count as activity" {
+  # A fresh `git worktree add` stamps every checked-out file with the CHECKOUT time, so counting
+  # tracked files would read a pristine 2-minute-old worktree as permanently active — the signal
+  # would fire on the whole population and mean nothing (memory: alarm-polarity-and-attention-budget).
+  p="$(wt wt-tracked feat/tracked)"
+  touch "$p/f"                                      # `f` is tracked, and now has a NOW mtime
+  ACTIVEMIN=30 run_gc
+  [ ! -d "$p" ]
+}
+
+@test "recent activity outranks --dispose-landed-dirt: the flag does not overrule occupancy" {
+  # The interaction the shipped disposal feature creates, pinned rather than left to chance. A tree
+  # whose dirt is byte-identical on trunk is disposable — but if something wrote here in the last
+  # 30 minutes, the safe reading is that a session is working, and occupancy wins. Getting this
+  # backwards is the original bug with an extra flag on it.
+  trunk_add x.md hello
+  p="$(dirt_wt wt-dirt-active feat/dirtactive x.md hello)"
+  ACTIVEMIN=30 run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  has_wt "$p"
+  # …and the same tree IS disposed once its writes age out, so the KEEP above is the signal firing,
+  # not the disposal path being broken.
+  find "$p" -type f -not -path "$p/.git/*" -exec touch -t 200001010000 {} +
+  ACTIVEMIN=30 run_gc --dispose-landed-dirt
+  run has_wt "$p"
+  [ "$status" -ne 0 ]
 }
