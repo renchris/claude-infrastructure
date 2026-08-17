@@ -147,7 +147,14 @@ add_map() {
   [ "$status" -eq 0 ]
   [ "$output" = "bulk7" ]
   # Exactly one index read, independent of the 60 directories.
+  # MUTATION-PROVEN: re-inserting the historical per-directory `jq -r .taskLists "$index"`
+  # into the loop reds exactly this line (jq count 60, not 1) and nothing else.
   [ "$(grep -c . < "$jqc")" -eq 1 ]
   # And not one per-directory helper fork. Reported by name so a regression names itself.
+  # HONEST COVERAGE NOTE: this second assertion is NOT mutation-proven. Restoring the
+  # historical `listid=$(basename "$dir")` made the suite exceed its 90 s bound and emit no
+  # ok/not ok line at all — the shims are themselves bash scripts, so 60 extra forks land on
+  # top of every fork bats already makes. A timeout is not a verdict, so this is kept as a
+  # documented invariant guard, not as evidence. The jq assertion above carries the proof.
   [ "$(grep -c . < "$forkc")" -eq 0 ]
 }
