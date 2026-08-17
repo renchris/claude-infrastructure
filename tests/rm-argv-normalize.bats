@@ -251,3 +251,79 @@ not_denied_count() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'PASSED' || false
 }
+
+# ════ WHERE THE COMMAND ENDS — the same spelling question, one layer out ═════════════════════════
+#
+# The flag half of this file made the rule blind to HOW A FLAG IS SPELLED. This half makes it blind
+# to HOW A CLAUSE ENDS, and it was found by the same method — feeding the shipped hook and reading
+# the decision, not by reading the code (backlog 567a4d90ca89; measured 2026-08-17).
+#
+# `shlex.split()` is a WORD splitter, not a shell parser: it only ever sees a control operator that
+# the writer happened to surround with whitespace. `&&` and `|` are conventionally spaced, so they
+# worked. `;` is conventionally GLUED to the word before it, so it was never a token at all —
+# `rm -rf dist; echo "$HOME"` tokenized as ['rm','-rf','dist;','echo','$HOME'] and the ENTIRE next
+# clause became targets of the rm. On the shipped hook that failed in BOTH directions at once:
+#
+#   rm -rf dist; echo "$HOME"   DENY   ← false positive (the filed row): a build-artifact delete
+#                                        refused because a LATER, unrelated clause says $HOME
+#   rm -rf ~; echo hi           ASK    ← false NEGATIVE, and this is the dangerous half: a home-
+#                                        directory wipe DOWNGRADED out of the deny, purely because
+#                                        `~;` is not `~`. Spelled `~ ;` the same command DENIES.
+#
+# The filed row named only the first. A guard proxy fails in both directions, so both are pinned
+# here (memory: guard-proxy-fails-in-both-directions) — the false negative is the one that loses a
+# home directory, and nothing in the row would have found it.
+
+@test "a glued semicolon ENDS the rm — the next clause is not its targets" {
+  # The false-positive half: every one of these deletes only build artifacts.
+  [ "$(decision 'rm -rf dist; echo hi')" = "PASS" ]
+  [ "$(decision 'rm -rf dist; echo "$HOME"')" = "PASS" ]
+  [ "$(decision 'rm -rf node_modules; echo hi')" = "PASS" ]
+  [ "$(decision 'rm -rf dist;ls /etc')" = "PASS" ]
+  # …and the spaced spelling, which always worked, still does. If these two ever disagree again,
+  # the splitter has regressed to word-splitting.
+  [ "$(decision 'rm -rf dist ; echo hi')" = "PASS" ]
+}
+
+@test "a glued semicolon does not DOWNGRADE a catastrophic rm out of the deny" {
+  # The false-negative half. Each of these was ASK on the shipped hook.
+  [ "$(decision 'rm -rf ~; echo hi')" = "DENY" ]
+  [ "$(decision 'rm -rf ~;ls')" = "DENY" ]
+  [ "$(decision 'rm -rf ~; rm -rf node_modules')" = "DENY" ]
+  # Spaced and glued must agree — that agreement IS the rule.
+  [ "$(decision 'rm -rf ~ ; echo hi')" = "DENY" ]
+  # The other catastrophic targets stayed denied even glued (their patterns tolerate a trailing
+  # `;`), so they are the CONTROL that says the bug was about `~` reaching its matcher, not about
+  # the deny arm being off entirely.
+  [ "$(decision 'rm -rf /; echo hi')" = "DENY" ]
+  [ "$(decision 'rm -rf $HOME; echo hi')" = "DENY" ]
+}
+
+@test "a subshell boundary ends the rm too, and a redirect target is not deleted" {
+  [ "$(decision '(rm -rf ~)')" = "DENY" ]          # `(` was never a token either
+  [ "$(decision 'rm -rf dist > /dev/null')" = "PASS" ]   # was ASK: /dev/null read as a target
+  [ "$(decision 'rm -rf dist >/dev/null 2>&1')" = "PASS" ]
+}
+
+@test "RED CONTROL: the pre-fix tokenizer really did miss the glued semicolon" {
+  # Without this, the three tests above could pass against a hook that never had the bug — the
+  # vacuous-pass trap this file already guards for the flag half. Build a mutant whose ONLY change
+  # is the tokenizer reverting to word-splitting, and prove the corpus above convicts it.
+  local mut="$BATS_TEST_TMPDIR/mutant"
+  mkdir -p "$mut/lib"
+  cp "$REPO/hooks/validate-bash.sh" "$mut/validate-bash.sh"
+  sed -e 's/^    lex = shlex.shlex(src, posix=True, punctuation_chars=PUNCT)$/    tokens = shlex.split(src, comments=True, posix=True)/' \
+      -e 's/^    lex.whitespace_split = True$//' \
+      -e 's/^    lex.commenters = "#".*$//' \
+      -e 's/^    tokens = list(lex)$//' \
+      "$REPO/hooks/lib/is-true-flag.sh" > "$mut/lib/is-true-flag.sh"
+  # The mutant must be a DIFFERENT file, or the sed silently matched nothing and this control is
+  # vacuous — the exact failure mode a mutant control exists to rule out.
+  ! cmp -s "$REPO/hooks/lib/is-true-flag.sh" "$mut/lib/is-true-flag.sh" || false
+  grep -q 'tokens = shlex.split' "$mut/lib/is-true-flag.sh" || false
+
+  # The dangerous direction: the mutant lets a glued home wipe out of the deny.
+  [ "$(decide_with "$mut/validate-bash.sh" 'rm -rf ~; echo hi')" != "DENY" ]
+  # The noisy direction: the mutant convicts a build-artifact delete.
+  [ "$(decide_with "$mut/validate-bash.sh" 'rm -rf dist; echo "$HOME"')" = "DENY" ]
+}
