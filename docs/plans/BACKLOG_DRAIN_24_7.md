@@ -87,6 +87,111 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~11:30Z — recycle #14: `master-enforcing-store` 17 open → `1 open / 11 blocked
+  (11 operator-gated)`. filed 0 / closed 16 (15 done + 1 blocked). Nine commits, one land,
+  `7c08a4bbf` + the row-6 doc; content-verified on `origin/main`.**
+  Six of the seventeen rows retired for ZERO code on re-validation. **The transferable finding is
+  that a row's premise decays in BOTH directions, and the UNIT decays before the VALUE.**
+
+  **The unit, not the number, was wrong twice — and both times the convenient reading was the
+  wrong one.** `1c16b58d9d3b` measured MEMORY.md in raw BYTES against a 24.4 KB limit; the repo had
+  already replaced that instrument (2026-08-15, `7a56de4c54ab`) with **25,000 stripped CHARACTERS**,
+  and `hooks/memory-nudge.sh:22` marks its own old figure SUPERSEDED in a comment. Measured with the
+  canonical `hooks/lib/memory-index-measure.sh`: **23,112 chars / 140 lines against 25,000 / 200** —
+  92.4%, not breaching, and `cc-memory-rotate`'s `ROTATE_AT` is `LIMIT-1500` = 23,500, so the
+  actuator sat **388 chars from firing on its own**, wired 5/5. It is a 13-row near-duplicate family
+  across `memory-index-near-cap` / `memory-index-over-budget`, every one measuring bytes against the
+  dead limit; three are still open under other conditions and `7c266e16fc94`'s "OVER its limit,
+  trailing entries SILENTLY dropped" is a **false alarm** under the corrected measure.
+  `a78f0fa4223a` asked to prune "one-shot exact-matches": 63.2% of patterns ARE exact — but
+  **exactness is not deadness**, and the teammate REFUSED the row's own predicate on measurement and
+  shipped a provable-redundancy one instead (245/2399 = 10.2%), re-measuring 59/2036 → 63/2399 on
+  the way.
+
+  **A falsifier can be POLARITY-BLIND to the remedy that actually shipped.** `7d18f9c26f1f`'s probe
+  was `test -x scripts/team/verify-team.sh` — it could only retract if that script were RESTORED,
+  the opposite of the row's own other sanctioned remedy ("fix both or delete the arm"), which is
+  what landed (`2d7b125d6` deleted the arm and its vacuous suite; `cb6314be1` fixed the
+  `VERIFY_EXIT=$?`-after-`|| true` half). Its rc 1 was a NON-VERDICT, not a defence of the row.
+
+  **Three ratchets caught the LEAD, and all three were real bugs — budget a land cycle for them.**
+  (a) pipefail-SIGPIPE caught my own `git ls-tree … | grep -q .`: `-q` exits early, SIGPIPEs the
+  producer, and under `pipefail` the condition **reads FALSE on a MATCH** — a path that IS present
+  would have been reported absent. (b) The bats dead-assertion ratchet caught my ANTI-VACUOUS arm
+  being itself vacuous — a `!` negation MID-test is dead because errexit skips it. (c) My own
+  wrapped prose line beginning `# shellcheck read each bare …` was parsed as a malformed directive
+  and aborted the whole file, which that lint's `--selftest` caught. **Four land attempts for one
+  land.**
+
+  **A teammate corrected the lead's instrument, and that is the methodological keeper.** I screened
+  the `.claude-next` hooks fork with `cmp -s` and reported "52 identical" — **`cmp` FOLLOWS
+  SYMLINKS**, so a link-into-the-checkout compares equal BY CONSTRUCTION and the sweep was vacuous.
+  The conclusion survived for a better reason (0 regular files of its own, empty reverse gap), and
+  `migrations/0013` now classifies each entry (same link target / resolved-byte-identical /
+  directory) and refuses on anything else, with arm 6 pinning exactly that.
+
+  **Lands.** `ee05adc63` (`bf63ce9f91fd` — `code_locality_warn`: a DISPATCHABLE label can still name
+  a repo without the code; 0 misfiled among the 13 path-bearing rows, 36 of 49 UNMEASURED and said
+  so) · `dcd16bd32` (`61d8605a25fc` — install.sh; the value is `$HOME`-derived while the write is
+  `--global`, and git resolves `--global` through `GIT_CONFIG_GLOBAL`/`XDG_CONFIG_HOME` first, so
+  they are not bound to the same HOME; discriminator is the passwd DB via getpwnam, not a path
+  denylist) · `4063d5679` (`a78f0fa4223a`) · `963dbd0a2` (`70cc9f44040f` — grouping-sweep fail-CLOSED;
+  **exit 2 is a measured choice**: `--assert` is this script's own stored falsifier and cc-premise
+  reads exit 0 as THE CONDITION IS GONE, so an absent engine did not merely fail to measure, it
+  RETRACTED the escalation row — 2 is already in `_FALSIFIER_UNASKABLE_RCS`, and autonomy-sweep's
+  consumer was fixed in the same diff) · `11b85f97b` (`a148bd3bc3e6` — cc-premise gated on the
+  ITEM's project, not the SHA's, so every meta-item about another repo minted `verdict=suspect`;
+  now widens to sibling repos on a miss and keeps THREE states, and a real fixture leak was caught:
+  unpinned, the widening reached the operator's real checkouts where the "resolves nowhere" token
+  resolves) · `7b1049846` (`7ea31ffa1a08` — migration 0014; the trace question its filing gated on
+  is SETTLED: **352 subagent transcripts exist**, so it is a harvest-index gap, not data loss) ·
+  `17ecae6c6` (`8c6606b6f048` — FF-GATE; the class was DETECTED and enforced by nothing, and the
+  quiet since 08-12 is not a fix: `5626e682f` removed deploy-now's raw ff on 08-10 and ungated
+  advances continued two more days) · `7c08a4bbf` (`11da376d60e3` — migration 0013) ·
+  the row-6 doc (`f5b31e05b0f7`).
+
+  **`f5b31e05b0f7` — GROUND-UP row 6 reconciled, and the campaign's last row now self-heals.**
+  `docs/plans/GUARDRAIL_HOOKS_V2.md` (262 lines) exists and is `status: open`, so the `plan-open`
+  generator — which takes an OPEN PLAN DOC as input and was structurally blind to the one row that
+  never had one — can now mint dispatcher-reachable rows for it. STEP -1 against `origin/main`, 18
+  days after the payload was composed: **8 of 12 claims MET or SUPERSEDED**. The whole graveyard
+  cherry-pick step is DEAD WORK (all five files on trunk, proven with a negative control beside the
+  positive); row 13's inbound remainder is SUPERSEDED because **row 13 falsified its own premise**
+  (contaminated denominator; clean instrument 92/92 = 100%); the payload's "`/goal` DOES NOT EXIST"
+  inferred absence-of-FEATURE from absence-of-a-slash-command-FILE. **What still FAILS is what the
+  row was commissioned for, and it got WORSE**: 62→**79** distinct `(event,script)` pairs, 4→**7**
+  drifting, every one missing from `.claude-next` ALONE, because registration writes four files and
+  skips the fifth — and `settings-drift-assert.sh` is correct, has a `--selftest`, and has **zero
+  live callers**. Root cause is A8: all five `settings.json` are REAL FILES with distinct inodes, so
+  hooks converge for free via per-file symlinks and `settings.json` does not converge at all.
+
+  **THE ONE ROW LEFT OPEN, and the instrument defect that stopped it.** `8942f3b1506d` (R-3,
+  HOOK_CHAIN_COST) is BLOCKED by its own terms on "a differential corpus proving identical verdicts
+  on every DANGER pattern first". Its premise is stale — it says 12 grep forks / ~42 ms;
+  `hooks/validate-bash.sh` is now **1012 lines with 32 grep sites**. A teammate built the right
+  harness (a shim dir on `PATH`, one wrapper per external, logging each exec) and it **self-destroyed
+  on a defect worth inheriting**: every shim body is `exec grep "$@"` while `PATH="$S/shim:$PATH"`,
+  so the bare name re-resolves to the shim and self-execs forever — the 772,768 `grep` lines in its
+  fork log are ONE INFINITE SELF-EXEC, not a measurement, and the same defect is in `shim/pwd`.
+  `measure.sh` already used absolute `/usr/bin/*` for its OWN accounting, so the author knew the
+  hazard for the harness and not for the shims. **Fix: `exec /usr/bin/grep "$@"` inside each shim.**
+  (Same class as `self-identity-guard-must-fully-resolve`.) Nothing was committed; the row is handed
+  to #15 with the corrected instrument.
+
+  **Instrument note for every successor: `cc-backlog list --open` FOLDS IN BLOCKED ROWS.** It
+  reported 27 for this condition when the true open count was 17. Filter on `.status=="open"`
+  explicitly, and use `(.condition//"")` — a null condition makes a bare `test()` throw.
+
+  **Not claimed as live.** Both new migrations are **c10 by design** (0013 gated on zero live
+  `.claude-next` panes — that account HAD live panes at land time; 0014 registers subagent-stop):
+  they stage and wait for a human, and `registration-state.sh` reports them `not-delivered`. The
+  land's smoke gate SHED (`selector answered FULL … the verifier proves the tree`), so the
+  behavioural evidence is that the lead re-ran all nine touched suites in-turn: **115 assertions, 0
+  failures**. `deploy-live.sh` was run and **declined**: no GREEN tree is a descendant of live HEAD
+  `12b4740c8` (newest green is BEHIND it), lag 23 commits / 2h inside the 25/6h degrade budget — so
+  the shared checkout is 23 behind and none of these nine commits are live yet. Not filed as a new
+  row: the platter already renders that deploy-lag line, and double-filing it would be net-filing.
+
 - **2026-08-17 ~08:47Z — recycle #13: `master-verification-integrity` at `0 open / 1 blocked
   (1 operator-gated)`. Every one of the four rows was diagnosed WRONG in its own filing, and each
   was wrong in a different way — that is the transferable finding, not any single fix.**
