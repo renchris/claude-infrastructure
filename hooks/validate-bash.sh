@@ -659,12 +659,46 @@ if echo "$CMD" | grep -qE 'drizzle-kit[[:space:]]+push'; then
   deny "drizzle-kit push bypasses migration history and causes schema drift. Use pnpm generate instead."
 fi
 
-# git add -f / --force (argv-aware)
-if check_real_flag "--force" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
-  deny "git add --force blocked — gitignored files are intentionally excluded. Force-adding bypasses .gitignore protection."
+# git add -f / --force — read off `git add`'s OWN argv (hooks/lib/is-true-flag.sh ::
+# git_add_force_scan). The two conditions used to be independent — "a real -f SOMEWHERE in $CMD"
+# AND "the text `git add` SOMEWHERE in $CMD" — which is two different invocations whenever the
+# command has more than one clause: `rm -f f.txt && git add f.txt` was denied, and denied with a
+# reason naming something it does not do. The same looseness ran the other way and mattered more:
+# `git add -fv`, `git add -Af`, `git -C /tmp/x add -f` and `git stage -f` all walked past, because
+# the flag had to be spelled as its own bare token and `add` had to be argv[1]. Backlog
+# 44750ff72ae7; the equivalence class is not enumerable by regex, so it is not enumerated.
+GIT_ADD_SCAN=""
+GIT_ADD_SCAN_RC=2
+GIT_ADD_PRESENT=0
+# Presence gate FIRST, and bash-native so it costs no fork: this runs on every Bash tool call in
+# the fleet, and the scan behind it forks python3 (~30 ms). It cannot hide a force-add — a real
+# invocation must contain the literal `git` and the literal subcommand (git does not abbreviate
+# subcommands), and `stage` is the only other name for `add`.
+if [[ "$CMD" == *git* && ( "$CMD" == *add* || "$CMD" == *stage* ) ]]; then
+  GIT_ADD_PRESENT=1
+  # `declare -F` is not ceremony: hooks/ deploys as per-file symlinks, so a live layer can briefly
+  # hold a NEW validate-bash.sh beside an OLD lib. Absent function → text path, never a crash.
+  if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F git_add_force_scan >/dev/null 2>&1; then
+    GIT_ADD_SCAN=$(git_add_force_scan "$CMD")
+    GIT_ADD_SCAN_RC=$?
+  fi
 fi
-if check_real_flag "-f" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
-  deny "git add -f blocked — gitignored files are intentionally excluded. Force-adding bypasses .gitignore protection."
+if [[ "$GIT_ADD_PRESENT" == "1" && "$GIT_ADD_SCAN_RC" == "0" ]]; then
+  while IFS=$'\t' read -r ga_force ga_tok; do
+    [[ "$ga_force" == "1" ]] || continue
+    deny "git add $ga_tok blocked — gitignored files are intentionally excluded. Force-adding bypasses .gitignore protection. This reads git add's own argv: a -f belonging to another command on the same line is not this rule."
+  done <<<"$GIT_ADD_SCAN"
+elif [[ "$GIT_ADD_PRESENT" == "1" ]]; then
+  # UNCLEAR (python3 absent / unparseable) or VALIDATE_BASH_LEGACY=1 → the pre-argv text rule,
+  # unchanged. It over-blocks a sibling clause's -f, which is the safe direction and exactly what
+  # shipped; it is a rollback of the PARSER, never a re-opening of the bypass. Reached only behind
+  # the presence gate, so a command with no `git add` in it no longer pays check_real_flag's fork.
+  if check_real_flag "--force" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
+    deny "git add --force blocked — gitignored files are intentionally excluded. Force-adding bypasses .gitignore protection."
+  fi
+  if check_real_flag "-f" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
+    deny "git add -f blocked — gitignored files are intentionally excluded. Force-adding bypasses .gitignore protection."
+  fi
 fi
 
 # --no-verify bypasses pre-commit hooks (CLAUDE.md critical rule)
