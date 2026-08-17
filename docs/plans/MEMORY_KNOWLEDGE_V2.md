@@ -349,6 +349,12 @@ never by count* — biting on the read that decides whether to build at all.
 | AC9 | **MET** | both mechanisms are read-only against the store; the gate only ever *refuses* |
 | AC10 | **MET** | coordinator, 2026-08-07 |
 
+🪦 **Graveyard verdict on the superseded side (2026-08-17).** The M1 bytes AC1·AC2·AC3 supersede were
+recovered onto a local branch, `fix/memory-budget-recover`, which is **RETIRED and must never be
+merged** — ledger `e2af8839be87`. The branch is kept only so the bytes survive. Full verdict, with
+the present/absent content reads on both sides, lives in the originating doc:
+`docs/ground-up-payloads/row9-memory-knowledge.md` (header).
+
 ### 7.4 Constants re-derived this session — the cap is not a constant
 
 Every figure below is first-person on **binary 2.1.220** (`ps -o command= -p $PPID` →
