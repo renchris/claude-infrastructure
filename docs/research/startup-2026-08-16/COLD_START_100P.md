@@ -814,3 +814,79 @@ only as good as its definition of "done", and on this box "done" has repeatedly 
 different to the harness than to the process. Prefer end-to-end, harness-visible acceptance
 (`T_help` on a **reused** pane) over any component timing — which is why the red-team replaced the
 absolute gate with the instrument-independent delta `T_help_render − T_help_typed ≤ 250 ms`.
+
+---
+
+## R2 — Follow-on sweep (2026-08-17): S3 and S5 are DROPPED, not deferred; S2's premise was wrong
+
+The operator asked for every remaining free win and loose end completed. Working them produced
+three reversals, so this section records the *reasons*, which outlive the items.
+
+### DROPPED — S5 (`_cc_sync_account` generation stamp, claimed 54 ms)
+
+**It re-arms a measured two-day fleet-wide auth outage.** The proposed key is "`~/.claude`'s mtime
++ entry count unchanged", and the skip would bypass not just the share loop but the **heal** and
+**reap** branches below it. The reap loop exists for a transient lock captured then released — and
+in exactly that scenario the entry count returns to its previous value, so the stamp reads
+*unchanged* precisely when the reap is needed. That is the incident `config-mirror.zsh:92-105`
+documents in its own comment: dangling `.oauth_refresh.lock` symlinks "disabled the in-session
+OAuth token refresh on all four accounts", producing "an 8-hourly logout-while-working for two
+days". 54 ms does not buy that risk. The doc's original risk line ("degrades silently") understated
+it — reading the code shows the skip removes the *only* mechanism that repairs the condition.
+
+### DROPPED — S3 (route verdict → T4 flat file, claimed 75 ms)
+
+Two independent reasons, both measured today:
+
+1. **The recoverable time is ~20 ms, not 75.** Decomposed: bare `python3 -c pass` = 20 ms; compiling
+   the 4,424-line script = **45–50 ms** (n=5) — pure waste, since a directly-run script is `__main__`
+   and Python never caches its bytecode; the actual work ≈ 30 ms. Total measured 90–110 ms today. A
+   stub+module prototype (so the bytecode caches in `__pycache__`) produced byte-identical `--route`
+   output and rc, and moved 0.09 s → 0.07 s. **20 ms, ~1% of the floor.**
+2. **Both implementations break a contract.** The doc's version (precompute the verdict at
+   keep-warm time) silently stops `log_route_decision()` from running — the record that
+   `claude-accounts:4283` calls out as load-bearing ("the desk decision goes on disk BEFORE either
+   exit path, so an abstention is recorded as faithfully as a pick"), or else duplicates the jsonl
+   schema in zsh, where it will drift. The stub version must relocate the `if __name__` wrapper
+   whose exit-5 semantics `handoff-fire` reads to decide **"a wave is safe to fire"**.
+
+Re-open only if `claude-accounts` is restructured for another reason; then the stub is free.
+
+### CORRECTED — S2's "nothing is printed" is false
+
+`worktree-pool.sh:79` is `log() { echo "→ worktree-pool: $1" >&2; }`, and the launcher captures the
+claim via `$( … )`, which takes **stdout only** — so the cold-path line has always reached the
+operator's terminal. The fallback was never silent. What it omitted was the *cost*. Landed the
+one-line fix instead of the proposed refuse-and-print: name the 20–30 s and the pre-warm command,
+then proceed. A refusal converts a slow success into a hard error, and the pool self-heals
+(observed 0/10 → 3/10 unaided in 3 h), so exhaustion is transient. Applied to **both** the repo copy
+and `~/.reso/bin/worktree-pool.sh`, which is a standalone copy, not a symlink — editing only the
+repo would have been an inert change (landed ≠ live).
+
+### LANDED
+
+| Item | Result |
+| --- | --- |
+| S4 — daily-stamp `cc-close-attrib`'s two sweeps | **20 ms** off every launch (measured, n=6; doc said 30) |
+| S7 — remove `mac-messages` | 4 config dirs (not the 3 predicted). 650 MB / 18 procs for **0 invocations across 7,196 transcripts, all time**. Capability preserved: the `msg` CLI covers it (213,985 messages, verified). Registration backed up to `mac-messages-registration-backup.json` |
+| S9 — six reso rules files | ~20K tokens/session recovered; frontmatter to line 1, directive below; markdownlint 0 issues |
+| `.alias` GC | `bin/cc-mailbox-alias-gc`, dry-run default, theft-free by construction. **Deletes nothing today** — oldest file is 19 d, all 1,243 tips have live transcripts |
+| reso `land-status.sh` | The money gate reported "no creds / API down" when `aws` was merely off-PATH. Three UNKNOWNs → three green reads |
+
+### FILED, not done — S8 (`ms365` → opt-in)
+
+Fails the Follow-On Gate's F1: 188 tool definitions / 1.3 GB, but **0.24% use is not 0%**, and the
+doc itself calls it "a judgement, not a measurement". Removing a capability the operator uses
+occasionally is a downside a reasonable operator would weigh, so this is theirs to call, not an
+auto-land. Re-add after removal is
+`claude mcp add ms365 -s user -- <cmd>`; the current registration is in every
+`~/.claude*/.claude.json` under `mcpServers.ms365`.
+
+### The pattern, now at four instances
+
+Every item in this sweep failed or succeeded on the same axis as the original bug — **the
+instrument, not the code**. S2's premise was an unread stderr stream. `land-status.sh` blamed
+credentials for a PATH. The `.alias` guard's first oracle was circular and its second under-reported.
+And the original `mailbox-drain` finding existed only because two prior waves had benchmarked an
+early-exit guard. Before trusting any measurement here, ask what the instrument had to exclude in
+order to produce it.

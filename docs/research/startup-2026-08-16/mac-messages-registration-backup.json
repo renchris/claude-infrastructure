@@ -1,0 +1,34 @@
+{
+  ".claude": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "mac-messages-mcp"
+    ],
+    "env": {}
+  },
+  ".claude-secondary": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "mac-messages-mcp"
+    ],
+    "env": {}
+  },
+  ".claude-tertiary": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "mac-messages-mcp"
+    ],
+    "env": {}
+  },
+  ".claude-quaternary": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "mac-messages-mcp"
+    ],
+    "env": {}
+  }
+}
