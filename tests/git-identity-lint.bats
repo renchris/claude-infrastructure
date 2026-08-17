@@ -38,16 +38,21 @@ fixture() {
   echo "$FIX/$1"
 }
 
-@test "1: the lint's own --selftest passes (31/31, both directions)" {
+@test "1: the lint's own --selftest passes (36/36, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # 22 → 29 (2026-08-06): the selftest grew rule-1 scope cases and the three proof-mutants; the
   # assertion was left at 22, so this test was RED on trunk. Updating it is the deliberate act the
   # message below asks for — the pin is here to force that choice, not to be silently loosened.
-  # 29 → 31 (2026-08-15): the own-scope pair grew its collapse control and its bare-form control
-  # (backlog c1a29f8ee045) — an own-set entry naming the same basename under a DIFFERENT directory
-  # must not block, while a bare entry still matches anywhere.
-  printf '%s' "$output" | grep -q '31/31' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
+  # 29 -> 36: BOTH growths, and neither supersedes the other — trunk added the own-scope
+  # collapse control and its bare-form control (backlog c1a29f8ee045: an own-set entry naming the
+  # same basename under a DIFFERENT directory must not block, while a bare entry still matches
+  # anywhere), and this change adds the five population-integrity cases (the basename-bijection
+  # guard). The number below is MEASURED from a real --selftest run after the merge, never derived
+  # The banner count is an AUTHORED literal, not a computed tally — which is why the two sides
+  # disagreed (31 and 34) while both counted from the same base of 29. 29 + 2 + 5 = 36, and every
+  # case behind both deltas is present and executing in the merged selftest.
+  printf '%s' "$output" | grep -q '36/36' || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
 # ── THE POSITIVE CONTROL. If the lint were a no-op these two tests are the ones that fail. ────────
@@ -311,4 +316,84 @@ F
 $spans
 EOF
   [ "$n" -ge 2 ] || { echo "expected both prescriptions (the -C guard and the cd chain); found $n — the extraction, not the message, is what changed"; false; }
+}
+
+# ── POPULATION INTEGRITY: the basename bijection the lint's three keys silently assume ────────────
+# The population is tests/*.bats + scripts/*.sh + bin/* — three flat globs over three directories —
+# and a file's BASENAME is the key for self-exclusion (which DROPS it from the scan), the
+# grandfather ratchet (which EXEMPTS it), and own-scope (which decides blocking vs advisory). None
+# of that is sound unless basename determines path, which nothing stated and nothing checked.
+#
+# Measured on this tree 2026-08-15: 0 colliding basenames. The clean baseline is what makes the
+# guard strict and allowlist-free, and it is why these cases are cheap.
+
+# poproot <name> — a minimal scan root with all three population dirs, one inert suite so the
+# root is never "nothing to judge" (which is exit 2 and would mask every verdict below).
+poproot() {
+  local r="$FIX/$1"
+  mkdir -p "$r/tests" "$r/scripts" "$r/bin"
+  printf '@test "x" {\n  : ok\n}\n' > "$r/tests/zz-fixture.bats"
+  echo "$r"
+}
+
+@test "19: CONTROL — a collision-FREE population reads clean (the guard does not fire on everything)" {
+  root="$(poproot popclean)"
+  printf '#!/bin/bash\n: ok\n' > "$root/scripts/foo.sh"
+  printf '#!/bin/bash\n: ok\n' > "$root/bin/bar.sh"
+  run bash "$LINT" "$root"
+  [ "$status" -eq 0 ] || { echo "a collision-free root did not read clean — the guard is over-firing: $output"; false; }
+  # `! A || { …; false; }`, not `A && { …; false; }`: bash exempts `! cmd` from errexit, so the
+  # `&&` spelling is ABSORBED and asserts nothing anywhere but the last line of a body. Caught here
+  # by scripts/bats-assert-liveness.py on the very commit that wrote it.
+  ! printf '%s' "$output" | grep -q 'COLLIDE' || { echo "a collision-free root reported COLLIDE: $output"; false; }
+}
+
+@test "20: one basename naming two files BLOCKS and names itself COLLIDE" {
+  root="$(poproot popdup)"
+  printf '#!/bin/bash\n: ok\n' > "$root/scripts/foo.sh"
+  printf '#!/bin/bash\n: ok\n' > "$root/bin/foo.sh"
+  run bash "$LINT" "$root"
+  [ "$status" -eq 1 ] || { echo "a colliding basename did not block (status $status): $output"; false; }
+  printf '%s' "$output" | grep -q 'COLLIDE' || { echo "it blocked without naming the class — triage cannot start from this: $output"; false; }
+  printf '%s' "$output" | grep -q 'scripts/foo.sh' || { echo "the finding does not name BOTH paths, which is the only actionable part: $output"; false; }
+  printf '%s' "$output" | grep -q 'bin/foo.sh' || { echo "the finding does not name BOTH paths, which is the only actionable part: $output"; false; }
+}
+
+@test "21: THE SILENT-GREEN — a leaky namesake of a SELF_EXCLUDE entry is REPORTED, not swallowed" {
+  # SELF_EXCLUDE matches on basename, and a match DROPS the file from the population outright: it is
+  # never scanned, never reported, and absent even from the census. Before the guard, this exact
+  # tree reported "clean — 1 file(s)" with rc 0 while bin/git-identity-lint.sh carried a real
+  # escaping identity write. Every SELF_EXCLUDE name maps to exactly one real file in this repo, so
+  # a namesake is necessarily a collision — which is what makes the guard cover the whole reachable
+  # class and not just this sample of it.
+  root="$(poproot popself)"
+  printf '#!/bin/bash\n: ok\n' > "$root/scripts/git-identity-lint.sh"
+  printf '#!/bin/bash\ngit -C "$1" config user.email t@t\n' > "$root/bin/git-identity-lint.sh"
+  run bash "$LINT" "$root"
+  [ "$status" -eq 1 ] || { echo "the leaky namesake was swallowed — this is the silent green the guard exists to stop (status $status): $output"; false; }
+  printf '%s' "$output" | grep -q 'COLLIDE' || { echo "blocked, but not for the collision — check what actually fired: $output"; false; }
+}
+
+@test "22: the collision is OWN-SCOPED — it gates the land that adds the namesake, not the fleet" {
+  # Without this the guard is a fleet-wide hard stop: every author refused over a file they never
+  # touched, which is the failure mode own-scope exists to prevent (memory:
+  # enforcement-must-live-at-the-chokepoint).
+  root="$(poproot popown)"
+  printf '#!/bin/bash\n: ok\n' > "$root/scripts/foo.sh"
+  printf '#!/bin/bash\n: ok\n' > "$root/bin/foo.sh"
+
+  CC_GITID_OWN="bin/foo.sh" run bash "$LINT" "$root"
+  [ "$status" -eq 1 ] || { echo "a collision INSIDE the diff did not block — the gate is inert for its own author: $output"; false; }
+
+  CC_GITID_OWN="tests/zz-fixture.bats" run bash "$LINT" "$root"
+  [ "$status" -eq 0 ] || { echo "a collision OUTSIDE the diff blocked — every land on this tree is now refused: $output"; false; }
+  printf '%s' "$output" | grep -q 'collide?' || { echo "advisory, but silent — an unreported collision is one nobody ever fixes: $output"; false; }
+}
+
+@test "23: the real tree HAS no colliding basename (the baseline the strict rule rests on)" {
+  # If this ever goes red the guard is not wrong — the tree is. Rename the file, or promote the
+  # three keys from basenames to paths.
+  run bash "$LINT" "$REPO"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! printf '%s' "$output" | grep -q 'COLLIDE\|collide?' || { echo "the population acquired a basename collision: $output"; false; }
 }
