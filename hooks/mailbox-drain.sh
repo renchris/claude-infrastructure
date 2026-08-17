@@ -241,7 +241,15 @@ MBXADOPT
   fi
 
   if [ "$_adopted" -gt 0 ]; then
-    _more="$(mailbox_take "$own_uuid" 0)"                      # surface the adopted lines NOW
+    # BOUNDED, and the bound is load-bearing (2026-08-16 red-team D2). Until the tip-set fix,
+    # adoption never actually completed — the hook was reaped inside mailbox_adoptable_predecessors,
+    # so this line effectively never ran. Making adoption work turns it on for ~48% of starts, and
+    # an UNBOUNDED take here would dump a whole adopted box into the first turn's context: the
+    # largest box on this machine holds 8,294 lines / 2.26 MB (~566K tokens). mailbox_take_n exists
+    # for exactly this ("a 600-line box must not be dumped into a tool result") and advances the
+    # cursor by precisely what it printed, so the remainder stays undelivered rather than being
+    # silently marked seen. Kill switch for the whole adoption path: CC_MBX_PULL_ADOPT=0.
+    _more="$(mailbox_take_n "$own_uuid" 0 "${CC_MBX_ADOPT_MAX_LINES:-200}")"  # surface adopted lines NOW
     [ -n "$_more" ] && body="$([ -n "$body" ] && printf '%s\n' "$body"; printf '%s' "$_more")"
   fi
 fi

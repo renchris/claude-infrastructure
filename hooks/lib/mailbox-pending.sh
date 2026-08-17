@@ -545,14 +545,45 @@ mailbox_alias_trail() { # <pane>
 # without a daemon and without row 4's (currently inert) beat oracle: a pane holds one session at a
 # time, so a session that is the tip of some pane's trail is being addressed as live RIGHT NOW.
 # Used only to REFUSE adoption — never to assert death. Deliberately conservative in that direction.
+#
+# PERFORMANCE (2026-08-16): this used to `tail | awk` PER FILE — two forks × every alias file. At
+# 1,300 files that is ~2,600 forks, measured at 5.0 s for a single MISS, and a miss is the common
+# case. `mailbox_adoptable_predecessors` calls it once per trail candidate, so a reused pane paid
+# 5 s+ and `mailbox-drain.sh session-start` was REAPED at its `timeout: 5` with its work discarded
+# — silently dropping peer mail on 47.9% of session starts. One awk pass over the same files is
+# 0.04 s median (n=5, 1,296 tips / 1,300 files), i.e. ~100×.
+#
+# The set is memoised for the life of the process. That is the CORRECT lifetime, not a shortcut: a
+# hook is short-lived, and the one write that could invalidate the set mid-run is our own session's
+# alias append — which cannot change any answer, because every caller already skips `q = self`.
+# A consistent snapshot is additionally SAFER than re-reading: it cannot half-see a concurrent
+# append and flip a liveness verdict between two candidates in the same scan.
+_MBX_TIPSET=
+_MBX_TIPSET_LOADED=
+_mbx_tipset_load() {
+  [ -n "$_MBX_TIPSET_LOADED" ] && return 0
+  _MBX_TIPSET_LOADED=1
+  local d; d="$(_mbx_alias_dir)"
+  [ -d "$d" ] || return 0
+  # Newline-delimited, with leading+trailing newlines so a `case` glob can anchor whole tokens.
+  # find|xargs rather than a glob: an empty .alias would make a bare `awk dir/*` read STDIN and hang.
+  _MBX_TIPSET="
+$(find "$d" -maxdepth 1 -type f -print0 2>/dev/null \
+    | xargs -0 awk '{ last[FILENAME] = $2 } END { for (f in last) if (last[f] != "") print last[f] }' 2>/dev/null)
+"
+}
+# Test seam: drop the memo so a suite can mutate .alias and re-read within one process.
+mailbox_tipset_reset() { _MBX_TIPSET=; _MBX_TIPSET_LOADED=; }
+
 mailbox_session_is_current() { # <session> → 0 = tip of some pane's trail, 1 = tip of none
-  local sess="${1:-}" f tip
+  local sess="${1:-}"
   _mbx_valid_uuid "$sess" || return 1
-  for f in "$(_mbx_alias_dir)"/*; do
-    [ -f "$f" ] || continue
-    tip="$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')"
-    [ "$tip" = "$sess" ] && return 0
-  done
+  _mbx_tipset_load
+  case "$_MBX_TIPSET" in
+    *"
+$sess
+"*) return 0 ;;
+  esac
   return 1
 }
 
