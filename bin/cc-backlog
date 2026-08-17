@@ -59,7 +59,13 @@
 #                                                                  before it is stored, and one
 #                                                                  that exits 0 against a live row
 #                                                                  is REFUSED (rc 5) — exit 0 is
-#                                                                  the RETRACTING direction.
+#                                                                  the RETRACTING direction. A
+#                                                                  SECOND screen then asks whether
+#                                                                  it would ALSO have passed on the
+#                                                                  day the item was filed, and
+#                                                                  WARNS (never refuses) if so —
+#                                                                  such a probe discriminates
+#                                                                  nothing.
 #   dups    [--project P] [--json] [--mode dodref|title|family|mechanical|all]
 #                                                                → REPORT candidate duplicate rows.
 #                                                                  FOUR keys, because a dodRef-less
@@ -2151,6 +2157,59 @@ premise_bin() {
   printf '%s' "${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$self")" 2>/dev/null && pwd)/cc-premise}"
 }
 
+# timeout_bin → an executable that BOUNDS a child, or "" when none is resolvable.
+#
+# Resolved the way cc-type-verified.sh resolves it, and ONE implementation for the same reason
+# premise_bin is one: `falsify` now bounds two different children (the probe, and the filing-day
+# screen), and two copies of this loop would be two answers to "can this box bound anything" —
+# divergent exactly under launchd, where PATH is short and `timeout` is frequently not on it.
+# Empty is a real answer and each caller decides what it means: the exit-0 screen degrades to "could
+# not ask" rather than run an ARBITRARY probe unbounded, while the filing-day screen proceeds,
+# because its child is our own cc-premise and every git read inside it is already bounded at 10s.
+timeout_bin() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  printf ''
+}
+
+# filing_day_warn <id> <probe> — print the ANTI-COVERAGE warning if the second screen says so.
+#
+# ALWAYS rc 0, and it writes NOTHING to the ledger: this reports, the caller stores regardless. See
+# THE SECOND SCREEN in cmd_falsify's header for why a warning and not a refusal, and why the verdict
+# is asked of cc-premise instead of re-derived here. Silence covers every failure path AND the
+# DISCRIMINATING/UNDECIDABLE verdicts — a screen that spoke on all three would put a line under every
+# falsify, and the one that matters would be the one nobody reads (memory:
+# alarm-polarity-and-attention-budget).
+filing_day_warn() {
+  local id="$1" probe="$2" pbin to out verdict
+  pbin="$(premise_bin)"
+  [ -x "$pbin" ] || return 0
+  to="$(timeout_bin)"
+  if [ -n "$to" ]; then
+    out="$("$to" "${CC_BACKLOG_FILING_SCREEN_TIMEOUT:-30}" \
+             "$pbin" screen "$id" --probe "$probe" --json 2>/dev/null)" || return 0
+  else
+    out="$("$pbin" screen "$id" --probe "$probe" --json 2>/dev/null)" || return 0
+  fi
+  # Parsed by the FIELD, never by position or substring. `screen` prints one JSON object whose `why`
+  # array carries the evidence lines, and a `grep -q ANTI-COVERAGE` over the blob would also match
+  # the word inside a probe that quotes it.
+  verdict="$(printf '%s' "$out" | jq -r 'if type == "object" then (.verdict // "") else "" end' \
+               2>/dev/null)" || return 0
+  [ "$verdict" = "ANTI-COVERAGE" ] || return 0
+  { printf 'cc-backlog falsify: WARNING — the filing-day screen calls this probe ANTI-COVERAGE.\n'
+    printf '  id %s\n' "$id"
+    printf '%s' "$out" | jq -r '(.why // [])[] | "  " + .' 2>/dev/null
+    printf '  STORED ANYWAY — this is a warning, not a refusal. A legitimate probe CAN key on a\n'
+    printf '  token that predates its item (a guard whose CALLER is what the fix adds). Only you\n'
+    printf '  can tell that from a probe that would have retracted this item the day it was filed.\n'
+  } >&2
+  return 0
+}
+
 # cmd_needs "<operator-only step>" [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]
 #
 # One-line filing of a step ONLY THE OPERATOR can do — see the `needs` paragraph in the header for
@@ -2620,6 +2679,36 @@ cmd_link() {
 # A probe we could NOT run (no timeout binary, the bound expired, an unreadable repo) is stored with
 # a WARNING rather than refused — identical to run_falsifier's own fail-open, and for the same
 # reason: "I could not ask" must never read as "the answer was no".
+#
+# THE SECOND SCREEN — "did it ALREADY pass on the day the item was filed?" — and it is a WARNING,
+# never a refusal. The exit-0 screen above can only ask about TODAY, and today is not where this
+# mechanism fails most: the CURRENCY pass hand-refuted 16 of 26 force-stored probes and the dominant
+# class, 8 instances against 2 for the next, was a probe whose token was ALREADY in the tree when its
+# item was filed (`918e9bac60b6`'s lint landed 08-06 against an item filed 08-10; `8e07e87770ce`'s
+# string by 5 minutes). Such a probe discriminates NOTHING. It is not weak coverage but ANTI-coverage:
+# the row reads as checked, and the first claim that re-runs it is a guaranteed false retraction of
+# work nobody ever did. The exit-0 screen is structurally blind to it — the probe passes at filing AND
+# fails today, so it sails through as a model citizen.
+#
+# ASKED THROUGH `cc-premise screen --probe`, NOT RE-IMPLEMENTED HERE, and that is the load-bearing
+# choice. The claim path already screens for exactly this (bin/cc-premise, THE SECOND SCREEN), and a
+# second copy of the rule in shell would be a second answer to one question — the failure mode this
+# repo has already paid for twice in this very mechanism (the falsifier fold, which diverged between
+# these two files on `""`, and premise_bin, which exists because two resolutions of "which cc-premise"
+# drifted). `--probe` is the interface for screening a string that is NOT stored yet, so the write
+# path needs nothing new. It also inherits the correction that arm earned: presence is read from the
+# reconstructed filing-day TREE, never from `git log -S --before=`, because `--before` filters on the
+# AUTHOR date and this repo routinely lands a change days after it was written — the prescribed form
+# CONVICTS `80e6637dfd9e`, whose probe in fact discriminated perfectly.
+#
+# FAIL OPEN, AND THE WARN/REFUSE SPLIT IS THE POINT. An anti-coverage reading is stored anyway,
+# because a legitimate probe CAN key on a token that predates its item — a guard whose CALLER is what
+# the fix adds, an assertion tightened around a line that was always there. Only the author can tell
+# those apart, so the screen hands over its evidence and leaves the judgment. Everything else — no
+# resolvable cc-premise, no python3, an unreadable repo, an UNDECIDABLE verdict (the majority: most
+# probes call a script or read outside the repo) — is silent, because "I could not ask" must not read
+# as either answer. Kill switch is cc-premise's own `CC_PREMISE_FILING_SCREEN=off`, deliberately not a
+# second one: one screen, one way to turn it off.
 cmd_falsify() {
   local id="${1:-}"; [ $# -gt 0 ] && shift
   local probe="" force=0 norun=0 clear=0
@@ -2690,11 +2779,7 @@ cmd_falsify() {
   # launchd must degrade to "could not ask", never to an unbounded probe holding this verb open.
   local rc="" to=""
   if [ "$norun" -eq 0 ]; then
-    local c
-    for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
-             /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-      [ -n "$c" ] && [ -x "$c" ] && { to="$c"; break; }
-    done
+    to="$(timeout_bin)"
     if [ -n "$to" ]; then
       local root; root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
       ( cd "$root" 2>/dev/null && "$to" "${CC_PREMISE_FALSIFIER_TIMEOUT:-20}" /bin/sh -c "$probe" ) \
@@ -2728,6 +2813,11 @@ cmd_falsify() {
     printf '  (%s). "Could not ask" is not "the answer was no" — read it yourself before trusting it.\n' \
       "$([ -n "$to" ] && printf 'bound expired' || printf 'no timeout binary resolvable')" >&2
   fi
+  # THE SECOND SCREEN — after the write, because it never changes what gets written. It is NOT gated
+  # on --no-run: that flag says "do not EXECUTE the probe", and this executes nothing — it re-asks
+  # the probe's own clauses against the filing-day tree with `git grep`/`cat-file`. A suite pinning
+  # the write path is therefore still screened, and still stores.
+  filing_day_warn "$id" "$probe"
   echo "$id"
 }
 
