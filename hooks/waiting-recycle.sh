@@ -241,7 +241,32 @@ is_monitoring_desk() {
   [ -n "$rv" ] || return 1
   { [ -n "$SID" ] && [ "$rv" = "$SID" ]; } || { [ -n "$u" ] && [ "$rv" = "$u" ]; }
 }
-NOTIFY_CMD="${CC_WR_NOTIFY:-}"                              # T-P1-8: empty → builtin osascript operator page
+# WHY THE ARM CHANNEL'S OWN STATE RIDES ON THE ABSTAIN (backlog 04010b4c8074, 2026-08-13).
+# `cc-roles/desk` was DELETED by a cleanup (scripts/autonomy-sweep.sh's own note: "No desk
+# orchestrator runs here. cc-roles/desk holds an iTerm2 pane uuid from 2026-07-26 whose pane has
+# self-closed…") and nothing connected that removal to THIS hook's arm-by-default gate, which keys
+# on the same file. The gate did not break loudly — it merged into the ordinary builder population:
+# 2,291 `not-armed` records over 14 days, byte-identical whether the role file named another pane
+# (correct, the common case) or did not exist at all (the channel is structurally dead for EVERY
+# session on this machine). An inert mechanism is indistinguishable from an absent one, so the only
+# repair is to make the two states DIFFERENT ON THE WIRE.
+#   docs/research/idle-recycle-not-proactive-2026-08-08.md §"Secondary items" · gate B.
+# Emitted as a SUFFIX after the first ':' so scripts/idl-abstain-alarm.sh's reason-token projection
+# (`split(":")[0]`) is unchanged: the token stays `not-armed`, unlisted in _default_blind, so this
+# still classifies DORMANT and never pages. A desk-less machine is a deliberate state, not a fault —
+# the same D6 reading scripts/desk-invariant.sh's `not-opted-in` branch already ships. VISIBLE, not
+# loud-as-in-paging. Precedent for the shape: af66a60b put FREEWIN_RUNG on boundary-handoff's
+# abstain "so a declining ledger stops being byte-identical to a dead arm".
+# Memo-aware but NOT memo-dependent: correct on the CLI path too, where _WR_ROLE_V is never filled.
+desk_role_state() { # → "" (role file present and non-empty) | ":no-role-file" | ":role-empty"
+  local rf="$COORD/cc-roles/$DESK_ROLE" rv
+  [ -f "$rf" ] || { printf ':no-role-file'; return 0; }
+  if [ -n "${_WR_ROLE_V+set}" ]; then rv="$_WR_ROLE_V"
+  else rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; fi
+  [ -n "$rv" ] || printf ':role-empty'
+  return 0
+}
+NOTIFY_CMD="${CC_WR_NOTIFY:-}"                            # T-P1-8: empty → builtin osascript operator page
 PUSH_BIN="${CC_WR_PUSH:-$CFG/hooks/push-critical.sh}"      # T-P1-8: Pushover break-through (INERT unless armed)
 ESCALATE_DEDUP_S="${CC_WR_ESCALATE_DEDUP_S:-900}"          # T-P1-8: page-once cadence while a desk stays wedged
 
@@ -419,7 +444,16 @@ case "${1:-}" in
       [ -f "$(live_for "$PWD")" ] && echo "  mode: LIVE (Stage-2 execs)" || echo "  mode: SHADOW (Stage-2 logs would-fire only)"
       [ -f "$(busyforce_for "$PWD")" ] && echo "  busy-force: ON (busy+high mid-work recycle also execs)" || echo "  busy-force: off (busy+high shadow-composes + pages, does NOT exec)"
       [ -s "$(brief_for "$PWD")" ] && echo "  brief: $(brief_for "$PWD") ($(wc -l < "$(brief_for "$PWD")" | tr -d ' ') lines)" || echo "  brief: none (LIVE blocked until set)"
-    else echo "not armed by sentinel (this cwd) — a session HOLDING the '$DESK_ROLE' role is armed-by-default at poll time (SHADOW) unless disarmed"; fi
+    else
+      echo "not armed by sentinel (this cwd) — a session HOLDING the '$DESK_ROLE' role is armed-by-default at poll time (SHADOW) unless disarmed"
+      # Name the dead-channel state HERE too, not only on the IDL row: `status` is the pull surface
+      # an operator reaches for, and "arm-by-default is on" reads as a live promise when the role
+      # file it keys on does not exist (backlog 04010b4c8074).
+      case "$(desk_role_state)" in
+        :no-role-file) echo "  !! arm-by-default is DEAD: $COORD/cc-roles/$DESK_ROLE does not exist — no session can be armed by role. Run 'desk-register' (or set CC_WR_DESK_ROLE) to revive it." ;;
+        :role-empty)   echo "  !! arm-by-default is DEAD: $COORD/cc-roles/$DESK_ROLE is EMPTY — it names no pane, so it can never match. Re-run 'desk-register'." ;;
+      esac
+    fi
     if [ -f "$c" ]; then
       cd_at="$(cat "$c" 2>/dev/null || echo 0)"; left=$(( COOLDOWN_S - ( $(date +%s) - ${cd_at:-0} ) ))
       [ "$left" -gt 0 ] 2>/dev/null && echo "cooldown: ${left}s remaining" || echo "cooldown: expired"
@@ -574,7 +608,10 @@ armed_by=""
 if   [ -f "$(arm_for "$CWD")" ]; then armed_by="sentinel"
 elif is_monitoring_desk;        then armed_by="desk-role"
 fi
-[ -n "$armed_by" ] || abstain "not-armed"
+# The suffix distinguishes a DEAD arm channel (`:no-role-file` / `:role-empty` — cc-roles/<role> is
+# gone or blank, so arm-by-default cannot fire for ANY session) from the ordinary unarmed builder
+# (bare `not-armed`). See desk_role_state() above for why.
+[ -n "$armed_by" ] || abstain "not-armed$(desk_role_state)"
 
 # ── AN ASSIGNEE IS NEVER THE DESK (2026-08-02) ───────────────────────────────────────────────────
 # Both arms above can arm a background team assignee by accident, so "it is probably not armed" is
