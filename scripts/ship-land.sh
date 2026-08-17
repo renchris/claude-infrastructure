@@ -2135,6 +2135,42 @@ bats_sc_nonverdict() {
 # reader hunting for a usage error the lint never reported. Default stays 2 — every other caller is
 # consuming a lint whose could-not-run IS a 2, and none of them had to change.
 # shellcheck disable=SC2329  # invoked from run_gate's arms below.
+# lint_own_scope <lint> <range> — the own-set for a lint that can NAME the population it judges.
+# Echoes newline-delimited repo-relative paths from this land's diff; rc 2 ⇒ the lint could not say.
+#
+# THE SEAM THIS CLOSES (backlog 0be0bd2c0b65). Two arms below used to build their own-set from a
+# pathspec RESTATED here — `-- 'install.sh' 'scripts/*'` for permission-gate, `-- 'bin/*' 'hooks/*'
+# 'scripts/*'` for tsv-pad — each with a comment telling the next author to widen it in the same diff
+# if the lint's env seam (CC_PERMGATE_SET / CC_TSVPAD_DIRS) ever reached another directory. Nothing
+# executes a comment. The two populations could drift apart, and the drift is silent in the dangerous
+# direction: a land that adds a violation under a directory the stale pathspec misses builds an
+# own-set WITHOUT that file, so the finding degrades to advisory and lands. Deriving the pathspec
+# from the lint makes them identical by construction rather than by discipline
+# (memory: resident-policy-must-not-restate-perishable-facts).
+#
+# rc 2 IS A NON-VERDICT AND MUST STAY ONE. A lint that cannot answer `--print-scope` (missing, or an
+# older copy that does not know the flag and exits 2 with empty stdout) must NOT silently yield an
+# EMPTY own-set — that is the exact failure this helper exists to prevent, arriving by a new route:
+# an empty own-set is the legitimate spelling of "this land touches nothing I judge", so it blocks on
+# nothing and says nothing. Callers route rc 2 into arm_nonverdict (⇒ GATE_KILLED ⇒ exit 9,
+# retryable), never into gate_red — the lint made no claim about the lander's tree.
+#
+# A land that legitimately touches none of the lint's population still returns rc 0 with EMPTY
+# output, which is the SET-BUT-EMPTY state own_run already carries. Empty-with-rc-0 and
+# empty-with-rc-2 are different answers here, exactly as they are for the lints themselves.
+# shellcheck disable=SC2329  # invoked from run_gate's permission-gate and tsv-pad arms below.
+lint_own_scope() {  # $1=lint path · $2=diff range
+  local lint="$1" range="$2" line
+  local spec=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && spec+=("$line")
+  done < <("$lint" --print-scope 2>/dev/null)
+  # bash 3.2 errors on "${arr[@]}" for an EMPTY array under `set -u`, so this test is not cosmetic —
+  # it is also the rc-2 gate. Same guard, same reason, as collect_actuation in permission-gate-lint.
+  [[ "${#spec[@]}" -gt 0 ]] || return 2
+  git diff --name-only "$range" -- "${spec[@]}" 2>/dev/null || return 2
+}
+
 arm_nonverdict() {  # $1=lint label · $2=optional extra hint line · $3=optional exit code (default 2)
   echo "⛔ gate: $1 could not RUN (exit ${3:-2}) — a NON-VERDICT, not a claim about your tree." >&2
   echo "  Nothing is wrong with the files named above (if any) — the lint never reached a verdict." >&2
@@ -2866,11 +2902,14 @@ run_gate() {  # $1=range → 0 green / 1 red
     local pgown=""
     if [[ "${SHIP_LAND_PERMGATE_OWN_SCOPE:-on}" != "off" ]]; then
       # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
-      # component strip. The pathspec must cover every population the lint judges (its actuation
-      # globs today are install.sh and scripts/*) — a land that adds a gate to a file this pathspec
-      # misses would build an own-set without it, the finding would drop to advisory, and it would
-      # land. If CC_PERMGATE_SET ever reaches another directory, widen this line in the same diff.
-      pgown="$(git diff --name-only "$range" -- 'install.sh' 'scripts/*' 2>/dev/null || true)"
+      # component strip. The pathspec must cover every population the lint judges — and it is now
+      # ASKED FOR rather than restated here, so widening CC_PERMGATE_SET moves both at once. The
+      # previous line hardcoded `'install.sh' 'scripts/*'` under a comment asking the next author to
+      # keep it in step by hand; see lint_own_scope for why that could only fail silently.
+      pgown="$(lint_own_scope "$PERMGATE_LINT" "$range")" || {
+        arm_nonverdict "permission-gate-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$pgown" ]] && echo "→ gate: permission-gate own-scope — blocking on $(printf '%s\n' "$pgown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: unbounded permission gates on the actuation paths (install · deploy · land)" >&2
@@ -2966,11 +3005,15 @@ run_gate() {  # $1=range → 0 green / 1 red
   if [[ -x "$TSVPAD_LINT" ]]; then
     local tsvown=""
     if [[ "${SHIP_LAND_TSVPAD_OWN_SCOPE:-on}" != "off" ]]; then
-      # The pathspec must list every population the lint judges (bin/ hooks/ scripts/), or a land
-      # adding an unpadded reader to a dir the pathspec misses yields an own-set without it, the
-      # lint reports it advisory, and the rule is detection again. Same widening the git-identity
-      # block documents. A docs-only land still yields an EMPTY own-set and blocks on nothing.
-      tsvown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
+      # The pathspec must list every population the lint judges, or a land adding an unpadded reader
+      # to a dir the pathspec misses yields an own-set without it, the lint reports it advisory, and
+      # the rule is detection again. It is now ASKED FOR rather than restated (the line used to
+      # hardcode `'bin/*' 'hooks/*' 'scripts/*'`), so CC_TSVPAD_DIRS moves both at once —
+      # see lint_own_scope. A docs-only land still yields an EMPTY own-set and blocks on nothing.
+      tsvown="$(lint_own_scope "$TSVPAD_LINT" "$range")" || {
+        arm_nonverdict "tsv-pad-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
     fi
     echo "→ gate: TSV field-collapse ratchet (an IFS=tab reader whose producer can emit an empty cell)" >&2
     own_run TSVPAD CC_TSVPAD_OWN "$tsvown" "$TSVPAD_LINT" . >&2; local trc=$?

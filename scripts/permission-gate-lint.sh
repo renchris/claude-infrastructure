@@ -771,6 +771,35 @@ run_corpus() {
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, so a caller need not restate it ───────────────
+# One glob per line, honouring CC_PERMGATE_SET exactly as lint_tree does. The globs are already
+# repo-relative and git-pathspec-shaped, so a consumer needs no translation.
+#
+# WHY IT EXISTS (backlog 0be0bd2c0b65). scripts/ship-land.sh builds this lint's own-scope set — the
+# files that are allowed to BLOCK the land — from a hardcoded `-- 'install.sh' 'scripts/*'` pathspec,
+# and carried a comment telling the next author to "widen this line in the same diff" if
+# CC_PERMGATE_SET ever reaches another directory. Nothing executes a comment. A restated population
+# cannot learn that the real one moved (memory: resident-policy-must-not-restate-perishable-facts),
+# and the drift is SILENT in the dangerous direction: a land that adds a gate to a file the stale
+# pathspec misses builds an own-set without it, so the finding drops to advisory and lands. Deriving
+# the pathspec from HERE makes the two identical by construction rather than by discipline.
+#
+# THE FALLBACK IS `:-`, DELIBERATELY — the same operator lint_tree uses, so the two can never
+# disagree about what an unset-or-empty CC_PERMGATE_SET means (both fall back to EMBEDDED_SET).
+# Measured: `CC_PERMGATE_SET= --print-scope` prints the 5 embedded globs, not zero.
+# The consumer's NON-VERDICT is therefore reached by an UNRUNNABLE lint — a missing file, or an
+# older copy that does not know this flag and exits 2 with empty stdout — never by an empty set here.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split, for collect_actuation's reason: an unquoted expansion would also
+  # PATHNAME-EXPAND the set against the caller's CWD and print real repo paths instead of the globs.
+  set -f
+  # shellcheck disable=SC2086  # deliberate IFS split of the glob set; globbing is off for exactly this
+  printf '%s\n' ${CC_PERMGATE_SET:-$EMBEDDED_SET}
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
+fi
+
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   # The header block, DERIVED rather than a hardcoded line range: every edit to the header would
   # otherwise silently truncate --help mid-sentence.
