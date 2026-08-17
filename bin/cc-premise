@@ -38,7 +38,13 @@ starve the queue. An unread premise is "I could not tell", never "it is finished
 Verbs:
   check <id>       one-line `verdict=<token>` + the contract on stderr. exit 3 iff superseded.
   contract <id>    the brief-injectable block, or nothing at all. always exit 0.
-  sweep [--json]   the whole-store triage report (§S3 "mechanical first").
+  sweep [--json] [--record] [--close-falsified N] [--limit N]
+                   the whole-store triage report (§S3 "mechanical first"). `--limit N` SHARDS the
+                   pass: at most N probe-capable rows are actually PROBED, the rest are `deferred`
+                   to the next pass via a cursor that guarantees every capable row is asked exactly
+                   once per cycle. The report itself stays whole-store — only the measurement is
+                   sharded — and `deferred` is reported SEPARATELY from `unprobed`, which keeps its
+                   meaning ("no arm can speak for this row") and stays the coverage ratchet's input.
   coverage [--json]
                    how many LIVE rows CAN re-check themselves, split by ARM (stored ·
                    derived-plan · derived-postland) and by SOURCE. CAPABILITY, not execution:
@@ -73,6 +79,13 @@ from collections import defaultdict
 
 BACKLOG = os.environ.get(
     "CC_BACKLOG_FILE", os.path.join(os.path.expanduser("~"), ".claude/autonomy/backlog.jsonl")
+)
+
+# THE SHARD CURSOR — `sweep --limit N`'s memory of which capable rows this CYCLE has already asked.
+# Beside the stamp file and the pass stamp, because it is the same kind of fact: a small piece of
+# pass state that must survive between runs and means nothing without the store it indexes.
+CURSOR = os.environ.get(
+    "CC_PREMISE_CURSOR", os.path.join(os.path.expanduser("~"), ".claude/autonomy/premise-cursor.json")
 )
 
 
@@ -1969,11 +1982,28 @@ def plan_remaining_lines(ent):
     return out
 
 
-def assess(item_id, idx, out=None):
+def assess(item_id, idx, out=None, run_probes=True):
     """The predicate. Returns (verdict, contract_lines).
 
     `out`, when a dict is passed, is filled with ONE extra fact the return value cannot carry:
     `out["probed"]` — did a probe (stored or derived) ACTUALLY EXECUTE for this item?
+
+    `run_probes=False` is the SHARD arm (`sweep --limit N`) and it means one thing only: do not
+    EXECUTE this row's probe on this pass. Everything else — the plan snapshot, supersession, the
+    self-duplicate and corrector reads, the cited-sha and cited-path arms — runs exactly as it
+    always does, so a sharded sweep's REPORT still covers the whole store and only its measurement
+    is sharded. That split is not an optimisation, it is the reason the arm is affordable at all:
+    measured 2026-08-16, the 141 probes were ~262 s of a 265.81 s pass and everything else was
+    ~3 s, so deferring the probes alone shards ~99% of the cost while shrinking nothing a reader
+    depends on.
+
+    THE ONE THING A DEFERRED ROW MUST NOT LOOK LIKE IS AN UNPROBED ONE. `out["probed"]` stays
+    False here — no probe ran, and lying about that is the false-freshness trap this file's
+    `probed` channel exists to prevent — so the caller is given `out["deferred"]` to tell the two
+    apart. Folding a deferred row into `unprobed` would report a coverage regression on every
+    sharded pass, from an arm that measures capability and never changed (memory:
+    span-must-equal-subject); that is exactly why the shard was filed rather than built the first
+    time it was wanted.
 
     WHY THAT FACT NEEDS A CHANNEL OF ITS OWN, and it is the difference between a currency metric and
     a lie. `verdict == "clear"` has two utterly different causes that this function deliberately
@@ -1993,6 +2023,7 @@ def assess(item_id, idx, out=None):
     if out is not None:
         out["probed"] = False
         out["probe_kind"] = "none"
+        out["deferred"] = not run_probes
     ent = idx.get(item_id)
     if ent is None:
         return "unknown", []
@@ -2005,7 +2036,11 @@ def assess(item_id, idx, out=None):
     # words somebody wrote at filing time; this re-asks the question against today's tree. When a
     # re-run says the condition is gone, no amount of confident prose beneath it should be able to
     # send a worker at it.
-    fals = run_falsifier(item_id, ent)
+    # …unless this pass DEFERRED the row (see `run_probes` above). Gated at the top of the chain
+    # rather than inside each arm: all three arms are one composed question, and a shard that ran
+    # the cheap derived ones but not the stored one would answer it with the wrong arm — the
+    # precedence below (stored outranks derived) exists precisely so that cannot happen.
+    fals = run_falsifier(item_id, ent) if run_probes else None
     # MARKED AT THE ARM THAT RAN, never inferred afterwards from the verdict. `run_falsifier`
     # returns None for "no probe stored", "probes disabled" AND "the probe could not be run" — all
     # three mean nothing was measured, which is exactly what `probed` must report.
@@ -2034,7 +2069,7 @@ def assess(item_id, idx, out=None):
             fals = ("clear", kept + list(screen_lines) + [
                 "The falsifier's exit 0 is therefore NOT a retraction, and this item is NOT "
                 "refused on it. Judge the premise on its own text below."])
-    if fals is None:
+    if run_probes and fals is None:
         # …and when the item stores no probe, a `plan-open` item still HAS a question that can be
         # re-asked: its plan's own status. STORED WINS — this is reached only on None, never on a
         # stored probe's "still live", because a proxy must not outrank the measurement it stands in
@@ -2043,7 +2078,7 @@ def assess(item_id, idx, out=None):
         if out is not None and fals is not None:
             out["probed"] = True
             out["probe_kind"] = "derived-plan"
-    if fals is None:
+    if run_probes and fals is None:
         # …and a `post-land RED` item has one too: whether trunk has since gone green PAST the commit
         # it was filed against. Reached only on None for the same reason — a stored probe is the
         # item's own question and outranks any derived proxy. The two derived arms are mutually
@@ -2311,8 +2346,8 @@ def _trunk_sha():
     return ""
 
 
-def _record_validations(verdicts, sha):
-    """Hand the whole pass to cc-backlog, which is the ONE writer of the currency stamp.
+def _record_validations(verdicts, sha, merge=False):
+    """Hand the pass to cc-backlog, which is the ONE writer of the currency stamp.
 
     THE POINT OF THE WHOLE WAVE IS HERE. `run_falsifier` had exactly one call site — the claim path
     — so 205 of 327 live rows had never had their probe executed at all, and nothing recorded the
@@ -2324,6 +2359,10 @@ def _record_validations(verdicts, sha):
     whole or not at all, so a half-recorded pass cannot report the unwritten half as never-validated.
     Failures are reported and ignored — a census that cannot write its stamp must not fail the sweep
     that carries it.
+
+    `merge=True` is the SHARD form and says the batch is a PART of a pass, not the pass. It is set
+    from `--limit`, never inferred: a whole-store batch and a shard that happened to cover
+    everything are the same bytes, and only the caller knows which it meant.
     """
     if not verdicts:
         return 0, "empty"
@@ -2332,7 +2371,8 @@ def _record_validations(verdicts, sha):
     )
     try:
         p = subprocess.run(
-            [_backlog_bin(), "validated", "--batch", "--sha", sha],
+            [_backlog_bin(), "validated", "--batch", "--sha", sha]
+            + (["--merge"] if merge else []),
             input=payload.encode("utf-8"),
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120,
         )
@@ -2443,7 +2483,104 @@ def _norm_title(t):
     return re.sub(r"\s+", " ", t).strip()
 
 
-def cmd_sweep(as_json, record=False, close_cap=0):
+def _read_cursor():
+    """The shard cursor, or a fresh one. NEVER raises — an unreadable cursor restarts the cycle.
+
+    Restarting is the safe direction and the only honest one: the cursor's whole content is "which
+    rows this cycle has already asked", so losing it means asking some rows twice, which costs
+    wall-clock and corrupts nothing. The opposite failure — inventing a `seen` set — would silently
+    skip rows forever, and a currency pass that never reaches a row is exactly the blindness the
+    currency pass was built to end.
+    """
+    try:
+        with open(CURSOR, "r", encoding="utf-8") as fh:
+            cur = json.load(fh)
+        if not isinstance(cur, dict):
+            return {"schema": 1, "cycle": 1, "seen": []}
+        seen = cur.get("seen")
+        return {"schema": 1,
+                "cycle": int(cur.get("cycle") or 1),
+                "seen": [s for s in seen if isinstance(s, str)] if isinstance(seen, list) else []}
+    except (OSError, ValueError, TypeError):
+        return {"schema": 1, "cycle": 1, "seen": []}
+
+
+def _write_cursor(cycle, seen, sha):
+    """Persist the cursor atomically. Returns True on success; a failure is REPORTED, never fatal.
+
+    Atomic-by-rename for `cmd_validated`'s reason: a torn cursor read as a partial `seen` set would
+    re-ask an arbitrary slice of the cycle, i.e. the pass would silently stop being a shard.
+
+    A write failure does NOT fail the sweep. The probes have already run and the stamp has already
+    been recorded by the time this is called; refusing the pass over its bookkeeping would throw
+    away the measurement to protect the note about it. The consequence of the lost write is bounded
+    and self-correcting — the next pass re-asks this shard.
+    """
+    tmp = CURSOR + ".tmp"
+    try:
+        d = os.path.dirname(CURSOR)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"schema": 1, "cycle": cycle, "seen": sorted(seen),
+                       "lastTs": datetime.datetime.now(datetime.timezone.utc)
+                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "lastSha": sha or ""}, fh)
+        os.replace(tmp, CURSOR)
+        return True
+    except (OSError, ValueError, TypeError):
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _shard(capable_ids, limit):
+    """Pick this pass's shard from the probe-CAPABLE population.
+
+    Returns (shard, deferred, cycle, seen_before) — `seen_before` being this cycle's already-asked
+    set, which the caller unions with the shard and writes back only after the probes have run.
+
+    THE CURSOR IS A SET, NOT AN INDEX, and that is the whole design. An integer offset into the
+    fold would be a pointer into a list that changes under it: this store gains and closes rows
+    continuously (the close arm in this very function closes some), so an offset silently skips
+    rows that shifted left and re-asks rows that shifted right — and the rows it skips are invisible,
+    because nothing downstream can tell "deferred to the next pass" from "deferred forever". Keying
+    on the ids already ASKED makes the cycle's guarantee exact regardless of churn: every capable
+    row is probed exactly once per cycle, and a row filed mid-cycle joins the current one.
+
+    ASKED, NOT ANSWERED. A selected row is marked seen even when its probe could not execute — a
+    missing helper, a disabled kill-switch, a timeout. Requiring an answer would pin the cycle on
+    the first permanently-unrunnable probe and starve every row behind it, which is the same
+    starvation an index would cause, arrived at from the other side.
+
+    The `seen` set is intersected with today's capable ids on every read, so the file cannot grow
+    past the live population and a row that loses its probe leaves the cursor by itself.
+    """
+    cur = _read_cursor()
+    cycle = cur["cycle"]
+    capable_set = set(capable_ids)
+    seen = set(cur["seen"]) & capable_set
+    pending = [i for i in capable_ids if i not in seen]
+    if not pending and capable_ids:
+        # THE CYCLE COMPLETED — every capable row has been asked once. Start the next one over the
+        # whole population rather than reporting nothing to do: currency decays continuously, so a
+        # finished cycle is the signal to begin again, never the signal to stop.
+        #
+        # Guarded on `capable_ids` being non-empty: a store with nothing to probe has not completed
+        # a cycle, it has no cycle, and bumping the counter every pass over one would report an
+        # ever-rising cycle number as evidence of work that never happened.
+        cycle += 1
+        seen = set()
+        pending = list(capable_ids)
+    shard = pending[:limit]
+    shard_set = set(shard)
+    deferred = [i for i in capable_ids if i not in shard_set]
+    return shard, deferred, cycle, seen
+
+
+def cmd_sweep(as_json, record=False, close_cap=0, limit=0):
     items = _folded_items()
     if items is None:
         _die_open("cc-backlog list failed — cannot sweep")
@@ -2466,24 +2603,89 @@ def cmd_sweep(as_json, record=False, close_cap=0):
     # useless (a sibling wave's link pass rewrote 70% of it in one hour as pure bookkeeping, and the
     # store's p50 read 8 commits behind while the real figure was 361).
     # A currency stamp records a MEASUREMENT. No measurement, no stamp.
-    all_verdicts, unprobed = [], 0
+    #
+    # ── THE SHARD (backlog d23f3a444984) ────────────────────────────────────────────────────────
+    # MEASURED 2026-08-16 at utility: 265.81 s per pass, of which the whole-store fold is 3.30 s and
+    # the other ~262 s is 141 falsifier probes at ~1.9 s each. The cost had 2.5x'd in four days, so
+    # every bound sized against it rots on the same schedule — the pass's own bound had already been
+    # re-sized twice and 4 of its 5 production runs ever were rc 124. A fixed cost of 3.3 s under a
+    # variable cost that doubles weekly is the definition of a shardable job.
+    #
+    # WHAT IS SHARDED IS THE PROBE, NEVER THE REPORT. The buckets below (superseded · self-duplicate
+    # · falsified-by-prose · corrected · suspect) are computed for EVERY non-done row on EVERY pass,
+    # sharded or not, because they cost ~3 s in total and a report that shrank with the shard would
+    # make "0 superseded rows" mean two different things on alternating passes.
+    #
+    # 🚨 A DEFERRED ROW IS NOT AN UNPROBED ONE, and keeping them apart is the reason this arm was
+    # filed rather than built the day it was wanted. `unprobed` counts rows NO ARM CAN SPEAK FOR —
+    # it is the coverage ratchet's work queue, falls only when generators start emitting probes, and
+    # is asserted against a high-water mark. Folding ~120 deferred rows into it would file a
+    # coverage-regression row on every sharded pass, from an alarm whose subject (capability) had
+    # not changed at all (memory: span-must-equal-subject, alarm-polarity-and-attention-budget).
+    # So the population is split BEFORE anything runs, by `probe_capability` — which executes no
+    # probe and is the same arbiter `coverage` publishes from, so the split cannot disagree with the
+    # ratchet's own denominator.
+    #
+    # A ROW THE LEDGER HAS NO ENTRY FOR IS `plain`, NOT capable — deliberately narrower than
+    # `coverage`'s `idx.get(id) or it` fallback, and for a reason specific to this caller. Coverage
+    # is measuring the ROW and must never let one vanish from its denominator; this is deciding what
+    # to ASK, and `assess` returns `unknown` without reaching a probe when the id is absent from the
+    # index. Calling such a row capable would let the shard "defer" a probe that could never have
+    # run, which is the deferred/unprobed confusion again in miniature.
+    capable_ids, plain = [], set()
+    for it in nd:
+        ent = idx.get(it["id"])
+        if ent is not None and probe_capability(ent) != "none":
+            capable_ids.append(it["id"])
+        else:
+            plain.add(it["id"])
+    shard_cycle, deferred_ids, seen_before = 0, [], set()
+    if limit > 0:
+        shard, deferred_ids, shard_cycle, seen_before = _shard(capable_ids, limit)
+        probe_now = set(shard)
+    else:
+        probe_now = set(capable_ids)
+
+    all_verdicts, unprobed, deferred = [], 0, 0
     for it in nd:
         probe_out = {}
-        verdict, lines = assess(it["id"], idx, out=probe_out)
+        # `plain` rows are asked exactly as they always were: all three arms decline them, so the
+        # call is a no-op and this stays byte-identical for the population that carries no probe.
+        verdict, lines = assess(it["id"], idx, out=probe_out,
+                                run_probes=it["id"] in probe_now or it["id"] in plain)
         if probe_out.get("probed"):
             all_verdicts.append((it["id"], verdict))
+        elif probe_out.get("deferred"):
+            deferred += 1
         else:
             unprobed += 1
         if verdict != "clear":
             buckets[verdict].append({"id": it["id"], "status": it.get("status"),
                                      "title": (it.get("title") or "")[:120], "why": lines[:2]})
 
-    # THE PROBES HAVE NOW RUN — every one of them, against this tree, in this pass. Recorded before
+    # THE PROBES HAVE NOW RUN — this pass's whole shard of them, against this tree. Recorded before
     # anything is closed, so the stamp exists even if the closer refuses everything.
     sha = _trunk_sha()
     recorded, record_note = (0, "not-requested")
     if record:
-        recorded, record_note = _record_validations(all_verdicts, sha)
+        # 🚨 A SHARDED PASS MERGES ITS STAMP; A WHOLE-STORE PASS REPLACES IT. `validated --batch` is
+        # a SNAPSHOT by default — written whole or not at all, so a half-written pass cannot report
+        # its unwritten half as never-validated — and that is exactly right when the batch IS the
+        # whole population. Handing it a shard under those semantics would erase the other ~120
+        # rows' stamps every pass, driving `never_validated` from ~0 back to the full store on every
+        # run: the identical false-staleness reading, arrived at from the opposite side of the same
+        # metric. The caller's `--limit` is what declares the pass a shard, so the writer is told
+        # rather than left to infer it from a count that could be whole by coincidence.
+        recorded, record_note = _record_validations(all_verdicts, sha, merge=limit > 0)
+
+    # THE CURSOR ADVANCES ONLY AFTER THE PROBES RAN AND THE STAMP WAS OFFERED. Advancing it first
+    # would let a pass that dies mid-shard skip the rows it never reached — permanently, since
+    # nothing downstream distinguishes "asked and clear" from "never reached". Written before the
+    # closer for `_record_validations`'s reason: the closer perturbs the population it just measured.
+    cursor_note = "not-sharded"
+    if limit > 0:
+        cursor_note = "ok" if _write_cursor(shard_cycle, seen_before | probe_now, sha) \
+                      else "write-failed"
 
     closed, close_skipped, close_lines = 0, 0, []
     if close_cap > 0:
@@ -2571,6 +2773,20 @@ def cmd_sweep(as_json, record=False, close_cap=0):
         # it falls only when generators start emitting `--falsifier`, never as a side effect of this
         # pass running more often.
         "unprobed": unprobed,
+        # THE SHARD'S OWN RECEIPT, and `deferred` is deliberately a SIBLING of `unprobed` rather
+        # than a share of it. The two answer different questions — "no arm can speak for this row"
+        # vs "an arm can, and this pass chose not to ask it yet" — and only the first is a coverage
+        # fact. A reader (or a ratchet) that wants "rows a probe has not run against today" adds
+        # them; nothing forces the sum on a consumer that means only one of them.
+        "deferred": deferred,
+        "probe_capable": len(capable_ids),
+        "limit": limit,
+        "shard_cycle": shard_cycle,
+        # What this cycle still owes AFTER this pass — 0 means the next pass starts a fresh cycle.
+        # Printed rather than left to arithmetic: `probe_capable - len(seen)` is only equal to it
+        # while no row was filed mid-cycle, which is most passes and exactly not the interesting one.
+        "shard_pending": len(capable_ids) - len(seen_before | probe_now) if limit > 0 else 0,
+        "cursor_note": cursor_note,
         "validated_recorded": recorded,
         "validated_note": record_note,
         "validated_sha": sha,
@@ -2583,6 +2799,14 @@ def cmd_sweep(as_json, record=False, close_cap=0):
 
     w = sys.stdout.write
     w("cc-premise sweep — %d non-done items (%d done) · store %s\n" % (len(nd), len(done), BACKLOG))
+    if limit > 0:
+        # SAID OUT LOUD ON EVERY SHARDED PASS. The verdict counts below are whole-store, but the
+        # PROBED half of them is not, and a reader who does not know a shard ran will read a falling
+        # `falsified` count as the store getting healthier.
+        w("  shard   : cycle %d — %d of %d probe-capable row(s) asked this pass, %d deferred to the "
+          "next (cycle owes %d more) · cursor %s\n"
+          % (shard_cycle, len(probe_now), len(capable_ids), deferred,
+             report["shard_pending"], cursor_note))
     if record:
         w("  currency: %d row(s) PROBED and recorded (%s) @ %s · %d row(s) carry no probe at all, "
           "so nothing was asked and nothing was stamped\n"
@@ -2861,7 +3085,28 @@ def main():
             if cap < 0:
                 sys.stderr.write("cc-premise sweep: --close-falsified cap must be >= 0\n")
                 sys.exit(2)
-        cmd_sweep("--json" in rest, record="--record" in rest, close_cap=cap)
+        # `--limit N` — the SHARD arm. Same argument discipline as the cap above and for a related
+        # reason: a bare `--limit` cannot be allowed to mean anything, and 0 cannot be allowed to
+        # mean "no limit" on the command line. Internally 0 IS the no-limit sentinel, so accepting
+        # `--limit 0` from a caller would turn "probe nothing" into "probe everything" — the most
+        # expensive possible reading of the cheapest possible request.
+        limit = 0
+        if "--limit" in rest:
+            i = rest.index("--limit")
+            if i + 1 >= len(rest):
+                sys.stderr.write("cc-premise sweep: --limit needs a count (e.g. 150)\n")
+                sys.exit(2)
+            try:
+                limit = int(rest[i + 1])
+            except ValueError:
+                sys.stderr.write("cc-premise sweep: --limit takes an integer count, got %r\n"
+                                 % rest[i + 1])
+                sys.exit(2)
+            if limit < 1:
+                sys.stderr.write("cc-premise sweep: --limit must be >= 1 "
+                                 "(omit the flag to probe every capable row)\n")
+                sys.exit(2)
+        cmd_sweep("--json" in rest, record="--record" in rest, close_cap=cap, limit=limit)
     elif verb == "coverage":
         cmd_coverage("--json" in rest)
     elif verb == "screen":
