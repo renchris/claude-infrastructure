@@ -38,6 +38,36 @@
 #   backlog-grouping-sweep.sh --file         file/update ONE condition-keyed row when crossed
 #   backlog-grouping-sweep.sh --apply        write the links (group.py --apply → link.py --run)
 #   --floor N                                default 50 (the W2 DoD), or CC_GROUPING_FLOOR
+#
+# EXIT CODES — three, and the third is why this file was edited (backlog 70cc9f44040f):
+#   0  measured: under the floor, or over it and reported/filed
+#   1  --assert only: the floor is crossed
+#   2  COULD NOT MEASURE — bad usage, or THE ENGINE IS ABSENT (no python3 / no group.py)
+#
+# 🚨 THE ENGINE CHECK IS FAIL-CLOSED, AND IT WAS FAIL-OPEN FOR THIS MECHANISM'S ENTIRE DEPLOYED LIFE.
+# The two guards below used to `exit 0` with one line to stderr — and autonomy-sweep calls this with
+# `>/dev/null 2>&1`, so the line went nowhere and the rc read as a clean store. install.sh's
+# deploy-class gap meant `scripts/backlog-consolidation/*.py` never reached the live layer at all
+# (fixed in 6d96bf560), so the LIVE copy of this sweep answered "no grouper at … (fail-open)" with
+# rc 0 on every 5-minute tick, forever: wired in, running on schedule, reporting success, folding
+# nothing. The fail-open is the reason nobody found out — a fail-CLOSED check would have paged on
+# the first tick. (Same shape as deploy-parity-assert.sh's want=0 arm, which measured exactly this.)
+#
+# WHY 2 AND NOT A NEW CODE OF ITS OWN. `--assert` is this script's stored falsifier
+# (`--falsifier "bash … --assert --floor N"` below), and cc-premise's `run_falsifier` reads exit 0 as
+# THE CONDITION IS GONE — so an absent engine did not merely fail to measure, it RETRACTED the
+# escalation row and told the reader to close it. cc-premise already has a could-not-ask band for
+# exactly this, `_FALSIFIER_UNASKABLE_RCS = {2, 124, 126, 127}`, which renders "UNVERIFIED, not
+# confirmed". Minting a fourth code would land OUTSIDE that set and be rendered "NOT REFUTED — the
+# probe declined to retract", i.e. a new non-verdict state that strands its own consumer. Picking the
+# code the consumer already handles is what fixes the consumer in the same diff (memory:
+# new-nonverdict-state-strands-its-consumers).
+#
+# THE PAGE IS DAMPED AND IT IS A FILING, NOT A PRINT — same two reasons as the floor row above: a
+# printed warning dies with the terminal, and a producer that re-derives one conclusion every sweep
+# re-sends it every sweep (page-damp.sh's own 570-pages-in-three-days forensics). It fires only in
+# `--file` mode, so `--assert` stays a pure read: it is run as a probe under cc-premise's 20 s bound,
+# and a probe that writes to the ledger it is being asked about is not a probe.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,8 +89,44 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-command -v python3 >/dev/null 2>&1 || { printf 'python3 missing — cannot measure (fail-open)\n' >&2; exit 0; }
-[ -f "$GROUP" ] || { printf 'no grouper at %s (fail-open)\n' "$GROUP" >&2; exit 0; }
+# Send-damping, best-effort: an absent lib means UNDAMPED, never a lost page (page-damp.sh's own
+# fail-open posture). Resolved through the tolerant ladder self-path-lint green-cases as (g).
+for _c in "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/page-damp.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
+          "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+
+# engine_absent <reason> — the fail-CLOSED exit. Says it on stderr for a human at a terminal, FILES
+# it for the scheduled caller whose stderr goes to /dev/null, and exits 2 in every mode.
+engine_absent() {
+  printf 'backlog-grouping-sweep: %s — CANNOT MEASURE (fail-closed, rc 2)\n' "$1" >&2
+  if [ "$MODE" = "file" ] && [ -x "$BACKLOG_BIN" ]; then
+    # The fingerprint is the STATE, never a clock or a count — a fingerprint that moved every sweep
+    # would look wired and damp nothing. Two engine states, so two fingerprints: a python3 that
+    # disappears while the grouper is present is a different fact from a grouper the deploy classes
+    # never carried, and a change between them is news that must not wait out the other's TTL.
+    if ! command -v damp_should_send >/dev/null 2>&1 || damp_should_send "store:backlog" "GROUPING-ENGINE-ABSENT:$2"; then
+      "$BACKLOG_BIN" add --project claude-infrastructure \
+        --condition backlog-grouping-engine-absent \
+        --title "the backlog grouping sweep cannot run: $1 — it is wired into autonomy-sweep on a 300 s tick and has been reporting success while folding nothing; every ungrouped row stays one dispatch slot until the engine is back" \
+        --source backlog-grouping-sweep \
+        --falsifier "command -v python3 >/dev/null 2>&1 && [ -f '$GROUP' ]" \
+        --dod-ref "origin/main:docs/plans/BACKLOG_SELF_DRAINING_2026-08-12.md" >/dev/null 2>&1 \
+        || {
+          # The marker records an INTENT to send. The filing failed — most likely because the very
+          # engine that is missing is the one cc-backlog needs — so drop it, or the whole TTL would
+          # suppress the retry of a page nobody ever received.
+          command -v damp_forget >/dev/null 2>&1 && damp_forget "store:backlog" "GROUPING-ENGINE-ABSENT:$2"
+          printf 'backlog-grouping-sweep: could not file the engine-absent row\n' >&2
+        }
+    fi
+  fi
+  exit 2
+}
+command -v python3 >/dev/null 2>&1 || engine_absent "python3 missing" "no-python3"
+[ -f "$GROUP" ] || engine_absent "no grouper at $GROUP" "no-grouper"
 export CC_BACKLOG_BIN="$BACKLOG_BIN"
 
 if [ "$MODE" = "apply" ]; then
