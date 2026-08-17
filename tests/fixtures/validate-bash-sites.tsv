@@ -1,0 +1,53 @@
+# Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
+# proposes converting from `grep -qE` to bash-native `[[ =~ ]]`.
+#
+# Columns (TAB separated):
+#   id            stable id used in the report and the doc
+#   line          line number in hooks/validate-bash.sh (checked by the harness — an edit that
+#                 moves a site makes the coverage assertion FAIL, which is the point)
+#   form          grep invocation form: qE | qiE | oE | qF
+#   feed          how the subject reaches grep: raw (printf '%s') | nl (echo, adds \n) |
+#                 pipeline (site 599 only: sed|tr|sed splits into MULTIPLE LINES first)
+#   subject       what is matched: whole (all of $CMD — can be multi-line) | line (one extracted
+#                 occurrence, newline-free by construction) | clause (tr ';|' '\n' split —
+#                 newline-free) | token (one argv token) | stream (a multi-line stream)
+#   verify        lit  = `pattern` must appear literally on that line of the hook (drift check)
+#                 syn  = pattern is synthesised at runtime (interpolated flag / ${PWD##*/}), so
+#                        no literal check is possible; recorded here as the instantiated form
+#   expect        EQUIVALENT | DIVERGENT — the MEASURED verdict this corpus pins. The harness
+#                 fails if reality no longer matches, in EITHER direction (a site that stops
+#                 diverging means the corpus lost its counterexample = a vacuous control).
+#   pattern       the ERE (or literal, for qF) exactly as the hook has it
+#
+id	line	form	feed	subject	verify	expect	pattern
+S01a	114	qE	nl	whole	syn	EQUIVALENT	(^|[[:space:]])--force([[:space:]]|$)
+S01b	114	qE	nl	whole	syn	EQUIVALENT	(^|[[:space:]])--no-verify([[:space:]]|$)
+S02	472	qE	nl	whole	lit	DIVERGENT	(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)
+S03	503	qE	raw	whole	lit	EQUIVALENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]|$)
+S04	542	oE	raw	whole	lit	DIVERGENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]+[^;&|]*)?
+S05	545	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S06	546	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)|--force([[:space:]=]|$)
+S07	599	qE	pipeline	stream	lit	DIVERGENT	^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)
+S08	600	oE	raw	whole	lit	DIVERGENT	(pkill|killall)[^;&|]*
+S09	604	qE	nl	line	lit	EQUIVALENT	(bats|ship-land|postland-verify)
+S10	608	qE	nl	line	lit	EQUIVALENT	\$PWD|\$\{PWD|\$\(pwd|`pwd|\$\(basename|(^|[[:space:]])-P[[:space:]]|\.worktrees/|(^|[^a-zA-Z0-9])wt-[a-zA-Z0-9]
+S11	612	qF	nl	line	syn	EQUIVALENT	r15-diffcorpus
+S12	624	qiE	nl	whole	lit	DIVERGENT	\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b
+S13	625	qiE	nl	whole	lit	DIVERGENT	\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b
+S14	630	qE	nl	whole	lit	DIVERGENT	drizzle-kit[[:space:]]+push
+S15	635	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
+S16	638	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
+S17	657	qE	nl	whole	lit	DIVERGENT	git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b
+S18	676	qE	raw	whole	lit	DIVERGENT	\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)=
+S19	684	qE	raw	whole	lit	DIVERGENT	\bconfig\b
+S20	685	qE	raw	whole	lit	DIVERGENT	\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b
+S21	686	qE	raw	whole	lit	DIVERGENT	\bcc\.identity\.exempt[[:space:]]+[^[:space:]]
+S22	776	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
+S23	778	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
+S24	779	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
+S25	781	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
+S26	950	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
+S27	956	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	971	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	986	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	989	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)

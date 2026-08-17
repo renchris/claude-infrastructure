@@ -1,0 +1,307 @@
+# Differential corpus for hooks/validate-bash.sh pattern sites.
+#
+# 🚨 THIS FILE CONTAINS LITERAL DANGER STRINGS BY DESIGN. It is read from disk by the harness;
+#    never paste a case body into a Bash tool call — the live hook will deny the call.
+#
+# Format — one record per case; bodies may be empty, whitespace-only, or MULTI-LINE:
+#
+#   ### <case_id> | <subject-classes> | <label>
+#   <input line 1>
+#   <input line 2>
+#   ### END
+#
+# subject-classes: which site `subject` columns this input can legitimately reach.
+#   whole   the full $CMD (a real agent tool call — CAN be multi-line)
+#   line    a single occurrence extracted upstream by grep -oE (newline-free by construction)
+#   clause  a `tr ';|' '\n'` split fragment (newline-free by construction)
+#   token   one argv token
+#   stream  the multi-line stream site 599 greps
+# A case is scored against a site only when the site's subject appears in this list; that is why
+# a multi-line case is not charged against a site that can never see a newline. Every case that
+# CAN reach a site is scored — the applicability tags narrow reachability, never the verdict.
+#
+# Lines starting with '#' outside a record are comments. A '#' INSIDE a record body is data.
+
+### tp-sudo-rm | whole,line,clause,stream | true positive: sudo rm, the classic system-damage shape
+sudo rm -rf /tmp/build-cache
+### END
+
+### nm-sudo-rm-msg | whole,line,clause,stream | near miss: the same words inside a commit message
+git commit -m "docs: explain why sudo rm is refused"
+### END
+
+### tp-forkbomb | whole,line,clause,stream | true positive: fork bomb
+:(){ :|:& };:
+### END
+
+### tp-rm-bare | whole,line,clause,token,stream | true positive: a bare rm
+rm foo.txt
+### END
+
+### nm-rm-path-segment | whole,line,clause,stream | near miss: 'rm' as a path segment, not a command
+ls -la /var/lib/rm/data
+### END
+
+### nm-rm-inside-word | whole,line,clause,stream | near miss: 'rm' inside 'warm' and 'rmdir'
+echo "the warm cache and rmdir helper"
+### END
+
+### tp-rm-rf-root | whole,line,clause,stream | true positive: catastrophic rm at root
+rm -rf /
+### END
+
+### tp-rm-Rf-root | whole,line,clause,stream | true positive: the -R spelling of the same command
+rm -Rf /*
+### END
+
+### tp-rm-long-flags | whole,line,clause,stream | true positive: long-form flags, no bundle at all
+rm --recursive --force /*
+### END
+
+### tp-rm-safe-target | whole,line,clause,stream | true positive rm, SAFE build-artifact target
+rm -rf node_modules
+### END
+
+### ml-rm-second-line | whole | MULTI-LINE: the danger is on line 2 (pasted multi-line tool call)
+echo "cleaning up"
+rm -rf /tmp/x
+### END
+
+### ml-heredoc-body | whole | MULTI-LINE: a heredoc message body quoting a danger string
+cat <<'EOF' > /tmp/note.txt
+never run rm -rf / on this box
+EOF
+### END
+
+### tp-pkill-bats | whole,line,clause,stream | true positive: unscoped kill of the gate program
+pkill -f bats
+### END
+
+### ml-pkill-second-line | whole,stream | MULTI-LINE: ^-anchored site 599 sees this on line 2
+echo one
+pkill -f bats
+### END
+
+### tp-killall-sudo | whole,line,clause,stream | true positive: sudo killall, the ^-anchored form
+sudo killall bats
+### END
+
+### nm-pkill-scoped-pwd | whole,line,clause,stream | near miss: worktree-scoped kill (exempted)
+pkill -f "bats.*$PWD"
+### END
+
+### nm-pkill-scoped-basename | whole,line,clause,stream | near miss: scoped by this worktree name
+pkill -f "bats.*r15-diffcorpus"
+### END
+
+### nm-pkill-not-first | whole,line,clause,stream | near miss: pkill NOT at the start of the line
+echo x && pkill -f bats
+### END
+
+### tp-ddl-turso | whole,line,clause,stream | true positive: DDL in a database-command context
+turso db shell mydb "DROP TABLE users"
+### END
+
+### nm-ddl-commit-msg | whole,line,clause,stream | near miss: DDL words in a commit message only
+git commit -m "fix: block DROP TABLE in migration"
+### END
+
+### wb-turso-suffixed | whole,line,clause,stream | word-boundary: 'turso' with a suffix, must NOT fire
+tursox db shell "DROP TABLE t"
+### END
+
+### wb-literal-b-turso | whole,line,clause,stream | word-boundary: literal 'b' bracketing the word
+bsqlite3b DROP TABLEb here
+### END
+
+### tp-git-add-force | whole,line,clause,stream | true positive: git add --force
+git add --force .env.secret
+### END
+
+### tp-git-add-f | whole,line,clause,stream | true positive: git add -f
+git add -f .env.secret
+### END
+
+### wb-git-addendum | whole,line,clause,stream | word-boundary near miss: 'git addendum'
+git addendum notes.txt
+### END
+
+### wb-git-addb | whole,line,clause,stream | word-boundary: 'git addb' — literal-b reading fires here
+git addb notes.txt
+### END
+
+### nm-force-in-message | whole,line,clause,stream | near miss: --force discussed inside a message
+git commit -m "the --force flag is banned in this repo"
+### END
+
+### tp-commit-no-verify | whole,line,clause,stream | true positive: --no-verify
+git commit --no-verify -m "wip"
+### END
+
+### tp-commit-dash-n | whole,line,clause,stream | true positive: git commit -n
+git commit -n -m "wip"
+### END
+
+### nm-commit-n-in-msg | whole,line,clause,stream | near miss: '-n' inside the message body
+git commit -m "use head -n 5 to peek"
+### END
+
+### tp-cc-git-identity | whole,line,clause,stream | true positive: identity-gate escape hatch
+CC_GIT_IDENTITY_OWNER=x git commit -m "wip"
+### END
+
+### wb-cc-identity-prefixed | whole,line,clause,stream | word-boundary: prefixed var name
+MYCC_GIT_IDENTITY_OWNER=x git commit -m "wip"
+### END
+
+### tp-exempt-write | whole,line,clause,stream | true positive: cc.identity.exempt WRITE
+git config --local cc.identity.exempt "project address"
+### END
+
+### nm-exempt-read | whole,line,clause,stream | near miss: the READ form, must stay allowed
+git config --get cc.identity.exempt
+### END
+
+### tp-gid-write-bare | whole,line,clause,stream | true positive: untargeted identity write
+git config user.email t@t
+### END
+
+### nm-gid-read | whole,line,clause,stream | near miss: identity READ
+git config --get user.email
+### END
+
+### nm-gid-global | whole,line,clause,stream | near miss: explicitly-scoped global write
+git config --global user.email me@example.com
+### END
+
+### nm-gid-list-l | whole,line,clause,stream | near miss: the -l read form
+git config -l
+### END
+
+### nm-gid-word-configure | whole,line,clause,stream | word-boundary: 'configure', not 'config'
+./configure --prefix=/usr/local
+### END
+
+### tp-reset-hard | whole,line,clause,stream | true positive: git reset --hard
+git reset --hard origin/main
+### END
+
+### wb-reset-hardball | whole,line,clause,stream | word-boundary: '--hardball' must NOT fire
+git reset --hardball origin/main
+### END
+
+### wb-reset-hardb | whole,line,clause,stream | word-boundary: '--hardb' — the literal-b reading
+git reset --hardb origin/main
+### END
+
+### tp-clean-x | whole,line,clause,stream | true positive: git clean -x bundle
+git clean -fdx
+### END
+
+### ml-clean-second-line | whole | MULTI-LINE: an unanchored pattern whose hit is on line 2
+cd /tmp/repo
+git clean -fdx
+### END
+
+### tp-drizzle-push | whole,line,clause,stream | true positive: drizzle-kit push
+drizzle-kit push
+### END
+
+### tok-safe-node-modules | token | safe rm target, bare
+node_modules
+### END
+
+### tok-safe-dotslash | token | safe rm target with a ./ prefix already stripped upstream
+node_modules/.bin
+### END
+
+### tok-safe-dotnext | token | safe rm target: .next
+.next
+### END
+
+### tok-unsafe-src | token | UNSAFE rm target
+src
+### END
+
+### tok-near-safe-prefix | token | near miss: a safe name as a PREFIX of an unsafe one
+node_modules_backup
+### END
+
+### tok-unsafe-home | token | UNSAFE rm target: home
+$HOME
+### END
+
+### edge-empty | whole,line,clause,token,stream | edge: empty input
+### END
+
+### edge-whitespace | whole,line,clause,token,stream | edge: whitespace-only input
+
+### END
+
+### edge-tab-separated | whole,line,clause,stream | edge: TAB instead of space between tokens
+git	add	-f	secret.env
+### END
+
+### edge-multibyte | whole,line,clause,stream | locale edge: multi-byte chars around the match
+git config user.name "Chrïs Ren — café"
+### END
+
+### edge-trailing-newline-only | whole,stream | edge: a lone trailing newline after the danger
+rm -rf /
+
+### END
+
+### edge-crlf | whole,stream | edge: CRLF line ending (pasted from a Windows source)
+git add -f secret.env
+### END
+
+### tp-compound-two-clauses | whole,line,stream | compound: two rm clauses, one safe one not
+rm -rf node_modules && rm -rf /etc
+### END
+
+### tp-pipe-to-db | whole,line,clause,stream | true positive: DDL piped into a db shell
+echo "TRUNCATE TABLE audit" | sqlite3 app.db
+### END
+
+# ── the [[:space:]]-spans-a-newline axis ─────────────────────────────────────────────────────────
+# grep matches per LINE, so `[[:space:]]+` inside a pattern can never cross one. In bash `=~` the
+# subject is ONE string and `[[:space:]]` INCLUDES \n, so the same pattern welds the end of one
+# line to the start of the next. The realistic carrier is a MULTI-LINE QUOTED MESSAGE BODY — a
+# commit message an agent writes with -m "…" spanning lines — where the words are prose, not a
+# command. grep correctly declines; the bash form invents a match across the line break and blocks
+# the commit. Direction: bash OVER-blocks. Reachable on every `subject: whole` site.
+
+### ml-body-sudo-rm | whole,stream | multi-line -m body: 'sudo' ends a line, 'rm' starts the next
+git commit -m "refuse to sudo
+rm anything under /, ever"
+### END
+
+### ml-body-drizzle-push | whole,stream | multi-line -m body: 'drizzle-kit' / 'push' across lines
+git commit -m "docs: never use drizzle-kit
+push against production"
+### END
+
+### ml-body-git-clean | whole,stream | multi-line -m body: 'git clean' / flag bundle across lines
+git commit -m "chore: stop recommending git clean
+-fdx in the runbook"
+### END
+
+### ml-pkill-then-more | whole,stream | MULTI-LINE: text AFTER the pkill occurrence (-oE reach)
+pkill -f bats
+echo done
+### END
+
+### ml-body-rm-flags | whole,stream | multi-line -m body: rm flags end a line, target starts next
+git commit -m "warn: rm -rf
+/etc is unrecoverable"
+### END
+
+### ml-rm-then-more | whole,stream | MULTI-LINE: text after the rm occurrence (-oE reach)
+rm -rf /tmp/x
+echo done
+### END
+
+### ml-body-git-add | whole,stream | multi-line -m body: 'git' ends a line, 'add' starts the next
+git commit -m "never run git
+add -f on a gitignored path"
+### END
