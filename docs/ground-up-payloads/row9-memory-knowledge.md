@@ -11,6 +11,28 @@ exceeds the limit AND grows the index — so compaction can never be locked out 
 #2 (2026-08-08) obeyed *reconcile, not rebuild*: not one line of M1 was built, AC1·AC2·AC3 are
 **SUPERSEDED rather than failed**, and it landed only the three genuine remainders.
 
+🪦 **THE RECOVERED M1 BYTES SURVIVE ON A RETIRED BRANCH — `fix/memory-budget-recover` — AND IT MUST
+NEVER BE MERGED** (ledger `e2af8839be87`; content-verified on trunk 2026-08-17). The branch is a
+LOCAL head on the operator's box, absent from `origin`, carrying the recovered `gu-memory-knowledge`
+bytes: the M1 artifacts named above. Keeping it is deliberate — the bytes survive. Merging it is not,
+because trunk already carries the better answer and every piece of it reads present by `git ls-tree`:
+`hooks/lib/memory-index-budget.sh` (the PreToolUse deny, sourced by `hooks/backup-before-write.sh`
+through a deref'd path with two fallbacks) · `hooks/lib/memory-index-measure.sh` (the ONE measurement
+the gate, `hooks/memory-nudge.sh` and `bin/cc-memory-rotate` share, so three measurers cannot disagree)
+· `tests/memory-index-budget.bats`. The retired side reads absent by the same command:
+`bin/cc-mem-budget` and `hooks/lib/memory-budget.sh` are on no trunk tree, and `MEM_INDEX_BYTE_CAP`
+survives only in docs — the live symbol is `MEMORY_INDEX_LIMIT` (`MEMORY_KNOWLEDGE_V2.md` §7.3, AC1).
+
+**Why this paragraph, and not just the ledger item.** The ground-up skill's own graveyard rule states
+the discriminator: *a land that never happened leaves exactly the same trace as a rejected design, and
+only the originating doc distinguishes them.* This branch had no such doc — its name appeared in NO
+file on trunk — while presenting every trace of unlanded work: the prescribed sweep
+(`git for-each-ref refs/heads` → `rev-list --count origin/main..$b`) lists it, and all of its paths
+are absent from trunk, which is also `scripts/stranded-sweep.sh`'s exact STRANDED definition. A
+sweeper obeying the doctrine would have "taken what survives on its merits" and rebuilt a superseded
+design — the campaign's fourth pass at one condition. Closing the ledger item would have deleted the
+only record; this is where it lives now.
+
 ⚠️ **Those three remainders were cited in the map by shas that no branch contains.** `25e897fd`,
 `1f828fcc` and `3f3600b4` are **dangling pre-rebase objects** — `git merge-base --is-ancestor` reads
 NOT-ON-TRUNK for all three, and `git branch -a --contains` is empty for all three, while the content
