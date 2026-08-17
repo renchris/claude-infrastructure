@@ -3275,6 +3275,64 @@ gate_nonzero_code() {  # $1=optional context → prints the operator line on std
 
 # ---- unlocked reconcile + gate (one optimistic round; parallel across sessions) ----
 
+# ── REBASE, HONOURING A rerere RESOLUTION GIT HAS ALREADY APPLIED ────────────────────────────
+# `git rebase` returns non-zero the moment a conflict STOPS it — including when rerere.autoupdate
+# (on globally: CLAUDE.md § Concurrent Sessions makes `git rerere` a standing setting) has already
+# replayed a recorded resolution and STAGED every path. The tree at that point is fully resolved
+# and one `--continue` from done, but a bare `if ! git rebase` reads only the exit CODE, calls it
+# "resolve it by hand", and throws the resolution away.
+#
+# Measured 2026-08-17 on refs/land/failed: 789 pins. The top branch alone had been retried 112
+# times across 5 days, and NO attempt was ever diagnosed — only counted. Replayed by hand,
+# claude/fire-20260816T094145Z-41172-1 stopped with BOTH its conflicts already staged by rerere
+# ("Staged '<path>' using previous resolution"), zero unmerged paths and zero conflict markers,
+# and rebased clean in ONE `--continue`. So the retries were not failing because the conflict was
+# hard; they were failing because the lander discarded a resolution git had already applied — and
+# a retry can never fix that, which is exactly why the count grew instead of the queue draining.
+#
+# The question after a failed rebase is therefore not "did it exit non-zero" but "is anything
+# ACTUALLY still unresolved". Both halves are checked, because each fails in a different direction:
+#   * unmerged paths (diff-filter=U) — the TOO-WEAK half: rerere replays only what it has seen
+#     before, so a partially-replayed rebase has real work left and MUST keep the exit-5 refusal.
+#   * conflict markers in the staged content — the TOO-STRONG half: the precondition for
+#     continuing is only "nothing is unmerged", i.e. SOMETHING staged every path. rerere is the
+#     expected stager but is not provably the only one (a stray `git add` from an earlier aborted
+#     attempt, a custom merge driver), and continuing over a marker lands `<<<<<<<` on trunk.
+#     Measured 2026-08-17 — rerere ITSELF cannot reach this arm: staging a resolution that still
+#     contains markers records ZERO postimages, so git never replays one. The arm is therefore
+#     fail-closed cover for a non-rerere stager, and its worst case is the pre-existing exit 5;
+#     tests/land-rerere-continue.bats pins it against a hand-staged marker, which is the reachable
+#     population (memory: cap-whose-population-is-empty — do not pin a case that cannot happen).
+# Only when both are clean do we continue. Anything else keeps the original refusal verbatim, with
+# the rebase still in progress and the backup ref intact — the author's recovery path is unchanged.
+rebase_onto_trunk() {  # $1=trunk → 0 = rebased (possibly via a rerere replay), 1 = real conflict
+  local TRUNK="$1" tries=0 fp_before fp_after gd ga
+  git rebase "origin/$TRUNK" >&2 && return 0
+
+  while [ "$tries" -lt 50 ]; do
+    tries=$((tries + 1))
+    # genuinely unresolved paths ⇒ nothing to continue, keep the refusal
+    [[ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]] && return 1
+    # a rebase that stopped for a reason OTHER than a conflict stop (no rebase in progress at all —
+    # e.g. the ref itself was bad) must not be "continued" either
+    gd="$(git rev-parse --git-path rebase-merge 2>/dev/null || true)"
+    ga="$(git rev-parse --git-path rebase-apply 2>/dev/null || true)"
+    [[ -d "$gd" || -d "$ga" ]] || return 1
+    if git diff --cached -U0 2>/dev/null | grep -qE '^\+(<{7}|={7}|>{7})([ 	]|$)'; then
+      echo "✗ ship-land: a replayed rerere resolution staged conflict markers — refusing to continue the rebase." >&2
+      return 1
+    fi
+    echo "→ ship-land: rebase conflict already resolved by git rerere (every path staged, no markers) — continuing (step ${tries})." >&2
+    fp_before="$(git rev-parse HEAD 2>/dev/null || true)$(cat "$gd/msgnum" 2>/dev/null || true)"
+    GIT_EDITOR=true git rebase --continue >&2 && return 0
+    fp_after="$(git rev-parse HEAD 2>/dev/null || true)$(cat "$gd/msgnum" 2>/dev/null || true)"
+    # no progress ⇒ `--continue` cannot resolve this one (e.g. the commit emptied out); refuse
+    # rather than spin the bound down against an unchanging tree.
+    [[ "$fp_before" = "$fp_after" ]] && return 1
+  done
+  return 1
+}
+
 unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_HEAD globals;
                                  # exits internally on rebase-conflict(5) / gate-red(6) /
                                  # nothing-to-land(0) / --dry-run(0).
@@ -3282,7 +3340,7 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
   echo "→ ship-land[unlocked]: fetch + rebase + gate (statics + ratchets + bounded smoke) — no lock held" >&2
   git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2
 
-  if ! git rebase "origin/$TRUNK" >&2; then
+  if ! rebase_onto_trunk "$TRUNK"; then
     echo "✗ ship-land: rebase onto origin/$TRUNK hit a conflict — resolve it, then re-run /ship. Rebase left in progress; backup ref intact." >&2
     exit 5
   fi
@@ -3367,7 +3425,7 @@ main_locked() {
     fi
     LAND_BASE="$GATE_BASE"
   else
-    if ! git rebase "origin/$TRUNK" >&2; then
+    if ! rebase_onto_trunk "$TRUNK"; then
       echo "✗ ship-land: rebase onto origin/$TRUNK hit a conflict — resolve it, then re-run /ship. Rebase left in progress; backup ref intact." >&2
       exit 5
     fi
