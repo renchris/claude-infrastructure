@@ -25,9 +25,9 @@ had become the work.
 | Wave | Locus | Deliverable | Depends on |
 |---|---|---|---|
 | **W0 · unwedge** ✅ DONE | **L** (lead-inline) | the dispatcher fires again; a terminal cloud session releases its slot | — |
-| **W1 · freshness** | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact | W0 |
+| **W1 · freshness** ✅ DONE | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact — **delivered: never-validated 536→387, 18 falsified rows retired, `cf0f11a4b`** | W0 |
 | **W2 · grouping-for-execution** ✅ DONE | **S** (dispatched, local) | the ungrouped remainder is folded into wave-sized `master-*` conditions; the applying scripts become tracked machinery — **delivered: ungrouped 424→7, ten master efforts, `1b044624d`** | W0 |
-| **W3 · capacity symmetry** | **S** (dispatched, local) | no unattended spawner can outbid the operator; the presence beat is consulted at SPAWN, not only at teardown | — (parallel with W1/W2) |
+| **W3 · capacity symmetry** ✅ DONE | **S** (dispatched, local) | no unattended spawner can outbid the operator; the presence beat is consulted at SPAWN, not only at teardown — **delivered: `scripts/lib/spawn-presence.sh` + three consumers, 31/31 RED-proved, `8576c0190`** | — (parallel with W1/W2) |
 | **W4 · drain** | **S ×N** (one long-running wave session per master effort) | the grouped efforts worked to done | W1, W2, W3 |
 
 **W0 was lead-inline and that needs its one line of justification:** it was four surgical edits in
@@ -144,8 +144,7 @@ reports `conservation=ok · 19 groups · 18 would fold · 0 ambiguous`. **The cr
 satisfied and no instrument on the box could observe it.** W2 owns the flip — on a series, not on this
 one reading.
 
-### 🚨 The BAND fix also attacks the thing blocking the ENTIRE live layer, and the arithmetic is
-### counter-intuitive enough that it was nearly shipped as a regression
+### 🚨 The BAND fix also attacks the thing blocking the ENTIRE live layer, and the arithmetic is counter-intuitive enough that it was nearly shipped as a regression
 
 Raising a timeout from 60 s to 180 s reads like it must make a suite slower, and `tests/autonomy-sweep.bats`
 runs the real sweep once per test across **49 tests with no stubs for the trigger or the ratchet** —
@@ -242,7 +241,19 @@ checkout, which trails trunk — so a brief must reference the trunk ref, not th
 **DoD:** ungrouped live rows < 50, and the number of distinct wave-sized efforts is countable on two
 hands.
 
-### W3 · Capacity symmetry — the operator can never be outbid again
+### W3 · Capacity symmetry — the operator can never be outbid again ✅ DONE (`8576c0190`)
+
+**Outcome: `scripts/lib/spawn-presence.sh` is new and consumed by `capacity-admit.sh` (×5),
+`handoff-fire.sh` (×4) and `agent-teams-enforce.sh` (×1); 31 cases, 31/31 RED against pristine
+`caab1c283`.** All five items landed and content-verified; the full account — including the two that
+came out different from the way the plan phrased them (item 4's reserve is **54**, not `~15`; the
+working day is **10:00→04:59**, not an assumed 08:00–20:00) — is in the Status log below. The five
+items as originally written are kept verbatim underneath, because item 2's phrasing named a direction
+the measurement then forced the other way.
+
+**DoD met:** `tests/spawn-presence.bats` case 20 drives BOTH gates over ONE pinned world and asserts
+they DISAGREE — autonomy refused on `reserve-slots`, the operator's own `capacity_gate` admitted —
+because either half alone is satisfiable by a gate that refuses or admits everything.
 
 1. **Consult the presence beat at every SPAWN site.** `cc-beat` is measured, live, and read by nothing
    that opens a pane. This is the single highest-leverage inert guard on the box.
@@ -299,27 +310,32 @@ reducing the sessions needed to work it.
 
 ## SUCCESSOR — start here
 
-State at the 2026-08-12 recycle: **🚀 landed, not live.** `c221caa58` + `39388b17d` are
-content-verified on `origin/main`; the live `~/.claude` layer still runs the pre-fix bytes because
-the shared checkout trails trunk and `deploy-live.sh` is fail-closed on a GREEN `postland-verify`
-stamp that does not yet exist.
+🚨 **W0–W3 are ALL LANDED. W4 is the only wave left, and it cannot be worked off-box.** Re-read
+2026-08-14 from an off-box session; the three build waves are content-verified on `origin/main`:
 
-**Do these in order. The first one may already be done for you.**
+| Wave | Sha | Filed row | Content-verified on trunk by |
+|---|---|---|---|
+| W0 · unwedge | `a984691f6` | — | — (heading already carried it) |
+| W1 · freshness | `cf0f11a4b` | `b585e86ea4e4` | `lastValidated` + `commits-since-filing` in `bin/cc-backlog`; `cc-premise` now has a caller in `scripts/autonomy-sweep.sh` (it had none) |
+| W2 · grouping | `1b044624d` | `ce1e9d1adab8` (the untracked `link.py`/`prune.py`) | ungrouped 424→7, ten master efforts |
+| W3 · capacity | `8576c0190` | `8ae4b508f274` | `scripts/lib/spawn-presence.sh` present; consumed by `capacity-admit.sh` ×5, `handoff-fire.sh` ×4, `agent-teams-enforce.sh` ×1 |
 
-1. **Check whether the fleet's convergence blocker just cleared.**
-   `ls -t ~/.claude/autonomy/postland/stamps | head -3` and read the newest verdict.
-   The two stamps before this work read `verdict:"hung"` / `failing:["tests/autonomy-sweep.bats"]`
-   with `run_s` 4,144 s and 5,235 s. **The arithmetic says that suite's probe block WAS the hang**:
-   49 tests × ~94 s of probe = ~4,600 s, which is essentially the whole run time, and the BAND fix
-   takes that to ~26 s × 49 ≈ 1,270 s. If the stamp against `39388b17d` is GREEN, run
-   `bash scripts/deploy-live.sh` and the whole backlog fix goes live in one step.
-   **If it still hangs, that is the highest-value target on the box** — nothing in `~/.claude`
-   can advance until it passes (filed `35190812890d`).
-2. **Confirm the unwedge actually took, once live.** `bin/cc-dispatch` should stop reporting
-   `reason:"at-ceiling"` with `fired:0`, and finished cloud sessions should start carrying
-   `.retired` markers (there were 0 across 38 declarations).
-3. **Then W1/W2/W3** below — filed as `b585e86ea4e4` (freshness), `ce1e9d1adab8` (the untracked
-   `link.py`/`prune.py`), `8ae4b508f274` (capacity symmetry). W3 is the one the operator feels.
+**So the only remaining item under this plan is W4 · Drain**, and its per-effort order is at the
+bottom of the Status log. **Do not accept an off-box dispatch of W4.** The plan's own § 3 measured
+why: 47 of 536 rows (8.8%) are off-box eligible and the refusal classes are *structural* — a shallow
+50-commit clone (confirmed again this session: `git rev-list --count HEAD` = 50, so no wave sha above
+resolves and only `git ls-tree` content-verification works), no `gh`, and no `~/.claude`, which is
+where the store, the beat and the live layer all are.
+
+**The two obsolete steps this section used to carry, and what replaced them.** It opened on a
+`🚀 landed, not live` state and sent the successor to `~/.claude/autonomy/postland/stamps` to see
+whether the convergence blocker (`35190812890d`) had cleared, then to fire W1/W2/W3. All three of
+those waves have since landed, so step 3 was pointing a successor at work that was already done —
+the exact stale-title failure `plan-phase-scan.sh --falsify` clause (b) exists to dissolve, arriving
+here through the *body* of the plan rather than its title. The convergence question is not closed and
+is not this plan's: the 2026-08-14 recycle-#3 entry measured the shared checkout still **5 commits
+behind `origin/main`** with `deploy-live.sh` declining, and routed it to
+`master-convergence-deadlock`. Read that entry, not this paragraph, for its live state.
 
 **Two traps this session hit, so you do not pay for them twice.**
 - **A timeout that is ALWAYS hit is not a bound, it is a fixed cost.** Raising one can make a suite
@@ -2320,3 +2336,71 @@ confirmed the file had been written.
 `master-convergence-deadlock` (84). 🚨 **Read `master-convergence-deadlock` before the others** — it
 is last by size but it is the blocker under `3e2358f03e23`, `6f183f5df5b9`, `48e14163e78a` and the
 skills track-half, so draining it unblocks work across every effort above it.
+
+### 2026-08-14 — OFF-BOX audit (`c9771c467a91`): W3 had been landed-and-unmarked for two days, and this plan's own falsifier can never retract ✅ DONE
+
+Fired off-box against `origin/main` (tree `0` behind trunk at start). Two deliverables, and the
+second is the transferable one.
+
+**1. THE MARKERS WERE STALE, and the plan was pointing successors at finished work.** `W3 · capacity
+symmetry` landed **`8576c0190`** on 2026-08-12 — the Status log entry above records it in full — but
+the wave's own `###` heading carried no `DONE` and no sha, and the Phase 0 table's `W1` and `W3` rows
+were still unmarked while `W0` and `W2` had their ✅. So `plan-phase-scan.sh` reported W3 `PENDING`
+for two days against work that was on trunk. Content-verified here before marking, because a shallow
+clone cannot resolve the shas at all (below): `scripts/lib/spawn-presence.sh` and
+`tests/spawn-presence.bats` are present on `origin/main`, and the three consumers the entry names
+reference it — `capacity-admit.sh` ×5, `handoff-fire.sh` ×4, `agent-teams-enforce.sh` ×1. W1
+(`cf0f11a4b`) likewise: `lastValidated` and `commits-since-filing` are in `bin/cc-backlog`, and
+`cc-premise` — item 1's "built, documented, and invoked by nothing" — now has a caller in
+`scripts/autonomy-sweep.sh`. **The `SUCCESSOR — start here` section was the worse half:** its step 3
+said *"Then W1/W2/W3"*, so the one section of this plan explicitly written to orient a successor was
+sending them at three landed waves. Rewritten to the wave/sha/verified-by table now there.
+
+**2. 🚨 THIS PLAN'S STORED FALSIFIER IS STRUCTURALLY UNSATISFIABLE, AND IT GETS WORSE EVERY TIME THE
+PLAN IS WORKED.** `plan-phase-scan.sh --falsify` exits 0 (premise gone, refuse the claim) only when
+**no** heading at level ≥2 reads `PENDING`. Measured on this file after every correction below: 16
+such sections, of which **exactly one — `W4 · Drain` — is remaining work.** The other 15 are
+3 containers (`Phase 0`, `3 · The waves`, `Status log`), 1 navigational (`SUCCESSOR`), 4 analysis
+narrative, and **7 Status-log entries that each describe COMPLETED work.** Reproduce with
+`scripts/plan-phase-scan.sh <this file> --markdown | grep '| PENDING |'`.
+
+The mechanism is that the status log is **append-only, and every recycle appends at least one `###`**
+— so each session that advances this plan makes its falsifier strictly harder to satisfy. That is the
+inversion: **work done on the plan raises the plan's own PENDING count.** A plan of this shape can
+never be retracted, so `c9771c467a91` and every future `plan-open` item minted from this H1
+re-dispatches forever, no matter how much of it is finished. The plan whose mission is *"make
+`cc-backlog` maintain and drain itself"* is the one its own instrument cannot drain.
+
+**The classifier is deciding it on incidental formatting, which is the proof it is not measuring
+work.** Status detection is `SUPERSEDED` → `DONE` → *any 7+ hex string in the heading* → `PENDING`.
+The recycle-#2 entry reads `DONE` **only because its title happens to quote `b15a2984d134` and
+`40613b786`**; recycle-#3 and the 24-day-false-alarm entry describe equally finished work and read
+`PENDING` because their titles carry no hex. Same class as `worker-claim-gate-coverage.bats` case 10
+above — **a test calibrated to FORMATTING** — arriving this time through the heading text instead of
+an anchor regex. (One authoring defect fixed in passing: the `BAND fix` heading was written as two
+consecutive `###` lines, which Markdown renders as two headings and the scanner counted as two
+sections, one of them a 1-line sentence fragment. Joined.)
+
+**Why the scanner was NOT changed here, and what was filed instead.** The obvious fix — do not count
+narrative/journal headings as work — makes **more** plans falsify. `plan-phase-scan.sh`'s own clause
+(a) exists precisely so this probe is a strict *superset* of the derived arm it shadows (memory:
+`cost-gate-must-be-strictly-weaker`), and a change in this direction is that rule inverted: it would
+silently retract genuinely-open plans fleet-wide. Sizing that needs the live store and the whole
+`docs/plans/` corpus, and this session had **neither** — see below. Shipping it from here would be
+the "instrument lying rather than subject breaking" failure this plan has now recorded four times.
+Filed as its own row against this plan, naming this entry.
+
+**The off-box refusal classes are confirmed, first-hand, and § 3's `8.8%` should be read as a
+ceiling.** `git rev-list --count HEAD` = **50** — the shallow clone § 3 predicted — so **none** of
+`a984691f6` / `cf0f11a4b` / `1b044624d` / `8576c0190` resolves in this tree, and `1b044624d` reports
+`NOT ancestor of origin/main` when it demonstrably is. **Every landing claim here had to be settled
+by `git ls-tree origin/main -- <path>` content-verification, never by sha ancestry or commit count**
+— which is the project rule anyway, and off-box it is the *only* available method. There is no
+`~/.claude`, so no store, no beat, no live layer: `cc-backlog` could not be reached to close this
+item, and **W4 · Drain is not off-box-eligible for the same reason** — it works rows in a store that
+does not exist here. Off-box sessions can advance this plan's *documents*; they cannot advance its
+*drain*.
+
+**State at this close.** W0/W1/W2/W3 all landed and content-verified; **W4 is the sole open wave**,
+its per-effort order unchanged from the recycle-#3 entry above. This item's own closure and the
+filing of the scanner finding are operator-gated on store access.
