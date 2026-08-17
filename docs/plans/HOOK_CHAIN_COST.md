@@ -25,7 +25,7 @@ store first, so closing this file drops nothing:
 
 | Remainder | Backlog id |
 |---|---|
-| R-3 — `validate-bash.sh`'s 12 `grep` forks (blocked on a differential corpus) | `8942f3b1506d` |
+| ~~R-3~~ — **ADJUDICATED 2026-08-17: the corpus exists and its answer is no.** See §5. | `8942f3b1506d` |
 | R-5 — `bash-execution.log` unbounded, and it is the decay window of every rate here | `9a25cbc24799` |
 | R-7 — no all-tool-call census, so no match-all hook's cost can be stated per-hour | `f6cc5c79885b` |
 
@@ -350,11 +350,76 @@ are keyed on, and ~3 ms on 1-in-5 calls does not buy perturbing it.
 |---|---|---|---|
 | ~~R-1~~ | **DONE — see M2 below.** | — | — |
 | ~~R-2~~ | **DONE — see M3 above.** Re-measured before it was touched: the 9 externals were exactly as filed. 9 → 2, −27.75 ms median. | ~~~32 ms~~ → **−27.75 ms measured** | — |
-| R-3 | `validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. **Deliberately not taken here** — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes. | ~42 ms | 6 |
+| ~~R-3~~ | **ADJUDICATED 2026-08-17 — the corpus was built and it RETIRES the remedy. See §5.1.** The original text is kept verbatim below because its reasoning was right and its numbers were not: *"`validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. Deliberately not taken here — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes."* | ~~~42 ms~~ → **36.7 ms measured, of which ~2.6 ms is convertible** | — |
 | ~~R-4~~ | **Superseded before it was filed** — the collapse is built and measured negative in `5c88633f`, landed inert. Not a remainder; see §3. Any revival must be measured under *sustained controlled* high load, since the win is O(load) and vanishes into noise at ambient. | — | — |
 | R-6 | **Registry/settings coupling introduced by M1.** `config/hook-chains.d/pretooluse-bash` names `curl-gate.py` because that is what settings.json registers today. If the operator runs `26-curl-gate-scope-activate.sh`, settings.json will name `curl-gate-scope.sh` and the two sets diverge. **No runtime effect while the dispatcher is inert** (it cannot run), and `tests/hook-chain-live-parity.bats`'s drift guard compares the registry against a test-internal `MEMBERS` array rather than live settings, so nothing reds either. But whoever wires the dispatcher must reconcile them — a note to that effect is in the registry file itself, at the point of use. | — | 6 |
 | R-7 | **No census of ALL-tool calls exists**, only of Bash. §2.4's fleet rate comes from `bash-execution.log`, so every per-hour figure in this document is scoped to `matcher: "Bash"` hooks. M3's subject runs on the **match-all** matcher, i.e. on a strictly larger population that nothing measures — so M3's fleet value is known only in direction, not magnitude, and the same blind spot covers `cc-permission-beacon.sh` and `mailbox-drain.sh`, which are also registered match-all. Needs a tool-call counter before any match-all hook's cost can be stated per-hour. | unmeasured | 6 |
 | R-5 | `bash-execution.log` is **9.46 MB** and unbounded (§8.5.5 flagged it at 23% over its stated cap; it has since grown). It is the *only* source for the fleet Bash rate in §2.4, so its rotation policy silently sets the decay window of every figure in this document. | — | 6 / 10 |
+
+---
+
+### 5.1 R-3 adjudicated — the corpus was built, and it says no (2026-08-17)
+
+R-3 blocked itself on its own terms: *"a differential corpus proving identical verdicts on every
+DANGER pattern first."* The corpus is the deliverable, and the optimization was only ever whatever
+the corpus authorized. It now exists — `scripts/validate-bash-differential.sh`,
+`tests/validate-bash-differential.bats`, 31 site rows × 66 corpus cases = **1,672 scored pairs, 56
+diverging** — and it authorizes almost nothing. Full report:
+`docs/research/validate-bash-grep-differential-2026-08-17.md`.
+
+**10 of 30 sites are safe to convert; 20 are not. On the modal path — the only path where the forks
+are actually spent — exactly 1 of the 10 always-executed greps is convertible.** The remedy's real
+prize is therefore **~2.6 ms, not 42 ms**, against a danger-pattern gate with a live scar on this
+exact file. It is not worth taking, and that is now a measurement rather than a caution.
+
+**The dominant cause is not subtlety, it is a silent semantic inversion.** `\b` is a word boundary
+in the BSD grep the hook resolves and a **literal `b`** in bash's `=~`, whose `regcomp` has no `\b`
+and drops the backslash — 13 of the sites carry one. Both directions were measured, with a control:
+
+```
+pattern '\bconfig\b'   input 'git config --get x'    grep=MATCH   bash=no       ← guard goes SILENT
+pattern '\bconfig\b'   input 'git bconfigb --get x'  grep=no      bash=MATCH    ← guard FIRES on noise
+pattern 'config'       input 'git config --get x'    grep=MATCH   bash=MATCH    (control: agrees)
+```
+
+The second cause is anchoring: `grep` anchors `^`/`$` **per line**, bash `=~` over the **whole
+string**, and `$CMD` is routinely multi-line here — which is exactly why `61826e193` (heredoc bodies
+are stdin, not argv) had to exist. A converted `^`-anchored pattern stops seeing line 2 onward.
+
+**The census corrected the premise in both directions at once**
+(`docs/research/validate-bash-fork-census-2026-08-17.md`, load bands matched to §2's, so the
+comparison is legitimate):
+
+| | R-3 filed | measured 2026-08-17 | direction |
+|---|---|---|---|
+| `grep` forks, modal path | 12 | **14** | count decayed **upward** |
+| ms attributed to them | ~42 | **36.7** | value decayed **downward** |
+| forks inside `validate-bash.sh` itself | 12 | **10** | 4 live in `hooks/lib/is-true-flag.sh:41`, which R-3 never names |
+
+The two errors partly cancel, which is why the headline scalar still looked about right. **The
+durable unit is the exec count, not the millisecond** — counts were byte-identical across three
+independent runs while the wall clock moved with load inside ten minutes.
+
+**Three things larger than R-3 that R-3 does not contain**, all newly measured:
+`grep` is **51%** of the modal path, not the whole story (24 externals, 14 of them grep) ·
+one `python3` exec costs **24.45 ms**, 9.3× a `grep`, and is the single most expensive fork in the
+file (off the modal path — the layer-1 grep short-circuit is the fix, and it works) ·
+the hook parses the **same stdin payload three times** with three `jq` execs (lines 46, 185, 1008),
+the same defect §2's audit named in `waiting-recycle.sh` and left unfixed here.
+
+**Taken this land:** the audit logger's own two forks (`7aefce5d6`) — `mkdir -p` recreating a
+directory that already exists, and a `date` duplicating a stamp the `jq` beside it can emit. It
+changes no danger pattern (it runs after every decision is made) and measures **+2.28 ms median
+paired, faster in 96/120 pairs** at load 11.0–14.3. **Not taken:** the remaining 2-of-3 `jq` parses,
+because that IS the gate's input path and its fail-open guard is the thing that must not be
+perturbed for ~7 ms — filed rather than done.
+
+**Method note, because the first measurement said the opposite.** A blocked A-then-B at n=41 read
+67.36 ms vs 67.59 ms — no saving, nominally slower — and would have been reported as a refutation.
+An interleaved paired design at n=120 resolves the same change at +2.28 ms with 80% paired wins.
+Load drifts over minutes; a blocked design charges that drift to whichever variant ran second. **At
+this effect size the experimental design, not the sample size, is what decides whether the effect is
+visible at all.**
 
 ---
 
