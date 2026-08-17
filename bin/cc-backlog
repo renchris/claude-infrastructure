@@ -1276,124 +1276,6 @@ EOF
   return 0
 }
 
-# ── CODE-LOCALITY VALIDATION (2026-08-17, backlog bf63ce9f91fd) ────────────────────────────────
-# project_dispatch_warn above answers "does this label name a project we drain?". It cannot answer
-# the NEXT question, and that is the one that stranded work: does the named project's repo actually
-# CONTAIN the code this item is about? A label can be perfectly dispatchable and still send every
-# worker to the wrong checkout.
-#
-# Live instance: a4c0c06e0829 ("cc-close-attrib.bats kill -SEGV fixture") was filed
-# project=reso-management-app, so cc-dispatch provisioned a worktree FROM ~/Development/
-# reso-management-app — but tests/cc-close-attrib.bats and bin/cc-close-attrib exist ONLY in
-# claude-infrastructure (re-verified today by git ls-tree in both: ci=1/1, reso=0/0). A worker that
-# trusts the project field opens the reso worktree, finds no such file, and cannot land. That item
-# accumulated 2 fast claim→reopen thrash cycles before a worker crossed repos BY HAND — the thrash
-# is the tell, because every pass looked like a fresh claimable item rather than a mislabel.
-#
-# WHY THIS RUNS ON THE RESOLVED PROJECT, NOT ONLY THE EXPLICIT ONE. project_dispatch_warn is
-# deliberately scoped to the explicit branch (the default path already normalizes through
-# project_default). This invariant is different: the default path resolves a label from `pwd`, and
-# filing FROM one repo ABOUT another repo's code is exactly how the live instance was minted. Both
-# branches can produce it, so the check sits after both (memory:
-# default-path-hardening-is-blind-to-the-explicit-argument, applied in the other direction).
-#
-# WARN, NEVER REFUSE — same three reasons as project_dispatch_warn, and one more that is specific
-# here: a title is PROSE. Path extraction is a heuristic over English, so a false positive is not
-# only possible but expected at some rate, and a heuristic must never hold the store shut. stderr,
-# id still on stdout at rc 0, every `id=$(cc-backlog add …)` caller byte-identical.
-#
-# SILENT WHENEVER IT CANNOT KNOW, and the asymmetry is deliberate — it warns only on POSITIVE
-# evidence both ways (>=1 cited path present HERE, and ZERO of them present THERE). No conf, no
-# `repo=` row for the label, a repo path that is not a readable git checkout, or a title with no
-# extractable path all yield silence, not a guess. An alarm that fired on every ambiguous title
-# would carry as few bits as one that never fires (memory: alarm-polarity-and-attention-budget).
-#
-# THE MEASURED INCIDENCE IS LOW AND THAT IS THE POINT. Audited today across the 49 open/claimed
-# rows whose project is not claude-infrastructure: 0 misfiled among the 13 that cite an extractable
-# path; the other 36 cite none and are UNMEASURED by this instrument, so "0" describes 13 rows, not
-# 49 (memory: zero-claim-must-name-its-excluded-strata). The named case is already cured by hand.
-# What was missing is the enforcement, which is this condition's whole subject: a conclusion that
-# nothing checks recurs the moment attention moves.
-
-# locality_repo_root → the checkout bin/cc-backlog itself lives in, symlink-resolved exactly as
-# dispatch_conf does, and for the same reason: production invokes this as $HOME/.claude/bin/
-# cc-backlog, so a dirname($0)-relative read lands in the deployed symlink tree instead of a repo.
-locality_repo_root() {
-  local s="$0" l
-  while [ -L "$s" ]; do
-    l="$(readlink "$s" 2>/dev/null)" || break
-    case "$l" in /*) s="$l" ;; *) s="$(dirname "$s")/$l" ;; esac
-  done
-  (cd "$(dirname "$s")/.." 2>/dev/null && pwd) || return 1
-}
-
-# locality_has_path <repo> <relpath> → rc 0 when that repo carries the path. Working tree FIRST,
-# then the index/HEAD: a path added in an unlanded commit or still untracked is nonetheless present
-# for a worker provisioned from that repo, and `git ls-tree HEAD` alone is blind to it (memory:
-# gate-scope-from-git-diff-is-blind-to-untracked).
-locality_has_path() {
-  [ -e "$1/$2" ] && return 0
-  # `grep .` DRAINED, never `grep -q .`: -q exits on the first line, SIGPIPEs ls-tree, and under
-  # `set -o pipefail` the pipeline then takes the PRODUCER's death as its status — so the condition
-  # would read FALSE on a MATCH, i.e. a path that IS present in a large repo would be reported
-  # absent and the warning would fire on a correctly-filed row. Caught by the pipefail-SIGPIPE
-  # ratchet on this very diff.
-  git -C "$1" ls-tree -r --name-only HEAD -- "$2" 2>/dev/null | grep . >/dev/null && return 0
-  return 1
-}
-
-# code_locality_warn <project> <title> — stderr only, never a status.
-code_locality_warn() {
-  local p="$1" title="$2" conf named here paths pth n_here=0 n_there=0 shown=""
-  [ -n "$p" ] && [ -n "$title" ] || return 0
-  [ "${CC_BACKLOG_LOCALITY_WARN:-on}" = off ] && return 0
-
-  conf="$(dispatch_conf)"; [ -r "$conf" ] || return 0
-  named="$(conf_verb_value "$p" repo "$conf")"; [ -n "$named" ] || return 0
-  case "$named" in "~"*) named="$HOME${named#\~}" ;; esac
-  git -C "$named" rev-parse --git-dir >/dev/null 2>&1 || return 0
-
-  here="$(locality_repo_root)" || return 0
-  git -C "$here" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  # Same repo ⇒ there is no locality question to ask.
-  [ "$(cd "$named" && pwd -P 2>/dev/null)" = "$(cd "$here" && pwd -P 2>/dev/null)" ] && return 0
-
-  # The top-level dirs a repo-relative code path actually starts with here. Anchored on a
-  # DIRECTORY NAME rather than a file extension on purpose: an extension list enumerates spellings,
-  # not the class, and this repo has been bitten by that move before (memory:
-  # denylist-enumerates-spellings-not-the-class). Bounded at 6 — a 7th cited path adds no clarity
-  # and each one costs two filesystem probes.
-  paths="$(printf '%s' "$title" \
-    | grep -oE '(bin|scripts|hooks|tests|lib|migrations|commands|skills|githooks)/[A-Za-z0-9._/-]+' \
-    | sed 's/[.,;:)]*$//' | sort -u | head -6)"
-  [ -n "$paths" ] || return 0
-
-  while IFS= read -r pth; do
-    [ -n "$pth" ] || continue
-    if locality_has_path "$here" "$pth"; then
-      n_here=$((n_here + 1)); shown="${shown:+$shown }$pth"
-    fi
-    locality_has_path "$named" "$pth" && n_there=$((n_there + 1))
-  done <<EOF
-$paths
-EOF
-
-  # BOTH halves must be positive. n_there>0 means the label is at least plausibly right, and
-  # n_here=0 means this checkout has nothing to say about it — either way, silence.
-  [ "$n_here" -gt 0 ] && [ "$n_there" -eq 0 ] || return 0
-
-  { printf 'cc-backlog add: WARNING — project "%s" does not contain the code this item cites.\n' "$p"
-    printf '  Cited path(s) present in %s: %s\n' "$(basename "$here")" "$shown"
-    printf '  Present in %s (%s): none of them.\n' "$p" "$named"
-    printf '  The item IS filed, but cc-dispatch provisions the worker'"'"'s worktree FROM that repo,\n'
-    printf '  so the worker opens it, finds no such file, and cannot land — the failure shape is\n'
-    printf '  fast claim->reopen thrash, which reads as a flaky item rather than a mislabel.\n'
-    printf '  If the code really lives in %s, re-file with --project %s.\n' "$(basename "$here")" "$(basename "$here")"
-    printf '  If the item spans repos, file it where the FIX must land; cite the other repo in the body.\n'
-  } >&2
-  return 0
-}
-
 cmd_add() {
   local project="" title="" dod="" source="" condition="" falsifier=""
   while [ $# -gt 0 ]; do
@@ -1437,10 +1319,6 @@ cmd_add() {
     # warning must not be conditional on this call being the one that writes.
     project_dispatch_warn "$project"
   fi
-  # AFTER both branches, on the RESOLVED label — see CODE-LOCALITY VALIDATION above. Also before
-  # the idempotent-id early return, for project_dispatch_warn's reason: a re-file of an item minted
-  # against the wrong repo strands a worker exactly as the first one did.
-  code_locality_warn "$project" "$title"
   ensure_file
   local id
   if [ -n "$condition" ]; then id=$(mk_cond_id "$project" "$condition")
