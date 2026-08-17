@@ -1,0 +1,251 @@
+# Outlook Cleanup — Post-Classification Rescue Rules
+# Version: 2026-05-21-r1
+#
+# Each rule flips a DELETE-verdict classification → KEEP when the rule matches.
+# Rules are evaluated in priority order (lower integer = higher priority).
+# A `promo_guard` block can BLOCK a rescue when overriding promo signals fire.
+
+meta:
+  schema_version: "1.0.0"
+  ruleset_version: "2026-05-21-r1"
+  description: "Rescue rules derived from 2026-05-21 convergent audit"
+
+rules:
+
+  # ── PRIORITY 1: Auth / Security (irreversible if deleted) ─────────────
+  - id: auth-security
+    description: "OTP, 2FA, password reset, security alerts — never delete"
+    priority: 1
+    enabled: true
+    match:
+      subject_regex: '(?i)\b(verification\s+code|one.?time\s+(code|password)|2fa|two.factor|MFA|OTP|security\s+code|confirm\s+your\s+identity|sign.?in\s+code|password\s+reset|account\s+(recovery|security|closure)|new\s+sign.?in|suspicious\s+(activity|login)|aws\s+password)\b'
+    conjunction: ANY
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: auth-security
+
+  # ── PRIORITY 10: User-flagged KEEP domains ────────────────────────────
+  - id: keep-domain-joshdoody
+    description: "Josh Doody salary-negotiation newsletter — user KEEPs"
+    priority: 10
+    enabled: true
+    match:
+      domain: joshdoody.com
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-joshdoody
+
+  - id: keep-domain-glassnode
+    description: "Glassnode crypto analytics — user KEEPs"
+    priority: 10
+    enabled: true
+    match:
+      domain: glassnode.com
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-glassnode
+
+  - id: keep-domain-luma
+    description: "Luma event invitations — user attends these events"
+    priority: 10
+    enabled: true
+    match:
+      domain: luma-mail.com
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-luma
+
+  - id: keep-domain-wetransfer
+    description: "WeTransfer file delivery confirmations — transactional records"
+    priority: 10
+    enabled: true
+    match:
+      domain: wetransfer.com
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(\d+%\s*off|sale\s+ends|last\s+chance|limited\s+time|exclusive\s+offer)'
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-wetransfer
+
+  - id: keep-domain-irvine
+    description: "Irvine Company apartment management — lease/tenant correspondence"
+    priority: 10
+    enabled: true
+    match:
+      domain:
+        - irvinecompany.com
+        - service.vistareal.irvinecompany.com
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-irvine
+
+  - id: keep-domain-buildspace
+    description: "Buildspace cohort program — substantive instructor correspondence"
+    priority: 10
+    enabled: true
+    match:
+      domain: buildspace.so
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(\d+%\s*off|sale\s+ends|last\s+chance|exclusive\s+offer|webinar)'
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-domain-buildspace
+
+  - id: keep-sender-substack-personal
+    description: "Specific Substack senders the user reads as substantive editorial"
+    priority: 10
+    enabled: true
+    match:
+      sender:
+        - lenny@substack.com
+        - glassnode@substack.com
+        - joshdoody@substack.com
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-sender-substack
+
+  # ── PRIORITY 15: University LMS ───────────────────────────────────────
+  - id: university-lms
+    description: "Academic course platforms — assignment/grade notifications"
+    priority: 15
+    enabled: true
+    match:
+      domain:
+        - piazza.com
+        - instructure.com
+        - canvas.instructure.com
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(product\s+update|feature\s+announcement|webinar|upgrade\s+your\s+plan|try\s+premium)'
+    action: RESCUE_TO_KEEP
+    audit_tag: university-lms
+
+  # ── PRIORITY 20: Transactional patterns ───────────────────────────────
+  - id: rideshare-receipt
+    description: "Uber/Lyft trip receipts — financial records"
+    priority: 20
+    enabled: true
+    match:
+      domain:
+        - uber.com
+        - lyft.com
+        - lyftmail.com
+        - post.uber.com
+        - receipts.lyft.com
+      subject_regex: '(?i)(receipt|trip\s+with|your\s+ride|your\s+trip|fare|earnings)'
+    conjunction: ALL
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: rideshare-receipt
+
+  - id: financial-transactional
+    description: "Bank/brokerage statements, e-transfers, Zelle receipts"
+    priority: 20
+    enabled: true
+    match:
+      domain:
+        - neofinancial.com
+        - fidelity.com
+        - mail.fidelity.com
+        - coinbase.com
+        - wealthsimple.com
+        - questrade.com
+        - chase.com
+      subject_regex: '(?i)(statement|invoice|receipt|payment|deposit|withdrawal|zelle|interac|e.?transfer|t[45]|tax\s+document|year.?end)'
+    conjunction: ALL
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(\d+%\s*off|special\s+offer|earn\s+extra|cashback\s+now)'
+    action: RESCUE_TO_KEEP
+    audit_tag: financial-transactional
+
+  # ── PRIORITY 25: Reply threads (person-to-person) ─────────────────────
+  - id: github-pr-reply
+    description: "GitHub PR/issue reply threads — substantive code review"
+    priority: 25
+    enabled: true
+    match:
+      domain: github.com
+      subject_regex: '(?i)^Re:'
+    conjunction: ALL
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(release\s+notes|changelog|github\s+universe|github\s+actions\s+update|monthly\s+update)'
+    action: RESCUE_TO_KEEP
+    audit_tag: github-pr-reply
+
+  - id: personal-domain-reply
+    description: "Re:/Fwd: thread from a personal email domain"
+    priority: 25
+    enabled: true
+    match:
+      domain:
+        - gmail.com
+        - yahoo.com
+        - yahoo.ca
+        - hotmail.com
+        - outlook.com
+        - live.com
+        - icloud.com
+        - me.com
+        - protonmail.com
+      subject_regex: '(?i)^(Re:|Fwd:|RE:|FW:|FWD:)'
+    conjunction: ALL
+    promo_guard:
+      enabled: false
+    action: RESCUE_TO_KEEP
+    audit_tag: personal-reply
+
+  # ── PRIORITY 30: Generic transactional keyword fallback ───────────────
+  - id: keep-bias-keyword
+    description: "Generic transactional keyword in subject — last-resort rescue"
+    priority: 30
+    enabled: true
+    match:
+      subject_regex: '(?i)\b(order\s*#|receipt|shipped|delivery|tracking|RMA|refund|cancellation|statement|invoice|tax|appointment|calendar\s+invite|booking\s+confirmation|reservation)\b'
+    promo_guard:
+      enabled: true
+      block_subject_regex: '(?i)(\d+%\s*off|sale\s+ends|last\s+chance|limited\s+time|exclusive\s+offer)'
+      block_body_regex: '(?i)(shop\s+now|browse\s+our|view\s+online|special\s+offer)'
+    action: RESCUE_TO_KEEP
+    audit_tag: keep-bias-keyword
+
+
+# ── ABSTAIN → DELETE rules (separate list, strictly gated) ────────────
+# DISABLED by default — enable with `--enable-abstain-flips` flag.
+abstain_to_delete_rules:
+  - id: abstain-delete-linkedin-digest
+    description: "LinkedIn 'added connections' digest spam stuck in ABSTAIN"
+    priority: 100
+    enabled: false
+    safety_level: HIGH_CONFIDENCE_ONLY
+    required_confidence_signals: 2
+    match:
+      domain: linkedin.com
+      subject_regex: '(?i)(added\s+connections|people\s+you\s+may\s+know|cold\s+invitation)'
+      body_regex: '(?i)(connections|invitations|may\s+know)'
+    action: DOWNGRADE_TO_DELETE
+    audit_tag: abstain-delete-linkedin-digest
+
+  - id: abstain-delete-conference-blast
+    description: "Conference marketing blasts stuck in ABSTAIN"
+    priority: 100
+    enabled: false
+    safety_level: HIGH_CONFIDENCE_ONLY
+    required_confidence_signals: 2
+    match:
+      domain:
+        - ethdenver.com
+        - ethglobal.com
+        - bollingerbands.com
+        - polkadot.academy
+      subject_regex: '(?i)(speaker\s+call|early\s+bird|tickets|register\s+now)'
+    action: DOWNGRADE_TO_DELETE
+    audit_tag: abstain-delete-conference-blast
