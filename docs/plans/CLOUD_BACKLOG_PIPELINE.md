@@ -1293,6 +1293,61 @@ git rebase --continue
 re-land that reads GREEN at `--precheck` can still fail three separate times, each with a different
 message and none pointing at the previous one. Do all three BEFORE the first land attempt.
 
+## A8 · RE-LANDING STRANDED WORK IS A BUG-FINDING METHOD, NOT ONLY A RECOVERY
+
+*Second half of the 2026-08-16 drain, after the transplant. `blocked 279 → 131` for the session.*
+
+### A8.1 · The dominant outcome is SUPERSEDED, and the tell is the conflict count
+
+Of every stranded cloud branch triaged to a verdict, the commonest answer was not "stranded" and
+not "landed" but **superseded — trunk carries an independently written fix for the same defect,
+under a different subject and a different spelling.** Confirmed cases: `subshell-cleanup-lint`'s
+command-prefix half (trunk's `mark_env_prefix`, strictly stronger — it also skips keywords and
+refuses to exempt a declaration builtin) · `memory-budget`'s 200-line cap (trunk `16dfe3b52` +
+`1fc55c9c5` REFUSE the write outright) · `cc-memory-rotate`'s Linux rotor (`4d7bc86db`) ·
+`capacity-admit-active`'s awk braces (`af8be7c93`, via an external `extract.awk`).
+
+🚨 **A high conflict count is the SIGNATURE of supersede, not of hard work.** `memory-budget`
+replayed into **17 hunks across 4 files** — and every one of them was the same idea already present
+in different words. **Before resolving a big conflict, test the FUNCTIONAL claim against trunk**
+(`does trunk's file already refuse the write? does the flag already exist?`); it costs one grep and
+it beats an hour of merging. The reverse also held: `cc-premise --limit`, `cc-await-ping
+--idle-scoped`, the `cc-backlog` probe screen and the `desk-role` consumers were each **absent from
+trunk by function**, and those replayed with one small conflict apiece.
+
+### A8.2 · The replay found live bugs that no review had
+
+This is the part that pays for the drain independently of the backlog count.
+
+- **`git-identity-lint`'s collision rung was INERT for exactly the author it gates.** The wave
+  called `in_own` with a BASENAME; trunk's newer `in_own` judges a PATH (so a same-basename file in
+  another directory correctly cannot block). A path-form own entry — `bin/foo.sh`, the ordinary
+  spelling of a diff — therefore matched nothing, and every collision an author's own diff
+  introduced printed `NOT in your diff — advisory` and did not block. Found by the land gate's own
+  smoke phase, not by reading. Fixed at the CALL SITE (ask about each colliding path, own if ANY
+  is), leaving the stricter `in_own` alone.
+- **The same wave's selftest could never have passed its own gate**: SC2181 ×2 and an SC2016 whose
+  quotes are load-bearing (the fixture must carry the leaky shape UNEXPANDED — waived in place, so
+  the next reader does not "fix" it into a no-op).
+- **`desk-brief-ssot.bats:225` asserted nothing** — a bare `! cmd` negation, which errexit cannot
+  reach. Revived with the gate's own prescribed tool rather than by hand, because the right form is
+  per class (`! A || false`).
+
+**Generalisable: work that sat stranded for days is work whose integration with a moved trunk has
+never been tested once.** Replaying it is the only thing that tests it, and the gate is the
+instrument. Budget for finding bugs, not just for merging.
+
+### A8.3 · Two smaller traps, both of which cost a wrong first answer
+
+- **A `re-land` row can name a branch that DID land.** Two rows here named branches this very
+  session had already landed (`reland/cc-reaper-v2`, `reland/mvi-shas`) — minted by an EARLIER
+  failed attempt and never retracted when the retry succeeded. Always re-derive: `git cherry
+  origin/main <ref>` reading 0 closes the row outright.
+- **Two cloud sessions produced the SAME work.** `6290f0ee6b52` and
+  `claude/fire-20260816T094145Z-41172-1` are both `cc-await-ping --idle-scoped`, ~500 lines each,
+  and a third (`b33f424c747b`) conflicts with both. Duplicate dispatch is already filed as
+  `8c60170a2037`; this is what it costs downstream — three rows, three merges, one feature.
+
 ### A7.2 · The gate goes NON-VERDICT when the session's PATH lacks Homebrew
 
 After the transplant to another account, `shellcheck` and `timeout` vanished from PATH
