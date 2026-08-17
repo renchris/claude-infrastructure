@@ -412,7 +412,7 @@ EOF
 lint_tree() {
   local root="$1" allow="$2" own="${3:-}" own_scoped=0
   local f base rel seen=0 bad=0 stuck=0 other=0 collide=0 records n _gitid_emit0=0
-  local _c_base _c_paths
+  local _c_base _c_paths _c_own _c_rest _c_one
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$root" ] || { echo "git-identity-lint: ⛔ not a directory: $root" >&2; return 2; }
@@ -422,7 +422,22 @@ lint_tree() {
   # own evidence by the time the loop ends.
   while IFS="$(printf '\t')" read -r _c_base _c_paths; do
     [ -n "$_c_base" ] || continue
-    if in_own "$_c_base" "$own" "$own_scoped"; then
+    # ASK in_own ABOUT EACH COLLIDING PATH, never about the bare basename. in_own judges a PATH:
+    # a `dir/name` own-set entry must match the path, and only a BARE entry matches on basename.
+    # Handing it `$_c_base` therefore made a path-form entry (`bin/foo.sh` — the ordinary spelling
+    # of a diff) unable to match anything, so a collision the author's OWN diff introduced was
+    # reported `NOT in your diff` and did not block. That is the exact inertness this rung exists
+    # to prevent, and it is why case 22 was red. A collision is own IF ANY of its paths is.
+    _c_own=0
+    _c_rest="$_c_paths"
+    while [ -n "$_c_rest" ]; do
+      case "$_c_rest" in
+        *", "*) _c_one="${_c_rest%%, *}"; _c_rest="${_c_rest#*, }" ;;
+        *)      _c_one="$_c_rest";        _c_rest="" ;;
+      esac
+      if [ -n "$_c_one" ] && in_own "$_c_one" "$own" "$own_scoped"; then _c_own=1; break; fi
+    done
+    if [ "$_c_own" = 1 ]; then
       printf '  COLLIDE  %s names %s\n' "$_c_base" "$_c_paths"
       printf '           self-exclusion, the ratchet and own-scope all key on the BASENAME, so a\n'
       printf '           verdict for either file is silently a verdict for both.\n'
