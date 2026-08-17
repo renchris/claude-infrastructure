@@ -475,8 +475,14 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     # asig(pid) — the argv signature the kill-time re-identification checks against (see
     # _gs_verify_kill). Tabs are the field separator, so any in argv are folded to spaces; an
     # unobserved argv yields "-", which opts that candidate out rather than refusing it.
+    # 120, not 60: at 60 the live log rendered `/Users/chrisren/Development/claude-infrastructure/scrip`
+    # — the directory prefix alone is 57 chars, so every script in this repo logged IDENTICALLY and
+    # the one question the line exists to answer (WHICH script did we just TERM?) was unanswerable.
+    # It cost a whole diagnostic pass. Still bounded well inside what `ps -o args=` returns to a
+    # captured (non-tty) stdout, so the kill-time containment check cannot start failing on
+    # truncation — and a longer signature only makes that re-identification MORE specific.
     function asig(p,  s) { s = (p in args) ? args[p] : ""; if (s=="") return "-"
-      gsub(/\t/, " ", s); return substr(s, 1, 60) }
+      gsub(/\t/, " ", s); return substr(s, 1, 120) }
     function esec(e,  d,a,n,hms) { d=0; if (index(e,"-")>0) { split(e,a,"-"); d=a[1]; e=a[2] }
       n=split(e,hms,":");
       if(n==3) return d*86400+hms[1]*3600+hms[2]*60+hms[3];
@@ -508,7 +514,18 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
         if (comm[p]=="claude.exe") continue
         if (parent[p]==1) {
           if (comm[p]=="ps" && secs[p]>=60)                    { printf "orphan-ps\t%s\t^ps$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
-          if (comm[p] ~ /^(awk|grep|egrep|tee|sed|cat|tail|wc|jq|sleep|gtimeout|timeout)$/ && secs[p]>=120) { printf "orphan-tool\t%s\t^%s$\t%s\t%s\t-\n", p, comm[p], secs[p], asig(p); continue }
+          # THE WHITELIST BINDS HERE TOO (2026-08-17). It was consulted by `orphan-bash` alone, and
+          # that is the wrong shape: `timeout`/`gtimeout` are on this list, and wrapping a bounded
+          # command is exactly how a whitelisted daemon is normally invoked. So
+          # `timeout -k 10 900 bash .../postland-verify.sh`, reparented to launchd, was classified
+          # orphan-tool and TERMed at the 120 s floor — while the identical script invoked WITHOUT a
+          # bound was protected at 600 s. The protection depended on whether someone had put a
+          # timeout in front of it, which is not a property anyone reasoned about when adding a name
+          # to `wl`. Measured on the live log after the land-path fix: no ship-land/desk-land is
+          # classified any more, but `/opt/homebrew/bin/timeout -k 10 900 bash /Users/…/.cl…` was
+          # still being reaped at age 488 s, and SIGTERM-143 land deaths continued at 8.4%.
+          # `wl` is matched against the whole argv, so it reaches the wrapped command as intended.
+          if (comm[p] ~ /^(awk|grep|egrep|tee|sed|cat|tail|wc|jq|sleep|gtimeout|timeout)$/ && args[p] !~ ("(" wl ")") && secs[p]>=120) { printf "orphan-tool\t%s\t^%s$\t%s\t%s\t-\n", p, comm[p], secs[p], asig(p); continue }
           if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
           if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
         }
