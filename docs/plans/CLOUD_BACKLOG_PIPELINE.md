@@ -1238,6 +1238,30 @@ GitHub permanently, and only a history rewrite undoes it. *(The M3 land in A6.2 
 this only because `405bcdec3` happened to carry the right author already — do not read that as the
 rule.)*
 
+🚨 **And `--reset-author` alone is NOT enough — there is a SECOND hook, and it fires from inside the
+first one's cure.** A cloud session also writes AI-authorship trailers, and `commit-msg` blocks
+them:
+
+```
+commit-msg: BLOCKED — the message carries an AI-authorship trailer:
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_…
+```
+
+So `git rebase --exec 'git commit --amend --no-edit --reset-author'` **fails part-way**, leaving the
+rebase stopped mid-sequence — the cure for wall 1 trips wall 2. The complete cure for a cloud commit
+is BOTH, in one amend:
+
+```
+git log -1 --format=%B | grep -vE '^(Co-Authored-By: Claude|Claude-Session:)' > /tmp/msg
+git commit --amend --reset-author -F /tmp/msg
+git rebase --continue
+```
+
+**Three independent walls, none of them a gate arm** (identity · trailer · PATH), so a cloud
+re-land that reads GREEN at `--precheck` can still fail three separate times, each with a different
+message and none pointing at the previous one. Do all three BEFORE the first land attempt.
+
 ### A7.2 · The gate goes NON-VERDICT when the session's PATH lacks Homebrew
 
 After the transplant to another account, `shellcheck` and `timeout` vanished from PATH
