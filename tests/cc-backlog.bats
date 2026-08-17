@@ -707,6 +707,47 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   bash "$CB" list --all --json | jq -e --arg i thrashaaaa01 '.[]|select(.id==$i)|.needs|test("thrash")'
 }
 
+# ── the reap's blocks are NOT operator steps ────────────────────────────────────────────────────
+# The operator-gate arm (cmd_transition (8)) keys every `block --needs` into master-operator-gated on
+# the premise that the payload IS an operator step. Three callers inside cmd_reap refute it: their
+# --needs is a machine non-verdict that names an AGENT as the next actor ("Investigate…, then
+# `cc-backlog unblock <id>`"). Measured on the live store 2026-08-17, 2 of 30 members were
+# reap-authored — one of them the drain's own SSOT plan row, i.e. a row handed to a human that no
+# human should ever see.
+@test "reap: a thrash block is a NON-VERDICT — it does not join the operator-gated batch" {
+  reap_env
+  rec '{"id":"reapnogate01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Thrash"}'
+  rec '{"id":"reapnogate01","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"reapnogate01","ts":"2026-01-01T00:00:14Z","event":"reopen"}'
+  rec '{"id":"reapnogate01","ts":"2026-01-01T00:00:20Z","event":"claim","by":"h-2"}'
+  rec '{"id":"reapnogate01","ts":"2026-01-01T00:00:24Z","event":"reopen"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of reapnogate01)" = blocked ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="reapnogate01")|.condition // ""')" = "" ]
+  # …and it SAYS so, on the same sweep that prints one line per blocked row. An arm that silently
+  # stopped firing would be indistinguishable from one that was never reached.
+  echo "$output" | grep -q 'reapnogate01 is a reap NON-VERDICT'
+  # POSITIVE CONTROL, same store, same process image: an ordinary external block still keys. Without
+  # it, the empty condition above would also pass on a tree where the arm is broken outright.
+  ctl=$(bash "$CB" add --title "paste the deploy key" --project /r)
+  bash "$CB" block "$ctl" --needs "paste the deploy key into the console" >/dev/null 2>&1
+  [ "$(bash "$CB" list --all --json | jq -r --arg i "$ctl" '.[]|select(.id==$i)|.condition')" = master-operator-gated ]
+}
+
+@test "reap: the exemption is INTERNAL — an external caller spelling --by cc-backlog-reap still keys" {
+  # The mutant that a `--by`-string implementation fails. The reap does write that spelling into the
+  # durable record, so matching on it would work today — and would silently strip the group from any
+  # external filer who used the same word, a denylist of one spelling rather than the class. The
+  # class is "a block THIS PROCESS wrote inside its own sweep", which argv cannot reach.
+  reap_env
+  id=$(bash "$CB" add --title "rotate the signing key" --project /r)
+  run bash "$CB" block "$id" --needs "rotate the signing key in 1Password" --by cc-backlog-reap
+  [ "$status" -eq 0 ]
+  [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.condition')" = master-operator-gated ]
+  ! echo "$output" | grep -q 'reap NON-VERDICT' || false
+}
+
 @test "reap: unblock resets the thrash window — the next reap does NOT re-block (dispatcher-starvation fix)" {
   # RED-proof for the reap→unblock→reap refold: pre-fix, reap folds fastFail over the WHOLE trail with
   # no awareness of a later `unblock`, so the very next sweep re-blocks anything the desk unblocks — the
