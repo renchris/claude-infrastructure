@@ -87,6 +87,38 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 — backlog `354c73ebd400` (ship-land.sh BRANCH / postland bisect) CLOSED on
+  already-landed evidence: `6ce67de910d6e46f825a7eae0db28b741964f5de`, verified an ancestor of
+  `origin/main`. No diff — re-deriving one would have reverted trunk.** The dispatched worker
+  read the item on trunk first (tree = trunk, 0 behind) and found the cure already there, per the
+  §4.1 rule that a post-land RED reproduces faithfully in a stale tree.
+  - **Both-directions control, run rather than reasoned.** Pre-fix lint (`6ce67de9^`) on the
+    pre-fix tree reproduces the item VERBATIM — `scripts/ship-land.sh:3687: BRANCH — assigned
+    inside a $( ) child`, chained to `write_decision_packet` at `:584`, trap `_land_exit_trap →
+    land_failure_inbox` at `:813`. Trunk's lint over that SAME pre-fix tree: clean, 165 parsed of
+    476. Trunk's lint over trunk: clean, 167 of 486, rc 0. So the cure is aimed at exactly this
+    finding, and it is not a blanket skip.
+  - **The finding was false, re-measured independently rather than taken from the cut message.**
+    `V=orig; f(){ :; }; V=inside f` leaves `V=orig`; `V2=inside /bin/true` leaves `V2` unset. A
+    command-PREFIX assignment writes the command's environment and never the shell, so
+    `ID="$id" BRANCH="$branch" … python3` set no global and the trap's `BRANCH` was never stale.
+  - **The bisect half needed no work either.** It was the DOWNSTREAM symptom — a pre-existing
+    whole-tree prelint red skipped the corpus from 11:35Z, no GREEN stamp could be minted, and
+    lands that merely touched the file were elected. The misattribution class itself is already
+    hardened on trunk (`postland-verify.sh:1948`/`:1980` tip-confirmation — a bisect can NAME a
+    commit it never RAN — plus `bisect_floor_ok` at `:1808`), and killing the false red removes
+    the input that fed it.
+  - **The land gate could not be run to green in this container, and the reason is the box, not
+    the tree.** `ship-land.sh --precheck` reds at `unattended-path-lint --selftest FAILED (9 of
+    30)` — IDENTICALLY on a pristine detached `origin/main` worktree, so nothing in this diff
+    reaches it. Root cause measured: this is a Linux cloud container and the lint's fixtures are
+    calibrated to macOS PATHs — `tmux` and `yq` sit on `/usr/bin` here but are Homebrew-only
+    there, so every fixture that expects a violation goes green and its allowlist rows read as
+    STUCK. The same selftest is green on the operator's box (475-suite corpus GREEN at
+    `416a7191dea8`). Doc-only change, pushed to its branch rather than bypassing the gate.
+  - **Operator-only remainder:** the ledger is on the operator's box; this container carries no
+    `~/.claude/autonomy/backlog.jsonl`, so `cc-backlog done 354c73ebd400` returned
+    `unknown id` and the row is still open THERE. It needs one run on that box with the sha above.
 - **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
   (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
   `6644273f3`; content-verified on `origin/main`.**
