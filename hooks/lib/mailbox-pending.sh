@@ -295,6 +295,44 @@ mailbox_wake_armed() { # <uuid> → 0 = a live watcher will wake this session, 1
   kill -0 "$wpid" 2>/dev/null
 }
 
+# ── WHO is arming it, and IN WHICH MODE — the two questions E2 needs and the predicate above cannot
+#    answer (docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2) ───────────────────────────────
+# `mailbox_wake_armed` answers "is a wake path live?", which is the only question its three callers
+# ever had. E2 asks a different one: a watcher armed BEFORE a `/goal` arrived defers that goal for
+# its whole term (CC skips goal evaluation at any Stop holding a non-terminal background Bash), and
+# the ONLY thing that can end it is a `kill` naming the pid — so the surface that reports the
+# condition has to be able to NAME the culprit. Both live here rather than in the drain for the
+# reason the predicate above was hoisted here: two readers of one marker must not disagree about it.
+mailbox_wake_pid() { # <uuid> → prints the LIVE watcher's pid; rc 1 = no live watcher, or a legacy
+                     #           marker that records no pid (armed, but not nameable — say nothing)
+  local u="${1:-}" wf wpid
+  mailbox_wake_armed "$u" || return 1
+  wf="$(_mbx_dir)/$u.watching"
+  wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" 2>/dev/null | head -n1)"
+  [ -n "$wpid" ] || return 1
+  printf '%s\n' "$wpid"
+}
+
+# THE WRITER CONTRACT, stated here because this is the reader (B3, `cc-await-ping --idle-scoped`,
+# §4 C1-C7). An idle-scoped watcher is SANCTIONED under a live goal: it terminates on any new turn
+# of its own session, so its deferral spans exactly the idle window. It must therefore be
+# distinguishable from the plain 14400 s park, which is not. The declaration is a `mode=idle-scoped`
+# line stamped by the watcher itself into EITHER of the two files it already re-writes every poll:
+#   ~/.claude/mailbox/<key>.watching        the marker (one owner slot, handed over at exit)
+#   ~/.claude/mailbox/.watchers/<key>.<pid> its own per-pid claim (never handed over)
+# Either suffices; the claim is the sturdier of the two, because `_unbeat`'s hand-over rewrites the
+# marker on behalf of a sibling whose mode it does not know. Absence ⇒ NOT idle-scoped, which is the
+# fail direction E2 needs: an unstamped watcher is reported as goal-blocking (a false alarm at worst,
+# and today every watcher in the fleet genuinely is one), where the inverse would silently swallow
+# the report this exists to make.
+mailbox_wake_idle_scoped() { # <uuid> → 0 iff the LIVE watcher declares idle-scoped mode
+  local u="${1:-}" wpid
+  wpid="$(mailbox_wake_pid "$u")" || return 1
+  grep -q '^mode=idle-scoped$' "$(_mbx_dir)/$u.watching" 2>/dev/null && return 0
+  grep -q '^mode=idle-scoped$' "$(_mbx_dir)/.watchers/$u.$wpid" 2>/dev/null && return 0
+  return 1
+}
+
 # LOCKED atomic take: snapshot the window (seen, EOF], print it, advance seen=EOF (never regress), and —
 # for a reliable channel — acked=EOF too. Emitting is the CALLER's job (it wraps the body in JSON); the
 # guard's acked cursor is what makes a post-print emit-failure loud, so advancing seen inside the lock is
@@ -567,6 +605,9 @@ _mbx_tipset_load() {
   [ -d "$d" ] || return 0
   # Newline-delimited, with leading+trailing newlines so a `case` glob can anchor whole tokens.
   # find|xargs rather than a glob: an empty .alias would make a bare `awk dir/*` read STDIN and hang.
+  # shellcheck disable=SC2016  # $2 and FILENAME belong to AWK, not the shell — the single quotes are
+  # what keeps them unexpanded. "Fixing" this to double quotes would substitute the shell's empty $2
+  # and silently make the program read an empty field for every alias file.
   _MBX_TIPSET="
 $(find "$d" -maxdepth 1 -type f -print0 2>/dev/null \
     | xargs -0 awk '{ last[FILENAME] = $2 } END { for (f in last) if (last[f] != "") print last[f] }' 2>/dev/null)
