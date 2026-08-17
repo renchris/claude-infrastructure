@@ -503,3 +503,92 @@ CC_ASSIGNEE_ABSTAIN_SHA="${CC_ASSIGNEE_ABSTAIN_SHA:-638fba76}"
   [ "$status" -eq 0 ]
   blocked "$output" || false                          # RED: an assignee under teardown, blocked
 }
+
+# ════ CUSTODY ATTRIBUTION (backlog 9581119669f9) ═════════════════════════════════════════════════
+#
+# The custody arm re-fires this floor while dispatched work has not returned, and it used to select
+# those rows by `--cwd` ALONE, then tell whoever was stopping "you are their ORIGINATOR — their
+# completion pings arrive through this inbox". claude-infrastructure is a SHARED checkout that many
+# sessions cd into, so for every session that merely shares the directory BOTH halves were false.
+# Measured 2026-08-11 from pane 246: two open rows, originatorPane 113 and 248, neither this pane,
+# and neither peer's ping routable here. It fired on the healthy case — a page that cannot tell an
+# originator from a bystander carries no bits (memory: alarm-polarity-and-attention-budget) — while
+# instructing an innocent session to await unreachable work, to `cc-custody return` a marker it does
+# not own, and holding ✅ unreachable for a session with nothing open.
+#
+# The store always had the discriminator (originatorPane / notifyBack on every row). The fix gives
+# this arm the same attribution gate the SHIP FLOOR in the same file already has.
+
+# cust_shim <json> — stand in for the cc-custody binary at the FIRST path the hook probes
+# ($(dirname $0)/../bin/cc-custody). `list --open --cwd . --json` replays <json>; `count` answers
+# from the same array, so a shim can never disagree with itself the way two literals would.
+cust_shim() {
+  mkdir -p "$HOME/.claude/bin"
+  printf '%s' "$1" > "$BATS_TEST_TMPDIR/custody.json"
+  cat > "$HOME/.claude/bin/cc-custody" <<'SHIM'
+#!/usr/bin/env bash
+case "$1" in
+  list)  cat "$CUSTODY_JSON" ;;
+  count) jq 'length' < "$CUSTODY_JSON" ;;
+esac
+SHIM
+  chmod +x "$HOME/.claude/bin/cc-custody"
+  export CUSTODY_JSON="$BATS_TEST_TMPDIR/custody.json"
+  # Bind the seam. Without it the hook resolves the REAL bin/cc-custody out of the checkout and
+  # reads the operator's live store, which answers 0 — so every "must block" case below would fail
+  # and, worse, every "must NOT block" case would pass VACUOUSLY. That asymmetry is exactly how an
+  # untested arm looks tested.
+  export CC_CUSTODY_BIN="$HOME/.claude/bin/cc-custody"
+}
+
+@test "custody: a row THIS pane originated re-fires the floor and asserts originatorship" {
+  cust_shim "$(jq -nc --arg u "$U" '[{originatorPane:$u,slug:"fire-mine"}]')"
+  out="$(actuate sidA)"; blocked "$out"              # first idle: the floor always tries once
+  out="$(actuate sidA)"                              # …and with no mail, ONLY custody re-fires it
+  blocked "$out"
+  printf '%s' "$out" | grep -q 'YOU fired'
+}
+
+@test "custody DISCRIMINATOR: a SIBLING's row does not convict this pane" {
+  # The whole bug, in one assertion. Same cwd, same store, same shape — only the owner differs.
+  cust_shim "$(jq -nc '[{originatorPane:"w0t0p0:BBBBBBBB-9999-8888-7777-666666666666",slug:"fire-theirs"}]')"
+  out="$(actuate sidA)"; blocked "$out"              # first idle
+  out="$(actuate sidA)"                              # second: a sibling's row must not re-fire it
+  ! blocked "$out" || false
+}
+
+@test "custody: with one row mine and one a sibling's, the floor counts EXACTLY one" {
+  # The control the backlog row names. A gate that simply counted rows would say 2 here, and one
+  # that had silently stopped counting would say 0 — only correct attribution says 1.
+  cust_shim "$(jq -nc --arg u "$U" '[{originatorPane:$u,slug:"fire-mine"},
+                                     {originatorPane:"w0t0p0:BBBBBBBB-9999-8888-7777-666666666666",slug:"fire-theirs"}]')"
+  out="$(actuate sidA)"; blocked "$out"
+  out="$(actuate sidA)"
+  blocked "$out"
+  printf '%s' "$out" | grep -q '1 dispatched session(s) YOU fired'
+}
+
+@test "custody: notifyBack is a second ownership spelling, and its anchor is not a bare suffix" {
+  # handoff-fire arms notifyBack as either the bare pane or <worktree>-<pane>, so the match needs
+  # the "-" anchor: without it, pane 15 would claim pane 415's row.
+  export ITERM_SESSION_ID="w0t0p0:415"
+  cust_shim '[{"notifyBack":"wt-pool-2-415","slug":"fire-wt"}]'
+  out="$(actuate sidA)"; blocked "$out"
+  out="$(actuate sidA)"; blocked "$out"              # 415 owns it
+  export ITERM_SESSION_ID="w0t0p0:15"
+  out="$(actuate sidB)"; blocked "$out"              # fresh session ⇒ first idle always blocks
+  out="$(actuate sidB)"
+  ! blocked "$out" || false                          # 15 must NOT inherit 415's debt                          # 15 must NOT inherit 415's debt
+}
+
+@test "custody: an UNATTRIBUTABLE row still counts, but the message HEDGES instead of asserting" {
+  # Deliberately NOT dropped: cc-custody's own POLARITY header rejects the direction that silently
+  # loses custody, because a per-pane key is lost across the measured resume-loses-pane-id case. So
+  # the safe reading is "cannot decide", and the wording has to say so rather than accuse.
+  cust_shim '[{"slug":"fire-orphan"}]'
+  out="$(actuate sidA)"; blocked "$out"
+  out="$(actuate sidA)"
+  blocked "$out"
+  printf '%s' "$out" | grep -q 'cannot say whose'
+  printf '%s' "$out" | grep -q 'NOT yours'
+}

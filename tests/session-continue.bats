@@ -302,3 +302,61 @@ mkuser_tx_string() {
   [ "$(cat "$CC_MAILBOX_DIR/$U.acked" 2>/dev/null || echo 0)" -eq 0 ]
   [ "$(cat "$CC_MAILBOX_DIR/$U.seen" 2>/dev/null || echo 0)" -eq 0 ]
 }
+
+# ════ `clear` REPORTS WHAT IT DID (backlog 2d0074dae889) ═════════════════════════════════════════
+#
+# The sentinel is $PWD-KEYED (sentinel_for "$PWD"), and `rm -f` on an absent file exits 0 — so the
+# verb printed "cleared" whether it disarmed a live chain or looked in the wrong directory and
+# touched nothing. MEASURED 2026-08-11 (session a28e8b9c): armed from the main checkout, cleared
+# from a worktree, got "cleared", and the next Stop replayed the same step — `status` read ARMED at
+# the checkout and inactive in the worktree, with nothing in between to say so. A success message
+# that is independent of the effect is the claimed-outcome ≠ checked-outcome defect.
+
+@test "clear: disarming something says so, and names the sentinel it removed" {
+  cd "$BATS_TEST_TMPDIR" || false
+  run bash "$HOOK" set "do the thing"
+  [ "$status" -eq 0 ]
+  run bash "$HOOK" clear
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '^cleared → '
+}
+
+@test "clear DISCRIMINATOR: disarming NOTHING says THAT, and names the cwd it looked in" {
+  # Same verb, same exit code, different fact — and the cwd is the actionable half, because the
+  # sentinel NAME is a one-way hash of (config-dir|cwd) and cannot be read back into a directory.
+  d="$BATS_TEST_TMPDIR/never-armed"; mkdir -p "$d"; cd "$d" || false
+  run bash "$HOOK" clear
+  [ "$status" -eq 0 ]                                 # NOT an error: clearing a deliberate park is normal
+  echo "$output" | grep -q 'nothing to clear'
+  echo "$output" | grep -qF "$d"
+  ! echo "$output" | grep -q '^cleared → ' || false   # the two messages must not be confusable
+}
+
+@test "clear: a CROSS-CWD clear names the directory to re-run it from" {
+  # The measured case end to end: arm in A, clear in B. B must report that it disarmed nothing AND
+  # that this session still holds an armed sentinel in A — which is only answerable because `set`
+  # stamps a .cwd sidecar beside the .sid one.
+  export CLAUDE_CODE_SESSION_ID="sid-xcwd"
+  a="$BATS_TEST_TMPDIR/wt-a"; b="$BATS_TEST_TMPDIR/wt-b"; mkdir -p "$a" "$b"
+  cd "$a" || false; run bash "$HOOK" set "finish wave 3"; [ "$status" -eq 0 ]
+  cd "$b" || false; run bash "$HOOK" clear
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'nothing to clear'
+  echo "$output" | grep -q 'armed sentinel elsewhere'
+  echo "$output" | grep -qF "$a"
+  # …and the chain in A is genuinely still armed — the report is not a consolation message.
+  cd "$a" || false; run bash "$HOOK" status
+  echo "$output" | grep -qi 'armed'
+}
+
+@test "clear: the cross-cwd report is SID-SCOPED — a sibling session's sentinel is not named" {
+  # Without this, the scan would hand every session a list of every other session's armed
+  # directories, which is the same bystander-noise defect the custody arm had.
+  a="$BATS_TEST_TMPDIR/wt-sib-a"; b="$BATS_TEST_TMPDIR/wt-sib-b"; mkdir -p "$a" "$b"
+  cd "$a" || false; CLAUDE_CODE_SESSION_ID="sid-them" run bash "$HOOK" set "their step"
+  [ "$status" -eq 0 ]
+  cd "$b" || false; CLAUDE_CODE_SESSION_ID="sid-mine" run bash "$HOOK" clear
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'nothing to clear'
+  ! echo "$output" | grep -qF "$a" || false
+}

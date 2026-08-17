@@ -99,6 +99,11 @@ case "${1:-}" in
     # Empty sid ⇒ write no bind (actuation then skips the sid check — conservative, never a wrong clear).
     csid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     if [ -n "$csid" ]; then printf '%s' "$csid" > "${f}.sid"; else rm -f "${f}.sid" 2>/dev/null; fi
+    # cwd-stamp: the sentinel NAME is a hash of (config-dir|cwd), so nothing can invert it back to a
+    # directory. Without this sidecar, a `clear` run from the wrong worktree can say "an armed
+    # sentinel exists for this sid" but never say WHERE — which is the actionable half. One line at
+    # arm time is what makes the cross-cwd answer below nameable.
+    printf '%s' "$PWD" > "${f}.cwd" 2>/dev/null || true
     echo "armed → $f"
     SC_SID="${csid:-?}"
     log_idl armed "cli-set" "$(jq -cn --arg s "${2:-Continue the in-scope work.}" --arg c "$PWD" \
@@ -106,15 +111,51 @@ case "${1:-}" in
     exit 0 ;;
   clear)
     f=$(sentinel_for "$PWD")
-    rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+    # DID IT ACTUALLY DISARM ANYTHING? The sentinel is $PWD-KEYED, and `rm -f` on an absent file
+    # exits 0 — so the verb used to print "cleared" whether it disarmed a live chain or looked in the
+    # wrong directory and touched nothing (claimed-outcome ≠ checked-outcome). MEASURED 2026-08-11
+    # (session a28e8b9c): armed from the main checkout, cleared from a worktree, got "cleared", and
+    # the next Stop replayed the same step — `status` read ARMED at the checkout and inactive in the
+    # worktree, with nothing in between to say so. Sample BEFORE the rm; report what the rm did.
+    was_armed=0; [ -f "$f" ] && was_armed=1
+    rm -f "$f" "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
     # `clear` means "this dirt is deliberate — stop asking", which is exactly what the mechanical
     # arm's own block message instructs. So SPEND its budget rather than deleting it: deleting would
     # let the next Stop re-arm and re-block, making clear/re-arm a two-cycle the operator cannot
     # exit. Marking it spent is the difference between an off switch and a snooze button.
+    # UNCONDITIONAL on purpose: the mech budget is a property of THIS cwd (where the mechanical arm
+    # would fire), not of whether an agent-set sentinel happened to be armed here.
     SC_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-?}}"
     printf '%s %s' "$SC_SID" "${CC_MECH_MAX:-3}" > "${f}.mech" 2>/dev/null || true
-    echo "cleared"
-    log_idl cleared "cli-clear" "$(jq -cn --arg c "$PWD" '{cwd:$c}' 2>/dev/null)"
+    if [ "$was_armed" = 1 ]; then
+      echo "cleared → $f"
+    else
+      # NOT AN ERROR, and NOT a failure exit (rc stays 0): clearing where nothing is armed is the
+      # normal shape of a deliberate park. What was missing is the fact, and the cwd it was true of.
+      echo "nothing to clear — no sentinel was armed for this cwd: $PWD"
+      # A cross-cwd clear is ANSWERABLE, because `set` stamps a .cwd sidecar next to the .sid one, so
+      # this scan can name the directory to re-run it from. Cheap: the state dir is FLAT (one
+      # continue-<hash> per worktree, per hooks/lib/continue-sentinel.sh), so this is a single glob,
+      # never a filesystem walk. Sentinels armed before the .cwd stamp existed report their path
+      # instead of a lie — the sentinel NAME is a one-way hash of (config-dir|cwd).
+      if [ -n "${SC_SID:-}" ] && [ "$SC_SID" != "?" ]; then
+        _others=""
+        for _s in "$(continue_state_dir)"/continue-*.sid; do
+          [ -f "$_s" ] || continue
+          _b="${_s%.sid}"; [ -f "$_b" ] || continue          # .sid without its sentinel = already disarmed
+          [ "$(cat "$_s" 2>/dev/null)" = "$SC_SID" ] || continue
+          _w="$(cat "${_b}.cwd" 2>/dev/null || true)"
+          [ -n "$_w" ] || _w="cwd unknown (armed before the .cwd stamp) — sentinel $_b"
+          _others="${_others}
+  · $_w"
+        done
+        # shellcheck disable=SC2016  # the backticks are MARKDOWN around a command the agent reads, not
+        # a substitution — single quotes are exactly right, and the only interpolation is %s.
+        [ -n "$_others" ] && printf 'but THIS session still has an armed sentinel elsewhere — re-run `session-continue.sh clear` from:%s\n' "$_others"
+      fi
+    fi
+    log_idl cleared "cli-clear" "$(jq -cn --arg c "$PWD" --argjson d "$was_armed" \
+      '{cwd:$c,disarmed:($d==1)}' 2>/dev/null)"
     exit 0 ;;
   status)
     f=$(sentinel_for "$PWD")
@@ -443,14 +484,60 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   # spikes). Best-effort count; absent binary (the ADD-not-live window) or any failure ⇒ 0.
   # (Composes with the /goal abstain above: a goal-driven originator is already kept awake by the
   # goal itself, which is a stronger wake path than any watcher.)
-  local cust=0 _cb=""
-  for _cb in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-custody" \
+  #
+  # ATTRIBUTED, like the SHIP FLOOR (2026-08-17, backlog 9581119669f9). This used to count
+  # `cc-custody count --open --cwd "$cwd"` — cwd and ONLY cwd — and then tell whoever was stopping
+  # "you are their ORIGINATOR, their pings arrive through THIS inbox". In a SHARED checkout
+  # (claude-infrastructure is one: many sessions cd into it) both halves are false for every session
+  # that merely shares the directory. It fired on the healthy case, which is the alarm-polarity
+  # defect — a page that cannot distinguish an originator from a bystander carries no bits — and it
+  # instructed an innocent session to await work that can never reach it and to `cc-custody return`
+  # a marker it does not own, while making ✅ unreachable for a session with nothing open.
+  # The store already carries the discriminator: every row cc-custody opens holds `originatorPane`
+  # (handoff-fire passes --originator-pane) and `notifyBack`. So: count only rows this PANE owns —
+  # the same shape as session_unlanded_mine, which exists precisely so a sibling's state cannot
+  # convict you. $_opane is the RAW pane key captured at :197 (deliberately NOT the canonicalised
+  # mailbox key), the same value handoff-fire writes as originatorPane.
+  # WHAT IS DELIBERATELY *NOT* DROPPED: a row carrying NEITHER field cannot be attributed either
+  # way, and cc-custody's own header (POLARITY, v1) rejects the direction that silently DROPS
+  # custody — a per-pane key loses it across the measured resume-loses-pane-id case. So an
+  # unattributable row still counts, and the message HEDGES instead of asserting originatorship.
+  # Same when this session has no pane id at all: no discriminator ⇒ the old cwd count, hedged.
+  local cust=0 cust_mine=0 cust_unk=0 _cb="" _cj="" _cc="" _custmsg=""
+  # CC_CUSTODY_BIN is a TEST SEAM, and it is first for the same reason every other oracle in this
+  # repo has one (CC_WTGC_CC_NOTIFY, CC_WTGC_LSOF, …): the probe below resolves the REAL binary out
+  # of the checkout, so a suite could only ever exercise this arm against the operator's live
+  # custody store — i.e. not at all, which is why the arm shipped with no test. Unset in production,
+  # where the probe order is unchanged.
+  for _cb in ${CC_CUSTODY_BIN:+"$CC_CUSTODY_BIN"} \
+             "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-custody" \
              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" "$HOME/.claude/bin/cc-custody"; do
     [ -x "$_cb" ] && break; _cb=""
   done
   if [ -n "$_cb" ]; then
-    cust="$("$_cb" count --open --cwd "$cwd" 2>/dev/null || echo 0)"
-    case "$cust" in ''|*[!0-9]*) cust=0 ;; esac
+    if [ -n "$_opane" ] && command -v jq >/dev/null 2>&1 \
+       && _cj="$("$_cb" list --open --cwd "$cwd" --json 2>/dev/null)" && [ -n "$_cj" ]; then
+      # notifyBack is a SECOND ownership spelling, not a fallback: handoff-fire arms it as either the
+      # bare pane ("386") or "<worktree>-<pane>" ("wt-pool-2-415"), so the "-" anchor is required —
+      # a bare suffix match would let pane 15 claim pane 415's row.
+      _cc="$(printf '%s' "$_cj" | jq -r --arg p "$_opane" '
+              def known: ((.originatorPane // "") != "") or ((.notifyBack // "") != "");
+              def mine:  ((.originatorPane // "") == $p)
+                      or ((.notifyBack // "") == $p)
+                      or ((.notifyBack // "") | endswith("-" + $p));
+              [ (map(select(known and mine)) | length), (map(select(known | not)) | length) ]
+              | map(tostring) | join(" ")' 2>/dev/null || true)"
+      cust_mine="${_cc%% *}"; cust_unk="${_cc##* }"
+      case "$cust_mine" in ''|*[!0-9]*) cust_mine=0 ;; esac
+      case "$cust_unk"  in ''|*[!0-9]*) cust_unk=0  ;; esac
+      cust=$(( cust_mine + cust_unk ))
+    else
+      # No pane identity (or no jq / unreadable store) ⇒ attribution is IMPOSSIBLE, not negative.
+      # Keep the pre-attribution behaviour and let the wording carry the uncertainty.
+      cust_unk="$("$_cb" count --open --cwd "$cwd" 2>/dev/null || echo 0)"
+      case "$cust_unk" in ''|*[!0-9]*) cust_unk=0 ;; esac
+      cust="$cust_unk"
+    fi
   fi
 
   # ── THIRD STATE: terminating / lead-owned ⇒ this gate does not APPLY (see the block above) ────────
@@ -485,8 +572,10 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   fi
 
   # Fire on the first idle of the session, any idle where mail is actually waiting, or any idle
-  # while dispatched work from this cwd has not returned (custody open ⇒ the originator's one job
-  # while waiting is to be wakeable). Otherwise a session that already declined once is left alone.
+  # while dispatched work THIS PANE OWNS (or that nothing can attribute away from it) has not
+  # returned — the originator's one job while waiting is to be wakeable. A row a sibling in this
+  # shared checkout fired is not in $cust at all, so it can no longer re-fire this floor over a
+  # session with nothing open. Otherwise a session that already declined once is left alone.
   [ "$cnt" -eq 0 ] || [ "$pend" -gt 0 ] || [ "$cust" -gt 0 ] || return 0
 
   maxa="${CC_WAKE_FLOOR_MAX:-2}"; case "$maxa" in ''|*[!0-9]*) maxa=2 ;; esac
@@ -552,7 +641,18 @@ Arm it as your LAST action, on a clean committed state. It REFUSES to arm (exit 
   [ "$pend" -gt 0 ] && reason="📬 ${pend} message(s) are pending in your inbox RIGHT NOW.
 
 ${reason}"
-  [ "$cust" -gt 0 ] && reason="🧵 ${cust} dispatched session(s) fired from this cwd have NOT returned (cc-custody list --open --cwd .). You are their ORIGINATOR — their completion pings arrive through this inbox, so idling deaf is how a wave gets abandoned. Await them armed; when one reports, collect + synthesize + land its work, then \`cc-custody return <marker-or-slug>\` (or \`cc-custody abandon <token> --why …\` if superseded).
+  # TWO SPELLINGS, because the two facts are different (see the attribution block above). Rows this
+  # pane OWNS support the originator claim; rows that merely cannot be attributed do not, and saying
+  # so is what keeps the alarm informative for the session that actually fired the wave.
+  if [ "$cust_mine" -gt 0 ]; then
+    _custmsg="🧵 ${cust_mine} dispatched session(s) YOU fired have NOT returned (\`cc-custody list --open --cwd . --json\` — the rows whose originatorPane is this pane). You are their ORIGINATOR — their completion pings arrive through this inbox, so idling deaf is how a wave gets abandoned. Await them armed; when one reports, collect + synthesize + land its work, then \`cc-custody return <marker-or-slug>\` (or \`cc-custody abandon <token> --why …\` if superseded)."
+    [ "$cust_unk" -gt 0 ] && _custmsg="${_custmsg} (${cust_unk} further open row(s) here carry no originator field at all, so whether they are also yours cannot be decided from the store.)"
+  elif [ "$cust_unk" -gt 0 ]; then
+    _custmsg="🧵 ${cust_unk} dispatched session(s) are open against this cwd, and the store cannot say whose (\`cc-custody list --open --cwd . --json\` — no originatorPane/notifyBack on those rows, or this pane has no id). If you fired them, their pings arrive through this inbox and idling deaf is how a wave gets abandoned — await them armed, then \`cc-custody return <marker-or-slug>\`. If a sibling session sharing this checkout fired them, this is NOT yours: it is that pane's debt, and nothing here is owed by you."
+  else
+    _custmsg=""
+  fi
+  [ -n "$_custmsg" ] && reason="${_custmsg}
 
 ${reason}"
   jq -nc --arg r "$reason" --arg m "🔔 Wake floor: arming this session's inbox watcher (no wake path was armed)." \
@@ -695,6 +795,10 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
 
   printf '%s' "You are about to go idle with ${n_files} file(s) you edited THIS TURN still uncommitted: ${shown}. Finish the in-scope work, run the repo's gate, and commit with explicit paths (then land per the repo's ship policy). If this dirt is deliberately parked, or is not yours to commit, run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
   [ -n "$cur_sid" ] && printf '%s' "$cur_sid" > "${f}.sid" 2>/dev/null
+  # Same cwd-stamp the CLI `set` writes. A MECHANICALLY armed sentinel is the one most likely to be
+  # cleared from the wrong directory — the model never chose where it was armed — so it needs the
+  # sidecar that lets `clear` name the cwd at least as much as an agent-set one does.
+  printf '%s' "$cwd" > "${f}.cwd" 2>/dev/null || true
   log_idl armed "mechanical-dirty" "$(jq -cn --arg c "$cwd" --argjson n "${n_files:-0}" \
     '{cwd:$c,files:$n,source:"session-writes"}' 2>/dev/null)"
   return 0
@@ -808,7 +912,7 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
 # Floor order: mechanical 🔧 (uncommitted own writes) → ship floor (📦/🚀 own work) → wake floor
 # (reachability). At most ONE floor emits per Stop — the hook prints a single JSON object.
 if [ ! -f "$f" ]; then
-  rm -f "${f}.count" "${f}.sid" 2>/dev/null
+  rm -f "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
   if ! mechanical_arm; then
     if ! _sf_json="$(ship_floor)"; then
       printf '%s' "$_sf_json"
@@ -829,7 +933,7 @@ fi
 # A kill phrase ⇒ clear + allow. (Detection is the shared kill_switch_active above, which the wake
 # floor also consults so it can never block a stop the operator asked for.)
 if kill_switch_active; then
-  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  rm -f "$f" "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
   printf 'session-continue: kill-switch phrase in last user message — cleared sentinel, allowing stop.\n' >&2
   log_idl cleared "kill-switch"
   exit 0
@@ -847,7 +951,7 @@ fi
 # BOTH sids are known (a missing sid = no evidence = never a wrong clear). $cur_sid is computed above.
 stored_sid=$(cat "${f}.sid" 2>/dev/null || true)
 if [ -n "$stored_sid" ] && [ -n "$cur_sid" ] && [ "$stored_sid" != "$cur_sid" ]; then
-  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  rm -f "$f" "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
   printf 'session-continue: sentinel sid=%s ≠ session sid=%s (inherited across succession) — cleared, allowing stop.\n' "$stored_sid" "$cur_sid" >&2
   log_idl cleared "sid-mismatch" "$(jq -cn --arg a "$stored_sid" --arg b "$cur_sid" \
     '{stored_sid:$a,session_sid:$b}' 2>/dev/null)"
@@ -860,7 +964,7 @@ n=$(cat "${f}.count" 2>/dev/null); [ -n "$n" ] || n=0
 case "$n" in ''|*[!0-9]*) n=0 ;; esac
 if [ "$n" -ge "$MAX" ]; then
   step=$(cat "$f" 2>/dev/null)
-  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  rm -f "$f" "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
   # NOT a silent give-up (D-7): name the re-arm lever, then ALLOW the stop (non-blocking).
   capmsg="session-continue: hit the continuation cap (${MAX}); allowing this stop. If in-scope work genuinely remains, re-arm with \`session-continue.sh set \"<next step>\"\` (a fresh set zeroes .count). Last step was: ${step}"
   printf '%s\n' "$capmsg" >&2
