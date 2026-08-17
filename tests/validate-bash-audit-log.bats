@@ -84,10 +84,14 @@ SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] \[[^]]+\] '
   # vacuous control). The mutation is a FROZEN stamp rather than a deleted one, because deleting it
   # is caught by the fallback below — see (8), which is what the first draft of this control
   # accidentally measured.
+  # The anchor MOVED once already: the stamp used to be produced by the logger's own jq and now
+  # comes from the single payload parse at the top of the file (backlog 054499f0c342). This grep is
+  # what caught that — it failed loudly rather than mutating nothing, which is the whole point of
+  # anchor-checking a mutant.
   MUT="$D/mutant-frozen.sh"
-  anchor='(now|todateiso8601)'
+  anchor='(now | todateiso8601)'
   grep -qF -- "$anchor" "$HOOK"
-  sed 's/(now|todateiso8601)/("1999-01-01T00:00:00Z")/' "$HOOK" > "$MUT"
+  sed 's/(now | todateiso8601)/("1999-01-01T00:00:00Z")/' "$HOOK" > "$MUT"
   chmod +x "$MUT"
   now=$(date -u '+%Y-%m-%dT%H:%M')
   good=$(emit "echo r15-mutant-probe" "sid-9")
@@ -103,18 +107,18 @@ SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] \[[^]]+\] '
   ! [[ "$mline" == *"$now"* ]]
 }
 
-@test "(8) the jq-failure FALLBACK produces the same shape and a live stamp" {
-  # Proven by mutating the collapsed jq to emit ONE field, so the tab test fails exactly as it does
-  # when jq is absent or the payload is unreadable. This path forks `date` — that is the point: the
-  # saving is taken on the modal path and paid back only where the fast path could not answer.
-  MUT="$D/mutant-nofield.sh"
-  anchor='(now|todateiso8601)'
+@test "(8) an EMPTY stamp from the parse still yields a live one — the date fallback holds" {
+  # Mutating the stamp to "" makes the parse hand the logger an empty TS, which is exactly what a
+  # jq that answered but could not produce a stamp would do. The `[ -n "$TS" ] || TS=$(date …)`
+  # fallback must then fork `date` and produce a live stamp — the saving is taken on the modal path
+  # and paid back only where the fast path could not answer.
+  MUT="$D/mutant-nostamp.sh"
+  anchor='(now | todateiso8601)'
   grep -qF -- "$anchor" "$HOOK"
-  sed 's/(now|todateiso8601)/(empty)/' "$HOOK" > "$MUT"
+  sed 's/(now | todateiso8601)/("")/' "$HOOK" > "$MUT"
   chmod +x "$MUT"
   now=$(date -u '+%Y-%m-%dT%H:%M')
   mline=$(emit "echo r15-fallback-probe" "sid-9" "$MUT")
   [[ "$mline" =~ $SHAPE ]] || false
-  [[ "$mline" == *"$now"* ]] || false
-  [[ "$mline" == *"[-]"* ]]
+  [[ "$mline" == *"$now"* ]]
 }

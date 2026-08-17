@@ -43,9 +43,37 @@ abstain_unclear() { # <reason>
   exit 0
 }
 command -v jq >/dev/null 2>&1 || abstain_unclear "jq unavailable on PATH"
-if ! CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null); then
+
+# ONE parse of the payload, not three (fork census 2026-08-17, backlog 054499f0c342). This hook read
+# the SAME stdin three times with three `jq` execs — `.tool_input.command` here, then
+# `.tool_input.run_in_background` at the /goal guard, then `.session_id` at the audit logger — for
+# 11.6 ms of a 71.9 ms modal path, two thirds of it pure duplication. The same defect the plan's
+# §2 audit already named in `waiting-recycle.sh` and left unfixed here.
+#
+# SHAPE, and it is chosen so the COMMAND cannot be corrupted: line 1 is the three scalars, tab
+# separated; everything after the first newline is the command VERBATIM, newlines, tabs and all.
+# `@tsv` is deliberately NOT used — it escapes a tab as `\t`, which would silently rewrite any
+# command containing one, and this value is the thing every danger pattern is matched against.
+# Cells are padded at the EMITTER via `cell()`, because `//` substitutes for null/false and never
+# for a present-but-empty string — and tab is IFS-whitespace, so one empty cell would shift every
+# later column left, silently, exit 0 (scripts/tsv-pad-lint.sh).
+#
+# Fail-open posture is UNCHANGED: any jq failure still lands in abstain_unclear, which is the guard
+# that stops an unreadable payload from silently disabling the whole bash validator.
+if ! _PAYLOAD=$(printf '%s' "$INPUT" | jq -r '
+      def cell(ph): (if . == null then "" else . end) | tostring
+                    | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+      ((.session_id | cell("-")) + "\t"
+        + (.tool_input.run_in_background | cell("false")) + "\t"
+        + (now | todateiso8601)),
+      (.tool_input.command // empty)' 2>/dev/null); then
   abstain_unclear "unparseable PreToolUse payload on stdin"
 fi
+_META=${_PAYLOAD%%$'\n'*}
+if [[ "$_PAYLOAD" == *$'\n'* ]]; then CMD=${_PAYLOAD#*$'\n'}; else CMD=""; fi
+IFS=$'\t' read -r _P_SID _P_BG _P_TS <<<"$_META"
+[ -n "${_P_SID:-}" ] || _P_SID="-"
+[ -n "${_P_BG:-}" ] || _P_BG="false"
 
 # Source the argv-aware flag detector. If unavailable, caller can force
 # legacy mode; otherwise fall back silently on a per-call basis below.
@@ -182,7 +210,7 @@ check_real_flag() {
 # Rollback knob: CC_GOAL_BG_SLEEP_SECS (park threshold, seconds). Tests:
 # tests/validate-bash-goal-guard.bats.
 _gg_shape=""
-_gg_bg="$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)"
+_gg_bg="$_P_BG"   # from the single payload parse at the top — was a second `jq` fork on this path
 if [[ "$_gg_bg" == "true" ]]; then
   # (1) whole-command shape — a poll loop's `sleep` lives in a body the segment splitter would
   #     tear apart, so this one is judged over the intact command.
@@ -1006,23 +1034,17 @@ fi
 # multi-line command shredded the line structure with no way to tell a continuation line from a
 # new entry. `.session_id` comes from stdin (never CLAUDE_SESSION_ID — CC does not export it, D-9).
 #
-# ONE jq for BOTH fields, and no unconditional `mkdir` (fork census 2026-08-17,
-# docs/research/validate-bash-fork-census-2026-08-17.md §6 levers 2-3). These four lines forked
-# jq + mkdir + date on EVERY invocation — 7.2 ms, 10% of the modal path's 71.9 ms, to append one
-# audit line. `todateiso8601` is byte-identical to `date -u '+%Y-%m-%dT%H:%M:%SZ'` (verified), and
-# bash 3.2.57 here has no `printf '%(...)T'`, so jq is the only fork-free source of the stamp.
+# ZERO forks on the modal path (fork census 2026-08-17,
+# docs/research/validate-bash-fork-census-2026-08-17.md §6 levers 2-3). These four lines used to
+# exec jq + mkdir + date on EVERY invocation — 7.2 ms, 10% of the modal path's 71.9 ms, to append
+# one audit line. Both fields now come from the single payload parse at the top of the file:
+# `todateiso8601` there is byte-identical to `date -u '+%Y-%m-%dT%H:%M:%SZ'` (verified), and bash
+# 3.2.57 here has no `printf '%(...)T'`, so jq is the only fork-free source of the stamp.
 # Nothing above this point is touched: every deny/ask decision is already made, so a fault here
 # can lose an audit line but can never open the gate.
-LOGMETA=$(printf '%s' "$INPUT" | jq -r '[(.session_id // "-"), (now|todateiso8601)] | @tsv' 2>/dev/null)
-if [[ "$LOGMETA" == *$'\t'* ]]; then
-  SID=${LOGMETA%%$'\t'*}
-  TS=${LOGMETA#*$'\t'}
-else
-  # jq absent, or a payload it could not read: keep the OLD shape exactly, forking `date` only here.
-  SID="-"
-  TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-fi
-[ -n "$SID" ] || SID="-"
+SID="$_P_SID"
+TS="$_P_TS"
+# `date` is forked ONLY if the single parse somehow yielded no stamp — never on the modal path.
 [ -n "$TS" ] || TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 # `[ -d ]` is a builtin; the directory exists on every call after the first, so the fork was pure loss.
 [ -d ~/.claude/logs ] || mkdir -p ~/.claude/logs
