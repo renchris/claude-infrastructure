@@ -1613,6 +1613,33 @@ EOF
   [ "$got" = "90103 " ]
 }
 
+# ── THE WHITELIST BOUND TO ONE CLASS OUT OF FOUR (2026-08-17). After the land path was whitelisted,
+# no ship-land/desk-land was classified again — and SIGTERM-143 land deaths CONTINUED at 8.4% (14 in
+# 166 attempts over the 7 h after the fix went live, vs 14.3% before). The remaining door: `wl` was
+# consulted by the `orphan-bash` branch ALONE, while `timeout`/`gtimeout` sit on the orphan-tool
+# list — and wrapping a command in a bound is precisely how a whitelisted daemon is normally run. So
+# protection depended on whether somebody had put a `timeout` in front of the script, which is not a
+# property anyone reasons about when adding a name to `wl`. Both directions in one closed world.
+@test "garbage: the whitelist reaches a daemon invoked THROUGH timeout, and unrelated tools still die" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90201 1 10:00 timeout
+90202 1 10:00 timeout
+90203 1 10:00 sleep
+EOF
+  cat > "$GB" <<'EOF'
+90201 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/.claude/scripts/postland-verify.sh --run-if-needed
+90202 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/some/unrelated/thing.sh
+90203 sleep 3000
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # 90201 is whitelisted THROUGH its bound and must survive; 90202 (same shape, unwhitelisted
+  # payload) and 90203 (a bare tool) are the controls that prove the arm still collects.
+  [ "$got" = "90202 90203 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
