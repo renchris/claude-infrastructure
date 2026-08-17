@@ -22,6 +22,10 @@
 # A suite that cannot fail is not a control.
 
 setup() {
+  # Fixture $HOME before anything else: the harness invokes hooks/validate-bash.sh, which appends to
+  # ~/.claude/logs — against the operator's live tree unless this is set, and two concurrent runs
+  # would then collide on the same path. Caught by the test-hermeticity ratchet at land time.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   HARNESS="$ROOT/scripts/validate-bash-differential.sh"
   CONTROLS="$ROOT/scripts/validate-bash-differential-controls.sh"
