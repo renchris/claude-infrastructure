@@ -26,6 +26,26 @@
 #   same pipeline with pipefail OFF                              0/400
 #   consumer drained (`grep PAT >/dev/null`, `awk 'NR<=N'`)      0/400
 #
+# THE 0/200 ROW IS A MEASUREMENT OF A SIZE, NOT OF A COMMAND WORD — re-measured 2026-08-17, same
+# box, /bin/bash + /usr/bin/grep, builtin `printf '%s\n' "$VAR"` with the match on the FIRST line of
+# a MULTI-LINE payload (the shape every site in this tree actually uses):
+#
+#   `printf '%s\n' "$VAR"` builtin, 4 KiB                        0/10
+#   `printf '%s\n' "$VAR"` builtin, 62 KB                        0/10
+#   `printf '%s\n' "$VAR"` builtin, 64 KiB                      10/10   ← the pipe buffer
+#   `printf '%s\n' "$VAR"` builtin, 96 KB / 128 KB / 269 KB     10/10
+#
+# The boundary is not probabilistic and it is not the grep implementation: it is the 64 KiB pipe
+# buffer. One write that FITS completes before the consumer is even scheduled; one that does not
+# blocks mid-write and is SIGPIPEd exactly like an external producer, deterministically. (A brief
+# measured against a differently-shaped payload put the knee lower and made it look statistical —
+# 7/10 at 49 KB, 10/10 at 59 KB. Same conclusion, softer edge; the sharp one above is this shape.)
+#
+# A variable's contents are not bounded by inspection, so the builtin exemption cannot key on the
+# command WORD — it keys on the ARGUMENT. A pure LITERAL keeps the 0/200 exemption (a literal you
+# can read is a length you can read, and that is what the row above actually measured); a parameter
+# expansion, command substitution, or backtick does not.
+#
 # TWO CORRECTIONS to what docs/plans/RELOGIN_BUILD_CONTRACT.md § "The defect" carries, both
 # re-measured above and both load-bearing for this rule's scope:
 #
@@ -33,7 +53,9 @@
 #     whether the producer makes MORE THAN ONE WRITE after the match. A single `write(2)` under the
 #     64 KiB pipe buffer completes before the consumer is even scheduled, so `printf '%s' "$BIG"`
 #     is safe at 4 KiB (0/200) while a 4-line separate process fails 11% and a streaming producer
-#     fails 85% at ONE kilobyte. Builtin-producer sites are therefore NOT violations here.
+#     fails 85% at ONE kilobyte. Builtin-producer sites with a LITERAL argument are therefore not
+#     violations here — but a variable-sourced one is only safe while the variable stays under the
+#     buffer, which nothing enforces (see the 64 KiB re-measurement above).
 #   · zsh is NOT immune. The contract attributes an early 0/300 repro to "zsh does not share bash's
 #     pipefail/SIGPIPE interaction"; re-measured, `zsh -c 'set -uo pipefail; …'` on a streaming
 #     producer is 400/400 FALSE — identical to bash. That 0/300 was a SINGLE-WRITE producer, i.e.
@@ -61,9 +83,12 @@
 #   2. the pipeline's LAST stage exits early — `grep -q|-l|-m N`, `head`, `sed …q`, `read`,
 #      `awk …exit`. A draining consumer (`grep -c`, plain `grep`, `awk 'NR<=N'`) cannot orphan the
 #      producer and is the fix, so it must not be the trigger;
-#   3. the PRODUCER is external/streaming. `echo`/`printf`/`:` of a shell variable is ONE write and
-#      measured 0/200 — flagging it would be a false positive on the commonest safe form in the tree
-#      (229 of the 367 status-consuming sites);
+#   3. the PRODUCER is not bounded by inspection. External/streaming always counts. `echo`/`printf`/
+#      `:` of a pure LITERAL is one write of a length you can read off the line, and is exempt; the
+#      same builtin fed a parameter expansion, a command substitution, or a backtick is NOT, because
+#      the bytes it writes are whatever the variable happens to hold — 0/10 at 62 KB, 10/10 the
+#      moment the write exceeds the 64 KiB pipe buffer. The command word is identical in both cases,
+#      so only the argument can discriminate;
 #   4. the pipeline's status is CONSUMED — an `if`/`elif`/`while`/`until` condition, a `!` operand,
 #      or (under `set -e`) a bare pipeline or a top-level `VAR=$(…)`. `local`/`declare`/`export`
 #      MASK the status (the builtin's own 0 wins), and `[ -n "$( … )" ]` discards it, so neither is
@@ -75,6 +100,7 @@
 #   · `p | grep -q PAT`   → `p | grep PAT >/dev/null`     — plain grep drains; 0/400
 #   · `p | grep -qE PAT`  → `p | grep -E PAT >/dev/null`
 #   · `p | head -N`       → `p | awk 'NR<=N'`             — drains, same bytes out; 0/400
+#   · `printf '%s' "$v" | grep -q P` → `case "$v" in *P*)` — no pipe at all, and one fewer fork
 #   · producer UNBOUNDED or expensive (`tail -f`, `yes`, a repo-wide `find`): do NOT drain — capture
 #     first (`out=$(p)`) and match with `case`/`[[`, which is what ec9a43a9 did and costs one fewer
 #     fork than the pipe it replaces.
@@ -172,7 +198,14 @@ function is_external(s,   t, p) {
   }
   sub(/^[({][ \t]*/, "", t)
   t = ltrim(t)
-  if (t ~ /^(echo|printf|:)([ \t]|$)/)                 return 0   # ONE write — 0/200 at 4 KiB
+  # A builtin producer is ONE write only while what it writes is BOUNDED BY INSPECTION. A literal
+  # argument is; a parameter expansion, a command substitution, or a backtick is not. The same printf
+  # that measured 0/200 at 4 KiB is 10/10 FALSE once the write exceeds the 64 KiB pipe buffer (see
+  # the header table). The command WORD is identical in both cases, so only the argument can decide.
+  if (t ~ /^(echo|printf|:)([ \t]|$)/) {
+    if (t ~ /\$/ || t ~ /`/) return 1                  # variable/substitution-sourced — UNBOUNDED
+    return 0                                           # pure literal — ONE write, 0/200 at 4 KiB
+  }
   if (t ~ /^(head|tail)[ \t]+(-n[ \t]*)?-?[1-9]([ \t]|$)/) return 0   # bounded: ≤9 lines, one write
   return 1
 }
@@ -473,12 +506,27 @@ selftest() {
   expect r9 RED "external producer nested in a whole-RHS \$( … ) under set -e"
   mk_noe r10 "strings -a \"\$bin\" 2>/dev/null | grep -q 'Claude-Session' && return 0"
   expect r10 RED "&& consumes the status with NO set -e (the cc-cloud 5/5-FALSE scar)"
+  # r11/r12 were GREEN fixtures until 2026-08-17, labelled "measured 0/200". That measurement was of
+  # a 4 KiB payload, not of the command word: re-measured, the SAME printf is 10/10 FALSE as soon as
+  # the write passes 64 KiB. Left GREEN, this control certified the very bug the widening fixes.
+  mk r11 "if printf '%s' \"\$MSG\" | grep -qE \"\$TELLS\"; then :; fi"
+  expect r11 RED "printf builtin fed a VARIABLE — unbounded by inspection, 10/10 FALSE past 64 KiB"
+  mk r12 "if echo \"\$X\" | grep -q pat; then :; fi"
+  expect r12 RED "echo builtin fed a VARIABLE"
+  # The backtick leg of the same rule — untested by r11/r12, which only exercise the `$` leg.
+  # (The `$( … )` leg is caught at clause 3 too, but clause 4's argument-substitution rule — the one
+  # g13 pins — masks the whole line before it is reached. That is pre-existing and deliberate, not a
+  # gap this widening opened: no such site exists in the tree.)
+  mk r13 "if printf '%s' \"\`git log --oneline\`\" | grep -q pat; then :; fi"
+  expect r13 RED "builtin fed a BACKTICK substitution"
 
   # ── must be GREEN: every legitimate form the tree actually uses ──
-  mk g1 "if printf '%s' \"\$MSG\" | grep -qE \"\$TELLS\"; then :; fi"
-  expect g1 GREEN "printf builtin producer — ONE write, measured 0/200"
-  mk g2 "if echo \"\$X\" | grep -q pat; then :; fi"
-  expect g2 GREEN "echo builtin producer"
+  # The literal half of the builtin rule. Without these the suite would pass against a lint that
+  # flagged EVERY builtin producer — proving "flags the variable one" is only half a discriminator.
+  mk g1 "if printf '%s\\n' 'ready' | grep -q ready; then :; fi"
+  expect g1 GREEN "printf of a pure LITERAL — one bounded write, measured 0/200"
+  mk g2 "if echo done | grep -q done; then :; fi"
+  expect g2 GREEN "echo of a pure LITERAL"
   mk g3 "if git status --porcelain | grep -c . >/dev/null; then :; fi"
   expect g3 GREEN "grep -c DRAINS — it is the fix, not the defect"
   mk g4 "if git status --porcelain | grep . >/dev/null; then :; fi"
@@ -511,7 +559,7 @@ EOF"
     echo "⛔ $SELF_NAME --selftest: $pass/$total — the detector no longer discriminates." >&2
     return 1
   fi
-  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions)"
+  echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
   return 0
 }
 
