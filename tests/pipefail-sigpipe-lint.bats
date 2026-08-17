@@ -9,9 +9,11 @@
 # WINDOW-CAPPED that narrowed a declared T-7d window to 72h. Both were misread as deploy lag.
 #
 # Four properties are proved here, and all four matter:
-#   • it DISCRIMINATES — red on the real scar shapes, green on every legitimate form in the tree
-#     (the builtin-producer form is 229 of the 367 status-consuming sites; flagging it would make
-#     the lint unusable, so a false positive there is as fatal as a miss);
+#   • it DISCRIMINATES — red on the real scar shapes, green on every legitimate form in the tree.
+#     The builtin producer splits ON ITS ARGUMENT and BOTH halves are pinned here: a LITERAL is one
+#     bounded write and must stay green (a false red there is as fatal as a miss), while a
+#     variable-sourced one is unbounded by inspection and must be red. Until 2026-08-17 test 3
+#     asserted the second case GREEN on the strength of a 4 KiB measurement — see test 7;
 #   • the MECHANISM is real and the FIX repairs it — asserted by running actual bash, not by
 #     re-reading the detector. A lint for a race nobody re-measures is a lint for a rumour;
 #   • it is GREEN on the tree as it stands — a lint that ships standing-red is rot, and the nightly
@@ -32,10 +34,10 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (24/24, both directions)" {
+@test "1: the lint's own --selftest passes (27/27, both directions)" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '24/24' >/dev/null \
+  printf '%s' "$output" | grep '27/27' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -45,10 +47,21 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   printf '%s' "$output" | grep 'scripts/scar.sh:' >/dev/null || { echo "$output"; false; }
 }
 
-@test "3: GREEN on the builtin-producer form (229 of 367 sites — a false red here is fatal)" {
-  mkfile ok1 "if printf '%s' \"\$MSG\" | grep -qE \"\$TELLS\"; then :; fi"
+@test "3: the builtin producer splits on its ARGUMENT — literal GREEN, variable RED" {
+  # Until 2026-08-17 this test asserted the variable form GREEN, citing "229 of 367 sites" and the
+  # 4 KiB 0/200 measurement. That measurement is of a SIZE, not of a command word: the same printf is
+  # 10/10 FALSE once the write passes 64 KiB (test 7). Left as it was, this control certified the bug.
+  # Both halves are asserted, because "flags the variable one" alone would also pass against a lint
+  # that flagged every builtin producer — which is the false positive the old title feared.
+  mkfile lit1 "if printf '%s\\n' 'ready' | grep -q ready; then :; fi"
+  mkfile lit2 "if echo done | grep -q done; then :; fi"
   run census
-  [ -z "$output" ] || { echo "unexpected hit: $output"; false; }
+  [ -z "$output" ] || { echo "a pure-LITERAL builtin producer was flagged: $output"; false; }
+  rm -f "$FIX/scripts/lit1.sh" "$FIX/scripts/lit2.sh"
+  mkfile var1 "if printf '%s' \"\$MSG\" | grep -qE \"\$TELLS\"; then :; fi"
+  run census
+  printf '%s' "$output" | grep 'scripts/var1.sh:' >/dev/null \
+    || { echo "a VARIABLE-sourced builtin producer was not flagged: $output"; false; }
 }
 
 @test "4: GREEN on both canonical fixes (drained grep, and awk NR<=N for head -N)" {
@@ -79,11 +92,22 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   [ "$status" -ne 0 ] || { echo "the fix returns TRUE on a non-match — it is not a predicate"; false; }
 }
 
-@test "7: MECHANISM — a single-write builtin producer is genuinely safe (why clause 3 exempts it)" {
-  # This is the empirical basis for the biggest exemption in the rule. If it ever stops holding,
-  # the exemption is wrong and this test is the thing that says so.
+@test "7: MECHANISM — the builtin exemption is a SIZE, not a command word (both sides of 64 KiB)" {
+  # This is the empirical basis for clause 3's builtin exemption, and for its 2026-08-17 narrowing.
+  # The exemption is real BELOW the pipe buffer and false above it, so both arms are asserted: an
+  # exemption keyed on `printf`/`echo` alone would be sound on the first and wrong on the second.
   run bash -c 'set -uo pipefail; V="MATCHME$(head -c 4096 /dev/zero | tr "\0" x)"; printf "%s" "$V" | grep -q MATCHME'
-  [ "$status" -eq 0 ] || { echo "builtin producer took SIGPIPE at 4 KiB — clause 3 is unsound"; false; }
+  [ "$status" -eq 0 ] || { echo "builtin producer took SIGPIPE at 4 KiB — the exemption is unsound"; false; }
+
+  # 62 KB still fits one write; 64 KiB does not. Deterministic on this box (0/10 and 10/10), because
+  # the boundary is the buffer rather than a scheduling race — which is exactly why the command word
+  # cannot decide it. A variable's length is not readable off the line, so the ARGUMENT decides.
+  run bash -c 'set -uo pipefail; V="MATCHME
+$(head -c 63488 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
+  [ "$status" -eq 0 ] || { echo "builtin producer failed UNDER the pipe buffer (62 KB) — the literal exemption would be unsound too"; false; }
+  run bash -c 'set -uo pipefail; V="MATCHME
+$(head -c 131072 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
+  [ "$status" -ne 0 ] || { echo "builtin producer survived 128 KB — clause 3's NARROWING is over-scoped and 127 sites are false positives"; false; }
 }
 
 @test "8: the tree as it stands is GREEN against the committed allowlist" {
