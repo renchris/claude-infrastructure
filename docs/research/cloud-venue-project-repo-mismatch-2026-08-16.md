@@ -154,3 +154,11 @@ lists two such projects (`scripts/dispatch-projects.conf`): `doc_classifier` and
 `doc_classifier`. The prediction is now observed, not argued, and the §3 decision — **(a) fail
 closed vs (b) route by project** — carries a fourth datapoint of cost.
 `venue-foreign-repo-recurrence-2026-08-17.md`.
+
+**A FIFTH followed the same day** — `38de29ec5e59`, `doc_classifier` again, into another
+`claude-infrastructure` VM. It adds the one thing the first four could not show: that item had
+**already** burned a cloud session on 2026-08-11 (`bin/cc-dispatch:619-626`), by a different
+mechanism, so the cost of an unfixed venue is **not capped at one session per item** — the
+dispatcher re-fires the row. Its premise was re-confirmed and its supersession refuted from evidence
+already in this repo, so it is open-and-unstarted, blocked purely on venue.
+`venue-foreign-repo-recurrence-2026-08-17.md` § FIFTH OCCURRENCE.
