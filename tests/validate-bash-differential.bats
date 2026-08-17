@@ -52,7 +52,7 @@ setup() {
   run bash "$HARNESS"
   [ "$status" -eq 0 ]
   # the harness prints this section only on a coverage failure
-  [[ "$output" != *"COVERAGE FAILURE"* ]]
+  [[ "$output" != *"COVERAGE FAILURE"* ]] || false
   [[ "$output" != *"UNTESTED grep sites"* ]]
 }
 
@@ -80,7 +80,7 @@ setup() {
   [ -n "$line" ]
   safe="$(printf '%s\n' "$line" | sed -n 's/SAFE TO CONVERT: \([0-9][0-9]*\) of.*/\1/p')"
   total="$(printf '%s\n' "$line" | sed -n 's/.* of \([0-9][0-9]*\) sites.*/\1/p')"
-  [ -n "$safe" ] && [ -n "$total" ]
+  [ -n "$safe" ] && [ -n "$total" ] || false
   # strictly fewer than half convertible: this is the finding, and if a future change made most
   # sites convertible that is NEWS and should be re-adjudicated, not silently absorbed.
   [ $(( safe * 2 )) -lt "$total" ]

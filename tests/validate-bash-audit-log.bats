@@ -56,7 +56,7 @@ SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] \[[^]]+\] '
 
 @test "(3) a payload with NO session_id still renders the '-' placeholder, not an empty field" {
   line=$(emit "echo r15-nosid-probe" "")
-  [[ "$line" =~ $SHAPE ]]
+  [[ "$line" =~ $SHAPE ]] || false
   [[ "$line" == *"[-]"* ]]
 }
 
@@ -92,14 +92,14 @@ SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] \[[^]]+\] '
   now=$(date -u '+%Y-%m-%dT%H:%M')
   good=$(emit "echo r15-mutant-probe" "sid-9")
   mline=$(emit "echo r15-mutant-probe" "sid-9" "$MUT")
-  [[ "$good" =~ $SHAPE ]]
-  [[ "$good" == *"$now"* ]]
-  [[ "$mline" == *"1999-01-01T00:00:00Z"* ]]
+  [[ "$good" =~ $SHAPE ]] || false
+  [[ "$good" == *"$now"* ]] || false
+  [[ "$mline" == *"1999-01-01T00:00:00Z"* ]] || false
   # Negations LAST: bats errexit skips a failing negation placed mid-test, which makes it dead code
   # (MEMORY.md bats dead-assertion ratchet). `! cmd` is the form that carries its own exit status;
   # `cmd && false` does NOT — when cmd is false the list short-circuits and yields cmd's own rc 1,
   # so it fails on exactly the runs it is supposed to pass. Measured here, this run.
-  ! grep -qF -- "$anchor" "$MUT"
+  ! grep -qF -- "$anchor" "$MUT" || false
   ! [[ "$mline" == *"$now"* ]]
 }
 
@@ -114,7 +114,7 @@ SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] \[[^]]+\] '
   chmod +x "$MUT"
   now=$(date -u '+%Y-%m-%dT%H:%M')
   mline=$(emit "echo r15-fallback-probe" "sid-9" "$MUT")
-  [[ "$mline" =~ $SHAPE ]]
-  [[ "$mline" == *"$now"* ]]
+  [[ "$mline" =~ $SHAPE ]] || false
+  [[ "$mline" == *"$now"* ]] || false
   [[ "$mline" == *"[-]"* ]]
 }
