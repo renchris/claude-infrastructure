@@ -133,7 +133,17 @@ awaiter_rc() { local p="$BATS_TEST_TMPDIR/await-rc$1"; printf '#!/bin/bash\nexit
   run "$REPO/bin/cc-await-ping" "$UUID" --timeout 1 --interval 1
   [ "$status" -eq 2 ]
   [[ "$output" == *"verdict=timeout"* ]] || false
-  [[ "$output" == *"DESIGNED outcome"* ]] || false
+  # NOT the literal "DESIGNED outcome". ac465c087 (2026-08-13, "cc-await-ping reports MEASURED
+  # elapsed, never the configured timeout") reworded this sentence to "the DESIGNED end of a watch
+  # that ran its term, not a failure" and left the assertion behind, so this test has been red on
+  # trunk ever since — including at f5b67a94760e, the commit postland-verify still calls last-green.
+  # That is worse than an ordinary stale assertion: it makes the bisect's BASELINE false, so the
+  # verifier elects whichever commit is newest as culprit and auto-reverts it. It convicted
+  # 438883e365ec on exactly this evidence — a spin-guard land that touches nothing in this suite.
+  # Assert the two INVARIANTS this test's name actually claims — the verdict calls itself designed,
+  # and says it is not a failure — instead of one more exact phrase for the next reword to break.
+  [[ "$output" == *DESIGNED* ]] || false
+  [[ "$output" == *"not a failure"* ]] || false
   [[ "$output" == *"RE-ARM"* ]] || false
 }
 
