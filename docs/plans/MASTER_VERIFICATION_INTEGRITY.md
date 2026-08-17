@@ -1409,3 +1409,65 @@ so it is not attributable to it. Worth a row.
 3. The same basename-bijection question is open for `test-hermeticity-lint`'s **rule-4** population
    (`bin/* scripts/*.sh hooks/*.sh`, also 0 collisions today). Its rules 1-3 population is a single
    flat `tests/*.bats` glob where basename IS a bijection by construction — do not "fix" that half.
+
+### A THIRD trunk red, found by the rebase — and the memo defeated the assertion guarding V1
+
+Trunk moved 4 commits mid-session. Re-running the gate after the rebase (the rule exists for exactly
+this) turned `git-identity-lint --selftest` **RED**, and the attribution took three invalid
+measurements before it took a valid one. All three are worth recording, because each is a way this
+repo's own tooling can be measured wrong:
+
+| attempt | why it was invalid |
+|---|---|
+| trunk's script copied to a scratch dir | `SELF_ROOT` no longer resolves `scripts/lib/gate-memo.sh` ⇒ **memo OFF** |
+| trunk's script written over the worktree file | the tree is then **dirty** ⇒ `memo_init` refuses ⇒ memo OFF |
+| my script run with uncommitted changes | same dirty-tree refusal ⇒ memo OFF |
+
+Each read GREEN and each proved nothing. The valid measurement is a **detached `origin/main`
+worktree with a clean tree**: `--selftest` exits **1** with the memo armable and **0** under
+`CC_GITID_MEMO=off`. Pristine trunk was red, and it was not mine.
+
+**The mechanism is this plan's own thesis, one level in.** Case (h) is the assertion that proves a
+scan which CANNOT RUN is a non-verdict (exit 2) rather than a false green — a V1 member, and the one
+guarding the whole could-not-run contract for this lint. It stubs `awk` so `scan_file` fails. But it
+scanned `$d/guarded`, which the rule-1 case above had already scanned and therefore **RECORDED in
+the content-keyed memo**. Case (h) took a hit, `scan_file` was never called, the stub was never
+reached, `CHECK_FAILED` was never set, and `lint_tree` returned 0. **The cache defeated the
+assertion that exists to prove the lint cannot be silently green.**
+
+It is live, not latent: `tests/git-identity-lint.bats` case 1 asserts this selftest exits 0, and the
+memo store lives in the **git dir**, not under `$HOME` — so bats' `HOME` fixturing does not disarm
+it and the suite is red in any clean checkout. Distinct from the two reds `f7644beb` records
+(`land-gate-cas` case 11, `SHIP_LAND_MEAS_ROUNDS`).
+
+Fixed in **`2f4e1f10`** by giving case (h) a fixture unique to it, so the content-keyed memo cannot
+hold a verdict for it — restoring what the case actually means, a COLD file whose scan cannot run.
+**Not** fixed with `CC_GITID_MEMO=off`, which would have made it pass while asserting strictly less.
+
+#### The paired control reproduced the bug on its first writing, and the reason generalises
+
+The obvious control — "prove the same root reads clean UNSTUBBED, so the exit 2 is attributable to
+the stub" — is necessary, because a root with nothing scannable ALSO exits 2 (case (i)), so a
+silently-failed fixture would turn case (h) green through the missing-fixture path. Written the
+obvious way it **re-created the exact red**: the control's own clean scan RECORDED the fixture and
+handed case (h) the cache hit back. And because the memo is keyed on **content, not path**, one
+recording would have poisoned every LATER run even though `$d` is a fresh mktemp each time — green
+on run 1, red forever after. The control now runs memo-off, which proves scannability and records
+nothing.
+
+**The generalisable rule: a control that OBSERVES through the cache is part of the cached
+population.** Verifying a memoized checker requires asking whether the verification itself writes an
+entry — and the failure it produces is the second-run kind, which a single green run cannot see.
+Every selftest verdict in this entry was therefore taken over **five consecutive runs on a clean
+tree**, not one.
+
+Mutation-proved per site, each mutant committed into a detached worktree so its tree was clean and
+the memo genuinely armable (a dirty mutant tree silently disarms the memo and every mutant reads
+green — the fourth way to measure this wrong):
+
+| mutant | site | result |
+|---|---|---|
+| control | — | rc 0, 0 failures |
+| M4 | case (h) reuses the warm `$d/guarded` (the pre-fix state) | rc 1 — reproduces the trunk red |
+| M5 | paired control loses `CC_GITID_MEMO=off` | rc 1 — the contamination above |
+| M6 | the fixture is never created | rc 1 — caught by the paired control, by name |
