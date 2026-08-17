@@ -130,10 +130,19 @@ awaiter_rc() { local p="$BATS_TEST_TMPDIR/await-rc$1"; printf '#!/bin/bash\nexit
 @test "the timeout verdict names itself as designed, so its reader does not triage it as a fault" {
   # The harness renders any non-zero background exit as `failed with exit code N`, so the only place a
   # clean timeout can declare itself is the stderr the notification carries.
+  #
+  # The assertion asks for the CLAIM in the title, not one authored sentence. It read
+  # `*"DESIGNED outcome"*` from birth (c92c6fe7) and the subject has never printed those two words
+  # adjacently — it says "A term=full outcome is the DESIGNED end of a watch that ran its term, not a
+  # failure". So this test was RED on the commit that introduced it, and the red said nothing about
+  # cc-await-ping: the self-naming it exists to protect was present the whole time. Quoting a phrase
+  # the subject never emitted is the defect; `DESIGNED` + `not a failure` are the two things the title
+  # actually claims, and prose around them can be rewritten without manufacturing another false red.
   run "$REPO/bin/cc-await-ping" "$UUID" --timeout 1 --interval 1
   [ "$status" -eq 2 ]
   [[ "$output" == *"verdict=timeout"* ]] || false
-  [[ "$output" == *"DESIGNED outcome"* ]] || false
+  [[ "$output" == *"DESIGNED"* ]] || false
+  [[ "$output" == *"not a failure"* ]] || false
   [[ "$output" == *"RE-ARM"* ]] || false
 }
 
