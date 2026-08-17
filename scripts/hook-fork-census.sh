@@ -177,6 +177,9 @@ build_payloads() {
     [[ -z "${class:-}" || "${class:0:1}" == "#" ]] && continue
     [[ -n "${cmd:-}" ]] || continue
     n=$((n+1))
+    # The $c/$bg/$cwd below are jq's own variables, bound by --arg above — single quotes are
+    # mandatory here, since letting the shell expand them would substitute empty strings.
+    # shellcheck disable=SC2016
     "$JQ" -n --arg c "$cmd" --argjson bg "${bg:-false}" --arg cwd "$REPO_ROOT" \
       '{tool_name:"Bash",tool_input:{command:$c,run_in_background:$bg},cwd:$cwd,session_id:"census-0000"}' \
       > "$OUTDIR/payload.$n.json"
@@ -234,6 +237,9 @@ run_xtrace() {
     payload="$OUTDIR/payload.$i.json"
     # PS4 delimiter is '@' — a single, non-regex-special character. bash repeats PS4's FIRST
     # character once per nesting level, hence the `^\+*@` anchor rather than a fixed prefix.
+    # PS4 must stay single-quoted: BASH_SOURCE and LINENO have to expand in the TRACED shell, at
+    # each traced line, not once here in this one.
+    # shellcheck disable=SC2016
     env "${CENSUS_ENV[@]}" PS4='+@${BASH_SOURCE##*/}:${LINENO}@ ' \
       /bin/bash -x "$HOOK" < "$payload" >/dev/null 2>"$OUTDIR/xtrace.$class.txt"
     # A traced line is an external exec iff its FIRST word is one of the resolved tool names.

@@ -212,8 +212,8 @@ for i in $(seq 0 $((NSITES-1))); do
 "
     fi
   done
-  if [[ $ndiv -gt 0 ]]; then MEASURED[$i]=DIVERGENT; else MEASURED[$i]=EQUIVALENT; fi
-  DIVCOUNT[$i]=$ndiv; APPCOUNT[$i]=$napp; FIRSTDIV[$i]="$first"
+  if [[ $ndiv -gt 0 ]]; then MEASURED[i]=DIVERGENT; else MEASURED[i]=EQUIVALENT; fi
+  DIVCOUNT[i]=$ndiv; APPCOUNT[i]=$napp; FIRSTDIV[i]="$first"
 done
 
 # ── report ───────────────────────────────────────────────────────────────────────────────────────
@@ -234,6 +234,9 @@ for i in $(seq 0 $((NSITES-1))); do
   ok=OK
   [[ "${MEASURED[$i]}" == "${S_EXPECT[$i]}" ]] || { ok=MISMATCH; FAIL=1; }
   if [[ $MARKDOWN -eq 1 ]]; then
+    # The backticks below are markdown, not command substitution — the single quotes are what keeps
+    # them literal, so this is the intended form rather than a missed expansion.
+    # shellcheck disable=SC2016
     printf '| %s | %s | `%s` | %s | %d | %d | **%s** | %s | %s |\n' \
       "${S_ID[$i]}" "${S_LINE[$i]}" "${S_FORM[$i]}" "${S_SUBJ[$i]}" \
       "${APPCOUNT[$i]}" "${DIVCOUNT[$i]}" "${MEASURED[$i]}" "${S_EXPECT[$i]}" \
