@@ -347,9 +347,46 @@ else
   warnings=$((warnings + 1))
 fi
 _gh_install "$HOME/.git-template/hooks"
+
+# --- init.templateDir: set it, but NEVER from an ephemeral HOME --------------------------------
+#
 # init.templateDir is what makes the template reach a new repo at all. Unset, every clone lands
-# unguarded and the copies above are inert decoration.
-if [[ "$(git config --global --get init.templateDir || true)" != "$HOME/.git-template" ]]; then
+# unguarded and the copies above are inert decoration. So the setting itself is load-bearing and
+# this guard must not suppress it on a real machine.
+#
+# THE DEFECT (measured 2026-08-11): the VALUE is $HOME-derived and the WRITE is `--global`, and
+# those two are not bound to the same HOME. Run under an isolated gate HOME, $HOME is a temp dir,
+# so the value becomes e.g. /var/folders/.../T/gate-home.qhMxtm/.git-template — while the write
+# destination can still be the operator's REAL global config, because git resolves `--global`
+# through GIT_CONFIG_GLOBAL / XDG_CONFIG_HOME before it ever looks at $HOME/.gitconfig, and a gate
+# that overrides HOME does not necessarily override those. The temp dir is then deleted, every
+# later `git init` on the box warns "templates not found" and creates NO hooks/ directory, and the
+# symptom surfaces three tests away from the cause (tests/ship-land.bats 14/15/33 write
+# $ORIGIN/hooks/update into a bare repo that no longer has one) where it reads as a test bug.
+#
+# THE DISCRIMINATOR is the passwd database, not a path denylist — scripts/lib/real-home.sh owns it
+# and carries the full rationale, the resolution ladder (bash `~<user>` first, dscl/getent as the
+# cross-check), and why the username comes from `id -un` rather than $USER.
+#
+# FAIL DIRECTION HERE: a HOME that is provably NOT the passwd home ⇒ SKIP the write, one line to
+# stderr, install continues. The exit status is unchanged and `warnings` is deliberately NOT
+# incremented — an isolated HOME is the *correct* state for every gate/bats caller (they all pass
+# --config-dir into a throwaway dir), so counting it would make the common case report a defect.
+# An unresolvable passwd home fails OPEN inside the lib, so a fresh machine still gets the setting.
+#
+# A MISSING LIB SKIPS THE WRITE. The lib lives in this same checkout, so its absence means a
+# broken/partial tree; between "silently skip a load-bearing setting" and "write a path we cannot
+# vouch for into the operator's global git config", only the first is recoverable and loud.
+if [[ -r "$REPO_DIR/scripts/lib/real-home.sh" ]]; then
+  # shellcheck source=scripts/lib/real-home.sh
+  . "$REPO_DIR/scripts/lib/real-home.sh"
+else
+  cc_home_is_passwd_home() { CC_HOME_NOT_OURS_WHY="scripts/lib/real-home.sh is missing from $REPO_DIR"; return 1; }
+fi
+
+if ! cc_home_is_passwd_home; then
+  echo "  ⚠ init.templateDir NOT set — $CC_HOME_NOT_OURS_WHY; refusing to write a path derived from an ephemeral HOME into the global git config" >&2
+elif [[ "$(git config --global --get init.templateDir || true)" != "$HOME/.git-template" ]]; then
   run git config --global init.templateDir "$HOME/.git-template"
   echo "  ✓ git config --global init.templateDir → $HOME/.git-template"
 fi
