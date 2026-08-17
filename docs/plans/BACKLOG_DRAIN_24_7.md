@@ -87,6 +87,24 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~05:30Z — W-P2 GO-LIVE: the drain chain is running.** (S3's own landed entry
+  below carries the full root cause; this entry is the go-live record.) **First GREEN since
+  08-15: `416a7191dea8` (475 suites, failing=[], run_s 2374); deploy-live ADVANCED on the
+  VERIFIED tier — `origin/main..live = 0`.** Every W-P1 fix is now LIVE.
+  Production evidence: the dispatcher's first live passes turned the stale-worktree case into
+  claim→refuse→BLOCK (one cycle, wt-02ba4e52389a, 05:01Z) with zero churn on the three old ids;
+  a cloud admission is in flight (row e2af8839be87, claim 04:46Z) = the A2 end-to-end probe;
+  the lead's postland-red page at 6200a8698 was A/B-exonerated (findings=1 identically at
+  parent/self/main). The rc-124 elapsed-discriminator content is on main (cherry `-`; branch
+  sha 52e388369).
+  **LOCAL DRAIN CHAIN FIRED: recycle #10, pane 131, worktree drain/recycle-10** — brief
+  /tmp/fire-drain-recycle10.txt per §4.1 (chain constraint IN the goal; smallest-effort-first
+  from the live fold; falsifier-first row picking; conservation printed per recycle; true-zero
+  termination clause). §5 gate status: (1) convergence ✓ · (3) freshness ✓ (138 validated /
+  5 closed in production) · (4) conservation structural in the goal · (2) the unattended recycle
+  boundary proves on the chain's FIRST self-recycle (#10→#11) — watch for it. R2 (pane 106)
+  still out: 7/12 stranded branches landed, T2 continuing; ledger shows rows closing with
+  "re-land of the stalled cloud session's …" landed evidence.
 - **2026-08-16 ~21:53Z — W-P1/S3 landed: the verifier was blocked by a FALSE prelint red, not by
   the ladder bound this wave was briefed against.** Landed `6ce67de91` · `e334bf6c1` · `2f84bf743`
   (content-verified on origin/main, 3 paths). The next sweep ran the corpus at 21:56:12Z —
