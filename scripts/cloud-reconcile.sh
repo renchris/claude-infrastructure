@@ -421,8 +421,24 @@ EOF
   # a repo other sessions are using. The identity comes from the same resolution `--reset-author`
   # uses (config → GIT_AUTHOR_*), and the ORIGINAL AUTHOR DATE is carried over, which
   # `--reset-author` would have discarded: when the VM did the work is provenance too.
-  f="$(mktemp "${TMPDIR:-/tmp}/cloud-reauthor.XXXXXX")" || {
-    REAUTH_DETAIL="could not create a temporary file to compose the rewritten messages."
+  # 🚨 AN INHERITED TMPDIR CAN NAME A DIRECTORY THAT NO LONGER EXISTS, and this line trusted it.
+  # Measured 2026-08-17 across five live refusal artifacts, all of the same shape:
+  #   mktemp: mkstemp failed on …/T/postland-run.VRdnYH/cloud-reauthor.XXXXXX: No such file or directory
+  # postland-verify hands the corpus a PRIVATE TMPDIR (`postland-run.XXXXXX`, and a nested
+  # `retry.XXXXXX` on its re-runs) and REAPS it when the run ends. Anything that inherited that
+  # value and outlived the run — or was started from a shell that did — is left pointing at a path
+  # that was deleted underneath it. `${TMPDIR:-/tmp}` cannot see that: the variable is SET and
+  # non-empty, so the fallback never fires, and the only failure the caller ever hears is a land
+  # refusal (rc 70) blamed on re-authoring. Five of the 39 stuck cloud branches were refused for
+  # this and nothing about their content was ever wrong.
+  # The guard is a PRESENCE test, not a wider override: a TMPDIR that is a writable directory is
+  # still honoured exactly as before, and only a value that cannot receive a file at all is
+  # replaced. Failing back to /tmp is safe here — the file holds a commit message for the length of
+  # one `commit-tree` and is unlinked on every path out.
+  local _tr="${TMPDIR:-}"; _tr="${_tr%/}"
+  if [ -z "$_tr" ] || [ ! -d "$_tr" ] || [ ! -w "$_tr" ]; then _tr=/tmp; fi
+  f="$(mktemp "$_tr/cloud-reauthor.XXXXXX")" || {
+    REAUTH_DETAIL="could not create a temporary file to compose the rewritten messages (temp root '$_tr')."
     return 1
   }
   new="$base"

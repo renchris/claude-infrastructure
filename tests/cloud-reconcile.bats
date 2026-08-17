@@ -267,6 +267,39 @@ STUB
   [ "$(remote_sha claude/vm)" = "$orig" ]
 }
 
+@test "a REAPED TMPDIR does not refuse the land — the re-author falls back rather than blaming the branch" {
+  # Measured 2026-08-17 on five live refusal artifacts, every one of this exact shape:
+  #   mktemp: mkstemp failed on …/T/postland-run.VRdnYH/cloud-reauthor.XXXXXX: No such file…
+  # postland-verify hands the corpus a private TMPDIR and REAPS it when the run ends, so anything
+  # holding that value is left pointing at a deleted path. `${TMPDIR:-/tmp}` is blind to it — the
+  # variable is SET, so the fallback never fires — and the only thing the caller hears is rc 70,
+  # "could not be re-authored", a verdict about a branch whose content was never wrong.
+  push_branch_as claude/vm 1 "$VM_EMAIL"
+  decl cloud-vm claude/vm
+  orig="$(remote_sha claude/vm)"
+
+  reaped="$BATS_TEST_TMPDIR/reaped-tmpdir"
+  mkdir -p "$reaped" && rmdir "$reaped"        # the exact live condition: set, non-empty, GONE
+  [ ! -d "$reaped" ] || false
+
+  CONFIRM=1 TMPDIR="$reaped" run cr --land claude/vm
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/vm$'
+  # and the re-author actually RAN — a land that skipped it would pass the status check vacuously
+  [ "$(local_sha claude/vm)" != "$orig" ]
+  bad="$(git -C "$REPO" log --format='%ae|%ce' main..refs/heads/claude/vm | /usr/bin/grep -cv '^t@e.com|t@e.com$' || true)"
+  [ "$bad" = 0 ]
+
+  # POSITIVE CONTROL for the guard's narrowness: a TMPDIR that IS a writable directory is still
+  # honoured, so this is a presence test and not a blanket override of the caller's choice.
+  good="$BATS_TEST_TMPDIR/good-tmpdir"; mkdir -p "$good"
+  push_branch_as claude/vm2 1 "$VM_EMAIL"
+  decl cloud-vm2 claude/vm2
+  CONFIRM=1 TMPDIR="$good" run cr --land claude/vm2
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/vm2$'
+}
+
 @test "a range ALREADY authored by the operator is not rewritten — no gratuitous history churn" {
   push_branch claude/mine 1
   push_branch_as claude/theirs 1 "$VM_EMAIL"
