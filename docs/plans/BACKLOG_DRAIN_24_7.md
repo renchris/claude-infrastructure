@@ -87,6 +87,63 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~08:47Z — recycle #13: `master-verification-integrity` at `0 open / 1 blocked
+  (1 operator-gated)`. Every one of the four rows was diagnosed WRONG in its own filing, and each
+  was wrong in a different way — that is the transferable finding, not any single fix.**
+  Lands: **`60b395923`** (0be0bd2c0b65), **`8c2705236`** (67a7d78c1134), **`d862e80af`**
+  (ff3f38d6eeed), **`1d77c6d69`** (6a7eb069e703). **filed 2 / closed 4.**
+
+  **The four rows, and what each filing got wrong.**
+  · `0be0bd2c0b65` — ship-land RESTATED two lints' judged populations as hardcoded pathspecs, each
+  under a comment asking the next author to keep them in step by hand. Nothing executes a comment,
+  and the drift fails silently toward advisory (an own-set that MISSES a file does not error — an
+  empty own-set is the legitimate spelling of "this land touches nothing I judge"). Both lints now
+  answer `--print-scope`; ship-land DERIVES each own-set via `lint_own_scope`. An unanswerable lint
+  is rc 2 → `arm_nonverdict` (GATE_KILLED, exit 9), never an empty own-set — that distinction is
+  the same defect by a new route, and it is exactly what a future `|| true` would reintroduce.
+  Control 9/9 RED at `33cf5df17`, 9/9 GREEN after. **Measured while doing it: the derivation
+  NARROWS permgate's own-set** (its actuation globs, not all of `scripts/*`) — behaviour-preserving,
+  since a file the lint does not judge can produce no finding.
+  · `67a7d78c1134` — RETRACTED on measurement. The cure (`f1b813f6d`, dead-assertion analyzer +
+  ratchet) landed 2026-07-25, **18 days BEFORE the row was filed**. 🚨 **The row's `2,561` counted
+  `[[` OCCURRENCES, and the cure idiom `[[ … ]] || false` matches the same grep — so the metric
+  could never reach zero and the row could never close by being worked.** Live proof the ratchet is
+  enforcing rather than merely present: **it took THIS recycle's own land RED** for 6 dead
+  assertions in the suite written above.
+  · `ff3f38d6eeed` — the builtin-producer exemption cited `printf '%s' "$VAR"` at 0/200 to exempt
+  every builtin. **That row measured a SIZE, not a command word.** Re-measured here: 0/10 at 62 KB,
+  10/10 FALSE at 64 KiB and above — the boundary is the pipe buffer. Exemption now discriminates on
+  the ARGUMENT (literal exempt, variable/substitution/backtick in scope). Census 30 → 157 sites,
+  regenerated ratchet, tree green today. **The selftest's own fixtures were the trap:** g1/g2 were
+  variable-sourced builtins asserted GREEN, so left alone the control would have certified the bug.
+  · `6a7eb069e703` — the flake's stated hypothesis pointed at a `>(tee)` procsub that `61101fb28`
+  had already deleted, and the obvious culprit (`52d93432b`, wait/liveness order) landed **9 days
+  before the row was filed**, which is what proved a third cause. It is `exec 9> "$TEE_FIFO"`: a
+  blocking `open(2)`, bash's SIGCHLD handler is not `SA_RESTART` and bash does not retry, so a
+  background child dying in that window aborts it with EINTR and the next line's `2>&9` kills the
+  child subshell before it can exec. **Not a flaky test — every eval-track session launches through
+  this wrapper, so an interrupted open lost the SESSION.**
+
+  **THE PATTERN ACROSS ALL FOUR, worth more than the fixes:** a filed row's DIAGNOSIS decays faster
+  than its SYMPTOM. Two rows named a mechanism that had already been deleted or fixed; one row's
+  metric counted its own cure; one row's cited measurement was of a different variable than the one
+  it was used to exempt. Re-validate the premise against trunk before building — `#13` spent its
+  first 40 minutes doing exactly that and it retired one row for zero code.
+
+  **Cloud lease, and why the condition sat blocked for 90 minutes.** `67a7d78c1134` was held by a
+  **cloud**-venue claim, and `claimer_live` returns rc 2 (UNRESOLVED, correctly — this box's oracles
+  cannot see a cloud worker) so the CONDITION lease refused every sibling row. `cloud-return`
+  abstained: **HTTP 401, account `next`'s OAuth token expired.** The abstain is right (a sensor that
+  could not run is not a verdict) but MUTE — it names the account, not the cause; filed
+  `c70f3bd06106`. Landed the VM's work by the local half (`cloud-reconcile` → conflict in the plan
+  doc → cherry-picked and INTEGRATED both sections in date order), then closed the row on evidence
+  re-derived HERE, independent of the VM's report. Do NOT read the board's `next token stale — heal
+  skipped` as a gap: it has a stated policy (a live session owns the token lifecycle).
+
+  **Filed (2):** `5fc8ff411a7c` — six MORE ship-land arms restate a pathspec; measured that none of
+  their five lints has a runtime env seam, which is why they were left out of scope AND is the whole
+  of their defence; cheap to close now the mechanism exists. `c70f3bd06106` — the mute abstain above.
+
 - **2026-08-17 ~07:45Z — the chain is PROVEN self-perpetuating; recovery is COMPLETE; the cloud
   return path is the last leg (S4 fired, pane 154).**
   DRAIN CHAIN: recycle #10 closed master-account-facts at `0 open / 16 blocked (16
