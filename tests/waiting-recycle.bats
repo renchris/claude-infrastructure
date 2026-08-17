@@ -308,7 +308,68 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   mk_tel nb 88
   run drive nb "$(mk_tx 120 "$ROT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
+  # No role file in this fixture, so the reason now NAMES the dead channel (backlog 04010b4c8074).
+  grep -q '"reason":"not-armed:no-role-file"' "$CC_WR_IDL"
+}
+
+# ── DEAD-ARM-CHANNEL VISIBILITY (backlog 04010b4c8074) ────────────────────────────────────────────
+# `cc-roles/desk` was deleted by a cleanup and arm-by-default silently died with it: 2,291 `not-armed`
+# records, byte-identical whether the role file named another pane (correct) or was GONE (the channel
+# cannot fire for anyone). These four pin the split. The `other-holder` case is the load-bearing
+# control — without it the three dead-channel cases would pass on a hook that suffixed EVERY abstain,
+# which would be the same collapse wearing a longer name.
+@test "dead-arm-channel: an ABSENT role file names itself on the abstain (not-armed:no-role-file)" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* "$CC_WR_COORD_DIR/cc-roles/desk" 2>/dev/null
+  mk_tel dac1 88
+  run drive dac1 "$(mk_tx 130 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"not-armed:no-role-file"' "$CC_WR_IDL"
+}
+@test "dead-arm-channel: an EMPTY role file is its OWN state (not-armed:role-empty), not 'absent'" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  : > "$CC_WR_COORD_DIR/cc-roles/desk"                     # registered, but names no pane
+  mk_tel dac2 88
+  run drive dac2 "$(mk_tx 131 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"not-armed:role-empty"' "$CC_WR_IDL"
+  ! grep -q '"reason":"not-armed:no-role-file"' "$CC_WR_IDL"
+}
+@test "dead-arm-channel: CONTROL — a role file held by ANOTHER pane keeps the bare 'not-armed'" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  printf '%s\n' "SOMEONE-ELSE-UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"
+  mk_tel dac3 88
+  run drive dac3 "$(mk_tx 132 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"not-armed"' "$CC_WR_IDL"
+  ! grep -q '"reason":"not-armed:' "$CC_WR_IDL"            # the ordinary builder gets NO suffix
+}
+@test "dead-arm-channel: the reason TOKEN before ':' is unchanged (idl-abstain-alarm stays DORMANT)" {
+  # scripts/idl-abstain-alarm.sh projects `(.reason|split(":")[0])` and pages only on BLIND tokens.
+  # If the suffix ever became a new token, a desk-less machine — a deliberate state — would page.
+  rm -f "$CC_WR_STATE_DIR"/arm-* "$CC_WR_COORD_DIR/cc-roles/desk" 2>/dev/null
+  mk_tel dac4 88
+  run drive dac4 "$(mk_tx 133 "$ROT")"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.reason|startswith("not-armed")) | (.reason|split(":")[0])' "$CC_WR_IDL" | tail -1)" = "not-armed" ]
+  # …and that token is NOT in the alarm's blind set, so the projection lands DORMANT (green).
+  local blind; blind="$(sed -n '/^_default_blind=(/,/)$/p' "$REPO/scripts/idl-abstain-alarm.sh")"
+  [ -n "$blind" ]                                          # the extractor must SEE its subject
+  ! printf '%s' "$blind" | grep -q 'not-armed'
+}
+@test "dead-arm-channel: 'status' tells the operator the channel is dead, not that it is armed" {
+  rm -f "$CC_WR_COORD_DIR/cc-roles/desk" 2>/dev/null
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null               # not armed by sentinel either
+  run bash -c "cd '$DESK' && bash '$HOOK' status"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "arm-by-default is DEAD"
+  echo "$output" | grep -q "cc-roles/desk"
+}
+@test "dead-arm-channel: 'status' says NOTHING about a dead channel when the role file is live" {
+  printf '%s\n' "SOMEONE-ELSE-UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  run bash -c "cd '$DESK' && bash '$HOOK' status"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "arm-by-default is DEAD"
 }
 @test "arm-by-default (G-P11-7): DISARM marker (clear) suppresses role-arm — per-desk kill-switch still bites" {
   rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null

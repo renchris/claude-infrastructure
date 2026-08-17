@@ -272,6 +272,41 @@ that ratio is what the soak is for.
   a role file that was deliberately removed. Two mechanisms silently keyed on a file a cleanup
   deleted; neither fails loud.
 
+  > **CLOSED 2026-08-13 — backlog `04010b4c8074`.** Both consumers now name the state on the wire.
+  > The fix is observability, NOT revival: `cc-roles/desk` staying absent is a deliberate
+  > configuration (the same D6 reading `scripts/desk-invariant.sh`'s `not-opted-in` branch already
+  > ships), so nothing here re-creates the role file or pages about it. What changed is that
+  > *"the file this mechanism keys on is gone"* stopped being byte-identical to *"the mechanism
+  > correctly did not fire"*.
+  >
+  > - **`hooks/waiting-recycle.sh`** — the `not-armed` abstain carries a suffix from the new
+  >   `desk_role_state()`: `:no-role-file` / `:role-empty` for a dead channel, bare `not-armed` for
+  >   the ordinary builder. Emitted AFTER the first `:` on purpose, so
+  >   `scripts/idl-abstain-alarm.sh`'s reason-token projection (`split(":")[0]`) is unchanged and a
+  >   desk-less machine still classifies DORMANT rather than paging. `status` says it in words too
+  >   — the pull surface used to read "arm-by-default is on" over a role file that does not exist.
+  >   Shape borrowed from `af66a60b`, which put `FREEWIN_RUNG` on `boundary-handoff`'s abstain for
+  >   exactly this reason.
+  > - **`hooks/desk-brief-inject.sh`** — emitted NO telemetry at all, so it could not even appear in
+  >   the abstain-alarm table (a hook with zero records leaves the table by design, per the fix
+  >   recorded above). It now writes one `hooks/lib/idl-log.sh` disposition row per invocation:
+  >   `fired:injected` and the abstains `no-role-file` · `role-empty` · `other-holder` ·
+  >   `brief-missing` · `brief-empty` · `no-pane` · `no-jq`. Stdout behaviour is UNCHANGED — silence
+  >   on every no-op, one line of JSON on a fire — because "silent on stdout" was never the defect.
+  >
+  > **The lesson is the one this report already names, applied to itself.** Gate B was diagnosed
+  > here on 2026-08-08 and the mechanism stayed dead for five more days, because a diagnosis in a
+  > document is not a sensor. What makes it un-repeatable is not the prose: it is that the next
+  > `idl-abstain-alarm` sweep will print `no-role-file` as a reason with a count, and the next
+  > `waiting-recycle.sh status` will print `arm-by-default is DEAD`.
+  >
+  > **Verified at close.** 24/24 `tests/desk-brief-ssot.bats` (10 new), the 6 new
+  > `dead-arm-channel` cases in `tests/waiting-recycle.bats`, shellcheck clean on both hooks. Every
+  > new-behaviour case was proven RED against the pre-change hooks in place (8/9 and 3/3 — the
+  > remainder are CONTROLS, which must stay green in both directions or they are not controls):
+  > the `other-holder` / bare-`not-armed` cases are what stop this landing as a hook that suffixes
+  > every abstain, i.e. the same collapse wearing a longer name.
+
 ---
 
 ## Evidence index
