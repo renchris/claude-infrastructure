@@ -164,3 +164,57 @@ attach a probe to a pre-existing row and surface a refuted premise without a hum
   worktree PRESENCE for the team, not the iTerm2 liveness pull-check the skill describes. Scoping
   that is design work with a real over-blocking risk — a gate that exits 2 whenever it cannot verify
   would wedge Phase-0 completion in every repo — so it wants its own row, not a rushed arm.
+
+- **2026-08-17 — `df003b95630b` (READINESS W3) was dispatched over work that landed six days
+  earlier, and the returner's own closer is why it will keep happening.** Nothing was built and
+  nothing needed to be: the cure is `8f1726cfb`, an ancestor of `origin/main`, carrying both halves
+  the row asks for — `--fold [--apply]` + `conservation=` in
+  `scripts/backlog-consolidation-trigger.sh` (R6, the consolidation actuator) and the mint brake in
+  `bin/cc-backlog`'s `cmd_needs` (R7). Verified by CONTENT on `origin/main`, then executed:
+  **51/51 green** across `backlog-consolidation-trigger.bats` (15), `cc-backlog-mechanical.bats`
+  (14) and `cc-backlog-dups-family.bats` (22) — including the cases that pin the fold's
+  non-destructive contract and the brake's re-file-instead-of-mint behaviour. The deepen trap was
+  re-confirmed on the way in (shallow 50 → 987 commits before any ancestry was read); this is the
+  third dispatch in the family to meet it, after W2's.
+
+  🚨 **THE FINDING, and it is a closed loop rather than an oversight: `cloud-return.sh` cannot close
+  a row whose cure already landed, because the correct outcome of such a dispatch is to write
+  nothing.** Step 5 fills the path set from *the VM's own commits* (`cc-cloud fill-paths`); step 6
+  initialises `landed_ok=1` and can only clear it when that path set is non-empty AND every member
+  resolves under `ls-tree $trunk`; step 8 runs `cc-backlog done` **only** on `landed_ok -eq 0`,
+  taking `left $item open — the content is not verified on trunk` otherwise. A no-op dispatch has an
+  empty path set by construction, so it lands in the else branch, the row stays live, `reap`
+  re-admits it, and it is dispatched again. **The one outcome that produces a spurious re-dispatch
+  is the one outcome the closer refuses to act on** — which is why W2 hit this on 2026-08-14, why
+  W3 hit it today, and why a fourth is scheduled.
+
+  **This is § READINESS W3's own best sentence one level up.** That wave ruled *"a key that is sound
+  for COUNTING a shape is not thereby safe for ACTING on it."* Here the confusion is between two
+  predicates the returner treats as one: *"did THIS DISPATCH land its work"* and *"is THIS ROW's
+  claim true on trunk."* They agree everywhere except on the already-done case, and that case is
+  self-reproducing.
+
+  **Not fixed in this entry, deliberately, and the risk is the mirror of the one above.** The cheap
+  repair — close the row when the worker reports it already done — closes a live row on a *worker's
+  conclusion* rather than on content anything verified, which is the fail-open trap this repo keeps
+  paying for; a worker wrong about "already done" would then silently delete real work from the
+  queue. The honest fix verifies the ROW's OWN cited path set against trunk instead of the
+  dispatch's commits, and that citation set already exists — W1 put `paths` on `cc-venue`, taken
+  from cc-premise's extractor. That is a real design increment with a real over-closing risk, so it
+  gets a row, not a rushed arm.
+
+  **LEDGER REPLAY OWED — same venue limit as the entry above.** `~/.claude/autonomy/backlog.jsonl`
+  is outside this repo and absent from the container, so the row could not be moved from here. On
+  the box, replay:
+
+  ```sh
+  cc-backlog done df003b95630b --evidence 8f1726cfb
+  cc-backlog add --condition master-enforcing-store \
+    --title "cloud-return: close a row whose CITED paths are on trunk, not only one whose dispatch landed commits (the no-op re-dispatch loop)" \
+    --dod-ref docs/plans/MASTER_ENFORCING_STORE.md
+  ```
+
+  The first line should not be needed: because this entry IS a commit, the dispatch now has a
+  non-empty path set, so the returner's own arm marks `df003b95630b` done once the box lands it.
+  That is the workaround stated as what it is — **the row closes only because the session happened
+  to write a file**, which is exactly the defect this entry reports.
