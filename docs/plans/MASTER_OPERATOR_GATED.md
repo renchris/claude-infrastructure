@@ -181,3 +181,75 @@ are counted class-C packets. No dispatch session is ever fired at this condition
   **So: `/ship` for this work runs from the operator's machine, alongside O1 and O2.** Three
   independent reasons now point the same way, which is the useful part — the venue question for this
   condition is not about any one row.
+- **2026-08-17 — O1 and O2 DONE, on the local box, by the drain chain (recycle #11).** Membership
+  at open: 30 live (28 blocked · 1 claimed · 1 open). At close: 26 live, 0 open.
+
+  **O1 · the false positives had a GENERATOR, and it was this repo's own reaper.** The demotions
+  were not judgment calls one at a time — four of the thirty arrived by one mechanism. `cmd_reap`
+  files `block --needs "<machine diagnostic>"` on three paths (thrash, wedged-live-worker,
+  dead-worker/unresolved-oracle), and O3's arm keys every `block` into this group. The arm's stated
+  premise — *"a `block --needs` record IS the statement 'the next step here belongs to the
+  operator' … the verb's own required payload"* — is true of every external caller and false of
+  exactly those three, which sit 2,300 lines below it **in the same file**. Each names an agent as
+  its next actor in its own last sentence: *"Investigate the root cause, then `cc-backlog unblock
+  <id>`."* Keyed here, that is this file's defect inverted: not an agent burning a slot on a row it
+  cannot act on, but a HUMAN handed a row no human should ever see — and one of the two was the
+  drain's own SSOT plan row, `70f0001c657b`.
+  Fixed at the chokepoint (`374256dd8`): an INTERNAL flag `cmd_reap` sets, **not** a `--by
+  cc-backlog-reap` string match. The reap does write that spelling durably and matching it would
+  work today, but it is a denylist of one spelling rather than the class, and it would silently
+  strip the group from any external filer who used the same word. Test 2 of the pair is that mutant.
+  Test 1 RED-proved with `bin/cc-backlog` stashed, with a same-store positive control so an
+  outright-broken arm cannot pass it.
+  **The four demotions, each said out loud as O1 requires:**
+  · `c33f3b1cb278` (was the only OPEN row) → `master-product-repos` — reap non-verdict; the subject
+    is a reso-management-app `/list` concurrent-delete orphan, a code bug an agent fixes.
+  · `70f0001c657b` → `master-convergence-deadlock` — same path; subject is the drain machinery not
+    converging, which is that wave's own subject.
+  · `e96021115661`, `12f5beab9361` → `master-stranded-work` — each row's own `run` field is a shell
+    command (`cd <wt> && git checkout <branch> && bash scripts/ship-land.sh`), and a land is agent
+    work in this repo under the project `CLAUDE.md` standing-land authorization. Content adjudicated
+    at demotion time, not assumed: both branches live on `origin`, one un-landed commit each,
+    `git cherry origin/main` prints `+` for both.
+  **Left open by O1, deliberately, because it is not this file's wave:** those two lands are part of
+  a LIVE retry storm — 41 `refs/land/failed/*` refs for the pair, the newest six minutes before this
+  entry, spanning many other branches too. Something retries a batch of stranded lands on a cadence
+  and fails all of them. Named here and demoted to the wave that owns it; not diagnosed here.
+
+  **O2 · the batch already existed; what was missing was the COMMAND.** The sub-wave above says to
+  file runnable survivors with `--run` "so `cc-do` can drive it". They were being filed that way —
+  and `bin/cc-do`'s backlog emitter hardcoded the generic pointer `cc-backlog list --blocked` into
+  the `cmd` slot for every row and threw `.run` away. Measured on the live store: **51 of 130
+  blocked rows carry a command and the board rendered none of them.** That reproduces the
+  operator's own complaint about this exact surface — *"I had to comb through the entire return body
+  to fish out which is the command to copy and paste"* — inside the renderer built to end it. Worse,
+  `hooks/operator-readout.sh` **already** consumed `.run` (its header line 57), so the two surfaces
+  that are meant to be ONE renderer disagreed, and cc-do was the one that was wrong.
+  Fixed (`ab1c1ab06`): the row's own command goes in the `cmd` slot and `--list` prints it under the
+  row. `6a428f48fd2e` gained the `--run` it lacked (migration 0009).
+  **Still JUDGMENT, and that is not a compromise — the population forbids anything else.** `mark`
+  stays `◆` and `path` stays `-`, so these are never counted into `NRUN`, never reached by the bulk
+  Enter, and structurally unexecutable (execution reads `path`, never `cmd`, precisely so it never
+  needs `eval`). Today's 51 include `turso auth api-tokens revoke reso-provisioning`, `rm -i …`,
+  `brew services stop postgresql@14`, `/ship` and `/compact-memory` (slash commands, not shell at
+  all), and a bare `sed -n '78,82p' ~/.zshrc` that is a READ someone filed as a step. RUNNABLE means
+  "a machine step with one correct outcome"; promoting that set would put a production-token revoke
+  one Enter away from an operator answering a prompt about activations.
+
+  **O2's other half — "judgment items become counted class-C `cc-decide` packets" — is NOT done, and
+  should not be.** Stated as a measurement rather than argued away, because the DoD above prescribes
+  it. The board sums the two judgment stores with no dedupe across them: live at this entry,
+  `22 open decision(s) + 130 blocked backlog = 152 judgment`, exactly. So minting a packet for a row
+  that stays `blocked` renders the SAME item twice on the SAME board, under two classes — which is
+  the wall this file exists to remove, one line longer. The alternative, converting 1-for-1 (open a
+  packet, close the backlog row), is net-neutral on what the operator sees — one counted line either
+  way — and costs the row's history. The prescription was written 2026-08-12, before `cc-do` and
+  `operator-readout.sh` counted blocked rows at all; being counted is what it was asking for, and
+  the rows already are. **The residue is therefore the operator's own call, not an agent's**: if the
+  packets are wanted anyway, the missing piece is dedupe across the two stores, and that is a build,
+  not a re-key.
+
+  **Definition of done, against the live store:** every member is demoted (4) or reachable in the
+  ONE batch — `cc-do --list` itemizes each survivor and now prints its exact command where one
+  exists. No dispatch session was fired at this condition. `master-operator-gated: 0 open / 26
+  blocked (26 operator-gated)`.
