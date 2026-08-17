@@ -197,13 +197,42 @@ trap '_forward HUP'  HUP
 # `exec 9>` blocks for a reader, and each is the other's counterpart. The name is unlinked the
 # moment both ends are open — the pipe then lives purely on fds, so a hard-killed wrapper
 # leaves no filesystem litter.
+#
+# ⚠️ THAT RENDEZVOUS OPEN IS INTERRUPTIBLE, AND ITS FAILURE USED TO KILL THE SESSION (backlog
+# 6a7eb069e703, fixed 2026-08-17). `exec 9> "$TEE_FIFO"` is a BLOCKING open(2); bash's SIGCHLD
+# handler is not SA_RESTART and bash does not retry the open, so a background child dying inside
+# that window aborts the redirection with EINTR and fd 9 is never created. This wrapper has two
+# such children BY CONSTRUCTION — the disowned `--version` probe above, and the tee on the line
+# before — so the window is structural, not exotic. Measured (QoS-starved, tight loop): 3 of ~100
+# runs printed `Interrupted system call` here and then `9: Bad file descriptor` at the child
+# spawn, because `2>&9` against an unopened fd kills that subshell BEFORE it can exec anything —
+# so the real binary never ran, `wait` handed back 1, and the wrapper exited 1 for a session that
+# had not started. Off-box it was 3 of 12 hermetic CI runs of tests/cc-close-attrib.bats.
+#
+# So the open is RETRIED, and — the load-bearing half — an open that still fails FALLS BACK to the
+# /dev/null sink instead of leaving fd 9 absent. This file's hard rule is that the worst case is a
+# plain exec with no record; a lost capture obeys that rule and a lost session does not. The retry
+# is not merely defensive: after EINTR the tee is still blocked on its own open, so the next
+# attempt pairs up immediately. `{ exec 9> …; } 2>/dev/null` is deliberate — a bare
+# `exec 9> f 2>/dev/null` would redirect the wrapper's real stderr to /dev/null PERMANENTLY,
+# whereas the brace group's redirection is unwound while fd 9's stays (verified on bash 3.2).
 TEE_PID=""
 TEE_FIFO="$(mktemp -u "${CAPTURE}.fifo.XXXXXX" 2>/dev/null)" || TEE_FIFO=""
 if [[ -n "$TEE_FIFO" ]] && mkfifo -m 600 "$TEE_FIFO" 2>/dev/null; then
   tee -a "$CAPTURE" >&2 < "$TEE_FIFO" &
   TEE_PID=$!
-  exec 9> "$TEE_FIFO"
+  FIFO_OK=0
+  for _try in 1 2 3 4 5; do
+    if { exec 9> "$TEE_FIFO"; } 2>/dev/null; then FIFO_OK=1; break; fi
+  done
   rm -f "$TEE_FIFO" 2>/dev/null || true
+  if [[ "$FIFO_OK" -ne 1 ]]; then
+    # Reap the tee we can no longer feed — it is blocked on an open that will never get a writer,
+    # and the exact-pid reap at the bottom of this file is unreachable once TEE_PID is cleared.
+    [[ -n "$TEE_PID" ]] && kill -TERM "$TEE_PID" 2>/dev/null
+    TEE_PID=""
+    exec 9> /dev/null
+  fi
 else
   # No FIFO ⇒ no capture (fail-open, the file's hard rule) — fd 9 still must be a sink so the
   # child spawn below is shape-identical on both branches.

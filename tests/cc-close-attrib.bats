@@ -338,6 +338,50 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   grep -q '"exit_code":1,' "$(rec)"          # ...and the record carries the TRUE code, not 0
 }
 
+# ── (x) fd 9 COULD NOT BE OPENED ⇒ the session still runs, with its TRUE exit code ───────────
+# THE FLAKE THIS PINS. `exec 9> "$TEE_FIFO"` is a BLOCKING open(2), and bash's SIGCHLD handler is
+# not SA_RESTART: any background child dying while the wrapper sits in that open aborts the
+# redirection with EINTR, and bash does not retry it. The wrapper has two such children by
+# construction — the disowned `--version` probe and the tee itself — so the window is real, not
+# theoretical. Measured on this box (QoS-starved via `taskpolicy -c background` + 4 CPU hogs,
+# tight loop): 3 of ~100 runs printed
+#     cc-close-attrib: line 205: …/.stderr.XXXXXX.fifo.XXXXXX: Interrupted system call
+#     cc-close-attrib: line 213: 9: Bad file descriptor
+# and exited 1. Off-box it is the whole of backlog 6a7eb069e703: 3 of 12 hermetic CI runs, always
+# case (i), always line 79 — because with fd 9 absent `2>&9` kills the child's subshell before it
+# can exec anything, so $status is 1, `seen` is never written and no record carries the argv.
+#
+# WHY THIS IS THE MECHANISM AND NOT THE TIMING. EINTR is only one way for that open to fail, and a
+# test that raced it would be as flaky as the bug. What actually broke the wrapper is the SECOND
+# half: an fd-9 open failure was FATAL rather than degrading, in a file whose stated hard rule is
+# that "the worst case is a plain exec with no record". So the control injects a DETERMINISTIC
+# open failure of the same class (a `mkfifo` shim that makes a DIRECTORY, so the open fails EISDIR
+# with fd 9 unopened) and asserts the contract that must hold for every member of the class: the
+# real binary still runs, and its exit code still reaches the caller. Capture may be lost; the
+# session may not. Pre-fix rc measured on this box: 1, with no `seen` file, on 5/5 runs.
+@test "(x) a FIFO whose fd-9 open fails still runs the session and preserves its exit code" {
+  local stub="$BATS_TEST_TMPDIR/stub" shim="$BATS_TEST_TMPDIR/shim"
+  mk_stub "$stub" 'printf "%s\n" "$@" > "'"$BATS_TEST_TMPDIR"'/seen"' 'exit 33'
+  mkdir -p "$shim"
+  # Reports success, so the wrapper takes the capture branch, but leaves a target that cannot be
+  # opened for writing. `-m 600` is swallowed: only the final argument is the path the wrapper uses.
+  { printf '#!/bin/bash\n'
+    printf 'touch %s\n' "$BATS_TEST_TMPDIR/mkfifo-fired"
+    printf 'for a; do :; done\n'
+    printf 'mkdir -p "$a"\n'
+  } > "$shim/mkfifo"
+  chmod +x "$shim/mkfifo"
+  export PATH="$shim:$PATH"
+
+  run bash "$WRAP" "$stub" alpha beta
+  # THE CONTROL MUST BE ABLE TO FAIL: if the wrapper ever stops calling mkfifo on this path the
+  # injection never happens and the assertions below would pass for an unrelated reason.
+  [ -f "$BATS_TEST_TMPDIR/mkfifo-fired" ]
+  [ "$status" -eq 33 ]                                  # the session ran and its code survived
+  grep -qx alpha "$BATS_TEST_TMPDIR/seen"               # ...and the binary was actually EXECUTED
+  grep -q '"exit_code":33,' "$(rec)"                    # ...and the record carries the true code
+}
+
 # ── (viii) the fd2-holder leak (2026-08-07 load-781 incident). The >(tee) procsub's stdin is the
 # session's fd2, and every process the session ever backgrounded inherits that fd — so a binary
 # that dies leaving even ONE orphan keeps tee EOF-less, and bash waits for the procsub at exit:
