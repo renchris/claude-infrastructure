@@ -13,8 +13,24 @@ setup() {
   # verbatim as "no transport" ⇒ pane liveness UNKNOWN, which is the fail-closed branch, so this
   # default can only ever make exit 5 harder to reach. Tests needing a verdict stub it explicitly.
   export CC_AWAIT_IT2_BIN=
+  # FIXTURE THE BEAT DIR for the same reason: --idle-scoped reads ~/.claude/cc-beats/<sid>.json to
+  # decide whether its session has taken a new turn, and this suite does not redirect $HOME. Pinned
+  # here rather than per-test so no future test can read the operator's live beats by omission.
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
+  mkdir -p "$CC_BEAT_DIR"
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
   MB="$CC_MAILBOX_DIR/$UUID.md"
+  SID="sidGOAL"
+}
+
+# ── beat fixtures (the C2 oracle) ────────────────────────────────────────────────────────────────
+# One attestation per turn boundary, exactly the shape hooks/session-beat.sh writes:
+# kind=prompt at UserPromptSubmit, kind=stop at Stop, `seq` monotone across both.
+beat() { # <seq> <kind> [age-seconds]
+  local age="${3:-0}"
+  jq -nc --arg k "$2" --argjson s "$1" --argjson t "$(( $(date +%s) - age ))" \
+    '{sid:"sidGOAL",pane:"p0",cwd:"/tmp",pid:1,lstart:"x",t:$t,kind:$k,who:"auto",operatorT:null,seq:$s}' \
+    > "$CC_BEAT_DIR/$SID.json"
 }
 
 @test "exits 0 and prints the new line when a ping lands mid-wait" {
@@ -684,4 +700,250 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   local e; e="$(_verdict_elapsed "$err")"
   [ -n "$e" ]
   [ "$e" -lt 10 ]                                      # fired at once ⇒ says so, never 900
+}
+
+# ── --idle-scoped: THE THIRD IDLE MODE (2026-08-16) ───────────────────────────────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §4, backlog 6290f0ee6b52.
+#
+# A session holding a live /goal has exactly two idle modes and needs a third. Park a background
+# task and CC defers the goal's evaluation for as long as the task lives (the STARVATION pole: 47 of
+# 84 goal sessions never evaluated once). Stay bare and every unmet evaluation blocks the stop (the
+# SPIN pole: 90 unmet evaluations in 76 minutes on the type specimen, one forced turn every ~51 s,
+# all re-judging a world in which nothing had changed). `--idle-scoped` is the third: it dies on
+# peer mail AND on any new turn of its own session, so the deferral spans exactly the idle window.
+#
+# The two RED-PROOFS at the foot of this block are the load-bearing tests. Everything above them
+# asserts a behaviour; those two assert that the behaviour is what SEPARATES this shape from the two
+# failures it exists to replace — a mutant that never self-cancels must starve a fixture goal, and a
+# session with no watcher at all must spin one, on the identical timeline.
+
+@test "idle-scoped: stands down (exit 0, verdict=stood-down) when its session takes a new turn" {
+  beat 5 prompt
+  ( sleep 1; beat 6 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped: the stand-down carries NO body — there is no mail, and a fake one would be a lie" {
+  beat 5 prompt
+  ( sleep 1; beat 6 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ ! -f "$MB" ] || [ ! -s "$MB" ]
+}
+
+@test "idle-scoped: the ARM TURN's own trailing Stop does NOT self-cancel it (baseline+1 is excluded)" {
+  # The arm happens inside a turn, so that turn's Stop beat lands moments later. Cancelling on it
+  # would make the mode useless: the watcher would die before the idle it was scoped to even began.
+  beat 10 prompt
+  ( sleep 1; beat 11 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 4
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # still watching → ran its term
+  [[ "$output" != *"stood-down"* ]] || false
+}
+
+@test "idle-scoped: a Stop beat BEYOND baseline+1 does cancel (the sampling hole is closed)" {
+  # The beat file holds only the LATEST boundary, so a whole turn can complete inside one poll and
+  # leave us looking at a Stop-kind beat whose prompt predecessor we never sampled. Turns alternate,
+  # so seq > baseline+1 PROVES a prompt beat happened in between — ignoring it would re-open the
+  # starvation pole through the oracle itself.
+  beat 10 prompt
+  ( sleep 1; beat 13 stop ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=stood-down"* ]] || false
+}
+
+@test "idle-scoped C1: MAIL still wins — a ping is delivered, never traded for a silent stand-down" {
+  beat 5 prompt
+  # both events land inside ONE poll interval, and the mail check runs first within an iteration:
+  # a delivered ping is the thing the session must not lose, and delivering it also ends the watch.
+  ( sleep 1; printf '2026-08-16T10:00:00+0000 [peer] HANDOFF-PING slug: landed\n' >> "$MB"; beat 6 prompt ) &
+  local writer=$!
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 3 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING slug: landed"* ]] || false
+}
+
+@test "idle-scoped C5: --timeout defaults to 3600 and --interval to 5, and both stay overridable" {
+  beat 5 prompt
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --timeout 1 --interval 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"timeout 1s, every 1s"* ]] || false     # the override is honoured
+  # and the defaults are the MODE's, not the bare form's 1800/15
+  run timeout 3 "$AWAIT" "$UUID" --idle-scoped --sid "$SID"
+  [[ "$output" == *"timeout 3600s, every 5s"* ]] || false
+}
+
+@test "idle-scoped CONTROL: the bare form's defaults are untouched (1800/15), and rejects --sid" {
+  run timeout 3 "$AWAIT" "$UUID"
+  [[ "$output" == *"timeout 1800s, every 15s"* ]] || false
+  run "$AWAIT" "$UUID" --sid "$SID" --timeout 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only meaningful with --idle-scoped"* ]] || false
+}
+
+# ── the three refusals: exit 6, and NOTHING parked ────────────────────────────────────────────────
+# A refusal is not an exit. An exit is a watch that did its job; a refusal is a watch that was never
+# safe to start, so it must create no deferral at all — which is why each of these asserts the exit
+# code AND the absence of any heartbeat left behind.
+
+@test "idle-scoped C4: REFUSES to arm while mail is already pending (you have work, not an idle)" {
+  beat 5 prompt
+  printf '2026-08-16T09:00:00+0000 [peer] already waiting for you\n' > "$MB"
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=pending-mail"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # nothing parked ⇒ no goal deferral created
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]                # and the mail is untouched, still to be read
+}
+
+@test "idle-scoped C3: REFUSES while a live SIBLING watcher already claims the key" {
+  beat 5 prompt
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  sleep 60 & local sib=$!
+  : > "$CC_MAILBOX_DIR/.watchers/$UUID.$sib"
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  kill "$sib" 2>/dev/null || true
+  wait "$sib" 2>/dev/null || true
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=sibling-watcher"* ]] || false
+  [[ "$output" == *"pid $sib"* ]] || false
+}
+
+@test "idle-scoped C3 CONTROL: a DEAD sibling's claim is no claim — the arm proceeds" {
+  # the discrimination, not just the refusal: a stale claim file that outlived its watcher must not
+  # be able to make this session permanently unable to arm a wake path.
+  beat 5 prompt
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  sleep 0.1 & local gone=$!
+  wait "$gone" 2>/dev/null || true
+  : > "$CC_MAILBOX_DIR/.watchers/$UUID.$gone"
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 2
+  [ "$status" -eq 2 ]                                  # armed and ran its term
+}
+
+@test "idle-scoped: REFUSES when the beat oracle is missing — fail-closed is the whole licence" {
+  # Without a readable beat there is no way to learn a new turn happened, so C2 could never fire and
+  # this would be an ordinary parked task wearing the safe mode's name. That is the starvation pole,
+  # armed deliberately. Refusing is what makes the flag mean something the chokepoint can admit.
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=no-beat"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+}
+
+@test "idle-scoped: REFUSES on a STALE beat (the producer is not running, or the sid is not ours)" {
+  beat 5 prompt 5000
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=stale-beat"* ]] || false
+}
+
+@test "idle-scoped: REFUSES when no sid can be resolved at all" {
+  run env -u CC_AWAIT_SID -u ITERM_SESSION_ID -u CC_PANE_ID "$AWAIT" "$UUID" --idle-scoped --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=no-session-id"* ]] || false
+}
+
+@test "idle-scoped: resolves the sid by PANE when --sid is omitted (the convenience path)" {
+  beat 5 prompt
+  run env ITERM_SESSION_ID="w0t0p0:$UUID" CC_PANE_ID=p0 "$AWAIT" "$UUID" --idle-scoped --interval 1 --timeout 2
+  [ "$status" -eq 2 ]                                  # armed → the pane fallback found sidGOAL
+  [[ "$output" == *"new turn of [$SID]"* ]] || false
+}
+
+@test "idle-scoped: a REFUSAL never prints the watching banner (it would report the opposite)" {
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" != *"watching $UUID inbox"* ]] || false
+}
+
+# ── RED-PROOF, BOTH POLES ────────────────────────────────────────────────────────────────────────
+# The fixture goal models exactly two measured harness facts and nothing else:
+#   A2  at a Stop where a NON-TERMINAL background task exists, CC deletes the /goal Stop hook before
+#       the runner sees it and restores it in a `finally` — the goal is silently NOT evaluated.
+#   A3  otherwise the goal IS evaluated; unmet blocks the stop and the session takes another turn.
+# So "is a background task alive at this stop attempt?" is the entire model, and `kill -0` answers
+# it. Every variant below runs the IDENTICAL timeline — same attempt count, same event at the same
+# point — so the only thing that differs is the shape of the watcher.
+
+stop_attempts() { # <pid|0> <count> → the number of those stops at which the goal would EVALUATE
+  local pid="$1" n="$2" i=0 ev=0
+  while [ "$i" -lt "$n" ]; do
+    sleep 1
+    if [ "$pid" = 0 ] || ! kill -0 "$pid" 2>/dev/null; then ev=$(( ev + 1 )); fi
+    i=$(( i + 1 ))
+  done
+  printf '%s' "$ev"
+}
+
+@test "RED-PROOF pole 1 (STARVATION): a mutant that never self-cancels leaves the fixture goal at ZERO evaluations" {
+  # A bin/ + hooks/lib/ tree, not a bare copy: the tool resolves its mailbox lib relative to its own
+  # path, and --idle-scoped REFUSES to arm without it (exit 6, reason=no-mailbox-lib). A bare copy in
+  # a tmpdir would therefore refuse instantly and this proof would "pass" on a watcher that never ran.
+  local root="$BATS_TEST_TMPDIR/starve" mut
+  mkdir -p "$root/bin" "$root/hooks/lib"
+  cp "$REPO/hooks/lib/mailbox-pending.sh" "$root/hooks/lib/"
+  mut="$root/bin/cc-await-ping"
+  sed 's/^  if _turn_moved; then$/  if false; then/' "$AWAIT" > "$mut"
+  chmod +x "$mut"
+  # THE MUTATION MUST HAVE BITTEN. A sed that matched nothing yields a copy of the real script and
+  # this red-proof silently becomes a second green test — the failure mode that makes a mutation
+  # proof worse than no proof at all.
+  ! grep -q '^  if _turn_moved; then$' "$mut" || false
+
+  beat 5 prompt
+  "$mut" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
+  local w=$!
+  sleep 1
+  local before; before="$(stop_attempts "$w" 3)"
+  beat 6 prompt                                        # the external event: this session woke
+  local after; after="$(stop_attempts "$w" 4)"
+  # positive control: it is still alive, so this is the MUTATION and not a crashed watcher
+  kill -0 "$w" 2>/dev/null || false
+  kill "$w" 2>/dev/null || true
+  wait "$w" 2>/dev/null || true
+
+  [ "$before" -eq 0 ]                                  # correct: nothing had changed, nothing judged
+  [ "$after" -eq 0 ]                                   # RED: the world CHANGED and the goal never learned
+}
+
+@test "GREEN pole 1: the real idle-scoped watcher lets the goal evaluate ONCE the world has changed" {
+  beat 5 prompt
+  "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 60 >/dev/null 2>&1 &
+  local w=$!
+  sleep 1
+  local before; before="$(stop_attempts "$w" 3)"
+  beat 6 prompt
+  local after; after="$(stop_attempts "$w" 4)"
+  kill "$w" 2>/dev/null || true
+  wait "$w" 2>/dev/null || true
+
+  [ "$before" -eq 0 ]                                  # quiet while genuinely idle — no spin
+  [ "$after" -ge 1 ]                                   # and judged once the world moved — no starvation
+}
+
+@test "RED-PROOF pole 2 (SPIN): with NO watcher armed, every stop re-judges an unchanged world" {
+  # This is the state today's chokepoint forces on a goal-armed session: bare. On the SAME timeline,
+  # the goal is evaluated at every single stop attempt — 7 evaluations for 1 event, which is the
+  # 90-evaluations-in-76-minutes specimen in miniature. Measured economics: 82% of met goals are met
+  # on evaluation #1 and the met rate falls to 27% at ≥10, so evaluations 2..7 here carry nothing.
+  beat 5 prompt
+  local before; before="$(stop_attempts 0 3)"
+  beat 6 prompt
+  local after; after="$(stop_attempts 0 4)"
+  [ "$before" -eq 3 ]
+  [ "$after" -eq 4 ]
+  [ "$(( before + after ))" -eq 7 ]                     # 7 evaluations, 1 event — the spin pole
 }

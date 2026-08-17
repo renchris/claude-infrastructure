@@ -421,10 +421,21 @@ actuate_err() { printf '{"cwd":"%s","session_id":"%s","transcript_path":""}' "$C
   printf '%s' "$output" | jq -r .systemMessage | grep -q '2 message(s) are still unread' || false
 }
 
-# ── (C) a LIVE /goal ⇒ the goal IS the wake path; the floor must not instruct its own sabotage ────
+# ── (C) a LIVE /goal ⇒ the floor instructs a DIFFERENT arm, not silence ──────────────────────────
 # CC deletes the /goal Stop hook at any Stop where a non-terminal background Bash exists
 # (docs/research/goal-in-handoff-2026-08-08.md § RESOLVED) — the exact watcher this floor
-# instructs. This block used to be the instruction-injector that made armed goals inert fleet-wide.
+# instructs. This block used to be the instruction-injector that made armed goals inert fleet-wide,
+# and the 2026-08-10 fix was to ABSTAIN.
+#
+# ── C7 FLIP (2026-08-16, docs/research/goal-safe-2way-comms-2026-08-13.md §4) ────────────────────
+# Abstaining fixed the starvation pole and installed the SPIN one: bare, the session blocks every
+# stop on an unmet goal and re-judges an unchanged world (90 consecutive unmet evaluations in 76 min
+# on the type specimen; 15 cap force-idles in 3 days — and ABOVE that cap the abstain's premise that
+# "the goal keeps this session awake" is simply false: the harness force-idles and the session is
+# deaf). So the floor now BLOCKS under a live goal like any other unarmed idle, and names the
+# idle-scoped form. The discrimination that matters is the COMMAND, so these tests assert the
+# spelling and not merely the block: a floor that blocked with the denied 4-hour arm would satisfy a
+# bare `blocked` assertion while handing the model a command its own chokepoint refuses.
 
 goal_tx() { # a transcript whose LAST goal_status is a LIVE arm marker
   p="$BATS_TEST_TMPDIR/goal-tx-$BATS_TEST_NUMBER.jsonl"
@@ -432,10 +443,25 @@ goal_tx() { # a transcript whose LAST goal_status is a LIVE arm marker
   printf '%s' "$p"
 }
 
-@test "(C) a LIVE /goal ⇒ the floor stands down (the arm it instructs would disable the goal)" {
+@test "(C) a LIVE /goal ⇒ the floor BLOCKS and instructs the idle-scoped arm, with this session's sid" {
   run actuate sidA "$(goal_tx)"
   [ "$status" -eq 0 ]
-  ! blocked "$output" || false
+  blocked "$output" || false
+  r="$(printf '%s' "$output" | jq -r .reason)"
+  printf '%s' "$r" | grep -q 'cc-await-ping --idle-scoped --sid sidA' || false
+  # the DENIED spelling must be ABSENT: under a live goal the chokepoint refuses it, so instructing
+  # it here would hand the model a command its own guard rejects
+  ! printf '%s' "$r" | grep -q 'cc-await-ping --timeout' || false
+  # …and the block must say WHY this form, or it teaches a spelling without the rule behind it
+  printf '%s' "$r" | grep -q 'stands itself down' || false
+}
+
+@test "DISCRIMINATOR (C): with NO goal the floor instructs the ORDINARY parked arm (unchanged)" {
+  run actuate sidA
+  blocked "$output" || false
+  r="$(printf '%s' "$output" | jq -r .reason)"
+  printf '%s' "$r" | grep -q 'cc-await-ping --timeout' || false
+  ! printf '%s' "$r" | grep -q -- '--idle-scoped' || false
 }
 
 @test "DISCRIMINATOR (C): a MET goal is no goal — the floor still blocks" {
@@ -448,6 +474,9 @@ goal_tx() { # a transcript whose LAST goal_status is a LIVE arm marker
 }
 
 @test "(C) the goal abstain spends NO budget attempt and says so visibly with mail pending" {
+  # PENDING MAIL is the one case the C7 flip deliberately leaves as an abstain — the session HAS
+  # work, cc-await-ping's C4 would refuse the arm for exactly that reason, and the goal-forced turns
+  # deliver the mail. Blocking to demand a command designed to fail is a pure round-trip.
   mail 1
   run actuate sidA "$(goal_tx)"
   ! blocked "$output" || false

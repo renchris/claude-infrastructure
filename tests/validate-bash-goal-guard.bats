@@ -177,3 +177,62 @@ denied() { printf '%s' "$1" | jq -e '.hookSpecificOutput.permissionDecision == "
   probe "cd /tmp && cc-await-ping --timeout 14400" true "$(live_goal_tx)"
   denied "$output"
 }
+
+# ── C6 CARVE-OUT (2026-08-16): the chokepoint admits its own cure ────────────────────────────────
+# docs/research/goal-safe-2way-comms-2026-08-13.md §4, backlog 6290f0ee6b52. Denying the whole class
+# left a goal-armed session with NO idle mode: park and starve the goal, or stay bare and spin it
+# (90 unmet evaluations in 76 min, measured). `--idle-scoped` is the third mode — it stands itself
+# down on any new turn of its own session, so its deferral spans exactly the idle window. The gate
+# admits that ONE shape, and the deny text teaches it, because a chokepoint that refuses without
+# naming the alternative is what produced the spin pole in the first place.
+
+@test "(17) ADMITS: cc-await-ping --idle-scoped under a LIVE goal (the one sanctioned parked shape)" {
+  probe "$HOME/.claude/bin/cc-await-ping --idle-scoped --sid abc-123" true "$(live_goal_tx)"
+  [ "$status" -eq 0 ]
+  ! denied "$output" || false
+}
+
+@test "(18) CONTROL: the SAME command WITHOUT the flag is still denied (the flag is the whole lever)" {
+  probe "$HOME/.claude/bin/cc-await-ping --sid abc-123" true "$(live_goal_tx)"
+  denied "$output"
+}
+
+@test "(19) the deny TEACHES the admitted form, and names THIS session's id" {
+  run bash -c 'jq -nc --arg c "$1" --arg t "$2" \
+    "{tool_input:{command:\$c, run_in_background:true}, transcript_path:\$t, session_id:\"sid-xyz\"}" | "$0"' \
+    "$HOOK" "cc-await-ping --timeout 14400" "$(live_goal_tx)"
+  denied "$output"
+  r="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+  printf '%s' "$r" | grep -q -- '--idle-scoped --sid sid-xyz' || false
+  # the pre-existing contract is unbroken: the mechanism and the goal-safe continuation lever stay
+  printf '%s' "$r" | grep -q 'skips /goal evaluation' || false
+  printf '%s' "$r" | grep -q 'session-continue.sh set' || false
+}
+
+@test "(20) with NO session_id the deny still teaches the form, as a placeholder — never a broken command" {
+  probe "cc-await-ping --timeout 14400" true "$(live_goal_tx)"
+  denied "$output"
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' \
+    | grep -q -- "--idle-scoped --sid <this session's id>" || false
+}
+
+@test "(21) the carve-out is PER-SEGMENT: an idle-scoped arm elsewhere does not launder a parked one" {
+  # the flag belongs to the cc-await-ping it is written on. A compound that arms the safe shape AND
+  # parks a 4-hour one still parks a 4-hour one, and the registry cannot tell them apart.
+  probe "cc-await-ping --idle-scoped --sid a && cc-await-ping --timeout 14400" true "$(live_goal_tx)"
+  denied "$output"
+}
+
+@test "(22) the carve-out does NOT reach the loop shape: --idle-scoped inside a poller is still denied" {
+  # shape (1) is judged over the intact command and never looks at flags — correctly, because the
+  # LOOP is the parker there, and a watcher that self-cancels inside a loop that restarts it is not
+  # idle-scoped at all.
+  probe "while true; do cc-await-ping --idle-scoped --sid a; sleep 30; done" true "$(live_goal_tx)"
+  denied "$output"
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q 'event-polling loop' || false
+}
+
+@test "(23) a substring is not the flag: --idle-scopedX does not open the gate" {
+  probe "cc-await-ping --idle-scopedX --timeout 14400" true "$(live_goal_tx)"
+  denied "$output"
+}

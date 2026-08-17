@@ -203,6 +203,24 @@ if [[ "$_gg_bg" == "true" ]]; then
       [[ -n "$_gg_w1" ]] || continue
       case "$_gg_w1" in
         *cc-await-ping)
+          # ── C6 CARVE-OUT: the chokepoint admits its own cure ──────────────────────────────────
+          # docs/research/goal-safe-2way-comms-2026-08-13.md §4. Denying the WHOLE class left a
+          # goal-armed session with no idle mode at all: park a watcher and starve the goal, or stay
+          # bare and spin it (90 unmet evaluations in 76 min, measured). `--idle-scoped` is the third
+          # mode — it stands itself down on any new turn of its own session, so the deferral it
+          # creates spans exactly the idle window and the goal is judged once per new-information
+          # event. That property is enforced by the tool (it REFUSES to arm when it cannot prove it
+          # will self-cancel — bin/cc-await-ping exit 6), which is why a flag is sufficient evidence
+          # here: this gate is admitting a shape, not taking the caller's word for a behaviour.
+          #
+          # PER-SEGMENT, like every other term: the flag has to belong to THIS cc-await-ping, not to
+          # some other segment of a compound command. And it is only a carve-out for the
+          # command-position term — a `--idle-scoped` arm wrapped in a `while … sleep` loop is still
+          # caught by shape (1) above, which runs first and never looks at flags. The loop is the
+          # parker there; the self-cancelling watcher inside it cannot help.
+          if [[ "$_gg_seg" =~ (^|[[:space:]])--idle-scoped([[:space:]]|$) ]]; then
+            continue
+          fi
           _gg_shape="a cc-await-ping arm"; break ;;
         sleep|*/sleep)
           if [[ "$_gg_a1" =~ ^[0-9]+$ ]] && (( _gg_a1 >= ${CC_GOAL_BG_SLEEP_SECS:-120} )); then
@@ -233,7 +251,22 @@ if [[ -n "$_gg_shape" ]]; then
   if command -v goal_live_condition >/dev/null 2>&1; then
     _gg_cond="$(goal_live_condition "$_gg_tp" 2>/dev/null)" || _gg_cond=""
     if [[ -n "$_gg_cond" ]]; then
-      deny "A /goal is LIVE in this session (\"${_gg_cond:0:120}\"), and this backgrounded command is ${_gg_shape}, which would silently disable it: Claude Code skips /goal evaluation at every Stop while a non-terminal background Bash exists (the registry is restored afterwards, so nothing ever looks wrong). Do not park a background watcher here. You are not deaf without it — the goal blocks your stops, so you keep taking turns and mailbox-drain delivers peer mail at every turn boundary; the birth watcher (mailbox-wake-arm, asyncRewake) also wakes a genuinely idle session WITHOUT entering the task registry. If you need a cross-turn continuation lever, use: ~/.claude/hooks/session-continue.sh set \"<next step>\" — it is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
+      # THE DENY TEACHES THE ADMITTED FORM (C7). Until 2026-08-16 this text said only "do not park a
+      # background watcher here", which is correct about the shape in hand and silent about the
+      # state the model is actually in: a session with nothing to do and a goal whose truth lives in
+      # someone else's progress. That silence is what produced the spin pole — the model complies,
+      # stays bare, and re-judges an unchanged world every ~51 seconds. So the refusal now names the
+      # one shape that IS safe, and it names it with this session's own id, because the flag without
+      # a resolvable beat oracle is a refusal at the tool (exit 6) rather than a wake path.
+      _gg_sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+      # $HOME, never "~/…" — the model pastes this verbatim and a tilde inside a quoted string is not
+      # a path (SC2088; same rule hooks/session-continue.sh:476 states for its own arm command).
+      if [[ -n "$_gg_sid" ]]; then
+        _gg_arm="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid ${_gg_sid}"
+      else
+        _gg_arm="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid <this session's id>"
+      fi
+      deny "A /goal is LIVE in this session (\"${_gg_cond:0:120}\"), and this backgrounded command is ${_gg_shape}, which would silently disable it: Claude Code skips /goal evaluation at every Stop while a non-terminal background Bash exists (the registry is restored afterwards, so nothing ever looks wrong). Do not park a background watcher here. You are not deaf without it — the goal blocks your stops, so you keep taking turns and mailbox-drain delivers peer mail at every turn boundary; the birth watcher (mailbox-wake-arm, asyncRewake) also wakes a genuinely idle session WITHOUT entering the task registry. If you have nothing actionable and are waiting on an EXTERNAL event (a fired peer, an operator answer), the one arm that is safe under a live goal is the idle-scoped awaiter — it stands itself down on your next turn, so the deferral lasts exactly as long as the idle does: ${_gg_arm} (run it as your LAST action, backgrounded, on a clean committed state; it refuses to arm — exit 6 — if mail is already pending, a sibling watcher is live, or it cannot read your turn beat). If instead you need a cross-turn continuation lever, use: ~/.claude/hooks/session-continue.sh set \"<next step>\" — it is goal-safe. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §4 · docs/research/goal-in-handoff-2026-08-08.md"
     fi
   fi
 fi
