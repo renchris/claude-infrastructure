@@ -15,6 +15,11 @@ appends every resolved prompt to a durable archive before removing it, so this r
 carries a measured set alongside the inferred bound. The archive only accumulates
 FORWARD from the day it landed, so a short history means a small observed set, not an
 absence of prompts — the two are distinguished explicitly below.
+
+Usage:
+  cc-permission-audit [DAYS]            the report above (0/absent = all history)
+  cc-permission-audit --prune [FILE…]   list provably-dead approved patterns; writes NOTHING
+  CONFIRM=1 cc-permission-audit --prune [FILE…]   remove them (timestamped backup per file)
 """
 
 import json, glob, re, sys, collections, os, time
@@ -36,7 +41,13 @@ def _days_arg(v):
     return int(m.group(1))
 
 
-DAYS = _days_arg(sys.argv[1]) if len(sys.argv) > 1 else 0  # 0 = all history
+ARGV = sys.argv[1:]
+PRUNE = "--prune" in ARGV
+# `--prune FILE…` takes explicit settings paths; the positional day-count keeps working
+# unchanged when no flag is given, so `cc-permission-audit 7` is untouched.
+PRUNE_PATHS = [a for a in ARGV if not a.startswith("-") and a.endswith(".json")]
+_POS = [a for a in ARGV if not a.startswith("-") and a not in PRUNE_PATHS]
+DAYS = _days_arg(_POS[0]) if _POS else 0  # 0 = all history
 # AXIS MISMATCH, deliberate and disclosed: with DAYS set the ARCHIVE is filtered per-ROW on
 # resolved_ts, while the transcript corpus is filtered per-FILE on mtime — so an actively
 # appended transcript contributes its entire history. The two halves of this report answer
@@ -249,7 +260,167 @@ def archive_report():
               + ", ".join(f"{k}×{v}" for k, v in other.most_common(6)))
 
 
+# ─────────────────────────────── --prune ────────────────────────────────────
+#
+# THE DEAD-ENTRY PREDICATE — REDUNDANCY, proven inside the one file being rewritten.
+#
+# An approved entry is DEAD iff removing it cannot change what any command resolves to,
+# proven from that same file's own `permissions.allow` list:
+#
+#   (a) DUPLICATE — a byte-identical earlier entry survives. Semantics-preserving under ANY
+#       matcher, because the surviving twin IS the same rule.
+#   (b) SHADOWED  — it is a wildcard-free rule `Tool(literal)` and the same list holds a
+#       prefix rule `Tool(base:*)` where `literal.startswith(base + " ")`. Under the
+#       documented prefix semantics the only command string the exact rule can match — the
+#       literal itself — starts with `base ` and is therefore still matched by the surviving
+#       prefix rule. Removal shrinks the file and widens nothing.
+#
+# This is a rule-ALGEBRA test, never a denylist of spellings: no command text is inspected
+# for "looks like a temp path / a sha / a pid".
+#
+# DELIBERATELY NOT PRUNED, though backlog row a78f0fa4223a asked for it: the "one-shot
+# exact-match" class — an entry naming a literal that looks unrepeatable. Nothing on disk
+# proves the operator will not type it again (`mkdir -p /tmp/advV/x` is one-shot-LOOKING and
+# perfectly repeatable), and the two errors are not symmetric: a false prune re-prompts the
+# operator forever, a missed prune costs a line of JSON. Measured 2026-08-17: 63.2% of the
+# fleet's 1748 Bash patterns are exact matches, but only 10.2% of all 2399 patterns are
+# provably redundant — exactness is not deadness, which is why that 48% figure is not the
+# prune population.
+#
+# ALSO NOT USED AS PROOF:
+#   · `literal == base` (does `Tool(x:*)` match the bare command `x`?). That is the matcher's
+#     business and is not asserted here; 3 fleet-wide entries turn on it and they stay.
+#   · a shadower living in a DIFFERENT settings file. Precedence-merged files are edited
+#     independently, so the proof has to live in the file that is being rewritten.
+
+WILDCARD = re.compile(r"[*?\[\]]")
+RULE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)\((.*)\)$", re.S)
+# Discovery is a bounded walk, not `**` — a recursive glob of $HOME does not terminate in
+# usable time. Explicit paths on the command line skip it entirely (that is what tests use).
+WALK_SKIP = {
+    "node_modules", "Library", "Applications", ".Trash", ".git", ".venv", "venv",
+    "site-packages", "Movies", "Music", "Pictures", "Downloads", ".npm", ".cache",
+    "dist", "build", ".next",
+}
+WALK_MAXDEPTH = 5
+
+
+def _settings_files():
+    if PRUNE_PATHS:
+        return PRUNE_PATHS
+    root = os.path.expanduser("~")
+    base = root.rstrip("/").count("/")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dirpath.count("/") - base >= WALK_MAXDEPTH:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
+        if "settings.local.json" in filenames and os.path.basename(dirpath).startswith(".claude"):
+            out.append(os.path.join(dirpath, "settings.local.json"))
+    return sorted(out)
+
+
+def dead_entries(allow):
+    """(survivors, [(index, rule, reason)]) for one `permissions.allow` list.
+
+    See THE DEAD-ENTRY PREDICATE above. Order of survivors is preserved exactly.
+    """
+    prefixes = collections.defaultdict(list)
+    for rule in allow:
+        m = RULE_RE.match(rule)
+        if not m:
+            continue
+        tool, arg = m.group(1), m.group(2)
+        if arg.endswith(":*") and not WILDCARD.search(arg[:-2]):
+            prefixes[tool].append(arg[:-2])
+
+    survivors, dead, seen = [], [], set()
+    for i, rule in enumerate(allow):
+        if rule in seen:
+            dead.append((i, rule, "duplicate of an earlier entry"))
+            continue
+        m = RULE_RE.match(rule)
+        if m and not WILDCARD.search(m.group(2)):
+            tool, arg = m.group(1), m.group(2)
+            hit = next((b for b in prefixes[tool] if arg.startswith(b + " ")), None)
+            if hit is not None:
+                dead.append((i, rule, f"shadowed by {tool}({hit}:*)"))
+                continue
+        seen.add(rule)
+        survivors.append(rule)
+    return survivors, dead
+
+
+def _backup(path):
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    dest = f"{path}.permprune-bak-{stamp}"
+    n = 0
+    while os.path.exists(dest):                      # never clobber a same-second backup
+        n += 1
+        dest = f"{path}.permprune-bak-{stamp}.{n}"
+    with open(path, "rb") as src, open(dest, "wb") as out:
+        out.write(src.read())
+    return dest
+
+
+def prune_report():
+    """Dry-run by default; writes only under CONFIRM=1 (this repo's dominant confirm idiom)."""
+    apply = os.environ.get("CONFIRM", "0") == "1"
+    files = _settings_files()
+    print(f"── PRUNE {'(APPLY)' if apply else '(DRY RUN — nothing will be written)'} ──")
+    print(f"  scope: {len(files)} settings.local.json file(s)")
+    total = dead_total = written = failed = 0
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                obj = json.load(fh)
+        except Exception as e:
+            print(f"  ⚠ SKIP (unreadable/invalid JSON): {path}: {e}")
+            failed += 1
+            continue
+        allow = ((obj.get("permissions") or {}).get("allow")) if isinstance(obj, dict) else None
+        if not isinstance(allow, list):
+            continue
+        total += len(allow)
+        survivors, dead = dead_entries(allow)
+        if not dead:
+            continue
+        dead_total += len(dead)
+        print(f"\n  {path}  ({len(allow)} → {len(survivors)}, {len(dead)} dead)")
+        for _, rule, why in dead:
+            print(f"    - {rule[:100]}   [{why}]")
+        if not apply:
+            continue
+        try:
+            bak = _backup(path)                      # backup BEFORE the write, always
+            obj["permissions"]["allow"] = survivors
+            tmp = path + ".permprune-tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh, indent=2, ensure_ascii=False)
+                fh.write("\n")
+            os.replace(tmp, path)                    # atomic; nothing half-written
+            written += 1
+            print(f"    ✔ rewritten (backup: {bak})")
+        except Exception as e:
+            print(f"    ⚠ WRITE FAILED, file left alone: {e}")
+            failed += 1
+    pct = f"{100 * dead_total / total:.1f}%" if total else "n/a"
+    print(f"\n  {dead_total} provably-dead entr(ies) of {total} approved patterns ({pct})")
+    if apply:
+        print(f"  {written} file(s) rewritten, {failed} skipped/failed")
+    else:
+        print("  DRY RUN — nothing written. Re-run as: "
+              f"CONFIRM=1 {os.path.basename(sys.argv[0])} --prune"
+              + (" " + " ".join(PRUNE_PATHS) if PRUNE_PATHS else ""))
+    return 1 if failed else 0
+
+
 def main():
+    if PRUNE:
+        # Before load_rules(): a prune must not depend on ~/.claude/settings.json existing,
+        # and must not spend a minute scanning the transcript corpus it does not read.
+        sys.exit(prune_report())
     allow, deny, ask = load_rules()
     files = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
     files += glob.glob(os.path.expanduser("~/.claude-next/projects/*/*.jsonl"))
