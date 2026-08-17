@@ -19,10 +19,30 @@ TASKS_INDEX="${CC_TASKS_INDEX:-$CC_CONFIG_DIR/tasks-index.json}"
 # Find the active task list for a project (G-P14-7). When a project is known,
 # ONLY lists the tasks-index maps to THAT project are eligible — a globally
 # most-recent FOREIGN list can never surface. Unmapped (UUID/foreign) lists and a
-# missing index ⇒ no match (never a global fallback). With no project (legacy /
+# missing index ⇒ NOT a match, and NOT a global fallback — but see the verdict channel
+# below: it is reported as UNDETERMINED, not as "none". With no project (legacy /
 # non-project context), falls back to global-most-recent.
 #   Args: $1 = project dir (default $CLAUDE_PROJECT_DIR), $2 = index (default $TASKS_INDEX)
 # Prints the task list ID (directory basename), or empty string if none found.
+#
+# THREE-STATE VERDICT (exit status is the channel; stdout alone cannot carry it).
+#   rc 0 + non-empty stdout → FOUND      — this is the active list.
+#   rc 0 + empty stdout     → NONE       — the index WAS read and nothing maps to $proj.
+#   rc 2 + empty stdout     → UNDETERMINED — the question could not be answered: the index
+#                             is absent, unreadable, or unparseable, or `jq` is missing.
+# Why this exists. Every one of those cases used to print "" and return 0, so a consumer
+# could not tell "this project has no task list" from "I could not find out" — a silent
+# wrong answer, and a DESTRUCTIVE one at setup-task-symlinks.sh's `elif [ -L "$CURRENT_LINK" ]`
+# arm, which deletes a perfectly good `_current` symlink on a verdict that means nothing.
+# The rc channel is the only one that survives the call form every caller uses
+# (`ID=$(find_active_list …)` runs the body in a SUBSHELL, so a status *variable* set inside
+# it can never reach the parent; `$?` after the assignment does).
+# NOTE FOR CALLERS: rc 2 is a *verdict*, not a failure. A caller under `set -e` MUST spell the
+# call `ID=$(find_active_list …) || true` (or test `$?` explicitly), or the shell aborts on
+# the undetermined case. The legacy contract is otherwise unchanged: rc 0 and the same stdout
+# in both the FOUND and NONE cases, so a caller that only tests `[ -z "$ID" ]` keeps working.
+# A missing/empty task STORE stays rc 0/NONE — "there are no lists" is a real answer, not an
+# unanswerable question.
 # PERFORMANCE (DESK_ROUTER_AND_STARTUP_V1 W0). This function used to fork one `jq` per
 # task-list DIRECTORY, each re-reading the WHOLE index, plus `basename` + `ls -t` + `head`
 # + `stat` per directory — ~2,400 dirs × a 136 KB index ≈ 21 s to select ~25 entries. It is
@@ -46,12 +66,17 @@ find_active_list() {
     local best="" best_file="" dir listid tj mapped_set=""
 
     if [ -n "$proj" ]; then
-        # Unmapped lists and a missing index ⇒ no match (never a global fallback).
-        [ -f "$index" ] || { echo ""; return 0; }
-        local mapped
+        # No index on disk ⇒ the question is unanswerable, never a global fallback.
+        [ -f "$index" ] || { echo ""; return 2; }
+        local mapped jrc
         mapped=$(jq -r --arg p "$proj" \
                    '.taskLists | to_entries[] | select(.value.project == $p) | .key' \
                    "$index" 2>/dev/null)
+        jrc=$?
+        # jq missing, or the index unreadable/unparseable — separated from "jq ran and the
+        # answer was the empty set", which is a real NONE. Collapsing the two is the silent
+        # wrong answer this function was fixed for.
+        [ "$jrc" -eq 0 ] || { echo ""; return 2; }
         [ -n "$mapped" ] || { echo ""; return 0; }
         while IFS= read -r listid; do
             [ -n "$listid" ] && mapped_set="${mapped_set}|${listid}|"
