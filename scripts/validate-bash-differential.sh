@@ -69,6 +69,21 @@ done
 esc() { printf '%q' "$1"; }   # unambiguous single-line rendering of a multi-line / control-char value
 
 # ── load sites ───────────────────────────────────────────────────────────────────────────────────
+# ARITY GUARD, and it is the reason this reader takes no tsv-pad exemption on trust. Tab is
+# IFS-whitespace, so an empty cell does not read back empty — it shifts every later column LEFT,
+# silently, exit 0. This fixture is checked in and hand-edited, which is exactly the population that
+# can acquire an empty cell later. So REFUSE a malformed row at the source rather than consume a
+# shifted one: every data row must have exactly 8 non-empty tab-separated cells, or the harness
+# exits 2 (a non-verdict) instead of quietly scoring the wrong pattern against the wrong subject.
+awk -F'\t' -v f="$SITES" '
+  /^#/ || /^[[:space:]]*$/ { next }
+  $1 == "id" { next }
+  NF != 8 { printf "%s:%d: has %d cells, expected 8\n", f, NR, NF > "/dev/stderr"; bad++ ; next }
+  { for (i = 1; i <= NF; i++) if ($i == "") {
+      printf "%s:%d: cell %d is EMPTY — it would shift every later column left\n", f, NR, i > "/dev/stderr"; bad++ } }
+  END { exit (bad ? 1 : 0) }
+' "$SITES" || { echo "sites fixture is malformed — refusing to score against shifted columns" >&2; exit 2; }
+
 S_ID=(); S_LINE=(); S_FORM=(); S_FEED=(); S_SUBJ=(); S_VERIFY=(); S_EXPECT=(); S_PAT=()
 while IFS=$'\t' read -r id line form feed subj verify expect pat; do
   case "$id" in ''|'#'*|id) continue ;; esac

@@ -184,6 +184,30 @@ smoke_test() {
 JQ="$(command -v jq)"
 [[ -n "$JQ" ]] || { echo "FAULT: jq required to build payloads" >&2; exit 1; }
 
+# ARITY GUARD — see scripts/validate-bash-differential.sh for the full reasoning. Tab is
+# IFS-whitespace, so an empty cell shifts every later column LEFT rather than reading back empty.
+# The corpus is checked in and hand-edited, so REFUSE a malformed row at the source: exactly 3
+# non-empty cells per data row. Without this, an empty `bg` cell would slide the COMMAND into the
+# run_in_background slot and the census would report timings for a payload nobody wrote.
+#
+# 🚨 THIS MUST BE CALLED AT TOP LEVEL, NOT FROM build_payloads. Its one caller is
+# `NCASES="$(build_payloads)"` — a command substitution, i.e. a SUBSHELL — so an `exit 2` inside it
+# ends the subshell and the parent runs on with NCASES empty. Measured while writing this: the first
+# draft lived inside build_payloads, and a deliberately malformed corpus produced a full clean run,
+# exit 0. A guard that cannot stop the thing it guards is decoration.
+assert_corpus_arity() {
+  awk -F'\t' -v f="$CORPUS" '
+    /^#/ || /^[[:space:]]*$/ { next }
+    NF != 3 { printf "%s:%d: has %d cells, expected 3\n", f, NR, NF > "/dev/stderr"; bad++ ; next }
+    { for (i = 1; i <= NF; i++) if ($i == "") {
+        printf "%s:%d: cell %d is EMPTY — it would shift every later column left\n", f, NR, i > "/dev/stderr"; bad++ } }
+    END { exit (bad ? 1 : 0) }
+  ' "$CORPUS" || {
+    echo "FAULT: corpus fixture is malformed — refusing to measure a payload nobody wrote" >&2
+    exit 2
+  }
+}
+
 build_payloads() {
   local class bg cmd n=0
   : > "$OUTDIR/classes.txt"
@@ -457,6 +481,7 @@ smoke_test
 } >> "$REPORT"
 
 echo "building payloads…"
+assert_corpus_arity          # top level, so its exit 2 can actually stop the run — see its comment
 NCASES="$(build_payloads)"
 echo "  $NCASES corpus cases"
 
