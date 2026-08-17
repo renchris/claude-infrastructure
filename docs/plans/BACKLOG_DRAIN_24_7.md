@@ -87,6 +87,32 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-17 ~07:45Z — the chain is PROVEN self-perpetuating; recovery is COMPLETE; the cloud
+  return path is the last leg (S4 fired, pane 154).**
+  DRAIN CHAIN: recycle #10 closed master-account-facts at `0 open / 16 blocked (16
+  operator-gated)` and fired #11 unattended; #11 closed master-operator-gated at `0 open / 25
+  blocked`, conservation 1/1, and fired #12 — **two unattended boundaries = §5 gate (2) PROVEN;
+  all four §5 gates now hold.** Chain lands so far: 9d8965faa+9dd286cb3 (install.sh nested-skills
+  converger bug), dc47200cc (reap blocks are machine non-verdicts), f5d4a552e (cc-do was
+  discarding .run for all 51 blocked rows), e7640e016. #11 found the operator-gated pile is a
+  GENERATOR, not 30 judgment calls; the second generator (desk-land refile loop) is filed
+  981a403a05fa as #12's pick.
+  W-R2 COMPLETE, zero loss: **12/12 stranded branches resolved** (9 landed: 1817ca740 b4d0a3d0f
+  f81808f5b 896973916 764f96963 c037c1aa1 73ceb76aa dbaba83ac 76d5dc100 · 3 retired-by-content
+  with evidence); paid clawd-bmo assets landed 1e040c79c; blocked re-land rows **30 → 2**
+  (neither ours). T1 reaper verdict confirmed at 39× enrichment + fixture repro, fix LIVE.
+  Honest conservation: R2 personally +5 (population still drained); 8 branches needed real fixes
+  (4 pre-existing on pristine trunk, each control-confirmed). All 12 shas verified ancestors by
+  the lead. Custody for this cwd: fully discharged.
+  CLOUD LANE: dispatcher now CREATES sessions that RUN (session_018in35KSYj7iLV7jZCNuCnj, item
+  c33f3b1cb278, worker_status=running) — but the RETURN path abstains every poll ("control plane
+  unreadable") while the identical read succeeds interactively (same ids, same accounts, rc=0) —
+  a daemon-environment failure with a muted callee (cloud-return.sh:156 discards stderr). **S4
+  fired** (pane 154, fix/cloud-return-daemon): un-mute the abstain, fix the daemon env, prove
+  real return rows; the running session is the live A2 end-to-end probe. Also shed: two
+  pane-less claude processes of completed S2/R2 sessions (TERMed after the reap-safe
+  certificate: complete + custody discharged + pane gone + work content-verified).
+
 - **2026-08-17 ~05:30Z — W-P2 GO-LIVE: the drain chain is running.** (S3's own landed entry
   below carries the full root cause; this entry is the go-live record.) **First GREEN since
   08-15: `416a7191dea8` (475 suites, failing=[], run_s 2374); deploy-live ADVANCED on the
