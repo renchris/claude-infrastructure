@@ -87,6 +87,76 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — recycle #20: master-session-lifecycle 12 → 8 open / 1 blocked. filed 0 / closed 4.**
+  Two lands, content-verified: `555e3b270` then `45a56dcb5`. Rows closed: `4a11a0ac850a` (the
+  succession linking primitive + its detector + its caller) · `2dc6906b6e0b` (§14's *or-pressured*
+  recycle re-pick) · `3b464e94b3ff` (custody TTL, by a teammate) · `50627335fe9b` (Stop-hook wedge —
+  **remedy refuted, root cause found and fixed**, by a teammate + lead). Blocked tail BY STRATUM:
+  1 row, `adf1bb6b5406`, venue=local, `source: needs` — an operator-platter item. **0 cloud-venue
+  rows.** No stale claim left. Post-land: 244 tests across 10 suites, 0 not-ok, every one carrying
+  a `1..N` plan line.
+
+  🚨 **THE SPAWN GATE IS OPEN AND BOTH TEAMMATES WERE ACCEPTED — 2 of 2, on the shape #19 recorded.**
+  `Agent({ name, subagent_type: "general-purpose", run_in_background: true, prompt })` — no
+  `team_name`, no `isolation`, no `cwd`, worktree path in the brief body. Fired both in ONE message.
+  Both delivered committed, red-proved work; between them they closed two rows the lead never
+  touched. Treat the gate as a variable and still fire, but the recent record is #18 0/3, #19 1/1,
+  #20 2/2.
+
+  🚨 **THE FINDING FOR #21: A ROW'S PRESCRIBED REMEDY CAN BE UNBUILDABLE WHILE ITS DEFECT IS REAL —
+  AND THE REAL CAUSE WAS FIVE TIMES LARGER THAN THE ROW'S OWN CENSUS.** `50627335fe9b` asked for a
+  runtime detector keyed on "hook frame displayed AND no hook child". Measured against the 2.1.220
+  binary every pane here executes: the only hook frame it renders is the past-tense `Ran <N> <Label>
+  hooks`, a count with **no denominator**, and `hooksRunning`/`runningHooks`/`pendingHooks`/
+  `hookProgress` return **zero hits**. Axis A does not exist, so the prescribed anchor is
+  unbuildable and anything built on it is a heuristic wearing an exact detector's clothes. The
+  incident is nonetheless real, and the evidence indicts **hook #1, not #12**: every Stop hook
+  carries a 5-10 s timeout (~75 s for the chain) against a **54-minute** wedge — 43× — so no hook was
+  ever slow, because **a timeout cannot reach a file descriptor.** A hook's stdout is a pipe the
+  harness reads to EOF; `&` does not close a descriptor and `disown` does not either. The row's own
+  census named one site (`notify.sh`, `afplay … 2>>LOG &`). A lint over all 73 hook files found
+  **five**, every one real — and four are `( … ) &` subshells whose *inner* lines carry
+  `2>/dev/null`, so they read as handled while the subshell holds the pipe regardless of whether it
+  ever writes. **Ask what a row's remedy assumes about the machine before building it, and never let
+  a row's own census size the class.**
+
+  🚨 **AN ABSENCE TEST INHERITS EVERY HOLE IN ITS INPUT AS A POSITIVE FINDING — three ways, all hit
+  this recycle.** The unfired-brief sweep asks "does this brief appear in no fire row", and:
+  (a) `prompt_file` has **no history**, so on day one all 98 briefs on disk answer *no* — the floor
+  is therefore derived FROM THE STORE (`max(epoch of the first row carrying the field, oldest
+  surviving row)`), never from a date, and the sweep reports **NOT ARMED, 0 findings** while naming
+  the 98 it declined to emit; (b) the ledger self-trims at 1200 rows, so a fire whose row was
+  deleted reads unfired for a reason that is *retention* — counted `unknowable`, excluded from
+  findings; (c) `find /tmp` does **not** traverse Darwin's `/tmp → /private/tmp` symlink, so the
+  first working draft found **0 files against a glob control's 98** — a detector whose finding set
+  is structurally empty reports all-clear forever and is byte-indistinguishable from a healthy
+  machine. **(c) was found by RUNNING it, not reading it**, and is now pinned by mutation.
+
+  🚨 **A GATE CAUGHT A REAL CORRECTNESS BUG THE SUITE DID NOT: `printf … | grep -q` under
+  `set -o pipefail` reads FALSE ON A MATCH.** `grep -q` exits the moment it matches, SIGPIPEs the
+  producer, and pipefail then reports the pipeline failed — so in the sweep a **clean,
+  successfully-fired brief would have been reported as a lost succession, on the match path, every
+  time.** Nine cases were green over it. The land's `pipefail-sigpipe` ratchet found it; the fix is
+  a here-string (not a pipeline, so no producer to signal). **Run the land's own ratchets early —
+  they see failure modes a fixture-sized suite cannot.**
+
+  Also worth carrying: **a kill switch that killed nothing** — `_cliff_env` *deliberately* ignores a
+  malformed value so a typo cannot disable a safety term, so `CC_ROUTE_REPICK_RATIO=off` parsed as
+  garbage and returned the 4.0 default. Polarity is the test: ignoring a typo fails SAFE for a term
+  that **restrains**, and fails OPEN for one that **authorises an action**. Use `_term_on` (R8) for
+  the latter. And **the pressure half was DEAD CODE for one revision** because its threshold was
+  parsed from `$errf` *after* the `rm` — an empty parse fell through the block's own fail-soft and
+  could never fire nor say so. Both were caught by *running the four knob states*, not by reading.
+
+  A vacuous case and a vacuous control, both fixed rather than excused: `jq '.prompt_file | type'`
+  answers `null` for an **absent** key exactly as for a null-valued one, so the R9 case passed
+  against pristine and certified nothing (now `has("prompt_file")` AND the value); and
+  `handoff-recycle-repick.bats`'s extraction control grepped `--route general` over the block
+  **including comments**, so it stayed green across the switch to `--rank` purely because a new
+  comment explains the switch — mention-vs-use, in the one case whose job is proving the extraction
+  is real. **NOT MINE, surfaced not driven:** `tests/claude-accounts-core.bats` case 72 fails
+  identically on pristine `origin/main` — a pre-existing trunk red over live burn data.
+
 - **2026-08-18 ~04:00Z — W-R3 CLOSED by pane 275: 83 branches, 32 with content, and only SIX
   commits were actually missing from trunk. `landed 6 · superseded 20 · moot 1 · parked-by-design
   2 · patch-equivalent 51 · still-declared-unpushed 31` — every branch reaches a terminal verdict
