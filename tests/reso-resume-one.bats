@@ -38,6 +38,13 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_RESUME_MODEL=claude-opus-5          # never read the host SSOT
   export CC_RESUME_NO_INTERACT=1                # interact needs a controlling tty; nothing else changes
+  # The engine carries a capacity gate as of 2026-08-17. Every case below is about pin resolution,
+  # worktree recreation and the resume dialog — none is about admission — so the gate is pinned OFF
+  # here rather than left to the verifier's own load. A refusal keyed on the box being busy would
+  # otherwise fire on THIS HARNESS, reddening unrelated cases on a loaded machine and passing on an
+  # idle one (memory: guard-refusal-fires-on-its-own-harness). The gate's own behaviour is asserted
+  # in the three dedicated cases at the end of this file, with it explicitly ON.
+  export CC_ADMIT_GATE=off
   export CC_RR_STUB_ARGV="$BATS_TEST_TMPDIR/argv"
   export CC_RR_STUB_OUT="$BATS_TEST_TMPDIR/selected"
   export CC_RESUME_CLAUDE_BIN="$BATS_TEST_TMPDIR/fake-claude"
@@ -305,4 +312,94 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # makes that structurally true, which is exactly why it was chosen over the copy that rotted —
   # so assert the property, and let the mechanism be what makes it cheap to hold.
   cmp -s "$live" "$target"
+}
+
+# ── THE CAPACITY GATE IN THE ENGINE'S OWN BODY (backlog eda267ff4b14) ────────────────────────────
+# §12.1 listed this engine as a capacity BYPASS: every in-repo invocation reaches it through
+# scripts/boot-resume-launch.sh, which is gated, but a DIRECT call — the runbook's, an operator's,
+# the Agent-tool path — spawned a session against no admission check at all. That was defended by
+# "ungateable because untracked" until 5c38ad5a tracked the file here.
+# tests/capacity-admit-coverage.bats case 25 pinned the residue and instructed its own rewrite for
+# the moment this landed; these are the cases that make the rewrite true.
+#
+# THE GATE IS DRIVEN DETERMINISTICALLY, never off the verifier's real load — the same
+# CC_ADMIT_LOADAVG_OVERRIDE / CC_ADMIT_HEADROOM_OVERRIDE seams tests/capacity-admit.bats uses. A
+# case whose verdict depends on how busy the box happens to be is not a test.
+# ONE MUTANT PER SITE: shed · admit · absent-library are three distinct behaviours of this block and
+# get three cases; a single "the gate exists" grep would credit none of them and would re-create the
+# spelling-pinned assertion that tests/reso-keepalive.bats already had to unlearn.
+
+@test "GATE shed — an overloaded box DEFERS the resume with exit 9, before any work is done" {
+  # 9 is `shed`, deliberately distinct from 2 (usage), 3 (missing dep) and 4 (launch failed): a
+  # failure needs fixing, a shed needs the box to settle, and the operator action differs.
+  run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-shed" \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-shed" SID-SHED feat/gate-shed
+  [ "$status" -eq 9 ] || { echo "expected shed (9), got $status: $output"; false; }
+  echo "$output" | grep -q "DEFERRED, not lost" \
+    || { echo "a shed must say the session is deferred rather than lost: $output"; false; }
+}
+
+@test "GATE admit — a quiet box resumes, and the admission is ANNOUNCED not silent" {
+  # An admitted spawn still says which terms it evaluated. A gate that is silent when it admits is
+  # indistinguishable from a gate that is not there, which is the state this row closed.
+  run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=0.1 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-ok" \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-ok" SID-OK feat/gate-ok
+  [ "$status" -ne 9 ] || { echo "a quiet box was shed: $output"; false; }
+  echo "$output" | grep -q "reso-resume-one: capacity-admit" \
+    || { echo "the admission was not announced: $output"; false; }
+}
+
+@test "GATE absent-library is LOUD and NOT fatal — the gate must never cause the outage it prevents" {
+  # §12.2's rule, verbatim: inertness must be LOUD rather than a silent admit. And refusing to
+  # recover a crashed box because a telemetry library is missing would be strictly worse than the
+  # ungated state this replaced — so it announces and proceeds.
+  # Forced via the SET-BUT-EMPTY seam, because nothing else can reach this branch from a checkout:
+  # the engine's first search path is its own sibling scripts/lib/, which always resolves in-repo.
+  run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on CC_RESUME_ADMIT_LIB= \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-nolib" SID-NOLIB feat/gate-nolib
+  [ "$status" -ne 9 ] || { echo "an absent library caused a shed — the gate became the outage: $output"; false; }
+  echo "$output" | grep -q "capacity-admit: ABSENT" \
+    || { echo "inertness must be LOUD, not a silent admit: $output"; false; }
+  # CONTROL — the load above is shed-level, so this case would pass vacuously if the seam did not
+  # actually disable the library. With the seam removed the SAME invocation must shed, which proves
+  # the case is exercising absence rather than a gate that was never going to refuse anyway.
+  run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-nolib-ctl" \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-nolib" SID-NOLIB feat/gate-nolib
+  [ "$status" -eq 9 ] || { echo "the control did not shed — the absent-library case is vacuous: $output"; false; }
+}
+
+@test "GATE is not evaluated TWICE — the launcher's own admission suppresses the engine's" {
+  # boot-resume-launch.sh runs this exact gate before invoking the engine, and the consecutive-
+  # refusal BUDGET is shared state: a second evaluation per resume spends it twice as fast and
+  # releases the bound early on a box that never settled. CC_ADMIT_DONE marks the admission that
+  # already happened. It can only ever SUPPRESS a redundant evaluation — nothing but the launcher
+  # sets it — so a shed-level load must still resume when it is present.
+  run env CC_ADMIT_DONE=1 CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-dup" \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-dup" SID-DUP feat/gate-dup
+  [ "$status" -ne 9 ] || { echo "the engine re-evaluated a gate the launcher had already passed: $output"; false; }
+  echo "$output" | grep -q "reso-resume-one: capacity-admit" \
+    && { echo "the engine evaluated the gate a second time: $output"; false; }
+  # and the launcher must actually SET it, or the suppression above pins a marker nobody sends
+  grep -q 'export CC_ADMIT_DONE=1' "$REPO_ROOT/scripts/boot-resume-launch.sh" \
+    || { echo "boot-resume-launch.sh does not mark its admission — the engine will double-evaluate"; false; }
+  # CONTROL — WITHOUT THIS THE CASE IS VACUOUS, and measurably so: run against the pre-gate engine
+  # it PASSED, while cases 18-20 correctly went red. An engine with NO gate also fails to evaluate
+  # one twice, so "suppressed" and "never there" are the same observation from the marker's side.
+  # The identical invocation with the marker removed must shed — that is the only thing that tells
+  # them apart, and it is what stops this case certifying the very state the gate replaced.
+  run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-dup-ctl" \
+      CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-dup" SID-DUP feat/gate-dup
+  [ "$status" -eq 9 ] \
+    || { echo "the control did not shed — there is no gate for the marker to suppress: $output"; false; }
 }

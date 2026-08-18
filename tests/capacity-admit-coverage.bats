@@ -170,25 +170,35 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   [ "$(jq -r 'select(.gate=="capacity-admit") | .basis' "$BATS_TEST_TMPDIR/iso-idl.jsonl")" = "absent" ]
 }
 
-@test "25 reso-resume-one is UNGATED in its own body — and the residue is stated, not hidden" {
-  # §12.1 lists it as a bypass path. Every IN-REPO invocation goes through boot-resume-launch.sh,
-  # which case 21 pins as gated; the engine's own body carries no capacity term.
+@test "25 reso-resume-one is GATED in its own body — the last capacity bypass is closed" {
+  # §12.1 listed it as a bypass path: every IN-REPO invocation goes through boot-resume-launch.sh,
+  # which case 21 pins as gated, but a DIRECT call — the runbook's, an operator's, the Agent-tool
+  # path — reached a spawn against no admission check at all.
   #
-  # THE PREMISE MOVED UNDER THIS CASE ON 2026-08-10. It used to read "UNGATEABLE … not in any git
-  # repository", and that reasoning died the moment 5c38ad5a tracked the engine at bin/ precisely
-  # so that fixes would reach it. The case then failed for a reason that had nothing to do with its
-  # subject — the file census counted the ENGINE as a caller of itself — and it blocked every land
-  # in the repo, including diffs that never touched it. Restated to what is now measurable.
+  # THE PREMISE MOVED UNDER THIS CASE TWICE, and both moves are the point of keeping the history.
+  # (1) It first read "UNGATEABLE … not in any git repository". That reasoning died the moment
+  # 5c38ad5a tracked the engine at bin/ precisely so fixes would reach it, and the case then failed
+  # for a reason with nothing to do with its subject — the file census counted the ENGINE as a
+  # caller of itself — blocking every land in the repo, including diffs that never touched it.
+  # (2) It was then restated to assert the residue: tracked AND still ungated, filed rather than
+  # accepted, with the standing instruction "will redden the moment that lands, which is when it
+  # should be rewritten to assert the gate."
   #
-  # WHAT IS NOT BEING LAUNDERED: the engine is tracked AND still ungated, which is unchanged in
-  # substance (it was never gated) but is now FIXABLE, so it is filed rather than accepted —
-  # backlog "gate bin/reso-resume-one in its own body". This case asserts today's truth and will
-  # redden the moment that lands, which is when it should be rewritten to assert the gate.
+  # 2026-08-17: that landed, so this is the instructed rewrite — NOT an assertion relaxed to let a
+  # change through. A test pinning behaviour the subject deliberately changed becomes a guard for
+  # the bug (memory: stale-assertion-becomes-an-inverted-guard); the discriminator is that the old
+  # text named the new state as the correct one and said what should replace it.
   [ -f "$REPO/bin/reso-resume-one" ] \
     || skip "the engine is not in this tree — nothing to make a claim about"
-  run grep -cE 'cc_capacity_admit|capacity-admit' "$REPO/bin/reso-resume-one"
-  [ "$output" = "0" ] \
-    || { echo "the engine now carries a capacity term — rewrite this case to ASSERT the gate"; false; }
+  grep -q 'cc_capacity_admit ' "$REPO/bin/reso-resume-one" \
+    || { echo "the engine lost its capacity gate — the §12.1 bypass is open again"; false; }
+  # SHED IS ITS OWN CODE. Reusing 2/3/4 would fold "the box is busy" into "this is broken", and
+  # boot-resume.sh reports the two separately because the operator's next action differs.
+  grep -q 'exit 9' "$REPO/bin/reso-resume-one" \
+    || { echo "the engine's gate does not shed with exit 9 — a shed is not a failure"; false; }
+  # The behaviour itself (shed · admit · absent-is-loud · no double evaluation) is asserted in
+  # tests/reso-resume-one.bats, which executes the real engine. This case owns the CENSUS below —
+  # that no NEW ungated invoker has appeared — and only checks here that the gate is present at all.
 
   # The invocation census: which OTHER in-repo files reach it. The engine itself is the subject,
   # not a caller, so it is excluded by name alongside the three limit-recover files that only
@@ -197,8 +207,14 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
              | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one' || true)"
   [ "$callers" = "$REPO/scripts/boot-resume-launch.sh" ] \
     || { echo "a NEW in-repo invoker appeared, and it is not the gated launcher: $callers"; false; }
-  # and the limitation must be written where the next reader looks, not left to be re-discovered
-  grep -q 'UNGATED IN ITS OWN BODY' "$REPO/scripts/boot-resume-launch.sh"
+  # The launcher must MARK its admission, or the engine's new gate double-evaluates on every
+  # in-repo resume and double-spends the shared consecutive-refusal budget. This pins the pairing
+  # from the launcher's side; tests/reso-resume-one.bats pins the engine's side of the same handshake.
+  grep -q 'export CC_ADMIT_DONE=1' "$REPO/scripts/boot-resume-launch.sh" \
+    || { echo "the launcher no longer marks its admission — the engine will evaluate the gate twice"; false; }
+  # The old form of this line required the phrase UNGATED IN ITS OWN BODY to be written where the
+  # next reader looks. That residue is closed, so requiring its statement would now pin a FALSE
+  # claim in the tree — the assertion moves to the pairing that replaced it, not away entirely.
 }
 
 @test "26 TERM PARITY — ONE literal per term, so the ceilings CANNOT drift (not merely 'do not')" {

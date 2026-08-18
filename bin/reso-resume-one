@@ -87,6 +87,63 @@ if [ -z "$acct" ] || [ -z "$wt" ] || [ -z "$sid" ]; then
 fi
 wt=${wt%/}
 
+# ── CAPACITY GATE, IN THE ENGINE'S OWN BODY (2026-08-17, backlog "gate bin/reso-resume-one in its
+#    own body") ────────────────────────────────────────────────────────────────────────────────
+# §12.1 lists this engine as a capacity BYPASS: every IN-REPO invocation reaches it through
+# scripts/boot-resume-launch.sh, which is gated, but a direct call — the runbook's, an operator's,
+# the Agent-tool path — spawned a session against no admission check at all. That was defended for a
+# while by "ungateable because untracked", and 5c38ad5a retired the argument by tracking the file
+# here precisely so fixes would reach it. tests/capacity-admit-coverage.bats case 25 pinned the
+# residue in the meantime and instructed its own rewrite for the moment this landed.
+#
+# SAME SHAPE AS scripts/boot-resume-launch.sh, deliberately — one gate spelled two ways is how the
+# two drift. Exit 9 is `shed`, distinct from 2 (usage), 3 (missing dep) and 4 (launch failed): a
+# failure needs fixing, a shed needs the box to settle. An ABSENT library is LOUD and NOT fatal
+# (§12.2's rule verbatim) — refusing a recovery because a telemetry library is missing would be the
+# gate causing the outage it exists to prevent.
+#
+# PLACED BEFORE the binary/model resolution and the worktree recreation, so a shed costs nothing and
+# leaves no half-built worktree behind. It is deliberately AFTER argument validation: a malformed
+# call must still fail on THAT, with that message, rather than on a load reading.
+#
+# ⚠ IT MUST NOT DOUBLE-EVALUATE. boot-resume-launch.sh already ran this exact gate before invoking
+# the engine, and the consecutive-refusal BUDGET is shared state — a second evaluation per resume
+# would spend it twice as fast and release the bound early on a box that never settled. So the
+# launcher marks its own admission and the engine honours it. The marker only ever SUPPRESSES a
+# redundant second evaluation of an admission that already happened; it cannot admit a spawn nothing
+# gated, because nothing else sets it.
+if [ -z "${CC_ADMIT_DONE:-}" ]; then
+  # CC_RESUME_ADMIT_LIB is `${VAR-}`, NOT `${VAR:-}` — the colon form substitutes the default for a
+  # SET-BUT-EMPTY value as well as an unset one, which would make "force the library absent"
+  # unexpressible and leave the loud-inert branch below untestable in-repo (the first search path
+  # always resolves from a checkout, so nothing else can reach it). Same distinction, and the same
+  # reason, as CC_KEEPALIVE_MARKERS in bin/reso-keepalive.
+  _RRO_CA=""
+  if [ -n "${CC_RESUME_ADMIT_LIB+set}" ]; then
+    [ -f "${CC_RESUME_ADMIT_LIB}" ] && _RRO_CA="${CC_RESUME_ADMIT_LIB}"
+  else
+    for _rro_d in "$(dirname "$0")/../scripts/lib/capacity-admit.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+                  "${HOME:-}/.claude/scripts/lib/capacity-admit.sh"; do
+      [ -f "$_rro_d" ] && { _RRO_CA="$_rro_d"; break; }
+    done
+  fi
+  if [ -n "$_RRO_CA" ]; then
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_RRO_CA" 2>/dev/null || _RRO_CA=""
+  fi
+  if [ -n "$_RRO_CA" ]; then
+    if ! cc_capacity_admit reso-resume-one "resume ${sid} on ${acct}"; then
+      printf '%s\n' "reso-resume-one: $(cc_capacity_admit_reason)" >&2
+      printf '%s\n' "  Session $sid is DEFERRED, not lost — re-run once the box settles." >&2
+      exit 9
+    fi
+    printf '%s\n' "reso-resume-one: $(cc_capacity_admit_reason)" >&2
+  else
+    printf '%s\n' "reso-resume-one: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — resuming UNGATED" >&2
+  fi
+fi
+
 # ── binary: the HIGHEST ACTUALLY-INSTALLED version, read from each package.json. Never the directory
 #    name (~/.claude-183 holds 2.1.215) and never a literal — both rot without a reader. ──
 # Prints "<version><TAB><path>". It must print BOTH, not set a global: the caller reads it through
