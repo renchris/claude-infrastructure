@@ -87,6 +87,25 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — `d6d4b85ebd4c`: §6's liveness invariant was blind to the failure that happens, and
+  the INPUT was the fix.** `scripts/drain-chain-assert.sh` was wired correctly (autonomy-sweep
+  § 2b-v, 300 s, condition-keyed, self-falsifying) and had filed ZERO rows at any status in its
+  whole deployed life — through the ~4 h dead-stop at recycle #21 (pane 131 wedged on a `rm -r`
+  PreToolUse modal, `7da9c4451540`). Cause: `alive ⟺ fresh brief` is the age of a file the chain
+  wrote when it last STARTED, so a session that wedges a minute after launch certifies itself alive
+  for 24 h. Predicate replaced (§6, struck-through and superseded there): a fresh brief is now
+  NECESSARY, never sufficient, and the successor must be **progressing** — resolved through
+  `handoffs.jsonl` → `target_pane` → cc-registry → sid → transcript, requiring both a
+  content-bearing assistant turn and a fresh mtime. `CC_DRAIN_CHAIN_MAX_AGE_S` deliberately
+  UNCHANGED: the axis was wrong, not the magnitude — shortening it convicts a healthy long recycle.
+  **The false-positive guard is half the work:** a `handover-grace` arm keeps the chain ALIVE across
+  the blind window at every recycle, where nothing about the successor is knowable yet and this
+  plan's own lead once misread a healthy chain as dead (a 42-min brief beside a 1-min ping).
+  RED-PROVED both ways against the REAL pre-fix artifact (`git show origin/main:…` replayed via the
+  new `CC_DRAIN_SUBJECT` seam): pre-fix the wedge case reads ALIVE, post-fix `dead`/`stalled`;
+  21/21 post-fix, and the live box still reads `progressing` (pane 131, transcript 417 s) rather
+  than being convicted. All three fail-open guards untouched and still checked first.
+
 - **2026-08-18T22:40Z — lead recycle (pane 102): the three rows this lead FILED but never started
   are now fired, and the capacity refusal that parked one of them was a 2-hour fact, not a wall.**
   Claimed `dc014c6829ac` · `d6d4b85ebd4c` · `7da9c4451540` under `lead-102` BEFORE firing — a claim
@@ -1957,9 +1976,40 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
 - The drain's unit of "done" is CONTENT ON TRUNK (ls-tree/diff), never a count, never a stamp.
 - "0 open" is never reported without its blocked tail: the drain's close line format is
   `<effort>: N open / M blocked (K operator-gated)`.
-- The chain is alive ⟺ a fire-drain-recycle-N brief younger than 24h exists OR a drain session
-  holds a live lease — checked by autonomy-sweep; a dead chain files ONE condition-keyed row
-  (`local-drain-chain-dead`), never a duplicate storm.
+- ~~The chain is alive ⟺ a fire-drain-recycle-N brief younger than 24h exists OR a drain session
+  holds a live lease~~ — **THIS INVARIANT WAS WRONG AND IS SUPERSEDED (2026-08-18, backlog
+  d6d4b85ebd4c). Kept struck-through, not deleted: the detector below implemented it faithfully,
+  and it is the invariant itself that could not see the failure that happens.** A recycle brief is
+  authored by the predecessor and stamped when the successor is FIRED, never while it works — so
+  "a brief younger than 24h" is THE AGE OF A FILE THE CHAIN WROTE WHEN IT LAST STARTED, satisfied
+  identically by a chain that is draining and by one that wedged sixty seconds after launch.
+  Measured cost: `scripts/drain-chain-assert.sh` filed ZERO `local-drain-chain-dead` rows at any
+  status across its entire deployed life, including the ~4 h dead-stop at recycle #21 when pane 131
+  wedged on a `rm -r /tmp/_ce` PreToolUse modal (backlog `7da9c4451540`). The magnitude was never
+  the defect and `CC_DRAIN_CHAIN_MAX_AGE_S` is deliberately unchanged — shortening the window only
+  convicts a healthy long recycle. **The replacement:**
+
+      alive ⟺ zero live rows (`drained`, the terminal SUCCESS state)
+            ∨ the chain fired inside CC_DRAIN_HANDOVER_GRACE_S (`handover-grace`)
+            ∨ somebody holds a live lease (`live-lease`, any holder — Lane A counts)
+            ∨ the session that brief was fired into is STILL EMITTING (`progressing`)
+
+  A fresh brief is now NECESSARY and never SUFFICIENT: brief-fresh-and-nothing-progressing is
+  precisely the wedge and reads `dead`, with the `why` naming which dead state it reached
+  (`no-brief-no-lease` · `stalled` · `unverifiable`). Progress is resolved newest brief →
+  its `prompt_file` row in `handoffs.jsonl` → `target_pane` → the cc-registry row → `.session_id`
+  → `<sid>.jsonl`, and requires BOTH a content-bearing assistant turn (`assistant_turn_in`, sourced
+  from `hooks/lib/engagement.sh` rather than re-spelled) AND an mtime younger than
+  `CC_DRAIN_PROGRESS_MAX_AGE_S` — mtime alone calls a newborn transcript alive (*birth is not
+  engagement*), and the turn-check alone is the old bug one level in, because the wedged pane HAD
+  taken real turns before it froze. The **handover grace** is the false-positive guard the fix
+  cannot be shipped without: between the fire and the successor's first turn nothing about it is
+  knowable, and that is the state of a healthy chain at EVERY recycle — the lead that filed this
+  row misread exactly that window once (a 42-minute-old brief beside a 1-minute-old ping). It is
+  bounded, because a wedged successor fires nothing and its brief ages out of the grace.
+  All three fail-open guards are untouched and are still checked BEFORE the progress arm: an
+  unreadable store answers `skipped`, an empty pile answers `drained`, any live lease answers
+  `live-lease` without the successor having to be identified at all.
   **IMPLEMENTED 2026-08-16** → `scripts/drain-chain-assert.sh`, called from `autonomy-sweep.sh`
   § 2b-v (`drain_chain_rc` in the `backlog-health` IDL row), pinned by
   `tests/drain-chain-assert.bats`. Ask it directly with `drain-chain-assert.sh --json`; the row it
