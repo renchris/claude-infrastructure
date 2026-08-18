@@ -219,17 +219,18 @@ if [ ! -x "$RESUME_ONE" ]; then
 fi
 
 # ── MACHINE-CAPACITY ADMISSION — the reso-resume-one seam (MACHINE_CAPACITY_V2 §12.1/§12.4). ───
-# §12.1's bypass table lists `reso-resume-one` as an ungated spawn path — UNGATED IN ITS OWN BODY.
-# Every in-repo invocation goes through THIS line, so this is where the term binds. Direct
-# hand-invocations of the engine remain uncovered; that residue is stated in §12.1, not papered
-# over here.
+# §12.1's bypass table listed `reso-resume-one` as an ungated spawn path. Every in-repo invocation
+# goes through THIS line, so this is where the term binds for them.
+#
+# THE RESIDUE IS CLOSED as of 2026-08-17: the engine now carries the same gate IN ITS OWN BODY, so a
+# direct hand-invocation — the runbook's, an operator's, the Agent-tool path — is admitted too. That
+# is why the line below exports CC_ADMIT_DONE.
 #
 # WHY THIS NO LONGER SAYS "UNGATEABLE" (2026-08-10). It used to argue the engine COULD not be gated
 # in its own body because it was not in any git repository — an untracked file under ~/.reso/bin, so
 # nothing this repo could land would reach it. `5c38ad5a` then tracked it at `bin/reso-resume-one`
-# for exactly that reason, which retired the argument without retiring the sentence. The gap is now
-# fixable and is filed ("gate bin/reso-resume-one in its own body"); until it lands, the honest
-# claim is ungated-in-body, not ungateable.
+# for exactly that reason, which retired the argument without retiring the sentence. The claim went
+# ungateable → UNGATED IN ITS OWN BODY (2026-08-10, honest but still open) → gated (2026-08-17).
 #
 # PLACEMENT. After the `--dry-run` return above (a dry run prints a command and spawns nothing —
 # gating it would refuse an inspection) and after the RESUME_ONE executability check (a resume with
@@ -271,6 +272,14 @@ if [ -n "$_BRL_CA" ]; then
 else
   echo "boot-resume-launch: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — launching UNGATED" >&2
 fi
+
+# bin/reso-resume-one carries its own capacity gate as of 2026-08-17 (it was the BYPASS §12.1 named,
+# and tracking it retired the "ungateable" argument). Reaching it from HERE would evaluate the same
+# gate twice per resume, and the consecutive-refusal BUDGET is shared state — a double spend
+# releases the bound early on a box that never settled. This marks the admission that just happened;
+# nothing else sets it, so it can only ever suppress a REDUNDANT second evaluation, never admit a
+# spawn no gate saw. Exported so it survives the terminal-launch indirection to the engine.
+export CC_ADMIT_DONE=1
 
 if [ "$IN_KITTY" = 1 ]; then
   command -v "$KITTY" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty unavailable" >&2; exit 3; }
