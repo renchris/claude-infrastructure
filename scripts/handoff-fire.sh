@@ -6608,8 +6608,12 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
     # `off` is the router's kill switch and lands here as a non-numeric, which this guard rejects
     # along with a missing field and a typo. All three mean v1.
     case "$rr" in ''|*[!0-9.]*) return 0 ;; esac
-    cur_s="$(printf '%s\n' "$out"  | awk -v a="$cur" '$1==a {print $2; exit}')"
-    best_s="$(printf '%s\n' "$out" | awk 'NR==1 {print $2}')"
+    # Here-strings, not pipes: `awk … exit` is an early-exit consumer, and under this script's
+    # `set -o pipefail` a SIGPIPE'd producer makes the whole pipeline non-zero — which under
+    # `set -e` would kill the fire on the very input the match SUCCEEDED on. No pipeline, no
+    # producer to signal. (The land's pipefail-sigpipe ratchet flags exactly this shape.)
+    cur_s="$(awk -v a="$cur" '$1==a {print $2; exit}' <<<"$out")"
+    best_s="$(awk 'NR==1 {print $2}' <<<"$out")"
     # The incumbent absent from the ranking is NOT pressure — it is an account the router did not
     # score this pass, which is the same unknown as a missing threshold. (It also cannot be the
     # exclusion case: that was handled above, and an excluded account still appears in the map.)

@@ -105,6 +105,8 @@ _OPEN_JQ='
 
 # Age annotation, applied AFTER _OPEN_JQ. Needs --argjson ttl. A row whose ts will not parse gets
 # ageHours null and stale false — never true (see the AGE block in the header).
+# shellcheck disable=SC2016  # $t and $ttl are JQ variables — the single quotes are the point, and
+# letting the shell expand them would hand jq an empty binding and silently mark every row fresh.
 _AGE_JQ='
   | map( ((.ts // "") | (try fromdateiso8601 catch null)) as $t
          | . + {ageHours: (if $t == null then null else (((now - $t) / 3600) | floor) end)}
