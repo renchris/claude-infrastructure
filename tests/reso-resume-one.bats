@@ -45,7 +45,15 @@ setup() {
   # idle one (memory: guard-refusal-fires-on-its-own-harness). The gate's own behaviour is asserted
   # in the three dedicated cases at the end of this file, with it explicitly ON.
   export CC_ADMIT_GATE=off
+  # The engine grew two seams of its own for source-suppression of the resume dialog. Both are read
+  # with ${VAR:-}, so an operator shell that happens to carry either would flip cases here the way a
+  # real invocation flips — CC_RESUME_NO_SUPPRESS especially, which would silently turn every
+  # suppression case into a fallback case and still look green. They are the SUBJECT of the cases at
+  # the end of this file, so they are set explicitly there and absent everywhere else.
+  unset CC_RESUME_NO_SUPPRESS CC_RESUME_THRESHOLD_MINUTES
   export CC_RR_STUB_ARGV="$BATS_TEST_TMPDIR/argv"
+  export CC_RR_STUB_ENV="$BATS_TEST_TMPDIR/stub-env"
+  export CC_RR_STUB_PATH="$BATS_TEST_TMPDIR/stub-path"
   export CC_RR_STUB_OUT="$BATS_TEST_TMPDIR/selected"
   export CC_RESUME_CLAUDE_BIN="$BATS_TEST_TMPDIR/fake-claude"
   export CC_RESUME_REPO_ROOTS="$BATS_TEST_TMPDIR/dev"
@@ -60,7 +68,33 @@ mk_stub() {
   cat > "$CC_RESUME_CLAUDE_BIN" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" > "$CC_RR_STUB_ARGV"
+# The suppression variable arrives as ENVIRONMENT and never as argv — `env NAME=v cmd` consumes the
+# assignment before exec — so recording "$*" could not see it at any value. Announcing a pin and
+# passing it are separate claims (the header above, on --effort); this records the second one.
+printf '%s\n' "${CLAUDE_CODE_RESUME_THRESHOLD_MINUTES-<unset>}" > "$CC_RR_STUB_ENV"
 cols=${CC_RR_STUB_COLS:-80}
+# SOURCE SUPPRESSION, modelled on D3f in the 2.1.220 bundle: the dialog is not raised at all when
+# the session is younger than the threshold, and a session it is not raised for is resumed FULL
+# AS-IS — the same outcome the menu path reaches by keystrokes, which is why this writes the same
+# `continue` and records HOW it got there. The default is 70 because that is Rue()'s literal
+# fallback in the bundle, and a non-numeric value takes it too (Rue reads NaN as the default, not as
+# a refusal) — so a broken value here shows the dialog rather than silently suppressing it.
+if [ -n "${CC_RR_STUB_HONOR_THRESHOLD:-}" ]; then
+  thr=${CLAUDE_CODE_RESUME_THRESHOLD_MINUTES:-70}
+  case "$thr" in ''|*[!0-9]*) thr=70 ;; esac
+  age=${CC_RR_STUB_AGE_MINUTES:-130}          # the "2h 10m" the header below announces
+  if [ "$age" -lt "$thr" ]; then
+    printf '%s\n' suppressed > "$CC_RR_STUB_PATH"
+    printf '%s\n' continue   > "$CC_RR_STUB_OUT"
+    # No dialog, and deliberately no "as-is" in this text: that token is the matcher trigger, and a
+    # suppressed session that still fires the matcher would not be a suppressed session.
+    printf 'resumed the full session, no dialog raised\n'
+    printf 'shift+tab to cycle\n'
+    sleep 1
+    exit 0
+  fi
+fi
+printf '%s\n' menu > "$CC_RR_STUB_PATH"
 wrap() { fold -s -w "$cols"; }
 LABELS=("Resume from summary (recommended)" "Resume full session as-is" "Do not ask me again")
 VALUES=(compact continue never)
@@ -102,8 +136,22 @@ STUB
   chmod +x "$CC_RESUME_CLAUDE_BIN"
 }
 
+# The SAME stub with the suppression variable's name removed from its bytes — a binary that cannot
+# read it, which is the version-drop this engine has to survive. Substituted rather than deleted so
+# every other behaviour is byte-identical: the only thing that changes is whether the token is there
+# to be found, which is exactly what the engine probes for.
+mk_stub_without_token() {
+  mk_stub
+  sed 's/CLAUDE_CODE_RESUME_THRESHOLD_MINUTES/CC_RR_ABSENT_TOKEN_______________/g' \
+      "$CC_RESUME_CLAUDE_BIN" > "$CC_RESUME_CLAUDE_BIN.notoken"
+  mv "$CC_RESUME_CLAUDE_BIN.notoken" "$CC_RESUME_CLAUDE_BIN"
+  chmod +x "$CC_RESUME_CLAUDE_BIN"
+}
+
 selected() { cat "$CC_RR_STUB_OUT" 2>/dev/null; }
 spawn_argv() { cat "$CC_RR_STUB_ARGV" 2>/dev/null; }
+stub_env()  { cat "$CC_RR_STUB_ENV" 2>/dev/null; }
+stub_path() { cat "$CC_RR_STUB_PATH" 2>/dev/null; }
 
 # A repo at $BATS_TEST_TMPDIR/dev/<name> with <branch>, plus a worktree at <wtpath> that is then
 # REAPED — leaving the .git/worktrees back-reference that is the whole point of the derivation.
@@ -405,4 +453,96 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
       CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-dup" SID-DUP feat/gate-dup
   [ "$status" -eq 9 ] \
     || { echo "the control did not shed — there is no gate for the marker to suppress: $output"; false; }
+}
+
+# ── SOURCE-SUPPRESSION OF THE RESUME DIALOG (backlog 267ebd112350) ───────────────────────────────
+# The matcher above wins a keystroke race against Ink's raw-mode mount. The binary will not RAISE
+# the dialog at all for a session younger than CLAUDE_CODE_RESUME_THRESHOLD_MINUTES, and a session
+# it does not ask about is resumed FULL AS-IS — the matcher's own answer, with no race to enter.
+#
+# THE ASSERTIONS ARE POSITIVE, never "no menu appeared": absence is also what a hang looks like, and
+# a case that passes on absence would go on passing after the spawn stopped happening at all. So
+# every claim below is a fact the SPAWNED PROCESS emitted — the value it received in its
+# environment, the path it took, and the option that ended up in force.
+#
+# ONE MUTANT PER SITE: the value reaching the process, the suppressed outcome, the OFF knob, and a
+# binary that cannot read the variable are four distinct behaviours and get four cases. Deleting the
+# spawn-line variable reds the first three; deleting the probe reds the fourth.
+
+@test "SUPPRESSION reaches the spawned binary as ENVIRONMENT, not merely as an announcement" {
+  # `env NAME=v cmd` consumes the assignment, so this can never be seen in argv — and announcing a
+  # pin while failing to pass it is the exact defect the --effort cases at the top were written for.
+  run env CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-THRESH-ENV
+  [ "$status" -eq 0 ]
+  local v; v="$(stub_env)"
+  case "$v" in
+    ''|*[!0-9]*) echo "no numeric threshold reached the spawned process: '$v'" >&2; false ;;
+  esac
+  # The PROPERTY, not the digits: a ceiling has to outlast any session worth recovering, and pinning
+  # the literal here would tripwire its own constant instead of guarding the mechanism.
+  [ "$v" -gt 1440 ] \
+    || { echo "the threshold ($v) does not clear a day — a session older than it still gets the dialog"; false; }
+  [[ "$output" == *"suppression: PRIMARY"* ]] || false
+  # and the value is a seam, not a literal — the override has to reach the same place
+  run env CC_RESUME_THRESHOLD_MINUTES=4321 CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-THRESH-OVR
+  [ "$status" -eq 0 ]
+  [ "$(stub_env)" = "4321" ] \
+    || { echo "the override did not reach the process: $(stub_env)"; false; }
+}
+
+@test "SUPPRESSION positive — the session comes up full, with no dialog ever raised" {
+  # THE claim, asserted on what the spawned process reports rather than on what it did not print.
+  # The stub models D3f: under the threshold there is no dialog and the full session is resumed, so
+  # `continue` is in force having been reached WITHOUT the menu, and it says which path that was.
+  run env CC_RR_STUB_HONOR_THRESHOLD=1 CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-SUPPRESSED
+  [ "$status" -eq 0 ]
+  [ "$(stub_path)" = "suppressed" ] \
+    || { echo "the dialog was raised and answered by keystrokes, not suppressed: $(stub_path)"; false; }
+  [ "$(selected)" = "continue" ] \
+    || { echo "suppressed, but the session did not come up as the full session: $(selected)"; false; }
+}
+
+@test "FALLBACK is reachable — CC_RESUME_NO_SUPPRESS withholds the variable and the matcher answers" {
+  # The matcher is not decoration: it is what survives the binary dropping the variable, so it must
+  # be exercised on purpose rather than left to be exercised by an outage. With the knob set the
+  # variable must be ABSENT — not empty — because an empty value is read as NaN and falls back to
+  # the default 70, which would raise the dialog and make "off" indistinguishable from "on".
+  run env CC_RESUME_NO_SUPPRESS=1 CC_RR_STUB_HONOR_THRESHOLD=1 CC_RR_STUB_COLS=80 \
+      timeout 90 "$RRO" next2 "$WT" SID-NOSUP
+  [ "$status" -eq 0 ]
+  [ "$(stub_env)" = "<unset>" ] \
+    || { echo "the knob is off but the variable still reached the process: $(stub_env)"; false; }
+  [ "$(stub_path)" = "menu" ] \
+    || { echo "the dialog was not raised, so the matcher was never exercised: $(stub_path)"; false; }
+  [ "$(selected)" = "continue" ] \
+    || { echo "the fallback matcher failed to take the full session: $(selected)"; false; }
+  [[ "$output" == *"suppression: OFF (CC_RESUME_NO_SUPPRESS)"* ]] || false
+  # CONTROL — WITHOUT THIS THE CASE IS VACUOUS. An engine that never suppresses anything also passes
+  # every line above, so "forced off" and "never on" are the same observation from the knob's side.
+  # The identical invocation with the knob removed must take the suppressed path instead.
+  run env CC_RR_STUB_HONOR_THRESHOLD=1 CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-NOSUP-CTL
+  [ "$(stub_path)" = "suppressed" ] \
+    || { echo "the control did not suppress — there is nothing for the knob to turn off: $(stub_path)"; false; }
+}
+
+@test "VERSION DROP is LOUD — a binary without the token announces UNSUPPORTED and is still resumed" {
+  # The variable is reached through a minified internal symbol behind an unnamed flag, so a bump can
+  # stop reading it with no other visible consequence than the dialog coming back. The engine probes
+  # the resolved binary's own bytes for the token and says so. Not a refusal: refusing to recover a
+  # crashed session because a suppression hint went away would be the fix causing the outage.
+  mk_stub_without_token
+  run env CC_RR_STUB_HONOR_THRESHOLD=1 CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-UNSUP
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"suppression: UNSUPPORTED"* ]] || false
+  [ "$(stub_path)" = "menu" ] \
+    || { echo "a binary that cannot read the token still skipped the dialog: $(stub_path)"; false; }
+  [ "$(selected)" = "continue" ] \
+    || { echo "the matcher did not carry a binary the suppression could not reach: $(selected)"; false; }
+  # CONTROL — the same stub WITH the token must announce and behave the other way, or this case is
+  # pinning a stub that was never going to suppress anything whatever the engine did.
+  mk_stub
+  run env CC_RR_STUB_HONOR_THRESHOLD=1 CC_RR_STUB_COLS=80 timeout 90 "$RRO" next2 "$WT" SID-UNSUP-CTL
+  [[ "$output" == *"suppression: PRIMARY"* ]] || false
+  [ "$(stub_path)" = "suppressed" ] \
+    || { echo "the control did not suppress — the token is not what the two cases differ on: $(stub_path)"; false; }
 }
