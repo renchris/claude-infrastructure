@@ -1807,6 +1807,34 @@ Verbatim, then disposition:
    Backlog `5cd2ecf792ae` stays **OPEN** — the beat is still not built, and a re-specified question
    is not a built beat. What changed is that its question is now answerable without the operator,
    against a composition that the build gate will accept.
+
+   **BUILT 2026-08-18 (drain recycle #25) — `29ea22eed` + `446e1a77d`, and the header above is now
+   history rather than status.** `rMail` is live in `tools/banner/gen.py` and emitted by all four
+   variants: `RARE_EVENTS["rMail"] = (39.0, 44.5)`, a `NARRATIVE` `BEAT_STORY` citing `bin/cc-notify`
+   (which the gate resolves on disk), three `BEAT_INK` probes, and membership in `ALWAYS_EMITTED`.
+   The peer is NOT drawn.
+
+   Two things are worth carrying forward, because neither is visible in the diff:
+
+   * **THE WINDOW IS FORCED, AND IT COST THE OVERLAP ITS ONE-LINE RESTORATION.** `rAsk` ends at
+     35.0s and `peek`/`peer` open at 48.5s; `EVENT_GAP` is 4.0s on both sides, so 39.0-44.5 is the
+     only interval a narrative beat can still occupy on this loop and it is exactly as wide as the
+     air. It had to be prime-window rather than the free 85s after `rTrace`, because the placement
+     rule inverts by KIND: a sky beat is worth catching by luck, while a narrative beat a reader
+     never sees has told them nothing. That slot was withdrawn `rOverlap`'s (36.0-44.25). Its 8.25s
+     cannot coexist with this 5.5s inside a 13.5s gap, so **restoring THE OVERLAP now costs a
+     re-timing as well as the one line** `ALWAYS_EMITTED` promises. Recorded in `RARE_EVENTS` beside
+     both windows, so whoever tries it reads it before the build failure rather than after.
+   * **THE FIRST CUT DREW THE BEAT BACKWARDS AND EVERY GATE STAYED GREEN.** The inbound message's
+     offsets counted up from the walker instead of down to it, so the answer *left* the hand it was
+     meant to arrive at and exited the left of the frame — and at the crossing instant, which is the
+     whole beat, the second letter sat occluded inside the silhouette. The flights overlapped in
+     time, the lanes cleared each other, the outbound left the frame, every step was a whole pixel,
+     and all three ink probes measured real ink. **Ink is not direction.** Only rendering it and
+     looking caught it, exactly as this document's live/storyboard split predicts. The remedy is a
+     gate that reads the SAME offset list the emitter does (`mail_offsets`), asserting each lane
+     holds one even heading and that the inbound ends AT the walker — a second copy of those numbers
+     is what let the inversion through in the first place.
 4. *"I dont see our stars being Opus 5 beautiful dynamic and opacity/flickering changing/twinkling
    for depth"*
    → **DONE.** `31ed0731`. The machinery was alive; the amplitude was losing to render scale — a

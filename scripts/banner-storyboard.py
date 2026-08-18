@@ -1226,7 +1226,7 @@ BEATS: tuple[Beat, ...] = (
     Beat(
         key="mail",
         name="TWO-WAY MAIL",
-        status="NEW · operator-requested (2026-07-30) · unbuilt",
+        status="BUILT 2026-08-18 · gen.py rMail (39.0-44.5s) · 29ea22eed + 446e1a77d",
         reach="no code needed",
         cause="Two live sessions have to reach each other with no human relaying between them. One "
         "writes into the other's mailbox; the other answers. The answer is the point — a system "
