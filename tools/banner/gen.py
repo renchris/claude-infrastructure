@@ -339,6 +339,23 @@ RARE_EVENTS = {
     "rRefuse": (17.0, 22.0),  # 5.0s — THE REFUSAL: the world pulls back one print pitch
     # THE ASK: 6s of dead world, then 3s at treble to clear the debt.
     "rAsk": (26.0, 35.0),  # 9.0s
+    # TWO-WAY MAIL. 5.5s, and every digit of that window is forced rather than chosen — this is the
+    # ONLY air a NARRATIVE beat can still occupy on this loop, and it is exactly as wide as the air.
+    # rAsk ends at 35.0 and `peek`/`peer` open at 48.5; EVENT_GAP is 4.0s on both sides, so the legal
+    # interval is 39.0-44.5 and nothing shorter would be legal to move and nothing longer would fit.
+    #
+    # It had to be a PRIME-window slot and not the free 85s after rTrace, because the placement rule
+    # inverts by KIND (see the sky-beat note below): a sky beat is worth catching by luck, while a
+    # narrative beat says something about the system and a reader who never sees it has been told
+    # nothing. 39.0s is late inside a 5-15s dwell and that is a real cost, honestly the last one
+    # available; the alternative was a beat at t=69s+, which is not a smaller version of that cost.
+    #
+    # 🚨 THIS SLOT WAS rOverlap's, AND TAKING IT REVOKES A PROMISE MADE ABOVE. THE OVERLAP is
+    # withdrawn but keeps its window (36.0-44.25), and both ALWAYS_EMITTED and the visitor note call
+    # restoring a withdrawn beat a ONE-LINE change. That is no longer true of rOverlap: its 8.25s
+    # cannot coexist with this 5.5s inside a 13.5s gap, so restoring it now costs a re-timing of one
+    # of the two as well. Said here rather than discovered at a build failure by whoever tries it.
+    "rMail": (39.0, 44.5),  # 5.5s — TWO-WAY MAIL: two messages cross, and the peer is never drawn
     # THE OVERLAP: the print pitch halves; the foot lands on every 2nd print. Placed here and not
     # earlier because it and THE REFUSAL are the only two beats that put an OBJECT on the scrolling
     # strip, and a strip object is on canvas for ~20s however brief its beat is. Their on-canvas
@@ -475,6 +492,21 @@ BEAT_STORY = {
         "read as a stalled image",
         "exit": "the answer arrives and the debt is repaid above nominal, because a looping world "
         "cannot hold for free",
+    },
+    "rMail": {
+        "label": "TWO-WAY MAIL",
+        "kind": "NARRATIVE",
+        "mechanism": "bin/cc-notify",
+        "cause": "two live sessions have to reach each other with no human relaying between them — "
+        "cc-notify writes into the peer's mailbox and the peer's own drain reads it back out, and "
+        "the ANSWER is the point: a system that can only broadcast is one session announcing",
+        "behaviour": "a pale message leaves the walker travelling RIGHT and riding HIGH; before it "
+        "arrives a second enters from off-frame travelling LEFT and riding LOW, and for the middle "
+        "of the beat both are in the air at once, crossing. Each drags a short trail, so which way "
+        "it is going is readable from a frozen frame",
+        "exit": "the answer reaches the walker and is read; its own message is gone off the right "
+        "edge; nothing is left in either lane. THE PEER IS NEVER DRAWN — it is in another pane, "
+        "which is the whole claim rather than a concession",
     },
     "rOverlap": {
         "label": "THE OVERLAP",
@@ -684,6 +716,13 @@ BEAT_INK: dict[str, tuple[tuple[float, str], ...]] = {
     ),
     "rRefuse": ((2.5, ".rfBar"),),
     "rAsk": ((3.0, ".eyesAsk,.armsAlert"),),
+    # Three probes, and the split is the meteor's lesson applied twice over. The two letters are
+    # alive at DIFFERENT instants by construction (the second enters after the first is already
+    # travelling), so one probe in the crossing would pass while either lane alone was missing. The
+    # trail gets its own because it is the element most able to paint nothing: it is the part that
+    # makes direction readable from a frozen frame, and it is a static child riding its group's
+    # transform, so no animation gate would ever notice it had stopped being drawn.
+    "rMail": ((2.0, ".mlOut"), (4.5, ".mlIn"), (2.0, ".mlT")),
     "rShoot": ((0.5, ".shBurn"), (1.1, ".shTrain")),
     "rTrace": ((2.4, ".cstL"), (2.4, ".cstN")),
     "peek": ((3.0, ".peek"),),
@@ -784,7 +823,7 @@ def _waived(kind: str, event: str | None) -> str | None:
 #
 # The two sky beats are here rather than per-variant for the same reason the starfield is: they are
 # properties of the NIGHT, not of an art direction. Every variant that has a sky has these.
-ALWAYS_EMITTED = ("rSummon", "rRefuse", "rAsk", "rShoot", "rTrace")
+ALWAYS_EMITTED = ("rSummon", "rRefuse", "rAsk", "rMail", "rShoot", "rTrace")
 
 
 def active_events(art: Art) -> list[str]:
@@ -4405,6 +4444,28 @@ def _result(x: float, y: float, u: float) -> str:
     )
 
 
+def _letter_rects(x: float, y: float, u: float) -> str:
+    """THE LETTER, as three rects: a dark edge, a pale face, one fold line. 2u square.
+
+    ONE definition, because two beats post the same document. THE SUMMONING hands it to a subagent
+    and TWO-WAY MAIL flies it to a peer, and the moment those were two inline copies they were two
+    objects that merely looked alike — which is the second-source-of-truth trap this file records
+    for the beat WINDOWS and again for the beat NOTES, both of which rotted exactly that way.
+
+    The read comes from the EDGE and the pale is the fill inside it, so the one shape works in both
+    schemes rather than needing a theme override of the same rect (the brief's pale #f4ead8 alone is
+    invisible against the light scheme's pale plate).
+    """
+    return (
+        f'<rect class="smMailE" x="{fmt(x)}" y="{fmt(y)}" width="{fmt(2 * u)}" '
+        f'height="{fmt(2 * u)}"/>'
+        f'<rect class="smMailF" x="{fmt(x + u / 4)}" y="{fmt(y + u / 4)}" '
+        f'width="{fmt(1.5 * u)}" height="{fmt(1.5 * u)}"/>'
+        f'<rect class="smMailE" x="{fmt(x + u / 2)}" y="{fmt(y + 0.85 * u)}" '
+        f'width="{fmt(u)}" height="{fmt(u / 4)}"/>'
+    )
+
+
 def _burst(cx: float, cy: float, cls: str) -> str:
     """Five dots as ONE group with STATIC children.
 
@@ -4451,16 +4512,7 @@ def summon_props(art: Art) -> str:
     # The letter: a pale face inside a dark edge. The brief's pale #f4ead8 alone is invisible on the
     # light scheme's pale plate, so the READ comes from the edge and the pale is the fill inside it —
     # one shape that works in both schemes rather than two theme overrides of the same rect.
-    letter = (
-        f'<g class="smMail">'
-        f'<rect class="smMailE" x="{fmt(a_right)}" y="{fmt(hand_y)}" width="{fmt(2 * u)}" '
-        f'height="{fmt(2 * u)}"/>'
-        f'<rect class="smMailF" x="{fmt(a_right + u / 4)}" y="{fmt(hand_y + u / 4)}" '
-        f'width="{fmt(1.5 * u)}" height="{fmt(1.5 * u)}"/>'
-        f'<rect class="smMailE" x="{fmt(a_right + u / 2)}" y="{fmt(hand_y + 0.85 * u)}" '
-        f'width="{fmt(u)}" height="{fmt(u / 4)}"/>'
-        f"</g>"
-    )
+    letter = f'<g class="smMail">{_letter_rects(a_right, hand_y, u)}</g>'
     # The travelling result is drawn at its DESTINATION and animated backwards from B, so its final
     # position is identical to the held copy's by construction rather than by two numbers agreeing.
     result = f'<g class="smWork">{_result(a_right, a_top + u, u)}</g>'
@@ -4957,7 +5009,7 @@ def css(art: Art) -> str:
         #     `assert_summon_geometry` measures it against every theme.
         f".smHat{{fill:{d.rule}}}.smHatBand{{fill:{d.star}}}"
         f".smWandS{{fill:{d.rule}}}.smWandT{{fill:{d.star}}}"
-        f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
+        f".smMailE,.mlT{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
         f".smResF{{fill:#5fa860}}"
         f".smSpk{{fill:{d.star}}}.smFlash{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
@@ -5139,6 +5191,8 @@ def css(art: Art) -> str:
             # here is a FRACTION of the declared rSummon window, so re-timing the beat moves the whole
             # choreography with it and no offset can run off the end into a negative percentage.
             + ([summon_css(art)] if emits(art, "rSummon") else [])
+            # ---- TWO-WAY MAIL ---- same rule again: element and gate ship together or not at all.
+            + ([mail_css(art)] if emits(art, "rMail") else [])
         )
         # the peer's stride — the only peer motion not driven by the event table
         + (
@@ -5181,7 +5235,12 @@ def css(art: Art) -> str:
         # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
         # could not occur.
         ".smHat,.smWand,.smWandSpk,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,"
-        ".smFlash{opacity:0}"
+        # Both mail lanes resolve to NOT SENT, for the identical reason: un-animated they revert
+        # to opacity 1, which would freeze the still on two messages hanging in mid-air with no way
+        # to read either as moving — the "frame that could not occur" every pin above exists to
+        # avoid, and here it would also be the one frame that shows the crossing without the motion
+        # that makes it legible.
+        ".smFlash,.mlOut,.mlIn{opacity:0}"
         ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
@@ -5227,7 +5286,7 @@ def css(art: Art) -> str:
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
         f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.wm}}}.smHatBand{{fill:{l.wm}}}"
         f".smHat{{fill:{l.rule}}}"
-        f".smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
+        f".smMailE,.mlT{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
         # The cake had NO light override at all: its #f4ead8 icing measured 1.05:1 against the day
         # sky. A prop that vanishes for every daylight reader is not a prop.
         f".smResF{{fill:#3d7f42}}"
@@ -5238,6 +5297,191 @@ def css(art: Art) -> str:
     daynight = ".dOnly{display:none}.nOnly{display:block}"
 
     return base + daynight + reduced + light
+
+
+# ── TWO-WAY MAIL ──────────────────────────────────────────────────────────────────────────────────
+# Storyboarded in `scripts/banner-storyboard.py` (beat key "mail"); built here. Read that file's
+# MAIL_HI_Y header before changing anything below — it carries the adjudication, and the one thing
+# it settles is what this code must NOT do.
+#
+# THE PEER IS NOT DRAWN, and that is the beat rather than a concession. A second creature sharing
+# the frame is `gen.py`'s own `"peer"` (v6b), kind WITHDRAWN, ruled out on its CAUSE — "a session is
+# never co-present with its peers, they live in other panes". THE SUMMONING earns its two bodies
+# only because the second is called into existence and removes itself inside the window; this peer
+# is neither summoned nor sent away, so the ruling binds a fortiori. What is left is THE LETTER's
+# own hard constraint (its sender is never drawn) used as the POINT: the answer arrives from
+# off-frame, which is precisely the claim — the peer is real, it is answering, and it is elsewhere.
+#
+# The original blocker asked whether the one-saturated-subject rule should be overturned so the peer
+# need not be drawn SMALLER and read as a CHILD. That question is moot under the above: size is
+# second-order to co-presence, and both of its exits had to buy a second body first.
+MAIL_STEP_CELLS = 2.0  # canvas cells per authored step — see mail_geom for why not 1 and not 4
+MAIL_LANE_CELLS = 5.0  # vertical clearance between the lanes, in cells; the gate checks it
+MAIL_OUT = (0.10, 0.72)  # outbound flight, as fractions of the declared window
+MAIL_IN = (0.34, 0.92)  # inbound flight — starts LATER and ends LATER, so the middle is the cross
+# (cells behind the letter, opacity). Three squares, static children of the travelling group.
+MAIL_TRAIL = ((0.75, 0.55), (1.5, 0.34), (2.25, 0.18))
+
+
+def ml_at(f: float) -> float:
+    """A fraction of TWO-WAY MAIL's declared window, in absolute seconds — the sibling of `sm_at`."""
+    w0, w1 = ev("rMail")
+    return w0 + f * (w1 - w0)
+
+
+def mail_geom(art: Art) -> dict[str, float]:
+    """Both lanes and the step, derived from the SAME grid every other prop is drawn on.
+
+    Returned as one dict so the gate measures the numbers the emitters use rather than a second copy
+    of them — the mistake that gave the stride lock four different ground speeds.
+
+    The step is 2 cells. One cell (THE SUMMONING's step) is right for a prop crossing a 5-cell gap
+    and wrong for one crossing the whole plate: it would need ~46 authored stops per letter. Four
+    cells is 96 canvas px, which at the 838 px README column is a 42 px jump per frame and reads as
+    teleporting rather than flying. Two cells is 21 CSS px a step at ~7 steps a second — pixel-art
+    motion, which is what the rest of this canvas is.
+
+    The travel is sized PER VARIANT so the outbound genuinely leaves the frame: `clawd_x` differs by
+    536 px across the four, so one shared distance would either strand the letter inside the plate on
+    the leftmost variant or overshoot by half a canvas on the rightmost. The step count absorbs that,
+    which means the letters travel at different SPEEDS between variants — deliberate, because the
+    journey the beat depicts is "hand to off-frame", not "N pixels".
+    """
+    u = summon_cell(art)
+    step = MAIL_STEP_CELLS * u
+    a_right = art.clawd_x + SPRITE_W * art.clawd_scale
+    a_top = GROUND - SPRITE_H * art.clawd_scale
+    lo_y = a_top + 2 * u  # the hand band — the same one THE SUMMONING posts its letter from
+    hi_y = lo_y - MAIL_LANE_CELLS * u
+    n = 1
+    while a_right + n * step < W:
+        n += 1
+    return {"u": u, "step": step, "x0": a_right, "hi_y": hi_y, "lo_y": lo_y, "n": float(n)}
+
+
+def _mail_trail(x: float, y: float, u: float, rightward: bool) -> str:
+    """The wake, drawn BEHIND the letter — the only thing that makes direction readable when frozen.
+
+    An SVG in the README is a still for every reader who screenshots it, quotes it, or arrives with
+    reduced motion honoured somewhere upstream, and a 2u square alone says nothing about which way it
+    is going. The trail is what turns "two objects at two heights" into "two objects passing".
+    """
+    out = []
+    for d, op in MAIL_TRAIL:
+        sq = u / 2
+        cx = x - d * u - sq if rightward else x + 2 * u + d * u
+        out.append(
+            f'<rect class="mlT" x="{fmt(cx)}" y="{fmt(y + 0.75 * u)}" '
+            f'width="{fmt(sq)}" height="{fmt(sq)}" opacity="{fmt(op)}"/>'
+        )
+    return "".join(out)
+
+
+def mail_props(art: Art) -> str:
+    """The two travelling messages. Nothing else — no peer, and nothing on the scrolling strip.
+
+    Each is ONE group carrying ONE transform animation, with the letter and its trail as static
+    children, for the same reason the summoning's bursts are: an SVG loaded as an `<img>` can never
+    pause off-screen, so every animated element paints for as long as the page is open.
+
+    The inbound is drawn at its DESTINATION and animated backwards from off-frame, so where it comes
+    to rest is identical to the walker's hand band by construction rather than by two numbers
+    agreeing. Both are drawn UNDER the creature, so each switches off while fully occluded instead of
+    popping out of existence in open plate.
+    """
+    if not emits(art, "rMail"):
+        return ""
+    g = mail_geom(art)
+    u, x0 = g["u"], g["x0"]
+    out = (
+        f'<g class="mlOut">{_mail_trail(x0, g["hi_y"], u, True)}'
+        f'{_letter_rects(x0, g["hi_y"], u)}</g>'
+    )
+    inb = (
+        f'<g class="mlIn">{_mail_trail(x0, g["lo_y"], u, False)}'
+        f'{_letter_rects(x0, g["lo_y"], u)}</g>'
+    )
+    return out + inb
+
+
+def _mail_flight(name: str, cls: str, n: int, step: float, sign: int, span: tuple) -> str:
+    """One lane: n whole-pixel stops, then off. `steps(1,end)` so it is only ever at an authored x.
+
+    Percentages come from `pctx`, not `pct`. `pct` is two decimals, i.e. 24 ms of a 240 s period, and
+    the stops here are ~148 ms apart — close enough that a longer flight would quantise two of them
+    onto the same selector and silently drop a step. The duplicate check below is not decoration: it
+    is the only thing standing between a re-timing and a stutter nothing else in this file measures.
+    """
+    t0, t1 = span
+    stops, seen = [], set()
+    for i in range(n + 1):
+        p = pctx(ml_at(t0 + (t1 - t0) * (i / n)))
+        if p in seen:
+            raise SystemExit(
+                f"gen: TWO-WAY MAIL's {cls} lane emits two stops at {p}% — {n} steps do not fit "
+                f"inside {(t1 - t0):.2f} of a {ev('rMail')[1] - ev('rMail')[0]:.1f}s window at this "
+                f"precision. Widen the window in RARE_EVENTS or raise MAIL_STEP_CELLS."
+            )
+        seen.add(p)
+        stops.append(f"{p}%{{opacity:1;transform:translateX({fmt(sign * step * i)}px)}}")
+    return (
+        f"@keyframes {name}{{0%{{opacity:0}}{''.join(stops)}"
+        f"{pctx(ml_at(t1) + GATE_EDGE)}%{{opacity:0}}100%{{opacity:0}}}}"
+        f".{cls}{{animation:{name} {fmt(P)}s steps(1,end) infinite}}"
+    )
+
+
+def mail_css(art: Art) -> str:
+    """Two animations, two elements, neither with more than one."""
+    g = mail_geom(art)
+    n, step = int(g["n"]), g["step"]
+    return _mail_flight("mlo", "mlOut", n, step, 1, MAIL_OUT) + _mail_flight(
+        "mli", "mlIn", n, step, -1, MAIL_IN
+    )
+
+
+def assert_mail_lanes_read_as_two(art: Art) -> None:
+    """The crossing must actually happen, in two lanes far enough apart to BE two.
+
+    THE CROSSING FRAME IS THE WHOLE BEAT. A send followed by a reply reads as one channel used
+    twice — which is a picture this banner can already draw, and it is the picture the beat exists to
+    contradict. Two messages passing each other at different heights reads as two channels. That
+    difference is entirely geometric, so all of it is checkable, and none of it is checked by
+    anything else here: every other gate would stay green over a beat that sent and then replied.
+
+      1. The flights must OVERLAP IN TIME, or there is no crossing frame and the beat is the thing it
+         was written not to be.
+      2. The lanes must clear each other by more than TWICE the prop. Below that the pair reads as
+         one message stuttering rather than two crossing — the storyboard's own derivation (22 px
+         against a 10 px prop) carried onto this canvas's grid.
+      3. The outbound must genuinely LEAVE the frame. "its own message is gone" is the exit; a letter
+         that stops short is parked in open plate, which is the pop this file occludes everywhere
+         else. Checked per variant because the travel is sized per variant.
+    """
+    if not emits(art, "rMail"):
+        return
+    g = mail_geom(art)
+    if MAIL_OUT[1] <= MAIL_IN[0]:
+        raise SystemExit(
+            f"gen[{art.key}]: TWO-WAY MAIL's lanes never share a frame — outbound ends at "
+            f"{MAIL_OUT[1]:.2f} and inbound starts at {MAIL_IN[0]:.2f} of the window. That is a send "
+            f"followed by a reply, which reads as ONE channel used twice; the crossing IS the beat."
+        )
+    clear = MAIL_LANE_CELLS * g["u"]
+    prop = 2 * g["u"]
+    if clear < 2 * prop:
+        raise SystemExit(
+            f"gen[{art.key}]: the mail lanes clear each other by {clear:.0f}px against a "
+            f"{prop:.0f}px prop. Under 2x the prop the pair reads as one message stuttering, not as "
+            f"two crossing. Raise MAIL_LANE_CELLS."
+        )
+    far = g["x0"] + g["n"] * g["step"]
+    if far < W:
+        raise SystemExit(
+            f"gen[{art.key}]: the outbound message stops at x={far:.0f} inside a {W}px frame. "
+            f"'its own message is gone' is this beat's exit, and a prop that halts in open plate "
+            f"switches off in full view instead of leaving."
+        )
 
 
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
@@ -5263,6 +5507,7 @@ def build(art: Art) -> str:
     assert_summon_on_grid(art)
     assert_prop_entry_sequence(art)
     assert_summon_clear_plate(art)
+    assert_mail_lanes_read_as_two(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -5337,6 +5582,10 @@ def build(art: Art) -> str:
         summon_props(art),
         summon_peer(art),
         summon_bursts(art),
+        # TWO-WAY MAIL rides at the same z and for the same reason: under the creature, so the
+        # outbound leaves a hand it is behind and the inbound switches off occluded rather than
+        # blinking out in open plate. Nothing of this beat is on the scrolling strip.
+        mail_props(art),
         clawd_placed(art, art.clawd_x, scale),
     ]
 
