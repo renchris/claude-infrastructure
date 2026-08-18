@@ -87,6 +87,78 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~04:00Z — W-R3 CLOSED by pane 275: 83 branches, 32 with content, and only SIX
+  commits were actually missing from trunk. `landed 6 · superseded 20 · moot 1 · parked-by-design
+  2 · patch-equivalent 51 · still-declared-unpushed 31` — every branch reaches a terminal verdict
+  and no ref was deleted.** Landed `d2cfe1312` (10 commits, 21 paths content-verified); live layer
+  converged; 135 tests green across the five touched suites.
+
+  🚨 **THE HEADLINE IS THE DENOMINATOR, NOT THE WORK: 26 of the 32 content-carrying branches were
+  already on trunk, and `git cherry` said otherwise for all of them.** Patch-id asks *are these
+  BYTES in main*, and a fix that landed by a re-authored port, a squashed rewrite, or a conflict
+  resolution answers NO while being fully present. The screen that found this is line-presence
+  (what fraction of a commit's added lines appear in trunk's current file), and it split cleanly —
+  15 SUPERSEDED ≥95%, 17 MISSING ≤18%, 3 PARTIAL — but it is *also* wrong in both directions on
+  its own: `6e7bdd2e8` read 1% present yet trunk carries the identical fix as `ba69a4510` with
+  different prose, and `6eb74d040` read 0% yet `a609a0cd4`+`5f2f5431f` cover it. **Only per-commit
+  adjudication by DEFECT-AND-REMEDY settled it** (three parallel read-only agents over the code
+  clusters). Two of the ports even carried `Original-commit:` trailers on trunk — decisive when
+  present, and absent exactly when a human re-authored the fix. Corollary for the next reconciler:
+  *a landedness oracle must be told what "landed" means*, and none of patch-id, ancestry, or text
+  overlap is that oracle by itself.
+
+  **What was genuinely missing, and it is the small half:** the drain-chain liveness mechanism
+  (§6's own invariant — `scripts/drain-chain-assert.sh` + 15 cases, and note this plan was
+  committing the very defect it diagnoses); `4da7836cf` (a bisect must be able to return NO
+  VERDICT — trunk had the empty-string culprit but none of `BISECT_WHY/STEPS/S/LOAD`); `ce0e5d2e8`
+  (git-add force flag read off its own argv); the venue/plan doc entries; and **two residues that
+  only a per-file split could find** — `649ecc23b`'s gate/nudge/compact halves were superseded but
+  its ROTOR half was not, so trunk could *refuse* a 200-line-cap write while the only fleet-wide
+  remedy never armed; and `44de2d805`, whose whole surviving value is one line
+  (`CC_BACKLOG_KICK=off`) stopping ~74 live-`$HOME` `cc-dispatch` spawns per suite run. Both
+  red-proved against the pre-fix subject; the rotor's three new cases fail 3/3 pre-fix.
+
+  **Retirement ≠ ref deletion.** `scripts/branch-reaper.sh:12-20` is explicit that ref deletion is
+  **strict-ancestor only** — a patch-id match can be coincidental and the ref is the last durable
+  carrier — and **none of the 83 is an ancestor of trunk**, so nothing was reapable by ref. The
+  terminal verdict is therefore `cc-cloud retire --id` on the DECLARATION, which stops the daemon
+  re-attempting a land forever while every branch survives as evidence: **41 declarations retired,
+  0 failed.** The 2 rc=65 squatters were removed only after all four gates held (clean tree, no
+  live session by cwd, owner pid 4089 gone, HEAD content superseded); their branches remain.
+
+  **The two oldest branches are NOT debris and must survive every future sweep.**
+  `…57078-1`/`-2` are the cloud arms of the cost A/B, and
+  `docs/research/cloud-local-cost-ab-2026-08-11.md` §7 rules them evidence: *"The work products
+  were deliberately NOT landed… the probe tool is throwaway and does not belong on trunk."* They
+  apply cleanly, which is exactly what makes them look like the easiest wins — the trap is that
+  **only the branch's own doc knows why it exists**, and no content oracle can see intent. Counted
+  PARKED-BY-DESIGN, declarations retired so the daemon stops trying, refs untouched.
+
+  **Two writers, one index — the mechanism failure that cost this wave its first hour.** Panes 275
+  and 276 were fired on the identical brief 4 min apart into the SAME worktree and branch, and
+  clobbered each other: 275's first conflict resolution was destroyed by 276's `reset --hard`
+  (reflog 19:39:38 → 19:40:25). 276 stood down and handed over `/tmp/w-r3-findings-from-pane-276.md`
+  — its `66550-1`-is-superseded and venue-INTEGRATE adjudications were reused verbatim here, so the
+  duplicate fire was not a total loss. 275 evacuated to its own worktree (`.worktrees/r3-land`),
+  which is what let the wave finish. The lead's 02:35Z entry recording both as permanently wedged
+  was true when written and stale within the hour.
+
+  **Also settled while here:** the `cherry-pick --continue` path is unusable in this repo — the
+  identity gate rejects the VM's `noreply@anthropic.com` author and the message gate rejects its
+  `Co-Authored-By: Claude` trailers, and a blocked `--continue` **tears down the sequencer and
+  loses the resolution**. Every pick must be `-n` + a re-authored commit; a marker guard belongs at
+  that commit step, since a resolution script that throws mid-way otherwise ships `<<<<<<< HEAD`
+  into a plan doc (it did once here, caught and amended).
+
+  **Not mine, named rather than driven:** `deploy-live`'s post-deploy host partition is RED on
+  `tests/test-hermeticity-lint.bats` #19 — this land touches neither that lint, its suite, nor
+  `ship-land.sh`; last toucher of the subjects is `c037c1aa1`. Filed `79e7ef3ca862`. Six stale
+  `.desk-land-*` dirs filed as `de4f1c0135bb` (verified clean, unregistered, no orphan HEAD — left
+  for `worktree-gc.sh` rather than hand-deleted). Row `941e57ba8d5a` (needs-brake merges two
+  re-land steps) stays OPEN: it is a defect in this row-class's own machinery, not in the branches.
+  `session_018in35…` needed nothing from this fire — it returned at **2026-08-17T09:04:28Z**,
+  goal MET, content-verified, ~9 h before either pane launched.
+
 - **2026-08-18 ~03:45Z — fired peer (blocked-pool-triage): the first audit of the blocked pool, and
   it is not an operator queue. One THIRD of it had no operator step in it at all.**
 
