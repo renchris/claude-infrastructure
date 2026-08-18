@@ -174,15 +174,43 @@ Resume-from-summary runs `/compact`, then leaves each session **idle** (empty bo
 ## Phase 4 — Perpetual autonomy (keep them going)
 
 Because the Stop-hook is gone, sessions pause between tasks. Start the keepalive watcher, which
-re-nudges ONLY idle panes (leaves working ones alone; skips decision-prompts):
+re-nudges ONLY idle panes — it leaves working ones alone, skips decision-prompts, and skips a pane
+that is legitimately awaiting its own armed watcher:
 
 ```
-osascript … > /tmp/reso-keepalive-ids.txt   # capture the pane session-ids (skip your own)
-nohup ~/.reso/bin/reso-keepalive 240 >>~/.reso/keepalive.out 2>&1 & disown
+CC_KEEPALIVE_MARKERS="wt-a wt-b" nohup ~/.reso/bin/reso-keepalive 240 >>~/.reso/keepalive.out 2>&1 & disown
 ```
 
-Interval 240s. Log: `~/.reso/keepalive.log`. **Stop: `pkill -f reso-keepalive`.** (Re-capture the ids
-file if you rebuild the pane layout.)
+Interval 240s. Log: `~/.reso/keepalive.log`. **Stop: `pkill -f reso-keepalive`.**
+
+**It re-discovers its targets every cycle by WORKTREE MARKER** — there is no ids file to capture or
+re-capture, and a static id list goes stale the moment a session recycles. `CC_KEEPALIVE_MARKERS` is
+a space-separated list; unset falls back to the built-in default, and an explicitly EMPTY value
+exits rather than looping blind. *(This section used to prescribe `osascript … >
+/tmp/reso-keepalive-ids.txt`. That interface has not existed since marker-rediscovery landed in
+410f920c — the doc was describing a script that no longer read an ids file.)*
+
+**BOTH TERMINALS, since 2026-08-17 (backlog a94c9e5722f7 · 71c2c19d6c63).** The watcher was
+iTerm2-only, so on a **kitty** fleet this whole phase was INERT — measured 2026-08-10 after resuming
+4 sessions onto next2/next4 in kitty, where 3 settled idle-at-prompt with nothing to re-nudge them,
+which made this skill's own success criterion ("keepalive covering it", Phase 6) unreachable on the
+terminal we actually run. It now drives kitty through `bin/it2-kitty`, the sanctioned adapter, and
+matches markers against each kitty window's **cwd** (durable) rather than its scrollback (a sampling
+surface — a long-running pane scrolls its worktree name off and silently stops matching).
+
+The kitty arm is inert *by design* when the watcher itself is not running in a kitty pane and
+`CC_TERM_KITTY_TO` is unset — driving panes in a window nobody is looking at is the failure the skip
+predicates exist to prevent. When that happens it **says so once in the log** rather than reporting
+nothing; an arm that is inert AND silent is exactly the defect this row filed.
+
+Three skip predicates, declared once and applied to both terminals — override any of them with
+`CC_KEEPALIVE_BUSY` / `CC_KEEPALIVE_PROMPT` / `CC_KEEPALIVE_AWAIT` if Claude Code rewords a footer:
+
+| predicate | why the nudge is withheld |
+|---|---|
+| a turn is running (`esc to interrupt`) | never interrupt work in flight |
+| a decision/approval prompt is on screen | a blind auto-typer that answers a permission dialog is worse than an idle pane |
+| the pane is awaiting **its own armed watcher** (`N monitor(s) still running`) | "Awaiting ARMED is the legitimate non-close state" — nudging it interrupts a correct wait and can duplicate a wave collection. **Silence is not evidence of a stall** |
 
 ## Phase 5 — Cross-account quota view + routing (quality-of-life)
 
