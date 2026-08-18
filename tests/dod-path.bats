@@ -78,6 +78,52 @@ setup() {
   case "$output" in "$WRAP_DOD_DIR"/repo-*.md) echo "repo-keyed a local-only repo: $output" >&2; false ;; *) : ;; esac
 }
 
+
+# ── CROSSTALK (row 4de3d0f9c0e1) — the flip side of the hop above ────────────────────────────────
+# The repo key is byte-equal across every worktree of the repo. That is what makes the SUCCESSION
+# hop work (test 1). It is also what makes two CONCURRENT waves of the same repo share one scope
+# file: wave B reads wave A's frozen scope as binding and REMAINDER sums both waves' boxes.
+# The axis is pinned INERT on the legacy side: neither worktree has a legacy path-hash file here,
+# so anything these cases observe comes from the repo-key store alone.
+#
+# THESE TWO CASES ARE RED ON PURPOSE AND ARE GATED OFF BY DEFAULT. They are the reproducible
+# red-proof for a defect that CANNOT be fixed from state this tree records — see
+# docs/research/dod-crosstalk-2026-08-18.md. Nothing in the store attributes a capture to a wave,
+# and the DEFAULT succession (`handoff-fire.sh --recycle`) writes no lineage record at all
+# (handoff-fire.sh:7358 — `RECYCLE=0` is a precondition of the fired-peer stamp), so every read-side
+# rule buildable today either keeps the crosstalk or re-breaks the hop test 1 pins. Reproduce with:
+#     CC_DOD_CROSSTALK_REDPROOF=1 bats tests/dod-path.bats
+# UNSKIP the day per-capture provenance + a lineage token exist; that is the fix, not a read-side
+# heuristic.
+_crosstalk_gate() {
+  [ "${CC_DOD_CROSSTALK_REDPROOF:-0}" = 1 ] \
+    || skip "known-red: no wave identity exists to fix it — docs/research/dod-crosstalk-2026-08-18.md"
+}
+
+@test "CROSSTALK: wave B's REMAINDER counts ONLY its own frozen items, not a concurrent wave A's" {
+  _crosstalk_gate
+  ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
+  printf -- '- [ ] alpha (wave A)\n' >> "$(cd "$A" && "$DP" path)"
+  ( cd "$B" && "$DP" set "Scope (frozen): wave B contract" ) >/dev/null
+  printf -- '- [ ] beta (wave B)\n' >> "$(cd "$B" && "$DP" path)"
+  run bash -c "cd '$B' && WRAP_TRUNK=origin/main bash '$WL' --machine"
+  [ "$status" -eq 0 ]
+  local got; got="$(printf '%s\n' "$output" | grep '^REMAINDER=' || true)"
+  if [ "$got" != "REMAINDER=1" ]; then
+    echo "wave B summed a concurrent sibling's boxes: $got (want REMAINDER=1)" >&2; false
+  fi
+}
+
+@test "CROSSTALK: a concurrent wave A's frozen scope is not injected into wave B as binding" {
+  _crosstalk_gate
+  ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
+  run bash -c "printf '%s' '{\"hook_event_name\":\"SessionStart\",\"cwd\":\"$B\"}' | '$DP'"
+  [ "$status" -eq 0 ]
+  if grep -q 'wave A contract' <<<"$output"; then
+    echo "wave B was handed a concurrent sibling's scope as binding" >&2; false
+  fi
+}
+
 @test "SEAM: WRAP_DOD_FILE overrides both modes to one file (the producer↔consumer test contract)" {
   export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/one.md"
   ( cd "$A" && "$DP" set "Scope (frozen): pinned" ) >/dev/null
