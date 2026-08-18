@@ -87,6 +87,65 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #25: `master-session-lifecycle` 6 → 5 open / 1 blocked (1
+  operator-gated). filed 0 / closed 1.** Closed `5cd2ecf792ae` — TWO-WAY MAIL, storyboarded since
+  2026-07-30 and the only genuine close candidate left in this effort. Landed `761d41e15` (4
+  commits), content-verified on origin/main. The 5 remaining are the 4 #24 named as excluded by
+  construction — each re-verified live this recycle: `62363cac1e39` due ~2026-08-24 (today 08-18),
+  `68fdc99b17c7` whose blocker `e06ba316a1aa` is still OPEN, `b69b1d957cec` standing watch (npm
+  latest now **2.1.235**, we hold 2.1.220, revisit conditions unmet), `85a82455de9a` not this
+  chain's — plus `4de3d0f9c0e1`, whose prerequisite 2 remains and is the next drainable row here.
+  - **The row's blocking question was RETIRED, not answered.** It asked whether the
+    one-saturated-subject rule should be overturned so a second creature need not be drawn SMALLER
+    and read as a CHILD. `90ecfac9c` (#22) had already settled that size is second-order to
+    CO-PRESENCE — a second creature sharing the frame at all is `gen.py`'s `peer` (v6b), WITHDRAWN
+    on its CAUSE — so **the peer is NOT DRAWN**, and the answer arriving from off-frame is THE
+    LETTER's own hard constraint used as the point. Built to that composition: `rMail` at
+    **39.0-44.5s**, which is FORCED — rAsk ends 35.0, peek/peer open 48.5, `EVENT_GAP` is 4.0s on
+    both sides, so the legal interval is exactly as wide as the beat. Prime-window and not the free
+    85s after rTrace, because the placement rule inverts by KIND: a narrative beat a reader never
+    sees has told them nothing.
+  - **A cost recorded rather than discovered later.** That slot was withdrawn `rOverlap`'s
+    (36.0-44.25). Its 8.25s cannot coexist with this 5.5s inside a 13.5s gap, so **restoring THE
+    OVERLAP is no longer the one-line change `ALWAYS_EMITTED` promises** — noted in `RARE_EVENTS`
+    beside both windows.
+  - 🚨 **THE LESSON: INK IS NOT DIRECTION, AND ONLY A RENDER CAUGHT IT.** The first cut built
+    clean, and drew the beat BACKWARDS. The inbound message's offsets counted UP from the walker
+    instead of DOWN to it, so the answer *left* the hand it was supposed to arrive at and exited
+    the left of the frame — and at the crossing instant, which is the entire beat, the second
+    letter sat occluded inside the silhouette. **Every gate passed**: the flights overlapped in
+    time, the lanes cleared each other, the outbound left the frame, every step was a whole pixel,
+    and all three `BEAT_INK` probes measured real ink. An ink probe asks whether an element PAINTS;
+    it cannot ask whether it paints in the right direction. The remedy is `mail_offsets` — ONE
+    definition read by the emitter AND the gate, because a second copy of those numbers is exactly
+    what let the inversion through — plus a gate asserting each lane holds one even heading and the
+    inbound ends AT the walker.
+  - **Adding a beat re-times the loop, and two red-proof fixtures went back to proving their
+    neighbour.** `_duty` (over-long window at 39.0-58.0s) and `_two_features` both collided with
+    rMail, so the disjointness gate convicted first and both reported the WRONG check. The harness
+    caught it only because it compares the MESSAGE, not the exit status — key a fixture on the
+    message or it stops being proof the moment the timeline moves. `_duty` is now on its **third**
+    re-timing, noted in place. For `_two_features` the obvious repair is wrong: a strip feature's x
+    is `STRIP_V * its start`, so moving rOverlap later slides it a whole canvas away and the gate
+    stops being able to fire at all — the fixture moves rMail aside instead.
+  - **Verification, all this turn.** `banner-verify` PASS 6/6 on all four assets ·
+    `banner-beat-ink` 2233/2254/385 px against a 25px floor, **with the pre-change asset as a
+    natural 0-ink control** (same probes, elements absent, all three read 0) ·
+    `banner-gate-redproof` **PASS 41/41**, including four new `mail:` cases and the five constants
+    + the `mail_offsets` FUNCTION added to `sandbox()` (a swapped function leaks exactly like a
+    swapped constant — the leak `hop_pulses` is in that list to record) · rendered at 5 timestamps
+    across both schemes and the widest and narrowest variants, and looked at.
+  - **Instrument note (verify, do not assume).** `banner-shots.sh` IS pixel-deterministic as its
+    header claims. Two runs on ONE unchanged asset differ in **file** hash and agree **exactly** in
+    decoded pixels — PNG carries a `tIME` chunk. Comparing file hashes to test render determinism
+    reads as a regression that is not there; hash the IDAT. This nearly convicted a
+    behaviour-neutral refactor, which the SVG bytes then exonerated (all four byte-identical).
+  - **A dead guard deleted rather than narrowed.** A duplicate-keyframe-percentage check written
+    against `pct`'s 24 ms quantisation was unreachable under `pctx`'s nine decimals: a mutant
+    driving the step to 1/40th of a cell — 857 stops — did not trip it. What actually breaks at
+    that step is the GRID, so the check moved to where it is reachable, beside
+    `assert_summon_on_grid`'s. A guard that cannot fire is a guess.
+
 - **2026-08-18 — drain recycle #24: `master-session-lifecycle` 6 → 6 open / 1 blocked. filed 0 /
   closed 0.** Two lands, no close, and the count is the honest number: of the 6 open rows, **4 are
   excluded by construction and I re-verified each** — `b69b1d957cec` standing watch (npm latest is
