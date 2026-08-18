@@ -342,3 +342,60 @@ fx_landed_other_sha() {
   run bash "$SUT" "$ref" --repo "$W" --no-fetch
   [ "$status" -eq 0 ]
 }
+
+# ── RELOCATED: content that landed at a DIFFERENT POSITION in the same file ──────────────────────
+# `diff` is POSITIONAL, so a line trunk carries at another offset is reported as ref-only and the
+# path is convicted. The blob-supersession arm above cannot rescue it: trunk never carried the ref's
+# whole-file blob, only its lines. That makes the miss SYSTEMATIC for exactly the file class this
+# repo mandates everywhere — INTEGRATE-only, newest-first logs, where landing an entry at the top
+# while the ref appended it at the bottom re-positions every line.
+#
+# LIVE INSTANCE (why these cases exist): refs/land/failed/20260817T072101Z-…-reland-drain-chain.
+# Its docs/plans/BACKLOG_DRAIN_24_7.md was reported as "19 line(s) present only in the ref" while
+# all 18 non-blank ref-only lines were present on trunk VERBATIM (grep -qxF -- each, 0 absent).
+# Two `re-land …` rows sat open on that verdict for a day.
+
+@test "RELOCATED — every ref line is on trunk at another position ⇒ 0, and it SAYS relocated" {
+  # Newest-first is this repo's own log convention: the ref appended NEW at the bottom, the land put
+  # it at the top. Same lines, no loss, yet positional diff calls NEW ref-only.
+  printf 'OLD\n' > "$W/log.md"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b reloc-side
+  printf 'OLD\nNEW\n' > "$W/log.md"; git -C "$W" add -A; git -C "$W" commit -qm 'ref appends at bottom'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'NEW\nOLD\n' > "$W/log.md"; git -C "$W" add -A; git -C "$W" commit -qm 'land puts it on top'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run git -C "$W" merge-base --is-ancestor "$ref" origin/main
+  [ "$status" -ne 0 ]                                   # fixture is only valid if NOT an ancestor
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "RELOCATED" || { echo "did not name relocation: $output"; false; }
+}
+
+@test "CONTROL — MULTIPLICITY: the ref holds a line TWICE and trunk once ⇒ 1, still a strand" {
+  # The forgiving arm is a MULTISET superset, not a set one. A set test would forgive a lost
+  # duplicate — the shape of a hunk deleted from a file whose other copy survives elsewhere.
+  printf 'X\n' > "$W/m.txt"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b mult-side
+  printf 'X\nX\n' > "$W/m.txt"; git -C "$W" add -A; git -C "$W" commit -qm 'ref holds it twice'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "m.txt" || { echo "the strand was not named: $output"; false; }
+}
+
+@test "CONTROL — RELOCATION does not forgive a genuinely absent line in a reordered file" {
+  # The sharp control for the arm: same reordering shape as the RELOCATED case, PLUS one line trunk
+  # never carried. Relocation must not launder that away.
+  printf 'OLD\n' > "$W/n.md"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b reloc-strand
+  printf 'OLD\nNEW\nLOST\n' > "$W/n.md"; git -C "$W" add -A; git -C "$W" commit -qm 'ref has an extra line'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'NEW\nOLD\n' > "$W/n.md"; git -C "$W" add -A; git -C "$W" commit -qm 'land reorders, drops LOST'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "n.md" || { echo "the strand was not named: $output"; false; }
+}
