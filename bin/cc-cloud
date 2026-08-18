@@ -8,7 +8,9 @@
 #   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
 #   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
-#   cc-cloud show <id>                               the declaration + its live state, human-readable
+#   cc-cloud show <id> | --item <backlog-id>         the declaration + its live state, human-readable
+#                                                    (--item resolves through the declaration's own
+#                                                    `item=` link; rc 1 = no declaration names it)
 #   cc-cloud list [--json] [--state]                 the declaration inventory from DISK — no probe
 #                                                    (--state opts INTO the state function, §9.3)
 #   cc-cloud --json | --table | --check | --selftest
@@ -193,6 +195,39 @@ ids() { # every declared, non-retired id, sorted
     [ -f "$STATE/$b.retired" ] && continue
     printf '%s\n' "$b"
   done | sort
+}
+
+# ── id_for_item — the BACKLOG-SIDE lookup, so a caller holding a work item can reach its session ──
+# `cc-cloud declare --item <backlog-id>` already records the link (cc-dispatch writes it on every
+# off-box fire); nothing could READ it back, so a caller holding a backlog row had no way to name
+# the session that is working it. That gap is why cc-backlog's reap blocked every venue=cloud claim:
+# the only oracle it could reach was the LOCAL worktree probe, which by construction cannot see an
+# off-box worker (see cc-backlog's owned_wait venue gate).
+#
+# RETIRED DECLARATIONS ARE DELIBERATELY NOT SKIPPED here, unlike `ids()`. `ids()` feeds the
+# reconciler, where a retired session is finished business; this feeds a caller asking "what
+# happened to my item", and "the session that worked it was retired" is an ANSWER — `cmd_show`
+# renders the .retired record, and `classify` still computes the live state. Skipping them would
+# convert a terminal answer into ABSENCE, which every caller must treat as "cannot tell".
+#
+# NEWEST DECLARATION WINS. A re-fire mints a second declaration naming the same item, and the one
+# that describes the live attempt is the one declared LAST. Ties (equal declared_at) resolve by the
+# glob's sort order — deterministic, and a tie means two fires in the same second, which the
+# dispatcher's own lock makes unreachable.
+id_for_item() { # <backlog-item-id> → echoes the declaration id, rc 0; rc 1 = NO declaration names it
+  local item="$1" f b dat best="" bestat=-1
+  [ -n "$item" ] || return 1
+  [ -d "$STATE" ] || return 1
+  for f in "$STATE"/*.decl; do
+    [ -f "$f" ] || continue
+    [ "$(dfield "$f" item)" = "$item" ] || continue
+    dat="$(dfield "$f" declared_at)"; is_num "$dat" || dat=0
+    if [ "$dat" -gt "$bestat" ]; then
+      bestat="$dat"; b="${f##*/}"; best="${b%.decl}"
+    fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
 }
 
 # The network sensor. Returns rc 0 with the sha on stdout (ref present), rc 0 with EMPTY stdout
@@ -718,6 +753,16 @@ cmd_is_offbox() {
 
 cmd_show() {
   local id="${1:-}" f line state detail rcmd
+  # `--item <backlog-id>` resolves through the declaration's own `item=` link (see id_for_item).
+  # A miss is rc 1 — the SAME rc as an unknown id — because both mean exactly "this tool has no
+  # declaration to speak about", and a caller that must fail closed on ignorance needs one rc for
+  # it (memory: lookup-miss-is-not-absence).
+  if [ "$id" = "--item" ]; then
+    local item="${2:-}"
+    [ -n "$item" ] || { echo "cc-cloud show: --item needs a backlog id" >&2; return 2; }
+    id="$(id_for_item "$item")" || {
+      echo "cc-cloud show: no declaration names item $item" >&2; return 1; }
+  fi
   [ -n "$id" ] || { echo "cc-cloud show: need an id" >&2; return 2; }
   f="$STATE/$id.decl"
   [ -f "$f" ] || { echo "cc-cloud show: no such declaration: $id" >&2; return 1; }
@@ -1111,7 +1156,7 @@ case "${1:-}" in
   retire)     shift; cmd_retire "$@"; exit $? ;;
   poll)       shift; cmd_poll "$@"; exit $? ;;
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
-  show)       shift; cmd_show "${1:-}"; exit $? ;;
+  show)       shift; cmd_show "$@"; exit $? ;;
   list)       shift; cmd_list "$@"; exit $? ;;
   --selftest) do_selftest; exit $? ;;
   -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
