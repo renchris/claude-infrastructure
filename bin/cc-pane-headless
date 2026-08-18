@@ -307,12 +307,20 @@ v_list() {
 }
 
 VERB="${1:-}"; [ $# -gt 0 ] && shift
+# ⚠ ARGUMENTS THIS DRIVER DOES NOT IMPLEMENT ARE A NAMED rc 3, never a silent drop — the same rule
+# bin/cc-pane's dispatch carries, and it has to be here TOO or the fix is only half applied: cc-pane
+# execs this driver with "$@" intact, so `CC_PANE_DRIVER=headless cc-pane list --json` reaches THIS
+# case and would keep lying while the iterm2 path told the truth. A flag that means one thing on one
+# driver and nothing on another is worse than no flag at all (backlog d65dcfd22ce2).
 case "$VERB" in
   spawn)   v_spawn "$@" ;;
-  address) [ $# -ge 1 ] || die_usage "address: need an id"; v_address "$1" ;;
+  address) [ $# -ge 1 ] || die_usage "address: need an id"
+           [ $# -eq 1 ] || die_usage "address: takes exactly one id, got $#: $*"; v_address "$1" ;;
   send)    [ $# -ge 2 ] || die_usage "send: need <id> <text…>"; id="$1"; shift; v_send "$id" "$@" ;;
-  close)   [ $# -ge 1 ] || die_usage "close: need an id"; v_close "$1" ;;
-  list)    v_list ;;
+  close)   [ $# -ge 1 ] || die_usage "close: need an id"
+           [ $# -eq 1 ] || die_usage "close: takes exactly one id, got $#: $*"; v_close "$1" ;;
+  list)    [ $# -eq 0 ] || die_usage "list: takes no arguments, got: $* — it prints one opaque id per line and has no --json"
+           v_list ;;
   driver)  printf 'headless\n' ;;
   *)       die_usage "unknown verb '$VERB'" ;;
 esac

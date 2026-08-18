@@ -196,6 +196,49 @@ fake() {
   [ "${lines[1]}" = "BBB" ]
 }
 
+# ── argv the seam does not implement is a NAMED refusal, never a silent drop ───────────────
+# The three tests below are one per SITE in bin/cc-pane's verb dispatch. The defect they pin was
+# real and measured (backlog d65dcfd22ce2): `list` dropped "$@", so `list --json` and `list` were
+# BYTE-IDENTICAL — bare ids, exit 0. json.load() on that raises, which is the parser being right
+# about a liar, and the consumer then reads its own failure as the DATA's fault. The test above is
+# this one's positive control: bare `list` must stay rc 0 with the ids, or the refusal below has
+# merely broken the verb rather than made it honest.
+
+@test "list REFUSES --json with rc 3 — a silently-ignored flag is worse than an absent one" {
+  fake 'printf "[{\"id\":\"AAA\"},{\"id\":\"BBB\"}]\n"; exit 0'
+  run "$CP" list --json
+  [ "$status" -eq 3 ]
+  # Count, never `grep -q` on a pipe: under pipefail -q exits on the first hit and the still-writing
+  # producer takes SIGPIPE, so the filter FAILS on the very input it matched (memory:
+  # grep-q-under-pipefail-inverts-the-verdict).
+  nmsg="$(printf '%s\n' "$output" | grep -cF 'list: takes no arguments' || true)"
+  [ "${nmsg:-0}" -ge 1 ]
+  # A refusal that ALSO prints the ids is the same lie in a louder voice — the caller could still
+  # parse them and never notice the rc.
+  nid="$(printf '%s\n' "$output" | grep -cF 'AAA' || true)"
+  [ "${nid:-0}" -eq 0 ]
+}
+
+@test "address takes exactly ONE id — a trailing flag is rc 3, not an ignored argument" {
+  fake 'printf "[{\"id\":\"AAA\"}]\n"; exit 0'
+  run "$CP" address AAA --json
+  [ "$status" -eq 3 ]
+  n="$(printf '%s\n' "$output" | grep -cF 'address: takes exactly one id' || true)"
+  [ "${n:-0}" -ge 1 ]
+}
+
+@test "close takes exactly ONE id, and the refusal happens BEFORE any pane is reaped" {
+  fake 'exit 0'
+  run "$CP" close "VICTIM-1" --force
+  [ "$status" -eq 3 ]
+  n="$(printf '%s\n' "$output" | grep -cF 'close: takes exactly one id' || true)"
+  [ "${n:-0}" -ge 1 ]
+  # The worst possible shape for this bug: refuse the argv AND close the pane anyway. The fake
+  # shim records its argv, so this asserts against what the seam INVOKED, not what it printed.
+  m="$(grep -cF 'session close' "$LOG" 2>/dev/null || true)"
+  [ "${m:-0}" -eq 0 ]
+}
+
 @test "RED-proof: a ZERO-row enumeration is INDETERMINATE (rc 2), never 'no panes'" {
   # iTerm2 always has at least the calling pane, so 0 rows means the PROBE failed. Reporting an
   # empty fleet here is what lets a caller reap live sessions — cc-teardown:198 refuses for the
