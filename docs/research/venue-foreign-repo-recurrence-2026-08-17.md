@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-18 | `0dafb03ed73d` | `reso-management-app` | label-foreign — **the first occurrence on a new day, after five documents** (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,71 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SEVENTH OCCURRENCE, 2026-08-18 — `0dafb03ed73d`, and the documentation is not a control
+
+**This section is one screen long on purpose.** Six prior dispatches produced five documents in five
+days; the rate did not fall. Nothing above reached an *enforcing store* — the repo's own
+`conclusion-must-reach-the-enforcing-store` rule, restated by every file in this family and obeyed by
+none of them, because the fix is a decision (§3 of `cloud-venue-project-repo-mismatch-2026-08-16.md`)
+and a document cannot make one. A sixth essay would be the same non-control at a higher cost, so this
+occurrence contributes a table row, two verified facts and a disposition — nothing else.
+
+**The occurrence.** Backlog item `0dafb03ed73d`, project `reso-management-app` — *"Amplify build cache
+never WRITTEN since ~2026-06-12 … fix `cache.paths` in `amplify.yml`"* — was dispatched into an
+`anthropic_cloud` session whose one attached repository is `renchris/claude-infrastructure`. The
+plainest route (label-foreign), the second `reso-management-app` item in two days, and the first on a
+new date. Its subject (`amplify.yml`) and its cited evidence
+(`docs/research/DEP_AUDIT_2026-08-11/b2-turbopack-build-cache.md`) are both in
+`~/Development/reso-management-app`, which does not exist here; GitHub reaches this VM only through
+MCP tools scoped to `renchris/claude-infrastructure`. **Unworkable on arrival.**
+
+**Fact 1 — the guard site named on 08-16 is the right one, and this is the first session to check.**
+`bin/cc-offload:84` was located as the cause, but no prior doc verified that the *dispatcher* fires
+through it. It does: `bin/cc-dispatch:1972-1985` selects between actuators and states that
+*"THE CLOUD ACTUATOR IS `cc-offload up`, NOT a --cloud flag on the local spawn"* — the venue is a
+selection between actuators, not an argv mutation. So a guard at `cc-offload` covers the dispatch path
+whole. `scripts/handoff-fire.sh`'s own `--cloud` leg carries the identical defect by a second route
+(`CLOUD_CWD="$PWD"`, `scripts/handoff-fire.sh:7066` — it ignores the `--cwd`/`--worktree` that would
+name the item's tree), but that leg is the DEPRECATED CLI create the dispatcher no longer selects, so
+it does not have to be guarded first. **One site, not two.**
+
+**Fact 2 — what has actually been stopping the improvisation is an accident.** Across all seven
+occurrences, nothing in the fire path noticed; what prevented a plausible answer against unreadable
+state was the brief's mandated FIRST STEP (*read what this item cites on trunk*). That instruction is
+in the template because of an unrelated incident (stale-tree diagnosis, `6110fc45141e`), not because
+of this class. It is a control this class did not build and cannot rely on: it works only while briefs
+keep carrying it, and it fires *after* the session is paid for.
+
+**Measured here** (the documented shape, unchanged): `hostname` = `vm`, `$HOME` = `/root`,
+`git rev-parse --is-shallow-repository` = `true`, `git rev-list --count HEAD` = 50, `HEAD..origin/main`
+= 0. `bats` and `shellcheck` both absent (`command -v` rc 1), so the repo's gate cannot be run on a
+shell change — the third refusal below still holds verbatim.
+
+**The rails fail quietly, re-measured:** `~/.claude/autonomy/backlog.jsonl` does not exist, so
+`cc-eligible why` returns `verdict=unknown-store` (fail-open, rc 0) and every `cc-backlog` verb would
+write an ephemeral store that dies with the container. **This session did NOT update the ledger and
+must not be reported as having done so.** This branch is the notification.
+
+## Operator action
+
+```
+cc-backlog block 0dafb03ed73d --needs "re-dispatch to a session that can reach renchris/reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; NOT adjudicated (amplify.yml and the cited DEP_AUDIT doc are unreadable from a claude-infrastructure VM); docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH OCCURRENCE"
+```
+
+`block`, not `reopen` and not `done`: the item is blocked on **where it was sent**, not on information
+or a judgment call, and parking it out of the wave is what stops an eighth fire into the same VM shape.
+
+## Not fixed here, and the item is NOT adjudicated
+
+The three standing refusals are unchanged and not re-argued: `bin/cc-offload` fires paid cloud sessions
+and this VM cannot run the gate (measured above); `bin/cc-eligible`'s `OFFBOX_LANE` class states that a
+session this lane created cannot verify a change to the lane; and §3's choice — **(a) fail closed vs
+(b) route by project**, as amended by the under-specification note on cross-repo masters — is a
+decision, which is precisely what a document cannot supply.
+
+**No claim is made about the Amplify build cache.** `amplify.yml`, the `cache.paths` key, job 1457's
+artifact and `b2-turbopack-build-cache.md` were never readable from this session. The item's premise is
+neither confirmed nor refuted here; it is untouched.
