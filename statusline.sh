@@ -140,6 +140,63 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             rm -f "$_tmp" 2>/dev/null
         fi
     fi
+
+    # ── THE DURABLE DENOMINATOR (row 5e4ce121b64a residual (b)) ─────────────────────────────
+    # Fill % = input_tokens / window. The numerator is in every transcript; the window was in
+    # almost nothing. It reached a DURABLE store on exactly two EVENT-CONDITIONED paths — a
+    # fill-drop (the IDL) and a recycle (recycle-events) — so a session that did neither had no
+    # denominator at all, and cc-ctx-audit could report a retrospective fill for only a sliver of
+    # the fleet (measured 1.5% coverage; the ephemeral /tmp copy above is wiped on every reboot).
+    # This writer runs on essentially every render, so coverage becomes a function of "the session
+    # existed" rather than of "something happened to it".
+    #
+    # DELIBERATELY NOT INSIDE the telemetry block above: that block blanks `_sid` when `-O "$TDIR"`
+    # fails, which is the right refusal for publishing into a shared /tmp dir and has nothing to do
+    # with a private write under this uid's own config root. Coupling the two would disable the
+    # denominator for a reason that is not about the denominator.
+    _wsid="$PAY_SID"
+    if [ -n "$_wsid" ]; then
+        # The window as the producer LITERALLY emitted it, taken from the ONE payload extraction
+        # rather than a second `jq -r` — this is a per-render hot path and the single-extraction
+        # invariant is asserted by tests/statusline-identity.bats. Absent or non-numeric ⇒ write
+        # NOTHING. Never a 200000/1000000 default: the same model id runs at BOTH windows on this
+        # box, so an imputed denominator is a wrong number rather than a missing one — the error
+        # this row committed and withdrew in its own Phase 1.
+        _wwin="$PAY_WINDOW"
+        case "$_wwin" in
+            ''|*[!0-9]*) _wwin="" ;;
+        esac
+        if [ -n "$_wwin" ]; then
+            _wtp="$PAY_TPATH"
+            _wroot="${_wtp%%/projects/*}"
+            if [ -z "$_wroot" ] || [ "$_wroot" = "$_wtp" ]; then
+                _wroot="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+            fi
+            _wstore="$_wroot/autonomy/session-window.jsonl"
+            # TEST CONTAINMENT, the same invariant hooks/lib/context-econ.sh enforces at its own
+            # writers: under bats, a store resolving OUTSIDE BATS_TEST_TMPDIR is redirected into
+            # it, so a suite that fixtures neither HOME nor CLAUDE_CONFIG_DIR cannot append to the
+            # operator's live store. Outside bats this is identity — production is never redirected.
+            case "${BATS_TEST_TMPDIR:-}" in
+                '') : ;;
+                *) case "$_wstore" in
+                       "$BATS_TEST_TMPDIR"/*) : ;;
+                       *) _wstore="$BATS_TEST_TMPDIR/session-window.jsonl" ;;
+                   esac ;;
+            esac
+            # ONE row per session: the window is fixed at launch, so the first render that sees it
+            # is the only one that needs to record it. The grep is what bounds the store — an
+            # append per render would grow without limit on a hot path. Fail-soft at every seam;
+            # this must never break a render.
+            if ! grep -q "\"sid\":\"$_wsid\"" "$_wstore" 2>/dev/null; then
+                if mkdir -p "${_wstore%/*}" 2>/dev/null; then
+                    printf '%s' "$INPUT" | jq -c '{sid: .session_id,
+                        window: .context_window.context_window_size,
+                        model: .model.id, ts: (now|floor)}' >> "$_wstore" 2>/dev/null || true
+                fi
+            fi
+        fi
+    fi
 fi
 # Left-anchored parallel-instance glyph (set below). Prepended at the final echo so
 # it sits at the START of the line and survives narrow-terminal ellipsis truncation.
