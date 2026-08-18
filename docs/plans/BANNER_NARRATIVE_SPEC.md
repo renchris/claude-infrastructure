@@ -1768,6 +1768,45 @@ Verbatim, then disposition:
    candidates, and both are cheaper than a second saturated orange). **Filed 2026-08-11 as backlog
    `5cd2ecf792ae`** — neither exit needs an operator, so this is ordinary agent work that was simply
    never put where the dispatcher could see it.
+
+   **ADJUDICATED 2026-08-18 (drain recycle #22) — THE QUESTION ABOVE IS THE WRONG QUESTION, AND
+   BOTH OF ITS EXITS ARE BARRED BY A RULING NEITHER OF THEM CITES.** Size is a second-order
+   problem. The binding constraint is CO-PRESENCE, and it was already ruled on.
+
+   The storyboard beat draws TWO creatures on every one of its five frames —
+   `banner-storyboard.py:565` defines `M_PEER = Creature(SML, SUM_BX, "look-left")` and each frame
+   is `(S_BIG, M_PEER)` or `(S_RIGHT, M_PEER)` (`:1240-1259`). That composition is
+   `gen.py`'s `"peer"` — **THE VISITOR (v6b), `kind: "WITHDRAWN"`** (`gen.py:501-513`), whose
+   recorded behaviour is verbatim *"a second creature walks in and shares the frame — the
+   co-presence the whole reframe says is the wrong picture of the system"*. It was withdrawn on a
+   **cause** indictment, not a composition one: *"a session is never co-present with its peers,
+   they live in other panes"* (`gen.py:434`, `:490-497`). Two facts follow, and both are in the
+   generator rather than in prose:
+   * `gen.py:347-350` — the visitor beats are *demoted, not deleted*, because **"deleting v6b's
+     identity is the spec owner's call, not this session's."** So overturning it is precisely the
+     operator ruling this item claimed it did not need.
+   * `gen.py:639-641` — a `WITHDRAWN` beat appearing in `ALWAYS_EMITTED` is a **build failure**,
+     deliberately, so that a revert has to be argued rather than made silently.
+
+   The argument holds *a fortiori* here. THE SUMMONING is allowed two bodies only because its
+   second one is **called into existence and removes itself inside the window** (`gen.py:4058-4064`)
+   — that distinction is the entire beat. TWO-WAY MAIL's peer is neither summoned nor sent away: it
+   is simply present from frame 1 and still striding at frame 5, which is a stronger co-presence
+   claim than the visitor's, and the visitor at least had an arrival to explain itself with.
+
+   **THE EXIT THAT NEEDS NO RULING — DON'T DRAW THE PEER AT ALL.** One creature. A message leaves
+   it travelling RIGHT and riding HIGH; a second message ARRIVES from off-frame travelling LEFT and
+   riding LOW; for one frame both are in the air, crossing. Every property the beat's own `note`
+   calls load-bearing survives — two independent lanes, two directions, trails that make each
+   readable from a frozen frame, and the crossing frame as the whole beat. What is dropped is the
+   only part that was barred. This is not a workaround: it is THE LETTER's existing hard constraint
+   (*the sender is never drawn*) used as the point rather than as a limitation, and it is what the
+   reframe actually asserts — the peer is real, it is answering, and it is **in another pane**. It
+   is also strictly cheaper than either filed exit, both of which had to buy a second body first.
+
+   Backlog `5cd2ecf792ae` stays **OPEN** — the beat is still not built, and a re-specified question
+   is not a built beat. What changed is that its question is now answerable without the operator,
+   against a composition that the build gate will accept.
 4. *"I dont see our stars being Opus 5 beautiful dynamic and opacity/flickering changing/twinkling
    for depth"*
    → **DONE.** `31ed0731`. The machinery was alive; the amplitude was losing to render scale — a

@@ -556,13 +556,37 @@ S_BIG = Creature(BIG, SUM_AX)
 S_RIGHT = Creature(BIG, SUM_AX, "look-right")
 S_VIS = Creature(SML, SUM_BX, "look-left")
 
-# The two mail lanes. They are separated VERTICALLY because the clear band is 36 px and two props
-# cannot pass side by side inside it without colliding; 22 px of separation is over twice the 10 px
-# prop, which is the distance below which the pair reads as one message stuttering rather than as
-# two messages crossing.
-MAIL_HI_Y = BASE - 52  # outbound lane, A → B
-MAIL_LO_Y = BASE - 30  # inbound lane,  B → A
-M_PEER = Creature(SML, SUM_BX, "look-left")
+# ── TWO-WAY MAIL's lanes, and why THE PEER IS NOT DRAWN (adjudicated 2026-08-18) ────────────────
+# This beat was first drawn with a second creature on the plate, `M_PEER = Creature(SML, SUM_BX,
+# "look-left")`, and its own note asked one question: a peer drawn SMALLER reads as a CHILD, so
+# either overturn the one-saturated-subject rule or say "peer" without using size.
+#
+# THAT WAS THE WRONG QUESTION. Size is second-order; the binding constraint is CO-PRESENCE, and it
+# had already been ruled on. A second creature sharing the frame is `gen.py`'s `"peer"` — THE
+# VISITOR (v6b), `kind: "WITHDRAWN"` — indicted on its CAUSE, not its composition: "a session is
+# never co-present with its peers, they live in other panes" (gen.py:434, :490-513). Two
+# consequences, both in the generator rather than in prose: gen.py:347-350 records that deleting
+# v6b's identity is "the spec owner's call, not this session's", and gen.py:639-641 makes a
+# WITHDRAWN beat in ALWAYS_EMITTED a BUILD FAILURE so the revert has to be argued. The claim held
+# a fortiori here — THE SUMMONING earns its two bodies only because the second is called into
+# existence and removes itself inside the window (gen.py:4058-4064), while this peer was neither
+# summoned nor sent away.
+#
+# So the peer is NOT DRAWN, and that is the beat rather than a concession. One message leaves the
+# walker travelling RIGHT and riding HIGH; a second ARRIVES from off-frame travelling LEFT and
+# riding LOW; for one frame both are in the air, crossing. Every property the note calls
+# load-bearing survives — two independent lanes, two directions, trails that make each readable
+# from a frozen frame, and the crossing frame as the whole beat. What is dropped is the only part
+# that was barred. It is THE LETTER's existing hard constraint (the sender is never drawn) used as
+# the point instead of as a limitation, and it says what the reframe actually asserts: the peer is
+# real, it is answering, and it is IN ANOTHER PANE.
+#
+# The lanes are separated VERTICALLY by 22 px — over twice the 10 px prop, which is the distance
+# below which the pair reads as one message stuttering rather than as two messages crossing. With
+# the peer gone, the whole plate right of the walker (107..200) is lane, so the crossing sits where
+# a reader is already looking rather than being squeezed into a 36 px clear band.
+MAIL_HI_Y = BASE - 52  # outbound lane, walker → peer (off-frame)
+MAIL_LO_Y = BASE - 30  # inbound lane,  peer (off-frame) → walker
 
 
 @dataclass(frozen=True)
@@ -1207,12 +1231,14 @@ BEATS: tuple[Beat, ...] = (
         cause="Two live sessions have to reach each other with no human relaying between them. One "
         "writes into the other's mailbox; the other answers. The answer is the point — a system "
         "that can only broadcast is not two sessions talking, it is one session announcing.",
-        behaviour="A pale message leaves the walker travelling RIGHT, riding HIGH. Before it lands, "
-        "a second message leaves the peer travelling LEFT, riding LOW — and for one frame both are "
-        "in the air at once, crossing. Each carries a short trail, so which way it is going is "
-        "readable from a frozen frame. Neither creature stops.",
-        exit_="Both land, both are read, both keep striding. No residue on the strip and nothing "
-        "left in either lane — an inbox that still shows mail after the beat is a bug, not a state.",
+        behaviour="A pale message leaves the walker travelling RIGHT, riding HIGH. Before it "
+        "arrives, a second message enters from off-frame travelling LEFT, riding LOW — and for one "
+        "frame both are in the air at once, crossing. Each carries a short trail, so which way it "
+        "is going is readable from a frozen frame. THE PEER IS NEVER DRAWN: it is in another pane, "
+        "which is the whole claim. The walker does not stop.",
+        exit_="The answer lands and is read; the walker's own message is gone off-frame; it keeps "
+        "striding. No residue on the strip and nothing left in either lane — an inbox that still "
+        "shows mail after the beat is a bug, not a state.",
         mech="The cross-session mail path: `cc-notify` writes into the peer's mailbox and the "
         "peer's own drain reads it out. The failure this beat is drawn from is real and it is "
         "exactly a two-way failure — the WRITER and the READER keyed on different boxes (the pane's "
@@ -1227,36 +1253,38 @@ BEATS: tuple[Beat, ...] = (
         "used twice; two messages passing each other at different heights reads as two channels, "
         "and that is the only difference between this beat and a beat that already exists. So the "
         "staging spends its middle frame on the crossing and nothing else. "
-        "THE ONE THING TO RULE ON: the peer is drawn SMALLER, because `_check_clear` refuses two "
-        "same-size clawds on one plate and the source's art direction allows only one saturated "
-        "orange subject. That rule was written for a parent and its subagent, and here it works "
-        "against the beat — a smaller peer reads as a CHILD, which is the summoning's relationship, "
-        "not this one. Two peer sessions are equals. So this beat cannot be built as drawn without "
-        "either overturning the one-subject rule for it, or finding a second way to say 'peer' that "
-        "is not size — a matched stride phase and a shared eye-line are the candidates, and both "
-        "are cheaper than a second orange.",
+        "NO LONGER BLOCKED, AND THE ORIGINAL QUESTION WAS THE WRONG ONE (adjudicated 2026-08-18, "
+        "backlog 5cd2ecf792ae). It used to ask whether the one-saturated-subject rule should be "
+        "overturned so the peer need not be drawn SMALLER and read as a CHILD. But size is "
+        "second-order: a second creature sharing the frame at all is `gen.py`'s WITHDRAWN `peer` "
+        "beat, ruled out on CAUSE — a session is never co-present with its peers — and gen.py "
+        "records that reversing it is the spec owner's call and makes it a build failure. The exit "
+        "that needs no ruling is to NOT DRAW THE PEER: the answer arrives from off-frame, which is "
+        "THE LETTER's own hard constraint used as the point rather than as a limitation, and it is "
+        "cheaper than either exit that had to buy a second body first. See MAIL_HI_Y above for the "
+        "full adjudication and its citations.",
         frames=(
-            Frame("two sessions, striding", 1, (S_BIG, M_PEER)),
+            Frame("one session, striding", 1, (W_BIG,)),
             Frame(
-                "A sends → · rides high",
+                "it sends → · rides high",
                 1,
-                (S_RIGHT, M_PEER),
-                front=mail(5, 102, MAIL_HI_Y, True, tail=1),
+                (W_RIGHT,),
+                front=mail(5, 120, MAIL_HI_Y, True, tail=1),
             ),
             Frame(
                 "BOTH in the air · crossing",
                 1,
-                (S_RIGHT, M_PEER),
-                front=mail(5, 112, MAIL_HI_Y, True) + mail(5, 100, MAIL_LO_Y, False),
+                (W_RIGHT,),
+                front=mail(5, 145, MAIL_HI_Y, True) + mail(5, 133, MAIL_LO_Y, False),
             ),
             Frame(
-                "each has the other's",
+                "answer lands · own gone",
                 1,
-                (S_RIGHT, M_PEER),
-                front=mail(5, 116, MAIL_HI_Y, True, tail=0)
-                + mail(5, 96, MAIL_LO_Y, False, tail=0),
+                (W_RIGHT,),
+                front=mail(5, 170, MAIL_HI_Y, True, tail=0)
+                + mail(5, 112, MAIL_LO_Y, False, tail=0),
             ),
-            Frame("read · both stride on", 1, (S_BIG, M_PEER)),
+            Frame("read · it strides on", 1, (W_BIG,)),
         ),
     ),
 )
