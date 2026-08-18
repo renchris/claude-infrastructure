@@ -87,6 +87,126 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~03:45Z — fired peer (blocked-pool-triage): the first audit of the blocked pool, and
+  it is not an operator queue. One THIRD of it had no operator step in it at all.**
+
+  **THE TALLY — conserving, over a population that MOVED under the audit.** The brief named 89
+  `claude-infrastructure` blocked rows; two more were filed while the audit ran (`19d607dc7ce3` at
+  ~02:48Z, `7d276b84f662` at ~02:52Z), so the adjudicated population is **91**, re-derived live and
+  each row re-read immediately before its own transition:
+
+  **91 = 24 obsolete-closed + 52 still-gated + 14 mis-filed-unblocked + 1 resolved by another
+  actor mid-audit.**
+
+  That last term is not padding — it is `135e62b5ff49` (the two W-R3 panes wedged at a `git reset
+  --hard` modal), closed at 02:55Z by the lead when pane 276 stood itself down. It was in the
+  population at snapshot and was not mine to claim, so it gets its own line rather than being
+  quietly absorbed into a column.
+
+  The obsolete column splits, and the split is the honest part: **19 are genuine obsolescence** — the
+  gate the row named is provably gone — and **5 are DUPLICATE rows** whose gate is real and still
+  operator-owned, closed only after their distinct prose was folded verbatim into the canonical
+  row's `needs`. A dedup close lowers the number without resolving anything, so it is counted apart
+  rather than banked as progress. Of the 52 still-gated, **51 got a rewritten `needs`** and 1 was
+  already today's truth (filed hours earlier); every one of those rewrites carries a measurement
+  taken this session, not a restatement.
+
+  Counts, before → after: `claude-infrastructure` blocked **90 → 54**; whole-ledger blocked
+  **153 → 117**; the `list --open` view **428 → 406**. The residual 54 is exactly the 52 still-gated
+  rows plus 2 filed after the audit's snapshot (`844de43ebe72`, `ec2614142185`) — nothing of the
+  adjudicated population is unaccounted for. Two rows were also filed BY this audit as agent work
+  (`daa7a7800caf`, `941e57ba8d5a`), so the open column is not purely a decrease.
+
+  Of the 14 unblocked, 12 are sitting `open` for the wave, 1 was claimed by the drain chain within
+  minutes, and 1 (`7d276b84f662`) was auto-closed by the very generator described below — all three
+  are correct downstream outcomes of returning work to the pipeline, not failures of the unblock.
+
+  **WHAT THE POOL TURNED OUT TO BE — the headline is that `blocked` is not where operator work
+  lives, it is where MACHINES PUT THINGS THEY COULD NOT DECIDE.** `blocked` is defined as
+  operator-gated and `cc-dispatch` excludes it from the wave by construction, so anything filed
+  there leaves the pipeline permanently. Two automated producers file into it, and between them they
+  account for **11 of the 14 mis-filed rows**:
+
+  * **`cc-backlog reap` blocks every `venue=cloud` claim, because the worktree occupancy oracle
+    structurally cannot see off-box work.** `bin/cc-backlog:4869` writes *"the worktree occupancy
+    oracle could not be RESOLVED past the 21600s ceiling — worker runs off-box (venue cloud)"* and
+    tells a human to *"establish by hand whether the worker is alive, then `cc-backlog unblock`"*.
+    The box already ships the instrument that answers exactly that, from the repo side, with no
+    credential: `cc-cloud show`. All 5 such rows resolved without an operator — **1 was already
+    `LANDED`** (`e2af8839be87`; content byte-identical on `origin/main` as `5ef11a988`, closed), 2
+    `STALLED`, 2 `NOT-STARTED`. This is a permanent generator: the oracle can never cover the cloud
+    venue, so every cloud dispatch that outlives the ceiling becomes an operator-gated row. Filed as
+    `daa7a7800caf`.
+  * **`scripts/desk-land.sh` files every failed land through `cc-backlog needs`, the BORN-BLOCKED
+    verb** — for work this repo's own `.claude/CLAUDE.md` explicitly authorises an agent to do
+    (standing-land). 6 re-land rows; 2 of them had already landed and were closed by content
+    (`f317e88d17be` — `git cherry` empty; `05c0add0db10` — branch ref deleted but its content
+    present via pin `f704bf8aa`), 4 carry real unlanded commits and were returned to the wave.
+    **`refs/land/failed/*` now holds 943 pins**, not the "41 for two branches alone" that
+    `981a403a05fa` records.
+
+  **THE CHURN IS MEASURABLE AND IT IS THE RATCHET.** Across the 90 rows there are **127 `block`
+  events** — 18 rows were re-blocked more than once. `b262e41b26fb` alone took **20 `block` events
+  and 3 falsifier auto-closes in 20 hours**: filed, auto-retracted when the content verified as
+  landed, re-filed by the next failed land, auto-retracted again. It is a live retry loop wearing a
+  work item's clothes, which is why trap 5 (`wasDone`) mattered — reading that history is what
+  stopped it being closed as obsolete. Observed directly during this audit: `7d276b84f662` was
+  unblocked at ~03:05Z and the generator had re-blocked it twice and auto-closed it again by
+  03:10:05Z.
+
+  **AND THE `needs`-BRAKE MERGES DISTINCT WORK.** The brake folds a step whose prose matches a live
+  row *"modulo digits"* — but two re-land steps differ ONLY in digits. `7d276b84f662`'s title names
+  `claude/fire-20260812T071538Z-80941-1` (1 unlanded commit `199b488f9`) while its `needs` AND `run`
+  name `claude/fire-20260814T055432Z-40416-1`, a different branch already covered by
+  `aefa6a955872`. Acting on that row re-lands the wrong branch and leaves the titled one unhandled.
+  Filed as `941e57ba8d5a`.
+
+  **STALE PREMISES WERE THE NORM, NOT THE EXCEPTION — and the shape of the staleness is diagnostic:
+  62 of the 90 rows had `needs` BYTE-IDENTICAL to `title`**, i.e. no operator step was ever
+  separately articulated; the `needs` verb copies one into the other. Nine rows named a gate that
+  had already been satisfied, in every case by something landing without anyone closing the row:
+  migration 0007's hook is registered `SessionStart asyncRewake=true` in all 5 config dirs; 0005's
+  is on `Stop` in all 5; the postland plist is byte-identical to trunk with the loaded job at
+  `nice=10, runs=469, exit 0` and `launchd-parity-lint` reporting `ok` — the very tripwire that row
+  cited as proof it was unfixed; `devserver-gc` is armed via `ProgramArguments` (`runs=93`) and its
+  log recorded an armed run at 02:40Z the same morning the audit ran; the ff-gate that makes
+  `5436396f405c`'s "the fix is that sessions work in their own worktree" a mechanical DENY landed
+  the previous day as `17ecae6c6`. `bcbc4e714ed5` ("ms365 MCP is dead in every config dir … only an
+  interactive browser OAuth can fix it") was refuted by calling it: `verify-login` returns
+  `success:true` for `ren.chris@outlook.com` — a personal/consumers account, the exact tenant the row
+  said it had to be re-logged-in under.
+
+  **AGE SAYS THE DRIVER IS INFLOW, NOT ROT.** Median age since first filing is **6 days**, p90 15,
+  max 28. This is not a pile of ancient decisions; it is a pool being refilled faster than anything
+  drains it, which is the same conclusion the 02:35Z entry above reached from the ledger flow.
+
+  **TRAP 1 EARNED ITS PLACE TWICE.** `1f323187c1e9` prescribed running the close-attrib activation;
+  that activation has a `.done` marker from 2026-07-30 and `~/.zshrc:498,502` invoke
+  `cc-close-attrib` — so the remedy is DONE, while the symptom is untouched (of 165 crash records
+  since 2026-08-01: `cause=abrupt-unknown` 91, `no-transcript` 44, and `stderr_log` non-zero in only
+  3 of 165). Remedy spent, symptom live, no operator step left ⇒ unblocked as agent work, not closed.
+  Conversely `782607797fc5`'s symptom is live TODAY (kills by signal 9/15 "sender unidentified" at
+  02:23Z, and 84 of the last 126 stamps `cut`) while one of its own evidence clauses — "ZERO green" —
+  is false: greens run ~1.6/day. Rewritten with the correction, still gated on `sudo`.
+
+  **WHAT IS ACTUALLY LEFT FOR THE OPERATOR, and the one answer with leverage over the rest.** The 53
+  still-gated rows are dominated by **C10 activations** — settings.json / `~/.zshrc` / launchd edits
+  an agent may not self-apply. `b09f54e9e080` is the ratification that would convert a whole class of
+  them at a one-word diff (`c10` → `mechanical`), so it is the highest-leverage single answer in the
+  queue. Three separate rows (`b448ceafa0ca`, `180d38b29912`'s D-A, `48e14163e78a`) reduce to one
+  yes/no on flipping `accounts[0].launcher` to `claude1`. `b22e519e06cb` is a roster row holding no
+  work of its own; its four DoD clauses now each point at a member row. And `5511ea906e2e` turned out
+  not to be a deploy problem at all: `deploy-live` is correctly waiting because the newest green tree
+  is an ANCESTOR of live HEAD, so no green can ever be a descendant — it is gated on the postland
+  signal-kill (`782607797fc5`), and the only local lever is authorising `deploy-live.sh --force`.
+
+  **METHOD NOTE.** Verdicts were taken against live measurement, never against a row's own claim, and
+  every content question was answered with `git cherry` / `git ls-tree` / blob-hash comparison rather
+  than a commit count — `af01d0a5` is NOT an ancestor of `origin/main` even though its content is
+  there, byte-identical, as `5ef11a988`. `git cherry origin/main origin/main` was run as a control on
+  every sweep, and returned empty while real branches returned 1–4 `+` lines, so the oracle
+  discriminates. No destructive git ran at any point.
+
 - **2026-08-18 ~03:05Z — lead (pane 102): the duplicate resolved ITSELF, a reported BLOCKER does
   not exist, and some "stranded" branches are evidence nobody may land.** Three facts from 276's
   stand-down ping, each verified here before being written — the middle one is the load-bearing one.
