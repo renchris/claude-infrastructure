@@ -949,16 +949,24 @@ verify_preserved() { # <branch> <head-sha> <unlanded-set-before> → 0 iff nothi
 
 json_esc() { printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <verified> <owner-proof> <ignored>
+log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <verified> <owner-proof> <ignored> [preserved-at]
   # `owner_proof` records WHICH oracle authorised the disposal (a done backlog item, a dead or
   # archived team, or an explicit warrant). Without it the ledger cannot answer, months later, why
   # this directory went. `destroyed_ignored` is the blast radius: the gitignored paths that went
   # with it, which git records NOWHERE and no gate can see — the only trace they ever existed.
+  #
+  # `preserved-at` is OPTIONAL and defaults to `refs/heads/<branch>`, which is byte-identical to
+  # what every existing caller already produced. It exists because that default is only true for
+  # the ABANDONED class: those branches are UNLANDED, so `--prune-branches` skips them
+  # (`landed "$branch" || continue`) and the ref is genuinely the recovery pointer. A LANDED-DIRT
+  # disposal is the opposite case — its branch is landed and worktree-less, so the very same run
+  # may legitimately `branch -d` it, and a record naming that ref would point at nothing. Recording
+  # the pointer that CANNOT go stale is the whole purpose of the ledger, so the caller supplies it.
   local dir; dir="$(dirname "$DISPOSAL_LOG")"
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"refs/heads/%s","verified":"%s","destroyed_ignored":"%s"}\n' \
+  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"%s","verified":"%s","destroyed_ignored":"%s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$1")" "$(json_esc "$2")" "$3" "$4" \
-    "$(json_esc "$5")" "$(json_esc "$6")" "$(json_esc "${9:-}")" "$7" "$(json_esc "$2")" "$8" \
+    "$(json_esc "$5")" "$(json_esc "$6")" "$(json_esc "${9:-}")" "$7" "$(json_esc "${11:-refs/heads/$2}")" "$8" \
     "$(json_esc "${10:-}")" \
     >> "$DISPOSAL_LOG" 2>/dev/null || true
 }
@@ -1168,12 +1176,31 @@ process_record() {
     # Read the blast radius BEFORE removal — afterwards the directory is gone and the answer is
     # unrecoverable, the same reason dispose_record() reads it first.
     _dirt_ign="$(ignored_inventory "$path")"
+    # The recovery pointer, read BEFORE removal for the same reason the blast radius is: this is a
+    # DIRTY tree, so `clear_redundant_dirt` is about to `git reset` it and the removal then takes
+    # the directory. Afterwards there is no worktree left to ask.
+    _dirt_head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
     if ! clear_redundant_dirt "$path"; then
       echo "KEEP    $path [$branch] — could not clear proven-redundant dirt ($DIRT_BLOCKER)"
       N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
       return 0
     fi
     if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+      # THE DISPOSAL RECORD, which this path shipped without. `--dispose-abandoned` has always
+      # written one and its own comment says why: that record is what later distinguishes
+      # abandoned-BY-DECISION from dropped-BY-ACCIDENT, and git alone cannot. The stakes are lower
+      # here — branch preserved AND content on trunk, so recovery is one `git worktree add` — but
+      # the ASYMMETRY is the defect, not the stakes: the gitignored bytes this removal destroys are
+      # recorded NOWHERE else, and the echo below scrolls past while the ledger is what survives.
+      #
+      # Two fields are deliberately not the abandoned path's. `unlanded_patches` is 0 with no shas
+      # because being LANDED is what defines this class (`landed "$branch"` held above), not an
+      # unmeasured default. And `preserved_at` names the TRUNK, not the branch: `--prune-branches`
+      # may delete this now-landed, now-worktree-less ref later in this very run, so the branch is
+      # the one pointer that can be gone by the time anyone reads the record.
+      log_disposal "$path" "$branch" "$_dirt_head" 0 "" "" "$((age / 60))" \
+        "landed-on-$TRUNK (dirt re-proven byte-identical at act time)" \
+        "dirt redundant with $TRUNK · idle · landed" "$_dirt_ign" "$TRUNK"
       echo "dispose-dirt  $path [$branch] — dirt redundant with $TRUNK (re-proven at act time) · idle · landed"
       [ -n "$_dirt_ign" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $_dirt_ign"
       N_DIRT_REMOVED=$((N_DIRT_REMOVED + 1))

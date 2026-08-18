@@ -1305,6 +1305,67 @@ trunk_add() {
   has_wt "$p"
 }
 
+# ── LANDED-DIRT leaves a DISPOSAL RECORD, like every other path that destroys a directory ────────
+# The asymmetry is the defect, not the stakes. `--dispose-abandoned` has always written one and its
+# own comment says why — that record is what later distinguishes abandoned-BY-DECISION from
+# dropped-BY-ACCIDENT, which git alone cannot. This path reaped 32 directories on 2026-08-11 and
+# appended nothing, so the only durable trace of the gitignored bytes it destroyed was an echo that
+# scrolled past. (backlog 34f41cc9118b)
+
+@test "LANDED-DIRT: the disposal is RECORDED, carrying the gitignored blast radius it destroys" {
+  # The ignore rule goes in the repo-level exclude, NOT a committed .gitignore. Two reasons, both
+  # measured while writing this: trunk_add() advances `refs/remotes/origin/main` ONLY and leaves
+  # $R's HEAD where it was, so a .gitignore added through it never reaches the branch dirt_wt cuts;
+  # and committing one ON the branch would take the worktree out of the population under test,
+  # which requires the branch to be LANDED. info/exclude lives in the common git dir and so applies
+  # to the linked worktree while changing no ref at all.
+  trunk_add x.md hello
+  p="$(dirt_wt wt-rec feat/rec x.md hello)"
+  echo 'secrets.env' >> "$R/.git/info/exclude"
+  echo 'API_KEY=paid-asset' > "$p/secrets.env"
+  # Positive control on the fixture: the file must be INVISIBLE to the dirty gate, which is the
+  # whole premise of the blast radius. If this reads non-empty the ignore never took and every
+  # assertion below would be measuring the wrong thing.
+  [ -z "$(git -C "$p" status --porcelain -- secrets.env)" ]
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "dispose-dirt  $p"
+  run has_wt "$p"
+  [ "$status" -ne 0 ]
+  # Count, never `grep -q` on a pipe — under pipefail -q SIGPIPEs the producer and the filter fails
+  # on the very input it matched (memory: grep-q-under-pipefail-inverts-the-verdict).
+  n="$(grep -cF '"destroyed_ignored":"secrets.env"' "$DLOG" || true)"
+  [ "${n:-0}" -eq 1 ]
+  # LANDED is what DEFINES this class, so 0 unlanded patches is a measured fact, not a default.
+  n="$(grep -cF '"unlanded_patches":0' "$DLOG" || true)"
+  [ "${n:-0}" -eq 1 ]
+  # The recovery pointer names the TRUNK, because --prune-branches may delete this now-landed,
+  # now-worktree-less branch later in the very same run.
+  n="$(grep -cF '"preserved_at":"origin/main"' "$DLOG" || true)"
+  [ "${n:-0}" -eq 1 ]
+}
+
+@test "LANDED-DIRT: --dry-run records NOTHING — a ledger row for a removal that never happened is worse than none" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-dryrec feat/dryrec x.md hello)"
+  run_gc --dispose-landed-dirt --dry-run
+  [ "$status" -eq 0 ]
+  has_wt "$p"
+  [ ! -s "$DLOG" ]
+}
+
+@test "CONTROL: the ABANDONED path's record is byte-unchanged — preserved_at still names its branch" {
+  # The optional 11th parameter must default to exactly what every existing caller produced, or
+  # this fix silently rewrites the field the other class depends on. That branch is UNLANDED, so
+  # --prune-branches skips it and the ref genuinely IS the recovery pointer there.
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "abandoned"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  n="$(grep -cF '"preserved_at":"refs/heads/feat/board"' "$DLOG" || true)"
+  [ "${n:-0}" -eq 1 ]
+}
+
 # ── The INDEX is the second copy, and the working file's hash cannot see it ──────────────────────
 # The discriminator set above ranges entirely over the WORKING FILE, so it is uniformly blind to the
 # one place a "staged-but-never-committed" byte can hide from `hash-object`: an index entry the
