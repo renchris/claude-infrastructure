@@ -85,6 +85,8 @@ jq -nc \
   git add "plans/$BASENAME" 2>/dev/null || exit 0
   git commit -m "auto: $BASENAME ($LINES lines, $TOOL)" \
     --author="Claude Hook <claude-hook@localhost>" 2>/dev/null || true
-) &
+  # >/dev/null: a backgrounded subshell INHERITS the hook stdout pipe, and the harness does not
+  # see EOF until every writer closes it — a wedge with no live hook child (backlog 50627335fe9b).
+) >/dev/null &
 
 exit 0

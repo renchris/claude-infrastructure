@@ -288,10 +288,28 @@ fi
 # Play sound async (background with disown so script can exit immediately)
 # afplay's stderr is the OTHER append at this path — a redirect the eye skips, and it CREATES the
 # file just as readily as the log line above, so it needs the resolved sink too.
+# 🚨 STDOUT IS REDIRECTED TOO, AND THAT IS THE WHOLE FIX FOR A 54-MINUTE WEDGE.
+# This ran `afplay … 2>>"$NTY_LOG" &` — stderr resolved, stdout INHERITED. A hook's stdout is a
+# PIPE the harness reads, and it does not see EOF until every descriptor on the write end is
+# closed. Backgrounding does not close one and `disown` does not either: it removes the job from
+# the shell's table and changes nothing about the file descriptor. So notify.sh could exit
+# instantly, its own frame complete, while a detached afplay grandchild held the pipe open — and
+# the harness blocked on a writer that was no longer a hook and no longer anyone's child.
+#
+# That is the measured shape of backlog 50627335fe9b: pane 113 wedged 54 minutes with ZERO hook
+# children and an advancing hook timer, recovered only by a human Escape. It read as "hook #12 of
+# 13 is slow", and it is not a slow hook at all — every Stop hook here carries a 5-10s timeout
+# (~75s for the whole chain) against a 54-minute stall, 43x, so no timeout was ever the thing that
+# failed. A timeout cannot reach a descriptor. The pipe-holder was a grandchild that is not a hook,
+# which is exactly why "no live hook child" read true while the harness sat blocked.
+#
+# `>/dev/null` on the sound player costs nothing — afplay's stdout carries no information anyone
+# reads — and it is what actually ends the wedge. scripts/bg-fd-inherit-lint.sh keeps every other
+# hook from re-introducing the same shape.
 if [[ "$SOUND" == /* ]]; then
-    afplay "${SOUND}" 2>> "$NTY_LOG" &
+    afplay "${SOUND}" >/dev/null 2>> "$NTY_LOG" &
 else
-    afplay "${SOUNDS_DIR}/${SOUND}" 2>> "$NTY_LOG" &
+    afplay "${SOUNDS_DIR}/${SOUND}" >/dev/null 2>> "$NTY_LOG" &
 fi
 disown 2>/dev/null || true
 

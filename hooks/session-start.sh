@@ -43,7 +43,11 @@ TODAY=$(date +%Y-%m-%d)
 if [ "$MCP_MODE" != "--refresh-mcp-cache" ] && [ -x "$PRUNE_SCRIPT" ]; then
   if [ ! -f "$LAST_PRUNE_FILE" ] || [ "$(cat "$LAST_PRUNE_FILE" 2>/dev/null)" != "$TODAY" ]; then
     echo "$TODAY" > "$LAST_PRUNE_FILE"
-    "$PRUNE_SCRIPT" &  # Background, non-blocking
+    # >/dev/null: a backgrounded child INHERITS this hook's stdout pipe, and the harness does not
+    # see EOF until every writer closes it — `&` does not close a descriptor and neither does
+    # `disown`. An unredirected background prune can therefore hold the SessionStart chain open
+    # long after the hook itself has exited (backlog 50627335fe9b).
+    "$PRUNE_SCRIPT" >/dev/null &  # Background, non-blocking
   fi
 fi
 

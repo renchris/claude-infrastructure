@@ -65,7 +65,9 @@ fi
     find "$_td" -maxdepth 1 \( -name 'handoff-selfclose-*.log' -o -name 'handoff-recycle-*' \
          -o -name 'handoff-prompt-nb-*' \) -mtime +2 -delete 2>/dev/null || true
   done
-) &
+  # >/dev/null: a backgrounded subshell INHERITS the hook stdout pipe, and the harness does not
+  # see EOF until every writer closes it — a wedge with no live hook child (backlog 50627335fe9b).
+) >/dev/null &
 disown 2>/dev/null || true
 
 # Secondary GC trigger: clean stale Claude versions on session end (background, non-blocking)
@@ -192,7 +194,9 @@ disown 2>/dev/null || true
   # open the double-release hole this change exists to close: release here, a peer acquires in the
   # microseconds before this subshell exits, then our trap fires and deletes THEIR lock, admitting a
   # third holder. One releaser, and it verifies ownership before deleting (see the trap).
-) &
+  # >/dev/null: a backgrounded subshell INHERITS the hook stdout pipe, and the harness does not
+  # see EOF until every writer closes it — a wedge with no live hook child (backlog 50627335fe9b).
+) >/dev/null &
 disown 2>/dev/null || true
 
 exit 0

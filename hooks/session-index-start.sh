@@ -75,6 +75,8 @@ fi
         ""
 
     session_index_log "Stub indexed for $SESSION_ID ($PROJECT_NAME)"
-) &
+  # >/dev/null: a backgrounded subshell INHERITS the hook stdout pipe, and the harness does not
+  # see EOF until every writer closes it — a wedge with no live hook child (backlog 50627335fe9b).
+) >/dev/null &
 
 exit 0
