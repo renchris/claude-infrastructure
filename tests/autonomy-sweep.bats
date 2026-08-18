@@ -1164,6 +1164,64 @@ SH
   [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="local-drain-chain-dead")]|length')" = "0" ]
 }
 
+# ── §6's FOURTH invariant: the weekly adds-vs-closes report ──────────────────────────────────────
+# Same caller-vs-string distinction as the two cases above, and the same generator risk: this arm
+# also runs every 300 s tick, so a filing that did not key on the CONVICTION would mint rows into
+# the store it measures. Two extra properties belong to this arm alone — the VERDICT is journalled
+# rather than inferred from an rc (the subject exits 0 on a draining week AND on all four of its
+# abstentions), and the figures ride along, which is what makes the sweep's own row the §6 report.
+#
+# flow_iso <epoch> — BSD-first with a validated GNU fallback; see tests/backlog-flow-assert.bats.
+flow_iso() {
+  local v; v="$(date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || v=""
+  case "$v" in ????-??-??T??:??:??Z) printf '%s' "$v"; return 0 ;; esac
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ
+}
+# flow_rec <id> <ago_s> <event> — one record straight into the store, `ago_s` before now. The past
+# has to be hand-written: cc-backlog has no clock seam on its write path (CC_BACKLOG_NOW is read at
+# :4753 only), and a store with no history older than the window makes the subject abstain.
+flow_rec() {
+  local now; now="$(date +%s)"
+  jq -nc --arg i "$1" --arg t "$(flow_iso $(( now - $2 )))" --arg e "$3" \
+    '{id:$i, ts:$t, event:$e, project:"claude-infrastructure", title:("t-"+$i), source:"fx"}' \
+    >> "$CC_BACKLOG_FILE"
+}
+
+@test "§6 · the flow report RUNS from the sweep and journals the week's figures" {
+  export CC_PREMISE_PASS_EVERY_S=99999
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  export CC_DRAIN_BRIEF_GLOB="$BATS_TEST_TMPDIR/no-briefs/fire-drain-recycle*.txt"
+  flow_rec anchor $(( 20 * 86400 )) add          # history depth, so the 7 d window fits
+  flow_rec f1 3600 add; flow_rec f2 3600 add; flow_rec f3 3600 add
+  flow_rec f1 1800 "done"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"backlog_flow_rc":"0"' "$CC_IDL"
+  grep -q '"backlog_flow_verdict":"net-positive"' "$CC_IDL"
+  # the FIGURES, not just the verdict — this row IS §6's report, and a verdict with no numbers
+  # sends the reader back to deriving them by hand, which is the state the invariant was in.
+  grep -q '"backlog_flow_closed":1' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --open --json
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-inflow-net-positive")]|length')" = "1" ]
+}
+
+@test "§6 CONTROL · a draining week journals the verdict and files NOTHING" {
+  export CC_PREMISE_PASS_EVERY_S=99999
+  export CC_PREMISE_PASS_STAMP="$BATS_TEST_TMPDIR/premise-pass.stamp"; : > "$CC_PREMISE_PASS_STAMP"
+  export CC_DRAIN_BRIEF_GLOB="$BATS_TEST_TMPDIR/no-briefs/fire-drain-recycle*.txt"
+  flow_rec anchor $(( 20 * 86400 )) add
+  flow_rec f1 3600 add
+  local i; for i in 1 2 3 4 5 6 7 8 9 10; do flow_rec "c$i" 1800 "done"; done
+  # margin of 9 on purpose: this sweep's OWN arms file rows (the dead drain chain above, for one),
+  # and those filings are real inflow the subject must count. A control that only just cleared
+  # would flip on the day a sibling arm learned to file.
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"backlog_flow_verdict":"draining"' "$CC_IDL"
+  run "$CC_BACKLOG_BIN" list --open --json
+  [ "$(printf '%s' "$output" | jq -r '[.[]|select(.condition=="backlog-inflow-net-positive")]|length')" = "0" ]
+}
+
 # ── THE BOUND ITSELF (post-land HUNG, backlog 6b42d1f49770) ──────────────────────────────────────
 # A wrapper that is present in the file and never fires reads exactly like no wrapper at all — this
 # subsystem's own recurring defect, and the reason the W1 cases above exist. So the bound gets the

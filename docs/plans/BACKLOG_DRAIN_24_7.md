@@ -87,6 +87,91 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — cloud lane: §6's FOURTH invariant is landed, and it was the LAST one still written
+  in prose.** `scripts/backlog-flow-assert.sh` + `tests/backlog-flow-assert.bats` (21 cases) +
+  `autonomy-sweep.sh` § 2b-vi + two caller cases in `tests/autonomy-sweep.bats`. §6 now has an
+  enforcing store for every invariant it states.
+
+  🚨 **THE INVARIANT THAT DECIDES WHAT THE PROGRAM DOES NEXT WAS THE ONE NOTHING COMPUTED.** §6's
+  rule — *net-positive week ⇒ the INFLOW list (C1-C4) gets the next fix, not more drain horsepower*
+  — routes the whole program's effort, and no script, test or plist on trunk computed adds against
+  closes over any window. Every figure this plan quotes for it (§1.3's *1,129 filed / 503 closed*,
+  the 21-day *1,530 adds vs 1,117 dones*, and every `filed N / closed M` line in this very log) was
+  hand-derived by whichever session was looking. That is a memory, not a measurement, and §1.1 is
+  the record of what this store's memory is worth. Exactly the state §6's THIRD invariant was in
+  before `drain-chain-assert.sh` landed two days ago — so this is the same shape twice in one plan,
+  and the second one was found only because the first one's fix left a sibling-shaped hole.
+
+  🚨 **THE FOLD STRUCTURALLY CANNOT ANSWER THIS QUESTION, AND READING IT ANYWAY WOULD HAVE LOOKED
+  RIGHT.** Every other backlog reader here asks a STOCK question (how many rows are open now) and
+  answers from cc-backlog's fold. This is a FLOW question, and the fold collapses a row's whole
+  event history to one status and one clock — so 1,500 closings across three weeks read as whatever
+  the last record says today. The subject therefore reads the RECORD TRAIL. That is not a second
+  state model of the same question (the rule is that two readers must not disagree about the SAME
+  question): it *differs on purpose* from `bin/cc-value`'s `tasks_closed`, which counts a
+  closed→reopened→closed row as ONE finished task and is right for its own question, where this
+  counts TWO closings because two closings is what the drain did. The plan's own figures are record
+  counts, which is why they match this and not that.
+
+  🚨 **AN ALARM'S ABSTENTIONS ARE WHERE ITS CORRECTNESS LIVES, AND ONE OF THE FOUR IS STRUCTURAL.**
+  A false NET-POSITIVE files a standing, condition-keyed row into the very store this program exists
+  to drain. The instance that would actually have fired: **a store younger than the window is
+  net-positive BY CONSTRUCTION** — everything in it is new and nothing has had time to close — so a
+  fresh box, a trimmed store or any test fixture convicts on day one and holds the row open forever.
+  That is `backlog-ratchet.sh`'s own cap-whose-population-is-empty defect pointed the other way, and
+  it is why the verdict abstains (`short-history`) while still REPORTING its figures. The other
+  three: no store / no jq (`skipped`), a store that parses to nothing (`read-failed`), and
+  **`unparsed-could-flip`** — records with an unreadable `ts` are excluded from both sides, and
+  excluded evidence is not absent evidence, so when that pile is larger than the margin the verdict
+  rests on it could reverse the sign and the honest answer is that we do not know (recycle #20's
+  rule: an absence test inherits every hole in its input as a positive finding). `--assert` exits 0
+  on all four: its rc-1 direction is the CONVICTION, so "I could not tell" must read to every
+  consumer exactly like a healthy week.
+
+  🚨 **THE FILED ROW'S TITLE CARRIES NO FIGURES, AND THAT IS THE DIFFERENCE BETWEEN A DETECTOR AND A
+  GENERATOR.** The caller is autonomy-sweep at 300 s, and cc-backlog's update arm rewrites a known
+  row's title whenever it CHANGED — so a title carrying live counts appends an `update` record on
+  every tick whose numbers moved, **up to 288 a day, into the store this row exists to shrink, from
+  the detector whose entire subject is filing rate.** The title states the window, the verdict and
+  the prescription (all stable while the condition holds); the figures live in `--json` and in the
+  sweep's IDL row. Pinned by a case that re-files after the figures move and asserts the store grew
+  by exactly the records the test itself wrote. **Worth carrying to the next reader:
+  `drain-chain-assert.sh` has this shape too** — its dead-chain title interpolates the live row
+  count — so a chain dead for a week can mint `update` records at the rate its pile changes. Named,
+  not driven: it is a different file's diff and this one is already load-bearing.
+
+  **Verification.** 21/21 new + 2/2 caller cases, and **seven mutations red-proved one case each**,
+  with the subject restored byte-identical after every one: short-history guard removed · unparsed
+  guard removed · reopens folded into `added` · closings counted as stock rather than flow · figures
+  put back in the title · the `net > 0` boundary loosened to `>= 0` · the project filter applied to
+  adds only. That last one is a real trap rather than a hypothetical: **a transition record carries
+  no `project` field** (cmd_transition writes only the verb's own operands), so a filter that scoped
+  adds while counting every project's closings yields a net that is about no project at all. The
+  filter therefore maps ids to projects through the `add` records, and a transition whose row was
+  never added is counted `unattributed` rather than silently dropped.
+
+  **NOT MINE, attributed rather than driven.** `tests/autonomy-sweep.bats` fails 19 cases in this
+  container and the failure set is **byte-identical on pristine `origin/main`** — they are
+  macOS-shaped (`date -v`, BSD flags) and predate this diff. `scripts/unattended-path-lint.sh` is
+  rc 1 with **57 findings on pristine trunk, and the identical 57 with this diff applied** — this
+  change adds none. `tests/backlog-ratchet.bats` case 4 is likewise red on pristine.
+
+  **Locus — what a cloud container could and could not do.** No `~/.claude/autonomy/backlog.jsonl`,
+  no launchd, no panes, no live layer: R1, R2, A1/A2/A4, B1-B5 and every §5 probe were untouchable
+  again, exactly as the 2026-08-16 cloud entry below records. What IS reachable from here is repo-
+  local machinery with a real test harness, which is what §6's invariants are. One environment note
+  worth keeping: `shellcheck` is absent from these containers and `bats-shellcheck-lint.sh` says so
+  loudly (`⛔ not installed — NOT a clean verdict`) rather than exiting 0, so the abstention was
+  converted into an answer with `pip3 install shellcheck-py` — the subject is clean under 0.11.0.
+  The npm `shellcheck` package cannot be used here: its postinstall downloads a binary and the agent
+  proxy answers **403**.
+
+  ⚠️ **This diff ADDS a file, so it is NOT live at lag 0.** `~/.claude/scripts/` is a per-file
+  symlink dir populated by `install.sh:558`'s top-level `scripts/*.sh` glob: an EDIT rides its
+  existing link and merely runs older bytes, but an ADD has no link at all and the sweep's
+  `[ -x "$_flow" ]` guard is a *silent* skip — `backlog_flow_rc` reads `skipped` and nothing says
+  why. `bash scripts/deploy-live.sh` on the box is what makes this check exist.
+
 - **2026-08-18 — recycle #20: master-session-lifecycle 12 → 8 open / 1 blocked. filed 0 / closed 4.**
   Two lands, content-verified: `555e3b270` then `45a56dcb5`. Rows closed: `4a11a0ac850a` (the
   succession linking primitive + its detector + its caller) · `2dc6906b6e0b` (§14's *or-pressured*
@@ -1503,3 +1588,18 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
   store's next generator.
 - Weekly report: adds vs closes; net-positive week ⇒ the INFLOW list (C1-C4) gets the next
   fix, not more drain horsepower.
+  **IMPLEMENTED 2026-08-18** → `scripts/backlog-flow-assert.sh`, called from `autonomy-sweep.sh`
+  § 2b-vi and journalled as `backlog_flow_verdict` / `_added` / `_closed` / `_net` in the
+  `backlog-health` IDL row, pinned by `tests/backlog-flow-assert.bats` (21 cases) plus two caller
+  cases in `tests/autonomy-sweep.bats`. Ask it directly with `--json`; a net-positive window files
+  ONE condition-keyed row (`backlog-inflow-net-positive`) carrying `--assert` as its falsifier, so
+  the week the sign flips retires it with no human in the loop. It reads the RECORD TRAIL, not the
+  fold: this is the only FLOW question in the store and the fold erases event history by
+  construction, so a row closed twice is two closings here and one finished task to `bin/cc-value`
+  — different questions, not rival answers (the figures §1.3 quotes are record counts, which is why
+  they match). Four abstentions, and the third is the one that decides detector-vs-generator: a
+  store younger than the window is `short-history`, because a fresh store's first week is
+  net-positive BY CONSTRUCTION and convicting there files a permanent row on a healthy box on day
+  one — the cap-whose-population-is-empty trap that left `backlog-ratchet.sh` red on every run it
+  had ever made, pointed the other way. `--assert` therefore exits 0 on every abstention: its rc-1
+  direction is the conviction, so "I could not tell" must read exactly like a healthy week.
