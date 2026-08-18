@@ -87,6 +87,55 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~01:47Z — recycle #18: `master-session-lifecycle` 20 open → `16 open / 1 blocked
+  (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 0 / closed 4. Four commits, ONE land.**
+  Two clusters, both entirely on the lead. **The spawn gate refused all three teammate briefs**
+  ("Background subagents cannot write code — use TeamCreate/team_name"), where #17 lost 1 of 4 and
+  #16 lost 2 of 5. `TeamCreate` does not exist on 2.1.220 and the Agent schema has no `team_name`,
+  so the instruction is unreachable; per the standing brief the rows were taken inline rather than
+  re-worded. A successor should budget for the gate being FULLY closed, not partly.
+  - **Kitty keepalive (`71c2c19d6c63` · `a94c9e5722f7` · `d591c8d990b5`, `d3af4367` + `d09cec4c`).**
+    The idle-pane arm was iTerm2-only, so on a kitty fleet it was inert. **Cause correction: the row
+    says "bin/it2 already diverts" and there is no `bin/it2`** — the divert is `bin/it2-wrapper`
+    (split/close for teammate panes, not a send path) and the kitty adapter is a third file,
+    `bin/it2-kitty`. None of it was reachable anyway: `IT2` defaults to the REAL python it2 binary,
+    so **the send path resolved PAST every divert** — "0 kitty references" understated it. The arm
+    now drives `bin/it2-kitty` and matches markers on window **cwd**, not scrollback (a long-running
+    pane scrolls its worktree name off and silently stops matching). `d591c8d990b5`'s third skip
+    predicate — never nudge a pane awaiting ITS OWN armed watcher — landed with it, and the three
+    predicates are declared ONCE and rendered into both the AppleScript `contains` clauses and the
+    kitty grep, per `hooks/lib/pane-modal.sh`'s standing warning that a copied screen predicate rots
+    independently. Docs carried a **second stale interface**: Phase 4 still prescribed capturing pane
+    ids into `/tmp/reso-keepalive-ids.txt`, an interface gone since `410f920c`.
+  - **Engine capacity gate (`eda267ff4b14`, `3296d71d`).** §12.1's last bypass: a direct call to
+    `bin/reso-resume-one` spawned against no admission check. Gated in its own body, same shape as
+    the launcher's, exit 9 = shed. **The row did not name the interaction that matters** — the
+    launcher already runs this gate and the consecutive-refusal BUDGET is shared state, so a naive
+    second gate double-spends it and releases the bound early on a box that never settled;
+    `CC_ADMIT_DONE` marks the admission that already happened. `capacity-admit-coverage` case 25 was
+    **inverted exactly as its own text instructed** ("will redden the moment that lands, which is
+    when it should be rewritten to assert the gate") — an instructed inversion, not a relaxation.
+  - 🚨 **TWO OF THIS WAVE'S OWN NEW ASSERTIONS ASSERTED NOTHING, and only the land gates said so**
+    (`d8f4340f`). (a) `A && { …; false; }` is errexit-absorbed and therefore dead;
+    `bats-assert-liveness-fix.py` **DECLINED** to repair it (split across two lines, no faithful
+    re-flow), so it was hand-rewritten and proven live in both directions with a mutant — a negative
+    assertion whose condition is already false cannot distinguish "revived" from "always passes".
+    (b) the kitty arm made `bin/it2-kitty` a subject, and it reads `CC_PANE_CMD_INTERACTIVE` —
+    injected into every pane this repo launches, so the suite would go red only when run from a
+    fired pane. Both fixed at the source the lints prescribe; the allowlist was not touched.
+  - 🚨 **A CASE CAN PASS PRE-FIX BECAUSE THERE IS NOTHING THERE TO BREAK.** The
+    no-double-evaluation case went GREEN against the pre-gate engine while its three siblings
+    correctly reddened: an engine with **no** gate also fails to evaluate one twice, so *suppressed*
+    and *never there* are the same observation from the marker's side. Caught only by running the
+    red-proof per case rather than per file. Same shape bit the absent-library case, unreachable
+    from a checkout because the engine's first search path is its own sibling `scripts/lib/`. Both
+    now carry a control that must SHED. **Ask of every green pre-fix case whether its subject even
+    exists yet.**
+  - Instrument note for the successor: `71c2c19d6c63`'s stored falsifier reads
+    `$HOME/.reso/bin/reso-keepalive`, a symlink into the SHARED CHECKOUT — so it retracts against the
+    tracked subject immediately but not through the symlink until the land converges that checkout.
+    Landed ≠ live, per the ledger's `🚀` rung; read which surface a falsifier names.
+
 - **2026-08-18 ~01:40Z — both lanes PROVEN end-to-end; the chain is 8 recycles deep; open
   568 → 427.**
   DRAIN CHAIN #12-#17 (all unattended): stranded-work 0/5 · verification-integrity 0/1 ·
