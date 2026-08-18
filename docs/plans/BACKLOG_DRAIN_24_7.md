@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~03:30Z — CLOUD session (Lane A): recycle #19's DECLINED row is unblocked — the
+  brief→fire join key now exists on every fire row.** #19 opened `4a11a0ac850a` (a brief written
+  but never fired) and put it back, correctly: *"no row in `handoffs.jsonl` records a prompt-file
+  path, so the linking primitive does not exist. Building the sweep without it would have shipped
+  a heuristic alarm over an attention budget."* It named the remedy — *"one line at the fire site;
+  naming it here so the next recycle can add it first"* — and that is what landed. Verified absent
+  on trunk before writing (`git show origin/main:scripts/handoff-fire.sh`, 9,341 lines, **0**
+  occurrences of `prompt_file`), so this is the plan's own named next step, not a re-derivation.
+
+  **IT IS NOT ONE LINE, AND THE THREE EXTRA ONES ARE THE WHOLE VALUE.** The naive version —
+  record `$PROMPT_FILE` on the fire row — ships a field that exists and answers nothing:
+
+  * **The trailer has already swapped the variable.** `:7263` copies the author's payload to a
+    `mktemp` and reassigns `PROMPT_FILE` to that copy whenever `ENGAGE_VERIFY` **or**
+    `RECYCLE_VERIFY` is set — i.e. on every non-dry fire AND every non-dry recycle. A bare
+    `PROMPT_FILE` would therefore read `…/handoff-prompt-nb-XXXXXX` on essentially every
+    production row: a path no brief is ever written to, joining zero rows, while the ledger looked
+    perfectly healthy. `PROMPT_FILE_ORIG` is the author's path; precedence is ORIG-first everywhere.
+  * **A refusal is not a non-fire.** Recording only the success row would make the detector alarm
+    loudest on briefs whose fire a gate refused — the briefs that DID try. That is an alarm over an
+    attention budget (memory `alarm-polarity-and-attention-budget`), i.e. the exact outcome #19's
+    decline existed to avoid. `emit_fire_event` carries the key too, so *written and never
+    attempted* and *written, attempted, refused* are now different rows rather than one silence.
+  * **The drain chain's own briefs live on the path the fire row never touches.** A `--recycle`
+    never reaches `emit_handoff_telemetry` (`ENGAGE_VERIFY` is hard-wired 0 for recycles) and its
+    row is written by the DETACHED `__recycle` re-exec, where both globals are unset by
+    construction. So a join covering only the peer-fire row would be blind to precisely the
+    `fire-drain-recycle<N>.txt` chain of §4.1. The author's path is now handed to the watcher as
+    argv `$9` → `RCY_PROMPT_FILE`, optional + positional-last like `$6-$8`, so a deployed-copy skew
+    mid-land degrades to an honest `null` rather than shifting anyone's arguments.
+
+  R9 throughout: unmeasured reads **`null`, never `""`** — the pre-parse gates refuse before
+  `PROMPT_FILE` exists, and `null` says *this refusal is not about any brief* instead of inventing
+  a value that joins against nothing. The jq-less fallback carries it too (a join key with a
+  jq-shaped hole silently under-reports fires), which made it the one field on that path whose
+  value we do not control: `"` and `\` are escaped by hand there, because an unescaped quote does
+  not lose one key, it makes the reader that hits it drop or die on the whole file.
+
+  **The query this buys, and its one honest caveat:**
+  `jq -rs --arg b /tmp/fire-foo.txt '[.[]|select(.prompt_file==$b)]|length' ~/.claude/logs/handoffs.jsonl`
+  — `0` ⇒ written and never fired. The caveat is the retention trim: a `0` over a window that
+  begins after the brief was written is *"not in this window"*, not *"never"*, so the detector must
+  read the trim's own record before it alarms. Stated at the field rather than left for the sweep's
+  author to rediscover.
+
+  **CORRECTION RECORDED, NOT LAUNDERED.** The new suite's header first claimed its case 9 was a
+  control "green in both directions by design". The per-case red-proof refuted that — it reddens
+  pre-change on `KeyError: 'prompt_file'`, because it reads the key before it can judge the
+  escaping. The property it actually guards is **unprovable** against the pristine tree for the
+  plainest reason available: there is no field there to corrupt. That is #18's *"ask of every green
+  pre-fix case whether its subject even exists yet"* run backwards — the case is a regression guard,
+  not evidence, and the header now says so.
+
+  **Gate.** `tests/handoff-prompt-file-join.bats`, 9 cases, **all nine red-proved individually**
+  against `git show origin/main:scripts/handoff-fire.sh`. Green after: 72 ok across the five
+  covering suites. Pre-existing reds attributed, not inherited: `moving-ref-control-lint` and
+  `unattended-path-lint` are rc=1 **on pristine trunk too** (verified in a detached trunk worktree),
+  and `fire-goal-disposition` case 27 is a BSD-`head` CONTROL that a GNU container cannot satisfy —
+  red on trunk here, correct on the target platform. shellcheck findings on `handoff-fire.sh` are
+  **byte-identical** to trunk's; hermeticity lint 0 new leaks; `gate-select.sh lint` rc=0 (the new
+  suite is reachable). No programmatic consumer reads this ledger outside its writer — the three
+  other files naming it do so only in comments — so an additive key is safe by inspection.
+
+  **Landed ≠ live.** This is a Lane A return: the branch carries the change, `~/.claude` does not
+  until the converger runs. `scripts/handoff-fire.sh` is a per-file symlink (an EDIT, not an ADD),
+  so it rides its link and merely runs the older bytes until the fast-forward — a `🚀` on the
+  budget, not a silent no-op. The **new test file is an ADD** and gets no budget: it is in no tree
+  the box can reach until convergence, per the `LIVE_ADDS`-breaches-at-1 rule.
+
 - **2026-08-18 ~03:05Z — lead (pane 102): the duplicate resolved ITSELF, a reported BLOCKER does
   not exist, and some "stranded" branches are evidence nobody may land.** Three facts from 276's
   stand-down ping, each verified here before being written — the middle one is the load-bearing one.

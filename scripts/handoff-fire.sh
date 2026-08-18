@@ -561,12 +561,38 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   if command -v jq >/dev/null 2>&1; then
-    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the trailing
-    # `under_test` key — the two recycle-* callers below are unchanged by construction, not by
-    # inspection. The key is appended LAST so no existing key's position moves.
+    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the two
+    # trailing keys `under_test` and `prompt_file` — the two recycle-* callers below are unchanged
+    # by construction, not by inspection. Both are appended LAST so no existing key's position moves.
+    #
+    # ── prompt_file: THE BRIEF THIS FIRE WAS MADE FROM (2026-08-18) ────────────────────────────
+    # A REFUSED fire has to carry it for the same reason an engaged one does, and the reason is a
+    # false-alarm one. BACKLOG_DRAIN_24_7 §2.1 (recycle #19) declined to build the "a brief was
+    # written but never fired" detector because "no row in handoffs.jsonl records a prompt-file
+    # path, so the linking primitive does not exist" — and if only the SUCCESS row carried the
+    # path, that detector would alarm on every brief whose fire was refused by a gate. Those are
+    # the briefs that DID try; an alarm loudest on them is an alarm over an attention budget
+    # (memory alarm-polarity-and-attention-budget), which is exactly what the decline avoided.
+    # `written and never attempted` and `written, attempted, refused` are different facts, and one
+    # field on both row classes is what makes them distinguishable.
+    #
+    # ORIG FIRST, and it is not a nicety — it is the whole value of the field. The prompt trailer
+    # (:7263) copies the author's payload to a `mktemp` and reassigns PROMPT_FILE to that copy on
+    # every non-dry fire AND every non-dry recycle (ENGAGE_VERIFY / RECYCLE_VERIFY), so in
+    # production a bare PROMPT_FILE reads `…/handoff-prompt-nb-XXXXXX` on essentially every row —
+    # a path no brief is ever written to and no detector can join on. PROMPT_FILE_ORIG is the
+    # author-written path the question is actually about.
+    # Inline expansion rather than a helper, deliberately: four sibling suites sed-extract these
+    # emitters individually, where a helper defined above resolves to a 127 that under `set -e`
+    # would kill the FIRE (the same trap _under_test's `2>/dev/null || echo false` guards). A
+    # parameter expansion cannot fail in any extraction context.
+    # R9 — an unmeasured field reads null: the pre-parse gates (:6245 and earlier) refuse before
+    # PROMPT_FILE exists at all, and `null` says "this refusal is not about any brief" rather than
+    # inventing an empty string that would join against nothing.
     line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
                   --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
                   --arg vd "${4:-}" --arg gt "${5:-}" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
+                  --arg pf "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" \
       '{ts:$ts, class:$cl}
        + (if $vd == "admit" then {basis:$r} else {engaged:false, refuse_reason:$r} end)
        + (if $vd == "" then {} else {verdict:$vd} end)
@@ -574,7 +600,8 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
        + {under_test:$ut}
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
-       + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+       + {detail:    (if $d  == "" then null else $d  end)}
+       + {prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
     [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   fi
   return 0
@@ -705,10 +732,21 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   command -v jq >/dev/null 2>&1 || return 0
   case "$en" in 1) en=true ;; 0) en=false ;; *) en=null ;; esac
+  # `prompt_file` — see emit_fire_event's block for the full derivation. THIS emitter is the one the
+  # drain chain actually needs: a `--recycle` is the commonest succession on this box and it never
+  # reaches emit_handoff_telemetry at all (ENGAGE_VERIFY is hard-wired 0 for recycles), so a
+  # brief→fire join that covered only the peer-fire row would be blind to exactly the
+  # `fire-drain-recycle<N>.txt` chain BACKLOG_DRAIN_24_7 §4.1 fires against itself.
+  # Three names, one question, because this function runs in TWO processes: the foreground fire has
+  # PROMPT_FILE_ORIG/PROMPT_FILE, while the detached `__recycle` re-exec has neither (its argv is
+  # `__recycle SID tty cmdfile …`, so nothing sets them) and is handed the author's path as $9 →
+  # RCY_PROMPT_FILE. Same precedence rule as everywhere else: the AUTHOR's path, never the trailer's
+  # mktemp copy.
   line=$(jq -cn --arg ts "$(_iso_now)" --arg cl "${1:-recycle}" --arg tp "${3:-}" --arg d "${4:-}" \
                 --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --arg ps "${RCY_OLD_SID:-}" \
                 --argjson en "$en" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                 --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+                --arg pf "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-${RCY_PROMPT_FILE:-}}}" \
     '{ts:$ts, class:$cl, gate:"recycle"}
      + (if $en == null then {} else {engaged:$en} end)
      + {target_pane:(if $tp == "" then null else $tp end),
@@ -716,7 +754,8 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
         goal_requested:$gr, under_test:$ut,
         firing_sid:(if $fs == "" then null else $fs end),
         account:   (if $ac == "" then null else $ac end),
-        detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+        detail:    (if $d  == "" then null else $d  end),
+        prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   return 0
 }
@@ -4773,6 +4812,13 @@ if [ "${1:-}" = "__recycle" ]; then
   RCY_OLD_SID="${6:-}"                             # pre-recycle CC sid — the ROW-CHANGE baseline
   RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
   FIRE_GOAL="${8:-}"                               # --goal condition to re-arm as MESSAGE 2
+  # The AUTHOR-written brief this recycle was fired from, for emit_recycle_event's `prompt_file`.
+  # It has to arrive as argv because this is a detached re-exec: PROMPT_FILE/PROMPT_FILE_ORIG are
+  # foreground state and are unset here, so without this slot every recycle row — the commonest
+  # fire class on the box — would read prompt_file:null and the brief→fire join would have a hole
+  # exactly where the drain chain lives. Optional + positional-last like $6-$8 above, so a watcher
+  # from a deployed-copy skew mid-land simply ignores it and degrades to the honest null.
+  RCY_PROMPT_FILE="${9:-}"
   RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
   RCY_ENGAGE_INTERVAL="${RCY_ENGAGE_INTERVAL:-5}"
   if [ -n "$RCWD" ] && [ ! -d "$RCWD" ]; then
@@ -8824,7 +8870,11 @@ recycle_fire() {
   # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
   # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
   # dir being LEFT — naming it in a "cwd VANISHED" warning would accuse the wrong directory.
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL")"
+  # $9 = the AUTHOR's brief path (never the trailer's mktemp copy — PROMPT_FILE has already been
+  # reassigned to it by :7263 at this point). Evidence, not control flow: the watcher only records
+  # it on its emit_recycle_event row, so an older deployed watcher that ignores the slot loses the
+  # join and nothing else.
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -9069,6 +9119,17 @@ else
     # field (R9) would be wrong HERE for the same reason it is right elsewhere — a fire that
     # deliberately carried no goal is a MEASURED false, and it is the measurement the ledger lacked.
     #
+    # prompt_file (2026-08-18) — THE JOIN KEY. Full derivation at emit_fire_event; the short of it
+    # is that this ledger recorded everything about a fire EXCEPT which brief it was made from, so
+    # "was a fire ever made from /tmp/fire-<slug>.txt?" was unanswerable and the written-but-never-
+    # fired detector (BACKLOG_DRAIN_24_7 §2.1) could not be built at all. Now one query, and it
+    # must span refusal and recycle rows too — those are fires that happened or tried:
+    #   jq -rs --arg b /tmp/fire-foo.txt '[.[]|select(.prompt_file==$b)]|length' \
+    #      ~/.claude/logs/handoffs.jsonl
+    # 0 ⇒ the brief was written and never fired. Mind the retention trim below: a 0 over a window
+    # that begins after the brief was written is "not in this window", not "never" — the trim's own
+    # record is what distinguishes them.
+    #
     # ── AND THE FIRE THAT CARRIES NO GOAL GETS NO NUDGE. Deliberately. ──────────────────────────
     # The brief asked whether a `--goal`-less fire deserves one. Measured on the live ledger the day
     # this landed: 139 fire rows over the 41h window, 4 goal-arm rows — and 2 of those 4 are this
@@ -9115,6 +9176,7 @@ else
         --arg sf "${SURFACE:-}" --arg sr "${SURFACE_REASON:-}" --arg ai "${ANCHOR_INTENT:-}" \
         --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         --argjson ut "$_hf_ut" \
+        --arg pf "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {goal_requested:  $gr}
          + {under_test:      $ut}
@@ -9127,7 +9189,8 @@ else
          + {started_at:      (if $sa == "" then null else $sa end)}
          + {engaged_at:      (if $ea == "" then null else $ea end)}
          + {engage_proof:    (if $pr == "" then null else $pr end)}
-         + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}' 2>/dev/null) || _hf_json=''
+         + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}
+         + {prompt_file:     (if $pf == "" then null else $pf end)}' 2>/dev/null) || _hf_json=''
     fi
     if [ -n "$_hf_json" ] && [ "$_hf_json" != '{}' ]; then
       printf '%s\n' "$_hf_json" >> "$_hf_log" 2>/dev/null || true
@@ -9135,9 +9198,22 @@ else
       # jq-less / jq-failed fallback: keep the pre-v2 line shape rather than lose the record.
       # goal_requested rides this path too — a denominator with a hole in it is not a denominator,
       # and "the rows jq wrote" is not a population anyone would think to split on.
-      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s}\n' \
+      #
+      # prompt_file rides it for the same reason, and is the ONE field here that can carry a value
+      # jq is not available to encode. A path may legally hold `"` or `\`, and an unescaped one
+      # would emit a line that is not JSON — which does not lose one field, it makes the reader
+      # that hits it drop or die on the whole file. So the two JSON-significant characters are
+      # escaped with bash's own substitution (backslash FIRST, or escaping the quote would then
+      # re-escape its own new backslash), and an empty path emits a bare `null`, unquoted.
+      local _hf_pf="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" _hf_pfj=null
+      if [ -n "$_hf_pf" ]; then
+        _hf_pf="${_hf_pf//\\/\\\\}"
+        _hf_pf="${_hf_pf//\"/\\\"}"
+        _hf_pfj="\"$_hf_pf\""
+      fi
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
-        "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+        "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" "$_hf_pfj" \
         >> "$_hf_log" 2>/dev/null || true
     fi
     # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
