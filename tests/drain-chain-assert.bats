@@ -193,10 +193,14 @@ n_rows()  { bash "$CB" list --all --json | jq '[.[]|select(.condition=="local-dr
 
 # ── the caller ──────────────────────────────────────────────────────────────────────────────────
 
-@test "autonomy-sweep calls the check and journals its rc" {
+# A FAST CANARY, NOT THE PROOF. A grep pins a string; the caller is pinned END-TO-END by
+# tests/autonomy-sweep.bats § "§6 · the drain-chain check RUNS from the sweep and files a dead
+# chain" (+ its silent-when-alive CONTROL), both red-proved against origin/main's sweep through the
+# suite's CC_TEST_SWEEP seam. This case exists so a deleted call site fails HERE too, beside the
+# subject, rather than only in a suite nobody re-runs when editing this file.
+@test "autonomy-sweep calls the check and journals its rc (canary; see autonomy-sweep.bats §6)" {
   run grep -c 'drain-chain-assert.sh' "$REPO/scripts/autonomy-sweep.sh"
   [ "$status" -eq 0 ]
-  # A tracked script with no caller is inert — the defect this repo keeps rediscovering.
   run grep -c 'drain_chain_rc' "$REPO/scripts/autonomy-sweep.sh"
   [ "$status" -eq 0 ]
 }
