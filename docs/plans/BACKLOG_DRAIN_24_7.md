@@ -87,6 +87,36 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~01:40Z — both lanes PROVEN end-to-end; the chain is 8 recycles deep; open
+  568 → 427.**
+  DRAIN CHAIN #12-#17 (all unattended): stranded-work 0/5 · verification-integrity 0/1 ·
+  enforcing-store 0/11 (16 closed in #14 alone) · session-lifecycle 32→20 in progress;
+  conservation printed every recycle; survived a 3.75h ENOTFOUND route outage (#16, lead did
+  the refused rows itself). Notable chain lands: b5f685081 (the 789-pin retry burn — ship-land
+  discarded rerere-staged resolutions), cc-close-attrib EINTR fd-9 launch-kill find (#13).
+  S4 COMPLETE — and its refutation is the finding: the daemon env was FINE (109 real rows vs 6
+  abstains interleaved; my tail sample was an abstain burst — a tail of an interleaved log is
+  not the population). TWO real causes: (1) postland-verify's THROWAWAY-WORKTREE copy of
+  cloud-return.sh held the return lock (deployed-copy gate `case $0 in $_cc_cfg/*` could not
+  discriminate — postland mints worktrees UNDER the config dir); exact-path gate + behavioural
+  test landed ba69a4510; (2) account next's OAuth ACCESS token expired — HTTP 401, discriminated
+  same-call-same-second (next=401, others=404-authenticated). Sensor un-muted (54aa27cd6 — a
+  bare command substitution was discarding every diagnostic), reaped-TMPDIR fix 33cf5df17.
+  **PRODUCTION PROOF: 3 cloud sessions returned end-to-end — landed, content-verified, goals
+  MET, custody discharged** (016cCpabd…, 01ByarSY…, 01GsPHLD…). Their "unknown id" row-close
+  failures were the rogue copy's environment (all 3 ids hold 7-8 store hits; all 3 rows now
+  fold done) — lookup-miss ≠ absence, cured by the exact-path gate.
+  A2 residual: session_018in35… is RETURN-READY (ref pushed db0981de6) behind next's 401; the
+  relogin gate refuses on live-session grounds (endpoint k counts CLOUD sessions; zero local
+  processes on next) — refusal honored, G2 credential surface untouched; second-order gap filed
+  8636b8f829fe (health gate blind to expired access token). Cure in motion: W-R3 fired ON
+  account next (launch = native token refresh) to clear S4's two handed-back blockers (39 stuck
+  cloud branches: 15 rc=65 stale worktrees + 18 rc=70 VM-doc conflicts). Fire saga: 2×
+  "never-engaged" verdicts were the DETECTOR missing a width-wrapped marker + pane 275 stalled
+  at a settings.json hooks-update modal (sibling of the fixed .mcp.json class — filed
+  8ea3acef7d64, condition fired-session-startup-modal); 276 is the working session
+  (goal-arm unreachable on both — brief carries the DoD); 275 refused by teardown's adoption
+  belt, left for reaper GC.
 - **2026-08-18 ~00:40Z — recycle #17: `master-session-lifecycle` 27 open → `20 open / 1 blocked
   (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 1 / closed 7. Ten commits, ONE land.**
   Seven rows: three on the lead (`471d2f3f98df` cc-announce, `08c746312188` handoff-disposition,
