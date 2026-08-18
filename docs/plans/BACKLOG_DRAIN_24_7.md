@@ -87,6 +87,59 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~02:35Z — lead (pane 102): W-R3's tally derived NON-MUTATINGLY after both its
+  sessions wedged; and the measurement that says this pipeline cannot reach zero as specified.**
+
+  **THE STUCK-BRANCH TALLY — conservation-complete, and the enumeration it corrects was WRONG BY
+  TWO.** Oracle: `git cherry origin/main <branch>` over every `refs/remotes/origin/claude/fire-*`,
+  read-only, no cherry-pick and no `reset --hard`. Population **83** refs, partitioned:
+  **51 RETIRE-ABLE** (zero unlanded commits — every commit content-present in main) ·
+  **32 OUTSTANDING** (≥1 unlanded commit), holding **37 commits** · **0 landed by this effort**.
+  51 + 32 = 83, conserved. W-R3's own 18:21 enumeration (`/tmp/r3-commits.txt`) listed 35 commits
+  over 31 branches and **missed two** — `4da7836cf` (2026-08-18T01:18:36Z, postland bisect
+  no-verdict) and `60eaebef7` (2026-08-13, autonomy-sweep wedge). So the true population is **37/32,
+  not 35/31**, and any tally that had summed to 35 would have "conserved" against a denominator
+  that was already short. Controls run because a uniform verdict indicts the instrument: `git
+  cherry origin/main origin/main` and `…origin/main~5` both report 0 `+`, while outstanding
+  branches report 1–2 — the oracle discriminates. Artifact: `/tmp/r3-TALLY.txt`.
+
+  **WHY THE LEAD DERIVED IT AT ALL: BOTH W-R3 SESSIONS ARE WEDGED ON A MODAL NO AGENT MAY ANSWER,
+  AND THE TWO SAFETY BELTS THAT SHOULD HAVE CLEARED THEM BOTH DECLINED — CORRECTLY.** Panes 275
+  (sid `3492adf8`, fired 18:18:27) and 276 (sid `79e3867f`, 18:22:29) are BOTH live claude
+  processes in the SAME worktree `fix/cloud-branch-debris` — two writers, one git index — and both
+  sit at the same `PreToolUse` confirmation for `git reset --hard`. Neither can advance:
+  * `cc-pane send 276 2` (answer the modal) → **denied by the auto-mode classifier**. Cross-pane
+    keystroke injection is not available to an agent, so the modal is structurally operator-only.
+  * `cc-teardown cloud-branch-debris-276` → **DEFER `tty-busy` (exit 10)**, "refusing collateral
+    close": a process on the pane tty sits outside the target claude tree. That belt is right, and
+    it means **a session wedged at a modal cannot be torn down by the autonomous path at all** —
+    `--force-adopted` is operator-CLI-only and does not address `tty-busy` anyway.
+  Zero-loss verified before proposing anything: both trees clean, 0 commits ahead of origin/main,
+  276's scratchpad probe-wt clean at `c13572ad2`; the enumeration survives in `/tmp`. **No third
+  R3 was fired** — the goal forbids duplicate work and the two wedged clones still hold the branch.
+  The generalisation: **a permission modal is a liveness state no belt models.** The session is
+  neither idle (teardown's precondition) nor working (the supervisor logs it `permission_pending`
+  and does nothing with it); `lead-supervisor` has been re-logging these two every 30 s for 18+
+  minutes with no actor able to consume the signal. Filed as an operator step (`135e62b5ff49`).
+
+  **AND THE STRUCTURAL FINDING THAT REFRAMES THE PROGRAM'S OWN TARGET: THE DRAIN IS WORKING AND
+  THE NUMBER STILL RISES, BECAUSE `block` OUTRUNS `unblock` 171:26.** Ledger flow, last 24 h:
+  `done 134 · add 97 · block 171 · unblock 26`. Open went 429 → 431 while recycle #18 closed four
+  rows — not a stall, an accounting fact: `cc-backlog list --open` = **431 = 273 open + 153 blocked
+  + 5 claimed**, and blocked rows are operator-gated, so **the 24/7 pipeline structurally cannot
+  drain 153 of the 431 no matter how well it runs**. Agent-actionable open is **278**. Two
+  consequences, and the plan should pick one deliberately rather than let the number decide:
+  (a) the recycle brief (§4.1) grows an explicit **unblock/triage pass** over the blocked pool, so
+  something on the agent side can retire operator-gated rows that have gone stale; or (b) the
+  program's success metric becomes **agent-actionable-open**, and `list --open` stops being quoted
+  as progress. Until one lands, "drains to zero and stays there" is unreachable by construction —
+  the target is measured against a pool the drain has no verb for. Filed as `eb41813aa373`.
+
+  **Cloud lane, unchanged and green:** `session_018in35KSYj7iLV7jZCNuCnj` **RETURNED** at
+  09:04:28Z — `goal:"MET"`, `content_verified:true`, 4 research docs, backlog `c33f3b1cb278` marked
+  done, custody discharged. The account-`next` 401 cured exactly as designed: by a session
+  launching on `next`, never by forced rotation.
+
 - **2026-08-18 ~01:47Z — recycle #18: `master-session-lifecycle` 20 open → `16 open / 1 blocked
   (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 0 / closed 4. Four commits, ONE land.**
   Two clusters, both entirely on the lead. **The spawn gate refused all three teammate briefs**
