@@ -269,3 +269,74 @@ mktx_grown() {  # $1 frozen  $2 grown1  [$3 grown2]
   run bash -c 'cd "$1" && bash "$2" get' _ "$CWD" "$HOOK"
   printf '%s' "$output" | grep -q 'Scope (frozen): control scope'
 }
+
+# ── INJECTION FRAME: newest-wins, matching the store's own semantics ──────────────
+# docs/research/dod-crosstalk-2026-08-18.md §2 measured this as the ACTIVE half: SessionStart cats
+# the whole repo-keyed file and frames it "Every 'Scope (frozen):' line below is binding … do NOT
+# narrow scope or declare done until ALL of it is met" — so a session in any of 101 worktrees was
+# handed 15 waves' contracts as ITS OWN. That framing also contradicted this very script: `get` and
+# last_recorded_scope both return the NEWEST line only. These cases pin the injection to the same
+# newest-wins semantics the rest of the store already has. LOSSLESS — nothing is dropped, the older
+# captures are reframed as history rather than as additional binding scope.
+# FAILS LOUD on an empty context. Without this an absent additionalContext makes every `! grep`
+# below pass vacuously — the empty-compares-equal trap — and a negative assertion that can only
+# ever pass is worse than no assertion at all.
+ctx_of() {
+  local c; c="$(printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)"
+  [ -n "$c" ] && [ "$c" != "null" ] || { echo "ctx_of: EMPTY/absent additionalContext" >&2; return 1; }
+  printf '%s' "$c"
+}
+HIST_MARK='full INTEGRATE-only history'
+
+@test "injection: the NEWEST frozen line is named as THE current contract, above the history" {
+  ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
+  # the newest scope is called out ABOVE the history dump; the older one is not
+  printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'wave TWO scope'
+  ! printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'wave ONE scope'
+}
+
+@test "injection: prior captures are NOT framed as binding scope" {
+  ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  # COUNT form, not `! grep`: bash errexit explicitly does NOT fire on a command "whose return value
+  # is being inverted with !", so a bare `! cmd` is a live assertion ONLY as a test's FINAL command
+  # (where bats takes the body's exit status). As an intermediate line it is DEAD and passes
+  # whatever the truth is — measured here, on this very assertion.
+  local bind_hits; bind_hits="$(printf '%s' "$ctx" | grep -cF "Every 'Scope (frozen):' line below is binding" || true)"
+  [ "$bind_hits" -eq 0 ]
+  printf '%s' "$ctx" | grep -qF 'NOT additional binding scope'
+}
+
+@test "injection LOSSLESS: every prior capture still reaches the session as history" {
+  ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'wave ONE scope'      # nothing is dropped …
+  printf '%s' "$ctx" | grep -q 'wave TWO scope'      # … and the newest is still there too
+}
+
+@test "injection: gate-passed GROWN lines stay binding and pre-authorized (unchanged contract)" {
+  ( cd "$CWD" && bash "$HOOK" set "the frozen base" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "Scope (grown): +authorized extra" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'Scope (grown)'
+  printf '%s' "$ctx" | grep -q 'do NOT re-ask'
+}
+
+@test "injection CONTROL: a single-capture store still names that capture as the contract" {
+  ( cd "$CWD" && bash "$HOOK" set "the only scope" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
+  printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'the only scope'
+}
