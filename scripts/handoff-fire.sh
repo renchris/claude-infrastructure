@@ -7844,6 +7844,42 @@ elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
 else                          LAUNCH_DIR="$REPO"
 fi
 
+# ── SUCCESSION LINEAGE EDGE (row 4de3d0f9c0e1, prerequisite 2) ──────────────────────────────────
+# WHY HERE AND NOWHERE ELSE. The durable-DoD store is keyed on REPO identity (hooks/lib/dod-path.sh,
+# CLOSE_INTEGRITY W3) so a worktree hop keeps the scope — and that same key made two CONCURRENT
+# waves of one repo share one contract file, with nothing recorded anywhere that could tell a
+# successor from a sibling. The missing input is exactly this edge: firing worktree → fired
+# worktree. This is the ONE site every dir-changing succession passes through: an ordinary
+# --worktree/--cwd fire, a self-routing fire, AND `--recycle --worktree` (the relocating recycle,
+# RECYCLE_RELOC=1 at :6690, which falls through to the $WT arm above).
+#
+# It deliberately does NOT reuse mark_fired_peer, which is the nearest existing record and cannot
+# serve: it stamps the FIRED session's own cwd plus the firing PANE id — never the firing session's
+# cwd, the one edge a worktree-scoped store needs — and it is written only when WANT_SELF_RETIRE=1,
+# which :7358 makes conditional on RECYCLE=0. So `--recycle`, the succession CLAUDE.md names the
+# DEFAULT, writes no peer stamp at all. A same-dir recycle needs no edge either way: LAUNCH_DIR IS
+# $PWD there (first arm above), the toplevel identity is unchanged, and dod_lineage_record drops
+# that self-loop itself.
+#
+# $PWD is the FIRING session's cwd: this script is a subprocess of that session and nothing above
+# here cd's outside a subshell (the invariant :6449 already states). BEST-EFFORT BY CONTRACT —
+# dod_lineage_record always returns 0, and the whole block is `|| true`, because a lineage write
+# must never be able to cost a succession. Skipped under --dry-run: a dry run fires nothing, and an
+# edge for a session that never existed would widen inheritance over a fiction.
+if [ "$DRY" = 0 ]; then
+  _hf_dplib="$(dirname "$0")/../hooks/lib/dod-path.sh"
+  [ -f "$_hf_dplib" ] || { _hf_dpt="$0"; [ -L "$_hf_dpt" ] && _hf_dpt="$(readlink "$_hf_dpt")"
+    _hf_dplib="$(cd "$(dirname "$_hf_dpt")" 2>/dev/null && pwd)/../hooks/lib/dod-path.sh"; }
+  [ -f "$_hf_dplib" ] || _hf_dplib="$HOME/.claude/hooks/lib/dod-path.sh"
+  # shellcheck source=../hooks/lib/dod-path.sh
+  # shellcheck disable=SC1090,SC1091
+  if [ -f "$_hf_dplib" ] && . "$_hf_dplib" 2>/dev/null \
+     && command -v dod_lineage_record >/dev/null 2>&1; then
+    dod_lineage_record "$PWD" "$LAUNCH_DIR" \
+      "$([ "$RECYCLE" = 1 ] && printf 'recycle' || printf 'fire')" || true
+  fi
+fi
+
 # ---- spawn the surface -----------------------------------------------------------------------
 # Anchor new surfaces to the FIRING session — the pane THIS script was launched from — NOT
 # iTerm2's app-frontmost window. $ITERM_SESSION_ID is inherited into the Bash-tool subprocess this

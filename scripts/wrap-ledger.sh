@@ -521,7 +521,17 @@ DOD="absent"; REMAINDER=0
 while IFS= read -r _wl_df; do
   [ -n "$_wl_df" ] && [ -f "$_wl_df" ] || continue
   DOD="present"
-  _wl_r="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$_wl_df" 2>/dev/null || echo 0)"
+  # LINEAGE-FILTERED (row 4de3d0f9c0e1). The repo key is shared by every worktree of the repo, so
+  # an unfiltered count summed a CONCURRENT wave's unchecked boxes into this wave's REMAINDER and
+  # red-runged a close over items belonging to someone else. dod_filter_for keeps this wave's
+  # blocks and its recorded predecessors', and keeps unattributable ones — so the count can only
+  # ever fail toward "too many", never toward hiding an item this wave actually owns.
+  if command -v dod_filter_for >/dev/null 2>&1; then
+    _wl_r="$(dod_filter_for "$PWD" "$_wl_df" \
+             | grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' 2>/dev/null || echo 0)"
+  else
+    _wl_r="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$_wl_df" 2>/dev/null || echo 0)"
+  fi
   case "$_wl_r" in ''|*[!0-9]*) _wl_r=0 ;; esac
   REMAINDER=$((REMAINDER + _wl_r))
 done <<WLDOD

@@ -286,7 +286,19 @@ ctx_of() {
   [ -n "$c" ] && [ "$c" != "null" ] || { echo "ctx_of: EMPTY/absent additionalContext" >&2; return 1; }
   printf '%s' "$c"
 }
-HIST_MARK='full INTEGRATE-only history'
+# The phrase that separates the binding contract from the history dump. Kept to the WORDING-STABLE
+# core: it read 'full INTEGRATE-only history' until the lineage filter landed, at which point the
+# injected history stopped being "full" (a concurrent wave's captures are now dropped) and every
+# sed-range assertion below silently widened to the whole document — `sed -n '1,/nomatch/p'` prints
+# EVERYTHING, so a stale marker does not fail, it inverts. _hist_mark_live is what makes that loud.
+HIST_MARK='INTEGRATE-only history'
+
+# A sed range over an ABSENT marker is vacuous — it selects the whole input, so every "…is NOT above
+# the history" assertion below would pass by accident. Assert the marker exists first.
+_hist_mark_live() {  # $1 = the injected context
+  local n; n="$(printf '%s' "$1" | grep -cF "$HIST_MARK" || true)"
+  [ "${n:-0}" -ge 1 ] || { echo "HIST_MARK '$HIST_MARK' absent — every sed-range assertion below is vacuous" >&2; return 1; }
+}
 
 @test "injection: the NEWEST frozen line is named as THE current contract, above the history" {
   ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
@@ -295,9 +307,15 @@ HIST_MARK='full INTEGRATE-only history'
   [ "$status" -eq 0 ]
   local ctx; ctx="$(ctx_of "$output")"
   printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
+  _hist_mark_live "$ctx"
   # the newest scope is called out ABOVE the history dump; the older one is not
   printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'wave TWO scope'
-  ! printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'wave ONE scope'
+  # a COUNT, not `! … | grep -q`: bash errexit explicitly does not fire on an inverted return
+  # value, so a bare `! cmd` is a live assertion ONLY as a test's final command — as an
+  # intermediate line it passes whatever the truth is (memory: negated-assertion-dead-unless-final)
+  local n1
+  n1="$(printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -cF 'wave ONE scope' || true)"
+  [ "${n1:-0}" -eq 0 ]
 }
 
 @test "injection: prior captures are NOT framed as binding scope" {
