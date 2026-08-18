@@ -87,6 +87,48 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~03:05Z — lead (pane 102): the duplicate resolved ITSELF, a reported BLOCKER does
+  not exist, and some "stranded" branches are evidence nobody may land.** Three facts from 276's
+  stand-down ping, each verified here before being written — the middle one is the load-bearing one.
+
+  **(1) THE REPORTED BLOCKER IS NOT A PROPERTY OF THE COMMAND — IT IS A PROPERTY OF A SESSION.**
+  276 closed by reporting `BLOCKER: 'CONFIRM=1 scripts/cloud-reconcile.sh --land' is DENIED by the
+  auto-mode permission classifier — the land half needs a permission rule or a /ship route`. Filed
+  as written, that sentence would have become a standing architectural defect and probably a
+  settings-permission change. **It is false at least in this session:** pane 102 ran
+  `CONFIRM=1 scripts/cloud-reconcile.sh --land --dry-run` and it EXECUTED — rc 0, refusing only
+  because `--dry-run` parsed as the branch argument (`branch '--dry-run' is not on 'origin'`). So
+  the classifier's decision is **per-session / per-invocation**, not a wall in the cloud lane's
+  land half. This is the anti-capture rule earning its keep: *a negative tool-claim inferred from
+  one failed call is not a fact about the tool.* The lesson generalises past this row — a
+  dispatched session that hits a classifier denial is reporting something about ITS OWN
+  invocation, and the lead must re-run it before the claim reaches a plan. 275 was told to retry
+  and to route via `scripts/ship-land.sh` if its own session still refuses.
+
+  **(2) A BRANCH CAN BE UNLANDED BY DESIGN, AND BOTH TALLIES WERE COUNTING IT AS LOSS.**
+  `claude/fire-…-57078-1` and `-2` are parked deliberately: `docs/research/
+  cloud-local-cost-ab-2026-08-11.md` §7 (verified verbatim) reads *"The work products were
+  deliberately NOT landed. All four branches remain on origin as evidence; the probe tool is
+  throwaway and does not belong on trunk."* Neither my 02:35Z partition nor 275's SUPERSEDED /
+  MISSING / PARTIAL split had a bucket for this, so an A/B experiment's preserved evidence read as
+  stranded work in both. **Every future landedness audit here needs a fourth verdict —
+  PARKED-BY-DESIGN — and the only way to reach it is reading why the branch exists, which no git
+  oracle can answer.** A cherry/patch-id sweep is blind to intent by construction.
+
+  **(3) The two-writer collision ended without the operator, and the mechanism was a peer
+  standing down.** 276 self-diagnosed the duplicate fire (275 @18:18:28, 276 @18:22:30, same
+  account, same cwd, "the two clobbered each other's commits"), wrote its derivations to
+  `/tmp/w-r3-findings-from-pane-276.md` (8352 B, verified present), reported `landed 0 / retired
+  0 / parked 0 — nothing written`, and ceded the mission to 275. So the collision was resolved by
+  the two sessions between them — a mail channel doing what no belt could. **The pane is still
+  live and still wedged** (`cc-teardown` DEFER `tty-busy` on both attempts), so operator step
+  `135e62b5ff49` still stands, but it is now pane HYGIENE, not a hazard: nothing of value is in
+  that worktree and 275 has evacuated. 276 also confirms `session_018in35` returned
+  2026-08-17T09:04:28Z with all 4 paths on trunk by `git ls-tree` — **~9 h before either R3 pane
+  launched**, which means R3's own brief ("your launch on next refreshes the token that unblocks
+  the return") was written on a premise that had already been satisfied. A fire's stated rationale
+  is worth re-checking at fire time, not only its task.
+
 - **2026-08-18 ~02:50Z — lead (pane 102): CORRECTION to the 02:35Z entry below, on both halves
   it got wrong — pane 275 UNWEDGED ITSELF, and `git cherry` cannot see supersession.** Source:
   275's own HANDOFF-PING (19:42:19-0700), verified against the tree before being written here.
