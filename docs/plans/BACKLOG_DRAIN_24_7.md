@@ -87,6 +87,35 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18T23:30Z — LEAD (pane 102) wave synthesis: all three fires returned inside 50 minutes,
+  ledger 417 → 404 live, and every one red-proved BOTH ways against the REAL pre-fix artifact.**
+  `d6d4b85ebd4c` → `206d0c001` · `7da9c4451540` → `27fb9da42` · `dc014c6829ac` → `017650872`, each
+  content-verified on origin/main by this lead independently of the assignee's claim. The alarm
+  half of `7da9c4451540` was FILED as `6a5a218fd9a8`, not prosed. Per-fix detail is in the three
+  entries below; what follows is only what the WAVE showed that no single entry could.
+  - 🚨 **THE POPULATION GREW WHILE THE FIX WAS BEING WRITTEN: four duplicates at filing, NINE by
+    the time the assignee started, two minutes later.** Nothing went wrong — that is simply what an
+    INFLOW GENERATOR does while you repair it. The lesson is about how such a row must be WORKED:
+    **a count in a filing note is a LOWER BOUND with a timestamp, never the population.** A fix
+    that closed exactly the ids the note named would have left five siblings behind, still minting,
+    and would have reported success. Consolidation must RE-CENSUS at claim time. All nine folded
+    onto canonical `20eff55d74f7`, each fold evidenced, none deleted — and that row stays OPEN,
+    because the re-land work it describes is genuinely unlanded (`land-content-verify` rc=1).
+    Closing it would have been exactly the false-zero this plan exists to prevent (§1.1).
+  - 🚀 **All three are landed and NOT live, and the converger is RIGHT to refuse.**
+    `deploy-live.sh` returns rc=0 and declines: **no GREEN tree is a DESCENDANT of live HEAD**
+    `36cbb55eda4c` — the newest green, `555e3b270f1e`, is BEHIND it, so deploying it would report a
+    deploy that never happened. Lag 17 / 25 commits, 3h / 6h, inside the degrade budget, and
+    `LIVE_ADDS=0` so the budget legitimately applies (an ADD would breach at lag 1). Two assignees
+    hit this independently and reported it identically, which is the mechanism working. **But name
+    what is inert:** `~/.claude/scripts/drain-chain-assert.sh` is a per-file symlink into the shared
+    checkout, so the alarm the 24/7 pipeline depends on still runs the OLD blind predicate on the
+    real box until a green tree lands. The stale `postland-verify` stamp is PRE-EXISTING, red long
+    before any of these diffs — named, not driven, per the attribution rule.
+  - **Two lanes, one store, no collision — because the rows were CLAIMED before they were fired.**
+    A claim is a lease, so the drain chain (recycle #26, running throughout) could not pick up work
+    a dispatched session held. This is the cheap half of two-lane safety and it cost three commands.
+
 - **2026-08-18 — `d6d4b85ebd4c`: §6's liveness invariant was blind to the failure that happens, and
   the INPUT was the fix.** `scripts/drain-chain-assert.sh` was wired correctly (autonomy-sweep
   § 2b-v, 300 s, condition-keyed, self-falsifying) and had filed ZERO rows at any status in its
