@@ -26,6 +26,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-15 | `9333991e4544` | `claude-infrastructure` | subject-foreign (label passes, text is about `doc_classifier`) |
 | 08-16 | `c07fb00eb9b6` | `doc_classifier` | label-foreign — **located the cause** at `bin/cc-offload:84` |
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
+| 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 
 This one is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -143,3 +144,161 @@ cites on TRUNK, because a post-land RED reproduces faithfully in a stale tree* (
 otherwise. Diagnosing it from the brief's prose is the anti-goal `bin/cc-venue` §5 names — *"a
 wrongly-routed item improvises a plausible answer against history it cannot read, and reports
 success."*
+
+---
+
+# The fifth, same day — and the first whose subject is in NO repo
+
+**2026-08-17, second dispatch.** Backlog item `5ab3327ed0c8`, project `reso-management-app`, title
+*"MEMORY.md at 23842 B of 24985 B cap — compact to <17.1KB"*, fired into a second cloud session with
+the same one attached repository. Appended here rather than filed as its own note because it is the
+same class on the same day and the anti-capture rule is explicit about near-duplicates — but it
+carries **three facts the four above do not**, and the third changes the item's disposition.
+
+## 1 · Store-foreign, not merely label-foreign — a new sub-case
+
+The prior four were all *repo*-subjected: real source files, in a real repo, that this VM had not
+cloned. Route (b) — *route by `item.project`* — would have made every one of them workable.
+
+This one is not reachable by route (b) either. Its subject is the **project memory index**, which
+Claude Code keys on the session's cwd and stores at
+
+```
+$CLAUDE_CONFIG_DIR/projects/<slugify(repo root)>/memory/MEMORY.md
+```
+
+— i.e. `~/.claude/projects/-Users-chrisren-Development-reso-management-app/memory/MEMORY.md`. That
+path is **in no git repository at all**. Resolution measured, not assumed: `hooks/memory-nudge.sh:93-113`
+builds it from `--git-common-dir`; `scripts/worktree-memory-link.sh:4-9` states the keying and the
+consequence; `bin/cc-memory-rotate:26-29` refuses any path not matching `*/memory/MEMORY.md`,
+"a repo file merely named MEMORY.md has no read limit to protect."
+
+So the pair this class is normally about — (`item.project`, `session.attached_repo`) — is not the
+whole discriminator. **A third state exists: the subject is not a repo object.** Attaching
+`reso-management-app` would leave this item exactly as unworkable as attaching nothing. Whichever of
+(a)/(b) the open 08-16 decision picks, this row needs the `~/.claude`-store arm as well.
+
+## 2 · `cc-eligible` has the right spelling and the item walks past it
+
+Unlike the four above — where §"Measured from inside this session" correctly concludes *no spelling
+would have caught it* — this file's `BOX` list **does** carry the exact class, added 2026-08-11 (W1):
+
+```python
+("dot-claude", r"~/\.claude\b|\$HOME/\.claude\b"),   # THE LIVE LAYER
+```
+
+with the comment *"`~/.claude` DOES NOT EXIST on the VM … the artifact under discussion is not in the
+repo at all."* That is this item, precisely. It is missed because the title names the **file**
+(`MEMORY.md`) and never the **store** (`~/.claude`), and `SPAN_FIELDS` is title/dodRef/condition/source:
+
+| probe | verdict |
+|---|---|
+| the item's full title | `eligible` · classes `[]` |
+| `+ condition memory-index-over-budget` | `eligible` · classes `[]` |
+| the same subject written `~/.claude/projects/…/memory/MEMORY.md` | `ineligible-box` · `dot-claude` |
+
+🚨 **Recorded as a measurement; deliberately not fixed here.** Same three refusals the 08-16 and
+c33f3b1cb278 sessions gave, all still binding: `bin/cc-eligible`'s own `OFFBOX_LANE` states that *a
+session this lane created cannot verify a change to the lane — the observer and the subject are the
+same object*, and its `venue` spelling exists to refuse exactly an item asking to edit that file;
+`bin/cc-venue` abstains in a 50-commit clone by measurement. Re-confirmed here: `.git/shallow`
+present, `git rev-list --count origin/main` → **50**. And the gate cannot be run on a shell change —
+`bats` and `shellcheck` are both **ABSENT** on this VM (`jq` and `python3` are present; an earlier
+`command -v bats jq` in this session returned 0 on `jq` alone and briefly read as "bats ok", which is
+why this line names each tool separately).
+
+The narrowing this needs is also **not** a hunch-widening of the kind the header forbids — the class
+is already in the list and the question is only which spellings reach it. But it is still a change to
+the admission predicate, so it routes home.
+
+## 3 · The item is probably already serviced, and its premise is in a superseded unit
+
+This is the part that makes the disposition differ from the four above, and it is why the brief's
+mandated *"if the cure is already on trunk, the item is DONE"* step matters here even though the
+subject is unreachable.
+
+**A landed actuator already services this exact condition, fleet-wide.** `hooks/memory-nudge.sh:178-229`
+("ACTUATE, then advise") invokes `bin/cc-memory-rotate` on **every** prompt whose index is at/over
+`ROTATE_AT`, for whatever project the session's cwd resolves to — not just this repo. Both files are
+present on `origin/main` (content-verified; the exact landing sha is not attributable from a clone
+grafted at 50 commits, where everything older collapses onto the boundary commit `b4fc288e`). Its
+header records why it exists: twelve hand-compactions in fourteen days, because *"insertion is
+machine-speed … while removal was human-speed."* Hand-compacting this index is the work that
+mechanism was built to stop anyone doing.
+
+Positive control, run here against a synthetic index (200 entry lines + linked topic files):
+
+```
+before 25609 B → verdict=rotated moved=37 stage2=0 after=21355 B
+                 cold=…/archive/MEMORY_ARCHIVE_2026-H2-COLD.md
+```
+
+The rotor works. Lines move verbatim; restore is a paste.
+
+**And the item's numbers are in the unit corrected on 2026-08-15** (`cc-backlog 7a56de4c54ab`,
+derivation in `hooks/lib/memory-index-measure.sh`). "23842 B of 24985 B cap" is raw disk bytes; the
+loader strips YAML frontmatter and block HTML comments, trims, and compares **characters** against
+**25000** — including stripping the `<!-- cold tier: … -->` pointer the rotor itself writes.
+`cc-memory-rotate:36-49` reconciles this by shifting its thresholds up by the measured gap. Measured
+here on a fixture at **23824 raw B** — within 18 B of the item's stated size:
+
+```
+loader-vs-disk overhead 401 B — thresholds shifted to limit=25401 rotate_at=23901 target=21401
+verdict=noop size=23824 rotate_at=23901
+```
+
+**A file at this item's stated raw size read `noop`** — under the threshold, nothing to do. The
+overhead is per-file, so this does not prove reso's index is fine; it proves the item's headline
+figure cannot decide the question, because it is not in the unit the cap is enforced in.
+
+One genuine mismatch survives either way: the item asks for **<17.1KB** (≈70% of 24985). The rotor's
+`TARGET` is `LIMIT-4000` ≈ **21000**. No landed mechanism drives to 17.1KB, and reaching it would
+mean archiving well past the sanctioned ~2.5-4 KB headroom — the **lossy, human-gated** half of
+`/compact-memory`, not the rotor's reversible cold split. That target looks like a filing session's
+own choice rather than any mechanism's.
+
+## 4 · The rails, re-measured (one differs from the record above)
+
+Same trap, one correction. `cc-notify` still fails **silently**:
+
+```
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset    # rc 0
+```
+
+But `cc-backlog reopen` did **not** exit 0 here:
+
+```
+$ cc-backlog reopen 5ab3327ed0c8
+cc-backlog reopen: unknown id 5ab3327ed0c8                            # rc 3
+```
+
+The §"rails fail QUIETLY" block above records rc 0 for this call. On this VM it is rc 3. The
+operative warning is unchanged and now sharper: **`cc-notify` is the silent one** — a worker that
+chains the two and checks only the last exit code reports a desk notification that was never
+enqueued. This branch remains the only durable channel.
+
+## 5 · Operator actions for `5ab3327ed0c8`
+
+The 08-16 decision — **(a) fail closed vs (b) route by project** — is unchanged and still the one
+that stops the class, with the §1 caveat that this row needs the `~/.claude`-store arm too, since (b)
+alone does not reach it.
+
+This item's own disposition is **not** re-dispatch. Re-measure the premise in the live unit first; if
+it is under the cap, nothing needs doing and the standing condition already has an actuator:
+
+```
+cc-backlog block 5ab3327ed0c8 --needs "re-measure reso's index in the LOADER unit on the Mac — cc-memory-rotate ~/.claude/projects/-Users-chrisren-Development-reso-management-app/memory/MEMORY.md --dry-run --verbose. verdict=noop ⇒ close as already-serviced (memory-nudge auto-rotates fleet-wide at ROTATE_AT); verdict=rotated ⇒ it has already fixed itself. Re-open ONLY if a real target below the rotor's ~21000-char TARGET is wanted — that is /compact-memory's lossy, human-gated half, not the rotor's. Item's '23842 B of 24985 B' is the raw-byte unit superseded 2026-08-15 (7a56de4c54ab); premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § The fifth)."
+```
+
+`block` rather than `reopen`, for the reason given above and one more: `reopen` returns it to the
+wave, and the guard that would stop it being re-fired into this same VM shape does not exist yet.
+
+## 6 · The item itself — NOT adjudicated
+
+Whether reso's index is over its cap today was never readable from this session. `/root/.claude/projects/`
+contains exactly one entry, this session's own `-home-user-claude-infrastructure`; `/Users` and
+`/root/Development` are absent. Everything in §3 is a measurement of the **mechanism** — on trunk, and
+on synthetic fixtures built here — never of the operator's index. No compaction was performed, none
+should be inferred, and the 17.1KB target is reported as a mismatch to adjudicate, not as a defect
+found.
