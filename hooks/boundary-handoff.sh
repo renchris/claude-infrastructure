@@ -126,7 +126,12 @@
 set -uo pipefail
 
 T="${CC_BOUNDARY_T:-73}"                          # fire threshold, used_pct (≤73; autocompact at 90, D-F)
-AGE_MAX=180                                        # abstain if telemetry older than this (can't trust stale)
+AGE_MAX=180                                        # telemetry older than this is not evidence of the CURRENT fill
+# ...but "not current" is not "not usable": above AGE_MAX the hook falls back to the session's own
+# transcript mtime as a liveness corroborator, and treats the stale fill as a LOWER BOUND (see the
+# fallback below). A transcript younger than this is WARM; anything older — or unresolvable — is COLD
+# and the stale-telemetry abstain stands.
+TX_WARM_MAX="${CC_BH_TX_WARM_S:-180}"
 REARM_DELTA="${CC_BOUNDARY_REARM_DELTA:-10}"       # B-2 second re-arm dimension (used_pct climb)
 T_MIN="${CC_BOUNDARY_T_MIN:-55}"                   # context-econ: forecast-early fire never below this fill
 LEAD_MIN="${CC_BOUNDARY_LEAD_MIN:-20}"             # context-econ: forecast ≤ this many min to the wall ⇒ early fire
@@ -225,7 +230,46 @@ now="$(date +%s)"
 ts="$(jq -r '.ts // 0' "$tel" 2>/dev/null || echo 0)"; ts="${ts%.*}"
 [ -n "$ts" ] || ts=0
 age=$(( now - ts ))
-[ "$age" -le "$AGE_MAX" ] || abstain "stale-telemetry:${age}s"
+# STALE-TELEMETRY FALLBACK (row 5e4ce121b64a residual (a)). A stale row used to end the hook here.
+# But the telemetry writer is the STATUSLINE, which renders ZERO times while a session sits inside
+# one long operation (statusline.sh:48) — so "telemetry went stale" is the signature of exactly the
+# case this rail exists to catch (a session burning context fast with nothing repainting), not
+# evidence the session is gone. Measured: a 4-SECOND-old transcript abstained on a 602-second-old
+# telemetry row.
+#
+# SOUNDNESS IS MONOTONICITY, NOT LIVENESS. A warm transcript proves the session is alive; it says
+# nothing about whether the fill number is current, which is what the abstain's own reason objects
+# to. The argument that licenses proceeding is different: fill grows monotonically within a session,
+# so a stale `used_pct` is a LOWER BOUND on the fill right now, and every consumer downstream is a
+# `used >= T` threshold test. Firing on a lower bound can only ever cost us false NEGATIVES from
+# staleness — it cannot manufacture a false positive.
+# THE CAVEAT, STATED RATHER THAN HIDDEN: compaction breaks monotonicity (fill drops), so a stale
+# PRE-compact number over-states and can produce an early nudge. That is the safe direction — a
+# spurious recycle costs a context reset, a missed one costs the session — and compaction is
+# operator-driven and rare here (fleet-wide: every observed compaction is trigger:"manual").
+# The transcript is therefore a LIVENESS corroborator only: no warm transcript ⇒ the old abstain
+# stands, unchanged. transcript_age()'s unresolved sentinel (999999999) reads COLD by construction,
+# so an unresolvable path abstains rather than silently becoming a blanket exemption.
+stale_ok=""
+if [ "$age" -gt "$AGE_MAX" ]; then
+  _bh_ta="${TRANSCRIPT_AGE_LIB:-$_bscd/lib/transcript-age.sh}"
+  [ -f "$_bh_ta" ] || _bh_ta="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/transcript-age.sh"
+  [ -f "$_bh_ta" ] || _bh_ta="$HOME/.claude/hooks/lib/transcript-age.sh"
+  _bh_tage=999999999
+  if [ -f "$_bh_ta" ]; then
+    # shellcheck source=lib/transcript-age.sh
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    if . "$_bh_ta" 2>/dev/null; then
+      _bh_cwd="$(jq -r '.cwd // empty' "$tel" 2>/dev/null || true)"
+      _bh_cfg="$(jq -r '.config_dir // empty' "$tel" 2>/dev/null || true)"
+      [ -n "$_bh_cfg" ] || _bh_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+      _bh_tage="$(transcript_age "$_bh_cwd" "$_bh_cfg" "$sid" 2>/dev/null || printf '%s' 999999999)"
+      case "$_bh_tage" in ''|*[!0-9]*) _bh_tage=999999999 ;; esac
+    fi
+  fi
+  [ "$_bh_tage" -le "$TX_WARM_MAX" ] || abstain "stale-telemetry:${age}s"
+  stale_ok="${age}s/tx:${_bh_tage}s"
+fi
 used="$(jq -r '.used_pct // 0' "$tel" 2>/dev/null || echo 0)"; used="${used%.*}"
 case "$used" in ''|*[!0-9]*) used=0 ;; esac
 
@@ -502,7 +546,9 @@ log_idl fired "past-boundary" \
       --argjson otok "$over_tok" --argjson tf "$tok_fired" --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
       --argjson fw "$freewin" --arg fwr "$FREEWIN_RUNG" \
       --arg gate "$gate_state" \
+      --arg sok "${stale_ok:-}" \
       '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
+        stale_ok:$sok,
         over_size:($osz==1),over_rss:($orss==1),over_tok:($otok==1),tok_k:$tk,tok_k_t:$tkt,
         gate_green:$gate,freewin:($fw==1),freewin_rung:$fwr,
         axis:(if $sf==1 then "size" elif $tf==1 then "tokens" elif $early==1 then "forecast" elif $fw==1 then "freewin" else "fill" end)}')"

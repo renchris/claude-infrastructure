@@ -178,6 +178,63 @@ fired() { echo "$1" | grep -q '"decision":"block"'; }
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q "stale-telemetry" "$CC_IDL"
 }
+
+# ── STALE-TELEMETRY FALLBACK (row 5e4ce121b64a residual (a)) ─────────────────────────────────────
+# The telemetry writer is the statusline, which renders ZERO times while a session sits inside ONE
+# long operation (statusline.sh:48) — so telemetry going stale is the signature of the case this
+# rail most needs to catch, not evidence the session is gone. The case ABOVE keeps its meaning: a
+# stale row with NOTHING to corroborate it still abstains. What changes is that a stale row beside a
+# demonstrably WARM transcript is no longer discarded.
+#
+# SOUNDNESS — this is a monotonicity argument, not a liveness one. A warm transcript proves the
+# session is alive; it says nothing about whether the fill number is current. But fill grows
+# monotonically within a session, so a stale `used_pct` is a LOWER BOUND on the fill now, and every
+# consumer here is a `used >= T` threshold test. Firing on a lower bound can therefore only produce
+# false NEGATIVES from staleness, never false positives. See the same argument at the call site.
+
+mk_btx_live() { # $1=sid $2=cwd $3=cfg_root $4=age_s → a session transcript at the age CC would write it
+  local slug d
+  slug="$(printf '%s' "$2" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  d="$3/projects/$slug"; mkdir -p "$d"
+  echo '{"type":"user"}' > "$d/$1.jsonl"
+  # LOCAL time, deliberately: `touch -t` parses its stamp in the LOCAL zone while `stat -f %m` reads
+  # back epoch seconds. Formatting the stamp with `date -u` therefore lands the mtime a whole UTC
+  # offset away — here it produced a mtime 7 HOURS IN THE FUTURE, i.e. a NEGATIVE age, which the
+  # hook's own numeric guard then read as unresolvable/COLD. The case failed for a reason that had
+  # nothing to do with the subject.
+  touch -t "$(date -r "$(( $(date +%s) - $4 ))" +%Y%m%d%H%M.%S 2>/dev/null \
+    || date -d "@$(( $(date +%s) - $4 ))" +%Y%m%d%H%M.%S)" "$d/$1.jsonl"; }
+
+mk_btel_cfg() { # $1=sid $2=used_pct $3=ts $4=cfg_root — telemetry carrying an explicit config_dir
+  jq -nc --arg sid "$1" --arg cwd "$WD" --argjson used "$2" --argjson ts "$3" --arg cfg "$4" \
+    '{ts:$ts,session_id:$sid,cwd:$cwd,config_dir:$cfg,used_pct:$used,input_tokens:1}' \
+    > "$CC_TELEMETRY_DIR/$1.json"; }
+
+@test "stale telemetry + WARM transcript at 75% → FIRES (a stale fill is a lower bound, not noise)" {
+  CFG="$BATS_TEST_TMPDIR/cfg"
+  mk_btel_cfg bs1 75 "$(( $(date +%s) - 100000 ))" "$CFG"
+  mk_btx_live bs1 "$WD" "$CFG" 4          # the row's live case: a 4-SECOND-old transcript
+  run drive bs1
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q '"stale_ok"' "$CC_IDL"           # the staleness is REPORTED as a field, not swallowed
+}
+
+@test "CONTROL: stale telemetry + COLD transcript still abstains (the fallback is not a bypass)" {
+  CFG="$BATS_TEST_TMPDIR/cfg"
+  mk_btel_cfg bs2 75 "$(( $(date +%s) - 100000 ))" "$CFG"
+  mk_btx_live bs2 "$WD" "$CFG" 100000     # transcript as old as the telemetry ⇒ nothing corroborates
+  run drive bs2
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q "stale-telemetry" "$CC_IDL"
+}
+
+@test "CONTROL: stale telemetry + UNRESOLVABLE transcript abstains (sentinel reads COLD, never warm)" {
+  CFG="$BATS_TEST_TMPDIR/cfg"
+  mk_btel_cfg bs3 75 "$(( $(date +%s) - 100000 ))" "$CFG"   # no transcript file written at all
+  run drive bs3
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q "stale-telemetry" "$CC_IDL"
+}
 @test "conversation-aware: exchange in flight → advisory STILL fires, wording says finish+persist first" {
   mk_btel b8 75
   run drive b8 "$(mk_btx 30)"
