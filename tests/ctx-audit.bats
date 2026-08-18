@@ -239,3 +239,97 @@ EOF
   run bash -c "printf '%s' '$output' | jq -e '.excluded_no_denominator' >/dev/null"
   [ "$status" -eq 0 ] || false
 }
+
+# ── residual (b): the DURABLE denominator, so a session that never recycled still has one ─────
+# Both existing sources are event-conditioned or ephemeral: telemetry is wiped on reboot (measured
+# 1.5% coverage) and recycle-events only gains a row when a session actually recycles. A session
+# that neither recycled nor survived a reboot therefore has NO denominator at all, which is the
+# whole reason p95 excludes most of the fleet. The durable per-session window store closes that.
+@test "a durable session-window record supplies a denominator when telemetry and recycle-events have none" {
+  # s2 has a peak but no window in EITHER existing source, so it is excluded today.
+  run /bin/bash "$AUDIT" --p95-recycle-fill --since all --json
+  [ "$status" -eq 0 ] || false
+  local before
+  before="$(printf '%s' "$output" | jq -r '.n')"
+  [ "$before" -eq 2 ] || false
+
+  mkdir -p "$HOME/.claude/autonomy"
+  printf '%s\n' '{"sid":"s2","window":200000,"model":"claude-opus-5"}' \
+    > "$HOME/.claude/autonomy/session-window.jsonl"
+  export CC_CTX_WINDOWS="$HOME/.claude/autonomy/session-window.jsonl"
+
+  run /bin/bash "$AUDIT" --p95-recycle-fill --since all --json
+  [ "$status" -eq 0 ] || false
+  local after
+  after="$(printf '%s' "$output" | jq -r '.n')"
+  [ "$after" -eq 3 ] || false
+}
+
+@test "a durable record with a null window is EXCLUDED, never imputed (the withdrawn Phase-1 error)" {
+  mkdir -p "$HOME/.claude/autonomy"
+  printf '%s\n' '{"sid":"s2","window":null,"model":"claude-opus-5"}' \
+    > "$HOME/.claude/autonomy/session-window.jsonl"
+  export CC_CTX_WINDOWS="$HOME/.claude/autonomy/session-window.jsonl"
+  run /bin/bash "$AUDIT" --p95-recycle-fill --since all --json
+  [ "$status" -eq 0 ] || false
+  # still 2 — a null window is an ABSENT denominator, not a zero and not a default
+  [ "$(printf '%s' "$output" | jq -r '.n')" -eq 2 ] || false
+}
+
+@test "the durable store is read per CONFIG ROOT, not only ~/.claude (the two-thirds population trap)" {
+  mkdir -p "$HOME/.claude-tertiary/autonomy"
+  printf '%s\n' '{"sid":"s2","window":200000,"model":"claude-opus-5"}' \
+    > "$HOME/.claude-tertiary/autonomy/session-window.jsonl"
+  # NO CC_CTX_WINDOWS override: this pins the DEFAULT list, which is what a live run uses.
+  run /bin/bash "$AUDIT" --p95-recycle-fill --since all --json
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.n')" -eq 3 ] || false
+}
+
+# ── residual (c): the .hist trajectories finally have a consumer ──────────────────────────────
+# ce_sample has been writing "ts used_pct input_tokens" per session since 2026-07-30 and NOTHING
+# on the box read it — verified with a symlink-following census, because BSD `grep -R` sees only
+# 7 of 407 files under ~/.claude (the live layer is per-file symlinks) and its null is not absence.
+@test "--burn reads the .hist trajectories and reports a fill velocity" {
+  printf '%s\n' \
+    '1785000000 10 20000' \
+    '1785000300 20 40000' \
+    '1785000600 30 60000' > "$TMP/telemetry/s1.hist"
+  run /bin/bash "$AUDIT" --burn --since all --json
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.n')" -eq 1 ] || false
+  # 20 points over 600 s = 2.0 pct/min
+  [ "$(printf '%s' "$output" | jq -r '.p50_pct_per_min')" = "2.0" ] || false
+}
+
+@test "a ONE-SAMPLE trajectory yields no slope and is EXCLUDED, never counted as a zero burn" {
+  printf '%s\n' '1785000000 10 20000' > "$TMP/telemetry/s1.hist"
+  printf '%s\n' \
+    '1785000000 10 20000' \
+    '1785000600 30 60000' > "$TMP/telemetry/s3.hist"
+  run /bin/bash "$AUDIT" --burn --since all --json
+  [ "$status" -eq 0 ] || false
+  # only s3 has a slope; s1 must be excluded rather than dragging the median to 0
+  [ "$(printf '%s' "$output" | jq -r '.n')" -eq 1 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.excluded_no_slope')" -eq 1 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.p50_pct_per_min')" = "2.0" ] || false
+}
+
+@test "a trajectory whose samples share one timestamp is EXCLUDED, not a divide-by-zero" {
+  printf '%s\n' \
+    '1785000000 10 20000' \
+    '1785000000 30 60000' > "$TMP/telemetry/s1.hist"
+  run /bin/bash "$AUDIT" --burn --since all --json
+  # n=0 is a NON-VERDICT by this reader's own exit contract, so 3 — never 0 with a fabricated
+  # number, and never an unbounded slope. The exclusion must be COUNTED, not silently dropped.
+  [ "$status" -eq 3 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.n')" -eq 0 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.excluded_no_slope')" -eq 1 ] || false
+  [ "$(printf '%s' "$output" | jq -r '.p50_pct_per_min')" = "null" ] || false
+}
+
+@test "--burn with no trajectory anywhere is a NON-VERDICT (exit 3), never exit 0 with a zero" {
+  rm -f "$TMP"/telemetry/*.hist 2>/dev/null || true
+  run /bin/bash "$AUDIT" --burn --since all
+  [ "$status" -eq 3 ] || false
+}
