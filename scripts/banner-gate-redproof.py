@@ -130,6 +130,15 @@ def sandbox():
         "HAT_BRIM_W",
         "WAND_CELLS",
         "prop_accent",
+        # TWO-WAY MAIL's lane geometry and the offset table its gate reads. `mail_offsets` is a
+        # FUNCTION, which is exactly the leak `hop_pulses` above records paying for: a case that
+        # swaps it and is not listed here leaves it swapped for every case after it.
+        "MAIL_STEP_CELLS",
+        "MAIL_LANE_CELLS",
+        "MAIL_OUT",
+        "MAIL_IN",
+        "MAIL_RISE_STEPS",
+        "mail_offsets",
     ]
     saved = {n: copy.deepcopy(getattr(g, n)) for n in names}
     try:
@@ -302,9 +311,18 @@ def _two_features():
     # for ~20 s however brief its declared window is. 40.0s is a whole number of strides off the
     # real 36.0s (384px, exactly 8 pitches), so `overlap_run`'s half-pitch check — which runs
     # whether or not the beat is emitted — still reads the same 24px offset and stays silent.
+    #
+    # TWO-WAY MAIL now owns 39.0-44.5s, which is the air this sabotage needs, so the fixture also
+    # moves rMail into the free stretch past THE SHOOTING STAR. That is not the fixture giving
+    # ground: the strip-x of a feature is `STRIP_V * its start`, so the two objects can only share
+    # canvas while their STARTS are close, and moving rOverlap later instead — the obvious repair —
+    # slides it a whole canvas away and the gate stops being able to fire at all. Sabotaging the
+    # neighbour is what keeps the ONE gate under test the one that convicts; the harness reports the
+    # message, so a fixture that drifts onto a different check still fails loudly (it just did).
     art = copy.copy(v())
     art.events = ("peek", "rOverlap")
     g.BAR_LEN = 400.0
+    g.RARE_EVENTS["rMail"] = (70.0, 75.5)
     g.RARE_EVENTS["rOverlap"] = (40.0, 44.0)
     g.build(art)
 
@@ -408,7 +426,53 @@ def _duty():
     # clear of `rShoot`'s 62.0s start, so the ONE thing wrong with this build is its duration.
     # (This is the same class of rot the seven stale fixtures on this branch were: a fixture is a
     # function of the timeline, and adding a beat re-times it.)
-    g.RARE_EVENTS["peek"] = (39.0, 58.0)
+    #
+    # RE-TIMED AGAIN 2026-08-18, by the same mechanism the paragraph above describes and for the
+    # third time: 39.0-58.0s was clear when it was written and TWO-WAY MAIL now starts at 39.0s, so
+    # the disjointness gate convicted first and this case went back to re-proving its neighbour. The
+    # over-long window moves into the free stretch past THE SHOOTING STAR — 69.0s is exactly
+    # EVENT_GAP clear of its 65.0s end, and 88.0s stands 62.2s clear of THE CONSTELLATION — so the
+    # one thing wrong with this build is again its 19.0s duration, which breaches both the 10.0s
+    # per-instance ceiling and the 4% per-type one.
+    g.RARE_EVENTS["peek"] = (69.0, 88.0)
+    g.build(v())
+
+
+# ── TWO-WAY MAIL ───────────────────────────────────────────────────────────────────────────────
+# Four cases for one gate, because the beat has four independent ways to stop being two messages
+# crossing and each is invisible to every other check here. The INVERTED case is the one worth
+# reading: it is not a hypothetical. The beat shipped that way through a fully green build — the
+# flights overlapped in time, the lanes cleared each other, the outbound left the frame, every step
+# was a whole pixel, and all three ink probes measured real ink — and only a RENDER caught that the
+# answer was flying out of the walker rather than arriving at it. Ink is not direction.
+
+
+@case("mail: a send and a reply instead of a crossing", "never share a frame")
+def _mail_no_cross():
+    g.MAIL_IN = (0.80, 0.99)
+    g.build(v())
+
+
+@case("mail: the answer flies OUT of the walker", "The inbound ARRIVES at the hand")
+def _mail_inverted():
+    real = g.mail_offsets
+    g.mail_offsets = lambda n, step, rise, outbound: (
+        real(n, step, rise, True)
+        if outbound
+        else [(-step * i, 0.0) for i in range(n + 1)]
+    )
+    g.build(v())
+
+
+@case("mail: two lanes too close to read as two", "one message stuttering")
+def _mail_lanes_close():
+    g.MAIL_LANE_CELLS = 3.0
+    g.build(v())
+
+
+@case("mail: a step that is a fraction of a pixel", "not a whole pixel")
+def _mail_fractional_step():
+    g.MAIL_STEP_CELLS = 0.05
     g.build(v())
 
 
