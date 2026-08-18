@@ -20,6 +20,16 @@ setup() {
   ROLES="$REPO/bin/cc-roles"
   NOTIFY="$REPO/bin/cc-notify"
 
+  # $HOME fixtured too, not only the CC_* seams: the subject resolves several defaults out of
+  # $HOME/.claude directly, so an unfixtured run reads the operator's live tree even when every
+  # seam above is pointed at the tmpdir.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # A READABLE but EMPTY session registry. Without it the fixtured $HOME has no registry at all and
+  # cc-notify answers resolver-unavailable (exit 4, "UNVERIFIED, not invalid") for every name — a
+  # different verdict from "this name does not resolve" (exit 3). Seeding it keeps the distinction
+  # the suite actually tests instead of borrowing the operator's live registry to supply it.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
+
   export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   export CC_NOTIFY_PHONE_DAMP_DIR="$BATS_TEST_TMPDIR/damp"
