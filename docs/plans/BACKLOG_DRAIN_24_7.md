@@ -128,8 +128,19 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   launched**, which means R3's own brief ("your launch on next refreshes the token that unblocks
   the return") was written on a premise that had already been satisfied. A fire's stated rationale
   is worth re-checking at fire time, not only its task.
-- **2026-08-18 — recycle #19 (local drain): `master-session-lifecycle` 16 → 13 open / 1 blocked.
-  filed 0 / closed 3. THE SPAWN GATE IS OPEN AGAIN — one teammate spawned and delivered.**
+- **2026-08-18 — recycle #19 (local drain): `master-session-lifecycle` 16 → 12 open / 1 blocked.
+  filed 0 / closed 4. THE SPAWN GATE IS OPEN AGAIN — one teammate spawned and delivered.**
+
+  *(Counts corrected after the land: this entry was written pre-land saying "13 open / closed 3",
+  because `112d13aa0018` and `267ebd112350` were still awaiting the land + content check that
+  authorises closing them. Both landed in `813c73bf7` and closed, so the true tally is 4. Recorded
+  rather than silently overwritten — the gap between "work finished" and "row closeable" is one
+  land, and a pre-land tally will always under-count by exactly the rows in flight.)*
+
+  **BLOCKED TAIL, BY STRATUM (never a bare zero):** 1 row — `adf1bb6b5406`, venue=**local**,
+  `source: needs`, an operator-platter row (the SessionStart accounts board reaches no session;
+  settings.json is five separate real files). **0 cloud-venue rows in this effort.** The effort is
+  still the smallest live one and still is NOT finished.
 
   **THE SPAWN GATE.** #16 lost 2 of 5 briefs, #17 lost 1 of 4, #18 lost **3 of 3** to
   *"Background subagents cannot write code — use TeamCreate/team_name"*. This recycle's single
