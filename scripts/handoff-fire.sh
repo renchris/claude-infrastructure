@@ -556,17 +556,62 @@ _under_test() { # → "true" when a bats harness is present in this process, els
     printf false
   fi
 }
+# ── THE BRIEF'S OWN PATH — the join key every fire row lacked (item 4a11a0ac850a) ───────────────
+# THE GAP. A lead ANNOUNCED a recycle, WROTE the successor brief, and died before firing it, and
+# succession was lost in silence. The detector that would catch that class has to answer exactly one
+# question — "was a fire ever made FROM this brief?" — and it could not be asked at all: measured
+# 2026-08-17 over the live ledger, 1005 rows across every class carry ZERO field naming a
+# prompt-file path (the 7 substring hits are prose inside `detail`). So a brief on disk and a brief
+# that was fired are byte-identical from the ledger's side, and the only sweep buildable without
+# this field is a heuristic alarm over an attention budget. With it the sweep is EXACT: a brief
+# whose path appears in no row was never fired.
+#
+# WHICH path, deliberately. `PROMPT_FILE` is REWRITTEN to a back-channel COPY at :7416-7417
+# (`PROMPT_FILE_ORIG="$PROMPT_FILE"; PROMPT_FILE="$PF_NB"`), so recording it would name a temp copy
+# the lead never heard of and the join would miss every time. `${PROMPT_FILE_ORIG:-$PROMPT_FILE}` is
+# the CALLER-NAMED path — the same expression payload_lint_gate already uses at :8973 and :9021 for
+# the same reason — and it is the only string a lead's own announcement can be matched against.
+#
+# ABSOLUTISED, NOT RESOLVED. A relative argv path is made absolute so a sweep scanning a brief
+# directory can compare at all; symlinks are deliberately NOT followed. The record is the path the
+# LEAD WROTE, and resolving it would make a symlinked brief fail to match the very announcement it
+# came from (memory self-identity-guard-must-fully-resolve is about the converse case — there the
+# subject IS the resolved target; here the subject is the name).
+#
+# Extraction-safe by the same rule as _under_test above: every call site spells it
+# `$(_resolved_prompt_file 2>/dev/null || true)`, never bare. Four sibling suites sed-extract these
+# emitters ALONE, where this definition is genuinely absent, and under `set -e` an unresolved helper
+# is a 127 that kills the FIRE. Empty ⇒ the field emits JSON null (R9: an unmeasured field reads
+# ABSENT, never a fabricated empty string).
+_resolved_prompt_file() { # → absolute caller-named brief path, or nothing
+  local _p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" _d
+  [ -n "$_p" ] || return 0
+  case "$_p" in
+    /*) printf '%s' "$_p" ;;
+    *)  _d="$(pwd 2>/dev/null || true)"
+        if [ -n "$_d" ]; then printf '%s/%s' "$_d" "$_p"; else printf '%s' "$_p"; fi ;;
+  esac
+}
 emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   if command -v jq >/dev/null 2>&1; then
-    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the trailing
-    # `under_test` key — the two recycle-* callers below are unchanged by construction, not by
-    # inspection. The key is appended LAST so no existing key's position moves.
+    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the two
+    # trailing keys `under_test` and `prompt_file` — the two recycle-* callers below are unchanged
+    # by construction, not by inspection. Both are appended LAST so no existing key's position
+    # moves.
+    #
+    # A REFUSAL CARRIES THE BRIEF TOO, and that is the point rather than an afterthought. The sweep
+    # this field exists for asks "was a fire ever made FROM this brief"; without the refusal rows it
+    # could only ever answer "did a fire SUCCEED from this brief", which collapses two states the
+    # detector must keep apart — a brief nobody ever attempted (the lost-succession class) and a
+    # brief that was attempted and refused by a gate (already recorded, already has a culprit).
+    # Convicting the second as the first is precisely the false alarm that would spend the budget.
     line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
                   --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
                   --arg vd "${4:-}" --arg gt "${5:-}" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
+                  --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
       '{ts:$ts, class:$cl}
        + (if $vd == "admit" then {basis:$r} else {engaged:false, refuse_reason:$r} end)
        + (if $vd == "" then {} else {verdict:$vd} end)
@@ -574,7 +619,8 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
        + {under_test:$ut}
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
-       + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+       + {detail:    (if $d  == "" then null else $d  end)}
+       + {prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
     [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   fi
   return 0
@@ -705,10 +751,25 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   command -v jq >/dev/null 2>&1 || return 0
   case "$en" in 1) en=true ;; 0) en=false ;; *) en=null ;; esac
+  # `prompt_file` — and this is the ONE row class where it is load-bearing rather than merely
+  # complete. The lost-succession class (item 4a11a0ac850a) is a lead that announced a recycle and
+  # wrote the brief and then died, and `recycle-intent` (:8747) is the only row emitted early enough
+  # to witness the attempt. That row runs in the PARENT, where PROMPT_FILE is set, so it carries the
+  # path.
+  #
+  # The three OUTCOME classes (`recycle-unverified`/`-engaged`/`-dead`, :4828/:4844/:4861) run
+  # inside the detached `__recycle` re-exec, which is invoked positionally at :8827 and is never
+  # handed PROMPT_FILE — so they emit null here, by construction and not by oversight. That is the
+  # right trade rather than a hole: threading an 8th positional through the detach would change the
+  # watcher's argv contract (`:4738-4740`) for a value the join does not need, because the intent
+  # row already names the brief and `target_pane`/`prev_sid` join the outcome rows back to it. A
+  # reader who finds prompt_file:null on a recycle-dead row is reading the re-exec, not an absence
+  # of evidence — stated here so nobody re-derives it.
   line=$(jq -cn --arg ts "$(_iso_now)" --arg cl "${1:-recycle}" --arg tp "${3:-}" --arg d "${4:-}" \
                 --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --arg ps "${RCY_OLD_SID:-}" \
                 --argjson en "$en" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                 --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+                --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
     '{ts:$ts, class:$cl, gate:"recycle"}
      + (if $en == null then {} else {engaged:$en} end)
      + {target_pane:(if $tp == "" then null else $tp end),
@@ -716,7 +777,8 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
         goal_requested:$gr, under_test:$ut,
         firing_sid:(if $fs == "" then null else $fs end),
         account:   (if $ac == "" then null else $ac end),
-        detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+        detail:    (if $d  == "" then null else $d  end)}
+     + {prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   return 0
 }
@@ -9115,8 +9177,10 @@ else
         --arg sf "${SURFACE:-}" --arg sr "${SURFACE_REASON:-}" --arg ai "${ANCHOR_INTENT:-}" \
         --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         --argjson ut "$_hf_ut" \
+        --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {goal_requested:  $gr}
+         + {prompt_file:     (if $pf == "" then null else $pf end)}
          + {under_test:      $ut}
          + {firing_sid:      (if $fs == "" then null else $fs end)}
          + {surface:         (if $sf == "" then null else $sf end)}
@@ -9135,9 +9199,18 @@ else
       # jq-less / jq-failed fallback: keep the pre-v2 line shape rather than lose the record.
       # goal_requested rides this path too — a denominator with a hole in it is not a denominator,
       # and "the rows jq wrote" is not a population anyone would think to split on.
-      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s}\n' \
+      #
+      # AND SO DOES prompt_file, for a strictly sharper reason than completeness. Its consumer is an
+      # ABSENCE test — "this brief appears in no row, so it was never fired" — and an absence test
+      # inherits every hole in its input as a POSITIVE finding. A fire that really happened but was
+      # written down this path would be reported as a lost succession, i.e. the field's own failure
+      # mode is to manufacture the exact alarm it exists to make trustworthy. `%s` on an unset value
+      # yields an empty string rather than jq's null, so the emptiness is spelled explicitly here.
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
         "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+        "$(_hf_pf="$(_resolved_prompt_file 2>/dev/null || true)"
+           if [ -n "$_hf_pf" ]; then printf '"%s"' "$_hf_pf"; else printf null; fi)" \
         >> "$_hf_log" 2>/dev/null || true
     fi
     # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
