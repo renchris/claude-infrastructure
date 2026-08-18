@@ -1,0 +1,195 @@
+#!/bin/bash
+# cc-roles — CLAIM / RELEASE / READ a machine-wide role pointer, with LIVENESS.
+#
+#   cc-roles claim <role> [--pane <uuid>] [--pid <n>] [--target <t>] [--force]
+#   cc-roles release <role> [--force]
+#   cc-roles read <role>            → prints the target IFF the claim is LIVE
+#   cc-roles list                   → every role + its state
+#
+# ── WHY A CLAIM IS NOT JUST A FILE (the trap this tool exists to close) ───────────────────────────
+# ${CC_ROLES_DIR:-~/.claude/cc-roles}/<role> holds ONE address (a pane uuid / session name) and five
+# consumers read it at send time — cc-notify --role, cc-announce, cc-await-ping --role, cc-classify
+# (never-reap), cc-reaper (CC_PAGE_TO_FILE), plus cc-dispatch/autonomy-sweep/handoff-fire via the
+# `cat cc-roles/desk` form. Every one of them reads it with `head -n1`. NONE of them asks whether the
+# claimant is still alive.
+#
+# That asymmetry is the whole bug, and it is NOT the one an empty directory produces:
+#
+#   ABSENT  — no file. `cc-notify --role desk` exits 3, LOUDLY, reason=role-unset. Nothing is
+#             claimed to have been delivered. A pager that gets this knows it failed.
+#   STALE   — a file naming a pane that died. `cc-notify --role desk` exits **0**,
+#             verdict=mailbox-only: the page is enqueued into a box no process will ever drain, and
+#             cc-reaper's own accounting (notify_desk, REACHED/RECORDED/REFUSED) files that as
+#             RECORDED and KEEPS its damping marker — so the next sweep does not even retry. The
+#             message is delivered-and-lost, in silence.
+#
+# STALE is strictly worse than ABSENT, so writing a live session's uuid into the file and walking
+# away is not a fix — it is the failure mode on a timer, armed for whenever that pane closes. The
+# cure is that a claim CARRIES ITS OWN LIVENESS EVIDENCE and a dead claimant READS AS ABSENT:
+# the loud failure is recoverable, the silent one is not.
+#
+# ── RECORD FORMAT — line 1 is the bare target, on purpose ─────────────────────────────────────────
+#   <target>                ← line 1: exactly what every existing `head -n1` reader already expects
+#   pid=<claimant pid>      ← the liveness evidence (kill -0)
+#   pane=<pane id>          ← optional second signal (probed only when CC_ROLES_PANE_PROBE is set)
+#   role=<name> claimed=<iso> host=<hostname>
+# So a legacy reader is unchanged by a claim written here, and a liveness-aware reader gets the
+# evidence from the same file. Writes are atomic (tmp + mv), mirroring handoff-fire's write_role.
+#
+# ── THREE READ STATES, because a legacy file cannot be convicted ──────────────────────────────────
+#   exit 0  LIVE         — target on stdout; the claimant's pid (and pane, if probed) is alive.
+#   exit 1  ABSENT       — no file, empty file, or the claimant is DEAD. Nothing is printed.
+#   exit 4  UNVERIFIED   — a file with NO liveness evidence at all (a hand-written / pre-cc-roles
+#                          pointer). The target IS printed, and the caller decides. This state must
+#                          never be folded into ABSENT: every role file on disk today is this shape,
+#                          so an abstain-as-absent rule would retire the main path (memory:
+#                          abstain-rule-can-retire-the-common-case). It is equally not LIVE — the
+#                          claim asserts nothing, so nothing may be claimed on its behalf.
+#   exit 2  usage.
+#
+# Env / seams: CC_ROLES_DIR (default ~/.claude/cc-roles) · CC_ROLES_PANE_PROBE (a command run as
+# `$probe <pane>`; exit 0 = live, non-zero = dead. UNSET ⇒ the pane signal is not evaluated at all,
+# which can only ever make a claim easier to keep, never a false ABSENT).
+set -uo pipefail
+
+ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
+PANE_PROBE="${CC_ROLES_PANE_PROBE:-}"
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-roles: $*" >&2; exit 2; }
+iso()   { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
+
+field() { # <file> <key> → value of the first `key=` line (empty if absent)
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1 | tr -d '[:space:]'
+}
+target_of() { # <file> → line 1, whitespace-stripped
+  head -n1 "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+# ── THE liveness predicate. Every verb here and every consumer goes through THIS function, so the
+# actuator is the arbiter and a second copy of the rule cannot drift from it (memory:
+# make-the-actuator-the-arbiter).
+# Prints: LIVE <target> | ABSENT <reason> | UNVERIFIED <target>
+role_state() { # <role>
+  local r="$1" f="$ROLES_DIR/$1" t pid pane
+  [ -f "$f" ] || { echo "ABSENT unset"; return; }
+  t="$(target_of "$f")"
+  [ -n "$t" ] || { echo "ABSENT empty"; return; }
+  pid="$(field "$f" pid)"
+  pane="$(field "$f" pane)"
+  if [ -z "$pid" ] && [ -z "$pane" ]; then echo "UNVERIFIED $t"; return; fi
+  # pid is the authoritative signal when the claim carries one.
+  if [ -n "$pid" ]; then
+    case "$pid" in (*[!0-9]*|'') echo "ABSENT bad-pid"; return ;; esac
+    kill -0 "$pid" 2>/dev/null || { echo "ABSENT dead-pid"; return; }
+  fi
+  # The pane signal is evaluated ONLY when a probe is configured. With no probe the pane is UNKNOWN,
+  # and UNKNOWN must not convict a claim whose pid is alive — an unprobeable signal is not a dead one.
+  if [ -n "$pane" ] && [ -n "$PANE_PROBE" ]; then
+    "$PANE_PROBE" "$pane" >/dev/null 2>&1 || { echo "ABSENT dead-pane"; return; }
+  fi
+  # A pane-only claim with no probe asserts nothing checkable.
+  if [ -z "$pid" ] && [ -z "$PANE_PROBE" ]; then echo "UNVERIFIED $t"; return; fi
+  echo "LIVE $t"
+}
+
+cmd_read() { # <role>
+  local r="${1:?}" st kind val
+  st="$(role_state "$r")"; kind="${st%% *}"; val="${st#* }"
+  case "$kind" in
+    LIVE)       printf '%s\n' "$val"; exit 0 ;;
+    UNVERIFIED) printf '%s\n' "$val"
+                echo "cc-roles: role '$r' carries NO liveness evidence (no pid=/pane= line) — the target is printed but UNVERIFIED; re-claim it with \`cc-roles claim $r\` to make it checkable" >&2
+                exit 4 ;;
+    *)          echo "cc-roles: role '$r' is ABSENT (reason=$val) — $ROLES_DIR/$r names no live claimant" >&2
+                exit 1 ;;
+  esac
+}
+
+cmd_claim() { # <role> [--pane|--pid|--target|--force]
+  local r="" pane="" pid="" target="" force=0
+  r="${1:?}"; shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pane)   pane="${2:?--pane needs a value}"; shift 2 ;;
+      --pid)    pid="${2:?--pid needs a value}"; shift 2 ;;
+      --target) target="${2:?--target needs a value}"; shift 2 ;;
+      --force)  force=1; shift ;;
+      *)        die "unknown claim arg '$1'" ;;
+    esac
+  done
+  # Default pid = $PPID, the process that INVOKED the claim (the session's shell), never $$ — this
+  # script exits the moment it has written the file, so binding the claim to $$ would produce a
+  # record that is dead-on-arrival: the very silent-stale state this tool exists to prevent, minted
+  # by the claim itself. --pid names a different owner explicitly (a supervisor claiming for a child).
+  [ -n "$pid" ]  || pid="${PPID:-$$}"
+  if [ -z "$pane" ]; then
+    local itsid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"
+    [ -n "$itsid" ] && pane="${itsid##*:}"
+  fi
+  [ -n "$target" ] || target="${pane:-${SESSION_ID:-}}"
+  [ -n "$target" ] || die "no target: pass --target/--pane, or run inside a pane (\$ITERM_SESSION_ID/\$SESSION_ID)"
+  case "$pid" in (*[!0-9]*) die "--pid must be numeric (got '$pid')" ;; esac
+
+  # A LIVE claim held by a DIFFERENT claimant is not silently stolen — that is how two organs end up
+  # each believing they hold the role. --force is the deliberate override (crash-path takeover).
+  local st kind cur
+  st="$(role_state "$r")"; kind="${st%% *}"; cur="${st#* }"
+  if [ "$kind" = LIVE ] && [ "$cur" != "$target" ] && [ "$force" != 1 ]; then
+    echo "cc-roles: role '$r' is held LIVE by $cur — refusing to steal it; pass --force to take over" >&2
+    exit 1
+  fi
+
+  mkdir -p "$ROLES_DIR" 2>/dev/null || die "cannot create $ROLES_DIR"
+  local tmp="$ROLES_DIR/.$r.$$.tmp"
+  {
+    printf '%s\n' "$target"
+    printf 'pid=%s\n' "$pid"
+    [ -n "$pane" ] && printf 'pane=%s\n' "$pane"
+    printf 'role=%s\n' "$r"
+    printf 'claimed=%s\n' "$(iso)"
+    printf 'host=%s\n' "$(hostname 2>/dev/null || echo '?')"
+  } > "$tmp" 2>/dev/null || die "cannot write $tmp"
+  mv -f "$tmp" "$ROLES_DIR/$r" 2>/dev/null || die "cannot install $ROLES_DIR/$r"
+  if [ "$kind" = ABSENT ] || [ "$cur" = "$target" ]; then
+    echo "claimed $r → $target (pid=$pid)"
+  else
+    echo "reclaimed $r: $cur → $target (pid=$pid)"
+  fi
+}
+
+cmd_release() { # <role> [--force]
+  local r="${1:?}" force=0; shift || true
+  [ "${1:-}" = "--force" ] && force=1
+  local f="$ROLES_DIR/$r"
+  [ -f "$f" ] || { echo "cc-roles: role '$r' is not claimed" >&2; exit 1; }
+  local pid; pid="$(field "$f" pid)"
+  # Releasing a role somebody ELSE still holds live would silently unaddress a working desk.
+  if [ "$force" != 1 ] && [ -n "$pid" ] && [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "cc-roles: role '$r' is held by a LIVE claimant (pid=$pid), not this process — pass --force to release it anyway" >&2
+    exit 1
+  fi
+  rm -f "$f" 2>/dev/null || die "cannot remove $f"
+  echo "released $r"
+}
+
+cmd_list() {
+  [ -d "$ROLES_DIR" ] || { echo "cc-roles: no roles dir ($ROLES_DIR)"; exit 0; }
+  local f n st
+  for f in "$ROLES_DIR"/*; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f")"
+    case "$n" in .*) continue ;; esac
+    st="$(role_state "$n")"
+    printf '%-14s %s\n' "$n" "$st"
+  done
+}
+
+case "${1:-}" in
+  claim)   shift; cmd_claim "$@" ;;
+  release) shift; cmd_release "$@" ;;
+  read)    shift; cmd_read "$@" ;;
+  list)    shift; cmd_list "$@" ;;
+  -h|--help|'') usage; exit 0 ;;
+  *)       die "unknown verb '$1' (claim|release|read|list)" ;;
+esac
