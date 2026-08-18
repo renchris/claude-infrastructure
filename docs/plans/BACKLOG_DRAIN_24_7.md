@@ -14910,6 +14910,76 @@ subshell. The answer therefore moved to `WS_STATUS` and the sensor is now called
 is what makes `WS_ERR`/`WS_RC` reachable at all. Rows carry `err`, `rc` and `account`; two bats
 arms pin it, both verified to fail against the pre-fix artifact replayed from git.
 
+#### A-lane routing 2026-08-18 — a FOREIGN-PROJECT row reached a VM cloned from THIS repo (ce7651b02a17)
+
+**The lane fired a doc_classifier row into a VM that cannot see doc_classifier.** The brief for
+`ce7651b02a17` (*"reviewapp/api/auth.py: fresh PyJWKClient per token → pre-auth JWKS fetch
+amplification"*) names `repo /Users/chrisren/Development/doc_classifier` and opens with a mandated
+FIRST STEP — read the cited file **on that repo's trunk**, because a post-land RED reproduces
+faithfully in a stale tree (6110fc45141e). Measured inside the VM:
+
+| What the brief needs | What the VM has |
+|---|---|
+| `~/Development/doc_classifier` | absent — `find / -name 'doc_classifier*'` is empty |
+| `git -C …/doc_classifier fetch origin` | no such repo, and no route to one |
+| any read of `reviewapp/api/auth.py` | GitHub access scoped to `renchris/claude-infrastructure` **only** |
+| the clone it did get | `renchris/claude-infrastructure`, **shallow**, HEAD == `origin/main` (`2d85de8c`) |
+
+So the first instruction is unexecutable, and **the security finding is neither confirmed nor
+refuted** — the row is untouched, not handled. Nothing was built: a diff for a file the session
+cannot read is precisely the *"improvises a plausible answer against history it cannot read, and
+reports success"* anti-goal `bin/cc-venue` is written against (§5).
+
+**The mechanism, measured — the item's project never enters the create.** `cc-offload`'s API path
+derives the VM's repo from the OFFLOADER's own checkout, not from the row it is firing:
+
+    bin/cc-offload:519-523   remote_url="$(cd "$REPO" && git remote get-url origin)"
+                             repo_slug=…               # ← the offloader's repo, always
+    scripts/cloud-create-api.py:454   "--repo", default="renchris/claude-infrastructure"
+    scripts/cloud-create-api.py:345   git_context() → sources[] + outcomes[]   # authorizes ONLY that repo
+
+`sources[]` is what authorizes the VM's git proxy at all (the 403 that file was born from), so the
+mismatch is not a soft failure the VM can work around — the target repo is not in its authorized
+set. Meanwhile `scripts/dispatch-projects.conf:48` resolves the project to `repo=~/Development/
+doc_classifier`, which is the correct tree for a **local worktree** and unreachable for a VM. The
+two never meet, and nothing compares them at create time. Generalised: **every row whose project is
+not `claude-infrastructure` is structurally unexecutable in Lane A today**, and the lane cannot tell.
+
+**Why `bin/cc-eligible` does not catch it.** Its classes ask *can a VM do this work* — spelling
+classes for state a VM cannot see, the measured history-reach arm, the horizon oracle — all
+evaluated against `CC_ELIGIBLE_REPO → $HOME/Development/<project>` (cc-eligible:102-104). None of
+them asks the prior question: *will the VM be handed that repo at all?* Repo-availability off-box is
+not one of its classes, and the gate fails OPEN on unmeasurable state, so a foreign-project row
+reads ELIGIBLE by construction. ⚠️ Read this arm as measured-from-inside-the-VM and re-verify it
+locally against full history before acting on it.
+
+**Deliberately NOT fixed here, and the refusal is the rule working.** `bin/cc-venue`'s header guard
+is explicit — *a cloud VM must never build or run the venue rule; a shallow clone cannot certify* —
+and this clone is grafted, so the premise of any spawn-rail patch cannot be checked against the
+history that justifies it. That is the same brief cc-venue's docstring records rejecting outright
+(*"it patches the fleet spawn rail and its premise had gone stale against the same day's
+landings"*). A local session owns this fix.
+
+**The ledger could not be written from here, which is why this entry is the channel.**
+`~/.claude/autonomy/backlog.jsonl` does not exist in the VM and cannot — `bin/cc-cloud`'s header
+states it: *"no backlog write … `git ls-files autonomy/` is 0 — a cloud VM cannot reach it"*. So
+`cc-backlog block` / `reopen` and `cc-notify` are all unreachable, and a pushed ref (O1/O2) is the
+only observable this box can read. Two commands are owed locally, both operator-side:
+
+    cc-backlog venue ce7651b02a17 --venue local \
+      --why "cloud-repo-mismatch: the VM clones claude-infrastructure; doc_classifier is not in its authorized source set"
+    cc-backlog reopen ce7651b02a17          # add --force iff the cloud claim still folds LIVE
+
+⚠️ **`--self-release` is NOT available for this class, and that is a second small gap.** The
+release this row needs is exactly Rule B's exemption shape — a claim rolled back with the work
+never commenced (98e0e325b3ed) — but the token set is CLOSED to `spawn-fail | compose-fail |
+worktree-fail` (cc-backlog:1549-1552), which spell three ways the DISPATCHER failed to fire. There
+is no spelling for *the venue could not host the work*, and the flag additionally requires `--by`
+and refuses unless the ledger folds that identity as the live claimer (cc-backlog:1555-1577) — so
+the operator cannot issue it on the VM's behalf either. This class therefore reopens as an ordinary
+pair and reads as thrash. A fourth token (`venue-unhostable`) is the obvious repair; it is not
+taken here for the same shallow-clone reason as the routing fix above.
+
 **Lane B — ONE local self-recycling goal-armed session, 24/7, for everything else.**
 The proven local-drain design (9 recycles) plus the one missing property — self-perpetuation:
 - B1 **Chained recycle, no terminal goal.** Per recycle: goal = effort-scoped, provable,
