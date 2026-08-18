@@ -47,7 +47,18 @@ set -uo pipefail
 DIR="${1:-}"; [ "$DIR" = "--dir" ] && { DIR="${2:?--dir needs a path}"; shift 2; } || DIR=""
 SELFTEST=0
 for a in "$@"; do [ "$a" = "--selftest" ] && SELFTEST=1; done
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# RESOLVE $0 THROUGH ITS SYMLINKS BEFORE DERIVING THE ROOT. ~/.claude/{scripts,hooks,bin}/ are
+# per-file symlinks into this checkout, so on the LIVE path `dirname "$0"/..` is ~/.claude — no
+# tests/, no docs/, no .git. A lint that derived its root that way would scan the wrong tree and
+# report clean, and only ever on the live path, which is invisible from a worktree. No
+# `readlink -f`: that is GNU-only and this box is BSD. Canonical loop, from scripts/ship-land.sh.
+_self_p="${BASH_SOURCE[0]}"
+while [ -L "$_self_p" ]; do
+  _self_d="$(cd "$(dirname "$_self_p")" && pwd)"
+  _self_p="$(readlink "$_self_p")"
+  case "$_self_p" in /*) ;; *) _self_p="$_self_d/$_self_p" ;; esac
+done
+REPO="$(cd "$(dirname "$_self_p")/.." && pwd)"
 DIR="${DIR:-$REPO/hooks}"
 
 # A line is a FINDING when it backgrounds a command (`&` at end, not `&&`) and redirects neither
