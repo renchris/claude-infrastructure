@@ -90,3 +90,70 @@ setup() {
   [ "$status" -ne 0 ]
   [ "$("$BIN" count --open --cwd "$WT_A")" = 1 ]
 }
+
+# ── AGE / THE STALE CLASS (item 3b464e94b3ff) ───────────────────────────────────────────────────
+# Rows had no age disposition, so a debt from a peer that can never return (reaped, crashed, died
+# before its detach) convicted every later same-cwd session as 🔧 until a human ran `abandon`.
+# What is pinned here is the rule the fix chose: age is DERIVED and VISIBLE, the stale set is
+# SEPARATELY ADDRESSABLE, and NOTHING EXPIRES — `count --open` still counts a stale row, because a
+# consumer contract that silently shrank would be the same silent-loss failure one layer down.
+
+_backdate() { # <marker> <iso-ts> — fixture surgery: backdate the open row carrying this marker
+  local f; f="$(ls "$CC_CUSTODY_DIR"/*.jsonl | head -1)"
+  jq -c --arg m "$1" --arg ts "$2" 'if .marker == $m then .ts = $ts else . end' "$f" > "$f.tmp"
+  mv "$f.tmp" "$f"
+}
+
+@test "stale class: an open row past the TTL counts as --stale, a fresh one as --fresh" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-STALE --slug waveStale
+  "$BIN" open --cwd "$WT_A" --target 43 --marker M-FRESH --slug waveFresh
+  _backdate M-STALE "2020-01-01T00:00:00Z"
+  [ "$("$BIN" count --open --cwd "$WT_A" --stale)" = 1 ]
+  [ "$("$BIN" count --open --cwd "$WT_A" --fresh)" = 1 ]
+  # NOTHING EXPIRES: the bare consumer contract still sees both.
+  [ "$("$BIN" count --open --cwd "$WT_A")" = 2 ]
+}
+
+@test "TTL default is 24h and CC_CUSTODY_TTL_HOURS is the seam that moves it" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-25H --slug wave25h
+  _backdate M-25H "$(date -u -v-25H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  [ "$("$BIN" count --open --cwd "$WT_A" --stale)" = 1 ]
+  [ "$(CC_CUSTODY_TTL_HOURS=48 "$BIN" count --open --cwd "$WT_A" --stale)" = 0 ]
+}
+
+@test "age is VISIBLE: list --open renders it and marks STALE; --json carries ageHours + stale" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-VIS --slug waveVis
+  _backdate M-VIS "2020-01-01T00:00:00Z"
+  run "$BIN" list --open --cwd "$WT_A"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'STALE'
+  run "$BIN" list --open --cwd "$WT_A" --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.[0].stale')" = true ]
+  [ "$(printf '%s' "$output" | jq -r '.[0].ageHours > 0')" = true ]
+}
+
+@test "abandon --stale --why discharges the stale set ONLY; the fresh debt survives" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-BULK1 --slug waveBulk1
+  "$BIN" open --cwd "$WT_A" --target 43 --marker M-BULK2 --slug waveBulk2
+  _backdate M-BULK1 "2020-01-01T00:00:00Z"
+  run "$BIN" abandon --stale --cwd "$WT_A"
+  [ "$status" -ne 0 ]                       # a bulk discharge without a reason is still refused
+  run "$BIN" abandon --stale --why "peer reaped before its detach" --cwd "$WT_A"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+  [ "$("$BIN" count --open --cwd "$WT_A")" = 1 ]
+  [ "$("$BIN" list --open --cwd "$WT_A" --json | jq -r '.[0].marker')" = M-BULK2 ]
+  grep -q 'peer reaped before its detach' "$CC_CUSTODY_DIR"/*.jsonl
+}
+
+@test "an UNPARSEABLE ts is never stale — an unknown age keeps the debt, never bulk-discharges it" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-BADTS --slug waveBadTs
+  _backdate M-BADTS "not-a-timestamp"
+  [ "$("$BIN" count --open --cwd "$WT_A" --stale)" = 0 ]
+  [ "$("$BIN" list --open --cwd "$WT_A" --json | jq -r '.[0].ageHours')" = null ]
+  run "$BIN" abandon --stale --why "sweep" --cwd "$WT_A"
+  [ "$status" -eq 0 ]
+  [ "$output" = 0 ]
+  [ "$("$BIN" count --open --cwd "$WT_A")" = 1 ]
+}

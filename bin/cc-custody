@@ -37,10 +37,33 @@
 #   sibling's dispatch costs a bounded, latched block, while a per-pane key would silently DROP
 #   custody across the measured resume-loses-pane-id case. Chosen deliberately.
 #
-# Env seams (tests): CC_CUSTODY_DIR · (lib) CC_FIRED_DIR unused here.
+# AGE / THE STALE CLASS (item 3b464e94b3ff, 2026-08-17). Rows had no age disposition at all: an
+#   open debt from a peer that was reaped, crashed, or died before its detach is indistinguishable
+#   from one fired a minute ago, so EVERY later session sharing that cwd inherits it as 🔧 until a
+#   human runs `abandon`. The rule chosen — and the one deliberately NOT chosen:
+#     · NOT expiry. A TTL that DROPS a row is the silent-loss direction this file's POLARITY note
+#       already rejects: the whole store exists because an unreturned wave is invisible, and an
+#       age-triggered delete makes it invisible again, this time by construction. Nothing here
+#       deletes, nothing here rewrites; the log stays append-only and `count --open` (the sole
+#       consumer contract — wrap-ledger's CUSTODY_OPEN) counts stale rows exactly as before.
+#     · AGE IS DERIVED AND VISIBLE. Every open row carries `ageHours` (from its own ts) and a
+#       `stale` boolean = age >= CC_CUSTODY_TTL_HOURS (default 24 — a dispatched wave that has not
+#       pinged back a full day after its fire is not in flight, it is gone). `list --open` renders
+#       the age and marks STALE; `--json` carries both fields.
+#     · THE STALE SET IS SEPARATELY ADDRESSABLE. `--stale` / `--fresh` select it on list+count, so
+#       a consumer can treat a dead peer's debt differently from a fresh one WITHOUT this file
+#       deciding for it, and `abandon --stale --why …` discharges the whole set in one explicit,
+#       reason-carrying, append-only act. The disposition is a human/agent decision that age makes
+#       cheap — never an automatic one.
+#   Unparseable/absent ts ⇒ ageHours null ⇒ NOT stale: the classification gates a bulk discharge,
+#   so an unknown age must fail toward keeping the debt (lookup-miss-is-not-absence).
+#
+# Env seams (tests): CC_CUSTODY_DIR · CC_CUSTODY_TTL_HOURS · (lib) CC_FIRED_DIR unused here.
 set -uo pipefail
 
 CUSTODY_DIR="${CC_CUSTODY_DIR:-$HOME/.claude/autonomy/custody}"
+TTL_HOURS="${CC_CUSTODY_TTL_HOURS:-24}"
+case "$TTL_HOURS" in ''|*[!0-9]*) TTL_HOURS=24 ;; esac
 
 _die() { printf 'cc-custody: %s\n' "$1" >&2; exit "${2:-2}"; }
 
@@ -80,6 +103,20 @@ _OPEN_JQ='
   | group_by(.k) | map(sort_by(.ts) | last) | map(select(.kind == "open"))
 '
 
+# Age annotation, applied AFTER _OPEN_JQ. Needs --argjson ttl. A row whose ts will not parse gets
+# ageHours null and stale false — never true (see the AGE block in the header).
+_AGE_JQ='
+  | map( ((.ts // "") | (try fromdateiso8601 catch null)) as $t
+         | . + {ageHours: (if $t == null then null else (((now - $t) / 3600) | floor) end)}
+         | . + {stale: ((.ageHours != null) and (.ageHours >= $ttl))} )
+'
+# _select_jq — the stale/fresh filter for list+count, given WANT_STALE/WANT_FRESH.
+_select_jq() {
+  if [ "$WANT_STALE" -eq 1 ]; then printf '%s' ' | map(select(.stale))'
+  elif [ "$WANT_FRESH" -eq 1 ]; then printf '%s' ' | map(select(.stale | not))'
+  fi
+}
+
 _files_for() { # $1=cwd-or-empty → prints the file list (existing only)
   local cwd="${1:-}" key f
   if [ -n "$cwd" ]; then
@@ -93,6 +130,7 @@ _files_for() { # $1=cwd-or-empty → prints the file list (existing only)
 
 cmd="${1:-}"; shift 2>/dev/null || true
 CWD="" TARGET="" MARKER="" SLUG="" NB="" OP="" WHY="" WANT_OPEN=0 WANT_JSON=0 TOKEN=""
+WANT_STALE=0 WANT_FRESH=0
 # A flag where the token should be is a MALFORMED call, not a token (review #5: `return --cwd X`
 # used to adopt "--cwd" as the token and rc-0 "no OPEN row matches" — a silent non-discharge).
 case "$cmd" in return|abandon)
@@ -110,10 +148,15 @@ while [ $# -gt 0 ]; do
     --why) shift; WHY="${1:-}" ;;
     --open) WANT_OPEN=1 ;;
     --json) WANT_JSON=1 ;;
+    # stale/fresh are age CLASSES of the open set — each implies --open (a discharged row has no
+    # age disposition worth asking about).
+    --stale) WANT_STALE=1; WANT_OPEN=1 ;;
+    --fresh) WANT_FRESH=1; WANT_OPEN=1 ;;
     *) _die "unknown arg: $1" ;;
   esac
   shift 2>/dev/null || true
 done
+[ "$WANT_STALE" -eq 1 ] && [ "$WANT_FRESH" -eq 1 ] && _die "--stale and --fresh are exclusive"
 
 case "$cmd" in
   open)
@@ -124,6 +167,34 @@ case "$cmd" in
       || _die "append failed" 3
     ;;
   return|abandon)
+    # BULK: `abandon --stale --why …` discharges every STALE open row in scope. One explicit act
+    # carrying one reason, appended per row like any other verdict — the addressability half of the
+    # age rule (never an expiry, never a rewrite). Prints the number discharged.
+    if [ "$cmd" = abandon ] && [ -z "$TOKEN" ] && [ "$WANT_STALE" -eq 1 ]; then
+      [ -n "$WHY" ] || _die "abandon needs --why"
+      bulk_n=0
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        stale_rows="$(jq -nc --argjson ttl "$TTL_HOURS" "$_OPEN_JQ$_AGE_JQ"' | .[]' "$f" 2>/dev/null || true)"
+        while IFS= read -r r; do
+          [ -n "$r" ] || continue
+          [ "$(printf '%s' "$r" | jq -r '.stale // false')" = true ] || continue
+          _row abandon \
+            "$(printf '%s' "$r" | jq -r '.cwd // ""')" "$OP" \
+            "$(printf '%s' "$r" | jq -r '.targetPane // ""')" \
+            "$(printf '%s' "$r" | jq -r '.marker // ""')" \
+            "$(printf '%s' "$r" | jq -r '.slug // ""')" "" "$WHY" >> "$f" \
+            || _die "append failed" 3
+          bulk_n=$((bulk_n + 1))
+        done <<INNER
+$stale_rows
+INNER
+      done <<OUTER
+$(_files_for "$CWD")
+OUTER
+      printf '%s\n' "$bulk_n"
+      exit 0
+    fi
     [ -n "$TOKEN" ] || _die "$cmd needs a <marker-or-slug> token"
     [ "$cmd" = abandon ] && [ -z "$WHY" ] && _die "abandon needs --why"
     matched=""
@@ -153,25 +224,36 @@ EOF
     [ -n "$files" ] || { [ "$WANT_JSON" -eq 1 ] && printf '[]\n' || :; exit 0; }
     if [ "$WANT_OPEN" -eq 1 ]; then
       # shellcheck disable=SC2086
-      out="$(cat $files 2>/dev/null | jq -nc "$_OPEN_JQ" 2>/dev/null || printf '[]')"
+      out="$(cat $files 2>/dev/null | jq -nc --argjson ttl "$TTL_HOURS" "$_OPEN_JQ$_AGE_JQ$(_select_jq)" 2>/dev/null || printf '[]')"
     else
       # shellcheck disable=SC2086
       out="$(cat $files 2>/dev/null | jq -nc '[ inputs ]' 2>/dev/null || printf '[]')"
     fi
     if [ "$WANT_JSON" -eq 1 ]; then printf '%s\n' "$out"
-    else printf '%s' "$out" | jq -r '.[] | [.ts, .kind, (.slug // "-"), (.targetPane // "-"), (.marker // "-")] | @tsv' 2>/dev/null || true
+    else printf '%s' "$out" | jq -r '.[] | [.ts, .kind, (.slug // "-"), (.targetPane // "-"), (.marker // "-")]
+                                        + (if has("ageHours") then [(if .ageHours == null then "age?" else ((.ageHours|tostring) + "h") end), (if .stale then "STALE" else "fresh" end)] else [] end)
+                                        | @tsv' 2>/dev/null || true
     fi
     ;;
   count)
-    [ "$WANT_OPEN" -eq 1 ] || _die "count supports --open only"
+    [ "$WANT_OPEN" -eq 1 ] || _die "count supports --open (optionally with --stale/--fresh) only"
     files="$(_files_for "$CWD")"
     [ -n "$files" ] || { printf '0\n'; exit 0; }
-    # shellcheck disable=SC2086
-    cat $files 2>/dev/null | jq -nc "$_OPEN_JQ"' | length' 2>/dev/null || _die "store unreadable" 3
+    # The bare `count --open` contract is UNCHANGED — stale rows still count. wrap-ledger's
+    # CUSTODY_OPEN reads exactly this, and an age class must never silently shrink a debt.
+    if [ "$WANT_STALE" -eq 1 ] || [ "$WANT_FRESH" -eq 1 ]; then
+      # shellcheck disable=SC2086
+      cat $files 2>/dev/null | jq -nc --argjson ttl "$TTL_HOURS" "$_OPEN_JQ$_AGE_JQ$(_select_jq)"' | length' 2>/dev/null || _die "store unreadable" 3
+    else
+      # shellcheck disable=SC2086
+      cat $files 2>/dev/null | jq -nc "$_OPEN_JQ"' | length' 2>/dev/null || _die "store unreadable" 3
+    fi
     ;;
   *) _die "usage: cc-custody open --cwd <dir> --target <pane> [--marker M] [--slug S] [--notify-back NB] [--originator-pane P]
        cc-custody return|abandon <marker-or-slug> [--cwd <dir>] [--why <text>]
-       cc-custody list [--open] [--cwd <dir>] [--json]
-       cc-custody count --open [--cwd <dir>]" ;;
+       cc-custody abandon --stale --why <text> [--cwd <dir>]   (bulk: every STALE open row)
+       cc-custody list [--open [--stale|--fresh]] [--cwd <dir>] [--json]
+       cc-custody count --open [--stale|--fresh] [--cwd <dir>]
+       stale = open and ageHours >= CC_CUSTODY_TTL_HOURS (default 24); nothing ever expires" ;;
 esac
 exit 0
