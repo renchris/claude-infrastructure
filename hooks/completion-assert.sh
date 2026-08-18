@@ -83,12 +83,15 @@
 #   hook must never block the turn on its own misconfiguration.
 #
 # ── SAFETY (mirrors anti-deference-nudge.sh:26-41,90-104) ──
-#   L one-shot latch (a fired MSG hash never re-fires) · C hard cap COMPLETION_MAX (default 3;
-#   silent forever after) · F fail-safe: block ONLY via {decision:"block"}; EVERY path exits 0;
+#   L one-shot latch (a fired MSG hash never re-fires) · C hard cap PER CLASS: `assert` (every
+#   conviction arm) = COMPLETION_MAX (default 3), `shape` (D6) = COMPLETION_SHAPE_MAX (default 2),
+#   each silent forever after — see the latch block for why one shared counter starved the terminal
+#   close · F fail-safe: block ONLY via {decision:"block"}; EVERY path exits 0;
 #   any read/jq/ledger failure → abstain. No `set -e` (a Stop hook exiting 2 false-blocks).
 #   B-3 one IDL {fired|abstained:<reason>} line per invocation.
 #
-# Env seams (tests): COMPLETION_STATE_DIR · COMPLETION_IDL · COMPLETION_MAX · WRAP_LEDGER_BIN ·
+# Env seams (tests): COMPLETION_STATE_DIR · COMPLETION_IDL · COMPLETION_MAX · COMPLETION_SHAPE_MAX ·
+#   WRAP_LEDGER_BIN ·
 #   CC_BACKLOG_BIN (arm 2 D1 — tests stub it; the real binary is resolved when unset) ·
 #   SESSION_WRITES_LIB / ORIGIN_IDENTITY_LIB / CLOSE_SHAPE_LIB / CC_FIRED_DIR / CC_CLOSE_SHAPE
 #   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch) ·
@@ -698,8 +701,11 @@ done <<< "$MSG"
 # same — final-response-shaping M4), and the reason deliberately does not restate D1/D3/D4.
 # Origin verdict: hooks/lib/origin-identity.sh oi_origin_class — contract polarity (unproven peer
 # ⇒ origin), pane-id first with the by-cwd+marker fallback that survives the measured
-# resume-loses-$ITERM_SESSION_ID case. Bounds: shares the latch-set + COMPLETION_MAX cap verbatim
-# with every other arm. CC_CLOSE_SHAPE=0 disables the arm outright (R8).
+# resume-loses-$ITERM_SESSION_ID case. Bounds: shares the latch-set with every other arm, but NOT
+# the cap — this arm is the `shape` CLASS and draws on COMPLETION_SHAPE_MAX, because a shared
+# counter let mid-wave convictions spend the budget before the terminal close it exists for ever
+# arrived (item 3b464e94b3ff; full derivation at the latch block). CC_CLOSE_SHAPE=0 disables the
+# arm outright (R8).
 d6=0; _d6_missing=""
 if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra" -eq 0 ] \
    && { [ "$RUNG" = "✅" ] || [ "$RUNG" = "👤" ]; } && ! _ca_assignee; then
@@ -749,7 +755,7 @@ fi
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
   || [ "$d5" -eq 1 ] || [ "$d6" -eq 1 ] || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
 
-# ── Latch-set + hard cap (RED-proofed L + C). ──
+# ── Latch-set + hard cap, PER CLASS (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 # GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
 # never reaped (mirrors memory-nudge.sh:26). A live session recreates its own on the next fire.
@@ -759,12 +765,42 @@ SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16
 HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
 [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"
-if [ -f "$FIRED" ] && grep -qxF "$HASH" "$FIRED" 2>/dev/null; then abstain "latched-already-fired"; fi
-N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;; esac
-[ "$N" -ge "$MAX" ] && abstain "capped:${N}>=${MAX}"
+# THE STARVATION this splits (item 3b464e94b3ff, 2026-08-17). ONE counter served every arm, so a
+# wave lead's MID-WAVE done-claims — each correctly convicted by the ledger arm (custody open,
+# unlanded commits) — spent the entire budget, and the TERMINAL close, the one the D6 origin
+# contract exists for, arrived at `capped:3>=3` and was never asserted against at all. The two are
+# different demands with different subjects: a conviction says the LIVE LEDGER contradicts your
+# done-claim; the shape demand says the operator's two standing questions are UNANSWERED. And the
+# order is structural, not incidental — D6 requires contra=0, so the shape demand only becomes
+# reachable AFTER the conviction arms stop firing. A shared budget therefore guarantees the wrong
+# order of spending: the cheap mid-wave assertions always get it first.
+#   So the budget is per CLASS. `assert` (every conviction arm) keeps COMPLETION_MAX verbatim —
+# same reason string, same numbers, so nothing about a conviction session changes. `shape` (D6)
+# draws on its own COMPLETION_SHAPE_MAX (default 2: one demand, plus one re-close that still
+# misses it). Both remain HARD caps and each is latched by message hash, so the worst case is
+# their sum, bounded and small, under the harness's own consecutive-block cap.
+#   Latch lines are `<hash> <class>`; the dedup key is field 1 alone, so an identical message
+# never re-fires whatever class it fired as. A LEGACY bare-hash line counts as `assert`, which is
+# what every fire written before this change was.
+CLASS=assert; CLASS_MAX="$MAX"
+if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"; fi
+case "$CLASS_MAX" in ''|*[!0-9]*) CLASS_MAX=2 ;; esac
+if [ -f "$FIRED" ] && awk -v h="$HASH" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$FIRED" 2>/dev/null
+then abstain "latched-already-fired"; fi
+N=0
+[ -f "$FIRED" ] && N="$(awk -v c="$CLASS" '{ k = ($2 == "" ? "assert" : $2); if (k == c) n++ } END { print n+0 }' "$FIRED" 2>/dev/null || printf 0)"
+case "$N" in ''|*[!0-9]*) N=0 ;; esac
+if [ "$N" -ge "$CLASS_MAX" ]; then
+  # The assert-class reason is byte-identical to the pre-split one (its consumers, and the RED
+  # proof of the cap itself, key on that exact string); a shape cap names its own class.
+  case "$CLASS" in
+    assert) abstain "capped:${N}>=${CLASS_MAX}" ;;
+    *)      abstain "capped:${CLASS}:${N}>=${CLASS_MAX}" ;;
+  esac
+fi
 
-# ── FIRE: record hash, log, block with the contradicting FACTS. ──
-printf '%s\n' "$HASH" >> "$FIRED" 2>/dev/null || true
+# ── FIRE: record hash + class, log, block with the contradicting FACTS. ──
+printf '%s %s\n' "$HASH" "$CLASS" >> "$FIRED" 2>/dev/null || true
 facts="${facts%; }"
 # WHICH arm fired, legible after the fact: ledger | hedge | handoff | offer | fence, `+`-joined in
 # that fixed order (so a combination is one canonical string, not five orderings of the same set).
@@ -777,8 +813,9 @@ arm=""
 [ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
 [ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
 log_idl fired "false-done" \
-  "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --argjson count "$((N+1))" --argjson max "$MAX" \
-      '{facts:$facts,rung:$rung,arm:$arm,count:$count,max:$max}')"
+  "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --arg class "$CLASS" \
+            --argjson count "$((N+1))" --argjson max "$CLASS_MAX" \
+      '{facts:$facts,rung:$rung,arm:$arm,class:$class,count:$count,max:$max}')"
 
 # Reason = one sentence-group per firing arm, in arm order. The ledger group is byte-unchanged.
 reason=""
@@ -790,7 +827,7 @@ reason=""
 [ "$d6" -eq 1 ] && reason="${reason:+$reason }$(close_shape_reason "$RUNG" "$_d6_missing")"
 [ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"
-reason="$reason (completion-assert $((N+1))/${MAX})"
+reason="$reason (completion-assert ${CLASS} $((N+1))/${CLASS_MAX})"
 
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
 exit 0
