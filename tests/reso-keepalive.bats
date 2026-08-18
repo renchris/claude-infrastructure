@@ -29,6 +29,12 @@
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The kitty arm makes bin/it2-kitty a subject of this suite, and it READS variables this repo
+  # INJECTS into every pane it launches — so every descendant of a fired pane carries them, bats
+  # included when an agent runs this suite from the pane that fired it. Inheriting one makes the
+  # suite go red exactly THERE and green everywhere else, which reads as a genuine trunk red.
+  # `unset`, never the inherited-value allowlist: scripts/test-hermeticity-lint.sh says so verbatim.
+  unset CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   KA="$REPO/bin/reso-keepalive"
   export CC_KEEPALIVE_LOG="$BATS_TEST_TMPDIR/keepalive.log"
