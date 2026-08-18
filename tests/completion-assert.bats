@@ -1276,3 +1276,51 @@ Good to close: <yes — complete, durable, deployed live, no loose ends; follow-
   printf '%s' "$output" | grep -q 'Origin-session close contract'
   grep -q '"arm":"shape"' "$COMPLETION_IDL"
 }
+
+# ── CAP SPLIT — the terminal close was starved by the mid-wave ones (item 3b464e94b3ff) ─────────
+# One counter served every arm. A wave lead's mid-wave done-claims are convicted by the LEDGER arm
+# (custody open, unlanded work) and each spends a slot; by the time the wave returns and the
+# TERMINAL close arrives — the only close the D6 origin contract exists for — the budget is gone
+# and the contract is never asserted against. The order is structural: D6 requires contra=0, so it
+# is reachable only AFTER the conviction arms fall silent. Budgets are therefore per CLASS.
+
+@test "CAP SPLIT: mid-wave convictions spend the assert cap; the TERMINAL close still gets its shape demand" {
+  export COMPLETION_MAX=3
+  local w; w="$(mkrepo_landed capsplit)"
+  # MID-WAVE: a clean landed tree with dispatched peers still out ⇒ the ledger arm convicts.
+  STUB="$BATS_TEST_TMPDIR/capsplit-stub"; printf '%s\n' '#!/usr/bin/env bash' 'echo 2' > "$STUB"; chmod +x "$STUB"
+  export CC_CUSTODY_BIN="$STUB"
+  run run_ca "$(mkfix "Everything requested is done — the wave is running.")" "$w" "capsplit-s"; fired "$output"
+  run run_ca "$(mkfix "All complete, nothing left to do here.")"             "$w" "capsplit-s"; fired "$output"
+  run run_ca "$(mkfix "Finished — that was the main ask.")"                  "$w" "capsplit-s"; fired "$output"
+  unset CC_CUSTODY_BIN
+  # TERMINAL: the wave has returned (custody 0 ⇒ ✅), real writes, shape missing. The assert budget
+  # is spent — the shape demand must NOT be.
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/capsplit.jsonl" "Everything is done and landed on trunk." "$w/base.txt")"
+  run run_ca "$tr" "$w" "capsplit-s"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'Origin-session close contract'
+  /usr/bin/grep -q '"class":"shape"' "$COMPLETION_IDL"
+}
+
+@test "CAP SPLIT: the shape budget is itself a HARD cap (COMPLETION_SHAPE_MAX)" {
+  export COMPLETION_SHAPE_MAX=1
+  local w; w="$(mkrepo_landed capshape)"
+  tr1="$(_d6_tr "$BATS_TEST_TMPDIR/capshape1.jsonl" "Everything is done and landed on trunk." "$w/base.txt")"
+  tr2="$(_d6_tr "$BATS_TEST_TMPDIR/capshape2.jsonl" "All complete — landed, nothing left to do." "$w/base.txt")"
+  run run_ca "$tr1" "$w" "capshape-s"; [ "$status" -eq 0 ]; fired "$output"
+  run run_ca "$tr2" "$w" "capshape-s"; [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"capped:shape:1>=1"' "$COMPLETION_IDL"
+}
+
+@test "CAP SPLIT COMPAT (green both sides): a pre-split latch line, bare hash, counts as assert" {
+  export COMPLETION_MAX=1
+  local w; w="$(mkrepo_unlanded capcompat)"
+  run run_ca "$(mkfix "Everything is done.")" "$w" "capcompat-s"; fired "$output"
+  # rewrite the latch file into the pre-split format (hash only, no class column)
+  local f; f="$(ls "$COMPLETION_STATE_DIR"/*.fired)"
+  awk '{print $1}' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+  run run_ca "$(mkfix "All complete, nothing to do.")" "$w" "capcompat-s"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"capped:1>=1"' "$COMPLETION_IDL"
+}
