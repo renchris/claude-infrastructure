@@ -10,7 +10,7 @@ across 4 accounts. Every gotcha below cost a real debugging cycle — trust them
 | tool | what it does |
 |---|---|
 | `reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo P]` | autonomous single-session resume: recreate the reaped worktree in whatever repo owns it, reset mouse reporting, answer the resume dialog with **full-session-as-is** (expect, 240s), hand off to interactive. `--effort` keeps the reasoning tier the session was running at; the account fixes only the model |
-| `reso-keepalive [interval_s]` | re-nudges only idle panes (from `/tmp/reso-keepalive-ids.txt`) every interval; skips working panes + decision-prompts |
+| `reso-keepalive [interval_s]` | re-nudges only idle panes every interval, on **iTerm2 AND kitty** (kitty via `bin/it2-kitty`, matched on window **cwd**). Targets are re-discovered each cycle by worktree marker via `CC_KEEPALIVE_MARKERS` — **not** from an ids file; that interface has not existed since 410f920c. Skips: working panes · decision-prompts · panes awaiting **their own armed watcher**. `CC_KEEPALIVE_ONCE=1` runs a single cycle |
 | `reso-quota [--json\|--route general\|--route fable]` | COMPAT SHIM (2026-07-10) → `~/bin/claude-accounts` (claude-infrastructure/bin; adds `--rank`, `--relogin-info`, auth states, SSOT Fable window, fixed k counter; heals via headless `claude auth login`, never raw refresh-and-discard) |
 
 `~/.reso/keepalive.log` = watcher activity. Backups of any overwritten tool: `~/.claude/backups/`.
@@ -167,7 +167,8 @@ inflicts it — but the re-engagement remains correct for the sessions that arri
 continue-prompt (Phase 3) and/or run `reso-keepalive` (Phase 4) for perpetual operation. To restore a
 true native loop, re-arm `/goal <cond>` on the session (sends a Stop-hook that blocks stopping until the
 condition holds) — but a blanket loop on a genuinely-done session invents busywork, so prefer the
-keepalive watcher (idle-only, decision-aware).
+keepalive watcher (idle-only, decision-aware, and — since 2026-08-17 — kitty-aware; it was iTerm2-only
+before that, which made Phase 4 inert on the terminal this fleet actually runs).
 
 ---
 
