@@ -15,10 +15,42 @@
 # guard — the name form silently loses terminology (-2740/-2741) and can LAUNCH the app.
 set -uo pipefail
 
+# ── THE KITTY ARM (2026-08-17, backlog 71c2c19d6c63 · a94c9e5722f7) ──────────────────────────────
+# This actuator was iTerm2-only, so on a kitty fleet the whole idle-pane keepalive arm was INERT:
+# recovered sessions finished a turn, rendered a close block and idled, and a human re-nudged every
+# ~30 min — the 8h-unattended case the arm exists to remove.
+#
+# CAUSE CORRECTION vs the row, which says "bin/it2 already diverts". There is no bin/it2. The divert
+# is in bin/it2-wrapper and covers `session split` / `session close` for teammate panes, not a send
+# path; the kitty adapter is a third file, bin/it2-kitty. And none of it was reachable from here
+# anyway: IT2 below defaults to the REAL python it2 binary, which bypasses the wrapper AND the
+# adapter. "0 kitty references" understates it — the send path resolved PAST every divert.
+#
+# So the kitty arm goes through bin/it2-kitty, the sanctioned adapter, rather than growing a second
+# kitty driver here. It speaks `session list --json` → [{id,cwd,title,pid}], `session read -s <id>`
+# → plain screen text, `session send -s <id> <text>`, and its send verb already no-ops on an ARMED
+# pane (a runner blocked on a file has no line editor to type at).
 IT2="${CC_IT2_BIN:-/Users/chrisren/Library/Python/3.11/bin/it2}"
+# Resolve the adapter as OUR OWN SIBLING, chasing the symlink chain of the FILE and not merely
+# `pwd -P` on the directory — this script is normally reached through ~/.reso/bin/reso-keepalive, a
+# symlink into the checkout, and resolving only the dir would look for the adapter in ~/.reso/bin
+# (memory: self-identity-guard-must-fully-resolve).
+_self="$0"
+while [ -L "$_self" ]; do
+  _link="$(readlink "$_self")"
+  case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
+done
+KT="${CC_KEEPALIVE_KITTY_BIN:-$(cd "$(dirname "$_self")" && pwd -P)/it2-kitty}"
 INTERVAL="${1:-240}"
-MYID="${2:-${ITERM_SESSION_ID##*:}}"
+# `${ITERM_SESSION_ID-}`, not a bare expansion: under `set -u` an unset ITERM_SESSION_ID aborts the
+# script outright, and it IS unset on the terminal this arm was added for.
+MYID="${2:-${ITERM_SESSION_ID-}}"; MYID="${MYID##*:}"
+MYKITTY="${KITTY_WINDOW_ID:-}"
 LOG="${CC_KEEPALIVE_LOG:-$HOME/.reso/keepalive.log}"
+# Run exactly one discovery+nudge cycle and exit. The unbounded `while :` types keystrokes into live
+# panes, so it is not a thing a suite may enter; this seam lets the DECISION (nudge / skip) be
+# asserted with both actuator seams stubbed, which is the half that was wrong.
+ONCE="${CC_KEEPALIVE_ONCE:-}"
 NUDGE="Continue autonomously with your goal: do your next task, commit it, and keep going. Stop only when the work is genuinely complete or you hit a real blocker (auth/session, destructive migration, or a decision you cannot infer)."
 
 # MARKERS — the panes this nudges. It USED TO BE a frozen literal: the 12 worktrees of the
@@ -38,11 +70,46 @@ if [ -z "${MARKERS// /}" ]; then
   exit 0
 fi
 
+# ── THE SKIP ENUMERATION — DECLARED ONCE, RENDERED TWICE ─────────────────────────────────────────
+# These fragments used to be literals inside the AppleScript below. With a second terminal arm they
+# would have become a second copy, and hooks/lib/pane-modal.sh already names that as the standing
+# risk of this class: enumerated UI strings rot, so a predicate copied into another file rots
+# independently of the first and nothing can say which one is stale. They are declared here and
+# rendered into BOTH the AppleScript `contains` clauses and the kitty grep — one place a successor
+# edits, one place a test can pin. Each is an env seam, so a wording change is an override rather
+# than a redeploy.
+#
+# Keep them free of regex metacharacters: they are spliced into an ERE for kitty and into AppleScript
+# string literals for iTerm2, and only the plain-fragment form is safe in both.
+#
+#   BUSY   — a turn is running. "esc to interrupt" shows for the whole turn, so its absence == idle.
+#   PROMPT — the pane is at a decision/approval prompt. A blind auto-typer that answers a permission
+#            dialog is worse than an idle pane, which is the reason this arm has predicates at all.
+#   AWAIT  — d591c8d990b5: the pane is legitimately AWAITING ITS OWN ARMED WATCHER. Measured
+#            2026-08-10 04:5xZ on pane 142 — idle for 30 min by the transcript-growth test, while
+#            its footer read "1 monitor still running" and its last message said the monitor wakes
+#            it to content-verify each landed diff. That is the "Awaiting ARMED is the legitimate
+#            non-close state" the close protocol blesses; nudging it would have interrupted a
+#            correct wait and risked duplicating a wave collection. SILENCE IS NOT EVIDENCE OF A
+#            STALL — the discriminator is whether the session has an armed wake of its own.
+CC_KEEPALIVE_BUSY="${CC_KEEPALIVE_BUSY:-esc to interrupt}"
+CC_KEEPALIVE_PROMPT="${CC_KEEPALIVE_PROMPT:-Tab to amend|ctrl+e to explain|Esc to cancel}"
+CC_KEEPALIVE_AWAIT="${CC_KEEPALIVE_AWAIT:-monitor still running|monitors still running}"
+SKIP_RE="$CC_KEEPALIVE_BUSY|$CC_KEEPALIVE_PROMPT|$CC_KEEPALIVE_AWAIT"
+
+osa_skip_clause() {   # the enumeration as AppleScript: (c contains "a") or (c contains "b") ...
+  local out="" f
+  local IFS='|'
+  for f in $SKIP_RE; do [ -n "$f" ] && out="$out or (c contains \"$f\")"; done
+  printf '%s' "${out# or }"
+}
+
 discover() {   # print session-ids of IDLE target panes (marker present, not working, not at prompt, not me)
   local clause="" m
   # shellcheck disable=SC2086  # deliberate word-split: MARKERS is a space-separated list
   for m in $MARKERS; do clause="$clause or (c contains \"$m\")"; done
   clause="${clause# or }"
+  local skip; skip="$(osa_skip_clause)"
   # BUNDLE ID + is-running short-circuit, never a name lookup: addressing the app by name resolves
   # via CFBundleName, loses terminology when it is not already running (-2740/-2741), and can launch
   # it. The guard returns empty rather than starting a terminal on a headless box.
@@ -57,7 +124,7 @@ tell application id "com.googlecode.iterm2"
         if sid is not "$MYID" then
           set c to (get contents of s)
           if ($clause) then
-            if not ((c contains "esc to interrupt") or (c contains "Tab to amend") or (c contains "ctrl+e to explain") or (c contains "Esc to cancel")) then
+            if not ($skip) then
               set out to out & sid & linefeed
             end if
           end if
@@ -70,7 +137,56 @@ end tell
 OSA
 }
 
-printf '%s reso-keepalive started (interval %ss · marker-rediscovery · skip %s)\n' \
+discover_kitty() {   # same contract as discover(), over kitty panes, via the sanctioned adapter
+  [ -x "$KT" ] || return 0
+  local json ids id txt
+  # it2-kitty REFUSES (exit 3) when driven from a pane that is not kitty's, and exit 4 with no
+  # control socket. Both are correct — sending nudges into a window nobody is looking at is the
+  # failure this arm is supposed to prevent — so the arm is simply inert there. It is inert LOUDLY:
+  # an arm that is both inert and silent is the exact defect 71c2c19d6c63 filed, and repeating it
+  # one terminal over would be the whole lesson missed.
+  json="$("$KT" session list --json 2>>"$LOG")" || { kitty_arm_note; return 0; }
+  [ -n "$json" ] || return 0
+  ids="$(printf '%s' "$json" | MARKERS="$MARKERS" MYKITTY="$MYKITTY" python3 -c '
+import json,os,sys
+try: rows=json.load(sys.stdin)
+except Exception: sys.exit(0)
+marks=[m for m in os.environ.get("MARKERS","").split() if m]
+me=os.environ.get("MYKITTY","")
+for r in rows:
+    i=str(r.get("id",""))
+    if not i or (me and i==me): continue
+    # CWD FIRST, TITLE SECOND. The iTerm2 arm matches the marker against SCROLLBACK, which is a
+    # sampling surface — a long-running pane scrolls its worktree name off and silently stops
+    # matching. A kitty window reports its cwd structurally, and a worktree marker IS a path
+    # component, so cwd is the durable spelling of the same identity
+    # (memory: argv-is-sampling-cwd-is-durable).
+    hay = (r.get("cwd") or "") + " " + (r.get("title") or "")
+    if any(m in hay for m in marks): print(i)
+' 2>/dev/null)" || return 0
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    txt="$("$KT" session read -s "$id" 2>/dev/null)"
+    # AN UNREADABLE SCREEN IS NOT AN IDLE PANE. Absence is also what a hang looks like, and a
+    # get-text that returns nothing means the screen could not be read — the one state a nudger must
+    # never read as "quiet, go ahead". Fail closed, exactly as pane_modal_reason does on empty input.
+    [ -n "$txt" ] || continue
+    printf '%s\n' "$txt" | grep -qE -- "$SKIP_RE" && continue
+    printf '%s\n' "$id"
+  done <<EOF
+$ids
+EOF
+}
+
+_kitty_noted=0
+kitty_arm_note() {
+  [ "$_kitty_noted" -eq 0 ] || return 0
+  _kitty_noted=1
+  printf '%s kitty arm INERT — %s could not list panes (not a kitty pane, or no control socket); iTerm2 arm only\n' \
+    "$(date '+%F %T')" "$KT" >> "$LOG"
+}
+
+printf '%s reso-keepalive started (interval %ss · marker-rediscovery · iTerm2+kitty · skip %s)\n' \
   "$(date '+%F %T')" "$INTERVAL" "${MYID:0:8}" >> "$LOG"
 while :; do
   while IFS= read -r id; do
@@ -95,5 +211,21 @@ while :; do
     "$IT2" session send -s "$id" $'\r' 2>/dev/null
     printf '%s nudged idle %s\n' "$(date '+%F %T')" "${id:0:8}" >> "$LOG"
   done < <(discover)
+  # The kitty arm. Same three predicates (discover_kitty applies SKIP_RE, the same enumeration the
+  # AppleScript above is generated from), same send-then-return shape — the adapter's `send` verb
+  # takes raw text with no newline, exactly as the it2 CLI's does.
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    # typed-send-lint:allow — same reasoning as the iTerm2 arm above: $NUDGE is an English
+    # continue-prompt for a Claude Code composer, not a shell command line. it2-kitty's send verb
+    # additionally no-ops on an ARMED pane (a runner blocked on a file has no line editor), which is
+    # one gate more than the iTerm2 path has, not one fewer.
+    "$KT" session send -s "$id" "$NUDGE" 2>/dev/null; sleep 0.5
+    "$KT" session send -s "$id" $'\r' 2>/dev/null; sleep 0.3
+    "$KT" session send -s "$id" $'\r' 2>/dev/null
+    printf '%s nudged idle kitty:%s\n' "$(date '+%F %T')" "$id" >> "$LOG"
+  done < <(discover_kitty)
+  [ -n "$ONCE" ] && break
   sleep "$INTERVAL"
 done
+exit 0

@@ -40,6 +40,126 @@ setup() {
   export CC_IT2_BIN="$BATS_TEST_TMPDIR/bin/it2"
 }
 
+# ── THE KITTY ARM (backlog 71c2c19d6c63 · a94c9e5722f7) AND THE THIRD SKIP PREDICATE (d591c8d990b5)
+#
+# The rows: this actuator was iTerm2-only, so on a kitty fleet the whole idle-pane keepalive arm was
+# INERT — each recovered session finished a turn, rendered a close block and idled, and a human had
+# to re-nudge every ~30 min, which is exactly the 8h-unattended case the arm exists to remove.
+#
+# CAUSE CORRECTION, MEASURED HERE (71c2c19d6c63 names `bin/it2` as already diverting to kitty):
+# there is no `bin/it2` in this repo. The divert lives in `bin/it2-wrapper` and covers `session
+# split` / `session close` for teammate panes — not a send path — and the kitty adapter is a third
+# file, `bin/it2-kitty`. More to the point, none of that was ever reachable from here: this script
+# resolves `CC_IT2_BIN` to the REAL python it2 binary by default, which bypasses the wrapper AND the
+# adapter. "0 kitty references" understated it — the send path resolved PAST every divert.
+#
+# WHY THESE CASES CAN RUN THE LOOP, WHICH THE HEADER ABOVE SAYS IT DELIBERATELY DOES NOT.
+# The header's reason is that the loop types keystrokes into live panes. Both actuator seams are
+# owned here — `CC_IT2_BIN` (already, since the original suite) and `CC_KEEPALIVE_KITTY_BIN` — so no
+# case can reach a real pane, and `CC_KEEPALIVE_ONCE=1` bounds it to a single cycle. The unbounded
+# `while :` is still never entered. What is asserted is the DECISION (nudge / skip), which is the
+# part that was wrong; delivery through a stub is only how the decision is observed.
+#
+# ONE MUTANT PER SITE. The kitty arm, each of the three skip predicates, the unreadable-screen
+# fail-closed, and the shared-enumeration property are six distinct sites and get six cases — a
+# single case covering "kitty works" would credit none of them.
+
+# Stand up a stub kitty adapter speaking it2-kitty's contract (`session list --json` → [{id,cwd,
+# title,pid}] · `session read -s <id>` → screen text · `session send -s <id> <text>`), with one
+# target pane whose cwd carries the marker and whose screen is $1.
+_stub_kitty() {
+  local screen="$1"
+  export CC_KITTY_SCREEN="$screen"
+  export CC_KITTY_SENDLOG="$BATS_TEST_TMPDIR/kitty.send"
+  cat > "$BATS_TEST_TMPDIR/bin/it2-kitty" <<'STUB'
+#!/usr/bin/env bash
+[ "$1" = session ] || exit 64
+verb="$2"; shift 2
+sid=""; while [ $# -gt 0 ]; do case "$1" in -s) sid="$2"; shift 2 ;; --json) shift ;; *) break ;; esac; done
+case "$verb" in
+  list) printf '[{"id":"7","title":"claude","cwd":"/tmp/wt-pool-1","pid":123}]\n' ;;
+  read) printf '%s\n' "$CC_KITTY_SCREEN" ;;
+  send) printf '%s|%s\n' "$sid" "$*" >> "$CC_KITTY_SENDLOG" ;;
+  *) exit 64 ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/it2-kitty"
+  export CC_KEEPALIVE_KITTY_BIN="$BATS_TEST_TMPDIR/bin/it2-kitty"
+}
+
+# osascript is called by BARE NAME, so a stub earlier on PATH intercepts the iTerm2 arm and records
+# the AppleScript it was handed. Returning nothing means "no idle iTerm2 panes", which keeps the
+# kitty cases single-armed.
+_stub_osascript() {
+  export CC_OSA_LOG="$BATS_TEST_TMPDIR/osa.script"
+  printf '#!/usr/bin/env bash\ncat >> "$CC_OSA_LOG"\nexit 0\n' > "$BATS_TEST_TMPDIR/bin/osascript"
+  chmod +x "$BATS_TEST_TMPDIR/bin/osascript"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+_one_cycle() { run timeout 20 env CC_KEEPALIVE_ONCE=1 CC_KEEPALIVE_MARKERS="wt-pool-1" "$KA" 1 fake-session-id; }
+
+@test "kitty: an idle marked pane IS nudged — the arm is not inert off iTerm2" {
+  _stub_osascript; _stub_kitty "welcome back
+? for shortcuts"
+  _one_cycle
+  [ "$status" -eq 0 ] || { echo "one cycle did not exit 0 (status $status): $output"; false; }
+  [ -s "$CC_KITTY_SENDLOG" ] || { echo "no kitty pane was nudged — the kitty arm is inert"; false; }
+  grep -q '^7|' "$CC_KITTY_SENDLOG" || { echo "nudge did not target the marked pane: $(cat "$CC_KITTY_SENDLOG")"; false; }
+}
+
+@test "kitty: a pane MID-TURN is skipped — never interrupt a running turn" {
+  _stub_osascript; _stub_kitty "doing the thing
+  esc to interrupt"
+  _one_cycle
+  [ "$status" -eq 0 ]
+  [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] || { echo "nudged a pane that was mid-turn: $(cat "$CC_KITTY_SENDLOG")"; false; }
+}
+
+@test "kitty: a pane at a DECISION PROMPT is skipped — a blind auto-typer answering a dialog is worse than an idle pane" {
+  _stub_osascript; _stub_kitty "Do you want to proceed?
+  Tab to amend"
+  _one_cycle
+  [ "$status" -eq 0 ]
+  [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] || { echo "nudged a pane sitting at a prompt: $(cat "$CC_KITTY_SENDLOG")"; false; }
+}
+
+@test "d591c8d990b5 — a pane AWAITING ITS OWN ARMED WATCHER is skipped; silence is not evidence of stall" {
+  # The measured case (2026-08-10 04:5xZ, pane 142): idle for 30 min by the transcript-growth test,
+  # while its own footer read "1 monitor still running" and its last message said the monitor wakes
+  # it to content-verify each landed diff. That is the "Awaiting ARMED is the legitimate non-close
+  # state" the close protocol blesses — nudging it would have interrupted a correct wait and risked
+  # duplicating a wave collection. The discriminator is an armed wake of its own, not silence.
+  _stub_osascript; _stub_kitty "waiting for the land to finish
+  1 monitor still running"
+  _one_cycle
+  [ "$status" -eq 0 ]
+  [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] || { echo "nudged a pane that was legitimately awaiting its own watcher: $(cat "$CC_KITTY_SENDLOG")"; false; }
+}
+
+@test "kitty: an UNREADABLE screen is not an idle pane — fail closed" {
+  # Absence is also what a hang looks like. An empty get-text means the screen could not be read,
+  # which is the one state a nudger must not read as "quiet, go ahead".
+  _stub_osascript; _stub_kitty ""
+  _one_cycle
+  [ "$status" -eq 0 ]
+  [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] || { echo "nudged a pane whose screen could not be read: $(cat "$CC_KITTY_SENDLOG")"; false; }
+}
+
+@test "ONE ENUMERATION, TWO RENDERINGS — the third predicate reaches the iTerm2 arm too" {
+  # hooks/lib/pane-modal.sh names the standing risk this pins: a screen predicate copied into a
+  # second file rots independently of the first. The skip fragments must be declared once and
+  # rendered into BOTH the AppleScript `contains` clauses and the kitty grep — so overriding the
+  # enumeration must change the AppleScript the iTerm2 arm actually runs.
+  _stub_osascript; _stub_kitty "idle"
+  run timeout 20 env CC_KEEPALIVE_ONCE=1 CC_KEEPALIVE_MARKERS="wt-pool-1" \
+      CC_KEEPALIVE_AWAIT="sentinel-await-fragment" "$KA" 1 fake-session-id
+  [ "$status" -eq 0 ] || { echo "one cycle did not exit 0 (status $status): $output"; false; }
+  [ -s "$CC_OSA_LOG" ] || { echo "the iTerm2 arm ran no AppleScript at all"; false; }
+  grep -q 'esc to interrupt' "$CC_OSA_LOG" || { echo "the mid-turn fragment is not in the generated AppleScript"; false; }
+  grep -q 'sentinel-await-fragment' "$CC_OSA_LOG" || { echo "the awaiting-watcher predicate never reaches the iTerm2 arm — two enumerations, not one"; false; }
+}
+
 @test "the actuator is TRACKED — the whole point of the row" {
   [ -f "$KA" ] || { echo "bin/reso-keepalive is not in the tree"; false; }
   [ -x "$KA" ] || { echo "bin/reso-keepalive is not executable"; false; }
