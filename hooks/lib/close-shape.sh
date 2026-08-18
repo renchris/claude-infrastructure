@@ -24,6 +24,23 @@
 # satisfy it, and a paraphrase does not either. Deliberately deterministic — a Stop hook judges
 # shape, never quality; quality stays with the model (prompt-for-form, hook-for-floor).
 #
+# MENTION vs USE (item 3b464e94b3ff, 2026-08-17). The anchors above matched the message ANYWHERE,
+# and close_shape_template() emits lines that contain them — so a close that merely QUOTED the
+# template (printed the skeleton, echoed /wrap's block, pasted D6's own block-reason back) matched
+# all four anchors and PASSED without answering one of them. The template was its own bypass.
+# THE DISCRIMINATOR IS THE VALUE, NOT THE LABEL: a label occurrence counts only when what follows
+# its colon is not merely a bare <angle-bracket placeholder> (`^<…>$` after trimming). The fix is
+# deliberately the SMALLEST one that can only move PASS→FAIL for the quoting case, because the
+# defect is false-PASS-only and a false FAIL on an honest close is strictly worse:
+#   · an EMPTY value still counts as answered — "Complication:" with the answer on the next line
+#     passed before and passes now (narrowing that would be a new false-FAIL class, not a fix);
+#   · the placeholder test is anchored at THE LABEL's own value, not at the end of the line, so
+#     `Good to close: yes — …; follow-on: <none>` — a genuine close using the template's own
+#     follow-on notation — is unaffected (the value starts with 'y', not '<');
+#   · ANY occurrence answering is enough, so a close that quotes the template AND answers passes.
+# One awk pass rather than four greps: the value test needs the text AFTER the anchor match, which
+# grep -q cannot hand back.
+#
 # Env seam (tests): none needed — pure functions over $1.
 # shellcheck shell=bash
 
@@ -34,12 +51,29 @@ _CS_VERDICT='(good|safe)[[:space:]]+to[[:space:]]+close'
 
 # close_shape_missing <msg> → prints the space-joined missing elements ('' when complete)
 close_shape_missing() {
-  local msg="${1:-}" miss=""
-  printf '%s' "$msg" | grep -iqE "$_CS_COMPLICATION" || miss="${miss}Complication: "
-  printf '%s' "$msg" | grep -iqE "$_CS_SOLUTION"     || miss="${miss}Solution: "
-  printf '%s' "$msg" | grep -iqE "$_CS_OUTCOME"      || miss="${miss}Outcome: "
-  printf '%s' "$msg" | grep -iqE "$_CS_VERDICT"      || miss="${miss}good-to-close-verdict "
-  printf '%s' "${miss% }"
+  printf '%s' "${1:-}" | awk -v c="$_CS_COMPLICATION" -v s="$_CS_SOLUTION" \
+                             -v o="$_CS_OUTCOME"      -v v="$_CS_VERDICT" '
+    # real(<lowercased line>, <anchor>) → 1 iff the anchor matches AND its value is an answer
+    # rather than the template placeholder it was copied from (MENTION vs USE, above).
+    function real(l, re,   rest) {
+      if (!match(l, re)) return 0
+      rest = substr(l, RSTART + RLENGTH)
+      sub(/^[[:space:]]*:?[[:space:]]*/, "", rest)   # the verdict anchor stops before its colon
+      sub(/[[:space:]]+$/, "", rest)
+      return (rest ~ /^<.*>$/) ? 0 : 1
+    }
+    { l = tolower($0)
+      if (real(l, c)) C = 1
+      if (real(l, s)) S = 1
+      if (real(l, o)) O = 1
+      if (real(l, v)) V = 1 }
+    END { m = ""
+      if (!C) m = m "Complication: "
+      if (!S) m = m "Solution: "
+      if (!O) m = m "Outcome: "
+      if (!V) m = m "good-to-close-verdict "
+      sub(/ $/, "", m)
+      printf "%s", m }'
 }
 
 # close_shape_ok <msg> → rc 0 iff all four elements are present

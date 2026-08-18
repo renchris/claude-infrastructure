@@ -1235,3 +1235,44 @@ PY
   run run_ca "$tr" "$w"
   [ "$status" -eq 0 ]; fired "$output"
 }
+
+# ── D6 MENTION vs USE — the template was its own bypass (item 3b464e94b3ff) ─────────────────────
+# close_shape_ok matched the four anchors ANYWHERE in the message, and close_shape_template() emits
+# lines that contain them. So a close that merely QUOTED the skeleton — echoed /wrap's block, or
+# pasted D6's own block-reason back — satisfied the contract without answering one question. The
+# defect is false-PASS-ONLY, so the fix is pinned from BOTH sides: the quoting close must fire, and
+# the honest close (including one using the template's own <follow-on> notation) must not.
+
+_cs_lib() { bash -c '. "$1/hooks/lib/close-shape.sh"; '"$2" _ "$REPO"; }
+
+@test "close-shape UNIT: quoting the template answers nothing — close_shape_ok must REJECT it" {
+  run _cs_lib "$REPO" 'close_shape_ok "$(close_shape_template)"'
+  [ "$status" -ne 0 ]
+  run _cs_lib "$REPO" 'printf "%s" "$(close_shape_missing "$(close_shape_template)")"'
+  [ "$output" = "Complication: Solution: Outcome: good-to-close-verdict" ]
+}
+
+@test "close-shape CONTROL (green both sides — the no-false-FAIL half): an honest close PASSES" {
+  # Deliberately includes the template's own <angle-bracket> follow-on notation and a label whose
+  # value is empty: neither is a quote of the skeleton, and neither may be newly rejected.
+  run _cs_lib "$REPO" 'close_shape_ok "✅ Complete & live on trunk.
+Complication: the template matched itself.
+Solution: the value, not the label, decides — landed abc123.
+Outcome:
+Good to close: yes — complete, durable, no loose ends; follow-on: <none>"'
+  [ "$status" -eq 0 ]
+}
+
+@test "D6 MENTION-vs-USE: an origin close that QUOTES the template still FIRES" {
+  local w; w="$(mkrepo_landed d6q)"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6q.jsonl" "✅ Complete & live on trunk — everything is done and landed.
+The close contract wants this shape:
+Complication: <what made this work necessary — one line>
+Solution: <what was built/changed, with the landed sha — one line>
+Outcome: <what is now true that was not before — one line>
+Good to close: <yes — complete, durable, deployed live, no loose ends; follow-on: <filed ids|none> | no — <what remains + who owns it>>" "$w/base.txt")"
+  run run_ca "$tr" "$w" "d6-sess-quote"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'Origin-session close contract'
+  grep -q '"arm":"shape"' "$COMPLETION_IDL"
+}
