@@ -54,7 +54,7 @@ start_holder() {
   sleep 30 &
   HOLDER=$!
 }
-stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null || true; }
+stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null || true; wait "$HOLDER" 2>/dev/null || true; }
 
 # ── PAIR 1 KEEP ──────────────────────────────────────────────────────────────────────────────────
 @test "PAIR1-KEEP: a claim whose pid is DEAD reads as ABSENT, not as an address" {
