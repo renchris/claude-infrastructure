@@ -5,8 +5,9 @@
 #   account: next|next2|next3|next4 (Opus) · fable|fable2|fable3|fable4 (Fable 5)
 # - recreates the worktree from <branch> if its dir was reaped, in WHATEVER repo owns it
 # - resets mouse reporting (stops crashed-session escape-seq garbage leaking into the input box)
-# - auto-answers the large-session resume dialog by selecting "Resume full session as-is"
-#   (NEVER blocks), waiting as long as the session needs to load (>60s on a big session)
+# - takes the full session AS-IS across the large-session resume dialog (NEVER blocks), waiting as
+#   long as the session needs to load (>60s on a big session): PRIMARY = suppress the dialog at the
+#   source so it is never raised, FALLBACK = answer it with the expect matcher if it is
 # - hands off to a live interactive session
 #
 # ── WHY THIS FILE IS IN THE REPO (2026-08-09) ────────────────────────────────────────────────────
@@ -177,6 +178,63 @@ resolve_model() {
   printf '%s\n' "$m"
 }
 
+# ── resume dialog: SUPPRESSED AT THE SOURCE, with the matcher kept as the fallback ───────────────
+# The expect block below answers the dialog. Answering it is a keystroke race against Ink's raw-mode
+# mount — the scar at :348 cost three transplants 20+ minutes — and a race you can decline to enter
+# is better than a race you win most of the time. The binary will not RAISE the dialog at all if the
+# session is younger than CLAUDE_CODE_RESUME_THRESHOLD_MINUTES, and a session it declines to ask
+# about is resumed FULL AS-IS: exactly the option the matcher exists to select, reached with zero
+# keystrokes. Read out of the 2.1.220 binary, the whole producer of the dialog's state:
+#
+#   function D3f(e,t){ if(!Ke("tengu_gleaming_fair",!1))return null;
+#                      if(Rt().resumeReturnDismissed)return null;
+#                      let r=Rue(process.env.CLAUDE_CODE_RESUME_THRESHOLD_MINUTES,70),
+#                          n=Rue(process.env.CLAUDE_CODE_RESUME_TOKEN_THRESHOLD,1e5), …
+#                      let s=(Date.now()-Date.parse(i))/60000;
+#                      if(s<r)return null;            ← age under the threshold ⇒ NO DIALOG
+#                      let a=t(e); if(a<n)return null; return {sessionAgeMinutes:s,…} }
+#
+# and its single caller `let dr=D3f(yt,YA); if(dr)FLe(dr)` — nothing else sets that state, so a null
+# is the dialog not existing rather than the dialog being dismissed. Rue() is
+# `(e,t)=>e===void 0?t:(isNaN(Bd(e))?t:Bd(e))`, so a non-numeric value is silently the default 70,
+# NOT a refusal — which is why the value below is resolved as an integer and announced as one.
+#
+# WHY THE MATCHER STAYS, AND WHY IT IS STILL TESTED. That read is version-coupled: the variable is
+# reached through a minified internal symbol (`cuh` in 2.1.220), the whole function sits behind a
+# `tengu_gleaming_fair` flag, and none of it is a documented interface. A bump can drop it silently
+# and the ONLY visible consequence would be the dialog coming back — i.e. the exact failure the
+# matcher already handles. So this is strictly a first line: it removes the race in the common case
+# and changes nothing about the second. tests/reso-resume-one.bats exercises BOTH paths, and the
+# fallback one with suppression explicitly forced off, so neither can rot into the other's shadow.
+#
+# WHAT IS RESOLVED HERE IS *SUPPORT*, NOT THE NUMBER — and that is the pin this file's convention is
+# about. The number is a ceiling on "how old can a session we are recovering be, in minutes", and a
+# ceiling of a year is true today and true after every bump; nothing about it can rot, so resolving
+# it from the transcript's own age would only ever produce a smaller and more fragile number with a
+# fallback to this one anyway. What CAN rot — silently, and in the direction that costs 20 minutes —
+# is whether the binary still reads the variable at all. So THAT is probed against the resolved
+# binary's own bytes and ANNOUNCED, on the same argument as the version and model pins at :26: a
+# downgrade during recovery has to be loud, because it is invisible otherwise.
+_RRO_THRESHOLD_TOKEN=CLAUDE_CODE_RESUME_THRESHOLD_MINUTES
+RESUME_THRESHOLD_CEILING=525600     # 365 days, in minutes
+
+# 0 = the token is in the binary · 1 = it is NOT · 2 = could not tell (never a refusal)
+probe_threshold_support() { # <binary>
+  local b="$1" rc
+  [ -r "$b" ] || return 2
+  command -v grep >/dev/null 2>&1 || return 2
+  # -a: the subject is a 256 MB native executable, so the token lives in a "binary" file; LC_ALL=C
+  # keeps the scan byte-wise (measured 0.6 s present / 1.1 s absent on 2.1.220 — a full scan is the
+  # absent case, and that is the case worth a second). Bounded where a bound exists, and an absent
+  # `timeout` degrades to UNBOUNDED-but-local rather than to a non-verdict.
+  if command -v timeout >/dev/null 2>&1; then
+    LC_ALL=C timeout 20 grep -qa "$_RRO_THRESHOLD_TOKEN" "$b"; rc=$?
+  else
+    LC_ALL=C grep -qa "$_RRO_THRESHOLD_TOKEN" "$b"; rc=$?
+  fi
+  case $rc in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
 # ── repo: DERIVED from the worktree being recreated, never a constant ─────────────────────────────
 # Only ever needed on the recreate path (a worktree that still exists needs no repo at all), so the
 # derivation is asked exactly the question that path has: "which repo owns this reaped directory?"
@@ -301,6 +359,25 @@ esac
 # ANNOUNCE. The 2026-08-09 defect was not that the pins were wrong — it was that being wrong looked
 # exactly like being right. One line makes a downgrade legible at the moment it would happen.
 printf '%s\n' "reso-resume-one: binary ${bin} (v${RESOLVED_VERSION}) · model ${model} · effort ${effort} · cfg ${cfg}"
+
+# The suppression strategy actually in force, named. An empty RESUME_THRESHOLD is what the expect
+# program reads as "do not pass the variable at all" — the OFF knob is the absence of the value, not
+# a second flag inside the Tcl, so there is exactly one place that decides.
+RESUME_THRESHOLD=""
+if [[ -n "${CC_RESUME_NO_SUPPRESS:-}" ]]; then
+  printf '%s\n' "reso-resume-one: resume-dialog suppression: OFF (CC_RESUME_NO_SUPPRESS) — the expect matcher is the only answer path"
+else
+  RESUME_THRESHOLD=${CC_RESUME_THRESHOLD_MINUTES:-$RESUME_THRESHOLD_CEILING}
+  probe_threshold_support "$bin"
+  case $? in
+    0) printf '%s\n' "reso-resume-one: resume-dialog suppression: PRIMARY ${_RRO_THRESHOLD_TOKEN}=${RESUME_THRESHOLD} (token PRESENT in the resolved binary) · matcher fallback armed" ;;
+    # LOUD, and NOT a refusal — the same rule the absent capacity library follows above. The variable
+    # is still passed: a binary that does not read it is not harmed by it, and the matcher below is
+    # exactly the path that was carrying this before, unchanged.
+    1) printf '%s\n' "reso-resume-one: resume-dialog suppression: UNSUPPORTED — the resolved binary does not carry ${_RRO_THRESHOLD_TOKEN}; passed anyway (inert), the expect matcher is the only answer path" ;;
+    *) printf '%s\n' "reso-resume-one: resume-dialog suppression: PRIMARY ${_RRO_THRESHOLD_TOKEN}=${RESUME_THRESHOLD} (token UNVERIFIED — no usable probe) · matcher fallback armed" ;;
+  esac
+fi
 [[ -n "${CC_RESUME_DRYRUN:-}" ]] && exit 0
 
 # reset mouse reporting so leftover escape sequences from a crashed session don't leak as input
@@ -312,6 +389,7 @@ printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 # one of them a path or an id that only has to contain a quote or a bracket to rewrite the program.
 export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$effort" CC_RR_SID="$sid"
 export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
+export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
 # shellcheck disable=SC2016  # single quotes REQUIRED: this is an expect(1) program and its
 #   $env(...) / $spawn_out references must reach expect uninterpreted.
 exec expect -c '
@@ -321,8 +399,18 @@ exec expect -c '
   set model  $env(CC_RR_MODEL)
   set effort $env(CC_RR_EFFORT)
   set sid    $env(CC_RR_SID)
+  set thr    $env(CC_RR_THRESHOLD)
   set answered 0
-  spawn -noecho env DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing
+  # NAME= with no value is not the same thing: Rue() reads "" as NaN and falls back to the default
+  # of 70 baked into the binary, which raises the dialog on every session older than 70 minutes —
+  # i.e. "off" would look identical to "on" from here. One spawn line, appended to, so the two
+  # paths cannot drift apart the way two spawn lines would.
+  # NO APOSTROPHES ANYWHERE BELOW THIS LINE: the whole program is a single-quoted bash string, so
+  # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.
+  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]
+  if {$thr ne ""} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }
+  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort --resume $sid
   # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.
   # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the
   # spawn-time width (verified 2026-07-05).
