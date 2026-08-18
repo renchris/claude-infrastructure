@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-18 | `5ab3327ed0c8` | `reso-management-app` | label-foreign — **second cloud burn**, the day after § The fifth adjudicated it (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,144 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# 2026-08-18 — `5ab3327ed0c8` FIRED AGAIN, and both rails blocks above are wrong
+
+*Written from inside the next VM, appended here rather than given a sixth `venue-*` file: this file
+already owns this item (§ The fifth), and the master doc's §2 measured that a new filename per
+occurrence is what makes the census a floor instead of a total. The class and its cause are settled
+above and are not re-derived. **Three facts are new, and two of them CORRECT this file.***
+
+**2026-08-18, ~07:58Z.** Backlog item `5ab3327ed0c8` — *"MEMORY.md at 23842 B of 24985 B cap —
+compact to <17.1KB"*, project **`reso-management-app`** — was dispatched to a `--venue cloud` session
+whose one attached repository is `renchris/claude-infrastructure`. `/Users` and `/root/Development`
+are absent; `/home/user` holds `claude-infrastructure` alone. Unworkable on arrival, for the second
+time, **one day after § The fifth adjudicated it and prescribed `block`.**
+
+## New fact 1 — the second item to burn two cloud sessions, and the first whose shape option (a) already refuses
+
+`venue-foreign-master-redispatch-2026-08-17.md` §1 demonstrated a re-dispatch of `8f59467c92b0` and
+drew the right conclusion for that row: it is **subject-foreign**, its `project` label is accurate,
+and *both* filed options pass it — so its recurrence indicts the remedy as under-specified.
+
+This row is the other shape. `project` = `reso-management-app`, attached repo = `claude-infrastructure`:
+the pair is unequal, so **option (a) — fail closed when `--item`'s project is not the attached repo —
+refuses it on its own terms, with no subject arm needed.** Its recurrence therefore says something
+narrower and harder: not that the remedy is mis-specified, but that **it is still unbuilt.**
+Re-verified on trunk today (`HEAD..origin/main` = 0, so every read below is a trunk read):
+
+```
+bin/cc-offload:84   REPO="${CC_OFFLOAD_REPO:-$ROOT}"            # cause unchanged
+grep -rniE 'foreign.?repo|subject.?foreign|attached.?repo' bin/ scripts/ hooks/
+                    → 1 hit, hooks/worktree-setup.sh:86, unrelated prose
+```
+
+And the disposition's own failure is now measured twice, on two different items. § The fifth's park
+was a `cc-backlog block` command **that only the Mac can run** — the ledger lives at
+`~/.claude/autonomy/backlog.jsonl`, absent from every VM. A disposition the deciding session cannot
+enact does not park anything; it is a note. `8f59467c92b0` proved that for plan prose (master §1),
+and this row proves it for an operator-action code block, which is the *stronger* case: the 08-17
+session did everything its brief asked, wrote the exact command, and the item was re-fired in ~23 h.
+
+## New fact 2 — 🚨 the rails do NOT fail quietly. Every `rc 0` in this file's rails blocks is a probe artifact
+
+Both rails blocks above — and the one in the master doc — record `rc 0` and build a standing warning
+on it (*"`cc-notify` is the silent one … a worker that chains the two and checks only the last exit
+code reports a desk notification that was never enqueued"*). § The fifth then read its own `rc 3` for
+`reopen` as a difference **between VMs**. It is not. Both readings reproduce on ONE box, in
+consecutive commands, differing only in the pipeline:
+
+| invocation | rc |
+|---|---|
+| `bin/cc-backlog reopen 5ab3327ed0c8` | **3** (`unknown id`) |
+| `bin/cc-backlog reopen 5ab3327ed0c8 2>&1 \| head -2` → `$?` | **0** ← `head`'s status, not the tool's |
+| `bin/cc-notify --role desk "…"` | **3** (`verdict=unresolvable enqueued=0 reason=role-unset`) |
+
+`$?` after a pipeline is the LAST element's status, and every rails block in this family was written
+with `| head`. The trunk source agrees with the unpiped reading and has no support for the other:
+`bin/cc-notify:15` documents *"Missing/empty role file → exit 3"*, and `cc-backlog` returns 3 on an
+unknown id. **So the warning inverts: both rails fail LOUDLY. What is silent is the way they were
+measured** — which is the more portable lesson, and the reason this correction is worth more than the
+datapoint it replaces.
+
+## New fact 3 — the probe CREATES the store, and `cc-backlog needs` then reports SUCCESS
+
+`~/.claude/autonomy/` does not exist on a fresh VM — this file and the master both say so, and it was
+absent when this session started. It is not absent after the rails are tried: `ensure_file()`
+(`bin/cc-backlog:908-911`) does `mkdir -p` + `: > "$BACKLOG"` unconditionally. Measured here, in
+order:
+
+```
+ls /root/.claude/autonomy            → No such file or directory
+bin/cc-backlog reopen 5ab3327ed0c8   → rc 3, unknown id          # and the store is now created
+bin/cc-backlog block  5ab3327ed0c8 --needs "…"   → rc 3, unknown id
+bin/cc-backlog needs  "probe step" --project reso-management-app → rc 0, echoes b3a403c16f95
+bin/cc-backlog list --all → blocked | b3a403c16f95 | reso-management-app | probe step
+```
+
+`needs` does not take a known id — it FILES a new row — so it cannot fail the way `block` and
+`reopen` do. Against the empty store its own predecessor just created, it succeeds completely: exit
+0, a well-formed 12-hex id, and a row that reads `blocked` in `list`. Everything a worker would check
+says the operator step is filed. It is filed on a tmpfs that dies at teardown.
+
+This is reachable straight from the brief every misrouted worker receives, which names both verbs —
+*"If blocked on an OPERATOR-only step … `cc-backlog block <id> --needs`"* — and a worker whose `block`
+returns `unknown id` will very reasonably reach for `needs` next. **The failure mode escalates from
+loud to silent as a side effect of the worker's own probing**, and the silent end is strictly worse
+than the `unknown id` this file has been recording: an id that addresses nothing looks exactly like
+an id that addresses something.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| host `$HOME` / cwd | `/root` / `/home/user/claude-infrastructure` |
+| clone | `rev-list --count HEAD` → **50**, `is-shallow-repository` → **true** |
+| `HEAD..origin/main` | **0** — this tree IS trunk |
+| `/Users`, `/root/Development` | both absent |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `bats` / `shellcheck` / `shfmt` | **all absent** (`jq`, `python3` present) |
+| `bin/cc-eligible check 5ab3327ed0c8` (fixtured on the item's real title) | `verdict=eligible`, classes `[]`, rc 0 |
+
+That last row re-confirms § The fifth §2 on today's trunk: the `dot-claude` spelling that describes
+this item exactly is never reached, because the title names the file and not the store. Adding
+`--venue cloud` to the fixture changes nothing — the gate is what the producer already consulted.
+
+## Operator actions
+
+Needs the Mac. The 08-17 command is unchanged in substance; re-issued with the second burn recorded,
+since the first issuance evidently did not take:
+
+```
+cc-backlog block 5ab3327ed0c8 --needs "re-measure reso's index in the LOADER unit on the Mac — cc-memory-rotate ~/.claude/projects/-Users-chrisren-Development-reso-management-app/memory/MEMORY.md --dry-run --verbose. verdict=noop ⇒ close as already-serviced (memory-nudge auto-rotates fleet-wide at ROTATE_AT); verdict=rotated ⇒ it has already fixed itself. Re-open ONLY if a real target below the rotor's ~21000-char TARGET is wanted — that is /compact-memory's lossy, human-gated half. Item's '23842 B of 24985 B' is the raw-byte unit superseded 2026-08-15 (7a56de4c54ab). SECOND cloud burn (08-17, 08-18); premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § 2026-08-18)."
+```
+
+**Verify the block took, rather than assuming it** — that is the whole lesson of new fact 1, and the
+same warning the master doc gave for `8f59467c92b0` one occurrence before this one.
+
+## Not fixed here, deliberately
+
+The three standing refusals hold verbatim and are re-measured, not inherited: `bats` and `shellcheck`
+are absent, so the repo's gate cannot be run on a change to `bin/cc-offload`, which fires **paid**
+sessions — landing an ungated guard there trades a bounded waste (one slot) for an unbounded one (a
+wrong refusal starves the tap); `bin/cc-eligible`'s `OFFBOX_LANE` class states that a session this
+lane created cannot verify a change to the lane, and its `venue` spelling exists to refuse exactly an
+item asking to edit that file; and `bin/cc-venue` abstains in a 50-commit clone by measurement
+(`is-shallow-repository` → `true`, re-confirmed above).
+
+New facts 2 and 3 are corrections to *this file*, not to the fire path, which is why they land here
+and land now: they change what the next misrouted worker believes about its own exit codes.
+
+## The item itself — NOT adjudicated
+
+Unchanged from § The fifth, and for the same reason: whether reso's index is over its cap today was
+never readable from this session. `/root/.claude/projects/` holds exactly one entry, this session's
+own. No compaction was performed and none should be inferred. The brief's mandated first step — read
+what the item cites on trunk — was run in full for the `claude-infrastructure` half (`HEAD..origin/main`
+= 0) and is unrunnable for the subject, which is in no tree here and, per § The fifth §1, in no git
+repository at all.
+
+**The ledger was NOT updated by this session.** The `b3a403c16f95` row in new fact 3 is a probe
+artifact on an ephemeral store and must not be looked for on the Mac. This branch is the notification.
