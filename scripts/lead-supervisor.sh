@@ -113,6 +113,25 @@ REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match the hook's default + seam
 PERMPEND_NOTICE_S="${CC_PERMPEND_NOTICE_S:-120}"      # page a prompt pending ≥ this (auto-approved tools clear in ms ⇒ no false page)
 PERMPEND_HORIZON_S="${CC_PERMPEND_HORIZON_S:-86400}"  # reap an orphaned beacon past this (hard-kill w/o SessionEnd + no telemetry)
+# ── L2-c wait-contract watchdog (desk-audit G-P4-2, open since 2026-07-18) ──
+# `wait-contract-lint.sh --sweep` is the ONE organ that enforces a wait contract INDEPENDENT of the
+# waiter's own liveness — a DISK scan with {pid,start-time} identity, so a recycled pid cannot fake a
+# live waiter. It was built, its --selftest is 13/13 GREEN, and it had NO scheduled caller anywhere:
+# not here, not in launchd. A waiter that dies mid-wait therefore left an OPEN contract nobody paged —
+# the exact 77-min-strand class the L2 layer was built to close, with the safety net never once fired.
+# The clean contracts dir is NOT an exoneration: SATISFIED/TIMED_OUT are written producer-side by
+# bin/cc-wait's close_contract at block-end; the sweep only PAGES and MARKS, it never closes.
+# The supervisor is the right caller because it already IS the out-of-session, waiter-independent
+# cadence — and this is a pure disk scan, i.e. exactly the class of work bash CAN do (no S-3 blindness).
+WAIT_CONTRACTS_DIR="${CC_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"  # cc-wait's OWN seam name — never fork the constant
+SUP_WCLINT_TIMEOUT_S="${CC_SUP_WCLINT_TIMEOUT_S:-60}"   # bounded like every other external (it forks jq per contract)
+WCLINT_BIN="${CC_WCLINT_BIN:-}"
+if [ -z "$WCLINT_BIN" ]; then
+  for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/scripts/wait-contract-lint.sh" \
+            "$HOME/.claude/scripts/wait-contract-lint.sh" "$(command -v wait-contract-lint.sh 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { WCLINT_BIN="$_c"; break; }
+  done
+fi
 # cc-notify must resolve under launchd's bare default PATH (/usr/bin:/bin:...) — env override →
 # beside-script repo bin → ~/.claude/bin → PATH (the autonomy-sweep resolve_bin order)
 NOTIFY_BIN="${CC_NOTIFY_BIN:-}"
@@ -804,8 +823,44 @@ self_check(){ # $1=enumerated-count
   printf '%s %s\n' "$consec" "$paged" > "$sf" 2>/dev/null || true
 }
 
+# ── L2-c: run the wait-contract watchdog on this sweep's cadence (G-P4-2) ──
+# The lint OWNS the page (page-once per state on the contract file, escalation at 3 repeats), so this
+# never re-pages what the lint already paged — a second page for the same fact is the wolf-cry the L2
+# marker exists to prevent. What the supervisor adds is (a) a caller at all, and (b) the divergence in
+# its OWN heartbeat: a sweep that found an orphaned wait must not record an all-clear (S-4).
+# Counting is keyed on the ASCII words in the lint's own report lines — never the ⛔/⏰ glyphs, which a
+# C-locale byte-split would make unmatchable (memory: c-locale-turns-character-ops-into-byte-ops).
+sweep_wait_contracts(){ # prints the number of DIVERGENT contracts found this sweep
+  local out rc n
+  if [ -z "$WCLINT_BIN" ] || [ ! -x "$WCLINT_BIN" ]; then
+    # The watchdog is UNRESOLVABLE — declare it, but not once per 30 s forever. The marker is a FILE,
+    # never a shell variable: this function runs inside a COMMAND SUBSTITUTION, so a variable set here
+    # mutates a copy that dies with the subshell (the digest's own measured trap, above).
+    _ensure
+    if [ ! -f "$PAGEDIR/wclint-missing" ]; then
+      : > "$PAGEDIR/wclint-missing" 2>/dev/null || true
+      idl wait_contract_sweep_unavailable "\"why\":\"wait-contract-lint.sh is not resolvable from this daemon (checked beside-script, ~/.claude/scripts, PATH) — OPEN wait contracts have NO liveness-independent watchdog; run ./install.sh from the checkout\""
+    fi
+    echo 0; return
+  fi
+  rm -f "$PAGEDIR/wclint-missing" 2>/dev/null || true      # re-arm: a later disappearance is news again
+  [ -d "$WAIT_CONTRACTS_DIR" ] || { echo 0; return; }      # nobody has ever waited — vacuous, not an alarm
+  out="$(sup_bounded "$SUP_WCLINT_TIMEOUT_S" "$WCLINT_BIN" --sweep "$WAIT_CONTRACTS_DIR" 2>&1)"; rc=$?
+  if [ "$rc" = 124 ]; then
+    idl wait_contract_sweep_cut "\"bound_s\":$SUP_WCLINT_TIMEOUT_S,\"dir\":$(json_str "$WAIT_CONTRACTS_DIR"),\"why\":\"the wait-contract sweep was CUT at its bound — this sweep produced NO verdict on wait contracts (a cut probe is not an all-clear)\""
+    echo 0; return
+  fi
+  n="$(grep -c -E 'DEAD-WAITER|PAST-DEADLINE|ESCALATED' <<<"$out" | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -gt 0 ]; then
+    idl wait_contract_divergence "\"n\":$n,\"dir\":$(json_str "$WAIT_CONTRACTS_DIR"),\"detail\":$(json_str "$(grep -E 'DEAD-WAITER|PAST-DEADLINE|ESCALATED' <<<"$out" | head -5)"),\"why\":\"an OPEN wait contract diverged (dead waiter or past deadline) — the lint paged it page-once; recovery is PAGED, never auto\""
+    printf '%s  wait-contract divergence n=%s\n' "$(utc)" "$n" >> "$SUPLOG" 2>/dev/null || true
+  fi
+  echo "$n"
+}
+
 sweep(){
-  local n=0 found=0 gc r pp
+  local n=0 found=0 gc r pp wc
   gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
   if [ -d "$TEL_DIR" ]; then
     for f in "$TEL_DIR"/*.json; do
@@ -818,6 +873,9 @@ sweep(){
   # possible MODAL for the operator to eyeball. (Recorded here so the blindness is declared, not hidden.)
   # But a permission prompt DOES leave a harness-emitted beacon — read it for a precise page (§B2).
   pp="$(sweep_permission_pending)"; found=$(( found + ${pp:-0} ))
+  # L2-c: the wait-contract watchdog runs on THIS cadence (G-P4-2) — a disk scan, so it is enforceable
+  # from bash and survives the death of every waiter it audits.
+  wc="$(sweep_wait_contracts)"; found=$(( found + ${wc:-0} ))
   # V3 self-check LAST, on the count this sweep actually enumerated: a heartbeat of "swept 0, found 0" is
   # an all-clear that must not be emitted while live panes sit outside the world-view it swept.
   self_check "$n"
