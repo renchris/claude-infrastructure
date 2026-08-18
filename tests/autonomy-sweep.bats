@@ -102,6 +102,15 @@ setup() {
   export CC_EXPIRED_LEDGER="$BATS_TEST_TMPDIR/expired-unread.jsonl"
   export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/watchdog-teardown"
   export CC_CLOSE_ATTRIB_LOG="$BATS_TEST_TMPDIR/close-attrib.jsonl"
+  # This suite calls the real sweep ~74 times, and every `cc-backlog add` under it runs
+  # dispatch_kick, which spawns `cc-dispatch --decide` in the background against the OPERATOR'S
+  # LIVE $HOME (CC_BACKLOG_IDL, the debounce marker) — the fixtures above redirect state per
+  # variable, and none of them reaches a child that resolves its own defaults. The spawn also
+  # inherits bats' fd 3, so a slow kick holds the suite's output pipe open: measured 150 s → 35 s
+  # with this line. `dispatch_kick` (bin/cc-backlog) returns 0 on this switch BEFORE it resolves a
+  # binary or touches the marker, so one line covers both the live-write and the wedge.
+  # The outer per-call `timeout` wrap bounds a hang; it does not stop the write.
+  export CC_BACKLOG_KICK=off
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
            "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR" \
