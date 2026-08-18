@@ -193,6 +193,21 @@ drv_iterm2_address() {
 # ── dispatch ───────────────────────────────────────────────────────────────────────────────────
 # Non-builtin drivers are sibling executables implementing these same verbs. exec, so the driver's
 # exit code IS ours and no rc is laundered through a wrapper.
+#
+# ⚠ EVERY VERB REJECTS ARGUMENTS IT DOES NOT IMPLEMENT — rc 3, named, on stderr. This is not
+# pedantry, it is the seam's INDETERMINACY CONTRACT applied to its own argv. `list` used to drop
+# `"$@"` on the floor, so `cc-pane list --json` and `cc-pane list` were BYTE-IDENTICAL: 15 bare ids
+# and exit 0. A consumer that asked for JSON got integers, json.load() raised, and the failure
+# looked like the DATA's fault rather than the flag's. Measured cost 2026-08-11 (backlog
+# d65dcfd22ce2): a custody pane-liveness check read "registry unreadable" for panes 282/284/305 and
+# could not tell a dead pane from an unparseable answer, so three custody debts could not be
+# adjudicated — the session correctly declined to abandon them, but the alternative was abandoning
+# live work. Same failure DIRECTION as `drv_iterm2_list`'s zero-row rule below: an answer we cannot
+# actually give must be a NAMED refusal, never a confident-looking wrong shape. A silently-ignored
+# flag is strictly worse than an absent one, because only the absent one is discoverable.
+# The rejection is deliberately not "add --json": `list`'s contract (header line 10) is one opaque
+# id per line, the three drivers cannot all answer id/cwd/alive, and a --json that lied on the
+# headless driver would recreate this exact defect one layer down.
 dispatch_external() {
   local exe="$DRIVER_DIR/cc-pane-$DRIVER"
   [ -x "$exe" ] || { printf 'cc-pane: no driver %s (looked for %s)\n' "$DRIVER" "$exe" >&2; exit "$RC_USAGE"; }
@@ -218,12 +233,15 @@ case "$DRIVER" in
     case "$VERB" in
       spawn)   drv_iterm2_spawn "$@" ;;
       address) [ $# -ge 1 ] || { die_usage "address: need an id"; exit $?; }
+               [ $# -eq 1 ] || { die_usage "address: takes exactly one id, got $#: $*"; exit $?; }
                drv_iterm2_address "$(pane_norm "$1")" ;;
       send)    [ $# -ge 2 ] || { die_usage "send: need <id> <text…>"; exit $?; }
                id="$(pane_norm "$1")"; shift; drv_iterm2_send "$id" "$@" ;;
       close)   [ $# -ge 1 ] || { die_usage "close: need an id"; exit $?; }
+               [ $# -eq 1 ] || { die_usage "close: takes exactly one id, got $#: $*"; exit $?; }
                drv_iterm2_close "$(pane_norm "$1")" ;;
-      list)    drv_iterm2_list ;;
+      list)    [ $# -eq 0 ] || { die_usage "list: takes no arguments, got: $* — it prints one opaque id per line and has no --json"; exit $?; }
+               drv_iterm2_list ;;
       *)       die_usage "unknown verb '$VERB'" ;;
     esac
     exit $? ;;

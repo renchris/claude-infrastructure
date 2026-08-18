@@ -158,7 +158,48 @@ check "split-output-not-validated" bin/cc-pane \
   '"Created new pane: "*) printf '"'"'%s\n'"'"' "${out#Created new pane: }"; return "$RC_OK" ;; ""|*) printf '"'"'%s\n'"'"' "" ; return "$RC_OK" ;;' \
   'does NOT return an id is a FAILURE'
 
+# ── argv the seam does not implement (2026-08-18, backlog d65dcfd22ce2) ───────────────────
+# SIX mutants, one per SITE, three here and three on the headless driver — because a green suite
+# credits no site. The mutation is the ORIGINAL BUG restored, not an approximation of it: each
+# guard's predicate is forced true so the `||` arm never runs and the argument is silently dropped,
+# which is byte-for-byte what `list) drv_iterm2_list ;;` did before the fix. Six separate anchors
+# rather than one, because the six guards are independent: deleting them together would prove only
+# that SOME test somewhere notices, not that each verb's claim is held by its own case.
+
+check "list-silently-drops---json" bin/cc-pane \
+  '[ $# -eq 0 ] || { die_usage "list: takes no arguments' \
+  '[ 1 -eq 1 ] || { die_usage "list: takes no arguments' \
+  'list REFUSES --json with rc 3 — a silently-ignored flag'
+
+check "address-silently-drops-a-trailing-flag" bin/cc-pane \
+  '[ $# -eq 1 ] || { die_usage "address: takes exactly one id' \
+  '[ 1 -eq 1 ] || { die_usage "address: takes exactly one id' \
+  'address takes exactly ONE id — a trailing flag'
+
+check "close-silently-drops-a-trailing-flag" bin/cc-pane \
+  '[ $# -eq 1 ] || { die_usage "close: takes exactly one id' \
+  '[ 1 -eq 1 ] || { die_usage "close: takes exactly one id' \
+  'close takes exactly ONE id, and the refusal happens BEFORE'
+
 # ── the headless driver ───────────────────────────────────────────────────────────────────
+# The three below are the SAME class one driver down, and they are the reason the fix is not
+# half-applied: bin/cc-pane `exec`s this driver with "$@" intact, so a guard present only on the
+# iterm2 branch would leave `CC_PANE_DRIVER=headless cc-pane list --json` still lying.
+check "headless-list-silently-drops---json" bin/cc-pane-headless \
+  '[ $# -eq 0 ] || die_usage "list: takes no arguments' \
+  '[ 1 -eq 1 ] || die_usage "list: takes no arguments' \
+  'list REFUSES --json with rc 3 on the headless driver too'
+
+check "headless-address-silently-drops-a-flag" bin/cc-pane-headless \
+  '[ $# -eq 1 ] || die_usage "address: takes exactly one id' \
+  '[ 1 -eq 1 ] || die_usage "address: takes exactly one id' \
+  'address takes exactly ONE id on the headless driver'
+
+check "headless-close-silently-drops-a-flag" bin/cc-pane-headless \
+  '[ $# -eq 1 ] || die_usage "close: takes exactly one id' \
+  '[ 1 -eq 1 ] || die_usage "close: takes exactly one id' \
+  'close takes exactly ONE id on the headless driver'
+
 check "zombie-reads-as-live (kill -0)" bin/cc-pane-headless \
   '  st="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '"'"' '"'"')"
   [ -n "$st" ] || return 1

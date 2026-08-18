@@ -331,6 +331,34 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   [ ! -d "$CC_PANE_HOME/$b" ]
 }
 
+# ── the SAME argv contract, on the SAME seam, one driver down ──────────────────────────────
+# These are not duplicates of the sibling suite's three: bin/cc-pane `exec`s this driver with "$@"
+# intact, so a fix applied only to the iterm2 branch would leave `CC_PANE_DRIVER=headless cc-pane
+# list --json` still silently dropping the flag. A flag that means one thing on one driver and
+# nothing on another is worse than no flag at all — the consumer cannot even learn the rule.
+# The test above is the positive control: bare `list` must stay rc 0 and enumerate.
+
+@test "list REFUSES --json with rc 3 on the headless driver too — half a fix is a flag that lies" {
+  run "$CP" list --json
+  [ "$status" -eq 3 ]
+  n="$(printf '%s\n' "$output" | grep -cF 'list: takes no arguments' || true)"
+  [ "${n:-0}" -ge 1 ]
+}
+
+@test "address takes exactly ONE id on the headless driver" {
+  run "$CP" address hdl-absent --json
+  [ "$status" -eq 3 ]
+  n="$(printf '%s\n' "$output" | grep -cF 'address: takes exactly one id' || true)"
+  [ "${n:-0}" -ge 1 ]
+}
+
+@test "close takes exactly ONE id on the headless driver" {
+  run "$CP" close hdl-absent --force
+  [ "$status" -eq 3 ]
+  n="$(printf '%s\n' "$output" | grep -cF 'close: takes exactly one id' || true)"
+  [ "${n:-0}" -ge 1 ]
+}
+
 @test "an empty registry is a TRUE empty (rc 0), not indeterminate" {
   run "$CP" list
   [ "$status" -eq 0 ]
