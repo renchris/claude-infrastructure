@@ -29,6 +29,10 @@
 #   B17-B18       a FOURTH clause, and the first that looks at what a fired bound left BEHIND rather
 #                 than at how the SUT returned from it: the kill must reach the wedged bats itself,
 #                 and every $BATS_BIN call site must be under a bound at all. Own block below.
+#   B19-B24       a FIFTH clause — REACHABILITY — and the first decided from the TREE rather than
+#                 from a probe: a commit whose diff cannot touch the failing subject is not a
+#                 candidate, and the walk's steps/elapsed/load are recorded beside every verdict so
+#                 a contention flake is distinguishable from a regression. Own block below.
 #
 # POSITIVE CONTROL: B1/B2/B3 drive a fixture bats stub that sleeps far past a 3s bound, so the
 # bound is SEEN to fire. A bound that has never been observed firing is not shipped.
@@ -634,4 +638,214 @@ teardown() {
   [ "$(printf '%s' "$exec_sites" | /usr/bin/grep -c .)" -ge 3 ]
   unbounded="$(printf '%s\n' "$exec_sites" | /usr/bin/grep -v 'bounded ' || true)"
   [ -z "$unbounded" ] || { echo "UNBOUNDED runner call site(s):"; echo "$unbounded"; false; }
+}
+
+# ── B19-B24 — REACHABILITY: A CANDIDATE MUST BE ABLE TO TOUCH THE SUBJECT ─────────────────────────
+# A FIFTH clause, and the first that decides from the TREE rather than from a probe. B10-B16 both
+# ask "did the walk MEASURE what it names" and answer by re-running the runner at an endpoint. That
+# cannot decide the contention shape at all: under load a real GOOD probe below and a real BAD probe
+# at an interior commit genuinely happen, so the differential exists and every re-run guard passes.
+#
+# THE INCIDENT (2026-08-17, backlog ebbf3adfb4d0). Page postland-red-0f55846f7de4 named
+# `tests/cc-wait.bats::the timeout verdict names itself as designed` at culprit 0f55846f7de4,
+# bisected from last-green f5b67a94760e. That commit's entire diff is docs/plans/BACKLOG_DRAIN_24_7.md,
+# +88 lines and no code — bats never opens it, cc-wait.bats never names it. The suite was 19/19
+# green at origin/main with that plan line present, so the RED never reproduced, and the page env
+# recorded load 16.45: the corpus failure was CONTENTION and the walk elected the nearest commit
+# rather than reporting no verdict. Cost: the originating chain paged for a fault it did not cause,
+# and a docs commit holding a permanent RED in the page store.
+#
+#   B19 veto      a culprit whose whole diff is inert (`*.md`/`*.txt`) and which the subject names
+#                 NOWHERE ⇒ UNDECIDABLE, no sha, and the runner log says why.
+#   B20 named     CONTROL — the same shape where the subject spells the doc's full path keeps its
+#                 culprit (tests/desk-brief-ssot.bats is that shape live). Without this, "abstain on
+#                 any docs commit" passes B19 and quietly retires convictions that are real.
+#   B21 prefix    CONTROL — the subject that builds the path at runtime and can only ever name the
+#                 DIRECTORY keeps its culprit too (tests/backlog-grouping.bats builds
+#                 `$REPO/docs/plans/$(… tr …).md`, so only the `docs/plans/` prefix can see it).
+#   B22 mixed     CONTROL — one non-inert path anywhere in the diff ⇒ the culprit stands, no
+#                 questions. A script the subject never names is still reachable transitively
+#                 through whatever binary it does invoke, and that is the whole code population.
+#   B23 order     the veto is decided BEFORE the endpoint probes, on a first-child culprit where the
+#                 FLOOR check would otherwise spend a whole-file bats run. Cheap evidence first.
+#   B24 numbers   every verdict AND every non-verdict records steps, elapsed and the loadavg AT the
+#                 verdict. $ENV_FP's load is the CORPUS's, taken before the walk began; a verdict
+#                 reached at load 16 and one reached at load 2 are different claims about the sha.
+#   B25 sigpipe   B20's control at REAL subject size. The reference check must not be a
+#                 `printf | grep -q` pipe: under pipefail an early-exiting consumer SIGPIPEs the
+#                 producer and the match reads FALSE, inverting the guard on exactly the large
+#                 subjects a fixture is too small to expose.
+
+# <n> [docs_at=3] — n linear commits where commit <docs_at> changes ONLY a markdown file. Every
+# other commit touches seq.txt, so the docs commit is the one and only inert-diff commit in the
+# range. The doc's PRESENCE is what stub_bats_docs_marker reads, which reproduces the walk's
+# observable — a bisect converging on a docs-only commit — without needing real contention.
+mk_history_docs_bad() {
+  local n="$1" at="${2:-3}" i
+  for i in $(seq 1 "$n"); do
+    if [ "$i" -eq "$at" ]; then
+      mkdir -p "$R/docs/plans"
+      printf 'plan line\n' > "$R/docs/plans/PLAN.md"
+    else
+      printf '%s\n' "$i" > "$R/seq.txt"
+    fi
+    git -C "$R" add -A >/dev/null
+    git -C "$R" commit -qm "c$i" >/dev/null
+    [ "$i" = 1 ] && GOOD="$(git -C "$R" rev-parse HEAD)"
+    [ "$i" = "$at" ] && FIRSTBAD="$(git -C "$R" rev-parse HEAD)"
+  done
+  BAD="$(git -C "$R" rev-parse HEAD)"
+  git -C "$R" push -q origin main
+}
+
+# Red exactly where the plan doc exists — the same discriminator shape as stub_bats_marker, moved
+# onto the inert path so the walk convicts a commit that changed nothing else.
+stub_bats_docs_marker() {
+  printf '#!/bin/bash\ncase "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac\n[ -f docs/plans/PLAN.md ] && exit 1\nexit 0\n' \
+    > "$STUB/bats-stub"
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+
+# Rewrite the subject so it NAMES <text>. The subject's own content is the corpus the reachability
+# check reads, so this is the single axis B19/B20/B21 turn on — same range, same stub, same verb.
+subject_names() {
+  printf '@test "p" { true; }\n# %s\n' "$1" > "$R/tests/ok.bats"
+}
+
+@test "B19: a culprit whose whole diff is a doc the subject never names is UNDECIDABLE, never a sha" {
+  mk_history_docs_bad 5
+  stub_bats_docs_marker           # the walk really does converge on the docs-only commit...
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  # ...and it must refuse to name it. C20 REVERTS what a bisect names, and this diff cannot reach
+  # a bats subject by any path — reverting it would delete a plan doc to fix a test.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  [[ "$output" != *"$FIRSTBAD"* ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  # The abstention came from THIS clause, not from a bound or an empty parse — without this the
+  # test would pass for the wrong reason on any future cut.
+  grep -q "bisect UNREACHABLE" "$RUNLOG"
+  grep -q "docs/plans/PLAN.md" "$RUNLOG"
+  ! grep -q "bisect CUT" "$RUNLOG" || false
+  # ...and the reason is machine-readable on the verb's own stderr, not only in the log.
+  [[ "$output" == *"unreachable"* ]] || false
+}
+
+@test "B20: CONTROL — a subject that NAMES the doc keeps its culprit (the guard vetoes, it does not blanket-abstain)" {
+  subject_names "reads docs/plans/PLAN.md at runtime"
+  mk_history_docs_bad 5
+  stub_bats_docs_marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "bisect UNREACHABLE" "$RUNLOG"
+}
+
+@test "B21: CONTROL — naming only the DIRECTORY is enough; a runtime-built path still convicts" {
+  # tests/backlog-grouping.bats builds `$REPO/docs/plans/$(printf %s "$m" | tr a-z- A-Z_).md`, so
+  # the basename never appears anywhere in it. A basename-only check would exonerate every commit
+  # to every plan doc that suite reads.
+  subject_names 'f="$REPO/docs/plans/$(gen).md"'
+  mk_history_docs_bad 5
+  stub_bats_docs_marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "bisect UNREACHABLE" "$RUNLOG"
+}
+
+@test "B22: CONTROL — one non-inert path in the diff and the culprit stands, named or not" {
+  # The ordinary regression: the culprit ships a doc AND a script. The subject names neither, and
+  # that is fine — a script it never spells can still be reached through whatever binary it runs.
+  # This is the clause that keeps the entire code population convictable.
+  mk_history_docs_bad 5
+  # re-author the docs commit's tree so it also carries a .sh, then rebuild the range on top
+  git -C "$R" checkout -q "$FIRSTBAD"
+  mkdir -p "$R/scripts"
+  printf '#!/bin/bash\nexit 0\n' > "$R/scripts/unrelated.sh"
+  git -C "$R" add -A >/dev/null
+  git -C "$R" commit -q --amend --no-edit >/dev/null
+  local newbad; newbad="$(git -C "$R" rev-parse HEAD)"
+  git -C "$R" checkout -q -B main "$newbad"
+  printf 'tail\n' > "$R/seq.txt"; git -C "$R" add -A >/dev/null
+  git -C "$R" commit -qm "c-tail" >/dev/null
+  BAD="$(git -C "$R" rev-parse HEAD)"
+  git -C "$R" push -qf origin main
+  stub_bats_docs_marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$newbad" ]] || false
+  ! grep -q "bisect UNREACHABLE" "$RUNLOG"
+}
+
+@test "B23: the veto is decided from the TREE, before any endpoint probe spends a bats run" {
+  # docs_at=2 makes the culprit the FIRST CHILD of good, which is exactly the shape bisect_floor_ok
+  # probes with a whole-file run. Reachability costs no run at all and answers the same question
+  # better here, so it must come first — on a box already starved enough to produce the false red,
+  # the ordering is the difference between one git read and one more full suite.
+  mk_history_docs_bad 4 2
+  stub_bats_docs_marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  grep -q "bisect UNREACHABLE" "$RUNLOG"
+  # the floor check never ran — none of its three verdict lines appear
+  ! grep -q "bisect floor" "$RUNLOG" || false
+  ! grep -q "bisect FLOOR" "$RUNLOG"
+}
+
+@test "B24: every verdict AND every non-verdict records steps, elapsed and the load AT the verdict" {
+  # A page that carries only $ENV_FP carries the CORPUS's load, read before the walk began — the
+  # 0f55846f7de4 page said `load 16.45` and nobody could tell whether that was still true when the
+  # bisect named its commit 20 minutes later. Both arms, or the abstentions stay unadjudicable.
+  mk_history 5
+  stub_bats_marker
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 0 ]
+  grep -qE "bisect verdict=[0-9a-f]{7,40} steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
+
+  : > "$RUNLOG"
+  subject_names "plain"
+  mk_history_docs_bad 5
+  stub_bats_docs_marker
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 1 ]
+  grep -qE "bisect verdict=NONE why=unreachable steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
+}
+
+@test "B25: a subject LARGER than the pipe buffer that names the doc still convicts (pipefail-SIGPIPE)" {
+  # THE DEFECT THIS PINS, found by the land gate's pipefail-sigpipe ratchet on the first draft of
+  # bisect_reach_ok. The reference check was `printf '%s' "$subject" | grep -qF -- "$tok"`. `grep -q`
+  # exits at the FIRST match, the producer takes SIGPIPE, `set -o pipefail` promotes that to 141, and
+  # the `&&` reads FALSE — so a subject that NAMES the doc gets its culprit vetoed anyway, which is
+  # the wrong-veto direction the whole function is one-sided to avoid.
+  #
+  # B20 could not see it: a printf under the 64KB pipe buffer finishes before grep leaves, so small
+  # fixtures pass and real subjects do not. THIS one pads past the buffer and puts the match FIRST,
+  # which is the shape that makes grep exit earliest. Under the pipe form it goes red; under the
+  # `case` builtin (no pipe, no fork, quoted pattern matched literally) it passes.
+  { printf '@test "p" { true; }\n# reads docs/plans/PLAN.md at runtime\n'
+    local i
+    for i in $(seq 1 3000); do printf '# padding line %s aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$i"; done
+  } > "$R/tests/ok.bats"
+  [ "$(wc -c < "$R/tests/ok.bats")" -gt 65536 ]     # past the pipe buffer, or this proves nothing
+
+  mk_history_docs_bad 5
+  stub_bats_docs_marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "bisect UNREACHABLE" "$RUNLOG" || false
 }

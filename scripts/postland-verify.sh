@@ -25,6 +25,10 @@
 # 1/3 = flake (→ flakes.jsonl, excluded from the verdict; all-flake ⇒ GREEN-WITH-FLAKES).
 # ON REPRODUCIBLE RED: `git bisect run` FIRST (culprit sha), then a STATE-KEYED page + backlog item
 # + notification (a fixed page key gets path-dedup-swallowed for 7 days). last-green stays put.
+# A BISECT MAY RETURN NO VERDICT, and four guards make it: the tip confirmation, the floor proof,
+# the two bounds, and REACHABILITY (a commit whose diff cannot touch the failing subject is not a
+# candidate — see bisect_reach_ok). On a non-verdict the page says NO VERDICT and names nobody;
+# steps/elapsed/load-at-verdict ride beside every verdict so contention reads as contention.
 # STATES: GREEN · RED (a named, reproducible failure) · HUNG (the suite never returned AND the
 # suspect file wedges again ALONE on a pristine checkout — a proven property of the TREE: stamped,
 # paged at that file, fix = timeout-wrap the un-stubbed seam, never a bisect) · CUT (truncated by a
@@ -353,6 +357,21 @@ BISECT_MAX_STEPS="${POSTLAND_BISECT_MAX_STEPS:-24}"  # STEP-COUNT cap — the OT
 # yields an empty string, which fails loudly at the caller instead of quietly on disk.
 # Enforced by scripts/subshell-cleanup-lint.sh, whose positive control is this file's pre-fix blob.
 BISECT_CULPRIT=""
+# ── THE NON-VERDICT'S OWN OUT-PARAMETERS (2026-08-17, backlog ebbf3adfb4d0) ───────────────────────
+# BISECT_CULPRIT already carried "undecidable" as the empty string, but that is one bit and the
+# surfaces downstream need three more. WHY it abstained (a cut is a machine event, an unreachable
+# candidate is a walk that convicted noise), and the two numbers that separate a REGRESSION from
+# CONTENTION: how long the walk took and what the box's load was AT THE VERDICT.
+#
+# The load in $ENV_FP is captured at run START and is the corpus's, not the walk's — page
+# postland-red-0f55846f7de4 carried `load 16.45` and nobody could tell whether that number was
+# still true 20 minutes later when the bisect named its commit. A verdict reached at load 16 and a
+# verdict reached at load 2 are different claims about the same sha, so the number belongs BESIDE
+# the verdict, not only in a fingerprint taken before the walk began.
+BISECT_STEPS=0     # walk steps actually run (0 = the walk never started)
+BISECT_S=0         # wall seconds the walk spent, verdict or not
+BISECT_LOAD=""     # 1-min loadavg read AT the verdict — empty when the instrument cannot be read
+BISECT_WHY=""      # short slug: why there is no verdict. Empty iff BISECT_CULPRIT is set.
 # TWO bounds, because the wall above does not address the measured CAUSE. The 12h41m walk was not
 # made of slow steps — every step was fast. The RANGE GREW: the bisected suite committed into
 # $WORKTREE on each invocation, so new revisions kept entering the interval and the walk had no
@@ -1815,7 +1834,7 @@ bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor g
   want="$(git -C "$WORKTREE" rev-parse --verify "$good^{commit}" 2>/dev/null || true)"
   [ -n "$want" ] || {
     log "bisect FLOOR UNPROVEN: cannot resolve the last-green $(sha12 "$good") in the cell, and $(sha12 "$culprit") is the first commit after it — undecidable, no culprit named"
-    return 1; }
+    BISECT_WHY="floor-unproven"; return 1; }
   git -C "$WORKTREE" cat-file -e "$want:$file" 2>/dev/null || {
     log "bisect floor N/A: $file does not exist at the last-green $(sha12 "$good"), so the floor cannot be the red — $(sha12 "$culprit") is where the file appeared and the walk probed it BAD; culprit stands"
     return 0; }
@@ -1823,7 +1842,7 @@ bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor g
   git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true      # ...so the checkout below can run
   if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$want" >/dev/null 2>&1; then
     log "bisect FLOOR UNPROVEN: cannot check out the last-green $(sha12 "$good") to confirm it — undecidable, no culprit named"
-    return 1
+    BISECT_WHY="floor-unproven"; return 1
   fi
   # CONFIRM WHERE WE ARE, never assume the checkout took: this probe's entire meaning is the commit
   # it ran at, and any way of failing to reach the floor leaves HEAD somewhere a GREEN would be
@@ -1832,21 +1851,127 @@ bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor g
   got="$(git -C "$WORKTREE" rev-parse --verify HEAD 2>/dev/null || true)"
   [ "$want" = "$got" ] || {
     log "bisect FLOOR UNPROVEN: the cell did not land on the last-green $(sha12 "$good") — undecidable, no culprit named"
-    return 1; }
+    BISECT_WHY="floor-unproven"; return 1; }
   bounded "$RETRY_TO" "$runner"; rc=$?      # the walk's own step, re-run — same script, same band
   [ "$rc" -eq 0 ] && {
     log "bisect floor CONFIRMED green at $(sha12 "$good") — $(sha12 "$culprit") is its first child, so the walk itself had no green to stand on"
     return 0; }
   log "bisect FLOOR NOT GREEN: the walk named $(sha12 "$culprit") only because it is the first commit after an ASSUMED-green floor, and $file is not green at $(sha12 "$good") either (runner rc=$rc) — undecidable, no culprit named"
+  BISECT_WHY="floor-not-green"
+  return 1
+}
+# ════ REACHABILITY — A COMMIT THAT CANNOT TOUCH THE SUBJECT IS NOT A CANDIDATE (2026-08-17) ═══════
+# THE MEASUREMENT (backlog ebbf3adfb4d0). Page postland-red-0f55846f7de4 named
+# `tests/cc-wait.bats::the timeout verdict names itself as designed` at culprit 0f55846f7de4,
+# bisected from last-green f5b67a94760e. That commit's ENTIRE diff is `docs/plans/BACKLOG_DRAIN_24_7.md`,
+# +88 lines and no code — a file bats never opens, that cc-wait.bats never names, and that no
+# process in the run reads. It cannot reach the subject by any path. The suite was 19/19 green at
+# origin/main with that same plan line present, so the RED never reproduced; the page env recorded
+# load 16.45, i.e. the corpus failure was CONTENTION, and the walk then elected the nearest commit
+# rather than reporting no verdict. Two costs, both durable: the originating chain gets paged for a
+# fault it did not cause, and a docs commit acquires a permanent RED in the page store.
+#
+# WHY THE THREE EXISTING GUARDS DO NOT COVER IT. The tip confirmation and the floor proof both ask
+# "did the walk MEASURE what it names" — they re-run the runner at an endpoint. An interior culprit
+# with a real GOOD probe below it and a real BAD probe at it passes both, because under contention
+# that differential genuinely existed: the box was loaded when one step ran and not when the other
+# did. Nothing in a re-run can separate that from a regression. This guard asks a different question
+# — CAN THIS DIFF REACH THE SUBJECT AT ALL — and it is answered from the tree, not from a probe, so
+# it costs no bats run and works on the one path where re-running is exactly what cannot decide.
+#
+# THE PREDICATE IS DELIBERATELY ONE-SIDED. Only a POSITIVE proof of unreachability vetoes; anything
+# unreadable, ambiguous, or merely unmentioned in the diff leaves the culprit standing. The reason
+# is the shape of the two errors: a wrong veto costs culprit REFINEMENT (red_actions still pages and
+# still backlogs the RED — it just names nobody), while a wrong conviction costs an AUTO-REVERT of an
+# innocent commit on trunk. So:
+#   · ANY changed path outside the inert class ⇒ stands, no questions. A `.sh` under docs/ is code,
+#     a config is loadable, and a script the subject never names can still be reached transitively
+#     through whatever binary it does invoke. This is what keeps every real code conviction intact.
+#   · A merge, an unreadable diff, an empty diff, or a subject we cannot read ⇒ stands. Unprovable
+#     is not proven.
+#   · ALL changed paths inert (`*.md`) AND none of them named by the subject ⇒ VETO.
+# THE INERT CLASS IS `*.md` AND NOTHING ELSE, and the narrowness is the point. Markdown in this repo
+# is never executed and never sourced — the one extension for which "bats cannot reach it except by
+# reading it" is a property of the format rather than a guess about the file. `*.txt` was in the
+# class for one draft and came straight back out: the fixture ranges in
+# tests/postland-verify-bisect-bound.bats commit `seq.txt`, and B10/B13/B17 — the tip and floor
+# clauses — went red because the veto short-circuited them. That is not a fixture accident. A `.txt`
+# in this tree is as likely to be a test fixture read through a path the test never spells as it is
+# to be prose, so vetoing on it proves less than it claims. Widen this class only with a measured
+# reason; every extension added here removes convictions somewhere.
+# "Named by the subject" is checked against the full path, every ancestor directory prefix, and the
+# basename, because a test that reads a doc does not always spell the whole path: tests/backlog-
+# grouping.bats builds `$REPO/docs/plans/$(… tr …).md` at runtime, so only the `docs/plans/` prefix
+# can see it, while tests/desk-brief-ssot.bats spells `docs/templates/desk-boot-brief.md` in full.
+# Both of those must keep their convictions; tests/cc-wait.bats, which contains no `docs/` at all,
+# is what this vetoes. Measured against the live tree, not reasoned: those are the three shapes in it.
+# The walk runs all the way up to the TOP-LEVEL component, so a subject merely saying the word
+# `docs` in a comment exonerates the whole of docs/ for that suite. That is a real loss of
+# discrimination and it is taken deliberately: stopping one level short would start vetoing on
+# subjects that reach a directory by a spelling this cannot see, and a wrong veto and a wrong
+# conviction are not the same size of mistake. The suite that produced the incident says `docs`
+# nowhere, which is the population that matters.
+#
+# SCOPE — the subject file's own text is the corpus. This repo has zero bats `load` helpers
+# (`grep -c '^ *load ' tests/*.bats` = 0), so the file IS its own closure today. If a helper is ever
+# introduced, its content has to be appended here or a doc named only by the helper reads as
+# unreachable — that is the one way this guard could start vetoing wrongly.
+bisect_reach_ok() { # <culprit> <bad> <file> — 0 = can reach the subject, or unprovable; 1 = provably cannot
+  local culprit="$1" bad="$2" file="$3" parents paths p subject dir tok
+  local -a inert=()
+  # ONE parent only. `diff-tree --name-only` prints NOTHING for a merge, and an empty path list read
+  # as "touches no file" would veto every merge commit — the opposite of one-sided.
+  parents="$(git -C "$WORKTREE" rev-list --parents -n1 "$culprit" 2>/dev/null | wc -w | tr -d ' ')"
+  case "$parents" in 2) ;; *) return 0 ;; esac        # 2 words = the sha + exactly one parent
+  paths="$(git -C "$WORKTREE" diff-tree --no-commit-id --name-only -r "$culprit" 2>/dev/null)"
+  [ -n "$paths" ] || return 0                          # unreadable, or an empty commit — unprovable
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      *.md) inert+=("$p") ;;
+      *)    return 0 ;;                                # code/config class — reachable, possibly transitively
+    esac
+  done <<EOF
+$paths
+EOF
+  [ "${#inert[@]}" -gt 0 ] || return 0
+  subject="$(git -C "$WORKTREE" show "$bad:$file" 2>/dev/null)"
+  [ -n "$subject" ] || return 0                        # cannot read the subject ⇒ cannot prove anything
+  # SUBSTRING VIA `case`, NEVER `printf | grep -q`. The pipe form is the pipefail-SIGPIPE trap this
+  # repo ratchets against, and here it inverts the guard's own meaning: `grep -q` exits at the FIRST
+  # match, the producer takes SIGPIPE, `set -o pipefail` promotes that to 141, and the `&&` reads
+  # FALSE — i.e. the subject NAMES the doc and the culprit gets vetoed anyway, which is the wrong
+  # veto this whole function is one-sided to avoid. It hides in small fixtures (a printf under the
+  # 64KB pipe buffer finishes before grep leaves) and appears on real subjects, so B20/B21 pass and
+  # the live path does not. `case` is a builtin over a string already in memory: no pipe, no fork,
+  # and the quoted "$tok" is matched LITERALLY, which is exactly `grep -F`'s semantics.
+  for p in "${inert[@]}"; do
+    for tok in "$p" "${p##*/}"; do
+      case "$subject" in *"$tok"*) return 0 ;; esac
+    done
+    # Ancestors WITHOUT a trailing slash, deliberately: tests/codex-probe-corpus.bats spells
+    # `"$REPO_ROOT/tests/fixtures/codex-probe"` with no slash after it, so a slash-terminated token
+    # would miss the very directory that suite reads its .md corpus out of. The bare form is a
+    # substring of the slashed one, so it matches both spellings and never fewer.
+    dir="$p"
+    while [ "${dir%/*}" != "$dir" ]; do                 # every ancestor: docs/plans then docs
+      dir="${dir%/*}"
+      case "$subject" in *"$dir"*) return 0 ;; esac
+    done
+  done
+  log "bisect UNREACHABLE: $(sha12 "$culprit") changes only ${inert[*]} — $file names none of those paths and bats never loads them, so this diff cannot reach the subject; undecidable, no culprit named (a red with no reachable candidate is contention or a pre-existing trunk red, not this commit)"
+  BISECT_WHY="unreachable"
   return 1
 }
 do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
   # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
-  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps
+  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps b0
   local probe_tmp="" probe_own=0
-  BISECT_CULPRIT=""
+  BISECT_CULPRIT=""; BISECT_STEPS=0; BISECT_S=0; BISECT_LOAD=""; BISECT_WHY="no-range"
+  b0="$(now_epoch)"
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
+  BISECT_WHY="no-cell"
   prepare_worktree "$bad" || return 1
   runner="$(mktemp "$TMPBASE/postland-bisect.XXXXXX")" || return 1
   counter="$runner.steps"; : > "$counter"
@@ -1920,6 +2045,7 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
     printf 'rc=$?\n[ "$rc" -le 1 ] || exit 125\nexit "$rc"\n'
   } > "$runner"
   chmod +x "$runner"
+  BISECT_WHY="no-walk"
   if git -C "$WORKTREE" bisect start "$bad" "$good" >/dev/null 2>&1; then
     # THE BOUND (2026-08-05, 12h53m runaway — see BISECT_TO). `bounded` degrades to running
     # unbounded when no timeout(1) resolves, so log that state rather than skip the bisect: a
@@ -1929,6 +2055,8 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
       || log "bisect UNBOUNDED — no timeout(1) resolved; the ${BISECT_TO}s wall is INERT this run — only the ${BISECT_MAX_STEPS}-step cap bounds it"
     out="$(bounded "$BISECT_TO" git -C "$WORKTREE" bisect run "$runner" 2>/dev/null)"; rc=$?
     steps="$(cat "$counter" 2>/dev/null || echo 0)"
+    case "$steps" in ''|*[!0-9]*) steps=0 ;; esac
+    BISECT_STEPS="$steps"
     # EITHER bound firing ⇒ NON-VERDICT, and the parse is SKIPPED rather than merely expected to
     # come back empty: `bisect run` prints its running log to stdout, so a cut mid-report could in
     # principle carry the "is the first bad commit" line for a commit it had not finished proving.
@@ -1941,10 +2069,20 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
     # its culprit named (pinned by B8).
     if [ "$rc" -eq 124 ]; then
       log "bisect CUT at ${BISECT_TO}s (POSTLAND_BISECT_TIMEOUT_S) — undecidable, no culprit named"
+      BISECT_WHY="cut-wall"
     elif [ "${steps:-0}" -gt "$BISECT_MAX_STEPS" ]; then
       log "bisect CUT at the ${BISECT_MAX_STEPS}-step cap (POSTLAND_BISECT_MAX_STEPS) — the range is NOT SHRINKING (a suite that commits into \$WORKTREE does exactly this); undecidable, no culprit named"
+      BISECT_WHY="cut-steps"
     else
       culprit="$(printf '%s\n' "$out" | sed -n 's/^\([0-9a-f]\{7,40\}\) is the first bad commit.*/\1/p' | head -1)"
+      [ -n "${culprit:-}" ] || BISECT_WHY="no-first-bad"
+      # REACHABILITY FIRST, and deliberately so (see bisect_reach_ok). It is the only one of the
+      # three culprit guards that costs NO bats run, and it is the only one that can decide the
+      # contention shape at all — so spending two whole-file probes to confirm endpoints of a
+      # candidate whose diff cannot touch the subject is burning a starved box to reach the same
+      # answer. Ordered before the tip confirmation, never merged into it: the tip guard is scoped
+      # to `culprit = bad`, and the commit this vetoes was an INTERIOR one.
+      [ -n "${culprit:-}" ] && { bisect_reach_ok "$culprit" "$bad" "$file" || culprit=""; }
       # ── A BISECT CAN NAME A COMMIT IT NEVER RAN ──────────────────────────────────────────────────
       # `git bisect` takes BOTH endpoints on trust and probes only until ONE candidate remains, which
       # it then DECLARES without running. So whenever the walk narrows onto the tip — every interior
@@ -1982,12 +2120,12 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
         git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true      # ...so the checkout below can run
         if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$bad" >/dev/null 2>&1; then
           log "bisect UNCONFIRMED: cannot check out the tip $(sha12 "$bad") to confirm it — undecidable, no culprit named"
-          culprit=""
+          BISECT_WHY="tip-unconfirmed"; culprit=""
         else
           rc=0; bounded "$RETRY_TO" "$runner" || rc=$?
           if [ "$rc" -ne 1 ]; then
             log "bisect UNCONFIRMED: the walk named the TIP $(sha12 "$bad") without ever running it, and $file is NOT reproducibly red there ALONE (runner rc=$rc) — undecidable, no culprit named"
-            culprit=""
+            BISECT_WHY="tip-unconfirmed"; culprit=""
           fi
         fi
       fi
@@ -1996,6 +2134,19 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
       # the one worth measuring from both ends before C20 acts on it.
       [ -n "${culprit:-}" ] && { bisect_floor_ok "$good" "$culprit" "$runner" "$counter" "$file" || culprit=""; }
     fi
+  fi
+  # ── THE TWO NUMBERS THAT SEPARATE A REGRESSION FROM CONTENTION (2026-08-17) ────────────────────
+  # Read AT the verdict, not at the corpus's start, and recorded on BOTH arms — a non-verdict under
+  # load is as much a fact about the box as a verdict is. `load1` returns empty when the instrument
+  # cannot be read, and empty is rendered as `?` downstream rather than as a number: an unreadable
+  # loadavg printed as 0 is the alarm-polarity defect this file already carries a comment about.
+  BISECT_S=$(( $(now_epoch) - b0 ))
+  BISECT_LOAD="$(load1)"
+  if [ -n "${culprit:-}" ]; then
+    BISECT_WHY=""
+    log "bisect verdict=$(sha12 "$culprit") steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
+  else
+    log "bisect verdict=NONE why=${BISECT_WHY:-unknown} steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
   fi
   [ -n "${culprit:-}" ] || return 1
   BISECT_CULPRIT="$culprit"
@@ -2362,7 +2513,22 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   pf="$PAGES/postland-red-$c12.page"
   { now_epoch
     printf 'post-land RED @ %s\n' "$(now_iso)"
-    printf 'culprit: %s (bisected from last-green %s)\n' "$c12" "$(sha12 "${good:-unknown}")"
+    # ── NAME A CULPRIT ONLY WHEN ONE WAS CONVICTED (2026-08-17, backlog ebbf3adfb4d0) ─────────────
+    # `culprit` falls back to the TARGET sha when the bisect abstained — that fallback exists to key
+    # the page file and to route the courtesy ping, and it was never a verdict. Rendering it under
+    # the word "culprit (bisected from last-green …)" turned the fallback INTO one on disk: the sha
+    # is the tip of the landing window, so whoever landed last acquires a permanent RED in the page
+    # store for a suite nothing showed they touched. Say which of the two this is, in the line that
+    # carries the sha, and put the walk's own numbers beside it — steps, wall, and the load AT the
+    # verdict, which is what tells a regression from a starved box.
+    if [ -n "$bisected" ]; then
+      printf 'culprit: %s (bisected from last-green %s)\n' "$c12" "$(sha12 "${good:-unknown}")"
+    else
+      printf 'culprit: NO VERDICT — the bisect convicted nothing (%s); RED observed at %s, which is where the window ENDS, not a commit shown to cause it\n' \
+        "${BISECT_WHY:-unknown}" "$c12"
+    fi
+    printf 'bisect:  steps=%s elapsed=%ss load-at-verdict=%s (last-green %s)\n' \
+      "$BISECT_STEPS" "$BISECT_S" "${BISECT_LOAD:-?}" "$(sha12 "${good:-unknown}")"
     printf 'failing: %s::%s\n' "$file" "$ftest"
     [ "${#FAILING[@]}" -gt 1 ] && printf 'all failing: %s\n' "${FAILING[*]}"
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats %s\n' \
@@ -2437,8 +2603,17 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   fi
   notify "Claude post-land RED" "$file fails at $c12 — see $pf"
   sid="$(author_sid "$culprit")"
-  [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
-    && "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
+  # The PEER ping is an accusation when a bisect convicted and a courtesy when it did not, and the
+  # wording has to differ or the abstention is invisible to the one session that acts on it. "(your
+  # land)" over an unconvicted sha is exactly how the originating chain gets paged for a fault it
+  # did not cause — the sha is merely where the window ends.
+  if [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ]; then
+    if [ -n "$bisected" ]; then
+      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
+    else
+      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest observed after your land $c12 — NO bisect verdict (${BISECT_WHY:-unknown}, load ${BISECT_LOAD:-?}); NOT attributed to your commit — see $pf" >/dev/null 2>&1
+    fi
+  fi
   # AUTO-REVERT only a BISECTED culprit (guard 0). When the bisect was undecidable, `culprit` above
   # fell back to the target sha for PAGING purposes — reverting that would revert a tip nothing
   # convicted, so the fallback is deliberately not passed through here.
@@ -2770,7 +2945,7 @@ verb_bisect() { # <file> <good> <bad>
   [ "$#" -eq 3 ] || { echo "usage: postland-verify.sh bisect <file> <good> <bad>" >&2; idl abstained bad-args; return 2; }
   do_bisect "$1" "$2" "$3" || true; c="$BISECT_CULPRIT"      # NOT `$( )` — see BISECT_CULPRIT
   idl fired "bisect:$1"
-  [ -n "$c" ] || { echo "postland-verify: bisect undecidable" >&2; return 1; }
+  [ -n "$c" ] || { echo "postland-verify: bisect undecidable (${BISECT_WHY:-unknown}; steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?})" >&2; return 1; }
   echo "$c"
 }
 # ════ a CUT stamp is a DIAGNOSTIC, never a verdict ════════════════════════════════════════════════
