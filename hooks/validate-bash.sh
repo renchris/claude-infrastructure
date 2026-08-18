@@ -1024,6 +1024,104 @@ fi
 # matched a safe target).
 SAFE_RM_TARGETS='(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)'
 
+# ── SCRATCHPAD-CATEGORY BEGIN ───────────────────────────────────────────────────────────────────
+# The session's OWN harness scratchpad — a MISSING CATEGORY, not a widening of the list above.
+#
+# SAFE_RM_TARGETS allowlists build-artifact NAMES. It has no entry for
+# `/private/tmp/claude-<uid>/<project>/<sessionUUID>/scratchpad`, the per-session temp tree the
+# harness creates and instructs every agent to use for throwaways. So an agent that builds a
+# throwaway there and removes it draws `rm -r on non-build-artifact target` → a PreToolUse
+# confirmation modal → a PERMANENT stall for a DISPATCHED session, because cross-pane keystrokes
+# are classifier-denied to agents and `cc-teardown` returns DEFER `tty-busy`: nothing but the
+# operator can clear it. Measured 2026-08-18, four sessions lost in 24 h — panes 275/276, pane 339
+# on a mutant binary it had built to prove a test RED, and pane 131, THE 24/7 DRAIN CHAIN itself,
+# which dead-stopped ~4 h at recycle #21 with no alarm at all. Backlog 7da9c4451540.
+#
+# The decision is made on the RESOLVED path, never on a prefix a caller can spell. This file has
+# already paid for the other approach: its `-rf` denylist let 11 of 13 equivalent spellings past
+# AND denied its own fix commit (MEMORY.md denylist-enumerates-spellings-not-the-class). A spelling
+# allowlist fails the same way, and here it fails in the DANGEROUS direction —
+# `…/<sid>/scratchpad/../../../../Development/reso-management-app` is a prefix match and a repo
+# delete. So: resolve the target (following a symlink chain on the final component too), resolve
+# the root, require containment. `..`, a symlink into a repo, a crafted look-alike prefix and
+# another session's scratchpad then all fail CLOSED by construction rather than by enumeration.
+#
+# Identity comes from the harness payload's own `.session_id` (`_P_SID`), never from the command:
+# the UUID is the discriminator, so no session can name another's tree. The root SPELLING is shared
+# with scripts/scratchpad-reaper.sh — the reaper that GCs this same tree — through the same
+# CC_SCRATCHPAD_ROOT seam, so the two cannot drift on where the scratchpad is.
+#
+# Cost: nothing below runs unless a recursive rm has ALREADY failed the name allowlist, so this is
+# off the modal path entirely (docs/research/validate-bash-fork-census-2026-08-17.md).
+_SP_ROOT=""; _SP_ROOT_DONE=0
+session_scratchpad_root() {  # → the RESOLVED root on stdout, or nothing at all
+  if [[ "$_SP_ROOT_DONE" == 1 ]]; then printf '%s' "$_SP_ROOT"; return; fi
+  _SP_ROOT_DONE=1
+  local sid="$_P_SID" cand
+  # A UUID, or nothing — `-` is the payload parse's own placeholder for absent. The shape check is
+  # also what keeps the value out of the glob below: no `*`, no `/` and no `..` can survive it.
+  [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || return
+  for cand in "${CC_SCRATCHPAD_ROOT:-/private/tmp/claude-${UID:-$(id -u)}}"/*/"$sid"/scratchpad; do
+    [[ -d "$cand" ]] || continue
+    _SP_ROOT=$( cd "$cand" 2>/dev/null && pwd -P ) || _SP_ROOT=""
+    break
+  done
+  printf '%s' "$_SP_ROOT"
+}
+
+_sp_resolve() {  # <path> → the fully resolved path on stdout, or nothing if it cannot be resolved
+  local p="$1" d b link i=0
+  # An unexpanded or glob token cannot be resolved, and GUESSING at one is exactly the spoofable
+  # prefix match this block exists to avoid. Undecidable ⇒ not this category ⇒ the ask stands.
+  case "$p" in ''|*'$'*|*'`'*|*'*'*|*'?'*|*'~'*) return ;; esac
+  # Follow a symlink CHAIN on the final component. `rm -r` unlinks a symlink rather than following
+  # it, so this is deliberately STRICTER than rm itself: a link out of the scratchpad is the exact
+  # shape that must not be admitted to a permissive category, and the cost of the strictness is one
+  # ask on a case that was already asking.
+  while [[ -L "$p" && "$i" -lt 20 ]]; do
+    link=$(readlink "$p" 2>/dev/null) || return
+    case "$link" in
+      /*) p="$link" ;;
+      *)  p="$(dirname "$p")/$link" ;;
+    esac
+    i=$(( i + 1 ))
+  done
+  if [[ -d "$p" ]]; then ( cd "$p" 2>/dev/null && pwd -P ); return; fi
+  # Not a directory. Walk up to the deepest EXISTING ancestor — `cd` + `pwd -P` there is what
+  # resolves every `..` and every intermediate symlink — then re-attach the remainder. Resolving
+  # only the immediate parent would refuse `<scratchpad>/build-1/obj` for the sole reason that
+  # `build-1` had already been removed, and "the path is not there" is not a reason to hold a
+  # session at a modal. A `..` BELOW the deepest existing ancestor is unresolvable by construction,
+  # so it abstains rather than guessing — the fail-closed direction.
+  local rest=""
+  while :; do
+    d=$(dirname "$p"); b=$(basename "$p")
+    case "$b" in ''|.|..) return ;; esac
+    rest="${b}${rest:+/$rest}"
+    if [[ -d "$d" ]]; then
+      d=$( cd "$d" 2>/dev/null && pwd -P ) || return
+      [[ -n "$d" ]] || return
+      printf '%s/%s' "${d%/}" "$rest"
+      return
+    fi
+    [[ "$d" == "$p" || "$d" == "/" || "$d" == "." ]] && return
+    p="$d"
+  done
+}
+
+is_own_scratchpad_target() {  # <argv-token> → 0 iff it RESOLVES strictly under THIS session's scratchpad
+  local t="$1" root res
+  # Absolute only. A relative token is resolved against a cwd this hook does not authoritatively
+  # know, and a wrong cwd would answer the question in the permissive direction. The harness hands
+  # every agent an absolute scratchpad path, so the restriction costs the category nothing.
+  case "$t" in /*) ;; *) return 1 ;; esac
+  root=$(session_scratchpad_root); [[ -n "$root" ]] || return 1
+  res=$(_sp_resolve "$t");         [[ -n "$res"  ]] || return 1
+  # STRICTLY under: the root itself is the harness's to create and the reaper's to remove.
+  case "$res" in "$root"/*) return 0 ;; *) return 1 ;; esac
+}
+# ── SCRATCHPAD-CATEGORY END ─────────────────────────────────────────────────────────────────────
+
 # is_safe_rm_target <argv-token> — shared by both paths below, for the same no-drift reason.
 is_safe_rm_target() {
   # Strip leading `./` or `/` (but NOT a leading `.` — `.next` must match `\.next`).
@@ -1040,7 +1138,7 @@ if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
   # without force, is the trigger — unchanged in meaning, only in reach.
   while IFS=$'\t' read -r rm_rec rm_force rm_target; do
     [[ "$rm_rec" == "1" ]] || continue
-    if ! is_safe_rm_target "$rm_target"; then
+    if ! is_safe_rm_target "$rm_target" && ! is_own_scratchpad_target "$rm_target"; then
       warn "rm -r on non-build-artifact target: '$rm_target'. Verify intentional."
     fi
   done <<<"$RM_SCAN"
@@ -1050,7 +1148,7 @@ elif [[ "$RM_PRESENT" == "1" ]]; then
     while IFS= read -r occurrence; do
       printf '%s' "$occurrence" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)' || continue
       target=$(printf '%s' "$occurrence" | sed -E 's/^rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*//')
-      if ! is_safe_rm_target "$target"; then
+      if ! is_safe_rm_target "$target" && ! is_own_scratchpad_target "$target"; then
         warn "rm -r on non-build-artifact target: '$target'. Verify intentional."
         # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
         break
