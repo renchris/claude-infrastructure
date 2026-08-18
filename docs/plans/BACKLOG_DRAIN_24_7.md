@@ -270,6 +270,20 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   backlog. **Report `blocked` by stratum or not at all** — the same law as the zero-claim memory
   (`zero-claim-must-name-its-excluded-strata`).
 
+  **Amended ~21:00Z with the RATE, which is the half that actually settles it.** A snapshot cannot
+  say whether a pile is draining, so the 24 h event flow was measured off the store directly:
+  **`done 108 · add 68`** — the agent lane is **net-draining, −40** — against **`block 153 ·
+  unblock 46`**, a **3.3:1** accumulation into blocked (down from the ~6:1 this session inherited,
+  and `reopen 20` is the third term nobody counts). So the live-row count creeping **412 → 417**
+  across one afternoon is **not the chain losing ground**: closures beat filings, and every bit of
+  the growth is in the lane `cc-dispatch` excludes by construction. **"Drain to zero" is therefore
+  unreachable by the agent lane alone** — it is gated on the operator lane moving (13 runnable via
+  `cc-do`, 145 needing a call), which is exactly what the `OPERATOR ▸` block already renders. Two
+  independent samples agree on the composition: recycle #23 closed `master-operator-gated` at
+  `0 open / 50 blocked` with **49 of the 50 operator-platter**, reached over a different slice by a
+  different session. **A pipeline's health is a RATE, and a rising total is not evidence against
+  it** — read the flow before diagnosing the level.
+
   🚨 **A MACHINE PRODUCER DEFEATS THE LEDGER'S IDEMPOTENCY BY *WHERE IT STANDS*, NOT BY WHAT IT
   WRITES — filed `dc014c6829ac`.** `desk-land.sh` builds a throwaway worktree per attempt at
   `/private/tmp/.desk-land-<branch>-<PID>` and, when `ship-land` cannot complete, files its `re-land
