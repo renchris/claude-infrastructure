@@ -168,6 +168,30 @@ _echo_sent() {
 
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"   # role → CURRENT pane uuid, re-read at SEND time
 DESK_ROLE="${CC_DESK_ROLE:-desk}"                     # the standing triager reroutes land on
+
+# ── ROLE LIVENESS + THE LIVENESS-FREE LEG (backlog aa8aed0d713a) ─────────────────────────────────
+# CC_ROLES_BIN is FIRST in the probe order so a suite can point the resolver at its own copy; unset
+# in production, where the sibling bin/cc-roles is the deployed one. A MISSING cc-roles is not fatal
+# — role resolution falls back to the historical `head -n1` read, so this can only ever be as strong
+# as before, never weaker.
+ROLES_BIN="${CC_ROLES_BIN:-}"
+if [ -z "$ROLES_BIN" ]; then
+  for _c in "$(dirname "$0")/cc-roles" "$HOME/.claude/bin/cc-roles" "$(command -v cc-roles 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { ROLES_BIN="$_c"; break; }
+  done
+fi
+# The PHONE. Same probe shape, same seam rule. This leg exists because the operator is reachable by
+# phone INDEPENDENT of any desk session — see the fallback function for why it may not be nested
+# inside the desk-liveness check.
+PUSH_BIN="${CC_NOTIFY_PUSH_BIN:-}"
+if [ -z "$PUSH_BIN" ]; then
+  for _c in "$(dirname "$0")/../scripts/push-send.sh" "$HOME/.claude/scripts/push-send.sh" "$(command -v push-send.sh 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { PUSH_BIN="$_c"; break; }
+  done
+fi
+PHONE_FALLBACK="${CC_NOTIFY_PHONE_FALLBACK:-1}"                                   # kill switch: 0 = off
+PHONE_DAMP_DIR="${CC_NOTIFY_PHONE_DAMP_DIR:-$HOME/.claude/autonomy/pages/notify-phone}"
+PHONE_DAMP_TTL="${CC_NOTIFY_PHONE_DAMP_TTL:-1800}"
 IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"     # read-only here (session list, for pane liveness) — NEVER `session send`
 
 # Forward-chain primitives (D1). Sourced best-effort from the sibling hooks/lib, then the live layer:
@@ -343,6 +367,61 @@ verdict() { # <verdict> [k=v ...]
   [ -n "$UNACKED" ]     && printf ' unacked=%s' "$UNACKED" >&2
   while [ $# -gt 0 ]; do printf ' %s' "$1" >&2; shift; done
   printf '\n' >&2
+}
+
+# ── THE LIVENESS-FREE LEG: the operator's PHONE (backlog aa8aed0d713a, half b) ───────────────────
+# On the night of 2026-08-10 an overnight run finished all of its work and could not tell the
+# operator anything by ANY channel: every page to role:desk came back rc 3, and rc 3 was the end of
+# the road — cc-reaper's notify_desk logs "page SEND FAILED" and waits for the next sweep, which
+# fails identically. There was never a second leg.
+#
+# The operator's phone does not depend on a desk existing. Its precondition is its OWN — are the
+# push credentials wired — and that precondition is INDEPENDENT of every pane, role and mailbox in
+# this file. So this leg is fired from the give-up sites directly, never from inside the
+# desk-liveness branch: nesting a liveness-free channel under a liveness test is exactly how the
+# absence of a desk became the absence of every channel (memory:
+# liveness-free-channel-never-gated-behind-liveness — gate each rung on its OWN precondition).
+#
+# Honest by construction and bounded:
+#   · it fires ONLY on a ROLE-shaped give-up (the automated-pager form). A human addressing a pane
+#     by uuid is not paging the operator and must not ring his phone.
+#   · the outcome is printed as a machine token `fallback=…` — phoned / phone-unwired / phone-failed
+#     / phone-no-bin / phone-damped / phone-off. `phone-unwired` is push-send's own exit 3 (creds
+#     unset). It is NOT this file's rc 3 and never becomes one: they are different subsystems, and
+#     the 2026-08-10 log's "(phone: push-rc-3)" was the credentials, not the role file.
+#   · damped per (role, reason) for CC_NOTIFY_PHONE_DAMP_TTL seconds, so a 300 s reaper sweep against
+#     a permanently-unset role rings once, not every five minutes. A damp is reported, never silent.
+#   · it NEVER changes the exit code: the send still failed, and a phone leg is not a delivery.
+FALLBACK_OUTCOME=""
+phone_fallback() { # <reason> <detail>
+  local reason="$1" detail="${2:-}" key mk now last rc
+  FALLBACK_OUTCOME=""
+  [ "$PHONE_FALLBACK" = 1 ] || { FALLBACK_OUTCOME=phone-off; echo "cc-notify: fallback=phone-off (CC_NOTIFY_PHONE_FALLBACK=0)" >&2; return 0; }
+  if [ -z "$PUSH_BIN" ]; then
+    FALLBACK_OUTCOME=phone-no-bin
+    echo "cc-notify: fallback=phone-no-bin — no push-send.sh found; the operator could NOT be reached by any channel" >&2
+    return 0
+  fi
+  key="$(printf '%s-%s' "${ROLE:-none}" "$reason" | tr -c 'A-Za-z0-9._-' '_')"
+  mk="$PHONE_DAMP_DIR/$key.stamp"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  last="$(cat "$mk" 2>/dev/null || echo 0)"
+  case "$last" in (*[!0-9]*|'') last=0 ;; esac
+  if [ "$last" -gt 0 ] && [ "$(( now - last ))" -lt "$PHONE_DAMP_TTL" ]; then
+    FALLBACK_OUTCOME=phone-damped
+    echo "cc-notify: fallback=phone-damped — the operator was already phoned for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s)" >&2
+    return 0
+  fi
+  "$PUSH_BIN" send --title "⚠️ undeliverable page ($reason)" \
+    --message "cc-notify could not address ${ROLE:+role:}${ROLE:-a target}: $detail — ${MSG:-}" >/dev/null 2>&1
+  rc=$?
+  mkdir -p "$PHONE_DAMP_DIR" 2>/dev/null && printf '%s' "$now" > "$mk" 2>/dev/null || true
+  case "$rc" in
+    0) FALLBACK_OUTCOME=phoned;        echo "cc-notify: fallback=phoned — the desk was unreachable, the OPERATOR was paged on his phone (the message itself was NOT delivered)" >&2 ;;
+    3) FALLBACK_OUTCOME=phone-unwired; echo "cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset). This is push-send's exit 3, NOT a role failure: the phone channel has never been wired, so the operator is unreachable even with a perfect role file" >&2 ;;
+    *) FALLBACK_OUTCOME=phone-failed;  echo "cc-notify: fallback=phone-failed rc=$rc — the phone leg itself failed; the operator was reached by NO channel" >&2 ;;
+  esac
+  return 0
 }
 
 # `timeout` reports 124 whatever the child exits with, so on a bounded-caller kill this stderr line is
@@ -692,19 +771,45 @@ resolve() {
 # ROLE resolution (v3 D2) — read the role file at SEND time, never a snapshot. This is what makes an
 # automated pager survive the target recycling: the role file is repointed by handoff-fire at
 # succession (refresh_roles_for), so the very next page goes to the continuation.
-role_uuid() { # <role-name> → current pane uuid (empty + rc 1 if the role is unset)
-  local r="$1" u=""
-  [ -f "$ROLES_DIR/$r" ] || return 1
+#
+# ── A DEAD CLAIMANT READS AS ABSENT (backlog aa8aed0d713a) ───────────────────────────────────────
+# Reading the file was never enough: a role naming a pane that DIED resolves here to a perfectly
+# well-formed uuid, the send enqueues into a box no process will ever drain, and this exits 0 with
+# verdict=mailbox-only. cc-reaper files that as RECORDED and KEEPS its damping marker, so nothing
+# retries and nothing is said. A stale address is delivered-and-lost; an absent one at least fails
+# loudly. So when the claim carries liveness evidence (cc-roles claim writes pid=/pane= under the
+# target), a dead claimant is resolved as ABSENT — the SAME rc 3 an unset role produces, because the
+# recoverable failure is the one a pager can act on.
+# cc-roles is the arbiter of that predicate, not a second copy of it here (memory:
+# make-the-actuator-the-arbiter). Its exit 4 (UNVERIFIED — a legacy pointer with no evidence at all)
+# resolves exactly as it always did: nothing about it can be convicted, and every role file written
+# before cc-roles existed is that shape, so treating it as absent would retire the main path.
+ROLE_STATE=""    # live | absent | unverified | legacy  (for the messages + the fallback leg)
+role_uuid() { # <role-name> → current target (empty + rc 1 if the role is unset OR its claimant is dead)
+  local r="$1" u="" rc=0
+  if [ -n "$ROLES_BIN" ]; then
+    u="$("$ROLES_BIN" read "$r" 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0) ROLE_STATE=live ;;
+      4) ROLE_STATE=unverified ;;
+      *) ROLE_STATE=absent; return 1 ;;
+    esac
+    [ -n "$u" ] || { ROLE_STATE=absent; return 1; }
+    printf '%s' "$u"; return 0
+  fi
+  ROLE_STATE=legacy
+  [ -f "$ROLES_DIR/$r" ] || { ROLE_STATE=absent; return 1; }
   u="$(head -n1 "$ROLES_DIR/$r" 2>/dev/null | tr -d '[:space:]')"
-  [ -n "$u" ] || return 1
+  [ -n "$u" ] || { ROLE_STATE=absent; return 1; }
   printf '%s' "$u"
 }
 
 if [ -n "$ROLE" ]; then
   if ! uuid="$(role_uuid "$ROLE")"; then
     verdict unresolvable reason=role-unset "target=--role $ROLE"
-    echo "cc-notify: role '$ROLE' is not set — no live pane at $ROLES_DIR/$ROLE (missing or empty)" >&2
-    echo "  a role is pointed at a pane by handoff-fire (--as-role) / cc-register; check: ls $ROLES_DIR" >&2
+    echo "cc-notify: role '$ROLE' is not set — no live pane at $ROLES_DIR/$ROLE (missing, empty, or its claimant is dead)" >&2
+    echo "  a role is pointed at a pane by cc-roles claim / handoff-fire (--as-role) / desk-register; check: cc-roles list" >&2
+    phone_fallback "role-unset" "no live '$ROLE' — a page could not be addressed"
     exit 3
   fi
   TARGET="--role $ROLE"          # for human-readable messages only
@@ -753,6 +858,10 @@ else
     fi
     echo "  Address the ROLE, not its contents: \`cc-notify --role <name> …\` resolves at SEND time and" >&2
     echo "  reports reason=role-unset when the role is empty, instead of collapsing to an empty address." >&2
+    # SAME give-up, so the SAME liveness-free leg. `cc-notify "$(cat cc-roles/desk)"` is the form
+    # cc-dispatch briefs every worker with, so this is where a real overnight page dies just as often
+    # as the --role form — and an operator who cannot be told is unreachable either way.
+    phone_fallback "empty-target" "the address collapsed to empty (an unset role file, resolved by \`cat\` before cc-notify was entered)"
     exit 3
   fi
   uuid="$(resolve "$TARGET")"; _rrc=$?
