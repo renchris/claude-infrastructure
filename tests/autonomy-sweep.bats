@@ -7,6 +7,20 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # ── $HOME IS THE REDIRECT, and it goes FIRST because everything below inherits it ──────────────
+  # The per-variable exports further down close each seam this suite currently knows about, and
+  # they were added one incident at a time — CC_TEARDOWN_RECORDS_DIR after a run deleted 6 real
+  # ~/.claude/cc-teardown records, CC_RATCHET_STATE after every run wrote the operator's live
+  # backlog-ratchet.json, CC_DRIFT_DIRS after settings-drift-assert read the five LIVE config dirs
+  # at 2.42 s per sweep against 0.154 s hermetic. That list is the shape of the problem: the sweep
+  # is a CALLER, its callees carry their own `${CC_X:-$HOME/.claude/…}` defaults, and naming them
+  # individually closes the ones that exist today and none that a sixth callee adds tomorrow.
+  #
+  # Fixturing $HOME closes the CLASS instead, and it is what scripts/test-hermeticity-lint.sh
+  # actually asserts — this suite was the last entry in that lint's grandfather allowlist, and the
+  # line below is what lets the allowlist entry go. `.claude/autonomy` is pre-created because
+  # cc-backlog appends its IDL there and would otherwise fail on a bare HOME.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/autonomy"
   # CC_TEST_SWEEP is the RED-PROOF seam and nothing else: the D2/D4 cases below are re-run against a
   # PRISTINE tree (`git archive HEAD scripts/ | tar -x`) to prove each one FAILS without the change.
   # It has to be the real extracted artifact — a hand-edited approximation of the old script proves
@@ -1295,6 +1309,13 @@ STUB
   local d
   for d in "$deployed" "$verifier"; do
     cp "$SWEEP" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+    # SEED THE LIB BESIDE EACH COPY. The sweep resolves cc-common.sh beside-script → CLAUDE_CONFIG_DIR
+    # → $HOME/.claude, and FATALs if all three miss. Until setup() fixtured $HOME this case passed by
+    # reading the operator's LIVE ~/.claude/scripts/lib — i.e. the positive control below was proving
+    # the gate works using a file the fixture never provided, which is the exact non-hermeticity this
+    # suite was grandfathered for. Beside-script is the first rung, so seeding it here keeps the
+    # subject the DEPLOYED-PATH DISCRIMINATOR and nothing else.
+    mkdir -p "$d/lib" && cp "$REPO"/scripts/lib/*.sh "$d/lib/" 2>/dev/null
     # the stubs stand where the two real acting tools stand, so an invocation is RECORDED rather
     # than acted on — this suite must never be the thing that lands a branch or briefs a VM, which
     # is the whole point. BOTH are covered: they share `_cloudret_deployed`, and the refusal router
