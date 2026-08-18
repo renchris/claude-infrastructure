@@ -120,6 +120,29 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
+  `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
+  `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
+  untouched and remain **open, correct as filed, and unstarted** — nothing about the plan is
+  refuted, only the venue. Three things this fire measured that the 08-15 one could not:
+  **(1)** a disproof in plan prose does not park an item — nothing in the dispatch chain reads it,
+  so the 08-15 entry bought two days; **(2)** the class census in `docs/research/venue-*` is
+  undercounted — the 08-15 fire of this row is absent from it (recorded here instead, inside
+  `b4ddaa27`, a commit about land-blockers), making the real figure **six dispatches over five
+  items in four days**; **(3)** 🚨 **both options of the filed remedy PASS this row.** The open
+  decision (`cloud-venue-project-repo-mismatch-2026-08-16.md` §3) is keyed on
+  (`item.project`, `session.attached_repo`) — but this row's project label is *accurate*
+  (`find-plan.sh:70` derives it correctly from the plan's path) and only the BODY names the foreign
+  trees, so fail-closed finds every term satisfied and route-by-project resolves right back to this
+  VM. Resolving it as written stops four of the six and neither of this one's. The remedy needs the
+  08-15 **subject** discriminator restored as a conjunct at `cc-offload`.
+  One cost correction to the four-mechanism list in Phase 0: *"a `projectName` entry in the plan
+  index"* is **not a build** — `scripts/find-plan.sh:73` already reads `.plans[$k].projectName` and
+  prefers it over the path basename, so it is a ~0-cost data entry, and setting it to a foreign
+  project composes with fail-closed to park THIS row specifically. Full measurement →
+  `docs/research/venue-foreign-master-redispatch-2026-08-17.md`. **Disposition: `cc-backlog block`,
+  not `reopen`** — blocked on where it was sent; the rails fail at rc 0 from a VM, so verify the
+  block took rather than assuming it.
 - **2026-08-15 — a cloud dispatch of the master row `8f59467c92b0` advanced nothing, and the
   disproof is the ROUTING CHAIN, not the plan.** The waves are all still open and all still
   correct; what is refuted is that this row can be worked by the venue it is fired at. Full

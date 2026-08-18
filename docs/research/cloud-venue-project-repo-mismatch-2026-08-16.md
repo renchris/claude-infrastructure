@@ -154,3 +154,24 @@ lists two such projects (`scripts/dispatch-projects.conf`): `doc_classifier` and
 `doc_classifier`. The prediction is now observed, not argued, and the §3 decision — **(a) fail
 closed vs (b) route by project** — carries a fourth datapoint of cost.
 `venue-foreign-repo-recurrence-2026-08-17.md`.
+
+🚨 **§3 IS UNDER-SPECIFIED — an implementer must read this before building either option
+(2026-08-17, ~08:52Z).** `8f59467c92b0` (the cross-repo product-repos master) was misrouted on 08-15
+and **again** on 08-17, and **both §3 options pass it**:
+
+- Its `project` label is `claude-infrastructure` and that IS the attached repo, so **(a) fail closed**
+  finds every term satisfied. The label is accurate — the plan really does live in this repo's
+  `docs/plans/` — and irrelevant: only the plan BODY names the two foreign trees. This is the
+  **subject-foreign** route of `venue-foreign-subject-repo-2026-08-15.md`, whose discriminator was
+  dropped, not refuted, when §2-3 here relocated the guard from the claim to the fire. Restore it as
+  a conjunct at `cc-offload` — it reads the item's text against `scripts/dispatch-projects.conf`,
+  both available at fire time.
+- Its work spans **two** trees, so **(b) route by project** is not merely insufficient but
+  *inexpressible*: a session gets exactly one `git_repository` source, permanently (`:69-72` above).
+  A cross-repo master must resolve to **refuse/park**, never to route, under either shape.
+
+Also a cost correction to the option set: *"a `projectName` entry in the plan index"* is **not a
+build** — `scripts/find-plan.sh:73` already reads `.plans[$k].projectName` and prefers it over the
+path-derived basename, so it is a data entry (~0 cost) that composes with (a) as a per-row stopgap.
+Full measurement, and a corrected occurrence census (six dispatches / five items — the `venue-*`
+family undercounts) → `venue-foreign-master-redispatch-2026-08-17.md` §§2-4.

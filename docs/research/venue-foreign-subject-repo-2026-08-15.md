@@ -73,6 +73,18 @@ subject-foreign route this file found; it relocates where the comparison should 
 `c33f3b1cb278` (project `reso-management-app`) recurred on the 08-14 route: fourth in four days,
 first on `reso-management-app`. `venue-foreign-repo-recurrence-2026-08-17.md`.
 
+🚨 **…but the relocation DROPPED this file's discriminator, and a row measured 2026-08-17 proves the
+cost.** The 08-16 §3 options and the 08-17 endorsement are both keyed purely on the pair
+(`item.project`, `session.attached_repo`) — a comparison that by construction cannot see a
+subject-foreign row, whose `project` is *correct*. `8f59467c92b0` (project `claude-infrastructure`,
+work in `reso-management-app` + `doc_classifier`) was fired on 08-15 and **again** on 08-17, and both
+filed options pass it. Resolving the decision as currently written would stop four of the six known
+dispatches and neither occurrence of that one. The subject discriminator this section proposes
+survives the relocation intact — it reads the item's text against
+`scripts/dispatch-projects.conf`, both available at fire time as readily as at claim time — and
+should be restored as a **conjunct** of whichever shape is chosen, at `cc-offload`.
+`venue-foreign-master-redispatch-2026-08-17.md` §3.
+
 ## Not fixed here, deliberately
 
 `bin/cc-venue`'s header forbids a cloud VM from building or running the venue rule: it would be
