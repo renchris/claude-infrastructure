@@ -87,6 +87,39 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18T22:40Z — lead recycle (pane 102): the three rows this lead FILED but never started
+  are now fired, and the capacity refusal that parked one of them was a 2-hour fact, not a wall.**
+  Claimed `dc014c6829ac` · `d6d4b85ebd4c` · `7da9c4451540` under `lead-102` BEFORE firing — a claim
+  is a lease, so the drain chain cannot pick up a row a dispatched session is already holding, and
+  the two lanes cannot duplicate the work. Then one dispatched session each, goals armed and
+  read back from each session's own transcript: pane 349 `fix/desk-land-dup-rows`, pane 350
+  `fix/drain-chain-predicate`, pane 351 `fix/validate-bash-scratchpad`. All three re-validated
+  against the tree at fire time, not against the filing note — `desk-land.sh:148` still builds
+  `TMP_WT="$WTROOT/.desk-land-$safe-$$"`, and the assert still answers on fresh-brief alone.
+  Custody debts open on all three; this lead does not close until they return.
+  - **The park was priced wrong.** `d6d4b85ebd4c`'s fire was refused earlier by the capacity gate
+    at load 2.08/core against a 2.0 ceiling, and the lead parked it. At this recycle the box read
+    **0.58/core** (5.75 over 10 cores), and 0.77/core after all three fires. A capacity refusal is a
+    reading of one minute, and treating it as a property of the work leaves the row parked for as
+    long as nobody re-reads the instrument. **Re-measure a park before inheriting it** — the same
+    lesson as `parked-blocker-obsoleted-by-later-fix`, arriving through load rather than through a
+    mechanism fix.
+  - 🚨 **The chain's own alarm was RIGHT this time and still carried zero information — which is the
+    third live demonstration of `d6d4b85ebd4c`, and the sharpest.** `drain-chain-assert.sh` answered
+    `chain ALIVE (fresh-brief) · 417 live row(s) · newest brief 2950s old`. Recycle #26 *was* alive:
+    pid 25405, state `R+`, 6.9% CPU, 49 min elapsed, cwd in its own drain worktree. But the assert
+    did not know that and could not have. It read the age of a file #26 wrote when it STARTED, so it
+    would have returned the identical verdict had #26 wedged at a modal in its first minute — which
+    is exactly how the chain dead-stopped ~4h at recycle #21 with the alarm silent. **An alarm that
+    is correct by coincidence has not been tested by the case where it agrees with you.** The lead
+    only knew the chain was healthy because it went and read the process; the instrument built to
+    answer that question contributed nothing to the answer.
+  - **Rate unchanged from the previous entry, so the fires do not change the headline:** live rows
+    417, and the growth is still in the operator lane `cc-dispatch` excludes by construction. These
+    three rows are agent-lane work — they reduce INFLOW rather than the level: `dc014c6829ac` stops
+    every land retry minting a fresh blocked row, and `7da9c4451540` stops the wedge that has cost
+    four dispatched sessions in 24h, one of them this very chain.
+
 - **2026-08-18 — drain recycle #26: `master-session-lifecycle` 5 → 4 open / 1 blocked (1
   operator-gated, `source: needs`). filed 0 / closed 1.** Closed `4de3d0f9c0e1` — the repo-keyed
   DoD crosstalk, open across #21/#24/#25, each of which landed real work on it and correctly left
