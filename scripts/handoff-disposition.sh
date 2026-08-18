@@ -129,9 +129,33 @@ fi
 # --- await_ping_running: a cc-await-ping loop for THIS session is live -----
 # Scoped to the session uuid when resolvable — a global match would let any
 # OTHER session's watcher hold this one mechanically open forever.
+#
+# TWO signals, because argv alone cannot see the watcher the wake floor
+# actually arms (backlog 08c746312188). hooks/session-continue.sh:595 arms
+# cc-await-ping with NO id in argv, deliberately: the tool then derives
+# ${ITERM_SESSION_ID##*:} itself and covers that key's whole set. An argv
+# match therefore reports false over a watcher that is running, one stay-OPEN
+# reason goes false with it, and a pane parked awaiting a peer is told it is
+# close-eligible. Both watcher forms run here at once and one was invisible.
+#
+# The second signal is the heartbeat cc-await-ping maintains for exactly this
+# question: <key>.watching, rewritten under EVERY key of the set each poll and
+# removed in its EXIT trap. It does not depend on how the watcher was invoked.
+# It IS strandable — a signal past the trap leaves the marker behind
+# (session-continue.sh:298) — so it counts only while the pid it names is
+# alive. Trusting it blind would swap a pane that closes too early for one
+# that can never close; the argv probe stays for the forms that do carry an id
+# (the --sid idle-scoped arm under a live goal).
 await_ping=false
 if [ -n "$uuid" ]; then
   pgrep -f "cc-await-ping.*$uuid" >/dev/null 2>&1 && await_ping=true
+  if [ "$await_ping" = false ] && [ -f "$MAILBOX_DIR/$uuid.watching" ]; then
+    wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$MAILBOX_DIR/$uuid.watching" 2>/dev/null | head -n1)"
+    if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+      await_ping=true
+      note "watcher seen via its .watching heartbeat (pid $wpid), not argv"
+    fi
+  fi
 else
   pgrep -f cc-await-ping >/dev/null 2>&1 && await_ping=true
 fi
