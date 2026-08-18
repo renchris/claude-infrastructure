@@ -21,7 +21,11 @@
 setup() {
   export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  SUBJECT="$REPO/scripts/drain-chain-assert.sh"
+  # CC_DRAIN_SUBJECT exists so the RED-PROVE below can be replayed against the REAL pre-fix
+  # artifact — `git show <sha>:scripts/drain-chain-assert.sh > /tmp/ctl.sh` and run this file with
+  # CC_DRAIN_SUBJECT=/tmp/ctl.sh — rather than against a hand-written mutant that only resembles it
+  # (memory control-must-replay-the-real-artifact). Unset, it is the tree's own script.
+  SUBJECT="${CC_DRAIN_SUBJECT:-$REPO/scripts/drain-chain-assert.sh}"
   CB="$REPO/bin/cc-backlog"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
@@ -31,11 +35,40 @@ setup() {
   export CC_BACKLOG_BIN="$CB"
   BRIEFS="$BATS_TEST_TMPDIR/briefs"; mkdir -p "$BRIEFS"
   export CC_DRAIN_BRIEF_GLOB="$BRIEFS/fire-drain-recycle*.txt"
+  # The progress oracle's three seams, pointed at scratch. Left EMPTY by default so the fixtures
+  # that say nothing about a successor genuinely resolve nothing.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
+  # The log EXISTS and is empty, so the default fixture state is "handoff-fire is here and recorded
+  # no fire for this brief" rather than "the log is missing" — the two are different diagnoses and
+  # the join is only exercised by the first.
+  export CC_DRAIN_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"; : > "$CC_DRAIN_HANDOFF_LOG"
+  export CC_ENGAGE_HOMES="$BATS_TEST_TMPDIR/acct"
+  mkdir -p "$CC_ENGAGE_HOMES/projects/-scratch"
+  # Fixed session ids, one per case, so a fixture never has to invent one inline.
+  SID21="aaaaaaaa-0000-4000-8000-000000000021"
+  SID23="aaaaaaaa-0000-4000-8000-000000000023"
+  SID24="aaaaaaaa-0000-4000-8000-000000000024"
 }
 
 add() { bash "$CB" add --project claude-infrastructure --title "$1" --source fx; }
 verdict() { bash "$SUBJECT" --json | jq -r '.verdict'; }
 why()     { bash "$SUBJECT" --json | jq -r '.why'; }
+
+# fire <brief-basename> <pane> — the shape §4.1 leaves on disk at a recycle: the brief the
+# PREDECESSOR wrote, plus the handoffs.jsonl row handoff-fire logs for that exact prompt_file.
+fire() {
+  : > "$BRIEFS/$1"
+  printf '{"ts":"2026-08-18T22:33:15Z","class":"recycle-intent","target_pane":"%s","prompt_file":"%s"}\n' \
+    "$2" "$BRIEFS/$1" >> "$CC_DRAIN_HANDOFF_LOG"
+}
+
+# engaged_session <pane> <sid> — the successor actually reached the model: a registry row naming
+# its sid, and a transcript carrying a content-bearing assistant turn.
+engaged_session() {
+  printf '{"session_id":"%s","cwd":"/scratch"}\n' "$2" > "$CC_REGISTRY_DIR/$1.json"
+  printf '{"type":"assistant","message":{"content":"a real turn"}}\n' \
+    > "$CC_ENGAGE_HOMES/projects/-scratch/$2.jsonl"
+}
 n_rows()  { bash "$CB" list --all --json | jq '[.[]|select(.condition=="local-drain-chain-dead")]|length'; }
 
 # ── the alarm fires when, and only when, the pile is non-empty and nothing is on it ─────────────
@@ -75,11 +108,119 @@ n_rows()  { bash "$CB" list --all --json | jq '[.[]|select(.condition=="local-dr
 
 # ── disjunct A: the brief, and the mtime read that would have shipped broken ────────────────────
 
-@test "a brief younger than the window proves the chain alive" {
+@test "a brief younger than the window is inside the handover grace, and that is what proves it" {
   add "a row" >/dev/null
   : > "$BRIEFS/fire-drain-recycle10.txt"
   [ "$(verdict)" = alive ]
-  [ "$(why)" = fresh-brief ]
+  # NOT `fresh-brief` any more, and the rename is the fix rather than cosmetics: this brief is
+  # seconds old, so what is actually true of it is that the chain FIRED seconds ago and nothing
+  # about the successor is knowable yet. Past the grace the same file proves nothing at all — the
+  # four cases in § THE PREDICATE below.
+  [ "$(why)" = handover-grace ]
+}
+
+# ── THE PREDICATE: a fresh brief is NECESSARY, never SUFFICIENT (backlog d6d4b85ebd4c) ──────────
+#
+# WHAT THESE FOUR CASES ARE FOR. The brief is written when the successor is FIRED, never while it
+# works, so `brief younger than 24h` is satisfied identically by a chain that is draining and by one
+# that wedged sixty seconds after launch — a proxy both populations satisfy (memories
+# `liveness-proxy-cannot-be-output-age`, `orphanhood-is-not-a-discriminating-signal`). Measured
+# consequence: ZERO `local-drain-chain-dead` rows filed across this detector's entire deployed life,
+# including the ~4 h dead-stop at recycle #21 when pane 131 wedged on a `rm -r` modal (7da9c4451540).
+#
+# The magnitude is NOT the axis and CC_DRAIN_CHAIN_MAX_AGE_S is deliberately untouched: shortening
+# it would convict a healthy long recycle instead. Every case below drives the clock with
+# CC_DRAIN_NOW and leaves both windows at their defaults, so what is pinned is the PREDICATE.
+
+# THE RED-PROVE, and it replays the incident rather than a paraphrase: the successor is found, it
+# reached the model, and then it stopped emitting. Pre-fix this is the `fresh-brief` short-circuit
+# and reads ALIVE — that greenness IS the bug.
+@test "a fresh brief whose session has gone silent is DEAD (the wedge), not alive" {
+  add "a row nobody is draining" >/dev/null
+  fire fire-drain-recycle21.txt 131
+  engaged_session 131 "$SID21"
+  # 2 h: past the 900 s handover grace and past the 3600 s progress ceiling, but still WELL inside
+  # the untouched 24 h brief window — so the only thing that can convict here is the new axis.
+  export CC_DRAIN_NOW=$(( $(date +%s) + 7200 ))
+  [ "$(verdict)" = dead ]
+  [ "$(why)" = stalled ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.live_leases')" = 0 ]
+  run bash "$SUBJECT" --assert
+  [ "$status" -eq 1 ]
+  # The title has to carry the thing a reader cannot re-derive: WHICH pane is wedged.
+  [ "$(printf '%s' "$output" | grep -c 'pane 131 is WEDGED')" -eq 1 ]
+}
+
+# The same conviction where the successor cannot be resolved AT ALL — no fire row, no registry row,
+# no transcript. Deliberately fail-CLOSED: the store has already answered (non-empty pile, no
+# lease), and an unfindable successor is one of the ways a chain is dead, not a reason to stop
+# asking. The `why` names it so a false row is diagnosable from the row.
+@test "a fresh brief with no resolvable successor is DEAD past the grace, and says why" {
+  add "a row nobody is draining" >/dev/null
+  : > "$BRIEFS/fire-drain-recycle21.txt"          # a brief and nothing else — no fire row logged
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))   # 42 min: past the grace, inside the 24 h window
+  [ "$(verdict)" = dead ]
+  [ "$(why)" = unverifiable ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.progress_why')" = no-fire-row-for-brief ]
+}
+
+# THE FALSE-POSITIVE GUARD THE FIX MUST NOT BUY DETECTION WITH. At every recycle there is a window
+# between the fire and the successor's first turn in which the registry row is mid-rewrite and the
+# new transcript does not exist — every hop answers "no" for a perfectly HEALTHY chain, and the lead
+# that filed this row misread exactly that window once (a 42-minute brief beside a 1-minute ping).
+# A detector that convicted here would file a false row at every handover, forever.
+@test "the blind window at a recycle stays ALIVE: fired, nothing knowable about the successor yet" {
+  add "a row" >/dev/null
+  fire fire-drain-recycle22.txt 131               # fired; no registry row, no transcript, no lease
+  export CC_DRAIN_NOW=$(( $(date +%s) + 60 ))     # one minute in
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = handover-grace ]
+  run bash "$SUBJECT" --file
+  [ "$status" -eq 0 ]
+  [ "$(n_rows)" -eq 0 ]
+}
+
+# The other half of that guard, and the case the grace does NOT cover: 42 minutes in, well past any
+# grace, a healthy session simply working. Without this arm the fix would be a shorter window
+# wearing a new name.
+@test "past the grace, a session that is still emitting keeps the chain ALIVE" {
+  add "a row being worked" >/dev/null
+  fire fire-drain-recycle23.txt 131
+  engaged_session 131 "$SID23"
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = progressing ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.pane')" = 131 ]
+}
+
+# BIRTH IS NOT ENGAGEMENT (handoff-fire item ff2d6609a33e). A transcript exists from the session's
+# first system row, so mtime alone would call a pane that has done nothing a working one — the exact
+# state a blocking startup modal leaves behind. The mutant is ONE line of the fixture and the case
+# above is its control, so a green here credits the assistant-turn oracle specifically.
+@test "a transcript with no assistant turn is not progress, however fresh it is" {
+  add "a row" >/dev/null
+  fire fire-drain-recycle24.txt 131
+  engaged_session 131 "$SID24"
+  # THE MUTATION: replace the content-bearing assistant record with the system row a newborn
+  # transcript carries. Everything else — registry row, fire row, mtime — is untouched.
+  printf '{"type":"system","subtype":"init"}\n' > "$CC_ENGAGE_HOMES/projects/-scratch/$SID24.jsonl"
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))
+  [ "$(verdict)" = dead ]
+  [ "$(bash "$SUBJECT" --json | jq -r '.progress_why')" = transcript-without-assistant-turn ]
+}
+
+# GUARD 3 STILL OUTRANKS THE NEW AXIS. "Any live claim counts, whoever holds it" is the arm that
+# keeps this from trying to prove the holder is *the* drain session — a Lane A cloud worker draining
+# a row is the chain doing its job, and it has no pane on this box at all.
+@test "a live lease keeps the chain alive with no successor to resolve anywhere" {
+  id=$(add "a row a cloud worker is holding")
+  bash "$CB" claim "$id" --by "fixture-$$" >/dev/null 2>&1
+  : > "$BRIEFS/fire-drain-recycle25.txt"
+  # 42 min: past the handover grace, and still inside the 5400 s claim TTL this shares with
+  # `cc-backlog reap` — so the lease is genuinely live and it is the lease doing the work.
+  export CC_DRAIN_NOW=$(( $(date +%s) + 2520 ))
+  [ "$(verdict)" = alive ]
+  [ "$(why)" = live-lease ]
 }
 
 # RED-PROVES THE PORTABILITY BUG DIRECTLY. `stat -f` is "format" on BSD and "--file-system" on GNU,
