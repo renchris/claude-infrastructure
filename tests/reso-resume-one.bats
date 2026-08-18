@@ -386,8 +386,11 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
       CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-dup" \
       CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-dup" SID-DUP feat/gate-dup
   [ "$status" -ne 9 ] || { echo "the engine re-evaluated a gate the launcher had already passed: $output"; false; }
-  echo "$output" | grep -q "reso-resume-one: capacity-admit" \
-    && { echo "the engine evaluated the gate a second time: $output"; false; }
+  # `! … || { …; false; }`, never `… && { …; false; }`: under errexit the `&&` form absorbs its own
+  # failure, so the assertion can never fail and asserts NOTHING. tests/bats-assert-liveness.bats
+  # caught this exact line as dead on the first pass, which is the ratchet working.
+  ! echo "$output" | grep -q "reso-resume-one: capacity-admit" \
+    || { echo "the engine evaluated the gate a second time: $output"; false; }
   # and the launcher must actually SET it, or the suppression above pins a marker nobody sends
   grep -q 'export CC_ADMIT_DONE=1' "$REPO_ROOT/scripts/boot-resume-launch.sh" \
     || { echo "boot-resume-launch.sh does not mark its admission — the engine will double-evaluate"; false; }
