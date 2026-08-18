@@ -194,7 +194,11 @@ drv_iterm2_address() {
 # Non-builtin drivers are sibling executables implementing these same verbs. exec, so the driver's
 # exit code IS ours and no rc is laundered through a wrapper.
 #
-# ⚠ EVERY VERB REJECTS ARGUMENTS IT DOES NOT IMPLEMENT — rc 3, named, on stderr. This is not
+# ⚠ EVERY VERB THAT REACHES A DRIVER REJECTS ARGUMENTS IT DOES NOT IMPLEMENT — rc 3, named, on
+# stderr. (`driver` and the help verb still ignore theirs, deliberately: they answer from constants,
+# take no id, and reach no driver, so there is nothing a flag could be silently wrong ABOUT.
+# Widening to them would add sites tests/cc-pane-redproof.sh does not mutate — which is how a proof
+# starts overstating its own coverage, the same defect one level up.) This is not
 # pedantry, it is the seam's INDETERMINACY CONTRACT applied to its own argv. `list` used to drop
 # `"$@"` on the floor, so `cc-pane list --json` and `cc-pane list` were BYTE-IDENTICAL: 15 bare ids
 # and exit 0. A consumer that asked for JSON got integers, json.load() raised, and the failure
