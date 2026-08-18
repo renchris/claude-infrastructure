@@ -29,6 +29,7 @@ setup() {
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
   export CC_WR_COORD_DIR="$BATS_TEST_TMPDIR/coord"; export CC_WR_UUID="DESK-UUID-TTL"
+  export CC_WR_SHARED_STATE_DIR="$BATS_TEST_TMPDIR/shared"   # account-neutral root (fc54aeebec4a)
   export CC_WR_T_IDLE=55 CC_WR_T_BUSY=75 CC_WR_MAX=3 CC_WR_COOLDOWN_S=600 CC_WR_AGE_MAX=180
   export CC_WR_T_NUDGE=101
   mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR" "$CC_WR_COORD_DIR/cc-roles" "$CLAUDE_CONFIG_DIR"
@@ -47,7 +48,15 @@ drive()  { printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","tool_in
 # The disarm marker's path is taken from the SUBJECT's own key derivation (run `clear`, read what it
 # wrote) — never re-derived here. A test that re-implements the key under test can agree with a
 # broken subject.
-disarm_marker() { ( cd "$DESK" && bash "$HOOK" clear >/dev/null ); ls "$CC_WR_STATE_DIR"/disarm-* ; }
+# ALL markers `clear` puts in force (account-scoped + account-neutral), one per line. Plural on
+# purpose: real ageing ages every copy, so a fixture that backdates only one is not the state under
+# test — it is a state the writer can never produce.
+disarm_marker() { ( cd "$DESK" && bash "$HOOK" clear >/dev/null )
+                  ls "$CC_WR_STATE_DIR"/disarm-* "$CC_WR_SHARED_STATE_DIR"/disarm-* 2>/dev/null; }
+DM=()
+mk_disarm() { local l; DM=(); while IFS= read -r l; do [ -n "$l" ] && DM+=("$l"); done <<< "$(disarm_marker)"; }
+backdate_all() { local s="$1" f; for f in "${DM[@]}"; do backdate "$f" "$s"; done; }
+touch_all()    { local f; for f in "${DM[@]}"; do touch "$f"; done; }
 # Backdate a marker's mtime by $2 seconds (BSD `date -r`, then GNU `date -d @`), and its recorded ISO
 # timestamp with it, so content and mtime stay consistent the way `clear` writes them.
 backdate() {
@@ -59,9 +68,9 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
 
 # ── PAIR 1 — TTL: an opt-out is a decision with a shelf life ───────────────────────────────────────
 @test "TTL: an opt-out older than the TTL no longer suppresses — the hook proceeds past the disarm gate" {
-  local m; m="$(disarm_marker)"
+  mk_disarm
   ( cd "$DESK" && bash "$HOOK" arm >/dev/null )     # armed AND (re-)disarmed: expiry must reach the armed path
-  backdate "$m" $(( 8 * 86400 ))
+  backdate_all $(( 8 * 86400 ))
   mk_tel s1 90
   run drive s1 "$(mk_tx 1)"
   [ "$status" -eq 0 ]
@@ -74,19 +83,19 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
 }
 
 @test "TTL: the expired marker is CLEARED, so status and the hook cannot disagree about it" {
-  local m; m="$(disarm_marker)"
-  backdate "$m" $(( 8 * 86400 ))
+  mk_disarm
+  backdate_all $(( 8 * 86400 ))
   mk_tel s2 90
   run drive s2 "$(mk_tx 2)"
   [ "$status" -eq 0 ]
-  [ ! -f "$m" ]
+  for m in "${DM[@]}"; do [ ! -f "$m" ]; done      # EVERY copy in force is cleared, not just one
   run bash -c "cd '$DESK' && bash '$HOOK' status"
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q "DISARMED"
 }
 
 @test "TTL control: a FRESH opt-out still fully suppresses (the TTL did not delete the feature)" {
-  disarm_marker >/dev/null
+  mk_disarm
   mk_tel s3 90
   run drive s3 "$(mk_tx 3)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
@@ -95,8 +104,8 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
 
 # ── PAIR 2 — WIRE VISIBILITY: two ages must not be one record ─────────────────────────────────────
 @test "wire: a STALE (but unexpired) opt-out carries a :stale suffix and its age; a FRESH one does not" {
-  local m; m="$(disarm_marker)"
-  backdate "$m" $(( 3 * 86400 ))                     # 3d: past DISARM_STALE_S (1d), inside the 7d TTL
+  mk_disarm
+  backdate_all $(( 3 * 86400 ))                      # 3d: past DISARM_STALE_S (1d), inside the 7d TTL
   mk_tel s4 90; run drive s4 "$(mk_tx 4)"
   [ "$status" -eq 0 ]; [ -z "$output" ]              # still suppressing — visibility is not a behaviour change
   local stale_row; stale_row="$(tail -1 "$CC_WR_IDL")"
@@ -104,7 +113,7 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
   # …and the token still projects to `disarmed` for scripts/idl-abstain-alarm.sh's split(":")[0].
   [ "$(echo "$stale_row" | jq -r '.reason|split(":")[0]')" = "disarmed" ]
 
-  touch "$m"                                          # same operator intent, one second old
+  touch_all                                           # same operator intent, one second old
   mk_tel s5 90; run drive s5 "$(mk_tx 5)"
   local fresh_row; fresh_row="$(tail -1 "$CC_WR_IDL")"
   echo "$fresh_row" | jq -e '.reason=="disarmed"'
@@ -113,26 +122,26 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
 }
 
 @test "wire: status names WHEN the opt-out was set, how old it is, and when it stops suppressing" {
-  local m; m="$(disarm_marker)"
-  backdate "$m" $(( 3 * 86400 ))
+  mk_disarm
+  backdate_all $(( 3 * 86400 ))
   run bash -c "cd '$DESK' && bash '$HOOK' status"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "DISARMED"
   echo "$output" | grep -qE "set: [0-9]{4}-[0-9]{2}-[0-9]{2}T.*\(3d[0-9]+h ago\)"
   echo "$output" | grep -qE "ttl: expires in [0-9]"
   # …and an already-expired one says EXPIRED rather than a countdown into the past.
-  backdate "$m" $(( 8 * 86400 ))
+  backdate_all $(( 8 * 86400 ))
   run bash -c "cd '$DESK' && bash '$HOOK' status"
   echo "$output" | grep -q "ttl: EXPIRED"
 }
 
 @test "knob control: CC_WR_DISARM_TTL_S=0 disables expiry — an 8-day opt-out still suppresses" {
-  local m; m="$(disarm_marker)"
-  backdate "$m" $(( 8 * 86400 ))
+  mk_disarm
+  backdate_all $(( 8 * 86400 ))
   mk_tel s6 90
   export CC_WR_DISARM_TTL_S=0
   run drive s6 "$(mk_tx 6)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  [ -f "$m" ]                                          # not cleared
+  for m in "${DM[@]}"; do [ -f "$m" ]; done            # not cleared
   [[ "$(last_reason)" = disarmed* ]]
 }

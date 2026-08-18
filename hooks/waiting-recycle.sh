@@ -225,6 +225,42 @@ DESK_ROLE="${CC_WR_DESK_ROLE:-desk}"                       # G-P11-7: role a mon
 # sentinel — the exact fragility this change removes. COORD is a FIXED path (cc-roles lives at
 # $HOME/.claude, NOT $CLAUDE_CONFIG_DIR) so identity survives a config-dir migration.
 COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
+# ── ACCOUNT-NEUTRAL SAFETY CONTROLS (backlog fc54aeebec4a) ────────────────────────────────────────
+# Every sentinel this hook owns lives under $CLAUDE_CONFIG_DIR — TWICE over: STATE_DIR is
+# $CLAUDE_CONFIG_DIR/state/waiting-recycle AND key_cwd/key_role hash "$CFG|…" into the filename. The
+# config dir IS the account, and the account is picked by the ROUTER, not by the operator. So the
+# same operator intent lands in a different store depending on where a session was routed. Measured
+# on a fixture: `arm` under one config dir, `status` under another → "not armed"; and the live census
+# in docs/research/context-economy-100p-2026-08-11/ found the machine's ONLY arm+live pair sitting
+# under ~/.claude while ~/.claude held ZERO live sessions (11 distinct live arms spread over 4 dirs).
+#
+# THE HALF THE ROW DID NOT NAME, AND THE ONLY HALF FIXED HERE. The arm side fails SAFE — a sentinel
+# a session cannot see just means it does nothing — and it already has a dedicated owner in
+# scripts/desk-recycle-invariant.sh, which pages on exactly that stranding. The two SAFETY controls
+# fail OPEN: `kill` documents itself as the GLOBAL blanket kill-switch ("no session recycles") and
+# `clear` as the per-desk kill-switch, and BOTH were silently scoped to one account. Verified: kill
+# on account A, and a session routed to account B reads no kill at all and stays free to exec
+# `handoff-fire --recycle`. A kill-switch that a routing decision can step around is the dangerous
+# one, so it is the one that becomes account-neutral.
+#
+# WHY A SEPARATE ROOT RATHER THAN MOVING THE STORE. scripts/desk-recycle-invariant.sh RE-IMPLEMENTS
+# this layout (its own key_for() duplicates key_cwd, and it reads arm-/live-/brief-/disarm-/OFF under
+# $cfg/state/waiting-recycle). Relocating any marker would strand that reader and turn the machine's
+# armedness alarm into a false pager. So the legacy writes below are left BYTE-IDENTICAL and the
+# account-neutral copy is ADDITIVE: strictly more suppression, never less, in a store keyed on the
+# cwd alone. COORD is the right root because this file already treats it as the fixed identity
+# anchor that "survives a config-dir migration" — the same property the router keeps breaking.
+#
+# AND THE LIFT HAS TO CROSS TOO — the half the control caught. `unkill` on account B can delete B's
+# marker and the shared one, but it CANNOT delete A's: that path is not knowable from B. Left there,
+# the fix moves the lottery onto the UNDO — a kill set on A would stay in force on A forever, liftable
+# only by a session the router happens to route back. So a lift is recorded as a TOMBSTONE in the
+# shared root, and an account-scoped marker binds only while it is NEWER than the tombstone that
+# lifted it. Each writer deletes the opposing token (`kill` drops UNKILL, `clear` drops rearm-), so
+# same-second ties resolve to the lift and nothing can deadlock.
+SHARED_DIR="${CC_WR_SHARED_STATE_DIR:-$COORD/state/waiting-recycle-shared}"
+SHARED_KILL="$SHARED_DIR/OFF"                                # account-neutral twin of $KILL
+SHARED_UNKILL="$SHARED_DIR/UNKILL"                           # tombstone: `unkill` run from any account
 UUID="${CC_WR_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
 SID="${SID:-}"                                               # set by the hook path; empty on the CLI path
 # G-P11-7: is THIS session the monitoring desk? (cc-roles/<DESK_ROLE> resolves to its uuid or sid).
@@ -365,6 +401,33 @@ sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder,
   [ -f "$cp" ] && { printf '%s' "$cp"; return; }   # legacy opt-in still honored — never silently dropped
   printf '%s' "$rp"                                 # nothing yet → new state is role-keyed
 }
+# Account-neutral key: the cwd ALONE. No $CFG, deliberately — $CFG is the thing the router picks,
+# and a key containing it is what made the operator's opt-out a function of routing (fc54aeebec4a).
+key_shared()        { printf '%s' "$1" | shasum 2>/dev/null | cut -c1-16; }
+shared_disarm_for() { printf '%s/disarm-%s' "$SHARED_DIR" "$(key_shared "$1")"; }
+shared_rearm_for()  { printf '%s/rearm-%s'  "$SHARED_DIR" "$(key_shared "$1")"; }   # tombstone: `arm` from any account
+# 0 when <tombstone> is at least as new as <marker>, i.e. the marker was lifted from another account.
+# `-le`, not `-lt`: mtime granularity is one second, and a lift issued in the same second as the
+# marker it lifts must still win. Safe because each writer deletes the opposing token, so the reverse
+# order (set-then-lift-in-the-same-second) cannot reach this comparison.
+superseded() { [ -f "$2" ] || return 1; [ "$(marker_age_s "$2")" -le "$(marker_age_s "$1")" ]; }
+# Every disarm marker in force for a cwd — the account-scoped one, the account-neutral one, or both.
+# The $SHARED_DIR existence test gates the extra shasum: on a machine where no operator has ever run
+# `clear`/`kill` the shared root does not exist and this costs nothing, which this hook's fork budget
+# requires (it rides PostToolUse:Bash at ~19x the Stop chain's rate).
+disarm_paths() { # <cwd> → 0..2 existing marker paths, one per line (account-scoped first)
+  local l s k
+  l="$(disarm_for "$1")"
+  if [ -d "$SHARED_DIR" ]; then
+    k="$(key_shared "$1")"; s="$SHARED_DIR/disarm-$k"
+    # An account-scoped opt-out that a later `arm` (run from any account) lifted is NOT in force.
+    { [ -f "$l" ] && ! superseded "$l" "$SHARED_DIR/rearm-$k"; } && printf '%s\n' "$l"
+    [ -f "$s" ] && printf '%s\n' "$s"
+  else
+    [ -f "$l" ] && printf '%s\n' "$l"
+  fi
+  return 0
+}
 arm_for()      { sentinel_for arm      "$1"; }
 cooldown_for() { sentinel_for cooldown "$1"; }
 cap_for()      { printf '%s/cap-%s'      "$STATE_DIR" "$1"; }               # keyed by session_id
@@ -442,6 +505,10 @@ case "${1:-}" in
     fi
     # ── all refusals cleared — every write below is unconditional ──────────────────────────────────
     rm -f "$(disarm_for "$PWD")" 2>/dev/null                # an explicit arm overrides a prior `clear` opt-out
+    rm -f "$(shared_disarm_for "$PWD")" 2>/dev/null         # …including one set from ANOTHER account (fc54aeebec4a)
+    # …and TOMBSTONE the lift, because an opt-out sitting in a third account's store cannot be
+    # deleted from here — only out-dated.
+    mkdir -p "$SHARED_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$(shared_rearm_for "$PWD")" 2>/dev/null
     printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) $PWD" > "$f"
     # brief template = the Stage-2 successor prompt seed; hard-required for LIVE (no empty-payload fire, FM-D)
     [ -n "$_brief" ] && cp "$_brief" "$(brief_for "$PWD")" 2>/dev/null
@@ -465,17 +532,32 @@ case "${1:-}" in
     # Durable disarm marker — the per-desk kill-switch must ALSO suppress arm-by-default (a desk that
     # still HOLDS the monitoring-desk role would otherwise re-arm on the next poll). `arm` removes it.
     mkdir -p "$STATE_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$(disarm_for "$PWD")" 2>/dev/null
-    echo "cleared (this desk opted out of monitoring auto-recycle; disarm marker set — run 'arm' to re-enable)"; exit 0 ;;
+    # …and the account-neutral twin (fc54aeebec4a). The legacy write above is deliberately unchanged
+    # so scripts/desk-recycle-invariant.sh's `disarmed` verdict still resolves; this second copy is
+    # what makes the opt-out bind on a session the router lands on a DIFFERENT account.
+    mkdir -p "$SHARED_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$(shared_disarm_for "$PWD")" 2>/dev/null
+    rm -f "$(shared_rearm_for "$PWD")" 2>/dev/null          # a fresh opt-out supersedes an earlier re-arm
+    echo "cleared (this desk opted out of monitoring auto-recycle; disarm marker set — run 'arm' to re-enable)"
+    echo "  scope: every account (this cwd) — $(shared_disarm_for "$PWD")"; exit 0 ;;
   status)
     a="$(arm_for "$PWD")"; c="$(cooldown_for "$PWD")"
-    if [ -f "$KILL" ]; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
-    d="$(disarm_for "$PWD")"
-    if [ -f "$d" ]; then
+    if [ -f "$KILL" ] && ! superseded "$KILL" "$SHARED_UNKILL"; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
+    if [ -f "$SHARED_KILL" ]; then
+      echo "GLOBAL KILL active ($SHARED_KILL) — set from ANOTHER account; binds here too"
+    fi
+    # Resolve the opt-out across BOTH roots, so a `clear` run under another account is not invisible
+    # here (fc54aeebec4a). Newest marker = the most recent operator intent.
+    d=""; while IFS= read -r p; do [ -n "$p" ] || continue
+      { [ -z "$d" ] || [ "$(marker_age_s "$p")" -lt "$(marker_age_s "$d")" ]; } && d="$p"
+    done <<< "$(disarm_paths "$PWD")"
+    if [ -n "$d" ] && [ -f "$d" ]; then
       # An opt-out with no age on it reads as a broken hook. Name WHEN it was set, HOW OLD it is, and
       # WHEN it stops suppressing — the three facts that separate a deliberate off from a forgotten one.
       dage="$(marker_age_s "$d")"; dset="$(head -1 "$d" 2>/dev/null | tr -d '[:space:]')"
       echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"
       echo "  set: ${dset:-unknown} ($(fmt_age "$dage") ago)"
+      case "$d" in "$SHARED_DIR"/*) echo "  scope: every account (set from another account's session)" ;;
+                   *)               echo "  scope: this account's store — $d" ;; esac
       if [ "$DISARM_TTL_S" -le 0 ] 2>/dev/null; then
         echo "  ttl: DISABLED (CC_WR_DISARM_TTL_S=0) — this opt-out never expires on its own"
       elif [ "$dage" -ge "$DISARM_TTL_S" ] 2>/dev/null; then
@@ -507,8 +589,19 @@ case "${1:-}" in
       [ "$left" -gt 0 ] 2>/dev/null && echo "cooldown: ${left}s remaining" || echo "cooldown: expired"
     fi
     exit 0 ;;
-  kill)   mkdir -p "$STATE_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$KILL"; echo "GLOBAL KILL set → $KILL"; exit 0 ;;
-  unkill) rm -f "$KILL" 2>/dev/null; echo "global kill removed"; exit 0 ;;
+  # `kill` calls itself the GLOBAL blanket kill-switch. It was scoped to one config dir, i.e. to one
+  # ACCOUNT, and the account is the router's choice (fc54aeebec4a) — so it is written to both roots
+  # and read from both. `unkill` must clear both or the kill becomes un-undoable from the far account.
+  kill)   mkdir -p "$STATE_DIR" "$SHARED_DIR" 2>/dev/null
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$KILL"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$SHARED_KILL" 2>/dev/null
+          rm -f "$SHARED_UNKILL" 2>/dev/null                 # a fresh kill supersedes an earlier unkill
+          echo "GLOBAL KILL set → $KILL"; echo "  scope: every account — $SHARED_KILL"; exit 0 ;;
+  unkill) mkdir -p "$SHARED_DIR" 2>/dev/null
+          rm -f "$KILL" "$SHARED_KILL" 2>/dev/null
+          # Tombstone: another account's OFF is unreachable from here, so out-date it instead.
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$SHARED_UNKILL" 2>/dev/null
+          echo "global kill removed (every account, this machine)"; exit 0 ;;
 esac
 
 # ---- PostToolUse actuation mode (no recognized arg; JSON on stdin) --------------------------------
@@ -641,8 +734,12 @@ is_monitoring_desk && \
 # so an in-flight bats run's own markers survive. Runs even under global-kill (pure hygiene).
 gc_bats_pollution
 
-# 2. GLOBAL kill-switch — blanket opt-out for every session.
-[ -f "$KILL" ] && abstain "global-kill"
+# 2. GLOBAL kill-switch — blanket opt-out for every session. Read from BOTH roots: the account-scoped
+# one it has always used, and the account-neutral twin, so a kill set on whichever account the router
+# happened to pick still binds here (fc54aeebec4a). Suffix after the first ':' keeps the reason token
+# projecting to `global-kill`, and makes "killed from elsewhere" visible rather than merged.
+if [ -f "$KILL" ] && ! superseded "$KILL" "$SHARED_UNKILL"; then abstain "global-kill"; fi
+[ -f "$SHARED_KILL" ] && abstain "global-kill:shared"
 
 # cwd is needed for the arm / cooldown / clean-tree checks — no cwd, nothing to reason about.
 { [ -n "$CWD" ] && [ -d "$CWD" ]; } || abstain "no-cwd"
@@ -651,24 +748,35 @@ gc_bats_pollution
 # without the manual `arm` step. A per-desk `clear` disarm marker suppresses BOTH the sentinel and the
 # role-arm (the kill-switch must still bite a role-holding desk). LIVE exec stays gated on live_for, so
 # a role-armed desk is SHADOW by default (damp-first).
-_dm="$(disarm_for "$CWD")"
-if [ -f "$_dm" ]; then
-  _dage="$(marker_age_s "$_dm")"
+_dms="$(disarm_paths "$CWD")"
+if [ -n "$_dms" ]; then
+  # Age = the NEWEST marker in force (the most recent operator intent); source = `shared` only when
+  # this account has no opt-out of its own, i.e. exactly the routed-elsewhere case (fc54aeebec4a).
+  _dage="" _dsrc="shared"
+  while IFS= read -r _dm; do
+    [ -n "$_dm" ] || continue
+    _da="$(marker_age_s "$_dm")"
+    { [ -z "$_dage" ] || [ "$_da" -lt "$_dage" ]; } && _dage="$_da"
+    case "$_dm" in "$SHARED_DIR"/*) ;; *) _dsrc="local" ;; esac
+  done <<< "$_dms"
   if [ "$DISARM_TTL_S" -gt 0 ] 2>/dev/null && [ "$_dage" -ge "$DISARM_TTL_S" ] 2>/dev/null; then
     # EXPIRED — an opt-out is a decision with a shelf life, not a permanent property of the desk.
     # Cleared here (not merely ignored) so `status` and every sibling reader converge on the same
     # answer instead of one saying DISARMED while the hook proceeds. Logged as its own disposition:
     # the expiry is an EVENT, and a state change nothing records is how the next 8-day opt-out
     # becomes invisible again.
-    rm -f "$_dm" 2>/dev/null
-    log_idl gc "disarm-expired" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" \
-      '{gc:"disarm-ttl",disarm_age_s:$age,disarm_ttl_s:$ttl}')"
+    # EVERY copy in force is cleared — clearing only one would leave the other still suppressing,
+    # which is the same silent divergence the TTL exists to end.
+    while IFS= read -r _dm; do [ -n "$_dm" ] && rm -f "$_dm" 2>/dev/null; done <<< "$_dms"
+    log_idl gc "disarm-expired" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" --arg src "$_dsrc" \
+      '{gc:"disarm-ttl",disarm_age_s:$age,disarm_ttl_s:$ttl,disarm_src:$src}')"
   else
     # Suffix AFTER the first ':' so scripts/idl-abstain-alarm.sh's reason-token projection
     # (`split(":")[0]`) still reads `disarmed` — same contract the `not-armed:…` suffix keeps.
-    _dsfx=""; [ "$_dage" -ge "$DISARM_STALE_S" ] 2>/dev/null && _dsfx=":stale"
-    log_idl abstained "disarmed$_dsfx" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" \
-      '{disarm_age_s:$age,disarm_ttl_s:$ttl}')"
+    _dsfx=""; [ "$_dage" -ge "$DISARM_STALE_S" ] 2>/dev/null && _dsfx="stale"
+    [ "$_dsrc" = shared ] && _dsfx="${_dsfx:+$_dsfx-}shared"
+    log_idl abstained "disarmed${_dsfx:+:$_dsfx}" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" --arg src "$_dsrc" \
+      '{disarm_age_s:$age,disarm_ttl_s:$ttl,disarm_src:$src}')"
     exit 0
   fi
 fi
