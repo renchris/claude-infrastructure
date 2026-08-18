@@ -30,6 +30,11 @@ parser** (finder measured 0.950/19.27 = 4.9%; verifier measured 1.075/22.95 = 4.
 Claude's runnable threads* removes ~5% of the load average. The vendor's win is a fraction of that
 fraction.
 
+**Put in the gate's own units, this is the number to remember:** the GC-attributable change is
+**0.019 runnable threads across the entire 14-session fleet** — measured by summing the
+`BUN_JSC_logGC` stop-the-world pause fields (105.1 → 65.0 ms per 30 s = 0.134% of one core per
+session). Against a load of 19 and a ceiling of 20, that is **~0.1% of the gap**.
+
 **Leg 2 — the measured CPU win is real but is NOT the GC fix.** An interleaved n=32/cell A/B of
 2.1.228 vs 2.1.234 measured **−8.9% CPU (t≈10)** — reproducible, and not the advertised 2× (the
 vendor's 24%→10% is a p99 across *their whole fleet*, a different statistic from our workload). But the
@@ -59,8 +64,12 @@ have made this a capacity story does not survive its own control.
 | Sessions running the MANIFEST-gated launcher | **0 of 13** (argv[0] census; all on `.claude-220`) | ✅ |
 | `gate-off` share of gated fires | **242 gate-off vs 271 measured (~47%)** | ✅ reproduced exactly |
 | Hard 15-session wall | **does not exist** — 52 resident in 24 h, headroom p10 22 GB, swap 0.00 | ✅ |
-| Peak physical footprint, 228 vs 234 | **1370 vs 1374 MB, t=0.11 — clean null** | ⚠️ unverified (verifier never returned) |
-| Idle stop-the-world eden collections | 2.1.220 **69/62/62** per 30 s → 2.1.234 **30/30/30** | ⚠️ unverified |
+| Peak physical footprint, 228 vs 234 | 1370 vs 1374 MB, t=0.11 | ❌ **the "no memory harm" reading is refuted** — see below |
+| Heap at collection, 220 → 234 | **+5.8 MB mean / +9.7 MB peak** | ✅ small harm *measured*, not absent |
+| Idle stop-the-world eden collections | 2.1.220 **69/62/62** per 30 s → 2.1.234 **30/30/30** | ✅ |
+| 2.1.220 is pre-fix | **by DATE**: 220 published 2026-07-24T23:11Z; the Bun fix commit `68ec9e5d0800` is authored 2026-07-30 | ✅ (the strings evidence was refuted; the date is not) |
+| Historic refusals below 3.0/core | **25 of 49 (51%)**, p50 exactly 3.00 | ✅ re-derived |
+| Load at CONSTANT session count (N=15–16) | **11.21 / 19.06 / 27.26 / 29.67 / 32.14 / 36.07** | ✅ — a ±8 swing exceeding the entire session-attributable term |
 
 ### What the verification killed
 
@@ -88,6 +97,13 @@ own errors:
   arithmetic on a `0.434 load/session` coefficient that is an unidentifiable one-point fit — its
   "fixed load" of 12.33 was chosen as the residual at N=16, so matching the observation is guaranteed
   by construction rather than predicted.
+- **"The theory of memory harm is refuted."** ITSELF REFUTED — the adversary axis's own retained logs
+  show heap-at-collection **+5.8 MB mean / +9.7 MB peak** on 234. Small harm *measured*, not absent.
+  The peak-footprint null (t=0.11) was a startup benchmark and does not carry the claim.
+- **"Set `CLAUDE_CODE_FORK_SUBAGENT=0` before the first fan-out."** REFUTED and inverted — see §4.
+- **"The gate is a wall you hit at 15."** REFUTED at the mechanism a second way: `CC_FIRE_ADMIT_BUDGET`
+  defaults to 1, so a refusal costs a *retrying* caller one round-trip and then admits. Whether our
+  automated fires retry is unverified — and that, not the ceiling, decides what raising it buys.
 - **"The A/B ingested 8.8 MB and peaked at 1.37 GB in one turn."** REFUTED — the harness output file is
   35 bytes: `Not logged in · Please run /login`. Both cells are ~0.5–1.0 s **startup** benchmarks. No
   mid-turn measurement exists on either binary, which is exactly the phase the vendor's claim is about.
@@ -135,10 +151,16 @@ The upgrade is defensible for 33 releases of unrelated fixes, never for capacity
 1. **`2.1.232` turns subagent forking ON BY DEFAULT** — a fork subagent "inherits the full conversation
    and prompt cache", so it starts at parent-sized heap instead of climbing the log curve. Against this
    repo's own census (`SUBAGENT foot ≈ −206 + 65.4·ln(age_s)`, r²=0.967, ~212 MB at 600 s; MAIN
-   plateaus ~450 MB) that is ~**+240 MB per concurrent subagent, ~2.9 GB at our default N=12 fan-out**,
-   on a box whose established failure mode is compressor-page exhaustion. `CLAUDE_CODE_FORK_SUBAGENT`
-   appears 7× in the 2.1.234 binary, so there is an off switch to set *before* the first fan-out.
-   ⚠️ Unverified — this axis's verifier never returned.
+   plateaus ~450 MB) that would be ~+240 MB per concurrent subagent, ~2.9 GB at our default N=12
+   fan-out, on a box whose established failure mode is compressor-page exhaustion.
+   ❌ **But the +240 MB was never measured, and the proposed mitigation is worse than the risk.**
+   🚨 **Do NOT set `CLAUDE_CODE_FORK_SUBAGENT=0`.** The real 2.1.234 binary tests it with *strict*
+   boolean comparison against a parsed env object — `if(V.CLAUDE_CODE_FORK_SUBAGENT===!0) return
+   "env"` / `===!1 return "disabled"`. Whether the string `"0"` coerces to `false` there is
+   unverified; if it does not, the setting **enables fork-by-default across every launcher** — the
+   exact inverse of the intent. This was a top-ranked recommendation from one axis and it did not
+   survive verification. The correct action is *no action* until the coercion is read out of the
+   binary.
 2. **The version pin is 7–8 sites, not one.** SSOT is `~/.zshrc:496`; copies at `accounts.json:14`,
    `hooks/model-permission-decider.py:93`, `scripts/lib/cloud-create.sh:116`,
    `scripts/capacity-ramp.sh:51`, `scripts/mcp-modal-probe.py:28`, `scripts/mcp-modal-e2e-probe.py:12`,
@@ -160,9 +182,40 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
 - **`kernel_task`'s runnable contribution** — absent from `ps -axM` entirely (~720 kernel threads
   invisible against `top`'s 5593).
 
-**The one next measurement:** a turn-latency series. The reframing that "~15 is a felt *latency*
-ceiling, not an admission wall" is the most consequential claim in the wave and it was refuted as
-*unsupported* — there is no turn-latency instrument, no queue depth, no wait-time distribution
-anywhere in the fleet. The box demonstrably admits 52 resident sessions; what degrades at ~15 has
-never been measured, only felt. Until it is, every capacity lever here is aimed at a wall nobody has
-observed.
+- **Marginal load per ACTIVE session — the denominator of every capacity claim in this repo.** This
+  wave produced **four values spanning 30×**: `0.172` (pooled OLS), `0.566` (in-band bucket median),
+  `1.89` (delta-marginal from the cited axis-09 pair), `2.5–5` (published, an aggregate÷N).
+  `CC_ADMIT_ACTIVE_CEILING=8`, the felt ~15 wall, `MACHINE_CAPACITY_V2`'s whole model and every
+  "+N sessions" figure above all divide by it.
+- **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
+  read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
+- **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
+  buys throughput or only latency.
+- **Turn latency.** The reframing that "~15 is a felt *latency* ceiling, not an admission wall" was
+  refuted as *unsupported*: there is no turn-latency instrument, no queue depth, no wait-time
+  distribution anywhere in the fleet. The box demonstrably admits 52 resident sessions; what degrades
+  at ~15 has never been measured, only felt.
+
+**The one next measurement:** marginal Δload from adding exactly **one** active session at a
+held-constant baseline, N≥5 at different baselines, counting sessions by **executable path, never
+argv** (argv reads 30–33 against a true 15–16, because briefs mention the path):
+
+```sh
+# quiet window: sysctl -n vm.loadavg stable ±1 over 5 min
+ps -axo comm= | grep -c 'claude-220/node_modules'      # the honest session count
+# sample load1 5 min -> fire ONE --goal-armed session doing real work -> sample 5 min
+```
+
+**The control that must be able to fail:** the sampler has to reproduce the load average it
+apportions. If the census stays flat while load moves, it is the instrument — which is exactly how
+this wave's "64% is our own automation" headline died. No attribution figure should be quoted again
+until a sampler clears that control.
+
+---
+
+## 6 · Provenance
+
+13 agents, 12 completed, **1 died on a genuine session limit** (`verify:load-mechanism`, aborted
+00:59 — "You've hit your session limit · resets 3:30am"); its axis therefore carries a finder with no
+adversarial check, and is flagged as such above. 2.05 M subagent tokens, 412 tool calls, 12.4 h wall
+clock. Workflow run `wf_96a89c2d-c5b`.
