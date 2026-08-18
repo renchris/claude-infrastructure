@@ -33,6 +33,11 @@
 #     lines present only in the ref's version — i.e. trunk is a SUPERSET. A line the ref holds and
 #     trunk does not is unlanded content, wherever else that file has since travelled. Blobs that
 #     differ but cannot be line-compared (binary) are NOT landed: differing bytes are content.
+#     Two arms rescue a path that shows ref-only lines but lost nothing, and each is exact:
+#       SUPERSEDED — trunk once carried the ref's whole-file BLOB and later changed it.
+#       RELOCATED  — trunk's version is a MULTISET SUPERSET of the ref's lines, so every line is
+#                    present and only its OFFSET moved. `diff` is positional and cannot see this;
+#                    it is the systematic false strand for INTEGRATE-only, newest-first log files.
 # Exit 0 iff every path is landed.
 #
 # THE PATH SET IS THREE-DOT, and that is load-bearing. Two-dot (`<base> <ref>`) drags in every path
@@ -163,8 +168,8 @@ if ! git -C "$REPO" diff --name-only -z "${BASE}...${REF}" > "$TMP/paths" 2>/dev
   exit 2
 fi
 
-N=0 BAD=0 SUP=0
-: > "$TMP/report"; : > "$TMP/superseded"
+N=0 BAD=0 SUP=0 REL=0
+: > "$TMP/report"; : > "$TMP/superseded"; : > "$TMP/relocated"
 
 # ── SUPERSESSION: value that reached trunk AND WAS THEN IMPROVED ─────────────────────────────────
 # Without this arm the script convicts our own later fixes. Measured 2026-08-12 against the census
@@ -202,6 +207,38 @@ trunk_ever_carried() {   # $1=path $2=ref-blob → 0 trunk carried this blob onc
   done < <(git -C "$REPO" log --format=%H "$BASE" -- "$p" 2>/dev/null)
   return 1
 }
+
+# ── RELOCATION: value that reached trunk AT ANOTHER POSITION IN THE SAME FILE ────────────────────
+# `diff` is POSITIONAL, so a line trunk carries at a different offset is counted as ref-only and the
+# path is convicted. `trunk_ever_carried` cannot rescue it: it asks for the ref's whole-file BLOB,
+# and trunk here carries the ref's LINES without ever having carried its blob.
+#
+# The miss is SYSTEMATIC for the file class this repo mandates everywhere — INTEGRATE-only,
+# newest-first logs. Landing an entry at the top while the ref appended it at the bottom
+# re-positions every line, so the ref reads as holding content that is demonstrably present.
+# Measured on refs/land/failed/20260817T072101Z-…-reland-drain-chain: its
+# docs/plans/BACKLOG_DRAIN_24_7.md was reported as "19 line(s) present only in the ref" while all 18
+# non-blank ref-only lines were on trunk VERBATIM. Two `re-land …` rows sat open on that for a day,
+# and the row's own remedy would have re-applied a superseded regression to scripts/autonomy-sweep.sh.
+#
+# 🚨 THE TEST IS A MULTISET SUPERSET, NOT A SET ONE, and that is the whole safety of the arm. A set
+# test forgives a LOST DUPLICATE — a hunk deleted from a file whose other copy survives elsewhere —
+# which is precisely a real strand. Asking "does trunk hold this line AT LEAST AS MANY TIMES" cannot.
+#
+# WHAT IT STILL CANNOT SEE, stated honestly: ORDER. A file whose every line survives but whose
+# sequence was scrambled is called landed here. That is the intended reading — this oracle's question
+# is "was CONTENT lost", and the arm forgives only movement, never absence. Structure-sensitive
+# checks belong to the gate that compiles or runs the file, not to a landedness oracle.
+#
+# LC_ALL=C on both sides: the comparison must be byte-wise and the two sorts must share one collating
+# order, or `comm` silently mis-pairs (memory: c-locale-turns-character-ops-into-byte-ops).
+# Cost is two sorts of ONE file per differing path — cheaper than the history walk above.
+trunk_covers_every_line() {   # $1=ref's blob file $2=trunk's blob file → 0 iff trunk is a multiset superset
+  local lost
+  lost="$(LC_ALL=C comm -23 <(LC_ALL=C sort "$1") <(LC_ALL=C sort "$2") 2>/dev/null | wc -l)"
+  lost="${lost//[[:space:]]/}"
+  [ "${lost:-1}" = "0" ]
+}
 while IFS= read -r -d '' P; do
   N=$((N + 1))
   RB="$(git -C "$REPO" rev-parse -q --verify "${REF}:${P}" 2>/dev/null || true)"
@@ -235,6 +272,10 @@ while IFS= read -r -d '' P; do
       SUP=$((SUP + 1))
       printf '  %s — %s ref-only line(s), but %s carried this exact blob before: SUPERSEDED, not lost\n' \
         "$P" "$ONLY_REF" "$BASE" >> "$TMP/superseded"
+    elif trunk_covers_every_line "$TMP/a" "$TMP/b"; then
+      REL=$((REL + 1))
+      printf '  %s — %s line(s) read as ref-only by positional diff, but %s holds every one of them (multiset superset): RELOCATED, not lost\n' \
+        "$P" "$ONLY_REF" "$BASE" >> "$TMP/relocated"
     else
       BAD=$((BAD + 1))
       printf '  %s — %s line(s) present only in the ref\n' "$P" "$ONLY_REF" >> "$TMP/report"
@@ -257,15 +298,18 @@ if [ "$N" -eq 0 ]; then
 fi
 
 if [ "$BAD" -eq 0 ]; then
-  if [ "$SUP" -gt 0 ]; then
-    # SAY WHY, always. A bare ✓ over a superseded path is the same silent verdict this file exists
-    # to end — the reader has to be able to tell "trunk is a superset" from "trunk carried this and
-    # then improved it", because only the second one means re-landing would REVERT something.
-    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (%s superseded since):\n' \
-      "$N" "$REF" "$BASE" "$SUP"
-    head -40 "$TMP/superseded"
-    [ "$SUP" -gt 40 ] && printf '  … and %s more\n' "$((SUP - 40))"
-    printf '  ⚠ re-landing this ref would REVERT the later work on the path(s) above.\n'
+  if [ "$SUP" -gt 0 ] || [ "$REL" -gt 0 ]; then
+    # SAY WHY, always, and say WHICH — the three ways a path can be landed are not interchangeable
+    # to the reader. A bare ✓ is the silent verdict this file exists to end: only SUPERSEDED means
+    # re-landing would REVERT something, while RELOCATED means the bytes are all there and the ref
+    # is simply describing them at another offset.
+    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (%s superseded, %s relocated):\n' \
+      "$N" "$REF" "$BASE" "$SUP" "$REL"
+    [ "$SUP" -gt 0 ] && head -40 "$TMP/superseded"
+    [ "$SUP" -gt 40 ] && printf '  … and %s more superseded\n' "$((SUP - 40))"
+    [ "$REL" -gt 0 ] && head -40 "$TMP/relocated"
+    [ "$REL" -gt 40 ] && printf '  … and %s more relocated\n' "$((REL - 40))"
+    [ "$SUP" -gt 0 ] && printf '  ⚠ re-landing this ref would REVERT the later work on the superseded path(s) above.\n'
   else
     printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (trunk is a superset).\n' \
       "$N" "$REF" "$BASE"
@@ -277,4 +321,5 @@ printf '✗ land-content-verify: %s of %s path(s) hold content %s LACKS — NOT 
 head -40 "$TMP/report"
 [ "$BAD" -gt 40 ] && printf '  … and %s more\n' "$((BAD - 40))"
 [ "$SUP" -gt 0 ] && printf '  (%s further path(s) differ but are SUPERSEDED, not lost — not counted against the verdict)\n' "$SUP"
+[ "$REL" -gt 0 ] && printf '  (%s further path(s) differ but are RELOCATED — every line is on %s at another offset — not counted against the verdict)\n' "$REL" "$BASE"
 exit 1
