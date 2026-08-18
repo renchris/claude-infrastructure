@@ -29,6 +29,12 @@ export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s
 export CC_PERMPEND_HORIZON_S=86400                # orphan-reap horizon (T16 ages a beacon past it)
 export CC_REGISTRY_DIR="$SBX/registry";           mkdir -p "$CC_REGISTRY_DIR"   # paneUUID→sid map for the registered-desk exemption tests (T23-T26)
 export CC_SUP_OWNER_PAT=sleep     # the live-session fixtures below are `sleep` PIDs — mark them owners (prod default: claude)
+# The two liveness-independent DISK sweeps read dirs that default to the REAL ~/.claude. Un-seamed,
+# this harness would sweep the live fleet's wait contracts (and the lint MARKS a diverged contract in
+# place) and stat 595 live fired-peer records ~30 times per run. A test must never touch live state,
+# and never take its verdict from it either.
+export CC_WAIT_CONTRACTS_DIR="$SBX/wait-contracts"; mkdir -p "$CC_WAIT_CONTRACTS_DIR"
+export CC_FIRED_DIR="$SBX/cc-fired";                mkdir -p "$CC_FIRED_DIR"
 # V3 self-check OFF by default here (T31 opts back in, like CC_PAGE_TO/T9). It compares REAL live claude
 # panes against the SANDBOX's telemetry dir, and this box legitimately runs ~30 panes against 1-2
 # fixtures — a permanent artificial blind spot whose page would land in notify.log and corrupt every

@@ -125,6 +125,22 @@ PERMPEND_HORIZON_S="${CC_PERMPEND_HORIZON_S:-86400}"  # reap an orphaned beacon 
 # cadence — and this is a pure disk scan, i.e. exactly the class of work bash CAN do (no S-3 blindness).
 WAIT_CONTRACTS_DIR="${CC_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"  # cc-wait's OWN seam name — never fork the constant
 SUP_WCLINT_TIMEOUT_S="${CC_SUP_WCLINT_TIMEOUT_S:-60}"   # bounded like every other external (it forks jq per contract)
+# ── fired-peer lifecycle records: the "STARTED THEN DIED" half nobody owned ──
+# handoff-fire.sh stamps `engagedAt` on cc-fired/<pane>.json the instant an oracle PROVED the peer
+# engaged. Measured 2026-08-18: that field had ZERO production readers — one writer, two bats cases,
+# docs, nothing else. So a peer that engaged and then died or stalled without self-closing left an OPEN
+# record (closedAt null) that nothing aged: cc-classify drops an idle, unlanded, teamless pane into
+# `owned-wait`, which is in NEITHER cc-reaper's REAPABLE_RE nor its SURFACE_PAGE_RE — never reaped,
+# never surfaced, no board row. Start-ack owns "never started"; this owns "started, then went dark".
+# Liveness signal = the peer's OWN transcript mtime (the same signal this file already trusts over
+# telemetry), read from the record's `transcript` field — measured present and resolvable on 57/57 live
+# open+engaged records.
+# TWO horizons, and the upper one is load-bearing: on the live box 47 of 53 cold records are >7 days
+# old — pre-existing archaeology whose originator is long gone. Paging those on the first sweep is the
+# 2026-07-19 storm (53 findings at once). Past the upper horizon the record is cc-gc's, not the pager's.
+FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"     # cc-reaper's OWN seam name — never fork the constant
+FIRED_DARK_S="${CC_SUP_FIRED_DARK_S:-3600}"             # transcript silence past which an OPEN engaged peer is dark
+FIRED_DARK_MAX_S="${CC_SUP_FIRED_DARK_MAX_S:-604800}"   # …and past which it is archaeology, not an actionable page
 WCLINT_BIN="${CC_WCLINT_BIN:-}"
 if [ -z "$WCLINT_BIN" ]; then
   for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/scripts/wait-contract-lint.sh" \
@@ -859,8 +875,61 @@ sweep_wait_contracts(){ # prints the number of DIVERGENT contracts found this sw
   echo "$n"
 }
 
+# ── the fired-peer dark sweep: read `engagedAt`, age the OPEN records (see the horizons above) ──
+# PAGE-ONCE per pane via a marker FILE (this function runs inside a command substitution, so a shell
+# variable would die with the subshell — the digest's own measured trap), and ONE aggregate page per
+# sweep rather than one per pane: 6 findings on the first live sweep must arrive as one message, never
+# as six. The marker is REMOVED when the record closes or goes warm again, so a genuine recurrence is
+# news a second time.
+sweep_fired_dark(){ # prints the number of dark fired peers found this sweep
+  local f pane engaged closed tp mt age n=0 fresh=0 names="" mk
+  [ -d "$FIRED_DIR" ] || { echo 0; return; }
+  _ensure; mkdir -p "$PAGEDIR/fired-dark" 2>/dev/null || true
+  for f in "$FIRED_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"
+    case "$pane" in ''|*[!0-9A-Fa-f-]*) continue ;; esac        # UUID-shaped only — never a path fragment
+    mk="$PAGEDIR/fired-dark/$pane"
+    closed="$(jq -r '.closedAt // "null"' "$f" 2>/dev/null || echo x)"
+    engaged="$(jq -r '.engagedAt // "null"' "$f" 2>/dev/null || echo x)"
+    # SPENT (self-closed) or NEVER-ENGAGED are both other organs' business — and a spent record that
+    # once paged must re-arm, or a later pane reusing the id would be silently suppressed.
+    if [ "$closed" != null ] || [ "$engaged" = null ] || [ "$engaged" = x ]; then
+      rm -f "$mk" 2>/dev/null || true; continue
+    fi
+    tp="$(jq -r '.transcript // empty' "$f" 2>/dev/null)"
+    if [ -z "$tp" ] || [ ! -f "$tp" ]; then
+      # UNPROVABLE, declared rather than folded into either verdict: with no readable transcript we
+      # cannot say dark and must not say healthy. Recorded once per pane, never paged.
+      if [ ! -f "$mk.unprovable" ]; then
+        : > "$mk.unprovable" 2>/dev/null || true
+        idl fired_peer_unprovable "\"pane\":$(json_str "$pane"),\"why\":\"an OPEN engaged fired-peer record whose transcript is null or missing — this sweep can neither prove nor disprove that the peer is still alive\""
+      fi
+      continue
+    fi
+    rm -f "$mk.unprovable" 2>/dev/null || true
+    mt="$(stat -f %m "$tp" 2>/dev/null || stat -c %Y "$tp" 2>/dev/null || echo 0)"
+    age=$(( $(now) - ${mt:-0} ))
+    if [ "$age" -lt "$FIRED_DARK_S" ] || [ "$age" -ge "$FIRED_DARK_MAX_S" ]; then
+      [ "$age" -lt "$FIRED_DARK_S" ] && rm -f "$mk" 2>/dev/null || true    # warm again ⇒ re-arm
+      continue
+    fi
+    n=$((n+1))
+    [ -f "$mk" ] && continue                                    # already declared — no wolf-cry
+    : > "$mk" 2>/dev/null || true
+    fresh=$((fresh+1)); names="${names:+$names }$pane"
+    idl fired_peer_dark "\"pane\":$(json_str "$pane"),\"originator\":$(json_str "$(jq -r '.originator // .firedBy // ""' "$f" 2>/dev/null)"),\"cwd\":$(json_str "$(jq -r '.cwd // ""' "$f" 2>/dev/null)"),\"engaged_at\":$(json_str "$engaged"),\"transcript_age_s\":$age,\"why\":\"a fired peer ENGAGED and then went dark for ${age}s without ever self-closing (closedAt null) — cc-classify calls this owned-wait, which is in neither REAPABLE_RE nor SURFACE_PAGE_RE, so nothing else reaps it, pages it or gives it a board row\""
+  done
+  if [ "$fresh" -gt 0 ]; then
+    send_page "⚠️ ${fresh} fired peer(s) ENGAGED then went DARK (no self-close, transcript silent ≥$(( FIRED_DARK_S / 60 ))m): ${names}. Nothing reaps or surfaces this state — re-observe each pane, then close it or hand its work back. Recovery is PAGED, never auto." \
+              "fired-dark:n$fresh" || true
+    printf '%s  fired-peer dark n=%s new=%s\n' "$(utc)" "$n" "$fresh" >> "$SUPLOG" 2>/dev/null || true
+  fi
+  echo "$n"
+}
+
 sweep(){
-  local n=0 found=0 gc r pp wc
+  local n=0 found=0 gc r pp wc fd
   gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
   if [ -d "$TEL_DIR" ]; then
     for f in "$TEL_DIR"/*.json; do
@@ -876,6 +945,8 @@ sweep(){
   # L2-c: the wait-contract watchdog runs on THIS cadence (G-P4-2) — a disk scan, so it is enforceable
   # from bash and survives the death of every waiter it audits.
   wc="$(sweep_wait_contracts)"; found=$(( found + ${wc:-0} ))
+  # The other liveness-independent disk contract: a fired peer that engaged and then went dark.
+  fd="$(sweep_fired_dark)"; found=$(( found + ${fd:-0} ))
   # V3 self-check LAST, on the count this sweep actually enumerated: a heartbeat of "swept 0, found 0" is
   # an all-clear that must not be emitted while live panes sit outside the world-view it swept.
   self_check "$n"
