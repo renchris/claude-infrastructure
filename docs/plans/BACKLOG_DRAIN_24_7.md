@@ -857,6 +857,50 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   boundary proves on the chain's FIRST self-recycle (#10→#11) — watch for it. R2 (pane 106)
   still out: 7/12 stranded branches landed, T2 continuing; ledger shows rows closing with
   "re-land of the stalled cloud session's …" landed evidence.
+- **2026-08-16 ~23:00Z — §6's chain-liveness invariant is now a mechanism; S3 landed and REFUTES
+  the 20:30Z reading of the convergence gate.** Cloud session (Claude Code on the web, no backlog
+  store / no launchd / no live layer reachable — see the locus note at the end of this entry).
+  **Trunk re-read by content**, every sha the 20:30Z entry claims: `46a86deb7` · `944abba49` ·
+  `672f34757` · `a87f32c66` · `1817ca740` · `b4d0a3d0f` all ancestors of origin/main. **S3 landed
+  as `2f84bf74`** — and its finding is not the one it was fired on: postland-verify's `retry_once`
+  runs under TWO bounds (FILE_TO 300 s for the single named test, RETRY_TO 5400 s for the
+  whole-file fallback), rc 124 is identical from either, and the abstain message named RETRY_TO
+  *unconditionally*. So the sixteen cuts the 20:30Z entry read as "our own 5400 s ladder bound
+  firing on tests/autonomy-sweep.bats" happened inside runs whose totals were 3364 s and 3538 s —
+  a 5400 s bound cannot fire in a 3364 s run. The real cut was one test overrunning the 300 s
+  per-file bound; the suite is 55/55 green in 77.09 s at the ladder's own band. **"A suite too slow
+  to re-run" was never the measurement, and a whole session was dispatched against it** — the same
+  claimed-outcome-vs-checked-outcome shape §1 catalogues, one layer up.
+  **§6's chain-liveness invariant was prose and nothing else.** `fire-drain-recycle` appeared in
+  this plan and in NO script, test or plist on trunk, so the plan that diagnoses "a conclusion that
+  never reached an enforcing store" (§1.2: the chain stopped at 06:45Z and the operator was the
+  detector, hours later) was committing it about its own remedy. Now implemented:
+  `scripts/drain-chain-assert.sh` (report / `--assert` / `--file` / `--json`), called from
+  `autonomy-sweep.sh` § 2b-v every 300 s tick and journalled as `drain_chain_rc`, with
+  `tests/drain-chain-assert.bats` — 15 cases green, and the two load-bearing guards red-proved by
+  reverting them. It files ONE condition-keyed row (`local-drain-chain-dead`) carrying `--assert`
+  as its own falsifier, so the chain restarting retires it with no human in the loop.
+  Three fail-open guards, and the middle one is the one that decides whether this is a detector or
+  a generator: an unreadable store abstains (`skipped`/`read-failed` — "I could not ask" is never
+  "the answer was no"); **zero live rows is `drained`, i.e. ALIVE**, because §6's own terminal
+  condition is chain-complete-at-true-zero and an alarm keyed on "no recycle fired lately" alone
+  would file its first row on the day the program SUCCEEDED and hold it open forever
+  (cap-whose-population-is-empty — precisely how `backlog-ratchet.sh` came to be red on every run
+  it had ever made); and any live lease counts whoever holds it, because the question is "is
+  anything draining" and Lane A cloud work is the chain too. Portability: the brief's mtime uses
+  the validated BSD-first form landed in `4d7bc86d`, whose naive `stat -f %m || stat -c %Y`
+  ancestor leaks a filesystem block to STDOUT on GNU — that failure would have reported DEAD on a
+  box that was draining fine, i.e. the false-DEAD direction that files a permanent row. Red-proved
+  by a test asserting the AGE, not the verdict.
+  **Locus — what this session structurally could not do, and did not fake.** A cloud container has
+  no `~/.claude/autonomy/backlog.jsonl`, no launchd, no panes and no live layer, so R1, R2, A1/A2/
+  A4, B1-B5 and every §5 probe stayed untouched; §2's venue pass already measured this — 10 cloud /
+  259 local, and 79% of labelled refusals name THIS MACHINE as the work's subject.
+  ⚠️ **This diff ADDS two files, so it is not live at lag 0.** `~/.claude/scripts/` is a per-file
+  symlink dir populated by `install.sh`'s `scripts/*.sh` glob: an EDIT rides its existing link and
+  merely runs older bytes, but an ADD has no link at all and the sweep's `[ -x "$_drain" ]` guard
+  is a *silent* skip. `bash scripts/deploy-live.sh` on the box is what makes the check exist.
+
 - **2026-08-16 ~21:53Z — W-P1/S3 landed: the verifier was blocked by a FALSE prelint red, not by
   the ladder bound this wave was briefed against.** Landed `6ce67de91` · `e334bf6c1` · `2f84bf743`
   (content-verified on origin/main, 3 paths). The next sweep ran the corpus at 21:56:12Z —
@@ -1156,5 +1200,12 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
 - The chain is alive ⟺ a fire-drain-recycle-N brief younger than 24h exists OR a drain session
   holds a live lease — checked by autonomy-sweep; a dead chain files ONE condition-keyed row
   (`local-drain-chain-dead`), never a duplicate storm.
+  **IMPLEMENTED 2026-08-16** → `scripts/drain-chain-assert.sh`, called from `autonomy-sweep.sh`
+  § 2b-v (`drain_chain_rc` in the `backlog-health` IDL row), pinned by
+  `tests/drain-chain-assert.bats`. Ask it directly with `drain-chain-assert.sh --json`; the row it
+  files carries `--assert` as its falsifier and retires itself when the chain restarts. Zero live
+  rows reads ALIVE (`why=drained`) — that is this invariant's terminal success state, not a
+  silence to be alarmed about, and the distinction is what keeps the detector from becoming the
+  store's next generator.
 - Weekly report: adds vs closes; net-positive week ⇒ the INFLOW list (C1-C4) gets the next
   fix, not more drain horsepower.
