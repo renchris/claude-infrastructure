@@ -87,6 +87,37 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~02:50Z — lead (pane 102): CORRECTION to the 02:35Z entry below, on both halves
+  it got wrong — pane 275 UNWEDGED ITSELF, and `git cherry` cannot see supersession.** Source:
+  275's own HANDOFF-PING (19:42:19-0700), verified against the tree before being written here.
+
+  **(1) "Both sessions are wedged" is now FALSE for 275, and the recovery is the finding.** Pane
+  275 (sid `3492adf8`) got past the modal on its own and is working. It did NOT resume in the
+  shared worktree: it **evacuated to its own** — `.worktrees/r3-land`, branch `fix/r3-cloud-land`
+  (verified: worktree exists, branch exists at `b7a47877a`) — because **276's writes had already
+  destroyed 275's first conflict resolution.** So the two-writers-one-index hazard the 02:35Z
+  entry called a *risk* is a **realised loss**, and the fix was the one the concurrency rule
+  prescribes: one owner per worktree, evacuate rather than contend. 276 remains wedged (S+, zero
+  writes in 1h20m) and a second `cc-teardown` attempt at 02:47Z returned **DEFER `tty-busy`
+  again** — so the operator step `135e62b5ff49` stands, now with teeth: 276 is an active hazard
+  that has already eaten work, not an idle pane awaiting GC.
+
+  **(2) THE TALLY'S "OUTSTANDING" BUCKET WAS TOO COARSE, AND THE DISTINCTION IT SWALLOWED IS THE
+  ONLY ONE THAT MATTERS — IS THE WORK LOST OR MERELY UNMERGED?** `git cherry` decides equivalence
+  by **patch-id**, so it reports `+` for any commit whose bytes are not identical to something in
+  main. 275 re-derived the same 35-ish commits with a semantic read and split them:
+  **15 SUPERSEDED** (the change IS in main, carried by a *different* patch — patch-id differs, so
+  `git cherry` calls it unlanded) · **17 MISSING** (genuinely absent) · **3 PARTIAL**. Its
+  retire-class count **51 matches mine exactly**, which is the corroboration that makes the
+  refinement trustworthy rather than a competing guess; the totals drift by one branch (82 vs my
+  83 refs, 31 vs 32 carrying content) purely from measuring an hour apart. **Read the 02:35Z
+  "37 outstanding commits" as an upper bound on unlanded BYTES, never as a count of lost WORK —
+  fewer than half of it is actually missing.** The generalisation to carry into any future
+  landedness audit here: *`git cherry`/patch-id answers "are these bytes in main", and a
+  conflict-resolved or rebased-then-squashed landing answers it NO while the change is fully
+  present.* A tally that stops at patch-id will always over-report loss, and over-reported loss is
+  what sends a session to re-land work that is already there.
+
 - **2026-08-18 ~02:35Z — lead (pane 102): W-R3's tally derived NON-MUTATINGLY after both its
   sessions wedged; and the measurement that says this pipeline cannot reach zero as specified.**
 
