@@ -210,7 +210,11 @@ T_BUSY="${CC_WR_T_BUSY:-75}"                                 # BUSY forced-recyc
 T_IDLE_FLOOR="${CC_WR_T_IDLE_FLOOR:-25}"                     # adaptive decay floor (== ROT_FLOOR: the two triggers converge here)
 IDLE_DECAY_S="${CC_WR_IDLE_DECAY_S:-3600}"                   # T_IDLE decays to the floor over THIS long-idle window (0 ⇒ no decay)
 ROT_FLOOR="${CC_WR_ROT_FLOOR:-25}"                          # rot-tell needs THIS much fill to be real
-AGE_MAX="${CC_WR_AGE_MAX:-180}"                             # telemetry older than this can't be trusted
+AGE_MAX="${CC_WR_AGE_MAX:-180}"                             # telemetry older than this is not a CURRENT fill
+# ...but not therefore useless: above AGE_MAX the fill is taken as a LOWER BOUND provided the
+# session's own transcript corroborates that it is alive (see §4a). Warm = younger than this;
+# older, or unresolvable, is COLD and the legacy fresh=0 behavior stands.
+TX_WARM_MAX="${CC_WR_TX_WARM_S:-180}"
 MAX="${CC_WR_MAX:-3}"                                       # per-session advisory cap (never nag forever)
 COOLDOWN_S="${CC_WR_COOLDOWN_S:-600}"                       # cwd-keyed anti-thrash + cross-session loop-breaker
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"            # shared with boundary-handoff / statusline
@@ -867,14 +871,49 @@ if [ "$stage2_pending" = 0 ] && [ "$wedged" = 0 ]; then
   [ "$capped" = 1 ] && abstain "capped:${N}>=${MAX}"    # defensive backstop (unreachable unless cooled/paced cleared the wedge)
 fi
 
-# 4a. Context fill (telemetry) — fresh number only; an old % is not evidence of the current fill.
-used=0; fresh=0
+# 4a. Context fill (telemetry) — a fresh number, OR a stale one the transcript corroborates.
+#
+# This used to be "fresh number only". The sibling rail (boundary-handoff.sh) made the same
+# assumption as a hard abstain, and it is wrong in the same way: the telemetry writer is the
+# STATUSLINE, which renders ZERO times while a session sits inside one long operation
+# (statusline.sh:48). So `age > AGE_MAX` does not mean the writer is dead — it is the ordinary
+# signature of a session BUSY inside a long turn, which is precisely the population this rail is
+# meant to catch. Dropping to used=0 there made every downstream tell (over_threshold, rot_valid,
+# high_ctx, the nudge) structurally unreachable for that population.
+#
+# WHY A STALE NUMBER IS STILL USABLE — monotonicity, not liveness. A warm transcript proves the
+# session is alive; it does not make the fill current. What licenses using it is that fill grows
+# monotonically within a session, so a stale `used_pct` is a LOWER BOUND, and every consumer of
+# `used` below is a `>=` threshold test. A lower bound can only cost false NEGATIVES, never invent a
+# false positive. Caveat stated rather than hidden: compaction breaks monotonicity, so a stale
+# pre-compact number over-states and can nudge early — the safe direction.
+#
+# The transcript is a LIVENESS corroborator ONLY: no warm transcript ⇒ fresh stays 0 and every
+# legacy abstain below is untouched. transcript_age()'s unresolved sentinel reads COLD by
+# construction, so an unresolvable path can never become a blanket exemption.
+used=0; fresh=0; stale_ok=""
 tel="$TEL_DIR/$SID.json"
 if [ -f "$tel" ]; then
   ts="$(jq -r '.ts // 0' "$tel" 2>/dev/null || echo 0)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   age=$(( $(date +%s) - ts ))
   if [ "$age" -le "$AGE_MAX" ]; then
     fresh=1
+  else
+    _wr_ta="${TRANSCRIPT_AGE_LIB:-$_wrd/lib/transcript-age.sh}"
+    [ -f "$_wr_ta" ] || _wr_ta="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/transcript-age.sh"
+    [ -f "$_wr_ta" ] || _wr_ta="$HOME/.claude/hooks/lib/transcript-age.sh"
+    _wr_tage=999999999
+    if [ -f "$_wr_ta" ]; then
+      # shellcheck source=lib/transcript-age.sh
+      # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+      if . "$_wr_ta" 2>/dev/null; then
+        _wr_tage="$(transcript_age "$CWD" "$CFG" "$SID" 2>/dev/null || printf '%s' 999999999)"
+        case "$_wr_tage" in ''|*[!0-9]*) _wr_tage=999999999 ;; esac
+      fi
+    fi
+    if [ "$_wr_tage" -le "$TX_WARM_MAX" ]; then fresh=1; stale_ok="${age}s/tx:${_wr_tage}s"; fi
+  fi
+  if [ "$fresh" = 1 ]; then
     used="$(jq -r '.used_pct // 0' "$tel" 2>/dev/null || echo 0)"; used="${used%.*}"
     case "$used" in ''|*[!0-9]*) used=0 ;; esac
   fi
@@ -935,8 +974,13 @@ rss_over=0; { [ "$RSS_PAGE_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_PAGE
 # VALIDATE before publishing: log_idl feeds this to `jq --argjson`, so a malformed value would fail the
 # WHOLE record and silently drop every IDL line from here on — the same "reads as no records ⇒ alarm
 # flips GREEN" trap log_idl's own comment guards against, one level up. Fall back to {} on any doubt.
+# `stale_ok` rides the same merge (§4a): when it is non-empty the `used` every record below reports
+# is a stale-but-transcript-corroborated LOWER BOUND rather than a current reading. That distinction
+# has to reach the record — an operator calibrating thresholds off these rows would otherwise read a
+# lower bound as a measurement, and the fallback itself would be unfalsifiable from the IDL.
 _sj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_PAGE_MB" \
-  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_page_t:$rt}' 2>/dev/null || true)"
+  --arg sok "${stale_ok:-}" \
+  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_page_t:$rt,stale_ok:$sok}' 2>/dev/null || true)"
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_sj" ] && printf '%s' "$_sj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_sj"; else SIZE_JSON='{}'; fi
 

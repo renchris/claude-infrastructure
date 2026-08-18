@@ -470,9 +470,46 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
 }
 
 # ── TELEMETRY freshness + non-repo cwd ──────────────────────────────────────────────────────────
+# NOTE both stale cases below are ALSO the cold-side controls for the §4a fallback: their transcripts
+# live at $BATS_TEST_TMPDIR, not at the CC projects path transcript_age() resolves, so the lookup
+# misses, returns its sentinel, and reads COLD. They must stay silent — if the fallback ever widened
+# into a bypass, these two would red first.
 @test "stale telemetry + no tell → silent (an old % is not evidence of current fill)" {
   mk_tel_stale s8 95
   run drive s8 "$(mk_tx 8 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── STALE-TELEMETRY FALLBACK (row 5e4ce121b64a residual (a)) ─────────────────────────────────────
+# The statusline stops rendering while a session sits inside ONE long operation, so stale telemetry
+# is the signature of a BUSY session — the population this rail exists for — and dropping to used=0
+# made every downstream tell structurally unreachable for exactly them. A stale fill is a LOWER
+# BOUND (fill is monotone within a session) and every consumer is a `>=` test, so a corroborated
+# stale number is usable. Corroboration is the session's OWN transcript, at the path CC writes it.
+mk_cctx() { # $1=sid $2=age_s → the session transcript where transcript_age() looks for it
+  local slug d
+  slug="$(printf '%s' "$DESK" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  d="$CLAUDE_CONFIG_DIR/projects/$slug"; mkdir -p "$d"
+  echo '{"type":"user"}' > "$d/$1.jsonl"
+  # LOCAL time: `touch -t` parses in the local zone while `stat -f %m` reads epoch seconds, so a
+  # `date -u` stamp lands the mtime a whole UTC offset away (measured: 7h in the FUTURE ⇒ a negative
+  # age the hook's numeric guard then reads as unresolvable). Cost a red that was pure harness.
+  touch -t "$(date -r "$(( $(date +%s) - $2 ))" +%Y%m%d%H%M.%S 2>/dev/null \
+    || date -d "@$(( $(date +%s) - $2 ))" +%Y%m%d%H%M.%S)" "$d/$1.jsonl"; }
+
+@test "stale telemetry + WARM session transcript at 95% → NOT silent (stale fill is a lower bound)" {
+  mk_tel_stale s9 95
+  mk_cctx s9 4                       # the row's live case: a 4-SECOND-old transcript
+  run drive s9 "$(mk_tx 8 "$WAIT")"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]                   # today: silent, because used was forced to 0
+  grep -q '"stale_ok":"' "$CC_WR_IDL"   # and the lower-bound provenance reaches the record
+}
+
+@test "CONTROL: stale telemetry + COLD session transcript → still silent (fallback is not a bypass)" {
+  mk_tel_stale s10 95
+  mk_cctx s10 100000                 # transcript as stale as the telemetry ⇒ nothing corroborates
+  run drive s10 "$(mk_tx 8 "$WAIT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 # ROT-FLOOR (2026-07-19 Fable panel, probe P1): a rot-tell needs FRESH telemetry AND used_pct ≥
