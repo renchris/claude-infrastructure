@@ -1,0 +1,168 @@
+# The 2× p99 CPU win is not our concurrency lever — and the constant that actually stops us was never measured
+
+**Date:** 2026-08-18
+**Question (operator):** does the Claude Code CLI now using 2× less CPU at p99 drastically affect our
+~15 concurrent-session limitation, and are there actionable outcomes?
+**Method:** 6-axis wave (version path · gate constants · load mechanism · live 2.1.228-vs-2.1.234 A/B ·
+memory adversary · ceiling model), each independently re-run by an adversarial verifier. 4 of 6
+verifiers returned; the load-mechanism verifier was aborted at 00:59 and the memory-adversary
+verifier never returned. **Every claim below is labelled by whether it survived verification.**
+Raw A/B measurements: [`data/gc-cpu-ab-2026-08-18.md`](data/gc-cpu-ab-2026-08-18.md).
+
+**The vendor claim under test** ([@ClaudeDevs](https://x.com/ClaudeDevs), 2026-08-17): "Claude Code CLI
+now uses 2× less CPU at p99. Bun's garbage collector was running on a fixed timer, so it would kick in
+mid-turn and steal CPU right when Claude Code was busiest. Now it waits until the process is idle."
+Chart: CPU **share** p99 24% → 10%, p50 5.8% → 2.5%, across releases v2.1.228 → v2.1.232, step at
+**v2.1.229** (Aug 12).
+
+---
+
+## 1 · The verdict
+
+**No — and it fails on two independent legs, either of which alone is sufficient.**
+
+**Leg 1 — claude.exe is ~4.7% of the quantity our gate measures.** The gate that refuses new sessions
+(`CC_FIRE_MAX_LOAD_PER_CORE`) keys on **load average**, and Darwin's load average counts *runnable
+threads*, never CPU time. A per-thread census attributing the load numerator by process found all live
+claude.exe processes together contribute **1.075 of 22.95 runnable threads (4.7%)**. This is the single
+most important number in the wave, and it is the one that **replicated under an independently written
+parser** (finder measured 0.950/19.27 = 4.9%; verifier measured 1.075/22.95 = 4.7%). Deleting *100% of
+Claude's runnable threads* removes ~5% of the load average. The vendor's win is a fraction of that
+fraction.
+
+**Leg 2 — the measured CPU win is real but is NOT the GC fix.** An interleaved n=32/cell A/B of
+2.1.228 vs 2.1.234 measured **−8.9% CPU (t≈10)** — reproducible, and not the advertised 2× (the
+vendor's 24%→10% is a p99 across *their whole fleet*, a different statistic from our workload). But the
+finder attributed the whole delta to one named change across a **six-release span**. The verifier ran
+the GC-isolating arm the finder never ran, on the post-fix binary where the knob is provably live
+(`BUN_GC_TIMER_INTERVAL=1` → **+13.5%** CPU, t≈5):
+
+> `BUN_GC_TIMER_DISABLE=1` on 2.1.234 changes CPU by **+0.6%** — a null (0.5300 → 0.5334 s, sems
+> 0.0027 / 0.0029).
+
+**Turning garbage collection off entirely, on the fixed binary, buys nothing.** So the −8.9% belongs to
+the other 33 releases' worth of changes in the band, not to the GC scheduler. The one claim that would
+have made this a capacity story does not survive its own control.
+
+---
+
+## 2 · The numbers that survived adversarial verification
+
+| Finding | Number | Status |
+|---|---|---|
+| claude.exe share of the load-average numerator | **4.7%** (verifier) / 4.9% (finder) | ✅ replicated, independent parser |
+| Measured CPU delta 2.1.228 → 2.1.234 | **−8.9%**, t≈10, n=32/cell interleaved | ✅ reproduced |
+| CPU delta attributable to the **GC fix** | **+0.6% — a null** | ✅ GC-isolating arm, knob proven live |
+| Whole claude fleet's CPU demand | **0.36–0.68 cores** across loads of 25 / 33 / 55; no single proc >21.4% of a core | ✅ reproduced over a 2× wider load range |
+| Bun-GC fix in the public CHANGELOG | **absent** — 5588 lines, 3 "garbage" hits, all unrelated; attribution is tweet-only | ✅ independent fetch |
+| `cc-upgrade-gate` coverage of this question | **zero** — all 14 checks, none measures CPU, threads or load | ✅ |
+| Sessions running the MANIFEST-gated launcher | **0 of 13** (argv[0] census; all on `.claude-220`) | ✅ |
+| `gate-off` share of gated fires | **242 gate-off vs 271 measured (~47%)** | ✅ reproduced exactly |
+| Hard 15-session wall | **does not exist** — 52 resident in 24 h, headroom p10 22 GB, swap 0.00 | ✅ |
+| Peak physical footprint, 228 vs 234 | **1370 vs 1374 MB, t=0.11 — clean null** | ⚠️ unverified (verifier never returned) |
+| Idle stop-the-world eden collections | 2.1.220 **69/62/62** per 30 s → 2.1.234 **30/30/30** | ⚠️ unverified |
+
+### What the verification killed
+
+Recording these explicitly, because a refuted claim that quietly vanishes is how a wave launders its
+own errors:
+
+- **"claude.exe lacks the GC-timer env knobs, proving we lack the fix."** REFUTED — an anchored-grep
+  artifact. `grep -c '^BUN_GC_TIMER_DISABLE$'` only matches a NUL-delimited string; in 2.1.220 and
+  2.1.228 the name sits inside a run-together blob. A raw `LC_ALL=C grep -a` byte search finds it in
+  **all three** binaries. *(This is the repo's own indexed `C locale` / greedy-anchor lesson, live again.)*
+- **"64% of the runnable population is our own launchd automation."** REFUTED as a number — the census
+  failed a correlation control it never ran: `corr(load, R-procs) = −0.05`, flat at 19–20 R procs across
+  a 2.3× load range. The *direction* (the fork storm, not Claude, owns the load) survives on the
+  thread-level census; the 64% figure does not.
+- **"The gate is a hard cliff at 2.0/core."** REFUTED at the mechanism — `handoff-fire.sh:4300`
+  defaults `CC_FIRE_ADMIT_BUDGET` to **1**, so after *one* consecutive refusal the next fire is
+  ADMITTED into the saturated box (`basis: budget-expired`). It is a one-refusal speed bump.
+- **"The gate is refusing right now."** REFUTED — simulated from a `sysctl` read, never observed. The
+  last real refusal was 2026-08-17T07:19Z, and 36 of 47 refusals fall on just two days. Refusals are a
+  burst, not a standing condition.
+- **"2.5–5 runnable threads per active session."** PARTIALLY REFUTED — an aggregate÷N, not a marginal.
+  The cited measurement is load1 27.4 → 44.4 across nine all-active sessions; the true marginal is
+  **(44.4−27.4)/9 = 1.89**, not 2.5–5. *(The repo's own `[Ratio ≠ marginal]` defect.)*
+- **"The fix buys +0.2 sessions" / "collapsing cc-dispatch frees 4.0 load points."** Both REFUTED as
+  arithmetic on a `0.434 load/session` coefficient that is an unidentifiable one-point fit — its
+  "fixed load" of 12.33 was chosen as the residual at N=16, so matching the observation is guaranteed
+  by construction rather than predicted.
+- **"The A/B ingested 8.8 MB and peaked at 1.37 GB in one turn."** REFUTED — the harness output file is
+  35 bytes: `Not logged in · Please run /login`. Both cells are ~0.5–1.0 s **startup** benchmarks. No
+  mid-turn measurement exists on either binary, which is exactly the phase the vendor's claim is about.
+
+---
+
+## 3 · The actionable finding, and it has nothing to do with the vendor
+
+**The constant that stops us was never derived from anything.**
+
+`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` (`scripts/lib/capacity-admit.sh:134`) is the number that
+becomes the load-20 ceiling on this 10-core box, and both gates expand it. Its own code comment cites
+"§9.5's measured ceiling" — and **§9.5 contains no such derivation**; it shows only that the gate
+admits at 1.55 and refuses at 2.92, which is a demonstration that a threshold thresholds. The origin
+commit `0fc3a3d33` measured the motivating incident at **2.72/core** and picked 2.0 with no stated
+rule. The verifier read the full commit body and **confirmed this verbatim** — it called it the
+strongest finding in the wave.
+
+Worse, the repo's own instrument already documents that this axis cannot do the job
+(`scripts/capacity-alarm.sh:139-147`, verbatim):
+
+> **THE SURVIVED POPULATION CONTAINS THE FATAL VALUE.** Fatal 2026-08-05: 25.3 on 10 cores = 2.53/core.
+> Survived: 13 consecutive samples at a CONSTANT 31–32 sessions spanning 29.15–59.80, i.e.
+> **2.92–5.98/core — every one of them ABOVE the fatal reading, all 13 on a box that lived.**
+
+So the threshold sits *below* every load this machine has demonstrably survived, and above the one
+that killed it — an axis that provably cannot separate fatal from survived. And the fleet already
+behaves accordingly: **47% of gated fires run with the gate switched off.**
+
+**This does not license raising it.** The verifier refuted the projection that 3.0/core buys 20–22
+sessions — it rests on a load ∝ sessions proportionality the data contradicts (at load 23.49 the top
+consumers were `bun` 65%, `mediaanalysisd` 33%, `kernel_task` 25%, with the highest claude.exe at
+**5.5%** and 52% idle). Corroborated live while writing this: **load 10.66 at 13 sessions**, against
+19.06 at 14 sessions twelve hours earlier — the same session count spanning a 1.8× load range.
+
+The honest actionable is therefore **to derive the number, not to move it**: re-run the axis-09-style
+measurement (load1 delta across N all-active sessions) and set the ceiling from a measured failure
+point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
+move a capacity constant.
+
+## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
+
+The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
+
+1. **`2.1.232` turns subagent forking ON BY DEFAULT** — a fork subagent "inherits the full conversation
+   and prompt cache", so it starts at parent-sized heap instead of climbing the log curve. Against this
+   repo's own census (`SUBAGENT foot ≈ −206 + 65.4·ln(age_s)`, r²=0.967, ~212 MB at 600 s; MAIN
+   plateaus ~450 MB) that is ~**+240 MB per concurrent subagent, ~2.9 GB at our default N=12 fan-out**,
+   on a box whose established failure mode is compressor-page exhaustion. `CLAUDE_CODE_FORK_SUBAGENT`
+   appears 7× in the 2.1.234 binary, so there is an off switch to set *before* the first fan-out.
+   ⚠️ Unverified — this axis's verifier never returned.
+2. **The version pin is 7–8 sites, not one.** SSOT is `~/.zshrc:496`; copies at `accounts.json:14`,
+   `hooks/model-permission-decider.py:93`, `scripts/lib/cloud-create.sh:116`,
+   `scripts/capacity-ramp.sh:51`, `scripts/mcp-modal-probe.py:28`, `scripts/mcp-modal-e2e-probe.py:12`,
+   `bin/cc-offload:87`. A flip that edits only `~/.zshrc` leaves the rest pointing at a directory that
+   still exists and still works — silent drift. Also: `docs/activation/pending-activation/28-cc-220-advance-activate.sh`
+   is hardcoded `FROM_DIR="claude-219"` / `TO_DIR="claude-220"` with no env override, and its backup
+   namespace `zshrc.cc220-*` would collide with a copied 234 script's `--undo`.
+
+The soak rule is satisfiable without a waiver: every version ≥ 2.1.229 carries the fix, and **2.1.234
+qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no successor ships.
+
+## 5 · Still unmeasured
+
+- **The mid-turn regime.** Every A/B cell auth-failed in <1 s, so no measurement of an *active,
+  model-driven turn* exists on either binary — precisely the phase the vendor's claim is about. The
+  GC-isolating null (+0.6%) is measured at startup/idle, so it bounds the idle regime, not the busy one.
+- **Whether the daemon population scales with session count** — decides whether the gate is merely
+  mis-keyed or actively self-defeating. One `cc-dispatch`-instance-count vs session-count regression away.
+- **`kernel_task`'s runnable contribution** — absent from `ps -axM` entirely (~720 kernel threads
+  invisible against `top`'s 5593).
+
+**The one next measurement:** a turn-latency series. The reframing that "~15 is a felt *latency*
+ceiling, not an admission wall" is the most consequential claim in the wave and it was refuted as
+*unsupported* — there is no turn-latency instrument, no queue depth, no wait-time distribution
+anywhere in the fleet. The box demonstrably admits 52 resident sessions; what degrades at ~15 has
+never been measured, only felt. Until it is, every capacity lever here is aimed at a wall nobody has
+observed.
