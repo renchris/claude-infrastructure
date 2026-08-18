@@ -26,7 +26,23 @@ setup() {
   export CC_DECIDE_BIN="$BSTUB" CC_BACKLOG_BIN="$BSTUB" CC_CUSTODY_BIN="$CSTUB"
 }
 
-@test "G2 CLOSED: a scope frozen in worktree A is READ by a fresh worktree B of the same repo" {
+# Mint a real succession edge THROUGH THE LIB'S OWN WRITER — never by hand-writing lineage.tsv.
+# A test that wrote the row itself would be a second copy of the format, and the reader agreeing
+# with the test would then prove nothing about the reader agreeing with handoff-fire.sh.
+_edge() {  # $1=firing cwd  $2=fired cwd
+  bash -c ". '$REPO_ROOT/hooks/lib/dod-path.sh' && dod_lineage_record '$1' '$2' test"
+}
+
+@test "G2 CLOSED: a scope frozen in worktree A is READ by its SUCCESSOR worktree B of the same repo" {
+  # THE EDGE IS PART OF THE SETUP NOW, AND THAT IS NOT A NARROWED FALSIFIER — it is the input this
+  # case was always missing. This case and the crosstalk case below have the SAME setup (A freezes,
+  # B reads) and OPPOSITE required answers (here B must inherit; there B must not). No function of
+  # that setup can satisfy both, so "B inherits from A" was never derivable from the repo alone:
+  # what distinguishes a successor from a concurrent sibling is whether a succession was RECORDED.
+  # Minting it here is what makes this case state the invariant it always claimed to — a SUCCESSOR
+  # inherits — rather than the weaker "any worktree of the repo inherits" it could only express
+  # before. The un-recorded direction is pinned separately below, so neither answer is assumed.
+  _edge "$A" "$B"
   ( cd "$A" && "$DP" set "Scope (frozen): the wave's contract" ) >/dev/null
   run bash -c "cd '$B' && '$DP' get"
   [ "$status" -eq 0 ]
@@ -86,22 +102,21 @@ setup() {
 # The axis is pinned INERT on the legacy side: neither worktree has a legacy path-hash file here,
 # so anything these cases observe comes from the repo-key store alone.
 #
-# THESE TWO CASES ARE RED ON PURPOSE AND ARE GATED OFF BY DEFAULT. They are the reproducible
-# red-proof for a defect that CANNOT be fixed from state this tree records — see
-# docs/research/dod-crosstalk-2026-08-18.md. Nothing in the store attributes a capture to a wave,
-# and the DEFAULT succession (`handoff-fire.sh --recycle`) writes no lineage record at all
-# (handoff-fire.sh:7358 — `RECYCLE=0` is a precondition of the fired-peer stamp), so every read-side
-# rule buildable today either keeps the crosstalk or re-breaks the hop test 1 pins. Reproduce with:
-#     CC_DOD_CROSSTALK_REDPROOF=1 bats tests/dod-path.bats
-# UNSKIP the day per-capture provenance + a lineage token exist; that is the fix, not a read-side
-# heuristic.
-_crosstalk_gate() {
-  [ "${CC_DOD_CROSSTALK_REDPROOF:-0}" = 1 ] \
-    || skip "known-red: no wave identity exists to fix it — docs/research/dod-crosstalk-2026-08-18.md"
-}
+# CLOSED 2026-08-18 (row 4de3d0f9c0e1, prerequisite 2) — previously red-on-purpose and gated off,
+# because the fix needed an input the tree did not record. It records one now: a succession edge
+# (firing worktree → fired worktree) minted by handoff-fire.sh at the single site where LAUNCH_DIR
+# resolves, `--recycle` included. The reader inherits along that lineage and drops a foreign wave's
+# blocks. The gate and CC_DOD_CROSSTALK_REDPROOF are gone — a permanently-skipped case reports
+# nothing, and these now run on every invocation like every other case in this file.
+#
+# BOTH waves below are RECORDED waves fired from a common lead L. That matters: it proves the
+# filter DISCRIMINATES along lineage rather than merely doing "no record ⇒ inherit nothing", which
+# a setup with no edges at all could not tell apart. The un-recorded direction is pinned in its own
+# case further down.
 
 @test "CROSSTALK: wave B's REMAINDER counts ONLY its own frozen items, not a concurrent wave A's" {
-  _crosstalk_gate
+  local L="$BATS_TEST_TMPDIR/wt-lead"; git clone -q "$O" "$L" 2>/dev/null
+  _edge "$L" "$A"; _edge "$L" "$B"        # one lead, two concurrent waves — neither descends the other
   ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
   printf -- '- [ ] alpha (wave A)\n' >> "$(cd "$A" && "$DP" path)"
   ( cd "$B" && "$DP" set "Scope (frozen): wave B contract" ) >/dev/null
@@ -115,16 +130,73 @@ _crosstalk_gate() {
 }
 
 @test "CROSSTALK: a concurrent wave A's frozen scope is not injected into wave B as binding" {
-  _crosstalk_gate
+  local L="$BATS_TEST_TMPDIR/wt-lead"; git clone -q "$O" "$L" 2>/dev/null
+  _edge "$L" "$A"; _edge "$L" "$B"
   ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
+  ( cd "$B" && "$DP" set "Scope (frozen): wave B contract" ) >/dev/null
   run bash -c "printf '%s' '{\"hook_event_name\":\"SessionStart\",\"cwd\":\"$B\"}' | '$DP'"
   [ "$status" -eq 0 ]
-  if grep -q 'wave A contract' <<<"$output"; then
-    echo "wave B was handed a concurrent sibling's scope as binding" >&2; false
+  local n
+  n="$(printf '%s' "$output" | grep -cF 'wave A contract' || true)"
+  if [ "$n" -ne 0 ]; then
+    echo "wave B was handed a concurrent sibling's scope as binding ($n hit(s))" >&2; false
   fi
+  # …and the injection is not merely EMPTY — B's own contract must still be there. A filter that
+  # dropped everything would pass the assertion above while destroying the feature.
+  printf '%s' "$output" | grep -qF 'wave B contract'
+}
+
+@test "LINEAGE: a predecessor's scope is inherited TRANSITIVELY (A → B → C)" {
+  local C="$BATS_TEST_TMPDIR/wt-c"; git clone -q "$O" "$C" 2>/dev/null
+  _edge "$A" "$B"; _edge "$B" "$C"
+  ( cd "$A" && "$DP" set "Scope (frozen): the grandparent contract" ) >/dev/null
+  run bash -c "cd '$C' && '$DP' get"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'the grandparent contract'
+}
+
+@test "LOSSLESS: a capture with NO toplevel stamp is inherited by any worktree (fail-open)" {
+  # Every capture written before per-capture provenance landed is unattributable. The filter must
+  # never guess at those — dropping them would turn this fix into the very blank-contract
+  # regression the repo key exists to prevent.
+  local f; f="$(cd "$A" && "$DP" path)"
+  mkdir -p "$(dirname "$f")"
+  printf '# hdr\n\n## 2026-01-01T00:00:00Z (pre-provenance)\nScope (frozen): the unattributed contract\n\n' > "$f"
+  run bash -c "cd '$B' && '$DP' get"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'the unattributed contract'
+}
+
+@test "ISOLATION: an UN-RECORDED concurrent worktree does NOT inherit (the accepted cost, pinned)" {
+  # A worktree nobody fired — a hand-made `claude -w` sibling — has no succession edge, so it is
+  # treated as concurrent and re-freezes its own scope. This is the deliberate trade, recorded here
+  # so it is a decision rather than an accident: see docs/research/dod-crosstalk-2026-08-18.md §5.
+  ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
+  run bash -c "cd '$B' && '$DP' get"
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s' "$output" | grep -cF 'wave A contract' || true)"
+  [ "$n" -eq 0 ]
+}
+
+@test "LINEAGE: a cycle (A→B and B→A) terminates and still inherits" {
+  _edge "$A" "$B"; _edge "$B" "$A"
+  ( cd "$A" && "$DP" set "Scope (frozen): the cyclic contract" ) >/dev/null
+  run timeout 30 bash -c "cd '$B' && '$DP' get"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'the cyclic contract'
+}
+
+@test "LINEAGE: a same-dir succession records NO edge (a self-loop says nothing)" {
+  _edge "$A" "$A"
+  [ ! -s "$WRAP_DOD_DIR/lineage.tsv" ]
 }
 
 @test "SEAM: WRAP_DOD_FILE overrides both modes to one file (the producer↔consumer test contract)" {
+  # This case's subject is PATH RESOLUTION — one file, both modes — so it mints the succession edge
+  # for the same reason case 1 does, to keep lineage out of what it is actually measuring. The lib
+  # deliberately carves NO exception for WRAP_DOD_FILE: an override that silently disabled the
+  # filter would be a second, invisible set of rules for the surface tests run on.
+  _edge "$A" "$B"
   export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/one.md"
   ( cd "$A" && "$DP" set "Scope (frozen): pinned" ) >/dev/null
   [ -f "$WRAP_DOD_FILE" ]

@@ -67,11 +67,23 @@ SH
   export SID_ENV="w1t0p0:$PANE_UUID"
   PF="$BATS_TEST_TMPDIR/brief.md"; printf 'body\n' > "$PF"
   LOG="$H/.claude/logs/handoffs.jsonl"
+
+  # The succession-lineage store (row 4de3d0f9c0e1). HOME is already repointed above, so the
+  # default would be hermetic anyway — pinned explicitly because a drive that wrote lineage rows
+  # into the operator's real ~/.claude/autonomy/dod would be a live-state write from a test suite.
+  export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"
+  LINEAGE="$WRAP_DOD_DIR/lineage.tsv"
+  RELOC_DIR="$BATS_TEST_TMPDIR/relocated"; mkdir -p "$RELOC_DIR"
 }
 
 drive_recycle() { # a real --recycle that cannot resolve its pane → aborts before the detach
   run env ITERM_SESSION_ID="$SID_ENV" timeout 90 \
       bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle
+}
+
+drive_recycle_reloc() { # ...the RELOCATING form: --cwd makes the fired dir differ from the firing one
+  run env ITERM_SESSION_ID="$SID_ENV" timeout 90 \
+      bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle --cwd "$RELOC_DIR"
 }
 
 @test "an attempt that dies BEFORE the detach still leaves a row — the denominator that did not exist" {
@@ -106,4 +118,44 @@ drive_recycle() { # a real --recycle that cannot resolve its pane → aborts bef
   grep '"class":"recycle-intent"' "$LOG" | tail -1 \
     | jq -e --arg p "$PANE_UUID" '.firing_sid==$p and .target_pane==$p and .gate=="recycle"' >/dev/null \
     || { echo "intent row is missing its parent-side identity:"; grep '"class":"recycle-intent"' "$LOG"; false; }
+}
+
+# ── SUCCESSION LINEAGE EDGE (row 4de3d0f9c0e1, prerequisite 2) ──────────────────────────────────
+# WHY THESE LIVE IN THIS SUITE. The lineage READER is pinned in tests/dod-path.bats; what could not
+# be pinned there is that anything ever WRITES an edge. `--recycle` is the succession CLAUDE.md
+# names the default and it writes no fired-peer stamp at all (handoff-fire.sh:7358 makes RECYCLE=0
+# a precondition), so an unwritten edge would leave the whole crosstalk fix inert while every
+# reader test stayed green — the store would simply never fill. This suite already drives a REAL
+# non-dry recycle safely by construction (see the header), which is exactly what that proof needs.
+
+@test "LINEAGE: a RELOCATING --recycle records the firing→fired worktree edge" {
+  drive_recycle_reloc
+  [ -f "$LINEAGE" ] || { echo "no lineage row for a relocating recycle — the reader can never fill"; false; }
+  # field 2 = firing toplevel, field 3 = fired dir; the row must name THIS drive's target
+  local n
+  n="$(awk -F'\t' -v d="$RELOC_DIR" '$3==d && $2!=d {c++} END{print c+0}' "$LINEAGE")"
+  [ "$n" -ge 1 ] || { echo "no edge whose fired dir is $RELOC_DIR:"; cat "$LINEAGE"; false; }
+  # ...and it is the recycle label, not a generic fire — the path that had NO record before
+  awk -F'\t' -v d="$RELOC_DIR" '$3==d {print $4}' "$LINEAGE" | grep -qx recycle \
+    || { echo "edge recorded, but not labelled as a recycle:"; cat "$LINEAGE"; false; }
+}
+
+@test "LINEAGE: a SAME-DIR --recycle records NO edge (the self-loop says nothing)" {
+  # LAUNCH_DIR IS $PWD on this path, so the toplevel identity is unchanged and an edge would be a
+  # self-loop. This is the control that keeps the case above honest: it proves the row appears
+  # because the DIRECTORY CHANGED, not merely because a recycle ran.
+  drive_recycle
+  if [ -f "$LINEAGE" ]; then
+    local n; n="$(grep -c . "$LINEAGE" || true)"
+    [ "${n:-0}" -eq 0 ] || { echo "a same-dir recycle minted a self-loop edge:"; cat "$LINEAGE"; false; }
+  fi
+}
+
+@test "LINEAGE: --dry-run records NO edge (a fire that never happened has no lineage)" {
+  run env ITERM_SESSION_ID="$SID_ENV" timeout 90 \
+      bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle --cwd "$RELOC_DIR" --dry-run
+  if [ -f "$LINEAGE" ]; then
+    local n; n="$(grep -c . "$LINEAGE" || true)"
+    [ "${n:-0}" -eq 0 ] || { echo "a dry run minted an edge for a session that never existed:"; cat "$LINEAGE"; false; }
+  fi
 }

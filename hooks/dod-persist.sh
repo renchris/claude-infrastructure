@@ -53,10 +53,27 @@ if ! . "$_dplib" 2>/dev/null; then
   }
   dod_read_files() { local f; f="$(dod_path_for "$1" read)"; [ -f "$f" ] && printf '%s\n' "$f"; return 0; }
 fi
+# Lineage fallbacks for a live layer whose lib predates the succession filter (row 4de3d0f9c0e1).
+# Both degrade to the PRE-filter behaviour — unfiltered content, own toplevel only — because the
+# fail-open direction here is "keeps the crosstalk", never "loses a contract you own".
+command -v dod_toplevel >/dev/null 2>&1 || dod_toplevel() {
+  local t; t="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)" || t=""
+  [ -n "$t" ] || t="${1:-.}"; printf '%s' "$t"; }
+command -v dod_filter_for >/dev/null 2>&1 || dod_filter_for() {
+  [ -f "${2:-}" ] && { cat "$2" 2>/dev/null || true; }; return 0; }
+command -v dod_read_content >/dev/null 2>&1 || dod_read_content() {
+  local f; while IFS= read -r f; do [ -n "$f" ] && [ -f "$f" ] || continue
+    cat "$f" 2>/dev/null || true; printf '\n'; done <<DPRC
+$(dod_read_files "${1:-$PWD}")
+DPRC
+  return 0; }
 dod_file_for() { dod_path_for "$1" write; }   # the canonical path — where new captures go
 
-# ── newest "Scope (frozen): …" line already recorded in the durable file ──
-last_recorded_scope() { grep -aoE 'Scope \(frozen\):.*' "$1" 2>/dev/null | tail -1; }
+# ── newest "Scope (frozen): …" line already recorded — reads the STREAM on stdin ──
+# Took a FILE argument until the lineage filter landed; every caller now pipes the
+# LINEAGE-FILTERED stream (dod_filter_for) instead, so the argument had no remaining reader. Left
+# as a dual-mode `"$@"` it would be dead surface AND a shellcheck SC2120 on every land.
+last_recorded_scope() { grep -aoE 'Scope \(frozen\):.*' 2>/dev/null | tail -1; }
 
 # ── newest "Scope (frozen): …" line stated anywhere in a transcript (all text records) ──
 extract_scope() {  # $1 = transcript path
@@ -91,9 +108,11 @@ extract_grown() {  # $1 = transcript path
 persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label  [$5=session-id, "" when unknown]
   local ts prov top sid
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  # a linked worktree's toplevel IS the worktree root — exactly the identity the repo key collapses
-  top="$(git -C "$3" rev-parse --show-toplevel 2>/dev/null)" || top=""
-  [ -n "$top" ] || top="$3"
+  # a linked worktree's toplevel IS the worktree root — exactly the identity the repo key collapses.
+  # ONE author (hooks/lib/dod-path.sh dod_toplevel): the lineage filter compares against this stamp
+  # BYTE-EQUAL, so a second copy of the formula would not be a style problem — it would be a silent
+  # filter miss, which is the same class of defect the path formula's own two copies were.
+  top="$(dod_toplevel "$3")"
   prov=" · toplevel=${top}"
   sid="${5:-}"
   if [ -n "$sid" ]; then prov="${prov} · session=${sid}"; fi
@@ -115,7 +134,11 @@ case "${1:-}" in
     [ -n "$scope" ] || { printf 'usage: dod-persist.sh set "<Scope (frozen): DoD>"\n' >&2; exit 2; }
     case "$scope" in *"Scope (frozen):"*|*"Scope (grown):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
     f="$(dod_path_for "$PWD" write)"
-    if [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; then
+    # The dedup compares against MY OWN last capture, not the file's. Unfiltered it would read a
+    # concurrent sibling's identical scope as "unchanged", skip the write, and leave this wave with
+    # no capture of its own — which the lineage filter would then correctly show as a BLANK
+    # contract. Filtering here is what stops the crosstalk fix from manufacturing that hole.
+    if [ -f "$f" ] && [ "$scope" = "$(dod_filter_for "$PWD" "$f" | last_recorded_scope)" ]; then
       printf 'unchanged → %s\n' "$f"; exit 0
     fi
     persist_dod "$f" "$scope" "$PWD" "manual-set" "${CLAUDE_CODE_SESSION_ID:-}"
@@ -128,13 +151,13 @@ case "${1:-}" in
     # DoD-carry (T-P4-4). Empty output (exit 0) = no DoD recorded yet; callers degrade gracefully.
     # W3: two read sources — the repo-key store (new captures) wins; this toplevel's legacy file
     # answers only when the new store has no scope yet.
-    _g=""
+    _g=""; _gc="${2:-$PWD}"
     while IFS= read -r _gf; do
       [ -n "$_gf" ] || continue
-      _g="$(last_recorded_scope "$_gf")"
+      _g="$(dod_filter_for "$_gc" "$_gf" | last_recorded_scope)"
       [ -n "$_g" ] && break
     done <<GETEOF
-$(dod_read_files "${2:-$PWD}")
+$(dod_read_files "$_gc")
 GETEOF
     printf '%s\n' "$_g"; exit 0 ;;
 esac
@@ -156,15 +179,12 @@ case "$event" in
     # W3: inject BOTH read sources (repo-key store first, then this toplevel's legacy) — the
     # lossless half of the migration: per-toplevel history keeps injecting exactly where it always
     # did, while every worktree of the repo now shares the repo-key captures.
-    content=""
-    while IFS= read -r _sf; do
-      [ -n "$_sf" ] && [ -f "$_sf" ] || continue
-      content="${content}$(cat "$_sf" 2>/dev/null || true)
-
-"
-    done <<SSEOF
-$(dod_read_files "$cwd")
-SSEOF
+    # LINEAGE-FILTERED (row 4de3d0f9c0e1, prerequisite 2). The repo key is byte-equal across every
+    # worktree of the repo, so this used to hand a session every CONCURRENT wave's contract too —
+    # 101 worktrees, 15 distinct frozen scopes, and no input existed to tell them apart. There is
+    # one now: dod_read_content keeps this wave's captures and its recorded predecessors', drops a
+    # foreign wave's, and keeps anything unattributable (see hooks/lib/dod-path.sh § FAIL-OPEN).
+    content="$(dod_read_content "$cwd")"
     [ -n "$content" ] || exit 0
     # NEWEST-WINS FRAME (docs/research/dod-crosstalk-2026-08-18.md §2, §5 adjacent finding). This
     # used to declare "Every 'Scope (frozen):' line below is binding … do NOT narrow scope or
@@ -179,7 +199,7 @@ SSEOF
     cur=""
     while IFS= read -r _cf; do
       [ -n "$_cf" ] && [ -f "$_cf" ] || continue
-      cur="$(last_recorded_scope "$_cf")"
+      cur="$(dod_filter_for "$cwd" "$_cf" | last_recorded_scope)"
       [ -n "$cur" ] && break
     done <<CUREOF
 $(dod_read_files "$cwd")
@@ -198,7 +218,7 @@ CUREOF
 
 $_lead
 
-Everything below is the store's full INTEGRATE-only history — ${ncap} capture(s) across every worktree of this repo, newest last. It is prior CONTEXT, NOT additional binding scope: this store is keyed on repo identity, so a capture written by a concurrent or already-finished wave in another worktree is not yours to complete. Each '## ' block names the toplevel that wrote it — use that to tell your own captures from a sibling's.
+Everything below is this wave's INTEGRATE-only history — ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest last. A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it.
 
 $content"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
@@ -211,14 +231,24 @@ $content"
     f="$(dod_path_for "$cwd" write)"
     scope="$(extract_scope "$tp")"
     if [ -n "$scope" ]; then
-      if ! { [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; }; then   # stale/absent only
+      # filtered, for the same reason `set` is: an identical scope frozen by a CONCURRENT wave must
+      # not read as "already recorded" and leave this wave with no capture of its own
+      if ! { [ -f "$f" ] && [ "$scope" = "$(dod_filter_for "$cwd" "$f" | last_recorded_scope)" ]; }; then
         persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}" "$sid"
       fi
     fi
     # Follow-On Gate growth: each DISTINCT grown line appends exactly once (INTEGRATE)
     while IFS= read -r g; do
       [ -n "$g" ] || continue
-      [ -f "$f" ] && grep -qF -- "$g" "$f" 2>/dev/null && continue
+      # COUNT, never `grep -q`: this file runs under `set -o pipefail`, and -q exits on the first
+      # match, so the upstream filter takes SIGPIPE and the whole pipeline reports FAILURE on the
+      # very input it just matched — a dedup that silently re-appends every grown line forever.
+      # Caught by tests/dod-persist.bats case 16, which counts the appends.
+      if [ -f "$f" ]; then
+        _gseen="$(dod_filter_for "$cwd" "$f" | grep -cF -- "$g" 2>/dev/null || true)"
+        case "${_gseen:-0}" in ''|*[!0-9]*) _gseen=0 ;; esac
+        [ "$_gseen" -gt 0 ] && continue
+      fi
       persist_dod "$f" "$g" "$cwd" "PreCompact:${trigger}:grown" "$sid"
     done <<GROWN_EOF
 $(extract_grown "$tp")
