@@ -135,7 +135,15 @@ while IFS= read -r b; do
   fi
   # Exact match on the whole line — a substring test would let /tmp/fire-a.txt be "found" by a row
   # naming /tmp/fire-ab.txt, and the sweep's whole claim is that the answer is exact.
-  if printf '%s\n' "$FIRED" | grep -qxF -- "$b"; then
+  #
+  # A HERE-STRING, NOT A PIPE, AND THIS WAS A REAL BUG THE LAND GATE CAUGHT. `printf … | grep -q`
+  # under `set -o pipefail` is the early-exit-consumer trap: grep -q exits the instant it matches,
+  # SIGPIPEs printf, and pipefail then reports the PIPELINE as failed — so the condition reads
+  # FALSE exactly when the brief WAS found. In this sweep that inverts the only output it has: a
+  # clean, successfully-fired brief would be reported as a lost succession, on the match path,
+  # every time. A here-string is not a pipeline, so there is no producer to signal and nothing to
+  # invert.
+  if grep -qxF -- "$b" <<<"$FIRED"; then
     n_clean=$(( n_clean + 1 ))
   else
     n_unfired=$(( n_unfired + 1 ))
