@@ -266,6 +266,40 @@ desk_role_state() { # → "" (role file present and non-empty) | ":no-role-file"
   [ -n "$rv" ] || printf ':role-empty'
   return 0
 }
+# ── DISARM TTL + VISIBILITY (backlog ac914e8982b8) ────────────────────────────────────────────────
+# `clear` used to write a disarm marker that was read ONLY as `[ -f ]` — no age term anywhere — and
+# every reader rendered it identically no matter how old it was. Measured on a fixture: an opt-out
+# backdated 8 days and one written 1 second ago produced BYTE-IDENTICAL IDL rows
+# (`"reason":"disarmed"`) and the same bare `status` line, while a desk at 90% fill was fully
+# suppressed. So the two states an operator most needs to tell apart — "I deliberately turned this
+# off this morning" and "this has been off for over a week and nobody remembers why" — were the same
+# state on the wire. That is the same pathology this file already fixed for the arm channel
+# (`:no-role-file` / `:role-empty` above): an inert mechanism indistinguishable from an absent one,
+# whose only repair is to make the states DIFFERENT ON THE WIRE.
+#
+# Note the data was already on disk and simply never read: `clear` has always written an ISO
+# timestamp into the marker. The defect was in the READERS, not the writer.
+DISARM_TTL_S="${CC_WR_DISARM_TTL_S:-604800}"               # opt-out expires after this long (7d; 0 ⇒ never expires)
+DISARM_STALE_S="${CC_WR_DISARM_STALE_S:-86400}"            # past this age the abstain token carries a `:stale` suffix
+# Age of a marker in seconds, from its MTIME. Deliberately not the ISO string the file contains: the
+# content and the mtime are written by the same redirect so they agree at creation, and mtime needs
+# neither a locale-dependent parse nor the BSD/GNU `date` fork-dance. Unreadable ⇒ 0 (treat as fresh:
+# an unreadable marker must never silently expire an operator's opt-out).
+marker_age_s() {
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || true)"
+  case "$m" in (*[!0-9]*|'') printf '0'; return ;; esac
+  printf '%s' "$(( $(date +%s) - m ))"
+}
+# Human age for the `status` pull surface — the operator reaches for this one, so it must not make
+# them do arithmetic on an epoch.
+fmt_age() {
+  local s="${1:-0}"
+  if   [ "$s" -ge 86400 ]; then printf '%dd%dh' "$(( s / 86400 ))" "$(( (s % 86400) / 3600 ))"
+  elif [ "$s" -ge 3600 ];  then printf '%dh%dm' "$(( s / 3600 ))"  "$(( (s % 3600) / 60 ))"
+  else printf '%dm' "$(( s / 60 ))"; fi
+}
+
 NOTIFY_CMD="${CC_WR_NOTIFY:-}"                            # T-P1-8: empty → builtin osascript operator page
 PUSH_BIN="${CC_WR_PUSH:-$CFG/hooks/push-critical.sh}"      # T-P1-8: Pushover break-through (INERT unless armed)
 ESCALATE_DEDUP_S="${CC_WR_ESCALATE_DEDUP_S:-900}"          # T-P1-8: page-once cadence while a desk stays wedged
@@ -435,7 +469,21 @@ case "${1:-}" in
   status)
     a="$(arm_for "$PWD")"; c="$(cooldown_for "$PWD")"
     if [ -f "$KILL" ]; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
-    if [ -f "$(disarm_for "$PWD")" ]; then echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"; fi
+    d="$(disarm_for "$PWD")"
+    if [ -f "$d" ]; then
+      # An opt-out with no age on it reads as a broken hook. Name WHEN it was set, HOW OLD it is, and
+      # WHEN it stops suppressing — the three facts that separate a deliberate off from a forgotten one.
+      dage="$(marker_age_s "$d")"; dset="$(head -1 "$d" 2>/dev/null | tr -d '[:space:]')"
+      echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"
+      echo "  set: ${dset:-unknown} ($(fmt_age "$dage") ago)"
+      if [ "$DISARM_TTL_S" -le 0 ] 2>/dev/null; then
+        echo "  ttl: DISABLED (CC_WR_DISARM_TTL_S=0) — this opt-out never expires on its own"
+      elif [ "$dage" -ge "$DISARM_TTL_S" ] 2>/dev/null; then
+        echo "  ttl: EXPIRED (>$(fmt_age "$DISARM_TTL_S")) — the next poll clears it and this desk re-arms"
+      else
+        echo "  ttl: expires in $(fmt_age "$(( DISARM_TTL_S - dage ))")"
+      fi
+    fi
     echo "thresholds: idle≥${T_IDLE}% (adaptive → floor ${T_IDLE_FLOOR}% over ${IDLE_DECAY_S}s idle) · busy-force≥${T_BUSY}% · rot-floor ${ROT_FLOOR}%"
     echo "context-econ: conv-hold ${CONV_HOLD_S}s · nudge≥${T_NUDGE}% (re-arm +${NUDGE_REARM}%) · early-busy≥${T_BUSY_MIN}% @ forecast≤${LEAD_MIN}min"
     echo "size axis:    transcript≥${SIZE_MB}MB ⇒ full trigger (may recycle) · RSS≥${RSS_PAGE_MB}MB ⇒ PAGE ONLY (never auto-recycles; 0 disables either)"
@@ -603,7 +651,27 @@ gc_bats_pollution
 # without the manual `arm` step. A per-desk `clear` disarm marker suppresses BOTH the sentinel and the
 # role-arm (the kill-switch must still bite a role-holding desk). LIVE exec stays gated on live_for, so
 # a role-armed desk is SHADOW by default (damp-first).
-[ -f "$(disarm_for "$CWD")" ] && abstain "disarmed"
+_dm="$(disarm_for "$CWD")"
+if [ -f "$_dm" ]; then
+  _dage="$(marker_age_s "$_dm")"
+  if [ "$DISARM_TTL_S" -gt 0 ] 2>/dev/null && [ "$_dage" -ge "$DISARM_TTL_S" ] 2>/dev/null; then
+    # EXPIRED — an opt-out is a decision with a shelf life, not a permanent property of the desk.
+    # Cleared here (not merely ignored) so `status` and every sibling reader converge on the same
+    # answer instead of one saying DISARMED while the hook proceeds. Logged as its own disposition:
+    # the expiry is an EVENT, and a state change nothing records is how the next 8-day opt-out
+    # becomes invisible again.
+    rm -f "$_dm" 2>/dev/null
+    log_idl gc "disarm-expired" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" \
+      '{gc:"disarm-ttl",disarm_age_s:$age,disarm_ttl_s:$ttl}')"
+  else
+    # Suffix AFTER the first ':' so scripts/idl-abstain-alarm.sh's reason-token projection
+    # (`split(":")[0]`) still reads `disarmed` — same contract the `not-armed:…` suffix keeps.
+    _dsfx=""; [ "$_dage" -ge "$DISARM_STALE_S" ] 2>/dev/null && _dsfx=":stale"
+    log_idl abstained "disarmed$_dsfx" "$(jq -cn --argjson age "$_dage" --argjson ttl "$DISARM_TTL_S" \
+      '{disarm_age_s:$age,disarm_ttl_s:$ttl}')"
+    exit 0
+  fi
+fi
 armed_by=""
 if   [ -f "$(arm_for "$CWD")" ]; then armed_by="sentinel"
 elif is_monitoring_desk;        then armed_by="desk-role"
