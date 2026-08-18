@@ -166,7 +166,39 @@ case "$event" in
 $(dod_read_files "$cwd")
 SSEOF
     [ -n "$content" ] || exit 0
-    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A). Every 'Scope (frozen):' line below is binding, and every 'Scope (grown): +<item>' line extends it (Follow-On Gate F1-F4 PASS — already authorized, do NOT re-ask); do NOT narrow scope or declare done until ALL of it is met.
+    # NEWEST-WINS FRAME (docs/research/dod-crosstalk-2026-08-18.md §2, §5 adjacent finding). This
+    # used to declare "Every 'Scope (frozen):' line below is binding … do NOT narrow scope or
+    # declare done until ALL of it is met" over the WHOLE file. The store is repo-KEYED, so that
+    # file is shared by every worktree of the repo — 101 of them here, 15 distinct frozen scopes —
+    # and the claim was therefore false for all but one: a session was handed concurrent and
+    # finished waves' contracts as its own, every SessionStart, and could not tell them apart.
+    # It also contradicted THIS SCRIPT: `get` and last_recorded_scope both already return the
+    # NEWEST frozen line only. The frame now says what the rest of the store has always meant.
+    # LOSSLESS — the full history is still injected verbatim, reframed as context rather than
+    # dropped, so nothing a successor legitimately inherits can go missing.
+    cur=""
+    while IFS= read -r _cf; do
+      [ -n "$_cf" ] && [ -f "$_cf" ] || continue
+      cur="$(last_recorded_scope "$_cf")"
+      [ -n "$cur" ] && break
+    done <<CUREOF
+$(dod_read_files "$cwd")
+CUREOF
+    ncap="$(printf '%s' "$content" | grep -c '^## ' 2>/dev/null || echo 0)"
+    case "$ncap" in ''|*[!0-9]*) ncap=0 ;; esac
+    if [ -n "$cur" ]; then
+      _lead="THE CURRENT CONTRACT — this is what binds you, and every 'Scope (grown): +<item>' line extends it (Follow-On Gate F1-F4 PASS — already authorized, do NOT re-ask). Do NOT narrow it or declare done until ALL of it is met:
+
+    $cur"
+    else
+      # no frozen line anywhere (a grown-only store): name no contract rather than invent one
+      _lead="THE CURRENT CONTRACT is not recorded — no 'Scope (frozen):' line exists in this store yet. Treat the history below as context only, and freeze a scope before claiming completeness."
+    fi
+    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
+
+$_lead
+
+Everything below is the store's full INTEGRATE-only history — ${ncap} capture(s) across every worktree of this repo, newest last. It is prior CONTEXT, NOT additional binding scope: this store is keyed on repo identity, so a capture written by a concurrent or already-finished wave in another worktree is not yours to complete. Each '## ' block names the toplevel that wrote it — use that to tell your own captures from a sibling's.
 
 $content"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true

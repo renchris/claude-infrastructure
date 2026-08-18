@@ -98,3 +98,28 @@ Sequenced, because (1) is a precondition for any version of (2):
 *entire* monotone history as binding — 15 contracts today, unbounded tomorrow. Even a legitimate
 successor inheriting from a legitimate predecessor is handed every scope the repo ever froze. That
 is a bounding question about the injection, not about identity, and is fixable on its own.
+
+**DONE 2026-08-18 (drain recycle #24) — and it needed no ruling, because the frame contradicted its
+own store.** `get` and `last_recorded_scope` have always returned the NEWEST `Scope (frozen):` line
+only; only the SessionStart frame claimed *all* of them bind. The injection now names that newest
+line as `THE CURRENT CONTRACT` and labels the rest prior context, `NOT additional binding scope`,
+pointing at the `## ` block's new `toplevel=` stamp as the way to tell your own captures from a
+sibling's. **LOSSLESS** — the full history is still injected verbatim; nothing is dropped, so a
+legitimate inheritance cannot go missing. This is the *active* half of §2 closed; the latent
+REMAINDER-inflation half still needs wave identity and is unchanged. Cases 26–30 in
+`tests/dod-persist.bats`, each attributed: oldest-instead-of-newest reds 26 alone, dropping the
+history reds the lossless case 28 alone, losing the re-ask licence reds 29.
+
+### Instrument note — a dead assertion class this repo's own analyzer does not flag
+
+Found by measurement while writing case 27, and it cost two wrong diagnoses first. Bash's errexit
+rule states the shell does not exit *"if the command's return value is being inverted with `!`"*.
+So under bats a bare **`! cmd` is a live assertion ONLY as a test's FINAL command** (where bats
+takes the body's exit status); as an **intermediate** line it is DEAD and passes regardless of the
+truth. Measured with a positive control (`negprobe.bats`: `! true` as the last line DOES fail),
+and confirmed on the real case — `! printf … | grep -qF "<a string that was provably present>"`
+passed pre-fix. `scripts/bats-assert-liveness-fix.py --dry-run` reports **no dead assertions** on
+that same file, so the class is outside what it detects (it caught the sibling `A && B && C` form
+in the same land). The live form used here is a count: `n="$(… | grep -c … || true)"; [ "$n" -eq 0 ]`.
+Not filed as a row — this recycle closed none, and filing would end it net-positive on filings;
+recorded here and in memory `negated-assertion-dead-unless-final` so it is not re-derived.
