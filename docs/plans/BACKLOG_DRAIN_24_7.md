@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #22: `master-session-lifecycle` 7 → 6 open / 1 blocked. filed 0 /
+  closed 1.** Landed `9fad38d2c` (3 commits), content-verified on origin/main and **converged LIVE**
+  by content on both deploy paths. Blocked tail BY STRATUM: 1 row, `adf1bb6b5406`, venue=local, a
+  `source: needs` operator-platter row. **0 cloud-venue rows in this effort.** No stale claim left
+  (`5cd2ecf792ae` was claimed, worked partially, and explicitly reopened).
+
+  **`master-verification-integrity` was checked first and is already LOCAL-TRUE-ZERO** — its
+  headline "1 open" is `ebbf3adfb4d0` with `venuePlan=cloud`, deliberately routed off-box, and its
+  1 blocked row is operator-gated. Nothing there is drainable by this chain; a successor should not
+  re-derive it.
+
+  **CLOSED — `5e4ce121b64a` (context-economy instrumentation), all three residuals.** (a) was
+  already landed by #21. (b)'s remaining half: fill % is `input_tokens / window`, and the window
+  reached a durable store on exactly two **event-conditioned** paths — a fill-drop and a recycle —
+  so a session that did neither had **no denominator at all**. `statusline.sh` now upserts one
+  durable `{sid, window, model}` row per session under its own config root, and `cc-ctx-audit` reads
+  it as a third source *per config root*. (c) `/tmp/cc-telemetry/*.hist` finally has a consumer:
+  `cc-ctx-audit --burn`, whose live first reading is **p50 = 0.1, p95 = 0.5 fill-points/min over
+  n = 66 sessions, 13 excluded for no computable slope**. That distribution has never been readable
+  before, and every forecast arm in the subsystem steers on that axis.
+
+  🚨 **BSD `grep -R` CANNOT SEE THE LIVE LAYER, AND ITS NULL READS EXACTLY LIKE ABSENCE.** Verifying
+  (c)'s "nothing consumes `.hist`" claim, a recursive grep over `~/.claude/{scripts,bin,hooks}`
+  returned zero — while a direct grep on one file inside it returned 19 matches. The live layer is
+  **per-file symlinks**, and BSD's `-r`/`-R` do not follow symlinks met during the walk (GNU's `-R`
+  does). **Measured: recursive grep sees 7 of 407 files there — 1.7%.** So every "the live layer does
+  not contain X" ever answered on this box with a recursive grep is a **non-verdict**. The instrument
+  that works is an explicit file list: `find <dirs> \( -type f -o -type l \) -print0 | xargs -0 grep`.
+  The claim only held once re-run that way. Same shape as the memory
+  `caller-census-keyed-on-path-misses-the-name`, one layer down: the grep was right, the *walk* was
+  blind.
+
+  **ADVANCED, NOT CLOSED — `5cd2ecf792ae` (TWO-WAY MAIL storyboarded not built).** Its stated
+  blocking question — *the peer is drawn SMALLER and reads as a CHILD; two exits, no operator ruling
+  needed* — **is the wrong question, and both of its exits were barred by a ruling neither cites.**
+  Size is second-order. Every one of the beat's five frames carried a second creature
+  (`banner-storyboard.py:565`), and that composition is `gen.py`'s `"peer"` — THE VISITOR (v6b),
+  `kind: "WITHDRAWN"` — ruled out on **cause**, not composition: *"a session is never co-present with
+  its peers, they live in other panes"* (`gen.py:434`, `:490-513`). `gen.py:347-350` records that
+  reversing it is *"the spec owner's call, not this session's"*, and `:639-641` makes a WITHDRAWN
+  beat in `ALWAYS_EMITTED` a **build failure** so the revert must be argued. It holds *a fortiori*:
+  THE SUMMONING earns two bodies only because its second is called into existence and removes itself
+  inside the window (`:4058-4064`), while this peer was neither summoned nor sent away. **The exit
+  that needs no ruling is to NOT DRAW THE PEER** — the answer arrives from off-frame, which is THE
+  LETTER's own hard constraint used as the point rather than as a limitation, and it is cheaper than
+  either filed exit, both of which had to buy a second body first. The storyboard is amended to that
+  composition (`7463b1de0`), verified by CONTENT against a pristine origin/main worktree: 30
+  body-cell groups before (6/frame = two creatures) → 15 after (3/frame = one). **The row stays OPEN
+  — the beat is still not built into `gen.py`, and a re-specified question is not a built beat.**
+
+  **A CONTROL THAT PASSES PRE-FIX IS CLEARED BY MUTATION OR IT IS NOTHING** — seven mutations this
+  recycle, each reddening its intended case and only that case: durable source removed → the two
+  denominator cases; null-window imputed → the exclusion case (the one that passed pre-fix); slope
+  guards removed → the two burn-exclusion cases; containment removed / upsert guard removed / window
+  imputed → the three producer cases.
+
+  🚨 **`git checkout -- <file>` AS MUTATION CLEANUP DELETED AN UNCOMMITTED IMPLEMENTATION.** The
+  first mutation round restored with `git checkout`, which restores to the **committed** state — and
+  the implementation was not yet committed, so the whole reader change was silently reverted and the
+  next mutation ran against origin/main's version, reading as six spurious failures. **Commit before
+  mutating, and restore from a `cp` backup, never from git.** The inherited "tell every teammate to
+  COMMIT EARLY" applies to the lead exactly as much.
+
+  **A SUITE CAUGHT A REAL REGRESSION MID-CHANGE, and the catch was worth more than the feature.** The
+  first producer version read the window with its own `jq -r`; `tests/statusline-identity.bats`'
+  single-payload-extraction invariant went red on a **per-render hot path**. The read now reuses
+  `PAY_WINDOW` from the one existing extraction. The jq count moves 3 → 4 for the durable EMIT only,
+  and stays EXACT deliberately — what it pins is not "few jq calls" but "every jq call on a
+  per-render path is enumerated with its reason".
+
+  Suites, each with its `1..N` plan line seen in the same run: `ctx-audit` 1..26 (6 of 7 new cases
+  red pre-change), `statusline-identity` 1..23 (4 of 4 red pre-change), `context-econ` 1..33. Test
+  containment proven by COUNT, not by reading: `recycle-events.jsonl` held at 4,057 lines across
+  both suite runs and the new store was never created in the operator's config root.
+
+  **THE SPAWN GATE REFUSED THE ONE TEAMMATE ATTEMPTED (record #22: 0/1).** The brief for the
+  context-economy residuals was denied with *"Background subagents cannot write code… use
+  TeamCreate"* — and `TeamCreate` does not exist on this runtime, so the guard still has no compliant
+  path. Per the standing instruction the row was taken onto the lead rather than re-rolling wording.
+  Cumulative: #18 0/3, #19 1/1, #20 2/2, #21 2/3, #22 0/1.
+
 - **2026-08-18 ~15:30Z — lead (pane 102, recycled): the `blocked` pool is 75% OPERATOR-OWNED, so the
   headline ratio was never one number.** Ledger 409 open / 119 blocked. Stratifying the blocked pool
   by source settles what "block outran unblock ~6:1" actually meant: **89 of 119 are `source: needs`,
