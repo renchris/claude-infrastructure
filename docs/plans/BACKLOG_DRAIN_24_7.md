@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~00:40Z — recycle #17: `master-session-lifecycle` 27 open → `20 open / 1 blocked
+  (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 1 / closed 7. Ten commits, ONE land.**
+  Seven rows: three on the lead (`471d2f3f98df` cc-announce, `08c746312188` handoff-disposition,
+  `8370af320af5` comms-strand-report), two from teammate t2 (`aa8aed0d713a` cc-roles + the phone
+  leg) and t4 (`dcf58e1ba056` cc-classify), two from t3 (`ac914e8982b8` + `fc54aeebec4a`,
+  waiting-recycle — one file, one owner). The one filing (`ebbf3adfb4d0`, linked to
+  `master-verification-integrity`, NOT to the effort being drained) is below.
+
+  **THE FINDING FOR #18: THE WATCHER, THE ROLE AND THE MAILBOX ALL PROVED THAT AN IDENTITY IS
+  PLURAL, AND EVERY ONE OF THESE BUGS IS A PROBE THAT LEARNED ONLY ONE SPELLING OF IT.** Three
+  independent rows this recycle turned out to be the same shape, and none of them said so:
+  * `08c746312188` — `handoff-disposition.sh` asked `pgrep -f "cc-await-ping.*$uuid"`. The wake
+    floor arms that watcher with **no id in argv, deliberately** (`session-continue.sh:595`), so
+    the tool can derive the key itself and cover the whole set. The probe therefore reported
+    `false` over a *running* watcher and told a pane awaiting a peer that it was close-eligible.
+  * `8370af320af5` — a mailbox box key is written in **two** spaces (pane id, and the registry's
+    `session_id`); the strand report adjudicated against pane ids only. Measured live: of 534
+    boxes it called dead, **eight belonged to sessions alive at that instant, including the
+    session running the report**. Under kitty the spaces are not even the same shape (`131` vs a
+    36-char uuid), so the match could never have succeeded by luck.
+  * `aa8aed0d713a` / `dcf58e1ba056` — the same lesson twice more: a role that is only an address
+    with no liveness, and two auditors keying tenancy on `startedAt` vs `cwd`.
+  The generalisation to carry: **when a probe asks "is X live?", ask which of X's names it is
+  asking about, and whether the thing being observed chose that name.** In every case here the
+  producer picked one spelling for a good reason and the consumer hard-coded another.
+
+  **AND THE COROLLARY THAT ALMOST HID IT: `8370af320af5`'s POSITIVE CONTROL PASSED THROUGHOUT.**
+  It asked whether *this pane's* id was in the *pane* list. It was. So the control certified the
+  oracle on the one axis that could not fail, while being structurally blind to the axis that
+  did — the report has shipped a wrong live/dead split for as long as both spaces have existed.
+  A control has to be independent of what it certifies; the fix makes the registry a REQUIRED
+  second oracle on the same fail-closed terms as the first (unreadable ⇒ `verdict=unknown`, no
+  numbers), because with it unread every uuid-keyed box is fabricated-dead.
+
+  **A PARTIAL REFUTATION, RECORDED RATHER THAN SMOOTHED OVER.** `8370af320af5` also claimed the
+  headline `dead_never_surfaced` figure was wrong. It is not — 14873 before, 14873 after. The
+  eight misclassified boxes hold no never-surfaced lines *at this instant*, so the classification
+  error never reached that number. The mechanism for it to be wrong is real (a live session's box
+  with unread mail would count as stranded loss) but the count itself is currently sound. What the
+  fix actually corrects is the box classification (live 10 → 18) and the blind control.
+
+  **A ROW RE-MEASURED, STILL OPEN, AND GENUINELY NOT MINE — `85a82455de9a`.** Two of its three
+  asserted paths have converged since filing (`commands/resume-sessions.md` and
+  `~/.reso/bin/reso-resume-one` are now symlinks; the latter was a real pre-vendor copy). The
+  third, `~/.claude/bin/reso-resume-one`, is still ABSENT. `deploy-live.sh` refuses correctly —
+  *no GREEN tree is a DESCENDANT of live HEAD* — and reports the lag as "inside the degrade
+  budget (25/6h)", which is exactly the reading CLAUDE.md warns against: **an ADD gets no budget**,
+  so a lag of 11 is a breach at 1 for this row. Left open, un-mutated, and named here so #18 does
+  not re-derive it. Only `postland-verify.sh` advances that stamp; this recycle's own land adds
+  more un-stamped commits above the pin.
+
+  **THE FILING (1).** `ebbf3adfb4d0` — peer mail paged this chain with a post-land RED naming
+  `tests/cc-wait.bats` at culprit `0f55846f7de4`. That commit changes **one file,
+  `docs/plans/BACKLOG_DRAIN_24_7.md`, +88 lines and no code** — it cannot reach a bats subject.
+  The suite is 19/19 green at `origin/main` HEAD with its plan line present, and the page's own
+  env recorded `load 16.45`. So a contention flake was bisected and the nearest commit elected as
+  culprit. A bisect must be able to return NO VERDICT; a candidate that touches no file the test
+  loads is not a candidate. Filed to `master-verification-integrity`, not here.
+
+  **PROCESS NOTES FOR #18.** (a) The spawn gate deterministically refused one of four teammate
+  briefs with the unreachable "use TeamCreate/team_name" instruction — that row was taken on the
+  lead immediately, per §4.1; do not re-word. (b) `cc-bats` REFUSED twice mid-recycle while
+  teammates held execution roots — **no `1..N` plan line, so no verdict**; every suite below was
+  re-run until it emitted one. (c) All three teammates returned real discriminator pairs this
+  time, unlike #16 where the lead had to write both controls — the briefs demanded the REMOVE half
+  FIRST and named it as the deliverable, and t2 went further and proved its *mutant* was the gated
+  variant rather than a merely-broken file.
+
+  **GATES (run this turn, on the merged branch, not recalled).** `cc-announce-alarm-body 1..5` ·
+  `cc-announce 1..18` · `announce-before-retire 1..21` · `handoff-disposition-watching 1..5` ·
+  `handoff-disposition 1..24` · `comms-strand-report-identity 1..6` · `comms-strand-report 1..9` ·
+  `cc-classify-origin-unify 1..10` · `cc-classify 1..69` · `cc-roles-liveness 1..18` ·
+  `cc-notify 1..87` · `waiting-recycle-disarm-ttl 1..6` · `waiting-recycle-account-neutral 1..5` ·
+  `waiting-recycle 1..114`. 402 tests, zero `not ok`, every plan line present.
+
 - **2026-08-17 ~17:30Z — recycle #16: `master-session-lifecycle` 32 open → `27 open / 1 blocked
   (1 operator-gated `source: needs`; 0 cloud-venue)`. filed 0 / closed 5. Six commits, ONE land,
   `ef98781de`; content-verified on `origin/main` (`git diff` empty on all 9 paths).**
