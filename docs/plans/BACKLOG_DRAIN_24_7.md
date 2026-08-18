@@ -87,6 +87,104 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #27: the briefed effort was UNDRAINABLE BY CONSTRUCTION, so the pass
+  switched on one measurement and drained `master-fleet-footprint` 35 → 31 open / 4 blocked (4
+  operator-gated, `source: needs`; 0 cloud-venue, 0 claimed). filed 0 / closed 4.**
+  Lands `c961dc779` + `24357bdc5` + `ef1fe0478`, each content-verified on origin/main.
+  - **`master-product-repos` is not this chain's to drain, and the reason is structural.** It was
+    the indicated pick (smallest, 34 open). Measured at intake: **33 of its 34 open rows target
+    repos that are not claude-infrastructure** — reso-management-app 27 · doc_classifier 3 · reso 1
+    · reso-qa-runner 1 · agent-build-hackathon 1 — and the single claude-infrastructure row
+    (`79e7c3cb7357`) is the **wave-PARENT meta row** describing exactly those other-repo rows, not
+    a fix. Closing them would mean committing to another project's default branch, which the chain
+    forbids. Its two `claimed` rows are **`venue=cloud`** — a stratum, not the stale local claims
+    the brief warned might be there. `master-fleet-footprint` is the right lane and this is why, so
+    #28 does not re-derive it: **35 open, 100% `project=claude-infrastructure` AND 100%
+    `venuePlan=local`** — the only sizeable effort with that property. The switch cost one query.
+  - **Built `d65dcfd22ce2` — the seam's argv contract.** `cc-pane list --json` and `cc-pane list`
+    were BYTE-IDENTICAL because the verb dispatch never passed `"$@"`; a consumer asking for JSON
+    got integers, `json.load()` raised, and the failure read as the DATA's fault. Fixed at SIX
+    sites — list/address/close on **both** `bin/cc-pane` and `bin/cc-pane-headless`, the latter
+    load-bearing rather than symmetric: cc-pane `exec`s that driver with `"$@"` intact, so an
+    iterm2-only guard leaves `CC_PANE_DRIVER=headless cc-pane list --json` still lying. **Refused
+    the flag rather than implementing it**, which the row offered as its other branch: `list`'s
+    contract is one opaque id per line, the three drivers cannot all answer id/cwd/alive, and a
+    `--json` that lied on the headless driver would recreate this defect one layer down.
+    6 cases + **6 mutants, one per SITE** (21 caught / 0 weak over the whole harness).
+    - **The row asked whether a prior fix had regressed, and answering it was half the pass.**
+      It flagged completed item K5 ("it2-kitty ignores --json") as the same SHAPE. Neither
+      regressed nor half-covered: `bin/it2-kitty` still implements `session list --json` and emits
+      `[{"id":…}]`. The hole was one layer UP, in cc-pane's own argv. A row naming a prior fix is
+      asking a real question, and answering it is what stops the same fix being applied twice in
+      the wrong place.
+  - **Built `34f41cc9118b` — the landed-dirt path destroyed directories and recorded nothing.**
+    `--dispose-abandoned` has always appended a disposal record (that record is what distinguishes
+    abandoned-BY-DECISION from dropped-BY-ACCIDENT, which git alone cannot); `--dispose-landed-dirt`
+    reaped 32 directories on 2026-08-11 and appended none. **The asymmetry is the defect, not the
+    stakes** — gitignored bytes are recorded NOWHERE else, and the echo scrolls past.
+    - 🚨 **The row's own framing needed two corrections, and both are in the landed diff.** (a) It
+      prescribes "a `dispose_record()` call"; the record-writer is **`log_disposal()`** —
+      `dispose_record()` is the whole gated DISPOSE action and would have re-run gates that do not
+      apply to a landed branch. (b) Copying the abandoned path's record wholesale would have
+      written a FALSE field: `preserved_at` is hardcoded `refs/heads/<branch>`, true only for that
+      class because those branches are UNLANDED so `--prune-branches` skips them
+      (`landed "$branch" || continue`). A landed-dirt branch is landed and worktree-less, so the
+      **same run may legitimately `branch -d` it** — the record would point at nothing. Hence a new
+      OPTIONAL 11th parameter defaulting to the old value (every existing caller byte-identical),
+      and the dirt row names the TRUNK. `unlanded_patches` is 0 with no shas for the same reason:
+      being LANDED is what DEFINES the class, not an unmeasured default.
+    - **The CONTROL case is the one that earns the parameter.** A 4-mutant red-proof, one per SITE,
+      each caught by its OWN named test with no over-wide reds: the call deleted (original bug
+      restored) · `preserved_at` falling back to the branch · **the optional param's DEFAULT broken
+      — caught ONLY by the abandoned-path control** · a phantom row on `--dry-run`. Unmutated
+      control green before AND after; subject restored from an in-memory copy, `shasum`-confirmed
+      identical to the `cp` backup.
+  - **Closed on evidence, not on work: `2224128627d0` (ALREADY-FIXED) and `1f89d52cb049`
+    (EVIDENCE-GONE).** The first asked to investigate + fix "an armed /goal never evaluates on this
+    box" and listed two live hypotheses; `goal-in-handoff-2026-08-08.md` now opens
+    `# RESOLVED 2026-08-09`, refutes BOTH by name plus hook-shadowing, and reads the real mechanism
+    out of the binary (goal evaluation is gated on a QUIET task registry, and a 4-hour
+    `cc-await-ping` background Bash holds one open) — guard landed `c00595bf7`, widened `d59dff44c`.
+    **This session was itself live evidence: its own `until … sleep` watcher was DENIED at the tool
+    call with that exact message.** The second's subject script does not exist on origin/main at
+    all (a throwaway probe harness), the grid it blocked completed 36/36 the day the row was filed,
+    and its prescribed `start_new_session` pattern predates it in both `ship-land.sh` and
+    `handoff-fire.sh`.
+  - 🚨 **A read-only `Explore` survey is the highest-leverage FIRST move in this effort — do it
+    before building anything.** One agent ran the three-question pass over 5 candidate rows in ~2
+    minutes and settled all five; it is how both evidence-closes were found, and its three
+    STILL-LIVE verdicts are the successor's map. **Every verdict was re-verified by the lead
+    against origin/main before use** — a subagent's finding is a claim, not a measurement.
+  - **STILL-LIVE, mapped, for #28:** `6e1361f39202` — `postland-verify.sh` `red_actions()`
+    (:2483-2622) has ZERO ancestry tests; the only one is in `auto_revert` at :2361, and the
+    2026-08-17 fix (`ebbf3adfb4d0`) addressed the bisect-ABSTAINED case, **not** the orphaned-sha
+    case. · `475222a572de` — both halves open: `deploy-parity-assert.sh` explicitly disclaims
+    daemons, so a launchd-resident sentinel on stale bytes is invisible to it BY DESIGN, and the
+    only two SIGCONT strings in the tree are prose acknowledging the one-way freeze.
+  - **A comment that overclaims is the same defect class as the flag the row was about.** The lead
+    wrote "EVERY VERB REJECTS ARGUMENTS IT DOES NOT IMPLEMENT" above a dispatch where `driver` and
+    the help verb still drop theirs, caught it in self-review, and **narrowed the comment rather
+    than widening the code** — widening would have added two sites the red-proof does not mutate,
+    which is how a proof starts overstating its own coverage. The next agent reads a comment as a
+    contract and does not re-derive it. Landed separately (`24357bdc5`) so the correction is
+    legible rather than buried in the fix.
+  - **Two instrument findings, recorded here rather than FILED — a recycle that closes 4 may still
+    not end net-positive on filings, and neither is measured enough to be a row.** (a) `pgrep -f
+    '<script>.sh'` used to poll a background job **matches the poller's own argv**, so it reported
+    RUNNING against a process that was this session's own `zsh -c` wrapper; the anchored form is
+    `ps -eo pid,etime,command` filtered to exclude the reader, or a pid captured up front. This is
+    `pgrep-f-matches-agent-briefs` re-hit inside our own waiting code, which is corroboration of
+    that memory rather than a new item. (b) There is **no generic enforcement** of the
+    `start_new_session` rule surfaced by `1f89d52cb049` — `hooks/validate-bash.sh` has zero hits
+    for `nohup`/`setsid`/`start_new_session` — so the doctrine lives only in the two scripts that
+    already obey it. Speculative as a row; named here so it is not lost.
+  - ⚠️ **`bash scripts/ship-land.sh` outlives the Bash tool's 600 s CEILING, and the brief's
+    "tool timeout 930000" is silently CLAMPED to it.** The second land returned exit 143 at 10m00s
+    with no output — and had **already pushed**: `origin/main..HEAD = 0`, empty path diff,
+    `_dirt_head` present twice in the landed copy. This is the exact failure the operating rules
+    already warn about, arriving through the TOOL's cap rather than the script's own `timeout`.
+    **Always adjudicate a land by CONTENT before believing it failed.**
+
 - **2026-08-18T23:30Z — LEAD (pane 102) wave synthesis: all three fires returned inside 50 minutes,
   ledger 417 → 404 live, and every one red-proved BOTH ways against the REAL pre-fix artifact.**
   `d6d4b85ebd4c` → `206d0c001` · `7da9c4451540` → `27fb9da42` · `dc014c6829ac` → `017650872`, each
