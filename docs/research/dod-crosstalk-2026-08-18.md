@@ -2,10 +2,18 @@
 
 Row `4de3d0f9c0e1` (master-session-lifecycle), "review #10b". Investigated 2026-08-18.
 
-**Verdict: the defect is REAL and reproduced; the remedy is NOT buildable from state this tree
-records.** This is filed as the design question rather than shipped as a read-side heuristic,
-because every rule buildable today either keeps the crosstalk or re-breaks the worktree hop that
-`hooks/lib/dod-path.sh` exists to make work.
+**Verdict as first written (2026-08-18, recycle #24): the defect is REAL and reproduced; the remedy
+is NOT buildable from state this tree records.** Filed as the design question rather than shipped as
+a read-side heuristic, because every rule buildable *then* either kept the crosstalk or re-broke the
+worktree hop that `hooks/lib/dod-path.sh` exists to make work.
+
+> **CLOSED 2026-08-18 (recycle #26). The verdict above was right about the READ side and that is why
+> it holds up: no read-side rule could ever have worked, because the distinguishing fact was not in
+> the tree.** The fix was to *record* it — prerequisite 1 (per-capture provenance, #24) then
+> prerequisite 2 (the succession edge, #26). §3's table needs no new row: it enumerates attempts to
+> DERIVE the distinction, and §5.2 now carries the proof that no such derivation exists. Both
+> red-proof cases are unskipped and green. **Everything below is preserved as the reasoning that
+> produced the fix, not as current state** — read §5 for what shipped.
 
 ## 1. The red proof
 
@@ -90,9 +98,72 @@ Sequenced, because (1) is a precondition for any version of (2):
    `completion-assert` 91/91.
 2. **Mint a lineage token on the succession paths**, `--recycle` included, recording the *firing
    cwd* alongside the fired cwd — then a reader can inherit along the lineage and exclude everything
-   else. Only at that point do cases 7–8 become fixable; unskip them there. **STILL OPEN — this is
-   why row `4de3d0f9c0e1` stays open.** Prerequisite 1 supplies the missing *input*; it does not by
-   itself let any reader separate a wave from its own successor, and the §3 table is unchanged.
+   else. Only at that point do cases 7–8 become fixable; unskip them there. ~~STILL OPEN~~
+   **DONE 2026-08-18 (drain recycle #26) — cases 7–8 unskipped and green; the gate and
+   `CC_DOD_CROSSTALK_REDPROOF` are deleted, because a permanently-skipped case reports nothing.**
+
+   **The edge.** `hooks/lib/dod-path.sh` gained `dod_lineage_record` / `dod_lineage_ancestors` and
+   a block filter; `scripts/handoff-fire.sh` calls the writer at the ONE site every dir-changing
+   succession passes through — where `LAUNCH_DIR` resolves (`:7841-7845`), which covers an ordinary
+   `--worktree`/`--cwd` fire, a self-routing fire, and `--recycle --worktree` (the relocating
+   recycle, `RECYCLE_RELOC=1` at `:6690`, which falls through to the `$WT` arm). §4.2's objection is
+   answered rather than worked around: `mark_fired_peer` is not reused, precisely because it records
+   the fired session's own cwd plus the firing PANE id and is gated on `WANT_SELF_RETIRE=1`.
+   **A same-dir `--recycle` needs no edge at all** — a measurement that simplified this materially:
+   `LAUNCH_DIR` *is* `$PWD` on that path (`:7841`, first arm), so the toplevel identity is unchanged
+   and the writer drops the self-loop itself. The "`--recycle` records nothing" problem was only ever
+   about the RELOCATING form.
+
+   **Why §3's table did not need a new row.** Every candidate there fails by trying to *derive* the
+   distinction from the repo. The proof that none can: **cases 1 and 8 have the same setup — A
+   freezes a scope, B reads it — and opposite required answers.** No function of that setup
+   satisfies both, so the fix was never a cleverer rule; it was a missing input. Case 1 therefore
+   mints the succession edge in its setup now. That is not a narrowed falsifier — it is the input
+   the case was always missing, and it makes case 1 state the invariant it always *claimed*
+   (a SUCCESSOR inherits) rather than the weaker "any worktree of the repo inherits" it could
+   express before. The un-recorded direction is pinned separately (case 11) so neither answer is
+   assumed.
+
+   **Fail-open, and the cost that buys.** A capture with no `toplevel=` stamp is unattributable —
+   every capture written before prerequisite 1 — and is ALWAYS inherited (case 10). The filter can
+   only drop a block that positively *names* a foreign wave, so it fails toward "keeps the
+   crosstalk", never toward "loses a contract you own": the same direction the lossless legacy
+   read-fallback chose. **The accepted cost, pinned as case 11 rather than left to be discovered:**
+   a worktree nobody fired — a hand-made `claude -w` sibling — has no edge, is treated as
+   concurrent, and re-freezes its own scope. *Considered and rejected:* grandfathering by "the
+   writing toplevel no longer exists on disk". It would soften the transition window, but it
+   re-introduces a liveness discriminator §3 already refuted, for a one-time benefit — so the rule
+   stays minimal and the cost stays visible.
+
+   **Attribution.** Nine mutants, one per site, control green before and after, none uncaught:
+   unfiltered REMAINDER reds case 7 alone · unfiltered injection reds 8 alone · a depth-1 lineage
+   walk reds 9 alone · dropping unattributable blocks reds {3,10} · **restoring the pre-fix
+   "always keep" reds {7,8,11} — the whole defect** · removing both cycle guards reds 12 alone ·
+   recording the self-loop reds 13 + intent-5 · removing the writer call reds intent-4 alone ·
+   letting `--dry-run` record reds intent-6 alone. Gates: `dod-path` 14/14, `dod-persist` 30/30,
+   `wrap-ledger` 75/75, `completion-assert` 91/91, `handoff-recycle-intent` 6/6.
+
+   **No new file, deliberately.** The lineage lives in `hooks/lib/dod-path.sh`, which is already
+   symlinked into the live layer, so this land carries `LIVE_ADDS=0` — a new lib would have been
+   absent from every consumer's `[ -f … ]` guard until the converger ran, i.e. a silent no-op.
+
+### Instrument note — `grep -q` under `pipefail` inverts a filter's verdict
+
+Two defects surfaced in this change, and **both were caught by the existing suites and fixed in the
+code rather than in the assertion.**
+
+1. `dod_filter_for "$cwd" "$f" | grep -qF -- "$g"` in the grown-line dedup. `hooks/dod-persist.sh`
+   runs under `set -uo pipefail`, and `grep -q` **exits on the first match** — so the upstream
+   filter takes SIGPIPE and the pipeline reports FAILURE *on the very input it just matched*. The
+   dedup then re-appended every grown line on every compaction, forever. `tests/dod-persist.bats`
+   case 16 counts the appends and caught it. The live form is the same count idiom the `!`-liveness
+   note below already prescribes: `n="$(… | grep -c … || true)"; [ "$n" -eq 0 ]`.
+2. **A fixture keyed on prose the change made false.** The SessionStart frame said *"full
+   INTEGRATE-only history"*; the filter made "full" untrue, and `tests/dod-persist.bats` keyed a
+   `sed -n "1,/$HIST_MARK/p"` range on that phrase. **A stale sed marker does not fail — it
+   inverts**, because `sed -n '1,/nomatch/p'` selects the WHOLE input, so every "…is not above the
+   history" assertion silently widens to the whole document. Marker narrowed to the wording-stable
+   core, plus `_hist_mark_live`, which asserts the marker exists *before* anything slices on it.
 
 **Adjacent finding, separate row.** Independent of wave identity, SessionStart injects the file's
 *entire* monotone history as binding — 15 contracts today, unbounded tomorrow. Even a legitimate
