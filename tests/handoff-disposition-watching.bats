@@ -25,6 +25,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HD="$REPO/scripts/handoff-disposition.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # never the operator's live ~/
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   export CC_TASKS_DIR="$BATS_TEST_TMPDIR/tasks"
   export CC_SESSIONS_BIN=/nonexistent

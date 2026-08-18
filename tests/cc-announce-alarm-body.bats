@@ -19,6 +19,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   A="$REPO/bin/cc-announce"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # never the operator's live ~/
   export CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/alarms"
   export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"
   export CC_ANNOUNCE_RETRY_SLEEP=0
