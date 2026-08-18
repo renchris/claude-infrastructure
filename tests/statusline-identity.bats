@@ -256,8 +256,13 @@ mk_repo() { # <dir> <branch>
   [ "$(grep -cF 'echo "$INPUT" | jq -r' "$NEW")" -eq 0 ]
   [ "$(grep -cF '"$INPUT" | jq -r' "$NEW")" -eq 1 ]          # replaced by exactly ONE extraction
   # every jq invocation that remains, and why it has to: 1 extraction + 1 memoized pid read
-  # from the prior telemetry FILE + 1 telemetry EMIT (it writes JSON, so it needs jq).
-  [ "$(grep -cE 'jq -[rc] ' "$NEW")" -eq 3 ]
+  # from the prior telemetry FILE + 1 telemetry EMIT (it writes JSON, so it needs jq) + 1
+  # durable-window EMIT (same reason, and it runs ONCE per session behind a grep guard rather than
+  # per render — row 5e4ce121b64a residual (b)). The count stays EXACT deliberately: the invariant
+  # this pins is not "few jq calls" but "every jq call on a per-render path is enumerated here with
+  # its reason", so an unexplained addition still reddens. The durable-window READ is not in this
+  # count because it reuses PAY_WINDOW from the single extraction instead of re-reading the payload.
+  [ "$(grep -cE 'jq -[rc] ' "$NEW")" -eq 4 ]
   [ "$(grep -cE 'jq -[rc] ' "$OLD")" -eq 9 ]
   grep -qF "jq -r '.pid // empty'" "$NEW"
   # git: count CODE lines only — the new header explains the old `git diff` probes in prose.
@@ -525,4 +530,67 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   # this layer exists to stop.
   ! printf '%s' "$body" | grep -q '(' || false      # no commit parens, no branch, no dirty marker
   ! printf '%s' "$body" | grep -q '\*' || false
+}
+
+# ── the DURABLE denominator (row 5e4ce121b64a residual (b)) ───────────────────────────────────
+# Fill % = input_tokens / window. The window reached a durable store on only two EVENT-conditioned
+# paths — a fill-drop (IDL) and a recycle (recycle-events) — so a session that did neither had no
+# denominator at all and was excluded from every retrospective read. The statusline renders on
+# essentially every turn, so writing it HERE makes coverage a function of "the session existed".
+#
+# These tests are OUTPUT-BLIND on purpose: they assert the side-effect file, never the rendered
+# line, so the frozen byte-identity proof above (tests 2-9) keeps its meaning.
+payload_win() {  # transcript_path OUTSIDE the bats tmpdir — proves the containment redirect
+  jq -nc '{session_id:"win-sid-1",
+           transcript_path:"/Users/x/.claude-tertiary/projects/-Users-x-p/win.jsonl",
+           model:{id:"claude-opus-5"}, effort:{level:"high"},
+           context_window:{context_window_size:200000, used_percentage:12},
+           cwd:"/Users/x/p"}'
+}
+payload_nowin() {  # the harness emitted NO window — it must be written as NOTHING, never imputed
+  jq -nc '{session_id:"nowin-sid-1",
+           transcript_path:"/Users/x/.claude-tertiary/projects/-Users-x-p/nowin.jsonl",
+           model:{id:"claude-opus-5"}, effort:{level:"high"},
+           context_window:{used_percentage:12},
+           cwd:"/Users/x/p"}'
+}
+
+@test "durable window: one row carrying sid, window and model is written for the session" {
+  mk_repo "$WORK/win-a" some-branch
+  render payload_win "$WORK/win-a" >/dev/null
+  local store="$BATS_TEST_TMPDIR/session-window.jsonl"
+  [ -f "$store" ] || false
+  run jq -r 'select(.sid=="win-sid-1") | "\(.window) \(.model)"' "$store"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "200000 claude-opus-5" ] || false
+}
+
+@test "durable window: re-rendering the SAME session does not grow the store (it is an upsert)" {
+  mk_repo "$WORK/win-b" some-branch
+  render payload_win "$WORK/win-b" >/dev/null
+  render payload_win "$WORK/win-b" >/dev/null
+  render payload_win "$WORK/win-b" >/dev/null
+  local store="$BATS_TEST_TMPDIR/session-window.jsonl"
+  [ "$(grep -c 'win-sid-1' "$store")" -eq 1 ] || false
+}
+
+@test "durable window: a payload with NO window writes NO row — the denominator is never imputed" {
+  mk_repo "$WORK/win-c" some-branch
+  render payload_nowin "$WORK/win-c" >/dev/null
+  local store="$BATS_TEST_TMPDIR/session-window.jsonl"
+  # positive control: the writer IS reachable from this fixture, so an empty store here means
+  # "declined to write", not "never ran at all"
+  render payload_win "$WORK/win-c" >/dev/null
+  [ -f "$store" ] || false
+  [ "$(grep -c 'win-sid-1' "$store")" -eq 1 ] || false
+  [ "$(grep -c 'nowin-sid-1' "$store" || true)" -eq 0 ] || false
+}
+
+@test "durable window: under bats a store outside the tmpdir is REDIRECTED into it" {
+  mk_repo "$WORK/win-d" some-branch
+  render payload_win "$WORK/win-d" >/dev/null
+  # the payload's config root is /Users/x/.claude-tertiary — a path this box does not own. The
+  # row must land in the fixture, and nothing may be created at the resolved path.
+  [ -f "$BATS_TEST_TMPDIR/session-window.jsonl" ] || false
+  [ ! -e "/Users/x/.claude-tertiary/autonomy/session-window.jsonl" ] || false
 }
