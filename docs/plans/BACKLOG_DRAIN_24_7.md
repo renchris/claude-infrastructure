@@ -87,6 +87,62 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 ~15:30Z — lead (pane 102, recycled): the `blocked` pool is 75% OPERATOR-OWNED, so the
+  headline ratio was never one number.** Ledger 409 open / 119 blocked. Stratifying the blocked pool
+  by source settles what "block outran unblock ~6:1" actually meant: **89 of 119 are `source: needs`,
+  venue=local — operator-platter steps, blocked BY DESIGN and not agent-drainable** (42 of them carry
+  a `--run`, so they are `cc-do`-runnable today); only ~30 are anything else. A count that mixes the
+  two lanes cannot be driven to zero by the drain chain and should never have been read as one
+  backlog. **Report `blocked` by stratum or not at all** — the same law as the zero-claim memory
+  (`zero-claim-must-name-its-excluded-strata`).
+
+  🚨 **A MACHINE PRODUCER DEFEATS THE LEDGER'S IDEMPOTENCY BY *WHERE IT STANDS*, NOT BY WHAT IT
+  WRITES — filed `dc014c6829ac`.** `desk-land.sh` builds a throwaway worktree per attempt at
+  `/private/tmp/.desk-land-<branch>-<PID>` and, when `ship-land` cannot complete, files its `re-land
+  <branch>` row from INSIDE it. `cc-backlog` derives `project` from the cwd, and the event key is
+  project+title+source — so the PID rides into the key and **every retry of the same land mints a
+  brand-new blocked row.** Measured on ONE branch (`claude/fire-20260818T080549Z-15840-1`): four
+  distinct ids (`1285df22b72e` · `9776708bc201` · `2ee586a548f8` · `e24b0f9933b7`) with
+  **byte-identical title, source and condition**, differing only in
+  `project=.desk-land-…-32615/-39245/-42721/-93241`; a 5th attempt was in flight while this was
+  written. **The store is not broken and the probe is what proves it:** a scratch-store control
+  (`CC_BACKLOG_FILE=<tmp>`, same title+source+condition added 3×) collapsed to ONE id
+  (`f3f2f0805807`). So the defect is the caller's *identity*, not the hash — and the fix is a stable
+  `--project` / branch-derived `--condition`, never a wider hash. This is the **second face** of what
+  `e3b966424` fixed one face of: that land stopped machine producers *misfiling* agent-doable work as
+  blocked, and does nothing about *duplicate minting*. Bounded at 4 rows today; unbounded by
+  construction.
+
+  **Landed this session, all content-verified on `origin/main`:** `bb124b4ff`, `76395a94e`,
+  `b683ec2eb` (§2.1 entries) and **`e3b966424`** — the two machine producers that filed agent-doable
+  work into `blocked`: the reap now consults `cc-cloud show --item` before blocking a venue=cloud
+  claim, and KEY 4 carries the branch ref unmasked so a re-land step is actionable. `5239f4431`
+  closed W-R3 (entry below).
+
+  **Threads left running, both alive and owned (transcripts writing this minute):** pane 339
+  (`foldfix-orphan`, custody `fire-foldfix-orphan|339` OPEN) took a **RED land on its own diff** —
+  `shellcheck` SC2016 at `bin/cc-backlog:4744` and a `dead-assertion` at
+  `tests/backlog-fold-agreement.bats:98` (`A && B` with both branches unreachable by errexit; the
+  fixer is `scripts/bats-assert-liveness-fix.py`). Its two commits (`2327dc4bd` the status fold,
+  `2e5ee1b82` the hermeticity allowlist tail) are NOT on trunk. Drain chain: **recycle #22 live**
+  (brief 15:05Z, worktree `drain/recycle-11`).
+
+  ⚠️ **The `rm -r` extension of the wedge class, and it took the drain chain itself.**
+  `hooks/validate-bash.sh:1024` allowlists build-artifact NAMES only and has **no category for a
+  session's own scratchpad**, so routine self-cleanup raises a PreToolUse confirmation — a liveness
+  state no belt models (not idle, so teardown returns DEFER `tty-busy`; cross-pane keystrokes are
+  classifier-denied). Four sessions lost in 24h: 275/276 on `git reset --hard`, then **339 and 131 —
+  the 24/7 drain chain — on `rm -r` of their own scratch dirs**, stopping the chain ~4h at recycle #21
+  with **no alarm**. Filed `7da9c4451540` (includes the missing alarm: a dispatched session at a modal
+  > N minutes). **Every brief this pipeline writes must forbid destructive git AND any `rm -r` outside
+  `node_modules|.next|dist|build|coverage|target` — leave scratch for the reaper.**
+
+  Two instrument traps measured today, both cheap and both silent: **`bash scripts/ship-land.sh | tail`
+  returns TAIL's rc** — it read 0 while ship-land exited 11 (another land in flight) and 5 (rebase
+  conflict); never pipe it. And **the kitty `❯` prompt line renders permanently** — it is not an idle
+  signal (liveness is the spinner + token counter), and misreading it nudged a session 32 min into a
+  step. Judge liveness by cwd + child processes, never by the prompt line.
+
 - **2026-08-18 — recycle #21: master-session-lifecycle 8 → 7 open / 1 blocked. filed 0 / closed 1.**
   One land, content-verified: `51f2b9d5e` (13 paths present + content-identical on origin/main).
   Row closed: `87a081c446f5` — deadline reconciliation, **both arms, both by one teammate**. ARM A
