@@ -87,6 +87,64 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — recycle #21: master-session-lifecycle 8 → 7 open / 1 blocked. filed 0 / closed 1.**
+  One land, content-verified: `51f2b9d5e` (13 paths present + content-identical on origin/main).
+  Row closed: `87a081c446f5` — deadline reconciliation, **both arms, both by one teammate**. ARM A
+  wired the L2-c watchdog `wait-contract-lint.sh --sweep` to a scheduled caller (lead-supervisor —
+  the loaded launchd, waiter-independent cadence); it had been built, `--selftest` 13/13 GREEN, and
+  **never once called** since desk-audit G-P4-2 on 2026-07-18. ARM B gave `engagedAt` its first
+  production READER, so a fired peer that engaged and then went dark is finally owned (it had been
+  falling into `owned-wait`, which is in neither `REAPABLE_RE` nor `SURFACE_PAGE_RE`). Blocked tail
+  BY STRATUM: 1 row, `adf1bb6b5406`, venue=local, `source: needs` — an operator-platter item.
+  **0 cloud-venue rows.** No stale claim left. Post-land suites: `1..116` + `1..95` + `1..43` +
+  `1..33`, 0 not-ok, every one with its plan line seen.
+
+  **TWO ROWS ADVANCED BUT DELIBERATELY LEFT OPEN — a partially-fixed row is not a closed row.**
+  `4de3d0f9c0e1` (DoD crosstalk) was proved REAL *and* proved unfixable from state we record:
+  separating a wave from its own SUCCESSOR needs an identity nothing stores (no per-capture
+  provenance; the fired-peer stamp holds a PANE id and is gated on `RECYCLE=0`, so `--recycle` — the
+  default succession — writes no stamp at all). Toplevel-, branch- and liveness-keying each re-red
+  the succession-hop case, because **the crosstalk and the hop are ONE mechanism seen from two
+  sides.** Red-proof parked as `skip`ped cases 40/41 in `tests/dod-path.bats` naming
+  `docs/research/dod-crosstalk-2026-08-18.md`; measured live, 101 worktrees share one file carrying
+  15 distinct frozen scopes. `5e4ce121b64a` got residual (a) closed on BOTH rails and residual (b)'s
+  pollution half closed; (b)'s statusline upsert and (c) remain.
+
+  🚨 **A GREEN SUITE RUN CAN BE A NON-VERDICT, AND IT LOOKS EXACTLY LIKE A PASS.** Two instruments
+  lied inside ten minutes. (1) `bash tests/<x>.bats` is **not a test run** — bats files need the
+  `bats` runner; under `bash` you get "@test: command not found" and a syntax error. **This brief
+  chain had carried that wrong command, and the lead passed it to two teammates before catching
+  it.** (2) `bats` here is `cc-bats`, which above a concurrency ceiling runs NOTHING, prints a
+  DEFERRAL, and **exits 0 with no TAP** — it fired repeatedly with three agents running suites.
+  Override it prints itself: `CC_BATS_MAX_ROOTS=0 bats …`. **THE RULE: a run is a verdict only if
+  you SAW its `1..N` line in that same run** — including on teammate reports.
+
+  🚨 **MEASURE THE LEAK, DO NOT READ FOR IT — AND NEVER LET A ROW'S CENSUS SIZE THE CLASS.** The row
+  called the durable recycle store "98.8% test pollution". Two corrections, both from RUNNING: the
+  first probe read `~/.claude/recycle-events.jsonl` and reported ABSENT (it lives under
+  `autonomy/`; a blind instrument's null is not absence), and the leak turned out **live, not
+  historical, with this very session causing it** — a before/after line count around one suite run
+  showed `tests/boundary-handoff.bats` appending **29 rows per run** to the operator's real store
+  while `waiting-recycle.bats` leaked 0. So never "the tests": any suite scoping neither `HOME` nor
+  `CLAUDE_CONFIG_DIR`, and only **61 of 512** suites scope anything. Fixed at the writer, not
+  per-suite.
+
+  🚨 **A CONTROL THAT PASSES PRE-FIX PROVES NOTHING UNTIL YOU MUTATE IT.** Every control written
+  this recycle passed before the fix — which is exactly how a vacuous control looks. Each was
+  cleared by mutating in both directions instead. Two first-reds were the HARNESS, not the subject:
+  `touch -t` parses LOCAL time while `stat -f %m` returns epoch, so a `date -u` stamp put a fixture
+  mtime **7 hours in the future** (a negative age the subject correctly rejected); and a containment
+  test used a canary `HOME` *nested inside* `BATS_TEST_TMPDIR`, which is contained BY DESIGN.
+  Relatedly, when shellcheck called a newly-added variable unused (SC2034) that was a **real gap** —
+  `stale_ok` was computed and never emitted; emitting it was the fix, silencing the lint would have
+  shipped the hole.
+
+  **Spawn gate: 2 of 3 accepted.** The third was denied with *"Background subagents cannot write
+  code… use TeamCreate"* — and `TeamCreate` does not exist on 2.1.220, so that guard has no
+  compliant path. It is a heuristic on prompt wording and fired on the most implementation-flavoured
+  of three near-identical briefs. Do not re-roll wording; take the row onto the lead. Record: #18
+  0/3, #19 1/1, #20 2/2, #21 2/3.
+
 - **2026-08-18 — recycle #20: master-session-lifecycle 12 → 8 open / 1 blocked. filed 0 / closed 4.**
   Two lands, content-verified: `555e3b270` then `45a56dcb5`. Rows closed: `4a11a0ac850a` (the
   succession linking primitive + its detector + its caller) · `2dc6906b6e0b` (§14's *or-pressured*
