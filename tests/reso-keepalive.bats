@@ -152,6 +152,27 @@ _one_cycle() { run timeout 20 env CC_KEEPALIVE_ONCE=1 CC_KEEPALIVE_MARKERS="wt-p
   [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] || { echo "nudged a pane whose screen could not be read: $(cat "$CC_KITTY_SENDLOG")"; false; }
 }
 
+@test "PIPEFAIL — a LONG screen whose skip fragment matches early is still skipped" {
+  # The failure this pins is inverted and silent, and it was found by the land's
+  # pipefail-sigpipe ratchet rather than by any case above. The subject runs under
+  # `set -o pipefail`; `printf … | grep -q P` exits the instant it matches, SIGPIPEs the producer,
+  # and the PIPELINE's status becomes the signal instead of grep's 0 — so the skip condition reads
+  # FALSE exactly ON A MATCH. Every case above passes anyway, because a short screen fits entirely
+  # in the pipe buffer and printf never blocks to be killed.
+  #
+  # So the discriminator is SIZE, not content: the fragment matches near the top, then enough text
+  # follows to exceed the pipe buffer (64 KiB on Darwin) and leave printf writing when grep leaves.
+  # The panes this inverts are exactly the ones that must never be typed into — mid-turn, at a
+  # permission dialog, awaiting their own watcher.
+  local pad; pad="$(head -c 131072 /dev/zero | tr '\0' 'x')"   # 128 KiB, twice Darwin's pipe buffer
+  _stub_osascript; _stub_kitty "  esc to interrupt
+$pad"
+  _one_cycle
+  [ "$status" -eq 0 ] || { echo "one cycle did not exit 0 (status $status): $output"; false; }
+  [ ! -s "${CC_KITTY_SENDLOG:-/nonexistent}" ] \
+    || { echo "a mid-turn pane was nudged because the match SIGPIPEd its own producer"; false; }
+}
+
 @test "ONE ENUMERATION, TWO RENDERINGS — the third predicate reaches the iTerm2 arm too" {
   # hooks/lib/pane-modal.sh names the standing risk this pins: a screen predicate copied into a
   # second file rots independently of the first. The skip fragments must be declared once and
