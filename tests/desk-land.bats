@@ -180,6 +180,42 @@ mk_branch_no_wt() {  # $1=branch
   ! ls -d "$DESK_LAND_WTROOT"/.desk-land-feat-orphan-* 2>/dev/null
 }
 
+# ── the throwaway worktree must not become the failure row's IDENTITY (2026-08-18, dc014c6829ac) ──
+# ship-land files its land-failure row from a TRAP, and the backlog id is
+# `sha256(project ⑟ title ⑟ source)` with `project` derived from the FILER'S CWD. On this path that
+# cwd is the per-attempt throwaway above, so when OUR cleanup wins the race the directory outlives
+# its git admin entry, cc-backlog falls back to `basename $(pwd)`, and the row's identity carries a
+# PID: one stuck branch minted four blocked rows on 2026-08-18. We are the process that cannot be
+# confused about the durable checkout — we created the throwaway — so we state it. The assertion is
+# on the EXPORT rather than on a filed row because the stub rail is what makes this suite hermetic;
+# tests/ship-land.bats proves the consuming half against the real filer, both directions.
+@test "the ship rail is handed the DURABLE checkout, not the throwaway it runs in" {
+  # The rail desk-land runs is `$TARGET_TOP/scripts/ship-land.sh` — the THROWAWAY's own checkout —
+  # so the reporting stub has to be COMMITTED before the branch is cut, not written into $MAIN's
+  # working tree. (Learned by the first cut of this case reading the old stub's output and failing
+  # for a reason that had nothing to do with the fix.)
+  (
+    cd "$MAIN" || exit 1
+    cat > scripts/ship-land.sh <<'STUB'
+#!/usr/bin/env bash
+{ echo "CWD=$(pwd)"; echo "LANDROOT=${SHIP_LAND_LAND_ROOT:-<unset>}"; } >> "${SHIP_LAND_STUB_LOG:?}"
+exit 0
+STUB
+    chmod +x scripts/ship-land.sh
+    git add -A && git commit -q -m "chore: reporting stub"
+  )
+  mk_branch_no_wt feat/proj-id
+
+  run bash "$DL" --branch feat/proj-id
+  [ "$status" -eq 0 ]
+  # It ran in the sandbox — the precondition, so the assertion below is not vacuously satisfied by
+  # a land that never used a throwaway at all.
+  grep -q "CWD=.*/\.desk-land-feat-proj-id-" "$SHIP_LAND_STUB_LOG"
+  # ...and the durable checkout was named anyway.
+  grep -q "LANDROOT=$(cd "$MAIN" && pwd -P)$" "$SHIP_LAND_STUB_LOG"
+  ! grep -q "LANDROOT=.*desk-land-" "$SHIP_LAND_STUB_LOG"
+}
+
 # ── handoff-fire.sh `land` dispatch delegates here ───────────────────────────────────────────
 @test "handoff-fire.sh land (no args) delegates to desk-land → 64" {
   run bash "$HF" land

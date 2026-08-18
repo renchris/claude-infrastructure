@@ -172,6 +172,31 @@ if ! [[ "$TARGET_BRANCH" =~ $SESSION_RE ]]; then
   die 65 "REFUSING to land branch '$TARGET_BRANCH' — not a session branch (${SESSION_RE}). desk-land lands feature branches onto trunk, never trunk-as-a-branch nor a detached HEAD."
 fi
 
+# ── THE FAILURE ROW'S IDENTITY MUST NOT CARRY THIS ATTEMPT'S SANDBOX (2026-08-18) ────────────────
+# TMP_WT above is `$WTROOT/.desk-land-<branch>-$$` — per-ATTEMPT by construction, and removed by
+# our own EXIT trap. ship-land's failure inbox files a `cc-backlog needs` row from a TRAP, and the
+# backlog id is `sha256(project ⑟ title ⑟ source)` with `project` derived from the FILER'S CWD.
+# When our teardown wins that race the directory outlives its git admin entry, project_default
+# falls back to `basename $(pwd)`, and the row's identity becomes the pid we happened to run under:
+# claude/fire-20260818T080549Z-15840-1 minted FOUR blocked rows on 2026-08-18 (1285df22b72e /
+# 9776708bc201 / 2ee586a548f8 / e24b0f9933b7) — identical title, source and condition, differing
+# only in `project=.desk-land-…-32615 / -39245 / -42721 / -93241`. Every land retry minted another.
+#
+# We are the one process that cannot be confused about this: we CREATED the throwaway, so we know
+# the durable checkout it came from. Stating it beats inferring it — ship-land can resolve this
+# itself (resolve_main_root), but only from a worktree that is still a worktree, and the whole
+# defect is that by trap time it may not be. Resolved HERE, before the land starts, from the
+# target's own git-common-dir rather than from $REPO, so it is right for --worktree too.
+LAND_ROOT="$(git -C "$TARGET_TOP" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+LAND_ROOT="${LAND_ROOT%/worktrees/*}"; LAND_ROOT="${LAND_ROOT%/.git}"
+if [ -n "$LAND_ROOT" ] && [ -d "$LAND_ROOT" ]; then
+  export SHIP_LAND_LAND_ROOT="$LAND_ROOT"
+else
+  # Unresolvable ⇒ say nothing. ship-land then falls back to its own resolution and, failing that,
+  # to the pre-existing cwd default — degraded to today's behaviour, never to a WRONG label.
+  echo "→ desk-land: could not resolve the durable checkout behind '$TARGET_TOP' — a land-failure row filed from here may carry a per-attempt project label." >&2
+fi
+
 SHIP_LAND="${DESK_LAND_SHIP_LAND_BIN:-$TARGET_TOP/scripts/ship-land.sh}"
 [ -x "$SHIP_LAND" ] || die 65 "no executable ship rail at '$SHIP_LAND' — desk-land targets the infra ship rail (a repo with scripts/ship-land.sh)."
 
