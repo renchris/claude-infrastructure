@@ -463,3 +463,69 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q 'below-threshold:43<73;freewin=off' "$CC_IDL"
 }
+
+# ── ABSOLUTE-OCCUPANCY ARM (TOK_K) — backlog 112d13aa0018 arm (b), 2026-08-17 ─────────────────────
+# The arm exists for ONE failure mode the fill arms structurally cannot reach: `used_pct` is
+# input_tokens/window, so a row whose window is missing or wrong presents as 0 and abstains
+# below-threshold no matter how large the session really is. `input_tokens` is a separate field and
+# survives that. Every case below is written so it REDS against a subject with no TOK_K at all (the
+# pre-fix engine abstains silently, and each case asserts a positive fire or a positive record).
+mk_btel_tok() { # $1=sid $2=used_pct $3=input_tokens — the fill and the occupancy set INDEPENDENTLY,
+                # which is the whole point: mk_btel pins input_tokens:1 and cannot express this state.
+  jq -nc --arg sid "$1" --arg cwd "$WD" --argjson used "$2" --argjson tok "$3" --argjson ts "$(date +%s)" \
+    '{ts:$ts,session_id:$sid,cwd:$cwd,config_dir:"/cfg",used_pct:$used,input_tokens:$tok}' \
+    > "$CC_TELEMETRY_DIR/$1.json"; }
+
+@test "tokens: a BROKEN denominator (fill reads 0) at 800K tokens still fires — the hole no fill arm reaches" {
+  mk_btel_tok tk1 0 800000
+  run drive tk1
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "holding 800K tokens"
+  echo "$output" | grep -q "fill reads only 0%"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="tokens" and .over_tok==true and .tok_k==800' >/dev/null
+  # THE CONTROL: identical broken fill, small occupancy → silent. Without this the case above would
+  # also pass on an engine that simply fires whenever used_pct is 0.
+  rm -rf "$CC_BOUNDARY_LATCH_DIR"
+  mk_btel_tok tk2 0 1000
+  run drive tk2
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "tokens: the arm YIELDS to size when both are over — and size's cure is not borrowed" {
+  # A size fire says "only a NEW SESSION resets a transcript or a process". That is FALSE of
+  # occupancy, which is exactly what compaction resets. If tok ever outranked size here, a genuine
+  # oversize session would be handed the wrong cure.
+  export CC_BOUNDARY_SIZE_MB=1
+  mk_btel_tok tk3 40 800000
+  run drive tk3 "$(mk_tx_size 1)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "TRANSCRIPT is 1MB"
+  echo "$output" | grep -q "only a NEW SESSION resets"
+  # over_tok is still RECORDED even though size won the wording — the census needs to know this arm
+  # was co-firing, or it can never learn whether tok ever fires ALONE.
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="size" and .over_tok==true' >/dev/null
+}
+@test "tokens: a tok fire takes the ordinary boundary cure, NOT the size wording" {
+  mk_btel_tok tk4 10 900000
+  run drive tk4
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "before auto-compaction"
+  # `! A || { …; false; }` — never `A && { …; false; }`, which errexit absorbs and which asserts
+  # nothing at all (scripts/bats-assert-liveness-lint blocks that shape, correctly).
+  ! echo "$output" | grep -q "only a NEW SESSION resets" || { echo "tok fire borrowed the size cure"; false; }
+}
+@test "tokens: the arm never hijacks an ordinary ≥T fire — 75% with 900K tokens is still axis=fill" {
+  mk_btel_tok tk5 75 900000
+  run drive tk5
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "75% ≥ 73%"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="fill" and .over_tok==true' >/dev/null
+}
+@test "tokens: TOK_K=0 disables the axis, and the abstain still RECORDS what it measured" {
+  export CC_BOUNDARY_TOK_K=0
+  mk_btel_tok tk6 10 900000
+  run drive tk6
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # Diagnosability, same contract as the size axis at 0: a disabled arm records the reading it
+  # declined to act on, so "never fired" and "never measured" stay distinguishable.
+  tail -1 "$CC_IDL" | jq -e 'select(.disposition=="abstained") | .tok_k==900 and .tok_k_t==0' >/dev/null
+}

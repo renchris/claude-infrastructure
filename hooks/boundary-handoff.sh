@@ -65,10 +65,37 @@
 # advisory on an unchanged HEAD with FLAT fill would satisfy neither existing re-arm and go silent
 # forever — B-2's own failure mode, re-introduced on a new axis. See SIZE_REARM_MB.
 #
+# ── ABSOLUTE-OCCUPANCY ARM (2026-08-17 — backlog 112d13aa0018 arm (b)) ────────────────────────────
+# Every fill arm above divides by `window`, and the DENOMINATOR is the part that can be missing or
+# wrong. `used_pct` is read at :201 as `.used_pct // 0`, so a telemetry row whose window is unknown,
+# or whose writer mis-computed the fraction, presents as **0** — and 0 abstains `below-threshold`
+# forever, no matter how large the session actually is. `input_tokens` is a SEPARATE field in the same
+# row and survives that failure. TOK_K closes exactly that hole: occupancy ≥ TOK_K thousand tokens
+# fires on its own axis, with no fill floor, because fill is the reading that is broken in this case.
+#
+# WHAT THIS ARM IS NOT, measured rather than assumed (2026-08-17, 21 live telemetry rows). The filing
+# row proposed TOK_K=700 as "window-independent" coverage of "4 of 5 historical deaths". Both halves
+# were checked here and neither survives as stated:
+#   • used_pct IS input_tokens/window to the integer — verified across all 21 rows — and every live
+#     window in the fleet is 1,000,000. So on today's population TOK_K=700 fires at used_pct 70,
+#     three points ahead of T=73. That is a small real lead, NOT an independent axis. Where the arm
+#     genuinely stands alone is the broken-denominator case above, which no fill arm can reach.
+#   • the deaths at 800K–950K occupancy sit at 80–95% on a 1M window, i.e. ABOVE T. They were not
+#     missed for want of this arm; they were missed because the rail was unfireable at all until
+#     `gate-not-green-at-head` was demoted (see :353). Crediting them to TOK_K would double-count a
+#     fix that already landed.
+# It is kept because the broken-denominator hole is real and fail-OPEN, and because a 30K-token lead
+# costs nothing — not because it covers those deaths. The IDL carries `over_tok` beside `over_size`
+# and `over_rss` on every record, fired or abstained, so the next census can measure whether this arm
+# ever fired ALONE; if it never does, that census should retire it rather than re-argue it.
+# Reachability: on a window smaller than TOK_K×1000 this arm can never fire (the population is empty
+# there) — that is why it is a floor beneath the fill arms and never a replacement for them.
+#
 # Env seams (tests): CC_TELEMETRY_DIR · CC_IDL · CC_BOUNDARY_T · CC_BOUNDARY_REARM_DELTA ·
 #                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL ·
 #                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S ·
 #                    CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_SIZE_REARM_MB ·
+#                    CC_BOUNDARY_TOK_K ·
 #                    CC_BOUNDARY_T_FREEWIN · CC_CE_*
 #
 # ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
@@ -106,6 +133,7 @@ LEAD_MIN="${CC_BOUNDARY_LEAD_MIN:-20}"             # context-econ: forecast ≤ 
 CONV_S="${CC_BOUNDARY_CONV_S:-900}"                # context-econ: an interactive turn fresher than this = exchange in flight
 SIZE_MB="${CC_BOUNDARY_SIZE_MB:-25}"               # size axis: transcript bytes ≥ this many MB ⇒ fire (0 disables)
 RSS_MB="${CC_BOUNDARY_RSS_MB:-1500}"               # size axis: process RSS ≥ this many MB ⇒ fire (0 disables)
+TOK_K="${CC_BOUNDARY_TOK_K:-700}"                  # absolute-occupancy axis: input_tokens ≥ this many K ⇒ fire (0 disables)
 SIZE_REARM_MB="${CC_BOUNDARY_SIZE_REARM_MB:-10}"   # B-2 third re-arm dimension: transcript GROWTH since the last fire
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LATCH_DIR="${CC_BOUNDARY_LATCH_DIR:-$HOME/.claude/autonomy/boundary-latch}"
@@ -232,10 +260,19 @@ fi
 # gates fail-safe to the pre-size behavior. Threshold 0 disables that axis outright.
 over_size=0; { [ "$SIZE_MB" -gt 0 ] 2>/dev/null && [ "$tx_mb" -ge "$SIZE_MB" ]; } && over_size=1
 over_rss=0; { [ "$RSS_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_MB" ]; } && over_rss=1
+# ── ABSOLUTE OCCUPANCY (see header) — read from `.input_tokens`, NOT derived from used_pct, because
+#    the whole point is to survive a broken/absent denominator. Same fail-safe rule as the two axes
+#    above: an unreadable or absent value is 0 = UNKNOWN, which cannot clear a positive threshold.
+tok_k=0
+_tk="$(jq -r '.input_tokens // 0' "$tel" 2>/dev/null || echo 0)"; _tk="${_tk%.*}"
+case "$_tk" in ''|*[!0-9]*) _tk=0 ;; esac
+tok_k=$(( _tk / 1000 ))
+over_tok=0; { [ "$TOK_K" -gt 0 ] 2>/dev/null && [ "$tok_k" -ge "$TOK_K" ]; } && over_tok=1
 # Validate before publishing: log_idl feeds this to `jq --argjson`, so a malformed value would fail the
 # whole record and silently drop every IDL line from here on.
 _bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_MB" \
-  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt}' 2>/dev/null || true)"
+  --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
+  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt,tok_k:$tk,tok_k_t:$tkt}' 2>/dev/null || true)"
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; else SIZE_JSON='{}'; fi
 
@@ -315,9 +352,11 @@ early=0; freewin=0
 if [ "$used" -lt "$T" ]; then
   if [ "$used" -ge "$T_MIN" ] && [ "$forecast_min" -ge 0 ] && [ "$forecast_min" -le "$LEAD_MIN" ]; then
     early=1
-  elif [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; then
+  elif [ "$over_size" = 1 ] || [ "$over_rss" = 1 ] || [ "$over_tok" = 1 ]; then
     :   # the SIZE axis carries the fire on its own — no fill floor applies, because fill is the metric
-        # that is blind here (a compacted giant sits at low used_pct BY CONSTRUCTION).
+        # that is blind here (a compacted giant sits at low used_pct BY CONSTRUCTION). The ABSOLUTE
+        # OCCUPANCY axis joins the same disjunction for the same reason, one failure mode over: fill
+        # is blind when its denominator is missing or wrong, and `used` then reads 0 (see header).
   elif free_win_now; then
     freewin=1   # see free_win_now() — the ✅-ledger free-win arm, its OWN axis (never `early`)
   else
@@ -441,29 +480,42 @@ printf '%s %s' "$used" "$tx_mb" > "$latch" 2>/dev/null || true
 # fire narrating itself as "context N% ≥ 73%" would misattribute the cause AND look like a false positive
 # (the reader checks the fill, finds it low, and distrusts the hook).
 size_fired=0; { [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; } && [ "$used" -lt "$T" ] && [ "$early" = 0 ] && size_fired=1
+# The absolute-occupancy arm is its OWN axis, and it yields to `size` when both are over: a size fire
+# names a cure this one must NOT borrow ("only a NEW SESSION resets a transcript or a process").
+# Occupancy is exactly what compaction DOES reset, so a tok fire takes the ordinary boundary wording.
+tok_fired=0
+{ [ "$over_tok" = 1 ] && [ "$used" -lt "$T" ] && [ "$early" = 0 ] && [ "$size_fired" = 0 ]; } && tok_fired=1
 # M-3: the DURABLE, self-describing outcome record (CONTEXT_ECONOMY_V2 §4.3). `advised` — this hook
 # only ever advises; it has no exec path at all. Measured before this landed: 2,173 evaluations,
 # 2,173 abstains, ZERO fires in the hook's entire lifetime — so this is the first record it will ever
 # produce, and it carries the window so the fill is interpretable later (the row's core defect).
 command -v ce_record_recycle >/dev/null 2>&1 && \
   ce_record_recycle "$tel" advised "$used" \
-    "$(if [ "$size_fired" = 1 ]; then printf 'size'; elif [ "$early" = 1 ]; then printf 'forecast'
+    "$(if [ "$size_fired" = 1 ]; then printf 'size'; elif [ "$tok_fired" = 1 ]; then printf 'tokens'
+       elif [ "$early" = 1 ]; then printf 'forecast'
        elif [ "$freewin" = 1 ]; then printf 'freewin'; else printf 'fill'; fi)" \
     "boundary" || true
 log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
       --argjson osz "$over_size" --argjson orss "$over_rss" --argjson sf "$size_fired" \
+      --argjson otok "$over_tok" --argjson tf "$tok_fired" --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
       --argjson fw "$freewin" --arg fwr "$FREEWIN_RUNG" \
       --arg gate "$gate_state" \
       '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
-        over_size:($osz==1),over_rss:($orss==1),gate_green:$gate,freewin:($fw==1),freewin_rung:$fwr,
-        axis:(if $sf==1 then "size" elif $early==1 then "forecast" elif $fw==1 then "freewin" else "fill" end)}')"
+        over_size:($osz==1),over_rss:($orss==1),over_tok:($otok==1),tok_k:$tk,tok_k_t:$tkt,
+        gate_green:$gate,freewin:($fw==1),freewin_rung:$fwr,
+        axis:(if $sf==1 then "size" elif $tf==1 then "tokens" elif $early==1 then "forecast" elif $fw==1 then "freewin" else "fill" end)}')"
 if [ "$size_fired" = 1 ]; then
   if [ "$over_size" = 1 ] && [ "$over_rss" = 1 ]; then why="this session is OVERSIZE on both axes — transcript ${tx_mb}MB (≥ ${SIZE_MB}MB) and process RSS ${rss_mb}MB (≥ ${RSS_MB}MB) — at only ${used}% context"
   elif [ "$over_size" = 1 ];                        then why="this session's TRANSCRIPT is ${tx_mb}MB (≥ ${SIZE_MB}MB) at only ${used}% context — a size problem your context fill cannot show you"
   else                                                   why="this session's PROCESS is at ${rss_mb}MB RSS (≥ ${RSS_MB}MB) at only ${used}% context — a footprint problem your context fill cannot show you"
   fi
+elif [ "$tok_fired" = 1 ]; then
+  # Name the ABSOLUTE number first and the percentage second — when this arm is the one that fired,
+  # the percentage is either the thing that is broken (denominator missing ⇒ reads 0) or the thing
+  # that is merely lagging it. Either way the token count is the fact the model can act on.
+  why="this session is holding ${tok_k}K tokens (≥ ${TOK_K}K) while its fill reads only ${used}% — an ABSOLUTE occupancy that a percentage cannot show you if the window behind it is unknown or wrong"
 elif [ "$early" = 1 ]; then
   why="context ${used}% BURNING toward the ${CC_CE_WALL:-88}% auto-compact wall — forecast ≤${forecast_min}min at the observed rate"
 elif [ "$freewin" = 1 ]; then
