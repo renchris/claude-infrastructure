@@ -91,7 +91,7 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
   for m in "${DM[@]}"; do [ ! -f "$m" ]; done      # EVERY copy in force is cleared, not just one
   run bash -c "cd '$DESK' && bash '$HOOK' status"
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "DISARMED"
+  ! echo "$output" | grep -q "DISARMED" || false
 }
 
 @test "TTL control: a FRESH opt-out still fully suppresses (the TTL did not delete the feature)" {
@@ -143,5 +143,5 @@ last_reason() { jq -r 'select(.disposition=="abstained")|.reason' "$CC_WR_IDL" |
   run drive s6 "$(mk_tx 6)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
   for m in "${DM[@]}"; do [ -f "$m" ]; done            # not cleared
-  [[ "$(last_reason)" = disarmed* ]]
+  [[ "$(last_reason)" = disarmed* ]] || false
 }

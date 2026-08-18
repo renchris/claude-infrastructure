@@ -91,7 +91,8 @@ last_reason() { jq -r '.reason' "$CC_WR_IDL" | tail -1; }
   cli_on "$A" clear >/dev/null
   ls "$SHARED"/disarm-* >/dev/null                     # pre-fix: no such store exists at all
   cli_on "$A" arm >/dev/null
-  ! ls "$SHARED"/disarm-* >/dev/null 2>&1
+  # NOT `! ls …`: bash exempts a negated command from errexit, so that spelling asserts nothing.
+  [ -z "$(ls "$SHARED"/disarm-* 2>/dev/null)" ]
   run drive_on "$B" a1                                  # and the far account is no longer suppressed
   [ "$(last_reason)" != "disarmed:shared" ]
 }
@@ -101,7 +102,7 @@ last_reason() { jq -r '.reason' "$CC_WR_IDL" | tail -1; }
   cli_on "$A" kill >/dev/null
   cli_on "$B" unkill >/dev/null
   run drive_on "$B" u1
-  [[ "$(last_reason)" != global-kill* ]]
+  [[ "$(last_reason)" != global-kill* ]] || false
   run drive_on "$A" u2
   [[ "$(last_reason)" != global-kill* ]]
 }

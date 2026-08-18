@@ -64,8 +64,8 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   "$ROLES" claim desk --target 11111111-2222-3333-4444-555555555555 --pid "$DEAD_PID" --force
   run "$ROLES" read desk
   [ "$status" -eq 1 ]
-  [ -z "$output" ] || [[ "$output" != *"11111111-2222-3333-4444-555555555555"* ]]
-  [[ "$output" == *"ABSENT"* ]]
+  [ -z "$output" ] || [[ "$output" != *"11111111-2222-3333-4444-555555555555"* ]] || false
+  [[ "$output" == *"ABSENT"* ]] || false
   [[ "$output" == *"dead-pid"* ]]
 }
 
@@ -106,7 +106,7 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   printf 'LEGACY-UUID-0000\n' > "$CC_ROLES_DIR/desk"
   run "$NOTIFY" --role desk "legacy page"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"enqueued=1"* ]]
+  [[ "$output" == *"enqueued=1"* ]] || false
   [ -f "$CC_MAILBOX_DIR/LEGACY-UUID-0000.md" ]
 }
 
@@ -114,7 +114,7 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   "$ROLES" claim desk --target 11111111-2222-3333-4444-555555555555 --pid "$DEAD_PID" --force
   run "$NOTIFY" --role desk "page to a dead desk"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"reason=role-unset"* ]]
+  [[ "$output" == *"reason=role-unset"* ]] || false
   [ ! -f "$CC_MAILBOX_DIR/11111111-2222-3333-4444-555555555555.md" ]
 }
 
@@ -123,7 +123,7 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   [ ! -e "$CC_ROLES_DIR/desk" ]                        # the 2026-08-10 state: nothing claimed
   run "$NOTIFY" --role desk "overnight run finished"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"fallback=phoned"* ]]
+  [[ "$output" == *"fallback=phoned"* ]] || false
   [ -f "$PUSHLOG" ]
   grep -q 'undeliverable page' "$PUSHLOG"
 }
@@ -131,8 +131,8 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
 @test "PAIR2-KEEP: the phone leg also fires on the \`cat cc-roles/desk\` form (empty target)" {
   run "$NOTIFY" "" "overnight run finished"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"reason=empty-target"* ]]
-  [[ "$output" == *"fallback=phoned"* ]]
+  [[ "$output" == *"reason=empty-target"* ]] || false
+  [[ "$output" == *"fallback=phoned"* ]] || false
   grep -q 'empty-target' "$PUSHLOG"
 }
 
@@ -158,9 +158,9 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   [ "$status" -eq 3 ]
   # The mutant must be the GATED variant, not merely a broken file — a script that died for some
   # unrelated reason would also fail to phone, and would prove nothing about the gating.
-  [[ "$output" == *"fallback=phone-skipped"* ]]
-  [[ "$output" == *"reason=role-unset"* ]]            # it reached the same give-up site
-  [[ "$output" != *"fallback=phoned"* ]]              # exactly what PAIR2-KEEP forbids
+  [[ "$output" == *"fallback=phone-skipped"* ]] || false
+  [[ "$output" == *"reason=role-unset"* ]] || false   # it reached the same give-up site
+  [[ "$output" != *"fallback=phoned"* ]] || false     # exactly what PAIR2-KEEP forbids
   [ ! -f "$PUSHLOG" ]                                  # the operator was told NOTHING
 }
 
@@ -174,9 +174,9 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
 
 @test "the phone leg is DAMPED per (role,reason) so a 5-minute sweep rings once, not forever" {
   run "$NOTIFY" --role desk "first"
-  [[ "$output" == *"fallback=phoned"* ]]
+  [[ "$output" == *"fallback=phoned"* ]] || false
   run "$NOTIFY" --role desk "second"
-  [[ "$output" == *"fallback=phone-damped"* ]]
+  [[ "$output" == *"fallback=phone-damped"* ]] || false
   [ "$(grep -c 'undeliverable page' "$PUSHLOG")" -eq 1 ]
 }
 
@@ -196,7 +196,7 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
 @test "CC_NOTIFY_PHONE_FALLBACK=0 is a real kill switch" {
   CC_NOTIFY_PHONE_FALLBACK=0 run "$NOTIFY" --role desk "overnight run finished"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"fallback=phone-off"* ]]
+  [[ "$output" == *"fallback=phone-off"* ]] || false
   [ ! -f "$PUSHLOG" ]
 }
 
@@ -206,7 +206,7 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null; wait "$HOLDE
   "$ROLES" claim desk --target HOLDER-TARGET --pid "$HOLDER" --force
   run "$ROLES" claim desk --target THIEF-TARGET --pid "$HOLDER"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"refusing to steal"* ]]
+  [[ "$output" == *"refusing to steal"* ]] || false
   run "$ROLES" claim desk --target THIEF-TARGET --pid "$HOLDER" --force
   stop_holder
   [ "$status" -eq 0 ]
