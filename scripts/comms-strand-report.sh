@@ -76,8 +76,50 @@ if [ -n "$it2_bin" ] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
+# ── the SECOND identity space (backlog 8370af320af5) ─────────────────────────────────────────────
+# A box key is written in one of two spaces. cc-notify addresses panes, so many boxes are pane-keyed
+# — and that is the only space the list above describes. But the session registry also carries a
+# `session_id`, and boxes exist under that too, so every session-uuid-keyed box was unmatched and
+# counted dead. Measured 2026-08-17 before this fix: of 544 boxes it called 534 dead, and eight of
+# those belonged to sessions that were live at that instant, including the one running the report.
+# Under kitty the spaces are not even the same shape (pane ids read `102`, `131`), so the match
+# could not have succeeded by accident.
+#
+# The registry is therefore a REQUIRED second oracle, on the same terms as the first: unreadable, or
+# readable but not describing this machine, means no numbers. Anything weaker keeps the failure —
+# with the registry unread, every uuid-keyed box is fabricated-dead, and that fabrication IS the
+# headline number this report exists to state.
+if [ "$ORACLE" = "readable" ] || [ "$ORACLE" = "controlled" ]; then
+  sessions_bin="${CC_SESSIONS_BIN:-}"
+  if [ -z "$sessions_bin" ]; then
+    for c in "$HOME/.claude/bin/cc-sessions" "$(command -v cc-sessions 2>/dev/null)"; do
+      [ -n "$c" ] && [ -x "$c" ] && { sessions_bin="$c"; break; }
+    done
+  fi
+  reg=""
+  [ -n "$sessions_bin" ] && reg="$(timeout "$IT2_TIMEOUT" "$sessions_bin" --json 2>/dev/null || true)"
+  if [ -z "$reg" ] || ! printf '%s' "$reg" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    ORACLE="registry-unreadable"
+  else
+    printf '%s' "$reg" | jq -r '.[] | (.session_id // empty), (.paneUUID // empty)' 2>/dev/null \
+      | tr '[:lower:]' '[:upper:]' | grep -v '^$' >> "$LIVE_LIST"
+    sort -u -o "$LIVE_LIST" "$LIVE_LIST"
+    # CONTROL, on the axis the pane-id control cannot see. The old control asked whether THIS PANE was
+    # in the pane list; it was, so it passed while blind to the only space that fails. This one asks
+    # whether the registry knows this pane at all — a registry describing some other machine is not an
+    # oracle for this one, and its session_ids would then adjudicate nothing.
+    if [ -n "${own:-}" ]; then
+      if printf '%s' "$reg" | jq -e --arg p "$own" '[.[] | (.paneUUID // "") | ascii_upcase] | index($p) != null' >/dev/null 2>&1; then
+        :
+      else
+        ORACLE="control-failed"
+      fi
+    fi
+  fi
+fi
+
 # A missing/failed oracle must NOT be reported as "everything is stranded".
-if [ "$ORACLE" = "unknown" ] || [ "$ORACLE" = "control-failed" ]; then
+if [ "$ORACLE" = "unknown" ] || [ "$ORACLE" = "control-failed" ] || [ "$ORACLE" = "registry-unreadable" ]; then
   if [ "$JSON" = 1 ]; then
     printf '{"verdict":"unknown","oracle":"%s","reason":"no positive-controlled pane-liveness oracle; no strand numbers claimed"}\n' "$ORACLE"
   else
