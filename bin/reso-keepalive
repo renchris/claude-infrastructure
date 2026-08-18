@@ -171,7 +171,13 @@ for r in rows:
     # get-text that returns nothing means the screen could not be read — the one state a nudger must
     # never read as "quiet, go ahead". Fail closed, exactly as pane_modal_reason does on empty input.
     [ -n "$txt" ] || continue
-    printf '%s\n' "$txt" | grep -qE -- "$SKIP_RE" && continue
+    # DRAINED CONSUMER, NOT `grep -q`. This file runs under `set -o pipefail`, and `grep -q` exits
+    # the instant it matches — which SIGPIPEs the producer, so the PIPELINE's status becomes the
+    # signal rather than grep's 0, and the condition reads FALSE exactly ON A MATCH. The failure is
+    # inverted and silent in the expensive direction: the panes that would have been skipped — the
+    # mid-turn one, the one at a permission dialog, the one awaiting its own watcher — are precisely
+    # the ones that would get typed into. `grep -E … >/dev/null` reads its input to the end.
+    printf '%s\n' "$txt" | grep -E -- "$SKIP_RE" >/dev/null && continue
     printf '%s\n' "$id"
   done <<EOF
 $ids
