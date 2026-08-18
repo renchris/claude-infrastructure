@@ -31,6 +31,19 @@ This one is a **repeat of the 08-14/08-16 route**, not a fifth route. The class 
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
 discriminator is re-derived below.
 
+🚨 **This table is UNDERCOUNTED, and the closing question below is now ANSWERED — 2026-08-17,
+~08:52Z.** `8f59467c92b0` (project `claude-infrastructure`, the cross-repo product-repos master) was
+misrouted **twice**: on 08-15 — an occurrence absent from this table because that worker recorded it
+in `docs/plans/MASTER_PRODUCT_REPOS.md` rather than in a `venue-*` file, inside a commit
+(`b4ddaa27`) about something else entirely — and again ~1.5h after this file landed. The true figure
+is **six dispatches over five distinct items**, and any count taken from the `venue-*` family is a
+floor. That re-dispatch also settles this file's *"the conclusion never reached the enforcing store"*
+question at full resolution: the 08-15 disproof was written into the item's own DoD-ref plan, the
+most on-topic location available, and bought two days — nothing in the dispatch chain reads plan
+prose. **And it refutes the remedy as filed:** both §3 options of the 08-16 doc PASS that row, since
+its `project` label is accurate and only the plan BODY names the foreign trees.
+`venue-foreign-master-redispatch-2026-08-17.md`.
+
 ## The cause is settled; the fix is a pending decision
 
 `cloud-venue-project-repo-mismatch-2026-08-16.md` §2 located it and this file does not improve on it:
