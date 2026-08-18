@@ -87,6 +87,53 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #24: `master-session-lifecycle` 6 → 6 open / 1 blocked. filed 0 /
+  closed 0.** Two lands, no close, and the count is the honest number: of the 6 open rows, **4 are
+  excluded by construction and I re-verified each** — `b69b1d957cec` standing watch (npm latest is
+  2.1.234, we hold 2.1.220; the revisit conditions are unmet), `85a82455de9a` not this chain's,
+  `68fdc99b17c7` whose blocker `e06ba316a1aa` I confirmed still OPEN, and `62363cac1e39` an efficacy
+  re-census **not due until ~2026-08-24** (today is 08-18 — running a soak 6 days early buys a
+  premature verdict, so it stays). That leaves two, and both are large: `5cd2ecf792ae` (banner beat)
+  and `4de3d0f9c0e1` (DoD crosstalk). I worked the second.
+  - **What landed.** `dc597de18` — per-capture provenance, prerequisite 1 of
+    `docs/research/dod-crosstalk-2026-08-18.md`. The DoD store is repo-KEYED, so 101 worktrees append
+    to one file, and `persist_dod` recorded the writing cwd only in the FILE HEADER — i.e. for the
+    FIRST writer. Every `## <ts>` block now names its own `toplevel=` (+ `session=` when known,
+    OMITTED rather than blank when not). `e215a1416` — the §5 adjacent finding, which §2 measured as
+    the **active every session** half: SessionStart framed the whole shared file as *"Every 'Scope
+    (frozen):' line below is binding … until ALL of it is met"*, handing each session 15 waves'
+    contracts as its own. **It needed no ruling on what "binding" means, because the frame
+    contradicted its own store** — `get` and `last_recorded_scope` have always returned the newest
+    frozen line only. Now: newest = `THE CURRENT CONTRACT`, the rest labelled `NOT additional binding
+    scope`, **LOSSLESS** (full history still injected verbatim).
+  - **The row stays OPEN, deliberately.** Prerequisite 2 — a lineage token on the succession paths,
+    `--recycle` included, recording the *firing* cwd — is unbuilt, and without it no reader can
+    separate a wave from its own successor. `tests/dod-path.bats` cases 7/8 stay skipped. I sized
+    prereq 2 and stopped: there is no `FIRING_CWD`/`TARGET_CWD` variable in `handoff-fire.sh` (9k
+    lines) to hang it on, and closure needs BOTH consumers filtering too. Do not "fix" this by
+    reverting to a per-toplevel key — that re-breaks the worktree hop from the other side.
+  - 🚨 **A DEAD-ASSERTION CLASS OUR OWN ANALYZER DOES NOT FLAG, and it cost two wrong diagnoses.**
+    Under bats a bare **`! cmd` is live ONLY as a test's FINAL command** — bash errexit explicitly
+    does not fire "if the command's return value is being inverted with `!`", so an **intermediate**
+    `! cmd` passes whatever the truth is. Mine sat mid-test and passed against a string I then
+    *proved present from inside the harness*. Settled by positive control, not by reasoning (`! true`
+    as a last line DOES fail). Live form is a count: `n="$(… | grep -c … || true)"; [ "$n" -eq 0 ]`.
+    `scripts/bats-assert-liveness-fix.py --dry-run` reports **no dead assertions** on that same file
+    — though it DID catch the sibling `A && B && C` form in the first land, and its fixer is the
+    right tool there. **Not filed** (this recycle closed 0, and filing would end it net-positive);
+    recorded in the doc and memory `negated-assertion-dead-unless-final`. Widening the analyzer was
+    deliberately not attempted in passing — it gates every land.
+  - **Method that paid.** Per-site mutants, one per case, both directions: M1 no-stamp → reds 20-24;
+    M3 blank `session=` → **23 alone**; M5 first-writer memoization (the precise §4.1 defect) →
+    **24 alone**; M4 stamp-makes-a-`- [ ]`-box → reds the reader-neutrality CONTROL, which is what
+    proves that control can fail at all (it passes pre-fix by construction). M2 reverted the stamp
+    outright and isolated nothing — an over-wide red indicts the MUTANT.
+  - **Two traps paid for.** `open(SRC,"w").write(mutate(...))` TRUNCATES before the assert runs, so a
+    missed anchor leaves an EMPTY subject — compute the mutated text FIRST (restored from the `cp`
+    backup, verified by `git diff --stat`). And the converge recipe in the brief is **stale**: a
+    `git pull --rebase` in the shared checkout is now DENIED by a guard ("ungated advance … creates
+    no symlinks"); `scripts/deploy-live.sh` does the advance itself.
+
 - **2026-08-18 — drain recycle #23: `master-operator-gated` 2 → 0 open / 50 blocked. filed 0 /
   closed 2.** Picked this effort over `master-session-lifecycle` (6 open) because the fold showed it
   cheaper, per the goal's own "or whichever effort the fold shows cheaper". Landed `070f205de`
