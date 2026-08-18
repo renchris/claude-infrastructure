@@ -5321,6 +5321,10 @@ MAIL_OUT = (0.10, 0.72)  # outbound flight, as fractions of the declared window
 MAIL_IN = (0.34, 0.92)  # inbound flight — starts LATER and ends LATER, so the middle is the cross
 # (cells behind the letter, opacity). Three squares, static children of the travelling group.
 MAIL_TRAIL = ((0.75, 0.55), (1.5, 0.34), (2.25, 0.18))
+# Steps the outbound spends climbing out of the hand band into the high lane. Three, because the
+# climb has to be over before the crossing (which is at ~0.52 of the window by construction) and
+# still be visible as a climb rather than a jump. The gate asserts the per-step lift is whole pixels.
+MAIL_RISE_STEPS = 3
 
 
 def ml_at(f: float) -> float:
@@ -5353,10 +5357,39 @@ def mail_geom(art: Art) -> dict[str, float]:
     a_top = GROUND - SPRITE_H * art.clawd_scale
     lo_y = a_top + 2 * u  # the hand band — the same one THE SUMMONING posts its letter from
     hi_y = lo_y - MAIL_LANE_CELLS * u
+    # BOTH lanes are anchored two cells INSIDE the silhouette, not at its right edge. That is the
+    # occlusion this file uses everywhere instead of a fade: the outbound's first stops are behind
+    # the walker, so it EMERGES from the hand rather than appearing beside the head, and the inbound
+    # switches off having reached the same hand — "the answer lands and is read". Anchored at the
+    # edge instead, the send popped into open plate above the head, which is the entrance the whole
+    # spec spent pages deleting.
+    x0 = a_right - 2 * u
     n = 1
-    while a_right + n * step < W:
+    while x0 + n * step < W:
         n += 1
-    return {"u": u, "step": step, "x0": a_right, "hi_y": hi_y, "lo_y": lo_y, "n": float(n)}
+    return {"u": u, "step": step, "x0": x0, "hi_y": hi_y, "lo_y": lo_y, "n": float(n)}
+
+
+def mail_offsets(
+    n: int, step: float, rise: float, outbound: bool
+) -> list[tuple[float, float]]:
+    """Every authored (dx, dy) for one lane — ONE definition, read by the emitter AND by the gate.
+
+    A second copy is what let the inbound fly the WRONG WAY through a fully green build: it counted
+    UP from the walker instead of DOWN to it, so the answer left the hand it was supposed to arrive
+    at and exited the left of the frame, and at the crossing instant the second letter was hidden
+    inside the silhouette. Every gate here passed — the flights overlapped in time, the lanes cleared
+    each other, the outbound left the frame, the steps were whole pixels, and all three ink probes
+    measured real ink, because ink is not direction. Only a RENDER caught it. `assert_mail_lanes_read
+    _as_two` now reads these offsets, so the same inversion is a build failure.
+    """
+    out = []
+    for i in range(n + 1):
+        if outbound:
+            out.append((step * i, -rise * min(i, MAIL_RISE_STEPS) / MAIL_RISE_STEPS))
+        else:
+            out.append((step * (n - i), 0.0))
+    return out
 
 
 def _mail_trail(x: float, y: float, u: float, rightward: bool) -> str:
@@ -5392,38 +5425,41 @@ def mail_props(art: Art) -> str:
     if not emits(art, "rMail"):
         return ""
     g = mail_geom(art)
-    u, x0 = g["u"], g["x0"]
-    out = (
-        f'<g class="mlOut">{_mail_trail(x0, g["hi_y"], u, True)}'
-        f'{_letter_rects(x0, g["hi_y"], u)}</g>'
-    )
-    inb = (
-        f'<g class="mlIn">{_mail_trail(x0, g["lo_y"], u, False)}'
-        f'{_letter_rects(x0, g["lo_y"], u)}</g>'
-    )
+    u, x0, y = g["u"], g["x0"], g["lo_y"]
+    # Both are AUTHORED in the hand band and the outbound is lifted into the high lane by its own
+    # transform. Drawing it at hi_y instead would have it start level with the head with nothing to
+    # have sent it — the lift IS the send, and it costs no second animation because a translate
+    # carries x and y together (the same construction THE SUMMONING's letter uses to cross a gap
+    # that is one cell down as well as five across).
+    out = f'<g class="mlOut">{_mail_trail(x0, y, u, True)}{_letter_rects(x0, y, u)}</g>'
+    inb = f'<g class="mlIn">{_mail_trail(x0, y, u, False)}{_letter_rects(x0, y, u)}</g>'
     return out + inb
 
 
-def _mail_flight(name: str, cls: str, n: int, step: float, sign: int, span: tuple) -> str:
+def _mail_flight(
+    name: str, cls: str, n: int, step: float, rise: float, span: tuple, outbound: bool
+) -> str:
     """One lane: n whole-pixel stops, then off. `steps(1,end)` so it is only ever at an authored x.
 
-    Percentages come from `pctx`, not `pct`. `pct` is two decimals, i.e. 24 ms of a 240 s period, and
-    the stops here are ~148 ms apart — close enough that a longer flight would quantise two of them
-    onto the same selector and silently drop a step. The duplicate check below is not decoration: it
-    is the only thing standing between a re-timing and a stutter nothing else in this file measures.
+    Percentages come from `pctx`, not `pct`. `pct` is two decimals — 24 ms of a 240 s period — and
+    these stops are ~148 ms apart, so `pct` would quantise a longer flight's stops onto one selector
+    and silently drop a step. `pctx`'s nine decimals put that below 2.4e-9 s and make the collision
+    unreachable for any step count this beat could have.
+
+    That is worth saying because a guard against it USED to stand here and it was dead. A mutant that
+    drove the step to 1/40th of a cell — 857 stops, the most degenerate flight available — did not
+    trip it, because nine decimals cannot collide. What actually breaks at that step is not the
+    PRECISION of the stops, it is the GRID: 1.2 px is a fractional canvas pixel, and a prop moving a
+    fractional pixel per step crawls at the render scale the README uses. So the check moved to where
+    it is reachable, beside the one `assert_summon_on_grid` already makes for the other beat's props.
     """
     t0, t1 = span
-    stops, seen = [], set()
-    for i in range(n + 1):
+    stops = []
+    for i, (dx, dy) in enumerate(mail_offsets(n, step, rise, outbound)):
         p = pctx(ml_at(t0 + (t1 - t0) * (i / n)))
-        if p in seen:
-            raise SystemExit(
-                f"gen: TWO-WAY MAIL's {cls} lane emits two stops at {p}% — {n} steps do not fit "
-                f"inside {(t1 - t0):.2f} of a {ev('rMail')[1] - ev('rMail')[0]:.1f}s window at this "
-                f"precision. Widen the window in RARE_EVENTS or raise MAIL_STEP_CELLS."
-            )
-        seen.add(p)
-        stops.append(f"{p}%{{opacity:1;transform:translateX({fmt(sign * step * i)}px)}}")
+        stops.append(
+            f"{p}%{{opacity:1;transform:translate({fmt(dx)}px,{fmt(dy)}px)}}"
+        )
     return (
         f"@keyframes {name}{{0%{{opacity:0}}{''.join(stops)}"
         f"{pctx(ml_at(t1) + GATE_EDGE)}%{{opacity:0}}100%{{opacity:0}}}}"
@@ -5435,8 +5471,9 @@ def mail_css(art: Art) -> str:
     """Two animations, two elements, neither with more than one."""
     g = mail_geom(art)
     n, step = int(g["n"]), g["step"]
-    return _mail_flight("mlo", "mlOut", n, step, 1, MAIL_OUT) + _mail_flight(
-        "mli", "mlIn", n, step, -1, MAIL_IN
+    rise = MAIL_LANE_CELLS * g["u"]
+    return _mail_flight("mlo", "mlOut", n, step, rise, MAIL_OUT, True) + _mail_flight(
+        "mli", "mlIn", n, step, rise, MAIL_IN, False
     )
 
 
@@ -5454,7 +5491,13 @@ def assert_mail_lanes_read_as_two(art: Art) -> None:
       2. The lanes must clear each other by more than TWICE the prop. Below that the pair reads as
          one message stuttering rather than two crossing — the storyboard's own derivation (22 px
          against a 10 px prop) carried onto this canvas's grid.
-      3. The outbound must genuinely LEAVE the frame. "its own message is gone" is the exit; a letter
+      3. The step must be a WHOLE canvas pixel, which is `assert_summon_on_grid`'s rule applied to
+         this beat's props — and is the check that actually catches a degenerate step, after a
+         precision guard written for the same fear turned out to be unreachable (see `_mail_flight`).
+      4. Each lane must hold ONE heading, and the inbound must end AT the walker while the outbound
+         ends away from it. This is the one check here written from a defect rather than from the
+         design: the inbound shipped inverted through a green build and only a render caught it.
+      5. The outbound must genuinely LEAVE the frame. "its own message is gone" is the exit; a letter
          that stops short is parked in open plate, which is the pop this file occludes everywhere
          else. Checked per variant because the travel is sized per variant.
     """
@@ -5474,6 +5517,41 @@ def assert_mail_lanes_read_as_two(art: Art) -> None:
             f"gen[{art.key}]: the mail lanes clear each other by {clear:.0f}px against a "
             f"{prop:.0f}px prop. Under 2x the prop the pair reads as one message stuttering, not as "
             f"two crossing. Raise MAIL_LANE_CELLS."
+        )
+    if abs(g["step"] - round(g["step"])) > 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the mail step is {g['step']:.3f} canvas px at "
+            f"clawd_scale={art.clawd_scale} — not a whole pixel. A prop stepping a fraction of a "
+            f"pixel crawls: its edges shimmer at the 838px README column, on the one object this "
+            f"beat asks the reader to follow. Same rule, same reason as assert_summon_on_grid."
+        )
+    n_st, step = int(g["n"]), g["step"]
+    rise = MAIL_LANE_CELLS * g["u"]
+    for label, outbound, want_first, want_last in (
+        ("outbound", True, 0.0, n_st * step),
+        ("inbound", False, n_st * step, 0.0),
+    ):
+        xs = [dx for dx, _dy in mail_offsets(n_st, step, rise, outbound)]
+        if xs[0] != want_first or xs[-1] != want_last:
+            raise SystemExit(
+                f"gen[{art.key}]: the {label} message runs {xs[0]:.0f}px -> {xs[-1]:.0f}px, but it "
+                f"must run {want_first:.0f} -> {want_last:.0f}. The inbound ARRIVES at the hand and "
+                f"the outbound LEAVES it; inverted, the answer flies out of the walker and off the "
+                f"left of the frame while every other gate here stays green — measured, not feared."
+            )
+        deltas = {round(b - a_, 6) for a_, b in zip(xs, xs[1:])}
+        if len(deltas) != 1 or (deltas.pop() > 0) != outbound:
+            raise SystemExit(
+                f"gen[{art.key}]: the {label} message does not travel one even step in one "
+                f"direction. Two messages that do not hold a heading cannot read as two lanes "
+                f"crossing, which is the only thing this beat says."
+            )
+    lift = MAIL_LANE_CELLS * g["u"] / MAIL_RISE_STEPS
+    if abs(lift - round(lift)) > 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the outbound lifts {lift:.3f}px a step out of the hand band — not a "
+            f"whole pixel, so the climb crawls exactly as a fractional x-step would. Pick a "
+            f"MAIL_RISE_STEPS that divides MAIL_LANE_CELLS * the cell."
         )
     far = g["x0"] + g["n"] * g["step"]
     if far < W:
