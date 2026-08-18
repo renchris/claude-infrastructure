@@ -28,6 +28,13 @@ _stub_it2() {
   chmod +x "$HOME/.claude/bin/it2"
 }
 
+# Install a fake cc-sessions whose `--json` prints $1 verbatim (the second identity oracle).
+_stub_sessions() {
+  mkdir -p "$HOME/.claude/bin"
+  { echo '#!/bin/bash'; printf 'cat <<"J"\n%s\nJ\n' "$1"; } > "$HOME/.claude/bin/cc-sessions"
+  chmod +x "$HOME/.claude/bin/cc-sessions"
+}
+
 @test "REFUSES with verdict=unknown when the oracle emits nothing (the fabricated-zero bug)" {
   _stub_it2 ''
   run /bin/bash "$RPT" --json
@@ -60,6 +67,12 @@ _stub_it2() {
 @test "positive control: our pane present in the list → verdict=ok and real numbers" {
   export ITERM_SESSION_ID="w0t0p0:1234ABCD-1111-2222-3333-444444444444"
   _stub_it2 '[{"id":"1234ABCD-1111-2222-3333-444444444444"}]'
+  # The report now requires BOTH identity oracles (backlog 8370af320af5: pane ids alone counted every
+  # session-uuid-keyed box dead, eight of them belonging to live sessions). This control's claim is
+  # unchanged — ok, with real numbers — so it has to supply the second one. Stubbing it also keeps the
+  # test hermetic: with only $HOME fixtured, resolution would otherwise fall through PATH to the
+  # operator's real cc-sessions, which does not know this fixture's pane.
+  _stub_sessions '[{"paneUUID":"1234ABCD-1111-2222-3333-444444444444","name":"fixture","session_id":"55556666-7777-8888-9999-aaaabbbbcccc"}]'
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '"verdict":"ok"' || false
@@ -69,6 +82,7 @@ _stub_it2() {
 @test "an EMPTY but valid array is a readable oracle, not an unknown one (when not in a pane)" {
   unset ITERM_SESSION_ID
   _stub_it2 '[]'
+  _stub_sessions '[]'   # second identity oracle: readable, describes no session (8370af320af5)
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '"oracle":"readable"' || false
@@ -77,6 +91,7 @@ _stub_it2() {
 @test "counts a dead-pane box's never-surfaced line, and keeps the three counts distinct" {
   unset ITERM_SESSION_ID
   _stub_it2 '[]'
+  _stub_sessions '[]'   # second identity oracle: readable, describes no session (8370af320af5)
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '"dead_boxes":1' || false
@@ -87,6 +102,7 @@ _stub_it2() {
 @test "a line already SURFACED is not counted as never-surfaced (the handed-down count's error)" {
   unset ITERM_SESSION_ID
   _stub_it2 '[]'
+  _stub_sessions '[]'   # second identity oracle: readable, describes no session (8370af320af5)
   printf '1\n' > "$CC_MAILBOX_DIR/DEAD1111-1111-2222-3333-444444444444.seen"
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
@@ -97,6 +113,7 @@ _stub_it2() {
 @test "fixture-keyed boxes are excluded from the denominator" {
   unset ITERM_SESSION_ID
   _stub_it2 '[]'
+  _stub_sessions '[]'   # second identity oracle: readable, describes no session (8370af320af5)
   printf 'x\n' > "$CC_MAILBOX_DIR/AAAAAAAA-1111-2222-3333-444444444444.md"
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
@@ -107,6 +124,7 @@ _stub_it2() {
 @test "forward coverage is reported in permille so 3.3% is not rounded to 3%" {
   unset ITERM_SESSION_ID
   _stub_it2 '[]'
+  _stub_sessions '[]'   # second identity oracle: readable, describes no session (8370af320af5)
   printf 'BBBB1111-1111-2222-3333-444444444444\n' > "$CC_MAILBOX_DIR/DEAD1111-1111-2222-3333-444444444444.forward"
   run /bin/bash "$RPT" --json
   [ "$status" -eq 0 ]
