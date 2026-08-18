@@ -1381,6 +1381,59 @@ KWORK_WINDOW_MIN = 10.0    # transcript-mtime window that counts a session as WO
 ASSIGN_TTL_MIN = 15.0      # assignment lifetime ≈ cache TTL + engage + first sweep that sees it
 ASSIGN_PRUNE_LINES = 400   # ledger rewrite threshold (kept to the newest half)
 URGENCY_EXP_DEFAULT = 2.0
+
+# ---- the RECYCLE RE-PICK threshold (ACCOUNT_ROUTING_V2 §14, backlog 2dc6906b6e0b) --------------
+# §14 wanted a recycle to re-pick on "excluded OR pressured". Only the excluded half shipped:
+# handoff-fire's recycle_repick moves a pane when the router names the current account in its
+# exclusion map, and otherwise keeps it — its own comment says pressure short of exclusion "belongs
+# with M7's scoring terms, where it can be scored against headroom, not here where the only input
+# is a boolean."
+#
+# THIS CONSTANT IS WHY THE OTHER HALF CAN NOW SHIP WITHOUT A BOOLEAN. The measured magnitude is the
+# M7 score itself — score_general already prices headroom, deadline urgency, projected 5h
+# utilization and the login cliff into one number, and `--rank general` already emits it per
+# account. So "pressured" needs no new sensor and no second definition of pressure: it is the RATIO
+# between the best account's score and the incumbent's, and the only thing missing was a declared
+# threshold for how much better is worth moving a pane for.
+#
+# It lives HERE, and rides route-meta, for the reason the backlog row insists on: a threshold
+# hardcoded in handoff-fire would be a routing policy authored outside the router, free to drift
+# from the scoring it is a threshold ON. The consumer reads the number the router declares; it does
+# not get a vote.
+#
+# 4.0 — deliberately well clear of noise rather than tuned. Live spread measured 2026-08-17
+# (`--rank general`): 0.005070 / 0.000062 / 0.000047 / 0.000039, i.e. the top account outscored the
+# rest by ~80-130x. A real pile-up is orders of magnitude, not percent, so a 4x floor moves a pane
+# only when the routing case is unambiguous and never on the jitter between two comparable
+# accounts. Raising it makes the re-pick rarer, never wrong.
+REPICK_RATIO_DEFAULT = 4.0
+
+
+def repick_ratio(R):
+    """The score ratio (best/incumbent) at or above which a recycle should re-pick, or None when
+    the pressure half is switched off (the consumer then re-picks only on exclusion, i.e. v1).
+
+    Takes the router config dict as a parameter, exactly like urgency_exp(R) — `R` is not a module
+    global here, and reading it as one raised NameError on the first live call.
+
+    TWO ENV KNOBS, NOT ONE, AND THE SPLIT IS THE POINT. The first draft documented
+    `CC_ROUTE_REPICK_RATIO=off` as the kill switch and routed it through _cliff_env, which by
+    deliberate design IGNORES a malformed value so that "a typo in a tuning knob must not silently
+    disable a safety term". So `off` parsed as garbage and returned the 4.0 default: a kill switch
+    that emitted `repick_ratio=4` and killed nothing. Measured, not reasoned — the claim was in the
+    docstring for one revision before the live run refuted it.
+
+    The polarity is what _cliff_env gets right and this term needs inverted. Ignoring a typo
+    fails SAFE for a term that restrains routing; this term AUTHORISES AN ACTION (moving a pane),
+    so its safe failure direction is off, not on. Hence the R8 `_term_on` primitive every other M7
+    kill switch already uses:
+        CC_ROUTE_REPICK=off|0|false     disable the pressure half entirely  → None → 'off'
+        CC_ROUTE_REPICK_RATIO=<float>   tune the threshold (a typo still falls back to the default,
+                                        which is correct HERE because a wrong threshold is a
+                                        rarer/commoner re-pick, never an unguarded one)"""
+    if not _term_on("CC_ROUTE_REPICK"):
+        return None
+    return _cliff_env("CC_ROUTE_REPICK_RATIO", (R or {}).get("REPICK_RATIO", REPICK_RATIO_DEFAULT))
 PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the window reset)
 
 # ---- the DESK lane's own terms (DESK_ROUTER_AND_STARTUP_V1 W1, R2 §7(ii)/§10) -------------------
@@ -4343,7 +4396,15 @@ def main():
                               f"k_work={w.get('k_work') if w.get('k_work') is not None else '-'}",
                               f"k={w.get('k') if w.get('k') is not None else '-'}",
                               f"k_eff={k_eff(w)}",
-                              f"kwork_to={KWORK_TIMEOUTS}"]
+                              f"kwork_to={KWORK_TIMEOUTS}",
+                              # §14's re-pick threshold, DECLARED BY THE ROUTER (backlog
+                              # 2dc6906b6e0b). handoff-fire's recycle_repick reads this rather than
+                              # carrying a constant of its own: a threshold on the M7 score that
+                              # lives outside the scorer is free to drift from it silently. Emitted
+                              # on every --route/--rank so the consumer never has to ask twice, and
+                              # so a decision's own threshold is recoverable from its log line.
+                              f"repick_ratio={_rr:g}" if (_rr := repick_ratio(cfg.get('router')))
+                              else "repick_ratio=off"]
                              # The desk lane's own decision inputs: which rung of the degradation
                              # ladder the winner came from, and whether hysteresis was in play.
                              + ([f"desk_tier={desk_keys(w, cfg)[2]}",

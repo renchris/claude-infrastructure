@@ -76,7 +76,12 @@ called() { # $1 = a substring of an expected invocation
 
 @test "extraction control: the marker found a non-empty block that routes and assigns" {
   [ -s "$BLOCK" ]
-  grep -q -- '--route general' "$BLOCK"
+  # THE ROUTER CALL, AS AN INVOCATION AND NOT AS A MENTION. This read `grep -- '--route general'`
+  # over the whole block, comments included, and it stayed GREEN across the switch to `--rank`
+  # purely because a new comment explains why `--rank`, not `--route`, is now called — a
+  # mention-vs-use false pass in the one case whose entire job is to prove the extraction is real.
+  # Comments are stripped before the match, so the token has to appear in code.
+  grep -v '^[[:space:]]*#' "$BLOCK" | grep -q -- '--rank general'
   grep -q -- '--src recycle-repick' "$BLOCK"
   grep -q '^}$' "$BLOCK"
   grep -q 'recycle_repick()' "$BLOCK"
@@ -88,7 +93,7 @@ called() { # $1 = a substring of an expected invocation
   run_repick next3
   [ "$status" -eq 0 ]
   [ "$output" = "next2" ]                                   # stdout contract: the new account, alone
-  called '--route general'
+  called '--rank general'
   called '--assign next2 --src recycle-repick'
   grep -q 'recycle RE-PICK' "$ERRF"
   grep -q 'next3' "$ERRF"                                   # old
@@ -181,7 +186,7 @@ called() { # $1 = a substring of an expected invocation
   run_repick next3
   [ "$status" -eq 0 ]
   [ "$output" = "next2" ]
-  called '--route general'
+  called '--rank general'
   ! called '--assign'
 }
 
@@ -255,4 +260,128 @@ called() { # $1 = a substring of an expected invocation
   run sed -n '/^# ---- fire-time assignment feedback (ACCOUNT_ROUTING_V2 M7)/,/^fi$/p' "$REPO/scripts/handoff-fire.sh"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q '\[ "\$RECYCLE" = 0 \]'
+}
+
+# ================================================================================================
+# §14's SECOND HALF — re-pick on PRESSURE, not only on exclusion (backlog 2dc6906b6e0b)
+#
+# v1 kept a routable incumbent however hot, because the only input here was a boolean and the row
+# insists the magnitude belongs in claude-accounts as an M7 scoring term. It now is: the magnitude
+# is the router's own per-account score off `--rank`, and the THRESHOLD is declared by the router
+# too and rides route-meta as `repick_ratio=`. These cases pin the one condition that moves a pane
+# on pressure and the five that must not — same polarity as the exclusion half above, because the
+# safe direction is always the byte-identical relaunch.
+#
+# RED-PROOF, STATED HONESTLY. Against pristine origin/main these eight run 1..25 with four not-ok:
+# the cases that MOVE a pane (field-1 parse, pressured incumbent, zero-score incumbent) plus the
+# static declaration check. The four RESTRAINT cases — below-threshold, kill switch, no route-meta,
+# incumbent unranked — PASS pre-fix, and not because they are weak: v1 refuses every pressure
+# re-pick unconditionally, so a case asserting "this one does not move" cannot fail against an
+# engine where nothing moves. They are the negative half of a pair whose positive half is
+# red-proved, and it is the PAIR that discriminates. Read them as regression guards on the new
+# restraint, never as independent evidence that the restraint was ever absent.
+# ================================================================================================
+
+# A ranked fleet: $1 = the route-meta repick_ratio field (empty ⇒ no route-meta line at all).
+_rank_fleet() {
+  printf 'next2 0.005000\nnext3 0.000050\nnext4 0.000040\n' > "$ROUTE_OUT"
+  if [ -n "${1:-}" ]; then
+    printf 'route-meta: acct=next2 k_eff=2 repick_ratio=%s\n' "$1" > "$ROUTE_ERR"
+  else
+    : > "$ROUTE_ERR"
+  fi
+  printf '0\n' > "$ROUTE_RC"
+}
+
+@test "the winner is field 1 of a --rank line, never the whole line squashed" {
+  # The v1 parse was `tr -d '[:space:]'` over line 1, correct for --route's bare name and silently
+  # catastrophic for --rank: it yields `next20.005000`, a name the account map cannot declare, so
+  # EVERY recycle would decline for a reason that looks like a routing nicety. Pinned as the
+  # stdout contract because nothing else in this suite would notice.
+  _rank_fleet 4
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ "$output" = "next2" ]
+}
+
+@test "a routable but PRESSURED incumbent is re-picked, on the router's own score and threshold" {
+  # next3 scores 0.000050 against next2's 0.005000 — 100x, well over the declared 4x. Nothing in
+  # the exclusion map names next3, so v1 would have kept it.
+  #
+  # THIS CASE IS ALSO THE errf-LIFETIME PIN. The threshold is parsed from the same stderr file as
+  # the exclusion map, and the first draft read it AFTER that file was removed: the parse returned
+  # empty, the block fell through its own "unknown ⇒ keep the incumbent" guard, and the entire
+  # pressure half was dead code that could never fire and would never have said so. If that
+  # ordering regresses, this case is what goes red.
+  _rank_fleet 4
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ "$output" = "next2" ]
+  called '--assign next2 --src recycle-repick'
+  grep -q 'PRESSURE' "$ERRF"
+  grep -q '0.000050' "$ERRF"    # the incumbent's measured score, not just a verdict
+  grep -q '0.005000' "$ERRF"    # the winner's
+  grep -q '4' "$ERRF"           # the threshold the decision was made against
+}
+
+@test "pressure BELOW the router's threshold keeps the pane where it is" {
+  # 0.005000 / 0.004000 = 1.25x against a declared 4x. A re-pick here would be jitter between two
+  # comparable accounts — the thing the threshold exists to refuse.
+  printf 'next2 0.005000\nnext3 0.004000\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next2 repick_ratio=4\n' > "$ROUTE_ERR"
+  printf '0\n' > "$ROUTE_RC"
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "the router's kill switch (repick_ratio=off) restores v1 even at 100x pressure" {
+  # The threshold is the ROUTER's to withdraw. `off` is what claude-accounts emits when
+  # CC_ROUTE_REPICK is disabled, and it must read here as "never", not as a parse failure that
+  # happens to fail the same way — so it is asserted against a fleet that would otherwise move.
+  _rank_fleet off
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "no route-meta line at all is an unknown threshold, so the pane stays" {
+  # An older router, or a truncated stderr. Absence is not permission.
+  _rank_fleet ""
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "an incumbent absent from the ranking is unmeasured, not pressured" {
+  # The router did not score this account this pass. That is the same unknown as a missing
+  # threshold — and critically NOT the exclusion case, which is handled earlier and would have
+  # named the account in the exclusion map.
+  _rank_fleet 4
+  run_repick nextX
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a zero-scoring incumbent against a positive winner is unbounded pressure, and moves" {
+  # best/0 is not a comparison to make in shell. The zero case is decided explicitly rather than
+  # left to divide-by-zero, and it decides in favour of moving — a zero score IS the pile-up.
+  printf 'next2 0.005000\nnext3 0\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next2 repick_ratio=4\n' > "$ROUTE_ERR"
+  printf '0\n' > "$ROUTE_RC"
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ "$output" = "next2" ]
+}
+
+@test "the threshold is DECLARED BY THE ROUTER, not carried as a constant in handoff-fire" {
+  # The row's actual requirement: a measured magnitude as an M7 scoring term in claude-accounts,
+  # "not a boolean in handoff-fire". A numeric threshold literal reappearing in the decision block
+  # would be that policy re-authored outside the router and free to drift from the scoring it
+  # thresholds — so the block may reference the ratio only as a value read off route-meta.
+  grep -q 'repick_ratio' "$BLOCK"
+  grep -q 'REPICK_RATIO_DEFAULT' "$REPO/bin/claude-accounts"
+  grep -q 'repick_ratio=' "$REPO/bin/claude-accounts"
+  # No bare numeric comparison against a literal threshold anywhere in the decision block.
+  ! grep -vE '^[[:space:]]*#' "$BLOCK" | grep -qE '(>=|-ge)[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*(\)|\]|$)'
 }

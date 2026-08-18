@@ -6546,26 +6546,85 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # stalls on a dark endpoint has not yet cost anything, while a recycle that stalls has already
   # been chosen as the CHEAP disposition and is holding a pane that would otherwise be working.
   # perl alarm survives exec (macOS has no GNU timeout) — the same idiom probe_account uses.
+  # `--rank`, not `--route`, and it is ONE call rather than two. Both flags run the identical
+  # scoring pass, emit the identical `<kind> excluded — …` stderr map (bin/claude-accounts:4350-4357
+  # says so explicitly: "stdout contract for both flags is untouched") and the identical route-meta
+  # line. `--route` then throws away everything except the winner's name. `--rank` keeps the
+  # per-account scores, which is exactly the measured magnitude the pressure half below needs — so
+  # the wider surface costs nothing and asking twice would have cost a second full scoring pass.
   if command -v perl >/dev/null 2>&1; then
-    out="$(perl -e 'alarm 25; exec @ARGV' "$bin" --route general 2>"$errf")" || rc=$?
+    out="$(perl -e 'alarm 25; exec @ARGV' "$bin" --rank general 2>"$errf")" || rc=$?
   else
-    out="$("$bin" --route general 2>"$errf")" || rc=$?
+    out="$("$bin" --rank general 2>"$errf")" || rc=$?
   fi
   if [ "$rc" != 0 ] || [ -z "$out" ] || [ "$out" = none ]; then rm -f "$errf"; return 0; fi
-  new="$(printf '%s\n' "$out" | sed -n '1p' | tr -d '[:space:]')"
-  if [ -z "$new" ] || [ "$new" = "$cur" ]; then rm -f "$errf"; return 0; fi
+  # `--rank` lines are `<name> <score>`, so the winner is FIELD 1 of line 1. The old `--route` parse
+  # was `tr -d '[:space:]'` over the whole line, which under --rank would yield `next30.005070` —
+  # a name the account map cannot declare, i.e. a silent decline on every recycle. Field-extracted
+  # here rather than space-stripped, for that reason.
+  new="$(printf '%s\n' "$out" | sed -n '1p' | awk '{print $1}')"
+  if [ -z "$new" ]; then rm -f "$errf"; return 0; fi
+  if [ "$new" = "$cur" ]; then rm -f "$errf"; return 0; fi
   # `claude-accounts: general excluded — next3=kmax-concurrency; next=5h-cutoff`. The prefix is
   # stripped by SHAPE rather than by the literal separator, so the em-dash never has to survive a
   # round trip through this file to keep the parse working. `sed -n '1p'` and not `head -1`:
   # pipefail turns a SIGPIPE'd producer into a non-zero pipeline, and this runs under `set -e`.
   exline="$(sed -n 's/^claude-accounts: [a-z]* excluded[^A-Za-z0-9]*//p' "$errf" | sed -n '1p')"
+  # BOTH stderr fields are read BEFORE the file is removed, and that ordering is load-bearing rather
+  # than tidy. The pressure block below needs the router's declared threshold off this same stderr;
+  # parsing it after this `rm` read an absent file, produced an empty string, and hit the block's own
+  # fail-soft "unknown ⇒ keep the incumbent" — so the whole second half was DEAD CODE that could
+  # never fire and would never have said so. Caught here before it shipped; the suite now pins the
+  # threshold parse against a fixture that carries a real route-meta line.
+  local rr_raw
+  rr_raw="$(sed -n 's/.*[[:space:]]repick_ratio=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
   rm -f "$errf"
   # Split on `; ` FIRST and anchor the whole field: `next` is a prefix of `next2/3/4`, so a
   # substring test would read a next3 exclusion as convicting next and move a perfectly routable
   # pane. The `=` is what makes the anchor exact.
   reason="$(printf '%s' "$exline" | tr ';' '\n' | sed 's/^[[:space:]]*//' \
             | sed -n "s/^${cur}=//p" | sed -n '1p')"
-  [ -n "$reason" ] || return 0                   # current account is routable — keep it (v1 scope)
+  # ── §14's SECOND HALF: re-pick on PRESSURE, not only on exclusion (backlog 2dc6906b6e0b) ───────
+  # v1 stopped here — a routable incumbent kept its pane, however hot. The block comment above says
+  # why: moving a pane off a merely-warm account "belongs with M7's scoring terms, where it can be
+  # scored against headroom, not here where the only input is a boolean."
+  #
+  # That constraint is honoured rather than worked around. Nothing here defines pressure, thresholds
+  # it, or invents a second opinion about routing. The magnitude is the ROUTER'S OWN M7 score —
+  # score_general already prices headroom, deadline urgency, projected 5h utilization and the login
+  # cliff into one number, and --rank just handed us one per account. The threshold is likewise the
+  # router's: bin/claude-accounts declares REPICK_RATIO_DEFAULT and emits it on every route-meta as
+  # `repick_ratio=`. This function reads two numbers it did not compute and compares them. A
+  # threshold hardcoded HERE would be a routing policy authored outside the router and free to
+  # drift from the scoring it thresholds — which is precisely what the row refused.
+  #
+  # FAIL-SOFT IN ONE DIRECTION ONLY, and that direction is "keep the incumbent". Every unknown —
+  # the router declaring `off`, an unparseable threshold, the incumbent missing from the ranking,
+  # a non-numeric score — resolves to no re-pick, because the alternative to a re-pick is not a
+  # failure, it is today's byte-identical relaunch. Only an affirmative, measured, above-threshold
+  # ratio moves a pane.
+  if [ -z "$reason" ]; then
+    local rr="$rr_raw" cur_s best_s
+    # `off` is the router's kill switch and lands here as a non-numeric, which this guard rejects
+    # along with a missing field and a typo. All three mean v1.
+    case "$rr" in ''|*[!0-9.]*) return 0 ;; esac
+    cur_s="$(printf '%s\n' "$out"  | awk -v a="$cur" '$1==a {print $2; exit}')"
+    best_s="$(printf '%s\n' "$out" | awk 'NR==1 {print $2}')"
+    # The incumbent absent from the ranking is NOT pressure — it is an account the router did not
+    # score this pass, which is the same unknown as a missing threshold. (It also cannot be the
+    # exclusion case: that was handled above, and an excluded account still appears in the map.)
+    [ -n "$cur_s" ] && [ -n "$best_s" ] || return 0
+    # Float comparison in awk — bash has no float arithmetic, and every one of these is a decimal
+    # well below 1. A zero/negative incumbent score against a positive best is unbounded pressure
+    # and is treated as over-threshold explicitly, because `best/0` is not a comparison anyone
+    # should be making at 25 lines of shell.
+    awk -v c="$cur_s" -v b="$best_s" -v r="$rr" '
+      BEGIN {
+        if (c + 0 <= 0) { exit (b + 0 > 0) ? 0 : 1 }
+        exit ((b + 0) / (c + 0) >= r + 0) ? 0 : 1
+      }' || return 0
+    echo "⚠ recycle re-pick on PRESSURE: $cur scores $cur_s against $new at $best_s (router threshold ${rr}x) — moving this pane" >&2
+  fi
   # SSOT check, not a naming one: launcher_for()/cfg_dir() below will HALT the fire on an account
   # the generated map does not declare (`!! unknown account`), which would turn a routing nicety
   # into a dead recycle. Ask the map first and decline instead. Skipped when the map is not loaded
