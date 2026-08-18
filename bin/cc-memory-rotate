@@ -23,9 +23,17 @@
 # two-tier hot/cold split): at/over ROTATE_AT, move ELIGIBLE `- [...](file.md) — hook` lines,
 # oldest-first by topic mtime, into archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md until the
 # index is at/under TARGET. Lines move VERBATIM under a dated boundary comment; topic files
-# are never touched; restore = paste the line back. This is the reversible, byte-budget-
+# are never touched; restore = paste the line back. This is the reversible, budget-
 # authorized class — NOT the lossy PROPOSE-ONLY half of /compact-memory (shortening and
 # dedupe stay human-gated there).
+#
+# TWO CAPS (2026-08-15). The loader reads "the first 200 lines or 25KB, whichever comes first",
+# so ROTATE_AT/TARGET each have a line-counted twin (ROTATE_AT_LINES/TARGET_LINES) and the rotor
+# arms on EITHER and stops only when BOTH are satisfied. Bytes alone was not a safe proxy: it
+# holds only above 25000/200 = 125 B/line, and a terse index (200 lines at 100 B/line = 20 KB)
+# sat under every byte threshold here while the loader dropped its tail. Rotation is the right
+# actuator for both, and for the line cap it is the ONLY one — shortening a hook frees bytes and
+# cannot free a line.
 #
 # ── WHAT IT REFUSES TO MOVE (protection, in evaluation order) ────────────────────────────────
 #   the newest TAIL_GUARD index lines        — the tail is what the loader drops when over;
@@ -60,7 +68,8 @@
 #
 # Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
 # Env:   MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
-#        (LIMIT-4000) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
+#        (LIMIT-4000) · MEMORY_INDEX_LINE_LIMIT (200) · MEMORY_ROTATE_AT_LINES (LINE_LIMIT-12) ·
+#        MEMORY_ROTATE_TARGET_LINES (LINE_LIMIT-32) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
 #        MEMORY_ROTATE_MIN_AGE_DAYS (7) · MEMORY_ROTATE_TEST_PRE_COMMIT (test seam, eval'd
 #        before each commit attempt's stat re-check — lets a suite exercise the contended path)
 # Exit:  0 noop/rotated/dry-run · 2 error · 3 locked/contended · 4 exhausted
@@ -112,16 +121,35 @@ if [ -r "$_ccmr_lib" ]; then . "$_ccmr_lib"; fi
 
 LIMIT="${MEMORY_INDEX_LIMIT:-25000}"
 case "$LIMIT" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-limit\n'; exit 2 ;; esac
+# The co-equal LINE cap. Anthropic documents the load as "the first 200 lines or 25KB, whichever
+# comes first", so the rotor's job is to hold the index under BOTH — a rotor that only watched
+# bytes left a terse index (200 lines at 100 B/line = 20 KB) permanently under every byte
+# threshold here while the loader dropped its tail, and the gate could then refuse an append
+# whose only mechanical remedy never fired. Sourced from the same lib the gate and the nudge
+# read, so one knob cannot drift between the three enforcers.
+if command -v mim_line_limit >/dev/null 2>&1; then
+  LINE_LIMIT=$(mim_line_limit) || LINE_LIMIT="${MEMORY_INDEX_LINE_LIMIT:-200}"
+else
+  LINE_LIMIT="${MEMORY_INDEX_LINE_LIMIT:-200}"
+fi
+case "$LINE_LIMIT" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-line-limit\n'; exit 2 ;; esac
 ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
 TARGET="${MEMORY_ROTATE_TARGET:-$(( LIMIT - 4000 ))}"
+# Same proportional bands as the byte thresholds (1500/25000 = 6%, 4000/25000 = 16%), so line
+# pressure arms and clears on the same shape of runway the byte side already uses.
+ROTATE_AT_LINES="${MEMORY_ROTATE_AT_LINES:-$(( LINE_LIMIT - 12 ))}"
+TARGET_LINES="${MEMORY_ROTATE_TARGET_LINES:-$(( LINE_LIMIT - 32 ))}"
 MIN_KEEP="${MEMORY_ROTATE_MIN_KEEP:-40}"
 TAIL_GUARD="${MEMORY_ROTATE_TAIL_GUARD:-15}"
 MIN_AGE_DAYS="${MEMORY_ROTATE_MIN_AGE_DAYS:-7}"
-for v in "$ROTATE_AT" "$TARGET" "$MIN_KEEP" "$TAIL_GUARD" "$MIN_AGE_DAYS"; do
+for v in "$ROTATE_AT" "$TARGET" "$ROTATE_AT_LINES" "$TARGET_LINES" "$MIN_KEEP" "$TAIL_GUARD" "$MIN_AGE_DAYS"; do
   case "$v" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-config\n'; exit 2 ;; esac
 done
 if [ "$TARGET" -ge "$ROTATE_AT" ]; then
   printf 'verdict=error reason=target-not-below-rotate-at\n'; exit 2
+fi
+if [ "$TARGET_LINES" -ge "$ROTATE_AT_LINES" ]; then
+  printf 'verdict=error reason=line-target-not-below-rotate-at\n'; exit 2
 fi
 
 fsize() { wc -c <"$1" | tr -d ' '; }
@@ -154,6 +182,9 @@ fmtime() {
   stat -c %Y -- "$1" 2>/dev/null || echo ""
 }
 
+# awk NR, not `wc -l`: NR counts a final unterminated line, which the loader still reads.
+flines() { LC_ALL=C awk 'END{print NR+0}' "$1" 2>/dev/null || echo 0; }
+
 # The threshold shift described above. An unresolvable lib leaves it at 0, which is exactly the
 # pre-2026-08-15 behaviour: measuring raw bytes against the cap over-states the index and rotates
 # EARLIER than needed. A side-car degrading to "too eager" is the direction to fail in.
@@ -168,8 +199,10 @@ if [ "$OVERHEAD" -gt 0 ]; then
 fi
 
 SIZE=$(fsize "$INDEX")
-if [ "$SIZE" -lt "$ROTATE_AT" ]; then
-  printf 'verdict=noop size=%s rotate_at=%s\n' "$SIZE" "$ROTATE_AT"; exit 0
+NLINES=$(flines "$INDEX")
+if [ "$SIZE" -lt "$ROTATE_AT" ] && [ "$NLINES" -lt "$ROTATE_AT_LINES" ]; then
+  printf 'verdict=noop size=%s rotate_at=%s lines=%s rotate_at_lines=%s\n' \
+    "$SIZE" "$ROTATE_AT" "$NLINES" "$ROTATE_AT_LINES"; exit 0
 fi
 
 # Sanity bound: a dir this command was never designed for is a refusal, not a bigger job.
@@ -236,8 +269,10 @@ while :; do
 
   SNAP=$(fstat "$INDEX")
   SIZE=$(fsize "$INDEX")
-  if [ "$SIZE" -lt "$ROTATE_AT" ]; then
-    printf 'verdict=noop size=%s rotate_at=%s\n' "$SIZE" "$ROTATE_AT"; exit 0
+  NLINES=$(flines "$INDEX")
+  if [ "$SIZE" -lt "$ROTATE_AT" ] && [ "$NLINES" -lt "$ROTATE_AT_LINES" ]; then
+    printf 'verdict=noop size=%s rotate_at=%s lines=%s rotate_at_lines=%s\n' \
+      "$SIZE" "$ROTATE_AT" "$NLINES" "$ROTATE_AT_LINES"; exit 0
   fi
 
   # Read the whole file (bash-3.2-safe: no mapfile). `|| [ -n ]` keeps a final
@@ -328,8 +363,13 @@ while :; do
 
   # Select oldest-first until the projected size reaches TARGET (the pointer line, if it must
   # be added, is part of the projection so the shrink guarantee stays honest).
+  # Both budgets are projected together: every moved entry buys back its bytes AND exactly one
+  # line, and the rotation is done only when BOTH are at/under target. Stopping at the byte
+  # target alone would leave a line-pressured index still over its line cap while reporting
+  # verdict=rotated, which reads as healed and is not.
   PROJ=$SIZE
-  if [ "$HAVE_PTR" -eq 0 ]; then PROJ=$(( PROJ + ${#PTR_LINE} + 1 )); fi
+  PROJ_L=$NL
+  if [ "$HAVE_PTR" -eq 0 ]; then PROJ=$(( PROJ + ${#PTR_LINE} + 1 )); PROJ_L=$(( PROJ_L + 1 )); fi
   MOVE_LNOS=""; MOVED=0; REMAIN=$NENT
   if [ -n "$ELIG" ]; then
     SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k3,3)
@@ -338,9 +378,10 @@ while :; do
   fi
   while IFS="$TAB" read -r _mt li f; do
     if [ -z "${li:-}" ]; then continue; fi
-    if [ "$PROJ" -le "$TARGET" ]; then break; fi
+    if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
     if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
     PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+    PROJ_L=$(( PROJ_L - 1 ))
     MOVE_LNOS="$MOVE_LNOS $li"
     MOVED=$(( MOVED + 1 )); REMAIN=$(( REMAIN - 1 ))
     vlog "move $f (mtime $_mt)"
@@ -352,8 +393,15 @@ EOF
   # Only when the index is at/over the loader LIMIT itself and the stage-1 pool could not reach
   # the target. The stage-1 pool always drains first; stage 2 re-judges only the stage-1 type
   # keeps (unprefixed self-stamped entries), and every other protection still binds there.
+  # Breach on EITHER cap arms stage 2: an index past its line cap is having its newest entries
+  # dropped just as surely as one past its byte cap, which is the whole justification for letting
+  # a self-reported type stamp yield.
   STAGE2=0
-  if [ "$PROJ" -gt "$TARGET" ] && [ "$SIZE" -ge "$LIMIT" ] && [ -n "$TYPEKEPT" ]; then
+  BREACHED=0
+  if [ "$SIZE" -ge "$LIMIT" ] || [ "$NLINES" -gt "$LINE_LIMIT" ]; then BREACHED=1; fi
+  SHORT=0
+  if [ "$PROJ" -gt "$TARGET" ] || [ "$PROJ_L" -gt "$TARGET_LINES" ]; then SHORT=1; fi
+  if [ "$SHORT" -eq 1 ] && [ "$BREACHED" -eq 1 ] && [ -n "$TYPEKEPT" ]; then
     ELIG2=""
     while IFS="$TAB" read -r mt j2 li f; do
       if [ -z "${li:-}" ]; then continue; fi
@@ -369,9 +417,10 @@ EOF
       SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k3,3)
       while IFS="$TAB" read -r _mt li f; do
         if [ -z "${li:-}" ]; then continue; fi
-        if [ "$PROJ" -le "$TARGET" ]; then break; fi
+        if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
         if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
         PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+        PROJ_L=$(( PROJ_L - 1 ))
         MOVE_LNOS="$MOVE_LNOS $li"
         MOVED=$(( MOVED + 1 )); STAGE2=$(( STAGE2 + 1 )); REMAIN=$(( REMAIN - 1 ))
         vlog "move [stage2] $f (mtime $_mt)"
@@ -382,13 +431,14 @@ EOF
   fi
 
   if [ "$MOVED" -eq 0 ]; then
-    printf 'verdict=exhausted size=%s kept: tail=%s type=%s hub=%s young=%s marker=%s dangling=%s pinned=%s unparseable=%s min_keep=%s\n' \
-      "$SIZE" "$K_TAIL" "$K_TYPE" "$K_HUB" "$K_YOUNG" "$K_MARK" "$K_DANGLING" "$K_PIN" "$K_PARSE" "$MIN_KEEP"
+    printf 'verdict=exhausted size=%s lines=%s kept: tail=%s type=%s hub=%s young=%s marker=%s dangling=%s pinned=%s unparseable=%s min_keep=%s\n' \
+      "$SIZE" "$NLINES" "$K_TAIL" "$K_TYPE" "$K_HUB" "$K_YOUNG" "$K_MARK" "$K_DANGLING" "$K_PIN" "$K_PARSE" "$MIN_KEEP"
     exit 4
   fi
 
   if [ "$DRYRUN" -eq 1 ]; then
-    printf 'verdict=dry-run moved=%s stage2=%s before=%s after_projected=%s\n' "$MOVED" "$STAGE2" "$SIZE" "$PROJ"
+    printf 'verdict=dry-run moved=%s stage2=%s before=%s after_projected=%s lines_before=%s lines_projected=%s\n' \
+      "$MOVED" "$STAGE2" "$SIZE" "$PROJ" "$NLINES" "$PROJ_L"
     exit 0
   fi
 
@@ -444,7 +494,9 @@ ${LINES[$li]}"
   if [ "$NEWSZ" -ge "$SIZE" ]; then rm -f "$TMP"; printf 'verdict=error reason=would-not-shrink\n'; exit 2; fi
   chmod 644 "$TMP"
   mv -f "$TMP" "$INDEX"
-  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s cold=%s\n' "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$COLD"
+  NEWLINES=$(flines "$INDEX")
+  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s\n' \
+    "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$NLINES" "$NEWLINES" "$COLD"
   printf '%s verdict=rotated moved=%s stage2=%s before=%s after=%s attempt=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true
   exit 0

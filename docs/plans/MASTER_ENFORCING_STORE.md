@@ -97,8 +97,13 @@ move together. Rows filed under the wrong project
 scoped to their real tree. And three DISPROOF rows sit open with nothing consuming their refutations.
 
 ### E4 · Memory index + the two CLAUDE.md copies
-`MEMORY.md` is over the loader's read limit — **BYTES bind, not lines** — so the index silently stops
+`MEMORY.md` is over the loader's read limit — so the index silently stops
 loading, which is the worst possible failure mode for the file whose whole job is to be loaded.
+*(Amended 2026-08-15, backlog `16a60c2431cc`: this read "**BYTES bind, not lines**". There are TWO
+caps — Anthropic documents "the first 200 lines or 25KB, whichever comes first" — and which one
+binds is a function of density, not a constant: bytes above 124 B/line, lines below it. True of THIS
+index at 244 B/line; false as the general rule it was written as, and all three enforcers had
+generalized it into code.)*
 `~/.claude/CLAUDE.md` and `claude-infrastructure/CLAUDE.md` diverge and which side is authoritative is
 unruled; the repo's own rule says a resident policy must not restate a perishable fact, so prefer
 deleting a restatement over syncing it.

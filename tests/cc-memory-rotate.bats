@@ -341,3 +341,54 @@ mkbulk() {
   has "$output" 'verdict=rotated'
   if grep -qF -- '(ops-call.md)' "$d2/MEMORY.md"; then return 1; fi   # mutant eats it
 }
+# ── the LINE cap: "the first 200 lines OR 25KB, whichever comes first" ───────────────────────
+#
+# Every fixture above is sized in BYTES, so none of them can tell whether this rotor watches lines
+# at all — and until 2026-08-15 it did not. These pin the other cap: an index far under every byte
+# threshold, pressured only by its line count. Budgets are shrunk to hand-countable values for the
+# same reason the byte ones are.
+
+line_env() {
+  export MEMORY_INDEX_LINE_LIMIT=12
+  export MEMORY_ROTATE_AT_LINES=10
+  export MEMORY_ROTATE_TARGET_LINES=8
+}
+
+# Ten old eligible project entries with SHORT hooks: ~400 B total, so the byte thresholds
+# (rotate_at 1500) can never be what fires — only the 11-line count can.
+mkterse() {
+  local d="$1" i
+  for i in 01 02 03 04 05 06 07 08 09 10; do
+    addentry "$d" "b$i.md" project old "$(pad 20)"
+  done
+}
+
+@test "LINE pressure alone rotates: an index far under every byte threshold still comes down" {
+  line_env
+  d="$(mkmem terse)"; mkterse "$d"
+  [ "$(wc -c <"$d/MEMORY.md" | tr -d ' ')" -lt "$MEMORY_ROTATE_AT" ]   # bytes CANNOT be the trigger
+  [ "$(LC_ALL=C awk 'END{print NR}' "$d/MEMORY.md")" -ge 10 ]
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  [ "$(LC_ALL=C awk 'END{print NR}' "$d/MEMORY.md")" -le 8 ]           # reached the LINE target
+  ls "$d"/archive/MEMORY_ARCHIVE_*-COLD.md >/dev/null
+}
+
+@test "polarity: the same terse index is a NOOP under the shipped 200-line cap" {
+  # 11 lines against the real cap is nowhere near pressure. Without this control the test above
+  # would pass just as well against a rotor that rotates unconditionally.
+  d="$(mkmem terse2)"; mkterse "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=noop'
+  has "$output" 'lines=11'
+}
+
+@test "a line target not below its rotate-at is refused, like the byte pair" {
+  d="$(mkmem lcfg)"; mkterse "$d"
+  MEMORY_ROTATE_AT_LINES=8 MEMORY_ROTATE_TARGET_LINES=8 run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 2 ]
+  has "$output" 'line-target-not-below-rotate-at'
+}
+
