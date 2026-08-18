@@ -19,6 +19,55 @@ setup() {
 mk_tel() { printf '{"ts":%s,"used_pct":%s,"input_tokens":%s}' "$1" "$2" "${3:-100000}" > "$TEL"; }
 iso_now_ms() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S.123Z 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%S.123Z; }
 
+# ── TEST CONTAINMENT (row 5e4ce121b64a residual (b)) ─────────────────────────────────────────────
+# Both durable writers prefer CLAUDE_CONFIG_DIR over $HOME so a fixtured suite stays in its sandbox.
+# That never covered a suite fixturing NEITHER: measured 2026-08-18, tests/boundary-handoff.bats
+# appended 29 rows to the operator's REAL ~/.claude/autonomy/recycle-events.jsonl on every run, and
+# 2,907 of that store's 3,743 rows are fixture sids — the durable window/fill denominator
+# cc-ctx-audit reads is ~78% test exhaust. These cases pin the invariant at the lib, because only 61
+# of 512 suites scope a config root and per-suite fixes cannot hold the line.
+# The canary HOME must be genuinely OUTSIDE BATS_TEST_TMPDIR — that is the whole leak. A canary
+# nested INSIDE the tmpdir is already contained, so it passes through by design and asserting a
+# redirect on it tests nothing (this suite's first draft made exactly that mistake and red for it).
+outside_home() { mktemp -d "${TMPDIR:-/tmp}/ce-canary-XXXXXX"; }
+
+@test "containment: with NO seam set, the recycle store lands in the tmpdir, never the real \$HOME" {
+  OUT="$(outside_home)"; HOME="$OUT"
+  unset CC_RECYCLE_EVENTS CLAUDE_CONFIG_DIR
+  now=$(date +%s); mk_tel "$now" 42
+  ce_record_recycle "$TEL" executed 42 test manual
+  [ -f "$BATS_TEST_TMPDIR/recycle-events.jsonl" ]
+  [ ! -e "$OUT/.claude/autonomy/recycle-events.jsonl" ]
+  rm -rf "$OUT"
+}
+@test "containment: with NO seam set, the IDL lands in the tmpdir, never the real \$HOME" {
+  OUT="$(outside_home)"; HOME="$OUT"
+  unset CC_CE_IDL CC_IDL CLAUDE_CONFIG_DIR
+  now=$(date +%s); mk_tel "$now" 42
+  ce_log_drop "$TEL" 80 40 100000 1000000
+  [ -f "$BATS_TEST_TMPDIR/idl.jsonl" ]
+  [ ! -e "$OUT/.claude/autonomy/idl.jsonl" ]
+  rm -rf "$OUT"
+}
+# CONTROL — containment must not RELOCATE a suite that already scoped itself, or every existing
+# fixture-isolation assertion silently changes meaning. An explicit seam inside the tmpdir is honored
+# verbatim, at its own path, not rewritten to the default basename.
+@test "CONTROL: an explicit in-tmpdir seam is passed through untouched, not redirected" {
+  export CC_RECYCLE_EVENTS="$BATS_TEST_TMPDIR/nested/mine.jsonl"
+  now=$(date +%s); mk_tel "$now" 42
+  ce_record_recycle "$TEL" executed 42 test manual
+  [ -f "$BATS_TEST_TMPDIR/nested/mine.jsonl" ]
+  [ ! -e "$BATS_TEST_TMPDIR/recycle-events.jsonl" ]
+}
+# CONTROL — outside bats the helper is IDENTITY. Production must never be redirected; a containment
+# that fired in production would silently move the operator's durable store to a stale path.
+@test "CONTROL: outside bats (no BATS_TEST_TMPDIR) the path is returned unchanged" {
+  run env -u BATS_TEST_TMPDIR bash -c \
+    ". '$REPO/hooks/lib/context-econ.sh'; _ce_contain /Users/x/.claude/autonomy/recycle-events.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/Users/x/.claude/autonomy/recycle-events.jsonl" ]
+}
+
 # ── ce_sample ─────────────────────────────────────────────────────────────────────────────────────
 @test "sample: first telemetry appends one 'ts used tokens' line" {
   now=$(date +%s); mk_tel "$now" 42 84000

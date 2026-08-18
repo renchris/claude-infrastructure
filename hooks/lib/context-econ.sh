@@ -91,6 +91,35 @@
 # namespaces already in the IDL, and `reason:"fill-drop"` is the parseable token consumers key on
 # (R8 — one token, one meaning; the incumbent's overloaded `fired` meant four things).
 # Fail-soft at every seam: no jq, no writable dir, or a kill switch ⇒ silent return 0.
+# ── TEST CONTAINMENT (row 5e4ce121b64a residual (b)) ─────────────────────────────────────────────
+# Both writers below resolve a DURABLE store, and both already prefer CLAUDE_CONFIG_DIR over $HOME
+# for exactly this reason — see their own comments. That covers a suite which fixtures its config
+# root. It does NOT cover a suite that fixtures NEITHER, and such a suite writes straight into the
+# operator's live store.
+#
+# MEASURED 2026-08-18, and the census in the item UNDERSTATED it: tests/boundary-handoff.bats scopes
+# neither HOME nor CLAUDE_CONFIG_DIR and appended 29 rows to the REAL
+# ~/.claude/autonomy/recycle-events.jsonl on EVERY run — confirmed by before/after count, not by
+# reading. 2,907 of that store's 3,743 rows carry fixture sids, so the durable denominator
+# cc-ctx-audit reads for window/fill history is ~78% test exhaust, and it is still growing today.
+# Only 61 of 512 suites scope a config root at all, so fixing the one suite that happened to be
+# caught is whack-a-mole: the invariant belongs HERE, at the single point where a path becomes a
+# write (memory: enforcement-must-live-at-the-chokepoint).
+#
+# THE INVARIANT: under bats, a store path resolving OUTSIDE BATS_TEST_TMPDIR is redirected into it.
+# A suite that already scopes its own root — via CC_RECYCLE_EVENTS / CC_IDL / CLAUDE_CONFIG_DIR /
+# HOME — resolves inside the tmpdir and passes through UNTOUCHED, so every existing fixture-isolation
+# assertion keeps its meaning. Outside bats this is identity: production is never redirected.
+_ce_contain() { # $1=resolved store path → the path, contained iff we are under bats
+  case "${BATS_TEST_TMPDIR:-}" in
+    '') printf '%s' "$1" ;;
+    *) case "$1" in
+         "$BATS_TEST_TMPDIR"/*) printf '%s' "$1" ;;
+         *)                     printf '%s/%s' "$BATS_TEST_TMPDIR" "${1##*/}" ;;
+       esac ;;
+  esac
+}
+
 ce_log_drop() {
   local tel="${1:-}" from="${2:-0}" to="${3:-0}" tok="${4:-0}" win="${5:-}" idl sid ts
   [ "${CC_CE_DROP_LOG:-on}" = off ] && return 0
@@ -100,6 +129,7 @@ ce_log_drop() {
   # directories under a suite's CANARY HOME (caught by waiting-recycle.bats' fixture-isolation test,
   # which asserts nothing lands outside the fixture root).
   idl="${CC_CE_IDL:-${CC_IDL:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/idl.jsonl}}"
+  idl="$(_ce_contain "$idl")"
   mkdir -p "$(dirname "$idl")" 2>/dev/null || return 0
   sid="${tel##*/}"; sid="${sid%.json}"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
@@ -159,6 +189,7 @@ ce_record_recycle() {
   # CLAUDE_CONFIG_DIR before $HOME — see the same note in ce_log_drop. A default that reaches past
   # the fixtured config root turns every hook that calls this into a writer outside its own sandbox.
   store="${CC_RECYCLE_EVENTS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/recycle-events.jsonl}"
+  store="$(_ce_contain "$store")"
   mkdir -p "$(dirname "$store")" 2>/dev/null || return 0
   # the denominator + numerator, read from the producer's LITERAL emission — never imputed
   win=''; tok=''
