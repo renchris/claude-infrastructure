@@ -79,9 +79,20 @@ Sequenced, because (1) is a precondition for any version of (2):
 
 1. **Stamp provenance at capture** — add the writing toplevel (and session id when known) to each
    `## <ts>` block in `persist_dod`. Strictly additive, INTEGRATE-safe, changes no reader today.
+   **DONE 2026-08-18 (drain recycle #24).** Each block now reads
+   `## <ts> (<label>) · toplevel=<writing worktree> · session=<sid>`; the session field is OMITTED
+   rather than emitted blank when neither the hook payload nor `CLAUDE_CODE_SESSION_ID` knows one,
+   so a reader can tell *"no session recorded"* from *"session recorded as nothing"*. Six cases in
+   `tests/dod-persist.bats` (20–25), each attributed by its own mutant: the per-block stamp (M1),
+   the blank-session field (M3), **first-writer memoization — the precise §4.1 defect — which reds
+   case 24 alone (M5)**, and a reader-neutrality control proven able to fail (M4: a stamp that
+   manufactures a `- [ ]` box reds it). `dod-persist`+`dod-path` 34/34, `wrap-ledger` 75/75,
+   `completion-assert` 91/91.
 2. **Mint a lineage token on the succession paths**, `--recycle` included, recording the *firing
    cwd* alongside the fired cwd — then a reader can inherit along the lineage and exclude everything
-   else. Only at that point do cases 7–8 become fixable; unskip them there.
+   else. Only at that point do cases 7–8 become fixable; unskip them there. **STILL OPEN — this is
+   why row `4de3d0f9c0e1` stays open.** Prerequisite 1 supplies the missing *input*; it does not by
+   itself let any reader separate a wave from its own successor, and the §3 table is unchanged.
 
 **Adjacent finding, separate row.** Independent of wave identity, SessionStart injects the file's
 *entire* monotone history as binding — 15 contracts today, unbounded tomorrow. Even a legitimate

@@ -79,8 +79,24 @@ extract_grown() {  # $1 = transcript path
 }
 
 # ── append (INTEGRATE, timestamped) — never overwrite prior captures ──
-persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+# PER-CAPTURE PROVENANCE (docs/research/dod-crosstalk-2026-08-18.md §4.1, prerequisite 1). The store
+# is repo-KEYED (hooks/lib/dod-path.sh, W3), so every worktree of one repo appends here — 101 of them
+# for this repo, 15 distinct frozen scopes in one file. The writing cwd was recorded only in the FILE
+# HEADER, i.e. for the FIRST writer, so no reader could attribute a capture to a wave and no read-side
+# rule against the crosstalk had an input to key on, however clever. Each block now names the toplevel
+# that wrote it (and the session when the caller knows one).
+# STRICTLY ADDITIVE — it rides the `## ` header line, which no consumer parses: readers grep the
+# `Scope (frozen|grown):` lines (last_recorded_scope, wrap-ledger REMAINDER counts `- [ ]` boxes only),
+# and this adds neither. Pinned by the reader-neutrality control in tests/dod-persist.bats.
+persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label  [$5=session-id, "" when unknown]
+  local ts prov top sid
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  # a linked worktree's toplevel IS the worktree root — exactly the identity the repo key collapses
+  top="$(git -C "$3" rev-parse --show-toplevel 2>/dev/null)" || top=""
+  [ -n "$top" ] || top="$3"
+  prov=" · toplevel=${top}"
+  sid="${5:-}"
+  if [ -n "$sid" ]; then prov="${prov} · session=${sid}"; fi
   mkdir -p "$(dirname "$1")" 2>/dev/null || true
   if [ ! -f "$1" ]; then
     {
@@ -89,7 +105,7 @@ persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label
       printf '# INTEGRATE-only: each capture APPENDS below; history is never rewritten (a19 HOP A).\n\n'
     } > "$1" 2>/dev/null || return 0
   fi
-  printf '## %s (%s)\n%s\n\n' "$ts" "$4" "$2" >> "$1" 2>/dev/null || true
+  printf '## %s (%s)%s\n%s\n\n' "$ts" "$4" "$prov" "$2" >> "$1" 2>/dev/null || true
 }
 
 # ── CLI modes ──
@@ -102,7 +118,7 @@ case "${1:-}" in
     if [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; then
       printf 'unchanged → %s\n' "$f"; exit 0
     fi
-    persist_dod "$f" "$scope" "$PWD" "manual-set"
+    persist_dod "$f" "$scope" "$PWD" "manual-set" "${CLAUDE_CODE_SESSION_ID:-}"
     printf 'captured → %s\n' "$f"
     exit 0 ;;
   path)
@@ -129,6 +145,11 @@ input="$(cat 2>/dev/null || printf '{}')"
 event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [ -n "$cwd" ] || cwd="$PWD"
+# per-capture provenance: the hook payload is authoritative; the env is the fallback (a hook runs as a
+# child of the session it belongs to). Empty when neither knows — the field is then OMITTED, never
+# emitted blank, so a reader can distinguish "no session recorded" from "session recorded as nothing".
+sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+[ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 
 case "$event" in
   SessionStart)
@@ -159,14 +180,14 @@ $content"
     scope="$(extract_scope "$tp")"
     if [ -n "$scope" ]; then
       if ! { [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; }; then   # stale/absent only
-        persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}"
+        persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}" "$sid"
       fi
     fi
     # Follow-On Gate growth: each DISTINCT grown line appends exactly once (INTEGRATE)
     while IFS= read -r g; do
       [ -n "$g" ] || continue
       [ -f "$f" ] && grep -qF -- "$g" "$f" 2>/dev/null && continue
-      persist_dod "$f" "$g" "$cwd" "PreCompact:${trigger}:grown"
+      persist_dod "$f" "$g" "$cwd" "PreCompact:${trigger}:grown" "$sid"
     done <<GROWN_EOF
 $(extract_grown "$tp")
 GROWN_EOF

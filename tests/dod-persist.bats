@@ -196,3 +196,76 @@ mktx_grown() {  # $1 frozen  $2 grown1  [$3 grown2]
   printf '%s' "$output" | grep -q "Scope (grown)"
   printf '%s' "$output" | grep -q 'do NOT re-ask'
 }
+
+# ── PER-CAPTURE PROVENANCE (crosstalk prerequisite 1) ─────────────────────────────
+# docs/research/dod-crosstalk-2026-08-18.md §4.1: the store is repo-keyed, so N worktrees of one repo
+# APPEND to one file — but `persist_dod` recorded the writing cwd only in the file HEADER, i.e. for
+# the FIRST writer. "No reader can attribute a capture to a wave, so no read-side rule has an input
+# to key on, however clever." These cases pin the missing input: every `## <ts>` block names the
+# toplevel that wrote it, and the session id when the caller knows one. Strictly additive — the
+# reader-neutrality control below is what keeps it that way.
+
+@test "provenance: a 'set' capture block names the writing git toplevel" {
+  local top; top="$(git -C "$CWD" rev-parse --show-toplevel)"
+  ( cd "$CWD" && bash "$HOOK" set "provenance via set" >/dev/null )
+  local f; f="$(dod_path)"
+  # the toplevel rides the capture's own '## ' block header, not just the file header
+  grep -E '^## ' "$f" | grep -qF -- "toplevel=$top"
+}
+
+@test "provenance: a PreCompact capture block names the toplevel of the writing worktree" {
+  local top; top="$(git -C "$CWD" rev-parse --show-toplevel)"
+  run run_hook "$(pjson "$(mktx "provenance via PreCompact")")"
+  [ "$status" -eq 0 ]
+  local f; f="$(dod_path)"
+  grep -E '^## ' "$f" | grep -qF -- "toplevel=$top"
+}
+
+@test "provenance: the hook JSON's session_id lands on the capture block" {
+  local tx; tx="$(mktx "scope with a session")"
+  run run_hook "$(jq -nc --arg c "$CWD" --arg t "$tx" \
+    '{hook_event_name:"PreCompact",cwd:$c,transcript_path:$t,trigger:"auto",session_id:"sid-ABC123"}')"
+  [ "$status" -eq 0 ]
+  grep -E '^## ' "$(dod_path)" | grep -qF -- "session=sid-ABC123"
+}
+
+@test "provenance: no session id known ⇒ the field is OMITTED, never an empty 'session='" {
+  # HERMETIC: the payload carries no session_id AND the env fallback is unset, so this exercises the
+  # real omission branch. Without the unset, the live CLAUDE_CODE_SESSION_ID leaks in from the bats
+  # environment and the case passes for a reason it does not test.
+  local json; json="$(pjson "$(mktx "scope with no session")")"
+  run bash -c 'unset CLAUDE_CODE_SESSION_ID; printf "%s" "$1" | bash "$2" 2>/dev/null' _ "$json" "$HOOK"
+  [ "$status" -eq 0 ]
+  local f; f="$(dod_path)"
+  grep -E '^## ' "$f" | grep -qF -- 'toplevel='      # provenance still stamped
+  ! grep -E '^## ' "$f" | grep -qF -- 'session='     # the field is absent, not blank
+}
+
+@test "provenance: PER-CAPTURE, not per-file — two worktrees sharing one store each name their own" {
+  # The exact §4.1 defect: one shared file, two writers, and only the first was attributable.
+  local shared="$BATS_TEST_TMPDIR/shared-store.md"
+  local other="$BATS_TEST_TMPDIR/wt-b"; mkdir -p "$other"
+  git -C "$other" init -q; git -C "$other" config user.email t@t; git -C "$other" config user.name t
+  echo y > "$other/f"; git -C "$other" add f; git -C "$other" commit -qm init
+  local topA topB; topA="$(git -C "$CWD" rev-parse --show-toplevel)"; topB="$(git -C "$other" rev-parse --show-toplevel)"
+  [ -n "$topA" ] && [ -n "$topB" ] && [ "$topA" != "$topB" ] || false # the axis is live, not vacuous
+  ( cd "$CWD"   && WRAP_DOD_FILE="$shared" bash "$HOOK" set "wave A scope" >/dev/null )
+  ( cd "$other" && WRAP_DOD_FILE="$shared" bash "$HOOK" set "wave B scope" >/dev/null )
+  # BOTH captures are attributable — the second writer is not swallowed by the first's file header
+  grep -E '^## ' "$shared" | grep -qF -- "toplevel=$topA"
+  grep -E '^## ' "$shared" | grep -qF -- "toplevel=$topB"
+  [ "$(grep -cE '^## ' "$shared")" -eq 2 ]
+}
+
+@test "provenance CONTROL: reader-neutral — no new unchecked box, DOD=present, REMAINDER unchanged" {
+  ( cd "$CWD" && bash "$HOOK" set "control scope" >/dev/null )
+  local f; f="$(dod_path)"
+  # the stamp must not manufacture a frozen-DoD remainder item (wrap-ledger.sh:525 counts '- [ ]')
+  run grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$f"; [ "$output" = "0" ]
+  run bash -c 'cd "$1" && WRAP_DOD_DIR="$2" bash "$3" --machine' _ "$CWD" "$WRAP_DOD_DIR" "$REPO/scripts/wrap-ledger.sh"
+  printf '%s\n' "$output" | grep -q '^DOD=present'
+  printf '%s\n' "$output" | grep -q '^REMAINDER=0'
+  # and the scope line itself is untouched, so last_recorded_scope / `get` still resolve it
+  run bash -c 'cd "$1" && bash "$2" get' _ "$CWD" "$HOOK"
+  printf '%s' "$output" | grep -q 'Scope (frozen): control scope'
+}
