@@ -424,6 +424,198 @@ PYEOF
   return 0
 }
 
+# ── git_add_force_scan — argv normalization for `git add --force` ──────────────────────────────
+#
+# WHY a third detector, and not two more is_true_flag calls: `git add -f` is a TWO-part predicate —
+# a force flag AND the invocation it belongs to — and is_true_flag answers only the first half, for
+# the WHOLE command string. The caller then had to re-associate the two by hand, with a separate
+# `grep 'git[[:space:]]+add'`, and a command string is not one invocation:
+#
+#     rm -f f.txt && git add f.txt        DENY   ← the -f is rm's; the git add is innocent
+#     grep -f pats.txt in.txt && git add out.txt   DENY
+#     git add out.txt && rsync -f rules a b       DENY
+#
+# The deny even named a thing the command does not do ("git add -f blocked"), which is how it was
+# found: a plain `git add f.txt` in a throwaway fixture repo was refused mid-investigation, on a
+# line whose only `-f` belonged to the `rm` that made the fixture (backlog 44750ff72ae7; the same
+# pair of clauses is finding 1 of tests/fixtures/codex-probe/runs/cp-01__D.md).
+#
+# And the mirror-image half, which is the more dangerous one: the flag had to be spelled EXACTLY
+# `-f` or `--force` as its own argv token, so the guard's actual purpose — refusing a force-add of
+# a gitignored file — walked past every bundle and every global-option prefix:
+#
+#     git add -fv ignored.bin             PASS   ← same flag, company in the bundle
+#     git add -Af node_modules            PASS
+#     git -C /tmp/x add -f ignored.bin    PASS   ← `add` is not argv[1] when git has a global opt
+#     git add --forc x                    PASS   ← parse-options takes any unambiguous abbreviation
+#     git stage -f ignored.bin            PASS   ← `stage` is git's own synonym for `add`
+#
+# Both halves are ONE defect — a denylist that enumerates SPELLINGS instead of naming the class
+# (memory: denylist-enumerates-spellings-not-the-class) — and both are answered the same way
+# rm_argv_scan answers it above: tokenize, find the invocation, and read the flag off ITS argv.
+#
+# Contract:
+#   git_add_force_scan <command>
+#   stdout: one TAB-separated line per real `git add` / `git stage` invocation:
+#             <force 0|1> \t <the argv token that proves it, or '-'>
+#           No git-add invocation → empty stdout, exit 0.
+#   exit 0 → scan completed; stdout is the whole truth
+#   exit 2 → UNCLEAR (python3 absent, or shlex could not tokenize) — caller MUST fall back to text
+#            matching and must not read an empty stdout as "nothing found" (the fail-open shape).
+#
+# Found wherever the invocation really is: `sudo git add`, `env X=1 git add`, `/usr/bin/git add`,
+# `xargs git add`, `bash -c 'git add …'`, `eval git add …` — same walk as rm_argv_scan, for the
+# same reason. Deliberately NOT normalized: the pathspecs. Which paths are gitignored is git's
+# question, not this library's, and the rule does not depend on the answer.
+git_add_force_scan() {
+  local cmd="$1"
+
+  _git_add_unclear() { # <cause>
+    mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' \
+      "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
+      "git-add-force-scan-UNCLEAR($1)" "text fallback, argv NOT parsed: $cmd" \
+      >> "${HOME}/.claude/logs/validate-bash-unclear.log" 2>/dev/null || true
+  }
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    _git_add_unclear "python3-absent"
+    return 2
+  fi
+
+  local out rc
+  out=$(CMD="$cmd" python3 - <<'PYEOF' 2>/dev/null
+import os
+import shlex
+import sys
+
+CMD = os.environ.get("CMD", "")
+
+PIPELINE_OPS = {"|", "||", "&&", ";", ";;", "&"}
+SHELL_HEADS = {"bash", "sh", "zsh", "ksh", "dash"}
+
+# git's own global options that CONSUME the next token. Without them the subcommand walk below
+# reads `/tmp/x` as the subcommand of `git -C /tmp/x add -f` and the invocation disappears.
+GIT_VALUE_GLOBALS = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace",
+    "--exec-path", "--config-env", "--super-prefix", "--attr-source",
+}
+# `git stage` is git's own documented synonym for `git add` — a spelling, not a different command.
+ADD_ALIASES = {"add", "stage"}
+
+
+def subcommand_index(argv, i):
+    """argv[i] is the git token → index of its subcommand, or None."""
+    j = i + 1
+    while j < len(argv):
+        tok = argv[j]
+        if not tok.startswith("-"):
+            return j
+        if "=" not in tok and tok in GIT_VALUE_GLOBALS:
+            j += 2
+        else:
+            j += 1
+    return None
+
+
+def force_token(rest):
+    """The argv token that makes this a force-add, or None. Last one wins (it is the same flag)."""
+    found = None
+    end_of_flags = False
+    for tok in rest:
+        if end_of_flags:
+            continue
+        if tok == "--":                    # everything after is a pathspec: `git add -- -f.txt`
+            end_of_flags = True
+            continue
+        if tok.startswith("--") and len(tok) > 2:
+            name = tok.split("=", 1)[0]
+            # parse-options accepts any UNAMBIGUOUS abbreviation, and --force is the only long
+            # option of `git add` that begins with f — so --f … --force all mean force. The
+            # auto-generated negation `--no-force` is a different name and does not match.
+            if len(name) >= 3 and "--force".startswith(name):
+                found = tok
+            continue
+        if len(tok) > 1 and tok.startswith("-"):
+            # A bundle: order and company are irrelevant, and no short option of `git add` takes
+            # an inline value, so a bare `f` among the letters is the force flag.
+            if "f" in tok[1:]:
+                found = tok
+            continue
+    return found
+
+
+def strip_env_prefix(argv):
+    i = 0
+    while i < len(argv) and "=" in argv[i] and not argv[i].startswith("-"):
+        name = argv[i].split("=", 1)[0]
+        if name and (name[0].isalpha() or name[0] == "_") and all(c.isalnum() or c == "_" for c in name):
+            i += 1
+        else:
+            break
+    return argv[i:]
+
+
+def scan(src, depth=0):
+    out = []
+    if depth > 3:
+        return out
+    tokens = shlex.split(src, comments=True, posix=True)
+    clauses = [[]]
+    for tok in tokens:
+        if tok in PIPELINE_OPS:
+            clauses.append([])
+        else:
+            clauses[-1].append(tok)
+
+    for argv in clauses:
+        argv = strip_env_prefix(argv)
+        if not argv:
+            continue
+        head = os.path.basename(argv[0])
+        if head in SHELL_HEADS:
+            for i in range(1, len(argv) - 1):
+                if argv[i] == "-c":
+                    out.extend(scan(argv[i + 1], depth + 1))
+                    break
+        elif head == "eval":
+            out.extend(scan(" ".join(argv[1:]), depth + 1))
+
+        # EVERY position, for the reason rm_argv_scan gives: sudo/env/time/xargs all place the
+        # real command mid-argv. A MENTION survives as one quoted token ("never git add -f"),
+        # whose basename is never "git" — that is what keeps a commit message describing this
+        # rule committable.
+        for i, tok in enumerate(argv):
+            if os.path.basename(tok) != "git":
+                continue
+            si = subcommand_index(argv, i)
+            if si is None or argv[si] not in ADD_ALIASES:
+                continue
+            out.append(force_token(argv[si + 1:]))
+    return out
+
+
+try:
+    results = scan(CMD)
+except ValueError:                         # unbalanced quotes → the caller must fall back
+    sys.exit(3)
+
+for tok in results:
+    safe = "-" if tok is None else "".join((c if ord(c) >= 32 else "?") for c in tok)
+    sys.stdout.write("%d\t%s\n" % (0 if tok is None else 1, safe))
+PYEOF
+  )
+  rc=$?
+
+  if [[ "$rc" != "0" ]]; then
+    _git_add_unclear "unparseable"
+    return 2
+  fi
+
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
+}
+
 # ── strip_heredoc_bodies — the same "text is not execution" question, one layer out.
 #
 #   strip_heredoc_bodies <command>

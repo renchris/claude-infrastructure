@@ -131,6 +131,14 @@ assert_case "A17-commit-with-env-prefix"         "GIT_EDITOR=true git commit -m 
 assert_case "A18-heredoc-body-flag"              $'cat <<EOF\ndiscuss --no-verify\nEOF'                                  "allow"  ""
 assert_case "A19-force-in-commit-msg"            "git commit -m 'warn: --force bypasses safety'"                         "allow"  ""
 assert_case "A20-drop-index-in-msg"              "git commit -m 'migration removes DROP INDEX step'"                     "allow"  ""
+# A21-A25 — an innocent `git add` is not a force-add, whatever else shares the command line. A21 is
+# the reported symptom: a plain `git add f.txt` in a throwaway fixture repo, refused because the
+# line that made the fixture began `rm -f f.txt` (backlog 44750ff72ae7).
+assert_case "A21-add-file-named-f"               "git add f.txt"                                                         "allow"  ""
+assert_case "A22-add-after-rm-f"                 "rm -f f.txt && echo x > f.txt && git add f.txt"                        "allow"  ""
+assert_case "A23-add-beside-grep-f"              "grep -f pats.txt in.txt && git add out.txt"                            "allow"  ""
+assert_case "A24-add-before-rsync-f"             "git add out.txt && rsync -f rules a b"                                 "allow"  ""
+assert_case "A25-add-force-after-dashdash"       "git add -- -f.txt"                                                     "allow"  ""
 
 # ────────────────────────────────────────────────────────────────────────
 # B. TRUE POSITIVES — commands that MUST be blocked (deny)
@@ -158,6 +166,13 @@ assert_case "B16-drizzle-kit-push"               "drizzle-kit push"             
 assert_case "B17-drop-table-case-insensitive"    "echo 'drop table users' | sqlite3 app.db"                              "deny"   "DDL"
 assert_case "B18-fork-bomb"                      ":(){ :|:& };:"                                                         "deny"   "system damage"
 assert_case "B19-chained-add-f"                  "cd /repo && git add -f .env"                                           "deny"   "gitignore"
+# B20-B24 — the spellings the two-condition rule could not see, because the flag had to be its own
+# bare token and `add` had to be argv[1] (backlog 44750ff72ae7). Read off git add's argv now.
+assert_case "B20-add-force-bundled"              "git add -fv .env.local"                                                "deny"   "gitignore"
+assert_case "B21-add-force-bundle-tail"          "git add -Af node_modules"                                              "deny"   "gitignore"
+assert_case "B22-add-force-behind-global-opt"    "git -C /tmp/repo add -f .env"                                          "deny"   "gitignore"
+assert_case "B23-add-force-abbreviated"          "git add --forc .env"                                                   "deny"   "gitignore"
+assert_case "B24-stage-force-synonym"            "git stage -f .env"                                                     "deny"   "gitignore"
 
 # ────────────────────────────────────────────────────────────────────────
 # C. ASK — destructive but may be intentional
