@@ -805,14 +805,42 @@ if [ "$_rat_rc" = "1" ] && [ -n "$BACKLOG" ] && [ -x "$BACKLOG" ]; then
   then _rat_filed="filed"; else _rat_filed="file-failed"; fi
 fi
 
+# ── 2b-v. THE DRAIN-CHAIN LIVENESS CHECK (BACKLOG_DRAIN_24_7 §6) ──────────────────────────────────
+# THE INVARIANT THIS ACTUATES IS THE PLAN'S OWN ROOT CAUSE. §1.2, measured: the local drain ran nine
+# recycles, recycle #9's goal cleared on an effort-scoped condition, and no recycle #10 ever fired.
+# The chain stopped at 06:45Z and the only instrument that reported it was the operator, hours later.
+# §6 says the chain's liveness is "checked by autonomy-sweep" — this is that check, and until it
+# landed the invariant existed in a plan and in no script, test or plist on trunk.
+#
+# WHY IT LIVES HERE AND NOT IN A PLIST OF ITS OWN. The sweep is already the box's ONE pull-based
+# consumer of things that would otherwise write into dirs with no reader, and a detector for "the
+# drain is not running" that itself depends on a second standing job has just moved the question one
+# level out. The 300 s tick is also the right cadence for a 24 h window: the alarm cannot be late by
+# more than one sweep, and it cannot be early because the window is four hundred times the tick.
+#
+# `--file`, NOT `--assert`, for the same reason the grouping sweep beside it files: a dead chain is
+# an UNATTENDED state by construction (06:45Z, nobody watching), so a verdict that only reaches a
+# terminal reaches nobody. The row is condition-keyed (`local-drain-chain-dead`) so a chain dead for
+# a week is ONE standing row, and it carries `--assert` as its own falsifier so the currency pass
+# retires it the moment a recycle fires or a worker takes a lease — the detector for backlog inflow
+# must not itself become a generator.
+#
+# COST: one `cc-backlog list --open --json` fold per sweep, the same order as the backfill arm above
+# (0.43 s measured over a 2400-record ledger) and well under the 3.30 s the premise-pass note records
+# for the whole-store `list --all` at utility. Bounded like every sibling, so a store that goes slow
+# costs one arm and not the sweep.
+_drain_rc="skipped"
+_drain="$_SWEEP_DIR/drain-chain-assert.sh"
+if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain_rc=$?; fi
+
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg f "$_fold_rc" --arg fc "$_fold_note" --arg fg "$_fold_groups" \
   --arg fa "$_fold_applied" --arg fw "$_fold_written" --arg g "$_grp_rc" \
   --arg br "$_bf_rc" --arg bn "$_bf_note" --arg bp "$_bf_proposed" --arg ba "$_bf_ambig" \
   --arg pr "$_prem_rc" --arg pn "$_prem_note" --arg pv "$_prem_recorded" \
   --arg pc "$_prem_closed" --arg pd "$_prem_deferred" --arg pp "$_prem_pending" \
-  --arg rf "$_rat_filed" \
-  '{consolidation_trigger_rc:$t, ratchet_rc:$r, ratchet_filed:$rf,
+  --arg rf "$_rat_filed" --arg dc "$_drain_rc" \
+  '{consolidation_trigger_rc:$t, ratchet_rc:$r, ratchet_filed:$rf, drain_chain_rc:$dc,
     fold_rc:$f, fold_conservation:$fc, fold_verdict_lines:($fg|tonumber),
     fold_applied:$fa, fold_links_written:($fw|tonumber), grouping_sweep_rc:$g,
     backfill_rc:$br, backfill_note:$bn, backfill_proposed:($bp|tonumber),
@@ -820,7 +848,7 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     premise_pass_rc:$pr, premise_pass_note:$pn,
     premise_rows_validated:($pv|tonumber), premise_rows_closed:($pc|tonumber),
     premise_rows_deferred:($pd|tonumber), premise_shard_pending:($pp|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE, the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism while it folded nothing, and the sweep now files its own condition-keyed row (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens. A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027."}')"
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). drain_chain_rc is the BACKLOG_DRAIN_24_7 §6 liveness check and its rc says only whether the CHECK ran (0 = it answered and filed if dead; skipped = no drain-chain-assert.sh on this box) — the VERDICT is never inferred from it, because the check is fail-open by construction and reports alive on an unreadable store, on zero live rows (the success state), and on any live lease. Read the verdict from `drain-chain-assert.sh --json` or from whether row condition=local-drain-chain-dead is open. ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE, the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism while it folded nothing, and the sweep now files its own condition-keyed row (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens. A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027."}')"
 
 # ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
 # scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
