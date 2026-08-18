@@ -105,6 +105,7 @@ _last() { tail -1 "$LOG"; }
 # "measured, and the answer is nothing" from "never written down", which is the entire distinction
 # this field exists to make.
 @test "a row with no brief in scope emits a PRESENT key valued null, not an empty string" {
+  # shellcheck disable=SC2034  # read by _resolved_prompt_file, sourced from units.sh
   PROMPT_FILE_ORIG="" PROMPT_FILE=""
   emit_fire_event admitted capacity "ok" admit capacity
   run jq -r 'has("prompt_file") as $p | [$p, (.prompt_file | type)] | @tsv' <<<"$(_last)"
@@ -130,8 +131,16 @@ _last() { tail -1 "$LOG"; }
 # manufacturing the exact alarm it exists to make trustworthy. `jq` is removed from PATH rather
 # than mocked, so the fallback is reached the same way production would reach it.
 @test "the jq-less telemetry fallback still names the brief, so a degraded write is not a false alarm" {
+  # All five are read by the emitters sourced from units.sh, which shellcheck cannot follow into;
+  # they are also re-set inside the subshell below, which is the arm that actually runs the
+  # fallback. A shellcheck directive must be a SINGLE line — wrapping the reason onto a second
+  # comment line makes it unparseable (SC1073) and silently costs the whole file its analysis.
+  # shellcheck disable=SC2034
   PROMPT_FILE_ORIG="$BRIEF"
+  # shellcheck disable=SC2034
   SPAWNED_PANE="pane-9" WANT_SELF_RETIRE=0 SESSION_ID="sid-under-test"
+  # shellcheck disable=SC2016
+  # $1/$2 are the INNER shell's positionals (passed after `_` below), not this shell's.
   run env PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
     . "$1"
     PROMPT_FILE_ORIG="$2"; SPAWNED_PANE=pane-9; WANT_SELF_RETIRE=0
@@ -148,6 +157,8 @@ _last() { tail -1 "$LOG"; }
 
 # ── 7. the fallback spells absence as null, not as an empty JSON string ────────────────────────
 @test "the jq-less fallback emits null for an absent brief, keeping the absence test honest" {
+  # shellcheck disable=SC2016
+  # $1 is the INNER shell's positional (passed after `_` below), not this shell's.
   run env PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
     . "$1"
     PROMPT_FILE_ORIG=""; PROMPT_FILE=""; SPAWNED_PANE=pane-9; WANT_SELF_RETIRE=0

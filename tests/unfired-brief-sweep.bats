@@ -148,6 +148,12 @@ _iso_ago() { date -u -v-"$1"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1
     printf 'brief\n' > "$real/fire-$n.txt"
     _stamp "$real/fire-$n.txt" 7200
   done
+  # `ls` over a SHELL GLOB is the point: the subject under test is `find`'s symlink traversal, so a
+  # control built from `find` would be a restatement of the thing it independently checks — and it
+  # would have agreed with the bug (0 == 0). The glob resolves the symlink through the shell, which
+  # is the decorrelated second opinion. Filenames here are fixtures this test creates, so SC2012's
+  # actual hazard does not arise. (Directive on its own single line — see SC1073 above.)
+  # shellcheck disable=SC2012
   control=$(ls -1 "$BATS_TEST_TMPDIR"/link-briefs/fire-*.txt | wc -l | tr -d ' ')
   [ "$control" = "3" ]
 
@@ -158,6 +164,8 @@ _iso_ago() { date -u -v-"$1"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1
   # MUTANT: revert the traversal fix in a copy. The sweep must go blind — if it does not, this case
   # is not measuring what its name claims and the trailing slash is unattributed.
   mutant="$BATS_TEST_TMPDIR/mutant-sweep.sh"
+  # shellcheck disable=SC2016
+  # $BRIEF_DIR is LITERAL SOURCE TEXT being matched inside the script, not a value to expand here.
   sed 's|find "$BRIEF_DIR/"|find "$BRIEF_DIR"|g' "$SWEEP" > "$mutant"
   ! cmp -s "$SWEEP" "$mutant" || { echo "mutation was a no-op — the anchor no longer matches" >&2; return 1; }
   run bash "$mutant" --json

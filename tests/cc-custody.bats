@@ -99,7 +99,10 @@ setup() {
 # consumer contract that silently shrank would be the same silent-loss failure one layer down.
 
 _backdate() { # <marker> <iso-ts> — fixture surgery: backdate the open row carrying this marker
-  local f; f="$(ls "$CC_CUSTODY_DIR"/*.jsonl | head -1)"
+  local f
+  # `find`, not `ls` (SC2012), and `sort | head` rather than relying on ls's ordering: the store
+  # holds one fixture file per test, but "whichever one ls printed first" is not a contract.
+  f="$(find "$CC_CUSTODY_DIR" -maxdepth 1 -name '*.jsonl' -type f | sort | awk 'NR==1')"
   jq -c --arg m "$1" --arg ts "$2" 'if .marker == $m then .ts = $ts else . end' "$f" > "$f.tmp"
   mv "$f.tmp" "$f"
 }
