@@ -16,6 +16,10 @@ fi
 
 # Fast exit if no DB or helpers
 [ -f "$HELPERS" ] || exit 0
+# shellcheck source=/dev/null
+# $HELPERS is resolved at runtime from two candidate roots above (checkout, then the live layer),
+# so there is no single constant path for shellcheck to follow. Pre-existing SC1090; annotated now
+# because editing this file for the fd-inherit fix pulls it into the land's own-scope shellcheck.
 source "$HELPERS"
 [ -f "$SESSION_INDEX_DB" ] || exit 0
 
