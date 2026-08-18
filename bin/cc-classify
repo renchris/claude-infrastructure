@@ -141,6 +141,26 @@ for _c in "$_CI_HERE/../hooks/lib/cc-interactive.sh" \
   [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
 done
 
+# ── the ONE origin/tenancy oracle (row dcf58e1ba056) ──────────────────────────────────────────
+# hooks/lib/origin-identity.sh owns fired_stamp_tenancy — the shared absent|valid|spent|stale|unknown
+# state model. Until now this script held a SECOND, divergently-keyed copy of the same question
+# (fired_peer's startedAt boot window), and two auditors over one population that disagree is the
+# defect itself (MEMORY sibling-auditors-must-share-the-state-model). Same resolve order as above.
+# Seam: CC_FIRED_DIR (already this script's $FIRED_DIR) — the lib takes an explicit stamp path, so the
+# suite drives it through the same temp store cc-classify reads, with no second env to pin.
+for _c in "$_CI_HERE/../hooks/lib/origin-identity.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/origin-identity.sh" \
+          "$HOME/.claude/hooks/lib/origin-identity.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+_OI_LIB_WARNED=0
+oi_lib_warn() {
+  [ "$_OI_LIB_WARNED" = 1 ] && return 0
+  _OI_LIB_WARNED=1
+  printf 'cc-classify: hooks/lib/origin-identity.sh unresolvable — cannot ask the shared origin/tenancy oracle, so NO stamp can be proven tenancy-valid; every stamped pane falls closed to the operator-safe cause (never auto-reap). Fix: run ./install.sh from the checkout to (re)link it.\n' >&2
+}
+
 # ── input helpers (all read-only) ─────────────────────────────────────────────────────────────
 iso_to_epoch() { # <iso8601 e.g. 2026-07-16T22:46:27.449Z> → epoch seconds (empty on parse fail)
   local s="${1%%.*}"; s="${s%Z}"                    # drop fractional seconds + trailing Z
@@ -410,7 +430,7 @@ is_desk_role() { # <sid> <pane> <name> → 0 if the desk-role file resolves to t
 }
 
 # ── fired-peer stamp + operator-interaction recency (2026-07-24, Danny-Studio-60 / Opus-5) ─────
-fired_peer() { # <paneUUID> [startedAt-ms] → 0 iff a TENANCY-VALID spawner stamp gates THIS session.
+fired_peer() { # <paneUUID> [startedAt-ms] [cwd] → 0 iff a TENANCY-VALID spawner stamp gates THIS session.
   # Mirrors cc-reaper's fired_peer: the only writer is handoff-fire.sh mark_fired_peer, at fire time.
   # FAIL-SAFE BY CONSTRUCTION — no marker ⇒ operator/role session ⇒ the "done" causes never apply.
   # TENANCY (2026-07-24 rule 2): the stamp is pane-keyed and never expired with tenancy, so a later
@@ -419,12 +439,38 @@ fired_peer() { # <paneUUID> [startedAt-ms] → 0 iff a TENANCY-VALID spawner sta
   # only if that session BOOTED within CC_FIRED_BOOT_MAX_S of the fire (a real worker boots ~at fire);
   # a startedAt beyond firedAt+boot-max is a different tenant → stamp does NOT apply. Unknown startedAt
   # (0/absent/unparseable) ⇒ INVALID: fail toward surface, never toward reap.
-  local pane="${1:-}" started_ms="${2:-}" fep started_s
+  #
+  # THE SHARED ORACLE (row dcf58e1ba056). The boot window above is NOT the whole tenancy question,
+  # and this script used to answer it alone — a second, divergently-keyed copy of what
+  # hooks/lib/origin-identity.sh answers with cwd + closedAt. Measured divergence, both directions:
+  #   · reused pane id in a DIFFERENT cwd, booted within the window → this said finished-teammate
+  #     (REAPABLE); the oracle says `stale`. A live wrong-reap.
+  #   · cwd matches but the stamp carries closedAt (a contract already used up by a completed
+  #     self-close, inherited by the next tenant of a reused id) → this said REAPABLE; the oracle
+  #     says `spent`. The state this script was structurally blind to.
+  #   · cwd matches, closedAt null, booted +2h (the peer crashed rather than self-closed and a later
+  #     session took the id) → the oracle says `valid`; the boot window refutes it. This is the state
+  #     the ORACLE is blind to, and it is why the fix is a CONJUNCT and not a replacement: unifying
+  #     onto cwd alone would auto-reap a pane this classifier deliberately surfaces today.
+  # So the oracle's verdict is added as a REFUTATION, never as an authorisation: only a positive
+  # `stale` or `spent` withdraws the stamp. `unknown` (no jq, no cwd field, a worktree since removed)
+  # and `absent` keep the pre-tenancy answer exactly — the lib's own calibrated-to-abstain rule. Every
+  # arm of this change NARROWS, so no consumer can begin reaping something it previously spared.
+  # CC_SELFCLOSE_TENANCY=0 makes the oracle answer `unknown` for every stamp ⇒ this conjunct is a
+  # no-op ⇒ the same kill switch restores the pre-unification behavior here too, by construction.
+  local pane="${1:-}" started_ms="${2:-}" here="${3:-}" fep started_s
   [ -n "$pane" ] || return 1
   case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
   [ -f "$FIRED_DIR/$pane.json" ] || return 1
   case "$started_ms" in ''|*[!0-9]*) return 1 ;; esac  # unknown startedAt ⇒ INVALID (surface, not reap)
   [ "$started_ms" -gt 0 ] || return 1
+  # Lib unresolvable ⇒ the oracle cannot be asked ⇒ no stamp is provable ⇒ fail CLOSED to the
+  # operator-safe cause, the same direction (and the same damped one-line remediation) the
+  # cc-interactive primitive's absence takes. A deploy gap must never widen what may be reaped.
+  if ! command -v fired_stamp_tenancy >/dev/null 2>&1; then oi_lib_warn; return 1; fi
+  case "$(fired_stamp_tenancy "$FIRED_DIR/$pane.json" "$here")" in
+    stale|spent) return 1 ;;
+  esac
   fep="$(fired_at_epoch "$pane" || true)"
   case "$fep" in ''|*[!0-9]*) return 1 ;; esac         # unparseable firedAt ⇒ INVALID
   started_s=$(( started_ms / 1000 ))
@@ -438,7 +484,7 @@ find_fired_successor_stamp() { # <predecessor-sid> <all-json> → 0 iff a TENANC
   # the handoff was operator-driven/unstamped, so the predecessor surfaces (finished-operator) rather
   # than auto-reaping. The stamp sits on the successor's OWN paneUUID → scan FIRED_DIR for firedBy match,
   # tenancy-valid per rule 2 (the successor booted ~at fire).
-  local sid="$1" all="$2" f pane fb started
+  local sid="$1" all="$2" f pane fb started scwd
   [ -n "$sid" ] || return 1
   [ -d "$FIRED_DIR" ] || return 1
   for f in "$FIRED_DIR"/*.json; do
@@ -447,7 +493,10 @@ find_fired_successor_stamp() { # <predecessor-sid> <all-json> → 0 iff a TENANC
     [ "$fb" = "$sid" ] || continue
     pane="$(basename "$f" .json)"
     started="$(printf '%s' "$all" | jq -r --arg p "$pane" '.[] | select(.paneUUID==$p) | (.startedAt // "")' 2>/dev/null | head -1)"
-    fired_peer "$pane" "$started" && return 0
+    # The tenancy oracle is keyed on the SUCCESSOR's own cwd, not the predecessor's — same registry
+    # row the startedAt came from, so the two halves of one verdict cannot describe two sessions.
+    scwd="$(printf '%s' "$all" | jq -r --arg p "$pane" '.[] | select(.paneUUID==$p) | (.cwd // "")' 2>/dev/null | head -1)"
+    fired_peer "$pane" "$started" "$scwd" && return 0
   done
   return 1
 }
@@ -647,7 +696,7 @@ classify_entry() { # <entry-json> <all-sessions-json>
     local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0
     if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ]; then
       local fep=""
-      if fired_peer "$pane" "$started"; then fep="$(fired_at_epoch "$pane" || true)"; fi
+      if fired_peer "$pane" "$started" "$cwd"; then fep="$(fired_at_epoch "$pane" || true)"; fi
       if [ -z "$fep" ] || [ "$iep" -gt $(( fep + FIRE_PROMPT_SLACK_S )) ]; then
         CAUSE=owned-wait; DETAIL="operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — operator-adopted pane (never-reap)"; return 0
       fi
@@ -701,7 +750,7 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #    as finished-teammate 14 min after their prompt) — the stamp is the spawner's own "self-retiring
   #    worker" contract (tenancy-valid); an unstamped worktree session falls through to the operator-safe
   #    branches.
-  if is_worktree_session "$cwd" && fired_peer "$pane" "$started"; then
+  if is_worktree_session "$cwd" && fired_peer "$pane" "$started" "$cwd"; then
     CAUSE=finished-teammate; DETAIL="spawner-stamped fired worker in a worktree, idle ${IDLE}s; work-landed=$LANDED"; return 0
   fi
 
@@ -734,7 +783,7 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #    never auto-reaped (2026-07-24; "clean & landed & idle" is every interactive Q&A session's
   #    steady state, not proof the operator is done with the pane).
   if [ "$LANDED" = yes ]; then
-    if fired_peer "$pane" "$started"; then
+    if fired_peer "$pane" "$started" "$cwd"; then
       CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK), spawner-stamped worker — done, reapable"; return 0
     fi
     CAUSE=finished-operator; DETAIL="idle ${IDLE}s, work landed, but operator-launched (no tenancy-valid fired-peer stamp) — surface for confirm-close, never auto-reap"; return 0
