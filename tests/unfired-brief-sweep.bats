@@ -164,3 +164,25 @@ _iso_ago() { date -u -v-"$1"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1
   [ "$status" -eq 0 ]
   [ "$(jq -r '.counts.unfired' <<<"$output")" = "0" ]
 }
+
+# ── THE CALLER IS PART OF THE FEATURE ──────────────────────────────────────────────────────────
+# `wait-contract-lint.sh --sweep` is built, --selftest 13/13 GREEN, and has NO caller in launchd or
+# in autonomy-sweep — so the flagship strand watchdog has never once fired in production (desk-audit
+# p04 G-P4-2, open to this day). A detector with no scheduler is not a detector. The invariant lives
+# in a token that would vanish SILENTLY if someone tidied the sweep, so it is pinned here
+# (memory invariant-can-live-in-an-absent-token).
+#
+# The ORDERING half is the load-bearing one and is asserted by line number, not by presence: a lost
+# succession emits no page and no alarm, so a call placed BELOW the `total_new -eq 0` early exit
+# would run only on sweeps that already had other news — i.e. never on the quiet fleet where a dead
+# chain actually sits. Present-but-below is the failure this case exists to catch, and it is
+# indistinguishable from correct by any grep that only asks "is it called".
+@test "autonomy-sweep calls the sweep, ABOVE its nothing-new early exit" {
+  AS="$REPO/scripts/autonomy-sweep.sh"
+  [ -f "$AS" ]
+  call_line=$(grep -n 'unfired-brief-sweep.sh' "$AS" | head -1 | cut -d: -f1)
+  exit_line=$(grep -n 'reason":"nothing-new' "$AS" | head -1 | cut -d: -f1)
+  [ -n "$call_line" ] || { echo "autonomy-sweep does not call unfired-brief-sweep.sh at all" >&2; return 1; }
+  [ -n "$exit_line" ] || { echo "the nothing-new early exit anchor no longer matches — this case is blind" >&2; return 1; }
+  [ "$call_line" -lt "$exit_line" ]
+}

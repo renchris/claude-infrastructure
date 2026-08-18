@@ -984,6 +984,53 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
     note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
 
+# ── 2f. UNFIRED BRIEFS — a succession that was WRITTEN and never FIRED ────────────────────────────
+# backlog 4a11a0ac850a: a lead announced a recycle, wrote the successor brief, and died before
+# firing it. Nothing noticed, because the only artifact was a file in /tmp that looks exactly like
+# one that WAS fired. scripts/unfired-brief-sweep.sh answers it exactly, now that every fire row
+# carries `prompt_file`: a brief whose path appears in no row was never fired.
+#
+# THIS BLOCK IS THE WHOLE POINT OF THE DETECTOR EXISTING. The failure this repo keeps re-committing
+# is the unscheduled watchdog — `wait-contract-lint.sh --sweep` is built, `--selftest` 13/13 GREEN,
+# and has NO caller in launchd or in this file, so the flagship strand-detector has never fired in
+# production (desk-audit p04 G-P4-2, still open today). Landing another detector without its caller
+# would be that defect committed by the change that names it, which is exactly how 2b above got its
+# comment. So the caller lands in the same diff as the tool.
+#
+# ABOVE THE nothing-new EARLY EXIT, for the same reason as 2b/2c/2d and most sharply of all: a lost
+# succession is SILENT BY CONSTRUCTION. It produces no pane, no page, no alarm and no ledger row —
+# that silence IS the failure — so wiring it below the gate would run it only on sweeps that already
+# had other news, i.e. never on the quiet fleet where a dead chain is actually sitting.
+#
+# PURE READ, so no deployed-copy guard: unlike 2d it lands nothing, marks nothing and spends no
+# quota — it stats files and greps a ledger. Running it from a checkout or a verifier worktree is
+# harmless, which is the standing rule for every read-only block here.
+#
+# ALARM BUDGET, measured rather than assumed. The sweep is SELF-ARMING and reports `not-armed` until
+# a real fire writes a `prompt_file` row, so it emits zero findings over the 98 briefs currently on
+# disk instead of 98 false positives on its first tick. Steady-state it can only fire on a brief
+# written inside the ledger's own retention window that no row names — an event that should be rare
+# enough to read, and is the event itself rather than a proxy for it.
+_unfired="$_SWEEP_DIR/unfired-brief-sweep.sh"
+_unfired_json=""
+if [ -x "$_unfired" ]; then
+  # Bounded like every other probe here, and at `utility` so the Background band's E-core
+  # confinement cannot turn a stat-and-grep into a rc-124 non-verdict (memory
+  # bound-must-fit-the-band-not-the-bench).
+  _unfired_json="$(_bounded bash "$_unfired" --json 2>/dev/null || true)"
+fi
+# An unparseable or empty result is reported as its own state. "the tool is absent", "the bound cut
+# it" and "no briefs are lost" are three different facts, and collapsing them would make a broken
+# rail read exactly like a clean fleet — the failure mode this whole section exists to end.
+log_idl unfired-briefs "$(printf '%s' "${_unfired_json:-}" | jq -c \
+  'if type=="object" then {unfired_verdict:(.verdict//"malformed"),
+                           unfired_n:(.counts.unfired//0),
+                           unfired_unknowable:(.counts.unknowable_pre_floor//0),
+                           unfired_floor:(.floor//null),
+                           findings:(.findings//[])}
+   else {unfired_verdict:"no-output"} end' 2>/dev/null \
+  || printf '{"unfired_verdict":"no-output"}')"
+
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0
