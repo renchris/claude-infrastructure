@@ -74,17 +74,25 @@ CC_NOTIFY="$(resolve_cc_notify)"
 FROM=""; EVENT=""; ROLE_LABEL=""
 
 # ── alarm record: the L1-e/L4 shape. A SILENT announce failure IS the SendMessage bug; this is never silent.
-write_alarm() { # <kind> <detail> <role> <target> <verdict>
+# The record carries the MESSAGE (body + from), not only the verdict: on UNRESOLVED / WRITEFAIL / AMBIGUOUS
+# / RESOLVER_DOWN no inbox write ever happened, so this record is the only copy of the announcement that
+# can exist — without it the failure is loud and the report is destroyed, which is a loss, not a recovery.
+# (Measured 2026-08-10: a full terminal report to an unset role, 0 of it retained. Item 471d2f3f98df.)
+write_alarm() { # <kind> <detail> <role> <target> <verdict> <body>
   mkdir -p "$ALARM_DIR" 2>/dev/null || true
-  jq -n --arg k "$1" --arg d "$2" --arg role "$3" --arg tgt "$4" --arg v "$5" --arg ev "$EVENT" --arg ts "$(iso)" \
-     '{kind:"alarm", alarm:$k, role:$role, target:$tgt, verdict:$v, event:$ev, detail:$d, ts:$ts}' \
+  jq -n --arg k "$1" --arg d "$2" --arg role "$3" --arg tgt "$4" --arg v "$5" --arg body "${6-}" \
+     --arg from "$FROM" --arg ev "$EVENT" --arg ts "$(iso)" \
+     '{kind:"alarm", alarm:$k, role:$role, target:$tgt, verdict:$v, event:$ev, from:$from, body:$body, detail:$d, ts:$ts}' \
      > "$ALARM_DIR/announce-alarm-$(stamp)-$$-${RANDOM}.json" 2>/dev/null || true
 }
 # a DEGRADE record: delivered but unverifiable to a busy-alive target — recorded (never silent), not alarmed.
-write_degrade() { # <detail> <role> <target>
+# It carries the body on the same argument: the message did reach an inbox here, so this copy is a
+# convenience rather than the last one — but it is dropped by the identical omission and costs the same.
+write_degrade() { # <detail> <role> <target> <body>
   mkdir -p "$ALARM_DIR" 2>/dev/null || true
-  jq -n --arg d "$1" --arg role "$2" --arg tgt "$3" --arg ev "$EVENT" --arg ts "$(iso)" \
-     '{kind:"degrade", role:$role, target:$tgt, event:$ev, detail:$d, ts:$ts}' \
+  jq -n --arg d "$1" --arg role "$2" --arg tgt "$3" --arg body "${4-}" \
+     --arg from "$FROM" --arg ev "$EVENT" --arg ts "$(iso)" \
+     '{kind:"degrade", role:$role, target:$tgt, event:$ev, from:$from, body:$body, detail:$d, ts:$ts}' \
      > "$ALARM_DIR/announce-degrade-$(stamp)-$$-${RANDOM}.json" 2>/dev/null || true
 }
 
@@ -162,7 +170,7 @@ announce() { # <role-token> <message>
         die "cc-notify usage error delivering to $target: $out" ;;
       UNVERIFIED)
         if [ "$last" = 1 ]; then
-          write_degrade "delivered to inbox but NOT a confirmed wake after retry (no watcher armed, or liveness unconfirmed — drains on the target's next turn; cc-inbox-guard escalates if it never does): $out" "$token" "$target"
+          write_degrade "delivered to inbox but NOT a confirmed wake after retry (no watcher armed, or liveness unconfirmed — drains on the target's next turn; cc-inbox-guard escalates if it never does): $out" "$token" "$target" "$msg"
           echo "cc-announce: ⚠️  $ROLE_LABEL — delivered to inbox but NOT a confirmed wake after retry (no watcher / liveness unconfirmed); RECORDED, guard backstops" >&2
           echo "cc-announce: verdict=DEGRADED" >&2
           return 0
@@ -170,7 +178,7 @@ announce() { # <role-token> <message>
       *)  # MAILBOX (dead inbox) | UNRESOLVED | WRITEFAIL | RESOLVER_DOWN | AMBIGUOUS | UNKNOWN —
           # the "nothing will read it" set.
         if [ "$last" = 1 ]; then
-          write_alarm "announce-not-verified" "announce to $target NOT verified after one retry (verdict=$VERDICT): $out" "$token" "$target" "$VERDICT"
+          write_alarm "announce-not-verified" "announce to $target NOT verified after one retry (verdict=$VERDICT): $out" "$token" "$target" "$VERDICT" "$msg"
           echo "cc-announce: ⛔ ALARM — $ROLE_LABEL announce NOT verified (verdict=$VERDICT) after one retry; an inbox no live session drains is a RELOAD not a WAKE. Alarm recorded in $ALARM_DIR." >&2
           echo "cc-announce: verdict=ALARM($VERDICT)" >&2
           return 5
