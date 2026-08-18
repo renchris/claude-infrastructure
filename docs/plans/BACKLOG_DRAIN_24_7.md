@@ -128,6 +128,82 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   launched**, which means R3's own brief ("your launch on next refreshes the token that unblocks
   the return") was written on a premise that had already been satisfied. A fire's stated rationale
   is worth re-checking at fire time, not only its task.
+- **2026-08-18 — recycle #19 (local drain): `master-session-lifecycle` 16 → 13 open / 1 blocked.
+  filed 0 / closed 3. THE SPAWN GATE IS OPEN AGAIN — one teammate spawned and delivered.**
+
+  **THE SPAWN GATE.** #16 lost 2 of 5 briefs, #17 lost 1 of 4, #18 lost **3 of 3** to
+  *"Background subagents cannot write code — use TeamCreate/team_name"*. This recycle's single
+  brief was **ACCEPTED** and its teammate did real work. The shape that worked: `Agent({name,
+  subagent_type:"general-purpose", run_in_background:true})` with the worktree PATH in the brief
+  body and no `isolation`/`cwd`/`team_name` argument. Treat the gate as a **variable, not a
+  constant** — try one brief, and size the recycle to a lead-only plan only after a refusal.
+
+  **ROWS.**
+  - **`112d13aa0018` — the context-recycle actuation layer (arms (b) and (c); `ce942509`,
+    `92717779`).** Arm (a) — demoting `gate-not-green-at-head` — was found ALREADY LANDED
+    (2026-08-11); only the header narrative remained. Arm (b) added the absolute-occupancy arm
+    `TOK_K`; arm (c) added the `recycle-intent` row.
+  - **`f5ed2d0dd0cb` — recycle kills in-flight subagents.** CLOSED as **already fixed**:
+    `20ac3254f` (2026-08-14) shipped all three named halves — the pre-flight `subagent_gate` on
+    the recycle path, the `gate:"subagents"` ledger rows, and the successor-brief section
+    *"SUBAGENTS KILLED BY THE RECYCLE THAT CREATED YOU"*. The row was filed by the L1-b census the
+    **same day** its fix landed. Verified by content on `origin/main` plus a live sandbox drive.
+  - **`620f2fa354a6` — the `62%→71%→93%` extrapolation.** CLOSED as **EVIDENCE-EXPIRED, not
+    fixed** — a close class this log had not used before. Its finding stands (no rail computes a
+    projected fill %; the session generated the number itself). Its own stated next step needed
+    "that session's id + its telemetry/idl trail" from 2026-08-10, and that trail now exists in
+    **no store**: live IDL spans 5 minutes, the oldest of 8 archives begins 2026-08-14T13:48, and
+    `2026-08-10|11` returns 0 records across all of them. **IDL retention here is ~4 days.**
+  - **`267ebd112350` — resume source-suppression (teammate, `f941f66f3`).** Ported
+    `CLAUDE_CODE_RESUME_THRESHOLD_MINUTES` as PRIMARY with the `-re {as-is}` matcher as an
+    *exercised* fallback. Left OPEN pending land + a same-moment content check.
+
+  **THE FINDING WORTH CARRYING.** *A row's remedy and its EVIDENCE rot on different clocks.* Two
+  of the three closes were not fixes at all: one row had been repaired by a sibling the day it was
+  filed, and one had quietly outlived the store its next step depended on. Neither is visible from
+  the row text — both needed a same-moment read of the tree and of the store's retention window.
+  So **before building anything, check (a) whether it already landed and (b) whether its evidence
+  still exists**; #19 spent ~15 minutes on that pass and it produced two of its three closes.
+  Corollary for filing: a next step naming an ephemeral store inherits that store's half-life, so
+  either snapshot the rows into the item or write the expiry into it (memory:
+  `work-item-next-step-inherits-its-stores-half-life`).
+
+  **THE CORRECTION TO MY OWN ROW, recorded rather than laundered.** `112d13aa0018` justified
+  `TOK_K=700` as "window-independent" coverage of "4 of 5 historical deaths". Measured against 21
+  live telemetry rows, **neither half survives as stated**: `used_pct` IS `input_tokens/window` to
+  the integer and every live window is 1,000,000, so on today's fleet TOK_K=700 fires at 70% —
+  three points ahead of `T=73`, a small lead and **not an independent axis**; and the 800K–950K
+  deaths sit at 80–95% on a 1M window, i.e. ABOVE T, so they were missed because the rail was
+  *unfireable at all* until arm (a) landed — crediting them to (b) double-counts a fix already
+  shipped. The arm was kept on a **different, verifiable** basis: `used_pct` is read as
+  `.used_pct // 0`, so a row whose **denominator** is missing or wrong presents as 0 and abstains
+  `below-threshold` forever however large the session is; `input_tokens` is a separate field and
+  survives that. `over_tok`/`tok_k` now ride every IDL record so the next census can retire the
+  arm on evidence if it never fires alone. **Reachability is named too:** on a window smaller than
+  `TOK_K×1000` the arm can never fire (an empty population), so it is a floor beneath the fill
+  arms, never a replacement.
+
+  **RED-PROOF, PER CASE (the discipline #18 paid for).** 8 new cases, each proved red against a
+  pristine `origin/main` worktree individually — boundary-handoff `1..5` five not-ok, the new
+  `handoff-recycle-intent` suite `1..3` three not-ok. Honest caveat recorded here rather than in
+  the commit: 2 of the 5 boundary cases red pre-fix on their **IDL-recording** assertion rather
+  than on their headline property, because the pre-fix engine still fires correctly on the size
+  and fill axes; they are regression guards for the labelling, not independent proofs of it.
+
+  **A TRAP RE-PAID.** `tests/handoff-recycle-intent.bats` is the first recycle suite to drive a
+  **real, non-dry** recycle — `--dry-run` returns before `recycle_fire`, so a dry test cannot
+  observe the intent row at all. It is safe by CONSTRUCTION, not by flags: the pane id is a
+  fabricated UUID no terminal owns, so `as_tty` resolves nothing and `recycle_fire` aborts at its
+  first exit path, upstream of every keystroke, detach and `/exit`. That abort *is* the state
+  under test. Its first draft also tripped the hermeticity lint on three seams the account sweep
+  leaves live even when the sweep itself is `off` (`HANDOFF_ACCOUNT_SWEEP_STAMP`, `CC_ACCOUNTS_BIN`,
+  `CC_HEAL_LOCK_PREFIX`) — pinned to absent paths, 0 new leaks.
+
+  **DECLINED, and why.** `4a11a0ac850a` (a brief written but never fired) was opened and put back:
+  its detector needs to answer "was a fire ever made FROM this brief", and **no row in
+  `handoffs.jsonl` records a prompt-file path**, so the linking primitive does not exist. Building
+  the sweep without it would have shipped a heuristic alarm over an attention budget. The missing
+  primitive is one line at the fire site; naming it here so the next recycle can add it first.
 
 - **2026-08-18 ~02:50Z — lead (pane 102): CORRECTION to the 02:35Z entry below, on both halves
   it got wrong — pane 275 UNWEDGED ITSELF, and `git cherry` cannot see supersession.** Source:
