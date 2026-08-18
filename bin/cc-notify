@@ -392,13 +392,18 @@ verdict() { # <verdict> [k=v ...]
 #   · damped per (role, reason) for CC_NOTIFY_PHONE_DAMP_TTL seconds, so a 300 s reaper sweep against
 #     a permanently-unset role rings once, not every five minutes. A damp is reported, never silent.
 #   · it NEVER changes the exit code: the send still failed, and a phone leg is not a delivery.
-FALLBACK_OUTCOME=""
 phone_fallback() { # <reason> <detail>
   local reason="$1" detail="${2:-}" key mk now last rc
-  FALLBACK_OUTCOME=""
-  [ "$PHONE_FALLBACK" = 1 ] || { FALLBACK_OUTCOME=phone-off; echo "cc-notify: fallback=phone-off (CC_NOTIFY_PHONE_FALLBACK=0)" >&2; return 0; }
+  [ "$PHONE_FALLBACK" = 1 ] || { echo "cc-notify: fallback=phone-off (CC_NOTIFY_PHONE_FALLBACK=0)" >&2; return 0; }
+  # HERMETICITY (same bats signals hooks/lib/comms-alarm.sh stamps as test_origin): under a suite,
+  # only an EXPLICITLY seamed push binary may fire. Left to the probe order, ANY existing suite that
+  # trips a role-unset path — and several address roles — would POST to the operator's real phone at
+  # 3am. A test that can page a human is not a test.
+  if [ -z "${CC_NOTIFY_PUSH_BIN:-}" ] && { [ -n "${BATS_TEST_FILENAME:-}" ] || [ -n "${BATS_TEST_TMPDIR:-}" ] || [ -n "${BATS_RUN_TMPDIR:-}" ]; }; then
+    echo "cc-notify: fallback=phone-test-blocked — running under bats with no CC_NOTIFY_PUSH_BIN seam; the real phone is NOT rung. Export CC_NOTIFY_PUSH_BIN=<stub> to exercise this leg." >&2
+    return 0
+  fi
   if [ -z "$PUSH_BIN" ]; then
-    FALLBACK_OUTCOME=phone-no-bin
     echo "cc-notify: fallback=phone-no-bin — no push-send.sh found; the operator could NOT be reached by any channel" >&2
     return 0
   fi
@@ -408,7 +413,6 @@ phone_fallback() { # <reason> <detail>
   last="$(cat "$mk" 2>/dev/null || echo 0)"
   case "$last" in (*[!0-9]*|'') last=0 ;; esac
   if [ "$last" -gt 0 ] && [ "$(( now - last ))" -lt "$PHONE_DAMP_TTL" ]; then
-    FALLBACK_OUTCOME=phone-damped
     echo "cc-notify: fallback=phone-damped — the operator was already phoned for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s)" >&2
     return 0
   fi
@@ -417,9 +421,9 @@ phone_fallback() { # <reason> <detail>
   rc=$?
   mkdir -p "$PHONE_DAMP_DIR" 2>/dev/null && printf '%s' "$now" > "$mk" 2>/dev/null || true
   case "$rc" in
-    0) FALLBACK_OUTCOME=phoned;        echo "cc-notify: fallback=phoned — the desk was unreachable, the OPERATOR was paged on his phone (the message itself was NOT delivered)" >&2 ;;
-    3) FALLBACK_OUTCOME=phone-unwired; echo "cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset). This is push-send's exit 3, NOT a role failure: the phone channel has never been wired, so the operator is unreachable even with a perfect role file" >&2 ;;
-    *) FALLBACK_OUTCOME=phone-failed;  echo "cc-notify: fallback=phone-failed rc=$rc — the phone leg itself failed; the operator was reached by NO channel" >&2 ;;
+    0) echo "cc-notify: fallback=phoned — the desk was unreachable, the OPERATOR was paged on his phone (the message itself was NOT delivered)" >&2 ;;
+    3) echo "cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset). This is push-send's exit 3, NOT a role failure: the phone channel has never been wired, so the operator is unreachable even with a perfect role file" >&2 ;;
+    *) echo "cc-notify: fallback=phone-failed rc=$rc — the phone leg itself failed; the operator was reached by NO channel" >&2 ;;
   esac
   return 0
 }
@@ -812,6 +816,10 @@ if [ -n "$ROLE" ]; then
     phone_fallback "role-unset" "no live '$ROLE' — a page could not be addressed"
     exit 3
   fi
+  # An UNVERIFIED claim resolves — but nothing about it has been checked, and saying so is the only
+  # thing that stops the next reader assuming it was. This is the shape of every role file written
+  # before cc-roles existed, including the one on the operator's own box.
+  [ "$ROLE_STATE" = unverified ] && echo "cc-notify: note — role '$ROLE' carries no liveness evidence; its claimant may already be dead. Re-claim it (\`cc-roles claim $ROLE\`) to make this checkable." >&2
   TARGET="--role $ROLE"          # for human-readable messages only
 elif [ "$ROLE_GIVEN" = 1 ]; then
   echo "cc-notify: --role needs a role name (e.g. --role desk)" >&2; usage >&2; exit 2
