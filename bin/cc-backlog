@@ -446,6 +446,47 @@
 #            while `refs/land/failed/20260811T081507Z-<uuid>-mcp-w3-no-inherit` and its 081742Z
 #            sibling collapse. That asymmetry is the whole mechanism: a MEASUREMENT varies only in
 #            digits, an IDENTITY carries letters that vary too.
+#   BRANCH  — for a re-land step ONLY, the branch ref the title names, UNMASKED. "" for every
+#             other title, which makes this component completely inert outside that one class.
+#
+# WHY `BRANCH` EXISTS — the asymmetry above is refuted by an identity MINTED FROM A TIMESTAMP, and
+# this repo's own fire branches are exactly that. `claude/fire-20260812T071538Z-80941-1` and
+# `claude/fire-20260814T055432Z-40416-1` are two DIFFERENT branches whose every distinguishing
+# character is a digit, so masking collapses both to `claude/fire-#t#z-#-#`. The re-land step
+# ship-land files names its branch, its worktree (`.desk-land-<branch>-<pid>`) and its failure pin
+# (`refs/land/failed/<ts>-<uuid>-<branch>`) — all three vary only in digits between two distinct
+# re-lands from the SAME session, and the prose is byte-identical boilerplate. So two unrelated
+# re-land steps satisfied every floor and folded.
+#
+# MEASURED 2026-08-18 on row 7d276b84f662: its TITLE named claude/fire-20260812T071538Z-80941-1
+# (1 unlanded commit, 199b488f9) while the brake had re-filed a LATER step onto it, so its `needs`
+# and `run` named a different branch entirely. Acting on that row re-lands the wrong branch and
+# leaves the titled one unowned — and because `needs` composes on `block`, the merge is invisible
+# until someone reads all three fields side by side.
+#
+# THE REPAIR KEEPS MASKING AND ADDS A DISCRIMINATOR, rather than exempting the re-land class. An
+# exemption would stop the fold that this key is FOR: §1.3 of BACKLOG_DRAIN_24_7 measures 39
+# duplicate rows for ONE stuck branch, and those are genuine duplicates the fold must still join.
+#
+# THE DISCRIMINATOR IS THE BRANCH, and nothing else in the title. A re-land step names three
+# digit-bearing identifiers and only one of them is its IDENTITY:
+#   branch   `claude/fire-<ts>-<pid>-1`                  ← the identity. What is being re-landed.
+#   worktree `.desk-land-<branch>-<pid>`                 per-ATTEMPT. A retry of the same branch
+#   pin      `refs/land/failed/<ts>-<uuid>-<branch>`     per-FAILURE-EVENT. gets new digits in both.
+# Keying the branch unmasked therefore separates two branches while still folding two rows about
+# the same branch — their branch is byte-identical and the two per-event identifiers stay masked.
+# The first cut of this fix keyed the LEADING identifier instead and was INERT: `re-land` itself
+# matches the identifier pattern (a letter then a hyphen), so the "subject" of every re-land step
+# resolved to the boilerplate verb. Measured, not reasoned — the fix ran green against its own
+# false premise until the fixture printed the extracted value.
+#
+# PROVEN IN BOTH DIRECTIONS by tests/backlog-blocked-producers.bats: the two branches split, and
+# `refs/land/failed/...081507Z...-mcp-w-no-inherit` vs its 081742Z sibling still collapse — which
+# is this header's own example and tests/cc-backlog-mechanical.bats' first acceptance case.
+#
+# IT CAN ONLY EVER SPLIT, NEVER MERGE — the direction that matters. A false join feeds claim guard
+# (6) and REFUSES dispatch on real work; a missed join costs one duplicate row. And it is INERT
+# outside the re-land class: every other title yields "", so the group key is unchanged.
 #
 # THREE FLOORS, each paying for a defect the detector already bought once (do not re-litigate them):
 #   (1) >= 3 surviving prose tokens. Keying on a normalised title unconditionally collapses every
@@ -2975,18 +3016,20 @@ dups_title() {
 mech_jq='
   def ids: [ scan("[A-Za-z_][A-Za-z0-9_]*(?:[./-][A-Za-z0-9_]+)+") ]
     | map(ascii_downcase | gsub("[0-9]+"; "#")) | unique;
+  def bref: [ scan("^re-land ([^ ]+)") ] | ((.[0] // [""])[0] // "") | ascii_downcase;
   def prose: ascii_downcase | [ splits("[^a-z0-9]+") ] | map(select(test("^[a-z]+$")));
   [ .[]
     | select((.status == "open") or (.status == "claimed") or (.status == "blocked"))
     | select($p == "" or .project == $p)
     | {id, project, status, title, source, condition: (.condition // ""),
-       lastTs: (.lastTs // ""), p: (.title | prose), i: (.title | ids)} ]
+       lastTs: (.lastTs // ""), p: (.title | prose), i: (.title | ids), b: (.title | bref)} ]
   | map(select((.p | length) >= 3 and (.i | length) >= 1))
-  | group_by([.project, (.p | join(" ")), (.i | join(" "))])
+  | group_by([.project, (.p | join(" ")), (.i | join(" ")), .b])
   | map(select(length > 1))
   | map(select([ .[] | .title ] | unique | length > 1))
   | map(select($mine == "" or any(.[]; .id == $mine)))
   | map({project: .[0].project, prose: (.[0].p | join(" ")), subject: (.[0].i | join(" ")),
+         branch: .[0].b,
          conditions: ([ .[] | .condition ] | unique),
          items: [ .[] | {id, status, source, condition, title, lastTs} ] | sort_by(.lastTs)})
   | sort_by(- (.items | length))'
@@ -4477,6 +4520,75 @@ owned_wait() {
   return 1
 }
 
+# ── cloud_state — THE ORACLE THAT CAN SEE AN OFF-BOX WORKER ──────────────────────────────────────
+# owned_wait above is a LOCAL worktree probe and says so: on venue != local it returns rc 2 with
+# "worker runs off-box". That rc 2 is honest, but the reap then treated it as an unresolvable
+# oracle and BLOCKED the row past the ceiling — telling a human to "establish by hand whether the
+# worker is alive". For a cloud claim that block is STRUCTURAL, not a finding: the probe can only
+# ever fail to resolve, so every venue=cloud claim was guaranteed to end blocked, and `blocked` is
+# the one status cc-dispatch excludes from the wave BY CONSTRUCTION. Measured 2026-08-18: 78 rows
+# sat blocked on exactly this sentence, and all 78 have a cloud declaration that answers them.
+#
+# The repo already ships the oracle. cc-cloud reconciles a declared off-box session ENTIRELY from
+# the repo side — remote ref existence, sha advance, content-on-trunk — with no credential and no
+# operator, and `cc-cloud show --item <backlog-id>` resolves the item→session link the dispatcher
+# already wrote at fire time. This is the lookup, not a second implementation of it: cc-cloud owns
+# that store and stays its only reader (memory: sibling-auditors-must-share-the-state-model).
+#
+# FAIL-CLOSED ON IGNORANCE, and that is the whole rc contract. rc 2 means "cannot tell" — no
+# cc-cloud on disk, no declaration naming the item, an unparseable answer, or cc-cloud's own
+# UNKNOWN (which it emits when a SENSOR failed, e.g. an unreachable remote). Every one of those
+# falls through to the pre-existing block path unchanged. A probe that could not run must never
+# manufacture a verdict (memory: lookup-miss-is-not-absence, null-result-must-not-use-the-error-
+# channel) — the cure for a blocked row is cheap, but a false "not running" reopens live work.
+cloud_state() { # <backlog-id> → echoes cc-cloud's state token, rc 0; rc 2 = CANNOT TELL
+  local item="$1" bin="" c out st
+  [ -n "$item" ] || return 2
+  for c in "$(dirname "$0")/cc-cloud" "$HOME/.claude/bin/cc-cloud" "$(command -v cc-cloud 2>/dev/null || true)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { bin="$c"; break; }
+  done
+  [ -n "$bin" ] || return 2
+  out="$("$bin" show --item "$item" 2>/dev/null)" || return 2
+  # `state=` is emitted once, in cmd_show's trailing block. `tail -1` rather than `head -1` because
+  # the declaration itself is cat'd first and a future field could share the prefix.
+  st="$(printf '%s\n' "$out" | sed -n 's/^state=//p' | tail -1)"
+  case "$st" in
+    BOOTING|ALIVE|LANDED|NOT-STARTED|STALLED|ABANDONED) printf '%s' "$st"; return 0 ;;
+    *) return 2 ;;   # UNKNOWN, empty, or a token this reap does not model ⇒ cannot tell
+  esac
+}
+
+# ── cloud_map — ONE mapping from a cloud state to a reap verdict ─────────────────────────────────
+# Two call sites need this (the claim sweep and the cure sweep below) and they must not disagree
+# about what a state MEANS — a report and a writer that drift about "the same" is the sibling-
+# auditors defect with a WRITE on the end. So the decision lives here once; the call sites differ
+# only in which spelling of "→ open" their row's status requires (reopen for a claim, unblock for
+# a block — RE-OPEN EFFECT in the header: two spellings of one effect).
+#
+# Echoes "<verb><token><message>". Verb ∈ block | open | done.
+#   BOOTING / ALIVE          → block. THE ONLY BLOCK LEFT, and now it means what it says: a worker
+#                              is genuinely running off-box. Reopening would fire a second peer at
+#                              live work — the exact double-dispatch the local oracle exists to stop.
+#   NOT-STARTED / STALLED /  → open. A verdict the machine can act on: nobody is working this, so
+#   ABANDONED                  it belongs back in the wave. Not a human's problem.
+#   LANDED                   → done. cc-cloud asserts this BY CONTENT (`git ls-tree <trunk> -- <p>`
+#                              per declared path) and returns NOT-landed on an empty path list, so
+#                              it cannot pass vacuously — which is what makes it safe to close on.
+# shellcheck disable=SC2016  # single quotes are the POINT — these carry literal backticks and %s.
+cloud_map() { # <state> <id> → verdict triple, rc 0; rc 1 = no action for this state
+  local st="$1" id="$2"
+  case "$st" in
+    BOOTING|ALIVE)
+      printf 'blocklive-cloud-workera LIVE off-box worker (cc-cloud reads %s) still holds this item past the ceiling. NOT reopened: the worker is running, so a reopen would fire a SECOND peer onto live work. Watch it (`cc-cloud show --item %s`) or close the session, then `cc-backlog unblock %s`.' "$st" "$id" "$id" ;;
+    NOT-STARTED|STALLED|ABANDONED)
+      printf 'opencloud-%scc-cloud reads %s for this item — no off-box worker is making progress, so it returns to the wave.' \
+        "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')" "$st" ;;
+    LANDED)
+      printf 'donecloud-landedcc-cloud reads LANDED — every path this off-box session declared is content-present on the trunk ref (git ls-tree, never a commit count). Closed by the reap on that content verdict; `cc-cloud show --item %s` reproduces it.' "$id" ;;
+    *) return 1 ;;
+  esac
+}
+
 # land_lock_owner <id> <wt> → echoes a reason + rc 0 when the machine-wide land lock is held for THIS
 # item's branch by a live holder; rc 1 (silent) otherwise. Distinct from S1, not redundant: a land
 # re-run from the shared checkout (or any other cwd) on branch wt-<id> names no worktree path in its
@@ -4812,6 +4924,56 @@ cmd_reap() {
       local owned owrc starved=""
       owned="$(owned_wait "$id" "$venue")"; owrc=$?
       if [ "$owrc" -eq 2 ]; then starved="$owned"; owned=""; fi
+
+      # ── OFF-BOX ADJUDICATION — before any verdict drawn from the LOCAL oracle's silence ─────────
+      # THE CHOKEPOINT, and it has to be here rather than at the block below. For a venue != local
+      # claim owned_wait ALWAYS returns rc 2 (it says so itself), so `starved` is always set and the
+      # row's whole fate is decided by the two paths beneath this one: KEEP-abstain under the
+      # ceiling, BLOCK over it. Both are conclusions drawn from an oracle that was never able to
+      # look. Ask the one that can, first — and only fall through when it too cannot tell.
+      if [ "$venue" != local ]; then
+        local cst cverb ctoken cmsg
+        if cst="$(cloud_state "$id")" && cloud_map "$cst" "$id" >/dev/null; then
+          IFS=$'\037' read -r cverb ctoken cmsg <<< "$(cloud_map "$cst" "$id")"
+          case "$cverb" in
+            block)
+              if [ "$dry" = 1 ]; then
+                printf 'cc-backlog reap: WOULD-BLOCK %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+              elif cmd_transition block "$id" --needs "$cmsg" --by cc-backlog-reap >/dev/null; then
+                blocked=$((blocked + 1))
+                printf 'cc-backlog reap: BLOCK %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+                idl_verdict "$id" block "$ctoken" true "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              else
+                idl_verdict "$id" block "$ctoken" false "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              fi ;;
+            open)
+              if [ "$dry" = 1 ]; then
+                printf 'cc-backlog reap: WOULD-REOPEN %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+              elif cmd_transition reopen "$id" --by cc-backlog-reap >/dev/null; then
+                reopened=$((reopened + 1))
+                printf 'cc-backlog reap: REOPEN %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+                idl_verdict "$id" reopen "$ctoken" true "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              else
+                idl_verdict "$id" reopen "$ctoken" false "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              fi ;;
+            'done')
+              if [ "$dry" = 1 ]; then
+                printf 'cc-backlog reap: WOULD-CLOSE %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+              elif cmd_transition 'done' "$id" --evidence "$cmsg" --by cc-backlog-reap >/dev/null; then
+                printf 'cc-backlog reap: DONE %s [%s — cc-cloud %s]\n' "$id" "$ctoken" "$cst"
+                idl_verdict "$id" 'done' "$ctoken" true "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              else
+                idl_verdict "$id" 'done' "$ctoken" false "$by" "$ageS" "$claims" "$fast" "$clrc" "cc-cloud:$cst" "$cmsg"
+              fi ;;
+          esac
+          continue
+        fi
+        # cc-cloud could not tell (rc 2: no binary, no declaration, UNKNOWN sensor). Say so, then
+        # fall through to the unchanged local-oracle paths — a silent fall-through would make an
+        # inert adjudicator indistinguishable from one that ran and abstained.
+        printf 'cc-backlog reap: cloud oracle UNRESOLVED for %s (venue %s) — falling through to the local paths\n' \
+          "$id" "$venue"
+      fi
       if [ -n "$owned" ] && [ "$ageS" -le "$ownedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [owned wait — %s; claimed %ss]\n' "$id" "$owned" "$ageS"
         idl_verdict "$id" keep owned-wait false "$by" "$ageS" "$claims" "$fast" "$clrc" "$owned" \
@@ -4895,6 +5057,82 @@ cmd_reap() {
       fi
     fi
   done <<< "$analysis"
+
+  # ── THE CURE SWEEP — a gate must be able to clear the damage its own predecessor wrote ─────────
+  # The sweep above EXCLUDES blocked rows by construction (`select(.status != "blocked")`), which is
+  # right for every other rule: `blocked` is the operator-gated state and a machine that re-litigates
+  # a human's block is a machine that overrides it. But the off-box blocks were never a human's —
+  # they are this reap's own `cc-backlog-reap` records, written because the LOCAL oracle could not
+  # see an off-box worker, and 78 of them were sitting in the pool when the fix landed. A fix that
+  # only stops the bleeding leaves every earlier casualty unreachable forever, because nothing else
+  # scans `blocked` (memory: enforcement-must-live-at-the-chokepoint — gate the act, and allow its
+  # own cure).
+  #
+  # SCOPED AS NARROWLY AS THE CLAIM IT REVERSES, on all three axes at once: the block must be the
+  # reap's OWN (`by == cc-backlog-reap`), its needs must carry the off-box sentence this fix
+  # retired, and the row's last claim must be venue != local. A block written by anyone else, for
+  # any other reason, is untouched — this can only ever undo the machine's own structural verdict.
+  local cure_rows cured=0
+  cure_rows="$(valid_records | jq -s -r '
+    def st($e): if $e=="done" then "done" elif $e=="block" then "blocked"
+      elif $e=="unblock" then "open" elif $e=="claim" then "claimed"
+      elif $e=="reopen" then "open" else "open" end;
+    group_by(.id)
+    | map((sort_by(.ts)) as $g
+        # The LAST STATUS-BEARING record, not the last record. `block` auto-links its condition, so
+        # a `link` record routinely lands after it — and reading $g[-1] blind takes `by`/`needs`
+        # from a record that carries neither, which is what made the first cut of this sweep find
+        # nothing at all (memory: read-the-diff-not-the-commit-subject — ask what the record IS).
+        | ([$g[] | select(.event=="done" or .event=="block" or .event=="unblock"
+                          or .event=="claim" or .event=="reopen")] | last) as $lastSt
+        # `by`/`needs` come from the last BLOCK specifically: they are the authorship and the
+        # sentence this sweep is scoped to, and no other event carries them.
+        | ([$g[] | select(.event=="block")] | last) as $lastB
+        | { id: $g[0].id,
+            status: (if $lastSt == null then "open" else st($lastSt.event) end),
+            by: (($lastB.by) // ""), needs: (($lastB.needs) // ""),
+            venue: ([$g[] | select(.event=="claim")] | last | .venue // "local") })
+    | .[]
+    | select(.status == "blocked")
+    | select(.venue != "local")
+    | select(.by == "cc-backlog-reap")
+    | select(.needs | test("worker runs off-box \\(venue|the worktree occupancy oracle could not be RESOLVED"))
+    | [.id, .venue] | join("\u001f")
+  ')"
+  if [ -n "$cure_rows" ]; then
+    local cid cvenue cst cverb ctoken cmsg
+    while IFS=$'\037' read -r cid cvenue; do
+      [ -n "$cid" ] || continue
+      if ! cst="$(cloud_state "$cid")" || ! cloud_map "$cst" "$cid" >/dev/null; then
+        printf 'cc-backlog reap: cloud oracle UNRESOLVED for blocked %s (venue %s) — block STANDS\n' "$cid" "$cvenue"
+        continue
+      fi
+      IFS=$'\037' read -r cverb ctoken cmsg <<< "$(cloud_map "$cst" "$cid")"
+      case "$cverb" in
+        block) printf 'cc-backlog reap: KEEP-BLOCKED %s [%s — cc-cloud %s]\n' "$cid" "$ctoken" "$cst" ;;
+        open)
+          if [ "$dry" = 1 ]; then
+            printf 'cc-backlog reap: WOULD-UNBLOCK %s [%s — cc-cloud %s]\n' "$cid" "$ctoken" "$cst"
+          elif cmd_transition unblock "$cid" --by cc-backlog-reap >/dev/null; then
+            cured=$((cured + 1)); printf 'cc-backlog reap: UNBLOCK %s [%s — cc-cloud %s]\n' "$cid" "$ctoken" "$cst"
+            idl_verdict "$cid" unblock "$ctoken" true "" -1 0 0 - "cc-cloud:$cst" "$cmsg"
+          else
+            idl_verdict "$cid" unblock "$ctoken" false "" -1 0 0 - "cc-cloud:$cst" "$cmsg"
+          fi ;;
+        'done')
+          if [ "$dry" = 1 ]; then
+            printf 'cc-backlog reap: WOULD-CLOSE %s [%s — cc-cloud %s]\n' "$cid" "$ctoken" "$cst"
+          elif cmd_transition 'done' "$cid" --evidence "$cmsg" --by cc-backlog-reap >/dev/null; then
+            cured=$((cured + 1)); printf 'cc-backlog reap: DONE %s [%s — cc-cloud %s]\n' "$cid" "$ctoken" "$cst"
+            idl_verdict "$cid" 'done' "$ctoken" true "" -1 0 0 - "cc-cloud:$cst" "$cmsg"
+          else
+            idl_verdict "$cid" 'done' "$ctoken" false "" -1 0 0 - "cc-cloud:$cst" "$cmsg"
+          fi ;;
+      esac
+    done <<< "$cure_rows"
+    printf 'cc-backlog reap: cure sweep — %s off-box block(s) re-adjudicated by cc-cloud, %s cleared\n' \
+      "$(printf '%s\n' "$cure_rows" | grep -c .)" "$cured"
+  fi
 
   # SELF-RELEASES ARE REPORTED, NEVER ACTED ON. They are excluded from the block predicate because
   # they are evidence about the machine and not about the item — but a number nobody can see is a
