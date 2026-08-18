@@ -140,15 +140,31 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   pre-fix case whether its subject even exists yet"* run backwards — the case is a regression guard,
   not evidence, and the header now says so.
 
-  **Gate.** `tests/handoff-prompt-file-join.bats`, 9 cases, **all nine red-proved individually**
-  against `git show origin/main:scripts/handoff-fire.sh`. Green after: 72 ok across the five
-  covering suites. Pre-existing reds attributed, not inherited: `moving-ref-control-lint` and
-  `unattended-path-lint` are rc=1 **on pristine trunk too** (verified in a detached trunk worktree),
-  and `fire-goal-disposition` case 27 is a BSD-`head` CONTROL that a GNU container cannot satisfy —
-  red on trunk here, correct on the target platform. shellcheck findings on `handoff-fire.sh` are
-  **byte-identical** to trunk's; hermeticity lint 0 new leaks; `gate-select.sh lint` rc=0 (the new
-  suite is reachable). No programmatic consumer reads this ledger outside its writer — the three
-  other files naming it do so only in comments — so an additive key is safe by inspection.
+  **Gate — the FULL direct set, and the attribution method is the part worth reusing.**
+  `tests/handoff-prompt-file-join.bats`, 9 cases, **all nine red-proved individually** against
+  `git show origin/main:scripts/handoff-fire.sh`; green after. Then all **77 DIRECT suites**
+  (`gate-select.sh --direct`) — the ones whose red is un-exonerable for this change:
+  **1,285 ok · 94 not-ok across 22 suites**, none of them the new one.
+
+  🚨 **94 reds is not a verdict until they are ATTRIBUTED, and equal COUNTS do not attribute
+  them.** The same 22 suites were re-run on a detached pristine `origin/main` worktree, and the
+  per-suite failure counts came back identical — 54/54 on `cc-classify`, 6/6 on `spawn-presence`,
+  and so on down. That is *suggestive and insufficient*: an identical count is exactly what a
+  one-fixed-one-broken swap also produces, so a count comparison can bless a regression it cannot
+  see. The verdict came from **set-comparing the failing case NAMES** — 94 lines each side,
+  `diff` empty, byte-identical. Every red is pre-existing; this diff introduces none. The reds are
+  a Linux container running a macOS-targeted corpus (`cc-classify` needs the live session registry;
+  `fire-goal-disposition` case 27 is a BSD-`head` CONTROL a GNU box structurally cannot satisfy;
+  `account-fact-derivation` wants an executable `claude` at the box's own path) — correct on the
+  target platform, and NOT this session's to drive per the ledger's attribute-before-you-drive rule.
+
+  Static arms, same discipline: shellcheck findings on `handoff-fire.sh` **byte-identical** to
+  trunk's (compared as sorted finding-sets, not counts); `bats-shellcheck-lint` scoped to the new
+  suite clean, 0 blocking; hermeticity lint 0 new leaks; `gate-select.sh lint` rc=0, so the new
+  suite is reachable and can never silently stop running. `moving-ref-control-lint` and
+  `unattended-path-lint` are rc=1 **on pristine trunk too** — inherited, named, not laundered into
+  this verdict. No programmatic consumer reads this ledger outside its writer — the three other
+  files naming it do so only in comments — so an additive key is safe by inspection.
 
   **Landed ≠ live.** This is a Lane A return: the branch carries the change, `~/.claude` does not
   until the converger runs. `scripts/handoff-fire.sh` is a per-file symlink (an EDIT, not an ADD),
