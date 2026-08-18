@@ -8722,6 +8722,29 @@ spawn() {
 # watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
 recycle_fire() {
   local tty cmdfile log ts wrote rcy_state
+  # ── THE INTENT ROW (2026-08-17, backlog 112d13aa0018 arm (c)) ───────────────────────────────────
+  # Every other recycle class — recycle-engaged / recycle-unverified / recycle-dead — is emitted from
+  # inside the detached `__recycle` re-exec (:4828, :4844, :4861). So the ONLY recycles that appear in
+  # handoffs.jsonl at all are the ones that got far enough to detach a watcher AND have that watcher
+  # reach a verdict. An attempt that died before the detach left no row of ANY class, which makes the
+  # announced-vs-fired rate structurally unmeasurable in BOTH directions: you cannot tell a recycle
+  # that was never attempted from one that was attempted and lost. This row is the denominator.
+  #
+  # It is emitted FIRST, before the temp-file mint and before `as_tty` — deliberately, because those
+  # are among the things that can fail or hang, and a denominator that is only written once the risky
+  # part succeeded is not a denominator. Everything below this line has an `exit 1` path; all of them
+  # are now covered.
+  #
+  # engaged is "" (null), never 0: this row asserts that an attempt STARTED and says nothing about
+  # its outcome. Emitting false here would publish a measured-negative for a state nothing has looked
+  # at yet — exactly the defect this function's header records against the old recycle-unverified
+  # caller. prev_sid is likewise left unset: resolving it needs an iTerm2 query (:8788, inside this
+  # function), and the intent row must not depend on the surface whose wedge it exists to record.
+  #
+  # Unlike every other caller, this one runs in the PARENT, where FIRING_SID IS assigned — so an
+  # intent row carries a non-null firing_sid while its own outcome row cannot. That asymmetry is the
+  # join key, not an inconsistency.
+  emit_recycle_event recycle-intent "" "$SID" "recycle ATTEMPTED for pane $SID; no watcher detached yet" || true
   ts="$(date +%s)"
   # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). $cmdfile is never executed as a
   # program, but the detached watcher `cat`s it and TYPES the contents into a live shell for up to
