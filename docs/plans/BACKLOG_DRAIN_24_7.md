@@ -87,6 +87,78 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #26: `master-session-lifecycle` 5 → 4 open / 1 blocked (1
+  operator-gated, `source: needs`). filed 0 / closed 1.** Closed `4de3d0f9c0e1` — the repo-keyed
+  DoD crosstalk, open across #21/#24/#25, each of which landed real work on it and correctly left
+  it open. Landed `63b71c0e` + `a40f5dca3`, content-verified on origin/main (0 unlanded, empty
+  path diff, `dod_lineage_record` present in the landed copy). **0 cloud-venue rows in the live
+  population.** The 4 remaining are the same set #24 and #25 named as excluded by construction, all
+  re-verified live: `62363cac1e39` efficacy re-census due ~2026-08-24 (today 08-18 — the FIRST
+  drainable row here once that date passes) · `68fdc99b17c7` blocker `e06ba316a1aa` still OPEN ·
+  `b69b1d957cec` standing watch, revisit conditions unmet · `85a82455de9a` not this chain's.
+  **This effort now has NO drainable row until 08-24.**
+  - **What was left: prerequisite 2 only — a succession lineage token, `--recycle` included.** #24
+    landed prerequisite 1 (per-capture provenance) and sized this half without building it; the
+    obstacle it recorded was that no `FIRING_CWD`/`TARGET_CWD` exists in the 9.5k-line
+    `handoff-fire.sh` to hang it on. **That obstacle dissolved on one measurement**: `LAUNCH_DIR` is
+    assigned at exactly ONE site (`:7841-7845`), reached by every dir-changing succession — ordinary
+    `--worktree`/`--cwd`, self-routing, and `--recycle --worktree` — and `$PWD` there IS the firing
+    session's cwd, because nothing above it `cd`s outside a subshell (the script states that
+    invariant itself at `:6449`). One call at one site covers the lot.
+  - 🚨 **THE PROOF THAT MADE THIS BUILDABLE: two of the file's own cases were CONTRADICTORY.**
+    `dod-path.bats` case 1 (a successor inherits) and case 8 (a concurrent sibling does not) have
+    the **same setup** — A freezes a scope, B reads it — and **opposite required answers**. No
+    function of that setup satisfies both. So #24's "not buildable from state this tree records" was
+    right about the *read* side and could never have been cleverer: the fix was a missing **INPUT**,
+    not a missing rule. That is also why case 1 minting the edge in its setup is **not a narrowed
+    falsifier** — it supplies the input the case always lacked, and makes case 1 state the invariant
+    it always *claimed* (a SUCCESSOR inherits) instead of the weaker "any worktree of the repo
+    inherits" it could express before. The un-recorded direction is pinned separately (case 11).
+  - **A measurement that shrank the work.** "`--recycle` writes no lineage record" is only ever
+    about the RELOCATING form: with no `--worktree`, `LAUNCH_DIR="$PWD"` byte-identically, so the
+    toplevel identity is unchanged and there is nothing to record. The writer drops that self-loop
+    itself, and a case pins it.
+  - **Fail-open is the design, and its cost is pinned rather than left to be found.** A capture with
+    no `toplevel=` stamp is unattributable and is ALWAYS inherited, so the filter can only fail
+    toward *keeping* the crosstalk, never toward losing a contract you own. The accepted trade —
+    a hand-made `claude -w` sibling has no edge, is treated as concurrent, and re-freezes its own
+    scope — is case 11, not a footnote. Grandfathering on "the writing toplevel no longer exists"
+    was **considered and rejected**: it re-introduces a liveness discriminator the research doc
+    already refuted, for a one-time transition benefit.
+  - 🚨 **`grep -q` UNDER `pipefail` INVERTS A FILTER'S VERDICT.** `dod_filter_for … | grep -qF` in
+    the grown-line dedup: `-q` exits on the first match, the upstream filter takes SIGPIPE, and
+    `set -o pipefail` reports the pipeline as FAILED **on the very input it just matched** — a dedup
+    that re-appends every grown line forever. Caught by `dod-persist` case 16 because it COUNTS the
+    appends. Live form is the count idiom: `n="$(… | grep -c … || true)"; [ "$n" -eq 0 ]`.
+  - 🚨 **A STALE `sed` MARKER DOES NOT FAIL — IT INVERTS.** The SessionStart frame said "full
+    INTEGRATE-only history"; the filter made "full" false, and `dod-persist` keyed a
+    `sed -n "1,/$HIST_MARK/p"` range on that phrase. `sed -n '1,/nomatch/p'` selects the **whole
+    input**, so every "…is not above the history" assertion silently widens to the whole document
+    and passes by accident. Marker narrowed to its wording-stable core plus `_hist_mark_live`, which
+    asserts the marker EXISTS before anything slices on it. Same family as #25's fixture lesson:
+    a fixture is a function of the artifact, and editing prose re-times it.
+  - **Both of those were caught by the EXISTING suites and fixed in the code, not the assertion.**
+  - **Attribution — 9 mutants, one per site, control green before AND after, none uncaught:**
+    unfiltered REMAINDER reds case 7 alone · unfiltered injection reds 8 alone · a depth-1 lineage
+    walk reds 9 alone · dropping unattributable blocks reds {3,10} · **restoring the pre-fix
+    "always keep" reds {7,8,11} — the whole defect** · removing both cycle guards reds 12 alone ·
+    recording the self-loop reds 13 + intent-5 · removing the writer call reds intent-4 alone ·
+    letting `--dry-run` record reds intent-6 alone. Every mutant ran from an in-memory `cp` backup
+    with the text computed BEFORE the file was opened for write.
+  - **Verification, all this turn.** `dod-path` **14/14** · `dod-persist` **30/30** · `wrap-ledger`
+    **75/75** · `completion-assert` **91/91** · `handoff-recycle-intent` **6/6** — every plan line
+    (`1..N`) seen in its own run. `shellcheck -x` rc=0 on all four scripts;
+    `bats-assert-liveness-fix --dry-run` clean. `CC_DOD_CROSSTALK_REDPROOF` is **deleted**: a
+    permanently-skipped case reports nothing.
+  - **`LIVE_ADDS=0` on purpose.** The lineage went into `hooks/lib/dod-path.sh`, already symlinked
+    into the live layer, rather than a new lib — an ADDED file has no symlink, is in no tree the box
+    can reach, and every `[ -f … ] && .` guard on it is a SILENT skip until the converger runs.
+  - **Live layer: `deploy-live.sh` declined again, for the third recycle running and for the same
+    CORRECT reason** — no GREEN tree is a descendant of live HEAD `36cbb55eda4c` (the newest green,
+    `555e3b270f1e`, is BEHIND it), i.e. the postland-verify stamp has not advanced. Lag **11 / 2h**,
+    inside the degrade budget (25 / 6h), `LIVE_ADDS=0`, `MIG_FAILED=0`. **Not this chain's loose
+    end** — it predates every commit here and no land can move that marker.
+
 - **2026-08-18 — drain recycle #25: `master-session-lifecycle` 6 → 5 open / 1 blocked (1
   operator-gated). filed 0 / closed 1.** Closed `5cd2ecf792ae` — TWO-WAY MAIL, storyboarded since
   2026-07-30 and the only genuine close candidate left in this effort. Landed `761d41e15` (4
