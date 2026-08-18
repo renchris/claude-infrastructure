@@ -4728,35 +4728,21 @@ idl_verdict() {
 #   CC_BACKLOG_WT_ROOT          (~/Development/.worktrees)  dispatch worktree parent (see owned_wait)
 #   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
 #   CC_BACKLOG_IDL              (~/.claude/autonomy/idl.jsonl)  the verdict journal (see idl_verdict)
-cmd_reap() {
-  # Every `block` this sweep writes carries a MACHINE NON-VERDICT, never an operator step — see
-  # THE REAP'S OWN BLOCKS ARE NOT OPERATOR STEPS at the top of this file. Set once for the whole
-  # verb rather than at each of the three call sites, because that is exactly the claim (three
-  # sites would be three places to drift), and cmd_reap is terminal — nothing runs after it.
-  REAP_INTERNAL_BLOCK=1
-  local dry=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --dry-run) dry=1 ;;
-      *) printf 'cc-backlog reap: unknown arg %s\n' "$1" >&2; return 2 ;;
-    esac
-    shift
-  done
-  ensure_file
-  local stale="${CC_BACKLOG_STALE_CLAIM_S:-5400}"
-  local maxthrash="${CC_BACKLOG_MAX_THRASH:-2}"
-  local maxattempts="${CC_BACKLOG_MAX_ATTEMPTS:-3}"
-  local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
-  local ownedmax="${CC_BACKLOG_OWNED_WAIT_MAX_S:-21600}"
-  local unresolvedmax="${CC_BACKLOG_UNRESOLVED_MAX_S:-$ownedmax}"
-  local liveclaimmax="${CC_BACKLOG_LIVE_CLAIM_MAX_S:-$ownedmax}"
-  local now="${CC_BACKLOG_NOW:-$(date +%s)}"
-
-  # Per non-terminal id → TSV [id, status, claimBy, claimAgeS, totalClaims, fastFailCycles].
-  # status = last-event fold; claimBy/claimTs from the LAST claim (not our reap-reopen); fastFail =
-  # adjacent claim→reopen pairs within $window (the intervening-done/block case can't be adjacent).
-  local analysis
-  analysis="$(valid_records | jq -s -r --argjson now "$now" --argjson window "$window" '
+# ── REAP_FOLD_JQ — THE REAP'S FOLD, IN ONE PLACE, WITH A SECOND CALLER THAT CAN SEE IT ───────────
+# This program used to be an anonymous heredoc inside cmd_reap, and that is precisely why its
+# status fold could disagree with `fold()` (the cmd_list projection) about 53 rows for as long as
+# it did: NOTHING could observe it. The reap's only externally visible trace of a fold is which
+# rows it declines to scan, and a row it wrongly folded to `open` looks exactly like a row that is
+# open. A fold no test can read is a fold no test can check.
+#
+# `$keepall` is the ONLY difference between the two callers. false (cmd_reap) applies the sweep's
+# terminal exclusion; true (cmd_fold_audit) emits every row, so `tests/backlog-fold-agreement.bats`
+# can compare THIS program's verdict — the production one, not a re-implementation — against
+# `list --all --json` row by row over a whole ledger. Re-implementing it in the test would have
+# re-created the exact defect the test exists to catch (memory: sibling-auditors-must-share-the-
+# state-model).
+# shellcheck disable=SC2016  # single quotes are the POINT — every $ below is a jq variable.
+REAP_FOLD_JQ='
     def st($e): if $e=="done" then "done" elif $e=="block" then "blocked"
       elif $e=="unblock" then "open" elif $e=="claim" then "claimed"
       elif $e=="reopen" then "open" else "open" end;
@@ -4772,8 +4758,41 @@ cmd_reap() {
         | ([ range(0; ($g|length)) as $j
              | select($g[$j].event=="unblock" or $g[$j].event=="block") | $j ] | last // -1) as $cut
         | ($g[-1]) as $last
+        # ── STATUS FOLDS ON THE LAST STATUS-BEARING RECORD, NEVER ON $g[-1] ─────────────────────
+        # `st()` maps every event it does not model to "open", so folding the LAST record blind
+        # reads a trail as open whenever a NON-status record lands after the status one — and
+        # several verbs do exactly that routinely: `block` AUTO-LINKS its condition, so a `link`
+        # record follows nearly every block; `falsify`, `venue` and `update` append the same way.
+        #
+        # MEASURED 2026-08-18 on the live ledger: 53 rows folded differently here than in `fold()`
+        # (the cmd_list projection), 50 of them BLOCKED read as open, plus one DONE and one CLAIMED.
+        # Both mis-reads defeat the terminal exclusion `select(.status != "done" and != "blocked")`
+        # exclusion at the bottom of this pipeline, so the reap scanned — and could re-adjudicate —
+        # rows a human had blocked and rows already closed.
+        #
+        # SAME FOLD AS THE CURE SWEEP BELOW, which pays for this bug once already: its first cut
+        # read $g[-1] blind, took `by`/`needs` from a `link` record that carries neither, and found
+        # NOTHING AT ALL. That comment says "the last STATUS-BEARING record, not the last record";
+        # this is the same rule, applied at the entry point of the sweep itself.
+        #
+        # THE ORACLE IS `fold()` — the cmd_list projection, which has always been right here because
+        # its reduce carries the previous status forward on an unmodelled event (`else ($p.status //
+        # "open")`) instead of resetting it. Two sibling auditors over ONE population must share the
+        # state model (memory: sibling-auditors-must-share-the-state-model), and that they silently
+        # disagreed about 53 rows IS the defect class — not just the rows. tests/backlog-fold-
+        # agreement.bats asserts the two folds row-by-row over the WHOLE ledger, so a future edit to
+        # either one cannot re-open this gap without a red.
+        #
+        # `null` (a trail with no status-bearing record at all — e.g. an `add` never acted on) folds
+        # to "open", which is exactly what the `($p.status // "open")` seed in fold() yields for it.
+        #
+        # (No apostrophes in this block: the whole program is a single-quoted shell string, so one
+        # would close it and the next brace reads as bash — the same warning fold() carries three
+        # times. Two were written here and `bash -n` pointed at both.)
+        | ([$g[] | select(.event=="done" or .event=="block" or .event=="unblock"
+                          or .event=="claim" or .event=="reopen")] | last) as $lastSt
         | { id: $last.id,
-            status: st($last.event),
+            status: (if $lastSt == null then "open" else st($lastSt.event) end),
             claimBy: ([$g[] | select(.event=="claim")] | last | .by // ""),
             claimTs: ([$g[] | select(.event=="claim")] | last | .ts // ""),
             # VENUE rides the LAST claim, exactly like claimBy/claimTs — it is a property of the
@@ -4833,10 +4852,65 @@ cmd_reap() {
         | .claimAgeS = (if .claimTs=="" then -1 else ($now - (.claimTs|fromdateiso8601)) end)
       )
     | .[]
-    | select(.status != "done" and .status != "blocked")
+    # THE TERMINAL EXCLUSION, and the reason the fold above has to be right. `blocked` is the
+    # operator-gated status and `done` is closed work; a row that survives this line is a row the
+    # reap body may re-adjudicate. $keepall is true for the AUDIT caller only (cmd_fold_audit),
+    # which reports and writes nothing and never reaches that body.
+    | select($keepall or (.status != "done" and .status != "blocked"))
     | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring), .venue, (.selfRel|tostring)]
     | join("\u001f")
-  ')"
+'
+
+# cmd_fold_audit — READ-ONLY, and the whole point of hoisting the program above. Emits
+# `<id><TAB><status>` for EVERY row, produced BY THE REAP PROGRAM ITSELF. tests/backlog-fold-
+# agreement.bats diffs it against `list --all --json` over a whole ledger — the check that was
+# structurally impossible while the fold lived anonymously inside cmd_reap, and whose absence let
+# the two folds disagree about 53 live rows. Re-deriving the reap status inside the test would have
+# re-created the very defect the test exists to catch: two auditors over one population, each with
+# its own state model (memory: sibling-auditors-must-share-the-state-model).
+#
+# Absent from `help` deliberately — an instrument, not a workflow verb. It takes no argument, writes
+# nothing, and every field it prints is already reachable through `list`.
+cmd_fold_audit() {
+  ensure_file
+  local now="${CC_BACKLOG_NOW:-$(date +%s)}"
+  local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
+  valid_records | jq -s -r --argjson now "$now" --argjson window "$window" \
+                           --argjson keepall true "$REAP_FOLD_JQ" \
+    | awk -F'\037' 'NF { printf "%s\t%s\n", $1, $2 }' | LC_ALL=C sort
+}
+
+cmd_reap() {
+  # Every `block` this sweep writes carries a MACHINE NON-VERDICT, never an operator step — see
+  # THE REAP'S OWN BLOCKS ARE NOT OPERATOR STEPS at the top of this file. Set once for the whole
+  # verb rather than at each of the three call sites, because that is exactly the claim (three
+  # sites would be three places to drift), and cmd_reap is terminal — nothing runs after it.
+  REAP_INTERNAL_BLOCK=1
+  local dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      *) printf 'cc-backlog reap: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+    shift
+  done
+  ensure_file
+  local stale="${CC_BACKLOG_STALE_CLAIM_S:-5400}"
+  local maxthrash="${CC_BACKLOG_MAX_THRASH:-2}"
+  local maxattempts="${CC_BACKLOG_MAX_ATTEMPTS:-3}"
+  local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
+  local ownedmax="${CC_BACKLOG_OWNED_WAIT_MAX_S:-21600}"
+  local unresolvedmax="${CC_BACKLOG_UNRESOLVED_MAX_S:-$ownedmax}"
+  local liveclaimmax="${CC_BACKLOG_LIVE_CLAIM_MAX_S:-$ownedmax}"
+  local now="${CC_BACKLOG_NOW:-$(date +%s)}"
+
+  # Per non-terminal id → TSV [id, status, claimBy, claimAgeS, totalClaims, fastFailCycles].
+  # status = last STATUS-BEARING-event fold; claimBy/claimTs from the LAST claim (not our
+  # reap-reopen); fastFail = adjacent claim→reopen pairs within $window (the intervening-done/block
+  # case can't be adjacent).
+  local analysis
+  analysis="$(valid_records | jq -s -r --argjson now "$now" --argjson window "$window" \
+                                       --argjson keepall false "$REAP_FOLD_JQ")"
 
   # Split on US (\037), NOT tab: an open item with no claim has an EMPTY claimBy field, and bash
   # `read` COALESCES consecutive whitespace-IFS chars (tab included) — two adjacent tabs would drop
@@ -5234,6 +5308,8 @@ case "${1:-}" in
   # dispatch wave, so a kick is pure waste and risks a worker on a human-only step (header § needs).
   needs)   shift; cmd_needs "$@" ;;
   reap)    shift; cmd_reap "$@" ;;
+  # Instrument, not a workflow verb (see cmd_fold_audit) — read-only, no args, absent from `help`.
+  fold-audit) shift; cmd_fold_audit "$@" ;;
   compact) shift; cmd_compact "$@" ;;
   # No dispatch_kick on either: `validated` records that a probe RAN and `freshness` is a pure read.
   # Neither changes what is dispatchable, and a kick on a whole-population sweep would fire the
