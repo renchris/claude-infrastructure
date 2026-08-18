@@ -175,3 +175,11 @@ build** — `scripts/find-plan.sh:73` already reads `.plans[$k].projectName` and
 path-derived basename, so it is a data entry (~0 cost) that composes with (a) as a per-row stopgap.
 Full measurement, and a corrected occurrence census (six dispatches / five items — the `venue-*`
 family undercounts) → `venue-foreign-master-redispatch-2026-08-17.md` §§2-4.
+
+**A FIFTH followed the same day** — `38de29ec5e59`, `doc_classifier` again, into another
+`claude-infrastructure` VM. It adds the one thing the first four could not show: that item had
+**already** burned a cloud session on 2026-08-11 (`bin/cc-dispatch:619-626`), by a different
+mechanism, so the cost of an unfixed venue is **not capped at one session per item** — the
+dispatcher re-fires the row. Its premise was re-confirmed and its supersession refuted from evidence
+already in this repo, so it is open-and-unstarted, blocked purely on venue.
+`venue-foreign-repo-recurrence-2026-08-17.md` § FIFTH OCCURRENCE.
