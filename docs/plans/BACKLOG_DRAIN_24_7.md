@@ -87,6 +87,52 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #23: `master-operator-gated` 2 → 0 open / 50 blocked. filed 0 /
+  closed 2.** Picked this effort over `master-session-lifecycle` (6 open) because the fold showed it
+  cheaper, per the goal's own "or whichever effort the fold shows cheaper". Landed `070f205de`
+  (content-verified on origin/main, then **converged LIVE** by content: `~/.claude/scripts/
+  land-content-verify.sh` carries the fix; the diff ADDS no file, so no add-breach). Blocked tail BY
+  STRATUM: 50 rows — 49 `source: needs` operator-platter rows and 1 `source: session-a28e8b9c`;
+  **0 cloud-venue rows in this effort.** No stale claim left (both claimed rows were closed).
+  - **The two rows were `re-land …` predictions that had come TRUE, and their own falsifier could
+    not say so.** `25337307a1a8` (reland/goal-wake): the stored probe exits 0 this moment — all 6
+    paths on trunk, which is strictly ahead. `515cfb4cd736` (reland/drain-chain): every path landed
+    by content — `scripts/drain-chain-assert.sh` and `tests/drain-chain-assert.bats` byte-identical
+    to trunk, the calling arm live at `scripts/autonomy-sweep.sh:832-834`, the §6 case at
+    `tests/autonomy-sweep.bats:1144` — yet the probe still convicted it.
+  - **THE FINDING, and it is a generator not an incident: `diff` is POSITIONAL, so a line that
+    landed at a NEW OFFSET reads as a strand.** The oracle's existing rescue arm asks whether trunk
+    once carried the ref's whole-file BLOB; the case that actually occurs is trunk carrying the
+    ref's LINES elsewhere and never that blob. The miss is **systematic for the file class this repo
+    mandates everywhere — INTEGRATE-only, newest-first logs**, where landing an entry at the top
+    while the ref appended at the bottom re-positions every line. Measured on this very plan file:
+    reported as "19 line(s) present only in the ref" while all 18 non-blank ref-only lines were on
+    trunk VERBATIM (`grep -qxF --` each, 0 absent). Because ship-land wires the script as a
+    FALSIFIER and a falsifier retracts only on exit 0, both rows were **structurally unable to
+    retract** while reading as mechanised.
+  - Fixed by a **MULTISET** superset arm (`trunk_covers_every_line`), never a set one: a set test
+    forgives a LOST DUPLICATE, which is a real strand. Three per-site mutants, each reddening only
+    its own case: set-instead-of-multiset → case 24 alone; forgive-everything → the 6 strand
+    controls incl. 3 pre-existing; arm-absent → case 23 alone. Suites run with the plan line seen —
+    `tests/land-content-verify.bats` `1..25` (25 ok, 0 not ok) and the consumer
+    `tests/ship-land.bats` `1..143` (143 ok, 0 not ok).
+  - 🚨 **The fix did NOT launder either row closed, deliberately.** Post-fix the drain-chain ref
+    still exits 1 — 2-of-5 paths became 1-of-5, the plan file correctly reclassified RELOCATED, and
+    `scripts/autonomy-sweep.sh` still convicted because its 6 residual lines are a
+    **superseded-by-REIMPLEMENTATION** variant: the ref's `case $0 in $_cc_cfg/*` glob, which trunk
+    replaced at `:946-947` with an exact-match test *because the glob also matched the verifier's
+    own throwaway worktrees*. **Actioning that row's prescribed `run` would have re-applied a
+    regression to trunk.** The rows were closed on independently verified content evidence, not on a
+    narrowed probe. **Residue for a successor: reimplementation-supersession is not decidable by any
+    content oracle** — trunk holds neither the blob nor the lines — so that row class needs a
+    different EXIT, not a smarter falsifier.
+  - Instrument notes paid for this recycle: a `grep -qxF "$l"` where `$l` begins with `-` is parsed
+    as an OPTION and the check is blind — use `grep -qxF -- "$l"`; and a `hash-object`/`rev-parse`
+    identity check compares EMPTY to EMPTY when the path is malformed, which renders as IDENTICAL —
+    print both hashes. Converging also required moving 2 untracked files aside in the shared
+    checkout (both byte-identical to the incoming adds, both restored identical by the pull);
+    `pull --rebase` ABORTS on such a collision rather than reporting a stale live layer.
+
 - **2026-08-18 — drain recycle #22: `master-session-lifecycle` 7 → 6 open / 1 blocked. filed 0 /
   closed 1.** Landed `9fad38d2c` (3 commits), content-verified on origin/main and **converged LIVE**
   by content on both deploy paths. Blocked tail BY STRATUM: 1 row, `adf1bb6b5406`, venue=local, a
