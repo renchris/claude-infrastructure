@@ -586,6 +586,79 @@ Ledger: `<state>/convictions`, TSV `epoch⇥file⇥tree⇥sha⇥load`, pruned to
 so corroborating on it would merge unrelated reds. Closing it needs a real attribution key, not a
 wider filter.
 
+#### 4.2.8 Reachability — a bisect must be able to return NO VERDICT (2026-08-17)
+
+**Added 2026-08-17**, closing backlog `ebbf3adfb4d0`. Landed in `scripts/postland-verify.sh`
+(`bisect_reach_ok`, plus `BISECT_STEPS`/`BISECT_S`/`BISECT_LOAD`/`BISECT_WHY` out-parameters and an
+honest `red_actions` page render) + 6 new tests (B19-B24) in
+`tests/postland-verify-bisect-bound.bats`.
+
+**The defect.** Page `postland-red-0f55846f7de4` named
+`tests/cc-wait.bats::the timeout verdict names itself as designed` at culprit `0f55846f7de4`,
+bisected from last-green `f5b67a94760e`. That commit changes exactly one file —
+`docs/plans/BACKLOG_DRAIN_24_7.md`, +88 lines, no code — which bats never opens and `cc-wait.bats`
+never names. It cannot reach the subject by any path. The suite is 19/19 green at `origin/main`
+HEAD `d047506a3` with that plan line present, so the RED does not reproduce; the page env recorded
+**load 16.45**, i.e. the corpus failure was CONTENTION. The walk then elected the nearest commit
+rather than reporting no verdict. Two durable costs: the originating chain is paged for a fault it
+did not cause, and a docs commit acquires a permanent RED in the page store.
+
+**Why the three existing culprit guards miss it.** The tip confirmation (§B10-B12) and the floor
+proof (§B13-B16) both ask *did the walk MEASURE what it names*, and answer by re-running the runner
+at an endpoint. Under contention an interior culprit genuinely has a GOOD probe below it and a BAD
+probe at it — the box was loaded for one step and not the other — so the differential is real and
+every re-run guard passes. No probe can separate that from a regression.
+
+**The fix.** A fourth culprit guard that decides from the **tree**, not from a probe, and therefore
+costs no bats run: *can this diff reach the subject at all?* One-sided by construction — only a
+positive proof of unreachability vetoes:
+
+- any changed path outside the inert class ⇒ **stands**, no questions (a script the subject never
+  spells is still reachable transitively through whatever binary it does invoke);
+- a merge, an unreadable diff, an empty diff, or an unreadable subject ⇒ **stands** (unprovable is
+  not proven);
+- all changed paths `*.md` **and** none named by the subject (full path · any ancestor directory ·
+  basename) ⇒ **NO VERDICT**.
+
+`*.md` is the whole inert class, deliberately. `*.txt` was in it for one draft and came out: the
+bisect fixtures commit `seq.txt` and B10/B13/B17 went red, which is the general point — a `.txt` in
+this tree is as likely to be a fixture read through a path its test never spells as it is to be
+prose. Ordered **before** the endpoint probes: reachability is free and, on a first-child culprit,
+the floor check would otherwise spend a whole-file bats run to reach a worse answer (B23).
+
+**And the numbers that adjudicate it.** `$ENV_FP`'s load is the corpus's, read at run start — the
+`0f55846f7de4` page said `load 16.45` and nothing said whether that was still true when the walk
+named its commit. Every verdict *and* every non-verdict now records `steps`, `elapsed` and the
+loadavg **at the verdict**, in the runner log, on the page, and on `verb_bisect`'s stderr (B24). An
+unreadable loadavg renders `?`, never `0`.
+
+**The page and the peer ping stop asserting causation they do not have.** `culprit` still falls
+back to the target sha to key the page file and route the courtesy ping, but that fallback is no
+longer rendered under the word "culprit (bisected from last-green …)". A non-verdict page reads
+`culprit: NO VERDICT — the bisect convicted nothing (<why>); RED observed at <sha>, which is where
+the window ENDS, not a commit shown to cause it`, and the author ping says
+`NOT attributed to your commit`. Auto-revert was already gated on `$bisected` and is unchanged —
+this closes the *surfaces*, which were the half that outlived the run.
+
+**The land gate caught the first draft's own bug, and it is worth recording.** The reference check
+was `printf '%s' "$subject" | grep -qF -- "$tok"`. Under `set -o pipefail` an early-exiting consumer
+SIGPIPEs its producer and the pipeline reports 141, so the `&&` reads **FALSE on a match** — the
+subject names the doc and the culprit is vetoed anyway, i.e. the exact wrong-veto direction the
+function is one-sided to prevent. It is invisible at fixture scale (a `printf` under the 64KB pipe
+buffer finishes before `grep -q` leaves), so B20 passed and the live path would not have. Fixed with
+a `case` builtin — no pipe, no fork, quoted pattern matched literally — and pinned by **B25**, a
+subject padded past the buffer with the match placed first. Verified as a positive control: B25 goes
+red against the pipe form and green against `case`, while B20 passes under both.
+
+**Seams.** None new. `BISECT_WHY` slugs: `no-range` · `no-cell` · `no-walk` · `cut-wall` ·
+`cut-steps` · `no-first-bad` · `unreachable` · `tip-unconfirmed` · `floor-unproven` ·
+`floor-not-green`.
+
+**Known residue (not fixed here, deliberately).** The reachability corpus is the subject file's own
+text. This repo has zero bats `load` helpers (`grep -c '^ *load ' tests/*.bats` = 0), so the file is
+its own closure today; introducing one means appending the helper's content here, or a doc named
+only by the helper reads as unreachable. That is the one way this guard can start vetoing wrongly.
+
 ### 4.3 Deploy lane — autopilot (tv2-deploy)
 
 1. `launchd/com.claude.deploy-live.plist` (new): every 600s run
