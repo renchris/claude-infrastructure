@@ -2840,6 +2840,95 @@ _reland_run_of() { # <backlog-store> → the filed row's --run command
   [ "$(git worktree list | wc -l | tr -d ' ')" -eq "$before" ]
 }
 
+# ── defect 2d: THE ROW'S IDENTITY CARRIED THE ATTEMPT'S SANDBOX (2026-08-18, dc014c6829ac) ───────
+# Stabilising the TITLE (defect 2a) fixed one of the two hashed fields. The id is
+# `sha256(project ⑟ title ⑟ source)`, and this call passed no --project — so cc-backlog derived one
+# from ITS OWN CWD, which on the desk-land path is the throwaway `.desk-land-<branch>-<pid>`.
+# Measured: claude/fire-20260818T080549Z-15840-1 minted FOUR blocked rows (1285df22b72e /
+# 9776708bc201 / 2ee586a548f8 / e24b0f9933b7), byte-identical in title, source and condition and
+# differing ONLY in `project=.desk-land-…-32615 / -39245 / -42721 / -93241`. The recurrence brake
+# could not fold them because it GROUPS BY PROJECT — the one field they disagreed on.
+#
+# THE FIXTURE REPRODUCES THE RACE RATHER THAN PARAPHRASING IT, and that distinction is the whole
+# reason this case is a case. Two LIVE linked worktrees already collapse to one id today (probed:
+# both resolve `--git-common-dir` to the main checkout), so the obvious framing — "run it twice from
+# two directories" — passes PRE-FIX and would be decoration. The defect needs the state desk-land's
+# EXIT trap actually creates when it races ship-land's: the directory still standing while its git
+# admin entry is gone, where `rev-parse --show-toplevel` fails and project_default falls back to
+# `basename $(pwd)`. The wrapper below injects exactly that, at exactly the instant of filing, and
+# puts it back afterwards so the blast radius is the one call under test.
+_dup_filer() { # → path to a cc-backlog wrapper that files mid-teardown
+  local w="$BATS_TEST_TMPDIR/cc-backlog-midteardown"
+  cat > "$w" <<EOF
+#!/usr/bin/env bash
+# Reproduce desk-land's cleanup winning the race with ship-land's trap: the worktree's admin entry
+# goes, the directory stays. Restored after the call — the race is momentary in production too.
+admin=""
+[ -f .git ] && admin="\$(sed 's/^gitdir: //' .git)"
+[ -n "\$admin" ] && [ -d "\$admin" ] && mv "\$admin" "\$admin.gone"
+"$REPO/bin/cc-backlog" "\$@"; rc=\$?
+[ -n "\$admin" ] && [ -d "\$admin.gone" ] && mv "\$admin.gone" "\$admin"
+exit \$rc
+EOF
+  chmod +x "$w"; printf '%s' "$w"
+}
+
+_dup_ids() { # <store> → the distinct ids of the filed `needs` rows, one per line
+  jq -r 'select(.title != null and .source == "needs") | .id' "$1" 2>/dev/null | sort -u
+}
+
+@test "P4 inbox identity: N failed lands of ONE branch from N sandboxes fold to ONE row" {
+  git checkout -q -b feat/dup-rows main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > baddup.sh   # SC2164 → gate RED, exit 6
+  git add baddup.sh && git commit -q -m "feat: baddup"
+  git checkout -q main
+
+  store="$BATS_TEST_TMPDIR/dup-store.jsonl"; : > "$store"
+  filer="$(_dup_filer)"
+
+  # Two attempts at the SAME branch, each in its own per-attempt throwaway — the desk-land shape,
+  # pid and all. SHIP_LAND_LAND_ROOT is deliberately NOT set: this proves ship-land's own early
+  # resolution, not desk-land's hint (tests/desk-land.bats owns that half).
+  for pid in 32615 39245; do
+    wt="$BATS_TEST_TMPDIR/.desk-land-feat-dup-rows-$pid"
+    git worktree add -q "$wt" feat/dup-rows
+    ( cd "$wt" && env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$store" \
+        CC_BACKLOG_BIN="$filer" CC_BACKLOG_NEEDS_BRAKE=off \
+        bash "$SHIPLAND" --trunk main >/dev/null 2>&1 ) || true
+    git worktree remove --force "$wt" >/dev/null 2>&1 || true
+    git worktree prune >/dev/null 2>&1 || true
+  done
+
+  # Both attempts filed — otherwise "one id" would be vacuously true of a store holding one row
+  # that a broken fixture happened to write once (memory: positive-control-the-denominator).
+  [ "$(grep -c 're-land feat/dup-rows' "$store")" -ge 2 ]
+  [ "$(_dup_ids "$store" | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "P4 inbox identity: the row's project is the DURABLE checkout, never the sandbox" {
+  # The direct statement of the fix, and the one that says WHICH label won. The case above would
+  # also pass if both attempts filed under the same WRONG name; this pins the right one.
+  git checkout -q -b feat/dup-proj main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > badproj.sh
+  git add badproj.sh && git commit -q -m "feat: badproj"
+  git checkout -q main
+
+  store="$BATS_TEST_TMPDIR/proj-store.jsonl"; : > "$store"
+  filer="$(_dup_filer)"
+  wt="$BATS_TEST_TMPDIR/.desk-land-feat-dup-proj-77777"
+  git worktree add -q "$wt" feat/dup-proj
+  ( cd "$wt" && env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$store" \
+      CC_BACKLOG_BIN="$filer" CC_BACKLOG_NEEDS_BRAKE=off \
+      bash "$SHIPLAND" --trunk main >/dev/null 2>&1 ) || true
+  git worktree remove --force "$wt" >/dev/null 2>&1 || true
+
+  proj="$(jq -r 'select(.title != null and .source == "needs") | .project' "$store" | head -1)"
+  [ "$proj" = "$(basename "$WORK")" ]
+  # ...and NEVER the sandbox. Stated as its own assertion because the equality above would pass on
+  # an empty string if jq's filter ever stopped matching.
+  ! printf '%s' "$proj" | grep -q 'desk-land'
+}
+
 # ── defect 2b: THE ROW WAS A PREDICTION NOTHING EVER RE-ASKED ────────────────────────────────────
 # The row above measures ONE fact — ship-land exited non-zero — and nothing re-asks by content, so
 # it decays as the work lands under a different sha. Censused 2026-08-12: 24 of the 25 `re-land …`
@@ -3245,7 +3334,12 @@ _reland_title() { printf 're-land %s: ship-land could not complete and its autho
 @test "re-land rows: the filed title carries NO per-attempt sandbox path or exit code" {
   # Structural, against the real source: the generator is inside a function this suite cannot call
   # without a full failing land, so assert the emitted title's SHAPE at the call site.
-  run sed -n '/^    "re-land /p' "$SHIPLAND"
+  # ANCHORED ON THE TOKEN, NOT ON A COLUMN. This used to require exactly four leading spaces, so
+  # wrapping the call in an argument array — a pure reformat — turned it RED and it read as the
+  # title regressing (memory: exact-count-assertion-tripwires-its-own-subject). `"re-land ` occurs
+  # exactly once in the file and comments open with `#`, so leading whitespace is the only degree
+  # of freedom worth giving up.
+  run sed -n '/^[[:space:]]*"re-land /p' "$SHIPLAND"
   [ "$status" -eq 0 ]
   [ -n "$output" ]
   [[ "$output" != *'REPO_ROOT'* ]] || { echo "sandbox path is back in the title: $output"; false; }

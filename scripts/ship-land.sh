@@ -736,6 +736,50 @@ rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never ex
 # there is ONE way this fleet attests a signalled death, not two.
 LIFECYCLE_ROLE="outer"   # the locked child sets "locked": it attests, but owns no marker and files no inbox
 INFLIGHT_FILE=""         # non-empty ⇒ THIS process claimed the worktree's in-flight marker
+
+# ── LAND_MAIN_ROOT — THE DURABLE CHECKOUT, RESOLVED WHILE IT IS STILL RESOLVABLE ─────────────────
+# The failure inbox runs from a TRAP, and by then this land's cwd may no longer be a git worktree at
+# all: desk-land.sh hands us a THROWAWAY worktree (`$WTROOT/.desk-land-<branch>-<pid>`) and removes
+# it in its own EXIT trap, so on a signalled death the two teardowns race. Measured 2026-08-18 —
+# with the admin entry gone and the directory still standing, `git rev-parse --show-toplevel` fails
+# and cc-backlog's project_default falls back to `basename $(pwd)`, i.e. to the SANDBOX NAME.
+#
+# That name carries a PID, and the backlog id is `sha256(project ⑟ title ⑟ source)`. So the row's
+# identity was a function of which process happened to observe the failure: one stuck branch
+# (claude/fire-20260818T080549Z-15840-1) minted FOUR blocked rows on 2026-08-18 —
+# 1285df22b72e / 9776708bc201 / 2ee586a548f8 / e24b0f9933b7 — byte-identical in title, source and
+# condition, differing ONLY in `project=.desk-land-…-32615 / -39245 / -42721 / -93241`.
+#
+# 🚨 THE STORE IS NOT BROKEN AND THE HASH MUST NOT BE WIDENED. A scratch-store probe (three `add`s,
+# same title+source+condition) collapses to ONE id. The key works; the CALLER fed it a per-attempt
+# input. This is the same lesson as the `--run` path a few hundred lines down — that one already
+# resolves the durable checkout because a `cd` into a reaped sandbox is unrunnable — the identity
+# simply never learned it. The fix is to resolve ONCE, EARLY, and hand the answer to the trap:
+# a value captured while the worktree is alive cannot be un-resolved by its teardown.
+#
+# It is the SECOND face of e3b966424 (machine producers inflating `blocked`). That commit stopped
+# `venue=cloud` misfiling and taught the recurrence brake to keep two branches apart; neither half
+# can see this one, because the brake groups BY PROJECT and these rows disagree on exactly that
+# field — so the fold never even considered them siblings.
+LAND_MAIN_ROOT=""        # the durable main checkout — see resolve_main_root; "" until main_outer runs
+
+# resolve_main_root <dir> → the durable main checkout backing <dir>, or <dir> when it is already one.
+# A linked worktree's `--git-common-dir` IS the main checkout's `.git`, so this holds for any
+# worktree, not merely the desk-land shape; SHIP_LAND_LAND_ROOT lets a caller that KNOWS the answer
+# (desk-land.sh does — it created the throwaway) state it rather than have us infer it.
+# Silent on failure BY DESIGN: it returns <dir> unchanged, which is exactly today's behaviour, so a
+# repo layout this cannot read degrades to the old identity instead of to a wrong one.
+resolve_main_root() {
+  local d="${1:-}" gcd m
+  [[ -n "${SHIP_LAND_LAND_ROOT:-}" && -d "${SHIP_LAND_LAND_ROOT:-}" ]] && { printf '%s' "$SHIP_LAND_LAND_ROOT"; return 0; }
+  [[ -n "$d" ]] || return 0
+  gcd="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$gcd" ]]; then
+    m="${gcd%/worktrees/*}"; m="${m%/.git}"
+    [[ -n "$m" && -d "$m" ]] && { printf '%s' "$m"; return 0; }
+  fi
+  printf '%s' "$d"
+}
 # shellcheck source=/dev/null
 [[ -r "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh" ]] && . "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh"
 
@@ -803,7 +847,7 @@ inflight_release() {  # idempotent · only ever removes a marker THIS process wr
 # conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
 # shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
 land_failure_inbox() {  # $1=exit code $2=cause word
-  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc land_root _lgcd _lmain
+  local rc="$1" cause="$2" head name ref cmd bl id oracle fout frc land_root land_proj _lgcd _lmain
   # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
   # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
   # visible feedback and filing them would drown the inbox in noise the author already read.
@@ -820,10 +864,12 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # `--run` cd's there is unrunnable by the time anyone reads it, and now that the recurrence brake
   # folds these rows (below) the FIRST attempt's path would be cemented for every later one.
   # Resolve the durable main checkout the same way handoff-fire's recycle fallback does.
-  land_root="$REPO_ROOT"
-  case "$REPO_ROOT" in
+  # LAND_MAIN_ROOT was resolved in main_outer, while the worktree was still a worktree. Prefer it;
+  # the inline resolution below stays as the fallback for the paths that never reached main_outer.
+  land_root="${LAND_MAIN_ROOT:-$REPO_ROOT}"
+  case "$land_root" in
     /tmp/*|/private/tmp/*|/var/folders/*)
-      _lgcd="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+      _lgcd="$(git -C "$land_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
       if [[ -n "$_lgcd" ]]; then
         _lmain="${_lgcd%/worktrees/*}"; _lmain="${_lmain%/.git}"
         [[ -d "$_lmain" ]] && land_root="$_lmain"
@@ -894,10 +940,34 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # The branch IS the identity: one stuck branch is one job to do, however many times the retry
   # loop notices. The volatile diagnostics move to the `--run` command, which cc-do renders
   # verbatim, so nothing an operator needs to act is lost — only the false distinctness is.
-  id="$("$bl" needs \
-    "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone" \
-    --run "$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}" \
-    --session "${CLAUDE_CODE_SESSION_ID:-}" 2>/dev/null || true)"
+  #
+  # 🚨 AND THE PROJECT IS HALF THAT IDENTITY, WHICH IS WHY IT IS PASSED EXPLICITLY (2026-08-18).
+  # The id is `sha256(project ⑟ title ⑟ source)`, and this call used to send no --project at all —
+  # so cc-backlog derived one from ITS OWN CWD, which on the desk-land path is the per-attempt
+  # throwaway worktree. Stabilising the TITLE (above) therefore fixed only one of the two hashed
+  # fields: every retry still minted a sibling, now differing in a field the title fold cannot even
+  # see, because the recurrence brake GROUPS BY PROJECT. Four rows for one branch, measured.
+  #
+  # land_root is the durable checkout resolved in main_outer, so this label is the same string on
+  # every attempt however many sandboxes observe the failure. A leading dot can only be a sandbox
+  # (`.desk-land-…`) and never a project, so it is refused rather than filed — falling through to
+  # the old cwd-derived default, which is exactly today's behaviour and not a worse one. The label
+  # is checked against scripts/dispatch-projects.conf at the chokepoint (WARN, never refuse), so a
+  # repo with no conf row still files; see EXPLICIT --project VALIDATION in cc-backlog.
+  land_proj="$(basename "$land_root" 2>/dev/null || true)"
+  local -a nargs
+  # The title stays ALONE on its own line: tests/ship-land.bats reads this call site structurally
+  # (it cannot call a trap handler without a full failing land) and asserts the emitted title's
+  # SHAPE — no sandbox path, no exit code, the branch present.
+  nargs=(needs
+    "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone"
+    --run "$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}"
+    --session "${CLAUDE_CODE_SESSION_ID:-}")
+  case "$land_proj" in
+    ""|.*) : ;;                                  # unresolvable, or a sandbox — do not file a lie
+    *) nargs=("${nargs[@]}" --project "$land_proj") ;;
+  esac
+  id="$("$bl" "${nargs[@]}" 2>/dev/null || true)"
   # THE FALSIFIER — the half that was missing, and the reason this population rotted. A row filed
   # here measures ONE thing: that ship-land exited non-zero. It never re-asks, so it is a PREDICTION
   # about content, and the prediction is usually wrong within a day: censused 2026-08-12, 24 of the
@@ -3756,6 +3826,10 @@ main_outer() {
 
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  # HERE, not in the trap — this is the earliest point in a real land where the worktree is
+  # provably alive, and the whole mechanism is that the trap may run after it is not. See
+  # LAND_MAIN_ROOT above for the four-duplicate-row measurement this line exists to stop.
+  LAND_MAIN_ROOT="$(resolve_main_root "$REPO_ROOT")"
   local TOP; TOP="$(cd "$REPO_ROOT" && pwd -P)"
 
   # --- shared-checkout refusal (G-P9-4, in code) ---
