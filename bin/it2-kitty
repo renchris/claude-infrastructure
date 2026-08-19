@@ -407,6 +407,106 @@ prove_target(){ # $1=window id  $2=verb → 0 deliver · 1 refuse (proven absent
   return 0
 }
 
+# ── NONCE-ANCHORED ECHO-VERIFY FOR `run` (item d90bbcd9e01f) ─────────────────────────────────────
+#
+# WHAT prove_target ABOVE DOES NOT COVER. It answers "did the text go NOWHERE" — the window is not
+# in kitty's list, so send-text's rc 0 is a lie. It cannot answer the other half: the window EXISTS
+# and the text arrived MANGLED. Both live sources are reproduced in the item: a ZLE race on a
+# still-loading .zshrc (`cd` -> `ould ocd`), and the operator's own in-flight keystrokes landing in
+# the same pty between the ^U and the command (measured: `a` then `cd /tmp` -> `acd /tmp` ->
+# `zsh: correct 'acd' to 'cd' [nyae]?`). A pty has no notion of who typed, so no amount of escaping
+# helps; only reading the line back before submitting it does.
+#
+# THE PREFIX IS NONCE-ANCHORED, NOT THE COMMAND. Grepping the screen for the command itself lets the
+# check pass on RESIDUE — the same command echoed by an earlier failed attempt, an earlier run into
+# this pane, or the line sitting above a wedged [nyae] prompt — and the CR then submits a mangled
+# fragment. Each attempt mints a fresh nonce and types `: <nonce>; <line>`, so what is sought is
+# unique to THIS attempt. `:` is the POSIX no-op builtin — never correction-eligible, argument
+# ignored — so the executed semantics are unchanged and the prefix is inert in zsh and bash alike.
+# This is the same proof scripts/handoff-fire.sh:_it2_type_line already runs for the LAUNCH line;
+# what was missing is that `run` — the verb Claude Code's own teammate spawn types through — had no
+# proof of any kind once the pane was not armed.
+#
+# 🚨 WHY THIS IS GATED ON in_alternate_screen AND NOT SIMPLY TURNED ON. `run`'s traffic is NOT one
+# population. scripts/handoff-fire.sh:as_write routes `/exit` through this exact verb into a LIVE
+# CLAUDE CODE COMPOSER, on the self-close and recycle paths. Typing `: <nonce>; /exit` there does not
+# execute anything — it enters that literal text as a CHAT MESSAGE and submits it. The nonce form is
+# therefore not merely useless on a TUI pane, it is DESTRUCTIVE, which is why the item names
+# in_alternate_screen as the oracle rather than foreground_processes (polluted by caffeinate/tee/mcp
+# side-cars, and blind to an expect-wrapped grandchild). Re-measured on this box 2026-08-19: 12 of 12
+# live Claude panes read True, the one bare-shell pane reads False — the axis separates cleanly.
+#
+# An identity test against False, NOT a truthiness test — the same rule composer_state states one
+# screen up. A payload MISSING in_alternate_screen must read as "a TUI may be up" and ABSTAIN; only
+# kitty explicitly saying False buys the verified path. So every unknown degrades to today's single
+# send-text, byte for byte.
+shell_prompt_pane(){ # $1=window id → 0 PROVEN a plain shell prompt · 1 not proven (abstain)
+  local id="$1" ans
+  # shellcheck disable=SC2016  # the python must reach the interpreter VERBATIM; the id crosses by
+  # ENVIRONMENT (WANT_ID) so a window id can never be interpolated into the program text.
+  ans="$(kt ls --match "id:$id" 2>/dev/null | WANT_ID="$id" python3 -c '
+import json, os, sys
+want = os.environ["WANT_ID"]
+try:
+    d = json.load(sys.stdin)
+    rows = [w for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])
+            if str(w.get("id")) == want]
+except Exception:
+    sys.exit(1)
+if len(rows) != 1:
+    sys.exit(1)
+print("SHELL" if rows[0].get("in_alternate_screen") is False else "TUI")' 2>/dev/null)" || return 1
+  [ "$ans" = SHELL ]
+}
+
+# THREE STATES, because two would have to lie about one of them (memory: null-result-must-not-use-
+# the-error-channel). rc 2 is ABSTAINED and is returned only BEFORE any keystroke, so the caller can
+# fall through to the legacy send with nothing double-typed. rc 1 is TRIED AND FAILED — the pane was
+# a proven shell, we typed, and four attempts could not read our own nonce back — and the caller must
+# fail loud rather than submit a line it cannot see. An unreadable get-text folds into rc 1 rather
+# than rc 2 deliberately: shell_prompt_pane just talked to kitty about this very window, so a screen
+# that then reads empty four times running is an anomaly, and the scrub below has already left the
+# line clean, so refusing costs a retry while guessing costs an executed fragment.
+type_verified(){ # $1=window id  $2=line → 0 verified+submitted · 1 tried and FAILED · 2 abstained
+  local id="$1" line="$2" attempt nonce wire want screen n
+  local attempts="${CC_KITTY_TYPE_ATTEMPTS:-4}"
+  local settle="${CC_KITTY_TYPE_SETTLE:-0.5}" presettle="${CC_KITTY_TYPE_PRESETTLE:-0.12}"
+  [ "${CC_KITTY_TYPE_VERIFY:-on}" = on ] || return 2
+  # Emptiness is judged on the CALLER's line, never on the wire form: the nonce prefix makes the wire
+  # non-empty for every input, so checking the wire would verify-and-submit an empty command.
+  [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || return 2
+  shell_prompt_pane "$id" || return 2
+  for attempt in $(seq 1 "$attempts"); do
+    # Fresh per ATTEMPT, not per call: attempt N must not be satisfiable by attempt N-1's echo.
+    nonce="ktv-$$-${attempt}-${RANDOM:-0}"
+    wire=": $nonce; $line"
+    want="$(printf '%s' "$wire" | tr -d '[:space:]')"
+    kt send-text --match "id:$id" -- $'\x15' >/dev/null 2>&1 || true   # ^U: scrub any partial line
+    /bin/sleep "$presettle"
+    kt send-text --match "id:$id" -- "$wire" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+    /bin/sleep "$settle"
+    # Whitespace stripped from BOTH sides so a line that WRAPPED across columns still matches.
+    screen="$(kt get-text --match "id:$id" 2>/dev/null | tr -d '[:space:]' || true)"
+    # A COUNT, never `grep -q`. Under `set -o pipefail` (line 91) `producer | grep -q X` can exit
+    # NON-ZERO on the very input it MATCHED — grep leaves early and the producer takes SIGPIPE — so
+    # the -q form inverts the verdict exactly when the text arrived intact. MEASURED here rather than
+    # assumed, because the hazard is PRODUCER-DEPENDENT and this producer is the safe kind: on this
+    # box `printf` is a bash BUILTIN and the pipeline reads rc 0, while a forked `/bin/cat` in the
+    # same shell reads rc 141. So the count form is not curing an observed red on this line — it is
+    # the shape that stays correct if the producer ever becomes a fork, which is one edit away. The
+    # mutant that swaps it back comes up GREEN, and that is the honest record: it indicts this
+    # rationale, not the assertion the line makes.
+    n=0
+    [ -n "$screen" ] && n="$(printf '%s' "$screen" | grep -cF -- "$want" || true)"
+    if [ "${n:-0}" -gt 0 ]; then
+      kt send-text --match "id:$id" -- $'\r' >/dev/null 2>&1 && return 0   # verified → submit
+    fi
+    kt send-text --match "id:$id" -- $'\x15' >/dev/null 2>&1 || true   # drop the mangled half-line
+    /bin/sleep "$settle"
+  done
+  return 1
+}
+
 # A rejection has to name its own cause. `not a kitty window id: 'E5D77446-…'` was the whole
 # diagnostic an operator got on 2026-07-31 while every teammate spawn failed, and it points at the
 # id — the one innocent party. The id is correct; the caller is the wrong terminal's.
@@ -975,10 +1075,30 @@ else:
 
   run)
     # Text + Enter. This is how the teammate's launch command is actually executed.
+    #
+    # THREE DISPOSITIONS, and only the third one types at a prompt. Naming them is the point: a
+    # guard wired at one of these covers only the traffic that reaches THAT branch, and `run` is not
+    # one population (memory: conclusion-must-reach-the-enforcing-store).
+    #   1. ARMED   → deliver_argv hands the command over as a FILE. No shell, no prompt line, no ZLE
+    #                and nothing to race. Already the strongest path; untouched below.
+    #   2. TUI     → a live Claude Code composer (as_write's `/exit`, self-close and recycle). Its
+    #                text is a MESSAGE, not a command, so the nonce wire must never reach it —
+    #                type_verified abstains (rc 2) and the legacy send below runs byte for byte.
+    #   3. SHELL   → a proven bare prompt (in_alternate_screen positively False). This is the one the
+    #                item is about: the operator-visible `cd <path> && env … claude.exe …` whose
+    #                first word is correction-eligible the moment a keystroke interleaves. Verified.
     text="${ARGS[*]:-}"
     if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" run
       if armed "$SESSION"; then deliver_argv "$SESSION" "$text" || exit 1; exit 0; fi
       prove_target "$SESSION" run || exit 1
+      type_verified "$SESSION" "$text"; case $? in
+        0) exit 0 ;;                       # verified and submitted
+        1) err "refusing to run in window $SESSION — typed the line 4x and could not read it back."
+           err "The pane is a live shell, so this is mangling (a ZLE race, or an operator keystroke"
+           err "in the same pty), not a missing window. The half-line has been scrubbed; retry."
+           exit 1 ;;
+      esac
+      # rc 2 — ABSTAINED before any keystroke. Today's transport, unchanged.
       kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
     else unaddressed run; fi
     ;;
