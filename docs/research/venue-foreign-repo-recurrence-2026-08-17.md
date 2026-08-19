@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-19 | `21e2c1088736` | `reso-management-app` | label-foreign — **third distinct `reso` item**; first whose cargo is a POLICY DECISION (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,143 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH OCCURRENCE, 2026-08-19 — `21e2c1088736`, and the first whose cargo is a POLICY DECISION
+
+*Written from inside that VM. The class, its cause and the open remedy are settled above and are not
+re-derived. Three facts are new, and the third CORRECTS the "rails fail quietly" warning this file
+gives twice.*
+
+**2026-08-19.** Backlog item `21e2c1088736`, **project `reso-management-app`**, was dispatched to a
+`--venue cloud` session whose one attached repository is `renchris/claude-infrastructure`. Its brief
+names `/Users/chrisren/Development/reso-management-app`, cites `operationBuilder.ts:1451,1499,1589`
+and `:791-812`, and its DoD ref is
+`docs/research/UNDO_SURFACE_AND_CONCURRENCY_2026-08-16.md § 2`. None is reachable here — the same
+label-foreign route as 08-14, 08-16 and both 08-17 `reso` rows, on the project that has now burned
+**three** cloud sessions across three distinct items.
+
+## New fact 1 — a DECISION item is worse cargo than a bug, in two specific ways
+
+The five above were bugs or a compaction chore. This one is explicitly *"DECISION (not a bug fix)"*:
+a policy fork between **(A)** hiding/disabling Undo for `door_staff` on manager-only actions and
+**(B)** widening permissions so door staff can reverse their own action. Two consequences that do not
+follow from the earlier rows:
+
+1. **The misroute withholds a cheap DISPROOF, not just an implementation.** The brief's own mandated
+   first question — *can `door_staff` perform the FORWARD action at all?* — is a one-grep question
+   against the reso tree, and a `no` **dissolves the item**: the same gate that rejects the undo would
+   already have hidden the affordance, and the lying button is unreachable in practice. So the cost of
+   sending this row to a VM is not "the fix waits"; it is that the ~2 minutes that might have closed it
+   for free cannot be spent, while the slot is spent anyway.
+2. **The improvisation anti-goal has a sharper shape here.** `bin/cc-venue` §5 names it — *"a wrongly-routed
+   item improvises a plausible answer against history it cannot read, and reports success."* For a bug
+   that yields a wrong patch. For this row it would yield a **recommendation about a permission model**,
+   authored without reading a single permission gate, on a surface whose one existing carve-out
+   (`door_staff` check-in) was ratified by a dated decision the brief cites (2026-06-20). That is the
+   one output shape whose wrongness is least visible downstream: a diff gets reviewed against code, a
+   policy verdict gets quoted.
+
+Both are reasons to prefer `block` over any attempt to answer from the brief's prose, which is what
+§ Operator actions below does.
+
+## New fact 2 — route (b) is not an unspecified build: the project→repo mapping already exists, twice, in this repo
+
+The open 08-16 decision is **(a) fail closed at the fire vs (b) route by `item.project`**, and the
+argument for it being genuinely open is unchanged (it turns on facts no VM can verify: the GitHub App
+installation on the second repo, and whether `cc-offload land` works against it). But one thing that
+reads as build cost in (b) is already paid, and this session measured it rather than inferring it:
+
+| the mapping | where it already lives |
+|---|---|
+| `repo_for(project)` → `~/Development/<project>` | `bin/cc-eligible:607-620`, documented as *"cc-dispatch's project_repo convention, deliberately … so the venue arm and the worktree provisioner can never disagree about which tree an item's project means"* |
+| the per-project SSOT, more explicit | `scripts/dispatch-projects.conf` — `reso-management-app  repo=~/Development/reso-management-app`, already a `repo=` row |
+
+`bin/cc-offload:84` on `origin/main` is still `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — verified this
+session, **no guard has shipped** — i.e. the fire path derives the attached repo from the firing
+checkout while two in-repo sources already answer the question it is not asking. What remains open in
+(b) is the two unverifiable-from-VM facts, not the resolver.
+
+Corollary, from `cc-eligible why --json` run on a fixture of this item's text (verdict `eligible`,
+`classes []` — the **sixth** consecutive such verdict, still correct on its own terms): the assessment
+carries `history: {state: "no-repo", repo: "/root/Development/reso-management-app"}`. That is a
+property of **this VM**, not of the Mac — on the producer the tree exists — so it is not a
+ready-made discriminator, and this row does not propose it as one. It is recorded because it shows the
+oracle already resolves `project → tree` inside the same assessment the fire path ignores.
+
+## New fact 3 — CORRECTION: `cc-notify` no longer fails silently. It exits 3 and names both failures
+
+The § "rails fail QUIETLY" block and § 4 of "The fifth" both conclude **"`cc-notify` is the silent
+one"** (rc 0, `reason=role-unset`). **That is stale as of trunk today.** Re-measured here, all four
+rails and their exit codes:
+
+```
+$ cc-backlog block  21e2c1088736 --needs "…"    cc-backlog block: unknown id 21e2c1088736     # rc 3
+$ cc-backlog done   21e2c1088736 --evidence "…" cc-backlog done: unknown id …                 # rc 3
+$ cc-backlog reopen 21e2c1088736                cc-backlog reopen: unknown id …               # rc 3
+$ cc-notify --role desk "…"
+    a role is pointed at a pane by cc-roles claim / handoff-fire (--as-role) / desk-register
+    cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset).
+    This is push-send's exit 3, NOT a role failure …                                          # rc 3
+```
+
+`cc-notify` now falls through the unresolvable role to a **phone leg** and reports a machine token for
+its outcome (`bin/cc-notify:418-456`); that leg first appears inside this clone's 50-commit horizon at
+`36cbb55e` (2026-08-18) — one day after the two measurements above, which is why they disagree with
+this one. So a worker chaining `block` then `notify` and checking the last exit code is now warned by
+**both**, and the standing advice inverts: on this VM shape every rail is loud, and the failure to
+watch for is no longer a silent rc 0 but the fact that **nothing was written at all** —
+`~/.claude/autonomy/backlog.jsonl` was created empty (0 bytes) by these probes and stayed empty, so no
+false ledger state exists here either. **The ledger was NOT updated by this session and must not be
+reported as such.** A cloud VM's only durable channel to the desk is the branch it pushes; this file
+is the notification.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present |
+| `HEAD` vs `origin/main` | **0 behind** — fresh fetch; this VM *is* at `claude-infrastructure` trunk |
+| `bin/cc-offload:84` on trunk | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged; no guard has shipped** |
+| `/Users`, `~/Development`, any `reso-management-app` checkout | absent (`find / -maxdepth 4 -name reso-management-app` → 0 hits) |
+| GitHub scope | `renchris/claude-infrastructure`, one repository — `get_file_contents` on `renchris/reso-management-app` returns *"not configured for this session"*; an unauthenticated clone fails on credentials |
+| the cited files (`operationBuilder.ts`, the DoD-ref doc) | 0 hits over the checkout |
+| `cc-eligible check` (fixture of this item's text) | `verdict=eligible` · `classes []` · `history.state=no-repo` |
+
+## Operator actions
+
+The §3 decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` — **(a) fail closed at the fire
+vs (b) route by `item.project`** — is unchanged, now carries a sixth datapoint of cost, and is
+narrowed only by New fact 2 (its resolver already exists). Nothing new is proposed.
+
+This item's ledger disposition needs the Mac:
+
+```
+cc-backlog block 21e2c1088736 --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; premise NOT adjudicated, and the brief's own first question (can door_staff perform the FORWARD action?) may dissolve it in one grep (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SIXTH OCCURRENCE); third cloud session burned on this project"
+```
+
+`block`, not `reopen` and not `done`: the item is blocked on **where it was sent**, not on information
+or on a judgment call, and parking it out of the wave is what stops a seventh fire into the same VM
+shape before the guard exists. `reopen` would return it to the wave; `done` would be false — nothing
+about `operationBuilder.ts` changed.
+
+**For whoever reaches a venue that can see it**, the brief's mandated first step is the whole triage
+and should be run before any policy argument is opened — against `origin/main`, never a local tree:
+
+```
+git -C ~/Development/reso-management-app fetch origin -q
+git -C ~/Development/reso-management-app show origin/main:<path>/operationBuilder.ts | sed -n '780,820p;1440,1600p'
+```
+
+If `door_staff` cannot reach the forward action, the affordance is already hidden and the item closes
+without touching the permission model. Only if it CAN does the (A)/(B) fork become real.
+
+## The item itself — NOT adjudicated
+
+No claim is made about the floor-plan undo surface, the `isManagerOrAbove` gates, the 2026-06-20
+check-in carve-out, or which of (A)/(B) is right, and none should be inferred. `operationBuilder.ts`
+and `UNDO_SURFACE_AND_CONCURRENCY_2026-08-16.md` were never readable from this session — the brief's
+mandated first step (*read what this item cites on TRUNK*) is unrunnable here for the strongest
+possible reason: there is no tree, stale or otherwise. Everything above is a measurement of the
+**venue**, never of the item.
