@@ -87,6 +87,108 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #29: the row's two premises were both false and the defect underneath
+  them was real; a standing trunk red, not mine, was what actually held the land.
+  `master-fleet-footprint` 28 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed). filed 1 / closed 2.**
+  Lands `aa0ce5cbf` (residency) + `f7c17fd2b` (cc-backlog sentinel), both content-verified on origin/main.
+  - **Re-measured rather than inherited, and the property held.** 30 open at intake, **30/30
+    `venuePlan=local` AND `project=claude-infrastructure`**. `master-session-lifecycle`'s
+    `62363cac1e39` (efficacy re-census, due **2026-08-24**) was checked against today's date FIRST
+    and is still **not drainable**; #30 must check the date again before anything else.
+  - **Built + closed `4a7762ca46c0` — `scripts/assignee-pane-residency.sh` reached `it2` and `jq`
+    by bare name, and the failure mode is a PERMANENT quiet degradation, not a crash.** `win_ids()`
+    maps a 127 to `unreachable`, which is the correct degradation and is deliberately distinguished
+    from `empty` — but nothing ever recovers it, so the alarm runs on the process table alone while
+    still printing a confident verdict token. `PS_BIN` one line below already spelled its binary
+    absolutely, so the file disagreed with itself.
+    - **BOTH of the row's premises were FALSE, and saying so is part of the deliverable.**
+      (1) The row asserts a box rebuilt from this repo "would 127 on it" because `bin/it2` is
+      untracked. REFUTED: `install.sh:758` runs `copy_file "$REPO_DIR/bin/it2-wrapper"
+      "$CONFIG_DIR/bin/it2"`, and live `~/.claude/bin/it2` is byte-identical to tracked
+      `bin/it2-wrapper` (sha256 `5e57f1c7c10e`). A rebuilt box gets it. The real hazard is narrower
+      and still real: callers other than the launchd job, which prepends both dirs itself via
+      `bash -c` and is fine.
+      (2) The row instructs "delete the `scripts/assignee-pane-residency.sh:it2` row from
+      `EMBEDDED_ALLOWLIST`". **There is no such entry** — `git log -S` over
+      `scripts/unattended-path-lint.sh` on origin/main returns nothing. Its cited commit
+      `66960552` is **NOT AN ANCESTOR of origin/main**; it never landed. An instruction premised on
+      unlanded history is unexecutable, and one `--is-ancestor` call is what separates the two
+      (memory: `work-item-citation-refutes-its-own-remedy`).
+    - 🚨 **THE GATE REJECTED THE FIX, THE GATE WAS RIGHT, AND ITS SECOND SUGGESTION WAS BETTER.**
+      The first cut copied the established `hooks/teammate-auto-shutdown.sh:_it2_bin()` precedent
+      verbatim — `command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2"`. `unattended-path-lint`
+      went **rc=1** on it: that spelling puts a bare name at COMMAND position. Taking the lint's
+      SECOND offered remedy instead — harden PATH at the top of the file, the idiom
+      `teammate-auto-shutdown.sh:55` documents — was strictly better: lint green, **no allowlist
+      entry to carry**, and it covers `jq`, the file's second bare name, for free. APPEND never
+      prepend, so a caller keeps its own resolution order.
+    - **Two arms pulling opposite ways, and the mutant is what proves the second one.** Plan line
+      seen on every run: pre-fix `1..2` arm1 **not ok** / arm2 ok · fixed `1..21` all ok · mutant
+      (prepend instead of append) `1..2` arm1 ok / arm2 **not ok**. Arm 2 exists only to catch a fix
+      that passes arm 1 while silently overriding every caller; without the mutant run it is
+      indistinguishable from a dead assertion (`guard-proxy-fails-in-both-directions`).
+    - **NOT PINNED, explicitly:** `jq` rides the same PATH append but has no arm of its own — both
+      new tests hold `CC_RESIDENCY_JQ_BIN` absolute precisely so a red can only be about `it2`.
+  - **Closed `68b8279b1457` on a sibling's landed fix, content-verified, not on its subject line.**
+    `7408f4c11` ("a probe that could not answer was reaping on its silence") addresses this row's
+    exact defect and not an adjacent one — its body names `claude_cwds()` having "one output channel
+    — stdout — and two meanings on it", and names `recheck_live()` as the consumer that now "fails
+    CLOSED". Verified in the code, located by NAME: `claude_cwds()` returns rc 2 on every
+    unanswerable path, gated by a POSITIVE CONTROL (lsof reading the cwd of its own pid — "an lsof
+    that cannot report that cannot report anyone's"), and `recheck_live()` reads `rc` and returns
+    KEEP with `RECHECK_WHY="occupancy UNPROVEN"`. The third state on the rc channel, with the
+    null-result kept off the error channel — `lookup-miss-is-not-absence`,
+    `probe-that-acts-on-absence-must-confirm-presence`.
+  - 🚨 **THE LAND WAS REFUSED BY A STANDING TRUNK RED THAT WAS NOT MINE, AND ATTRIBUTING IT FIRST IS
+    WHAT MADE THE FIX CORRECT.** `tests/tsv-field-collapse.bats` case 34 ("no padding sentinel is
+    ever left in a tracked source file as a raw byte") failed the smoke gate, so `ship-land.sh`
+    refused to push. It named `bin/cc-backlog`: **8 raw 0x1f bytes** across 4 lines. A **pristine
+    detached origin/main checkout reported the identical finding** while the same scan over this
+    session's own two files exited 1 — so it was a standing red blocking every lander, exactly the
+    shape case 34's own comment records from `28a8fba9b`. Fixed with the remedy the guard prescribes
+    (`\037` inside the `printf` FORMAT, which printf interprets itself), proven inert by `od -c`
+    rather than argued: `printf 'a\037b'` and `printf 'a<raw>b'` are byte-identical. Controls:
+    tsv-field-collapse `1..34` case 34 now ok; `backlog-blocked-producers.bats` `1..8` green before
+    AND after (the only suite exercising the changed lines — unchanged behaviour is the claim);
+    `shellcheck -x bin/cc-backlog` 0, run EXPLICITLY because the file is extensionless and the usual
+    `grep '\.sh$'` drops it silently.
+    `Scope (grown): +unblock the standing tsv-sentinel red in bin/cc-backlog` (F1-F4 PASS: it
+    unblocks every land in the repo, not only this one).
+  - **Filed 1, deliberately OUT of the effort being drained** (`master-verification-integrity`, so
+    it does not inflate fleet-footprint's own open count): `scripts/unattended-path-lint.sh` on
+    origin/main is **blind to the `${VAR:-name}` spelling** and sees only a bare name at COMMAND
+    position. Measured decisively rather than inferred — it was silent on
+    `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"` for that defect's entire life and went rc=1 the instant
+    the spelling changed. The detector that closes it exists ONLY on the unlanded `66960552`, which
+    also touches `scripts/boot-resume.sh`. That lint GATES EVERY LAND, so widening it is its own
+    piece of work, not a passing edit.
+  - **Survey (1 read-only Explore, ~25-call budget, returned in-pass with 5 verdicts — and one of
+    them was WRONG, which is why they get re-derived).** It called `f0283c35130e` a CLOSE-CANDIDATE;
+    one plist read refuted it — `launchd/com.claude.browser-spin-guard.plist:34` says verbatim **"IT
+    DETECTS AND SURFACES; IT DOES NOT REAP"**, and its ProgramArguments run `--notify`, never
+    `--reap`. A subagent's prose is a CLAIM (`synthesis-loses-provenance`). Verdicts handed to #30:
+    `cb47f6a92fe9` STILL-LIVE and buildable (commit `dd695e1a0` and ref `terminal-arm-land` at
+    `088e7c2df` both still exist; the merge bug is intact) · `0f796daa0c76` STILL-LIVE, all 4 sites
+    ITERM_SESSION_ID-only, and **not a sed** — they read another pid's `ps eww` env blob, so it is a
+    two-key blob lookup · `93a9f880b6fe` STILL-LIVE at REDUCED scope — the oracle was fixed and its
+    comment names this row, but the consumer `successor_engaged()` calls it with an EMPTY marker, so
+    the fixed path is unreached; the minimal fix is threading the marker, not the growth assertion
+    the row prescribes.
+  - **`475222a572de` re-checked and #29's own first reading corrected.** Half 2 (no SIGCONT sender)
+    is **CONFIRMED STILL LIVE**: a bare `git grep CONT` hits the sentinel file and reads as YES, but
+    every hit is a COMMENT explaining why the freeze is one-way — `grep -vE '^\s*#'` first returns
+    nothing (`spec-named-mechanism-may-be-prose-only`). Half 1's stated evidence has moved (tree,
+    live symlink and origin/main now all read 72,743 B against the row's cited 42,679 vs 52,618),
+    but that does NOT clear it: the row's claim is about the bytes the RUNNING daemon holds an fd
+    on, which no file-size check can see.
+  - **Instrument note worth carrying:** `$?` after a pipe is the LAST command's rc. A
+    `lint.sh | tail -40` + `echo $?` read as a clean **rc=0** while the lint was about to report
+    **rc=1** on this session's own diff. Capture it as `out=$(cmd 2>&1); rc=$?`.
+  - Live layer: `deploy-live.sh` declines as it has for #24-#29 — no GREEN tree is a descendant of
+    live HEAD (the postland-verify stamp has not advanced). `LIVE_ADDS=0` for this pass: both
+    commits extend already-symlinked files and add none. Not this session's loose end.
+
 - **2026-08-18 — drain recycle #28: the guard was real, and every artifact a human reads ignored it.
   `master-fleet-footprint` 30 open / 4 blocked (4 operator-gated, `source: needs`; 0
   cloud-venue, 0 claimed). filed 0 / closed 1.**
