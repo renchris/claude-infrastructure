@@ -592,3 +592,87 @@ SHIM
   printf '%s' "$out" | grep -q 'cannot say whose'
   printf '%s' "$out" | grep -q 'NOT yours'
 }
+
+# ── HEADLESS (F6 / T16 of docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md) ──
+# A pane session's wake is an armed cc-await-ping whose EXIT rides the harness's task-completion
+# notification back into the model. A resident `--input-format stream-json` agent has no such
+# boundary — its only one is a WRITE TO ITS STDIN — so blocking its Stop demands a continuation the
+# substrate cannot produce. The measured outcome is a DEATH (`Error: Input must be provided`), which
+# is why this abstain is a correctness case and not an ergonomics one.
+#
+# WHY THE EXISTING "no inbox identity" CASE DOES NOT ALREADY COVER THIS. That case pins the EMPTY
+# address, and the spec wrote F6 as "pane-less" meaning exactly that. But gap 1 did not land the
+# empty-pane fallthrough it prescribed: `cc-pane-headless:124` mints `hdl-<16hex>` and `:197` exports
+# it as CC_PANE_ID, so a headless session arrives here with a perfectly ordinary NON-EMPTY address
+# and sails past that guard. These cases pin the discriminator that actually holds — the writer's
+# env, `session-register.sh:142`'s own predicate — never the id's shape.
+HDL="hdl-0123456789abcdef"
+headless_env() { unset ITERM_SESSION_ID; export CC_PANE_ID="$HDL"; }
+hmail() { printf '2026-08-19T00:00:0%sZ [peer] page %s\n' "${1:-1}" "${1:-1}" >> "$CC_MAILBOX_DIR/$HDL.md"; }
+
+@test "headless: a pane-less session is NOT blocked — a watcher is not its wake path" {
+  headless_env
+  # ANTI-VACUITY: the fixture must actually be the headless shape, or every assertion below is over
+  # a pane session and passes for the wrong reason.
+  [ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ] || false
+  run actuate sidA
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+}
+
+@test "headless: the abstain says WHY on stderr (T16)" {
+  headless_env
+  run actuate_err sidA
+  printf '%s' "$output" | grep -qF 'wake floor ABSTAINS' || false
+  printf '%s' "$output" | grep -qF 'pane-less session' || false
+}
+
+@test "headless: with mail pending the abstain names the count AND the wake primitive" {
+  # Not silent when it costs something: standing down quietly over unread mail is the silent-cap
+  # defect. Naming the count also PROVES $_ouid resolved to the headless address — the mail was
+  # written under that key and nowhere else, so a count of 2 cannot be produced by any other reading.
+  headless_env
+  hmail 1; hmail 2
+  run actuate sidA
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+  printf '%s' "$output" | jq -r .systemMessage | grep -qF '2 message(s)' || false
+  printf '%s' "$output" | jq -r .systemMessage | grep -qF "cc-wake-headless $HDL" || false
+}
+
+@test "headless: the abstain does not consume a budget attempt" {
+  # Placed with the other abstains for this reason: a session that was headless for a while must not
+  # arrive at a genuine unarmed idle with its attempts already spent.
+  headless_env
+  run actuate sidA
+  [ ! -f "$CC_MAILBOX_DIR/$HDL.wakefloor" ] || false
+}
+
+@test "DISCRIMINATOR: CC_PANE_ID alone is NOT headless — a pane session carrying one still blocks" {
+  # GREEN PRE-FIX BY CONSTRUCTION — it asserts a PRESERVATION, so it carries no red-proof of its own.
+  # Its guarantee comes from mutant M3 (drop the ITERM_SESSION_ID conjunct from the abstain), which
+  # reds exactly this case and nothing else. Without it the abstain would fire for every session in
+  # the fleet, since `cc-pane` exports CC_PANE_ID on pane sessions too — i.e. the floor would be
+  # silently disabled everywhere while the whole suite stayed green.
+  export CC_PANE_ID="$U"                      # set, but ITERM_SESSION_ID is also set (setup's)
+  [ -n "${ITERM_SESSION_ID:-}" ] || false
+  run actuate sidA
+  blocked "$output" || false
+}
+
+# Pinned, never a moving ref — same reasoning as the two RED-PROOFs above: once this change lands on
+# origin/main a floating control IS the fixed tree and the proof inverts.
+#   3b11e115 = recycle #46's docs commit, the last tree before the F6 abstain.
+CC_HEADLESS_PREFIX_SHA="${CC_HEADLESS_PREFIX_SHA:-3b11e115}"
+@test "RED-PROOF: the pre-fix hook (pinned sha) BLOCKS a headless session" {
+  local old="$BATS_TEST_TMPDIR/prehdl"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_HEADLESS_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_HEADLESS_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/session-continue.sh" ]
+  # sanity: the control must genuinely predate the change, or a green tree replays as a red one
+  ! grep -q 'its wake is the spawner stdin write' "$old/hooks/session-continue.sh" || false
+  headless_env
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$old/hooks/session-continue.sh' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  blocked "$output" || false                   # RED: the defect this change closes — it kills the session
+}
