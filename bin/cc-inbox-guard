@@ -29,7 +29,9 @@
 # Env seams (tests): CC_MAILBOX_DIR · CC_INBOX_GUARD_DEADLINE_S (600) · CC_INBOX_GUARD_URGENT_S (60) ·
 #   CC_INBOX_GUARD_STATE_DIR · CC_IDL · CC_COMMS_ALARM_DIR · CC_INBOX_GUARD_PUSH_BIN · CC_INBOX_GUARD_IT2 ·
 #   CC_INBOX_GUARD_RECONCILE_BIN · CC_INBOX_GUARD_NOW (epoch clock override) · CC_INBOX_GUARD_LIVE_UUIDS
-#   (test: space-sep list treated as live panes, bypassing it2).
+#   (test: space-sep list treated as live panes, bypassing it2) · CC_INBOX_GUARD_REG_DIR ·
+#   CC_INBOX_GUARD_BEAT_MAX_S (900 — headless beat-freshness bound, E13) plus cc-beat.sh's own
+#   CC_BEAT_DIR / CC_BEAT_NOW, which gate the beat oracle.
 # bash 3.2-safe. Exit: 0 = swept (escalations may have fired) · 2 = usage.
 # shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom is
 # intentional — okp/badp always return 0 (printf + arithmetic), so SC2015's "C runs when A true but B
@@ -43,6 +45,10 @@ STATE_DIR="${CC_INBOX_GUARD_STATE_DIR:-$HOME/.claude/autonomy/inbox-guard}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 ALARM_DIR="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
 IT2="${CC_INBOX_GUARD_IT2:-$HOME/.claude/bin/it2}"
+# The registry is read for ONE purpose here (E13): to join an inbox key to the session id the beat is
+# keyed on, and to learn the owner's SURFACE from the only party that knows it. FIXED $HOME/.claude
+# like every other reader of this dir — it is one registry per box, never per worktree.
+REG_DIR="${CC_INBOX_GUARD_REG_DIR:-$HOME/.claude/cc-registry}"
 
 command -v jq >/dev/null 2>&1 || { echo "cc-inbox-guard: jq required" >&2; exit 2; }
 
@@ -65,6 +71,23 @@ for _ca_lib in "$_ca_root/hooks/lib/comms-alarm.sh" "$_bd/../hooks/lib/comms-ala
     . "$_ca_lib" 2>/dev/null && command -v comms_alarm_write >/dev/null 2>&1 && break
   fi
 done
+# Beat lib — the READ side of the session presence beat, and the ONLY oracle on this box that can
+# adjudicate a PANE-LESS owner. `it2 session list` enumerates panes, so for a headless session it can
+# only ever MISS, and a miss is not absence (fleet memory: lookup-miss-is-not-absence). Without it
+# every headless box with unacked mail lands on owner_liveness()'s INDETERMINATE arm and pages the
+# operator with a cause naming a pane that never existed — edit E13 / §4 A4 of
+# docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md, which calls this a
+# precondition for turning the substrate on rather than optional hardening.
+# Same three-path resolve as the chokepoint lib above (symlink-resolved root first, so the guard is
+# live from the commit and not from the next install.sh re-glob), and the same fail-open contract:
+# lib absent ⇒ every verdict below is exactly what it was before this block existed.
+for _cb_lib in "$_ca_root/hooks/lib/cc-beat.sh" "$_bd/../hooks/lib/cc-beat.sh" "$HOME/.claude/hooks/lib/cc-beat.sh"; do
+  if [ -f "$_cb_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_cb_lib" 2>/dev/null && command -v cb_last_beat >/dev/null 2>&1 && break
+  fi
+done
+
 _mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 # shellcheck source=/dev/null
@@ -156,6 +179,77 @@ canonical_uuid() {
   esac
 }
 
+# A HEADLESS owner's liveness, from the beat (E13) — the second oracle owner_liveness() needs and the
+# pane list structurally cannot be. Returns 0 ONLY for a registered `surface:headless` row whose
+# session has a beat younger than CC_INBOX_GUARD_BEAT_MAX_S. EVERY other answer is 1, which leaves the
+# caller's verdict byte-for-byte what it was.
+#
+# Four deliberate narrowings, each of which a wider version gets wrong:
+#   · POPULATION — the row must SAY `surface:headless`. The discriminator is the writer's own recorded
+#     fact (hooks/session-register.sh:140-146), never the SHAPE of the address: only the writer knows
+#     which substrate minted it, and reading a surface off an id's shape is the exact mistake
+#     hooks/session-register.sh:142 documents. A pane row is untouched and keeps the it2 oracle.
+#   · KEY — the beat is keyed on the SESSION id; this inbox is keyed on the PANE id, and for a headless
+#     session those DIFFER (bin/cc-pane-headless:124 mints `hdl-<16hex>` as CC_PANE_ID; the sid is CC's
+#     own uuid). A plain `cb_last_beat "$u"` would therefore MISS on every box and read as a no-op. The
+#     registry row is the join, and it records the sid under `sessionId` — there is no `.sid` field.
+#   · EXISTENCE — cb_system_live, per that lib's own stated contract (a beat-less WORLD must never be
+#     collapsed into a beat-less SESSION). Stated honestly, because it is easy to over-claim: with the
+#     two bounds at their defaults it is REDUNDANT with the freshness check below — a world with no
+#     fresh beat cannot contain a fresh beat for THIS sid, and either way the verdict is 1. It earns
+#     its place only when the bounds DIVERGE: raise CC_INBOX_GUARD_BEAT_MAX_S to be forgiving of a slow
+#     headless session and, without this gate, a box whose beat PRODUCER was uninstalled hours ago —
+#     stale beats frozen in place — starts reading live. That is the case its mutant pins.
+#   · DIRECTION — a STALE beat returns 1, never "dead". A lapsed beat is not proof a session exited, so
+#     the caller's INDETERMINATE arm remains the honest verdict for it.
+# Cost: this is called ONLY on the two branches that were about to return INDETERMINATE, so the normal
+# pane path pays nothing — no extra fork per swept box (P1's whole point).
+# The CAUSE printed on the INDETERMINATE arm. It was a two-way `canonical_uuid && … || …`, and once
+# E13 exists that is a fabricated cause for the class it was built for: a headless box that reached
+# this arm did so because its beat was STALE or its producer is not deployed — nothing whatsoever to
+# do with being "a NAME-keyed box", which is what the old text asserted about every non-canonical key.
+# An escalation is damped to roughly one per state change, so the extra registry read is not on any
+# hot path.
+indeterminate_why() { # <inbox key> → one-clause reason, never empty
+  local u="${1:-}" f
+  case "$u" in *[!A-Za-z0-9._-]*) : ;; *) f="$REG_DIR/$u.json" ;; esac
+  if [ -n "${f:-}" ] && [ -f "$f" ] \
+     && [ "$(jq -r '.surface // "pane"' "$f" 2>/dev/null)" = headless ]; then
+    printf '%s' "'$u' is a HEADLESS owner and its presence beat is stale or unreadable — no pane list can adjudicate it"
+    return 0
+  fi
+  if canonical_uuid "$u"; then
+    printf 'it2 unreadable'
+  else
+    printf '%s' "'$u' is a NAME-keyed box — not a pane uuid it2 can adjudicate"
+  fi
+}
+
+headless_beat_live() { # <inbox key> → 0 iff a registered headless owner has a fresh beat
+  local u="${1:-}" f sid j t age max
+  [ -n "$u" ] || return 1
+  case "$u" in *[!A-Za-z0-9._-]*) return 1 ;; esac   # never let a key escape into a path
+  command -v cb_last_beat  >/dev/null 2>&1 || return 1
+  command -v cb_system_live >/dev/null 2>&1 || return 1
+  f="$REG_DIR/$u.json"
+  [ -f "$f" ] || return 1
+  [ "$(jq -r '.surface // "pane"' "$f" 2>/dev/null)" = headless ] || return 1
+  sid="$(jq -r '.sessionId // empty' "$f" 2>/dev/null)"
+  [ -n "$sid" ] || return 1
+  cb_system_live || return 1
+  j="$(cb_last_beat "$sid" 2>/dev/null)" || return 1
+  t="$(printf '%s' "$j" | jq -r '.t // empty' 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  max="${CC_INBOX_GUARD_BEAT_MAX_S:-900}"
+  case "$max" in ''|*[!0-9]*) max=900 ;; esac
+  # This script's OWN clock, so the sweep's existing CC_INBOX_GUARD_NOW seam pins this decision too
+  # rather than leaving one branch reading wall time. A beat from the FUTURE (a stepped clock) reads
+  # as fresh, which is the safe direction here — it cannot manufacture an escalation.
+  age=$(( $(now) - t ))
+  [ "$age" -le "$max" ] 2>/dev/null || return 1
+  return 0
+}
+
 # owner liveness by PANE existence (F8): live=0 · dead=1 · indeterminate=2. Test override wins.
 #
 # The pane list is probed ONCE PER SWEEP and memoized (P1). It used to be re-forked per overdue inbox —
@@ -175,7 +269,13 @@ owner_liveness() {
   # proves nothing about it. Reporting "the pane died" would be a fabricated cause on a real backlog of
   # mail — INDETERMINATE is the honest verdict, and it escalates just the same. Answered BEFORE the
   # probe, so a name-keyed box also costs nothing (it can never be resolved by the pane list anyway).
-  canonical_uuid "$u" || return 2
+  if ! canonical_uuid "$u"; then
+    # E13: before conceding INDETERMINATE, ask the one oracle that CAN see a pane-less owner. A
+    # headless address is not 8-4-4-4-12, so without this it exits here and escalates with a cause
+    # about a pane. A NAME-keyed box has no registry row and still falls through unchanged.
+    if headless_beat_live "$u"; then return 0; fi
+    return 2
+  fi
   if [ -z "$_LIVE_STATE" ]; then
     local raw; raw="$(_ig_bounded "$IT2" session list --json 2>/dev/null || true)"
     if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
@@ -189,7 +289,12 @@ owner_liveness() {
       _LIVE_STATE=bad
     fi
   fi
-  [ "$_LIVE_STATE" = ok ] || return 2   # it2 unavailable → cannot prove the pane gone → INDETERMINATE
+  if [ "$_LIVE_STATE" != ok ]; then
+    # it2 unreadable → cannot prove the PANE gone → INDETERMINATE, unless the beat can answer outright
+    # for a headless owner (whose liveness never depended on it2 in the first place).
+    if headless_beat_live "$u"; then return 0; fi
+    return 2
+  fi
   case "$_LIVE_IDS" in *"$NL$u$NL"*) return 0 ;; esac
   return 1
 }
@@ -393,7 +498,7 @@ SCANEOF
                   "desk/session $u: $unacked message(s) undrained ${oldest_age}s (live but not consuming) — re-engage it" ;;
       1) escalate "$u" "$acked" "$lines" "$unacked message(s) enqueued to a NOW-DEAD pane ($u) — the target died with mail undelivered" \
                   "session $u died with $unacked undelivered message(s) — the page never reached anyone" ;;
-      *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE ($(canonical_uuid "$u" && echo 'it2 unreadable' || echo "'$u' is a NAME-keyed box — not a pane uuid it2 can adjudicate")) — cannot prove delivery" \
+      *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE ($(indeterminate_why "$u")) — cannot prove delivery" \
                   "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
     esac
     n_esc=$((n_esc+1))
