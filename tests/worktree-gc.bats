@@ -1599,3 +1599,151 @@ ignored_scratch() {
   run has_wt "$p"
   [ "$status" -ne 0 ]
 }
+
+# ── The shared object store's git `maintenance.lock` (section 4) ─────────────────────────────────
+# WHY THIS AXIS EXISTS. Every worktree's `git commit` fires `git maintenance run --auto` against the
+# ONE shared object store and git serialises them on `<objectdir>/maintenance.lock`. A holder killed
+# mid-run leaves it behind and every later run on the box becomes a permanent SILENT no-op — no log,
+# no non-zero exit, no alarm. `docs/research/memory-econ-rearchitecture-2026-08-10/git-maint.md` §8
+# named it the store's single point of failure and §9 filed the reaper as "L2 — missing". It then
+# happened: 2026-08-19, claude-infrastructure's lock stranded since 2026-08-12 13:18 — 7 days,
+# 15,155 loose objects, 154 MiB, with no gc.log and no gc.pid.
+#
+# HARNESS LAWS FOR THIS BLOCK:
+#   L-a  every KEEP has a paired ACT. The reap is proved by the SAME ancient lock surviving when one
+#        gate is tripped and vanishing when it is not — a block that only asserted KEEP would pass
+#        against a reaper that can never remove anything.
+#   L-b  the fixture NEVER calls the subject. It writes the lock itself and resolves the path with
+#        plain `git rev-parse`, so a subject that computes the wrong path is caught, not followed.
+#   L-c  the locator asserts what it found. `mk_maint_lock` fails LOUD if the file it just created
+#        is absent, so no case can pass over a lock that was never there.
+
+# mk_maint_lock [ancient] — create the maintenance lock the subject will look for, and PROVE it.
+# The path is derived independently of the subject (L-b); `ancient` backdates it past any floor.
+mk_maint_lock() {
+  local common
+  common="$(git -C "$R" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [ -n "$common" ] || { echo "mk_maint_lock: FIXTURE FAILED — no --git-common-dir for $R" >&2; return 1; }
+  MAINTLOCK="$common/objects/maintenance.lock"
+  mkdir -p "$(dirname "$MAINTLOCK")"
+  : > "$MAINTLOCK"
+  [ "${1:-}" = ancient ] && touch -t 200001010000 "$MAINTLOCK"
+  [ -e "$MAINTLOCK" ] || { echo "mk_maint_lock: FIXTURE FAILED — $MAINTLOCK absent after creation" >&2; return 1; }
+  echo "$MAINTLOCK"
+}
+
+# maint_field <name> — read a named field off the machine counts line. Named, never positional:
+# this file's own history is a positional reader that mislabelled three columns for weeks.
+maint_field() {
+  local line
+  line="$(printf '%s\n' "$output" | grep -m1 '^worktree-gc: counts ')"
+  [ -n "$line" ] || { echo "maint_field: no counts line in output" >&2; return 1; }
+  printf '%s\n' "$line" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1
+}
+
+# says <text> — how many output lines contain <text>. COUNTED, never `grep -q`: under `pipefail` a
+# `-q` SIGPIPEs its own producer and the pipeline fails on the input it just matched
+# (memory: grep-q-under-pipefail-inverts-the-verdict).
+says() {
+  local n
+  n="$(printf '%s\n' "$output" | grep -cF -- "$1" || true)"
+  printf '%s\n' "${n:-0}"
+}
+
+# lsof_stub <mode> — replace the shared STUB for one test.
+#   holder  answers the cwd positive control AND reports an open fd on any maintenance.lock
+#   blind   answers NOTHING, not even the control — the probe that must never certify an absence
+lsof_stub() {
+  local f="$BATS_TEST_TMPDIR/lsof-$1"
+  if [ "$1" = holder ]; then
+    cat > "$f" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do [ "$a" = cwd ] && { printf 'p%s\nn/\n' "$$"; exit 0; }; done
+case "$*" in *maintenance.lock*) printf 'git 999 t 5w %s\n' "$*"; exit 0 ;; esac
+exit 1
+SH
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$f"
+  fi
+  chmod +x "$f"
+  echo "$f"
+}
+
+# run_gc_lsof <lsof-binary> — run_gc with ONE seam swapped. Everything else is identical to run_gc,
+# so a difference in verdict can only come from the holder oracle.
+run_gc_lsof() {
+  local L="$1"; shift
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$L" \
+      CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
+      CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" CC_WTGC_TEAMS_DIR="$TEAMS" \
+      CC_WTGC_WARRANTS="$WTS" \
+      CC_WTGC_SESSION_REGISTRY="$BATS_TEST_TMPDIR/no-session-registry" \
+      CC_WTGC_ACTIVE_MIN=0 bash "$GC" "$@"
+}
+
+@test "maintenance lock: stranded and unheld → REAPED, and the box's silent no-op ends" {
+  # The ACT half of L-a, and the one the 7-day live incident needed.
+  lk="$(mk_maint_lock ancient)"
+  run_gc
+  [ "$status" -eq 0 ] || false
+  [ ! -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = reaped ] || false
+  [ "$(says 'REAPED the stranded git maintenance lock')" -ge 1 ]
+}
+
+@test "maintenance lock: HELD by a live process → KEPT (the lock working is not a fault)" {
+  # KEEP half paired with the reap above: identical ancient lock, only the holder oracle differs.
+  # Age can never be the test — a long live repack is exactly as old as a strand.
+  lk="$(mk_maint_lock ancient)"
+  run_gc_lsof "$(lsof_stub holder)"
+  [ "$status" -eq 0 ] || false
+  [ -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = held ]
+}
+
+@test "maintenance lock: present, unheld, but YOUNGER than the floor → KEPT" {
+  # The second gate. A lock created moments ago is indistinguishable from a live run whose opener
+  # is not visible yet, so the floor refuses rather than guesses.
+  lk="$(mk_maint_lock)"
+  run_gc
+  [ "$status" -eq 0 ] || false
+  [ -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = young ]
+}
+
+@test "maintenance lock: --dry-run reports the strand and removes NOTHING" {
+  lk="$(mk_maint_lock ancient)"
+  run_gc --dry-run
+  [ "$status" -eq 0 ] || false
+  [ -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = would-reap ] || false
+  [ "$(says 'is STRANDED')" -ge 1 ]
+}
+
+@test "maintenance lock: an lsof that cannot answer its own control makes the holder UNPROVABLE → KEPT" {
+  # Fail-closed, the same rule gate 4 applies. A probe that answers nothing must never be able to
+  # certify an absence — that inversion is what let this suite prove 33 removals over a blind lsof.
+  lk="$(mk_maint_lock ancient)"
+  run_gc_lsof "$(lsof_stub blind)"
+  [ "$status" -eq 0 ] || false
+  [ -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = unprovable ]
+}
+
+@test "maintenance lock: absent → reported as absent, and SILENT (an alarm that always fires carries no bits)" {
+  run_gc
+  [ "$status" -eq 0 ] || false
+  [ "$(maint_field maint_lock)" = absent ] || false
+  [ "$(says 'maintenance lock')" -eq 0 ]
+}
+
+@test "maintenance lock: CC_WTGC_MAINT_LOCK_MIN raises the floor — the same ancient lock is then KEPT" {
+  # Pairs with the reap: identical fixture, identical oracles, only the floor moves. Proves the
+  # floor is a real gate and not decoration, without needing a precisely-aged file.
+  lk="$(mk_maint_lock ancient)"
+  export CC_WTGC_MAINT_LOCK_MIN=99999999
+  run_gc
+  [ "$status" -eq 0 ] || false
+  [ -e "$lk" ] || false
+  [ "$(maint_field maint_lock)" = young ]
+}
