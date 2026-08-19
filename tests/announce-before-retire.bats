@@ -376,3 +376,141 @@ mutant_bare_awk() {  # → writes fn-noguard.sh
   run mailbox_lines ".sent"
   [ "$output" = "0" ]
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# W2-ROUTED — COMMITTED ≠ LANDED reaches the ORIGINATOR (item 1b19ab3096d2, 2026-08-19).
+#
+# THE GAP THESE PIN. The self-close preflight already computed the unlanded-commit count and wrote
+# it to the retiring pane's OWN stderr — a pane that is, by definition, about to evaporate. Its own
+# comment claimed "it names the branch so the ping can carry it"; nothing carried it, and the value
+# had exactly two uses in the whole file, both inside the block that computed it. So the measured
+# incident (bs-footer-motion, 2026-08-09: pinged completion twice, self-closed cleanly, 2 commits
+# stranded, lead read it as a completed track) was invisible to every mechanism except an operator
+# screenshot.
+#
+# THE SECOND HALF, AND IT IS THE LOAD-BEARING ONE. The announce the originator DOES receive asserted
+# "Its work is committed (self-close refuses a dirty tree)" — true, and precisely the wrong store.
+# A lead reading "work is committed" concludes the work is safe. These cases pin that the message
+# now distinguishes TREE-clean from LANDED, and that the unlanded fact overrides the ping verdict.
+#
+# ANTI-VACUITY. This block asserts against the SAME sed-extracted fn.sh the suite above drives, so a
+# refactor that renames or hides the function fails setup() rather than passing over nothing. The
+# wiring case additionally reads the SCRIPT, because a correct function nothing calls with the new
+# arguments would re-create the exact defect being fixed (memory: conclusion-must-reach-the-
+# enforcing-store).
+
+@test "W2-ROUTED: a peer that DID ping is STILL announced for when its branch is unlanded" {
+  # The incident shape. A pinged peer is normally silent (the CONTROL above pins that) — the peer's
+  # own report is exactly the channel that failed, so an unlanded branch speaks over it.
+  stamp_with_notifyback "$ORIG"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T00:56:08+0000 %s\n' "$ORIG" > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 2 "wt-bs-footer-motion" "origin/main"
+  [ "$status" -eq 0 ] || false
+  [ -f "$BATS_TEST_TMPDIR/notify.log" ] || false
+  grep -q "$ORIG" "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF 'COMMITTED ≠ LANDED' "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF '2 commit(s)' "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF 'wt-bs-footer-motion' "$BATS_TEST_TMPDIR/notify.log"   # the branch, so the ping is actionable
+}
+
+@test "W2-ROUTED CONTROL: a LANDED peer that pinged stays silent (the clause is not always-on)" {
+  # Polarity. If this fired on every close it would carry exactly as much information as one that
+  # never fires. 0 ahead ⇒ nothing sent at all, identical to the pre-change behaviour.
+  stamp_with_notifyback "$ORIG"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T00:56:08+0000 %s\n' "$ORIG" > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 0 "wt-clean" "origin/main"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"this pane pinged"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ] || false
+}
+
+@test "W2-ROUTED CONTROL: a legacy 3-argument call behaves exactly as before (no unlanded claim)" {
+  # Every pre-existing caller and test passes three arguments. Defaulting to 0 is what makes this
+  # strictly additive rather than a behaviour change nobody asked for.
+  stamp_with_notifyback "$ORIG"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T00:56:08+0000 %s\n' "$ORIG" > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ] || false
+}
+
+@test "W2-ROUTED: the unannounced-retire announce carries the unlanded clause too" {
+  stamp_with_notifyback "$ORIG"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 5 "wt-abandoned" "origin/main"
+  [ "$status" -eq 0 ] || false
+  grep -q 'unannounced retire' "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF 'COMMITTED ≠ LANDED' "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF '5 commit(s)' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "W2-ROUTED: the UNKNOWN-status announce carries the unlanded clause too" {
+  # The third verdict must not be the one path where a stranded branch goes unmentioned.
+  stamp_with_notifyback "$ORIG"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-10T09:00:00-0700 99\n' > "$MDIR/.sent/$PANE"     # legacy record ⇒ UNKNOWN
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 3 "wt-unknown" "origin/main"
+  [ "$status" -eq 0 ] || false
+  grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
+  grep -qF 'COMMITTED ≠ LANDED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "W2-ROUTED: no announce tells the originator that COMMITTED means safe" {
+  # The false-reassurance regression, pinned as its own case because it is the half that misled a
+  # real lead. "Its work is committed" is a true sentence about the wrong store; the originator
+  # must be able to read tree-cleanliness WITHOUT inferring durability from it.
+  stamp_with_notifyback "$ORIG"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 2 "wt-x" "origin/main"
+  [ "$status" -eq 0 ] || false
+  run grep -cF 'Its work is committed' "$BATS_TEST_TMPDIR/notify.log"
+  [ "$output" = "0" ] || false
+  grep -qF 'not the same as LANDED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "W2-ROUTED: a non-numeric unlanded count is treated as no-claim, not as a claim" {
+  # `rev-list --count` returns empty on a repo state it cannot read, so junk reaching this parameter
+  # is a real input, not a hypothetical.
+  #
+  # WHAT THIS DOES *NOT* PIN, stated because the first version of this case claimed it and was wrong
+  # (caught by its own mutant leaving the suite green — M5, 2026-08-19). An unsanitised
+  # `[ "$x" -gt 0 ]` on junk does NOT abort the close: `[` returns rc 2, and a condition inside `if`
+  # is exempt from errexit, so the branch is simply not taken. Verified directly rather than assumed.
+  #
+  # WHAT IT DOES PIN is the sanitiser's DIRECTION, which is the part that can silently invert: an
+  # unreadable count must fail toward "make no claim about durability", never toward "assert this
+  # peer stranded work". A false unlanded-claim on every junk read would be an always-firing alarm,
+  # and this whole clause is only worth having because it stays quiet on an ordinary close.
+  stamp_with_notifyback "$ORIG"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T00:56:08+0000 %s\n' "$ORIG" > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" "not-a-number" "wt-x" "origin/main"
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ] || false
+}
+
+@test "W2-ROUTED WIRING: the self-close call site actually PASSES the measured facts" {
+  # THE CASE THAT STOPS THIS FIX REPEATING THE DEFECT IT FIXES. The bug was never that the count was
+  # wrong — it was that a correct measurement reached no consumer. A correct function called with
+  # three arguments would be the same bug wearing a new shape, and every case above would still pass.
+  # So this reads the SHIPPED script, not the extracted function.
+  grep -qF 'SC_UNLANDED_N="$_sc_ahead"' "$HF"                       # the preflight captures it
+  grep -qF 'SC_UNLANDED_N=0 SC_UNLANDED_BR="" SC_UNLANDED_TRUNK=""' "$HF"   # …and pre-seeds, for set -u
+  grep -qF '"${SC_UNLANDED_N:-0}" "${SC_UNLANDED_BR:-}" "${SC_UNLANDED_TRUNK:-}"' "$HF"
+  # ORDER: the capture must precede the announce, or the call site reads the pre-seeded zero forever.
+  cap="$(grep -nF 'SC_UNLANDED_N="$_sc_ahead"' "$HF" | head -1 | cut -d: -f1)"
+  ann="$(grep -nF 'sc_announce_before_retire "$SC_SID"' "$HF" | head -1 | cut -d: -f1)"
+  [ -n "$cap" ] && [ -n "$ann" ] || false                            # both anchors found (anti-vacuity)
+  [ "$cap" -lt "$ann" ] || false
+}
+
+@test "W2-ROUTED WIRING: the fired-peer trailer states land-BEFORE-ping-BEFORE-close" {
+  # Leg 1 of the item. The trailer used to name "committed/clean" as the bar a retiring peer must
+  # meet — the same false equivalence the announce carried, delivered to the other party. A peer
+  # that reads this must learn that a commit on its branch is not safe.
+  grep -qF 'LAND IT BEFORE YOU PING, AND PING BEFORE YOU CLOSE' "$HF"
+  grep -qF 'git rev-list --count origin/main..HEAD' "$HF"
+  run grep -cF 'work must be committed/clean' "$HF"
+  [ "$output" = "0" ] || false
+}
