@@ -134,8 +134,12 @@ default N=10 (band 8-12), no parallelism cap, 15-20% adversarial floor.
   author to skim the template. Worse than no section.
 - **Overfitting to this session.** The recycle-machinery finding is ONE instance. A rule shaped
   exactly around it may be a category error rather than a general law — R2.1 exists to test that.
-- **Length for its own sake.** The file is injected whole, every time; a change can be net-negative
-  on cost alone.
+- **Length for its own sake.** ⚠️ **Rule stands; its original justification is REFUTED — do not
+  re-argue this on cost.** It read "the file is injected whole, every time; a change can be
+  net-negative on cost alone", which is false: measured, the file reaches **3.87% of sessions**
+  (149 injections / 40 days), at **$0.61–$1.72 per line-year** — economics that would *pay* for a
+  reliable fix, not forbid one (findings §R2.3). The rule survives on **attention**, not price: the
+  bridge is 1.7% of a successor's first turn, and length competes there.
 - **Duplicating durable state into the bridge.** Squarely against the skill's own Core rule (the
   staleness trap). Any proposal moving content INTO the brief rather than pointing at it must clear
   that rule explicitly.
@@ -216,3 +220,18 @@ default N=10 (band 8-12), no parallelism cap, 15-20% adversarial floor.
   store measured decaying at 23.6%/9 days, and `handoffs.jsonl` is a *ring buffer* that deletes rows.
   The findings doc §2.2 dates every short-half-life fact with its decay mode and re-derivation
   command. **Re-derive those numbers; do not quote them.**
+
+- **2026-08-19 · closed** — verified against trunk, not re-derived. `cf7a5490` (ancestor of
+  `origin/main`) carries both the 708-line findings doc and this plan's completion, and it touched
+  **only those two files** — so W3's "`commands/handoff.md` is byte-identical" claim is confirmed by
+  the commit's own stat, not by assertion. R5 is met in full (findings §8). The two-of-twelve
+  heading scan that re-dispatched this item reads per-section markers, which this plan never used;
+  its frontmatter `status: complete` and the Phase 0 table were already the truth.
+
+  **One authorised edit was outstanding and is now applied:** findings §R2.3 authorised striking R4
+  anti-goal 3's *justification* while keeping its rule, and §8 lists it as owed to the plan. It was
+  not carried over when the verdict landed, leaving a refuted cost argument standing in the
+  anti-goals — exactly what a re-opener would have read first. The second authorised edit (the
+  arm-scope qualifier, `--recycle` = 96/694 succession-shaped events) was already present above and
+  is unchanged. The forbidden edit — rewriting R1 to claim the finding was already durable — was
+  **not** made; R1 stands as written.
