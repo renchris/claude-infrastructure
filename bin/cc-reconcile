@@ -131,7 +131,23 @@ live_claude_pids() {
   "$PS_BIN" -wwo pid=,command= 2>/dev/null | awk '
     { pid=$1; a=$2
       if (a!="claude" && a!="claude.exe" && a !~ /\/claude$/ && a !~ /\/claude\.exe$/ && a !~ /cli\.js/) next
-      for (i=3; i<=8 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
+      # A RESIDENT headless agent also carries -p, so -p alone cannot mean "not a session" (spec 03
+      # E9). It is told apart by --input-format: a one-shot `claude -p "hi"` has none and still gets
+      # no row; `claude -p --input-format stream-json …` is a resident session that was invisible to
+      # the whole fleet. --version is still always excluded.
+      # The marker scan is NOT the narrow window below: in the real invocation
+      # (headless-precondition-probe.sh:121-125) --input-format lands at field 9, so scanning 3..8
+      # would detect nothing and this change would read correct while doing nothing at all.
+      # It stops at the first KEY=value field because the cc-reaper mirror of this scan reads ps -E,
+      # whose ENVIRONMENT follows argv — matching a marker there would re-admit one-shot probes. An
+      # early break can only lose the marker, i.e. fail toward the behaviour of today, never toward
+      # over-inclusion.
+      hasif=0
+      for (i=3; i<=NF; i++) { if ($i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) break; if ($i=="--input-format") hasif=1 }
+      for (i=3; i<=8 && i<=NF; i++) {
+        if ($i=="--version") next
+        if (($i=="-p" || $i=="--print") && !hasif) next
+      }
       print pid }'
 }
 
