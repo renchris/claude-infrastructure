@@ -194,3 +194,120 @@ setup() {
   run mailbox_session_is_current "$SESS_1"
   [ "$status" -eq 1 ]
 }
+
+# ── TENANCY GATE on the alias write (item 66ec1b04f050) ──────────────────────────────────────────
+# A nested `claude` inherits the pane id and, ungated, appends its own dying session as the tip of
+# the tenant's trail. The trail is APPEND-ONLY and mailbox_adoptable_predecessors keeps only the 3
+# most recent entries, so each such write permanently consumes an adoption slot and pushes a real
+# predecessor off the end — its mail is then never adopted, silently.
+#
+# A LIVE STRICT ANCESTOR is taken from the real process tree rather than mocked: the gate's whole
+# point is that it rests on a live kernel fact, so a mocked `ps` would test the mock.
+#
+# DERIVED INDEPENDENTLY OF THE SUBJECT, and that is not fastidiousness — it is the difference
+# between a control and a decoration. Two earlier versions of this fixture were both wrong, in
+# opposite ways, and the second was the dangerous one:
+#   1. parent-of-$PPID, on the stated premise "there is no `claude` in the bats ancestry". FALSE:
+#      this suite normally runs from inside a live Claude Code session, so the subject finds that
+#      real claude and walks from ABOVE the pid the test had chosen. The case failed for a reason
+#      that had nothing to do with the gate.
+#   2. parent-of-_mbx_claude_pid — correct against the fixed tree, and VACUOUS as a red-proof: on a
+#      pre-fix tree that function does not exist, so this returned empty, the `skip` below fired,
+#      and bats renders a skip as `ok`. The red-proof reported 5/5 green against origin/main — a
+#      control that could not fail, reading exactly like one that passed.
+# So walk the chain here, in the test, and never call into the subject. No `skip`: an underivable
+# ancestor is now a hard failure, because a skip is precisely how this went vacuous.
+live_ancestor_pid() { # a pid that is STRICTLY above this process's claude (or above $PPID if none)
+  local walk="$$" prev="" chain="" i=0 c
+  while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 20 ]; do
+    chain="$chain $walk"
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+  # first claude in the chain → its parent is a strict ancestor, one hop up, well inside the
+  # subject's 16-hop bound. No claude (CI) → the topmost ancestor, which is above $PPID either way.
+  for c in $chain; do
+    case "$(ps -o comm= -p "$c" 2>/dev/null | sed 's#.*/##')" in
+      claude|claude.exe|claude-*) ps -o ppid= -p "$c" 2>/dev/null | tr -d ' '; return 0 ;;
+    esac
+    prev="$c"
+  done
+  printf '%s' "$prev"
+}
+write_row() { # <pane> <pid>
+  mkdir -p "$HOME/.claude/cc-registry"
+  printf '{"paneUUID":"%s","name":"t","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"s"}' \
+    "$1" "$2" > "$HOME/.claude/cc-registry/$1.json"
+}
+
+@test "M1 tenancy: a nested session REFUSES to re-point a pane held by a live ancestor" {
+  local anc; anc="$(live_ancestor_pid)"
+  [ -n "$anc" ] || { echo "could not derive a live ancestor pid — a SKIP here is how this control went vacuous" >&2; false; }
+  mailbox_alias_write "$PANE_A" "$SESS_1"          # the real tenant establishes the trail
+  write_row "$PANE_A" "$anc"
+  run mailbox_alias_write "$PANE_A" "$SESS_2"      # the nested `claude -p`
+  [ "$status" -eq 2 ]
+  # and the trail is UNCHANGED — the tenant is still the tip
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_1" ]
+}
+
+@test "M1 tenancy: negative control — a DEAD pid in the row must NOT refuse the write" {
+  # Fail-OPEN is the designed direction: refusing wrongly strands a legitimate tenant's addressing,
+  # while allowing wrongly costs one trail entry. Without this control the case above could pass
+  # because the gate refuses EVERYTHING that has a row.
+  local dead; sleep 1 & dead=$!; kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  write_row "$PANE_A" "$dead"
+  run mailbox_alias_write "$PANE_A" "$SESS_2"
+  [ "$status" -eq 0 ]
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
+
+@test "M1 tenancy: negative control — NO registry row must NOT refuse the write" {
+  # The overwhelmingly common path, and the one every other case in this suite rides on.
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  run mailbox_alias_write "$PANE_A" "$SESS_2"
+  [ "$status" -eq 0 ]
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
+
+@test "M1 tenancy: CC_MBX_ALIAS_TENANCY=0 restores the pre-gate behaviour verbatim" {
+  local anc; anc="$(live_ancestor_pid)"
+  [ -n "$anc" ] || { echo "could not derive a live ancestor pid — a SKIP here is how this control went vacuous" >&2; false; }
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  write_row "$PANE_A" "$anc"
+  CC_MBX_ALIAS_TENANCY=0 mailbox_alias_write "$PANE_A" "$SESS_2"
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
+
+@test "M1 tenancy: the TENANT's own row must never refuse the tenant's own write" {
+  # The real-world common path and the most important non-regression: on an ordinary boundary the
+  # pane's registry row holds THIS session's own claude pid. If that read as "held by an ancestor",
+  # every live session would stop maintaining its own alias trail — a far worse outage than the
+  # pollution the gate exists to stop. Distinct from the no-row control: this one HAS a row, and a
+  # live one, so it exercises the whole gate rather than its first early return.
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  write_row "$PANE_A" "$(_mbx_claude_pid)"
+  run mailbox_alias_write "$PANE_A" "$SESS_2"
+  [ "$status" -eq 0 ]
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
+
+@test "M1 tenancy: a LIVE but NON-ANCESTOR pid in the row must NOT refuse (pid/pane reuse)" {
+  # The case that credits the ANCESTRY check specifically, and the one session-register.sh:74-79
+  # names as the reason the cheaper "incumbent is a live claude" test was rejected: it convicts on
+  # pid REUSE (the kernel recycles a stale row's pid onto an unrelated process) and on pane REUSE
+  # (a `handoff-fire --recycle` relaunch), refusing a legitimate tenant forever — the very failure
+  # the gate exists to prevent, re-created by the gate.
+  #
+  # It also pins what the mutants proved is NOT load-bearing: `kill -0` is a fork-saving fast path,
+  # not the safety property. Removing it reds nothing, because a dead pid is not in our ancestor
+  # chain either. This case fails if the ancestry requirement is dropped; the dead-pid case does not.
+  local live; sleep 30 & live=$!
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  write_row "$PANE_A" "$live"
+  run mailbox_alias_write "$PANE_A" "$SESS_2"
+  kill "$live" 2>/dev/null || true; wait "$live" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
