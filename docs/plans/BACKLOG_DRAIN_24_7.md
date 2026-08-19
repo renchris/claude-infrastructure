@@ -87,6 +87,69 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #38: a row can be TRUE at its stated site and still prescribe the
+  design its own subsystem already refuted — and the shortcut that would have answered the second
+  row was refuted by its own denominator.** `master-fleet-footprint` **17 open / 4 blocked (4
+  operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale claim — the 4 claimed rows
+  fleet-wide are all `venue=cloud`, a stratum, none in this effort)**. Property re-measured at
+  intake and at close: 17/17 open are `venuePlan=local` AND `project=claude-infrastructure`.
+  **filed 0 / closed 1.** Landed `60f6ca46e` (case 29) + `a17164a7` (R-7 measurement).
+  - **Closed `9a88cb04dab2` as PRESCRIBED-REMEDY-REFUTED** — not fixed, not already-fixed. It asks
+    to wire `cc_capacity_admit` into the pane-split sites and stores the falsifier
+    `grep -q cc_capacity_admit bin/cc-pane`, which is TRUE (count 0, re-measured at the moment of
+    the close). **The falsifier was left exiting 1 and was not rewritten: this row is not closed by
+    satisfying it.** Two independent reasons it is still wrong. (i) *The prescribed site is dead* —
+    `cc-pane spawn` owns both raw `session split` sites (`bin/cc-pane:146,149`) and NOTHING calls
+    that verb: 0 callers in the tracked tree, 0 in the live layer via a symlink-aware
+    `find … | xargs grep` (a recursive grep there sees 1.7% of it), positive-controlled at 114 for
+    `cc-notify`. Wiring the remedy would green the row's own falsifier while gating a path with no
+    traffic. (ii) *The remedy at the primitive is the refuted design* — `handoff-fire.sh:6354` is
+    `if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi`, because a recycle REPLACES a session
+    (net-zero panes) and is exempt on purpose. A term inside the primitive cannot see `$RECYCLE`:
+    it fires on every split, so it would **refuse recycles — including this chain's own successor
+    fire** — while putting the BUDGET-BOUNDED `cc_capacity_admit` underneath the UNBOUNDED
+    `capacity_gate`. `handoff-fire.sh:4210-4213` names that composition verbatim ("ONE gate for
+    both would re-commit the fix that §8.5.2 and §12.2 already refuted") and MACHINE_CAPACITY_V2
+    §12.1 closes with "NOT by universalising `capacity_gate()` — §12.2 stands unamended". The
+    population the row worries about is already gated **at the caller** (§12.1 census + coverage
+    cases 21/23/24/25, landed `57cb9a60`/`64a7d1fae` on 2026-08-07 — the SAME DAY as the row's
+    `firstTs`, `scan-revision-predates-the-fix`). Its cited incident `149789b69fc4` is the
+    tsv-field-collapse guard row, not the load-781 pane meltdown.
+    **Deliverable: case 29 in `tests/capacity-admit-coverage.bats`** — the ledger §12.1 itself
+    designates ("read that suite, not this table") — stating the residue §12.1 never stated: the
+    CALLER owns the gate because boundedness is a property of the caller, not of the primitive.
+    Suite `1..15`, 15/15 ok, 0 skips; **4 mutants, one per assertion group, each RED with its own
+    distinct message**; anti-vacuity locator asserts the split sites exist before claiming anything
+    about them. `test-hermeticity-lint` caught my own diff (INHERIT on `CC_PANE_CMD*`, which case 29
+    made subjects of this suite) — pristine-main attribution check confirmed rc=0 there, so it was
+    mine; fixed by `unset` in `setup()`.
+  - **`f6cc5c79885b` (R-7) left OPEN, claim RELEASED, remainder NARROWED** — `HOOK_CHAIN_COST.md`
+    §5.2. R-7 wants an ALL-tool census; the obvious objection is that one exists un-consumed as the
+    `tool_use` blocks in the transcripts. **Measured, that objection is wrong in R-7's own way.**
+    Both counts bounded to `bash-execution.log`'s span (a Bash numerator over one span and an
+    all-tool denominator over another IS the span mismatch R-7 names): 20,071 entry-starts across
+    **214** sessions, of which only **104 have a transcript in either root** (9,069 entries) and
+    **110 have none at all (11,000 entries — 55% of Bash volume)**. Transcript census: 13,388
+    `tool_use` blocks deduped on tool_use id → **all/Bash = 1.40x**, cross-validated because its
+    9,566 Bash calls closely match the 9,069 the log attributes to the shared stratum. So the ratio
+    is real but scoped to 49% of sessions; the missing 51% is a structurally absent population, not
+    sampling noise, so R-7 stays open and the counter it asks for is still the only fleet answer.
+  - **Three instrument defects found INSIDE that measurement, each invisible in its own output** —
+    recorded in §5.2 rather than smoothed away, and all three are re-hits of memories this chain
+    already holds. A glob of `~/.claude/projects/*/*.jsonl` saw **899 of 1,817** files and missed
+    the **second transcript root entirely** (`~/.claude-secondary/projects`, 1,725 files), reporting
+    a confident **1.84x over roughly a quarter of the corpus**. A hand-typed epoch in the prefilter
+    was **a year off** (Aug 2025, not Aug 2026), so it excluded nothing and said so nowhere — now
+    derived from the window string. And the have/without split used `find … | grep -q .`
+    (`grep-q-under-pipefail-inverts-the-verdict`) followed by `for u in $misslist` **under zsh,
+    which does not word-split** — together producing "110 sessions with 0 entries", an arithmetic
+    impossibility that is what exposed both. Final figures carry a conservation check (20,069 vs
+    20,071, the log being live). **Lesson for the successor: `positive-control-the-denominator`
+    applies to the corpus you READ, not only to the population you COUNT — and this fleet has TWO
+    transcript roots.**
+  - Teammates 0 code / 0 Explore. `deploy-live.sh` not run — the live layer is the pipeline lead's,
+    and no land moves the postland-verify marker (see #24-#37).
+
 - **2026-08-19 — drain recycle #37: a guard that defers "while it is busy" permanently exempts the
   population that is ALWAYS busy — and my own land re-created the defect I had just closed the
   sibling of, within minutes. `master-fleet-footprint` 18 open / 4 blocked (4 operator-gated,
