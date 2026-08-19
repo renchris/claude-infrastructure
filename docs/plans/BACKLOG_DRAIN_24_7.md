@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #47: the floor was killing the very sessions it exists to keep
+  reachable, because the address it keyed on was never the one the substrate actually mints.**
+  `master-fleet-footprint` **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed, no stale claim)** — unchanged. **filed 0 / closed 0.** Landed `bf9bb8335` (F6),
+  `3372ca5c6` (F7), + this entry.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 20th consecutive
+  recycle. Property re-measured at intake and it held: 12/12 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. Row `5d1b5dd9b3db` claimed with no advisory, worked, and **left
+  OPEN with its claim released** — F3 and F0 remain, and F3's premise is corrected below.
+  - **F6 — THE SPEC SAID "PANE-LESS" AND MEANT EMPTY; THE SUBSTRATE MINTS A PERFECTLY ORDINARY
+    ADDRESS.** `wake_floor()` blocks a Stop to demand an armed `cc-await-ping`. A resident
+    `--input-format stream-json` agent has no turn boundary but a WRITE TO ITS STDIN, so that block
+    demands a continuation the substrate cannot produce and the measured outcome is a DEATH
+    (`Error: Input must be provided`). The guard that was supposed to prevent this already existed —
+    `wake_floor` returns early on an empty `_ouid`, and the suite has pinned "a pane with no inbox
+    identity is never blocked" for weeks. It never fired, because **gap 1 did not land the
+    empty-pane fallthrough the spec prescribed**: `cc-pane-headless:124` mints `hdl-<16hex>` and
+    `:197` exports it as `CC_PANE_ID`, so a headless session arrives with a NON-EMPTY address and
+    sails past. This is #46's design-level law hit a second time — *the property held, the
+    prescribed diff never landed and never should* — and it generalises: **a guard written against
+    a value's ABSENCE is dead the moment someone supplies a legitimate value. Ask what the producer
+    actually emits, never what the spec assumed it would.**
+  - **THE DISCRIMINATOR IS THE WRITER'S ENV, AND THE REPO ALREADY SAID SO IN TERMS.**
+    `hooks/session-register.sh:134-145` states that reading the surface off an id's SHAPE is "the
+    exact mistake", because only the writer knows it. Both hooks now use that file's predicate
+    verbatim (`[ -n "$CC_PANE_ID" ] && [ -z "$ITERM_SESSION_ID" ]`) rather than matching `hdl-`.
+    Reusing an SSOT predicate beat re-deriving one, and no new lib file was added — `LIVE_ADDS=0`
+    on both commits, proven `M`-only with `git diff --name-status <sha>~1 <sha>`.
+  - **F7 — THE FILED REASON IS REFUTED AND THE ITEM SURVIVES ANYWAY.** F7 says the drain nudge
+    advertises "a command that cannot run — `cc-await-ping` exits 3 headless". **It does not.**
+    `bin/cc-await-ping:193` derives its uuid from `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}`, landed
+    2026-07-31 in `7b7a7e014` — *before the spec was written* — and `cc-pane-headless:197` exports
+    exactly that variable. The command resolves fine. The item survives for a different reason:
+    arming is not this session's job at all, so the advisory names no action its recipient can take.
+    **Suppressed the two arm-advertising branches, kept the third** ("kill $pid, it is holding your
+    goal inert" IS an action a headless agent can take). **A refuted rationale is not a refuted
+    item — re-derive the reason before you drop the work, and before you do it.**
+  - **WHY F7 WAS NOT OPTIONAL ONCE F6 LANDED.** `tests/wake-floor.bats` already pins that the floor
+    and the drain must not disagree about the arm. Landing F6 alone would have made the floor stand
+    down while the drain kept nagging for the same arm — **re-creating the pinned defect in a shape
+    the pin could not see**, since it compares command TEXT, not whether to advise at all. *When you
+    silence one of two advisories a test pins as agreeing, check whether the pin can see your axis.*
+  - **F3 IS REFUTED — `v_send` HAS ZERO CALLERS, AND ITS STATED PURPOSE WAS ALREADY ACHIEVED.**
+    F3 wants `cc-pane-headless`'s `send` verb routed through `cc-notify`, "what joins the two
+    disjoint substrates". Measured: the verb's only non-doc references are its own file, its own
+    suite, and the spec — **nobody calls it, and nobody reads `$dir/inbox`** (the other `inbox` hits
+    are agent-teams' unrelated `$team_dir/inboxes/*.json`). Meanwhile #46's `8d38fec34` already made
+    `cc-notify` reach a headless session, so **the substrates are joined and F3's rationale is
+    stale.** Worse, its prescribed remedy is HAZARDOUS for the population: `cc-pane-headless` execs
+    ARBITRARY argv, most of which is not a Claude session, has no registry row and cannot drain —
+    and `cc-notify` on a row-less address returns UNKNOWN rather than inventing one (pinned by
+    `tests/headless-address-consumers.bats:13`). Routing unconditionally would break the majority
+    case to serve a caller that does not exist. **Left unbuilt deliberately; the correction is the
+    deliverable.**
+  - **RED-PROOF, STATED HONESTLY.** 10 new cases, 14 mutants, **14/14 MATCH**, plan line asserted on
+    every run, no `# skip`, tree `diff -q`-verified restored. **7 of the 10 are red pre-fix**; the
+    other 3 assert a PRESERVATION (a pane session still blocks / still gets the nudge) and are green
+    pre-fix by construction — their guarantee is carried by named mutants (M3, M12), not by
+    red-proof. One case replays the pre-fix hook from a **pinned** sha (`3b11e115`), never a moving
+    ref — the defect that file's own header documents.
+  - **TWO MUTANTS CAME BACK GREEN AND BOTH WERE PREDICTED NO-OPS (M2, M11).** Dropping the
+    `CC_PANE_ID` conjunct from either predicate changes nothing, because an empty address already
+    short-circuits upstream in both hooks. **That conjunct is DEFENSIVE, not load-bearing** — it is
+    there to mirror `session-register.sh`'s expression exactly. Recorded rather than dressed up as
+    coverage: a green mutant whose no-op you predicted is evidence about the code, but it credits no
+    case.
+  - **CARRIED FINDING, recorded not filed (conservation).** `tests/mailbox-drain.bats` case 47
+    (`E2 RED-PROOF: the pre-fix drain from origin/main…`) has **silently degraded to a permanent
+    `# skip`** — `control is not pre-fix`. Its control is `origin/main`, a MOVING ref, so it became
+    a no-op the moment E2 landed. This is precisely the defect `tests/wake-floor.bats`'s header
+    documents and fixed by pinning to an immutable sha, in the sibling suite, unfixed. **It renders
+    as `ok` in every run.** Predates this diff and is not this session's loose end; the fix is one
+    pinned sha, and the next recycle should take it. *A red-proof pinned to a moving ref does not
+    fail when it expires — it skips, and a skip reads as a pass.*
+  - Instruments: both lands' smoke gates ABSTAINED under budget (exit 124, zero `not ok`) on suites
+    that are **not mine** — `tests/install-wire-hooks.bats`, then a budget exhaustion. Own suites run
+    green by hand with their plan lines seen: `wake-floor 1..49`, `mailbox-drain 1..53`,
+    `headless-address-consumers 1..13`. `bats-shellcheck-lint` read **0 changed .bats lines before
+    each commit and 84 / 57 after** — the commit-range blindness, hit twice more.
+
 - **2026-08-19 — drain recycle #46: the remedy was BUILT, TESTED and reachable from nothing — and the
   one field needed to reach it collapsed the column beside it.** `master-fleet-footprint`
   **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
