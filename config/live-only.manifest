@@ -64,3 +64,11 @@
 
 bin/kitty-pane-menu-native	build	scripts/kitty-setup.sh	swiftc -O of the tracked bin/kitty-pane-menu-native.swift; a compiled binary cannot be symlinked and the repo does not carry binaries (kitty-setup.sh:239-246)
 lib/*.prelink-bak	residue	docs/activation/pending-activation/15-shared-task-board-activate.sh	the activation script deliberately preserves the previous REAL file before replacing it with a link, so the operator can recover it (15-shared-task-board-activate.sh:67)
+
+skills/motion/*	vendored	skills/LOCAL_ONLY.md	vendored with the Motion MCP plugin; upstream owns the text and replaces it wholesale on re-vendor, so a tracked copy is a fork that diverges silently
+skills/react-best-practices/*	vendored	skills/LOCAL_ONLY.md	Vercel Engineering's published React/Next.js guidance — third-party text refreshed from upstream, not authored here
+skills/vercel-design-guidelines/*	vendored	skills/LOCAL_ONLY.md	Vercel's published design guidelines — same upstream-owned reasoning as react-best-practices
+skills/pyramid-principle-full/*	local-only	skills/LOCAL_ONLY.md	a substantial derivative of a copyrighted book; committing it would put that work into git history permanently (deliberate, see f542c8b2c)
+skills/pyramid-principle/*	local-only	skills/LOCAL_ONLY.md	its SKILL.md is a symlink into ~/Development/convert-pdf-to-md, which is tracked in THAT repo and already has history and a remote
+agents/motion-reviewer.md	vendored	skills/LOCAL_ONLY.md	the Motion MCP plugin vendors an agent alongside its skill; same upstream-owned class as skills/motion
+skills/kpmg-deck/showcase.pptx	residue	skills/kpmg-deck/MIRROR.md	deliberate BUILD OUTPUT inside an otherwise fully tracked skill: .gitignore excludes it, MIRROR.md records it as a stale artifact to regenerate, examples/showcase.py produces it
