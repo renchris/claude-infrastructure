@@ -87,6 +87,58 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #37: a guard that defers "while it is busy" permanently exempts the
+  population that is ALWAYS busy — and my own land re-created the defect I had just closed the
+  sibling of, within minutes. `master-fleet-footprint` 18 open / 4 blocked (4 operator-gated,
+  `source: needs`; 0 cloud-venue, 0 claimed, no stale claim). filed 1 / closed 2.** Land
+  `5305ee34c`, content-verified on origin/main (`git diff origin/main` empty on both paths;
+  `release_frozen` ×3, `kill -CONT` ×1, 10 unfreeze cases present).
+  - **Date checked FIRST.** 2026-08-19 → `62363cac1e39` (due **2026-08-24**) still not drainable;
+    effort = `master-fleet-footprint`, property re-measured **19/19 open were `venuePlan=local` AND
+    `project=claude-infrastructure`**. #38 must check again — 2026-08-24 is now **5 days out**.
+  - **Row `477f0b771ec3` — CLOSED, BUILT.** The sentinel actuator justified choosing SIGSTOP over
+    SIGKILL in its own words — *"so we must be the reversible one"* — and the reversal was never
+    built. Measured: **109 trips** (the row says 91; it has grown), **59 real SIGSTOPped events**,
+    actuator armed for real (`CC_SENTINEL_ACT=stop` in the launchd wrapper), and **zero SIGCONT
+    senders** in the tree. Now has a freeze ledger + `release_frozen` with an explicit three-mode
+    policy (clear / ceiling / **exit**, the last so a daemon restart cannot strand a cohort), gated
+    on `(pid,lstart)` TZ-pinned both sides so a recycled pid is dropped **without** a signal.
+    - **Precondition substituted, and said so in the close.** The row asks to replay the snapshots
+      through `select_stop_targets`; I measured the live actuation RECORD instead — the selector's
+      real outputs rather than a simulation of them.
+    - **10 cases; red-proof 10/10 `not ok` on pristine origin/main, 0 skips, instrument checked.**
+      11 mutants: every case 1-10 redded by ≥1, including **per-SITE** mutants for both
+      `record_frozen` call sites — the other nine cases drive the arm directly, so deleting a CALL
+      would have left them all green (`invariant-can-live-in-an-absent-token`).
+  - **Row `475222a572de` — LEFT OPEN, and the close-time re-measure is why.** Half 2 (no SIGCONT
+    sender) is now built by the land above. Half 1 read REFUTED at intake: the running daemon's
+    fd 255r held 72,743 B = `origin/main` exactly. **Re-measured at the moment of the close, it had
+    become TRUE AGAIN — `origin/main` was now 79,904 B and the daemon still held 72,743.** My own
+    land re-created it. Half 1 is not a one-time bug; it is structural.
+  - **Row `e43e95c0ad18` — CLOSED as PREMISE-REFUTED + REMEDY-UNBUILDABLE, explicitly not "fixed".**
+    Refuted **on trunk by name** in `TEAMMATE_SELFCLOSE_INVESTIGATION.md` CORRECTION 1: the shared
+    cwd is TRUTHFUL and the teammate really runs there (proven three ways), so the tree a per-member
+    gate reads IS their real tree; `.members[].cwd` is vendor-written and our repo has **zero
+    writers**. Residue ("the gates are ownership-blind") deliberately NOT re-filed — it is a
+    different claim and already recorded in that same trunk doc.
+    - **The survey said "zero writers" and I re-derived it anyway** — my own writer-shaped grep
+      returned **1** hit, which on inspection was a jq OUTPUT TEMPLATE (`cwd=\(.cwd // "?")`), i.e.
+      a read. The verdict held; the instrument did not.
+  - **FILED `ce775801633b` (1 filed vs 2 closed — conservation holds).** `install.sh:864` skips any
+    job that currently holds a PID — correct for a periodic job hours deep, **permanently wrong for
+    a `KeepAlive` daemon that by design never exits**, so its "next natural load" never arrives.
+    **6 of 22** fleet plists are `KeepAlive`, i.e. six jobs the converger can never advance;
+    `deploy-live.sh` issues no `launchctl` verb at all and the daemon has no self-reload. This is
+    why "the live-layer convergence fix did not hold" — **a per-file symlink converger cannot reach
+    a process that already holds the fd open.** Memory: `reload-guard-excludes-the-always-busy`.
+  - **Explore survey over the 10 fleet-footprint rows no brief in this chain had assessed** (~25-call
+    budget, partials allowed): 10/10 verdicts, no NOT-REACHED. Flagged premise drift on
+    `66ef300dd0b4` (49→60 rows, 37 already done; 21GB→3.9GB TMPDIR) and `ad18a72e2be5` (`.claude.json`
+    171KB→129KB, and that half is vendor-gated). Best unworked ratios it returned, for #38:
+    **`9a88cb04dab2`** (S — `cc_capacity_admit` already proven at 5 call sites, absent from
+    `bin/cc-pane`; its own falsifier still reads 0) and **`f6cc5c79885b`** (S — a Bash-only log
+    consumed as a fleet-wide rate; the denominator already exists un-consumed in the transcripts).
+
 - **2026-08-19 — drain recycle #36: two counts that justified a decision were each measured over a
   span their consumer never reads — one excluded a whole surface for 11 days, the other would have
   made the fix inert. `master-fleet-footprint` 19 open / 4 blocked (4 operator-gated, `source:
