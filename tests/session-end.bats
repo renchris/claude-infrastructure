@@ -65,6 +65,76 @@ seed_session() { # $1=sid — LIVE pid so the background straggler sweep keeps i
   grep -q 'Session ended' "$HOME/.claude/logs/sessions.log"
 }
 
+# ── attribution on the sessions.log line (row b521cb445465) ───────────────────
+# The line used to be a bare "[ts] Session ended": no sid, no reason, on a log
+# where ~86% of such lines are PHANTOMS emitted by `claude mcp list` during
+# SessionStart (reason=other, fresh random sid). That made a real session end
+# indistinguishable from the phantom AND unattributable to a session — which is
+# why an abrupt-death investigation could not name what closed the pane.
+# ANTI-VACUITY: each case first asserts the log line exists at all, so a refactor
+# that stopped writing it can never make these pass over nothing.
+
+@test "session end line carries the sid that ended" {
+  end_for AAA
+  line=$(grep -F 'Session ended' "$HOME/.claude/logs/sessions.log" | tail -1)
+  [ -n "$line" ] || false                       # anti-vacuity: the line was written
+  case "$line" in *"sid=AAA"*) ;; *) false ;; esac
+}
+
+@test "session end line carries the reason, so the mcp-list phantom is separable" {
+  echo '{"session_id":"PHANTOM1","reason":"other"}' | bash "$HOOK"
+  line=$(grep -F 'Session ended' "$HOME/.claude/logs/sessions.log" | tail -1)
+  [ -n "$line" ] || false                       # anti-vacuity
+  case "$line" in *"reason=other"*) ;; *) false ;; esac
+  case "$line" in *"sid=PHANTOM1"*) ;; *) false ;; esac
+}
+
+@test "missing sid/reason render as '-' so the fields are always parseable" {
+  echo '{}' | bash "$HOOK"
+  line=$(grep -F 'Session ended' "$HOME/.claude/logs/sessions.log" | tail -1)
+  [ -n "$line" ] || false                       # anti-vacuity
+  case "$line" in *"sid=-"*) ;; *) false ;; esac
+  case "$line" in *"reason=-"*) ;; *) false ;; esac
+}
+
+@test "a newline in the sid cannot forge an extra log record" {
+  # The property is RECORD integrity, not text absence: sanitation strips the
+  # newline (and '=' and spaces) but legitimately keeps the letters, so the
+  # forged words survive INSIDE the one legitimate record. What must never
+  # happen is a second record, or a record whose line begins with the payload.
+  log="$HOME/.claude/logs/sessions.log"
+  : > "$log"                                    # anti-vacuity: known-empty baseline
+  before=$(wc -l < "$log")
+  printf '{"session_id":"EVIL\\nFORGED Session ended sid=victim"}' | bash "$HOOK"
+  after=$(wc -l < "$log")
+  [ "$((after - before))" -eq 1 ] || false      # exactly ONE record appended
+  run grep -c '^FORGED' "$log"
+  [ "$output" -eq 0 ] || false                  # payload never starts a record
+  run grep -c '^\[' "$log"
+  [ "$output" -eq 1 ] || false                  # exactly one timestamped record
+}
+
+@test "reason=clear still logs an attributed line (the process survives, the sid does not)" {
+  seed_session AAA
+  echo '{"session_id":"AAA","reason":"clear"}' | bash "$HOOK"
+  line=$(grep -F 'Session ended' "$HOME/.claude/logs/sessions.log" | tail -1)
+  [ -n "$line" ] || false                       # anti-vacuity
+  case "$line" in *"sid=AAA"*) ;; *) false ;; esac
+  case "$line" in *"reason=clear"*) ;; *) false ;; esac
+  [ -e "$WD/AAA.pid" ] || false                 # and the pidfile is still kept
+}
+
+@test "stdin is consumed once — the sid still reaches the removal logic" {
+  # Regression guard for the reordering: reading stdin at the top for the log line
+  # must not starve the charset-guarded rm below. An empty second read EXITS 0, so
+  # the `|| echo '{}'` fallback would NOT fire and the sid would silently blank.
+  seed_session AAA
+  run end_for AAA
+  [ "$status" -eq 0 ]
+  [ ! -e "$WD/AAA.pid" ] || false
+  [ ! -e "$WD/AAA.id" ] || false
+}
+
 @test "reason=clear keeps the pidfile (process survives /clear — no team-archive regression)" {
   seed_session AAA
   echo '{"session_id":"AAA","reason":"clear"}' | bash "$HOOK"
