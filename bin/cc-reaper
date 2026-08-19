@@ -83,6 +83,13 @@ CHECKPOINT_BIN="${CC_REAPER_CHECKPOINT_BIN:-$HERE/../hooks/teammate-checkpoint.s
 GIT_BIN="${CC_REAPER_GIT_BIN:-git}"
 TRUNK="${CC_REAPER_TRUNK:-origin/main}"
 SETTLE_S="${CC_REAPER_SETTLE_S:-600}"                 # backstop delay: give self-close 10 min first
+# STRANDED_S — how long a finished-but-unlanded session must sit before its branch is called STRANDED
+# rather than mid-land (2026-08-19, backlog 1b19ab3096d2 leg 2). Sized against what it must not
+# convict: a `scripts/ship-land.sh` run takes ~4-6 min of gates and is itself bounded at `timeout 900`,
+# so any threshold at or under ~15 min pages every session that is simply LANDING. 30 min is the first
+# value comfortably past that bound, which is what keeps this alarm's polarity right — it fires on
+# work nobody is coming back for, never on work in flight.
+STRANDED_S="${CC_REAPER_STRANDED_S:-1800}"
 LOG_FILE="${CC_REAPER_LOG:-$HOME/.claude/logs/cc-reaper.log}"
 REAPABLE_RE='^(handed-off-lead|finished-teammate|finished|coordination-abandoned)$'
 # Gap-2 second legs (2026-07-25): the belt below stamp-gates finished/finished-teammate; these give
@@ -611,6 +618,14 @@ idl_selfcheck(){ # <live> <enumerated> <delta>
     '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta}' \
     2>/dev/null >> "$IDL_FILE" || true
 }
+idl_stranded(){ # <pane> <name> <cause> <cwd> <branch> <ahead> <dirty> <firedBy> — the blockers-board row
+  mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --arg pane "$1" --arg name "$2" --arg cause "$3" --arg cwd "$4" \
+    --arg branch "$5" --argjson ahead "${6:-0}" --arg dirty "$7" --arg firedBy "$8" \
+    '{ts:$ts, actor:"cc-reaper", kind:"stranded-work", pane:$pane, name:$name, cause:$cause,
+      cwd:$cwd, branch:$branch, unlanded_commits:$ahead, tracked_dirty:$dirty, firedBy:$firedBy}' \
+    2>/dev/null >> "$IDL_FILE" || true
+}
 idl_safeguard(){ # <pane> <name> <account> <model> <refusal> <firedBy> <recover_cmd> — the blockers-board row
   mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
   jq -nc --arg ts "$(utc)" --arg pane "$1" --arg name "$2" --arg account "$3" \
@@ -1030,6 +1045,92 @@ handle_safeguard_blocked(){ # <reap> <obj-json>
   log "safeguard-blocked surfaced $name pane=$pane firedBy=${firedBy:-none} desk=${NOTIFY_OUTCOME:-unknown} autorecover=$SAFEGUARD_AUTORECOVER"
 }
 
+# ── STRANDED WORK (2026-08-19, backlog 1b19ab3096d2 leg 2) ──────────────────────────────────────
+# The LEAD-SIDE half of the succession contract, for the case where no close path runs at all.
+# handoff-fire's self-close preflight already routes the committed-vs-landed fact to the originator
+# (4a455e43b) — but a fired session that CRASHED, was killed, or whose pane died never reaches
+# self-close, and this reaper is then the last actor that can still see its branch.
+#
+# The verdict was already being computed and then thrown away. `landed != yes` on a REAPABLE cause is
+# exactly "this session is done and its work is not on trunk", and its whole disposition was `say`
+# (the stdout of a launchd job) + `log` (a file with no consumer) + `continue`. A measurement
+# delivered to nobody is indistinguishable from one never taken. The incident is bs-footer-motion
+# (2026-08-09): 2 commits + 1 dirty file stranded, the lead read the track as COMPLETE, and only an
+# operator screenshot ever surfaced it.
+#
+# Deliberately NOT handle_surface, for two reasons that are the whole point of this row:
+#   · that page names the wrong remedies — "re-engage a hang · close a crashed pane · confirm-close a
+#     shared-review" — none of which is "land the branch", and
+#   · it pages the DESK only. The party that must learn is the ORIGINATOR: the session that read this
+#     track as finished is the one holding a false belief, and it is the one that can still act.
+# handle_safeguard_blocked exists for exactly this reason and is the shape copied here.
+#
+# EVIDENCE IS RE-DERIVED AT ACT TIME, never taken from the classify verdict. Two independent reasons:
+# the verdict is a snapshot that may be minutes stale (the same race the promotion leg's work_landed
+# re-check guards), and it is a bare yes/no that carries neither the branch nor the counts a recipient
+# needs to act. `landed != yes` is also reachable for causes that are NOT stranded work at all — a
+# non-git cwd, a git invocation that failed. This page ACTS on a negative, so it must positively
+# CONFIRM the stranded state before firing: no unlanded commits AND no tracked dirt ⇒ nothing to say.
+handle_stranded(){ # <reap> <name> <cause> <pane> <cwd> <idle> → 0 always (best-effort; never reaps)
+  local reap="$1" name="$2" cause="$3" pane="$4" cwd="$5" idle="$6"
+  local br="" ahead=0 dirty=no firedBy inspect_cmd
+  [ -n "$cwd" ] && [ -d "$cwd" ] || return 0
+  "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null || echo 0)"
+  case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+  # TRACKED dirt only — the same definition work_landed itself uses. Counting untracked litter here
+  # would let a live sibling's scratch file in a shared checkout page the originator of an innocent
+  # session, which is the exact false-conviction the --untracked-files=no relaxation removed.
+  [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null)" ] || dirty=yes
+  # PRESENCE CONFIRMED, or say nothing at all.
+  if [ "$ahead" -eq 0 ] && [ "$dirty" = no ]; then
+    log "stranded-check $name pane=$pane: not-landed verdict but tree shows 0 unlanded commits + no tracked dirt — nothing to surface"
+    return 0
+  fi
+  # A land is not a strand. Under STRANDED_S this session is most likely mid-`ship-land`.
+  if ! [ "${idle:-0}" -ge "$STRANDED_S" ] 2>/dev/null; then
+    say "  keep   $name [$cause] — unlanded (${ahead} commit(s), dirty=${dirty}) but idle ${idle}s < stranded ${STRANDED_S}s (a land takes minutes)"
+    log "stranded-hold $name pane=$pane ahead=$ahead dirty=$dirty idle=$idle < $STRANDED_S"
+    return 0
+  fi
+  br="$("$GIT_BIN" -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  firedBy="$(fired_by "$pane")"
+  inspect_cmd="git -C $cwd log --oneline $TRUNK..HEAD"
+  if [ "$reap" = 0 ]; then
+    say "  WOULD-SURFACE $name [$cause] — STRANDED: ${ahead} unlanded commit(s) on ${br:-?}, tracked-dirty=${dirty}; would notify originator ${firedBy:-<none>} + desk + board (in --reap)"
+    return 0
+  fi
+  # 1. ORIGINATOR page, damped by (originator, pane) — the session holding the false "complete" belief.
+  if [ -n "$firedBy" ] && [ -n "$NOTIFY_BIN" ]; then
+    if ! command -v damp_should_send >/dev/null 2>&1 || damp_should_send "$firedBy" "stranded:$pane"; then
+      "$NOTIFY_BIN" "$firedBy" "⚠️ STRANDED WORK — your fired peer ${name} is ${cause} and NEVER LANDED: ${ahead} commit(s) on branch ${br:-<unknown>} are not on ${TRUNK}${dirty:+, tracked tree dirty=${dirty}}. It is done; its work is visible to nobody but this machine. Its worktree is still on disk at ${cwd} — land it from there, or confirm the work is disposable. Inspect: ${inspect_cmd}" >/dev/null 2>&1 || true
+      log "stranded originator-paged $firedBy for $pane ahead=$ahead dirty=$dirty branch=${br:-?}"
+    else
+      log "stranded originator page damped [$firedBy:$pane]"
+    fi
+  else
+    log "stranded $pane has no firedBy originator — desk + board only (ahead=$ahead dirty=$dirty)"
+  fi
+  # 2. desk page. FINGERPRINT CARRIES NO COUNTS: ${ahead}/${dirty} change as a tree is worked on, and
+  #    a fingerprint that moves every sweep silently defeats damping — the same trap handle_surface
+  #    documents for ${detail}. State words only: this pane, stranded.
+  notify_desk "⚠️ REAPER SURFACE — ${name} is ${cause} but its work NEVER LANDED: ${ahead} commit(s) on ${br:-<unknown>} not on ${TRUNK}, tracked-dirty=${dirty}, idle ${idle}s. Originator ${firedBy:-<unknown>} notified. Worktree still on disk: ${cwd}. Inspect: ${inspect_cmd}. cc-reaper never auto-acts on this — it has already DEFERRED the reap so nothing is destroyed." \
+              "stranded:${name}:${pane}" || true
+  local dnote
+  case "${NOTIFY_OUTCOME:-unknown}" in
+    reached)  dnote="desk" ;;
+    recorded) dnote="desk MAILBOX (no live desk; verdict=$NOTIFY_VERDICT)" ;;
+    damped)   dnote="desk (page damped inside the TTL)" ;;
+    refused)  dnote="desk NOT reached (transport refused)" ;;
+    *)        dnote="no desk channel wired" ;;
+  esac
+  # 3. blockers-board row — the one-glance operator view, and the only durable record of the finding.
+  idl_stranded "$pane" "$name" "$cause" "$cwd" "$br" "$ahead" "$dirty" "$firedBy"
+  say "  STRANDED $name [$cause] — ${ahead} unlanded commit(s) on ${br:-?}, tracked-dirty=${dirty} → originator ${firedBy:-<none>} + ${dnote} + board (reap still DEFERRED)"
+  log "stranded surfaced $name pane=$pane cause=$cause ahead=$ahead dirty=$dirty branch=${br:-?} firedBy=${firedBy:-none} desk=${NOTIFY_OUTCOME:-unknown}"
+  return 0
+}
+
 # ── P0-12b: enumerated≈live-panes self-check. `enum` = what cc-classify saw this sweep; `live` = the
 #    independent interactive-pane count. A positive delta past tolerance, PERSISTED, pages the desk once. ──
 self_check() { # <reap> <enumerated>
@@ -1202,7 +1303,13 @@ sweep() {
       continue
     fi
     if [ "$landed" != yes ]; then
-      say "  keep   $name [$cause] — work NOT landed (would strand work) → DEFER"; log "defer $name: not landed"; continue
+      say "  keep   $name [$cause] — work NOT landed (would strand work) → DEFER"; log "defer $name: not landed"
+      # The DEFER above is unchanged and still the whole safety story — nothing is destroyed. What was
+      # missing is that it told NOBODY: this reaper is the last actor that can see the branch of a
+      # session which never ran a close path. handle_stranded re-derives the evidence at act time and
+      # routes it to the originator; it never reaps (backlog 1b19ab3096d2 leg 2).
+      handle_stranded "$reap" "$name" "$cause" "$pane" "$cwd" "$idle"
+      continue
     fi
     if ! [ "$idle" -ge "$SETTLE_S" ] 2>/dev/null; then
       say "  keep   $name [$cause] — idle ${idle}s < settle ${SETTLE_S}s (self-close still has its chance)"; continue

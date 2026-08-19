@@ -1877,3 +1877,136 @@ CLEOF
   run grep -c 'BLIND to 1' "$D/notify-calls"
   [ "$status" -ne 0 ]
 }
+
+# ── STRANDED WORK (backlog 1b19ab3096d2 leg 2, 2026-08-19) ──────────────────────────────────────
+# The reaper already computed "this session is done and its work is not on trunk" and dispositioned
+# it to `say` + `log` + `continue` — its own stdout and its own logfile, reaching nobody. These cases
+# pin the ROUTING (the originator learns), the EVIDENCE (rev-list count + tracked dirt, the two the
+# row names), and both POLARITY guards: it must not fire on a session that is merely mid-land, and it
+# must not fire when there is no stranded work to name. The DEFER itself is unchanged and re-asserted.
+#
+# Fixtures: $D/ahead = clean tree + 1 genuinely-unlanded commit · $D/dirty = tracked modification,
+# 0 ahead · $D/clean = 0 ahead, clean (the not-landed verdict is then uninformative).
+# Cause is handed-off-lead: in REAPABLE_RE (so it reaches the landed gate) and stamp-belt exempt.
+
+@test "W-STRANDED-1: finished-but-unlanded past the window PAGES THE ORIGINATOR with the commit count" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # the originator ("t", from mark_fired's firedBy) is told, and told HOW MUCH is stranded
+  grep -q 'STRANDED WORK' "$D/notify-calls" || false
+  grep -q '^NOTIFY t ' "$D/notify-calls" || false
+  grep -q '1 commit(s)' "$D/notify-calls" || false
+}
+
+@test "W-STRANDED-2: the page carries the branch and the on-disk worktree, so it is actionable" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  local br; br="$(git -C "$D/ahead" rev-parse --abbrev-ref HEAD)"
+  [ -n "$br" ] || false                                   # anti-vacuity: the fixture HAS a branch
+  grep -qF "branch $br" "$D/notify-calls" || false
+  grep -qF "$D/ahead" "$D/notify-calls" || false           # the worktree is still on disk — say where
+}
+
+@test "W-STRANDED-3: the DIRTY half is reported too (rev-list AND dirty, the row names both)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  # 0 unlanded commits but a TRACKED modification — stranded work that rev-list alone cannot see.
+  mock_classify handed-off-lead "$D/dirty" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'STRANDED WORK' "$D/notify-calls" || false
+  grep -q 'dirty=yes' "$D/notify-calls" || false
+}
+
+@test "W-STRANDED-4: POLARITY — under the window it is a LAND, not a strand: no page" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 500 no "$WPANE"    # idle 500s < 1000s
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'STRANDED WORK' "$D/notify-calls"
+  [ "$status" -ne 0 ]                                        # no originator page at all
+  # …and it says WHY it held, so the hold is legible rather than silent
+  run bash -c "'$R' sweep --reap 2>&1 | grep -c 'idle 500s < stranded 1000s'"
+  [ "$status" -eq 0 ]
+}
+
+@test "W-STRANDED-5: PRESENCE GUARD — a not-landed verdict over a clean, landed tree pages nobody" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  # $D/clean is 0 ahead + tracked-clean. The classify verdict is stale/uninformative; this page ACTS
+  # on a negative, so with nothing positively confirmed it must say nothing.
+  mock_classify handed-off-lead "$D/clean" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'STRANDED WORK' "$D/notify-calls"
+  [ "$status" -ne 0 ]
+  # "pages nobody" is trivially true of a subject that has no pager at all, so assert the guard RAN
+  # and DECLINED — otherwise this case is green pre-fix and pins nothing.
+  run grep -c 'nothing to surface' "$D/reaper.log"
+  [ "$status" -eq 0 ]
+}
+
+@test "W-STRANDED-6: the surface is ADDITIVE — the reap is still DEFERRED, nothing is torn down" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  ! td_called || false                                       # the whole safety story is unchanged
+  echo "$output" | grep -q 'NOT landed' || false             # the original DEFER line still prints
+  echo "$output" | grep -q 'STRANDED' || false               # and now it also reaches someone
+}
+
+@test "W-STRANDED-7: DRY-RUN surfaces WOULD-SURFACE and pages nobody" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'WOULD-SURFACE' || false
+  run grep -c 'STRANDED WORK' "$D/notify-calls"
+  [ "$status" -ne 0 ]
+}
+
+@test "W-STRANDED-8: a blockers-board row records the finding durably (kind=stranded-work)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ -s "$D/idl.jsonl" ] || false
+  run jq -r 'select(.kind=="stranded-work") | "\(.unlanded_commits)|\(.tracked_dirty)|\(.firedBy)|\(.cwd)"' "$D/idl.jsonl"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ] || false                                  # anti-vacuity: the row EXISTS
+  echo "$output" | grep -qF "1|no|t|$D/ahead" || false
+}
+
+@test "W-STRANDED-9: no originator stamp → desk + board only, no crash, no originator page" {
+  set_desk; set_live 1                                       # deliberately NO mark_fired
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify handed-off-lead "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'STRANDED WORK' "$D/notify-calls"              # the ORIGINATOR page is the one skipped
+  [ "$status" -ne 0 ]
+  grep -q 'NEVER LANDED' "$D/notify-calls" || false           # the DESK page still goes
+  run jq -r 'select(.kind=="stranded-work") | .pane' "$D/idl.jsonl"
+  [ "$output" = "$WPANE" ] || false
+}
+
+@test "W-STRANDED-10: the desk fingerprint carries NO volatile counts (damping cannot be defeated)" {
+  # Wiring, read from the SHIPPED script: a fingerprint that moves as a tree is worked on silently
+  # defeats damping — the trap handle_surface documents for \${detail}. State words only.
+  # exactly one fingerprint, and it is the state-words-only form (anti-vacuity: -c must find 1, so a
+  # renamed function or a moved call reds here rather than passing over an empty extract).
+  run bash -c "sed -n '/^handle_stranded()/,/^}/p' '$R' | grep -cF 'stranded:\${name}:\${pane}'"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+  # and that fingerprint line mentions neither volatile count
+  run bash -c "sed -n '/^handle_stranded()/,/^}/p' '$R' | grep -F 'stranded:\${name}' | grep -c -e ahead -e dirty"
+  [ "$status" -ne 0 ]
+}
