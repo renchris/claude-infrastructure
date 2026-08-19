@@ -549,11 +549,113 @@ MBXEOF
 # boundaries writes ONE line, not 500 — the file stays O(sessions-on-this-pane), not O(turns).
 # Fail-safe like every primitive here: a bad key or an unwritable dir is a silent no-op, never an
 # error that could cost a hook.
-mailbox_alias_write() { # <pane> <session>
+# ── TENANCY GATE (alias-write side) — the third face of a hazard already fixed twice ─────────────
+# A pane id is INHERITED: every child process of the pane's session carries CC_PANE_ID /
+# ITERM_SESSION_ID, so any nested `claude` that fires a hook — a `claude -p` probe, an upgrade-gate
+# check, a script that shells out to the CLI — reaches mailbox-drain.sh holding the LIVE pane's id
+# and appends ITS OWN, immediately-dying session as the tip of the tenant's alias trail.
+#
+# hooks/session-register.sh:126-165 gates exactly this on the registry WRITE side, and
+# session-deregister.sh:12-32 on the REMOVE side. Neither reaches here: the proof they share
+# (`pid_is_strict_ancestor`) is defined inside session-register.sh and is not on any path this
+# library can see, so the alias trail — a third pane→session store, written on EVERY boundary
+# rather than only at SessionStart — had no gate at all (item 66ec1b04f050).
+#
+# WHAT THE ITEM ASKED TO ESTABLISH FIRST — "does any resolver read the TIP?" — MEASURED, because the
+# answer changes what the damage is:
+#   · mailbox_alias_of() reads the tip and is the one that would MISDELIVER (pane → dead child's
+#     box). It has ZERO production callers. That harm does not exist today.
+#   · mailbox_session_is_current() reads the tip and IS live, reached from
+#     mailbox_adoptable_predecessors() at mailbox-drain.sh:222/239 and re-derived in
+#     bin/cc-mailbox-alias-gc. That is the liveness proxy guarding pull-adoption.
+#
+# So the item's own reassurance — "self-heals at the parent's next boundary" — is true of the TIP
+# and FALSE of the TRAIL, which is the part that matters (memory: reassurance-clause-is-the-untested-half).
+# The trail is APPEND-ONLY, and mailbox_adoptable_predecessors keeps only the CC_MBX_ALIAS_MAX_PRED
+# (3) most recent entries. Every nested probe therefore permanently consumes one of three adoption
+# slots on that pane, and a genuine predecessor falls off the end — its mail is never adopted, with
+# no error anywhere. Three probes over a pane's life exhaust the window outright.
+#
+# FAIL-OPEN on everything unprovable (no row, unreadable row, no pid, pid dead, pid ours, pid not our
+# ancestor) — all of those take the write exactly as before this gate existed. Refusing wrongly would
+# strand a legitimate tenant's addressing; allowing wrongly costs one polluted trail entry.
+#
+# FORK-LEAN BY ORDERING, which this library has already paid for once (the 5.0s tipset incident
+# above): the common boundary has no registry row for its pane, or a row that is its own, and pays a
+# single `[ -f ]` plus one `sed`. The ps walk runs ONLY on the contested path — a row that exists,
+# names a live pid, and that pid is not ours. `_mbx_claude_pid` is memoised for the process.
+# No `jq`: this library deliberately has no jq dependency, and the registry row is flat JSON.
+# Kill switch: CC_MBX_ALIAS_TENANCY=0.
+#
+# WHICH CHECK IS LOAD-BEARING — MEASURED BY MUTATION, not assumed, because the answer is not the
+# obvious one and a future reader would otherwise treat all five as safety and refuse to touch any:
+#   `_mbx_pid_is_strict_ancestor`   LOAD-BEARING. Deleting it reds the live-non-ancestor case.
+#   the CC_MBX_ALIAS_TENANCY switch LOAD-BEARING. Deleting it reds the kill-switch case.
+#   the call from mailbox_alias_write LOAD-BEARING. Deleting it reds the nested-session case.
+#   `kill -0 "$inc"`                NOT load-bearing — deleting it reds NOTHING. A dead pid is not
+#                                   in our ancestor chain either, so the walk already excludes it.
+#                                   It is a FORK-SAVING FAST PATH (skips up to 16 `ps` calls on a
+#                                   stale-row pane), which on a per-boundary hook is worth keeping.
+#   `[ "$inc" = "$(_mbx_claude_pid)" ]` NOT load-bearing, same reason: the walk starts at our
+#                                   claude's PARENT, so our own pid can never match. Also a fast path.
+#   `[ -f "$row" ]`                 unmutatable: without it the `sed` reads a missing file, yields
+#                                   empty, and the `case` below fails OPEN anyway. Kept as the
+#                                   cheapest possible early return on the overwhelmingly common path.
+_MBX_CPID=
+_mbx_claude_pid() { # my own claude process (fallback: $PPID) — memoised
+  [ -n "$_MBX_CPID" ] && { printf '%s' "$_MBX_CPID"; return 0; }
+  local walk="$PPID" found="" i=0 c
+  while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 12 ]; do
+    c=$(ps -o comm= -p "$walk" 2>/dev/null); c="${c##*/}"
+    case "$c" in claude|claude.exe|claude-*) found="$walk"; break ;; esac
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+  [ -n "$found" ] || found="$PPID"
+  _MBX_CPID="$found"; printf '%s' "$found"
+}
+
+# 0 iff <pid> is STRICTLY ABOVE our own claude. Ancestry, not "is a live claude": the cheaper test
+# convicts on pid REUSE and on pane REUSE (a --recycle relaunch would refuse the incoming tenant),
+# which is the failure the gate exists to prevent, re-created by the gate. Reasoning carried over
+# verbatim from hooks/session-register.sh:68-83, where it was derived.
+_mbx_pid_is_strict_ancestor() { # <pid>
+  local target="${1:-}" walk i=0
+  case "$target" in ''|*[!0-9]*) return 1 ;; esac
+  walk=$(ps -o ppid= -p "$(_mbx_claude_pid)" 2>/dev/null | tr -d ' ')
+  while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 16 ]; do
+    [ "$walk" = "$target" ] && return 0
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+  return 1
+}
+
+mailbox_pane_held_by_live_ancestor() { # <pane> → 0 = I am a nested session under this pane's tenant
+  local pane="${1:-}" row inc
+  [ "${CC_MBX_ALIAS_TENANCY:-1}" != 0 ] || return 1
+  _mbx_valid_uuid "$pane" || return 1
+  row="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$pane.json"
+  [ -f "$row" ] || return 1
+  # No `head -1`: a multi-line capture lands in the `case` below and fails OPEN, and an early-exit
+  # consumer under a future `set -o pipefail` would invert this verdict on the input it matched
+  # (memory: grep-q-under-pipefail-inverts-the-verdict).
+  inc="$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$row" 2>/dev/null)"
+  case "$inc" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$inc" = "$(_mbx_claude_pid)" ] && return 1     # the row is already ours — not a nested write
+  kill -0 "$inc" 2>/dev/null || return 1
+  _mbx_pid_is_strict_ancestor "$inc"
+}
+
+mailbox_alias_write() { # <pane> <session> → 0 wrote/deduped · 1 invalid · 2 REFUSED (not the tenant)
   local pane="${1:-}" sess="${2:-}" f tip dir
   _mbx_valid_uuid "$pane" || return 1
   _mbx_valid_uuid "$sess" || return 1
   [ "$pane" = "$sess" ] && return 1          # a self-alias carries no information
+  # Gated HERE, at the act itself, rather than at mailbox-drain.sh's call site: the write IS the
+  # event, and a gate living in the one caller we happen to know about is detection, not enforcement
+  # (memory: enforcement-must-live-at-the-chokepoint). A future second writer inherits it.
+  mailbox_pane_held_by_live_ancestor "$pane" && return 2
   dir="$(_mbx_alias_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
   f="$(_mbx_alias_file "$pane")"
   tip="$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')"
