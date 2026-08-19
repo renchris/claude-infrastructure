@@ -87,6 +87,80 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #31: both rows were already SOLVED somewhere in the tree and neither
+  solution could be reached from the place that needed it. `master-fleet-footprint` 24 open /
+  4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed). filed 0 / closed 2.**
+  Lands `d72f2981b` (cc-teardown tty guard) and `9df04881b` (successor engagement gate), both
+  content-verified on origin/main.
+  - **Date checked FIRST, as #30 instructed.** 2026-08-18 — `master-session-lifecycle`'s
+    `62363cac1e39` (efficacy re-census, due **2026-08-24**) is still **not drainable**. #32 must
+    check again; on or after 2026-08-24 it outranks fleet-footprint.
+  - **Property re-measured, not inherited: 26 open at intake, 26/26 `venuePlan=local` AND
+    `project=claude-infrastructure`.** 4 blocked, all `source: needs`.
+  - **Built + closed `47878886746f` — `tty_foreign()` counted the launcher's OWN close-records
+    `tee`, so every wrapped session was un-reapable by construction.** The marking walk is strictly
+    DOWNWARD from the target, and `cc-close-attrib` spawns its `tee` (:222) and the real binary
+    (:242, `{ exec "$REAL_BIN" "$@" 2>&9; } <&0 &`) as two background SIBLINGS. The tee is therefore
+    never in the marked tree and is not a shell, so it scored 1 and the guard DEFERred `tty-busy`
+    forever. Fix reads the target's own ppid from the SAME ps table and stops counting processes
+    hanging off it.
+    - **The obvious discriminator was measured and found DEAD, which is what chose the rule.**
+      "Exempt siblings only under a non-shell wrapper" is unimplementable here: `ps -o comm=`
+      reports a `#!`-script as its interpreter, so `cc-close-attrib` reads as `/bin/bash`,
+      indistinguishable from the interactive shell. Measured with a probe before writing code.
+      That also explains the row's `count=1` — every ancestor in the chain is a shell script and was
+      already allowlisted; only the `tee`, a real binary, ever scored.
+    - **Structural, not a spelling.** Adding `tee` to the shell allowlist would exempt a genuinely
+      foreign tee on any tty — the opposite of the guard's purpose.
+    - **The pre-existing control was VACUOUS for this axis and could not stand in for either arm.**
+      Scenario 10's target is absent from its own ps table, so `tppid` is empty and nothing is
+      exempted; neither mutant reds it. Two new scenarios, opposite polarity: M1 (drop the sibling
+      skip, == pre-fix) reds ONLY 10b with the row's own symptom `rc=10/DEFER`; M2 (drop the
+      ppid-equality, keep the non-empty guard) reds ONLY 10c `rc=0/TEARDOWN`, which is what earns
+      the narrowness arm. Ratchet `tests/cc-teardown.bats` 25 → 27.
+  - **Built + closed `93a9f880b6fe` — SCOPE CORRECTED: the row's prescribed remedy was not needed
+    and was not built.** It asked for a resume special-case ("when launched with `--resume <sid>`,
+    verify against THAT sid's transcript and assert it GREW"). `engagement_seen` already has a
+    resume-proof CONTENT path keyed on the fire marker, its own comment NAMES this row, and
+    `tests/handoff-lifecycle-record.bats` already proved that path returns 0 where the registry path
+    returns 1. The defect was one level up: the sole consumer, `successor_engaged`, called it with
+    an **empty marker**, so the better oracle was unreachable from the only gate that needed it.
+    - **Nothing new had to be built — the field was already being written and ignored.**
+      `mark_fired_peer` records `.marker` for exactly this purpose; its own field comment reads *"so
+      successor_engaged no longer depends on row 4's registry row carrying a `.session_id`"*. The
+      conclusion had simply never reached the enforcing call site (memory:
+      `spec-named-mechanism-may-be-prose-only`, `conclusion-must-reach-the-enforcing-store`).
+    - **The fix covers a LARGER population than the row named**, which is why no resume branch
+      exists: any pane holding `ensure_registration`'s PROVISIONAL row has no `.session_id` at all
+      (M-9) and was equally unprovable. Not resume-specific.
+    - **Three mutants, three cases, one each — M3 exists because case 3 was otherwise dead.** M1
+      (drop the marker read, == pre-fix) reds ONLY case 1; M2 (`${3-}` → `${3:-}`) reds ONLY case 2;
+      M3 (treat a recorded marker as proof by itself — the plausible wrong fix) reds ONLY case 3,
+      which passes under both other mutants. The `${3-}`-vs-`${3:-}` case is the
+      `harness-default-collapses-the-states-under-test` memory made falsifiable.
+    - **The land's own gate caught a real gap and its remedy was the better one.**
+      `bats-shellcheck` went RED on two SC2034 dead assignments THIS diff wrote. They are consumed
+      by the sed-extracted unit, not by any test body — so the gate was right. Taking its second
+      suggestion (`export`) over a per-site `disable` states the truth instead of silencing it.
+      Fixed and re-verified LOCALLY by running `scripts/bats-shellcheck-lint.sh` rather than paying
+      a second 5-minute land cycle to find out.
+  - **The second land's smoke gate ABSTAINED (`smoke PARTIAL`, 9 suites attempted, 120s budget
+    exhausted) and the land proceeded — not a red, and it cost nothing** because all four affected
+    suites had been run green in-session with their `1..N` seen: handoff-lifecycle-record `1..15`,
+    fire-engagement `1..34`, handoff-engage-scan-window `1..10`, handoff-fire-pane-parked `1..30`.
+  - **Instrument note for #32: `grep -c 'fdir="${3-'` returned 0 on a file that CONTAINS that
+    string.** The interactive grep here reads `{3-` as an interval expression, so the null was a
+    regex-flavor artifact, not absence — `grep -cF` found it at `handoff-fire.sh:2423`. A
+    content-verification null is not evidence until the instrument is controlled.
+  - **Surveyed-but-not-taken, carried forward for #32:** `15265ac3c502` has NO detail body and no
+    falsifier — its primary site (`hooks/worktree-setup.sh`) already uses the prescribed
+    `bash <script>` form at :62 and :175, but closing it means proving a whole CLASS adopted, which
+    is a broader claim than it looks; a first grep for it was wrong twice (pattern required no space
+    after `bash`, and `\./` matches the `./` inside `../`). `0f796daa0c76` remains 4 confirmed sites
+    with one G2 escalation surface (`teammate-auto-shutdown` resolves a pane in order to CLOSE it).
+  - **Teammates: 0 code spawns, 0 Explore surveys** — #30's survey section covered the rows taken,
+    and re-deriving its claims directly was cheaper than a fresh fan-out.
+
 - **2026-08-18 — drain recycle #30: a subagent's ALREADY-FIXED verdict was refuted by the log and
   then re-confirmed by the code, arriving at the same close for the opposite reason.
   `master-fleet-footprint` 26 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
