@@ -87,6 +87,85 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #33: the pattern held a FIFTH and SIXTH time, and both times the
+  unreachable fix was an ADDRESS THE FLEET ALREADY MINTS. `master-fleet-footprint` 21 open /
+  4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale claim).
+  filed 0 / closed 1.** Lands `b532c67ec` (headless registry address) and `ed7eee4c4` (it2-kitty
+  delivery proof), both content-verified on origin/main.
+  - **Date checked FIRST.** 2026-08-18 — `master-session-lifecycle`'s `62363cac1e39` (efficacy
+    re-census, due **2026-08-24**) still **not drainable**. #34 must check again; on or after
+    2026-08-24 it outranks fleet-footprint.
+  - **Property re-measured, not inherited: 22 open at intake, 22/22 `venuePlan=local` AND
+    `project=claude-infrastructure`.** 4 blocked, all `source: needs`.
+  - **Built + closed `4b9d5e93b40a` — the row's premise was wrong and the defect was real
+    underneath it.** The row says cc-registry "is keyed on a pane UUID" and the 38 KB spec written
+    against it (`docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md`) prescribes
+    a 15-edit re-key onto the harness `session_id`. Neither was needed. `bin/cc-pane-headless:124`
+    ALREADY mints `hdl-<16 hex>` and `:197` runs the agent under
+    `export CC_PANE_ID="$id" && unset ITERM_SESSION_ID` — i.e. the seam that spec calls "the whole
+    leverage" was built, landed and wired. What refused it was one `case` arm in
+    `hooks/session-register.sh`: `''|*[!0-9A-Fa-f-]*) return 0`. **`h` and `l` are not hex digits**,
+    so the gate refused the address its own fleet mints and the session got NO ROW AT ALL — from
+    which every symptom follows (cc-sessions never lists it; cc-notify converts the lookup-miss
+    into `reason=target-not-live`; peers retire a live session).
+  - **The gate was already wrong in the OTHER direction too, which is what proves "hex" was never
+    the rule.** The fleet runs kitty; `scripts/kitty-setup.sh:305` synthesises
+    `ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID"`, and those small integers pass only because digits
+    are hex. "UUID-shaped" had stopped describing the live keyspace in both directions at once.
+  - **Fixed at the 4 sites that form ONE keyspace and cannot move separately** — write
+    (`session-register.sh`), remove (`session-deregister.sh`), read (`bin/cc-sessions`), drain
+    (`hooks/mailbox-drain.sh`). The predicate is the one this tree had ALREADY settled on for this
+    exact class: `hooks/lib/mailbox-pending.sh:118-124` `_mbx_valid_uuid` — a safe filename
+    component, which is the property the guard actually protects (the value becomes
+    `$reg_dir/$pane.json`). Inlined rather than sourced: the hook runs every SessionStart under a
+    hard wall-clock budget and that lib is 824 lines.
+  - **🚨 The drain edit is what keeps the registration edit HONEST rather than harmful.** Registering
+    a headless session while `mailbox-drain.sh` still exited at its own hex gate would have traded
+    "correctly reported dead" for "reported live, deliverable, and structurally deaf" — the worse of
+    the two, because nothing looks wrong. **Ask of any addressability fix: does the thing I just made
+    reachable have a working receive path?**
+  - **TWO SPEC PRESCRIPTIONS REJECTED, both named in the commit body.** E3 ("skip the ancestor walk
+    on the non-pane branch — a sid is not inherited") is true of a harness session_id and **FALSE of
+    the address actually received**: `cc-pane-headless` EXPORTS `CC_PANE_ID`, so a nested `claude -p`
+    inherits the tenant's address exactly as a pane child does. Taking it would have reopened the
+    2026-08-08 dead-pid-corpse squat on precisely the sessions with no pane to be re-addressed
+    through. E4's "skip the alias write / coverage fold / migrate for headless" is unnecessary under
+    this design: keying on the driver-minted address instead of re-keying on the session id leaves
+    all five downstream uses working unchanged, because each treats the value as an opaque mailbox
+    key. **A spec's edit list is calibrated to ITS OWN design; adopting a different design silently
+    invalidates parts of it.**
+  - **Partially built `d90bbcd9e01f`, LEFT OPEN, claim released.** Same pattern a sixth time:
+    `bin/it2-kitty` has owned `pane_exists()` since `:322` with exactly ONE caller, and
+    `identity_ok()`/`composer_state()` guard only `close` — so the DESTRUCTIVE verb was proven
+    against three oracles while the two DELIVERY verbs were proven against none. Re-measured live
+    at the same moment as the fix: `kitty @ send-text --match id:999999 -- ""` → **rc=0**, id absent
+    from `ls`, so the `|| exit 1` on both verbs is dead code and mis-delivery is undetectable.
+    `prove_target()` wires the existing oracle in, fail-OPEN on rc 2 (indeterminate is not absence).
+    **Not closed**, because the row's other half — a nonce echo-verify catching text that arrives
+    MANGLED rather than nowhere — cannot be lifted from `scripts/lib/cc-type-verified.sh`: every
+    function there shells out to osascript against `com.googlecode.iterm2`, so adopting it means
+    writing a kitty transport in the one script `handoff-fire.sh` routes its own typing through.
+    That wants a window that can exercise the fire path end to end.
+  - **A gate refusal that was RIGHT for a reason that was not its message.** `pipefail-sigpipe-lint`
+    said `bin/cc-sessions` "was FIXED but its allowlist count was not lowered — set it to 0". It had
+    not been fixed: adding a guard as a **line continuation** pushed `printf` off the statement head,
+    where the detector could no longer see it. Obeying the instruction would have made a live
+    SIGPIPE site permanently invisible. Removed the hazard for real (herestring, no pipe), which
+    made the count-0 honest. **When a ratchet says a site disappeared and you did not remove one,
+    the census went blind — check before lowering it.**
+  - **Red-proof discipline held (both rows).** Every fixture constructs the `hdl-`/stub shapes
+    LITERALLY and calls NO symbol the fixes introduce; run against pristine `origin/main` worktrees:
+    5 red + 3 both-direction controls (row 1), 2 red + 2 controls (row 2), plan lines seen, **zero
+    `# skip`**. Two mutants that no revert covers: adding spec E3's tenancy bypass reds the
+    nested-squat case; treating rc 2 as absent reds the unreadable-enumeration case and nothing
+    else. Both controls are load-bearing rather than decorative.
+  - **For #34:** `5d1b5dd9b3db` still holds the CONSUMER half of the same predicate — **16 further
+    sites** of `*[!0-9A-Fa-f-]*` across `bin/cc-reconcile:178`, `bin/cc-reaper:725/741/762`,
+    `bin/cc-notify` `target_live()`, `bin/cc-inbox-guard`, `hooks/mailbox-wake-arm.sh:115`,
+    `hooks/session-continue.sh` (5 sites), plus the argv `-p` classifiers — and all liveness
+    hardening (the spec's `(pid,lstart)` pair; note C2's shared-pid subagent case, where two live
+    sids share one pid, so pid can prove the CONTAINER alive but never the SESSION).
+
 - **2026-08-18 — drain recycle #32: both rows were a defect whose FIX ALREADY EXISTED and could not
   reach the class that needed it — once as a blind ratchet, once as a proof living in the wrong
   file. `master-fleet-footprint` 22 open / 4 blocked (4 operator-gated, `source: needs`; 0
