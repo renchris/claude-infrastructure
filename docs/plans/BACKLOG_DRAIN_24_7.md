@@ -91,8 +91,12 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   it prevents, and the fix is not a wider guard but a second channel — and a row filed as "three
   rare instances you cannot schedule" turned out to be 352 measured events, 17 of them today.**
   `master-fleet-footprint` **11 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
-  stale claim)** — unchanged from intake. **filed 0 / closed 0.** Landed `d4239f179` +
-  `a1098641` + this entry. Effort choice: `date` read 2026-08-19, so
+  stale claim)** — unchanged from intake. **filed 0 / closed 0.** Landed `4e4c0f3f4` +
+  `a10986411` + this entry (`e02b1d775`). *(Those first two shas are the post-rebase objects. This
+  entry originally cited `d4239f179`, which the land's own rebase rewrote — `--is-ancestor` reads
+  rc 1 for it against trunk while the content is plainly there. Corrected the same pass rather than
+  left as a dead pointer; memory `cited-sha-may-not-survive-the-land`, and the reason this log
+  verifies landings by CONTENT.)* Effort choice: `date` read 2026-08-19, so
   `master-session-lifecycle`'s `62363cac1e39` efficacy re-census (due ~2026-08-24) was still shut
   and correctly declined for the 24th consecutive recycle. Intake property re-measured and it held:
   11/11 open are `venuePlan=local` AND `project=claude-infrastructure`. Both claims came back clean,
