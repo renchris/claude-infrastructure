@@ -87,6 +87,92 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #48: five of gap 1's eight uncensused edits were already DONE, and
+  the sixth's prescribed edit points at a field that does not exist.** `master-fleet-footprint`
+  **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed after release,
+  no stale claim)** — unchanged. **filed 0 / closed 0.** Landed `5e8ba16ae` (E13), `602d51c64`
+  (five dead red-proofs), + this entry. Row `5d1b5dd9b3db` LEFT OPEN, claim RELEASED.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 21st consecutive
+  recycle. Intake property re-measured and it held: 12/12 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. Claim came back clean, no advisory.
+
+  **THE CENSUS — the item this recycle was handed, and its answer is mostly "already done".**
+  `E6 · E8 · E9 · E10 · E12 · E13 · E14 · E15` had been unverified for two recycles running. Done
+  by PREDICATE, never by the spec's proposed identifier or line number, per the standing law:
+
+  | edit | verdict |
+  |---|---|
+  | **E6** `bin/cc-sessions` | **LANDED, by a different route — and its prescribed edit is REFUTED.** All three sub-predicates hold: the `lstart` re-check sits beside `kill -0`, and the it2-membership stale test is skipped for `surface != headless` with a comment naming the very `lookup-miss-is-not-absence` trap the spec cited. But the prescribed `jq -r '.paneUUID // .sid // empty'` **cannot ever fire**: `hooks/session-register.sh:259-265` writes `paneUUID` on EVERY row (`hdl-<16hex>` for headless), so the `//` fallback is unreachable, and the sid is recorded as **`sessionId`** — there is no `.sid` field to fall back TO. Building it would have added dead code pointing at a nonexistent key. |
+  | **E8** `bin/cc-notify` | **SATISFIED by ordering, not by the prescribed guard.** `target_live()` is registry-FIRST; the it2 fallback is reached only when NO row matched, so a registered headless target is never adjudicated by a pane list. The prescribed `[ -n "$pane_of_row" ]` gate presumes a row is in hand — which is exactly the branch that already returns before it. |
+  | **E9** `bin/cc-reconcile` | **LANDED.** `:135-148` drops `--version` always and `-p` only when `--input-format` is absent; the comment cites "E9" by name. |
+  | **E10** `bin/cc-reconcile` | **NOT landed** — `n_no_pane++; continue` stands, no `n_headless` counter. Narrower than it reads: `:191` already prefers `CC_PANE_ID`, so a `cc-pane-headless` session DOES get a key and is not in this class. The residue is a raw `claude -p --input-format stream-json` started outside that spawner. |
+  | **E12** `bin/cc-reaper` | **LANDED** (argv half) — `live_pane_count` at `:811-819` carries the same `--input-format` discriminator, in the lockstep its own header demands. |
+  | **E13** `bin/cc-inbox-guard` | **WAS NOT landed. BUILT THIS PASS** — see below. |
+  | **E14** `hooks/live-session-registry.sh` | **NOT landed** — `:30` is still `base=$(basename "$cwd")`; the pooled-worktree collision (§4 A2) stands. Carries a migration obligation on `worktree-gc.sh`'s `registry_live()`. |
+  | **E15** `bin/cc-teardown` + `hooks/teammate-auto-shutdown.sh` | **LANDED** — both scrapers read `^CC_PANE_ID=` first with `^ITERM_SESSION_ID=` as an annotated fallback. |
+
+  So gap 1's remaining agent-doable surface is **E10 and E14 only**, and E6 should be struck from
+  the spec the way E11 was by #41 — same shape of finding, one layer down.
+
+  **E13 BUILT AND LANDED (`5e8ba16ae`).** Its own adversarial pass (§4 A4) calls it a precondition
+  for turning the substrate on, not optional hardening. `owner_liveness()` reads `it2 session list`,
+  which enumerates PANES; a headless address (`hdl-<16hex>`) is not 8-4-4-4-12, so `canonical_uuid()`
+  rejected it and the function returned INDETERMINATE **before any probe ran** — every headless box
+  with overdue mail escalating on the fail-loud arm with the cause *"'<key>' is a NAME-keyed box —
+  not a pane uuid it2 can adjudicate"*: true of the SHAPE, false about the session. Now
+  `headless_beat_live()` asks the beat at the two sites that were about to concede, with four
+  narrowings, **and the KEY one is where a naive fix silently does nothing**: the beat is keyed on
+  the SESSION id and the inbox on the PANE id, so a plain `cb_last_beat "$u"` misses on every box
+  and reads as a working no-op — the registry row is the join. `indeterminate_why()` replaces the
+  old two-way cause, which after E13 is a fabricated cause for exactly the class it was built for.
+  6 cases, **2 red pre-fix against a pristine `origin/main` worktree**; the other 4 assert a
+  PRESERVATION or an ABSENCE and are green pre-fix by construction, carried by named mutants.
+  **14 mutants attempted across two rounds, 7 in the final series, 7/7 MATCH**, every run asserting
+  its `1..6` plan line and zero `# skip`.
+
+  **A MUTANT CORRECTED MY MODEL OF MY OWN CASE, WHICH IS THE REASON TO RUN THEM.** M3 (drop the
+  surface gate) came back **GREEN**. Not a bad mutant and not a no-op: case 4 used the default
+  readable `[]` it2 stub, and a canonical-shaped pane row is **adjudicated and returns one branch
+  EARLIER** than the gate it claimed to pin — the case pinned nothing, over a population already
+  excluded upstream. Making it2 unreadable moves the case onto the only path where a canonical row
+  consults the beat at all, and M3 then reds it. This also **refuted my own first reading** that the
+  second wiring site is purely defensive: it is reachable, and on it the surface gate is the only
+  thing between a pane row and a beat-borne LIVE verdict. Both the case and the commit message were
+  corrected before landing.
+
+  **THE CARRIED FINDING WAS FIVE, NOT ONE (`602d51c64`).** #47 recorded that
+  `tests/mailbox-drain.bats`'s E2 red-proof had degraded to a permanent `# skip`. Grepping the
+  corpus for other moving-ref controls, as #47 advised, found **four more, all already dead**:
+  `mailbox-drain.bats:399` + `:525`, `cc-await-ping.bats:997`, `operator-readout.bats:1243`. Each
+  fetched its control with `git archive origin/main` and guarded staleness with `if grep -q
+  '<sentinel>'; then skip; fi` — so the moment the change under test landed on main, the control
+  BECAME the fixed tree and the case reported `ok … # skip` forever. **A stale control does not go
+  red; it SKIPS, and bats renders a skip as `ok`** — which is why three suites read fully green over
+  five controls that had stopped controlling. `tests/wake-floor.bats:164-170` had diagnosed this
+  exact hazard in its own suite and fixed it the same way; the siblings were never migrated. All
+  five are now pinned to the immutable parent of the commit that introduced their sentinel
+  (`a94c8a5ea` · `73ceb76aa` · `f704bf8aa`), each verified an ancestor of origin/main with a
+  two-sided control (sentinel hits 0 in the pinned tree, >0 in the introducing tree), and the
+  staleness guard is a **hard FAILURE**, not a skip. Before: 5 permanent skips. After: mailbox-drain
+  `1..53`, cc-await-ping `1..68`, operator-readout `1..81`, cc-inbox-guard `1..31` — **not-ok=0 and
+  skips=0 in all four**.
+
+  **RECIPE FINDING, recorded not filed (conservation).** `"$SHA:hooks/mailbox-drain.sh"` inside the
+  Bash tool is mangled by **zsh's `:h` history modifier** — it resolved to `.ooks/…` and git answered
+  *"ambiguous argument … unknown revision"*, while the very next `grep -c` in the pipeline printed a
+  clean **`0`**. A verification control that reads as "the string is absent" when the file was never
+  read at all. Wrap any `<rev>:<path>` in `bash -c`, and treat a `0` beside an error on the previous
+  line as a NON-VERDICT. Same family as the standing zsh traps (`--include=*.sh`, unmatched globs).
+
+  Row `5d1b5dd9b3db` stays OPEN with its remainder now precisely named — **gap 1: E10 + E14 (E6
+  refuted, E8 satisfied, E9/E12/E15 landed); gap 2: F0 only, and F0 is operator-only (run migration
+  0007)**. Claim released with `cc-backlog reopen`, no stale claim left. Smoke gate abstained on
+  `tests/cc-await-ping.bats` (exit 124, budget cut, ZERO `not ok`) — the known non-verdict, and that
+  suite was run in full by hand, green, `1..68`, before the land. Both commits `M`-only ⇒
+  `LIVE_ADDS=0`: `bin/cc-inbox-guard` was extended rather than factored into a new `hooks/lib/` file,
+  and the beat lib it sources was already symlinked.
+
 - **2026-08-19 — drain recycle #47: the floor was killing the very sessions it exists to keep
   reachable, because the address it keyed on was never the one the substrate actually mints.**
   `master-fleet-footprint` **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
