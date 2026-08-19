@@ -87,6 +87,109 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #49: a pooled worktree runs several sessions and the liveness
+  registry had room for exactly one, so the second session erased the first's proof of life.**
+  `master-fleet-footprint` **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed after release, no stale claim)** — unchanged. **filed 0 / closed 0.** Landed
+  `bdf57e195` (E14) + this entry. Row `5d1b5dd9b3db` LEFT OPEN, claim RELEASED.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 22nd consecutive
+  recycle. Intake property re-measured and it held: 12/12 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. Claim came back clean, no advisory.
+
+  **E14 — BUILT AND LANDED (`bdf57e195`).** `hooks/live-session-registry.sh` keyed its row
+  `basename($cwd)`, a PER-WORKTREE key. A pooled worktree hosts more than one session, so the
+  second session's row REPLACED the first's and the registry recorded one pid out of two. The
+  unrecorded session then has no positive liveness proof at all: once the recorded pid exits (or
+  its SessionEnd removes the row), `worktree-gc.sh` `registry_live()` answers NOT-LIVE for a
+  worktree that is still OCCUPIED and falls back to the flaky cwd/lsof oracle that file's own
+  header says it exists to eliminate — a LIVE worktree becomes reapable.
+  **MEASURED AT INTAKE, not assumed:** `wt-pool-2` and `wt-pool-8` each carried TWO live `claude`
+  procs with DIFFERENT parents — SIBLINGS, not the nested-probe ancestry the tenancy gate covers,
+  which is exactly why that gate never caught this. Pids 21808 and 54762 were unrecorded.
+  The key now carries the sid (`<basename>-<sid8>`) and `registry_live()` reads `$base` AND
+  `$base-*`, keeping the worktree if ANY row is live.
+
+  **Three things the fix had to get right, each pinned by a case — and the first CORRECTS the
+  spec.** (a) The bare key is NOT a transition window, as E14's text assumes.
+  `~/.reso/worktree-gc-run.sh:96` is a SECOND WRITER into this shared store, from another repo,
+  and it still keys bare — its rows are the `scan`-sid ones visible on the live box. Both shapes
+  must count indefinitely. (b) The wider read must not manufacture liveness: base `wt-pool` globs
+  `wt-pool-*`, which matches a row belonging to the DIFFERENT worktree `wt-pool-2`. The
+  recorded-cwd check now runs PER ROW, which is what makes the glob safe — and it is why the
+  spec's prescribed `"$base"*` was narrowed to `"$base"-*` plus that per-row check.
+  (c) The tenancy gate is not silently disarmed. A sid-bearing nested probe now lands on its own
+  key and structurally cannot overwrite the tenant, so the gate no longer fires for it; it still
+  covers the degraded no-`session_id` input. Said plainly in the source rather than left looking
+  load-bearing, and tests 5/6 now fire the nested probe WITHOUT a session_id so that path stays
+  reachable instead of passing vacuously — #47's law ("the guard exists and nothing can reach it")
+  applied to a guard this recycle was itself about to strand.
+
+  **Tests: `tests/live-session-registry-atomic.bats` 8 → 15 cases, 15/15 green, `1..15` seen, 0
+  skips.** Cases 1-8 were MIGRATED, not weakened — they pinned the old key shape, which this change
+  deliberately alters (#46's law: the census was right, so migrate it and extend it). Two
+  migrations carry real content: test 2 now re-registers the SAME sid, because two different sids
+  write two different files and would never exercise replacement at all, and test 4 hammers one sid
+  for the same reason. `registry_live()` had **NO test coverage at all** before this; cases 11-14
+  extract it behind an anti-vacuity check, because a per-session key that no reader globs for would
+  be strictly WORSE than the bug it replaces.
+  **Red-proof: 9, 10, 11, 12 red pre-fix** against the restored `origin/main` subjects (control
+  asserted pre-fix, restoration proven by `git status --porcelain` + `diff -q`). **13, 14, 15 are
+  GREEN PRE-FIX BY CONSTRUCTION** — they assert a PRESERVATION, and their guarantee is carried by
+  named mutants, never reported as red-proof.
+  **7 mutants, 7/7 MATCH**, plan line asserted on every run with non-verdict arms for a missed
+  anchor, a wrong plan line and any `# skip`: M1 (drop the sid suffix) reds 1,2,7,8,9,10 — wide,
+  and that IS the key shape's real blast radius; M2 (drop the bare key) reds 13 ALONE; M3 (drop the
+  per-row cwd check) reds 14 ALONE; M4 (gate never refuses) reds 5; M5 (drop the IDL write) reds 6;
+  M6 (first row decides) reds 12 ALONE; M7 (suffix unconditionally) reds 6,15.
+  **M4 refuted my own prediction and the mismatch is the finding:** I expected it to red 5 AND 6,
+  but the IDL journal write PRECEDES the `exit 0` it replaces, so the refusal is still recorded
+  while the row is stolen. The mutant was right and my model of the ordering was wrong.
+  **M6 exists because writing it exposed a weak case.** Case 12's live row originally sorted BEFORE
+  its dead one, and a glob expands in sorted order — so it would have passed just as well against a
+  reader that stops at the first row it finds, pinning "some row is live" rather than "ANY row
+  keeps the worktree". The dead row now sorts first, deliberately.
+
+  **E10 — NOT BUILT, AND THE REASON IS A MEASUREMENT: ITS POPULATION IS EMPTY TODAY.** #48's brief
+  required re-measuring before building, and that was the right instruction. E10 asks
+  `bin/cc-reconcile` to synthesise a sid-keyed row for a session with no pane. But `:190-197`
+  already prefers `CC_PANE_ID` and already accepts `hdl-<16hex>` (E1-E5 landed by widening that
+  address gate), so `cc-pane-headless` sessions are NOT in the class. The residue is a session
+  carrying NEITHER `CC_PANE_ID` NOR `ITERM_SESSION_ID`. **Censused live: 0 of 17 live claude
+  sessions.** All 17 carry `ITERM_SESSION_ID`; 1 also carries `CC_PANE_ID`. Building it now would
+  be speculative and unverifiable — #41's law, a population with no member of the class cannot
+  report what that class would get — and its prescribed `n_headless` counter would be an alarm that
+  can only ever read 0. **E10 stays open with its population recorded, not with a guess.**
+
+  **RECIPE-LEVEL FINDING, recorded here rather than filed (conservation — this recycle closes 0).**
+  🚨 **`pgrep` EXCLUDES THE CALLER'S OWN ANCESTORS, so a census a session runs on itself is
+  structurally blind to that session.** Found as a failed positive control: my own registered,
+  demonstrably-live session (pid 65515, `lsof` cwd correct, `kill -0` fine) was absent from both
+  `pgrep -f claude` and `pgrep claude`. **The obvious hypothesis was argv length and it is REFUTED
+  ON BOTH ARMS** — this session's argv is 71,565 bytes because it carries the whole recycle brief,
+  but a synthetic NON-ancestor at 60 KB is VISIBLE, and a synthetic ancestor of only ~20 bytes is
+  INVISIBLE with a same-moment non-ancestor control VISIBLE beside it. The two variables were
+  confounded in the natural sample (both invisible procs were long AND ancestors); decorrelating
+  them is what produced the verdict. Two earlier probes of mine were VACUOUS in ways that read as
+  confirmation — `sleep` rejected the pad and died (every case "INVISIBLE"), then
+  `bash -c 'sleep 5' NAME` EXEC'd sleep and dropped argv[0] (every case "INVISIBLE" again). Only
+  adding a control that the marker was actually IN the subject's argv turned the answer over.
+  In-repo call sites that run from inside a session and therefore inherit this blind spot:
+  `hooks/lead-crash-watchdog.sh:996-997` (concurrency count), `hooks/git-worktree-guard.sh:99`,
+  `scripts/desk-arm-live.sh:122`. Not filed — each needs its own semantics checked first, and a
+  filing while closing 0 would end this recycle net-positive on filings.
+  Complementary to memory `pgrep-f-matches-agent-briefs` (argv so wide it matches too much); this
+  is the same instrument failing the other way. Memory: `pgrep-excludes-the-callers-ancestors`.
+
+  **Also observed, NOT filed:** `~/.reso/live-sessions/.wt-149789b69fc4.65918` is a leaked atomic-write
+  tmp file dating to 2026-08-07 — the `mv`-failure path in the register hook cleans up, so this is
+  most likely a kill mid-write. One stale byte-range, no correctness impact (readers glob real keys),
+  and it is swept by the reso janitor's dead-pid pass. Recorded for a successor, not minted.
+
+  **Teammates/subagents: 0 code, 0 Explore** (#44-#49 all spawned none). `master-fire-gate` (46
+  open) and `master-convergence-deadlock` (55 open) remain UNSURVEYED — #43's and #28's Explore
+  surveys both failed to return in-pass even with a call budget and a partials clause.
+
 - **2026-08-19 — drain recycle #48: five of gap 1's eight uncensused edits were already DONE, and
   the sixth's prescribed edit points at a field that does not exist.** `master-fleet-footprint`
   **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed after release,
