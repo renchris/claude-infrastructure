@@ -52,6 +52,12 @@ setup() {
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
+  # Case 29 made bin/cc-pane and bin/it2-kitty subjects of this suite, and both READ these two —
+  # which this repo INJECTS into every pane, so they arrive with an ambient value here. Case 29 only
+  # greps them, but the seam is pinned for the same reason the block above pins handoff-fire's: a
+  # case added later that EXECUTES either file must not inherit a live pane's launch command.
+  # UNSET rather than assigned, because "absent" is the state their readers branch on.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE
 }
 
 # a real call site, not a comment or a doc mention
@@ -342,4 +348,63 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   grep -q 'basis:"absent"' "$REPO/hooks/agent-teams-enforce.sh"
   # and it must NOT be on stderr there — the regression this replaced
   ! grep -qE 'capacity-admit: ABSENT.*>&2' "$REPO/hooks/agent-teams-enforce.sh"
+}
+
+@test "29 the pane-spawn PRIMITIVE is ungated BY DESIGN — the gate is the CALLER's (item 9a88cb04dab2)" {
+  # THE RESIDUE §12.1 NEVER STATED, and the reason a drain recycle re-derived it from scratch.
+  # Item 9a88cb04dab2 reads "it2-kitty split path has NO capacity admission … wire cc_capacity_admit
+  # into the split/os-window spawn sites", and its stored falsifier is `grep -q cc_capacity_admit
+  # bin/cc-pane`. Both halves of that are true of the tree and the conclusion is still wrong, which
+  # is exactly the shape this ledger exists to make un-re-derivable.
+  #
+  # WHY GATING THE PRIMITIVE IS THE REFUTED FIX, not merely an unnecessary one. handoff-fire.sh:6354
+  # reads `if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi` — a recycle REPLACES a session
+  # (net-zero panes) and is exempt on purpose. A term inside the primitive cannot see $RECYCLE: it
+  # fires on every split, so it would refuse recycles, and it would place the BUDGET-BOUNDED
+  # cc_capacity_admit underneath handoff-fire's UNBOUNDED capacity_gate. handoff-fire.sh:4210-4213
+  # names that composition directly — "ONE gate for both would re-commit the fix that §8.5.2 and
+  # §12.2 already refuted" — and §12.1's own closing note says the extraction was "NOT by
+  # universalising capacity_gate() — §12.2 below stands unamended".
+  #
+  # SO THE DESIGN IS: the CALLER owns the gate, because boundedness is a property of the caller and
+  # not of the primitive. Unattended callers (boot storm, limit-recovery, the Agent tool) take the
+  # bounded term — cases 21/23/24/25. The attended caller takes the unbounded one with the recycle
+  # exemption. The primitive itself stays neutral so both policies remain expressible through it.
+  # (pane-spawn-coverage-lint.sh reaches the same split for LOGGING and states the mirror rule —
+  # there the CALLEE owns the row, so the two ledgers are not in tension: one counts surfaces, this
+  # one binds policy.)
+
+  # ANTI-VACUITY FIRST: if a refactor moves the raw split sites out of cc-pane, every assertion
+  # below would pass over nothing. Locate the subject before making a claim about it.
+  grep -qE '^[^#]*session split' "$REPO/bin/cc-pane" \
+    || { echo "bin/cc-pane no longer issues 'session split' — this case is asserting over nothing"; false; }
+
+  # THE CENSUS, and the ONE assertion here that should ever red. `cc-pane spawn` is the verb that
+  # owns those sites, and nothing in the tree calls it — so wiring the item's remedy there would
+  # green its own falsifier while gating a path with no traffic. Measured 2026-08-19 with a
+  # positive control (the same instrument returns 114 for cc-notify, which is called everywhere;
+  # memory `caller-census-keyed-on-path-misses-the-name` and `positive-control-the-denominator`).
+  # The day a caller appears, this reds — which is precisely when the capacity question has to be
+  # answered, at that new caller and with its own boundedness policy.
+  spawn_callers="$(grep -rnE '^[^#]*(bin/)?cc-pane (spawn|split)' "$REPO/scripts" "$REPO/bin" "$REPO/hooks" 2>/dev/null || true)"
+  [ -z "$spawn_callers" ] \
+    || { echo "cc-pane spawn gained a caller — decide its capacity policy AT THE CALLER, not in the primitive: $spawn_callers"; false; }
+
+  # THE ATTENDED CALLER STAYS GATED, and keeps its exemption. If either half of this line moves, the
+  # reasoning above stops holding and the item deserves a fresh answer rather than this one.
+  grep -qF 'if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi' "$REPO/scripts/handoff-fire.sh" \
+    || { echo "handoff-fire's gate or its recycle exemption moved — re-derive whether the primitive should stay neutral"; false; }
+
+  # AND THE PRIMITIVES STAY NEUTRAL. This is a real ratchet, not decoration: adding the bounded term
+  # to either file is the change that would refuse recycles. If a future design genuinely wants a
+  # term here, that is a §12.2 amendment and this case should be rewritten to assert the new shape —
+  # the discriminator case 25 established (the old text must name the new state as correct and say
+  # what replaces it), NOT an assertion relaxed to let a change through.
+  for prim in "$REPO/bin/it2-kitty" "$REPO/bin/cc-pane"; do
+    [ -f "$prim" ] || continue
+    if calls_gate "$prim"; then
+      echo "$prim took the BOUNDED term: it cannot see \$RECYCLE, so this refuses recycles (handoff-fire.sh:6354). Gate the CALLER."
+      false
+    fi
+  done
 }
