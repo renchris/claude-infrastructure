@@ -503,6 +503,97 @@ table, and a scanner over 3,500 transcript files is not something to leave rotti
 Its method is fully specified above; the two sources are `~/.claude/logs/bash-execution.log` and
 both `projects/` roots.
 
+### 5.3 R-7 ANSWERED — the census was always derivable, and the largest match-all hook had never been priced (2026-08-19, recycle #41)
+
+§5.2 left R-7 open with a *measurement* as its remainder, not a build: re-derive the all-tool rate
+from the four stores and see whether it already answers the row. It does. **Both halves of R-7's
+claim are now false** — the census exists, and all three named match-all hooks have a stated
+per-hour cost.
+
+**The census, and why dedupe is not optional.** Enumerate `~/.claude*/projects` deduped by
+*realpath* (4 distinct stores; `~/.claude-next/projects` is a symlink onto the first), scan every
+`.jsonl` for `"type":"tool_use"` blocks, and dedupe on the block's own `toolu_` id. Whole corpus:
+**352,926 calls over 6,997 files / 9.46 GB.** The raw occurrence count is **368,278** against
+**353,270** distinct ids — **15,008 redundant (4.08%)**, and **6,118 of the 6,912 repeated ids
+appear in more than one STORE**: the same session file exists under two account roots, which is the
+transcript-transplant path (limit-recover) writing a session into a second account. *A four-store
+census that does not dedupe on tool_use id over-counts by ~4%, and a session count taken per-root
+double-counts the transplanted sessions.* This is the natural successor to §5.2's lesson —
+enumerating the roots is necessary but not sufficient.
+
+**Windowed to `bash-execution.log`'s own span** (`2026-08-16T22:22:09Z → 2026-08-19T11:32:36Z`), so
+numerator and denominator share one window — the span-mismatch defect R-7 itself names:
+
+| | in-window |
+|---|---|
+| all-tool calls (4 stores, deduped) | **28,400** |
+| Bash | 20,778 |
+| non-Bash | **7,622 (26.84%)** |
+| **ALL / Bash** | **1.3668x** |
+| `bash-execution.log` entries (independent instrument) | 21,081 |
+| **agreement between the two instruments** | **98.6%** |
+| log sessions having a transcript | **234 / 234** |
+| log sessions having NO transcript | **0** |
+
+Whole-corpus ALL/Bash is **1.4131x**; §5.2's published 1.40x sits between the two. #39's
+"the absent population is zero" reproduces on a fresh span with an independent instrument.
+Note also **451 sessions made tool calls in-window against the log's 234** — a Bash-only census is
+blind to 217 sessions that made *no Bash call at all*, which is the population R-7 was really about.
+
+**The three hooks are ALREADY match-all — this is a live unaccounted cost, not a hypothetical.**
+In `settings.json`, `teammate-checkpoint.sh`, `cc-permission-beacon.sh clear` and
+`mailbox-drain.sh post-tool` all carry `matcher: ""`, while only `log-bash` and `waiting-recycle`
+are `Bash`-scoped. So §2.3's "PostToolUse/Bash — 4 hooks" table priced them *on a Bash call*, and
+their firing on the other 26.84% of tool calls has never been in any total.
+
+**Per-call cost** — abstain path (fabricated session id, so no live team/mailbox state is touched),
+40 iterations each, load avg ~15 (comparable to §2.3's load 16), null control `/usr/bin/true` =
+**2.65 ms**:
+
+| hook | measured | §2.3 published |
+|---|---|---|
+| `teammate-checkpoint.sh` | **18.90 ms** | 51.57 ms — **63% lower** |
+| `cc-permission-beacon.sh` | **14.78 ms** | 14.76 ms — **Δ 0.02 ms** |
+| `mailbox-drain.sh` | **72.58 ms** | *never measured* |
+| **match-all chain** | **106.26 ms** | |
+
+The `cc-permission-beacon` agreement to 0.02 ms is the **positive control on the timing method** —
+without it these figures would be one instrument's word against another's. The
+`teammate-checkpoint` drop is §4's M3 abstain-path fix landing and working, measured independently
+of the commit that claimed it. **And `mailbox-drain`, never priced anywhere in this document, is
+68.3% of the match-all chain — larger than the other two hooks combined.** The biggest term was the
+unmeasured one.
+
+**The per-hour cost R-7 said could not be stated:**
+
+| | all-tool/h | s/h | cores | % of the 10-core box |
+|---|---|---|---|---|
+| mean | 498.2 | 52.94 | 0.0147 | **0.147%** |
+| median hour | 383 | 40.70 | 0.0113 | 0.113% |
+| p95 hour | 1,221 | 129.74 | 0.0360 | 0.360% |
+| busiest hour | 1,896 | 201.47 | 0.0560 | 0.560% |
+
+**The term a Bash-only census structurally cannot see** — the non-Bash calls alone: 133.7/h →
+**14.21 s/h → 0.00395 cores → 0.0395% of the box.**
+
+**This refutes the build, which is the decision R-7 existed to inform.** The PostToolUse match-all
+counter was justified as the only route to a fleet number. It is not the only route, and the
+quantity it would report is **four hundredths of one percent of the machine** — inside §2.4's
+"third-order term", itself third-order. Worse, the instrument would be a match-all hook: it would
+fire on all 498 calls/h and cost the same order as the term it reports. **R-7 is closed on
+measurement, and the counter is rejected.**
+
+**Residue, named rather than absorbed:** every per-call figure above is the **abstain** path. A
+session that *does* have a team, or *does* have pending mail, takes a longer path that remains
+unmeasured. §2.5 establishes abstain is the majority case, so these are the common-case figures,
+not worst-case ones. Sizing the non-abstain tail is a separate question this measurement does not
+answer.
+
+Reproduce: as with §5.2 the scanners are one-shots, not landed — a scanner over 6,997 transcript
+files is not something to leave rotting in the tree, and its durable output is the tables above.
+Method fully specified here; sources are `~/.claude/logs/bash-execution.log`, all four
+`~/.claude*/projects` roots, and `~/.claude/settings.json`.
+
 ---
 
 ## 6. Rejected alternatives
