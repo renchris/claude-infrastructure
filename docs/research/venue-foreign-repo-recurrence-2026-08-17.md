@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-19 | `ce7651b02a17` | `doc_classifier` | label-foreign — **the guard already fires from here and cannot fire there** (§ SEVENTH) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,181 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# The seventh — the refusal already exists, and it can only fire where it is not needed
+
+**2026-08-19.** Backlog item `ce7651b02a17`, project `doc_classifier`, title *"reviewapp/api/auth.py:
+fresh PyJWKClient per token → pre-auth JWKS fetch amplification (medium, PoC-proven: 4 fetches from 2
+rejected tokens)"*, fired into a cloud session whose one attached repository is
+`renchris/claude-infrastructure`. Third distinct `doc_classifier` item, two days after the last row,
+`bin/cc-offload:84` byte-unchanged. The class-level facts are not restated; three things below are new,
+and the first two revise conclusions recorded above rather than adding to them.
+
+## 1 · The eligibility side is not silent on this item — it refuses, and the refusal is unreachable
+
+Every occurrence above concluded that `cc-eligible` reads the row as cloud-suitable *and is correct on
+its own terms*, and closed the widen-the-denylist question with a no. That is right about the **keyword
+lists** and it is the wrong place to have stopped looking. The file's other arm — the **history
+certification**, a measurement rather than a spelling — already fires on this item:
+
+```
+$ cc-eligible why ce7651b02a17                                   # fixture, this VM
+  verdict : eligible
+  refused : (nothing fired)
+  history : no-repo — NOT CERTIFIED: no readable git repo for this project — reach is unknown
+            repo=/root/Development/doc_classifier ref=- depth=50
+```
+
+`no-repo` is one of the three states on which, per `bin/cc-eligible:86-92`, *"the GATE stays fail-open …
+the PRODUCER fails closed"* — and the producer does exactly that: `bin/cc-venue:281` returns
+`{"venue": "local", "token": "uncertified-history"}`. **A venue label minted from here would have been
+`local`.** The guard that stops this dispatch is built, shipped and working.
+
+It cannot fire where it is needed, and the reason is structural rather than a missing case.
+`repo_for()` (`bin/cc-eligible:613-626`) resolves a project to `$HOME/Development/<project>` — a path on
+**the machine doing the measuring**. On the Mac that path exists for `doc_classifier`
+(`scripts/dispatch-projects.conf`: `repo=~/Development/doc_classifier`, *"verified 2026-07-29: repo
+present"*; `OUT-docclf.md:3`), so the oracle reads a real, full clone, certifies reach, and the producer
+promotes to `cloud`. The certification is a measurement of the **producing** filesystem being used to
+predict reach on the **consuming** one, and for a foreign project those two answers are opposites by
+construction: present on the box that decides, absent on the box that works.
+
+That the path resolution — not the item's text — is what moves the verdict is measurable from here:
+
+| resolved repo | history state |
+|---|---|
+| `/root/Development/doc_classifier` (absent) | `no-repo` — NOT CERTIFIED |
+| `CC_ELIGIBLE_REPO=/home/user/claude-infrastructure` (present) | `shallow` — NOT CERTIFIED |
+
+Same item text, different certification, and the only variable is which tree the oracle was pointed at.
+The Mac's third answer (`reachable`, on a full clone) is **inferred** from `repo_for()`'s definition plus
+the two citations above, not measured — this VM's clone is shallow, so it cannot reproduce a `reachable`
+and the `shallow` guard in arm B is that refusal working as designed.
+
+This does **not** reopen the denylist question. It relocates the fix to an arm that already exists: the
+certification is sound about *reach into history* and unsound about *reach to the repo at all*, because
+it never asks which repo the consuming session will attach. Both shapes on the open 08-16 decision
+((a) fail closed at the fire, (b) route by `item.project`) still hold; this only shows the predicate side
+is nearer to already answering than four notes have recorded, and that the missing input is
+`session.attached_repo` — the same value `bin/cc-offload:84` derives from the wrong place.
+
+**This is the third face of one generator.** `CLOUD_BACKLOG_PIPELINE.md` A2 F3 found the M2 freshness
+gate refusing cloud fires *"on a staleness check about a directory the cloud session does not use"*;
+`bin/cc-offload:84` attaches the firing checkout's origin rather than the item's; and the history oracle
+certifies against the firing box's filesystem. Three guards, all measuring the local disk to decide
+something about a remote one.
+
+## 2 · CORRECTION — the disposition rails do **not** exit 0; they fail loudly
+
+Both 08-17 sections record `cc-backlog` and `cc-notify` as *"exit 0 while doing nothing"*, and draw the
+trap from it: *"a worker that ran them and trusted the exit code would report the item parked when it is
+not."* **That does not reproduce.** Measured this session with the store absent, invoked bare:
+
+```
+$ cc-backlog block  ce7651b02a17 --needs "…"    → cc-backlog block: unknown id …    rc 3
+$ cc-backlog done   ce7651b02a17 --evidence "…" → cc-backlog done: unknown id …     rc 3
+$ cc-backlog reopen ce7651b02a17                → cc-backlog reopen: unknown id …   rc 3
+$ cc-notify --role desk "…"                     → verdict=unresolvable enqueued=0   rc 141
+                                                  + names the fix: cc-roles list
+```
+
+`bin/cc-backlog:1562` is `has_id "$id" || { …; return 3; }`. The rc-0 reading reproduces exactly, and
+only, when `$?` is read after a pipe:
+
+```
+$ cc-backlog block … >/dev/null 2>&1;        echo $?   → 3
+$ cc-backlog block … 2>&1 | head -1 >/dev/null; echo $?   → 0      # head's rc, not the tool's
+```
+
+Every rc quoted in the two sections above sits beside a piped, `head`-trimmed transcript. That is
+consistent with a measurement artifact, and it is **not proof of one**: `63b71c0e` (2026-08-18) touched
+that line, and this clone is grafted at 50 commits with its oldest reachable commit *being* `63b71c0e`,
+so the pre-08-17 source is unreadable from here and the two hypotheses cannot be separated at this
+venue. One command on the Mac settles it:
+
+```
+git log -L1562,1562:bin/cc-backlog --oneline | head -20
+```
+
+The operational consequence is the opposite of what is recorded above, so it is worth stating plainly:
+**the rails are safe to run blind.** A worker that runs them on a VM gets a non-zero exit and a
+diagnostic, not a false confirmation. The reason a cloud VM still cannot dispose of its item is that the
+store is not here — not that the tools lie about it.
+
+## 3 · The M-P-2 consolidation was decided ten days ago and never actuated
+
+The sixth occurrence noted in passing that a worker reaching the right venue *"should read that grouping
+before opening a diff, because two of the five conflict if done separately."* The dispatch record now
+makes that a mechanism defect rather than advice. `OUT-docclf.md:132` groups five items — `e3d8a8cf90a4`,
+`ce7651b02a17`, `38de29ec5e59`, `16319f4234a3`, `1a9f3323e4d7` — as **one effort** under one DoD, with an
+explicit order in which `ce7651b02a17` is member **3**, behind a member 2 that *"must be done in one diff
+or they conflict."* Two of those five have since each been dispatched as a **standalone one-item wave**:
+`38de29ec5e59` on 08-17, `ce7651b02a17` today. Even a correctly-routed fire of this brief would therefore
+have produced a wrong-shaped diff — a venue fix alone does not make this item workable as sent.
+
+The ledger already ships the actuator. A `--condition` group joined with `link` gives its members a
+shared **lease** that admits one at a time (`bin/cc-backlog:352`, `:525-532`), which is precisely the
+constraint M-P-2 describes; `bin/cc-dispatch:1075` names *"the consolidation actuator (R6)"* as the repair
+and disclaims it as out of scope for that file. Nothing joined these five. This is the same diode the
+§"the conclusion never reached the enforcing store" finding names for the venue fix, arriving
+independently: the consolidation is **plan prose**, and nothing in the dispatch chain reads plan prose.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present, oldest reachable commit `63b71c0e` (2026-08-18) |
+| `HEAD` vs `origin/main` | **0 behind** — fresh fetch succeeded |
+| `bin/cc-offload:84` | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged; no guard has shipped** (3 days after the decision was filed) |
+| `/Users`, `~/Development`, any `doc_classifier` checkout | absent (`find / -maxdepth 4 -name doc_classifier` → 0 hits) |
+| GitHub scope | `renchris/claude-infrastructure`, one repository — and `renchris/doc_classifier` exists (`OUT-docclf.md:3`) but is out of scope, so it cannot be cloned from here either |
+| `cc-eligible check ce7651b02a17` (fixture) | `verdict=eligible` · `refused: (nothing fired)` · `history: no-repo` |
+
+## The item itself — NOT adjudicated
+
+No claim is made about `reviewapp/api/auth.py` by this session, and none should be inferred. The premise
+is **confirmed by citation to a dated read of trunk** — `OUT-docclf.md:49` verified on `origin/main`
+@ `cc6a30a6` that `jwt.PyJWKClient(settings.jwks_url, cache_keys=True).get_signing_key_from_jwt(...)` is
+constructed inline per token at `auth.py:73`, and that `cache_keys=True` caches only within a throwaway
+instance — not by this VM re-reading it. The brief's own mandated first step is unrunnable here for the
+reason the fourth occurrence already gave: there is no tree, stale or otherwise. Whether the fix has
+landed since 2026-07-30 is unknown from this venue; `OUT-docclf.md:163` carries the falsifier, and it
+needs a `doc_classifier` checkout to run.
+
+## Operator actions
+
+The §3 decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` — **(a) fail closed at the fire vs
+(b) route by `item.project`** — is unchanged and now carries a seventh datapoint. §1 above adds one input
+to it: the predicate side already computes the right answer when pointed at the consuming machine, so
+whichever shape is chosen, `session.attached_repo` is the value both `bin/cc-offload:84` and
+`cc-eligible`'s `repo_for()` are missing.
+
+Two ledger dispositions need the Mac. First, this item:
+
+```
+cc-backlog block ce7651b02a17 --needs "re-dispatch to a session that can reach renchris/doc_classifier — a local claim, or a cloud fire whose attached git_repository source IS doc_classifier; AND dispatch it as part of M-P-2, not standalone (OUT-docclf.md:132 puts it 3rd of 5 behind a member that must share a diff); premise CONFIRMED by citation only (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH)"
+```
+
+Second, the grouping — the thing that stops members 4 and 5 being fired standalone next:
+
+```
+for i in e3d8a8cf90a4 ce7651b02a17 38de29ec5e59 16319f4234a3 1a9f3323e4d7; do cc-backlog link "$i" --condition mp-two-axis-separation-docclf; done
+```
+
+*(Signature checked against the source, not assumed: `link` takes **one** id per call
+(`bin/cc-backlog:48`, `cmd_link` at `:2690-2715`), hence the loop; and the slug carries **no digit** —
+`cmd_link` rejects digits outright, "a slug carrying a measurement mints one GROUP per measurement",
+and its own error text prescribes spelling the numeral out. `mp2-…` would have exited 2. The group
+semantics — one lease, one live member — are at `:352` and `:525-532`. Not exercised here: there is no
+store on this VM, so this is a read of the code, not a dry run.)*
+
+## Not fixed here, deliberately
+
+The three standing refusals hold verbatim and are not re-argued: `bin/cc-offload` fires paid cloud
+sessions and neither `bats` nor `shellcheck` is installed here, so the repo's gate cannot be run on a
+shell change; `bin/cc-eligible`'s `OFFBOX_LANE` class states that a session this lane created cannot
+verify a change to the lane; and a 50-commit clone cannot adjudicate its own admission. §1 identifies a
+placement inside `bin/cc-eligible`, which is squarely inside that third refusal — it is written as a
+finding for the open decision, not as a patch withheld.
