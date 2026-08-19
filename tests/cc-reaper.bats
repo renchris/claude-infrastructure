@@ -1812,3 +1812,68 @@ EOF
   ! grep -E '^(REAPABLE_RE|AUTOREAP_FIRED_RE)=' "$R" | grep -q 'task-less' || false
   grep -E '^SURFACE_PAGE_RE=' "$R" | grep -q 'task-less'
 }
+
+# --- spec 03 E12: live_pane_count and cc-reconcile share ONE process-identity definition -----------
+
+@test "E12: live_pane_count COUNTS a resident headless session (-p with --input-format)" {
+  # Lockstep half of E9. This signal is the reaper INDEPENDENT truth source, so dropping every -p
+  # process made resident headless agents invisible to the blind-spot detector itself — the one
+  # instrument whose whole job is noticing sessions nothing else enumerated.
+  set_desk
+  cat > "$D/bin/ps" <<'PSEOF'
+#!/bin/bash
+echo "/Users/x/.claude-183/node_modules/.bin/claude -p --strict-mcp-config --settings /tmp/s.json --model claude-opus-5 --input-format stream-json --output-format stream-json --verbose CC_PANE_ID=hdl-0123456789abcdef TERM_PROGRAM=Apple_Terminal"
+PSEOF
+  chmod +x "$D/bin/ps"
+  cat > "$D/bin/classify" <<'CLEOF'
+#!/bin/bash
+echo '[]'
+CLEOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  notified
+  grep -q 'BLIND to 1' "$D/notify-calls"
+}
+
+@test "E12: a true one-shot probe is still NOT counted as a live pane" {
+  # The over-widening guard. Dropping the -p exclusion outright would make every transient probe
+  # inflate the live count and false-page the operator forever.
+  set_desk
+  cat > "$D/bin/ps" <<'PSEOF'
+#!/bin/bash
+echo "/Users/x/.claude-183/node_modules/.bin/claude -p hi CC_PANE_ID=hdl-fedcba9876543210"
+PSEOF
+  chmod +x "$D/bin/ps"
+  cat > "$D/bin/classify" <<'CLEOF'
+#!/bin/bash
+echo '[]'
+CLEOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'BLIND to 1' "$D/notify-calls"
+  [ "$status" -ne 0 ]
+}
+
+@test "E12: the marker is read from ARGV only — an env-borne token never re-admits a probe" {
+  # This ps runs with -E, so the ENVIRONMENT follows argv on the same line. A marker matched there
+  # would count one-shot probes as live panes, which is exactly the failure the -p exclusion exists
+  # to prevent. The scan stops at the first KEY=value field; here `FOO=` opens the env region and a
+  # bare --input-format token sits AFTER it, so it must not be seen.
+  set_desk
+  cat > "$D/bin/ps" <<'PSEOF'
+#!/bin/bash
+echo "/Users/x/.claude-183/node_modules/.bin/claude -p hi FOO= --input-format stream-json"
+PSEOF
+  chmod +x "$D/bin/ps"
+  cat > "$D/bin/classify" <<'CLEOF'
+#!/bin/bash
+echo '[]'
+CLEOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'BLIND to 1' "$D/notify-calls"
+  [ "$status" -ne 0 ]
+}

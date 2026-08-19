@@ -88,6 +88,23 @@ add_pane_no_iterm() {
   printf 'claude --permission-mode auto CLAUDE_CONFIG_DIR=/Users/x/.claude TERM_PROGRAM=Apple_Terminal\n' > "$D/psenv/$pid"
   printf '{"pid":%s,"sessionId":"s","cwd":"/tmp/x","startedAt":1,"kind":"interactive"}\n' "$pid" > "$D/sessions/$pid.json"
 }
+# A RESIDENT headless agent: argv carries -p AND --input-format, env carries a `hdl-` pane address
+# (bin/cc-pane-headless mints it). Field order is copied from the real invocation in
+# scripts/headless-precondition-probe.sh:121-125 — load-bearing, because --input-format lands at
+# field 9 there, PAST the 3..8 window the -p/--version exclusion scans. A marker scan reusing that
+# narrow window detects nothing and the whole E9 change reads correct while doing nothing.
+add_headless() {  # pid paneAddr sid cwd
+  printf '%s /Users/x/.claude-183/node_modules/.bin/claude -p --strict-mcp-config --settings /tmp/s.json --model claude-opus-5 --input-format stream-json --output-format stream-json --verbose\n' "$1" >> "$D/pslist"
+  printf 'claude -p CC_PANE_ID=%s CLAUDE_CONFIG_DIR=/Users/x/.claude TERM_PROGRAM=Apple_Terminal\n' "$2" > "$D/psenv/$1"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","startedAt":1699000000000,"kind":"headless"}\n' "$1" "$3" "$4" > "$D/sessions/$1.json"
+}
+# A true ONE-SHOT probe: -p with NO --input-format. Given a perfectly good pane address and sessions
+# file on purpose, so the only thing that can keep it out of the registry is the argv rule itself.
+add_oneshot() {  # pid paneAddr
+  printf '%s /Users/x/.claude-183/node_modules/.bin/claude -p hi\n' "$1" >> "$D/pslist"
+  printf 'claude -p CC_PANE_ID=%s CLAUDE_CONFIG_DIR=/Users/x/.claude\n' "$2" > "$D/psenv/$1"
+  printf '{"pid":%s,"sessionId":"sid-oneshot","cwd":"/tmp/probe","startedAt":1699000000000,"kind":"headless"}\n' "$1" > "$D/sessions/$1.json"
+}
 rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 # a definitely-dead real pid (spawn → kill → reap) — for the recycle-in-place stale-row heal tests.
 # The heal decision uses a REAL kill -0 on the row's recorded pid (aligned with cc-sessions), so a
@@ -437,4 +454,75 @@ add_pane_both() { # pid realPaneUUID stalePaneUUID configdir sid cwd
     echo "row was keyed on the STALE ITERM_SESSION_ID — preference not honoured" >&2
     false
   fi
+}
+
+# --- spec 03 E9: -p no longer means "not a session" ------------------------------------------------
+# 33 pane-less sessions ran on this box invisible to the whole fleet because the argv scan dropped
+# every -p process. The discriminator is --input-format: a resident headless agent streams, a
+# one-shot probe does not. Liveness stays (pid,lstart) — argv never becomes the liveness oracle.
+
+@test "E9: a RESIDENT headless session (-p with --input-format) is COUNTED LIVE, not dropped" {
+  # THE E9 DELTA, stated exactly. Pre-fix the argv scan dropped every -p process, so a resident
+  # headless agent was never iterated at all and live=0 — invisible to the whole fleet. Post-fix it
+  # is a live session the scan yields. It does NOT yet get a ROW: cc-reconcile:220 requires the CC
+  # sessions file to read kind=="interactive", and what CC writes there for a resident -p session is
+  # the SPEC OWN OPEN QUESTION Q1 (03-headless-substrate.md:446, "All 9 live rows read interactive.
+  # Measure.") — re-measured 2026-08-19 and still unanswerable: 9 session files on this box, all
+  # interactive, zero headless processes running. So the gate is asserted where the evidence ends.
+  add_headless 5150 hdl-0123456789abcdef sid-headless /tmp/wt-headless
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.live')" = 1 ]
+  [ "$(printf '%s' "$output" | jq -r '.skipped')" = 1 ]
+}
+
+@test "E9: a true one-shot probe (-p, NO --input-format) still gets NO row" {
+  # The over-widening this guards (spec T8): dropping the -p exclusion outright would mint a row for
+  # every transient `claude -p` probe. It is handed a valid hdl- address and a sessions file, so the
+  # argv rule is the ONLY thing that can exclude it.
+  add_oneshot 5151 hdl-fedcba9876543210
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  # Asserted on the LIVE count, NOT on rows. rows==0 is VACUOUS here: cc-reconcile:220 also rejects
+  # it at the kind gate, so a mutant that drops the -p rule outright still leaves rows at 0 and this
+  # case passes having tested nothing. Measured by exactly that mutant, which reded its cc-reaper
+  # sibling and not this one.
+  [ "$(printf '%s' "$output" | jq -r '.live')" = 0 ]
+  [ "$(rows)" = 0 ]
+}
+
+@test "E9: the two are told apart in ONE pass — the resident is registered, the probe is not" {
+  add_headless 5150 hdl-0123456789abcdef sid-headless /tmp/wt-headless
+  add_oneshot  5151 hdl-fedcba9876543210
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.live')" = 1 ]      # the resident only — never the probe
+  [ "$(rows)" = 0 ]
+}
+
+@test "E9: --version is STILL excluded, even carrying the streaming marker" {
+  # --version is unconditional: the marker re-admits -p only. Without this, "drop --version always"
+  # is asserted by nothing and a later simplification could fold it into the -p rule unnoticed.
+  printf '5152 /Users/x/.claude-183/node_modules/.bin/claude --version --input-format stream-json\n' >> "$D/pslist"
+  printf 'claude --version CC_PANE_ID=hdl-aaaabbbbccccdddd CLAUDE_CONFIG_DIR=/Users/x/.claude\n' > "$D/psenv/5152"
+  printf '{"pid":5152,"sessionId":"sid-v","cwd":"/tmp/v","startedAt":1699000000000,"kind":"headless"}\n' > "$D/sessions/5152.json"
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  # LIVE, not rows — same vacuity as the one-shot case: the kind gate would hold rows at 0 anyway,
+  # so a mutant folding --version under the marker rule passed this case until it asserted here.
+  [ "$(printf '%s' "$output" | jq -r '.live')" = 0 ]
+  [ "$(rows)" = 0 ]
+}
+
+@test "E9: the marker is found PAST the narrow -p window — a same-window scan would see nothing" {
+  # THE VACUITY THIS EXISTS FOR. The -p/--version exclusion scans argv fields 3..8. In the real
+  # invocation --input-format is field 9 (headless-precondition-probe.sh:121-125), so a marker scan
+  # reusing that window returns "absent" for every genuine resident headless session and the fix is
+  # inert. Pin the marker even FURTHER out so the scan cannot be quietly narrowed back.
+  printf '5153 /Users/x/.claude-183/node_modules/.bin/claude -p --strict-mcp-config --settings /tmp/s.json --model claude-opus-5 --allowedTools Bash --permission-mode auto --verbose --input-format stream-json\n' >> "$D/pslist"
+  printf 'claude -p CC_PANE_ID=hdl-1111222233334444 CLAUDE_CONFIG_DIR=/Users/x/.claude\n' > "$D/psenv/5153"
+  printf '{"pid":5153,"sessionId":"sid-far","cwd":"/tmp/far","startedAt":1699000000000,"kind":"headless"}\n' > "$D/sessions/5153.json"
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.live')" = 1 ]
 }

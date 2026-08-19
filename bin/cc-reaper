@@ -781,7 +781,19 @@ live_pane_count(){
   "$PS_BIN" -wwEo command= 2>/dev/null | awk '
     { t0=$1
       if (t0!="claude" && t0!="claude.exe" && t0 !~ /\/claude$/ && t0 !~ /\/claude\.exe$/ && t0 !~ /cli\.js/) next
-      for (i=2; i<=7 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
+      # LOCKSTEP with cc-reconcile live_claude_pids (spec 03 E12 — the two share ONE process-identity
+      # definition, so the -p rule is changed in both or in neither). A RESIDENT headless agent carries
+      # -p too; --input-format is what separates it from a one-shot `claude -p "hi"`, which must stay
+      # uncounted. The marker scan spans argv rather than the narrow window because --input-format
+      # lands at field 8 here in the real invocation. It stops at the first KEY=value field: this ps
+      # runs with -E, so the ENVIRONMENT follows argv and a marker matched there would count one-shot
+      # probes as panes. Breaking early only loses the marker — it fails toward the count of today.
+      hasif=0
+      for (i=2; i<=NF; i++) { if ($i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) break; if ($i=="--input-format") hasif=1 }
+      for (i=2; i<=7 && i<=NF; i++) {
+        if ($i=="--version") next
+        if (($i=="-p" || $i=="--print") && !hasif) next
+      }
       c++ }
     END { print c+0 }'
 }
