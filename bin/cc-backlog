@@ -30,6 +30,12 @@
 #                                                                  --falsifier are excluded; the
 #                                                                  falsifier keeps its own verb
 #                                                                  because that one RUNS the probe.
+#                                                                  On a DONE-LATCHED condition key,
+#                                                                  the update is redirected to an
+#                                                                  open/blocked SIBLING sharing that
+#                                                                  condition and ITS id is echoed —
+#                                                                  see THE LATCH FOLDS THE GROUP,
+#                                                                  NOT THE KEY.
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid> [--venue local|cloud] [--force]      → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
@@ -345,6 +351,24 @@
 # work (index a topic file · capture a lesson · fix the nudge hook's cardinality blindness · fix
 # compact-memory.md's orphan sweep), and no pattern separates those from the 21 above. The caller
 # knows which channel it is in; a regex does not.
+#
+# ── THE LATCH FOLDS THE GROUP, NOT THE KEY (2026-08-19, backlog b82a4060b00f) ──────────────────
+# The add-side done-guard below stops a re-file storm and does that correctly. It consulted only the
+# condition KEY's own status, and a condition group is routinely in SEVERAL states at once: `link`
+# and `block`'s operator-gate join put rows into a group whose ids are not the key. Measured
+# 2026-08-19 — `memory-index-over-budget` resolved to THREE ids in THREE states (150c50055e1c
+# done-latched, the KEY · 7c266e16fc94 open · 5ab3327ed0c8 blocked), and a re-add carrying a fresh
+# live measurement echoed the latched key, advised `reopen --force`, and wrote ZERO records. An OPEN
+# sibling is POSITIVE EVIDENCE the condition still holds, and it was the one piece of evidence the
+# guard ignored. The cost is not a missing row but a ROTTING TITLE: a standing condition closed once
+# could never again carry a fresh measurement, so its title froze at the value it held on the day it
+# closed — and that stale number is what a later reader budgets against (the RE-INFLATION rule).
+# `cmd_add` now selects the whole (project, condition) group from the fold it already holds: any
+# `open` or `blocked` member makes the add an UPDATE to that member, and the echoed id is the row it
+# landed on (the same shape `needs` already has — file onto the live row, echo ITS id). Nothing
+# reopens, nothing mints, the done row is never re-worded, and a group with no live member latches
+# exactly as before. Distinct from `backfill`, which PROPOSES the join after the fact; this is the
+# fold at ADD time. Pinned by tests/cc-backlog-condition-group-add.bats.
 #
 # ── CONDITION LEASE (2026-08-07, backlog 0bded74c6fa2) ─────────────────────────────────────────
 # The block above dedupes at `add`. It cannot dedupe what `add` never saw: two SESSIONS filing one
@@ -1450,8 +1474,114 @@ cmd_add() {
     # rc 0 (the idempotency contract `cc-discover` and every other caller depends on) and the
     # item is deliberately NOT re-opened, but the collision is announced LOUD so a stale re-file
     # can never read as fresh work.
-    local ex; ex="$(item_json "$id")"
+    #
+    # ONE fold, selected twice — this row, and (in the done arm below) the CONDITION GROUP it
+    # belongs to. `item_json` folds the whole ledger to answer about one id, so asking it twice
+    # would double the cost of every re-file; the group question is asked only on the one path
+    # where its answer can change the outcome. Same shape, same reason as claim's guard block
+    # (memory: make-the-actuator-the-arbiter).
+    local aall ex
+    aall="$(fold 2>/dev/null)"
+    ex="$(printf '%s' "$aall" | jq -c --arg i "$id" 'map(select(.id == $i)) | first // empty' 2>/dev/null)"
     if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" = "done" ]; then
+      # ── THE GROUP FOLD BEFORE THE LATCH (2026-08-19, backlog b82a4060b00f) ──────────────────────
+      # WHAT WAS BROKEN, AND WHAT WAS NOT. The latch below exists to stop a re-file storm (the
+      # 21-duplicate incident that earned `--condition` in the first place) and it does that
+      # correctly. Its defect is narrower and one word wide: it consulted only the condition KEY's
+      # OWN status, never whether any row SHARING that condition is still live. `link` (and `block`'s
+      # operator-gate join) put rows into a condition group whose ids are not the key, so a group is
+      # routinely in several states at once — and an OPEN sibling is POSITIVE EVIDENCE that the
+      # condition holds. It was exactly the evidence the guard ignored.
+      #
+      # MEASURED 2026-08-19. Condition `memory-index-over-budget` resolved to THREE ids in THREE
+      # states — 150c50055e1c done-latched (the KEY), 7c266e16fc94 open, 5ab3327ed0c8 blocked. A
+      # re-add carrying a fresh live measurement echoed the done-latched key, printed
+      # `if it genuinely holds again: reopen --force`, and wrote ZERO records. The measurement
+      # reached nothing, while a row proving the condition still held sat one select away.
+      #
+      # THE COST OF THE MISS IS A ROTTING TITLE, NOT A MISSING ROW. A standing condition closed once
+      # can never again carry a fresh measurement without --force, so its title stays frozen at
+      # whatever value it held on the day it was closed — and that stale number is what a later
+      # reader budgets against. The RE-INFLATION rule already warns that a filed size is a
+      # timestamped observation and not the state; this is the write path that made the warning
+      # necessary.
+      #
+      # SO: FOLD ACROSS THE GROUP, NOT THE KEY. If any row sharing (project, condition) is `open` or
+      # `blocked`, the add is an UPDATE to that row — the same `event:"update"` the arm below
+      # already writes, on the live row instead of the dead one — and the echoed id is the row it
+      # actually landed on.
+      #
+      # FOUR THINGS IT DELIBERATELY DOES NOT DO:
+      #   * it never REOPENS the key. The latch's whole job is that only a deliberate `reopen
+      #     --force` puts a worker back on closed work, and a state re-entering minutes after its own
+      #     close (004502cf59ab → 0fc2ae0d0140, six minutes) is thrash. Nothing here writes a status.
+      #   * it never re-words the DONE row — its title is the history its own evidence refers to
+      #     (the arm below states that reason and it is unchanged; the control in
+      #     tests/cc-backlog-add-update.bats has no sibling, so it still latches exactly as before).
+      #   * it never MINTS a row. A group with no live member is the case the latch was built for,
+      #     and it still refuses, still loudly, with the same `reopen --force` advice.
+      #   * a `claimed` sibling is NOT a redirect target. It is live evidence too, but a worker is
+      #     executing against that wording right now, and re-wording the brief under them is a
+      #     different and worse failure. Claim guard (6) already owns contention on a claimed
+      #     sibling; this arm stays out of its way.
+      #   * it fires ONLY when THIS add passed `--condition`, and that is scoping, not an oversight.
+      #     An EVENT key is hash(project, title, source), so a collision on it means the caller
+      #     re-filed a byte-identical title — there is no fresh measurement to carry anywhere, and
+      #     the only field that could still differ (`--dod-ref`, which is not in the hash) belongs
+      #     to the event that was closed, not to some other row. Redirecting it would move one
+      #     row's citation onto another. `--condition` is the channel whose whole contract is
+      #     "one standing state, re-measured", and it is the only channel this serves.
+      #
+      # WHICH SIBLING WINS, and why the order is what it is: `open` before `blocked` (an open row is
+      # the one a dispatcher can act on, and the one a reader budgets against), then OLDEST
+      # `firstTs`, then id. `firstTs` is first-wins in the fold, so nothing that happens later can
+      # move it — the target is INVARIANT across re-files. Ranking on `lastTs` instead would let
+      # successive measurements ping-pong between two live siblings as either one is touched,
+      # scattering the history of one condition across rows.
+      local sib=""
+      if [ -n "$condition" ]; then
+        sib="$(printf '%s' "$aall" | jq -r --arg i "$id" --arg c "$condition" --arg p "$project" '
+          [ .[] | select(.id != $i
+                         and (.condition // "") == $c
+                         and (.project   // "") == $p
+                         and ((.status // "") == "open" or (.status // "") == "blocked")) ]
+          | sort_by([(if (.status // "") == "open" then 0 else 1 end), (.firstTs // ""), .id])
+          | first | if . == null then "" else .id end' 2>/dev/null)"
+      fi
+      if [ -n "$sib" ]; then
+        local sj sst; sj="$(printf '%s' "$aall" | jq -c --arg i "$sib" 'map(select(.id == $i)) | first // empty' 2>/dev/null)"
+        sst="$(printf '%s' "$sj" | jq -r '.status // ""' 2>/dev/null)"
+        # The diff is against the SIBLING's fields, not the dead key's — this is an update to that
+        # row, so "changed" means changed relative to what that row currently says. Unchanged still
+        # appends nothing: the idempotency contract does not weaken just because the write moved.
+        local sb_title="" sb_dod="" sb_source=""
+        [ -n "$title" ]  && [ "$title"  != "$(printf '%s' "$sj" | jq -r '.title  // ""')" ] && sb_title="$title"
+        [ -n "$dod" ]    && [ "$dod"    != "$(printf '%s' "$sj" | jq -r '.dodRef // ""')" ] && sb_dod="$dod"
+        [ -n "$source" ] && [ "$source" != "$(printf '%s' "$sj" | jq -r '.source // ""')" ] && sb_source="$source"
+        if [ -n "$sb_title" ] || [ -n "$sb_dod" ] || [ -n "$sb_source" ]; then
+          jq -nc --arg id "$sib" --arg ts "$(now_iso)" \
+             --arg title "$sb_title" --arg dod "$sb_dod" --arg source "$sb_source" \
+             '{id:$id, ts:$ts, event:"update"}
+              + (if $title  == "" then {} else {title:$title}   end)
+              + (if $dod    == "" then {} else {dodRef:$dod}    end)
+              + (if $source == "" then {} else {source:$source} end)' \
+             >> "$BACKLOG"
+        fi
+        # NOT the string `already DONE`, and that is load-bearing. scripts/postland-verify.sh greps
+        # this stderr for that phrase and logs "RECURRED (closed item, NOT re-opened — needs
+        # `reopen --force`)". On this path the condition is NOT parked behind a --force: it is live
+        # on a row that just took the measurement, so that log line would be false. Different
+        # wording lands it in the caller's verbatim `?*)` arm instead, where it stays visible and
+        # stays true (memory: sibling-auditors-must-share-the-state-model).
+        { printf 'cc-backlog add: the condition key %s is done-latched, but condition "%s" is LIVE on %s (%s).\n' \
+            "$id" "$condition" "$sib" "$sst"
+          printf '  Applied to %s%s.\n' "$sib" \
+            "$([ -n "$sb_title$sb_dod$sb_source" ] && echo ' as an update' || echo ' — nothing changed, so nothing was appended')"
+          printf '  The latched key was NOT re-opened and NOT re-worded; a done row is the history its\n'
+          printf '  evidence refers to. If the CLOSED work itself regressed:  cc-backlog reopen %s --force\n' "$id"
+        } >&2
+        echo "$sib"; return 0
+      fi
       { printf 'cc-backlog add: WARNING — this event-key is already DONE; NOT re-opened.\n'
         printf '  id %s · done %s\n' "$id" "$(printf '%s' "$ex" | jq -r '.lastTs // "?"')"
         printf '  evidence: %s\n' "$(printf '%s' "$ex" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end')"
