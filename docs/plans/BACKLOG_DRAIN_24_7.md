@@ -87,6 +87,83 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #43: the row asked for a durability check to be BUILT, and it already
+  existed twice — neither copy reached anyone who could act on it, while the one message the lead
+  *does* receive told it the work was safe.** `master-fleet-footprint`
+  **14 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
+  claim)**. Property re-measured at intake and it held: 15/15 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. **filed 0 / closed 1.** Landed `4a455e43b`.
+  Session-lifecycle row `62363cac1e39` correctly declined again — `date` read **2026-08-19**, its
+  efficacy re-census window opens ~2026-08-24.
+  - **Row `1b19ab3096d2` — BUILT and left OPEN.** It asked for (1) the fired-session brief to state
+    land-BEFORE-ping-BEFORE-close and (2) a lead-side reaper checking `rev-list origin/main..HEAD`
+    for every fired worktree, "since 'pinged' != 'work is safe'". Leg 2's remedy is **REDIRECTED**:
+    the prescribed check already exists in TWO places and neither delivers.
+    - `bin/cc-reaper` `work_landed()` runs exactly the prescribed predicate. Its "not landed"
+      disposition is `say` + `log` + `continue` — the reaper's own stdout and its own logfile. The
+      surface-PAGE path sits in the branch ABOVE it, reached only for `SURFACE_PAGE_RE` causes, so a
+      *reapable* cause with unlanded work falls through to a bare `continue`. Nothing pages.
+    - `scripts/handoff-fire.sh`'s self-close preflight (CLOSE_INTEGRITY W2) computes the count
+      itself and emits `⚠ self-close: N commit(s) … are NOT landed`. **`_sc_ahead` had exactly two
+      uses in ~9,900 lines, both inside the block that computed it**, and it is written to the
+      stderr of a pane that is about to evaporate. The warning's own comment says *"it names the
+      branch so the ping can carry it"* — nothing carried it.
+  - 🚨 **THE HALF THAT WAS NOT IN THE ROW AT ALL, AND IS THE LOAD-BEARING ONE: the announce the
+    originator DOES receive asserted "Its work is committed (self-close refuses a dirty tree)".**
+    A true sentence about the wrong store, arriving at the exact moment a peer retires with unlanded
+    commits. That is how the measured incident read as a completed track — bs-footer-motion pinged
+    completion twice, self-closed cleanly, left 2 commits stranded, and only an operator screenshot
+    surfaced it. The trailer carried the SAME false equivalence to the other party, naming
+    "committed/clean" as the bar a retiring peer must meet. **One wrong idea — *committed = safe* —
+    was installed on both ends of the same handshake.** Both are fixed; the clause now rides every
+    announce path, and the unlanded fact overrides the ping verdict, because the peer's self-report
+    is precisely the channel that failed while `rev-list` is a measurement rather than a report.
+    Polarity preserved by the count itself: 0 ahead sends nothing, so an ordinary landed close is
+    exactly as quiet as before. Strictly additive — params 4-6 default to 0/empty, pinned by its own
+    legacy-3-argument case. **Row stays OPEN**: the lead-side sweep over worktrees whose session is
+    already gone — the case where no close path runs at all — remains unbuilt.
+  - **Row `f9b5ce0c5d17` (task-store prune) — CLOSED on same-moment re-derivation, not on its own
+    text.** Amortised over 20 iterations with a null control (2.247 ms): **37.3 µs/dir over 2414
+    real dirs, threshold 26,796 dirs to cost 1s — 11× headroom**, independently reproducing the
+    row's own 36 µs / ~28,000. Cited fix `8d642bca9` adjudicated **by CONTENT** (`--is-ancestor`
+    returns rc≠0 — the rebased-land case, not absence): on trunk `find_active_list` holds two `jq`
+    occurrences, one real call made ONCE before the loop and one in a comment, with both
+    per-directory loops pure-bash globs. **The "without this the fix decays again" half needed a
+    different instrument** — decay requires monotonic growth, and the count *decreased* across three
+    readings (2428 at filing → 2392 at #42 → 2414 now), which proves removal is happening. Limit
+    stated in the evidence rather than papered over: **the specific reaper was NOT identified**, and
+    the mtime floor (2026-07; none older) is consistent with removal but cannot prove it, since
+    mtime records last touch and not creation — the decreasing COUNT is what carries the claim.
+    Not filed as an operator step: with the urgency premise refuted, putting a destructive action
+    with no measured benefit on the platter is worse than closing.
+  - 🚨 **RECIPE — A MUTANT THAT LEAVES THE SUITE GREEN INDICTS YOUR STATED RATIONALE, NOT ONLY YOUR
+    COVERAGE (extends #40).** 8 mutants for 9 cases; 7 matched their predicted case set on the first
+    run and **M5 red nothing**. The mutant had applied (the anchor assert would have failed loudly).
+    The real cause was that the case's *comment* claimed an unsanitised `[ "$x" -gt 0 ]` on junk
+    "aborts under set -euo pipefail" — **it does not**: `[` returns rc 2 and a condition inside `if`
+    is errexit-EXEMPT, verified by direct probe rather than reasoned about. The case pinned a real
+    property but by a mechanism that did not exist, so nothing in the subject could break it. Fixed
+    by re-aiming the mutant at what the line actually guarantees — the sanitiser's **direction**
+    (junk must fail toward *make no claim*, never toward *assert this peer stranded work*) — and by
+    correcting the comment. **A green mutant is a question about your model of the code; a plausible
+    rationale in a test comment is as capable of being wrong as the code, and nothing else checks
+    it.** Second run: **8/8 MATCH, every one of the 9 cases credited to a site.**
+  - 🚨 **RECIPE — WHEN YOUR FIX IS "ROUTE A FACT TO ITS CONSUMER", WRITE THE WIRING CASE FIRST.** The
+    defect here was never a wrong measurement; it was a correct measurement delivered to nobody. A
+    correct function called with three arguments would have been the identical bug wearing a new
+    shape, and every behavioural case would still have passed. Two cases therefore read the
+    **shipped script** rather than the sed-extracted function, and assert the capture site precedes
+    the announce site by line number — otherwise the call reads the pre-seeded zero forever.
+    Memories: `conclusion-must-reach-the-enforcing-store`, `spec-named-mechanism-may-be-prose-only`.
+  - Gates all green (shellcheck rc 0, bats-shellcheck-lint clean at **138 changed `.bats` lines**
+    post-commit, kill-guard / pipefail-sigpipe / self-path / unattended-path / hermeticity /
+    typed-send / assert-liveness all clean). Suites run this pass: **30/30 announce-before-retire ·
+    98/98 self-close batch · 134/134 fire+payload+notify batch · 24/24 desk-invariant**, every plan
+    line seen, no skips. The land's smoke gate cut `desk-invariant.bats` (exit 124, zero `not ok`) —
+    the known non-verdict; **run directly afterwards and green at 24/24**, so it was a budget cut and
+    not evidence about the tree. `LIVE_ADDS=0` from this diff by construction — both files were
+    already tracked and symlinked.
+
 - **2026-08-19 — drain recycle #42: the row named the wrong mechanism, and the RIGHT one had been
   predicted on trunk for nine days with nothing built to see it — so a stranded lock had silently
   disabled every git maintenance run on the box for a week.** `master-fleet-footprint`
