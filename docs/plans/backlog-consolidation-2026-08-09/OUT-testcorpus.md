@@ -143,7 +143,12 @@ typed-send-lint grandfather line deleted); verify_engagement has a true wall-clo
 preserves today's effective window, with a test that can see the 40× multiplication.
 
 **Falsifier.**
-`cd /Users/chrisren/Development/claude-infrastructure && git show origin/main:scripts/payload-lint.sh | grep -q -- '--resolve' && git show origin/main:scripts/typed-send-lint.sh | grep -qv 'bin/cc-pane::drv_iterm2_send'`
+`cd /Users/chrisren/Development/claude-infrastructure && git show origin/main:scripts/payload-lint.sh | grep -q -- '--resolve' && ! git show origin/main:scripts/typed-send-lint.sh | grep -q 'bin/cc-pane::drv_iterm2_send'`
+
+⚠️ **Second conjunct was `| grep -qv …` until 2026-08-19 — vacuous, for the reason pinned at
+`docs/research/codex-probe-screen-2026-08-10/screen-mailbox-forward.md:9`: `grep -qv` exits 0 the
+moment any ONE line fails to match, so "the grandfather line is deleted" passed whether or not it
+was. `! … | grep -q` is the shape that asserts absence. Corrected in place; nothing else changed.
 
 **First move.** `bacdfc4f63ab` — replace F3's regex with a `cc-notify --resolve` call. It is the smallest
 diff, it deletes a re-implementation rather than adding a mechanism, and it is the one whose failure mode
