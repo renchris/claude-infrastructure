@@ -1,22 +1,27 @@
 ---
-status: open
+status: complete
+resolution: research complete — verdict CHANGE NOTHING in commands/handoff.md (R5 success outcome)
+findings: docs/research/handoff-high-value-capture-2026-08-19.md
 ---
 
 # /handoff — capture the high-value information a succession currently drops
 
 **Owner file:** `commands/handoff.md` (736 lines; symlinked to `~/.claude/commands/handoff.md`)
 **Origin:** reso session `579d2a59` (wt-pool-8), 2026-08-19
-**Gate:** research-first — implementation is BLOCKED until R2 is answered (operator directive)
+**Gate:** research-first — implementation was BLOCKED until R2 was answered (operator directive).
+**GATE CLEARED 2026-08-19** — R2 answered in `docs/research/handoff-high-value-capture-2026-08-19.md`.
+**W3 was NOT taken: the verdict is CHANGE NOTHING in `commands/handoff.md`**, which R5 names as a
+success outcome. The file was never opened for editing. See the status log for the full record.
 
 ---
 
 ## Phase 0 — Agent Team Orchestration
 
-| Wave | Execution locus | Why |
-|---|---|---|
-| **W1 · research** | **S** — this dispatched session, fanning research subagents and/or a Dynamic Workflow | Read-only breadth; S is the default for a dispatched phase and needs no justification |
-| **W2 · adversarial pass** | **S** — same session | The stated risk is a FALSE POSITIVE change, so the synthesis must be attacked before it is trusted |
-| **W3 · implementation** | **S** — gated on W1+W2 | Only if the evidence justifies a change. If it becomes ≥2 code-writing tasks, escalate to teammates (`Agent({name})`) per the agent-teams skill |
+| Wave | Execution locus | Why | Status |
+|---|---|---|---|
+| **W1 · research** | **S** — this dispatched session, fanning research subagents and/or a Dynamic Workflow | Read-only breadth; S is the default for a dispatched phase and needs no justification | ✅ **DONE** — 2 Dynamic Workflow rounds, 23 agents |
+| **W2 · adversarial pass** | **S** — same session | The stated risk is a FALSE POSITIVE change, so the synthesis must be attacked before it is trusted | ✅ **DONE** — 5 refuters + 1 completeness critic across both rounds; round 1's synthesis was refuted on its own headline, which is why round 2 exists |
+| **W3 · implementation** | **S** — gated on W1+W2 | Only if the evidence justifies a change. If it becomes ≥2 code-writing tasks, escalate to teammates (`Agent({name})`) per the agent-teams skill | ⛔ **NOT TAKEN — correctly.** The evidence does not justify a change; R5 names this a success outcome. `commands/handoff.md` is byte-identical |
 
 **Dependency graph:** W1 → W2 → W3. W3 is not merely last, it is CONDITIONAL — "change nothing"
 is a legitimate terminal state (see R5).
@@ -156,3 +161,58 @@ default N=10 (band 8-12), no parallelism cap, 15-20% adversarial floor.
 - **2026-08-19 · opened** by reso session `579d2a59` (wt-pool-8) at the operator's direction, after a
   `/handoff` exchange in which the firing session made a false claim about context loss (the URL was
   in the brief) but a real, separate loss was then found and persisted.
+
+- **2026-08-19 · RESEARCH COMPLETE — verdict: CHANGE NOTHING in `commands/handoff.md`.**
+  Findings: **`docs/research/handoff-high-value-capture-2026-08-19.md`**. Two Dynamic Workflow rounds,
+  23 agents, ~4.6M subagent tokens, 966 tool calls, read-only on tracked files throughout —
+  `commands/handoff.md` was never opened for editing, per the R3 gate.
+
+  **Method actually run** (R3 satisfied): round 1 = 9 finders over orthogonal axes → synthesis →
+  3 adversarial refuters + 1 completeness critic. All four returned **NEEDS-REVISION**: the
+  recommendation survived, several of its supports did not, and the critic named five unadjudicated
+  gaps. Round 2 = 6 gap-closers → re-based synthesis → 2 refuters (**SOUND** / **NEEDS-REVISION**).
+  Six further corrections were then applied by the lead in place, each marked inline.
+
+  **R2 answers, in brief** (full evidence + citations in the findings doc):
+  - **R2.1** — the machinery-findings gap is **not** what the plan hypothesised. The class *is*
+    carried by bridges (84% of succession bridges; 18/18 hand-adjudicated; 3 chains accreting).
+    Measured re-derivation is real but cheap: 9 tool calls / 6 sessions / 8 days / **0** operator
+    round-trips. **R1's `n=1` premise STANDS** — round 1 claimed the finding was already durable 13
+    days earlier and that was refuted by all three refuters and settled by git in round 2 (the 08-19
+    failure mode is emitted by the 08-06 fix's *own* code, so it is chronologically impossible as
+    prior art).
+  - **R2.2** — **reflex, not template.** The reflex already runs at a 22.5-min median capture
+    latency, fires 658× vs the template's 183×, and a template-shaped remedy already shipped 31 days
+    ago at the arm step (`5d5e734`). A section here would be a second, weaker copy.
+  - **R2.3** — the plan's cost premise is **quantitatively wrong** and does not carry the verdict:
+    the file reaches 3.9% of sessions (149 injections / 40 days), ~$0.61–1.72 per line-year.
+  - **R2.4** — fifteen failure modes, each with a worked example, extending R4's five.
+  - **R2.5** — every class is already carried elsewhere; the payoff class is the *dominant* content
+    of this repo's memory system. Pointer, not new section.
+
+  **What the verdict rests on** (three attacked-and-surviving supports; a fourth was demoted
+  post-review): the class is already carried · **no reachable site beats the existing convention**
+  (best candidate reaches 15.6% of recycle authors and **0 of 41** identifiable firing sessions) ·
+  prose-only rules here have no runner and a one-way ratchet behind them (32 commits, 922 added /
+  186 deleted, **no commit has ever reduced this file**).
+
+  **R5 bullet 3 is not owed** — no change means no negative control for this file. Controls were
+  built and **RUN, failing pre-fix**, for three of the *elsewhere* levers (F1, F2, F5); two more are
+  specified-but-not-run and labelled as such rather than claimed.
+
+  **Out of scope but real — filed, not done:** F1–F10 in §5 of the findings doc. The two most
+  actionable: **F5** (`bin/cc-await-ping`'s WAKE-PATH-DOWN notice names a decision and never names
+  the check — **confirmed LIVE**, not closed by the sibling fix, and observed first-hand by the
+  session that ran this wave) and **F10** (the only site where a brief-content check could reach
+  every fire path is `scripts/handoff-fire.sh`, not this file — filed with three gates it must clear
+  first, explicitly **not** recommended).
+
+  **Known residual bound, carried in the verdict rather than a footnote:** everything is measured on
+  the `--recycle` arm — 96 of 694 succession-shaped events (13.8%). The new-pane fired-peer arm is
+  structurally unmeasurable from today's instruments (open item O1). Eleven open items are recorded
+  with what would settle each.
+
+  ⚠️ **The raw evidence base is not durable.** Round-1 artifacts live in a reboot-bounded `/tmp`
+  store measured decaying at 23.6%/9 days, and `handoffs.jsonl` is a *ring buffer* that deletes rows.
+  The findings doc §2.2 dates every short-half-life fact with its decay mode and re-derivation
+  command. **Re-derive those numbers; do not quote them.**
