@@ -164,6 +164,12 @@ EOF
   # ── T-P3-4 fired-peer markers: hermetic dir, EMPTY by default so every pre-existing test runs
   #    unmarked (⇒ operator ⇒ never promoted). Tests opt in with mark_fired. ──
   export CC_FIRED_DIR="$D/fired"
+  # HERMETICITY, not tidiness: the uncommitted-peer belt reads sender-side send records, and the
+  # default is the OPERATOR'S LIVE ~/.claude/mailbox. Unset, a fixture pane id could collide with a
+  # real one and the suite's verdict would depend on the desk's message history. Pointed at $D and
+  # left EMPTY by default, so `.sent` is ABSENT unless a test creates it — which is itself the
+  # belt's "no store ⇒ cannot tell" arm, exercised explicitly below.
+  export CC_MAILBOX_DIR="$D/mailbox"
   # THE KILL SWITCH IS AMBIENT BY DESIGN (P3, 2026-08-15) — an operator who has stopped the reaper
   # has it exported in the shell they run this suite from, and every test below would then pass
   # VACUOUSLY against a program that exits at its own line 100. Unset it so each test states its
@@ -2036,4 +2042,203 @@ CLEOF
   run grep -c 'STRANDED WORK' "$D/notify-calls"
   [ "$status" -ne 0 ]
   grep -q 'is coordination-hang' "$D/notify-calls" || false   # the ordinary surface still fires
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# UNCOMMITTED-PEER BELT (backlog 7c22e9b43956 · bin/cc-reaper `session_ever_committed` /
+# `peer_ping_verdict`) — `ahead=0` conflates "committed everything and landed it" with "NEVER
+# COMMITTED ANYTHING", and the DEFER guard that is meant to be the backstop can only fire for a
+# session that HOLDS COMMITS. Real death: pane B2D1CE68, 2026-07-30T04:39Z
+# (docs/research/reaped-uncommitted-peer-2026-08-19.md).
+#
+# RED-PROOF, STATED HONESTLY — MEASURED, not predicted. Run against pristine origin/main (637eca308)
+# carrying this file, SIX of the ten fail, and they fail for three DIFFERENT reasons, which is worth
+# separating because only the first kind is evidence about the defect:
+#   B1, B2   the falsifier proper — pre-fix the fixture is REAPED. This is the item.
+#   B4, B6   their BEHAVIOURAL half (still reaped) is a preservation and is green pre-fix; they red
+#            only on the new `uncommitted-belt pass|abstain` log assertion. Kept deliberately: it is
+#            what makes the two abstain paths positively OBSERVED rather than inferred from "well,
+#            it still reaped".
+#   B9, B10  red because the subject functions do not exist pre-fix. True of any new unit case, and
+#            not evidence about the defect either.
+# The remaining four (B3, B5, B7, B8) assert the reap STILL happens, so they are green pre-fix BY
+# CONSTRUCTION and prove nothing on their own — each is credited by a mutant instead.
+# B1+B7 are a DISCRIMINATOR PAIR on ONE fixture: belt on ⇒ keep, kill-switch off ⇒ reap.
+#
+# MUTANT MAP (8 mutants, 8 applied, 8 reddened ≥1 case, 0 green, 0 non-verdicts; subject restored
+# byte-identical). Every case is credited by a pre-fix red, a mutant, or both:
+#   M1 never-committed condition always true ......... B3
+#   M2 a matching send record cannot be recognised ... B4 B10
+#   M3 an UNARMED back-channel defaulted to a real one B5
+#   M4 the legacy-record arm removed ................. B6
+#   M5 the missing-store denominator check removed ... B8 B10
+#   M6 `commit` dropped from the verb list ........... B3 B9
+#   M7 the operator kill-switch made inert ........... B7
+#   M8 the durable refusal log line dropped .......... B2
+# M3 was PREDICTED to red B4 as well and did not: it defaults only an EMPTY address, and B4 arms a
+# real one, so it is a no-op there. Running the mutant is what said so.
+#
+# `mkworktree` is exactly the falsifier's shape already: `git worktree add -b wt-branch` creates a
+# branch with ZERO commits of its own, so ahead=0 and the reflog holds none.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+BPANE="$WPANE"
+BNB="claude-infrastructure-102"
+
+# a fired-peer stamp WITH a back-channel armed — the narrowing the belt requires. mark_fired writes
+# no notifyBack, so every pre-existing test in this file stays outside the belt by construction.
+mark_fired_nb() { # [pane] [notify-back]
+  mkdir -p "$D/fired"; local iso; iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true,"notifyBack":"%s"}\n' \
+    "${1:-$BPANE}" "$iso" "${2:-$BNB}" > "$D/fired/${1:-$BPANE}.json"
+}
+sent_store()  { mkdir -p "$D/mailbox/.sent"; }                     # store PRESENT, this pane silent
+sent_record() { sent_store; printf '%s %s\n' "2026-08-19T10:00:00-0700" "${2:-$BNB}" > "$D/mailbox/.sent/${1:-$BPANE}"; }
+belt_refused() { echo "$output" | grep -q 'uncommitted-peer belt'; }
+
+# ANTI-VACUITY: assert the fixture really is the state under test before asserting anything about
+# the verdict. A worktree that silently gained a commit would make every case below pass over the
+# wrong population.
+assert_never_committed() { # <worktree>
+  [ "$(git -C "$1" rev-list --count origin/main..HEAD)" = 0 ] || false
+  run grep -cE "$(printf '\t')(commit|cherry-pick|rebase|merge|am|revert)" \
+      "$(git -C "$1" rev-parse --git-dir)/logs/HEAD"
+  [ "$output" = 0 ] || false
+}
+
+@test "B1 FALSIFIER: 0-commit fired peer that never announced is NOT reaped (uncommitted-peer belt)" {
+  mkworktree "$D/bmain1" "$D/.worktrees/wt-b1"
+  assert_never_committed "$D/.worktrees/wt-b1"
+  mark_fired_nb; sent_store                      # store present, no record for THIS pane ⇒ definite silence
+  mock_classify finished-teammate "$D/.worktrees/wt-b1" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  belt_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false                   # the pane SURVIVES — this is the whole item
+  [ -d "$D/.worktrees/wt-b1" ] || false          # and so does its worktree
+}
+
+@test "B2 the refusal names its reason in the durable log, not only on stdout" {
+  mkworktree "$D/bmain2" "$D/.worktrees/wt-b2"
+  mark_fired_nb; sent_store
+  mock_classify finished-teammate "$D/.worktrees/wt-b2" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  grep -q 'uncommitted-belt refuse' "$D/reaper.log" || false
+  grep -q 'inferred from silence' "$D/reaper.log" || false
+}
+
+@test "B3 a peer that DID commit is reaped exactly as before (belt must not over-fire)" {
+  # GREEN PRE-FIX BY CONSTRUCTION (a preservation). Redded by mutant M1.
+  mkworktree "$D/bmain3" "$D/.worktrees/wt-b3"
+  echo x > "$D/.worktrees/wt-b3/n"; git -C "$D/.worktrees/wt-b3" add n
+  git -C "$D/.worktrees/wt-b3" commit -qm b3
+  git -C "$D/bmain3" update-ref refs/remotes/origin/main "$(git -C "$D/.worktrees/wt-b3" rev-parse HEAD)"
+  mark_fired_nb; sent_store
+  mock_classify finished-teammate "$D/.worktrees/wt-b3" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "B4 a 0-commit peer that DID announce to its armed address is reaped (positive done-evidence)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M2.
+  mkworktree "$D/bmain4" "$D/.worktrees/wt-b4"
+  mark_fired_nb; sent_record "$BPANE" "$BNB"
+  mock_classify finished-teammate "$D/.worktrees/wt-b4" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+  grep -q 'uncommitted-belt pass' "$D/reaper.log" || false
+}
+
+@test "B5 no back-channel was armed ⇒ silence was never promised ⇒ belt stays quiet" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M3. This is what keeps every pre-existing
+  # mark_fired test in this file outside the belt.
+  mkworktree "$D/bmain5" "$D/.worktrees/wt-b5"
+  mark_fired; sent_store                          # stamp WITHOUT notifyBack
+  mock_classify finished-teammate "$D/.worktrees/wt-b5" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "B6 a LEGACY send record cannot answer, so the belt abstains rather than convicting" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M4. A pre-both-spellings line holds only the
+  # RESOLVED key, so a no-match over it is cannot-tell — calling it silence would convict on the
+  # store's own history.
+  mkworktree "$D/bmain6" "$D/.worktrees/wt-b6"
+  mark_fired_nb; sent_store
+  printf '%s %s\n' "2026-08-10T02:58:03-0700" "136" > "$D/mailbox/.sent/$BPANE"   # NF=2 ⇒ legacy
+  mock_classify finished-teammate "$D/.worktrees/wt-b6" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+  grep -q 'uncommitted-belt abstain' "$D/reaper.log" || false
+}
+
+@test "B7 kill-switch CC_REAPER_UNCOMMITTED_BELT=0 reaps B1's exact fixture (discriminator pair)" {
+  mkworktree "$D/bmain7" "$D/.worktrees/wt-b7"
+  mark_fired_nb; sent_store
+  export CC_REAPER_UNCOMMITTED_BELT=0
+  mock_classify finished-teammate "$D/.worktrees/wt-b7" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "B8 NO .sent store at all ⇒ cannot-tell for everyone ⇒ the belt does not fire fleet-wide" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M5. Policing the denominator: a missing store is
+  # a blind instrument, not a fleet of silent peers (memory: lookup-miss-is-not-absence).
+  mkworktree "$D/bmain8" "$D/.worktrees/wt-b8"
+  mark_fired_nb                                   # note: NO sent_store — $D/mailbox/.sent absent
+  [ ! -d "$D/mailbox/.sent" ] || false
+  mock_classify finished-teammate "$D/.worktrees/wt-b8" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "B9 session_ever_committed is THREE-valued: committed=0 never=1 cannot-tell=2" {
+  # Red pre-fix: the function does not exist. Extract-and-run rather than sourcing the sweep.
+  local fn="$D/sec.sh"
+  sed -n '/^session_ever_committed() {/,/^}/p' "$R" > "$fn"
+  grep -q 'logs/HEAD' "$fn" || false              # anti-vacuity: the extract really is the subject
+  grep -q 'cherry-pick' "$fn" || false
+  mkworktree "$D/bmain9" "$D/.worktrees/wt-b9"
+  printf 'GIT_BIN=git\n' | cat - "$fn" > "$fn.run"
+  echo 'session_ever_committed "$1"; echo "rc=$?"' >> "$fn.run"
+  run bash "$fn.run" "$D/.worktrees/wt-b9"
+  [ "$output" = "rc=1" ] || false                 # fresh worktree: never committed
+  echo y > "$D/.worktrees/wt-b9/m"; git -C "$D/.worktrees/wt-b9" add m
+  git -C "$D/.worktrees/wt-b9" commit -qm b9
+  run bash "$fn.run" "$D/.worktrees/wt-b9"
+  [ "$output" = "rc=0" ] || false                 # now it has committed
+  mkdir -p "$D/not-a-repo"
+  run bash "$fn.run" "$D/not-a-repo"
+  [ "$output" = "rc=2" ] || false                 # not a repo: cannot tell, NOT "never committed"
+}
+
+@test "B10 peer_ping_verdict distinguishes no-store(2) from no-record(1) from match(0)" {
+  # Red pre-fix: the function does not exist. The 2-vs-1 split is the anti-flood invariant.
+  local fn="$D/ppv.sh"
+  sed -n '/^peer_ping_verdict() {/,/^}/p' "$R" > "$fn"
+  grep -q 'MAILBOX_DIR' "$fn" || false            # anti-vacuity
+  grep -q 'legacy' "$fn" || false
+  printf 'MAILBOX_DIR="%s"\n' "$D/mailbox" | cat - "$fn" > "$fn.run"
+  echo 'peer_ping_verdict "$1" "$2"; echo "rc=$?"' >> "$fn.run"
+  run bash "$fn.run" P1 "$BNB"
+  [ "$output" = "rc=2" ] || false                 # no store
+  sent_store
+  run bash "$fn.run" P1 "$BNB"
+  [ "$output" = "rc=1" ] || false                 # store present, this pane never announced
+  printf '%s %s %s\n' "2026-08-19T13:05:08-0700" "102" "$BNB" > "$D/mailbox/.sent/P1"
+  run bash "$fn.run" P1 "$BNB"
+  [ "$output" = "rc=0" ] || false                 # as-given spelling matches field 3
 }

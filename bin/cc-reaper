@@ -247,6 +247,11 @@ AUTOREAP_FIRED="${CC_REAPER_AUTOREAP_FIRED:-1}"          # operator kill-switch:
 # wholesale and would clobber it.
 FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"
 FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"        # stamp tenancy: a fired worker boots within this of firedAt (mirrors cc-classify); a later tenant is a stale stamp (2026-07-24)
+# Sender-side send records (bin/cc-notify `_record_send`): one line per SUCCESSFUL enqueue, under
+# the SENDER's own key. Same env name cc-notify and handoff-fire use, so the three agree by
+# construction rather than by coincidence. Read-only here — the reaper never writes this store.
+MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+UNCOMMITTED_BELT="${CC_REAPER_UNCOMMITTED_BELT:-1}"    # operator kill-switch: 0 = pre-2026-08-19 behaviour
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
@@ -849,6 +854,83 @@ work_landed() {
   return 1
 }
 
+# ── WHAT `ahead=0` CONFLATES, AND THE TWO ORACLES THAT SEPARATE IT (backlog 7c22e9b43956) ────────
+# work_landed's fast path answers "is anything unlanded?" with a COUNT, and `ahead=0` is true of two
+# OPPOSITE states: "committed everything and landed it" and "NEVER COMMITTED ANYTHING". For the
+# second, ahead=0 is not evidence of doneness — it IS the silence, which makes the reap's own audit
+# string at the ACT step ("positive done-evidence, not inferred from silence") false exactly when it
+# is relied upon. Measured on a real death: pane B2D1CE68, 2026-07-30T04:39Z, REAPed mid-Phase-1
+# while blocked on its own background task, its whole work product only in its transcript — while
+# THREE sibling finished-teammate sessions in the SAME sweep were DEFERred by the `[ "$landed" !=
+# yes ]` guard, each because it HELD COMMITS. The protection was inverted with respect to the loss:
+# weakest where the loss is total, strongest where the loss is smallest and recoverable.
+# Forensics: docs/research/reaped-uncommitted-peer-2026-08-19.md.
+#
+# EVERY UNCERTAIN ANSWER IS 2 ("cannot tell") AND EVERY CALLER TREATS 2 AS "PROCEED AS BEFORE". That
+# is the whole failure-direction design: a missed detection costs one extra operator page, an
+# over-eager one would cost a silent reap, and this belt exists because a silent reap already
+# happened once.
+
+# THE DISCRIMINATOR IS THE WORKTREE'S OWN HEAD REFLOG, never the ahead-count. Measured on this box:
+# a worktree holding 173 commits reads ahead=0 once landed AND carries 173 reflog `commit` entries;
+# a freshly created worktree reads ahead=0 and carries none. Same ahead, opposite reflog.
+# KNOWN AND DELIBERATE LIMITS, both failing toward the pre-existing behaviour (reap):
+#   · a SHARED checkout's reflog is every session's, so it reads "committed" for everyone;
+#   · a POOLED worktree re-used across sessions inherits its predecessor's entries.
+# Neither can be fixed from a per-cwd oracle, and neither makes the belt worse than the status quo.
+# Under-matching the commit-producing verbs below yields 1 ("never committed") ⇒ an extra page;
+# over-matching yields 0 ⇒ today's silent reap. So the list is deliberately short, not exhaustive.
+session_ever_committed() { # <cwd> → 0 committed HERE · 1 NEVER committed here · 2 cannot tell
+  local cwd="${1:-}" gd rl n
+  [ -n "$cwd" ] && [ -d "$cwd" ] || return 2
+  gd="$("$GIT_BIN" -C "$cwd" rev-parse --git-dir 2>/dev/null)" || return 2
+  [ -n "$gd" ] || return 2
+  case "$gd" in /*) rl="$gd/logs/HEAD" ;; *) rl="$cwd/$gd/logs/HEAD" ;; esac   # rev-parse may answer relatively
+  [ -f "$rl" ] || return 2                       # reflog off/absent ⇒ cannot tell, NEVER "never committed"
+  # `grep -c` PRINTS 0 and EXITS 1 on no-match, so `$(grep -c … || echo 0)` yields the two-line
+  # string "0\n0" and every numeric test downstream errors out. No `||` arm — the count is the answer.
+  n="$(grep -cE "$(printf '\t')(commit|cherry-pick|rebase|merge|am|revert)" "$rl" 2>/dev/null)"
+  case "${n:-}" in ''|*[!0-9]*) return 2 ;; esac
+  [ "$n" -gt 0 ] && return 0
+  return 1
+}
+
+peer_notify_back() { # <pane> → the back-channel ARMED AT FIRE TIME, empty when none was
+  local s="$FIRED_DIR/${1:-}.json"
+  [ -n "${1:-}" ] && [ -s "$s" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r '.notifyBack // empty' "$s" 2>/dev/null || true
+}
+
+# Did this pane ever announce to the address it was fired with? A SECOND, INDEPENDENT implementation
+# of the read in handoff-fire.sh's sc_announce_before_retire — deliberately, for the same reason the
+# 2026-07-24 belt re-derives cc-classify's verdict: that one runs only on the SELF-CLOSE path, and
+# the reaper's entire population is the sessions for which self-close never ran. Sharing the code
+# would not have shared the reach.
+#   MATCH FIELDS 2..NF, never field 1 (the timestamp), and compare WHOLE fields: the record carries
+#   the resolved key AND the as-given spelling, because recording only the resolved one made the
+#   store unanswerable for the one question it exists to answer (cc-notify `_record_send` header).
+#   A record whose every line has NF<=2 predates that fix and cannot answer either way ⇒ 2.
+peer_ping_verdict() { # <pane> <armed-address> → 0 announced · 1 definitely NOT announced · 2 cannot tell
+  local pane="${1:-}" nb="${2:-}" f rc=0
+  [ -n "$pane" ] && [ -n "$nb" ] || return 2
+  # POLICE THE DENOMINATOR: with no store at all, EVERY pane would read "never announced" and the
+  # belt would fire on the whole fleet. A missing store is a blind instrument, not a fleet of silent
+  # peers (memory: lookup-miss-is-not-absence, positive-control-the-denominator).
+  [ -d "$MAILBOX_DIR/.sent" ] || return 2
+  f="$MAILBOX_DIR/.sent/$pane"
+  # …but with the store PRESENT, no file under this pane's key IS the definite negative: cc-notify
+  # appends one line per successful enqueue, so a pane that ever announced has a file here.
+  [ -e "$f" ] || return 1
+  { [ -s "$f" ] && [ -r "$f" ]; } || return 2
+  awk -v want="$nb" '
+    { for (i = 2; i <= NF; i++) if ($i == want) { hit = 1; exit } }
+    NF <= 2 { legacy = 1 }
+    END { exit(hit ? 0 : (legacy ? 3 : 1)) }
+  ' "$f" || rc=$?
+  case "$rc" in 0) return 0 ;; 1) return 1 ;; 3) return 2 ;; *) return 2 ;; esac
+}
+
 checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LAST (proven plumbing)
   local cwd="$1" name="$2" sid="$3"
   [ -x "$CHECKPOINT_BIN" ] || { log "checkpoint: $CHECKPOINT_BIN not executable — SKIP (no snapshot)"; return 1; }
@@ -1347,6 +1429,47 @@ sweep() {
       surfaced_keys="$surfaced_keys$bkey "
       handle_surface "$reap" "$bkey" "$name" "$cause" "$pane" "unstamped operator pane (no fired-peer marker) — auto-reap refused; confirm-close if truly done"
       continue
+    fi
+    # ── UNCOMMITTED-PEER BELT (2026-08-19, backlog 7c22e9b43956 — the B2D1CE68 death) ───────────
+    # The belt directly above answers "is this pane allowed to be auto-reaped at all?". This one
+    # answers the question the `[ "$landed" != yes ]` DEFER guard only LOOKS like it answers: "is
+    # there positive evidence this session finished?" For a session that never committed, `ahead=0`
+    # is silence on the git channel, so the only channel left is the one the fire contract armed —
+    # its completion ping. Both silent ⇒ nothing has said this session is done, and the reap would
+    # rest on inference. SURFACE it (the pane lives, the desk is paged, damped) rather than reap.
+    #
+    # NARROWED TO WHERE A PING WAS ACTUALLY PROMISED. A peer fired WITHOUT --notify-back never owed
+    # an announcement, so its silence carries no information and this belt must stay quiet over it —
+    # the same polarity rule sc_announce_before_retire applies to itself, and what keeps the belt's
+    # firing rate a signal instead of a tax. Measured before wiring: 144 of 938 fired stamps on this
+    # box carry notifyBack, and of 30 recently-reaped panes 14 had a send record and 16 did not, so
+    # this reads BOTH ways on the live population rather than always-on or always-off.
+    #
+    # THREE-VALUED THROUGHOUT, AND ONLY THE DEFINITE NEGATIVES COMBINE. Anything either oracle
+    # cannot answer proceeds exactly as before, loudly enough to be found in the log.
+    if [ "$UNCOMMITTED_BELT" = 1 ] && [[ "$cause" =~ ^(finished|finished-teammate)$ ]]; then
+      local ub_nb ub_c=0 ub_p=0
+      ub_nb="$(peer_notify_back "$pane")"
+      if [ -n "$ub_nb" ]; then
+        session_ever_committed "$cwd" || ub_c=$?
+        if [ "$ub_c" = 1 ]; then
+          peer_ping_verdict "$pane" "$ub_nb" || ub_p=$?
+          case "$ub_p" in
+            1)
+              say "  keep   $name [$cause] — NEVER COMMITTED here and never announced to its armed back-channel ($ub_nb): 'landed' is 0-ahead-by-silence, not done-evidence → auto-reap refused (uncommitted-peer belt)"
+              log "uncommitted-belt refuse $name [$cause] pane=$pane cwd=$cwd notifyBack=$ub_nb: 0 commits in this worktree's reflog AND no send record — reap would be inferred from silence"
+              surfaced=$((surfaced+1))
+              local ubkey; ubkey="$(sanitize_key "${pane:-$name}")"
+              surfaced_keys="$surfaced_keys$ubkey "
+              handle_surface "$reap" "$ubkey" "$name" "$cause" "$pane" "never committed in this worktree AND never pinged $ub_nb — auto-reap refused; its work (if any) is in its transcript only. Confirm-close if truly done"
+              continue ;;
+            0) log "uncommitted-belt pass $name pane=$pane: 0 commits but DID announce to $ub_nb — positive done-evidence, reap allowed" ;;
+            *) log "uncommitted-belt abstain $name pane=$pane: 0 commits, ping verdict UNKNOWN for $ub_nb (no store / legacy or unreadable record) — proceeding as before, NOT treating unknown as silence" ;;
+          esac
+        elif [ "$ub_c" = 2 ]; then
+          log "uncommitted-belt abstain $name pane=$pane: cannot tell whether this cwd ever committed ($cwd) — proceeding as before"
+        fi
+      fi
     fi
     # ── Gap-2 second legs (2026-07-25): the belt above is the independent leg for finished/
     #    finished-teammate. coordination-abandoned and handed-off-lead had NONE — they rested on
