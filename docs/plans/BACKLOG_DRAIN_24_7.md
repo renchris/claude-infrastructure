@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #32: both rows were a defect whose FIX ALREADY EXISTED and could not
+  reach the class that needed it — once as a blind ratchet, once as a proof living in the wrong
+  file. `master-fleet-footprint` 22 open / 4 blocked (4 operator-gated, `source: needs`; 0
+  cloud-venue, 0 claimed). filed 0 / closed 2.** Lands `f223b2c5c` (class-B pane-id preference) and
+  `d20134339` (alias-trail tenancy gate), both content-verified on origin/main.
+  - **Date checked FIRST.** 2026-08-18 — `master-session-lifecycle`'s `62363cac1e39` (efficacy
+    re-census, due **2026-08-24**) still **not drainable**. #33 must check again; on or after
+    2026-08-24 it outranks fleet-footprint.
+  - **Property re-measured, not inherited: 24 open at intake, 24/24 `venuePlan=local` AND
+    `project=claude-infrastructure`.** 4 blocked, all `source: needs`. No stale claim.
+  - **Built + closed `0f796daa0c76` — the pane-id rename's OWN ratchet was structurally blind to the
+    class it needed to cover.** `tests/cc-pane.bats` already enforced "no production file reads a
+    BARE `$ITERM_SESSION_ID`" and had been green since it first fired. It greps the SHELL spelling
+    `${ITERM_SESSION_ID:-}` — a process reading its OWN id. A disjoint class reads ANOTHER pid's
+    pane id out of a `ps eww` blob, where the key is a STRING (`grep '^ITERM_SESSION_ID='`,
+    `env_val "$blob" ITERM_SESSION_ID`, `index($i,"ITERM_SESSION_ID=")`). None contains that
+    expansion, so five un-migrated sites sat behind a green gate. Extended the ratchet to class B.
+  - **Three corrections to that row, all landed in the commit body.** (1) The population is **5**
+    in-track sites, not 4 — `bin/cc-teardown`'s `pane_occupants()` was unnamed, and that file
+    already preferred CC_PANE_ID for its OWN id at :148 while the oracle reading OTHER processes did
+    not. (2) A **6th** genuine class-B site exists at `scripts/handoff-fire.sh:3277`, excluded BY
+    CONSTRUCTION on the class-3 exemption list the original ratchet already carries. (3) The obvious
+    remedy — widening the grep to `^(CC_PANE_ID|ITERM_SESSION_ID)=` — is wrong **twice**: it matches
+    EITHER key (a stale inherited iTerm id beside a fresh CC_PANE_ID resolves the pid to a pane it
+    does not occupy), and it would have been **INERT anyway**, because CC_PANE_ID accepts the BARE
+    uuid, on which the existing `${line##*:}` yields `CC_PANE_ID=<uuid>` and every downstream UUID
+    check rejects it. **Stripping `KEY=` BEFORE `##*:` is the load-bearing half.**
+  - **Built + closed `66ec1b04f050` — the alias trail was the THIRD pane→session store and the only
+    ungated one.** The same nested-`claude` hazard was gated on the registry WRITE side
+    (`session-register.sh:126-165`, 2026-08-08) and the REMOVE side (`session-deregister.sh:12-32`,
+    2026-08-05). Both turn on `pid_is_strict_ancestor`, defined INSIDE `session-register.sh` and on
+    no path `hooks/lib/mailbox-pending.sh` can see — so the store written on EVERY boundary, rather
+    than only at SessionStart, had no gate at all.
+  - **The row's own precondition, established before fixing as it instructed.** "Does any resolver
+    read the TIP?" — `mailbox_alias_of()` does and would MISDELIVER, but has **ZERO production
+    callers**, so that harm does not exist. `mailbox_session_is_current()` does and IS live: it is
+    the liveness proxy guarding pull-adoption. So the row's reassurance *"self-heals at the parent's
+    next boundary"* is true of the TIP and **FALSE of the TRAIL** — which is append-only, and
+    `mailbox_adoptable_predecessors` keeps only the 3 most recent entries, so every nested write
+    permanently consumes an adoption slot and pushes a real predecessor off the end. Its mail is
+    then never adopted, silently. (Memory: `reassurance-clause-is-the-untested-half`.)
+  - 🚨 **A RED-PROOF CAME BACK 5/5 GREEN AND WAS VACUOUS — the sharpest lesson of this pass, because
+    the failure mode is invisible.** Run against a pristine `origin/main` worktree, the tenancy cases
+    all reported `ok`. They had not passed: the fixture called `_mbx_claude_pid`, which does not
+    exist pre-fix, so it returned empty, the cases hit their `skip` guard, **and bats renders a skip
+    as `ok`**. A control that could not fail read exactly like one that passed. **A red-proof fixture
+    must never call into the subject, and a `skip` inside one is how it goes vacuous** — both guards
+    are now hard failures. Generalises `verification-harness-vacuous-pass-traps`: the trap here was
+    not a shell quirk but the *harness's own rendering* of abstention as success.
+  - **Mutants, one per check — and 2 of 5 answers were NOT the expected ones.** Dropping the call
+    site / the ancestry walk / the kill switch each reds exactly one named case. Dropping
+    `kill -0 "$inc"` and dropping the self-row early return red **NOTHING**: a dead pid is not in
+    our ancestor chain either, and the walk starts at our claude's PARENT so our own pid can never
+    match. Both are fork-saving fast paths, **not** the safety property — kept, and the code now
+    says which is which, because a reader who believes a fast path is a guard will not dare touch
+    it. A **live-non-ancestor (pid-reuse)** case was ADDED as a result: until it existed, nothing
+    credited the ancestry check, making it indistinguishable from decoration.
+  - **Teammates 0 / Explore 0** — both rows were pre-surveyed by #31's brief or re-derived directly;
+    a fresh fan-out would have cost more than the derivation. Recycled at **~32% fill**, deliberately
+    early, so #33 inherits a full window for `4b9d5e93b40a` / `5d1b5dd9b3db` (below).
+  - **Measured for #33, so it need not re-derive:** `4b9d5e93b40a` (headless sessions never register)
+    is **LIVE** — `hooks/session-register.sh:101-103` returns 0 on an empty/non-hex pane, writing no
+    row; its falsifier `grep -q headless hooks/session-register.sh` finds **0** hits. But its remedy
+    is the sibling row `5d1b5dd9b3db`, the **38 KB** headless-substrate spec (15+8 edits, 17 tests,
+    `docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md`). They are a
+    defect/remedy PAIR and the claim gate allows only one at a time. **Do not split it:** landing the
+    writer without the reader's glob and the deregister path makes headless rows unreapable orphans.
+    Give it a full window.
+
 - **2026-08-18 — drain recycle #31: both rows were already SOLVED somewhere in the tree and neither
   solution could be reached from the place that needed it. `master-fleet-footprint` 24 open /
   4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed). filed 0 / closed 2.**
