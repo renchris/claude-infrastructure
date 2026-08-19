@@ -252,6 +252,12 @@ FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"        # stamp tenancy: a fired 
 # construction rather than by coincidence. Read-only here — the reaper never writes this store.
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
 UNCOMMITTED_BELT="${CC_REAPER_UNCOMMITTED_BELT:-1}"    # operator kill-switch: 0 = pre-2026-08-19 behaviour
+# Leg 3's silence cap. NOT a liveness proxy — it BOUNDS a positive in-flight claim so a corpse cannot
+# refuse forever, and it can only make the leg abstain (see session_subagent_inflight). 900s sits ~3x
+# above the measured p99.9 (306s) of inter-record gaps inside subagent transcripts that ran to
+# completion; only 17 of 59,266 measured gaps exceed it.
+INFLIGHT_MAX_SILENCE_S="${CC_REAPER_INFLIGHT_MAX_SILENCE_S:-900}"
+INFLIGHT_BELT="${CC_REAPER_INFLIGHT_BELT:-1}"          # operator kill-switch for leg 3 alone
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
@@ -789,6 +795,17 @@ find_transcript(){ # <sid> → its .jsonl path (first match across the account r
 # Gap-3: the reaper's wall-clock. A file seam (CC_REAPER_NOW_FILE) lets a test advance it across the
 # sweep deterministically (durable product, not an mtime); in production it is just `date +%s`.
 reaper_now(){ if [ -n "${CC_REAPER_NOW_FILE:-}" ] && [ -r "$CC_REAPER_NOW_FILE" ]; then cat "$CC_REAPER_NOW_FILE" 2>/dev/null; else date +%s; fi; }
+# mtime in epoch seconds — BSD first (this is a macOS-only janitor), GNU as the fallback, and a
+# non-zero return rather than a 0 on failure: a caller comparing timestamps must be able to tell
+# "cannot read" from "the epoch", or an unreadable file reads as infinitely stale. Mirrors the
+# stat idiom already used for the lockdir age.
+file_mtime_r(){ # <path> → epoch seconds | empty+1
+  local p="${1:-}" m
+  [ -n "$p" ] || return 1
+  m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null)" || return 1
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$m"
+}
 clear_fired_marker(){ # <paneUUID> — the pane is gone; drop its marker so the dir cannot grow forever
   local pane="${1:-}"
   [ -n "$pane" ] || return 0
@@ -929,6 +946,87 @@ peer_ping_verdict() { # <pane> <armed-address> → 0 announced · 1 definitely N
     END { exit(hit ? 0 : (legacy ? 3 : 1)) }
   ' "$f" || rc=$?
   case "$rc" in 0) return 0 ;; 1) return 1 ;; 3) return 2 ;; *) return 2 ;; esac
+}
+
+# ── THE THIRD CHANNEL: POSITIVE EVIDENCE OF IN-FLIGHT WORK (backlog 7c22e9b43956, leg 3) ─────────
+# Leg 2 above is deliberately narrowed to peers that OWED an announcement (a --notify-back was armed
+# at fire time). A peer fired WITHOUT one never owed anything, so its silence carries no information,
+# and widening leg 2 over it would be the exact polarity error sc_announce_before_retire avoids —
+# reading "said nothing" as "did nothing". Measured cost of getting that wrong: the reaper's log
+# holds 618 REAP lines over 173 distinct panes, and a belt firing across all of them re-creates the
+# confirm-close pile-up the 2026-07-20 work_landed relaxation exists to undo.
+#
+# So this leg reads no silence at all. It asks the opposite question — is there POSITIVE evidence
+# that this session still has work in flight? — on a channel that exists whether or not a ping was
+# ever promised: the session's own Agent-tool subagents. A subagent runs IN-PROCESS, so tearing the
+# pane down SIGKILLs it mid-run with its deliverable unwritten and nothing observes the loss. That is
+# the same loss scripts/handoff-fire.sh subagent_gate refuses a --recycle over; this is a SECOND,
+# INDEPENDENT implementation of its predicate, for the same reason the 2026-07-24 belt re-derives
+# cc-classify's verdict — subagent_gate runs only on the self-close/recycle path, and the reaper's
+# entire population is the sessions for which self-close never ran. Sharing the code would not have
+# shared the reach.
+#
+# THE BARE PREDICATE IS NOT USABLE ON ITS OWN, AND THE MEASUREMENT IS WHY. "last quoted stop_reason
+# is not end_turn" reads IN-FLIGHT for 133 of the 717 agent transcripts on this box — but 119 of
+# those 133 were last written MORE THAN SEVEN DAYS AGO. They are corpses: subagents killed by an
+# interrupted turn, or by their session dying around them. Wired bare, this leg would be a permanent
+# refusal generator, which is the alarm that says as little as one that never fires. Two bounds fix
+# it, and each was chosen from data rather than taste:
+#
+#   (1) ORDERING, not age (memory: log ordering proves which branch ran). While a subagent is
+#       genuinely in flight the session CANNOT write its tool_result, so the subagent's transcript is
+#       the newest write in the session dir. Once the session writes past it, that subagent has
+#       returned or been abandoned. Measured: this retires 112 of the 133, leaving 21.
+#   (2) A SILENCE CAP retires the remaining 21 — every one of them a session that DIED holding a
+#       subagent (ages 9 h to 20 d). The cap is measured, not guessed: over 584 subagent transcripts
+#       that provably ran to completion, 59,266 inter-record gaps give p99 = 89 s and p99.9 = 306 s,
+#       and only 17 gaps (0.029%) exceed 900 s. The default therefore sits ~3x above p99.9.
+#
+# FAILURE DIRECTION, STATED PLAINLY: the cap can only ever make this leg ABSTAIN. A genuinely live
+# subagent that has been silent longer than the cap yields "cannot tell" and the sweep proceeds
+# exactly as it does today — this leg can under-refuse, never over-refuse. That is deliberate: an
+# over-eager refusal here is a permanent un-reapable pane, and the pile-up is the failure mode with
+# no natural end.
+#
+# EXISTENCE EVIDENCE that the composite predicate can fire at all: for each of the 21 sessions that
+# died holding an in-flight subagent, the gap between that subagent's last write and its session's
+# last write was 0-183 s — inside the cap. Had a sweep run at that moment, this leg would have fired
+# for every one of them.
+#
+# WHAT THIS LEG DOES NOT COVER, so nobody later mistakes it for the whole item: the B2D1CE68 victim
+# was blocked on a backgrounded Bash TASK, not a subagent. That store
+# (/private/tmp/claude-501/<slug>/<sid>/tasks/*.output) is reboot-ephemeral and records no
+# started/finished status, so it cannot answer the question. The obvious session-level analogue —
+# "the session's own last stop_reason is not end_turn" — was measured and REFUTED: 253 of 401
+# sampled session transcripts read that way, so a belt on it would refuse ~63% of all reaps.
+session_subagent_inflight() { # <sid> → 0 in-flight · 1 definitely none · 2 cannot tell
+  local sid="${1:-}" tj sdir now sm am f stop
+  [ -n "$sid" ] || return 2
+  tj="$(find_transcript "$sid" 2>/dev/null)" || return 2
+  [ -n "$tj" ] && [ -f "$tj" ] || return 2
+  sdir="${tj%.jsonl}"
+  # No subagents/ dir at all = this session never spawned one. A genuine negative, not an unresolved
+  # one — the same ruling subagent_gate makes about its own common case.
+  [ -d "$sdir/subagents" ] || return 1
+  sm="$(file_mtime_r "$tj")" || return 2
+  case "$sm" in ''|*[!0-9]*) return 2 ;; esac
+  now="$(reaper_now)"
+  case "$now" in ''|*[!0-9]*) return 2 ;; esac
+  for f in "$sdir"/subagents/agent-*.jsonl; do
+    [ -f "$f" ] || continue                       # unmatched glob, or a meta with no transcript
+    # A FINISHED agent's last quoted stop_reason is "end_turn" — that IS the stop. `grep -o | tail -1`
+    # takes the LAST one, which skips streaming `"stop_reason":null` partials and stays correct for a
+    # RESUMED agent (its old end_turn is not the last). jq-free on purpose: this must survive
+    # PATH=/usr/bin:/bin under launchd (memory: hermetic-in-stubs-not-in-interpreter).
+    stop="$(grep -o '"stop_reason":"[a-z_]*"' "$f" 2>/dev/null | tail -1)" || true
+    case "$stop" in *'"end_turn"') continue ;; esac
+    am="$(file_mtime_r "$f")" || continue
+    case "$am" in ''|*[!0-9]*) continue ;; esac
+    [ "$am" -ge "$sm" ] 2>/dev/null || continue                       # bound (1): the session wrote past it
+    [ "$(( now - am ))" -le "$INFLIGHT_MAX_SILENCE_S" ] 2>/dev/null || continue   # bound (2)
+    return 0
+  done
+  return 1
 }
 
 checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LAST (proven plumbing)
@@ -1448,11 +1546,35 @@ sweep() {
     # THREE-VALUED THROUGHOUT, AND ONLY THE DEFINITE NEGATIVES COMBINE. Anything either oracle
     # cannot answer proceeds exactly as before, loudly enough to be found in the log.
     if [ "$UNCOMMITTED_BELT" = 1 ] && [[ "$cause" =~ ^(finished|finished-teammate)$ ]]; then
-      local ub_nb ub_c=0 ub_p=0
-      ub_nb="$(peer_notify_back "$pane")"
-      if [ -n "$ub_nb" ]; then
-        session_ever_committed "$cwd" || ub_c=$?
-        if [ "$ub_c" = 1 ]; then
+      local ub_nb ub_c=0 ub_p=0 ub_i=0 ub_sid
+      # HOISTED (2026-08-19b): never-committed is the precondition BOTH legs share, so it is asked
+      # once, ahead of either. This changes no verdict — leg 2 required it already — it just makes
+      # the answer available to leg 3, whose population is exactly the peers leg 2 must stay quiet
+      # over (no back-channel armed ⇒ no announcement was ever owed).
+      session_ever_committed "$cwd" || ub_c=$?
+      if [ "$ub_c" = 1 ]; then
+        # ── LEG 3: an Agent-tool subagent of this session is still IN FLIGHT ────────────────────
+        # POSITIVE evidence, so it outranks leg 2's inferred-silence read and is tried first, and it
+        # applies whether or not a back-channel was ever armed. Reaping here SIGKILLs a running
+        # subagent mid-work; nothing downstream ever learns it existed.
+        if [ "$INFLIGHT_BELT" = 1 ]; then
+          ub_sid="$(printf '%s' "$o" | jq -r '.session_id // .sessionId // ""' 2>/dev/null)"
+          session_subagent_inflight "$ub_sid" || ub_i=$?
+          case "$ub_i" in
+            0)
+              say "  keep   $name [$cause] — NEVER COMMITTED here and an Agent-tool subagent is still IN FLIGHT: a reap would SIGKILL it mid-run → auto-reap refused (in-flight-subagent belt)"
+              log "inflight-belt refuse $name [$cause] pane=$pane cwd=$cwd sid=${ub_sid:-none}: 0 commits in this worktree's reflog AND a live subagent transcript newer than the session's own, silent < ${INFLIGHT_MAX_SILENCE_S}s — reap would kill in-flight work"
+              surfaced=$((surfaced+1))
+              local ibkey; ibkey="$(sanitize_key "${pane:-$name}")"
+              surfaced_keys="$surfaced_keys$ibkey "
+              handle_surface "$reap" "$ibkey" "$name" "$cause" "$pane" "never committed in this worktree AND an Agent-tool subagent is still running — auto-reap refused; closing this pane kills it mid-run. Confirm-close if truly done"
+              continue ;;
+            2) log "inflight-belt abstain $name pane=$pane: cannot resolve this session's transcript for sid=${ub_sid:-none} — proceeding to the back-channel leg" ;;
+          esac
+        fi
+        # ── LEG 2 (2026-08-19a): a back-channel WAS armed and was never used ────────────────────
+        ub_nb="$(peer_notify_back "$pane")"
+        if [ -n "$ub_nb" ]; then
           peer_ping_verdict "$pane" "$ub_nb" || ub_p=$?
           case "$ub_p" in
             1)
@@ -1466,9 +1588,12 @@ sweep() {
             0) log "uncommitted-belt pass $name pane=$pane: 0 commits but DID announce to $ub_nb — positive done-evidence, reap allowed" ;;
             *) log "uncommitted-belt abstain $name pane=$pane: 0 commits, ping verdict UNKNOWN for $ub_nb (no store / legacy or unreadable record) — proceeding as before, NOT treating unknown as silence" ;;
           esac
-        elif [ "$ub_c" = 2 ]; then
-          log "uncommitted-belt abstain $name pane=$pane: cannot tell whether this cwd ever committed ($cwd) — proceeding as before"
         fi
+      elif [ "$ub_c" = 2 ]; then
+        # Attached to the never-committed branch, NOT to the back-channel one: after the hoist above
+        # `ub_c = 2` is unreachable inside `ub_c = 1`, so an elif left down there would be dead code
+        # that silently deletes this abstain line — the one record that says the belt looked.
+        log "uncommitted-belt abstain $name pane=$pane: cannot tell whether this cwd ever committed ($cwd) — proceeding as before"
       fi
     fi
     # ── Gap-2 second legs (2026-07-25): the belt above is the independent leg for finished/

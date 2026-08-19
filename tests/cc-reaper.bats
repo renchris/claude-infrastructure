@@ -37,6 +37,13 @@ setup() {
   export CC_BEAT_LIVE_MAX_S=900             # the liveness window is the DEFAULT, not the box's
   export CC_REAP_BEAT_RETAKE=on             # never let an ambient `off` silently disarm R3
   unset CC_BEAT_NOW                         # the beat clock is real time here, not a pinned one
+  # PROJECT_ROOTS — the same `${VAR:-$HOME/…}` shape the comment above says $HOME alone cannot
+  # defend. The fixtured $HOME does cover the DEFAULT, but an ambient CC_REAPER_PROJECT_ROOTS wins
+  # outright, and since 2026-08-19b the uncommitted-peer belt resolves a transcript for EVERY
+  # never-committed finished peer (leg 3) — so an unpinned seam would let this suite read the
+  # operator's real ~/.claude*/projects and decide a verdict from their live subagent transcripts.
+  # Absent by default ⇒ find_transcript misses ⇒ leg 3 abstains; each leg-3 test opts in explicitly.
+  export CC_REAPER_PROJECT_ROOTS="$D/proj-absent"
   # real git repos: clean+shipped (landed) and dirty (not landed)
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
@@ -2241,4 +2248,270 @@ assert_never_committed() { # <worktree>
   printf '%s %s %s\n' "2026-08-19T13:05:08-0700" "102" "$BNB" > "$D/mailbox/.sent/P1"
   run bash "$fn.run" P1 "$BNB"
   [ "$output" = "rc=0" ] || false                 # as-given spelling matches field 3
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# C-SERIES — LEG 3 OF THE UNCOMMITTED-PEER BELT: IN-FLIGHT SUBAGENT (backlog 7c22e9b43956)
+#
+# WHAT LEG 3 IS FOR. Leg 2 (B-series) only ever fires over a peer that OWED an announcement, i.e.
+# one fired WITH --notify-back — 144 of 938 fired stamps on this box. Every other never-committed
+# peer is still reaped on `ahead=0`-by-silence, which is the remainder this row carries. Widening
+# leg 2 to cover them is the WRONG fix and is the hazard, not the remedy: a peer that was never
+# given a back-channel never owed a ping, so its silence is not evidence of anything. Leg 3 reads
+# no silence at all — it reads POSITIVE evidence that work is in flight (a running Agent-tool
+# subagent), which is meaningful whether or not a ping was ever promised.
+#
+# RED-PROOF, SORTED BY *WHY* EACH CASE REDS — not all pre-fix reds are evidence about the defect:
+#   C1, C7   THE FALSIFIER PROPER. Pre-fix both fixtures are REAPED and their subagent dies with
+#            them; post-fix both survive. This is the only kind of red that is evidence.
+#   C2       reds pre-fix too, but it is a SECOND READ OF C1's defect (the durable log line for a
+#            refusal that pre-fix never happens), not independent evidence. Counted separately so
+#            the proof is not overstated.
+#   C8       reds pre-fix only because session_subagent_inflight does not exist yet — true of any
+#            new unit case, and not evidence about the defect.
+#   C3,C4,C5,C6,C9  assert the reap STILL happens. GREEN PRE-FIX BY CONSTRUCTION, and saying so is
+#            part of the proof — each is credited by a mutant instead, never by a red.
+# So: 4 red pre-fix, of which 2 are the falsifier proper. C1+C6 are a DISCRIMINATOR PAIR on ONE
+# fixture (belt on ⇒ keep, kill-switch off ⇒ reap), which is what proves C1's red is leg 3's doing
+# and not some unrelated refusal upstream.
+#
+# THE TWO BOUNDS ARE PINNED IN ISOLATION, deliberately. C4 makes the agent transcript OLDER than
+# the session's while keeping it well inside the silence cap, so only the ORDERING bound can be
+# what retires it; C5 keeps the ordering satisfied and pushes the agent past the cap, so only the
+# SILENCE bound can be. A fixture that violated both would pass whichever bound was deleted.
+#
+# MUTANT MAP (8 mutants; 8 applied, 8 reddened >=1 case, 0 green, 0 non-verdicts, 0 anchor drift;
+# subject restored byte-identical and proven so with `diff -q` + `git status --porcelain`). Every
+# one of the 9 cases is credited by a pre-fix red, a mutant, or both:
+#   N1 a RETURNED subagent no longer acquits ......... C3
+#   N2 bound (1), the ordering test, deleted ......... C4
+#   N3 bound (2), the silence cap, deleted ........... C5
+#   N4 the operator kill-switch made inert ........... C6
+#   N5 the never-committed gating removed ............ C9  + B3
+#   N6 leg 3 re-narrowed so it no longer outranks a ping  C7
+#   N7 the durable refusal log line dropped .......... C2
+#   N8 cannot-tell collapsed into definite-none ...... C8
+# N5's red is DELIBERATELY OVER-WIDE and was predicted as such before the run: removing the
+# never-committed gate drags committed peers into leg 2 as well, so B3 reds beside C9. That is the
+# gate's true blast radius, not a bad mutant. Every other prediction matched on the first run.
+# C1 is credited by its own pre-fix red, and by pairing with C6/N4 on one fixture.
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+CPROJ_SID="c0c0c0c0-1111-4222-8333-444455556666"
+
+# BSD `touch -t`: set an mtime N seconds in the past. The suite already relies on BSD `date -v`
+# (the Gap-2 operator-prompt cases), so this adds no new platform assumption.
+touch_ago() { # <file> <seconds-ago>
+  touch -t "$(date -v-"${2}"S +%Y%m%d%H%M.%S)" "$1"
+}
+
+mk_sess_transcript() { # <sid> <seconds-ago> — the session's OWN transcript, at a pinned mtime
+  mkdir -p "$D/proj-c/slug/$1"
+  printf '{"type":"assistant","message":{"role":"assistant"}}\n' > "$D/proj-c/slug/$1.jsonl"
+  touch_ago "$D/proj-c/slug/$1.jsonl" "$2"
+  export CC_REAPER_PROJECT_ROOTS="$D/proj-c"
+}
+
+# The state word is `returned`, never `done`: a bare `done` as a test operand reads to shellcheck as
+# the loop keyword (SC1010) and blocks the .bats ratchet. It is also the more accurate word.
+mk_subagent() { # <sid> <agent-name> <inflight|returned> <seconds-ago>
+  mkdir -p "$D/proj-c/slug/$1/subagents"
+  local f="$D/proj-c/slug/$1/subagents/agent-$2.jsonl"
+  if [ "$3" = returned ]; then
+    printf '{"stop_reason":"tool_use"}\n{"stop_reason":"end_turn"}\n' > "$f"
+  else
+    printf '{"stop_reason":null}\n{"stop_reason":"tool_use"}\n' > "$f"
+  fi
+  touch_ago "$f" "$4"
+}
+
+# classify mock that EMITS session_id — mock_classify does not, and leg 3 cannot resolve a
+# transcript without it. Everything else matches mock_classify field for field.
+mock_classify_sid() { # <cause> <cwd> <idle> <landed> <pane> <sid>
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"t",paneUUID:"$5",account:"next",cwd:"$2",session_id:"$6",cause:"$1",idle_s:$3,work_landed:"$4",startedAt:$(( $(date +%s) * 1000 )),successor:"PANE-SUCC",detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+}
+
+inflight_refused() { echo "$output" | grep -q 'in-flight-subagent belt'; }
+
+# ANTI-VACUITY for the C-series locator: leg 3 is reached through find_transcript, so a fixture
+# whose transcript the reaper cannot resolve would make every case below pass over an ABSTAIN
+# rather than over the state under test — and an abstain reaps, which looks exactly like the
+# green the preservation cases want. Assert the two files exist and that the ordering the case
+# intends actually holds on disk, before asserting anything about the verdict.
+assert_inflight_fixture() { # <sid> <agent-name> <expect-agent-newer:yes|no>
+  [ -f "$D/proj-c/slug/$1.jsonl" ] || false
+  [ -f "$D/proj-c/slug/$1/subagents/agent-$2.jsonl" ] || false
+  local sm am
+  sm="$(stat -f %m "$D/proj-c/slug/$1.jsonl")"
+  am="$(stat -f %m "$D/proj-c/slug/$1/subagents/agent-$2.jsonl")"
+  if [ "$3" = yes ]; then [ "$am" -ge "$sm" ] || false; else [ "$am" -lt "$sm" ] || false; fi
+}
+
+@test "C1 FALSIFIER: 0-commit peer with NO back-channel but a LIVE subagent is NOT reaped" {
+  mkworktree "$D/cmain1" "$D/.worktrees/wt-c1"
+  assert_never_committed "$D/.worktrees/wt-c1"
+  mark_fired                                          # stamp WITHOUT notifyBack — leg 2 is quiet here
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c1 inflight 10
+  assert_inflight_fixture "$CPROJ_SID" c1 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c1" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  inflight_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false                        # the pane SURVIVES — this is the whole item
+  [ -d "$D/.worktrees/wt-c1" ] || false
+}
+
+@test "C2 leg 3's refusal names its reason in the durable log, not only on stdout" {
+  mkworktree "$D/cmain2" "$D/.worktrees/wt-c2"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c2 inflight 10
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c2" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  grep -q 'inflight-belt refuse' "$D/reaper.log" || false
+  grep -q 'reap would kill in-flight work' "$D/reaper.log" || false
+}
+
+@test "C3 a subagent that RETURNED (end_turn) is not in-flight ⇒ belt quiet ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION (a preservation). Redded by mutant N1.
+  mkworktree "$D/cmain3" "$D/.worktrees/wt-c3"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c3 returned 10
+  assert_inflight_fixture "$CPROJ_SID" c3 yes            # ordering + freshness both SATISFIED …
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c3" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  run inflight_refused
+  [ "$status" -ne 0 ] || false                           # … so end_turn is the ONLY thing acquitting it
+  td_called
+}
+
+@test "C4 ORDERING bound: the session wrote PAST its subagent ⇒ corpse, not in-flight ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant N2. Measured motivation: the bare no-end_turn
+  # predicate reads in-flight for 133 of 717 agent transcripts on this box; this bound retires 112
+  # of them. The agent here is only 120s old, well inside the silence cap, so the CAP cannot be
+  # what acquits this fixture — only the ordering bound can be.
+  mkworktree "$D/cmain4" "$D/.worktrees/wt-c4"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 30
+  mk_subagent "$CPROJ_SID" c4 inflight 120
+  assert_inflight_fixture "$CPROJ_SID" c4 no
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c4" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  run inflight_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "C5 SILENCE bound: an in-flight subagent silent past the cap ⇒ abstain ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant N3. The ordering bound is SATISFIED here
+  # (agent newer than the session), so only the cap can be what acquits this fixture. This is the
+  # bound that stops a corpse refusing forever — 21 such sessions exist on this box, aged 9h-20d.
+  mkworktree "$D/cmain5" "$D/.worktrees/wt-c5"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 3600
+  mk_subagent "$CPROJ_SID" c5 inflight 1800            # > the 900s default cap
+  assert_inflight_fixture "$CPROJ_SID" c5 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c5" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  run inflight_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "C6 kill-switch CC_REAPER_INFLIGHT_BELT=0 reaps C1's exact fixture (discriminator pair)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant N4. Pairs with C1 on ONE fixture: this is what
+  # proves C1's survival is leg 3's doing and not an unrelated refusal upstream.
+  mkworktree "$D/cmain6" "$D/.worktrees/wt-c6"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c6 inflight 10
+  assert_inflight_fixture "$CPROJ_SID" c6 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c6" 999 yes "$WPANE" "$CPROJ_SID"
+  CC_REAPER_INFLIGHT_BELT=0 run "$R" sweep --reap
+  run inflight_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "C7 in-flight evidence OUTRANKS a completion ping: announced peer with a live subagent is kept" {
+  # RED PRE-FIX, and it is the falsifier proper for the ordering of the two legs. Pre-fix this
+  # fixture takes leg 2's `uncommitted-belt pass` arm ("DID announce ⇒ positive done-evidence ⇒
+  # reap allowed") and the running subagent is SIGKILLed. A completion ping says the SESSION
+  # thinks it is done; it says nothing about a subagent still executing in that process.
+  mkworktree "$D/cmain7" "$D/.worktrees/wt-c7"
+  mark_fired_nb; sent_record "$WPANE" "$BNB"           # back-channel armed AND announced
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c7 inflight 10
+  assert_inflight_fixture "$CPROJ_SID" c7 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c7" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  inflight_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false
+}
+
+@test "C8 session_subagent_inflight is THREE-valued: in-flight=0 none=1 cannot-tell=2" {
+  # Reds pre-fix only because the function does not exist — a new-unit red, NOT evidence about the
+  # defect. Extracted and run directly so the two abstain paths are positively OBSERVED rather than
+  # inferred from "well, it still reaped".
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c8 inflight 10
+  local ex="$D/inflight-fn.sh"
+  {
+    sed -n '/^find_transcript(){/,/^}/p'              "$R"
+    sed -n '/^file_mtime_r(){/,/^}/p'                 "$R"
+    sed -n '/^reaper_now(){/p'                        "$R"
+    sed -n '/^session_subagent_inflight() {/,/^}/p'   "$R"
+  } > "$ex"
+  # ANTI-VACUITY: a `sed` range whose start marker has drifted silently selects nothing (or, worse,
+  # everything to EOF), and the extract would then "pass" over an empty file. Assert the extract
+  # really contains each function AND parses, before running a single case through it.
+  grep -q 'session_subagent_inflight()' "$ex" || false
+  grep -q 'find_transcript()' "$ex" || false
+  grep -q 'file_mtime_r()' "$ex" || false
+  bash -n "$ex" || false
+
+  cat > "$D/run-inflight.sh" <<EOF
+#!/bin/bash
+PROJECT_ROOTS="\$CC_REAPER_PROJECT_ROOTS"
+INFLIGHT_MAX_SILENCE_S=900
+. "$ex"
+session_subagent_inflight "\$1"; echo "rc=\$?"
+EOF
+  chmod +x "$D/run-inflight.sh"
+
+  run bash "$D/run-inflight.sh" "$CPROJ_SID"          # live subagent
+  [ "$output" = "rc=0" ] || false
+  run bash "$D/run-inflight.sh" "no-such-session-id"  # transcript unresolvable
+  [ "$output" = "rc=2" ] || false
+  # a session whose transcript resolves but that never spawned a subagent = a DEFINITE negative
+  mk_sess_transcript "d1d1d1d1-1111-4222-8333-444455556666" 60
+  run bash "$D/run-inflight.sh" "d1d1d1d1-1111-4222-8333-444455556666"
+  [ "$output" = "rc=1" ] || false
+}
+
+@test "C9 a peer that DID commit is reaped even with a live subagent (leg 3 stays in its population)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant N5. Leg 3 is deliberately gated on
+  # never-committed, matching the row: a peer holding commits is already defended by work_landed's
+  # DEFER, and widening leg 3 past its row would raise the belt's firing rate on the population
+  # the 2026-07-20 relaxation exists to keep reapable.
+  mkworktree "$D/cmain9" "$D/.worktrees/wt-c9"
+  echo x > "$D/.worktrees/wt-c9/n"; git -C "$D/.worktrees/wt-c9" add n
+  git -C "$D/.worktrees/wt-c9" commit -qm c9
+  git -C "$D/cmain9" update-ref refs/remotes/origin/main "$(git -C "$D/.worktrees/wt-c9" rev-parse HEAD)"
+  mark_fired
+  mk_sess_transcript "$CPROJ_SID" 60
+  mk_subagent "$CPROJ_SID" c9 inflight 10
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-c9" 999 yes "$WPANE" "$CPROJ_SID"
+  run "$R" sweep --reap
+  run inflight_refused
+  [ "$status" -ne 0 ] || false
+  td_called
 }
