@@ -30,12 +30,25 @@
 #     honouring that contract is that a hand-placed link to a non-repo path is missed; the defect that
 #     actually recurred twice was a hand-placed real FILE, which is what this leg catches.
 #   · PROMPT-DOCUMENT surfaces — skills/, agents/, commands/. Live-only content there is the NORMAL
-#     path, not a defect: 20 of the 35 live skills are unversioned (vendor- and plugin-installed —
-#     motion, react-best-practices, vercel-design-guidelines …), as is agents/motion-reviewer.md.
-#     Sweeping them would print a 20-item standing wall that reds every deploy and teaches the operator
-#     to skip the report (memory alarm-polarity-and-attention-budget — an alarm that always fires
-#     carries the same zero bits as one that cannot). The defect class here is an EXECUTABLE silently
-#     entering PATH, not a document. The unversioned-skills gap is real and separately filed.
+#     path, not a defect. The exclusion stands; both of its numbers were re-measured 2026-08-18 and
+#     the FIRST one was misleading in the direction that matters:
+#       — SKILL DIRECTORIES: 5 of 35 now, not 20. f542c8b2c tracked 13 and 8b33db9e6/ab62d3a08 two
+#         more; the surviving 5 are third-party derivatives, each with a durable reason recorded in
+#         skills/LOCAL_ONLY.md (motion + the two Vercel guides are vendored upstream text;
+#         pyramid-principle-full is a derivative of a copyrighted book, deliberately never committed;
+#         pyramid-principle's SKILL.md is a symlink into another tracked repo).
+#       — WHAT THIS LEG WOULD ACTUALLY PRINT: 82 lines, not 5, and not 20. The STRAY leg reports
+#         FILES; those 5 directories hold 84 files (82 real, 2 symlinks it already excludes) —
+#         react-best-practices alone is 59. Reading "20 of the 35 live skills" as the size of the
+#         wall conflates a DIRECTORY count with a FILE count and understates it 4x. So the
+#         alarm-polarity case for excluding skills/ is STRONGER than when it was written, not
+#         weaker — do not "re-open this now that it is only 5".
+#     Widening this leg to skills/ therefore requires the 5 declarations FIRST — glob rows
+#     (`skills/<name>/*`, the form lib/*.prelink-bak already uses) witnessed by skills/LOCAL_ONLY.md —
+#     and is only worth it as one unit, because the rows are inert until the sweep reaches them.
+#     agents/motion-reviewer.md is a real file in no checkout and is the same class.
+#     The defect class this leg exists for is an EXECUTABLE silently entering PATH, not a document.
+#     The unversioned-skills gap is real and separately filed (backlog bb2495b098b8).
 #   · DIRECTORIES. hooks/lib and scripts/lib are structural; the three live __pycache__ dirs are
 #     bytecode residue of the *.py hooks. Neither is a hand-placed tool.
 #

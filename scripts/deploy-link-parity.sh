@@ -50,9 +50,15 @@
 #     (tests/deploy-link-parity.bats:156). Cost of honouring that: a hand-placed link to a non-repo
 #     path is missed. The defect that recurred twice was a hand-placed real FILE.
 #   · PROMPT-DOCUMENT surfaces (skills/, agents/, commands/) are excluded: live-only content there
-#     is the normal path — 20 of 35 live skills are vendor/plugin-installed and unversioned. Reporting
-#     them would red every deploy forever and train the operator to skip the report (memory
-#     alarm-polarity-and-attention-budget). Tracked separately; not this leg's class.
+#     is the normal path. Re-measured 2026-08-18 — the skill-DIRECTORY count fell 20 → 5 (siblings
+#     f542c8b2c, 8b33db9e6, ab62d3a08 tracked the rest; the 5 survivors are third-party derivatives
+#     with durable reasons in skills/LOCAL_ONLY.md) — but that is NOT the size of the wall this leg
+#     would print. This leg reports FILES: those 5 dirs hold 82 real files (react-best-practices
+#     alone is 59), so the report would grow to 82 lines, not shrink to 5. The alarm-polarity case
+#     is STRONGER than when written (memory alarm-polarity-and-attention-budget); do not re-open
+#     the exclusion on the directory count alone. Widening to skills/ needs 5 glob declarations
+#     (`skills/<name>/*`) in config/live-only.manifest FIRST, landed as one unit with the widening —
+#     the rows are inert until the sweep reaches them. Tracked separately (backlog bb2495b098b8).
 #   · DIRECTORIES are skipped (hooks/lib and scripts/lib are structural; __pycache__ is bytecode
 #     residue of the *.py hooks). Neither is a hand-placed tool.
 #
