@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #50: two rows closed on measurements that contradicted the brief
+  they were handed to me in — a migration four recycles carried as "pending" was already live, and
+  the session death nobody could explain was killed by our own reaper, past a guard that cannot
+  fire for a session which has not yet made its first commit.**
+  `master-fleet-footprint` **11 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim)** — down from 12. **filed 1 / closed 2.** Landed `cb980161b` + `eefdd0396` + this
+  entry. Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39`
+  efficacy re-census (due ~2026-08-24) was still shut and correctly declined for the 23rd
+  consecutive recycle. Intake property re-measured and it held: 12/12 open were `venuePlan=local`
+  AND `project=claude-infrastructure`. Both claims came back clean, no advisory.
+
+  **CLOSED `5d1b5dd9b3db` (headless-substrate spec) — the first recycle for which closing it was a
+  live option, and it closed.** The row's OWN falsifier passes: `headless-precondition-probe.sh
+  --json` under T1's specified `env -u ITERM_SESSION_ID -u CC_PANE_ID` returned `P1_no_pty=PASS`,
+  `P2_hooks=PASS` (`P2_missing=""`), `P3_mail=PASS` with `P3_reached_model=yes`, rc 0 — T1's
+  contract was "P3 FAIL pre-fix, PASS post-fix". Tests: **312 cases / 9 suites, all green, every
+  `1..N` plan line seen in that run, 0 skips.** Closing record landed into the spec doc itself.
+  **Four corrections to the carried-forward record**, each re-derived at the moment of the close:
+  1. **F0 IS NOT UNRUN.** #46-#49 all carried "run migration 0007 — OPERATOR-ONLY, pending".
+     `scripts/registration-state.sh` says `verdict=registered … verifier exit 0 in all 5 config
+     dir(s)`. `migrations/README.md:37` defines that verifier as "exit 0 ⇒ the effect **is live in
+     the enforcing store**". `ledger=staged` means the SCRIPT was never invoked, not that the
+     EFFECT is absent — and the instrument already distinguishes `registered` from
+     `staged-pending`. **Nobody in four recycles had asked it.** Generalisable: when a brief says
+     an item is pending, check whether the item's own verifier agrees before inheriting the claim.
+  2. **E10's population is empty BY CONSTRUCTION** (upgrading #49's "empty today").
+     `bin/cc-pane-headless:197` is `export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@"`,
+     so the only sanctioned headless spawner GUARANTEES an address, and no launchd job spawns a
+     local claude session at all. Live census (`ps -axo pid=,command=` anchored on argv[0], this
+     session as a positive control — **PRESENT**, pid 96992, which `pgrep` structurally could not
+     have found): 17 claude procs, 17 with an address, 0 with neither.
+  3. **E6's key is `session_id`, not `sessionId`** — sharpening #48, whose refutation stands. A
+     reader keyed on `.sessionId` misses as surely as `.sid`. Near-miss checked and **cleared**:
+     `cc-reconcile:221` reads `.sessionId` from Claude Code's OWN per-pid store, whose schema
+     genuinely uses that spelling, and re-emits it as `session_id` at `:248-251` — it is the
+     translator between two schemas, not drift.
+  4. **Q2 no longer gates gap 2.** The doc still said Q2 "is the one that actually gates gap 2" —
+     true of gap 2 AS DESIGNED, over `asyncRewake` (W2). What was BUILT is W1: `cc-wake-headless`
+     writes stream-json to the fifo `cc-pane-headless` holds open (5 fifo refs, **0** asyncRewake).
+     **A spec's stated blocker can be routed around by the implementation, and the spec never
+     learns.**
+
+  **CLOSED `b521cb445465` (the unexplained session death) — a closer DID run: `cc-reaper`.**
+  `cc-reaper.out.log` carries the lifecycle `[active] → [active] → [finished-teammate] "idle 473s
+  < settle 600s" → REAP`. The transcript's last record enqueues a task-notification for background
+  Bash task `bn8c8kjam`, so **the session was blocked waiting on its own background task when it
+  was killed**; there is no SessionEnd record in it. Transcript mtime `Jul 29 21:39` local against
+  a `2026-07-30T04:39:12.303Z` record fixes PDT = UTC-7 and puts the reap in the same minute.
+  **Why the guard could not fire:** the chain checks landed (`:1323`) BEFORE settle (`:1332`), and
+  the victim's log shows the `:1332` message — so it necessarily passed `:1323` with `landed=yes`.
+  **The log ORDERING is the evidence; it is not inferred from reading the code.** `work_landed`'s
+  first line is `bin/cc-reaper:842` — `[ "${ahead:-1}" = 0 ] && return 0  # 0 ahead by COUNT →
+  landed`. The victim had made **no commits at all**, so the fast path returned "landed" and the
+  guard whose own comment calls it "still the whole safety story" was structurally unable to
+  protect it. `ahead=0` conflates *committed everything and landed it* with *never committed
+  anything*; `:1432` calls the reap "positive done-evidence, not inferred from silence", but for a
+  session that never committed, **`ahead=0` IS the silence** (`lookup-miss-is-not-absence`).
+  **THE PROTECTION IS INVERTED WITH RESPECT TO THE LOSS**, and the same sweep proves it: three
+  sibling `finished-teammate` sessions were SAVED by the DEFER guard, every one of them *because it
+  held commits* — the recoverable case. The victim held none, so its entire work product lived only
+  in its transcript, and it was the one session in the sweep with no protection at all. The
+  2026-07-24 belt (`:1342`) does not cover it either, symmetrically: that belt exempts properly
+  stamped fired peers, which is exactly what a dispatched peer is. Record:
+  `docs/research/reaped-uncommitted-peer-2026-08-19.md`. The row's own hypothesis named the right
+  subsystem and the wrong element — not the marker, the DEFER guard's PREDICATE.
+
+  **FILED `7c22e9b43956`** (the remedy, into `master-fleet-footprint`) rather than built: `cc-reaper`
+  is a live janitor with real blast radius, and a correct predicate must distinguish "never
+  committed" from "committed and landed", which `ahead` alone cannot do. Needs its own red-proofs
+  and a full window. Conservation: **closed 2 ≥ filed 1.**
+
+  **Strata of the remaining 11**, so the next recycle does not re-derive them: `399b9938bef8` is
+  genuinely CROSS-REPO (reso's `scripts/worktree-pool.sh`) despite its `project` field — not
+  drainable by this chain. `e78107996dea` re-checked a THIRD time and still **23,128/23,128 NULL**
+  `argv0` over 2026-07-30→2026-08-19, i.e. the log has NOT rotated and #40's landed field has still
+  never converged — structurally blocked on the live layer, not on analysis. `475222a572de` +
+  `ce775801633b` remain a blocked pair. `66ef300dd0b4` is an umbrella to refresh, not to work.
+  `f0283c35130e` is a value call on live daemons. That leaves `2029c52b8a32`, `b38279c10c55`,
+  `d4fa449e3895`, `15265ac3c502` and the new `7c22e9b43956` as genuinely agent-workable — and
+  **`7c22e9b43956` is the best of them: a named defect with a stated falsifier and a real death
+  behind it.**
+
+  **Instrument notes (recorded, not filed).** (a) A `for i in …; do grep "T$i[ :,)]"` sweep returned
+  `files=0` for all 17 ids — **an instrument failure that reads exactly like absence**, because zsh
+  parses `T$i[ :,)]` as an array subscript. Re-run in `bash -c` it found the real answer. The
+  all-zero column matching the hypothesis is precisely when to check the instrument (#49's second
+  law, hit again). (b) `LIVE_LAG=35` / `LIVE_ADDS=38` at close were **attributed and are NOT mine**:
+  `git diff --name-status --diff-filter=A` over my range under `bin hooks scripts commands` is
+  empty — my only add is a `docs/research/` file, which is not in the live layer.
+
 - **2026-08-19 — drain recycle #49: a pooled worktree runs several sessions and the liveness
   registry had room for exactly one, so the second session erased the first's proof of life.**
   `master-fleet-footprint` **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
