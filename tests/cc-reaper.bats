@@ -2010,3 +2010,30 @@ CLEOF
   run bash -c "sed -n '/^handle_stranded()/,/^}/p' '$R' | grep -F 'stranded:\${name}' | grep -c -e ahead -e dirty"
   [ "$status" -ne 0 ]
 }
+
+@test "W-STRANDED-11: a CRASHED session holding unlanded work pages the originator too" {
+  # crashed is in SURFACE_PAGE_RE, NOT REAPABLE_RE, so it never reaches the landed gate — yet it is
+  # the canonical "no close path ever ran". Without this leg the row's central case reaches nobody.
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify crashed "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'STRANDED WORK' "$D/notify-calls" || false
+  grep -q '1 commit(s)' "$D/notify-calls" || false
+  # the ORIGINAL crashed surface still fires — this is additive, not a replacement
+  grep -q 'is crashed' "$D/notify-calls" || false
+}
+
+@test "W-STRANDED-12: a LIVE-but-hung session is NOT called stranded (unlanded work is normal there)" {
+  # coordination-hang is deliberately excluded: the session is live and stuck, and a working session
+  # normally HAS unlanded work. Firing here would page on healthy in-flight state.
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_STRANDED_S=1000
+  mock_classify coordination-hang "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  run grep -c 'STRANDED WORK' "$D/notify-calls"
+  [ "$status" -ne 0 ]
+  grep -q 'is coordination-hang' "$D/notify-calls" || false   # the ordinary surface still fires
+}

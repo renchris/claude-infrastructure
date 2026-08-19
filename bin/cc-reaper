@@ -221,6 +221,16 @@ PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # DEFAUL
 # deliberately absent from REAPABLE_RE and AUTOREAP_FIRED_RE, because making a never-spoke pane reapable
 # is the destructive path (a wrong verdict kills a live session) and needs its own design, not this one.
 SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator|task-less)$'
+# Surface causes that ALSO warrant the stranded-work check (backlog 1b19ab3096d2 leg 2). These sit
+# outside REAPABLE_RE, so they never reach the landed gate below and their unlanded work was invisible.
+# DELIBERATELY narrow — the discriminator is "this session is not coming back", not "this session is
+# idle":
+#   · crashed          → included. The canonical no-close-path-ever-ran case, and the one the row is about.
+#   · coordination-hang→ EXCLUDED. The session is LIVE and stuck; unlanded work is what a working
+#                        session normally has, so paging on it would fire on healthy in-flight state.
+#   · finished-*/task-less → EXCLUDED. Operator-owned panes awaiting a human's confirm-close; that
+#                        human is already being paged by handle_surface and owns the disposition.
+STRANDED_SURFACE_RE='^(crashed)$'
 # ── T-P3-4: auto-reap the DESK-FIRED WORKER pile ───────────────────────────────────────────────
 # Every finished session sharing a cwd with a live sibling was SURFACED for operator confirm-close
 # (finished-shared-review) and 0 were auto-reaped, so 13+ finished desk-fired workers piled up and
@@ -1297,6 +1307,13 @@ sweep() {
         local key; key="$(sanitize_key "${pane:-$name}")"
         surfaced_keys="$surfaced_keys$key "
         handle_surface "$reap" "$key" "$name" "$cause" "$pane" "$(printf '%s' "$o" | jq -r '.detail // ""')"
+        # …and if that session ALSO died holding unlanded work, say so to the ORIGINATOR. handle_surface
+        # is desk-only and names no branch, no count and no remedy that fits — a crash is the canonical
+        # "no close path ever ran", which is the exact case backlog 1b19ab3096d2 leg 2 is about, so
+        # without this the row's CENTRAL case reaches nobody who could act on it. The two pages are
+        # different findings for different audiences ("this pane crashed" vs "its work is not on
+        # trunk") and damp independently.
+        [[ "$cause" =~ $STRANDED_SURFACE_RE ]] && handle_stranded "$reap" "$name" "$cause" "$pane" "$cwd" "$idle"
       else
         say "  keep   $name [$cause] — never-reap cause"
       fi
