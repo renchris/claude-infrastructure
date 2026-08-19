@@ -103,6 +103,16 @@ instances, no surviving evidence — so this doc names the *class* of cause (ext
 stops there. Anyone who sees another 144 should capture the sender directly with the recorder in §2
 rather than re-deriving from the exit code, which cannot identify a sender.
 
+> **UPDATE 2026-08-19 — the class is far larger than "two instances", and that changes the advice
+> above.** Measured across all four transcript stores: **352 distinct exit-144 events**, 348 of them
+> **mid-session** (median 293 records follow, so the pane-teardown explanation is out), 109 of them
+> watcher/wake-path arms and 243 ordinary backgrounded work — running at up to 42/day. So "anyone who
+> sees another 144" is not a wait for a rare accident: a recorder armed in ANY backgrounded task's
+> group gets an `si_pid` within a day. The mechanism in §1–§3 is unchanged and still correct; only
+> the rarity was wrong. Numbers, the five-instrument story behind them, and the macOS
+> `sigwaitinfo` constraint on building the recorder →
+> `docs/research/exit-144-population-2026-08-19.md`. Backlog `b38279c10c55` stays OPEN.
+
 Worth noting against the "the session never learns" half of the report: the item's own timeline —
 watcher #1 died 00:36, **watcher #2 armed 01:00** — is evidence the session *did* learn and *did*
 re-arm. Measured here twice: a task death delivers its completion notification immediately, and
