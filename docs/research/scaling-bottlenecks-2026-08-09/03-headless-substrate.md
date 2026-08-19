@@ -483,3 +483,74 @@ already left it eight days ago.
 - **Q4** `bin/cc-inbox-guard` has no hook or LaunchAgent wiring that a grep over `settings.json` and
   `~/Library/LaunchAgents/*.plist` could find. If it is genuinely un-invoked, A4's severity drops —
   and a *different* problem (the fail-loud backstop is inert) is the finding.
+
+## SPEC EXECUTED — closing record, 2026-08-19 (recycle #50)
+
+Backlog row `5d1b5dd9b3db` closed on this section. Every claim below was re-derived at the moment of
+the close, never carried forward from a predecessor's brief — three of them **correct a predecessor**.
+
+**The falsifier this spec defines passes.** `scripts/headless-precondition-probe.sh --json`, run
+under T1's specified invocation (`env -u ITERM_SESSION_ID -u CC_PANE_ID`) on the running binary
+`~/.claude-220/node_modules/.bin/claude`: `P1_no_pty=PASS` (ptmx 31 unchanged across
+before/resident/active/after) · `P2_hooks=PASS`, `P2_missing=""` (all six fired) ·
+`P3_mail=PASS` with `P3_enqueued=yes P3_consumed=yes P3_reached_model=yes`. T1's contract was
+"P3 FAIL pre-fix, PASS post-fix"; it is PASS.
+
+**Tests: 312 cases across 9 suites, all green, every `1..N` plan line seen in that run, 0 skips** —
+`cc-notify` 100 · `mailbox-drain` 53 · `wake-floor` 49 · `cc-reconcile` 34 · `cc-inbox-guard` 31 ·
+`live-session-registry-atomic` 15 · `headless-address-consumers` 13 · `cc-wake-headless` 11 ·
+`headless-precondition-probe` 6. The spec's T1-T17 ids are **not** used as case labels (only T16 is
+cited by id, in `wake-floor.bats`); the properties landed under different names, as most of this
+spec's edits did. Grep the predicate, not the identifier.
+
+### Four corrections to the record
+
+**1. F0 is not unrun — its effect is live.** Four recycles carried "F0 (run migration 0007) is
+OPERATOR-ONLY [and pending]". True of the *bookkeeping*, false of the *enforcing store*.
+`scripts/registration-state.sh` this moment:
+`verdict=registered migration=0007-mailbox-wake-arm-registration class=c10 ledger=staged — verifier exit 0 in all 5 config dir(s)`.
+The migration's own `# migration-verify:` predicate — which `migrations/README.md:37` defines as
+"exit 0 ⇒ the effect **is live in the enforcing store**" — holds in every config dir. `ledger=staged`
+means the script was never *invoked*; it does not mean the effect is absent, and the instrument
+already distinguishes `registered` from `staged-pending`. Nobody had asked it.
+
+**2. E10's population is empty BY CONSTRUCTION, not merely today.** #49 measured it empty and
+correctly declined to build it; this pass establishes the stronger claim. E10 (and the empty-pane
+branch of E4) serve exactly one class: a session carrying **neither** `CC_PANE_ID` nor
+`ITERM_SESSION_ID`. That class cannot arise on any local spawn path — `bin/cc-pane-headless:197` is
+`( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" )`, so the only
+sanctioned headless spawner *guarantees* an address, and no launchd job spawns a local claude
+session at all. Live census, `ps -axo pid=,command=` anchored on argv[0] with the caller's own
+session as a positive control (**present**, pid 96992 — `pgrep` could not have found it, per
+`pgrep-excludes-the-callers-ancestors`): **17 claude processes, 17 carry `ITERM_SESSION_ID`, 0 carry
+neither.** Three files refuse that class identically — `session-register.sh:128`,
+`mailbox-drain.sh:111`, `bin/cc-reconcile:197`, all the same safe-filename gate — which is a
+deliberate uniform policy, not three oversights. `session-continue.sh:454-460` already says so in
+landed source: *"gap 1 did not land the empty-pane fallthrough it prescribed: `cc-pane-headless:124`
+mints `hdl-<16hex>` and `:197` exports it as CC_PANE_ID."* **A counter over this class (`n_headless`)
+would be an alarm that can only ever read 0.**
+
+**3. E6's refutation stands, and its key name is `session_id`.** #48 refuted E6's
+`jq -r '.paneUUID // .sid'` because the producer never writes `.sid`, and recorded the real key as
+`sessionId`. The emitted JSON key is actually **`session_id`** (`session-register.sh:262`) — a
+reader keyed on `.sessionId` would miss just as surely. Verified against a live row, whose keys are
+`account, cwd, lstart, name, paneUUID, pid, session_id, startedAt, surface`. The lone `sid:$sid` in
+that file is `reclaim_idl`'s **IDL journal**, a different store. Related near-miss, checked and
+cleared: `cc-reconcile:221` reads `.sessionId`, but from `~/.claude*/sessions/<pid>.json` — *Claude
+Code's own* per-pid store, whose schema genuinely uses `sessionId` — and re-emits it under
+`session_id` at `:248-251`. cc-reconcile is the translator between the two schemas; the two
+spellings are correct, not drift.
+
+**4. Q2 no longer gates gap 2 — the implementation routed around it.** The Q1 block above ends
+"**Q2 … is the one that actually gates gap 2**". That was true of gap 2 *as designed*, which reached
+a pane-less session over **W2** (`asyncRewake`). What was built is **W1**: `bin/cc-wake-headless`
+writes stream-json directly to the fifo `cc-pane-headless` holds open — 5 fifo references, 0
+`asyncRewake` — and `tests/cc-wake-headless.bats` W1 pins that the line *lands in the live agent's
+own output*. So Q2 is moot for the delivered capability and remains open only about an alternative
+path nothing depends on. Q2/Q3/Q4 stay open as questions; **none gates this row.**
+
+### What is deliberately NOT built
+
+E6 (refuted, above) · E10 + E4's empty-pane branch (empty by construction, above) · E11 (struck by
+#41's measurement) · F3 (refuted by #47 — see its entry). Every other E and F item is present in the
+tree and covered by the suites listed above. The spec is executed.
