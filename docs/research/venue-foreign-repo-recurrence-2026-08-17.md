@@ -35,6 +35,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-18 | `0dafb03ed73d` | `reso-management-app` | label-foreign — **the first occurrence on a new day, after five documents** (§ below) |
 | 08-19 | `21e2c1088736` | `reso-management-app` | label-foreign — **third distinct `reso` item**; first whose cargo is a POLICY DECISION (§ below) |
 | 08-19 | `ce7651b02a17` | `doc_classifier` | label-foreign — **the guard already fires from here and cannot fire there** (§ SEVENTH) |
+| 08-19 | `21e2c1088736` | `reso-management-app` | label-foreign — **decision-class**: route-by-project would not have finished it either (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -750,6 +751,39 @@ constraint M-P-2 describes; `bin/cc-dispatch:1075` names *"the consolidation act
 and disclaims it as out of scope for that file. Nothing joined these five. This is the same diode the
 §"the conclusion never reached the enforcing store" finding names for the venue fix, arriving
 independently: the consolidation is **plan prose**, and nothing in the dispatch chain reads plan prose.
+# SEVENTH OCCURRENCE — 2026-08-19, `21e2c1088736` (reso): the first row that **option (b) would not have saved**
+
+**2026-08-19.** Backlog item `21e2c1088736`, **project `reso-management-app`**, dispatched to a
+`--venue cloud` session attached to `renchris/claude-infrastructure`. It cites
+`operationBuilder.ts:1451,1499,1589` and `docs/research/UNDO_SURFACE_AND_CONCURRENCY_2026-08-16.md`;
+`/Users` and `~/Development/reso-management-app` are both absent and the repo is outside this
+session's GitHub scope, so the brief's mandated first step — read the citations on `origin/main` —
+is unrunnable. Unworkable on arrival, three days after the cause was located and still unguarded.
+
+Nothing about the mechanism is re-derived: the cause is `bin/cc-offload:84`
+(`REPO="${CC_OFFLOAD_REPO:-$ROOT}"`, re-read this session and unchanged on this clone) and the
+remedy is the open (a)/(b) decision. **One new fact only.**
+
+## The new fact: option (b) is not a complete remedy, because some misrouted items are decision-class
+
+Every prior row is a *code or analysis* item, and for all six the implied claim is that routing the
+fire by `item.project` (option **b**) would have made the item workable. This row is the first where
+it would not. The item's own text names its terminal state:
+
+> THE FORK IS POLICY, not code: (A) hide/disable Undo for door_staff on manager-only actions … or
+> (B) widen permissions so door staff can reverse their own action.
+
+A correctly-routed VM with the reso checkout could answer the item's empirical opener — *can
+`door_staff` perform the FORWARD action at all?*, which the item itself says may dissolve the whole
+thing — and would then stop at a product policy call that belongs to the operator. So option (b)
+converts this row from *unworkable* to *partially workable, terminating in `⛔`*, not to *done*.
+
+That does not weaken the (a)/(b) decision — six of seven rows are unaffected and the cost figure is
+unchanged. It refines what the decision buys: **venue routing fixes reachability, not disposition.**
+A decision-class item dispatched to any autonomous worker, local or cloud, ends at the same fork;
+what it wants is `cc-decide` (a class-C packet the desk adjudicates), not a dispatch slot. Whether
+the dispatch set should exclude decision-class rows is a separate, unfiled question, noted here
+because this is the first row that exposes it.
 
 ## Measured from inside this session
 
@@ -1074,3 +1108,53 @@ shell change; `bin/cc-eligible`'s `OFFBOX_LANE` class states that a session this
 verify a change to the lane; and a 50-commit clone cannot adjudicate its own admission. §1 identifies a
 placement inside `bin/cc-eligible`, which is squarely inside that third refusal — it is written as a
 finding for the open decision, not as a patch withheld.
+| clone | `git rev-parse --is-shallow-repository` → `true`, `git rev-list --count HEAD` → **50** |
+| `~/Development` (`/root/Development`), `/Users` | both absent |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `docs/research/UNDO_SURFACE_AND_CONCURRENCY_2026-08-16.md` | 0 hits over the whole filesystem |
+| `cc-eligible check 21e2c1088736` (fixture, item's real title + source) | `verdict=eligible` · exit 0 · `refused: (nothing fired)` |
+| `cc-eligible why` history arm | `no-repo — NOT CERTIFIED … repo=/root/Development/reso-management-app depth=50` |
+
+The `eligible` verdict is the **seventh** consecutive one and is again correct on its own terms — the
+item names no local-only state, no browser, no pane, no sha. Note the history arm *did* see the
+missing tree and is required to fail **open** there, which is right for a gate that must never starve
+the tap on an instrument outage: `no-repo` measured from inside the VM cannot distinguish "this
+project has no repo" from "this VM is not where that repo lives." The discriminator remains the pair
+(`item.project`, `session.attached_repo`), unavailable to `cc-eligible` at claim time and available
+to `cc-offload` at fire time. Unchanged from the 08-16 finding; recorded only to show it re-measured.
+
+## The rails fail quietly here too
+
+`~/.claude/autonomy/` does not exist on this VM, so `cc-backlog list --open` returns empty and every
+disposition verb in the brief is a silent no-op — third session to reproduce this, unchanged.
+**The ledger was NOT updated by this session and must not be reported as such.**
+
+## Operator actions
+
+The (a)/(b) decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 is unchanged and now
+carries a seventh datapoint. Nothing new is proposed for it.
+
+The ledger disposition for this item needs the Mac:
+
+```
+cc-backlog block 21e2c1088736 --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; then note it is DECISION-class and terminates at an operator policy fork (A hide/disable Undo for door_staff vs B widen permissions), so consider cc-decide rather than a dispatch slot; premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH OCCURRENCE)"
+```
+
+`block`, not `reopen` and not `done`: the item is blocked on **where it was sent**, and parking it
+out of the wave is what stops an eighth fire into the same VM shape before the guard exists.
+
+## Not fixed here, deliberately
+
+The three standing refusals were re-measured this session and all still hold: `bats` and `shellcheck`
+are **absent** (confirmed, not assumed), so the repo's gate cannot be run on a shell change to the
+paid-fire path; `bin/cc-eligible`'s `OFFBOX_LANE` class states that a session this lane created
+cannot verify a change to the lane, and lists `venue` precisely so an item asking to edit that file
+is refused; and this clone is shallow at 50 commits, which `bin/cc-venue`'s own guard says disqualifies
+it from minting venue rules.
+
+## The item itself — NOT adjudicated
+
+No claim is made about `door_staff`, `isManagerOrAbove`, or the eleven floor-plan undos. The cited
+files were never readable from this session, and the item's opening question — whether `door_staff`
+can perform the forward action at all, which would make the whole item theoretical — **remains
+open**. It is the first thing the next worker should answer.
