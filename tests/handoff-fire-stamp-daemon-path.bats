@@ -93,11 +93,14 @@ reason_of() { printf '%s' "${1##*— }"; }
 @test "the pane-shape refusal names ITSELF, and never mentions jq" {
   # The exact call that reported "jq missing" with jq present and the fired-dir writable. `%3` is a
   # tmux pane id — a shape mark_fired_peer's guard refuses so a pane id can never be a path fragment.
+  # (`%` is refused by the widened predicate exactly as it was by the hex one; what changed with
+  # backlog 5d1b5dd9b3db is only the WORDING, because "UUID/hex-shaped" had stopped describing the
+  # rule the guard enforces — this suite is coupled to the message, which is the point of it.)
   run bash "$HF" stamp-peer --pane '%3' --cwd "$PEERWT" --by 2
   [ "$status" -eq 1 ]
   [[ "$output" == *"no stamp written"* ]] || false
   local why; why="$(reason_of "$output")"
-  [[ "$why" == *"not UUID/hex-shaped"* ]] || false
+  [[ "$why" == *"not a safe filename component"* ]] || false
   # The whole defect in one assertion: the old message blamed jq here, and jq was never the cause.
   [[ "$why" != *"jq"* ]] || false
 }

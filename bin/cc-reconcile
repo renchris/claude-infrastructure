@@ -175,7 +175,10 @@ while IFS= read -r pid; do
   [ -n "$pane" ] || pane="$(env_val "$env_blob" ITERM_SESSION_ID)"  # cc-pane-id-lint:allow — this line IS the fallback
   pane="${pane##*:}"
   case "$pane" in
-    ''|*[!0-9A-Fa-f-]*) n_no_pane=$(( n_no_pane + 1 )); continue ;;
+    # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+    # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+    # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+    ''|.|..|.*|*[!A-Za-z0-9._-]*) n_no_pane=$(( n_no_pane + 1 )); continue ;;
   esac
 
   # PRESENT MUST MEAN LIVE — aligned with cc-sessions' kill -0, NOT mere file-existence. A row whose
