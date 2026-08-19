@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-19 | `38de29ec5e59` | `doc_classifier` | label-foreign — **third cloud burn of the same item**, 2 days after the row above (§ SIXTH OCCURRENCE) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,117 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH OCCURRENCE — `38de29ec5e59` again, two days later, and the pair is not un-computed: it is mis-classed
+
+*Written from inside the third VM burned on this one item. The class, its cause and this item's
+premise are settled above and are **not** re-derived — §"New fact 2" already confirmed the premise on
+trunk and refuted the supersession, and nothing here disturbs either. One measurement below is new,
+and it narrows where the guard belongs.*
+
+**2026-08-19.** Item `38de29ec5e59`, project `doc_classifier`, dispatched to a `--venue cloud`
+session whose one attached repository is `renchris/claude-infrastructure`. Same brief, same DoD ref
+(`pipeline/backbone/port/build.py#L125`), same absent subject. The brief again carried the PREMISE
+CHECK and SUPERSESSION preambles, and again neither is runnable here.
+
+## The cost is now compounding on a settled diagnosis
+
+| | |
+|---|---|
+| cloud sessions burned on **this item** | **three** — 08-11 (`handoff-fire` leg, brief never delivered), 08-17, 08-19 |
+| turns of work on `build.py` across all three | **zero** |
+| `bin/cc-offload:84` on `origin/main` today | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **byte-identical; no guard has shipped** |
+| the 08-16 §3 decision (a) fail-closed vs (b) route-by-project | still open, now carrying a **sixth** datapoint |
+
+Two days of trunk activity separate this fire from the one above (54 commits; `HEAD..origin/main` = 0
+here, so this VM *is* at trunk). None touched the fire path. The diagnosis has been correct and
+stationary since 08-16; what is missing is the decision, not the analysis.
+
+## The one new measurement — `no-repo` is doing two jobs, and off-box only one of them is true
+
+The five sessions above concluded that the gap is the pair (`item.project`,
+`session.attached_repo`) and that **no spelling** in `bin/cc-eligible` would catch it. Both hold.
+But the pair is not *un-computed* — `cc-eligible` already resolves and reports it:
+
+```
+$ cc-eligible why 38de29ec5e59            # fixture built from this brief's own text
+  verdict : eligible
+  project : doc_classifier
+  refused : (nothing fired)
+  history : no-repo — NOT CERTIFIED: no readable git repo for this project — reach is unknown
+            repo=/root/Development/doc_classifier ref=- depth=50
+```
+
+`repo_for(project)` (`bin/cc-eligible:613-626`) lands exactly on the absent tree and the oracle says
+so. The verdict is still `eligible` because **`no-repo` is classed as an instrument outage**, and the
+file's founding rule fails open on those: *"a claim must never be starved by an instrument outage"*
+(`:86`). That classification is right on the Mac, where `no-repo` means *I could not measure reach*.
+It is wrong off-box, where `no-repo` for a foreign project is not an outage at all — **it is the
+answer.** One token is standing for two states:
+
+| state | on the box | in a VM |
+|---|---|---|
+| `no-repo` | cannot measure reach → fail open, correctly | the project has no tree here → the work cannot run, at all |
+
+So the missing thing is neither a new measurement nor a denylist spelling — it is a **discriminator
+between two states that currently share one token**, evaluated against the venue being asked for.
+The header's own asymmetry already decides which way it resolves once separated: *"a wrong ELIGIBLE
+puts a worker in a VM that CANNOT do the work at all and cannot tell you so… Stranding is
+recoverable; a confident worker on invisible state is not"* (`:44-50`).
+
+🚨 **This does not reopen the "was it a spelling all along?" question — that stays closed with a no**,
+and it does not displace the 08-16 §3 decision: `cc-offload` gates the *fire* and the fire is what
+spends the slot, so a `cc-eligible` conjunct remains the weaker placement (§"The cause is settled"
+above). It is recorded because it changes the shape of the weaker fix from *add an arm* to *split an
+existing verdict*, which is cheaper and does not widen a denylist.
+
+## Not fixed here — the same three refusals, re-measured
+
+Unchanged and not re-argued: `bin/cc-eligible`'s `OFFBOX_LANE` rule (a session this lane created
+cannot verify a change to the lane); a clone grafted at 50 commits cannot adjudicate its own
+admission (`.git/shallow` present, `git rev-list --count HEAD` → **50**); and the repo's gate cannot
+be run on a change to the fire path — `bats` **ABSENT**, `shellcheck` **ABSENT** (`jq` and `python3`
+present). Landing an ungated guard into the path that fires paid cloud sessions trades a bounded
+waste for an unbounded one.
+
+## The rails, re-measured — `block` and `done` are silent here too
+
+The §"rails fail quietly" blocks above record `cc-backlog reopen` at rc 0 in one session and rc 3 in
+another. On this VM the two verbs a blocked worker is actually told to use are both **rc 0**:
+
+```
+$ cc-backlog done  38de29ec5e59 --evidence "…"
+cc-backlog done: unknown id 38de29ec5e59                              # rc 0
+$ cc-backlog block 38de29ec5e59 --needs "…"
+cc-backlog block: unknown id 38de29ec5e59                             # rc 0
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 reason=role-unset          # rc 0
+```
+
+`~/.claude/autonomy/backlog.jsonl` does not exist here, and the store is untracked and unsynced
+(`git ls-files | grep backlog.jsonl` → no match), so nothing written from this venue could reach the
+desk regardless of exit code. **The ledger was NOT updated by this session and must not be reported
+as such.** This branch is the notification.
+
+## Operator actions
+
+Nothing new is proposed. The 08-16 §3 decision — **(a) fail closed at the fire vs (b) route by
+`item.project`** — is the one that stops the class; §1 of "The fifth" still holds that (b) alone does
+not reach a `~/.claude`-store subject.
+
+The ledger disposition for this item is **unchanged from the § FIFTH OCCURRENCE block above** and
+needs the Mac. `block`, not `reopen` and not `done`: the item is blocked on *where it was sent*, its
+premise is confirmed and its supersession refuted, and parking it out of the wave is what stops a
+**fourth** fire into the same VM shape before the guard exists.
+
+## The item itself — NOT adjudicated, for the third time
+
+No claim is made here about `_stage_uv`, `--require-hashes`, `verify-package.sh` or `bootstrap.sh`
+beyond what `OUT-docclf.md` verified on 2026-08-09 and §"New fact 2" above already cites. The file
+was never readable from this session. Its DoD and falsifier are already written
+(`OUT-docclf.md:154-164`, cluster **M-P-2**, which orders this item against four others in the same
+surface set — read the grouping before opening a diff). The falsifier is one command and it is
+unrunnable here for the strongest possible reason: there is no `doc_classifier` tree, stale or
+otherwise.
