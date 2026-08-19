@@ -55,12 +55,22 @@ setup() {
     sed -n '/^_iso_delta_s() {/,/^}/p'      "$HF"
     sed -n '/^assistant_turn_in() {/,/^}/p' "$HF"
     sed -n '/^engagement_seen() {/,/^}/p'   "$HF"
+    sed -n '/^successor_engaged() {/,/^}/p' "$HF"
     sed -n '/^mark_fired_peer() {/,/^}/p'   "$HF"
   } > "$HELPERS"
 
   # set -u safety: the extracted units read these globals, which the real script declares at :221.
   LR_STARTED_AT="" LR_ENGAGED_AT="" LR_PROOF="" LR_TRANSCRIPT="" LR_LATENCY_S=""
   ENGAGE_PROOF="" ENGAGE_TRANSCRIPT="" FIRE_MARKER=""
+  # successor_engaged reads these two: the projects-dir list it scans, and the fired-record dir it
+  # takes the marker from. Both are pinned per-test below; FIRED_DIR is declared here only so the
+  # extracted unit is set -u safe when a case exercises the no-record path.
+  # EXPORTED, not merely assigned: both are consumed by the sed-extracted unit rather than by any
+  # test body, so shellcheck reads every assignment below as dead (SC2034). FIRED_DIR is the sharper
+  # case — the ${3-} case deliberately sets it and then proves it is NOT read, which is precisely
+  # what makes that mutant red. Exporting states the truth (the value escapes this scope) instead of
+  # silencing the check per site.
+  export CC_PROJECTS_DIRS="" FIRED_DIR=""
   # shellcheck disable=SC1090
   . "$HELPERS"
 
@@ -169,6 +179,53 @@ birth_only_transcript() { # $1=path
   ENGAGE_PROOF=""
   engagement_seen "$PDIR" 'MARK-RESUMED' "$REGDIR" "$PANE"
   [ "$ENGAGE_PROOF" = "marker" ]
+}
+
+# ── 2b. …AND THE GATE ACTUALLY USES IT (cc-backlog 93a9f880b6fe) ───────────────────────────────
+# The three cases above prove the ORACLE. They passed for a day while the only consumer that needed
+# them, successor_engaged, still handed engagement_seen an empty marker — so the better answer was
+# unreachable from the gate, and self-close kept aborting on a working successor. These pin the
+# CONSUMER: one case that could not pass before the wiring, and two that keep it from widening.
+
+# The resume fixture, verbatim from the oracle case above: a PROVISIONAL registry row with no
+# session_id (so path b cannot answer) and the marker sitting in the transcript the resumed session
+# actually grew. Only the marker path can prove this pane engaged.
+resumed_successor_fixture() { # $1=marker-in-transcript
+  printf '{"paneUUID":"%s","name":"n","cwd":"/tmp","cmd":"c","provisional":true}\n' "$PANE" \
+    > "$REGDIR/$PANE.json"
+  engaged_transcript "$PDIR/original-sid.jsonl" \
+    "$(printf '{"type":"user","message":{"content":"%s"}}' "$1")"
+  CC_PROJECTS_DIRS="$PDIR"
+}
+
+@test "successor_engaged proves a RESUMED successor via the marker its own fire recorded" {
+  resumed_successor_fixture 'MARK-RESUMED'
+  FIRE_MARKER='MARK-RESUMED' mark_fired_peer "$FIREDIR" "$PANE" '/tmp/wt' 'FIRING-SID-1'
+  [ "$(jq -r '.marker' "$FIREDIR/$PANE.json")" = 'MARK-RESUMED' ]
+  # pre-wiring this returned 1 — "process-alive but NEVER ENGAGED" — and self-close aborted (exit 3)
+  run successor_engaged "$REGDIR" "$PANE" "$FIREDIR"
+  [ "$status" -eq 0 ]
+}
+
+@test "successor_engaged: an explicitly EMPTY fired-dir reads no marker, even with a record on disk" {
+  # The record EXISTS and would prove engagement — but the caller said "no fired-dir", and the unit
+  # must honour that rather than substituting its live default. This is the ${3-} vs ${3:-} choice
+  # made falsifiable: a colon-default silently promotes "the caller passed empty" into "the caller
+  # said nothing", which is how a harness ends up certifying a path it never exercised.
+  resumed_successor_fixture 'MARK-RESUMED'
+  FIRE_MARKER='MARK-RESUMED' mark_fired_peer "$FIREDIR" "$PANE" '/tmp/wt' 'FIRING-SID-1'
+  FIRED_DIR="$FIREDIR"
+  run successor_engaged "$REGDIR" "$PANE" ""
+  [ "$status" -eq 1 ]
+}
+
+@test "successor_engaged: a recorded marker ABSENT from the transcript never fabricates engagement" {
+  # The gate must still fail closed. A record whose marker no transcript carries is the cold-fire
+  # case the whole check exists for — the successor booted, and never ingested the brief.
+  resumed_successor_fixture 'MARK-SOMETHING-ELSE'
+  FIRE_MARKER='MARK-RESUMED' mark_fired_peer "$FIREDIR" "$PANE" '/tmp/wt' 'FIRING-SID-1'
+  run successor_engaged "$REGDIR" "$PANE" "$FIREDIR"
+  [ "$status" -eq 1 ]
 }
 
 # ── 3. the record ──────────────────────────────────────────────────────────────────────────────
