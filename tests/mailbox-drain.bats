@@ -673,3 +673,60 @@ goal_t() { # → a transcript path whose LAST goal_status attachment is a live a
   delivered_nothing "$output"
   [ ! -e "$CC_MAILBOX_DIR/../evil.seen" ]
 }
+
+# ── HEADLESS (F7 of docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md) ────────
+# A resident `--input-format stream-json` agent's only turn boundary is a WRITE TO ITS STDIN, which
+# bin/cc-wake-headless performs against the fifo its spawner made. So there is no watcher for it to
+# arm, and an advisory naming no action its recipient can take is pure noise — on every prompt of
+# every agent, at the 150× scale this substrate is built for.
+#
+# SYMMETRY IS THE POINT, not tidiness: hooks/session-continue.sh's wake floor abstains for exactly
+# this session (tests/wake-floor.bats), and tests/wake-floor.bats separately pins that these two
+# advisories must not disagree about the arm. A floor that stands down while this hook keeps nagging
+# for the same arm re-creates that disagreement in a new shape. Both read the SAME predicate —
+# hooks/session-register.sh:142's writer's-env test, never the id's shape.
+HDL="hdl-0123456789abcdef"
+headless_drain() { # <mode> → runs the drain as a headless agent (no ITERM, CC_PANE_ID set)
+  env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash -c 'echo "{}" | "$0" "$1"' "$DRAIN" "${1:-prompt}"
+}
+
+@test "headless: mail is still DELIVERED, but no arm nudge rides along" {
+  printf 'a page\n' > "$CC_MAILBOX_DIR/$HDL.md"
+  run headless_drain prompt
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  # ANTI-VACUITY: the delivery must actually have happened, or "no nudge" is trivially true of an
+  # empty payload and this case would pass over a totally broken drain.
+  printf '%s' "$ctx" | grep -qF 'a page' || false
+  ! printf '%s' "$ctx" | grep -qF 'no watcher armed' || false
+  ! printf '%s' "$ctx" | grep -qF 'cc-await-ping' || false
+}
+
+@test "headless: an EMPTY inbox produces NO output at all (the nag had nothing else to carry)" {
+  run headless_drain prompt
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "headless: under a LIVE /goal the 'do NOT park' arm advice is suppressed too" {
+  # Branch 2 of three. Suppressing only the no-goal branch would leave a headless agent under a goal
+  # still being taught an arm — the same defect wearing the goal-aware wording.
+  local T="$BATS_TEST_TMPDIR/goal-hdl.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish the rollout"}}\n' > "$T"
+  run env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash -c \
+    'printf "{\"transcript_path\":\"%s\",\"session_id\":\"abc-123-def\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -qF 'do NOT park the ordinary 4-hour watcher' || false
+  ! printf '%s' "$output" | grep -qF 'cc-await-ping' || false
+}
+
+@test "DISCRIMINATOR: CC_PANE_ID alone is NOT headless — a pane session still gets the nudge" {
+  # GREEN PRE-FIX BY CONSTRUCTION — a PRESERVATION, so it carries no red-proof of its own. Its
+  # guarantee is mutant M12 (drop the ITERM_SESSION_ID conjunct), which reds exactly this case:
+  # without it every pane session in the fleet reads as headless, the nudge dies fleet-wide, and
+  # every other case here stays green.
+  printf 'a page\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  run bash -c "echo '{}' | CC_PANE_ID='$UUID' ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'no watcher armed' || false
+}

@@ -298,6 +298,31 @@ fi
 nudge=""
 _watched=0
 mailbox_wake_armed "$own_uuid" && _watched=1
+# ── HEADLESS: there is no watcher for this session to arm (F7 of
+#    docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md) ───────────────────────
+# SYMMETRIC WITH hooks/session-continue.sh's wake-floor abstain, and that symmetry is load-bearing:
+# tests/wake-floor.bats already pins that these two advisories must not disagree about the arm, and
+# a floor that stands down headless while this hook keeps nagging for the same arm re-creates that
+# disagreement in a new shape. Both hooks therefore read the SAME predicate, which is
+# hooks/session-register.sh:142's — the writer's own env, never the id's shape (that file states in
+# terms that reading the surface off an id is "the exact mistake", because only the writer knows it).
+#
+# WHY SUPPRESS RATHER THAN RE-WORD. A resident `--input-format stream-json` agent's only turn
+# boundary is a WRITE TO ITS STDIN, performed by bin/cc-wake-headless against the fifo its spawner
+# made — so arming is not merely the wrong command here, it is not this session's job at all. An
+# advisory naming no action its recipient can take is pure noise, and at the 150× headless scale
+# this substrate is built for it is noise on every prompt of every agent.
+#
+# NOT the parked-watcher branch below, deliberately: "kill $pid, it is holding your goal inert" IS
+# an action a headless agent can take, and it stays.
+#
+# THE SPEC'S OWN REASON FOR THIS ITEM IS REFUTED AND THE ITEM SURVIVES ANYWAY. F7 says the nag is
+# for "a command that cannot run — cc-await-ping exits 3 headless". It does not: bin/cc-await-ping:193
+# derives its uuid from `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}`, landed 2026-07-31 in 7b7a7e014,
+# before the spec was written, and cc-pane-headless:197 exports exactly that variable. The command
+# resolves fine. It is still the wrong advice, for the reason above rather than the one filed.
+_headless=0
+[ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ] && _headless=1
 # NO-ARG (2026-07-31). This used to interpolate $own_uuid — our SESSION key — while session-continue.sh
 # interpolated its own separately-derived key, so the two advisories named DIFFERENT ids for one
 # mechanism and a session following either could arm a box nothing writes to. Passing no id at all
@@ -373,11 +398,11 @@ if [ -n "$_goal_cond" ]; then
 You lose nothing by killing it: the goal blocks your stops, so you keep taking turns and this drain delivers peer mail at every boundary the goal forces. Its death writes a WAKE-PATH-DOWN line into this inbox — that is the designed receipt, not a fault, and the harness will render the kill as 'failed with exit code 143/144'. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2.)"
     fi
   else
-    nudge="
+    [ "$_headless" = 1 ] || nudge="
 (a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
   fi
 else
-  [ "$_watched" = 1 ] || nudge="
+  [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || nudge="
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
 fi
 
