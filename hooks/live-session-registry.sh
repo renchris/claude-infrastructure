@@ -27,11 +27,28 @@ case "$cwd" in
   "$HOME/Development/.worktrees/"*) ;;
   *) exit 0 ;;
 esac
+# ── KEY: per-SESSION, not per-worktree (headless-substrate spec 03, E14 / §4 A2) ───────────────
+# `basename($cwd)` alone is a PER-WORKTREE key, and a pooled worktree hosts more than one session.
+# Measured live 2026-08-19: wt-pool-2 and wt-pool-8 each carried TWO live `claude` procs, and their
+# parents differ — they are SIBLINGS, not the nested-probe ancestry the tenancy gate below covers.
+# So the second sibling's row REPLACED the first's, and the registry recorded one pid out of two.
+# The unrecorded session then has no positive liveness proof at all: once the recorded pid exits
+# (or its SessionEnd removes the row) `worktree-gc.sh` `registry_live()` answers NOT-LIVE for a
+# worktree that is still occupied, and falls back to the flaky cwd/lsof oracle this file's header
+# says it exists to eliminate — i.e. a LIVE worktree becomes reapable. Suffixing the sid gives every
+# session its own row, so no session can erase another's.
+#
+# MIGRATION: `registry_live()` reads `$base` AND `$base-*`. That is not only a transition window for
+# rows this hook wrote pre-fix — `~/.reso/worktree-gc-run.sh:96` is a SECOND writer into this shared
+# store, from another repo, and it still keys bare. Both shapes must keep counting, indefinitely.
 base=$(basename "$cwd")
+if [ -n "$sid" ]; then base="$base-${sid:0:8}"; fi
 mkdir -p "$REG_DIR" 2>/dev/null
 
 if [ "$ev" = "SessionEnd" ]; then
-  # Only remove if it's ours (basename is unique per worktree, but match sid to be safe).
+  # Only remove if it's ours. The key is now per-session, so it is already ours by construction;
+  # the sid field is still matched because a row under a LEGACY bare key (pre-fix, or written by
+  # the reso-side scanner) can belong to a sibling, and removing that one is the original defect.
   if [ -f "$REG_DIR/$base" ]; then
     have=$(cut -f2 "$REG_DIR/$base" 2>/dev/null)
     { [ -z "$sid" ] || [ "$have" = "$sid" ]; } && rm -f "$REG_DIR/$base" 2>/dev/null
@@ -64,6 +81,15 @@ done
 # back to the cwd/lsof oracle — the flakiness this file's header says it exists to eliminate ("live
 # `claude` procs routinely report cwd=/ … a single bad pass made a LIVE session's worktree look dead
 # and it was reaped"). One throwaway probe silently disarms the guard for the session that fired it.
+#
+# SCOPE AFTER E14 — say this plainly rather than leave a guard that looks load-bearing and is not.
+# Now that the key carries the sid, a nested `claude -p` probe brings its OWN session_id, lands on
+# its OWN row, and structurally CANNOT overwrite the tenant's. This gate therefore no longer fires
+# for a sid-bearing probe; it still covers the degraded input where `.session_id` is absent, where
+# the key falls back to the bare basename and the collision it was built for is live again. The
+# protection is strictly stronger than before — the gate is narrower because the hazard is gone,
+# not because it was weakened. Test 5/6 below fire the nested probe WITHOUT a session_id so this
+# path stays reachable and pinned; test 9 pins the structural half.
 #
 # Refuse ONLY when the incumbent pid is a live ANCESTOR of ours: a nested claude got this cwd by
 # inheriting it from the process that owns the worktree, so ancestry IS the proof the row is not
