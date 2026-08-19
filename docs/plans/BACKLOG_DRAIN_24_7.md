@@ -87,6 +87,79 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #34: a fix can land at TWO organs and be re-refused by SIXTEEN, and
+  a landedness check by SHA can read "never landed" over content that is plainly on trunk.
+  `master-fleet-footprint` 20 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed, no stale claim). filed 0 / closed 1.** Land `1028a238b`, content-verified on
+  origin/main (13 paths, `git diff origin/main` empty, predicate present at every site).
+  - **Date checked FIRST.** 2026-08-18 — `master-session-lifecycle`'s `62363cac1e39` (efficacy
+    re-census, due **2026-08-24**) still **not drainable**. #35 must check again; on or after
+    2026-08-24 it outranks fleet-footprint.
+  - **Property re-measured, not inherited: 21 open at intake, 21/21 `venuePlan=local` AND
+    `project=claude-infrastructure`.** 4 blocked, all `source: needs`.
+  - **Built the CONSUMER half of `5d1b5dd9b3db`; row LEFT OPEN, claim RELEASED.** `b532c67ec` made
+    `hdl-<16 hex>` a real registry identity at the writer (`session-register.sh`) and the drain
+    (`mailbox-drain.sh`). **Sixteen other readers each carried their own copy of the retired rule**
+    `*[!0-9A-Fa-f-]*`, and `h`/`l` are not hex digits — so a headless session was addressable at the
+    two fixed organs and structurally invisible at every other one: not a fired peer (cc-classify,
+    cc-reaper ×3), counted pane-less (cc-reconcile), un-recoverable (cc-recover-safeguard),
+    un-wakeable (mailbox-wake-arm), **wake floor inert and mail never folded** (session-continue ×5),
+    stamp unreadable (desk-invariant), unstampable (handoff-fire `mark_fired_peer`), unswept
+    (lead-supervisor), unaddressable (cc-notify). Replaced with the safe-filename-component
+    predicate the tree already settled on — `''|.|..|.*|*[!A-Za-z0-9._-]*` — each site pointing at
+    the SSOT rationale rather than restating it.
+  - **THE PATTERN HELD A SEVENTH TIME, and this is now its most reliable shape: question (d) —
+    *does the fix exist and simply not reach its consumer?*** Seven rows across #31-#34. Here the
+    fix had already landed **and been proven**, one level away from sixteen call sites.
+  - **`cc-notify`'s arm 1b is the generator caught in the act.** It was added 2026-08-07 for exactly
+    this failure (`cc-notify 247` → no-such-target while `--list` printed pane 247 live) and fixed it
+    by enumerating **one more spelling** (`^[0-9]+$`). A headless address walked straight back into
+    the same hole. Widened to the CLASS; the row-file requirement that makes it safe is untouched and
+    is pinned as a control. **Enumerating a spelling does not retire the defect — it schedules it.**
+  - **Widening was SEQUENCED deliberately.** `mark_fired_peer` (stamp WRITER) and cc-reaper's three
+    stamp READERS moved in one commit: today no headless stamp can exist, so widening the readers
+    alone changes nothing observable and widening the writer alone produces stamps the reaper
+    ignores. Together a headless fired peer becomes both stampable and reapable.
+  - **TWO EXISTING ASSERTIONS PINNED THE OLD SPELLING — corrected, not deleted.**
+    `tests/cc-reaper.bats` "a non-UUID pane can never carry a marker (path-fragment guard fails
+    safe)" passed **`PANE-X`**, which is not a path fragment at all — it is a perfectly safe filename
+    that merely is not hex. The case asserted a *harmless* address is inert and **would tripwire any
+    widening**. Fixture is now a real traversal, name states the class, and the positive half (a
+    headless pane DOES carry a marker) is added beside it.
+    `tests/handoff-fire-stamp-daemon-path.bats` pinned the refusal wording `not UUID/hex-shaped`;
+    `%3` is still refused, only the message changed, because that phrase had stopped describing the
+    rule. (memory: `stale-assertion-becomes-an-inverted-guard`)
+  - **The hermeticity gate caught this session's own suite twice and was right both times.**
+    `cc-recover-safeguard` reaches `cc-notify`/`cc-sessions` by **BARE NAME**, so without
+    `CC_RECOVER_NOTIFY_BIN`/`CC_RECOVER_SESSIONS_BIN` the behavioural case would have executed the
+    operator's **deployed** binaries. A fixtured `$HOME` did not cover it and the suite looked
+    perfectly hermetic. Both seams pinned to absent paths.
+  - **Red-proof, and its anti-vacuity half.** `tests/headless-address-consumers.bats` extracts the
+    REAL arm list of all 15 case blocks from the shipped files and asserts a **semantic** property,
+    not a spelling: *a headless address must be classified by the SAME arm as a canonical pane uuid
+    and a DIFFERENT arm than a path-traversal string.* Pristine origin/main: **`1..13`, 12 red,
+    1 control green, zero skips**; post-fix 13/13. A per-file **block census** fails loud if the
+    guards vanish, so the suite cannot silently test zero. Mutants, all four as designed: single-file
+    revert → **case 2 only** (attribution); over-wide predicate → **OVER-WIDE** at that site only
+    (the control direction, which no revert covers); guard **deleted** → **BLOCK CENSUS** red (the
+    vacuity proof); `cc-notify` row-file requirement dropped → **case 13 only**, case 12 still green.
+  - **Closed `d40d148d0333` on its own falsifier — and the sha it cites is NOT on main.**
+    `7a218edc` is **not an ancestor** of origin/main (full sha, `merge-base --is-ancestor` rc 1); it
+    was rewritten on the way in and the content landed as `d3951e5e3` + `2a352788b`. **A landedness
+    check by sha would have read "never landed" and re-derived a fix that has been on trunk for nine
+    days.** Adjudicated by CONTENT: `bin/it2-kitty` carries the `AGENT-PANE`/`AGENT-NO-BOX` branch at
+    five sites, `tests/it2-kitty-composer-guard.bats` pins it with 10 named CONTROL cases,
+    **`1..47`, 47/47 green this turn**; and 0 of 11 live `claude`-argv0 processes carry the agent-id
+    flag, so none is idle >2h. (memory: `landedness-oracle-is-blind-to-intent`)
+  - **`pgrep-f-matches-agent-briefs` fired twice inside one measurement.** A bare `--agent-id` ps
+    grep returned a hit that was a **`jq` process whose argv carried the backlog JSON**, and a
+    self-matching grep counted **its own pipeline** as 3 agent panes. The honest census anchors on
+    argv0 and reports its denominator: **0 of 11**.
+  - **Instrument note for #35:** `bats-shellcheck-lint` infers its scope from `origin/main...HEAD`,
+    so it reports **0 changed `.bats` lines** for an UNCOMMITTED test file and prints *clean*.
+    `git add -N` does not help — it needs the **commit**. Re-run it after committing, or its silence
+    is blindness. (memory: `gate-scope-from-git-diff-is-blind-to-untracked`)
+
 - **2026-08-18 — drain recycle #33: the pattern held a FIFTH and SIXTH time, and both times the
   unreachable fix was an ADDRESS THE FLEET ALREADY MINTS. `master-fleet-footprint` 21 open /
   4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale claim).
