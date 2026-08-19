@@ -1,5 +1,6 @@
 ---
 status: open
+work-repos: reso-management-app, doc_classifier
 ---
 
 # MASTER: product repos — the operator's actual products, one wave per repo
@@ -59,6 +60,15 @@ Measured on a cloud fire of `8f59467c92b0`: the VM held exactly one checkout
 tree the LABEL names, and for a cross-repo master the label and the work disagree. This plan
 already states the governing rule two sections up — *"the tree it edits decides which wave can
 work it"* — and its own master row is the counter-example to it.
+
+**Half of this is now enforced, not advisory (2026-08-19).** The frontmatter above declares
+`work-repos: reso-management-app, doc_classifier`, and `bin/cc-eligible`'s `ineligible-foreign-tree`
+class dereferences this row's `dodRef` to read it — so an off-box claim of the master row is now
+REFUSED at the gate rather than disproved after the fact. What is enforced is only the cloud half:
+a *local* `claude-infrastructure` worker is still equally unable to edit these trees, and the
+general class (a subject-foreign row whose plan carries no declaration) is still the open desk
+decision. `docs/research/venue-declared-foreign-tree-2026-08-19.md` measures why all three filed
+remedies missed this row.
 
 **Until the routing fix lands, work these waves only from a session that HOLDS the target tree**
 (the local drain, per the SUPERSEDED note above), and treat the correctly-projected member rows as
@@ -120,6 +130,31 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-19 — third fire of the same row; the disproof is now a MECHANISM, not a paragraph.**
+  `8f59467c92b0` was dispatched into the same one-checkout VM shape a third time (08-15, -17, -19).
+  R1-R4 untouched and unreachable again — **open, correct as filed, unstarted**; only the venue is
+  refuted. The finding that changes anything: **all three filed remedies would have let this row
+  through.** Measured — the item's whole classified span (`title · dodRef · condition · source`)
+  contains **no project label at all** when grepped against `scripts/dispatch-projects.conf`, so
+  fail-closed, route-by-project *and* the 08-17 amendment (restore the 08-15 subject discriminator)
+  are each blind to it. The 08-17 entry proposed that amendment specifically to catch this row; it
+  does not. Common cause: `dodRef` is the one field that knows where the work lives, and it is a
+  **pointer** that nothing dereferenced.
+  **Fixed, landed, gated.** New measured class `ineligible-foreign-tree` in `bin/cc-eligible`,
+  modelled on `ineligible-deep-history`: a plan declares its checkouts in frontmatter
+  (`work-repos:` — this plan now carries `reso-management-app, doc_classifier`), `cc-eligible`
+  resolves `dodRef` → plan → declaration, and any foreign tree refuses. It reads the DECLARATION,
+  never the body, so the span rule holds. `cc-offload` is untouched — `cc-venue` imports
+  `cc-eligible` as a module, so `BLOCKING` reaches the fire on its own. Opt-in and fail-open on
+  every uncertainty, which is what made it safe to land from the lane it constrains. 10 tests
+  (5 RED-proven refusals + 5 fail-open controls); suite 37/37. Two of 08-17's three refusal grounds
+  were re-measured and are gone — notably **`bats` installs here via npm**, so "the repo's gate
+  cannot be run on this host" is a property of the image, not of the venue. Full measurement →
+  `docs/research/venue-declared-foreign-tree-2026-08-19.md`. Still open: the *class* (a
+  subject-foreign row with no `work-repos:` key), local dispatch (`cc-eligible` only answers
+  "may this go off-box?"), and the store-side `block` — the rails were re-measured and still fail
+  at rc 0 from a VM (§4 there), which is the likely reason 08-15's and 08-17's dispositions never
+  took.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were

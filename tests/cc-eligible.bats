@@ -282,3 +282,121 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   run "$CE" check "$id"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# ── THE DECLARED-TREE CLASS ────────────────────────────────────────────────────────────────────
+# The one class in this file that no spelling can reach. It exists because a cross-repo MASTER row
+# can have a perfectly correct span — title, dodRef, condition and source all accurate — and still
+# name no project at all, its foreign checkouts living only in the plan BODY that `dodRef` points
+# at. Measured on 8f59467c92b0, dispatched to a single-repo cloud VM three times (2026-08-15, -17,
+# -19); docs/research/venue-declared-foreign-tree-2026-08-19.md.
+#
+# What these pin is the SAFETY of the dereference, not that one plan is refused: the arm reads a
+# declared frontmatter key and NOTHING else, and every uncertainty it meets must fail OPEN. A
+# regression here does not look like a wrong refusal in the census — it looks like the cloud tap
+# quietly refusing every item whose plan it merely could not read.
+
+# CALLED BARE, never inside `$( )`. CC_ELIGIBLE_REPO stands in for ~/Development/<project>, and an
+# `export` from a command substitution dies with its subshell — which is a live trap here, because
+# this arm FAILS OPEN, so losing the variable turns every assertion below into a silent `eligible`
+# that looks like a passing control. Two of these tests were written that way first and reported
+# `verdict=eligible` for a plan that declares two foreign trees.
+fixture_repo() {
+  export CC_ELIGIBLE_REPO="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$BATS_TEST_TMPDIR/repo/docs/plans"
+}
+
+# plan <name> <frontmatter-lines…> → writes a plan under the fixture repo, echoes its dodRef
+plan() {
+  local name="$1"; shift
+  { echo "---"; printf '%s\n' "$@"; echo "---"; echo; echo "# $name"; echo "body: reso-management-app"; } \
+    > "$BATS_TEST_TMPDIR/repo/docs/plans/$name.md"
+  echo "docs/plans/$name.md"
+}
+
+foreign_item() {
+  "$CB" add --title "MASTER: product repos" --project probe --source ft --dod-ref "$1"
+}
+
+@test "DECLARED TREE: a plan declaring another checkout refuses, and NAMES the checkouts" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open "work-repos: reso-management-app, doc_classifier")")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-foreign-tree"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"reso-management-app"* && "$output" == *"doc_classifier"* ]] \
+    || { echo "refused without naming the trees: $output"; false; }
+}
+
+@test "DECLARED TREE: the refusal note sends the reader to a session, never to a spelling list" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open "work-repos: reso-management-app")")"
+  run "$CE" check "$id"
+  # REFUSAL_NOTE says "fix bin/cc-eligible's list". There is no list here, and an instruction that
+  # cannot be carried out is how a correct refusal gets forced past instead of understood.
+  [[ "$output" != *"bin/cc-eligible's list"* ]] || { echo "sent to a list that does not exist: $output"; false; }
+  [[ "$output" == *"HOLDS those trees"* ]] || { echo "$output"; false; }
+}
+
+@test "DECLARED TREE: a plan declaring only the item's OWN project stays eligible" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open "work-repos: probe")")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "own-tree work must not be refused: $output"; false; }
+}
+
+@test "DECLARED TREE: ANY foreign tree refuses — a cloud session gets exactly one repository" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open "work-repos: probe, doc_classifier")")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "own + foreign is still uncompletable off-box: $output"; false; }
+  [[ "$output" == *"doc_classifier"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"named: probe"* ]] || { echo "named the tree it DOES hold: $output"; false; }
+}
+
+@test "FAIL-OPEN: a plan with no work-repos key is eligible — the key is opt-in, not a default" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open owner:\ desk)")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "silence must not read as foreign: $output"; false; }
+}
+
+@test "FAIL-OPEN: a dodRef pointing at NOTHING is eligible, not refused" {
+  fixture_repo
+  local id; id="$("$CB" add --title "m" --project probe --source ft --dod-ref "docs/plans/ABSENT.md")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "unreadable must fail OPEN: $output"; false; }
+}
+
+@test "FAIL-OPEN: a plan with no frontmatter at all is eligible" {
+  fixture_repo
+  printf '# bare\nwork-repos: reso-management-app\n' > "$BATS_TEST_TMPDIR/repo/docs/plans/BARE.md"
+  local id; id="$("$CB" add --title "m" --project probe --source ft --dod-ref "docs/plans/BARE.md")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "a body line is not a declaration: $output"; false; }
+}
+
+@test "THE BODY IS NOT READ: prose naming a foreign tree does not refuse — only the declaration does" {
+  # The fixture plan's body carries the line `body: reso-management-app` in every case above. If
+  # this ever fires, the arm has started reading prose, and the span rule this file guards
+  # (memory: assertion-span-must-equal-its-subject) is gone.
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open)")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "read the body, not the frontmatter: $output"; false; }
+}
+
+@test "DECLARED TREE: an ABSOLUTE dodRef written on another box is re-rooted at this checkout" {
+  fixture_repo
+  local rel; rel="$(plan MASTER status:\ open "work-repos: doc_classifier")"
+  local id; id="$("$CB" add --title "m" --project probe --source ft \
+                           --dod-ref "/Users/someone/Development/probe/$rel")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "a Mac-absolute dodRef must still resolve here: $output"; false; }
+}
+
+@test "DECLARED TREE: a section anchor on the dodRef is not part of the path" {
+  fixture_repo
+  local id; id="$(foreign_item "$(plan MASTER status:\ open "work-repos: doc_classifier")#3")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "'…md#3' must resolve to '…md': $output"; false; }
+}

@@ -359,16 +359,46 @@ CLASSES = [(v, d, [(t, re.compile(p, re.I)) for t, p in pats]) for v, d, pats in
 # the more actionable sentence to lead with — and `why` reports both regardless.
 DEEP_HISTORY = "ineligible-deep-history"
 
+# THE SECOND MEASURED CLASS — and the one that exists because every SPELLING arm is structurally
+# blind to it. Same reason as DEEP_HISTORY for living outside CLASSES: it reads a file.
+#
+# 🚨 THE SPAN CAN BE ENTIRELY CORRECT AND STILL NAME NOTHING. The classified span is
+# `title · dodRef · condition · source` — the item's specification — and for a MASTER row whose
+# waves each edit a different foreign checkout, all four of those fields are accurate and none of
+# them contains a project label. Measured on `8f59467c92b0` ("MASTER: product repos", project
+# `claude-infrastructure`, dodRef `docs/plans/MASTER_PRODUCT_REPOS.md`, condition
+# `master-product-repos`): every open wave it carries edits `~/Development/reso-management-app` or
+# `~/Development/doc_classifier`, and the only place either name appears is the plan BODY. Grepping
+# that span against scripts/dispatch-projects.conf returns no project row. So:
+#
+#   · the spelling table cannot fire — there is no local-only WORD to spell;
+#   · a guard keyed on (item.project, session.attached_repo) cannot fire — the project label is
+#     RIGHT (scripts/find-plan.sh:70 derives it correctly from the plan's path);
+#   · the 2026-08-15 "subject-foreign" discriminator — an item whose text names a dispatch-set
+#     project other than its own — cannot fire either, because it too reads the span.
+#
+# Three proposed remedies, none of which sees this row. The item was dispatched to a single-repo
+# cloud VM on 08-15, 08-17 and 08-19, each time producing a correct disproof into a markdown file,
+# because the ONE field that knows where the work lives is a POINTER (`dodRef`) and nothing
+# dereferenced it. This class dereferences it — and reads a DECLARATION, never the prose:
+# `work-repos:` in the plan's YAML frontmatter is the plan author stating which checkouts the work
+# edits. That keeps this file's span rule intact (memory: assertion-span-must-equal-its-subject):
+# a frontmatter key IS specification, the body is not, and nothing below reads the body.
+#
+# Full measurement: docs/research/venue-declared-foreign-tree-2026-08-19.md.
+FOREIGN_TREE = "ineligible-foreign-tree"
+
 # Every refusing verdict with its one-line description, spelling-backed and measured alike. The
 # census renders from THIS, not from CLASSES, so a measured class cannot be invisible in the report
 # that exists to find what the classifier misses.
 SWEEP_ROWS = [(v, d) for v, d, _p in CLASSES] + [
+    (FOREIGN_TREE, "WORK LIVES IN ANOTHER CHECKOUT, declared by the plan (measured)"),
     (DEEP_HISTORY, "NEEDS HISTORY the shallow cloud clone cannot see (measured)"),
 ]
 
 # The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
 # disagree about which is which — cc-premise's BLOCKING, same reason.
-BLOCKING = tuple(v for v, _d, _p in CLASSES) + (DEEP_HISTORY,)
+BLOCKING = tuple(v for v, _d, _p in CLASSES) + (FOREIGN_TREE, DEEP_HISTORY)
 
 # The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
 # things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
@@ -430,7 +460,7 @@ def build_index(recs):
     idx = {}
     for r in recs:
         rid = r["id"]
-        ent = idx.setdefault(rid, {"text": "", "title": "", "project": ""})
+        ent = idx.setdefault(rid, {"text": "", "title": "", "project": "", "dodref": ""})
         parts = [r.get(k) or "" for k in SPAN_FIELDS]
         text = " ".join(p for p in parts if p)
         if text:
@@ -439,6 +469,13 @@ def build_index(recs):
             ent["title"] = r["title"]
         if r.get("project") and not ent["project"]:
             ent["project"] = r["project"]
+        # KEPT AS A POINTER, not only folded into `text`. dodRef is already classified as span
+        # (tests/cc-eligible.bats:14) and stays so — this is the same field held in the shape the
+        # FOREIGN_TREE arm needs, because "docs/plans/X.md" is a path and a path is worth reading.
+        # First non-empty wins, matching `title`/`project`: the `add` record carries it, and a
+        # re-add of the same id carries the same words.
+        if r.get("dodRef") and not ent["dodref"]:
+            ent["dodref"] = r["dodRef"]
     return idx
 
 
@@ -626,6 +663,100 @@ def repo_for(project):
     return os.path.join(os.path.expanduser("~"), "Development", project)
 
 
+# ── THE DECLARED-TREE ARM ──────────────────────────────────────────────────────────────────────
+# Read FOREIGN_TREE's block above first: this is the dereference of `dodRef` that every span-only
+# guard is missing, and its whole safety story is that it reads ONE declared key and fails open on
+# everything else.
+#
+# BYTES, NOT LINES, and capped: a plan is an arbitrarily large operator-authored file and this runs
+# inside a per-item gate. The frontmatter is the leading `---` block, so nothing past it is needed
+# and nothing past it is read.
+_FM_MAX_BYTES = 8192
+_WORK_REPOS_KEY = re.compile(r"^work-repos:\s*(.+?)\s*$", re.I)
+_PLAN_DIRS = ("/docs/plans/", "/.claude-plans/")
+_DECLARED = {}                                   # path → [labels]; a dodRef cited twice costs one read
+
+
+def _plan_candidates(dodref, project):
+    """The paths `dodRef` could mean here, most-specific first. Never a search — just re-rooting.
+
+    A dodRef is written wherever the filer stood: absolute on the operator's Mac
+    (`/Users/…/Development/claude-infrastructure/docs/plans/X.md`), repo-relative from a session
+    that had already cd'd in (`docs/plans/X.md`). Both must resolve, and a session running from a
+    WORKTREE must resolve too — which is why the absolute form is also re-rooted at the project's
+    checkout rather than trusted as written (memory: deploy-lag has the same shape).
+    """
+    out, root = [], repo_for(project)
+    if not dodref:
+        return out
+    ref = dodref.split("#", 1)[0].strip()        # `…md#3` — a section anchor is not part of the path
+    if not ref:
+        return out
+    if os.path.isabs(ref):
+        out.append(ref)
+    elif root:
+        out.append(os.path.join(root, ref))
+    if root:
+        for d in _PLAN_DIRS:                     # re-root an absolute path written on another box
+            i = ref.find(d)
+            if i != -1:
+                out.append(os.path.join(root, ref[i + 1:]))
+    return out
+
+
+def declared_trees(dodref, project):
+    """The project labels the item's plan DECLARES its work edits — [] when it declares nothing.
+
+    [] is the fail-open answer and it is returned for every uncertainty there is: no dodRef, a
+    dodRef that resolves to nothing, an unreadable file, no frontmatter, no `work-repos:` key. That
+    is deliberate and it is what makes this arm safe to land: no plan in the tree carries the key
+    yet, so this class cannot fire on anything until a plan author opts in by writing it. A
+    classifier that guessed here would starve the cloud tap on every plan it merely could not read.
+    """
+    for path in _plan_candidates(dodref, project):
+        if path in _DECLARED:
+            if _DECLARED[path]:
+                return _DECLARED[path]
+            continue
+        try:
+            with open(path, "r") as fh:
+                head = fh.read(_FM_MAX_BYTES)
+        except (IOError, OSError):
+            continue
+        lines = head.splitlines()
+        if not lines or lines[0].strip() != "---":
+            _DECLARED[path] = []
+            continue
+        labels = []
+        for line in lines[1:]:
+            if line.strip() == "---":            # end of frontmatter — the body is NOT read
+                break
+            m = _WORK_REPOS_KEY.match(line)
+            if m:
+                for lab in re.split(r"[,\s]+", m.group(1)):
+                    lab = lab.strip().strip("`\"'")
+                    if lab and lab not in labels:
+                        labels.append(lab)
+        _DECLARED[path] = labels
+        if labels:
+            return labels
+    return []
+
+
+def foreign_trees(dodref, project):
+    """The declared trees this venue cannot hold — [] when there are none to refuse.
+
+    ANY foreign tree refuses, not "all of them" — a cloud session gets exactly ONE repository and
+    gets it permanently (`cc-offload up --via api` exits 5 unless the session reads back with
+    exactly one `git_repository` source, CLOUD_BACKLOG_PIPELINE.md:48-49). So a plan spanning its
+    own repo PLUS one foreign tree is no more completable off-box than one spanning two foreign
+    trees; there is no in-session recovery and the worker cannot clone its way out.
+    """
+    if not project:
+        return []                                # `repo_for` already refuses a projectless item
+    return [t for t in declared_trees(dodref, project) if t != project]
+
+
 _ORACLES = {}
 
 
@@ -664,6 +795,20 @@ def assess_full(item_id, idx, measure=True):
         }
     text = ent["text"]
     classes = classify_all(text)
+
+    # AHEAD OF THE HISTORY ARM, BEHIND THE SPELLINGS. The ordering rule the DEEP_HISTORY comment
+    # sets is "lead with the more actionable sentence", and these three are strictly ordered by it:
+    # a spelling names a word the reader can see in the title; this names a checkout the reader can
+    # `ls`; deep history names a property of the graph. It also outranks DEEP_HISTORY on strength —
+    # an unreachable TREE makes the item's history question moot, not merely harder.
+    foreign = foreign_trees(ent.get("dodref", ""), ent.get("project", ""))
+    if foreign:
+        classes.append({
+            "verdict": FOREIGN_TREE,
+            "description": "the plan DECLARES its work edits %s — not this venue's checkout"
+                           % ", ".join(foreign),
+            "tokens": foreign,
+        })
 
     orc = oracle_for(ent.get("project", ""))
     hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
@@ -712,6 +857,22 @@ DEEP_HISTORY_NOTE = (
 )
 
 
+FOREIGN_TREE_NOTE = (
+    "The checkout(s) named above are where this item's work actually is, per its own plan's\n"
+    "  `work-repos:` frontmatter. A cloud session holds exactly ONE repository, permanently, so a\n"
+    "  worker fired here would find the tree simply ABSENT — not stale, not shallow, absent — and\n"
+    "  the honest ceiling on what it can then do is re-derive the diagnosis from the plan's prose\n"
+    "  and report success (measured three times on 8f59467c92b0: 2026-08-15, -17, -19;\n"
+    "  docs/research/venue-declared-foreign-tree-2026-08-19.md). There is no spelling list to\n"
+    "  correct: claim it from a session that HOLDS those trees. If the declaration is wrong, fix\n"
+    "  the plan's frontmatter — that is the assertion this refusal is quoting."
+)
+
+# One note per measured class, so a reader is never sent to edit a list that does not exist. The
+# spelling classes all share REFUSAL_NOTE because for them that instruction is real.
+MEASURED_NOTE = {DEEP_HISTORY: DEEP_HISTORY_NOTE, FOREIGN_TREE: FOREIGN_TREE_NOTE}
+
+
 def cmd_check(item_id):
     idx = build_index(load_records())
     verdict, desc, hits, title = assess(item_id, idx)
@@ -731,7 +892,7 @@ def cmd_check(item_id):
         # the list, and there is no list here — sending them to edit an array over a git
         # measurement is an instruction that cannot be carried out, which is how a correct refusal
         # gets forced past instead of understood (memory: work-item-citation-refutes-its-own-remedy).
-        sys.stderr.write("  " + (DEEP_HISTORY_NOTE if verdict == DEEP_HISTORY else REFUSAL_NOTE) + "\n")
+        sys.stderr.write("  " + MEASURED_NOTE.get(verdict, REFUSAL_NOTE) + "\n")
     elif verdict == UNKNOWN_ITEM:
         sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
     sys.exit(3 if verdict in BLOCKING else 0)
