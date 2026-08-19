@@ -232,7 +232,25 @@ for f in "$REG_DIR"/*.json; do
 
   stale=0
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then stale=1; fi
-  if [ "$have_panes" = 1 ] && ! printf '%s\n' "$live_panes" | grep -qxF "$uuid"; then stale=1; fi
+  # The pane cross-check is asked ONLY of rows a terminal can enumerate. A headless row's address
+  # is never in `it2 session list` — that list can only ever MISS it — so applying the check would
+  # mark every headless session stale the instant it registered and hide it from the addressing
+  # view, which is the same false death the registration fix removed, one layer down
+  # (backlog 4b9d5e93b40a; fleet memory: lookup-miss-is-not-absence). `surface` is recorded by the
+  # writer, which is the only party that knows it; an old or provisional row carries no such field
+  # and reads as "pane" here, i.e. unchanged behaviour. Liveness for a headless row therefore rests
+  # on `kill -0` above, exactly as it does for a pane row whose terminal is unreadable.
+  # The membership test is a HERESTRING, not `printf … | grep -q`. Under `set -o pipefail` the -q
+  # exits on the first hit, the producer takes SIGPIPE, and the pipeline adopts that status — the
+  # verdict inverts on exactly the input it matched (fleet memory:
+  # grep-q-under-pipefail-inverts-the-verdict; scripts/pipefail-sigpipe-lint.sh grandfathered this
+  # one site). It is removed here rather than merely moved: adding the surface guard as a line
+  # continuation had pushed the producer off the statement head, where the lint's detector could no
+  # longer see it — the census read 0 while the hazard was still in the file, and lowering the
+  # allowlist to match would have made a live site permanently invisible.
+  surface=$(jq -r '.surface // "pane"' "$f" 2>/dev/null)
+  if [ "$surface" != headless ] && [ "$have_panes" = 1 ] \
+     && ! grep -qxF -- "$uuid" <<<"$live_panes"; then stale=1; fi
 
   if [ "$stale" = 1 ]; then
     # RETENTION, not liveness: keep the evidence for the investigation window, then reap.

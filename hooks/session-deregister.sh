@@ -39,9 +39,16 @@ command -v jq >/dev/null 2>&1 || exit 0
 reason=$(printf '%s' "$input" | jq -r '.reason // empty' 2>/dev/null)
 [ "$reason" = "clear" ] && exit 0
 
+# The address predicate MIRRORS hooks/session-register.sh's — they are one keyspace, and a remover
+# narrower than its writer does not fail, it ORPHANS: the row is written, nothing can ever remove
+# it, and it survives to CC_REG_RETAIN_H as a confident corpse. That is why this moved in the same
+# diff as the writer (backlog 4b9d5e93b40a) rather than after it. Safe filename component only —
+# the rationale, and why "hex-shaped" was the wrong proxy, is written out at the writer's copy.
 pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
 case "$pane" in
-  ''|*[!0-9A-Fa-f-]*) exit 0 ;;
+  ''|.|..) exit 0 ;;
+  .*) exit 0 ;;
+  *[!A-Za-z0-9._-]*) exit 0 ;;
 esac
 
 reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"

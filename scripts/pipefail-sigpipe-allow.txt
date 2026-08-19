@@ -14,7 +14,6 @@ bin/cc-idl	1
 bin/cc-notify	1
 bin/cc-reaper	1
 bin/cc-reconcile	1
-bin/cc-sessions	1
 bin/cc-teardown	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
 docs/activation/pending-activation/32-cc-roles-kitty-normalise-activate.sh	2

@@ -327,3 +327,103 @@ IN
   run jq -r '.session_id' "$CC_REGISTRY_DIR/$PANE_T.json"
   [ "$output" = "CHILD-SID" ]
 }
+
+# ── HEADLESS ADDRESSES (backlog 4b9d5e93b40a) ────────────────────────────────────────────────────
+# The address under test is the one bin/cc-pane-headless:124 mints (`hdl-` + 16 hex) and :197
+# exports as CC_PANE_ID while unsetting ITERM_SESSION_ID. These cases construct that shape
+# LITERALLY and never invoke cc-pane-headless: a red-proof fixture that calls into the subject
+# cannot distinguish "pre-fix" from "fixture broken", and bats renders the resulting skip as `ok`
+# (fleet memory: red-proof-fixture-must-not-call-the-subject). Nothing here calls a symbol the fix
+# introduces, so every case below is a genuine verdict against origin/main.
+HDL="hdl-a1b2c3d4e5f60718"
+
+mkentry_headless() { # $1=id $2=name $3=pid
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"%s","name":"%s","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"HL-SID","surface":"headless"}' \
+    "$1" "$2" "$3" > "$CC_REGISTRY_DIR/$1.json"
+}
+
+@test "register: a headless address (CC_PANE_ID set, ITERM_SESSION_ID unset) writes a row" {
+  printf '{"cwd":"/tmp/hl","session_id":"HL-SID","reason":"startup"}' \
+    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" CC_SESSION_NAME="hl" bash "$REG"
+  [ -f "$CC_REGISTRY_DIR/$HDL.json" ]
+  run jq -r '.paneUUID' "$CC_REGISTRY_DIR/$HDL.json";   [ "$output" = "$HDL" ]
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$HDL.json"; [ "$output" = "HL-SID" ]
+}
+
+@test "register: surface records WHICH variable supplied the address (headless vs pane)" {
+  printf '{"cwd":"/tmp/hl","session_id":"HL-SID"}' \
+    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash "$REG"
+  run jq -r '.surface' "$CC_REGISTRY_DIR/$HDL.json"; [ "$output" = "headless" ]
+  printf '%s' "$CHILD" | ITERM_SESSION_ID="w1t0p0:$PANE_T" bash "$REG"
+  run jq -r '.surface' "$CC_REGISTRY_DIR/$PANE_T.json"; [ "$output" = "pane" ]
+}
+
+@test "register: a path-unsafe or empty address is STILL refused (the widening opened no traversal)" {
+  # The OVER-widening control. The old gate's real duty was path safety — this value becomes
+  # "$reg_dir/$pane.json" — and "hex-shaped" was only ever a proxy for it. Each of these must leave
+  # the registry empty. Failures are accumulated and asserted at the end rather than asserted inside
+  # the loop, because a non-final bare assertion in a bats body is not trapped
+  # (fleet memory: negated-assertion-dead-unless-final).
+  bad_kept=""
+  for bad in "../evil" "/etc/passwd" ".hidden" "." ".." "not a uuid" "a/b" ""; do
+    rm -rf "${CC_REGISTRY_DIR:?}" 2>/dev/null || true
+    printf '{"cwd":"/tmp/x","session_id":"X"}' \
+      | env -u ITERM_SESSION_ID CC_PANE_ID="$bad" bash "$REG" || true
+    n="$(find "$CC_REGISTRY_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${n:-0}" = 0 ] || bad_kept="$bad_kept [$bad->$n]"
+  done
+  [ -z "$bad_kept" ] || { printf 'accepted path-unsafe address(es):%s\n' "$bad_kept" >&2; false; }
+}
+
+@test "register: a nested session inheriting CC_PANE_ID must not squat the headless tenant" {
+  # Credits the deliberate decision NOT to take spec E3's "skip the ancestor walk on the non-pane
+  # branch". cc-pane-headless EXPORTS CC_PANE_ID, so a nested `claude` inherits the tenant's address
+  # exactly as a pane child does; the write-side tenancy gate must therefore still fire here.
+  fake="$BATS_TEST_TMPDIR/fakeh"; mkdir -p "$fake" "$CC_REGISTRY_DIR"; ln -sf /bin/bash "$fake/claude"
+  cat > "$BATS_TEST_TMPDIR/outer-h.sh" <<'OUT'
+printf '{"paneUUID":"%s","name":"TENANT","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"TENANT-SID","surface":"headless"}' \
+  "$NR_PANE" "$$" > "$CC_REGISTRY_DIR/$NR_PANE.json"
+"$NR_FAKE/claude" "$NR_INNER"
+:
+OUT
+  cat > "$BATS_TEST_TMPDIR/inner-h.sh" <<'IN'
+printf '%s' "$NR_PAYLOAD" | env -u ITERM_SESSION_ID CC_PANE_ID="$NR_PANE" bash "$NR_HOOK"
+:
+IN
+  NR_PANE="$HDL" NR_PAYLOAD='{"cwd":"/tmp/child","session_id":"CHILD-SID","reason":"startup"}' \
+    NR_FAKE="$fake" NR_HOOK="$REG" NR_INNER="$BATS_TEST_TMPDIR/inner-h.sh" \
+    "$fake/claude" "$BATS_TEST_TMPDIR/outer-h.sh"
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$HDL.json"
+  [ "$output" = "TENANT-SID" ]
+}
+
+@test "cc-sessions: a headless row is NOT hidden by absence from the terminal pane list" {
+  # A pane list can only ever MISS a headless address, so cross-checking against it would convert
+  # the registration fix into a hidden row — the same false death one layer down
+  # (fleet memory: lookup-miss-is-not-absence). The scoping control is the existing pane-row case
+  # "a gone-pane entry (pid alive) is hidden from addressing but RETAINED", which must stay green.
+  export IT2_STUB_PANES="SOME-OTHER-PANE"
+  mkentry_headless "$HDL" "hl-agent" "$$"
+  run bash "$CCS" --names
+  [ "$status" -eq 0 ]
+  [ "$output" = "hl-agent" ]
+}
+
+@test "cc-sessions: a headless row with a DEAD pid is still hidden (liveness is not waived)" {
+  export IT2_STUB_PANES="SOME-OTHER-PANE"
+  mkentry_headless "$HDL" "hl-corpse" "$(deadpid)"
+  run bash "$CCS" --names
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+  [ -f "$CC_REGISTRY_DIR/$HDL.json" ]      # RETAINED for forensics, as any dead row is
+}
+
+@test "deregister: removes a headless row (writer and remover share one keyspace)" {
+  # A remover narrower than its writer does not fail, it ORPHANS — the row would survive to
+  # CC_REG_RETAIN_H with nothing able to remove it. This is why both moved in one diff.
+  mkentry_headless "$HDL" "hl-agent" "$$"
+  printf '{"session_id":"HL-SID","reason":"other"}' \
+    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash "$DEREG"
+  [ ! -f "$CC_REGISTRY_DIR/$HDL.json" ]
+}
