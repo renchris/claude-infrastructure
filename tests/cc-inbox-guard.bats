@@ -384,3 +384,115 @@ _stage_guard_with_fixture_reconcile() {  # → echoes the staged guard path
   run grep -qE '(\.hidden|bad name)' "$PUSHLOG"
   [ "$status" -ne 0 ]
 }
+
+# ── E13 · a HEADLESS owner's liveness comes from the beat, never from the pane list ────────────────
+# `it2 session list` enumerates PANES, so for a pane-less session it can only ever MISS — and a miss
+# is not absence. Before E13 every headless box with overdue mail therefore landed on the
+# INDETERMINATE arm and paged the operator with a cause about a pane that never existed
+# (docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md §4 A4, edit E13).
+#
+# THE KEY TRAP THESE PIN: the inbox is keyed on the PANE id (`hdl-<16hex>`), the beat on the SESSION
+# id, and for a headless session those DIFFER. Every fixture below therefore uses a sessionId that is
+# NOT the inbox key, so a `cb_last_beat "$u"` that skipped the registry join would read as a no-op.
+HDL="hdl-0123456789abcdef"
+HSID="9f9f9f9f-1111-2222-3333-aaaaaaaaaaaa"
+
+hdl_env() {  # arm the registry + beat seams (both default to $HOME — never let a test touch those)
+  export CC_INBOX_GUARD_REG_DIR="$BATS_TEST_TMPDIR/reg"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
+  export CC_BEAT_NOW="$NOW"
+  mkdir -p "$CC_INBOX_GUARD_REG_DIR" "$CC_BEAT_DIR"
+}
+reg_row() {  # <inbox key> <surface> <sessionId>
+  printf '{"paneUUID":"%s","name":"hb","cwd":"/tmp","account":"a","pid":1,"startedAt":0,"sessionId":"%s","surface":"%s","lstart":""}\n' \
+    "$1" "$3" "$2" > "$CC_INBOX_GUARD_REG_DIR/$1.json"
+}
+beat_row() { # <sid> <age-seconds>
+  printf '{"sid":"%s","t":%s,"who":"auto"}\n' "$1" "$(( NOW - $2 ))" > "$CC_BEAT_DIR/$1.json"
+}
+overdue_for() { # <inbox key> — one unacked line, an hour past the 600s deadline
+  local ts; ts="$(date -u -r "$((NOW - 3600))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-3600))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] triage me\n' "$ts" > "$CC_MAILBOX_DIR/$1.md"
+}
+# ANTI-VACUITY: assert the fixture really is the population under test before asserting anything about
+# the verdict. Without this, a renamed field or a mis-set seam makes every case below pass over a box
+# the sweep classified by some entirely different route.
+assert_headless_fixture() { # <inbox key> <sid>
+  [ "$(jq -r '.surface' "$CC_INBOX_GUARD_REG_DIR/$1.json")" = headless ] || false
+  [ "$(jq -r '.sessionId' "$CC_INBOX_GUARD_REG_DIR/$1.json")" = "$2" ] || false
+  [ "$1" != "$2" ] || false                                  # the join must be doing real work
+  run bash -c 'case "$1" in [0-9A-Fa-f]*-*-*-*-*) exit 0;; *) exit 1;; esac' _ "$1"
+  [ "$status" -ne 0 ] || false                               # …and the key must NOT be pane-shaped
+}
+
+@test "E13: a beat-fresh HEADLESS owner reads LIVE, not INDETERMINATE (no fabricated pane cause)" {
+  hdl_env; reg_row "$HDL" headless "$HSID"; beat_row "$HSID" 30; overdue_for "$HDL"
+  assert_headless_fixture "$HDL" "$HSID"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "$HDL"           # the sweep actually reached this box
+  echo "$output" | grep -q 'LIVE session'
+  refute_match "$output" 'INDETERMINATE'
+  refute_match "$output" 'NOW-DEAD pane'
+}
+
+@test "E13: the beat is joined through the row's sessionId — a beat under the INBOX key is not read" {
+  hdl_env; reg_row "$HDL" headless "$HSID"; overdue_for "$HDL"
+  beat_row "$HDL" 30                          # fresh, but filed under the PANE key — the wrong join
+  beat_row "$HSID" 4000                       # the session's own beat is stale
+  assert_headless_fixture "$HDL" "$HSID"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INDETERMINATE'
+  refute_match "$output" 'LIVE session'
+}
+
+@test "E13: a beat-STALE headless owner still escalates, and its cause names HEADLESS not NAME-keyed" {
+  hdl_env; reg_row "$HDL" headless "$HSID"; overdue_for "$HDL"
+  beat_row "$HSID" 4000                       # this session lapsed…
+  beat_row "someone-else" 30                  # …while the beat WORLD is demonstrably alive
+  assert_headless_fixture "$HDL" "$HSID"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INDETERMINATE'
+  echo "$output" | grep -q 'HEADLESS owner'
+  refute_match "$output" 'NAME-keyed box'
+  pushed
+}
+
+@test "E13: a PANE row is NOT rescued by a fresh beat — the surface gate holds the population" {
+  hdl_env; reg_row "$U" pane "$HSID"; beat_row "$HSID" 30; overdue_for "$U"
+  [ "$(jq -r '.surface' "$CC_INBOX_GUARD_REG_DIR/$U.json")" = pane ] || false
+  # it2 UNREADABLE on purpose, so owner_liveness actually REACHES the second E13 site. That is the
+  # only path on which a canonical-shaped row consults the beat at all: with a readable pane list the
+  # row is adjudicated and returns before the gate. An earlier version of this case used the default
+  # `[]` stub, and its surface mutant (M3) came back GREEN — the case pinned nothing, because the
+  # population it meant to exclude was already excluded one branch earlier.
+  export CC_INBOX_GUARD_IT2=/nonexistent/it2
+  unset CC_INBOX_GUARD_LIVE_UUIDS
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INDETERMINATE'
+  refute_match "$output" 'LIVE session'
+}
+
+@test "E13: a NAME-keyed box with no registry row keeps its original INDETERMINATE cause" {
+  hdl_env; overdue_for "desk-drive"
+  [ ! -f "$CC_INBOX_GUARD_REG_DIR/desk-drive.json" ] || false
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INDETERMINATE'
+  echo "$output" | grep -q 'NAME-keyed box'
+  refute_match "$output" 'HEADLESS owner'
+}
+
+@test "E13: a stale beat WORLD is not live even under a generous per-session bound (existence gate)" {
+  hdl_env; reg_row "$HDL" headless "$HSID"; overdue_for "$HDL"
+  beat_row "$HSID" 3000                       # inside the generous bound below…
+  export CC_INBOX_GUARD_BEAT_MAX_S=86400      # …but no beat ANYWHERE is fresh: the producer is gone
+  assert_headless_fixture "$HDL" "$HSID"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INDETERMINATE'
+  refute_match "$output" 'LIVE session'
+}
