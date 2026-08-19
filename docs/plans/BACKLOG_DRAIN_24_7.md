@@ -87,6 +87,86 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #44: the verdict was already being computed every sweep and thrown
+  away into a logfile with no reader — and the case it most needed to cover was the one my own first
+  fix could not reach.** `master-fleet-footprint`
+  **13 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
+  claim)** — down from 14. **filed 0 / closed 1.** Landed `6e106182a` + `3090a58d3`.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 17th consecutive recycle.
+  `e78107996dea` re-checked and still structurally blocked — 68,091 `top_procs` rows in the live
+  `capacity-alarm.jsonl`, **every one `argv0: null`**, so the converger still has not run.
+  Property re-measured at intake and it held: 14/14 open were `venuePlan=local` AND
+  `project=claude-infrastructure`.
+
+  **CLOSED `1b19ab3096d2`** (handoff succession contract unenforced on the durability leg) after
+  building the leg #43 left. Both of the row's enumerated "Needs:" are now on trunk and were
+  content-verified at the moment of the close.
+
+  *The finding.* This is #43's lesson one layer down. #43 found a prescribed check that existed twice
+  and reached nobody. Here the check existed **once, in the right place, computing exactly the right
+  thing** — `landed != yes` on a REAPABLE cause is precisely "this session is done and its work is not
+  on trunk" — and its entire disposition was `say` (the stdout of a launchd job) + `log` + `continue`.
+  A grep for a consumer of that log line returns `bin/cc-reaper` itself. **The reaper is the last actor
+  that can still see the branch of a session which never ran a close path, and it was writing the
+  answer to itself.** `handle_stranded()` re-derives the evidence at act time — both halves the row
+  names, `rev-list --count TRUNK..HEAD` AND tracked dirt — and routes it to the ORIGINATOR, the party
+  holding the false "complete" belief. Deliberately *not* `handle_surface`: that page is desk-only and
+  its remedy list ("re-engage a hang · close a crashed pane · confirm-close a shared-review") contains
+  nothing resembling "land the branch". `handle_safeguard_blocked` is the precedent and the shape.
+
+  *🚨 The sharper half, and the one worth carrying: **checking hardest before closing my own row is
+  what found the hole in my own fix.*** The first commit wired the page at the landed gate — which only
+  `REAPABLE_RE` causes ever reach. **`crashed` is in `SURFACE_PAGE_RE`, not `REAPABLE_RE`**, so it
+  takes the surface path and never reaches that gate at all. A crash is the canonical *"no close path
+  ever ran"* — the row's **central** case — and it would have stayed dark behind a green suite, a green
+  land, and a commit message claiming the leg was built. `3090a58d3` adds `STRANDED_SURFACE_RE`,
+  deliberately narrow: `crashed` in; `coordination-hang` OUT (that session is LIVE and stuck, and a
+  working session normally *has* unlanded work — firing there is the always-firing alarm);
+  `finished-*`/`task-less` OUT (operator-owned, already paged, human owns the disposition).
+  **Generalisable: a fix wired at ONE gate covers only the causes that reach THAT gate — enumerate the
+  dispositions your subject actually has before believing a call site is coverage.**
+
+  *Polarity, both directions.* (a) PRESENCE — the page acts on a NEGATIVE, so with 0 unlanded commits
+  and no tracked dirt it says nothing at all rather than paging on absence. (b) A LAND IS NOT A STRAND
+  — `STRANDED_S` defaults to 1800 s, sized against what it must not convict: a `ship-land` run takes
+  ~4-6 min and is bounded at `timeout 900`, so any threshold at or under ~15 min pages every session
+  that is merely *landing*. The DEFER itself is untouched — nothing is destroyed; the refusal just
+  reaches someone now.
+
+  *Instrument corrections — two of my own mutants were wrong, and this is the transferable part.*
+  **M2 came back GREEN**: its anchor edited the dirty-clause, not the branch, which lives earlier in
+  the same string. **M11 came back red on the WRONG case**: `: [[ … ]] && cmd` makes `[[` an
+  **argument to the `:` builtin**, so `:` returns 0 and the `&&` call runs **unconditionally** — it had
+  silently inverted from a *remove* mutant into a *widen* mutant. Both re-aimed. Same law, and it is
+  #43's extended one more turn: **a green mutant indicts your model of the code, and a red one on the
+  wrong case indicts your model of the shell.** Verify what a mutant DID; never reason about it.
+  Also paid: `declare -A` does not exist on this box (macOS ships **bash 3.2**) — the driver uses a
+  `case` function instead.
+
+  *Evidence.* 12 red-proof cases (`W-STRANDED-1..12`); 10/12 red against the pre-fix subject, the two
+  exceptions being the ones that assert an **absence** (case 5 presence-guard, case 12 exclusion) which
+  are green pre-fix *by construction* — **their guarantees are carried by mutants, not by red-proof,
+  and saying so is part of the proof**. Case 5 was rewritten mid-pass for exactly this reason: as first
+  written it asserted only "pages nobody", which is trivially true of a subject with no pager, so it now
+  also asserts the guard RAN and DECLINED. 12 mutants, one per case, every one matching its predicted
+  red-case set with `1..12` printed on every run. `tests/cc-reaper.bats` **1..135, 135 ok, 0 not ok, 0
+  skips** run directly — the land's smoke gate cut this very suite at its 120 s budget (exit 124, zero
+  `not ok`) **twice**, so that non-verdict was converted into a verdict rather than inherited. Six
+  adjacent suites green (reap-guard 19 · reap-sweep-bounds 11 · reap-freshness 10 ·
+  teammate-reap-alarm 21 · cc-blockers-teammate-reap 9 · desk-invariant 24 = 94). Both commits are
+  `M`/`M` — **zero adds**, so `LIVE_ADDS` is untouched by this diff.
+
+  *Recorded, not filed (conservation — closed 1, filed 0).* (i) A worktree whose session is absent
+  from the registry **entirely** is never enumerated by `cc-classify`, so no sweep-driven page can
+  reach it — but `ship-land.sh`'s stranded-sweep already enumerates `refs/heads/` independently of
+  sessions, so the population has coverage from a different actor. A different mechanism, not this
+  row's. (ii) **`damp_should_send` is never sourced in `cc-reaper`** — it is only ever
+  `command -v`-guarded — so originator-page damping is inert today for the **pre-existing
+  `handle_safeguard_blocked` path** as well as this one. This is why no behavioural damping case was
+  written: it would have been vacuous. The fingerprint's freedom from volatile counts is pinned from
+  the shipped script instead (case 10).
+
 - **2026-08-19 — drain recycle #43: the row asked for a durability check to be BUILT, and it already
   existed twice — neither copy reached anyone who could act on it, while the one message the lead
   *does* receive told it the work was safe.** `master-fleet-footprint`
