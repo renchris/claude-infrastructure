@@ -371,6 +371,42 @@ deliver_argv(){ # $1=pane id  $2=command text
   return 0
 }
 
+# ── PROVE THE TARGET BEFORE CLAIMING DELIVERY (backlog d90bbcd9e01f) ─────────────────────────────
+# `kitty @ send-text` EXITS 0 FOR A WINDOW THAT DOES NOT EXIST. Re-measured 2026-08-18 on this box,
+# the id absent from `kitty @ ls` at that same moment:
+#
+#   kitty @ send-text --match id:999999 -- ""   → rc=0, no output
+#
+# So the `|| exit 1` guarding both delivery verbs below is DEAD CODE, and a send to a closed,
+# recycled or simply wrong window id is INDISTINGUISHABLE FROM A DELIVERED ONE by every signal the
+# caller has. That is the same silent-success shape `deliver_argv` was built to end on the armed
+# path — Claude Code checking that the KEYSTROKES were accepted, never that anything arrived — and
+# the legacy typing path kept it. Note the asymmetry this closes: the file already owns an existence
+# oracle, and until now spent it only on `close`, i.e. the DESTRUCTIVE verb was proven while the two
+# DELIVERY verbs were not.
+#
+# Three states, and the failure DIRECTION is the whole design (fleet memory:
+# gate-default-decides-failure-direction · probe-that-acts-on-absence-must-confirm-presence):
+#   0 present        → deliver.
+#   1 provably absent→ FAIL LOUD. This is the case that used to report success. On `run` the caller
+#                      (Claude Code) turns a non-zero into a real spawn failure, which is the point.
+#   2 could not tell → DELIVER ANYWAY, exactly as today. An unreadable enumeration is not evidence
+#                      of absence (fleet memory: lookup-miss-is-not-absence), and a kitty-ls hiccup
+#                      must never take out live delivery. This gate can only ever ADD a refusal it
+#                      can PROVE; it can never withhold a send on an indeterminate reading.
+#
+# Cost: one `kitty @ ls` (~100ms) on the NON-ARMED path only. The armed spawn path returns before
+# this and keeps its millisecond budget.
+prove_target(){ # $1=window id  $2=verb → 0 deliver · 1 refuse (proven absent)
+  pane_exists "$1"; case $? in
+    1) err "refusing to $2 into window $1 — it is not in kitty's window list."
+       err "kitty's send-text exits 0 for a nonexistent id, so delivering here would report"
+       err "success while the text went nowhere. Re-derive the id and retry."
+       return 1 ;;
+  esac
+  return 0
+}
+
 # A rejection has to name its own cause. `not a kitty window id: 'E5D77446-…'` was the whole
 # diagnostic an operator got on 2026-07-31 while every teammate spawn failed, and it points at the
 # id — the one innocent party. The id is correct; the caller is the wrong terminal's.
@@ -932,6 +968,7 @@ else:
       # deliberate no-op rather than a delivery. Exit 0: Claude Code does not check this call's code,
       # but the honest answer is that the requested effect (an empty input line) already holds.
       armed "$SESSION" && exit 0
+      prove_target "$SESSION" send || exit 1
       kt send-text --match "id:$SESSION" -- "$text" || exit 1
     else unaddressed send; fi
     ;;
@@ -941,6 +978,7 @@ else:
     text="${ARGS[*]:-}"
     if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" run
       if armed "$SESSION"; then deliver_argv "$SESSION" "$text" || exit 1; exit 0; fi
+      prove_target "$SESSION" run || exit 1
       kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
     else unaddressed run; fi
     ;;

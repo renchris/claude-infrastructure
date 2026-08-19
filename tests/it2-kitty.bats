@@ -445,3 +445,64 @@ JSON
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   grep -q -- 'get-text --match id:15' "$CALLS" || { cat "$CALLS"; false; }
 }
+
+# ── DELIVERY MUST PROVE ITS TARGET (backlog d90bbcd9e01f) ────────────────────────────────────────
+# `kitty @ send-text` exits 0 for a window id that does not exist — re-measured on a live kitty
+# 2026-08-18 (`--match id:999999` → rc 0, no output, id absent from `ls` at that same moment), which
+# is why the `|| exit 1` on both delivery verbs was dead code. These cases pin the three-state
+# outcome, INCLUDING the fail-open direction, because a gate that withheld delivery on an
+# unreadable enumeration would be a worse defect than the one it closes.
+#
+# The stub RECORDS its argv, so "refused" is asserted as "no send-text was ever issued" rather than
+# as an exit code alone — an exit code cannot tell a refusal apart from a delivery that also failed.
+
+fake_kitty_rec() { # $1=blind|"" — blind makes `ls` unreadable (the INDETERMINATE arm)
+  KREC="$BATS_TEST_TMPDIR/krec"; : > "$KREC"
+  export KREC KBLIND="${1:-}"
+  cat > "$CC_TERM_KITTY" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$KREC"
+for a in "$@"; do [ "$a" = ls ] || continue
+  [ -n "${KBLIND:-}" ] && exit 1
+cat <<'JSON'
+[{"id":1,"tabs":[{"id":1,"windows":[{"id":2,"title":"leader","cwd":"/tmp/a","pid":100},
+                                    {"id":15,"title":"teammate","cwd":"/tmp/b","pid":101}]}]}]
+JSON
+exit 0; done
+exit 0
+SH
+  chmod +x "$CC_TERM_KITTY"
+}
+
+sent_count() { grep -c 'send-text' "$KREC" 2>/dev/null || true; }
+
+@test "run into an ABSENT window REFUSES and sends nothing (kitty's rc 0 is not delivery)" {
+  fake_kitty_rec
+  run "$K" session run -s 999999 "echo hi"
+  [ "$status" -ne 0 ]
+  [ "$(sent_count)" = 0 ] || false
+  printf '%s' "$output" | grep -qF 'not in kitty' || false
+}
+
+@test "send into an ABSENT window REFUSES and sends nothing" {
+  fake_kitty_rec
+  run "$K" session send -s 999999 "x"
+  [ "$status" -ne 0 ]
+  [ "$(sent_count)" = 0 ] || false
+}
+
+@test "run into a PRESENT window still delivers (the proof adds a refusal, never a withholding)" {
+  fake_kitty_rec
+  run "$K" session run -s 15 "echo hi"
+  [ "$status" -eq 0 ]
+  [ "$(sent_count)" -ge 1 ] || false
+}
+
+@test "run under an UNREADABLE enumeration still delivers — indeterminate is not absence" {
+  # The fail-open direction, pinned. A kitty-ls hiccup must never take out live delivery, and a
+  # lookup that cannot read cannot prove absence (fleet memory: lookup-miss-is-not-absence).
+  fake_kitty_rec blind
+  run "$K" session run -s 999999 "echo hi"
+  [ "$status" -eq 0 ]
+  [ "$(sent_count)" -ge 1 ] || false
+}
