@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #42: the row named the wrong mechanism, and the RIGHT one had been
+  predicted on trunk for nine days with nothing built to see it — so a stranded lock had silently
+  disabled every git maintenance run on the box for a week.** `master-fleet-footprint`
+  **15 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
+  claim)**. Property re-measured at intake and it held: 16/16 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. **filed 0 / closed 1.** Landed `ccfe342ba`.
+  - **The row (`ad18a72e2be5`) had two premises and BOTH were false.** (1) "gc.auto threshold
+    crossing within hours" — refuted, *and already refuted on trunk by name since 2026-08-10*:
+    `docs/research/memory-econ-rearchitecture-2026-08-10/git-maint.md` §7 measured that git's
+    `too_many_loose_objects()` never compares anything to 6,700 — it counts entries in `objects/17`
+    ONLY, firing above `gc.auto/256` = 27. Measured 2026-08-19: `objects/17` held **62**, so the
+    threshold was not "hours away", it had been continuously TRUE for a week while auto-gc fired on
+    every commit across 88 worktrees and achieved nothing. (2) ".claude.json 171KB no-lockfile
+    rewrites — single-owner/lock design" — refuted as work this repo can do: `~/.claude.json` is
+    **129,406 bytes** (the cited 171KB is stale, and low), there is no lockfile and no tmp file
+    because claude.exe writes in place, and a `git grep` over `bin/ scripts/ hooks/` finds **ZERO**
+    lines in this tree that redirect into it. We are not a writer, so we cannot be made its single
+    owner. Vendor-gated, named as an excluded stratum rather than dropped.
+  - **The real mechanism was `<objectdir>/maintenance.lock` — no TTL, no observability, one
+    instance shared by every worktree.** git-maint.md §8 named it the shared store's single point of
+    failure and §9 filed the reaper as **"L2 — missing, this is the real gap"**. It had since
+    HAPPENED and nothing could see it: the lock was stranded from **2026-08-12 13:18** — age 9,636
+    min = **6.7 days** — with no holder (`lsof` clean), no `gc.pid`, no `gc.log`, and no gc running.
+    Every `git maintenance run --auto` on the machine had been a silent no-op for a week. The
+    failure is silent BY CONSTRUCTION: git's `warning: lock file … exists, skipping maintenance`
+    goes to a closed fd under launchd, the exit code stays 0, and no alarm exists.
+  - 🚨 **THE GENERALISABLE LESSON, and it is not about git: A PREDICTED FAILURE WITH NO DETECTOR IS
+    AN UNDETECTED FAILURE.** Two landed research docs named this exact mode, gave it a name, gave it
+    a file path, measured its cost at another repo (reso: 5.5 days undetected → 11,660 loose
+    objects, +1.1 GB) and filed the remedy as a numbered gap — and then it happened here anyway,
+    ran for seven days, and was found only because a drain pass re-derived a row's premise from
+    scratch. Prose in `docs/research/` ADVISES; only a script on a schedule OBSERVES. When an
+    analysis ends in "L2 — missing", the analysis is not finished, it is a work item with no
+    owner. (Memory: `conclusion-must-reach-the-enforcing-store`,
+    `spec-named-mechanism-may-be-prose-only`.)
+  - 🚨 **AND THE INSTRUMENT LESSON: EVERY PASSIVE SIGNAL SAID HEALTHY.** `gc.auto` unset (correct),
+    `gc.autoDetach` unset (correct), no `gc.log` (looks like no failures — it is actually git's
+    `gc.logExpiry` deleting it after a day), no `gc.pid`, no `*.lock` at `.git/` top level, 6 packs
+    under the 50-pack limit, `prune-packable: 0`, `garbage: 0`. **Four separate "is anything wrong"
+    probes returned clean over a subsystem that had been dead for a week.** The one signal that
+    discriminated was an mtime histogram: loose objects spanned only 2026-08-12 → 2026-08-19 with
+    **nothing older**, which is not what accumulation looks like — it is what a store looks like
+    when everything before a specific instant was packed and nothing since has been. Dating the
+    floor of a population is what named the instant; the config never could.
+    🚨 And the first path I checked was the WRONG one: `.git/maintenance.lock` is ABSENT — the lock
+    git actually uses is `.git/objects/maintenance.lock`. A miss at the wrong path reads exactly
+    like health (memory: `lookup-miss-is-not-absence`).
+  - **Built + landed:** `scripts/worktree-gc.sh` section 4 — detect and reap, fail-closed. The
+    oracle is the lock's **own open fd** (`hold_lock_file_for_update` holds it for the whole run),
+    never its age, because a long live repack is exactly as old as a strand (memory:
+    `liveness-proxy-cannot-be-output-age`); `CC_WTGC_MAINT_LOCK_MIN` (default 60 m) is a SECOND
+    gate; an `lsof` that cannot answer its own positive control makes the holder **UNPROVABLE ⇒
+    KEEP**, the same rule gate 4 applies. Reported on the machine `counts` line as
+    `maint_lock` / `maint_lock_age_min` / `loose_objects` — safe to append because
+    `worktree-gc-infra-run.sh:505` reads that line by NAMED field, which is exactly why the line
+    exists; the human summary line, whose reader is positional, is untouched. Scheduled by the
+    already-loaded `com.claude.worktree-gc-infra` at 04:15 daily, so a future strand is bounded at
+    ~24 h instead of unbounded. Chosen host BECAUSE it is already live-symlinked ⇒ `LIVE_ADDS=0`.
+  - **Proof it was the cause, not a plausible story — same-moment, on the real artifact.** The
+    shipped gate classified the live lock `maint_lock=would-reap age=9623m` under `--dry-run`; the
+    real run reported `maint_lock=reaped` with `removed=0 kept=89` (idle floor raised via
+    `CC_WTGC_IDLE_MIN` so the reap was the ONLY action and no worktree was touched). Auto-maintenance
+    then recovered **by itself**, within minutes:
+
+    | | before reap | after |
+    |---|---|---|
+    | loose objects | 15,233 | **7** |
+    | loose size | 154 MiB | **32 KiB** |
+    | packs | 6 | 2 |
+    | commit-graph chain | 2026-08-12 06:37 | **2026-08-19 05:55** |
+
+    Red-proof: **7/7 RED** against the pre-fix subject from HEAD (`1..7` seen, no skips), 107/107
+    green post-fix, `worktree-gc-infra.bats` 53/53. Six mutants, each isolating exactly its
+    predicted case set: M1 reap-no-op {1} · M2 holder test disarmed {2} · M3 age floor deleted {3,7}
+    · M4 dry-run made to act {4} · M5 blind probe certifies absence {5} · M6 absent default flipped
+    {6}. Restoration verified byte-identical after the series.
+  - 🚨 **RECORDED, NOT FILED (conservation — closed 1, filed 0): reso is still uncovered, and it is
+    the repo that already had this failure.** `gl.reso.worktree-gc` runs a DIFFERENT script
+    (`~/.reso/worktree-gc-run.sh`), not this janitor, so reso inherits nothing from this fix. Checked
+    same-moment and clean today: reso-management-app, personal, finance-ai-web-app, doc_classifier
+    all have no stranded lock. The durable point for whoever works reso: the reaper is ~40 lines and
+    the seam is `CC_WTGC_REPO`.
+  - 🚨 **A note for the next pass on the classifier wall:** the auto-mode classifier DENIED both a
+    bare `rm -f <the lock>` and the first janitor run. The brief's standing advice held — it is
+    transient, and the identical command succeeded on retry. The better move was the one the denial
+    pushed toward anyway: let the TOOL be the actuator rather than hand-removing the file
+    (memory: `make-the-actuator-the-arbiter`).
+
 - **2026-08-19 — drain recycle #41: both rows were blocked on a question already answerable — one
   from disk, one by running the thing for ninety seconds — and both measurements REMOVED work
   rather than adding it.** `master-fleet-footprint` **16 open / 4 blocked (4 operator-gated,
