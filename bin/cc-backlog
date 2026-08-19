@@ -4565,7 +4565,7 @@ cloud_state() { # <backlog-id> → echoes cc-cloud's state token, rc 0; rc 2 = C
 # only in which spelling of "→ open" their row's status requires (reopen for a claim, unblock for
 # a block — RE-OPEN EFFECT in the header: two spellings of one effect).
 #
-# Echoes "<verb><token><message>". Verb ∈ block | open | done.
+# Echoes "<verb>\037<token>\037<message>". Verb ∈ block | open | done.
 #   BOOTING / ALIVE          → block. THE ONLY BLOCK LEFT, and now it means what it says: a worker
 #                              is genuinely running off-box. Reopening would fire a second peer at
 #                              live work — the exact double-dispatch the local oracle exists to stop.
@@ -4579,12 +4579,12 @@ cloud_map() { # <state> <id> → verdict triple, rc 0; rc 1 = no action for this
   local st="$1" id="$2"
   case "$st" in
     BOOTING|ALIVE)
-      printf 'blocklive-cloud-workera LIVE off-box worker (cc-cloud reads %s) still holds this item past the ceiling. NOT reopened: the worker is running, so a reopen would fire a SECOND peer onto live work. Watch it (`cc-cloud show --item %s`) or close the session, then `cc-backlog unblock %s`.' "$st" "$id" "$id" ;;
+      printf 'block\037live-cloud-worker\037a LIVE off-box worker (cc-cloud reads %s) still holds this item past the ceiling. NOT reopened: the worker is running, so a reopen would fire a SECOND peer onto live work. Watch it (`cc-cloud show --item %s`) or close the session, then `cc-backlog unblock %s`.' "$st" "$id" "$id" ;;
     NOT-STARTED|STALLED|ABANDONED)
-      printf 'opencloud-%scc-cloud reads %s for this item — no off-box worker is making progress, so it returns to the wave.' \
+      printf 'open\037cloud-%s\037cc-cloud reads %s for this item — no off-box worker is making progress, so it returns to the wave.' \
         "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')" "$st" ;;
     LANDED)
-      printf 'donecloud-landedcc-cloud reads LANDED — every path this off-box session declared is content-present on the trunk ref (git ls-tree, never a commit count). Closed by the reap on that content verdict; `cc-cloud show --item %s` reproduces it.' "$id" ;;
+      printf 'done\037cloud-landed\037cc-cloud reads LANDED — every path this off-box session declared is content-present on the trunk ref (git ls-tree, never a commit count). Closed by the reap on that content verdict; `cc-cloud show --item %s` reproduces it.' "$id" ;;
     *) return 1 ;;
   esac
 }
