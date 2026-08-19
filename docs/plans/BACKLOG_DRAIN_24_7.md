@@ -87,6 +87,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #35: the fleet's own liveness oracle `(pid,lstart)` existed at two
+  organs and reached NEITHER registry reader — and the guard that fixes it ships a WORSE bug unless
+  its timezone is pinned. `master-fleet-footprint` 20 open / 4 blocked (4 operator-gated,
+  `source: needs`; 0 cloud-venue, 0 claimed, no stale claim). filed 0 / closed 0.** Lands
+  `8df2914e2` + `c1c8b48fa`, both content-verified on origin/main (`git diff origin/main` empty;
+  `LIVE_ADDS=0`, `LIVE_LAG=2` inside the 25 budget).
+  - **Date checked FIRST.** 2026-08-18 at intake → `master-session-lifecycle`'s `62363cac1e39`
+    (efficacy re-census, due **2026-08-24**) still not drainable; effort = `master-fleet-footprint`.
+    **Property re-measured, not inherited: 20/20 open are `venuePlan=local` AND
+    `project=claude-infrastructure`.** #36 must check the date again — 2026-08-24 is now 5 days out.
+  - **Row `5d1b5dd9b3db` — the LIVENESS half built and landed; row LEFT OPEN, claim RELEASED.**
+    Pattern (d) again, seventh recycle running, and the widest form of it yet: the correct oracle was
+    already written, tested, deployed and reasoned about — in `bin/cc-pane-headless:64-92` `is_live()`,
+    *the very driver that mints the `hdl-` address* #33 taught the registry to accept — and again in
+    `hooks/session-beat.sh:72-82` ("identity is (pid,lstart), never pid alone"). **30 files in this
+    tree carry that idiom. `cc-registry` was the one store it had not reached**, so both readers
+    adjudicated liveness with a bare `kill -0`.
+    - **The defect, proven against pristine origin/main** (one live pid, a row whose recorded start
+      time does not match it): `cc-sessions --names` printed `row-match row-recyc` — offering a dead
+      session as addressable — and `cc-notify row-recyc` **resolved** it. Post-fix both return
+      `no-such-target`. This is the false-LIFE mirror of `lookup-miss-is-not-absence`, and worse than
+      a miss: cc-notify reports delivery for mail nobody will read.
+    - **Why it bites headless hardest, i.e. why NOW.** A pane row has a second corroborator — the
+      live-pane cross-check — but `1028a238b` (#34) deliberately skips it for `surface:headless`,
+      because a pane list can only ever MISS a headless address. That was right, and it left a
+      headless row's liveness resting on `kill -0` alone. **A fix can create the need for the next
+      fix**: #34's correct narrowing is what made this the load-bearing gap.
+    - 🚨 **THE TIMEZONE PIN IS THE LESSON, AND IT NEARLY SHIPPED THE INVERSE BUG.** `ps -o lstart=`
+      renders through the AMBIENT timezone — measured, one live pid: `Tue 18 Aug 23:02:07 2026`
+      local, `Wed 19 Aug 06:02:07 2026` under `TZ=UTC`, `Wed 19 Aug 15:02:07 2026` under
+      `TZ=Asia/Tokyo`. Unpinned, the string changes for a process that **never restarted** whenever
+      DST flips or a reader runs under a different TZ than the writer (every launchd daemon), and
+      every reader convicts every row at once — **a fleet-wide false DEATH, strictly worse than the
+      false life being fixed.** This repo had already paid for exactly that bug:
+      `tests/watchdog-census.bats:197-221` pins lead-crash-watchdog's *third state*, which exists
+      only to survive it. **UTC has no DST, so pinning removes the class instead of classifying it.**
+      Found only because a `grep lstart tests/` surfaced that sibling suite — read the neighbours of
+      any idiom you adopt. Safe to define the rendering because there was no corpus to migrate:
+      **0 of 11 live rows carried `lstart` at all.**
+    - **Fail-open twice, on two DIFFERENT facts** — no recorded value ⇒ a row predating the field
+      (never convict on what nobody wrote); an unreadable `ps` ⇒ not proof of death. Only a value
+      READ and DIFFERING convicts. Measured worth: mutating that fail-open out breaks **21 of the 87
+      pre-existing cc-notify cases**, so the backward-compatibility claim is a number, not a hope.
+    - **The TSV column was the silent hazard.** `REG_ROWS` is tab-separated and `read` puts all
+      remaining fields in its LAST variable, so a reader left at `read -r n p u` does not fail — it
+      binds `u` to `<uuid><TAB><lstart>` and every address comparison silently stops matching. All
+      **3** readers moved in one diff; a **block census** case pins 2 producer arms / 3 four-field
+      readers / 0 three-field readers, and its mutant reds both the census AND real name resolution.
+    - **Spec R3 deliberately NOT adopted, and the correction is the deliverable.** `03-headless-substrate.md`
+      prescribes *beat freshness* as the session-level oracle because two live sids share one pid
+      (C2). True for the harness-sid design that spec assumed; **false for the address this tree
+      adopted** — `hdl-` is minted per agent process, so `(pid,lstart)` does discriminate. Named in
+      the commit body. **Remainder, for #36:** argv classifiers E9/E12, the rc-3
+      `no-watcher-headless` verdict, and gap 2 entirely.
+  - **Row `bb2495b098b8` — precondition discharged, premise CORRECTED, row LEFT OPEN, claim RELEASED.**
+    Its stated blocker was "needs the vendor-vs-ours split decided FIRST, then an auditor". The split
+    is **already decided by siblings**: `f542c8b2c` tracked 13 skills, `8b33db9e6`/`ab62d3a08` two
+    more, and `9d8965faa` recorded the surviving 5 as third-party derivatives in `skills/LOCAL_ONLY.md`
+    with a durable reason each. So 20 of 35 unversioned → **5 of 35**.
+    - 🚨 **AND THE OBVIOUS CONCLUSION FROM THAT IS WRONG — measurement refuted my own hypothesis
+      mid-pass.** "Only 5 left, so the alarm-polarity exclusion of `skills/` has expired, widen the
+      STRAY sweep" is exactly backwards. **The STRAY leg reports FILES, not directories**: those 5
+      dirs hold **84 files (82 real, 2 symlinks it already excludes)** — `react-best-practices` alone
+      is **59**. Widening today prints an **82-line** wall, not a 5-line one, so the alarm-polarity
+      case is **~4x STRONGER** than when written. "20 of the 35 live skills" conflated a DIRECTORY
+      count with a FILE count and understated the wall 4x. Both sites now carry both numbers and an
+      explicit *do not re-open on the directory count*.
+    - **Two near-misses worth keeping.** (1) I was about to VERSION `pyramid-principle-full` as an
+      unbacked 116K asset with zero git objects anywhere — until reading the citing commit revealed
+      it is a **deliberate copyright call** (a derivative of Minto's book, never to enter git
+      history). *Read the commit that made the decision before "fixing" its outcome.* (2) The
+      declaration the sweep commit promised "in the next commit" landed as a **doc**
+      (`skills/LOCAL_ONLY.md`), not in `config/live-only.manifest` — the store
+      `deploy-link-parity.sh` actually reads (`conclusion-must-reach-the-enforcing-store`). Adding
+      manifest rows now would be **inert**, because the sweep does not reach `skills/` at all.
+    - **Coherent remedy recorded for #36:** 5 glob rows (`skills/<name>/*`, the form
+      `lib/*.prelink-bak` already uses) witnessed by `skills/LOCAL_ONLY.md`, landed as **ONE unit**
+      with the widening — rows are inert until the sweep reaches them, and the widening without them
+      IS the 82-line wall. `agents/motion-reviewer.md` is a real file in no checkout, same class.
+  - **Two RED lands, both correct, both caught defects in MY tests — and one exposed a prescribed
+    pre-land check that is strictly weaker than the gate.**
+    - 🚨 **`bats-assert-liveness-fix.py --dry-run` IS NOT THE GATE, AND ITS rc=0 IS NOT A
+      CLEARANCE.** The gate runs the DETECTOR `scripts/bats-assert-liveness.py`; the brief's
+      prescribed pre-land command runs the **fixer**, which reports `would fix 0` and **exits 0** for
+      any shape it cannot auto-rewrite. Same file, same moment: fixer `--dry-run` rc=**0**, fixer
+      real-mode rc=**2** (declines), detector rc=**1** (one finding). It cost a 5-minute RED land.
+      **#36+: run `python3 scripts/bats-assert-liveness.py <suites>`** (memory:
+      `prescribed-repro-weaker-than-the-harness`, `cost-gate-must-be-strictly-weaker`).
+    - **`scripts/bats-kill-guard-lint.sh` is a blocking gate and is NOT in the brief's sweep list.**
+      It caught `[ -n "$P" ] && kill "$P" 2>/dev/null; return 0` — `&&` does **not** exempt errexit
+      for the last command of an AND-list, and a trailing `; return 0` never runs, so a child already
+      reaped under load aborts the body. Add it to the sweep.
+    - **A `git checkout HEAD -- <file>` after a mutant ate an UNCOMMITTED fix** (the #22 trap, hit
+      again). Cure used: `cp` the fixed file aside BEFORE mutating, restore from the copy.
+    - **A mutant filter matched the WRONG case** — `-f 'ambient TZ'` hit the cc-sessions case, not
+      the register case labelled `ambient-TZ` (hyphen), and the resulting `ok` read as "the mutant
+      did not red it". *Prove your filter selected the case you think it did* (#34's law, new shape).
+  - **7 mutants, and every one of the 10 new cases is credited by at least one.** M1 drop the TZ pin
+    (read side) → the matching-still-live + TZ-identical pair · M2 delete the cc-sessions guard → the
+    recycled-row case alone · M3 drop the TZ pin (write side) → both write-side cases · M4 remove
+    `pid_live` fail-open → the truth table **+ 21 of 87 pre-existing** · M5 one reader back to 3
+    fields → census **and** name resolution · M6 remove cc-sessions fail-open → the legacy-row case
+    alone · M7 drop the TZ pin in `pid_live` → truth table + over-conviction control. Tree verified
+    restored (`git diff --stat HEAD` = 0) after every one.
+  - **Suites run green by hand before landing: 16, ~500 cases, each with its `1..N` seen and 0
+    `# skip` in the new blocks** — so the land's smoke abstain on `tests/cc-notify.bats` (exit 124,
+    zero `not ok`, the documented non-verdict) cost nothing. `session-registry` 1..36 ·
+    `cc-notify` 1..91 · `deploy-link-parity` 1..34 · plus 13 consumer suites.
+  - **Teammates 0 / Explore 0** — both rows were pre-surveyed by the brief; direct re-derivation was
+    cheaper, as it was for #31-#34.
+
 - **2026-08-18 — drain recycle #34: a fix can land at TWO organs and be re-refused by SIXTEEN, and
   a landedness check by SHA can read "never landed" over content that is plainly on trunk.
   `master-fleet-footprint` 20 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
