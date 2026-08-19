@@ -87,6 +87,61 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #30: a subagent's ALREADY-FIXED verdict was refuted by the log and
+  then re-confirmed by the code, arriving at the same close for the opposite reason.
+  `master-fleet-footprint` 26 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed). filed 0 / closed 2.**
+  Land `81831f80e` (window-census `--pid`), content-verified on origin/main.
+  - **Re-measured rather than inherited, and the property held.** 28 open at intake, **28/28
+    `venuePlan=local` AND `project=claude-infrastructure`**. Date checked FIRST:
+    `master-session-lifecycle`'s `62363cac1e39` (efficacy re-census, due **2026-08-24**) is still
+    **not drainable** on 2026-08-18; #31 must check the date again before anything else.
+  - **Built + closed `cb47f6a92fe9` — `window-census.swift` grouped on `kCGWindowOwnerName`, which
+    is the APP's name, so two instances of one app summed into ONE row.** The `pid` column was
+    whichever window was enumerated last. Cherry-picked the 25-line `--pid` hunk from `dd695e1a0`
+    (branch `terminal-arm-land`, **not** an ancestor of main); the base blob is byte-identical
+    across `dd695e1a0^` / `origin/main` / `HEAD` (`38a50d7fd`), so the land is main plus exactly
+    that hunk and nothing else from a branch whose bake-off verdict has been warranted away.
+    - **The flag was not merely absent — it was silently IGNORED, which is strictly worse.**
+      Pre-fix, `--pid <a windowless pid>` exits **0** with `verdict=OK` and all 37 owners on the
+      box: the tool answered a question nobody asked and certified it. Post-fix, exit 3 /
+      `verdict=NO-DATA`, the same rule `--owner` already followed.
+    - **Three mutants, one per SITE, each red its named case and no other — 0 weak.** M1 filter-site
+      red BOTH cases; M2 keying-site (always key on app name) red **only** arm 2; M3 no-data-site
+      red **only** arm 1. M2 is the one that matters: it proves arm 2 is load-bearing rather than
+      decoration, because a fix that satisfies arm 1 by making `--pid` always return `NO-DATA`
+      would pass arm 1 while destroying the only reason the flag exists.
+  - **Closed `594dcaa4e976` as ALREADY-FIXED — but the Explore survey's verdict did not survive
+    first contact, and re-deriving it is what produced the real evidence.** The survey called it
+    already-fixed and explained the falsifier's red as a cumulative append-only log measuring
+    history. The log **refuted that**: the newest `rc=67` is **2026-08-17**, seven days AFTER the
+    fix landed (`5f5fd7270`, 2026-08-10 11:05:41 -0700), so the residue was not all historical.
+    - **The code then re-confirmed the close for the opposite reason.** 13 events post-date the
+      fix, and they are the arm the remedy **deliberately preserves**. With a zero-byte screen
+      capture (verified: `20260818T044659Z-win300.txt` is 0 bytes) the landed `no_box` predicate at
+      `bin/it2-kitty:727` reaches `UNKNOWN` only when `agent == "-"` — an argv-unproven pane. And
+      `tests/it2-kitty-composer-guard.bats` case **17**, *"CONTROL: the same zero-rule screen
+      WITHOUT an agent argv is refused"*, pins that refusal as **required**.
+    - **⇒ The stored falsifier cannot green on the row's own prescribed remedy, and was NOT
+      rewritten.** It demands `grep -c 'rc=67' == 0` while the remedy it prescribes keeps `rc=67`
+      for the rendered-but-unreadable arm. Closed on independent content evidence instead: the
+      split is on main at `:727`, both states are admitted at `:972`, the suite is `1..47` green
+      this moment, and refusals collapsed 46 (Aug-7) / 24 (Aug-9) / 57 (Aug-10) → 3 / 3.
+    - **Two instrument traps worth carrying.** The fix landed as `AGENT-PANE` / `AGENT-NO-BOX`, not
+      the row's proposed `NO-COMPOSER`, so grepping the row's own token returns nothing and reads
+      as *not landed*. And the row's `firstTs` (05:29) is EARLIER the same day than the fix
+      (11:05) — dating the fix against the row is what separated "sibling already did it" from
+      "still open".
+  - **For #31: a subagent verdict is a claim, and BOTH directions of checking it paid.** The survey
+    (5 rows, ~14 calls, all reached) was high-value, but its one actionable verdict was wrong in
+    its reasoning and right in its conclusion. Re-deriving cost four commands. Its other verdicts —
+    `4b9d5e93b40a` (headless sessions never register; multi-file, writer+deregister+reader must
+    change together), `47878886746f` (`cc-teardown` `tty_foreign` counts a sibling `tee`;
+    single-file, control already exists), `15265ac3c502` (**EVIDENCE-EXPIRED** at its primary site
+    — `hooks/worktree-setup.sh` already uses the prescribed `bash script.sh` form) and
+    `d90bbcd9e01f` (spawn half landed, existing-pane half unwired; large) — are UNVERIFIED
+    survey prose, not measurements. Re-derive before claiming.
+
 - **2026-08-18 — drain recycle #29: the row's two premises were both false and the defect underneath
   them was real; a standing trunk red, not mine, was what actually held the land.
   `master-fleet-footprint` 28 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
