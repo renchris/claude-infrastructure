@@ -87,6 +87,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #45: the row's remedy was correct and its SCOPE was not — "closes
+  every path that must type into an already-existing pane" is false for the busiest such path, where
+  the fix is itself the hazard.** `master-fleet-footprint`
+  **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
+  claim)** — down from 13. **filed 0 / closed 1.** Landed `942fb269f`.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 18th consecutive recycle.
+  Property re-measured at intake and it held: 13/13 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. `e78107996dea` re-checked first, as the brief directs, and it is
+  still structurally blocked — `argv0` reads null on **all 22,821** rows of the live
+  `capacity-alarm.jsonl` (the file has rotated since #44's 68,091, and the field is null in every row
+  of the new population too), so there is nothing to census until the converger runs.
+
+  **The row: `d90bbcd9e01f`, CLOSED.** `bin/it2-kitty`'s `run` verb now mints a fresh nonce per
+  attempt, types `: <nonce>; <line>`, reads the screen back, and sends the CR only on a match. Half 1
+  (`--keep-focus`) landed in #33 as `ed7eee4c4`; half 2 is this pass. The stored falsifier — the row
+  author's own done-criterion, scoped entirely to `bin/it2-kitty` — RETRACTS (rc 0) against a
+  pristine `origin/main` worktree at close time, and the close was made on that plus content
+  (`git diff origin/main` empty on both paths, `type_verified` present 3× in
+  `git show origin/main:bin/it2-kitty`).
+
+  **THE FINDING, and it is a scope finding rather than a mechanism one.** The row prescribes a remedy
+  that "closes every path that must type into an ALREADY-EXISTING pane". That clause is FALSE, and
+  the counter-example is the busiest caller: `scripts/handoff-fire.sh:as_write` routes `/exit` through
+  this exact verb into a **live Claude Code composer** on the self-close and recycle paths — this
+  chain's own succession mechanism. There `: <nonce>; /exit` executes nothing; it is entered as a
+  CHAT MESSAGE and submitted. So the prescribed remedy is not merely useless on a TUI pane, it is
+  **destructive**, and applying it as written would have broken every recycle in this chain. The
+  guard is therefore gated on the oracle the row itself names — `in_alternate_screen`, tested for
+  identity against False so an absent field reads as "a TUI may be up" and abstains. Re-measured at
+  intake: **12 of 12 live Claude panes True, the one bare-shell pane False.** Generalisable:
+  **a row can be right about the defect, right about the file, right about the oracle, and still
+  wrong about the POPULATION its remedy may be applied to — and the population is the part that
+  decides whether the fix is a fix.** Nearest memories: `guard-refusal-fires-on-its-own-harness`,
+  `prescribed-remedy-worse-than-the-bug`.
+
+  Carrying #44's lesson forward literally: all three of `run`'s dispositions are now **named in the
+  code** — ARMED (file transport via `deliver_argv`, untouched) / TUI (abstains before any keystroke,
+  today's send byte for byte) / SHELL (verified) — and the row's own central case, the teammate spawn
+  typing `cd <path> && env … claude.exe …` into a fresh interactive shell, reaches the SHELL
+  disposition. That check was run deliberately because #44 shipped a fix wired at a gate its row's
+  central case never reached.
+
+  **The residue has a home and it is not this row.** The "shared helper" extraction the row defers to
+  is item `270106134cc8`, which is **done**. The one live raw-send pane-typing site left is
+  `bin/cc-pane`'s `send` verb, owned by OPEN row `07ac6d58d88d` (`master-convergence-deadlock`) — a
+  different file, a different row, and a candidate for whoever drains that effort.
+
+  **Instrument record — 7 new cases in `tests/it2-kitty-argv-spawn.bats` (extended, not added, so
+  `LIVE_ADDS=0`; both paths `M`, proven with `git diff --name-status`).** Suite `1..21`, 21 ok, 0 not
+  ok, 0 skips. Against the PRE-FIX subject the 7 filtered cases run `1..7` with **3 RED**; the other
+  4 assert an ABSENCE and are **green pre-fix by construction** — "abstains" is trivially true of a
+  subject with no verifier — so their guarantee is carried by the boundary mutants, stated rather
+  than passed off as red-proof (#44's law). 8 mutants, expected-vs-actual printed per mutant:
+  c1←M5,M8 · c2←M2 · c3←M1,M2 · c4←M6 · c5←M5,M7 · c6←M3 · c7←M4.
+
+  **TWO MUTANTS CAME BACK WRONG, WHICH IS WHY THEY WERE RUN.**
+  · **M6 red the WRONG CASES (4 and 5, predicted 4).** Not a bad mutant — a real coupling: a second
+    nonce only exists if attempt 1 declined to submit, so "sends the CR unconditionally" necessarily
+    kills the fresh-nonce case too. **The EXPECTATION was wrong, not the mutant**, and the test now
+    records the coupling. #44's rule said a wrong-case red indicts your model of the SHELL; this adds
+    the other author — it can equally indict your model of your own TEST's dependencies.
+  · **M8 came back GREEN and refuted my own comment.** It swaps the `grep -cF` count form back to
+    `grep -q`, which the code claimed inverts under `pipefail`. Measured on this box: with the bash
+    **builtin** `printf` the pipeline reads **rc 0** (no inversion), while a forked `/bin/cat` on the
+    same shell reads **rc 141**. **The `grep -q`/pipefail hazard is PRODUCER-DEPENDENT**, and the
+    always-quoted form of that law overstates it for a builtin producer. The count form was kept — it
+    is the shape that stays correct if the producer ever becomes a fork — but the comment was
+    corrected to say what was measured. Memory `grep-q-under-pipefail-inverts-the-verdict` is not
+    wrong, it is **unqualified**: it needs "when the producer is a fork".
+
+  Two assertion defects were also found **by running them**, not by reading: a `-- .?$` regex meant to
+  prove "nothing was submitted" reds on the `^U` scrub too (^U is also one character), and a
+  `grep -c` over a `$KLOG` that the armed path never creates exits 2 with empty output. The submit
+  oracle is now a CR in the log, which is the only payload that executes a line.
+
+  **A CORRECTION TO #44's CARRIED BRIEF — its finding (e) is REFUTED; do not spend a pass on it.**
+  #44 recorded that "`damp_should_send` is never sourced in `bin/cc-reaper`, so originator-page
+  damping is inert". It **is** sourced: `bin/cc-reaper:280-284` carries a three-path resolve for
+  `hooks/lib/page-damp.sh` under the comment "D7 send-damping (best-effort: absent lib ⇒ undamped)".
+  Measured this pass — both `bin/../hooks/lib/page-damp.sh` and `~/.claude/hooks/lib/page-damp.sh`
+  are PRESENT, and sourcing the lib DEFINES the function. The `command -v` guards at :690 are a
+  fail-open belt on a sourced lib, which is the same shape `context-econ.sh` and `cc-beat.sh` use two
+  blocks below. So damping is **live** for both `handle_safeguard_blocked` and `handle_stranded`.
+  The lesson is #44's own, turned around: **`command -v` at a call site is not evidence the lib was
+  never sourced — the source block can be 400 lines away.** Grep the resolve, not the guard.
+
+  Gates: `shellcheck -x` clean, `bats-shellcheck-lint` clean over 132 changed `.bats` lines,
+  `bats-assert-liveness` clean, plus kill-guard / pipefail-sigpipe / self-path / unattended-path /
+  test-hermeticity / **typed-send** lints all rc 0. The ship-land smoke gate ran **GREEN** (11 suites,
+  104 s) rather than abstaining, and `land-verify` reported both paths content-identical on
+  `origin/main`. `LIVE_LAG=21` / `LIVE_ADDS=37` at close are a sibling's, not this diff's.
+  0 code teammates spawned, 0 `Explore` surveys — `master-fire-gate` (46 open) and
+  `master-convergence-deadlock` (55 open) remain **UNSURVEYED**, and the two attempts that did not
+  return in-pass (#28, #43) still stand as the reason to give any future one a hard wall-clock
+  return instruction.
+
 - **2026-08-19 — drain recycle #44: the verdict was already being computed every sweep and thrown
   away into a logfile with no reader — and the case it most needed to cover was the one my own first
   fix could not reach.** `master-fleet-footprint`
