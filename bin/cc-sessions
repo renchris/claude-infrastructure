@@ -232,6 +232,30 @@ for f in "$REG_DIR"/*.json; do
 
   stale=0
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then stale=1; fi
+  # PID-REUSE GUARD (write side: hooks/session-register.sh, field `lstart`). `kill -0` answers "is
+  # SOME process holding this pid", never "is THAT process still this session" — and a row is
+  # retained for CC_REG_RETAIN_H (24h) after its session dies, so the recycled-pid window IS the
+  # retention window. Re-read the pid's own start time and require it to match what the writer
+  # recorded; this is `bin/cc-pane-headless:86-92` is_live() and `hooks/session-beat.sh:72-82`,
+  # which have keyed identity on (pid,lstart) all along — cc-registry was simply not reached by it.
+  #
+  # It matters most for the row DIRECTLY BELOW: a pane row has the live-pane cross-check as a second
+  # opinion, but a `surface:headless` row deliberately skips that check (a pane list can only MISS a
+  # headless address), so without this field its liveness rests on `kill -0` alone.
+  #
+  # FAIL-OPEN TWICE, and the two cases are different facts: a row with no `lstart` predates the
+  # writer's field and must behave exactly as it did before (never convict on a value nobody wrote);
+  # an unreadable `ps` is not proof of death either, so a hiccup must not reap a live session. Only a
+  # start time that is READ and DIFFERS convicts. The fork is paid only for a row whose pid is still
+  # alive — a dead-pid row already short-circuited above — so it costs at most one `ps` per live
+  # session, on a lister that already spends 2-3 `jq` forks per row.
+  if [ "$stale" = 0 ] && [ -n "$pid" ]; then
+    rec_lstart=$(jq -r '.lstart // ""' "$f" 2>/dev/null)
+    if [ -n "$rec_lstart" ]; then
+      now_lstart=$(TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+      if [ -n "$now_lstart" ] && [ "$now_lstart" != "$rec_lstart" ]; then stale=1; fi
+    fi
+  fi
   # The pane cross-check is asked ONLY of rows a terminal can enumerate. A headless row's address
   # is never in `it2 session list` — that list can only ever MISS it — so applying the check would
   # mark every headless session stale the instant it registered and hide it from the addressing

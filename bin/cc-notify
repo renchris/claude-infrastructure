@@ -264,7 +264,7 @@ registry_load() {
   # turn one bad file into a total resolver outage — so fall back to per-file parsing (N forks, but
   # only ever on the degraded path) and simply skip the rows that will not parse.
   if out="$(jq -s -r '.[] | select(type=="object")
-                    | [(.name // ""), (.pid // ""), (.paneUUID // "")] | @tsv' \
+                    | [(.name // ""), (.pid // ""), (.paneUUID // ""), (.lstart // "")] | @tsv' \
               "$REG_DIR"/*.json 2>/dev/null)"; then
     REG_ROWS="$out"; REG_RC=0; return 0
   fi
@@ -273,23 +273,53 @@ registry_load() {
     [ -e "$f" ] || continue
     local row
     row="$(jq -r 'select(type=="object")
-                | [(.name // ""), (.pid // ""), (.paneUUID // "")] | @tsv' "$f" 2>/dev/null)" || continue
+                | [(.name // ""), (.pid // ""), (.paneUUID // ""), (.lstart // "")] | @tsv' "$f" 2>/dev/null)" || continue
     [ -n "$row" ] && out="${out}${row}
 "
   done
   REG_ROWS="$out"; REG_RC=0; return 0
 }
 
-# `kill -0` is a bash BUILTIN — liveness for the whole registry costs zero forks.
-pid_live() { local p="$1"; case "$p" in ''|*[!0-9]*) return 1 ;; esac; kill -0 "$p" 2>/dev/null; }
+# `kill -0` is a bash BUILTIN, so the pid half of this still costs zero forks — and it remains the
+# only test performed for a row that has no recorded start time, or whose pid is already dead.
+#
+# PID-REUSE GUARD (arg 2, the row's `lstart` — written by hooks/session-register.sh). `kill -0`
+# answers "is SOME process holding this pid", never "is THAT process still this session". A registry
+# row outlives its session by CC_REG_RETAIN_H (24h) by design, so the recycled-pid window IS the
+# retention window, and this box's pid counter wraps its ~100k space in well under an hour under
+# ordinary fleet load. Unguarded, a recycled pid makes a DEAD session resolve as live — which is the
+# false-life mirror of the false-death (`lookup-miss-is-not-absence`) this resolver was rebuilt to
+# end, and it is worse here than a miss: cc-notify would resolve a name onto a dead pane and report
+# `verdict=delivered` for mail nobody will ever read.
+#
+# The oracle is (pid,lstart), which is what `bin/cc-pane-headless:86-92` is_live() and
+# `hooks/session-beat.sh:72-82` have keyed identity on all along; the registry was the one store the
+# guard had not reached. The rendering expression is theirs verbatim — writer and reader must render
+# the same instant into the same string, or the comparison is inert rather than merely wrong.
+#
+# FAIL-OPEN TWICE, on two different facts: no recorded value ⇒ a row predating the field, judged
+# exactly as before (never convict on something nobody wrote); an unreadable `ps` ⇒ not proof of
+# death, so a hiccup cannot retire a live peer. Only a start time READ and DIFFERING convicts.
+#
+# COST: every caller reaches this only for a row that already matched the requested address, so the
+# `ps` is paid at most once or twice per invocation — not once per registry row.
+pid_live() {
+  local p="$1" want="${2:-}" now
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  [ -n "$want" ] || return 0
+  now="$(TZ=UTC ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$now" ] || return 0
+  [ "$now" = "$want" ]
+}
 
 # name → pane uuid, LIVE rows only (the W4 addressing contract: never resolve a name onto a dead
 # pane). rc 0 = hit, 1 = readable-but-absent, 2 = registry unreadable.
 registry_name_to_uuid() {
-  local want="$1" n p u
+  local want="$1" n p u lst
   registry_load || return 2
-  while IFS="$(printf '\t')" read -r n p u; do
-    [ "$n" = "$want" ] && [ -n "$u" ] && pid_live "$p" && { printf '%s' "$u"; return 0; }
+  while IFS="$(printf '\t')" read -r n p u lst; do
+    [ "$n" = "$want" ] && [ -n "$u" ] && pid_live "$p" "$lst" && { printf '%s' "$u"; return 0; }
   done <<EOF
 $REG_ROWS
 EOF
@@ -302,19 +332,19 @@ EOF
 # unique dead match still resolves — and the liveness verdict below stays honest about it.
 # rc 0 = unique hit, 1 = no match, 2 = registry unreadable, 3 = AMBIGUOUS (never guess).
 registry_prefix_to_uuid() {
-  local want="$1" n p u lc_w lc_u hits="" live_hits="" n_hits=0 n_live=0
+  local want="$1" n p u lst lc_w lc_u hits="" live_hits="" n_hits=0 n_live=0
   registry_load || return 2
   # Both sides are compared DASH-STRIPPED and lower-cased, so "AAAAAAAA-1111", "aaaaaaaa1111" and the
   # full 32 hex digits all address the same pane. The value RETURNED is still the canonical dashed
   # uuid ($u), because that is what every downstream consumer (mailbox path, it2) expects.
   lc_w="$(printf '%s' "${want//-/}" | tr '[:upper:]' '[:lower:]')"
-  while IFS="$(printf '\t')" read -r n p u; do
+  while IFS="$(printf '\t')" read -r n p u lst; do
     [ -n "$u" ] || continue
     lc_u="$(printf '%s' "${u//-/}" | tr '[:upper:]' '[:lower:]')"
     case "$lc_u" in
       "$lc_w"*) hits="${hits}${u}
 "; n_hits=$(( n_hits + 1 ))
-                if pid_live "$p"; then live_hits="${live_hits}${u}
+                if pid_live "$p" "$lst"; then live_hits="${live_hits}${u}
 "; n_live=$(( n_live + 1 )); fi ;;
     esac
   done <<EOF
@@ -1108,15 +1138,16 @@ target_live() {
   # registered? Decide from the REGISTRY DIRECTLY (v4) — this used to shell to `cc-sessions --json`,
   # i.e. into the same it2 IPC that hangs, so even a full-UUID send (the "reliable" address) blocked
   # here. It only ever LOOKED reliable because the enqueue above already happened.
-  # `kill -0` is cc-sessions' own authoritative liveness signal, so a registered row decides outright:
-  #   dead pid → not-live · live pid → live. The one behaviour change is a pid that outlives its pane
+  # `(pid,lstart)` is cc-sessions' own authoritative liveness signal — the SAME predicate, kept in
+  # lockstep on purpose — so a registered row decides outright: dead-or-recycled pid → not-live ·
+  # live pid whose start time still matches → live. The one behaviour change is a pid that outlives its pane
   #   (a transient window at close): formerly not-live via it2, now live — and the verdict below still
   #   says "NO watcher armed → drains on its NEXT turn", so nothing claims a wake that will not happen.
-  local n p ruuid
+  local n p ruuid rlst
   if registry_load; then
-    while IFS="$(printf '\t')" read -r n p ruuid; do
+    while IFS="$(printf '\t')" read -r n p ruuid rlst; do
       if [ -n "$ruuid" ] && [ "$ruuid" = "$u" ]; then
-        pid_live "$p" && return 0
+        pid_live "$p" "$rlst" && return 0
         return 1
       fi
     done <<EOF

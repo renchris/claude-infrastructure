@@ -215,14 +215,54 @@ if [ -f "$row" ]; then
   fi
 fi
 
+# PID-REUSE GUARD — the row records the pid's OWN START TIME, so identity is (pid,lstart) and never
+# pid alone. Readers adjudicate a row's liveness with `kill -0 $pid`, which answers "is SOME process
+# holding this pid", not "is THAT process still this session". A row outlives its session by
+# CC_REG_RETAIN_H (default 24h) by design, so the recycled-pid window is the retention window; this
+# box's pid counter advanced 2,568 in 5s under ordinary fleet load, against a ~100k space, so the
+# space wraps in well under an hour — orders of magnitude inside 24h. A reboot is the same hazard
+# arriving faster: pids restart low and every retained row's pid is immediately fair game.
+#
+# THE FIX ALREADY EXISTED ONE LAYER AWAY. `bin/cc-pane-headless:64-67,86-92` — the very driver that
+# mints the `hdl-` address this hook was taught to accept — records `pstart` at spawn and re-checks
+# it in `is_live()`, with the rationale verbatim: "after a reboot every recorded pid is fair game for
+# reuse". `hooks/session-beat.sh:72-82` does the same for the beat row ("identity is (pid,lstart),
+# never pid alone"). Thirty files in this tree carry that idiom; cc-registry was the one store that
+# did not, so the guard could not reach the readers that needed it (fleet memory:
+# conclusion-must-reach-the-enforcing-store).
+#
+# The expression is `pstart_of()`/session-beat.sh:82, with ONE addition: `TZ=UTC`. Writer and reader
+# must render the same instant into the same string, and `ps -o lstart=` renders through the AMBIENT
+# timezone — measured on this box, one live pid prints "Tue 18 Aug 23:02:07 2026" local, "Wed 19 Aug
+# 06:02:07 2026" under TZ=UTC and "Wed 19 Aug 15:02:07 2026" under TZ=Asia/Tokyo. Unpinned, the
+# string changes for a process that NEVER RESTARTED whenever DST flips or a reader runs under a
+# different TZ than the writer (a launchd daemon with no TZ set is the standard case), and every
+# reader below would convict every row at once — a fleet-wide false DEATH, strictly worse than the
+# false life this field exists to stop. `tests/watchdog-census.bats:197-221` is this repo already
+# paying for that exact bug in lead-crash-watchdog, which had to grow a whole third state to survive
+# it. UTC has no DST, so pinning it removes the class instead of classifying it.
+#
+# Safe to define the rendering here because there is no corpus to migrate: measured this session,
+# 0 of 11 live registry rows carry `lstart` at all, and every reader fails OPEN on its absence.
+#
+# This is sharper for a headless row than a pane one. A pane row has a second, independent
+# corroborator — `bin/cc-sessions` cross-checks it against the live pane list — but that check is
+# skipped for `surface:headless` (see the SURFACE note above), because for a headless address the
+# list can only ever MISS. So a headless row's liveness rests on `kill -0` and nothing else, and this
+# field is what puts a second signal back under it.
+#
+# One `ps` fork, on a hook with a wall-clock budget. The tenancy gate above already spends up to 16.
+lstart=$(TZ=UTC ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+
 # Atomic write (tmp + mv) so a concurrent cc-sessions read never sees a partial file.
 tmp="$reg_dir/.$pane.$$.tmp"
 if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" \
         --arg account "$acct" --arg sessionId "$sid" --arg surface "$surface" \
+        --arg lstart "$lstart" \
         --argjson pid "$cpid" --argjson startedAt "$started" \
       '{paneUUID:$paneUUID, name:$name, cwd:$cwd, account:$account, pid:$pid,
         startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end),
-        surface:$surface}' \
+        surface:$surface, lstart:$lstart}' \
       > "$tmp" 2>/dev/null; then
   mv -f "$tmp" "$reg_dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 else
