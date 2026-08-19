@@ -57,6 +57,55 @@ SETTLE="${CC_RAMP_SETTLE:-4}"         # seconds between unit launches
 SEG_LOG="${CC_RAMP_SEG_LOG:-$HOME/.claude/logs/compressor-sentinel.jsonl}"
 SEG_MAX_AGE="${CC_RAMP_SEG_MAX_AGE:-30}"  # a row older than this is a DEAD instrument, not a calm one
 
+# ── THE LOAD TERM (2026-08-19, backlog e981656df348) ───────────────────────────────────────────
+# WHY IT WAS MISSING AND WHY THAT MATTERED. This script is the box's ONLY actuator that adds
+# sessions one at a time under a tracked identity — and until now it recorded sessions, ptys,
+# memory, segments and panics, and NOT the one quantity the spawn gate actually keys on. So every
+# capacity constant in the tree divides by a marginal load per session that no ramp ever measured,
+# and the four values in circulation span 30x (0.172 pooled OLS · 0.566 bucket median · 1.89 delta
+# · 2.5-5 published, an aggregate/N). capacity-alarm.sh:132-135 states the same gap from the other
+# side: "no historical load series for this box exists to calibrate against — the log has to become
+# that series first." `marginal` is that series.
+#
+# 🚨 THE UNIT HERE IS RESIDENT-IDLE, AND THAT BOUNDS WHAT THE NUMBER MEANS. Every figure this verb
+# produces is the RESIDENCY FLOOR of the marginal — a lower bound. An ACTIVE, model-driven session
+# is a different and larger draw, and measuring it needs real turns and real quota, which this
+# harness deliberately does not spend (see the header: full RSS, one pty, ZERO tokens). Do not quote
+# a number from here as "the marginal load per session"; the report labels every line accordingly.
+#
+# THE NULL ARM IS NOT OPTIONAL. §8.5.7 measured this box's load moving 29.15 -> 59.80 at a CONSTANT
+# 31-32 sessions, and one instrumentation run alone moved it 19 -> 36 with session count unchanged.
+# A per-unit delta drawn from that box without a no-unit control is indistinguishable from drift, so
+# `marginal` runs the null arm FIRST and the report refuses to resolve a marginal smaller than it.
+MLOG="${CC_RAMP_MARGINAL_LOG:-$HOME/.claude/logs/capacity-marginal.jsonl}"
+# 300 s, not the 4 s launch cadence above. loadavg field 1 is an exponentially-damped 1-minute
+# average, so a delta sampled S seconds after the step still carries e^(-S/60) of the old level:
+# at 4 s that is 94% stale and measures nothing, at 90 s 22%, at 300 s 0.67%. The default is the
+# first settle at which the residual is below the reporting precision, and NO correction is applied
+# — correcting for a time constant the sampler never verified would be inventing a measurement.
+MSETTLE="${CC_RAMP_MARGINAL_SETTLE:-300}"
+MMIN="${CC_RAMP_MARGINAL_MIN_TRIALS:-5}"   # the doc's N>=5 at different baselines; report refuses below it
+
+# sysctl is RESOLVED ABSOLUTELY for the same measured reason capacity-admit.sh:155-160 gives — it
+# lives in /usr/sbin, which a launchd PATH lacks, and 222 of 239 capacity rows once read
+# `hw.ncpu unreadable ('')` because the bare name never resolved. An EXPLICIT override is honoured
+# verbatim and only the DEFAULT falls back.
+sysctl_bin() { if [ -n "${CC_RAMP_SYSCTL:-}" ]; then printf '%s' "$CC_RAMP_SYSCTL"
+               elif [ -x /usr/sbin/sysctl ]; then printf '%s' /usr/sbin/sysctl
+               else printf '%s' sysctl; fi; }
+is_num() { case "${1:-}" in ''|*[!0-9.]*) return 1 ;; esac; return 0; }
+# BOTH probes print NOTHING and return 1 when they cannot read — never a 0. This file's seg_read()
+# already establishes the rule and the reason: a 0 is the healthiest possible reading, so a dead
+# probe that returns one re-enters as a calm box. A marginal computed from a blind load probe would
+# read 0.00/session, which is exactly the conclusion the whole question is trying to test.
+load1() { local v; v="${CC_RAMP_LOADAVG_OVERRIDE:-$("$(sysctl_bin)" -n vm.loadavg 2>/dev/null | awk '{print $2}')}"
+          is_num "$v" || return 1; printf '%s' "$v"; }
+ncpu()  { local v; v="${CC_RAMP_NCPU_OVERRIDE:-$("$(sysctl_bin)" -n hw.ncpu 2>/dev/null)}"
+          is_num "$v" || return 1; [ "${v%%.*}" -gt 0 ] 2>/dev/null || return 1; printf '%s' "$v"; }
+load_display() { local l n; l="$(load1)" || { printf 'BLIND'; return 0; }
+                 n="$(ncpu)" || { printf '%s' "$l"; return 0; }
+                 awk -v l="$l" -v n="$n" 'BEGIN{ printf "%s(%.2f/core)", l, l / n }'; }
+
 avail_gb() { vm_stat 2>/dev/null | awk '
   /^Pages free:/        {gsub(/[^0-9]/,"",$NF); f=$NF}
   /^Pages purgeable:/   {gsub(/[^0-9]/,"",$NF); p=$NF}
@@ -144,8 +193,8 @@ stat_line() {
   local r seg age
   r="$(seg_read)" || r=""
   if [ -n "$r" ]; then seg="${r%% *}%"; age="${r##* }s"; else seg="BLIND"; age="n/a"; fi
-  printf 'sessions=%s ptys=%s avail=%sGB seg=%s segage=%s panics=%s\n' \
-    "$(sessions)" "$(ptys)" "$(avail_gb)" "$seg" "$age" "$(panics)"
+  printf 'sessions=%s ptys=%s avail=%sGB seg=%s segage=%s panics=%s load=%s\n' \
+    "$(sessions)" "$(ptys)" "$(avail_gb)" "$seg" "$age" "$(panics)" "$(load_display)"
 }
 
 up() {
@@ -174,17 +223,112 @@ down() {
   echo "capacity-ramp: down complete — $(stat_line)"
 }
 
+# ── THE TWO-ARM MARGINAL EXPERIMENT ────────────────────────────────────────────────────────────
+# m_sample: "<sessions> <load1>" for ONE instant, or nothing and rc 1 when the load probe is blind.
+# The census is `ps -axo comm=` (command position), never `pgrep -f` — measured 2026-08-09 at 9 by
+# argv against 0 by command position on this box, because argv here carries whole agent briefs.
+m_sample() { local s l; s="$(sessions)"; l="$(load1)" || return 1; printf '%s %s' "$s" "$l"; }
+
+m_emit() { # $1=event $2=i $3=s_pre $4=s_post $5=l_pre $6=l_post $7=ncpu $8=valid $9=why
+  mkdir -p "$(dirname "$MLOG")" 2>/dev/null || true
+  printf '{"ts":"%s","event":"%s","i":%s,"sessions_pre":%s,"sessions_post":%s,"dsessions":%s,"load_pre":%s,"load_post":%s,"dload":%s,"ncpu":%s,"settle":%s,"valid":%s,"why":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$(( $4 - $3 ))" "$5" "$6" \
+    "$(awk -v a="$5" -v b="$6" 'BEGIN{ printf "%.3f", b - a }')" "$7" "$MSETTLE" "$8" "$9" >> "$MLOG"
+}
+
+marginal() {
+  local n="${1:?usage: marginal <trials>}" i pre post sp sq lp lq nc valid why
+  [ -x "$BIN" ] || { echo "capacity-ramp: binary not executable: $BIN" >&2; return 2; }
+  nc="$(ncpu)"  || { echo "capacity-ramp: hw.ncpu unreadable — a per-core figure cannot be computed" >&2; return 4; }
+  # A BLIND LOAD PROBE ABORTS BEFORE ANYTHING IS SPAWNED. Same rule as D3's UNVERIFIABLE branch:
+  # "could not measure" is not "measured 0", and here it would spend real sessions producing rows
+  # that all read 0.000 — the exact answer the experiment exists to test.
+  pre="$(m_sample)" || { echo "capacity-ramp: load probe BLIND — refusing to spawn for an unmeasurable trial" >&2; return 4; }
+
+  # ARM 0 — THE NULL. Same window, same sampler, no unit added. Whatever this reads is the box's own
+  # drift, and it is the floor of what any per-unit delta below can claim to have resolved.
+  echo "capacity-ramp: NULL ARM — ${MSETTLE}s of drift with NO unit added (this is the control)"
+  sleep "$MSETTLE"
+  post="$(m_sample)" || { echo "capacity-ramp: load probe went BLIND during the null arm" >&2; return 4; }
+  sp="${pre%% *}"; lp="${pre##* }"; sq="${post%% *}"; lq="${post##* }"
+  m_emit null-arm 0 "$sp" "$sq" "$lp" "$lq" "$nc" true "no unit added"
+  echo "capacity-ramp: null drift = $(awk -v a="$lp" -v b="$lq" 'BEGIN{printf "%+.3f", b-a}') load over ${MSETTLE}s (sessions ${sp} -> ${sq})"
+
+  for i in $(seq 1 "$n"); do
+    pre="$(m_sample)" || { echo "capacity-ramp: trial $i ABORT — load probe blind" >&2; return 4; }
+    sp="${pre%% *}"; lp="${pre##* }"
+    up 1 || { echo "capacity-ramp: trial $i ABORT — up refused (rc $?)" >&2; return 3; }
+    sleep "$MSETTLE"
+    post="$(m_sample)" || { echo "capacity-ramp: trial $i ABORT — load probe blind after the unit" >&2; return 4; }
+    sq="${post%% *}"; lq="${post##* }"
+    # THE CONTROL THAT MUST BE ABLE TO FAIL. The census has to reproduce the population it is
+    # apportioning: exactly ONE more session, no more and no fewer. A trial where the box gained or
+    # lost sessions of its own is a delta over a moving population and is recorded INVALID rather
+    # than quietly averaged in — the defect that killed this wave's "64% is our own automation"
+    # headline was a census that stayed flat while load moved.
+    if [ "$(( sq - sp ))" -eq 1 ]; then valid=true;  why="census moved by exactly 1"
+    else                               valid=false; why="census moved by $(( sq - sp )), not 1"; fi
+    m_emit trial "$i" "$sp" "$sq" "$lp" "$lq" "$nc" "$valid" "$why"
+    printf 'capacity-ramp: trial %s/%s baseline=%s dload=%s valid=%s (%s)\n' \
+      "$i" "$n" "$lp" "$(awk -v a="$lp" -v b="$lq" 'BEGIN{printf "%+.3f", b-a}')" "$valid" "$why"
+  done
+  echo "capacity-ramp: $n trial(s) recorded in $MLOG — read them with 'marginal-report', then RUN 'down'"
+}
+
+marginal_report() {
+  [ -s "$MLOG" ] || { echo "capacity-ramp: no marginal log at $MLOG — run 'marginal <n>' first" >&2; return 1; }
+  command -v jq >/dev/null 2>&1 || { echo "capacity-ramp: jq unavailable — cannot fold $MLOG" >&2; return 1; }
+  jq -rs --argjson min "$MMIN" '
+    (map(select(.event == "null-arm")) | map(.dload | fabs) | max) as $drift
+    | (map(select(.event == "trial" and .valid))) as $ok
+    | ($ok | map(.dload) | sort) as $d
+    | (if ($d | length) == 0 then null
+       elif (($d | length) % 2) == 1 then $d[(($d | length) - 1) / 2]
+       else (($d[($d | length) / 2 - 1] + $d[($d | length) / 2]) / 2) end) as $median
+    | "capacity-ramp marginal report — RESIDENT-IDLE sessions only: a LOWER BOUND, never the marginal",
+      "  valid trials ....... \($ok | length) (need \($min))",
+      "  invalid trials ..... \(map(select(.event == "trial" and (.valid | not))) | length) — census did not move by exactly 1",
+      "  null-arm drift ..... \($drift // "NONE RUN") load over the same window, NO unit added",
+      "  per-trial dload .... \($d | @json)",
+      (if ($ok | length) < $min then
+         "  VERDICT: INSUFFICIENT — \($ok | length) of \($min) valid trials. No figure is reported."
+       elif $drift == null then
+         "  VERDICT: UNCONTROLLED — no null arm in this log. A delta without the drift control is not a measurement."
+       elif ($median | fabs) <= $drift then
+         "  VERDICT: UNRESOLVED — median \($median + 0) is within the box'"'"'s own \($drift) drift. The instrument cannot see the term."
+       else
+         "  median marginal ... \($median + 0) load per RESIDENT session (\(($median / ($ok[0].ncpu)) * 100 | floor / 100) per core)",
+         "  VERDICT: RESOLVED at the residency floor. This does NOT license moving CC_HW_DEFAULT_MAX_LOAD_PER_CORE:",
+         "           that constant needs a population separating FATAL from SURVIVED, and this measures neither."
+       end)
+  ' "$MLOG"
+}
+
 case "${1:-}" in
   up)     shift; up "$@" ;;
   down)   down ;;
   stat)   stat_line ;;
+  marginal)        shift; marginal "$@" ;;
+  marginal-report) marginal_report ;;
   breach) if r="$(breach)"; then echo "BREACH: $r"; exit 1; else echo "OK: $(stat_line)"; fi ;;
   *) cat >&2 <<USAGE
-usage: capacity-ramp.sh {up <n>|down|stat|breach}
+usage: capacity-ramp.sh {up <n>|down|stat|breach|marginal <n>|marginal-report}
   up <n>   launch n RESIDENT idle sessions (tracked in $PIDFILE), aborting on a D3/D6 breach
   down     terminate ONLY the pids this script recorded — never by age, never by pattern
-  stat     one line: sessions, ptys, available GB, seg_pct (or BLIND), sample age, panic count
+  stat     one line: sessions, ptys, available GB, seg_pct (or BLIND), sample age, panics, load
   breach   exit 1 with the reason if a D3/D6 abort condition holds right now
+  marginal <n>     the TWO-ARM experiment for the marginal load of ONE added session: a NULL arm
+                   (\${CC_RAMP_MARGINAL_SETTLE}=${MSETTLE}s of drift, no unit) then n trials, each
+                   adding exactly ONE unit at a HIGHER baseline. Rows -> \$CC_RAMP_MARGINAL_LOG
+                   (${MLOG}). Run 'down' when finished — it does not tear down between trials,
+                   because rising baselines are the point.
+  marginal-report  fold that log. REFUSES a figure below \${CC_RAMP_MARGINAL_MIN_TRIALS}=${MMIN}
+                   valid trials, and refuses to resolve a median smaller than the null arm's drift.
+🚨 The unit is RESIDENT-IDLE (full RSS, one pty, zero tokens), so every figure is a LOWER BOUND on
+the marginal, never "the marginal load per session". The ACTIVE marginal needs real turns and real
+quota and this harness deliberately does not spend them. Neither figure licenses moving
+CC_HW_DEFAULT_MAX_LOAD_PER_CORE — see tests/capacity-ceiling-derivation.bats for why that constant
+needs a population this axis can separate, which no marginal supplies (backlog e981656df348).
 Stages for S6-DOD D1: 19 -> 40 -> 80 -> 150, measuring at each and never advancing past a breach.
 D3 aborts as UNVERIFIABLE when the compressor sentinel gives no reading at all — a missing, stale
 (> \$CC_RAMP_SEG_MAX_AGE=${SEG_MAX_AGE}s), or unparseable row is a dead instrument, never a healthy 0.

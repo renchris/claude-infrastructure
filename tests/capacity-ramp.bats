@@ -8,6 +8,10 @@
 #   2. `up` refuses to launch when a D3/D6 abort condition already holds. The actuator excludes
 #      claude from its cohort, so this floor is the ramp's ONLY backstop.
 # Each has a mutation check asserting the test goes RED when the property is neutered.
+#
+# The `marginal` / `marginal-report` verbs in the same script are a DIFFERENT subject — an experiment
+# whose output is a number other people will quote, not a ramp — and live in
+# tests/capacity-marginal.bats (backlog e981656df348).
 
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../scripts/capacity-ramp.sh"
