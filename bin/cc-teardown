@@ -500,11 +500,41 @@ resolve_assignee() {
 
 # tty_foreign <pid> → count of FOREIGN live processes sharing the pane tty (not in the target tree, not an
 # interactive shell). -1 = tty undeterminable (fail-closed). Descendants of <pid> and login shells are OK.
+#
+# ── SIBLINGS OF THE LAUNCH CHAIN ARE NOT TENANTS (backlog 47878886746f) ────────────────────────
+# The marking walk below is strictly DOWNWARD from the target, so it sees a launcher's own
+# machinery as a stranger. cc-close-attrib is the standard launcher path and it spawns TWO
+# background children — the close-records `tee` (its line 222) and the real binary itself
+# (`{ exec "$REAL_BIN" "$@" 2>&9; } <&0 &`, its line 242). The tee is therefore a SIBLING of the
+# target under the same wrapper parent, never a descendant, and `tee` is not a shell — so it
+# scored 1 and every cc-close-attrib-wrapped session DEFERred `tty-busy` forever. Measured
+# 2026-08-10 on wedged pid 43305: chain login → cc-pane-runner → zsh → cc-close-attrib(43248) →
+# {tee(43303), claude(43305)}, verdict=DEFER reason_kind=tty-busy exit=10.
+#
+# The rule is STRUCTURAL — "same parent as the target" — not a spelling. Adding `tee` to the
+# interactive-shell allowlist below would exempt a genuinely foreign tee on any tty, which is the
+# opposite of what this guard exists for. Two things had to be measured rather than assumed:
+#   · The parent CANNOT be classified by comm. `ps -o comm=` reports a #!-script as its
+#     interpreter — cc-close-attrib reads as `/bin/bash`, indistinguishable from the interactive
+#     shell — so "exempt siblings only under a non-shell wrapper" is unimplementable here and an
+#     argv match would need a ps format change this shared read cannot take.
+#   · The exemption stays NARROW because it is keyed on the target's OWN ppid: a process one
+#     level up, or under any other parent on the tty, still counts. The `vim` control below
+#     proves the guard still DEFERs; a second control pins that narrowness directly.
 tty_foreign() {
-  local p="$1" tty tbl marked changed q pp c base fp=0
+  local p="$1" tty tbl marked changed q pp c base fp=0 tppid=""
   tty="$("$PS_BIN" -o tty= -p "$p" 2>/dev/null | tr -d ' ')"
   { [ -z "$tty" ] || [ "$tty" = "??" ]; } && { echo -1; return; }
   tbl="$("$PS_BIN" -t "$tty" -o pid=,ppid=,comm= 2>/dev/null)"
+  # The target's own parent, read from the SAME table (no extra ps, no format change). Absent —
+  # the target is not on its own tty's table — leaves tppid empty and NOTHING is exempted, which
+  # is the fail-closed direction: an unresolvable parent must never widen the guard.
+  while read -r q pp c; do
+    [ -n "${q:-}" ] || continue
+    [ "$q" = "$p" ] && { tppid="$pp"; break; }
+  done <<EOF
+$tbl
+EOF
   marked=" $p "
   changed=1
   while [ "$changed" = 1 ]; do          # transitively mark the target's descendant tree within this tty
@@ -520,6 +550,8 @@ EOF
   while read -r q pp c; do               # anything left that is not an interactive shell is foreign
     [ -n "${q:-}" ] || continue
     case "$marked" in *" $q "*) continue ;; esac
+    # the launcher's own machinery, spawned beside the target by the same wrapper — not a tenant
+    [ -n "$tppid" ] && [ "$pp" = "$tppid" ] && continue
     base="${c##*/}"
     case "$base" in -zsh|zsh|-bash|bash|-sh|sh|login|tmux|screen|gitstatusd*|caffeinate) continue ;; esac
     fp=$((fp+1))
@@ -1109,6 +1141,39 @@ EOF
   [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
     && okp "foreign process on pane tty → DEFER (exit 10) — no collateral close" \
     || badp "tty-busy not deferred (rc=$rc dec=$(last_decision); want 10/DEFER)"
+  reap
+
+  # 10b. LAUNCH CHAIN, NOT A TENANT (backlog 47878886746f). The standard launcher cc-close-attrib
+  #      spawns the close-records `tee` and the real binary as two BACKGROUND SIBLINGS, so the tee
+  #      is never in the target's descendant tree and is not a shell. Before the fix it scored 1 and
+  #      EVERY wrapped session DEFERred tty-busy forever — un-reapable by construction. The table
+  #      below is the measured 2026-08-10 chain, with the target standing in for claude. Note the
+  #      wrapper reads as `/bin/bash`: `ps -o comm=` reports a #!-script as its interpreter, which
+  #      is why the exemption cannot be keyed on the parent's name.
+  rm -f "$d/rec"/*.json; rm -rf "$d/tdmark"; mkrepo "$d/r10b"; spawn
+  printf '99999 1 -zsh\n43248 99999 /bin/bash\n%s 43248 /bin/sleep\n43303 43248 /usr/bin/tee\n' "$P" \
+    > "$d/state/tty_sibling"
+  make_ps "$d/bin/ps_sibling" "$d/state/tty_sibling"
+  set_session "$P" "$d/r10b"; set_panes "[\"$U\"]"
+  rc=0; IT2_CLOSE_REMOVES=1 IT2_CLOSE_RC=0 run_td "$d/bin/ps_sibling" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] && [ "$(last_decision)" = TEARDOWN ] \
+    && okp "launcher's own tee (sibling under the wrapper) is NOT foreign → TEARDOWN (exit 0)" \
+    || badp "the launch chain still reads as a tenant (rc=$rc dec=$(last_decision); want 0/TEARDOWN)"
+  reap
+
+  # 10c. …AND THE EXEMPTION IS NARROW. Same target, same wrapper, but the extra process hangs off
+  #      the interactive SHELL rather than the target's own parent — a real second tenant. It must
+  #      still DEFER. Without this, a fix that simply stopped counting unmarked processes would pass
+  #      10b while destroying the only reason the guard exists.
+  rm -f "$d/rec"/*.json; mkrepo "$d/r10c"; spawn
+  printf '99999 1 -zsh\n43248 99999 /bin/bash\n%s 43248 /bin/sleep\n88888 99999 /usr/bin/vim\n' "$P" \
+    > "$d/state/tty_tenant"
+  make_ps "$d/bin/ps_tenant" "$d/state/tty_tenant"
+  set_session "$P" "$d/r10c"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_tenant" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
+    && okp "a tenant under a DIFFERENT parent still DEFERs — the sibling exemption stays narrow" \
+    || badp "the sibling exemption swallowed a real tenant (rc=$rc dec=$(last_decision); want 10/DEFER)"
   reap
 
   # 12. BLIND ENUMERATOR: live pane, but it2 returns a 0-list ([]) → pane_present INDETERMINATE →
