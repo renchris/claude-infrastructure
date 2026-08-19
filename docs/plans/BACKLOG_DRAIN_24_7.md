@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #51: the reaper's safety guard was inverted with respect to the loss
+  it prevents, and the fix is not a wider guard but a second channel — and a row filed as "three
+  rare instances you cannot schedule" turned out to be 352 measured events, 17 of them today.**
+  `master-fleet-footprint` **11 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim)** — unchanged from intake. **filed 0 / closed 0.** Landed `d4239f179` +
+  `a1098641` + this entry. Effort choice: `date` read 2026-08-19, so
+  `master-session-lifecycle`'s `62363cac1e39` efficacy re-census (due ~2026-08-24) was still shut
+  and correctly declined for the 24th consecutive recycle. Intake property re-measured and it held:
+  11/11 open are `venuePlan=local` AND `project=claude-infrastructure`. Both claims came back clean,
+  no advisory. 0 teammates, 0 Explore surveys.
+
+  **`7c22e9b43956` (cc-reaper reaps a peer that never committed) — BUILT AND LANDED, LEFT OPEN.**
+  #50's forensics were right and the remedy it warned was "not obvious" really is not. The
+  discriminator is the worktree's **own HEAD reflog**, never the ahead-count: measured on this box, a
+  worktree holding 173 commits reads `ahead=0` once landed and carries 173 reflog `commit` entries,
+  while a fresh worktree reads `ahead=0` and carries none — same ahead, opposite reflog. But the
+  obvious remedy is the hazard: "never reap a 0-commit session" would permanently exempt every peer
+  that legitimately finished without committing, and the log says that costs real volume (618 REAP
+  lines / 173 distinct panes, against 3,631 DEFERs). So the belt asks for **positive done-evidence on
+  the two channels a dispatched peer actually has** and fires only when BOTH are definitively silent:
+  it never committed here, AND it never announced to the back-channel armed at fire time.
+  **The second oracle already existed and the reaper had never called it** — `$mailbox/.sent/<pane>`,
+  written by `cc-notify _record_send`, read by `handoff-fire.sh sc_announce_before_retire`. That read
+  runs only on the **self-close** path, and the reaper's entire population is the sessions for which
+  self-close never ran, so sharing the code would not have shared the reach (question (n): X was
+  built and called by nobody *on the path that needed it*). Narrowed to peers fired WITH
+  `--notify-back`, measured first: 144 of 938 fired stamps carry one, and of 30 recently-reaped panes
+  14 had a send record and 16 did not — the oracle reads both ways on the live population.
+  Three-valued throughout; only definite negatives combine. **LEFT OPEN because the row's stored
+  falsifier is broader than what I built**: it names a fixture with a valid fired-peer stamp and says
+  nothing about `--notify-back`, so an unarmed peer is still reaped on `ahead=0`-by-silence. That
+  remainder is real and the row already names its candidates — transcript/beat evidence, or a
+  pending-background-task check. Not narrowed, not argued away.
+  10 bats cases, 6 red against pristine `637eca308` — and the honest split is recorded in the suite
+  itself, because only two of the six are evidence about the defect (B1/B2); B4/B6 red only on their
+  new log assertions and B9/B10 red because the functions do not exist yet. 8 mutants, 8 applied, 8
+  reddened ≥1 case, 0 green, 0 non-verdicts, subject restored byte-identical. One prediction was
+  wrong and running it is what said so (M3 was expected to red B4; it defaults only an EMPTY address
+  and B4 arms a real one). Full suite after: **145/145, plan line `1..145` seen, 0 skips.**
+
+  **`b38279c10c55` (capture the sender of the group-SIGTERM) — PREMISE CORRECTED, LEFT OPEN.**
+  The row and its source doc frame this as two-or-three unschedulable instances. Measured across all
+  four transcript stores (6,996 files): **352 distinct events** deduped on task-id, **348 of them
+  mid-session** (median 293 records follow — which refutes the pane-teardown explanation outright,
+  since a teardown TERM would be the last thing in its transcript), 109 watcher/wake-path arms
+  against 243 ordinary backgrounded polls and builds, running to 42/day. So the row's blocker —
+  *"you cannot schedule the hit, decide how you will prove a recorder fires before you build it"* —
+  dissolves: at one event every few hours, a recorder armed in ANY backgrounded group captures an
+  `si_pid` within a day. Confirmed no recorder is in the tree (only `cc-await-ping`'s comment saying
+  one is needed), and flagged the constraint that will bite whoever builds it: **macOS ships no
+  `sigwaitinfo`**, so Python cannot host it and a compiled helper means a new `bin/` file, i.e. a
+  `LIVE_ADDS` breach until the converger runs. LEFT OPEN — the sender is still unnamed.
+  → `docs/research/exit-144-population-2026-08-19.md`; the 2026-08-07 doc's §5 gains a pointer.
+
+  **RECIPE-LEVEL FINDINGS (recorded here, not filed — conservation).**
+  (a) **Five instruments, four wrong, each reading as a clean answer** — the fullest instance this
+  chain has recorded. Counting `exit code 144` over the transcript corpus counts the sessions
+  *discussing* it (including the one counting); the fuller phrase `failed with exit code 144`
+  selects the **identical** 215 files, and that identity is the tell; classifying `tool_result`
+  records as events counts every Bash call that merely PRINTED the source comments; counting
+  `queue-operation` records double-counts because the notification is written twice per event. Only
+  **dedupe-on-`task-id` over `type=="queue-operation"`** answers. The law: **a quotable string cannot
+  distinguish an event from a discussion of it — find the record TYPE, which quoting cannot forge.**
+  The positive control is what proved it: this session displayed the phrase nine times, suffered no
+  144, and carries zero `queue-operation` matches.
+  (b) **A sixth error nearly shipped a wrong headline**: testing "is this a cc-await-ping death?" by
+  looking for `await-ping` in the notification returns **1 of 352** and reads exactly like "the row's
+  subject is a non-event". That field holds the **operator-written prose description**, so the real
+  arms are spelled `Arm inbox watcher` / `Re-arm inbox wake watcher` — 109 of them. Same law as
+  `pgrep-f-matches-agent-briefs` and `caller-census-keyed-on-path-misses-the-name`.
+  (c) **`grep -c` prints `0` AND exits 1**, so `$(grep -c … || echo 0)` yields the two-line string
+  `"0\n0"` and every numeric test downstream errors out — which rendered, in this pass's first
+  census, as `never-committed=0` across every worktree, i.e. exactly the answer that would have
+  killed the row. No `||` arm: the count IS the answer.
+  (d) **`sort -u | tail -N` over a corpus that changed identifier format samples only the OLD era.**
+  Cross-checking reaped panes against `.sent` returned `0 of 40` — read as "reaped peers never
+  announce", was actually "these 40 are UUID-era ids and `.sent` is keyed by the numeric pane id
+  today". The current era is 200/200 numeric and the key spaces DO align. Sample the recent tail
+  explicitly when an id format has migrated.
+  (e) **The live-layer converger's refusal now has a named culprit.** `deploy-live.sh` refused for
+  the 25th consecutive recycle, correctly (`--ff-only` would exit 0 without moving the tree). The
+  block is **one un-landed commit sitting in the shared checkout `~/Development/claude-infrastructure`
+  on `main`, dated 2026-08-19 04:10** — `git rev-list --count origin/main..9709c99d3ce2` = 1. Not
+  this chain's (this chain never commits in the shared checkout, per the project CLAUDE.md). Naming
+  it beats re-reporting "no GREEN tree is a descendant": the remedy is to land or drop that one
+  commit. Consequence owned honestly: **the reaper belt landed this pass is NOT live until that
+  clears**, because the launchd job runs `~/.claude/bin/cc-reaper`.
+
 - **2026-08-19 — drain recycle #50: two rows closed on measurements that contradicted the brief
   they were handed to me in — a migration four recycles carried as "pending" was already live, and
   the session death nobody could explain was killed by our own reaper, past a guard that cannot
