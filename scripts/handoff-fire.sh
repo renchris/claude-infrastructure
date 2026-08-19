@@ -2393,13 +2393,42 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
 # it would let a pane retire into a successor that has not started — trading a false negative that
 # costs an inspection for a false positive that loses a session. The asymmetry runs the other way from
 # verify_engagement's, which is why the same oracle gets a different consumer rule.
-successor_engaged() { # $1=registry-dir $2=successor-pane → 0 engaged / 1 not (2/3 from the oracle also fail-closed here)
-  local regdir="$1" pane="$2" pdir
+#
+# THE MARKER IS READ, NOT DISCARDED (cc-backlog 93a9f880b6fe). This passed an EMPTY marker to
+# engagement_seen, which disables that oracle's CONTENT path (a) and leaves it wholly dependent on
+# path (b): the cc-registry row's `.session_id`. Two populations are unprovable that way, and the
+# second is the larger one:
+#   · A RESUMED successor. `claude --resume <sid>` writes into the ORIGINAL sid's transcript, so no
+#     new transcript is ever created for the sid a fresh row would name. Measured 2026-07-29
+#     recovering ground-up row 5: pane 0813A7FF resumed sid 8891c11f, its transcript grew 502→536
+#     rows carrying 188 assistant turns and a live tool loop, and self-close still refused to retire
+#     the predecessor. Only --successor-assume-engaged got past it — which SKIPS the check rather
+#     than answering it.
+#   · Any pane holding ensure_registration's PROVISIONAL row, which has no `.session_id` field at
+#     all (M-9). That is not resume-specific, and it is why the fix is not a resume special-case.
+# The record mark_fired_peer already writes carries `marker` for exactly this purpose — its own
+# field comment says "so successor_engaged no longer depends on row 4's registry row carrying a
+# .session_id" — and tests/handoff-lifecycle-record.bats already proves the oracle half: on one
+# fixture the registry path returns 1 while the marker path returns 0 with ENGAGE_PROOF=marker.
+# The conclusion simply never reached the consumer, so the better oracle was unreachable from the
+# only gate that needed it.
+#
+# STRICTLY ADDITIVE, and it does NOT widen the gate. No record, no `marker`, or no jq leaves the
+# marker empty and the behaviour byte-identical to before. The `&& return 0` below still admits
+# ONLY 0, so states 2 (cannot-tell) and 3 (ingested-not-running) keep failing closed exactly as the
+# block above requires — the marker buys a better ANSWER, never a lower bar. $3 uses ${3-…} rather
+# than ${3:-…} deliberately: an explicitly-empty fired-dir must stay empty, or a caller (and every
+# test) asking for "no record" would silently be handed the live default instead.
+successor_engaged() { # $1=registry-dir $2=successor-pane [$3=fired-dir] → 0 engaged / 1 not (2/3 from the oracle also fail-closed here)
+  local regdir="$1" pane="$2" fdir="${3-${FIRED_DIR:-}}" pdir marker=""
   [ -n "$pane" ] && [ -n "$regdir" ] || return 1
+  if [ -n "$fdir" ] && [ -f "$fdir/$pane.json" ] && command -v jq >/dev/null 2>&1; then
+    marker="$(jq -r '.marker // empty' "$fdir/$pane.json" 2>/dev/null || true)"
+  fi
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
   for pdir in $CC_PROJECTS_DIRS; do
     [ -d "$pdir" ] || continue
-    engagement_seen "$pdir" "" "$regdir" "$pane" && return 0
+    engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
   done
   return 1
 }
