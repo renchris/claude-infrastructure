@@ -1,5 +1,38 @@
 #!/bin/bash
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended" >> ~/.claude/logs/sessions.log
+# ── stdin is read FIRST so the sessions.log line can carry ATTRIBUTION ─────────
+# This read used to sit at line 20, below a bare `echo "... Session ended"`. That
+# ordering made the fleet's only session-end record UNATTRIBUTABLE: no sid, no
+# reason, on a log where the MAJORITY of such lines are not real session ends at
+# all. `hooks/session-start.sh` runs `claude mcp list` on EVERY SessionStart and
+# that subprocess emits a SessionEnd of its own — reason "other", a fresh random
+# session_id, no matching SessionStart — so 5360 of 6208 `MCP Status` lines are
+# immediately preceded by a PHANTOM "Session ended" (measured 2026-08-05; see
+# hooks/session-deregister.sh and docs/research/registry-row-removal-2026-08-05.md).
+# A reader could therefore neither tell WHICH session ended nor whether the line
+# was a real end or the phantom, and the two are only ~14% / ~86% of the file.
+#
+# The cost of that was paid in full: backlog row b521cb445465 spent 20 days as an
+# "UNEXPLAINED ABRUPT SESSION DEATH" because the one line written at the death
+# second could not be tied to the session that died. Both fields were already in
+# this hook's own stdin and already parsed four lines down — they were simply
+# thrown away before being written. Emitting them makes the phantom mechanically
+# separable (reason=other + a sid with no matching SessionStart) and turns that
+# investigation into a grep.
+#
+# The literal phrase "Session ended" is PRESERVED verbatim and the fields are
+# APPENDED, so every existing consumer that greps it keeps matching unchanged
+# (tests/session-end.bats, plus the forensics docs that count these lines).
+_se_input=$(cat 2>/dev/null || echo '{}')
+_se_sid=$(printf '%s' "$_se_input" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+_se_reason=$(printf '%s' "$_se_input" | jq -r '.reason // empty' 2>/dev/null || echo "")
+# Log-field sanitation is independent of the charset GUARD below: that guard gates
+# `rm`, this one gates what reaches a shared append-only log. A sid/reason is
+# attacker-adjacent free text, so strip to a safe charset and bound the length —
+# an embedded newline would otherwise forge an entire extra log record.
+_se_sid_log=$(printf '%s' "${_se_sid:--}" | tr -cd 'A-Za-z0-9._-' | cut -c1-64)
+_se_reason_log=$(printf '%s' "${_se_reason:--}" | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended sid=${_se_sid_log:--} reason=${_se_reason_log:--}" \
+  >> ~/.claude/logs/sessions.log
 
 # ── clean-exit watchdog + checkpoint cleanup ───────────────────────────────────
 # Remove THIS session's watchdog pid/id + teammate-checkpoint counter on a clean
@@ -16,10 +49,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended" >> ~/.claude/logs/sessions.l
 # A genuine crash / OOM / SIGKILL does NOT run SessionEnd, so its pid file
 # persists and the daemon still correctly detects and classifies the crash.
 # stdin is the SessionEnd hook JSON (same `cat` pattern as lead-crash-watchdog.sh);
-# sid is validated to a safe charset before any rm (defense-in-depth).
-_se_input=$(cat 2>/dev/null || echo '{}')
-_se_sid=$(printf '%s' "$_se_input" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-_se_reason=$(printf '%s' "$_se_input" | jq -r '.reason // empty' 2>/dev/null || echo "")
+# sid is validated to a safe charset before any rm (defense-in-depth). It is read
+# ONCE, at the top of this file, for the attributed log line — a second `cat` here
+# would read an already-consumed stdin, come back EMPTY, and (because an empty read
+# still EXITS 0, so the `|| echo '{}'` fallback never fires) silently blank the sid
+# and disable every removal below.
 # Skip the per-sid pidfile removal on reason=clear: /clear ends the sid but the PROCESS and pane
 # SURVIVE, and team-orphan-reaper reads a missing pidfile as lead-death — removing it mid-team-wave
 # would archive a LIVE team and shutdown-deny its teammates. Real exits (logout / prompt_input_exit
