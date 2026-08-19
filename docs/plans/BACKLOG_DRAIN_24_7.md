@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #36: two counts that justified a decision were each measured over a
+  span their consumer never reads — one excluded a whole surface for 11 days, the other would have
+  made the fix inert. `master-fleet-footprint` 19 open / 4 blocked (4 operator-gated, `source:
+  needs`; 0 cloud-venue, 0 claimed, no stale claim). filed 0 / closed 1.** Lands `e1b0bb804` +
+  `da0e8daf8`, both content-verified on origin/main (`git diff origin/main` empty on all 8 paths).
+  - **Date checked FIRST.** 2026-08-19 → `62363cac1e39` (due **2026-08-24**) still not drainable;
+    effort = `master-fleet-footprint`, property re-measured **19/19 open are `venuePlan=local` AND
+    `project=claude-infrastructure`**. #37 must check again — 2026-08-24 is now **5 days out**.
+  - **Row `bb2495b098b8` — CLOSED.** skills/ and agents/ now have the live→checkout auditor the row
+    asked for, and the vendor-vs-ours split it demanded is recorded in `skills/LOCAL_ONLY.md`.
+    - **The exclusion was carried by a count measured over the wrong span, and this is its THIRD
+      revision — which reverses the second.** 20 (stale directory count) → 82 (right unit: the leg
+      reports FILES, and the 5 live-only skill dirs hold 82 real files) → **5**. `sweep_strays` is
+      **non-recursive and skips subdirectories**, so it visits depth 1 only: one `SKILL.md` per dir.
+      `react-best-practices` contributes **1**, not 59. #35 landed the 82 figure with the conclusion
+      *"the alarm-polarity case is STRONGER than when written — do not re-open this now that it is
+      only 5"*; measured against the consumer, 5 declarations absorb the entire wall and the
+      objection **dissolves**. Memory `assertion-span-must-equal-its-subject` — a span that does not
+      equal its consumer's span is not a measurement of that consumer.
+    - **The row's PRESCRIBED remedy would have killed the manifest's own anti-rot device.** It (and
+      the manifest header) called for bare glob rows `skills/<name>/*`, *"the form `lib/*.prelink-bak`
+      already uses"*. They are not the same form: a witness stem is the literal remainder after the
+      `*` — `.prelink-bak` there, but the **EMPTY STRING** for a bare `*`, and `grep -F ''` matches
+      every line. All 5 rows would have silently degraded to *"does the witness file exist"* while
+      still reading as honoured. `declared_owner` now derives a whole-directory row's stem from its
+      directory name; the fallback is reached by no existing row.
+    - **FOUND BY THE WIDENING, not assumed:** `skills/kpmg-deck/showcase.pptx` — a gitignored build
+      artifact inside an otherwise fully tracked skill, a class content-matching structurally cannot
+      see. Declared, witnessed by `MIRROR.md`. And the widening's own witness check caught my
+      incomplete `agents/motion-reviewer.md` declaration before I noticed it.
+    - **`commands/` MEASURED, not assumed: 20/20 live entries are symlinks, zero real files** — so
+      the one prompt-document surface left excluded holds nothing for this leg to find. That
+      measurement is what closed the row; it is also what my own commit body predates (it says
+      *"row stays OPEN"*, written before the measurement).
+  - **Row `5d1b5dd9b3db` — spec 03 E9+E12 built and landed; row LEFT OPEN, claim RELEASED.**
+    - **The measurement that would have made the fix inert.** The `-p`/`--version` exclusion scans
+      argv fields **3..8** (2..7 in the reaper). In the real invocation
+      (`scripts/headless-precondition-probe.sh:121-125`) `--input-format` lands at **field 9** —
+      past that window. A marker scan reusing the same window returns "absent" for every genuine
+      resident headless session, so the change reads correct in review and detects **nothing**. An
+      independent probe had already flagged the narrow window
+      (`tests/fixtures/codex-probe/runs/cp-06__D.md:125`) and nothing had acted on it.
+    - **The spec's own edit list is incomplete for its stated outcome.** E9 names the argv filter
+      alone, but `cc-reconcile:220` then requires `kind=="interactive"`, so an admitted headless pid
+      still gets **no row**. Not guessed at: the spec already files this as **open question Q1**
+      (`03-headless-substrate.md:446` — *"All 9 live rows read interactive. Measure."*). Re-measured
+      2026-08-19 and **still unanswerable by observation** — 9 session files across all four config
+      dirs, every one `interactive`, and **zero headless claude processes running**. So the tests
+      assert exactly where the evidence ends: the resident is COUNTED LIVE (the E9 delta, 0→1) and
+      reaches the kind gate. `live_pane_count` never consults `kind`, so the reaper's blind-spot
+      detector is fixed outright.
+    - Remaining and named: E7's rc-3 `no-watcher-headless` verdict, the E11/Q1 kind gate (blocked on
+      a measurement), and **all of gap 2** (nothing wakes an idle headless session).
+  - **TWO OF MY OWN NEW CASES WERE VACUOUS AND ONLY A MUTANT SAID SO.** Both asserted `rows==0` for a
+    probe `cc-reconcile` rejects at the *kind* gate anyway, so they held at 0 whatever the argv rule
+    did — the mutant that drops the `-p` exclusion outright reded their `cc-reaper` sibling and left
+    both green. Re-asserted on the live count, the number the rule actually moves. **Asking "which
+    mutant reds THIS case" is what surfaced it; the pristine-main red-proof did not.**
+  - **Instrument notes for #37.** (1) An **apostrophe inside a single-quoted `awk` program** ends the
+    shell string — three of them in comments I added broke both binaries at once and reded *every*
+    pre-existing case, which reads like a logic error and is not. (2) The `zsh` no-word-split trap hit
+    a `for n in $list` on the very first measurement. (3) `bats-shellcheck-lint` read `0 changed .bats
+    line(s)` before committing and **81 after** — it scopes on a COMMIT RANGE, exactly as briefed.
+  - **Not my loose end:** `deploy-link-parity` was **already red on trunk** before my diff (3 findings
+    — `bin/browsermcp-wrapper.sh`, `bin/cc-cloud-watch`, and `bin/it2` drifted from its tracked
+    `bin/it2-wrapper` source). My change adds **zero**. The `bin/it2` drift is a real, separate,
+    unfiled defect: the manifest header cites it as the canonical *content-matched copy-deploy* case,
+    and it no longer content-matches.
+
 - **2026-08-19 — drain recycle #35: the fleet's own liveness oracle `(pid,lstart)` existed at two
   organs and reached NEITHER registry reader — and the guard that fixes it ships a WORSE bug unless
   its timezone is pinned. `master-fleet-footprint` 20 open / 4 blocked (4 operator-gated,
