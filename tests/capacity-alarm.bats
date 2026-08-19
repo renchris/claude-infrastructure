@@ -172,11 +172,23 @@ POP
   502 1048576 WindowServer
   503  524288 node
 RSS
+  # argv[0] rows, keyed on the same pids the top(1) and rss fixtures use. Row 501 is the case the
+  # argv0 field exists for: an EMBEDDED ugrep, which runs as the claude.exe image with argv[0]
+  # rewritten (`exec -a ugrep "$CLAUDE_CODE_EXECPATH"`), so p_comm and argv[0] name different things.
+  # The trailing flags are deliberately realistic — they are what must NOT reach the log.
+  cat > "$STUBS/argv0.txt" <<'A0'
+  501 ugrep -G --ignore-files --hidden -I -ao .{0,160}Ydr.{0,160} /U/.claude
+  502 /usr/libexec/small-two-helper --flag
+  503 node /U/x/server.js
+A0
+  # `command=` is unique to the argv[0] reader — the census uses args=, the fallback and the tree
+  # walk use comm=. Matching on it cannot capture any other caller in this script.
   cat > "$STUBS/ps" <<STUB
 #!/bin/bash
 case "\$*" in
-  *rss*) cat "$STUBS/rss.txt" ;;
-  *)     cat "$STUBS/population.txt" ;;
+  *command=*) cat "$STUBS/argv0.txt" ;;
+  *rss*)      cat "$STUBS/rss.txt" ;;
+  *)          cat "$STUBS/population.txt" ;;
 esac
 STUB
   chmod +x "$STUBS/ps"
@@ -189,12 +201,15 @@ STUB
 # (1676M WindowServer) and they silently outranked the parameter, so `mk_top_stub 900` produced a max
 # of 1676 — the fixture was not testing the number it claimed to. Rows descend, as `top -o mem` emits.
 mk_top_stub() { # $1 = MB for the largest process (must dominate the fixed rows below)
+                # $2 = its COMMAND, i.e. the p_comm top(1) reports (default big-proc). Overridable
+                #      because the argv0 tests need the real-world case where that column reads
+                #      `claude.exe` for a process that is not a session.
   cat > "$STUBS/top" <<TOP
 #!/bin/bash
 echo 'Processes: 700 total, 4 running'
 echo ''
 echo 'PID    MEM   COMMAND'
-echo '501    ${1}M big-proc'
+echo '501    ${1}M ${2:-big-proc}'
 echo '502    64M small-two'
 echo '503    32M small-three'
 TOP
@@ -389,6 +404,83 @@ SC
   [ "$status" -ne 64 ] || false
   [[ "$output" =~ \"top_procs\":\[\{\"pid\": ]] || false
   ! [[ "$output" =~ \"max_proc_gb\":null ]] || false
+}
+
+# ── argv[0] on the footprint rows ─────────────────────────────────────────────────────────────────
+# WHY THESE EXIST. top(1)'s COMMAND column is p_comm, derived from the executable image. Claude Code
+# reaches its embedded ugrep/bfs by re-exec-ing its OWN binary with argv[0] rewritten, so every
+# embedded search reports as `claude.exe` there. Measured on this box 2026-08-19: `ugrep` occurs 0
+# times in 22,575 logged rows, while 150 multi-GB events over 20 days all read `claude.exe` — and a
+# sibling instrument that reads argv caught one of those same pids, in the same minute, as `ugrep`.
+# The rung was naming the host binary instead of the work, which is unactionable in exactly the case
+# the rung exists for.
+
+@test "(xxxiii) every footprint row carries argv0, resolved per pid — not just the outlier" {
+  # A field on the top row only would diagnose one process and leave the rest as before.
+  mk_stubs
+  mk_top_stub 900 claude.exe
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"top_procs\":\[\{\"pid\": ]] || false    # locator found its subject first
+  [[ "$output" =~ \"argv0\":\"ugrep\" ]] || false           # 501, via the embedded-grep fixture
+  [[ "$output" =~ \"argv0\":\"small-two-helper\" ]] || false # 502, basename of an absolute argv[0]
+  [[ "$output" =~ \"argv0\":\"node\" ]] || false            # 503
+}
+
+@test "(xxxiv) an embedded search is NOT filed as a session — cmd says claude.exe, argv0 says ugrep" {
+  # The defect itself. Both names are kept: p_comm is still true about the image, and argv0 is what
+  # makes the row actionable. Keeping only one of them is how 150 events became undiagnosable.
+  mk_stubs
+  mk_top_stub 9000 claude.exe
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  [[ "$output" =~ \"cmd\":\"claude.exe\" ]] || false
+  [[ "$output" =~ \"argv0\":\"ugrep\" ]] || false
+}
+
+@test "(xxxv) argv0 is a BASENAME — flags and search patterns never reach the durable row" {
+  # argv carries whole agent briefs (memory pgrep-f-matches-agent-briefs). This row is written every
+  # ~65 s, so logging argv would put multi-KB prompts on disk forever. The bound is the feature.
+  #
+  # MEASURED WHILE RED-PROOFING THIS CASE: the tail is bounded at THREE independent sites — the
+  # basename split in read_argv0, the `NF == 2` guard on the producer, and the single-field `A[$2] =
+  # $3` read on the consumer. Mutating any one or any two of them still yields `ugrep`; only a
+  # three-site mutant leaks. That is why the two negatives below are kept even though the exact-value
+  # assertion looks like it subsumes them: they are the only assertions that fail on the leak itself
+  # rather than on the value changing shape, and a future refactor collapsing those three layers into
+  # one would otherwise land silently.
+  mk_stubs
+  mk_top_stub 9000 claude.exe
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  # The locator first, so the two negatives below cannot pass over an empty or malformed row — and
+  # the negatives BEFORE the exact-value check, so a change that leaks the tail is caught here rather
+  # than only by the stricter assertion that would mask it.
+  [[ "$output" =~ \"top_procs\":\[\{\"pid\": ]] || false
+  ! [[ "$output" =~ ignore-files ]] || false        # no flags from the embedded-grep argv…
+  ! [[ "$output" =~ Ydr ]] || false                 # …and no search pattern either
+  [[ "$output" =~ \"argv0\":\"ugrep\" ]] || false   # the value is exactly the basename
+}
+
+@test "(xxxvi) an argv[0] lookup that returns nothing yields an EMPTY field, never a guessed one" {
+  # Property 1 of this file: a broken instrument reports that it could not measure. Substituting
+  # cmd would be worse than silence — it would re-assert the very name the field exists to correct.
+  mk_stubs
+  mk_top_stub 900 claude.exe
+  : > "$STUBS/argv0.txt"                            # lookup returns no rows
+  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"cmd\":\"claude.exe\" ]] || false   # the rest of the row survives
+  [[ "$output" =~ \"argv0\":\"\" ]] || false           # present and empty, not absent, not guessed
+}
+
+@test "(xxxvii) the ps-rss fallback rows carry argv0 too — the schema does not depend on the producer" {
+  # If argv0 appeared only on the top(1) path, its ABSENCE would be ambiguous between "the fallback
+  # ran" and "the lookup failed", and no reader could tell those apart after the fact.
+  mk_stubs
+  run env PATH="$STUBS:$PATH" CC_CAP_TOP=/nonexistent/top /bin/bash "$ALARM" --json --no-append
+  [ "$status" -ne 64 ] || false
+  [[ "$output" =~ \"top_procs\":\[\{\"pid\": ]] || false
+  [[ "$output" =~ \"argv0\":\"ugrep\" ]] || false
+  [[ "$output" =~ \"argv0\":\"node\" ]] || false
 }
 
 @test "(xxvi) the selftest names the NEW rungs too — census, pressure and outlier all controlled" {
