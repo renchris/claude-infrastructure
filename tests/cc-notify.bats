@@ -1198,3 +1198,83 @@ write_accounts() {
   [ ! -e "$CC_MAILBOX_DIR/999.md" ]
   [[ "$output" == *"enqueued=0"* ]] || false   # positive control beside the absence assertion
 }
+
+# ── PID-REUSE GUARD: identity is (pid,lstart), never pid alone ────────────────────────────────────
+# `kill -0` answers "is SOME process holding this pid", never "is THAT process still this session".
+# A registry row is retained 24h AFTER its session dies, so a recycled pid makes cc-notify resolve a
+# name onto a DEAD pane and report delivery for mail nobody will read — the false-LIFE mirror of the
+# false-death this resolver was rebuilt to end. Note the suite's own setup() row carries no `lstart`,
+# so every test ABOVE this block is the backward-compatibility control for the fail-open path.
+
+@test "pid_live: the truth table, extracted from the shipped file" {
+  fn="$BATS_TEST_TMPDIR/pid_live.sh"
+  # Extract the REAL function from the REAL file — a retyped copy is a dead assertion that keeps
+  # passing after the subject moves (fleet memory: control-must-replay-the-real-artifact).
+  python3 - "$NOTIFY" "$fn" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r'^pid_live\(\) \{.*?^\}', s, re.S | re.M)
+assert m, "ANCHOR MISSING: pid_live() is not where this case looks — locator failed, not the subject"
+open(sys.argv[2], "w").write(m.group(0) + "\n")
+PY
+  [ -s "$fn" ] || { echo "extraction produced nothing"; false; }
+  # shellcheck disable=SC1090
+  . "$fn"
+  type pid_live >/dev/null 2>&1 || { echo "extraction did not define pid_live"; false; }
+
+  mine="$(TZ=UTC ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$mine" ] || { echo "could not read our own start time — instrument, not subject"; false; }
+
+  pid_live "$$" "$mine" || { echo "live pid + MATCHING start time read not-live"; false; }
+  run pid_live "$$" "Wed 01 Jan 00:00:00 2020"
+  [ "$status" -eq 1 ] || { echo "a RECYCLED pid still read live (status $status)"; false; }
+  pid_live "$$" "" || { echo "fail-open broke: a row predating the field was convicted"; false; }
+  run pid_live 999999 "$mine"
+  [ "$status" -eq 1 ] || { echo "a dead pid read live"; false; }
+  run pid_live "" "$mine"
+  [ "$status" -eq 1 ] || { echo "an empty pid read live"; false; }
+
+  # FAIL-OPEN on an unreadable `ps`: a hiccup is not proof of death. Shadowing ps drives this
+  # fork-free, against the REAL function body.
+  ps() { return 0; }
+  pid_live "$$" "$mine" || { echo "an unreadable start time was treated as proof of death"; false; }
+}
+
+@test "cc-notify: a name whose row's start time no longer matches does not resolve" {
+  sleep 300 & lp=$!
+  jq -n --argjson p "$lp" '{paneUUID:"BBBBBBBB-1111-2222-3333-444444444444",name:"recycled",
+    cwd:"/tmp",account:"next",pid:$p,startedAt:1,surface:"headless",
+    lstart:"Wed 01 Jan 00:00:00 2020"}' > "$CC_REGISTRY_DIR/BBBBBBBB-1111-2222-3333-444444444444.json"
+  run "$NOTIFY" recycled "hello"
+  kill "$lp" 2>/dev/null || true
+  # The pid is ALIVE, so `kill -0` alone would resolve this name onto a dead session.
+  [ "$status" -ne 0 ] || { echo "a recycled-pid row resolved: $output"; false; }
+  case "$output" in *"no-such-target"*|*"not a live session"*) ;;
+    *) echo "expected an unresolvable verdict, got: $output"; false ;; esac
+}
+
+@test "cc-notify: a live row whose start time matches still resolves (no over-conviction)" {
+  sleep 300 & lp=$!
+  ls_="$(TZ=UTC ps -o lstart= -p "$lp" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  jq -n --argjson p "$lp" --arg l "$ls_" '{paneUUID:"CCCCCCCC-1111-2222-3333-444444444444",
+    name:"genuine",cwd:"/tmp",account:"next",pid:$p,startedAt:1,surface:"headless",lstart:$l}' \
+    > "$CC_REGISTRY_DIR/CCCCCCCC-1111-2222-3333-444444444444.json"
+  run "$NOTIFY" genuine "hello"
+  kill "$lp" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "a genuinely live row was convicted: $output"; false; }
+}
+
+@test "registry TSV: every reader of REG_ROWS takes the lstart column (block census)" {
+  # THE VACUITY THIS CASE EXISTS FOR. REG_ROWS is a TAB-separated string consumed by `read -r`, and
+  # `read` puts ALL remaining fields into its LAST variable. So a reader still written `read -r n p u`
+  # does not fail — it silently binds u to "<uuid><TAB><lstart>", and every address comparison
+  # against it stops matching. Adding a column is therefore a change to EVERY reader, and the failure
+  # mode is silent. This asserts the locator found what it expected BEFORE asserting anything about
+  # it, so a refactor that hides the readers reds here rather than passing over nothing.
+  emit="$(grep -c '(.lstart // "")\] | @tsv' "$NOTIFY" || true)"
+  [ "${emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting lstart = ${emit:-0}, expected 2 (fast path + per-file fallback)"; false; }
+  readers="$(grep -cE 'read -r n p (u lst|ruuid rlst)' "$NOTIFY" || true)"
+  [ "${readers:-0}" -eq 3 ] || { echo "TSV CENSUS: readers taking the lstart column = ${readers:-0}, expected 3"; false; }
+  short="$(grep -cE 'read -r n p (u|ruuid);' "$NOTIFY" || true)"
+  [ "${short:-0}" -eq 0 ] || { echo "TSV CENSUS: ${short} reader(s) still take only 3 fields — lstart is landing in the uuid variable"; false; }
+}
