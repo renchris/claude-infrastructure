@@ -14397,6 +14397,48 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   - **Operator-only remainder:** the ledger is on the operator's box; this container carries no
     `~/.claude/autonomy/backlog.jsonl`, so `cc-backlog done 354c73ebd400` returned
     `unknown id` and the row is still open THERE. It needs one run on that box with the sha above.
+- **2026-08-19 — `354c73ebd400` RE-DISPATCHED and re-confirmed DONE at a newer trunk (`12e7e10e`).
+  Still no diff. The second worker slot this row has burned, and the cause is structural: the close
+  verb cannot run at the venue the row is dispatched to.**
+  - **Re-confirmed on 2026-08-19's trunk, not on 2026-08-17's word.** Trunk's
+    `subshell-cleanup-lint.sh` over trunk's `ship-land.sh`: clean, rc 0. `--selftest` PASS, 30
+    fixtures — including the four that ARE the cure and its bounds: `envprefix` /
+    `envprefixcont` (a command-PREFIX assignment is the command environment, not the caller
+    global) and `prefixthenreal` / `prefixinsub` (the exemption neither swallows a real assignment
+    beside it nor leaks into the call tree it enters). The both-directions control was re-run, not
+    quoted: pre-fix lint (`6ce67de9^`) over the pre-fix `ship-land.sh` reproduces the item verbatim
+    — `:3687 BRANCH — assigned inside a $( ) child`, chain `write_decision_packet` `:584`, trap
+    `_land_exit_trap → land_failure_inbox` `:813` — and trunk's lint over that SAME tree is clean.
+  - **Both landed shas, both proven ancestors of `origin/main`.** Clause 1 (the false red):
+    `6ce67de910d6e46f825a7eae0db28b741964f5de`. Clause 2 (the misattribution class): the tip
+    confirmation plus `bisect_floor_ok`, wired at `postland-verify.sh:2137` — the guard that fires
+    on exactly this shape, an all-bad range whose red predates the floor, where the walk can only
+    name the first commit after an ASSUMED-green floor. `bisect_reach_ok`
+    (`66857bc2ef210003b34b0889c23dc3191777b881`, wired `:2087`) is adjacent, not this item's cure:
+    it vetoes only an all-`*.md` diff, and a land that touched `ship-land.sh` is code, so it stands.
+    Killing the false red is what removes the input; the floor proof is what bounds the class.
+  - 🚨 **THE SHALLOW-CLONE TRAP — a cloud worker's ancestry check is a FALSE NEGATIVE by default,
+    and it sits directly on the §4.1 first-step path.** This container clones at depth 50.
+    `git merge-base --is-ancestor 6ce67de9 origin/main` answered **NO**, and
+    `git log origin/main -- scripts/subshell-cleanup-lint.sh` returned exactly ONE commit — the
+    graft, which shows every file in the repo as an add. Both readings say "the cited cure is not
+    on trunk", which is precisely the premise that licenses re-deriving a diff, i.e. the trunk-
+    reverting failure `6110fc45141e` names. `git fetch --deepen 400` moved the count to 467 and the
+    same check answered **YES**. So: **`git rev-parse --is-shallow-repository` before any
+    `--is-ancestor` or path-history read, and deepen before believing a negative.** The content
+    check is the one that survives a shallow clone — trunk's file was a strict superset of the
+    fix's, and the lint ran clean, before ancestry could be resolved at all.
+  - **Why it re-dispatched, which is the finding worth keeping.** The row is closed on evidence in
+    THIS doc and open in the ledger, because `~/.claude/autonomy/backlog.jsonl` exists only on the
+    operator's box: `cc-backlog done|block|venue` all return `unknown id` here (`block` cannot park
+    it out of the wave either, so the "operator-gated ⇒ no re-dispatch loop" rail is itself
+    unreachable from cloud), and `cc-notify --role desk` is `unresolvable` with the phone channel
+    unwired. A cloud worker therefore cannot record ANY terminal verdict — it can only leave prose
+    and hope. Until a hand-back exists (the `offbox-green-pull.sh` channel carries hermetic test
+    verdicts only, never ledger events), every already-landed item routed to cloud re-dispatches on
+    the next wave and burns a slot per pass.
+  - **Operator-only step, unchanged and now with both shas:**
+    `cc-backlog done 354c73ebd400 --evidence "6ce67de910d6e46f825a7eae0db28b741964f5de + 66857bc2ef210003b34b0889c23dc3191777b881"`
 - **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
   (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
   `6644273f3`; content-verified on `origin/main`.**
