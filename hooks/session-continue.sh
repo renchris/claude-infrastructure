@@ -264,17 +264,20 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
     # A restated fact about a sibling file rots silently; a named symbol rots loudly, at the grep that
     # cannot find it. State the neighbour's behaviour by pointing at the symbol that implements it.
     case "$_ouid" in
-      ''|*[!0-9A-Fa-f-]*) : ;;
+      # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+      # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+      # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+      ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;;
       *) if command -v mailbox_resolve_key >/dev/null 2>&1; then
            _rk="$(mailbox_resolve_key "$_ouid" 2>/dev/null || true)"
            # Adopt ONLY a valid uuid: an empty or malformed resolve must never blank the key, or every
            # guard below would skip and the wake floor would go silently inert — the exact class of
            # failure this hook exists to prevent.
-           case "$_rk" in ''|*[!0-9A-Fa-f-]*) : ;; *) _ouid="$_rk" ;; esac
+           case "$_rk" in ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;; *) _ouid="$_rk" ;; esac
            unset _rk
          fi ;;
     esac
-    case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mailbox_promote_acked "$_ouid" ;; esac
+    case "$_ouid" in ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;; *) mailbox_promote_acked "$_ouid" ;; esac
   fi
 fi
 
@@ -414,7 +417,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   [ "${CC_WAKE_FLOOR:-1}" = 1 ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   command -v mailbox_wake_armed >/dev/null 2>&1 || return 0
-  case "$_ouid" in ''|*[!0-9A-Fa-f-]*) return 0 ;; esac
+  case "$_ouid" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
 
   local mbxd sf now cnt ts prev_sid maxa ttl pend armcmd reason warnmsg
   mbxd="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -985,7 +988,7 @@ printf '%s' "$n" > "${f}.count"
 # a take is confined HERE because its body is about to be delivered in the decision:block reason below.
 mail=""
 if command -v mailbox_take >/dev/null 2>&1; then
-  case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mail="$(mailbox_take "$_ouid" 0)" ;; esac
+  case "$_ouid" in ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;; *) mail="$(mailbox_take "$_ouid" 0)" ;; esac
 fi
 
 step=$(cat "$f")

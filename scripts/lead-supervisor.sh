@@ -888,7 +888,10 @@ sweep_fired_dark(){ # prints the number of dark fired peers found this sweep
   for f in "$FIRED_DIR"/*.json; do
     [ -e "$f" ] || continue
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"
-    case "$pane" in ''|*[!0-9A-Fa-f-]*) continue ;; esac        # UUID-shaped only — never a path fragment
+    # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+    # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+    # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+    case "$pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*) continue ;; esac
     mk="$PAGEDIR/fired-dark/$pane"
     closed="$(jq -r '.closedAt // "null"' "$f" 2>/dev/null || echo x)"
     engaged="$(jq -r '.engagedAt // "null"' "$f" 2>/dev/null || echo x)"

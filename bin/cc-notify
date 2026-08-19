@@ -734,16 +734,30 @@ resolve() {
   # 1. exact friendly-name match — read STRAIGHT from the registry (no it2 IPC, so no hang).
   u="$(registry_name_to_uuid "$t")"; rc=$?
   [ "$rc" = 0 ] && [ -n "$u" ] && { echo "$u"; return 0; }
-  # 1b. kitty integer pane id. Registry rows are keyed by pane id, and on a kitty box those are
-  #     decimal integers — a shape every uuid gate below structurally rejects (id-space law: iTerm2
-  #     UUIDs and kitty ints share the code path but not the id space). A numeric token resolves
-  #     IFF its registry row file exists — same dead-row semantics as the full-uuid passthrough
-  #     below (the liveness verdict downstream stays the honest half), and name-match above still
-  #     wins for a session actually NAMED with digits. Measured 2026-08-07: `cc-notify 247`
-  #     returned no-such-target while `--list` printed pane 247 live in its UUID column.
-  if [[ "$t" =~ ^[0-9]+$ ]] && [ -f "$REG_DIR/$t.json" ]; then
-    echo "$t"; return 0
-  fi
+  # 1b. ROW-BACKED PANE ID — any address the registry actually holds a row for resolves to itself.
+  #     Registry rows are keyed by pane id, and THREE id spaces now share this code path without
+  #     sharing a shape (id-space law): iTerm2 uuids, kitty's decimal integers, and the headless
+  #     `hdl-<16 hex>` that bin/cc-pane-headless:124 mints and :197 exports as CC_PANE_ID. Every
+  #     uuid gate below structurally rejects the latter two.
+  #
+  #     THIS ARM WAS NUMERIC-ONLY (`^[0-9]+$`, added 2026-08-07 after `cc-notify 247` returned
+  #     no-such-target while `--list` printed pane 247 live in its UUID column). That fixed the
+  #     kitty half by enumerating one more SPELLING, and a headless address walked straight back
+  #     into the same hole — `hdl-…` is neither decimal nor hex-shaped, so a registered, live,
+  #     perfectly addressable session resolved to "target genuinely UNKNOWN". Widened to the CLASS
+  #     the arm was always about: a safe filename component (the value becomes "$REG_DIR/$t.json"),
+  #     which is the predicate hooks/session-register.sh settled on for the same reason — a lookup
+  #     MISS is not absence, and the shape was never what made the answer true (memory:
+  #     denylist-enumerates-spellings-not-the-class · lookup-miss-is-not-absence).
+  #
+  #     The row-file requirement is what keeps this safe and is unchanged: same dead-row semantics
+  #     as the full-uuid passthrough below (the liveness verdict downstream stays the honest half),
+  #     an address nothing ever registered is still UNKNOWN rather than invented, and the name-match
+  #     above still wins for a session actually NAMED with digits.
+  case "$t" in
+    ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;;
+    *) [ -f "$REG_DIR/$t.json" ] && { echo "$t"; return 0; } ;;
+  esac
   # 2. raw full UUID passthrough — needs no registry at all, so it works even when the registry does
   #    not. Tried BEFORE surfacing any resolver-unavailable verdict.
   if [[ "$t" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then

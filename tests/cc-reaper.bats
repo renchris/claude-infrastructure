@@ -565,14 +565,31 @@ EOF
   notified
 }
 
-@test "a non-UUID pane can never carry a marker (path-fragment guard fails safe)" {
-  # fired_peer refuses anything not [0-9A-Fa-f-]; a marker filed under such a name is inert.
+@test "a PATH-FRAGMENT pane can never carry a marker (the guard fails safe)" {
+  # This case used to pass `PANE-X` and describe it as "non-UUID", pinning the guard's old spelling
+  # (`*[!0-9A-Fa-f-]*` — hex and dashes only) rather than its PURPOSE. `PANE-X` is not a path
+  # fragment at all: it is a perfectly safe filename component that merely is not hex, so the case
+  # asserted that a harmless address is inert — and would have tripwired any widening, including the
+  # one that made this fleet's own headless `hdl-<hex>` addressable (backlog 5d1b5dd9b3db). The
+  # subject is what "$FIRED_DIR/$pane.json" may safely be, so the fixture is now a REAL traversal.
+  # (memory: stale-assertion-becomes-an-inverted-guard · denylist-enumerates-spellings-not-the-class)
   set_desk; set_live 1
-  mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/../fired/PANE-X.json"
-  mock_classify finished-shared-review "$D/untracked" 9000 no PANE-X
+  mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/escape.json"
+  mock_classify finished-shared-review "$D/untracked" 9000 no "../fired/escape"
   run "$R" sweep --reap
   ! td_called || false
   notified
+}
+
+@test "a HEADLESS pane DOES carry a marker (the address cc-pane-headless mints is a pane address)" {
+  # The positive half of the guard, and the one the old spelling silently got wrong: `hdl-<16 hex>`
+  # is what bin/cc-pane-headless:124 mints and :197 exports as CC_PANE_ID. Written out literally —
+  # this fixture invokes nothing the fix introduced.
+  set_desk; set_live 1
+  mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/hdl-a1b2c3d4e5f60718.json"
+  mock_classify finished-shared-review "$D/untracked" 9000 no hdl-a1b2c3d4e5f60718
+  run "$R" sweep --reap
+  td_called
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────

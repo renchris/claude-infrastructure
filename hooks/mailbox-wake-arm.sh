@@ -112,7 +112,10 @@ fi
 case "$_sid" in *[!0-9A-Fa-f-]*) _sid="" ;; esac
 
 _pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _pane="${_pane##*:}"
-case "$_pane" in ''|*[!0-9A-Fa-f-]*) _pane="" ;; esac
+# ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+# address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+# hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+case "$_pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*) _pane="" ;; esac
 
 # PRECEDENCE, and the reason for it: cc-await-ping given a PANE watches mailbox_keyset(pane) = the
 # pane box AND its aliased session box, which is the full cover. Given a SESSION it can only watch

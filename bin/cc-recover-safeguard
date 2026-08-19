@@ -41,7 +41,10 @@ while [ $# -gt 0 ]; do case "$1" in
   *)            if [ -z "$BLOCKED" ]; then BLOCKED="$1"; else echo "cc-recover-safeguard: unexpected arg $1" >&2; exit 2; fi; shift ;;
 esac; done
 [ -n "$BLOCKED" ] || { echo "usage: cc-recover-safeguard <blocked-pane> [--model M] [--dry-run|--execute]" >&2; exit 2; }
-case "$BLOCKED" in *[!0-9A-Fa-f-]*) echo "cc-recover-safeguard: <blocked-pane> must be a pane UUID" >&2; exit 2 ;; esac
+# ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+# address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+# hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+case "$BLOCKED" in ''|.|..|.*|*[!A-Za-z0-9._-]*) echo "cc-recover-safeguard: <blocked-pane> is not a usable pane address" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "cc-recover-safeguard: jq required" >&2; exit 2; }
 
 REG_DIR="${CC_RECOVER_REG_DIR:-$HOME/.claude/cc-registry}"

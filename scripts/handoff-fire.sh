@@ -2858,8 +2858,11 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   MFP_SKIP_REASON=""
   [ -n "$dir" ]  || { MFP_SKIP_REASON="no fired-dir was given"; return 0; }
   [ -n "$pane" ] || { MFP_SKIP_REASON="no pane id was given"; return 0; }
-  case "$pane" in *[!0-9A-Fa-f-]*)                    # UUID-shaped only — never a path fragment
-    MFP_SKIP_REASON="pane id '$pane' is not UUID/hex-shaped, so it was refused as a possible path fragment"
+  # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+  # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+  # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+  case "$pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*)
+    MFP_SKIP_REASON="pane id '$pane' is not a safe filename component, so it was refused as a possible path fragment"
     return 0 ;;
   esac
   command -v jq >/dev/null 2>&1 || { MFP_SKIP_REASON="jq is not on PATH ($PATH)"; return 0; }

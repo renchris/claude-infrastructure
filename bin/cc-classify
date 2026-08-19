@@ -460,7 +460,10 @@ fired_peer() { # <paneUUID> [startedAt-ms] [cwd] → 0 iff a TENANCY-VALID spawn
   # no-op ⇒ the same kill switch restores the pre-unification behavior here too, by construction.
   local pane="${1:-}" started_ms="${2:-}" here="${3:-}" fep started_s
   [ -n "$pane" ] || return 1
-  case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
+  # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+  # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+  # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+  case "$pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 1 ;; esac
   [ -f "$FIRED_DIR/$pane.json" ] || return 1
   case "$started_ms" in ''|*[!0-9]*) return 1 ;; esac  # unknown startedAt ⇒ INVALID (surface, not reap)
   [ "$started_ms" -gt 0 ] || return 1

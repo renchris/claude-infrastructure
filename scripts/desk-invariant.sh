@@ -296,7 +296,10 @@ newest_fired_pane() { # → echo the UUID of handoff-fire's most-recent cc-fired
   done
   [ -n "$newest" ] || return 0
   pane="$(basename "$newest" .json)"
-  case "$pane" in ""|*[!0-9A-Fa-f-]*) return 0 ;; esac       # UUID-shaped only — never a stray filename
+  # ADDRESS SHAPE: a safe filename component, NOT "hex-shaped". `hdl-<hex>` is a real pane
+  # address (bin/cc-pane-headless:124/:197); the hex spelling refused it. SSOT rationale:
+  # hooks/session-register.sh. Backlog 4b9d5e93b40a (writer) + 5d1b5dd9b3db (this consumer).
+  case "$pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
   printf '%s' "$pane"
 }
 heal_role() { # <pane> — atomically repoint $ROLES_DIR/$ROLE at pane (tmp+mv); best-effort, always 0
