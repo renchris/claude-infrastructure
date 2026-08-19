@@ -331,3 +331,54 @@ EOF
   run bash -c "cksum '$D/teams/session-aa/config.json'"
   [ "$output" = "$after" ]
 }
+
+# ── it2 RESOLUTION: PATH-first with an absolute fallback ─────────────────────────────────────────
+# `it2` exists ONLY in the deployed layer — install.sh copies bin/it2-wrapper to $CONFIG_DIR/bin/it2
+# and the repo carries no bin/it2 — so a bare name is resolvable only while ~/.claude/bin happens to
+# be on PATH. The scheduled caller (com.claude.teammate-reap-alarm.plist) prepends it via `bash -c`
+# and is fine; every other caller inherits whatever its session carries. The failure is quiet:
+# win_ids() maps 127 to `unreachable`, which is the RIGHT degradation but a permanent one, and the
+# alarm then runs on the process table alone while still printing a verdict.
+#
+# TWO ARMS, BOTH REQUIRED, and they pull in OPPOSITE directions. The first proves the hardening is
+# REACHED; the second proves it did not EAT the ordering. A PREPEND passes arm one and silently
+# overrides every caller's own it2, so an arm-one-only proof is half a proof (memory:
+# guard-proxy-fails-in-both-directions). Both pin every other external read absolutely, so a red
+# here can only be about it2 — under the lean PATH `jq` would otherwise vanish too and confound
+# src_mem with src_win.
+#
+# The subject appends ~/.claude/bin to PATH rather than resolving it2 absolutely at the variable.
+# That is not a style choice: `command -v it2` puts a bare name at COMMAND position, which
+# unattended-path-lint.sh reports (it is blind to the `${VAR:-it2}` spelling and NOT to this one),
+# and the append also covers `jq`, the second bare name in the same file.
+
+@test "it2 still resolves when the CALLER's PATH cannot reach ~/.claude/bin" {
+  seed 12; live 12; seat
+  local abs_jq; abs_jq="$(command -v jq 2>/dev/null || true)"
+  [ -n "$abs_jq" ]
+  mkdir -p "$HOME/.claude/bin"
+  cp "$D/it2" "$HOME/.claude/bin/it2"; chmod +x "$HOME/.claude/bin/it2"
+  unset CC_RESIDENCY_IT2_BIN
+  run env PATH=/usr/bin:/bin CC_RESIDENCY_JQ_BIN="$abs_jq" "$S" --quiet --no-state
+  echo "$output" | grep -q "src_win=ok"
+  if printf '%s\n' "$output" | grep -q "src_win=unreachable"; then
+    echo "bare name did not resolve: a scheduled run loses the window source permanently" >&2; false
+  fi
+}
+
+@test "the caller's own PATH still WINS — the hardening APPENDS, never prepends" {
+  seed 12; live 12; seat
+  local abs_jq; abs_jq="$(command -v jq 2>/dev/null || true)"
+  [ -n "$abs_jq" ]
+  mkdir -p "$HOME/.claude/bin" "$D/pathbin"
+  # The fallback location answers with a DIFFERENT population, so whichever binary actually ran is
+  # readable straight off the counts: PATH's copy yields the seeded 12, the fallback's yields none.
+  printf '#!/bin/bash\necho 999\n' > "$HOME/.claude/bin/it2"; chmod +x "$HOME/.claude/bin/it2"
+  cp "$D/it2" "$D/pathbin/it2"; chmod +x "$D/pathbin/it2"
+  unset CC_RESIDENCY_IT2_BIN
+  run env PATH="$D/pathbin:/usr/bin:/bin" CC_RESIDENCY_JQ_BIN="$abs_jq" "$S" --quiet --no-state
+  echo "$output" | grep -q "resident=12"
+  if printf '%s\n' "$output" | grep -q "resident=0"; then
+    echo "the absolute fallback shadowed PATH — a caller can no longer choose its own it2" >&2; false
+  fi
+}

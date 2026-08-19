@@ -69,6 +69,22 @@
 
 set -uo pipefail
 
+# PATH hardening — scripts/unattended-path-lint.sh governs the two bare names below (`it2`, `jq`).
+# Both ship OUTSIDE the stock PATH: install.sh copies bin/it2-wrapper to $CONFIG_DIR/bin/it2 (the
+# repo carries no bin/it2 at all, so nothing on a bare PATH can ever resolve it), and jq is
+# Homebrew-only. Today the scheduled caller com.claude.teammate-reap-alarm.plist prepends both dirs
+# itself through `bash -c` so $HOME expands, and the names DO resolve there — the hazard is every
+# OTHER caller, bin/cc-blockers among them, which inherits whatever PATH its session happens to
+# carry. The failure is quiet rather than loud, which is why it survived: win_ids() maps 127 to
+# `unreachable`, the RIGHT degradation but a permanent one, and the alarm then runs on the process
+# table alone forever while still printing a confident verdict. Same class, same file, same cure as
+# hooks/teammate-auto-shutdown.sh:55, whose wording this follows.
+# APPEND, never prepend: a caller that already reaches its own it2 keeps its own resolution order —
+# tests/assignee-pane-residency.bats pins that direction as well as the fallback, because a prepend
+# passes the fallback arm and silently overrides every caller's choice.
+PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+
 STATE_DIR="${CC_RESIDENCY_STATE_DIR:-$HOME/.claude/watchdog}"
 STATE_FILE="$STATE_DIR/assignee-residency.state"
 LIFECYCLE="${TEAMMATE_LIFECYCLE_LOG:-$HOME/.claude/logs/teammate-lifecycle.log}"
