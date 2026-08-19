@@ -49,16 +49,21 @@
 #     sweep_orphans' business; a link pointing anywhere else is explicitly not ours to judge
 #     (tests/deploy-link-parity.bats:156). Cost of honouring that: a hand-placed link to a non-repo
 #     path is missed. The defect that recurred twice was a hand-placed real FILE.
-#   · PROMPT-DOCUMENT surfaces (skills/, agents/, commands/) are excluded: live-only content there
-#     is the normal path. Re-measured 2026-08-18 — the skill-DIRECTORY count fell 20 → 5 (siblings
-#     f542c8b2c, 8b33db9e6, ab62d3a08 tracked the rest; the 5 survivors are third-party derivatives
-#     with durable reasons in skills/LOCAL_ONLY.md) — but that is NOT the size of the wall this leg
-#     would print. This leg reports FILES: those 5 dirs hold 82 real files (react-best-practices
-#     alone is 59), so the report would grow to 82 lines, not shrink to 5. The alarm-polarity case
-#     is STRONGER than when written (memory alarm-polarity-and-attention-budget); do not re-open
-#     the exclusion on the directory count alone. Widening to skills/ needs 5 glob declarations
-#     (`skills/<name>/*`) in config/live-only.manifest FIRST, landed as one unit with the widening —
-#     the rows are inert until the sweep reaches them. Tracked separately (backlog bb2495b098b8).
+#   · PROMPT-DOCUMENT surfaces: skills/ and agents/ ARE swept as of 2026-08-19; commands/ is not.
+#     The exclusion was carried by a wall estimate that measured the wrong span, and the correction
+#     runs the OTHER way from the last two: the wall is 5 lines, not 82 and not 20.
+#       — 20 was a stale DIRECTORY count (siblings f542c8b2c, 8b33db9e6, ab62d3a08 tracked the rest;
+#         5 third-party survivors remain, each with a durable reason in skills/LOCAL_ONLY.md).
+#       — 82 corrected the UNIT (this leg reports files, and those 5 dirs hold 82 real files) but
+#         counted RECURSIVELY while sweep_strays is non-recursive and skips subdirectories. It
+#         visits depth 1 only: exactly 5 real files, one SKILL.md per dir. react-best-practices
+#         contributes 1 here, not 59. A span that does not equal its consumer's span is not a
+#         measurement of that consumer (memory assertion-span-must-equal-its-subject).
+#     So 5 declarations absorb the whole wall and the alarm-polarity objection dissolves rather
+#     than strengthening. Depth-1 coverage is also the RIGHT span for the defect class: a skill IS
+#     its top-level SKILL.md, so a newly hand-placed unversioned skill is always caught. Nested
+#     content inside an already-declared skill is deliberately not audited.
+#     agents/ is flat and holds exactly one real file (the Motion plugin's motion-reviewer.md).
 #   · DIRECTORIES are skipped (hooks/lib and scripts/lib are structural; __pycache__ is bytecode
 #     residue of the *.py hooks). Neither is a hand-placed tool.
 #
@@ -273,7 +278,14 @@ declared_owner() {  # $1 = live-relative path
     case "$base" in
       \**) stem="${base#\*}"
            [ "$dir/${rel##*/}" = "$rel" ] || continue
-           case "$rel" in *"$stem") ;; *) continue ;; esac ;;
+           case "$rel" in *"$stem") ;; *) continue ;; esac
+           # A WHOLE-DIRECTORY row (`skills/motion/*`) has no literal remainder, so the witness
+           # stem would be the empty string — and `grep -F ''` matches every line, which silently
+           # degrades the witness check into "does the witness file exist" and kills the anti-rot
+           # device the manifest is built on. Fall back to the row's own directory name, which is
+           # what a whole-directory exemption is actually about: skills/motion/* stays honoured
+           # only while its witness still says "motion".
+           [ -n "$stem" ] || stem="${dir##*/}" ;;
       *)   stem="$base"
            [ "$path" = "$rel" ] || continue ;;
     esac
@@ -348,6 +360,12 @@ for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 # are not in the forward walk above; that asymmetry is deliberate, not an oversight. The two
 # directions answer different questions, and "is anything live here unversioned?" stands on its own.
 for d in bin hooks hooks/lib scripts scripts/lib scripts/limit-recover lib; do sweep_strays "$d"; done
+
+# PROMPT-DOCUMENT surfaces. skills/ is NESTED where every executed surface is flat, so the sweep is
+# driven one level down — sweep_strays lists a single directory and skips subdirectories, so passing
+# "skills" itself would visit nothing at all and read as a clean pass over an unswept surface.
+for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_strays "skills/$(basename "$d")"; done
+sweep_strays "agents"
 
 # --- report -------------------------------------------------------------------------------------
 if [ "$findings" -eq 0 ] && $QUIET; then exit 0; fi

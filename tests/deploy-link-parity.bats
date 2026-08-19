@@ -418,14 +418,91 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   lacks "STRAY"
 }
 
-@test "PROMPT-DOCUMENT surfaces are out of the stray leg's scope (20/35 live skills are vendor-owned)" {
-  # Sweeping commands/ and skills/ would print a standing wall of vendor- and plugin-installed files
-  # that reds every deploy forever, which trains the operator to skip the report entirely.
+@test "commands/ stays out of the stray leg's scope — the boundary that did NOT move" {
+  # skills/ and agents/ were brought in scope on 2026-08-19; commands/ was not, and that asymmetry
+  # is deliberate. Pinning it here stops the widening from being read as "sweep every document
+  # surface" by the next editor.
   hand_place "commands/personal.md"
-  mkdir -p "$CC_LINKPARITY_CONFIG/skills/vendor"; hand_place "skills/vendor/SKILL.md"
   run "$LP"
   [ "$status" -eq 0 ]
   lacks "STRAY"
+}
+
+@test "an undeclared live skill IS swept ⇒ STRAY (skills/ is in scope as of 2026-08-19)" {
+  # The gap this closes: a hand-placed skill directory was in no checkout, had no git history, no
+  # /ship path, and NO auditor looked at it from the live side (backlog bb2495b098b8).
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/hand-placed"
+  hand_place "skills/hand-placed/SKILL.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "skills/hand-placed/SKILL.md"
+}
+
+@test "the live agents/ directory is swept too — its one real file is the same class" {
+  # setup() does not build agents/, on purpose: a MISSING surface must be a silent no-op (the guard
+  # in sweep_strays), so the directory is created here by the case that actually needs it.
+  mkdir -p "$CC_LINKPARITY_CONFIG/agents"
+  hand_place "agents/hand-placed.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "agents/hand-placed.md"
+}
+
+@test "a WHOLE-DIRECTORY row exempts a vendored skill, and prints its reason under --all" {
+  # The form the 5 live third-party skills use: skills/<name>/*, witnessed by skills/LOCAL_ONLY.md.
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/vendored"
+  hand_place "skills/vendored/SKILL.md"
+  hand_place "skills/vendored/REFERENCE.md"
+  declare_row "skills/vendored/*" vendored "skills/LOCAL_ONLY.md" "upstream owns the text"
+  witness "skills/LOCAL_ONLY.md" "| \`vendored\` | replaced wholesale on re-vendor |"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+  run "$LP" --all
+  has "DECLARED"
+  has "upstream owns the text"
+}
+
+@test "a whole-directory row whose witness stops naming the DIRECTORY goes STALE, not silently OK" {
+  # THE VACUITY THIS GUARDS. A row's witness stem is the literal remainder after the '*', and for a
+  # bare `skills/<name>/*` that remainder is the EMPTY STRING — `grep -F ''` matches every line, so
+  # the witness check would degrade to "the file exists" and the anti-rot device would be dead while
+  # still looking alive. The stem falls back to the row's own directory name so this case can fail.
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/vendored"
+  hand_place "skills/vendored/SKILL.md"
+  declare_row "skills/vendored/*" vendored "skills/LOCAL_ONLY.md" "upstream owns the text"
+  witness "skills/LOCAL_ONLY.md" "this file no longer mentions the directory it exempts"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STALE-DECL"
+  has "1 actionable"        # the STALE row is the only finding — nothing borrowed from another leg
+}
+
+@test "the sweep reaches INTO each skill dir — passing the nested parent would visit nothing" {
+  # sweep_strays lists ONE directory and skips subdirectories, so a single sweep of "skills" would
+  # look at 5 directory entries, skip all 5, and report a clean pass over a surface it never read.
+  # Driving it one level down is what makes the leg non-vacuous on a nested surface.
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/alpha" "$CC_LINKPARITY_CONFIG/skills/beta"
+  hand_place "skills/alpha/SKILL.md"
+  hand_place "skills/beta/SKILL.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "skills/alpha/SKILL.md"
+  has "skills/beta/SKILL.md"
+}
+
+@test "coverage is DEPTH 1 by construction — nested skill content is not audited, and that is stated" {
+  # Honest scope, pinned so it is not mistaken for full coverage later. A skill IS its top-level
+  # SKILL.md, so a newly hand-placed unversioned skill is always caught; content nested inside an
+  # already-declared skill is deliberately out of scope (it is what made the wall read as 82 files
+  # when the sweep only ever visits 5).
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/deep/references"
+  hand_place "skills/deep/references/buried.md"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "buried.md"
 }
 
 @test "directories in a swept surface are not tools — __pycache__ never reads as a stray" {
