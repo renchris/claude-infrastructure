@@ -87,6 +87,68 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #39: the "evidence expired, close it" row had its evidence intact in
+  an account store nobody enumerated — and the same blind spot had already manufactured a phantom
+  population inside the measurement #38 landed one recycle earlier.**
+  `master-fleet-footprint` **17 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed, no stale claim)**. Property re-measured at intake: 17/17 open are `venuePlan=local`
+  AND `project=claude-infrastructure`. **filed 0 / closed 0.** Landed `e797317cd` (session-end
+  attribution) + this entry and the R-7 retraction. `b521cb445465` worked and **left OPEN, claim
+  released**, remainder named below.
+  - **`b521cb445465` is NOT evidence-expired, and the instrument that said so read one store of
+    four.** The inherited brief offered it as a close candidate on `find ~/.claude/projects -name
+    '*380dce96*'` → no output. **The transcript exists** — 701,799 bytes, 236 rows, at
+    `~/.claude-tertiary/projects/…/380dce96-….jsonl`. The row's own account is `next3` =
+    `claude-tertiary`, so the one root searched was guaranteed not to hold it. Do not close this row
+    on evidence expiry; the evidence is complete.
+  - **Two instrument traps inside the same investigation, each of which renders as a clean answer.**
+    (i) *Timezone.* `sessions.log`, `lead-crash-watchdog.log`, `session-index.log` and
+    `teammate-lifecycle.log` timestamp in **LOCAL** time (`[2026-07-29 21:39:12]`); `cc-reconcile.log`
+    and the jsonl stores are **UTC** (`[…T04:39:12Z]`). The death at `04:39Z` is `21:39` local **on
+    the previous day** — a first pass querying `2026-07-30T04:3*` found nothing across every
+    lifecycle store and read exactly like "no closer ran". (ii) *Format.* Those same four stores use
+    a space, not `T`, so even a right-day grep for `2026-07-30T04:` is blind by construction. Memory
+    `process-start-time-renders-in-ambient-timezone`, `lookup-miss-is-not-absence`.
+  - **The death RECLASSIFIES, but does not resolve.** At the death second the fleet logged
+    `[2026-07-29 21:39:12] Session ended`, and `lead-crash-watchdog.log` carries
+    `[watchdog 380dce96-…] pid file gone — exit` for this exact sid — the clean-shutdown branch.
+    `claude-crashes.jsonl` has no row for it, which is the *documented expected* consequence of that
+    branch, not a mystery. So the observed signature is a clean SessionEnd, **not** the unlogged
+    abrupt kill the row's title asserts. **What it is NOT is proof of the initiator**, and the
+    tempting inference was checked and refused: `session-deregister.sh:10-32` records that
+    `claude mcp list` emits a PHANTOM SessionEnd on every SessionStart (reason `other`, fresh random
+    sid), and **5360 of 6208** such lines are phantoms — so an unattributed "Session ended" is ~86%
+    likely not to be a real end at all, and `session-end.sh`'s own straggler GC can remove a
+    *sibling's* stale pidfile, so `pid file gone` does not uniquely convict this session's own hook.
+    **Remainder: name what initiated the close.** Left OPEN deliberately — closing on the literal
+    sub-question ("did any closer run") while the row's actual concern (a watched pane vanished with
+    no visible continuation) is unanswered would be exactly the narrowing §6 forbids.
+  - **Landed the remedy the investigation proves is needed** (`e797317cd`). `hooks/session-end.sh`
+    wrote its `Session ended` line at line 2, **before reading its own stdin** — discarding the
+    `session_id` and `reason` it parses four lines later. Both are now emitted
+    (`Session ended sid=<sid|-> reason=<reason|->`), the literal phrase preserved verbatim so every
+    existing consumer greps unchanged, both fields charset-sanitized and length-bounded because they
+    reach a shared append-only log (a newline would otherwise forge a whole record). The duplicate
+    `cat` below was **removed, not left**: a second read of a consumed stdin returns empty and still
+    **exits 0**, so the `|| echo '{}'` fallback never fires and the sid would silently blank,
+    disabling every removal in the hook — a mutant (M4) pins that regression. Suite 7 → 13 cases,
+    every case anti-vacuity-guarded; **5 mutants, each redding its own assertion group with its own
+    message** (M1 → 6,7,8,10 · M2 → 7,8,10 · M3 → 9 · M4 → 1,2,11 · M5 → 8).
+  - 🚨 **RETRACTED a number this chain landed one recycle ago.** #38's R-7 measurement reported
+    **110 of 214 sessions with NO transcript at all — 55% of Bash volume**, and
+    `docs/plans/HOOK_CHAIN_COST.md` called it "not sampling noise, a structurally absent
+    population", using it to argue a live-settings PostToolUse counter was *the only* way to reach a
+    fleet figure. It was the two-root defect a third time. **There are four distinct transcript
+    stores** — `~/.claude`, `-secondary`, `-tertiary`, `-quaternary` (plus `~/.claude-next/projects`,
+    a symlink to the first: a glob double-counts it, a `find` reports it empty). Re-derived over all
+    four on the log's own span: **218 of 218 sessions have a transcript; the absent population is
+    ZERO**, with conservation asserted both ways and the two-root set a strict subset. The `1.40x`
+    is therefore not confined to a stratum — the stratum is the fleet — and R-7's remainder may be a
+    *measurement*, not the build. §5.2's paragraph is struck through with the correction in place.
+    **The generalizable half:** `positive-control-the-denominator` binds the CORPUS YOU READ, and
+    "I added the root I was missing" is not a control — enumerating `~/.claude*/projects` is. New
+    memory `transcript-corpus-spans-four-account-stores`.
+
 - **2026-08-19 — drain recycle #38: a row can be TRUE at its stated site and still prescribe the
   design its own subsystem already refuted — and the shortcut that would have answered the second
   row was refuted by its own denominator.** `master-fleet-footprint` **17 open / 4 blocked (4

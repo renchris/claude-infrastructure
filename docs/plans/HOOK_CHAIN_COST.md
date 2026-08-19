@@ -450,12 +450,40 @@ it is unbounded but rotates, so this span is the measurement's decay window too)
 attributes to transcript-bearing sessions. Two independent instruments agree on the stratum they
 share, which is what makes the 1.40x usable at all.
 
-**What this licenses, and what it does not.** A match-all hook's per-hour cost is the Bash rate
+**What this licenses, and what it does not.** ~~A match-all hook's per-hour cost is the Bash rate
 × 1.40 **on the 49% of sessions that keep a transcript**. It does NOT give a fleet figure: the
-missing 51% is not sampling noise, it is a structurally absent population, and nothing in the
-transcripts can say whether its tool mix resembles the stratum that is visible. So R-7 stays OPEN
-with its remainder narrowed rather than closed — the counter it asks for is still the only thing
-that would produce a fleet number (memory `zero-claim-must-name-its-excluded-strata`).
+missing 51% is not sampling noise, it is a structurally absent population.~~
+
+🚨 **RETRACTED 2026-08-19 (recycle #39) — THE "STRUCTURALLY ABSENT POPULATION" DOES NOT EXIST.**
+It was the *same* two-root defect this section's own bullet below congratulates itself for fixing,
+committed a third time: the corrected census searched `~/.claude` **and** `~/.claude-secondary` and
+called that "EITHER root". **There are four distinct transcript stores, one per account** —
+`~/.claude`, `~/.claude-secondary`, `~/.claude-tertiary`, `~/.claude-quaternary` (plus
+`~/.claude-next/projects`, a symlink to the first, which is why a naive glob double-counts it and a
+`find` reports it empty). Re-derived over all of them, on this instrument's own span
+`2026-08-16T22:22:09Z → 2026-08-19T10:21:07Z`:
+
+| stratum | sessions | Bash entries | share |
+|---|---|---|---|
+| have a transcript — 2 roots (as published) | 106 | 9,173 | 45% |
+| **have a transcript — all 4 stores** | **218** | **20,415** | **100%** |
+| **NO transcript at all — all 4 stores** | **0** | **0** | **0%** |
+
+*(218/20,415 vs the 214/20,071 above is log growth over the intervening hours, not a discrepancy;
+both counts conserve — sessions and entries each sum to their totals, and the two-root set is a
+strict subset of the four-store set.)*
+
+**Every session in the window keeps a transcript.** So the 1.40x is not confined to a stratum at
+all — the stratum *is* the fleet — and the stated reason R-7 could not be closed from transcripts
+is void. **This materially changes R-7's remaining work:** the PostToolUse match-all counter was
+justified as "the only thing that would produce a fleet number", and that justification is now
+refuted. Before building it — it is a live-settings change with real blast radius — re-derive the
+all-tool rate directly from the four stores and see whether it already answers the row. R-7 stays
+OPEN, but its remainder is a *measurement*, not necessarily a build.
+
+**The lesson, stated so it cannot recur a fourth time:** `positive-control-the-denominator` applies
+to the CORPUS YOU READ, and "I added the root I was missing" is not a control — enumerating
+`~/.claude*/projects` is. A census must print its own root inventory beside its result.
 
 **Three instrument defects were found and fixed inside this measurement**, each the failure mode
 this document keeps re-encountering, and each invisible in its output:
