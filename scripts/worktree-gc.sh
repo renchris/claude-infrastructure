@@ -490,18 +490,33 @@ fi
 
 is_live_cwd() { printf '%s\n' "$LIVE_CWDS" | grep -qxF "$1"; }
 
-registry_live() { # <basename> <canon-path> → 0 iff a registered session PID is still alive here
-  local base="$1" path="$2" row pid rcwd
-  [ -f "$REGISTRY_DIR/$base" ] || return 1
-  row="$(cat "$REGISTRY_DIR/$base" 2>/dev/null)"
-  pid="$(printf '%s' "$row" | cut -f1)"
-  rcwd="$(printf '%s' "$row" | cut -f3)"
-  case "${pid:-}" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null || return 1
-  # A bare basename can collide across the 5 repos sharing ~/Development/.worktrees (audit §6):
-  # only honour the row when its recorded cwd is this worktree (or was never recorded).
-  [ -z "$rcwd" ] && return 0
-  [ "$(canon "$rcwd")" = "$path" ]
+registry_live() { # <basename> <canon-path> → 0 iff ANY registered session PID is still alive here
+  local base="$1" path="$2" f row pid rcwd
+  # ONE ROW PER SESSION, NOT PER WORKTREE (headless-substrate spec 03, E14). A pooled worktree hosts
+  # several sessions — measured 2026-08-19, wt-pool-2 and wt-pool-8 each ran two sibling `claude`
+  # procs — and the pre-fix per-worktree key meant the second silently erased the first, leaving a
+  # live session with no row. `hooks/live-session-registry.sh` now keys `<basename>-<sid8>`, so this
+  # must read EVERY row for the worktree and keep it if ANY is alive. A single dead row no longer
+  # condemns an occupied worktree.
+  #
+  # The bare key is read too, and NOT merely for a transition window: `~/.reso/worktree-gc-run.sh:96`
+  # is a second writer into this shared store, from another repo, and it still keys bare.
+  #
+  # The recorded-cwd check runs PER ROW, which is what makes the wider glob safe: a prefix neighbour
+  # (`wt-pool-1` globbing `wt-pool-11`'s row) records a different cwd and is rejected, so this cannot
+  # manufacture liveness for a worktree that has none.
+  for f in "$REGISTRY_DIR/$base" "$REGISTRY_DIR/$base"-*; do
+    [ -f "$f" ] || continue
+    row="$(cat "$f" 2>/dev/null)"
+    pid="$(printf '%s' "$row" | cut -f1)"
+    rcwd="$(printf '%s' "$row" | cut -f3)"
+    case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue
+    # A bare basename can collide across the 5 repos sharing ~/Development/.worktrees (audit §6):
+    # only honour the row when its recorded cwd is this worktree (or was never recorded).
+    if [ -z "$rcwd" ] || [ "$(canon "$rcwd")" = "$path" ]; then return 0; fi
+  done
+  return 1
 }
 
 # ── Occupancy signal: the SESSION-CWD REGISTRY, read straight off disk. ──────────────────
