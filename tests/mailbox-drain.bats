@@ -394,16 +394,21 @@ an embedded newline that must not leak into the operator line"
   printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
 }
 
-@test "RED-PROOF: the pre-fix drain from origin/main emits NOTHING on an empty unwatched inbox" {
+# PINNED TO A SHA, NEVER A MOVING REF. `origin/main` was the pre-fix tree only until the hoist landed
+# on it (7f2b85d55); from that moment the staleness guard matched and this case reported
+# `ok … # skip control is not pre-fix` on every run — green, and proving nothing.  a94c8a5ea =
+# 7f2b85d55~1. The old note here explained why the guard was an `if` block rather than `A && skip`
+# (skip is control flow, and the liveness fixer's mechanical `|| false` inverts it). That reasoning
+# was right about `skip` and is now moot: the guard is no longer a skip at all but a plain NEGATIVE
+# ASSERTION, for which `! grep -q … || false` is exactly the correct form — a control that is present
+# and wrong must fail LOUD, not render `ok`.
+CC_DRAIN_HOIST_PREFIX_SHA="${CC_DRAIN_HOIST_PREFIX_SHA:-a94c8a5ea}"
+@test "RED-PROOF: the pre-fix drain (pinned sha) emits NOTHING on an empty unwatched inbox" {
   local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
-  # An `if` block, NOT `A && skip || false`: the liveness fixer's mechanical `|| false` is correct for
-  # `A && <assertion>` but INVERTS `A && skip` — a non-matching grep (the normal case, i.e. the control
-  # genuinely IS pre-fix) falls through to `false` and fails the test. skip is control flow, not an
-  # assertion, so it needs a branch rather than a short-circuit.
-  if grep -q 'HOISTED ABOVE THE EMPTY-INBOX EXIT' "$old/hooks/mailbox-drain.sh"; then
-    skip "control is not pre-fix"
-  fi
+  git -C "$REPO" archive "$CC_DRAIN_HOIST_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_DRAIN_HOIST_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/mailbox-drain.sh" ] || false
+  ! grep -q 'HOISTED ABOVE THE EMPTY-INBOX EXIT' "$old/hooks/mailbox-drain.sh" || false
   run bash -c 'echo "{}" | "$0" prompt' "$old/hooks/mailbox-drain.sh"
   [ "$status" -eq 0 ]
   [ -z "$output" ] || false        # RED: the arm nudge was unreachable with an empty box
@@ -519,13 +524,17 @@ drain_at() { # $1 = cwd → runs `prompt` mode with that cwd in the payload
   ! printf '%s' "$ctx" | grep -q 'DISCHARGED' || false   # already discharged ⇒ nothing to report
 }
 
-@test "RED-PROOF: the pre-v1.1 drain from origin/main leaves an open custody row OPEN on a ping" {
+# PINNED TO A SHA, NEVER A MOVING REF — same class as the two above. `origin/main` stopped being the
+# pre-v1.1 tree the moment custody landed on it (6cedafbf5), and this case has reported
+# `ok … # skip control is not pre-v1.1` ever since.  73ceb76aa = 6cedafbf5~1.
+CC_DRAIN_CUSTODY_PREFIX_SHA="${CC_DRAIN_CUSTODY_PREFIX_SHA:-73ceb76aa}"
+@test "RED-PROOF: the pre-v1.1 drain (pinned sha) leaves an open custody row OPEN on a ping" {
   custody_setup
   local old="$BATS_TEST_TMPDIR/pre-custody"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
-  if grep -q 'cc-custody' "$old/hooks/mailbox-drain.sh"; then
-    skip "control is not pre-v1.1"
-  fi
+  git -C "$REPO" archive "$CC_DRAIN_CUSTODY_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_DRAIN_CUSTODY_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/mailbox-drain.sh" ] || false
+  ! grep -q 'cc-custody' "$old/hooks/mailbox-drain.sh" || false
   "$CUSTODY" open --cwd "$ORIG_CWD" --target 84 --marker M-PING-8 --slug wave12
   seed "2026-08-13T10:00:00+0000 [peer] HANDOFF-PING wave12: landed, self-closing"
   run bash -c 'printf "{\"cwd\":\"%s\"}" "$1" | "$0" prompt' "$old/hooks/mailbox-drain.sh" "$ORIG_CWD"
@@ -637,12 +646,26 @@ goal_t() { # → a transcript path whose LAST goal_status attachment is a live a
   [ -z "$output" ] || false
 }
 
-@test "E2 RED-PROOF: the pre-fix drain from origin/main says NOTHING about a goal-blocking watcher" {
+# THE CONTROL IS PINNED TO A SHA, NEVER A MOVING REF — and the failure mode being fixed here is that
+# a stale control does not FAIL, it SKIPS, and bats renders a skip as `ok`. This case replayed
+# `origin/main`, which was the pre-fix tree only until E2 itself landed on it (e8c2435aa); from that
+# moment the staleness guard matched and every run reported
+#   `ok NN … # skip control is not pre-fix`
+# — a red-proof that had silently stopped proving anything, in a suite that looked entirely green.
+# tests/wake-floor.bats:164-170 documents this exact hazard and fixes it exactly this way; this
+# sibling suite was simply never migrated.
+#   f704bf8aa = e8c2435aa~1, the newest tree that genuinely predates the E2 notice.
+# The staleness guard is now a HARD FAILURE rather than a skip: if this pinned sha ever stops being
+# pre-fix, the suite must say so out loud instead of rendering green over a control that no longer
+# controls. Only the ARCHIVE step may skip, and only for the one honest reason (a shallow clone that
+# cannot produce the tree at all) — never for a control that is present and wrong.
+CC_DRAIN_E2_PREFIX_SHA="${CC_DRAIN_E2_PREFIX_SHA:-f704bf8aa}"
+@test "E2 RED-PROOF: the pre-fix drain (pinned sha) says NOTHING about a goal-blocking watcher" {
   local old="$BATS_TEST_TMPDIR/pre-e2"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
-  if grep -q 'holding your LIVE /goal inert' "$old/hooks/mailbox-drain.sh"; then
-    skip "control is not pre-fix"
-  fi
+  git -C "$REPO" archive "$CC_DRAIN_E2_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_DRAIN_E2_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/mailbox-drain.sh" ] || false
+  ! grep -q 'holding your LIVE /goal inert' "$old/hooks/mailbox-drain.sh" || false
   printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
   run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$old/hooks/mailbox-drain.sh" "$(goal_t)"
   [ "$status" -eq 0 ]
