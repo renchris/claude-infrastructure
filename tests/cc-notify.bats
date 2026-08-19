@@ -80,6 +80,30 @@ SH
 
   CLOUD_ID="session_01CHQoFxvsoDQ9KgJFSLrKno"
 
+  # `cc-wake-headless` STUB — file-wide, for the same reason as the `claude` stub above and stated in
+  # the same terms: the REAL waker writes a stream-json user line into a live agent's stdin FIFO, i.e.
+  # it fires a model turn on this box. No test in this file may ever reach it. It must be set in
+  # setup() rather than per-test, because cc-notify falls back to `command -v cc-wake-headless` and
+  # ~/.claude/bin is normally on PATH — so ANY test whose fixture row carries surface:"headless"
+  # (one already did before this seam existed) would otherwise resolve the live binary.
+  export WAKE_LOG="$BATS_TEST_TMPDIR/wake.log"
+  WAKE_STUB="$BATS_TEST_TMPDIR/cc-wake-headless"
+  cat > "$WAKE_STUB" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$WAKE_LOG"
+printf 'cc-wake-headless: stub for %s\n' "$*" >&2
+exit "$(cat "$WAKE_RC_FILE" 2>/dev/null || echo 0)"
+SH
+  chmod +x "$WAKE_STUB"
+  export CC_WAKE_BIN="$WAKE_STUB"
+  export WAKE_RC_FILE="$BATS_TEST_TMPDIR/wake.rc"
+
+  # a LIVE registered HEADLESS peer — same pid trick as $UUID, plus surface:"headless", the field
+  # hooks/session-register.sh:134-145 writes and (until this seam) only bin/cc-sessions read.
+  HUUID="hdl-00112233445566aa"
+  printf '{"paneUUID":"%s","name":"hpeer","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"surface":"headless"}' \
+    "$HUUID" "$$" > "$CC_REGISTRY_DIR/$HUUID.json"
+
   # Answer poser: cloud_answer <stdout> [stderr] [rc]
   cloud_answer() {
     printf '%s\n' "$1" > "$STUB_DIR/out"
@@ -1271,10 +1295,122 @@ PY
   # against it stops matching. Adding a column is therefore a change to EVERY reader, and the failure
   # mode is silent. This asserts the locator found what it expected BEFORE asserting anything about
   # it, so a refactor that hides the readers reds here rather than passing over nothing.
-  emit="$(grep -c '(.lstart // "")\] | @tsv' "$NOTIFY" || true)"
-  [ "${emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting lstart = ${emit:-0}, expected 2 (fast path + per-file fallback)"; false; }
-  readers="$(grep -cE 'read -r n p (u lst|ruuid rlst)' "$NOTIFY" || true)"
+  #
+  # SURFACE is now the 5th column, so this census covers it too — and the `emit` anchor moved from
+  # `(.lstart // "")]` to `(.surface // "pane")]` because lstart is no longer the LAST field. That
+  # migration is the whole point: the old anchor would have read 0 and reddened here the moment a
+  # column was appended, which is exactly the alarm this case is for.
+  emit="$(grep -c '^[^#]*(.surface // "pane")\] | @tsv' "$NOTIFY" || true)"
+  [ "${emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting surface = ${emit:-0}, expected 2 (fast path + per-file fallback)"; false; }
+  lst_emit="$(grep -c '^[^#]*(.lstart // "-"),' "$NOTIFY" || true)"
+  [ "${lst_emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting the lstart SENTINEL = ${lst_emit:-0}, expected 2"; false; }
+  # No column may be emitted as "" — tab is IFS whitespace, so an empty field is COLLAPSED and every
+  # later column shifts left. Text-census only; the behavioural proof is the case below it.
+  empt="$(grep -c '^[^#]*// "")' "$NOTIFY" || true)"
+  [ "${empt:-0}" -eq 0 ] || { echo "TSV CENSUS: ${empt} column(s) can still be emitted EMPTY — an empty field collapses under IFS=<tab> and shifts every later column"; false; }
+  readers="$(grep -cE '^[^#]*read -r n p (u lst|ruuid rlst)' "$NOTIFY" || true)"
   [ "${readers:-0}" -eq 3 ] || { echo "TSV CENSUS: readers taking the lstart column = ${readers:-0}, expected 3"; false; }
-  short="$(grep -cE 'read -r n p (u|ruuid);' "$NOTIFY" || true)"
+  # Every reader must ALSO take a 5th target, else surface lands in the lstart variable and pid_live()
+  # compares "<lstart><TAB>headless" against a live process's start time — convicting every headless
+  # row as dead. Two absorb it with `_`; target_live() binds it as `rsfc` because it is the consumer.
+  fifth="$(grep -cE '^[^#]*read -r n p (u lst _|ruuid rlst rsfc)' "$NOTIFY" || true)"
+  [ "${fifth:-0}" -eq 3 ] || { echo "TSV CENSUS: readers taking the surface column = ${fifth:-0}, expected 3 — a short reader folds surface into lstart"; false; }
+  short="$(grep -cE '^[^#]*read -r n p (u|ruuid);' "$NOTIFY" || true)"
   [ "${short:-0}" -eq 0 ] || { echo "TSV CENSUS: ${short} reader(s) still take only 3 fields — lstart is landing in the uuid variable"; false; }
+}
+
+# ── THE HEADLESS WAKE (E7/F5 of 03-headless-substrate.md) ────────────────────────────────────────
+# bin/cc-wake-headless was built and tested on 2026-08-13 and then called by NOTHING on the delivery
+# path — its only non-doc references were its own source, its own suite, and two PROSE comments in
+# bin/cc-pane-headless. These cases pin the seam that calls it, and pin the two literal phrases
+# bin/cc-announce:145-149 greps out of this output, whose final arm is fail-CLOSED (an unrecognized
+# rc-0 string ALARMS). A clean new headless sentence without the matching phrase would page the
+# operator on every headless announce.
+
+@test "headless + no watcher: the waker is CALLED with the target, and the wake is reported as woken" {
+  run "$NOTIFY" "$HUUID" "wake me"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reason=woken"* ]] || { echo "expected reason=woken, got: $output"; false; }
+  # the waker actually ran, against THIS address — a verdict is not evidence that a wake happened
+  n="$(grep -cF -- "$HUUID" "$WAKE_LOG" 2>/dev/null || true)"
+  [ "${n:-0}" -gt 0 ] || { echo "cc-wake-headless was never invoked for $HUUID"; false; }
+}
+
+@test "headless woken: the sentence keeps 'wake-path armed' — cc-announce reads VERIFIED off that literal" {
+  run "$NOTIFY" "$HUUID" "wake me"
+  [[ "$output" == *"wake-path armed"* ]] \
+    || { echo "cc-announce:148 greps this literal; without it the rc-0 string is unrecognized and :149 ALARMS. Got: $output"; false; }
+}
+
+@test "headless + waker REFUSES: reported no-watcher-headless, never a claimed wake" {
+  printf '1' > "$WAKE_RC_FILE"
+  run "$NOTIFY" "$HUUID" "cannot wake"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reason=no-watcher-headless"* ]] || { echo "expected reason=no-watcher-headless, got: $output"; false; }
+  [[ "$output" != *"reason=woken"* ]] || { echo "claimed a wake the waker refused: $output"; false; }
+}
+
+@test "headless NOT woken: the sentence keeps 'NO watcher armed' — else cc-announce:149 fails CLOSED and alarms" {
+  printf '1' > "$WAKE_RC_FILE"
+  run "$NOTIFY" "$HUUID" "cannot wake"
+  [[ "$output" == *"NO watcher armed"* ]] \
+    || { echo "cc-announce:146 greps this literal to classify UNVERIFIED (a recorded degrade, no alarm). Got: $output"; false; }
+  # and it must NOT promise a next turn — the lie this seam exists to remove
+  [[ "$output" != *"drains on its NEXT turn"* ]] \
+    || { echo "a pane-less session has no next turn to drain on; that promise is the defect: $output"; false; }
+}
+
+@test "PANE rows are untouched: still reason=no-watcher, and the waker is NEVER invoked for them" {
+  run "$NOTIFY" "$UUID" "pane peer"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reason=no-watcher"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"reason=no-watcher-headless"* ]] || { echo "a PANE row took the headless branch: $output"; false; }
+  [ ! -s "$WAKE_LOG" ] || { echo "the waker was invoked for a pane session: $(cat "$WAKE_LOG")"; false; }
+}
+
+@test "a row with NO surface field reads as PANE — the writer makes the ABSENCE meaningful" {
+  # hooks/session-register.sh:134-145: an old row, or a provisional row from handoff-fire, carries no
+  # `surface` at all and every reader must treat that absence as "pane". bin/cc-sessions:275 defaults
+  # the same way; this pins the two readers together.
+  LUUID="EEEEEEEE-1111-2222-3333-444444444444"
+  printf '{"paneUUID":"%s","name":"legacy","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+    "$LUUID" "$$" > "$CC_REGISTRY_DIR/$LUUID.json"
+  run "$NOTIFY" "$LUUID" "legacy row"
+  [[ "$output" == *"reason=no-watcher"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"reason=no-watcher-headless"* ]] || { echo "an absent surface was read as headless: $output"; false; }
+  [ ! -s "$WAKE_LOG" ] || { echo "the waker was invoked for a surface-less row: $(cat "$WAKE_LOG")"; false; }
+}
+
+@test "headless WITH an armed watcher: still wake-path-armed, and the waker is not double-fired" {
+  : > "$CC_MAILBOX_DIR/$HUUID.watching"
+  run "$NOTIFY" "$HUUID" "already armed"
+  [[ "$output" == *"reason=wake-path-armed"* ]] || { echo "$output"; false; }
+  [ ! -s "$WAKE_LOG" ] || { echo "an armed watcher was woken a second time: $(cat "$WAKE_LOG")"; false; }
+}
+
+@test "the surface column did not shift the others: a headless row still resolves by NAME and by PREFIX" {
+  # The field-shift this guards is silent: without a 5th read target, lstart binds "<lstart><TAB>headless"
+  # and pid_live() convicts a live row. Resolve by both addressing paths that walk REG_ROWS.
+  run "$NOTIFY" hpeer "by name"
+  [ "$status" -eq 0 ] || { echo "name resolution broke: $output"; false; }
+  [[ "$output" == *"$HUUID"* ]] || { echo "name did not resolve to the headless uuid: $output"; false; }
+}
+
+@test "a row with NO lstart still resolves LIVE — the empty-field collapse that shifts every later column" {
+  # THE BUG THIS PINS, measured 2026-08-19. `IFS=<tab> read` collapses RUNS of tab because tab is IFS
+  # WHITESPACE, so a row emitting an empty lstart ("<name>\t<pid>\t<uuid>\t\t<surface>") bound
+  # lst="<surface>" and pid_live() compared a live process's start time against the literal "pane".
+  # EVERY peer then resolved as target-not-live — pane and headless alike. 5 of 15 live registry rows
+  # carry no lstart, so this was the common shape, not an edge case.
+  #
+  # The block census above CANNOT see this: it greps source text, and this is a runtime binding. That
+  # is why this case is behavioural and asserts the VERDICT, not the source.
+  NUUID="FFFFFFFF-1111-2222-3333-444444444444"
+  printf '{"paneUUID":"%s","name":"nolstart","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"surface":"pane"}' \
+    "$NUUID" "$$" > "$CC_REGISTRY_DIR/$NUUID.json"
+  run "$NOTIFY" "$NUUID" "no lstart"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reason=no-watcher"* ]] \
+    || { echo "a live row with no lstart was convicted — the empty field collapsed and shifted the columns: $output"; false; }
+  [[ "$output" != *"target-not-live"* ]] || { echo "$output"; false; }
 }
