@@ -204,7 +204,7 @@ the code path is `:963` (`reason=target-not-live`) — but it was never exercise
 | E8 | `bin/cc-notify:911-916` | gate the it2 fallback on `[ -n "$pane_of_row" ]` — never adjudicate a pane-less target with a pane list. |
 | E9 | `bin/cc-reconcile:131-139` | the argv filter drops `-p`. Change to: drop `--version` always; drop `-p` **only when `--input-format` is absent** (a resident headless session carries `--input-format stream-json`). Classification by argv is legitimate here; **liveness stays `(pid,lstart)`** — argv never becomes the liveness oracle. |
 | E10 | `bin/cc-reconcile:169-172` | no `ITERM_SESSION_ID` ⇒ currently `n_no_pane++; continue`. Change to: fall through and synthesise a **sid-keyed** row from `sessions/<pid>.json` (`.sessionId`, `.cwd`, `.startedAt`, and `.procStart` → `lstart`). Add an `n_headless` counter so the class is countable, never silent. |
-| E11 | `bin/cc-reconcile:196` | `[ "$kind" = interactive ]` → accept the headless `kind` too. **Unresolved: what value CC writes for a resident `-p` session.** All 9 live rows across 5 config dirs read `kind:"interactive"`. Resolve by measurement in step 0, never by guess. |
+| E11 | `bin/cc-reconcile:196` | ~~`[ "$kind" = interactive ]` → accept the headless `kind` too. **Unresolved: what value CC writes for a resident `-p` session.** All 9 live rows across 5 config dirs read `kind:"interactive"`. Resolve by measurement in step 0, never by guess.~~ **RESOLVED 2026-08-19 (#41) — NO EDIT NEEDED.** Measured on two RUN headless sessions (§"Open questions", Q1): CC writes `kind:"interactive"` for a headless session too, so this gate already admits it. The discriminator is `entrypoint:"sdk-cli"`, not `kind`. E11 is struck from the diff. |
 | E12 | `bin/cc-reaper:574-578` | same argv change as E9, plus: a headless row is never a reap *target* by pane absence. `live_pane_count`'s header says it must stay in lockstep with `cc-reconcile` — change both in one diff. |
 | E13 | `bin/cc-inbox-guard:159-192` | owner liveness: before returning `2` (INDETERMINATE → escalate), consult `cb_last_beat "$u"`. A fresh beat ⇒ **live**, not indeterminate. Without this, every headless box with unacked mail pages the phone (§4 A4). |
 | E14 | `hooks/live-session-registry.sh:30` | `base=$(basename "$cwd")` → `base="$(basename "$cwd")-${sid:0:8}"` when a sid is present, else unchanged. Fixes the pooled-worktree collision (§4 A2). Migration: the reaper's `registry_live()` (`worktree-gc.sh:361-372`) must glob `"$base"*` for a transition window. |
@@ -444,6 +444,39 @@ already left it eight days ago.
 ### Open questions this spec could not close by reading
 
 - **Q1** `kind` for a resident `-p` session (E11). All 9 live rows read `interactive`. Measure.
+  - 🚨 **ANSWERED BY MEASUREMENT 2026-08-19 (recycle #41) — `kind` is `"interactive"`, so E11 needs
+    NO change and the gate was never the exclusion.** Two headless sessions were RUN, not reasoned
+    about, on the running binary `2.1.220` (`~/.claude-220/node_modules/.bin/claude`), each with no
+    controlling terminal (`ps -o tty=` → `??`):
+
+    | shape | pid | session file | `kind` | `entrypoint` |
+    |---|---|---|---|---|
+    | `-p --input-format stream-json --output-format stream-json` (FIFO-held stdin, resident) | 56890 | `~/.claude-secondary/sessions/56890.json` | **`interactive`** | `sdk-cli` |
+    | plain `-p '<prompt>'` (one-shot) | 4459 | `~/.claude-secondary/sessions/4459.json` | **`interactive`** | `sdk-cli` |
+
+    **The session file IS written** (the other half of step 0's question), keyed on pid exactly as
+    `cc-reconcile`'s `sessions_file_for` expects, and it carries the full shape a live pane's row
+    does — `{pid, sessionId, cwd, startedAt, procStart, version, peerProtocol, kind, entrypoint,
+    name, nameSource}`. So `bin/cc-reconcile`'s `[ "$kind" = "interactive" ]` **already admits a
+    headless session**; E11's proposed "accept the headless `kind` too" has nothing to accept.
+
+    **The discriminator is `entrypoint`, not `kind`.** `sdk-cli` is what names a headless session;
+    `kind` does not vary with headlessness at all, across both shapes. Anything that needs to *tell
+    them apart* (rather than admit them) must key on `entrypoint` — and note this cuts the other
+    way too: a consumer that assumed `kind` would identify the Phase-E substrate is reading a field
+    that cannot answer, which is the indexed `lookup-miss-is-not-absence` shape.
+
+    **Why the pre-existing sample could not have answered this**, and why the spec was right to
+    demand a run: all live rows read `interactive` because every live session *is* an interactive
+    pane — a population with no headless member cannot report what a headless member would get.
+    Re-measured at this pass: **14 live rows across 4 distinct `sessions/` dirs, all `interactive`**
+    (5 glob hits → 4 realpaths; `~/.claude-next/sessions` resolves onto `~/.claude/sessions`).
+
+    **Residue:** this settles E11 and step 0's `kind` clause only. The three exclusions at
+    `03-headless-substrate.md:108` are independent — the argv filter and the pane check are
+    untouched by this, and a pane-less session still exits at the pane branch *before* the `kind`
+    gate is reached. **Q2 (does `asyncRewake` synthesise a turn under `stream-json`) remains open
+    and is the one that actually gates gap 2.**
 - **Q2** Does `asyncRewake` synthesise a turn in `--input-format stream-json`? W2's headless value
   hinges on it. Unproven either way.
 - **Q3** kitty window-id reuse after a server restart (C1). **[inferred]** — one restart settles it.
