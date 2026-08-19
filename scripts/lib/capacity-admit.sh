@@ -129,8 +129,52 @@
 # other two.
 
 # The ONE literal for each term. Both gates expand these; neither may carry a number of its own
-# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 2.0/core is §9.5's measured ceiling;
-# 4 GB is M10's reclaimable floor.
+# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 4 GB is M10's reclaimable floor.
+#
+# 🚨 2.0/core IS UNDERIVED, AND THE AXIS IT SITS ON CANNOT SEPARATE.
+# This line used to read: 2.0/core is §9.5's measured ceiling. That citation was false in both
+# halves and it is worth being exact about, because a false provenance is what let the number look
+# settled for three weeks (item e981656df348; derivation attempt 2026-08-19):
+#
+#   · §9.5 CONTAINS NO DERIVATION. It is a SELF-CORRECTION — it retracts a "permanent dispatch
+#     outage" projection by showing the gate admits at 1.55/core and refuses at 2.92/core, i.e. it
+#     demonstrates that a threshold thresholds. It never measures where the box fails. Its own
+#     closing paragraph is the opposite of a warrant: "a projection from a single high-variance
+#     window is not a measurement."
+#   · THE ORIGIN COMMIT STATES NO RULE. `0fc3a3d33` (2026-07-29) measured the motivating incident
+#     at load 27 on 10 cores = **2.72/core** and shipped `default 2.0` with no stated derivation
+#     from it — not a fraction, not a quantile, not a failure point. 2.0 is a round number chosen
+#     below an incident reading.
+#
+# WHAT THE RECORDED POPULATION ACTUALLY SAYS — and this is the finding, not the missing citation.
+# scripts/capacity-alarm.sh:139-147 already carries it for the ALARM's floors, and it binds this
+# gate identically because it is the same instrument on the same axis:
+#
+#     FATAL     2026-08-05 panic .................. 25.3 / 10 cores = 2.53/core   (n=1)
+#     SURVIVED  §8.5.7, 13 consecutive samples .... 29.15-59.80     = 2.92-5.98   (n=13)
+#     SURVIVED  reso, 42 h with no panic .......... 25.0            = 2.50        (n=1)
+#
+# A separating ceiling `c` would have to REFUSE the fatal and ADMIT every survivor, i.e. satisfy
+# `2.53 > c` AND `5.98 <= c` simultaneously. That set is EMPTY. **No value of this constant
+# separates fatal from survived on the recorded population** — 2.0 is not merely underived, it is
+# underivable ON THIS AXIS from what has been measured. And the resolution is worse than the
+# emptiness suggests: a survivor sits at 2.50 against a fatal at 2.53, a 0.03/core gap on a signal
+# §8.5.7 measured swinging 2x at CONSTANT session count.
+#
+# 🚨 THEREFORE: DO NOT RAISE THIS NUMBER TO "FIX" THE FALSE REFUSALS. Every ceiling that clears the
+# 13 false refusals also admits the death, by the same arithmetic. The value stays at 2.0 not
+# because 2.0 is right but because moving it along this axis trades one error for the other with no
+# measurement to price the trade — and the gate is BUDGET-BOUNDED (see THE BOUND below), so a false
+# refusal costs one round-trip rather than an outage, which is the cheaper of the two errors to
+# keep.
+#
+# The population above is EXECUTABLE, not prose: tests/capacity-ceiling-derivation.bats runs it
+# through cc_hw_load_verdict and sweeps every candidate ceiling, so a future re-derivation has to
+# argue with a control rather than with this paragraph (the pattern capacity-alarm.sh:154-157
+# already uses for its own uncalibrated floors). What would legitimately move it is a population
+# this axis CAN separate — which needs the marginal Δload of one added session, measured rather
+# than divided out of an aggregate. `scripts/capacity-ramp.sh marginal` is that instrument; it had
+# no load term at all until the same item added one.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 
