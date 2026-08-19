@@ -137,6 +137,9 @@
 #                         an unanswerable probe is refused, not believed. Use CC_WTGC_DISABLE.
 #   CC_WTGC_REGISTRY_DIR  live-session registry (default: ~/.reso/live-sessions)
 #   CC_WTGC_LOCK          mutex dir (default: ~/.claude/state/worktree-gc.lock)
+#   CC_WTGC_MAINT_LOCK_MIN  age floor in MINUTES below which a git maintenance lock is left alone
+#                         (default 60). This is the SECOND gate only — the holder test is the
+#                         lock's own open fd, never its age. See section 4 at the bottom.
 #
 # bash 3.2-safe (macOS default): no associative arrays, no mapfile, no [[ -v ]].
 set -uo pipefail
@@ -1275,6 +1278,68 @@ if [ "$PRUNE_BRANCHES" = "1" ]; then
   done < <("$GIT_BIN" -C "$MAIN" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null)
 fi
 
+# ── 4. The shared object store's `maintenance.lock` — the ONE silent, permanent failure. ─────────
+# Every worktree's `git commit` fires `git maintenance run --auto` against the ONE shared object
+# store, and git serialises them on `<objectdir>/maintenance.lock`; the losers skip silently, which
+# is the design working. But a holder killed mid-run — pane close, /handoff, crash, reboot, the
+# compressor OOM path, all routine at this session density — leaves the lock behind, and from that
+# moment EVERY maintenance run on the box is a permanent no-op. It has no log (git's `warning: lock
+# file … exists, skipping maintenance` goes to a closed fd under launchd), no non-zero exit, and no
+# alarm, so nothing on this machine can currently see it.
+# `docs/research/memory-econ-rearchitecture-2026-08-10/git-maint.md` §8 named this the shared
+# store's single point of failure and §9 filed the reaper as "L2 — missing, this is the real gap".
+# It then happened: measured 2026-08-19, claude-infrastructure's lock had been stranded since
+# 2026-08-12 13:18 — 7 days, 15,155 loose objects, 154 MiB, with no gc.log, no gc.pid, and nothing
+# running. reso's earlier instance ran 5.5 days undetected and cost 11,660 loose objects and +1.1 GB.
+#
+# FAIL-CLOSED, like every other gate in this file: the lock is removed ONLY when it is provably
+# UNHELD. The oracle is the lock's OWN fd — `hold_lock_file_for_update` keeps the file open for the
+# whole run — and never its age, because a long live repack looks exactly as old as a strand
+# (memory: liveness-proxy-cannot-be-output-age). The age floor is a SECOND gate, not the test: it
+# only stops a lock created microseconds ago from being reaped in the window before its opener is
+# visible. An lsof that cannot answer its own positive control makes this UNPROVABLE ⇒ KEEP — the
+# same rule `claude_cwds` applies to gate 4, and for the same reason: a probe that answers nothing
+# must not be able to certify an absence.
+MAINT_LOCK_MIN="${CC_WTGC_MAINT_LOCK_MIN:-60}"
+MAINT_LOCK_STATE=absent
+MAINT_LOCK_AGE_MIN=-1
+LOOSE_OBJECTS="$("$GIT_BIN" -C "$MAIN" count-objects -v 2>/dev/null | sed -n 's/^count: //p' | head -1)"
+case "$LOOSE_OBJECTS" in ''|*[!0-9]*) LOOSE_OBJECTS=-1 ;; esac
+MAINT_GIT_COMMON="$("$GIT_BIN" -C "$MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+MAINT_LOCK="${MAINT_GIT_COMMON:-$MAIN/.git}/objects/maintenance.lock"
+if [ -e "$MAINT_LOCK" ]; then
+  MAINT_LOCK_MTIME="$(stat -f %m "$MAINT_LOCK" 2>/dev/null || stat -c %Y "$MAINT_LOCK" 2>/dev/null || echo 0)"
+  case "$MAINT_LOCK_MTIME" in ''|*[!0-9]*) MAINT_LOCK_MTIME=0 ;; esac
+  [ "$MAINT_LOCK_MTIME" -gt 0 ] && MAINT_LOCK_AGE_MIN=$(( ( $(date +%s) - MAINT_LOCK_MTIME ) / 60 ))
+
+  # -1 ⇒ the probe could not answer at all. Counted, never `grep -q`: under `pipefail` a `-q` that
+  # matches SIGPIPEs its own producer and the pipeline reports failure on the input it just matched
+  # (memory: grep-q-under-pipefail-inverts-the-verdict).
+  MAINT_HOLDERS=-1
+  if command -v "$LSOF_BIN" >/dev/null 2>&1; then
+    MAINT_CTL="$("$LSOF_BIN" -a -p "$$" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    if [ -n "$MAINT_CTL" ]; then
+      MAINT_HOLDERS="$("$LSOF_BIN" -- "$MAINT_LOCK" 2>/dev/null | grep -c . || true)"
+      case "$MAINT_HOLDERS" in ''|*[!0-9]*) MAINT_HOLDERS=0 ;; esac
+    fi
+  fi
+
+  if [ "$MAINT_HOLDERS" -lt 0 ]; then
+    MAINT_LOCK_STATE=unprovable
+  elif [ "$MAINT_HOLDERS" -gt 0 ]; then
+    MAINT_LOCK_STATE=held
+  elif [ -z "$(find "$MAINT_LOCK" -maxdepth 0 -mmin +"$MAINT_LOCK_MIN" 2>/dev/null)" ]; then
+    MAINT_LOCK_STATE=young
+  elif [ "$DRY_RUN" = "1" ]; then
+    MAINT_LOCK_STATE=would-reap
+  else
+    rm -f "$MAINT_LOCK" 2>/dev/null || true
+    # Verified by ABSENCE, not by `rm`'s exit code: `rm -f` reports success for a file it never
+    # removed, so its rc cannot distinguish a reap from a permission refusal.
+    if [ -e "$MAINT_LOCK" ]; then MAINT_LOCK_STATE=reap-failed; else MAINT_LOCK_STATE=reaped; fi
+  fi
+fi
+
 SUFFIX=""; [ "$DRY_RUN" = "1" ] && SUFFIX="   [DRY-RUN — nothing was mutated]"
 echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abandoned · $N_DIRT_REMOVED landed-dirt · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
 # ── §6 R-b: the sweep's own wall-clock, against the mutex's staleness window ──────────────────────
@@ -1300,7 +1365,7 @@ GC_ELAPSED_S=$(( $(date +%s) - GC_T0 ))
 # numbers in every nightly row, silently, exit 0. A positional reader over a human sentence makes
 # ADDING A FIELD a breaking change to history, which is the defect, not the symptom.
 # Every value is ASCII and whitespace-free so `k=v` splitting is total.
-echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN"
+echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN maint_lock=$MAINT_LOCK_STATE maint_lock_age_min=$MAINT_LOCK_AGE_MIN loose_objects=$LOOSE_OBJECTS"
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
 # Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
 # whether or not it passed the flag that acts on it.
@@ -1324,6 +1389,23 @@ fi
 if [ "$N_OWNER_ACTIVE" -gt 0 ]; then
   echo "worktree-gc: $N_OWNER_ACTIVE unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon but their owner is provably NOT terminal (an open/claimed/blocked item, or a live team) — this is owned, parked work, not residue. Land it or resolve the item; do NOT mark an item done to reap a directory."
 fi
+# The maintenance lock, reported as the state it actually is. `absent` is SILENT on purpose: it is
+# the resting state of a healthy box, and a line that printed every night would carry no bits at all
+# (memory: alarm-polarity-and-attention-budget).
+case "$MAINT_LOCK_STATE" in
+  reaped)
+    echo "worktree-gc: REAPED the stranded git maintenance lock ($MAINT_LOCK, age ${MAINT_LOCK_AGE_MIN}m, no holder). Auto-maintenance had been a SILENT no-op for the whole box since it was left behind — $LOOSE_OBJECTS loose object(s) had accumulated. It resumes at the next commit in any worktree." ;;
+  would-reap)
+    echo "worktree-gc: the git maintenance lock is STRANDED ($MAINT_LOCK, age ${MAINT_LOCK_AGE_MIN}m, no holder) — auto-maintenance is a box-wide silent no-op and $LOOSE_OBJECTS loose object(s) have accumulated. Re-run without --dry-run to reap it." ;;
+  held)
+    echo "worktree-gc: git maintenance lock is HELD by a live process — left in place. That is the lock working, not a fault." ;;
+  young)
+    echo "worktree-gc: git maintenance lock present and unheld but younger than ${MAINT_LOCK_MIN}m — left in place until the age floor clears." ;;
+  unprovable)
+    echo "worktree-gc: git maintenance lock present but lsof ($LSOF_BIN) could not answer its own positive control — holder UNPROVABLE, left in place." >&2 ;;
+  reap-failed)
+    echo "worktree-gc: git maintenance lock is stranded and could NOT be removed ($MAINT_LOCK) — auto-maintenance stays a box-wide no-op until it is." >&2 ;;
+esac
 if [ "$VERIFY_FAIL" -gt 0 ]; then
   echo "worktree-gc: $VERIFY_FAIL disposal(s) could NOT be verified as preserved — see $DISPOSAL_LOG" >&2
   exit 4
