@@ -87,17 +87,40 @@ if [ "$DRY" -eq 1 ]; then
 fi
 
 # Batch the deletes; a failed batch must not be reported as success.
+#
+# 🚨 The manifest is written BEFORE any deletion (so a crash mid-run still leaves a restore source),
+# which means its verdict column is an INTENT — `PRUNE` — not an OUTCOME. Left there, a reader
+# restoring from it cannot tell a branch we deleted from one we merely planned to, and a FAILED
+# batch would sit in the record indistinguishable from a successful one. So the outcome is folded
+# back in below, per branch: PRUNE -> DELETED or DELETE-FAILED. (Repo memory:
+# claimed-outcome-vs-checked-outcome — a claim under a damping marker is not a checked result.)
 rc=0
 i=0
+deleted_list="$(mktemp)"; failed_list="$(mktemp)"
+trap 'rm -f "$deleted_list" "$failed_list"' EXIT
 while [ "$i" -lt "${#safe[@]}" ]; do
   batch=("${safe[@]:$i:20}")
   if git push origin --delete "${batch[@]}" >/dev/null 2>&1; then
     echo "  deleted ${#batch[@]}"
+    printf '%s\n' "${batch[@]}" >> "$deleted_list"
   else
     echo "  BATCH FAILED (${#batch[@]} branches) — see manifest to retry" >&2; rc=1
+    printf '%s\n' "${batch[@]}" >> "$failed_list"
   fi
   i=$((i+20))
 done
+
+# Fold the outcome back into the manifest, so the record states what HAPPENED.
+tmp_manifest="$(mktemp)"
+awk -F'\t' -v OFS='\t' -v del="$deleted_list" -v fail="$failed_list" '
+  BEGIN { while ((getline l < del)  > 0) D[l]=1
+          while ((getline l < fail) > 0) F[l]=1 }
+  /^#/ { print; next }
+  $6=="PRUNE" && ($1 in D) { $6="DELETED";       print; next }
+  $6=="PRUNE" && ($1 in F) { $6="DELETE-FAILED"; print; next }
+  { print }
+' "$MANIFEST" > "$tmp_manifest" && mv "$tmp_manifest" "$MANIFEST"
+echo "  manifest verdicts folded to outcome (DELETED / DELETE-FAILED)"
 
 git fetch origin --prune --quiet
 echo "remote branches remaining: $(git branch -r | grep -vc HEAD)"
