@@ -301,22 +301,38 @@ is_pane_uuid() {
 # every occupant and read as VACANT — a silent false "gone", the exact bug class this closes.
 #
 # TRI-STATE with a POSITIVE CONTROL. "Zero occupants" is only evidence when the scan could see
-# occupancy AT ALL: if the whole process table yields no ITERM_SESSION_ID token, `ps -E` is not
+# occupancy AT ALL: if the whole process table yields no pane-id token, `ps -E` is not
 # reporting environments (restricted context, foreign owner, mock) and the read is BLIND, not vacant.
 # Without that control this oracle would answer "vacant" most confidently exactly when it is broken —
 # and broken-oracle and empty-pane both measure zero (memory: structural-gates-are-blind-to-zero-ink).
+#
+# BOTH PANE KEYS, WITH CC_PANE_ID WINNING PER-PROCESS (item 0f796daa0c76). Line 148 of this file
+# already prefers CC_PANE_ID for cc-teardown's OWN id; this oracle — the one that reads OTHER
+# processes — did not, so the file resolved itself by one contract and everyone else by another.
+# Two consequences, both live: (a) a headless/kitty occupant carrying only CC_PANE_ID was invisible
+# here, so its pane could be reported ALREADY-GONE while it was occupied, and the occupancy oracle
+# could not CONTRADICT a blind it2 enumeration (the refusals at ~660/668 are exactly that
+# contradiction); (b) in an all-headless table every token count was zero, so this returned 2
+# BLIND forever — a permanent non-verdict that reads like a safety property and is not one.
+# The per-process preference matters because $ITERM_SESSION_ID inherits across exec and across
+# pane boundaries: a re-keyed pane can carry a STALE iTerm2 id beside its real CC_PANE_ID, and
+# scoring both would let the stale one nominate an occupant for a pane it does not hold.
+# `u` is now the BARE uppercased uuid: CC_PANE_ID is a superset that also accepts the bare form,
+# so the old ":<uuid>" suffix test — which REQUIRES the wNtNpN: prefix — could not have matched it.
 pane_occupants() {
   local uuid out res tok pids
   uuid="$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')"
   [ -n "$uuid" ] || return 2
   out="$(cct_bounded "$PS_BIN" -E -Ao pid=,command= 2>/dev/null)" || return 2
   [ -n "$out" ] || return 2
-  res="$(printf '%s\n' "$out" | awk -v u=":$uuid" '
-    { for (i = 2; i <= NF; i++)
-        if (index($i, "ITERM_SESSION_ID=") == 1) {
-          tok++
-          if (substr(toupper($i), length($i) - length(u) + 1) == u) pids[$1] = 1
-        } }
+  res="$(printf '%s\n' "$out" | awk -v u="$uuid" '
+    { cc = ""; it = ""
+      for (i = 2; i <= NF; i++) {
+        if (index($i, "CC_PANE_ID=") == 1)            { cc = substr($i, 12); tok++ }
+        else if (index($i, "ITERM_SESSION_ID=") == 1) { it = substr($i, 18); tok++ }  # cc-pane-id-lint:allow — this branch IS the fallback
+      }
+      v = (cc != "" ? cc : it)
+      if (v != "") { sub(/^.*:/, "", v); if (toupper(v) == u) pids[$1] = 1 } }
     END { printf "tok=%d\n", tok + 0; for (p in pids) print p }' 2>/dev/null)" || return 2
   tok="$(printf '%s\n' "$res" | sed -n '1s/^tok=//p')"
   case "${tok:-}" in ''|*[!0-9]*) return 2 ;; esac

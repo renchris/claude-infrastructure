@@ -312,6 +312,136 @@ fake() {
   [ -z "$hits" ] || { printf 'bare reads still present:\n%s\n' "$hits"; false; }
 }
 
+@test "ratchet: no production file reads ANOTHER pid's ITERM_SESSION_ID without CC_PANE_ID first" {
+  # CLASS B — the population the ratchet above is STRUCTURALLY BLIND TO (item 0f796daa0c76).
+  #
+  # That ratchet greps for the shell spelling `${ITERM_SESSION_ID:-}`, i.e. a process reading its
+  # OWN id. A second, entirely disjoint class reads the pane id of ANOTHER pid, out of a `ps eww`
+  # environment blob, where the key is a STRING and never a parameter expansion:
+  #
+  #     grep -m1 '^ITERM_SESSION_ID='        env_val "$blob" ITERM_SESSION_ID
+  #     index($i, "ITERM_SESSION_ID=") == 1
+  #
+  # None of those contain `${ITERM_SESSION_ID:-}`, so the rename's own enforcement could not see
+  # them and five sites sat un-migrated behind a green ratchet. The fix for the rename existed,
+  # had landed, and simply could not reach the call sites that needed it (memory:
+  # conclusion-must-reach-the-enforcing-store). This case is that reach.
+  #
+  # SAME per-LINE marker as above, not a per-file exemption: the correct implementation of a
+  # PREFERENCE necessarily contains one line that reads ITERM_SESSION_ID alone — the fallback
+  # branch — exactly as bin/cc-pane:80's own fallback DEFINITION opts out.
+  #
+  # Comment lines are dropped BEFORE judging. A prose line that merely says the word "grep" near
+  # the key is not a read, and a detector that cannot tell them apart answers a different question
+  # than the one asked (memory: spec-named-mechanism-may-be-prose-only).
+  #
+  # EXEMPTIONS are the class-3 files the sibling track owns (plan §6.1), carried over verbatim from
+  # the ratchet above. NOTE, because it is a live fact and not a rounding error: handoff-fire.sh:3277
+  # IS a genuine class-B site (`grep -m1 '^ITERM_SESSION_ID='` over a `ps eww` blob). It is excluded
+  # BY CONSTRUCTION here, not overlooked — item 0f796daa0c76 named "4 sites" and the true in-track
+  # population is 5 (it missed bin/cc-teardown's occupancy oracle), plus this 6th behind T3's fence.
+  local hits
+  hits="$(grep -rnE '(grep|index\(|env_val).*ITERM_SESSION_ID' "$REPO/bin" "$REPO/scripts" "$REPO/hooks" 2>/dev/null \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' \
+          | grep -v 'CC_PANE_ID' \
+          | grep -v 'cc-pane-id-lint:allow' \
+          | grep -vE 'handoff-fire\.sh|handoff-selfclose-e2e\.sh|lr-handoff\.sh' || true)"
+  [ -z "$hits" ] || { printf 'class-B env-blob reads still ITERM-only:\n%s\n' "$hits"; false; }
+}
+
+# Extract a shell function VERBATIM from a production file into $2, so the cases below exercise the
+# shipped code rather than a retyped copy. A retyped copy is a DEAD assertion: it keeps passing after
+# the subject changes, and it passes on the pre-fix tree too, which is the same thing as not testing.
+# A missing anchor is a LOUD failure, never a silent green (memory: control-must-replay-the-real-artifact).
+extract_fn() { # <file> <fn-name> <out-path>
+  python3 - "$1" "$2" "$3" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^%s\(\) \{.*?\n\}" % re.escape(sys.argv[2]), src, re.S | re.M)
+assert m, "ANCHOR MISSING: %s() not found in %s — this control is BLIND, not green" % (sys.argv[2], sys.argv[1])
+open(sys.argv[3], "w", encoding="utf-8").write(m.group(0) + "\n")
+PY
+}
+
+@test "class B: pane_of_env PREFERS CC_PANE_ID when a STALE ITERM_SESSION_ID sits beside it" {
+  # The behaviour the ratchet above only asserts the SHAPE of. $ITERM_SESSION_ID inherits across
+  # exec and across pane boundaries, so "both keys present, disagreeing" is the designed-for case,
+  # not a corner: an OR-match would resolve the pid to the pane it USED to be in.
+  #
+  # BOTH copies are pinned, in one loop. The two desk scripts carry the helper independently (they
+  # source no shared lib), so the duplication is real and a diverging copy is the live risk — one
+  # case covering only one file would credit neither site (memory: per-site-mutation-attributes-coverage).
+  local f fn out blob
+  blob="$(printf '%s\n' 'PWD=/tmp' 'ITERM_SESSION_ID=w0t0p0:STALE-1111' 'CC_PANE_ID=REAL-2222')"
+  for f in scripts/desk-arm-live.sh scripts/desk-recycle-invariant.sh; do
+    fn="$BATS_TEST_TMPDIR/$(basename "$f").fn"
+    extract_fn "$REPO/$f" pane_of_env "$fn"
+    out="$(CC_TEST_BLOB="$blob" bash -c '. "$1"; pane_of_env "$CC_TEST_BLOB"' _ "$fn")"
+    [ "$out" = "REAL-2222" ] || { printf '%s: got %s, want REAL-2222\n' "$f" "$out"; false; }
+  done
+}
+
+@test "class B: a BARE CC_PANE_ID survives the wNtNpN: strip (the trap a grep-widening misses)" {
+  # CC_PANE_ID is a SUPERSET that also accepts the bare uuid, which contains no colon. The original
+  # sites did `sid="${line##*:}"` on the WHOLE matched line, so on a bare value that yields
+  # `CC_PANE_ID=<uuid>` — which every downstream UUID check then rejects. Widening the grep alone
+  # would have looked like the fix and changed nothing (memory: lookup-miss-is-not-absence).
+  # Stripping `KEY=` BEFORE `##*:` is the load-bearing half.
+  local fn out naive
+  fn="$BATS_TEST_TMPDIR/bare.fn"
+  extract_fn "$REPO/scripts/desk-arm-live.sh" pane_of_env "$fn"
+  out="$(CC_TEST_BLOB="CC_PANE_ID=BARE-3333" bash -c '. "$1"; pane_of_env "$CC_TEST_BLOB"' _ "$fn")"
+  [ "$out" = "BARE-3333" ] || { printf 'got %s, want BARE-3333\n' "$out"; false; }
+
+  # The pre-fix order, pinned as a CONTROL: it must still produce the WRONG answer, or this case is
+  # passing for a free reason and proves nothing about the ordering.
+  naive="$(CC_TEST_BLOB="CC_PANE_ID=BARE-3333" bash -c 'v="$CC_TEST_BLOB"; printf "%s" "${v##*:}"')"
+  [ "$naive" = "CC_PANE_ID=BARE-3333" ] || { printf 'control drifted: %s\n' "$naive"; false; }
+}
+
+@test "class B: teammate-auto-shutdown resolves a CC_PANE_ID-only pane it would otherwise call absent" {
+  # The escalation-surface site: _pane_from_env feeds a caller that resolves a pane IN ORDER TO
+  # CLOSE IT, and its UUID regex means a miss is SILENT — it answers "no pane" rather than erroring.
+  # Pre-fix, a headless/kitty teammate carrying only CC_PANE_ID was exactly that silent miss.
+  local fn out
+  fn="$BATS_TEST_TMPDIR/tas.fn"
+  extract_fn "$REPO/hooks/teammate-auto-shutdown.sh" _pane_from_env "$fn"
+  # `ps` is stubbed, so the case exercises the resolution logic and never the process table.
+  out="$(bash -c '
+    ps() { printf "%s\n" "PWD=/tmp CC_PANE_ID=D0D0D0D0-1111-2222-3333-444455556666"; }
+    . "$1"; _pane_from_env 4242' _ "$fn")"
+  [ "$out" = "D0D0D0D0-1111-2222-3333-444455556666" ] || { printf 'got [%s]\n' "$out"; false; }
+}
+
+@test "class B: cc-teardown's occupancy oracle scores CC_PANE_ID and counts BOTH keys as sighted" {
+  # pane_occupants' tri-state turns on `tok` — "did the scan see ANY pane-id token at all". While
+  # that control counted only ITERM_SESSION_ID, an all-headless process table measured tok=0 and the
+  # oracle returned 2 BLIND forever: a permanent non-verdict that reads like a safety property.
+  # Three assertions in one table: preference (pid 111 is claimed by its CC_PANE_ID, NOT nominated
+  # by the stale ITERM id beside it), the bare form (333), and the tok control seeing all four.
+  # The awk program is EXTRACTED FROM bin/cc-teardown, never retyped here. A copy pasted into the
+  # test would keep passing after the subject changed underneath it; extraction makes drift
+  # impossible and a moved anchor fail LOUD rather than silently green (memory:
+  # control-must-replay-the-real-artifact, absent-range-endpoint-selects-everything).
+  local prog="$BATS_TEST_TMPDIR/occ.awk" res
+  python3 - "$REPO/bin/cc-teardown" "$prog" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"""awk -v u="\$uuid" '(.*?)' 2>/dev/null\)""", src, re.S)
+assert m, "ANCHOR MISSING: pane_occupants' awk program moved — this control is BLIND, not green"
+open(sys.argv[2], "w", encoding="utf-8").write(m.group(1))
+PY
+  [ -s "$prog" ] || { echo "extracted awk program is empty"; false; }
+
+  res="$(printf '%s\n' \
+      '111 claude ITERM_SESSION_ID=w0t0p0:AAAA CC_PANE_ID=BBBB' \
+      '222 claude ITERM_SESSION_ID=w0t0p0:CCCC' \
+      '333 claude CC_PANE_ID=DDDD' \
+    | awk -v u="BBBB" -f "$prog")"
+  [ "$(printf '%s\n' "$res" | sed -n '1p')" = "tok=4" ] || { printf 'tok wrong:\n%s\n' "$res"; false; }
+  [ "$(printf '%s\n' "$res" | sed 1d | tr -d '[:space:]')" = "111" ] || { printf 'pids wrong:\n%s\n' "$res"; false; }
+}
+
 @test "address <id> does NOT downgrade an indeterminate enumeration into 'gone'" {
   # The bug this forbids: a blind probe answering "that pane is dead", which a caller then acts
   # on by reaping a live agent. Indeterminate must propagate as indeterminate.

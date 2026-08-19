@@ -164,9 +164,16 @@ while IFS= read -r pid; do
   n_live=$(( n_live + 1 ))
 
   env_blob="$("$PS_BIN" eww -p "$pid" -o command= 2>/dev/null)"
-  # paneUUID from ITERM_SESSION_ID (strip the wNtNpN: prefix). No pane / not a UUID ⇒ unaddressable,
-  # exactly as SessionStart would skip it (return 0 on a bad ITERM_SESSION_ID).
-  pane="$(env_val "$env_blob" ITERM_SESSION_ID)"; pane="${pane##*:}"
+  # paneUUID from the pid's env, CC_PANE_ID FIRST and ITERM_SESSION_ID as the read fallback — the
+  # order bin/cc-pane's pane_self() defines (item 0f796daa0c76). It is a PREFERENCE, not an
+  # either-key match: $ITERM_SESSION_ID inherits across exec and across pane boundaries, so a
+  # re-keyed headless/kitty pane can carry a STALE iTerm2 id beside its real CC_PANE_ID, and
+  # keying on that stale one writes this pid's registry row under a pane someone else now owns.
+  # Strip the wNtNpN: prefix after; CC_PANE_ID may be bare, on which `##*:` is a no-op.
+  # No pane / not a UUID ⇒ unaddressable, exactly as SessionStart would skip it.
+  pane="$(env_val "$env_blob" CC_PANE_ID)"
+  [ -n "$pane" ] || pane="$(env_val "$env_blob" ITERM_SESSION_ID)"  # cc-pane-id-lint:allow — this line IS the fallback
+  pane="${pane##*:}"
   case "$pane" in
     ''|*[!0-9A-Fa-f-]*) n_no_pane=$(( n_no_pane + 1 )); continue ;;
   esac

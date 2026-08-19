@@ -93,15 +93,36 @@ case "$BRIEF" in /*) ;; *) BRIEF="$(cd "$(dirname "$BRIEF")" 2>/dev/null && pwd)
 # session whose own (cfg,cwd) matches AND which holds the desk role, so a sentinel with no matching
 # session is inert. Under-covering is the failure that costs a day. CC_ARM_CFGS still overrides (tests).
 
+# THE PANE ID OF ANOTHER PID IS A PREFERENCE, NOT AN OR-MATCH (item 0f796daa0c76).
+# bin/cc-pane's pane_self() defines the contract: CC_PANE_ID wins, ITERM_SESSION_ID is the read
+# fallback. Reading it out of ANOTHER process's env blob has to honour the SAME order, and the
+# reason is not symmetry — $ITERM_SESSION_ID inherits across exec and across pane boundaries
+# (handoff-fire.sh:1748), so a headless or kitty pane that re-keyed itself can carry a STALE iTerm2
+# id beside its real CC_PANE_ID. A `grep -E '^(CC_PANE_ID|ITERM_SESSION_ID)='` that matched EITHER
+# would then resolve that pid to a pane it does not occupy — the precise failure this ordering
+# exists to prevent. Strips `KEY=` BEFORE `##*:`: CC_PANE_ID is a superset that accepts the bare
+# uuid, and on a bare value `${line##*:}` alone returns the whole `CC_PANE_ID=<uuid>` line.
+# Herestring, not a pipe: `producer | grep -m1` under `set -o pipefail` SIGPIPEs the producer and
+# inverts the verdict (memory: grep-q-under-pipefail-inverts-the-verdict).
+pane_of_env() { # <newline-split env blob> → pane uuid (prefix stripped); empty when neither key is set
+  local blob="${1:-}" v
+  v="$(grep -m1 '^CC_PANE_ID=' <<<"$blob")" || v=""
+  [ -n "$v" ] || { v="$(grep -m1 '^ITERM_SESSION_ID=' <<<"$blob")" || v=""; }  # cc-pane-id-lint:allow — this line IS the fallback
+  v="${v#*=}"
+  printf '%s' "${v##*:}"
+}
+
 resolve_desk_cfg() { # echo the CLAUDE_CONFIG_DIR of the live process holding the desk role, if any
   local roles_dir="${CC_ARM_ROLES_DIR:-$HOME/.claude/cc-roles}" role="${CC_ARM_DESK_ROLE:-desk}"
-  local uuid pid env_cfg
+  local uuid pid env_cfg envs
   uuid="$(head -1 "$roles_dir/$role" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$uuid" ] || return 1
-  # find the claude process whose iTerm pane uuid matches the registered desk role
+  uuid="${uuid##*:}"                                   # role files may hold either spelling
+  # find the claude process whose pane uuid matches the registered desk role
   for pid in $(pgrep -f claude 2>/dev/null); do
-    ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -q "^ITERM_SESSION_ID=.*${uuid}$" || continue
-    env_cfg="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep '^CLAUDE_CONFIG_DIR=' | head -1)"
+    envs="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"
+    [ "$(pane_of_env "$envs")" = "$uuid" ] || continue
+    env_cfg="$(printf '%s\n' "$envs" | grep '^CLAUDE_CONFIG_DIR=' | head -1)"
     env_cfg="${env_cfg#CLAUDE_CONFIG_DIR=}"
     [ -n "$env_cfg" ] && { printf '%s\n' "$env_cfg"; return 0; }
     printf '%s\n' "$HOME/.claude"; return 0            # unset env ⇒ the CC default root

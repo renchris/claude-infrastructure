@@ -393,3 +393,48 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -qi 'dry run'
 }
+
+# ── class-B pane identity: CC_PANE_ID out of ANOTHER pid's env blob (item 0f796daa0c76) ────────────
+# a headless/kitty pane: CC_PANE_ID only, in its BARE (colon-free) spelling, no ITERM_SESSION_ID.
+add_pane_headless() { # pid paneUUID configdir sid cwd
+  printf '%s /Users/x/.claude-183/node_modules/.bin/claude --permission-mode auto\n' "$1" >> "$D/pslist"
+  printf 'claude --permission-mode auto CC_PANE_ID=%s CLAUDE_CONFIG_DIR=%s TERM_PROGRAM=WezTerm\n' "$2" "$3" > "$D/psenv/$1"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","startedAt":1699000000000,"kind":"interactive","status":"idle"}\n' \
+    "$1" "$4" "$5" > "$D/sessions/$1.json"
+}
+# a pane carrying BOTH keys, DISAGREEING — the shape $ITERM_SESSION_ID's inheritance across exec and
+# across pane boundaries actually produces: a re-keyed pane holding a stale iTerm2 id beside its real one.
+add_pane_both() { # pid realPaneUUID stalePaneUUID configdir sid cwd
+  printf '%s /Users/x/.claude-183/node_modules/.bin/claude --permission-mode auto\n' "$1" >> "$D/pslist"
+  printf 'claude --permission-mode auto ITERM_SESSION_ID=w1t0p0:%s CC_PANE_ID=%s CLAUDE_CONFIG_DIR=%s TERM_PROGRAM=iTerm.app\n' \
+    "$3" "$2" "$4" > "$D/psenv/$1"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","startedAt":1699000000000,"kind":"interactive","status":"idle"}\n' \
+    "$1" "$5" "$6" > "$D/sessions/$1.json"
+}
+
+@test "class B: backfills a HEADLESS pane identified only by a bare CC_PANE_ID" {
+  # RED pre-fix: the pane id was read from ITERM_SESSION_ID alone, so this pane resolved to EMPTY,
+  # counted n_no_pane and was skipped — permanently unregistered and invisible to the reaper, which
+  # is the exact double-blindness cc-reconcile exists to close. Bare (colon-free) on purpose:
+  # CC_PANE_ID is a superset that accepts it, and `${pane##*:}` must be a no-op there, not a mangle.
+  add_pane_headless 5150 BB011111-2222-3333-4444-555566667777 /Users/x/.claude-next sid-hl /tmp/wt-headless
+  run "$CCR"
+  [ "$status" -eq 0 ]
+  [ "$(rows)" = 1 ]
+  [ -f "$CC_REGISTRY_DIR/BB011111-2222-3333-4444-555566667777.json" ]
+}
+
+@test "class B: with BOTH keys set and disagreeing, the row is keyed on CC_PANE_ID" {
+  # The load-bearing half, and the reason this is a PREFERENCE rather than an either-key match.
+  # Pre-fix the row was written under the STALE iTerm2 id — a registry row filed against a pane this
+  # process does not occupy, which is worse than no row at all: the reaper acts on it.
+  add_pane_both 5151 CC021111-2222-3333-4444-555566667777 DEAD9999-2222-3333-4444-555566667777 \
+    /Users/x/.claude-next sid-both /tmp/wt-both
+  run "$CCR"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/CC021111-2222-3333-4444-555566667777.json" ]
+  if [ -f "$CC_REGISTRY_DIR/DEAD9999-2222-3333-4444-555566667777.json" ]; then
+    echo "row was keyed on the STALE ITERM_SESSION_ID — preference not honoured" >&2
+    false
+  fi
+}

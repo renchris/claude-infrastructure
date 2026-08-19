@@ -348,12 +348,27 @@ _find_teammate_pid() {
   return 1
 }
 
-# iTerm2 session UUID from a pid via its ITERM_SESSION_ID env var
-# (shape `<window><tab><pane>:<UUID>`). Echoes UUID; empty on failure.
+# Pane UUID from a pid via its env — CC_PANE_ID first, ITERM_SESSION_ID as the read fallback
+# (shape `<window><tab><pane>:<UUID>`, or a bare UUID). Echoes UUID; empty on failure.
+#
+# PREFERENCE, NOT AN OR-MATCH (item 0f796daa0c76). bin/cc-pane's pane_self() defines the order and
+# this site has to honour it: $ITERM_SESSION_ID inherits across exec and across pane boundaries
+# (handoff-fire.sh:1748), so a re-keyed headless/kitty pane can carry a STALE iTerm2 id beside its
+# real CC_PANE_ID. Taking whichever key matched first would hand a STALE uuid to a caller that
+# resolves a pane IN ORDER TO CLOSE IT.
+#
+# `KEY=` IS STRIPPED BEFORE `##*:`, AND THAT ORDER IS THE WHOLE FIX. CC_PANE_ID is a superset that
+# also accepts the BARE uuid, which contains no colon — so on a bare value the original
+# `${line##*:}` returns the entire `CC_PANE_ID=<uuid>` line, the UUID regex below rejects it, and
+# the function answers "no pane" for a pane that is plainly identified. Widening the grep alone
+# would have looked correct and changed nothing (memory: lookup-miss-is-not-absence).
 _pane_from_env() {
-  local pid="$1" line sid
+  local pid="$1" envs line sid
   [[ -n "$pid" ]] || return 1
-  line=$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -m1 '^ITERM_SESSION_ID=')
+  envs=$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')
+  line=$(grep -m1 '^CC_PANE_ID=' <<<"$envs") || line=""
+  [[ -n "$line" ]] || { line=$(grep -m1 '^ITERM_SESSION_ID=' <<<"$envs") || line=""; }  # cc-pane-id-lint:allow — this line IS the fallback
+  line="${line#*=}"
   sid="${line##*:}"
   [[ "$sid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
     && printf '%s\n' "$sid"

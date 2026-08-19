@@ -137,13 +137,28 @@ key_for() { printf '%s|%s' "$1" "$2" | shasum 2>/dev/null | cut -c1-16; }
 
 # ── ground truth: the config dir + cwd the LIVE desk process is running under ──────────────────────
 # Read from the process's OWN environment, never inferred from a list this script maintains.
+# THE PANE ID OF ANOTHER PID IS A PREFERENCE, NOT AN OR-MATCH (item 0f796daa0c76) — CC_PANE_ID
+# wins, ITERM_SESSION_ID is the read fallback, exactly as bin/cc-pane's pane_self() contract
+# defines it. $ITERM_SESSION_ID inherits across exec and across pane boundaries, so a re-keyed
+# headless/kitty pane can carry a STALE iTerm2 id beside its real CC_PANE_ID; matching EITHER key
+# would resolve that pid to a pane it does not occupy. `KEY=` is stripped BEFORE `##*:` because
+# CC_PANE_ID accepts the bare uuid, on which `${line##*:}` alone returns the whole line.
+pane_of_env() { # <newline-split env blob> → pane uuid (prefix stripped); empty when neither key is set
+  local blob="${1:-}" v
+  v="$(grep -m1 '^CC_PANE_ID=' <<<"$blob")" || v=""
+  [ -n "$v" ] || { v="$(grep -m1 '^ITERM_SESSION_ID=' <<<"$blob")" || v=""; }  # cc-pane-id-lint:allow — this line IS the fallback
+  v="${v#*=}"
+  printf '%s' "${v##*:}"
+}
+
 resolve_desk() { # echo "<cfg>\t<cwd>\t<uuid>"; nonzero when no live desk resolves
   local uuid pid envs cfg cwd
   uuid="$(head -1 "$ROLES_DIR/$ROLE" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$uuid" ] || return 1
+  uuid="${uuid##*:}"                                 # role files may hold either spelling
   for pid in $("$PGREP_CMD" -f claude 2>/dev/null); do
     envs="$("$PS_CMD" eww -p "$pid" 2>/dev/null | tr ' ' '\n')"
-    printf '%s\n' "$envs" | grep -q "^ITERM_SESSION_ID=.*${uuid}$" || continue
+    [ "$(pane_of_env "$envs")" = "$uuid" ] || continue
     cfg="$(printf '%s\n' "$envs" | grep '^CLAUDE_CONFIG_DIR=' | head -1)"; cfg="${cfg#CLAUDE_CONFIG_DIR=}"
     cwd="$(printf '%s\n' "$envs" | grep '^PWD=' | head -1)";               cwd="${cwd#PWD=}"
     [ -n "$cfg" ] || cfg="$H/.claude"                  # unset ⇒ the CC default root
