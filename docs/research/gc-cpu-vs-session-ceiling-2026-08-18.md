@@ -219,3 +219,102 @@ until a sampler clears that control.
 00:59 — "You've hit your session limit · resets 3:30am"); its axis therefore carries a finder with no
 adversarial check, and is flagged as such above. 2.05 M subagent tokens, 412 tool calls, 12.4 h wall
 clock. Workflow run `wf_96a89c2d-c5b`.
+
+---
+
+## 7 · ADDENDUM (2026-08-19) — §3's derivation was attempted, and it returns a NEGATIVE result stronger than "unmeasured"
+
+§3 said the honest actionable is "to derive the number, not to move it", and filed it as backlog
+item `e981656df348`. This is what came back. **The value is unchanged at 2.0/core.**
+
+### 7.1 The citation was false in both halves, and the origin commit states no rule
+
+`scripts/lib/capacity-admit.sh` carried `2.0/core is §9.5's measured ceiling`. §9.5 is a
+**self-correction**: it retracts a "permanent dispatch outage" projection by showing the gate admits
+at 1.55/core and refuses at 2.92 — a demonstration that a threshold thresholds, never a failure
+point — and its own closing line is *"a projection from a single high-variance window is not a
+measurement."* The origin commit `0fc3a3d33` measured the motivating incident at load 27 on 10 cores
+= **2.72/core** and shipped `default 2.0` with nothing connecting the two: not a fraction, not a
+quantile, not a failure point. §3's reading of both is confirmed verbatim.
+
+### 7.2 The finding: no value of this constant separates fatal from survived
+
+This is what §3 could not have known from the citation alone, and it changes what the item was for.
+The recorded population — `scripts/capacity-alarm.sh:139-147`, citing the 2026-08-05 panic and
+§8.5.7 — is:
+
+| | Load (10 cores) | Per core | n |
+|---|---|---|---|
+| **FATAL** 2026-08-05 watchdogd-starvation panic | 25.30 | **2.53** | 1 |
+| SURVIVED §8.5.7, 13 consecutive samples at a CONSTANT 31-32 sessions | 29.15-59.80 | 2.92-5.98 | 13 |
+| SURVIVED reso, 42 h with no panic | 25.00 | 2.50 | 1 |
+
+A separating ceiling `c` must **REFUSE the fatal** (`2.53 > c`) and **ADMIT every survivor**
+(`5.98 <= c`) at the same time. That set is **empty**. So 2.0 is not merely underived — the constant
+is **underivable on this axis from everything that has been measured**, and the axis's resolution is
+worse than the emptiness suggests: a survivor sits **0.03/core below the death**, on a signal §8.5.7
+measured swinging 2x at *constant* session count.
+
+The consequence for the gate as it stands: at 2.0/core it produces **1 true refusal and 14 false
+ones** over the recorded population. That is not an argument for raising it — every ceiling that
+clears the false refusals admits the death, by the same arithmetic. The value stays because the gate
+is **budget-bounded** (`CC_ADMIT_BUDGET`, §12.2's law), so a false refusal costs one round-trip while
+a false admit is the failure mode — the cheaper of the two errors to keep until a separable
+population exists.
+
+**This is now executable, not prose.** `tests/capacity-ceiling-derivation.bats` (8 cases) runs the
+population through `cc_hw_load_verdict` itself and sweeps every candidate ceiling in 0.01 steps, with
+a positive control proving the sweep finds a separator when one exists and a ratchet against the
+false citation returning. It is the pattern `capacity-alarm.sh:154-157` already used for its own
+uncalibrated floors — *"so a future re-derivation has to argue with a control rather than with this
+paragraph"* — which the **gate** lacked. Deliberately portable: `tests/capacity-admit.bats` is 14/21
+red off-Darwin, so a control added there could only ever be checked on the one box whose numbers are
+in dispute.
+
+### 7.3 The instrument gap §5 named, closed — and what is still blocked
+
+§5's "one next measurement" is the marginal Δload of exactly one added session. It could not be run
+by anything in the tree, and the reason was narrower than "nobody ran it": **`capacity-ramp.sh` — the
+box's only actuator that adds sessions one at a time under a tracked identity — recorded sessions,
+ptys, memory, segments and panics, and not load.** The one instrument that could produce a load-vs-N
+series was blind to load. That is also why §5's four candidate values span 30x: every one of them is
+divided out of an aggregate rather than measured as a delta.
+
+Landed with this addendum: `capacity-ramp.sh marginal <n>` / `marginal-report`, the two-arm
+experiment §5 specifies — a **null arm first** (same window, same sampler, no unit added), then n
+trials each adding exactly one unit at a rising baseline, with §5's mandated control implemented as
+a hard predicate (*a trial counts only if the census moved by exactly 1*) and three refusals in the
+report: below N=5 valid trials, with no null arm, and when the median sits inside the null arm's
+drift. Settle defaults to **300 s** rather than the ramp's 4 s launch cadence — loadavg field 1 is a
+damped 1-minute average, so a delta sampled 4 s after the step is 94% stale, and 0.67% at 300 s.
+
+**Still blocked, and this is the item's remaining half.** The verb runs on the 10-core Darwin box or
+nowhere: it spawns real sessions, reads `vm.loadavg`/`hw.ncpu`/`vm_stat`, and its census is a live
+`ps` over that process table. None of that exists off-box, and this addendum was written in a cloud
+VM — so the experiment is *runnable* now and *unrun*. And what it produces is bounded twice over:
+
+- the unit is **resident-idle** (full RSS, one pty, zero tokens), so any figure is a **lower bound**
+  on the marginal, never "the marginal load per session";
+- **a marginal is not a failure point.** Even a clean marginal tells you what one session costs, not
+  where the box dies — so it can price *what raising the ceiling buys*, and it still cannot derive
+  the ceiling. §7.2's emptiness is not waiting on this measurement; it is waiting on a population
+  that contains more than one death.
+
+### 7.4 What would actually move the constant
+
+Stated so the next attempt does not re-run the one that returns empty:
+
+1. **More deaths, instrumented.** n=1 on the fatal side is the binding limit. The 2026-08-05 panic is
+   the only recorded one, and it is *below* 13 survived samples. Nothing on this axis can be derived
+   until the fatal side has a population.
+2. **A different axis.** §8.5.2's retraction and the compressor-segment term already point at it: the
+   quantity that separated fatal from survived at the panic was `"compressor_exhausted": 1` while
+   every load and headroom rung read healthy. That term is already in the gate. The honest reading of
+   §7.2 is that **the load term is the one that cannot be calibrated**, and the segment term is where
+   a real ceiling lives.
+3. **Retire rather than tune.** Not proposed here — the load term is cheap, fails open, and is
+   budget-bounded — but it is the option §7.2 makes admissible, and it should be argued against the
+   control in `tests/capacity-ceiling-derivation.bats` rather than against this section.
+
+**Item disposition:** the derivation half is done and landed; the marginal-measurement half is parked
+on the box. Nothing here licenses a change to `CC_HW_DEFAULT_MAX_LOAD_PER_CORE`.
