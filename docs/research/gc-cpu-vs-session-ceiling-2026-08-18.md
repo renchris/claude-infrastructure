@@ -187,6 +187,16 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   `1.89` (delta-marginal from the cited axis-09 pair), `2.5–5` (published, an aggregate÷N).
   `CC_ADMIT_ACTIVE_CEILING=8`, the felt ~15 wall, `MACHINE_CAPACITY_V2`'s whole model and every
   "+N sessions" figure above all divide by it.
+  **Adjudicated 2026-08-19** (`marginal-load-per-active-session-2026-08-19.md`, backlog
+  `193ae8ddce72`): none of the four is repairable — three are arithmetically disqualified and
+  `0.172`/`0.566` have **no committed derivation anywhere on trunk** — and the instrument behind all
+  four (`load1` regressed on session count) is *unidentified* on this box, because B3 measured 87.3%
+  of the load numerator as not-Claude across an 8.35→46.39 daily range and A8's direct probe watched
+  load FALL while a unit was added. The sampler this bullet asks for is landed
+  (`scripts/capacity-marginal.sh`, controls proven able to fail in `tests/capacity-marginal.bats`);
+  the coefficient itself still wants one ~1 h on-box window (§6 of that doc). **Until it exists, none
+  of the four may be quoted** — including by `scripts/lib/capacity-admit.sh:698` and
+  `hooks/agent-teams-enforce.sh:220`, which both still carry `2.5–5`.
 - **Whether load average means anything as a capacity signal at all.** At constant N=15–16 the box
   read **11.21 → 36.07**; one instrumentation run alone moved it 19 → 36 with session count unchanged.
 - **Whether automated fires retry after a capacity refusal** — decides whether raising the ceiling
@@ -210,6 +220,15 @@ ps -axo comm= | grep -c 'claude-220/node_modules'      # the honest session coun
 apportions. If the census stays flat while load moves, it is the instrument — which is exactly how
 this wave's "64% is our own automation" headline died. No attribution figure should be quoted again
 until a sampler clears that control.
+
+**That sampler is now `scripts/capacity-marginal.sh`** (2026-08-19). It implements this paragraph as
+three required controls — LEVEL (does the census reproduce the load, at more than one load) ·
+DYNAMICS (does it move when load moves, over `n_eff` independent observations, not `n`) · IDENTIFY
+(did the ACTIVE count vary at all) — and emits `NO-ATTRIBUTION` with the failing term rather than a
+number when any of them fails. The first row of `tests/capacity-marginal.bats` replays the exact
+census shape that killed the 64% headline and asserts the refusal, so the control is known to be able
+to fail rather than assumed to be. Design, the adjudication of the four values, and the run protocol:
+`marginal-load-per-active-session-2026-08-19.md`.
 
 ---
 
