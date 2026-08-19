@@ -992,12 +992,18 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   [ "$(grep -c 'WAKE-PATH-DOWN' "$MB")" -eq 1 ]
 }
 
-@test "E1 RED-PROOF: the pre-fix watcher from origin/main instructs RE-ARM with no /goal branch" {
+# PINNED TO A SHA, NEVER A MOVING REF. `origin/main` was the pre-fix tree only until E1 landed on it
+# (e8c2435aa); from that moment the staleness guard matched and this case reported
+# `ok … # skip control is not pre-fix` on every run — green, and proving nothing. A stale control does
+# not fail, it SKIPS, and bats renders a skip as `ok`; the guard is therefore a hard FAILURE now.
+# tests/wake-floor.bats:164-170 documents the hazard.  f704bf8aa = e8c2435aa~1.
+CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
+@test "E1 RED-PROOF: the pre-fix watcher (pinned sha) instructs RE-ARM with no /goal branch" {
   local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main bin/cc-await-ping | tar -x -C "$old" || skip "origin/main unavailable"
-  if grep -q 'A /goal IS LIVE' "$old/bin/cc-await-ping"; then
-    skip "control is not pre-fix"
-  fi
+  git -C "$REPO" archive "$CC_AWAIT_PING_E1_PREFIX_SHA" bin/cc-await-ping | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_AWAIT_PING_E1_PREFIX_SHA unavailable"
+  [ -f "$old/bin/cc-await-ping" ] || false
+  ! grep -q 'A /goal IS LIVE' "$old/bin/cc-await-ping" || false
   "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
   sleep 2
   kill -TERM "$watcher" 2>/dev/null || true

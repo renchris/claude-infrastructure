@@ -1238,12 +1238,18 @@ custody_env() { # renders with a stub ledger; an activation step satisfies the f
     || { echo "wrong partition or ordering: $output"; false; }
 }
 
-@test "RED-PROOF: the pre-v1.1 renderer from origin/main drops a custody 🔧 to 'loose ends'" {
+# PINNED TO A SHA, NEVER A MOVING REF. `origin/main` was the pre-v1.1 tree only until custody landed
+# on it (6cedafbf5); from that moment the staleness guard matched and this case reported
+# `ok … # skip control is not pre-v1.1` on every run — green, and proving nothing. A stale control
+# does not fail, it SKIPS, and bats renders a skip as `ok`; the guard is a hard FAILURE now.
+# tests/wake-floor.bats:164-170 documents the hazard.  73ceb76aa = 6cedafbf5~1.
+CC_READOUT_CUSTODY_PREFIX_SHA="${CC_READOUT_CUSTODY_PREFIX_SHA:-73ceb76aa}"
+@test "RED-PROOF: the pre-v1.1 renderer (pinned sha) drops a custody 🔧 to 'loose ends'" {
   local old="$BATS_TEST_TMPDIR/pre-custody-hook"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
-  if grep -q 'CUSTODY_OPEN' "$old/hooks/operator-readout.sh"; then
-    skip "control is not pre-v1.1"
-  fi
+  git -C "$REPO" archive "$CC_READOUT_CUSTODY_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_READOUT_CUSTODY_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/operator-readout.sh" ] || false
+  ! grep -q 'CUSTODY_OPEN' "$old/hooks/operator-readout.sh" || false
   w="$(mkrepo_landed custodyred)"
   run custody_env "$(stub_ledger "🔧" "CUSTODY_OPEN=2")" "$old/hooks/operator-readout.sh" "$w"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
