@@ -573,6 +573,8 @@ AUTOREVERT="${POSTLAND_AUTOREVERT:-on}"                 # kill switch: POSTLAND_
 MAX_REVERTS="${POSTLAND_MAX_REVERTS:-2}"                # markers written THIS run before we stop
 REPO_SHIP="${CC_POSTLAND_SHIP_BIN:-$REPO/scripts/ship-land.sh}"   # the land lane (the ONLY pusher)
 SHIP_TO="${CC_POSTLAND_SHIP_TIMEOUT_S:-900}"            # bound on the revert land
+TWIN_SCAN_N="${CC_POSTLAND_TWIN_SCAN_N:-120}"           # trunk commits scanned for a patch-id twin
+TWIN_SCAN_S="${CC_POSTLAND_TWIN_SCAN_S:-60}"            # ...and the bound on that one scan
 REVERTS="$STATE/reverts"                                # <sha> marker ⇒ never reverted twice
 REVERTS_THIS_RUN=0
 # ── THE NEVER-TWICE MARKER IS BOUNDED (item 8e8a306f6dc0) ────────────────────────────────────────
@@ -2308,6 +2310,72 @@ revert_rearm() { # <marker> <culprit> <c12>
   log "AUTOREVERT rearm culprit=$c12 attempt=$ATTEMPT_N/$REVERT_RETRY_MAX prev_exit=$prev_exit why=$( [ "$moved" -eq 1 ] && echo new-tip || echo "decay-${age}s" )"
   return 0
 }
+# ── ONE ARBITER FOR "IS THIS SHA IN THE TRUNK WE ARE STANDING ON" (backlog 6e1361f39202) ────────
+# Extracted from auto_revert, which is where this test was born and where its two log tokens are
+# pinned (C31). It is EXTRACTED rather than copied because red_actions now has to ask the same
+# question a few lines earlier, and a second implementation of a predicate an actuator already owns
+# is the sample-then-act defect (memory: make-the-actuator-the-arbiter): the two would answer
+# differently the first time either was touched, and the disagreement would surface as a page that
+# names a culprit the revert lane then refuses — which is the shape of the bug being fixed here,
+# reintroduced one layer up.
+#
+# THREE answers, never two. An unresolvable trunk ref is a BLIND instrument; a resolved one that
+# does not contain $c is a PROVEN non-ancestor; anything else is in trunk. Collapsing blind into
+# orphan would report the instrument's own failure as a finding about the culprit — auto_revert's
+# own comment says exactly this, and the collapse is now impossible for either caller rather than
+# for one of them (memory: lookup-miss-is-not-absence).
+#
+# The FETCH lives here because the whole defect is a staleness race: --run-if-needed captures
+# target=origin/main at entry, the corpus runs ~1h, and a rebase-land inside that window rewrites
+# the shas. A test against the ref as it stood an hour ago cannot see the orphan at all — it would
+# answer `trunk` for every one of them and this guard would be decorative. Both callers therefore
+# pay one bounded fetch; the second is a no-op round trip, and it is on the RED path only, which
+# already runs a full bisect and forks cc-backlog per failing suite.
+#
+# rc is ALWAYS 0 and the verdict is on stdout: this is an acquit-or-convict producer with a real
+# third answer, and a non-zero rc would put "I could not tell" on the same channel as "not in
+# trunk" for any caller reading rc (memory: null-result-must-not-use-the-error-channel).
+trunk_state() { # <sha> → echoes `trunk <tip>` | `orphan <tip>` | `blind`
+  local c="$1" tip
+  bounded 120 git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
+  tip="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
+  [ -n "$tip" ] || { printf 'blind\n'; return 0; }
+  if git -C "$REPO" merge-base --is-ancestor "$c" "$tip" 2>/dev/null; then
+    printf 'trunk %s\n' "$tip"
+  else
+    printf 'orphan %s\n' "$tip"
+  fi
+}
+# THE OPERATOR'S REAL NEXT MOVE over an orphan is "act on the twin", never "revert this sha" — so
+# naming the orphan without naming the twin hands back a dead end. A rebase-land preserves the
+# patch and changes the sha, so the twin is found by PATCH-ID and never by sha or by tree: the same
+# patch on a different parent has a different tree, which is why --is-ancestor is the discriminator
+# above and patch-id is the locator here.
+#
+# ONE fork pair, not one per commit: `git log -p` emits its own `commit <sha>` headers and
+# `git patch-id` attributes each diff back to them, so the whole window is scanned in a single
+# pipeline. Bounded twice over — by commits and by seconds — because this runs on the starved RED
+# path, and the window only has to cover a land lane that rewrote history within the last hour.
+#
+# THREE answers again, for the same reason: `none` means the scan RAN and the window held no twin,
+# `blind` means the scan produced nothing at all and is a statement about the instrument. Rendering
+# blind as none would tell the operator "there is no twin, go revert it" on exactly the evidence
+# that we could not look (memory: probe-that-acts-on-absence-must-confirm-presence).
+patch_twin() { # <sha> → echoes `<trunk-sha>` | `none` | `blind`
+  local c="$1" pid ids twin
+  pid="$(git -C "$REPO" show --no-color "$c" 2>/dev/null \
+           | git -C "$REPO" patch-id --stable 2>/dev/null | awk '{print $1}')"
+  [ -n "$pid" ] || { printf 'blind\n'; return 0; }
+  # NOT `| grep -q` — under pipefail a match makes the still-writing producer take SIGPIPE and the
+  # pipeline adopts that status, so the filter fails on the very input it matched. Count instead
+  # (memory: grep-q-under-pipefail-inverts-the-verdict).
+  ids="$(bounded "$TWIN_SCAN_S" git -C "$REPO" log -p --no-color -n "$TWIN_SCAN_N" origin/main 2>/dev/null \
+           | git -C "$REPO" patch-id --stable 2>/dev/null || true)"
+  [ -n "$ids" ] || { printf 'blind\n'; return 0; }
+  twin="$(printf '%s\n' "$ids" | awk -v p="$pid" '$1 == p {print $2; exit}')"
+  [ -n "$twin" ] || { printf 'none\n'; return 0; }
+  printf '%s\n' "$twin"
+}
 auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1 = skipped
   local c="$1" file="${2:-tests/}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid tip=""
   c12="$(sha12 "$c")"
@@ -2351,15 +2419,21 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   # reverting is a MEANINGFUL operation against this trunk at all. Refuse before the budget is spent
   # and before any marker is written — nothing was attempted, so nothing should be recorded as an
   # attempt. The fetch moves up here because the guard must test the SAME tip the revert will use.
-  bounded 120 git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
-  tip="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
   # Two distinct not-permitted states, two distinct tokens: an unresolvable trunk ref is a BLIND
   # instrument, a resolved one that does not contain $c is a PROVEN non-ancestor. Collapsing them
-  # would report the blind case as a finding about the culprit.
-  [ -n "$tip" ] \
-    || { log "AUTOREVERT verdict=skipped reason=no-trunk-ref culprit=$c12 (origin/main unresolvable — cannot prove the premise)"; return 1; }
-  git -C "$REPO" merge-base --is-ancestor "$c" "$tip" 2>/dev/null \
-    || { log "AUTOREVERT verdict=skipped reason=culprit-not-in-trunk culprit=$c12 tip=$(sha12 "$tip") (orphaned by a rebase-land; its patch is in trunk under another sha — revert it there, or fix FORWARD)"; return 1; }
+  # would report the blind case as a finding about the culprit. The test itself now lives in
+  # trunk_state() so red_actions asks the same arbiter rather than growing a second copy; both
+  # tokens below, and the fetch that makes them mean anything, are unchanged.
+  # $tip is read well below this point (the PROVISIONAL marker records it), so it is set in every
+  # arm that survives rather than derived once and patched up — `blind` has no tip to strip and
+  # ${tstate#* } would silently yield the word "blind" itself.
+  local tstate; tstate="$(trunk_state "$c")"
+  case "$tstate" in
+    blind)   log "AUTOREVERT verdict=skipped reason=no-trunk-ref culprit=$c12 (origin/main unresolvable — cannot prove the premise)"; return 1 ;;
+    orphan*) tip="${tstate#* }"
+             log "AUTOREVERT verdict=skipped reason=culprit-not-in-trunk culprit=$c12 tip=$(sha12 "$tip") (orphaned by a rebase-land; its patch is in trunk under another sha — revert it there, or fix FORWARD)"; return 1 ;;
+    *)       tip="${tstate#* }" ;;
+  esac
 
   REVERTS_THIS_RUN=$((REVERTS_THIS_RUN+1))               # counted at ATTEMPT, so the cap bounds attempts
   # PROVISIONAL marker, written BEFORE the work and rewritten after it. The retry budget must count
@@ -2507,6 +2581,39 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   culprit="$bisected"
   [ -n "$culprit" ] || culprit="$sha"
   c12="$(sha12 "$culprit")"
+  # ── IS THE CONVICTED SHA STILL IN TRUNK? (backlog 6e1361f39202) ────────────────────────────────
+  # auto_revert has refused orphaned culprits since 9795ec7b, but it runs at the BOTTOM of this
+  # function and the page, the backlog item and the peer ping are all written above it — so the
+  # three artifacts a human actually reads went on naming a sha that the actuator had already
+  # decided was not actionable. Measured 2026-08-09: item a31d1fe3de3d named 57e162494c10, whose
+  # patch is on trunk as 28949c7b with five commits on top; 2 of 9 all-time revert markers have
+  # non-ancestor culprits. The cause is the land-lane race — target=origin/main is captured at
+  # entry, the corpus runs ~1h, and a rebase-land inside that window rewrites the sha.
+  #
+  # ONLY when the bisect CONVICTED. With no verdict `culprit` is the target sha, kept solely to key
+  # the page file and route the courtesy ping, and the branch below already declines to call it a
+  # cause at all — an orphanhood note there would qualify a claim that is not being made.
+  #
+  # `blind` deliberately renders as today's plain line and adds NOTHING: refusing to accuse a sha of
+  # being orphaned on evidence we could not obtain is the same discipline that keeps no-trunk-ref a
+  # separate token from culprit-not-in-trunk one layer down.
+  local tstate="" ttip="" twin="" otwin="" orphan=0
+  if [ -n "$bisected" ]; then
+    tstate="$(trunk_state "$culprit")"
+    case "$tstate" in
+      orphan*)
+        orphan=1; ttip="${tstate#* }"; twin="$(patch_twin "$culprit")"
+        local tlab="$twin"
+        case "$twin" in
+          none)  otwin="no patch-id twin in the last $TWIN_SCAN_N trunk commits — the patch may not be on trunk at all; fix FORWARD" ;;
+          blind) otwin="patch-id twin UNKNOWN — the scan produced nothing, which says nothing about whether one exists" ;;
+          *)     tlab="$(sha12 "$twin")"
+                 otwin="its patch IS on trunk as $tlab — act on THAT, not on this sha" ;;
+        esac
+        log "TRUNKSTATE verdict=orphan culprit=$c12 tip=$(sha12 "$ttip") twin=$tlab"
+        ;;
+    esac
+  fi
   # No re-mint after the bisect: the check cell is EPHEMERAL now (§4.2.1) and nothing below reads
   # it — the re-run hint hands the operator their own cell instead of a path we are about to delete.
   # STATE-KEYED page filename — a fixed key gets path-dedup-swallowed for 7 days.
@@ -2521,7 +2628,10 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
     # store for a suite nothing showed they touched. Say which of the two this is, in the line that
     # carries the sha, and put the walk's own numbers beside it — steps, wall, and the load AT the
     # verdict, which is what tells a regression from a starved box.
-    if [ -n "$bisected" ]; then
+    if [ -n "$bisected" ] && [ "$orphan" = 1 ]; then
+      printf 'culprit: %s — CONVICTED BUT NOT IN TRUNK (bisected from last-green %s). origin/main is at %s and does not contain this sha: a rebase-land orphaned it mid-run, so a git revert of %s asks a tree that never had it applied. Do NOT revert it — %s\n' \
+        "$c12" "$(sha12 "${good:-unknown}")" "$(sha12 "$ttip")" "$c12" "$otwin"
+    elif [ -n "$bisected" ]; then
       printf 'culprit: %s (bisected from last-green %s)\n' "$c12" "$(sha12 "${good:-unknown}")"
     else
       printf 'culprit: NO VERDICT — the bisect convicted nothing (%s); RED observed at %s, which is where the window ENDS, not a commit shown to cause it\n' \
@@ -2575,6 +2685,11 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
       fname="${FAILNAME[$i]:-}"; fname="${fname//[$'\n\r']/ }"; fname="${fname:0:120}"
       [ -n "$fname" ] || fname='?'
       ftitle="post-land RED: $fentry::$fname @ $c12"
+      # The durable artifact outlives the page (which is state-keyed and cleared on the next green),
+      # so a worker who opens this row a day later has only the title. A title naming a sha that is
+      # not on trunk, with nothing saying so, is what sends them to `git revert` against a tree that
+      # never had it — the exact dead end item a31d1fe3de3d recorded.
+      [ "$orphan" = 1 ] && ftitle="$ftitle (culprit NOT in trunk — orphaned by a rebase-land; $otwin)"
       # stderr is CAPTURED, not discarded: a --condition add against an item already marked done
       # warns and deliberately does NOT re-open (cc-backlog's DONE-GUARD). Swallowing that would
       # make a RECURRENCE invisible — the exact failure mode being fixed — so it goes to runner.log.
@@ -2608,7 +2723,12 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   # land)" over an unconvicted sha is exactly how the originating chain gets paged for a fault it
   # did not cause — the sha is merely where the window ends.
   if [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ]; then
-    if [ -n "$bisected" ]; then
+    if [ -n "$bisected" ] && [ "$orphan" = 1 ]; then
+      # Same accusation, same correction. "(your land)" over an orphan pages the session whose sha
+      # the land lane already rewrote, for a commit it can no longer act on — and that session is
+      # the one most likely to try the revert the page is refusing.
+      "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest bisected to $c12, which is NOT in trunk — a rebase-land orphaned it, so do not revert it ($otwin) — see $pf" >/dev/null 2>&1
+    elif [ -n "$bisected" ]; then
       "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
     else
       "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest observed after your land $c12 — NO bisect verdict (${BISECT_WHY:-unknown}, load ${BISECT_LOAD:-?}); NOT attributed to your commit — see $pf" >/dev/null 2>&1
