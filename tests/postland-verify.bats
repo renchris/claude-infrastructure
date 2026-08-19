@@ -2192,6 +2192,100 @@ orphan_culprit_bats() {   # <culprit> → echoes the wrapper's path
   [ "$(git -C "$R" rev-parse origin/main)" = "$twin" ]
 }
 
+# ── C34 the ARTIFACTS A HUMAN READS must say the culprit is orphaned too (item 6e1361f39202) ────
+# C31 above proves the ACTUATOR refuses an orphaned culprit. It runs at the BOTTOM of red_actions,
+# and the page, the backlog item and the peer ping are all written ABOVE it — so every artifact a
+# human opens went on naming the sha as the thing to act on while auto_revert had already decided
+# it was not actionable. That asymmetry is the whole item: measured 2026-08-09, item a31d1fe3de3d
+# named 57e162494c10, whose patch is on trunk as 28949c7b with five commits on top.
+#
+# The BACKLOG TITLE is the one that matters most and is asserted for that reason: the page is
+# state-keyed and the next green deletes it, so a worker who opens the row a day later has only the
+# title — and a title naming a non-ancestor sha, with nothing saying so, is what sends them to a
+# revert against a tree that never had the commit applied.
+#
+# SAME FIXTURE AS C31, deliberately — one race, two consumers — but run at the suite default
+# POSTLAND_AUTOREVERT=off. The revert lane is not the subject here, and leaving it off keeps trunk
+# parked on the twin, so the twin the assertions read is the twin the SUT saw.
+#
+# THE TWIN IS FOUND BY PATCH-ID, WHICH IS WHY THIS FIXTURE PROVES IT: the wrapper mints the twin as
+# the culprit's OWN tree on the culprit's OWN parent, i.e. the same diff under a different sha —
+# precisely what a rebase-land produces, and precisely what patch-id equates and --is-ancestor does
+# not. A twin minted any other way would pass the orphan half and prove nothing about the locator.
+@test "C34: an orphaned culprit is named as orphaned in the page and the backlog title, with its patch-id twin" {
+  ship_stub
+  culprit="$(arv_red)"
+  CC_POSTLAND_BATS="$(orphan_culprit_bats "$culprit")"; export CC_POSTLAND_BATS
+  run bash "$SUT" --run-if-needed
+  # PRECONDITIONS — facts about the RACE, read from the record the wrapper wrote, never from live
+  # origin/main (C31's own comment explains why: a precondition read after the sweep describes the
+  # SUT's response rather than the race).
+  twin="$(cat "$REC/orphaned" 2>/dev/null || true)"
+  [ -n "$twin" ]                                                     # the wrapper fired
+  [ "$(git -C "$R" rev-parse "$twin^{tree}")" = "$(git -C "$R" rev-parse "$culprit^{tree}")" ]
+  run git -C "$R" merge-base --is-ancestor "$culprit" "$twin"         # a TWIN, not a rewind...
+  [ "$status" -ne 0 ]                                                # ...and the culprit is off trunk
+  page="$CC_PAGES_DIR/postland-red-${culprit:0:12}.page"
+  [ -f "$page" ]
+  # CONTROL — the bisect CONVICTED. Every claim below lives on the convicted branch, so an abstained
+  # run would satisfy them vacuously by never reaching it. Pinned as its own line so that failure
+  # reports "the bisect abstained" instead of "the page lacks a string" (memory:
+  # harness-default-collapses-the-states-under-test).
+  run grep -c 'NO VERDICT' "$page"
+  [ "$output" = "0" ]
+  # CLAIM 1: the page says the convicted sha is not in trunk, and says not to revert it.
+  run grep -c 'CONVICTED BUT NOT IN TRUNK' "$page"
+  [ "$output" = "1" ]
+  run grep -c 'Do NOT revert it' "$page"
+  [ "$output" = "1" ]
+  # CLAIM 2: the page names the TWIN — the operator's real next move. Counted, never `grep -q`:
+  # under pipefail a matching -q makes the producer take SIGPIPE and the pipeline adopts it
+  # (memory: grep-q-under-pipefail-inverts-the-verdict).
+  run grep -c "its patch IS on trunk as ${twin:0:12}" "$page"
+  [ "$output" = "1" ]
+  # CLAIM 3: THE DURABLE ARTIFACT. The title outlives the page, so it carries the same warning.
+  [ -f "$REC/cc-backlog.argv" ]
+  run grep -c 'culprit NOT in trunk' "$REC/cc-backlog.argv"
+  [ "$output" -ge 1 ]
+  run grep -c "act on THAT, not on this sha" "$REC/cc-backlog.argv"
+  [ "$output" -ge 1 ]
+  # CLAIM 4: the sha is still IN the title. Naming the orphan state must not cost the identifier —
+  # a worker needs the sha to find the twin's neighbourhood at all, and the fix would otherwise be
+  # a subtraction dressed as a warning.
+  run grep -c "@ ${culprit:0:12}" "$REC/cc-backlog.argv"
+  [ "$output" -ge 1 ]
+}
+
+# ── C35 the ordinary in-trunk culprit is UNCHANGED (the too-wide half of C34's guard) ────────────
+# A guard that fired on every culprit would satisfy every claim in C34 and be catastrophically
+# wrong: every page and every backlog row on this box would tell the operator not to act on a sha
+# that is perfectly actionable. C31's positive control is C20 (a real revert lands), which proves
+# the ACTUATOR still permits the healthy case; nothing proved the RENDERING still does, because
+# C20 never reads the page text. This is that control, and it is the half a `[ "$orphan" = 1 ]`
+# mutated to a constant-true reds (memory: guard-proxy-fails-in-both-directions).
+@test "C35: an in-trunk culprit is still named plainly — no orphan warning in the page or the title" {
+  ship_stub
+  culprit="$(arv_red)"
+  run bash "$SUT" --run-if-needed
+  page="$CC_PAGES_DIR/postland-red-${culprit:0:12}.page"
+  [ -f "$page" ]
+  # PRECONDITION, and the exact inverse of C34's: this culprit IS reachable from trunk. Asserted
+  # rather than assumed — with no race fired the only way it could be false is a broken fixture,
+  # and then every negative below would pass for the wrong reason.
+  run git -C "$R" merge-base --is-ancestor "$culprit" origin/main
+  [ "$status" -eq 0 ]
+  run grep -c 'NO VERDICT' "$page"
+  [ "$output" = "0" ]                                    # control: convicted, as in C34
+  # CLAIM: the plain rendering, and NOT the orphan one, in both artifacts.
+  run grep -c "culprit: ${culprit:0:12} (bisected from last-green" "$page"
+  [ "$output" = "1" ]
+  run grep -c 'CONVICTED BUT NOT IN TRUNK' "$page"
+  [ "$output" = "0" ]
+  [ -f "$REC/cc-backlog.argv" ]
+  run grep -c 'culprit NOT in trunk' "$REC/cc-backlog.argv"
+  [ "$output" = "0" ]
+}
+
 # The rc-90 remedy is the ONE that asks the operator for hand-work — resolving a revert conflict —
 # and it used to park that work at $WT_ROOT/wt-revert-manual, inside the glob
 # reap_stale_worktrees deletes (`wt-run-*` -o `wt-revert-*`, older than WT_STALE_S). That reaper is
