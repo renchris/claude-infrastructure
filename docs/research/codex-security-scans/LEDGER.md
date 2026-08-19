@@ -159,6 +159,15 @@ duplicates:
 | local-principal bypass "correctly gated on … a loopback origin" | **low** — DNS rebinding inherits the launcher's all-role principal; the loopback *peer* check carries no Host/Origin binding | `a36f2a81e3ee` |
 | — (new surface) | **low** — UPN local-part mapping merges distinct reviewer identities | filed with the two above |
 
+**Status of the medium row, 2026-08-19 — still open on trunk, and blocked on venue, not on the fix.**
+`ce7651b02a17` was re-verified against doc_classifier `origin/main` @ `cc6a30a6` on 2026-08-09
+(`../../plans/backlog-consolidation-2026-08-09/OUT-docclf.md:49`: the per-token `PyJWKClient` is live
+at `auth.py:73`), and `origin/main` has not moved since 2026-07-30. It has now burned cloud sessions
+that cannot reach `doc_classifier` at all, and it is member 3 of ordered cluster **M-P-2** — do not
+work it standalone. Disposition and the operator's `cc-backlog block` line:
+`../venue-foreign-repo-recurrence-2026-08-17.md` § SEVENTH DISPATCH. Lesson 5 above applies to its
+eventual fix as much as to `cb9ab22e7b12`'s.
+
 Neither engine is wrong about the code; they asked different questions. The amplification defect is
 about a *client lifecycle*, and rebinding defeats a peer-address check precisely because the victim's
 browser really does connect from `127.0.0.1`. **Lesson for this ledger: `completeness: complete`

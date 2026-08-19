@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-19 | `ce7651b02a17` | `doc_classifier` | label-foreign — **first item fully adjudicable in-VM**, and a member of an already-merged cluster (§ SEVENTH DISPATCH) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,142 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SEVENTH DISPATCH — the first misrouted item this repo can fully adjudicate without the missing repo
+
+**2026-08-19.** Backlog item `ce7651b02a17`, **project `doc_classifier`**, subject
+`reviewapp/api/auth.py` — *"fresh `PyJWKClient` per token → pre-auth JWKS fetch amplification
+(medium, PoC-proven: 4 fetches from 2 rejected tokens)"* — was dispatched into an `anthropic_cloud`
+session whose one attached repository is `renchris/claude-infrastructure`. Same mechanism as the six
+rows above; nothing about the cause is re-derived here. `cc-eligible check` reads the row
+`eligible`, correctly and for the seventh time.
+
+Three facts are new, and the first two change what should be *done* with this row.
+
+## New fact 1 — the brief's mandated first step is ANSWERED here, in this repo, at zero doc_classifier access
+
+Every prior occurrence recorded the same dead end: *"reading the cited files on trunk — the brief's
+mandated FIRST STEP — is not possible from this venue."* For this item it is not needed. The
+evidence is checked into **this** repo, in two independent places:
+
+- **The canonical finding, with source excerpts and the PoC** —
+  `docs/research/codex-security-scans/doc_classifier/pathB-c1ae7ce8_20260729T2300Z/` (revision
+  `c1ae7ce8`, scan complete). `report.md:93-228` carries the affected lines
+  (`auth.py:73-75`, `:117-139`), both offending excerpts, CWE-400, the confidence rationale
+  (*"four JWKS fetches for two rejected token attempts"*), the remediation (*one long-lived
+  `PyJWKClient` per immutable JWKS configuration, bounded fetch timeouts, pre-auth failure
+  throttling*) and its three acceptance tests. `LEDGER.md:158` maps the finding to this item id.
+- **A trunk read by someone who had the tree** — `docs/plans/backlog-consolidation-2026-08-09/OUT-docclf.md:49`
+  records a **KEEP** verdict for `ce7651b02a17` verified against doc_classifier `origin/main` @
+  `cc6a30a6` on 2026-08-09, quoting the live construct at `auth.py:73`. The same file's governing
+  measurement (`:8-14`) is that `origin/main` **has not moved since 2026-07-30**, so no landed
+  change since could have satisfied it.
+
+**Therefore: open, correct as filed, unstarted, premise confirmed by citation to a dated read of
+trunk — blocked purely on venue.** The distinction the fifth occurrence drew still applies: this VM
+did not re-read `auth.py`; it read two records written by readers who could.
+
+That makes this row cheap for whoever reaches a venue that can see the tree — the fix is specified,
+its tests are specified, and the only unreached step is the edit.
+
+## New fact 2 — it is not a standalone item, and dispatching it alone re-splits a merge
+
+`OUT-docclf.md:130-176` folded this item into cluster **M-P-2**, an *ordered* five-member effort
+(`e3d8a8cf90a4`, `ce7651b02a17`, `38de29ec5e59`, `16319f4234a3`, `1a9f3323e4d7`) sharing one root
+cause — docclf's own most-named defect, *a control exists but the thing it keys on is not the thing
+that decides safety*; `auth.py` keys JWKS caching on an object that dies each request. Its stated
+order puts `ce7651b02a17` **third**, behind `1a9f3323e4d7` (whose window closes at M-P-1's merge)
+and `e3d8a8cf90a4` (same file and test as another fix — *"do them in one diff or they conflict"*).
+
+The brief this VM received names none of that: it reads as a standalone one-item fix with a
+one-item DoD. Whether the grouping ever reached the ledger (`cc-backlog link --plan`) is not
+verifiable from here — but the dispatch that arrived is evidence it did not, and it is the same
+diode the 08-17 master re-dispatch settled at full resolution: **a conclusion written into a plan
+file is not read by anything in the dispatch chain.** A worker that took this brief at face value
+would produce a single-file diff that M-P-2's own ordering says will conflict.
+
+Note also `docs/plans/BACKLOG_DRAIN_24_7.md:51`: the standing cloud dispatcher was measured wedged
+in a claim→spawn-fail→release loop on three worktrees, and **`wt-ce7651b02a17` is one of the
+three**. Like `38de29ec5e59`, this row's cost is not capped at one session.
+
+## New fact 3 — 3 days after the cause was located, the fire path is unchanged
+
+Re-measured on trunk `44177d6` (2026-08-19 08:49 -0700), the tip this VM was cloned at:
+
+```
+bin/cc-offload:84       REPO="${CC_OFFLOAD_REPO:-$ROOT}"
+bin/cc-offload:519-522  remote_url=$(cd "$REPO" … git remote get-url origin); repo_slug=…
+bin/cc-offload:529,536  python3 "$api" … --repo "$repo_slug"
+```
+
+No comparison against `item.project` exists at any point in the chain, and no off-switch, guard or
+route-by-project arm has landed since `cloud-venue-project-repo-mismatch-2026-08-16.md` §2 located
+it. The §3 decision — **(a) fail closed at the fire vs (b) route by `item.project`** — is unchanged
+and now carries a **seventh** datapoint of cost. As the 08-17 master file established, any count
+taken from the `venue-*` family is a floor.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| host / `$HOME` | `vm` / `/root` |
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present, HEAD == `origin/main` (`44177d6`) |
+| `/Users`, `~/Development` | both absent |
+| `doc_classifier` checkout | none on the filesystem (the only path match is this repo's own `docs/research/codex-security-scans/doc_classifier/`) |
+| `reviewapp/api/auth.py` | 0 hits over the whole filesystem |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `cc-eligible check ce7651b02a17` | `verdict=eligible`, rc 0 |
+| `bats`, `shellcheck` | both absent |
+
+## The rails fail quietly here too
+
+`~/.claude/autonomy/backlog.jsonl` does not exist on this VM, and the desk role file does not
+either, so the brief's disposition verbs exit 0 while doing nothing:
+
+```
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset target=--role desk
+cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset)   # rc 0
+```
+
+**The ledger was NOT updated by this session and must not be reported as such.** This file, on the
+pushed branch, is the notification.
+
+## Operator actions
+
+```
+cc-backlog block ce7651b02a17 --needs "re-dispatch as part of cluster M-P-2, to a session that can reach renchris/doc_classifier — NOT standalone and NOT third-in-order until 1a9f3323e4d7 and e3d8a8cf90a4 precede it (docs/plans/backlog-consolidation-2026-08-09/OUT-docclf.md:130-176). Premise CONFIRMED without the tree: fix, remediation tests and PoC are in docs/research/codex-security-scans/doc_classifier/pathB-c1ae7ce8_20260729T2300Z/report.md:93-228; trunk read of 2026-08-09 at OUT-docclf.md:49 (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH DISPATCH)"
+```
+
+`block`, not `reopen` and not `done`, for the reason the fifth occurrence gave: the item is blocked
+on **where it was sent**, and parking it out of the dispatch wave is what stops an eighth fire into
+the same VM shape. Nothing about `auth.py` changed.
+
+A second row is worth filing against the *ledger*, not the fire path, since it is a different
+defect from the venue one and this session is its second sighting:
+
+```
+cc-backlog add --project claude-infrastructure --title "a consolidation MERGE verdict never reaches the dispatcher — ce7651b02a17 was fired standalone on 08-19 though OUT-docclf.md:130-176 folded it into ordered cluster M-P-2 behind two predecessors; decide whether cc-backlog link --plan is run at consolidation time or the dispatcher reads the cluster" --source ce7651b02a17
+```
+
+## Not fixed here, deliberately
+
+The three standing refusals hold verbatim and are not re-argued: `bin/cc-offload` fires paid cloud
+sessions and neither `bats` nor `shellcheck` is installed here, so the repo's gate cannot be run on
+a shell change; a session this lane created cannot verify a change to the lane; a 50-commit clone
+cannot adjudicate its own admission.
+
+**And no patch was written against `reviewapp/api/auth.py`.** That refusal is the brief's own rail
+and it binds hardest exactly where the premise looks most settled: a diagnosis derived from records
+rather than from the tree can produce a diff that reverts trunk (`cc-backlog 6110fc45141e`). The
+remediation is specified in two places; writing it is one edit for a worker who can read the file
+first.
+
+**What this session did land** is one thing it could both find and verify from here: the M-P-2
+falsifier's `ce7651b02a17` conjunct was `| grep -qv '<construct>'`, which cannot fail, so the
+cluster's oracle carried no test of this item at all. Corrected to `! … | grep -q` and proven
+against a vulnerable and a fixed fixture (`OUT-docclf.md:163` + note; same defect fixed at
+`OUT-testcorpus.md:146`). The venue kept the fix out of reach; it did not keep the *acceptance test
+for the fix* out of reach.
