@@ -86,6 +86,11 @@ LOG="${CC_SENTINEL_LOG:-$HOME/.claude/logs/compressor-sentinel.jsonl}"
 # The snap log DERIVES from LOG so one override moves both — a test that redirects only the JSONL
 # would otherwise still append trip snapshots to the operator's live logs.
 SNAP="${CC_SENTINEL_SNAP:-${LOG%.jsonl}-snap.log}"
+# The freeze ledger DERIVES from LOG for the same reason SNAP does, and here the stake is higher
+# than tidiness: this file is the ONLY record of which pids this daemon owes a SIGCONT to. A test
+# that redirected the JSONL but not the ledger would append the operator's live cohort with its
+# fixtured pids, and the next real release would then skip them as pid-reuse mismatches.
+FROZEN_DB="${CC_SENTINEL_FROZEN_DB:-${LOG%.jsonl}-frozen.tsv}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 PAGE="$PAGES_DIR/compressor-sentinel.page"
 ACT="${CC_SENTINEL_ACT:-off}"
@@ -101,6 +106,11 @@ ACT_CAP="${CC_SENTINEL_ACT_CAP:-200}"
 ACT_PARENT="${CC_SENTINEL_ACT_PARENT:-on}"
 ACT_PARENT_MIN="${CC_SENTINEL_ACT_PARENT_MIN:-3}"   # burst children a parent must own to be a spawner
 ACT_PARENT_CAP="${CC_SENTINEL_ACT_PARENT_CAP:-4}"   # most spawners frozen per trip, biggest first
+# The unfreeze arm's two bounds. HOLD_MIN matches COOLDOWN by construction so a release can never
+# land inside the ramp the freeze interrupted; HOLD_MAX is the ceiling past which an unreleased
+# freeze is treated as the incident rather than the remedy (see the release policy above the arm).
+HOLD_MIN_S="${CC_SENTINEL_HOLD_MIN_S:-60}"
+HOLD_MAX_S="${CC_SENTINEL_HOLD_MAX_S:-600}"
 FOLLOWUP_N="${CC_SENTINEL_FOLLOWUP_N:-12}"       # 12 x 5 s = the 60 s cooldown, by construction
 FOLLOWUP_SEC="${CC_SENTINEL_FOLLOWUP_SEC:-5}"
 SNAP_TOPN="${CC_SENTINEL_SNAP_TOPN:-30}"         # trip snapshot: how many RSS ranks carry full argv
@@ -690,6 +700,73 @@ write_page() { # <ts> <why> <headline> <detail>
   } > "$PAGE" 2>/dev/null || true
 }
 
+# ── THE UNFREEZE ARM (master 477f0b771ec3) ────────────────────────────────────────────────────────
+# The actuator SIGSTOPs and nothing resumes. That is not an oversight in the margins: the kill site
+# below justifies choosing SIGSTOP over SIGKILL with the words "so we must be the reversible one",
+# and the reversal was never built. Measured 2026-08-19: 109 trips, 59 real SIGSTOPped events, and
+# zero SIGCONT senders anywhere in the tree (git grep -- -CONT, prose filtered, returns nothing).
+# So every actuation to date has been a one-way freeze whose only exit was the process dying or the
+# box rebooting.
+#
+# THE RELEASE POLICY, stated explicitly because the row demands one and because an implicit policy
+# here is indistinguishable from the bug:
+#   clear   — the breach is over (no trip this tick) AND the freeze has been held HOLD_MIN_S. This
+#             is the normal path; the minimum matches the cooldown so we never resume into the ramp
+#             we just interrupted.
+#   ceiling — held HOLD_MAX_S, released EVEN IF STILL IN BREACH. A freeze that outlives its own
+#             emergency has stopped being a guard and become the incident; at that point the honest
+#             move is to give the box back and say so loudly.
+#   exit    — the sentinel is going away (TERM/INT). Unconditional. Without this arm a daemon
+#             restart strands the whole cohort permanently, which is the row's failure mode with
+#             extra steps.
+#
+# WHAT MAKES THIS SAFE TO RUN UNATTENDED: we resume ONLY what we froze. Every release is gated on
+# (pid, lstart) matching the ledger, TZ-pinned on BOTH sides because ps renders lstart in the
+# ambient zone and a DST flip would otherwise convict every row at once (memory:
+# process-start-time-renders-in-ambient-timezone). A pid that has been recycled onto a different
+# process fails that compare and is dropped WITHOUT a signal — SIGCONT to an innocent stopped
+# process (a debugger target, an operator ^Z) is the one harm this arm could do, and the guard is
+# what forecloses it.
+proc_lstart() { # <pid> → TZ-pinned start time, empty if the pid is gone
+  TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be undone
+  local ls
+  ls="$(proc_lstart "$1")"
+  # No lstart means the process died between the signal and this read. Nothing to owe it.
+  [ -n "$ls" ] || return 0
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$ls" "$2" "$(date +%s)" "$3" >> "$FROZEN_DB" 2>/dev/null || true
+}
+
+release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> → "released=N held=N stale=N"
+  local now="$1" mode="$2" keep rel=0 held=0 stale=0 pid ls kind at comm cur age due
+  [ -s "$FROZEN_DB" ] || { printf 'released=0 held=0 stale=0'; return 0; }
+  keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'released=0 held=0 stale=0'; return 0; }
+  while IFS="$(printf '\t')" read -r pid ls kind at comm; do
+    [ -n "$pid" ] || continue
+    cur="$(proc_lstart "$pid")"
+    # Gone, or the pid now belongs to someone else. Either way we owe it nothing and must not signal.
+    if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then stale=$((stale + 1)); continue; fi
+    age=$((now - at))
+    due=0
+    [ "$mode" = "exit" ] && due=1
+    [ "$age" -ge "$HOLD_MAX_S" ] && due=1
+    [ "$mode" = "clear" ] && [ "$age" -ge "$HOLD_MIN_S" ] && due=1
+    if [ "$due" -eq 1 ]; then
+      kill -CONT "$pid" 2>/dev/null
+      rel=$((rel + 1))
+      printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s\n' "$pid" "$age" "$kind" "$comm" \
+        >> "$SNAP" 2>/dev/null || true
+    else
+      held=$((held + 1))
+      printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
+    fi
+  done < "$FROZEN_DB"
+  mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
+  printf 'released=%s held=%s stale=%s' "$rel" "$held" "$stale"
+}
+
 # ── panic attribution: read the kernel's own verdict before it is rotated away ────────────────────
 # The kernel already named the culprit; the only defect is that nobody reads it. Two facts are
 # extracted, and they are the two that a post-mortem has always had to be reconstructed by hand:
@@ -990,6 +1067,15 @@ FOLLOWUP_PID=""
 # shellcheck disable=SC2329  # invoked indirectly, by the trap below.
 cleanup() {
   [ -n "$FOLLOWUP_PID" ] && kill "$FOLLOWUP_PID" 2>/dev/null
+  # RELEASE ON THE WAY OUT, unconditionally. Without this the row's failure mode survives the fix:
+  # a daemon that freezes a cohort and is then restarted (launchd reload, an upgrade, a reboot that
+  # kills it before the box goes down) leaves those pids stopped with the only record of the debt
+  # sitting in a file nothing will read again. The exiting process is the last actor that still
+  # knows what it owes.
+  if [ "$ACT" = "stop" ] && [ -s "$FROZEN_DB" ]; then
+    printf '%s compressor-sentinel: RELEASE-ON-EXIT %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" exit)" >&2
+  fi
   exit 0
 }
 trap cleanup TERM INT
@@ -1139,6 +1225,7 @@ while :; do
             printf '%s parent pid=%s kids=%s comm=%s\n' "$ACTVERB" "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
           elif kill -STOP "$ppid" 2>/dev/null; then
             PARENT_STOPPED=$((PARENT_STOPPED + 1))
+            record_frozen "$ppid" parent "$pcomm"
             printf '%s parent pid=%s kids=%s comm=%s\n' "$ACTVERB" "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
           fi
         done <<< "$PARENTS"
@@ -1153,6 +1240,7 @@ while :; do
           printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
         elif kill -STOP "$spid" 2>/dev/null; then
           STOPPED=$((STOPPED + 1))
+          record_frozen "$spid" proc "$scomm"
           printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
         fi
       done <<< "$TARGETS"
@@ -1172,6 +1260,13 @@ while :; do
         printf 'actuator: parent-break none — no eligible parent owns >= %s of the %s selected burst procs\n' \
           "$ACT_PARENT_MIN" "$COHORT_N" >> "$SNAP" 2>/dev/null || true
       fi
+      # The standing freeze debt, on EVERY armed trip including the zero. Same reasoning as the
+      # parent-break verdict above it: before this arm existed the snapshot looked exactly as it
+      # would if a release path were wired and simply had nothing to do, which is why 59 one-way
+      # freezes went unnoticed across 109 trips. A number here makes the two states distinguishable.
+      printf 'actuator: freeze debt %s pid(s) awaiting SIGCONT (hold min %ss / ceiling %ss)\n' \
+        "$(wc -l < "$FROZEN_DB" 2>/dev/null | tr -d ' ' || echo 0)" \
+        "$HOLD_MIN_S" "$HOLD_MAX_S" >> "$SNAP" 2>/dev/null || true
     else
       printf 'actuator: DISARMED (CC_SENTINEL_ACT=%s) — detection only\n' "$ACT" >> "$SNAP" 2>/dev/null || true
     fi
@@ -1183,6 +1278,23 @@ while :; do
     fi
     COOLDOWN_UNTIL=$((NOW + COOLDOWN))
     STREAK=0
+  fi
+
+  # THE RELEASE RUNS ON EVERY TICK, INCLUDING THE QUIET ONES, and that placement is the mechanism
+  # rather than tidiness: a cohort frozen at tick N is owed its SIGCONT by a LATER tick, and the
+  # ticks that follow a freeze are precisely the ones where nothing trips. Hanging the release off
+  # the trip block would mean a cohort is only ever resumed by the NEXT emergency — i.e. never, on
+  # the quiet box that is the normal case after the actuator has done its job.
+  if [ "$ACT" = "stop" ] && [ -s "$FROZEN_DB" ]; then
+    if [ -z "$WHY" ]; then RELMODE=clear; else RELMODE=ceiling; fi
+    RELV="$(release_frozen "$NOW" "$RELMODE")"
+    case "$RELV" in
+      released=0\ *) : ;;   # nothing came due this tick; the trip block reports the standing debt
+      *)
+        printf '%s compressor-sentinel: RELEASE mode=%s %s\n' "$TS" "$RELMODE" "$RELV" >&2
+        printf 'actuator: release mode=%s %s\n' "$RELMODE" "$RELV" >> "$SNAP" 2>/dev/null || true
+        ;;
+    esac
   fi
 
   PREV_T="$NOW"; PREV_SEG="$SEG_EST"; PREV_CBU="$CBU"; PREV_SWAP="$SWAP_B"
