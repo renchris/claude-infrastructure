@@ -669,6 +669,42 @@ read_top_procs() { # → lines "<pid> <mb> <cmd>"
     }'
 }
 
+# ── argv[0] resolution — the discriminator this rung was missing ──────────────────────────────────
+# `top -stats command` reports the kernel p_comm, which is derived from the EXECUTABLE IMAGE. Claude
+# Code ships an embedded ugrep/bfs and the shell snapshot shadows grep/find to reach them:
+# `ARGV0=ugrep "$CLAUDE_CODE_EXECPATH" ...` (zsh) / `exec -a ugrep ...`. So an embedded grep IS the
+# claude.exe image with argv[0] rewritten, and the two instruments disagree BY CONSTRUCTION.
+#
+# Measured live on one process, 2026-08-19, same pid and same moment (pid 71388):
+#     top -stats pid,mem,command  ->  71388  10M  claude.exe      <- what this rung read
+#     ps -o comm=                 ->  ugrep
+#     ps -o command= (argv[0])    ->  ugrep                       <- what it reads now
+# Darwin resolves both ps columns through argv[0], so `top` is the ONLY blind one of the three.
+# That is why the fallback below is not the bug and this reader is: it is the top(1) path that
+# renames every embedded search to the binary that hosts it.
+#
+# THE MEASUREMENT THAT MOTIVATES THIS (2026-08-19, this box, its own logs). `ugrep` appears 0 times
+# in 22,575 rows of capacity-alarm.jsonl, while compressor-sentinel-snap.log — which reads argv —
+# caught pid 15222 climbing 6.8 -> 12.2 GB as `ugrep`, printing the whole command line. This alarm
+# logged THAT SAME PID in THAT SAME MINUTE as `claude.exe` at 16 GB. One process, two names, and the
+# rung kept the one that cannot be acted on: 150 multi-GB events over 20 days all read `claude.exe`,
+# so every one of them looked like a session leaking and none of them was.
+#
+# ARGV[0] ONLY, AND HARD-BOUNDED — full argv is not an option here. argv carries whole agent briefs
+# (memory pgrep-f-matches-agent-briefs), so logging it would put multi-KB prompts into a row written
+# every ~65 s. `cut -c1-200` bounds the read before awk sees it, and only the BASENAME of argv[0] is
+# kept: ~10 bytes per process against ~823 bytes per row today. The field is additive and readers
+# that never heard of it are unaffected.
+read_argv0() { # $1 = comma-separated pids → lines "<pid> <argv0-basename>"
+  [ -n "${1:-}" ] || return 0
+  "${CC_CAP_PS:-ps}" -o pid=,command= -p "$1" 2>/dev/null \
+    | cut -c1-200 \
+    | awk 'NF >= 2 && $1 ~ /^[0-9]+$/ {
+             n = split($2, a, "/"); v = a[n]
+             gsub(/[^A-Za-z0-9._-]/, "", v)
+             if (v != "") print $1, v }'
+}
+
 TOP_PROCS="$(read_top_procs || true)"
 if [ -z "$TOP_PROCS" ]; then
   TOP_PROCS="$(ps -eo pid=,rss=,comm= 2>/dev/null \
@@ -681,12 +717,27 @@ fi
 # never disagree about which process was the outlier.
 TOP_JSON='[]'; MAX_PROC_GB=""
 if [ -n "$TOP_PROCS" ]; then
-  TOP_JSON="$(printf '%s\n' "$TOP_PROCS" | awk '
-    BEGIN { printf "[" }
-    { if (NR > 1) printf ","
-      cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
-      printf "{\"pid\":%s,\"mb\":%s,\"cmd\":\"%s\"}", $1, $2, cmd }
-    END { printf "]" }')"
+  # Resolved for BOTH producers, so `argv0` is on every row whatever produced it — a field present
+  # only on the top(1) path would make its ABSENCE ambiguous between "fallback ran" and "lookup
+  # failed", and a reader cannot tell those apart. The fallback itself is already sighted (it reads
+  # comm=, which Darwin resolves through argv[0]); this is schema uniformity, not a second fix.
+  # The two streams are tagged and fed to one awk rather than passed with -v, so a newline in the map
+  # cannot corrupt the program text.
+  TOP_PIDS="$(printf '%s\n' "$TOP_PROCS" | awk 'NF { printf "%s%s", (n++ ? "," : ""), $1 }')"
+  ARGV0_ROWS="$(read_argv0 "$TOP_PIDS" || true)"
+  TOP_JSON="$(
+    { printf '%s\n' "$ARGV0_ROWS" | awk 'NF == 2 { print "A " $1 " " $2 }'
+      printf '%s\n' "$TOP_PROCS"  | awk 'NF >= 3 { print "T " $0 }'
+    } | awk '
+      BEGIN { printf "[" }
+      $1 == "A" { A[$2] = $3; next }
+      $1 == "T" {
+        pid = $2; mb = $3
+        cmd = $4; for (i = 5; i <= NF; i++) cmd = cmd " " $i
+        v = (pid in A) ? A[pid] : ""
+        if (n++ > 0) printf ","
+        printf "{\"pid\":%s,\"mb\":%s,\"cmd\":\"%s\",\"argv0\":\"%s\"}", pid, mb, cmd, v }
+      END { printf "]" }')"
   MAX_PROC_GB="$(printf '%s\n' "$TOP_PROCS" \
                   | awk 'BEGIN{m=0} {if ($2+0 > m) m = $2+0} END{printf "%.2f", m/1024}')"
 fi
