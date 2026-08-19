@@ -96,12 +96,54 @@ pid_is_strict_ancestor() {
 register() {
 command -v jq >/dev/null 2>&1 || return 0
 
-# Pane UUID from $ITERM_SESSION_ID (strip the "wNtNpN:" prefix → bare UUID the
-# it2 shim addresses). No pane / not a UUID → nothing to register.
+# Address from $CC_PANE_ID, else $ITERM_SESSION_ID (strip the "wNtNpN:" prefix → the bare id the
+# it2 shim addresses). Path-unsafe or empty → nothing to register.
+#
+# ── WHY THIS PREDICATE IS NOT "UUID-SHAPED" (backlog 4b9d5e93b40a) ─────────────────────────────
+# It used to be `''|*[!0-9A-Fa-f-]*) return 0`, i.e. hex-and-dashes only, and that rejected the
+# address THIS FLEET'S OWN HEADLESS DRIVER MINTS. `bin/cc-pane-headless:124` mints
+# `id="hdl-$(od -An -N8 -tx1 /dev/urandom …)"` and `:197` runs the agent under
+# `export CC_PANE_ID="$id" && unset ITERM_SESSION_ID` — so a headless agent reaches this line
+# holding a perfectly good, unique, non-recycled address, under exactly the variable this hook
+# already reads. `h` and `l` are not hex digits, so the shape check refused it and the session got
+# NO ROW AT ALL. Every consequence follows from that one refusal: cc-sessions never lists it,
+# cc-notify resolves no row and converts the lookup-miss into `reason=target-not-live`, and peers
+# retire a session that is alive (fleet memory: lookup-miss-is-not-absence).
+#
+# The seam was already built and already wired; only the validator could not see a second SPELLING
+# of its own rule (fleet memory: denylist-enumerates-spellings-not-the-class). Note the check was
+# ALREADY accepting a form it was not written for: the fleet runs kitty, and
+# `scripts/kitty-setup.sh:305` synthesises `ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID"` — a small
+# integer, which passes only because digits are hex. So "UUID-shaped" had stopped describing the
+# live keyspace in either direction.
+#
+# The replacement is the predicate this tree ALREADY settled on for the same class, verbatim in
+# shape from `hooks/lib/mailbox-pending.sh:118-124` `_mbx_valid_uuid`: a safe filename component —
+# non-empty, no path separator, no leading dot (the .lock/.tmp namespace), no `.`/`..` traversal.
+# That is the property the guard was actually protecting (this value becomes `$reg_dir/$pane.json`);
+# "hex" was a proxy for it that has now been wrong twice. Inlined rather than sourced because this
+# hook runs on every SessionStart under a hard wall-clock budget (see the header) and the lib is
+# 824 lines; the shape is pinned against the lib by tests/session-registry.bats.
 pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
 case "$pane" in
-  ''|*[!0-9A-Fa-f-]*) return 0 ;;
+  ''|.|..) return 0 ;;
+  .*) return 0 ;;
+  *[!A-Za-z0-9._-]*) return 0 ;;
 esac
+
+# SURFACE — can a terminal enumerate this address? A FACT ONLY THE WRITER KNOWS.
+# `bin/cc-sessions` cross-checks each row against the live pane list and marks a missing row stale.
+# For a headless row that list can only ever MISS, so the cross-check would hide every headless
+# session the moment it registered — trading "no row" for "a row nothing will address", which is
+# worse because it looks like it works. The reader cannot re-derive this: it would have to guess
+# from the id's shape, which is the exact mistake above. So record which variable supplied the
+# address. An OLD row, or a provisional row from handoff-fire, carries no `surface` field at all,
+# and every reader must treat that absence as "pane" — i.e. exactly today's behaviour.
+if [ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ]; then
+  surface=headless
+else
+  surface=pane
+fi
 
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 [ -z "$cwd" ] && cwd="$PWD"
@@ -148,6 +190,16 @@ mkdir -p "$reg_dir" 2>/dev/null || return 0
 #
 # Fail-OPEN on everything unprovable (no row, unreadable row, no pid, pid dead, pid not ours and not
 # our ancestor): those all take the write, exactly as before this gate existed.
+#
+# THE GATE APPLIES TO HEADLESS ROWS TOO — deliberately, against the spec that prescribed this work.
+# `docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md` E3 says to skip the
+# ancestor walk on the non-pane branch, on the premise that such a key "is not inherited". That is
+# true of a harness session_id, which is what that spec's design keys on; it is FALSE of the address
+# this hook actually receives. `cc-pane-headless:197` EXPORTS `CC_PANE_ID` into the agent, so every
+# child process of a headless agent — including a nested `claude -p` probe — inherits it and reaches
+# this line holding the tenant's address. That is the identical squat this gate was built for, so
+# skipping it here would reopen the 2026-08-08 dead-pid-corpse hazard on precisely the sessions that
+# have no pane to be re-addressed through.
 row="$reg_dir/$pane.json"
 if [ -f "$row" ]; then
   inc=$(jq -r '.pid // empty' "$row" 2>/dev/null)
@@ -166,10 +218,11 @@ fi
 # Atomic write (tmp + mv) so a concurrent cc-sessions read never sees a partial file.
 tmp="$reg_dir/.$pane.$$.tmp"
 if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" \
-        --arg account "$acct" --arg sessionId "$sid" \
+        --arg account "$acct" --arg sessionId "$sid" --arg surface "$surface" \
         --argjson pid "$cpid" --argjson startedAt "$started" \
       '{paneUUID:$paneUUID, name:$name, cwd:$cwd, account:$account, pid:$pid,
-        startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end)}' \
+        startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end),
+        surface:$surface}' \
       > "$tmp" 2>/dev/null; then
   mv -f "$tmp" "$reg_dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 else

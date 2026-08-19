@@ -648,3 +648,28 @@ goal_t() { # → a transcript path whose LAST goal_status attachment is a live a
   [ "$status" -eq 0 ]
   [ -z "$output" ] || false        # RED: the session was starving its own goal and was never told
 }
+
+# ── HEADLESS ADDRESS (backlog 4b9d5e93b40a) ──────────────────────────────────────────────────────
+# `bin/cc-pane-headless:124` mints `hdl-<16 hex>` and `:197` exports it as CC_PANE_ID with
+# ITERM_SESSION_ID unset. The own-address gate near the top of the subject used to demand a
+# hex-shaped value, so a headless session's drain exited before reading one mailbox line: mail
+# enqueued, cursor never advanced, cc-inbox-guard eventually paging. The shape is constructed
+# LITERALLY here — this fixture never calls cc-pane-headless, so it cannot confuse "pre-fix" with
+# "fixture broken" (fleet memory: red-proof-fixture-must-not-call-the-subject).
+@test "headless drain: an hdl- address delivers its mail and advances the cursor" {
+  HDL="hdl-a1b2c3d4e5f60718"
+  hmbox="$CC_MAILBOX_DIR/$HDL.md"
+  printf '%s\n' "2026-08-18T10:00:00+0000 [peer] headless page" > "$hmbox"
+  run env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext // ""')"
+  printf '%s' "$ctx" | grep -qF 'headless page'
+  [ "$(cat "$CC_MAILBOX_DIR/$HDL.seen")" -eq 1 ]
+}
+
+@test "headless drain: a path-unsafe own address is still refused (no traversal opened)" {
+  run env -u ITERM_SESSION_ID CC_PANE_ID="../evil" bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  delivered_nothing "$output"
+  [ ! -e "$CC_MAILBOX_DIR/../evil.seen" ]
+}

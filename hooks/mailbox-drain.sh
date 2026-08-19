@@ -88,9 +88,31 @@ own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 own_tp="$(printf '%s' "$_stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
-# THE PANE IS STILL REQUIRED — it is how this hook knows WHICH container it is in, and the alias trail
-# is keyed on it. A missing/garbage pane is the one unrecoverable case (exit 0, as before).
-case "$own_pane" in ''|*[!0-9A-Fa-f-]*) exit 0 ;; esac
+# AN ADDRESS IS STILL REQUIRED — it is how this hook knows WHICH container it is in, and the alias
+# trail is keyed on it. A missing/path-unsafe address is the one unrecoverable case (exit 0, as
+# before). What is NOT required is that the address be hex-shaped: this gate refused
+# `hdl-<hex>`, the address `bin/cc-pane-headless:124` mints and `:197` exports as `CC_PANE_ID`, so a
+# headless session's drain hook exited here before reading a single mailbox line — mail enqueued,
+# cursor never advanced, cc-inbox-guard eventually paging (backlog 4b9d5e93b40a; the writer-side
+# copy of this rationale is in hooks/session-register.sh).
+#
+# Widening THIS gate is what keeps the registration fix honest rather than harmful. Registering a
+# headless session without it would make peers resolve it as live and deliverable while it stayed
+# structurally deaf — "reported dead" traded for "reported live and silently unreachable", which is
+# the worse of the two because nothing looks wrong.
+#
+# Nothing below needs a headless special case, and that is a property of keying on the address the
+# driver already minted rather than re-keying on the harness session id: every use downstream
+# (`mailbox_alias_write` :101, the pending checks :134, the cover-pane migrate :165-167, the target
+# match :198, `mailbox_adoptable_predecessors` :239) treats this value as an opaque mailbox key, and
+# the lib's own `_mbx_valid_uuid` already accepts it. The pane→session alias in particular stays
+# meaningful — `hdl-…` and the session id are two genuinely different addresses for one session, so
+# the trail maps them exactly as it does for a pane.
+case "$own_pane" in
+  ''|.|..) exit 0 ;;
+  .*) exit 0 ;;
+  *[!A-Za-z0-9._-]*) exit 0 ;;
+esac
 
 # Record pane→session on EVERY boundary. This is the whole of M1's addressing repair: this hook is the
 # one place that sees both identities at once, for every session, so the mapping needs no daemon, no
