@@ -87,6 +87,80 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #40: the fleet's 150 multi-GB `claude.exe` events were the binary's
+  own embedded grep, and the instrument that named them is the only one of three that cannot say so.**
+  `master-fleet-footprint` **17 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
+  0 claimed, no stale claim)**. Property re-measured at intake: 17/17 open are `venuePlan=local` AND
+  `project=claude-infrastructure`. **filed 0 / closed 0.** Landed `fcb354d37` (argv[0] on every
+  footprint row) + this entry. `e78107996dea` worked and **left OPEN, claim released** — remainder
+  named below. Date checked first: 2026-08-19, so `62363cac1e39` (due ~2026-08-24) was correctly not
+  yet drainable.
+  - **The row's subject is a labelling artifact, and the artifact is structural.** `e78107996dea`
+    reads "identify the claude.exe 4-40GB self-burst trigger". Re-derived from the live log: **150
+    events at ≥4 GB across 20 days**, latest 2026-08-18 — the phenomenon is real and current. But
+    `top -stats pid,mem,command`, which `read_top_procs` reads, reports **p_comm, derived from the
+    executable image**. Claude Code reaches its embedded ugrep/bfs by re-exec-ing *its own binary*
+    with argv[0] rewritten — `ARGV0=ugrep "$CLAUDE_CODE_EXECPATH" …` / `exec -a ugrep …`, from the
+    shell snapshot that shadows `grep`/`find`. So an embedded search **is** the claude.exe image, and
+    the rung filed it as a session. Caught live on one process, same pid and same moment (pid 71388):
+    `top` → `claude.exe`, `ps -o comm=` → `ugrep`, `ps -o command=` argv[0] → `ugrep`. **Darwin
+    resolves both ps columns through argv[0], so top(1) is the only blind one of the three** — the
+    ps-rss fallback this rung also carries was never the bug.
+  - **The historic corroboration is a same-pid, same-minute contradiction between two live stores.**
+    `ugrep` appears **0 times in 22,575 rows** of `capacity-alarm.jsonl`. `compressor-sentinel-snap.log`,
+    which reads argv, watched pid 15222 climb **6.8 → 12.2 GB as `ugrep`** at `2026-08-10T07:09:07Z`;
+    `capacity-alarm.jsonl` logged **that same pid in that same minute as `claude.exe` at 16 GB**. One
+    process, two names, and the rung kept the one that cannot be acted on.
+  - **The row's stated blocker — "no argv in historic sampler" — is refuted by a sibling store.**
+    `compressor-sentinel-snap.log` has a `--- top N by RSS, full argv ---` section that is
+    **rank-bounded and unfiltered** (222 blocks), and it has been capturing the bursting command
+    lines the whole time. Three of them, all the same shape: `-a -o` with a permissive
+    wildcard-context regex over a huge tree or the minified CC binary — `isEnabled:\(\)=>[^,]{0,200}
+    ultrareview…` (6.0 GB), `.{0,250}hasRemoteEnvironment.{0,250}` (7.9 GB), `.{0,160}Ydr.{0,160}`
+    (12.2 GB). **This is our own agents' grep recipe**, reached through the shadowed `grep`.
+    ⚠️ A first pass read the file's *other* section header — `--- argv (node|chrom|next|vitest|
+    esbuild|playwright) ---` — and nearly filed "the sampler's filter excludes claude". That was
+    wrong and a `grep -cF claude.exe` (3,821 hits) caught it. **A section header is not the file's
+    schema.**
+  - **The magnitude in the title is instrument-specific and should not be quoted as RSS.** `top`'s
+    MEM is not `ps` RSS and diverges in both directions, measured same-moment: WindowServer 1772 M
+    vs 249 MB, kitty 1160 M vs 256 MB, Dia 901 M vs 1184 MB. The "4-40 GB" figure is top-MEM; the
+    **RSS-measured ceiling for this class is 12.2 GB**. The 40 GB sample (pid 80508, 2026-08-02)
+    predates snap-log coverage and has no argv, so it is unattributable either way.
+  - **Landed remedy — argv[0], bounded, additive.** `read_argv0()` resolves argv[0] for the top-3
+    pids in **one** batched `ps -o pid=,command= -p …`, and every `top_procs` row now carries
+    `"argv0"`. **Full argv was refused deliberately**: argv carries whole agent briefs (memory
+    `pgrep-f-matches-agent-briefs`) and this row is written every ~65 s, so it would put multi-KB
+    prompts on disk forever. `cut -c1-200` bounds the read and only the basename is kept — ~10 bytes
+    per process against ~823 bytes per row. Existing readers are untouched.
+  - **Red-proof: 5 cases, all 5 red against origin/main's subject, each on its own argv0 assertion.**
+    Mutants: **M1** lookup neutered → reds xxxiii/xxxiv/xxxv/xxxvii (xxxvi correctly stays green —
+    empty is what it asserts) · **M3** argv0 on the first row only → reds exactly xxxiii + xxxvii ·
+    **M4** a miss substitutes `cmd` back in → reds **exactly** xxxvi. 🚨 **The leak mutant took three
+    tries and taught the real property**: `M2` (basename split only) and `M2b` (+ the producer's
+    `NF == 2` guard) both still yielded `ugrep`, because the consumer's single-field `A[$2] = $3`
+    read drops the tail independently. **The argv tail is bounded at three independent sites**, and
+    only the three-site `M2c` reaches (xxxv)'s negative assertion. Recorded in the case, because a
+    refactor collapsing those layers into one would otherwise land silently. *A mutant that leaves
+    the suite green has not proven the case vacuous — it may have failed to do what you think.*
+  - **REMAINDER — why the row is left OPEN.** The trigger is identified for the stratum where argv is
+    readable, and **not** for the population. Of 6 distinct pids ≥4 GB with snap-log coverage, **3
+    are unmistakably the embedded grep** (the shadow's fixed `-G --ignore-files --hidden -I
+    --exclude-dir=…` prefix) and **3 render as `(claude.exe)`** — parenthesised, i.e. ps could not
+    read argv at all. And **62 of the 150 events predate snap-log coverage** (begins 2026-08-06), so
+    no argv is possible for them. Closing on "identified" would be exactly the narrowing this chain
+    refuses. What changed is that the question is now *answerable*: `argv0` lands on **every**
+    capacity-alarm row every ~65 s, far denser than the trip-gated snap blocks, so a successor can
+    close this row on population coverage rather than on 3 readable pids. **The `cwd` leg of the
+    row's prescription was not built** — argv[0] identifies the *class*, cwd would identify *which
+    session*, and `lsof -a -d cwd` at this cadence is a cost this effort should not pay unattributed.
+  - **Follow-on NOT filed (conservation: closed 0, so filed 0 — the sanctioned escape valve, per
+    #24 and #30-#36, #39).** The genuinely actionable finding is upstream of this row: **our own
+    agents routinely issue `grep -o` with `.{0,160}`-style wildcard-context regexes under `-a` over
+    `~/.claude` and the minified binary, and that recipe costs 6-12 GB RSS per invocation.** 150
+    events in 20 days. That is a recipe-level remedy, not a capacity-alarm one, and it belongs to
+    whoever next opens a row on agent search discipline — recorded here rather than minted as a row.
+
 - **2026-08-19 — drain recycle #39: the "evidence expired, close it" row had its evidence intact in
   an account store nobody enumerated — and the same blind spot had already manufactured a phantom
   population inside the measurement #38 landed one recycle earlier.**
