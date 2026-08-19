@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #46: the remedy was BUILT, TESTED and reachable from nothing — and the
+  one field needed to reach it collapsed the column beside it.** `master-fleet-footprint`
+  **12 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue, 0 claimed, no stale
+  claim)** — unchanged. **filed 0 / closed 0.** Landed `8d38fec34` (+ this entry).
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) was still shut and correctly declined for the 19th consecutive recycle.
+  Property re-measured at intake and it held: 12/12 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. Row `5d1b5dd9b3db` (headless substrate) claimed with no advisory,
+  worked, and **left OPEN with its claim released** — this pass built E7/F5 only.
+  - **THE BRIEF'S REMAINDER WAS STALE, measured first.** It said "ALL of gap 2 (F1-F7)" remains.
+    **F1, F2 and F4 are already built** — landed 2026-08-13 under backlog `8ad4b02602dc`, outside
+    this chain: `bin/cc-pane-headless` spawns on a `mkfifo` stdin with a holder process (the header
+    at `:27-36` documents why `</dev/null` was the whole of the bug), `meta` publishes
+    `fifo=`/`holder=`/`sid=`, and **`bin/cc-wake-headless` exists complete with
+    `tests/cc-wake-headless.bats` (1..11 green)**. Still unbuilt: **F3** (`v_send` still appends to
+    `$dir/inbox`, a private file no fleet reader knows), **F6** (`wake_floor()` must abstain for a
+    pane-less session), **F7**.
+  - **THE PATTERN THIS RECYCLE HIT — a remedy fully built and structurally unreachable.** The fleet's
+    ONLY wake primitive for a pane-less session had, on the whole tree, **zero callers**: its only
+    non-doc references were its own source, its own suite, and two PROSE comments in
+    `bin/cc-pane-headless`. So mail to a headless session enqueued and sat there while `cc-notify`
+    told the sender it "drains on its NEXT turn" — false for a resident `--input-format stream-json`
+    agent, whose only turn boundary is a write to its stdin (spec §2.2). The discriminator was
+    already on disk too: `hooks/session-register.sh:134-145` writes `surface:"pane"|"headless"` into
+    every row and calls it *"a fact only the writer knows"*, and `bin/cc-sessions:275` consumes it —
+    but all six of `cc-notify`'s `surface` matches were the English word. **This is #43's shape one
+    turn further on: not "the check already exists and reaches nobody" but "the ACTUATOR already
+    exists and is called by nobody".** Ask of a row that says *build X*: is X already built, and is
+    the real defect that nothing invokes it?
+  - **THE COUPLING THE SPEC'S OWN E7 DID NOT NAME — and it would have paged the operator.** E7
+    prescribes a new `reason=` token *"→ `verdict delivered reason=no-watcher-headless`"* as though
+    the reason token were the contract between the tools. It is not. **`bin/cc-announce:145-149`
+    classifies this line by grepping the LITERAL substrings `NO watcher armed` and `wake-path armed`
+    out of cc-notify's HUMAN sentence, and its final arm is fail-CLOSED** — *"an unrecognized rc-0
+    string alarms, never VERIFIED"*. Writing a clean new headless sentence without the matching
+    phrase therefore does not lose a nuance; it sends **every headless announce to
+    `VERDICT=UNKNOWN`** and alarms. Both phrases are retained deliberately, with the reason recorded
+    at both ends and two cases pinning them. **Generalisation: before changing an operator-facing
+    string, grep for who GREPS it — a human sentence can be a wire protocol, and a fail-closed
+    consumer converts a cosmetic edit into a page.**
+  - **A LATENT DEFECT THIS CHANGE ACTIVATED, then fixed — and it is the one worth carrying.**
+    `REG_ROWS` is TAB-separated and read with `IFS=<tab>`. **Tab is an IFS *whitespace* character, so
+    `read` COLLAPSES RUNS OF IT.** A row whose `lstart` is empty emitted
+    `<name>\t<pid>\t<uuid>\t\t<surface>` and bound `lst="<surface>"` — every column after the empty
+    one shifted LEFT by one. `pid_live()` then compared a live process's start time against the
+    literal `pane`, no row matched, and **EVERY peer — pane and headless alike — resolved as
+    `reason=target-not-live`.** Measured by A/B against a pristine `origin/main` worktree; **5 of 15
+    live registry rows carry no `lstart`**, so this was the common shape, not an edge case. Fixed by
+    emitting a `-` sentinel for every column so the collapse has nothing to collapse (`pid_live()`
+    maps `-` back to "unknown"), which also makes a future column safe to append. The latent half
+    predates this change: an empty LEADING field is stripped the same way.
+    **Carry this: appending a TSV column is only safe while every earlier column is guaranteed
+    non-empty. A trailing-empty column is fine; an interior one silently shifts everything after it.**
+  - **AND THE INSTRUMENT LESSON: the block census could not have caught it, by construction.**
+    `tests/cc-notify.bats`'s "registry TSV" case is a SOURCE-TEXT census — it greps `bin/cc-notify`
+    for reader/producer shapes. The collapse is a RUNTIME BINDING, invisible to any grep. The census
+    is extended to the new column and to a no-empty-column rule, but the real guarantee is a new
+    BEHAVIOURAL case asserting the verdict for a row with no `lstart`. **A source census and a
+    behavioural case are not substitutes; the census tells you the shape is right and says nothing
+    about what the shell does with it.** Also: the census greps had to be anchored `^[^#]*` because
+    **my own explanatory comment inside `cc-notify` matched one of them** and made it report 4
+    readers where 3 exist — the match-comments law, hit from the writing side rather than the
+    reading side.
+  - **Red-proof, stated honestly.** 9 new cases (suite now **1..100**, no skips; siblings green —
+    `cc-announce` 1..18, `completion-push` 1..8, `cc-wake-headless` 1..11, `session-registry` 1..36).
+    **Only 4 of the 9 are red pre-fix** (the headless woken/refused/phrase cases); the other five
+    assert PRESERVATION — pane rows untouched, an absent `surface` reading as pane, an armed watcher
+    not double-fired, name resolution intact, the no-`lstart` row still live — and are green pre-fix
+    by construction. Their guarantee is carried by named mutants, not by red-proof. **9 mutants, all
+    9 landing exactly as predicted on the second pass; the table printed expected-vs-actual with a
+    NON-VERDICT arm for a missed anchor and for a wrong plan line.** Every one of the 9 cases is red
+    by ≥1 mutant (3→M1,M7,M8 · 4→+M4 · 5→+M3 · 6→+M5 · 7,8→M2,M8 · 9→M9 · 10→M6 · 11→M8).
+    **Three mutants first read as MISMATCH and all three were the EXPECTATION's error, not the
+    mutant's** — M2/M6/M8 also red the block census because it pins those literals in source text, so
+    case 2 is coupled to them BY CONSTRUCTION; and M8 (revert the sentinel) reds 10 of 11 cases,
+    which is not an over-wide mutant but **the defect's true blast radius**. Restoration proven by
+    `diff -q` against the fixed copy plus a clean `git status --porcelain`.
+  - **Ledger attribution.** `LIVE_LAG=24` (inside the 25 budget), `LIVE_ADDS=37` — **not mine**:
+    `git diff --name-status 8d38fec34~1 8d38fec34` is `M`-only on both paths. `deploy-live.sh` still
+    correctly declines. The land's smoke gate CUT `tests/cc-notify.bats` at its 120 s budget
+    (exit 124, ZERO `not ok`) — the adjudicated non-verdict, not a red; the defence is that the suite
+    was run here first, green, with its `1..100` seen.
+
 - **2026-08-19 — drain recycle #45: the row's remedy was correct and its SCOPE was not — "closes
   every path that must type into an already-existing pane" is false for the busiest such path, where
   the fix is itself the hazard.** `master-fleet-footprint`
