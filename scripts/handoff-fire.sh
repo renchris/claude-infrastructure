@@ -2768,8 +2768,28 @@ _hf_custody() {
 # What is deliberately NOT a cannot-tell: an ABSENT or EMPTY record file. cc-notify appends one line
 # per successful enqueue, so with the store working, nothing recorded means nothing was sent. Keeping
 # that DEFINITE is what preserves the positive control — a genuinely silent peer must still be caught.
-sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-effort, always 0
+sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir [$4=unlanded-count $5=branch $6=trunk] → best-effort, always 0
   local pane="${1:-}" dir="${2:-}" mdir="${3:-}" stamp nb sent verdict rc
+  # ── COMMITTED ≠ LANDED, *ROUTED* (item 1b19ab3096d2, 2026-08-19) ──────────────────────────────
+  # The self-close preflight ALREADY computes this — the `⚠ self-close: N commit(s) … are NOT
+  # landed` warning — and then throws it away on the retiring pane's OWN stderr, which nothing
+  # survives to read. That warning's own comment says "it names the branch so the ping can carry
+  # it"; nothing carried it. A fact computed and not delivered is a fact nobody has (memory:
+  # conclusion-must-reach-the-enforcing-store).
+  #
+  # WHY IT IS A CLAUSE ON EVERY PATH RATHER THAN ITS OWN MESSAGE. The originator reads ONE message
+  # per retiring peer. A separate durability ping would be a second message about the same event,
+  # and the one the reader acts on is whichever arrives first — so the durability fact has to ride
+  # the message that is already authoritative, not compete with it.
+  #
+  # POLARITY. Empty unless there ARE unlanded commits, so an ordinary landed close says nothing and
+  # this clause carries information when it appears (memory: alarm-polarity-and-attention-budget).
+  # Defaults to 0 when unpassed, so every existing caller and test keeps its exact prior behaviour.
+  local ahead="${4:-0}" ubr="${5:-}" utr="${6:-}" uclause=""
+  case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+  if [ "$ahead" -gt 0 ]; then
+    uclause=" ⚠ COMMITTED ≠ LANDED: $ahead commit(s) on branch '${ubr:-?}' are NOT on ${utr:-the trunk} — that work exists on this machine only and retires with this pane. COLLECT IT (git fetch && git log ${utr:-origin/main}..${ubr:-<branch>}) or land it; do NOT read this retirement as a completed track."
+  fi
   [ -n "$pane" ] && [ -n "$dir" ] && [ -n "$mdir" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   stamp="$dir/$pane.json"
@@ -2817,6 +2837,19 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-eff
   fi
   if [ "$verdict" = sent ]; then
     echo "→ announce-before-retire: this pane pinged $nb — proceeding"
+    [ -n "$uclause" ] || return 0
+    # A PINGED peer is precisely the measured incident shape, which is why this arm exists at all.
+    # bs-footer-motion (2026-08-09) pinged completion TWICE and its own ping even said "not landed
+    # yet" — and the lead still read the track as complete. The peer's self-report is the channel
+    # that failed; the close path's `rev-list` is not a report, it is a measurement. So when work is
+    # unlanded the originator hears it from the close path REGARDLESS of the ping verdict. This is
+    # the only branch that speaks over a peer that did everything it was asked to.
+    if "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --mailbox-only "$nb" \
+         "HANDOFF-PING (auto, durability): peer $pane pinged you and is retiring NOW.$uclause" >/dev/null 2>&1; then
+      echo "→ announce-before-retire: unlanded-work announce delivered to $nb"
+    else
+      echo "⚠ announce-before-retire: unlanded-work announce to $nb FAILED — retiring anyway, but the originator has NOT been told its branch is unlanded." >&2
+    fi
     return 0
   fi
   if [ "$verdict" = unreadable ] || [ "$verdict" = legacy-record ]; then
@@ -2828,7 +2861,7 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-eff
       echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) could NOT BE READ — so whether it pinged is UNKNOWN, not answered. Announcing that, rather than accusing the peer of silence." >&2
     fi
     if "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --mailbox-only "$nb" \
-         "HANDOFF-PING (auto, status unverified): peer $pane is retiring NOW. Its send record could not answer whether it already pinged you, so its status is UNVERIFIED — this is NOT a claim that it stayed silent. Its work is committed (self-close refuses a dirty tree); check your inbox for an earlier ping from it before re-driving its work." >/dev/null 2>&1; then
+         "HANDOFF-PING (auto, status unverified): peer $pane is retiring NOW. Its send record could not answer whether it already pinged you, so its status is UNVERIFIED — this is NOT a claim that it stayed silent. Its TREE is clean (self-close refuses a dirty tree), which is not the same as LANDED; check your inbox for an earlier ping from it before re-driving its work.$uclause" >/dev/null 2>&1; then
       echo "→ announce-before-retire: unknown-status announce delivered to $nb"
     else
       echo "⚠ announce-before-retire: unknown-status announce to $nb FAILED — retiring anyway, but the originator has NOT been told." >&2
@@ -2837,7 +2870,7 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-eff
   fi
   echo "⚠ announce-before-retire: fired with --notify-back $nb but NO ping was ever sent from this pane. Announcing on its behalf so the originator is not left waiting on an event that never comes." >&2
   if "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --mailbox-only "$nb" \
-       "HANDOFF-PING (auto, unannounced retire): peer $pane is retiring NOW and never sent its own status ping. Its work is committed (self-close refuses a dirty tree), but you are getting this from the close path, not from the peer — so treat its status as UNREPORTED and check its branch/worktree yourself." >/dev/null 2>&1; then
+       "HANDOFF-PING (auto, unannounced retire): peer $pane is retiring NOW and never sent its own status ping. Its TREE is clean (self-close refuses a dirty tree), which is not the same as LANDED, and you are getting this from the close path, not from the peer — so treat its status as UNREPORTED and check its branch/worktree yourself.$uclause" >/dev/null 2>&1; then
     echo "→ announce-before-retire: auto-announce delivered to $nb"
   else
     echo "⚠ announce-before-retire: auto-announce to $nb FAILED — retiring anyway (a pane that cannot announce must still be able to retire), but the originator has NOT been told." >&2
@@ -6031,6 +6064,11 @@ MSG
   # SAME SUBJECT as the dirty guard, through the same accessor (item c5d25ebe630b). Two checks over
   # ONE population must not disagree about which population that is: left on $PWD, a remote close
   # would refuse on the husk's uncommitted work while warning about the DRIVER's unlanded branch.
+  # Captured into SCRIPT scope, not consumed inline: the announce below is the only consumer that
+  # reaches anyone else, and it runs ~30 lines later in this same block (item 1b19ab3096d2). Set
+  # unconditionally FIRST so the `set -u` read at the call site is total on every path — a trunk
+  # that cannot be resolved must render as "no claim", never as an unbound-variable abort of a close.
+  SC_UNLANDED_N=0 SC_UNLANDED_BR="" SC_UNLANDED_TRUNK=""
   if sc_git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     _sc_trunk="$(sc_git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
     [ -n "$_sc_trunk" ] || { sc_git rev-parse --verify -q origin/main >/dev/null 2>&1 && _sc_trunk="origin/main"; }
@@ -6038,7 +6076,9 @@ MSG
       _sc_ahead="$(sc_git rev-list --count "$_sc_trunk"..HEAD 2>/dev/null || echo 0)"
       case "$_sc_ahead" in ''|*[!0-9]*) _sc_ahead=0 ;; esac
       if [ "$_sc_ahead" -gt 0 ]; then
-        echo "⚠ self-close: $_sc_ahead commit(s) on $(sc_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?') are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
+        _sc_br="$(sc_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+        SC_UNLANDED_N="$_sc_ahead" SC_UNLANDED_BR="$_sc_br" SC_UNLANDED_TRUNK="$_sc_trunk"
+        echo "⚠ self-close: $_sc_ahead commit(s) on $_sc_br are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
       fi
     fi
   fi
@@ -6069,7 +6109,8 @@ MSG
   #
   # --no-notify opts out, matching the succession announce it sits beside. Best-effort throughout: a
   # close must never die on its own bookkeeping.
-  [ "$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+  [ "$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}" \
+    "${SC_UNLANDED_N:-0}" "${SC_UNLANDED_BR:-}" "${SC_UNLANDED_TRUNK:-}"
   # W2 CUSTODY: discharge the originator's open custody row for this fire — the marker on our own
   # stamp is the join key (the same one adoption proves identity by). Best-effort; a close never
   # dies on its bookkeeping, and a marker-less schema-1 stamp simply discharges nothing.
@@ -7511,7 +7552,15 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       printf '%s\n' '     land per the standing values). NEVER finish on a "say the word" / "heads-up" and sit'
       printf '%s\n' '     idle — that is the deference defect. A step that is GENUINELY the operator'"'"'s call is'
       printf '%s\n' '     surfaced in your ping, not a reason to idle.'
-      printf '%s\n' '  2. Then retire your OWN pane (work must be committed/clean — self-close refuses a dirty tree):'
+      printf '%s\n' '  2. LAND IT BEFORE YOU PING, AND PING BEFORE YOU CLOSE. Committed is NOT safe: a commit'
+      printf '%s\n' '     on your branch is visible to nobody but this machine, and it retires with this pane.'
+      printf '%s\n' '     Check `git rev-list --count origin/main..HEAD` yourself; if it is not 0, /ship it, or'
+      printf '%s\n' '     say so IN THE PING and name the branch so the originator can collect it. A ping that'
+      printf '%s\n' '     reads as done over an unlanded branch is the measured top loss class — it is how a'
+      printf '%s\n' '     lead reads a stranded track as a completed one.'
+      printf '%s\n' '  3. Then retire your OWN pane (self-close refuses a dirty tree, and WARNS — it does not'
+      printf '%s\n' '     refuse — on an unlanded branch; it now also tells your originator, so an unlanded'
+      printf '%s\n' '     close is loud rather than silent, never a substitute for landing it):'
       printf '%s\n' '       $HOME/.claude/scripts/handoff-fire.sh self-close --terminal'
       printf '%s\n' 'Report, finish the trivial tail, close. Do not wait idle for input that is not coming.'
     } >> "$PF_NB"
