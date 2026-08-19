@@ -1334,3 +1334,175 @@ BOOTSTAMP=202608132242    # the same instant, in touch's format
       CC_PANIC_LEDGER="$D/fz.jsonl" CC_SENTINEL_LOG="$D/s2.jsonl" bash "$S" --once
   jq -e '.kind == "freeze"' "$D/fz.jsonl" >/dev/null || false
 }
+
+# ── THE UNFREEZE ARM (master 477f0b771ec3) ────────────────────────────────────────────────────────
+# The actuator SIGSTOPs and, until this diff, nothing resumed. Measured 2026-08-19 on the live box:
+# 109 trips, 59 real SIGSTOPped events, zero SIGCONT senders in the tree. The kill site itself calls
+# SIGSTOP the reversible choice — so these cases exist to prove the reversal is real, and above all
+# that it CANNOT fire on a process this daemon did not freeze.
+#
+# STUBBING NOTE, and it is the reason this block has its own runner: `ps` is a real binary, so a
+# script in $STUB shadows it. `kill` is a bash BUILTIN — a PATH stub can NEVER shadow a builtin, and
+# a suite that put `kill` in $STUB would silently signal REAL pids while reading green. It is
+# intercepted as a shell FUNCTION inside the runner instead, which does take precedence.
+#
+# RED-PROOF: pre-fix, `release_frozen`/`record_frozen` are absent from lib.sh, so each case fails at
+# its explicit locator assertion. NO case carries `skip` — a skipped case renders as `ok` and would
+# make this whole block vacuous (memory: red-proof-fixture-must-not-call-the-subject).
+
+mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart" rows. A pid ABSENT from the map is gone.
+  PSMAP="$D/psmap"; printf '%s\n' "$1" > "$PSMAP"
+  FDB="$D/frozen.tsv"; : > "$FDB"
+  KILLLOG="$D/kill.calls"; : > "$KILLLOG"
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+pid=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-p" ]; then pid="$2"; shift; fi
+  shift
+done
+awk -F'\t' -v p="$pid" '$1==p {print $2}' "$PSMAP"
+SH
+  chmod +x "$STUB/ps"
+}
+
+ledger() { # <pid> <lstart> <kind> <frozen-at-epoch> <comm>
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$FDB"
+}
+
+# ANTI-VACUITY: every case calls this FIRST. If the arm is absent (pre-fix, or a refactor that
+# renames it) the case dies here with a named reason instead of asserting over nothing.
+have_arm() { # <fn>
+  grep -q "^$1() {" "$D/lib.sh" || false
+}
+
+run_rel() { # <now-epoch> <mode>
+  run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
+      HOLD_MIN_S="${HOLD_MIN_S:-60}" HOLD_MAX_S="${HOLD_MAX_S:-600}" \
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3"' \
+      _ "$D/lib.sh" "$1" "$2"
+}
+
+@test "unfreeze: the breach clearing after the minimum hold SIGCONTs the cohort" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026\n4002\tMon 18 Aug 04:00:01 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  ledger 4002 "Mon 18 Aug 04:00:01 2026" parent 1000 bash
+  run_rel 1100 clear                                  # age 100 >= HOLD_MIN_S 60
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "released=2 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-CONT 4002' "$KILLLOG")" -eq 1 ] || false
+  [ ! -s "$FDB" ] || false                            # ledger drained: nothing still owed
+}
+
+@test "unfreeze: mode=clear does NOT release inside the minimum hold, and keeps the row owed" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  run_rel 1030 clear                                  # age 30 < HOLD_MIN_S 60
+  [ "$output" = "released=0 held=1 stale=0" ] || false
+  [ ! -s "$KILLLOG" ] || false
+  # POSITIVE CONTROL: the identical ledger one tick past the minimum DOES release, so the silence
+  # above is the hold working rather than the runner failing to reach the signal at all.
+  run_rel 1061 clear
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
+}
+
+@test "unfreeze: PID REUSE — a mismatched lstart is dropped with NO signal (+ positive control)" {
+  have_arm release_frozen
+  # 4001 is alive but STARTED LATER than the ledger says: the pid was recycled onto a different
+  # process. Resuming it would SIGCONT an innocent third party — the one harm this arm can do.
+  mkcohort "$(printf '4001\tMon 18 Aug 09:99:99 2026\n4002\tMon 18 Aug 04:00:01 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  ledger 4002 "Mon 18 Aug 04:00:01 2026" proc 1000 node
+  run_rel 1100 clear
+  [ "$output" = "released=1 held=0 stale=1" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 0 ] || false   # the recycled pid: untouched
+  [ "$(grep -cF -- '-CONT 4002' "$KILLLOG")" -eq 1 ] || false   # control: the matched pid resumed
+}
+
+@test "unfreeze: a pid that is gone entirely is stale, never signalled" {
+  have_arm release_frozen
+  mkcohort "$(printf '4002\tMon 18 Aug 04:00:01 2026')"          # 4001 absent = process gone
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  run_rel 1100 clear
+  [ "$output" = "released=0 held=0 stale=1" ] || false
+  [ ! -s "$KILLLOG" ] || false
+}
+
+@test "unfreeze: mode=ceiling releases even while the breach is STILL live" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  run_rel 1700 ceiling                                # age 700 >= HOLD_MAX_S 600
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
+}
+
+@test "unfreeze: mode=ceiling HOLDS a fresh freeze — a live breach does not release early" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  run_rel 1500 ceiling                                # age 500 < HOLD_MAX_S 600, and still tripping
+  [ "$output" = "released=0 held=1 stale=0" ] || false
+  [ ! -s "$KILLLOG" ] || false
+}
+
+@test "unfreeze: mode=exit releases unconditionally, at age zero" {
+  have_arm release_frozen
+  # The daemon is going away. Without this the row's failure mode survives the fix: a restart would
+  # strand the cohort with the only record of the debt in a file nothing reads again.
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node
+  run_rel 1000 exit                                   # age 0 — below BOTH bounds
+  [ "$output" = "released=1 held=0 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
+}
+
+@test "unfreeze: the ledger is rewritten to EXACTLY the rows still owed" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026\n4003\tMon 18 Aug 04:00:03 2026')"
+  ledger 4001 "Mon 18 Aug 04:00:00 2026" proc 1000 node    # due
+  ledger 4002 "Mon 18 Aug 04:00:02 2026" proc 1000 node    # gone → dropped
+  ledger 4003 "Mon 18 Aug 04:00:03 2026" proc 1090 node    # too fresh → kept
+  run_rel 1100 clear
+  [ "$output" = "released=1 held=1 stale=1" ] || false
+  [ "$(wc -l < "$FDB" | tr -d ' ')" -eq 1 ] || false
+  [ "$(cut -f1 < "$FDB")" = "4003" ] || false
+}
+
+@test "unfreeze: record_frozen ledgers a live pid, and ledgers NOTHING for one already gone" {
+  have_arm record_frozen
+  mkcohort "$(printf '4001\tMon 18 Aug 04:00:00 2026')"
+  run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" \
+      bash -c '. "$1"; record_frozen 4001 proc node; record_frozen 4099 proc ghost' _ "$D/lib.sh"
+  [ "$status" -eq 0 ] || false
+  [ "$(wc -l < "$FDB" | tr -d ' ')" -eq 1 ] || false
+  [ "$(cut -f1 < "$FDB")" = "4001" ] || false
+  [ "$(cut -f2 < "$FDB")" = "Mon 18 Aug 04:00:00 2026" ] || false
+  [ "$(cut -f3 < "$FDB")" = "proc" ] || false
+}
+
+@test "unfreeze: BOTH real-kill sites ledger the freeze, and the observe branch ledgers nothing" {
+  # WHY THIS CASE IS STRUCTURAL AND THE OTHERS ARE BEHAVIOURAL. Everything above drives the arm
+  # directly, so a diff that DELETED `record_frozen` from a kill site would leave all nine green:
+  # the invariant lives in a call that is simply absent, and an absent token is invisible to every
+  # assertion about the function it would have called (memory: invariant-can-live-in-an-absent-token).
+  # A behavioural version would have to run the whole daemon with `kill` intercepted, and this
+  # suite's contract is that it never signals — `kill` is a builtin, so an escape there would signal
+  # REAL pids. So this asserts the WIRING and says so: it proves both sites call the recorder and
+  # that the observe branch does not, not that the recorder then behaves (cases above own that).
+  actuator="$(sed -n '/ACT_PARENT" = "on"/,/parent-break none/p' "$S")"
+  [ -n "$actuator" ] || false                      # ANTI-VACUITY: the anchor still matches
+  # Both REAL kill sites, each on the branch that actually signalled (`elif kill -STOP`).
+  [ "$(printf '%s\n' "$actuator" | grep -cF 'record_frozen "$ppid" parent')" -eq 1 ] || false
+  [ "$(printf '%s\n' "$actuator" | grep -cF 'record_frozen "$spid" proc')" -eq 1 ] || false
+  [ "$(printf '%s\n' "$actuator" | grep -cF 'record_frozen')" -eq 2 ] || false
+  # NEGATIVE + its control: observe computes the whole selection and signals nothing, so it must
+  # ledger nothing — a debt recorded for a freeze that never happened would SIGCONT a stranger.
+  obs="$(printf '%s\n' "$actuator" | grep -A2 'ACT" = "observe"')"
+  [ -n "$obs" ] || false                           # control: the observe branch is still there
+  [ "$(printf '%s\n' "$obs" | grep -cF 'record_frozen')" -eq 0 ] || false
+}
