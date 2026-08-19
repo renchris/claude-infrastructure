@@ -37,6 +37,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-19 | `ce7651b02a17` | `doc_classifier` | label-foreign — **the guard already fires from here and cannot fire there** (§ SEVENTH) |
 | 08-19 | `21e2c1088736` | `reso-management-app` | label-foreign — **decision-class**: route-by-project would not have finished it either (§ below) |
 | 08-19 | `38de29ec5e59` | `doc_classifier` | label-foreign — **third cloud burn of the same item**, 2 days after the row above (§ SIXTH OCCURRENCE) |
+| 08-19 | `38de29ec5e59` | `doc_classifier` | label-foreign — **third burn of the same item**, and the first fired *after* its disproof was on trunk (§ THIRD BURN below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -1265,3 +1266,89 @@ was never readable from this session. Its DoD and falsifier are already written
 surface set — read the grouping before opening a diff). The falsifier is one command and it is
 unrunnable here for the strongest possible reason: there is no `doc_classifier` tree, stale or
 otherwise.
+# THIRD BURN of `38de29ec5e59` — 2026-08-19, the first one fired *after* its own disproof was on trunk
+
+*Appended from inside that VM. The class, its cause, this item's premise and its supersession are all
+settled above and none is re-derived. **One** fact here is new, and it is about the remedy, not the item.*
+
+**2026-08-19.** The same item, the same project, the same one attached repository
+(`renchris/claude-infrastructure`), the same brief — `/Users/chrisren/Development/doc_classifier`,
+DoD ref `pipeline/backbone/port/build.py#L125`. Third actuator-burn on one row (08-11 `handoff-fire`
+cloud leg, 08-17 `--venue cloud`, 08-19 `--venue cloud`), still **zero turns of work on its subject**.
+
+## The new fact: writing the disproof to trunk did not stop the re-fire
+
+The 08-17 section chose its channel deliberately — *"a cloud VM's only durable channel to the desk is
+the branch it pushes; this file is the notification"* — and paired it with an operator action, a
+manual `cc-backlog block` run on the Mac. Two days later that section is **on `origin/main` and this
+VM read it**, and the item fired anyway. So this occurrence measures the remedy of record end-to-end:
+
+| what the 08-17 section did | what it bought |
+|---|---|
+| wrote the confirmed premise + refuted supersession to trunk | this session skipped straight to disposition — real, and the reason nothing above is re-derived |
+| recommended `cc-backlog block 38de29ec5e59 --needs …` (operator, on the Mac) | **not run** — the row was still dispatch-eligible on 08-19 |
+
+That is the same self-refuting shape the 08-15 disproof hit (§ the UNDERCOUNTED note above:
+*"nothing in the dispatch chain reads plan prose"*), now observed on the file that recorded it. The
+disproof is durable for a **reader**; it is inert for the **dispatcher**. A remedy whose stop-arm is
+a human command has a latency, and this row prices it at **≥2 days and one additional burn**.
+
+🚨 **This bears on the open (a)/(b) decision** and is the only thing here that should move it. Both
+options in `cloud-venue-project-repo-mismatch-2026-08-16.md` §3 sit at the fire; the *interim*
+protection everyone has relied on instead — park the row by hand — is the arm just measured failing.
+It argues for **(a) fail closed at the fire**, which needs no human in the loop per row, over any
+disposition that keeps depending on the park being run. Nothing else about §3 is reopened.
+
+## Re-measured from inside this session
+
+Recorded because a two-day-old measurement of a *fire path* is a claim, not a fact:
+
+| what | value | vs 08-17 |
+|---|---|---|
+| `HEAD..origin/main` | **0** — this VM *is* at `claude-infrastructure` trunk | same |
+| clone | 50 commits, `.git/shallow` present | same |
+| `bin/cc-offload:84` on trunk | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` | **byte-identical — no guard has shipped** |
+| `git log --since=2026-08-17 origin/main -- bin/cc-offload cc-eligible cc-venue cc-dispatch` | one commit, `e1b0bb80` (link-parity/skills-wall) | unrelated to the venue pair |
+| `scripts/dispatch-projects.conf` | still lists `doc_classifier repo=~/Development/doc_classifier` | same — **a fourth fire is not prevented** |
+| `/Users`, `~/Development`, any `doc_classifier` checkout, `backbone/port/build.py` | absent (`find /` → 0 hits) | same |
+| GitHub scope | `renchris/claude-infrastructure`, one repository | same |
+| `bats` / `shellcheck` | **both ABSENT** (`jq`, `python3` present) | same — the shell gate still cannot run here |
+
+## Rails — reproduced a third time, with exit codes
+
+```
+$ cc-backlog done 38de29ec5e59 --evidence "…"
+cc-backlog done: unknown id 38de29ec5e59                                    # rc 0
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 reason=role-unset                # rc 0
+```
+
+`~/.claude/autonomy/` does not exist here, so both **exit 0 while doing nothing**. **The ledger was
+NOT updated by this session and must not be reported as such** — the operator command below is still
+outstanding, and its being outstanding is this section's subject.
+
+## Operator action — unchanged, and now the thing being measured
+
+```
+cc-backlog block 38de29ec5e59 --needs "re-dispatch to a session that can reach renchris/doc_classifier — a local claim, or a cloud fire whose attached git_repository source IS doc_classifier; premise CONFIRMED and supersession by 71258c80fce2 REFUTED (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § FIFTH OCCURRENCE); THIRD session burned on this item"
+```
+
+Still `block`, not `reopen`, and not `done`: nothing about `build.py` changed, and marking it done
+would be false. The fix itself remains specified and unstarted at `OUT-docclf.md:154-164` (cluster
+**M-P-2**, item 4 of 5 — read the grouping before opening a diff; two of the five conflict if done
+separately), with the falsifier a worker in the right venue runs:
+
+```
+git show origin/main:pipeline/backbone/port/build.py | sed -n '116,140p' | grep -q -- --require-hashes
+```
+
+## Not fixed here — same three refusals, one of them now sharper
+
+`bats` and `shellcheck` are absent, so a shell change to the fire path cannot be gated; `bin/cc-eligible`'s
+`OFFBOX_LANE` holds that a session this lane created cannot verify a change to the lane; a shallow
+50-commit clone cannot adjudicate its own admission. Sharper this time: (a) and (b) are an **open
+operator decision**, so a VM implementing either would not be fixing a specified bug, it would be
+choosing for the operator — inside the very fire path that dispatched it, ungated. The escalation
+above is offered *to* that decision, not as a substitute for it.
+
+**No claim is made about `build.py`.** It was not readable from this session either.
