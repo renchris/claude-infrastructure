@@ -442,6 +442,39 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   pend="$(mailbox_pending_count "$_ouid" 2>/dev/null || echo 0)"
   case "$pend" in ''|*[!0-9]*) pend=0 ;; esac
 
+  # ── HEADLESS: this session has no terminal, so a WATCHER is not its wake path (F6 of
+  #    docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md, test T16) ────────────
+  # A pane session is woken by an armed cc-await-ping whose EXIT rides the harness's task-completion
+  # notification back into the model. A resident `--input-format stream-json` agent has no such
+  # boundary: its only turn boundary is a WRITE TO ITS STDIN, which is what `bin/cc-wake-headless`
+  # performs against the fifo `bin/cc-pane-headless` spawns it on. Blocking such a session's Stop
+  # therefore demands a continuation the substrate cannot produce, and the measured outcome is not a
+  # nag but a DEATH: `Error: Input must be provided`.
+  #
+  # THE DISCRIMINATOR IS THE WRITER'S ENV, NOT THE ADDRESS'S SHAPE. The spec wrote this abstain as
+  # "pane-less", i.e. an EMPTY id — and the `_ouid` guard at the top of this function already returns
+  # on that. But gap 1 did not land the empty-pane fallthrough it prescribed: `cc-pane-headless:124`
+  # mints `hdl-<16hex>` and `:197` exports it as CC_PANE_ID, so a headless session reaches here with a
+  # perfectly ordinary NON-EMPTY address and sails past that guard. The property held; the prescribed
+  # diff never landed. So the test cannot be emptiness, and it must not be the `hdl-` prefix either:
+  # `hooks/session-register.sh:134-145` states in terms that reading the surface off an id's SHAPE is
+  # "the exact mistake", because only the writer knows it. This hook RUNS IN the writer's own
+  # environment, so it can use that file's predicate verbatim rather than re-deriving it — the same
+  # expression, at the one other site that needs the same answer.
+  #
+  # Placed with the other abstains, BEFORE the state-file write: an abstain must never consume a
+  # budget attempt. And it is not silent when it costs something — with mail actually pending it
+  # names the count and the primitive that delivers it, because a floor that stands down quietly over
+  # unread mail is the silent-cap defect.
+  if [ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ]; then
+    printf 'session-continue: wake floor ABSTAINS (pane-less session — its wake is the spawner stdin write, not a watcher).\n' >&2
+    if [ "$pend" -gt 0 ]; then
+      jq -nc --arg m "ℹ Wake floor stood down (pane-less session — a watcher is not its wake path), but ${pend} message(s) are unread in this session's inbox. A headless session has no next turn to drain on: something must call cc-wake-headless ${_ouid} to give it one." \
+        '{systemMessage:$m}' 2>/dev/null || true
+    fi
+    return 0
+  fi
+
   # ── FOURTH STATE: a LIVE /goal ⇒ the goal IS the wake path, and the watcher would DISABLE it ─────
   # CC deletes the /goal Stop hook at any Stop where a non-terminal background Bash exists, then
   # silently restores it (measured on 2.1.220 — docs/research/goal-in-handoff-2026-08-08.md
