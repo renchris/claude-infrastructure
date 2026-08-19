@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #41: both rows were blocked on a question already answerable — one
+  from disk, one by running the thing for ninety seconds — and both measurements REMOVED work
+  rather than adding it.** `master-fleet-footprint` **16 open / 4 blocked (4 operator-gated,
+  `source: needs`; 0 cloud-venue, 0 claimed, no stale claim)**. Property re-measured at intake:
+  17/17 open were `venuePlan=local` AND `project=claude-infrastructure`. **filed 0 / closed 1.**
+  Landed `c88d31f18` (R-7 answered) + `7c10fb998` (E11 resolved) + this entry. Date checked first:
+  2026-08-19, so `62363cac1e39` (due ~2026-08-24) was correctly still not drainable — **it is now
+  ~5 days out and is the next recycle's best pick if the date has passed.**
+  - **`f6cc5c79885b` (R-7) — CLOSED. The census it said did not exist was always derivable, and the
+    build it was going to justify is refuted by the number it would have produced.** #38 argued a
+    live-settings PostToolUse match-all counter was the only route to a fleet figure; #39 killed the
+    "structurally absent population" that justified it. Re-derived directly: **352,926 tool calls
+    over 6,997 files / 9.46 GB**, four stores deduped by realpath. Windowed to
+    `bash-execution.log`'s own span so numerator and denominator share one window — the span
+    mismatch R-7 itself names — **28,400 all-tool / 20,778 Bash / 7,622 non-Bash (26.84%),
+    ALL/Bash = 1.3668x**, cross-validated against that independent instrument at **98.6%**, with
+    **234 of 234** log sessions carrying a transcript. Full record: `HOOK_CHAIN_COST.md` §5.3.
+  - 🚨 **DEDUPE IS LOAD-BEARING, AND ENUMERATING THE FOUR ROOTS IS NOT ENOUGH.** 368,278 raw
+    occurrences against **353,270 distinct** tool_use ids — 15,008 redundant (4.08%) — and **6,118
+    of the 6,912 repeated ids appear in more than one STORE**: the same session `.jsonl` exists
+    under two account roots, because the transplant path (limit-recover) writes a session into a
+    second account. A four-store census that does not dedupe on the `toolu_` id over-counts ~4%,
+    and a session count taken per-root double-counts every transplanted session. This is the direct
+    successor to #39's root-enumeration lesson: the roots were necessary, not sufficient.
+  - 🚨 **THE BIGGEST MATCH-ALL HOOK HAD NEVER BEEN PRICED, AND THE THREE ARE ALREADY MATCH-ALL.**
+    In `settings.json`, `teammate-checkpoint.sh`, `cc-permission-beacon.sh clear` and
+    `mailbox-drain.sh post-tool` all carry `matcher: ""` — only `log-bash` and `waiting-recycle` are
+    `Bash`-scoped. So §2.3's "PostToolUse/Bash — 4 hooks" priced them *on a Bash call* and their
+    firing on the other 26.84% of tool calls was in no total. Measured per-call (abstain path, 40
+    iterations, load ~15, null control `/usr/bin/true` = 2.65 ms): teammate-checkpoint **18.90 ms**
+    (63% below §2.3's 51.57 — M3 landed and works, measured independently of the commit claiming
+    it), cc-permission-beacon **14.78 ms** against §2.3's published **14.76** — Δ 0.02 ms, which is
+    the **positive control on the timing method** — and **mailbox-drain 72.58 ms, never measured
+    anywhere, 68.3% of the 106.26 ms chain.** The largest term was the unmeasured one.
+  - **The decision that closes it:** per-hour cost is **0.147% of the 10-core box at the mean**,
+    0.360% at p95; the part a Bash-only census structurally cannot see is **0.0395%**. So the
+    counter is **rejected**, not merely unnecessary — it would report four hundredths of one
+    percent, and being itself a match-all hook it would fire on all ~498 calls/h and cost the same
+    order as the term it reports. Residue named: all per-call figures are the **abstain** path.
+  - **`5d1b5dd9b3db` — E11/Q1 SETTLED BY RUNNING ONE; row LEFT OPEN, claim RELEASED.** The spec
+    said resolve by measurement, never by guess, and nobody had. Two headless sessions were run on
+    the running 2.1.220 binary, each with no controlling terminal (`ps -o tty=` → `??`): a resident
+    `-p --input-format stream-json` with stdin held on a FIFO (pid 56890), and a plain one-shot
+    `-p` (pid 4459). **Both got a session file, keyed on pid exactly as `sessions_file_for`
+    expects, and both read `kind:"interactive"` with `entrypoint:"sdk-cli"`.** So
+    `cc-reconcile`'s `[ "$kind" = "interactive" ]` **already admits a headless session** — E11 had
+    nothing to accept and is struck from the diff. **The discriminator is `entrypoint`, not
+    `kind`**, which does not vary with headlessness at all.
+  - 🚨 **A POPULATION WITH NO MEMBER OF THE CLASS CANNOT REPORT WHAT THAT CLASS WOULD GET.** The
+    spec's 9 live rows all read `interactive` — re-measured here, **14 rows across 4 distinct
+    `sessions/` dirs, still all `interactive`** — and that sample was consistent with *every*
+    hypothesis, because every live session is an interactive pane. Only running one could
+    discriminate. Row stays OPEN: gap 1 (E1-E15 minus E11), gap 2 (F1-F7), and E7's rc-3
+    `no-watcher-headless` verdict all remain, and **Q2 — does `asyncRewake` synthesise a turn under
+    `stream-json` — is now the question actually gating gap 2.**
+  - **Two candidates checked and REFUTED, so #42 need not re-derive them.** (i) `d4fa449e3895` was
+    flagged by #40 as the most plausible untested close; it is **genuinely open**. Its falsifier
+    exits 1 (a real verdict, not blindness — instrument and plan both present). Every section reads
+    PENDING, which looks like a blind classifier, but the vocabulary hypothesis is refuted: only
+    **4 files / 6 headings** fleet-wide use `IMPLEMENTED`/`RESOLVED`/`LANDED` against 27 with a
+    bounded `DONE`, and the plan carries explicit "Residue — named, not absorbed" sections plus a
+    `⛔ NOT LIVE` one, so a perfect classifier would still exit 1. (ii) `e78107996dea` is **not
+    closeable yet and the reason is structural**: #40's `argv0` field reads **0/3 on every row** of
+    `capacity-alarm.jsonl` because the live copy symlinks into the shared checkout, which is behind
+    (`LIVE_LAG=5`, `LIVE_ADDS=0` — within budget). **The instrument cannot accumulate until the
+    converger runs**, so that row's close path is gated on convergence, not on more analysis.
+  - **Recorded here rather than filed (conservation).** The E11 land's stranded-sweep returned
+    **NO VERDICT** on `docs/gc-cpu-vs-session-ceiling` (`git cherry` exit 128, unknown commit) under
+    a headline attributing it to this session. Diagnosed, not assumed: the ref resolves **nowhere**
+    — not locally, not on origin, not in the shared checkout — and the head count fell **1,813 →
+    1,796 within minutes**, so a sibling deleted the branch between the sweep's `for-each-ref`
+    enumeration and its `git cherry`. A benign TOCTOU under 14 concurrent sessions, and the sweep
+    reports it honestly as an abstain rather than a false clean. `--mine` confirmed **0
+    own-session drops**. No row: the instrument behaved correctly.
+
 - **2026-08-19 — drain recycle #40: the fleet's 150 multi-GB `claude.exe` events were the binary's
   own embedded grep, and the instrument that named them is the only one of three that cannot say so.**
   `master-fleet-footprint` **17 open / 4 blocked (4 operator-gated, `source: needs`; 0 cloud-venue,
