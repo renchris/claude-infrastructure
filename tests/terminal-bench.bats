@@ -262,6 +262,66 @@ STUB
   [[ "$output" == *"verdict=OK"* ]] || false
 }
 
+# ── --pid: two instances of one app must not share a bucket (added 2026-08-18) ─────────────────────
+# THE BUG THESE PIN. kCGWindowOwnerName is the APP's name, so a box running two instances of one app
+# produced ONE row whose window/onscreen/Mpx columns were the SUM of both and whose `pid` column was
+# whichever window happened to be enumerated last. Measured 2026-07-31: a bake-off arm's fresh kitty
+# and the operator's live 30-pane kitty merged into a single row reading win=36, so "one window each"
+# — the actual question — could not be checked, and the number looked entirely ordinary.
+#
+# The two arms are not redundant. Arm 1 pins the DEFECT (an unknown flag is silently ignored, so the
+# tool answers a question nobody asked and calls it OK). Arm 2 pins the POSITIVE path, and exists to
+# catch a fix that satisfies arm 1 by making --pid always report NO-DATA — which would pass arm 1
+# while destroying the only reason the flag exists.
+
+@test "census: --pid on a process that owns no windows is NO-DATA, not the whole desktop" {
+  command -v swiftc >/dev/null || skip "swiftc unavailable — control cannot run, so it must not pass"
+  local bin="$BATS_TEST_TMPDIR/wc"
+  swiftc -O "$CENSUS_SRC" -o "$bin" 2>/dev/null || skip "swiftc could not build the census"
+  # A sleep owns no windows by construction, so this needs no desktop and cannot flake on layout.
+  sleep 120 &
+  local windowless=$!
+  run "$bin" --pid "$windowless"
+  kill "$windowless" 2>/dev/null || true
+  # PRE-FIX this exits 0 with verdict=OK and every owner on the box, because an unrecognised flag is
+  # ignored rather than refused — the silent-wrong-subject failure this whole suite is about.
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"verdict=NO-DATA"* ]] || false
+  if printf '%s\n' "$output" | grep -q "verdict=OK"; then
+    echo "--pid was IGNORED: the tool censused the whole desktop for a windowless pid" >&2
+    false
+  fi
+}
+
+@test "census: --pid keys the row on the PROCESS, so one instance cannot absorb another" {
+  command -v swiftc >/dev/null || skip "swiftc unavailable"
+  local bin="$BATS_TEST_TMPDIR/wc"
+  swiftc -O "$CENSUS_SRC" -o "$bin" 2>/dev/null || skip "swiftc could not build the census"
+  # Bootstrap the subject from the tool's own full census rather than naming an app that may not be
+  # running: take the busiest owner, then ask for that pid alone.
+  run "$bin" --tsv
+  if [ "$status" -eq 3 ]; then skip "no window server in this context (headless runner)"; fi
+  [ "$status" -eq 0 ]
+  local target
+  target="$(printf '%s\n' "$output" | awk 'NR==2{print $2}')"
+  [ -n "$target" ]
+  run "$bin" --pid "$target" --tsv
+  [ "$status" -eq 0 ]
+  # Exactly ONE data row (excluding the header and the trailing verdict line). PRE-FIX this is every
+  # owner on the box — 37 rows when this case was written.
+  local rows
+  rows="$(printf '%s\n' "$output" | grep -cvE '^owner\b|^verdict=' || true)"
+  [ "${rows:-0}" -eq 1 ]
+  # …and it is keyed on the pid that was asked for, not on the app name alone.
+  local rowpid
+  rowpid="$(printf '%s\n' "$output" | grep -vE '^owner\b|^verdict=' | awk '{print $2}')"
+  [ "$rowpid" = "$target" ]
+  if printf '%s\n' "$output" | grep -vE '^owner\b|^verdict=' | grep -qv "#${target}"; then
+    echo "row is not keyed Name#pid — two instances of one app would still merge" >&2
+    false
+  fi
+}
+
 # ── the constant-layout PRECONDITION (added 2026-07-31) ───────────────────────────────────────────
 # THE BUG THESE PIN. The 2026-07-31 22:17Z 30-minute kitty run returned `verdict=OK` and its
 # +10 ports/hr is unusable: the window census fell 36 → 19 while the interval held. `verdict=OK`

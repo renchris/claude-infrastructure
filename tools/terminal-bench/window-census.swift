@@ -80,6 +80,17 @@ let wantTSV = args.contains("--tsv")
 var ownerFilter: String? = nil
 if let i = args.firstIndex(of: "--owner"), i + 1 < args.count { ownerFilter = args[i + 1] }
 
+// --pid GROUPS BY PID INSTEAD OF BY OWNER NAME, and it exists because grouping by name is wrong
+// whenever two instances of one app are running. kCGWindowOwnerName is the APP's name, so a box
+// with two kitty processes produces ONE row whose window count, onscreen count and Mpx are the SUM
+// of both, and whose `pid` column is whichever window happened to be enumerated last. Measured
+// 2026-07-31: a bake-off arm's fresh kitty and the operator's live 30-pane kitty merged into a
+// single row reading win=36, so "one window each" could not be checked at all — and the number
+// looked entirely ordinary. With --pid, every row is keyed on the process the caller actually
+// means, and the app-name column is retained only for legibility.
+var pidFilter: Int? = nil
+if let i = args.firstIndex(of: "--pid"), i + 1 < args.count { pidFilter = Int(args[i + 1]) }
+
 // .optionAll = every window the server knows about, including windows that are not on screen.
 // Restricting to .optionOnScreenOnly here would structurally hide the exact defect this tool exists
 // to catch, so the option is deliberately not configurable.
@@ -93,10 +104,14 @@ guard let raw = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[St
 var byOwner: [String: OwnerStats] = [:]
 
 for w in raw {
-    let owner = (w[kCGWindowOwnerName as String] as? String) ?? "(unknown)"
+    let wpid = (w[kCGWindowOwnerPID as String] as? Int) ?? 0
+    if let pf = pidFilter, wpid != pf { continue }
+    let appName = (w[kCGWindowOwnerName as String] as? String) ?? "(unknown)"
+    // Key on pid when a pid was asked for, so two instances of one app cannot share a bucket.
+    let owner = pidFilter != nil ? "\(appName)#\(wpid)" : appName
     var s = byOwner[owner] ?? OwnerStats()
 
-    s.pid = (w[kCGWindowOwnerPID as String] as? Int) ?? s.pid
+    s.pid = wpid != 0 ? wpid : s.pid
     s.windows += 1
     if let layer = w[kCGWindowLayer as String] as? Int { s.layers.insert(layer) }
 
@@ -140,6 +155,12 @@ for (name, s) in byOwner.sorted(by: { $0.value.windows > $1.value.windows }) {
 if ownerFilter != nil && byOwner[ownerFilter!] == nil {
     // An absent owner is a real answer (the app is not running) and must not read as a clean zero.
     FileHandle.standardError.write("window-census: owner '\(ownerFilter!)' has no windows tracked\n".data(using: .utf8)!)
+    print("verdict=NO-DATA")
+    exit(3)
+}
+if let pf = pidFilter, byOwner.isEmpty {
+    // Same rule for a pid: "that process owns no windows" is a finding, never a clean zero row.
+    FileHandle.standardError.write("window-census: pid \(pf) has no windows tracked\n".data(using: .utf8)!)
     print("verdict=NO-DATA")
     exit(3)
 }
