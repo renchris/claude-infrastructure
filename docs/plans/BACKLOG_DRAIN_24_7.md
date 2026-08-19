@@ -87,6 +87,78 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-18 — drain recycle #28: the guard was real, and every artifact a human reads ignored it.
+  `master-fleet-footprint` 30 open / 4 blocked (4 operator-gated, `source: needs`; 0
+  cloud-venue, 0 claimed). filed 0 / closed 1.**
+  Land `904bacdcc`, content-verified on origin/main.
+  - **Re-measured rather than inherited, and the inheritance held.** 31 open at intake, **31/31
+    `venuePlan=local` AND `project=claude-infrastructure`** — the property #27 established is still
+    true, so the lane needed no re-derivation. `master-session-lifecycle`'s `62363cac1e39` (efficacy
+    re-census, due **2026-08-24**) was checked against today's date and is **not yet drainable**;
+    #29 should check it first, since on or after the 24th it outranks anything in fleet-footprint.
+  - **Built `6e1361f39202` — `auto_revert` refused the orphaned culprit; the page, the durable
+    backlog row and the peer ping all went on naming it anyway.** The guard landed 9795ec7b and
+    logs `reason=culprit-not-in-trunk`, but it runs at the BOTTOM of `red_actions` and all three
+    human-facing artifacts are written ABOVE it. So the fix was real and *invisible*: the operator
+    was handed a sha to act on that the code one screen below had already ruled un-actionable.
+    Measured 2026-08-09 (item a31d1fe3de3d): culprit 57e162494c10, not an ancestor of origin/main,
+    patch on trunk as 28949c7b with five commits on top. 2 of 9 all-time revert markers carry
+    non-ancestor culprits. Cause is the land-lane race — target captured at entry, corpus runs ~1h,
+    a rebase-land inside that window rewrites the shas.
+    - **EXTRACTED the predicate, did not copy it** — the row's own FIX clause said so and
+      `make-the-actuator-the-arbiter` is why. `trunk_state()` is now the single arbiter; `auto_revert`
+      calls it with **both log tokens and the fetch byte-identical**, which is what makes the
+      pre-existing **C20** (a real revert lands) and **C31** (orphan refused) the extraction's own
+      controls rather than tests I had to write.
+    - **THREE answers everywhere, never two.** `trunk`/`orphan`/`blind`, and for the twin
+      `<sha>`/`none`/`blind`. A `blind` instrument renders exactly today's plain line and adds NO
+      claim — refusing to accuse a sha of being orphaned on evidence we could not obtain is the same
+      discipline `no-trunk-ref` already encoded one layer down (`lookup-miss-is-not-absence`,
+      `probe-that-acts-on-absence-must-confirm-presence`).
+    - **`patch_twin()` names the operator's real next move.** Naming the orphan alone hands back a
+      dead end; the actionable fact is "act on the twin". A rebase-land preserves the patch and
+      changes the sha, so the twin is located by **patch-id** and never by sha or tree — which is
+      exactly why `--is-ancestor` is the discriminator and patch-id the locator. ONE fork pair for
+      the whole window (`git log -p` emits its own commit headers and `patch-id` attributes each
+      diff back to them), bounded by commits (120) and seconds (60).
+    - 🚨 **The locator was positive-controlled against the REAL repo before being trusted** — a
+      known trunk commit's own patch-id resolved back to itself. `control-must-replay-the-real-artifact`:
+      a locator proven only inside its own fixture proves the fixture.
+  - **The row's stored falsifier CANNOT green on the remedy the row prescribes.** It greps
+    `red_actions` for a literal `is-ancestor` — i.e. for exactly the re-implementation the row's own
+    FIX clause forbids. Measured against a **pristine origin/main worktree**, that spelling and
+    `trunk_state` both read 0, so it was a true pre-fix RED and is now a permanent false negative.
+    **Not rewritten**: a rewritten probe on a row that closes with the same change is unfalsifiable
+    ceremony, and narrowing a falsifier so one's own row can close is the move this chain forbids.
+    Named in the commit body instead, where a future re-file will look
+    (`work-item-citation-refutes-its-own-remedy`, `control-calibrated-to-implementation-decays`).
+  - **Red-proof: C34 + C35, 5 mutants one-per-SITE, 5/5 red their named case, 0 weak.** C34 reuses C31's own `orphan_culprit_bats()` fixture —
+    one race, two consumers — so the orphan is produced by the REAL land-lane shape rather than a
+    hand-set flag; its twin is minted as the culprit's own tree on the culprit's own parent, which
+    is what makes it prove the *locator* and not merely the orphan half. **C35 is the too-wide
+    control**: an over-firing guard would satisfy every C34 claim while telling the operator not to
+    act on perfectly actionable shas, and C20 could not catch that because it never reads the page
+    text. Both carry a `NO VERDICT` control, because every claim lives on the convicted branch and
+    an abstained run would satisfy them vacuously.
+  - 🚨 **NOT independently pinned, and said so rather than implied:** the peer-ping rendering. It
+    rides the same computed `$orphan` guard as the other two, but no test in this suite asserts
+    `cc-notify.argv` and `author_sid` does not resolve in the fixture. Covered by construction, not
+    by assertion — the #27 lesson about a comment overclaiming what the code does, applied to a
+    close instead of a comment.
+  - **Instrument note for #29 — the cheap anchor half paid for itself again.** The mutation harness
+    validates every anchor BEFORE paying for a single suite run; the first firing aborted on a stale
+    M4 anchor (mangled by shell quoting of an `awk` fragment) having spent nothing. Under this box's
+    load (~10-15, the live postland daemon sweeps concurrently) each case-run is ~5 min, so a
+    7-run proof is ~35 min — background it and do read-only work, and never edit the subject while
+    it runs.
+  - **The land's own smoke gate abstained, correctly, and #29 should read it the same way.**
+    `tests/cc-reaper.bats` was CUT by the 120s smoke budget — exit 124, **ZERO `not ok`** — and the
+    gate says so in its own words: *"It is NOT a red and NOT evidence about your tree"*, land
+    PROCEEDS with `smoke:"partial"`. That is a BOUND firing under a loaded box, not a verdict about
+    the diff, and it is a suite this change does not touch (`timeout-rc-collides-with-the-childs-own-rc`,
+    `bound-must-fit-the-band-not-the-bench`). Do not chase it, and do not launder it into a green
+    either — the gate already named which it is.
+
 - **2026-08-19 — drain recycle #27: the briefed effort was UNDRAINABLE BY CONSTRUCTION, so the pass
   switched on one measurement and drained `master-fleet-footprint` 35 → 31 open / 4 blocked (4
   operator-gated, `source: needs`; 0 cloud-venue, 0 claimed). filed 0 / closed 4.**
