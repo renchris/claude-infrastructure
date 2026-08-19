@@ -138,7 +138,7 @@
 #   (exact, cc-registry, LIVE rows) -> raw pane UUID passthrough -> unambiguous UUID PREFIX (>=8 hex
 #   — what `--list` prints) -> --self; then the forward chain.
 # Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, IT2_BIN,
-#   CC_IT2_TIMEOUT_S, CC_CLOUD_BIN, CC_CLAUDE_BIN, CC_CLOUD_STATE.
+#   CC_IT2_TIMEOUT_S, CC_CLOUD_BIN, CC_CLAUDE_BIN, CC_CLOUD_STATE, CC_WAKE_BIN.
 # bash 3.2-safe. Exit: 0 = enqueued (delivered to a live inbox, OR mailbox-only to a not-live/unknown-
 #   liveness target, possibly rerouted — stderr says which); 2 = usage; 3 = target genuinely UNKNOWN
 #   (the registry was readable and holds no such name/uuid; incl. a missing/empty --role file, and an
@@ -251,6 +251,9 @@ REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 # Rows are "<name>\t<pid>\t<paneUUID>". REG_RC: 0 = read OK (a miss is then a REAL unknown target),
 # 1 = the registry could not be read (a miss means NOTHING — that is exit 4, never exit 3).
 REG_ROWS=""; REG_RC=-1
+# The surface of the registry row target_live() last matched: "pane" | "headless". Initialised here
+# because this file runs under `set -u` and the wake branch reads it whether or not a row was hit.
+TARGET_SURFACE="pane"
 registry_load() {
   [ "$REG_RC" -ge 0 ] && return "$REG_RC"      # parse once per invocation
   local f any=0 out
@@ -263,8 +266,29 @@ registry_load() {
   # Fast path: ONE jq over the whole set. A single corrupt row fails `jq -s` wholesale, which would
   # turn one bad file into a total resolver outage — so fall back to per-file parsing (N forks, but
   # only ever on the degraded path) and simply skip the rows that will not parse.
+  # 🚨 NO COLUMN MAY BE EMPTY, AND THAT IS A LAW ABOUT `read`, NOT A STYLE CHOICE. TAB is an IFS
+  # *whitespace* character, so `IFS=<tab> read` COLLAPSES RUNS OF IT: a row whose `lstart` is empty
+  # emits "<name>\t<pid>\t<uuid>\t\t<surface>" and `read -r n p u lst sfc` binds lst="<surface>" and
+  # leaves sfc empty — every column after the empty one shifts left by one, silently.
+  #
+  # MEASURED 2026-08-19, and it is why lstart now defaults to "-" rather than "". Adding `surface`
+  # after `lstart` (which is absent on 5 of 15 live rows) turned that latent collapse into an ACTIVE
+  # one: pid_live() received "pane" as the expected start time, no live row ever matched, and every
+  # peer — pane and headless alike — resolved as `reason=target-not-live`. The pre-existing block
+  # census below could not see it, because it greps SOURCE TEXT and this is a runtime binding.
+  # The latent half predates this change: an empty LEADING field is stripped the same way.
+  #
+  # The sentinel makes every field non-empty, so the collapse has nothing to collapse and a future
+  # column is safe to append. pid_live() maps "-" back to "unknown".
+  #
+  # SURFACE is the 5th column, and `.surface // "pane"` is copied VERBATIM from bin/cc-sessions:275 —
+  # the only other reader of this field — because the writer (hooks/session-register.sh:134-145) makes
+  # the absence itself meaningful: an old row, or a provisional row from handoff-fire, carries no
+  # `surface` at all and MUST read as a pane. Two readers defaulting differently would put a headless
+  # session on the wake path in one tool and off it in the other; keeping the expression identical is
+  # what stops that drift (fleet memory: sibling-auditors-must-share-the-state-model).
   if out="$(jq -s -r '.[] | select(type=="object")
-                    | [(.name // ""), (.pid // ""), (.paneUUID // ""), (.lstart // "")] | @tsv' \
+                    | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane")] | @tsv' \
               "$REG_DIR"/*.json 2>/dev/null)"; then
     REG_ROWS="$out"; REG_RC=0; return 0
   fi
@@ -273,7 +297,7 @@ registry_load() {
     [ -e "$f" ] || continue
     local row
     row="$(jq -r 'select(type=="object")
-                | [(.name // ""), (.pid // ""), (.paneUUID // ""), (.lstart // "")] | @tsv' "$f" 2>/dev/null)" || continue
+                | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane")] | @tsv' "$f" 2>/dev/null)" || continue
     [ -n "$row" ] && out="${out}${row}
 "
   done
@@ -305,6 +329,9 @@ registry_load() {
 # `ps` is paid at most once or twice per invocation — not once per registry row.
 pid_live() {
   local p="$1" want="${2:-}" now
+  # "-" is the REG_ROWS sentinel for an absent lstart — see registry_load's IFS-whitespace note. A
+  # real `ps -o lstart=` value never equals "-", so this normalisation cannot mask a genuine value.
+  [ "$want" = "-" ] && want=""
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null || return 1
   [ -n "$want" ] || return 0
@@ -318,7 +345,10 @@ pid_live() {
 registry_name_to_uuid() {
   local want="$1" n p u lst
   registry_load || return 2
-  while IFS="$(printf '\t')" read -r n p u lst; do
+  # trailing `_` ABSORBS the surface column. Without a 5th target the shell folds it into `lst`, and
+  # pid_live() would then compare a live process's start time against "<lstart>\theadless" and judge
+  # every headless row dead — the same silent field-shift that makes a column addition dangerous.
+  while IFS="$(printf '\t')" read -r n p u lst _; do
     [ "$n" = "$want" ] && [ -n "$u" ] && pid_live "$p" "$lst" && { printf '%s' "$u"; return 0; }
   done <<EOF
 $REG_ROWS
@@ -338,7 +368,7 @@ registry_prefix_to_uuid() {
   # full 32 hex digits all address the same pane. The value RETURNED is still the canonical dashed
   # uuid ($u), because that is what every downstream consumer (mailbox path, it2) expects.
   lc_w="$(printf '%s' "${want//-/}" | tr '[:upper:]' '[:lower:]')"
-  while IFS="$(printf '\t')" read -r n p u lst; do
+  while IFS="$(printf '\t')" read -r n p u lst _; do   # trailing `_` absorbs surface — see above
     [ -n "$u" ] || continue
     lc_u="$(printf '%s' "${u//-/}" | tr '[:upper:]' '[:lower:]')"
     case "$lc_u" in
@@ -1143,10 +1173,14 @@ target_live() {
   # live pid whose start time still matches → live. The one behaviour change is a pid that outlives its pane
   #   (a transient window at close): formerly not-live via it2, now live — and the verdict below still
   #   says "NO watcher armed → drains on its NEXT turn", so nothing claims a wake that will not happen.
-  local n p ruuid rlst
+  local n p ruuid rlst rsfc
   if registry_load; then
-    while IFS="$(printf '\t')" read -r n p ruuid rlst; do
+    while IFS="$(printf '\t')" read -r n p ruuid rlst rsfc; do
       if [ -n "$ruuid" ] && [ "$ruuid" = "$u" ]; then
+        # Record the SURFACE of the row we matched, for the wake-path decision below. Set only on a
+        # registry HIT: an unregistered pane resolved via the it2 list has no row and therefore no
+        # surface fact, and "pane" is the right default there — an it2-enumerable address IS a pane.
+        TARGET_SURFACE="${rsfc:-pane}"
         pid_live "$p" "$rlst" && return 0
         return 1
       fi
@@ -1196,12 +1230,61 @@ wake_path_armed() {
   kill -0 "$wpid" 2>/dev/null                 # a dead watcher cannot wake anyone — NOT armed
 }
 
+# ── THE HEADLESS WAKE (E7/F5 of docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md)
+# `bin/cc-wake-headless` — the fleet's ONLY wake primitive for a pane-less session — was built and
+# tested on 2026-08-13 (backlog 8ad4b02602dc) and then referenced by NOTHING on the delivery path:
+# its only non-doc mentions were its own source, its own suite, and two PROSE comments in
+# bin/cc-pane-headless. A wake primitive nothing calls is not a wake path, so mail to a headless
+# session enqueued and sat there. This is the seam that calls it (fleet memory:
+# conclusion-must-reach-the-enforcing-store).
+#
+# WHY THE NO-WATCHER SENTENCE WAS A LIE FOR THIS POPULATION. The else-branch below promises the
+# sender the target "drains on its NEXT turn". For a pane session that is true — a boundary arrives.
+# For a resident `--input-format stream-json` agent there is no turn loop to arrive: §2.2 of the spec
+# establishes that the ONLY thing that creates a turn boundary is a WRITE TO ITS STDIN. So the one
+# population that most needed a wake was told, in the reassuring voice, that it would get one anyway.
+#
+# 🚨 THE PHRASES `NO watcher armed` AND `wake-path armed` BELOW ARE A LOAD-BEARING WIRE PROTOCOL, NOT
+# PROSE. bin/cc-announce:145-149 classifies this line by grepping those literal substrings, and its
+# final arm is fail-CLOSED — "an unrecognized rc-0 string alarms, never VERIFIED". Writing a clean
+# new headless sentence WITHOUT the matching phrase therefore does not merely lose a nuance: every
+# headless announce falls to VERDICT=UNKNOWN and pages the operator. Keep the phrase; change the
+# truth around it. (This is the coupling the spec's own E7 did not name — it prescribed a new
+# `reason=` token as though the reason token were the contract.)
+_wake_headless() {   # rc 0 = a turn was genuinely queued; any other rc = not woken, and why on stderr
+  local u="$1" wbin
+  wbin="${CC_WAKE_BIN-}"
+  if [ -z "${CC_WAKE_BIN+set}" ]; then
+    wbin="$(command -v cc-wake-headless 2>/dev/null || true)"
+    [ -n "$wbin" ] || { [ -x "$HOME/.claude/bin/cc-wake-headless" ] && wbin="$HOME/.claude/bin/cc-wake-headless"; }
+  fi
+  [ -n "$wbin" ] && [ -x "$wbin" ] || { echo "cc-notify: no cc-wake-headless available to wake [$u]" >&2; return 1; }
+  # stdout folded onto stderr: this runs on the send path, whose stdout is the caller's, and the
+  # waker's diagnostics belong beside cc-notify's own verdict lines.
+  "$wbin" "$u" >&2
+}
+
 target_live "$uuid"; _lv=$?
 case "$_lv" in
   0)
     if [ "$uuid" = "$own_uuid" ] || wake_path_armed "$uuid"; then
       verdict delivered reason=wake-path-armed
       echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)${READ_NOTE}" >&2
+      _echo_sent
+    elif [ "${TARGET_SURFACE:-pane}" = headless ]; then
+      # ONLY the waker's own rc 0 earns the word "woken". Every other rc — not live to the driver (1),
+      # DAMPED inside CC_WAKE_MIN_S (2), no FIFO endpoint at all (4), the agent not draining its stdin
+      # (5) — is reported as NOT woken, with the waker's own stderr as the reason. A damped wake is
+      # deliberately NOT counted as a wake: the earlier turn it refers to may already have drained the
+      # inbox before this line landed, so claiming it would be a wake we did not observe (fleet memory:
+      # claimed-outcome-vs-checked-outcome).
+      if _wake_headless "$uuid"; then
+        verdict delivered reason=woken
+        echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (pane-less session — WOKEN: a stream-json user line was written to its stdin, so a turn is queued; wake-path armed by that write, not by a watcher)${READ_NOTE}" >&2
+      else
+        verdict delivered reason=no-watcher-headless
+        echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (pane-less session, NO watcher armed AND the stdin wake did not happen — see the cc-wake-headless line above for why. A headless session has no next turn to drain on: its boundary IS a write to its stdin, so this mail is recorded and will sit unread until something wakes it)${READ_NOTE}" >&2
+      fi
       _echo_sent
     else
       verdict delivered reason=no-watcher
