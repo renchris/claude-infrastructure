@@ -338,7 +338,10 @@ this repo that shells out to `bats` needs the same positive control — this fai
 **Claims this section does NOT make.** (a) The **fleet** value is larger than M1's and M2's because
 the matcher is match-all rather than `Bash` — but *how much* larger is **unmeasured**, and is not
 inferable from §2.4: that rate comes from `bash-execution.log`, which logs only Bash. Filed as R-7.
-The per-call delta above is measured; the per-hour one is not. (b) `basename` on the snapshot path
+The per-call delta above is measured; the per-hour one is not. **Narrowed 2026-08-19 (§5.2): the
+all/Bash ratio is 1.40x on the 49% of sessions that keep a transcript, so the direction is now a
+magnitude on a named stratum — but the fleet figure is still unmeasured, because the other 51% of
+sessions leave no transcript to count.** (b) `basename` on the snapshot path
 is still a fork, left alone deliberately — it feeds the member-name derivation that recovery refs
 are keyed on, and ~3 ms on 1-in-5 calls does not buy perturbing it.
 
@@ -353,7 +356,7 @@ are keyed on, and ~3 ms on 1-in-5 calls does not buy perturbing it.
 | ~~R-3~~ | **ADJUDICATED 2026-08-17 — the corpus was built and it RETIRES the remedy. See §5.1.** The original text is kept verbatim below because its reasoning was right and its numbers were not: *"`validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. Deliberately not taken here — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes."* | ~~~42 ms~~ → **36.7 ms measured, of which ~2.6 ms is convertible** | — |
 | ~~R-4~~ | **Superseded before it was filed** — the collapse is built and measured negative in `5c88633f`, landed inert. Not a remainder; see §3. Any revival must be measured under *sustained controlled* high load, since the win is O(load) and vanishes into noise at ambient. | — | — |
 | R-6 | **Registry/settings coupling introduced by M1.** `config/hook-chains.d/pretooluse-bash` names `curl-gate.py` because that is what settings.json registers today. If the operator runs `26-curl-gate-scope-activate.sh`, settings.json will name `curl-gate-scope.sh` and the two sets diverge. **No runtime effect while the dispatcher is inert** (it cannot run), and `tests/hook-chain-live-parity.bats`'s drift guard compares the registry against a test-internal `MEMBERS` array rather than live settings, so nothing reds either. But whoever wires the dispatcher must reconcile them — a note to that effect is in the registry file itself, at the point of use. | — | 6 |
-| R-7 | **No census of ALL-tool calls exists**, only of Bash. §2.4's fleet rate comes from `bash-execution.log`, so every per-hour figure in this document is scoped to `matcher: "Bash"` hooks. M3's subject runs on the **match-all** matcher, i.e. on a strictly larger population that nothing measures — so M3's fleet value is known only in direction, not magnitude, and the same blind spot covers `cc-permission-beacon.sh` and `mailbox-drain.sh`, which are also registered match-all. Needs a tool-call counter before any match-all hook's cost can be stated per-hour. | unmeasured | 6 |
+| R-7 | **No census of ALL-tool calls exists**, only of Bash. §2.4's fleet rate comes from `bash-execution.log`, so every per-hour figure in this document is scoped to `matcher: "Bash"` hooks. M3's subject runs on the **match-all** matcher, i.e. on a strictly larger population that nothing measures — so M3's fleet value is known only in direction, not magnitude, and the same blind spot covers `cc-permission-beacon.sh` and `mailbox-drain.sh`, which are also registered match-all. Needs a tool-call counter before any match-all hook's cost can be stated per-hour. **PARTIALLY MEASURED 2026-08-19 — see §5.2. The all/Bash ratio is 1.40x on the transcript-bearing stratum, and the obvious shortcut (count `tool_use` records in the transcripts) is REFUTED as a fleet denominator: 51% of sessions carry no transcript at all. R-7 stays OPEN — the counter is still needed for a fleet figure.** | **1.40x on 49% of sessions; fleet still unmeasured** | 6 |
 | R-5 | `bash-execution.log` is **9.46 MB** and unbounded (§8.5.5 flagged it at 23% over its stated cap; it has since grown). It is the *only* source for the fleet Bash rate in §2.4, so its rotation policy silently sets the decay window of every figure in this document. | — | 6 / 10 |
 
 ---
@@ -420,6 +423,57 @@ An interleaved paired design at n=120 resolves the same change at +2.28 ms with 
 Load drifts over minutes; a blocked design charges that drift to whichever variant ran second. **At
 this effect size the experimental design, not the sample size, is what decides whether the effect is
 visible at all.**
+
+---
+
+### 5.2 R-7 partially measured — the shortcut is refuted, and the ratio has a stratum (2026-08-19)
+
+R-7 says a tool-call counter is needed. The obvious objection is that one already exists: every
+`tool_use` block in `~/.claude/projects/**/*.jsonl` is a tool call, un-consumed. **Measured, that
+objection is wrong, and the way it is wrong is this document's own R-7 defect a second time.**
+
+**The window is the whole method.** A Bash-only numerator over one span and an all-tool denominator
+over another is exactly the span mismatch R-7 names, so both counts are bounded to
+`bash-execution.log`'s own span — `2026-08-16T22:22:09Z` → now, which is all the log retains (R-5:
+it is unbounded but rotates, so this span is the measurement's decay window too).
+
+| | in-window |
+|---|---|
+| `bash-execution.log` entry-starts | **20,071** |
+| distinct session ids in that log | **214** |
+| …of which have a transcript in EITHER root | **104** (9,069 Bash entries) |
+| …of which have NO transcript at all | **110** (11,000 Bash entries — **55% of Bash volume**) |
+| `tool_use` blocks in transcripts, deduped on tool_use id | **13,388** — Bash 9,566, Read 2,215, Edit 657, Write 342 |
+| **all / Bash, transcript-bearing stratum** | **1.40x** |
+
+**Cross-validation:** the transcript census's 9,566 Bash calls closely matches the 9,069 the log
+attributes to transcript-bearing sessions. Two independent instruments agree on the stratum they
+share, which is what makes the 1.40x usable at all.
+
+**What this licenses, and what it does not.** A match-all hook's per-hour cost is the Bash rate
+× 1.40 **on the 49% of sessions that keep a transcript**. It does NOT give a fleet figure: the
+missing 51% is not sampling noise, it is a structurally absent population, and nothing in the
+transcripts can say whether its tool mix resembles the stratum that is visible. So R-7 stays OPEN
+with its remainder narrowed rather than closed — the counter it asks for is still the only thing
+that would produce a fleet number (memory `zero-claim-must-name-its-excluded-strata`).
+
+**Three instrument defects were found and fixed inside this measurement**, each the failure mode
+this document keeps re-encountering, and each invisible in its output:
+- The first census globbed `~/.claude/projects/*/*.jsonl` and saw **899 of 1,817** files, and it
+  missed the **second transcript root entirely** (`~/.claude-secondary/projects`, 1,725 files). It
+  reported a confident 1.84x over roughly a quarter of the corpus.
+- A hand-typed epoch in the file-level prefilter was **a year off** (Aug 2025, not Aug 2026), so the
+  prefilter excluded nothing and said so nowhere. It is now derived from the window string itself.
+- The have/without split was first taken with `find … | grep -q .`, which under `pipefail` fails on
+  the very input it matched (memory `grep-q-under-pipefail-inverts-the-verdict`), and the follow-up
+  tally used `for u in $misslist` **under zsh, which does not word-split** — together they produced
+  "110 sessions with 0 entries", an arithmetic impossibility that is what exposed both. The final
+  figures carry a conservation check against the log total (20,069 vs 20,071, the log being live).
+
+Reproduce: the census script is not landed — it is a one-shot whose only durable output is this
+table, and a scanner over 3,500 transcript files is not something to leave rotting in the tree.
+Its method is fully specified above; the two sources are `~/.claude/logs/bash-execution.log` and
+both `projects/` roots.
 
 ---
 
