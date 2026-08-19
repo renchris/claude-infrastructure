@@ -87,6 +87,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #52: three quarters of the fired population never owed a ping, so the
+  belt that reads silence can never reach them — the fix is a channel that reads WORK, not quiet;
+  and a row twenty-one recycles declined turned out to have a true premise nobody had measured.**
+  `master-fleet-footprint` **11 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim)** — unchanged from intake. **filed 0 / closed 0.** Landed `ab22990a1` + this entry.
+  Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` efficacy
+  re-census (due ~2026-08-24) is still CLOSED and was correctly declined for the 25th consecutive
+  recycle. Intake property re-measured and it held: 11/11 open were `venuePlan=local` AND
+  `project=claude-infrastructure`. Teammates 0/0, Explore 0.
+
+  **Row `7c22e9b43956` — leg 3 built (`ab22990a1`), row LEFT OPEN with its remainder still named.**
+  #51 built leg 2 (a never-committed peer that never announced to its ARMED back-channel is
+  surfaced). Re-derived the population myself rather than inheriting it: **459 of the 603 fired
+  stamps on this box today carry no `notifyBack` at all — 76%.** (#51 measured 144 of 938; the 144
+  is unchanged, but `clear_fired_marker` has pruned the denominator to 603. A carried-forward count
+  is a claim about a store that keeps moving.) Leg 2 is structurally unable to reach that 76%, and
+  **widening it over them is the hazard, not the remedy** — a peer never given a back-channel never
+  owed a ping, so its silence carries no information. Leg 3 therefore reads no silence at all: it
+  reads POSITIVE evidence of work in flight — an Agent-tool subagent that has not returned. A
+  subagent runs IN-PROCESS, so the teardown SIGKILLs it mid-run and nothing downstream ever learns
+  it existed.
+  - **The instrument already existed and could not reach here** — `handoff-fire.sh`'s
+    `live_subagents_of` / `subagent_gate` refuses a `--recycle` over exactly this loss, but runs
+    ONLY on the self-close/recycle path, which is precisely the path the reaper's population never
+    runs. Same shape as #51's finding about `sc_announce_before_retire`, one level up: **question
+    (n) of the intake pass keeps paying — the thing the row asks you to build is often built, and
+    simply never on the path that needs it.**
+  - **THE BARE PREDICATE WAS UNUSABLE, AND ONLY MEASUREMENT SAID SO.** "last quoted `stop_reason`
+    is not `end_turn`" reads in-flight for **133 of the 717 agent transcripts** on this box — but
+    **119 of those 133 were last written over SEVEN DAYS ago.** Wired bare, leg 3 would have been a
+    permanent-refusal generator, i.e. the alarm that says as little as one that never fires. Two
+    bounds, each chosen from data: **(1) ORDERING, not age** — while a subagent is genuinely in
+    flight the session CANNOT write its `tool_result`, so the subagent's transcript is the newest
+    write in the session dir; once the session writes past it, it is a corpse. Retires 112 of 133.
+    **(2) A SILENCE CAP** retires the remaining 21 (each a session that DIED holding a subagent,
+    9 h to 20 d old). Measured over **584 subagent transcripts that provably ran to completion:
+    59,266 inter-record gaps, p99 = 89 s, p99.9 = 306 s, only 17 gaps (0.029%) above 900 s** — so
+    the default sits ~3x above p99.9. The cap can only ever make the leg ABSTAIN, never
+    over-refuse; an over-eager refusal here is a permanently un-reapable pane.
+  - **A REFUTED DESIGN IS A DELIVERABLE TOO.** The obvious unifying predicate — apply the same
+    `stop_reason` test to the SESSION transcript, which would have covered background Bash tasks as
+    well as subagents — was measured and **REFUTED: 253 of 401 sampled session transcripts read
+    "last = tool_use" (63%)**, so a belt on it would refuse two thirds of all reaps. Recorded here
+    rather than discovered again by #53.
+  - **THE REMAINDER, unchanged and not argued away:** the B2D1CE68 victim was blocked on a
+    backgrounded Bash TASK, not a subagent. That store
+    (`/private/tmp/claude-501/<slug>/<sid>/tasks/*.output`) is reboot-ephemeral and records no
+    started/finished status, so it cannot answer. The row's stored falsifier still names a bare
+    0-commit fixture with no subagent and no back-channel, and that fixture is still reaped. **Row
+    stays OPEN**, claim released.
+  - Red-proof **sorted by why each case reds**, because not all pre-fix reds are evidence: 9 cases,
+    **4 red against a pristine `origin/main` subject, of which only 2 (C1, C7) are the falsifier
+    proper**; C2 is a second read of C1's defect and C8 reds only because the function does not
+    exist yet. The other five assert the reap STILL happens and are green pre-fix BY CONSTRUCTION.
+    Predicted 4 red / 5 green before running and measured exactly that. **8 mutants, 8 applied, 8
+    reddened >=1 case, 0 green, 0 non-verdicts, 0 anchor drift**, subject restored byte-identical;
+    N5's red was predicted OVER-WIDE and was (B3 beside C9 — the gate's true blast radius). Full
+    suite **154/154**, plan line seen, 0 skips. C4 and C5 pin the two bounds in ISOLATION, so a
+    fixture cannot pass whichever bound was deleted.
+  - Two traps paid for and worth carrying: the `.bats` shellcheck ratchet read **0 blocking before
+    the commit and 2 after** (it scopes on a COMMIT RANGE) — both SC1010, because a bare `done`
+    used as a test OPERAND reads to shellcheck as the loop keyword. The gate was right; renamed the
+    sentinel to `returned`. And **`setup()` did not pin `CC_REAPER_PROJECT_ROOTS`**: leg 3 resolves
+    a transcript for every never-committed finished peer, so an ambient value would have let this
+    suite decide verdicts from the operator's real subagent transcripts — the exact
+    `${VAR:-$HOME/…}` shape `setup()`'s own comment says a fixtured `$HOME` cannot defend. Pinned.
+
+  **Row `15265ac3c502` — premise MEASURED for the first time and CONFIRMED; row left OPEN, nothing
+  filed.** #31-#51 all "looked and DECLINED" it — no detail body, no falsifier, and, decisively,
+  **nobody had ever tested its central claim.** A/B over 60 freshly-created inodes, arms alternated
+  so ordering cannot favour either: **first exec `./x.sh` 138.7 ms vs `bash x.sh` 25.8 ms
+  (delta ~113 ms)**, corroborating the row's 121→2.9 ms within noise (the ~25.8 ms floor is the
+  timing harness's own `python3` startup, constant across both arms, so only the delta is a claim).
+  **The positive control is what settles it:** a SECOND exec over the SAME inodes reads
+  **direct 25.7 ms vs bash 25.8 ms — identical**, which rules out the seductive wrong cause
+  ("execve is simply slower than bash") and proves the effect is genuinely first-exec AND
+  inode-keyed, exactly as the row says. Class membership: the row's **named primary site is indeed
+  already adopted** (`handoff-fire.sh:7894` runs `bash "$WT_DEPS"`, and `scripts/new-worktree.sh`
+  invokes no script directly), but the class is **NOT empty** — roughly 15 real direct-exec sites
+  remain, concentrated in the safety/premortem gate scripts, once the census excludes README prose
+  and the many `"… → run ./install.sh"` strings inside `printf`/`report` calls, which a naive grep
+  counts as invocations. Left open and unfiled deliberately: the payoff is ~1.7 s ONCE per fresh
+  worktree against a broad diff across six land-blocking gates, which is a poor trade — but the
+  premise is no longer unverified, so #53 can decide on evidence instead of declining again.
+
+  **Standing state re-derived, not inherited:** `e78107996dea` still reads **69,609 of 69,609 rows
+  `argv0: null`** (a FOURTH confirmation, on a denominator grown from #50's 23,128) — not closeable
+  until the converger runs. And the converger still refuses for the single cause #51 named:
+  `deploy-live.sh` reports `target ab22990a1c79 is not a descendant of live HEAD 9709c99d3ce2`,
+  i.e. **one un-landed commit still sits in the shared checkout `~/Development/claude-infrastructure`
+  on `main`** (`rev-list --count origin/main..HEAD` = 1, `9709c99d3`). Not this chain's — this chain
+  never commits in the shared checkout. **Consequence owned honestly: the leg 3 belt landed this
+  pass is NOT live until that clears**, because launchd runs `~/.claude/bin/cc-reaper`. `LIVE_ADDS`
+  read 39 at close; my own diff adds no file under `bin hooks scripts commands`
+  (`git diff --name-status --diff-filter=A 96702aefc..ab22990a1` returns EMPTY), so all 39 are
+  siblings'.
+
 - **2026-08-19 — drain recycle #51: the reaper's safety guard was inverted with respect to the loss
   it prevents, and the fix is not a wider guard but a second channel — and a row filed as "three
   rare instances you cannot schedule" turned out to be 352 measured events, 17 of them today.**
