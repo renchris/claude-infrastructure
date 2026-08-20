@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #63: `master-fleet-footprint` 1 open → 0 open / 5 blocked — the
+  effort is DRAINED. closed 2 / filed 1 (net-negative on filings). 🚨 THE FINDING: the
+  uncommitted-peer belt that recycles #59-#62 tracked as "landed, ~1% residual" was guarding the
+  WRONG DOOR — it never protected a dispatched peer at all, and a 0-commit peer was still being
+  torn down with its worktree removed on unmodified trunk.**
+
+  **`7c22e9b43956` — CLOSED with a fix, and the premise-attack found a bigger hole than the row
+  claimed.** The row's remedy was inherited as "build leg 5, a pending-background-task check, which
+  needs a `CC_TASKS_ROOT` seam". That work was **not needed and not done.** Reading the belt against
+  the *reap path* instead of against its own comments showed there are **two doors** into a reap and
+  the belt only stood at one:
+  - `REAPABLE_RE` (`finished|finished-teammate|handed-off-lead|coordination-abandoned`) — belted.
+  - the **T-P3-4 promotion** (`AUTOREAP_FIRED_RE='^(finished-shared-review)$'`, `bin/cc-reaper:243`)
+    — sets `promoted=1`, and the disposition gate reads `[ "$promoted" = 0 ] && ! [[ … ]]`, so a
+    promotion **bypasses the reapable-cause requirement**. The belt gated on `cause`, never on
+    `$promoted`, so all four legs were skipped here.
+
+  A **dispatched peer is the second door** — `cc-classify` labels a desk-fired peer
+  `finished-shared-review`. So the row's own title ("auto-reaps a dispatched peer") named a
+  population its belt had never covered. Measured over 7 days of the live reaper log: **467
+  `[finished-shared-review]` sightings vs 71 `[finished-teammate]`** — the unbelted door is ~6.6× the
+  belted one — and `finished` + `coordination-abandoned` were emitted **0 times**. The belt shipped
+  measured against the minority door.
+
+  Reproduced, not argued (`tests/cc-reaper.bats` **B11**, red pre-fix): the promoted 0-commit peer
+  read `1 classified · 1 safe candidate(s) · 1 reaped`, `cc-teardown` was invoked, and the worktree
+  was **REMOVED**. Fix = one condition (`|| [ "$promoted" = 1 ]`), which is **strictly
+  safety-increasing**: every belt leg can only refuse-and-continue or fall through, so admitting a
+  population converts reaps into surfaces and never the reverse. **B12** is the discriminator pair
+  (a promoted peer that DID commit still reaps, so T-P3-4's confirm-close drain is preserved), and a
+  mutant forcing the never-committed precondition true reds B12 while leaving B11 green — neither
+  case is vacuous. Full reaper suite green.
+
+  **The inherited "leg 5 / `CC_TASKS_ROOT`" blocker was a real blocker on a remedy that was not the
+  right one.** Four recycles carried it forward. The generalisable move is the one this chain keeps
+  re-proving: attack the premise — but attack it against the *mechanism*, not against the row's own
+  prose, which is where the wrong door hid.
+
+  **`96a3501c31ce` — CLOSED, no fix needed; its remedy landed and has already executed.**
+  `scripts/deploy-live.sh` on origin/main now carries `superseded_ahead()` (:1048) and prints a
+  runnable remedy on the patch-identical-sibling branch (:1631-1633), which is exactly the row's own
+  falsifier. Live evidence, same moment: `~/.claude/autonomy/pages/deploy-diverged-superseded.page`
+  is dated **2026-08-20 04:57** and carries trunk's exact string plus the command. *(#62 verified
+  this and correctly declined to close it without the artifact; the artifact now exists.)*
+
+  🚨 **THE cc-reaper "0 reaped in 7 days" METRIC IS RE-MEASURED AND THE INHERITED FRAMING IS FALSE.**
+  #62 handed this over as "the box's most destructive unattended actuator has reaped NOTHING",
+  deliberately unfiled. It is not filed now either, because **cc-reaper is not idle**: over the same
+  window its **garbage arm TERMed 2,148 processes across 826 sweeps**. Only the *session* arm reads
+  zero, and that zero is fully attributed with no defect behind it:
+  1. **~95% of sightings carry a cause that is never reapable by design** (crashed 788,
+     finished-operator 528, coordination-hang 247, task-less 5 — plus finished-shared-review's
+     surface path). Fail-closed, working as intended.
+  2. **3 of the 4 `REAPABLE_RE` causes were emitted zero times.** `handed-off-lead` requires a live
+     firedBy-stamped *successor pane*, and this chain recycles **in place** (`--recycle` relaunches
+     the same pane), so it structurally cannot be produced. The reapable vocabulary is nearly dead
+     against the fleet's actual operating mode.
+  3. **The promotion path fired exactly 4 times, all on one pane (`claude-infrastructure-80`), and
+     every one was refused downstream by `beat-refuse`** — no heartbeat for the sid while the beat
+     system was live.
+
+  **Why the log made it look dead** — and this is the reusable part: the dominant disposition,
+  `keep … never-reap cause`, is `say`-only and is **never written to the log**. The refusal that
+  accounts for the overwhelming majority of the population leaves no durable record, so a
+  `grep`-based reading of `cc-reaper.log` sees classification followed by silence and reads it as
+  paralysis. The `REAP` tokens that *are* in the log are `sweep start mode=REAP` and the garbage
+  arm's own verdict — **neither is a session verdict**, and both invite exactly the misread the
+  inherited brief made. Instrument the branch that fires most (memory:
+  `diagnostic-ladder-skipped-by-the-common-branch`).
+
+  **Lag re-derived: 69**, against the 66 in my brief, the 65 in #61's and the 62 in #60's. **Fourth
+  consecutive stale quote.** Note the two numbers are different objects: this drain worktree sits at
+  **origin/main exactly (0 ahead / 0 behind)**; the 69 is the *shared checkout* `~/Development/
+  claude-infrastructure`, which is the frozen live layer. Do not conflate them.
+
 - **2026-08-20 — drain recycle #62: `master-fleet-footprint` 8 open → 1 open / 5 blocked.
   closed 6 / filed 6. Five of the six closes were premise-measurements; only one needed a fix, and
   that fix was one line of YAML. 🚨 THE FINDING: the frozen live layer is not a lag, it is a
