@@ -87,6 +87,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #64: `master-session-lifecycle` 2 open → 1 open / 1 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the effort's "standing watch" was NOT STANDING — the daily
+  launchd job that owns the Claude Code version hold had been dead for 26 days, killed inside its
+  own launcher line, and every observable agreed it was healthy.**
+
+  **Effort choice, re-folded not remembered.** `master-session-lifecycle` is the smallest live
+  master-* effort (2 open / 1 blocked; next is `master-product-repos` at 33). Both open rows are
+  FUTURE-DATED triggers — `62363cac1e39` due ~2026-08-24, `b69b1d957cec` next audit ~2026-08-26 —
+  and **`open` is cc-dispatch's fire predicate**, so the standing dispatcher can claim work that
+  cannot be done. #56 named the generator (a date-gated row is re-picked by every recycle and
+  `cc-backlog` has no defer verb) and declined to file a row for it. **Premise re-attacked against
+  the mechanism, not the prose: `cc-backlog --help` confirms it — `block` keys into the
+  operator-gated group, `falsify` refuses an exit-0 probe because exit 0 is the RETRACTING
+  direction, and neither expresses "not yet". #56 was right.** But §4.1's invariant 2 is
+  *re-measure dated titles*, not decline on the date — which is what ~30 consecutive recycles had
+  been doing.
+
+  **`62363cac1e39` — CLOSED, by running the census four days early rather than declining a 31st
+  time.** Landed as `docs/research/close-integrity-recensus-2026-08-20.md`. The gate check came
+  FIRST, because this lineage has now found five criteria that could never clear: is the subject
+  even executing? The frozen checkout at `9709c99d3` carries `CC_SHIP_FLOOR_MAX`,
+  `session_unlanded_mine`, `close_shape_ok`, `hooks/lib/close-shape.sh` and `bin/cc-custody`, tree
+  clean on all of them — so CLOSE_INTEGRITY is **below** the freeze and live, and this is *not* a
+  sixth. Result: **P2 ship floor HOLDS** (72 fires / 50 sessions, first at 2026-08-10T10:10:56Z
+  with nothing before it over a log reaching back to 07-25 — correct polarity; control 10/10);
+  **P4 D6 HOLDS** (30 fires, 29 ✅ / 1 👤, zero on 📦/🚀/⛔/🔧; control 7/7); **P3 HOLDS for the
+  pane lane** (133 opens / 130 discharges, exactly ONE genuine orphan in ten days) and **is
+  REFUTED for the cloud lane** (164 open / 45 return = 118 open, 27% discharge); **P1 is REFUTED
+  as literally stated and holds on the population it meant** — 60 vs 62 is (sha,branch) PAIRS not
+  commits (37 distinct shas), 50 of 60 predate the landing, 8 of the 10 post-land rows are ONE A/B
+  fixture, 23 sit on `ship/backup-*` the land path writes by design; genuinely new non-fixture
+  stranding is **2 commits in 10 days**. The prediction was written as if the sweep were a RATE;
+  it is a standing INVENTORY. **The number nobody predicted: the silent-close rate went UP, 58% →
+  71.4%** (1008/1411 adjudicated stops assert nothing) — the substrate of the felt symptom, worse
+  than when the design was written. **Live generator named by RUNNING its own falsifier, not by
+  reading it: `fd5196ac31ef` [OPEN, `master-fire-gate` — not this effort, reported not driven].**
+  An origin session that fires a peer into its OWN cwd reads `fired-peer`, because the fire's
+  marker lands in the originator's own transcript as a `tool_result`, so D6 exempts exactly the
+  session the origin close contract was built for.
+  🚨 **Method note worth carrying: the IDL store alone would have produced a FALSE ZERO for P2.**
+  `idl.jsonl` rotates ~4×/day and `grep ship-floor` on it returns **0** — a statement about
+  retention, not about the mechanism. The long-retention CLOG is the right store. Police the
+  denominator before reporting a zero.
+
+  🚨 **THE GENERALISABLE FINDING — a watch can be loaded, scheduled, and dead, with every
+  observable agreeing it is fine.** `com.chrisren.watch-claude-code-2118-hold` is loaded and fires
+  daily at 09:12. Its `ProgramArguments` ran `/bin/bash -c 'source $HOME/.zshrc 2>/dev/null; …'`,
+  and `~/.zshrc` is a **zsh** rc: sourced by bash it hits an anonymous function `() {` at
+  `.p10k-robbyrussell.zsh:13`, which is a **fatal parse error** in bash, so the whole `-c` command
+  list aborts and the `;`-separated watch invocation never runs. `2>/dev/null` swallowed all five
+  errors. **Nothing could see it:** `launchctl list` shows a bare `1`; both `StandardOut/ErrorPath`
+  logs are 0 bytes because the errors went to `/dev/null`; and the script's OWN log was **absent**,
+  because the script never started — and an absent log reads exactly like a quiet one. Dead since
+  the plist was reconstructed **2026-07-25 — 26 days**. Reproduced under the plist's exact
+  environment (rc=1, no log) with a **positive control** that isolates the launcher line: same
+  script, same PATH, source removed → **rc=0 and the log is written**. Fleet scan bounded the
+  class: **exactly 1 of 49 LaunchAgents** has this pattern, so it is a one-off, not a generator.
+  Fixed (`65cab5664`) and **verified live under real launchd**, not merely in a repro:
+  `LastExitStatus` **0** (was 256) and a real poll line in the job's own log. The moment it could
+  speak it delivered a verdict it had been sitting on for weeks — **the 2.1.118 hold it guards is
+  RESOLVED, 3/3 issues closed, both blockers closed.**
+  This is #63's *guard at the wrong door* one recycle later and one level down: the watcher exists
+  and runs — it had simply never been able to take a breath, and separately it is aimed at a band
+  ~200 releases stale while the LIVE hold has no issue-level watcher at all.
+
+  **The second defect, found because the revived watch immediately mis-reported: the MANIFEST
+  allow-list cannot read 3 of its own 25 rows** (`79f075a07`). `~/.claude-versions/MANIFEST.jsonl`
+  is the ONE enforcing store for binary advancement, and `bin/claude-latest:200` read it with
+  `grep -E "\"version\":\"X\""` + `sed 's/.*"status":"([^"]+)".*/\1/'` — both assuming the compact,
+  space-free spelling. Three live rows are `{"version": "2.1.237", "status": "skip", …}`, the
+  spelling jq and `python json.dumps` emit by default and the one the last three programmatic
+  writers used. The matcher cannot see them, and **a lookup MISS is indistinguishable from
+  ABSENCE**, so they fall into the `*)` arm and the launcher logs *"no MANIFEST entry"* about an
+  entry that is right there. Today it fails **SAFE** (all three are `skip`, and default-deny
+  refuses too) — the direction that bites is a reviewed, smoke-tested **`stable`** row written with
+  spaces, which is then silently never installed while the log blames a missing entry. The watch
+  script carried the identical expression against the identical store. Red-proof
+  `tests/manifest-allowlist-whitespace.bats`: **3 of 5 RED pre-fix**, 2 green — and those 2 are the
+  preservation controls that must pass in both worlds (no-entry still default-denies; a compact
+  `stable` row still works). The spaced-`skip` case asserts the **logged REASON**, because
+  pre-fix it refused anyway by falling through, so asserting "it refused" would have passed in both
+  worlds and credited the fix with nothing. 5/5 post-fix; 43/43 across the new suite plus
+  `claude-latest-stderr` and `gate-manifest`; `shellcheck -x` clean.
+  **Deliberately NOT done: normalising the three spaced rows in the live store.** That is fixing
+  data to satisfy a buggy reader; the reader is fixed, and the exposure until the freeze clears
+  fails safe.
+
+  **`b69b1d957cec` STAYS OPEN, and the reason is a mechanism, not a preference.** It was tempting
+  to close it: its enforcement half is live and continuous (the launcher default-denies every
+  version without a `stable`/`candidate` entry, now correctly), and after `65cab5664` its
+  reassessment half has a real daily owner that provably runs. **But the revived watch polls the
+  WRONG BAND** — three April issues that are all closed — while the current hold's gating issues
+  (#84974 spawn ceiling, #84224/#85154 darwin installer) are watched by nothing. Repointing it is a
+  **script** edit, and the script reaches `~/.claude` by symlink into the frozen checkout, so a
+  repoint lands ABOVE the freeze and does not run. Closing the row would assert an ownership that
+  one third of the mechanism actually has. **A perpetual watch is also a category error in a
+  drain-to-zero ledger** — it guarantees this effort can never read 0 open — but the fix for that
+  is a defer/recurrence primitive, not a close, and minting one mid-drain is not this recycle's
+  call. Recorded here so a successor can overturn it with evidence rather than re-derive it.
+
+  **Close line — `master-session-lifecycle`: 1 open / 1 blocked (1 operator-gated).** The 1 open is
+  `b69b1d957cec` (above). The 1 blocked is `adf1bb6b5406`, operator-only. **Filed 0, closed 1.**
+  🚨 **Lag re-derived, and it is TWO objects: this drain worktree is at origin/main EXACTLY (0
+  ahead / 0 behind); the `71` belongs to the shared checkout, the frozen live layer** — up from 69
+  (#63), 66, 65, 62, a fifth consecutive stale quote in the briefs. **The live layer is still
+  FROZEN at `9709c99d3` and nothing landed above it runs from `~/.claude`.** `deploy-live.sh`
+  refuses correctly; the remedy is operator-only and already filed as `f33f72da71e0`. The plist fix
+  is the exception that proves the rule — it took effect immediately **because a LaunchAgent is
+  live state, not a tracked file waiting on a converge**, which is the same reason #56's MANIFEST
+  write worked. The two script fixes in `79f075a07` are NOT live and join the standing five.
+
 - **2026-08-20 — drain recycle #63: `master-fleet-footprint` 1 open → 0 open / 5 blocked — the
   effort is DRAINED. closed 2 / filed 1 (net-negative on filings). 🚨 THE FINDING: the
   uncommitted-peer belt that recycles #59-#62 tracked as "landed, ~1% residual" was guarding the
