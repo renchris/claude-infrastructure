@@ -201,3 +201,66 @@ signalled the group, and **killed its own driver shell, which the harness report
 probe reproduced the very defect it was investigating, on itself. Any bats case here must put the
 victim in its own session/group first, and must never signal a group it is a member of.
 
+
+## UPDATE 2026-08-19 (recycle #54) — the recorder is WIRED and live-safe; what remains is an event
+
+Recycle #53 proved the probe and named the remainder. This pass wired it. Landed `dc1559c3b`
+(`bin/cc-await-ping`, `tests/cc-await-ping.bats`), `LIVE_ADDS=0` — nothing was added, both files were
+edited, so the recorder rides the ordinary fast-forward instead of waiting on a converger.
+
+### 1. Where it went, and what it now prints
+
+A side-car armed at startup by `_sigrecord_arm`, reaped by the EXIT trap, read by `_sig_verdict`
+through a BOUNDED poll (10 × 50 ms — that handler must not block). Both channels carry the result:
+the stderr `verdict=killed` line and the `WAKE-PATH-DOWN` inbox notice. Measured end-to-end, the
+verdict now reads
+
+```
+… labels 'failed'. SENDER IDENTIFIED: sig=15 si_pid=98148 si_uid=501 si_code=0
+  sender_cmd=[bash …/e2e-inbox.sh]. If you are going idle, RE-ARM …
+```
+
+with `si_pid` matching the driver shell the probe predicted, on both arms.
+
+### 2. THE FOOTPRINT FIGURE IN THE PRIOR SECTION IS AN OVERCOUNT — 15.0 MB is `ps` RSS
+
+§4 above set the default-choice question against "15.0 MB RSS per armed recorder", and said it
+interacts with `master-fleet-footprint`. It does — which is exactly why the instrument matters, and
+`ps` RSS is the wrong one: it charges every mapper the full shared COW text of the interpreter, the
+same overcount master `2029c52b8a32` names for this box. Re-measured per-task:
+
+| Quantity | Armed recorder | Bare `python3` |
+|---|---|---|
+| `ps -o rss=` | 15.4 MB | 11.5 MB |
+| `vmmap` Physical footprint | **10.3 MB** | 7.7 MB |
+| `vmmap` TOTAL dirty | 9.5 MB | — |
+
+Nine `cc-await-ping` watchers were armed concurrently while measuring, so the honest fleet cost is
+**~93 MB**, not the ~240 MB the RSS figure implies. That is what made ON-by-default defensible.
+
+**One instrument here was a NON-VERDICT and is recorded so nobody repeats it.** The first marginal
+test took a system-wide `vm_stat` anon-pages delta across killing one recorder and reported
+**355 MB** — on a box running ~16 sessions, a 10 MB process is far below the noise floor, so that
+number measured the box, not the recorder. A per-task instrument was the only way to the answer.
+
+### 3. Two design points the reference implementation did not have
+
+- **Parent-death polling.** The EXIT trap reaps the side-car on an ordinary death, but a SIGKILLed
+  watcher runs no trap at all, and an orphaned interpreter sleeping forever is a ~10 MB leak into
+  the very effort this row sits in. The recorder polls `getppid()` in 5 s slices and exits. Mutant
+  N5 removes it, and the resulting immortal orphan was observed directly during the mutant run.
+- **`_sigrecord_disarm` uses KILL, not TERM.** The recorder *handles* TERM by writing a capture
+  file, so a TERM-then-`rm` disarm races its own side-car and can strand a temp file naming the
+  watcher itself as the sender. By disarm time there is nothing to flush.
+
+### 4. Coverage and the remainder
+
+Coverage is unchanged at **109 of 352 events (31%)** — the other 243 die in the harness's own
+wrapper. At the measured rate the watcher arms should yield a real `si_pid` within days.
+
+**The row `b38279c10c55` stays OPEN, deliberately.** It asks for the sender to be *captured*; this
+lands the instrument that can capture it, not the capture. The remaining step is not code: it is
+waiting for a live exit-144 and reading the `SENDER IDENTIFIED` clause out of the verdict. A
+successor should check that before assuming any work is left — and should treat the two suspects
+named in §4 of `await-ping-exit-144-2026-08-07.md` as already excluded (that section's own title
+says "neither caused this").
