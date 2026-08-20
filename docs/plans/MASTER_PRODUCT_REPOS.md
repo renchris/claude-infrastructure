@@ -65,6 +65,42 @@ work it"* — and its own master row is the counter-example to it.
 the real handles — they carry `reso-management-app` / `doc_classifier` and route correctly. The
 master row is a coordination header, not a unit of work; advancing it means advancing members.
 
+🚨 **CORRECTION (measured 2026-08-20): a correctly-projected member row misroutes too — the
+projection was never the load-bearing part.** A cloud fire of `b0be87487228` (project
+`reso-management-app`, "`--bs-cap` under-reserves the caption", naming `_lib/type.ts` and
+`Surface.tsx`) landed on a VM holding exactly one checkout — `claude-infrastructure` — with GitHub
+scope pinned to `renchris/claude-infrastructure` and no `~/Development/reso-management-app` on
+disk. The label was RIGHT and the work was still unreachable, so the paragraph above is wrong where
+it says member rows "route correctly": correct projection buys nothing, because **nothing in the
+chain compares the item's project to the repo the VM will actually hold.**
+
+Read out of `bin/cc-eligible` this session, the cloud gate has exactly two arms and neither can
+ask that question:
+
+- `classify_all()` (line 445) is pure regex over the span fields — it fires on *spellings* of
+  local-only state (`launchd`, `sudo`, …). A repo name is not such a spelling, so a foreign-tree
+  item matches nothing.
+- `DEEP_HISTORY` (via `HistoryOracle.unreachable()`) certifies cited shas against the 50-commit
+  cloud horizon. This item cites no sha, so the arm is silent.
+
+With both silent, `assess_full()` returns `eligible — repo-only work, no local-only state named`,
+and that verdict is TRUE as written and useless as read: `cmd_explain` already warns that
+"eligible" means *no spelling in the list fired*, "which is weaker than 'this is repo-only work'".
+Worse, `repo_for(project)` resolves `~/Development/reso-management-app` and the oracle certifies it
+`ok` — a healthy reading of a tree the *dispatching* box holds, which says nothing whatever about
+the *receiving* one. **The gate measures the wrong box.** So this is not a missing spelling to add
+to the list (the remedy `REFUSAL_NOTE` offers); it is a missing arm — a cross-repo/venue check that
+convicts when `project` is not the repo the target venue is scoped to. Adding a spelling cannot
+close it, and forcing past it re-burns a slot each time.
+
+Consequence for this table: the "work these waves only from a session that HOLDS the target tree"
+rule stands, but it must be enforced at `claim --venue cloud`, not left to the label. Until it is,
+**every** open `reso-management-app` / `doc_classifier` row is cloud-ineligible in fact while
+reading `eligible`, and each cloud dispatch of one costs a full worker slot that can only report
+the blocker back. (`b0be87487228` did exactly that: it could not even record its own transition —
+the VM has no `~/.claude/autonomy/backlog.jsonl`, so the ledger is unwritable from the venue the
+gate sent it to.)
+
 | Wave | Execution locus | Deliverable | Depends on |
 |---|---|---|---|
 | **R1 · reso: unblock the gate** | **S** (reso worktree) | `pnpm lint` green on `origin/main`; a fresh worktree can pass `ship-land` | — |
