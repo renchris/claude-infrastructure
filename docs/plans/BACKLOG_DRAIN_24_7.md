@@ -206,6 +206,41 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   were no-ops), but the residuals were silently not filed until re-filed without the flag. To join a
   NEW row to a condition, `add` first and `link <id> --condition <slug>` second.
 
+  **`7c22e9b43956` STAYS OPEN, and it is handed to #63 with the remedy measured — the one row this
+  recycle did not resolve, deliberately.** Verdict PARTIALLY-LANDED. Its premise survives: the
+  `work_landed` fast path it indicts is unchanged at `bin/cc-reaper:878`, and `bin/cc-classify:537`
+  carries the identical line, so `work_landed:yes` is still emitted for a 0-commit session. What DID
+  land is the precondition — `session_ever_committed()` at `:914`, three-valued off the worktree's
+  own HEAD reflog — plus three belts (`4e4c0f3f4` back-channel, `ab22990a1` in-flight subagent,
+  `d99841243` live unmet goal). But `dc461778a` is docs-only and is the row's own best evidence:
+  *"the 83% was the size of the hole, not leg 4's coverage of it — measured, the new belt reaches
+  ~1% of it,"* closing with *"That residual is why 7c22e9b43956 stays open."* Re-measured today:
+  `~/.claude/cc-fired` holds 623 stamps, **512 (82%) with no `notifyBack`** — the 83% figure holds.
+  The falsifier as literally worded now reaches REAP and two tests PIN that as intended
+  (`tests/cc-reaper.bats:2164` B5, `:2632` G5 — G5's comment: *"14.3% of transcripts carry a goal
+  record at all… it MUST reap, or leg 4 exempts the whole fleet"*). **So a leg 5 must re-scope G5,
+  not sit beside it.** The measured remedy is candidate (c) — a pending-background-task check —
+  which `bin/cc-reaper:1010-1014` dismissed on the wrong store: reboot-ephemerality is true of
+  `/private/tmp/claude-501/…/tasks/` and FALSE of the transcript, which cc-reaper already resolves
+  via `find_transcript` (`:799`) for legs 3 and 4. Insertion point `:1683`, above leg 2; blocker is
+  that no seam exists for the task store (`CC_TASKS_ROOT` must be introduced) so T1-T8 cannot be
+  fixtured hermetically. Population: 18% of 7,003 transcripts ever launch a background task, ~28%
+  of those hold a launched id with no notification — ~5% of all transcripts, too broad unbounded, so
+  it must carry leg 3's `INFLIGHT_MAX_SILENCE_S` freshness bound. This is an ESCALATION SURFACE
+  (launchd-loaded, removes worktrees) and needs red-proofs per case + mutants before landing.
+
+  🚨 **VERIFIED BUT NOT FILED, DELIBERATELY — `cc-reaper` has reaped NOTHING in 7 days and I could
+  not attribute it.** Measured directly on `~/.claude/logs/cc-reaper.log` (99,462 lines,
+  2026-08-13T01:03Z → 2026-08-20T12:59Z): **1,063 sweeps ending `0 reaped`, ZERO with a nonzero reap
+  count**, and **608 `bound-fired classify: exceeded 90s`** events. All four belt strings
+  (`uncommitted-belt`, `goal-belt`, `inflight-belt`, `task-belt`) appear **0 times**, consistent with
+  the live copy being 1,782 lines against trunk's 2,262 with all four new symbols at 0. The freeze
+  explains the belts. It does **not** explain 0-reaped, because sweeps that did classify 4-10
+  sessions still produced 0 candidates. **I am handing this over as a measurement with the
+  attribution question OPEN rather than minting a row with a guessed cause** — a wrong cause beside
+  a true metric reads as diagnosed (memory: `wrong-cause-corroborated-by-true-metric`), and this is
+  the box's most destructive unattended actuator. #63's first task: attribute it, then file it.
+
 - **2026-08-20 — drain recycle #61: `master-fleet-footprint` 10 open → 8. Both rows I closed had
   been fixed the previous evening, hours after they were filed — and the residual they left behind
   is that a remedy can land, be correct, and still be unreachable by the process that has to run
