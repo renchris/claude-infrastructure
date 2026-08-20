@@ -87,6 +87,83 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #54: two rows that both asked for an instrument got one, because in
+  both cases the syscall was already on the box and only the python BINDING was missing.**
+  `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim left behind)** — unchanged, and the property re-measured at intake still holds
+  (10/10 open are `venuePlan=local` AND `project=claude-infrastructure`). Date checked FIRST:
+  2026-08-19, so `master-session-lifecycle`'s `62363cac1e39` re-census window (~2026-08-24) is
+  **still shut** and was correctly declined for the 27th time. **filed 0 / closed 0**; three
+  commits landed across two rows, `LIVE_ADDS=0` for the whole range.
+
+  **`b38279c10c55` — the sender recorder is WIRED (`dc1559c3b`), row left OPEN.** #53 killed the
+  "compiled binary only" constraint; this pass built on it. The side-car lives inside
+  `bin/cc-await-ping` (already symlinked), armed at startup, reaped by the EXIT trap, read by
+  `_sig_verdict` through a bounded 10x50 ms poll. Both channels now carry the sender — the stderr
+  verdict and the `WAKE-PATH-DOWN` inbox line — verified end-to-end with `si_pid` matching the
+  predicted driver shell on both arms. Coverage stays 109/352 (31%). Row stays open because it asks
+  for the sender to be CAPTURED and what landed is the instrument, not the capture; the remaining
+  step is not code but a live exit-144.
+
+  **`2029c52b8a32` — the per-coalition footprint instrument exists now (`ca6b067b7`), row left
+  OPEN.** `capacity-alarm.sh`'s own rung-6 header said such an instrument "does not exist yet".
+  Both halves were already on the box: libproc's `PROC_PIDCOALITIONINFO` (via ctypes — python ships
+  no binding) gives TRUE coalition membership in **0.05s over 1025 pids**, and `/usr/bin/footprint`
+  counts shared pages ONCE across a pid set. Nothing reads the new fields, deliberately — the row's
+  fatal evidence is n=1 and says not to mint a cutoff from it, so `coal_true_procs` / `coal_id` /
+  `coal_fp_mb` / `coal_fp_src` are logged BESIDE the existing fields and CF4 pins that as a source
+  invariant over `classify()`. Row stays open: it also asks for a population to calibrate against,
+  and that does not exist yet.
+
+  **THE PASS'S OWN LESSON — THE COST FIGURE A DESIGN IS JUDGED ON MUST BE MEASURED WITH THE
+  INSTRUMENT THAT MATCHES THE DECISION.** The brief handed down "15.0 MB RSS per armed recorder" and
+  tied it to this very effort. That is `ps` RSS, which charges every mapper the interpreter's full
+  shared COW text — the overcount `2029c52b8a32` itself bans. Per-task: **10.3 MB** footprint,
+  9.5 MB dirty, vs 7.7 MB for a bare python3; nine watchers armed concurrently ⇒ **~93 MB**, not the
+  ~240 MB RSS implies. Same law, second row: summed `ps rss` over the terminal coalition is
+  **1.12x** its footprint (Dia's: 1.38x), NOT the 2.34x the row cites — that figure was measured
+  over SESSIONS and does not carry. And the tree-walk undercount is not a constant: the header says
+  0.57x (range 0.43-0.62), measured here **0.61x and 0.67x**, outside the stated range, which is
+  exactly why `COAL_PROCS` was logged beside the true count rather than replaced by it.
+
+  **A NON-VERDICT, RECORDED SO NOBODY REPEATS IT.** The first marginal-footprint test took a
+  system-wide `vm_stat` anon-pages delta across killing one recorder and reported **355 MB** for a
+  ~10 MB process. On a box running ~16 sessions that measured the box, not the recorder. A per-task
+  instrument was the only route to the answer.
+
+  **A GREEN MUTANT THAT INDICTED THE TEST, NOT THE SUBJECT — and a new variant of a known trap.**
+  M-C5 (overwrite `COAL_PROCS` with the true count) came back GREEN. The mutant had applied; CF5's
+  source check was wrong. It used the usual `^[^#]*` comment anchor, but the target line carries
+  `${_ct#* }` — **the `#` inside a PARAMETER EXPANSION ends the `[^#]*` span** before it reaches
+  `COAL_PROCS=`, so the pattern matched nothing and the case passed against a mutated subject.
+  Comment lines are now stripped by a separate pass. Note this is a third face of the census trap
+  (#52: string literals; #53: quoted spans three lines from a real site): the `#` need not be a
+  comment at all. Also honest: M-C1's red on CF3 was **over-wide and unpredicted**, recorded as such
+  in the suite header rather than folded into the prediction after the fact.
+
+  **RED-PROOF + MUTANTS, both published in their suite headers.** cc-await-ping: 8 cases, predicted
+  before the pristine run and matched **8/8** (RED R1/R3/R4/R5/R6/R8; GREEN R2+R7 by construction,
+  both asserting an ABSENCE); **8 mutants, 8/8 red >=1 case, 0 green, 0 anchor drift**, and R7 is
+  stated as credited by NO mutant because the `command -v python3` branch is unreachable here
+  (/usr/bin/python3 exists, so PATH cannot be made python3-free without removing what the watcher
+  needs). capacity-alarm: 5 cases, predicted and matched **5/5** (GREEN CF4 by construction);
+  5 mutants, 5/5 red >=1 case, 0 green. Full suites run by hand: **76/76** and **47/47**, 0 skips.
+  The land's smoke gate ABSTAINED on `tests/cc-await-ping.bats` (exit 124, zero `not ok`) exactly as
+  the brief predicts — covered by having pre-run it.
+
+  **THE TEST HAZARD #53 PAID FOR, AND HOW THIS SUITE SURVIVES IT.** Exercising the 144 shape needs
+  `kill -TERM -<pgid>`, and under the Bash tool a backgrounded task and its children share ONE
+  process group led by the wrapper. The suite defends in two parts: `spawn_isolated()` puts the
+  victim in its own session via `os.setsid()`, and `group_term()` REFUSES any group whose pgid is
+  not provably different from ours. Both are load-bearing; neither may be weakened to pass a case.
+
+  **NOT OURS, ATTRIBUTED:** `deploy-live.sh` still REFUSES, blocked by the same single un-landed
+  commit in the shared checkout — `9709c99d3`, `rev-list --count origin/main..HEAD` = 1, unchanged
+  through 28 recycles. Consequence owned: **both instruments landed this pass are NOT live until
+  that clears** — `capacity-alarm.sh` rides its symlink into a checkout still at `9709c99d3`, so the
+  new fields emit nothing yet, the same way `e78107996dea`'s `argv0` still reads null. 0 teammates,
+  0 Explore subagents spawned.
+
 - **2026-08-19 — drain recycle #53: a row declined for twenty-two recycles closed on the arm nobody
   had run — a fresh checkout pays the exec penalty in full for bytes assessed long ago; and the
   "compiled binary only" constraint that made the exit-144 recorder expensive is simply false.**
