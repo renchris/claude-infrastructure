@@ -244,7 +244,18 @@ printf '\nreaping…\n'
 if [ -n "${CC_SPIN_GUARD_CLOSE:-}" ]; then
   "$CC_SPIN_GUARD_CLOSE" || true
 else
-  command -v agent-browser >/dev/null 2>&1 && { agent-browser close --all >/dev/null 2>&1 || true; }
+  # `type -P`, never a bare `agent-browser` at command position. This job's PATH is
+  # com.claude.browser-spin-guard.plist's, and on this box agent-browser exists ONLY inside an fnm
+  # multishell dir — a path that changes per shell — so the bare name resolved in the operator's
+  # shell and NOWHERE the daemon actually runs. The graceful close is best-effort by construction,
+  # so the unreachable case stays a skip, but a LOGGED one: a silent skip is exactly the fail-open
+  # polarity unattended-path-lint exists to catch. The hard kill below runs either way.
+  _ab_close="$(type -P agent-browser 2>/dev/null || true)"
+  if [ -n "$_ab_close" ]; then
+    "$_ab_close" close --all >/dev/null 2>&1 || true
+  else
+    printf '  agent-browser is not on this job%s PATH — skipping the graceful close, going straight to the hard kill\n' "'s"
+  fi
   sleep 3
 fi
 
