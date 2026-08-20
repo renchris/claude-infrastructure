@@ -258,7 +258,25 @@ content_is_tracked() {  # $1 = absolute live file → 0 if its bytes are in a tr
     h="$(shasum -a 1 < "$1" 2>/dev/null | awk '{print $1}')" || return 1
   fi
   [ -n "$h" ] || return 1
-  printf '%s\n' "$TRACKED_SET" | grep -qxF -- "$h"
+  # -c AND NEVER -q, and the reason is measured on this exact line (2026-08-19). Under the
+  # `set -uo pipefail` at the top of this file, `grep -q` exits the instant it matches; the producer
+  # is then killed by SIGPIPE and the PIPELINE's rc becomes 141 — so a MATCH returned FALSE, and
+  # because this pipeline is the function's LAST statement that inverted rc was its RETURN VALUE.
+  # Every caller read "these bytes are in no tracked file". Live effect: ~/.claude/bin/it2 — a real
+  # file cp'd from the tracked bin/it2-wrapper under a different name, byte-identical (blob
+  # 1df5cbff) — was reported STRAY, which is precisely the case config/live-only.manifest's header
+  # names as "a false RED on the one case this leg exists to NOT convict".
+  #
+  # A BUILTIN PRODUCER IS NOT EXEMPT, contrary to the folklore. It is exempt only while what it
+  # writes fits the 64 KiB pipe buffer, and $TRACKED_SET is one 40-char line per tracked file —
+  # 2,035 lines / ~83 KB on this repo today, i.e. already past it, and growing. The failure also
+  # gets MORE likely the EARLIER the match is found, so the healthiest inputs fail hardest.
+  # pipefail-sigpipe-lint.sh's own header records the same measurement (64 KiB → 10/10).
+  # Counting consumes the whole stream, so there is no early exit and no signal to invert.
+  local n
+  n="$(printf '%s\n' "$TRACKED_SET" | grep -cxF -- "$h" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ]
 }
 
 # A declared row is honoured ONLY while its witness still exists AND still mentions the artifact.
