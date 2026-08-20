@@ -87,6 +87,125 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #62: `master-fleet-footprint` 8 open → 1 open / 5 blocked.
+  closed 6 / filed 6. Five of the six closes were premise-measurements; only one needed a fix, and
+  that fix was one line of YAML. 🚨 THE FINDING: the frozen live layer is not a lag, it is a
+  CEILING that has now eaten three separate landed instruments on their first live events — and the
+  one command that clears it was filed nowhere.** Effort re-folded from the CURRENT list
+  (`--all --json` + jq), never from the inherited brief.
+
+  **The lag number was 66, not the 65 my brief inherited and not the 62 the two briefs before it
+  quoted.** Third consecutive recycle to find this stale. Re-derive it; the brief is not an
+  instrument.
+
+  🚨 **THE FREEZE IS CLASS B1 `diverged-superseded`, AND ITS REMEDY WAS UNFILED.** My brief asserted
+  the wall was "filed as `96a3501c31ce`". It is not. That row is an **open code-fix** row asking
+  `deploy-live.sh` to *print* a runnable remedy on the not-a-descendant branch — a different thing
+  from the operator *running* it — and that code fix has since LANDED (the page at
+  `~/.claude/autonomy/pages/deploy-diverged-superseded.page`, written 04:57 today, prints the exact
+  command). So the emitter works, the page has sat undriven for hours, and the operator step it
+  emits existed in no store at all. **Filed as `f33f72da71e0`** with the command.
+  Re-verified independently rather than trusting the page: the sole diverging commit `9709c99d3`
+  has patch-id `d25f1b149c5c18427eea8ff3c7bd59ceee92821a`, **identical** to `a7ae139800a5` on
+  trunk, so dropping it loses nothing. `deploy-live.sh:1610-1612` names this class in its own
+  source as *"THE STATE THAT FROZE THE LIVE LAYER FOR 29 DRAIN RECYCLES."* It is back.
+
+  **The cost is three landed instruments executing nowhere, each measured this recycle:**
+  · `ca6b067b7` per-coalition footprint — **0 of 23,909** `capacity-alarm.jsonl` rows carry
+  `coal_fp_mb`; the live script has 0 occurrences of `read_coalition_footprint` and no damping
+  stamp has ever been written.
+  · `fcb354d37` `argv0` attribution — **0 of 23,909** rows carry `argv0`.
+  · `dc1559c3b` the SA_SIGINFO sender recorder — 13 watchers armed, **0** side-cars alive, and at
+  least **7 genuine exit-144 group-kills fired 4.4 hours AFTER it landed**, all uncaptured.
+  The common shape: each landed **above** the freeze (`--is-ancestor` false), so the live layer
+  structurally cannot carry it. `ca6b067b7` landed 2026-08-19 **19:00:55**; the freeze is
+  2026-08-19 **04:10:03** — fifteen hours apart, which is the whole story.
+
+  **FOURTH sighting of "a criterion that cannot clear."** #60 found `b69b1d957cec` gated on a
+  one-week npm tenure for a tag that turns over every 1.5 days; #61 found the resident-reload arm
+  waiting on an observation cycle emitted from the frozen layer; this recycle found two more, and
+  they are the same shape. `2029c52b8a32`'s remaining work is *"gather more fatal events or a
+  deliberate load test before setting any cutoff"* — on an instrument that emits nothing. When a
+  gate has never once been observed to open, **suspect the gate before the world.**
+
+  **Closes (all content-verified on `origin/main` at the moment of closing):**
+  · **`2029c52b8a32` — the instrument it calls "real work" was already built.**
+  `read_coalition_footprint()` at `scripts/capacity-alarm.sh:917` uses libproc
+  `PROC_PIDCOALITIONINFO` for true membership and `/usr/bin/footprint --json` for shared-aware
+  bytes — exactly the row's ask, and exactly not the banned `ps rss` 2.34× overcount. Landed
+  `ca6b067b7`, whose own subject reads *"the per-coalition footprint instrument its own header
+  calls nonexistent."*
+  · **`66ef300dd0b4` (the W4 umbrella) — its two named defects both closed 2026-08-15, and every
+  census figure it cites has rotted in the healthy direction.** Re-measured: orphaned-worktree gap
+  **122 → 34** (167 on disk vs 133 registered); `/tmp/claude-*` **21 GB → 1.43 GB** with the last
+  boot 7 days ago, so that is real cleanup and not a reboot artifact; empty task dirs
+  **2,363 of 2,428 → 454 of 2,450**, i.e. the empty *fraction* collapsed 97% → 18.5%. ⚠️ My first
+  worktree count read **3,696** and was an instrument artifact — a depth-2 `find` counts nested
+  dirs of worktrees, not worktrees. Police the denominator before reporting it.
+  · **`399b9938bef8` (reso, cross-repo) — REFUTED twice over.** Both halves landed in reso
+  `1211088d7` **thirteen hours after the row was filed**, and its stated blocker ("reso reserves
+  ship as the operator's explicit call") had been false since 2026-08-02. The row's cited line
+  numbers `:92/:167/:218` match reso revision `6f8992a7c` — **2026-07-03**, i.e. its source was 39
+  days stale at filing. Root cause of both errors is one thing: the local reso checkout is **906
+  commits behind** trunk, so it is a stale oracle for any cross-repo read.
+  ⚠️ **My own pre-measurement here was a FALSE NEGATIVE and I nearly published it.** I ran
+  `grep -c 'timeout .* git fetch'` → 0 and concluded the bound was unfixed. The bound is at
+  `worktree-pool.sh:120-122` and applies through a `${_to}` variable, so `timeout` and `git fetch`
+  never share a line and no same-line regex can see it. Same class as *"Grep name, not path"* and
+  *"Miss ≠ absence"* — a null from a single-line grep is a statement about the grep.
+  · **`f0283c35130e` — premise refuted by a landed guard that argues against the row in its own
+  source.** `scripts/browser-spin-guard.sh:20-26`: *"neither 'is it old' nor 'is it orphaned'
+  discriminates… on this box essentially every backgrounded worker is reparented to launchd, so
+  ppid==1 is the healthy population, not the sick one."* The 42 → 1 drop is the 2026-08-09/08-13
+  reboots, not a reap — the guard landed 2026-08-17, ten days after the census, and its plist arms
+  `--notify`, never `--reap`, so nothing has ever reaped an agent-browser daemon here.
+  · **`e78107996dea` — TRIGGER IDENTIFIED, and it is not a session leaking.** 21 of 21 attributable
+  ≥4 GiB episodes are Claude Code's own embedded `ugrep`, reached through the shell snapshot's
+  `grep` shadow, running an **agent-authored wildcard-context regex** over a huge tree —
+  `[^;]\{0,400\}teamFilePath[^;]\{0,300\}` (32 GiB), `.\{0,1500\}Goal set: .\{0,600\}` (13 GiB),
+  the latter two over *our own transcript directory*. `ugrep -o` with `.{0,N}` materialises every
+  overlapping match window, so cost is ~N × matches. Whoever writes `.{0,1500}` over a transcript
+  tree buys ~30 GiB. Rate has halved rather than stopped (4.9/day → 2.4/day). Attribution came from
+  a **sibling** store — the compressor-sentinel snap log — covering 27% of episodes; that 27% is
+  stated as the honest limit, not rounded up.
+  · **`d4fa449e3895` — the only row needing a fix, and the fix is one line of front matter.** The
+  row is machine-minted by `plan-phase-scan.sh` (`source: plan-open`, title = the plan's H1). Its
+  falsifier has two clauses, and clause (b) — no level-≥2 section still `PENDING|IN_PROGRESS` — is
+  **structurally unreachable** for a narrative investigation whose 49 of 51 headings carry no status
+  markers. So only a front-matter `complete` could ever retract it, which is why two prior workers
+  claimed it and could not land. Flipped in `c82b5c8b9`. The question itself was answered long ago:
+  a teammate never self-closes **by design** (`bin/cc-pane-runner:115` `exec`s an interactive login
+  shell when the agent command returns), the remedy is external reaping, and it is working —
+  acceptance metric **680 → 1,061 closes**, every operating day 08-04 → 08-20.
+
+  **Blocked (not closed, not hidden):** `b38279c10c55` → blocked on `f33f72da71e0`. Its recorder is
+  landed and CORRECT — it captures `si_pid`, `si_uid`, `si_code` **and** resolves the sender's full
+  argv — and its own landing commit says the row stays open because it lands the instrument, not the
+  identification. But this is **not** "awaiting an event": the events arrive at ~16 external kills
+  per 12 h and the instrument has never once been on the machine. Also settled, do not re-test:
+  `docs/research/exit-144-population-2026-08-19.md` excludes **both** suspects the row's own cited
+  §4 names, by mechanism.
+
+  **Filed 6 (conservation: closed 6 ≥ filed 6):** `f33f72da71e0` the operator unfreeze ·
+  `ee69a1b8dcd0` the one teammate-close refusal that reaches the actuator is the only one that pages
+  nobody (`teammate-auto-shutdown.sh:303` returns without `_page_desk_damped`, which 6 sibling
+  refusal paths in that same file call) · `4adbece80a5f` `tests/cc-reaper.bats` cannot run off macOS
+  (22 of 111 red on Linux against unmodified trunk; the plan recorded this **twice** as "NEEDS
+  FILING" because the cloud VM that found it had no reachable store — 5 days as prose only) ·
+  `bc971e0ea6a7` `cc-eligible`'s BANKING class refuses branch work by SPELLING and `ship/backup`
+  is not among the spellings, so it burns cloud slots on populations the VM holds 0 of ·
+  `810d59da926a` the new `argv0` field will silently re-manufacture the `claude.exe` label it
+  exists to delete, because `ps` prints `(claude.exe)` for unreadable argv and the awk strips the
+  parens — latent today, arrives the moment the layer converges · `6c55ce7364d4` an idle
+  agent-browser tree holds ~976 MB across 11 processes and no rung watches aggregate per-tree
+  memory (CPU-keyed guard reads clean; `proc_warn_gb` is 3 GB *per process*).
+
+  ⚠️ **`cc-backlog add --condition <slug>` re-keys the id to project+condition — ONE row per
+  condition.** Three `add --condition master-fleet-footprint` calls all echoed `66ef300dd0b4`, the
+  umbrella row, and filed nothing. No damage (a `done` row is excluded from the update arm, so they
+  were no-ops), but the residuals were silently not filed until re-filed without the flag. To join a
+  NEW row to a condition, `add` first and `link <id> --condition <slug>` second.
+
 - **2026-08-20 — drain recycle #61: `master-fleet-footprint` 10 open → 8. Both rows I closed had
   been fixed the previous evening, hours after they were filed — and the residual they left behind
   is that a remedy can land, be correct, and still be unreachable by the process that has to run
