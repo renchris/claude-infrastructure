@@ -1011,3 +1011,198 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
   grep -q 'WAKE-PATH-DOWN' "$MB"                     # positive control: the control DID write a notice
   ! grep -q 'do NOT re-arm' "$MB" || false           # RED: its only instruction was the denied one
 }
+
+# ══ THE SENDER RECORDER (backlog b38279c10c55) ═══════════════════════════════════════════════════
+# A killed watcher used to say it was killed but never BY WHOM, because an exit code carries no
+# sender. These cases pin the SA_SIGINFO side-car that reads si_pid.
+#
+# 🚨 THE TEST HAZARD, PAID FOR ONCE ALREADY. Exercising the 144 shape means `kill -TERM -<pgid>`,
+# and under the harness a backgrounded task and everything it spawns share ONE process group led by
+# the wrapper — so a group kill aimed at "the child" takes the runner with it. Recycle #53's probe
+# did exactly that and the harness reported it as exit 144: the probe reproduced the very defect it
+# was investigating, on itself. Defence, in two parts, both mandatory:
+#   1. spawn_isolated() puts the victim in a NEW SESSION via os.setsid(), so its pgid is its own.
+#   2. group_term() REFUSES to signal any group whose pgid is not provably different from ours.
+# Never signal a group this process belongs to. Never weaken part 2 to make a case pass.
+#
+# WHICH MUTANT REDS WHICH CASE — published so a green suite cannot silently credit nothing.
+# All eight were RUN, not reasoned about: 8/8 applied, 8/8 reddened at least one case, 0 green,
+# 0 anchor drift, 0 non-verdicts, and every result matched the prediction written before the run.
+#   N1 (drop the `_sigrecord_arm` call)                     → R1, R3, R4, R6, R8
+#   N2 (flip the kill-switch default from 1 to 0)           → R1, R3, R4, R6, R8   [over-wide: PREDICTED]
+#   N3 (drop the sender clause from the stderr verdict)     → R3
+#   N4 (drop the sender arg passed to _wake_down_notice)    → R4
+#   N5 (drop the recorder's parent-death poll)              → R8
+#   N6 (make _sigrecord_arm ignore CC_AWAIT_PING_SIGRECORD) → R2
+#   N7 (drop _sigrecord_disarm from the EXIT trap)          → R6
+#   N8 (drop the honest "no sender was captured" fallback)  → R5
+# R7 IS CREDITED BY NO MUTANT, and that is stated rather than hidden. Its subject is the
+# `command -v python3` fail-open guard, whose branch is unreachable here: /usr/bin/python3 exists on
+# this box, so PATH cannot be made python3-free without also removing the binaries the watcher needs.
+# R7 pins the SPAWN-FAILS branch instead, which converges on the same state (no recorder armed), and
+# stands as a regression guard rather than as proof. Do not read its green as coverage.
+
+# Launch cc-await-ping in its OWN session, so its process group is its own and can be signalled
+# without touching ours. Optional 3rd arg prefixes the WATCHER's PATH only (not this launcher's,
+# which needs the real python3). Echoes the victim pid; returns 1 if it never appeared.
+spawn_isolated() { # <uuid> <capfile> [watcher-PATH-prefix]
+  local i pid
+  python3 - "$AWAIT" "$1" "$2" "${3:-}" <<'PYSPAWN' &
+import os, sys
+exe, uuid, cap = sys.argv[1], sys.argv[2], sys.argv[3]
+pathpfx = sys.argv[4] if len(sys.argv) > 4 else ""
+os.setsid()
+fd = os.open(cap, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+os.dup2(fd, 2); os.dup2(fd, 1)
+if pathpfx:
+    os.environ["PATH"] = pathpfx + ":" + os.environ.get("PATH", "")
+os.execv("/bin/bash", ["/bin/bash", exe, uuid, "--timeout", "60", "--interval", "2"])
+PYSPAWN
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    sleep 1
+    # NOT pgrep, deliberately: pgrep excludes the caller's own ancestors, and this lookup runs from
+    # inside the very process tree it is enumerating. Matching on argv keeps the victim visible.
+    # shellcheck disable=SC2009
+    pid="$(ps -axo pid=,command= | grep -F "cc-await-ping $1" | grep -vF grep | awk '{print $1}' | head -1)"
+    if [ -n "$pid" ]; then printf '%s' "$pid"; return 0; fi
+  done
+  return 1
+}
+
+# ANTI-VACUITY: a case that never got a live watcher must FAIL, not quietly assert about nothing.
+assert_victim() { # <pid>
+  [ -n "${1:-}" ] || false
+  kill -0 "$1" 2>/dev/null || false
+}
+
+# THE SAFETY GATE. Refuses unless the victim's pgid is provably not ours.
+group_term() { # <victim pid>
+  local vpg ourpg
+  vpg="$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')"
+  ourpg="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  [ -n "$vpg" ] || return 1
+  [ -n "$ourpg" ] || return 1
+  [ "$vpg" != "$ourpg" ] || return 1
+  kill -TERM -"$vpg" 2>/dev/null || true
+  return 0
+}
+
+recorder_pid() { # <watcher pid> -> pid of its python side-car, empty if none
+  ps -axo pid=,ppid=,command= | awk -v v="$1" '$2==v && /[Pp]ython/ {print $1; exit}'
+}
+
+@test "R1: a watcher arms an SA_SIGINFO recorder side-car by default" {
+  local u="RECORD-R1-$$" cap="$BATS_TEST_TMPDIR/r1.out" v r
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  r="$(recorder_pid "$v")"
+  group_term "$v" || false
+  [ -n "$r" ] || false
+}
+
+@test "R2: CC_AWAIT_PING_SIGRECORD=0 arms no recorder, and the watch is otherwise unchanged" {
+  local u="RECORD-R2-$$" cap="$BATS_TEST_TMPDIR/r2.out" v r
+  export CC_AWAIT_PING_SIGRECORD=0
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  r="$(recorder_pid "$v")"
+  group_term "$v" || false
+  sleep 2
+  [ -z "$r" ] || false
+  # the kill-switch must cost nothing else: the verdict still lands
+  run grep -cF 'verdict=killed' "$cap"
+  [ "$output" = "1" ] || false
+}
+
+@test "R3: a GROUP TERM makes the stderr verdict name the sender's si_pid" {
+  local u="RECORD-R3-$$" cap="$BATS_TEST_TMPDIR/r3.out" v n
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  group_term "$v" || false
+  sleep 3
+  n="$(grep -cF 'SENDER IDENTIFIED' "$cap" 2>/dev/null)"
+  [ "${n:-0}" -ge 1 ] || false
+  run grep -oE 'si_pid=[0-9]+' "$cap"      # a real pid, not a literal
+  [ "$status" -eq 0 ] || false
+}
+
+@test "R4: the WAKE-PATH-DOWN inbox line carries the sender too, not only stderr" {
+  local u="RECORD-R4-$$" cap="$BATS_TEST_TMPDIR/r4.out" v n
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  group_term "$v" || false
+  sleep 3
+  [ -f "$CC_MAILBOX_DIR/$u.md" ] || false
+  n="$(grep -cF 'SENDER IDENTIFIED' "$CC_MAILBOX_DIR/$u.md" 2>/dev/null)"
+  [ "${n:-0}" -ge 1 ] || false
+}
+
+@test "R5: a single-pid TERM never reaches the recorder, so the verdict says so honestly" {
+  local u="RECORD-R5-$$" cap="$BATS_TEST_TMPDIR/r5.out" v
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  kill -TERM "$v" 2>/dev/null || true  # THIS PROCESS ALONE — deliberately not the group
+  sleep 3
+  # `run`, not $(...): grep -c prints 0 and EXITS 1 on no-match, which under bats errexit aborts the
+  # assignment and reds the case before it ever asserts. Only a case expecting ZERO matches can trip
+  # that — which is exactly this one.
+  run grep -cF 'SENDER IDENTIFIED' "$cap"
+  [ "$output" = "0" ] || false         # no sender, because none was deliverable
+  run grep -cF 'sender was not captured' "$cap"
+  [ "$output" -ge 1 ] || false         # and it SAYS so, rather than staying silent
+}
+
+@test "R6: an ordinary wake reaps the recorder and leaves no capture file behind" {
+  local u="RECORD-R6-$$" cap="$BATS_TEST_TMPDIR/r6.out" v r
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  r="$(recorder_pid "$v")"
+  [ -n "$r" ] || false                 # anti-vacuity: there must BE a recorder to reap
+  printf '2026-08-19T10:00:00+0000 [peer] R6 wake body\n' >> "$CC_MAILBOX_DIR/$u.md"
+  # Wait for the WATCHER to go, then check the recorder IMMEDIATELY. A fixed sleep would not
+  # discriminate: an un-disarmed recorder self-exits on its own parent poll within ~5s, so a late
+  # check reads clean either way and the disarm path would be credited for the poll's work.
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$v" 2>/dev/null || break
+    sleep 1
+  done
+  run kill -0 "$v"
+  [ "$status" -ne 0 ] || false         # anti-vacuity: the watcher really did exit
+  run grep -cF 'R6 wake body' "$cap"   # and it exited because the ping was consumed
+  [ "$output" = "1" ] || false
+  # keyed on the recorder's OWN pid: an orphan is reparented to pid 1, so a ppid-based check here
+  # would match nothing either way and pass vacuously.
+  run kill -0 "$r"
+  [ "$status" -ne 0 ] || false
+  [ ! -f "${TMPDIR:-/tmp}/cc-await-ping-sender.$v" ] || false
+}
+
+@test "R8: a SIGKILLed watcher runs no trap, so the recorder must self-exit on parent death" {
+  local u="RECORD-R8-$$" cap="$BATS_TEST_TMPDIR/r8.out" v r
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  r="$(recorder_pid "$v")"
+  [ -n "$r" ] || false
+  kill -KILL "$v" 2>/dev/null || true  # no EXIT trap, no disarm — only the parent poll can save us
+  sleep 8                              # the poll slices at 5s
+  run kill -0 "$r"
+  [ "$status" -ne 0 ] || false
+  rm -f "${TMPDIR:-/tmp}/cc-await-ping-sender.$v" 2>/dev/null || true
+}
+
+@test "R7: a recorder that cannot arm FAILS OPEN — the watch runs and still verdicts" {
+  # SCOPE, stated rather than implied: this exercises the SPAWN-FAILS branch, not the
+  # `command -v python3` branch — see the mutant-map note at the head of this block.
+  local u="RECORD-R7-$$" cap="$BATS_TEST_TMPDIR/r7.out" v r
+  mkdir -p "$BATS_TEST_TMPDIR/stub"
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/stub/python3"
+  chmod +x "$BATS_TEST_TMPDIR/stub/python3"
+  v="$(spawn_isolated "$u" "$cap" "$BATS_TEST_TMPDIR/stub")" || false
+  assert_victim "$v"
+  r="$(recorder_pid "$v")"
+  [ -z "$r" ] || false                 # nothing armed
+  group_term "$v" || false
+  sleep 2
+  run grep -cF 'verdict=killed' "$cap" # but the watcher itself was untouched
+  [ "$output" = "1" ] || false
+}
