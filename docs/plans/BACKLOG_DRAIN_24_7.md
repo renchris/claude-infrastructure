@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #53: a row declined for twenty-two recycles closed on the arm nobody
+  had run — a fresh checkout pays the exec penalty in full for bytes assessed long ago; and the
+  "compiled binary only" constraint that made the exit-144 recorder expensive is simply false.**
+  `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim)** — down from 11 at intake. **filed 0 / closed 1.** Landed `1ac0ca33e` +
+  `d3489771e` + this entry. Effort choice: `date` read 2026-08-19, so `master-session-lifecycle`'s
+  `62363cac1e39` efficacy re-census (due ~2026-08-24) is still CLOSED and was correctly declined for
+  the 26th consecutive recycle. Intake property re-measured and it held: 11/11 open were
+  `venuePlan=local` AND `project=claude-infrastructure`. Teammates 0/0, Explore 0.
+
+  **Row `15265ac3c502` — ADOPTED AND CLOSED (`1ac0ca33e`).** #52 confirmed the base effect and left
+  the adoption open as a judgement call. The judgement turned on an arm nobody had run. #52's
+  same-inode control (25.7 vs 25.8 ms) proves the cache is *at least* inode-granular, but it cannot
+  distinguish **H-inode** (keyed on file identity ⇒ `git checkout` writes NEW inodes holding OLD
+  bytes and pays again) from **H-content** (keyed on the bytes ⇒ a fresh worktree pays NOTHING and
+  the row's named scenario, "worktree setup", is EMPTY). n=40 per arm, alternated:
+  `A` fresh inode + novel content `./x.sh` **130.60 ms** · `B` fresh inode + content ALREADY
+  ASSESSED `./x.sh` **131.05 ms** · `C` same inode re-exec **3.75 ms** · `D` fresh inode + novel
+  content `bash x.sh` **3.55 ms**. **B−D = 127.51 ms — a fresh checkout pays in full.** H-inode
+  holds, the scenario is real, and `C−D = 0.21 ms` is what makes A and B mean anything.
+  - **Delivered:** 15 call sites, one token each, across the 5 gate scripts (comms 6 · premortem 3 ·
+    wait-safety 4 · reaper-safety 1 · supervisor-e2e 1); 12 distinct target inodes ⇒ ~1.7 s off the
+    first land in each fresh worktree. That is ~1% of the gates' own ~3 min runtime — **the honest
+    value is uniformity plus a recorded measurement, not speed, and the entry says so rather than
+    inflating it.**
+  - **Safety proved, not asserted:** all 18 candidate targets are `#!/bin/bash` mode 100755, so no
+    member can change interpreter (question (m) answered NO) and the tempting "this also fixes a
+    latent missing +x" hypothesis was checked and **REFUTED**. All five gates were run before and
+    after: **byte-identical apart from one PID in supervisor-e2e's own `sleep` teardown line.**
+    premortem and wait-safety were ALREADY red on trunk (S-1, L0) — attributed before proceeding,
+    not laundered.
+  - **TWO SITES EXCLUDED BECAUSE THE REMEDY IS THE HAZARD THERE, and that is a reason, not a
+    convenience.** `bats-shellcheck-lint.sh:421,426` run `env -u … ./scripts/lint.sh` in a mktemp
+    fixture whose own comment says *"Driven through the real ENTRY POINT … because the refusal lives
+    there and `$ROOT` is derived from `$0`"*. The fixture exists to drive the real entry point and
+    assert a REFUSAL; rewriting its invocation would alter the subject under test.
+
+  **Row `b38279c10c55` — ADVANCED, LEFT OPEN (`d3489771e`), and its stated blocker is GONE.**
+  - 🚨 **THE CONSTRAINT THIS CHAIN CARRIED WAS FALSE.** The brief and the population doc both said
+    macOS ships no `sigwaitinfo`, therefore a COMPILED `SA_SIGINFO` helper is the only route,
+    therefore a new file in `bin/`, therefore a `LIVE_ADDS` breach at a lag of 1. **`sigwaitinfo`'s
+    absence says nothing about `sigaction`**, which `ctypes` calls directly. Measured twice, both
+    naming the true sender: group TERM (the 144 shape) → `si_pid=82922`; single-pid TERM (the 143
+    shape) → `si_pid=33361`. ~45 lines, no toolchain, **so the recorder fits inside the already-
+    symlinked `bin/cc-await-ping` and `LIVE_ADDS` stays 0.** Verified code is embedded in the doc.
+    Gotchas that will bite a re-derivation: Darwin's `sigset_t` is a bare `uint32` (so `struct
+    sigaction` is NOT the glibc layout), and the `CFUNCTYPE` thunk **must be held in a live
+    variable** or ctypes frees it and the handler segfaults on delivery.
+  - **NEITHER NAMED SUSPECT IS LIVE — this brief said "both STILL UNTESTED" and the doc it cites
+    refutes that.** §4 is titled *"Two live risks found on the way (neither caused this)"*. The
+    garbage arm is excluded by MECHANISM, not "one window": `bin/cc-reaper:485` is
+    `kill "-$sig" "$pid"` under a `case "$pid" in *[!0-9]*) continue` guard, so a negative target is
+    unreachable — re-derived in code, not taken on trust. The memory-pressure reaper is excluded by
+    §3 on an equally timing-independent ground: it reports `"<desc>" was stopped`, never
+    `failed with exit code N`, and every event here is an exit code. **Treat the sender as
+    unidentified rather than as one of two.**
+  - **§5's "no group-kill site" re-derived — and grep CANNOT establish it.** `kill -0 "$p"` (signal
+    0) is regex-indistinguishable from a negative target, and this repo discusses `` `kill -0` `` on
+    hundreds of COMMENT lines, so a naive pattern returns ~60 hits that are all prose. Comment- and
+    quote-stripped, then parsing kill's ARGUMENT POSITIONS: **0 negative-target kill sites**, 0
+    `killpg`, 0 `pkill -g`.
+  - **Remainder, named:** wire the sidecar into `cc-await-ping` (whose `_sig_verdict` TERM trap at
+    line 539 already clears the marker, writes WAKE-PATH-DOWN to the inbox and exits 128+signal —
+    **it does everything except name the sender**). Bounds: coverage is **109 of 352 (31%)**, the
+    other 243 dying in the harness's own wrapper which is not ours; and an armed recorder costs
+    **15.0 MB RSS**, which interacts with this very effort and wants a deliberate env-gate default.
+
+  **RECIPE-LEVEL FINDINGS (recorded here, not filed as rows — conservation).**
+  - (a) 🚨 **A RED-PROOF FOR THE 144 SHAPE CAN KILL ITS OWN RUNNER, AND THIS PASS PROVED IT BY
+    SUFFERING IT.** Under the Bash tool the backgrounded task and everything it spawns share ONE
+    process group led by the wrapper. The feasibility probe derived its child's pgid, signalled the
+    group, and **killed its own driver shell — reported as exit 144.** The probe reproduced the
+    defect it was investigating, on itself. Any bats case here must put the victim in its own
+    session/group and must never signal a group it belongs to.
+  - (b) **#52's census law needed a HARDER half, twice over.** Anchoring on `^[^#]*` is not enough:
+    the false positive can sit inside a QUOTED STRING on a live code line —
+    `premortem-gate.sh:80` carries `"(./scripts/s3b-lint.sh --selftest ⇒ 3/3)"` inside a `todo` call,
+    three lines from the real site at :84, and it must NOT be rewritten. A census here has to strip
+    quoted spans, not just comments. And a `\./` pattern matches the TAIL of `../`, so
+    `"$_LR_DIR/../../bin/cc-claude-bin"` reads as a direct exec — that false positive appeared in
+    **both** of this pass's instruments before it was caught.
+  - (c) **Six apparent sites were already adopted and invisible to the grep.** `p8-e2e.sh:21` and
+    `telemetry-e2e.sh:13` look like `HOOK=./hooks/session-register.sh`, `BOARD=./bin/cc-board` … but
+    are path ASSIGNMENTS whose every call site is already `bash "$HOOK"` / `bash "$BOARD"`. Reading
+    each hit is what settled it — the string matched is not the act meant.
+  - (d) **`LIVE_ADDS` attribution:** this pass's own range adds nothing under
+    `bin hooks scripts commands` (`--diff-filter=A` empty). Any breach at close is a sibling's.
+  - (e) **The live-layer converger's named culprit is UNCHANGED** — see recipe finding (i): one
+    un-landed commit in the shared checkout. Re-derived at close; not this chain's, and said so.
+
 - **2026-08-19 — drain recycle #52: three quarters of the fired population never owed a ping, so the
   belt that reads silence can never reach them — the fix is a channel that reads WORK, not quiet;
   and a row twenty-one recycles declined turned out to have a true premise nobody had measured.**
