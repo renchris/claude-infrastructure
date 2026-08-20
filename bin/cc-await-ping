@@ -448,7 +448,136 @@ _turn_moved() {  # 0 iff this session has taken a new turn since the arm baselin
   return 1
 }
 
-trap '_unbeat' EXIT
+# ── THE SENDER RECORDER (backlog b38279c10c55) ────────────────────────────────────────────────────
+# The verdict below can say a watcher was killed but not BY WHOM, because an exit code carries no
+# sender. `si_pid` does, and only a handler installed with SA_SIGINFO ever sees it.
+#
+# THE BUILD CONSTRAINT THIS FILE USED TO CARRY WAS FALSE. The comment below still says "an
+# SA_SIGINFO recorder is the only thing that yields si_pid" — true — but the doc it points at then
+# inferred that macOS shipping no `sigwaitinfo` left a COMPILED helper as the only route, which would
+# mean a new file in bin/ and a live-layer add that is dead until the converger runs. `sigwaitinfo`'s
+# absence says nothing about `sigaction`, which ctypes calls directly. So the recorder lives here, in
+# an already-symlinked file, and goes live on the ordinary fast-forward.
+# Measured twice (docs/research/exit-144-population-2026-08-19.md § UPDATE 2026-08-19): group TERM →
+# si_pid = the group's killer; single-pid TERM → si_pid = the sender. Two Darwin specifics that a
+# re-derivation gets wrong: sigset_t is a bare uint32 (so struct sigaction is {handler, uint32, int},
+# NOT the glibc layout), and the CFUNCTYPE thunk must be held in a live variable or ctypes frees it
+# and the handler segfaults on delivery.
+#
+# WHAT IT CAN AND CANNOT SEE — stated here so a reader does not over-read a silent verdict. The 144
+# shape is a kill of the process GROUP, so the recorder, being a child in that group, is signalled
+# too and names the sender. A 143 (this process alone) never reaches the recorder, so the sender
+# stays unknown exactly as before. That asymmetry is the right way round: 144 is the shape under
+# investigation.
+#
+# FAILS OPEN, ALWAYS. No python3, a spawn failure, a ctypes refusal — any of them leaves the watcher
+# running precisely as it did before. A diagnostic side-car must never fail wider than itself.
+# Kill-switch: CC_AWAIT_PING_SIGRECORD=0. Default ON, deliberately: measured cost is ~10.3 MB
+# physical footprint per armed watcher (9 armed concurrently at the time of writing ⇒ ~93 MB), it is
+# self-limiting because the diagnostic only has to catch one event, and an off-by-default recorder is
+# one nobody ever turns on — inert by construction. NOTE the cost figure is footprint, not `ps` RSS:
+# RSS reads 15.4 MB for the same process because it counts the interpreter's shared COW text once per
+# mapper, the same overcount master 2029c52b8a32 names for this box.
+SIGRECORD_PID=""
+SIGRECORD_CAP=""
+
+# shellcheck disable=SC2329  # invoked indirectly — trap/startup only.
+_sigrecord_arm() {
+  [ "${CC_AWAIT_PING_SIGRECORD:-1}" = 0 ] && return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  SIGRECORD_CAP="${TMPDIR:-/tmp}/cc-await-ping-sender.$$"
+  rm -f "$SIGRECORD_CAP" 2>/dev/null || true
+  python3 - "$SIGRECORD_CAP" "$$" <<'PYSIGREC' >/dev/null 2>&1 &
+import ctypes, ctypes.util, os, signal, sys, time
+try:
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    OUT, PARENT = sys.argv[1], int(sys.argv[2])
+    SA_SIGINFO = 0x0040
+
+    class SIGINFO(ctypes.Structure):            # Darwin sys/signal.h
+        _fields_ = [("si_signo", ctypes.c_int), ("si_errno", ctypes.c_int),
+                    ("si_code", ctypes.c_int),  ("si_pid",   ctypes.c_int),
+                    ("si_uid", ctypes.c_uint),  ("si_status", ctypes.c_int),
+                    ("si_addr", ctypes.c_void_p), ("si_value", ctypes.c_void_p),
+                    ("si_band", ctypes.c_long), ("__pad", ctypes.c_ulong * 7)]
+
+    class SIGACTION(ctypes.Structure):          # sigset_t is a bare uint32 on Darwin
+        _fields_ = [("sa_handler", ctypes.c_void_p), ("sa_mask", ctypes.c_uint32),
+                    ("sa_flags", ctypes.c_int)]
+
+    HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.POINTER(SIGINFO), ctypes.c_void_p)
+
+    def _on_sig(signo, info, _ctx):
+        i = info.contents
+        try:
+            with open(OUT, "a") as fh:          # append + fsync: we are already dying
+                fh.write("sig=%d si_pid=%d si_uid=%d si_code=%d\n"
+                         % (i.si_signo, i.si_pid, i.si_uid, i.si_code))
+                fh.flush(); os.fsync(fh.fileno())
+        except Exception:
+            pass
+        os._exit(0)
+
+    _KEEP = HANDLER(_on_sig)                    # MUST outlive the call — ctypes frees the thunk else
+    act = SIGACTION()
+    act.sa_handler = ctypes.cast(_KEEP, ctypes.c_void_p)
+    act.sa_mask, act.sa_flags = 0, SA_SIGINFO
+    for _s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        libc.sigaction(_s, ctypes.byref(act), None)
+    # Never outlive the watcher. The EXIT trap reaps us on an ordinary death, but a SIGKILLed watcher
+    # runs no trap at all, and an orphaned interpreter sleeping forever is a ~10 MB leak into the very
+    # footprint effort this row sits in. Poll the parent instead of trusting the reap.
+    while True:
+        if os.getppid() != PARENT:
+            os._exit(0)
+        time.sleep(5)
+except Exception:
+    os._exit(0)
+PYSIGREC
+  SIGRECORD_PID=$!
+  return 0
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — trap/startup only.
+_sigrecord_disarm() {
+  # KILL, not TERM, deliberately: the recorder handles TERM by writing a capture file and the `rm`
+  # below would race that write, leaving a stray temp file naming US as the sender. By the time we
+  # disarm we have already read anything we wanted, so there is nothing to flush.
+  [ -n "${SIGRECORD_PID:-}" ] && kill -KILL "$SIGRECORD_PID" 2>/dev/null
+  [ -n "${SIGRECORD_CAP:-}" ] && rm -f "$SIGRECORD_CAP" 2>/dev/null
+  return 0
+}
+
+# Reads the captured sender, BOUNDED — this runs inside a signal handler, which must not block. The
+# recorder fsyncs the moment it is delivered and both processes are signalled in the same instant, so
+# 0.5s is generous; a 143 never reaches the recorder and correctly spends the whole bound returning
+# nothing. Resolving the pid to a command is best-effort and uses `command=` (full argv), never
+# `comm=`, which on Darwin reports the executable image rather than the work.
+# shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
+_sigrecord_sender() {
+  local n=0 line pid cmd
+  [ -n "${SIGRECORD_CAP:-}" ] || return 0
+  while [ "$n" -lt 10 ]; do
+    [ -s "$SIGRECORD_CAP" ] && break
+    sleep 0.05 2>/dev/null || break
+    n=$(( n + 1 ))
+  done
+  [ -s "$SIGRECORD_CAP" ] || return 0
+  line="$(head -n1 "$SIGRECORD_CAP" 2>/dev/null)"
+  [ -n "$line" ] || return 0
+  pid="$(printf '%s' "$line" | sed -n 's/.*si_pid=\([0-9][0-9]*\).*/\1/p')"
+  [ -n "$pid" ] || return 0
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null | head -n1 | cut -c1-120)"
+  if [ -n "$cmd" ]; then
+    printf ' SENDER IDENTIFIED: %s sender_cmd=[%s].' "$line" "$cmd"
+  else
+    printf ' SENDER IDENTIFIED: %s (sender already gone, no argv).' "$line"
+  fi
+  return 0
+}
+
+trap '_unbeat; _sigrecord_disarm' EXIT
+_sigrecord_arm
 
 # ── A KILLED WATCHER MUST NOT DIE SILENT (G10, backlog 5b77e20d9db6) ──────────────────────────────
 # The EXIT trap above was the ONLY trap in this file, so an external SIGTERM ended the watch with no
@@ -515,25 +644,30 @@ trap '_unbeat' EXIT
 #
 # ONE LINE, no embedded newline: the mailbox is line-oriented and a line IS a message.
 # shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
-_wake_down_notice() {
+_wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
   local box="$MAILBOX_DIR/${CUR_UUID}.md"
   [ -n "${CUR_UUID:-}" ] || return 0
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
   # BOTH improvements, deliberately: trunk's MEASURED slice (elapsed + budget, so a reader can size
   # how much of the arm was actually covered) AND this commit's goal-aware branch (which repair
   # applies at all). They were written against each other and neither subsumes the other.
-  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping. WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1.\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" \
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1.\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" "${2:-}" \
     "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" \
     >> "$box" 2>/dev/null || true
   return 0
 }
 # shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines below are its only callers.
 _sig_verdict() {   # <signame> <signum>
+  local sender
   trap - TERM HUP INT EXIT
   _unbeat
-  _wake_down_notice "$1"
-  echo "cc-await-ping: verdict=killed signal=SIG$1 $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM — UNLESS a /goal is live in this session, in which case do NOT (a parked background Bash makes CC skip goal evaluation at every Stop; the goal forces the turns that drain your mail). The inbox line states both branches." >&2
+  # _unbeat first: clearing the stale claim is the safety-critical half and is fast. The bounded
+  # sender read comes after, which also gives the recorder those few extra milliseconds to land.
+  sender="$(_sigrecord_sender)"
+  _sigrecord_disarm
+  _wake_down_notice "$1" "$sender"
+  echo "cc-await-ping: verdict=killed signal=SIG$1 $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'.${sender:- The sender was not captured: a kill of this process alone never reaches the recorder, and the recorder may also be disabled or unavailable — an exit code carries no sender either way.} If you are going idle, RE-ARM — UNLESS a /goal is live in this session, in which case do NOT (a parked background Bash makes CC skip goal evaluation at every Stop; the goal forces the turns that drain your mail). The inbox line states both branches." >&2
   exit $(( 128 + $2 ))
 }
 trap '_sig_verdict TERM 15' TERM
