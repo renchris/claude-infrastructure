@@ -87,6 +87,91 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #68: `master-fire-gate` 43 open → 42 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: a guard's SECOND look at the same oracle is a RECHECK AT A
+  LATER TIME, not a redundant repeat — and "it already checked" is the reason that deletes a
+  TOCTOU window while sounding like an optimisation. The first draft of this very fix exempted
+  the reap on exactly that reasoning and turned a landed test red.**
+
+  **Effort choice.** Fourth consecutive recycle in `master-fire-gate` — #67 left it warm at 43
+  open. The lineage's settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`,
+  `7c6ff16259a0`, `b69b1d957cec`). Lag re-derived at open: the shared checkout was **81** behind
+  origin/main (#67 measured 79, #66 and #65 measured 77) — every recycle's number has gone stale
+  inside its own session, which is why it is re-derived and not quoted.
+
+  **`b7fe9507d986` — FIXED and LANDED `d00caf1b7`, premise CONFIRMED on same-moment origin/main
+  content before a line was written.** The row claimed `reopen`/`unblock` was the last lease verb
+  still judging on one oracle in the WEAK polarity. Reproduced against `git show
+  origin/main:bin/cc-backlog`: the guard read `... && claimer_live "$cby" "$cvenue"` — a bare
+  `&&`, so it refused ONLY on rc 0 (proven LIVE) and proceeded on BOTH rc 1 (proven dead,
+  correct) and rc 2 (UNRESOLVED, a non-verdict), never asking the worktree at all. The
+  acquire-side lease warns against precisely that shape in a comment that NAMES this verb: *"Do
+  NOT rewrite this as the reopen guard's `&& claimer_live` (rc 0 only) — that inverts it into
+  fail-open and restores the defect."* The warning was written about this code and the code kept
+  the defect. It matters because reopen/unblock resolves the fold to `open`, which IS
+  cc-dispatch's fire predicate.
+
+  🚨 **The transferable part is what happened to the REMEDY, not to the defect.** Fixing the
+  polarity is three lines. But `cmd_reap` releases through this same call without `--force`, so
+  the tightening lands on the sanctioned releaser too, and it does so **silently** — reap's call
+  sites are `elif cmd_transition … ; then` whose else-arm only writes an IDL row, so a refused
+  reopen prints nothing to any stream a caller keeps. Two separate over-reaches followed, and
+  each was caught by a different instrument:
+
+  1. **The venue half — caught by MEASUREMENT.** `claimer_live` returns rc 2 for every non-local
+     venue *unconditionally* (its venue gate), and so does `owned_wait`. A `-ne 1` refusal over a
+     permanent rc 2 refuses **100% of cloud releases forever**, including reap's own. Measured on
+     the live store: **both** claimed rows were `venue=cloud` (2/2), so the naive remedy's blast
+     radius was the entire claimed population (memory:
+     `alarm-polarity-and-attention-budget`). Reap is the only caller entitled to an exemption
+     there because it is the only one holding an oracle that CAN see that venue — cc-cloud's
+     declared session state.
+  2. 🚨 **The local half — caught by a LANDED TEST, and this is the finding.** The first draft
+     exempted reap outright, justified as *"reap already convicted with both oracles, so
+     re-asking is redundant"*. That reasoning is **false**, and `tests/cc-backlog.bats` *"journal:
+     a REFUSED transition is recorded with acted:false"* is the standing proof: it flips a
+     stateful sessions stub **dead-then-live across the two probes** and asserts this guard
+     catches the claimer that revived in between. The second probe is a **recheck at a later
+     time**, and that TOCTOU window is the only thing between a rotated-then-revived claimer and
+     a duplicate peer. The blanket exemption deleted it. **Ask, of any "we already checked this"
+     exemption: could the answer have CHANGED between the two looks? If it could, the second look
+     was never redundant — and the exemption is removing a sensor, not an inefficiency.**
+     Family: #63's guard at the wrong door · #64's watch that could not take a breath · #65's
+     oracle that asked presence when the question was direction · #66's falsifier keyed on a
+     spelling · #67's acquittal earned on the wrong axis.
+
+  **Final shape.** Both oracles in the strong polarity (oracle 1 must return rc 1; then
+  `owned_wait` must too — CALLED, never restated, so the four verbs cannot drift), exempting reap
+  **only** on a non-local venue. Not `--force` (it would also lift the TERMINAL guard, incident
+  1a226422cb37) and not a `[ "$by" = cc-backlog-reap ]` match (a denylist of one spelling, not the
+  class — the reason `REAP_INTERNAL_BLOCK` already states about itself); `REAP_INTERNAL_RELEASE`
+  is structural, set only by `cmd_reap`, unreachable from argv. The holder's own release is
+  untouched: `[ "$cby" != "$by" ]` still runs first, so `reopen --by` / `--self-release` never
+  reaches either oracle and `cc-dispatch:754`'s rollback is unaffected. Guard (4)'s comment is
+  corrected in the same diff — it cited this verb as the live example of the inversion, which is
+  now true of no verb in the file (memory: `stale-assertion-becomes-an-inverted-guard`).
+
+  **Verification.** `tests/cc-backlog-reopen-lease.bats` 9/9, in its own file so
+  `cc-backlog-venue.bats`'s published per-site mutant-kill table is not silently invalidated. The
+  two red-proof cases fail **differently** against pre-fix origin/main: case 1 on **oracle 2**
+  (dead claimer, occupied worktree), case 4 on **oracle 1** (UNRESOLVED, oracle 2 never reached).
+  Case 7 is a control on the remedy itself — reap's cloud release must still go through — and it
+  is the case the naive tightening breaks, failing at the *real* transition while the `--dry-run`
+  above it still printed `WOULD-REOPEN`, which is the silent shape predicted from the code read
+  and then confirmed by execution. The blanket-exemption mutant is killed **only** by
+  `cc-backlog.bats`, attributed three ways (blanket RED · narrowed fix green · pre-fix green)
+  rather than asserted. 19 sibling suites green, 0 failures. `ship-land` rc=0 on the second run;
+  the first was a **genuine own-scope gate red** — SC1010, shellcheck parsing cc-backlog's `done`
+  *verb* as the loop keyword on a line this change wrote — fixed by quoting `'done'` as the
+  subject itself does, then `--fixup` + autosquash. Smoke attested `partial` (120 s budget
+  exhausted, the documented non-red path); the 19 suites were run directly instead.
+  `land-verify` 2 paths content-identical, stranded-sweep clean.
+
+  **Live-layer note.** The shared checkout remains frozen at `9709c99d3` behind the operator-only
+  wall (`f33f72da71e0`). This land is the **eleventh** instrument stranded there and, like #67's,
+  it is **behavioural**: `~/.claude/bin/cc-backlog` keeps releasing live claims on a non-verdict
+  until the operator clears the freeze.
+
 - **2026-08-20 — drain recycle #67: `master-fire-gate` 44 open → 43 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: an acquittal earned on the WRONG axis leaves the case it
   was never argued about convicted by default — the cited-path arm let an AMBIGUOUS bare
