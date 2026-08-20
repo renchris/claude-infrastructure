@@ -1901,3 +1901,180 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
   [[ "$output" == *"item=none"* ]] || false           # CHECKED, not claimed: the filing did not happen
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
 }
+
+# ── the anti-rollback guard, CLASSIFIED (2026-08-19) ─────────────────────────────────────────────
+# "HEAD is not an ancestor of TARGET" hid two states with opposite remedies, and answered both with
+# a sentence measured on only one of them. These pin the split. The live instance that motivated it:
+# the shared checkout sat 29 drain recycles on ONE commit whose content was already on trunk under a
+# rebased sha, and the refusal told every reader to "land or drop those commits by hand".
+#
+# RED-PROOF, honestly stated: SUP1/SUP3/SUP4/SUP5 fail against pre-fix deploy-live.sh, which emits
+# the descendant sentence for every one of these states. SUP2 and SUP6 are GREEN PRE-FIX BY
+# CONSTRUCTION — one asserts an ABSENCE of mutation, the other asserts a sentence the pre-fix script
+# already emits (it is the preservation arm). They are kept because the whole value of this change
+# is WHICH sentence fires, so the arm that must NOT change needs a pin too.
+
+# The guard is only REACHABLE once the lane has stopped waiting: inside the degrade budget, a green
+# tree that is not a descendant of live HEAD is an ordinary "waiting" exit 0. The fleet's real lag
+# (49 commits) had long exceeded that budget; a 1-commit fixture has not. Force the trip so these
+# cases pin the GUARD rather than the budget.
+dl_lagged() { # [EXTRA_ENV=val ...]
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_MAX_LAG_COMMITS=0 CC_DEPLOY_MAX_LAG_HOURS=0 "$@" /bin/bash "$DL"
+}
+
+# shared HEAD holds a commit whose CONTENT is on origin under a DIFFERENT sha — the rebased-land
+# shape. Same diff, different commit message ⇒ same patch-id, different object.
+# Staging is EXPLICIT, never `add -A`: setup's install.sh stub is untracked, and sweeping it into
+# only the first of the two commits makes their diffs differ — which silently destroys the very
+# supersession the fixture exists to create (measured while writing these).
+diverge_superseded() {
+  local base live; base="$(git -C "$SHARED" rev-parse HEAD)"
+  echo super > "$SHARED/super.txt"; git -C "$SHARED" add super.txt
+  git -C "$SHARED" commit -q -m "super (the object the live checkout keeps)"
+  live="$(git -C "$SHARED" rev-parse HEAD)"
+  git -C "$SHARED" reset -q --hard "$base"
+  echo super > "$SHARED/super.txt"; git -C "$SHARED" add super.txt
+  git -C "$SHARED" commit -q -m "super (same change, landed under a rebased sha)"
+  git -C "$SHARED" push -q origin main
+  git -C "$SHARED" reset -q --hard "$live"
+  git -C "$SHARED" fetch -q origin
+}
+
+# shared HEAD holds a commit that exists NOWHERE else — dropping it destroys work
+diverge_unlanded() {
+  local base live; base="$(git -C "$SHARED" rev-parse HEAD)"
+  echo mine > "$SHARED/mine.txt"; git -C "$SHARED" add mine.txt
+  git -C "$SHARED" commit -q -m "mine (never landed anywhere)"
+  live="$(git -C "$SHARED" rev-parse HEAD)"
+  git -C "$SHARED" reset -q --hard "$base"
+  echo theirs > "$SHARED/theirs.txt"; git -C "$SHARED" add theirs.txt
+  git -C "$SHARED" commit -q -m "theirs"
+  git -C "$SHARED" push -q origin main
+  git -C "$SHARED" reset -q --hard "$live"
+  git -C "$SHARED" fetch -q origin
+}
+
+# ANTI-VACUITY. A fixture that silently failed to produce the state under test would let every
+# assertion below pass over a case that does not exist. Assert the STATE, never the intent.
+assert_diverged() {
+  run git -C "$SHARED" merge-base --is-ancestor HEAD origin/main
+  [ "$status" -ne 0 ] || false                        # HEAD is NOT on trunk
+  run git -C "$SHARED" merge-base --is-ancestor origin/main HEAD
+  [ "$status" -ne 0 ] || false                        # ...and trunk is not on HEAD ⇒ genuinely diverged
+}
+assert_same_patch_id() {                              # the fixture really is a rebased land
+  local a b
+  a="$(git -C "$SHARED" show HEAD | git -C "$SHARED" patch-id --stable | awk '{print $1}')"
+  b="$(git -C "$SHARED" show origin/main | git -C "$SHARED" patch-id --stable | awk '{print $1}')"
+  [ -n "$a" ] || false
+  [ "$a" = "$b" ] || false
+}
+
+@test "diverged-but-SUPERSEDED is named as already-landed and hands over the drop command (SUP1)" {
+  diverge_superseded
+  assert_diverged
+  assert_same_patch_id
+  stamp origin/main
+  run dl_lagged
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"DIVERGED but ALREADY LANDED"* ]] || false
+  [[ "$output" == *"present on it by CONTENT"* ]] || false
+  [[ "$output" == *"reset --keep origin/main"* ]] || false
+  [[ "$output" == *"1 commit(s)"* ]] || false
+}
+
+@test "diverged-but-SUPERSEDED still moves NOTHING — it only changes the sentence (SUP2)" {
+  diverge_superseded
+  assert_diverged
+  stamp origin/main
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dl_lagged
+  [ "$status" -eq 1 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [ ! -f "$INSTALL_LOG" ] || false                     # ...and install.sh never ran
+}
+
+@test "genuinely un-landed divergence is named as work-destroying and never offers the drop (SUP3)" {
+  diverge_unlanded
+  assert_diverged
+  stamp origin/main
+  run dl_lagged
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"DIVERGED"* ]] || false
+  [[ "$output" == *"DESTROY work"* ]] || false
+  [[ "$output" != *"ALREADY LANDED"* ]] || false
+  [[ "$output" != *"reset --keep"* ]] || false        # the one sentence that must never appear here
+}
+
+@test "a MERGE commit in the diverging set fails CLOSED to the work-destroying wording (SUP4)" {
+  # A merge has no single patch-id, so supersession is not adjudicable over it. Fail-closed means
+  # the safe-to-drop sentence is WITHHELD, not that the merge is skipped.
+  local live
+  git -C "$SHARED" checkout -q -b side
+  echo s > "$SHARED/s.txt"; git -C "$SHARED" add s.txt; git -C "$SHARED" commit -q -m side
+  git -C "$SHARED" checkout -q main
+  echo m > "$SHARED/m.txt"; git -C "$SHARED" add m.txt; git -C "$SHARED" commit -q -m mainline
+  git -C "$SHARED" merge -q --no-ff -m "merge side" side
+  live="$(git -C "$SHARED" rev-parse HEAD)"
+  git -C "$SHARED" reset -q --hard origin/main
+  echo t > "$SHARED/t.txt"; git -C "$SHARED" add t.txt; git -C "$SHARED" commit -q -m theirs
+  git -C "$SHARED" push -q origin main
+  git -C "$SHARED" reset -q --hard "$live"
+  git -C "$SHARED" fetch -q origin
+  assert_diverged
+  stamp origin/main
+  run dl_lagged
+  [ "$status" -eq 1 ] || false
+  [[ "$output" != *"ALREADY LANDED"* ]] || false
+  [[ "$output" == *"DESTROY work"* ]] || false
+}
+
+@test "the scan bound fails CLOSED — an over-budget ahead-set never reads as safe to drop (SUP5)" {
+  diverge_superseded
+  assert_diverged
+  assert_same_patch_id                                 # the state IS superseded; only the bound refuses
+  stamp origin/main
+  run dl_lagged CC_DEPLOY_SUPERSEDE_SCAN=0
+  [ "$status" -eq 1 ] || false
+  [[ "$output" != *"ALREADY LANDED"* ]] || false
+  [[ "$output" == *"DESTROY work"* ]] || false
+}
+
+@test "case A's original sentence survives the classification, pinned in SOURCE (SUP6)" {
+  # HONEST LABEL: this is a SOURCE pin, not a behavioural one, because case A (TARGET an ancestor of
+  # live HEAD) is NOT REACHABLE through the lane's own target selection. Two constructions were
+  # measured 2026-08-19 and the lane diverted before the guard in both:
+  #   · green behind live HEAD, trunk ahead   → the DEGRADE arm re-targets FORWARD to the newest
+  #                                             not-red commit, which is a descendant, so the guard
+  #                                             never sees a behind-HEAD target
+  #   · live linearly ahead of trunk          → "at trunk tip — nothing above the live layer", exit 0
+  # That matches the guard's own provenance: its 2026-08-07 measurement was taken in a throwaway
+  # repo, not through this lane. So the arm is defensive, and the only thing that can regress is the
+  # sentence being moved out from under its test — which is exactly what this pins.
+  local a b
+  a="$(grep -n 'is-ancestor "\$TARGET" "\$HEAD_SHA"' "$DL" | head -1 | cut -d: -f1)"
+  b="$(grep -n 'NEVER HAPPENED' "$DL" | head -1 | cut -d: -f1)"
+  # Assert both ENDPOINTS exist before anything arithmetic runs on them: a stale anchor that matched
+  # nothing would otherwise compare empty to empty and read as a clean pass.
+  [ -n "$a" ] || false
+  [ -n "$b" ] || false
+  [ "$b" -gt "$a" ] || false                           # the sentence is INSIDE the case-A arm...
+  [ "$((b - a))" -le 3 ] || false                      # ...immediately, not merely somewhere below
+}
+
+@test "the divergence refusal PAGES, so a frozen live layer stops being a silence (SUP7)" {
+  # The half that let this run 29 recycles undetected: the guard `die`d bare — no refusal_bump, no
+  # page — so it was a standing state generating no event. permission-gate-lint's 545-refusal scar
+  # is the same shape. The page is the event.
+  diverge_superseded
+  assert_diverged
+  stamp origin/main
+  run dl_lagged
+  [ "$status" -eq 1 ] || false
+  [ -f "$PAGES/deploy-diverged-superseded.page" ] || false
+  run grep -cF 'reset --keep origin/main' "$PAGES/deploy-diverged-superseded.page"
+  [ "$output" -ge 1 ] || false                        # the page carries the remedy, not just the fact
+  run grep -cF 'FROZEN' "$PAGES/deploy-diverged-superseded.page"
+  [ "$output" -ge 1 ] || false                        # ...and says what the freeze costs
+}
