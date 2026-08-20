@@ -87,6 +87,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #60: `master-session-lifecycle` 4 open → 2. Both rows I closed were
+  closed by MEASURING THEIR PREMISE, and both premises had rotted in the same direction — each row
+  described a world that was true when it was filed and false when it was read.**
+  Effort picked from the CURRENT fold: **`master-session-lifecycle` 4 open / 1 blocked** was the
+  smallest LIVE master-* (fleet-footprint 10, product-repos 33, fire-gate 46, convergence-deadlock
+  55; five efforts read 0 open and a 0-open effort is not a live one). **closed 2 / filed 0** —
+  conservation holds with room to spare. Two commits, both docs-into-code. Close line at the bottom.
+
+  **`85a82455de9a` — closed on measurement; the lag number is not the landedness test.** The row
+  said `5c38ad5a` was "landed but NOT live" and named three paths. The framing everyone inherits
+  here — including my own fire brief, which predicted this row was "probably gated on the frozen
+  live layer" — is that the live layer sitting **62 commits behind** origin/main means a recent fix
+  is not live. That inference is invalid, and this row is the counterexample: **`git merge-base
+  --is-ancestor 5c38ad5a0 9709c99d3` ⇒ YES.** The fix landed BELOW the freeze point, so the freeze
+  never applied to it. *Lag says nothing about whether YOUR commit is in; only ancestry does, and
+  it costs one command.* On top of that, four of the row's five facts had already flipped:
+  `~/.claude/commands/resume-sessions.md` is now a symlink (row: ABSENT), `~/.reso/bin/
+  reso-resume-one` is now a symlink (row: a REAL pre-vendor copy), and both resolve to files
+  byte-identical to trunk (`shasum 4c1e276e…` on the engine; `diff -q` clean on the command). All
+  three cited fixes are present in the engine every consumer actually resolves — `--effort` at
+  :71/:357, the as-is selector at :436, `--repo`/`resolve_repo` at :72/:310. The fifth fact,
+  `~/.claude/bin/reso-resume-one` ABSENT, is TRUE and CORRECT: **no consumer references that path**
+  (every call site defaults `CC_RESUME_ONE_BIN` to `~/.reso/bin/reso-resume-one`) and
+  `deploy-parity-assert.sh` puts it in no deploy class — all classes `0 missing`. The row had
+  invented a deploy expectation for a path nothing reads. Its residual rc 1 is the standing
+  PROVENANCE drift, not content, and not mine.
+
+  **`68fdc99b17c7` — REFUTED, and the refutation is now in the code it would have changed**
+  (`822bac8c9`). The row wanted a "worktree-implies-mine" extension of `hooks/lib/session-writes.sh`:
+  dirt in a LINKED worktree gets attributed to whoever is cwd'd there, transcript evidence or not.
+  Its gate was "once #114 rollout settles" — and **#114 has no on-disk referent**, only
+  `CLOSE_INTEGRITY_2026-08-10.md:73`'s own mention of it, so the gate could never be observed to
+  settle (the `spec-named-mechanism-may-be-prose-only` shape). Measured instead. Instrument: one
+  live claude session per `bin/ms-365-mcp-server` child, cwd via `lsof` — *argv is sampling, cwd is
+  durable.* **17 live sessions across 15 cwds, and the LINKED worktree `.worktrees/wt-fp-lshape`
+  held TWO concurrent sessions** (TUI pids 66991 and 95308, distinct parent shells, four minutes
+  apart). A linked worktree is not single-tenant, so the premise is false. **The asymmetry is what
+  makes this a rejection rather than another deferral:** the residue the file already documents
+  fails SAFE — a Bash-written file goes unattributed and a real loose end is merely missed — while
+  the extension fails UNSAFE, blocking a session over a sibling's file it does not own and
+  therefore cannot commit, burning `CC_MECH_MAX` on work that was never its. *Trading a missed
+  nudge for a false conviction is not a coverage win.* Recorded beside the residue it was meant to
+  close, with the note that this does not generalise to an ASSIGNEE sharing a worktree either — an
+  assignee is a separate session with its own transcript, not a sidechain record of this one.
+  Suites this turn: session-writes 29/29 · session-continue 27/27 · completion-assert 59/59 ·
+  `shellcheck -x` clean.
+
+  **`b69b1d957cec` STAYS OPEN — it is a standing watch — but its clearance criterion was
+  unsatisfiable, so the HOLD it produced was unfalsifiable rather than evidence-based.** Fixed
+  (`abc14150f`) and the watch advanced. The row's condition (b) reads "it has ≥1wk as npm latest".
+  Measured over the package's entire npm history: **exactly TWO versions have EVER held the latest
+  tag for ≥7 days, and one of the two is our own pin 2.1.220 at 9.96 d** — which it managed only by
+  sitting through a release pause. Excluding it, the longest tenure across the last 40 releases is
+  **2.99 d**, against **20 releases in 30 days**. So (b) cannot clear on the normal shipping
+  rhythm, only on a shipping pause. Note the 2.1.224 MANIFEST entry had already seen this for ONE
+  version ("npm latest for 21.5 HOURS … fails the soak rule permanently") and read it as a property
+  of that release; it is a property of the CRITERION at this cadence. `skills/cc-version-audit/
+  SKILL.md` Step 4 already said the right thing — "<1 week **field exposure**" — so the defect was
+  the row's restatement, not the skill; the skill now carries the measurement, the reason
+  `latest`-tenure is the wrong instrument, and the `jq` recipe (including the `fromdate`
+  millisecond trap that kills the whole query on one row). **Then I ran the watch**, because with
+  (b) repaired it was worth running: no release in **2.1.229–2.1.237** restores a spawn ceiling or
+  touches `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, and **2.1.232 moves against us** — "subagent
+  forking is now on by default … and non-teammate agent spawns in interactive sessions now run in
+  the background by default". A new darwin-relevant churn cluster also opened at 2.1.229 and closed
+  only at 2.1.236 (two directory-removal regressions — and this box removes worktrees out from
+  under live sessions as ordinary practice), so by the skill's own Step 4 the safe floor is
+  **≥2.1.236**, published 2026-08-19, hence not soaked until ~2026-08-26. **HOLD STANDS at 2.1.220,
+  now for a stated reason.** Written to the enforcing store the launcher actually reads —
+  `~/.claude-versions/MANIFEST.jsonl`, which had **zero entries for the whole 229–237 band**, eight
+  unassessed releases since 2026-08-12 — appended as `status:"skip"` and **honestly scoped: the
+  CHANGELOG leg only, the adversarial GH sweep was NOT run.** `skip` and no-entry are the same
+  refusal to `claude-latest`, so a partial audit recorded this way cannot advance anything.
+
+  **`62363cac1e39` DECLINED on its own date, in one comparison, with no re-derivation.** The row is
+  a CLOSE_INTEGRITY efficacy re-census due **~2026-08-24**; today is 2026-08-20, so the window is
+  not open. #56 declined it for the 29th time. Naming the generator rather than filing a row for it
+  (filing is the inflow this plan exists to control): **a row whose trigger is a FUTURE DATE sits
+  `open` and is re-picked by every recycle, and `cc-backlog` has no defer/snooze verb** — `block`
+  is for operator-only gates and a falsifier's exit-0 means *retracting*, so neither instrument
+  fits a date gate. The cheap discipline until one exists is the one this entry follows: **read the
+  date first, and decline in one line.** Re-keying it into a quieter condition group would not be a
+  fix — hiding a live row inside a 0-open group is §1.1's defect wearing different clothes.
+
+  **Close line — `master-session-lifecycle`: 2 open / 1 blocked (1 operator-gated).** The 2 open
+  are both non-work by construction: `b69b1d957cec` is a standing watch (advanced this cycle, next
+  audit on/after 2026-08-26) and `62363cac1e39` is date-gated to ~2026-08-24. The 1 blocked is
+  `adf1bb6b5406`, operator-only (C10: merge a hook roster into FIVE separate real `settings.json`
+  files; `~/.claude-next`, the account bare `claude` defaults to, is the divergent one).
+  **Filed 0, closed 2.**
+  🚨 **The live layer is still FROZEN and nothing above is running from `~/.claude`.** The shared
+  checkout sits at `9709c99d3`, 62 behind origin/main; `deploy-live.sh` refuses correctly because a
+  rebased land made live HEAD a patch-identical sibling of trunk and `--ff-only` cannot move.
+  Re-pointing a shared checkout other sessions execute from is OPERATOR-ONLY — filed `96a3501c31ce`.
+  The `MANIFEST.jsonl` write above is the exception that proves it: it took effect immediately
+  precisely because it is live state, not a tracked file waiting on a converge.
+
 - **2026-08-20 — drain recycle #59: `master-verification-integrity` reaches 0 OPEN. One row was
   already fixed on trunk and nobody closed it; the other's detector could only ever report its own
   remedy.**
