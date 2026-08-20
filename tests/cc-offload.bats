@@ -582,6 +582,26 @@ EOF
   [[ "$output" == *UNMANAGED* ]] || false
 }
 
+@test "a fire with NO iTerm still fires — the unset default is fire-and-forget, not an abort" {
+  # REGRESSION, measured 2026-08-20. `UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"` under `set -u`
+  # aborted on an unset variable — three lines ABOVE the `elif [ -z "$UP_NOTIFY_BACK" ]` branch
+  # written to handle precisely that case, which therefore was unreachable code. The desk never saw
+  # it because an iTerm shell always exports the variable; every OTHER caller (a VM, cron/launchd, a
+  # kitty pane, this suite) died `unbound variable` rc 1 with no fire and no diagnosis.
+  #
+  # This is the [[alarm-polarity]] shape in the launch path: the one configuration the code claims
+  # to support in prose was the only one it could not execute. So the assertion is not "it prints a
+  # note" — it is that the FIRE HAPPENS, with the note as the positive control on the degrade.
+  _api_fixture
+  unset ITERM_SESSION_ID
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"unbound variable"* ]] || false
+  grep -q 'cc-cloud declare' "$CALLS" || false          # it really fired …
+  ! grep -q 'declare .*--notify-back' "$CALLS" || false  # … with no wake target, as the note says
+  [[ "$output" == *FIRE-AND-FORGET* ]] || false
+}
+
 @test "a custody failure is SURFACED and never silently downgrades the fire to fire-and-forget" {
   _api_fixture
   CUSTODY_RC=3 ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3

@@ -399,8 +399,14 @@ cmd_up() {
   # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
+  # `:-` FIRST, then the suffix strip. This file runs under `set -u`, so a bare
+  # `${ITERM_SESSION_ID##*:}` ABORTS on an unset variable — and it aborts three lines above the
+  # branch written to handle exactly that case, which therefore could never execute. Measured
+  # 2026-08-20: outside iTerm every `up` died `unbound variable`, rc 1, before any fire. It never
+  # showed on the desk because the operator's shell always exports it; it took a caller with no
+  # iTerm (a VM, cron/launchd, a kitty pane, the test suite) to reach the line at all.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
