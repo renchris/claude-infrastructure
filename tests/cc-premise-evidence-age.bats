@@ -358,6 +358,57 @@ verdict() { printf '%s' "$1" | sed -n 's/^verdict=//p'; }
   refute_match "$output" "not at that location"
 }
 
+@test "a bare basename NO trunk file carries is REPORTED, never CONVICTED — it named no location" {
+  # THE FALSE POSITIVE BY CONSTRUCTION (backlog a431c71076e6, measured on cf6eb3e47b12). The
+  # ambiguous case above is acquitted for a reason that reads as "still present on trunk", which
+  # left the ZERO-carrier case convicted by default — and that case is not a rare tail here. The
+  # memory-index condition re-mints an item citing `MEMORY.md` every few days; that file is the
+  # user auto-memory index under ~/.claude*/projects/<encoded-cwd>/memory/, is not a repo file at
+  # all, and therefore can NEVER carry a trunk basename. Live on origin/main at filing time both
+  # open memory-index rows (0b3d53bcd1fd, 7c266e16fc94) read `verdict=suspect` off this sentence
+  # alone. The cost is not the wasted detour: an alarm that fires on a whole population trains a
+  # worker to discount it where it is REAL (memory: alarm-polarity-and-attention-budget).
+  #
+  # "not at THAT location" presupposes the item named one. A bare basename does not, so git was
+  # never told where to look and a miss is not absence (memory: lookup-miss-is-not-absence).
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 8e8e8e8e8e8e "MEMORY.md is 25.9KB over its 24.4KB loader cap" "$(ts_ago 5d)"
+
+  run "$CP" check 8e8e8e8e8e8e
+  [ "$status" -eq 0 ]
+  # VERDICT-NEUTRAL, exactly like the churn arm: "I was not told where this lives" is not evidence
+  # that the premise died, and `suspect` is what cc-backlog claim surfaces to the worker.
+  [ "$(verdict "$output")" = clear ]
+  refute_match "$output" "not at that location"
+  # …but it is not SILENT either — the name is still reported, in words that concede what git was
+  # never asked. Silence would lose the genuinely-never-landed bare name along with the false ones.
+  printf '%s' "$output" | grep -q "CITED NAME(S) with no directory component"
+  printf '%s' "$output" | grep -q "MEMORY.md"
+}
+
+@test "the split does NOT soften the real finding — a directory-bearing absent path still convicts" {
+  # The control that stops the fix above from becoming "stop convicting cited paths". Both kinds are
+  # cited by ONE item, with the bare name FIRST so the pre-fix ordering is the one under test: with
+  # a single list the sentence read `MEMORY.md, scripts/no-such-file-at-all.sh` and the real finding
+  # was buried behind the fabricated one. The two must now appear under different headings.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 8f8f8f8f8f8f \
+    "MEMORY.md is over cap and scripts/no-such-file-at-all.sh is unpadded" "$(ts_ago 5d)"
+
+  run "$CP" check 8f8f8f8f8f8f
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = suspect ]
+  # The real finding, ALONE on its line — pre-fix the bare name preceded it and this grep missed.
+  line="$(printf '%s' "$output" | grep 'not at that location')"
+  printf '%s' "$line" | grep -q "origin/main: scripts/no-such-file-at-all.sh — moved"
+  # …and the bare name is NOT inside that sentence, which is the whole boundary.
+  refute_match "$line" "MEMORY.md"
+  printf '%s' "$output" | grep -q \
+    "CITED NAME(S) with no directory component and no carrier on origin/main: MEMORY.md"
+}
+
 @test "the trunk read is -z, so a QUOTED path is neither convicted nor mis-asked" {
   # `ls-tree -r --name-only` C-quotes any path carrying a non-ASCII byte, so bin/café.sh comes back
   # as the literal characters `"bin/caf\303\251.sh"`. Under that read the basename set holds a

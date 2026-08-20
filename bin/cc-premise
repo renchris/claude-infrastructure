@@ -2341,7 +2341,7 @@ def assess(item_id, idx, out=None, run_probes=True):
                         "CONTENT before concluding anything.%s" % (sha, state, scope, hedge)
                     )
 
-        gone, present = [], []
+        gone, unlocatable, present = [], [], []
 
         def note_present(path):
             # One file can be cited twice under two spellings — `statusline.sh` beside
@@ -2374,6 +2374,23 @@ def assess(item_id, idx, out=None, run_probes=True):
                     if len(hits) == 1:
                         note_present(hits[0])
                     continue  # present under some directory either way ⇒ cannot convict
+                # ZERO CARRIERS IS A DIFFERENT FINDING FROM A MISSING PATH, and collapsing the two
+                # made this arm a FALSE POSITIVE BY CONSTRUCTION for a whole live population. The
+                # memory-index condition re-mints an item citing `MEMORY.md` every few days, and
+                # that file is not a repo file at all — it is the user auto-memory index at
+                # ~/.claude*/projects/<encoded-cwd>/memory/MEMORY.md, so it can never carry a trunk
+                # basename and the sentence below can only ever fire (backlog a431c71076e6, which
+                # measured it on cf6eb3e47b12 and named the cost: it trains a worker to discount a
+                # check that is REAL for genuine repo paths).
+                #
+                # The sentence has no subject here. "not at THAT location" presupposes the item
+                # named one, and a bare basename does not: git was never told where to look, so a
+                # miss is not absence (memory: lookup-miss-is-not-absence) — the same reason the
+                # ambiguous case two lines up is acquitted rather than convicted. Reported in its
+                # own words, and — like the churn arm below — deliberately VERDICT-NEUTRAL, because
+                # "I was not told where this lives" is not evidence that the premise died.
+                unlocatable.append(p)
+                continue
             gone.append(p)
         if gone:
             if verdict == "clear":
@@ -2381,6 +2398,14 @@ def assess(item_id, idx, out=None, run_probes=True):
             lines.append(
                 "CITED PATH(S) not at that location on origin/main: %s — moved, renamed, or never "
                 "landed. Confirm before acting." % ", ".join(gone[:6])
+            )
+        if unlocatable:
+            lines.append(
+                "CITED NAME(S) with no directory component and no carrier on origin/main: %s — this "
+                "repo was never told where they should be, so git cannot say they moved. They may "
+                "live OUTSIDE this repo (user memory, a home-dir config) or may never have landed; "
+                "resolve the location before reading this as evidence either way."
+                % ", ".join(unlocatable[:6])
             )
 
         # (c) …and the question neither arm above can ask. Both of those resolve a POINTER; this
