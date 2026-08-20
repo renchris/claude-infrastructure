@@ -372,6 +372,117 @@ cmd_setup() {
 #              run our hooks — and a goal keyed on the VM's own prose would be unfalsifiable.
 #   wake     → the notify-back pane, delivered by scripts/cloud-return.sh over the same v2 inbox
 #              transport a local peer uses. The originator never polls.
+# ── THE FOREIGN-REPO GATE (2026-08-20) ───────────────────────────────────────────────────────────
+# A cloud session gets EXACTLY ONE repository, permanently, and this file picks it at line 84:
+# `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — the FIRING checkout. The item's own `project` was never
+# consulted and the two were never compared. Fire from ~/Development/claude-infrastructure and every
+# session gets `renchris/claude-infrastructure` attached, whatever the brief is about. There is no
+# in-session recovery: the worker cannot clone its way out, and GitHub reaches the VM only through
+# MCP tools scoped to that one repository.
+#
+# MEASURED COST: seven dispatches over six items in six days, each unworkable ON ARRIVAL —
+# 1cc794cbc6c4, 9333991e4544, 8f59467c92b0 (×2), c07fb00eb9b6, c33f3b1cb278, 5ab3327ed0c8,
+# 38de29ec5e59, 64f1d37dc4b3. Located at this line on 08-16; filed as a decision; still unfixed on
+# 08-20, when `grep -rn foreign-repo bin/ scripts/ hooks/` returned 0 hits and a seventh fire landed.
+# That zero IS the defect this function fixes: four docs under docs/research/ hold the whole
+# analysis, nothing in the dispatch chain reads prose, and one item was re-fired two days after its
+# own disproof was written into its own DoD-ref plan (venue-foreign-master-redispatch-2026-08-17 §1).
+#
+# WHY HERE AND NOT IN bin/cc-eligible. That predicate answers "may this WORK go off-box?" — a
+# property of the item ALONE, and it answers `eligible` correctly on every one of these rows: the
+# work really is repo-only. The unanswered question is a property of the PAIR (item.project,
+# session.attached_repo), and only the fire knows the second half. Widening cc-eligible's spelling
+# lists was considered and rejected there in its own header (:25-37).
+#
+# TWO ARMS, because the class has two measured routes and either alone leaves rows through:
+#   LABEL-FOREIGN   the item's `project` is not the attached repo. Six of the eight dispatches.
+#   SUBJECT-FOREIGN the label is ACCURATE and the WORK is elsewhere (9333991e4544, whose project is
+#                   `claude-infrastructure` and whose subject is doc_classifier's nightly;
+#                   8f59467c92b0, a cross-repo master spanning both foreign trees). A pair
+#                   comparison cannot see these by construction — the pair matches.
+#
+# THE MATCH IS DELIBERATELY ASYMMETRIC BETWEEN THE TWO TEXTS, and this is the whole false-positive
+# budget. On the ROW's own short fields a BARE LABEL is high signal (9333991e4544's title opens with
+# the word `doc_classifier`). In a dodRef'd PLAN BODY it is not — half the plans in docs/plans/
+# mention reso in passing — so there the label must appear PATH-SHAPED (`~/Development/x`, `x/`,
+# `/x`), which is how 8f59467c92b0's plan names the trees its waves edit. A prose mention is not a
+# subject; an edited tree is.
+#
+# FAIL OPEN ON EVERYTHING IT CANNOT READ — no ledger, no reader, unknown id, no project label, no
+# conf, no origin. cc-eligible's founding rule and for its reason: a classifier that refused on "I
+# could not tell" would starve the whole cloud tap on a missing file. The asymmetry that makes the
+# refusals safe is the one that file also states — a wrong INELIGIBLE leaves the item exactly where
+# it was, open and claimable locally (bin/cc-dispatch treats this family as a SKIP, not a failure);
+# a wrong ELIGIBLE burns a slot AND invites a confident wrong answer about invisible state.
+# Off-switch: CC_OFFLOAD_FOREIGN_GATE=off. No `--item`, no gate — an ad-hoc brief is the operator's.
+BACKLOG_BIN="${CC_OFFLOAD_BACKLOG_BIN:-}"
+[ -n "$BACKLOG_BIN" ] || { for c in "$BINDIR/cc-backlog" "$HOME/.claude/bin/cc-backlog" "$(command -v cc-backlog 2>/dev/null || true)"; do
+  [ -n "$c" ] && [ -x "$c" ] && { BACKLOG_BIN="$c"; break; }; done; }
+DISPATCH_CONF="${CC_OFFLOAD_DISPATCH_CONF:-$ROOT/scripts/dispatch-projects.conf}"
+
+# The label a cloud fire will actually attach: the origin of the repo being bundled, never the
+# directory's basename — firing from a worktree (`wt-foo`) must not read as a different project.
+attached_project() {
+  local url
+  url="$(git -C "$REPO" remote get-url origin 2>/dev/null)" || return 1
+  [ -n "$url" ] || return 1
+  url="${url%.git}"; url="${url%/}"
+  printf '%s\n' "${url##*/}"
+}
+
+# The DISPATCHABLE labels only (`repo=` rows). A `skip=` row is a declared non-project or a project
+# with no open work — scanning for those would match the conf's own explanatory prose.
+dispatch_projects() {
+  [ -r "$DISPATCH_CONF" ] || return 1
+  awk '$0 !~ /^[[:space:]]*#/ && NF >= 2 && $2 ~ /^repo=/ { print $1 }' "$DISPATCH_CONF"
+}
+
+# rc 3 = REFUSE (reason on stdout) · rc 0 = allow, silently. Never writes, never fires.
+foreign_repo_refusal() {
+  local id="$1" row proj attached text dodref dpath p
+  [ "${CC_OFFLOAD_FOREIGN_GATE:-on}" != off ] || return 0
+  [ -n "$id" ] || return 0
+  [ -n "$BACKLOG_BIN" ] && [ -x "$BACKLOG_BIN" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  row="$("$BACKLOG_BIN" list --all --json 2>/dev/null | jq -c --arg i "$id" 'first(.[]? | select(.id == $i)) // empty' 2>/dev/null)"
+  [ -n "$row" ] || return 0                                   # unknown id / unreadable ledger
+  proj="$(printf '%s' "$row" | jq -r '.project // ""' 2>/dev/null)"
+  [ -n "$proj" ] || return 0                                  # no label to compare
+  attached="$(attached_project)" || return 0
+  [ -n "$attached" ] || return 0
+
+  if [ "$proj" != "$attached" ]; then
+    printf 'label-foreign: this item belongs to project %s, and this fire attaches %s. A cloud session gets exactly ONE repo, permanently, so the worker would arrive unable to read its own subject.' \
+      "$proj" "$attached"
+    return 3
+  fi
+
+  # SUBJECT-FOREIGN. The label matched; ask what the row is ABOUT.
+  text="$(printf '%s' "$row" | jq -r '[.title // "", .dodRef // "", .source // "", .needs // ""] | join(" ")' 2>/dev/null)"
+  dodref="$(printf '%s' "$row" | jq -r '.dodRef // ""' 2>/dev/null)"
+  dpath="${dodref%%#*}"
+  local body=''
+  if [ -n "$dpath" ] && [ -f "$REPO/$dpath" ]; then body="$(cat "$REPO/$dpath" 2>/dev/null)"; fi
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ "$p" != "$proj" ] || continue
+    case "$text" in *"$p"*)
+      printf 'subject-foreign: the item is labelled %s -- which IS the attached repo -- but its own text names %s, a different dispatchable project. The label is accurate and the work is elsewhere.' \
+        "$proj" "$p"
+      return 3 ;;
+    esac
+    # Path-shaped only, in the plan body — see the asymmetry note above.
+    case "$body" in *"/$p/"*|*"/$p "*|*"/$p"$'\n'*|*"$p/"*)
+      printf 'subject-foreign: the item is labelled %s, but its DoD-ref (%s) names the tree %s as a path -- a cross-repo brief cannot be expressed as one attached repo, so it must be parked or split, never routed.' \
+        "$proj" "$dpath" "$p"
+      return 3 ;;
+    esac
+  done < <(dispatch_projects)
+  return 0
+}
+
 UP_GOAL='' UP_GOAL_PROBE='' UP_NOTIFY_BACK='' UP_ITEM='' UP_UNMANAGED=0
 cmd_up() {
   local task='' n=1 account='auto' dry='' i via="${CC_OFFLOAD_VIA:-api}"
@@ -428,6 +539,20 @@ cmd_up() {
     die "up: no such task file: $task"
   fi
   [ -s "$pf" ] || die "up: the task file is empty — a cloud session with no brief does nothing"
+
+  # BEFORE either fire path, so `--via api` and `--via cli` cannot diverge on admission, and before
+  # any quota is spent. Exit 3 is this file's "a precondition is not met" — the item is untouched
+  # and stays open and locally claimable, which is the desired end state.
+  local fr
+  fr="$(foreign_repo_refusal "$UP_ITEM")"
+  if [ $? -eq 3 ]; then
+    note "cc-offload: REFUSED — verdict=ineligible-foreign-repo"
+    note "  $fr"
+    note "  Run it where its subject is: claim it locally, or fire with CC_OFFLOAD_REPO pointed at that project's repo."
+    note "  Override (you have checked the worker can reach the subject): CC_OFFLOAD_FOREIGN_GATE=off"
+    [ "$task" = "-" ] && rm -f "$pf"
+    return 3
+  fi
 
   if [ "$via" = api ]; then
     cmd_up_api "$pf" "$n" "$account" "$dry"
