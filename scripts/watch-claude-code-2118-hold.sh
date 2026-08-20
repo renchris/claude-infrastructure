@@ -136,8 +136,11 @@ fi
 npm_latest=$(timeout 5 npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")
 npm_skip="no"
 if [[ -n "$npm_latest" && -f "$MANIFEST" ]]; then
-  skip_check=$(grep -E "\"version\":\"${npm_latest//./\\.}\"" "$MANIFEST" 2>/dev/null | tail -1 \
-    | sed -nE 's/.*"status":"([^"]+)".*/\1/p' || true)
+  # Same whitespace tolerance as bin/claude-latest's allow-list gate — this
+  # reads the same store and shared the same compact-only assumption, so it
+  # announced "not on MANIFEST skip list" about versions that were on it.
+  skip_check=$(grep -E "\"version\"[[:space:]]*:[[:space:]]*\"${npm_latest//./\\.}\"" "$MANIFEST" 2>/dev/null | tail -1 \
+    | sed -nE 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' || true)
   [[ "$skip_check" == "skip" ]] && npm_skip="yes"
 fi
 
