@@ -837,6 +837,153 @@ if [ -n "$COAL_ROW" ]; then
   COAL_APP="${COAL_ROW#* }"
 fi
 
+# ── THE PER-COALITION FOOTPRINT INSTRUMENT (backlog 2029c52b8a32) ─────────────────────────────────
+# §8.3a asked for this and the header at the top of the coalition rung says it "does not exist yet".
+# It exists now, and it MEASURES ONLY — no threshold reads it, no verdict changes. That restraint is
+# the row's own instruction: its fatal evidence is n=1, which is an ORDERING and not a calibrated
+# cutoff, and minting a number from it would repeat the error that already had to be reverted twice
+# (a7ededdad, 96c2932af). The job here is to make the quantity RECORDABLE so a future pass has a
+# population to calibrate against.
+#
+# TWO INSTRUMENTS, DELIBERATELY SPLIT ON COST — this is the whole design:
+#
+#   MEMBERSHIP is free and runs every tick. libproc's PROC_PIDCOALITIONINFO gives a process's TRUE
+#   coalition id. Measured 0.05s over 1025 pids, so there is no reason to approximate it. python3
+#   has no binding for it, but ctypes calls proc_pidinfo directly — a missing python MODULE is not a
+#   missing syscall (the same route bin/cc-await-ping's SA_SIGINFO recorder takes).
+#
+#   FOOTPRINT is expensive and is DAMPED. footprint(1) counts shared pages ONCE across a pid set,
+#   which is exactly what summing `ps rss` cannot do — but it costs 5.4s over the 145-member terminal
+#   coalition and 11.0s over a 74-member one (cost tracks address-space complexity, not pid count).
+#   This job's StartInterval is 60s, so running it every tick would spend ~10% of the box's wall
+#   clock on measurement. It samples at most once per CC_CAP_COAL_FP_MIN_S (default 1800) and reports
+#   `damped` in between — never a stale value re-presented as fresh.
+#
+# WHAT THE MEMBERSHIP NUMBER ALREADY SHOWS, and why it is logged separately rather than replacing
+# COAL_PROCS: the tree-walk above reported 97 kitty procs where libproc reports 145 in that
+# coalition. The header at line ~251 puts that undercount at 0.57x (range 0.43-0.62); measured here
+# it is 0.67x — OUTSIDE the stated range, i.e. the factor drifts and is not a constant to correct by.
+# COAL_PROCS still feeds rung 6's 500/700 thresholds, which were derived against the tree-walk's own
+# scale, so silently swapping in the true count would re-noun a live verdict on one sample. It is
+# logged beside it instead; re-nouning is a later pass with a population behind it.
+#
+# Fails silent and separate: any failure leaves every existing field untouched and reports its own
+# absence. Kill-switch CC_CAP_COAL_FP=0.
+COAL_TRUE=""; COAL_ID=""; COAL_FP_MB=""; COAL_FP_SRC="off"
+read_coalition_true() { # → "<true_members> <coalition_id>" for the largest TERMINAL coalition
+  "${CC_CAP_PYTHON:-python3}" -c '
+import ctypes, ctypes.util, os, subprocess, collections, sys
+try:
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    class PCI(ctypes.Structure):
+        _fields_ = [("cid", ctypes.c_uint64 * 2), ("r1", ctypes.c_uint64),
+                    ("r2", ctypes.c_uint64), ("r3", ctypes.c_uint64)]
+    libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                  ctypes.c_void_p, ctypes.c_int]
+    libc.proc_pidinfo.restype = ctypes.c_int
+    PROC_PIDCOALITIONINFO = 20
+    def coal(pid):
+        i = PCI()
+        if libc.proc_pidinfo(pid, PROC_PIDCOALITIONINFO, 0, ctypes.byref(i), ctypes.sizeof(i)) <= 0:
+            return None
+        return i.cid[0]
+    TERMS = ("iTerm2", "kitty", "ghostty", "Ghostty")
+    out = subprocess.run(["ps", "-Ao", "pid=,comm="], capture_output=True, text=True).stdout
+    comm = {}
+    for line in out.split("\n"):
+        f = line.split(None, 1)
+        if len(f) == 2 and f[0].isdigit():
+            comm[int(f[0])] = os.path.basename(f[1].strip())
+    groups = collections.defaultdict(int)
+    for p in comm:
+        c = coal(p)
+        if c is not None:
+            groups[c] += 1
+    term = set()
+    for p, c in comm.items():
+        if c in TERMS:
+            cid = coal(p)
+            if cid is not None:
+                term.add(cid)
+    if not term:
+        sys.exit(0)
+    best = max(term, key=lambda c: groups.get(c, 0))
+    sys.stdout.write("%d %d\n" % (groups.get(best, 0), best))
+except Exception:
+    sys.exit(0)
+' 2>/dev/null
+}
+
+read_coalition_footprint() { # <coalition_id> → "<mb>" — shared pages counted ONCE. SLOW; damped.
+  "${CC_CAP_PYTHON:-python3}" -c '
+import ctypes, ctypes.util, os, subprocess, sys, json, tempfile
+try:
+    want = int(sys.argv[1])
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    class PCI(ctypes.Structure):
+        _fields_ = [("cid", ctypes.c_uint64 * 2), ("r1", ctypes.c_uint64),
+                    ("r2", ctypes.c_uint64), ("r3", ctypes.c_uint64)]
+    libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                  ctypes.c_void_p, ctypes.c_int]
+    libc.proc_pidinfo.restype = ctypes.c_int
+    def coal(pid):
+        i = PCI()
+        if libc.proc_pidinfo(pid, 20, 0, ctypes.byref(i), ctypes.sizeof(i)) <= 0:
+            return None
+        return i.cid[0]
+    pids = [int(x) for x in subprocess.run(["ps", "-Ao", "pid="], capture_output=True,
+                                           text=True).stdout.split() if x.isdigit()]
+    members = [p for p in pids if coal(p) == want]
+    if not members:
+        sys.exit(0)
+    fd, path = tempfile.mkstemp(prefix="cap-coal-fp.", suffix=".json")
+    os.close(fd)
+    try:
+        args = ["/usr/bin/footprint", "--json", path]
+        for p in members:
+            args += ["-p", str(p)]
+        # BOUNDED: a wedged footprint must never hold a 60s-interval alarm open.
+        r = subprocess.run(args, capture_output=True, text=True, timeout=45)
+        if r.returncode != 0:
+            sys.exit(0)
+        d = json.load(open(path))
+        mb = float(d.get("total footprint", 0)) * float(d.get("bytes per unit", 1)) / (1024.0 ** 2)
+        if mb > 0:
+            sys.stdout.write("%.0f\n" % mb)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+except Exception:
+    sys.exit(0)
+' "$1" 2>/dev/null
+}
+
+if [ "${CC_CAP_COAL_FP:-1}" != 0 ]; then
+  COAL_FP_SRC="unavailable"
+  _ct="$(read_coalition_true || true)"
+  if [ -n "$_ct" ]; then
+    COAL_TRUE="${_ct%% *}"; COAL_ID="${_ct#* }"
+    # Damping stamp: the footprint sample is expensive, so it is taken at most once per window and
+    # the row says which of the two it is rather than repeating the last value as if it were fresh.
+    _fp_stamp="${CC_CAP_COAL_FP_STAMP:-$HOME/.claude/logs/.capacity-coal-fp.stamp}"
+    _now="$(date +%s 2>/dev/null || echo 0)"
+    _last="$(cat "$_fp_stamp" 2>/dev/null)"
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+    if [ "$(( _now - _last ))" -ge "${CC_CAP_COAL_FP_MIN_S:-1800}" ]; then
+      COAL_FP_MB="$(read_coalition_footprint "$COAL_ID" || true)"
+      if [ -n "$COAL_FP_MB" ]; then
+        COAL_FP_SRC="measured"
+        mkdir -p "$(dirname "$_fp_stamp")" 2>/dev/null || true
+        printf '%s\n' "$_now" > "$_fp_stamp" 2>/dev/null || true
+      fi
+    else
+      COAL_FP_SRC="damped"
+    fi
+  fi
+fi
+
 # ── scheduler saturation (rung 7) — the axis four panics arrived on, previously not instrumented ──
 # Two counter reads, no walk, nothing to block on — the D2 property rung 5 had to be rebuilt to get.
 #
@@ -1275,12 +1422,13 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
   "${SEG_PCT:-null}" "$SEG_WARN_PCT" "$SEG_ALARM_PCT" \
   "${COAL_PROCS:-null}" "${COAL_APP:-}" "$COAL_WARN" "$COAL_ALARM" \
+  "${COAL_TRUE:-null}" "${COAL_ID:-null}" "${COAL_FP_MB:-null}" "$COAL_FP_SRC" \
   "$TOP_JSON" "$SEG_SOURCE_JSON" "${SWAP_DELTA:-null}" "$SWAP_DELTA_MB" "$SWAP_WINDOW_S" \
   "${OCCUPANCY_PCT:-null}" "${THRASH_CD_RATIO:-null}" \
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \

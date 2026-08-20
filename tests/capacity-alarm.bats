@@ -811,3 +811,108 @@ SC
   [ ! -f "$log" ] || false
   [ ! -f "$CC_PAGES_DIR/capacity-alarm.page" ] || false
 }
+
+# ══ THE PER-COALITION FOOTPRINT INSTRUMENT (backlog 2029c52b8a32) ════════════════════════════════
+# The row asks for a per-coalition footprint instrument because summing `ps rss` counts shared pages
+# once PER MAPPER. It also says, in as many words, not to mint a threshold from its n=1 fatal sample.
+# So these cases pin BOTH halves: that the quantity is now recorded, and that NOTHING reads it.
+# CF4 is the load-bearing one — it is the case that would catch a future pass quietly re-nouning
+# rung 6 on top of this field.
+#
+# WHICH MUTANT REDS WHICH CASE — all five applied and RUN, 0 green, 0 anchor drift, and the
+# unmutated baseline re-confirmed green 5/5 between rounds:
+#   M-C1 (drop coal_true_procs from the JSON row)        → CF1, CF3, CF5
+#   M-C2 (ignore the damping stamp — always measure)     → CF2
+#   M-C3 (make the kill-switch a no-op)                  → CF3
+#   M-C4 (feed coal_true_procs into rung 6's comparison) → CF4
+#   M-C5 (overwrite COAL_PROCS with the true count)      → CF5
+#
+# TWO RESULTS WORTH KEEPING, because both were surprises and both are the reason to run mutants
+# rather than reason about them:
+#   · M-C1's red on CF3 was NOT predicted (predicted CF1+CF5). Renaming the JSON field makes CF3's
+#     lookup return MISSING where it expects the literal "null" — a legitimate red, recorded as
+#     unpredicted rather than tidied into the prediction after the fact.
+#   · M-C5 first came back GREEN, and the fault was in CF5, not the mutant. Its source check used
+#     the usual `^[^#]*` comment anchor, but the target line carries `${_ct#* }` — the `#` inside
+#     that parameter expansion ends the `[^#]*` span before it reaches COAL_PROCS=, so the pattern
+#     matched nothing and the case passed against a subject that HAD been mutated. Comment lines are
+#     now stripped by a separate pass. A `#` in a parameter expansion defeats that anchor.
+
+cf_field() { # <json> <key> — prints the value, or the literal "null"
+  printf '%s' "$1" | "${CC_CAP_PYTHON:-python3}" -c '
+import json,sys
+d=json.loads(sys.stdin.read()); v=d.get(sys.argv[1], "MISSING")
+sys.stdout.write("null" if v is None else str(v))' "$2"
+}
+
+@test "CF1: the row records the coalition TRUE member count and a shared-aware footprint" {
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run bash "$ALARM" --json --no-append
+  [ -n "$output" ] || false
+  local t s
+  t="$(cf_field "$output" coal_true_procs)"
+  s="$(cf_field "$output" coal_fp_src)"
+  [ "$s" = "measured" ] || false
+  # a real integer, not the string "null" and not a placeholder
+  case "$t" in ''|*[!0-9]*) false ;; esac
+  [ "$t" -gt 0 ] || false
+  local mb
+  mb="$(cf_field "$output" coal_fp_mb)"
+  case "$mb" in ''|*[!0-9]*) false ;; esac
+  [ "$mb" -gt 0 ] || false
+}
+
+@test "CF2: the expensive footprint sample is DAMPED — a second run inside the window reports so" {
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" coal_fp_src)" = "measured" ] || false
+  run bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" coal_fp_src)" = "damped" ] || false
+  # and it reports NOTHING rather than re-presenting the previous value as fresh
+  [ "$(cf_field "$output" coal_fp_mb)" = "null" ] || false
+}
+
+@test "CF3: CC_CAP_COAL_FP=0 switches the instrument off without disturbing the coalition rung" {
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run env CC_CAP_COAL_FP=0 bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" coal_fp_src)" = "off" ] || false
+  [ "$(cf_field "$output" coal_true_procs)" = "null" ] || false
+  # the PRE-EXISTING field is untouched — the kill-switch must not cost the rung its own reading
+  local p
+  p="$(cf_field "$output" coal_procs)"
+  case "$p" in ''|*[!0-9]*) false ;; esac
+}
+
+@test "CF4: NO verdict reads the new fields — the row forbids re-nouning on its n=1 sample" {
+  # A SOURCE invariant, deliberately: a runtime comparison could not distinguish "not read" from
+  # "read but not tripped on this box today". classify() is where every rung's threshold lives.
+  local body
+  body="$(sed -n '/^classify() {/,/^}/p' "$REPO/scripts/capacity-alarm.sh")"
+  [ -n "$body" ] || false                       # anti-vacuity: the extract must exist
+  run bash -c "printf '%s' \"\$1\" | grep -cE 'coal_true|COAL_TRUE|coal_fp|COAL_FP'" _ "$body"
+  [ "$output" = "0" ] || false
+}
+
+@test "CF5: the true count is logged BESIDE the tree-walk count, never over it" {
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run bash "$ALARM" --json --no-append
+  local p t
+  p="$(cf_field "$output" coal_procs)"
+  t="$(cf_field "$output" coal_true_procs)"
+  case "$p" in ''|*[!0-9]*) false ;; esac       # both present…
+  case "$t" in ''|*[!0-9]*) false ;; esac
+  # …and they are DISTINCT quantities. The tree-walk stops at pid 1 and so undercounts a coalition
+  # that keeps reparented orphans; measured 90/147 and 97/145 on this box, i.e. 0.61x and 0.67x.
+  # Asserting t >= p pins the direction without pinning a ratio the header already got wrong.
+  [ "$t" -ge "$p" ] || false
+  # AND the source invariant, because the runtime half alone cannot catch the failure that matters:
+  # overwriting COAL_PROCS with the true count makes t == p, which still satisfies t >= p. Rung 6's
+  # 500/700 thresholds were derived against the tree-walk's scale, so that overwrite would re-noun a
+  # live verdict silently — exactly what the row forbids.
+  # Comment lines are dropped by a SEPARATE pass, not by a `^[^#]*` anchor. That idiom is wrong here
+  # and silently so: the target line carries `${_ct#* }`, and the `#` inside that parameter expansion
+  # ends the `[^#]*` span before it ever reaches COAL_PROCS=, so the pattern matched nothing and the
+  # case passed against a subject that HAD been mutated. Caught by mutant M-C5 coming back green.
+  run bash -c "grep -vE '^[[:space:]]*#' \"\$1\" | grep -cE 'COAL_PROCS=.*COAL_TRUE'" _ "$REPO/scripts/capacity-alarm.sh"
+  [ "$output" = "0" ] || false
+}
