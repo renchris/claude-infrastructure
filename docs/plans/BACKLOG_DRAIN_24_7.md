@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #55: the 29-recycle live-layer freeze was never un-landed work. It
+  was a rebased land, and `--is-ancestor` cannot tell those apart — patch-id can.**
+  `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim left)**. Property re-measured at intake and it held: 10/10 open are `venuePlan=local`
+  AND `project=claude-infrastructure`. Date checked FIRST — 2026-08-19, so
+  `master-session-lifecycle`'s `62363cac1e39` re-census window (~2026-08-24) is still CLOSED and was
+  correctly declined for the 28th time. **filed 0 / closed 0**, two commits landed
+  (`e09e06e21`, `17b31c3a4`), both `LIVE_ADDS=0`.
+
+  **THE HEADLINE, because 29 recycles inherited the wrong sentence.** Recipe finding (i) has told
+  every recycle since #27 that `deploy-live.sh` refuses because of "ONE un-landed commit in the
+  shared checkout — `9709c99d3`", remedy "land or drop that one commit". The *fact* was true and the
+  *inference* was wrong: **that commit was already landed**, the same day, at the same author-second,
+  as `a7ae13980`. Three independent oracles agree — identical blob (`e03447bce`), identical
+  **patch-id** (`d25f1b149c`), identical author-date and subject. A rebased land rewrites the commit
+  OBJECT, so `merge-base --is-ancestor` correctly reports it absent from trunk while the CONTENT is
+  on trunk in full (memory `cited-sha-may-not-survive-the-land`, in the wild, costing 29 passes).
+  So the remedy was never a land — it is a **drop**, and it loses nothing.
+
+  **`e09e06e21` — classify the refusal instead of guessing at it.** `superseded_ahead()` (patch-id,
+  fail-closed, bounded by `CC_DEPLOY_SUPERSEDE_SCAN`) splits a refusal that was answering three
+  questions with one sentence measured on only one of them: **A** live strictly AHEAD (`--ff-only`
+  really does exit 0 without moving — wording kept verbatim); **B1** diverged but every commit on
+  trunk by content ⇒ the drop is printed as a runnable one-liner; **B2** genuinely un-landed ⇒
+  dropping DESTROYS work, say so. The lane still refuses, still moves nothing, still never resets a
+  shared checkout — only the sentence changed. 7 red-proof cases (6 RED / 1 GREEN-by-construction on
+  pristine, predicted exactly), 8 mutants 8/8 matching pre-recorded predictions.
+  **And permission-gate-lint refused the first draft, correctly** — the guard `die`d bare, so it was
+  itself a standing state generating no event, which IS the 29-recycle freeze. The arms now
+  `refusal_bump` and write a page, declared `gate_bounded: REFUSE_MAX/REFUSE_COOLOFF`.
+
+  **`17b31c3a4` — `grep -q` under pipefail was convicting a file it had just matched.**
+  `deploy-link-parity.sh` reported `STRAY bin/it2` for ~18 recycles. `bin/it2` is byte-identical to
+  the tracked `bin/it2-wrapper` (blob `1df5cbff`). `content_is_tracked()` ended in a bare
+  `printf … | grep -qxF` under `set -uo pipefail`: grep exits on the match, printf takes SIGPIPE, the
+  pipeline returns 141 — and being the function's LAST statement, that inverted rc was its RETURN
+  VALUE. Measured on the real set: `grep -q` → rc 141, `grep -c` → count=1.
+
+  **🚨 A CHAIN LAW IS REFUTED. "A bash BUILTIN producer such as `printf` does NOT trigger the
+  SIGPIPE inversion" (carried in this brief since #45) is FALSE at scale.** It holds only while the
+  producer's output fits the **64 KiB pipe buffer**. `$TRACKED_SET` is one 40-char line per tracked
+  file — 2,035 lines / ~83 KB today and growing monotonically. `pipefail-sigpipe-lint.sh`'s own
+  header had already measured this exactly (64 KiB → 10/10); nothing connected that measurement to
+  the call site. **Successors: treat "builtin ⇒ exempt" as bounded-by-inspection ONLY.**
+
+  **🚨 AND THE CONTROL FOR THIS EXACT TRAP EXISTED, WAS NAMED AFTER IT, AND WAS GREEN THROUGHOUT.**
+  `tests/deploy-link-parity.bats:275` is titled *"CONTROL: a copy under a DIFFERENT NAME is matched
+  by CONTENT, never convicted (the it2 trap)"* and asserts *"it is red the moment the leg stops
+  comparing bytes"*. Its fixture is **two files** — two lines never overflow a 64 KiB pipe, so the
+  bug cannot fire inside it. Proven mechanically, not argued: mutant **P1 (revert to `grep -q`) reds
+  PIPE1 and ONLY PIPE1, 1 of 41, with the it2-trap control still GREEN.** A size-dependent bug needs
+  a size-dependent control, so PIPE1 asserts its OWN fixture size (≥1700 tracked paths AND ×41 >
+  65536) and that the match sorts FIRST; a **vacuity control** (filler 1800→50, size assertions
+  removed) passes against the BUGGY subject, which is why those assertions are load-bearing.
+
+  **Recipe-level findings recorded here rather than filed (conservation — closed 0, so filed 0):**
+  (j) **`pipefail-sigpipe-lint` misses the highest-consequence shape.** It flags
+  `… | grep -q … && continue` (line 311 of that file) and MISSES a **bare trailing pipeline whose rc
+  becomes a function's RETURN VALUE** (line 261) — where the inversion propagates to every caller.
+  **17 sites repo-wide** share that shape; most have producers bounded by inspection (a shebang, one
+  path) and cannot reach the regime. Widening the detector touches a 156-site census plus its
+  allowlist and is its own unit of work.
+  (k) **The parity report's remaining reds are mostly NOT drift.** After `17b31c3a4` it is 4→3
+  actionable, and `UNLINKED scripts/branch-prune-landed.sh` was added by `d40b04fac`, which is **not
+  in the frozen shared checkout's history** — i.e. it is the `LIVE_ADDS` consequence of the very
+  divergence `e09e06e21` makes drivable. The other two are dangling symlinks needing an `rm` on live
+  operator state. **The brief's inherited claim that `~/.claude/bin/it2` had "DRIFTED from its
+  tracked source" is REFUTED: it is byte-identical; the LEG was broken.**
+  (l) **`d4fa449e3895` re-checked and genuinely open, but its falsifier is coarser than it looks.**
+  The stored probe exits 1 as a REAL verdict (the scanner has a positive control and rc 1 means a
+  level≥2 section is PENDING) — but 49 of its 51 sections read PENDING, including ones titled
+  "Status log", "The evidence" and "RESOLVED 2026-08-03", because status is inferred from the word
+  DONE in a heading and narrative sections can never carry it. The row's real remainder is
+  `docs/plans/TEAMMATE_SELFCLOSE_INVESTIGATION.md:681` — **`⛔ NOT LIVE — blocked on one
+  operator-owned step**". Do not "close" it by marking narrative headings DONE; that is narrowing a
+  stored falsifier.
+  (i) **UPDATED — the converger's block is now LEGIBLE and DRIVABLE, but still standing.**
+  `deploy-live.sh` now names it and prints the remedy. It remains ONE operator command:
+  `git -C ~/Development/claude-infrastructure reset --keep origin/main` (`--keep`, never `--hard`:
+  it ABORTS rather than discarding local work, and the dropped object stays in the reflog). Until it
+  runs, cc-reaper's belts (legs 2+3), the exit-144 recorder, capacity-alarm's `coal_*` fields and
+  `e78107996dea`'s `argv0` are all landed and NONE of them is running.
+
+  **Row disposition.** `475222a572de` claimed, real work landed, **left OPEN and claim RELEASED** —
+  its half 1 ("prove convergence by reading the RUNNING image") is untouched and its named cause
+  `ce775801633b` still stands; this pass fixed the *upstream* reason nothing converges at all.
+  `b38279c10c55` NOT advanceable this pass and said so rather than rebuilding anything: no
+  `SENDER IDENTIFIED` capture and no `verdict=killed` exists anywhere in the mailbox, because no
+  live watcher can carry the recorder until the converger runs. Teammates 0/0, Explore 0.
+
 - **2026-08-19 — drain recycle #54: two rows that both asked for an instrument got one, because in
   both cases the syscall was already on the box and only the python BINDING was missing.**
   `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
