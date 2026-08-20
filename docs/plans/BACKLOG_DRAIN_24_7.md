@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #66: `master-fire-gate` 45 open → 44 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: a falsifier keyed on a SPELLING can only ever CONVICT —
+  the fix landed under a different NAME, so the row's own probe reported "still broken" for the
+  three weeks after it was fixed, and kept admitting workers who found nothing to do.**
+
+  **Effort choice.** Stayed in `master-fire-gate` — #65 left it warm at 45 open, and a warm effort
+  is cheaper than a cold survey. Two adjacent rows were read and deliberately NOT taken:
+  `9a14c2ef8224` (the `scripts/worktree-pool.sh` phantom) **stands** — re-verified this session,
+  the file was never added in any ref (`git log --all --diff-filter=A` empty), is absent from
+  origin/main, and **34 files still reference it, one of them the live executable
+  `bin/cc-wave-plan`**; and `159c2211b0f2` (lead-crash-watchdog sourcing `watchdog.env`) is
+  **correctly not a drain row** — its own body rules it a Follow-On Gate **F3 fail**, because the
+  fix arms `cc-teardown`, a pane-CLOSING actuator, which is a G2 escalation surface. Left open.
+
+  **`0bcccfd6cd18` — CLOSED as REFUTED (no code fix needed), evidence same-moment from
+  origin/main.** The row claimed `hooks/operator-readout.sh` consumes a `run_command` field that
+  **no producer on trunk writes**, so "the silver-platter close renders needs-prose where it should
+  render a runnable command". The *literal* half is still true and the *consequence* is false,
+  because **the capability arrived under a different name**:
+
+  - **Backlog leg.** `cc-backlog needs --run` is a real producer (`bin/cc-backlog:2307`, arg at
+    `:1486`, threaded at `:2385`), riding the step as **`run`** on the `block` record and folding
+    at `:1058`. The consumer at `hooks/operator-readout.sh:471` already reads `.run // .run_command`.
+    Live: **60 of 160 blocked rows carry `.run`** and render `▶ <cmd>`; **0** carry `run_command`.
+  - **Decisions leg.** `hooks/operator-readout.sh:433` reads `.run_command` only — and that is
+    *correct as built*, because a decision's runnable channel is `staged_artifact_path`
+    (`▶ bash <p>`), which **12 of 26 open packets** carry. Every open packet WITHOUT one was read:
+    each is a genuine value fork ("May the Turso client go 1.9.2 → 2.0.5?", "pick the path") or a
+    ship-land escalation. `◆` — "judgment, no single command exists" — is the right mark for those,
+    and the id renders whole so `cc-decide veto|action <id>` round-trips.
+  - **Both invariants are already TEST-PINNED** on origin/main: `tests/cc-backlog-needs.bats:140`
+    (`--run` survives the fold as `.run`) and `tests/operator-readout.bats:299` (a row carrying
+    `run/run_command` renders `▶`) + `:216` (staged artifact renders `▶ bash <staged>`).
+
+  🚨 **Why the row could not retract itself, which is the transferable part.** Its stored falsifier
+  was `grep -rq run_command bin` — keyed on the *field spelling of a superseded branch*
+  (`feat/board-runnable-commands`, verified this session: local ref only, **never pushed**, and
+  `2f25c802`/`a0d96fde` are **not ancestors of origin/main**). Exit 0 is the RETRACTING direction
+  in this store, so a probe that can never match can only ever **convict**. `bin/cc-premise`
+  `run_falsifier` re-runs stored probes at claim time precisely to keep a worker off a row a
+  sibling stream already fixed — but it read rc 1 and admitted the worker every time, which is
+  exactly the `needs` line the row carries: *"persistent thrash — 2 fast claim→reopen cycle(s)"*.
+  A falsifier must ask about the **capability**, never the identifier the fix happens to use.
+  Family: #63's guard at the wrong door · #64's watch that could not take a breath · #65's oracle
+  that asked presence when the question was direction — and the standing **"criterion that cannot
+  clear"** thread, now at its eighth sighting.
+
+  **Census — 53/53 stored falsifiers convict today, and the harness was controlled before that was
+  believed.** All 55 open rows carrying a probe were re-run in this worktree (byte-identical to
+  origin/main; the one `cc-notify` probe was skipped as it SENDS). Result: **53 exit 1, 1 exits 4,
+  1 skipped, 0 exit 0.** A uniform verdict indicts the instrument first, so the same base64 exec
+  path was positive-controlled (`true`, `test -f bin/cc-backlog`, a matching grep → **rc 0**) and
+  negative-controlled (a non-existent token → **rc 1**), with every probe's premise file confirmed
+  present. The harness discriminates; the reading is real. Probes live at `/tmp/p66k.sh`,
+  results `/tmp/fals66.tsv`.
+
+  **What landed.** No code change was warranted — the working channels exist and are pinned. What
+  landed is the **comment that was regenerating the row**: `hooks/operator-readout.sh:53` still
+  advertised `run_command` as *"board vocabulary, forward-compatible with
+  feat/board-runnable-commands"*, i.e. it read as a channel waiting on a branch that is dead. It
+  now states the measured truth on both legs, names the producer and the two pinning tests, and
+  says in terms not to re-file this. Gates: `shellcheck -S warning` rc 0, `bash -n` rc 0, both
+  render tests green.
+
+  ⚠️ **Live-layer freeze unchanged — nothing in this land runs from `~/.claude` yet.** Live HEAD
+  is still `9709c99d3`, `deploy-live.sh` still refuses correctly (patch-identical sibling ⇒
+  `--ff-only` cannot move), remedy still filed as `f33f72da71e0`. This land is comment-only, so
+  the freeze costs nothing here — but it is now the **ninth** landed instrument waiting on it.
+
 - **2026-08-20 — drain recycle #65: `master-fire-gate` 46 open → 45 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: the origin oracle asked PRESENCE when the question was
   DIRECTION — and the originator's own transcript is the one place the marker is guaranteed to
