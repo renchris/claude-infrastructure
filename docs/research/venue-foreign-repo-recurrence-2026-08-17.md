@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-20 | `38de29ec5e59` | `doc_classifier` | label-foreign — **THIRD burn of the same item**, and the row was still `open` at fire time (§ SIXTH OCCURRENCE) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,121 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH OCCURRENCE — `38de29ec5e59` a THIRD time, and the doc a stranded VM writes is a FALSE-DONE GENERATOR
+
+*2026-08-20, written from inside the third VM burned on this one item. The class, its cause and this
+item's adjudication are settled above and are NOT re-derived — §§ FIFTH OCCURRENCE and
+`cloud-venue-project-repo-mismatch-2026-08-16.md` §§2–3 stand verbatim. Three things here are new, and
+the second one is the reason this section exists.*
+
+Re-measured this session, all unchanged: no `doc_classifier` checkout anywhere
+(`find / -maxdepth 4 -name doc_classifier` → 0); GitHub scope is the one repo `renchris/claude-infrastructure`;
+`git show origin/main:bin/cc-offload` line 84 is still `REPO="${CC_OFFLOAD_REPO:-$ROOT}"`, so **no guard has
+shipped**; `HEAD..origin/main` = 0 with `.git/shallow` present at 50 commits; and the disposition rails still
+exit 0 while doing nothing (`cc-notify --role desk` → `verdict=unresolvable enqueued=0 reason=role-unset`,
+`~/.claude/autonomy/` absent). **This session did not update the ledger and must not be reported as having
+done so.**
+
+## New fact 1 — the prescribed `block` is not on the row, and the dispatcher proves it
+
+§ FIFTH OCCURRENCE closed by prescribing `cc-backlog block 38de29ec5e59`, on the reasoning that parking it
+*"is what stops a sixth fire into the same VM shape before the guard exists."* The sixth fire happened
+anyway, three days later, into the same VM shape.
+
+That is not merely suggestive — the dispatcher settles it. `bin/cc-dispatch` filters to `status=="open"` at
+step 1 and its own suite pins the behaviour: case **(k)**, *"blocked item → NOT dispatched (passed)"* +
+*"blocked item → ZERO spawn (no loop)"* (`bin/cc-dispatch:2497-2503`). A row that reaches a fire was
+therefore `open` when the pass read it. So the prescription was either never applied or was folded away
+again — and either way the finding generalises past this item: **a cloud VM's remedy for a venue mismatch
+is a sentence in a file, and the mechanism that re-burns the item reads the store.** Prose cannot park a row.
+The period of this loop is ~3 days and its cost is one paid session per turn.
+
+## New fact 2 — the ONLY artifact a stranded VM can produce is what marks its item DONE
+
+`scripts/cloud-return.sh` step 8 (`:395-423`) marks the fired item done, unattended, on the laptop:
+
+```sh
+if [ "$landed_ok" -eq 0 ] && [ -n "$BACKLOG_BIN" ]; then
+  "$BACKLOG_BIN" "done" "$item" --evidence "cloud $id → $trunk: $paths"
+```
+
+Every input to that condition is subject-blind, and the chain closes on itself:
+
+- **`item` is populated on dispatcher fires.** `bin/cc-dispatch:2307` fires `up --via api --task … --item "$id"`
+  and `bin/cc-offload:550` writes it onto the declaration. This session's declaration therefore carries
+  `item_id=38de29ec5e59`.
+- **`paths` is the VM's own diff.** `cc-cloud fill-paths` derives it from the branch's commits against the
+  merge-base — it asks what this session wrote, never what the item was about.
+- **`landed_ok` checks those same paths against the FIRING repo's trunk** (`git -C "$repo" ls-tree "$trunk" -- "$p"`).
+- **Nothing compares the item's project to the repo.** `grep -n project scripts/cloud-return.sh` → **zero hits**.
+
+So on a venue-mismatched fire the only durable act available to the VM — pushing a research doc into
+`claude-infrastructure`, which is exactly what this file is and what §§ above instruct — is *precisely* the
+act that makes its item content-verify and closes it, with evidence reading
+`cloud <session> → main: docs/research/….md`. **The honest artifact and the false completion are the same
+push.** `build.py` is never touched, and the item that named a real, twice-confirmed supply-chain hole on a
+foreign repo folds to `done`.
+
+This inverts the cost model §3 of the 08-16 doc was decided against. An unfixed venue was priced at *one
+burned session per fire*, a bounded waste. It is actually *one burned session **plus** the silent completion
+of the item that was burned* — and the completion is the sticky half: `cmd_transition`'s terminal guard
+(`bin/cc-backlog:1600-1615`) refuses `reopen` and `unblock` over a `done` row with rc 4, so recovery needs
+`--force`. The local lane does not have this defect for the same reason it does not have the venue one:
+`cc-dispatch` already resolves the repo **from the item's own project** (`project_repo()` /
+`scripts/dispatch-projects.conf`, `:1187-1192`). Only the cloud lane attaches the firer's repo — and only
+the cloud lane's return path then reads that repo's trunk as proof about the item.
+
+**One command survives every ordering.** `block` takes neither the terminal guard (reopen/unblock only) nor
+the done latch (claim only), and status is a last-transition-wins fold — so `cc-backlog block <id> --needs …`
+lands over `open`, `blocked` and `done` alike. It is therefore correct whether the operator runs it before
+the sweep, after it, or after a `done` has already been folded in. Nothing else about this item needs
+sequencing.
+
+## New fact 3 — the standing refusal's TOOLING leg is refuted; its real leg is untouched
+
+Three sessions declined to ship a guard citing, in part, that *"neither `bats` nor `shellcheck` is installed
+here, so the repo's gate cannot be run on a shell change."* Measured this session, that leg is **false**:
+
+| step | result |
+|---|---|
+| `npm i -g bats@1.11.0` | OK — Bats 1.11.0 |
+| `pip install shellcheck-py` | OK — ShellCheck 0.11.0 |
+| `bats tests/cloud-return.bats` (untouched tree) | 6/24 failing |
+| root cause of the 6 | no git identity in the container — the fixture overrides `HOME`, so the stub lander commits as `root@vm.(none)` |
+| after `git config --system user.email/user.name` | **24/24 green** |
+
+A future cloud VM should not repeat that refusal in that form: the gate for this lane's scripts **is
+obtainable here**, and the six red tests are a container-provisioning gap, not a repo signal.
+
+**The conclusion is unchanged, on the leg that actually carries it.** `bin/cc-eligible`'s `OFFBOX_LANE`
+class states the rule that forbids the fix, and it is not about difficulty or tooling:
+
+> A SESSION THIS LANE CREATED CANNOT VERIFY A CHANGE TO THE LANE. … It is not a statement about difficulty;
+> it is that the observer and the subject are the same object. (`bin/cc-eligible:212-231`)
+
+`scripts/cloud-return.sh` **is** that lane — W2 of `CLOUD_BACKLOG_PIPELINE.md`, the one thing on it that acts
+unattended, as its own suite header says. A green hermetic suite whose lander, `cc-backlog` and `cc-custody`
+are all stubs proves the argv, not the return; the failure mode of a wrong guard here is that nothing lands
+or nothing closes, and both are invisible from inside the session the lane produced. So the fix is **filed,
+not landed** — the same disposition, now resting on the leg that a tooling change cannot move.
+
+## Operator actions
+
+Both need the Mac. The first is unchanged from § FIFTH OCCURRENCE except that it is now also the recovery
+for a false-done, and is correct in any order relative to the sweep:
+
+```
+cc-backlog block 38de29ec5e59 --needs "re-dispatch to a session that can reach renchris/doc_classifier — a local claim, or a cloud fire whose attached git_repository source IS doc_classifier; premise CONFIRMED on origin/main and supersession by 71258c80fce2 REFUTED (docs/research/venue-foreign-repo-recurrence-2026-08-17.md §§ FIFTH+SIXTH OCCURRENCE); THIRD cloud session burned on this item; if cloud-return already folded it to done over this doc's land, that done is FALSE — build.py was never touched"
+```
+
+```
+cc-backlog add --project claude-infrastructure --title "cloud-return marks a fired item done from the FIRING repo's trunk with no check that the item's project is that repo — a venue-mismatched VM's only durable artifact (a research doc) content-verifies and silently completes the item it could not work on (measured: 38de29ec5e59)" --dod-ref "scripts/cloud-return.sh#L395" --source 38de29ec5e59
+```
+
+The §3 fork of the 08-16 doc — **(a) fail closed at the fire vs (b) route by `item.project`** — is still the
+operator's, still unshipped, and now carries a sixth datapoint plus a second failure face. Nothing new is
+proposed about it here; note only that face 2 outlives either choice, because a same-repo item whose work a
+VM cannot finish reaches the identical `done` on any doc it pushes.
