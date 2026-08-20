@@ -1109,10 +1109,111 @@ migrations_converge() { # never fails, never changes the exit code
 }
 STATE_MIGRATIONS="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
 
+# ── residency: did the live layer reach the RUNNING PROCESSES? (master 475222a572de half 1) ──────
+# Every other statement this lane makes about convergence is a statement about a git ref and a set
+# of symlinks. A KeepAlive daemon holds an open fd on the image it exec'd, so it keeps running the
+# bytes it started with no matter what the ref says or where the link points — "already deployed"
+# can be true of the tree and false of the machine, indefinitely and silently.
+#
+# WHY THE STEADY STATE IS THE WHOLE POINT, and why this is not just install.sh's warning repeated.
+# install.sh runs ONLY on the advance path (the block at the top of link_refresh spells out why it
+# must stay there: at 144 ticks/day it is destructive). Both early exits — "already deployed" and
+# the rollback refusal — return long before it. And because content advances by a SECOND path
+# (~/.claude is per-file symlinks into the checkout, so every land moves the live layer for free),
+# the layer's CONTENT is permanently fresh while install.sh may not have run for days. That is the
+# exact combination that lets a resident daemon rot: nothing looks broken, and nothing asks.
+#
+# MEASURED ON THE LIVE HOST 2026-08-19, with this function's own probes:
+#   com.claude.compressor-sentinel  pid 80076  executing an image 23.3 h OLDER than its file
+#   com.claude.lead-supervisor      pid 82511  executing an image 18.8 h OLDER than its file
+#   com.claude.caffeinate-floor     resident, exec'd into /usr/bin/caffeinate ⇒ EXEMPT, not a gap
+# The compressor sentinel is the only guard against the kernel-panic class that killed this box 5
+# times in 11 days, so a stale one is a safety regression. 475222a572de recorded the same defect on
+# 2026-08-11 (42,679 running vs 52,618 deployed) and it has RECURRED — which is the argument for a
+# standing report rather than another one-off repair.
+#
+# READ-ONLY AND asay, DELIBERATELY. It mutates nothing, so it runs on every path including --dry-run
+# (the operator's inspection path and the platter's oracle). It uses `asay`, not `say`, because the
+# stale state PERSISTS until an advance runs install.sh with CC_INSTALL_RESIDENT_RELOAD=1 — under
+# --auto `say` would emit the identical line 144×/day, which is the noise defect this file's own
+# at-tip block was written to kill. install.sh already owns the counted warning at the moment a
+# reload could actually happen; this owns the honest answer when a human asks.
+#
+# POPULATION FIRST, THEN THE LIB. An empty launchd/ means there is no subject and silence is honest;
+# plists present with the probe lib missing is a genuine NO VERDICT and says so. That ordering is
+# also what keeps every existing fixture repo (none has launchd/) completely unperturbed.
+#
+# THE PROBES ARE NOT RE-DERIVED HERE. install.sh:845-847 names this consumer by row id and states
+# the contract: two copies of a probe that must agree about one population is the drift
+# scripts/lib/cc-common.sh was created to end. Its resident_image_stale() is the "read the RUNNING
+# image, not the symlink" primitive — TZ=UTC *and* LC_ALL=C on both sides, `stat -L` to follow the
+# live-layer symlink to the checkout, each operand validated separately, fail-closed to NOT-stale.
+RESIDENCY_LAUNCHCTL="${CC_DEPLOY_LAUNCHCTL_BIN:-launchctl}"
+
+residency_report() { # never fails, never changes the exit code, never mutates anything
+  local plist label rpid rprog checked=0 stale=0 exempt=0 names="" any=0 xtra="" _probe
+  for plist in "$DEPLOY_REPO"/launchd/*.plist; do
+    if [ -f "$plist" ]; then any=1; break; fi
+  done
+  [ "$any" -eq 1 ] || return 0
+  if [ ! -r "$DEPLOY_REPO/scripts/lib/cc-common.sh" ]; then
+    asay "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh is unreadable, so no running image was read"
+    return 0
+  fi
+  # shellcheck source=scripts/lib/cc-common.sh
+  # The `source=` hint resolves the path but does not make shellcheck FOLLOW it without -x, and the
+  # statics gate runs a bare `shellcheck` (scripts/ship-land.sh:2326).
+  # shellcheck disable=SC1091
+  . "$DEPLOY_REPO/scripts/lib/cc-common.sh"
+  # PRESENT AND READABLE IS NOT THE SAME AS CARRYING THE PROBES, and the difference is not academic:
+  # this lane's whole subject is a checkout that is BEHIND, and scripts/lib/cc-common.sh only gained
+  # these four probes in b2763f882. Measured 2026-08-19 against the real shared checkout, which is
+  # frozen below that commit: the `-r` test passed, the source succeeded, and the loop then emitted
+  # 26 lines of `plist_is_resident: command not found` and concluded "no resident daemon is
+  # executing" — a confident, wrong measurement produced by a non-verdict, over a host on which two
+  # daemons WERE stale. Fail-closed to NO VERDICT instead; an older lib must never be able to
+  # certify freshness. (`command -v` is used here as a capability test on a lib already sourced two
+  # lines up — NOT as an inference about whether the source happened.)
+  for _probe in plist_is_resident resident_pid resident_program resident_image_stale; do
+    if ! command -v "$_probe" >/dev/null 2>&1; then
+      asay "residency: NO VERDICT — $DEPLOY_REPO/scripts/lib/cc-common.sh predates the resident probes (no $_probe), so no running image was read"
+      return 0
+    fi
+  done
+  for plist in "$DEPLOY_REPO"/launchd/*.plist; do
+    [ -f "$plist" ] || continue
+    plist_is_resident "$plist" || continue
+    label="${plist##*/}"; label="${label%.plist}"
+    rpid="$(resident_pid "$label" "$RESIDENCY_LAUNCHCTL")"
+    [ -n "$rpid" ] || continue          # declared resident but not executing ⇒ nothing to compare
+    rprog="$(resident_program "$rpid")"
+    # EXEMPT, not skipped-and-forgotten: 4 of this fleet's ProgramArguments are `/bin/bash -c` with
+    # an inline script, and caffeinate-floor exec's into /usr/bin/caffeinate — argv names no repo
+    # file, so there is no image to compare. Counted and reported so the denominator is never silent.
+    if [ -z "$rprog" ]; then exempt=$((exempt + 1)); continue; fi
+    checked=$((checked + 1))
+    if resident_image_stale "$rpid" "$rprog"; then
+      stale=$((stale + 1)); names="${names:+$names, }$label"
+    fi
+  done
+  if [ "$exempt" -gt 0 ]; then xtra=" · $exempt exempt (argv names no file on disk)"; fi
+  if [ "$stale" -gt 0 ]; then
+    asay "residency: $stale of $checked executing resident daemon(s) are running STALE bytes — $names — so the live layer has NOT reached them (install.sh reloads a resident daemon only on an advance, and only with CC_INSTALL_RESIDENT_RELOAD=1)$xtra"
+  elif [ "$checked" -gt 0 ]; then
+    asay "residency: $checked of $checked executing resident daemon(s) are running current bytes$xtra"
+  else
+    asay "residency: no resident daemon is executing$xtra"
+  fi
+  return 0
+}
+
 # UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
 # even when the network is down, the tip has no green stamp, or the live layer already sits above it.
 link_refresh
 migrations_converge
+# THIRD, not first: it must read the state the two steps above leave behind — link_refresh can
+# create the very link whose target resident_image_stale() then follows with `stat -L`.
+residency_report
 
 # ── --offline · DECIDE WITHOUT THE NETWORK (§2.6 D5 / V9) ────────────────────────────────────────
 # The operator platter (bin/cc-do, hooks/operator-readout.sh) must not offer a deploy command this
