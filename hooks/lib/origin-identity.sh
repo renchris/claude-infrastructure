@@ -154,6 +154,61 @@ fired_stamp_tenancy() { # $1=stamp-path $2=this-pane-cwd → echoes absent|valid
   if [ "$closed" = null ]; then printf 'valid'; else printf 'spent'; fi
 }
 
+# ---- oi_marker_inbound — the marker must have ARRIVED, not merely been TYPED (item fd5196ac31ef) -
+# THE DEFECT THIS CLOSES. Both marker proofs below used to be a bare `grep -qF -- "$marker" "$tp"`,
+# which asks only "does this string appear ANYWHERE in my transcript" — and that is true of the
+# ORIGINATOR too. A session that fires a peer WITHOUT --worktree fires into its OWN cwd, and
+# scripts/handoff-fire.sh runs as a Bash TOOL CALL, so the composed prompt (marker and all) is
+# written into the FIRING session's own transcript twice over: once as the assistant record's
+# `tool_use` input, once as the `tool_result` / `toolUseResult` that comes back. The by-cwd index
+# then points at the peer's still-open stamp whose cwd IS the originator's cwd, the grep matches,
+# and oi_origin_class answers `fired-peer` for an ORIGIN session — so completion-assert D6 exempts
+# from the origin close contract exactly the session that contract was built for, and keeps doing so
+# for as long as the stamp stays open. The comment on the absent branch already names the negative
+# it defends against (an operator pane opened in the peer's worktree); it does not name this one,
+# because the originator's transcript is the ONE place the marker is guaranteed to be.
+#
+# THE DISCRIMINATOR IS DIRECTION, NOT PRESENCE. A fired peer RECEIVES its marker: the marker rides
+# the composed prompt and lands in the message content of a `user` record. An originator only ever
+# EMITS it — inside an assistant record's `tool_use` input, inside a user record's `tool_result`
+# block, or in the sibling `toolUseResult` field of that same record. Reading ONLY `.message.content`
+# of `user` records, dropping tool_result/tool_use blocks and skipping any record carrying
+# `toolUseResult`, keeps every inbound occurrence and no outbound one.
+#
+# MEASURED ON LIVE DATA, both polarities, 2026-08-20. Marker HANDOFF-ENGAGE-278-1787233982-5484 is
+# carried by SIX transcripts across the four account stores — the bare grep calls all six "mine".
+# Exactly ONE has it inbound: the real peer, in the wt-pool-5 worktree the stamp names. The drain
+# session that merely echoed the marker into its own tool output scored grepLines=10, INBOUND=0,
+# while its OWN recycle marker scored grepLines=6, INBOUND=1. One transcript, both answers, correct.
+#
+# POLARITY. Every unresolvable case answers NO, which oi_origin_class maps to `origin` — the
+# bounded, latched, ≤cap-blocked-stops side (header CONSUMER POLARITY). A real peer misread as
+# origin costs turns; an origin misread as a peer is the silent permanent exemption that IS the bug.
+oi_marker_inbound() { # $1=marker $2=transcript-path → rc 0 iff the marker ARRIVED in a user prompt
+  local m="${1:-}" tp="${2:-}"
+  [ -n "$m" ] && [ -n "$tp" ] && [ -f "$tp" ] || return 1
+  # Cost gate, strictly weaker than the verdict it guards: every line jq can match, grep matches
+  # too, so a fast NO can never overrule a slow YES (MEMORY cost-gate-must-be-strictly-weaker).
+  # `-qF` over a FILE, never a pipe — grep -q on a pipe kills its producer under pipefail.
+  grep -qF -- "$m" "$tp" 2>/dev/null || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  # Whitespace around `? //` is LOAD-BEARING: jq 1.7 lexes `?//` as the alternative-destructuring
+  # operator, so `.type?//""` is a COMPILE error — which, under a `2>/dev/null` reader, returns no
+  # output and reads exactly like "no inbound occurrence". Measured here while building this fix.
+  jq -e -R --arg m "$m" '
+        (fromjson? // empty)
+        | select((.type? // "") == "user")
+        | select(has("toolUseResult") | not)
+        | (.message?.content?) as $c
+        | (if   ($c | type) == "string" then $c
+           elif ($c | type) == "array"  then
+             ($c | map(select(((.type? // "") != "tool_result")
+                          and ((.type? // "") != "tool_use"))) | tojson)
+           else empty end)
+        | select(type == "string") | select(contains($m))
+      ' "$tp" >/dev/null 2>&1
+}
+
 # ---- oi_origin_class — the CLOSE-CONTRACT consumer's verdict ------------------------------------
 # $1=pane $2=cwd [$3=transcript-path] → echoes fired-peer|origin|unknown. Always rc 0.
 #
@@ -189,7 +244,7 @@ oi_origin_class() {
     valid) printf 'fired-peer'; return 0 ;;
     spent)
       marker="$(jq -r '.marker // ""' "$dir/$pane.json" 2>/dev/null || true)"
-      if [ -n "$marker" ] && [ -n "$tp" ] && [ -f "$tp" ] && grep -qF -- "$marker" "$tp" 2>/dev/null; then
+      if [ -n "$marker" ] && oi_marker_inbound "$marker" "$tp"; then
         printf 'fired-peer'
       else
         printf 'origin'
@@ -199,9 +254,13 @@ oi_origin_class() {
     unknown) printf 'origin'; return 0 ;;
   esac
   # state=absent — the id may have changed under a live peer. The by-cwd index FINDS the candidate;
-  # the marker in THIS session's transcript PROVES it (cwd alone never authorises: an operator pane
-  # opened in the peer's worktree matches the cwd too — the load-bearing negative in
-  # tests/handoff-fired-cwd-index.bats).
+  # an INBOUND marker in THIS session's transcript PROVES it (cwd alone never authorises). TWO
+  # load-bearing negatives, and the second is why the proof is oi_marker_inbound and not a grep:
+  #   · an operator pane opened in the peer's worktree matches the cwd too
+  #     (tests/handoff-fired-cwd-index.bats);
+  #   · the ORIGINATOR of a fire launched WITHOUT --worktree shares the peer's cwd AND carries the
+  #     marker in its own transcript — outbound, as the tool_use/tool_result of the fire it ran
+  #     (item fd5196ac31ef; see oi_marker_inbound's header for the measurement).
   if [ -n "$cwd" ] && [ -n "$tp" ] && [ -f "$tp" ]; then
     idxpane="$(read_fired_cwd_index "$dir" "$cwd")"
     if [ -n "$idxpane" ] && [ -s "$dir/$idxpane.json" ]; then
@@ -211,7 +270,7 @@ oi_origin_class() {
         if [ -n "$scwd" ] && scwd="$(cd "$scwd" 2>/dev/null && pwd -P)" \
            && [ "$scwd" = "$(cd "$cwd" 2>/dev/null && pwd -P)" ]; then
           marker="$(jq -r '.marker // ""' "$dir/$idxpane.json" 2>/dev/null || true)"
-          if [ -n "$marker" ] && grep -qF -- "$marker" "$tp" 2>/dev/null; then
+          if [ -n "$marker" ] && oi_marker_inbound "$marker" "$tp"; then
             printf 'fired-peer'; return 0
           fi
         fi
