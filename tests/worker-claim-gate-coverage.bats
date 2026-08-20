@@ -462,3 +462,95 @@ EOF
   printf '%s' "$block" | grep -q 'basis:"absent"'
   printf '%s' "$block" | grep -q 'caller:"pane-spawn"'
 }
+
+# ── CASES 19-21: THE SECOND GATE ON THE PRESCRIBED COMMAND (backlog ba5511bbe388) ────────────────
+# Case 18 asked whether the WORKER-CLAIM gate refuses its own cure, and proved it does not. It then
+# stopped. But `self-close --terminal` passes through TWO gates, and the second one — handoff-fire's
+# ORIGIN GATE — was never asked: a pane with no fired-peer stamp exits 2 with "ORIGIN session, not a
+# fired peer", and that is every operator-launched pane and every Agent-Team lead. So case 16, whose
+# own name is "names a drivable action", certified a command that is undrivable for a large part of
+# the population it is handed to. Exempt from THIS gate was true; drivable was the unchecked half.
+#
+# This is the same shape as backlog e91b6ef3d076 one layer up (cc-notify promised a desk-invariant
+# replacement without asking launchd): a sentence about an ACTUATOR is as falsifiable as one about a
+# reader, and the honesty gate that stopped asserting the FIRST unchecked thing left the SECOND one
+# a branch away. The remedy is the prose, never the origin gate — that gate exists because a
+# workflow carrier self-closed after landing 4 commits and 3M tokens looked lost.
+#
+# THREE ORACLES, DELIBERATELY DIFFERENT (two cases failing the same way are one case):
+#   19  the actuator's own EXIT STATUS + stderr, executed — plus a both-directions library control
+#       so the refusal cannot be an artifact of running in a scratch dir
+#   20  the PROSE across every prescribing site, enumerated from the tree, keyed on the deny-reason
+#       CLASS rather than on one file or one spelling, so a fifth site added later is covered
+#   21  a MUTANT + a NEGATIVE control on case 20's own predicate, so it can neither pass vacuously
+#       nor be satisfied by deleting every mention of the command
+#
+# RED-PROOF (recorded 2026-08-20). The control arm is `git archive origin/main` unpacked into a
+# scratch tree with ONLY this test file substituted, and it was CHECKED BEFORE IT RAN: 0 hits of the
+# fix's own symbol in all three hooks, 3 hits of the pre-fix clause. (A control arm that re-runs the
+# FIXED subject agrees perfectly with the treatment arm and proves nothing — the failure mode that
+# returned a 5/5 green pre-fix arm on backlog e91b6ef3d076.) Result: 20 RED pre-fix, green post-fix.
+#   19 and 21 are green in BOTH arms BY DESIGN, and that is their point: 19 states the premise — a
+#   fact about handoff-fire's origin gate, not about this diff, so a red there indicts the premise
+#   and not the prose — and 21 proves 20's predicate can fail at all. Sibling cases 05/11/16/18,
+#   which assert the same deny reasons on other axes, stay green post-fix: the edit moved exactly
+#   the retire clause, which no test in the tree asserts (phrase-censused before writing).
+
+# every line that PRESCRIBES the cure inside a deny reason but does not state the origin condition
+noncompliant_prescriptions() { # $1=file → echoes the offending lines, if any
+  grep -n 'self-close --terminal' "${1:?}" 2>/dev/null \
+    | grep -E 'permissionDecisionReason|deny "' \
+    | grep -v 'ORIGIN session, not a fired peer' || true
+}
+
+@test "19 THE PRESCRIBED COMMAND HAS A SECOND GATE — self-close refuses a pane with no fired-peer stamp" {
+  fired="$BATS_TEST_TMPDIR/fired-empty"; mkdir -p "$fired"
+  probe_cwd="$BATS_TEST_TMPDIR/probe-cwd"; mkdir -p "$probe_cwd"
+  pane=00000000-0000-4000-8000-00000000cafe
+
+  # THE SUBJECT: the exact command the three deny reasons hand to a duplicate worker, run by a pane
+  # with no stamp. --dry-run is deliberately NOT what makes this safe — the origin gate blocks ~600
+  # lines ABOVE the dry-run exit, so this arm can never reach a close even if the flag were dropped.
+  run env CC_FIRED_DIR="$fired" bash "$REPO/scripts/handoff-fire.sh" \
+      self-close --terminal --no-notify --session-id "$pane" --dry-run
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'ORIGIN session, not a fired peer'
+
+  # BOTH-DIRECTIONS CONTROL, at the library rather than by running the whole script again: the
+  # refusal above means nothing unless the same oracle answers differently for a REAL peer. If this
+  # ever reads `absent` for a valid stamp, case 19's red is the instrument, not the subject.
+  . "$REPO/hooks/lib/origin-identity.sh"
+  [ "$(fired_stamp_tenancy "$fired/$pane.json" "$probe_cwd")" = absent ]
+  resolved="$(cd "$probe_cwd" && pwd -P)"
+  jq -n --arg c "$resolved" '{cwd:$c,selfRetire:true,closedAt:null}' > "$fired/$pane.json"
+  [ "$(fired_stamp_tenancy "$fired/$pane.json" "$probe_cwd")" = valid ]
+}
+
+@test "20 EVERY deny reason that prescribes the cure states the condition under which it works" {
+  # Enumerated per hook so a failure names the file. The predicate matches the deny-reason CLASS,
+  # not a file list, so a fourth enforcement point inherits the rule without editing this case.
+  for _wcp_hook in "$HOOK" "$HOOK2" "$HOOK3"; do
+    [ -z "$(noncompliant_prescriptions "$_wcp_hook")" ]
+  done
+  # and the rule is not vacuously satisfied by there being nothing to check — the sites must exist
+  [ "$(cat "$HOOK" "$HOOK2" "$HOOK3" | grep -c 'self-close --terminal')" -ge 4 ]
+}
+
+@test "21 case 20 predicate CAN fail, and is not satisfied by deleting the prescription" {
+  # MUTANT — a deny reason prescribing the cure with no condition. If this passes, case 20 is inert.
+  mutant="$BATS_TEST_TMPDIR/mutant-hook.sh"
+  printf '%s\n' '  deny "STAND DOWN: retire this pane with self-close --terminal (it refuses a dirty tree)."' > "$mutant"
+  [ -n "$(noncompliant_prescriptions "$mutant")" ]
+
+  # NEGATIVE CONTROL — a deny reason that prescribes nothing must NOT be flagged, so the only way to
+  # go green is to state the condition, never to blanket-mute every mention of the command.
+  quiet="$BATS_TEST_TMPDIR/quiet-hook.sh"
+  printf '%s\n' '  deny "STAND DOWN: stop work and return your findings to the session that spawned you."' > "$quiet"
+  [ -z "$(noncompliant_prescriptions "$quiet")" ]
+
+  # SECOND NEGATIVE CONTROL — a compliant prescription is accepted, so the predicate is not simply
+  # rejecting every line that names the command (which case 20 would then also fail on the real tree).
+  ok="$BATS_TEST_TMPDIR/ok-hook.sh"
+  printf '%s\n' '  deny "retire with self-close --terminal only if fired; else it exits 2, ORIGIN session, not a fired peer."' > "$ok"
+  [ -z "$(noncompliant_prescriptions "$ok")" ]
+}
