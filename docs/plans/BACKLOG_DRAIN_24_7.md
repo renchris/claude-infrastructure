@@ -87,6 +87,73 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #67: `master-fire-gate` 44 open → 43 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: an acquittal earned on the WRONG axis leaves the case it
+  was never argued about convicted by default — the cited-path arm let an AMBIGUOUS bare
+  basename go free "because it is still present on trunk", and that reasoning silently
+  convicted the ZERO-carrier one, which is 54 of 432 live rows.**
+
+  **Effort choice.** Stayed in `master-fire-gate` for the third recycle running — #66 left it
+  warm at 44 open, and a warm effort is cheaper than a cold survey. The three rows the lineage
+  has already ruled on were NOT re-derived: `9a14c2ef8224` (the `scripts/worktree-pool.sh`
+  phantom) still stands, `159c2211b0f2` is still a Follow-On Gate **F3 fail** (its fix arms the
+  pane-CLOSING `cc-teardown`, a G2 surface), and `b69b1d957cec` stays open pending a repointed
+  watcher proven LIVE. One row was read and rejected as a candidate before `a431c71076e6` was
+  taken: `7c6ff16259a0` ("off-box payload pushes to an invented branch name"), whose stored
+  falsifier greps `scripts/handoff-fire.sh` for `switch -c` and `cc-cloud preflight` — but the
+  payload push is at `bin/cc-cloud:831` and the preflight it wants is `cmd_preflight`
+  (`bin/cc-cloud:787`), which *already* refuses a branch that exists only locally
+  (`bin/cc-cloud:1046`). **Same shape as #66's finding: the probe interrogates the file the fix
+  was expected in, not the capability.** Adjudicating whether the caller actually reaches it is
+  a cloud-lane measurement this recycle could not make on-box; left open, unfiled.
+
+  **`a431c71076e6` — FIXED and LANDED `a37ec0a0b`, premise CONFIRMED (not refuted) on
+  same-moment origin/main content.** The row claimed the dispatcher's CITED-PATH warning is a
+  false positive **by construction** for every memory-index item. Verified live before touching
+  anything: `python3 bin/cc-premise contract` on both open memory-index rows (`0b3d53bcd1fd`,
+  `7c266e16fc94`) emitted `CITED PATH(S) not at that location on origin/main: MEMORY.md —
+  moved, renamed, or never landed`, and `check` returned **`verdict=suspect` off that sentence
+  alone**. `MEMORY.md` is the user auto-memory index under
+  `~/.claude*/projects/<encoded-cwd>/memory/` — **0 trunk files carry that basename**, so the
+  sentence can only ever fire, and the `memory-index` condition re-mints a row citing it every
+  few days (13 rows in the store, 2 open + 1 blocked).
+
+  🚨 **The root cause is narrower than the row's own framing, and that is the transferable
+  part.** `bin/cc-premise`'s path arm already ACQUITS a bare basename carried by **two or more**
+  trunk files — the comment and its bats control both justify that as *"an ambiguous name is
+  still present on trunk"*. That rationale is about **presence**, so it had nothing to say about
+  the **zero-carrier** case, which fell through to `gone.append(p)` and was convicted by
+  default. But the honest objection is not presence at all: **a bare basename never named a
+  location**, so *"not at THAT location"* has no subject — git was never told where to look, and
+  a miss is not absence (memory: `lookup-miss-is-not-absence`). The acquittal was right for the
+  wrong reason, and the wrong reason is exactly what left the sibling case standing.
+
+  **The fix takes the row's SECOND offered remedy, not its first.** The row proposed *"exempt
+  paths that resolve outside the repo toplevel"* **or** *"classify them as not a tracked path"*.
+  The first is unevaluable — a bare basename gives nothing to resolve — so zero-carrier names
+  now get their own line, conceding what git was never asked, and are **VERDICT-NEUTRAL** like
+  the churn arm beside them.
+
+  **Blast radius measured, because silencing an arm is the failure mode here** (memory:
+  `alarm-polarity-and-attention-budget`): of **432 live rows**, **54** carried the fabricated
+  conviction and **74** cite a directory-bearing absent path and are **untouched** — the arm
+  keeps its teeth on the larger population and stops speaking a sentence it cannot support on
+  the other.
+
+  **Red-proof, 2/2 against origin/main's pre-fix `bin/cc-premise`,** and the two fail
+  *differently*: the first on `verdict=clear` (the conviction), the second because with one
+  shared list the fabricated name **preceded and buried** the real finding
+  (`MEMORY.md, scripts/no-such-file-at-all.sh`), so a grep anchored on the real path missed.
+  Post-fix `tests/cc-premise-evidence-age.bats` 22/22; `tests/cc-premise.bats` and
+  `tests/cc-dispatch-supersession.bats` unchanged and green; `ship-land` rc=0 first try, smoke
+  14 suites in 171 s, `land-verify` 2 paths content-identical, stranded-sweep clean.
+
+  **Live-layer note.** The shared checkout was **79 behind** origin/main at this recycle's open
+  (#66 measured 77) and is still frozen at `9709c99d3` behind the operator-only wall
+  (`f33f72da71e0`). This land is the **tenth** instrument stranded there — and unlike #66's
+  comment-only land it **is behavioural**, so `~/.claude/bin/cc-premise` keeps convicting
+  `MEMORY.md` until the operator clears the freeze.
+
 - **2026-08-20 — drain recycle #66: `master-fire-gate` 45 open → 44 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: a falsifier keyed on a SPELLING can only ever CONVICT —
   the fix landed under a different NAME, so the row's own probe reported "still broken" for the
