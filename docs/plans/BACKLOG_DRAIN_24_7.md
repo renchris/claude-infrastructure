@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #59: `master-verification-integrity` reaches 0 OPEN. One row was
+  already fixed on trunk and nobody closed it; the other's detector could only ever report its own
+  remedy.**
+  Effort picked from the CURRENT fold, not a remembered order: **`master-verification-integrity`
+  2 open / 1 blocked** was the smallest LIVE master-* (four efforts read 0 open — stranded-work,
+  operator-gated, enforcing-store, account-facts — and a 0-open effort is not a live one).
+  **closed 2 / filed 1**, one commit landed (`56ddd74d2`). Close line at the bottom of this entry.
+
+  **`ebbf3adfb4d0` — closed on trunk content, zero code written.** The row asked that a post-land
+  bisect be able to return NO VERDICT (it had elected a docs-only commit as culprit for a bats
+  failure at load 16.45). Checked BEFORE building anything: `git show origin/main:scripts/postland-
+  verify.sh` already carries `bisect_reach_ok()` at :1921 gating the culprit claim at :2087, and
+  `BISECT_LOAD`/`BISECT_S`/`BISECT_STEPS` beside every verdict AND non-verdict — **both halves of
+  the row's own FIX SHAPE**, landed as `66857bc2e` on 2026-08-17, red-proofed by B19-B25 in
+  `tests/postland-verify-bisect-bound.bats`, and the commit **cites this row's id**. It sat open for
+  three days anyway. Recipe: a row whose remedy has landed does not close itself, and the check that
+  finds it is one `git show origin/main:<path>` — cheaper than the first line of a re-derivation.
+
+  **`bfd2e4eaaf2f` — a detector that reported the REMEDY and not the DEFECT.** `unattended-path-lint`
+  answers "what word sits at command position", which is structurally blind to the one spelling this
+  repo actually writes. Re-measured through the live scanner on a fixture rather than read:
+  `${V:-name}`, `${V:=name}` and `${V-name}` **all emit nothing**, while a bare `name` on its own
+  line emits normally, and `${V:-/bin/ps}` is correctly silent. The live instance —
+  `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"` — sat in the tree for the whole life of the row with the
+  lint exiting 0 on a clean tree, and spoke only once a FIX moved `it2` to command position.
+
+  Four things in the shape of the fix are the reusable part:
+  1. **A SECOND PRODUCER, never a change to `scan()`.** The command-position machine drops a
+     double-quoted word before a word ever forms, so reaching `"$IT2_BIN"` means editing the quote
+     state — on a lint that GATES EVERY LAND here. The new pass only ADDS emissions, so every
+     verdict `scan()` produces today is bit-identical and all downstream (`plausible_binary`,
+     `reachable_on`, `file_guards`, allowlist, inventory) applies unchanged: no second reporting
+     path to drift (memory: `sibling-auditors-must-share-the-state-model`).
+  2. **The discriminator is REACHABILITY TO COMMAND POSITION, not the `:-` spelling.** A default is
+     a binary reference only if something RUNS it. Without that second half the pass fires on every
+     `${FMT:-json}` in the tree.
+  3. **The blast radius was MEASURED on the real corpus, not reasoned** — exactly TWO new findings,
+     `assignee-pane-residency.sh:92 it2` and `boot-resume.sh:106 sysctl`, and **both are fixed in
+     the same commit**, because a detector landing without its site fixes reds every in-flight
+     lander. Independent corroboration that the detector is right: those are the same two files the
+     stranded commit `66960552` touched. That commit was NOT cherry-picked — not an ancestor, and
+     the scanner has changed under it three times (`3a30a7d6d`, `fb7d0591c`, `02086516d`).
+  4. 🚨 **The obvious one-line fix was WRONG in the direction a lint cannot see, and a sibling test
+     caught it.** `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-$HOME/.claude/bin/it2}"` clears the lint and
+     **SHADOWS PATH** — `tests/assignee-pane-residency.bats:369` ("the caller's own PATH still WINS
+     — the hardening APPENDS, never prepends") went red on the first attempt. Shipped shape is PATH
+     first via `type -P`, absolute as FALLBACK. `type -P` is also the PATH lookup that does not put
+     the bare name back at command position, so it is resolved honestly rather than spelled around
+     the gate — the distinction that separates a fix from gaming a falsifier.
+  Red-proofed nine ways in `--selftest` (39/39, the file's own convention): 21a/b/c one fixture PER
+  SPELLING (a working spelling cannot carry the others), 21d the no-holder form — **all four
+  replayed against a mutant with the producer disabled go RED, 4 of 38 and only those** — plus five
+  GREEN too-wide arms: an ABSOLUTE default (**the pass must not forbid its own remedy**, which is
+  the shape both site fixes use), a default nothing runs, a comment (this file carries
+  `${CC_TERM_KITTY:-kitty}` in its own prose and would convict itself), single quotes, and an
+  unrelated variable being run.
+
+  **Filed 1 then DROVE it, and the sequence is the lesson** (`7cd5641ebcf9`, filed→done in one
+  session, `d31e3e351`). A PRE-EXISTING TRUNK RED proven by A/B, not a suspicion:
+  `tests/unattended-path-lint.bats` is **15 ok / 3 not ok on a pristine `git worktree add --detach
+  origin/main`** — the identical split as a tree carrying this diff, so nothing in flight caused it.
+  Single cause: bare `agent-browser` at `browser-spin-guard.sh:247`, which on this box resolves ONLY
+  inside an fnm multishell dir (a path that changes per shell), so the lint was GREEN in the land
+  gate — handed the live `$PATH` — and RED under bats, whose `setup()` fixtures `HOME`. **That
+  self-disagreement is exactly what case 14 of that suite is named after**, and it was a real
+  fail-open, not a test artifact: `command -v … && …` made the daemon's own teardown a SILENT skip.
+
+  It was filed rather than driven because the fork looked like a decision (tracked resolver in
+  `bin/` vs explicit no-op) — **and then ship-land refused the land on it**, which converted an
+  adjacent finding into an in-path one and settled the fork by itself. Fixed with `type -P`: a
+  genuine PATH lookup that does not put the bare name back at command position, so the resolution is
+  honest rather than spelled around the gate, with the unreachable case now a LOGGED skip instead of
+  a silent one. **NOT an `EMBEDDED_ALLOWLIST` row** — grandfathering a name whose whole problem is
+  that it resolves nowhere stable silences case 14 instead of answering it. 18/18 (from 15/3).
+
+  🚨 **The gate contradicted itself on the way there, and the contradiction is worth a row of its
+  own if it recurs.** ship-land printed `GATE-KILLED: tests/unattended-path-lint.bats — cut by the
+  smoke budget (exit 124, ZERO 'not ok') … It is NOT a red and NOT evidence about your tree`, and
+  then on the very next line `smoke RED — 1 of 7 direct suite(s) named a failure. This is a VERDICT
+  about your diff`. A cut is a NON-VERDICT; folding it into "named a failure" is the same
+  collapse-of-states this plan keeps meeting (memory: `enum-member-falls-into-fail-closed-default`).
+  Here the refusal happened to be correct for an unrelated reason, which is the dangerous shape — a
+  wrong mechanism corroborated by a true outcome (memory: `wrong-cause-corroborated-by-true-metric`).
+  Do not read this session's land as evidence the smoke verdict is sound.
+
+  **`782607797fc5` stays BLOCKED and is genuinely operator-gated** — `sudo dtrace` on
+  `proc:::signal-send` is the only way to name a signal's sender on macOS (SIP/root). Not re-derived.
+
+      master-verification-integrity: 0 open / 1 blocked (1 operator-gated)   filed 1 / closed 2
+
 - **2026-08-19 — drain recycle #56: the row named a line that CANNOT EXECUTE, and doubled its own
   blast radius with a grep that matched comments. A KeepAlive daemon's "next natural load" never
   arrives.**
