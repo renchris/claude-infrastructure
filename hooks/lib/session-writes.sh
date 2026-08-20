@@ -43,8 +43,29 @@
 # (A) withholds a certificate it cannot justify, (B) declines to force a continuation. Neither
 # fails loud, so this residue costs coverage, never correctness.
 #
+# The tempting closure is "worktree-implies-mine": if dirt sits in a LINKED worktree (not the
+# shared checkout), attribute it to the session cwd'd there, transcript evidence or not. It was
+# filed as backlog 68fdc99b17c7 gated on a "worktree rollout" that has no on-disk referent, and
+# it is REFUTED — a linked worktree is not single-tenant. Measured 2026-08-20 over the live
+# fleet, one live claude session per `bin/ms-365-mcp-server` child, cwd read from lsof (argv is
+# sampling, cwd is durable): 17 sessions across 15 cwds, and `.worktrees/wt-fp-lshape` held TWO
+# concurrent sessions — distinct TUI processes 66991 and 95308, distinct parent shells, started
+# four minutes apart. The shared checkout held two more, which the extension would have excluded
+# anyway; the linked worktree is the case it could not.
+#
+# The asymmetry is the whole argument, and it is the reason this is a rejection and not a
+# deferral. The residue above fails in the SAFE direction: a Bash-written file goes unattributed,
+# (B) declines to block, and a real loose end is merely missed. The extension fails in the UNSAFE
+# one: it convicts a session of its SIBLING's dirt, which is precisely the guarantee this file
+# exists to provide, and the resulting 🔧 block is unclearable by the innocent session — it does
+# not own the file, so it cannot commit it, and it burns CC_MECH_MAX against work that was never
+# its own. Trading a missed nudge for a false conviction is not a coverage win.
+#
 # Sidechain (subagent) records are DELIBERATELY INCLUDED: a subagent's edit is this session's
-# write, and excluding it would attribute the session's own dirt to nobody.
+# write, and excluding it would attribute the session's own dirt to nobody. Note this does NOT
+# generalise to an ASSIGNEE sharing a worktree: an assignee is a separate session with its own
+# transcript, not a sidechain record of this one, and cross-attributing between them is the same
+# false conviction the paragraph above rejects.
 #
 # ── TWO SCOPES, AND PICKING THE WRONG ONE FAILS LOUD ─────────────────────────────────────────────
 # The two arms above ask questions with DIFFERENT time spans, and for a year this file offered only
