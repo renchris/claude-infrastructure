@@ -2515,3 +2515,232 @@ EOF
   [ "$status" -ne 0 ] || false
   td_called
 }
+
+# ── LEG 4: THE PEER'S OWN UNMET CONTRACT (backlog 7c22e9b43956) ─────────────────────────────────
+# Legs 2 and 3 leave the row's own falsifier unsatisfied: leg 2 can only speak where a --notify-back
+# was ARMED and leg 3 only where the session spawned a subagent. A dispatched peer with NEITHER
+# still falls through to REAP on ahead=0-by-silence, and that hole is 76% of the fired population
+# (459 of 603 fired stamps carry no notifyBack). Leg 4 reads the peer's OWN goal contract instead.
+#
+# PRE-FIX SPLIT — MEASURED 2026-08-20 (recycle #58), not predicted. The subject is `git show
+# HEAD:bin/cc-reaper` (leg-4 token count 0, asserted as a control) run against THIS test file:
+#   RED   — G1, G2, G5, G8   (they assert a refusal/probe/log-line that does not exist pre-fix)
+#   GREEN — G3, G4, G6, G7, G9  (green PRE-FIX BY CONSTRUCTION: each asserts a PRESERVATION — that
+#           the belt stays QUIET and the peer is reaped exactly as before. A build with no leg 4 at
+#           all satisfies every one of them, which is precisely why each names the mutant that reds
+#           it. They pin the belt's population, not the defect.)
+#
+# #57 PREDICTED `RED G1,G2,G8,G9 / GREEN G3,G4,G5,G6,G7` and was wrong in BOTH directions. Recorded
+# because a prediction that is never executed is a claim, and this file's whole discipline is that a
+# case must be shown to be able to fail:
+#   • G5 reds pre-fix — it is NOT the pure preservation its old note claimed. Its last assertion
+#     greps the log for `goal-belt pass`, a line only leg 4 emits, so half of G5 is a new-unit red.
+#     It is a stronger case than advertised; the note was the thing that was wrong.
+#   • G9 is GREEN pre-fix — pre-fix, leg 3 alone refuses and no goal message exists anywhere, so
+#     both of its assertions hold over a build with no leg 4 at all. It is an ORDERING pin, not a
+#     new-unit red, and it therefore needs its own mutant to be non-vacuous (it has one — below).
+GPROJ_SID="9a9a9a9a-1111-4222-8333-444455556666"
+
+mk_goal() { # <sid> <live|met|failed> <seconds-ago> — a goal_status attachment in the session's own
+            # transcript, in the exact shape hooks/lib/goal-state.sh reads (last record wins).
+  local f="$D/proj-c/slug/$1.jsonl" met=false failed=false
+  case "$2" in met) met=true ;; failed) failed=true ;; esac
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":%s,"failed":%s,"condition":"the fixture goal"}}\n' \
+    "$met" "$failed" >> "$f"
+  touch_ago "$f" "$3"                                  # appending moved the mtime; restore the age
+}
+
+# ANTI-VACUITY for the G-series, and it is doing real work: leg 4 answers through
+# goal_live_condition, so a fixture whose JSON shape drifted from what that function greps and
+# slurps would read as "no goal was ever armed" — a DEFINITE NEGATIVE. Every preservation case
+# below would then pass without the fixture ever carrying a goal at all, and G1 would fail for a
+# reason that has nothing to do with the belt. Assert the real library agrees with the case's
+# intent BEFORE asserting anything about the verdict.
+assert_goal_fixture() { # <sid> <live|not>
+  [ -f "$D/proj-c/slug/$1.jsonl" ] || false
+  ( . "$REPO/hooks/lib/goal-state.sh"
+    if goal_live_condition "$D/proj-c/slug/$1.jsonl" >/dev/null 2>&1; then echo live; else echo not; fi
+  ) > "$D/goalverdict.txt"
+  [ "$(cat "$D/goalverdict.txt")" = "$2" ] || false
+}
+
+goal_refused() { echo "$output" | grep -q 'goal-contract belt'; }
+
+@test "G1 FALSIFIER: 0-commit peer, NO back-channel, NO subagent, LIVE unmet goal is NOT reaped" {
+  # The row's falsifier proper: "a fixture session with 0 commits, clean tree, cause=finished-teammate,
+  # valid fired-peer stamp, idle > SETTLE_S must NOT reach REAP" — with neither of the earlier legs
+  # able to speak for it.
+  mkworktree "$D/gmain1" "$D/.worktrees/wt-g1"
+  assert_never_committed "$D/.worktrees/wt-g1"
+  mark_fired                                           # stamp WITHOUT notifyBack ⇒ leg 2 is quiet
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60                         # …and no subagents/ dir ⇒ leg 3 is quiet
+  assert_goal_fixture "$GPROJ_SID" live
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g1" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  goal_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false                         # the pane SURVIVES — this is the whole item
+  [ -d "$D/.worktrees/wt-g1" ] || false
+}
+
+@test "G2 leg 4's refusal names its reason in the durable log, not only on stdout" {
+  mkworktree "$D/gmain2" "$D/.worktrees/wt-g2"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60
+  assert_goal_fixture "$GPROJ_SID" live
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g2" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  grep -q 'goal-belt refuse' "$D/reaper.log" || false
+  grep -q 'neither met nor failed' "$D/reaper.log" || false
+}
+
+@test "G3 a goal that is MET is positive DONE-evidence ⇒ belt quiet ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION (a preservation). Redded by mutant M1. This is the half that keeps
+  # leg 4 from being a permanent-refusal generator: the channel must read BOTH ways. Measured over
+  # all five account transcript roots — 267 live-unmet vs 217 met/failed — it does.
+  mkworktree "$D/gmain3" "$D/.worktrees/wt-g3"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" met 60
+  assert_goal_fixture "$GPROJ_SID" not                 # the fixture DOES carry a goal — it is met
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g3" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "G4 a goal that FAILED is also resolved ⇒ belt quiet ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M1. Separate from G3 on purpose: `failed` is a
+  # DIFFERENT field, and a predicate reading only `.met` would keep every failed-goal peer alive
+  # forever while G3 still passed.
+  mkworktree "$D/gmain4" "$D/.worktrees/wt-g4"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" failed 60
+  assert_goal_fixture "$GPROJ_SID" not
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g4" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "G5 a session that never armed a goal is a DEFINITE negative, not an abstain ⇒ reaped" {
+  # MEASURED RED PRE-FIX (#58) — the note here used to claim "green by construction, redded by
+  # mutant M2", and that was wrong: the trailing `goal-belt pass` log assertion names a line only
+  # leg 4 writes, so this case is half preservation (it MUST reap) and half new-unit (it must
+  # record that it LOOKED). 14.3% of transcripts carry a goal record at all, so the reap half is
+  # the common case: it MUST reap, or leg 4 exempts the whole fleet.
+  mkworktree "$D/gmain5" "$D/.worktrees/wt-g5"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60                   # transcript resolves, but carries no goal
+  assert_goal_fixture "$GPROJ_SID" not
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g5" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+  grep -q 'goal-belt pass' "$D/reaper.log" || false    # and it recorded that it LOOKED
+}
+
+@test "G6 kill-switch CC_REAPER_GOAL_BELT=0 reaps G1's exact fixture (discriminator pair)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Pairs with G1 on ONE fixture: this is what proves G1's survival
+  # is leg 4's doing and not an unrelated refusal upstream.
+  mkworktree "$D/gmain6" "$D/.worktrees/wt-g6"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60
+  assert_goal_fixture "$GPROJ_SID" live
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g6" 999 yes "$WPANE" "$GPROJ_SID"
+  CC_REAPER_GOAL_BELT=0 run "$R" sweep --reap
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "G7 a peer that DID commit is reaped even with a live goal (leg 4 stays in its population)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Redded by mutant M3. The never-committed precondition is HOISTED
+  # above all three legs; without it leg 4 would exempt every goal-armed session on the box, which
+  # is the pile-up harm work_landed's 2026-07-20 relaxation exists to undo.
+  mkworktree "$D/gmain7" "$D/.worktrees/wt-g7"
+  git -C "$D/.worktrees/wt-g7" commit -q --allow-empty -m "real work"
+  git -C "$D/.worktrees/wt-g7" push -q origin HEAD:main 2>/dev/null || true
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60
+  assert_goal_fixture "$GPROJ_SID" live
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g7" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+}
+
+@test "G8 session_goal_inflight is THREE-valued: live=0 resolved=1 cannot-tell=2" {
+  # Reds pre-fix only because the function does not exist — a new-unit red, NOT evidence about the
+  # defect. Extracted and run directly so the ABSTAIN path is positively OBSERVED rather than
+  # inferred from "well, it still reaped". The cannot-tell arm is the one that matters: conflating
+  # an unresolved read with "no goal" is exactly how a belt silently stops protecting anyone.
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60
+  local ex="$D/goal-fn.sh"
+  {
+    sed -n '/^find_transcript(){/,/^}/p'          "$R"
+    sed -n '/^session_goal_inflight() {/,/^}/p'   "$R"
+  } > "$ex"
+  # ANTI-VACUITY: a `sed` range whose start marker has drifted selects NOTHING, or everything to
+  # EOF, and the extract would then "pass" over an empty file. Assert the extract really carries
+  # both functions AND parses, before running a single case through it.
+  grep -q 'session_goal_inflight()' "$ex" || false
+  grep -q 'find_transcript()' "$ex" || false
+  bash -n "$ex" || false
+
+  cat > "$D/run-goal.sh" <<EOF
+#!/bin/bash
+PROJECT_ROOTS="\$CC_REAPER_PROJECT_ROOTS"
+[ "\${2:-}" = nolib ] || . "$REPO/hooks/lib/goal-state.sh"
+. "$ex"
+session_goal_inflight "\$1"; echo "rc=\$?"
+EOF
+  chmod +x "$D/run-goal.sh"
+
+  run bash "$D/run-goal.sh" "$GPROJ_SID"                # a LIVE unmet goal
+  [ "$output" = "rc=0" ] || false
+  run bash "$D/run-goal.sh" "no-such-session-id"        # transcript unresolvable ⇒ cannot tell
+  [ "$output" = "rc=2" ] || false
+  run bash "$D/run-goal.sh" "$GPROJ_SID" nolib          # the LIB itself is absent ⇒ cannot tell,
+  [ "$output" = "rc=2" ] || false                       # never a manufactured negative
+  # a transcript that resolves and carries no goal at all = a DEFINITE negative
+  mk_sess_transcript "e1e1e1e1-1111-4222-8333-444455556666" 60
+  run bash "$D/run-goal.sh" "e1e1e1e1-1111-4222-8333-444455556666"
+  [ "$output" = "rc=1" ] || false
+}
+
+@test "G9 leg 3 OUTRANKS leg 4: with BOTH true the message names the subagent, not the goal" {
+  # Both legs would refuse, so this pins WHICH reason the operator is handed. Leg 3's is the more
+  # concrete destruction — a reap SIGKILLs a process that is executing right now — so it must own
+  # the surface. Without the ordering the operator gets the weaker of two true reasons.
+  #
+  # GREEN PRE-FIX BY CONSTRUCTION (measured #58, correcting a prediction that called this a red):
+  # with no leg 4 in the build, leg 3 refuses alone and no goal message exists, so both assertions
+  # hold. Its discriminating MUTANT is therefore an ORDERING one — move leg 4's block above leg 3's
+  # — and it was RUN, not argued: that mutant reds THIS CASE ALONE, 8/9 of the G-series staying
+  # green, which is what attributes the coverage to this site instead of to the belt at large.
+  mkworktree "$D/gmain9" "$D/.worktrees/wt-g9"
+  mark_fired
+  mk_sess_transcript "$GPROJ_SID" 60
+  mk_goal "$GPROJ_SID" live 60
+  mk_subagent "$GPROJ_SID" g9 inflight 10
+  assert_goal_fixture "$GPROJ_SID" live
+  assert_inflight_fixture "$GPROJ_SID" g9 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-g9" 999 yes "$WPANE" "$GPROJ_SID"
+  run "$R" sweep --reap
+  inflight_refused || false
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  run td_called
+  [ "$status" -ne 0 ] || false
+}

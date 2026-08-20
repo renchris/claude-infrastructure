@@ -258,6 +258,10 @@ UNCOMMITTED_BELT="${CC_REAPER_UNCOMMITTED_BELT:-1}"    # operator kill-switch: 0
 # completion; only 17 of 59,266 measured gaps exceed it.
 INFLIGHT_MAX_SILENCE_S="${CC_REAPER_INFLIGHT_MAX_SILENCE_S:-900}"
 INFLIGHT_BELT="${CC_REAPER_INFLIGHT_BELT:-1}"          # operator kill-switch for leg 3 alone
+# Leg 4's own kill-switch. Separate from leg 3's on purpose: its false-positive rate on its own
+# population is UNMEASURED (that population was empty when it was written), so the operator must be
+# able to retire exactly this leg without also disarming the in-flight-subagent one.
+GOAL_BELT="${CC_REAPER_GOAL_BELT:-1}"                  # operator kill-switch for leg 4 alone
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
@@ -300,6 +304,16 @@ done
 # leg. Absent lib ⇒ the leg FAILS CLOSED (surface, never reap; command -v guards the call site).
 for _c in "$HERE/../hooks/lib/context-econ.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/context-econ.sh" \
           "$HOME/.claude/hooks/lib/context-econ.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+# goal-state.sh — goal_live_condition for the uncommitted-peer belt's FOURTH leg (7c22e9b43956).
+# Same resolve order and the same fail-closed contract as context-econ.sh above: absent lib ⇒
+# session_goal_inflight returns 2 ("cannot tell"), the leg abstains loudly in the log, and the sweep
+# proceeds exactly as it did before — never a silent widening, and never a genuine negative
+# manufactured out of a missing dependency.
+for _c in "$HERE/../hooks/lib/goal-state.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh" \
+          "$HOME/.claude/hooks/lib/goal-state.sh"; do
   # shellcheck disable=SC1090,SC1091
   [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
 done
@@ -1029,6 +1043,60 @@ session_subagent_inflight() { # <sid> → 0 in-flight · 1 definitely none · 2 
   return 1
 }
 
+# ── THE FOURTH CHANNEL: THE PEER'S OWN UNMET CONTRACT (backlog 7c22e9b43956, leg 4) ──────────────
+# Legs 2 and 3 leave a hole the row's own falsifier sits in. Leg 2 can only speak where a
+# --notify-back was ARMED (a peer fired without one never owed a ping, so its silence carries no
+# information) and leg 3 only where the session spawned an Agent-tool subagent. A dispatched peer
+# with NEITHER — 0 commits, no back-channel, no subagent, clean tree, idle past the settle — still
+# falls straight through to REAP on ahead=0-by-silence. Measured 2026-08-19: 459 of 603 fired stamps
+# on this box carry no notifyBack at all, so that hole is 76% of the fired population.
+#
+# THE CHANNEL IS THE GOAL, AND IT IS POSITIVE EVIDENCE, NOT SILENCE. Since 2026-08-09 `--goal` is
+# part of the fire recipe rather than an option, so a dispatched peer carries a machine-readable
+# contract: an end state, re-judged by the evaluator after every turn, whose verdict is written into
+# the peer's own transcript as a goal_status attachment. A goal that is neither met nor failed is the
+# session stating, in its own record, that it is NOT done. Reaping over that destroys work whose only
+# home is the transcript — which is exactly how pane B2D1CE68 died.
+#
+# THE INSTRUMENT WAS ALREADY BUILT AND SIMPLY NOT ON THIS PATH. hooks/lib/goal-state.sh's
+# goal_live_condition is already consumed by session-continue, mailbox-drain, validate-bash,
+# wrap-ledger, handoff-fire and cc-await-ping. The reaper — the one actor that can DESTROY the
+# session it describes — was the only consumer missing. Sourced above with the same resolve order and
+# the same fail-closed contract as context-econ.sh.
+#
+# WHY THE CORPSE FAILURE MODE DOES NOT REACH HERE, which is what made leg 3 need two bounds and this
+# need none. Over all FIVE account transcript roots (3,386 transcripts — a two-root census reads 51%
+# and its shortfall renders as a real absent population), 484 carry a goal record: 267 read
+# LIVE-and-UNMET and 217 read met/failed, so the channel reads BOTH ways rather than always-on. 151
+# of those 267 are more than seven days old — the corpse shape that would have made a bare predicate
+# a permanent-refusal generator. They cannot reach this belt: a corpse is a session whose process is
+# DEAD, and cc-classify labels those `crashed`, which is never auto-reaped. This belt only ever runs
+# for finished / finished-teammate, both of which require a live pid. Verified on the live population
+# rather than argued: of 9 live sessions, 2 read GOAL-LIVE-UNMET and 7 do not, and neither of the 2
+# is in this belt's cause set.
+#
+# HONEST LIMIT: the belt's true population — finished/finished-teammate with 0 commits and no
+# back-channel — was EMPTY at the time of writing, so this leg's false-positive rate on its own
+# population is UNMEASURED, not measured-and-low. It ships behind its own kill-switch for that
+# reason. The failure directions are not symmetric and that is what settles the default: a wrong
+# REFUSAL costs one damped desk surface with the pane left alive, a wrong REAP destroys a work
+# product that exists nowhere else.
+#
+# THREE-VALUED, and the two negatives are kept apart. goal_live_condition returns 1 for "no goal was
+# ever armed", for "met/failed", AND for "jq is missing / the file is unreadable" — conflating an
+# unresolved read with a genuine negative is the exact sin legs 2 and 3 avoid, so the hard
+# dependencies are checked HERE before its rc is trusted as an answer.
+session_goal_inflight() { # <sid> → 0 in-flight (a /goal is LIVE and UNMET) · 1 definitely none · 2 cannot tell
+  local sid="${1:-}" tj
+  [ -n "$sid" ] || return 2
+  command -v goal_live_condition >/dev/null 2>&1 || return 2   # lib absent ⇒ cannot tell, never "none"
+  command -v jq >/dev/null 2>&1 || return 2                    # the probe's own hard dependency
+  tj="$(find_transcript "$sid" 2>/dev/null)" || return 2
+  [ -n "$tj" ] && [ -r "$tj" ] || return 2
+  goal_live_condition "$tj" >/dev/null 2>&1 && return 0
+  return 1
+}
+
 checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LAST (proven plumbing)
   local cwd="$1" name="$2" sid="$3"
   [ -x "$CHECKPOINT_BIN" ] || { log "checkpoint: $CHECKPOINT_BIN not executable — SKIP (no snapshot)"; return 1; }
@@ -1570,6 +1638,30 @@ sweep() {
               handle_surface "$reap" "$ibkey" "$name" "$cause" "$pane" "never committed in this worktree AND an Agent-tool subagent is still running — auto-reap refused; closing this pane kills it mid-run. Confirm-close if truly done"
               continue ;;
             2) log "inflight-belt abstain $name pane=$pane: cannot resolve this session's transcript for sid=${ub_sid:-none} — proceeding to the back-channel leg" ;;
+          esac
+        fi
+        # ── LEG 4: the peer's OWN contract is still UNMET (backlog 7c22e9b43956) ────────────────
+        # POSITIVE evidence like leg 3, so it sits with it above leg 2's inferred-silence read, and
+        # like leg 3 it applies whether or not a back-channel was ever armed — which is the entire
+        # point: leg 2 is structurally unable to reach the 76% of fired peers that carry no
+        # notifyBack, and this is the leg that does. Ordered AFTER leg 3 because leg 3's refusal is
+        # the more concrete destruction (a reap SIGKILLs a subagent mid-run), so it should own the
+        # message when both are true.
+        if [ "$GOAL_BELT" = 1 ]; then
+          local ub_g=0
+          [ -n "${ub_sid:-}" ] || ub_sid="$(printf '%s' "$o" | jq -r '.session_id // .sessionId // ""' 2>/dev/null)"
+          session_goal_inflight "$ub_sid" || ub_g=$?
+          case "$ub_g" in
+            0)
+              say "  keep   $name [$cause] — NEVER COMMITTED here and its own /goal is still LIVE and UNMET: the session's own record says it is not done → auto-reap refused (goal-contract belt)"
+              log "goal-belt refuse $name [$cause] pane=$pane cwd=$cwd sid=${ub_sid:-none}: 0 commits in this worktree's reflog AND the last goal_status in its transcript is neither met nor failed — reap would destroy work that lives only in the transcript"
+              surfaced=$((surfaced+1))
+              local gbkey; gbkey="$(sanitize_key "${pane:-$name}")"
+              surfaced_keys="$surfaced_keys$gbkey "
+              handle_surface "$reap" "$gbkey" "$name" "$cause" "$pane" "never committed in this worktree AND its own /goal is still unmet — auto-reap refused; its work (if any) is in its transcript only. Confirm-close if truly done"
+              continue ;;
+            1) log "goal-belt pass $name pane=$pane: 0 commits and no LIVE unmet goal (never armed one, or it is met/failed) — not evidence of in-flight work, proceeding to the back-channel leg" ;;
+            2) log "goal-belt abstain $name pane=$pane: cannot resolve a goal verdict for sid=${ub_sid:-none} (lib/jq/transcript unavailable) — NOT treating an unresolved read as a negative, proceeding to the back-channel leg" ;;
           esac
         fi
         # ── LEG 2 (2026-08-19a): a back-channel WAS armed and was never used ────────────────────
