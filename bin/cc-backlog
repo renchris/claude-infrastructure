@@ -859,6 +859,17 @@ OPERATOR_CONDITION="${CC_BACKLOG_OPERATOR_CONDITION:-master-operator-gated}"
 # set only by cmd_reap, unreachable from argv.
 REAP_INTERNAL_BLOCK=0
 
+# REAP_INTERNAL_RELEASE — the same "this process's own maintenance sweep" class, for the RELEASE side.
+# Set only by cmd_reap, unreachable from argv, and read by exactly one site: the live-claim guard in
+# cmd_transition, where it exempts reap's release ONLY on a venue whose oracles cannot answer at all.
+# It deliberately does NOT exempt reap on a local claim — that guard is a recheck at a later time, not
+# a repeat of reap's own probe, and tests/cc-backlog.bats pins the TOCTOU flip it catches. The full
+# argument (why not `--force`, why not a `--by` string match, why the venue half is load-bearing) is
+# at that guard; this declaration exists so `set -u` can see it. Deliberately a SECOND flag rather
+# than a reuse of the one above: they gate unrelated policies, and one name over two policies is one
+# edit away from lifting the wrong one.
+REAP_INTERNAL_RELEASE=0
+
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
 }
@@ -1616,19 +1627,116 @@ cmd_transition() {
       return 4
     fi
     local cvenue; cvenue="$(printf '%s' "$cur" | jq -r '.venue // "local"' 2>/dev/null)"
-    if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] && claimer_live "$cby" "${cvenue:-local}"; then
-      { printf 'cc-backlog %s: REFUSED — %s is claimed by %s, which is still LIVE\n' "$event" "$id" "$cby"
-        printf '  A live claim returned to "open" is re-dispatchable: the next cc-dispatch tick\n'
-        printf '  claims it and spawns a SECOND worker onto work already in progress. That is the\n'
-        printf '  2026-07-20 incident exactly (reopened 33 min into a live claim, re-claimed 15 s later).\n'
-        # `reopen` is LITERAL in this line, whichever verb was attempted: releasing a live claim is
-        # what reopen --by is FOR, and unblock is not a synonym for it. Echoing "$event" here would
-        # hand the caller back the verb that just failed, dressed as the remedy.
-        printf '  The claimer releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$cby"
-        printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
-        printf '  To override deliberately:  cc-backlog %s %s --force\n' "$event" "$id"
-      } >&2
-      return 4
+    # THE RELEASE-SIDE MIRROR of claim's guards (4)+(5), and it was the LAST lease verb still judging
+    # on one oracle in the WEAK polarity (2026-08-11, item b7fe9507d986). It used to read
+    # `... && claimer_live "$cby" "$cvenue"`, i.e. refuse ONLY on rc 0 (proven LIVE) — so it proceeded
+    # on rc 1 (proven dead, correct) AND on rc 2 (UNRESOLVED, a non-verdict), and it never asked the
+    # worktree at all. Guard (4) warns against exactly that shape in writing, one screen below: *"Do
+    # NOT rewrite this as the reopen guard's `&& claimer_live` (rc 0 only) — that inverts it into
+    # fail-open and restores the defect."* The warning named this verb and this verb kept the defect.
+    #
+    # IT MATTERS HERE FOR THE SAME REASON IT MATTERS ON `claim`, not a weaker one: reopen/unblock
+    # resolves the fold to "open", which IS cc-dispatch's fire predicate. A third party releasing a
+    # claim whose `<host>-<pid>` has merely ROTATED puts a live worker's item straight back in the
+    # wave — the 2026-07-20 double-fire, reached through the release door instead of the acquire one.
+    # Both verbs hand out work; only the number of hops differs.
+    #
+    # SO BOTH ORACLES, IN THE STRONG POLARITY. Oracle 1 must return rc 1 (PROVEN not-live) to
+    # proceed; on rc 1 oracle 2 (`owned_wait`, the item's worktree) must ALSO return rc 1, because a
+    # `<host>-<pid>` verdict is about a SHELL and shells rotate while the work does not — measured on
+    # e1ce92772859 (2026-08-06), where `kill -0` said dead and the worker was mid-suite in its own
+    # worktree. `reap`, `claim` and `reclaim` have all required both oracles to convict since
+    # 1a56e14e; this verb now does too, so no two of them can disagree about what "live" means
+    # (memory: sibling-auditors-must-share-the-state-model).
+    #
+    # THE `--by` EXEMPTION IS UNCHANGED and stays FIRST: `[ "$cby" != "$by" ]` means the claimer's own
+    # release — reopen --by / --self-release, the legitimate direction of this verb — never reaches
+    # either oracle. Tightening the third-party path does not narrow the holder's own door.
+    if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] \
+       && { [ "$REAP_INTERNAL_RELEASE" -eq 0 ] || [ "${cvenue:-local}" = local ]; }; then
+      # THE REAP EXEMPTION IS NARROW — reap-internal AND a venue no oracle here can see. Both halves
+      # are load-bearing, and the second half was learned the hard way; see below.
+      #
+      # WHY IT EXISTS AT ALL. `cmd_reap` releases through this same call — `cmd_transition reopen
+      # "$id" --by cc-backlog-reap`, both from the local dead-worker path and from cloud_map's `open`
+      # verb — without `--force`. On a NON-LOCAL venue this guard is not merely redundant, it is
+      # unanswerable: `claimer_live` returns rc 2 for every non-local venue unconditionally (its venue
+      # gate), and so does `owned_wait`. A `-ne 1` refusal over a permanent rc 2 refuses 100% of cloud
+      # releases forever, including the sanctioned one, and does it SILENTLY — reap's call sites are
+      # `elif cmd_transition ... ; then` whose else-arm only writes an IDL row, so the item would sit
+      # claimed with nothing printed to any stream a caller keeps. Measured when this landed: BOTH
+      # live claimed rows in the store were venue=cloud, i.e. the un-narrowed remedy's blast radius
+      # was the entire claimed population (memory: alarm-polarity-and-attention-budget). Reap is the
+      # only caller entitled to that exemption because it is the only one holding an oracle that CAN
+      # see the venue — cc-cloud's declared session state, via cloud_state/cloud_map.
+      #
+      # WHY IT DOES NOT COVER LOCAL, WHICH IS THE PART THE FIRST DRAFT GOT WRONG. The tempting
+      # justification is "reap already convicted with both oracles, so asking again is redundant".
+      # That is false, and tests/cc-backlog.bats "journal: a REFUSED transition is recorded with
+      # acted:false" is the landed proof: reap probes the claimer, takes the dead-worker path, and
+      # this guard probes it AGAIN — catching the claimer that came back to life in between and
+      # refusing at rc 4. The second probe is a RECHECK AT A LATER TIME, not a repeat of the first,
+      # and that TOCTOU window is the only thing standing between a rotated-then-revived claimer and
+      # a duplicate peer. A blanket reap exemption deletes it. The narrow one keeps it: on a local
+      # claim reap goes through both oracles here exactly as a third party does.
+      #
+      # NOT `--force`, the easy lever and the wrong one: force also lifts the TERMINAL guard above,
+      # and a reap that could resurrect a done item is incident 1a226422cb37. This lifts the
+      # live-claim guard only, and only for a venue it cannot judge; the done-latch stays live.
+      #
+      # NOT a `[ "$by" = cc-backlog-reap ]` match either, for the reason REAP_INTERNAL_BLOCK already
+      # states about itself: that is a denylist of one spelling, not the class, and an external caller
+      # passing the string would silently inherit the exemption (memory:
+      # denylist-enumerates-spellings-not-the-class). The class is "a release this process wrote as
+      # part of its own maintenance sweep" — structural, set only by cmd_reap, unreachable from argv.
+      local crc cowned cowrc
+      claimer_live "$cby" "${cvenue:-local}"; crc=$?
+      if [ "$crc" -ne 1 ]; then
+        { if [ "$crc" -eq 0 ]; then
+            printf 'cc-backlog %s: REFUSED — %s is claimed by %s, which is still LIVE\n' "$event" "$id" "$cby"
+          else
+            printf 'cc-backlog %s: REFUSED — %s is claimed by %s, whose liveness is UNRESOLVED\n' "$event" "$id" "$cby"
+            printf '  An unanswered probe is not proof the holder is gone, and this verb RELEASES the\n'
+            printf '  work into the dispatch wave: abstaining leaves the incumbent alone, never mints\n'
+            printf '  a second worker.\n'
+          fi
+          printf '  A live claim returned to "open" is re-dispatchable: the next cc-dispatch tick\n'
+          printf '  claims it and spawns a SECOND worker onto work already in progress. That is the\n'
+          printf '  2026-07-20 incident exactly (reopened 33 min into a live claim, re-claimed 15 s later).\n'
+          # `reopen` is LITERAL in this line, whichever verb was attempted: releasing a live claim is
+          # what reopen --by is FOR, and unblock is not a synonym for it. Echoing "$event" here would
+          # hand the caller back the verb that just failed, dressed as the remedy.
+          printf '  The claimer releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$cby"
+          printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
+          printf '  To override deliberately:  cc-backlog %s %s --force\n' "$event" "$id"
+        } >&2
+        return 4
+      fi
+      # Oracle 1 says PROVEN-DEAD. That is a verdict about a SHELL, so ask the durable handle before
+      # releasing (memory: argv-is-sampling-cwd-is-durable). `owned_wait` CALLED, never restated —
+      # the same function guard (5) and reap use, so the three cannot drift apart.
+      cowned="$(owned_wait "$id" "${cvenue:-local}")"; cowrc=$?
+      if [ "$cowrc" -ne 1 ]; then
+        { if [ "$cowrc" -eq 0 ]; then
+            printf 'cc-backlog %s: REFUSED — %s is claimed by %s, whose process is gone but whose WORKTREE IS LIVE\n' "$event" "$id" "$cby"
+            printf '  evidence: %s\n' "$cowned"
+          else
+            printf 'cc-backlog %s: REFUSED — %s is claimed by %s, and its worktree occupancy is UNRESOLVED\n' "$event" "$id" "$cby"
+            printf '  %s\n' "$cowned"
+            printf '  The claimer probe answered "not live", but that answers for a SHELL; the only oracle\n'
+            printf '  that can see the WORKER never ran. No oracle has spoken about the worker, and this\n'
+            printf '  verb RELEASES the work into the dispatch wave — abstaining leaves the incumbent alone.\n'
+          fi
+          printf '  A <host>-<pid> claim names a shell, and shells rotate while the work does not: on\n'
+          printf '  e1ce92772859 (2026-08-06) the pid was dead, the worker was mid-suite in its own worktree,\n'
+          printf '  and the resulting duplicate cost ~20 min of thrown-away work. reap and claim both ask\n'
+          printf '  this same oracle before they will move a claim; so does this verb.\n'
+          printf '  If YOU are that worker and only need the claim re-keyed to your own identity:\n'
+          printf '      cc-backlog reclaim %s --by %s\n' "$id" "${by:-<worker-identity>}"
+          printf '  To override deliberately:  cc-backlog %s %s --force\n' "$event" "$id"
+        } >&2
+        return 4
+      fi
     fi
   fi
   # CLAIM GUARDS — the DONE LATCH (3) then the LEASE (4). Both are `claim`-side, both rc 4, and they
@@ -1698,8 +1806,11 @@ cmd_transition() {
       # path, on the acquire side, where the consequence is immediate rather than deferred.
       local lvenue; lvenue="$(printf '%s' "$lcur" | jq -r '.venue // "local"' 2>/dev/null)"
       claimer_live "$lby" "${lvenue:-local}"; lrc=$?
-      # ONLY rc 1 (PROVEN not-live) may be displaced. Do NOT rewrite this as the reopen guard's
-      # `&& claimer_live` (rc 0 only) — that inverts it into fail-open and restores the defect.
+      # ONLY rc 1 (PROVEN not-live) may be displaced. Do NOT rewrite this as `&& claimer_live`
+      # (rc 0 only) — that inverts it into fail-open and restores the defect. This warning used to
+      # cite the reopen guard as the live example of that inversion; it was, for three months, and it
+      # is not any more (b7fe9507d986) — the release side now runs this same two-oracle polarity, so
+      # the shape named here is one no verb in this file still has. Kept as the rule, not the sighting.
       if [ "$lrc" -ne 1 ]; then
         { if [ "$lrc" -eq 0 ]; then
             printf 'cc-backlog claim: REFUSED — %s is already claimed by %s, which is LIVE\n' "$id" "$lby"
@@ -4886,6 +4997,11 @@ cmd_reap() {
   # verb rather than at each of the three call sites, because that is exactly the claim (three
   # sites would be three places to drift), and cmd_reap is terminal — nothing runs after it.
   REAP_INTERNAL_BLOCK=1
+  # Same scope and same reason for the release side: this sweep convicts with BOTH oracles under its
+  # own ceilings before it reopens anything, so the live-claim guard in cmd_transition would be
+  # re-asking a question already answered — and on a cloud claim it is a question neither oracle can
+  # answer at all. Set for the whole verb, not per call site, for the reason stated just above.
+  REAP_INTERNAL_RELEASE=1
   local dry=0
   while [ $# -gt 0 ]; do
     case "$1" in
