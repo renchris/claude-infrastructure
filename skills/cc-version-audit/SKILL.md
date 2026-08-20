@@ -113,6 +113,32 @@ version that looks clean.** (2026-07: 2.1.196 shipped daemon self-kill fixed onl
 across 199–203 → safe floor 2.1.203, not the 2.1.197 `stable` tag.) A version with
 <1 week field exposure is a moving target regardless of changelog.
 
+🚨 **Measure that week as AGE SINCE PUBLISH, never as tenure on the `latest` tag** — the two
+read alike and only one is reachable. Measured 2026-08-20 over the package's whole npm history:
+exactly **two** versions have EVER held `latest` for ≥7 days, and one of them is our own pin
+2.1.220 (9.96 d, and only because it sat through a release pause). Excluding it, the longest
+tenure in the last 40 releases is **2.99 d**, against 20 releases in 30 days — roughly one every
+1.5 days. So a hold criterion phrased "≥1 week as npm `latest`" is not a strict bar, it is an
+**unsatisfiable** one: it cannot clear on the normal shipping rhythm, only on a shipping pause,
+so the audit it gates would return HOLD forever without that ever being an evidence-based verdict
+(this is what backlog `b69b1d957cec` had, and how the defect was found). Age since publish keeps
+accruing after a version stops being `latest`, which is what soak actually means, and it is the
+predicate this line has always intended. Instrument:
+
+```bash
+npm view @anthropic-ai/claude-code time --json | jq -r --arg v "$TARGET" '.[$v]'   # publish date
+# tenure-as-latest, if you ever need it as a CONTRAST — never as the gate:
+npm view @anthropic-ai/claude-code time --json | jq -r '
+  to_entries | map(select(.key|test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))
+  | map(.value |= sub("\\.[0-9]+Z$";"Z")) | sort_by(.value) | . as $v
+  | [range(0;length-1) | {ver:$v[.].key,
+      days: ((($v[.+1].value|fromdateiso8601)-($v[.].value|fromdateiso8601))/86400*100|round/100)}]
+  | sort_by(-.days) | .[0:5][] | "\(.ver)\t\(.days) d"'
+```
+
+(`fromdate` throws on npm's millisecond timestamps — strip the fractional seconds first, as
+above, or the whole measurement dies on one malformed-looking row.)
+
 ## Step 5 — Verdict + MANIFEST governance (the auto-install trap)
 Two INDEPENDENT guards hold the pin — both must stay intact (verified 2026-07-09):
 - **CC's built-in self-updater is off**: `DISABLE_AUTOUPDATER=1` is exported by the
