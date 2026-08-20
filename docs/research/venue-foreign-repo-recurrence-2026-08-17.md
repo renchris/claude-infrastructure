@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-20 | `64f1d37dc4b3` | `reso-management-app` | label-foreign — **first after a 3-day gap; no salvage available** (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,137 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SEVENTH OCCURRENCE — 2026-08-20, `64f1d37dc4b3`, `reso-management-app`
+
+**Written from inside the VM.** Item `64f1d37dc4b3` — *"`lib/generated/bottle-audit.ts` committed
+artifact is stale vs its inputs: prepare regen produces promptName drift"* — was dispatched to an
+`anthropic_cloud` session whose one attached repository is `renchris/claude-infrastructure`. Its
+brief names `/Users/chrisren/Development/reso-management-app`. Same mechanism, nothing new about the
+route. Three things ARE new, and only they are recorded here.
+
+## 1 · The gap is now measured in days, not argued
+
+The cause was located on 08-16 at `bin/cc-offload:84`. Four days later **no guard exists on trunk**,
+measured against `origin/main` @ `64ecabc` (this VM's HEAD; `git rev-list --count HEAD..origin/main`
+= 0, so it IS trunk):
+
+```
+$ for f in bin/cc-offload bin/cc-venue bin/cc-eligible; do
+    git show origin/main:$f | grep -cE 'dispatch-projects|foreign-repo|attached_repo'; done
+0   0   0            # cc-dispatch's 3 hits are its pre-existing dispatch-set reads, not a venue guard
+```
+
+The 08-17 file closes by noting the cost per item is not capped at one session. This adds the other
+axis: the cost per *class* is not capped either, and the recurrence interval is not decaying — three
+quiet days, then a seventh dispatch.
+
+## 2 · The gate's verdict is INVARIANT under `project` — a control, not an observation
+
+`cloud-venue-project-repo-mismatch-2026-08-16.md` §2 measured `cc-eligible check` on the misrouted
+item and got `eligible`, then argued the gate is not wrong to miss it. That argument is right, and it
+is now a measurement. Three fixtured runs, same binary, same environment:
+
+```
+64f1d37dc4b3  project=reso-management-app  → verdict=eligible          rc 0   # the misrouted item
+aaaaaaaaaaaa  project=claude-infrastructure→ verdict=eligible          rc 0   # POSITIVE control: same
+                                                                              # title shape, workable repo
+bbbbbbbbbbbb  project=reso-management-app  → verdict=ineligible-box    rc 3   # NEGATIVE control: the
+                                                                              # probe does refuse here
+```
+
+The negative control is what makes the first line a fact about the classifier rather than about a
+broken instrument in a strange venue. The positive control is the contribution: **an item that can
+run off-box and an item that cannot receive the identical verdict.** The verdict is invariant under
+the one field that decides whether the VM can see the work at all, so no amount of reading
+`cc-eligible`'s output can separate the two cases — which is the precise reason widening its spelling
+lists (`bin/cc-eligible:25-37`) could never have been the fix.
+
+## 3 · The line that PROMOTES these items has a name, and it is a third guard site
+
+The 08-16 note traces the *fire* (`cc-offload` attaching the firer's origin). It does not name what
+writes `venuePlan=cloud` in the first place. A cloud fire needs **both** halves:
+
+```
+bin/cc-venue:296-303      decide() falls through to {"venue": "cloud"} — the ONLY producer of the label
+bin/cc-dispatch:1986-1987 if [ "$plan_venue" = cloud ] && [ "${CC_FIRE_CLOUD:-off}" = on ]
+```
+
+`decide()` is already a fail-closed ladder — unknown item, any fired class, `hist["state"] != "ok"`
+(`:277`), a moved premise — each returns `venue: local`. A foreign project falls past all four,
+because the history oracle it consults resolves `repo_for(project)` → `~/Development/<project>`
+(`bin/cc-eligible:613-627`) and, on the Mac, certifies reach against **reso's own trunk** — a repo
+the VM will never receive. Measured here, where that tree is absent, the ladder catches it for the
+wrong reason:
+
+```
+$ CC_BACKLOG_FILE=<fixture> cc-venue assess 64f1d37dc4b3
+venue : local
+why   : uncertified-history: no-repo — no readable git repo for this project (repo=/root/Development/reso-management-app)
+```
+
+So the promotion is not a gap in a guard; it is a **certification that answers a question about the
+wrong repository**. That makes `decide()` a candidate site alongside the 08-16 §3 pair, and a cheap
+one: one conjunct in a ladder whose entire contract is already *"requires a POSITIVE certification
+for every cloud label, routes local on every uncertainty"*. It is also **Python**, so the blocker
+that stopped the 08-16 and fifth-occurrence sessions from touching `bin/cc-offload` — no `bats`, no
+`shellcheck` in the VM (re-measured 2026-08-20: both still absent; `python3`, `jq`, `node` present) —
+does not apply to it. This does not settle (a) vs (b); it adds a third place either could live, at
+the producer rather than the actuator.
+
+## 4 · No salvage was available — the burn is total
+
+The 08-16 and fifth-occurrence sessions each returned real value despite the misroute: both
+re-confirmed their item's premise and refuted its supersession, by citation to
+`docs/plans/backlog-consolidation-2026-08-09/OUT-docclf.md`, a dated read of the foreign trunk that
+happened to live in *this* repo. That salvage is not a property of the mechanism. It is luck about
+coverage, and here the luck runs out:
+
+```
+$ grep -rl '64f1d37dc4b3' . --exclude-dir=.git     # nothing
+$ grep -rl 'bottle-audit' docs/                    # nothing
+```
+
+`OUT-reso.md` triaged 77 `reso-management-app` items against that repo's `origin/main` @ `55c0c2294`
+on 2026-08-09; this item is in none of them, so it postdates the only in-repo evidence about that
+tree. **No claim is made here about `lib/generated/bottle-audit.ts`, its generator, its manifest, or
+the 12-entry `promptName` drift.** The brief's mandated FIRST STEP — read what the item cites on
+`origin/main` — was unrunnable, and the brief itself warns why a diagnosis built without it can
+produce a diff that reverts trunk (`cc-backlog 6110fc45141e`). The item is neither confirmed nor
+refuted; it is untouched.
+
+Reachability, measured both ways rather than assumed:
+
+```
+/Users/chrisren/Development/reso-management-app     absent  ($HOME=/root; no ~/Development at all)
+mcp__github__get_file_contents renchris/reso-management-app
+  → Access denied: not configured for this session. Allowed: renchris/claude-infrastructure
+```
+
+## 5 · The ledger was NOT updated by this session
+
+`~/.claude/autonomy/backlog.jsonl` does not exist in this VM (`cc-backlog list --open` → empty, rc
+0), so `done`, `block` and `reopen` would each mint a divergent phantom store that dies with the
+container. None was run. As the fifth occurrence records: a cloud VM's only durable channel to the
+desk is the branch it pushes, and this file is the notification.
+
+## 6 · Operator action
+
+```
+cc-backlog block 64f1d37dc4b3 --needs "re-dispatch to a session that can reach renchris/reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; premise NOT verified either way (the item postdates OUT-reso.md's 2026-08-09 triage and the tree is unreachable off-box), see docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH OCCURRENCE"
+```
+
+`block`, not `reopen` and not `done`, for the reason the fifth occurrence gives verbatim: the item is
+blocked on **where it was sent**, and parking it out of the wave is what stops an eighth fire into
+the same VM shape before the guard exists. `done` would be false — nothing about `bottle-audit.ts`
+was read, let alone changed.
+
+## 7 · Not fixed here, deliberately
+
+Unchanged from the three prior refusals and not re-argued: `bin/cc-eligible`'s `OFFBOX_LANE` class
+holds that **a session this lane created cannot verify a change to the lane** — "the observer and the
+subject are the same object" — and `bin/cc-venue` is that lane's producer, so §3's candidate site is
+the one thing this session is least entitled to build. A 50-commit clone cannot adjudicate its own
+admission. The guard belongs on the Mac, where a wrong refusal is visible before it starves the tap.
