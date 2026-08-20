@@ -535,3 +535,40 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   has "1 live-extra"
   has "every landed file is live"
 }
+
+# ── the STRAY leg's content-match, and why its SIZE is the whole test (2026-08-19) ───────────────
+# content_is_tracked() ended in a bare `printf '%s\n' "$TRACKED_SET" | grep -qxF -- "$h"`. Under the
+# file's own `set -uo pipefail` that pipeline's rc is the FUNCTION'S RETURN VALUE, and `grep -q`
+# exits the moment it matches — killing the producer with SIGPIPE and yielding rc 141. So a file
+# whose bytes ARE tracked answered "not tracked" and was convicted STRAY.
+#
+# 🚨 THE FIXTURE MUST OVERFLOW THE 64 KiB PIPE BUFFER OR THIS CASE IS VACUOUS. Below it the producer
+# completes before the consumer is even scheduled, nothing is signalled, and the case passes against
+# the UNFIXED script. That is asserted explicitly below rather than left to the file count.
+@test "a content-matched copy is not convicted STRAY once the tracked set passes the pipe buffer (PIPE1)" {
+  git init -q "$CC_LINKPARITY_REPO"
+  printf 'the-copied-bytes\n' > "$CC_LINKPARITY_REPO/bin/aaa-source"
+  ln -sfn "$CC_LINKPARITY_REPO/bin/aaa-source" "$CC_LINKPARITY_CONFIG/bin/aaa-source"
+  # Filler lives in docs/, which no surface walk visits, so it inflates TRACKED_SET without minting
+  # 1,800 UNLINKED findings. Empty files share one blob, but ls-files prints one ROW PER PATH.
+  mkdir -p "$CC_LINKPARITY_REPO/docs"
+  local i=0
+  while [ "$i" -lt 1800 ]; do : > "$CC_LINKPARITY_REPO/docs/f$i"; i=$((i + 1)); done
+  git -C "$CC_LINKPARITY_REPO" add -A >/dev/null 2>&1
+  # the live REAL file: same bytes as bin/aaa-source, different name — the copy-deploy shape
+  printf 'the-copied-bytes\n' > "$CC_LINKPARITY_CONFIG/bin/zz-copy"
+  chmod +x "$CC_LINKPARITY_CONFIG/bin/zz-copy"
+
+  # ANTI-VACUITY, both halves: the set must be git-backed AND past 64 KiB (40-char sha + newline).
+  run git -C "$CC_LINKPARITY_REPO" ls-files
+  [ "${#lines[@]}" -ge 1700 ] || false
+  [ "$(( ${#lines[@]} * 41 ))" -gt 65536 ] || false
+  # ...and the match must sort EARLY, or grep never exits before the producer finishes.
+  run bash -c "git -C '$CC_LINKPARITY_REPO' ls-files | head -1"
+  [ "$output" = "bin/aaa-source" ] || false
+
+  run bash "$LP" --all
+  lacks "STRAY"
+  lacks "zz-copy                                      live and executable, in NO checkout"
+  has "COPY"
+}
