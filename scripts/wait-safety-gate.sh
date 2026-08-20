@@ -54,7 +54,7 @@ echo "wait-safety-gate — never-wait-on-the-dead un-hold bar (L0 done · L1–L
 echo
 
 echo "L0 — spawn-death + DEAD detection (p8 + d2; DONE — this incident is its case study)"
-if [ -f hooks/boundary-handoff.sh ] && [ -f scripts/lead-supervisor.sh ] && ./scripts/premortem-gate.sh >/dev/null 2>&1; then
+if [ -f hooks/boundary-handoff.sh ] && [ -f scripts/lead-supervisor.sh ] && bash scripts/premortem-gate.sh >/dev/null 2>&1; then
   ok "L0" "p8/d2 built + premortem-gate green; DEAD is detected — but at POLL latency (≤1 sweep), and the WAIT it was blocking on is still unowned (⇒ L1 event-instant, L2 owns the wait)"
 else
   bad "L0" "p8/d2 not green — build the runtime primitives first (premortem-gate.sh)"
@@ -75,7 +75,7 @@ else
   [ -f "$WCLINT" ] && ok "L1-a" "wait-contract lint present to RED an unregistered waitee (L2)" || bad "L1-a" "no L2 lint — an unregistered waited-on pid is invisible to the watcher"
   # L1-e — the watcher's own death is LOUD. Its OWN RED lives in the behavioral selftest (kill -9 the
   # helper → a watcher-died alarm), which ALSO exercises b/c/d against a REAL kqueue exit (SEE it fire).
-  if grep -qiE 'heartbeat' "$DEATHWATCH" && grep -qiE 're-?arm|watcher.?died|alarm|abnormal' "$DEATHWATCH" && ./scripts/lead-deathwatch.sh --selftest >/dev/null 2>&1; then
+  if grep -qiE 'heartbeat' "$DEATHWATCH" && grep -qiE 're-?arm|watcher.?died|alarm|abnormal' "$DEATHWATCH" && bash scripts/lead-deathwatch.sh --selftest >/dev/null 2>&1; then
     ok "L1-e" "watcher own-death LOUD — heartbeat + helper-death alarm/re-arm present AND lead-deathwatch --selftest GREEN (real kqueue exit + SIGKILL-helper→alarm; every L1 RED-proof fires)"
   else
     bad "L1-e" "watcher own-death not proven — heartbeat/alarm mechanism absent, or the selftest does not fire green"
@@ -90,7 +90,7 @@ if [ ! -f "$WCLINT" ]; then
   todo "L2-c" "NOT BUILT — the watchdog enforces contracts INDEPENDENT of the waiter's liveness: a contract whose WAITER is dead is itself a divergence (contract outlives its author on disk) → detected + PAGED. BLIND TO: nothing the reconciler (L4) doesn't also cover — this is where L2 and L4 meet."
   todo "L2-d" "NOT BUILT — on-timeout for a LIVE-but-stalled waitee gates on the effect re-read (S-3b), NEVER on silence — a page deadline triggers RE-OBSERVATION, never a reap (the §3h near-miss law, inherited)."
 else
-  ./scripts/wait-contract-lint.sh --selftest >/dev/null 2>&1 && ok "L2" "wait-contract-lint selftest green (uncontracted-wait RED, deadline/on-timeout required, dead-waiter divergence, S-3b timeout)" || bad "L2" "wait-contract-lint selftest not green"
+  bash scripts/wait-contract-lint.sh --selftest >/dev/null 2>&1 && ok "L2" "wait-contract-lint selftest green (uncontracted-wait RED, deadline/on-timeout required, dead-waiter divergence, S-3b timeout)" || bad "L2" "wait-contract-lint selftest not green"
 fi
 
 echo
@@ -115,7 +115,7 @@ else
   grep -qiE 'heartbeat|sweep_log|idl' "$RECONCILER" && ok "L4-c" "reconciler heartbeat (who-watches-the-watcher)" || bad "L4-c" "no reconciler heartbeat — a crashed reconciler looks like a quiet system"
   # L4-a folds in the behavioral SEE-it-fire (like L1/L2): the selftest RED-proves divergence-names-pair,
   # grace transient-vs-persist, and the own heartbeat against the naive form.
-  if grep -qiE 'diverg|mismatch|pair' "$RECONCILER" && ./scripts/lead-reconciler.sh --selftest >/dev/null 2>&1; then
+  if grep -qiE 'diverg|mismatch|pair' "$RECONCILER" && bash scripts/lead-reconciler.sh --selftest >/dev/null 2>&1; then
     ok "L4-a" "pairwise divergence alarm names the pair AND lead-reconciler --selftest GREEN (grace transient-vs-persist + own heartbeat all fire RED-provably)"
   else
     bad "L4-a" "no divergence detection, or the lead-reconciler selftest does not fire green"
