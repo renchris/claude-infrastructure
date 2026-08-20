@@ -87,6 +87,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #69: `master-fire-gate` 42 open → 41 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: a claim about an ACTUATOR is exactly as falsifiable as a
+  claim about a reader — and the ones that survive longest are the ones a DECISION made false,
+  because nothing about the code changed on the day the claim stopped being true.**
+
+  **Effort choice.** Fifth consecutive recycle in `master-fire-gate` — #68 left it warm at 42
+  open. The lineage's settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`,
+  `7c6ff16259a0`, `b69b1d957cec`). Lag re-derived at open: the shared checkout was **83** behind
+  origin/main (#68 measured 81, #67 measured 79, #66/#65 measured 77), and **84** at close — it
+  went stale inside this session too, which is the whole reason it is re-derived and never quoted.
+
+  **`e91b6ef3d076` — FIXED and LANDED `c7dfff617`, premise CONFIRMED on same-moment origin/main
+  content before a line was written.** Both desk-is-down arms of cc-notify's D3 reroute closed with
+  the parenthetical `(desk-invariant fires a replacement)`, asserted unconditionally. Reproduced
+  against `git show origin/main:bin/cc-notify` (lines 1332 and 1343), then measured against live
+  launchd: `com.claude.desk-invariant` is **absent from `launchctl list` and reads `=> disabled`**
+  in the `gui/501` override DB, while **22 sibling `com.claude` jobs are loaded** (the positive
+  control that keeps the null from being an instrument failure). So the one caller whose page had
+  just stranded in a dead desk's box was told a rescuer was coming — by the very mechanism built
+  to end stranding.
+
+  🚨 **THE TRANSFERABLE PART — the claim was false BY DECISION, which is why it survived.** This
+  is not rot and not a bug: `launchd/fleet.manifest` carries `com.claude.desk-invariant | staged`
+  **deliberately** (2026-08-14, backlog `ff6a95a1779b` — `install.sh` bootstraps every
+  `expect = run` label unattended every 600s, so flipping that field IS the launchd mutation, and
+  C10 puts it in the operator's hands). The prohibition that kept it staged was itself REFUTED in
+  that same note, and the row was still left staged on purpose. Nothing in `bin/cc-notify` changed
+  on the day its sentence became false, so no diff, no test, and no lint had an event to fire on.
+  **A sentence whose truth lives in a config field another file owns has no tripwire — the only
+  way it gets caught is by someone asking the actuator.** `scripts/lead-supervisor.sh:188` had
+  already written the true thing in its own prose (*"com.claude.desk-invariant — the only organ
+  that can CREATE one — is not loaded"*); the fleet's two halves simply never had to agree.
+
+  **Same class as `b515aadb`, one branch away — and that is what made it findable.** That fix
+  stopped calling a dead box *"the desk is the standing triager"* because the sentence is a claim
+  about a **READER** and a box is not one. The parenthetical is the same shape pointed at an
+  **ACTUATOR**, sitting inside the honesty gate's own `if/elif`, untouched. *Ask, of any honesty
+  gate: it stopped asserting one unchecked thing — is there a SECOND unchecked assertion inside
+  the same sentence?* (Family: #63 guard at the wrong door · #64 watch that could not take a
+  breath · #65 oracle asking presence when the question was direction · #66 falsifier keyed on a
+  spelling · #67 acquittal on the wrong axis · #68 exemption that deleted a TOCTOU window.)
+
+  **The remedy: inventory first, three states, and a seam.** `desk_invariant_armed()` is the
+  predicate `bin/cc-blockers:657` and `hooks/activation-watch.sh:214` **already share**, not a
+  third implementation of launchd health — LOADED matches the **WHOLE final field** of
+  `launchctl list` (a substring test lets `com.claude.desk-invariant-shadow` stand in), ENABLED
+  reads the override DB (absence = enabled, since it records overrides not memberships). It
+  returns **three** states: a box with no launchd is **UNVERIFIABLE**, and collapsing that into
+  "not armed" would re-commit this row's own defect pointing the other way — asserting the absence
+  of a rescuer nobody checked for (memory `probe-that-acts-on-absence-must-confirm-presence`).
+
+  🚨 **A VERDICT TOKEN THAT IS A SUBSTRING OF ANOTHER VERDICT TOKEN IS NOT A TOKEN.** The
+  unverifiable arm first read *"whether desk-invariant fires a replacement is UNVERIFIABLE"* —
+  which **contains the armed arm's phrase verbatim**, so any reader or test matching that phrase
+  would have scored an abstention as a promise. Caught by the session's own case 3 going red, and
+  fixed by rewording the SENTENCE rather than weakening the assertion. Producer-side cousin of
+  `greedy-anchor-matches-the-longer-token`: there a pattern swallowed a longer token; here the
+  emitter minted two verdicts one of which contained the other. The three renderings are now kept
+  mutually non-substring on purpose, and the code says why.
+
+  **Blast radius of the remedy, measured before writing it** (#68's discipline, applied to prose).
+  A phrase census with positive AND negative controls found the surrounding sentences are a wire
+  protocol: `tests/cc-notify.bats` asserts `no reroute` ×3 and `NO triager` ×1, and the file's own
+  caller contract records that *"cc-announce, completion-push.sh and desk-invariant.sh all grep the
+  prose"*. **Nothing greps `fires a replacement`** — so exactly that parenthetical, and nothing
+  else, was allowed to move. A second-order effect the census surfaced: reading `launchctl` from
+  cc-notify would have made **every pre-existing test in the suite** consult the operator's real
+  launchd — borrowed hermeticity arriving through a NEW DEPENDENCY rather than a new test. Seam
+  `CC_NOTIFY_LAUNCHCTL_BIN` (read-only subcommands, the shape `activation-watch.sh` already
+  carries) is fixtured file-wide in `setup()`, pinning the pre-existing file at the UNVERIFIABLE
+  arm.
+
+  **`scripts/desk-invariant.sh` carried the same false claim in prose** — it quoted cc-notify's
+  sentence as an unconditional deferral and cited line numbers 656 lines stale. Corrected in the
+  same diff: the deferral describes what happens once the operator flips that manifest row, not
+  what happens today. *A false claim about a mechanism tends to exist in more than one file,
+  because the second copy was written by reading the first.*
+
+  **Red-proof: 5 cases, each failing on a DIFFERENT oracle, attributed THREE ways.**
+  Arm 1 the fix → 5/5 ok. Arm 2 a real pre-fix tree (origin/main's binary copied into a scratch
+  repo, with an instrument control proving the substitution actually took) → **4 red**
+  (`NOT-LOADED` · `DISABLED` · `UNVERIFIABLE` · `PREFIX`), `CONTROL-ARMED` **green** — it is the
+  REMEDY control, red only against a remedy that deletes the claim instead of conditioning it.
+  Arm 3 four mutants, **one kill each, no case over-wide**: blanket-mute→`CONTROL-ARMED` ·
+  list-only→`DISABLED` · substring→`PREFIX` · abstain-collapse→`UNVERIFIABLE`.
+
+  ⚠️ **Arm 2's first attempt was VACUOUS and said so loudly.** It passed `NOTIFY_OVERRIDE=…`,
+  which is not a seam the suite reads — `setup()` binds `NOTIFY="$REPO/bin/cc-notify"` — so the
+  "pre-fix" arm re-ran the FIXED binary and returned 5/5 green. **A control arm that agrees
+  perfectly with the treatment arm is the tell**, and the fix is a positive control on the
+  instrument itself: the rebuilt arm greps the substituted file for the fix's own symbol and
+  prints `0` before running anything (memory `control-must-replay-the-real-artifact`).
+
+  **Verification.** `bash scripts/ship-land.sh` → `✓ ship-land: LANDED c7dfff617 → origin/main;
+  content-verified; sweep=clean.` Land verified by CONTENT in BOTH directions: the fix's symbols
+  present on `origin/main` (`desk_invariant_armed` ×2, `e91b6ef3d076` ×6, the desk-invariant
+  comment ×1) and **absent at the parent sha `92afdc183`** (0/0/0) — the negative control that
+  proves the instrument can read absence. Suites: `cc-notify` **105/105** · `desk-invariant`
+  **24/24** · `desk-brief-ssot` **24/24** · `cc-blockers` **95/95** · `cc-announce` **18/18** ·
+  `desk-invariant --selftest` **26/26 GREEN**. `shellcheck -S style` (the gate's own level, not
+  the weaker `-S warning`) clean on both scripts; all four bats lints and the `!`-assertion
+  liveness analyzer report nothing.
+
+  **The live-layer freeze holds and now carries TWELVE landed instruments.** Live layer frozen at
+  `9709c99d3`; `deploy-live.sh` refuses CORRECTLY (live HEAD is a patch-identical sibling of trunk,
+  so `--ff-only` cannot move). Remedy already filed as `f33f72da71e0` — **not re-filed, not run**
+  (re-pointing a shared checkout other sessions execute from is operator-only by deploy-live's own
+  design). This land is an EDIT to three tracked files, so `LIVE_ADDS` is 0 and no consumer guard
+  silently skips — but `~/.claude/bin/cc-notify` keeps printing the false promise until the
+  operator clears the freeze.
+
 - **2026-08-20 — drain recycle #68: `master-fire-gate` 43 open → 42 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: a guard's SECOND look at the same oracle is a RECHECK AT A
   LATER TIME, not a redundant repeat — and "it already checked" is the reason that deletes a
