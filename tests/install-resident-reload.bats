@@ -24,12 +24,21 @@
 #   com.claude.caffeinate-floor     pid  1054  exec'd into /usr/bin/caffeinate — exempt BY
 #                                              CONSTRUCTION (no repo script in argv), not by a gap
 #
-# PRE-FIX EXPECTATION, RECORDED BEFORE THE RUN (pristine origin/main install.sh — no resident arm):
+# WHERE THE PROBES LIVE. plist_is_resident / resident_program / resident_image_stale / resident_pid
+# are in scripts/lib/cc-common.sh, sourced by install.sh, because a SECOND consumer must agree with
+# the installer about the same population (master 475222a572de half 1 wants deploy-live to PROVE
+# convergence by reading the running image). Two copies of a probe that must agree is exactly the
+# drift cc-common.sh was created to end — its own header documents resolve_bin having done it.
+# Test 8 therefore extracts from the LIB, and test 13 pins the fail-closed path when it is absent.
+#
+# PRE-FIX EXPECTATION, RECORDED BEFORE THE RUN, PINNED TO SHA 85a3aadf3 (the commit before this
+# work — NOT `origin/main`, which now carries it; a control on a moving ref skips rather than fails):
 #   RED   1, 4, 6, 7, 8   — each asserts a line, a verb or a function that does not exist pre-fix
-#   GREEN 2, 3, 5, 9, 10, 11, 12 — every one asserts an ABSENCE or a PRESERVATION, so it is green
-#         pre-fix BY CONSTRUCTION. That is not a weakness and it is not hidden: 2/3/9/10 pin the
-#         discriminator's failure directions, 5 pins that the mutation stays default-OFF, 11 is the
-#         positive control, 12 pins that the new arm does not swallow the pre-existing reload path.
+#   GREEN 2, 3, 5, 9, 10, 11, 12, 13 — every one asserts an ABSENCE or a PRESERVATION, so it is
+#         green pre-fix BY CONSTRUCTION. That is not a weakness and it is not hidden: 2/3/9/10 pin
+#         the discriminator's failure directions, 5 pins that the mutation stays default-OFF, 11 is
+#         the positive control, 12 pins that the new arm does not swallow the pre-existing reload
+#         path, 13 pins that a missing lib disables the arm rather than enabling it.
 #         They are credited by mutation, not by pre-fix colour — see the mutant table in the commit.
 #
 # Hermeticity: fixture $HOME, fixture repo, PATH-stubbed launchctl/ps/defaults. `stat` and `date`
@@ -47,8 +56,11 @@ setup() {
   export LOG="$TDIR/launchctl.log"
   : > "$LOG"
 
-  mkdir -p "$FX/launchd"
+  mkdir -p "$FX/launchd" "$FX/scripts/lib"
   cp "$REPO/install.sh" "$FX/install.sh"
+  # The probes live in the lib, sourced by install.sh, so the fixture repo must carry it. Test 13
+  # pins what happens when it does NOT.
+  cp "$REPO/scripts/lib/cc-common.sh" "$FX/scripts/lib/cc-common.sh"
   printf '# fixture global instructions\n' > "$FX/CLAUDE.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FX/statusline.sh"
 
@@ -259,7 +271,7 @@ EOF
   # stub emits one fixed string regardless of locale, so no behavioural case can reach it.
   # A stale range marker does not fail, it INVERTS — `sed -n '1,/nomatch/p'` selects the whole
   # file — so the extract is asserted non-empty before anything is concluded from it.
-  run bash -c "sed -n '/^resident_image_stale() {/,/^}/p' '$FX/install.sh'"
+  run bash -c "sed -n '/^resident_image_stale() {/,/^}/p' '$FX/scripts/lib/cc-common.sh'"
   [ -n "$output" ] || false
   n="$(printf '%s\n' "$output" | grep -cE 'TZ=UTC LC_ALL=C ps .*lstart=' || true)"; [ "${n:-0}" -gt 0 ] || false
   n="$(printf '%s\n' "$output" | grep -cE 'TZ=UTC LC_ALL=C date '        || true)"; [ "${n:-0}" -gt 0 ] || false
@@ -308,4 +320,20 @@ EOF
   install_run
   run grep -cF "bootstrap gui/" "$LOG"
   [ "$output" -ge 1 ] || false
+}
+
+@test "13 a MISSING probe lib makes the arm inert — no report, no verb, install still succeeds" {
+  # The probes moved to scripts/lib/cc-common.sh so a second consumer (scripts/deploy-live.sh) can
+  # share them. A missing lib means a broken or partial tree, and the safe reading of "I cannot
+  # tell whether this daemon is stale" is "do not touch it" — the same fail-closed shape install.sh
+  # already uses for the real-home lib.
+  rm -f "$FX/scripts/lib/cc-common.sh"
+  stale_daemon
+  export CC_INSTALL_RESIDENT_RELOAD=1
+  seed_then_rerun || false
+  [ "$status" -eq 0 ] || false
+  n="$(out_count "RESIDENT daemon is running a STALE image")"
+  [ "${n:-0}" -eq 0 ] || false
+  run grep -cF "bootout gui/" "$LOG"
+  [ "$output" -eq 0 ] || false
 }
