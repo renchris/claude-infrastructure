@@ -1230,6 +1230,61 @@ wake_path_armed() {
   kill -0 "$wpid" 2>/dev/null                 # a dead watcher cannot wake anyone — NOT armed
 }
 
+# ── IS THE DESK-INVARIANT DAEMON ARMED? (backlog e91b6ef3d076) ──────────────────────────────────────
+# THE SAME FALSE-CLAIM CLASS AS THE HONESTY GATE in the D3 block below, one branch away. That gate
+# stopped calling a dead box "the desk is the standing triager" because the sentence is a claim about
+# a READER and a box is not one. The parenthetical "(desk-invariant fires a replacement)" in the two
+# desk-is-down sentences is a claim about an ACTUATOR — and it was asserted unconditionally.
+#
+# On this box it is FALSE, and false by DECISION rather than by accident: launchd/fleet.manifest
+# carries `com.claude.desk-invariant | staged`, left there deliberately (2026-08-14, backlog
+# ff6a95a1779b — install.sh bootstraps every `expect = run` label unattended, so flipping that field
+# IS the launchd mutation and C10 puts it in the operator's hands). So the one caller whose page had
+# just stranded in a dead desk's box was told a rescuer was coming, by the very mechanism built to end
+# stranding. scripts/lead-supervisor.sh:188 already says the true thing in its own prose; this makes
+# the sentence the SENDER reads agree with it.
+#
+# The predicate is the one bin/cc-blockers:657 and hooks/activation-watch.sh:214 already share, not a
+# third implementation of launchd health:
+#   LOADED  — `launchctl list` prints "PID STATUS LABEL", so the label is the LAST field and is matched
+#             WHOLE. A substring test would let com.claude.desk-invariant-foo satisfy it.
+#   ENABLED — `print-disabled gui/<uid>` records OVERRIDES, not memberships, so absence means enabled
+#             and only an explicit `"<label>" => disabled` counts against it.
+# THREE states, never two. A box with no launchd to read is UNVERIFIABLE, and collapsing that into
+# "not armed" would re-commit this row's own defect pointing the other way — asserting the absence of
+# a rescuer we did not check for either (memory: probe-that-acts-on-absence-must-confirm-presence).
+# Seam CC_NOTIFY_LAUNCHCTL_BIN, read-only subcommands only: without it a test reads the OPERATOR's
+# real launchd and the verdict flips by machine (hooks/activation-watch.sh carries the same seam).
+DESK_INVARIANT_LABEL="${CC_DESK_INVARIANT_LABEL:-com.claude.desk-invariant}"
+desk_invariant_armed() {   # → 0 = armed · 1 = provably NOT armed · 2 = unverifiable
+  local lc uid listing disabled_db
+  lc="${CC_NOTIFY_LAUNCHCTL_BIN:-launchctl}"
+  command -v "$lc" >/dev/null 2>&1 || return 2          # no sensor ⇒ no verdict
+  uid="$(id -u 2>/dev/null || true)"
+  case "${uid:-}" in ''|*[!0-9]*) return 2 ;; esac
+  listing="$("$lc" list 2>/dev/null)" || return 2       # sensor error ⇒ no verdict, never "not armed"
+  printf '%s\n' "$listing" | awk -v l="$DESK_INVARIANT_LABEL" '$NF == l { f = 1 } END { exit !f }' || return 1
+  disabled_db="$("$lc" print-disabled "gui/$uid" 2>/dev/null || true)"
+  case "$disabled_db" in *"\"$DESK_INVARIANT_LABEL\" => disabled"*) return 1 ;; esac
+  return 0
+}
+
+# The parenthetical, rendered from that verdict and interpolated into both desk-is-down sentences.
+# The sentences THEMSELVES are unchanged: `no reroute`, `NO triager`, `NO proven reader` and
+# `NOT a delivery to the original target` are asserted verbatim by tests/cc-notify.bats and by the
+# caller contract at the top of this file — only the claim about the rescuer moves.
+# The three renderings are kept mutually NON-SUBSTRING on purpose. The unverifiable arm first read
+# "whether desk-invariant fires a replacement is UNVERIFIABLE", which CONTAINS the armed arm's phrase
+# verbatim — so any reader (or test) matching on that phrase would have scored an abstention as a
+# promise. A verdict token that is a substring of another verdict token is not a token.
+desk_invariant_note() {
+  desk_invariant_armed; case $? in
+    0) printf '%s' "desk-invariant fires a replacement" ;;
+    1) printf '%s' "NO replacement is coming — the $DESK_INVARIANT_LABEL daemon is not loaded on this box, so nothing will fire one; flip its launchd/fleet.manifest row from \`staged\` to \`run\`" ;;
+    *) printf '%s' "no launchd to read on this box, so whether any replacement gets fired is UNVERIFIABLE" ;;
+  esac
+}
+
 # ── THE HEADLESS WAKE (E7/F5 of docs/research/scaling-bottlenecks-2026-08-09/03-headless-substrate.md)
 # `bin/cc-wake-headless` — the fleet's ONLY wake primitive for a pane-less session — was built and
 # tested on 2026-08-13 (backlog 8ad4b02602dc) and then referenced by NOTHING on the delivery path:
@@ -1329,7 +1384,7 @@ case "$_lv" in
       # then claimed "the desk is the standing triager" about a pane that had just failed target_live.
       # Teeing would copy the line into the same dead box; say so plainly rather than reporting a
       # reroute that changed nothing (the desk-is-down case the desk-invariant replacement exists for).
-      echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead address (role=[$desk_uuid_role], chain head=[$desk_uuid]); the triager itself is down (desk-invariant fires a replacement). Message recorded, undrained." >&2
+      echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead address (role=[$desk_uuid_role], chain head=[$desk_uuid]); the triager itself is down ($(desk_invariant_note)). Message recorded, undrained." >&2
     elif printf '%s [%s] [for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$ORIG_UUID" "$MSG_1LINE" \
            >> "$MAILBOX_DIR/$desk_uuid.md" 2>/dev/null; then
       # HONESTY GATE. The tee landed — but "the desk is the standing triager" is a claim about a
@@ -1340,7 +1395,7 @@ case "$_lv" in
       if [ "$_dlv" -eq 0 ]; then
         echo "cc-notify: rerouted to desk [$desk_uuid] tagged [for:$ORIG_UUID] — the original addressee is gone; the desk is the standing triager. NOT a delivery to the original target." >&2
       else
-        echo "cc-notify: NO triager — copied to the '$DESK_ROLE' box [$desk_uuid] tagged [for:$ORIG_UUID], but that box is NOT a live session either: recorded with NO proven reader, so this is not a reroute to a triager (desk-invariant fires a replacement). NOT a delivery to the original target." >&2
+        echo "cc-notify: NO triager — copied to the '$DESK_ROLE' box [$desk_uuid] tagged [for:$ORIG_UUID], but that box is NOT a live session either: recorded with NO proven reader, so this is not a reroute to a triager ($(desk_invariant_note)). NOT a delivery to the original target." >&2
       fi
     else
       echo "cc-notify: reroute to desk FAILED (inbox $MAILBOX_DIR/$desk_uuid.md unwritable) — the message is recorded in the dead box only" >&2

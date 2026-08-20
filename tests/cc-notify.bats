@@ -29,6 +29,13 @@ setup() {
   # It belongs in setup() for the reason the $HOME ratchet gives: per-test does not count, it leaves
   # every OTHER test in the file pointed at live state.
   export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
+  # LAUNCHD, file-wide (2026-08-20, landed with the desk-invariant armedness gate). The D3 desk-is-down
+  # sentences now read `launchctl` to decide whether to promise a replacement, so WITHOUT this every
+  # pre-existing test in this file would consult the OPERATOR's real launchd and its output would flip
+  # by machine — the borrowed-hermeticity shape the ratchet names, arriving through a new dependency
+  # rather than a new test. Pointing at a path that does not exist pins the whole file at the
+  # UNVERIFIABLE arm; the four armedness tests below override it with their own stub.
+  export CC_NOTIFY_LAUNCHCTL_BIN="$BATS_TEST_TMPDIR/no-launchctl-here"
   mkdir -p "$CC_REGISTRY_DIR" "$CC_MAILBOX_DIR"
 
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
@@ -1413,4 +1420,115 @@ PY
   [[ "$output" == *"reason=no-watcher"* ]] \
     || { echo "a live row with no lstart was convicted — the empty field collapsed and shifted the columns: $output"; false; }
   [[ "$output" != *"target-not-live"* ]] || { echo "$output"; false; }
+}
+
+# ══ THE DESK-INVARIANT ARMEDNESS CLAIM (backlog e91b6ef3d076) ══════════════════════════════════════
+# The b515aadb honesty gate above stopped asserting "the desk is the standing triager" over a box with
+# no reader. The parenthetical one branch away — "(desk-invariant fires a replacement)" — is the same
+# shape pointed at an ACTUATOR, and it was printed unconditionally while `com.claude.desk-invariant`
+# sits `staged` in launchd/fleet.manifest BY DECISION. So the caller whose page had just stranded was
+# told a rescuer was coming from a daemon that is not loaded.
+#
+# WHY THESE CASES FAIL DIFFERENTLY (two cases that fail the same way are one case):
+#   NOT-LOADED  → fails the `launchctl list` oracle          (site A: the desk-is-down arm)
+#   DISABLED    → passes `list`, fails the override-DB oracle (site B: the NO-triager arm)
+#   UNVERIFIABLE→ fails at the SENSOR, before either oracle
+#   PREFIX      → passes a substring match, fails a whole-final-field match
+# and CONTROL-ARMED is the REMEDY control: it is green pre-fix AND post-fix, and goes red only against
+# a naive remedy that deletes the claim outright instead of conditioning it.
+
+# $1 = `launchctl list` body · $2 = `print-disabled` body
+_lc_stub() {
+  local s="$BATS_TEST_TMPDIR/launchctl-stub"
+  cat > "$s" <<SH
+#!/bin/bash
+case "\$1" in
+  list)           printf '%s\n' '$1' ;;
+  print-disabled) printf '%s\n' '$2' ;;
+esac
+exit 0
+SH
+  chmod +x "$s"
+  export CC_NOTIFY_LAUNCHCTL_BIN="$s"
+}
+
+# The desk-is-down arm (site A): the target IS the desk in its PRE-forward form.
+_fixture_site_a() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  DK="DCDCDCDC-1111-2222-3333-444444444444"
+  DS="DEDEDEDE-1111-2222-3333-444444444444"
+  printf '%s\n' "$DK" > "$CC_ROLES_DIR/desk"
+  printf '%s\n' "$DS" > "$CC_MAILBOX_DIR/$DK.forward"
+}
+
+# The NO-triager arm (site B): an unrelated dead addressee tees into a dead desk box.
+_fixture_site_b() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  DK="DCDCDCDC-1111-2222-3333-444444444444"
+  DS="DEDEDEDE-1111-2222-3333-444444444444"
+  D3="D3D3D3D3-1111-2222-3333-444444444444"
+  printf '%s\n' "$DK" > "$CC_ROLES_DIR/desk"
+  printf '%s\n' "$DS" > "$CC_MAILBOX_DIR/$DK.forward"
+}
+
+@test "e91b6ef3d076 NOT-LOADED: the desk-is-down sentence never promises a replacement from an unloaded daemon" {
+  _fixture_site_a
+  _lc_stub '-	0	com.claude.dispatcher' ''      # the label is absent from the loaded set
+  run "$NOTIFY" "$DK" "paging the desk itself"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"no reroute"* ]] || { echo "the surrounding sentence moved: $output"; false; }
+  [[ "$output" == *"the triager itself is down"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NO replacement is coming"* ]] \
+    || { echo "an UNLOADED desk-invariant was still sold as a rescuer: $output"; false; }
+  [[ "$output" != *"desk-invariant fires a replacement"* ]] \
+    || { echo "the false claim survived: $output"; false; }
+}
+
+@test "e91b6ef3d076 DISABLED: loaded is not armed — the override DB is the second oracle" {
+  _fixture_site_b
+  # Passes the `list` oracle deliberately: a fix that reads ONLY `launchctl list` is green here.
+  _lc_stub '-	0	com.claude.desk-invariant' '	"com.claude.desk-invariant" => disabled'
+  run "$NOTIFY" "$D3" "page into the void"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"NO triager"* ]] || { echo "the surrounding sentence moved: $output"; false; }
+  [[ "$output" == *"NO proven reader"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NO replacement is coming"* ]] \
+    || { echo "a DISABLED daemon read as armed — only the loaded-set oracle was consulted: $output"; false; }
+  [[ "$output" != *"desk-invariant fires a replacement"* ]] || { echo "$output"; false; }
+}
+
+@test "e91b6ef3d076 UNVERIFIABLE: no launchd to read says so — it does not assert the absence either" {
+  _fixture_site_a
+  export CC_NOTIFY_LAUNCHCTL_BIN="$BATS_TEST_TMPDIR/there-is-no-launchctl-here"
+  run "$NOTIFY" "$DK" "paging the desk itself"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"UNVERIFIABLE"* ]] \
+    || { echo "a box with no sensor still produced a definite verdict: $output"; false; }
+  [[ "$output" != *"desk-invariant fires a replacement"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"NO replacement is coming"* ]] \
+    || { echo "an UNCHECKED daemon was convicted — the same defect pointing the other way: $output"; false; }
+}
+
+@test "e91b6ef3d076 PREFIX: a longer label that merely STARTS with ours does not satisfy the loaded test" {
+  _fixture_site_a
+  _lc_stub '-	0	com.claude.desk-invariant-shadow' ''
+  run "$NOTIFY" "$DK" "paging the desk itself"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"NO replacement is coming"* ]] \
+    || { echo "a substring match let com.claude.desk-invariant-shadow stand in for the real label: $output"; false; }
+}
+
+@test "e91b6ef3d076 CONTROL-ARMED: a genuinely loaded+enabled daemon still gets the full claim" {
+  # THE REMEDY CONTROL. Green before the fix and after it; red only against a remedy that deletes the
+  # sentence instead of conditioning it. Without this, "never say it" would pass every case above.
+  _fixture_site_a
+  _lc_stub '82225	0	com.claude.desk-invariant' '	"com.claude.some-other-job" => disabled'
+  run "$NOTIFY" "$DK" "paging the desk itself"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"desk-invariant fires a replacement"* ]] \
+    || { echo "the honesty gate became a blanket mute — an ARMED daemon lost its true sentence: $output"; false; }
+  [[ "$output" != *"NO replacement is coming"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"UNVERIFIABLE"* ]] || { echo "$output"; false; }
 }

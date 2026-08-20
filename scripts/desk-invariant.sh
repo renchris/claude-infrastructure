@@ -321,9 +321,15 @@ heal_role() { # <pane> — atomically repoint $ROLES_DIR/$ROLE at pane (tmp+mv);
 #       they keep enqueuing into a box nothing drains (the class that stranded 631/206/155 unread lines
 #       in former-desk boxes; research doc §2 — "root cause is addressing, not transport").
 #   (b) D3 REROUTES — cc-notify tees a dead target's mail to the DESK role's box. When the desk is the
-#       thing that died, that box IS the dead one; cc-notify:676-679 detects this and DEFERS to exactly
-#       here ("the '$DESK_ROLE' role still points at THIS dead pane … desk-invariant fires a
-#       replacement"). So the reroute — the mechanism built to end stranding — was itself stranding.
+#       thing that died, that box IS the dead one; cc-notify's desk-is-down arm detects this and DEFERS
+#       to exactly here ("the '$DESK_ROLE' role still points at THIS dead address … "). So the reroute
+#       — the mechanism built to end stranding — was itself stranding.
+#       🚨 THAT DEFERRAL IS CONDITIONAL AS OF backlog e91b6ef3d076, and the condition is THIS daemon.
+#       cc-notify used to complete that sentence with "desk-invariant fires a replacement" no matter
+#       what; it now asks launchd first (desk_invariant_armed) and says so plainly when the answer is
+#       no. On a box where launchd/fleet.manifest still carries `com.claude.desk-invariant | staged`,
+#       nothing here runs — so the deferral above describes what happens once the operator flips that
+#       row to `run`, NOT what happens today. Do not read it as a live guarantee.
 # handoff-fire writes this pointer on a graceful self-close (write_forward_for) and desk-register on a
 # hand REASSIGNMENT, but a desk that CRASHES/OOMs/is hard-reaped runs neither: this daemon is the only
 # actor present on that path, so it is the only one that can write it.
