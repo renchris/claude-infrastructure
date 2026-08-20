@@ -3418,9 +3418,72 @@ gate_nonzero_code() {  # $1=optional context → prints the operator line on std
 #     population (memory: cap-whose-population-is-empty — do not pin a case that cannot happen).
 # Only when both are clean do we continue. Anything else keeps the original refusal verbatim, with
 # the rebase still in progress and the backup ref intact — the author's recovery path is unchanged.
-rebase_onto_trunk() {  # $1=trunk → 0 = rebased (possibly via a rerere replay), 1 = real conflict
-  local TRUNK="$1" tries=0 fp_before fp_after gd ga
-  git rebase "origin/$TRUNK" >&2 && return 0
+#
+# ── 2026-08-20: THE SAME EVIDENCE ALSO MEANT TWO THINGS IT WAS NEVER TESTED AGAINST ─────────────
+# Reported second-hand (cc-backlog 38bddf30180c, W1a session 2026-08-19): a STOP reading "rebase
+# stopped without conflicts / commit already upstream" on a rebase that then went clean by hand,
+# with none of the branch's commits actually upstream. Reproduced here — twice, because the guard
+# above reads the ABSENCE of evidence (nothing unmerged, no markers) plus the PRESENCE of a state
+# directory, and neither fact distinguishes a rerere replay from two other states that produce it:
+#
+#   1. THE PICK EMPTIED OUT ⇒ FALSE STOP (the reported symptom). A commit whose content is already
+#      on trunk — or whose conflict was resolved TO trunk's side, which is precisely what a rerere
+#      replay does — leaves nothing to commit. Nothing is unmerged, nothing carries a marker, the
+#      rebase is in progress: the guard's three preconditions all hold, so it announced a rerere
+#      replay and ran `--continue`. `--continue` cannot commit an empty pick; it fails, HEAD and
+#      msgnum do not move, the no-progress guard below fires, and the lander exits 5 telling the
+#      author to resolve a conflict that does not exist. `git rebase --skip` finishes it clean,
+#      which is exactly the "succeeded by hand" in the report. Measured on git 2.43 via the apply
+#      backend, whose refusal is verbatim the reported one: "No changes - did you forget to use
+#      'git add'? ... something else already introduced the same changes; you might want to skip
+#      this patch." The merge backend reaches the same STOPPED state (`--empty=ask`/`stop`); which
+#      git versions reach it by DEFAULT is a moving target, so the fix keys on the tree, never on
+#      git's English or its version: index == HEAD ⇒ the commit would be empty ⇒ `--skip`, never
+#      `--continue`. Fail-closed on the one way that reading can be wrong — an unstaged hand
+#      resolution sitting in the worktree also shows an empty index — so an unclean worktree falls
+#      through to the old `--continue`-then-refuse path rather than skipping the author's work away.
+#
+#   2. THE REBASE WAS NEVER OURS ⇒ FALSE SUCCESS (found while reproducing 1, same root cause).
+#      `git rebase` REFUSES to start over an existing state directory ("there is already a
+#      rebase-merge directory ... I am stopping in case you still have something valuable there")
+#      and changes nothing. That refusal is non-zero with nothing unmerged and no markers, so the
+#      loop read a rebase it did not start, called it a rerere replay, and `--continue`d it. This
+#      state is not exotic — an exit-5 above LEAVES the rebase in progress by design, so it is the
+#      state every re-run of /ship on a failed land begins in. Measured: with trunk moved on in the
+#      meantime, the loop finished that stale rebase and returned 0, handing the gate a HEAD whose
+#      base did not contain origin/main; the push is what eventually rejected it (exit 7), i.e. the
+#      detector's verdict was wrong and only a later stage caught it. Now the state directory is
+#      read BEFORE `git rebase` runs: same `onto` as the current trunk ⇒ adopt and resolve it in
+#      place (the helpful half — a hand-resolved leftover still lands); different `onto` ⇒ refuse
+#      with the mismatch named, because continuing it gates against a trunk that has moved.
+#
+# Both cases keep the bound, the no-progress guard, and the in-progress + backup-ref recovery path.
+# Pinned per direction in tests/land-rerere-continue.bats.
+rebase_onto_trunk() {  # $1=trunk → 0 = rebased (via a rerere replay or an empty-pick skip),
+                       #            1 = real conflict, or a rebase that is not ours to finish
+  local TRUNK="$1" tries=0 fp_before fp_after gd ga sd onto_sha want_sha adopted=0
+
+  # A state directory that exists BEFORE we start means `git rebase` will refuse to run and every
+  # signal the loop reads afterwards describes someone else's rebase, not ours.
+  gd="$(git rev-parse --git-path rebase-merge 2>/dev/null || true)"
+  ga="$(git rev-parse --git-path rebase-apply 2>/dev/null || true)"
+  sd=""; [[ -d "$gd" ]] && sd="$gd"; [[ -d "$ga" ]] && sd="$ga"
+  if [[ -n "$sd" ]]; then
+    want_sha="$(git rev-parse "origin/$TRUNK" 2>/dev/null || true)"
+    onto_sha="$(cat "$sd/onto" 2>/dev/null || true)"   # both backends write `onto`
+    if [[ -z "$onto_sha" || "$onto_sha" != "$want_sha" ]]; then
+      echo "✗ ship-land: a rebase is ALREADY in progress here and it is NOT onto the current origin/$TRUNK (its base is ${onto_sha:-unknown}, trunk is ${want_sha:-unknown}) — refusing to finish it. Continuing would replay your commits onto a STALE base and gate them against a trunk that has moved. Finish or abandon it yourself (git rebase --continue | --skip | --abort), then re-run /ship." >&2
+      return 1
+    fi
+    adopted=1
+    echo "→ ship-land: adopting the rebase already in progress — it is onto the current origin/$TRUNK, so resolving it in place rather than refusing." >&2
+  fi
+
+  # Not adopted ⇒ this is our rebase to start, and a clean exit is the whole job done. Adopted ⇒
+  # `git rebase` would only refuse over the existing state dir, so go straight to the resolve loop.
+  if [[ "$adopted" -eq 0 ]]; then
+    git rebase "origin/$TRUNK" >&2 && return 0
+  fi
 
   while [ "$tries" -lt 50 ]; do
     tries=$((tries + 1))
@@ -3435,12 +3498,21 @@ rebase_onto_trunk() {  # $1=trunk → 0 = rebased (possibly via a rerere replay)
       echo "✗ ship-land: a replayed rerere resolution staged conflict markers — refusing to continue the rebase." >&2
       return 1
     fi
-    echo "→ ship-land: rebase conflict already resolved by git rerere (every path staged, no markers) — continuing (step ${tries})." >&2
-    fp_before="$(git rev-parse HEAD 2>/dev/null || true)$(cat "$gd/msgnum" 2>/dev/null || true)"
-    GIT_EDITOR=true git rebase --continue >&2 && return 0
-    fp_after="$(git rev-parse HEAD 2>/dev/null || true)$(cat "$gd/msgnum" 2>/dev/null || true)"
-    # no progress ⇒ `--continue` cannot resolve this one (e.g. the commit emptied out); refuse
-    # rather than spin the bound down against an unchanging tree.
+    # msgnum (merge backend) and next (apply backend) are the two progress counters; read both so
+    # the no-progress guard is not blind on whichever backend git chose.
+    fp_before="$(git rev-parse HEAD 2>/dev/null || true)|$(cat "$gd/msgnum" 2>/dev/null || true)|$(cat "$ga/next" 2>/dev/null || true)"
+    if git diff --cached --quiet HEAD 2>/dev/null && git diff --quiet 2>/dev/null; then
+      # index == HEAD (and no unstaged work to lose) ⇒ this pick would commit nothing. `--continue`
+      # cannot; `--skip` is what a human runs here. Case 1 above.
+      echo "→ ship-land: the commit being replayed is EMPTY against the rebased tree — its content is already on origin/$TRUNK, so there is nothing to commit. Skipping it (step ${tries}); this is not a conflict." >&2
+      GIT_EDITOR=true git rebase --skip >&2 && return 0
+    else
+      echo "→ ship-land: rebase conflict stopped with every path staged and no markers (a git rerere replay is the expected stager) — continuing (step ${tries})." >&2
+      GIT_EDITOR=true git rebase --continue >&2 && return 0
+    fi
+    fp_after="$(git rev-parse HEAD 2>/dev/null || true)|$(cat "$gd/msgnum" 2>/dev/null || true)|$(cat "$ga/next" 2>/dev/null || true)"
+    # no progress ⇒ neither verb can move this one; refuse rather than spin the bound down against
+    # an unchanging tree.
     [[ "$fp_before" = "$fp_after" ]] && return 1
   done
   return 1
@@ -3615,7 +3687,14 @@ main_locked() {
     echo "↻ ship-land: content-verify failed (concurrent drop) — auto-retry ${attempt}/${MAX_RETRIES}: re-fetch + rebase onto origin/$TRUNK + re-gate + re-push…" >&2
 
     # reconcile onto the moved trunk (origin/$TRUNK is fresh from the loop-top fetch).
-    if ! git rebase "origin/$TRUNK" >&2; then
+    # Through rebase_onto_trunk, not a bare `git rebase` (2026-08-20, cc-backlog 38bddf30180c):
+    # this loop runs precisely BECAUSE a sibling's land dropped our content, so the commit being
+    # replayed has the best chance in the whole script of being already-upstream and emptying out —
+    # the false-STOP case the helper now skips instead of refusing. When it does empty, the
+    # `rev-list "$LAND_BASE..HEAD"` check just below already reports the right answer ("the drop
+    # self-healed"). rollback_clean still owns the failure path, so the never-strand-a-half-applied
+    # -tree invariant is unchanged: `git rebase --abort` no-ops whether or not one is in progress.
+    if ! rebase_onto_trunk "$TRUNK"; then
       rollback_clean
       echo "✗ ship-land: auto-retry rebase onto origin/$TRUNK hit a conflict — rolled back to a clean tree; backup ref ship/backup-* intact. Resolve the conflict and re-run /ship." >&2
       attest_land "n/a" "n/a" "clean" 5

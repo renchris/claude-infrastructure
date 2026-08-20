@@ -19,6 +19,24 @@
 #   2. real unmerged paths  → MUST refuse     (too-weak half: not everything was replayed)
 #   3. staged markers       → MUST refuse     (too-strong half: never land `<<<<<<<` on trunk)
 #   4. no conflict at all   → MUST succeed    (control: the happy path is untouched)
+#
+# 2026-08-20 (cc-backlog 38bddf30180c). The three preconditions above — nothing unmerged, no
+# markers, a rebase in progress — turned out to be satisfied by two states that are NOT a rerere
+# replay, and the guard misfired in OPPOSITE directions on them. Four more cases, again one per
+# direction, because a fix for either half alone is exactly the too-permissive/too-strict pair:
+#   5. pick emptied out       → MUST skip and succeed  (the reported FALSE STOP: `--continue`
+#                                                       cannot commit an empty pick, `--skip` can)
+#   6. unstaged work present  → MUST NOT skip          (too-strong half of 5: an empty INDEX also
+#                                                       describes a hand resolution nobody `git
+#                                                       add`ed — skipping would eat the author's
+#                                                       work, so an unclean worktree refuses)
+#   7. leftover onto STALE base → MUST refuse          (the FALSE SUCCESS: `git rebase` refuses to
+#                                                       start over an existing state dir, so the
+#                                                       loop was finishing SOMEONE ELSE's rebase
+#                                                       onto a trunk that had moved)
+#   8. leftover onto SAME base  → MUST adopt and finish (too-strong half of 7: a blanket refusal
+#                                                       would pass 7 and strand every hand-resolved
+#                                                       leftover an exit-5 deliberately leaves)
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -131,4 +149,104 @@ mk_conflict() {  # $1=trunk-content $2=topic-content
   source "$FN"
   run rebase_onto_trunk main
   [ "$status" -eq 0 ]
+}
+
+# ── 5-6: the pick that emptied out ──────────────────────────────────────────────────────────────
+# Fixtures use the APPLY backend deliberately. Both backends can STOP on a pick that would commit
+# nothing, but which one does so by DEFAULT moved across git versions (`--empty` drop/ask/stop), and
+# a suite that pinned the merge backend's default would be pinning the git on the box rather than
+# the subject. The apply backend reaches the state on every version, and its refusal is verbatim the
+# one in the report: "No changes - did you forget to use 'git add'? ... something else already
+# introduced the same changes; you might want to skip this patch." The helper's decision is read off
+# the TREE (index == HEAD), not off that English, so pinning it here pins it for both backends.
+mk_emptied_pick() {  # conflict, then resolve TO TRUNK'S SIDE — which is what a rerere replay does,
+                     # and what leaves the commit with nothing left to say.
+  git config rebase.backend apply
+  mk_conflict trunkline topicline
+  printf 'keeper\n' > keeper.txt; git add keeper.txt; git commit -qm "a second, REAL commit"
+  run git rebase origin/main
+  [ "$status" -ne 0 ]
+  printf 'trunkline\n' > f.txt; git add f.txt      # resolution == trunk ⇒ this pick is now empty
+}
+
+@test "emptied pick: SKIPPED and the land proceeds — not refused as a conflict" {
+  mk_emptied_pick
+  # preconditions really are the guard's own, so the case is not vacuous
+  run git diff --name-only --diff-filter=U
+  [ -z "$output" ]
+  git diff --cached --quiet HEAD                   # index == HEAD: the pick would commit nothing
+
+  # shellcheck disable=SC1090
+  source "$FN"
+  run rebase_onto_trunk main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"EMPTY against the rebased tree"* ]] || false
+
+  # the rebase really finished, and the branch's OTHER commit — the one that was never upstream —
+  # survived. This is the half the false STOP was costing: a good land abandoned.
+  [ ! -d "$(git rev-parse --git-path rebase-apply)" ]
+  [ ! -d "$(git rev-parse --git-path rebase-merge)" ]
+  git merge-base --is-ancestor origin/main HEAD
+  run git log --oneline origin/main..HEAD
+  [[ "$output" == *"a second, REAL commit"* ]]
+}
+
+@test "empty index but UNSTAGED work: REFUSED, never skipped (the author's resolution survives)" {
+  mk_emptied_pick
+  git reset -q                                     # unstage: index == HEAD, worktree still edited
+  printf 'hand-resolved\n' > f.txt
+  git diff --cached --quiet HEAD                   # the skip branch's first condition holds…
+  run git diff --quiet
+  [ "$status" -ne 0 ]                              # …but there IS unstaged work to lose
+
+  # shellcheck disable=SC1090
+  source "$FN"
+  run rebase_onto_trunk main
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"EMPTY against the rebased tree"* ]] || false
+  [ "$(cat f.txt)" = "hand-resolved" ]             # not skipped away
+}
+
+# ── 7-8: the rebase that was never ours ─────────────────────────────────────────────────────────
+mk_leftover() {  # the state an exit-5 deliberately leaves behind: rebase in progress, resolved,
+                 # not continued — i.e. the state EVERY re-run of /ship on a failed land begins in.
+  mk_conflict trunkline topicline
+  run git rebase origin/main
+  [ "$status" -ne 0 ]
+  printf 'resolved-by-hand\n' > f.txt; git add f.txt
+  [ -d "$(git rev-parse --git-path rebase-merge)" ]
+}
+
+@test "leftover rebase onto a STALE base: REFUSED, and the author's state is left intact" {
+  mk_leftover
+  # trunk moves on underneath the leftover rebase
+  git update-ref refs/heads/origin-main "$(git commit-tree "$(git rev-parse 'origin/main^{tree}')" \
+      -p "$(git rev-parse origin/main)" -m 'trunk moved on')"
+  [ "$(cat "$(git rev-parse --git-path rebase-merge)/onto")" != "$(git rev-parse origin/main)" ]
+
+  # shellcheck disable=SC1090
+  source "$FN"
+  run rebase_onto_trunk main
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"NOT onto the current origin/main"* ]] || false
+
+  # refusing is only safe if it costs the author nothing: their rebase and resolution are untouched
+  [ -d "$(git rev-parse --git-path rebase-merge)" ]
+  run git diff --cached --name-only
+  [[ "$output" == *"f.txt"* ]]
+}
+
+@test "leftover rebase onto the SAME base: ADOPTED and finished, not refused" {
+  mk_leftover
+  [ "$(cat "$(git rev-parse --git-path rebase-merge)/onto")" = "$(git rev-parse origin/main)" ]
+
+  # shellcheck disable=SC1090
+  source "$FN"
+  run rebase_onto_trunk main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"adopting the rebase already in progress"* ]] || false
+
+  [ ! -d "$(git rev-parse --git-path rebase-merge)" ]
+  git merge-base --is-ancestor origin/main HEAD
+  [ "$(cat f.txt)" = "resolved-by-hand" ]          # the hand resolution is what landed
 }
