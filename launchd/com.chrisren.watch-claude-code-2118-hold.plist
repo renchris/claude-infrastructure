@@ -14,7 +14,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>source $HOME/.zshrc 2>/dev/null; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin $HOME/.claude/scripts/watch-claude-code-2118-hold.sh</string>
+        <string>PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin $HOME/.claude/scripts/watch-claude-code-2118-hold.sh</string>
     </array>
 
     <key>StartCalendarInterval</key>
