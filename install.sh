@@ -379,6 +379,12 @@ _gh_install "$HOME/.git-template/hooks"
 # vouch for into the operator's global git config", only the first is recoverable and loud.
 if [[ -r "$REPO_DIR/scripts/lib/real-home.sh" ]]; then
   # shellcheck source=scripts/lib/real-home.sh
+  # The `source=` hint above resolves the path but does NOT make shellcheck follow it without -x,
+  # and ship-land's statics gate runs a BARE `shellcheck` (scripts/ship-land.sh:2326) while
+  # .shellcheckrc sets only disable=SC2001,SC2015. So this line has reddened that gate for every
+  # land that TOUCHES install.sh since the lib was introduced — pre-existing, and invisible until a
+  # diff invalidates the file's blob-sha memo and forces a re-scan.
+  # shellcheck disable=SC1091
   . "$REPO_DIR/scripts/lib/real-home.sh"
 else
   cc_home_is_passwd_home() { CC_HOME_NOT_OURS_WHY="scripts/lib/real-home.sh is missing from $REPO_DIR"; return 1; }
