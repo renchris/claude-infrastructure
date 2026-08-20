@@ -87,6 +87,78 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #65: `master-fire-gate` 46 open → 45 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the origin oracle asked PRESENCE when the question was
+  DIRECTION — and the originator's own transcript is the one place the marker is guaranteed to
+  be, so the close contract exempted precisely the session it was built for.**
+
+  **Effort choice.** #64 left `master-session-lifecycle` at 1 open and told its successor not to
+  spend the recycle re-deriving why that row (`b69b1d957cec`, the standing watch) will not close.
+  It also handed over a **named, already-diagnosed live generator in a different effort** —
+  `fd5196ac31ef` in `master-fire-gate` (46 open). Taking the diagnosed defect over a fresh effort
+  survey is the cheaper close and the larger one: it is the generator behind the felt symptom
+  #64's own census measured getting WORSE (silent closes 58% → 71.4%).
+
+  **`fd5196ac31ef` — CLOSED, landed `0a1f08e38`, content-verified on origin/main.**
+  `oi_origin_class` proved "this session is a fired peer" with a bare
+  `grep -qF -- "$marker" "$tp"` on **both** its spent and absent arms. That asks *does this string
+  appear anywhere in my transcript* — and it is TRUE OF THE ORIGINATOR. A session firing a peer
+  **without `--worktree`** fires into its own cwd, through a Bash **tool call**, so the composed
+  prompt lands in the FIRING session's transcript twice: as the assistant record's `tool_use`
+  input, and as the `tool_result` coming back. The by-cwd index then finds the peer's still-open
+  stamp on that shared cwd, the grep matches, and an **origin** session is classed `fired-peer` —
+  so `completion-assert.sh:733` (D6) exempts it from the origin Pyramid-close contract for as long
+  as the stamp stays open. The absent branch's comment already named the negative it defends
+  against (an operator pane opened in the peer's worktree); it did not name this one.
+
+  **The fix is a direction test, not a presence test.** `oi_marker_inbound` reads only
+  `.message.content` of `user` records, skips any record carrying `toolUseResult`, and drops
+  `tool_result`/`tool_use` blocks — keeping every INBOUND occurrence and no OUTBOUND one. A fired
+  peer RECEIVES its marker on the composed prompt; an originator only ever EMITS it. Unresolvable
+  answers NO ⇒ `origin`, the bounded/latched/≤cap side, preserving the lib's CONSUMER POLARITY.
+
+  🚨 **Proven on LIVE data, both polarities, before a line was written.** Marker
+  `HANDOFF-ENGAGE-278-1787233982-5484` is carried by **six** transcripts across the four account
+  stores — the bare grep calls all six "mine". **Exactly one** has it inbound: the real peer, in
+  the `wt-pool-5` worktree its stamp names. This drain session, which had merely echoed the marker
+  into its own tool output, scored `grepLines=10 INBOUND=0`, while its **own** recycle marker
+  scored `grepLines=6 INBOUND=1` — one transcript, both answers, both correct. Red-proof:
+  **6 of 10 new bats cases RED against the real pre-fix artifact from origin/main**, 25/25 green
+  after, **0 skips**, with **one mutant per exclusion SITE** (record-level `toolUseResult` skip;
+  block-level `tool_result`/`tool_use` drop) so a green suite credits both rather than one
+  covering for the other. The two inbound shapes are preservation controls green in BOTH worlds —
+  the fix narrowed the oracle, it did not break the proof channel. 145/145 green across
+  origin-identity + completion-assert + cc-classify-origin-unify + handoff-fired-cwd-index.
+  Landing content-verified with its own **positive control**: 0 old proof sites remain in code
+  (the single textual hit is the new header comment quoting the pattern it replaced), against 2 in
+  the pre-fix artifact. The stored falsifier returns rc 0 on the landed content and rc 1 on the
+  pre-fix artifact, so it **discriminates** rather than passing vacuously.
+
+  🚨 **THE METHOD TRAP, and it nearly produced this recycle's false null.** The direction probe was
+  first written as `.type?//""`. **jq 1.7 lexes `?//` as the alternative-destructuring operator**,
+  so that is a *compile error*, not a filter — and under the probe's own `2>/dev/null` it emitted
+  no output and read **exactly** like "no inbound occurrence anywhere". Six live transcripts
+  reported INBOUND=0, including the one that genuinely had it, and the reading was internally
+  consistent enough to look like a refutation of the whole hypothesis. It was caught only by
+  re-running with `2>&1 >/dev/null` to see the instrument's own stderr. Generalisable, and a
+  sibling of #64's zsh-mangled grep one level up: **a filter language can fail CLOSED at COMPILE
+  time, and a silenced compile error is indistinguishable from a true zero.** Show the instrument's
+  stderr before believing its null. The whitespace requirement is pinned in the function's header
+  so the next editor cannot re-introduce it silently.
+
+  ⚠️ **ship-land ran RED first, correctly, on THIS land's own diff** — the test-hermeticity ratchet
+  blocked because touching `tests/origin-identity.bats` pulled it into own-scope and its `setup()`
+  did not pin `CC_FIRE_CAPACITY_GATE=off`, so the suite could go red-by-LOAD rather than by its
+  subject. Named file, named two-line fix, applied as a `--fixup` + autosquash. This is **not** the
+  gate-killed-non-verdict mislabel of #59/#60 — it was a real red with a real cause, and the second
+  run landed rc=0 in ~4 min. Worth recording because a genuine ratchet red on an *added test file*
+  is the common shape, and the reflex to suspect the gate is wrong here.
+
+  **Not driven, deliberately:** `b69b1d957cec` stays open on #64's reasoning, unchanged and not
+  re-derived — its repoint is a SCRIPT edit that lands above the frozen live layer, so it cannot
+  run until the operator clears the freeze; and a perpetual standing watch remains a category
+  error in a drain-to-zero ledger that only a recurrence primitive fixes.
+
 - **2026-08-20 — drain recycle #64: `master-session-lifecycle` 2 open → 1 open / 1 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: the effort's "standing watch" was NOT STANDING — the daily
   launchd job that owns the Claude Code version hold had been dead for 26 days, killed inside its
