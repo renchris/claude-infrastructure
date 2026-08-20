@@ -197,8 +197,13 @@ update_if_needed() {
   local manifest="$VERSIONS_DIR/MANIFEST.jsonl"
   if [[ -f "$manifest" ]]; then
     local mstatus
-    mstatus=$(grep -E "\"version\":\"${available//./\\.}\"" "$manifest" 2>/dev/null \
-      | tail -1 | sed -nE 's/.*"status":"([^"]+)".*/\1/p' || true)
+    # Whitespace-tolerant on BOTH keys: this store is written by hand (compact)
+    # and by jq/python (`"version": "X"`), and a matcher that only knows the
+    # compact spelling MISSES the spaced rows — a miss it then reports as
+    # "no MANIFEST entry" (memory: lookup-miss-is-not-absence). Measured
+    # 2026-08-20: 3 of 25 live rows were invisible here.
+    mstatus=$(grep -E "\"version\"[[:space:]]*:[[:space:]]*\"${available//./\\.}\"" "$manifest" 2>/dev/null \
+      | tail -1 | sed -nE 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' || true)
     case "$mstatus" in
       stable|candidate)
         # Explicitly allowed — proceed with auto-install
