@@ -36,14 +36,14 @@ echo
 if [ ! -f "$ANNOUNCE" ]; then
   todo "F1" "NOT BUILT — bin/cc-announce: role-token → RESOLVE (registry / self-close chain) → cc-notify VERIFIED submit → retry ONCE → on failure write a LOUD alarm record (NEVER a silent degrade like SendMessage did). RED-provable (--selftest): an UNRESOLVABLE / undeliverable target → an alarm record exists on disk AND a non-zero exit (never silent success); a resolvable target → a VERIFIED delivery. This is the mechanical announce the exit/ship recipes call so an announce is never 'remembered'."
 else
-  ./bin/cc-announce --selftest >/dev/null 2>&1 && ok "F1" "cc-announce --selftest GREEN — resolve→verified→retry→LOUD-alarm-on-failure (never silent degrade)" || bad "F1" "cc-announce --selftest not green"
+  bash bin/cc-announce --selftest >/dev/null 2>&1 && ok "F1" "cc-announce --selftest GREEN — resolve→verified→retry→LOUD-alarm-on-failure (never silent degrade)" || bad "F1" "cc-announce --selftest not green"
 fi
 
 # ── F2 — channel-ladder law (E5 addition): met when F1 IMPLEMENTS the ladder (VERIFIED-or-alarm) + F3/a
 #         lints a SendMessage terminal-announce RED + §8.5 E5 DOCUMENTS the law. ─────────────────────────
 AUDIT=docs/research/W0-W3_INTERVENTION_AUDIT.md
-f2_f1=0; [ -f "$ANNOUNCE" ]     && ./bin/cc-announce --selftest    >/dev/null 2>&1 && f2_f1=1
-f2_f3=0; [ -f "$PAYLOAD_LINT" ] && ./scripts/payload-lint.sh --selftest >/dev/null 2>&1 && f2_f3=1
+f2_f1=0; [ -f "$ANNOUNCE" ]     && bash bin/cc-announce --selftest    >/dev/null 2>&1 && f2_f1=1
+f2_f3=0; [ -f "$PAYLOAD_LINT" ] && bash scripts/payload-lint.sh --selftest >/dev/null 2>&1 && f2_f3=1
 f2_e5=0; [ -f "$AUDIT" ] && grep -q '### 8.5' "$AUDIT" && grep -qiE 'channel.?ladder' "$AUDIT" && f2_e5=1
 if [ "$f2_f1" = 1 ] && [ "$f2_f3" = 1 ] && [ "$f2_e5" = 1 ]; then
   ok "F2" "channel-ladder law: F1 cc-announce implements the ladder (VERIFIED-or-alarm) · F3/a lints a SendMessage terminal-announce RED · §8.5 E5 documents it (a TERMINAL event REQUIRES a VERIFIED announce; disk-truth is a RELOAD not a WAKE)"
@@ -57,7 +57,7 @@ fi
 if [ ! -f "$PAYLOAD_LINT" ]; then
   todo "F3" "NOT BUILT — scripts/payload-lint.sh: a successor-fire payload (the /tmp/fire-*.txt / handoff prompt) WITHOUT the BACK-CHANNEL BLOCK (a cc-notify line + the desk full-uuid) lints RED — this succession DROPPED it, and that is the incident's ROOT. RED-provable (--selftest): a payload fixture missing the cc-notify+desk-uuid block → RED; one carrying it → GREEN; a missing file → LOUD (exit 2)."
 else
-  ./scripts/payload-lint.sh --selftest >/dev/null 2>&1 && ok "F3" "payload-lint --selftest GREEN — a back-channel-less successor payload lints RED (the incident root, closed)" || bad "F3" "payload-lint --selftest not green"
+  bash scripts/payload-lint.sh --selftest >/dev/null 2>&1 && ok "F3" "payload-lint --selftest GREEN — a back-channel-less successor payload lints RED (the incident root, closed)" || bad "F3" "payload-lint --selftest not green"
 fi
 
 # ── F4 — event-adaptive contract deadlines: scripts/exit-deadline.sh resolves the tightened deadline. ──
@@ -65,7 +65,7 @@ DEADLINE=scripts/exit-deadline.sh
 if [ ! -f "$DEADLINE" ]; then
   todo "F4" "NOT BUILT — EVENT-ADAPTIVE deadlines: the desk's wait-contract / reconciler sweep TIGHTENS to ~900s during EXIT SEQUENCES (the 50-min window was tuning, not architecture). RED-provable: with an exit-sequence flag set, the effective deadline/sweep cadence is ~900s (not the 3600s hourly default); without it, the default. (Extends L2/L4 — the deadline is an INPUT, not a constant.)"
 else
-  ./scripts/exit-deadline.sh --selftest >/dev/null 2>&1 && ok "F4" "exit-deadline --selftest GREEN — the wait/sweep deadline TIGHTENS 3600→900 under an exit-sequence flag (env or file); per-layer pairs honored; the deadline is an INPUT, not a constant (extends L2/L4; live machinery calls it at ACTIVATION)" || bad "F4" "exit-deadline --selftest not green"
+  bash scripts/exit-deadline.sh --selftest >/dev/null 2>&1 && ok "F4" "exit-deadline --selftest GREEN — the wait/sweep deadline TIGHTENS 3600→900 under an exit-sequence flag (env or file); per-layer pairs honored; the deadline is an INPUT, not a constant (extends L2/L4; live machinery calls it at ACTIVATION)" || bad "F4" "exit-deadline --selftest not green"
 fi
 
 # ── F5 — completion-push: scripts/completion-push.sh pushes a program-terminal completion via cc-announce.
@@ -73,7 +73,7 @@ PUSH=scripts/completion-push.sh
 if [ ! -f "$PUSH" ]; then
   todo "F5" "NOT BUILT — COMPLETION-PUSH: program-terminal detection → an OPERATOR push. The rule existed but was STARVED of input; F1 (cc-announce) feeds it. RED-provable: a program-terminal completion event → a push/announce fires (a record exists), verified via cc-announce; the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)."
 else
-  ./scripts/completion-push.sh --selftest >/dev/null 2>&1 && ok "F5" "completion-push --selftest GREEN — a program-terminal completion → an OPERATOR push via cc-announce (F1); a record captures BEFORE the push and both outcomes record (deliverable→VERIFIED 0, undeliverable→LOUD 5); the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)" || bad "F5" "completion-push --selftest not green"
+  bash scripts/completion-push.sh --selftest >/dev/null 2>&1 && ok "F5" "completion-push --selftest GREEN — a program-terminal completion → an OPERATOR push via cc-announce (F1); a record captures BEFORE the push and both outcomes record (deliverable→VERIFIED 0, undeliverable→LOUD 5); the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)" || bad "F5" "completion-push --selftest not green"
 fi
 
 echo

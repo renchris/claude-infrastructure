@@ -44,7 +44,7 @@ if [ ! -f "$GUARD" ]; then
   todo "R-c" "NOT BUILT — REAPER ABSTENTION LAW (no silent reap): the guard emits an outcome record {reaped|deferred|grace-held} per decision. The current hook reaps SILENTLY — and a silent reaper is the D9 shape with a body count (a reaper that cannot be audited). RED-provable: after a reap OR a defer, an outcome record exists on disk; a silent decision produces none."
   todo "R-*" "NOT BUILT — scripts/reap-guard.sh absent (a STANDALONE decide REAP|DEFER module with --selftest). The live hook must never be edited in place — the guard is called at ACTIVATION (C10). Build to this gate, then hand the operator an activation script."
 else
-  ./scripts/reap-guard.sh --selftest >/dev/null 2>&1 && ok "R" "reap-guard --selftest GREEN — R-a birth-grace (young → defer), R-b effect-read (products-then-clean → reap vs no-products → defer), R-c outcome-record (every reap/defer recorded, no silent reap) all fire RED-provably" || bad "R" "reap-guard --selftest not green — an R-a/b/c RED-proof does not fire"
+  bash scripts/reap-guard.sh --selftest >/dev/null 2>&1 && ok "R" "reap-guard --selftest GREEN — R-a birth-grace (young → defer), R-b effect-read (products-then-clean → reap vs no-products → defer), R-c outcome-record (every reap/defer recorded, no silent reap) all fire RED-provably" || bad "R" "reap-guard --selftest not green — an R-a/b/c RED-proof does not fire"
 fi
 
 echo

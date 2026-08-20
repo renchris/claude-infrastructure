@@ -118,7 +118,7 @@ idl_has '"kind":"page_escalate"' && ok "effects-dark past deadline ⇒ ESCALATE"
 
 echo "T8 S-3b discrimination — the disposition is NOT reachable from silence alone"
 # proven statically by s3b-lint on this very file's target; assert the lint agrees at runtime too
-./scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "s3b-lint GREEN on the supervisor (no silence→dispose)" || no "s3b-lint RED"
+bash scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "s3b-lint GREEN on the supervisor (no silence→dispose)" || no "s3b-lint RED"
 
 echo "T9 role-file page fallback — empty CC_PAGE_TO ⇒ target resolved from CC_PAGE_TO_FILE at page time"
 # effect-read through a capturing cc-notify stub: the page must reach the uuid in the role FILE.

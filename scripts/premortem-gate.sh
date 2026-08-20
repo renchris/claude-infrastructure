@@ -60,7 +60,7 @@ echo "SUPERVISOR (b)"
 # supervisor will read. Encoded today (the desk's suggestion), so the constraint is safe BY CONSTRUCTION
 # rather than by luck, and a future "tidy /tmp" change fails a gate NOW instead of blinding a supervisor
 # that does not exist yet.
-if ./scripts/reaper-horizon-lint.sh >/dev/null 2>&1; then
+if bash scripts/reaper-horizon-lint.sh >/dev/null 2>&1; then
   ok  "S-1" "every evidence horizon outlives the supervisor's slowest sweep (×10) — enforced by scripts/reaper-horizon-lint.sh"
 else
   bad "S-1" "a reaper's horizon is shorter than the sweep interval ×10 — its evidence would be INVISIBLE to the supervisor (run scripts/reaper-horizon-lint.sh)"
@@ -69,7 +69,7 @@ fi
 # S-2 is a PRECONDITION and it is checkable today: the supervisor reads telemetry + the registry, both of
 # whose reapers were found erasing evidence. A supervisor on a spine that deletes its own evidence reports
 # "all clear" into a fire. So: the evidence-separation suites must be green BEFORE b is built.
-if bash scripts/telemetry-e2e.sh >/dev/null 2>&1 && ./scripts/p8-e2e.sh >/dev/null 2>&1; then  # e2e:reviewed-hermetic (audit 08 S3, 2026-07-25 — both sandbox in mktemp, no live ~/.claude writes)
+if bash scripts/telemetry-e2e.sh >/dev/null 2>&1 && bash scripts/p8-e2e.sh >/dev/null 2>&1; then  # e2e:reviewed-hermetic (audit 08 S3, 2026-07-25 — both sandbox in mktemp, no live ~/.claude writes)
   ok  "S-2" "evidence separation proven upstream (telemetry-e2e + p8-e2e green) — the spine no longer deletes its own evidence"
 else
   bad "S-2" "evidence-separation suites are NOT green — do not build the supervisor on a spine that erases what it must detect"
@@ -81,7 +81,7 @@ if [ ! -f "$SUP" ]; then
   todo "S-4" "NOT BUILT — Criterion: the supervisor MUST log every sweep (a heartbeat outcome record). A silently-crashed daemon is otherwise indistinguishable from a quiet system. This answers 'who watches the watcher' mechanically: THE WATCHER'S HEARTBEAT IS AN OUTCOME RECORD, AND ITS ABSENCE IS THE ALARM."
 else
   grep -qE 'MODAL|modal' "$SUP" && ok "S-3" "in-session blindness declared; modal ⇒ PAGE" || bad "S-3" "structural in-session blindness not declared"
-  ./scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "S-3b" "page-deadline gates on a re-observe re-read, not silence (scripts/s3b-lint.sh)" || bad "S-3b" "disposition reachable from deadline-silence alone — it would reap a healthy long turn (scripts/s3b-lint.sh)"
+  bash scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "S-3b" "page-deadline gates on a re-observe re-read, not silence (scripts/s3b-lint.sh)" || bad "S-3b" "disposition reachable from deadline-silence alone — it would reap a healthy long turn (scripts/s3b-lint.sh)"
   grep -qE 'heartbeat|sweep_log|IDL|idl' "$SUP" && ok "S-4" "sweeps emit a heartbeat/outcome record" || bad "S-4" "no sweep heartbeat — a crashed daemon looks like a quiet system"
 fi
 
