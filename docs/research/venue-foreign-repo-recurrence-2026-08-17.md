@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-20 | `20caf9661ea4` | `reso-management-app` | label-foreign — first **DECISION** item; three days after the cause was located and published (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,223 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH ITEM, THREE DAYS LATER — `20caf9661ea4`, and the first whose deliverable IS the judgment
+
+*Written from inside that VM. The class and its cause are settled above and are not re-derived; the
+three standing refusals in § Not fixed here are re-confirmed below and not re-argued. Three facts
+here are new.*
+
+**2026-08-20.** Backlog item `20caf9661ea4`, **project `reso-management-app`**, was dispatched to a
+`--venue cloud` session whose one attached repository is `renchris/claude-infrastructure`. Its brief
+names `/Users/chrisren/Development/reso-management-app`, its subject is the `@rocicorp/undo` package
+plus `lib/create-undo-context.tsx`, `lib/undo-helpers.ts` and `lib/__tests__/undo-helpers.test.ts`,
+and its DoD ref is `docs/research/UNDO_LIST_ACTIONS_AUDIT_2026-08-16.md`. None is reachable here.
+
+## New fact 1 — the class outlived its own publication by three days, unguarded
+
+The cause was located on 08-16 at `bin/cc-offload:84` and published in this file on 08-17. Measured
+on `origin/main` today, from a fetch that succeeded:
+
+```
+$ git show origin/main:bin/cc-offload | sed -n '84p'
+REPO="${CC_OFFLOAD_REPO:-$ROOT}"
+```
+
+Unchanged. `grep -n 'project\|CC_OFFLOAD_REPO'` over the same file returns that one line and nothing
+else — the item's `project` field is still never consulted or compared, and no guard of either shape
+has shipped. The **(a) fail closed vs (b) route by `item.project`** decision filed 2026-08-16 is
+still open and now carries a sixth item and a seventh dispatch of cost (this file's own count is a
+floor — see the undercount warning above).
+
+## New fact 2 — a DECISION item has no partial value off-box, and no premise to adjudicate by citation
+
+Every prior row was a bug or premise item, and two of them retained partial value from the wrong
+venue: `38de29ec5e59`'s premise was **confirmed** and its supersession **refuted** by citation to
+`OUT-docclf.md`, a dated read of the right trunk that happens to live in this repo. That is not
+available here, and the reason generalises past this item.
+
+This item's deliverable is a **judgment about whether to delete code** — its own title is *"decide
+`@rocicorp/undo`'s fate"*. There is no premise separable from the verdict: the fork it states (delete
+and foreclose the Cmd+Z undo-stack path, vs keep and leave a test suite asserting a library that is
+not live) is not a fact to check but a value call over trade-offs, and both arms are only weighable
+against code this session cannot read. A misrouted bug item wastes a session; a misrouted decision
+item is a **total** loss, because the one thing it exists to produce is precisely the thing a VM that
+cannot see the subject must not manufacture.
+
+Nor is it adjudicable by citation, and that was checked rather than assumed:
+
+| probe over this checkout | hits |
+|---|---|
+| `grep -rn 20caf9661ea4` | 0 |
+| `grep -rni 'rocicorp\|create-undo-context\|undo-helpers\|UNDO_LIST_ACTIONS'` | 0 |
+
+`docs/plans/backlog-consolidation-2026-08-09/OUT-reso.md` is the analogue of `OUT-docclf.md` and it
+does **not** carry this row: it was measured 2026-08-09 against `reso-management-app` `origin/main`
+@ `55c0c2294`, while the item's own re-verification is dated 2026-08-17. It predates the item.
+
+Two rows in that triage are *adjacent reasoning* for whoever adjudicates on the Mac, and are offered
+as reading, **not** as a verdict:
+
+- `b235198a915f` (KEEP) — *"both halves still on trunk … The delete-vs-keep decision is unmade"*, on
+  a preview route plus its visual spec and snapshot. Structurally the same shape as this item: an
+  unmounted artifact plus the test that is its only consumer, with the fate call open. Two rows, one
+  decision principle — worth ruling on together rather than twice.
+- `14e142267a7a` (PRUNE) — *"it exists only as PROOF for `610586f8aeb7`, which is dead … A proof of a
+  retired defect retires with it."* The nearest established principle in reso's own ledger to this
+  item's "its test suite gives false assurance that an undo library is live". It is a principle about
+  a *retired* defect, and whether the Cmd+Z path is retired or merely unbuilt is exactly the open
+  question — so it informs the ruling and does not settle it.
+
+## New fact 3 — the prescribed rail is the silent one, and the silence has two causes now
+
+The brief's blocked-path instruction is `cc-backlog block 20caf9661ea4 --needs "…"`. Measured here:
+
+```
+$ cc-backlog block 20caf9661ea4 --needs "…"
+cc-backlog block: unknown id 20caf9661ea4                                   # rc 0
+$ cc-backlog done  20caf9661ea4 --evidence "…"
+cc-backlog done: unknown id 20caf9661ea4                                    # rc 0
+```
+
+`~/.claude/autonomy/` is absent, so **the exact command the brief hands a blocked worker exits 0
+while doing nothing.** The record above has `reopen` at rc 0 in one session and rc 3 in another; add
+`block` and `done` at rc 0. A worker that checks exit codes reports the item parked when it is not.
+
+`cc-notify` is still rc 0 and still inert, but for a **different reason** than the two occurrences
+above recorded:
+
+```
+$ cc-notify --role desk "…"
+cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset).
+This is push-send's exit 3, NOT a role failure                              # rc 0
+```
+
+08-17 saw `reason=role-unset`; this is `fallback=phone-unwired`. Two independent causes, same rc 0,
+same zero delivery — so the silence is **structural to running off-box, not one misconfiguration
+waiting to be fixed.** This branch remains the only durable channel to the desk.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present |
+| `HEAD` vs `origin/main` | **0 behind** — fresh fetch succeeded; this VM *is* at `claude-infrastructure` trunk |
+| `/Users`, `/root/Development`, `/home/user/Development`, `~/.claude/autonomy` | all absent |
+| any `reso-management-app` checkout | `find / -maxdepth 5 -name reso-management-app` → 0 hits |
+| `~/.claude/projects/` | one entry, this session's own `-home-user-claude-infrastructure` |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `bats` / `shellcheck` | **both ABSENT** (`jq`, `python3` present) |
+
+`cc-eligible check` on a fixture of this item's full text — **the sixth consecutive `eligible`**, and
+still correct on its own terms: the work names no local-only state, cites no sha, needs no browser,
+no pane, no `launchd`.
+
+```
+verdict=eligible
+  refused : (nothing fired)
+  history : no-repo — NOT CERTIFIED: no readable git repo for this project — reach is unknown
+            repo=/root/Development/reso-management-app ref=- depth=50
+```
+
+🚨 **That `no-repo` is an artifact of measuring from the VM and proves nothing about the fire.** On
+the Mac `repo_for("reso-management-app")` resolves to a tree that exists, so the certification taken
+at label time is not the one printed here. It is recorded to forestall the tempting misreading —
+*"the producer would have abstained"* — which this session cannot support either way. The gap remains
+the pair (`item.project`, `session.attached_repo`), unchanged.
+
+## Operator actions
+
+The 08-16 decision — **(a) fail closed at the fire vs (b) route by `item.project`** — is unchanged,
+is the one that stops the whole class, and now carries the datapoint that it has cost a session on
+every one of the last four days it went unmade. Nothing new is proposed.
+
+The ledger disposition for this item needs the Mac:
+
+```
+cc-backlog block 20caf9661ea4 --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app. This is a DECISION item: its deliverable is the delete-vs-keep ruling itself, so it has no partial value off-box and was NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SIXTH ITEM). When it is ruled on, consider it together with b235198a915f — same shape (unmounted artifact + its only-consumer test, fate unmade) — and read 14e142267a7a's 'a proof of a retired defect retires with it' as adjacent, not dispositive."
+```
+
+`block`, not `reopen` and not `done`: the item is not blocked on information or on a judgment call
+that this session could have made — it is blocked on **where it was sent**, and parking it out of the
+wave is what stops a seventh fire into the same VM shape before the guard exists. `done` would be
+false; nothing about `@rocicorp/undo` changed.
+
+And one step this record needs that the earlier ones did not state: **this file reached you on a
+branch, not on trunk, and merging it is yours.** Per § The second refinement, the land gate is RED on
+this VM for any diff — `unattended-path-lint --selftest` cannot discriminate on Linux — so the commit
+is pushed to `claude/fire-20260820T065955Z-38594-1` and could not be landed from here. Gate it on the
+Mac (where that arm can certify itself) and land it via the project-local `/ship`.
+
+## Not fixed here, deliberately
+
+The three refusals recorded by the 08-16 and 08-17 sessions hold verbatim and are re-confirmed by
+measurement, not by memory: `bin/cc-offload` fires paid cloud sessions and **neither `bats` nor
+`shellcheck` is installed here**, so the repo's gate cannot be run on a shell change;
+`bin/cc-eligible`'s `OFFBOX_LANE` class states that a session this lane created cannot verify a
+change to the lane — the observer and the subject are the same object; and `bin/cc-venue`'s header
+states that a shallow clone may not decide its own admission, which `.git/shallow` + `depth=50` makes
+true of this session by measurement. Landing an ungated guard into the fire path would trade a
+bounded waste for an unbounded one.
+
+**Two refinements, both measured here rather than inherited.** The first sharpens the shellcheck
+clause and strengthens it: a missing `shellcheck` does **not** make the gate refuse to run: it
+produces a **NON-VERDICT** on that arm, by deliberate design — `scripts/ship-land.sh:2308` guards it
+because *"a MISSING checker is not a claim about this tree … unguarded it exits 127 and the else-arm
+files `gate_red`, so a box without the binary is told its code is RED … identically whether the code
+is spotless or filthy."* So the accurate statement is not *"the gate cannot run"* but *"the arm that
+would judge a shell change abstains here"* — landing a `cc-offload` guard from this VM would be
+landing it **ungated**, which is the same refusal on firmer ground.
+
+## The second refinement changes what the operator has to do: THIS VM CANNOT `/ship` AT ALL
+
+Newly measured, and not recorded by any occurrence above. The land gate is **structurally RED on
+this host for any diff whatsoever**, including a pure-markdown one:
+
+```
+$ bash scripts/ship-land.sh --precheck            # diff = this file, 170 insertions, 0 deletions
+✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so
+  its clean verdict would mean nothing. Fix the lint before landing.
+✗ ship-land: GATE RED at precheck — not pushing.          # PRECHECK_RC=6
+```
+
+Every other arm ran and came back clean (test-hermeticity 517 suites, wall-clock, AF_UNIX,
+moving-ref, git-identity 784 files, utc-stamp, pipefail/SIGPIPE, self-path, pane-spawn coverage).
+The one red arm is **not attributable to this diff**, and that was tested rather than assumed:
+restoring the worktree to `origin/main` content and re-running the selftest fails **identically** —
+`FAILED (9 of 30)`.
+
+The cause is that `scripts/unattended-path-lint.sh` is **macOS-shaped by subject**: it reasons about
+`/sbin/md5` (*"md5 on macOS exists ONLY at /sbin/md5"*, `:66`), a Homebrew PATH that *"ADDS Homebrew
+and DROPS /usr/sbin and /sbin"* (`:60`), `/usr/sbin/sysctl`, and `launchctl` reloads. `uname -s` here
+is **Linux**, so its fixtures cannot discriminate and the detector correctly refuses to certify
+itself. That refusal is right — a lint whose selftest fails must not emit a clean verdict — and it
+means a cloud VM's commits can be **committed and pushed to a branch, never landed from the VM**.
+
+Consequence for this class, and it is a cost the five rows above do not name: a misrouted cloud
+session cannot even land its own incident report. **The branch is the whole deliverable, and merging
+it is an operator step.** That is presumably how the 08-14 → 08-17 records reached `origin/main`,
+where this session read them.
+
+🚨 **Not fixed here, for the same reason as everything else in this section.** Making the lint
+portable is a change to a shell file, on a host where the arm that would judge it abstains
+(`shellcheck` absent) and where `bats` cannot run its 30-case suite — i.e. precisely an ungated
+change to a gate. The correct fix is a platform guard (skip-with-a-named-non-verdict on non-Darwin,
+never a silent pass), and it belongs to a session that can gate it.
+
+## The item itself — NOT adjudicated
+
+No claim is made about `@rocicorp/undo`'s fate, and none should be inferred. The package, the two
+`lib/` modules, the test file, the shipped `restoreTodo` toast the brief contrasts them with, and the
+audit at `docs/research/UNDO_LIST_ACTIONS_AUDIT_2026-08-16.md` were **never readable from this
+session** — there is no `reso-management-app` tree here, and the checkout that is here mentions none
+of them. The brief's own mandated first step — *read what this item cites on TRUNK, never in your own
+tree* — is unrunnable for the strongest available reason: there is no tree, stale or otherwise.
+
+The item states its own fork sharply and correctly, and that is exactly what makes ruling on it from
+here indefensible: both arms turn on facts about live reso code — whether the Cmd+Z undo-stack path
+is still wanted, and what the test suite actually asserts. Answering from the brief's prose would be
+the anti-goal `bin/cc-venue` §5 names — *"a wrongly-routed item improvises a plausible answer against
+history it cannot read, and reports success."*
