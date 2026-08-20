@@ -78,3 +78,126 @@ two suspects `await-ping-exit-144-2026-08-07.md` §4 names (the harness memory-p
 the memory-pressure reaper in a way the teardown story is not — but "consistent with" is not
 evidence, and that doc already exonerated the garbage arm for one window only. A recorder is still
 the way to get `si_pid`.
+
+## UPDATE 2026-08-19 (recycle #53) — the recorder needs NO compiled binary, and the suspect list is shorter than both docs say
+
+Three corrections, each measured. The row (`b38279c10c55`) stays OPEN — the recorder is designed and
+proven but not yet wired — and the remainder is named at the foot of this section.
+
+### 1. The stated build constraint is FALSE: pure-python `ctypes` reaches `SA_SIGINFO` on macOS
+
+The section above concluded that because macOS ships no `sigwaitinfo`/`sigtimedwait`,
+`signal.sigwaitinfo` is unavailable and **a compiled `sigaction(SA_SIGINFO)` helper is the only
+route** — which forces a NEW FILE in `bin/`, i.e. a `LIVE_ADDS` breach at a lag of 1, the single
+thing that made this row expensive.
+
+That inference is wrong. `signal.sigwaitinfo` being absent says nothing about `sigaction`, which
+`ctypes` can call directly, passing a `CFUNCTYPE` handler that receives the `siginfo_t *` and reads
+`si_pid` out of it. Measured twice on this box, both captures naming the true sender:
+
+| Shape | Signal delivery | Captured |
+|---|---|---|
+| group TERM (`kill -TERM -<pgid>`) — the 144 shape | recorder in the victim group | `sig=15 si_pid=82922 si_uid=501 si_code=0` — the driver shell, exactly |
+| single-pid TERM (`kill -TERM <pid>`) — the 143 shape | recorder is the target | `sig=15 si_pid=33361 si_uid=501 si_code=0` — this shell, exactly |
+
+Two properties matter for the wiring: the Darwin `sigset_t` is a bare `uint32` (so `struct sigaction`
+is `{handler, uint32 mask, int flags}`, not the glibc layout), and the `CFUNCTYPE` thunk **must be
+held in a live variable** or ctypes frees it and the handler segfaults on delivery.
+
+Reference implementation — this is the verified probe, not a sketch; both captures above came from
+it. No build step, no toolchain:
+
+```python
+import ctypes, ctypes.util, os, signal
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+SA_SIGINFO = 0x0040
+
+class SIGINFO(ctypes.Structure):            # Darwin sys/signal.h
+    _fields_ = [("si_signo", ctypes.c_int), ("si_errno", ctypes.c_int),
+                ("si_code", ctypes.c_int),  ("si_pid",   ctypes.c_int),
+                ("si_uid", ctypes.c_uint),  ("si_status", ctypes.c_int),
+                ("si_addr", ctypes.c_void_p), ("si_value", ctypes.c_void_p),
+                ("si_band", ctypes.c_long), ("__pad", ctypes.c_ulong * 7)]
+
+class SIGACTION(ctypes.Structure):          # sigset_t is a bare uint32 on Darwin
+    _fields_ = [("sa_handler", ctypes.c_void_p), ("sa_mask", ctypes.c_uint32),
+                ("sa_flags", ctypes.c_int)]
+
+HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.POINTER(SIGINFO), ctypes.c_void_p)
+
+def _on_term(signo, info, _ctx):
+    i = info.contents
+    with open(OUT, "a") as fh:              # append + fsync: we are already dying
+        fh.write(f"sig={i.si_signo} si_pid={i.si_pid} si_uid={i.si_uid} si_code={i.si_code}\n")
+        fh.flush(); os.fsync(fh.fileno())
+    os._exit(0)
+
+_KEEP = HANDLER(_on_term)                   # MUST outlive the call — ctypes frees the thunk otherwise
+act = SIGACTION()
+act.sa_handler = ctypes.cast(_KEEP, ctypes.c_void_p)
+act.sa_mask, act.sa_flags = 0, SA_SIGINFO
+assert libc.sigaction(signal.SIGTERM, ctypes.byref(act), None) == 0
+```
+
+**Consequence: the recorder can live INSIDE an already-symlinked file, so `LIVE_ADDS` stays 0.**
+
+### 2. `cc-reaper`'s garbage arm is excluded by MECHANISM, not merely "for one window"
+
+This doc says the 08-07 doc "already exonerated the garbage arm for one window only". That
+undersells it, and the difference decides whether the suspect is worth re-testing. §4 gives a second,
+**window-independent** ground: the arm "kills a single positive pid, not a group, so it cannot
+produce a 144 at all". Re-derived in the code today rather than taken on trust —
+`bin/cc-reaper:485` is `kill "-$sig" "$pid"`, and the candidate loop guards
+`case "$pid" in *[!0-9]*) continue ;;`, so the target is always a validated positive integer. A
+negative target is unreachable from that arm. `cc-await-ping` is whitelisted there besides.
+
+The memory-pressure reaper is likewise excluded by §3 on a ground independent of timing: it reports
+through `nFs(…,"killed",…)`, whose text is `"<desc>" was stopped`, **not** `failed with exit code N`.
+Every event in this population is an exit *code*. "Mid-session is consistent with a pressure reaper"
+remains true and remains not evidence — but it is arguing against a hypothesis §3 already excluded on
+the message shape.
+
+So: **neither named suspect is live.** Treat the sender as unidentified rather than as one of two.
+
+### 3. The repo has no group-kill site — re-derived with an instrument that can actually answer
+
+`await-ping-exit-144-2026-08-07.md` §5 asserts this. It is TRUE, but grep cannot establish it and a
+grep that looks like it did is the trap here: `kill -0 "$p"` (signal 0) is regex-indistinguishable
+from a negative target, and this repo *discusses* `` `kill -0` `` on several hundred comment lines, so
+a naive pattern returns ~60 hits that are all prose. Re-derived by stripping comments and quoted
+spans first and then parsing `kill`'s **argument positions** (signal flag vs target):
+**0 negative-target kill sites** across `bin/ scripts/ hooks/ commands/ tests/`, plus 0 `killpg`,
+0 `pkill -g`. Same family as the direct-exec census trap — the string you match is not the act you
+mean.
+
+### 4. Where the recorder goes, and what it will and will not cover
+
+`bin/cc-await-ping` already traps TERM (`trap '_sig_verdict TERM 15' TERM`, line 539) and
+`_sig_verdict` already clears the wake marker, appends a `WAKE-PATH-DOWN` line to the watched inbox,
+prints `verdict=killed`, and exits `128+signal`. **It does everything except name the sender** — its
+own comment says so: "an SA_SIGINFO recorder is the only thing that yields si_pid". So the recorder
+belongs there, as a sidecar armed at startup and cleaned up by the existing EXIT trap; no new file,
+no new transport, no new convention.
+
+Two honest bounds on that placement:
+
+- **Coverage is 109 of 352 (31%)**, not all of it. The watcher/wake-path arms are ours to instrument;
+  the 243 ordinary backgrounded polls and builds die in the harness's own shell wrapper, which we do
+  not own. 109 events at the measured rate still yields an `si_pid` within days.
+- **Footprint: 15.0 MB RSS per armed recorder** (measured). Non-trivial on a box running ~16
+  sessions, so the arm wants an env gate; this interacts with `master-fleet-footprint` and the
+  default should be chosen deliberately rather than inherited.
+
+### 5. The remainder, and the test hazard already paid for
+
+Left to do: wire the sidecar into `bin/cc-await-ping`, have `_sig_verdict` fold the captured sender
+into its verdict line and inbox notice (bounded read — that handler must not block), and red-proof it.
+
+**The red-proof is the hard part, and the hazard is not hypothetical.** A test that exercises the 144
+shape must `kill -TERM -<pgid>`, and under the Bash tool the backgrounded task and everything it
+spawns share ONE process group whose leader is the wrapper — so a group kill aimed at "the child"
+takes the runner with it. This pass hit exactly that: the feasibility probe derived its child's pgid,
+signalled the group, and **killed its own driver shell, which the harness reported as exit 144**. The
+probe reproduced the very defect it was investigating, on itself. Any bats case here must put the
+victim in its own session/group first, and must never signal a group it is a member of.
+
