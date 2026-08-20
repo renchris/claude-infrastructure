@@ -1023,6 +1023,58 @@ untracked_blockers() { # <to-sha> — one path per line; empty ⇒ no untracked 
   return 0
 }
 
+# ── SUPERSESSION: is every commit the live checkout carries ALREADY on trunk, BY CONTENT? ────────
+# A rebased land rewrites the commit OBJECT. A checkout that committed X and then watched X land as
+# X' is left holding an object `merge-base --is-ancestor` correctly reports absent from trunk, while
+# the CONTENT is on trunk in full. By SHA that state is indistinguishable from a checkout holding
+# genuinely un-landed work. By PATCH-ID it is not — which is the whole question this answers, and
+# the reason the lane's refusals could not tell the two apart.
+#
+# Measured 2026-08-19: the shared checkout had sat on exactly one such object for 29 consecutive
+# drain recycles — 9709c99d3, content-identical to trunk's a7ae13980 (same blob e03447bce, same
+# patch-id d25f1b149c). The live layer was frozen 49 commits behind that entire time, so cc-reaper's
+# uncommitted-peer belts, the cc-await-ping exit-144 recorder and capacity-alarm's new coalition
+# fields were all landed and none of them was running. Every reader believed the commit held
+# unlanded work, because that is what the refusal said.
+#
+# FAIL-CLOSED IN EVERY DIRECTION. rc 0 is the claim "dropping these loses nothing", and it is the
+# claim that licenses a destructive-looking remedy — so it is made only on positive evidence for
+# EVERY commit. An empty ahead-set, a merge commit (no single patch-id), an empty patch-id, either
+# side larger than the scan bound, or one unmatched commit all return 1, i.e. exactly the refusal
+# the lane emits today. This predicate never advances anything and never mutates the checkout; it
+# only decides WHICH sentence the operator is handed.
+SUPERSEDE_SCAN_MAX="${CC_DEPLOY_SUPERSEDE_SCAN:-500}"
+case "$SUPERSEDE_SCAN_MAX" in ''|*[!0-9]*) SUPERSEDE_SCAN_MAX=500 ;; esac
+superseded_ahead() { # <head> <target> — rc 0 iff EVERY commit in <target>..<head> is content-present on <target>
+  local head="$1" target="$2" ahead nahead nnomerge ntrunk trunk_pids c pid hit
+  ahead="$(g rev-list "$target..$head" 2>/dev/null)" || return 1
+  [ -n "$ahead" ] || return 1
+  nahead="$(printf '%s\n' "$ahead" | wc -l | tr -d ' ')"
+  [ "$nahead" -le "$SUPERSEDE_SCAN_MAX" ] || return 1
+  # A merge commit has no single patch-id, so it cannot be adjudicated here at all — refuse rather
+  # than skip it, or a merge carrying real work reads as "nothing would be lost".
+  nnomerge="$(g rev-list --no-merges "$target..$head" 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$nnomerge" = "$nahead" ] || return 1
+  ntrunk="$(g rev-list --count "$head..$target" 2>/dev/null || echo 0)"
+  case "$ntrunk" in ''|*[!0-9]*) ntrunk=0 ;; esac
+  [ "$ntrunk" -le "$SUPERSEDE_SCAN_MAX" ] || return 1
+  trunk_pids="$(g rev-list --no-merges "$head..$target" 2>/dev/null \
+      | while read -r t; do g show "$t" 2>/dev/null | g patch-id --stable; done | awk '{print $1}')"
+  [ -n "$trunk_pids" ] || return 1
+  while read -r c; do
+    [ -n "$c" ] || continue
+    pid="$(g show "$c" 2>/dev/null | g patch-id --stable | awk '{print $1}')"
+    [ -n "$pid" ] || return 1
+    # -c and never -q: under `set -o pipefail` a FORK producer killed by grep -q's early exit turns
+    # a MATCH into a non-zero rc, which would read here as "not superseded" on the very input that
+    # matched. Counting consumes the whole stream, so the verdict is the count.
+    hit="$(printf '%s\n' "$trunk_pids" | grep -cxF -- "$pid" 2>/dev/null || true)"
+    case "$hit" in ''|*[!0-9]*) hit=0 ;; esac
+    [ "$hit" -gt 0 ] || return 1
+  done <<< "$ahead"
+  return 0
+}
+
 g rev-parse --git-dir >/dev/null 2>&1 || die "DEPLOY_REPO is not a git checkout: $DEPLOY_REPO"
 
 # ── migration converge (face 3 of inertness-generator-2026-08-07 §3) ────────────────────────────
@@ -1442,8 +1494,56 @@ fi
 # reporting `deployed X → Y`, running install.sh, running the host checks and filing a backlog item,
 # ALL against a tree that never moved. It buys TRUTHFULNESS, not safety — which is also why it is
 # kept: removing it risks the lane lying about a deploy, not losing work.
-g merge-base --is-ancestor "$HEAD_SHA" "$TARGET" >/dev/null 2>&1 || \
-  die "target ${TARGET:0:12} is not a descendant of live HEAD ${HEAD_SHA:0:12} — --ff-only would exit 0 WITHOUT moving the tree, so the lane would report a deploy that NEVER HAPPENED"
+#
+# THE GUARD STILL REFUSES EVERY ONE OF THESE. What is new (2026-08-19) is that it no longer answers
+# three different questions with one sentence. "HEAD is not an ancestor of TARGET" hides two states,
+# and the measured claim above — exit 0 without moving — is true of only the FIRST:
+#
+#   A  TARGET is an ancestor of HEAD (live strictly AHEAD).  `merge --ff-only` returns "Already up
+#      to date." with EXIT 0. This is the case the 2026-08-07 measurement above was taken on, and
+#      the sentence it produced is correct here and kept verbatim.
+#   B  neither is an ancestor (DIVERGED). `merge --ff-only` does NOT exit 0 — it FAILS — so the old
+#      sentence described a mechanism that cannot fire, and named no remedy at all. Two sub-states,
+#      with opposite remedies and no way to tell them apart by sha:
+#      B1 every diverging commit is on trunk already BY CONTENT (a rebased land rewrote the object).
+#         Dropping them loses nothing, and the drop is a one-liner. THIS IS THE STATE THAT FROZE THE
+#         LIVE LAYER FOR 29 DRAIN RECYCLES — see superseded_ahead() for the measurement.
+#      B2 a diverging commit is genuinely un-landed. Dropping it DESTROYS work; it must be landed.
+#
+# B1 and B2 are one typo apart in consequence, which is why the classifier is fail-closed: anything
+# superseded_ahead() cannot prove falls through to B2's wording, never the other way round.
+#
+# AND EVERY ARM BELOW IS COUNTED AND ESCALATED, which is the other half of what went wrong. This
+# guard used to `die` bare — no refusal_bump, no page — so it was a STANDING STATE that generated no
+# event, and permission-gate-lint's whole doctrine (the 545-refusal scar) says nobody is ever told.
+# That is not a hypothetical here: it is precisely what happened. The live layer sat frozen for 29
+# drain recycles and the only reason anyone found out was a human reading the refusal by hand.
+# gate_bounded: REFUSE_MAX/REFUSE_COOLOFF — the refusal streak expires into an escalation + page,
+# so a divergence nobody clears becomes an EVENT instead of a silence.
+if ! g merge-base --is-ancestor "$HEAD_SHA" "$TARGET" >/dev/null 2>&1; then
+  if g merge-base --is-ancestor "$TARGET" "$HEAD_SHA" >/dev/null 2>&1; then
+    refusal_bump ancestor-inverted "live HEAD ${HEAD_SHA:0:12} is AHEAD of target ${TARGET:0:12}"
+    die "target ${TARGET:0:12} is not a descendant of live HEAD ${HEAD_SHA:0:12} — --ff-only would exit 0 WITHOUT moving the tree, so the lane would report a deploy that NEVER HAPPENED"
+  fi
+  DIV_N="$(g rev-list --count "$TARGET..$HEAD_SHA" 2>/dev/null || echo 0)"
+  case "$DIV_N" in ''|*[!0-9]*) DIV_N=0 ;; esac
+  if superseded_ahead "$HEAD_SHA" "$TARGET"; then
+    DIV_MSG="DIVERGED but ALREADY LANDED — the live checkout carries $DIV_N commit(s) absent from ${TARGET:0:12} by SHA, and EVERY one of them is present on it by CONTENT (identical patch-id; a rebased land rewrote the objects), so dropping them loses nothing. This lane never resets a shared checkout. Run: git -C $DEPLOY_REPO reset --keep origin/main"
+    DIV_CLASS=diverged-superseded
+  else
+    DIV_MSG="DIVERGED — the live checkout carries $DIV_N commit(s) that are not on ${TARGET:0:12} and are NOT present on it by content, so it cannot fast-forward. Dropping them would DESTROY work. This lane never rebases or resets a shared checkout; land them, then re-run. inspect: git -C $DEPLOY_REPO log --oneline $TARGET..HEAD"
+    DIV_CLASS=diverged-unlanded
+  fi
+  refusal_bump "$DIV_CLASS" "$DIV_MSG"
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  { date +%s
+    printf 'deploy-live BLOCKED: %s\n' "$DIV_MSG"
+    printf 'live HEAD %s · target %s · diverging commit(s) %s\n' "$HEAD_SHA" "$TARGET" "$DIV_N"
+    printf 'the live layer is FROZEN until this checkout stops diverging — every landed hook,\n'
+    printf 'script and belt above the live tip is inert for as long as this holds.\n'
+  } > "$PAGES_DIR/deploy-$DIV_CLASS.page" 2>/dev/null || true
+  die "$DIV_MSG"
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   [ -n "$BANNER" ] && say "!! $BANNER"
