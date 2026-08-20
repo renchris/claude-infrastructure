@@ -101,3 +101,54 @@ is established here. The remedy is filed separately rather than built in this pa
 `cc-reaper` is a live janitor with real blast radius and the fix needs its own red-proofs: a correct
 predicate has to distinguish "never committed" from "committed and landed", which `ahead` alone
 cannot do.
+
+## POSTSCRIPT 2026-08-20 — the belt was built against the minority door
+
+*(Drain recycle #63. The belt landed 2026-08-19 across `4e4c0f3f4` / `ab22990a1` / `d99841243`, and
+for its first day it protected a population that is not the one this document is about.)*
+
+The belt's gate read `cause =~ ^(finished|finished-teammate)$`. That is the cause set of **one** of
+the two doors into the reap path. A **dispatched peer** — the thing this incident is about, and the
+thing backlog `7c22e9b43956`'s own title names — does not come through that door at all:
+
+- `cc-classify` labels a desk-fired peer **`finished-shared-review`**, which is in `SURFACE_PAGE_RE`,
+  not `REAPABLE_RE`.
+- It reaches the reap path through the **T-P3-4 promotion** (`AUTOREAP_FIRED_RE`, `bin/cc-reaper:243`),
+  which sets `promoted=1`, and the disposition gate is written `[ "$promoted" = 0 ] && ! [[ "$cause"
+  =~ $REAPABLE_RE ]]` — so a promotion bypasses the reapable-cause requirement entirely.
+- The belt never consulted `$promoted`. All four legs were therefore skipped for exactly the
+  population they were built to protect, leaving `work_landed`'s 0-ahead-by-silence fast path
+  load-bearing there with nothing behind it.
+
+**Measured on the live reaper log, not reasoned.** Over the 7 days to 2026-08-20 (99,502 lines,
+2026-08-13T01:03Z →) the classifier emitted six causes across ~2,106 session-sightings:
+
+| cause | sightings | reachable by reap? |
+|---|---:|---|
+| `crashed` | 788 | never (by design) |
+| `finished-operator` | 528 | never (by design) |
+| **`finished-shared-review`** | **467** | **yes — via promotion; UNBELTED until this fix** |
+| `coordination-hang` | 247 | never (by design) |
+| **`finished-teammate`** | **71** | yes — belted since 2026-08-19 |
+| `task-less` | 5 | never (by design) |
+
+The other two `REAPABLE_RE` causes — `finished` and `coordination-abandoned` — were emitted **zero
+times in seven days**. So the belt shipped measured against the minority door, by a factor of ~6.6.
+
+**Reproduced end-to-end** rather than argued (`tests/cc-reaper.bats` B11): a 0-commit,
+never-announced, desk-fired peer labelled `finished-shared-review` reads `1 classified · 1 safe
+candidate(s) · 1 reaped`, `cc-teardown` is invoked, and the worktree is **removed** — this
+document's death, on the majority path, on unmodified trunk.
+
+**The fix is a widening, not a re-scope**, and that is the whole safety argument: every belt leg can
+only refuse-and-continue or fall through, so admitting a population can convert a reap into a
+surface and can never do the reverse. B12 is the discriminator that keeps it from degrading into
+"never auto-reap a desk-fired peer" — a promoted peer that DID commit still reaps, so the
+confirm-close pile-up T-P3-4 exists to drain stays drained. Mutant-checked: forcing the
+never-committed precondition true reds B12 and leaves B11 green, so neither case is vacuous.
+
+**A third indexed law this instantiates** — `guard-proxy-fails-in-both-directions` is the near miss,
+but the exact one is **`span must equal its subject`**: the guard's span (`finished|finished-teammate`)
+was narrower than its subject (*the dispatched peer*), and nothing in the suite could see the gap
+because **every** B/C/G fixture entered through the belted door. A suite that only ever builds
+fixtures on one branch of a two-branch gate cannot discover the other branch is unguarded.

@@ -1627,7 +1627,30 @@ sweep() {
     #
     # THREE-VALUED THROUGHOUT, AND ONLY THE DEFINITE NEGATIVES COMBINE. Anything either oracle
     # cannot answer proceeds exactly as before, loudly enough to be found in the log.
-    if [ "$UNCOMMITTED_BELT" = 1 ] && [[ "$cause" =~ ^(finished|finished-teammate)$ ]]; then
+    #
+    # ── THE CAUSE SET HAD TO MATCH THE DOOR, NOT THE LABEL (2026-08-20, same row) ────────────────
+    # This gate read `cause =~ ^(finished|finished-teammate)$` for its first day, which is the cause
+    # set of ONE of the two doors into the reap path. A DISPATCHED PEER — the thing the row's title
+    # names — does not come through that door at all: cc-classify labels a desk-fired peer
+    # `finished-shared-review`, and it reaches the reap path via the T-P3-4 PROMOTION above, which
+    # sets promoted=1 and thereby bypasses REAPABLE_RE at the disposition gate. The belt never
+    # consulted $promoted, so all four legs were skipped for exactly the population they were built
+    # to protect, and `work_landed`'s 0-ahead-by-silence fast path was load-bearing there with
+    # nothing behind it.
+    #
+    # MEASURED, not reasoned: over the 7 days to 2026-08-20 the live reaper log carries 467
+    # `[finished-shared-review]` sightings against 71 `[finished-teammate]`, and the other two
+    # REAPABLE_RE causes (`finished`, `coordination-abandoned`) were emitted ZERO times. The belt
+    # shipped measured against the minority door. Reproduced end-to-end on the majority one: a
+    # 0-commit, never-announced promoted peer read `1 reaped`, cc-teardown was invoked and the
+    # worktree was REMOVED (tests/cc-reaper.bats B11, red pre-fix).
+    #
+    # STRICTLY SAFETY-INCREASING, which is why it is a widening and not a re-scope: every leg below
+    # can only refuse-and-continue or fall through, so admitting a population can convert a reap
+    # into a surface and can never do the reverse. B12 is the discriminator that stops it degrading
+    # into "never auto-reap a desk-fired peer" — a promoted peer that DID commit still reaps, so the
+    # confirm-close pile-up T-P3-4 exists to drain stays drained.
+    if [ "$UNCOMMITTED_BELT" = 1 ] && { [[ "$cause" =~ ^(finished|finished-teammate)$ ]] || [ "$promoted" = 1 ]; }; then
       local ub_nb ub_c=0 ub_p=0 ub_i=0 ub_sid
       # HOISTED (2026-08-19b): never-committed is the precondition BOTH legs share, so it is asked
       # once, ahead of either. This changes no verdict — leg 2 required it already — it just makes

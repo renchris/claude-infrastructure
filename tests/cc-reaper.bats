@@ -2335,6 +2335,55 @@ EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
 
+# ── B11/B12: THE BELT'S CAUSE SET vs THE PROMOTION'S (backlog 7c22e9b43956, 2026-08-20) ──────────
+# Every B/C/G case above enters the belt as `finished-teammate`, because the belt gates on
+# `cause =~ ^(finished|finished-teammate)$`. But that is NOT the cause a DISPATCHED PEER carries —
+# the row's own title is "auto-reaps a dispatched peer", and cc-classify labels a desk-fired peer
+# `finished-shared-review`, which reaches the reap path by a DIFFERENT door: the T-P3-4 promotion
+# (AUTOREAP_FIRED_RE), which sets promoted=1 and thereby bypasses REAPABLE_RE at the disposition
+# gate. The belt never consults $promoted, so the whole four-leg belt was skipped for exactly the
+# population it was built to protect.
+#
+# NOT a hypothetical split: over the 7 days to 2026-08-20 the live reaper log carries 467
+# `[finished-shared-review]` sightings against 71 `[finished-teammate]` — the unbelted door is ~6.6x
+# the belted one, and the other two REAPABLE_RE causes (`finished`, `coordination-abandoned`) were
+# emitted ZERO times. The belt was measured against the minority population.
+#
+# B11 is the falsifier (RED pre-fix: the pane is torn down). B12 is its discriminator pair — the
+# same fixture that DID commit must still reap, so the fix cannot be "refuse all promotions".
+promo_fired() { # a desk-fired peer stamp WITH a back-channel armed, for the promotion path
+  mark_fired_nb "${1:-$BPANE}" "${2:-$BNB}"
+}
+
+@test "B11 FALSIFIER: 0-commit PROMOTED peer (finished-shared-review) that never announced is NOT reaped" {
+  mkworktree "$D/bmain11" "$D/.worktrees/wt-b11"
+  assert_never_committed "$D/.worktrees/wt-b11"
+  promo_fired; sent_store                        # store present, no record for THIS pane ⇒ definite silence
+  mock_classify finished-shared-review "$D/.worktrees/wt-b11" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  belt_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false                   # the pane SURVIVES — this is the whole item
+  [ -d "$D/.worktrees/wt-b11" ] || false         # and so does its worktree
+}
+
+@test "B12 a PROMOTED peer that DID commit is reaped exactly as before (belt must not over-fire)" {
+  # DISCRIMINATOR PAIR with B11: green pre-fix by construction, and it is what stops the fix from
+  # degenerating into "never auto-reap a desk-fired peer" — which would re-create the 13-worker
+  # confirm-close pile-up that T-P3-4 promotion exists to drain (see AUTOREAP_FIRED_RE rationale).
+  mkworktree "$D/bmain12" "$D/.worktrees/wt-b12"
+  git -C "$D/.worktrees/wt-b12" commit -q --allow-empty -m "real work"
+  git -C "$D/bmain12" fetch -q "$D/.worktrees/wt-b12" HEAD 2>/dev/null || true
+  git -C "$D/.worktrees/wt-b12" push -q origin HEAD:main 2>/dev/null || true
+  promo_fired; sent_store
+  mock_classify finished-shared-review "$D/.worktrees/wt-b12" 999 yes "$BPANE"
+  run "$R" sweep --reap
+  run belt_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
 inflight_refused() { echo "$output" | grep -q 'in-flight-subagent belt'; }
 
 # ANTI-VACUITY for the C-series locator: leg 3 is reached through find_transcript, so a fixture
