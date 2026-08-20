@@ -824,6 +824,104 @@ fleet_expect() {
   done < "$FLEET_MANIFEST"
 }
 
+# ── RESIDENT DAEMONS: the reload a per-file symlink converger can never perform ───────────────────
+# master ce775801633b. A periodic job re-execs its program at its next scheduled load, so the
+# "unchanged plist ⇒ nothing to do" skip below is exactly right for it. A KeepAlive daemon by
+# design NEVER exits, so its next natural load never arrives: it holds the image it exec'd at
+# start, forever. And because its plist names a SCRIPT PATH, the plist itself never changes when
+# the script does — so the skip fires on every install and the daemon is never reloaded at all.
+#
+# THE ROW NAMED THE WRONG STATEMENT, AND THE DIFFERENCE IS THE WHOLE FIX. It cites the PID skip
+# ("executing right now, not reloaded"). That branch is UNREACHABLE for an unchanged plist: the
+# `$loaded && ! $plist_changed` skip returns first, and copy_file only increments `installed` when
+# the bytes actually differ. Verified 2026-08-19 by reading copy_file's early return.
+#
+# MEASURED ON THE LIVE BOX 2026-08-19, with the corrected instrument:
+#   com.claude.compressor-sentinel  pid 80076  running an image 1395 min (23.3 h) old
+#   com.claude.lead-supervisor      pid 82511  running an image 1127 min (18.8 h) old
+#   com.claude.caffeinate-floor     pid  1054  exec'd into /usr/bin/caffeinate — no repo script in
+#                                              its argv at all, so it is exempt BY CONSTRUCTION,
+#                                              not by a gap in the probe.
+
+# Resident = the plist's OWN top-level KeepAlive key is true.
+#
+# NOT `grep -l KeepAlive`, which is what put "6 of 22" in the row. Measured 2026-08-19: 3 of those
+# 6 say the word only in a COMMENT, and two of those comments say the job is deliberately NOT
+# KeepAlive ("StartInterval 300, NOT KeepAlive — AND THIS IS THE OPPOSITE CHOICE FROM THE SENTINEL,
+# DELIBERATELY"). The true population is 3 of 22, which is also what scripts/deploy-live.sh:894 has
+# said all along. A grep that matches comments answers a different question than the one asked.
+#
+# Strictly `true`/`1`: a KeepAlive DICT is a conditional restart, i.e. the job does exit, so it is
+# not in the class this arm exists for. Failure direction is deliberate — a dict-KeepAlive job
+# stays stale (today's behaviour) rather than earning an unwanted bounce.
+#
+# PlistBuddy is invoked by absolute path and so cannot be PATH-shadowed; that is fine and hermetic,
+# because it only ever READS the plist it is handed, which under test is a fixture file.
+plist_is_resident() {
+  local ka
+  ka="$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$1" 2>/dev/null | tr -d '[:space:]' || true)"
+  case "$ka" in true|1) return 0 ;; *) return 1 ;; esac
+}
+
+# The program the daemon is ACTUALLY RUNNING, read out of its own argv — never out of the plist.
+# The plist cannot answer: 4 of the fleet's ProgramArguments are `/bin/bash -c '<inline script>'`
+# with $HOME unexpanded, and one of them exec's into a system binary. argv is already resolved.
+resident_program() {
+  local pid="$1" tok prog="" line
+  line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  local -a argv=()
+  read -ra argv <<<"$line"
+  # ${argv[@]+…}: bash 3.2 treats an empty array as unbound under `set -u`.
+  for tok in ${argv[@]+"${argv[@]}"}; do
+    [[ -f "$tok" ]] && prog="$tok"
+  done
+  printf '%s' "$prog"
+}
+
+# rc 0 iff the program file on disk is NEWER than the moment the process started — i.e. the running
+# image is not the image on disk.
+#
+# TZ=UTC *and* LC_ALL=C, on BOTH sides. TZ alone is not enough: unpinned, this box renders lstart as
+# `Tue 18 Aug 11:36:03 2026`, which the US-order format cannot parse at all, yielding an EMPTY start
+# that then compares as "fresh". LC_ALL=C normalises it to `Tue Aug 18 11:36:03 2026`.
+#
+# `stat -L` FOLLOWS the live-layer symlink to the checkout. Without -L it reads the SYMLINK's own
+# mtime, which for com.claude.compressor-sentinel is 1785961166 — 13 days OLDER than the daemon's
+# own start — so a -L-less probe reports a 23-hour-stale daemon as fresh. That is master
+# 475222a572de half 1's defect ("reading the symlink, not the running image") reproduced exactly,
+# and it is one character wide.
+#
+# Fail-closed: any operand it cannot resolve ⇒ rc 1, NOT stale, no bounce. Each operand is validated
+# SEPARATELY — concatenating them to test both at once lets an empty one hide behind a valid one.
+resident_image_stale() {
+  local pid="$1" prog="$2" lstart start_s file_s
+  lstart="$(TZ=UTC LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  start_s="$(TZ=UTC LC_ALL=C date -j -f '%a %b %e %T %Y' "$lstart" +%s 2>/dev/null || true)"
+  file_s="$(stat -L -f %m "$prog" 2>/dev/null || stat -L -c %Y "$prog" 2>/dev/null || true)"
+  case "${start_s:-x}" in *[!0-9]*) return 1 ;; esac
+  case "${file_s:-x}"  in *[!0-9]*) return 1 ;; esac
+  [[ "$file_s" -gt "$start_s" ]]
+}
+
+# The one bounce that can LOSE something. Prints the reason and returns 0 when a reload must NOT
+# happen. The compressor sentinel SIGSTOPs burst processes and owes every one of them a SIGCONT;
+# that debt lives ONLY in its frozen ledger (5305ee34c). Bouncing it while the ledger is non-empty
+# strands those processes stopped forever — the remedy strictly worse than the stale image it cures.
+resident_bounce_vetoed() {
+  local label="$1" db n
+  case "$label" in
+    com.claude.compressor-sentinel)
+      db="${CC_SENTINEL_FROZEN_DB:-$HOME/.claude/logs/compressor-sentinel-frozen.tsv}"
+      if [[ -s "$db" ]]; then
+        n="$(wc -l < "$db" 2>/dev/null | tr -d ' ' || true)"
+        printf 'it owes SIGCONT to %s frozen pid(s)' "${n:-?}"
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
 if $IS_GLOBAL; then
   echo ""
   echo "LaunchAgents → ~/Library/LaunchAgents/"
@@ -858,7 +956,37 @@ if $IS_GLOBAL; then
     if [[ $installed -ne $installed_before ]]; then plist_changed=true; fi
     loaded=false
     if "$LAUNCHCTL_BIN" list "$label" >/dev/null 2>&1; then loaded=true; fi
-    if $loaded && ! $plist_changed; then continue; fi
+    if $loaded && ! $plist_changed; then
+      # Correct for a periodic job. For a KeepAlive daemon this is the statement that strands it
+      # forever — see the resident-daemon block above. Detection is unconditional so the staleness
+      # becomes a counted EVENT rather than a standing state nobody is told about; the launchd
+      # MUTATION stays behind CC_INSTALL_RESIDENT_RELOAD because this runs on an autonomous path.
+      if plist_is_resident "$plist"; then
+        rlist="$("$LAUNCHCTL_BIN" list "$label" 2>/dev/null || true)"
+        # Captured whole, then parsed: `| head -1` would SIGPIPE the producer under `pipefail` and
+        # abort the installer on the assignment.
+        rpid="$(printf '%s\n' "$rlist" | sed -n 's/.*"PID" = \([0-9][0-9]*\).*/\1/p' || true)"
+        rpid="${rpid%%$'\n'*}"
+        rprog=""
+        [[ -n "$rpid" ]] && rprog="$(resident_program "$rpid")"
+        if [[ -n "$rprog" ]] && resident_image_stale "$rpid" "$rprog"; then
+          if veto="$(resident_bounce_vetoed "$label")"; then
+            echo "  · $label — RESIDENT, running a stale image, NOT reloaded: $veto"
+          elif [[ "${CC_INSTALL_RESIDENT_RELOAD:-0}" != 1 ]]; then
+            echo "  ⚠ $label — RESIDENT daemon is running a STALE image ($rprog changed after it started); CC_INSTALL_RESIDENT_RELOAD=1 reloads it"
+            warnings=$((warnings + 1))
+          else
+            echo "  → $label — RESIDENT daemon running a stale image: reloading"
+            "$LAUNCHCTL_BIN" bootout "gui/$uid/$label" 2>/dev/null || true
+            if ! "$LAUNCHCTL_BIN" bootstrap "gui/$uid" "$HOME/Library/LaunchAgents/$name" 2>/dev/null; then
+              echo "  ⚠ $label — resident reload FAILED; the daemon is NOT running"
+              warnings=$((warnings + 1))
+            fi
+          fi
+        fi
+      fi
+      continue
+    fi
 
     # Never bounce a job that is EXECUTING RIGHT NOW (defect (c)). Its new plist applies at the
     # next natural load; a reload here would restart a run that is already hours deep.
