@@ -1,8 +1,35 @@
 ---
-status: open
+status: complete
 ---
 
 # Why teammates don't gracefully self-close when done
+
+> **COMPLETE 2026-08-20 (drain recycle #62).** The title's premise is answered and the remedy is
+> built, deployed and outcome-verified. **The answer is that a teammate never self-closes BY
+> DESIGN** — `bin/cc-pane-runner:115` `exec`s an interactive login shell when the agent command
+> returns, so link 0 of this document's own chain table (`:753`) reads *"the process exits on its
+> own — NEVER TRUE, by design"*, and F-c (`:588`) concludes external `close-window` is mandatory.
+> The shipped remedy is therefore external reaping, not self-exit, and it is working: the
+> acceptance metric A1 (`grep -c '✓ closed pane'`) has moved **680 → 1,061**, with closes on every
+> operating day 2026-08-04 → 2026-08-20 (most recent `pane 448 (S4-ship)` at 03:25:22 today) after
+> the 9-day cliff this plan was reopened for. Both falsifier arms are clear: 0 resident agent panes,
+> and `rc=67` has not recurred since 2026-08-17. The `rc=67` residue this document's last section
+> deliberately left unbuilt landed anyway — `d3951e5e3` (a subagent pane has no composer) and
+> `2a352788b` (a narrow pane hides its own footer).
+>
+> **Why the front matter is the fix.** Backlog row `d4fa449e3895` is machine-minted from this file
+> by `scripts/plan-phase-scan.sh` (`source: "plan-open"`, title = this H1), and its stored falsifier
+> can only ever be satisfied by clause (a) — a front-matter `complete|superseded`. Clause (b) needs
+> a level-≥2 section marked `PENDING|IN_PROGRESS` to *stop* matching, but this is a narrative
+> investigation whose 49 of 51 headings carry no status markers, so clause (b) is structurally
+> unreachable here and the row could never self-retract. Two prior workers claimed it and could not
+> land, which is what a row whose only remedy is a one-line doc edit looks like to a code-shaped
+> worker.
+>
+> **One residual was filed rather than closed with it** — the single teammate-close refusal class
+> that reaches the actuator is the only one that pages nobody (`hooks/teammate-auto-shutdown.sh:303`
+> logs `✗ pane close FAILED (rc=$rc)`, retracts the marker and returns, while `_page_desk_damped` is
+> called on 6 other refusal paths in that same file).
 
 **Observed 2026-08-03**, reso `wt-cc-234411-2580`, team `session-ba3d4b59` (5 teammates building
 the north-star route). Three closed, **two are still sitting at a live prompt hours after
