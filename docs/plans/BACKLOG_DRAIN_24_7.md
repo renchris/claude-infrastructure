@@ -87,6 +87,106 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-19 — drain recycle #56: the row named a line that CANNOT EXECUTE, and doubled its own
+  blast radius with a grep that matched comments. A KeepAlive daemon's "next natural load" never
+  arrives.**
+  `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
+  stale claim left)**. Property re-measured at intake and it held: 10/10 open are `venuePlan=local`
+  AND `project=claude-infrastructure`. Date checked FIRST — 2026-08-19, so
+  `master-session-lifecycle`'s `62363cac1e39` re-census window (~2026-08-24) is still CLOSED and was
+  correctly declined for the 29th time. **filed 0 / closed 0**, three commits landed
+  (`976c6b4`→amended`fd059b999`, `fd059b999`, `b2763f882`), both worked rows left OPEN with their
+  remainders named and their claims released.
+
+  **Worked `ce775801633b` (open) and `475222a572de` (open).** Two of the row's premises were wrong
+  and both mattered:
+  1. **It named an UNREACHABLE line.** `ce775801633b` blames install.sh's PID skip ("executing right
+     now, not reloaded"). That branch cannot run for an unchanged plist — `$loaded && !
+     $plist_changed` returns first, and `copy_file` only increments `installed` when the bytes
+     actually differ. Fixing the named line would have changed nothing. The load-bearing statement
+     is the unchanged-plist skip: right for a PERIODIC job (it re-execs at its next scheduled load),
+     permanently wrong for a KeepAlive daemon that never exits — and whose plist names a SCRIPT
+     PATH, so the plist never changes when the script does.
+  2. **"6 of 22 carry KeepAlive" is a grep-over-comments artifact.** PlistBuddy says **3 of 22**;
+     the other three say the word only in prose and two of those say the job is deliberately NOT
+     KeepAlive. `scripts/deploy-live.sh:894` has said "the three KeepAlive daemons" all along and
+     was right. The wrong number doubled the blast radius of the proposed remedy.
+
+  **A SIBLING ROW ALREADY HAD IT RIGHT, AND NOBODY JOINED THEM.** `d74191a99b5f` (filed 2026-08-09,
+  condition `daemon-runs-stale-bytes-after-script-only-land`, so it never appears in a `master-*`
+  fold) names the CORRECT line and prescribes "reload on a changed SCRIPT mtime, not only a changed
+  plist" — exactly what was built. **Its stored falsifier is `grep -qE "script_changed|script_mtime"
+  install.sh`, keyed on IDENTIFIERS rather than behaviour, so it can never green on a correctly
+  named fix.** Not renamed to game it; recorded here instead. Recipe-level: *a falsifier that greps
+  for a proposed variable name tests the author's vocabulary, not the defect.*
+
+  **MEASURED LIVE (corrected instrument):** compressor-sentinel pid 80076 running an image **23.3 h**
+  older than its file; lead-supervisor pid 82511 **18.8 h**; caffeinate-floor exec'd into
+  `/usr/bin/caffeinate`, so exempt BY CONSTRUCTION rather than by a gap.
+
+  **THREE INSTRUMENT DEFECTS THE FIRST DRAFT HAD, ALL FOUND BY RUNNING IT — the first is new:**
+  - 🚨 **`ps -o lstart=` is LOCALE-rendered as well as TZ-rendered.** Unpinned, this box emits
+    `Tue 18 Aug 11:36:03 2026`, which the US-order `date -j -f` format cannot parse at all. Existing
+    memory `process-start-time-renders-in-ambient-timezone` warns only about TZ. **Pin `LC_ALL=C`
+    with `TZ=UTC`, on BOTH sides.**
+  - 🚨 **A fail-closed guard testing `"$a$b"` for non-digits lets an EMPTY operand hide behind a
+    valid one.** The empty start compared as "fresh" — a NON-VERDICT rendering as a measurement.
+    Validate each operand SEPARATELY.
+  - 🚨 **`stat` without `-L` reads the SYMLINK's own mtime.** The sentinel's link mtime is 13 days
+    OLDER than the daemon's start while its target is 23 h NEWER, so a `-L`-less probe calls a
+    23-hour-stale daemon fresh. That is `475222a572de` half 1's defect, one character wide.
+
+  **A MILDER INVOCATION EXONERATES — the land proved it.** The pre-land sweep ran `shellcheck -x
+  install.sh` → rc 0. The statics gate runs a **bare** `shellcheck` (`scripts/ship-land.sh:2326`)
+  and went RED on SC1091. Attribution: `git show origin/main:install.sh` through the SAME bare
+  invocation reds identically ⇒ **pre-existing, not my diff** — install.sh has been
+  un-landable-whenever-touched since the real-home lib arrived, invisible because the file's
+  blob-sha memo carries it until a diff forces a re-scan. The file already had the *right* directive
+  (`# shellcheck source=…`), which resolves the path but does not make shellcheck FOLLOW it without
+  `-x`. Fixed at the site (`fd059b999`).
+
+  **WHAT WAS BUILT.** A resident-daemon reload path: KeepAlive discriminator (PlistBuddy, not grep) ·
+  running-image staleness from the process's OWN argv (4 of the fleet's `ProgramArguments` are
+  `/bin/bash -c '<inline>'` with `$HOME` unexpanded, so the plist cannot answer) · a per-label veto
+  refusing to bounce the compressor sentinel while its frozen ledger owes a SIGCONT (bouncing
+  mid-freeze strands those pids forever — the remedy worse than the disease) · **detection always
+  on and counted; the launchd MUTATION behind `CC_INSTALL_RESIDENT_RELOAD`, default OFF**, because
+  deploy-live runs this autonomously and the population is the supervisor plus the guard for the
+  axis three kernel panics died on. Probes then consolidated into the already-symlinked
+  `scripts/lib/cc-common.sh` (`LIVE_ADDS=0`) so the future reporter cannot drift from the actuator.
+
+  **REMAINDERS, NAMED (both rows stay OPEN):** flip the reload default after one observation cycle;
+  and `deploy-live.sh` still does not CALL the probes — `already deployed` remains a claim about a
+  git ref and symlinks, never about the running processes. Not bundled: deploy-live is
+  high-blast-radius with its own suite family and needs a stubbable launchctl seam.
+
+  **TESTS:** 13 cases, new suite. Red-proof **pinned to sha `85a3aadf3`, not `origin/main`** (which
+  now carries the work — a control on a moving ref skips rather than fails): predictions written in
+  the suite header BEFORE the run and matched exactly — `not ok 1 4 6 7 8 · ok 2 3 5 9 10 11 12 13`,
+  0 skips, plan line seen in both worlds. **10 mutants, 8/10 matched.** Two misses, both
+  informative: M3 reddened case 7 as well because 7 asserts the same string as 1 (my model of which
+  cases assert the output was incomplete, the mutant was fine); **M5 was a NO-OP because the call
+  site is `[[ -n "$rpid" ]] && rprog="$(…)"` and errexit is disabled for every command in an AND-OR
+  list except the last** — the `|| true` is belt-and-braces behind that `&&`, honestly uncreditable
+  today, and case 9 is credited by M9 instead. All 13 cases reddened by ≥1 mutant, 0 uncredited.
+  Existing install family 45/45; cc-common consumers (autonomy-sweep, boot-resume,
+  boot-resume-launch) 87/87.
+
+  **CONVERGER, RE-DERIVED AT INTAKE.** Still **B1 — `DIVERGED but ALREADY LANDED`**. But the shared
+  checkout's own `deploy-live.sh` is frozen at `9709c99d3`, BELOW #55's classifier, so it printed the
+  **pre-fix** wording; the classification only appears when the fixed copy is run with
+  `DEPLOY_REPO=… --dry-run --offline` from a worktree. **That is the bootstrap circle in its purest
+  form: the fix for the converger cannot run because the converger is frozen.** New detail for the
+  operator step: the checkout is on branch **`main`** with a **clean tracked tree** (untracked only),
+  so `--keep` cannot abort on local changes, and the single dropped commit `9709c99d3` is
+  content-present on trunk as `a7ae13980`. Left on the platter, not run — destructive-class on a
+  shared checkout. `LIVE_LAG=54`, `LIVE_ADDS=40`, **none of it mine** (`--diff-filter=A` over
+  `85a3aadf3..origin/main` for `bin hooks scripts commands` is EMPTY).
+
+  **STRUCTURAL FINDING FOR THE SUCCESSOR:** 8 of the 10 open rows gate on the converger. Nothing in
+  this effort closes until that one operator command runs; "advance" here means landing real work
+  and correcting premises, which is what #51-#56 have all done.
+
 - **2026-08-19 — drain recycle #55: the 29-recycle live-layer freeze was never un-landed work. It
   was a rebased land, and `--is-ancestor` cannot tell those apart — patch-id can.**
   `master-fleet-footprint` **10 open / 4 blocked (4 operator-gated; 0 cloud-venue, 0 claimed, no
