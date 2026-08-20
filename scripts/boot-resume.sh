@@ -103,7 +103,19 @@ if [ -z "$KEEPALIVE" ] && [ -x "$HOME/.reso/bin/reso-keepalive" ]; then
 fi
 LAUNCHCTL="${CC_LAUNCHCTL_BIN:-launchctl}"
 
-SYSCTL="${CC_SYSCTL_BIN:-sysctl}"
+# ABSOLUTE default, matching scripts/capacity-alarm.sh:276 — com.claude.boot-resume.plist's PATH
+# stops at /usr/bin:/bin and sysctl lives in /usr/sbin, so the bare name resolves in the operator's
+# shell and nowhere the job actually runs. boottime() swallows the failure with 2>/dev/null, which
+# is the fail-open polarity this whole lint exists for: an unreachable sysctl reads as "no boot
+# time" rather than as an error. Probe rather than hardcode so a box without /usr/sbin still
+# resolves; the CC_SYSCTL_BIN seam is unchanged and still wins.
+SYSCTL="${CC_SYSCTL_BIN:-}"
+if [ -z "$SYSCTL" ]; then
+  for _c in /usr/sbin/sysctl /sbin/sysctl; do [ -x "$_c" ] && { SYSCTL="$_c"; break; }; done
+  # No `command -v sysctl` tail: that spelling puts the bare name back at command position, which is
+  # the very finding this fix clears, and it would resolve against the same PATH that lacks it.
+  [ -n "$SYSCTL" ] || SYSCTL=/usr/sbin/sysctl
+fi
 # ── boottime (sec). sysctl prints `{ sec = NNN, usec = NNN } <date>`. Anchor on the LEADING `{ sec = `
 #    — a bare `.*sec = ` GREEDILY matches `usec = ` and captures the usec field (the wrong number). ──
 boottime() {

@@ -708,6 +708,89 @@ import re
 FUNCDEF = re.compile(r"^[ \t]*(?:function[ \t]+)?([A-Za-z_][A-Za-z0-9_:.-]*)[ \t]*\(\)[ \t]*\{?",
                      re.MULTILINE)
 
+# ── SECOND PRODUCER: a bare name hiding in a VARIABLE DEFAULT ────────────────────────────────────
+# scan() answers "what word sits at command position", and that is structurally blind to the one
+# spelling this repo actually writes. Measured 2026-08-20 on a fixture through the live scanner:
+# `${V:-name}`, `${V:=name}` and `${V-name}` all emit NOTHING, while a bare `name` on its own line
+# emits normally. The live instance was scripts/assignee-pane-residency.sh's
+# `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"` … `"$IT2_BIN" …`, which sat in the tree for the whole
+# life of the defect with `unattended-path-lint.sh` exiting 0 on a clean tree — and the lint only
+# ever spoke once a FIX moved the bare name to command position. A detector that reports the remedy
+# and not the defect (backlog bfd2e4eaaf2f; memory guard-proxy-fails-in-both-directions).
+#
+# WHY A SEPARATE PASS AND NOT A CHANGE TO scan(). The command-position machine drops a DOUBLE-QUOTED
+# word before a word ever forms, so reaching `"$IT2_BIN"` means editing the quote state itself — on
+# a lint that GATES EVERY LAND in this repo, where a widened emission reds every in-flight lander at
+# once. This pass adds emissions and removes none, so every verdict scan() produces today is
+# bit-identical, and everything downstream (plausible_binary, reachable_on, file_guards, the
+# allowlist, the inventory) applies to these words UNCHANGED — no second reporting path to drift.
+#
+# THE DISCRIMINATOR IS REACHABILITY TO COMMAND POSITION, not the `:-` spelling. A default is only a
+# binary reference if something eventually RUNS it. `${1:-}`, `${x:-0}`, `${2:-$ROOT}` and
+# `${PS_BIN:-/bin/ps}` are the corpus's dominant shapes and none of them is a bare-name command:
+# the first three are excluded by DEFAULT_RE (empty, digit-initial, `$`-bearing), the fourth by its
+# slash. What survives must then be shown to reach a command position — either the expansion IS the
+# command, or it is assigned to a holder that is one. Without that second half this fires on every
+# `${FMT:-json}` in the tree.
+VAR_DEFAULT = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-|:=|-)([A-Za-z_][A-Za-z0-9_.+-]*)\}")
+# `local X=`, `declare -g X=`, `X=`, `X+=` — the holder is the last name before the `=`.
+HOLDER = re.compile(r"(?:^|[;&|(]|\b(?:local|declare|typeset|readonly|export)\s+(?:-\w+\s+)*)"
+                    r"([A-Za-z_][A-Za-z0-9_]*)\+?=")
+
+
+def _decomment(line):
+    """Blank out single-quoted spans and a trailing # comment. One-sided: when the quote state is
+    ambiguous the span is dropped, so this can only ever SILENCE a finding, never invent one."""
+    out, i, n, sq = [], 0, len(line), False
+    while i < n:
+        c = line[i]
+        if c == "'":
+            sq = not sq
+            out.append(" ")
+        elif sq:
+            out.append(" ")
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;|&("):
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def scan_var_defaults(text):
+    """Yield (lineno, word) for a bare-name default that reaches a command position."""
+    lines = [_decomment(l) for l in text.split("\n")]
+    body = "\n".join(lines)
+    hits = []
+    for lineno, line in enumerate(lines, 1):
+        for m in VAR_DEFAULT.finditer(line):
+            hits.append((lineno, line, m))
+    if not hits:
+        return []
+    out = []
+    for lineno, line, m in hits:
+        default = m.group(2)
+        pre = line[:m.start()].rstrip()
+        # (a) the expansion IS the command — bare or double-quoted, at the head of a command.
+        direct = re.search(r'(?:^|[;&|]|\$\(|\bthen\b|\belse\b|\bdo\b|\bexec\b|\btime\b)'
+                           r'[ \t]*"?$', pre) is not None
+        if direct:
+            out.append((lineno, default))
+            continue
+        # (b) the expansion is assigned to a holder that is run somewhere in the file.
+        holders = HOLDER.findall(pre)
+        if not holders:
+            continue
+        holder = holders[-1]
+        used = re.search(r'(?:^|[;&|]|\$\(|\bthen\b|\belse\b|\bdo\b|\bexec\b|\btime\b)'
+                         r'[ \t]*"?\$\{?' + re.escape(holder) + r'\}?"?[ \t]',
+                         body, re.MULTILINE)
+        if used:
+            out.append((lineno, default))
+    return out
+
+
 for path in sys.argv[1:]:
     try:
         text = open(path, encoding="utf-8", errors="replace").read()
@@ -722,7 +805,9 @@ for path in sys.argv[1:]:
     # against sibling ratchets that are sub-second. Deduping here rather than in bash keeps the work
     # in the process that already holds the text, and needs no cache in a shell without hashes.
     emitted = set()
-    for lineno, word in scan(text):
+    # scan() first, so a name that is ALSO at command position keeps its command-position line
+    # number — the more actionable of the two for a reader opening the file.
+    for lineno, word in list(scan(text)) + scan_var_defaults(text):
         if word in local_funcs or word in emitted:
             continue
         emitted.add(word)
@@ -1489,6 +1574,79 @@ esac'
   newtree t20c; mk t20c hooks/a.sh 'zzunobtainium --check "$f"'
   ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="zzunobtainiumx" "$SELF" "$d/t20c" >/dev/null 2>&1 )
   expect 0 "$?" 'the inventory matched a name as a SUBSTRING rather than a whole line'
+
+  # ── 21. THE VARIABLE-DEFAULT CLASS (backlog bfd2e4eaaf2f) ──────────────────────────────────────
+  # Every 21x case below was measured RED-first against the pre-fix scanner: all three spellings
+  # exited 0 (silent) while the bare-name control on the same fixture exited 1, which is a detector
+  # reporting the REMEDY and not the DEFECT. The live instance was
+  # scripts/assignee-pane-residency.sh's `IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"` — invisible for
+  # the whole life of the defect, and it spoke only once a fix moved `it2` to command position.
+  # `zzunobtainium` is the inventory-vouched word cases 20a-20c already use, so these arms test the
+  # SCANNER and inherit a settled answer for everything downstream of it.
+  INV_Z="zzunobtainium"
+
+  # 21a/b/c. RED — one per spelling. Separate fixtures, because a single file would let ONE working
+  #          spelling carry the other two (memory: per-site-mutation-attributes-coverage).
+  newtree t21a; mk t21a hooks/a.sh 'Z="${CC_Z_BIN:-zzunobtainium}"
+"$Z" --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21a" >/dev/null 2>&1 )
+  expect 1 "$?" 'a bare binary in a ${VAR:-name} default was not detected'
+
+  newtree t21b; mk t21b hooks/a.sh 'Z="${CC_Z_BIN:=zzunobtainium}"
+"$Z" --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21b" >/dev/null 2>&1 )
+  expect 1 "$?" 'a bare binary in a ${VAR:=name} default was not detected'
+
+  newtree t21c; mk t21c hooks/a.sh 'Z="${CC_Z_BIN-zzunobtainium}"
+"$Z" --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21c" >/dev/null 2>&1 )
+  expect 1 "$?" 'a bare binary in a ${VAR-name} default was not detected'
+
+  # 21d. RED — the expansion IS the command, with no holder variable at all.
+  newtree t21d; mk t21d hooks/a.sh '"${CC_Z_BIN:-zzunobtainium}" --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21d" >/dev/null 2>&1 )
+  expect 1 "$?" 'a bare-name default AT command position was not detected'
+
+  # 21e. GREEN — THE TOO-WIDE CONTROL THAT MATTERS MOST, and the reason this pass is gated on
+  #      reachability rather than on the `:-` spelling. An ABSOLUTE default is the FIX for this
+  #      class (it is what both site fixes in this land use), so a pass that reported it would
+  #      forbid its own remedy — the both-directions failure of memory
+  #      guard-proxy-fails-in-both-directions. `PS_BIN=${CC_RESIDENCY_PS_BIN:-/bin/ps}` is the live
+  #      neighbour this is modelled on, sitting one line below the defect it must not resemble.
+  newtree t21e; mk t21e hooks/a.sh 'Z="${CC_Z_BIN:-/opt/homebrew/bin/zzunobtainium}"
+"$Z" --check "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21e" >/dev/null 2>&1 )
+  expect 0 "$?" 'an ABSOLUTE default was reported — the pass forbids its own remedy'
+
+  # 21f. GREEN — a default that no one ever RUNS is not a binary reference. This is the arm that
+  #      keeps the pass off the corpus's dominant shapes; `${FMT:-json}`, `${MODE:-auto}` and every
+  #      other value-shaped default live here, and without it the lint reds the whole tree at once.
+  newtree t21f; mk t21f hooks/a.sh 'Z="${CC_Z_BIN:-zzunobtainium}"
+printf %s "$Z"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21f" >/dev/null 2>&1 )
+  expect 0 "$?" 'a default that never reaches command position was reported as a binary'
+
+  # 21g. GREEN — a default inside a COMMENT. This file itself carries `${CC_TERM_KITTY:-kitty}` in
+  #      its own header prose, so a pass blind to comments would convict the lint on its own text.
+  newtree t21g; mk t21g hooks/a.sh '# Z="${CC_Z_BIN:-zzunobtainium}" and then "$Z" runs it
+true'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21g" >/dev/null 2>&1 )
+  expect 0 "$?" 'a bare-name default inside a COMMENT was reported'
+
+  # 21h. GREEN — a default inside a single-quoted string does not expand, matching case 4's rule for
+  #      the command-position scanner. Two producers, one rule about quoting.
+  newtree t21h; mk t21h hooks/a.sh 'grep -q '"'"'${CC_Z_BIN:-zzunobtainium}'"'"' "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21h" >/dev/null 2>&1 )
+  expect 0 "$?" 'a bare-name default inside SINGLE QUOTES was reported'
+
+  # 21i. GREEN — the ONE-SIDED control on the holder rule: a DIFFERENT variable being run must not
+  #      convict this default. Without it the "is the holder ever a command" test could degrade into
+  #      "does this file ever run anything", which is true of every file in the corpus.
+  newtree t21i; mk t21i hooks/a.sh 'Z="${CC_Z_BIN:-zzunobtainium}"
+Y=/bin/ls
+"$Y" -l'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t21i" >/dev/null 2>&1 )
+  expect 0 "$?" 'running an UNRELATED variable convicted a default that is never run'
 
   # 19. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
   #     or it cannot be wired into the gate at all.

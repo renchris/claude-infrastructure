@@ -89,7 +89,22 @@ STATE_DIR="${CC_RESIDENCY_STATE_DIR:-$HOME/.claude/watchdog}"
 STATE_FILE="$STATE_DIR/assignee-residency.state"
 LIFECYCLE="${TEAMMATE_LIFECYCLE_LOG:-$HOME/.claude/logs/teammate-lifecycle.log}"
 TEAM_GLOB="${CC_RESIDENCY_TEAM_GLOB:-$HOME/.claude*/teams/*/config.json}"
-IT2_BIN="${CC_RESIDENCY_IT2_BIN:-it2}"
+# PATH FIRST, ABSOLUTE FALLBACK SECOND — and the order is load-bearing in BOTH directions, which is
+# why this is four lines rather than one default.
+#   · Not the bare name `it2`: com.claude.teammate-reap-alarm.plist declares its own PATH and `it2`
+#     is not on it, so a scheduled run loses the window source permanently. That spelling survived
+#     here for the whole life of backlog bfd2e4eaaf2f because unattended-path-lint could not see a
+#     name inside a variable default — this file WAS the live instance of that blindness.
+#   · Not a bare `${...:-$HOME/.claude/bin/it2}` default either: that SHADOWS PATH, and
+#     tests/assignee-pane-residency.bats:369 exists to refuse exactly that ("the caller's own PATH
+#     still WINS — the hardening APPENDS, never prepends"). It caught this on the first attempt.
+# `type -P` is the PATH lookup that does not put the bare name back at command position, so the
+# resolution is honest rather than spelled around the lint. The CC_RESIDENCY_IT2_BIN seam still wins.
+IT2_BIN="${CC_RESIDENCY_IT2_BIN:-}"
+if [ -z "$IT2_BIN" ]; then
+  IT2_BIN="$(type -P it2 2>/dev/null || true)"
+  [ -n "$IT2_BIN" ] || IT2_BIN="$HOME/.claude/bin/it2"
+fi
 PS_BIN="${CC_RESIDENCY_PS_BIN:-/bin/ps}"
 JQ_BIN="${CC_RESIDENCY_JQ_BIN:-jq}"
 # How long a member may sit resident before it counts toward the pile. Anchored on the vendor's own
