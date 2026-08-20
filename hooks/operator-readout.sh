@@ -50,11 +50,24 @@
 #   activation   pending-activation/*.sh with no .done marker → `bash <p> && touch <p>.done`
 #                (CONFIRM=1-prefixed when the script gates on it — `&&` keeps a dry-run or failed
 #                run from falsely marking done)
-#   decisions    cc-decide store, open class-C (human-gated): run_command (board vocabulary,
-#                forward-compatible with feat/board-runnable-commands) → staged_artifact_path
+#   decisions    cc-decide store, open class-C (human-gated): run_command → staged_artifact_path
 #                (`bash <p>`) → first-sentence prose fallback. Open class-B is NEVER itemized —
 #                one summary line only when defaults auto-fire within 24h (the early-veto window).
+#                `run_command` HAS NO PRODUCER, and is not waiting for one. It was written
+#                forward-compatible with feat/board-runnable-commands, a branch that was never
+#                pushed and never merged (2f25c802/a0d96fde are not ancestors of origin/main;
+#                measured 2026-08-20). The LIVE runnable channel for a decision is
+#                `staged_artifact_path` — 12 of 26 open packets carry it and render `▶ bash <p>`;
+#                a class-C packet WITHOUT one is a value fork, which is exactly what `◆` means.
+#                Do not re-file "nothing writes run_command" as a defect (backlog 0bcccfd6cd18
+#                was closed as refuted on 2026-08-20): the capability arrived under a different
+#                NAME on the backlog leg below, so a probe keyed on this spelling can only ever
+#                convict — it cannot see its own fix land.
 #   backlog      cc-backlog list --blocked --json → run/run_command if present, else needs-prose.
+#                The producer is `cc-backlog needs --run` (bin/cc-backlog:2307), which rides the
+#                step as `run` on the `block` record and folds at bin/cc-backlog:1058 — 60 of 160
+#                blocked rows carry it today and render `▶ <cmd>`. Pinned by
+#                tests/cc-backlog-needs.bats:140 (fold) + tests/operator-readout.bats:299 (render).
 #   queue        cc-backlog OPEN items for the cwd project (git-toplevel basename, the same
 #                normalization cc-dispatch applies) → one COUNTED line, never itemized (open items
 #                are the dispatcher's work, not operator steps). Header when it is the only signal,
