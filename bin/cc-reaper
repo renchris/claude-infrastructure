@@ -1049,7 +1049,21 @@ session_subagent_inflight() { # <sid> → 0 in-flight · 1 definitely none · 2 
 # information) and leg 3 only where the session spawned an Agent-tool subagent. A dispatched peer
 # with NEITHER — 0 commits, no back-channel, no subagent, clean tree, idle past the settle — still
 # falls straight through to REAP on ahead=0-by-silence. Measured 2026-08-19: 459 of 603 fired stamps
-# on this box carry no notifyBack at all, so that hole is 76% of the fired population.
+# on this box carry no notifyBack at all, so that hole is 76% of the fired population (re-measured
+# 2026-08-20: 516 of 618 .json stamps, 83% — the hole is growing, not closing).
+#
+# 🚨 THAT 83% IS THE SIZE OF THE HOLE, NOT THIS LEG'S COVERAGE OF IT, and the two were conflated in
+# this comment for one commit. Re-measured 2026-08-20 (recycle #58) over every no-notifyBack stamp
+# whose transcript still exists (n=344): 341 carry NO goal record at all, 2 read live-and-unmet, 1
+# read met/failed. Leg 4 can therefore speak for ~1% of the hole, not for the hole. Dating the
+# population against the 2026-08-09 goal-in-the-recipe cutover does NOT rescue it — post-cutover the
+# split is 66 no-goal / 2 live / 1 resolved (n=69), i.e. 95% still silent. Cross-checked against the
+# real library rather than this file's own parse: goal_live_condition answers live for exactly 2 of
+# those 69, the same 2. So "`--goal` is part of the fire recipe" is true of the FIRE and false of
+# the RECORD — a goal_status attachment only exists once the evaluator has run, and a dispatched
+# peer that self-retires quickly never produces one. This leg is correct and cheap and it closes the
+# sub-case it names; it is NOT the remedy for the row's falsifier at large, and the residual — a
+# fired peer with no commits, no back-channel, no subagent AND no goal record — is still unbelted.
 #
 # THE CHANNEL IS THE GOAL, AND IT IS POSITIVE EVIDENCE, NOT SILENCE. Since 2026-08-09 `--goal` is
 # part of the fire recipe rather than an option, so a dispatched peer carries a machine-readable
@@ -1643,8 +1657,10 @@ sweep() {
         # ── LEG 4: the peer's OWN contract is still UNMET (backlog 7c22e9b43956) ────────────────
         # POSITIVE evidence like leg 3, so it sits with it above leg 2's inferred-silence read, and
         # like leg 3 it applies whether or not a back-channel was ever armed — which is the entire
-        # point: leg 2 is structurally unable to reach the 76% of fired peers that carry no
-        # notifyBack, and this is the leg that does. Ordered AFTER leg 3 because leg 3's refusal is
+        # point: leg 2 is structurally unable to reach the 83% of fired peers that carry no
+        # notifyBack, and this is the leg that reaches the goal-armed SLICE of them — measured at
+        # ~1% of that hole (2 of 344), never the hole itself; see the header. Ordered AFTER leg 3
+        # because leg 3's refusal is
         # the more concrete destruction (a reap SIGKILLs a subagent mid-run), so it should own the
         # message when both are true.
         if [ "$GOAL_BELT" = 1 ]; then
