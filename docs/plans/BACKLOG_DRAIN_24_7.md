@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #61: `master-fleet-footprint` 10 open → 8. Both rows I closed had
+  been fixed the previous evening, hours after they were filed — and the residual they left behind
+  is that a remedy can land, be correct, and still be unreachable by the process that has to run
+  it.** Effort picked from the CURRENT fold (`--all --json` + jq; the `--condition` flag does not
+  exist and a filtered `list` returns EMPTY, reading exactly like a drained effort):
+  **`master-fleet-footprint` 10 open / 4 blocked, all 4 operator-gated** — the smallest LIVE
+  master-\* after `master-session-lifecycle` drained to two date-gated rows. **closed 2 / filed 2.**
+  Both closes were premise-measurements; neither required writing a fix.
+
+  **`ce775801633b` — closed REFUTED. Filed 2026-08-19, fixed ~21:00 the same evening.** It claimed
+  `install.sh` "can NEVER reload a resident daemon" and the live-layer converger was "structurally
+  incapable" of advancing 6 of 22 fleet jobs. Both halves landed within the hour after it was
+  written: `976c6b418` put the reload path at `install.sh:920-937`, discriminating resident from
+  periodic with the plist `KeepAlive` key via PlistBuddy — *precisely the discriminator the row
+  itself named* — and `0c34771ca` made `deploy-live.sh:1177-1205` read the **executing process's
+  own argv**, which is the row's own wording for the proof it wanted. Probes then consolidated into
+  the already-symlinked `scripts/lib/cc-common.sh` (`b2763f882`) so actuator and reporter cannot
+  drift. Verified by CONTENT on `origin/main`, never by count.
+
+  **`475222a572de` — closed; both prescribed fixes built.** It named exactly two, and the one it
+  called impossible ("there is NO SIGCONT sender anywhere in the tree") landed as `5305ee34c`:
+  `compressor-sentinel.sh:703-770`, a three-mode release policy (clear / ceiling / exit) stated in
+  the source, with every release gated on `(pid, lstart)` matching the ledger and **TZ-pinned on
+  both sides** so a DST flip cannot convict every row at once.
+
+  🚨 **THE FINDING — a landed remedy can be unreachable by the process that must execute it, and
+  the freshness probe that is supposed to notice says the daemon is fine.** The sentinel is the
+  only guard against the class three kernel panics died on. Measured today: PID 80076 started
+  **2026-08-18T11:36Z**, the unfreeze arm landed **2026-08-19T08:46Z**, and the process holds
+  `fd 255r` on **inode 486782526 / 72,743 bytes** while the on-disk script is **inode 554577451 /
+  79,904 bytes**. Different inodes, because `git checkout` replaces a path rather than rewriting it
+  — so bash reads the pre-fix inode for the daemon's whole life and *can never* see the fix. The
+  guard can still SIGSTOP and cannot release. That 72,743-vs-79,904 pair is the same one
+  `ce775801633b` measured a day earlier, independently reproduced, which is what makes it a
+  standing state and not a snapshot. **Generalise it as: landing is not activation, and for a
+  resident daemon not even deploying is activation — only a re-exec is.** Same family as
+  `🚀 landed ≠ live`, one layer lower down.
+
+  **What the cure costs is one bounce, and the design's own veto already says it is safe.**
+  `install.sh:925` refuses to bounce the sentinel while its frozen ledger owes a SIGCONT — the
+  remedy-worse-than-the-disease guard. That ledger
+  (`~/.claude/logs/compressor-sentinel-frozen.tsv`) is **ABSENT**, **0** processes are in `T` state,
+  and the installed plist is byte-identical to `origin/main` with `ProgramArguments` exec'ing
+  `$HOME/.claude/scripts/compressor-sentinel.sh`, which resolves to the current image. Every
+  precondition the design wrote down is met. The `launchctl bootout`/`bootstrap` pair is refused by
+  the **Claude Code auto-mode classifier**, not by any repo gate, so it is operator-only and filed
+  as **`e0e8ed19ec56`** with its exact command. Worth stating plainly: the gate that stopped this
+  is external to the repo, so no amount of repo work removes it.
+
+  🚨 **THE SECOND FINDING — the arm's criterion cannot clear, for the same reason #60's could
+  not.** The named remainder was "flip the reload default after one observation cycle". The
+  observation is emitted by `deploy-live.sh`, which runs **from the live layer** — and the live
+  layer is frozen at `9709c99d3`, now **65** commits behind (the 62 every brief in this lineage
+  quotes is already stale). `grep -c resident_bounce_vetoed` on the frozen `install.sh` = **0**;
+  `grep -c resident_image_stale` on the frozen `deploy-live.sh` = **0**. The live copies carry
+  neither the actuator nor the reporter, so the cycle has accumulated **exactly zero** data since
+  both landed. This is `b69b1d957cec`'s npm-tenure soak bar wearing different clothes: *a gate
+  never once observed to open*. **The criterion has to be repaired before the flag is touched** —
+  stated as N observations from a command a session can RUN, not as a passive cycle on a converger
+  that is refusing. Filed as **`84394a44f133`**, carrying datum 1 of N.
+
+  **DATUM 1, recorded by running the `cc-common.sh` probes directly (read-only):** 3 resident
+  daemons declared (`KeepAlive` true, of 22 plists); **2 executing and both stale by inode** —
+  `compressor-sentinel` 80076 (486782526 → 554577451) and `lead-supervisor` 82511 (507008930 →
+  550294210); `caffeinate-floor` EXEMPT, its argv `caffeinate -i -s` naming no repo file. The
+  exempt row is **counted, not silently skipped** (`deploy-live.sh:1194`) — the denominator is
+  never silent, which is the difference between a reporter and a comforting one.
+
+  ⚠️ **Harness note, not a defect in the subject:** `resident_program()` uses `read -ra`, and the
+  Bash tool here is **zsh**, where that is `bad option: -a`. My first probe run returned `noprog`
+  for all three daemons — a clean-looking null that was entirely my instrument. Re-run under
+  `/bin/bash` it answered correctly. Production is unaffected (`install.sh` and `deploy-live.sh`
+  are both `#!/bin/bash`). Memory `interactive-grep-is-ugrep-not-usr-bin-grep`, third sighting.
+
+  **Hypothesis raised and REFUTED before it reached the ledger:** `resident_image_stale()` answers
+  *"did the file change after I started?"*, never *"is the file itself current?"* — so a daemon
+  restarted against the frozen checkout would read **fresh** while running 65-commit-old bytes. I
+  expected to find that live and did not: neither `compressor-sentinel.sh` nor `lead-supervisor.sh`
+  was touched in those 65 commits, so both on-disk files equal `origin/main` and the probe's answer
+  is correct today. Recorded as **unproven, not filed** — the blind spot is real in principle and
+  had no instance, and inventing a row for it would be exactly the premise-rot this chain keeps
+  closing rows for.
+
 - **2026-08-20 — drain recycle #60: `master-session-lifecycle` 4 open → 2. Both rows I closed were
   closed by MEASURING THEIR PREMISE, and both premises had rotted in the same direction — each row
   described a world that was true when it was filed and false when it was read.**
