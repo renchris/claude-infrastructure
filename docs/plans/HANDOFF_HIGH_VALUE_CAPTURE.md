@@ -216,3 +216,23 @@ default N=10 (band 8-12), no parallelism cap, 15-20% adversarial floor.
   store measured decaying at 23.6%/9 days, and `handoffs.jsonl` is a *ring buffer* that deletes rows.
   The findings doc §2.2 dates every short-half-life fact with its decay mode and re-derivation
   command. **Re-derive those numbers; do not quote them.**
+
+- **2026-08-20 · re-dispatched after completion; premise REFUTED, no work done.** Backlog
+  `83f44615f0eb` ("advance /handoff …") was dispatched against this plan a day after `cf7a5490`
+  closed it. Verified on `origin/main` before acting: frontmatter `status: complete`, findings doc
+  present (708 lines), `commands/handoff.md` untouched. Nothing was owed and nothing was changed —
+  the item is closed citing `cf7a5490`, not re-derived.
+
+  **Why the item's own falsifier did not retract it, since it should have.** Run against this
+  checkout's scanner, the stored probe exits 0 (`FALSIFIED`) — clause (a) reads the frontmatter and
+  answers correctly. The dispatch brief reported `NOT REFUTED (exit 1) … output: (silent)`, which is
+  consistent only with a deployed scanner that does not know the verb (`--falsify` landed in
+  `9b5ffdb6`, one day earlier) or is absent. The probe shape `cc-discover` mints for every plan-open
+  item wraps the answer in `[ "$(…)" = FALSIFIED ]`, and that test discards the inner exit code — so
+  cc-premise's could-not-ask band (`_FALSIFIER_UNASKABLE_RCS`, built for exactly this after backlog
+  `f401935c0bd4`) is structurally unreachable here and every unaskable state renders as a genuine
+  "still live". Reproduced under `/bin/sh -c` across four inner states; **fix specified, not
+  applied** (it belongs to its own item, with a negative control this cloud checkout cannot run):
+  **`docs/research/plan-open-falsifier-cannot-report-unaskable-2026-08-20.md`**.
+
+  This is a defect in the *dispatch* machinery, not in this plan. The verdict above is unchanged.
