@@ -30,6 +30,31 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-20 | `64f1d37dc4b3` | `reso-management-app` | label-foreign — **the last one. The guard shipped from this VM: `cfb84d7`** |
+
+🚨 **CLOSED 2026-08-20 by `cfb84d7` — `bin/cc-offload` now refuses the fire.** The seventh dispatch
+(`64f1d37dc4b3`, a `lib/generated/bottle-audit.ts` staleness item in `reso-management-app`) landed in
+a `claude-infrastructure` VM and was unworkable on arrival, identically to the six above. What it
+could add was not another measurement — the class had stopped producing spellings three occurrences
+earlier — but the one thing every prior VM declined to do: **build the guard instead of describing
+it.** Both arms this family specified are now in the fire path, with the label arm and the subject
+arm as conjuncts, `verdict=ineligible-foreign-repo` at exit 3, and 7 tests.
+
+The stated reason four prior sessions gave for not building it was **wrong, and re-measurable in one
+minute**: *"this VM has neither `bats` nor `shellcheck` (both confirmed absent), so the repo's gate
+cannot be run on a shell change"* (`cloud-venue-project-repo-mismatch-2026-08-16.md` §3). Both are
+**absent from the image and installable from it** — `npm i -g bats` (1.13.0) and
+`pip install shellcheck-py` (0.11.0) both succeed through the agent proxy on a stock cloud VM. That
+is the anti-capture list's *negative tool-claim* entry exactly: one failed lookup hardened into a
+permanent self-imposed refusal, inherited by three later sessions that never re-ran the probe. The
+cost of the inherited claim was three of the seven dispatches.
+
+Second-order finding from running that suite at all: **tests 33/34/35/41 were red on trunk** and had
+been for as long as any non-iTerm caller existed. `UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"` under
+`set -u` aborted `up` outright, three lines above the branch written to degrade that exact case to
+FIRE-AND-FORGET. Invisible on the desk, where an iTerm shell always exports the variable; fatal to
+every VM, cron, launchd and kitty caller. Fixed in `981fe9b`. Nobody could have landed a guard here
+without hitting it first, which is its own small argument for building rather than describing.
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the

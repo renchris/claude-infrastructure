@@ -183,3 +183,52 @@ mechanism, so the cost of an unfixed venue is **not capped at one session per it
 dispatcher re-fires the row. Its premise was re-confirmed and its supersession refuted from evidence
 already in this repo, so it is open-and-unstarted, blocked purely on venue.
 `venue-foreign-repo-recurrence-2026-08-17.md` § FIFTH OCCURRENCE.
+
+---
+
+## 5 · RESOLVED 2026-08-20 — `cfb84d7`, shape (a) plus the restored subject conjunct
+
+§3 filed this as a decision and it stayed one for four days, through two more dispatches. It is
+now built, in the place §2 located it (`bin/cc-offload`, at the fire), and the shape is the one
+the family converged on rather than either filed option alone:
+
+- **(a) fail closed** on `item.project != attached_repo` — the label arm, six of the eight dispatches.
+- **plus the subject conjunct** `venue-foreign-subject-repo-2026-08-15.md` proposed and the 08-16
+  relocation dropped. Without it `9333991e4544` and both fires of `8f59467c92b0` pass every term,
+  which §3's own 🚨 already recorded.
+- **(b) route by project** stays refused, for the reason §3's 🚨 gives: a session gets exactly one
+  `git_repository` source, so a cross-repo master is not merely unrouteable but *inexpressible*. It
+  resolves to refuse-and-park.
+
+Two design points that were open in §3 and are now settled by construction:
+
+- **Where the false-positive budget goes.** §3 correctly feared that a wrong refusal starves the
+  cloud tap — the one unbounded cost on this class. So the subject match is asymmetric: a BARE label
+  is sufficient on the row's own short fields (title / dodRef / source / needs), where it is high
+  signal, and INSUFFICIENT in a dodRef'd plan body, where the label must appear path-shaped
+  (`~/Development/x`, `x/`). A prose mention is not a subject; an edited tree is. Both directions
+  are pinned by paired tests.
+- **Fail-open, and what it costs.** No ledger, no reader, unknown id, no project label, no conf, no
+  origin ⇒ allow. This is `bin/cc-eligible`'s founding rule and it means the gate cannot starve the
+  tap on an instrument outage. The residue is that a genuinely unreadable row still burns a slot —
+  a bound this class already lives inside, not a new one.
+
+**The end state on a refusal is the one §3 wanted.** Exit 3 is `cc-offload`'s "precondition not
+met"; `bin/cc-dispatch:2371` already routes any non-zero fire rc through `self_release`, so the item
+reopens with `selfRelease` — excluded from reap rule B's thrash block by construction — and the
+refusal text lands in the kept fire excerpt. `verdict=ineligible-foreign-repo` therefore now reaches
+a store the dispatch chain **reads**, which is the gap `venue-foreign-master-redispatch-2026-08-17`
+§1 named as the real open question: *"a disproof written to a markdown file does not park the item,
+because nothing in the dispatch chain reads plan prose."*
+
+🚨 **§3's stated blocker was a stale negative tool-claim, and it cost three dispatches.** *"this VM
+has neither `bats` nor `shellcheck` (both confirmed absent), so the repo's gate cannot be run on a
+shell change"* is true about the image and false about the VM: `npm i -g bats` (1.13.0) and
+`pip install shellcheck-py` (0.11.0) both succeed on a stock cloud VM through the agent proxy. Three
+later sessions inherited the claim without re-running the probe — the anti-capture list's
+*negative-tool-claim* entry, doing exactly the damage it predicts. Re-measure before inheriting a
+refusal; it took one minute.
+
+Landed with `981fe9b`, which had to come first: `up` aborted `unbound variable` under `set -u` for
+every caller without an iTerm, so tests 33/34/35/41 were red on trunk and no guard could be gated
+until it was fixed.
