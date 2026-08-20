@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #70: `master-fire-gate` 41 open → 40 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: an honesty gate that asked whether a guard forbids its own
+  prescribed remedy asked only about the FIRST of the two gates that command passes through —
+  and its own case is named "names a drivable action".**
+
+  **Effort choice.** Sixth consecutive recycle in `master-fire-gate` — #69 left it warm at 41
+  open. The lineage's settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`,
+  `7c6ff16259a0`, `b69b1d957cec`). Lag re-derived at open: the shared checkout was **85** behind
+  origin/main (#69 measured 83→84, #68 measured 81, #67 measured 79), and **86** at close.
+
+  **`ba5511bbe388` — CLOSED on `3a2d81bcd`, and its own named locus is EXONERATED while its
+  defect CLASS was alive four sites away.** The row indicts a brief template for emitting
+  "You are a fired PEER session … `handoff-fire.sh self-close --terminal`" to launcher-spawned
+  workers that are not fired peers, and prescribes: emit the block only when the fire actually set
+  `WANT_SELF_RETIRE`. Reproduced against `git show origin/main:scripts/handoff-fire.sh`: the block
+  at :7546 already sits inside `if [ "$WANT_SELF_RETIRE" = 1 ]` (:7537), and
+  `git log -S` dates that gate to `f137b1baf`, which **predates the row's own 2026-07-31 filing**.
+  A whole-tree content census found the contract text in exactly one executable — that file — so
+  no other composer can hand it to anyone. The prescribed remedy was landed before the row existed.
+
+  🚨 **THE LIVE DEFECT, and why the exoneration mattered rather than ending the investigation.**
+  The class the row named — *a text tells a non-fired-peer to run a command the mechanism forbids* —
+  was alive in four PreToolUse **deny reasons**: `hooks/agent-teams-enforce.sh` (Agent spawn),
+  `hooks/check-edit-boundary.sh` (Edit/Write), and `hooks/validate-bash.sh` twice (pane-spawn +
+  spawn-lineage). Each ends "STAND DOWN: stop work, and retire this pane with
+  `… self-close --terminal` (it refuses a dirty tree, which is the intended safety)". That command
+  passes through **two** gates. handoff-fire's ORIGIN GATE (:5896) exits 2 —
+  *ORIGIN session, not a fired peer* — for any pane with no fired-peer stamp, i.e. **every
+  operator-launched pane and every Agent-Team lead**, which is much of the population these hooks
+  fire on. Asked of the actuator rather than read off it: rc=2 + the refusal with an empty
+  `CC_FIRED_DIR`; **rc=0 with a valid stamp for the same cwd**, so the null is the subject's and
+  not the probe's. `--terminal` confers no exemption; the only exemptions are
+  `assignee|transplanted-source` (:5758), and the assignee path additionally needs a **provably
+  dead** originator — which a duplicate-worker refusal, whose own text says the incumbent is LIVE,
+  cannot supply.
+
+  🚨 **WHY IT SURVIVED — the honesty gate stopped one question short, and said so in its own name.**
+  `tests/worker-claim-gate-coverage.bats` case 18 already asks exactly this question — *"THE GATE
+  ALLOWS ITS OWN CURE — self-close is exempt, and the fixture proves it bites"*, headed *"a guard
+  that forbids its own prescribed remedy re-emits forever"* — and proves the worker-claim gate
+  exempts `self-close`. It then stops. Case 16 is literally named **"names a drivable action, and
+  that action is the exempt one"**: *exempt from THIS gate* was verified; *drivable* never was.
+  This is #69's finding one layer up (cc-notify promised a desk-invariant replacement without
+  asking launchd) and the sixth member of the family — #63 guard at the wrong door · #64 watch
+  that could not take a breath · #65 oracle asking presence when the question was direction ·
+  #66 falsifier keyed on a spelling · #67 acquittal on the wrong axis · #68 exemption that deleted
+  a TOCTOU window · #69 unchecked claim about an actuator.
+  **The rule to carry: when a check clears a command against ONE gate, enumerate the gates that
+  command actually passes through — an exemption is not a permission.**
+
+  **The remedy is the prose, never the origin gate.** That gate exists because a 30-agent workflow
+  carrier called `self-close --terminal` after landing 4 commits and, to the operator, simply
+  vanished. All four deny reasons now state the condition: closing is CONDITIONAL on how the pane
+  was started; with no fired-peer stamp self-close exits 2 and the pane STAYS UP and reports.
+  Blast radius measured on the REMEDY before a character moved: **no test in the tree asserts the
+  retire clause** (`STAND DOWN: stop work` / `refuses a dirty tree…` / `retire this pane with` each
+  appear only in the three hooks), while `DUPLICATE WORKER` and `SPAWN GENERATION CAP` are asserted
+  by 12 test lines — so exactly the clause moved and those labels were left alone. Sibling cases
+  05/11/16/18, which assert these same reasons on other axes, stay green.
+
+  **Cases 19-21 on three different oracles** (two cases failing the same way are one case): 19
+  EXECUTES the actuator (exit status + stderr) with a both-directions `fired_stamp_tenancy` control;
+  20 asserts every deny reason that PRESCRIBES the cure also states the condition, keyed on the
+  deny-reason CLASS (`self-close --terminal` on a line carrying `permissionDecisionReason` or
+  `deny "`) so a fourth enforcement point inherits the rule without editing the case; 21
+  mutant-controls 20's predicate with a non-compliant fixture that must be flagged plus two
+  compliant fixtures that must not — so 20 can neither pass vacuously nor be satisfied by deleting
+  every mention of the command.
+
+  🚨 **THE CONTROL-ARM RULE #69 PAID FOR, APPLIED.** The pre-fix arm is `git archive origin/main`
+  unpacked into a fresh scratch tree (2079 files, **0 symlinks** — the `>`-through-a-symlink shape
+  that destroyed 92 lines in #58) with ONLY the test file substituted, and it was **checked before
+  it ran**: 0 hits of the fix's own symbol in all three hooks, 3 hits of the pre-fix clause.
+  Result: **20 RED pre-fix, green post-fix; 19 and 21 green in BOTH arms by design** — 19 states
+  the premise (a fact about handoff-fire, so a red there indicts the premise, not the prose) and
+  21 proves 20's predicate can fail at all.
+
+  🚨 **A NON-VERDICT THAT LOOKED LIKE A PASS, and the shape it takes in bats.** The first sibling
+  run returned **rc=1 with ZERO `not ok` lines** — `mkdir: … BATS_TEST_TMPDIR: File exists`,
+  `Executed 559 instead of expected 580`. Cause: the suite was passed **twice** on one `bats`
+  command line (once from the grep-derived list, once appended by hand), and bats collided with its
+  own duplicate. The gap was exactly 21 = the suite's size. Not a red and not a pass — a
+  **non-verdict**, cleared by re-running the list with no duplicate: **559/559 executed, 0
+  failures, rc=0**. Gates: `shellcheck -S style` (the gate's own level, not `-S warning`) on all
+  three hooks, four bats lints + `bats-assert-liveness.py`, and ship-land smoke **green — 24
+  suites in 500s, full, not `partial` and not gate-killed**.
+
+  **Land verified by CONTENT in both directions with a positive control at the parent.**
+  `3a2d81bcd` on origin/main: fix symbol 1/1/2 across the three hooks, cases 19/20/21 present.
+  NEGATIVE control at parent `317b5bea3`: 0/0/0 and case20=0. POSITIVE control at the same parent:
+  pre-fix clause = 3, case 18 present, 84686 bytes readable — so the zeros are the parent's content
+  and not an instrument that cannot read it. `git diff origin/main` on all four paths: empty.
+
+  ⚠️ **THIRTEENTH landed-but-not-live instrument.** All three hooks are reached through per-file
+  symlinks into the shared checkout, which is FROZEN at `9709c99d3`; `grep` of the live
+  `~/.claude/hooks/validate-bash.sh` returns **0** for the fix. The false promise keeps printing
+  until the operator clears the freeze (remedy already filed as `f33f72da71e0` — not re-filed).
+  This diff is three EDITs + one test file, so `LIVE_ADDS`=0 and the lag budget applies normally.
+
+  ⚠️ **CORRECTION to #69's reading of `ungrouped`.** #69 recorded that `ungrouped` had held flat at
+  97 through both #68 and #69 and called two flat readings "the first evidence the sibling stream
+  may have stopped minting". It has not: `ungrouped` read 97 at this recycle's open and **98** at
+  its close, and `master-product-repos` blocked went 22 → 23, while this session filed **zero**.
+  The three newest rows are a sibling stream's (`fly-logs-loki-poller`, a `W-MEASURE` re-fire
+  duplicate, a `floor-plan L-12` follow-on). **Two flat readings were a pause, not a stop** — the
+  inflow resumed inside this very session, which is the same lesson the lag count teaches: re-derive
+  it, never quote it.
+
 - **2026-08-20 — drain recycle #69: `master-fire-gate` 42 open → 41 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: a claim about an ACTUATOR is exactly as falsifiable as a
   claim about a reader — and the ones that survive longest are the ones a DECISION made false,
