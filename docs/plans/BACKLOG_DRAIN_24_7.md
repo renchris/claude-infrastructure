@@ -87,6 +87,95 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #74: `master-fire-gate` 37 open → 36 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the producer was four-valued, its verdict was pinned by 25
+  tests, and its ONLY consumer read the exit code — so a distinction that was built, tested and
+  landed had no observer, and one of the collapsed states was killing the live dispatcher.**
+
+  **Effort choice.** Tenth consecutive recycle in `master-fire-gate`; #73 left it warm at 37 open.
+  Row `63c8215eacdc` — *"cc-dispatch mislabels a wave-overflow as QUOTA CLIFF and names the wrong
+  operator action (F1)"*. Settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`,
+  `7c6ff16259a0`, `b69b1d957cec`, and the deliberate holds `95512886c19a` / `4043ab43bf4a`).
+
+  **THE SHAPE — an enum grew at the producer and the consumer kept the old arity.** `bin/cc-wave-plan`
+  has been four-valued since S3: `capped`(4) `capacity`(4) `auth`(5) `unknown`(6), each with its own
+  operator action, each emitted as a `WALL[<verdict>]` line plus an evidenced IDL record, and all
+  four pinned by 25 discriminating tests in `tests/cc-wave-plan-verdict.bats`. `bin/cc-dispatch:1843`
+  is its **only executable consumer** (censused; `scripts/dispatch-acceptance.sh` reads the IDL, it
+  does not invoke), and it read the **exit code alone** — plus `2>/dev/null`, so the verdict line was
+  discarded before it could be read. Every rc 4 became `⛔ QUOTA CLIFF … run /limit-recover`; rc 5
+  and 6 fell into the fail-closed `die3`.
+
+  🚨 **Both halves are MEASURED, and the one the row did NOT name is the expensive one.** The row
+  named `capacity`, evidenced by `~/.claude/autonomy/idl.jsonl:77973` — the one and only quota-cliff
+  record on this box, whose own body reads `reason:"wave-overflow"`, `action:"reduce-wave-size"`,
+  with four accounts at **1-8%** of their 5-hour window: the operator paged to `/limit-recover` over
+  a nearly-empty fleet. But `docs/research/usage-telemetry-100p-2026-08-16/utilization.md` **F13**
+  records the `unknown` arm doing worse in production — `cc-dispatch: wave-plan returned non-cliff
+  rc=6 — refusing to fire blind`, `launchctl com.claude.dispatcher` **LastExitStatus 768** (= exit
+  3), with dispatcher `failed` per day going **7 · 20 · 16 · 16 · 96 · 136** over 08-11..08-16. rc 6
+  is the producer saying *"the oracle gave no answer, retry next pass"* — a **defined non-verdict**
+  that the consumer's `*)` arm converted into a config-fail and killed the pass with. Class:
+  `new-enum-member-falls-into-fail-closed-default`. **Read the row's cited research, not only its
+  title: the title named the cheaper half.**
+
+  🚨 **AND THE PLAN THAT ADDED THE STATES HAD ALREADY WRITTEN THE LESSON.**
+  `docs/plans/AUTONOMY_DISPATCH_V2.md`, entry dated 2026-07-31: *"When a state is added to a system,
+  enumerate its consumers and visit each."* The same document's own S3 change added three states and
+  never visited the one consumer. A lesson recorded in the file that violates it is not a control —
+  which is why this fix ships a **parity test** asserting the producer emits the two tokens the
+  consumer parses, so neither side can drift alone.
+
+  **What shipped** (`47e95198`). Consumer: capture the producer's stderr (the same idiom as the
+  claim/fire captures ten lines below — a subordinate's diagnosis is evidence, not noise), classify
+  on `WALL[<verdict>]`, keep the **rc as the fallback map** so a failed capture and lane v1 both
+  degrade to the contract rather than to silence. `capacity` → defer, no page · `auth` → page
+  `/relogin`, never `/limit-recover` · `unknown` → defer, no page, no failure · `capped` →
+  **unchanged, verbatim**. An rc *outside* the four defined verdicts still fails closed and loud: the
+  guard is **narrowed, not removed**, and a by-design-green-both-arms case pins that. Plus the half
+  nothing performed: `reduce-wave-size` is an ACTION, so the capacity arm now re-plans **once** at
+  the bound the producer reports, with cc-wave-plan still the arbiter. Without it a box whose
+  capacity sits below `CEILING` walls on **every** tick forever — nothing fires, so `live_workers`
+  never rises, so `free_slots` never falls, so the wave is rebuilt at the same oversized width next
+  pass. **Starvation with headroom.** Producer: the capacity wall now carries its bound on the wire
+  as a keyed `capacity=<n>` token (the prose always named the number; prose is not a contract), and
+  its message no longer ends *"— all capped"* one clause before saying *"the accounts have
+  headroom"*.
+
+  **Method notes worth carrying.**
+  · **The disposition had to be chosen against the READER, not against taste.**
+  `scripts/dispatch-acceptance.sh` **A3** fails on *any* `action:"abstained"` record since v2 began,
+  and `bin/cc-dispatch:2905` fails its own selftest on any `action:"decision"` record lacking an
+  `.id` (and 2897 pins an exact decision count). So the obvious spellings — `idl abstained` for the
+  auth wall, `idl decision` for a deferral — would each have reddened a live reader. The capacity and
+  unknown arms follow the existing at-ceiling precedent (bump `DEFERRED`, print, no new record) and
+  auth got its own unconsumed token. **Enumerate the readers of a store before writing to it.**
+  · **`bats-assert-liveness.py` earned its slot again**: five `! cmd` assertions in the suite's first
+  draft were DEAD mid-test (memory `negated-assertion-dead-unless-final`) — repaired with the
+  prescribed `|| false`, and the linter's later silence positive-controlled against an injected dead
+  assertion.
+  · 🚨 **A lint piped to `tail` reports TAIL's rc.** `test-hermeticity-lint.sh` printed `⛔ 1 new
+  non-hermetic suite` and the harness echoed `rc=0` — the vacuous-pass trap from
+  `verification-harness-vacuous-pass-traps`, met live. Re-run reading the rc directly: it was a real
+  ratchet hit (a new suite must fixture `$HOME`), now clean with **0 new leaks**.
+  · The range-scoped `bats-shellcheck-lint --range` was re-run **after** the commit and reported
+  `1 suite(s) scanned` — non-vacuous, per #73's method item 10.
+
+  **Gates.** Belt of **16 suites / 272 tests**, `plan == ok + notok` in every one, **0 red**. Both
+  embedded selftests green (cc-dispatch **168/0**, cc-wave-plan **76/0**). Red-proof: **8 of 13** new
+  cases fail on the pristine `origin/main` binary through the kept `CC_DISPATCH_UNDER_TEST` seam; the
+  other **5 are by-design green on both arms** and say so in their names.
+
+  **Premise correction inherited from the lead (pane 102), recorded so #75 does not carry the old
+  one.** #73's entry says `deploy-live.sh` was deliberately not run and stays operator-only. That was
+  superseded ~40 min later: the lead ran it (`rc=0`, *"1 live link created — brand-new tracked file
+  had no link · 2 of 2 executing resident daemons running current bytes"*). Of the 44 files the 92
+  held-back commits ADDED, exactly one was in a live-layer dir — and **an ADD gets no symlink, so it
+  is ABSENT, not stale**. The reset alone did not make it live; the converger did. Both operator-only
+  rows are now closed (`f33f72da71e0` unfreeze, `e0e8ed19ec56` compressor-sentinel OBSOLETE).
+  Re-derived independently at this open: live HEAD `4369cae88`, **5** behind trunk — the ordinary
+  landed-not-yet-live case, well inside the converge budget (25).
+
 - **2026-08-20 — drain recycle #73: `master-fire-gate` 38 open → 37 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: the empty string was naming two different facts, and the
   message built on it told an operator to `--terminal` — to declare that nothing continues the
