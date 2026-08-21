@@ -87,6 +87,120 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #103: stayed in `master-convergence-deadlock` (as #102 opened it).
+  closed 2 / filed 0.** ONE commit, TWO files (`tests/test-hermeticity-lint.bats`, this SSOT).
+  Row **`d0afa40677ef`** — *two host suites RED on a STALE SPELLING* — **CLOSED by a cure that had
+  already landed and never cited it**. Row **`79e7ef3ca862`** — *deploy-live host check RED:
+  test-hermeticity-lint.bats #19 CHOKEPOINT* — **CLOSED by a landed cure written this turn**,
+  4-cell red-proofed with the regression's birth dated to one commit.
+
+  🚨 **THE GENERALISABLE FINDING — `grep -m1` TURNS AN ANCHOR INTO A LOTTERY, AND THE WINNER
+  CHANGES WHEN SOMEONE ELSE IMPROVES THE FILE.** Both rows are the same defect class arriving by
+  two different routes, and the second route is the one nothing in the repo was guarding. Route A
+  (`d0afa40677ef`): the SUBJECT was re-spelled — `CC_HERM_OWN="$own"` became
+  `own_run HERM CC_HERM_OWN "$own"` — so the anchor's needle stopped matching anything. Route B
+  (`79e7ef3ca862`): **the subject never moved at all.** The needle
+  `grep -m1 'git diff --name-only "$range" --'` identified the HERM own-set only for as long as no
+  EARLIER line in `ship-land.sh` matched it. `60b395923` added `lint_own_scope()` — a helper that
+  derives the pathspec from the lint's own `--print-scope`, i.e. a STRENGTHENING of exactly the
+  contract the anchor pins — and its `git diff --name-only "$range" -- "${spec[@]}"` sits ~180
+  lines above. `-m1` silently retargeted all three pins onto a line that can never hold a literal
+  pathspec. **Generalise: a first-match anchor encodes a claim it never states — "no other line
+  matches" — and that claim is invalidated by edits ANYWHERE ABOVE it, including edits that improve
+  the very thing being pinned. Re-pointing the needle is half a fix; PIN THE MATCH COUNT, or the
+  next collision retargets it just as silently.** That is what the cure does, and Mutant B below
+  is what attributes the assertion to it.
+
+  1. **ROUTE A — `d0afa40677ef`, cured 7h46m after it was filed, by a commit that never named it.**
+     `42ebfd74c` (**2026-08-11T17:41:33Z**, on `origin/main`) vs the row's `firstTs`
+     **2026-08-11T09:55:01Z** — both normalised to UTC from `%ct`, with a positive control on the
+     conversion (`epoch 0 → 1970-01-01T00:00:00Z`). It re-anchored the two named suites on
+     `own_run HERM CC_HERM_OWN` / `own_run WALL CC_WALLTIME_OWN`, which is one of the two fixes the
+     row itself prescribed. `git show -s | grep -c d0afa40677ef` = **0** — nothing connected the
+     cure to the row, so it sat open ten days.
+  2. **ROUTE A RED-PROOF, both directions, `git archive` scratch tree at parent `07aa4a16c`.**
+     Non-vacuous by method 30 — the parent carries the **PRIOR SHAPE**, printed: `CC_HERM_OWN=`
+     anchors **8**, `CC_WALLTIME_OWN=` anchors **3**, `own_run` anchors **0**; and its
+     `ship-land.sh` already held **14** `own_run` calls with **0** inline `CC_HERM_OWN=` — the
+     subject had moved, the tests had not, exactly as the row diagnosed. PRE: hermeticity `1..53`
+     ok=52 notok=1 (`not ok 17`), walltime `1..14` ok=13 notok=1 (`not ok 13`) — the two named
+     anchors are the ONLY reds, matching the cure commit's own "17/53, 13/14". POST at HEAD, run
+     **by name** for attribution: `ok 1 own-scope: ship-land passes its OWN diff…` rc 0 and
+     `ok 1 ship-land runs it, own-scoped, with a kill switch` rc 0.
+  3. **NO RESIDUAL ON ROUTE A, MEASURED RATHER THAN ASSUMED.** Census of all **15** `own_run` arms
+     in `ship-land.sh` against every suite: tests still greping `ship-land.sh` for a
+     `CC_*_OWN=` ASSIGNMENT spelling = **0**. ⚠️ A raw `grep -c 'CC_HERM_OWN='` on that suite reads
+     **12** and looks like twelve survivors — all twelve are ordinary env-var *use* in test
+     invocations (`CC_HERM_OWN="tests/…" run bash "$LINT"`); the stale-anchor count is the subset
+     that also names `ship-land.sh` on the line, which is 0. The row's own "better fix"
+     (assert the BEHAVIOUR) also needs nothing: the behavioural pins already exist beside it —
+     hermeticity `:291 :298 :316 :322 :328` plus `tests/gate-ownscope-leak.bats` (17 tests).
+  4. **ROUTE B — the red the Route-A run exposed was NOT Route A's, and it has its own row.**
+     POST at HEAD, hermeticity was `1..68` ok=67 notok=1: `not ok 19 CHOKEPOINT: ship-land's
+     own-set covers every population the lint judges, incl. rule 4's`. That is `79e7ef3ca862`
+     verbatim (`firstTs` **2026-08-18T03:53:30Z**) — a separate defect filed a week AFTER Route A's
+     cure. It was not laundered into Route A's close and it was not left for the next recycle
+     either, because the reproduction was already in hand.
+  5. 🚨 **ROUTE B — THE SUBJECT IS CORRECT AND THE GATE IS HEALTHY; ONLY THE ANCHOR BROKE.**
+     `ship-land.sh:2418` still reads `own="$(git diff --name-only "$range" -- 'tests/*.bats'
+     'bin/*' 'scripts/*.sh' 'hooks/*.sh' …)"` — all three populations rule 4 walks are there. The
+     red is the test's, not the tree's. Printing every line matching the old needle makes it
+     unmistakable: **14** matches, and `-m1` returns line **2241** (`lint_own_scope`'s
+     `"${spec[@]}"` form, `bin=0 scripts=0 hooks=0`) rather than 2418 (`bin=1 scripts=1 hooks=1`).
+     Reading the test's failure as "ship-land's own-set lost `bin/*`" would have widened a pathspec
+     that was never narrowed — the wrong fix, on a live gate.
+  6. **ROUTE B CURE.** Anchor on the HERM arm's own assignment — `^ *own="\$(git diff --name-only
+     "\$range" --`, whose match count in `ship-land.sh` is **1** — and **assert that count is 1**
+     before reading it. The count is the load-bearing half: a bare re-point fails the same way, and
+     as silently, the next time any line collides. An ambiguous needle now fails LOUD, naming the
+     ambiguity (`needle no longer identifies the HERM arm: matched N lines, expected 1`).
+  7. **ROUTE B RED-PROOF, 4 cells, scratch trees via `git archive`, and the regression DATED to one
+     commit.** Birth: old-form test **GREEN at `40696cd2f`** (`ok 1`, rc 0) and **RED at
+     `60b395923`** (`not ok 1`, rc 1, failing at the `'bin/*'` pin) — one commit, 2026-08-17T08:21:08Z,
+     ~19.5 h before the row was filed. Prior shape printed (method 30): parent carries the OLD
+     `-m1` needle (**1**) and **0** of the new count-pin; earlier-generic-match lines in
+     `ship-land.sh` go **0 → 1** across that commit, which IS the mechanism. Then, against the
+     current tree: **CONTROL** real tree + new form → `ok 1`, rc 0 · **MUTANT A** (drop `'bin/*'`
+     from the HERM arm) → `not ok 1` at the pathspec pin, rc 1 — the original contract is still
+     guarded, so the cure was not "make it pass" · **MUTANT B** (a SECOND colliding needle line) →
+     `not ok 1` at the NEW count pin with its own message, rc 1. Per method 27, Mutant B is the
+     **per-site mutant** that attributes the new assertion to the new site rather than letting it
+     restate Mutant A.
+  8. **GATES, run this turn on the committed bytes.** `tests/test-hermeticity-lint.bats` plan
+     `1..68`, ok=68, notok=0, skip=0, **sum=68 = plan**, rc 0 — the suite is now whole-file green,
+     which it had not been since 2026-08-17. `bats-shellcheck-lint` **`--range origin/main...HEAD`
+     re-run POST-commit** (method 9 — a range-scoped lint run before the commit exists passes
+     vacuously): **2 files in range**, rc **0**, "clean — 1 suite(s) scanned, 0 blocking finding(s),
+     0 unanalyzable", 71 pre-existing findings reported-not-blocking. ⚠️ The same lint in **FILE**
+     mode returns **rc 1** on this suite and that is NOT a verdict on this change — it is the
+     unscoped census those 71 findings belong to, attributed to nobody (the constraint's own
+     warning; the tool prints "For a verdict on YOUR change instead, scope it to a range").
+     `bats-kill-guard-lint` (FILE) rc 0 · `bats-testname-eval-lint` (DIR `tests`) rc 0 ·
+     `test-hermeticity-lint` (DIR `tests`) rc 0 · `bats-shim-parity-lint` (NO ARG) NOT-ACTIVE, the
+     healthy default. `bats-assert-liveness.py` silent — and **positive-controlled**: an injected
+     `! false` on a scratch copy is flagged `DEAD`, rc 1, so the silence is a verdict and not a
+     blind instrument.
+  9. **WRONG CAUSES REJECTED.** (a) *"`d0afa40677ef` names suites that are still red, so the row is
+     still live"* — the red at HEAD is a DIFFERENT test with a DIFFERENT open row; closing on the
+     file's colour rather than the named tests would have kept a cured row open forever, and
+     running the two named tests **by name** is what separates them. (b) *"`grep -c 'CC_HERM_OWN='`
+     returns 12, so the stale anchors survive"* — twelve ordinary env uses; a needle that does not
+     include the subject file cannot count anchors (method 44's cousin). (c) *"test 19 is red ⇒
+     ship-land's own-set lost `bin/*`, widen the pathspec"* — the pathspec is intact; the fix would
+     have edited a healthy live gate on a false reading. (d) *"re-point the needle at line 2418's
+     spelling and stop"* — that is Route A's fix applied to Route B, and it leaves the unstated
+     "no other line matches" claim unguarded, which is the whole mechanism; hence the count pin.
+     (e) *"`60b395923` introduced a regression, so revert or blame it"* — it strictly strengthened
+     the gate (deriving the pathspec from the lint's own `--print-scope` instead of restating it);
+     the anchor was the fragile party, and the fix belongs in the test.
+  10. **DUPLICATE CHECK RUN ACROSS ALL CONDITIONS (method 14), before either close.** Phrase-search
+      of the WHOLE store for `own_run` / `CC_HERM_OWN` / `CC_WALLTIME_OWN` / "stale spelling"
+      returns 3 rows — 2 `done`, and the only open one was `d0afa40677ef` itself. Searching
+      `test-hermeticity-lint|test-walltime-lint` returns 36 rows, of which 5 are open: the two
+      closed here, plus `7c05d45796d8` (CLAUDE_CONFIG_DIR seam), `b2775a8bbc3a` (rule-1/rule-5
+      blind spot) and `09b19c40ad70` (prelint bound vs load) — all different subjects, none
+      touched. Filed **0**: every residual this session could name was measured to be empty.
+
 - **2026-08-21 — drain recycle #102: LEFT `master-fire-gate` (all ten rows gated, per #101) and
   opened `master-convergence-deadlock` — 55 open / 4 blocked, untouched since #87. closed 1 /
   filed 1.** ONE commit, THREE files (`scripts/land-lock.sh`, `tests/land-lock.bats`, this SSOT).

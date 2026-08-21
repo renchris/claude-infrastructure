@@ -353,7 +353,23 @@ skip_if_selftest_nonverdict() {
   # selftest to bin/ produced an own-set without it, the lint said `collides?` — advisory — and the
   # land went through. The rule would have been detection, never a gate. These three pins are the
   # regression cover for that, one per directory rule 4 walks.
-  local spec; spec="$(grep -m1 'git diff --name-only "\$range" --' "$REPO/scripts/ship-land.sh")"
+  #
+  # THE NEEDLE MUST IDENTIFY THE HERM ARM, AND `grep -m1` DOES NOT (2026-08-21, backlog
+  # 79e7ef3ca862). This used to grep the first line matching `git diff --name-only "$range" --`,
+  # which was the HERM own-set only for as long as no EARLIER line matched. 60b395923 added
+  # lint_own_scope() — a helper that derives the pathspec from the lint's own --print-scope, which
+  # is a STRENGTHENING — and its `git diff --name-only "$range" -- "${spec[@]}"` sits ~180 lines
+  # above. `-m1` then silently retargeted the three pins onto a line that can never hold a literal
+  # pathspec, so the anchor went red over a change that did not touch the contract it pins. The
+  # subject was correct throughout; only the needle stopped naming it.
+  #
+  # So anchor on the HERM arm's OWN assignment (`own="$(git diff …`), and assert the needle matches
+  # EXACTLY ONE line. The count is the load-bearing half: a bare re-point would fail the same way
+  # the next time a sibling arm is spelled to collide, and it would fail SILENTLY again. With the
+  # count pinned, an ambiguous needle is a LOUD failure naming the ambiguity, never a retarget.
+  local n; n="$(grep -c '^ *own="\$(git diff --name-only "\$range" --' "$REPO/scripts/ship-land.sh" || true)"
+  [[ "$n" -eq 1 ]] || { echo "needle no longer identifies the HERM arm: matched $n lines, expected 1"; false; }
+  local spec; spec="$(grep '^ *own="\$(git diff --name-only "\$range" --' "$REPO/scripts/ship-land.sh")"
   [[ "$spec" == *"'bin/*'"* ]] || false
   [[ "$spec" == *"'scripts/*.sh'"* ]] || false
   [[ "$spec" == *"'hooks/*.sh'"* ]] || false
