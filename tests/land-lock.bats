@@ -382,3 +382,124 @@ RUN
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# ── {pid,lstart} IDENTITY IS LOCALE- AND TZ-PINNED (the C31/C33 class) ──────────────────────────
+# `ps -o lstart=` renders through LC_TIME and TZ, so the SAME live pid reads as two different
+# strings to two different readers, and an unequal string means "pid recycled ⇒ reap" — on the
+# LANDING mutex. Every case below drives a STUBBED `ps`, never /bin/ps: the real binary shows the
+# skew only on a non-C-locale box, so a real-ps test silently no-ops on a C-locale machine and
+# certifies nothing. The stub is the whole instrument, so the fixtures are written THROUGH it.
+stub_locale_ps() { # <mode: skew|blind|stranger> — install a $PATH `ps` emulating the hazard
+  STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
+  cat > "$STUB/ps" <<PS
+#!/bin/bash
+q=
+for a in "\$@"; do [ "\$a" = "lstart=" ] && q=1; done
+[ -n "\$q" ] || exec /bin/ps "\$@"          # every other ps query (ppid=, …) is the real one
+case "$1" in
+  blind)    exit 0 ;;                        # the instrument cannot be read at all
+  stranger) printf 'Thu Jan  1 00:00:00 2020    \n' ;;   # a genuinely different start instant,
+                                             # rendered identically in BOTH locales
+  *) if [ "\${LC_ALL:-}" = "C" ]; then printf 'Fri Aug 21 13:45:22 2026    \n'
+     else                              printf 'Fri 21 Aug 06:45:22 2026    \n'; fi ;;
+esac
+PS
+  chmod +x "$STUB/ps"
+}
+
+@test "C31: a LIVE holder recorded in a DIFFERENT locale is NEVER reaped (H2 over the land mutex)" {
+  # The bug: a holder records `Fri Aug 21 …` (C — launchd, or any of the 5 scripts that
+  # `export LC_ALL=C`); a session reads `Fri 21 Aug …`; the strings differ; the reader concludes
+  # the pid was recycled by a stranger, reaps the LANDING mutex, and two lands run at once — the
+  # rebase-drop incident .claude/CLAUDE.md opens with.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  stub_locale_ps skew
+  # The record is written THROUGH the stub, so the fixture cannot drift from the instrument.
+  LC_ALL=C "$STUB/ps" -o lstart= -p "$live" > "$LOCK/lstart"
+  [ -s "$LOCK/lstart" ]                                    # armed, not silently empty
+  # …and read back by a session-shaped environment, which renders the same instant day-first.
+  # UNSET rather than set-empty: `LC_ALL= cmd` is SC1007 and the gate is right to call it a typo.
+  run env -u LC_ALL -u LC_TIME LANG=en_CA.UTF-8 PATH="$STUB:$PATH" \
+      LAND_LOCK_TTL=0 LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 75 ]                                     # queued behind the live holder
+  [ "$(cat "$LOCK/pid")" = "$live" ]                       # …and did NOT steal the lock
+  kill "$live" 2>/dev/null || true
+}
+
+@test "C33: an UNREADABLE lstart instrument does not convict a LIVE holder, at ANY age" {
+  # `ps` returning nothing for a pid `kill -0` has just proved alive is a FAILED PROBE, not a
+  # stranger. Pre-fix the empty reading fell through `rec != cur` straight into the reap branch, so
+  # the one condition under which NOTHING is known was the one that produced two live landers.
+  # H2 DIVERGES from postland-verify's twin here deliberately: that one bounds the honour by TTL,
+  # this one never reaps a live holder at any age — a wedged land costs a wait, a dropped commit
+  # costs the commit. lock_alarm_rows is what reaches a human instead (asserted below).
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  printf 'Fri Aug 21 13:45:22 2026\n' > "$LOCK/lstart"
+  stub_locale_ps blind
+  run env PATH="$STUB:$PATH" LAND_LOCK_TTL=0 LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 75 ]
+  [ "$(cat "$LOCK/pid")" = "$live" ]
+  kill "$live" 2>/dev/null || true
+}
+
+@test "C31: --alarms can still SEE a cross-locale live holder (the page is not silenced)" {
+  # The second consumer, and the one whose failure is silent: lock_alarm_rows does
+  # `holder_live "$d" || continue`, so a holder misjudged as not-live is SKIPPED — the over-budget
+  # page that is H2's other half never fires, and the wedge reaches nobody.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  stub_locale_ps skew
+  LC_ALL=C "$STUB/ps" -o lstart= -p "$live" > "$LOCK/lstart"
+  touch -t 202001010000 "$LOCK"                            # past budget
+  run env -u LC_ALL -u LC_TIME LANG=en_CA.UTF-8 PATH="$STUB:$PATH" \
+      LAND_LOCK_SCAN="$LAND_LOCK_DIR" bash "$LL" --alarms
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '"kind":"land-lock-hung"'
+  # H2 UNWEAKENED, asserted rather than assumed: paging must not have become reaping.
+  [ "$(cat "$LOCK/pid")" = "$live" ]
+  kill "$live" 2>/dev/null || true
+}
+
+@test "C31 control: a GENUINE stranger is still reaped — the fix left survivors" {
+  # DISCRIMINATING arm, green on BOTH sides of the fix by design. Its job is not to red: it is to
+  # prove the cure was not "honour everything", which is the way this class is usually over-fixed.
+  # The stub renders a different start INSTANT identically in both locales, so the mismatch is real
+  # and neither the canonical compare nor the ambient fallback can launder it.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  stub_locale_ps stranger
+  printf '%s\n' "$SENTINEL_LSTART" > /dev/null              # the sentinel's shape, rendered by the stub
+  printf 'Fri Aug 21 13:45:22 2026\n' > "$LOCK/lstart"      # ≠ what the stub reports for this pid
+  marker="$BATS_TEST_TMPDIR/stranger-ran"
+  run env PATH="$STUB:$PATH" LAND_LOCK_TTL=0 LAND_LOCK_WAIT=1 bash "$LL" -- bash -c "touch '$marker'"
+  [ "$status" -eq 0 ]                                       # reaped and acquired
+  [ -f "$marker" ]
+  [ "$(cat "$LOCK/pid")" != "$live" ]
+  kill "$live" 2>/dev/null || true
+}
+
+@test "C31 migration: a PRE-FIX record (ambient rendering) is honoured by the canonical reader" {
+  # Load-bearing, not defensive. A lock already on disk carries the OLD ambient rendering, which
+  # does NOT equal the new canonical one (measured on this box: `Fri 21 Aug 06:46:23 2026` vs
+  # `Fri Aug 21 13:46:23 2026`). A canonical-ONLY reader would reap exactly one live holder on the
+  # way in — the fix committing the bug it removes. Deleting the ambient fallback in
+  # lstart_matches turns THIS case red while every other case above stays green, which is what
+  # makes it a per-site assertion rather than a restatement of the locale case.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  stub_locale_ps skew
+  env -u LC_ALL "$STUB/ps" -o lstart= -p "$live" > "$LOCK/lstart"   # the PRE-FIX writer's dialect
+  grep -q 'Fri 21 Aug' "$LOCK/lstart"                       # the fixture really is the old shape
+  run env -u LC_ALL -u LC_TIME LANG=en_CA.UTF-8 PATH="$STUB:$PATH" \
+      LAND_LOCK_TTL=0 LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 75 ]
+  [ "$(cat "$LOCK/pid")" = "$live" ]
+  kill "$live" 2>/dev/null || true
+}

@@ -81,22 +81,71 @@ WAITERS="${LOCK_PARENT}/waiters"    # one file per QUEUED acquirer — the visib
 #      ship-land's `"$LAND_LOCK" -- "$SELF" __locked …` included — is untouched.
 # All verbs are PURE READS and run before any mkdir, so introspection never litters /tmp and never
 # takes the lock.
+# ── {pid,lstart} IDENTITY — ONE DIALECT, PINNED (the C31/C33 class) ──────────────────────────────
+# `ps -o lstart=` renders through LC_TIME **and** TZ, so THE SAME LIVE PID reads as two different
+# strings depending on who is looking. Measured on this box 2026-08-21, same pid, same instant:
+#     LANG=en_CA.UTF-8 (every session — 17/17 live `claude` procs) → `Fri 21 Aug 06:45:22 2026    `
+#     LC_ALL=C         (launchd has no LANG; 5 of our own scripts `export LC_ALL=C`)
+#                                                                 → `Fri Aug 21 06:45:22 2026    `
+#     TZ=UTC                                                      → the hour moves by 7
+# Compared as strings, an UNEQUAL reading means "pid REUSED by a stranger ⇒ holder DEAD ⇒ reap", so
+# a cross-locale reader reaps the LANDING MUTEX out from under a live holder and two lands run at
+# once — the rebase-drop incident .claude/CLAUDE.md opens with. Three separate hazards, one fix:
+#
+#   1. RENDERING — pin TZ *and* LC_ALL on every reading (LC_ALL, not LC_TIME: LC_ALL outranks every
+#      other locale variable, so one pin cannot be defeated by an LC_TIME the caller also set).
+#      TZ is pinned too, which the C31 shape did not: it is a second, independent axis of the same
+#      bug (memory: process-start-time-renders-in-ambient-timezone), and scripts/lib/cc-common.sh
+#      already pins both here for the same reason.
+#   2. PADDING — `ps` pads to a fixed column width. A difference in trailing blanks is not a
+#      difference in identity, and comparing untrimmed strings re-introduces this class the next
+#      time a ps changes its padding. Trim on WRITE and on READ.
+#   3. THE UNREADABLE INSTRUMENT — `ps` returning nothing for a pid `kill -0` has just proved alive
+#      is a FAILED PROBE, not a stranger. Pre-fix that empty string fell straight through the
+#      `rec != cur` comparison into the reap branch, so the one condition under which NOTHING is
+#      known was the condition that produced two live landers. It is now honoured, per H2 below.
+#
+# MIGRATION, and it is load-bearing rather than defensive: a lock already on disk carries the OLD
+# ambient rendering, which does NOT equal the new canonical one (measured: `Fri 21 Aug 06:46:23
+# 2026` vs `Fri Aug 21 13:46:23 2026`). A canonical-only reader would therefore reap exactly one
+# live holder on the way in — this fix committing the bug it removes. So a record that fails the
+# canonical compare is re-checked against the AMBIENT rendering before it is called a mismatch.
+# That fallback cannot launder a genuinely recycled pid: both readings are of the SAME pid taken at
+# the SAME moment, so no rendering of a *different* start instant can equal the record.
+#
+# Net direction, asserted by the tests below and never merely claimed: this path can only ever reap
+# FEWER locks than before. H2 is strictly strengthened.
+proc_lstart() {   # <pid> → that pid's start time rendered CANONICALLY and trimmed; "" = unreadable
+  TZ=UTC LC_ALL=C ps -o lstart= -p "${1:-$$}" 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
+lstart_matches() { # <recorded> <pid> → 0 iff <recorded> is NOT evidence that <pid> is a stranger.
+                   # Returns 0 (honour) for every unusable reading; 1 ONLY on a proven mismatch.
+  local rec cur
+  rec="$(printf '%s' "${1:-}" | sed 's/^ *//;s/ *$//')"
+  [[ -n "${rec}" ]] || return 0                     # nothing recorded — caller's compat rule owns it
+  cur="$(proc_lstart "${2:-}")"
+  [[ -n "${cur}" ]] || return 0                     # hazard 3: unreadable instrument ⇒ NOT a mismatch
+  [[ "${rec}" = "${cur}" ]] && return 0
+  cur="$(ps -o lstart= -p "${2:-}" 2>/dev/null | sed 's/^ *//;s/ *$//')"   # migration: pre-fix record
+  [[ -n "${cur}" && "${rec}" = "${cur}" ]] && return 0
+  return 1                                          # proven stranger → the caller may reap
+}
+
 holder_live() {   # $1=lock.d → 0 iff its recorded holder is a LIVE process whose lstart MATCHES.
                   # Same pid+lstart rule as lock_is_stale, in the same dialect, for the same reason.
-  local d="$1" pid rec cur
+  local d="$1" pid rec
   pid="$(cat "${d}/pid" 2>/dev/null || true)"
   case "${pid:-}" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "${pid}" 2>/dev/null || return 1
   rec="$(cat "${d}/lstart" 2>/dev/null || true)"
-  cur="$(ps -o lstart= -p "${pid}" 2>/dev/null || true)"
-  [[ -n "${rec}" && "${rec}" != "${cur}" ]] && return 1
+  lstart_matches "${rec}" "${pid}" || return 1
   return 0
 }
 
 waiters_live() {  # $1=lock parent → one "<pid> <waited_s> <branch>" line per LIVE waiter.
                   # PRUNES as it reads: a waiter SIGKILLed mid-queue runs no trap and leaves its
                   # file behind, so the registry is self-healing rather than monotonically growing.
-  local wd="$1/waiters" f pid rec cur ts now
+  local wd="$1/waiters" f pid rec ts now
   [[ -d "${wd}" ]] || return 0
   now="$(date +%s)"
   for f in "${wd}"/*; do
@@ -104,8 +153,10 @@ waiters_live() {  # $1=lock parent → one "<pid> <waited_s> <branch>" line per 
     pid="${f##*/}"
     case "${pid}" in ''|*[!0-9]*) rm -f "${f}" 2>/dev/null; continue ;; esac
     rec="$(sed -n 's/^lstart=//p' "${f}" 2>/dev/null | sed -n 1p)"
-    cur="$(ps -o lstart= -p "${pid}" 2>/dev/null || true)"
-    if ! kill -0 "${pid}" 2>/dev/null || [[ -z "${cur}" ]] || { [[ -n "${rec}" ]] && [[ "${rec}" != "${cur}" ]]; }; then
+    # Same dialect as holder_live/lock_is_stale — ONE identity rule for the whole file. The old
+    # `[[ -z "$cur" ]]` prune is GONE: an unreadable `ps` deleted a LIVE waiter's registration, so
+    # an instrument failure silently shrank the very queue depth --status exists to publish.
+    if ! kill -0 "${pid}" 2>/dev/null || ! lstart_matches "${rec}" "${pid}"; then
       rm -f "${f}" 2>/dev/null; continue
     fi
     ts="$(sed -n 's/^since=//p' "${f}" 2>/dev/null | sed -n 1p)"
@@ -217,7 +268,7 @@ logline() {  # $1=event $2=wait_s $3=hold_s $4=exit [$5=queue depth]
 waiter_register() {
   mkdir -p "${WAITERS}" 2>/dev/null || return 0
   {
-    printf 'lstart=%s\n' "$(ps -o lstart= -p "$$" 2>/dev/null || true)"
+    printf 'lstart=%s\n' "$(proc_lstart "$$")"
     printf 'since=%s\n'  "$(date +%s)"
     printf 'branch=%s\n' "${BRANCH}"
   } > "${WAITERS}/$$" 2>/dev/null || true
@@ -235,7 +286,8 @@ write_owner() {
   printf '%s\n' "$$" > "${LOCK}/pid"
   # Record OUR start-time next to the pid so a later acquirer can distinguish a live holder
   # from a DEAD holder whose pid the OS has recycled to a new process (see try_acquire).
-  ps -o lstart= -p "$$" 2>/dev/null > "${LOCK}/lstart" || true
+  # Rendered through the ONE chokepoint, so the writer and every reader speak one dialect.
+  proc_lstart "$$" > "${LOCK}/lstart" 2>/dev/null || true
   printf '%s\n' "${BRANCH}" > "${LOCK}/branch" 2>/dev/null || true
 }
 
@@ -248,7 +300,7 @@ write_owner() {
 # authorised the reap (memory: actuator-is-the-arbiter — never re-implement a gate's predicate
 # outside it).
 lock_is_stale() {  # 0 = reapable · 1 = live, hold off
-  local holder age rec_lstart cur_lstart
+  local holder age rec_lstart
   holder="$(cat "${LOCK}/pid" 2>/dev/null || true)"
   age="$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || echo 0) ))"
   if [[ -z "${holder}" ]]; then
@@ -262,9 +314,15 @@ lock_is_stale() {  # 0 = reapable · 1 = live, hold off
     # 2026-07-25). Verify identity by start-time: a recycled pid belongs to a different
     # process with a different lstart → the original holder is dead → reap. pid+lstart rule
     # (memory: periodic-job-self-overlap — kill -0 alone is insufficient under pid reuse).
+    # The comparison goes through lstart_matches, so a locale/TZ/padding difference and an
+    # unreadable `ps` can no longer masquerade as a recycled pid. H2 DIVERGES here from
+    # postland-verify.sh's twin ON PURPOSE and that divergence is this file's documented policy,
+    # not an oversight: postland bounds its unverifiable-holder honour by TTL, because two live
+    # verifiers are cheap; here a live holder is NEVER reaped at any age, because two live LANDERS
+    # rebase-drop a commit. The unverifiable holder is not left unattended either — once it is past
+    # budget, lock_alarm_rows pages a human, which is the OTHER half of H2.
     rec_lstart="$(cat "${LOCK}/lstart" 2>/dev/null || true)"
-    cur_lstart="$(ps -o lstart= -p "${holder}" 2>/dev/null || true)"
-    [[ -n "${rec_lstart}" && "${rec_lstart}" != "${cur_lstart}" ]] && return 0   # pid REUSED → holder DEAD
+    lstart_matches "${rec_lstart}" "${holder}" || return 0   # pid REUSED by a stranger → holder DEAD
     return 1                                         # same live process → H2: NEVER stale
   fi
   return 0                                           # holder pid DEAD → reap immediately

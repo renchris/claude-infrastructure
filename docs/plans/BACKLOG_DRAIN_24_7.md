@@ -87,6 +87,105 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #102: LEFT `master-fire-gate` (all ten rows gated, per #101) and
+  opened `master-convergence-deadlock` — 55 open / 4 blocked, untouched since #87. closed 1 /
+  filed 1.** ONE commit, THREE files (`scripts/land-lock.sh`, `tests/land-lock.bats`, this SSOT).
+  Row **`77dfaa5a3cfe`** — *land-lock.sh has the SAME locale-skewed {pid,lstart} identity bug C31
+  fixed in postland-verify* — **CLOSED by a landed cure**, red-proofed against parent `fc1e0674b`.
+
+  🚨 **THE GENERALISABLE FINDING — THE MIGRATION STEP OF A CANONICALISING FIX *IS* THE BUG IT
+  REMOVES, FIRED ONCE, AND ONLY A MEASUREMENT FINDS IT.** The row's whole remedy is "render the
+  identity string canonically at both ends". Applied literally that is a one-line change — and it
+  would have reaped exactly one LIVE holder of the landing mutex on the way in, because every lock
+  already on disk carries the OLD ambient rendering and a canonical-only reader calls that a
+  stranger. Measured on this box before writing a line of the fix: an ambient record reads
+  `Fri 21 Aug 06:46:23 2026`, the canonical reading of *the same pid at the same instant* reads
+  `Fri Aug 21 13:46:23 2026` — **unequal, which in this file means "pid recycled ⇒ reap the mutex"**.
+  So the cure needs a second leg the row never mentions: a record that fails the canonical compare
+  is re-checked against the ambient rendering before it is called a mismatch. That leg cannot
+  launder a real stranger — both readings are of the SAME pid at the SAME moment, so no rendering
+  of a *different* start instant can equal the record — and it is pinned by its own test with its
+  own mutant (below). **Generalise: whenever a fix changes the ENCODING of state that already
+  exists on disk, ask what the new reader does with the old bytes, and measure it rather than
+  reason about it.**
+
+  1. 🚨 **MECHANISM REAL, 3 AXES, MEASURED WITH CONTROLS.** Same pid, same instant:
+     `LANG=en_CA.UTF-8` (every session — **17/17** live `claude` procs carry it) →
+     `Fri 21 Aug 06:45:22 2026`; `LC_ALL=C` (launchd has no LANG; **5** of our own scripts
+     `export LC_ALL=C` — `gate-manifest.sh`, `cc-gc.sh`, `git-identity-assert.sh`,
+     `browser-spin-guard.sh`, `bin/cc-memory-rotate`) → `Fri Aug 21 06:45:22 2026`; `TZ=UTC` moves
+     the hour by 7. Positive control: the same locale read twice MATCHES, so the instrument is
+     stable. Negative control on the env census: a var no process carries reads 0/17.
+  2. 🚨 **BUT THE ROW'S OWN HARM FRAMING — "a lock recorded by a launchd daemon" — HAS AN EMPTY LIVE
+     POPULATION, AND THAT DOES NOT EXONERATE THE ROW.** **0** LaunchAgents plists invoke
+     `land-lock.sh` or `ship-land.sh`; its only invokers (`ship-land.sh`, `desk-land.sh`) run from
+     sessions, all of which carry the same `LANG`; and the five `export LC_ALL=C` scripts are
+     *exec'd*, never sourced into the land path, so none leaks. The locale half is therefore
+     **latent** here. What is **not** latent is the second half the row names in its own fix
+     sentence: an EMPTY reading — `ps` failing for a pid `kill -0` has just proved alive — fell
+     straight through `rec != cur` into the reap branch. That has no locale precondition at all.
+     **Two halves of one row, and only one of them had a population; report both.**
+  3. **THE CURE, at all five sites in the subject file.** ONE chokepoint pair — `proc_lstart()`
+     (`TZ=UTC LC_ALL=C ps -o lstart=` + trim) and `lstart_matches()` (canonical compare → ambient
+     fallback → honour on any unusable reading; rc 1 ONLY on a proven mismatch) — used by
+     `holder_live`, `waiters_live`, `write_owner`, `waiter_register` and the correctness core
+     `lock_is_stale`. `waiters_live`'s `[[ -z "$cur" ]]` prune is deleted: an unreadable `ps` was
+     silently shrinking the very queue depth `--status` exists to publish. **This path can only
+     ever reap FEWER locks than before — H2 is strictly strengthened, never weakened.**
+  4. 🚨 **THE SUBJECT'S OWN POLICY OUTRANKED THE ROW'S PRESCRIPTION (method 6, again).** The row
+     says "honour, **TTL-bounded**", copied from the twin. land-lock's H2 forbids reaping a LIVE
+     holder *at any age*, on purpose and in writing: two live verifiers are cheap, two live LANDERS
+     rebase-drop a commit. So the TTL clause was NOT applied, and the divergence is now documented
+     at the branch. The unverifiable holder is not left unattended either — `lock_alarm_rows` pages
+     a human once it is past budget, which is H2's other half, and **that page was itself silenced
+     by this bug** (`holder_live "$d" || continue`): a misjudged holder was SKIPPED, so the wedge
+     reached nobody. That second consumer has its own test.
+  5. **RED-PROOF, 4 cells, in a `git archive` scratch tree at parent `fc1e0674b`.** Non-vacuous by
+     method 29 — the parent carries the **PRIOR SHAPE**, printed: unguarded direct-compare sites
+     `holder_live=2 · lock_is_stale=1 · write_owner=1`, and the new-shape needles `proc_lstart=0 ·
+     `lstart_matches=0`. PRE-fix `1..5` → `not ok 1,2,3`, `ok 4,5`, rc 1. POST-fix `1..5` → 5/5 ok,
+     rc 0. Every case drives a **PATH-stubbed `ps`**, never `/bin/ps`, exactly as the row demands:
+     the real binary shows the skew only on a non-C-locale box, so a real-ps test silently no-ops
+     and certifies nothing. The fixtures are written THROUGH the stub, so they cannot drift from
+     the instrument.
+  6. **THE TWO GREEN-ON-BOTH-SIDES ARMS ARE CONTROLS, AND ARE LABELLED AS SUCH RATHER THAN COUNTED
+     AS EVIDENCE.** `ok 4` (a genuine stranger is STILL reaped) is the discriminating arm that
+     proves the cure was not "honour everything" — the way this class is usually over-fixed.
+     `ok 5` (the migration case) is pinned by a **per-site mutant**: deleting only the ambient
+     fallback from `lstart_matches` turns test 5 RED while 1–4 stay green, so the assertion is
+     attributed to that one site and is not a restatement of the locale case.
+  7. **GATES, run this turn on the committed bytes.** `tests/land-lock.bats` **plan `1..25`,
+     ok=25, notok=0, skip=0, sum=25 = plan**, rc 0. `shellcheck -S style scripts/land-lock.sh` rc 0.
+     `bats-shellcheck-lint` (FILE) rc 0, 1 suite scanned · `bats-kill-guard-lint` (FILE) rc 0 ·
+     `bats-testname-eval-lint` (DIR) rc 0, 524 suites · `test-hermeticity-lint` (DIR) rc 0, 524
+     suites / 0 new leaks · `bats-shim-parity-lint` NOT-ACTIVE (the healthy default).
+     `bats-assert-liveness.py` silent — and **positive-controlled**: an injected `! false` on a
+     scratch copy is flagged `DEAD [negation]`, rc 1, so the silence is a verdict.
+  8. **WRONG CAUSES REJECTED.** (a) *"the row names launchd, the launchd population is empty,
+     therefore the row is a false positive"* — the same shape #101 corrected; the empty-instrument
+     half has no locale precondition, and closing on the population census alone would have
+     dismissed the live half. (b) *"pin `LC_ALL=C` only, per the row and the C31 twin"* — TZ is a
+     second independent axis of the identical bug (`scripts/lib/cc-common.sh` already pins both and
+     says why), free to pin here. (c) *"canonicalise both ends and stop"* — the finding above; it
+     reaps one live holder at deploy. (d) *"also fix the parenthetical sites"* — measured, and they
+     are not one subject: `lead-deathwatch.sh:208` writes and reads inside ONE process, where the
+     locale is constant by construction (the row's own CRITICAL TEST NOTE), so it is **not a defect
+     site at all**; `ship-land.sh:824` and `wait-contract-lint.sh:125` are real, but each has a
+     *different* reader in a *different* file. Filed as one row rather than smuggled into this land.
+  9. **RESIDUAL, named so nobody re-derives it.** Census of `ps -o lstart` across `bin/ scripts/
+     hooks/`: **25 files, 39 call sites, of which exactly 2 were locale-pinned** (both in
+     `postland-verify.sh`, from C31/C33) before this change. The `bin/` half already has an open
+     home — **`7a00b5de1ec0`** (cc-reaper/cc-dispatch/cc-respawn/cc-backlog/cc-wait/
+     cc-pane-headless/cc-deathwatch-kqueue; cc-reaper's misjudgement KILLS) — and is NOT re-filed.
+     The `scripts/`+`hooks/` half had none, so ONE row was filed for it. **`land-lock.sh`'s
+     `proc_lstart`/`lstart_matches` pair is the ready-made shape for both**, and the ambient
+     fallback is the part a copier must not drop.
+  10. **DUPLICATE CHECK RUN ACROSS ALL CONDITIONS (method 12), and its null is a real result.**
+      Phrase-searching the WHOLE store for `lstart` returns **7** rows; 3 are `done`, and of the 3
+      open ones only `77dfaa5a3cfe` had land-lock as its subject (`7a00b5de1ec0` = `bin/`,
+      `4adbece80a5f` = a portability row about `tests/cc-reaper.bats`). No open row covered the
+      `scripts/`+`hooks/` residual, which is why filing one is not minting.
+
 - **2026-08-21 — drain recycle #101: `master-fire-gate` 10 open / 2 blocked — UNCHANGED.
   closed 0 / filed 0** (thirty-seventh consecutive recycle in `master-fire-gate`). ONE commit, TWO
   files (`scripts/capacity-alarm.sh`, `tests/capacity-alarm.bats`). **No row was closeable, and the
