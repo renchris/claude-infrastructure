@@ -76,7 +76,30 @@ set -uo pipefail
 
 # Delegate to the decision core. `exec` so the hook's exit status is the core's own.
 # If python3 is missing the hook must DEFER (exit 0), never fail in the allow direction.
-_CORE="${BASH_SOURCE[0]%/*}/lib/smart-bash-allowlist.py"
+#
+# RESOLVE OUR OWN REAL PATH FIRST. `${BASH_SOURCE[0]%/*}` is the directory we were INVOKED
+# through, not the directory we live in, and this hook is invoked through the ~/.claude
+# symlink layer — so the first cut looked for the core at ~/.claude/hooks/lib/, which is a
+# real directory of PER-FILE symlinks that has no link for a newly added file. The core was
+# therefore unreadable and this hook deferred every command: fail-safe, but completely
+# inert, and inert in the way nothing reports (a deferring allowlist looks exactly like an
+# allowlist with nothing to say). Measured live before the fix.
+#
+# Resolving the chain makes the core reachable from wherever the layer points, so the hook
+# works the moment the checkout advances and does not also depend on someone remembering to
+# mint a symlink for each new sibling file.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link=$(readlink "$_self") || break
+  case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(cd -P -- "$(dirname -- "$_self")" 2>/dev/null && pwd)/$_link" ;;
+  esac
+done
+_CORE="$(cd -P -- "$(dirname -- "$_self")" 2>/dev/null && pwd)/lib/smart-bash-allowlist.py"
+# Fall back to the invoked-path sibling, so a future layer that DOES link the core still
+# works even if the resolution above cannot run.
+[[ -r "$_CORE" ]] || _CORE="${BASH_SOURCE[0]%/*}/lib/smart-bash-allowlist.py"
 if [[ ! -r "$_CORE" ]] || ! command -v python3 >/dev/null 2>&1; then
   cat >/dev/null 2>&1 || true   # drain stdin so the harness never sees a broken pipe
   exit 0
