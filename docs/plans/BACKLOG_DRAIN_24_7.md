@@ -87,6 +87,107 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #107: took the GENERATOR CENSUS #103 named and #104/#105/#106 each
+  deferred. closed 3 / filed 0** — `da4b516dc78a`, `4a74657d6088`, `087db20c3a24`, all three
+  **already cured by landed commits that never cite them**. ONE commit (this SSOT entry); no code
+  changed, because the census's finding is that the code change it would have prescribed is
+  ALREADY FILED. Fold at close: `master-convergence-deadlock` **49 open / 4 blocked** (population:
+  rows in THAT condition only; the store spans 62 conditions). Live-layer lag re-measured at **8**,
+  not #106's 4 — the brief is right that it is not monotonic.
+
+  🚨 **FINDING 1 — THE ROW THE CENSUS WOULD HAVE FILED ALREADY EXISTS: `d0a1bb8717cf`.** The brief
+  said *"file it as a row only after you have a measured population"*. The measured population is
+  below — but the duplicate check across condition boundaries (method 16) found the remedy already
+  open and better specified than anything this census would have written: *"emit `--falsifier` from
+  postland-verify and deploy-live at FILING time … **Measured 2026-08-10: 1 of 1584 items carries a
+  falsifier**"*. So the correct output of four recycles of deferral is **not a new row** — it is the
+  HARM measurement `d0a1bb8717cf` is missing (method 10: mechanism and harm are measured
+  separately). Recorded here because `cc-backlog` has no `note` verb (method 31).
+
+  🚨 **FINDING 2 — THE CHEAP MECHANICAL SCREEN DOES NOT WORK, AND THAT IS THE MEASUREMENT.** The
+  census's hoped-for first cut was *"has the file this row names been touched since the row was
+  filed?"*. Over all 52 open rows: **44 CANDIDATE (85%) · 1 UNTOUCHED · 7 unresolvable.** A screen
+  that admits 85% of its population discriminates nothing — these rows name `ship-land.sh`,
+  `postland-verify.sh`, `test-hermeticity-lint.sh`, the hottest files in the repo. **This is the
+  argument FOR `d0a1bb8717cf`:** a *derived* oracle over git history cannot answer "is this row
+  still true", and a *stored* one can, which is exactly that row's own claim ("a stored probe beats
+  a derived one"). The census did not merely fail to find a shortcut — it measured why no shortcut
+  of that shape exists.
+
+  ⚠️ **FINDING 3 — THE SCREEN'S FIRST VERSION REPEATED AN ALREADY-INDEXED FAILURE MODE.** v1 keyed
+  on repo-relative PATHS and reported **16 of 52 (31%) as NOPATH — "the row names no file"**. False:
+  every one of those rows names its subject by BARE NAME (`wrap-ledger.sh:712`, `cc-dispatch`,
+  `gate-select`, `pane-spawn-coverage-lint`), never as `scripts/…`. v2 resolves bare names through
+  `git ls-files` and recovered 9 of the 16. The failure is verbatim the memory
+  `caller-census-keyed-on-path-misses-the-name` — *"zero callers" was FALSE; the grep keyed on the
+  PATH, the live caller invokes the bare NAME*. **An instrument built to audit a corpus is itself in
+  the corpus:** the null it produced ("this row is unjudgeable") read exactly like a property of the
+  rows.
+
+  🚨 **FINDING 4 — FOR A STATE-SHAPED ROW, AN INSTANTANEOUS READ CANNOT TELL CURED FROM
+  INTERMITTENT, AND IT FAILS TOWARD THE FALSE CLOSE.** Row `01ab05685857` — *postland-verify is
+  INERT, newest GREEN stamp 46h old (max 24h)* — reads **CURED** at a glance: the verifier had run
+  23 minutes earlier and the newest green stamp was **77 minutes** old, well inside the 24h budget.
+  It is not cured. Measured over every green stamp since the row was filed: **3 breaches of the 24h
+  max — 57h, 53h, and 26h, the last of them only 3 days ago (2026-08-18 → 08-19)**. The condition
+  recurs; the row's 46h was one draw from a live distribution. CONTROL, and it can fail: the same
+  instrument replayed over the PRE-filing window reports a **127h** gap, so it is able to see a
+  breach when one is there. **Row stays OPEN.** Generalise: a row asserting a STATE needs its rate
+  measured across the whole window since filing, never its value sampled now — the single sample is
+  biased toward "cured" precisely because a live intermittent defect is absent most of the time.
+
+  ✅ **FINDING 5 — THE MEASURED HARM, over the one stratum where a row's own claim is directly
+  runnable** (rows asserting RED-ON-TRUNK or a checkable state; 6 of 52). Adjudicated by running the
+  row's own claim in the row's own configuration, on a worktree byte-identical to `origin/main`:
+
+  | row | its claim | verdict |
+  |---|---|---|
+  | `da4b516dc78a` | `watchdog-census.bats:256` RED, 18 ok / 1 not-ok | **CURED** — 20/20, cured by `30494ba0980b` (2026-08-15), open **6 days** past its cure |
+  | `4a74657d6088` | `scratchpad-reaper.bats` t12 RED at :167 | **CURED** — 12/12, cured by `90a5bcecb8e1`, which landed **3h18m AFTER the row was filed** and left it open **21 days** |
+  | `087db20c3a24` | `cc-await-ping` G10 red ONLY in full-suite order, 4/4 | **CURED** — 78/78 twice, `ok 35 G10: HUP…` at the exact named index, second run under heavier contention; mechanism cure `09125457e` rewrote the `verdict=killed` path it failed on |
+  | `14531016f6a7` | 3-RED hermetically, cases 15/17/18 | **LIVE** — reproduced **exactly**: 16 ok / 3 not-ok off-box |
+  | `6a82c9405b9e` | two qos-census cases red under sibling load | **LIVE** — reproduced **exactly**: 2 not-ok, both named cases |
+  | `01ab05685857` | no green stamp inside 24h | **LIVE (intermittent)** — see finding 4 |
+
+  **3 of 6 were already cured and nothing noticed** (staleness 6, 21 and <1 days). 🚨 **The
+  denominator is controlled, which is what makes that number mean anything** (memory:
+  `positive-control-the-denominator`): in the SAME session on the SAME tree, three rows reproduced
+  their red *exactly* as written. So the instrument — running the row's own claim — demonstrably CAN
+  return "still red", and its three "cured" verdicts are information rather than instrument failure.
+  ⚠️ **Do NOT extrapolate 50% to the other 46 rows.** This stratum is biased upward by construction:
+  a row whose claim IS a failing test is the row most likely to be fixed in passing by someone
+  landing through that same gate. The honest statement is the one above — *3 of the 6 rows whose
+  claims can be re-run on demand were stale* — plus finding 2's measured reason the other 46 cannot
+  be screened cheaply.
+
+  **Wrong causes rejected** (method 43): (1) *"the 16 NOPATH rows name no file"* — refuted, they name
+  bare tool names (finding 3). (2) *"postland-verify is cured, its green is 77 min old"* — refuted by
+  the rate (finding 4); this would have closed a live row. (3) *"file the generator as a new row"* —
+  refuted, `d0a1bb8717cf` already carries it (finding 1); four recycles of deferral would have ended
+  in a duplicate. (4) *"a green filtered run refutes a full-suite-order red"* — rejected on principle
+  for `4a74657d6088` and `087db20c3a24`; both were re-run in FULL suite order before any close,
+  because a filtered green is precisely the shape `087db20c3a24` documents as non-evidence.
+  (5) *"`da4b516dc78a`'s fix is to wrap `ps aux` in `lcw_bounded`"* — the row's own implied remedy,
+  and **actively harmful**: `30494ba0980b` proves the assertion was born unsatisfiable (the hook runs
+  `pgrep -x`, never `ps aux`), so the only way to make the case green as written was to RE-INTRODUCE
+  the full-table walk the load-781 incident measured at 10-30s × ~20 concurrent scans. Second
+  instance in two recycles of #106's finding — *a row's own prescribed fix can be the disaster*.
+
+  **Red-proof of the closes** (methods 26/29): `da4b516dc78a`'s case was independently mutant-proved
+  in a `git archive` scratch tree rather than trusting the curing commit's own message — control
+  (pristine `origin/main`) **1/1 GREEN**, mutant (one `lcw_bounded` stripped from a single
+  `/usr/bin/pgrep` site) **1/1 RED**, the mutator asserting loudly that its edit was not a no-op. The
+  case is per-site and refuses to pass by deletion, so it is not vacuous.
+
+  **Residual handed forward:** `14531016f6a7`, `6a82c9405b9e` and `01ab05685857` are re-verified LIVE
+  with fresh reproductions — take one of those first, they need no re-derivation. `d0a1bb8717cf` now
+  has its harm measured and is the highest-leverage row in the effort. #106's residual list is
+  otherwise untouched and still current, including `scripts/cc-gc.sh:263-266`.
+
+  **Also verified for the lead:** §4.1 invariant 8 (`SHIP_LAND_SMOKE_BUDGET_S=420`) is already
+  landed at line 8964 — #106 did it; the lead's request to promote it from recommendation to
+  invariant is already satisfied, no action needed.
+
 - **2026-08-21 — drain recycle #106: stayed in `master-convergence-deadlock`. closed 1 / filed 0.**
   THREE commits — `e0d69fa9f` (the fix, five files), `5f8b859a6` (two stale test assertions the
   first land's partial smoke hid), and this SSOT entry. Files: `hooks/session-register.sh`,
