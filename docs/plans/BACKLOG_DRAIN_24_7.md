@@ -87,6 +87,80 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #118: the memory index is not over its cap and never crossed it. All
+  three open rows rested on a `wc -c` reading; the "one-day growth" that filed the newest one is the
+  gap between two instruments, to the character. filed 0 / closed 3 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  **still differs** from trunk (checkout **19** behind, budget 25) — #114's fix landed and *not
+  running* for **five consecutive recycles**. Zero heredocs; every probe written with the Write tool.
+  Fold at open: `master-convergence-deadlock` **46/4**, store-wide — **a fourth window with no
+  movement**. This session ends that streak on the closed side: **3 closed, 0 filed.**
+
+  Target: #117's handover — *settle the memory-index loader cap's VALUE AND UNIT by reading the
+  loader, then re-judge the three open rows.* **The answer was already pinned in one place, and
+  reading the producer resolved in one step what three rows had been restating for three weeks**
+  (method 11, sixth consecutive recycle to say so). `hooks/lib/memory-index-measure.sh` is the single
+  measurer shared by the gate, the advisory and the rotor, and its header carries the derivation read
+  out of the 2.1.233 bundle: the loader **strips YAML frontmatter, strips column-0 block HTML
+  comments, trims, then compares `String.length` — UTF-16 CODE UNITS — against 25000, plus a co-equal
+  200-LINE cap**. The `24985 B` figure three rows quote is marked SUPERSEDED at `memory-nudge.sh:23`.
+
+  **LIVE, measured with that instrument: `24287 units / 146 lines` against `25000 / 200` — 713 units
+  and 54 lines UNDER, 143 entries.** Raw bytes 25591; codepoints 25027; the loader enforces neither.
+  Gap fully attributed rather than waved at: **739 units of the single cold-tier block comment + 1
+  trailing-newline trim = 740**, astral codepoints **0**. Instrument positive-controlled three ways
+  (26000-char file → 26000 units · 5-char → 5 · a lone `🚨` U+1F6A8 → **2**, the surrogate pair).
+
+  🚨 **THE FINDING: A TREND COMPUTED ACROSS TWO INSTRUMENTS MEASURES THE INSTRUMENTS.** Row
+  `150c50055e1c` filed *"25591 chars … ~591 over … the SessionStart hook reported 24287/25000 this
+  morning and it is 25591 now, +1304 in one day, so it crossed the cap TODAY"*, and named the three
+  newest entries as at risk. **25591 − 24287 = 1304 exactly** — that is `mim_overhead`, the function
+  in the same repo whose whole job is to compute it. The file's mtime is `2026-08-21T04:20:08Z` and
+  had not moved between the two readings, so **zero growth is demonstrated**: the row diffed its own
+  `wc -c` against the hook's correct figure and read the unit conversion as an event. Positive
+  control on the truncation claim: `mim_effective_file`'s last line **is**
+  `missing-dependency-indicts-resolver-before-deployer`, and this session's own system-reminder
+  carries that entry verbatim — nothing is being dropped. The index's **own line 4** already says
+  *"limit = 25000 UTF-16 CODE UNITS … measure with `memory-index-measure.sh`, never `wc -c`"* — and
+  that warning **is 739 of the 740-unit gap it warns about**, because the loader strips it. A rule
+  written inside the object it governs is invisible to the instrument it forbids.
+
+  🚨 **THE NEAR-MISS, AND IT IS ONE FLAG WIDE.** `0b3d53bcd1fd` asked for a human-gated
+  `/compact-memory` *"before it truncates"*, so the live question was whether the rotor self-heals.
+  `bin/cc-memory-rotate` reads `verdict=exhausted` today, which looks like a stall and is the
+  **designed hold** — stage 2 arms only at breach, so below it all 143 entries are legitimately
+  protected (`tail=15 type=100 hub=15 young=11 marker=2`, `min_keep=40`). Testing that needs a copy
+  pushed past the cap, and **`cp -R` is a MUTATION of this program's input**: the `young` rule reads
+  *topic-file mtime*, so a non-preserving copy restamped the corpus (`young=26 hub=0`) and returned
+  **`exhausted moved=0` at a real breach** — which reads exactly like *"the rotor cannot hold the
+  breach line"*, a clean, alarming, entirely false finding I was one commit from filing. With
+  `cp -Rp` the copy reproduced the live keep-classes **identically**, and the same breach returned
+  **`rotated moved=29 stage2=29`, 25873 → 20949 units — back under the cap with 4051 units of
+  headroom.** The self-heal works; no human-gated pass is owed. **The control's precondition is an
+  EQUALITY** — the untouched copy's verdict token must match the live one before any arm counts.
+
+  **Landed** `hooks/lib/memory-index-measure.sh` (the phantom-breach note beside `mim_overhead`, which
+  is the function that computes the phantom) + `bin/cc-memory-rotate` (how to build a control for it,
+  and the `cp -R` trap). Comment-only, no new file, so `LIVE_ADDS` stays 0 (premise 2). Gates: `bash
+  -n` 0/0, `shellcheck -S style` 0/0, `cc-memory-rotate.bats` **22/22**, `memory-index-budget.bats`
+  **28/28**, `memory-nudge-budget.bats` **31/31** — plan == ok+notok, 0 skips, all run this turn.
+
+  **Closed 3, all premise-refuted, each adjudicated separately (method 25):** `150c50055e1c` (over by
+  591 — false; unit wrong; growth an artifact; truncation false) · `7c266e16fc94` (stale N 101→143,
+  superseded byte cap, and its stored falsifier `wc -c … -lt 17100` is **remedy-shaped against the
+  product-side 17.1KB nag**, 0.7× the real limit and unreachable by construction — method 9) ·
+  `0b3d53bcd1fd` (remedy mechanized and now *proven*, not inferred).
+
+  **Wrong causes rejected, with why:** (1) *#117's "the breach is 27 characters"* — right that 591 was
+  wrong, still the wrong unit: `wc -m` counts codepoints, the loader counts UTF-16 units of the
+  **stripped** text, and stripping is 740 of the difference. A correction can inherit the defect it
+  corrects. (2) *"the rotor fails at the breach"* — my own best-looking finding, killed by `cp -Rp`.
+  (3) *"the four config dirs hold four diverging indexes"* — one inode (594827983), four paths.
+  (4) *"the rotor is broken"* on `verdict=error reason=not-a-memory-index` — a **usage error**, i.e. a
+  non-verdict: it takes an explicit path. (5) *"astral codepoints inflate the count"* — measured 0.
+  (6) *"`0b3d53bcd1fd` is substantively right at 97% of cap, so keep it open"* — the stage-2 proof
+  retired it; near-cap is not a defect when the mechanism that owns it demonstrably fires.
+
 - **2026-08-21 — drain recycle #117: #116's masking class has a population of ONE. Four of the six
   allowlist variables have no self-pinning subject at all, and the two that do are already guarded a
   layer below the census. filed 0 / closed 0 / landed 1 commit.**

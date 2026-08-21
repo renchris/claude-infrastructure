@@ -113,6 +113,23 @@ mim_effective_file() {
 # mim_overhead <file> → raw-bytes-on-disk MINUS effective units, i.e. everything the loader does
 # not count: frontmatter, block comments, surrounding whitespace, and the multibyte delta.
 #
+# ⚠️ THIS QUANTITY IS ALSO THE SIZE OF THE PHANTOM BREACH, AND IT HAS BEEN REPORTED AS ONE THREE
+# TIMES. `wc -c` and this file measure the same index in different units, so COMPARING A READING
+# FROM ONE AGAINST A READING FROM THE OTHER yields a difference of exactly mim_overhead — and that
+# difference reads as either an overage or a day's growth, depending on which way round it is put.
+# Measured 2026-08-21 on the claude-infrastructure index (backlog 150c50055e1c, 7c266e16fc94,
+# 0b3d53bcd1fd, all three closed on this): raw 25591 B · codepoints 25027 · effective 24287 units
+# · mim_overhead 1304. The row read `wc -c` = 25591, called it "chars", compared it to the 25000
+# cap and filed "591 over"; it then compared the same 25591 against the advisory hook's correctly
+# measured 24287 from that morning and filed "+1304 in one day, so it crossed the cap TODAY". The
+# file's mtime had not moved between the two readings. Truth: 713 units UNDER, nothing dropped.
+#
+# So when a size claim about this index disagrees with the hook, suspect the INSTRUMENT before the
+# index, and check the disagreement against mim_overhead first — if it equals this number, there
+# is no event. The index's own line 4 already carries the rule ("measure with
+# memory-index-measure.sh, never wc -c") and could not prevent this, because that comment is a
+# block comment: the loader strips it, and it is 739 of the 740-unit gap it warns about.
+#
 # This exists for bin/cc-memory-rotate, whose per-line arithmetic is byte-based and internally
 # consistent. Rather than convert that arithmetic (and risk a unit-mixed projection), the rotor
 # shifts its byte THRESHOLDS up by this constant, which makes every decision effective-sized
