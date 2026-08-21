@@ -20,11 +20,29 @@ the data rather than from the plan's summary of it. The plan names one flagship 
 `bbad96d163ab` exists solely to record that `23eccae755a9`'s claim is FALSE, and warns that a
 worker claiming the latter "would very plausibly roll back a version on a refuted premise".
 Read verbatim, though, the correction refutes ONE SUB-CLAIM ("2.1.220 is 3.4x worse per
-session") while that item's MAIN work — a ~20x auth-error regression whose trigger is still
-unresolved — is entirely live. Refusing that claim would strand real work; the actual remedy
-is to guarantee the worker READS the correction before acting. So:
+session") while that item's MAIN work — a ~20x auth-error regression whose trigger was still
+unresolved when this paragraph was written — was entirely live. Refusing that claim would
+strand real work; the actual remedy is to guarantee the worker READS the correction before
+acting. So:
 
     the enforcing store for a worker is its BRIEF, not this file's exit code.
+
+THE FLAGSHIP CASE HAS SINCE CLOSED, AND ITS OUTCOME CONFIRMS THE DECISION (2026-08-20) — the
+paragraph above is history, not live state, and a maintainer who re-derives it from today's
+store will find facts that read the other way. `23eccae755a9` reached done 2026-08-08T03:37Z
+and the trigger it called unresolved WAS resolved: `7abb4b8fcbce` traced it to the
+config-mirror race that symlinked a transient `.oauth_refresh.lock` into all four account
+dirs (fix 1677218f), confirmed by effect. That is the whole point. The live work was
+discharged by exactly the follow-on investigation a `superseded` refusal would have blocked,
+so this is now a completed proof of the design rather than a standing bet on it. Read
+carelessly it inverts: target closed + corrector retired reads as "the correction superseded
+it after all", which argues for making this file REFUSE — the one change the case forbids.
+
+The invariant does not rest on this docstring. `tests/cc-premise.bats` "a CORRECTION of one
+sub-claim ADVISES but never blocks" pins `verdict=corrected` at exit 0, and flipping the
+correction branch below to `superseded` reds that test and ONLY that test (mutation-verified
+2026-08-20: 1..24, ok 23, not ok 1, the failure being that case). Change the rationale here
+only with that test's verdict in hand.
 
 Hence `contract` is the primary product and refusal (`superseded`) is reserved for the narrow
 case where an item's WHOLE reason for existing is gone. This mirrors cc-dispatch's own
