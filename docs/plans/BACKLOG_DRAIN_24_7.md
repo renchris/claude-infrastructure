@@ -87,6 +87,93 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #111: the row was cured five hours after it was filed, and its
+  headline premise — "will NOT reproduce on the desk" — was one lucky sample. closed 1 / filed 0.**
+  #111 opened on the START-HERE order. Gate 1 was clear: **no `.page` file on disk at all**
+  (`ls …/postland/*.page` → zsh "no matches found", the shape premise 10 warns reads exactly like a
+  failed probe), so the trunk carried no post-land RED. Gate 2 was `7f8bb9f43035` —
+  `tests/boundary-handoff.bats` test 26, carried by two briefs as *"the last unexplained suite in
+  the hermetic partition"*.
+
+  🚨 **FINDING 1 — METHOD 18 PAID IN ONE COMMAND, AND THE CURE WAS FIVE HOURS OLD AT FILING TIME.**
+  `git log -S 'freewin-conversation-hold'` returned two commits; the newest, **`378072b52`**, is
+  titled *"the free-win hold asserted a wall-clock age as a string literal"* — the row's own failing
+  assertion, named in the subject. Dated both sides in UTC (method 14, `%ct` + `TZ=UTC date -r`):
+  authored **2026-08-12T23:02:28Z**, committed **2026-08-13T01:20:38Z**, against the row's `firstTs`
+  of **2026-08-12T18:11:17Z** — the fix is ~5 h younger than the row it cures, and
+  `git merge-base --is-ancestor 378072b52 origin/main` says it has been on trunk ever since. **The
+  row was never open work; it was an unclosed row.** This is #109's lesson repeating with a shorter
+  fuse: there, two briefs carried a row as unbuilt for four recycles; here, two briefs carried one
+  as unexplained while its cure sat on trunk. Run `git log -S` on the row's own phrase FIRST.
+
+  🚨 **FINDING 2 — THE ROW'S DIAGNOSIS WAS WRONG IN THE MOST EXPENSIVE DIRECTION: IT INDICTED A
+  SILENT-FAILURE CHAIN WHEN THE VALUE WAS COMPUTED CORRECTLY AND MERELY OFF BY ONE.** The row spent
+  its length on `hooks/boundary-handoff.sh`'s three-guard chain (`command -v ce_last_interactive_age`
+  ∧ `$tp` non-empty ∧ `[ -f $tp ]`, then the `case … *[!0-9]*) conv_age=""` blanking), on the theory
+  that any one guard silently yields `conv_age=''` so the suppression never runs — and prescribed a
+  temporary diagnostic printing each guard's outcome. **None of that was the bug.** `conv_age` was
+  computed fine. `mk_btx 30` stamps the turn at `now-30`, but the hook re-derives the age from its
+  **own** `date +%s` after several `git` calls and a whole `wrap-ledger` run — so it records `30`
+  only when that work costs under a second, and `31+` when it does not. The test grepped the literal
+  `freewin-conversation-hold:30s<900s`. **A guard-chain theory and an off-by-one drift produce the
+  identical TAP output — a bare `not ok` — which is exactly why the red "said nothing" for two
+  recycles.** Note the asymmetry in cost: the row's theory pointed at the *subject* and would have
+  had a session editing a live Stop hook; the real fault was in the *assertion*. Method 20's newest
+  face, restated: **before instrumenting the subject, ask whether the test's expected VALUE is
+  itself derived or literal.**
+
+  🚨 **FINDING 3 — "IT WILL NOT REPRODUCE ON THE DESK" WAS A SINGLE SAMPLE, AND THE CONTROL REDS
+  9 OF 12 AT IDLE.** The row asserted, in its title, that the failure is off-box-only and green
+  here — resting on one run reading 35 ok / 0 notok. Red-proofed per method 28 in a scratch tree
+  (`git archive 13f09023d | tar -x -C $(mktemp -d)`, nothing touched outside it), with a
+  fail-loud control that the parent actually carries the prior shape (1 occurrence — method 29):
+  **parent notok=9, ok=3 over 12 runs, on an idle box.** The author of `378072b52` measured the
+  same coin-flip independently (6/20 idle, 10/20 under an 8-way load). So the desk reproduces it
+  about three times in four, and the row's headline claim came from landing on the 25%. **A
+  non-reproduction is a RATE, never a run** — the same law method 21 already imposes on closing a
+  state row, here biting at the *filing* end: a one-sample negative promoted "I did not see it" to
+  "it does not happen here", and that word *unexplained* then rode two briefs.
+
+  ⚠️ **THE INSTRUMENT DISAGREED WITH ME AND WAS RIGHT (method 4/5).** My control asserted HEAD
+  carries **0** occurrences of the literal; it printed **1**. Printing every match (method 5) rather
+  than trusting the count resolved it in one command: the survivor is at **`:427`, inside the fix's
+  own explanatory comment**, quoting the string it removed. The live assertion is at **`:438`** —
+  `grep -oE 'freewin-conversation-hold:[0-9]+s<900s'` plus a `-ge 30` / `-le 120` range. Had I
+  believed the bare count, I would have concluded the fix was absent and re-fixed a cured row.
+  **A needle that matches prose about the defect is not a needle that matches the defect.**
+
+  ✅ **VERIFICATION.** HEAD is **GREEN 43/43 in FULL suite order** under the harness's exact env
+  (`env -i HOME TMPDIR PATH TERM=dumb LC_ALL=C CC_OFFBOX=1`, per `scripts/offbox-run.sh:120-137`) —
+  plan `1..43`, `ok+notok = 43` (method 33), `skip=0`, `BW01=0`. The filtered single-case run was
+  green too, but per method 6 the full-order run is what the close rests on.
+
+  **WRONG CAUSES REJECTED (method 43).** (1) *The three-guard chain silently blanks `conv_age`* —
+  the row's own leading hypothesis, refuted by `378072b52`'s measurement that the age is computed and
+  merely drifts. (2) *A `CLAUDE_CONFIG_DIR` ladder miss*, which #110's finding made the warm prior
+  and which my brief explicitly told me to re-open — refuted: rung 1 resolves in-repo and the value
+  recorded is a correct integer, not the empty string a ladder miss yields. **#110's cause was the
+  right shape for #110 and the wrong shape here; a fresh prior is still a prior.** (3) *Load on the
+  runner* — the standing half-explanation, and the reason `postland-verify`'s C29 note read
+  "convicted in ONE load window only". Load raises the odds of the drift; it is not the mechanism,
+  and the 9/12 idle control is what separates them.
+
+  📊 **STORE (fold at close, over the whole store).** `master-convergence-deadlock` **47 open /
+  4 blocked — UNCHANGED**: this recycle did not work the warm effort, because the START-HERE order
+  put an `ungrouped` row first and it was the right call. `7f8bb9f43035` was **linked into
+  `master-verification-integrity`** before closing (method 8's safe verb — `link`, never `add
+  --condition`), because its parent row `05ff1e5fabc0` — *"3 CI-ONLY reds on the hermetic corpus,
+  GREEN on the desk — run 31586181611"* — lives there and is already `done`. **This was that
+  family's last open child.** `ungrouped` 128 → **127**. Store-wide **269 open · 180 blocked ·
+  2537 items** — and the level is the trap: open read 269 at #110's close too, but items moved
+  2536 → 2537, so **a sibling filed one open row inside this window and my close netted it to
+  zero**. State the movements, never the level.
+
+  🔭 **HANDED ON.** `26d4010f1b22` (OPEN) is the CLASS row for this defect — *"corpus assertions
+  carry WALL-CLOCK bounds sized on an idle box"* — and `378072b52` is now a worked instance of its
+  correct cure: **assert a range derived from the mechanism** (`-ge 30` is exact, since the age can
+  only ever be `30 + elapsed`), never a literal, and never — as that row's own 🚨 warns — by
+  enlarging the constant. Not folded in: the class row wants a census, which is wave-sized.
+
 - **2026-08-21 — drain recycle #110: the suite's three reds PASSED the gate the suite exists to pin
   and died seventeen lines later, at an account it never fixtured. closed 1 / filed 0.** #110 opened
   on the START-HERE order and both gates were cheap: no post-land RED page was on disk at all (the
