@@ -23,10 +23,105 @@ while [ -L "$_p" ]; do
   case "$_p" in /*) ;; *) _p="$_d/$_p" ;; esac
 done
 REPO="$(cd "$(dirname "$_p")/.." && pwd)"
-PARENT="${1:-}"
-[ -n "$PARENT" ] || { echo "usage: $0 <parent-sha>" >&2; exit 2; }
-export PATH="/opt/homebrew/bin:$PATH"          # bats is NOT on a hardened PATH; rc 127 reads as red
 SUITE="tests/lstart-dialect-bin.bats"
+RSUITE="tests/lstart-dialect-registry.bats"
+
+# ── THE ANCHOR TABLE — one source for every literal this harness pins in the CURRENT tree ─────────
+# Rows are `id|rule|file|literal`. `--check-anchors` COUNTS them; the mutators and extractors below
+# SUBSTITUTE and derive from the same rows via anchor_lit(). ONE table, deliberately: a cheap screen
+# that keeps its own copy of the literals can go green while the expensive run is already broken,
+# which is the vacuous pass one level up that tests/anti-vacuity-contract.bats exists to prevent.
+#
+# Only CURRENT-tree literals belong here. The prior-shape needles in ARM 1 and the ex() extractions
+# in ARM 2 read the archived PARENT tree, where they are *expected* to be absent from HEAD — an
+# anchor check over those would convict this repo for having landed the fix.
+#
+#   rule=one   must appear EXACTLY once — a single-site substitution; 0 means the proof lost its
+#              subject, 2+ means the mutation would sabotage more than it claims.
+#   rule=some  must appear at least once — a line FILTER that strips every occurrence.
+#   rule=file  the literal is unused; the file must EXIST (a suite this harness runs; a missing one
+#              makes tally() print `plan=?`, which reads like a quiet zero rather than a break).
+#
+# Every mutation below is DERIVED from its anchor by a further literal replace, so the "before" and
+# the "after" cannot drift apart either.
+ANCHORS=(
+  "migration-fallback:cc-backlog|some|bin/cc-backlog|# migration:"
+  "migration-fallback:cc-reaper|some|bin/cc-reaper|# migration:"
+  "migration-fallback:cc-dispatch|some|bin/cc-dispatch|# migration:"
+  "migration-fallback:cc-respawn|some|bin/cc-respawn|# migration:"
+  "migration-fallback:cc-pane-headless|some|bin/cc-pane-headless|# migration:"
+  "deathwatch-overlay-triple|one|bin/cc-deathwatch-kqueue|for overlay in ({\"TZ\": \"UTC\", \"LC_ALL\": \"C\"}, None, {\"LC_ALL\": \"C\"}):"
+  "registry-canonical-write|one|hooks/session-register.sh|lstart=\$(TZ=UTC LC_ALL=C ps -o lstart="
+  "registry-norm-order-swap:cc-sessions|one|bin/cc-sessions|    *)           printf '%s %s %s %s %s' \"\$1\" \"\$3\" \"\$2\" \"\$4\" \"\$5\""
+  "registry-norm-order-swap:cc-notify|one|bin/cc-notify|    *)           printf '%s %s %s %s %s' \"\$1\" \"\$3\" \"\$2\" \"\$4\" \"\$5\""
+  "registry-norm-fn|one|bin/cc-notify|reg_lstart_norm() {"
+  "registry-pidlive-fn|one|bin/cc-notify|pid_live() {"
+  "suite-bin|file|$SUITE|"
+  "suite-registry|file|$RSUITE|"
+)
+
+anchor_lit() { # <id> -> its literal. A miss is exit 9 and never an empty string, because an empty
+               # FROM makes python's str.replace() match at every position.
+  local row r
+  for row in "${ANCHORS[@]}"; do
+    case "$row" in
+      "$1|"*) r="${row#*|}"; r="${r#*|}"; printf '%s' "${r#*|}"; return 0 ;;
+    esac
+  done
+  echo "NO SUCH ANCHOR: $1" >&2
+  return 9
+}
+
+check_anchors() {
+  local live=0 stale=0 row id rule file lit n
+  echo "RED-PROOF --check-anchors — every literal this harness pins must still match its subject"
+  for row in "${ANCHORS[@]}"; do
+    id="${row%%|*}"; row="${row#*|}"
+    rule="${row%%|*}"; row="${row#*|}"
+    file="${row%%|*}"; lit="${row#*|}"
+    if [ "$rule" = file ]; then
+      if [ -f "$REPO/$file" ]; then
+        live=$((live + 1))
+      else
+        printf '  STALE ANCHOR %-38s (%s is gone — the arm that runs it would report plan=?)\n' \
+          "$id" "$file"
+        stale=$((stale + 1))
+      fi
+      continue
+    fi
+    # -1 for an unreadable file, so a deleted subject lands in the STALE arm rather than reading 0
+    # for rule=one (which is stale anyway) and being indistinguishable from a renamed line.
+    n="$(LIT="$lit" /usr/bin/python3 - "$REPO/$file" <<'PY'
+import os, sys
+try:
+    print(open(sys.argv[1]).read().count(os.environ["LIT"]))
+except OSError:
+    print(-1)
+PY
+)"
+    case "$rule:$n" in
+      one:1)          live=$((live + 1)) ;;
+      some:0|some:-1) printf '  STALE ANCHOR %-38s (matches %sx in %s — need at least 1)\n' \
+                        "$id" "$n" "$file"; stale=$((stale + 1)) ;;
+      some:*)         live=$((live + 1)) ;;
+      *)              printf '  STALE ANCHOR %-38s (matches %sx in %s — must be exactly 1)\n' \
+                        "$id" "$n" "$file"; stale=$((stale + 1)) ;;
+    esac
+  done
+  printf 'RED-PROOF --check-anchors: %d live · %d STALE\n' "$live" "$stale"
+  [ "$stale" -eq 0 ]
+}
+
+# The cheap half, and it exits BEFORE the parent-sha guard: the anchor check is about THIS tree and
+# has no parent to compare against. tests/anti-vacuity-contract.bats runs this mode on every land.
+if [ "${1:-}" = "--check-anchors" ]; then
+  check_anchors
+  exit $?
+fi
+
+PARENT="${1:-}"
+[ -n "$PARENT" ] || { echo "usage: $0 <parent-sha> | $0 --check-anchors" >&2; exit 2; }
+export PATH="/opt/homebrew/bin:$PATH"          # bats is NOT on a hardened PATH; rc 127 reads as red
 
 banner() { printf '\n══ %s\n' "$*"; }
 
@@ -125,18 +220,33 @@ printf '%-26s %s\n' "POST BW01 vacuity warns" "$(grep -c BW01 /tmp/rp-post.tap |
 # ── ARM 4 — PER-SITE MUTANTS ─────────────────────────────────────────────────────────────────────
 banner "PER-SITE MUTANTS — each must bite ONLY its own site's tests"
 mutate() { # <tree> <file> — strip that file's dialect fallbacks; FAIL LOUD if nothing changed
-  python3 - "$1/$2" <<'PY'
-import sys
+  # Both literals come from the ANCHOR TABLE, and the "after" is DERIVED from the "before" — so
+  # --check-anchors and this mutation are pinned to the same string by construction.
+  if [ "$2" = "bin/cc-deathwatch-kqueue" ]; then
+    LIT="$(anchor_lit deathwatch-overlay-triple)" python3 - "$1/$2" <<'PY'
+import os, sys
 p = sys.argv[1]
 s = open(p).read()
-if p.endswith("cc-deathwatch-kqueue"):
-    new = s.replace('for overlay in ({"TZ": "UTC", "LC_ALL": "C"}, None, {"LC_ALL": "C"}):',
-                    'for overlay in ({"TZ": "UTC", "LC_ALL": "C"},):')
-else:
-    new = "\n".join(l for l in s.split("\n") if "# migration:" not in l)
+frm = os.environ["LIT"]
+# Drop the two fallback overlays, keeping the trailing comma: `(x,)` stays a one-tuple, whereas
+# `(x)` would silently iterate the dict's KEYS and mutate something other than what is claimed.
+to = frm.replace(', None, {"LC_ALL": "C"}):', ',):')
+assert to != frm, "ANCHOR NO LONGER CARRIES THE FALLBACKS: %r" % frm[:70]
+new = s.replace(frm, to)
 assert new != s, "MUTANT DID NOT APPLY to %s — an absent control, not a pass" % p
 open(p, "w").write(new)
 PY
+  else
+    LIT="$(anchor_lit "migration-fallback:$(basename "$2")")" python3 - "$1/$2" <<'PY'
+import os, sys
+p = sys.argv[1]
+s = open(p).read()
+mark = os.environ["LIT"]
+new = "\n".join(l for l in s.split("\n") if mark not in l)
+assert new != s, "MUTANT DID NOT APPLY to %s — an absent control, not a pass" % p
+open(p, "w").write(new)
+PY
+  fi
 }
 for f in bin/cc-backlog bin/cc-reaper bin/cc-dispatch bin/cc-respawn \
          bin/cc-pane-headless bin/cc-deathwatch-kqueue; do
@@ -163,8 +273,7 @@ done
 # dialects in this store share TZ=UTC and differ only in field ORDER, so the readers normalise the
 # ORDER instead. This arm proves the parent is wrong, the fix is right, and the fix still convicts.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-RSUITE="tests/lstart-dialect-registry.bats"
-RSITES="hooks/session-register.sh bin/cc-sessions bin/cc-notify"
+RSITES="hooks/session-register.sh bin/cc-sessions bin/cc-notify"   # RSUITE: set with the anchors
 
 banner "REGISTRY 5a — PRIOR SHAPE at parent $PARENT (non-vacuity)"
 for f in $RSITES; do
@@ -187,8 +296,17 @@ printf '  stored    (what a session wrote)    : [%s]\n' "$STORE_NOW"
 for TREE_LBL in "PARENT:$PT" "THIS:$REPO"; do
   lbl="${TREE_LBL%%:*}"; tree="${TREE_LBL#*:}"
   ex="$(mktemp)"
-  awk '/^reg_lstart_norm\(\) *\{/{i=1} i{print} i&&/^\}/{i=0}
-       /^pid_live\(\) *\{/{j=1}       j{print} j&&/^\}/{j=0}' "$tree/bin/cc-notify" > "$ex"
+  # Function headers come from the ANCHOR TABLE. A rename used to yield an EMPTY extraction, whose
+  # `. "$ex"; pid_live …` error was swallowed by the 2>/dev/null below and printed as a blank
+  # verdict — a non-verdict wearing a verdict's shape. Now it says so. (reg_lstart_norm is absent
+  # from the PARENT by design, so the guard requires a non-empty extraction, never both names.)
+  awk -v A="$(anchor_lit registry-norm-fn)" -v B="$(anchor_lit registry-pidlive-fn)" '
+       index($0,A)==1{i=1} i{print} i&&/^\}/{i=0}
+       index($0,B)==1{j=1} j{print} j&&/^\}/{j=0}' "$tree/bin/cc-notify" > "$ex"
+  if [ ! -s "$ex" ]; then
+    printf '  %-7s cc-notify pid_live → EXTRACTION EMPTY (anchors stale) — NOT a verdict\n' "$lbl"
+    continue
+  fi
   v="$(LC_ALL=C LANG=C bash -c '. "$1"; pid_live "$2" "$3" && echo LIVE || echo "NOT-THE-PEER"' \
         _ "$ex" "$RP" "$STORE_NOW" 2>/dev/null)"
   printf '  %-7s cc-notify pid_live(live pid, stored record) → %s\n' "$lbl" "$v"
@@ -217,19 +335,32 @@ printf '%-26s %s\n' "POST BW01 vacuity warns" "$(grep -c BW01 /tmp/rp-reg-post.t
 
 banner "REGISTRY 5e — PER-SITE MUTANTS (each must bite ONLY its own site)"
 rmutate() { # <tree> <file>
-  python3 - "$1/$2" <<'PY'
-import sys
+  if [ "$2" = "hooks/session-register.sh" ]; then
+    LIT="$(anchor_lit registry-canonical-write)" python3 - "$1/$2" <<'PY'
+import os, sys
 p = sys.argv[1]
 s = open(p).read()
-if p.endswith("session-register.sh"):
-    new = s.replace("lstart=$(TZ=UTC LC_ALL=C ps -o lstart=", "lstart=$(TZ=UTC ps -o lstart=")
-else:
-    # Neuter the normaliser: make it the identity, which is exactly the parent's behaviour.
-    new = s.replace('    *)           printf \'%s %s %s %s %s\' "$1" "$3" "$2" "$4" "$5"',
-                    '    *)           printf \'%s %s %s %s %s\' "$1" "$2" "$3" "$4" "$5"')
+frm = os.environ["LIT"]
+to = frm.replace(" LC_ALL=C", "")        # half-pin the write: TZ only, which is the parent's shape
+assert to != frm, "ANCHOR NO LONGER PINS THE LOCALE: %r" % frm[:70]
+new = s.replace(frm, to)
 assert new != s, "MUTANT DID NOT APPLY to %s — an absent control, not a pass" % p
 open(p, "w").write(new)
 PY
+  else
+    LIT="$(anchor_lit "registry-norm-order-swap:$(basename "$2")")" python3 - "$1/$2" <<'PY'
+import os, sys
+p = sys.argv[1]
+s = open(p).read()
+frm = os.environ["LIT"]
+# Neuter the normaliser: make it the identity, which is exactly the parent's behaviour.
+to = frm.replace('"$1" "$3" "$2"', '"$1" "$2" "$3"')
+assert to != frm, "ANCHOR NO LONGER SWAPS THE ORDER: %r" % frm[:70]
+new = s.replace(frm, to)
+assert new != s, "MUTANT DID NOT APPLY to %s — an absent control, not a pass" % p
+open(p, "w").write(new)
+PY
+  fi
 }
 for f in $RSITES; do
   MT="$(mktemp -d)"

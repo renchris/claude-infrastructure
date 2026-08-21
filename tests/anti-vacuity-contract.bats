@@ -39,6 +39,25 @@
 #
 # So the CENSUS glob below now covers scripts/ as well as tests/ — stated here because a glob that
 # widens without its comment widening is how a scoping decision becomes an accident.
+#
+# THE FOURTH HARNESS — scripts/redproof-lstart-dialect.sh, and it arrived the way the census was
+# built to catch. It landed on trunk in 33c462990b2c with no case here, the glob picked it up on the
+# day it was created exactly as designed, and the CENSUS went red IN THE TRUNK VERIFIER rather than
+# in anyone's head. That is the recurrence guard working; the fix is to wire it, never to widen the
+# glob past it.
+#
+# Its mechanism is a THIRD kind again. cc-queue/cc-pane are declarative-anchor; banner-gate is
+# AST-derived cases. This one is a five-arm procedural proof that mutates six bin/ tools and three
+# registry sites in `git archive` scratch trees, one bats run per site — far too expensive to live
+# here. So it grew a --check-anchors mode over ONE table that its own mutators read: every literal
+# is counted here, and every mutation below is DERIVED from its anchor by a further replace, so the
+# cheap screen cannot go green over a run that is already broken. A screen keeping a private copy of
+# the literals would be the vacuous pass one level up — the thing this whole file is about.
+#
+# The table also pins two things an anchor count is the only cheap way to reach: the two suites the
+# harness RUNS (a deleted one made tally() print `plan=?`, which reads like a quiet zero), and the
+# two function headers ARM 5b extracts by name (a rename yielded an EMPTY extraction whose error was
+# swallowed by a 2>/dev/null and printed as a blank verdict).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -87,6 +106,18 @@ setup() {
   [ "$r" -ge 40 ] || false
 }
 
+@test "redproof-lstart-dialect: every literal the harness pins still matches its subject" {
+  run bash "$REPO/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'STALE ANCHOR' || false
+  # A floor and never an equality, so a row added to the anchor table cannot red this — the one
+  # direction nobody needs protecting from. It is high enough that a gutted table (the migration
+  # markers alone are 5 rows) cannot pass by having nothing left to check.
+  n="$(echo "$output" | sed -n 's/.*--check-anchors: \([0-9]*\) live.*/\1/p')"
+  [ -n "$n" ] || false
+  [ "$n" -ge 11 ] || false
+}
+
 @test "CENSUS: every red-proof harness under tests/ or scripts/ is wired into THIS suite" {
   # The recurrence guard. Wiring the two that exist today fixes today; the class reproduces the next
   # time someone writes a third harness and references it in a comment, which is precisely how these
@@ -109,10 +140,11 @@ setup() {
     grep -v '^[[:space:]]*#' "$BATS_TEST_FILENAME" | grep -q -- "$b" || unwired="$unwired $h"
   done
   # A glob that matched nothing would make this test pass while asserting nothing — the exact
-  # vacuity the file is about. Three harnesses exist; require at least three. A FLOOR and never an
-  # equality: `-eq 3` would go red on a fourth harness being written, which is the one direction
-  # nobody needs protecting from.
-  [ "$seen" -ge 3 ] || false
+  # vacuity the file is about. Four harnesses exist; require at least four. A FLOOR and never an
+  # equality: `-eq 4` would go red on a fifth harness being written, which is the one direction
+  # nobody needs protecting from. (Raised 3→4 when the lstart harness landed; the floor tracks what
+  # is on disk, so a harness DELETED without its case being removed is still caught here.)
+  [ "$seen" -ge 4 ] || false
   if [ -n "$unwired" ]; then
     echo "UNWIRED red-proof harness(es) —$unwired"
     echo "Each must be invoked by a case in $BATS_TEST_FILENAME, not merely mentioned in a comment."
@@ -120,11 +152,11 @@ setup() {
   fi
 }
 
-@test "all three harnesses REFUSE a stale case — the check can fail, on the real artifact" {
-  # Without this the two cases above would pass just as well for a --check-anchors that returns 0
+@test "all four harnesses REFUSE a stale case — the check can fail, on the real artifact" {
+  # Without this the cases above would pass just as well for a --check-anchors that returns 0
   # unconditionally. Sabotage a real anchored line in a COPY of the tree and require the refusal.
   cp -R "$REPO/bin" "$REPO/tests" "$BATS_TEST_TMPDIR/"
-  mkdir -p "$BATS_TEST_TMPDIR/scripts"
+  mkdir -p "$BATS_TEST_TMPDIR/scripts" "$BATS_TEST_TMPDIR/hooks"
 
   # cc-queue: the cap notice, whose disappearance is the finding's own named failure scenario.
   python3 - "$BATS_TEST_TMPDIR/bin/cc-queue" <<'PY'
@@ -178,4 +210,29 @@ PYSAB
   [ "$status" -eq 1 ]
   echo "$output" | grep -q 'STALE CASE' || false
   echo "$output" | grep -q 'READS g.WORLD_MOD, which gen.py no longer defines' || false
+
+  # redproof-lstart-dialect: no anchors of its own to sabotage in bin/cc-queue or bin/cc-pane, so
+  # the equivalent damage is RENAMING a function ARM 5b extracts BY NAME from bin/cc-notify. That is
+  # the rot this mode exists for and the one the harness itself was silent about: the extraction
+  # came back empty, the error went to /dev/null, and the arm printed a blank where a verdict goes.
+  cp "$REPO/scripts/redproof-lstart-dialect.sh" "$BATS_TEST_TMPDIR/scripts/"
+  cp "$REPO/hooks/session-register.sh" "$BATS_TEST_TMPDIR/hooks/"
+
+  # CONTROL FIRST, for the same reason as above: an untouched copy must PASS, or a refusal proves
+  # only that the copy is short a file. bin/ and tests/ were copied whole at the top of this case.
+  run bash "$BATS_TEST_TMPDIR/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 0 ]
+
+  python3 - "$BATS_TEST_TMPDIR/bin/cc-notify" <<'PYLS'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "reg_lstart_norm() {"
+assert s.count(a) == 1, s.count(a)
+open(p, "w").write(s.replace(a, "reg_lstart_norm_RENAMED() {"))
+PYLS
+  run bash "$BATS_TEST_TMPDIR/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'STALE ANCHOR registry-norm-fn' || false
+  echo "$output" | grep -q 'must be exactly 1' || false
 }
