@@ -87,6 +87,62 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #84: `master-fire-gate` 27 open → 26 open / 2 blocked.
+  closed 1 / filed 0** (twentieth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row
+  had been CURED THREE TIMES OVER and stayed open anyway, because **closure follows the CITED id, not
+  the defect** — every one of its three cures cited a SIBLING row in a DIFFERENT condition group, so
+  nothing sweeping `master-fire-gate` ever saw them. `3208342f2f4c` (filed 2026-08-08) said the idle
+  recycle is *unarmable even once a Stop carrier exists*, named two gates, and asked for three things:
+  (i) a TTL on the disarm marker, (ii) a live arm-state readout, (iii) a decision on whether
+  arm-by-default should key on something that still exists. All three landed on trunk 2026-08-16→18,
+  under `master-session-lifecycle`: **(i) `9e61a52cd` cites `ac914e8982b8`** (`DISARM_TTL_S`, 7 d
+  default; an expired marker is CLEARED, not ignored, and logged as its own `gc`/`disarm-expired`);
+  **(ii) `9e61a52cd` + `471bfc22d`** (`status` names when the opt-out was set, its age, and when it
+  stops suppressing); **(iii) `471bfc22d` cites `04010b4c8074`** — and decided AGAINST revival on the
+  record: *"a desk-less machine is a deliberate state … nothing here re-creates the role file"*, so the
+  fix is observability, `desk_role_state()` suffixing the abstain `:no-role-file` / `:role-empty`. The
+  account lottery went the same way — **`3eea84aa1` cites `fc54aeebec4a`** (a `SHARED_DIR` keyed on
+  cwd ALONE plus `UNKILL` / `rearm-<cwd>` tombstones so the LIFT crosses accounts too). The row's own
+  cited prerequisite `bd2f7c2209fa` is `done` as well. Four sibling rows closed; the row naming their
+  conjunction sat open for ten days.
+  **MEASURED, not inherited from any prior recycle's one-line verdict.** Deployed == trunk:
+  `sha256(git show origin/main:hooks/waiting-recycle.sh)` = `e281e4f6…829b88`, byte-identical to the
+  deployed `~/.claude/hooks/waiting-recycle.sh` — a LIVE-LAYER verification, not a trunk one. GATE B's
+  cure is firing **right now**: `~/.claude/autonomy/idl.jsonl` carries **6,511** `not-armed:no-role-file`
+  records and **ZERO** bare `"not-armed"`, and the two newest `waiting-recycle` rows are this very
+  session. GATE A's TTL is CONSUMED, not merely defined — it sits on the executed path at
+  `hooks/waiting-recycle.sh:766`, *before* the arm check at `:788`, i.e. precisely where the row said a
+  session "would still abstain `disarmed` before reaching it" — and its own control suite ran green
+  this turn: `tests/waiting-recycle-disarm-ttl.bats` rc=0, plan `1..6`, ok=6 not-ok=0 (ok+notok ==
+  plan), with tests 3 and 6 the anti-over-fire controls (a FRESH opt-out still fully suppresses;
+  `CC_WR_DISARM_TTL_S=0` disables expiry), so the TTL did not delete the opt-out feature.
+  🚨 **WRONG CAUSE #1 REJECTED — THE DISAPPEARANCE TRAP.** Across all five config dirs there are now
+  **zero** `disarm-*` markers and zero `OFF` files, so the row's four-pair repro cannot be reproduced
+  today. Closing on that would have closed on an absent PRECONDITION — one `clear` re-creates it — and
+  the absence is **not attributable to the cure at all**: the IDL shows `disarm-expired` = **0**, so the
+  TTL gc has never once fired in production. The close rests on the mechanism being on the executed
+  path plus its control suite, never on the empty directory.
+  🚨 **WRONG CAUSE #2 REJECTED — THE ROW'S OWN ATTRIBUTION.** "No TTL" frames the defect as missing
+  WRITER data. Verified independently rather than inherited: `clear` has written an ISO timestamp into
+  the marker since `abecaad48` (2026-07-19), and that line is UNCHANGED by all three cures — still at
+  `:538`. The age data was already on disk **~20 days before the row was filed**; the writer was never
+  the problem, all three READERS were blind to it. A live-disk detail proves the same point from the
+  other side: `~/.claude-next/state` is a **symlink to `~/.claude/state`**, so those two "accounts"
+  literally share the state DIRECTORY and yet the row observed divergent answers across them —
+  positive proof the divergence lived in the FILENAME hash `"$CFG|…"`, exactly as `3eea84aa1` warned
+  ("a fix that unified only the state DIRECTORY would look right and change nothing").
+  **RESIDUE, not re-filed — it has an owner.** arm-by-default stays dead for every session (that is
+  what the 6,511 abstains mean): `~/.claude/cc-roles/` holds only `archive/` + an empty `orchestrator`.
+  OPEN `c94cf98ab91f` owns that class (`71bd004cc416` open alongside). Per `471bfc22d` it is a
+  DELIBERATE state, not a regression, and arm-by-SENTINEL is unaffected — live `arm-*` markers exist
+  under `~/.claude`, `-tertiary` and `-quaternary`.
+  **METHOD ITEM FOR THE NEXT LINK — census the CROSS-CONDITION duplicate.** #83's lesson was precedence
+  within one chain; this one is precedence across the ROW STORE. Before driving any row, grep trunk for
+  commits citing a `backlog <id>` OTHER than the row's own and read what they cured: a row can be
+  100% dead work while every sibling it decomposes into is already `done` under a different condition.
+  The cheap probe is `git log --format='%h %cI %s' -S'<the subject file>' origin/main -- <file>` and
+  then reading each hit's `backlog` trailer — four `done` siblings surfaced here in one pass.
+
 - **2026-08-21 — drain recycle #83: `master-fire-gate` 28 open → 27 open / 2 blocked.
   closed 1 / filed 0 (nineteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row
   named the right CHOKEPOINT and the wrong ARM of it. Its prescribed remedy was aimed at the hook that
