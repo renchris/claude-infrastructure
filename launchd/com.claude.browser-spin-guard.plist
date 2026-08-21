@@ -31,13 +31,17 @@
   after a panic reboot at load 140. A guard parked in the band its own trigger condition starves is
   inert precisely when it is needed. Standard band, same as an interactive process.
 
-  IT DETECTS AND SURFACES; IT DOES NOT REAP. `--reap` exists and is tested (tests/browser-spin-guard.bats
-  test 9) but is NOT passed below. Acting on live processes is an operator decision in this repo —
-  the sentinel's actuator required an explicit in-session authorization. The asymmetry that justifies
-  a different default here: the compressor panic gives ~7.6 s of warning, so only an armed actuator
-  can act inside it, whereas this wedge ran for a day and a half. A surfaced alarm has abundant time
-  to be acted on, and the downside of auto-killing (a browser torn out mid-automation) is real. To
-  arm it, add `--reap` to the argument below — that is the whole change.
+  IT DETECTS AND IT REAPS (armed 2026-08-20). This plist used to argue the opposite — "a surfaced
+  alarm has abundant time to be acted on" — and the recurrence refuted it. The same class returned
+  three days after this job shipped: 500% aggregate CPU for 2 d 20 h, with this guard loaded and
+  correct the whole time (851 runs, verdict=spin on every tick, the remedy printed). Nothing acted.
+  Time was never the binding constraint; OWNERSHIP was — no session on this box owns machine health,
+  so the generous window bought a longer burn (~340 CPU-hours), not deliberation. The full argument,
+  including why the auto-kill downside was also overstated (membership needs a LIFETIME-AVERAGED
+  >=80% CPU over >=900 s, which real bursty automation cannot reach), is in the script header.
+
+  Reverting to detect-only is dropping `--reap` from the argument below; `CC_SPIN_GUARD=0` is the
+  kill switch that makes the whole arm inert.
 
   --notify is DAMPED IN THE SCRIPT, not here: it speaks on the edge (clean -> spin) and re-asserts
   every 6 h while the condition persists. A 5-minute job that paged every tick for a day and a half
@@ -61,9 +65,15 @@
   WHY A MISSING agent-browser WOULD HAVE BEEN SILENT. The script guards the graceful close with
   `command -v agent-browser >/dev/null 2>&1 &&`, so an unreachable binary is not an error — it is a
   SKIPPED teardown. The reap would then go straight to SIGKILL, losing the vendor's own session
-  cleanup, and nothing would say so. That is latent today because the job does not pass --reap, but
-  this header tells the operator to arm it by adding one word, so the trap was armed for whoever
-  did that. A guarded dependency that cannot be reached is the quietest kind of broken.
+  cleanup, and nothing would say so. A guarded dependency that cannot be reached is the quietest
+  kind of broken.
+
+  THAT TRAP WAS DISARMED BEFORE ARMING --reap (2026-08-20), by EXECUTING the resolution rather than
+  reasoning about it: the PATH on the ProgramArguments line below was replayed verbatim under
+  `env -i` and agent-browser 0.27.1 resolved from the fnm default-alias prefix. This is the check to
+  re-run if the graceful close ever stops appearing in the log —
+
+    env -i HOME="$HOME" PATH="$HOME/.claude/bin:$HOME/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" bash -c 'command -v agent-browser'
 
   Kill switches: CC_SPIN_GUARD=0 in the wrapper, or
   `launchctl bootout gui/$UID/com.claude.browser-spin-guard`.
@@ -77,7 +87,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:$HOME/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/browser-spin-guard.sh" --notify</string>
+        <string>export PATH="$HOME/.claude/bin:$HOME/Library/Application Support/fnm/aliases/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/browser-spin-guard.sh" --notify --reap</string>
     </array>
 
     <key>RunAtLoad</key>
