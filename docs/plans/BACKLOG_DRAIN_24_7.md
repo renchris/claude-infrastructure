@@ -87,6 +87,109 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #114: three of the row's four claims had already gone stale, the
+  fourth was real, and the probe standing guard over it could not have told anyone either way — it
+  returns the same verdict whether the bug is present or cured. closed 1 / filed 1 / landed 2
+  commits.**
+  Opened on the START-HERE order. Gate 1 clear — **no `.page` file on disk** (`find`, not a glob);
+  land-lock free; deploy lag **9** of budget 25. Fold at open: `master-convergence-deadlock` **46/4**
+  (unchanged from #113's close), store-wide **273 open · 181 blocked · 2549 items** — +2 open / +6
+  items against #113, of which the peer lead's own correction row and the reso `floor-plan` audit
+  siblings account for the movement. Not mine.
+
+  Gate 2 was **`e2eaaa0f4907`**, #113's recommended start: *qos-rewrite's bats→cc-bats rewrite
+  corrupts QUOTED ARGUMENTS, and its own comment mis-states the blast radius.* Method 18 first, and
+  this time `git log -S` was **not** a null: `27772ede4` ("the bare token is PATH's job now, so stop
+  rewriting it as data") landed **2026-08-16T02:13Z**, four days after the row's `lastTs`, and never
+  cited it. Adjudicated per conjunct (method 25):
+  · **the comment mis-states the blast radius** — REFUTED. `27772ede4` rewrote that very comment; it
+    now says the substitution "rewrites inside quoted literals and heredoc BODIES", with its own
+    2026-08-15 repro. The row's second claim was cured by the commit that made the first one narrower.
+  · **the harm — `bats -f "REAL bats emits no TAP"` → `1..0`** — CURED. That exact command now
+    produces no rewrite at all.
+  · **the trigger is a literal ` bats ` delimited both sides** — STALE. Post-`27772ede4` the trigger
+    is `<absolute dir>/bats`; the bare form is left to the PATH shim.
+  · **the mechanism — a flat-string `sed` cannot see a quote** — **TRUE AND LIVE.** Narrowing the
+    pattern fixed the common corruption, not the class.
+
+  🚨 **FINDING 1 — A STORED FALSIFIER WHOSE TRIGGER AND ASSERTION RIDE THE SAME TOKEN CANNOT
+  RETRACT, SO ITS ROW IS IMMORTAL.** This row's probe fed a **bare** `bats` command token and grepped
+  the hook's stdout for the surviving filter text. Once `27772ede4` stopped rewriting bare tokens the
+  hook emitted **nothing at all** — so the needle was absent, and the probe exited 1. It also exits 1
+  when the bug is fully present, because then the filter *is* rewritten and the needle is absent for
+  the opposite reason. Measured across three shas, against a **decoupled** control that triggers on an
+  absolute command token and asserts on a quoted copy beside it:
+
+  | sha | hook | STORED probe | DECOUPLED control |
+  |---|---|---|---|
+  | `a4e3b4d3f` (= `27772ede4^`, bug fully present) | flat sed | 1 | 1 |
+  | `7f698bbb3` (origin/main at open, residual only) | flat sed | 1 | 1 |
+  | `adf7a01b1` (this recycle's fix) | quote-aware | **1** | **0** |
+
+  The control retracts exactly at the fix, so 1/1/1 is a property of the **probe**, not of the shas.
+  ⚠️ **This bears directly on #108's "24/24 stored falsifiers exit 1", which every recycle since has
+  read as *24 rows still live*.** A structurally dead probe is indistinguishable from a live row in
+  that tally. Filed as **`fd10594f088c`** — the census is wave-sized and is NOT done here.
+
+  🚨 **FINDING 2 — THE BUG UNDER TEST CORRUPTED THE INSTRUMENT MEASURING IT, AND THE CORRUPTION READ
+  AS A CLEAN RESULT.** Three of this session's own probes were altered in flight by the live hook.
+  The decisive one: `cat > probe.sh <<'EOF' … /usr/local/bin/bats … EOF` wrote the *substituted* bytes
+  to disk, so the probe compared the hook against an input it had never been given and reported
+  "rc=1, still live" — the `1..0` shape the row itself describes, one layer out. Two further
+  instruments were wrong in the ordinary way (a case-mismatched grep needle; a `\047` that `grep`
+  reads as four literal characters). **The chain's own standing rule — write probes to a file and run
+  them with bash — routes straight through the defect**, which is what makes this a file-content bug
+  rather than a surprising echo. Cure that generalises: **assemble the trigger token at runtime**
+  (`B='ba''ts'`) so the literal never appears in the command text being measured.
+
+  🚨 **FINDING 3 — WHEN A ROW PRESCRIBES TWO FIX SHAPES, THE SUBJECT'S OWN DOCUMENTED POLICY PICKS
+  BETWEEN THEM (method 11/20).** The row offered *skip quoted regions* **or** *rewrite only in command
+  position*. The second is the one that looks cheaper and it is the wrong one: the pattern comment
+  states that `/g` exists so wrapper forms — `timeout 90 <path>/bats`, `env FOO=1 <path>/bats` — are
+  covered **without this file knowing the wrapper**, and command-position-only deletes exactly that,
+  replacing it with an allowlist of wrapper spellings (the denylist defect one layer out).
+
+  **LANDED — `adf7a01b1`** (fix + 5 red-proofed cases) **and this entry.** `sed` is replaced by an
+  `awk` walk tracking shell quote state char by char, substituting only outside quotes; it builds the
+  result with `substr()` and takes the target through `ENVIRON` rather than `-v`, so the `\`/`&`/`%`
+  replacement escaping the old path needed **cannot be wrong any more** — one fork saved per Bash
+  call and a whole metacharacter class deleted. A heredoc body is not a quoted region, so the walk
+  additionally stops substituting at the first unquoted `<<` — deliberately wider than the body, and
+  it is the case that was measured doing damage. **Fail-safe in one direction by construction:** where
+  the walk's model of the quoting disagrees with the shell's it errs toward believing it is *inside* a
+  quote (an odd apostrophe in prose parks it there) and substitutes nothing, so a miss costs a bats
+  run its QoS band and can never corrupt a command; a missing or erroring `awk` yields the empty
+  `NEWCMD` the existing guard already treats as "no rewrite". The `*bats*` pre-filter is strictly
+  weaker than the pattern it guards.
+  **Red-proof** (scratch tree at parent `7f698bbb3`, new tests over the OLD hook, aborting unless the
+  parent still carries the `sed` one-liner): **35 ok / 5 not-ok** — exactly the five new cases red,
+  every pre-existing case green; **40/0** with the fix. Four of the five are ABSENCE assertions, which
+  a hook that had simply stopped rewriting would also satisfy; the fifth pins a real command token
+  being rewritten in the same command whose quoted copy is preserved, and is red at the parent too.
+  **Gates:** qos-rewrite 40/0 (off-box green, 4s) · qos-chokepoint 47/0 · cc-cpubound 14/0 ·
+  coldcompile-admit 27/0 · coldcompile-admit-migration 7/0 · deploy-parity 69/0 — **204 tests over the
+  hook's full blast radius, 0 failures**. `shellcheck -S style` clean; `bats-assert-liveness` silent
+  and positive-controlled against a planted dead negation (rc 1 on the mutant).
+
+  **WRONG CAUSES REJECTED, and the first two were my warm priors on opening:**
+  1. *The row is live as written.* Its headline harm had been cured for four days.
+  2. *The comment still mis-states the blast radius.* It had been rewritten to state it correctly.
+  3. *Command-position-only is the cheap fix.* It deletes the documented wrapper coverage (Finding 3).
+  4. *The stored falsifier's rc=1 means the row is live.* It means nothing (Finding 1).
+  5. *The row's title can be corrected in place with `add --condition`, as the peer lead did for
+     `590fedde86cc`.* **No — and this one would have destroyed a live row.** That row is
+     condition-keyed; `e2eaaa0f4907` is event-keyed and merely `link`ed into the group, so its title
+     is in its id hash and a changed title mints a NEW id. Worse, `mk_cond_id(claude-infrastructure,
+     master-convergence-deadlock)` = **`3b22efbc2340`**, which is itself a live row — the peer lead's
+     own correction row — so the update arm would have overwritten *its* title. The correction belongs
+     here, in §2.1, exactly as method 31 says.
+  6. *My own census/probe results.* Three instruments were wrong before any of the above was trusted
+     (Finding 2).
+
+  **Store:** closed **`e2eaaa0f4907`** (mechanism-grounded, per method 21: the flat-string
+  substitution no longer exists and 5 cases pin its replacement). Filed **`fd10594f088c`** for the
+  falsifier-coupling class. `master-convergence-deadlock` 46/4 → **45/4**.
+
 - **2026-08-21 — drain recycle #113: the row named the covered half. The uncovered half was being
   measured 144×/day and read by nobody — and the land that fixed it was refused by a trunk red whose
   harness had the same disease. closed 1 / filed 0 / blocked 1 / landed 3 commits in ONE land
