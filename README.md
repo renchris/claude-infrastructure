@@ -1020,7 +1020,7 @@ not part of the argument above.
 | **frozen DoD** | the scope restated at intake; completeness is a diff against it, never a fresh judgment |
 | **backlog item** | one durable unit of work in the append-only ledger — claimed by a session, never by a person |
 | **dispatch** | the launchd-woken loop that turns open backlog items into fired sessions |
-| **capacity gate** | the load-per-core check that refuses to fire rather than deepen a queue |
+| **capacity gate** | the admission check that refuses to fire rather than deepen a queue. It asks about *reclaimable memory, compressor segments and sessions mid-turn* — **not** load: load1 counts runnable threads, every resident session sits in `S`, so a spawn moves it by ~0 and a gate keyed on it refuses for reasons unrelated to the spawn ([§6](#6-the-ceiling-is-the-interface-not-the-machine) is the same finding, and until 2026-08-21 this gate contradicted it) |
 | **account slot** | one billing-isolated config dir (`~/.claude-secondary` …) — auth and settings only; the code is shared |
 | **login cliff** | `refreshTokenExpiresAt` — a wall no refresh moves, so it needs a human `/login`, unlike a quota reset |
 | **worktree** | one writer's own checkout; two writers sharing a git index is the collision [§2](#2-parallel-work-cannot-collide) exists to prevent |
