@@ -260,6 +260,14 @@ gc_watchdog() {
     if ! kill -0 "$pid" 2>/dev/null; then
       why='dead-pid'; dead=$((dead + 1))
     else
+      # THE LOCALE PIN FOR THIS PARSE IS `export LC_ALL=C` AT LINE 59 — file scope, not this line.
+      # Do not "fix" this site by adding an inline pin, and do not read a bare `ps` here as a bug:
+      # a LINE-scoped grep for LC_ALL reports this pair as ambient and it is not. That misreading
+      # has been re-derived repeatedly. Ambient here renders `Fri 21 Aug 14:37:09 2026`, which the
+      # US-order format below cannot parse at all; LC_ALL=C normalises it to `Fri Aug 21 …`.
+      # Deleting line 59 kills the whole recycled-pid path SILENTLY via the KEEP arm below — the
+      # hermetic runner exports LC_ALL=C itself (scripts/offbox-run.sh:134), so the land gate cannot
+      # see it. tests/cc-gc.bats ratchets line 59 structurally for exactly that reason.
       ls=$(ps -o lstart= -p "$pid" 2>/dev/null)
       pstart=''
       [ -n "$ls" ] && pstart=$(date -j -f '%a %b %e %T %Y' "$ls" +%s 2>/dev/null || date -d "$ls" +%s 2>/dev/null)
