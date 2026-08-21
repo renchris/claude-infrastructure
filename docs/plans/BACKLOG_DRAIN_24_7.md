@@ -130,11 +130,19 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   reso's reaper shipped a PATH without it, every liveness gate returned empty and it **reaped a live
   worktree** (`wt-cc-233227-53597`, 2026-06-19) — `worktree-gc.sh` pins no PATH of its own and inherits
   the wrapper's, and `devserver-gc-run.sh` says the same omission "would turn it into a reaper that
-  kills every dev server on the box". The aliasing held and was **measured**: the ambient PATH that
-  `offbox-run.sh:133` forwards verbatim carries three `sbin` dirs, and with the pin **stripped**
+  kills every dev server on the box". The deletion does land green and it was **measured**: the ambient
+  PATH `offbox-run.sh:133` forwards verbatim carries three `sbin` dirs, and with the pin **stripped**
   `tests/worktree-gc-infra.bats` runs **53/53 green** under it. Axis controlled both ways — `lsof`
   resolves under ambient and is `NONE` under the hostile PATH, with `bats` kept resolvable in both, so
   the arm could actually fail.
+  ⚠️ **But the full 2×2 over both PATH subjects came back 8/8 green** (`worktree-gc-infra.bats` 53/53
+  and `devserver-census.bats` 12/12, each at pin present/stripped × ambient/hostile), and that is a
+  *different and weaker* fact than #116's `LC_ALL` case. There, a real discriminator pair existed and
+  the runner NEUTERED it — masking. Here nothing is masked, because there is no PATH assertion to mask:
+  harness law L1 of `worktree-gc-infra.bats` stubs the janitor precisely so wrapper tests cannot drift
+  into janitor tests, and no suite anywhere references `devserver-gc-run` at all. **Distinguish the two
+  before calling either a defect** — a neutered assertion is a broken guard, an absent one may be a
+  deliberate scope boundary, and only the first is the class #116 named.
   **And it is still not a defect.** Reading one layer down (method 11, fifth recycle running that it is
   the highest-yield item in the list): `worktree-gc.sh:408/415` positively controls its own oracle —
   `command -v lsof` failing, *and* an lsof that cannot report the caller's own cwd, both route to
