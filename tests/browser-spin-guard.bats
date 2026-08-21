@@ -243,3 +243,49 @@ EOF
   # the push/pull renderers must not drift: JSON and text agree on the aggregate
   echo "$output" | grep -q '"cpu_pct_total":764'
 }
+
+# ── the 2026-08-20 recurrence: a perfect detector wired to nothing ────────────────────────────
+# The guard was loaded, correct and ignored for 2 d 20 h. Two defects made that possible and each
+# gets a case here. 14/15: the log ASSERTED delivery it never checked, so the one artifact that
+# could have shown the alarm was going nowhere instead read "SENT". 16: the reap is what makes an
+# undelivered alarm survivable, so the arming itself must be pinned — it has been reverted once
+# already (b1a46b713) and a silent second revert returns the box to the incident.
+
+@test "14: a FAILING transport is logged UNDELIVERED, never SENT" {
+  # RED-PROOF: pre-fix this logged "SENT" unconditionally after `|| true` — the claimed-outcome
+  # class. The whole incident log carries one "SENT" line and it is a claim, not an observation.
+  write_incident_fixture
+  cat > "$BATS_TEST_TMPDIR/notifier.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/notifier.sh"
+  CC_SPIN_GUARD_PS="$FIX" \
+  CC_SPIN_GUARD_NOTIFY="$BATS_TEST_TMPDIR/notifier.sh" \
+  CC_SPIN_GUARD_STATE="$BATS_TEST_TMPDIR/state" \
+    run bash "$GUARD" --notify
+  [ "$status" -eq 0 ]
+  grep -q 'notify: UNDELIVERED rc=3' "$CC_SPIN_GUARD_LOG"
+  # failure-distinct: the false claim must be ABSENT, not merely accompanied by the truth
+  ! grep -q 'notify: SENT' "$CC_SPIN_GUARD_LOG"
+}
+
+@test "15: no transport on PATH is NO-TRANSPORT — a launchd env defect, not a quiet box" {
+  write_incident_fixture
+  CC_SPIN_GUARD_PS="$FIX" \
+  CC_SPIN_GUARD_STATE="$BATS_TEST_TMPDIR/state" \
+    run env PATH=/usr/bin:/bin bash "$GUARD" --notify
+  [ "$status" -eq 0 ]
+  grep -q 'notify: NO-TRANSPORT' "$CC_SPIN_GUARD_LOG"
+  ! grep -q 'notify: SENT' "$CC_SPIN_GUARD_LOG"
+}
+
+@test "16: the shipped plist ARMS the reap — detect-only is what let the box burn twice" {
+  PLIST="$REPO/launchd/com.claude.browser-spin-guard.plist"
+  [ -f "$PLIST" ]
+  # the flag must be on the EXECUTED line, not merely somewhere in the prose header
+  run grep -E '^\s*<string>export PATH=.*browser-spin-guard\.sh.*--reap' "$PLIST"
+  [ "$status" -eq 0 ]
+  # and --notify must survive alongside it: reaping silently is how the operator stops learning
+  echo "$output" | grep -q -- '--notify'
+}

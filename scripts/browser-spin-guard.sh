@@ -48,15 +48,48 @@
 # mean "nothing found" is how a null result gets read as a fault. Exit is non-zero only for a
 # usage error.
 #
-# WHY IT ONLY DETECTS, AND DOES NOT REAP, ON THE SCHEDULE. `--reap` exists and is tested, but the
-# launchd job does not pass it. This arm acts on live processes, which this repo treats as an
-# operator decision rather than a maintenance default (see the header of
-# launchd/com.claude.compressor-sentinel.plist, where arming was an explicit in-session
-# authorization). The asymmetry that justifies waiting here and not there: the compressor panic
-# gives ~7.6 seconds of warning, so nothing but an armed actuator can act inside it — whereas this
-# wedge ran for a day and a half. Any surfaced alarm has abundant time to be acted on, so the
-# marginal value of auto-killing is small and the downside (killing a browser mid-automation) is
-# not. Arming is one word in the plist's ProgramArguments if the operator wants it.
+# WHY IT NOW REAPS ON THE SCHEDULE — the detect-only design was refuted by its own re-run.
+#
+# This block used to argue the opposite, and the argument is preserved here because the way it
+# failed is the reusable lesson:
+#
+#     "the compressor panic gives ~7.6 seconds of warning, so nothing but an armed actuator can act
+#      inside it — whereas this wedge ran for a day and a half. Any surfaced alarm has abundant
+#      time to be acted on, so the marginal value of auto-killing is small and the downside
+#      (killing a browser mid-automation) is not."
+#
+# THE RECURRENCE (2026-08-20), which is the same class three days later. An `agent-browser` daemon
+# (pid 71286) held a headless Chrome whose GPU, NetworkService, StorageService and two renderers sat
+# at 94-100% CPU each — 500% aggregate — for TWO DAYS TWENTY HOURS. This guard was activated,
+# loaded, and working perfectly throughout: 851 runs, `verdict=spin` on every tick from the age
+# floor onward, the roles named, the exact remedy printed. Nothing acted on any of it. The operator's
+# eventual signal was not the alarm; it was noticing the machine felt laggy. Killing the tree took
+# load 262 -> 93 and free memory 0.05 GB -> 4.76 GB within four minutes.
+#
+# WHERE THE ARGUMENT WENT WRONG. It reasoned about the TIME available to act and concluded the
+# window was generous. But time was never the binding constraint — OWNERSHIP was. The alarm went to
+# `cc-notify --role desk`, damped to one page per 6 h; across the whole incident the log carries a
+# single `notify: SENT`, and even that was a claim rather than a checked delivery (fixed below). No
+# session on this box owns machine health, so a longer window did not buy deliberation, it just
+# bought a longer burn: ~340 CPU-hours. "Abundant time to act" is only worth something if somebody
+# acts. An alarm with no hands is not a slower actuator; it is not an actuator at all.
+#
+# WHY THE DOWNSIDE HALF WAS ALSO OVERSTATED — by this script's own instrument argument, above.
+# Membership requires pcpu >= 80 over an age >= 900 s, and Darwin's pcpu is LIFETIME-AVERAGED: a
+# process qualifies only by sustaining ~80% across its entire life. Real automation is bursty and
+# spends most of its life blocked on the network and on the agent's next command, so it cannot reach
+# that floor; a wedge reaches it trivially (the incident read 94-100% against 2d20h lifetimes). The
+# population a reap can touch is, by construction, essentially only wedges. The reap is graceful
+# first (`agent-browser close --all`, which is what the daemon's own CLI does), hard-kills only the
+# survivors, and re-reads argv immediately before each kill so a recycled pid is refused rather than
+# killed. Cost of a false positive: a warm browser cold-starts on the next command. Cost of a false
+# negative, measured twice now: the box.
+#
+# WHAT STAYS TRUE. The compressor asymmetry in the old text is still correct — that guard's 7.6 s
+# window is why IT needs an armed actuator. This one's 2d20h window turned out not to be the
+# mitigation it looked like. Both now act; they differ only in urgency, not in whether detection
+# alone is enough. `CC_SPIN_GUARD=0` remains the kill switch, and dropping `--reap` from the plist
+# returns this to detect-only.
 #
 # Usage:
 #   browser-spin-guard.sh              # detect + report (never kills)
@@ -198,10 +231,25 @@ EOF
     write_state spin "$last"; return 0
   fi
   msg="⚠️ wedged automation browser: $1 processes at $2% aggregate CPU for >$((AGE_S/60))m. This is the 2026-08-17 class (load 244, 0% idle). Remedy: agent-browser close --all"
-  if [ -n "${CC_SPIN_GUARD_NOTIFY:-}" ]; then "$CC_SPIN_GUARD_NOTIFY" "$msg" || true
-  else command -v cc-notify >/dev/null 2>&1 && { cc-notify --role desk "$msg" >/dev/null 2>&1 || true; }
+  # DELIVERY IS CHECKED, NOT CLAIMED (2026-08-20). This used to log "SENT" unconditionally after a
+  # `|| true`, so the log asserted an outcome it had never looked at — the repo's own
+  # claimed-outcome-vs-checked-outcome class, and the same defect cc-reaper was fixed for. It
+  # mattered here: the 2026-08-20 recurrence has exactly ONE "notify: SENT" line in its whole log,
+  # and that line is a claim. Distinguish the three outcomes, because they have different owners:
+  # SENT (transport returned 0) · UNDELIVERED (transport ran and FAILED) · NO-TRANSPORT (no
+  # cc-notify on PATH — a launchd-environment defect, not a quiet box).
+  local rc=0
+  if [ -n "${CC_SPIN_GUARD_NOTIFY:-}" ]; then "$CC_SPIN_GUARD_NOTIFY" "$msg" || rc=$?
+  elif command -v cc-notify >/dev/null 2>&1; then cc-notify --role desk "$msg" >/dev/null 2>&1 || rc=$?
+  else rc=127
   fi
-  log "notify: SENT ($1 procs, $2%)"
+  if [ "$rc" -eq 0 ]; then log "notify: SENT ($1 procs, $2%)"
+  elif [ "$rc" -eq 127 ]; then log "notify: NO-TRANSPORT — cc-notify not on PATH ($1 procs, $2%)"
+  else log "notify: UNDELIVERED rc=$rc ($1 procs, $2%)"
+  fi
+  # State advances on ATTEMPT, not on success: a transport that is down would otherwise re-page
+  # every 5-minute tick forever, which is the attention-budget failure damping exists to prevent.
+  # The reap arm below is what makes an undelivered alarm survivable.
   write_state spin "$now"
 }
 
