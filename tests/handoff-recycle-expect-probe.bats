@@ -240,6 +240,11 @@ setup_recycle() {
   export SID="PANE-1" CMD="claude --resume abc" LAUNCHER="claude" RECYCLE_MARKER="MK"
   pin_term_verdict_for_watcher() { :; }
   as_tty() { printf '/dev/%s' "$STUB_TTY"; }
+  # recycle_fire resolves through as_tty_classified now (item 87a515ed087e), so it can tell a pane
+  # the resolver said is GONE from a resolver that never answered. The stub carries the real rc
+  # contract — 0 resolved / 1 absent — rather than always-0, so a test that empties STUB_TTY gets
+  # the state it is asking for instead of a resolved empty string.
+  as_tty_classified() { [ -n "$STUB_TTY" ] || return 1; printf '/dev/%s' "$STUB_TTY"; }
   it2_type_verified() { printf '%s\n' "$3" >> "$TYPED"; return 0; }
   cc_sid_for_pane() { printf 'old-sid'; }
   write_teardown_marker() { :; }

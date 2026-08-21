@@ -99,14 +99,22 @@ setup() {
   # AppleScript-bridge contention as_tty's osascript errors NON-ZERO; a bare `SUC_TTY="$(as_tty …)"` under
   # `set -e` then LEAKED that code (status 1/128+sig), NOT the gate's intended `exit 3` — the same CLASS as
   # cc-run 846380c6308f. The seam HANDOFF_TTY_FAIL_FILE fails EVERY query (count 4 > RETRIES 3), so the run
-  # never touches real iTerm2 — the only way to reach exit 3 is the fixed as_tty retrying past the failures
-  # then classifying the unresolved pane as absent. A naive as_tty (no retry / no set-e guard) leaks status
-  # 1 here instead. RETRY_SLEEP_S=0 keeps it instant.
+  # never touches real iTerm2 — the only way to reach a CLASSIFIED exit is the fixed as_tty retrying past
+  # the failures and then reporting what it actually knows. A naive as_tty (no retry / no set-e guard)
+  # leaks status 1 here instead. RETRY_SLEEP_S=0 keeps it instant.
+  #
+  # RE-KEYED 3 → 7 (item 87a515ed087e). This case's SUBJECT is unchanged — "a failing tty query does not
+  # leak a raw osascript code" — and 7 discriminates from the leak (1 / 128+sig) exactly as 3 did. What
+  # changed is the subject's honesty: every query here FAILED, so the resolver never answered, and the
+  # old comment on this very line said the gate reached 3 by "classifying the unresolved pane as absent"
+  # — naming the misclassification as the intent. Exit 3 is now reserved for a resolver that ANSWERED and
+  # said the pane is not there; a resolver that never answered exits 7 and says so. The suite that pins
+  # the split itself is tests/handoff-selfclose.bats § RESOLVER CANNOT TELL.
   local failf="$BATS_TEST_TMPDIR/ttyfail"; printf '4\n' > "$failf"
   run env CC_COMPLETION_PUSH_BIN="$STUB" \
       HANDOFF_TTY_FAIL_FILE="$failf" HANDOFF_TTY_RETRIES=3 HANDOFF_TTY_RETRY_SLEEP_S=0 \
       bash "$HF" self-close --successor "NOPANE-5150" --session-id "fake:FFFF-5150"
-  [ "$status" -eq 3 ]                       # NOT a leaked osascript code — the flake this fixes
+  [ "$status" -eq 7 ]                       # NOT a leaked osascript code — the flake this fixes
   [ ! -f "$MARK" ]                          # still aborts BEFORE any completion push
   [ "$(cat "$failf")" -eq 1 ]              # seam consumed on all 3 retries (4→1) — proves the query was retried
 }

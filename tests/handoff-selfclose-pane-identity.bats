@@ -170,6 +170,9 @@ PANE-OTHER /dev/ttysOTHER"
   eval "$(sed -n '/^kitty_identity() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^in_kitty() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^_as_tty_query() {/,/^}/p' "$HF")"
+  # as_tty is a state-DISCARDING wrapper over as_tty_classified, which owns the retry loop
+  # (item 87a515ed087e) — extract it for the same reason _as_tty_query is extracted above.
+  eval "$(sed -n '/^as_tty_classified() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^as_tty() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^_it2_pane_tty_listing() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^own_ancestry_pids() {/,/^}/p' "$HF")"
