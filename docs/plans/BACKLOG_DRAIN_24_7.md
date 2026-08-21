@@ -87,6 +87,73 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #92: `master-fire-gate` 19 open → 18 open / 2 blocked.
+  closed 1 / filed 0** (twenty-eighth consecutive recycle in `master-fire-gate`). Row
+  `a5b39138e098` closed: *"Parallelise claude-accounts collect(): 5-way (4 probes +
+  working_concurrency) 2480ms -> 340-674ms; needs _REJECTED_LOCK, unique temp names
+  (_save_rejected:735 pid-only temp is identical across threads), _HEAL_GATE semaphore, SSL/urllib
+  opener pre-warm, jitter in both fetch_usage sleeps, and a log_event on the 429 branch which today
+  emits NOTHING"*, filed 2026-08-11T06:22:43Z. ONE commit, TWO files — `bin/claude-accounts`
+  (modified) and `tests/claude-accounts-parallel-collect.bats` (NEW, 6 cases).
+  **Measured, interleaved A/B, N=3 per arm against the pre-fix tree at pin `c2ffa94cf`: collect()
+  median 1.889 s → 0.532 s = 3.55×**, inside the spec's projected 2.6–4×.
+
+  🚨 **A FUNDED SPEC IS THE CHEAPEST CLOSE AND THE MOST DANGEROUS ONE: ITS REASONING KEEPS, ITS
+  CONSTANTS ROT.** The row cites a patch shape at
+  `~/.claude/research-artifacts/start-latency-2026-08-10/D-parallel.md`, and eleven days later its
+  *mechanism* analysis was correct line-for-line — every shared-state race, every anchor
+  (`_save_rejected`'s pid-only temp, both `fetch_usage` sleeps, the lazy `SSL_CTX` and
+  `urllib.request._opener`), and the adversarial call to use `executor.map` rather than
+  `as_completed` because row order is load-bearing. Exactly one *number* had moved, and applying it
+  verbatim would have been a regression **inside a diff whose whole purpose is to make the sweep
+  faster**: §8 says *"raise `budget_s` to 3.0"*, correct against the 2.0 default it measured — but
+  `KWORK_BUDGET_S` has since been raised to **5.0**, so passing 3.0 would have CUT the working-census
+  budget by 40% **and** hard-coded past `_cliff_env`'s `CC_ROUTE_KWORK_BUDGET_S`, the operator's own
+  override. A breach there is not a slow row, it is a fleet-wide `k_work` blackout for the whole
+  sweep. The prescription is satisfied by leaving the budget alone. **Read a spec's REASONING as
+  authority; re-derive every CONSTANT against the tree.**
+
+  🚨 **THE ROW'S OWN HEADLINE IS WRONG ON THE ARITHMETIC, AND THE SPEC IT CITES SAYS SO.**
+  "Parallelise the per-account loop" caps the win at ~40%, because the loop was only **54%** of the
+  sweep (measured cold: `load_cfg` 44 ms · `concurrency()` 221 ms · `working_concurrency()` **865 ms**
+  · 4 probes 1350 ms serial = 2480 ms). The single largest term is `working_concurrency`, and it is
+  **not consumed inside the loop at all** — its result is attached to each row *after* the probe
+  returns — so it is a pure 5th independent task and co-scheduling it is free. `concurrency()`
+  stays a serial PREFIX for the opposite reason: `k_live` is the input to every probe's heal
+  rotation-safety gate. The row title already encodes the corrected design ("5-way"); the naïve
+  reading of its first four words does not.
+
+  🚨 **A CURE THAT LOOKED ALREADY-LANDED, REFUTED BY 47 SECONDS.** `b3b14ecbe`
+  (*"feat(accounts): --keepwarm producer"*) keeps the shared 90 s cache warm via a launchd job, so an
+  ordinary `claude-accounts --json` serves the cache and never pays `collect()` at all — measured
+  0.111 s in-process against 5.2 s for a cache-missing subprocess. That reads exactly like *"the
+  row's target is off the critical path, close it stale"*. Normalising both sides to UTC refutes it:
+  keepwarm landed **2026-08-11T06:21:56Z**; the row was filed **2026-08-11T06:22:43Z** — **47 seconds
+  later**, by an author who therefore already knew. Keepwarm is the thing that *pays* the collect()
+  cost on a timer, not the thing that avoids it. (Same instrument warning in the small: timing
+  `probe_account` directly warms the 90 s cache, so the very next `collect()` reading is already warm
+  — every number above is A/B interleaved for that reason, and trial 2 spiked on **both** arms,
+  1.889→19.2 s and 0.532→6.6 s, which is exactly what interleaving exists to make legible.)
+
+  🚨 **MY OWN FIRST BOUND WAS VACUOUS AND ONLY THE RED-PROOF CAUGHT IT.** Case 1 uses *descending*
+  probe delays, deliberately — under `as_completed` the fastest account finishes first and the rows
+  come back reversed, so the descending shape is what pins `map` over `as_completed` rather than
+  merely proving "it is parallel". But the ceiling was then sized as `4 × DELAY` when the serial
+  floor of descending delays is `2.5 × DELAY` = 1.5 s, so a 1.8 s ceiling **passed against the
+  pre-fix tree**: 5/6 red, one silent vacuous green. Resized to sit in the real gap (serial ≥ 2.0 s,
+  concurrent ~0.85 s, bound 1.4 s) it goes **6/6 red pre-fix, 6/6 green post-fix**. A red-proof that
+  is 5-of-6 red is not "mostly proved" — the green one is the case you have no evidence about.
+
+  **Gates.** `ast.parse` ✓ · `ruff check` clean ✓ · new suite 6/6 (plan 6, ok 6, not-ok 0) ·
+  pre-fix control at `c2ffa94cf` 6/6 **red** · ten accounts-adjacent suites re-run: 9 fully green,
+  and `claude-accounts-core.bats` 83/84 with the single not-ok being **`router M7: pace line`**,
+  which fails **identically on the pre-fix control tree** — the documented pre-existing trunk red,
+  attributed, not inherited. `bats-shellcheck-lint` / `bats-kill-guard-lint` /
+  `bats-testname-eval-lint` (524 suites) / `test-hermeticity-lint` (0 new leaks, after adding the
+  `$HOME` fixture it correctly demanded) / `shellcheck -S style` all clean;
+  `bats-assert-liveness.py` silent on the subject **and positive-controlled** — an injected
+  non-final `! false` in a copy is flagged `DEAD [negation]` rc=1, so the silence is a verdict.
+
 - **2026-08-21 — drain recycle #91: `master-fire-gate` 20 open → 19 open / 2 blocked.
   closed 1 / filed 0** (twenty-seventh consecutive recycle in `master-fire-gate`). Row
   `e15a743e12ba` closed: *"shrink the off-box exclusion list with a census run — 44 entries were
