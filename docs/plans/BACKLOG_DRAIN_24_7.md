@@ -87,6 +87,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #98: `master-fire-gate` 13 open → 12 open / 2 blocked.
+  closed 1 / filed 0** (thirty-fourth consecutive recycle in `master-fire-gate`). Row
+  `b8a515115b2f` closed, filed 2026-08-12T10:54:35Z: *"cc-cloud retire is FORWARD-ONLY: 41
+  declarations carry 0 .retired markers and the 5 already-.returned ones short-circuit at 'already
+  returned', so the 24 sessions that reached a terminal state before W0 landed have no path to
+  release their claim — the ceiling self-heals only for round trips that start after the fix."*
+  ONE commit, ONE file (`docs/plans/BACKLOG_DRAIN_24_7.md`). An **ADJUDICATION** close.
+  Tree pinned at `f73cd4843`.
+
+  🚨 **THE ROW PROVED ONE PATH WAS CLOSED AND CONCLUDED NO PATH EXISTED — A CENSUS OF ONE FILE
+  REPORTED AS A FACT ABOUT THE TREE. AND IT DID NOT MAKE THAT ERROR ITSELF: IT INHERITED IT VERBATIM
+  FROM A COMMENT IN THE VERY FILE IT WAS READING, WHICH WAS ALREADY FALSE WHEN WRITTEN.**
+
+  **Both mechanism premises SURVIVE.** (1) `cc-cloud retire` is wired forward only inside
+  `scripts/cloud-return.sh` (`:489` terminal branch, `:511` bounded-retry branch). (2) `handle()`
+  short-circuits at `scripts/cloud-return.sh:266` —
+  `if [ -f "$STATE/$id.returned" ]; then say …; return 0; fi` — inside the *same function* as both
+  retire calls (`handle()` opens at `:246`), so an id already carrying `.returned` can **never**
+  reach either. The row proved this correctly and it is still true today.
+
+  **The CONCLUSION is refuted, and was false when written.** A second, independent retire caller
+  already existed: **`cc-offload gc`** (`bin/cc-offload:758` `cmd_gc`, `:784`
+  `"$CLOUD_BIN" retire --id "$id"`). It selects on **classified state** —
+  `cc-cloud list --json --state | jq 'select(.retired != true) | select(.state as $s | $want | index($s))'`
+  — filtering on `.retired` and **never on `.returned`**, so premise 2's short-circuit is
+  structurally irrelevant to it. It is retroactive *by construction*: it asks what a declaration IS
+  now, not when its round trip started. Dated in UTC on both sides
+  (`TZ=UTC git log --date=format-local:'%Y-%m-%dT%H:%M:%SZ'`): `cmd_gc` born **`237ecf243`
+  2026-08-10T06:40:00Z**; forward wiring **`a48ab4594` 2026-08-12T09:11:03Z**; **this row filed
+  2026-08-12T10:54:35Z**. The backward path predates the row by **2 d 04 h 14 m 35 s**.
+
+  **It did not stay theoretical — it ran, on exactly this row's population.** Census of
+  `~/.claude/autonomy/cloud` (217 `.decl` / 88 `.retired` / 47 `.returned`): the ids carrying
+  `.returned` at the row's own filing instant number exactly **five** — the row's own *"the 5
+  already-.returned ones"* — and all five were released retroactively in one batch second,
+  **2026-08-18T03:54:17–18Z**, at lags of 138–152 h (`013H8jXq4Njbg68rKdsJ8ter`,
+  `017ga3J7cGNKkq4AMBmd3rrE`, `01CCZcjYGJnLMuRQrFzaaqx7`, `01CHL2GUxKQq2M69kbZbeBaT`,
+  `01HEudSuWY9hLk2Y5jqqX7Nr`). `pre_row_returned=5 · retroactively_released=5 · STILL_STRANDED=0`;
+  across the whole store today **zero of 47** `.returned` ids hold an unreleased claim. Attribution
+  is by **elimination, not timing**: premise 2 proves the forward path cannot produce a
+  `retired_at` later than its own `returned_at`, and `cc-offload gc` is the only other retire caller
+  in the tree.
+
+  🚨 **THE GENERALISABLE DEFECT — 0 MARKERS IS NOT 0 CALLERS.**
+  `scripts/cloud-return.sh:475` states *"`cc-cloud retire` shipped as a verb with **ZERO callers**:
+  0 `.retired` markers across 38 declarations"*. Measured at **`a48ab4594^`** — the tree one instant
+  *before* that comment was authored — production callers of `retire --id` numbered exactly **one**:
+  `bin/cc-offload:784`. `git merge-base --is-ancestor 237ecf243 a48ab4594` = **TRUE**. The comment
+  counted **markers** (a runtime artifact) and reported **callers** (a tree fact), and they diverge
+  here for a mundane reason: `cc-offload gc` is `CONFIRM=1`-gated and manual, so a perfectly real
+  path had legitimately produced zero markers. The row, filed **1 h 43 m 32 s** later, restated that
+  census as *"no path"* — and **a path that has never been RUN reads exactly like a path that does
+  not EXIST**. Method for the successor: when a row says *no path exists*, census the **verb** across
+  the tree (`grep -rn '<verb>' bin scripts hooks`), never the one producer you are already reading —
+  and treat a **runtime-artifact count as evidence about runtime only**. Memories:
+  `caller-census-keyed-on-path-misses-the-name`, `lookup-miss-is-not-absence`.
+
+  The row's wider **24-session** figure is a larger population than the 5 and is not separately
+  re-censusable nine days on, so this close rests on the **mechanism**, not that count (method 11):
+  `cc-offload gc` releases by classified terminal state, which is precisely how the row describes
+  those 24.
+
+  **Negative control, non-vacuous, on the cure side** (method 27 — the parent must carry the *prior*
+  shape, not merely lack the new one; scratch trees via `git archive`, nothing touched):
+
+  ```text
+  needle          a48ab4594 (comment)   a48ab4594^ (prior shape)   verdict
+  retire --id     3 production callers   1 production caller       ← prior shape PRESENT, and it
+                  (cc-offload:784,       (cc-offload:784)            already refutes "ZERO callers"
+                   cloud-return:458,:480)
+  cmd_gc          2 (row-time trunk      0 (237ecf243^ — bin/cc-offload
+                  a1af2a81c)              did not yet exist)
+  ```
+
+  **Wrong causes rejected** (recorded so the next reader does not re-walk them): **(1)** *"the guard
+  moved into `is-offbox`"* — **no**. `bin/cc-cloud` `cmd_is_offbox` (`:746-753`) is still exactly two
+  file-existence tests (`.decl` present, `.retired` absent) with no `.returned` notion at all;
+  stopping at that null returns an UNCURED verdict. **(2)** *"the forward path retired them"* —
+  structurally impossible, per premise 2's own short-circuit. **(3)** *"the state dir was rewritten,
+  so the same-second `retired_at == returned_at` pairs are fabricated"* — an artefact of **my own
+  instrument**: a hand-computed cutoff epoch was wrong by ~4 days and reported **33** pre-row
+  `.returned` ids; `1786744307` is 2026-08-14T21:51:47Z (**post**-cure), so those pairs are the
+  forward path working correctly. Deriving the cutoff with `date -j -f` *plus printing a positive
+  control on the conversion* collapsed 33 → the true 5. **An epoch computed by hand nearly
+  manufactured a contradiction that would have refuted a correct close.**
+
+  **Residual, deliberately NOT filed:** `cc-offload gc` is manual and `CONFIRM=1`-gated, so the
+  backward release depends on someone running it — the 138–152 h lag above is that dependency made
+  visible. That is a property of the cure, not a surviving instance of this row's defect, and the
+  wider spawn-economy row **`1b00d62958a6`** already carries the venue-and-release class.
+
 - **2026-08-21 — drain recycle #97: `master-fire-gate` 14 open → 13 open / 2 blocked.
   closed 1 / filed 0** (thirty-third consecutive recycle in `master-fire-gate`). Row
   `8c60170a2037` closed, filed 2026-08-07T10:21:25Z: *"3 live sessions share ONE item's worktree
