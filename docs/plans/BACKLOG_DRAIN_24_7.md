@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #117: #116's masking class has a population of ONE. Four of the six
+  allowlist variables have no self-pinning subject at all, and the two that do are already guarded a
+  layer below the census. filed 0 / closed 0 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  **still differs** from trunk (checkout **16** behind, budget 25) — #114's fix has now been landed and
+  *not running* for **four consecutive recycles**. Zero heredocs; every probe written with the Write
+  tool. Fold at open: `master-convergence-deadlock` **46/4**, store-wide **271 open · 182 blocked ·
+  2553 items** — **identical to #115 and #116 on all three**, a third window with no movement from
+  anyone, mine included.
+
+  Target: #116's handover — *census the other five variables in `scripts/offbox-run.sh`'s `env -i`
+  allowlist (`HOME · TMPDIR · PATH · TERM · LC_ALL · CC_OFFBOX`) for the aliasing defect it proved on
+  `LC_ALL`: a subject that pins an env var for itself is untestable under a runner that pins the same
+  var externally, so deleting the subject's pin lands green.* **Result: a clean NULL, and the null is
+  the finding.** Of the six, only two have any subject that self-pins: **`LC_ALL` (5)** —
+  `gate-manifest.sh:32`, `cc-gc.sh:59`, `browser-spin-guard.sh:113`, `git-identity-assert.sh:41`,
+  `bin/cc-memory-rotate:77` (matching `land-lock.sh:88`'s "5 of our own scripts" exactly) — and
+  **`PATH` (2)**: `worktree-gc-infra-run.sh:18`, `devserver-gc-run.sh:16`. **`HOME`, `TMPDIR`, `TERM`
+  and `CC_OFFBOX` have ZERO**, so for four of the five handed over there was never anything to alias.
+  `HOME`'s 33 apparent hits are all fixture STRINGS inside `test-hermeticity-lint.sh`'s own selftest —
+  method 48 exactly, the lint sitting in its own corpus, caught only by printing the members (method
+  26) and reading the filenames in my own output.
+
+  🚨 **THE MOVE THAT MADE THE NULL WORTH ANYTHING — CONTROL A CENSUS AGAINST THE INSTANCE THAT PROVED
+  THE CLASS.** The 2×2 over the four remaining `LC_ALL` subjects (pin present/stripped × `LC_ALL=C` /
+  hostile `en_CA.UTF-8`, mutation derived from the anchor by `grep -v` with a post-condition asserting
+  the line is gone) returned **16 cells, all green, all identical** — which is equally the signature of
+  a dead instrument (method 4). So the identical harness was pointed at **`scripts/cc-gc.sh:59`, the
+  member #116 proved**, and it reproduced the red *by name*: stripped × `C` → 2 not-ok, stripped ×
+  `en_CA.UTF-8` → 3 not-ok, the reds being #116's own landed cases (`the lstart parse is locale-pinned
+  by the SUBJECT`, `RECYCLED pid is still separated under a non-C locale`), against 28/28 green with the
+  pin present. **The instrument works; the population is empty.** Generalisable: *a census that finds
+  nothing is worthless until it is controlled against a known positive — and the known positive is
+  free, because it is whatever proved the class in the first place.* Without that arm, "no defect
+  found" is the most expensive false negative available, and it is indistinguishable from diligence.
+
+  🚨 **THE SECOND HALF, AND THE ONE THAT KILLED THE BEST-LOOKING FIND: "LOAD-BEARING PIN + DELETION
+  LANDS GREEN" IS STILL NOT A DEFECT UNTIL YOU ASK WHAT ELSE CATCHES THE HARM.** The `PATH` arm looked
+  far stronger than `LC_ALL` ever did, on every axis a triage uses: both files carry a 🚨 comment citing
+  a *realised incident* — `lsof` lives only in `/usr/sbin` (verified: `/usr/bin/lsof` does not exist),
+  reso's reaper shipped a PATH without it, every liveness gate returned empty and it **reaped a live
+  worktree** (`wt-cc-233227-53597`, 2026-06-19) — `worktree-gc.sh` pins no PATH of its own and inherits
+  the wrapper's, and `devserver-gc-run.sh` says the same omission "would turn it into a reaper that
+  kills every dev server on the box". The aliasing held and was **measured**: the ambient PATH that
+  `offbox-run.sh:133` forwards verbatim carries three `sbin` dirs, and with the pin **stripped**
+  `tests/worktree-gc-infra.bats` runs **53/53 green** under it. Axis controlled both ways — `lsof`
+  resolves under ambient and is `NONE` under the hostile PATH, with `bats` kept resolvable in both, so
+  the arm could actually fail.
+  **And it is still not a defect.** Reading one layer down (method 11, fifth recycle running that it is
+  the highest-yield item in the list): `worktree-gc.sh:408/415` positively controls its own oracle —
+  `command -v lsof` failing, *and* an lsof that cannot report the caller's own cwd, both route to
+  `_cwds_unanswerable` → rc 2 → `UNPROVABLE ⇒ KEEP` (`:1315`), and `devserver-census.sh`'s D-e control
+  exits 3 → `verdict=oracle-blind`. So a PATH omission degrades both janitors to a loud no-op sweep,
+  never a bad reap. Better still, `tests/worktree-gc.bats` **already ratchets exactly this harm** —
+  `"no liveness oracle at all → refuse to remove (exit 3), never a blind reap"` and `"a PRESENT but
+  BLIND lsof does not count as an oracle"`, **2/2 green, run by name** (method 6) — and it is immune to
+  this whole class *by construction*, because it drives the `CC_WTGC_LSOF` seam at `/nonexistent`,
+  which no ambient PATH can rescue. Generalisable: **a guard placed at the layer where the HARM lands
+  is invisible to a census keyed on the layer where the MECHANISM lives.** Both files' own comments say
+  the PATH pin is "belt and braces"; the census could not see the braces.
+
+  **Wrong causes rejected**, with why: (1) *the class generalises across the allowlist* — refuted, 4 of
+  6 variables have no subject; (2) *the 16/16 uniform green means no exposure* — could not be believed
+  until the cc-gc control ran, and the control is what licensed it; (3) *`HOME` is the second instance*
+  — its 33 hits are one lint's own selftest fixtures, zero real subjects; (4) *the `PATH` pin is the
+  sole protection against the 2026-06-19 reap* — refuted, both janitors fail closed on a blind oracle
+  independently of PATH; (5) *therefore ship a `PATH` ratchet into `tests/worktree-gc-infra.bats`* —
+  rejected as ceremony: it would guard, at the wrapper, a harm already ratcheted at the seam, and
+  harness law L1 of that suite stubs the janitor precisely so wrapper tests cannot drift into janitor
+  tests; (6) *file a row to "track" the null* — rejected per #116's method 10, a row over a refuted
+  claim mints a permanent false positive.
+
+  **Landed** (`scripts/offbox-run.sh`, comment only, `bash -n` + `shellcheck -S style` clean,
+  `tests/offbox-admission-lint.bats` + `tests/offbox-partition.bats` **1..39 ok=39 notok=0 skip=0**):
+  the producer's own header now states the corollary of *"the allowlist is exactly what a suite may
+  assume"* — **that a suite therefore cannot, by default, test a subject's own pin of one of these six,
+  and the cure is in the SUITE (set a hostile value; a suite's own `export` overrides the allowlist
+  value), never in the allowlist** — plus this census inline so it is not re-derived. That is the
+  standing lint's ninth instance and its cheapest form: #109's inverse, where reading the producer's
+  header resolves in one step what otherwise costs a session.
+
 - **2026-08-21 — drain recycle #116: the eleven-recycle "warm bounded item" is NOT A BUG — the pin it
   says is missing is at file scope, 200 lines above the site. But the axis it pointed at was real one
   layer down: that pin is load-bearing, and the land gate cannot see it being deleted. filed 0 /

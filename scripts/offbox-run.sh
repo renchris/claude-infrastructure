@@ -120,6 +120,27 @@ run_one() {
   # env -i so the runner's own environment cannot leak in; the allowlist below is exactly what a
   # suite may assume. TMPDIR is fresh per suite so two suites cannot collide on a scratch path
   # (rule 4 of scripts/test-hermeticity-lint.sh, the per-run-uniqueness rule).
+  #
+  # 🚨 THE COROLLARY OF "EXACTLY WHAT A SUITE MAY ASSUME": A SUITE CANNOT, BY DEFAULT, TEST A
+  # SUBJECT'S OWN PIN OF ONE OF THESE SIX. If a subject exports X for itself and X is on this
+  # allowlist, the runner already supplies X — so a diff DELETING the subject's pin still lands
+  # green, and the invariant the subject is supposed to own is satisfied by the harness instead.
+  # Measured on scripts/cc-gc.sh:59 (`export LC_ALL=C`): its discriminator pair reds at the desk
+  # and stays green here, because LC_ALL=C below IS the pin. THE CURE IS IN THE SUITE, NOT HERE —
+  # a suite testing an env pin must set a HOSTILE value ITSELF (a suite's own `export` overrides
+  # the value below; tests/cc-gc.bats does exactly this). Do NOT "fix" it by dropping a variable
+  # from the allowlist: every suite then loses an axis it is entitled to assume.
+  #
+  # CENSUS 2026-08-21 — DO NOT RE-DERIVE, THE CLASS DOES NOT RECUR. Of the six, only two have any
+  # subject that self-pins at all: LC_ALL (5 — gate-manifest.sh:32, cc-gc.sh:59, browser-spin-
+  # guard.sh:113, git-identity-assert.sh:41, bin/cc-memory-rotate:77) and PATH (2 — worktree-gc-
+  # infra-run.sh:18, devserver-gc-run.sh:16). HOME/TMPDIR/TERM/CC_OFFBOX have ZERO, so there is
+  # nothing to alias (HOME's 33 apparent hits are all fixture STRINGS inside test-hermeticity-
+  # lint.sh's own selftest — the lint sitting in its own corpus). Of the seven real pins, cc-gc.sh
+  # was the only exposed one: a 2x2 (pin present/stripped x C/en_CA.UTF-8) moved no verdict for the
+  # other four LC_ALL subjects, and both PATH pins are belt-and-braces behind an independent lsof
+  # positive control that fail-closes to KEEP/refuse — already ratcheted, immune to the PATH here
+  # because it drives the CC_WTGC_LSOF seam (tests/worktree-gc.bats "never a blind reap", 2 green).
   mkdir -p "$home/tmp"
   # CWD is the repo root, matching how scripts/postland-verify.sh runs the corpus: suites resolve
   # sibling paths relative to the checkout, so running from anywhere else changes what is under test.
