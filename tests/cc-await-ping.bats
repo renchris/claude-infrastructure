@@ -1206,3 +1206,78 @@ recorder_pid() { # <watcher pid> -> pid of its python side-car, empty if none
   run grep -cF 'verdict=killed' "$cap" # but the watcher itself was untouched
   [ "$output" = "1" ] || false
 }
+
+# ══ A SIGNAL AFTER THE TERM EXPIRED IS NOT A KILL (task #173, 2026-08-21) ═══════════════════════
+#
+# The whole _sig_verdict path had NO coverage in this file, which is how the defect below survived.
+#
+# THE DEFECT: the wait loop re-tests `elapsed < TIMEOUT` only once per --interval (15s in the
+# recommended arm), and bash additionally defers a trap until the current foreground command
+# returns. So there is a window of up to one interval in which the budget is spent but the loop has
+# not yet said so. A signal landing there took the TERM path and emitted, verbatim, "it did NOT time
+# out" — about a watcher whose own MEASURED elapsed had already reached its budget — and wrote a
+# WAKE-PATH-DOWN anomaly into the inbox. The successor then reads that and goes hunting for an
+# external killer that never existed.
+#
+# MEASURED over the 552 WAKE-PATH-DOWN lines in ~/.claude/mailbox (271 carry a parseable
+# elapsed/budget pair): 19, i.e. 7%, report elapsed >= budget. Every one asserts something false
+# about itself, and none of them needs a killer to explain.
+#
+# THE HANDLE IS THE .watching MARKER, not a pgrep: the watcher records its OWN pid there (see the
+# heartbeat case above), so the killer below targets a pid the subject itself published. `pgrep -f`
+# would match any process whose argv merely MENTIONS the name — including this suite's own bats
+# runner — which is the instrument error that cost this session a false reading earlier today.
+
+@test "#173 a SIGTERM arriving AFTER the budget expired reports the TIMEOUT it reached, not a kill" {
+  # budget 1s, interval 60s: after the first check the loop sleeps far past its own deadline, so the
+  # signal is guaranteed to land inside the window the defect lives in.
+  # INTERVAL 5, NOT 60 — and the reason is the very mechanism under test. bash defers a trap until
+  # the current foreground command returns, and that command is the poll `sleep`. With --interval 60
+  # each case sat a full minute waiting for its OWN SIGTERM to be delivered: the two cases took 125s
+  # together, blowing ship-land's 120s smoke budget by themselves and getting the whole suite cut.
+  # 5s still exceeds the 1s budget, so the loop cannot re-test before the signal lands — which is the
+  # only property this case needs from the interval.
+  "$AWAIT" "$UUID" --interval 5 --timeout 1 >/dev/null 2>"$BATS_TEST_TMPDIR/err" & watcher=$!
+  wf="$CC_MAILBOX_DIR/$UUID.watching"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$wf" ] && break; sleep 0.3; done
+  [ -f "$wf" ] || { echo "watcher never published its .watching marker"; false; }
+  sleep 2                                    # the 1s budget is now definitively spent
+  kill -TERM "$watcher" 2>/dev/null || true
+  # `set -e` is on in bats: a bare `wait` returning non-zero aborts the test BEFORE $? is read,
+  # so the status must be captured on the failure branch or the case can only ever "fail" with the
+  # very value it wanted to assert (memory: negated-assertion-dead-unless-final).
+  status=0; wait "$watcher" 2>/dev/null || status=$?
+  err="$(cat "$BATS_TEST_TMPDIR/err")"
+
+  [ "$status" -eq 2 ] || { echo "expected the documented timeout status 2, got $status"; echo "$err"; false; }
+  [[ "$err" == *"verdict=timeout"* ]] || { echo "did not report a timeout: $err"; false; }
+  # the false sentence must be gone…
+  [[ "$err" != *"did NOT time out"* ]] || { echo "still claims it did not time out: $err"; false; }
+  # …and no anomaly may be filed into the inbox for a watch that simply ended
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ] || \
+    ! grep -q 'WAKE-PATH-DOWN' "$CC_MAILBOX_DIR/$UUID.md" || \
+    { echo "filed a WAKE-PATH-DOWN anomaly for a completed term"; false; }
+}
+
+@test "#173 CONTROL — a SIGTERM WELL INSIDE the term is still a kill, loudly and on the record" {
+  # The other half, and the one that stops the fix widening into "nothing is ever a kill": at 1s
+  # elapsed against a 600s budget the term plainly has NOT expired, so the killed verdict, the
+  # inbox anomaly and the 128+15 exit must all survive untouched.
+  # Same interval reasoning as the case above: the trap cannot fire until the poll sleep returns.
+  "$AWAIT" "$UUID" --interval 5 --timeout 600 >/dev/null 2>"$BATS_TEST_TMPDIR/err2" & watcher=$!
+  wf="$CC_MAILBOX_DIR/$UUID.watching"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$wf" ] && break; sleep 0.3; done
+  [ -f "$wf" ] || { echo "watcher never published its .watching marker"; false; }
+  kill -TERM "$watcher" 2>/dev/null || true
+  # `set -e` is on in bats: a bare `wait` returning non-zero aborts the test BEFORE $? is read,
+  # so the status must be captured on the failure branch or the case can only ever "fail" with the
+  # very value it wanted to assert (memory: negated-assertion-dead-unless-final).
+  status=0; wait "$watcher" 2>/dev/null || status=$?
+  err="$(cat "$BATS_TEST_TMPDIR/err2")"
+
+  [ "$status" -eq 143 ] || { echo "expected 128+15=143 for a real kill, got $status"; echo "$err"; false; }
+  [[ "$err" == *"verdict=killed"* ]]     || { echo "a real kill lost its verdict: $err"; false; }
+  [[ "$err" == *"did NOT time out"* ]]   || { echo "a real kill must still say so: $err"; false; }
+  grep -q 'WAKE-PATH-DOWN' "$CC_MAILBOX_DIR/$UUID.md" \
+    || { echo "a real kill must still file the inbox anomaly"; false; }
+}
