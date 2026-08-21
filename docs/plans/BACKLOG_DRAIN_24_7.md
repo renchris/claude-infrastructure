@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #80: `master-fire-gate` 31 open → 30 open / 2 blocked.
+  closed 1 / filed 0 (sixteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: a row
+  filed a MEASUREMENT as a permanent property — *"239 of 525 open rows carry no venuePlan and are
+  unreachable in every venue forever"* — and it was filed FOUR HOURS AFTER the commit that built
+  the two callers which reach them. The fix's own header comment answers this row's exact
+  population by name. A snapshot became a "forever" because nobody re-took it.**
+
+  **Effort choice.** #79 left `master-fire-gate` warm at 31 open. Row `116d5a15674b` carries no
+  body — the title is the whole item (method item 1) — and its whole content is a count plus a
+  modal claim, which makes it re-measurable end-to-end with read-only commands.
+
+  **What refutes it, in four independent arms** (full text in the row's own `evidence`, 4,570 B,
+  read-back controlled IDENTICAL against the source file per method item 26):
+
+  1. **The count.** Same-moment re-fold: **274 open rows, 45 with no venuePlan** (208 `local` +
+     21 `cloud`). Filed as 239 of 525 — **45.5% → 16.4%**, the absolute figure down by 194.
+  2. **The mechanism, and the row postdates its own fix by four hours.** Both automatic callers of
+     `bin/cc-venue` landed in **`5ac7990d91e7`, 2026-08-11T23:53:25Z**; the row was filed
+     **2026-08-12T03:55:52Z**. `origin/main:bin/cc-dispatch` carries them by name —
+     `venue_label_new()` (add-kick window, `CC_DISPATCH_VENUE_NEW_WINDOW_S=900`, `MAX=2`/pass) for
+     new inflow, and `ready_relabel()` (*"THE REPAIR … A void venue verdict is RE-DERIVED IN PLACE
+     … NEVER A DROP"*) at admission for the legacy population. The fix's header names this row's
+     population outright: *"the ~219 legacy unlabelled rows can never enter it \[the window] …
+     Those are labelled at ADMISSION instead (the readiness gate's repair)."* Not circular — an
+     unlabelled row's readiness verdict **is** `venue-unlabelled` → `void` → repaired.
+  3. **Production, not just code.** `~/.claude/autonomy/backlog.jsonl` holds 618 venue records;
+     **306 were written after the filing, on every day since with no gap** (08-12:55 · 08-13:81 ·
+     08-14:13 · 08-15:7 · 08-16:47 · 08-17:25 · 08-18:26 · 08-19:20 · 08-20:25 · **08-21:15**).
+     **69 of those landed on LEGACY rows** (filed before this one), running through 2026-08-17 —
+     so the legacy arm is not a one-off manual batch. Labelled and unlabelled **interleave by
+     minutes**: the newest labelled open row is `2026-08-21T05:40:09Z`, six minutes AFTER the
+     newest unlabelled one. That is a per-pass bound, not a closed door.
+  4. **"Forever" dies on a 0-second read-only command.** `bin/cc-venue assess <id> --json`
+     (*"Never writes. exit 0 always."*) answers the **oldest still-unlabelled open row**,
+     `449f29fad085`, filed 2026-07-20 and unlabelled for **32 days**: `rc=0, elapsed 0s,
+     venue=local, why="ineligible-box: launchd,pane"`. Same for `39045277edc8` and for
+     `e077cce6c49b` filed the same day. One command away is not unreachable forever.
+
+  **The wrong cause I rejected, recorded per method item 15.** The obvious reading of "239 → 45"
+  is *the sweep drained it*. That is **not** what the evidence shows and I did not close on it:
+  the denominator also collapsed (525 → 274 open), and **177 open-or-blocked rows still carry no
+  venuePlan**, so a large slice of the original 239 simply moved to `blocked` rather than being
+  labelled. The count arm alone would have been a false corroboration of a true metric (memory:
+  `wrong-cause-corroborated-by-true-metric`). What actually settles the row is arms 2–4, which are
+  about the PATH existing, not about the pile shrinking.
+
+  🚨 **Decorrelation, before trusting the green probe** (method item 7). `cc-venue` was invoked by
+  **absolute path into the worktree**, never through `PATH` or `~/.claude/bin`, so no shim or
+  wrapper could have answered for it; it imports `bin/cc-eligible` **by path, as the same code
+  object the claim gate runs**, and exits 3 if absent. Its answers were **not constant** —
+  different repos (`claude-infrastructure` vs `reso-management-app`), different token sets per
+  row — and each carried a live history-oracle block (`state=ok, ref=origin/main, depth=50`), so
+  it consulted the oracle rather than replaying a cached verdict.
+
+  🚨 **`cc-premise check 116d5a15674b` prints `verdict=clear`, and that is a NON-VERDICT here**
+  (method item 9). The title cites no path and no sha, so the instrument had nothing to ask about
+  — and `cc-dispatch` names this exact trap in its own words: *"AN EMPTY PATH SET IS ALWAYS VOID,
+  NEVER ALWAYS-FRESH … a verdict that can never be falsified is not a verdict."* The close rests
+  on measurement, not on that `clear`.
+
+  **Every part adjudicated separately** (method item 5 — third recycle running that it paid off):
+  count REFUTED · "unreachable in every venue" REFUTED · "forever" REFUTED · **the residue REAL
+  and deliberately NOT re-filed** — 45 open rows still unlabelled (12 of them legacy) are already
+  owned by the OPEN W4 wave row `1b00d62958a6` (*"248 rows carry no venue label"*), which this
+  close does not retire (method item 4: the wave row is the sibling census, and it stays open) ·
+  **the cure DECLINED ON THE RECORD** — `cc-venue run --apply` would label all 45 in one pass, but
+  it writes into the shared live store and thereby changes what a 24/7 dispatcher may fire. A
+  read-only probe settles the claim; the write is a separate, owned, fleet-behaviour decision, and
+  #79's whole lesson was to keep those two apart rather than let one label cover both.
+
+  🚨 **THE SHAPE — the family's SNAPSHOT-AS-PROPERTY face.** #73 = state destroyed UPSTREAM of a
+  gate that knew how to use it · #74 = destroyed DOWNSTREAM at its only consumer · #75 = correct in
+  a sibling document that never reached the authoritative one · #76 = reached the authoritative
+  store, then decayed there in the present tense · #77 = correct, landed and authoritative, and the
+  INSTRUMENT pointed at it could not read it · #78 = correct, landed, authoritative and
+  self-describing, with no consumer at all · #79 = correct, landed and reachable by a 0-second
+  read-only command, behind a label that forbade running it · **#80 = the cure had already landed,
+  was already running daily, and its own header answered this population by name — and the row was
+  written four hours later in the PERMANENT TENSE, so nothing it said could ever expire.** A
+  measurement filed as "forever" is a claim no later measurement is invited to check. Memories:
+  `published-figure-decays-with-its-source`, `scan-revision-predates-the-fix`,
+  `resident-policy-must-not-restate-perishable-facts`.
+
 - **2026-08-21 — drain recycle #79: `master-fire-gate` 32 open → 31 open / 2 blocked.
   closed 1 / filed 0 (fifteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: an
   operator-gate keyed on the REMEDY's cost was written as a property of the WHOLE ROW, so the
