@@ -61,6 +61,19 @@ setup() {
 
   export HOME="$BATS_TEST_TMPDIR/home"          # hermeticity ratchet rule 1: never the live ~/
   mkdir -p "$HOME/.claude/bin" "$HOME/.claude/cc-registry" "$HOME/.claude/cc-roles"
+
+  # A FIXTURED $HOME DOES NOT REDIRECT $CLAUDE_CONFIG_DIR, and --recycle is one of the six tools
+  # that read it with an EMPTY default (item 7c05d45796d8, which measures the class: 54 tools,
+  # 72 of 355 suites inheriting the operator's real config dir). Left unpinned, the three --recycle
+  # cases below PASS the self-identity gate this file exists to pin (handoff-fire.sh:7160) and then
+  # die 17 lines later at the account derivation (:7177, `exit 1`) — so they were red under the
+  # hermetic runner and green at any desk, where the operator's own CLAUDE_CONFIG_DIR happens to be
+  # set. That is item 14531016f6a7, and its 3 reds included this file's OWN positive control, which
+  # is what said the harness rather than the subject was environment-dependent.
+  # The basename is the whole input (env_account reads `${CLAUDE_CONFIG_DIR##*/}` and never stats
+  # the path), and `.claude-next` is the one the in-repo generated map resolves to a real account —
+  # so this pins the ACCOUNT=auto branch the cases actually take, without reaching outside the tmpdir.
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/.claude-next"
   FIRED="$HOME/.claude/cc-fired"; mkdir -p "$FIRED"
   export CC_FIRED_DIR="$FIRED"
 
