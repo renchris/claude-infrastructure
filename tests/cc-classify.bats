@@ -772,3 +772,125 @@ tx_silent() { local sid="$1"
     >> "$D/proj/slug/sidCap.jsonl"
   [ "$(cause PANE-A)" = rate-limited ]
 }
+
+# ── livelocked (backlog aabf363ff409, operator-caught 2026-07-26): the session that burns turns ────
+# Three panes sat in a goal-hook loop for ~4 h emitting two alternating lines; a full desk sweep an
+# hour earlier scored all three KEEP and the OPERATOR caught it from the rendered panes. The defect
+# is structural: a livelocked session emits a turn every few seconds, so IDLE is small and it takes
+# the `active` return — it is invisible BECAUSE it is busy. These fixtures pin the new SURFACE-only
+# cause and, far more importantly, every way a HEALTHY session must NOT acquire it.
+#
+# tx_loop writes N assistant TEXT turns ending <ago>s before NOW, <step>s apart, cycling the given
+# texts. Spacing is what lets one helper express both a LOOP and a BURST.
+tx_loop() { local sid="$1" n="$2" ago="$3" step="$4"; shift 4
+  local texts=( "$@" ) i ep ts txt f
+  f="$D/proj/slug/$sid.jsonl"; : > "$f"
+  for ((i=0; i<n; i++)); do
+    ep=$(( NOW - ago - (n-1-i)*step ))
+    ts="$(TZ=UTC date -j -f %s "$ep" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+    txt="${texts[$(( i % ${#texts[@]} ))]}"
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' \
+      "$ts" "$txt" >> "$f"
+  done
+}
+
+@test "livelocked — the incident shape: 10 turns alternating TWO lines over ~25min (surface, never active)" {
+  # The 2026-07-26 loop verbatim in shape: 'Goal not yet met… continuing' / 'Holding — operator
+  # command pending, nothing changed', alternating. DISTINCT_MAX is 2 for exactly this reason.
+  reg PANE-A "$LIVE" /repo sidLL "$(boot_ago 20000)"
+  tx_loop sidLL 10 10 170 "goal not yet met, continuing" "holding - operator command pending, nothing changed"
+  [ "$(cause PANE-A)" = livelocked ]
+  run "$C" PANE-A --json
+  printf '%s' "$output" | jq -e '.detail | test("restating itself, not progressing")' >/dev/null
+}
+
+@test "LIVE FALSIFIER: a healthy busy session — same turn count and span, DIFFERENT messages — is active" {
+  # The single most important fixture here. Identical cadence to the incident; only the CONTENT
+  # varies. If this ever goes livelocked the detector is grading volume, not repetition, and the
+  # reaper starts paging every working session on the box.
+  reg PANE-A "$LIVE" /repo sidH "$(boot_ago 20000)"
+  tx_loop sidH 10 10 170 "reading the config" "patching the parser" "running the suite" \
+                          "fixing the lint" "landing the diff" "opening the row" \
+                          "measuring the load" "writing the brief" "closing the item" "firing the peer"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "BURST ≠ LOOP: 10 turns, 2 distinct, but packed into 60s ⇒ active (the span gate)" {
+  # A session emitting a few identical one-liners inside a working minute is normal. The span gate is
+  # the whole discriminator between that and a loop; drop it and normal chatter reads as livelocked.
+  reg PANE-A "$LIVE" /repo sidB "$(boot_ago 20000)"
+  tx_loop sidB 10 10 6 "same line" "other line"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "span boundary is >= : one step under the window ⇒ active, at it ⇒ livelocked" {
+  reg PANE-A "$LIVE" /repo sidS1 "$(boot_ago 20000)"
+  tx_loop sidS1 10 10 99 "a" "b"        # span = 9*99 = 891 < 900
+  [ "$(cause PANE-A)" = active ]
+  reg PANE-A "$LIVE" /repo sidS2 "$(boot_ago 20000)"
+  tx_loop sidS2 10 10 100 "a" "b"       # span = 9*100 = 900
+  [ "$(cause PANE-A)" = livelocked ]
+}
+
+@test "too FEW turns cannot establish a pattern — 4 identical turns over 25min ⇒ active (the MIN gate)" {
+  reg PANE-A "$LIVE" /repo sidF "$(boot_ago 20000)"
+  tx_loop sidF 4 10 500 "still holding"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "distinct boundary is <= : 2 distinct ⇒ livelocked, 3 distinct ⇒ active" {
+  reg PANE-A "$LIVE" /repo sidD2 "$(boot_ago 20000)"
+  tx_loop sidD2 9 10 200 "one" "two"
+  [ "$(cause PANE-A)" = livelocked ]
+  reg PANE-A "$LIVE" /repo sidD3 "$(boot_ago 20000)"
+  tx_loop sidD3 9 10 200 "one" "two" "three"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "UNREADABLE ≠ repetitive: a truncated transcript stays active (the jq-rc gate)" {
+  # THE load-bearing case, and the same one turn_census documents: a live session's transcript is
+  # appended to continuously, so its trailing line is routinely a partial write and jq exits 5 while
+  # a naive pipeline still yields the records parsed before the error. Here a confident count would
+  # CONVICT a healthy session. livelock_census captures jq's OWN rc; drop that and this goes RED.
+  reg PANE-A "$LIVE" /repo sidT "$(boot_ago 20000)"
+  tx_loop sidT 9 10 200 "loopy" "loopy two"
+  printf '{"type":"assistant","isSidechain":false,"timestamp":\n' >> "$D/proj/slug/sidT.jsonl"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "TOOL-ONLY turns are skipped, never counted as N identical empty messages ⇒ active" {
+  # A working session's turns are mostly tool_use blocks. Counting a text-less turn as the empty
+  # string would make any tool-heavy stretch read as 'the same message N times' — the detector would
+  # fire hardest on the most productive sessions.
+  reg PANE-A "$LIVE" /repo sidTool "$(boot_ago 20000)"
+  : > "$D/proj/slug/sidTool.jsonl"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ts="$(TZ=UTC date -j -f %s "$(( NOW - 10 - (10-i)*200 ))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}\n' \
+      "$ts" >> "$D/proj/slug/sidTool.jsonl"
+  done
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "STRICT NARROWING: an IDLE session that once looped is NOT livelocked (it can only re-label active)" {
+  # The branch is gated on the session already qualifying as active, so no other cause can lose a
+  # member to it and the REAPABLE set stays byte-identical. Here the last turn is 9000s ago — far
+  # past IDLE_S — so this must take its ordinary idle cause, never the new one.
+  reg PANE-A "$LIVE" /repo sidIdle "$(boot_ago 20000)"
+  tx_loop sidIdle 10 9000 200 "a" "b"
+  [ "$(cause PANE-A)" != livelocked ]
+  [ "$(cause PANE-A)" = owned-wait ]
+}
+
+@test "a DEAD pid still reads crashed, not livelocked (branch order: liveness precedes everything)" {
+  reg PANE-A "$DEAD" /repo sidLLD "$(boot_ago 20000)"
+  tx_loop sidLLD 10 10 200 "a" "b"
+  [ "$(cause PANE-A)" = crashed ]
+}
+
+@test "a mis-set LIVELOCK_SPAN_S is FLOORED — it can never fire on a 60s burst" {
+  reg PANE-A "$LIVE" /repo sidFl "$(boot_ago 20000)"
+  tx_loop sidFl 10 10 6 "same line" "other line"
+  run env CC_CLASSIFY_LIVELOCK_SPAN_S=0 "$C" PANE-A --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = active ]
+}

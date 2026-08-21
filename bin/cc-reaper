@@ -220,7 +220,14 @@ PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # DEFAUL
 # persisted forever with no board row and nothing ever asked about it. Surfacing is the WHOLE fix: it is
 # deliberately absent from REAPABLE_RE and AUTOREAP_FIRED_RE, because making a never-spoke pane reapable
 # is the destructive path (a wrong verdict kills a live session) and needs its own design, not this one.
-SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator|task-less)$'
+# livelocked (backlog aabf363ff409, operator-caught 2026-07-26): a session TURNING but only restating
+# itself — three panes looped ~4 h and a full desk sweep scored all three KEEP, because a livelocked
+# session reads `active` (it is the busiest-looking thing on the box) and `active` is in NEITHER regex.
+# Surfacing is the whole fix. Deliberately absent from REAPABLE_RE and AUTOREAP_FIRED_RE for the same
+# reason task-less is: the cause is a HEURISTIC over transcript repetition, and a heuristic may cost a
+# board row, never a live session. It is also absent from STRANDED_SURFACE_RE below — the session is
+# LIVE and stuck, so unlanded work is exactly what it should have (the coordination-hang reasoning).
+SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator|task-less|livelocked)$'
 # Surface causes that ALSO warrant the stranded-work check (backlog 1b19ab3096d2 leg 2). These sit
 # outside REAPABLE_RE, so they never reach the landed gate below and their unlanded work was invisible.
 # DELIBERATELY narrow — the discriminator is "this session is not coming back", not "this session is

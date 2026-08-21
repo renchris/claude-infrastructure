@@ -9,6 +9,7 @@
 #
 # CAUSES (exactly one per session):
 #   active            recent *assistant* turn (< idle threshold), pid alive        → NEVER reap
+#   livelocked        turning, but only restating itself across turns (a loop)      → NEVER reap (surface)
 #   rate-limited      a structured usage-cap API error in the transcript tail       → NEVER reap
 #   owned-wait        pid alive, idle, a legitimate wait (live teammates / user)    → NEVER reap
 #   coordination-hang pid alive, idle, had REAL teammates but none alive / no prog  → NEVER reap (surface)
@@ -80,6 +81,27 @@ case "$TASKLESS_BOOT_S" in
   ''|*[!0-9]*) TASKLESS_BOOT_S=1800 ;;
   *) [ "$TASKLESS_BOOT_S" -lt 60 ] 2>/dev/null && TASKLESS_BOOT_S=1800 ;;
 esac
+# ── livelocked (backlog aabf363ff409): a session burning turns to restate that it is done ──────────
+#    Sized from the incident it is built on (2026-07-26, panes E2AB8892/EBFAAECB/F55D0462, ~4 h):
+#    the loop alternated between TWO texts ("Goal not yet met… continuing" / "Holding — operator
+#    command pending, nothing changed"), which is why DISTINCT_MAX is 2 and not 1 — a detector
+#    keyed on a single repeated string would have missed the very case that generated this item.
+#    Every bound is a floor against a FALSE positive, because the population this must not convict
+#    is "a healthy session doing repetitive work":
+#      WINDOW/MIN  the last N assistant texts, and at least MIN of them — a short transcript
+#                  cannot establish a pattern over time at all.
+#      SPAN_S      those MIN turns must cover this much wall-clock. This is the gate that separates
+#                  a LOOP from a BURST: a session emitting three identical one-liners inside a
+#                  working minute is normal, the same three spread over a quarter hour is not.
+LIVELOCK_WINDOW="${CC_CLASSIFY_LIVELOCK_WINDOW:-12}"
+LIVELOCK_MIN="${CC_CLASSIFY_LIVELOCK_MIN:-8}"
+LIVELOCK_DISTINCT_MAX="${CC_CLASSIFY_LIVELOCK_DISTINCT_MAX:-2}"
+LIVELOCK_SPAN_S="${CC_CLASSIFY_LIVELOCK_SPAN_S:-900}"
+case "$LIVELOCK_WINDOW"       in ''|*[!0-9]*) LIVELOCK_WINDOW=12 ;; *) [ "$LIVELOCK_WINDOW" -lt 4 ] 2>/dev/null && LIVELOCK_WINDOW=12 ;; esac
+case "$LIVELOCK_MIN"          in ''|*[!0-9]*) LIVELOCK_MIN=8 ;;  *) [ "$LIVELOCK_MIN" -lt 3 ] 2>/dev/null && LIVELOCK_MIN=8 ;; esac
+case "$LIVELOCK_DISTINCT_MAX" in ''|*[!0-9]*) LIVELOCK_DISTINCT_MAX=2 ;; *) [ "$LIVELOCK_DISTINCT_MAX" -lt 1 ] 2>/dev/null && LIVELOCK_DISTINCT_MAX=2 ;; esac
+case "$LIVELOCK_SPAN_S"       in ''|*[!0-9]*) LIVELOCK_SPAN_S=900 ;; *) [ "$LIVELOCK_SPAN_S" -lt 60 ] 2>/dev/null && LIVELOCK_SPAN_S=900 ;; esac
+[ "$LIVELOCK_MIN" -le "$LIVELOCK_WINDOW" ] 2>/dev/null || LIVELOCK_MIN="$LIVELOCK_WINDOW"
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 
@@ -215,6 +237,54 @@ turn_census() { # <jsonl> → "<assistant> <real-user>"; rc 1 = unreadable (neve
 $out
 EOF
   printf '%s %s' "$a" "$u"
+}
+
+# livelock-census (backlog aabf363ff409): "<n> <distinct> <span_s>" over the LAST LIVELOCK_WINDOW
+# assistant TEXT turns; rc 1 iff the file could not be READ. Grades BEHAVIOUR OVER TIME, which is the
+# whole point — defect (2) of the item is that the sweep graded last-message CONTENT, and a stuck
+# session's final message is typically its most coherent ("I have reached the end of what I can
+# contribute… the work is done and live"). A loop is only visible as a repetition pattern ACROSS turns.
+#
+# TEXT ONLY, and that is a load-bearing filter, not tidiness. A working session's turns are mostly
+# tool_use blocks; joining those in would make two different tool calls look like two different texts
+# and mask the very repetition being measured. Turns with no text at all are SKIPPED rather than
+# counted as an empty string, so a run of pure tool calls can never read as "the same message N times".
+#
+# THE rc CHECK IS LOAD-BEARING for the same measured reason turn_census documents: a live session's
+# transcript is being appended to RIGHT NOW, jq exits 5 on the partial trailing line, and a naive
+# pipeline still prints the records parsed before the error. An unreadable transcript must stay an
+# UNREADABLE answer — never a confident "the same message 8 times", which here would convict a
+# healthy session (memory: claimed-outcome-vs-checked-outcome).
+livelock_census() { # <jsonl> → "<n> <distinct> <span_s>"; rc 1 = unreadable (never a verdict)
+  local f="${1:-}" out line n distinct first_ts last_ts fe le span
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  # ONE jq. `\\s` reaches jq as `\s`; ascii_downcase + whitespace-collapse + truncate normalises
+  # away the cosmetic drift (a counter, trailing spaces) that makes two identical restatements differ.
+  out="$(jq -rc 'select(.type=="assistant" and (.isSidechain|not) and ((.isApiErrorMessage//false)|not))
+                 | ([(.message.content // [])[]? | select(.type=="text") | .text] | join(" ")) as $t
+                 | select(($t|type) == "string" and ($t|length) > 0)
+                 | "\(.timestamp)\t\($t | ascii_downcase | gsub("\\s+"; " ") | .[0:200])"' "$f" 2>/dev/null)" || return 1
+  [ -n "$out" ] || { printf '0 0 0'; return 0; }
+  # last WINDOW lines only — bash 3.2 has no mapfile, and `${arr[@]: -N}` past the length is EMPTY in
+  # bash while it is WHOLE in zsh (memory: negative-array-slice-empties-the-diagnostic). tail is neither.
+  out="$(printf '%s\n' "$out" | tail -n "$LIVELOCK_WINDOW")"
+  n=0; first_ts=""; last_ts=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    n=$((n + 1))
+    [ -n "$first_ts" ] || first_ts="${line%%	*}"
+    last_ts="${line%%	*}"
+  done <<EOF
+$out
+EOF
+  [ "$n" -gt 0 ] || { printf '0 0 0'; return 0; }
+  distinct="$(printf '%s\n' "$out" | cut -f2- | sort -u | wc -l | tr -d ' ')"
+  case "$distinct" in ''|*[!0-9]*) return 1 ;; esac
+  fe="$(iso_to_epoch "$first_ts")"; le="$(iso_to_epoch "$last_ts")"
+  # An unparseable timestamp is a NON-VERDICT on the span, so the span reads 0 and the caller's
+  # `>= LIVELOCK_SPAN_S` gate refuses — failing toward "not livelocked", the safe direction.
+  case "${fe:-x}${le:-x}" in *[!0-9]*) span=0 ;; *) span=$((le - fe)); [ "$span" -ge 0 ] || span=0 ;; esac
+  printf '%s %s %s' "$n" "$distinct" "$span"
 }
 
 recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is among the last records
@@ -596,6 +666,40 @@ classify_entry() { # <entry-json> <all-sessions-json>
   fi
 
   # 3. recent assistant turn → active
+  #
+  # 3.0 livelocked (backlog aabf363ff409, operator-caught 2026-07-26): a session burning turns to
+  #     restate that it is done. THREE panes sat in a goal-hook loop for ~4 h; a full desk sweep an
+  #     hour earlier scored all three KEEP, and the OPERATOR caught it from the rendered panes.
+  #
+  #     WHY THE CHECK IS HERE, ABOVE `active`, AND NOT DOWN AT THE IDLE=-1 FAIL-SAFE. A livelocked
+  #     session is the maximally-ACTIVE-looking thing on the box: it emits an assistant turn every
+  #     few seconds, so IDLE is small and it takes the `active` return one line below. It is
+  #     invisible precisely BECAUSE it is busy — no idle threshold it could ever cross, and `active`
+  #     is in NEITHER cc-reaper's REAPABLE_RE nor its SURFACE_PAGE_RE, so it survives every sweep.
+  #
+  #     THIS IS A STRICT NARROWING OF `active` AND NOTHING ELSE — the same discipline §3.5 states.
+  #     The branch is gated on the session ALREADY qualifying as active, so it can only ever re-label
+  #     a session that would have returned `active` on the next line. No other cause can lose a
+  #     member to it, and the REAPABLE set stays byte-identical: livelocked joins SURFACE_PAGE_RE
+  #     only. That matters because a wrong verdict here costs ONE board row, never a killed session —
+  #     which is the whole reason this may ship on a heuristic at all.
+  #
+  #     FAIL TOWARD `active`: an unreadable transcript (rc 1) returns no verdict, and every bound is
+  #     a floor (see the LIVELOCK_* block). A healthy session does not restate itself ≤2 ways across
+  #     8 turns spanning 15 minutes.
+  if [ "$IDLE" -ge 0 ] 2>/dev/null && [ "$IDLE" -lt "$IDLE_S" ] && [ -n "$tj" ]; then
+    local _lc _ln _ld _ls
+    if _lc="$(livelock_census "$tj")"; then
+      _ln="${_lc%% *}"; _ls="${_lc##* }"; _ld="${_lc#* }"; _ld="${_ld%% *}"
+      if [ "$_ln" -ge "$LIVELOCK_MIN" ] 2>/dev/null \
+         && [ "$_ld" -le "$LIVELOCK_DISTINCT_MAX" ] 2>/dev/null \
+         && [ "$_ls" -ge "$LIVELOCK_SPAN_S" ] 2>/dev/null; then
+        CAUSE=livelocked
+        DETAIL="last ${_ln} assistant turns are only ${_ld} distinct message(s) over ${_ls}s — restating itself, not progressing (never-reap, surface)"
+        return 0
+      fi
+    fi
+  fi
   if [ "$IDLE" -ge 0 ] 2>/dev/null && [ "$IDLE" -lt "$IDLE_S" ]; then
     CAUSE=active; DETAIL="last assistant turn ${IDLE}s ago (< ${IDLE_S}s)"; return 0
   fi

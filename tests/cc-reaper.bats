@@ -2821,3 +2821,50 @@ FIX
   # the control (90303) fired, so the fixture reaches the actuator; both wake-path halves did not.
   [ "$got" = "90303 " ]
 }
+
+# ── livelocked (backlog aabf363ff409, operator-caught 2026-07-26) ──────────────────────────────────
+# Three panes sat in a goal-hook loop ~4 h and a full desk sweep an hour earlier scored all three
+# KEEP. A livelocked session reads `active` — it is the BUSIEST-looking thing on the box — and
+# `active` is in neither regex, so it was never reaped AND never paged. Same two halves as task-less
+# above: it must page, and it must never acquire a teardown.
+
+@test "livelocked pages the desk (the ~4h loop finally gets a board row)" {
+  set_desk
+  mock_classify livelocked "$D/clean" 60 yes PANE-LL
+  run "$R" sweep --reap
+  ! td_called || false
+  notified
+  grep -q 'livelocked' "$D/notify-calls"
+}
+
+@test "livelocked is NEVER reaped — landed, idle far past settle, --reap, and still no teardown" {
+  # The cause is a HEURISTIC over transcript repetition, so a wrong verdict must cost a board row and
+  # never a live session. Every gate a reapable cause would clear is satisfied here on purpose.
+  set_desk
+  mock_classify livelocked "$D/clean" 99999 yes PANE-LL
+  run "$R" sweep --reap
+  ! td_called || false
+}
+
+@test "livelocked is not promotable either — a fired-peer stamp must not turn it into an auto-reap" {
+  # A looping pane is very often a stamped fired worker, so this is the realistic path by which this
+  # never-reap cause could quietly acquire a teardown.
+  set_desk; mark_fired "PANE-LL"
+  mock_classify livelocked "$D/clean" 99999 yes PANE-LL
+  run "$R" sweep --reap
+  ! td_called || false
+  notified
+}
+
+@test "REAPABLE_RE / AUTOREAP_FIRED_RE do not name livelocked; SURFACE_PAGE_RE does (structural)" {
+  grep -q "^REAPABLE_RE=.*handed-off-lead" "$R"                 # anchor: the line still exists as expected
+  ! grep -E '^(REAPABLE_RE|AUTOREAP_FIRED_RE)=' "$R" | grep -q 'livelocked' || false
+  grep -E '^SURFACE_PAGE_RE=' "$R" | grep -q 'livelocked'
+}
+
+@test "livelocked is absent from STRANDED_SURFACE_RE (a LIVE stuck session SHOULD have unlanded work)" {
+  # Same reasoning that excludes coordination-hang: the discriminator for the stranded-work check is
+  # "this session is not coming back", not "this session is stuck".
+  grep -E '^STRANDED_SURFACE_RE=' "$R" | grep -q 'crashed'      # anchor: the line still exists
+  ! grep -E '^STRANDED_SURFACE_RE=' "$R" | grep -q 'livelocked' || false
+}

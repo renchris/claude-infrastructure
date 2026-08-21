@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #90: `master-fire-gate` 21 open → 20 open / 2 blocked.
+  closed 1 / filed 0** (twenty-sixth consecutive recycle in `master-fire-gate`). Row
+  `aabf363ff409` closed: *"cc-classify has no LIVELOCKED cause — a session burning turns to restate
+  it is done classifies as 'active' and survives every sweep"*, filed 2026-07-26T22:09:50Z (the
+  effort's OLDEST open row). Stored falsifier `grep -qi livelock bin/cc-classify` read 0 at the
+  parent and now MATCHES. Fix: a `livelocked` cause in `bin/cc-classify` that grades **behaviour
+  over time** — `livelock_census()` reads the last 12 assistant TEXT turns and fires only on
+  ≥8 turns / ≤2 distinct normalised messages / ≥900s span — plus `livelocked` in cc-reaper's
+  `SURFACE_PAGE_RE` and in neither `REAPABLE_RE` nor `AUTOREAP_FIRED_RE`.
+
+  **THE PLACEMENT IS THE FINDING, AND IT INVERTS THE ROW'S OWN FRAMING.** The item blames the
+  `IDLE=-1` fail-safe (its defect 3), so the obvious fix is to work down at that fail-safe — where
+  §3.5's `task-less` already sits. That is the wrong floor. A livelocked session emits a turn every
+  few seconds, so `IDLE` is SMALL and it returns `active` at §3, *one line above* and never reaches
+  the fail-safe at all. **It is invisible precisely BECAUSE it is busy** — there is no idle
+  threshold it could ever cross, and `active` is in neither reaper regex. So the branch had to go
+  ABOVE `active`, gated on the session already qualifying as active — which makes it a strict
+  NARROWING of `active` and nothing else, leaving the reapable set byte-identical (§3.5's own
+  discipline, reused).
+
+  🚨 **WRONG REMEDY REJECTED — escalate the `IDLE=-1` fail-safe wholesale.** The funded DoD
+  (`docs/plans/backlog-consolidation-2026-08-09/OUT-dispatch.md:298`) reads *"…and its non-verdicts
+  escalate as their own decision item rather than resolving to `active`"*, i.e. give the fail-safe
+  its own surface cause. **Refuted by measurement, twice.** (a) Live: `cc-classify --all --json`
+  read **2 of 13** sessions at `cause=active idle=null` via that fail-safe — and the population that
+  reaches it is dominated by HEALTHY sessions (a pane seconds into its first turn; a transcript
+  whose trailing line is a partial write, which is every live session continuously). Surfacing them
+  pages the desk on healthy panes — memory `alarm-polarity-and-attention-budget`, an alarm that
+  always fires carries the bits of one that cannot. (b) Structural: **11 assertions** in
+  `tests/cc-classify.bats` pin that fail-safe to `active`, and `task-less` has *already* carved the
+  one actionable slice (zero assistant turns + booted long ago) out of it. The remaining non-verdict
+  population is genuinely healthy, so the DoD's second clause is under-specified as literally
+  written. Recorded, not filed — it is a note on an existing DoD, not a new defect.
+
+  🚨 **WRONG REMEDY REJECTED — grade the last message.** The item's defect (1)+(2) already prove it:
+  the sweep's extractor took "the last assistant message with >60 chars", and the loop lines are
+  SHORT, so it **discarded the symptom and kept the alibi** (*"I have reached the end of what I can
+  contribute… the work is done and live"*). A stuck session's final message is typically its most
+  coherent. Hence a census ACROSS turns, and hence `DISTINCT_MAX=2` rather than 1 — the incident
+  alternated between TWO texts, so a detector keyed on one repeated string would have missed the
+  very case that generated the item.
+
+  **Red-proof** (`git archive 1803b1802` → scratch tree, new suites copied in): `tests/cc-classify.bats`
+  **77 ok / 3 not ok / plan 1..80** pre-fix — reds are exactly the three positive `= livelocked`
+  assertions (incident shape, span boundary, distinct boundary) — and **80/80 post-fix**. The other
+  eight new cases assert `= active` and are green in BOTH arms by design: they are the
+  non-discrimination arms (healthy-busy falsifier, burst-vs-loop, MIN gate, tool-only turns, jq-rc
+  gate, strict-narrowing, dead pid, floored knob) and are named as such rather than counted as
+  red-proof. `tests/cc-reaper.bats` gains 5 cases pinning surface-yes / reap-never / promote-never /
+  structural-regex / absent-from-`STRANDED_SURFACE_RE`.
+
+  **Method earned.** (a) **A ROW'S OWN DIAGNOSIS CAN NAME THE RIGHT DEFECT AT THE WRONG FLOOR** —
+  `aabf363ff409` blames the `IDLE=-1` fail-safe, and the cure had to go at `active` instead; adjudicate
+  where the population actually LANDS, not where the item says it does. (b) **A "SURFACE-ONLY, NEVER
+  REAPABLE" CAUSE IS WHAT LICENSES A HEURISTIC TO SHIP** — a wrong verdict costs one board row, never
+  a live session, which is the whole reason a repetition heuristic is admissible here at all. (c)
+  **TEXT-ONLY IS LOAD-BEARING, NOT HYGIENE** — counting a text-less (pure tool_use) turn as the empty
+  string would make the detector fire hardest on the most productive sessions; pinned by its own case.
+
+  **Rows scoped and left OPEN, with the residual named** (do not re-derive): **`579bc8781b5b`** —
+  its prescribed remedy is refuted twice over. `cc_worker_claim_admit` reaches the ledger via
+  `cc-backlog reclaim`, which is a RE-KEY under the CALLER's ancestor pid, while the row explicitly
+  wants a consult *"rather than minting a claim"* — and cc-backlog exposes no read-only holder query
+  (verbs enumerated at `bin/cc-backlog:5398-5435`). Worse, for its legs (3)+(4) — `cc-offload`'s
+  CLOUD fires — `claimer_live` returns rc 2 (UNRESOLVED) for every non-local venue unconditionally
+  (`bin/cc-backlog:4208+`), so the refusal arm is structurally unreachable there. It needs a
+  design call (a probe-mode gate), not a diff. **`95512886c19a`** — half B (*"prescribes a
+  duplicate-session recovery"*) IS cured: `scripts/handoff-fire.sh:10034` now says *"RETIRE THAT
+  PANE FIRST (clear it)"* and names the duplicate hazard. Half A is only BOUNDED, not cured — #89's
+  window scales but caps at 480s, past which the same false FIRE FAILED fires. Correctly open.
+  **`6bfd83f03c3a`** — `cc-runner` appears in ZERO files under `hooks/ scripts/ bin/`; the rewrite
+  is genuinely product-side, matching its own `venueWhy: ineligible-box: tool-layer`. No cure lives
+  in this repo; its value is the mitigation rule (method item 29). **`159c2211b0f2`** — self-documents
+  an F3 FAIL (it arms `cc-teardown`, a pane-closing G2 surface); not a free drive.
+
 - **2026-08-21 — drain recycle #89: `master-fire-gate` 22 open → 21 open / 2 blocked.
   closed 1 / filed 0** (twenty-fifth consecutive recycle in `master-fire-gate`). Row
   `4043ab43bf4a` closed: *"handoff-fire's 120s engagement window is sized for an idle box: at load
