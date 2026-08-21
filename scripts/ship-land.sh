@@ -810,7 +810,11 @@ fi
 
 inflight_claim() {  # 0 = claimed · refuses (exit 11) when a LIVE land already owns this worktree
   local f live pid age
+  # Both symbols, because the marker is only adjudicable if writer and reader share ONE lstart
+  # dialect: an older deployed lib without li_lstart ⇒ no marker at all, i.e. today's behaviour,
+  # rather than a marker no reader can match (see hooks/lib/land-inflight.sh § DIALECT).
   command -v land_inflight_path >/dev/null 2>&1 || return 0   # lib absent ⇒ no marker, today's behaviour
+  command -v li_lstart >/dev/null 2>&1 || return 0
   f="$(land_inflight_path .)" || return 0
   if live="$(land_inflight_live . 2>/dev/null)"; then
     pid="${live%% *}"; age="$(( $(date +%s) - $(printf '%s' "$live" | cut -d' ' -f2) ))"
@@ -821,7 +825,7 @@ inflight_claim() {  # 0 = claimed · refuses (exit 11) when a LIVE land already 
   # adjudicated it dead by pid+lstart, and re-adjudicating here would be a second predicate.
   {
     printf 'pid=%s\n'     "$$"
-    printf 'lstart=%s\n'  "$(ps -o lstart= -p "$$" 2>/dev/null || true)"
+    printf 'lstart=%s\n'  "$(li_lstart "$$")"
     printf 'started=%s\n' "$(date +%s)"
     printf 'branch=%s\n'  "${BRANCH:-?}"
     printf 'head=%s\n'    "$(git rev-parse HEAD 2>/dev/null || echo '?')"
