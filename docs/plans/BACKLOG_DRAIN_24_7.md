@@ -87,6 +87,123 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #99: `master-fire-gate` 12 open → 11 open / 2 blocked.
+  closed 1 / filed 0** (thirty-fifth consecutive recycle in `master-fire-gate`). Row
+  `579bc8781b5b` closed, filed 2026-08-10T17:48:24Z: *"Four spawn paths fire a session into a
+  dispatch worktree without ever calling `cc-backlog claim`, so the lease has no opportunity to
+  refuse them."* ONE commit, ONE file (`docs/plans/BACKLOG_DRAIN_24_7.md`). An **ADJUDICATION**
+  close. Tree pinned at `4ac97377e`.
+
+  🚨 **THE ROW CENSUSED THE PRODUCERS AND CONCLUDED ABOUT THE ENFORCEMENT. A LEASE WHOSE PRODUCER
+  NEVER CLAIMS IS NOT A LEASE WITH NO OPPORTUNITY TO REFUSE — THE REFUSAL SITE IT MISSED IS
+  PROVENANCE-BLIND BY DESIGN, KEYS ON EXACTLY THIS ROW'S POPULATION, AND WAS ALREADY LIVE THREE DAYS
+  BEFORE THE ROW WAS FILED.**
+
+  **The premise SURVIVES, verbatim.** All four named paths genuinely never claim: `grep` for
+  `worker-claim-gate|claim_admit|cc-backlog claim|cc_wcg` over `bin/cc-recover-safeguard`,
+  `scripts/boot-resume.sh` and `bin/cc-offload` returns **zero hits in all three**. The stored
+  falsifier (`grep -q cc_worker_claim_admit` across those three files) reads **rc=1**, and that
+  rc=1 is a *true* reading of the producer paths — it was correct at #96, at #97 and today.
+
+  **The CONCLUSION is refuted by a THIRD enforcement point the row never mentions.**
+  `hooks/check-edit-boundary.sh:106` calls
+  `cc_worker_claim_admit edit-boundary "$_ceb_cwd" "$_ceb_tool"` and denies with a `PreToolUse`
+  `permissionDecision: "deny"`. It is wired in the **enforcing store** — parsed, not grepped
+  (method 8): `~/.claude/settings.json` `.hooks.PreToolUse` carries
+  `matcher=Write|Edit|MultiEdit → ~/.claude/hooks/check-edit-boundary.sh`. It resolves the gate
+  library **symlink-resolved-sibling FIRST** (`:91-97`), deliberately, so it goes live with the file
+  rather than behind a deploy (the `deployed-layer-bootstrap-circle`, its header cites `64a7d1fa`),
+  and it sits **above every early exit** in the hook. Its input is `.cwd` from the hook payload and
+  `.tool_name` — **provenance is never read at all**, so *how* the session was fired cannot reach
+  the decision.
+
+  **And the population it keys on IS the row's population.** `cc_worker_claim_admit` keys on the cwd
+  being `wt-<12 lowercase hex>` (`scripts/lib/worker-claim-gate.sh:95`, `:330`) — which the row
+  itself states is what a dispatch worker's `$CWD` always is (*"which for any dispatch worker IS
+  wt-<12hex>"*). Live functional probe, two discriminating arms: a non-dispatch cwd
+  (`/tmp/wt/desk-w1-routing`) admits and resolves **no item**; `/tmp/wt/wt-0123456789ab/src` admits
+  but resolves **`item=0123456789ab`, reason "is in no ledger"** — i.e. the gate parsed the item
+  identity straight out of the cwd shape. For a *real* dispatch worktree that id is a real item, and
+  a live holder makes it rc 9 REFUSE. Behaviourally pinned green this turn:
+  `tests/worker-claim-gate.bats` **1..37, ok=37, notok=0, skip=0** and
+  `tests/worker-claim-gate-coverage.bats` **1..21, ok=21, notok=0, skip=0** (plan line equals the ok
+  count on both, and the `skip` census is 0 — method 19/40).
+
+  **Dated in UTC on both sides, with a printed positive control on every conversion** (method 4 —
+  `TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' … '+%s'`, each epoch converted back and compared, 3/3
+  `CONTROL OK`): `scripts/lib/worker-claim-gate.sh` born **`8cbf77d0e` 2026-08-07T12:32:09Z**
+  (*"the refusal that reached only a journal now stops the write"*); the
+  `cc_worker_claim_admit edit-boundary` call string first appears **2026-08-07T12:12:42Z**; **this
+  row filed 2026-08-10T17:48:24Z**. The gate predates the row by **3 d 05 h 16 m 15 s**
+  (278,175 s); the call string by 3 d 05 h 35 m 42 s. **Negative control, non-vacuous** (method 29,
+  `git archive 8cbf77d0e^` into a scratch tree): the parent **HAS** `hooks/check-edit-boundary.sh`
+  and carries **22** lines of its prior boundary/freeze logic while carrying **0** admit calls — the
+  parent holds the PRIOR SHAPE, so this is not #98's vacuous-control trap of a parent missing the
+  file entirely.
+
+  🚨 **WHERE THE ROW ACTUALLY WENT WRONG — IT PRE-EMPTED THE OBJECTION AND THE PRE-EMPTION WAS
+  CORRECT.** The row explicitly distinguishes itself: *"NOT the same defect as `5deb4418a648`
+  (landed `5bb53542`), which gated the Agent-tool amplifier at the CONSUMER because arrival paths
+  are not enumerable — this is the complementary producer-side half."* That is **true**:
+  `hooks/agent-teams-enforce.sh:128` is `matcher=Agent`, so it sees Agent-tool spawns and genuinely
+  cannot see a session fired by `cc-recover-safeguard` or `boot-resume.sh`. The row reasoned from
+  the one consumer gate it was already discussing to a claim about **the lease** — and missed the
+  second consumer gate, which is arrival-path-*agnostic* precisely because it fires on the WRITE
+  rather than on the spawn. **This is #98's defect one layer up:** #98 censused the one producer
+  file it was reading and reported a fact about the tree; this row censused the one enforcement site
+  it was arguing against and reported a fact about all enforcement. A correct local proof plus a
+  quantifier that outran it.
+
+  **The row's own harm model is exactly what the missed gate covers.** Its stated danger is
+  *"three of them are legitimate CONTINUATIONS whose danger is only that another live session now
+  holds the item"* — and *another live session holds the item* is the precise condition
+  `check-edit-boundary.sh` denies on, at the duplicate's first write, with a STAND-DOWN body naming
+  the holder. Where nobody holds it, admitting is the correct answer, not a miss. A third site
+  landed **after** the row and is a genuine post-row addition: `hooks/validate-bash.sh:429`
+  `cc_worker_claim_admit pane-spawn`, first appearing 2026-08-11T02:18:06Z.
+
+  **DECLARED RESIDUAL — REAL, LIVE, AND DELIBERATELY NOT FILED AS A NEW ROW.** The title is a
+  CONJUNCTION (method 1) and conjuncts (3)+(4) do not resolve: `bin/cc-offload up` accepts
+  **`--item ID`** (`:390`, forwarded at `:550`) yet `bin/cc-offload` contains **zero** occurrences of
+  `cc-eligible` or `venue`, so an item-bound cloud fire never reaches the claim-side refusal that
+  `bin/cc-eligible`'s own header designates (*"`cc-backlog claim --venue cloud` → the claim-side
+  refusal"*). That is a **venue-eligibility** defect, a different mechanism from the worker lease,
+  and it fires into a cloud VM — not *"a dispatch worktree"*, which is the population this row's own
+  title bounds. It already has a home: the OPEN wave row **`1b00d62958a6`**, whose title names both
+  *"four spawn paths fire into a dispatch worktree without ever claiming"* **and** the venue class,
+  and whose `venueWhy` reads `ineligible-offbox-lane: off-box,cc-cloud,venue`. Minting a second row
+  over it would be duplicate analysis against an open parent (memory:
+  `refuted-open-row-remints-its-own-analysis`), so it is recorded here and left with `1b00d62958a6`.
+
+  **WRONG CAUSES REJECTED** (method 34): **(a)** *"the falsifier is keyed on a name this repo never
+  carried"* — the #94 shape, tested FIRST because it is the cheapest refutation: `cc_worker_claim_admit`
+  is real (`scripts/lib/worker-claim-gate.sh:308`, 51 references tree-wide) and the falsifier is
+  correctly keyed. The name was not the defect and the rc=1 was not an instrument error. **(b)** *"the
+  cure is `5deb4418a648`, the agent-tool consumer gate"* — the row pre-empted this and was RIGHT;
+  stopping at the row's own cited precedent would have CONFIRMED the row. The refutation required
+  finding the site the row cites nowhere. **(c)** *"`c4383f1c9172` (extract `capacity-alarm.sh`
+  `census()`) was the closeable row"* — probed first and it is genuinely uncured
+  (`scripts/lib/session-census.sh` still absent). Recorded there, not filed: the extraction *did*
+  happen under another name — `scripts/lib/spawn-presence.sh` `cc_sp_trees()`, born
+  **2026-08-12T11:16:21Z**, **76 s AFTER this row was filed at 11:15:05Z** — with two consumers
+  (`handoff-fire.sh`, `scripts/lib/capacity-admit.sh`), while `capacity-alarm.sh:608` keeps a
+  3-field copy. The two are **already divergent**: `cc_sp_trees()` carries the `rows` positive-control
+  guard that returns rc 1 when `ps` yields nothing, and `capacity-alarm.sh`'s copy does **not** — so
+  the *"behavioural parity"* control the wave installed to make the extraction safely deferrable
+  (`tests/spawn-presence.bats` case P1, identical counts on one stubbed `ps` fixture) is blind on the
+  one axis where the copies already differ, because they agree on every populated fixture (memory:
+  `guard-sample-fields-bound-its-blind-spot`, `control-calibrated-to-implementation-decays`).
+
+  **THE METHOD ITEM THIS ADDS.** *A claim about a GATE is not established by a census of its
+  CALLERS.* The row's four-path producer census was rigorous, complete and correct, and it licensed
+  nothing about whether the lease can refuse — because the refusal was never sited on the producer.
+  When a row says *"X has no opportunity to refuse"*, enumerate **every call site of the refusal
+  primitive** (`grep -rn '<the admit fn>' bin scripts hooks`) and then ask, per site, **what its
+  input is**: a gate reading `cwd` cannot be evaded by a spawn path, whereas a gate reading a
+  `matcher` can. Pairs with #98's *0 markers is not 0 callers* — that one says a runtime artifact
+  count cannot establish a tree fact; this one says a **producer** census cannot establish an
+  **enforcement** fact.
+
 - **2026-08-21 — drain recycle #98: `master-fire-gate` 13 open → 12 open / 2 blocked.
   closed 1 / filed 0** (thirty-fourth consecutive recycle in `master-fire-gate`). Row
   `b8a515115b2f` closed, filed 2026-08-12T10:54:35Z: *"cc-cloud retire is FORWARD-ONLY: 41
