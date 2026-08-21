@@ -87,6 +87,107 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #71: `master-fire-gate` 40 open → 39 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the failure branch whose pane holds a LIVE session was the
+  only one that omitted "retire the pane first" — the branch with no session at all already had
+  it, and the safety net everyone credited cannot reach the population in question.**
+
+  **Effort choice.** Seventh consecutive recycle in `master-fire-gate` — #70 left it warm at 40
+  open. The lineage's settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`,
+  `7c6ff16259a0`, `b69b1d957cec`, `ba5511bbe388`). Lag re-derived at open: the shared checkout was
+  **87** behind origin/main (#70 measured 85→86, #69 83→84, #68 81, #67 79).
+
+  **`87626e1593c3` — CLOSED. Its cited defect reproduces verbatim on same-moment origin/main
+  content, and the fix is the one clause its own sibling branch already had.**
+  `scripts/handoff-fire.sh:9575` ended the never-engaged verdict with *"The pane is live but
+  TASK-LESS — recover with a WARM re-fire (`--cwd <existing-worktree>`)"*. That branch (`ENGAGE_RC`
+  falls through to `else`, i.e. `verify_engagement` returned **1**) is reached ONLY after
+  `pane_parked_reason` AND `pane_wedge_reason` have both come back empty — the pane is neither a
+  bare shell nor a modal, so a claude session IS running there, idle at an empty composer. The
+  prescription therefore adds a SECOND session to that worktree and leaves the first alive.
+
+  🚨 **The refutation is inside the same `if`/`elif` chain, in two directions.** The `ENGAGE_RC=5`
+  branch 20 lines above documents that exact outcome as the thing it exists to avoid — *"Re-firing
+  over a live session is what produced two sessions in one worktree, a duplicated paid model grid
+  and one clobbered index.json"* — and the `ENGAGE_RC=2` **PARKED** branch, whose pane holds **no
+  session at all**, already says *"Clear the pane, then re-fire"*. So the branch that needed the
+  retirement step LEAST had it, and the branch that needed it MOST did not. Independently filed a
+  month earlier: `docs/research/infra-reliability-audit-2026-07-22/raw/a1.md:10` describes the same
+  scenario ("they spawn a *second* session — meanwhile the first engages … the orphan is
+  unreapable"), so this hazard was found twice and fixed neither time.
+
+  🚨 **AND THE NET EVERYONE CREDITED CANNOT REACH THIS POPULATION.** The row's own narrative credits
+  "the sibling's own duplicate-detection (pane 381 stood down without writing a byte)" with
+  preventing a clobber. `cc_worker_claim_admit` (`scripts/lib/worker-claim-gate.sh:316-343`) derives
+  its item from a `wt-<12-lowercase-hex>` component of the cwd and **bails to admit-without-record
+  when it finds none** — so `DUPLICATE WORKER` cannot fire in a worktree named anything else, which
+  is precisely the population in the row's evidence (`desk-w1-routing`, `desk-w2-observability`).
+  The remedy the verdict prescribed was protected by a gate that structurally does not cover the
+  dirs it prescribed it for. Family: #63 guard at the wrong door · #64 watch that could not take a
+  breath · #65 oracle asking presence when the question was direction · #66 falsifier keyed on a
+  spelling · #67 acquittal on the wrong axis · #68 exemption that deleted a TOCTOU window ·
+  #69 unchecked claim about an actuator · #70 exemption from one gate read as permission from the
+  next. **The rule to carry: when an incident report credits a safety net, ask what POPULATION that
+  net keys on before you rely on it in a remedy.**
+
+  **What moved, and the blast radius measured on the REMEDY first.** Phrase census over the whole
+  tree at `origin/main`: `WARM re-fire` and `live but TASK-LESS` appear in exactly ONE executable
+  (this line) plus two historical audit docs, and **no test asserts either** — while
+  `FIRE FAILED — never engaged` is asserted at `tests/fire-engagement.bats:280,389,416` and
+  `LIVE but TASK-LESS` (the RECYCLE twin at :4982, a different line) at
+  `tests/handoff-recycle-engagement.bats:258`. So the verdict token and the recycle twin were left
+  untouched and exactly the recovery clause moved: it now says a claude session IS running there,
+  **RETIRE THAT PANE FIRST (clear it), then re-fire warm**, and that nothing downstream refuses a
+  second session. The gate's key derivation is named in the code comment, not in the operator-facing
+  string, so a future widening of the gate rots a comment with a test on it rather than a verdict.
+
+  **Three cases on three oracles, and the suite header says which is the red-proof.** Case 35
+  (process oracle — drives the real script to the real rc=1 verdict, asserts the retirement clause
+  and the *why*) and case 36 (static oracle — a three-state matcher keyed on ORDER, not on a
+  spelling: retire/clear must PRECEDE the re-fire) are **RED pre-fix, green post-fix**. Case 37 is
+  **green in BOTH arms by design** — it states the PREMISE (a non-`wt-` cwd is admitted without a
+  record) with a positive control on the same call (a real `wt-<hex>` cwd DOES resolve its item, so
+  the admit is not vacuous); a red there indicts the premise, never the diff. Case 36 also carries a
+  MUTANT control (the verbatim pre-fix sentence must be FLAGGED), a COMPLIANT control (the PARKED
+  branch's own line, read from the script, must PASS the same matcher — so the assertion cannot be
+  satisfied by this diff's phrasing alone), and a NOT-APPLICABLE control (an ordinary line abstains
+  with 2 rather than failing, so the matcher cannot convict the whole file).
+
+  **Pre-fix control arm** built the safe way (`git archive origin/main | tar -x -C "$(mktemp -d)"`,
+  `symlinks=0` printed before writing into it): 37 tests, exactly **2 not-ok — 35 and 36** — and
+  both failed on the intended assertion line, not on setup noise. Post-fix 37/37 rc=0.
+  `shellcheck -S style` on the subject: 0 findings, identical to the `origin/main` baseline. All
+  five bats lints clean; `bats-assert-liveness.py` clean AND proven able to fail on a synthetic
+  `! false`.
+
+  **The sibling-suite belt run is a PARTIAL, and it is named rather than laundered.** All 115 suites
+  referencing `handoff-fire.sh` or `worker-claim-gate.sh` were run in ONE invocation (no duplicate
+  argument — #70's rc=1 non-verdict cause): **1,326 ok, 1 not-ok, then a stall** inside
+  `tests/handoff-fire-argv-launch.bats` on a `/bin/zsh -l -i` child that sat >12 min at **load
+  average 28**, with the repo's own full-corpus `postland-verify` run competing for the box. Both
+  are attributed, neither is this diff:
+  · the 1 not-ok is `tests/claude-accounts-core.bats::router M7`, the documented PRE-EXISTING trunk
+  red (a quota-pacing assertion, nothing my diff can reach);
+  · the stalled suite contains **0** references to any token this diff touched (positive control:
+  the same grep with the same tool matched `handoff-fire` 4× in that same file), and
+  `git diff origin/main` on it is EMPTY — so it is byte-identical to trunk and its wedge is a
+  contention property of an interactive-login-shell fixture, not a regression.
+  The load-bearing coverage is elsewhere and it is complete: the home suite is 37/37 green with a
+  replayed pre-fix control arm, and the phrase census proves no test in the tree asserts either
+  string that moved.
+
+  **RESIDUAL, deliberately NOT filed as a new row** (inflow is this plan's §1.3 defect; the drain
+  chain reads this log, so this is the store that reaches the next recycle). The row's fix candidate
+  (c) — *have the warm re-fire itself refuse when another live session already holds that worktree*
+  — is **not** implemented: `grep` for any occupancy guard on the `--cwd` path in
+  `scripts/handoff-fire.sh` returns nothing (positive control: `WARM re-fire` matched 1 in the same
+  file with the same tool). `bin/cc-backlog` already owns an `lsof`-based worktree-occupancy oracle
+  (:4315, :4409-4430) that a guard could reuse. Sibling rows `95512886c19a` (the same
+  duplicate-recovery clause, plus a late-engagement half) and `4043ab43bf4a` (the 120s window is
+  sized for an idle box) stay **OPEN** and carry that half: `4043ab43bf4a` is dated **after** the
+  state-5 land `6509abd23` and so refutes any claim that late-engagement is fully fixed — closing
+  `95512886c19a` on this diff would have laundered a sibling's live counter-evidence.
+
 - **2026-08-20 — drain recycle #70: `master-fire-gate` 41 open → 40 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: an honesty gate that asked whether a guard forbids its own
   prescribed remedy asked only about the FIRST of the two gates that command passes through —
