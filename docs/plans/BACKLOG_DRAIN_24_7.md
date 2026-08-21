@@ -87,6 +87,100 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #93: `master-fire-gate` 18 open → 17 open / 2 blocked.
+  closed 1 / filed 0** (twenty-ninth consecutive recycle in `master-fire-gate`). Row
+  `9260be0cc89c` closed: *"pre_trust's stall premise is UNPROVEN on CC 2.1.220: 17 of 18 worktree
+  keys in ~/.claude-next carry hasTrustDialogAccepted:false and those sessions engaged fine …
+  Establish whether the trust dialog still gates a headless --permission-mode auto launch at all
+  (positive control: fire into a dir absent from the target account's config with pre_trust
+  disabled, and observe engagement) before anyone prunes it OR relies on it"*, filed
+  **2026-08-08T23:13:36Z**. An ADJUDICATION close, no code change: the row asked a mechanism
+  question and the mechanism is now read rather than inferred.
+
+  **VERDICT — the trust dialog does NOT gate a headless `--permission-mode auto` launch, by two
+  independent bypasses, and `pre_trust` must NOT be pruned because its necessity has MOVED.**
+  Read out of the live 2.1.220 binary
+  (`~/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe`, offsets ~238.15M):
+
+  ```js
+  function _n(){ return !Mt.isInteractive }                       // headless ⇔ true
+  function Xd(){ return pcp ||= J3y() }
+  function kRe(){ if(_n()) return !0; return Xd() }               // ← BYPASS 1
+  function J3y(){ … if(e.projects?.[t]?.hasTrustDialogAccepted) return !0;
+                  let n=VMe(xt()); while(!0){ if(e.projects?.[n]?.hasTrustDialogAccepted) return !0;
+                    let i=VMe(Ey.resolve(n,"..")); if(i===n) break; n=i } return !1 }   // ← BYPASS 2
+  function Dpr(e){ let t=Uon(e); return Rt().projects?.[t]?.hasTrustDialogAccepted===!0 }
+  function wB(e){ return Dpr(e??gn()) }        // EXACT canonical key — no _n(), no ancestor walk
+  ```
+
+  **Bypass 1 — non-interactive is trusted unconditionally.** `kRe()` short-circuits on `_n()`, and
+  `_n()` is exactly "not interactive". A headless fire is trusted before any record is consulted.
+  **Bypass 2 — the ancestor walk.** `J3y()` climbs to `/`, so any ancestor recorded trusted covers
+  every directory beneath it. Measured live this session: `/Users/chrisren/Development` is
+  `hasTrustDialogAccepted:true` in **3 of 4** account configs and `/Users/chrisren` itself is true in
+  `.claude-tertiary` — so every worktree under `Development/` satisfies `Xd()` regardless of its own
+  key. Either bypass alone refutes the filed consequence ("fired session stalls at the trust dialog,
+  SessionStart never runs, no registry row"); both hold simultaneously.
+
+  🚨 **THE ROW'S PRESCRIBED POSITIVE CONTROL HAD ALREADY BEEN RUN — IN PRODUCTION, BY AN INCIDENT,
+  SEVEN DAYS AFTER FILING.** The row asks for a paid probe: *fire into a dir absent from the target
+  account's config with pre_trust disabled, and observe engagement.* `scripts/handoff-fire.sh`
+  :9682-9694 records precisely that experiment, arrived at from a live stall rather than by design:
+  `.claude-tertiary/.claude.json` recorded `/Users/chrisren/Development/personal` as
+  `hasTrustDialogAccepted:false` **with no `hasCompletedProjectOnboarding` key at all** — so
+  `pre_trust` provably never wrote it, which is the "pre_trust disabled" arm — while that entry's own
+  `lastDuration` shows a session ran there for 2.3 h. Engagement observed; trust dialog never fired.
+  Dates normalised to UTC on both sides (`TZ=UTC git log`): row filed **2026-08-08T23:13:36Z**,
+  answer landed `0d8973832` **2026-08-16T04:47:24Z** — **7 d 5 h 34 m LATER**, i.e. the row is
+  answered by later work, not superseded before filing. ⚠️ `--date=iso-strict-local` renders that
+  same commit `2026-08-15T21:47:24-07:00`; taking the calendar date off the unpinned render would
+  have put the answer on the wrong day.
+
+  🚨 **AND THAT INCIDENT READS AS CONFIRMATION OF THE PREMISE IT ACTUALLY LEAVES REFUTED.** The
+  comment says *"the recycled pane stalled … with the brief unread behind it"* — the row's exact
+  symptom, in the row's exact subsystem. A fast reader closes the row the other way. The same
+  sentence disposes of it: *"The cost is **not** the trust dialog (that one did not fire)"*. The
+  stall was the project `.mcp.json` **approval modal**, a different modal downstream of a different
+  effect. Same symptom class, different mechanism; the row's filed consequence stays refuted, and
+  only the binary read discriminates the two. **A later incident can reproduce a row's SYMPTOM
+  through another mechanism and read as corroboration of a premise it does not touch.**
+
+  **NECESSITY — measured, and it is not the one filed.** The row's real ask was *"before anyone
+  prunes it OR relies on it"*. Do neither naïvely: `pre_trust` never protected engagement, but it
+  does protect **settings delivery**, and that path uses the *other* oracle. `wB()`/`Dpr()` is an
+  exact canonical-key read with **no `_n()` bypass and no ancestor walk**, and from v2.1.196 an
+  untrusted key makes Claude Code drop project-scoped settings (`settings.local.json` likewise from
+  v2.1.207). This repo's own `.claude/settings.json` carries **35 `permissions.allow` entries** that
+  a session in an exact-untrusted worktree silently loses. `pre_trust` writes the canonicalised
+  physical path (`cd "$dir" && pwd -P`, `handoff-fire.sh:7302`) — i.e. precisely the key `Uon()`
+  computes — so it is correct and load-bearing, and both call sites now invoke it unconditionally.
+  Independently corroborated in-tree: `docs/research/mcp-modal-fire-stall-2026-08-15.md` § RESOLVED
+  derives the same `Dpr`/`wB` functions from the same binary at the same offsets, with an A/B and a
+  positive control, and its V1 states *"Trust gates the approval sources"*.
+
+  **THE POPULATION THE ROW MEASURED HAS SINCE INVERTED — and the close does NOT rest on that.**
+  `~/.claude-next` today reads **164 of 186** worktree keys `true` / **22** false, against the filed
+  "17 of 18 false"; tertiary 327/335 true, quaternary 438/439 true. That is `pre_trust` working, but
+  a vanished precondition proves nothing about the mechanism question the row asked — the close rests
+  on `kRe`/`J3y`/`wB`, which are properties of the binary, not of the census.
+
+  **Wrong causes rejected.** (1) *"The population flipped, so close it stale"* — refuted above; the
+  row asked whether the gate gates, not what the records currently say. (2) *"The 2026-08-16 comment
+  reports a stall, so the premise is confirmed"* — refuted by the same comment's own next clause.
+  (3) *"`--strict-mcp-config` avoids the whole class"* — the artifact's A/B shows the flag governs
+  which servers *load*, never whether the modal is *asked*.
+
+  **RESIDUAL, scoped and deliberately NOT filed.** 31 exact-`false` worktree keys remain across the
+  three configs, but 29 are reaped directories; only `wt-cc-005159-55873` and `wt-pool-1` still
+  exist. Separately, 4 live worktree cwds (`wt-cc-013849-83289`, `wt-cc-043659-7938`,
+  `wt-cc-043659-8018`, `wt-region-foldin`) carry no `hasTrustDialogAccepted:true` in **any** of the
+  four configs — and since `Dpr()` tests `===true`, *absent* behaves exactly like *false* for the
+  settings-drop path. ⚠️ Attribution is NOT established: each process's own `CLAUDE_CONFIG_DIR` was
+  not read, so this is a bounded observation, not a verdict. Its shape is the already-open row
+  `579bc8781b5b` (spawn paths that never reach `handoff-fire.sh`, hence never reach `pre_trust`) —
+  `wt-cc-*` dirs are cc-dispatch/Agent-tool worktrees, not fires. Left with that row rather than
+  minted as a duplicate.
+
 - **2026-08-21 — drain recycle #92: `master-fire-gate` 19 open → 18 open / 2 blocked.
   closed 1 / filed 0** (twenty-eighth consecutive recycle in `master-fire-gate`). Row
   `a5b39138e098` closed: *"Parallelise claude-accounts collect(): 5-way (4 probes +
