@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-21 | `f5882b6d6a8a` | `reso-management-app` | label-foreign — after a 4-day gap; **reserved by an on-disk triage verdict nothing read** (§ The sixth) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,120 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# The sixth, four days later — and the first that an on-disk verdict had already reserved
+
+**2026-08-21.** Backlog item `f5882b6d6a8a`, project `reso-management-app`, the A21 `randomUUID`
+inventory correction, fired into a cloud session whose one attached repository is
+`renchris/claude-infrastructure`. Seventh dispatch, sixth distinct item. Same route (label-foreign),
+same cause, so nothing about the mechanism is re-derived. Three facts are new.
+
+## 1 · The gap closed, and `bin/cc-offload:84` is still bare
+
+The prior six landed inside four days (08-14 → 08-17) and could be read as one storm. This one is
+**four days after the last**, which converts the class from a burst into a standing leak. Measured on
+trunk this session (`HEAD` = `1803b180`, 0 behind `origin/main`):
+
+| what | value |
+|---|---|
+| `bin/cc-offload:84` | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged; still no guard** |
+| `grep -n 'item.project\|foreign' bin/cc-offload` | 0 hits — neither §3 option has shipped |
+| clone | `git rev-list --count HEAD` → **50**, `is-shallow-repository` → `true` |
+| `/Users`, `~/Development`, any `reso-management-app` checkout | absent (`find / -maxdepth 4` → 0 hits) |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `cc-eligible check f5882b6d6a8a` (fixture) | `verdict=eligible` · `refused: (nothing fired)` — the **sixth** consecutive |
+
+The `cc-eligible` verdict is again correct on its own terms and again the wrong question; its `why`
+prints `history: no-repo — NOT CERTIFIED … repo=/root/Development/reso-management-app`, the fail-open
+state the 08-16 doc §2 already names as *"right for an instrument outage and silent for this."*
+
+## 2 · THE NEW FACT — a verdict in THIS repo had already reserved this item, by id, 12 days earlier
+
+Every prior occurrence's disproof was written *after* the misroute. This one had a reservation on
+disk *before* it, in `claude-infrastructure` itself:
+
+- `docs/plans/backlog-consolidation-2026-08-09/OUT-reso.md:264` lists `f5882b6d6a8a` by id in the
+  **operator-priority collision** table, under *Next.js 16.3 upgrade*.
+- `:258` states the disposition of that table verbatim: **"15 items … deliberately kept OUT of
+  M-reso-1."**
+- `:18` carries its KEEP verdict, re-verified against `reso` `origin/main` @ `55c0c2294`, ending
+  `⚠️ A21/Next-16 scope — OPERATOR PRIORITY (Next.js 16.3 upgrade)`.
+
+So a hand-triage had read this row, confirmed it live at source, and reserved it out of the dispatch
+merge because it collides with a track the operator is driving. The dispatcher read none of it and
+fired it anyway — into a VM that cannot see the repo either.
+
+This sharpens the 08-17 master row rather than repeating it. There, the correction lived in plan prose
+written after the fact; the lesson drawn was that *"nothing in the dispatch chain reads plan prose."*
+Here the reservation is **older than the dispatch, keyed by backlog id, and in the dispatcher's own
+repo** — the shortest path a conclusion could take to its enforcing store without being inside it, and
+it still did not arrive. The repo's own `conclusion-must-reach-the-enforcing-store` memory covers it.
+
+**Consequence for the open §3 decision:** venue is not the only unread signal. A guard that only
+compares (`item.project`, `session.attached_repo`) would refuse this row correctly — but for the
+narrower of the two reasons it should be refused, and it would still fire the fourteen sibling items
+that OUT-reso.md reserved on the same line and whose project label is unremarkable. The reservation
+wants its own arm: a triage file that names a backlog id and says *kept out* is a park, and something
+has to read it.
+
+## 3 · The rails no longer fail silently — they now exit 3
+
+The 08-17 and 08-17-fifth sections both recorded the brief's disposition rails exiting **0** while
+doing nothing, and warned that a worker trusting the exit code would report the item parked when it is
+not. **That is fixed.** Re-measured this session:
+
+```
+$ cc-backlog block f5882b6d6a8a --needs "…"
+cc-backlog block: unknown id f5882b6d6a8a                                   # rc 3
+
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 reason=role-unset                # rc 3
+cc-notify: role 'desk' is not set — no live pane at /root/.claude/cc-roles/desk
+cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset)
+```
+
+Both refuse loudly, and `cc-notify` now names the second channel as dead too rather than implying a
+rescuer (`c7dfff61`, 2026-08-20, *"the desk-is-down sentence promised a rescuer it never asked
+about"*). The trap the two prior sections documented is closed; the rails are still unusable from
+here, but they now say so. **The ledger was NOT updated by this session** — `~/.claude/autonomy/`
+did not exist until my probe created a 0-byte `backlog.jsonl`, which nothing wrote to and which dies
+with the VM. A cloud VM's only durable channel to the desk is the branch it pushes; this section is
+the notification.
+
+## Operator actions
+
+The §3 decision — **(a) fail closed at the fire vs (b) route by `item.project`** — is unchanged and
+now carries a sixth item of cost plus the point in §2 above, which argues for a **third conjunct**
+(read the triage reservations) rather than a third option. Nothing else is proposed.
+
+The ledger disposition needs the Mac:
+
+```
+cc-backlog block f5882b6d6a8a --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; ALSO check the operator-priority reservation first: OUT-reso.md:258,264 deliberately kept this item out of M-reso-1 as a Next.js-16.3 collision, so the right answer may be to leave it parked for the operator's own track rather than re-dispatch it at all (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § The sixth)"
+```
+
+`block`, not `reopen` and not `done`: the item is blocked on **where it was sent**, and — uniquely in
+this family — possibly on **whether it should have been dispatched at all**. Parking it out of the
+wave is what stops an eighth fire before the guard exists. `done` would be false; nothing about
+`replicache-pull/route.ts` changed.
+
+## The item itself — NOT adjudicated
+
+**No claim is made about the A21 inventory, and none should be inferred.** `src/app/api/replicache-pull/route.ts:28`,
+the `(guest)/t/[claimToken]/**` route group, `lib/auth/register.ts:50` and `lib/rum/session-id.ts:29-32`
+were never readable from this session. The brief's mandated first step — *read what this item cites on
+TRUNK, never in your own tree*, with `cc-backlog 6110fc45141e`'s warning that a stale tree reproduces a
+post-land RED faithfully and yields a diff that reverts trunk — is unrunnable here for the strongest
+possible reason: **there is no tree, stale or otherwise.** The item's central claim is `KEEP`-verified
+as of 2026-08-09 by citation (`OUT-reso.md:18`), not by this VM re-reading it.
+
+## Not fixed here, deliberately
+
+The three refusals recorded by the 08-16 and 08-17 sessions hold verbatim and are not re-argued:
+`bin/cc-offload` fires paid cloud sessions and this VM has no `bats` and no `shellcheck`, so the
+repo's gate cannot be run on a shell change; `bin/cc-eligible`'s `OFFBOX_LANE` class states that a
+session this lane created cannot verify a change to the lane — *"the observer and the subject are the
+same object"*; and a 50-commit clone (confirmed shallow above) cannot adjudicate its own admission.
+Landing an ungated guard into the fire path would trade a bounded waste for an unbounded one.
