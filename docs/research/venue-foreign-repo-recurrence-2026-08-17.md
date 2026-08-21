@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-21 | `99ffd4789f9d` | `reso-management-app` | label-foreign — **after a four-day gap; cause re-verified unfixed on trunk** (§ SIXTH) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,142 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH OCCURRENCE, four days later — `99ffd4789f9d`, and the rails no longer fail quietly
+
+*Written from inside that sixth VM, appended here rather than given a new file: the class and its
+cause are settled above and are not re-derived. Three facts are new, and one of them CORRECTS this
+file's own trap warning.*
+
+**2026-08-21.** Backlog item `99ffd4789f9d`, **project `reso-management-app`** (W1 — *bootstrap-region.sh
+gains the APP secret leg*), was dispatched to a `--venue cloud` session whose one attached repository
+is `renchris/claude-infrastructure`. Its brief names `repo /Users/chrisren/Development/reso-management-app`
+and cites `.claude/team-briefs/W1-region-app-secret-leg.md` plus
+`docs/research/TENANT_PROVISIONING_ONE_COMMAND_AUDITS_2026-08-10.md` § A. None is reachable here —
+the same label-foreign route as 08-14, 08-16 and both 08-17 `reso` rows.
+
+Verified VM shape, matching `CLOUD_BACKLOG_PIPELINE.md:100-112` exactly: `hostname` = `vm`,
+`$HOME` = `/root`, `git rev-parse --is-shallow-repository` = `true`,
+`git rev-list --count HEAD` = 50, `/Users` absent, `gh` absent, `~/.claude/autonomy` absent. The
+fire branch is `claude/fire-20260821T125141Z-95342-1` — `cc-offload:530`'s
+`claude/fire-$(date -u +%Y%m%dT%H%M%SZ)-$$-$i` pattern verbatim, so this was `cc-offload up`, not
+`handoff-fire`'s deprecated leg.
+
+## New fact 1 — the cause is UNCHANGED on trunk today, five days after it was located
+
+Not inferred from the doc; read off the working tree, which is trunk (`git rev-list --count
+HEAD..origin/main` = 0 after a fresh fetch):
+
+```
+bin/cc-offload:84    REPO="${CC_OFFLOAD_REPO:-$ROOT}"
+bin/cc-offload:520   remote_url="$(cd "$REPO" … git remote get-url origin …)"
+bin/cc-offload:522   repo_slug="$(printf '%s' "$remote_url" | awk -F'[/:]' 'NF>1{print $(NF-1)"/"$NF}')"
+
+$ grep -nE 'mismatch|foreign|item_project|dispatch-projects|project.*repo_slug' bin/cc-offload
+(no matches)
+```
+
+Neither §3 option has shipped, and no third one has appeared in its place. `bin/cc-eligible` is
+likewise unchanged on the pair-property gap: its project→repo map is still the **local**
+`~/Development/<project>` (`repo_for()`), which certifies on the firing Mac while the VM receives a
+different repo entirely. So the decision filed 2026-08-16 has now been open **five days**, and the
+burn continued through it.
+
+## New fact 2 — the four-day gap, and what it rules out
+
+The first five occurrences fall in 08-14…08-17, three of them on one day. A reader of that burst
+could reasonably have read the class as a one-week artifact of the producer's first live days,
+self-limiting as the foreign-project rows drained. This row refutes that: **four days of silence,
+then the same route on the same project.** The class is not a burst; it fires whenever a
+foreign-project item reaches the head of the fairness queue, and `scripts/dispatch-projects.conf`
+still lists two such projects (`doc_classifier`, `reso-management-app`). A quiet week is evidence
+about the queue's composition, never about the guard.
+
+## New fact 3 — 🚨 THIS FILE'S "rails fail QUIETLY" WARNING NO LONGER HOLDS, measured today
+
+The § *The rails handed to this dispatch fail QUIETLY here* above records `cc-backlog reopen` on an
+unknown id as printing an error **at rc 0**, and `cc-notify --role desk` as `rc 0` with a one-line
+`role-unset` verdict — the trap being that a worker trusting the exit code would report an item
+parked when it is not. Re-run here on this item, all four now **exit 3**:
+
+```
+$ cc-backlog block  99ffd4789f9d --needs "probe"     → cc-backlog block: unknown id …    rc=3
+$ cc-backlog reopen 99ffd4789f9d                     → cc-backlog reopen: unknown id …   rc=3
+$ cc-backlog done   99ffd4789f9d --evidence probe    → cc-backlog done: unknown id …     rc=3
+$ cc-notify --role desk "…"                                                              rc=3
+    cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset target=--role desk
+    cc-notify: role 'desk' is not set — no live pane at /root/.claude/cc-roles/desk …
+    cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset).
+               This is push-send's exit 3, NOT a role failure …
+```
+
+The three ledger verbs share one guard — `bin/cc-backlog:1573`,
+`has_id "$id" || { …unknown id…; return 3; }` in `cmd_transition` — so this is one deliberate code
+path, not three coincidences, and `cc-notify` now names its own fallback's inertness rather than
+implying a role problem. **A worker in this position is now protected by the exit code.**
+
+Two caveats, both load-bearing:
+
+- **This clone cannot date the change.** Its 50 commits span 2026-08-20 → 08-21 only, and
+  `bin/cc-backlog` is not among them. Whether the rc-0 record was already stale when written, or
+  was fixed in the interval, is not answerable from here — only the *current* behaviour is.
+- **Rc 3 protects the worker; it changes nothing for the item.** The store is still machine-local
+  and absent here, so the disposition below still needs the Mac. A cloud VM's only durable channel
+  to the desk remains the branch it pushes. **The ledger was NOT updated by this session and must
+  not be reported as such.**
+
+## The discriminator, on this row specifically
+
+This is a **plain label-foreign** row and **both §3 options catch it**: `project` is
+`reso-management-app`, the attached repo is `claude-infrastructure`, and the two differ at the
+label. It adds no route and does not touch the under-specification that `8f59467c92b0` exposed
+(a `claude-infrastructure`-labelled master whose *body* names foreign trees).
+
+One detail is worth recording for whoever builds the guard, because it argues against the cheapest
+implementation. The item's cited paths are `.claude/team-briefs/…` and `docs/research/…` — and this
+repo **has** a `.claude/` directory and a `docs/research/` holding 182 files. The paths are
+*native-shaped and foreign-resident*: nothing about their spelling distinguishes them, and
+`git ls-tree -r origin/main | grep team-briefs` returns 0 only because the file is absent, not
+because the prefix is alien. A discriminator keyed on path spelling reads this row as native. The
+test has to be **repo membership or the project label**, which is what §3 already says and what
+`bin/cc-eligible:25-37` warns against replacing with a spelling list.
+
+## Operator actions
+
+The §3 decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` — **(a) fail closed at the
+fire vs (b) route by `item.project`** — is unchanged and now carries a **sixth** datapoint of cost,
+across a five-day open window. Nothing new is proposed here.
+
+The ledger disposition for this item needs the Mac:
+
+```
+cc-backlog block 99ffd4789f9d --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; premise NOT adjudicated, no tree to read (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SIXTH OCCURRENCE)"
+```
+
+`block`, not `reopen`, and not `done` — the item is blocked on **where it was sent**, not on
+information or a judgment call, and parking it out of the dispatch wave is what stops a seventh
+fire into the same VM shape before the guard exists. Marking it `done` would be false: nothing about
+`scripts/bootstrap-region.sh` changed.
+
+## Not fixed here, deliberately
+
+The three refusals recorded by the 08-16 and 08-17 sessions still hold verbatim and are re-verified,
+not re-argued: `bin/cc-offload` fires paid cloud sessions, and `bats` and `shellcheck` are both
+confirmed absent here, so the repo's gate cannot be run on a shell change; `bin/cc-eligible`'s
+`OFFBOX_LANE` class states that a session this lane created cannot verify a change to the lane; and
+a 50-commit clone cannot adjudicate its own admission. `CLOUD_BACKLOG_PIPELINE.md`'s Phase 0 says the
+same thing prospectively and by name — *"W1 (the venue producer) must NOT be built by a cloud
+session … a cloud VM building its own admission rule is a circular dependency"*. Landing an ungated
+guard into the fire path would trade a bounded waste for an unbounded one.
+
+## The item itself — NOT adjudicated
+
+No claim is made about `scripts/bootstrap-region.sh`, the 2-vs-17 secret count, or § A of the
+tenant-provisioning audit, and none should be inferred. The brief, the spec and the script were
+never readable from this session. The brief's own mandated first step — *read what this item cites
+on TRUNK, because a post-land RED reproduces faithfully in a stale tree* (`cc-backlog
+6110fc45141e`) — is unrunnable here for the strongest possible reason: **there is no tree, stale or
+otherwise.** Answering from the brief's prose is the anti-goal `bin/cc-venue` §5 names — *"a wrongly-
+routed item improvises a plausible answer against history it cannot read, and reports success."*
