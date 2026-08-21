@@ -1939,17 +1939,48 @@ sweep() {
   return 0
 }
 
-proc_lstart(){ ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+# ── DIALECT + UNREADABLE-INSTRUMENT (backlog 7a00b5de1ec0) ───────────────────────────────────────
+# `ps -o lstart=` renders through LC_TIME *and* TZ, so ONE live pid reads as several different
+# strings depending on who is looking. Measured on this box, same pid, same instant:
+#   canonical (TZ=UTC LC_ALL=C)  `Fri Aug 21 15:45:00 2026`
+#   ambient   (LANG=en_CA.UTF-8) `Fri 21 Aug 08:45:00 2026`
+#   LC_ALL=C at local TZ         `Fri Aug 21 08:45:00 2026`
+# A cc-reaper sweep started from a session writes one dialect; a sweep started by launchd (no LANG
+# ⇒ C) reads another. The lock file is written HERE and read HERE, so this file owns both ends: the
+# write is pinned canonical, and the read accepts every dialect the fleet is measured to produce so
+# records already on disk are not called strangers (memory: control-must-replay-the-real-artifact).
+#
+# FAIL DIRECTION, and it is the opposite of land-inflight's: a mismatch here BREAKS the sweep lock,
+# and a broken lock means two concurrent reapers — a leg that KILLS. So every unusable reading is
+# honoured as "holder alive, skip this tick". Skipping a tick is free; overlapping sweeps are not.
+# The prior line returned FALSE on an unreadable `ps`, i.e. it broke the mutex on a ps hiccup.
+proc_lstart(){ TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+# 0 iff <recorded> is NOT evidence that <pid> is a stranger. Cannot manufacture a false match: every
+# candidate re-renders the SAME pid at the SAME moment, so no rendering of a different start instant
+# can equal the record — the time-of-day digits differ in every dialect.
+lstart_matches(){ # <recorded> <pid>
+  local want="${1:-}" pid="${2:-}" now
+  want="$(printf '%s' "$want" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$want" ] || return 0
+  now="$(proc_lstart "$pid")"
+  [ -n "$now" ] || return 0                        # unreadable instrument → honour, do not reap
+  [ "$now" = "$want" ] && return 0
+  now="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$now" ] && [ "$now" = "$want" ] && return 0            # migration: reader-ambient
+  now="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$now" ] && [ "$now" = "$want" ] && return 0            # migration: C at local TZ
+  return 1
+}
 
 # 0 iff THAT EXACT process is still running. `kill -0` alone answers "some process holds this pid",
 # which a recycled pid satisfies forever — the failure mode that turns a crash into permanent dormancy.
 lock_holder_alive(){ # <pid> <lstart>
-  local pid="${1:-}" want="${2:-}" now
+  local pid="${1:-}" want="${2:-}"
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   [ -n "$want" ] || return 0                       # no pin recorded → pid liveness is all we have
-  now="$(proc_lstart "$pid")"
-  [ -n "$now" ] && [ "$now" = "$want" ]
+  lstart_matches "$want" "$pid"
 }
 
 # 0 = lock held by us (caller proceeds) · 1 = another sweep owns this tick (caller exits 0, no work).
@@ -2020,13 +2051,37 @@ wd_lead_live(){
 # answers the same question production asks — and the positive control below can therefore exercise
 # the real predicate instead of a lookalike. Unverifiable identity ⇒ not provably ours ⇒ not alive
 # (same bias as daemon_alive, which re-spawns rather than trust an unpinned pid).
+#
+# DIALECT (backlog 7a00b5de1ec0): the `.daemon` record is written by ANOTHER PROGRAM —
+# hooks/lead-crash-watchdog.sh — and read here, so the two ends can sit in different locales (a
+# session writes `Fri 21 Aug 08:45:00 2026`; a launchd-started reaper reads `Fri Aug 21 08:45:00
+# 2026` for the SAME live pid). An exact compare then calls every daemon a stranger. Read-side only:
+# the write belongs to the watchdog, and re-pinning a shared record's format from the reading end is
+# how a fix commits the bug it removes.
+# 0 iff <recorded> is a rendering of <pid>'s OWN start instant, in any dialect this fleet is measured
+# to produce. Cannot manufacture a false match: every candidate re-renders the SAME pid at the SAME
+# moment, so a record of a DIFFERENT start instant matches none of them — the time-of-day digits
+# differ in every dialect. Strict on an unreadable `ps` (rc 1), preserving wd_daemon_live's
+# documented "unverifiable identity ⇒ not provably ours" bias; do NOT relax that here.
+wd_lstart_matches(){ # <recorded> <pid>
+  local want="${1:-}" pid="${2:-}" cur
+  want="$(printf '%s' "$want" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$want" ] || return 1
+  cur="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0
+  cur="$(wd_lstart "$pid")"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: reader-ambient
+  cur="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: C at local TZ
+  return 1
+}
+
 wd_daemon_live(){
-  local pid="${1:-}" want="${2:-}" cur
+  local pid="${1:-}" want="${2:-}"
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   [ -n "$want" ] || return 1
-  cur="$(wd_lstart "$pid")"
-  [ -n "$cur" ] && [ "$cur" = "$want" ]
+  wd_lstart_matches "$want" "$pid"
 }
 
 # wd_classify <watchdog-dir> <sid> → CLASS<TAB>LEAD_PID<TAB>DAEMON_PID<TAB>DAEMON_LSTART
@@ -2164,6 +2219,24 @@ watchdog_census(){
     # alone here would reproduce, inside the census, the exact defect the census exists to report.
     sid=""; dstart=""
     rec="$(printf '%s' "$records" | awk -F'\t' -v P="$p" -v L="$plstart" '$1==P && $2==L {print $3; exit}')"
+    # DIALECT FALLBACK (backlog 7a00b5de1ec0). The exact join above compares two INDEPENDENTLY
+    # rendered strings: `plstart` comes from this reaper's own bulk `ps` (its ambient locale/TZ),
+    # while the record was written by hooks/lead-crash-watchdog.sh in ITS ambient. Same locale ⇒
+    # they match and this fallback never runs. Different locale — a launchd-started reaper reading a
+    # session-written record — ⇒ the join misses for EVERY daemon, each one is then classed
+    # UNTRACKED, and the census prints `▶ kill` for a live, correctly-tracked watchdog.
+    #
+    # Exact-first is deliberate: pinning the bulk `ps` to a canonical dialect instead would stop
+    # today's ambient-written records from matching, i.e. it would commit the bug it removes. The
+    # fork cost stays bounded by the number of UNEXPLAINED daemons (normally zero), never one fork
+    # per daemon, so the single-ps design this census was built around is preserved.
+    if [ -z "$rec" ]; then
+      local crp crl crs
+      while IFS=$'\t' read -r crp crl crs; do
+        [ "$crp" = "$p" ] || continue
+        if wd_lstart_matches "$crl" "$p"; then rec="$crs"; plstart="$crl"; break; fi
+      done <<< "$records"
+    fi
     if [ -n "$rec" ]; then sid="$rec"; dstart="$plstart"; fi
     if [ -z "$sid" ]; then
       n_untracked=$(( n_untracked + 1 ))

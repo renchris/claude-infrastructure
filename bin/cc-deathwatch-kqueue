@@ -24,15 +24,49 @@
 import sys, os, select, subprocess, time
 
 
-def pid_start(pid):
-    """Current start-time of <pid> via `ps -o lstart=`, or None if the pid is gone (ESRCH shape)."""
+def _ps_lstart(pid, env_overrides=None):
+    """`ps -o lstart=` for <pid> under an optional env overlay; None when the pid is gone."""
     try:
+        env = dict(os.environ)
+        if env_overrides:
+            env.update(env_overrides)
         out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
-                             capture_output=True, text=True)
-        s = out.stdout.strip()
+                             capture_output=True, text=True, env=env)
+        s = " ".join(out.stdout.split())
         return s if s else None
     except Exception:
         return None
+
+
+def pid_start(pid):
+    """Current start-time of <pid>, rendered CANONICALLY; None if the pid is gone (ESRCH shape)."""
+    return _ps_lstart(pid, {"TZ": "UTC", "LC_ALL": "C"})
+
+
+def start_is_same(recorded, pid):
+    """True iff <recorded> is a rendering of THIS pid's own start instant, in any dialect the fleet
+    is measured to produce.
+
+    DIALECT (backlog 7a00b5de1ec0). `start` arrives from the WATCH FILE, written by another process,
+    while this comparison renders the pid here — and `ps -o lstart=` formats through LC_TIME *and*
+    TZ. Measured on this box, same pid, same instant: canonical `Fri Aug 21 15:45:00 2026` ·
+    ambient(en_CA) `Fri 21 Aug 08:45:00 2026` · LC_ALL=C at local TZ `Fri Aug 21 08:45:00 2026`. An
+    exact compare against one dialect reports a LIVE registered process as "recycled", so the waiter
+    is told its subject is already gone and stops waiting for a death that has not happened.
+
+    Read-side only — the watch file's format belongs to its writer. No candidate can manufacture a
+    false SAME: each re-renders the same pid at the same moment, so a genuinely recycled pid (a
+    different start instant) matches none of them. An unreadable `ps` is handled by the caller, which
+    already treats a None reading as "gone" via its own ESRCH path.
+    """
+    want = " ".join((recorded or "").split())
+    if not want:
+        return True                       # nothing pinned ⇒ cannot call this pid a stranger
+    for overlay in ({"TZ": "UTC", "LC_ALL": "C"}, None, {"LC_ALL": "C"}):
+        cur = _ps_lstart(pid, overlay)
+        if cur and cur == want:
+            return True
+    return False
 
 
 def emit(label, pid, reason, waiter):
@@ -78,7 +112,7 @@ def main():
         if cur is None:
             emit(label, pid, "gone", waiter)          # ESRCH at arm time — already gone
             continue
-        if start and cur != start:
+        if start and not start_is_same(start, pid):
             emit(label, pid, "recycled", waiter)       # {pid,start} guard: NOT the same process
             continue
         try:

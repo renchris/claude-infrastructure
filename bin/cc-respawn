@@ -47,6 +47,33 @@ record() { # <phase> <outcome> <member> <detail>
 
 pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
 
+# start_is_same <expected> <pid> → 0 iff <expected> is a rendering of THIS pid's own start instant.
+#
+# DIALECT (backlog 7a00b5de1ec0). `--start` is supplied by a CALLER — another process, possibly in
+# another locale — and `ps -o lstart=` renders through LC_TIME *and* TZ. Measured on this box, same
+# pid, same instant: canonical `Fri Aug 21 15:45:00 2026` · ambient(en_CA) `Fri 21 Aug 08:45:00
+# 2026` · LC_ALL=C at local TZ `Fri Aug 21 08:45:00 2026`. An exact compare against one dialect
+# therefore reports a LIVE process as "a recycled stranger", and verify-stopped's caller respawns a
+# session that is still running — the expensive direction, which is why every measured dialect is
+# tried before concluding "recycled".
+#
+# Read-side only: the expected string is the caller's to format. No candidate can manufacture a
+# false SAME — each re-renders the same pid at the same moment, so a genuinely recycled pid (a
+# different start instant) matches none of them.
+start_is_same() { # <expected> <pid>
+  local want="${1:-}" pid="${2:-}" cur
+  want="$(printf '%s' "$want" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$want" ] || return 0                       # nothing pinned ⇒ cannot call it a stranger
+  cur="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] || return 0                        # unreadable instrument ⇒ do not declare stopped
+  [ "$cur" = "$want" ] && return 0
+  cur="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: caller-ambient
+  cur="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: C at local TZ
+  return 1
+}
+
 # member_pid <member> — the teammate-discovery primitive for PHASE 3 and PHASE 5. Prints the pid of a
 # process whose argv carries `--agent-name <member>`, or nothing.
 #
@@ -186,7 +213,7 @@ cmd_verify_stopped() {
   if kill -0 "$pid" 2>/dev/null; then
     # {pid,start} identity (the L1-c/L2-c recycling guard): a live pid with a DIFFERENT start time is a
     # stranger holding the recycled number — the original IS stopped.
-    if [ -n "$start" ] && [ "$(pid_start "$pid")" != "$start" ]; then
+    if [ -n "$start" ] && ! start_is_same "$start" "$pid"; then
       record verify-stopped stop-verified "${member:-pid-$pid}" "pid $pid recycled (start mismatch) — original gone"
       echo "cc-respawn: verify-stopped OK — pid $pid is a recycled stranger; the original is gone."
       exit 0

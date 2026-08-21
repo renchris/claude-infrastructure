@@ -1144,8 +1144,19 @@ idl_readiness() {
 # `mkdir` is the atomic primitive (no flock on this box). The holder is pinned by pid|lstart and
 # NEVER by `kill -0` alone: pids recycle, and one recycled pid makes a dead holder read LIVE
 # forever — a permanently wedged dispatcher, which is strictly worse than an overlap.
+#
+# DIALECT (backlog 7a00b5de1ec0): `ps -o lstart=` renders through LC_TIME *and* TZ, so ONE live pid
+# reads as several strings depending on who looks — measured on this box, same pid, same instant:
+# canonical `Fri Aug 21 15:45:00 2026` · ambient(en_CA) `Fri 21 Aug 08:45:00 2026` · LC_ALL=C at
+# local TZ `Fri Aug 21 08:45:00 2026`. A dispatcher started by launchd (no LANG ⇒ C) and one started
+# from a session therefore disagree about the SAME live holder, and the disagreement resolves as
+# "stale" — the lock is broken under a live holder and two passes claim one item.
+#
+# This file owns BOTH ends of $LOCK_DIR/owner, so the write is pinned canonical and the read accepts
+# the dialects already on disk. Trimmed on both sides: `ps` pads to a fixed width, and the previous
+# untrimmed write/read pair only agreed because both were equally padded.
 lock_write_owner() {
-  printf '%s|%s\n' "$$" "$(ps -o lstart= -p $$ 2>/dev/null)" > "$LOCK_DIR/owner" 2>/dev/null || true
+  printf '%s|%s\n' "$$" "$(TZ=UTC LC_ALL=C ps -o lstart= -p $$ 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')" > "$LOCK_DIR/owner" 2>/dev/null || true
 }
 lock_holder_live() {
   local rec pid ls cur tries=0
@@ -1161,9 +1172,20 @@ lock_holder_live() {
   pid="${rec%%|*}"; ls="${rec#*|}"
   is_uint "$pid" || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  cur="$(ps -o lstart= -p "$pid" 2>/dev/null || echo "")"
+  ls="$(printf '%s' "$ls" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  # Exact-first, then the dialects this fleet is measured to produce. A record in a fourth dialect
+  # matches none and falls through to rc 1 — today's behaviour, degraded but never worse. No
+  # candidate can manufacture a FALSE live holder: each re-renders the SAME pid at the SAME moment,
+  # so a record of a different start instant matches none of them. The rc-1-on-unreadable-ps bias
+  # above is deliberate and preserved (a wedged dispatcher is worse than an overlap).
+  cur="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
   [ -n "$cur" ] || return 1
-  [ "$cur" = "$ls" ]
+  [ "$cur" = "$ls" ] && return 0
+  cur="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$ls" ] && return 0        # migration: reader-ambient
+  cur="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$ls" ] && return 0        # migration: C at local TZ
+  return 1
 }
 lock_release() {
   [ "$LOCK_HELD" = 1 ] || return 0
