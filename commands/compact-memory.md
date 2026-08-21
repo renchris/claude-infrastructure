@@ -32,9 +32,22 @@ Three consequences for a compaction pass:
   Report both figures; name which one is binding.
 - **Only removing a LINE clears a line breach.** Shortening hooks moves the char figure and nothing
   else, so the lever table below (§ WHICH LEVER) answers the char question only.
+- 🚨 **`17,100` IS THE SAME MISTAKE, AND `bytes → chars` DOES NOT REPAIR IT** (2026-08-21). Both
+  product-side labels are the same quantity over 1024, and this file expanded them with **two
+  different KB conventions**: `24.4 KB × 1024 = 24,985.6` → `24985` (binary), but
+  `17.1 KB × 1000` → `17100` (decimal). One producer, one unit, two answers. The product's own
+  observed ratio is a flat **0.7 × the limit** (recorded below, verified unchanged at two index
+  sizes on 2026-08-06), and `0.7 × 25,000 = 17,500` units — which is `17,500/1024 = 17.09`, the
+  label, exactly as `25,000/1024 = 24.41` is the other one. **So the product-side target is ~17,500
+  UTF-16 units**, and `17,100` was never a byte count of anything: substituting *bytes → chars* into
+  it leaves it **400 units short**, understating an already-hostile target. Every historical
+  per-entry figure derived from it (67 · 52 · 115 · 167 · 395) inherits that error on top of the
+  byte/char one. Re-derive from `0.7 × 25,000`, or better, do not target it at all — see the
+  PROVENANCE/ARITHMETIC split at § BUDGET THE PREFIXES FIRST.
 
 Every formula below stays structurally correct with *bytes → chars* substituted and the line cap
-checked alongside. They are left as written rather than rewritten, because their DERIVATIONS and
+checked alongside — **with the one exception just named: the `17,100` constant needs re-deriving,
+not substituting.** They are left as written rather than rewritten, because their DERIVATIONS and
 the incidents attached to them are the record; only the unit was wrong.
 
 Reduce the auto-loaded `MEMORY.md` index without losing information.
@@ -284,16 +297,45 @@ it is the one a compaction pass is most likely to misread, because an excess fig
 a stale constant is never zero. **2026-08-06 alone ran all three** — length at 02:06, neither at
 12:51, cardinality at 15:10 (backlog `0fc2ae0d0140`). A verdict has an expected life of hours here.
 
-🚨 **`headroom_target` is NOT 17.1 KB — that demand is PRODUCT-SIDE and no honest pass can reach
-it.** The harness itself emits *"The memory index at … is 21.1KB, approaching the 24.4KB read limit.
-Compact it to under 17.1KB now"*. It appears in **no `settings.json` and no repo hook** — `grep -a`
-finds the template inside the Claude Code binary — and it is a flat **0.7 × the limit**, constant
-regardless of index size (verified unchanged at 21.1 KB and at 20.9 KB, 2026-08-06). At this
-project's entry count it demands **~67 B/entry, below one sentence**. At least six backlog items
-have copied it in verbatim as *"target <17.1KB"*, and each one hands the next pass an unreachable
-goal that argues for grinding live rules. **The contract is the 24,985 B limit with ~2.5 KB of
-headroom as done**; trace a demand to a config file before obeying it (same provenance shape as the
-product-side "don't spawn subagents unless asked" line).
+🚨 **`headroom_target` is NOT the product's target — that demand is PRODUCT-SIDE.** The harness
+itself emits *"The memory index at … is 21.1KB, approaching the 24.4KB read limit. Compact it to
+under 17.1KB now"*. It appears in **no `settings.json` and no repo hook**, and it is a flat
+**0.7 × the limit**, constant regardless of index size (verified unchanged at 21.1 KB and at
+20.9 KB, 2026-08-06) — i.e. **~17,500 units**, see THE UNIT. At least six backlog items have copied
+it in verbatim as *"target <17.1KB"*. **The contract is the 25,000-unit / 200-line limit with
+~2.5 KB of headroom as done**; trace a demand to a config file before obeying it (same provenance
+shape as the product-side "don't spawn subagents unless asked" line).
+*(Provenance note: this used to add "`grep -a` finds the template inside the Claude Code binary".
+Re-attempted 2026-08-21 against the shipped `claude-code-darwin-arm64/claude` — the JS payload is
+**compressed**: a positive control for a string that must be present (`claude-sonnet`) also returned
+0 hits, so that read is a NON-VERDICT on this bundle, not a refutation. The 0.7 ratio above is an
+observed-behaviour measurement and does not depend on it.)*
+
+🚨 **What used to follow — *"and no honest pass can reach it"* — was a UNIVERSAL resting on a
+POPULATION-DEPENDENT premise, and that is the defect, not the number.** The provenance argument
+above is population-independent and load-bearing on its own. The arithmetic one is a function of
+`N` and of how the index is SHAPED, so at the populations where it fails a reader who checks
+discards the whole paragraph — **including the provenance argument that was doing the work.** Never
+bundle them again. The real unreachability test is one line, run it against the LIVE index:
+
+```
+per_hook_budget = (17500 − Σprefix − N) / N      # refuse the target only if this nears the ~115 floor
+```
+
+Measured 2026-08-21 on two live indexes with `mim_measure_file`, **one instrument for every figure**:
+
+| | N | index | Σprefix | budget @17,500 | observed | verdict |
+|---|---|---|---|---|---|---|
+| **claude-infrastructure** | 143 | 24,287 u / 146 ln | 10,114 u | **50 u/hook** | 98 u/hook | **unreachable — below the ~115 floor.** The old verdict holds *here* |
+| **reso-management-app** | 31 | 22,263 u / 32 ln | *n/a* | **564 u/entry** | 718 u/entry | **reachable** — a 21% trim, nowhere near "below one sentence" |
+
+Two things that table is teaching beyond the arithmetic. First, **`Σprefix` is the whole story**: at
+N=143 the immutable `- [Title](file.md) — ` prefixes alone are 10,114 units — 58% of the product's
+entire target — which is why the budget collapses to 50 while the *average hook* is a healthy 98.
+Second, **reso has no prefix/hook split at all** — its hook text sits INSIDE the link title, so the
+formula's `Σprefix` term does not apply and a pass that assumed it would have budgeted against a
+term that is not there. **Check the index's SHAPE before running the formula on it**; a sibling
+project is not a sibling structure.
 
 ⚠️ **`slack` above answers "how many WOULD fit if I rewrote everything" — that is not runway.** When
 what you need is *how many entries can still be ADDED*, divide by what a line actually costs today:
@@ -464,12 +506,22 @@ Consequences for how you run this command:
 - ⚠️ **The `17.1 KB` demand is product-side, and it is not this project's budget.** A PostToolUse
   reminder fires *"approaching the 24.4KB read limit — compact to under 17.1KB now"*; no operator
   hook or config emits it (`settings*.json` wires only `memory-nudge.sh`, on UserPromptSubmit).
-  17.1 KB works out to ~67 B/entry — below one sentence — i.e. unreachable by construction. Its size
-  figure is also not a live read: it reported `20.9KB` on a file `wc -c` put at 22,232 B, and
-  **repeated `20.9KB` unchanged across two edits that each changed the file's size**. **Measure the
-  index directly and budget against the real 24,985 B limit; do not let that reminder authorize a
-  lossy pass** — same precedence as the product-side "don't spawn unless asked" line the global
-  CLAUDE.md overrides.
+  **Measure the index directly and budget against the real 25,000-unit / 200-line limit; do not let
+  that reminder authorize a lossy pass** — same precedence as the product-side "don't spawn unless
+  asked" line the global CLAUDE.md overrides.
+  🚨 **Two claims that used to close this bullet are RETRACTED (2026-08-21) — and note they argued
+  in OPPOSITE directions while both being cited as support.**
+  - *"~67 B/entry, unreachable by construction"* — **conditional on N and on index shape**, not by
+    construction. The live table under § BUDGET THE PREFIXES FIRST has both populations; it is
+    unreachable at N=143 and reachable at N=31.
+  - *"Its size figure is also not a live read"* — **refuted by its own numbers.** It reported
+    `20.9KB` on a file `wc -c` put at 22,232 B. `20.9 × 1024 = 21,402` units against 22,232 bytes is
+    a ratio of **1.0388**, which sits squarely inside the byte→UTF-16 overhead measured live on two
+    real indexes the same day (**1.0161 and 1.0537**). That is what a *correct* live read looks like
+    once you stop comparing it to `wc -c`. The second half — *"repeated `20.9KB` unchanged across
+    two size-changing edits"* — is a different and still-open observation, but it needs a size it
+    never states: a 1-dp label over 1024 has a granularity of **~51 units**, so only edits that move
+    the index further than that are evidence of staleness at all.
 - **A no-op close is a legitimate outcome** when SAFE-AUTO is clean and the index sits under trigger.
   Do not manufacture lossy work to look productive — the byte budget, not the ritual, authorizes a
   shortening. Report the headroom and the rate.
@@ -571,8 +623,9 @@ Consequences for how you run this command:
   ⚠️ **The `--condition` fix has actuated.** This item was minted `condition=memory-index-over-budget`
   with the size left in `--title`, exactly as the RE-INFLATION bullet prescribes — so the 21-duplicate
   re-keying defect is closed at the producer. The title still hands a reader *"compact to <17.1KB"*,
-  which remains product-side and unreachable (~67 B/entry at this N); read it as the measurement it
-  is and budget against 24,985 B.
+  which remains product-side and — **at THIS project's N, per the live table in § BUDGET THE PREFIXES
+  FIRST** — unreachable; read it as the measurement it is and budget against the 25,000-unit /
+  200-line limit.
 - **This pass (2026-08-11 pass 2), for the record — the FIRST recorded HEADROOM-OK no-op close.**
   Backlog `152e9cacc8aa`, filed quoting *21.7 KB* and asking for *<17.1 KB*. Re-measured at intake:
   **21,450 B / 123 entries, headroom 3,535 B** — i.e. already **1,035 B PAST the 2,500 B done
@@ -601,15 +654,26 @@ filed on the premise that *"the hook said 21.7KB while wc -c read 23.2KB"* and i
 to establish *which one the loader applies* before sizing a cut. Three measurements settle it, and
 the first two cost nothing:
 
-- **The ratio disproves units.** KiB→kB is a factor of **1.024**. The observed gap is
-  23.2/21.7 = **1.0691** — **2.9× too large** for any base-1000/1024 difference to produce. A units
-  hypothesis is testable with one division; run it before spending a pass on it.
+- ~~**The ratio disproves units.**~~ 🚨 **RETRACTED 2026-08-21 — this refuted ONE candidate
+  conversion and concluded that NO conversion applied.** As written: *"KiB→kB is a factor of 1.024.
+  The observed gap is 23.2/21.7 = 1.0691 — 2.9× too large for any base-1000/1024 difference to
+  produce."* The first two sentences are arithmetically fine and the third does not follow. The
+  conversion that actually applies here is **bytes → UTF-16 units, plus the loader's frontmatter and
+  block-comment stripping** — the thing this section's own third bullet goes on to discover — and it
+  measures **1.0161 and 1.0537** on two live indexes (2026-08-21), composed of ~2.3% multibyte and
+  ~3.0% stripping on the larger. A **1.0691** gap is at the top of that band, not 2.9× outside it,
+  so the residual this bullet handed to STALENESS was never established. **The transferable rule is
+  the opposite of the one it wrote:** disproving the base-1000/1024 factor does not disprove *a unit
+  difference* — it disproves *that* unit difference. Name every conversion between the two
+  instruments before assigning the remainder to a bug (see also THE UNIT, and the `17,100` constant
+  that survived for months precisely because one KB convention was tested and the other was not).
 - **The named hook renders no KB figure at all.** `hooks/memory-nudge.sh` emits raw bytes in both
   branches (`"${TOTAL}/${LIMIT} B across $N entries"`), and `grep -iE 'kb|1024|1000'` over it returns
   only comment prose. So *"the memory-nudge hook reports 21.7KB"* misattributes the **product-side**
-  reminder to our hook — the same template the RE-INFLATION bullet above already flags as not a live
-  read (it repeated `20.9KB` unchanged across two size-changing edits). **The stale figure is the
-  smaller one**, which is the dangerous direction: it understates urgency.
+  reminder to our hook. ⚠️ **The clause that used to follow — that the template "is not a live read"
+  and so "the stale figure is the smaller one" — is retracted with the bullet above**; the smaller
+  figure is smaller because it is measured in loader units, which is the CORRECT unit, not because
+  it is stale. The misattribution finding is unaffected and stands on its own.
 - 🚨 **The answer to "which one does the loader apply" is NEITHER — and "it applies BYTES" was also
   wrong.** This bullet asserted `24985` bytes, pinned it in two suites and asserted it present in all
   three code paths; that made the three measurers agree with each other and with nothing else. The
@@ -659,6 +723,12 @@ carried the entire verdict.
 
 ## Output
 A report: SAFE-AUTO actions (taken or previewed), then the PROPOSE-ONLY queue as an
-approve/reject list. End with before/after `MEMORY.md` **byte** count against the ~24,985 B limit —
-bytes are what truncate, so a line-count delta alone cannot say whether the pass worked. Report the
-line count too, but as context, never as the verdict.
+approve/reject list. End with before/after `MEMORY.md` figures from
+**`mim_measure_file` — never `wc -c`** — against **BOTH** caps: **25,000 UTF-16 units** and
+**200 lines**. 🚨 **Name which cap is binding, and report both deltas as verdicts.** *(Corrected
+2026-08-21. This used to read "before/after **byte** count against the ~24,985 B limit — bytes are
+what truncate … report the line count too, but as context, never as the verdict", which contradicted
+THE UNIT at the top of this file on both halves: bytes are not what truncate, and the line cap binds
+FIRST on an index of one-line entries. A pass that cleared the char cap and reported the line count
+"as context" would have declared victory over a live line breach — and only removing a LINE clears
+one, so the char-side work would not even have been the right job.)*
