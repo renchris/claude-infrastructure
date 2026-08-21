@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #100: `master-fire-gate` 11 open → 10 open / 2 blocked.
+  closed 1 / filed 0** (thirty-sixth consecutive recycle in `master-fire-gate`). Row
+  `2228b5bf8477` closed, filed 2026-08-08T21:38:40Z: *"worktree wt-592061637f80 was handed out
+  holding a PRIOR session's staged work: 8 files staged (A), 4 of them UNLANDED on origin/main …
+  Two questions: (a) should those 4 land or be discarded, and (b) why did the worktree pool hand a
+  dispatched item a worktree with a dirty index."* An **ADJUDICATION** close.
+
+  **VERDICT: the row asks TWO questions and both are discharged — (a) was ANSWERED on trunk by a
+  land that never cites it, and (b) is a DUPLICATE of an OPEN, better-evidenced row in a DIFFERENT
+  condition. The row's own causal claim and its loss-risk claim are each REFUTED by measurement.**
+
+  🚨 **THE GENERALISABLE FINDING — A QUESTION-SHAPED ROW IS CLOSED BY AN *ANSWER*, NOT BY A FIX, AND
+  THE ANSWER WILL NOT CITE THE ROW.** Every prior recycle asked *"is the DEFECT cured?"*. This row
+  states no defect: it asks two questions. (a) was answered by someone landing the assets with their
+  reasoning in the commit body; (b) was answered by another ROW being opened, with better evidence,
+  in another condition. Neither is reachable by grepping the row id, and neither is a "cure".
+
+  1. 🚨 **(a) ANSWERED BY ACTION, CONTENT-VERIFIED.** Three of the four named unlanded files are on
+     `origin/main` with blobs **IDENTICAL to the very checkpoint commit the row cites as their only
+     home** (`046e6dad`): `clawd-bmo-{hero,portrait,three-quarter}.webp`. Landing commit
+     **`1e040c79c`**, *"assets(blender): the clawd-bmo renders, off the staging area and into
+     history"* — and its BODY makes the value call in prose (paid renders are TRACKED not ignored,
+     *"because that is what the repo already says"*). It reached them by a **different census** —
+     naming worktrees `osa-bounds-bakeoff` and `wt-entrypoint`, never this item — which is why no
+     grep for the row id finds it (method 13).
+  2. 🚨 **DATED UTC BOTH SIDES, POSITIVE CONTROL ON EVERY CONVERSION (2/2 OK).** Filed
+     **2026-08-08T21:38:40Z**; landed **2026-08-16T10:10:09Z**; DELTA **+649,889 s = 7 d 12 h 31 m
+     29 s**. POSITIVE ⇒ a **genuine later cure**, not a premise already false when written — the
+     opposite shape to #98 and #99.
+  3. 🚨 **THE LOSS-RISK PREMISE IS REFUTED — and it was the premise that made (a) urgent.** *"They
+     survive only in the PostToolUse checkpoint ref … which is itself reapable"* is false for the
+     one file still unlanded: `tools/blender/clawd_bmo.py` is reachable from **8 named branches**,
+     **314 checkpoint refs**, and **30 on-disk copies**. It is also the Blender **scene script**,
+     not a render — losing it costs a re-write, never a re-render, so CLAUDE.md's paid-asset
+     protection (the row's entire stated stake) never reached it. The 2026-08-16 author scoped
+     deliberately to *"four paid render outputs"* and left it.
+  4. 🚨 **(b) IS ALREADY OWNED, OPEN, AND BETTER EVIDENCED — ACROSS A CONDITION BOUNDARY.**
+     `e281cde67a48` (**master-convergence-deadlock**, the lineage's standing owner of the
+     worktree-POLLUTION class): *"cc-dispatch reuses a STALE, POLLUTED worktree instead of resetting
+     it: wt-1162f51b1cf3 was 439 commits behind origin/main AND carried **8 staged foreign files
+     from a dead banner session** … Same shape recorded in stash@{1} for wt-149789b69fc4."* Same
+     eight files, a strictly stronger instance, and it names the reset-vs-reuse remedy this row only
+     gestures at. **The duplicate check has to cross conditions** — (b)'s owner is not in this effort.
+  5. 🚨 **THE ROW'S OWN CAUSE IS REFUTED BY A BYTE-IDENTICAL SIGNATURE.** The dirt is not one
+     predecessor's leftover in one worktree: **eight** worktrees carry the *same* staged set —
+     sorted-porcelain signature **`93424db039f2`, n=8** — at the *same* branch tip **`31ed07310`**
+     (2026-08-01T01:38:08Z). A signature repeating byte-for-byte across eight independent handouts
+     is **manufactured at creation**, so *"the pool handed THIS item a dirty worktree"* mislocates
+     the fix in the HANDOUT path; `e281cde67a48` puts it in RESET.
+  6. **POPULATION + A DISCRIMINATING ARM (method 28/29).** Whole `.worktrees/wt-*` set, tracked-dirty
+     (`--untracked-files=no`, exactly what the self-close refusal counts): **TOTAL=137 · DIRTY=47 ·
+     CLEAN=90**. Cut at the asset land: tip **BEFORE** → DIRTY=45/CLEAN=66 (**40.5%**); tip
+     **AFTER** → DIRTY=2/CLEAN=20 (**9.1%**). The rate falls **4.5×** once trunk carries the assets.
+     **Two dirty survive above the cut**, so this is a real arm and not an over-claim — the asset
+     staging is a large *component* of the pollution, not the whole of it.
+  7. 🚨 **THE HARM CLAUSE IS A MODAL AND FAILS AS STATED (method 35).** *"forces **every**
+     dispatched session to `--allow-dirty` at self-close"* — 90/137 worktrees are clean, 20 of the
+     22 cut after the land are, and the refusal itself is intact and correctly narrowed at
+     `scripts/handoff-fire.sh:6410` (`--untracked-files=no` since 2026-07-20, plus `--dirty-owner
+     successor`). The safety refusal is not blunted fleet-wide; it is tripped by a bounded,
+     shrinking, separately-owned population. `wt-592061637f80` is **0 commits ahead** of trunk (the
+     index is all it ever held) and its item id `592061637f80` is itself `done`.
+  8. **WRONG CAUSES REJECTED (4, method 37).** (i) *".worktreeinclude auto-copies the assets and a
+     checkpoint hook stages them"* — REFUTED: `.worktreeinclude` is **absent** in both this worktree
+     and the shared checkout; **a mechanism named by CLAUDE.md is not a mechanism this repo has**.
+     (ii) the row's own occupant-leakage cause (item 5). (iii) the reapable-single-ref loss risk
+     (item 3). (iv) 🚨 **inheriting #99's disposition** — *"(a) is an operator value call ⇒
+     `cc-backlog block --needs`"* — would have been WRONG: **the value call had already been made,
+     in prose, in a landed commit, eight days before #99 ran.** #99 read the question as open
+     because the ROW said it was open.
+  9. **BEHAVIOURAL PIN:** none applicable — docs-only diff, no suite maps to this range (see the
+     smoke attestation below). The close rests on content reads at pinned shas, not on a green count.
+
+  **THE SHAPE.** #96 = the row prescribed NARROWING a mutex key to stop a race, and narrowing is what
+  CAUSES one · #97 = the row's guard lived inside a call the spawner never makes · #98 = the row
+  proved ONE path was closed and concluded NO path existed · #99 = the row censused the PRODUCERS and
+  concluded about the ENFORCEMENT · **#100 = the row asked two QUESTIONS rather than naming a defect,
+  and both had been answered elsewhere — one by a land that never cites it, one by a better row in
+  another condition.** #98–#100 are one generator seen from three sides: *the thing that settles a
+  row is usually not where the row is pointing.*
+
 - **2026-08-21 — drain recycle #99: `master-fire-gate` 12 open → 11 open / 2 blocked.
   closed 1 / filed 0** (thirty-fifth consecutive recycle in `master-fire-gate`). Row
   `579bc8781b5b` closed, filed 2026-08-10T17:48:24Z: *"Four spawn paths fire a session into a
