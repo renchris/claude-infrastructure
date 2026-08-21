@@ -62,6 +62,26 @@ EOF
   # mood of the machine — the same ambient-dependence M11 removes from the rest of the corpus. The
   # headroom cases below override this per-test; the parse cases unset it and stub vm_stat instead.
   export CC_FIRE_HEADROOM_OVERRIDE=64
+  # ── WAVE E (task #170) — THE LOAD TERM NOW SHIPS OFF; THIS SUITE PINS IT ON ────────────────────
+  # Cases 1-9, 13, 21-24 and the P-series were written against a gate whose FIRST term was load, and
+  # they still assert exactly what they always asserted: the load term's own behaviour. Pinning it on
+  # here keeps them testing that, instead of quietly becoming assertions about a term that no longer
+  # runs — a control decaying into a no-op while staying green
+  # (memory control-calibrated-to-implementation-decays).
+  #
+  # 🚨 SO THE SHIPPED DEFAULT IS NOT EXERCISED BY THIS LINE, and a suite that only ever runs a
+  # non-default configuration cannot notice the default breaking. The E-series at the bottom of this
+  # file unsets it per-case and asserts the real shipped behaviour; E1 is the case that goes red if
+  # someone flips the default back.
+  export CC_FIRE_LOAD_TERM=on
+  # The two Wave-E terms read instruments this harness does not stub: the compressor-segment sysctls
+  # (the stub above exits 1 for every key but hw.ncpu/vm.loadavg) and the live session census. Left
+  # unpinned, every case in this file would become a function of the compressor state and the session
+  # count of whatever box runs the suite — ambient dependence, the exact thing M11 removed from the
+  # rest of the corpus. Pinned to comfortably-admitting synthetic values; the E-series overrides
+  # them per-case.
+  export CC_FIRE_SEGMENT_OVERRIDE=0
+  export CC_FIRE_ACTIVE_OVERRIDE=0
 }
 
 # fire() runs the real script with the stub sysctl in front; all cases are --dry-run.
@@ -537,7 +557,12 @@ _fires() {
   # none, because nothing about it looks wrong
   run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG'"
   # + the presence reading (§W3 item 1) — see case 21 for why it rides on the ADMIT row too.
-  [ "$output" = "load 1.00 on 10 cores = 0.10/core (ceiling 2.0/core) · reclaimable 64GB (floor 4GB) · operator unknown" ]
+  #
+  # Wave E (task #170): the row now carries FOUR terms, and it is composed from per-term notes so an
+  # off or blind term contributes nothing rather than a stale number. That composition is what this
+  # exact-string assertion is really pinning — `measured` has to mean every ENABLED term read a live
+  # instrument and cleared, so if a term silently stopped contributing its clause this goes red.
+  [ "$output" = "load 1.00 on 10 cores = 0.10/core (ceiling 2.0/core) · reclaimable 64GB (floor 4GB) · compressor segments 0% of limit (ceiling 50%) · 0 sessions mid-turn (ceiling 8) · operator unknown" ]
 }
 
 @test "26 an admit carries NO engaged field — absent, never a fabricated false (R9)" {
@@ -702,7 +727,10 @@ _fires() {
   while read -r reason; do
     [ -n "$reason" ] || continue
     case "$reason" in
-      capacity|headroom) printf '%s' "$mapped" | grep -q 'capacity|headroom' || false ;;
+      # Wave E (task #170) added `segments` and `active` as TERMS of the same capacity_gate(), so
+      # they share its gate name — a fire must clear every enabled term, and splitting them into
+      # their own denominators would make the capacity admit ratio answer a question nobody asked.
+      capacity|headroom|segments|active) printf '%s' "$mapped" | grep -q 'capacity|headroom|segments|active' || false ;;
       # G5 — the off-box venue's refusals (cloud-optin, cloud-router-absent,
       # cloud-account-headroom, cloud-account-policy) map to their OWN gate name, deliberately not
       # capacity's: a cloud fire never measured this box, so counting its refusals into the
@@ -957,4 +985,158 @@ EOF
   # nothing. The library is where they went, so that is where they must be found.
   grep -qE '"\$1" -n hw\.ncpu' "$REPO/scripts/lib/capacity-admit.sh" \
     || { echo "the ncpu read is in neither file — P8 is scanning an empty subject"; false; }
+}
+
+# ══ WAVE E (task #170) — THE LOAD TERM SHIPS OFF; SEGMENTS AND ACTIVE REPLACE ITS INTENT ═══════
+#
+# WHY: this gate was refusing real fires at 3.37/core against a 2.00 ceiling while every other
+# measure of the box was clear — reclaimable headroom 21.64 GB vs a 4 GB floor, compressor segments
+# 6.99% vs a 50% ceiling, 5 sessions mid-turn vs a ceiling of 8. The runnable numerator at that
+# instant, over 5 samples, was jq 25 / bash 20 / ps 8 / claude 8: our own hook and test-suite shell
+# fan-out, which is per-TURN. Every live `claude` process was in S/Ss, and load1 counts only
+# runnable and uninterruptible, so a RESIDENT session moves this term by ~0. A spawn gate whose
+# input does not move with the spawn can only refuse for unrelated reasons.
+#
+# STATE IT PRECISELY: it is NOT that "our sessions add nothing to load" — our tooling is ~2/3 of the
+# numerator. It is that an ADDITIONAL RESIDENT SESSION adds ~nothing, which is the only question a
+# spawn gate asks. The loose form was circulated and had to be retracted; do not restore it.
+#
+# EVERY CASE BELOW UNSETS the CC_FIRE_LOAD_TERM=on that setup() pins, so this block — and only this
+# block — exercises the configuration that actually ships.
+
+# fire_e() — the shipped default (load term unset), with the three other terms as explicit inputs.
+# $1=STUB_LOAD  $2=headroom GB  $3=segment %  $4=active count; $5.. passed to the script.
+fire_e() {
+  run env -u CC_FIRE_LOAD_TERM STUB_NCPU=10 STUB_LOAD="$1" \
+      CC_FIRE_HEADROOM_OVERRIDE="$2" CC_FIRE_SEGMENT_OVERRIDE="$3" CC_FIRE_ACTIVE_OVERRIDE="$4" \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run "${@:5}"
+}
+
+@test "E1 DIRECTION A — a load-saturated box with three clear terms now ADMITS (the shipped default)" {
+  # 9.90/core against the untouched 2.00 ceiling: the exact world that was refusing fires. This is
+  # the case that goes RED if someone flips the default back to on, which is the whole point of
+  # unsetting rather than assuming — setup() pins the term ON for every other case in this file, so
+  # without this block the shipped configuration would never be executed at all.
+  fire_e 99.00 64 0 0
+  [ "$status" -ne 9 ]
+}
+
+@test "E2 MUTATION CONTROL — the SAME world with the term switched on still REFUSES, naming load" {
+  # Without this, E1 proves nothing: an admit could equally mean the load term broke, or that the
+  # fixture never reached it. One input changes — the switch — and the verdict must flip. This also
+  # pins that the term is dormant, NOT deleted: the code, the shared ceiling and the shared verdict
+  # are all still there and still work when asked.
+  run env CC_FIRE_LOAD_TERM=on STUB_NCPU=10 STUB_LOAD=99.00 \
+      CC_FIRE_HEADROOM_OVERRIDE=64 CC_FIRE_SEGMENT_OVERRIDE=0 CC_FIRE_ACTIVE_OVERRIDE=0 \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"= 9.90/core > ceiling 2.0/core"* ]] || false
+}
+
+@test "E3 DIRECTION A — the fire gate and the Agent gate AGREE on one saturated instant" {
+  # THE DEFECT WAS DISAGREEMENT, not refusal. Measured at one instant, the fire gate REFUSED at
+  # 3.14/core while the Agent tool's gate ADMITted, because the Agent gate had already run
+  # CC_ADMIT_LOAD_TERM=off since Wave D (A5-our-slot-accounting.md:17). Two gates on one box
+  # returning different answers about the same box is the thing being fixed, so the assertion is
+  # AGREEMENT — admitting is necessary but not sufficient.
+  fire_e 99.00 64 0 0
+  local fire_rc="$status"
+  run env CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_SEGMENT_OVERRIDE=0 CC_ADMIT_ACTIVE_TERM=off CC_ADMIT_RESERVE_TERM=off \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/agree" \
+      bash -c '. "$1"; cc_capacity_admit e3 "spawn"' _ "$LIB"
+  local lib_rc="$status"
+  [ "$fire_rc" -ne 9 ] || { echo "fire gate REFUSED where the library ADMITS — the disagreement is back"; false; }
+  [ "$lib_rc" -eq 0 ] || { echo "library refused this world (rc=$lib_rc); the fixture does not isolate the load term"; false; }
+}
+
+@test "E4 DIRECTION B — at a load that used to admit, each replacement term still REFUSES on its own" {
+  # THREE refusals at an IDLE load. Without this, E1 is indistinguishable from "the terms were
+  # dropped, not swapped" — the failure mode that would turn this gate into a permanent admit.
+  # Each is asserted by the reason it NAMES, not merely by rc 9, so a refusal arriving from the
+  # wrong term cannot pass for the right one.
+  fire_e 1.00 1 0 0                       # headroom 1GB < floor 4GB
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"reclaimable memory headroom 1GB < floor 4GB"* ]] || false
+
+  fire_e 1.00 64 99 0                     # segments 99% > ceiling 50%
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"compressor segments 99% of limit"* ]] || false
+
+  fire_e 1.00 64 0 8                      # 8 mid-turn + 1 > ceiling 8
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"8 sessions mid-turn + 1 > active ceiling 8"* ]] || false
+}
+
+@test "E5 A FULLY BLIND GATE IS NOT 'measured' — the 222-dead-rows shape cannot recur" {
+  # RISK 2. The two Wave-E terms NOTE their blindness instead of failing open out of the function
+  # (capacity-admit.sh:672-677 — a blind term must not delete the terms below it). The cost of that
+  # correctness is this hazard: with every enabled term's probe dead, the gate would admit every
+  # fire while filing basis:"measured", which is a deleted gate that reads back as a healthy one.
+  # It must file `fail-open` and NAME what it could not read.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  run env -u CC_FIRE_LOAD_TERM STUB_NCPU=10 STUB_LOAD=1.00 \
+      CC_FIRE_HEADROOM_GATE=off CC_FIRE_SEGMENT_OVERRIDE=nonsense CC_FIRE_ACTIVE_OVERRIDE=nonsense \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  run bash -c "jq -r 'select(.class==\"admitted\")|.basis' '$LOG'"
+  [ "$output" = "fail-open" ] || { echo "all-blind gate filed basis '$output', not fail-open"; false; }
+  run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG'"
+  [[ "$output" == *"blind: segments,active"* ]] || { echo "the blind terms are not NAMED on the row: $output"; false; }
+}
+
+@test "E6 HEADROOM=off NO LONGER DELETES THE TERMS BELOW IT (the early-return defect)" {
+  # Before Wave E the headroom kill switch RETURNED, so turning it off silently disabled every term
+  # that came after it. With the load term off there is nothing above headroom either, so that
+  # return would have admitted on NOTHING MEASURED. The switch must now fall through: segments still
+  # binds. Same law as E5, reached from the operator's side rather than a dead probe.
+  fire_e_headroom_off() {
+    run env -u CC_FIRE_LOAD_TERM STUB_NCPU=10 STUB_LOAD=1.00 CC_FIRE_HEADROOM_GATE=off \
+        CC_FIRE_SEGMENT_OVERRIDE="$1" CC_FIRE_ACTIVE_OVERRIDE=0 \
+        bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  }
+  fire_e_headroom_off 99
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"compressor segments 99% of limit"* ]] || false
+  fire_e_headroom_off 0                       # positive control: it is a real term, not always-refuse
+  [ "$status" -ne 9 ]
+}
+
+@test "E7 RISK 1 — every term that CHARGES the budget is also RESET by it (no unbounded term)" {
+  # A term whose counter _cc_fire_bound writes but _cc_fire_budget_reset never clears can only
+  # ratchet up: it spends its one release and then refuses forever with no way back — an UNBOUNDED
+  # gate on the operator's own path, the exact defect §W3 item 2 built this bound to remove. The
+  # list was hardcoded `load headroom` and Wave E added two terms, so this is derived from the
+  # source rather than restated: the charged set must equal the reset set.
+  # ANCHORED TO NON-COMMENT LINES. An unanchored grep also matches this function's own prose —
+  # "_cc_fire_bound returns 0 only when…" yields the term `returns` — so the charged set would be
+  # polluted by the very comments that explain the bound, and the case would convict a correct gate.
+  # Position is the discriminator, exactly as coverage case 20 uses it.
+  charged="$(grep -oE '^[^#]*[^_a-zA-Z]_cc_fire_bound [a-z]+ ' "$HF" | grep -oE '_cc_fire_bound [a-z]+' | awk '{print $2}' | sort -u | tr '\n' ' ')"
+  reset="$(awk '/^_cc_fire_budget_reset\(\) \{/{p=1} p&&/for t in /{sub(/.*for t in /,""); sub(/;.*/,""); print; exit}' "$HF" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+  [ -n "$charged" ] || { echo "no _cc_fire_bound call sites found — the extraction is broken, not the gate"; false; }
+  [ "$charged" = "$reset" ] \
+    || { echo "TERMS CHARGE THE BUDGET BUT ARE NEVER RESET."; echo "  charged: [$charged]"; echo "  reset:   [$reset]"; false; }
+}
+
+@test "E8 DIRECTION D — a NEW binding term's refusal is BOUNDED: it releases, and says why" {
+  # The operator's own path may not be refused forever by a term that cannot self-clear, and
+  # compressor pressure is exactly such a term (unlike load, waiting does not lower it). Budget 1:
+  # the first fire refuses, the second releases and files the release as `budget-expired` rather
+  # than as a healthy measured admit.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  bound_fire() {
+    run env -u CC_FIRE_LOAD_TERM STUB_NCPU=10 STUB_LOAD=1.00 \
+        CC_FIRE_HEADROOM_OVERRIDE=64 CC_FIRE_SEGMENT_OVERRIDE=99 CC_FIRE_ACTIVE_OVERRIDE=0 \
+        CC_FIRE_ADMIT_BUDGET=1 CC_FIRE_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/e8" \
+        bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  }
+  bound_fire
+  [ "$status" -eq 9 ]                        # the first refusal stands — this is still a real gate
+  bound_fire
+  [ "$status" -ne 9 ]                        # ...and the second releases
+  run bash -c "jq -r 'select(.class==\"admitted\")|.basis' '$LOG' | tail -1"
+  [ "$output" = "budget-expired" ] || { echo "the release filed basis '$output', not budget-expired"; false; }
 }
