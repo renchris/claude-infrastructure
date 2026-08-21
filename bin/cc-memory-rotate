@@ -66,6 +66,23 @@
 # archive/.rotate.log. A side-car must never fail wider than itself: any unexpected state is
 # verdict=error with the index untouched.
 #
+# ── HOW TO BUILD A CONTROL FOR THIS PROGRAM, AND THE ONE THAT LOOKS RIGHT AND IS NOT ─────────
+# `verdict=exhausted` UNDER the limit is the designed hold, not a stall: stage 2 arms only at
+# breach (index >= LIMIT), so below it every entry is legitimately protected and moved=0. Proving
+# that requires pushing a COPY past the cap — and the obvious copy is wrong.
+#
+# 🚨 `cp -R` IS A MUTATION OF THIS PROGRAM'S INPUT. The `young` rule reads TOPIC-FILE MTIME
+# (line 54), so a copy without `-p` restamps every topic to now and re-classifies the corpus.
+# Measured 2026-08-21 on the claude-infrastructure index: `cp -R` gave young=26 hub=0 where the
+# live index gives young=11 hub=15, and at a real breach the rotor returned `exhausted moved=0` —
+# which reads exactly like "the rotor cannot hold the breach line" and is purely the artifact.
+# With `cp -Rp` the same breach returned `rotated moved=29 stage2=29`, 25873 -> 20949 units, i.e.
+# back under the 25000 cap with 4051 units of headroom. The self-heal works.
+#
+# So the control's precondition is an EQUALITY, not a hope: run --dry-run on the untouched copy
+# first and require its keep-classes (tail/type/hub/young/marker) to match the live index's
+# verdict token exactly. If they differ, the copy is not the subject and no verdict from it counts.
+#
 # Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
 # Env:   MEMORY_INDEX_LIMIT (25000, in loader chars) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
 #        (LIMIT-4000) · MEMORY_INDEX_LINE_LIMIT (200) · MEMORY_ROTATE_AT_LINES (LINE_LIMIT-12) ·
