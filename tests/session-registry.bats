@@ -456,7 +456,7 @@ mkentry_ls() {
   fi
 }
 
-@test "register: the row records the ancestor pid's start time, TZ-pinned" {
+@test "register: the row records the ancestor pid's start time, TZ- AND LOCALE-pinned" {
   printf '{"cwd":"/tmp/demo"}' \
     | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" CC_SESSION_NAME="demo" bash "$REG"
   f="$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json"
@@ -464,10 +464,26 @@ mkentry_ls() {
   rec="$(jq -r '.lstart // ""' "$f")"
   [ -n "$rec" ] || { echo "row carries no lstart: $(cat "$f")"; false; }
   # ANTI-VACUITY: the value must be the recorded pid's ACTUAL start time, not merely non-empty.
+  #
+  # PINNED ON BOTH AXES. `ps -o lstart=` renders through LC_TIME as well as TZ, and this assertion
+  # used to build `want` with `TZ=UTC ps` — pinning only TZ, i.e. the same half-pin the writer had.
+  # A test that reproduces the subject's own blind spot cannot see it: it passed while a session's
+  # row and a launchd reader's rendering of ONE live pid differed in month/day ORDER
+  # (`Fri 21 Aug …` vs `Fri Aug 21 …`), which made 7 of 10 live sessions unresolvable to every
+  # unattended reader (backlog bb9f69a6a2fa). `want` is now canonical, so this case pins the
+  # CANONICAL WRITE and goes red if either axis is dropped again.
   rpid="$(jq -r '.pid' "$f")"
-  want="$(TZ=UTC ps -o lstart= -p "$rpid" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  want="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$rpid" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
   [ -n "$want" ] || { echo "could not read the recorded pid $rpid — instrument, not subject"; false; }
-  [ "$rec" = "$want" ] || { echo "recorded [$rec] != live [$want]"; false; }
+  [ "$rec" = "$want" ] || { echo "recorded [$rec] != canonical live [$want]"; false; }
+  # And the dialect itself, so a re-half-pinning is caught by SHAPE and not only by equality on a
+  # box that happens to be C already: canonical is month-FIRST, so field 2 is never numeric.
+  # shellcheck disable=SC2086  # splitting into fields IS the check; an lstart holds no glob char
+  set -- $rec
+  case "${2:-}" in
+    ''|*[!0-9]*) : ;;
+    *) echo "row is DAY-FIRST [$rec] — the locale axis is unpinned again"; false ;;
+  esac
 }
 
 @test "register: the recorded start time is ambient-TZ invariant (the DST false-death class)" {

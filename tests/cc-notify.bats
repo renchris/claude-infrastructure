@@ -1241,17 +1241,30 @@ write_accounts() {
   fn="$BATS_TEST_TMPDIR/pid_live.sh"
   # Extract the REAL function from the REAL file — a retyped copy is a dead assertion that keeps
   # passing after the subject moves (fleet memory: control-must-replay-the-real-artifact).
+  # EVERY symbol the subject calls must come along. `pid_live` grew a `reg_lstart_norm` helper
+  # (backlog bb9f69a6a2fa); extracting only `pid_live` left that helper UNDEFINED, so its call
+  # substituted the empty string on BOTH sides of the comparison and the function returned MATCH for
+  # every input, including a recycled pid. This case caught that — it went RED on the recycled-pid
+  # assertion, which is the one direction an extraction bug of this shape cannot hide behind. The
+  # roster is now explicit and every name is asserted defined after sourcing, so the NEXT dropped
+  # callee fails on the extraction rather than depending on some later assertion happening to
+  # exercise it.
   python3 - "$NOTIFY" "$fn" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
-m = re.search(r'^pid_live\(\) \{.*?^\}', s, re.S | re.M)
-assert m, "ANCHOR MISSING: pid_live() is not where this case looks — locator failed, not the subject"
-open(sys.argv[2], "w").write(m.group(0) + "\n")
+out = []
+for name in ("reg_lstart_norm", "pid_live"):
+    m = re.search(r'^%s\(\)[^\n]*\{.*?^\}' % name, s, re.S | re.M)
+    assert m, "ANCHOR MISSING: %s() is not where this case looks — locator failed, not the subject" % name
+    out.append(m.group(0))
+open(sys.argv[2], "w").write("\n".join(out) + "\n")
 PY
   [ -s "$fn" ] || { echo "extraction produced nothing"; false; }
   # shellcheck disable=SC1090
   . "$fn"
-  type pid_live >/dev/null 2>&1 || { echo "extraction did not define pid_live"; false; }
+  for _f in reg_lstart_norm pid_live; do
+    declare -F "$_f" >/dev/null 2>&1 || { echo "extraction did not define $_f"; false; }
+  done
 
   mine="$(TZ=UTC ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')"
   [ -n "$mine" ] || { echo "could not read our own start time — instrument, not subject"; false; }
