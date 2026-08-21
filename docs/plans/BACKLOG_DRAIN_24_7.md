@@ -177,12 +177,26 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   3. *Command-position-only is the cheap fix.* It deletes the documented wrapper coverage (Finding 3).
   4. *The stored falsifier's rc=1 means the row is live.* It means nothing (Finding 1).
   5. *The row's title can be corrected in place with `add --condition`, as the peer lead did for
-     `590fedde86cc`.* **No — and this one would have destroyed a live row.** That row is
-     condition-keyed; `e2eaaa0f4907` is event-keyed and merely `link`ed into the group, so its title
-     is in its id hash and a changed title mints a NEW id. Worse, `mk_cond_id(claude-infrastructure,
-     master-convergence-deadlock)` = **`3b22efbc2340`**, which is itself a live row — the peer lead's
-     own correction row — so the update arm would have overwritten *its* title. The correction belongs
-     here, in §2.1, exactly as method 31 says.
+     `590fedde86cc`.* **No.** That row is condition-keyed; `e2eaaa0f4907` is event-keyed and merely
+     `link`ed into the group, so its title is IN its id hash and a changed title mints a NEW id —
+     the update arm is unreachable for it. `mk_cond_id(claude-infrastructure,
+     master-convergence-deadlock)` = **`3b22efbc2340`**, a DIFFERENT row, so the add would have
+     landed there. The correction belongs here, in §2.1, exactly as method 31 says.
+     ⚠️ **CORRECTED 2026-08-21, same session, after `claude-infrastructure-102` challenged it** —
+     recorded because the error is the one this chain keeps making from both sides. #114 first wrote
+     that `3b22efbc2340` was "the peer lead's own correction row" and "live", so the add "would have
+     destroyed a live row". **Both halves were wrong, and #114 never checked the field that decides
+     it.** It is `status=done`, `source="lead self-correction 2026-08-13T01:20Z"` — a *previous*
+     lead's, eight days old; 102's five rows are `e3aed0f34f3e` · `2aa51822cca8` · `1c760dca69ea` ·
+     `17e94bb423ef` · `590fedde86cc`, and both of its own corrections used their own distinct slugs,
+     so nothing of its was ever at risk. **And a third correction neither session made at first:
+     because the row is DONE, `cmd_add`'s update arm excludes it outright** (`bin/cc-backlog:1428`
+     — *"a DONE row … the loud warning stands and nothing is written"*), so the concrete instance was
+     never destructive at all — it would have been a warned no-op. The LAW survives all three: an
+     `add --condition <slug>` lands on whatever row owns `mk_cond_id`, which is not the row you meant
+     to edit; it is destructive only when that other row is OPEN. **Mechanism right, attribution
+     wrong — the same span/attribution error #113 flagged in the peer's rows, committed here against
+     the peer.** Read the STATUS field before naming an owner.
   6. *My own census/probe results.* Three instruments were wrong before any of the above was trusted
      (Finding 2).
 
