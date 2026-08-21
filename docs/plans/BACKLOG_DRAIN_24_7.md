@@ -87,6 +87,116 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #112: the guard was never broken; the log it was judged by is
+  CONDITIONAL, so its silence meant "nothing to say", not "never ran". closed 1 / filed 0.**
+  #112 opened on the START-HERE order. Gate 1 clear — **no `.page` file on disk** (checked with
+  `find`, not a glob, so the zsh unmatched-glob abort premise 10 warns about cannot be mistaken for
+  a failed probe). Gate 2 was `9f69e13fc2e0`, VERIFY-shaped: *"identity_resident_guard fires on a
+  live tick — never observed"*, resting on **0 `resident unsanctioned` lines** in the live
+  `runner.log` across a window in which 2+ 300 s ticks should have fired it.
+
+  **METHOD 18 RUN FIRST, AND THIS TIME IT CORRECTLY RETURNED NOTHING.** `git log -S` on the row's
+  own phrase, scoped to `origin/main` (unscoped `--all` is drowned by ~100 `checkpoint:` commits and
+  is useless here), found `e393048eb` **2026-08-08T09:59:46Z** and `9faea809a` **10:39:40Z** — both
+  UTC-dated against the row's `firstTs` of **20:19:45Z**, so both PREDATE it by ~10 h. #111's shape
+  (cure five hours younger than its row) does not recur: this row was filed *after* the guard landed,
+  which is exactly what a VERIFY row should do. **Method 18 earns its place by returning null cleanly
+  as much as by finding a cure** — the null is what licensed spending the session on measurement.
+
+  🚨 **THE ANSWER (method 15 — a question-shaped row closes on an ANSWER, not a fix): the guard
+  fires.** Four links, each measured this session, none inherited:
+  1. `~/Library/LaunchAgents/com.claude.postland-verify.plist` execs
+     `"$HOME/.claude/scripts/postland-verify.sh" --run-if-needed` — the exact path and verb.
+  2. That path is a **per-file symlink** into the checkout and carries `identity_resident_guard`
+     (3 occurrences). The tempting "the live layer is stale so the guard isn't deployed" story —
+     plausible given premise 1's converge lag — is refuted by the symlink.
+  3. A real `--run-if-needed` against a **throwaway** `CC_POSTLAND_REPO` + temp `CC_POSTLAND_DIR`
+     (the row's own prescribed experiment) with an unsanctioned `t@e.com` resident: the guard
+     **logged and dropped**, `user.email` empty afterwards. The sanctioned control logged **nothing**
+     and was left untouched. Run twice — once with `CC_GIT_IDENTITY_TEST=1` and once **without it**,
+     so the second pair uses the production predicate (`want=ren.chris@outlook.com`) that a real
+     launchd tick uses. 4 arms, 2 directions, same verdict.
+  4. The real repo **has no local `[user]` section at all**, so `identity_snapshot` returns empty and
+     the guard returns at its FIRST line, before the log.
+
+  🚨 **FINDING 1 — AN ABSENT LOG LINE IS EVIDENCE ABOUT REACH ONLY IF THE PRODUCER IS
+  UNCONDITIONAL.** The row's inference was *"2+ ticks fell in the window, yet no line ⇒ the live path
+  is unproven"*, and it explicitly checked that the logging is unconditional **on the drop branch**
+  ("the guard logs unconditionally on a drop"). That is true and it is the wrong conditional: the
+  guard's own first statement is `[ -n "$now" ] || return 0`, so on a clean config it never reaches
+  the drop branch at all. Silence is the guard's CORRECT output over a healthy repo — which is the
+  overwhelmingly common state — so the needle can only ever fire on a host that happened to be sick.
+  **A verify-by-log-absence is sound only against a producer that emits on the HEALTHY path too**;
+  against an event logger, zero lines and a dead code path are indistinguishable, which is precisely
+  the ambiguity that kept this row open for 13 days. Note the direction of the error, as #111 asks:
+  the row indicted a deployed component, and nothing was wrong with it.
+
+  🚨 **FINDING 2 — THE THREE EXISTING TESTS COULD NOT HAVE ANSWERED IT, BECAUSE THEY STUB THE
+  PRODUCER.** The row credits `tests/git-identity-guard.bats` tests 24-26 with proving the logic, and
+  it is right to stop there. Read: two of them `eval` a `sed`-extracted function body with
+  **`log() { :; }` stubbed to a no-op**, and the third greps the SOURCE for line ORDER
+  (`first_guard < first_abstain`). Not one executes the script. **A test that stubs the producer of
+  the artifact the question is about cannot answer the question, however green it is** — the stub
+  deletes exactly the runner.log line the row is asking after. This is the standing lint's shape
+  again, one turn further out: the log message is the contract between a PRODUCER
+  (`postland-verify.sh`) and its CONSUMERS (a human reading runner.log; this row's stored falsifier),
+  and the suite pinned the function while leaving the contract untested.
+
+  ⚠️ **A MECHANISM MEASURED AND DELIBERATELY NOT FILED (method 10).** There are **two** drop sites
+  with **two different** log phrasings — `identity_resident_guard` writes *"resident unsanctioned
+  [user] in …"*, `identity_assert`'s unchanged-but-wrong branch writes *"… local [user] is
+  unsanctioned and UNCHANGED this run"* — and the row's falsifier greps only the first. So an auditor
+  asking "was a resident bad identity ever dropped?" under-counts by construction. Mechanism TRUE.
+  **Harm NOT demonstrated: both needles read 0 on this host**, so the split changed no conclusion
+  here, and the 2026-08-08T10:50Z cleanup the row calls unattributed stays unattributed for a duller
+  reason — neither drop site logged it, so it was an out-of-band cure (a human, or
+  `git-identity-assert.sh --repair`), and neither of those writes runner.log at all. Recorded here
+  rather than filed as a row: filing a defect whose harm I could not measure is the failure mode this
+  effort's own method 10 exists to prevent.
+
+  ✅ **WHAT LANDED — the hand-proof made standing, at 1 s instead of 61 s.** Two cases added to
+  `tests/git-identity-guard.bats`, the execution counterpart to the three source assertions. **Method
+  20 (ask what a working fix COSTS) chose the shape:** the obvious fixture — a repo with a remote,
+  which runs the corpus — measured **61 s per arm, 60 s of it a fixed stall-clock window**, i.e.
+  ~120 s added to a suite that rides the very corpus whose runtime IS premise 1's converge problem.
+  A fixture with **no remote** abstains at `no-origin-main` immediately after the guard and costs
+  **~1 s** — and it is the STRONGER assertion, because the guard exists precisely for ticks that do
+  nothing else. Red-proofed in scratch trees, **one mutant per SITE** (method 50, each derived from
+  its own anchor with an abort-if-absent check): unmutated control **2/2 green**; mutating the log
+  string reds the FIRE case **only**; removing the `identity_snap_ok` early return reds the CONTROL
+  case **only** — per-site attribution, no over-wide red. Full suite in order **49/49,
+  `ok+notok == plan`, skip 0, BW01 0, 9 s**. Gates: `offbox-run.sh suites` **green 49/0** under
+  `env -i` (read off the state column, not the wrapper rc), `self-path-lint --selftest` 32/32,
+  `bats-kill-guard-lint` clean, `bats-shellcheck-lint` clean, `bats-assert-liveness` silent — and its
+  silence **positive-controlled** (method 4) by planting a dead negation in a scratch copy, which it
+  flagged `DEAD [negation]` at exit 1.
+
+  ⚠️ **THE INSTRUMENT DISAGREED WITH ME AGAIN, AND AGAIN IT WAS RIGHT** (#111's finding 3, second
+  instance in two recycles). My verification grep reported the planted mutation as `applied: 0` while
+  assert-liveness reported the mutant at line 618. The grep was wrong — **the Bash tool is zsh and it
+  ate `${n:-0}` inside the pattern**, the constraint this brief already carries. The mutation had
+  applied. Had I trusted my own count I would have concluded the positive control failed and thrown
+  away a working gate.
+
+  **WRONG CAUSES REJECTED (method 43), 4:** (1) *the deployed script is stale and lacks the guard* —
+  refuted, it is a symlink carrying it; (2) *an abstain returns before the guard, so it is
+  unreachable* — refuted by execution, it fired on a tick that abstained immediately after; (3) *tests
+  24-26 already prove the live path, so the row is a duplicate* — refuted by reading them, all three
+  are source assertions with `log` stubbed; (4) *zero lines means the guard never ran* — refuted, the
+  guard returns at its first line on a clean config and the repo is clean. **Cause (4) was my own
+  warm prior on opening the row, and it is the row's thesis.**
+
+  **COUNTS at #112's close** — `master-convergence-deadlock` **46 open / 4 blocked** (was 47/4;
+  −1 = my close, no sibling movement). Store-wide **268 open · 180 blocked · 2537 items** (open 269 →
+  268, items **flat at 2537** — so unlike #110→#111 there was no sibling filing inside this window,
+  and the level moved because nothing masked it). `ungrouped` 127/23 unchanged. **closed 1 / filed 0.**
+  Attribution owed from the prior window, per `claude-infrastructure-102`: #111's unexplained
+  2536→2537 mover was **`590fedde86cc`**, filed by that peer — the converge path itself, where
+  `deploy-live` (deploys the newest VERIFIED commit, behind trunk BY DESIGN) and `install.sh`
+  (treats behind-trunk as stale, full stop) define "stale" incompatibly, so EDITED files go live via
+  their symlinks while ADDED files never get symlinked. That is the mechanism behind premise 2's
+  LIVE_ADDS silent-skip, now with a named cause.
+
 - **2026-08-21 — drain recycle #111: the row was cured five hours after it was filed, and its
   headline premise — "will NOT reproduce on the desk" — was one lucky sample. closed 1 / filed 0.**
   #111 opened on the START-HERE order. Gate 1 was clear: **no `.page` file on disk at all**

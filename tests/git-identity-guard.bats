@@ -584,6 +584,60 @@ load_resident_guard() {
   [ "$first_guard" -lt "$first_abstain" ]
 }
 
+# ── The LIVE path (9f69e13fc2e0) ──────────────────────────────────────────────────────────────
+# The three tests above are all SOURCE assertions: two `eval` a sed-extracted function body with
+# `log()` stubbed to a no-op, and the third greps line ORDER. Not one of them executes the script,
+# and a stubbed `log` cannot emit the runner.log line — so between them they proved the guard's
+# LOGIC and left its deployed REACH unproven. That gap is what let a reader look at a runner.log
+# with zero `resident unsanctioned` lines and be unable to tell "the guard never ran" from "the
+# guard correctly said nothing". These two run the real script end-to-end and settle it.
+#
+# The fixture repo deliberately has NO remote, so the run abstains at `no-origin-main` immediately
+# after the guard. That is not a shortcut around the subject — it IS the subject: the guard exists
+# because the abstain paths are where the box deadlocks, and it must fire on a tick that does
+# nothing else. It also keeps these two at ~1s each instead of the ~61s a corpus-running fixture
+# costs, which matters because this suite rides the very corpus whose runtime is the open problem.
+postland_tick() {  # <repo> <state dir> — one real --run-if-needed against a fixture
+  env POSTLAND_VERIFY=on POSTLAND_AUTOREVERT=off \
+      CC_POSTLAND_DIR="${2:?state dir required}" CC_POSTLAND_REPO="${1:?repo path required}" \
+      CC_POSTLAND_WT_ROOT="$2/cells" CC_PAGES_DIR="$2/pages" CC_IDL="$2/idl.jsonl" \
+      CC_BACKLOG_BIN=/usr/bin/true CC_POSTLAND_NOTIFY=/usr/bin/true CC_POSTLAND_NOTIFY_BIN=/usr/bin/true \
+      CC_POSTLAND_LANDLOG="$2/land.log" \
+      "$SRC/scripts/postland-verify.sh" --run-if-needed
+}
+
+@test "postland: a REAL --run-if-needed tick fires the guard, logs it, and drops the override" {
+  local r s n
+  r="$(mkrepo livetick)"; s="$BATS_TEST_TMPDIR/state-live"; mkdir -p "$s"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  git -C "${r:?repo path required}" config user.name t
+  run postland_tick "$r" "$s"
+  [ "$status" -eq 0 ] || false
+  # The log line is the half no source assertion can reach — runner.log is what a human reads.
+  n="$(grep -c 'resident unsanctioned' "$s/runner.log" 2>/dev/null || true)"
+  [ "${n:-0}" -ge 1 ] || false
+  # …and the drop actually happened, so the line is an EVENT and not just a message.
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ -z "$output" ]
+}
+
+@test "postland: a real tick over a SANCTIONED identity logs nothing and touches nothing" {
+  # The discriminating control. The test above is a presence-assertion and reds when the log
+  # string is mutated; this one is an ABSENCE-assertion and is immune to that mutant — it reds
+  # only when the guard loses its `identity_snap_ok` early return and starts dropping everything.
+  # Two sites, two mutants: without this arm a guard that fired unconditionally would read green.
+  local r s n
+  r="$(mkrepo livetick2)"; s="$BATS_TEST_TMPDIR/state-ctl"; mkdir -p "$s"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  git -C "${r:?repo path required}" config user.name Good
+  run postland_tick "$r" "$s"
+  [ "$status" -eq 0 ] || false
+  n="$(grep -c 'resident unsanctioned' "$s/runner.log" 2>/dev/null || true)"
+  [ "${n:-0}" -eq 0 ] || false
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ "$output" = "$CC_GIT_IDENTITY_EMAIL" ]
+}
+
 @test "postland: the OTHER unattributed family is not restorable either" {
   # ren.chris+claude@outlook.com looks legitimate and is just as unattributable on GitHub
   # (verified 2026-08-08). A denylist keyed on `t` would have restored this one.
