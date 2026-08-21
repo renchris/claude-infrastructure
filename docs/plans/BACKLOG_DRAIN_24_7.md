@@ -167,6 +167,21 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   tests; (6) *file a row to "track" the null* — rejected per #116's method 10, a row over a refuted
   claim mints a permanent false positive.
 
+  **MEASURED, NOT FILED — the memory-index breach is 27 CHARACTERS, not 591, and the open row that
+  says otherwise is `150c50055e1c`.** Noticed while reading `bin/cc-memory-rotate:77`, whose pin
+  comment says its byte semantics are "reconciled to the loader's char limit by the threshold shift".
+  The open row (filed today) reads *"25591 chars / 154 lines … cap ~25000 chars. Chars is the binding
+  lever"* — but **25591 is the BYTE count** (`wc -c`). The index carries 288 non-ASCII bytes, so its
+  actual character count is **25027** (`LC_ALL=en_US.UTF-8 wc -m`; `LC_ALL=C wc -m` returns the byte
+  figure 25591, which is how the two get conflated). If the cap really is 25000 characters the index
+  is over by **27 characters — one word — not by 591**, and a compaction pass is the wrong-sized
+  remedy. ⚠️ **NOT filed and NOT closed, because the cap's own unit is contested and I did not verify
+  it**: sibling rows variously assert `24400 B`, `24985 B` and `~25000 chars`, i.e. the one contract
+  every one of these rows depends on is pinned in three places that disagree on both value and unit —
+  the standing lint's own shape, aimed at the loader. Whoever takes this must read the LOADER and
+  settle value+unit FIRST; the arithmetic above is only as good as that number. Do not re-file:
+  `150c50055e1c`, `0b3d53bcd1fd` and `7c266e16fc94` are already open.
+
   **Landed** (`scripts/offbox-run.sh`, comment only, `bash -n` + `shellcheck -S style` clean,
   `tests/offbox-admission-lint.bats` + `tests/offbox-partition.bats` **1..39 ok=39 notok=0 skip=0**):
   the producer's own header now states the corollary of *"the allowlist is exactly what a suite may
