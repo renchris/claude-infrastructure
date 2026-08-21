@@ -220,6 +220,59 @@ fi
 #                immediately; dead rows are kept for CC_REG_RETAIN_H (default 24h) so a
 #                spawn-death is still investigable, then reaped for hygiene.
 # `cc-sessions --all` exposes the dead rows (cc-board joins them against telemetry).
+# ── {pid,lstart} DIALECT LADDER ───────────────────────────────────────────────────────────────
+# `ps -o lstart=` renders through LC_TIME *and* TZ, and the two axes are independent. One live pid
+# at one instant, measured on this box:
+#
+#   canonical (TZ=UTC LC_ALL=C)   `Fri Aug 21 16:29:03 2026`   ← what the writer records from now on
+#   TZ=UTC + ambient LC           `Fri 21 Aug 16:29:03 2026`   ← every row written before that pin
+#   bare ambient                  `Fri 21 Aug 09:29:03 2026`
+#   LC_ALL=C at local TZ          `Fri Aug 21 09:29:03 2026`
+#
+# The WRITE is pinned canonical (hooks/session-register.sh); the READ accepts every dialect this
+# store is measured to hold, because the corpus predating the pin cannot be rewritten — 15 of 18
+# live rows are in the second dialect, and a canonical-only comparison would call all 15 strangers
+# at once. That is not a hypothetical: the two axes diverge for any launchd-started reader, which
+# has no LANG and therefore renders in C. Measured on an isolated copy of the live store, same
+# instant — at the writer's locale 10 rows resolve LIVE, under LC_ALL=C only 3.
+#
+# 🚨 The comparison NORMALISES the recorded string; it does NOT try to re-render the writer's
+# dialect. Re-rendering is the obvious fix and it does not work: a reader running under an exported
+# `LC_ALL=C` (every launchd job) cannot get the ambient rendering back, because `TZ=UTC ps` overrides
+# only TZ and LC_ALL still outranks whatever else it sets. A reader does not know the writer's
+# environment and cannot restore it — so the writer's environment must not be part of the question.
+#
+# Both dialects in this store share TZ=UTC (that axis was pinned from the field's first commit);
+# they differ ONLY in field ORDER — `Fri Aug 21` vs `Fri 21 Aug`. Canonicalising the order makes the
+# compare locale-independent by construction, and costs ONE `ps` fork, not four.
+#
+# BOUND, stated honestly: this normalises ORDER, not month NAMES. Both locales measured in this
+# fleet (C and en_CA.UTF-8) render English abbreviations; a non-English LC_TIME would still differ,
+# and it is the canonical WRITE above — not this reader — that removes that class going forward.
+reg_lstart_norm() { # <lstart rendering> -> "Dow Mon DD HH:MM:SS YYYY", whitespace already squeezed
+  # Word-splitting is the POINT here — it is how the five fields are separated. The caller has
+  # already squeezed whitespace, and an lstart rendering contains no glob character, so the two
+  # hazards SC2086 warns about cannot arise. Quoting would pass the whole string as $1 and the
+  # function would silently become the identity.
+  # shellcheck disable=SC2086
+  set -- $1
+  [ "$#" -eq 5 ] || { printf '%s' "$*"; return 0; }
+  case "$2" in
+    ''|*[!0-9]*) printf '%s %s %s %s %s' "$1" "$2" "$3" "$4" "$5" ;;  # already month-first
+    *)           printf '%s %s %s %s %s' "$1" "$3" "$2" "$4" "$5" ;;  # day-first -> swap
+  esac
+}
+# FAIL-OPEN is preserved exactly as documented below: an unreadable `ps` returns MATCH, because a
+# hiccup is not proof of death. Only a start time READ and differing after normalisation convicts.
+reg_lstart_matches() { # <recorded> <pid> — rc 0 = same process (or unprovable), 1 = differs
+  local want="$1" pid="$2" now
+  [ -n "$want" ] || return 0
+  now="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$now" ] || return 0
+  [ "$now" = "$want" ] && return 0
+  [ "$(reg_lstart_norm "$now")" = "$(reg_lstart_norm "$want")" ]
+}
+
 RETAIN_S=$(( ${CC_REG_RETAIN_H:-24} * 3600 ))
 now=$(date +%s)
 live=()
@@ -251,10 +304,7 @@ for f in "$REG_DIR"/*.json; do
   # session, on a lister that already spends 2-3 `jq` forks per row.
   if [ "$stale" = 0 ] && [ -n "$pid" ]; then
     rec_lstart=$(jq -r '.lstart // ""' "$f" 2>/dev/null)
-    if [ -n "$rec_lstart" ]; then
-      now_lstart=$(TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
-      if [ -n "$now_lstart" ] && [ "$now_lstart" != "$rec_lstart" ]; then stale=1; fi
-    fi
+    if [ -n "$rec_lstart" ] && ! reg_lstart_matches "$rec_lstart" "$pid"; then stale=1; fi
   fi
   # The pane cross-check is asked ONLY of rows a terminal can enumerate. A headless row's address
   # is never in `it2 session list` — that list can only ever MISS it — so applying the check would
