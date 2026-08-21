@@ -118,13 +118,30 @@ lint_contracts_dir() {
 # ── L2-c: the watchdog sweep (INDEPENDENT of waiter liveness — a disk scan) ───────────────────────────
 # {pid,start-time} liveness: a live pid whose start-time no longer matches was RECYCLED — a DIFFERENT
 # process — so the original waiter is dead (the classic bare-pid false-liveness hole, L1-c/L2-c).
+# DIALECT — the reader and the writer are DIFFERENT PROCESSES, so `ps -o lstart=` must be pinned or
+# the compare is a coin toss on whose LC_TIME/TZ won (the C31/C33/land-lock class). This pair is the
+# cross-CONTEXT case: bin/cc-wait writes the record from a session (ambient en_CA — measured 64/64
+# of ~/.claude/wait-contracts on 2026-08-21, `Fri 21 Aug 11:03:20 2026`), while the sweep's only
+# scheduled caller is scripts/lead-supervisor.sh under launchd, which has no LANG and therefore
+# renders C (`Fri Aug 21 11:03:20 2026`). Unpinned, those strings differ for the SAME LIVE waiter,
+# `state` becomes "dead-waiter", and the watchdog pages a divergence about a process that is fine.
+# Canonical first, then the two dialects this fleet is measured to produce, so a record written
+# before the pin still matches (migration); a third dialect degrades to today's verdict, never
+# worse. Every candidate renders the SAME pid at the SAME moment, so a genuinely recycled pid
+# cannot be laundered alive — its time-of-day digits differ in every dialect.
 waiter_alive() { # <pid> <stored_start>  -> 0 alive(same proc) / 1 dead(gone or recycled)
   local pid="$1" stored="$2" cur
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  cur="$(ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//;s/ *$//')"
   [ -n "$stored" ] || return 0                 # no stored start (legacy) — pid is alive, cannot guard
-  [ "$cur" = "$stored" ]                        # same start-time = same process; mismatch = recycled = dead
+  cur="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] || return 0                    # unreadable instrument is a FAILED PROBE, not a death
+  [ "$cur" = "$stored" ] && return 0           # same start-time = same process
+  cur="$(ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$stored" ] && return 0        # migration: reader-ambient
+  cur="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$stored" ] && return 0        # migration: C at local TZ
+  return 1                                     # proven mismatch = recycled = dead
 }
 
 # page = the durable divergence record. Default cc-notify (mailbox write survives a closed pane); a test

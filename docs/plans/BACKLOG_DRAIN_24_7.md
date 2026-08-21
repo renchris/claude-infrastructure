@@ -87,6 +87,156 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #104: stayed in `master-convergence-deadlock`. closed 1 / filed 0.**
+  ONE commit, SIX files (`hooks/lib/land-inflight.sh`, `scripts/ship-land.sh`,
+  `scripts/wait-contract-lint.sh`, `bin/cc-wait`, `tests/land-inflight.bats` (new),
+  `tests/wait-contract-lint.bats`) plus this SSOT. Row **`27e7561555cb`** — *the {pid,lstart}
+  identity in `scripts/` and `hooks/` is still locale- and TZ-unpinned at 2 REAL sites with
+  DIFFERENT readers* — **CLOSED by a cure written and landed this turn**, both sites, red-proofed
+  in both directions with two per-site mutants. Fold at close: `master-convergence-deadlock`
+  **53 open / 4 blocked** (population: rows in THAT condition only — see the attribution note
+  below, which is why this number is stated with its span).
+
+  🚨 **THE GENERALISABLE FINDING — A CROSS-PROCESS RECORD HAS A DIALECT, AND THE TWO PRODUCERS ON
+  THIS BOX WRITE OPPOSITE ONES. THE GUARD WAS NOT FLAKY; IT WAS INERT 100% OF THE TIME.** The row
+  named the mechanism (`ps -o lstart=` renders through `LC_TIME` and `TZ`) and predicted the pair
+  could disagree. The measurement is stronger than the prediction, and it is what turns this from
+  a latent hazard into a live one: **the fleet's two lstart producers write in OPPOSITE dialects**,
+  so the compare does not *sometimes* miss, it *always* misses.
+
+      ship-land-inflight markers on disk  →   3/3  `Fri Aug 21 08:05:57 2026`   (C dialect)
+      ~/.claude/wait-contracts records    →  64/64 `Fri 21 Aug 11:03:20 2026`   (ambient en_CA)
+
+  **SAME-MOMENT PROOF ON A LIVE LAND, not a reconstruction.** While this recycle was measuring,
+  pid **21936** was a running `ship-land` (branch `claude/fire-20260820T172902Z-13979-1`, started
+  08:05:57). Its own marker, and three renderings of that same pid at that same instant:
+
+      STORED by ship-land             [Fri Aug 21 08:05:57 2026    ]
+      a session reader renders        [Fri 21 Aug 08:05:57 2026    ]   → exact compare MISMATCH
+      LC_ALL=C                        [Fri Aug 21 08:05:57 2026    ]
+      TZ=UTC LC_ALL=C (canonical)     [Fri Aug 21 15:05:57 2026    ]
+
+  `land_inflight_live` therefore answered **NOT IN FLIGHT for a land that was running** — which is
+  this lib's entire purpose defeated. Downstream: `wrap-ledger.sh:480` renders 📦 *"on a branch
+  only — /ship to land it"* DURING the land, and `ship-land.sh:815 inflight_claim`'s exit-11
+  concurrency refusal never fires, so a second land takes the same worktree's HEAD and rebase —
+  the rebase-drop incident `.claude/CLAUDE.md` opens with. **Generalise: when a record crosses a
+  process boundary, its RENDERING is part of its contract. Pin the dialect at the WRITE, or the
+  reader is comparing two answers to different questions. And the fleet's own on-disk records are
+  the instrument that settles which dialect is in play — not the environment of the process you
+  happen to be inspecting from.**
+
+  1. **SITE 1 — `scripts/ship-land.sh:824` (writer) ↔ `hooks/lib/land-inflight.sh:55` (reader).**
+     Both pinned: the lib gained `li_lstart()` (`TZ=UTC LC_ALL=C` + trim) and
+     `li_lstart_matches()`, the writer now records via `li_lstart`, and the reader compares
+     through the matcher. `inflight_claim`'s lib guard was widened to require BOTH symbols, so an
+     older deployed lib writes **no marker at all** (today's behaviour) rather than a marker no
+     reader can match.
+  2. **SITE 2 — `bin/cc-wait:76` (writer) ↔ `scripts/wait-contract-lint.sh:125` (reader).** This is
+     the cross-CONTEXT pair: `cc-wait` writes from a session, and the sweep's only scheduled caller
+     is `scripts/lead-supervisor.sh` under **launchd** (`com.claude.lead-supervisor.plist`, no
+     `LANG`). Unpinned, a LIVE waiter compares unequal, `state` becomes `dead-waiter`, and the
+     watchdog pages a divergence about a process that is fine. Both halves pinned; the reader also
+     now treats an **unreadable `ps` as a failed probe rather than a death** (land-lock's hazard 3),
+     which strictly reduces false pages.
+  3. 🚨 **THE READY-MADE SHAPE COULD NOT BE COPIED VERBATIM, AND COPYING IT WOULD HAVE COMMITTED
+     THE BUG IT REMOVES.** `land-lock.sh`'s migration fallback re-checks a canonical MISS against
+     the **reader's own ambient** rendering. That works there because the pre-fix records were
+     written by the same population that reads them. Here the pre-fix `ship-land` record is a
+     **THIRD** rendering — C dialect at **LOCAL** TZ — which is neither the canonical (UTC+C) nor
+     any session reader's ambient. A verbatim copy would have called all 3/3 markers on disk
+     strangers. The matcher therefore tries canonical, then reader-ambient, then **C-at-local-TZ**:
+     the two dialects this fleet is MEASURED to produce, not a denylist of guessed spellings
+     (memory: `denylist-enumerates-spellings-not-the-class`). A fourth dialect matches nothing and
+     falls through to the pre-existing verdict — degraded, never worse.
+  4. **THE WIDENING CANNOT LAUNDER A RECYCLED PID, AND THAT IS ASSERTED, NOT ARGUED.** More
+     candidate renderings means more matches, and for `land-inflight` the *false-IN-FLIGHT*
+     direction is the dangerous one (it suppresses the 📦 nudge over genuinely parked work). Every
+     candidate renders the SAME pid at the SAME moment, so no rendering of a different start
+     instant can equal the record. Pinned by a per-site MUTANT in each suite.
+  5. **RED-PROOF, both directions, `git archive` scratch tree at parent `332babf6370a0c7b45c4a9752ed29d6143e9a6e7`.**
+     Non-vacuous by method 29 — the parent carries the **PRIOR SHAPE**, printed: bare-`ps` reader
+     in `land-inflight.sh` = **1**, `li_lstart` present = **0**, bare-`ps` writer in
+     `ship-land.sh` = **1**, bare-`ps` reader in `wait-contract-lint.sh` = **1**, bare-`ps`
+     `pid_start` in `cc-wait` = **1**. **PRE:** `tests/land-inflight.bats` `1..9` ok=5 notok=4;
+     `tests/wait-contract-lint.bats` `1..10` ok=9 notok=1 — the 5 reds are exactly the cross-locale
+     regression, the canonical-rendering pin, the C-dialect migration case, the writer/reader
+     dialect pin, and the launchd-locale sweep. **POST:** 9/9 and 10/10, rc 0, **sum = plan**,
+     skip=0 in every cell.
+  6. **PER-SITE MUTANTS (method 26/one-mutant-per-site), each biting EXACTLY ONE test.** M1 —
+     `li_lstart_matches` can never return "stranger" → `not ok 6 MUTANT: a genuinely recycled pid
+     is NOT laundered alive` and nothing else. M2 — `waiter_alive` can never return "dead" →
+     `not ok 9 L2-c MUTANT: a genuinely recycled pid is STILL paged dead` and nothing else. Both
+     mutators `assert new != s` so an absent control FAILS LOUD rather than passing vacuously.
+  7. **CONTROLS, green on BOTH sides and labelled as such so no successor reads them as evidence:**
+     the same-locale writer/reader case, the ambient-dialect migration case, the blind-`ps` case,
+     the no-lstart case, and the pre-existing `tests/wait-contract-lint.bats:60` *"a live in-window
+     waiter draws no page"*. That last one is the row's own warning made concrete — it writes and
+     reads inside ONE process, where the locale is constant by construction, which is exactly why
+     **a single-process test cannot see this class at all**. Every new case drives a PATH-stubbed
+     `ps` that renders per-locale, never `/bin/ps`.
+  8. 🚨 **THE SITE-2 MIGRATION GAP IS REAL BUT ITS POPULATION IS MEASURED EMPTY — stated because a
+     later recycle would otherwise have to re-derive it.** A reader-side fallback can only rescue a
+     pre-pin record written in the READER's ambient, so a launchd-context sweep still cannot match
+     a session-written pre-pin record. That gap can only touch contracts that are **OPEN with a
+     still-live waiter pid**: measured `~/.claude/wait-contracts` = **64 total, 0 OPEN, 0 with a
+     live pid** — every other record fails `kill -0` first and is correctly judged dead in any
+     dialect. The writer pin closes it going forward.
+  9. **GATES.** `tests/land-inflight.bats` 9/9 · `tests/wait-contract-lint.bats` 10/10 ·
+     `tests/cc-wait.bats` 19/19 · `tests/supervisor-wait-contract-sweep.bats` 4/4 — each with
+     `ok + notok = plan`, skip=0. `shellcheck -S style` on all four changed shell files: rc 0, 0
+     findings. `bats-kill-guard-lint` (FILE, ×2) rc 0 · `bats-testname-eval-lint` (DIR) 525 suites
+     rc 0 · `test-hermeticity-lint` (DIR) 525 suites **0 new leaks**, 68 selftests 0 collisions ·
+     `bats-shim-parity-lint` NOT-ACTIVE (healthy default) · `bats-assert-liveness` rc 0,
+     **positive-controlled** (injected `! false` → `DEAD [negation]`, rc 1).
+     ⚠️ That analyzer caught a REAL defect in this turn's own new suite: a **non-final `[[ ]]`** is
+     a DEAD assertion under errexit, so the writer/reader dialect pin was half-inert on its first
+     draft. Fixed to counted `[ ]` comparisons, not bypassed.
+  9b. 🚨 **THE LAND REFUSED THE FIRST ATTEMPT (`ship-land` rc 6, `offbox-admission` RED) AND IT WAS
+      RIGHT — a locale-bug's own test was coupled to the box's locale.** The off-box runner is
+      `env -i LC_ALL=C`, so *the reader's "ambient" IS C there*. The migration case written to
+      exercise the **reader-ambient** fallback hard-coded the `Fri 21 Aug` string, which off-box no
+      candidate can ever produce → `not ok 4`, and two sibling cases were silently exercising a
+      different fallback than the one they named. Cure (the gate's own option (a), never the
+      exclusion manifest): the reader is now invoked with `LC_ALL=en_CA.UTF-8` pinned
+      **explicitly** (`read_live_as_session`) instead of inheriting the box's, so each case asserts
+      the same thing everywhere. On-box **9/9**, off-box **green 9/0**, `tests/wait-contract-lint.bats`
+      off-box **green 10/0**, and the red-proof re-run with the corrected file still reds the same
+      four cases at the parent. **Generalise: a test for a locale defect must PIN every locale it
+      depends on — inheriting one makes the test's meaning a property of the box it ran on, and the
+      hermetic runner is where that surfaces.** Same shape as the `[[ ]]` finding above: both were
+      caught by a gate, in this commit's own new file, and neither was bypassed.
+  10. **WRONG CAUSES REJECTED — recorded so nobody re-derives them (method 43).**
+      **(a) "the daemon's env says `LANG=` empty, so launchd is C-locale — diagnosis confirmed."**
+      The instrument was BLIND: `ps -E` read `LANG=[]` for the daemon *and* for a child this
+      session had just spawned with a known `LANG=zz_ZZ.PROBE`. A positive control is what caught
+      it; believing it would have rested the whole finding on a non-verdict. The on-disk dialect
+      census is the evidence that actually holds.
+      **(b) "copy `land-lock.sh`'s `proc_lstart`/`lstart_matches` verbatim."** Would have reaped
+      3/3 live markers — see item 3.
+      **(c) "one shape fits both sites, so pinning the readers is the whole fix."** False for
+      site 2, whose writer lives in `bin/` — a reader-only pin leaves the cross-context pair
+      broken, which is why `bin/cc-wait:76` moved with it (see the census note below).
+      **(d) "the existing live-waiter test already covers this."** It is structurally incapable of
+      seeing the bug — item 7.
+  11. **CENSUS HANDOVER — `7a00b5de1ec0` (the `bin/` half) SHRINKS BY ONE SITE.** That row's census
+      reads *"cc-reaper 4, cc-dispatch 3, cc-respawn 2, cc-backlog 1, cc-wait 1, cc-pane-headless 1,
+      cc-deathwatch-kqueue 1"* = 13 sites / 7 files. **`bin/cc-wait`'s single site is now pinned by
+      this commit**, because leaving it would have made this row's site-2 reader fix inert. The row
+      remains OPEN with **12 sites across 6 files**, `cc-reaper` (4, and its misjudgement KILLS)
+      still the warmest. Do not re-derive the old 13.
+  12. **PEER CORRECTION RECORDED — #103's two closes, against their TRUE conditions.**
+      `claude-infrastructure-102` lead-verified #103 and found its ping reported *"closed 2 / filed
+      0 in `master-convergence-deadlock` (55→54)"* while only ONE of the two rows is in that
+      condition: `d0afa40677ef` is `master-convergence-deadlock` (that IS the 55→54);
+      `79e7ef3ca862` has `condition=None` — unconditioned, so its close moves this condition's
+      count by zero. Both closes are real and #103's land is content-verified; nothing was redone.
+      **The class is the recurring one — a COUNT whose SPAN does not equal its SUBJECT** (#97
+      censused claim-side guards to conclude about spawning; #98 proved one path closed to conclude
+      no path existed; #99 censused producers to conclude about enforcement; #103 reported a 2-close
+      tally against a 1-condition span). Standing check, applied in this entry's own fold line:
+      **state the population every number is over.**
+
 - **2026-08-21 — drain recycle #103: stayed in `master-convergence-deadlock` (as #102 opened it).
   closed 2 / filed 0.** ONE commit, TWO files (`tests/test-hermeticity-lint.bats`, this SSOT).
   Row **`d0afa40677ef`** — *two host suites RED on a STALE SPELLING* — **CLOSED by a cure that had

@@ -73,7 +73,12 @@ claude_ancestor_pid() {
 }
 # {pid,start-time} identity — pid ALONE is a false-liveness hole (the OS recycles pids); the start-time
 # pins WHICH process (L1-c / L2-c recycling guard). ps lstart is stable across a process's life.
-pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
+# PINNED DIALECT: this value is written to disk and read back by a DIFFERENT process in a DIFFERENT
+# locale — scripts/wait-contract-lint.sh --sweep, whose scheduled caller runs under launchd (no
+# LANG ⇒ C) while this writer is a session (ambient). `ps -o lstart=` renders through LC_TIME and
+# TZ, so unpinned the same live waiter compares UNEQUAL and the sweep pages it as a dead waiter.
+# The reader accepts pre-pin records too (see its § DIALECT block); this is the write half.
+pid_start() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
 
 cmd_wait() {
   local waitee="" signal="" deadline="" ontimeout="" heartbeat="none" waiter="" interval=15 note=""
