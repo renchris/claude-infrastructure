@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #95: `master-fire-gate` 16 open → 15 open / 2 blocked.
+  closed 1 / filed 0** (thirty-first consecutive recycle in `master-fire-gate`). Row
+  `95512886c19a` closed: *"handoff-fire declares FIRE FAILED on a session that engages late, and
+  prescribes a duplicate-session recovery"*, filed **2026-08-11T05:32:40Z**. An ADJUDICATION
+  close, no code change.
+
+  **VERDICT — both conjuncts are cured, landed, and content-verified in BOTH directions. The row
+  stayed open 10 days because it is a STRICT SUBSET of `87626e1593c3` (done, closed by #71) that
+  was filed 17 HOURS EARLIER — and the LATER, LONGER row is the one every cure cited.**
+
+  **THE GENERALISABLE FINDING — WHEN TWO ROWS NAME ONE DEFECT, THE ONE THAT GETS CURED IS NOT THE
+  ONE THAT SAW IT FIRST; IT IS THE ONE THAT ARGUES IT BEST, AND PRIORITY DATE BUYS NOTHING.**
+  This row (2026-08-11T**05:32**:40Z) states both conjuncts in a single 15-word line with an empty
+  body. `87626e1593c3` (2026-08-11T**22:24**:50Z) states the same two conjuncts across a
+  400-word title carrying named panes, landed shas, a measured latency and three fix candidates.
+  Three cures landed against the later row; **zero cite this one** — `grep -rl '95512886c19a'`
+  over the whole tree returns exactly one file, this plan's own prose about it. #84's law was
+  *closure follows the CITED id*; the new half is that **being first to file does not make you the
+  cited id, and terseness is what costs the citation.** A duplicate-detector keyed on filing order
+  would have picked the wrong survivor here.
+
+  **BOTH CONJUNCTS, ADJUDICATED SEPARATELY (method 18 — a title that is a CONJUNCTION needs one
+  verdict per conjunct; a half-cure closes nothing):**
+
+  ```text
+  needle                                    origin/main   parent-sha   verdict
+  (b) "RETIRE THAT PANE FIRST"                    2       a4bf0a7d8 0  CURED + LIVE
+      "TASK-LESS — recover with a WARM re-fire"   0       a4bf0a7d8 1  ← non-vacuity control
+  (a) "fire_engage_window"                        3       3516251c5 0  CURED, NOT YET LIVE
+  ```
+
+  Conjunct **(b)** is the row's claim verbatim: `967929471` *"fix(handoff): the never-engaged
+  verdict prescribed adding a second session to a worktree that already held a live one"*,
+  **2026-08-21T00:05:30Z**, moved the operator string from a bare *"recover with a WARM re-fire"*
+  to *"RETIRE THAT PANE FIRST (clear it), then re-fire warm … re-firing while it is alive puts a
+  SECOND session in that worktree, and nothing downstream refuses that."* The negative control at
+  its parent is **non-vacuous in both directions** — the parent does not merely lack the new
+  string, it CARRIES the old one.
+
+  Conjunct **(a)** has two landed cures, both later than this row: `6509abd2`
+  **2026-08-11T18:57:28Z** (13 h after filing) added the fifth outcome — state 5 UNPROVEN,
+  `exit 6` via `goal_unreachable engagement-unproven` — so an INGESTED-but-late session no longer
+  reaches the definite negative; and `1803b1802` **2026-08-21T08:39:51Z** replaced the constant
+  120 s with `fire_engage_window()`, load1-per-core scaled off the same read `capacity_gate`
+  takes, base 120 s, cap 480 s, fail-safe to 120 on every unreadable input.
+
+  🚨 **METHOD 25 DISCHARGED EXPLICITLY — DEFINED IS NOT CONSUMED.** A landed function is not a
+  landed behaviour, and `fire_engage_window` is exactly the shape that fakes it: its definition at
+  `handoff-fire.sh:2358` sits ~90 lines from its only call, and the call is *guarded*
+  (`if command -v fire_engage_window …; then timeout="$(fire_engage_window)"; else timeout=120; fi`,
+  `:2450`) precisely so an isolated `sed`-extraction in `tests/handoff-fire-pane-parked.bats`
+  still gets 120. A census that counted the definition and stopped would have read the same
+  non-zero and proved nothing about the running window.
+
+  ⚠️ **DECLARED RESIDUAL, DELIBERATELY NOT FILED — conjunct (a) is LANDED BUT NOT LIVE**, and the
+  already-open `deploy-live-frozen` row owns it (do NOT re-file). The live layer reaches
+  `scripts/handoff-fire.sh` by a per-file symlink into the shared checkout, which sits at
+  `ba082bc4b` (**recycle #86**) = **11 behind** origin/main, inside the 25 budget. Ancestry against
+  the live sha resolves it exactly: `967929471` **IN-LIVE**, `6509abd2` **IN-LIVE**, `1803b1802`
+  **NOT-IN-LIVE** — matching the deployed bytes (`RETIRE THAT PANE FIRST` = 1, `fire_engage_window`
+  = 0). So the duplicate-prescription half is fixed on the box *today* and the window half still
+  runs the constant. This is an **EDIT riding its symlink** — degraded, present, converging — not
+  an **ADD**, so it is a budgeted lag and not a `LIVE_ADDS` breach.
+
+  **WRONG CAUSES RECORDED (three, each refuted on a read rather than a hunch):**
+  1. *"Superseded at filing / already fixed."* REFUTED on dates, both sides normalised with
+     `TZ=UTC git log --date=format-local`: all three cures POST-date the row by 13 h, 10 d, 10 d.
+  2. *"This row is `4043ab43bf4a`."* REFUTED — that row (done, #89) was filed
+     **2026-08-12T10:52:39Z**, a day LATER still, and covers only conjunct (a); `handoff-fire.sh`'s
+     own comment at `:2318` scopes it to the window alone and is silent on the prescription. The
+     true duplicate is `87626e1593c3`, the only row carrying BOTH conjuncts.
+  3. *"Check the cure against the row's own fix candidates."* REFUTED by READING the citation
+     (#89's law): `87626e1593c3` proposed (a) an adaptive window, (b) recovery advice conditional
+     on a re-probe, (c) a warm re-fire that refuses an occupied worktree. `967929471` implemented
+     **none of the three** — it changed the PRESCRIPTION to retire-first, a fourth remedy the row
+     never named — and the row was closed on it anyway. Scoring the cure against the candidate list
+     would have declared a cured defect uncured.
+
+  **NO DISTINGUISHING ARTIFACT SURVIVES for this row's own incident** (`source: shepherd-113
+  2026-08-11 P2 fire`): `body` length 0, and `grep -rl 'shepherd-113'` over the tree returns
+  nothing. So nothing shows its late engagement had a mechanism other than the constant window, and
+  the close rests on the MECHANISM — never on the vanished incident (#93's law: never close on a
+  vanished precondition).
+
+  **Stored falsifiers re-run in one pass (method 15) — BOTH still `rc=1` (NO MATCH), correctly
+  open:** `579bc8781b5b` (four spawn paths never call `cc_worker_claim_admit`) and `159c2211b0f2`
+  (`lead-crash-watchdog.sh` does not source `watchdog.env`). `34b35fc074d7` **DECLINED AGAIN on a
+  measurement** — load **24.15 / 27.11 / 29.14** at pick time (#94 saw 26.07/28.32/30.62), so its
+  quiet-box bench is still a non-verdict (`bound-must-fit-the-band-not-the-bench`).
+
 - **2026-08-21 — drain recycle #94: `master-fire-gate` 17 open → 16 open / 2 blocked.
   closed 1 / filed 0** (thirtieth consecutive recycle in `master-fire-gate`). Row
   `6bfd83f03c3a` closed: *"a Bash-tool-layer rewrite silently substitutes the resolved cc-runner
