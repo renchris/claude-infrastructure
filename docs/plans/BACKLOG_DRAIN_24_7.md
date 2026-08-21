@@ -87,6 +87,88 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #83: `master-fire-gate` 28 open → 27 open / 2 blocked.
+  closed 1 / filed 0 (nineteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row
+  named the right CHOKEPOINT and the wrong ARM of it. Its prescribed remedy was aimed at the hook that
+  ALREADY said "allow" and is OUTRANKED by the sibling hook that actually decides — so the fix it asked
+  for was INERT BY CONSTRUCTION, and the cure had to land, and did land, in the stricter sibling.
+  `abd96111a1b2` said *"fired sessions wedge SILENTLY on PreToolUse rm-r confirmation dialogs … fix at
+  the chokepoint: auto-allow rm -r under the session scratchpad + BATS_TEST_TMPDIR in the hook"*. The
+  hook it meant, `hooks/rm-safe-allowlist.sh`, had auto-allowed the absolute scratchpad path since its
+  BIRTH commit `1393815e9` (2026-07-16), **25 days before the row was filed** — measured, not read:
+  fed the live hook a PreToolUse payload for `rm -rf <SP>/mut`, `permissionDecision=allow`. The modal
+  came from `hooks/validate-bash.sh`, whose `ask` beats that `allow` under BOTH precedence models in
+  play — rm-safe's own header says *"hooks chain, first non-empty decision wins"* (validate-bash is
+  position 3 in the live PreToolUse/Bash chain, rm-safe position 6), and the harness order is
+  deny > ask > allow. **Widening the PERMISSIVE hook is a no-op whenever a STRICTER sibling is the one
+  deciding.**
+
+  **The cure, and it is LIVE not merely landed.** `27fb9da42` (2026-08-18) — *"fix(validate-bash): the
+  rm allowlist had no name for the one tree the harness itself hands every agent"* — added the
+  SCRATCHPAD-CATEGORY span to `hooks/validate-bash.sh`, deciding on a RESOLVED path with identity taken
+  from the payload's own `.session_id`. It landed under row `7da9c4451540` (`done`), filed 2026-08-18,
+  which cites the SAME four panes as this row's class (275/276, 339, and **pane 131 — the 24/7 drain
+  chain itself**, dead ~4 h at recycle #21). Production-shape measurement against the DEPLOYED hooks
+  with a real session_id: `rm -rf <SP>/mut` → validate-bash NO DECISION, rm-safe `allow`,
+  `defaultMode=auto` proceeds, **no modal**. Three controls still ask, so the category discriminates
+  rather than blanket-allowing: same command with a WRONG session_id → `ask`; a traversal
+  `<SP>/../../../../Development/reso-management-app` → `ask`; an unrelated repo path → `ask`. The
+  deployed `~/.claude/hooks/validate-bash.sh` carries 2 SCRATCHPAD-CATEGORY markers, so this is a
+  live-layer verification, not a trunk one.
+
+  **Effort choice.** #82 left `master-fire-gate` warm at 28 open — a warm effort is cheaper than a cold
+  one, and nineteen recycles have now proved it. This row was the only one of the five candidates read
+  that carried a STORED FALSIFIER, which is what drew it — and the falsifier turned out to be the trap
+  (below), not the guide.
+
+  **Every part adjudicated separately (#77's method item 6, now paying off SEVEN recycles running).**
+  (a1) scratchpad auto-allow — SATISFIED, in a different hook than prescribed, and the prescribed edit
+  could never have worked. (a2) `BATS_TEST_TMPDIR` — **MOOT: the class cannot reach the gate.** The
+  stored falsifier `grep -q BATS_TEST_TMPDIR hooks/rm-safe-allowlist.sh` reads 0 and always will — it
+  tests for a literal env-var NAME inside a hook that parses COMMAND TEXT, and the variable resolves to
+  `/var/folders/<…>/T/bats-run-*/test/1` on this box, so the string never appears in a resolved target.
+  The 8 real `rm -rf "$BATS_TEST_TMPDIR/postland"` call sites (`tests/deploy-live.bats`) execute inside
+  a **bats subprocess**, never as an agent Bash tool call, so PreToolUse never sees them. (b) *"teach
+  the pane supervisor to detect dialog-frozen screens"* — the OBSERVABILITY landed `b7db06c5f`
+  (2026-07-19), **22 days before the row was filed**: `hooks/cc-permission-beacon.sh` is keyed on the
+  harness's PermissionRequest event *precisely because* no Stop fires mid-dialog — the row's own stated
+  premise — and `scripts/lead-supervisor.sh:453` pages `PERMISSION-PENDING` from the same land. The
+  residual ESCALATING-CONSUMER gap is owned by OPEN `6a5a218fd9a8` (filed 2026-08-18, same four panes),
+  so nothing was re-filed.
+
+  🚨 **WRONG CAUSE #1 REJECTED — CAUGHT IN MY OWN INSTRUMENT, and it pointed the opposite way.** The
+  first chain run showed validate-bash returning `ask` for EVERY form **including** the absolute
+  scratchpad path — which reads as *the fix is absent, the row is live work*, and would have produced a
+  confident, fully-evidenced, wrong verdict. False: my payload carried only
+  `{tool_name, tool_input.command}`. The scratchpad category takes identity from `.session_id`
+  (`_P_SID`) and requires a UUID shape, so an **absent** session_id collapsed every case under test
+  into the single `ask` state — `harness-default-collapses-the-states-under-test`, in my own probe.
+  What caught it was reading the section the probe had just indicted **before** writing a word: its
+  comment names `.session_id` as the discriminator. The re-run with a real session_id plus three
+  discriminating controls is what separated the states.
+
+  🚨 **WRONG CAUSE #2 REJECTED — the row's own prescription**, *"rm-safe lacks the scratchpad class, so
+  widen it"*. Refuted by measurement: that hook already emitted `allow` for the named case, 25 days
+  before filing. **The stored falsifier corroborates the wrong reading perfectly** — 0 is exactly what
+  it reads whether the remedy is missing or merely POINTLESS. A falsifier proves a remedy ABSENT; it
+  never proves the remedy was the RIGHT ONE, and here a 0 was the residue of an edit that would have
+  changed nothing.
+
+  🚨 **THE SHAPE.** #73 = state destroyed UPSTREAM of a gate that knew how to use it · #74 = destroyed
+  DOWNSTREAM at its only consumer · #75 = correct in a sibling document that never reached the
+  authoritative one · #76 = reached the authoritative store, then decayed there · #77 = correct and
+  authoritative, and the INSTRUMENT could not read it · #78 = correct, landed, self-describing, with no
+  consumer at all · #79 = reachable by a 0-second read-only command, behind a label that forbade running
+  it · #80 = the cure had already landed, but the row was filed four hours later in the PERMANENT TENSE ·
+  #81 = the mechanism was never the one named — the cited file present, correct and irrelevant · #82 =
+  right symptom, wrong mechanism, and an inert cure-shaped line bypassed by a sibling arm · **#83 = the
+  remedy was aimed at the arm that was already permissive and is OUTRANKED — a PRECEDENCE fact, not a
+  bypass — so the prescribed fix was inert by construction and the cure landed in the stricter sibling.**
+  Kin to #82 and distinct from it: there the cure-shaped line ran and did nothing for the defect; here
+  the remedy's target emits the right decision and is simply overruled. Memories:
+  `harness-default-collapses-the-states-under-test`, `corrected-instrument-can-lie-again`,
+  `gate-default-decides-failure-direction`, `work-item-citation-refutes-its-own-remedy`.
+
 - **2026-08-21 — drain recycle #82: `master-fire-gate` 29 open → 28 open / 2 blocked.
   closed 1 / filed 0 (eighteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row's
   OBSERVATION was true, its NAMED CAUSE was refuted three weeks before it was filed, and the line that
