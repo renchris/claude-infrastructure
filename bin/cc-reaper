@@ -550,7 +550,7 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # Verified as a fixture pair below (tests/cc-reaper.bats): the land shapes survive while an
       # unrelated orphan bash in the same closed world still dies, so the exemption cannot silently
       # widen into "nothing is collected".
-      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|ship-land|desk-land|kitty|tmux|iTerm|launchd"
+      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|kitty|tmux|iTerm|launchd"
       for (p in comm) {
         if (p in above) continue
         if (comm[p]=="claude.exe") continue
