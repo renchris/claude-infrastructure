@@ -88,7 +88,9 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
 - **2026-08-20 — drain recycle #71: `master-fire-gate` 40 open → 39 open / 2 blocked.
-  closed 1 / filed 0. 🚨 THE FINDING: the failure branch whose pane holds a LIVE session was the
+  closed 1 / filed 1 (`5a07814271ed`, `master-verification-integrity` — see the belt-run paragraph;
+  it was filed only after the wedge reproduced in ISOLATION, never on the first instance).
+  🚨 THE FINDING: the failure branch whose pane holds a LIVE session was the
   only one that omitted "retire the pane first" — the branch with no session at all already had
   it, and the safety net everyone credited cannot reach the population in question.**
 
@@ -175,6 +177,20 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   The load-bearing coverage is elsewhere and it is complete: the home suite is 37/37 green with a
   replayed pre-fix control arm, and the phrase census proves no test in the tree asserts either
   string that moved.
+
+  🚨 **THE BELT RUN DID NOT MERELY STALL — IT TRUNCATED ITSELF AND STILL RENDERED AS ORDINARY RED,
+  and that is the filed row (`5a07814271ed`).** Its own tail reads `test_list_file.txt: No such file
+  or directory` and **`bats warning: Executed 1328 instead of expected 2789`** — the run tmpdir was
+  reclaimed underneath bats during the >12-min wedge, so **52% of the corpus never executed** while
+  the TAP presented three ordinary `not ok` lines. A reader tallying `ok`/`not ok` would have called
+  that a 3-red pass. Re-run **ALONE** against that suite unmodified, the same test wedged again at
+  >14 min, which is what promoted it from contention to a defect worth a row — one instance would
+  have been the environment, two in isolation is the subject. Premise caveat carried into the row
+  itself: both instances were at 1-min load ~28, so the trigger may be a bound sized in the
+  foreground band (memory `bound-must-fit-the-band-not-the-bench`), and it must be re-measured on a
+  quiet box before anything is re-sized. **The rule to carry: a harness that loses its own run
+  directory reports a PARTIAL as a pass — always read the executed-vs-expected line, never the
+  `not ok` count alone.**
 
   **RESIDUAL, deliberately NOT filed as a new row** (inflow is this plan's §1.3 defect; the drain
   chain reads this log, so this is the store that reaches the next recycle). The row's fix candidate
