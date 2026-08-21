@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #72: `master-fire-gate` 39 open → 38 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: a non-verdict a fix labelled "transitional" is not
+  transitional when the same fix's own writer keeps minting the shape that produces it — 82 of the
+  243 records the message calls old were written AFTER the format it says they predate.**
+
+  **Effort choice.** Eighth consecutive recycle in `master-fire-gate` — #71 left it warm at 39 open.
+  The lineage's settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`, `7c6ff16259a0`,
+  `b69b1d957cec`, `ba5511bbe388`, `87626e1593c3`, and the deliberate holds `95512886c19a` /
+  `4043ab43bf4a`). Lag re-derived at open: the shared checkout was **90** behind origin/main
+  (#71 measured 87→90, #70 85→86, #69 83→84, #68 81, #67 79).
+
+  **`016174e64121` — CLOSED, and it was already fixed twenty minutes after it was filed.** The row
+  says peer 349 SENT its status ping to 345 at 11:36:35 and 26 s later `self-close` announced
+  *"(auto, unannounced retire)"* — the peer accused of silence over a ping it had made. Filed
+  2026-08-11T18:37:43Z; `6509abd23` (*"the negative verdict was the fall-through, not the time
+  window"*) landed 2026-08-11T18:57:28Z. **The row's own artifacts survive and settle the
+  attribution rather than leaving it to the dates**: `~/.claude/mailbox/.sent/349` still holds
+  `2026-08-11T11:36:35-0700 345`. Replaying the two readers against that real line with an alias
+  `want` — pre-fix `grep -qF` → `not-sent` (the row's message verbatim), post-fix `awk` → rc 3
+  cannot-tell — with the positive control on the same record (`want=345` → `sent`, so the matcher
+  can still say yes) and the negative control on a new-format line (`want` absent → definite
+  `not-sent`, so the fix is not always-unknown). The writer half is observable live in the same
+  file: its 2026-08-18 line reads `102 claude-infrastructure-102`, both spellings.
+
+  🚨 **THE GENERALISABLE FINDING — a "transitional" non-verdict that its own writer keeps minting
+  never drains, and the label is what misleads.** `6509abd23` introduced the third verdict and
+  called rc 3 *"the transitional honesty term"*, reasoning *"every `.sent` file already on disk is
+  in the old format"* — true the day it was written. But the same commit's writer, `_record_send`,
+  **deliberately omits** the redundant third field whenever the caller's spelling already WAS the
+  resolved key, and `tests/announce-before-retire.bats` pins exactly that (*"records BOTH spellings
+  when they differ, and one when they do not"*, asserting `NF == 2`). So the current writer keeps
+  minting one-spelling lines on purpose. Measured on the operator's live store: **82 of 243**
+  one-spelling lines postdate the fix (161 genuinely predate it). The message told the operator the
+  record *"predates the both-spellings format"* — false for a third of them, and the remedy it
+  implies (wait for the new format to roll out) is not a remedy at all.
+  **Two green tests in ONE suite asserted the two halves and nothing drove a single record through
+  both.** Family: #63 guard at the wrong door · #64 watch that could not take a breath · #65 oracle
+  asking presence when the question was direction · #66 falsifier keyed on a spelling · #67
+  acquittal on the wrong axis · #68 exemption that deleted a TOCTOU window · #69 unchecked claim
+  about an actuator · #70 exemption read as permission · #71 the safety net that could not reach
+  its population.
+
+  **What was NOT changed, and why the verdict is right.** A one-spelling line genuinely cannot
+  answer an ALIAS `want` — the single field might BE what that alias resolved to, or might not — so
+  cannot-tell is correct and the polarity is untouched. The tempting mechanical fix (when `want` is
+  itself a resolved-key spelling, a one-spelling record CAN answer definitively) was **measured and
+  dropped**: only **2 of 118** armed `notifyBack` values in `~/.claude/cc-fired` name a real box key;
+  116 are project-qualified aliases (`wt-pool-2-<n>` 55, `claude-infrastructure-<n>` 34, …). The
+  first census said `0` bare and was WRONG — it classified a bare pane UUID as an alias because it
+  contains non-digits; re-keyed on box existence on disk, not on shape. A discriminator worth ~2%
+  of fires does not earn a behaviour change to a detector. So the diff moves the MESSAGE and the
+  comment's overclaimed invariant, and nothing else.
+
+  **Verification (both arms, plan lines read, not the `not ok` count).** Pre-fix control tree via
+  `git archive origin/main | tar -x -C $(mktemp -d)`, `symlinks=0` printed before writing into it.
+  `tests/announce-before-retire.bats`: post-fix `1..32`, 32 ok, rc 0; pre-fix `1..32`, 29 ok / **3
+  not ok**, every red attributed — the new interaction case, plus the two existing assertions
+  deliberately re-keyed off the retired sentence. No `instead of expected` line on either arm.
+  The new block carries a **premise control** (the record under test must actually be 2-field, or
+  the branch is never reached and the assertions are about nothing), a **verdict control** (still
+  UNVERIFIED, never UNREPORTED — this diff moves prose, not polarity) and a **compliant control**
+  that is green in BOTH arms by design (the age disclaimer must ride the cannot-tell path only, so
+  the red-proof case cannot be satisfied by spraying the new sentence everywhere).
+  Sibling suites that reference the subject, from ONE `grep -l`: `handoff-selfclose-stamp-repair`
+  15/15, `mailbox-drain` 53/53. `shellcheck -S style scripts/handoff-fire.sh` rc 0; the four bats
+  lints rc 0 each at their own argument types; `bats-assert-liveness.py` rc 0 **and
+  positive-controlled** on a synthetic mid-test `! false`, which it flagged `DEAD [negation]` — so
+  its silence was earned.
+
 - **2026-08-20 — drain recycle #71: `master-fire-gate` 40 open → 39 open / 2 blocked.
   closed 1 / filed 1 (`5a07814271ed`, `master-verification-integrity` — see the belt-run paragraph;
   it was filed only after the wedge reproduced in ISOLATION, never on the first instance).
