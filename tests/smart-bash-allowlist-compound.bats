@@ -203,8 +203,11 @@ EOF')" = defer ]
   # allow standing alone is allowed inside a compound, and one it would refuse still defers.
   [ "$(decide "$HOOK" 'rm -rf /tmp/scratch/build && echo done')" = allow ]
   [ "$(decide "$HOOK" 'rm -rf /Users/chrisren/Documents && echo done')" = defer ]
-  # and the rm hook's own kill switch still governs the delegated answer
-  RM_SAFE_ALLOWLIST_DISABLED=1 [ "$(RM_SAFE_ALLOWLIST_DISABLED=1 decide "$HOOK" 'rm -rf /tmp/scratch/build')" = defer ]
+  # and the rm hook's own kill switch still governs the delegated answer — disarming the
+  # owner must disarm the delegation, or this hook would quietly outlive the switch
+  export RM_SAFE_ALLOWLIST_DISABLED=1
+  [ "$(decide "$HOOK" 'rm -rf /tmp/scratch/build && echo done')" = defer ]
+  unset RM_SAFE_ALLOWLIST_DISABLED
 }
 
 @test "git read subcommands are allowed; git mutations are not" {

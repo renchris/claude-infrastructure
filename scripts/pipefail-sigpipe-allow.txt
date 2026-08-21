@@ -30,7 +30,7 @@ hooks/plan-version-commit.sh	1
 hooks/qos-rewrite.sh	2
 hooks/research-precognition-nudge.sh	1
 hooks/session-index-sweep.sh	1
-hooks/smart-bash-allowlist.sh	3
+hooks/smart-bash-allowlist.sh	0
 hooks/task-quality-gate.sh	2
 hooks/teammate-auto-shutdown.sh	4
 hooks/teammate-checkpoint.sh	1
