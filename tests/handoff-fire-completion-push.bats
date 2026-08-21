@@ -94,7 +94,7 @@ setup() {
   [ ! -f "$MARK" ]     # a successor close is NOT terminal — no push
 }
 
-@test "--successor liveness gate is load-robust: a failing tty query does NOT leak a non-3 exit (T-P2-1)" {
+@test "--successor liveness gate is load-robust: a failing tty query does NOT leak a raw osascript exit (T-P2-1)" {
   # RED-provable guard for the concurrent-load flake that reds the shared ship-land gate. Under iTerm2
   # AppleScript-bridge contention as_tty's osascript errors NON-ZERO; a bare `SUC_TTY="$(as_tty …)"` under
   # `set -e` then LEAKED that code (status 1/128+sig), NOT the gate's intended `exit 3` — the same CLASS as
