@@ -262,7 +262,10 @@ EOF
 
 # A stub claude that emits a canned create/refusal. Real ANSI, because the normaliser is in the path.
 cloud_claude() { # $1 = payload written to stdout, $2 = exit code
-  printf '#!/bin/bash\nprintf %%s "$CLOUD_STUB_OUT"\nexit %s\n' "${2:-0}" > "$BIN/claude-cloud"
+  # It also records its own argv when CLOUD_CREATE_LOG is set, which is how case 17 reads the
+  # PAYLOAD as an effect (the thing actually handed to the create) rather than as a string in the
+  # source. Unset for every pre-existing case, so their behaviour is byte-identical.
+  printf '#!/bin/bash\nif [ -n "${CLOUD_CREATE_LOG:-}" ]; then printf "%%s\\n" "$@" >> "$CLOUD_CREATE_LOG"; fi\nprintf %%s "$CLOUD_STUB_OUT"\nexit %s\n' "${2:-0}" > "$BIN/claude-cloud"
   chmod +x "$BIN/claude-cloud"
   export CLOUD_STUB_OUT="$1" CC_CLOUD_CREATE_BIN="$BIN/claude-cloud"
 }
@@ -270,8 +273,25 @@ cloud_claude() { # $1 = payload written to stdout, $2 = exit code
 # A stub cc-cloud that RECORDS the declaration argv, so case 13 asserts the declare happened with
 # the right fields rather than that the script contains the word "declare".
 cloud_ccloud() {
+  # ⚠️ THE VERBS ARE SPLIT, and that split is load-bearing. `cc-cloud` is now called TWICE per fire
+  # — `preflight` before the create (B2) and `declare` after it — and a stub that answered both
+  # from one rc and one log would have collapsed the two states under test: CLOUD_DECL_RC=1 (case
+  # 15's FAILED DECLARE) would have refused at the preflight instead, and every preflight would
+  # have written into the log three cases assert is EMPTY. One seam per verb keeps each case
+  # measuring what it names (memory: harness-default-collapses-the-states-under-test).
+  #
+  # ⚠️ AND THE SEAMS ARE `STUB_`-PREFIXED FOR A MEASURED REASON, not for tidiness. They were first
+  # written as CLOUD_PF_RC/CLOUD_PF_LOG — the same names the subject uses for its OWN locals. Bash
+  # keeps the export attribute on assignment, so the subject's `CLOUD_PF_RC=0` REWROTE the exported
+  # value before invoking this stub: case 18 fired a rc=1 preflight, the stub read 0, the fire sailed
+  # into the create and the case failed asserting the exit code. A stub seam must not collide with a
+  # variable name inside the thing it is stubbing.
   cat > "$BIN/cc-cloud" <<'EOF'
 #!/bin/bash
+if [ "${1:-}" = preflight ]; then
+  if [ -n "${STUB_PF_LOG:-}" ]; then echo "$@" >> "$STUB_PF_LOG"; fi
+  exit "${STUB_PF_RC:-0}"
+fi
 echo "$@" >> "$CLOUD_DECL_LOG"
 exit "${CLOUD_DECL_RC:-0}"
 EOF
@@ -380,4 +400,64 @@ EOF
   cfire CLOUD_IT2_LOG="$BATS_TEST_TMPDIR/it2.log"
   [ "$status" -eq 0 ]
   [ ! -f "$BATS_TEST_TMPDIR/it2.log" ]
+}
+
+# ── B1 + B2 — the two halves of backlog 7c6ff16259a0 ────────────────────────────────────────────
+# Both defects lived ONLY on this leg, and the reason is worth stating once: the sibling API create
+# (scripts/cloud-create-api.py) names the branch in the create body's `outcomes.git_info.branches`,
+# so there the push target is authorised AT CREATE and neither fix is needed. cc_cloud_create's
+# signature is `cfg cwd prompt` — no branch parameter at all — so on this leg the payload is the
+# only place the branch can be established, and nothing had ever established it.
+#
+# RED-PROOF (re-runnable): replay this file against `git show <pre-fix sha>:scripts/handoff-fire.sh`
+# in a scratch tree. 17 and 18 go RED there — 17 because the payload only ever said
+# `git push origin HEAD:<branch>` with no branch to push, 18 because no preflight was called at all,
+# so the fire proceeded to the create and exited on the create's own outcome instead of on 12.
+# 19 is green on BOTH trees BY DESIGN and is not a weaker case for it: it is the non-discrimination
+# control proving the new gate is a GATE and not a blanket refusal of the venue.
+
+@test "17 the payload CREATES the assigned branch before pushing it — not a push to a name nothing holds" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw push
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$sw" ] || { echo "the payload never creates the branch it tells the VM to push"; false; }
+  [ -n "$push" ] || { echo "the payload never instructs the push"; false; }
+  [ "$sw" -lt "$push" ] || { echo "switch -c must PRECEDE the push (sw=$sw push=$push)"; false; }
+  # The pre-fix spelling pushed HEAD straight at an invented ref name. It must be gone, or the
+  # branch would be created and then bypassed by the very next line.
+  ! grep -q 'HEAD:claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "18 a fire whose preflight REFUSES never reaches the create — the quota is not spent" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire STUB_PF_RC=1 STUB_PF_LOG="$BATS_TEST_TMPDIR/pf.log" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 12 ]
+  [[ "$output" == *"REFUSED by preflight"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]                # the account's rate limit was NOT spent
+  [ ! -f "$CLOUD_DECL_LOG" ]                             # and nothing was declared
+  # Called for the REPO the VM would clone, not for some default — the whole point of the probe.
+  [ -s "$BATS_TEST_TMPDIR/pf.log" ]
+  grep -q -- '--repo' "$BATS_TEST_TMPDIR/pf.log"
+}
+
+@test "19 CONTROL — a PASSING preflight changes nothing, and the override still fires" {
+  # Green on both trees by design (case 18 is the discriminating half). It exists so that a future
+  # widening of the gate into "refuse the venue" cannot pass: both a clean probe and an explicit
+  # opt-out must still produce an ordinary, declared cloud fire.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire STUB_PF_RC=0
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  rm -f "$CLOUD_DECL_LOG"
+  cfire CC_FIRE_CLOUD_PREFLIGHT=off STUB_PF_RC=1 STUB_PF_LOG="$BATS_TEST_TMPDIR/pf-off.log"
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }

@@ -87,6 +87,119 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #88: `master-fire-gate` 23 open → 22 open / 2 blocked.
+  closed 1 / filed 0** (twenty-fourth consecutive recycle in `master-fire-gate`). Row
+  `7c6ff16259a0` closed: *"off-box payload pushes to an invented branch name — add `git switch -c`
+  before push + call the existing cc-cloud preflight (two ~3-line fixes unblock the cloud lane)"*,
+  filed 2026-08-10T06:52:43Z. Source: `docs/research/scaling-bottlenecks-2026-08-09/06-offbox.md`
+  §B1/§B2 + its implementation table rows 1-2.
+  🚨 **THE ZERO THAT WOULD HAVE CLOSED IT AS CURED.** The row's own quoted defect is
+  `git push origin HEAD:claude/fire-<UTC>-<pid>`, and `git grep -n 'HEAD:claude/fire'` over the
+  tracked tree returns hits in **`docs/` ONLY** — zero in `scripts/`, which is byte-identical to a
+  cure. The mechanism is live and untouched at `scripts/handoff-fire.sh:7430`, spelled
+  `git push origin HEAD:'"$CLOUD_BRANCH"'`. The doc quoted the *rendered* payload; the source holds
+  the *template*. This is #87's method item (a) recurring on the very next row — **grep the
+  MECHANISM, never the rendered message** — and it is now two-for-two.
+  **P1 "the payload pushes to a name nothing holds" — CONFIRMED.** `CLOUD_BRANCH` is minted by
+  `cc_cloud_branch_name()` (`scripts/lib/cloud-create.sh:238`) and `switch -c` / `checkout -b`
+  appear **nowhere** in `scripts/handoff-fire.sh` or any `cloud-*.sh`. The repo had already learned
+  this once and not carried it forward: `CLOUD_OBSERVABILITY.md:737-740` records §7.4's push probe
+  as void as first written, with the fix stated verbatim — *"the fix is `git switch -c` first, so
+  the control is a real session branch"* — and that prose line was the ONLY occurrence in the tree.
+  **P2 "the guard exists and is never called" — CONFIRMED at both ends.** `bin/cc-cloud:787`
+  `cmd_preflight` refuses exactly this case (its own comment: origin carried ONE head against 286
+  upstream-less local branches, 2026-08-07), `bin/cc-offload:282` calls it — and
+  `scripts/handoff-fire.sh` contained **zero** preflight call sites.
+  🚨 **WHY ONLY THIS LEG, stated as a mechanism rather than a coincidence** (method item 13,
+  defined-vs-consumed). The sibling API create puts the branch in the create body's
+  `outcomes.git_info.branches` (`scripts/cloud-create-api.py:357`, `:411`) — *"what names the branch
+  the VM may push to"*, its own words — so there the push target is authorised AT CREATE and neither
+  fix is needed. `cc_cloud_create`'s signature is `cfg cwd prompt` (`scripts/lib/cloud-create.sh:185`):
+  the CLI leg has **no branch parameter at all**, so the payload is the only place the branch can be
+  established, and nothing had ever established it. The two lanes were not two spellings of one
+  thing; they authorise by different mechanisms and only one of them had been wired.
+  🚨 **WRONG REMEDY REJECTED — "the leg is DEPRECATED, so refuse it and point at `cc-offload`."**
+  Trunk's own dispatcher says so in as many words (`bin/cc-dispatch:2072-2083`: *"the handoff-fire
+  cloud leg is the DEPRECATED CLI create … cc-offload up --via api is the one managed create"*, and
+  a hand-authored `--cloud` *"routes to the same selection, never to the deprecated leg"*), so the
+  defect has **no automated producer** and a blanket refusal looks free. It is not: the leg is pinned
+  by a dedicated 16-case suite (`tests/handoff-fire-cloud.bats`), deleting a capability is a design
+  call this chain does not make in prose, and the hand-fire path stays reachable either way. Fixing
+  the two defects costs less than adjudicating the deprecation and leaves nothing worse.
+  🚨 **WRONG CAUSE REJECTED — "`switch -c` cannot be the fix, because authorisation is a create-time
+  list."** True of the API lane and NOT of this one — see P2's mechanism above. The temptation was to
+  generalise the API lane's `outcomes` list into a claim about the proxy, and then to reject the
+  row's own prescription on the strength of it. The CLI create has no such list to be absent from;
+  what it has is a payload, which is precisely what the prescription addresses.
+  **THE FIX** — one commit, two files, both halves red-proofed. `scripts/handoff-fire.sh`:
+  (1) the payload now says `git switch -c <branch>` and then `git push -u origin HEAD`, so the ref
+  exists before it is pushed; (2) a preflight gate immediately before `cc_cloud_create` resolves
+  `cc-cloud` through the existing `CC_CLOUD_BIN` seam, runs `preflight --repo <cwd> --branch <cwd's
+  branch>`, and on refusal prints the probe verbatim + the `git push -u` remedy, emits
+  `cloud-preflight` (already mapped by `_fire_gate_of`'s `cloud-*` arm) and exits **12**. It sits
+  AFTER the `--dry-run` exit so case 9's *"issues no create at all"* stays literally true, and
+  cc-cloud being unreachable is a SKIP not a refusal — `CC_FIRE_CLOUD_PREFLIGHT=off` is the
+  documented one-fire override.
+  **RED-PROOF, pinned to an immutable sha** (method item 19). `git archive 8454c5778` into a scratch
+  tree, this suite copied in, fail-loud on an absent control AND on the suite's own documented trap
+  (`scripts/lib/capacity-admit.sh` must be present or case 5 reds for a harness reason):
+  **not ok 17 · not ok 18 · ok 19**, 17 of 19 green there; **19/19 green here**, plan `1..19`,
+  `ok + not ok == 19` both sides. Case 19 is green on BOTH trees BY DESIGN — the
+  non-discrimination arm (#87c) proving the new gate is a gate and not a blanket refusal of the
+  venue, asserted twice over (a passing probe still fires and declares; the override SKIPS the probe
+  rather than merely ignoring its verdict).
+  🚨 **NEW METHOD ITEM — A STUB SEAM MUST NOT COLLIDE WITH A VARIABLE NAME INSIDE ITS SUBJECT.**
+  Case 18 failed on its first run for a reason that reads exactly like a refuted fix. The seams were
+  first spelled `CLOUD_PF_RC`/`CLOUD_PF_LOG` — the same names the subject uses for its own locals —
+  and **bash keeps the export attribute on assignment**, so the subject's `CLOUD_PF_RC=0` rewrote the
+  *exported* value before invoking the stub: the case fired a rc=1 preflight, the stub read 0, the
+  fire sailed into the create. Renamed to the suite's own `STUB_` convention. Same family as
+  `harness-default-collapses-the-states-under-test`, reached by a different door.
+  ⚠️ **The shared `cloud_ccloud` stub now splits by VERB**, because cc-cloud is called twice per fire.
+  One rc and one log for both would have collapsed two states under test: case 15's `CLOUD_DECL_RC=1`
+  (a FAILED DECLARE) would have refused at the preflight instead, and every preflight would have
+  written into the log three cases assert is EMPTY. All 16 incumbent cases stay green on both trees,
+  which is what proves the helper edit is faithful.
+  **Gates:** `bash -n` 0 · `shellcheck -S style scripts/handoff-fire.sh` rc 0 ·
+  `bats-shellcheck-lint` clean, **1 suite(s) scanned** · `bats-kill-guard-lint` clean, 1 scanned ·
+  `bats-shim-parity-lint` **NOT-ACTIVE** (the healthy default) · `bats-assert-liveness.py` rc 0, and
+  its silence positive-controlled — a planted mid-test `! false` in a /tmp copy was caught
+  (`DEAD [negation]`, rc 1). ⚠️ `bash -n` on a `.bats` file is a NON-VERDICT (it reports a syntax
+  error at the first `@test … {`); the suite itself is the instrument.
+  🚨 **ROW READ IN FULL AND DELIBERATELY LEFT OPEN — `1c20dc1e92db`** (*"cc-wave-plan capacity
+  excludes poll-throttled accounts holding 92-99% headroom (F2)"*). Do not re-derive; it needs a
+  DESIGN CALL, not a diff. **Mechanism CONFIRMED:** `_excluded()` bails on `if "error" in r` FIRST
+  (`bin/claude-accounts:1922`), before `session_pct` is ever read, and a 429 row carries
+  `error="poll throttled ↻ (cached usage)"` with its percents inherited (`:1138-1140`,
+  `inherit_lastgood`) — so a row visibly holding 96% headroom is dropped from `--rank general`, hence
+  from cc-wave-plan's `RANKED`, hence from `wave_capacity()`. **But the remedy as written is refuted
+  by its own consumer:** F2 says count cached-but-healthy rows toward *capacity* while preferring
+  fresh for *placement*, and cc-wave-plan has no fleet-capacity concept separate from placement —
+  `wave_capacity()` sums `RCAP` over `RANKED` and its ONLY consumers fire when `place_item` fails
+  (`bin/cc-wave-plan:675`, `wall_capacity`). Inflating it puts an unachievable bound on the wire that
+  `bin/cc-dispatch:1901-1905` re-plans to ONCE, turning today's successful re-plan into a guaranteed
+  second wall. The honest form — admit cached-but-healthy rows as a TAIL tier so they are counted AND
+  placeable — is a routing-policy change against an explicit in-code declaration
+  (`bin/claude-accounts:813`: *"That exclusion is CORRECT and stays"*). Someone must pick.
+  🚨 **AND THE LIVE HARM IS A DIFFERENT EXCLUDER ENTIRELY — measured, unfiled, and bigger.** All
+  **8** `cc-wave-plan` wall records in `~/.claude/autonomy/idl.jsonl` are verdict `unknown`; **zero**
+  are `capacity` or `capped`, and **zero** mention poll-throttling. The exclusion reason on every
+  non-timeout wall is **`concurrency-unmeasured` on all four accounts at once** (plus two
+  `keychain-error`) — the arm added by `968ea4a1e` (2026-08-13T15:10:21Z, one day AFTER this row was
+  filed), whose fail-OPEN fix correctly refuses on an unmeasured `ps`. Newest record
+  (2026-08-21T07:49:50Z) shows `ranked_n:0` beside four `state:"ok"` accounts holding 58-86% weekly
+  headroom, i.e. the whole wave deferred with the fleet idle. **Re-measured live this session:
+  `--rank general` returned all four accounts, rc 0, `k_src=work` in 3s** — so it is INTERMITTENT,
+  not permanent, which is exactly why it has to be measured rather than reasoned about. Deliberately
+  NOT filed as a new row (`closed >= filed`); #89 should decide whether it belongs to
+  `1c20dc1e92db` re-scoped or to a new row, and should re-fold the IDL first because the count moves.
+  **NOT A FINDING, deliberately unfiled:** the row's stored falsifier
+  (`grep -q "switch -c" … && grep -q "cc-cloud preflight" …`) is correctly shaped and now flips to
+  MATCH on trunk — but its second clause greps the literal string `cc-cloud preflight`, which this
+  fix satisfies only in a comment; the executable call is `"$CLOUD_DECL" preflight`. It reads TRUE
+  for a half-right reason. Left as-is: the row is closed, and rewriting a closed row's falsifier
+  mints churn without a consumer.
+
 - **2026-08-21 — drain recycle #87: `master-fire-gate` 24 open → 23 open / 2 blocked.
   closed 1 / filed 0** (twenty-third consecutive recycle in `master-fire-gate`). Row
   `e86e500e96c0` closed: *"cloud fires die on a LOCAL worktree freshness gate the VM never touches —
