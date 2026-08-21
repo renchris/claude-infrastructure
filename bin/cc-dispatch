@@ -26,8 +26,12 @@
 #   2. no items                    → IDL {action:"passed", detail:"backlog empty"}, exit 0.
 #   3. wave   = [{id, slot}]  (slot from an optional item hint; MVP default "lead")
 #      plan   = `<wave-plan> --items <wave-json> --json`
-#   4. wave-plan exit 4 (CLIFF)    → IDL {action:"abstained", detail:"quota-cliff"} + PAGE, exit 0.
-#                                    NEVER spawn on a cliff.  (any other non-zero → exit 3, no spawn)
+#   4. wave-plan WALL → dispatch on its VERDICT (stderr `WALL[<v>]`, rc as fallback), never on rc alone:
+#        capped  (4) → IDL {action:"abstained", detail:"quota-cliff"} + PAGE (/limit-recover), exit 0
+#        capacity(4) → re-plan ONCE at the reported capacity=<n>; else DEFER, no page (not a cliff)
+#        auth    (5) → IDL {action:"walled"} + PAGE (/relogin), exit 0 — an auth wall, not a quota one
+#        unknown (6) → DEFER, no page, no failure: the oracle gave no answer, retry next pass
+#                                    NEVER spawn on any wall.  (any rc OUTSIDE those four → exit 3)
 #   5. per placement, up to CC_DISPATCH_MAX_SPAWN (default 2):
 #        a. `<backlog> claim <id> --by $SID`
 #        b. spawn `<spawn-bin> <fire_line...>`   (fire_line = an ARGV ARRAY, injection-safe)
@@ -138,12 +142,16 @@
 # CONTRACT with cc-wave-plan (T-P7-6, its owner; consumed here purely through the env seam):
 #   input : --items '[{"id":"<id>","slot":"lead"}, ...]' --json
 #   stdout: a JSON ARRAY of placements, each {"id","account","fire_line":[argv...], ...}
-#   exit  : 0 = placements emitted · 4 = QUOTA CLIFF (no account has headroom)
+#   exit  : 0 = placements emitted · 4 = capped | capacity · 5 = auth · 6 = unknown
+#   stderr: `cc-wave-plan: … WALL[<verdict>] — …` on every wall, and `capacity=<n>` on the capacity
+#           arm. The rc alone CANNOT separate capped from capacity, so the verdict token is the
+#           discriminator and the rc is only its fallback map.
 #   fire_line is an argv ARRAY so cc-dispatch passes it VERBATIM to the spawn bin — no eval,
 #   no word-splitting (a plain-string fire_line is accepted too, as a single argument).
 #
 # Exit: 0 = normal (passed | abstained-cliff | fired/failed loop) · 3 = config-fail LOUD
-#       (jq / a required actuator unresolvable, or wave-plan returned an un-plannable non-cliff rc).
+#       (jq / a required actuator unresolvable, or wave-plan returned an rc OUTSIDE its four defined
+#       verdicts — a defined non-verdict like `unknown` is a deferral, never a config-fail).
 # Env (actuator seams — every external side-effect is overridable so bats can stub it):
 #   CC_DISPATCH_BACKLOG_BIN  (default: cc-backlog on PATH / sibling)
 #   CC_DISPATCH_WAVEPLAN_BIN (default: cc-wave-plan on PATH / sibling)
@@ -1840,19 +1848,111 @@ dispatch() { # <dry|run|decide>
   fi
   waveplan="$(resolve_bin "${CC_DISPATCH_WAVEPLAN_BIN:-}" cc-wave-plan)" \
     || die3 "wave-plan bin unresolvable (set CC_DISPATCH_WAVEPLAN_BIN)"
-  plan="$("$waveplan" --items "$wave" --json 2>/dev/null)"; rc=$?
+  # 4. THE WALL VERDICT — read what cc-wave-plan SAID, not merely how it exited.
+  #
+  # cc-wave-plan is four-valued and has been since S3: `capped`(4) `capacity`(4) `auth`(5)
+  # `unknown`(6), each with its own operator action, all four pinned by 25 tests in
+  # tests/cc-wave-plan-verdict.bats. This is its ONLY executable consumer, and it read the EXIT CODE
+  # alone: every 4 became "⛔ QUOTA CLIFF … run /limit-recover", and 5/6 fell into the fail-closed
+  # `die3` default. The discrimination was built, tested, landed — and destroyed at the one place
+  # obliged to act on it. Both halves cost real behaviour, and both are MEASURED, not reasoned:
+  #
+  #   · capacity → the wrong page. ~/.claude/autonomy/idl.jsonl:77973, the one and only quota-cliff
+  #     record on this box, carries its own contrary diagnosis — reason:"wave-overflow",
+  #     action:"reduce-wave-size", four accounts at 1-8% of their 5-hour window. The operator was
+  #     told to run /limit-recover over a fleet that was very nearly empty.
+  #   · unknown → a dead dispatcher. `cc-dispatch: wave-plan returned non-cliff rc=6 — refusing to
+  #     fire blind`, launchctl com.claude.dispatcher LastExitStatus 768 (= exit 3), with `failed`
+  #     per day going 7 · 20 · 16 · 16 · 96 · 136 across 08-11..08-16
+  #     (docs/research/usage-telemetry-100p-2026-08-16/utilization.md F13). rc 6 is the producer
+  #     saying "the oracle gave no answer, retry next pass" — a defined NON-VERDICT, which this
+  #     turned into a config-fail that killed the pass. Class: new-enum-member-falls-into-fail-
+  #     closed-default; the plan that ADDED these states wrote the lesson itself
+  #     (AUTONOMY_DISPATCH_V2.md, 2026-07-31: "when a state is added to a system, enumerate its
+  #     consumers and visit each") and this consumer was never visited.
+  #
+  # The verdict rides the producer's STDERR as `WALL[<verdict>]`, and this call sent that stream to
+  # /dev/null. Capturing it is the same idiom as the claim/fire captures further down — a
+  # subordinate's diagnosis is evidence, not noise. The exit code stays as the FALLBACK map, so a
+  # capture that fails degrades to the contract's own rc→verdict mapping rather than to silence.
+  local wperrf="" wpverdict="" wpcap="" wpexc="" wave_n replanned=0
+  wave_n="$(printf '%s' "$wave" | jq 'length' 2>/dev/null || echo 0)"
+  wperrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-waveplan.XXXXXX" 2>/dev/null || true)"
+  while :; do
+    if [ -n "$wperrf" ]; then plan="$("$waveplan" --items "$wave" --json 2>"$wperrf")"; rc=$?
+    else                      plan="$("$waveplan" --items "$wave" --json 2>/dev/null)";  rc=$?; fi
+    [ "$rc" -eq 0 ] && break
+    wpverdict=""; wpcap=""; wpexc=""
+    if [ -n "$wperrf" ] && [ -s "$wperrf" ]; then
+      wpverdict="$(sed -n 's/.*WALL\[\([a-z][a-z]*\)\].*/\1/p' "$wperrf" 2>/dev/null | tail -1)"
+      wpcap="$(sed -n 's/.*capacity=\([0-9][0-9]*\).*/\1/p' "$wperrf" 2>/dev/null | tail -1)"
+      wpexc="$(head -1 "$wperrf" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200)"
+    fi
+    # No WALL[] token ⇒ fall back to the rc, which IS the contract (bin/cc-wave-plan:59). This also
+    # keeps lane v1 — one unlabelled exit 4 — resolving to `capped`, exactly as it did before.
+    if [ -z "$wpverdict" ]; then
+      case "$rc" in 4) wpverdict=capped ;; 5) wpverdict=auth ;; 6) wpverdict=unknown ;; esac
+    fi
+    # `reduce-wave-size` is an ACTION and nothing performed it. Re-plan ONCE at the bound the
+    # producer reported; cc-wave-plan stays the arbiter of the smaller wave and a second wall is
+    # taken at face value, so this cannot loop. Without it a box whose capacity sits below CEILING
+    # walls on EVERY tick forever: nothing fires, so live_workers never rises, so free_slots never
+    # falls, so the wave is rebuilt at the same oversized width next pass — starvation with headroom.
+    if [ "$wpverdict" = capacity ] && [ "$replanned" -eq 0 ] \
+       && [ -n "$wpcap" ] && [ "$wpcap" -gt 0 ] && [ "$wpcap" -lt "$wave_n" ]; then
+      replanned=1
+      DEFERRED=$((DEFERRED + wave_n - wpcap))
+      echo "cc-dispatch: wave-plan WALL[capacity] — re-planning $wave_n → $wpcap item(s) at the capacity it reported; $((wave_n - wpcap)) deferred." >&2
+      wave="$(printf '%s' "$wave" | jq -c --argjson k "$wpcap" '[ .[0:$k][] ]')"
+      wave_n="$wpcap"
+      continue
+    fi
+    break
+  done
+  [ -n "$wperrf" ] && rm -f "$wperrf" 2>/dev/null || true
 
-  # 4. cliff (exit 4) → abstain + page, NEVER spawn.  Any other non-zero → fail-closed, exit 3.
-  if [ "$rc" -eq 4 ]; then
-    if [ "$mode" = dry ]; then echo "PLAN: quota-cliff → would abstain + page, NO spawn"; return 0; fi
-    ABSTAINED=1; idl abstained "quota-cliff"; write_page "wave-plan reports no account headroom"
-    echo "cc-dispatch: ⛔ QUOTA CLIFF — abstained, paged, NO spawn (run /limit-recover)." >&2
-    idl_summary; return 0
-  fi
   if [ "$rc" -ne 0 ]; then
+    case "$wpverdict" in
+      capacity)
+        # NOT a quota cliff and NOT a page: the accounts have headroom; the wave is simply wider than
+        # the per-wave caps can place, and a re-plan could not shrink it (no bound on the wire, or
+        # already at the bound). Surplus DEFERS — the same disposition as the at-ceiling path above,
+        # and what scripts/dispatch-acceptance.sh A3 requires of surplus.
+        if [ "$mode" = dry ]; then echo "PLAN: wave-plan WALL[capacity] → would defer $wave_n item(s), NO page, NO spawn"; return 0; fi
+        DEFERRED=$((DEFERRED + wave_n))
+        echo "cc-dispatch: wave exceeds placement capacity — $wave_n item(s) deferred, no spawn (NOT a quota cliff: the accounts have headroom)." >&2
+        idl_summary; return 0 ;;
+      auth)
+        # A real STOP, but a DIFFERENT one: /relogin, never /limit-recover. Recorded under its own
+        # action token rather than `abstained` — A3 counts `abstained` records to prove surplus is
+        # not abstaining, and an auth wall is not surplus, so folding it in there would trip a
+        # reader that is asking a different question. The page still fires; nothing is laundered.
+        if [ "$mode" = dry ]; then echo "PLAN: wave-plan WALL[auth] → would page + refuse, NO spawn"; return 0; fi
+        ABSTAINED=1; idl walled "auth-wall${wpexc:+: $wpexc}"
+        write_page "wave-plan reports an AUTH wall — accounts are logged out (run /relogin)"
+        echo "cc-dispatch: ⛔ AUTH WALL — paged, NO spawn (run /relogin — this is NOT a quota wall)." >&2
+        idl_summary; return 0 ;;
+      unknown)
+        # The producer's own words: "NOT a wall and NOT a page: the oracle gave no answer. Retry next
+        # pass." A defined non-verdict is not a config-fail. Dying here is what turned a slow account
+        # oracle into a dead dispatcher (F13 above) — the pass exits 0 having decided nothing, and
+        # the next tick asks again.
+        if [ "$mode" = dry ]; then echo "PLAN: wave-plan WALL[unknown] → would retry next pass, NO page, NO spawn"; return 0; fi
+        DEFERRED=$((DEFERRED + wave_n))
+        echo "cc-dispatch: ⚠️  wave-plan gave NO verdict (the account oracle did not answer) — $wave_n item(s) deferred, retry next pass. Not a cliff, not a page, not a failure." >&2
+        idl_summary; return 0 ;;
+      capped)
+        if [ "$mode" = dry ]; then echo "PLAN: quota-cliff → would abstain + page, NO spawn"; return 0; fi
+        ABSTAINED=1; idl abstained "quota-cliff"; write_page "wave-plan reports no account headroom"
+        echo "cc-dispatch: ⛔ QUOTA CLIFF — abstained, paged, NO spawn (run /limit-recover)." >&2
+        idl_summary; return 0 ;;
+    esac
+    # Outside the producer's verdict contract (rc 2 usage, rc 3 config-fail, anything unforeseen) the
+    # fail-closed default is KEPT, verbatim and loud. Narrowing it to the four DEFINED states is the
+    # whole point: an undefined rc still refuses.
     if [ "$mode" = dry ]; then echo "PLAN: wave-plan un-plannable (rc=$rc) → would refuse, NO spawn"; fi
-    [ "$mode" = dry ] || { FAILED=1; idl failed "wave-plan rc=$rc"; idl_summary; }
-    die3 "wave-plan returned non-cliff rc=$rc — refusing to fire blind"
+    [ "$mode" = dry ] || { FAILED=1; idl failed "wave-plan rc=$rc${wpexc:+ · $wpexc}"; idl_summary; }
+    die3 "wave-plan returned non-verdict rc=$rc — refusing to fire blind"
   fi
   printf '%s' "$plan" | jq -e 'type=="array"' >/dev/null 2>&1 \
     || die3 "wave-plan did not return a JSON array"

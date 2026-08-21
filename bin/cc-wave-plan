@@ -234,13 +234,19 @@ wall_emit() {
   case "$verdict" in
     unknown)  echo "cc-wave-plan: ⚠️  WALL[unknown] — $msg. NOT a wall and NOT a page: the oracle gave no answer. Retry next pass. No plan emitted." >&2 ;;
     auth)     echo "cc-wave-plan: ⛔ WALL[auth] — $msg. STOP: run /relogin. This is an AUTH wall, not a quota wall." >&2 ;;
-    capacity) echo "cc-wave-plan: ⛔ WALL[capacity] — $msg. STOP: plan a smaller wave — the accounts have headroom, this is wave sizing. No plan emitted." >&2 ;;
+    capacity) echo "cc-wave-plan: ⛔ WALL[capacity] — $msg. STOP: plan a smaller wave — the accounts have headroom, this is wave sizing. capacity=${WALL_CAPACITY_N:-0}. No plan emitted." >&2 ;;
     *)        echo "cc-wave-plan: ⛔ WALL[capped] — $msg. STOP: run /limit-recover (disk-truth audit, re-run or transplant). No plan emitted." >&2 ;;
   esac
   exit "$code"
 }
 wall_capped()   { wall_emit capped   4 /limit-recover   "$1" "$2"; }
-wall_capacity() { wall_emit capacity 4 reduce-wave-size "$1" "$2"; }
+# The capacity wall carries its BOUND on the wire, as a keyed `capacity=<n>` token. The prose has
+# always named the number, but prose is not a contract: the ONE consumer (bin/cc-dispatch) is told
+# to `reduce-wave-size` and had no machine-readable size to reduce TO, so it could only abstain.
+# Emitted from here rather than wall_emit because RCAP — the per-account caps this sums — is a
+# wave-placement global that only the capacity arm is guaranteed to have populated.
+WALL_CAPACITY_N=""
+wall_capacity() { WALL_CAPACITY_N="$(wave_capacity 2>/dev/null || echo 0)"; wall_emit capacity 4 reduce-wave-size "$1" "$2"; }
 wall_auth()     { wall_emit auth     5 /relogin         "$1" "$2"; }
 wall_unknown()  { wall_emit unknown  6 retry-next-pass  "$1" "$2"; }
 
@@ -662,7 +668,11 @@ cmd_plan() {
   # Spread-place every item (all-or-nothing: any overflow walls, never a partial plan).
   local accts=()
   for i in "${!ids[@]}"; do
-    place_item || cliff wave-overflow "wave of $n items exceeds capacity (${#RANKED[@]} accounts, $(wave_capacity) slot(s) total$([ -n "$URG_ACCT" ] && echo " incl. ${URG_ACCT}'s urgent ${URG_CAP}") — all capped)"
+    # "— all capped" used to end this line, and it contradicted the verdict the same line produces:
+    # place_item returns 1 when every ranked account sits at its PER-WAVE cap, which is this tool's
+    # own sizing bound and says nothing about quota. A capacity wall that reads "all capped" on the
+    # left and "the accounts have headroom" on the right is unreadable in either direction.
+    place_item || cliff wave-overflow "wave of $n items exceeds capacity (${#RANKED[@]} accounts, $(wave_capacity) slot(s) total$([ -n "$URG_ACCT" ] && echo " incl. ${URG_ACCT}'s urgent ${URG_CAP}") — every ranked account is at its per-wave cap)"
     accts+=("$PLACED_ACCT")
   done
 
