@@ -2311,6 +2311,88 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
   return 1
 }
 
+# ---- LOAD-SIZED ENGAGEMENT WINDOW (backlog 4043ab43bf4a) ----------------------------------------
+# The window below used to be the constant 120, and a constant is an assertion about the BOX. At
+# load 14.7 on this 10-core box (1.47 runnable/core) a cold-worktree fire engaged LATE, the window
+# expired, verify_engagement returned 1 — the DEFINITE negative — and the caller printed
+# "FIRE FAILED — never engaged … RETIRE THAT PANE FIRST (clear it)" over a session that was working,
+# skipping arm_goal on the way. The definite negative is TIME-RELATIVE by construction: "nothing was
+# born within T" licenses "nothing will be born" only when T is long enough for THIS box, and 120
+# was long enough for an idle one.
+#
+# NOT ALREADY FIXED BY `6509abd2` — that commit's own subject says which half it took: "the negative
+# verdict was the fall-through, not the time window". Its state 5 (UNPROVEN) fires only when the
+# brief was seen INGESTED; a pane still cold-booting has ingested nothing, so it still lands on 1.
+# It landed 2026-08-11T18:57:28Z and this item was filed 2026-08-12T10:52:39Z — after it, not before.
+#
+# SIGNAL = 1-minute load average / core count, the same read capacity_gate takes, honouring the same
+# CC_FIRE_LOADAVG_OVERRIDE test seam. 🚨 It is the RIGHT instrument HERE and the wrong one THERE, and
+# that distinction is the whole justification — task #170 switched the capacity gate's load term OFF
+# by default and this must NOT be read as a ruling against this use. That term answered "should one
+# MORE resident session be admitted?", and #170 measured that an additional RESIDENT session moves
+# load1 by ~0: a gate whose input does not move with its own decision. This function asks a different
+# question — "how long does a process take to BOOT on this box right now?" — and #170's own precise
+# claim concedes the numerator is real contention (jq 25 / bash 20 / ps 8 / claude 8, our hook and
+# test-suite fan-out). Runnable-per-core is exactly the queue a cold boot waits in.
+#
+# ∝ lpc IS FIRST-ORDER QUEUEING, NOT A MEASURED CURVE, and the measurement cannot be taken from here:
+# engage_latency_s is written only when engagement was PROVEN, so that population is RIGHT-CENSORED
+# at the window itself — 84 production samples, median 15s, max 49s, and no sample can ever exceed
+# the constant that truncates it. So this scales the window rather than claiming a percentile.
+#
+# THE CAP IS REQUIRED and costs less than it looks: PARKED (2) and WEDGED (4) are knowable in SECONDS
+# and short-circuit every iteration, so a long window is only ever SPENT on a pane holding a live,
+# non-modal claude — the one state where waiting is the right act. The pane-oracle block above
+# records the other side of that trade ("expires long after the caller's patience"), which is why
+# this is bounded at 4× base rather than left to grow with an unbounded-above input.
+#
+# THIS IS NOT §5's REJECTED ROW (LOAD_INSENSITIVE_VERIFY_V2 — "raise the ceiling until tests pass").
+# That row forbids enlarging a CONSTANT that a term with a WRONG input is compared against. Here the
+# input is elapsed time, which is the right input; what was wrong was sizing its bound for one box
+# state. Raising 120 to a bigger constant would have BEEN that rejected fix — load is unbounded
+# above, so any constant is a future wrong verdict. Scaling with the load is the form that is not.
+#
+# FAIL-SAFE IS TODAY'S BEHAVIOUR EXACTLY. Every unreadable input returns the base, so a box without
+# sysctl, a tree without the capacity library, and a verify_engagement sed-extracted in ISOLATION by
+# tests/handoff-fire-pane-parked.bats:53 all get the unchanged 120.
+fire_engage_window() {   # → the engagement window in whole seconds, on stdout
+  local base="${FIRE_ENGAGE_TIMEOUT_BASE:-120}" max="${FIRE_ENGAGE_TIMEOUT_MAX:-480}"
+  local ref="${FIRE_ENGAGE_LOAD_REF:-1.0}" sysctl_bin load ncpu out win lpc
+  case "$base" in ''|*[!0-9]*) base=120 ;; esac
+  case "$max"  in ''|*[!0-9]*) max=480 ;; esac
+  [ "$max" -ge "$base" ] || max="$base"
+  # The collaborators live in scripts/lib/capacity-admit.sh, sourced at TOP LEVEL far below this
+  # definition — fine at call time, absent under an isolated extraction. Guarded, never assumed.
+  command -v cc_hw_resolve_sysctl >/dev/null 2>&1 || { echo "$base"; return 0; }
+  command -v cc_hw_is_num         >/dev/null 2>&1 || { echo "$base"; return 0; }
+  sysctl_bin="$(cc_hw_resolve_sysctl "${CC_FIRE_SYSCTL:-}")"
+  load="$(cc_hw_load1 "$sysctl_bin")"
+  ncpu="$(cc_hw_ncpu "$sysctl_bin")"
+  if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
+  cc_hw_is_num "$load" || { echo "$base"; return 0; }
+  cc_hw_is_int "$ncpu" || { echo "$base"; return 0; }
+  [ "$ncpu" -gt 0 ]    || { echo "$base"; return 0; }
+  cc_hw_is_num "$ref"  || ref=1.0
+  # ONE awk, emitting BOTH numbers, so the scaled path costs one fork and the note it prints can
+  # never disagree with the window it explains.
+  out="$(awk -v l="$load" -v n="$ncpu" -v b="$base" -v m="$max" -v r="$ref" 'BEGIN{
+      if (r <= 0) r = 1.0
+      lpc = l / n
+      f = lpc / r
+      if (f < 1) f = 1
+      w = int(b * f + 0.5)
+      if (w > m) w = m
+      printf "%d %.2f\n", w, lpc
+    }' 2>/dev/null)" || out=""
+  win="${out%% *}"; lpc="${out##* }"
+  case "$win" in ''|*[!0-9]*) echo "$base"; return 0 ;; esac
+  [ "$win" -ge "$base" ] || win="$base"
+  if [ "$win" -gt "$base" ]; then
+    echo "-- engagement window: load ${load} on ${ncpu} cores = ${lpc}/core -> ${win}s (base ${base}s, cap ${max}s)" >&2
+  fi
+  echo "$win"
+}
+
 # Poll for engagement ≤timeout; on a miss re-type the prompt ONCE into the fired pane (the exact
 # INC-4 recovery), re-poll ≤retry, then return 1 (caller FAILS LOUD — never a false "→ fired").
 # All windows are env-overridable so tests run in seconds.
@@ -2353,7 +2435,20 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
 # shell and a running TUI — so the order is stability, not precedence.
 verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2/4/5
   local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
-  local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
+  local timeout="${FIRE_ENGAGE_TIMEOUT:-}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
+  # AN EXPLICIT FIRE_ENGAGE_TIMEOUT WINS VERBATIM. The bats corpus pins it to seconds, and a window
+  # that read ambient load under a pinned test is exactly the channel LOAD_INSENSITIVE_VERIFY_V2 R1b
+  # forbids — a suite whose verdict is a function of the box. Unset ⇒ size it to the box.
+  # The `command -v` arm is not defensive dressing: THIS function is sed-extracted and EXECUTED in
+  # isolation by tests/handoff-fire-pane-parked.bats:53, where the collaborator is not in scope and
+  # an unguarded call would die "fire_engage_window: command not found" (the same trap this suite's
+  # own setup() documents for hf_bounded). The fallback is the pre-change constant, exactly.
+  # RETRY IS DELIBERATELY NOT SCALED: it bounds the re-poll AFTER the INC-4 re-send, and on the
+  # loaded box that re-send is now the branch we no longer reach. Scaling it would lengthen a
+  # recovery whose own premise (the prompt was LOST) this change does not touch.
+  if [ -z "$timeout" ]; then
+    if command -v fire_engage_window >/dev/null 2>&1; then timeout="$(fire_engage_window)"; else timeout=120; fi
+  fi
   local t=0 esrc=0
   ENGAGE_PARKED=""
   ENGAGE_WEDGED=""
