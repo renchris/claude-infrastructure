@@ -152,3 +152,94 @@ for f in bin/cc-backlog bin/cc-reaper bin/cc-dispatch bin/cc-respawn \
     "$(grep -c '^not ok ' /tmp/rp-mut.tap || true)" \
     "$(grep '^not ok ' /tmp/rp-mut.tap | sed 's/^not ok [0-9]* //' | cut -c1-46 | paste -sd'; ' -)"
 done
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ARM 5 — THE cc-registry TRIPLE (backlog bb9f69a6a2fa)
+#
+# Same class, different store, and NOT the same fix. The bin/ sites above were cured by re-rendering
+# in each candidate dialect. That cannot work here: both registry readers are reached from launchd
+# jobs which export LC_ALL=C, and under an exported LC_ALL a `TZ=UTC ps` overrides only TZ — the
+# ambient rendering is unreachable, so a reader cannot reconstruct the writer's environment. Both
+# dialects in this store share TZ=UTC and differ only in field ORDER, so the readers normalise the
+# ORDER instead. This arm proves the parent is wrong, the fix is right, and the fix still convicts.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+RSUITE="tests/lstart-dialect-registry.bats"
+RSITES="hooks/session-register.sh bin/cc-sessions bin/cc-notify"
+
+banner "REGISTRY 5a — PRIOR SHAPE at parent $PARENT (non-vacuity)"
+for f in $RSITES; do
+  half="$(grep -c 'TZ=UTC ps -o lstart=' "$PT/$f" 2>/dev/null || true)"
+  newh="$(grep -c 'reg_lstart_norm' "$PT/$f" 2>/dev/null || true)"
+  printf '  %-34s parent half-pinned(TZ only)=%-3s parent new-helper=%s\n' "$f" "${half:-0}" "${newh:-0}"
+done
+printf '  %-34s %s\n' "parent canonical writes" \
+  "$(grep -c 'TZ=UTC LC_ALL=C ps -o lstart=' "$PT/hooks/session-register.sh" 2>/dev/null || true)"
+
+banner "REGISTRY 5b — the PARENT's OWN pid_live, real live pid, C-locale reader"
+sleep 60 & RP=$!
+CANON_NOW="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$RP" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+# Derive the store's dialect from the canonical string by ORDER, not by re-rendering: the box this
+# runs on need not have en_CA generated, and off-box it certainly does not.
+# shellcheck disable=SC2086  # the split into five fields IS the operation; quoting defeats it
+STORE_NOW="$(set -- $CANON_NOW; printf '%s %s %s %s %s' "$1" "$3" "$2" "$4" "$5")"
+printf '  canonical (what a C reader renders) : [%s]\n' "$CANON_NOW"
+printf '  stored    (what a session wrote)    : [%s]\n' "$STORE_NOW"
+for TREE_LBL in "PARENT:$PT" "THIS:$REPO"; do
+  lbl="${TREE_LBL%%:*}"; tree="${TREE_LBL#*:}"
+  ex="$(mktemp)"
+  awk '/^reg_lstart_norm\(\) *\{/{i=1} i{print} i&&/^\}/{i=0}
+       /^pid_live\(\) *\{/{j=1}       j{print} j&&/^\}/{j=0}' "$tree/bin/cc-notify" > "$ex"
+  v="$(LC_ALL=C LANG=C bash -c '. "$1"; pid_live "$2" "$3" && echo LIVE || echo "NOT-THE-PEER"' \
+        _ "$ex" "$RP" "$STORE_NOW" 2>/dev/null)"
+  printf '  %-7s cc-notify pid_live(live pid, stored record) → %s\n' "$lbl" "$v"
+done
+
+banner "REGISTRY 5c — the PARENT's cc-sessions BINARY, end to end, C-locale reader"
+for TREE_LBL in "PARENT:$PT" "THIS:$REPO"; do
+  lbl="${TREE_LBL%%:*}"; tree="${TREE_LBL#*:}"
+  rd="$(mktemp -d)"
+  printf '{"paneUUID":"AAAAAAAA-1111-2222-3333-444444444444","name":"probe","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"surface":"headless","lstart":"%s"}\n' \
+    "$RP" "$STORE_NOW" > "$rd/AAAAAAAA-1111-2222-3333-444444444444.json"
+  n="$(env CC_REGISTRY_DIR="$rd" IT2_BIN=/nonexistent-it2 LC_ALL=C LANG=C \
+        "$tree/bin/cc-sessions" --names 2>/dev/null | grep -c . || true)"
+  printf '  %-7s live rows visible to a launchd reader = %s   (1 = the live session is addressable)\n' "$lbl" "${n:-0}"
+done
+kill "$RP" 2>/dev/null || true
+
+banner "REGISTRY 5d — SUITE PRE (parent tree) vs POST (this tree)"
+cp "$REPO/$RSUITE" "$PT/$RSUITE"
+( cd "$PT"   && CC_REDPROOF_TREE="$PT" bats "$RSUITE" ) > /tmp/rp-reg-pre.tap  2>&1
+( cd "$REPO" && bats "$RSUITE" )                        > /tmp/rp-reg-post.tap 2>&1
+tally /tmp/rp-reg-pre.tap  "PRE  (parent)"
+tally /tmp/rp-reg-post.tap "POST (this tree)"
+printf '%-26s %s\n' "PRE  BW01 vacuity warns" "$(grep -c BW01 /tmp/rp-reg-pre.tap  || true)"
+printf '%-26s %s\n' "POST BW01 vacuity warns" "$(grep -c BW01 /tmp/rp-reg-post.tap || true)"
+
+banner "REGISTRY 5e — PER-SITE MUTANTS (each must bite ONLY its own site)"
+rmutate() { # <tree> <file>
+  python3 - "$1/$2" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if p.endswith("session-register.sh"):
+    new = s.replace("lstart=$(TZ=UTC LC_ALL=C ps -o lstart=", "lstart=$(TZ=UTC ps -o lstart=")
+else:
+    # Neuter the normaliser: make it the identity, which is exactly the parent's behaviour.
+    new = s.replace('    *)           printf \'%s %s %s %s %s\' "$1" "$3" "$2" "$4" "$5"',
+                    '    *)           printf \'%s %s %s %s %s\' "$1" "$2" "$3" "$4" "$5"')
+assert new != s, "MUTANT DID NOT APPLY to %s — an absent control, not a pass" % p
+open(p, "w").write(new)
+PY
+}
+for f in $RSITES; do
+  MT="$(mktemp -d)"
+  git -C "$REPO" archive HEAD | tar -x -C "$MT" 2>/dev/null
+  cp "$REPO"/bin/* "$MT/bin/" 2>/dev/null
+  cp "$REPO"/hooks/session-register.sh "$MT/hooks/" 2>/dev/null
+  cp "$REPO/$RSUITE" "$MT/$RSUITE"
+  rmutate "$MT" "$f" || { echo "  MUTANT FAILED TO APPLY: $f"; continue; }
+  ( cd "$MT" && CC_REDPROOF_TREE="$MT" bats "$RSUITE" ) > /tmp/rp-reg-mut.tap 2>&1
+  printf '  mutate %-30s → notok=%-3s : %s\n' "$f" \
+    "$(grep -c '^not ok ' /tmp/rp-reg-mut.tap || true)" \
+    "$(grep '^not ok ' /tmp/rp-reg-mut.tap | sed 's/^not ok [0-9]* //' | cut -c1-44 | paste -sd'; ' -)"
+done

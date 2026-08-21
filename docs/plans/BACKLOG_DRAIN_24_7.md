@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #106: stayed in `master-convergence-deadlock`. closed 1 / filed 0.**
+  ONE commit, FIVE files (`hooks/session-register.sh`, `bin/cc-sessions`, `bin/cc-notify`,
+  `scripts/redproof-lstart-dialect.sh` (extended, not added), `tests/lstart-dialect-registry.bats`
+  (new)) plus this SSOT. Row **`bb9f69a6a2fa`** — *the cc-registry {pid,lstart} identity pins TZ but
+  NOT the locale* — **CLOSED**. Fold at close: `master-convergence-deadlock` **52 open / 4 blocked**
+  (population: rows in THAT condition only; the whole store spans 62 conditions). 52, not 53,
+  because this recycle closed one and filed none in that condition — the opposite of #105's cancel.
+  `closed >= filed` holds at 1/0, which is the invariant the chain contract asks for.
+
+  🚨 **THE ROW'S OWN "LATENT, NOT LIVE" WAS WRONG, AND ITS OWN PRESCRIBED FIX WOULD HAVE CAUSED THE
+  DISASTER IT WARNED ABOUT.** #105 filed this as latent — all three sites share one HALF(UTC,
+  ambient LC) dialect, so they are self-consistent. Both halves of that reasoning failed a
+  measurement, and the row told me to take exactly these two measurements first. That instruction is
+  the reason this recycle produced a fix instead of a re-file.
+
+  1. **The premise had rotted in 2 days, in the direction that matters.**
+     `hooks/session-register.sh:246` justified defining the rendering with *"no corpus to migrate:
+     0 of 11 live registry rows carry `lstart` at all"*. Measured this session: **15 of 18 rows
+     carry it, and every one is in the TZ=UTC + ambient-LC dialect.** So the row's own prescribed
+     remedy — *"add `LC_ALL=C` beside the existing `TZ=UTC` at all three sites"* — applied as
+     written would have made all 15 stored rows strangers at once: **the fleet-wide false DEATH the
+     file's own comment cites `tests/watchdog-census.bats:197-221` for.** A remedy prescribed
+     against a vanished premise is not a remedy; the comment carrying that premise is rewritten in
+     this commit so the next reader cannot re-derive it.
+  2. **Self-consistent ≠ latent, because the readers do not all run where the writer runs.** Rows are
+     written by SESSIONS (`LANG=en_CA.UTF-8`). Both readers are reached from launchd, which sets no
+     LANG and therefore renders in C: measured, **all 25 installed `com.claude` LaunchAgents set no
+     `LANG`/`LC_*`**, and two reach these readers (`com.claude.boot-resume` → `boot-resume.sh`;
+     `com.claude.lead-supervisor` → `lead-supervisor.sh`, 21 call sites). Behavioural probe against
+     an isolated copy of the live store, ONE instant: **at the writer's own locale 10 sessions
+     resolve LIVE; under `LC_ALL=C` only 3.** Seven live sessions invisible to every unattended
+     reader — `cc-notify` silently fails to resolve the peer (the pager goes dark), `cc-sessions`
+     drops the row from the addressing view and reaps it past `CC_REG_RETAIN_H`. **Generalise: a
+     store whose writers all share one environment is self-consistent only over its WRITERS; ask
+     where the READERS run before calling a dialect defect latent.**
+
+  🚨 **THE FIX IS A NORMALISER, NOT A LADDER — AND MY FIRST ATTEMPT WAS THE LADDER, WHICH THE PROBE
+  CAUGHT.** #105's cured sites re-render the live pid in each candidate dialect until one matches. I
+  copied that shape, and the behavioural arm stayed at **3 of 10** — unchanged. Cause: the launchd
+  readers run under an **exported** `LC_ALL=C`, and `TZ=UTC ps` overrides only TZ, so `LC_ALL` still
+  wins and the ambient rendering is simply **unreachable from inside that process**. **A reader does
+  not know the writer's environment and cannot restore it, so the writer's environment must not be
+  part of the question.** Both dialects here share TZ=UTC and differ only in field ORDER
+  (`Fri Aug 21` vs `Fri 21 Aug`), so both readers now canonicalise the ORDER — locale-independent by
+  construction, and **one `ps` fork instead of four**. The WRITE is pinned canonical
+  (`TZ=UTC LC_ALL=C`) so the corpus converges; the READ stays tolerant so the re-pin cannot convict
+  the 15 rows already stored. Bound stated in-code and honestly: this normalises ORDER, not month
+  NAMES — a non-English `LC_TIME` still differs, and it is the canonical WRITE, not the reader, that
+  removes that class going forward.
+  ⚠️ **This is the first site in the lstart lineage where copying the established cure was WRONG.**
+  #105's rule — *fixing the READER is blast-radius-free* — still holds; what does not carry over is
+  *how* to fix the reader. Re-rendering assumes the reader can reach the writer's environment. That
+  is true for a session reading a session's record and FALSE for a launchd job, which is precisely
+  the population this row is about.
+
+  **RED-PROOF — `scripts/redproof-lstart-dialect.sh <parent-sha>`, ARM 5 (extended, not a new file:
+  a `scripts/` ADD is a live-layer path and material whenever a consumer guards on it — peer note to
+  #105).** Both directions, all in `git archive` scratch trees at parent `36d144e54`:
+  - **Non-vacuity (5a):** parent carries the PRIOR shape — half-pinned `TZ=UTC ps` = 1 at each of
+    the three sites, new helper absent (0), canonical writes 0. The red is because the bug is
+    THERE, not because a new symbol is missing (method 29).
+  - **The parent's OWN predicate, behaviourally (5b):** real live pid, record in the store's real
+    dialect, C-locale reader → parent `cc-notify pid_live` answers **NOT-THE-PEER**; this tree
+    answers **LIVE**. That is the harm itself, not a proxy.
+  - **End-to-end on the parent's BINARY (5c):** parent `cc-sessions` shows **0** live rows to a
+    launchd reader; this tree shows **1**.
+  - **Suite (5d):** PRE 0/16 · POST 16/16 · `ok+notok=plan` both · skip=0 · **BW01=0** both.
+    ⚠️ Read PRE honestly: 0/16 is *over-wide*, because the parent lacks the extracted helper and
+    `load_fn`'s `declare -F` guard fails every case loudly. **The discriminating evidence is 5b/5c,
+    which probe the parent's own predicates** — the PRE tally alone would not distinguish "the bug
+    was there" from "the symbol is new".
+  - **Per-site mutants (5e):** `session-register.sh` → 1 red (R9, the write pin) · `cc-sessions` → 4
+    (R1/R7 + the shared-normaliser drift test) · `cc-notify` → 3 (R4 + drift). No mutant bit another
+    site's tests.
+  - **Convict direction, on the real store:** every row's `lstart` replaced with a wrong instant, in
+    BOTH spellings → live rows fall to 3 (only the rows carrying no `lstart`, which fail open by
+    design). A tolerant read did not become a disabled read.
+
+  **GATES — all four new-file gates green on the FIRST pass, so the land needed ONE `ship-land`
+  invocation** (#105 needed three). The one worth recording: **`scripts/offbox-run.sh` was green
+  16/16**, because `setup()` pins `LC_ALL=en_CA.UTF-8` explicitly rather than inheriting it. This
+  class had failed off-box on two consecutive recycles (#104, #105) for exactly that omission — the
+  runner is `env -i LC_ALL=C`, so an inherited "ambient" IS C and the same-dialect control has no
+  dialect to match. **A test for a locale defect must pin BOTH locales explicitly; inheriting either
+  makes the test's meaning a property of the box it ran on.**
+
+  **Wrong causes rejected (method 43).** (1) *"Copy #105's dialect ladder"* — refuted by its own
+  behavioural arm, which stayed at 3/10; `TZ=UTC ps` cannot escape an exported `LC_ALL`. (2) *"Apply
+  the row's prescribed fix (`LC_ALL=C` at all three sites)"* — would have convicted 15 live rows;
+  the row itself flagged the premise as needing re-derivation, and it did. (3) *"The row says latent,
+  so downgrade it"* — refuted by the launchd caller census. (4) *"A grep for `LC_ALL=C` shows which
+  sites are pinned"* — #105's own rejected cause, still true, and it would have counted these three
+  sites as unfixed while saying nothing about the TZ axis. (5) *"Test it by varying the reader's
+  locale end-to-end and diffing `cc-sessions` output"* — my first probe did exactly that against the
+  LIVE registry and would have made `cc-sessions` **sweep and delete** real rows; the store is
+  swept lazily on read, so every arm runs against a `mktemp -d` copy.
+
+  ⚠️ **An instrument that agreed with me, again, twice (method 4).** My first dialect census counted
+  rows with `jq -r '.lstart'` and read **18 of 18** — it was counting `jq`'s literal `null` line.
+  The true figure is 15 of 18; the arms used the real files and are unaffected, but the *label* was
+  wrong in the direction that flattered the finding. And the first R8 drift assertion compared the
+  two normaliser copies *including comments*, so it red on a pure doc difference — an assertion
+  whose SPAN exceeded its subject; it now strips comments before diffing.
+
 - **2026-08-21 — drain recycle #105: stayed in `master-convergence-deadlock`. closed 1 / filed 1.**
   ONE commit, NINE files (`bin/cc-backlog`, `bin/cc-reaper`, `bin/cc-dispatch`, `bin/cc-respawn`,
   `bin/cc-pane-headless`, `bin/cc-deathwatch-kqueue`, `tests/lstart-dialect-bin.bats` (new),
@@ -8797,6 +8901,16 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
 6. THE CHAIN IS THE DELIVERABLE: firing recycle #N+1 (or, at true zero live rows, writing the
    chain-complete entry in this plan) outranks finishing one more row. A recycle that runs out
    of context mid-effort still fires its successor with the effort in-flight.
+7. 🚨 **THE BACK-CHANNEL ADDRESSES A ROLE, NEVER A PANE** (backlog `2aa51822cca8`, condition
+   `drain-brief-names-a-dead-originator`; lead note to #106). The brief block must read
+   `cc-notify --role <name> "HANDOFF-PING …"`, not `cc-notify claude-infrastructure-<N-1> …`.
+   **Naming the predecessor pane is dead BY CONSTRUCTION, not by accident:** this chain recycles
+   IN PLACE as one pane, so the pane the brief names is gone the moment the brief is written —
+   the author IS the target's replacement. #104, #105 and #106 each inherited the dead spelling
+   and each had to re-diagnose it. `--role` resolves `~/.claude/cc-roles/<name>` at SEND time, so
+   a recycled pane is followed automatically; `cc-notify`'s own help already says to prefer it for
+   any automated pager. Keep trusting the stderr verdict (`wake-path armed` = instant ·
+   `NO watcher armed` = lands next turn · `mailbox only` = target gone, surface it in the report).
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old

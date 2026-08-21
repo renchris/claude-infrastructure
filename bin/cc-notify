@@ -327,6 +327,40 @@ registry_load() {
 #
 # COST: every caller reaches this only for a row that already matched the requested address, so the
 # `ps` is paid at most once or twice per invocation — not once per registry row.
+# DIALECT: `ps -o lstart=` renders through LC_TIME *as well as* TZ, and the two axes are
+# independent, so pinning only TZ leaves a HALF-pinned string that still differs by the reader's
+# locale. One live pid, one instant, measured on this box:
+#
+#   canonical (TZ=UTC LC_ALL=C)   `Fri Aug 21 16:29:03 2026`   ← what the writer records from now on
+#   TZ=UTC + ambient LC           `Fri 21 Aug 16:29:03 2026`   ← every row written before that pin
+#   bare ambient                  `Fri 21 Aug 09:29:03 2026`
+#   LC_ALL=C at local TZ          `Fri Aug 21 09:29:03 2026`
+#
+# month/day ORDER, not just the time. This resolver is reached from launchd jobs that set no LANG
+# and therefore render in C (`com.claude.boot-resume` -> boot-resume.sh is one), while every row in
+# the store was written by a session at LANG=en_CA.UTF-8 — so the half-pin made a live peer
+# unresolvable to exactly the callers that page unattended. Measured on an isolated copy of the live
+# store: 10 rows resolve LIVE at the writer's locale, 3 under LC_ALL=C.
+#
+# 🚨 The compare NORMALISES the recorded string rather than re-rendering the writer's dialect.
+# Re-rendering is the obvious fix and it does not work: this resolver runs under an exported
+# `LC_ALL=C` in exactly the launchd callers that matter, and `TZ=UTC ps` overrides only TZ — LC_ALL
+# still wins. A reader does not know the writer's environment and cannot restore it, so the writer's
+# environment must not be part of the question. Both dialects here share TZ=UTC and differ only in
+# field ORDER, so canonicalising the order settles it in ONE fork. Normalises ORDER, not month
+# NAMES — both locales measured in this fleet render English abbreviations, and it is the canonical
+# WRITE in hooks/session-register.sh, not this reader, that removes that class going forward.
+reg_lstart_norm() { # <lstart rendering> -> "Dow Mon DD HH:MM:SS YYYY"
+  # Word-splitting is the POINT — it is how the five fields are separated; an lstart rendering holds
+  # no glob character, and quoting would make this the identity function.
+  # shellcheck disable=SC2086
+  set -- $1
+  [ "$#" -eq 5 ] || { printf '%s' "$*"; return 0; }
+  case "$2" in
+    ''|*[!0-9]*) printf '%s %s %s %s %s' "$1" "$2" "$3" "$4" "$5" ;;
+    *)           printf '%s %s %s %s %s' "$1" "$3" "$2" "$4" "$5" ;;
+  esac
+}
 pid_live() {
   local p="$1" want="${2:-}" now
   # "-" is the REG_ROWS sentinel for an absent lstart — see registry_load's IFS-whitespace note. A
@@ -335,9 +369,12 @@ pid_live() {
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null || return 1
   [ -n "$want" ] || return 0
-  now="$(TZ=UTC ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  # FAIL-OPEN on an unreadable `ps` is rung 1's empty check — unchanged. Only a start time READ and
+  # differing in EVERY known dialect convicts.
+  now="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
   [ -n "$now" ] || return 0
-  [ "$now" = "$want" ]
+  [ "$now" = "$want" ] && return 0
+  [ "$(reg_lstart_norm "$now")" = "$(reg_lstart_norm "$want")" ]
 }
 
 # name → pane uuid, LIVE rows only (the W4 addressing contract: never resolve a name onto a dead

@@ -242,8 +242,31 @@ fi
 # paying for that exact bug in lead-crash-watchdog, which had to grow a whole third state to survive
 # it. UTC has no DST, so pinning it removes the class instead of classifying it.
 #
-# Safe to define the rendering here because there is no corpus to migrate: measured this session,
-# 0 of 11 live registry rows carry `lstart` at all, and every reader fails OPEN on its absence.
+# `TZ` is not the only axis: `ps -o lstart=` renders through LC_TIME as well, and the two are
+# independent. Pinning only TZ leaves a HALF-pinned dialect that still differs by the reader's
+# locale — measured on this box, ONE live pid at ONE instant:
+#
+#   canonical (TZ=UTC LC_ALL=C)   `Fri Aug 21 16:29:03 2026`
+#   TZ=UTC + ambient LC           `Fri 21 Aug 16:29:03 2026`   ← what this line wrote before the pin
+#   bare ambient                  `Fri 21 Aug 09:29:03 2026`
+#   LC_ALL=C at local TZ          `Fri Aug 21 09:29:03 2026`
+#
+# month/day ORDER, not just the time — so a session (LANG=en_CA.UTF-8) and a launchd job (no LANG,
+# therefore C) disagree about a process that never restarted. That is not hypothetical here: all 25
+# installed com.claude LaunchAgents set no LANG/LC_*, and two of them reach these readers
+# (`com.claude.boot-resume` -> boot-resume.sh; `com.claude.lead-supervisor` -> lead-supervisor.sh,
+# 21 call sites). Measured against the live store, isolated copy, same instant: read at the writer's
+# own locale 10 sessions are LIVE; read under LC_ALL=C only 3 are — 7 of 10 live sessions invisible
+# to every launchd-started reader, which for cc-notify means the pager silently goes dark and for
+# cc-sessions means the row is dropped from the addressing view and reaped past CC_REG_RETAIN_H.
+#
+# ⚠️ The corpus that made this safe to define is GONE — do not re-derive the old justification.
+# This comment used to read "no corpus to migrate: 0 of 11 live registry rows carry `lstart` at
+# all". Two days later that is false: 15 of 18 rows carry it, and every one of them is in the
+# TZ=UTC + ambient-LC dialect above. So pinning the WRITE canonical is only safe because every
+# READER below was taught the migration ladder in the same commit; a canonical-only re-pin would
+# have called all 15 existing rows strangers at once — the fleet-wide false DEATH the note above
+# warns about, committed by the very change meant to prevent it.
 #
 # This is sharper for a headless row than a pane one. A pane row has a second, independent
 # corroborator — `bin/cc-sessions` cross-checks it against the live pane list — but that check is
@@ -252,7 +275,7 @@ fi
 # field is what puts a second signal back under it.
 #
 # One `ps` fork, on a hook with a wall-clock budget. The tenancy gate above already spends up to 16.
-lstart=$(TZ=UTC ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+lstart=$(TZ=UTC LC_ALL=C ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
 
 # Atomic write (tmp + mv) so a concurrent cc-sessions read never sees a partial file.
 tmp="$reg_dir/.$pane.$$.tmp"
