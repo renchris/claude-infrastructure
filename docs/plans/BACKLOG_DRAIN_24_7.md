@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #96: `master-fire-gate` 15 open → 14 open / 2 blocked.
+  closed 1 / filed 0** (thirty-second consecutive recycle in `master-fire-gate`). Row
+  `4558bb9b39fc` closed, filed 2026-08-11T21:03:19Z: *"cloud-return: two lands can run
+  CONCURRENTLY on one cloud branch — the single-flight lock is per-PASS, not per-BRANCH … Decide
+  whether the land lock should key on the branch."* ONE commit, ONE file
+  (`docs/plans/BACKLOG_DRAIN_24_7.md`). An **ADJUDICATION** close. Tree pinned at `38c76546c`.
+  🚨 **A MUTEX KEY IS A SCOPE — NARROWING IT WEAKENS IT — AND THE GUARD THAT ACTUALLY DEFEATS A
+  DOUBLE-LAND IS NOT A LOCK AT ALL, IT IS A CAS ON CONTENT.** The row prescribed re-keying the
+  land lock from per-PASS to per-BRANCH to stop two lands racing one branch. Three defects, in
+  increasing order of importance:
+  1. **The scope direction is inverted.** The lock in the land path is already keyed **per-REPO**,
+     which is *wider* than per-branch: `scripts/land-lock.sh:2` — *"machine-wide landing
+     serializer, REPO-KEYED"*, keyed on `git rev-parse --git-common-dir` so every worktree of one
+     repo collides on ONE mutex. Re-keying to a branch would **admit** the concurrency the row
+     wants forbidden, and it is the *exact* mistake `50540ff41` (2026-07-18T22:21:52Z) landed to
+     eliminate — its header states that a per-worktree key "would get two different lock dirs and
+     land **CONCURRENTLY** — the exact topology the desk runs" (fixes G-P9-1).
+  2. **It measured the wrong lock.** The per-PASS lock the row names is the *poller's*
+     (`scripts/cloud-return.sh:129`, `$STATE/.return.lock`), whose own comment — *"two passes CAN
+     overlap"* — reads exactly like a confession of the row's defect and is about a different
+     object: a *pass* is a 300 s sweep over many items, not a land. The land is delegated whole
+     (`cloud-return.sh:319-325` → `cloud-reconcile.sh --land` → `desk-land.sh` → `ship-land.sh`),
+     and the lander brings **two** guards of its own that the poller's lock is blind to.
+  3. **No name-keyed lock can decide the row's actual harm.** The harm it states is *"the work
+     landed by luck"* — a gate verdict about a tree that has since moved. Serialization alone does
+     not answer that; a **CAS on content** does. Inside the mutex, `ship-land.sh:50-53`:
+     *last-moment fetch → `origin/<trunk>` still == `GATE_BASE` **and** `HEAD` still ==
+     `GATE_HEAD`? NO ⇒ release the lock, **exit 42** and re-rebase + re-gate unlocked; YES ⇒
+     push.* A branch name cannot see that trunk moved; `(GATE_BASE, GATE_HEAD)` can. The row's own
+     scenario is what the CAS is *for*, and it is why the second land was not luck.
+  **THE THREE GUARDS ALL PREDATE THE ROW — dated in UTC on both sides, so the row was never live**
+  (`firstTs` 2026-08-11T21:03:19Z; `TZ=UTC git log --date=format-local`):
+  ```text
+  guard                                             sha         landed (UTC)          vs firstTs
+  repo-keyed machine-wide mutex (land-lock.sh)      50540ff41   2026-07-18T22:21:52Z  −24 d
+  per-worktree in-flight refusal (ship-land.sh)     b078e2faa   2026-08-11T03:54:57Z  −17 h 08 m
+  cloud-return seen_sha supersession                339f27366   2026-08-11T20:59:08Z  −4 m 11 s
+  ```
+  The middle one answers the row **in its own error string** (`ship-land.sh:817`): *"a land is
+  ALREADY IN FLIGHT for this worktree … Two lands from one worktree share a HEAD and a rebase, and
+  **the second only queues behind the first on the machine-wide mutex**."* And the third landed
+  **4 minutes 11 seconds before the row was filed** — the row even credits it (*"W3 absorbs the
+  losing half"*) without noticing that this dates its own premise.
+  **NEGATIVE CONTROL, non-vacuous in BOTH directions on one commit** — the parent does not merely
+  *lack* the new shape, it **carries the prior one** (method 24):
+  ```text
+  needle                     origin/main   parent 52dad36bc   verdict
+  git-common-dir (new key)        4               0           repo-keying ADDED here
+  show-toplevel  (old key)        2               1           ← prior shape present at parent
+  ```
+  (On `38c76546c` the two `show-toplevel` hits are the telemetry `REPO_ROOT` line plus the comment
+  explaining why toplevel keying is wrong — the *keying* itself moved. A one-needle check proves
+  half of this.)
+  **DECLARED RESIDUAL, deliberately NOT filed** (`closed >= filed`): the row's cost observation —
+  *"two gates, two throwaway worktrees"* — SURVIVES, but as **redundant serial work, not a
+  correctness race**. It is a cost the CAS design accepts on purpose: a drifted lander takes exit
+  42 and re-gates unlocked, *"seconds, not a second corpus"* (`ship-land.sh:53-54`). There is
+  exactly ONE push window on this box per repo, and it is behind the mutex.
+  **WRONG CAUSES REJECTED (3):** (1) *"`.return.lock` IS the land lock"* — it is the poller's, and
+  its *"two passes CAN overlap"* comment is the trap that makes the wrong reading feel confirmed.
+  (2) *"no guard existed at filing; one landed later"* — refuted by the dated table above; this is
+  **not** a cured-later row, it is a never-live one, and the distinction is the whole close.
+  (3) *"the heavy gate runs OUTSIDE the lock, so two lands DO overlap"* — TRUE and irrelevant: the
+  unlocked phase is read-only (fetch/rebase/lint/smoke), so overlap there costs CPU, never a double
+  push. `ship-land.sh:1105` moved work *out* of the mutex deliberately (*"work the lock does not
+  protect"*), which is the same lesson from the other side.
+  **Gates:** docs-only diff (one `.md`) ⇒ `shellcheck`/`bats` **n/a**, not partial; smoke — 0
+  direct suite(s) map to this range (lint-only land). No code path touched.
+
 - **2026-08-21 — drain recycle #95: `master-fire-gate` 16 open → 15 open / 2 blocked.
   closed 1 / filed 0** (thirty-first consecutive recycle in `master-fire-gate`). Row
   `95512886c19a` closed: *"handoff-fire declares FIRE FAILED on a session that engages late, and
