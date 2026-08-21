@@ -7420,14 +7420,31 @@ if [ "$CLOUD" = 1 ]; then
   # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
   # IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*` on the remote and hands it
   # to the sanctioned local lander.
+  #
+  # 🚨 THE PAYLOAD SAYS `switch -c` FIRST, AND THAT ORDER IS THE WHOLE POINT (B1, backlog
+  # 7c6ff16259a0; docs/research/scaling-bottlenecks-2026-08-09/06-offbox.md §B1). It used to say
+  # only `git push origin HEAD:<branch>` — a push of a detached-from-anything HEAD to a ref name
+  # this side INVENTED, which is not the session's working branch. This repo had already learned
+  # that lesson once and did not carry it forward: CLOUD_OBSERVABILITY.md:737-740 records §7.4's
+  # push probe as void as first written, with the fix stated verbatim — "the fix is `git switch -c`
+  # first, so the control is a real session branch". `switch -c` / `checkout -b` then appeared
+  # NOWHERE in this file or any cloud-*.sh; only in that one prose line.
+  #
+  # ⚠️ Note WHY the sibling lane needs none of this, because the difference is not style. The API
+  # create (scripts/cloud-create-api.py:357/411) puts the branch in the create body's
+  # `outcomes.git_info.branches` — "what names the branch the VM may push to", its own words — so
+  # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
+  # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
+  # is the only place the branch can be established, and establishing it is a real `switch -c`.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
 "'
 ── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch:
+channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
 
-    git push origin HEAD:'"$CLOUD_BRANCH"'
+    git switch -c '"$CLOUD_BRANCH"'
+    git push -u origin HEAD
 
 That branch name was assigned by the firing side and is already declared as the one thing watched
 for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
@@ -7442,6 +7459,46 @@ of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branc
     echo "   repo    : $REPO"
     echo "   binary  : $CC_CLOUD_CREATE_BIN   (attempts up to $CC_CLOUD_CREATE_ATTEMPTS)"
     exit 0
+  fi
+
+  # ---- B2: PREFLIGHT BEFORE THE QUOTA IS SPENT ---------------------------------------------------
+  # The guard was already written and was never called (backlog 7c6ff16259a0;
+  # docs/research/scaling-bottlenecks-2026-08-09/06-offbox.md §B2). `cc-cloud preflight` refuses
+  # exactly the case that makes a cloud fire worthless — the VM clones the GitHub REMOTE at the
+  # cwd's CURRENT branch, so a branch that exists only locally is invisible to it and the session
+  # silently runs against the default branch instead. Measured 2026-08-07 on this repo: origin
+  # carried ONE head against 286 upstream-less local branches, i.e. the failing case is the
+  # overwhelmingly likely one, and every worktree this repo fires from is on such a branch.
+  #
+  # ORDER IS THE POINT, and it is why this sits here rather than beside the declare below: a
+  # refusal is only worth anything BEFORE `cc_cloud_create` charges an account's rate limit. It is
+  # deliberately AFTER the --dry-run exit so case 9's "issues no create at all" stays literally
+  # true and a dry run cannot be refused by a probe it never needed. cc-cloud unreachable is a
+  # SKIP, not a refusal — this leg already survives that at the declare (:cloud-declare-absent) and
+  # a preflight that hard-fails on its own absence would be a stricter gate than the fire needs.
+  CLOUD_DECL="cc-cloud"
+  if [ -n "${CC_CLOUD_BIN+set}" ]; then CLOUD_DECL="$CC_CLOUD_BIN"      # SET-including-EMPTY seam
+  elif [ -x "$(dirname "$_CC_KS")/../bin/cc-cloud" ]; then CLOUD_DECL="$(dirname "$_CC_KS")/../bin/cc-cloud"
+  elif [ -x "${HOME:-}/.claude/bin/cc-cloud" ]; then CLOUD_DECL="${HOME:-}/.claude/bin/cc-cloud"
+  fi
+  if [ "${CC_FIRE_CLOUD_PREFLIGHT:-on}" != off ] && [ -n "$CLOUD_DECL" ] \
+     && { command -v "$CLOUD_DECL" >/dev/null 2>&1 || [ -x "$CLOUD_DECL" ]; }; then
+    CLOUD_SRC_BRANCH="$(git -C "$CLOUD_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    CLOUD_PF_ARGS=(preflight --repo "$CLOUD_CWD")
+    [ -n "$CLOUD_SRC_BRANCH" ] && [ "$CLOUD_SRC_BRANCH" != HEAD ] \
+      && CLOUD_PF_ARGS+=(--branch "$CLOUD_SRC_BRANCH")
+    CLOUD_PF_RC=0
+    CLOUD_PF="$("$CLOUD_DECL" "${CLOUD_PF_ARGS[@]}" 2>&1)" || CLOUD_PF_RC=$?
+    if [ "$CLOUD_PF_RC" != 0 ]; then
+      echo "!! cloud fire REFUSED by preflight — a session fired now would be UNOBSERVABLE, and the" >&2
+      echo "   account's rate limit would be spent producing work nothing on this box can reach." >&2
+      printf '%s\n' "$CLOUD_PF" | sed 's/^/   /' >&2
+      echo "   Put the branch on the remote, then re-fire:" >&2
+      echo "     git -C $CLOUD_CWD push -u origin ${CLOUD_SRC_BRANCH:-<branch>}" >&2
+      echo "   Override for one fire (you accept an unobservable session): CC_FIRE_CLOUD_PREFLIGHT=off" >&2
+      emit_fire_refusal cloud-preflight "cc-cloud preflight exited $CLOUD_PF_RC for $CLOUD_CWD (branch ${CLOUD_SRC_BRANCH:-unknown}) — not spending an account's quota on an unobservable fire"
+      exit 12
+    fi
   fi
 
   echo "-- cloud fire: creating on account $CLOUD_ACCT from $CLOUD_CWD (branch $CLOUD_BRANCH)" >&2
