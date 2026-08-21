@@ -96,8 +96,43 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   Settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`, `7c6ff16259a0`,
   `b69b1d957cec`, `ba5511bbe388`, `87626e1593c3`, `016174e64121`, and the deliberate holds
   `95512886c19a` / `4043ab43bf4a`). Lag re-derived at open: the shared checkout was **92** behind
-  origin/main (#72 measured 90→92, #71 87→90, #70 85→86, #69 83→84, #68 81, #67 79). Live layer
-  still FROZEN at `9709c99d3`; **nothing landed here runs from `~/.claude` yet.**
+  origin/main (#72 measured 90→92, #71 87→90, #70 85→86, #69 83→84, #68 81, #67 79).
+
+  🚨 **THE FREEZE CLEARED DURING THIS SESSION, AND THE ONLY REASON THAT WAS NOTICED IS THAT THE LAG
+  WAS RE-DERIVED AT CLOSE RATHER THAN QUOTED FROM OPEN.** At open: live HEAD `9709c99d3`, **92**
+  behind. At close: live HEAD `4369cae88`, **4** behind. Every recycle from #63 on inherited a brief
+  asserting the live layer was frozen and that `deploy-live.sh` refused *correctly* (the live HEAD
+  was a patch-identical sibling of trunk, so `--ff-only` could not move) — a premise that was true
+  when written and stopped being true mid-session, with nothing connecting the two (memory:
+  `parked-blocker-obsoleted-by-later-fix`, `resident-policy-must-not-restate-perishable-facts`).
+  **#74 must re-derive it, not inherit it**, and should re-verify the wall behind `f33f72da71e0` /
+  `deploy-live-frozen` before treating either as standing.
+
+  What is true at this close is the ordinary case, not the frozen one: the 4 commits the live layer
+  lacks **are this recycle's three plus one sibling**, the lag is far inside the converge budget
+  (25), and the diff is **EDITs only — `LIVE_ADDS`=0** — so every changed file rides its existing
+  per-file symlink and merely runs older bytes until the next fast-forward. Content-checked, not
+  assumed: `as_tty_classified` reads **0** in `~/Development/claude-infrastructure` and **0**
+  through the live `~/.claude/scripts/handoff-fire.sh` symlink. So the honest statement is *landed,
+  not yet live, within budget* — **not** *"nothing runs from `~/.claude`"*. `deploy-live.sh` was
+  deliberately NOT run: re-pointing a shared checkout other sessions execute from stays
+  operator-only by its own design.
+
+  ⚠️ **Instrument note for whoever repeats that check:** `grep -c` exits **1** on zero matches, so a
+  `grep -c … || echo UNREADABLE` fallback prints BOTH the real `0` and a false "unreadable". The
+  file was perfectly readable; only the rc said otherwise. Count, then judge the count — do not let
+  an rc-on-empty masquerade as a broken instrument (the mirror of `grep -q` inverting a verdict
+  under `pipefail`).
+
+  🚨 **`ungrouped` IS MINTING AGAIN — the "pause" reading is now dead, and #74 must not inherit it.**
+  #69 read two flat measurements as evidence the sibling stream had stopped; #70 refuted that; #71
+  and #72 then each held it at **98/22** across a whole session, and #73's brief carried that
+  forward as *"four flat readings are still a pause and not a stop."* Measured across THIS session
+  alone: **98 → 106 open** (+8), while `master-operator-gated` went 81 → **80** blocked. So the
+  stream is live and the flat run was exactly what #70 said it was — a lull, never a stop. The
+  standing guidance is otherwise unchanged: `ungrouped` breaches the W2 floor of 50 and has no
+  owner, so it remains a legitimate place to open a fresh effort — **but never on the premise that
+  inflow has ceased**, and least of all now.
 
   **Row `87a515ed087e` closed on `e0ff4f470`.** Its ask was one line — *"handoff-fire.sh +
   self-close report a WEDGED it2 resolver as a dead pane/successor — mirror the `0c93f779ecfa`
