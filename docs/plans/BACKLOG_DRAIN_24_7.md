@@ -87,6 +87,127 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #101: `master-fire-gate` 10 open / 2 blocked — UNCHANGED.
+  closed 0 / filed 0** (thirty-seventh consecutive recycle in `master-fire-gate`). ONE commit, TWO
+  files (`scripts/capacity-alarm.sh`, `tests/capacity-alarm.bats`). **No row was closeable, and the
+  recycle says so rather than manufacturing one — but it did not end empty: it CURED a measured
+  fail-open inside the row that owns it.**
+
+  **VERDICT: the effort's ten remaining rows are gated, not merely unworked — operator-gated (2),
+  design-gated (2), cost-gated (1), cloud-gated (2), load-gated (2), wave-sized (1). The two that
+  looked live were driven to a verdict: `159c2211b0f2` is genuinely UNCURED with ZERO live harm,
+  and `c4383f1c9172` is a real multi-file refactor whose *harm* — not its tidiness — was fixed and
+  landed this recycle.**
+
+  🚨 **THE GENERALISABLE FINDING — A STORED FALSIFIER THAT TESTS THE PRESCRIBED REMEDY CAN ONLY EVER
+  REPORT "THE EDIT HAS NOT BEEN MADE". It is structurally incapable of detecting a cure by any other
+  route, and it is silent on the one question that matters: is there any LIVE HARM?** `159c2211b0f2`
+  is the effort's only row carrying a falsifier — `grep -q watchdog.env hooks/lead-crash-watchdog.sh`
+  — and it has read **rc=1 for five consecutive recycles** (#96, #97, #99, #100, #101). Each read was
+  correctly reported as "still uncured" and each time that was allowed to stand in for an
+  adjudication. It cannot: the falsifier is *remedy-shaped*, so rc=1 means only that nobody has typed
+  that specific edit. Method 18 already says score against the DEFECT, never the candidate list —
+  this is its mirror image, and the lineage had been on the wrong side of it for five recycles.
+  Measuring the defect instead took eight probes and inverted the picture: **the mechanism is real
+  and the harm is zero.**
+
+  1. 🚨 **THE ROW'S MECHANISM CLAIM IS TRUE, MEASURED 4/4 WITH CONTROLS.** *"an env-only switch
+     cannot reach … any session whose provenance is not an interactive zsh"*: every launchd-shaped
+     shell — `zsh -lc`, `zsh -c`, `bash -c`, `bash -lc`, parent env stripped — reads
+     `LCW_ORPHAN_CLOSE=UNSET`. Positive control: the same invocations DO see a var the parent
+     exports (`[present]`, 2/2). Negative control: an unset var reads `[UNSET]`. `.zshrc` is
+     interactive-only, so the arming channel genuinely is provenance-bound.
+  2. 🚨 **AND ITS HARM CLAIM HAS AN EMPTY POPULATION — BOTH HALVES.** (a) *"cannot reach a
+     launchd-invoked caller"*: **0** of the LaunchAgents plists spawn a Claude session, and **0**
+     carry `LCW_ORPHAN_CLOSE`. (b) non-interactive provenance: **18/18** live `claude` processes
+     carry `LCW_ORPHAN_CLOSE=1` (`ps eww` per pid). Instrument controlled both ways — `PATH=` found
+     in 18/18 (positive), a bogus var in 0/18 (negative).
+  3. 🚨 **THE REASON THE POPULATION IS EMPTY IS STRUCTURAL, NOT LUCKY — AND A NAIVE CENSUS MISSES
+     IT.** The `ProgramArguments` grep says no plist invokes a claude binary, but `com.claude.boot-
+     resume` IS a launchd job whose whole purpose is resuming sessions — it reaches them through a
+     launcher script, so an argv-shaped census is blind to it (memory:
+     `caller-census-keyed-on-path-misses-the-name`). Following it settles the row:
+     `scripts/boot-resume-launch.sh:4` states it *"runs headless from launchd and CANNOT host an
+     interactive `claude --resume`"*, so it creates an iTerm2 pane and **types** the command into it
+     (`:167`, `:313`). The session is therefore born in a fresh **interactive** zsh which sources
+     `~/.zshrc:675` → `watchdog.env` → `export LCW_ORPHAN_CLOSE=1`. **The env never travels from
+     launchd to the session; the pane's own rc file supplies it.** That is why even the one
+     launchd-originated path lands armed.
+  4. **SO THE ROW STAYS OPEN, AND ITS OWN F3 REFUSAL STILL BINDS.** Its purpose clause — *"arming is
+     independent of shell provenance"* — is unmet (item 1), so it is not cured and must not be
+     closed. Nor may it be driven: the fix is a **no-op on the current fleet** (all 18 already armed)
+     that would arm a pane-closing actuator in a context nobody has reviewed — which is a worse
+     property than the gap it closes, not a better one. Its detection arm is real and was verified
+     live: `hooks/activation-watch.sh` is in the SessionStart chain of `~/.claude/settings.json`, and
+     its `--envarm` axis discriminates on exactly one axis (var present → `GREEN`; var absent →
+     `NOT-DELIVERED`, naming this very consumer), while an unrelated var moves it not at all.
+  5. **NO CROSS-CONDITION DUPLICATE (method 4, run before concluding).** Phrase-searching the WHOLE
+     store for `watchdog.env|LCW_ORPHAN_CLOSE|lead-crash-watchdog|orphan-close` returns 14 rows; the
+     only one open in this class is `159c2211b0f2` itself. Its parent `80321b2556e6` — the sole row
+     that names it — is `done`. It is the sole owner.
+  6. **`34b35fc074d7` DECLINES A FOURTH TIME, and the trend #100 reported has REVERSED.** `uptime`
+     read **10.40 / 9.88 / 11.23**, *above* #100's record-low 9.12 (#99: 20.64; #97: 14.24). Its DoD
+     is one command on a QUIET box; this is not one. Re-measure first, always — a falling trend is
+     not a trend (memory: `bound-must-fit-the-band-not-the-bench`).
+
+  🚨 **THE CURE THAT DID LAND — `c4383f1c9172`'s HARM, SEPARATED FROM ITS TIDINESS.** The row asks to
+  extract `capacity-alarm.sh census()` into a shared lib, *"one census, two consumers"*. Sizing it
+  showed why three recycles left it: the two censuses are **not interchangeable** — `census()`
+  returns a 3-field triple `"<trees> <exe> <bin>"`, its twin `cc_sp_trees()` returns one field; and
+  `capacity-alarm`'s selftest needs the per-family breakdown for its disjoint-sum control. A faithful
+  extraction also cannot reach *"two consumers"* without repointing the admission gate
+  (`scripts/lib/capacity-admit.sh:777`), which is gratuitous churn in a live gate. **That remains
+  open.** But the divergence #99 named turned out to be a live fail-open, and that is fixed:
+
+  7. 🚨 **A DEAD `ps` MADE THE ALARM REPORT A FALSE EMPTY FLEET, AND ITS OWN CONTROL CERTIFIED IT.**
+     Red-proofed with `ps` stubbed to print nothing: `census()` returned a well-formed **`0 0 0`**,
+     the consumer's `[ -n "$CENSUS" ]` guard PASSED it, and the selftest's census control — the
+     disjoint-family sum `trees == exe + bin` — read **`control OK census trees=0 = exe 0 + bin 0`**,
+     because `0 == 0 + 0`. The one rung whose own comment says *"its failure mode is a
+     plausible-looking zero"* was **vacuous on exactly that failure**. Under the identical stub the
+     twin `cc_sp_trees()` returned empty + **rc 1** and correctly refused — the discriminating
+     negative control, and proof the defect was the missing guard rather than the harness.
+  8. **FOUR-CELL PROOF, ONE AXIS.** Pre-fix control taken from the parent `1224fac91` via
+     `git archive` into a scratch tree — never a file swapped in place. Dead census: PRE `control OK
+     … trees=0` → **selftest GREEN (rc 0, false)**; POST `control FAIL census` → **selftest RED
+     (rc 70)**. Healthy box: PRE and POST both `control OK census trees=18` → GREEN, and the jsonl
+     `"sessions":18` is **unchanged**. So the fix cannot fire on a working box, and the parent
+     carries the *prior shape* — a genuine `control OK` over a dead instrument — not merely the
+     absence of the new one (method 37).
+  9. **THE FIX IS ONE FUNCTION, AND IT DE-VACUUMS THE CONTROL FOR FREE.** `rows++` plus
+     `if (rows + 0 == 0) exit 1` in the awk END, matching the twin's semantics exactly. No consumer
+     or schema change was made **deliberately**: `NO-DATA` is reserved by design for the headroom
+     instrument alone (`:79-83` — *"turning it to NO-DATA would destroy a working alarm to report the
+     absence of a bonus"*), and `:1318-1322` records a prior change that emitted `?` into the jsonl
+     and *"poisoned the file for every consumer"*. On an empty read `set -- $cs` leaves `$1` unset,
+     so `${1:-x}` = `x` ≠ `0` and the existing rung goes RED with no edit to it at all.
+  10. **TESTS: `(vii-e)` red-proofed, `(vii-f)` the non-regression control.** Against the pre-fix
+      subject in a scratch tree: `1..2`, **`not ok 1`** on the census assertion, `ok 2`. Post-fix:
+      `1..2`, `ok 1`, `ok 2`, **0 skips** — `ok + notok` equals the plan both times. `(vii-f)`
+      asserts on the census control ALONE with **no status check**, deliberately: six of the seven
+      rungs read the live box, so pinning the overall rc would make it a hostage to box weather.
+  11. **WRONG CAUSES REJECTED (4).** (i) 🚨 **inheriting "falsifier rc=1 ⇒ correctly open"** — true
+      as a fact, worthless as an adjudication (the headline finding). (ii) *"no launchd job spawns a
+      session, so claim (a) is moot"* — REFUTED as reasoning: `boot-resume` does, via a launcher the
+      argv census cannot see; the claim is moot for a *different and better* reason (item 3).
+      (iii) *"the census fail-open flips a verdict"* — REFUTED, and deliberately not over-claimed:
+      `SESSIONS` feeds the jsonl, the page detail and the report, **not** `classify()`, whose seven
+      rungs are unaffected. The harm is a logged 0 that means *blind*, not a fabricated OK. (iv)
+      *"route the census failure into NO-DATA"* — REFUTED by the subject's own documented policy
+      (item 9); the prescribed-looking remedy was the one the file forbids.
+  12. **NOT A FINDING, deliberately unfiled.** The scoped `bats-shellcheck-lint --range` reads
+      *"clean — this change writes no .bats line"* **before the commit exists** — a vacuous pass
+      (method 49); the real verdict is the post-commit run. Its unscoped census reports 3 `SC2009`
+      findings at `tests/capacity-alarm.bats:239,243,262`, each verified **byte-identical on trunk**
+      and attributed by the tool itself to *"NOBODY … inherited debt included"*. And the new
+      source comment quotes `rows + 0 == 0`, so a needle count of that string reads **2**, not 1.
+  13. **WHY THE STORE WAS NOT TOUCHED.** `cc-backlog` has no `note` verb, and the only way to reach
+      an existing row through `add` is to re-supply its exact title+source (the id IS
+      `hash(project+title+source)`) — a near miss MINTS A NEW ROW, which would make this recycle
+      net-positive on filings for a purely clerical reason. So `c4383f1c9172`'s evidence lives in
+      THIS entry and in the cited source comment (which names the row id at the fix site), exactly
+      as #100 recorded its worktree population rather than minting a row. **closed 0 / filed 0.**
+
 - **2026-08-21 — drain recycle #100: `master-fire-gate` 11 open → 10 open / 2 blocked.
   closed 1 / filed 0** (thirty-sixth consecutive recycle in `master-fire-gate`). Row
   `2228b5bf8477` closed, filed 2026-08-08T21:38:40Z: *"worktree wt-592061637f80 was handed out
