@@ -164,6 +164,74 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   (⚠️ read the `state` column, never the wrapper rc — #107) · `self-path-lint --selftest` 32/32 ·
   `bats-kill-guard-lint` clean · `bats-assert-liveness` silent **and positive-controlled** ·
   `shellcheck -S style` rc 0 · `test-hermeticity-lint tests` clean, 527 suites, **0 new leaks**.
+  Landed `9de43ce2b`, content-verified both directions (3 paths present + `git diff` empty vs
+  `origin/main`; the parent `9b329d21d` carried **0** occurrences of the harness name in the suite,
+  which is the red). Smoke ran **1 direct suite** in 25s under `SHIP_LAND_SMOKE_BUDGET_S=420` —
+  §4.1 invariant 8 selecting the one suite inside the blast radius, NOT #107's zero-suite lint-only
+  state and NOT #104's fail-closed selector bug.
+
+  🚨 **FINDING 5 — THE BRIEF SAID THIS EFFORT CARRIES *ZERO* STORED FALSIFIERS. IT CARRIES 24 OF
+  53.** #107 handed forward *"measured **zero** stored falsifiers across all 52 rows of this effort
+  — expect none"*, which retired method 24 (*run every stored falsifier in one pass before
+  choosing*) for whoever inherited it. One `jq` refutes it: **24 of 53 (45%)** carry one, the oldest
+  attached 2026-08-08 — before #107 ran. Twenty-four re-run checks sat unrun because a number in a
+  brief said there was nothing to run. This is `published-figure-decays-with-its-source` in its
+  cheapest possible form: the figure was not even stale, it was wrong at the time, and it read as a
+  property of the population. **Re-derive an inherited count before letting it delete a method.**
+
+  ✅ **THE PASS — 24/24 exit 1, and the instrument was controlled before the result was believed.**
+  Run the way `cc-premise.run_falsifier` runs them (`/bin/sh -c`, `cwd=REPO`, 20 s bound — memory:
+  `prescribed-repro-weaker-than-the-harness`), against a worktree byte-identical to `origin/main`.
+  Polarity, read out of `cmd_falsify`'s own header rather than assumed: **exit 0 RETRACTS** the
+  item; non-zero is advisory and means *merely unrefuted*, never *confirmed*. A uniform 24/24 first
+  indicts the runner (memory: `uniform-error-ratio-indicts-the-model`), so it was positive-controlled
+  on real reads, not just `true`/`false`: `grep -q anchor_lit <a file that has it>` → 0 and
+  `grep -q ZZZ_NO_SUCH_TOKEN <same file>` → 1. The runner discriminates; **no row in this effort is
+  retractable by its own probe.**
+
+  🚨 **FINDING 6 — AND THE REASON IS THE PROBES' SHAPE, WHICH IS THE QUALITY BAR `d0a1bb8717cf` IS
+  MISSING.** Classified by the axis that decides what a non-zero MEANS — does the probe EXECUTE its
+  subject, read live STATE, or only grep TEXT? **EXECUTES 2/24 · STATE 5/24 · TEXT 17/24 (71%).**
+  A pure text-grep answers *"has this exact string been typed"*, not *"does the condition still
+  hold"* — it cannot tell a fix from a rewrite that moved the token, and `cmd_falsify`'s own header
+  names this class **ANTI-coverage**: *"the row reads as checked, and the first claim that re-runs
+  it is a guaranteed false retraction of work nobody ever did"* (16 of 26 force-stored probes were
+  hand-refuted on exactly this). #107 named `d0a1bb8717cf` — *emit `--falsifier` at FILING time* —
+  the generator's actual cure. **This measures the bar that row must clear: emitting a falsifier is
+  not the win; emitting a CONDITION-shaped one is.** A generator that mints 1584 text-greps would
+  move coverage from 1/1584 to 1584/1584 and the answer to *"is this row still true"* would still
+  be unknown. Recorded here because `cc-backlog` has no `note` verb (method 31).
+
+  ✅ **CLOSED 1 — `16c864bd34a8`, and the duplicate check crossing CONDITION boundaries is what
+  found it (method 16).** The one-pass run surfaced **two rows carrying the IDENTICAL probe**
+  (`grep -q "diff-filter=A" scripts/deploy-live.sh`): `b79591064f75` and `16c864bd34a8`, filed 3h40m
+  apart into the same condition. The later is fully subsumed — every conjunct of it appears in the
+  earlier, which additionally carries the CLAUDE.md contract breach and a named fix. **Not closed as
+  cured: the defect is LIVE, reproduced in this very session** — #108's own ledger read `🚀 Landed
+  but NOT live — 4 NEW file(s) are absent` over a diff that added **zero** files, which is
+  `b79591064f75`'s own attribution note verbatim, ten days on. A **THIRD** independent filing exists
+  — `42fbbf112209`, filed 08-18, which the `LIVE_ADDS` grep found only because it was **ungrouped**.
+  It is **LINKED into the condition, not closed**: it carries the precedent commit `8ae61e12e` and
+  the reason nobody has fixed it (*changing when the converger advances is a deploy-path escalation
+  surface* — G2), neither of which the survivor holds. Deleting it would have lost information.
+
+  ⚠️ **THE FOLD READS 49/4 — UNCHANGED — AND THAT IS NOT A NULL RESULT.** One row closed and one
+  row linked IN, in the same condition, in the same session: they cancel. #105 recorded this shape
+  for a close-plus-file; it is identical for a close-plus-**link**. **State the movements, never
+  just the level.**
+
+  🚨 **FINDING 7 — PREMISE 1 OF THIS BRIEF IS REFUTED BY A ROW FILED TODAY, AND THE BOTTLENECK
+  MOVED.** Every recycle since ~#102 has carried *"`deploy-live.sh` STILL DECLINES — do NOT drive"*.
+  `eef88daa030a` (condition `deploy-live-frozen`, `lastTs` 2026-08-21T17:57Z — **this same day**)
+  re-measured it by RUNNING the converger twice: it **advanced** `ba082bc4b → 56160dc64 →
+  1224fac91 → 332babf63`, then declined with *"already deployed — live layer is at the newest
+  deployable commit 332babf6370a (9 un-stamped commit(s) above)"*. So the converger is **not**
+  frozen; **`postland-verify` has not STAMPED**, and the row records the lag GROWING across one
+  session (16 → 7 → 3 → 2 → 9) because the drain chain lands faster than stamping. Memory
+  `parked-blocker-obsoleted-by-later-fix`, exactly: a park keyed on a MECHANISM fact that a later
+  measurement obsoletes. ⚠️ **What does NOT change: never run `deploy-live.sh` from a worktree**
+  (row `874c58890cc9`) — that constraint is about the *caller's tree*, not about the converger being
+  frozen, and the two were being carried forward as though they were one fact.
 
 - **2026-08-21 — drain recycle #107: took the GENERATOR CENSUS #103 named and #104/#105/#106 each
   deferred. closed 3 / filed 0** — `da4b516dc78a`, `4a74657d6088`, `087db20c3a24`, all three
