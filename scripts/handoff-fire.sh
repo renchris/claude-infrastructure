@@ -9572,7 +9572,24 @@ else
       goal_unreachable engagement-unproven || true
       exit 6
     else
-      echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
+      # THE RECOVERY MUST RETIRE THE PANE FIRST (cc-backlog 87626e1593c3). This branch is reached
+      # only after pane_parked_reason AND pane_wedge_reason both came back empty — the pane is
+      # neither a bare shell nor a modal, so a claude session IS running there, idle at an empty
+      # composer. The old text prescribed a bare warm re-fire, which adds a SECOND session to that
+      # worktree and leaves the first alive: exactly the outcome the rc=5 branch above documents as
+      # "two sessions in one worktree, a duplicated paid model grid and one clobbered index.json",
+      # and the same hazard docs/research/infra-reliability-audit-2026-07-22/raw/a1.md:10 filed a
+      # month earlier. The sibling PARKED branch, whose pane holds NO session at all, already says
+      # "Clear the pane, then re-fire" — the branch that needs that step most was the one omitting
+      # it. Two sessions in one checkout is also what the worktree-isolation rule forbids outright.
+      #
+      # AND NOTHING DOWNSTREAM CATCHES THE DUPLICATE FOR YOU. The DUPLICATE WORKER refusal in
+      # scripts/lib/worker-claim-gate.sh derives its item from a wt-<12-lowercase-hex> component of
+      # the cwd and returns admit-without-record when it finds none (cc_worker_claim_admit bails on
+      # an empty item before any claim is consulted), so in a worktree named anything else — a desk
+      # wave dir, an operator checkout — two live sessions coexist unrefused. That premise is pinned
+      # by its own case in tests/fire-engagement.bats, so this comment cannot rot silently.
+      echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — a claude session IS running there, idle at an empty composer. RETIRE THAT PANE FIRST (clear it), then re-fire warm (--cwd <existing-worktree>): re-firing while it is alive puts a SECOND session in that worktree, and nothing downstream refuses that. Do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
       # is answerable in one grep. Guarded so a telemetry hiccup can never preempt the exit 1.
       emit_handoff_telemetry 0 || true

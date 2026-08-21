@@ -579,3 +579,96 @@ _ve_returned() {     # $1=path to handoff-fire.sh → codes the BODY actually re
   [ "$(_ve_returned  "$STALE" | tr -d '\n')" = "01245" ]  # body untouched — still returns 5
   [ "$(_ve_documented "$STALE")" != "$(_ve_returned "$STALE")" ]
 }
+
+# ---- the never-engaged RECOVERY must retire the live pane first (cc-backlog 87626e1593c3) -----
+#
+# WHICH OF THESE THREE IS THE RED-PROOF, stated so a reader cannot mistake the greens for vacuous:
+#   · "prescribes retiring the pane BEFORE the re-fire"  — RED pre-fix, green post-fix (E2E oracle).
+#   · "the matcher flags the pre-fix line and clears the PARKED sibling" — RED pre-fix on the
+#     subject arm; its two control arms are green in BOTH, by design, because they exist to prove
+#     the matcher can fail and cannot be satisfied by deleting every mention of a re-fire.
+#   · "a non-dispatch worktree is outside the DUPLICATE WORKER gate" — GREEN IN BOTH ARMS BY
+#     DESIGN. It states the PREMISE the fix's comment relies on; a red there indicts the premise
+#     (the gate grew to cover this population, so the comment and the verdict need revisiting),
+#     never this diff.
+#
+# THE DEFECT. `verify_engagement` returns 1 only after pane_parked_reason AND pane_wedge_reason have
+# both come back empty — so the pane is neither a bare shell nor a modal, and a claude session IS
+# running in that worktree. The verdict nonetheless prescribed a bare "recover with a WARM re-fire
+# (--cwd <existing-worktree>)", which starts a SECOND session there and leaves the first alive. The
+# rc=5 branch two elifs above already names that outcome ("two sessions in one worktree, a
+# duplicated paid model grid and one clobbered index.json"), and the PARKED branch — whose pane
+# holds no session at all — already says "Clear the pane, then re-fire". The branch that needed the
+# retirement step most was the only one omitting it.
+
+# 0 = a retire/clear verb precedes the re-fire this line prescribes · 1 = it does not · 2 = the line
+# prescribes no re-fire at all (not applicable). Three states, because collapsing "not applicable"
+# into "unsafe" would convict every ordinary line in the file (memory:
+# abstain-rule-can-retire-the-common-case). Keyed on ORDER, not on a spelling: any retirement verb
+# will do, but it has to come before the re-fire it is qualifying.
+_retire_precedes_refire() { # $1=line → 0/1/2
+  local head
+  case "$1" in *re-fire*) ;; *) return 2 ;; esac
+  head="${1%%re-fire*}"
+  printf '%s' "$head" | grep -Eqi '(retire|clear)' && return 0
+  return 1
+}
+
+@test "never-engaged verdict prescribes retiring the live pane BEFORE the re-fire [RED-PROOF]" {
+  run env HOME="$HOMEDIR" IT2_BIN="$BIN/it2" TMPDIR="$BATS_TEST_TMPDIR" \
+    FIRE_ENGAGE_TIMEOUT=1 FIRE_ENGAGE_RETRY=1 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire
+  [ "$status" -ne 0 ]
+  # The verdict itself is unchanged — the existing E2E above pins that, and so does this line, so a
+  # "fix" that renamed the verdict rather than fixing its remedy still goes red somewhere.
+  printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged'
+  line="$(printf '%s\n' "$output" | grep -F 'FIRE FAILED — never engaged' | head -1)"
+  _retire_precedes_refire "$line"
+  # …and it says WHY, so the operator can tell this from the rc=5 "do not re-fire" verdict.
+  printf '%s' "$line" | grep -q 'SECOND session'
+}
+
+@test "the retire-before-re-fire matcher flags the PRE-FIX line and clears the PARKED sibling" {
+  # SUBJECT — the real line in the shipped script (static arm; the E2E above is the process arm).
+  subj="$(grep -F 'FIRE FAILED — never engaged: $LAUNCHER' "$HF" | head -1)"
+  [ -n "$subj" ]
+  _retire_precedes_refire "$subj"
+
+  # MUTANT CONTROL — the verbatim pre-fix remedy. It MUST be flagged, or the subject arm above is
+  # a matcher that cannot fail (memory: control-must-replay-the-real-artifact).
+  run _retire_precedes_refire 'The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session.'
+  [ "$status" -eq 1 ]
+
+  # COMPLIANT CONTROL — the PARKED branch's own remedy, read from the script, in nobody's new
+  # wording. It must pass the SAME matcher, so the assertion cannot be satisfied only by the exact
+  # phrasing this diff introduced.
+  parked="$(grep -F 'Clear the pane, then re-fire' "$HF" | head -1)"
+  [ -n "$parked" ]
+  _retire_precedes_refire "$parked"
+
+  # NOT-APPLICABLE CONTROL — an ordinary line prescribing nothing abstains (2) rather than failing.
+  run _retire_precedes_refire 'the session is LIVE — answer the dialog, then re-check engagement.'
+  [ "$status" -eq 2 ]
+}
+
+@test "PREMISE (green both arms): a non-dispatch worktree is outside the DUPLICATE WORKER gate" {
+  # The verdict's new sentence — "nothing downstream refuses that" — rests on this. The gate keys
+  # its item off a wt-<12-lowercase-hex> component of the cwd and bails to admit-without-record
+  # when it finds none, so a desk wave dir or an operator checkout carries no duplicate protection
+  # at all. If this ever goes RED the gate has GROWN to cover that population, and the comment at
+  # the never-engaged branch in handoff-fire.sh must be revisited — it does not indict this diff.
+  source "$REPO/scripts/lib/worker-claim-gate.sh"
+  export CC_WCLAIM_IDL="$BATS_TEST_TMPDIR/wclaim-idl.jsonl"
+  export CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/wclaim-state"
+
+  # (a) NOT covered: a plausibly-named wave worktree — admitted, and no item resolved.
+  CC_WCLAIM_GATE=off cc_worker_claim_admit hook "/tmp/wt/desk-w1-routing" write
+  [ "$(cc_worker_claim_item)" = "" ]
+  # (b) POSITIVE CONTROL on the same call, so (a) cannot be an admit for some unrelated reason: a
+  # real dispatch worktree DOES resolve its item. Gate pinned off — this pins the KEY DERIVATION,
+  # not the claim ledger, which needs a live backlog.
+  CC_WCLAIM_GATE=off cc_worker_claim_admit hook "/tmp/wt/wt-0123456789ab/src" write
+  [ "$(cc_worker_claim_item)" = "0123456789ab" ]
+}
