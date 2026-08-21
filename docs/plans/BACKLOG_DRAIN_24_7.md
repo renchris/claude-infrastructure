@@ -87,6 +87,78 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #85: `master-fire-gate` 26 open → 25 open / 2 blocked.
+  closed 1 / filed 0** (twenty-first consecutive recycle in `master-fire-gate`). Row `9362e80a999f`
+  closed: *"re-aim 0006 cold-compile admission at the Edit/Write ignition path … then ratify 0006"*,
+  filed 2026-08-10T07:29:14Z.
+  🚨 **THE FINDING: the row's own cited source prescribed the OPPOSITE of the row's remedy — and the
+  tool that agreed with closing it was inverted, so the right verdict was available only for the
+  wrong reason.** Two independent refutations, neither inherited:
+  **(i) the citation.** G4 of `docs/research/scaling-bottlenecks-2026-08-09/05-crash-closure.md` — the
+  row's own `source` — classifies the Bash-chokepoint-vs-fleet-edit gap as *"scope mismatch, **not a
+  defect in the artifact**"*, assigns the storm shape to G1 (compressor sentinel) / G5 (the generator
+  kill), and prescribes exactly ONE action: *"Record this in §S6.5 so a later reader does not mistake
+  registration for closure."* The row converted a documentation record into an engineering change on
+  the live permission surface (memory `work-item-citation-refutes-its-own-remedy`).
+  **(ii) the mechanism.** Re-aiming is INERT: `hooks/coldcompile-admit.sh` reads `.tool_input.command`
+  and returns at `[ -n "$CMD" ] || exit 0`, so an Edit/Write payload — which has no `command` — emits
+  **0 bytes**. Four arms, one instant, on a subject pinned identical (sha256 `48b866be5506ea8f…`)
+  across trunk, worktree and the deployed `~/.claude` copy: Edit 0 B · Write 0 B · **positive control**
+  a real `npx next dev` compound → **255 B** of `updatedInput` prefixing `cc-ignition-gate` ·
+  **negative control** `echo hello ; ls -l` → 0 B. So the remedy installs precisely what
+  `migrations/0006`'s own header warns about — *"a registered no-op reads GREEN"* — on a `settings.json`
+  surface that is C10 anyway. Registration census re-measured: matcher `Bash` in four config dirs,
+  absent from `~/.claude-next`, no Edit/Write matcher anywhere.
+  **Both halves have owners, which is why filings are zero**: the registration is `f30fa039f98f`
+  (blocked) and its ratification `b09f54e9e080` (blocked) — that IS the row's *"then ratify 0006"*
+  clause; the real fleet-edit remedy is G5, `d60fd1f9c375` + `0e4f795b3a20`, both open in
+  `master-product-repos`. **G4's prescribed record was genuinely missing** — origin/main's
+  `CONCURRENCY_PROGRAM.md` held **0** occurrences of *does not intersect · registration for closure ·
+  scope mismatch · children-of-children · Edit/Write* — so this land DRIVES it into §S6.5-DONE rather
+  than merely citing it.
+  🚨 **WRONG CAUSE #1 REJECTED — THE INVERTED INSTRUMENT THAT AGREED WITH ME.** `cc-premise check
+  9362e80a999f` returned **rc 3 · verdict=superseded · `REFUTED BY e3fb627bc57a ("superseded by") —
+  WHOLE ITEM`**. But `e3fb627bc57a` is `done` and its text reads *"Closing as superseded **by**
+  9362e80a999f"* — the PASSIVE. The corpse named THIS row as its live successor, and the tool read the
+  arrow backwards. Closing on that line would have been `wrong-cause-corroborated-by-true-metric` in
+  its purest form: right outcome, refuted reasoning.
+  **So the instrument was FIXED in the same land, not filed.** `bin/cc-premise`'s `RE_FILL` listed
+  `by` as closed-class filler, so a past participle reached the id and the passive was scored ACTIVE;
+  `RE_WHOLE` then made it a WHOLE-item kill — **exit 3, the BLOCKING verdict, aimed at exactly the row
+  that should be worked, carrying the instruction "never act on the refuted part"**. Measured over the
+  live store: **30 directed verb→id matches, 11 of them (37%) carry `by`, and all eleven are the
+  passive shape with every speaker `done`** — zero active refutations are spelled with `by`, so
+  dropping it costs no true positive. **Three OPEN rows were being refused this way** and all three
+  flip rc 3 → rc 0 with the fix: `9362e80a999f` (superseded→suspect), `087db20c3a24` (killed→killed but
+  ADVISORY, so the information survives and only the refusal goes), `34e024ba297a` (superseded→clear).
+  Red-proofed against the real pre-fix artifact (`git archive origin/main | tar -x`, `symlinks=0`,
+  control `bin/cc-premise` byte-identical to trunk): **PRE-FIX not ok** at the positive assertion,
+  **POST-FIX ok**. The new test pairs it with TWO discriminating controls — active `SUPERSEDES <id>`
+  must still refuse, and `RE_ID_PRED`'s genuine `<id> was SUPERSEDED by the new design` must still
+  refuse — so the assertion is not satisfiable by deleting the arm. This is the same class the file's
+  own `RE_SELF_DUP` comment calls *"the most dangerous bug in this file"*: it guarded the DUPLICATE
+  direction and left the agentive preposition open (memory `corrected-instrument-can-lie-again`,
+  `guard-proxy-fails-in-both-directions`).
+  🚨 **WRONG CAUSE #2 REJECTED — "the storm no longer reproduces."** §S6.5-DONE's acceptance run
+  measured peak `seg_pct` 0.00% and 3 node procs, which reads like the shape is gone. It is not
+  attributable: the plan's own caveat says the 372–736-proc horde **did not reproduce** because
+  residency was ~2 sessions, not 150 — the run never exercised the burst. That is a vanished
+  precondition (method item 13), so the close rests on the citation and the mechanism, which hold at
+  any residency.
+  **Gates, run this turn:** eleven suites green — `cc-premise.bats` `1..25` ok=25 notok=0 ·
+  `cc-premise-supersession.bats` `1..17` ok=17 · coverage 12 · evidence-age 22 · falsifier 12 ·
+  filing-day 13 · plan-open 12 · postland-red 20 · shard 17 · sibling-sha 7 · `cc-backlog-falsify` 26
+  — **183 ok / 0 not-ok, plan == ok in every one**. `ruff check bin/cc-premise` *All checks passed!* ·
+  `ast.parse` OK · bats-shellcheck-lint and bats-kill-guard-lint clean (1 suite each) ·
+  `bats-assert-liveness.py` silent, **and its silence positive-controlled** (a planted mid-test
+  `! false` made it exit 1 and name the line).
+  **NEW METHOD ITEM #85 EARNS — WHEN A TOOL AGREES WITH YOU, AUDIT ITS REASON, NOT JUST ITS VERDICT.**
+  `cc-premise` and this recycle reached the same conclusion about `9362e80a999f` by opposite routes,
+  and only one of them was sound. A verdict that matches your hypothesis is the *least* likely thing
+  you will re-derive — which is exactly why it must be. The cheap probe: read the tool's own quoted
+  MATCHED PHRASE (it printed `"superseded by"`), then find that phrase in the source text and check
+  who is the subject of the sentence.
+
 - **2026-08-21 — drain recycle #84: `master-fire-gate` 27 open → 26 open / 2 blocked.
   closed 1 / filed 0** (twentieth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row
   had been CURED THREE TIMES OVER and stayed open anyway, because **closure follows the CITED id, not
