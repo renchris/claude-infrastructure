@@ -87,6 +87,86 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #97: `master-fire-gate` 14 open → 13 open / 2 blocked.
+  closed 1 / filed 0** (thirty-third consecutive recycle in `master-fire-gate`). Row
+  `8c60170a2037` closed, filed 2026-08-07T10:21:25Z: *"3 live sessions share ONE item's worktree
+  (wt-77fb892c4db5) and only 2 of them have a claim record: a session can be SPAWNED with no claim
+  at all, so cc-backlog's three claim-side guards never run … NOT YET DIAGNOSED: which spawner
+  fired 344."* ONE commit, ONE file (`docs/plans/BACKLOG_DRAIN_24_7.md`). An **ADJUDICATION**
+  close. Tree pinned at `d08f4061b`.
+  🚨 **THE ROW'S PREMISE WAS "THE GUARD LIVES INSIDE A CALL THE SPAWNER NEVER MAKES" — AND THE CURE
+  WAS NOT TO MAKE THE SPAWNER CALL IT, BUT TO MOVE THE GUARD TO AN EVENT NO SESSION CAN SKIP.**
+  The row is correct as filed and was **overtaken 2 h 10 m 44 s later the same morning**. Both
+  sides in UTC: row `firstTs` **2026-08-07T10:21:25Z**; cure `8cbf77d0e`
+  **2026-08-07T12:32:09Z** (`TZ=UTC git log --date=format-local`), subject *"feat(worker-claim-gate):
+  the refusal that reached only a journal now stops the write"*.
+  1. **The premise was true for exactly two hours.** The row's mechanism is that the lease (guard
+     4), the done-latch (guard 3) and the worktree oracle (guard 5) *all live inside* `cc-backlog
+     claim`, so "a spawn path that never calls claim is unguarded **by construction**".
+     `scripts/lib/worker-claim-gate.sh` puts those same three oracles behind an event no session
+     can decline — **its own first tool call** — and derives the item **from the cwd**
+     (`wt-<12 lowercase hex>`, walking UP the path since 2026-08-10 so a worker that `cd`s into a
+     subdirectory is still caught). It therefore needs **no claim record and no cooperation from
+     the spawner at all**, which is precisely what the row said was impossible.
+  2. **It is in the ENFORCING store, not a journal — verified live.** All three consumers are
+     registered `PreToolUse` hooks in `~/.claude/settings.json`: `validate-bash` (matcher `Bash`),
+     `check-edit-boundary` (`Write|Edit|MultiEdit`), `agent-teams-enforce` (`Agent`). The gate's own
+     header names the prior shape it replaced — *"Zero consumers that ACT. The refusal reached a
+     journal and stopped there, which is the definition of advisory"* (memory
+     `conclusion-must-reach-the-enforcing-store`).
+  3. **It refuses the row's exact population.** Pane 344's cwd was `.worktrees/wt-77fb892c4db5`
+     → item `77fb892c4db5` (12 lowercase hex, passes the class test) → `cc-backlog reclaim` →
+     `verdict=noop-live-claimer` (…52114 reclaimed at 10:07:36Z and was LIVE) → `return 9`, REFUSE
+     at the write. The row's own harder case is covered too: pane 342 predates the first claim by
+     −33 s, so at *its* spawn the item carried no claim and the gate would admit — but **an admit
+     is cached for a TTL and a refusal is never cached**, so 342's next write after the claim
+     landed re-asks the ledger and is refused. That asymmetry is the gate's stated self-healing
+     property.
+  4. 🚨 **THE QUESTION THE ROW BLOCKED ON IS DISSOLVED, NOT ANSWERED.** Its `needs` string
+     (*"dead-worker stall after 3 dispatch attempt(s)"*) and its body both make the first move
+     *"which spawner fired 344 and whether it consulted the ledger"*. A cwd-keyed gate **does not
+     care which spawner fired it**, so the enumeration is no longer on the critical path. This is
+     why resting the close on the vanished panes would have made it unclosable: its census
+     `/tmp/s3-triage-census-2026-08-07.md` is 14 days gone and its three panes are long dead.
+  5. **Why it survived 14 days with two artifacts citing it.** The gate was built from a **sibling
+     incident measured the same morning** — its header opens on item `191d4d056c98`, *eight*
+     sessions in ONE worktree at 10:41–10:44Z — so nothing in the cure names `77fb892c4db5` or the
+     row. `grep -rl '8c60170a2037'` returns only `docs/plans/backlog-consolidation-2026-08-09/OUT-dispatch.md`
+     and `docs/research/blocked-tail-triage-2026-08-16.md`; **the fix is in neither**. A cure
+     minted from a different instance of the same class is invisible to every id-keyed search.
+  **NEGATIVE CONTROL, both directions on one commit** (method 27 — the parent must CARRY the prior
+  shape, not merely lack the new one; parent `ed0073c3a`, scratch tree via `git archive`):
+
+  ```text
+  needle                     cure 8cbf77d0e   parent ed0073c3a   verdict
+  cc_worker_claim_admit            4                0            consumer ADDED here
+  noop-live-claimer                5                2            ← prior shape present at parent
+  ```
+
+  The parent already *produced and journaled* the refusal (2 sites) and had nobody to act on it —
+  the exact "advisory" state the cure's subject line names.
+  **WRONG CAUSES REJECTED (3).** (a) *"It is a duplicate of `579bc8781b5b`"* — same class, opposite
+  halves. `579bc8781b5b` declares itself *"the complementary **producer**-side half"* of
+  `5deb4418a648`; this row is the consumer-side one, and only the consumer-side half is cured.
+  Closing the older as a duplicate would have retired the half that IS fixed and left the label on
+  the half that is not. The citation direction is also inverted from #95's shape: `579bc8781b5b`
+  appears in **no** artifact but this plan, while `8c60170a2037` is cited twice. (b) *"Identify the
+  spawner first"* — see 4; the subject is 14 days gone and the cure makes the question moot.
+  (c) *"The gate ADMITS via its no-claim arm, so it does not cure this"* — that is `579bc8781b5b`'s
+  own complaint and it is true only of an item carrying **no** claim; this row's item was held by a
+  LIVE claimer at the moment of the spawn, so it lands on the `noop-live-claimer` arm, not the
+  no-claim one.
+  **DECLARED RESIDUAL, deliberately NOT filed:** the producer-side gating of the four enumerable
+  spawn paths is real and is carried by the **still-open** `579bc8781b5b` (its stored falsifier
+  re-run this recycle: **rc=1, NO MATCH**, correctly open). Also confirmed and left alone:
+  `scripts/handoff-fire.sh`'s two `cc_worker_claim_admit` mentions (`:10029-10030`, entered
+  `967929471` 2026-08-21T00:05:30Z) are **prose in a comment**, so that row's *"handoff-fire.sh
+  itself NEVER claims"* premise still holds verbatim.
+  **NOT A FINDING, deliberately unfiled:** `8c60170a2037`'s `needs` string is where
+  `docs/research/blocked-tail-triage-2026-08-16.md:162` got the *"dead-worker stall"* title #96
+  flagged as a mis-key — the triage doc read the row's `needs`, not its title, so neither artifact
+  is wrong; they render different fields. A docs-integrity nit, not a `master-fire-gate` item.
+
 - **2026-08-21 — drain recycle #96: `master-fire-gate` 15 open → 14 open / 2 blocked.
   closed 1 / filed 0** (thirty-second consecutive recycle in `master-fire-gate`). Row
   `4558bb9b39fc` closed, filed 2026-08-11T21:03:19Z: *"cloud-return: two lands can run
