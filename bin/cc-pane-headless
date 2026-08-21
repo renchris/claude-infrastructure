@@ -64,7 +64,30 @@ die_usage() { printf 'cc-pane-headless: %s\n' "$1" >&2; exit "$RC_USAGE"; }
 # recycled pid "our agent", and after a reboot every recorded pid is fair game for reuse. This is
 # the direct defence of memory liveness-proxy-cannot-be-output-age — never infer aliveness from a
 # file's existence or an output's age; ask the subject's own kernel record.
-pstart_of() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+# DIALECT (backlog 7a00b5de1ec0): `ps -o lstart=` renders through LC_TIME *and* TZ, so ONE live pid
+# reads as several strings depending on who looks — measured on this box, same pid, same instant:
+# canonical `Fri Aug 21 15:45:00 2026` · ambient(en_CA) `Fri 21 Aug 08:45:00 2026` · LC_ALL=C at
+# local TZ `Fri Aug 21 08:45:00 2026`. A `pstart` recorded by a session and re-checked by a
+# launchd-started process (no LANG ⇒ C) then differs for an agent that never restarted, and is_live
+# reports a LIVE agent as dead. This file owns both ends of the meta `pstart` field (cc-wake-headless
+# defers liveness arbitration here), so the write is pinned canonical and the read below accepts the
+# dialects already on disk.
+pstart_of() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+# 0 iff <recorded> is a rendering of <pid>'s own start instant, in any dialect this fleet produces.
+pstart_matches() { # <recorded> <pid>
+  local want="${1:-}" pid="${2:-}" cur
+  want="$(printf '%s' "$want" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$want" ] || return 0
+  cur="$(pstart_of "$pid")"
+  [ -n "$cur" ] || return 0                        # unreadable instrument ⇒ not proof of death
+  [ "$cur" = "$want" ] && return 0
+  cur="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: reader-ambient
+  cur="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$cur" ] && [ "$cur" = "$want" ] && return 0             # migration: C at local TZ
+  return 1
+}
 
 meta_get() { # $1=dir $2=key
   [ -f "$1/meta" ] || return 1
@@ -72,7 +95,7 @@ meta_get() { # $1=dir $2=key
 }
 
 is_live() { # $1=dir  → 0 live · 1 dead
-  local pid rec now st
+  local pid rec st
   pid="$(meta_get "$1" pid)" || return 1
   [ -n "$pid" ] || return 1
   # PROCESS STATE FIRST, and deliberately NOT `kill -0`. `kill -0` SUCCEEDS on a ZOMBIE — an
@@ -84,12 +107,10 @@ is_live() { # $1=dir  → 0 live · 1 dead
   [ -n "$st" ] || return 1
   case "$st" in Z*) return 1 ;; esac
   rec="$(meta_get "$1" pstart)"
-  now="$(pstart_of "$pid")"
   # A recorded-but-unreadable start time is NOT proof of death, but it is also not proof of life;
-  # with the pid confirmed present we accept it rather than reap a live agent on a ps hiccup.
-  [ -n "$rec" ] || return 0
-  [ -n "$now" ] || return 0
-  [ "$rec" = "$now" ]
+  # with the pid confirmed present we accept it rather than reap a live agent on a ps hiccup. Both
+  # of those honour-cases now live inside pstart_matches, alongside the dialect fallbacks.
+  pstart_matches "$rec" "$pid"
 }
 
 pane_dir() { printf '%s/%s' "$HOME_DIR" "$1"; }

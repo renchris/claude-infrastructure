@@ -87,6 +87,154 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #105: stayed in `master-convergence-deadlock`. closed 1 / filed 1.**
+  ONE commit, NINE files (`bin/cc-backlog`, `bin/cc-reaper`, `bin/cc-dispatch`, `bin/cc-respawn`,
+  `bin/cc-pane-headless`, `bin/cc-deathwatch-kqueue`, `tests/lstart-dialect-bin.bats` (new),
+  `scripts/redproof-lstart-dialect.sh` (new)) plus this SSOT. Row **`7a00b5de1ec0`** — *cc-reaper
+  and cc-dispatch carry the same locale-skewed {pid,lstart} identity as C33, and cc-reaper's
+  misjudgement KILLS* — **CLOSED**, all remaining sites cured, red-proofed in both directions with
+  six per-site mutants. Fold at close: `master-convergence-deadlock` **52 open / 4 blocked**
+  (population: rows in THAT condition only; the whole store spans 62 conditions).
+
+  🚨 **THE GENERALISABLE FINDING — "PINNED" IS NOT ONE DIALECT, AND A LANDED FIX CAN STRAND ITS OWN
+  CONSUMER IN ANOTHER PROGRAM.** #104 established that a cross-process record has a dialect. The
+  sharper fact this turn: there are **FOUR** pin classes live in this tree, two of which both look
+  "fixed" to a grep for `LC_ALL=C`, and a census that counts them together is blind by construction
+  (my first one was, and it agreed with me):
+
+      FULL(UTC+C)          land-lock.sh:119 · land-inflight.sh:78 · cc-wait:81 · wait-contract-lint:137
+      HALF(C, local TZ)    postland-verify.sh:880          → writes `Fri Aug 21 07:50:09 2026`
+      HALF(UTC, ambient LC) cc-notify:338 · cc-sessions:255 · session-register.sh:255
+      BARE(ambient)        ~30 further sites, incl. every site this commit fixes
+
+  Measured on this box, ONE pid at ONE instant: canonical `Fri Aug 21 15:45:00 2026` · ambient
+  (en_CA) `Fri 21 Aug 08:45:00 2026` · C-at-local-TZ `Fri Aug 21 08:45:00 2026`. The live
+  `postland/run.lock.d/lstart` record on disk reads `Fri Aug 21 07:50:09 2026` — the THIRD dialect,
+  neither canonical nor any session's ambient, which is how the fourth class was found at all.
+
+  **The sharpest single defect was NOT the one the row predicted, and it is a consumer stranded by a
+  landed fix.** `84757849b` correctly made `scripts/land-lock.sh` write `lock.d/lstart` canonically.
+  `bin/cc-backlog:4729` reads that same file — and read it with a bare, untrimmed
+  `ps -o lstart=`. Writer canonical, reader ambient ⇒ a compare that misses *always* on any box that
+  is not UTC+C, not merely sometimes. Consequence: signal S2 — the AFFIRMATIVE "this item is
+  actively landing" — is silent over a real in-flight land, so a claim reads as unowned exactly
+  while a land holds its branch. **Generalise: when a fix pins a shared record's format, its
+  consumers in OTHER programs are part of the diff's blast radius; grep the record's readers, not
+  just the writer's own file.**
+
+  🚨 **THE RULE THAT MADE THIS SAFE TO DO ACROSS SIX FILES AT ONCE: fixing the READER is
+  blast-radius-free; changing a WRITE dialect is what breaks siblings.** So the write is pinned
+  canonical ONLY where one file owns both ends (cc-reaper's sweep lock, cc-dispatch's lock,
+  cc-pane-headless's meta `pstart`). Where the writer is a foreign program — cc-backlog reading
+  land-lock's file, cc-reaper reading `lead-crash-watchdog.sh`'s `.daemon`, cc-respawn and
+  cc-deathwatch-kqueue reading a caller's `--start` — ONLY the read was made dialect-tolerant. Each
+  matcher also preserves its own subject's documented fail direction rather than importing
+  land-inflight's: cc-reaper's sweep lock now HONOURS an unreadable `ps` (the row's own second ask —
+  the prior line broke the mutex on a `ps` hiccup), while `wd_daemon_live` keeps its documented
+  "unverifiable ⇒ not provably ours" bias unchanged.
+
+  **RED-PROOF, both directions, scratch trees at parent `4ef5b7288`** (`scripts/redproof-lstart-dialect.sh`,
+  four arms). Non-vacuous by method 29 — the parent carries the PRIOR SHAPE, printed: bare-`ps`
+  reader/writer present at all 6 sites (1 each), all 6 new helpers absent (0). **Behavioural
+  pre-probe on the parent's OWN predicates with a real live pid: `lock_holder_alive` → DEAD ·
+  `wd_daemon_live` → NOT-OURS · `lock_holder_live` → STALE · `verify-stopped` → RECYCLED ·
+  `is_live` → DEAD.** That is the harm itself, not a proxy: a live sweep holder judged dead (mutex
+  broken ⇒ two concurrent reapers), a tracked watchdog daemon classed UNTRACKED (⇒ printed as
+  `▶ kill`), a live dispatch holder classed stale (⇒ double-claim), a live session declared stopped
+  (⇒ respawned). PRE `1..16` ok=2 notok=14; POST 16/16, **sum=plan**, skip=0, BW01=0 both arms. Six
+  per-site mutants, each biting ONLY its own site (cc-reaper's bites 2 — it holds two distinct
+  sites); the mutator asserts `new != s`, so an absent control fails loud.
+
+  🚨 **TWO INSTRUMENTS WERE WRONG THIS TURN AND BOTH FLATTERED ME — neither was caught by reading,
+  only by running.** (1) The behavioural pre-probe first set the recorded value to the *reader's own*
+  ambient dialect, so the buggy parent matched correctly and the probe printed **"no bug" on all
+  five sites** — a probe that could not fail, which would have refuted the entire finding. The
+  discriminating pair is a C-locale (launchd) record read by a session; the same error was in the
+  suite, whose primary cases are now retargeted to `C_LOCAL` with the same-dialect case demoted to
+  an explicit control. (2) The per-site mutants were built from `git archive HEAD` — but this work
+  was UNCOMMITTED, so HEAD *was* the parent, and every "mutant" bit ~12 tests that were failing for
+  an unrelated reason (absent helpers). Both are the same class as #104's blind `ps -E`:
+  **positive-control an instrument that agrees with you.**
+
+  🚨 **A `[ "$status" -eq 1 ]` ASSERTION CANNOT DISTINGUISH A REAL REFUTATION FROM A MISSING
+  FUNCTION.** Five of this suite's cases were vacuously green on rc **127** (`command not found`)
+  because the awk extractor silently produced nothing for every multi-line matcher — its block-start
+  pattern required end-of-line after `{`, and this repo's house style puts a signature comment there.
+  **bats renders that as a WARNING (BW01), never a failure.** The cure is a positive control on the
+  instrument: `load_fn` now asserts `declare -F` for every requested function, and the red-proof
+  prints the BW01 count beside ok/notok in both arms — a non-zero BW01 is now a vacuity alarm, not
+  a footnote. Worth adopting fleet-wide in any suite asserting a non-zero rc.
+
+  🚨 **THE OFF-BOX RUNNER REFUSED THE FIRST SUITE, AND IT WAS RIGHT — for the SECOND recycle
+  running.** `scripts/offbox-run.sh suites tests/lstart-dialect-bin.bats` came back **red 15/1**
+  while the desk was 16/16. Cause, and it is #104's item 3 recurring in a fresh suite written by
+  someone who had just read that lesson: the hermetic runner is `env -i LC_ALL=C`, **so the
+  READER's "ambient" IS C there**, and the same-dialect control had no dialect left to match. A test
+  for a locale defect whose own reader-side locale is INHERITED has a meaning that is a property of
+  the box it ran on. Cured by the gate's option (a) — `setup()` now pins `LC_ALL=en_CA.UTF-8`
+  EXPLICITLY, so every case asserts the same thing anywhere; the value need not be a locale the box
+  has generated, because the stub keys on `LC_ALL != C`, which is the distinction the real `ps`
+  makes. Off-box after: **green 16/0**. **Standing lesson: run method 46 BEFORE the land, and expect
+  the locale axis specifically — this class has now failed off-box twice in a row.**
+
+  🚨 **THE LAND ALSO REFUSED (rc 6, `self-path-lint --selftest FAILED`) AND THAT WAS A REAL BUG IN
+  MY OWN NEW SCRIPT — the THIRD gate this turn to fire on this commit's own new files.** Attributed
+  before driving, per the "🔧 you did not cause" rule: parent `4ef5b7288` runs the selftest **32/32
+  green**, the working tree failed — so it was mine, not a pre-existing red. The message is
+  indirect and worth reading correctly: the *selftest* fails with *"the embedded allowlist is stale
+  — the real tree is not clean"*, because one of its 32 cases is **"GREEN on the real tree"**, and
+  `scripts/redproof-lstart-dialect.sh:15` had `REPO="$(cd "$(dirname "$0")/.." && pwd)"`. Through
+  the live layer that is wrong, not merely unlovely: `~/.claude/{scripts,hooks,bin}` are per-file
+  SYMLINKS into the checkout, so `dirname "$0"/..` resolves to `~/.claude` — no `tests/`, no
+  `docs/`, no `.git` — and the script would have red-proofed the WRONG TREE silently, only on the
+  live path (memory: `self-identity-guard-must-fully-resolve`). Cured with the canonical
+  `_resolve_self()` loop from `scripts/ship-land.sh` (**never `readlink -f`** — GNU-only, this box
+  is BSD). After: selftest 32/32, tree scan clean (372 files, 0 new). **A refused land is not a
+  spent land** — fix and refire.
+
+  🚨 **AND A FOURTH GATE FIRED ON THE SAME NEW FILE — `bats-kill-guard-lint`, rc 6 again.** The
+  suite's `teardown` read `[ -n "$LIVE_PID" ] && kill "$LIVE_PID" 2>/dev/null`. The `kill` is the
+  LAST command of the AND-list, so errexit is not exempt there, and a child already REAPED under
+  load returns 1 and aborts the body — a suite green on its own merits going red only under load,
+  and only sometimes (memory: `kill-on-reaped-child-fails-fast-path-hides-it`). Neither a trailing
+  `; true` (never runs) nor the `&&` shields it; the cure is `|| true` on the kill itself.
+
+  **TALLY FOR THE NEXT LINK: FOUR separate gates fired on THIS commit's own new files** — off-box
+  locale (`offbox-admission`), `self-path-lint`, `bats-kill-guard-lint`, and — in #104 — 
+  `bats-assert-liveness`. Every one was a REAL defect in new code, none was a false positive, and
+  none was reachable by reading the diff. **Budget for two land refusals on any commit that ADDS a
+  `.bats` suite plus a `scripts/` helper, and run the four directly BEFORE the first land attempt:
+  `offbox-run.sh suites <file>` · `self-path-lint.sh --selftest` · `bats-kill-guard-lint.sh <file>`
+  · `bats-assert-liveness.py <file>`.** A refused land is not a spent land.
+
+  **FILED (1) — `hooks/session-register.sh` + `bin/cc-sessions` + `bin/cc-notify` pin `TZ=UTC` but
+  NOT the locale.** That triple is currently self-consistent (all three HALF(UTC, ambient LC)), so it
+  is a latent defect, not a live one — but its own comment names the cost as *"a fleet-wide false
+  DEATH, strictly worse than the false life this field exists to stop"*, and a launchd reader (no
+  `LANG` ⇒ C) versus a session writer disagree on month/day ORDER at the same TZ. Deliberately NOT
+  folded into this commit: different files, different store, its own row. ⚠️ Its "no corpus to
+  migrate" premise (*0 of 11 live registry rows carry `lstart`*) is ~2 days old and is the first
+  thing to re-derive.
+
+  **NOT DRIVEN, named for the next link:** `scripts/cc-gc.sh:263-266` reads a BARE ambient `ls` and
+  parses it with `date -j -f '%a %b %e %T %Y'` — the **C-dialect** format, which cannot parse
+  `Fri 21 Aug …` at all, so `pstart` comes back EMPTY and the guard at :266 silently no-ops. That is
+  `scripts/lib/cc-common.sh:141`'s documented failure reproduced at a second site. Unmeasured for
+  harm; verify before filing (method 10).
+
+  **WRONG CAUSES REJECTED** (method 43): (a) *"the row's 13 sites are one homogeneous class"* — they
+  are not; the cc-backlog site is a stranded consumer of a canonical writer, a different and CERTAIN
+  defect, while the rest are symmetric bare/bare pairs that only break cross-locale. (b) *"pin every
+  site canonical, writes included"* — that breaks `.daemon` (written by lead-crash-watchdog) and
+  `lock.d/lstart` (written by land-lock) for every sibling reader; the fix would have committed the
+  bug it removes. (c) *"a grep for `LC_ALL=C` measures which sites are fixed"* — it counts
+  HALF(C, local TZ) as pinned and misses the TZ axis entirely. (d) *"the parent predicates are fine —
+  the pre-probe says no bug"* — the probe was testing a same-dialect pair (see above). (e) *"the
+  bulk census `ps -axo pid,lstart` should be pinned canonical too"* — that would stop today's
+  ambient-written records matching; it needs exact-first + a tolerant fallback for the unmatched,
+  which is what landed, and it keeps the single-`ps` design (fork cost bounded by the number of
+  UNEXPLAINED daemons, normally zero).
+
 - **2026-08-21 — drain recycle #104: stayed in `master-convergence-deadlock`. closed 1 / filed 0.**
   ONE commit, SIX files (`hooks/lib/land-inflight.sh`, `scripts/ship-land.sh`,
   `scripts/wait-contract-lint.sh`, `bin/cc-wait`, `tests/land-inflight.bats` (new),

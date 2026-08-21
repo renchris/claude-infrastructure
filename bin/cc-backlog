@@ -4714,6 +4714,44 @@ cloud_map() { # <state> <id> → verdict triple, rc 0; rc 1 = no action for this
 # landing", not a starved probe — and S2 is an AFFIRMATIVE signal, so its silence never decides
 # anything on its own. Only S1b's silence can be mistaken for evidence, which is why only S1b carries
 # the abstention.
+#
+# ── DIALECT: this reader consumes a record ANOTHER PROGRAM writes ────────────────────────────────
+# The record is `<lockdir>/lock.d/lstart`, and its writer is land-lock.sh's own `proc_lstart`, which
+# since 84757849b renders CANONICALLY — `TZ=UTC LC_ALL=C`. This reader used a BARE `ps -o lstart=`,
+# i.e. the reader's own ambient locale and TZ. Those are two different strings for one live pid, so
+# the compare did not sometimes miss, it missed ALWAYS on any box that is not UTC+C. Measured here,
+# same pid, same instant: canonical `Fri Aug 21 15:45:00 2026` · ambient(en_CA) `Fri 21 Aug
+# 08:45:00 2026` · LC_ALL=C at local TZ `Fri Aug 21 08:45:00 2026`.
+#
+# Consequence, and it is the reason this is not cosmetic: S2 is the AFFIRMATIVE "this item is
+# actively landing" signal. A guaranteed mismatch makes it silent over a real in-flight land, so the
+# item reads as unowned exactly while a land holds its branch.
+#
+# The fix is READ-SIDE ONLY, deliberately. land-lock.sh owns the write and other programs read that
+# same file; re-pinning the WRITE here would be a change to a shared record's format, which is how a
+# fix commits the bug it removes (memory: control-must-replay-the-real-artifact). Accepting every
+# dialect the fleet is MEASURED to produce cannot break any sibling.
+#
+# The fallbacks cannot manufacture a FALSE owner: every candidate re-renders the SAME pid at the
+# SAME moment, so no rendering of a different start instant can equal the record — the time-of-day
+# digits differ in every dialect. A fourth dialect matches nothing and falls through to rc 1, which
+# is exactly today's behaviour — degraded, never worse.
+llo_lstart_matches() { # <recorded> <pid> → 0 iff <recorded> is NOT evidence <pid> is a stranger.
+                       # Absent record / unreadable ps ⇒ 0 (honour): S2 is affirmative-only, and an
+                       # unreadable instrument must not convict a live holder.
+  local _r _c
+  _r="$(printf '%s' "${1:-}" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$_r" ] || return 0
+  _c="$(TZ=UTC LC_ALL=C ps -o lstart= -p "${2:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$_c" ] || return 0
+  [ "$_r" = "$_c" ] && return 0
+  _c="$(ps -o lstart= -p "${2:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$_c" ] && [ "$_r" = "$_c" ] && return 0          # migration: reader-ambient
+  _c="$(LC_ALL=C ps -o lstart= -p "${2:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$_c" ] && [ "$_r" = "$_c" ] && return 0          # migration: C at local TZ
+  return 1
+}
+
 land_lock_owner() {
   local id="$1" wt="$2"
   local ll="$wt/scripts/land-lock.sh"
@@ -4724,10 +4762,9 @@ land_lock_owner() {
   [ "$(cat "$lock/branch" 2>/dev/null)" = "wt-$id" ] || return 1
   local holder; holder="$(cat "$lock/pid" 2>/dev/null)"
   [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null || return 1
-  local rec_lstart cur_lstart
+  local rec_lstart
   rec_lstart="$(cat "$lock/lstart" 2>/dev/null || true)"
-  cur_lstart="$(ps -o lstart= -p "$holder" 2>/dev/null || true)"
-  [ -z "$rec_lstart" ] || [ "$rec_lstart" = "$cur_lstart" ] || return 1
+  llo_lstart_matches "$rec_lstart" "$holder" || return 1
   printf 'land lock held for wt-%s by live pid %s' "$id" "$holder"
 }
 
