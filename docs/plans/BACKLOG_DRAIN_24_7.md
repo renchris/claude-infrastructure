@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #94: `master-fire-gate` 17 open → 16 open / 2 blocked.
+  closed 1 / filed 0** (thirtieth consecutive recycle in `master-fire-gate`). Row
+  `6bfd83f03c3a` closed: *"a Bash-tool-layer rewrite silently substitutes the resolved cc-runner
+  path into QUOTED PROSE, corrupting records … Write/Edit content and 'git commit -F file' are
+  immune, so route prose through a file — trigger NOT yet isolated (the bare token alone does not
+  reproduce it)"*, filed **2026-08-08T09:42:10Z**. An ADJUDICATION close, no code change.
+
+  **VERDICT — the mechanism is OURS (`hooks/qos-rewrite.sh` transform (a)), the trigger IS
+  isolated, and the corrupting arm is CURED AND LIVE. The row stayed open for 13 days because its
+  own spelling of the wrapper — `cc-runner` — names nothing that has ever existed in this repo, so
+  every census keyed on it MISSED.**
+
+  **THE GENERALISABLE FINDING — A ROW CAN NAME ITS OWN SUBJECT UNDER A NAME THE REPO HAS NEVER
+  CARRIED, AND THEN EVERY CENSUS KEYED ON THAT NAME RETURNS A CLEAN, CONFIDENT ZERO THAT READS AS
+  "NOT OURS".** `git log --all --diff-filter=A -- '*cc-runner*'` is EMPTY — no file was ever added
+  under that name — and the token appears today in exactly ONE tracked file: this plan's own prose
+  about this row. The standing declination through #93 ("cc-runner appears in ZERO files under
+  `hooks/ scripts/ bin/` ⇒ genuinely PRODUCT-side, no cure lives here") is a **lookup miss read as
+  an absence** (memory `lookup-miss-is-not-absence`, `caller-census-keyed-on-path-misses-the-name`).
+  The subject ships as `cc-bats`. **Grep the MECHANISM — a PreToolUse hook that emits
+  `updatedInput` — never the rewritten token.** Two files in the tree emit `updatedInput`
+  (`hooks/qos-rewrite.sh`, `hooks/coldcompile-admit.sh`); one grep on that string reaches in one
+  step what four recycles of grepping the row's own noun could not.
+
+  **THE LIVE TWO-ARM A/B (both arms in ONE Bash-tool call, so they share one hook invocation):**
+
+  ```text
+  ARM1  echo "ARM1-bare: hello bats world"
+     →  ARM1-bare: hello bats world                                    NOT rewritten — CURED
+  ARM2  echo "ARM2-abs: hello /opt/homebrew/bin/bats world"
+     →  ARM2-abs: hello /Users/chrisren/.claude/bin/cc-bats world      REWRITTEN, INSIDE QUOTED PROSE
+  ```
+
+  ARM2 is the **non-vacuous positive control**: it proves the instrument is not blind and the
+  mechanism is firing *right now*, which is what refutes "product-side". ARM1 proves the arm that
+  corrupted records is gone. Transform (a) substitutes via `sed -E …%g` over the WHOLE command text
+  with only whitespace boundaries (`hooks/qos-rewrite.sh:189-190`), which is why it reaches inside
+  quoted literals and heredoc bodies.
+
+  **THE CURE IS LIVE, NOT MERELY LANDED.** `27772ede4` *"fix(qos-rewrite): the bare token is PATH's
+  job now, so stop rewriting it as data"*, **2026-08-16T02:13:57Z** (`TZ=UTC`), `merge-base
+  --is-ancestor … origin/main` = YES ⇒ **7 d 16 h 31 m AFTER filing**, later work, not
+  superseded-at-filing. Liveness measured at close: `~/.claude/hooks/qos-rewrite.sh` is a per-file
+  symlink into the checkout and carries the fix; `~/.claude/bin/bats` and `~/.claude/bin/cc-bats`
+  both resolve to `bin/cc-bats`, so the cure's precondition `[ "$_SHIM" -ef "$CC_BATS_TARGET" ]`
+  holds and `_PFX` drops to the absolute-only arm. ⚠️ **Declared residual, deliberately NOT
+  re-filed:** the cure is CONDITIONAL on that shim — remove it and `_PFX` reverts to the
+  bare-inclusive arm (`qos-rewrite.sh:179-182`, and `1d20ff5ee344`'s evidence).
+
+  🚨 **WHY THE ROW'S OWN REPRO FAILED — AND WHY THAT IS A REUSABLE TRAP.** The row's one open
+  clause was *"the bare token alone does not reproduce it"*. Sibling row `1d20ff5ee344` (status
+  `done`) already paid for the answer: *"the first reproduction probe was VACUOUS and said the
+  opposite — its command text contained the string cc-bats, which trips this hook's own idempotency
+  guard, so the probe disabled the mechanism it was testing."* That guard is
+  `hooks/qos-rewrite.sh:133-135` — `case "$CMD" in *cc-bats*|*'taskpolicy -c'*|*cc-cpubound*) exit
+  0`. **A probe that NAMES the wrapper turns the hook off.** Generalised: when the subject is a
+  rewriter with an idempotency guard, mentioning its output in the probe is self-anaesthesia — the
+  probe must be written in the *pre-image* vocabulary only.
+
+  **WRONG CAUSES REJECTED** (method item 24):
+  1. *"The token is nowhere under `hooks/ scripts/ bin/` ⇒ product-side"* — the standing
+     declination. REJECTED by ARM2, which shows our own hook rewriting quoted prose live.
+  2. *"The two rows are different mechanisms, because `1d20ff5ee344` says the symptom 'appeared
+     mid-day 2026-08-10' while this row was filed 2026-08-08"* — the real two-day tension, and the
+     reading that keeps this row open. REJECTED on the **birth date**: transform (a) has existed
+     since `8bc12dae8` **2026-07-30T07:09:48Z**, 9 days before THIS row and 11 before the other's
+     claimed appearance. **"Appeared" is a FIRST-NOTICE date, not a birth date.**
+  3. *"The cured row is the authoritative one, so this is a lesser duplicate"* — REJECTED as to
+     causal quality, and this is the part worth keeping. `1d20ff5ee344`'s title blames the **zsh rc
+     chain** (`alias -g`/`preexec`) — the **wrong layer**. THIS row named it right on day one: *"a
+     Bash-tool-layer rewrite"*. The better diagnosis sat open for 13 days while the worse one was
+     cured, because closure follows the CITED id. Nothing to fix; recorded so the ranking is not
+     repeated.
+
+  **The row's own prescribed workaround is now doubly confirmed.** *"Route prose through a file"* is
+  correct by construction — the hook reads `.tool_input.command` (`:112`) and exits 0 when empty
+  (`:113`), so Write/Edit content is structurally unreachable — and it has been standing drain
+  discipline since #80. This close's own 6,583-byte evidence string went in via
+  `--evidence "$(cat file)"` and came back **byte-identical** on the `jq` read-back diff.
+
+  Gates: docs-only diff ⇒ tsc/lint/test/build **n/a** (not skipped, not partial). The gate on an
+  adjudication close is the land-verify negative control at the parent sha plus that read-back diff.
+
 - **2026-08-21 — drain recycle #93: `master-fire-gate` 18 open → 17 open / 2 blocked.
   closed 1 / filed 0** (twenty-ninth consecutive recycle in `master-fire-gate`). Row
   `9260be0cc89c` closed: *"pre_trust's stall premise is UNPROVEN on CC 2.1.220: 17 of 18 worktree
