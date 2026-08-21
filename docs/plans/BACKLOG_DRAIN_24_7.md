@@ -87,6 +87,79 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #76: `master-fire-gate` 35 open → 34 open / 2 blocked.
+  closed 1 / filed 0 (fifth consecutive net-negative recycle; twelfth consecutive in
+  `master-fire-gate`). 🚨 THE FINDING: a correction row OUTLIVED the row it corrects, and the
+  tool that cites it as its flagship rationale now reads, on today's facts, as an argument for
+  the exact change the case forbids.**
+
+  **Effort choice.** #75 left `master-fire-gate` warm at 35 open. Row `bbad96d163ab` — a
+  CORRECTION row whose entire content is *"`23eccae755a9`'s claim '2.1.220 IS 3.4x worse per
+  session' is FALSE — a time-confounded comparison"*.
+
+  **THE SHAPE — #75's family, run backwards.** #73 = state destroyed UPSTREAM of a gate that
+  knew how to use it · #74 = state destroyed DOWNSTREAM at its only consumer · #75 = state
+  correct in a sibling document that never reached the authoritative one · **#76 = state that
+  DID reach the authoritative store, then decayed there because it was written in the present
+  tense about a MUTABLE row.** Same law as memory `resident-policy-must-not-restate-perishable-facts`
+  and `control-calibrated-to-implementation-decays`.
+
+  **What was actually true.** The correction is landed and live in the canonical doc
+  (`docs/research/forced-relogin-rootcause-2026-08-02.md` lines 61 and 345-365, including the
+  controlled table 49 sess/9 err = 0.184 vs 119/15 = 0.126, ratio 0.69× — 2.1.220 slightly
+  *better*). The row it corrects, `23eccae755a9`, reached done 2026-08-08T03:37Z; its trigger —
+  which the correction's era called unresolved — WAS resolved by `7abb4b8fcbce` (config-mirror
+  race symlinking a transient `.oauth_refresh.lock` into all four account dirs, fix `1677218f`,
+  on trunk, confirmed by effect). UPDATE 5 independently exonerates the version axis a second
+  way: the 35 class-A errors straddle 2.1.219×20 and 2.1.220×15. So the correction's conclusion
+  is corroborated by a later, stronger analysis — not inherited.
+
+  **THE DECAYED ARTIFACT, and why it is the harmful direction.** `bin/cc-premise`'s module
+  docstring argues the tool's load-bearing design decision — *advise, almost never refuse* —
+  from this one case, in the present tense: the correction refutes one sub-claim *"while that
+  item's MAIN work … is entirely live"*, so refusing would strand it. A maintainer checking the
+  flagship example today finds the target **closed** and the corrector **still open**, which
+  reads as *"the correction superseded it after all"* — evidence FOR making `cc-premise` refuse,
+  the one change the case forbids. The outcome in fact CONFIRMS the design: the live work was
+  discharged by exactly the follow-on investigation a `superseded` refusal would have blocked.
+  Fixed by past-tensing the paragraph, recording the outcome, and keying the invariant on the
+  guard that holds it instead of on a mutable row state (`811f1b1c5`).
+
+  **A CONTROL ON THE REMEDY, mutation-verified.** The harmful remedy is "flip the correction
+  branch to refuse". Flipping `bin/cc-premise:2268` to `verdict = "superseded"` reds
+  `tests/cc-premise.bats` *"a CORRECTION of one sub-claim ADVISES but never blocks"* and **only**
+  that test — `1..24`, ok 23, not ok 1, the failure being that case; reverted, `git diff --stat`
+  empty. So the guard was already there and is live, which is why **no new test was added**:
+  writing one would have duplicated a non-vacuous guard. Baseline and post-edit both `1..24`
+  ok=24 notok=0; `ruff` clean; AST parse OK.
+
+  **WHY NO NEW `cc-premise` ARM — the census refused the build.** `cc-premise` models refutation
+  in one direction only ("is this row refuted BY a sibling?") and has no arm for the dual ("is
+  this row's TARGET gone, so the correction has no consumer?") — which is why it returned
+  `verdict=clear` on `bbad96d163ab` throughout. Tempting to build. The census says no: **24
+  correction-shaped rows exist store-wide (titles opening CORRECTION/DISPROOF/UPDATE + a named
+  12-hex id), 21 are done, and of the 3 open, `bbad96d163ab` is the ONLY one whose target is
+  closed** — the other two (`5ba77ac42d81`, `9a522a8fa6fb`) have live targets and are correctly
+  open. A class of population 1, against a fleet norm of corrections being retired with their
+  target. Building a mechanical arm for n=1 is the `cost-gate-must-be-strictly-weaker` hazard;
+  the wider "open row references a done row" rule was measured first and is far too wide — most
+  such references are ordinary CONTEXT ("SUPERSEDES the sweep …"), and a blanket arm would
+  falsely retire real work.
+
+  **Closing was proved SAFE before it was done.** `bin/cc-premise` builds its refutation index
+  from the append-only ledger, never the folded status (`:499-524` — deliberately, so a later
+  reopen cannot retroactively un-supersede work on trunk), so retiring the corrector cannot
+  suppress its refutation of `23eccae755a9`. Verified after the close, not assumed.
+
+  **Checked and NOT stale — the negative finding.** `bin/cc-eligible:204,209` cites the same row,
+  but as the example TEXT motivating a `\b2\.1\.\d{3}\b` on-box-only regex. That holds whatever
+  the row's status, and `tests/cc-eligible.bats:274` pins the text. Left alone.
+
+  **Method note for the next link.** `cc-premise check` on a row prints the full *"verify BEFORE
+  acting"* work contract even when that row is `done` (observed on `23eccae755a9`). Harmless at
+  the claim-time chokepoint it is called from — a done row is unclaimable — so it was NOT filed;
+  named here so the next reader does not mistake it for a finding.
+
 - **2026-08-20 — drain recycle #75: `master-fire-gate` 36 open → 35 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: the item's own quoted evidence was the defect. It read a
   doc claim as ground truth and the filesystem as the bug, so it filed the ABSENT FILE and
