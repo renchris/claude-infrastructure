@@ -258,6 +258,25 @@ EOF')" = defer ]
   [ "$(decide "$HOOK" 'git commit -m x && npm publish')" = defer ]
 }
 
+@test "the hook works when invoked THROUGH A SYMLINK, as the live layer invokes it" {
+  # THE DEFECT THIS PINS, measured live on 2026-08-21 after the first land. ~/.claude is a
+  # PER-FILE symlink layer, so the wired path is a link to this file while the sibling
+  # decision core — a NEWLY ADDED file — has no link of its own. The shim derived the core
+  # from `${BASH_SOURCE[0]%/*}`, which is the directory it was INVOKED through, so it
+  # looked in ~/.claude/hooks/lib/, found nothing, and deferred EVERY command.
+  #
+  # That failure is silent by construction: a hook that defers everything is
+  # indistinguishable from a hook with nothing to say, so no alarm could ever have fired.
+  # It is the LIVE_ADDS class — an edited file rides its existing link and merely runs an
+  # older version, but an ADDED file is absent, and every consumer guard on it skips.
+  local linkdir="$BATS_TEST_TMPDIR/layer/hooks"
+  mkdir -p "$linkdir"
+  ln -s "$HOOK" "$linkdir/smart-bash-allowlist.sh"
+  # deliberately NO lib/ link beside it — that is precisely the live layer's shape
+  [ ! -e "$linkdir/lib/smart-bash-allowlist.py" ]
+  [ "$(decide "$linkdir/smart-bash-allowlist.sh" 'git commit -m x')" = allow ]
+}
+
 @test "kill switch still disarms every rule" {
   SMART_ALLOWLIST_DISABLED=1 run bash -c "printf '%s' '{\"tool_input\":{\"command\":\"git commit -m x\"}}' | bash '$HOOK'"
   [ -z "$output" ]
