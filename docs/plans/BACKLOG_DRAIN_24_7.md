@@ -87,6 +87,70 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #77: `master-fire-gate` 34 open → 33 open / 2 blocked.
+  closed 1 / filed 0 (sixth consecutive net-negative recycle; thirteenth consecutive in
+  `master-fire-gate`). 🚨 THE FINDING: a row's own stored falsifier can be STRUCTURALLY
+  UNFIREABLE, because it pins the DEFECT's spelling and the correct remedy PRESERVES that
+  spelling on purpose. The row stayed open nine days under a tool built to retire it.**
+
+  **Effort choice.** #76 left `master-fire-gate` warm at 34 open. Row `55fd6ee27c33` — *"The
+  Agent-tool spawn gate evaluates memory ONLY … so the gate is structurally incapable of
+  refusing anything"*, filed 2026-08-11 by the jcode due-diligence wave, with a three-part
+  fix shape.
+
+  **THE SHAPE — the family's instrument face.** #73 = state destroyed UPSTREAM of a gate that
+  knew how to use it · #74 = state destroyed DOWNSTREAM at its only consumer · #75 = state
+  correct in a sibling document that never reached the authoritative one · #76 = state that
+  reached the authoritative store and decayed there in the present tense · **#77 = the state
+  was correct, landed and authoritative, and the INSTRUMENT pointed at it could not read it.**
+  Same law as memory `control-calibrated-to-implementation-decays` and
+  `falsifier-polarity-inverted-under-no-run`, arriving from a new side: not a falsifier with the
+  wrong polarity, but one whose *pinned token survives its own cure*.
+
+  **All three parts were discharged at origin/main by `10e321519`** (wave D, 2026-08-13,
+  `--is-ancestor origin/main` rc=0 — the trunk commit for row `1c45598a91be`, itself `done`).
+  The headline is false by direct read: the cited call site disables NONE of the other three
+  terms (`grep -cF` of `CC_ADMIT_HEADROOM_TERM=off` / `_SEGMENT_TERM=off` / `_ACTIVE_TERM=off`
+  in `hooks/agent-teams-enforce.sh` each read **0**), so headroom + segments + active are all
+  live there and `active` refuses at ceiling 8. Fix (a) *"key on ACTIVE session count"* — done;
+  the hook's own comment calls `active` *"the honest replacement for what the load term was
+  reaching for"*. Fix (b) *process-class cardinality* — done; a `ps`-derived live SESSION-TREE
+  census charged at this same call site against a ceiling of 54. Fix (c) *"correct the headroom
+  accounting"* — **adjudicated, deliberately NOT by correcting the arithmetic**:
+  `capacity-admit.sh:203-208` restates this row's identical measurement in the repo's own voice
+  (counts dirty-anonymous inactive pages as free; 0 of 127 refusals; at the panic read 29.79 GB
+  and still ADMIT while segments read 100%) and answers it with the compressor-segment term,
+  keeping headroom on purpose because *"segments alone would be blind to plain residency
+  exhaustion"*. **Symptom and remedy rot independently** (memory
+  `work-item-remedy-can-become-forbidden`) — here the symptom is discharged while the literal
+  prescribed remedy was consciously declined, and only reading the source says so.
+
+  **WHY IT SURVIVED NINE DAYS — two independent blindnesses in the SAME adjudicator.**
+  `cc-premise check 55fd6ee27c33` returned `verdict=clear`. (1) The stored falsifier is
+  `grep -q cc_capacity_admit … && ! grep -q "CC_ADMIT_LOAD_TERM=off" …` — it retracts the row
+  only if that token DISAPPEARS, and the correct fix keeps it (*"the load term stays off
+  here"*), so the probe can fire only when the repo does the one thing its own design forbids.
+  Run verbatim this session: **NOT REFUTED**. (2) The supersession arm never named
+  `1c45598a91be` even though wave D touched `hooks/agent-teams-enforce.sh`, a file the row
+  cites — because that row's recorded evidence sha `668b1f7fc` is **not an ancestor** of
+  origin/main (`--is-ancestor` rc=1, a pre-land cloud-worker object) while `10e321519` is
+  (rc=0). Memory `cited-sha-may-not-survive-the-land`, with a consequence beyond its own row:
+  it blinds the arm that exists to say *"your fix already landed"*.
+
+  **THE CENSUS REFUSED THE BUILD, and that is the finding's other half.** Falsifiers are a
+  stored per-row field: **258 rows carry one, 53 of them open, 9 of those refute-on-
+  disappearance (`! grep`)**. Very tempting to add a lint. But 8 of the 9 pin the **FIX's**
+  marker — `! grep -q "must never be claimed by rule 5"`, `! grep -q "NO PATH FILTER,
+  deliberately"`, `! grep -q "FIRE_ENGAGE_TIMEOUT:-120"` — which is the CORRECT shape: they fire
+  when the remedy lands. Only `55fd6ee27c33` pinned the defect's own token. **Population on the
+  discriminating axis = 1**, so nothing was built (#76's rule, applied again). The wider grep
+  "falsifier contains `! grep`" was measured first and would have falsely convicted eight
+  correctly-shaped probes — `cost-gate-must-be-strictly-weaker`.
+
+  **Blast radius checked and left alone.** `git grep -ln 55fd6ee27c33 origin/main` = **no
+  citations anywhere in the tree**, so the close strands no prose. The eight sibling
+  refute-on-disappearance falsifiers were read and deliberately NOT touched.
+
 - **2026-08-20 — drain recycle #76: `master-fire-gate` 35 open → 34 open / 2 blocked.
   closed 1 / filed 0 (fifth consecutive net-negative recycle; twelfth consecutive in
   `master-fire-gate`). 🚨 THE FINDING: a correction row OUTLIVED the row it corrects, and the
