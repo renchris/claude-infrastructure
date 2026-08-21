@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-21 | `b5532002e6c5` | `reso-management-app` | label-foreign — **one of a SIX-item batch**, and the first row carrying a second, independent ineligibility (§ The seventh) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,150 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# The seventh — the class stopped arriving one at a time, and this row is doubly unworkable
+
+**2026-08-21, 20:35:24Z.** Backlog item `b5532002e6c5`, project **`reso-management-app`**, title
+*"floor-plan: `useDetailPanel.ts:79` unconditional `useSSRBridge` paints the DEFAULT event's
+reservations on the SELECTED event's canvas until first pull"*, fired into a cloud session whose one
+attached repository is `renchris/claude-infrastructure`. The brief names
+`/Users/chrisren/Development/reso-management-app`; `/Users` and `/root/Development` are both absent
+and `/home/user` holds `claude-infrastructure` only. Unworkable on arrival — the seventh recorded
+dispatch of this class, four days after the sixth.
+
+The cause is not re-derived. Re-measured on trunk this session (`HEAD..origin/main` = **0**):
+`bin/cc-offload:84` still reads `REPO="${CC_OFFLOAD_REPO:-$ROOT}"`, and
+`grep -rniE 'foreign.repo|subject.foreign|attached.repo' bin/ scripts/ hooks/` still returns nothing
+but one unrelated comment in `hooks/worktree-setup.sh`. **The conclusion has still not reached the
+enforcing store**, five days after it was located.
+
+## 1 · The unit of cost is no longer one item — it is an audit's whole output
+
+Every row above is a single item finding a single victim, so the cost of leaving the 08-16 decision
+open has read as roughly one slot every day or two. That is now a floor for a different reason than
+§2 of `venue-foreign-master-redispatch-2026-08-17.md` gives.
+
+`docs/plans/BACKLOG_DRAIN_24_7.md:236-237`, written earlier today by the drain recycle that watched
+the store move, attributes its `+6` items exactly:
+
+> all six carry `source=audit-2026-08-21-100p`, all six are reso `floor-plan` product-repo findings
+> filed 20:21:50–20:22:07Z, all six landed `ungrouped`
+
+Six items of one shape, one project and one source, filed inside **17 seconds**. This item is a reso
+`floor-plan` product-repo finding fired **13 minutes later**. Its id is not listed in that entry, so
+membership is a strong inference and not a proof — but the shape does not need the inference to
+matter: **a single audit pass can put six label-foreign items into the wave at once**, and nothing
+between the audit and the fire looks at the pair. The exposure is per-audit, not per-day.
+
+That changes only the *cost* side of the open decision, and deliberately not the decision: both §3
+options still turn on facts unverifiable from any VM.
+
+## 2 · This row is ineligible TWICE, and the second reason survives fixing the first
+
+Every prior row is unworkable for exactly one reason — the subject is in a tree the VM does not hold.
+Attach `reso-management-app` (option (b)) and four of them become workable.
+
+Not this one. Its subject is a **render defect**: two hooks disagree about which event's data reaches
+the panel, and the visible symptom is what the floor-plan canvas paints before the first pull. That
+is `bin/cc-eligible`'s `VISUAL` class verbatim — *"a worker 'verifies' a render it never saw"* — and
+a cloud VM has no dev server and no browser whichever repo is attached. So the row needs **both**
+arms: the venue pair AND `VISUAL`. It reads `eligible · classes []` today:
+
+```
+$ cc-eligible why b5532002e6c5          # fixtured with the item's own text
+  verdict : eligible
+  refused : (nothing fired)
+```
+
+## 3 · No rendering spelling survives measurement — the same "no" the path form got, on the visual form
+
+`VISUAL` carries `render · pixel · visual · screenshot · css · browser · localhost · dev server ·
+banner · cdp · UI · click`. This title spells **none** of them; it says *paints*, *canvas*,
+*floor-plan*. The obvious move is to add those three. Measured first, per this file's own rule and
+the `wt-slug` precedent — 518 files, `docs/**/*.md`:
+
+| candidate | hits | verdict |
+|---|---|---|
+| `\bpaint(?:s\|ed\|ing)?\b` | **103** | **REJECT** — the corpus's load-bearing uses are metaphorical: *"structurally identical to the harness's own `idleReason`, painted 'finished' at every Stop"* (`CLOUD_OBSERVABILITY.md`, `CLOUD_BACKLOG_PIPELINE.md`). A `paint` arm refuses the return-path work this lane most needs. |
+| `\bcanvas(?:es)?\b` | **46** | **REJECT** — mixed. Genuine rendering in the banner/media docs, but also *"peers are always off-canvas"* (`BANNER_NARRATIVE_SPEC.md`) and *"slides it a whole canvas away"* (`BACKLOG_DRAIN_24_7.md`), both about a diagram of the system rather than a screen. |
+| `\bfloor[- ]?plans?\b` | **3** | clean — all three are reso floor-plan product findings — **but it is a product FEATURE name, not a rendering verb.** It would catch this batch and nothing else, i.e. it enumerates one item's spelling, which is the failure `:25-37` names by name. |
+
+🚨 **So the answer is the same one § "Measured from inside this session" reached for the absolute-path
+form, reached independently on the visual form: it was not a spelling.** Recorded so the next
+misrouted worker does not re-run the measurement — and because the evidence and the remedy sit on
+opposite sides of `OFFBOX_LANE`. The worker holding a concrete missed spelling is, by construction,
+the one session forbidden to write it into `bin/cc-eligible`. Every spelling found this way needs a
+local hop, which is a property of the feedback loop the file's header describes, not a defect in it.
+
+## 4 · The "absent store" tell is SELF-ERASING — the trap is worse than recorded
+
+The rails fail quietly here exactly as the three sections above record, re-measured not inherited:
+
+```
+$ cc-backlog block b5532002e6c5 --needs "…"
+cc-backlog block: unknown id b5532002e6c5                              # rc 0
+
+$ cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset     # rc 0
+```
+
+Neither is on `PATH`; invoked as the brief spells them they exit `127`.
+
+**New, and it undercuts the tell every prior section leans on.** Those sections say
+`~/.claude/autonomy/` *does not exist*, which is what a careful worker would check to tell "the
+ledger has no such id" from "there is no ledger". It did not exist here either — until the probe
+above. `bin/cc-backlog:920` runs `mkdir -p "$(dirname "$BACKLOG")"` before it reads, so one refused
+verb leaves behind:
+
+```
+/root/.claude/autonomy/backlog.jsonl        0 bytes, mtime = the probe        (+ pages/, push-records/)
+```
+
+A present, well-formed, empty store. Any check made *after* the first probe — by a later step of the
+same session, or by a second worker in the same VM shape — sees a store that exists and an
+`unknown id` at rc 0, and those two readings are indistinguishable from "the item genuinely is not in
+the ledger". **Probe the store's existence BEFORE running any `cc-backlog` verb, or not at all.**
+
+## 5 · Operator actions
+
+The §3 decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` — **(a) fail closed at the
+fire vs (b) route by `item.project`** — is unchanged and now carries a seventh datapoint, the first
+batch-shaped one, and the first row that (a) or (b) alone would not make workable (§2). Nothing new
+is proposed.
+
+Two ledger dispositions, both needing the Mac. This item:
+
+```
+cc-backlog block b5532002e6c5 --needs "re-dispatch to a session that can reach reso-management-app AND has a browser + dev server — this row is a render defect, so it is cloud-ineligible on TWO independent grounds and stays so even if the attached repo is fixed; premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § The seventh)"
+```
+
+And its five siblings, before the wave reaches them — they share the source, so they are one query:
+
+```
+cc-backlog list --all --json | jq -r '.[]|select(.source=="audit-2026-08-21-100p")|.id'
+```
+
+`block`, not `reopen`: the item is blocked on **where it was sent**, not on information or a
+judgment call, and parking it out of the dispatch wave is what stops an eighth fire into the same VM
+shape before the guard exists.
+
+## 6 · Not fixed here, deliberately — and the item NOT adjudicated
+
+The three refusals the 08-16 / 08-17 sessions recorded hold verbatim and are not re-argued.
+Re-measured here rather than inherited: `bats`, `shellcheck` and `shfmt` are all **absent** on this
+host, so the repo's gate cannot be run on a shell change; `bin/cc-eligible`'s `OFFBOX_LANE` list
+carries `venue` precisely so that an item asking to edit that file is refused off-box, and this
+session is the VM that list is about; and a 50-commit shallow clone cannot adjudicate its own
+admission. §3's measurement is offered *as measurement*, for a local implementer to act on — not as
+a diff.
+
+**No claim is made about `useDetailPanel.ts`.** Neither the file, the `useSSRBridge` call at `:79`,
+nor the `selectedEventID === defaultEventID` guard the brief cites at `:75-77` was readable from this
+session. The brief's own mandated first step — *read what this item cites on TRUNK, because a
+post-land RED reproduces faithfully in a stale tree* (`cc-backlog 6110fc45141e`) — is unrunnable here
+for the strongest possible reason: there is no tree, stale or otherwise. Whether the bug is real,
+already fixed, or misread is **open**, and diagnosing it from the brief's prose is the anti-goal
+`bin/cc-venue` §5 names — *"a wrongly-routed item improvises a plausible answer against history it
+cannot read, and reports success."*
