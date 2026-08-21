@@ -70,6 +70,11 @@ extract_leg() {   # the real leg: from its own first line to the `fi` that close
 # mk_stub <path> <rc-for---selftest> <rc-for-the-scan> <env-log>
 mk_stub() {
   { printf '#!/bin/bash\n'
+    # --print-scope FIRST, and it must not touch the env log: lint_own_scope calls it AHEAD of the
+    # selftest arm, so a stub that logged here would break case 23's short-circuit assertion by
+    # writing the log before the selftest gate ever ran. Two lines, so the scope is plainly non-empty
+    # (an empty --print-scope is lint_own_scope's rc-2 NON-VERDICT path, a different case entirely).
+    printf '%s\n' 'if [ "${1:-}" = "--print-scope" ]; then printf "%s\n" "scripts/*" "install.sh"; exit 0; fi'
     printf 'if [ "${1:-}" = "--selftest" ]; then exit %s; fi\n' "$2"
     printf 'printf "OWN=[%%s]\\n" "${CC_PERMGATE_OWN-<UNSET>}" >> %s\n' "$4"
     printf 'exit %s\n' "$3"
@@ -110,6 +115,18 @@ run_leg() {
     # 2>/dev/null below — so the stub would never run at all and all four cases would report
     # GATE_RED=0 rc=0, a uniform false pass of exactly the shape the header above warns about.
     sed -n '/^own_run() {/,/^}/p' "$REPO/scripts/ship-land.sh"
+    # lint_own_scope is EXTRACTED for the same reason own_run is, and its absence is what made cases
+    # 22/23/24 red on pristine trunk from 2026-08-21 (backlog 9c125b91fbe0): the leg grew a call to
+    # it, this list did not follow, and under `set -u` with no `-e` the command-not-found returned
+    # 127 into the `|| { arm_nonverdict …; return 1; }` — so the leg returned 1 with GATE_RED still
+    # 0 and the stub never ran at all. That is the THIRD instance of this one shape here; the two
+    # earlier ones are recorded in the own_run and gate_red comments directly above and below.
+    sed -n '/^lint_own_scope() {/,/^}/p' "$REPO/scripts/ship-land.sh"
+    # arm_nonverdict is STUBBED rather than extracted: the real one only narrates and sets
+    # GATE_KILLED, which this harness does not model, but it must EXIST — an undefined one is the
+    # very command-not-found being cured, and it must be OBSERVABLE, because a leg that reached the
+    # non-verdict path has not blocked and has not passed either.
+    printf '%s\n' 'GATE_KILLED=0' 'arm_nonverdict() { GATE_KILLED=1; echo "ARM_NONVERDICT: $*" >&2; }'
     # STUB gate_red — without it cases 22/23 could never pass. The leg does not assign GATE_RED
     # directly; it calls ship-land's gate_red helper (ship-land.sh:223, used by all 27 ratchet
     # arms). Unstubbed that is a command-not-found, swallowed by the 2>/dev/null on the harness
@@ -124,7 +141,21 @@ run_leg() {
     printf '%s\n' '  return 0' '}' 'gate; rc=$?'
     printf '%s\n' 'printf "GATE_RED=%s rc=%s\n" "$GATE_RED" "$rc"'
   } > "$h"
-  bash "$h" 2>/dev/null
+  # THE 2>/dev/null ABOVE IS WHY THIS KEPT RECURRING, so the stderr is captured and screened rather
+  # than discarded. It still may not reach stdout — these cases compare $out against an exact string
+  # — but a missing helper now names itself instead of arriving as an unexplained `rc=1`, which cost
+  # this suite three red cases on trunk and a full drain recycle to re-diagnose. The screen is the
+  # CLASS, not a list of helper names: any future call the leg grows is caught the same way.
+  local err="$BATS_TEST_TMPDIR/harness.err"
+  bash "$h" 2>"$err"
+  if [ -s "$err" ] && grep -q 'command not found' "$err"; then
+    {
+      echo "HARNESS INCOMPLETE — the extracted leg calls a ship-land.sh helper that this harness"
+      echo "neither extracts nor stubs, so the leg aborted before reaching the stub:"
+      sed 's/^/    /' "$err"
+      echo "  Fix: add it to the extraction list in run_leg (see lint_own_scope), do not delete this test."
+    } >&2
+  fi
 }
 
 # lint <case> [ratchet-text] — run against a fixture root with an EXPLICIT ratchet. The embedded
