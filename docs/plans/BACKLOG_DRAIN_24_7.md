@@ -87,6 +87,80 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #86: `master-fire-gate` 25 open → 24 open / 2 blocked.
+  closed 1 / filed 0** (twenty-second consecutive recycle in `master-fire-gate`). Row `1f4e2c357649`
+  closed: *"a local venue window will STARVE cloud: CEILING is global and the S7 key has no venue
+  term"*, filed 2026-08-12T03:55:54Z.
+  🚨 **THE FINDING: the cure landed 5h15m AFTER the row was filed, and the ONLY thing standing
+  between the right verdict and its exact inverse was a timezone.** The cure commit `a48ab45946ed`
+  stamps `2026-08-12T02:11:03-07:00`. Read as a wall-clock string it precedes the row's
+  `2026-08-12T03:55:54Z` by 1h45m and the row reads *stale at birth* — a row filed over a fact that
+  was already false, the #79/#80 shape. Converted to UTC it is **09:11:03Z**, i.e. **5h15m AFTER**
+  the filing, and the row is the #84 shape instead: **correct when filed, cured later, and never
+  told.** Same two timestamps, opposite diagnoses, and nothing else in the evidence distinguishes
+  them. `firstTs` is already UTC (`Z`); `git log --date=iso-strict` is LOCAL with an offset. **Any
+  recycle that dates a row against a commit is one unconverted offset away from electing the wrong
+  shape** — and the two shapes prescribe opposite closes (a stale-at-birth row indicts the FILER; a
+  cured-later row indicts the ROW STORE's inability to learn).
+  **Adjudicated part by part** (method item 15), because the conclusion rests on two premises that
+  rot at different rates:
+  **P1 "CEILING is global" — REFUTED.** `bin/cc-dispatch` now carries TWO ceilings and a
+  venue-scoped fold: `:376 CEILING=12` (panes/worktrees/local CPU), `:382 CLOUD_CEILING=6`
+  (quota/off-box concurrency), `:1650 cloud) _lane=cloud; _lane_ceiling="$CLOUD_CEILING"`, and
+  `live_workers()` takes a venue argument. The cure commit's own body says it in as many words:
+  *"It is correct accounting and it stops the two lanes starving each other."*
+  **P2 "the S7 key has no venue term" — LITERALLY TRUE, and MOOT; the LINE NUMBERS are the proof.**
+  The venue admission filter runs at `:1449`/`:1482` (`jq select((.venuePlan//"")==$v)`); the S7
+  ordering at `:1624`. **1482 < 1624**, so by the time S7 orders, the queue is already narrowed to
+  ONE venue and a venue term would have nothing left to discriminate. A "venue window" *is* the
+  narrowing — so P2 is structurally unable to carry the row's conclusion once P1 falls. A surviving
+  premise is not a surviving claim.
+  **MEASURED — four arms, executing the SUBJECT'S OWN code, never a reimplementation.**
+  `live_workers()` extracted verbatim (17 lines, 780 B) from the **deployed** binary and run
+  read-only against the live store: **positive control** `any = 2` (the pre-fix venue-blind
+  denominator — this IS the wedge) · **arm** `local = 0` (a local window: `free_slots = 12−0 = 12`)
+  · **arm** `cloud = 2` (`free_slots = 6−2 = 4`) · **negative control** `bogus = ''` (an unknown
+  lane falls out of the closed case set = UNKNOWN). **`any(2) == local(0) + cloud(2)` — the
+  partition is EXACT**, so a local window's denominator is 0 and it cannot consume one cloud slot.
+  **LIVE, not merely landed.** `~/.claude/bin/cc-dispatch` → the shared checkout, deployed sha256
+  `7ca3cd8463fa3b58…` **byte-identical** to `origin/main`, carrying `THE FOLD IS VENUE-SCOPED` = 1.
+  Live config read from **launchd argv**, not the plist file alone (`launchctl print
+  gui/$UID/com.claude.dispatcher` → `CC_FIRE_CLOUD=on CC_DISPATCH_VENUE_ONLY=cloud`) — the plist's
+  own comment records that a deployed binary trailing trunk cost a real bleed on 2026-08-11, so the
+  file is not the running state.
+  🚨 **WRONG CAUSE #1 REJECTED — "the fix predates the row."** The timezone above; the offset
+  inverts the verdict.
+  🚨 **WRONG CAUSE #2 REJECTED — "cloud is not starving, so the row is moot."** Cloud holds 2 of 6
+  with 4 free, which is a **vanished precondition, not a cure** (method item 12): today's headroom
+  says nothing about whether a local window *could* consume those slots. The close rests on the
+  exact partition and the closed case set — the mechanism — never on the comfort of the moment.
+  **RESIDUAL, deliberately NOT filed:** a MIXED pass (`CC_DISPATCH_VENUE_ONLY` unset) still resolves
+  `*) _lane=any; _lane_ceiling="$CEILING"` — the pre-fix global denominator. It is **not this row's
+  scenario** (a mixed pass is by definition not a venue window), it is **unreachable** in the live
+  config measured above, and **trunk already names it in its own comment at `:1640-1647`**: *"UNSET
+  (mixed queue) keeps the PRE-FIX behaviour byte-for-byte … Named as open, not silently ~done."*
+  A row minted over an unreachable configuration the code already documents is duplicate analysis.
+  **ROWS READ AND LEFT OPEN — do not re-derive.**
+  **`b8a515115b2f`** (cc-cloud retire FORWARD-ONLY) was worked first and is **NOT closable, for the
+  opposite reason to the row above**: its *named mechanism* is refuted but its *symptom is live and
+  LARGER*. `cc-offload gc` (`bin/cc-offload:758`) retires terminal declarations and landed
+  `237ecf2438f9` **2026-08-10T06:40Z, two days BEFORE the row was filed** — so "no path to release
+  their claim" is false, with a positive record: of 88 retired declarations, **54 NOT-STARTED + 26
+  STALLED + 5 ABANDONED** cannot have come from `cloud-return.sh`'s LANDED-only terminal branch.
+  **But** the live census is **214 declarations / 88 retired**, leaving **125 unretired non-ALIVE**
+  (91 NOT-STARTED, 25 STALLED, 7 ABANDONED, 2 LANDED) holding admission slots — up from the 41 the
+  row measured. The real gap is **not "no path" but "no ACTUATOR"**: `cc-offload gc` is `CONFIRM=1`
+  and manual, with **zero automated callers** (both trunk hits are its own help text and a Python
+  advisory string), and its default filter is only `NOT-STARTED ABANDONED`, missing STALLED/LANDED
+  unless `--state` widens it. **Closing it on "the path exists" would launder a live 125-row
+  problem** (memory: `detector-with-no-owner-is-not-an-actuator`). Left open, undiagnosed remainder
+  named here so the next recycle starts from the census, not from scratch.
+  **`e86e500e96c0`** (cloud fires die on a LOCAL worktree freshness gate) — same 2026-08-12T03:55
+  filing batch as the closed row, plausibly touched by the same cure; **not** examined this recycle.
+  **`c4383f1c9172`** — `scripts/lib/session-census.sh` does **not** exist on trunk and
+  `scripts/capacity-alarm.sh:608 census()` is still inline, so the row is genuine unstarted refactor
+  work, not a stale claim.
+
 - **2026-08-21 — drain recycle #85: `master-fire-gate` 26 open → 25 open / 2 blocked.
   closed 1 / filed 0** (twenty-first consecutive recycle in `master-fire-gate`). Row `9362e80a999f`
   closed: *"re-aim 0006 cold-compile admission at the Edit/Write ignition path … then ratify 0006"*,
