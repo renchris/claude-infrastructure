@@ -97,6 +97,71 @@ _install_shim() { ln -sfn "$CCBATS" "$D/bin/bats"; }
   [ "$(cmd_of "$output")" = "$CCBATS /Users/x/repo/tests/foo.bats" ]
 }
 
+# ── the substitution skips QUOTED REGIONS and heredoc bodies (backlog e2eaaa0f4907) ─────────────
+# Narrowing the pattern to absolute spellings (the two tests above) fixed the COMMON corruption but
+# not the CLASS: the surviving arm still rewrote an absolute spelling wherever it appeared, because
+# sed sees one flat string. Measured 2026-08-21 from a drain session's own probe — a `-f` FILTER was
+# rewritten (bats then matched zero tests and reported `1..0`, a non-verdict that reads like a clean
+# run), and a heredoc that WROTE a file put the substituted bytes on disk.
+#
+# These four are ABSENCE assertions, so each would also be satisfied by a hook that had simply
+# stopped rewriting anything (MEMORY.md structural-gates-are-blind-to-zero-ink). The control that
+# makes them non-vacuous is the LAST test in this group, which pins a real command token being
+# rewritten in the same command whose quoted copy is preserved — one input, both directions.
+@test "shim present: an absolute bats inside a SINGLE-quoted argument is data, not the tool" {
+  _install_shim
+  run run_hook "bats -f 'check /usr/local/bin/bats path' t.bats"
+  [ "$status" -eq 0 ]
+  if [ -n "$output" ]; then
+    echo "a quoted argument was rewritten: $(cmd_of "$output")" >&2
+    return 1
+  fi
+}
+
+@test "shim present: an absolute bats inside a DOUBLE-quoted argument is data, not the tool" {
+  _install_shim
+  run run_hook 'bats -f "check /usr/local/bin/bats path" t.bats'
+  [ "$status" -eq 0 ]
+  if [ -n "$output" ]; then
+    echo "a quoted argument was rewritten: $(cmd_of "$output")" >&2
+    return 1
+  fi
+}
+
+# A heredoc body is NOT a quoted region, so quote-skipping alone does not reach it — the hook stops
+# substituting at the first unquoted `<<`. This is the case that was measured doing damage.
+@test "shim present: an absolute bats in a HEREDOC BODY is never substituted" {
+  _install_shim
+  run run_hook "cat > /tmp/x.sh <<XEOF
+see /usr/local/bin/bats here
+XEOF"
+  [ "$status" -eq 0 ]
+  if [ -n "$output" ]; then
+    echo "a heredoc body was rewritten: $(cmd_of "$output")" >&2
+    return 1
+  fi
+}
+
+# Quote-skipping is orthogonal to the shim narrowing: WITHOUT a shim the bare token is still the
+# hook's to rewrite, and it must still leave a quoted copy of it alone.
+@test "no shim: a bare bats inside a quoted argument is still left alone" {
+  run run_hook "echo 'hello bats world'"
+  [ "$status" -eq 0 ]
+  if [ -n "$output" ]; then
+    echo "a quoted argument was rewritten: $(cmd_of "$output")" >&2
+    return 1
+  fi
+}
+
+@test "shim present: the command token is rewritten while a quoted bats beside it is preserved" {
+  # THE CONTROL for the four absence assertions above. A hook that stopped rewriting altogether
+  # satisfies every one of them and fails this one.
+  _install_shim
+  run run_hook "/opt/homebrew/bin/bats -f 'x /usr/local/bin/bats y' t.bats"
+  [ "$status" -eq 0 ]
+  [ "$(cmd_of "$output")" = "$CCBATS -f 'x /usr/local/bin/bats y' t.bats" ]
+}
+
 # ── idempotency: never wrap what is already wrapped ────────────────────────────────────────────
 @test "a command already naming cc-bats is untouched" {
   run run_hook "$CCBATS tests/foo.bats"
