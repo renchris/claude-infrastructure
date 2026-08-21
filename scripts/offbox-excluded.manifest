@@ -64,32 +64,18 @@
 #      never read as one.
 # An entry here still costs coverage. Prefer fixing the suite; that is what cure (a) is for.
 
-# ── slow-fixture surface — a sweep whose REPORTED SHAPE depends on how fast the box is ──────────
-# run 31657575571: notok=1 (case 11) · also red in runs 31652700852 and 31645128003
-# MEASURED, not attributed. This suite builds 640 branches and asserts the stranded-sweep's own
-# verdict line ("on 40 of 641 local branch(es)"). It is GREEN on the operator's box and GREEN under
-# scripts/offbox-run.sh locally — the identical env -i runner — and RED on the hosted runner across
-# three consecutive runs, including after its stale-wording defect was genuinely fixed (c5f1d1d56).
-# So the off-box red survives the on-box cure, which is the definition of "does not yet produce a
-# usable off-box signal" in this file's own terms.
-# HINT (not verified): the sweep is bounded, and a bound sized on a fast box becomes a truncation on
-# a slower one, changing the line the case greps rather than failing loudly. Naming it here as a
-# hypothesis, not a cause — this list records measurements.
-# The land-time admission gate CANNOT see this class and says so in its own header: it reproduces
-# the environment axes on THIS box and not the machine axes. That is the gap this list exists for.
-# Filed for the real fix, with the hypothesis, rather than left as a permanent hole.
-tests/land-gate-cas.bats
-
 # ── terminal-emulator surface — these drive or assert a live iTerm2/kitty ────────────────────────
 # HINT (not verified): a hosted runner has no terminal application at all.
 # run 31362043861: notok=1
 tests/it2-wrapper.bats
-# run 31362043861: notok=2
-tests/iterm-sticky-command.bats
 # run 31362043861: notok=1
+# ⚠ RE-MEASURED AND KEPT (2026-08-21). Green in all three censuses at 4/4 — but the green is not
+# full strength: three of its four cases are `skip`-guarded on a machine axis the runner does not
+# have ("Excel is running — the control needs it down", "control app absent", "osacompile
+# unavailable"), and bats renders a skip as `ok`. A count that cannot distinguish a pass from a
+# skip is not the measurement this file's contract asks for. Delete it only against a census whose
+# TAP body is read, or after the control stops depending on an app the runner will never install.
 tests/iterm2-appname-lint.bats
-# run 31362043861: notok=5
-tests/kitty-recovery-launch.bats
 # run 31362043861: notok=2
 tests/handoff-selfclose-kitty-identity.bats
 
@@ -98,9 +84,10 @@ tests/handoff-selfclose-kitty-identity.bats
 # run 31362043861: notok=2
 tests/capacity-alarm-launchd-path.bats
 # run 31362043861: notok=1
+# ⚠ RE-MEASURED AND KEPT (2026-08-21): green / RED / green across the censuses of 08-18, 08-19 and
+# 08-20 (21 ok, then 20 ok + 1 notok, then 21 ok). It is FLAKY off-box, not cured — and a list that
+# deletes on the run that happened to be green would be curating, not re-measuring.
 tests/capacity-admit.bats
-# run 31362043861: notok=1
-tests/capacity-ramp.bats
 # run 31362043861: notok=4
 tests/idle-slope-sweep.bats
 # run 31362043861: notok=1
@@ -124,8 +111,6 @@ tests/operator-readout.bats
 tests/cc-inbox-guard.bats
 # run 31362043861: notok=1
 tests/cc-reconcile.bats
-# run 31362043861: notok=1
-tests/task-quality-gate.bats
 # run 31362043861: notok=16 (0 ok — the whole suite)
 tests/cc-dispatch-v2.bats
 # run 31362043861: notok=19 (0 ok — the whole suite)
@@ -159,11 +144,13 @@ tests/subshell-cleanup-lint.bats
 # executed off-box at all — a reminder that the first census's 26 reds were never the whole list,
 # only the part a truncated run could see.
 # HINT (not verified): pane/fleet/session-registry state and the Darwin QoS band.
-# run 31363422123: notok=1
-tests/handoff-fired-cwd-index.bats
 # run 31363422123: notok=3
 tests/handoff-selfclose-pane-identity.bats
 # run 31363422123: notok=2
+# ⚠ RE-MEASURED AND KEPT (2026-08-21): green at 43/43 in all three censuses — but f944d6e3e landed
+# eight more cases AFTER the last one ran, and no off-box run has ever executed them. The
+# measurement that would justify deleting this line describes a file that is no longer this file.
+# Re-check on the next census; if it is still green at full count, the line goes.
 tests/handoff-fire-capacity-gate.bats
 # run 31363422123: notok=3
 tests/session-register-reclaim.bats
@@ -171,8 +158,6 @@ tests/session-register-reclaim.bats
 tests/cc-await-ping.bats
 # run 31363422123: notok=1
 tests/qos-chokepoint.bats
-# run 31363422123: notok=1
-tests/bats-assert-liveness.bats
 # run 31363422123: notok=5
 tests/suggest-filter.bats
 
@@ -194,8 +179,6 @@ tests/compressor-sentinel.bats
 tests/pool-floor.bats
 # run 31369960469: notok=1
 tests/rotate-autonomy-logs.bats
-# run 31369960469: notok=1
-tests/session-end-gc-lock.bats
 # 2026-08-13: tests/tsv-field-collapse.bats REMOVED — the first entry this list has ever shed, and
 # the shrink arm named it rather than a human noticing. Its run-31369960469 measurement was notok=1
 # on case 25 (an unpadded TSV reader in bin/cc-offload), which has since been fixed; case 34 then
@@ -205,31 +188,53 @@ tests/session-end-gc-lock.bats
 # which is exactly what this file's own header says the census arm exists to prevent.
 # run 31369960469: CUT at the 120s bound — a non-verdict, not a red. Excluded on COST, like
 # postland-verify.bats below, and re-admissible if it ever gets faster.
+# ⚠ RE-MEASURED AND KEPT (2026-08-21). It is green in all three censuses — 53/53 at 252s, 249s and
+# 251s — but it did not get faster; the BOUND got bigger (120 → 300, and that raise was decided on a
+# different suite's numbers). 251 of 300 is 84% of the budget, which puts this suite inside the tail
+# of the distribution its own bound is drawn from — the exact condition hermetic.yml's bound comment
+# names as unable to discriminate a hung suite from a slow one. Admitting it would make the producer
+# a coin-flip on every slow runner, and the cost of THAT direction is the one this file's header
+# calls unrecoverable: an over-broad entry loses coverage that never existed, a wrong deletion stops
+# the producer producing anything for everyone. The entry's own condition is still the right one —
+# delete it when the SUITE gets faster, not when the bound moves.
 tests/worktree-gc-infra.bats
 
-# ── FOURTH SEEDING — a THIRD exclusion class: hostile to the runner itself ───────────────────────
-# Actions run 31371884433 (trunk 77656a65). Shard 6 died with **exit 143 — SIGTERM** immediately
-# after tests/pkill-scope.bats reported GREEN, taking the 34 suites behind it with it and folding
-# the whole run to a short 304-of-338. The suite passed its own assertions and then killed the
-# process running it.
+# ── 2026-08-21: TEN ENTRIES DELISTED — the shrink half fired for the first time at scale ─────────
+# backlog e15a743e12ba. Read together with the FOURTH SEEDING block this replaces, because that
+# block is the one that wrote its own release condition and then waited eleven days for someone to
+# read it: *"The entry stays until a census MEASURES it surviving … Run the census, and if this
+# suite comes back green, delete these three lines."* Nothing was wrong with the machinery. The
+# daily census had been running since 2026-08-12 and its verdict job had been printing
+# `release candidates (16)` into a step summary nobody opened. A detector with no reader is the same
+# artifact as a detector with no owner.
 #
-# That is neither of the two classes above. It is not machine-coupled (it passes) and it is not too
-# slow (15s). It is HOSTILE TO A SHARDED RUNNER: this repo's own land docs record that
-# `pkill -f bats…` SIGKILLs every concurrent gate on the box because every bats command line
-# contains the same string, and a CI runner is just another box where that is true. A suite whose
-# subject is process-killing cannot share a process tree with a runner that has more work queued.
-# The per-suite `timeout` gives each suite its own process group and does NOT help here — a pattern
-# match on a command line crosses process groups by design, which is the whole point of the tool
-# under test.
-# run 31371884433: shard SIGTERM (143) immediately after this suite, 34 suites lost
-# ⚠ THIS ENTRY'S REASON MAY ALREADY BE DISSOLVED. scripts/offbox-run.sh now ignores SIGTERM for the
-# duration of a shard, precisely so a process-killing suite costs its own row and nothing else. The
-# entry stays until a census MEASURES it surviving — re-admitting it on the strength of a fix rather
-# than a measurement is how a list starts carrying claims nobody checked. Run the census, and if
-# this suite comes back green, delete these three lines.
-tests/pkill-scope.bats
-# run 31371884433: notok=1
-tests/live-session-registry-atomic.bats
+# THE BAR APPLIED HERE IS STRICTER THAN THE ONE THIS FILE ASKS FOR, deliberately. The header says
+# "Run the census, confirm the suite is green off-box, delete its line". One run is one sample, and
+# the direction of a wrong deletion is the expensive one — an over-broad entry loses coverage that
+# never existed, a wrong deletion stops the producer producing anything for everyone. So each line
+# below is green in THREE independent censuses (32124683059 · 32240707543 · 32357106290, the daily
+# `43 9 * * *` runs of 2026-08-18/19/20, 510/515/517 suites executed), at its FULL test count in the
+# revision each run actually saw, with its recorded cause named as dissolved. Six of the sixteen
+# candidates were withheld on that bar and each carries its reason at its own line above.
+#
+#   tests/land-gate-cas.bats            15/15 · 78s/61s/61s — the slow-fixture red is gone. Its
+#     entry's own hypothesis (a bound sized on a fast box truncating on a slow one) is consistent
+#     with the cure: the per-suite bound went 120 → 300 in hermetic.yml. It is nowhere near it.
+#   tests/iterm-sticky-command.bats      7/7 · ~1s — no `skip` in the file; the terminal-emulator
+#   tests/kitty-recovery-launch.bats   19/19 · ~13s — class header's HINT ("a hosted runner has no
+#     terminal application") turns out not to bind these two: they assert text, not a live emulator.
+#   tests/capacity-ramp.bats           20/20 · ~8s — the launchd/QoS HINT does not bind it either.
+#   tests/task-quality-gate.bats       10/10 · ~3s
+#   tests/handoff-fired-cwd-index.bats 19/19 · ~4s
+#   tests/bats-assert-liveness.bats    36/36 · ~15s
+#   tests/session-end-gc-lock.bats       7/7 · ~15s
+#   tests/live-session-registry-atomic.bats  8/8 then 15/15 · ~6s — bdf57e195 grew it mid-window;
+#     green at full count on both sides of that commit, which is a stronger result than either alone.
+#   tests/pkill-scope.bats             22/22 · ~11s — THE NAMED ONE. Its exclusion was never about
+#     the suite failing; the suite passed and then SIGTERMed the shard, losing the 34 suites behind
+#     it. ed095d4be gave the runner `trap '' TERM` so a process-killing suite costs its own row and
+#     nothing else. Three censuses ran it green with the shard intact, which is the measurement its
+#     own entry demanded before the fix could be believed.
 
 # ── the land and verify machinery itself ─────────────────────────────────────────────────────────
 # These are the subjects that OWN the on-box verdict, so excluding them from the off-box second
