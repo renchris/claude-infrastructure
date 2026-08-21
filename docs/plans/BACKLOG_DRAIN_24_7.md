@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #73: `master-fire-gate` 38 open → 37 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the empty string was naming two different facts, and the
+  message built on it told an operator to `--terminal` — to declare that nothing continues the
+  work — over a successor nothing had actually looked at.**
+
+  **Effort choice.** Ninth consecutive recycle in `master-fire-gate`; #72 left it warm at 38 open.
+  Settled rows were not re-derived (`9a14c2ef8224`, `159c2211b0f2`, `7c6ff16259a0`,
+  `b69b1d957cec`, `ba5511bbe388`, `87626e1593c3`, `016174e64121`, and the deliberate holds
+  `95512886c19a` / `4043ab43bf4a`). Lag re-derived at open: the shared checkout was **92** behind
+  origin/main (#72 measured 90→92, #71 87→90, #70 85→86, #69 83→84, #68 81, #67 79). Live layer
+  still FROZEN at `9709c99d3`; **nothing landed here runs from `~/.claude` yet.**
+
+  **Row `87a515ed087e` closed on `e0ff4f470`.** Its ask was one line — *"handoff-fire.sh +
+  self-close report a WEDGED it2 resolver as a dead pane/successor — mirror the `0c93f779ecfa`
+  rc-split"* — and the citation held up on reading, which is not the default (memory:
+  `work-item-citation-refutes-its-own-remedy`). `0c93f779ecfa` is a **done** row whose fix (2) is
+  literally *"distinguish rc for 'resolver unavailable/timed out' from 'target genuinely unknown'
+  — conflating them turns an infrastructure outage into a user error"*, after that conflation cost
+  the desk six non-delivered advisories and two successively-wrong diagnoses.
+
+  **The defect, reproduced against origin/main content before a line was written.** `as_tty`
+  printed the empty string for two facts that are not the same fact:
+
+  | | what happened | what it is |
+  |---|---|---|
+  | ABSENT | the query SUCCEEDED and said there is no such pane | a definite negative **about the pane** |
+  | WEDGED | the query never succeeded at all, `max` retries over | a **non-verdict about the RESOLVER**, which has looked at nothing |
+
+  Its own header documented the collapse — *"query never succeeded (iTerm2 wedged) → nothing
+  printed = empty tty; the caller aborts safely"* — and then handed the caller a single
+  `[ -z "$SUC_TTY" ]`. So `self-close --successor` answered **both** states with one message:
+  *"successor pane <uuid> not found in iTerm2 — the continuation is NOT there; fix the uuid, or
+  --terminal if truly nothing continues"*. Both prescriptions are wrong in the wedged half and the
+  first is **harmful**: `--terminal` retires the pane declaring that nothing continues the work,
+  over a successor that may be alive — after which nothing is looking for it. On a kitty box the
+  same line fired while naming **iTerm2**, a terminal the session was not even using.
+
+  🚨 **THE SHAPE WORTH CARRYING: the three-state contract already existed TEN LINES BELOW, and the
+  non-verdict was being destroyed one layer ABOVE it.** `successor_pin` (rc 0 live / 1 dead / 2
+  unpinnable) gives every one of its states its own message, and the gate consumes all three
+  correctly. The file already knew how to do this. The cannot-tell simply never survived long
+  enough to reach the code that would have handled it. **When a gate mishandles a non-verdict,
+  look UPSTREAM of it before adding states to it** — the discriminating consumer may already be
+  written, and starved.
+
+  **Mechanism note that shaped the fix.** The state had to ride the **exit code**, not a global:
+  every call site is `$(as_tty …)`, a command substitution, so a variable set inside can never
+  reach the caller. That is also why `successor_pin` uses rc. `as_tty_classified` now owns the
+  retry loop (rc 0/1/3); `as_tty` is a state-discarding wrapper preserving its always-exit-0
+  contract for the four callers with no stake in the distinction — one loop, two contracts over
+  it, never two copies of one state model.
+
+  **The polarity does NOT move.** Both arms still refuse; the close is irreversible and gated on
+  positive proof, so a non-verdict can never license it. What splits is the rc and the diagnosis —
+  the same discipline as #72, whose diff moved a message and not a behaviour.
+
+  🚨 **TWO EXISTING GREEN TESTS PINNED THE DEFECT, one of them naming it out loud.**
+  `tests/handoff-fire-completion-push.bats` said the gate reached exit 3 by *"classifying the
+  unresolved pane as absent"* — the misclassification recorded as the intent (memory:
+  `stale-assertion-becomes-an-inverted-guard`). Its subject — *a failing query must not leak a raw
+  osascript rc* — is untouched; 7 discriminates from the leak (1 / 128+sig) exactly as 3 did. The
+  `handoff-selfclose.bats` kitty control's phrase assertion was a proxy for *"identity stayed kitty
+  and the gate refused"*: same refusal, true verdict. Both re-keyed in the same diff.
+
+  **Attribution beat guessing, twice.** The post-fix belt first showed **8 reds across 4 suites**.
+  Rather than reason about them, the three non-mine-looking suites were run on a pristine
+  `origin/main` tree unpacked with `git archive | tar -x` into a `mktemp -d` (`symlinks=0` printed
+  before writing) — **all three came back GREEN**, so all seven were mine, not inherited. Cause:
+  three suites `sed`-extract `as_tty` and `eval` it, and a fourth stubs it, so the new callee was
+  undefined there. Fixed by extracting/stubbing `as_tty_classified` alongside — the pattern those
+  files already use for `_as_tty_query`, which `as_tty` also calls.
+
+  **Controls, and what they caught.**
+  - The **premise control FIRED on its first run** and corrected the fixture: the wedged path
+    crosses **two** `as_tty` sites (measured 8 attempts against a 4-attempt budget — the ownership
+    probe burns its own first and fails open). It was re-keyed from `-eq <exact>` to a **floor plus
+    a not-dry check**, because an exact count reds on the subject's own growth and never on a
+    regression (memory: `exact-count-assertion-tripwires-its-own-subject`).
+  - A **by-design-green-both-arms** case pins the definite negative byte-for-byte, named so no
+    reader mistakes it for a red-proof; it can only fail if a diff turns *every* empty tty into a
+    cannot-tell.
+  - A **discrimination** case sized at 6 failures against a budget of 4 leaves exactly 2 for the
+    successor gate, which must absorb them and resolve — proving 7 is **exhaustion**, not any
+    failure. A smaller count is swallowed entirely upstream and would exercise nothing.
+  - `bats-assert-liveness.py` caught a **real** `DEAD [cond-keyword]` in the new diff: a bare
+    `[[ ]]` that had been live only because it was its test's last line, and stopped being live the
+    moment a line was added after it. Fixed, and the linter's later silence was **positive-
+    controlled** against a synthetic dead assertion rather than trusted.
+  - The scoped `bats-shellcheck-lint --range` verdict was **vacuous pre-commit** ("this change
+    writes no .bats line") because nothing was committed yet; re-run post-commit over a real
+    129-line range it read clean, with the one SC2164 finding attributed to NOBODY.
+
+  **Verification.** Pre-fix control: plan `1..31`, 29 ok / **2 not ok**, both attributed. Post-fix
+  belt over **16 suites / 291 tests** touching `as_tty`, the retired phrase, or self-close's rc:
+  **0 red, every plan line equal to ok+notok, 0 executed-vs-expected warnings** (#71's truncation
+  trap checked explicitly, not assumed). `shellcheck -S style scripts/handoff-fire.sh` rc=0;
+  testname-eval and hermeticity clean over 519 suites. Land smoke attested `PARTIAL` (600 s budget)
+  — the documented non-red path — with 2267 ok / 0 not ok before the cut.
+
+  **Landed `e0ff4f470`, content-verified BOTH directions against parent `4beb9a42e`** (trunk moved
+  under this session mid-run, so a commit count would have proved nothing — memory:
+  `cited-sha-may-not-survive-the-land`): `as_tty_classified` **0 → 1**, `exit 7` **0 → 1**,
+  `@test` **28 → 31**, the three new cases **0 → 3**, the re-keyed `-eq 7` **0 → 1** — all over
+  files readable at BOTH shas (689,212 / 40,511 bytes at the parent), so the zeros are the parent's
+  content and not an instrument that cannot read it. ⚠️ One honest caveat on that check: the bare
+  phrase `CANNOT TELL` reads **2 at the parent** — it is pre-existing vocabulary elsewhere in the
+  file, so it is *not* a discriminating marker. `as_tty_classified` and `exit 7` are.
+
 - **2026-08-20 — drain recycle #72: `master-fire-gate` 39 open → 38 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: a non-verdict a fix labelled "transitional" is not
   transitional when the same fix's own writer keeps minting the shape that produces it — 82 of the
