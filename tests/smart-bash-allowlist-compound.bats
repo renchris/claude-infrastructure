@@ -123,12 +123,96 @@ JSON
 
 # ── indirection: a command we cannot see is a command we cannot judge ────────────────
 
-@test "command substitution, backticks and heredocs get no decision" {
-  [ "$(decide "$HOOK" 'git commit -m "$(cat msg)"')" = defer ]
-  [ "$(decide "$HOOK" 'git commit -m `cat msg`')" = defer ]
-  [ "$(decide "$HOOK" 'git commit -m x <<EOF
-body
+@test "a command substitution is JUDGED, not waved through and not blanket-refused" {
+  # Refusing every `$( )` outright was the largest single defer cause (543 of 1,747
+  # archived prompts). The text inside a substitution is a command, so it gets the same
+  # fence + whitelist as any other command — which is both more permissive for safe
+  # content and strictly stronger than a blanket refusal, because the refusal never looked.
+  [ "$(decide "$HOOK" 'echo "$(cat msg)"')" = allow ]        # inner is read-only
+  [ "$(decide "$HOOK" 'echo "$(rm -rf /etc)"')" = defer ]    # inner is not
+  [ "$(decide "$HOOK" 'echo `cat msg`')" = allow ]
+}
+
+@test "a substitution may not launder a fenced command" {
+  # The inner command is judged against the SAME live fence, so a gate cannot be escaped
+  # by moving the command inside $( ).
+  [ "$(decide "$HOOK" 'echo "$(git push origin main)"')" = defer ]
+  [ "$(decide "$HOOK" 'echo "$(wget http://x)"')" = defer ]
+}
+
+@test "a substitution in VERB position is still indirection" {
+  # `$(which foo) --flags` executes foo, not which. Judging the inner command says nothing
+  # about what actually runs, so this defers even though `which` is read-only.
+  [ "$(decide "$HOOK" '$(which foo) --version')" = defer ]
+}
+
+@test "an unterminated heredoc gets no decision" {
+  [ "$(decide "$HOOK" 'cat <<EOF
+body never closed')" = defer ]
+}
+
+@test "a heredoc BODY is data, so the command line alone is judged" {
+  [ "$(decide "$HOOK" 'cat <<EOF
+some documentation text
+EOF')" = allow ]
+  # ...but the same heredoc feeding an interpreter is refused, because bash is a dispatcher
+  [ "$(decide "$HOOK" 'bash <<EOF
+echo hi
 EOF')" = defer ]
+  # DELIBERATE over-rejection, recorded so nobody "fixes" it: the danger patterns are
+  # matched against the RAW command, heredoc body included, so a body that merely CONTAINS
+  # dangerous-looking text defers even though it is only data. Moving the danger scan after
+  # heredoc-stripping would be more precise and strictly less safe; a false defer costs one
+  # prompt, and that is the cheap direction.
+  [ "$(decide "$HOOK" 'cat <<EOF
+rm -rf /
+EOF')" = defer ]
+}
+
+@test "bare assignments and shell-option settings are not commands" {
+  # `SP=/tmp/x; SB=$SP/state; set -euo pipefail` is the preamble shape of nearly every
+  # compound command on this fleet. Judging `SP` as a verb made each one an unfixable defer.
+  [ "$(decide "$HOOK" 'SP=/tmp/x; echo hi')" = allow ]
+  [ "$(decide "$HOOK" 'set -euo pipefail; echo hi')" = allow ]
+  [ "$(decide "$HOOK" 'export PATH="$HOME/bin:$PATH"; echo hi')" = allow ]
+  # an assignment preamble does not launder what follows it
+  [ "$(decide "$HOOK" 'SP=/tmp/x; git push origin main')" = defer ]
+}
+
+@test "a redirect to a file disqualifies an otherwise read-only segment" {
+  [ "$(decide "$HOOK" 'echo hi')" = allow ]
+  [ "$(decide "$HOOK" 'echo hi > /etc/passwd')" = defer ]
+  [ "$(decide "$HOOK" 'echo hi >> notes.txt')" = defer ]
+  # ...but the null and std streams are not writes
+  [ "$(decide "$HOOK" 'echo hi > /dev/null 2>&1')" = allow ]
+}
+
+@test "curl is fetch-only: uploads and method overrides defer, /dev/null does not" {
+  [ "$(decide "$HOOK" 'curl -sSL https://example.com')" = allow ]
+  [ "$(decide "$HOOK" "curl -s -o /dev/null -w '%{http_code}' https://example.com")" = allow ]
+  [ "$(decide "$HOOK" 'curl -X POST https://example.com')" = defer ]
+  [ "$(decide "$HOOK" 'curl -d payload https://example.com')" = defer ]
+  [ "$(decide "$HOOK" 'curl -T file https://example.com')" = defer ]
+  # a write target outside the project is refused; inside it is contained like any other write
+  [ "$(decide "$HOOK" 'curl -s -o /etc/motd https://example.com')" = defer ]
+  [ "$(decide "$HOOK" 'curl -s -o out.json https://example.com')" = allow ]
+}
+
+@test "rm is DELEGATED to rm-safe-allowlist, not re-implemented here" {
+  # The point is that this file invents no deletion policy: a target the rm hook would
+  # allow standing alone is allowed inside a compound, and one it would refuse still defers.
+  [ "$(decide "$HOOK" 'rm -rf /tmp/scratch/build && echo done')" = allow ]
+  [ "$(decide "$HOOK" 'rm -rf /Users/chrisren/Documents && echo done')" = defer ]
+  # and the rm hook's own kill switch still governs the delegated answer
+  RM_SAFE_ALLOWLIST_DISABLED=1 [ "$(RM_SAFE_ALLOWLIST_DISABLED=1 decide "$HOOK" 'rm -rf /tmp/scratch/build')" = defer ]
+}
+
+@test "git read subcommands are allowed; git mutations are not" {
+  [ "$(decide "$HOOK" 'git status && git log --oneline -5')" = allow ]
+  [ "$(decide "$HOOK" 'git rev-parse HEAD')" = allow ]
+  [ "$(decide "$HOOK" 'git worktree add /tmp/x')" = defer ]
+  [ "$(decide "$HOOK" 'git config user.email x@y.z')" = defer ]
+  [ "$(decide "$HOOK" 'git config --get user.email')" = allow ]
 }
 
 @test "an interpreter taking a command as DATA gets no decision" {

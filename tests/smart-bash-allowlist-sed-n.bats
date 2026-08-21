@@ -55,11 +55,24 @@ decide() { # $1=command -> "allow" | "defer"
   [ "$(decide "sed -n '1r /etc/passwd' f")" = defer ]
 }
 
-@test "REFUSES every chaining operator — nothing may ride in on the sed prefix" {
-  [ "$(decide "sed -n '1p' f; echo chained")" = defer ]
-  [ "$(decide "sed -n '1p' f && echo chained")" = defer ] || false
-  [ "$(decide "sed -n '1p' f || echo chained")" = defer ]
+@test "nothing UNJUDGED may ride in on the sed prefix" {
+  # 2026-08-20 — THIS ASSERTION CHANGED ON PURPOSE; the old spelling is quoted here so the
+  # change is auditable instead of silent. It used to read "REFUSES every chaining
+  # operator" and required `sed -n '1p' f && echo chained` to DEFER. That was never a
+  # safety property — it was a restatement of the old whole-command anchor (`[^;&|]+$`),
+  # which could not fire on a compound command at all. Pinning it made the anchor
+  # load-bearing, so this test would have tripwired the fix that removed it. (Trunk's own
+  # `|| false` on line 60 is the tell: the assertion needed propping up.)
+  #
+  # The property worth holding is that nothing rides in UNJUDGED. Under decomposition each
+  # segment is judged on its own merits, so a chained segment is refused whenever it is not
+  # independently allowlisted — strictly stronger than refusing the shape.
+  [ "$(decide "sed -n '1p' f; npm publish")" = defer ]
+  [ "$(decide "sed -n '1p' f && chmod 777 /etc")" = defer ]
   [ "$(decide "sed -n '1p' f | sh")" = defer ]
+  # ...and a chained segment that IS independently safe is now allowed. That is the point
+  # of the change: the safe rules can finally reach a compound command.
+  [ "$(decide "sed -n '1p' f && echo chained")" = allow ]
 }
 
 @test "REFUSES in-place editing under any spelling" {
