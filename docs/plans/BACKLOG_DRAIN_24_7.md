@@ -93,8 +93,13 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `scripts/redproof-lstart-dialect.sh` (new)) plus this SSOT. Row **`7a00b5de1ec0`** — *cc-reaper
   and cc-dispatch carry the same locale-skewed {pid,lstart} identity as C33, and cc-reaper's
   misjudgement KILLS* — **CLOSED**, all remaining sites cured, red-proofed in both directions with
-  six per-site mutants. Fold at close: `master-convergence-deadlock` **52 open / 4 blocked**
-  (population: rows in THAT condition only; the whole store spans 62 conditions).
+  six per-site mutants. Fold at close: `master-convergence-deadlock` **53 open / 4 blocked**
+  (population: rows in THAT condition only; the whole store spans 62 conditions). ⚠️ **53, NOT 52 —
+  the close and the file land in the SAME condition, so they cancel** (53 → −1 closed → +1 filed →
+  53). Stating 52 would have been this lineage's recurring defect one more time: a COUNT whose SPAN
+  does not equal its SUBJECT (peer note to #103; #97/#98/#99 the same). `closed >= filed` still
+  holds at 1/1, which is the invariant the chain contract actually asks for — the condition's open
+  count is not that invariant and must never be quoted as if it were.
 
   🚨 **THE GENERALISABLE FINDING — "PINNED" IS NOT ONE DIALECT, AND A LANDED FIX CAN STRAND ITS OWN
   CONSUMER IN ANOTHER PROGRAM.** #104 established that a cross-process record has a dialect. The
@@ -215,6 +220,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   folded into this commit: different files, different store, its own row. ⚠️ Its "no corpus to
   migrate" premise (*0 of 11 live registry rows carry `lstart`*) is ~2 days old and is the first
   thing to re-derive.
+
+  **LIVE-LAYER NOTE (premise 1/2, re-measured not inherited).** Lag on the shared checkout at close
+  = **2**, inside the 25 budget. This diff ADDS two files, and per the ADD rule an add gets no
+  budget — but both are inert here, verified rather than assumed: `~/.claude/tests` does not exist
+  at all (row `4e6a51df2a84`, the known false positive), and `scripts/redproof-lstart-dialect.sh`
+  has **ZERO callers** — no hook, gate, or consumer guard references it, so no
+  `[ -f x ] && . x` can silently skip. It is a developer tool run by path from the checkout. So this
+  is a ✅ carrying a note, not a `🚀`. `deploy-live.sh` still declines (row `deploy-live-frozen`,
+  open) — not driven, not re-filed.
 
   **NOT DRIVEN, named for the next link:** `scripts/cc-gc.sh:263-266` reads a BARE ambient `ls` and
   parses it with `date -j -f '%a %b %e %T %Y'` — the **C-dialect** format, which cannot parse
