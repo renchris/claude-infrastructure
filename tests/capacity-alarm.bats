@@ -916,3 +916,43 @@ sys.stdout.write("null" if v is None else str(v))' "$2"
   run bash -c "grep -vE '^[[:space:]]*#' \"\$1\" | grep -cE 'COAL_PROCS=.*COAL_TRUE'" _ "$REPO/scripts/capacity-alarm.sh"
   [ "$output" = "0" ] || false
 }
+
+# ── the census as an INSTRUMENT: refusing beats a plausible-looking zero ──────────────────────────
+@test "(vii-e) a dead process table REFUSES instead of reporting a false empty fleet" {
+  # THE DEFECT THIS PINS. Without the `rows` positive control, census()'s awk END block prints a
+  # well-formed "0 0 0" over an EMPTY stream, and that triple is indistinguishable at every consumer
+  # from a genuinely idle box. Worse, the selftest's own census control is the disjoint-family sum
+  # (trees == exe + bin) — and 0 == 0 + 0 — so the one rung written to catch "a plausible-looking
+  # zero" CERTIFIED it: measured 2026-08-21, the pre-fix subject printed `control OK census trees=0`
+  # and exited selftest GREEN with its instrument dead. The twin extraction of this same census,
+  # scripts/lib/spawn-presence.sh cc_sp_trees(), already carried the guard and correctly returned
+  # rc 1 under the identical stub; this copy was the divergent one (backlog c4383f1c9172).
+  #
+  # ONE AXIS. The stub kills ONLY the census read (`args=`); every other ps reader — the argv[0]
+  # rung's `command=`, the rss reader, the tree walk's `comm=` — still reaches the real ps. So a red
+  # here indicts the census and nothing else.
+  local stub="$BATS_TEST_TMPDIR/deadstub"
+  mkdir -p "$stub"
+  cat > "$stub/ps" <<'STUB'
+#!/bin/bash
+case "$*" in
+  *args=*) exit 0 ;;
+  *)       exec /bin/ps "$@" ;;
+esac
+STUB
+  chmod +x "$stub/ps"
+  run env PATH="$stub:$PATH" /bin/bash "$ALARM" --selftest
+  [ "$status" -ne 0 ] || false                       # a blind census must not certify itself GREEN
+  [[ "$output" == *"control FAIL census"* ]] || false
+  ! [[ "$output" == *"census trees=0 = exe 0 + bin 0"* ]] || false
+}
+
+@test "(vii-f) NON-REGRESSION CONTROL — the refusal does not fire on a healthy box" {
+  # The discriminating half: (vii-e) alone would also pass for a census that refused ALWAYS, which
+  # is a worse bug than the one being fixed. Asserted on the census control ALONE, with no status
+  # check, deliberately — six of the seven rungs read the live box, so pinning the overall rc here
+  # would make this case a hostage to box weather (memory: bound-must-fit-the-band-not-the-bench).
+  run /bin/bash "$ALARM" --selftest
+  [[ "$output" == *"control OK   census trees="* ]] || false
+  ! [[ "$output" == *"control FAIL census"* ]] || false
+}

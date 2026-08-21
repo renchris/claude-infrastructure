@@ -605,15 +605,29 @@ fi
 #
 # `comm` was rejected as the matching field: measured, a `.bin/claude` session reports COMMAND `node`
 # to top(1), so the resolved executable name loses the very distinction being counted.
-census() { # → "<trees> <exe_trees> <bin_trees>"
+# POSITIVE CONTROL ON THE DENOMINATOR. Without the `rows` guard the END block prints a well-formed
+# "0 0 0" over an EMPTY stream — a dead `ps`, an exec-deny, a sandbox — and that triple is
+# indistinguishable at every consumer from a genuinely idle box. It is not a measurement of zero
+# sessions; it is the absence of a measurement, and a live box always has processes, so zero input
+# rows is never truthful. Measured 2026-08-21 with `ps` stubbed to print nothing: census returned
+# "0 0 0", the `[ -n "$CENSUS" ]` guard below PASSED it, and the selftest's own disjoint-sum control
+# read `control OK` because 0 == 0 + 0 — vacuous on the exact failure its comment names. The twin
+# extraction of this same census, scripts/lib/spawn-presence.sh cc_sp_trees(), already carries this
+# guard (`if (rows + 0 == 0) exit 1`) and correctly returned rc 1 under the identical stub; this
+# function was the divergent copy. Refusing (empty + rc 1) also de-vacuums the selftest control for
+# free: on an empty read `set -- $cs` leaves $1 unset, so `${1:-x}` = x != 0 and the rung goes RED.
+# Backlog c4383f1c9172 (memory: positive-control-the-denominator).
+census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the process table is unreadable
   ps -eo pid=,ppid=,args= 2>/dev/null | awk '
     {
+      rows++
       cmd = $3; f = ""
       if      (cmd ~ /claude-code\/bin\/claude\.exe$/) f = "exe"
       else if (cmd ~ /node_modules\/\.bin\/claude$/)   f = "bin"
       if (f != "") { fam[$1] = f; par[$1] = $2 }
     }
     END {
+      if (rows + 0 == 0) exit 1
       exe = 0; bin = 0
       for (p in fam) {
         if (par[p] in fam) continue        # child of an already-counted tree
