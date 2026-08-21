@@ -87,6 +87,90 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #82: `master-fire-gate` 29 open → 28 open / 2 blocked.
+  closed 1 / filed 0 (eighteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: the row's
+  OBSERVATION was true, its NAMED CAUSE was refuted three weeks before it was filed, and the line that
+  looked like the cure was INERT because a sibling code path bypassed it. `500765da985c` said *"dispatch
+  worktrees are pinned at FILING time"*. Nothing pins a base at filing time — `warm_worktree` has
+  fetched `origin` immediately before `worktree add` since three weeks earlier. The worker really did
+  get a tree 613 commits behind; the mechanism was the BRANCH-REUSE arm checking out the old branch
+  tip and ignoring `$base` entirely, which is why that fetch bought nothing.**
+
+  **Effort choice.** #81 left `master-fire-gate` warm at 29 open — a warm effort is cheaper than a cold
+  one, and eighteen recycles have now proved it. **Method note: `created_at` is `null` on every row via
+  `jq`; the real field is `firstTs`.** An age sort keyed on `created_at` silently returns filing order,
+  which is not age. The oldest open row is `aabf363ff409` (2026-07-26, 25 d).
+
+  **FOUR ROWS READ AND LEFT ALONE — every stored falsifier in the group reads NO MATCH.** That is
+  itself a result: this effort is genuinely un-drained, not stale. Run against `origin/main` CONTENT
+  this turn, each with a non-empty-needle control:
+  - `aabf363ff409` (*cc-classify has no LIVELOCKED cause*) — `grep -ci livelock bin/cc-classify` = **0**.
+    Correctly open, and it is a **funded design spec**: trunk's own
+    `docs/plans/backlog-consolidation-2026-08-09/OUT-dispatch.md:90` ran this exact falsifier, scored the
+    row KEEP, and wrote its DoD at `:298`. Confirmed live on trunk: `active` is in **neither**
+    `cc-reaper:94 REAPABLE_RE` nor `:223 SURFACE_PAGE_RE`, so a turn-burning session is invisible to both
+    sweeps. The 2026-08-08 `task-less` cause (`0d50b76a`) narrowed the `IDLE=-1` fail-safe but does not
+    reach a session that IS speaking. **Do not close this on the falsifier alone.**
+  - `579bc8781b5b` — all three legs still ungated: `cc_worker_claim_admit` = 0 in `bin/cc-recover-safeguard`,
+    `scripts/boot-resume.sh` and `bin/cc-offload` (control: 3 in `worker-claim-gate.sh`).
+  - `7c6ff16259a0` — `switch -c` = 0 and `cc-cloud preflight` = 0 in `handoff-fire.sh` (control: `cc-cloud` = 11).
+  - `159c2211b0f2` — `watchdog.env` = 0 in `lead-crash-watchdog.sh` (control: `LCW_ORPHAN_CLOSE` = 5).
+  - `fe740e799fd5` — read, NOT closed and NOT re-filed: its own last sentence demands a **design call**
+    (*does a recycle INHERIT the self-retire contract or deliberately drop it? Both are defensible*).
+    That is operator-gated by construction, not a drain close.
+
+  **The close — `500765da985c`, adjudicated in five parts.**
+  1. **The instance resolved.** `7a1fc4de0aac` now reads `status=done`, its evidence naming `7bc4b4e5`
+     (*"FILED DEFECT WAS ALREADY FIXED … landed with NO test, so I pinned it with 3"*) — i.e. it closed
+     exactly the way the row's own fix direction (b) prescribes.
+  2. **The named cause is refuted at birth.** `warm_worktree` has run `git -C "$repo" fetch origin -q`
+     one line above `worktree add` since `8460d71f9` (2026-07-20) — three weeks BEFORE this row was filed
+     (2026-08-09T07:14:50Z). Trunk states the real mechanism in its own words at `bin/cc-dispatch:1241`:
+     *"THE REUSE PATH IGNORED THE BASE ENTIRELY, which made the fetch one line up buy nothing."*
+  3. **Fix direction (a) LANDED** `861144a76` (2026-08-10, one day after filing): a reused branch BEHIND
+     the base is fast-forwarded; one carrying its own commits is REFUSED with a named remedy; and the
+     pre-existing worktree DIRECTORY — *the path `warm_worktree` never sees* — is checked too.
+  4. **Fix direction (b) LANDED** `edb9652e6` (2026-08-11T10:48:11-07:00, two days after filing) and is
+     **CONSUMED, not merely defined** — `staleness_rail` is built at `:2269-2270` and interpolated into
+     the worker brief at `:2275`, ending *"If the cure is already on trunk, the item is DONE — close it
+     with that sha as evidence rather than re-deriving it."* The row's `lastTs` (2026-08-11T10:37:28Z)
+     predates that land by ~7 h, so it was never re-read against its own cure.
+  5. **The residue is not this row's to carry.** The POLLUTION half (foreign staged files → dirty-tree
+     refusal) is owned by OPEN `e281cde67a48`, whose own falsifier
+     `grep -qE "git stash|reset --hard" bin/cc-dispatch` reads **0** this turn — correctly still open.
+     The same staleness class already closed once as `6110fc45141e` (done).
+
+  **Positive control, run this turn:** `bats -f 'freshness' tests/cc-dispatch-firegate.bats` → **rc=0,
+  plan `1..4`, 4 ok / 0 not ok** (`ok + notok == plan`). Test 1 pins the BEHIND-base reuse case as
+  *fast-forwarded, not silently reused* — this row's exact mechanism, red-proofed.
+
+  🚨 **WRONG CAUSE #1 REJECTED — the close-on-the-example trap.** *"The item it names is done, so the row
+  is moot."* Refused: `7a1fc4de0aac` being done closes the INSTANCE, not the structural claim, and a row
+  whose example resolved can still name a live generator (method item 13 — a decayed REASON is not a
+  wrong CONCLUSION). The close rests on parts 3+4, not on the example's disappearance.
+
+  🚨 **WRONG CAUSE #2, CAUGHT IN MY OWN INSTRUMENT — a cure-shaped line ADJACENT to the defect.** My first
+  pass found `fetch origin -q` one line above `worktree add` and concluded fix direction (a) had been
+  satisfied all along — which would have closed the row as **WRONG AT BIRTH**. That is false in the more
+  interesting direction: the fetch predates the row by three weeks *and bought nothing*, because the reuse
+  arm never consulted `$base`. **Adjacency is not causation** — the fetch and the staleness sat six lines
+  apart for three weeks without one touching the other. Only `861144a76` actually closed it. Where #81's
+  broken needle was LOUD (115/133 vacuous matches), this one was *correct and irrelevant*: the grep hit a
+  real line that really runs and really does nothing for this defect.
+
+  🚨 **THE SHAPE — the family's RIGHT-SYMPTOM-WRONG-MECHANISM face.** #73 = state destroyed UPSTREAM of a
+  gate that knew how to use it · #74 = destroyed DOWNSTREAM at its only consumer · #75 = correct in a
+  sibling document that never reached the authoritative one · #76 = reached the authoritative store, then
+  decayed there · #77 = correct and authoritative, and the INSTRUMENT could not read it · #78 = correct,
+  landed, self-describing, with no consumer at all · #79 = reachable by a 0-second read-only command,
+  behind a label that forbade running it · #80 = the cure had already landed and its header answered the
+  row's population by name, but the row was filed four hours later in the PERMANENT TENSE · #81 = the
+  mechanism was never the one named — the cited file was present, correct and irrelevant · **#82 = the
+  SYMPTOM was real and reproducible, the named MECHANISM was already false when written, and the fix that
+  looked present was inert because a sibling arm bypassed it.** Memories:
+  `scan-revision-predates-the-fix`, `wrong-cause-corroborated-by-true-metric`,
+  `spec-named-mechanism-may-be-prose-only`, `conclusion-must-reach-the-enforcing-store`.
+
 - **2026-08-21 — drain recycle #81: `master-fire-gate` 30 open → 29 open / 2 blocked.
   closed 1 / filed 0 (seventeenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: a row
   indicted the wrong script. It said the monitor *"delegates desk-existence to desk-invariant.sh
