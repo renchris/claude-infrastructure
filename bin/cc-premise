@@ -1878,12 +1878,20 @@ def _postland_red(ent):
     path = m.group(1).split("::", 1)[0].strip()
     if not (RE_BATS_PATH.match(path) or RE_CORPUS_PATH.match(path)):
         # Everything else falls through as "cannot tell", and the live store's remaining shapes are
-        # PRELINT reds — `scripts/<meta-lint>.sh::<violation>`. A green does imply those passed (a
-        # prelint red SKIPS the corpus, postland-verify.sh:469-470), but the span clause for one is
-        # membership of that script in the PRELINTS array AT the green's tree, and that array is a
-        # bash literal inside the verifier. Parsing it out of a historical file version to decide
-        # whether to retract a live lint violation is exactly the brittleness this arm exists to
-        # avoid, so they are left to the incumbent signals. Filed rather than guessed.
+        # PRELINT reds — `scripts/<meta-lint>.sh::<violation>`. A green does imply every prelint that
+        # RAN passed (a red lands in FAILING; an unproven one CUTs, and a CUT is never a green —
+        # postland-verify.sh:1044-1049, :2916). So the span clause is WHICH prelints ran, and THAT IS
+        # NOT A PROPERTY OF THE GREEN'S TREE: the effective list comes from the CC_POSTLAND_PRELINTS
+        # seam (:539-552) — unset ⇒ the five-element default, set-but-EMPTY ⇒ none, and an empty list
+        # returns from prelint_check with PRELINT_UNPROVEN=0 (:1049), i.e. a green is claimable with
+        # ZERO prelints run. No reading of any historical file version can recover that, so this is a
+        # category objection, not the brittleness of a parser: a perfect parse of the bash literal
+        # answers a different question than "what ran", and it errs toward retracting a live lint
+        # violation. Nor can the runner.log that DOES record each disposition stand in — it is
+        # rotated/GC'd on a different schedule from the stamps (:2827), which is precisely why the
+        # stamp carries the corpus denominator `suites` (:2823, :2159). The enabling change is
+        # therefore a prelint denominator IN the stamp, mirroring `suites` — not a parser (backlog
+        # 786ac458be00). Until then these are left to the incumbent signals. Filed, not guessed.
         return None
     return path, m.group(2)
 

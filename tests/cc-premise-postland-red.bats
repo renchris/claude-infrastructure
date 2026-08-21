@@ -254,10 +254,11 @@ green_manifest() {
   refute_match "$output" "verdict=falsified"
 }
 
-# THE PRELINT SHAPE stays out, deliberately. A green DOES imply the prelints passed (a prelint red
-# skips the corpus), but the span clause for one is membership of that script in the PRELINTS bash
-# array AT the green's tree — parsing that out of a historical file version to retract a live lint
-# violation is the brittleness this arm exists to avoid. Backlogged, not guessed.
+# THE PRELINT SHAPE stays out, deliberately. A green DOES imply every prelint that RAN passed (a red
+# lands in FAILING; an unproven one CUTs, and a CUT is never a green). So the span clause is WHICH
+# prelints ran — and that is not a property of the green's tree but of the run's environment, so no
+# reading of any historical file version can recover it. The case below pins that fact rather than
+# describing it. Enabling change: a prelint denominator in the stamp (backlog 786ac458be00).
 @test "a PRELINT red (scripts/<lint>.sh) is not a subject this arm judges" {
   a="$(add "post-land RED: scripts/test-walltime-lint.sh::  RATCHET  some-suite.bats has no future absolute date now @ $RED" postland-verify)"
   b="$(add "post-land RED: scripts/git-identity-lint.sh::  IDENTITY a suite wrote git user.* @ $RED" postland-verify)"
@@ -266,6 +267,33 @@ green_manifest() {
     [ "$status" -eq 0 ]
     refute_match "$output" "verdict=falsified"
   done
+}
+
+# THE ABSTAIN'S REASON IS A CROSS-FILE FACT, so it is pinned, not described — the comment above and
+# cc-premise's own are prose, and prose cannot notice when the verifier changes underneath it. What
+# the abstain rests on is that the EFFECTIVE prelint list comes from postland-verify's
+# CC_POSTLAND_PRELINTS seam rather than from its bash literal, which is what makes a parse at a
+# historical ref answer a different question than "what ran". This REPLAYS the verifier's real seam
+# block (memory: control-must-replay-the-real-artifact) instead of grepping for the seam's spelling:
+# a grep says somebody typed it, an eval says it still decides the list. If the seam is ever removed
+# the abstain's reason has changed, and this is where that surfaces.
+@test "the effective prelint list is env-derived, not a property of the tree" {
+  block="$(sed -n '/^if \[ -n "${CC_POSTLAND_PRELINTS+set}" \]; then$/,/^fi$/p' \
+    "$REPO/scripts/postland-verify.sh")"
+  # A MOVED ANCHOR IS A NON-VERDICT, and a non-verdict must fail rather than assert over an empty
+  # block — every arm below would otherwise read 0 and agree with each other vacuously.
+  [ -n "$block" ]
+  # ANTI-VACUITY: both branches must be present, or the arms cannot differ for the reason under test.
+  [ "$(printf '%s' "$block" | grep -c 'PRELINTS=(\$CC_POSTLAND_PRELINTS)')" -eq 1 ]
+  [ "$(printf '%s' "$block" | grep -c 'PRELINTS=(scripts/')" -eq 1 ]
+
+  n_default="$(unset CC_POSTLAND_PRELINTS; eval "$block"; printf '%s' "${#PRELINTS[@]}")"
+  n_empty="$(export CC_POSTLAND_PRELINTS=""; eval "$block"; printf '%s' "${#PRELINTS[@]}")"
+  n_one="$(export CC_POSTLAND_PRELINTS="scripts/only-one.sh"; eval "$block"; printf '%s' "${#PRELINTS[@]}")"
+
+  [ "$n_default" -gt 0 ]   # the tree's own literal is non-empty…
+  [ "$n_empty" -eq 0 ]     # …and the seam can erase it entirely — a green over ZERO prelints
+  [ "$n_one" -eq 1 ]       # CONTROL: the arm tracks the seam's VALUE, not merely whether it is set
 }
 
 @test "another PROJECT's item -> does NOT refuse (its shas are not this checkout's)" {
