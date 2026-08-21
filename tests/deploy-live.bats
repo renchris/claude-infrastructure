@@ -1003,6 +1003,86 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   [[ "$output" != *"link-refresh"* ]] || false
 }
 
+# ── COPY-class drift: the half link_refresh must not repair, and nobody was reading ──────────────
+# Filed as backlog 590fedde86cc, whose stated consequence ("ADDED files never get symlinked") this
+# suite's own subject REFUTES — link_refresh repairs every symlink class unconditionally, and the
+# live host measured 20/20 classes at 0 missing on 2026-08-21. The surviving true half is the COPY
+# classes: they have no unconditional repairer BY DESIGN (see the deploy-live.sh block above the
+# function — a link into the working tree dangles on any branch switch), so install.sh is the only
+# one, and it refuses from a behind-trunk checkout — the state deploy-live itself creates. The
+# verdict was computed on every tick and consumed by nobody; these tests pin that it is now read.
+#
+# The fixture uses the PRODUCER's own line shape, deploy-parity-assert.sh's single report() site
+# `printf '  %-9s %-22s %s\n'`, so a rename there fails these tests rather than silently muting them.
+copydrift() { # <token> <subject> — one copy-class verdict line, exactly as report() emits it
+  printf '  %-9s %-22s %s\n' "$1" "$2" "copy differs from repo → run ./install.sh" >> "$PARITY_OUT"
+}
+
+@test "copy-class drift is REPORTED and PAGED with an EMPTY missing list (the steady-state return)" {
+  seed_parity 1
+  copydrift STALE claude-latest                  # no miss(): this is exactly the early-return path
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "copy-drift: 1 copy-class file(s) DIFFER"
+  echo "$output" | grep -q "claude-latest"
+  [ -f "$PAGES/deploy-copy-drift.page" ]
+  grep -q "claude-latest" "$PAGES/deploy-copy-drift.page"
+  grep -q "install.sh is the only copy repairer" "$PAGES/deploy-copy-drift.page"
+}
+
+@test "every copy token the producer emits is seen — STALE · COPYMISS · COPYSTALE · CLAUDEMD" {
+  seed_parity 1
+  copydrift COPYMISS  githooks/pre-commit
+  copydrift COPYSTALE statusline.sh
+  copydrift CLAUDEMD  CLAUDE.md
+  copydrift STALE     claude-latest
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "copy-drift: 4 copy-class file(s) DIFFER"
+}
+
+@test "copy drift is REPORTED, never REPAIRED — no copy-class file is ever linked" {
+  seed_parity 1
+  copydrift COPYMISS githooks/pre-commit
+  miss hooks/real-symlink-class.sh               # the symlink half still repairs, alongside it
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$DEST" ]                                 # symlink class: repaired
+  [ ! -e "$LIVE/githooks/pre-commit" ]           # copy class: reported and untouched
+  echo "$output" | grep -q "copy-drift: 1 copy-class file(s) DIFFER"
+}
+
+@test "the page is the EDGE not the level — an unchanged drift set is silent on the second tick" {
+  seed_parity 1
+  copydrift STALE claude-latest
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "copy-drift: 1 copy-class file(s) DIFFER"
+  rm -f "$PAGES/deploy-copy-drift.page"          # prove the SECOND tick does not re-write it
+  run dlp
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"copy-drift:"* ]] || false
+  [ ! -f "$PAGES/deploy-copy-drift.page" ]
+}
+
+@test "a CHANGED drift set re-pages immediately (the damp above can fail — this is its control)" {
+  seed_parity 1
+  copydrift STALE claude-latest
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  rm -f "$PAGES/deploy-copy-drift.page"
+  copydrift COPYSTALE statusline.sh              # the SET changed ⇒ the signature key must differ
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "copy-drift: 2 copy-class file(s) DIFFER"
+  [ -f "$PAGES/deploy-copy-drift.page" ]
+}
+
 @test "the refresh is idempotent — a second tick relinks nothing and narrates nothing" {
   seed_parity 1
   miss hooks/once.sh

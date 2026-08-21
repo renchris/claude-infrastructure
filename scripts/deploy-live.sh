@@ -927,6 +927,70 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
 # NOT; deploy-parity.bats: no copy-class finding ever prints an ln -sf line).
 PARITY_ASSERT="${CC_DEPLOY_PARITY_ASSERT-$DEPLOY_REPO/scripts/deploy-parity-assert.sh}"
 
+# ── COPY-class drift: DETECTED on this path, repairable by NOBODY on it ──────────────────────────
+# The block above is about what link_refresh MUST NOT repair, and every word of it stands. This is
+# the half it leaves behind: the assert scores the COPY classes too, and link_refresh consumed one
+# line shape (`MISSING: ln -sf `) and dropped the rest on the floor. So the copy verdict became a
+# thing this machine COMPUTES 144×/day and NOTHING reads — the assert has no launchd job and no
+# other caller (census 2026-08-21: its only non-test references are two comments), and link_refresh
+# reads its rc solely to test for 3.
+#
+# WHY THAT IS NOT MERELY UNTIDY. A symlink class self-heals here, so its drift is transient. A copy
+# class has NO unconditional repairer anywhere on the machine: install.sh is the only one, and it
+# REFUSES a global install from a behind-trunk checkout (install.sh:109-132, guarding the 2026-08-01
+# silent-stale-deploy incident) — which is exactly the state deploy-live ITSELF creates by design,
+# because TARGET is the newest GREEN commit and trunk keeps moving while a landing chain runs. The
+# two guards are each correct and jointly leave the copy half unreachable for as long as landing
+# continues. Measured 2026-08-21 on the live host: `STALE claude-latest copy differs from repo` on
+# every tick, 29h after 79f075a07 landed the fix for a MANIFEST matcher that cannot read 3 of its
+# own 25 rows — and an unreadable row falls into the launcher's default-DENY arm, so the live
+# version gate was refusing operator-allowed versions with no line anywhere saying so.
+#
+# ACT NEVER, REPORT ALWAYS. Repairing here would re-create the githooks-as-symlinks bug the block
+# above exists to prevent, so this only ever prints. The needle is the PRODUCER's own shape, not a
+# copied literal: deploy-parity-assert.sh's report() is `printf '  %-9s %-22s %s\n'`, one site, and
+# the copy verdicts are its STALE · COPYMISS · COPYSTALE · CLAUDEMD tokens.
+#
+# Damped on a DEDICATED marker, deliberately NOT damp_ok(): that helper keeps ONE key in one shared
+# file, so a persistent condition parked in it would suppress the dirty-tree and untracked-collision
+# pages that share the slot. Signature-keyed, so a CHANGE in the drift set re-pages immediately.
+COPYDRIFT_TTL_S="${CC_DEPLOY_COPYDRIFT_TTL_S:-86400}"
+copy_drift_notice() { # <assert stdout> — never fails, never mutates the live layer
+  local out="$1" n names sig marker prev now=0
+  n="$(printf '%s\n' "$out" | grep -cE '^  (STALE|COPYMISS|COPYSTALE|CLAUDEMD) ' 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  names="$(printf '%s\n' "$out" | grep -E '^  (STALE|COPYMISS|COPYSTALE|CLAUDEMD) ' \
+             | awk '{print $2}' | sort -u | tr '\n' ' ' 2>/dev/null || true)"
+  names="${names% }"
+  sig="$n:$names"
+  marker="$POSTLAND_DIR/deploy-copydrift.sig"
+  prev="$(cat "$marker" 2>/dev/null || true)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  # THE PAGE IS THE EDGE, NOT THE LEVEL — and so is the log line, which is why the say() below sits
+  # inside this gate rather than above it. Copy drift PERSISTS until an operator acts, so speaking
+  # once per tick would put 144 identical lines/day into deploy.log and break the --auto silence
+  # contract this file states at asay(). An alarm that fires every tick carries the same information
+  # as one that cannot fire; the state CHANGE is the news, and the signature key is what detects it.
+  if [ "$prev" = "$sig" ] && [ -f "$marker" ] \
+     && [ -z "$(find "$marker" -mmin "+$((COPYDRIFT_TTL_S / 60))" 2>/dev/null)" ]; then
+    return 0
+  fi
+  say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — and NOTHING on this path can repair them (link_refresh owns symlink classes only; install.sh is the sole repairer and refuses from a behind-trunk checkout)"
+  mkdir -p "$PAGES_DIR" "$POSTLAND_DIR" 2>/dev/null || true
+  { echo "$now"
+    printf 'deploy-live: COPY-class drift — %s file(s) live-stale: %s\n' "$n" "$names"
+    printf 'the live layer is NOT running this checkout for these files, and no automatic path repairs them.\n'
+    printf 'link_refresh repairs SYMLINK classes only; install.sh is the only copy repairer and it\n'
+    printf 'refuses a global install from a behind-trunk checkout — the state deploy-live creates by\n'
+    printf 'design while a landing chain runs (it deploys the newest GREEN commit, not the tip).\n'
+    printf 'fix: reconcile the shared checkout, then run install.sh there by hand.\n'
+  } > "$PAGES_DIR/deploy-copy-drift.page" 2>/dev/null || true
+  printf '%s\n' "$sig" > "$marker" 2>/dev/null || true
+  return 0
+}
+
 link_refresh() { # never fails, never changes the exit code, never touches a PENDING file
   local out rc miss line src dest n=0
   # UNSET ⇒ the default path. SET (including SET-EMPTY) ⇒ honored verbatim, so
@@ -940,6 +1004,9 @@ link_refresh() { # never fails, never changes the exit code, never touches a PEN
     say "link-refresh: NO VERDICT from ${PARITY_ASSERT##*/} (rc 3) — nothing relinked"
     return 0
   fi
+  # BEFORE the steady-state early return below: copy drift PERSISTS by definition (nothing on this
+  # path repairs it), so an empty MISSING list is exactly when it must still be reported.
+  copy_drift_notice "$out"
   miss="$(printf '%s\n' "$out" | grep '^MISSING: ln -sf ' 2>/dev/null || true)"
   [ -n "$miss" ] || return 0   # steady state emits NOTHING: --auto's silence contract holds here too
   while IFS= read -r line; do
