@@ -178,6 +178,39 @@ future_ts() { date -u -v+2d +%Y-%m-%dT%H:%M:%SZ; }
   refute_match "$output" "verdict=superseded"
 }
 
+@test "SUPERSEDED *by* <id> is the PASSIVE — it names the SPEAKER as stale, never the target" {
+  # THE MEASURED DEFECT (2026-08-20). `by` was closed-class filler, so the participle reached the id
+  # and the passive was scored as active: a `done` predecessor pointing FORWARD at the live successor
+  # that inherited its work convicted that successor. RE_WHOLE makes it a WHOLE-item kill ⇒ exit 3,
+  # the BLOCKING verdict, aimed at exactly the row that should be worked. Live at the time: three
+  # OPEN rows refused this way (9362e80a999f verdict=superseded, 087db20c3a24 verdict=killed,
+  # 34e024ba297a), each named as the SUCCESSOR by the corpse that refused it.
+  #
+  # The fixture is the live sentence verbatim, not a paraphrase of it.
+  add 121212121212 "the re-aim item that inherited the work"                       2026-08-01T00:00:00Z
+  add 131313131313 "DECIDED: wire, not retire. Closing as superseded by 121212121212" 2026-08-02T00:00:00Z
+  run "$CP" check 121212121212
+  [ "$status" -eq 0 ]
+  refute_match "$output" "verdict=superseded"
+  refute_match "$output" "verdict=killed"
+
+  # CONTROL A — the ACTIVE voice, differing in exactly the one word under test, MUST still refuse.
+  # Without it the whole assertion above is satisfiable by deleting the arm.
+  add 141414141414 "the original claim"                                            2026-08-01T00:00:00Z
+  add 151515151515 "SUPERSEDES 141414141414 — its remedy is refuted"               2026-08-02T00:00:00Z
+  run "$CP" check 141414141414
+  [ "$status" -eq 3 ]
+  [ "$(verdict "$output")" = superseded ]
+
+  # CONTROL B — the OTHER direction, which is RE_ID_PRED's and is NOT what changed: here the
+  # predicate genuinely governs our id and the agent is somebody else, so `by` must not silence it.
+  add 161616161616 "the item a later design replaced"                              2026-08-01T00:00:00Z
+  add 171717171717 "161616161616 was SUPERSEDED by the new design — do not work it" 2026-08-02T00:00:00Z
+  run "$CP" check 161616161616
+  [ "$status" -eq 3 ]
+  [ "$(verdict "$output")" = superseded ]
+}
+
 @test "a correction cannot precede its subject — an earlier item never refutes a later one" {
   add 999999999999 "SUPERSEDES abcabcabcabc"       2026-08-01T00:00:00Z
   add abcabcabcabc "filed AFTER the text above"    2026-08-05T00:00:00Z

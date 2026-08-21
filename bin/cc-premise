@@ -188,7 +188,27 @@ RE_VERB = (
     r"|REFUTES?|REFUTED|INVALIDATES?|OBSOLETES?)"
 )
 # closed-class filler only — never an open word, or "supersedes X" would reach past a noun phrase
-RE_FILL = r"(?:\s+(?:to|of|vs\.?|by|my|the|backlog|item|blocked|open|and|or|[/,])){0,4}\s*"
+#
+# 🚨 `by` IS DELIBERATELY ABSENT, and it used to be here. It is the AGENTIVE preposition, so it is
+# the one closed-class word that INVERTS the relation the rest of this predicate is built to get
+# right. "SUPERSEDED by <id>" is the PASSIVE: the speaker is the stale one and <id> is the canonical
+# item still holding the work — the same direction RE_SELF_DUP below is careful about, arriving by a
+# different word. Read as filler, the participle reaches the id and the verb is scored as ACTIVE, so
+# a `done` predecessor pointing FORWARD at its live successor convicts that successor of being
+# superseded by a corpse. RE_WHOLE then makes it a WHOLE-item kill, which is exit 3 — the blocking
+# verdict — so the refusal lands on precisely the row that should be worked, and it lands with the
+# instruction "never act on the refuted part".
+#
+# MEASURED over the live store (2026-08-20, 30 directed verb→id matches): 11 of them — 37% — carry
+# `by` in the filler and ALL ELEVEN are this passive shape, every speaker `done`. Zero active
+# refutations are spelled with `by`, so dropping it costs no true positive. Three OPEN rows were
+# being refused when this was measured — `9362e80a999f` (verdict=superseded, by done `e3fb627bc57a`
+# whose own text reads "Closing as superseded by 9362e80a999f"), `087db20c3a24` (verdict=killed) and
+# `34e024ba297a` — each by a predecessor that had named it as the SUCCESSOR.
+#
+# The `<id> was superseded by X` direction is unaffected: that is RE_ID_PRED's shape, where the
+# predicate genuinely governs our id and the agent is somebody else.
+RE_FILL = r"(?:\s+(?:to|of|vs\.?|my|the|backlog|item|blocked|open|and|or|[/,])){0,4}\s*"
 # `(?<!UN-)` is not decoration: the store contains "THIS PARTIALLY UN-RETRACTS <id>", which the
 # bare verb reads as a retraction of exactly the item it is REINSTATING.
 RE_VERB_ID = re.compile(r"(?<!UN-)(?<!un-)(?<!-)\b" + RE_VERB + RE_FILL + r"$", re.I)
