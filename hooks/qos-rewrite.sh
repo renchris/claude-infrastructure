@@ -144,10 +144,14 @@ else
 fi
 
 if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
-  # Escape the replacement for sed: `\` and `&` are special in a replacement, `%` is our delimiter.
-  # Verified 2026-07-30 against targets containing each of the three.
-  REPL=$(printf '%s' "$CC_BATS_TARGET" | sed -e 's/[\\&%]/\\&/g') || REPL=""
-  if [ -n "$REPL" ]; then
+  # NO REPLACEMENT ESCAPING IS NEEDED ANY MORE, and that is a consequence of the substituter, not
+  # an oversight. sed needed the target escaped because `\` and `&` are special in a replacement and
+  # `%` was our delimiter (verified 2026-07-30 against targets containing each of the three); the
+  # awk pass below never puts the target through a replacement parser at all — it builds the result
+  # with substr() and concatenation — and receives it through ENVIRON rather than -v, which would
+  # itself process escape sequences. One fork saved on every Bash call, and one whole class of
+  # metacharacter bug that can no longer exist.
+  if [ -n "$CC_BATS_TARGET" ]; then
     # THE TOKEN PATTERN, and why each piece is load-bearing (all four verified on BSD sed):
     #   (^|[[:space:]])      the token starts a word — `my.bats.file` and `t.bats` never match
     #   (/[^[:space:]]*/)?   an optional ABSOLUTE directory prefix that must END in `/`. This is
@@ -186,9 +190,93 @@ if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
     else
       _PFX='(/[^[:space:]]*/)?'     # no shim: the bare token still has no other chokepoint
     fi
-    NEWCMD=$(printf '%s' "$CMD" \
-      | sed -E "s%(^|[[:space:]])${_PFX}bats([[:space:]]|\$)%\\1${REPL}\\3%g" 2>/dev/null) \
-      || NEWCMD=""
+    # ── THE SUBSTITUTION SKIPS QUOTED REGIONS (backlog e2eaaa0f4907, fixed 2026-08-21) ───────────
+    # WHAT WAS STILL BROKEN AFTER THE BARE TOKEN WAS DROPPED. Narrowing the pattern to absolute
+    # spellings fixed the COMMON corruption, not the CLASS: `sed` sees one flat string, so the
+    # surviving arm still rewrote an absolute spelling wherever it appeared, including inside a
+    # quoted argument and a heredoc BODY. Reproduced 2026-08-21 from a drain session's own probe —
+    # `bats -f 'check /usr/local/bin/bats path' t.bats` came back with its FILTER rewritten, and a
+    # heredoc that WROTE a file landed the substituted bytes on disk. The chain's own working rule
+    # ("write probes to a file and run them with bash") routes straight through this path, so the
+    # blast radius is agent-authored file CONTENT, not merely a surprising echo.
+    #
+    # WHY QUOTE-SKIPPING AND NOT COMMAND-POSITION-ONLY. The row proposed either. Command-position
+    # would delete the wrapper coverage the pattern comment above says `/g` exists for — `timeout 90
+    # <path>/bats`, `env FOO=1 <path>/bats` are matched today WITHOUT this file knowing the wrapper,
+    # and an allowlist of wrapper spellings is the denylist defect one layer out. Quote-skipping
+    # subtracts only the positions where the token is DATA, which is exactly the harm.
+    #
+    # THE WALK IS FAIL-SAFE IN ONE DIRECTION BY CONSTRUCTION, which is what makes it safe to put in
+    # front of every agent Bash call. It tracks shell quote state char by char; when its model of
+    # the quoting disagrees with the shell's, it does so by believing it is INSIDE a quote (an odd
+    # apostrophe in a heredoc body — `don't` — parks it there), and inside a quote it substitutes
+    # nothing. A miss costs a bats run its QoS band; it cannot corrupt a command. An awk that is
+    # missing or errors yields an empty NEWCMD, which the guard below already treats as "no rewrite".
+    #
+    # A HEREDOC BODY IS NOT A QUOTED REGION, so quote-skipping alone does NOT cover it — and the
+    # heredoc is the case that was actually MEASURED doing damage (a probe file was written with
+    # substituted bytes). Rather than parse `<<[-]WORD` bodies in front of every Bash call, the walk
+    # stops substituting at the first unquoted `<<`: everything after a heredoc or herestring
+    # operator is copied verbatim. That is deliberately wider than the body itself — a rewritable
+    # token after a heredoc loses its QoS band — and it is the same trade the rest of this block
+    # makes, spending a miss to buy the guarantee that agent-authored DATA is never edited.
+    #
+    # SENTINEL (SOH) marks a run edge that is NOT the true string edge, so `^`/`$` cannot match
+    # there — a token abutting a quote is not whitespace-delimited and sed did not match it either.
+    # Re-prepending it after each match reproduces sed's /g resume semantics, where `^` no longer
+    # applies. Both sentinel bytes are declined outright if the command already carries one.
+    #
+    # The `*bats*` pre-filter is STRICTLY WEAKER than the pattern it guards — every match contains
+    # the literal — so it cannot shadow a real match (memory: cost-gate-must-be-strictly-weaker),
+    # and it keeps the char walk off the overwhelming majority of commands.
+    case "$CMD" in
+      *$'\001'*|*$'\034'*) NEWCMD="" ;;   # a sentinel byte is already present — decline, fail-safe
+      *bats*)
+        NEWCMD=$(printf '%s' "$CMD" | \
+          CC_QOS_REPL="$CC_BATS_TARGET" \
+          CC_QOS_PAT="(^|[[:space:]])${_PFX}bats([[:space:]]|\$)" awk '
+            function subst(t, atStart, atEnd,   res, rest, m, lead, tail) {
+              rest = (atStart ? "" : SENT) t (atEnd ? "" : SENT)
+              res  = ""
+              while (match(rest, PAT)) {
+                m    = substr(rest, RSTART, RLENGTH)
+                lead = substr(m, 1, 1);         if (lead !~ /[[:space:]]/) lead = ""
+                tail = substr(m, length(m), 1); if (tail !~ /[[:space:]]/) tail = ""
+                res  = res substr(rest, 1, RSTART - 1) lead REPL tail
+                rest = SENT substr(rest, RSTART + RLENGTH)
+              }
+              return res rest
+            }
+            BEGIN { RS = "\034"; SENT = sprintf("%c", 1)
+                    REPL = ENVIRON["CC_QOS_REPL"]; PAT = ENVIRON["CC_QOS_PAT"] }
+            {
+              s = $0; n = length(s); out = ""; run = ""; st = 0; i = 1
+              while (i <= n) {
+                c = substr(s, i, 1)
+                if (st == 0) {                                   # unquoted
+                  if (c == "\\")                { run = run substr(s, i, 2); i += 2; continue }
+                  if (c == "<" && substr(s, i + 1, 1) == "<") {  # heredoc/herestring — all data
+                    out = out subst(run, (out == ""), 0) substr(s, i)
+                    run = ""; i = n + 1; break
+                  }
+                  if (c == "\047" || c == "\"") { out = out subst(run, (out == ""), 0) c
+                                                  run = ""; st = (c == "\047") ? 1 : 2
+                                                  i++; continue }
+                  run = run c; i++
+                } else if (st == 1) {                            # inside single quotes
+                  out = out c; if (c == "\047") st = 0; i++
+                } else {                                         # inside double quotes
+                  if (c == "\\") { out = out substr(s, i, 2); i += 2; continue }
+                  out = out c; if (c == "\"") st = 0; i++
+                }
+              }
+              out = out subst(run, (out == ""), 1)
+              gsub(SENT, "", out)
+              printf "%s", out
+            }' 2>/dev/null) || NEWCMD=""
+        ;;
+      *) NEWCMD="" ;;
+    esac
     if [ -n "$NEWCMD" ] && [ "$NEWCMD" != "$CMD" ]; then
       emit "$NEWCMD"
     fi
