@@ -87,6 +87,88 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #119: `/compact-memory` bundled a population-independent conclusion
+  onto a population-dependent premise, so at the populations where the premise fails the sound
+  argument falls with it — and the premise's own constant, `17,100`, is a THIRD KB convention this
+  file never noticed it was using. filed 1 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  **still differs** from trunk (checkout **20** behind, budget 25) — #114's fix landed and *not
+  running* for **six consecutive recycles**. Zero heredocs; every probe written with the Write tool.
+  Fold at open: `master-convergence-deadlock` **46/4** — **a fifth consecutive window with no
+  movement**, and like #118 this session's work sits outside that group.
+
+  Target: #118's handover — row `1922427e1b84`, *"`/compact-memory` asserts the 17.1 KB demand
+  unreachable UNCONDITIONALLY, but the claim is a function of N."* **The row is right about the
+  shape and wrong about the arithmetic it uses to prove it, and the arithmetic error is the more
+  durable finding.**
+
+  **1. The claim is conditional — confirmed on two LIVE populations, one instrument for every
+  figure (`mim_measure_file`, method 61).** claude-infrastructure: N=143, index 24,287 u / 146 ln,
+  `Σprefix` **10,114 u**, so the per-hook budget at the product target is **50 u/hook** against a
+  ~115 floor — **unreachable, the old verdict holds here**. reso-management-app: N=31, index
+  22,263 u / 32 ln, **564 u/entry** against 718 observed — a 21% trim, **reachable**. Two structural
+  facts the row did not have: `Σprefix` alone is **58% of the entire product target** at N=143 (which
+  is why the budget collapses to 50 while the average hook is a healthy 98), and **reso has no
+  prefix/hook split at all** — its hook text sits inside the link title, so the row's own formula
+  does not apply to the population it cites as proof.
+
+  🚨 **2. `17,100` IS THE SAME DEFECT `24,985` WAS, AND `bytes → chars` DOES NOT REPAIR IT.** Both
+  product-side labels are one quantity over 1024, and this file expanded them with **two different KB
+  conventions**: `24.4 × 1024 = 24,985.6` → `24985` (binary), but `17.1 × 1000` → `17100` (decimal).
+  The product's ratio is a flat 0.7 (already recorded in the file, verified at two index sizes), and
+  `0.7 × 25,000 = 17,500` units → `17,500/1024 = 17.09` = the label, exactly as `25,000/1024 = 24.41`
+  is the other. So the target is **~17,500 units** and `17,100` was **never a byte count of
+  anything** — THE UNIT's blanket *bytes → chars* substitution leaves it **400 units short**. Every
+  historical per-entry figure (67 · 52 · 115 · 167 · 395) inherits this on top of the byte/char one,
+  **including the backlog row's own 395 B/hook**.
+
+  🚨 **3. "The ratio disproves units" refuted ONE candidate conversion and concluded that NONE
+  applied — RETRACTED.** The bullet computed `23.2/21.7 = 1.0691`, called it "2.9× too large for any
+  base-1000/1024 difference", and assigned the residual to STALENESS. The conversion that applies is
+  **bytes → UTF-16 units plus the loader's stripping**, which measures **1.0161 and 1.0537** live on
+  two real indexes (~2.3% multibyte + ~3.0% stripping on the larger) — 1.0691 is at the top of that
+  band, not outside it. Its downstream claim, that the product's `20.9KB` on a 22,232 B file "is not
+  a live read", is refuted by its own numbers: `20.9 × 1024 = 21,402` against 22,232 is **1.0388**,
+  inside the band. **Disproving *that* unit difference is not disproving *a* unit difference.**
+
+  **Landed** (`commands/compact-memory.md`, +98/−28, docs-only): THE UNIT gains the `17,100`
+  correction; the headline claim is split into its population-INDEPENDENT provenance half (kept, and
+  now stated as the load-bearing one) and its population-DEPENDENT arithmetic half (replaced by the
+  one-line test + the live table); the RE-INFLATION bullet's two closing claims are retracted with
+  their reasons; and the **Output contract** is corrected — it instructed the pass to report a
+  **byte** count against 24,985 and to treat the line count "as context, never as the verdict",
+  which contradicted this file's own THE UNIT on both halves and would have let a pass declare
+  victory over a live 200-line breach. Suites green this turn: `memory-index-budget` 28/28,
+  `compact-memory-orphan-sweep` 6/6, `memory-nudge-budget` 31/31, `cc-memory-rotate` 22/22 — plans
+  matched, 0 skips.
+
+  **Closed `1922427e1b84`** on two of its three conjuncts (the doc claim — fixed; the *"desk should
+  mint with `--condition`"* ask — already cured at the producer, `mk_cond_id` + `--condition` in
+  `bin/cc-backlog`, recorded in the file's own 2026-08-11 bullet). **Filed its third conjunct as its
+  own row**: the dropped-token audit is a distinct deliverable, not a docs edit.
+
+  **Wrong causes rejected** (method 43): *(a)* "the doc's byte premise is uncorrected" — false, THE
+  UNIT already carries a blanket correction; nearly filed a duplicate of a landed fix (method 60).
+  *(b)* "`grep -a` no longer finds the template in the binary, so that claim is stale" — **a
+  NON-VERDICT**: the positive control (`claude-sonnet`, a string that must be present) also returned
+  0 hits, so the payload is compressed and every null was blind; recorded in the file as a
+  non-verdict rather than a refutation. *(c)* "reso proves it at N=36 / 395 B/hook" — that state no
+  longer exists and the formula does not fit reso's shape. *(d)* inheriting `17,100` while fixing the
+  doc — would have reproduced the exact defect being fixed. *(e)* "the `~67 B/entry` site at the
+  HOT/COLD SPLIT is another unconditional claim" — already conditionalised four lines below it; a
+  second caveat would have competed with the first. *(f)* "the `20.9KB` figure is stale" — the doc's
+  own conclusion, accepted at first, refuted by its own arithmetic. *(g)* importing the dropped-token
+  audit now — a `scripts/` ADD is **not** covered by `4e6a51df2a84`'s `tests/*` exemption and would
+  have forced a `🚀 LIVE_ADDS` breach at a lag of 1, for an instrument only a human-gated pass needs.
+
+  **Method 62 for the successor — A RULE'S SCOPE AND ITS ARGUMENT'S SCOPE ARE TWO DIFFERENT SPANS,
+  AND BUNDLING THEM DESTROYS THE STRONGER ONE.** *"That demand is product-side"* is true everywhere;
+  *"no honest pass can reach it"* is true at N=143 and false at N=31. Welded into one sentence, a
+  reader at low N checks the arithmetic, finds it false, and discards the provenance argument that
+  was actually doing the work — so the paragraph fails hardest exactly where its advice is most
+  needed. Before writing a 🚨, ask of each clause: *over what population is this true?* Clauses with
+  different answers do not belong in the same assertion.
+
 - **2026-08-21 — drain recycle #118: the memory index is not over its cap and never crossed it. All
   three open rows rested on a `wc -c` reading; the "one-day growth" that filed the newest one is the
   gap between two instruments, to the character. filed 0 / closed 3 / landed 1 commit.**
