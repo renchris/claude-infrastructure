@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #109: `d0a1bb8717cf`'s remedy landed ten days before the brief named
+  it as the generator's outstanding cure — and the ONE site that still does not emit is a documented
+  exclusion the repo proves works. closed 1 / filed 0.** #109 opened on the START-HERE order: the
+  post-land RED page for `33c462990b2c` was still on disk, so a red trunk was checked FIRST. It is
+  **stale** — its sweep ran at `ce8fb6c0719a`, which PREDATES #108's fix `9de43ce2b`; re-run at HEAD,
+  `tests/anti-vacuity-contract.bats` is **green ok=6 notok=0**. The verifier's own newer `C29 PENDING`
+  conviction names the same suite over the same pre-fix tree. **A page is state-keyed and outlives its
+  cure; date its SWEEP against the fix before believing it** (this is `scan-predates-the-fix` on the
+  PAGE rather than on a finding, and here the check ACQUITTED where #108's convicted).
+
+  🚨 **FINDING 1 — THE ROW ASKED FOR A REMEDY THAT WAS ALREADY LANDED, IN TWO COMMITS, AT EVERY SITE
+  WHERE ITS OWN INSTRUMENT IS THE RIGHT ONE.** `d0a1bb8717cf` — *emit `--falsifier` from
+  postland-verify and deploy-live at FILING time* — was carried forward by #107 and #108 as the
+  generator's actual cure and this recycle's item (3). Both generators emit today:
+  **`fe6ebd0fb`** (2026-08-11T06:39Z, `scripts/deploy-live.sh` — BOTH mint sites, `:724` and `:869`,
+  via `fals_host` / `fals_host_set`) and **`e4ef73d3f`** (2026-08-11T23:09Z,
+  `scripts/postland-verify.sh:793` `file_linked`). Neither commit cites the row — ordinary, and
+  exactly what method 18 predicts. **Found by `git log -S` on the emission strings, in one command
+  each.**
+
+  🚨 **FINDING 2 — THE ONE NON-EMITTING SITE IS A REASONED EXCLUSION WITH A BUILT ARM BEHIND IT, AND
+  METHOD 11 IS THE ONLY THING THAT CAUGHT IT.** `postland-verify.sh` has exactly TWO mint sites, and
+  the split is perfect against the store: `:793` emits (11/11 of its post-cure rows carry a probe),
+  `:2696` — the **`post-land RED:`** filer, which is the DOMINANT class — does not (7/7 lack one).
+  That reads as a bug, and it is not. `scripts/postland-verify.sh:3187` states it: *"NOT EMITTED ON
+  `post-land RED:` ITEMS, deliberately"* — that population is served by the DERIVED arm
+  `bin/cc-premise:1931 run_derived_postland_falsifier` (dispatched at `:2262`), and cc-premise's
+  composition rule is that a **stored probe OUTRANKS a derived one**, so storing an equal probe there
+  would shadow a tested arm and buy a second implementation to keep in sync. **Verified BUILT, not
+  prose** (memory: `spec-named-mechanism-may-be-prose-only`) and green this turn:
+  `tests/cc-premise-postland-red.bats` **20/20** · `tests/cc-premise-coverage.bats` **12/12**.
+
+  🚨 **FINDING 3 — THE ROW'S HEADLINE NUMBER IS STALE *AND* ITS INSTRUMENT IS THE ONE THE REPO BUILT
+  A REPLACEMENT FOR.** The row measured *"1 of 1584 items carries a falsifier"* (2026-08-10) by
+  counting STORED probes. `bin/cc-premise`'s `coverage` verb exists precisely because *"a numerator
+  counting only STORED probes reads every derived-covered row as uncovered"*. Right instrument,
+  2026-08-21: **46 of 267 probeable live rows covered (17.2%)**, all 46 via the stored arm; store-wide
+  **260 of 2536 items** carry a stored probe, up from 1. **A count is a count of what the needle
+  names (method 7) — and here the row's own needle was the superseded one.**
+
+  🚨 **FINDING 4 — A ZERO OVER AN EMPTY SUBPOPULATION NEARLY CONVICTED A WORKING ARM.**
+  `cc-premise coverage` reports **`derived-postland 0`**, which reads as *the arm the exclusion
+  depends on speaks for nobody* — a clean, publishable refutation of finding 2. It is **vacuous**:
+  all **99** `post-land RED:` rows in the store are `status=done`, so the probeable subpopulation is
+  **EMPTY** and the zero says nothing whatever about the arm (memory:
+  `positive-control-the-denominator`; method 48 — ask whether an unjudgeable bucket is a property of
+  the POPULATION or of your extractor). **Measure the denominator before reporting a zero as a
+  finding.**
+
+  **WRONG CAUSES REJECTED** (method 43): **(a)** *"the dominant RED class is uncovered — the cure only
+  reached the rare sites"* — refuted by the subject's own documented policy (finding 2); note the
+  row's own plan doc `BACKLOG_CONSOLIDATION_2026-08-09.md:483` frames it as *"its grep matched the
+  rare generator sites while the dominant one…"*, i.e. the framing that survived into the plan is the
+  one the code refutes. **(b)** *"`derived-postland 0` proves the derived arm is dead"* — finding 4,
+  refuted on the denominator. **(c)** *"`a7bf7068` made the four generators emit, so this was cured
+  2026-08-10"* — refuted by READING THE DIFF (memory: `read-the-diff-not-the-commit-subject`):
+  `a7bf70689` touched `postland-verify.sh` with **zero** falsifier changes; it built the MECHANISM,
+  not the emission. `cmd_falsify`'s own header sentence describing it as making generators *"emit
+  probes going forward"* describes CAPABILITY, and reading it as a landed emission would have closed
+  this row on a commit that emitted nothing. **(d)** *"just add `--falsifier` at `:2696`"* — actively
+  harmful **two** ways, and it was the obvious fix for most of this session: the row is
+  CONDITION-keyed, so a stored culprit sha OUTLIVES its culprit and `--falsify-red` would exit 0 —
+  the RETRACTING direction — against a suite gone red again at a LATER sha; and it would shadow the
+  derived arm per finding 2. **Fourth instance in four recycles of `prescribed-remedy-worse-than-the-bug`,
+  and the first where the prescription was MINE rather than a row's or a machine's.**
+
+  **THE STANDING LINT IS UNCHANGED AND STILL UNCLAIMED** (five recycles, one shape): for every file
+  written by one tool and read by another, pin the format in ONE place. This recycle adds no instance
+  — its subject was a CONTRACT between two programs (`postland-verify` writes, `cc-premise` reads)
+  that **is** pinned in one place, in prose at `:3187` and in code at `cc-premise:1931`, and that is
+  precisely why reading the producer's own header resolved it in one step.
+
+  **NOT RE-FILED — the peer owns it.** `claude-infrastructure-102` measured the stamping bottleneck
+  independently and filed **`17e94bb423ef`** (`verifier-cycle-exceeds-landing-interval`): the verifier
+  is not dead but **OUTPACED** — 2295 s ≈ 38 min per cycle against a ~30-35 min landing interval, so
+  the un-stamped backlog grows BY CONSTRUCTION, with load (17.13) making the chain its own
+  contributor. This retires the 🆕 *"the stamping bottleneck is unowned"* residual carried since #108.
+  Live-layer lag read **11** at open (premise-1 trend 16 → 7 → 3 → 2 → 9 → 11 against a budget of 25).
+
+  **GATES, run this turn on the closing tree:** `offbox-run.sh suites` green on all three suites read
+  — `anti-vacuity-contract` **ok=6 notok=0**, `cc-premise-postland-red` **ok=20 notok=0**,
+  `cc-premise-coverage` **ok=12 notok=0** (⚠️ read the `state` column, never the wrapper rc — #107).
+  Docs-only diff, so `tsc`/`lint` are **n/a**, never a false ✓. Evidence round-tripped byte-identical
+  through `jq` (method 31).
+
+  **Fold at close.** `master-convergence-deadlock` **48 open / 4 blocked** (was 49/4 — the one close
+  is this recycle's). Store-wide **270 open / 180 blocked / 2536 items / 159 conditions**. 🚨 **The
+  store-wide open level did NOT move, and that is not a null result:** my close of `d0a1bb8717cf` and
+  the peer's filing of `17e94bb423ef` cancel exactly. **State the movements, never just the level.**
+
 - **2026-08-21 — drain recycle #108: the trunk was RED and it outranked every row. closed 0 / filed
   0 / trunk restored to green.** Recycle #108 opened on peer mail, not on a fold: *post-land RED
   `tests/anti-vacuity-contract.bats::CENSUS` at `33c462990b2c` (your land)* followed one minute
