@@ -87,6 +87,84 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #108: the trunk was RED and it outranked every row. closed 0 / filed
+  0 / trunk restored to green.** Recycle #108 opened on peer mail, not on a fold: *post-land RED
+  `tests/anti-vacuity-contract.bats::CENSUS` at `33c462990b2c` (your land)* followed one minute
+  later by *AUTO-REVERT FAILED (step=revert rc=90)*. Re-derived rather than inherited (method 2):
+  the culprit was **five commits back on trunk**, so the first question was whether a later land had
+  already cured it. It had not — `bats tests/anti-vacuity-contract.bats` at `origin/main` HEAD
+  `9b329d21d` read **4 ok / 1 not ok, plan `1..5`**, naming `scripts/redproof-lstart-dialect.sh` as
+  the unwired harness. ONE commit; the suite now reads **6 ok / 0 not ok, plan `1..6`**, and green
+  off-box under `env -i LC_ALL=C` as well. Fold at close (population: rows in that condition only,
+  of 159 conditions / 2533 items): `master-convergence-deadlock` **49 open / 4 blocked** —
+  unchanged, deliberately; this recycle spent itself on the trunk, not on a row.
+
+  🚨 **FINDING 1 — THE GUARD WORKED, AND THE PRESCRIBED REMEDY WOULD HAVE DELETED THE FIX.** The
+  census's design is that membership is by GLOB, *"so a new harness is in scope on the day it is
+  created, with nobody's cooperation"*. That is exactly what happened: `33c462990b2c` landed a
+  fourth red-proof harness with no case, the glob caught it, and the trunk verifier went red. The
+  machine's own prescribed remedy was `postland-revert-33c462990b2c` — and reverting would have
+  **deleted the lstart-dialect cure for six `bin/` tools** (backlog `7a00b5de1ec0`, closed by #105)
+  to satisfy a census asking for a *test case*. The auto-revert FAILING with rc 90 was the good
+  outcome. Third instance in three recycles of `prescribed-remedy-worse-than-the-bug` (#106, #107
+  finding 5, now this) — and the first where the prescriber was a MACHINE, not a row's prose.
+
+  🚨 **FINDING 2 — A RED-PROOF'S NEEDLES LIVE IN TWO POPULATIONS, AND ONLY ONE OF THEM IS AN
+  ANCHOR.** This is the recycle's one-line generalisation. A differential red-proof reads two trees:
+  the tree it is PROVING (current) and the tree it COMPARES AGAINST (an archived parent). Its
+  literals split the same way, and they rot in opposite directions. `redproof-lstart-dialect.sh`
+  ARM 1 greps `cur_lstart="$(ps -o lstart=` and ARM 2 extracts `proc_lstart` — **from the PARENT**,
+  where their job is to prove the bug WAS there. Those must be absent from HEAD; an anchor check
+  over them would convict the repo for having landed its own fix. Only the current-tree literals —
+  the ones the mutators substitute — are anchors. The table therefore carries 13 rows and
+  deliberately excludes ARM 1 and ARM 2, with the reason written next to the exclusion rather than
+  implied by its absence.
+
+  🚨 **FINDING 3 — THE CHEAP SCREEN MUST NOT KEEP ITS OWN COPY OF THE LITERALS.** The obvious
+  `--check-anchors` implementation is a list of strings to grep. That is the vacuous pass one level
+  up, which is the defect this entire suite exists to prevent: a private list goes green while the
+  expensive run it stands in for is already broken. So the table is the SINGLE source — `mutate()`,
+  `rmutate()` and ARM 5b's extractor all read it through `anchor_lit()`, and **every mutation is
+  DERIVED from its anchor by a further literal replace** (drop `, None, {"LC_ALL": "C"}`; drop
+  ` LC_ALL=C`; swap `"$1" "$3" "$2"` back to `"$1" "$2" "$3"`). Proven behaviour-preserving, not
+  asserted: all **3/3** derived strings are byte-identical to the literals the harness hardcoded
+  before this change. `anchor_lit` on a miss is exit 9 and never an empty string, because an empty
+  `FROM` makes python's `str.replace()` match at every position.
+
+  ⚠️ **FINDING 4 — THE HARNESS HAD A SILENT NON-VERDICT, FOUND ONLY BY ASKING WHAT EACH NEEDLE
+  READS.** ARM 5b extracted `reg_lstart_norm` and `pid_live` from `bin/cc-notify` by awk regex, then
+  ran `bash -c '. "$ex"; pid_live …' 2>/dev/null`. A rename makes the extraction EMPTY, the sourcing
+  error goes to `/dev/null`, and the arm prints a blank where a verdict goes — a non-verdict wearing
+  a verdict's shape (memory: `null-result-must-not-use-the-error-channel`). Two of the four ARM-4/5e
+  mutators already fail loud via `assert new != s`; this one did not, and nothing distinguished them
+  from outside. Both function headers are now anchors, and the extractor refuses an empty result out
+  loud. Same class as the `rule=file` rows: a deleted suite made `tally()` print `plan=?`, which
+  reads like a quiet zero rather than a break.
+
+  ✅ **CONTROL — five sabotage arms, one script, counts side by side (methods 26/27).** A pristine
+  copy PASSES (`13 live · 0 STALE`, rc 0) and each rule class can FAIL: `rule=one` renamed →
+  rc 1 + `STALE ANCHOR registry-norm-fn` · `rule=some` marker stripped → rc 1 + the named site ·
+  `rule=file` suite deleted → rc 1 · `rule=one` DUPLICATED → rc 1 + *"must be exactly 1"* (2× is
+  unsound too — the mutation would sabotage more than it claims). The bats case carries the same
+  proof against a copied tree, control-first. And the liveness checker's SILENCE on the suite was
+  itself positive-controlled (method 35): silent as written, `DEAD [negation]` on a planted mid-test
+  `! … | grep -q` with no `|| false`.
+
+  **WRONG CAUSES REJECTED** (method 43): **(a)** *"take the revert branch"* — finding 1. **(b)**
+  *"the culprit sha is 5 commits stale, so the red is probably already cured"* — the
+  `scan-predates-the-fix` check is mandatory and it came back **still red**, reproduced at HEAD in
+  this session; the check acquits sometimes, not always. **(c)** *"widen the glob past the new
+  harness / lower the floor"* — that makes the guard vacuous in precisely the direction it exists
+  to prevent; the floor went 3→4 instead. **(d)** *"wire it by running the full proof"* — 5 arms ×
+  ~9 bats runs in `git archive` scratch trees; the suite's own documented trade is cheap-half
+  unconditional, expensive-half explicit, and this harness had no cheap half until now. **(e)** *"a
+  second literal table is fine, it is only a screen"* — finding 3.
+
+  **GATES, all run this turn on the closing tree:** `offbox-run.sh suites` **green ok=6 notok=0**
+  (⚠️ read the `state` column, never the wrapper rc — #107) · `self-path-lint --selftest` 32/32 ·
+  `bats-kill-guard-lint` clean · `bats-assert-liveness` silent **and positive-controlled** ·
+  `shellcheck -S style` rc 0 · `test-hermeticity-lint tests` clean, 527 suites, **0 new leaks**.
+
 - **2026-08-21 — drain recycle #107: took the GENERATOR CENSUS #103 named and #104/#105/#106 each
   deferred. closed 3 / filed 0** — `da4b516dc78a`, `4a74657d6088`, `087db20c3a24`, all three
   **already cured by landed commits that never cite them**. ONE commit (this SSOT entry); no code
