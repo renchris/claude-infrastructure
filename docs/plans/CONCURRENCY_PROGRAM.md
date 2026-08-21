@@ -1613,6 +1613,32 @@ and none of the 3 set it** — `reso-management-app` (filed, pending), plus **`r
 **Not touched, deliberately:** `compressor-sentinel` tuning, `CC_FIRE_MAX_LOAD_PER_CORE`, any gate
 default, and every file Wave A owns.
 
+🚨 **REGISTRATION IS NOT CLOSURE — the chokepoint (Bash) does not intersect the storm's trigger
+(fleet edits), and this is a SCOPE BOUNDARY, not a defect in the artifact.** This is G4 of
+`docs/research/scaling-bottlenecks-2026-08-09/05-crash-closure.md`, recorded here because G4 asked
+for it in these words: *"Record this in §S6.5 so a later reader does not mistake registration for
+closure."* Wave C binds **the agent-initiated ignition edge only** — a Bash tool call that starts a
+cold compile. The storm shape that produced the panics is the children-of-children one: *repeated
+mass invalidation of a long-lived server under continuous fleet edits*, which begins at an
+`Edit`/`Write`, never at a Bash call, so nothing in this wave can see it. Its owners are named and
+they are elsewhere — the compressor sentinel (G1, armed) and the generator kill (G5,
+`experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` in each app's own `next.config`,
+filed as `d60fd1f9c375` / `0e4f795b3a20`, both still open in `master-product-repos`).
+
+**And the tempting remedy — "re-aim the registration at `Edit`/`Write`" — is INERT, measured
+2026-08-20 on the deployed file** (`hooks/coldcompile-admit.sh`, sha256 `48b866be5506ea8f…`
+byte-identical across trunk, this worktree and `~/.claude`). The hook reads
+`.tool_input.command` and returns at `[ -n "$CMD" ] || exit 0`; an `Edit` or `Write` payload has no
+`command`, so it emits **0 bytes**. Four arms, same instant: `Edit` → rc 0 / 0 B · `Write` → rc 0 /
+0 B · **positive control** a real ignition command (`cd … && (npx next dev &) ; sleep 25`) → rc 0 /
+**255 B** of `updatedInput` prefixing `cc-ignition-gate --class next-dev` · **negative control**
+`echo hello ; ls -l` → rc 0 / 0 B. Re-pointing the matcher would therefore install exactly what
+`migrations/0006`'s own header warns about — *"a registration naming a path that does not execute is
+a registered no-op — and a registered no-op reads GREEN"* — on a `settings.json` surface that is C10
+and operator-gated (`f30fa039f98f`, blocked; ratification `b09f54e9e080`, blocked). Covering the
+fleet-edit path needs a different detector, not this one re-aimed; backlog `9362e80a999f` closed on
+this record.
+
 ### S6.6 · Phase D — fix what the gate measures
 
 Two term changes, both evidence-backed, both **operator's call** (they gate spawn box-wide):
