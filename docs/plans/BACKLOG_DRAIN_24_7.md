@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #75: `master-fire-gate` 36 open → 35 open / 2 blocked.
+  closed 1 / filed 0. 🚨 THE FINDING: the item's own quoted evidence was the defect. It read a
+  doc claim as ground truth and the filesystem as the bug, so it filed the ABSENT FILE and
+  prescribed two remedies that would each have broken a live cross-repo safety gate.**
+
+  **Effort choice.** Eleventh consecutive recycle in `master-fire-gate`; #74 left it warm at 36
+  open. Row `9a14c2ef8224` — *"scripts/worktree-pool.sh is a PHANTOM … 15 files reference it …
+  decide delete-or-build"*. It had been re-verified "STANDS" by #66 and read again by #67, so it
+  was carried forward as settled through three recycles. **It was not settled; it was unexamined.**
+
+  **THE SHAPE — an absent file reached through `$REPO/` is not a phantom, it is a capability this
+  repo does not have.** Measured, all at origin/main content: `git log --all --diff-filter=A --
+  scripts/worktree-pool.sh` is genuinely empty (positive-controlled — the same query on
+  `scripts/handoff-fire.sh` returns its add commit `31b5bff94`), **but the script is not missing
+  from the box.** It is reso's: `~/Development/reso-management-app/scripts/worktree-pool.sh`
+  (15,445 B, reso commit `fdbf0b2d5`) plus the self-updating `~/.reso/bin/worktree-pool.sh`
+  (25,715 B), and **all ten slots at `~/Development/.worktrees/wt-pool-N` are live and
+  reso-owned**, each on a real branch. `scripts/handoff-fire.sh` reaches it through a
+  **repo-relative probe** — `POOL="$REPO/scripts/worktree-pool.sh"` — and then re-checks slot
+  ownership by git-common-dir, because on 2026-07-24 all ten slots were reso's while the fire was
+  claude-infrastructure's and `claim` handed back a reso path without complaint. `POOL_ELIGIBLE=0`
+  in this repo is that gate **working**, not dead code. `lib/claude-launcher.zsh` is gated the same
+  way (`basename "$_top" == reso-management-app`) — a hypothesis that it leaked cross-repo was
+  raised and **refuted** by reading it.
+
+  🚨 **BOTH PRESCRIBED REMEDIES WERE HARMFUL, AND THE GATE'S OWN COMMENT SAYS SO.** *Delete the
+  references* removes the ownership gate that exists to stop the 07-24 misfire. *Build / cherry-pick
+  a pool here* creates a second repo's pool contending for the shared `wt-pool-N` namespace — which
+  that same comment names as the hazard it defends against (*"nor a second repo growing its own
+  pool.sh can hand a peer a foreign checkout"*). Class: `prescribed-remedy-worse-than-the-bug` +
+  `work-item-citation-refutes-its-own-remedy`.
+
+  🚨 **AND THE REPO HAD ALREADY RULED CORRECTLY — TWICE — IN DOCUMENTS NOBODY READS FIRST.**
+  `docs/plans/WORKTREE_MANAGEMENT_V2.md:698-700`: *"which **does not exist in this repo**; it is
+  reso's … `handoff-fire.sh` only *calls* it through a repo-relative path."*
+  `docs/research/repo-semantics.md:165` says the same. Meanwhile the **canonical**
+  `docs/WORKTREE_WORKFLOW.md` § 5 kept asserting *"**Warm pool feeds the front**
+  (`scripts/worktree-pool.sh`): 10 pre-provisioned slots"* with no repo qualifier — and § 5's whole
+  body is reso's `/ship` (`ship-reconcile.sh`, migration renumbering, `pnpm typecheck`, Playwright
+  VRT, `pnpm worktree:gc`) under a heading that never says so, while **this** repo lands through
+  `scripts/ship-land.sh`. Attributed by existence check: `worktree-pool.sh` and `ship-reconcile.sh`
+  are reso-only; `land-lock.sh` is the one artifact both ship. **The item's own cited line
+  (`:162`) was the minting source** — the reader took the doc as ground truth and concluded the
+  filesystem was broken.
+
+  🚨 **THE GENERALISABLE FINDING — a correction that lands in a SECONDARY document does not retract
+  the primary one.** Family: #73 (state destroyed UPSTREAM of a gate that already knew how to use
+  it) · #74 (state emitted perfectly and destroyed DOWNSTREAM at its only consumer). **#75 is the
+  third direction: the state was CORRECT in a sibling document and never reached the authoritative
+  one.** Same law as memory `conclusion-must-reach-the-enforcing-store` — docs/plans ADVISE, only
+  the enforcing store binds; for a human or agent reader the enforcing store is *the canonical
+  workflow doc they consult first*. Two correct rulings sat on disk for weeks and the false premise
+  kept minting anyway, because nothing connected them. **Before filing an absence, ask which
+  document told you it should be there — and whether a sibling doc already refuted it.**
+
+  **What shipped.** `docs/WORKTREE_WORKFLOW.md`: a SCOPE block at the head of § 5 declaring the
+  section reso-scoped, naming `scripts/ship-land.sh` as this repo's own land path, stating that no
+  pool and no `ship-reconcile.sh` here is **by design, not a gap**, and recording why the item was
+  filed so the next reader cannot repeat it; plus the warm-pool paragraph re-opened with an explicit
+  repo qualifier. Control: `tests/worktree-pool-repo-scope.bats`, **7 cases — 2 RED pre-fix** on a
+  pristine `git archive origin/main` tree (`symlinks=0` printed before writing into it), and **5
+  green-both-arms, named as such in the test names**: the repo-relative probe, the slot-ownership
+  refusal, the launcher's reso scope gate, the absence of a pool here (so the SCOPE note may not
+  outlive the fact it asserts), and a find/miss positive control on the doc reader. Tests 3-5 are
+  the real teeth: **the item's own "delete the references" remedy now reds a test.**
+
+  **Gates.** `shellcheck -S style` rc=0 (two SC2016 on deliberately-literal `$REPO` matches carry
+  scoped disables, not a widened level) · `bats-assert-liveness.py` rc=0 **with its silence
+  positive-controlled** — injected `! false` negations made it rc=1 / 3 found · `bats-kill-guard-lint`
+  rc=0 · `bats-testname-eval-lint` rc=0, 521 suites · `bats-shim-parity-lint` NOT-ACTIVE (healthy
+  default) · `test-hermeticity-lint` **hit the ratchet on the new suite** (AMBIENT + SEAM: it names
+  `handoff-fire.sh`, and the lint keys on naming it) — repaired as the lint prescribes, by pinning
+  `CC_FIRE_CAPACITY_GATE=off` and the three non-`$HOME` seams in `setup()`, **never by an
+  allowlist entry**, which the lint forbids in terms.
+
 - **2026-08-20 — drain recycle #74: `master-fire-gate` 37 open → 36 open / 2 blocked.
   closed 1 / filed 0. 🚨 THE FINDING: the producer was four-valued, its verdict was pinned by 25
   tests, and its ONLY consumer read the exit code — so a distinction that was built, tested and
