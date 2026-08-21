@@ -87,6 +87,76 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #110: the suite's three reds PASSED the gate the suite exists to pin
+  and died seventeen lines later, at an account it never fixtured. closed 1 / filed 0.** #110 opened
+  on the START-HERE order and both gates were cheap: no post-land RED page was on disk at all (the
+  two `33c462990b2c` pages #109 acquitted are swept), so the trunk was clear, and `14531016f6a7` —
+  the row #108 and #109 both left untouched — reproduced its red exactly on the first hermetic run:
+  **16 ok / 3 notok / 12 s**, plan `1..19`, `16+3=19`, no skips.
+
+  🚨 **FINDING 1 — THE ROW'S OWN STRONGEST EVIDENCE WAS RIGHT, AND ONE `--print-output-on-failure`
+  CASHED IT.** The row said its three failures included the suite's **own positive control** (case
+  18), and called that the strongest available signal that *the harness, not the subject*, is what
+  the environment changes. It was. Under the offbox env the failing cases print:
+  `!! --recycle: can't derive this session's account from CLAUDE_CONFIG_DIR='' — pass --account or
+  --launcher`. `env -i` strips `CLAUDE_CONFIG_DIR`; the suite fixtures `$HOME` and never it. So
+  cases 15/17/18 **pass** the self-identity gate at `scripts/handoff-fire.sh:7160` — the gate the
+  whole file exists to pin — emit their verdict lines, and then `exit 1` at the account derivation
+  seventeen lines below (`:7177`). Only `[ $status -eq 0 ]` ever failed; every verdict grep beneath
+  it would have matched. **The three cases were never testing what their red said they were.**
+
+  🚨 **FINDING 2 — THE PASSING CASE IS WHAT PROVES THE DIAGNOSIS, AND IT IS WHY THE COUNT IS THREE
+  AND NOT FOUR.** Case 16 expects `exit 2` and stayed green throughout. That is not luck and not
+  vacuity: `:7160` refuses with 2 **before** `:7177` is reached, so the one case whose expectation
+  matches the identity gate's own exit code is the one the account gate can never reach. An
+  arithmetic tell that was on the table from the first TAP read — *why exactly three?* — and it
+  discriminates this cause from every "the whole `rc()` helper is broken" story.
+
+  🚨 **FINDING 3 — THE REPO HAD ALREADY MEASURED THE CLASS, UNDER A DIFFERENT CONDITION KEY.**
+  A duplicate check by PHRASE rather than by condition (method 16) found **`7c05d45796d8`** OPEN,
+  naming `handoff-fire.sh` explicitly as one of **six** tools reading `CLAUDE_CONFIG_DIR` with an
+  EMPTY default, across **72 of 355** suites inheriting the operator's real config dir. So this row
+  is a confirmed **instance** of that class, and the class row settles the fix direction by method
+  11: the tools are right to refuse — a recycle with no account cannot relaunch its pane — and the
+  **suites** are the gap. `7c05d45796d8` is left OPEN and NOT folded in: it wants a measured lint
+  rule with ratchet/scope-control discipline (its own note says a naive version hits 123 of 355),
+  which is wave-sized and is not this close.
+
+  **THE FIX IS THE FIXTURE.** `export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/.claude-next"` in
+  `setup()`. `env_account` reads `${CLAUDE_CONFIG_DIR##*/}` and never stats the path, `.claude-next`
+  is the basename the in-repo `lib/account-map.generated.sh` resolves to a real account, and it
+  keeps the `ACCOUNT=auto` branch the cases actually take under test.
+
+  🚨 **NON-VACUITY — THREE MUTANTS, EACH DERIVED FROM ITS ANCHOR IN A SCRATCH TREE, NEVER STORED**
+  (methods 26/28/50). A green-after is worthless here without proving the cases can still fail:
+  `A0` scratch+fixture unmutated **19/0** · `M1` `self-identity CORRECTED` mutated → **red 15**
+  (+10) · `M2` `self-identity UNPROVEN` mutated → **red 17** (+13) · `M3` the `mine) return 0` fast
+  path removed → **red 18** (+14). **Case 18 asserts an ABSENCE, so no string mutation can red it** —
+  M3 is the only arm that can, which is exactly the trap a two-mutant control would have walked
+  into. Each red carries its self-close twin because one verdict serves both call sites, the
+  coupling the suite header already claims.
+
+  **WRONG CAUSES REJECTED.** (1) *The KITTY_PID remedy* that cured the two sibling items — the row
+  warned against assuming it and the suite emits zero `not kitty` messages; the shim never reaches a
+  terminal-identity gate. (2) *`LC_ALL=C`* — the first suspect on an `env -i` diff and a documented
+  scar in this repo (`c-locale-turns-character-ops-into-byte-ops`); the failure is an UNSET
+  variable, not a locale-dependent comparison. (3) *Passing `--account` in the `rc()` helper* — it
+  clears the red, and the error message itself prescribes it, but it takes the explicit branch that
+  skips `recycle_repick`, so the cases would stop exercising the branch they were written for. A
+  prescribed remedy that works and still costs coverage.
+
+  **Premise correction inherited, NOT re-derived:** `claude-infrastructure-102` refuted its own
+  `17e94bb423ef` cause mid-recycle — the verifier JUMPS to the newest tree rather than walking a
+  backlog, so cycle time cannot produce a lag of 12; the real cause is a **run of non-green
+  verdicts** (deploy-live advances only to GREEN, and 4 of the last 6 cycles were cut/red). The slug
+  `verifier-cycle-exceeds-landing-interval` is now a MISNOMER — read the title, not the key — and
+  **sharding the 524-suite run is the refuted cause's cure**, explicitly not to be spent on.
+
+  Gates: offbox **19/0** (was 16/3) · `test-hermeticity-lint` 527 suites, **0 new leaks** ·
+  kill-guard clean · `bats-assert-liveness` silent and **positive-controlled RED** on an injected
+  mid-body `[[ ]]` (rc 1, `DEAD [cond-keyword]`) · `self-path-lint --selftest` 32/32 · shim-parity
+  NOT-ACTIVE (healthy default). Item `14531016f6a7` closed.
+
 - **2026-08-21 — drain recycle #109: `d0a1bb8717cf`'s remedy landed ten days before the brief named
   it as the generator's outstanding cure — and the ONE site that still does not emit is a documented
   exclusion the repo proves works. closed 1 / filed 0.** #109 opened on the START-HERE order: the
