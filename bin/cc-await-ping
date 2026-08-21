@@ -657,11 +657,50 @@ _wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
     >> "$box" 2>/dev/null || true
   return 0
 }
+# A SIGNAL THAT ARRIVES AFTER THE TERM EXPIRED IS NOT A KILL — it collected a watch that was already
+# over. The wait loop only re-tests `elapsed < TIMEOUT` once per --interval (15s by default), and bash
+# additionally defers a trap until the current foreground command returns, so there is a window of up
+# to one interval in which the budget has been spent but the loop has not yet noticed. A signal
+# landing in that window took the TERM path and emitted, verbatim, "it did NOT time out" — about a
+# watcher whose own measured elapsed had already reached its budget.
+#
+# MEASURED 2026-08-21 over the 552 WAKE-PATH-DOWN lines in ~/.claude/mailbox (271 carry a parseable
+# elapsed/budget pair): 19 of them, 7%, report elapsed >= budget. Every one of those asserts something
+# false about itself, and it needs no killer to explain — the successor reading it goes looking for an
+# external process that does not exist.
+#
+# UNMEASURABLE STAYS A KILL. _elapsed_s returns -1 when no clock could answer, and -1 is never >=
+# TIMEOUT, so an unknown elapsed falls through to the kill branch rather than being laundered into a
+# clean timeout. Missing data is not evidence the term completed (memory lookup-miss-is-not-absence).
+#
+# EACH trap-only function carries its OWN directive, and that is not duplication. A `shellcheck
+# disable` applies to the NEXT construct, so inserting this function below _sig_verdict's shared
+# directive silently ORPHANED it: the comment covered the new arrival and _sig_verdict lost its
+# cover, reddening the land gate's shellcheck arm on a function nobody had touched. The directive
+# binds to position, so anything inserted between it and its subject steals it.
+# shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
+_term_expired() {   # 0 = the budget was already spent when the signal arrived
+  local e; e="$(_elapsed_s)"
+  [ "$e" -ge 0 ] 2>/dev/null || return 1
+  [ "$e" -ge "$TIMEOUT" ] 2>/dev/null || return 1
+  return 0
+}
 # shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines below are its only callers.
 _sig_verdict() {   # <signame> <signum>
   local sender
   trap - TERM HUP INT EXIT
   _unbeat
+  if _term_expired; then
+    # The DESIGNED end of a watch, reached a beat before the loop could say so. Same disarm and the
+    # same re-arm advice as any other end of term — but no anomaly, no "terminated from outside", and
+    # no inbox alarm asking the successor to hunt for a culprit. Exit 2 is the file's documented
+    # timeout status (see the Exit map at the top), NOT 128+signum: the outcome is what the watch
+    # actually reached, and a reader keying on the exit code must not have to know which of two racing
+    # clocks won.
+    _sigrecord_disarm
+    echo "cc-await-ping: verdict=timeout term=full $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — SIG$1 arrived AFTER the budget was already spent, so this is the designed end of the watch, not a kill: the wait loop re-tests only once per interval and had not yet returned. No ping was consumed and nothing is still claiming the wake path. If you are going idle, RE-ARM — unless a /goal is live in this session (a parked background Bash makes CC skip goal evaluation at every Stop)." >&2
+    exit 2
+  fi
   # _unbeat first: clearing the stale claim is the safety-critical half and is fast. The bounded
   # sender read comes after, which also gives the recorder those few extra milliseconds to land.
   sender="$(_sigrecord_sender)"
