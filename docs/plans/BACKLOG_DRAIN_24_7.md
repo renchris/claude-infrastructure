@@ -87,6 +87,85 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #115: the abstain was right and its recorded reason was the weakest of
+  the three available — read as written it prescribes the one fix that cannot work, and that fix
+  fails in the retracting direction. closed 1 / filed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  still **differed** from trunk (the shared checkout was **12** behind, budget 25), so #114's fix was
+  landed but *not running in this session* — method 56 in the flesh. Every probe below was written
+  with the Write tool, never a heredoc. Fold at open: `master-convergence-deadlock` **46/4**,
+  store-wide **272 open · 181 blocked · 2550 items** — −1 open / +1 item against #114's open reading,
+  which is #114's own close (one row done, one filed). Matches the peer lead's independent
+  re-derivation exactly.
+
+  Gate 3 was **`cfd3037bf9dd`**, #114's recommended start: *cc-premise's postland RED arm abstains on
+  PRELINT reds — a green DOES imply they passed, but the span clause is membership in the PRELINTS
+  bash array AT the green's tree; 6 such items, deferred in `605fa49f` rather than retract a live
+  lint violation on a brittle parse.* A **question-shaped row** (method 15) — closed by an answer.
+  Adjudicated per conjunct (method 25):
+  · **the arm abstains on prelint reds** — TRUE, and already pinned behaviorally
+    (`tests/cc-premise-postland-red.bats`, the `scripts/<lint>.sh` case, with its own anti-vacuity
+    note at :48-51). No change needed.
+  · **a green implies they passed** — TRUE but under-stated. A green implies every prelint that
+    **RAN** passed: a red lands in `FAILING`, an unproven one sets `PRELINT_UNPROVEN` and the green
+    gate (`postland-verify.sh:2916`) turns that into a CUT, and a CUT is never a green.
+  · **the cited line `postland-verify.sh:469-470`** — STALE. The prelint block is `:1044-1049`, the
+    PRELINTS assignment `:539-552` (method 2, as ever).
+  · **the span clause is membership in the array AT the green's tree** — **REFUTED, and this is the
+    finding.** It is not a property of the tree at all.
+  · **"6 such items in the store"** — STALE both ways: the population is **7**, and **all 7 are
+    `done`** (0 open, 0 blocked). Per method 21 that does *not* close the row — the mechanism
+    survives and will abstain on the next prelint red, so the close rests on the mechanism.
+  · **`venueWhy: ineligible-deep-history: 605fa49f`** — a **dead pointer**. That object is not an
+    ancestor of `origin/main` (rc 1); the land rebased it to **`a5f7118c2`** (2026-08-10T18:58:25Z),
+    same subject. Memory `cited-sha-may-not-survive-the-land`, hit again.
+
+  🚨 **FINDING — THE SPAN CLAUSE IS UNRECOVERABLE FROM ANY TREE, SO THE OBJECTION IS A CATEGORY ONE,
+  NOT A PARSER'S BRITTLENESS.** The effective prelint list is the `CC_POSTLAND_PRELINTS` seam, not the
+  bash literal. Measured by **replaying the verifier's real seam block** (extract-and-eval, memory:
+  `control-must-replay-the-real-artifact`) rather than re-implementing it, with an anti-vacuity abort
+  if either branch is absent:
+
+  | `CC_POSTLAND_PRELINTS` | effective list |
+  |---|---|
+  | unset | **5** — the tree literal |
+  | set-but-EMPTY | **0** |
+  | `"scripts/only-one.sh"` (control) | **1** — tracks the VALUE, not the presence |
+
+  An empty list returns from `prelint_check` with `PRELINT_UNPROVEN=0` (`:1049`), and the green gate
+  never consults *which* prelints ran — so **a green is claimable with ZERO prelints run**, and
+  nothing durable distinguishes that from all five running clean. A *perfect* parse of the historical
+  literal therefore answers a different question than "what ran", and it errs toward retracting a
+  live lint violation. That is why the comment mattered: it named brittleness, which invites someone
+  to write a careful parser.
+
+  **Nor can the log stand in, and the file says so itself** (method 11 — the subject's own documented
+  policy, again the highest-yield step). `runner.log` records every prelint disposition, but it is
+  "rotated/GC'd on a different schedule from the stamps" (`:2827`) — that exact cross-read cost real
+  time on 2026-07-31, and it is *why* the tree-keyed stamp carries the corpus denominator `suites`
+  (`:2823`). The stamp printf (`:2159`) carries **no prelint field**. So the enabling change is a
+  prelint denominator **in the stamp**, mirroring `suites` — filed as **`786ac458be00`**, deliberately
+  not attempted here: it touches the verifier that gates every land and can auto-revert, while the
+  population it would serve is currently empty.
+
+  **Landed `ad71c3df4`** — the reason corrected in both places that state it (`bin/cc-premise` and the
+  test file's own header comment), plus **one new case that PINS it instead of describing it**. Prose
+  cannot notice when the verifier changes underneath it; the case replays the real seam block and
+  asserts the three arms diverge, where a grep would only prove somebody typed the seam. Red-proofed
+  one mutant per site in a scratch tree (method 50): **seam branch deleted → 1 not-ok, this case, 20
+  others green**; **anchor renamed → 1 not-ok**, i.e. a moved anchor fails LOUD rather than asserting
+  over an empty block. Suite **21/21** (`1..21`, 0 skips), off-box **green**, all four new-file gates
+  clean, and `bats-assert-liveness` silence positive-controlled against a planted dead negation
+  (`DEAD [negation]`, rc 1).
+
+  **WRONG CAUSES REJECTED (method 43).** (1) *"All 7 items are done, so close on the drained
+  population"* — method 21; the mechanism outlives the precondition. (2) *"runner.log records each
+  disposition, so extend the arm to read it"* — refuted by the file's own `:2827`. (3) *"the parse is
+  merely brittle, so write a careful one"* — refuted empirically by the 5/0/1 table. (4) *"cite
+  `605fa49f` as the deferring commit"* — not on trunk; it is `a5f7118c2`. (5) *"implement the stamp
+  prelint denominator now"* — F1/F3 fail: the land-gating verifier, for an empty current population.
+  Filed instead.
+
 - **2026-08-21 — drain recycle #114: three of the row's four claims had already gone stale, the
   fourth was real, and the probe standing guard over it could not have told anyone either way — it
   returns the same verdict whether the bug is present or cured. closed 1 / filed 1 / landed 2
