@@ -19,6 +19,13 @@ setup() {
   # tests/handoff-fire-capacity-gate.bats is the ONE place the gate runs ON, against synthetic inputs.
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # …and the SIBLING gate in scripts/lib/capacity-admit.sh, which this suite began reaching when the
+  # engagement-window cases below started sourcing that library for its pure `cc_hw_*` probes
+  # (backlog 4043ab43bf4a). Those cases never call cc_capacity_admit and pin sysctl through
+  # CC_FIRE_SYSCTL, so nothing here reads live load — but scripts/test-hermeticity-lint.sh keys on
+  # REACHING the file, and it is right to: the next case to source it might call the gate, and a
+  # suite that goes red-by-desk rather than by its subject is the failure it exists to prevent.
+  export CC_ADMIT_GATE=off
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
@@ -671,4 +678,167 @@ _retire_precedes_refire() { # $1=line → 0/1/2
   # not the claim ledger, which needs a live backlog.
   CC_WCLAIM_GATE=off cc_worker_claim_admit hook "/tmp/wt/wt-0123456789ab/src" write
   [ "$(cc_worker_claim_item)" = "0123456789ab" ]
+}
+
+# ---- THE ENGAGEMENT WINDOW IS SIZED FOR THE BOX, NOT FOR AN IDLE ONE (backlog 4043ab43bf4a) ------
+#
+# THE DEFECT. `verify_engagement`'s window was the constant 120. At load 14.7 on this 10-core box
+# (1.47 runnable/core) a cold-worktree fire engaged LATE, the window expired, the function returned
+# 1 — the DEFINITE negative, not the cannot-tell — and the caller printed "FIRE FAILED — never
+# engaged … RETIRE THAT PANE FIRST (clear it)" over a session that was working, having skipped
+# arm_goal on the way. "Nothing was born within T" licenses "nothing will be born" only when T is
+# long enough for THIS box.
+#
+# NOT ALREADY FIXED BY `6509abd2`, whose own subject line names the half it took: "the negative
+# verdict was the fall-through, not the time window". State 5 (UNPROVEN) fires only once the brief
+# has been seen INGESTED; a pane still cold-booting has ingested nothing and still lands on 1.
+#
+# WHICH OF THESE SEVEN IS THE RED-PROOF, stated so the greens cannot be mistaken for vacuous.
+# MEASURED, not asserted: the whole file was replayed against the pristine pre-change tree recovered
+# with `git archive 3516251c5` into a scratch dir — 44 planned, 39 ok, 5 not ok, and the 37
+# pre-existing cases all green there, which is what proves the five reds are caused BY this diff and
+# not by a broken harness.
+#   RED pre-fix, green post-fix — the subject arms (the helper does not exist in that tree at all,
+#   and the constant does):
+#   · "the idle-box CONSTANT is gone and a sizer stands in its place"
+#   · "a LOADED box gets a window longer than the idle-box base"
+#   · "an IDLE box gets exactly the pre-change base" — also the NON-DISCRIMINATION arm: it exists to
+#     prove the fix did not WIDEN. A quiet box must wait exactly as long as it did before, so a
+#     genuine never-engaged fire is still caught in 120s and not in 480.
+#   · "the cap holds against an unbounded-above input" — bounds the other direction.
+#   · "an unreadable probe returns the base" — the fail-safe direction.
+#   GREEN IN BOTH ARMS BY DESIGN — these pin PREMISES this diff relies on, so a red in either
+#   indicts the premise (or this diff's guard), never the diff's arithmetic:
+#   · "an ISOLATED extraction still resolves a window" — tests/handoff-fire-pane-parked.bats:53
+#     sed-extracts and EXECUTES verify_engagement with no collaborators in scope, so an unguarded
+#     call to the new helper would die "command not found" there and skip the poll loop entirely.
+#   · "an EXPLICIT FIRE_ENGAGE_TIMEOUT wins verbatim" — the pinning contract the corpus already
+#     depended on before this diff; it must survive the sizer being added underneath it.
+#
+# sysctl is STUBBED VIA CC_FIRE_SYSCTL (the handoff-fire-capacity-gate.bats seam), so load AND core
+# count are inputs rather than ambient facts — a window assertion that read the real box would be
+# exactly the channel LOAD_INSENSITIVE_VERIFY_V2 R1b forbids. Seam names carry the STUB_ prefix
+# because bash keeps the export attribute on assignment: a seam sharing a name with a local inside
+# the subject is silently rewritten by the subject (memory: a stub seam must not collide).
+
+_few_stub_sysctl() {   # $1=load $2=ncpu → exports CC_FIRE_SYSCTL at a stub answering both keys
+  local d="$BATS_TEST_TMPDIR/few-bin"; mkdir -p "$d"
+  cat > "$d/sysctl" <<'SH'
+#!/bin/bash
+case "$*" in
+  *hw.ncpu*)    echo "${STUB_NCPU:-10}" ;;
+  *vm.loadavg*) echo "{ ${STUB_LOAD:-1.00} ${STUB_LOAD:-1.00} ${STUB_LOAD:-1.00} }" ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$d/sysctl"
+  export CC_FIRE_SYSCTL="$d/sysctl" STUB_LOAD="$1" STUB_NCPU="$2"
+}
+
+_few_load_window() {   # sources the hardware terms + the subject, both as the fire path has them
+  # shellcheck source=../scripts/lib/capacity-admit.sh
+  . "$REPO/scripts/lib/capacity-admit.sh"
+  eval "$(sed -n '/^fire_engage_window() {/,/^}/p' "$HF")"
+}
+
+@test "engagement window: the idle-box CONSTANT is gone and a sizer stands in its place" {
+  # The item's own stored falsifier, as a regression pin: it refutes on the disappearance of
+  # `FIRE_ENGAGE_TIMEOUT:-120`. Both halves are asserted — a file that merely lost the constant
+  # (say, to a rename) would satisfy the falsifier while sizing nothing.
+  run grep -cF 'FIRE_ENGAGE_TIMEOUT:-120' "$HF"
+  [ "$status" -ne 0 ]                                    # grep -c exits 1 on zero matches
+  [ "$output" = "0" ]
+  grep -q '^fire_engage_window() {' "$HF"
+  # …and the sizer is REACHED from the window's one consumer, not merely defined beside it.
+  sed -n '/^verify_engagement() {/,/^}/p' "$HF" | grep -q 'fire_engage_window'
+}
+
+@test "engagement window: a LOADED box gets a window longer than the idle-box base" {
+  _few_stub_sysctl 14.70 10        # the incident: load 14.7 on 10 cores = 1.47 runnable/core
+  _few_load_window
+  # STDOUT AND STDERR ARE CAPTURED SEPARATELY, and that is an assertion, not plumbing. The consumer
+  # is `timeout="$(fire_engage_window)"`: a note leaking onto stdout would put prose into `[ "$t"
+  # -lt "$timeout" ]` and break the poll loop outright. `run` merges the two, so it cannot see this.
+  local err="$BATS_TEST_TMPDIR/win-err"; : > "$err"
+  local out; out="$(fire_engage_window 2>"$err")"
+  [ "$out" -gt 120 ]
+  [ "$out" -eq 176 ]               # 120 x 1.47, rounded — the arithmetic, pinned
+  grep -q '1.47/core' "$err"       # the scaled decision is auditable…
+  grep -q '176s' "$err"            # …and the note cannot disagree with the window it explains
+}
+
+@test "engagement window (NON-DISCRIMINATION): an IDLE box gets exactly the pre-change base" {
+  # The fix must not buy the loaded case by taxing the quiet one: a genuine never-engaged fire on
+  # an idle box must still fail loud in 120s, not in 480. Two idle shapes, one below the reference
+  # and one at it, so the floor is proven to be a floor and not an accident of rounding.
+  _few_stub_sysctl 0.50 10
+  _few_load_window
+  run fire_engage_window
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 120 ]
+  STUB_LOAD=10.00 run fire_engage_window     # exactly 1.00/core — the reference itself
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 120 ]
+}
+
+@test "engagement window: the cap holds against an unbounded-above input" {
+  # Load has no upper bound, so the scaled window needs one or a runaway box hangs the caller for
+  # as long as it is busy. PARKED and WEDGED are knowable in seconds and short-circuit every
+  # iteration, so the cap is only ever spent on a pane holding a live, non-modal claude.
+  _few_stub_sysctl 900.00 10
+  _few_load_window
+  local out
+  out="$(fire_engage_window 2>/dev/null)"
+  [ "$out" -eq 480 ]
+  out="$(FIRE_ENGAGE_TIMEOUT_MAX=200 fire_engage_window 2>/dev/null)"   # a seam, not a hardcode
+  [ "$out" -eq 200 ]
+}
+
+@test "engagement window: an unreadable probe returns the base, never an empty window" {
+  # Fail-SAFE is the pre-change behaviour EXACTLY. A sysctl that answers nothing must not yield an
+  # empty string into `[ "$t" -lt "$timeout" ]`, which is a bash error, not a short window.
+  local d="$BATS_TEST_TMPDIR/dead-bin"; mkdir -p "$d"
+  printf '#!/bin/bash\nexit 1\n' > "$d/sysctl"; chmod +x "$d/sysctl"
+  export CC_FIRE_SYSCTL="$d/sysctl"
+  _few_load_window
+  run fire_engage_window
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 120 ]
+}
+
+@test "engagement window (green both arms): an ISOLATED extraction still resolves a window" {
+  # tests/handoff-fire-pane-parked.bats:53 sed-extracts and EXECUTES verify_engagement with no
+  # collaborators in scope. Reproduced here WITHOUT extracting fire_engage_window, so an unguarded
+  # call would die "command not found", leave $timeout empty, and skip the poll loop entirely.
+  # engagement_seen is stubbed to SUCCEED and to record that it was reached: the assertion is that
+  # the loop ran at all, which is only true when the window resolved to a number.
+  eval "$(sed -n '/^verify_engagement() {/,/^}/p' "$HF")"
+  POLLED="$BATS_TEST_TMPDIR/polled"; : > "$POLLED"
+  engagement_seen()   { printf 'poll\n' >> "$POLLED"; return 0; }
+  pane_parked_reason() { :; }
+  pane_wedge_reason()  { :; }
+  it2_paste_submit()   { :; }
+  unset FIRE_ENGAGE_TIMEOUT
+  export CC_FIRE_LOADAVG_OVERRIDE=900        # would be visible ONLY if the guard leaked
+  run verify_engagement "$PROJ" "MARKER" "$REG" "$PANE" "/bin/true" "brief"
+  [ "$status" -eq 0 ]
+  [ -s "$POLLED" ]
+}
+
+@test "engagement window: an EXPLICIT FIRE_ENGAGE_TIMEOUT wins verbatim over the sizer" {
+  # The corpus pins this to seconds; a load-scaled value overriding a pinned one would make every
+  # suite that sets it ambient. Proven WITHOUT a wall-clock: at 0 the poll loop cannot execute even
+  # once, so a single recorded poll IS the leak. The load override would otherwise size 480.
+  . "$REPO/scripts/lib/capacity-admit.sh"
+  eval "$(sed -n '/^fire_engage_window() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^verify_engagement() {/,/^}/p' "$HF")"
+  POLLED="$BATS_TEST_TMPDIR/polled"; : > "$POLLED"
+  engagement_seen()   { printf 'poll\n' >> "$POLLED"; return 0; }
+  pane_parked_reason() { :; }
+  pane_wedge_reason()  { :; }
+  it2_paste_submit()   { :; }
+  export CC_FIRE_LOADAVG_OVERRIDE=900 FIRE_ENGAGE_TIMEOUT=0 FIRE_ENGAGE_RETRY=0
+  run verify_engagement "$PROJ" "MARKER" "$REG" "$PANE" "/bin/true" "brief"
+  [ "$status" -eq 1 ]                        # straight to the expiry path, no poll at all
+  [ ! -s "$POLLED" ]
 }

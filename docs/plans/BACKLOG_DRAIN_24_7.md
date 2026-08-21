@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #89: `master-fire-gate` 22 open → 21 open / 2 blocked.
+  closed 1 / filed 0** (twenty-fifth consecutive recycle in `master-fire-gate`). Row
+  `4043ab43bf4a` closed: *"handoff-fire's 120s engagement window is sized for an idle box: at load
+  14.7 a cold-worktree fire engaged LATE, so the fire declared FIRE FAILED, skipped goal arming, and
+  marked a correctly-working session as task-less and reapable"*, filed 2026-08-12T10:52:39Z.
+  Stored falsifier: `! grep -q "FIRE_ENGAGE_TIMEOUT:-120" scripts/handoff-fire.sh` — it now MATCHES
+  (count 0), which is the row refuting itself. Fix: `fire_engage_window()` scales the window by
+  1-minute load-per-core (base 120, reference 1.00/core, cap 480), reusing capacity_gate's own
+  `cc_hw_*` probes and its `CC_FIRE_LOADAVG_OVERRIDE` seam; the incident's 1.47/core now yields
+  176s and an idle box still yields exactly 120.
+
+  **EVERY PREMISE SURVIVED, AND ONE OF THEM ONLY BECAUSE A COMMIT SUBJECT MADE AN EXCLUSION CLAIM.**
+  P1 (the constant is the window) — live at `scripts/handoff-fire.sh:2356`, and `git log -S` shows
+  `FIRE_ENGAGE_TIMEOUT` touched by exactly ONE commit ever (`0a4c8c9c2`, 2026-07-18): no
+  cross-condition duplicate cure. P2 (the harm) — `verify_engagement` rc 1 is the DEFINITE negative,
+  and its caller prints *"FIRE FAILED — never engaged … RETIRE THAT PANE FIRST (clear it)"* and
+  exits before `arm_goal`, which only the rc 0 arm reaches. P3 (**not** already fixed by the rc=5
+  UNPROVEN state) — `6509abd23`'s own subject line names the half it took: *"the negative verdict
+  was the fall-through, not the time window"*. State 5 fires only once the brief has been seen
+  INGESTED; a pane still cold-booting has ingested nothing and still lands on 1. UTC on both sides:
+  `6509abd23` landed **2026-08-11T18:57:28Z**, the row was filed **2026-08-12T10:52:39Z** — after
+  it, not before, so the filer was looking at a tree that already had state 5.
+
+  🚨 **WRONG CAUSE REJECTED — "task #170 turned the capacity gate's load term OFF *today*, so load1
+  is a discredited instrument and this fix must not use it."** The most seductive refutation
+  available: same file, same probe, same box, landed hours earlier, and its comment block is 30
+  lines of measured argument. It does not transfer. #170's claim is that an ADDITIONAL RESIDENT
+  session moves load1 by ~0 — so a gate deciding *admission* had an input that does not move with
+  its own decision. This function decides *how long a cold BOOT takes*, and #170's own explicitly
+  "precise" clause concedes the numerator is real contention (jq 25 / bash 20 / ps 8 / claude 8, our
+  hook and test-suite fan-out). Runnable-per-core is exactly the queue a boot waits in.
+  **Generalisable: a ruling against an instrument is a ruling against a QUESTION-INSTRUMENT PAIR.
+  Re-read which question it names before inheriting it as a fact about the instrument.**
+
+  🚨 **WRONG REMEDY REJECTED — "just raise 120 to 480."** One character-class of a diff, satisfies
+  the falsifier, and it is `docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md` §5's own rejected row —
+  *"load is unbounded above; any constant is a future permanent-refuse"*. It also taxes the case
+  that works: a genuinely never-engaged fire on a quiet box would fail loud in 8 minutes instead of
+  2. The NON-DISCRIMINATION arm exists to hold exactly that line — an idle box still gets 120, and
+  the two idle shapes pinned (0.05/core and exactly 1.00/core) prove the floor is a floor.
+
+  🚨 **AND A CHEAPER FIX WAS AVAILABLE THAT CANNOT CURE THE NAMED HARM.** Downgrading the expiry
+  from rc 1 to rc 5 (cannot-tell) is more principled on its face — the definite-negative inference
+  really is unsound at high load — and costs no extra waiting. It was rejected because every
+  non-zero rc exits before `arm_goal`: a nicer verdict still leaves the session task-less and
+  un-goaled, which is half of what the row is about. **Only actually waiting long enough recovers a
+  harm whose cure is the SUCCESS path.**
+
+  **RED-PROOF (7 new cases in `tests/fire-engagement.bats`, 37 → 44).** Replayed against the
+  pristine pre-change tree via `git archive 3516251c5 | tar -x -C "$(mktemp -d)"` — nothing in the
+  working tree touched — with the copied suite: **44 planned, 39 ok, 5 not ok**, and the 37
+  pre-existing cases all green there, which is what proves the five reds are caused BY this diff and
+  not by a broken harness. RED pre-fix: the constant's disappearance · a loaded box gets 176s · an
+  idle box gets exactly 120 · the cap holds at 480 against 90.00/core · an unreadable probe returns
+  the base. GREEN IN BOTH ARMS BY DESIGN: an ISOLATED sed-extraction still resolves a window (the
+  premise `tests/handoff-fire-pane-parked.bats:53` depends on — it extracts and EXECUTES
+  `verify_engagement` with no collaborators in scope, so an unguarded call to the new helper would
+  die "command not found" there) · an explicit `FIRE_ENGAGE_TIMEOUT` still wins verbatim.
+  Gates: `bats` 44/44 (plan 44, ok+notok == plan) · `shellcheck -S style` rc 0 on the subject ·
+  `bats-shellcheck-lint --file` **1 suite(s)** · `bats-kill-guard-lint` clean ·
+  `bats-shim-parity-lint` NOT-ACTIVE (the healthy default) · `bats-testname-eval-lint tests`
+  **523 suite(s)** — an EDIT, so 523 unchanged is the correct value (#88 method item d) ·
+  `bats-assert-liveness.py` rc 0, POSITIVE-CONTROLLED by planting a mid-test `! false` into a /tmp
+  copy (`DEAD [negation]`, rc 1).
+
+  🚨 **NEW METHOD ITEMS #89 EARNED**
+  **(a) A CORPUS LINT KEYS ON WHAT A SUITE *REACHES*, NOT ON WHAT IT CALLS — so adding one `source`
+  reddens it.** `test-hermeticity-lint tests` went **RED on my own suite** because the new cases
+  `source scripts/lib/capacity-admit.sh` for its pure `cc_hw_*` probes. They never call
+  `cc_capacity_admit` and they pin sysctl through `CC_FIRE_SYSCTL`, so nothing actually reads live
+  load — and the lint is still RIGHT: the next case to source it might call the gate. Cured with the
+  lint's own prescribed `export CC_ADMIT_GATE=off` in `setup()`. **A suite-local green is not a
+  corpus green; run the DIRECTORY lints before believing one.**
+  **(b) `run` MERGES STDERR INTO `$output`, so it is structurally blind to a stdout-purity defect.**
+  Two cases failed with `[: -- engagement window: load 14.70 … 176: integer expression expected` —
+  the note this function prints to stderr had been folded into the value under test. Capturing the
+  streams separately did not merely fix the case, it produced a BETTER assertion than the one
+  intended: the consumer is `timeout="$(fire_engage_window)"`, so a note leaking onto **stdout**
+  would put prose into `[ "$t" -lt "$timeout" ]` and break the poll loop outright — and `run` can
+  never see that, because merging is exactly the bug.
+  **(c) A COMMIT SUBJECT CAN ADJUDICATE "IS THIS ALREADY FIXED?" — when it makes an EXCLUSION
+  claim.** `6509abd23`'s *"the negative verdict was the fall-through, **not the time window**"*
+  named the half it left, and two commands settled a question that would otherwise have needed the
+  whole state machine re-derived. ⚠️ This is the narrow exception to memory
+  `read-the-diff-not-the-commit-subject`, and it stays narrow: the subject was usable only because
+  its exclusion was then VERIFIED in the code (state 5 requires an already-ingested brief).
+  **(d) A CENSORED INSTRUMENT CANNOT SIZE ITS OWN BOUND.** `engage_latency_s` in
+  `~/.claude/logs/handoffs.jsonl` is written only when engagement was PROVEN — 84 production
+  samples, median 15s, max 49s — so the distribution is RIGHT-CENSORED **at the very constant under
+  review**: no sample can ever exceed the window that truncates it. Reading "max 49s ≪ 120s" as
+  "the window is generous" is the trap, and it is the reading the data invites. Scale the bound;
+  never claim a percentile the instrument cannot have observed.
+
+  **ROWS READ AND LEFT OPEN.** `95512886c19a` (*"handoff-fire declares FIRE FAILED on a session that
+  engages late, and prescribes a duplicate-session recovery"*) is this row's SIBLING and stays open
+  deliberately — #71 already chose not to close it, and this diff addresses only the WINDOW half
+  (the recovery-prescription half was separately fixed by `87626e1593c3`, whose "retire the pane
+  first" text this diff leaves untouched). The remaining four stored `master-fire-gate` falsifiers
+  (`aabf363ff409`, `159c2211b0f2`, `579bc8781b5b`, `a5b39138e098`) are correctly open.
+  **NOT A FINDING, deliberately unfiled:** `engage_latency_s`'s right-censoring is a real blind spot
+  in the fleet's own instrument, but it is inherent to measuring a bounded wait — recording the
+  attempted window beside the latency would fix it and is a different item's scope, not a defect in
+  this one.
+
 - **2026-08-21 — drain recycle #88: `master-fire-gate` 23 open → 22 open / 2 blocked.
   closed 1 / filed 0** (twenty-fourth consecutive recycle in `master-fire-gate`). Row
   `7c6ff16259a0` closed: *"off-box payload pushes to an invented branch name — add `git switch -c`
