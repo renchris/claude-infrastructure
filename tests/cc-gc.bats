@@ -207,6 +207,67 @@ mkbox() { # <key> <lines> <acked>
   echo "$output" | grep -q "recycled=1"
 }
 
+# ── the pin that makes the test above possible, and why it needs its own case ──────────────────
+# The recycle predicate is only decidable if cc-gc.sh can PARSE the lstart it reads. That parse
+# (`date -j -f '%a %b %e %T %Y'`, cc-gc.sh:265) is US-order and CANNOT read this box's ambient
+# rendering `Fri 21 Aug 14:37:09 2026` at all. What makes it work is `export LC_ALL=C` at
+# cc-gc.sh:59, which normalises ps to `Fri Aug 21 14:37:09 2026`.
+#
+# Delete that one line and the parse yields EMPTY, the guard at :266 takes its documented
+# `ambiguity ⇒ KEEP` arm, and the ENTIRE recycled-pid reap path goes dead — silently, at rc 0,
+# reporting `recycled=0`. It is the file's only reap reason besides an outright dead pid.
+#
+# THE TEST ABOVE CANNOT CATCH THAT, AND NEITHER CAN THE LAND GATE. scripts/offbox-run.sh:134 runs
+# every suite under `env -i … LC_ALL=C`, so the RUNNER supplies the very pin the SUBJECT is
+# supposed to own. Measured 2x2 (pin present/stripped × ambient/LC_ALL=C), 2026-08-21:
+#
+#                    ambient en_CA.UTF-8      LC_ALL=C
+#   pin present      reaped, recycled=1       reaped, recycled=1
+#   pin STRIPPED     NOT reaped, recycled=0   reaped, recycled=1   <- gate is blind
+#
+# Hence two cases, and red-proofing them (strip line 59, run both ways) measured which carries the
+# gate: OFF-BOX both new cases go red while the case above stays GREEN — a suite's own
+# `export LC_ALL=…` overrides the runner's allowlist value, so the behavioural case reaches the
+# hostile dialect even under `env -i`. They are kept separate anyway because they fail for
+# different reasons: the structural one can never go vacuous, whereas the behavioural one skips
+# on a box that cannot render a non-C dialect. It pins that dialect explicitly — the same device
+# tests/lstart-dialect-bin.bats uses.
+
+@test "watchdog: the lstart parse is locale-pinned by the SUBJECT (ratchet on cc-gc.sh:59)" {
+  # Scope, not mere presence: the export must be top-level AND above the parse it protects.
+  local pin_ln parse_ln
+  pin_ln=$(grep -n '^export LC_ALL=' "$GC" | head -1 | cut -d: -f1)
+  parse_ln=$(grep -n "date -j -f '%a %b %e" "$GC" | head -1 | cut -d: -f1)
+  [ -n "$pin_ln" ]
+  [ -n "$parse_ln" ]
+  [ "$pin_ln" -lt "$parse_ln" ]
+}
+
+@test "watchdog: RECYCLED pid is still separated under a non-C locale (pin is not the runner's)" {
+  export LC_ALL=en_CA.UTF-8 LANG=en_CA.UTF-8
+
+  # ANTI-VACUITY: this case is only meaningful where the dialect really is hostile to the US-order
+  # format. On a box that cannot render en_CA, ps stays C-order, the parse succeeds regardless, and
+  # the case would pass while proving nothing — so say so out loud rather than banking a false ok.
+  local amb
+  amb=$(ps -o lstart= -p $$ 2>/dev/null)
+  [ -n "$amb" ]
+  if date -j -f '%a %b %e %T %Y' "$amb" +%s >/dev/null 2>&1; then
+    skip "box renders C-order under en_CA.UTF-8 — no hostile dialect available to test against"
+  fi
+
+  local recycled
+  spawn; recycled="$SPAWNED"
+  echo "$recycled" > "$CC_WATCHDOG_DIR/sid-loc.pid"
+  echo sid-loc > "$CC_WATCHDOG_DIR/sid-loc.id"
+  age_days "$CC_WATCHDOG_DIR/sid-loc.pid" 5      # pidfile predates the process ⇒ provable recycle
+
+  CC_GC_WATCHDOG_AGE_S=0 run bash "$GC" --store watchdog --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_WATCHDOG_DIR/sid-loc.pid" ]
+  echo "$output" | grep -q "recycled=1"
+}
+
 @test "watchdog: a young pair is KEPT regardless of pid state" {
   spawn; local p="$SPAWNED"; kill "$p" 2>/dev/null || true; sleep 0.2
   echo "$p" > "$CC_WATCHDOG_DIR/sid-young.pid"; echo sid-young > "$CC_WATCHDOG_DIR/sid-young.id"
