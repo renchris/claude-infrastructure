@@ -23,7 +23,22 @@ command -v jq &>/dev/null || exit 0
 INPUT=$(cat)
 
 # Extract Agent tool parameters
+#
+# ── WHY TWO KEYS, AND WHY THIS WAS SILENTLY UNGATED (measured 2026-08-20) ─────────────────────
+# `team_name` is the CLASSIC spawn shape (TeamCreate + team_name, stable 2.1.114). The 2.1.183+
+# implicit-team model dropped it: a teammate is `Agent({name: …})` and the runtime never sends
+# `team_name` at all. Measured on 2.1.220: **0 of 1,251 Agent calls carried `team_name`**, so every
+# gate below that keyed on it had been dead for the whole window — a spawn with a 300-line brief on
+# an off-allowlist model was ALLOWED, unchecked. The suite stayed green because
+# tests/agent-teams-enforce.bats fed the legacy shape, i.e. it proved the gate worked on the one
+# call nobody makes any more (memory: stale-assertion-becomes-an-inverted-guard).
+#
+# TEAMMATE_ID is the union, and it is what every teammate gate must key on. Line ~467 already read
+# `.tool_input.name // .tool_input.team_name` — half this file was migrated and the two hard gates
+# were missed, which is exactly why a partial migration is worse than none: the file LOOKS aware.
 TEAM_NAME=$(echo "$INPUT" | jq -r '.tool_input.team_name // empty')
+NAME=$(echo "$INPUT" | jq -r '.tool_input.name // empty')
+TEAMMATE_ID="${TEAM_NAME:-$NAME}"
 RUN_BG=$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')
 PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty')
 SUBAGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // empty')
@@ -505,7 +520,7 @@ fi
 # the 2026-04-17 failure mode (stale plan hardcoding Sonnet for "mechanical"
 # teammates).
 # Rule: memory/feedback-agent-team-models.md + model-upgrade skill.
-if [ -n "$TEAM_NAME" ] && [ -n "$MODEL" ]; then
+if [ -n "$TEAMMATE_ID" ] && [ -n "$MODEL" ]; then
   ALLOWED=$(yq -r '.auto_mode_allowlist.non_firstParty_max[]' "$HOME/.claude/model-config.yaml" 2>/dev/null)
   [ -n "$ALLOWED" ] || ALLOWED="claude-opus-4-8"   # fallback if yq/config unavailable
   ALLOWED_FLAT=$(echo "$ALLOWED" | tr '\n' ' ')
@@ -558,7 +573,7 @@ emit_allow_ctx() {
 #                   near-certain crash (the exact FM2 wave-stall the guard exists to stop).
 # Line count via `grep -c ''` — exact even when the prompt has no trailing newline (wc -l undercounts
 # that case by one). Dynamic reasons are jq-built, never raw %s-interpolated (malformed-JSON class).
-if [ -n "$TEAM_NAME" ]; then
+if [ -n "$TEAMMATE_ID" ]; then
   BRIEF_WARN="${AGENT_TEAMS_BRIEF_WARN_LINES:-150}"
   BRIEF_DENY="${AGENT_TEAMS_BRIEF_DENY_LINES:-250}"
   BRIEF_LINES=$(printf '%s' "$PROMPT" | grep -c '' || true)

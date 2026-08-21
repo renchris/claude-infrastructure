@@ -33,9 +33,25 @@ setup() {
 
 brief() { yes "brief content line" | head -n "$1"; }   # emit an N-line brief
 
-run_hook() { # $1=team_name  $2=prompt  [$3=model]
+run_hook() { # $1=team_name  $2=prompt  [$3=model]   — the CLASSIC (2.1.114) spawn shape
   jq -n --arg tn "$1" --arg p "$2" --arg m "${3:-}" \
     '{tool_input:{team_name:$tn,prompt:$p,model:$m}}' | bash "$HOOK"
+}
+
+# The MODERN (2.1.183+) spawn shape, and the reason this suite could be green over a dead gate.
+# `team_name` no longer exists on the runtime — measured 2026-08-20, **0 of 1,251 Agent calls on
+# 2.1.220 carried it** — so every case built on run_hook was exercising the one invocation nobody
+# makes any more, while a real spawn (`{name: …}`) sailed past BOTH hard gates: a 300-line brief and
+# an off-allowlist model were each ALLOWED. The suite was not wrong about its subject; it was aimed
+# at a population of size zero (memory: stale-assertion-becomes-an-inverted-guard, and
+# positive-control-the-denominator).
+#
+# The legacy cases are deliberately KEPT rather than migrated: TEAMMATE_ID is a UNION of both keys,
+# so both halves need pinning, and a suite that only ever fed the new shape would be the same defect
+# rotated 180 degrees the next time the parameter changes.
+run_hook_named() { # $1=name  $2=prompt  [$3=model]
+  jq -n --arg nm "$1" --arg p "$2" --arg m "${3:-}" \
+    '{tool_input:{name:$nm,prompt:$p,model:$m}}' | bash "$HOOK"
 }
 decision() { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // "none"'; }
 has()      { printf '%s' "$1" | grep -q "$2"; }
@@ -215,4 +231,31 @@ run_spawn() {
   CC_SPAWN_MAX_PER_SESSION="not-a-number" run run_spawn "sid-bad" "/tmp/bad.jsonl" Explore
   [ "$status" -eq 0 ]
   [ "$(decision "$output")" != deny ]
+}
+
+# ── MODERN SPAWN SHAPE: the same three policies, on the invocation the runtime actually sends ────
+# Each of these was measured ALLOW before hooks/agent-teams-enforce.sh keyed its gates on
+# TEAMMATE_ID ("${TEAM_NAME:-$NAME}"). They are the red-proof: revert that one expression and the
+# two deny cases below go green-to-red together, which is the signal that the gate is live at all.
+
+@test "MODERN: name + oversized brief → deny (was ALLOW while gates keyed on team_name)" {
+  run run_hook_named "impl-1" "$(brief 300)"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = deny ]
+  printf '%s' "$output" | jq -e . >/dev/null
+}
+
+@test "MODERN: name + off-allowlist model → deny (was ALLOW while gates keyed on team_name)" {
+  run run_hook_named "impl-1" "small brief" "gpt-4o-mini"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = deny ]
+  printf '%s' "$output" | jq -e . >/dev/null
+}
+
+@test "MODERN: name + small brief + no model → allow (the gate must not over-refuse)" {
+  run run_hook_named "impl-1" "$(brief 10)"
+  [ "$status" -eq 0 ]
+  [ "$(decision "$output")" = allow ]
+  ! has "$output" "OVER CAP" || false
+  printf '%s' "$output" | jq -e . >/dev/null
 }
