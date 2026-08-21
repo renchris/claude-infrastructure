@@ -87,6 +87,105 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #81: `master-fire-gate` 30 open → 29 open / 2 blocked.
+  closed 1 / filed 0 (seventeenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: a row
+  indicted the wrong script. It said the monitor *"delegates desk-existence to desk-invariant.sh
+  whose pane→pid resolution returns no live process"* — but `desk-recycle-invariant.sh` has never
+  delegated resolution to anything. It carried its own `resolve_desk()` at BIRTH, in the commit that
+  created it HOURS BEFORE the row was written. The row had read a comment about who *pages* as a
+  statement about who *resolves*.**
+
+  **Effort choice.** #80 left `master-fire-gate` warm at 30 open — a warm effort is cheaper than a
+  cold one, and seventeen recycles have now proved it. Row `449f29fad085` is the oldest still-open
+  row in the group (filed 2026-07-20T15:51:21Z, 31 days), has no body — the title IS the item — and
+  carries its own prescribed next step, which is what made it adjudicable in one pass:
+  *"confirm the invariant's resolution path uses the registry, not an it2/launchd-unavailable
+  lookup."*
+
+  **The row, adjudicated part by part (method item 8 — five parts, four dead).**
+
+  1. **"delegates desk-existence to desk-invariant.sh"** — **REFUTED AT BOTH DATES.** At its birth
+     commit `2ebab2b29` (2026-07-20T01:17:51-07:00), `scripts/desk-recycle-invariant.sh` already
+     had its own `resolve_desk()` at line 115: `pgrep -f claude` → `ps eww -p <pid>` → match the
+     role file's uuid against the process's OWN environment. It still does on trunk. The row was
+     verified **later the same day**. What the row actually read is the comment at `:45` —
+     `no-desk … desk-invariant.sh owns that` — and the selftest assertion at `:272`,
+     `no-desk: no page (desk-invariant.sh owns this)`. Both are about who **pages and remediates**,
+     not who **resolves**. The script resolves independently and then deliberately declines to page.
+  2. **"whose pane→pid resolution returns no live process" / the prescribed registry confirmation**
+     — **ALREADY SATISFIED ON THE FILING DAY.** `desk-invariant.sh` was registry-keyed at
+     `812799eebd` (2026-07-20, same day): `REGISTRY_DIR` at `:52`, then
+     `row="$REGISTRY_DIR/$PANE.json"` → `[ -f "$row" ] || handle_no_desk "no-registry-row"` →
+     `.pid` → `alive "$PID" || handle_no_desk "dead-pid"` at `:256-261`. On trunk that same ladder
+     is at `:491-495`. It was never an "it2/launchd-unavailable lookup" — not then, not now. The
+     row prescribed a confirmation that its own subject already passed.
+  3. **The one REAL resolution weakness — and it has a landed, named cure.** `resolve_desk()` at
+     birth matched on iTerm2's key ALONE: `grep -q "^ITERM_SESSION_ID=.*${uuid}$"` (`:121`).
+     `ITERM_SESSION_ID` inherits across exec and across pane boundaries, so a re-keyed
+     headless/kitty pane carries a stale iTerm2 id beside its real `CC_PANE_ID`. `f223b2c5c1`
+     (2026-08-18) replaced it with `pane_of_env()` — CC_PANE_ID wins, ITERM_SESSION_ID is the read
+     fallback — and its own comment names the cure item **`0f796daa0c76`, which is `done`**.
+  4. **"reports 'no-desk'" today — a CORRECT verdict, not blindness.** `~/.claude/cc-roles/` holds
+     exactly `archive/` and an empty `orchestrator`. **There is no `desk` role file at all.**
+     `resolve_desk()` returns 1 on the first line (`[ -n "$uuid" ] || return 1`), which is
+     documented quiet-skip case 6 — exit 0, **no page**, because desk existence is genuinely
+     `desk-invariant.sh`'s to own. The monitor is reporting the truth about an absent desk.
+  5. **"Likely resolved by proper desk-register (desk-bootstrap 06, pending activation)"** — still
+     pending, and **not this row's to carry**: the live residue is already owned by OPEN row
+     `c94cf98ab91f` (`role-resolution-dead-target`), whose own title measures the same state —
+     *"~/.claude/cc-roles/ holds exactly ONE file, 'orchestrator' → pane 3…"* — and the
+     pending-activation queue is surfaced mechanically at every SessionStart. **Nothing filed.**
+
+  **Positive control on the resolution path.** `bash scripts/desk-recycle-invariant.sh --selftest`
+  → **rc=0, 12 ok, 0 bad**, rc captured into a variable, never through a pipe (method item 22). The
+  decisive case is not the `no-desk` one but `ok: fully-armed desk verdicts ok`, which can only
+  pass if `resolve_desk()` **succeeds** against a stubbed live desk. So the path is not a mechanism
+  that can only ever return `no-desk` — the row's core allegation is red-proven false in the
+  script's own falsifier.
+
+  🚨 **THE WRONG CAUSE REJECTED, and it is the one this row was engineered to invite.** *"The role
+  file is gone, so the row is moot"* — close on disappearance. **Refused.** Method item 14: a
+  decayed REASON is not a wrong CONCLUSION, and the missing `cc-roles/desk` is precisely why the
+  live positive control is **unrunnable** — the row's own scoping clause, *"even when the role file
+  holds the correct pane UUID"*, is not satisfiable today. Closing on that would have been closing
+  on an absent precondition. The close rests on parts 1–3, which are mechanism facts readable at
+  both dates and independent of today's fleet state.
+
+  🚨 **A SECOND WRONG CAUSE, caught in my own instrument.** My first live probe replicated
+  `resolve_desk()` and printed **`RESOLVED` for 115 of 133 pids** — which read exactly like "the
+  resolution works fine, fleet-wide." It was **vacuous**: with no `desk` role file, `uuid` was the
+  empty string, and the probe compared empty-to-empty for every process whose env carried neither
+  key. The real `resolve_desk()` never reaches that loop (`[ -n "$uuid" ] || return 1`). A
+  115/133 hit rate is what a broken needle looks like when it happens to be *loud* instead of zero
+  — the mirror image of #80's 0/0 needle error, and the reason a probe's output is not a finding
+  until you have asked what else could have produced it (method item 9).
+
+  **THE SHAPE — the family's WRONG-SUBJECT face.** #73 = state destroyed UPSTREAM of a gate that
+  knew how to use it · #74 = destroyed DOWNSTREAM at its only consumer · #75 = correct in a sibling
+  document that never reached the authoritative one · #76 = reached the authoritative store, then
+  decayed there · #77 = correct and authoritative, and the INSTRUMENT pointed at it could not read
+  it · #78 = correct, landed, self-describing, with no consumer at all · #79 = reachable by a
+  0-second read-only command, behind a label that forbade running it · #80 = the cure had already
+  landed and its own header answered the row's population by name, but the row was filed four hours
+  later in the PERMANENT TENSE · **#81 = the mechanism was never the one named. The row's evidence
+  was a COMMENT about ownership-of-remediation, read as a statement about ownership-of-resolution,
+  and so every later reader inherited an indictment of a file that does not do the thing.** A cited
+  mechanism can be present, correct, and irrelevant. Memories:
+  `wrong-cause-corroborated-by-true-metric`, `work-item-citation-refutes-its-own-remedy`,
+  `read-the-diff-not-the-commit-subject`.
+
+  **Premise check.** `cc-premise check 449f29fad085` → `verdict=clear`, but read it as the *pointer*
+  it is, not an acquittal: it flagged **31 days old, 11 commits landed on the cited file since**,
+  and named `scripts/desk-invariant.sh` — a real path, so this is a genuine verdict and not the
+  empty-path-set non-verdict the lineage warns about. Its own instruction — *"if they already
+  discharged this condition, THE DISCHARGE IS THE DELIVERABLE"* — is what this entry is.
+
+  **Landed** as this entry's own docs-only commit (self-citing a branch sha is unsafe — a rebasing
+  land rewrites the object; memory `cited-sha-may-not-survive-the-land`). Closed `449f29fad085`
+  with the adjudication above as evidence, routed through
+  a file per open row `6bfd83f03c3a` and diffed back out of the store. Filed nothing:
+  `closed 1 / filed 0`, so the recycle is net-negative.
+
 - **2026-08-21 — drain recycle #80: `master-fire-gate` 31 open → 30 open / 2 blocked.
   closed 1 / filed 0 (sixteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: a row
   filed a MEASUREMENT as a permanent property — *"239 of 525 open rows carry no venuePlan and are
