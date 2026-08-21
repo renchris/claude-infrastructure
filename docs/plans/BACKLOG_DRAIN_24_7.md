@@ -87,6 +87,111 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #113: the row named the covered half. The uncovered half was being
+  measured 144×/day and read by nobody. closed 0 / filed 0 / blocked 1 / landed 1.**
+  #113 opened on the START-HERE order. Gate 1 clear — **no `.page` file on disk** (`find`, not a
+  glob). Fold at open was IDENTICAL to #112's close on every axis — `master-convergence-deadlock`
+  46/4, store-wide **268 open · 180 blocked · 2537 items** — so unlike #110→#111 no sibling wrote in
+  the gap and any movement below is mine alone.
+
+  Gate 2 was **`590fedde86cc`**, the peer's converge-path row: *deploy-live and install.sh hold
+  contradictory definitions of "stale" … CONSEQUENCE: EDITED files go live but **ADDED files never
+  get symlinked**, which is precisely the LIVE_ADDS silent-skip case.* Method 18 first: `git log -S`
+  on the guard's own refusal phrase, scoped to `origin/main`, returns only `4a01b810d` (the commit
+  that ADDED the guard) — a clean null on any cure, which is what licensed spending the session on
+  measurement.
+
+  🚨 **THE MECHANISM IS TRUE AND THE CONSEQUENCE IS FALSE — and they are separate claims (method
+  10/25).** Measured with the deploy repo in exactly the state the row describes (HEAD `6578b59df`,
+  **5** behind trunk, `merge-base --is-ancestor origin/main HEAD` **false**, i.e. install.sh's guard
+  firing by construction):
+  · `deploy-parity-assert.sh` reports **all 20 SYMLINK classes at 0 missing** — `scripts/*.sh`
+    177 tracked · 177 live, `hooks/*.sh` 73 · 73, `skills/*/*` 35 · 35, `hooks/*.py` 3 · 3.
+  · Of **75** files ADDED to a symlink class in the last 40 trunk commits, **66 are live symlinks**
+    and the other **9 are in no deploy class at all** (`scripts/*.py`, `hooks/lib/*.py`,
+    `skills/LOCAL_ONLY.md`, a reso binary). That 9 is a property of MY census glob, not of the
+    population — **method 48, and I nearly reported it as the finding.**
+  `link_refresh()` repairs that half **unconditionally**, at `deploy-live.sh:1212`, ahead of the
+  fetch and ~570 lines ahead of the install.sh call that dies at `:1780`. Its own comment block
+  (`:906-916`) says it was built for precisely this and is *"the only thing on the machine that
+  repairs that without an advance."* So the row's cure — a decision on `CC_INSTALL_ALLOW_STALE`, a
+  G2 deploy-path escalation surface whose guard cites the 2026-08-01 incident by name — would have
+  been spent on a symptom that is not occurring.
+
+  🚨 **FINDING 1 — WHEN A ROW NAMES A CONSEQUENCE, ASK WHICH HALF OF THE SUBJECT IT LANDS ON; A
+  SUBJECT WITH TWO REPAIR MODELS WILL HAVE ONE OF THEM COVERED.** install.sh deploys by SYMLINK and
+  by COPY. The row reasoned about ADDs generically and landed on the symlink half, which self-heals
+  every tick. The COPY half is the one with no unconditional repairer, and it is uncovered **by
+  deliberate design**, not by omission: linking those classes is the githooks bug `install.sh:289`
+  calls *"a critical bug"* (a link into the working tree dangles on any branch switch and git fails
+  OPEN on a dangling hook), so `link_refresh` must never touch them — `deploy-live.sh:918-927` is a
+  whole block arguing exactly that, with tests pinning both directions. **The two guards are each
+  correct and jointly leave the copy half unreachable for as long as a landing chain runs.** Note
+  the direction, as #111 asks: the row indicted a real contradiction and mis-assigned its blast
+  radius, so acting on it as written would have escalated a deploy-path decision for nothing.
+
+  🚨 **FINDING 2 — A VERDICT WITH NO CONSUMER IS INDISTINGUISHABLE FROM A VERDICT NEVER COMPUTED,
+  AND THIS ONE HAD BEEN COMPUTED ~144×/DAY.** The copy drift was never undetected. The assert scores
+  it, exits **1**, and prints `STALE claude-latest copy differs from repo`. Nobody reads that:
+  `deploy-parity-assert.sh` has **no launchd job**, and its only production caller is `link_refresh`,
+  which consumes ONE line shape (`^MISSING: ln -sf `) and reads the rc **solely to test for 3**. A
+  full caller census — re-run without the extension filter after noticing `bin/cc-*` are
+  extensionless, and positive-controlled to prove the grep finds extensionless files at all
+  (memory: `caller-census-keyed-on-path-misses-the-name`) — finds its only other references are two
+  COMMENTS. This is the standing lint's fifth face again: a producer pins the format in one place
+  (`report()`, a single `printf '  %-9s %-22s %s\n'`) and the consumer reads one line shape of it.
+  **HARM, measured, not asserted (method 10):** the one drifting file is `~/bin/claude-latest`, and
+  the live copy is the **pre-`79f075a07`** MANIFEST matcher — the compact-only `"version":"X"` regex
+  that cannot read a jq/python-written spaced row. An unreadable row falls into the launcher's `*)`
+  **default-DENY** arm, so the live binary-version gate had been refusing operator-allow-listed
+  versions for **29 h** after the fix landed, with no line anywhere saying so.
+
+  **LANDED** — `copy_drift_notice()` in `scripts/deploy-live.sh`, reported and never repaired.
+  Anchored on the PRODUCER's own single `report()` site rather than copied literals, so a rename
+  there reds the tests instead of silently muting the arm. Damped on a **dedicated signature
+  marker, deliberately not `damp_ok()`** — that helper keeps ONE key in ONE shared file, so a
+  persistent condition parked in it would have suppressed the `dirty-tree` and `untracked-collision`
+  pages that share the slot. **The log line sits INSIDE the damp gate with the page**, which was a
+  correction mid-build: `say()` prints under `--auto`, and copy drift is a LEVEL, not an edge, so
+  the first draft would have put 144 identical lines/day into `deploy.log` and broken the `--auto`
+  silence contract `asay()` states — an alarm that fires every tick carrying the same information as
+  one that cannot fire (memory: `alarm-polarity-and-attention-budget`). Placed **before** the
+  steady-state `[ -n "$miss" ] || return 0`, because an empty MISSING list is exactly when copy
+  drift still needs reporting.
+
+  **Red-proof** (method 28/29/50) in a scratch tree at HEAD, control FAIL-LOUD on a subject that
+  already carried the fix: control with the fix absent **5/5 red**, fix applied **5/5 green**, and
+  **one mutant per changed site**, each red with its own attribution — call moved below the miss
+  early-return (4 red), needle drops the `STALE` token (4), page write redirected away (2), damp
+  gate inverted (2), signature key made constant (**1** — exactly the one test that exists for it).
+  Gates: off-box hermetic `tests/deploy-live.bats` **green ok=121 notok=0 83 s** (116 baseline + 5,
+  plan `1..116`→`1..121`, read from the state column, never the wrapper rc); `shellcheck -S style`
+  rc 0; `bats-kill-guard-lint` clean; `bats-assert-liveness` silent **and positive-controlled** by a
+  planted dead negation it flags at rc 1.
+
+  ⚠️ **`590fedde86cc` BLOCKED, not closed.** Its mechanism stands and is unfixed; only its blast
+  radius was wrong. Reconciling the two staleness definitions is still a real decision on a G2
+  surface, and it is not mine to make — so it moves to `blocked --needs` carrying the measured
+  radius (~1 copy-class file, not the ADD population) so whoever takes it is deciding on facts. **Do
+  not re-file it and do not close it on this entry.**
+
+  **WRONG CAUSES REJECTED** (method 43): (1) *the row's own thesis* — ADDs never reach the live
+  layer; refuted at 20/20 classes and 66/75 ADDs. (2) *the live layer is stale so deploy-live is
+  frozen* — it advanced `332babf637`→`6578b59df` this window and the symlink half is current. (3)
+  *the 9 ABSENT ADDs are the harm* — they are outside every deploy class; my glob was wider than
+  install.sh's classes. (4) *`CC_INSTALL_ALLOW_STALE=1` is the fix* — it is a G2 escalation whose
+  guard names a prior incident, and on this measurement it would buy one launcher copy. (5) *put the
+  new alarm on `asay()` like the neighbouring residency arm* — `asay` is silent under `--auto`, i.e.
+  silent on the only path that runs it, which is the same defect being cured.
+
+  **Fold at close — and the population matters here (method 7).** `590fedde86cc` is NOT in the warm
+  effort: it carries its own condition **`deploy-live-and-install-guards-contradict`**, which goes
+  **1 open / 0 blocked → 0 / 1**. `master-convergence-deadlock` is therefore **46 / 4, UNCHANGED** —
+  I wrote "46→45" into this entry before re-folding and it was false; the block moved a row in a
+  different group. Store-wide **268 open · 180 blocked** → **267 · 181**, **items FLAT at 2537** —
+  a pure status transition, so the level moves without the total and no sibling filed in my window.
+  `ungrouped` 127/23 unchanged. Live-layer lag **5** at open (budget 25).
+
 - **2026-08-21 — drain recycle #112: the guard was never broken; the log it was judged by is
   CONDITIONAL, so its silence meant "nothing to say", not "never ran". closed 1 / filed 0.**
   #112 opened on the START-HERE order. Gate 1 clear — **no `.page` file on disk** (checked with
