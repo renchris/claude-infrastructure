@@ -88,7 +88,9 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
 - **2026-08-21 — drain recycle #113: the row named the covered half. The uncovered half was being
-  measured 144×/day and read by nobody. closed 0 / filed 0 / blocked 1 / landed 1.**
+  measured 144×/day and read by nobody — and the land that fixed it was refused by a trunk red whose
+  harness had the same disease. closed 1 / filed 0 / blocked 1 / landed 3 commits in ONE land
+  (`ff00efb8a`).**
   #113 opened on the START-HERE order. Gate 1 clear — **no `.page` file on disk** (`find`, not a
   glob). Fold at open was IDENTICAL to #112's close on every axis — `master-convergence-deadlock`
   46/4, store-wide **268 open · 180 blocked · 2537 items** — so unlike #110→#111 no sibling wrote in
@@ -184,13 +186,63 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   new alarm on `asay()` like the neighbouring residency arm* — `asay` is silent under `--auto`, i.e.
   silent on the only path that runs it, which is the same defect being cured.
 
+  🚨 **FINDING 3 — THE LAND WAS REFUSED BY A TRUNK RED, AND ITS ROOT CAUSE WAS THE SAME SHAPE AS
+  FINDING 2, ONE LAYER OUT. Closed `9c125b91fbe0`.** `ship-land.sh` refused: *smoke RED — 1 of 14
+  direct suite(s)*, `tests/permission-gate-lint.bats` cases **22, 23, 24**. **ATTRIBUTED BEFORE
+  DRIVEN**, by A/B in scratch trees: `origin/main` reads **23 ok / 3 not-ok** and my HEAD reads
+  **23 / 3** — identical, and the merge-base IS `origin/main`, so the red is trunk's. A row already
+  named it (`9c125b91fbe0`, filed 04:56Z, title naming those exact three), so it was not re-filed.
+  It is a DIRECT suite for anything touching `scripts/`, so it refuses unrelated lands — which makes
+  it mine to drive even though it is not mine to blame.
+
+  **Root cause, found by running the harness WITHOUT the `2>/dev/null` it hides behind:** the leg
+  now calls `lint_own_scope` and `arm_nonverdict`, and `run_leg` extracts neither. Under
+  `set -uo pipefail` with no `-e`, the command-not-found returns **127** straight into the leg's own
+  `|| { arm_nonverdict …; return 1; }`, so the leg returned 1 with `GATE_RED` still 0 and the lint
+  stub **never executed** — which is why case 24 reported an EMPTY env log rather than a wrong
+  own-set. 🚨 **This is the THIRD instance of one shape in that single file, and the other two are
+  written down in the comments immediately around the fix** — `own_run` had to be extracted for this
+  reason, `gate_red` had to be stubbed for this reason, and that one reported the identical
+  `GATE_RED=0 rc=1`. The contract — *which ship-land helpers an extracted leg depends on* — is
+  pinned in NO place, so it rots every time the leg gains a call. Same generator as the standing
+  lint, at the harness layer: #110's face was a program and its harness; this is a harness and the
+  program's INTERNAL call graph. **The durable half of the fix is therefore not the two helpers, it
+  is the screen:** `run_leg` now captures the harness stderr and screens it for the CLASS
+  (`command not found`), so the next helper the leg grows names itself as `HARNESS INCOMPLETE — …`
+  instead of arriving as an unexplained `rc=1`. Red-proof: fixed **26/26**, control at pristine
+  trunk reds exactly 22/23/24, and a mutant dropping ONLY the `lint_own_scope` extraction reds the
+  same three **and prints the new screen naming it**. `scripts/ship-land.sh` is untouched — the
+  landing rail's behaviour did not change.
+
+  ⚠️ **A refused land is not a spent land.** The re-fire landed all three commits at once:
+  `c10aa8d0b..ff00efb8a`, smoke **green — 14 direct suite(s) in 374 s** (premise 9's SELECTOR-WORKING
+  reading, inside the 420 s budget, and it ran the suites my diff touches). Verified BOTH directions
+  with a control that can fail: four needles read **0 at the parent `c10aa8d0b` and present on
+  trunk**, `git diff --stat origin/main -- <4 paths>` EMPTY, all four present by `ls-tree`, tree
+  clean, `trunk..HEAD = 0`.
+
   **Fold at close — and the population matters here (method 7).** `590fedde86cc` is NOT in the warm
   effort: it carries its own condition **`deploy-live-and-install-guards-contradict`**, which goes
   **1 open / 0 blocked → 0 / 1**. `master-convergence-deadlock` is therefore **46 / 4, UNCHANGED** —
   I wrote "46→45" into this entry before re-folding and it was false; the block moved a row in a
-  different group. Store-wide **268 open · 180 blocked** → **267 · 181**, **items FLAT at 2537** —
-  a pure status transition, so the level moves without the total and no sibling filed in my window.
-  `ungrouped` 127/23 unchanged. Live-layer lag **5** at open (budget 25).
+  different group. `master-verification-integrity` 1/1 unchanged. `9c125b91fbe0` closes into
+  **`permission-gate-lint-run-gate-leg-inert`**, its own condition — so the warm effort's counters do
+  not move on either of my two adjudications, which is a fact about where these rows live, not about
+  how much was done.
+
+  **Store-wide, and the movement is NOT mine alone this time.** At open: **268 open · 180 blocked ·
+  2537 items**, identical to #112's close. After my block: 267 · 181 · 2537. At close: **271 open ·
+  181 blocked · 2543 items**. The **+6 items are attributed** (#112's law — never leave an
+  unexplained mover): all six carry `source=audit-2026-08-21-100p`, all six are reso `floor-plan`
+  product-repo findings filed 20:21:50–20:22:07Z, all six landed `ungrouped` (127→132). ⚠️ **The
+  arithmetic does not fully close and I am saying so rather than rounding it:** 267 + 6 − 1 (my
+  close) = 272, and the store reads **271**, so one further open→non-open transition happened in my
+  window that I did not isolate — a sibling close. Live-layer lag **5** at open, **8** at close
+  (budget 25); my diff ADDS no file, so `LIVE_ADDS` is 0 and this is an ordinary within-budget lag,
+  not a `🚀` breach. ⚠️ **But note what premise 1 and Finding 1 jointly imply about that lag:** the
+  fix I just landed rides a per-file symlink into the shared checkout, and that checkout is behind
+  trunk, so `copy_drift_notice` does not execute until the checkout fast-forwards. **It cannot report
+  its own subject yet.**
 
 - **2026-08-21 — drain recycle #112: the guard was never broken; the log it was judged by is
   CONDITIONAL, so its silence meant "nothing to say", not "never ran". closed 1 / filed 0.**
