@@ -39,6 +39,22 @@
 #
 # So the CENSUS glob below now covers scripts/ as well as tests/ — stated here because a glob that
 # widens without its comment widening is how a scoping decision becomes an accident.
+#
+# THE FOURTH HARNESS, and the proof that the CENSUS is not decorative. scripts/redproof-lstart-dialect.sh
+# was added by 33c46299 and matched the scripts/*redproof* glob the same day — and was not wired, so
+# this suite went RED post-land (backlog 464c856d6799; the auto-revert then failed, rc=90). That is
+# the recurrence guard working exactly as its comment promises: a new harness is in scope on the day
+# it is created, with nobody's cooperation, and the census refused to stay green over it. The remedy
+# is forward, and it is the same one that discharged the banner exclusion above — give the harness a
+# cheap self-check, then wire it.
+#
+# Its check is --check-anchors, and unlike cc-queue's and cc-pane's it spans ELEVEN subjects rather
+# than one, in four classes with different predicates: MUTANT (a literal an ARM-4/5e mutator
+# replaces — 0 matches makes that site an absent control), FIX (a symbol the fix introduced, whose
+# absence-at-the-parent is the arm's non-vacuity claim), PROBE (a definition ARM 5b awk-lifts out of
+# this tree), SUITE (a bats file the PRE/POST tallies run). The full harness stays an explicit
+# invocation and could never be anything else: it needs a parent sha, a `git archive` per arm, a
+# bats run per mutant, and a real live pid. Same trade as the other three, one file wider.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -87,6 +103,23 @@ setup() {
   [ "$r" -ge 40 ] || false
 }
 
+@test "redproof-lstart-dialect: every anchor still matches its subject across all eleven files" {
+  run bash "$REPO/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'STALE ANCHOR' || false
+  echo "$output" | grep -q 'anchors live across' || false
+  # Floors, so a gutted CASES table cannot pass this by having nothing to check. The harness
+  # enforces its own floors too (>=18 cases, >=9 of them MUTANT); these are the outer ones, and the
+  # subject count is here because this harness's distinguishing risk is a subject going MISSING —
+  # eleven files across bin/, hooks/ and tests/, any one of which a later refactor could move.
+  n="$(echo "$output" | sed -n 's/.*: \([0-9]*\)\/[0-9]* anchors live.*/\1/p')"
+  [ -n "$n" ] || false
+  [ "$n" -ge 18 ] || false
+  s="$(echo "$output" | sed -n 's/.*anchors live across \([0-9]*\) subjects.*/\1/p')"
+  [ -n "$s" ] || false
+  [ "$s" -ge 10 ] || false
+}
+
 @test "CENSUS: every red-proof harness under tests/ or scripts/ is wired into THIS suite" {
   # The recurrence guard. Wiring the two that exist today fixes today; the class reproduces the next
   # time someone writes a third harness and references it in a comment, which is precisely how these
@@ -109,10 +142,11 @@ setup() {
     grep -v '^[[:space:]]*#' "$BATS_TEST_FILENAME" | grep -q -- "$b" || unwired="$unwired $h"
   done
   # A glob that matched nothing would make this test pass while asserting nothing — the exact
-  # vacuity the file is about. Three harnesses exist; require at least three. A FLOOR and never an
-  # equality: `-eq 3` would go red on a fourth harness being written, which is the one direction
-  # nobody needs protecting from.
-  [ "$seen" -ge 3 ] || false
+  # vacuity the file is about. Four harnesses exist; require at least four. A FLOOR and never an
+  # equality: `-eq 4` would go red on a fifth harness being written, which is the one direction
+  # nobody needs protecting from. (Raised 3 -> 4 when scripts/redproof-lstart-dialect.sh was wired;
+  # the floor tracks the count that exists, so it stays a floor and never a ceiling.)
+  [ "$seen" -ge 4 ] || false
   if [ -n "$unwired" ]; then
     echo "UNWIRED red-proof harness(es) —$unwired"
     echo "Each must be invoked by a case in $BATS_TEST_FILENAME, not merely mentioned in a comment."
@@ -120,11 +154,15 @@ setup() {
   fi
 }
 
-@test "all three harnesses REFUSE a stale case — the check can fail, on the real artifact" {
-  # Without this the two cases above would pass just as well for a --check-anchors that returns 0
+@test "all four harnesses REFUSE a stale case — the check can fail, on the real artifact" {
+  # Without this the cases above would pass just as well for a --check-anchors that returns 0
   # unconditionally. Sabotage a real anchored line in a COPY of the tree and require the refusal.
   cp -R "$REPO/bin" "$REPO/tests" "$BATS_TEST_TMPDIR/"
-  mkdir -p "$BATS_TEST_TMPDIR/scripts"
+  mkdir -p "$BATS_TEST_TMPDIR/scripts" "$BATS_TEST_TMPDIR/hooks"
+  # redproof-lstart-dialect anchors hooks/session-register.sh too, so the copy must carry it or its
+  # arm below would refuse for a missing file rather than for the sabotage — a refusal that proves
+  # the copy is incomplete, not that the check discriminates.
+  cp "$REPO/hooks/session-register.sh" "$BATS_TEST_TMPDIR/hooks/"
 
   # cc-queue: the cap notice, whose disappearance is the finding's own named failure scenario.
   python3 - "$BATS_TEST_TMPDIR/bin/cc-queue" <<'PY'
@@ -178,4 +216,29 @@ PYSAB
   [ "$status" -eq 1 ]
   echo "$output" | grep -q 'STALE CASE' || false
   echo "$output" | grep -q 'READS g.WORLD_MOD, which gen.py no longer defines' || false
+
+  # redproof-lstart-dialect: sabotage the ONE anchor whose loss is worst — the kqueue overlay tuple
+  # that ARM 4's mutant replaces. Lose it and `assert new != s` makes that site an absent control,
+  # which is this harness's version of the vacuous pass. The literal used here is the mutator's own,
+  # so this arm also pins the CASES/mutate() coupling the harness header calls out.
+  cp "$REPO/scripts/redproof-lstart-dialect.sh" "$BATS_TEST_TMPDIR/scripts/"
+
+  # CONTROL FIRST, for the same reason the banner arm above needs one: a refusal with no passing
+  # control proves only that the copied tree is broken.
+  run bash "$BATS_TEST_TMPDIR/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 0 ]
+
+  python3 - "$BATS_TEST_TMPDIR/bin/cc-deathwatch-kqueue" <<'PYK'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = 'for overlay in ({"TZ": "UTC", "LC_ALL": "C"}, None, {"LC_ALL": "C"}):'
+assert s.count(a) == 1, s.count(a)
+open(p, "w").write(s.replace(a, 'for overlay in ({"TZ": "UTC", "LC_ALL": "C"},):'))
+PYK
+  run bash "$BATS_TEST_TMPDIR/scripts/redproof-lstart-dialect.sh" --check-anchors
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'STALE ANCHOR' || false
+  echo "$output" | grep -q 'kqueue-overlay-tuple' || false
+  echo "$output" | grep -q 'MATCHED 0x' || false
 }

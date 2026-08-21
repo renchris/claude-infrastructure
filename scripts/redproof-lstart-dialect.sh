@@ -23,8 +23,119 @@ while [ -L "$_p" ]; do
   case "$_p" in /*) ;; *) _p="$_d/$_p" ;; esac
 done
 REPO="$(cd "$(dirname "$_p")/.." && pwd)"
+
+# ── --check-anchors: the half of this harness cheap enough to live in the normal test contract ────
+#
+# WHY THIS MODE EXISTS. tests/anti-vacuity-contract.bats holds that a red-proof harness which
+# nothing runs has rotted into a comment, and its CENSUS makes membership a GLOB — so this file was
+# in scope on the day it was written. The full run cannot be that wiring: it needs a parent sha, a
+# `git archive` per arm, a bats run per mutant, and a real live pid. What it CAN be is the same
+# trade the three sibling harnesses already make — the expensive half stays an explicit invocation,
+# and the cheap half, which needs no bats and no git, becomes unconditional.
+#
+# WHAT IT CHECKS, and the predicate for each class. Every arm below is only as good as a literal
+# still matching its subject in THIS tree; when one stops matching, the arm keeps printing and stops
+# meaning anything, which is precisely the silent vacuity the contract is about.
+#
+#   MUTANT  the literal an ARM-4/5e mutator replaces. 0 matches ⇒ `assert new != s` fires and that
+#           site becomes an ABSENT CONTROL — the one failure mode a green suite cannot show you.
+#   FIX     a symbol this fix introduced. ARM 1 reports it as absent from the PARENT; if it is also
+#           absent HERE, the line is reporting on a symbol nothing defines any more.
+#   PROBE   a function definition ARM 5b awk-extracts from THIS tree. 0 matches ⇒ the extraction is
+#           empty and the arm prints a failure that reads like a verdict.
+#   SUITE   a bats file ARMs 3/5d tally. Absent ⇒ the tally is of an empty run.
+#
+# NOT COVERED, stated rather than implied: a subject that keeps every anchored line and breaks the
+# behaviour some other way. Only the full run catches that, and its name is in the failure message.
+#
+# COUPLING. The MUTANT needles are duplicated between CASES here and the mutate()/rmutate() bodies
+# far below — the same convention the sibling harnesses run on. Change one, change the other; the
+# mutators' own `assert new != s` is the backstop that makes a missed edit loud rather than silent.
+if [ "${1:-}" = "--check-anchors" ]; then
+  CC_RP_REPO="$REPO" python3 - <<'PY'
+import os, sys
+
+REPO = os.environ["CC_RP_REPO"]
+
+NORM = "    *)           printf '%s %s %s %s %s' \"$1\" \"$3\" \"$2\" \"$4\" \"$5\""
+KQ_OVERLAY = 'for overlay in ({"TZ": "UTC", "LC_ALL": "C"}, None, {"LC_ALL": "C"}):'
+MIG = "# migration:"
+
+# (id, relative path, class, needle | None, spec)   spec: "1" = exactly once · "+" = at least once
+# A needle starting with "^" is matched at line start instead of as a free substring.
+CASES = [
+    # ── ARM 4 — mutate() strips these; each is one site's negative control ──
+    ("cc-backlog-dialect-fallbacks",       "bin/cc-backlog",           "MUTANT", MIG,        "+"),
+    ("cc-reaper-dialect-fallbacks",        "bin/cc-reaper",            "MUTANT", MIG,        "+"),
+    ("cc-dispatch-dialect-fallbacks",      "bin/cc-dispatch",          "MUTANT", MIG,        "+"),
+    ("cc-respawn-dialect-fallbacks",       "bin/cc-respawn",           "MUTANT", MIG,        "+"),
+    ("cc-pane-headless-dialect-fallbacks", "bin/cc-pane-headless",     "MUTANT", MIG,        "+"),
+    ("kqueue-overlay-tuple",               "bin/cc-deathwatch-kqueue", "MUTANT", KQ_OVERLAY, "1"),
+    # ── ARM 5e — rmutate() replaces these; the registry triple's negative controls ──
+    ("register-canonical-write",           "hooks/session-register.sh", "MUTANT",
+     "lstart=$(TZ=UTC LC_ALL=C ps -o lstart=", "1"),
+    ("cc-sessions-order-normaliser",       "bin/cc-sessions",          "MUTANT", NORM,       "1"),
+    ("cc-notify-order-normaliser",         "bin/cc-notify",            "MUTANT", NORM,       "1"),
+    # ── ARM 1 / 5a — the symbols whose absence-at-the-parent is the non-vacuity claim ──
+    ("cc-backlog-new-helper",              "bin/cc-backlog",           "FIX", "llo_lstart_matches", "+"),
+    ("cc-reaper-new-helper",               "bin/cc-reaper",            "FIX", "lstart_matches",     "+"),
+    ("cc-reaper-wd-new-helper",            "bin/cc-reaper",            "FIX", "wd_lstart_matches",  "+"),
+    ("cc-respawn-new-helper",              "bin/cc-respawn",           "FIX", "start_is_same",      "+"),
+    ("cc-pane-headless-new-helper",        "bin/cc-pane-headless",     "FIX", "pstart_matches",     "+"),
+    ("kqueue-new-helper",                  "bin/cc-deathwatch-kqueue", "FIX", "start_is_same",      "+"),
+    ("cc-sessions-new-helper",             "bin/cc-sessions",          "FIX", "reg_lstart_norm",    "+"),
+    ("cc-notify-new-helper",               "bin/cc-notify",            "FIX", "reg_lstart_norm",    "+"),
+    # ── ARM 5b — the two definitions its awk lifts out of THIS tree's cc-notify ──
+    ("cc-notify-pid_live-def",             "bin/cc-notify",            "PROBE", "^pid_live() {",        "1"),
+    ("cc-notify-reg_lstart_norm-def",      "bin/cc-notify",            "PROBE", "^reg_lstart_norm() {", "1"),
+    # ── ARMs 3 / 5d — the suites the PRE/POST tallies run ──
+    ("bin-suite",      "tests/lstart-dialect-bin.bats",      "SUITE", None, "1"),
+    ("registry-suite", "tests/lstart-dialect-registry.bats", "SUITE", None, "1"),
+]
+
+# This harness's OWN floors, so a gutted table cannot pass by having nothing to check. The suite
+# asserts outer floors too; these are the ones that travel with the file.
+assert len(CASES) >= 18, "CASES gutted: %d" % len(CASES)
+assert sum(1 for c in CASES if c[2] == "MUTANT") >= 9, "every mutation site must be anchored"
+
+bad = 0
+for name, rel, kind, needle, spec in CASES:
+    path = os.path.join(REPO, rel)
+    if not os.path.exists(path):
+        print("  STALE ANCHOR %-34s %s is MISSING — the arm reading it cannot mean anything"
+              % (name, rel))
+        bad += 1
+        continue
+    if needle is None:
+        continue
+    text = open(path, encoding="utf-8", errors="replace").read()
+    if needle.startswith("^"):
+        hits = sum(1 for line in text.split("\n") if line.startswith(needle[1:]))
+    else:
+        hits = text.count(needle)
+    ok = hits >= 1 if spec == "+" else hits == 1
+    if not ok:
+        want = "at least 1" if spec == "+" else "exactly 1"
+        print("  STALE ANCHOR %-34s [%s] MATCHED %dx in %s (need %s)"
+              % (name, kind, hits, rel, want))
+        bad += 1
+
+if bad:
+    print("redproof-lstart-dialect --check-anchors: FAIL — %d of %d anchors no longer match their "
+          "subject." % (bad, len(CASES)))
+    sys.stderr.write("The proof is stale: re-anchor it, or the arms it backs are unproven. "
+                     "Full run: scripts/redproof-lstart-dialect.sh <parent-sha>\n")
+    sys.exit(1)
+
+subjects = len({c[1] for c in CASES})
+print("redproof-lstart-dialect --check-anchors: %d/%d anchors live across %d subjects. "
+      "(Cheap half: proves no arm went vacuous.)" % (len(CASES), len(CASES), subjects))
+PY
+  exit $?
+fi
+
 PARENT="${1:-}"
-[ -n "$PARENT" ] || { echo "usage: $0 <parent-sha>" >&2; exit 2; }
+[ -n "$PARENT" ] || { echo "usage: $0 <parent-sha> | $0 --check-anchors" >&2; exit 2; }
 export PATH="/opt/homebrew/bin:$PATH"          # bats is NOT on a hardened PATH; rc 127 reads as red
 SUITE="tests/lstart-dialect-bin.bats"
 
