@@ -222,6 +222,13 @@
 #                       assistant-turn check (retains the liveness checks) for a successor whose
 #                       transcript is unreadable from this account. --terminal declares
 #                       end-of-line (nothing continues). Bare self-close exits 2.
+#                       EXIT 3 vs EXIT 7 (item 87a515ed087e): exit 3 is a VERDICT ABOUT THE
+#                       SUCCESSOR — resolved and not there, or resolved and not alive; the fix is
+#                       to correct the uuid, re-fire, or --terminal. Exit 7 is NO VERDICT AT ALL:
+#                       the pane→tty resolver never answered, so nothing was learned about the
+#                       successor and --terminal would be a false declaration. The fix for 7 is to
+#                       RETRY. Do not collapse them in a caller — that is the very conflation this
+#                       split exists to end (0c93f779ecfa, one layer down, in cc-notify).
 #                       Guard: refuses on a DIRTY git tree in cwd (exit 1). On a SHARED
 #                       checkout where the dirt is a live successor's in-flight work, pass
 #                       --dirty-owner successor (requires --successor; asserts the close
@@ -1375,6 +1382,41 @@ AS
   hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session run -s "${1##*:}" "$2"
 }
 
+# THE RESOLVER HAS THREE STATES, AND THE EMPTY STRING NAMES TWO OF THEM (item 87a515ed087e).
+# as_tty prints the tty or empty, and an empty answer is produced by two facts that are not the same
+# fact and do not have the same remedy:
+#   ABSENT   the query SUCCEEDED and said there is no such pane → a DEFINITE NEGATIVE about the pane.
+#   WEDGED   the query never succeeded at all, `max` times over → a NON-VERDICT about the RESOLVER,
+#            which says nothing whatever about the pane; it may be perfectly alive.
+# Collapsing them is the 0c93f779ecfa defect one layer down: cc-notify returned "cannot resolve
+# target … not a live session name or a pane UUID" for a VALID target whose resolver had merely timed
+# out, and that misleading error cost this desk six non-delivered advisories and two successively-wrong
+# diagnoses. The same conflation here made `self-close --successor` tell an operator "the continuation
+# is NOT there" — and prescribe `--terminal`, i.e. DECLARE THAT NOTHING CONTINUES — over a successor
+# the resolver simply could not see. The sibling gate directly below (successor_pin, rc 0 live / 1
+# dead / 2 unpinnable) already carries exactly this three-state contract and every one of its states
+# gets its own message; the non-verdict was being destroyed one layer ABOVE it, before it could arrive.
+#
+# WHY THE STATE RIDES THE EXIT CODE AND NOT A GLOBAL: every call site is `$(as_tty …)`, a command
+# SUBSTITUTION — a subshell — so a variable set in here can never reach the caller. rc is the only
+# channel that crosses that boundary, which is also why successor_pin uses it, and the callers that
+# want the split consume it with the same `X="$(f …)" || RC=$?` idiom already used for the pin.
+as_tty_classified() { # $1=session-uuid → tty on stdout · rc 0 RESOLVED / 1 pane ABSENT / 3 CANNOT TELL
+  local out n=0 max="${HANDOFF_TTY_RETRIES:-5}"
+  while [ "$n" -lt "$max" ]; do
+    n=$((n + 1))
+    # `if out=$(…)` runs the query in an if-condition ⇒ set -e is suppressed for it; a non-zero query
+    # falls through to the retry instead of aborting. A successful query WINS — including an empty
+    # one, which is the ABSENT verdict and is never retried (see as_tty's header).
+    if out="$(_as_tty_query "$1")"; then
+      [ -n "$out" ] || return 1
+      printf '%s' "$out"; return 0
+    fi
+    [ "$n" -lt "$max" ] && /bin/sleep "${HANDOFF_TTY_RETRY_SLEEP_S:-0.3}"
+  done
+  return 3   # the resolver never answered — CANNOT TELL, not "the pane is gone"
+}
+
 as_tty() { # $1=session-uuid → the pane's tty path (empty when the session is gone)
   # LOAD-ROBUST (T-P2-1, 2026-07-19; same class as cc-run 846380c6308f). iTerm2's AppleScript bridge
   # intermittently errors NON-ZERO under concurrent-session contention. Every caller assigns bare —
@@ -1386,15 +1428,16 @@ as_tty() { # $1=session-uuid → the pane's tty path (empty when the session is 
   # tty or empty. A genuinely ABSENT pane returns immediately (the query SUCCEEDS — exit 0 — with empty
   # output, never retried); only a FAILED query is retried, so a real, alive successor still resolves
   # through a transient bridge hiccup rather than being spuriously judged dead.
-  local out n=0 max="${HANDOFF_TTY_RETRIES:-5}"
-  while [ "$n" -lt "$max" ]; do
-    n=$((n + 1))
-    # `if out=$(…)` runs the query in an if-condition ⇒ set -e is suppressed for it; a non-zero query
-    # falls through to the retry instead of aborting. A successful query (incl. empty = pane absent) wins.
-    if out="$(_as_tty_query "$1")"; then printf '%s' "$out"; return 0; fi
-    [ "$n" -lt "$max" ] && /bin/sleep "${HANDOFF_TTY_RETRY_SLEEP_S:-0.3}"
-  done
-  return 0   # query never succeeded (iTerm2 wedged) → nothing printed = empty tty; the caller aborts safely
+  #
+  # THIS IS NOW THE STATE-DISCARDING WRAPPER over as_tty_classified, deliberately kept: its always-0
+  # contract is load-bearing for the callers that genuinely have nothing to do with the distinction
+  # (pane_ownership, the orphan-stamp sweep), and re-implementing the retry loop beside it would be two
+  # copies of one state model — how sibling auditors end up disagreeing about a single population
+  # (memory: sibling-auditors-must-share-the-state-model). One loop, two contracts over it.
+  local out
+  out="$(as_tty_classified "$1")" || true
+  printf '%s' "$out"
+  return 0
 }
 
 # Raw single pane→tty query (the osascript), split out so as_tty's retry / set-e-safety wrapper is
@@ -5394,7 +5437,9 @@ if [ "${1:-}" = "self-close" ]; then
   #
   #   :2853 SUC_TTY  → "successor pane <uuid> not found in iTerm2", exit 3, for a successor that is
   #                    alive and enumerable. `self-close --successor` is a primary close form, so the
-  #                    polluted box could not take it at all.
+  #                    polluted box could not take it at all. (That site is now three-state — see
+  #                    as_tty_classified: a resolver that never ANSWERED exits 7 and says so, rather
+  #                    than borrowing this branch's definite claim about the pane. item 87a515ed087e.)
   #   :2762 SC_SC_TTY → agent_id_on_tty(none) ⇒ no originator ⇒ "pane is NOT an Agent-Team assignee",
   #                    exit 2, for a pane that demonstrably is one.
   #
@@ -5992,11 +6037,30 @@ USAGE
   SUC_TTY=""
   SUC_PIN=""                       # "<sid> <pid>" of the pinned successor session; "" = unpinned
   if [ -n "$SC_SUCCESSOR" ]; then
-    SUC_TTY="$(as_tty "$SC_SUCCESSOR")"
-    if [ -z "$SUC_TTY" ]; then
-      echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR not found in iTerm2 — the continuation is NOT there; fix the uuid, or --terminal if truly nothing continues" >&2
-      exit 3
-    fi
+    # THREE STATES, not two (item 87a515ed087e). Both non-zero rcs still REFUSE — this close is
+    # irreversible and gated on POSITIVE proof, so a non-verdict can never license it and the polarity
+    # does not move. What moves is the DIAGNOSIS and the prescription, because the pre-split message
+    # was actively harmful in the wedged half: it asserted "the continuation is NOT there" and offered
+    # `--terminal`, which would retire this pane declaring that nothing continues its work — over a
+    # successor that may be alive and running, whose loss nothing would then be looking for.
+    SUC_TTY_RC=0
+    SUC_TTY="$(as_tty_classified "$SC_SUCCESSOR")" || SUC_TTY_RC=$?
+    case "$SUC_TTY_RC" in
+      0) : ;;   # RESOLVED — fall through to the liveness pin below
+      3) # CANNOT TELL. Deliberately says nothing about the successor, names the resolver as the
+         # unknown, and withdraws BOTH prescriptions the absent branch offers — neither is safe here.
+         # Transport-neutral wording on purpose: on a kitty box this same path fired while naming
+         # iTerm2, a terminal the session was not even using.
+         { echo "!! self-close ABORTED (resolver CANNOT TELL): the pane→tty resolver never answered for successor $SC_SUCCESSOR — ${HANDOFF_TTY_RETRIES:-5} attempt(s), every one of them a FAILED query rather than an answer."
+           echo "!!   This is NOT a finding about the successor. It may be perfectly alive; nothing here has looked at it."
+           echo "!!   Do NOT pass --terminal on this verdict — that would retire this pane declaring nothing continues the work, over a continuation that may be running."
+           echo "!!   Do NOT go hunting a 'correct' uuid either — the id was never rejected; the query never completed."
+           echo "!!   recover: retry the same command once the terminal API answers again (check it is running and not wedged: $HOME/.claude/bin/it2 session list). Raise HANDOFF_TTY_RETRIES to widen the window."
+         } >&2
+         exit 7 ;;
+      *) echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR not found in iTerm2 — the continuation is NOT there; fix the uuid, or --terminal if truly nothing continues" >&2
+         exit 3 ;;
+    esac
     # SESSION-PINNED liveness (see successor_pin). The pin is what the close-instant re-verify
     # re-checks, so it is resolved here, FOREGROUND, and handed to the watcher — never re-derived
     # there (a row rewritten by a new session in that pane must not satisfy this gate).
@@ -9024,8 +9088,21 @@ recycle_fire() {
   # stale inherited KITTY_WINDOW_ID sends an iTerm2 UUID into kitty's numeric id space and this
   # very next line aborts the recycle on a pane that is perfectly alive. (stage 1 of 191d1fc4143c)
   pin_term_verdict_for_watcher
-  tty="$(as_tty "$SID")"
-  [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
+  # Same two-states-in-one-empty-string split as the successor gate (item 87a515ed087e), on this
+  # pane's OWN id. The rc stays 1 in BOTH arms here — recycle's generic abort code — because nothing
+  # consumes recycle's rc by value and inventing a second one would churn a contract for no reader;
+  # the successor gate splits its rc because `self-close --successor` is a primary close form whose
+  # caller does branch on it. The asymmetry is chosen, not missed. What both share is the message:
+  # a wedged resolver must not be reported as a missing pane.
+  tty_rc=0
+  tty="$(as_tty_classified "$SID")" || tty_rc=$?
+  case "$tty_rc" in
+    0) : ;;
+    3) { echo "!! recycle ABORTED (resolver CANNOT TELL): the pane→tty resolver never answered for session $SID — ${HANDOFF_TTY_RETRIES:-5} attempt(s), every one a FAILED query. This says nothing about the pane; it is almost certainly still here (you are running inside it)."
+         echo "!!   recover: retry once the terminal API answers again. Nothing was typed and nothing was closed."
+       } >&2; exit 1 ;;
+    *) echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1 ;;
+  esac
   # THE 2026-08-06 INCIDENT'S OWN LINE. This was `! ps -o comm= -t <tty> | grep -qE 'node|claude'`,
   # and it TYPED on that negative — so a CC launched under `expect` (the standard resume path, whose
   # nested pty hides claude from the pane's tty) read as "no CC" and the relaunch command went into

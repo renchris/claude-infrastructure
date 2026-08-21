@@ -337,8 +337,111 @@ SH
   export HANDOFF_TTY_RETRIES=1
 
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
+  # RE-KEYED (item 87a515ed087e). The assertion here is a PROXY for "identity stayed kitty and the gate
+  # therefore refused" — that is what makes this the non-vacuity control for the test above, and it is
+  # unchanged. But the state it actually produces is a resolver that could not answer at all (the kitty
+  # transport is deliberately unreachable), and the pre-split subject reported that as "not found in
+  # iTerm2" — naming a terminal this session is not even using, about a pane nothing had looked at.
+  # The refusal is the same refusal; only the verdict on it is now true.
+  [ "$status" -eq 7 ]
+  # `|| false` is not decoration: this assertion used to be the LAST line of the test, where bats
+  # takes the test's exit status, and a bare `[[ ]]` was therefore live. Adding a line after it made
+  # it DEAD — a conditional keyword mid-test does not abort (bats-assert-liveness.py caught exactly
+  # this on the first run of the new diff).
+  [[ "$output" == *"CANNOT TELL"* ]] || false
+  [[ "$output" != *"not found in iTerm2"* ]] || false   # the false claim is GONE, not merely joined
+}
+
+# ── 1c. RESOLVER CANNOT TELL vs PANE ABSENT (item 87a515ed087e, 2026-08-20) ─────────────────────
+#
+# THE DEFECT. as_tty printed the empty string for two facts that are not the same fact: a query that
+# SUCCEEDED and reported no such pane (a definite negative ABOUT THE PANE), and a query that never
+# succeeded at all (a non-verdict about the RESOLVER, which has looked at nothing). The successor
+# gate consumed only `[ -z "$SUC_TTY" ]`, so both produced one message — "successor pane <uuid> not
+# found in iTerm2 — the continuation is NOT there; fix the uuid, or --terminal if truly nothing
+# continues" — and both prescriptions in it are WRONG in the wedged half. `--terminal` retires this
+# pane declaring that nothing continues the work, which over a live-but-unresolvable successor
+# strands it with nothing looking for it; "fix the uuid" sends the operator hunting a correct id
+# that was never rejected. This is 0c93f779ecfa one layer up: that row fixed exactly this conflation
+# in cc-notify ("resolver unavailable" vs "target genuinely unknown") after it cost the desk six
+# non-delivered advisories and two wrong diagnoses, and item 87a515ed087e asked for the same split
+# here. The sibling gate immediately below (successor_pin, rc 0/1/2) already had three states; the
+# non-verdict was destroyed one layer above it, before it could ever arrive.
+#
+# THE POLARITY DOES NOT MOVE. Both arms still REFUSE — this close is irreversible and gated on
+# positive proof, so a non-verdict can never license it. What splits is the rc and the diagnosis.
+#
+# The two arms are driven by DIFFERENT seams, which is what makes them discriminable at all:
+#   WEDGED  HANDOFF_TTY_FAIL_FILE — the query itself returns non-zero, every time, past the budget.
+#   ABSENT  $OSA_GONE_DIR/<uuid>  — the query SUCCEEDS and prints nothing (setup's osascript shim).
+
+@test "RED-PROOF wedged resolver: exit 7 CANNOT TELL, and BOTH wrong prescriptions are withdrawn" {
+  # Pre-fix this exits 3 with the absent branch's message. Every assertion below was verified RED
+  # against the pre-split subject.
+  local failf="$BATS_TEST_TMPDIR/ttyfail-wedge"; printf '99\n' > "$failf"
+  run env HANDOFF_TTY_FAIL_FILE="$failf" HANDOFF_TTY_RETRIES=4 HANDOFF_TTY_RETRY_SLEEP_S=0 \
+      bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
+
+  # PREMISE CONTROL FIRST — the fixture must actually have WEDGED the resolver. If the seam were not
+  # consumed the query would have succeeded and this case would be about the resolved path instead,
+  # with every assertion below true of nothing (memory: harness-default-collapses-the-states-under-test).
+  #
+  # A FLOOR AND A NOT-DRY CHECK, never `-eq <exact>`. This path crosses MORE than one as_tty site —
+  # verify_self_pane's ownership probe runs first and burns its own budget (measured: 8 consumed for
+  # a 4-attempt budget, i.e. two sites), so an exact count would red on the subject's own growth the
+  # next time a site is added and never on a regression (memory:
+  # exact-count-assertion-tripwires-its-own-subject). The floor is what the premise actually needs.
+  local left; left="$(cat "$failf")"
+  [ "$left" -lt 99 ]                                       # the seam WAS exercised
+  [ "$left" -gt 0 ]                                        # …and never ran DRY — a dry file lets a
+                                                           # later query SUCCEED, silently changing
+                                                           # the state under test out from under it
+  [ "$(( 99 - left ))" -ge 4 ]                             # at least one FULL budget burned to exhaustion
+
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"CANNOT TELL"* ]] || false
+  [[ "$output" == *"NOT a finding about the successor"* ]] || false
+  # THE TWO RETIRED PRESCRIPTIONS. These are the harm, not the wording: an operator acting on either
+  # one damages a succession that was never shown to be broken.
+  [[ "$output" == *"Do NOT pass --terminal on this verdict"* ]] || false
+  [[ "$output" != *"the continuation is NOT there"* ]] || false
+  [[ "$output" != *"fix the uuid"* ]] || false
+  ! [[ "$output" == *"dry run (self-close)"* ]] || false   # still REFUSED — polarity unmoved
+}
+
+@test "BY DESIGN GREEN both sides: a resolver that ANSWERS 'no such pane' keeps exit 3, byte-identical" {
+  # NOT a red-proof case, deliberately, and named so no reader mistakes it for one. Its whole job is
+  # to prove the split did not move the DEFINITE NEGATIVE — the state that was always classified
+  # correctly. It passes pre-fix and post-fix alike; a diff that "fixed" the wedged half by making
+  # every empty tty a cannot-tell would go red here, which is the only way this case can fail.
+  : > "$OSA_GONE_DIR/$SUCC"                                # query succeeds, prints nothing
+  run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"not found in iTerm2"* ]]
+  [[ "$output" == *"not found in iTerm2"* ]] || false
+  [[ "$output" == *"the continuation is NOT there"* ]] || false
+  [[ "$output" != *"CANNOT TELL"* ]] || false
+}
+
+@test "DISCRIMINATION: a TRANSIENT failure inside the retry budget still RESOLVES — 7 is exhaustion, not any failure" {
+  # Non-vacuity for the red-proof case. If exit 7 fired on any failed query the load-robustness the
+  # retry loop exists for would be gone — a bridge hiccup would abort a healthy close, which is the
+  # T-P2-1 flake in the other direction. Two failures inside a budget of four must still resolve and
+  # let the gate proceed to its real verdict.
+  # 6 failures against a budget of 4, and TWO as_tty sites on this path: the ownership probe upstream
+  # burns its full 4 (it fails open — "self-identity UNPROVEN … proceeding"), leaving exactly 2 for
+  # the SUCCESSOR gate, which must absorb them and resolve on its third attempt. Sized this way on
+  # purpose: a smaller count is swallowed entirely upstream and the case would never exercise the
+  # gate it names at all.
+  local failf="$BATS_TEST_TMPDIR/ttyfail-transient"; printf '6\n' > "$failf"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"go"}}' \
+    '{"type":"assistant","message":{"content":"on it"}}' > "$PROJDIR/$SUCC_SESS.jsonl"
+  run env HANDOFF_TTY_FAIL_FILE="$failf" HANDOFF_TTY_RETRIES=4 HANDOFF_TTY_RETRY_SLEEP_S=0 \
+      bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
+  [ "$(cat "$failf")" -eq 0 ]                              # the seam WAS exercised — 2 real failures
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CANNOT TELL"* ]] || false
+  [[ "$output" == *"dry run (self-close)"* ]] || false     # reached the plan → gate passed
 }
 
 # ── 2. CLOSE-INSTANT RE-VERIFY (the __selfclose watcher) ─────────────────────────────────────────
