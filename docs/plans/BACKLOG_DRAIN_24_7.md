@@ -88,9 +88,11 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
 - **2026-08-21 — drain recycle #106: stayed in `master-convergence-deadlock`. closed 1 / filed 0.**
-  ONE commit, FIVE files (`hooks/session-register.sh`, `bin/cc-sessions`, `bin/cc-notify`,
+  THREE commits — `e0d69fa9f` (the fix, five files), `5f8b859a6` (two stale test assertions the
+  first land's partial smoke hid), and this SSOT entry. Files: `hooks/session-register.sh`,
+  `bin/cc-sessions`, `bin/cc-notify`,
   `scripts/redproof-lstart-dialect.sh` (extended, not added), `tests/lstart-dialect-registry.bats`
-  (new)) plus this SSOT. Row **`bb9f69a6a2fa`** — *the cc-registry {pid,lstart} identity pins TZ but
+  (new), `tests/session-registry.bats`, `tests/cc-notify.bats`. Row **`bb9f69a6a2fa`** — *the cc-registry {pid,lstart} identity pins TZ but
   NOT the locale* — **CLOSED**. Fold at close: `master-convergence-deadlock` **52 open / 4 blocked**
   (population: rows in THAT condition only; the whole store spans 62 conditions). 52, not 53,
   because this recycle closed one and filed none in that condition — the opposite of #105's cancel.
@@ -183,6 +185,32 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   locale end-to-end and diffing `cc-sessions` output"* — my first probe did exactly that against the
   LIVE registry and would have made `cc-sessions` **sweep and delete** real rows; the store is
   swept lazily on read, so every arm runs against a `mktemp -d` copy.
+
+  🚨 **THE PARTIAL SMOKE HID TWO REDS INSIDE MY OWN DIFF — AND RAISING THE BUDGET IS A ONE-WORD
+  CURE THAT NOBODY HAS BEEN USING.** The first land reported `smoke PARTIAL — 4 direct suite(s)
+  attempted in 120s`, with `tests/cc-notify.bats` **GATE-KILLED at exit 124, budget SPENT** — a file
+  this commit CHANGED. Method 41 says close the gap by hash and re-run; doing that surfaced **two
+  reds, both mine**, which the land had pushed:
+  - `tests/session-registry.bats:459` built its expected value with `TZ=UTC ps` — pinning only TZ,
+    **the same half-pin as the subject**. A test that reproduces its subject's blind spot cannot
+    see it, which is why it was green for the entire life of the defect
+    (memory: `stale-assertion-becomes-an-inverted-guard`). Now canonical, and it additionally
+    asserts the SHAPE (canonical is month-first ⇒ field 2 never numeric), so a re-half-pin reds even
+    on a box whose ambient locale is already C.
+  - `tests/cc-notify.bats:1240` extracts `pid_live` out of the shipped file. `pid_live` grew a
+    `reg_lstart_norm` callee, the extractor did not take it, so the helper was UNDEFINED and its
+    call substituted the empty string on BOTH sides of the compare — the function returned MATCH
+    for every input. **The recycled-pid assertion caught it and went red**, which is the one
+    direction this shape of extraction bug cannot hide behind. Roster now explicit, every name
+    `declare -F`-asserted after sourcing. **Generalise: an extractor that pulls ONE function out of
+    a real file is only as good as its callee roster, and a subject that GROWS a helper silently
+    invalidates it.**
+  **The cure for the smoke gap itself: `SHIP_LAND_SMOKE_BUDGET_S=420` made the second land's smoke
+  GREEN (2 suites in 146 s).** Every recycle from #103 on has recorded a partial smoke and closed it
+  by hand; the override is named in the land's own output each time. **When your diff touches a file
+  whose suite is big — `cc-notify` alone is 105 tests — set the budget on the FIRST land instead of
+  reconstructing the gap afterwards.** A refused land is still not a spent land: this repair took
+  rc 6 (one more deliberate `set -- $x` SC2086, same class as the other three) and then rc 0.
 
   ⚠️ **An instrument that agreed with me, again, twice (method 4).** My first dialect census counted
   rows with `jq -r '.lstart'` and read **18 of 18** — it was counting `jq`'s literal `null` line.
