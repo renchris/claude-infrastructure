@@ -103,7 +103,19 @@ EOF
 
 # Opt back into the capacity gate for the cases that ARE the gate. Paired with the sysctl stub, so
 # STUB_LOAD/STUB_NCPU are what the gate reads — never /usr/sbin/sysctl's live answer.
-gate_on() { export CC_FIRE_CAPACITY_GATE=on; }
+# Wave E (task #170) defaulted the LOAD term OFF — load1 does not move with an added resident
+# session, so the saturated-load fixture case 5 uses is no longer a refusal unless the term is asked
+# for. Pinning it here keeps case 5 asserting what it was written to assert (the cloud branch is a
+# BRANCH, not a weakening of the box-local gate) rather than silently becoming a test of a term that
+# no longer runs. The segment and active terms are pinned to comfortably-admitting values for the
+# same reason the headroom override exists: otherwise this suite becomes a function of the
+# compressor state and live session count of whichever box happens to run it.
+gate_on() {
+  export CC_FIRE_CAPACITY_GATE=on
+  export CC_FIRE_LOAD_TERM=on
+  export CC_FIRE_SEGMENT_OVERRIDE=0
+  export CC_FIRE_ACTIVE_OVERRIDE=0
+}
 
 # fire() — the real script, always --dry-run so an ADMIT never actually launches anything.
 # $1 = ncpu, $2 = load; the rest are passed through.

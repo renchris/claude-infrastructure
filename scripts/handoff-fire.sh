@@ -641,7 +641,12 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
 # by refuse_reason.
 _fire_gate_of() { # $1=refusal reason → gate name
   case "${1:-}" in
-    capacity|headroom) printf capacity ;;
+    # `segments` and `active` joined the pair in Wave E (task #170) when the load term was defaulted
+    # off. All four are TERMS of the single capacity_gate() — a fire must clear every enabled one —
+    # so they share the gate name and stay distinguishable by refuse_reason. Adding a term without
+    # adding it here drops its refusals into the fail-visible `*)` arm and out of the capacity
+    # denominator, which is what the ENUM guard in tests/handoff-fire-capacity-gate.bats catches.
+    capacity|headroom|segments|active) printf capacity ;;
     # G5 — the off-box venue's refusals get their OWN gate name, not capacity's. A cloud fire
     # never measured this box, so folding its refusals into the capacity denominator would make
     # that denominator span two different populations measured by two different instruments —
@@ -4384,13 +4389,47 @@ _cc_fire_page() { # $1=text — never fatal, never blocking; an unreachable noti
   return 0
 }
 
+# 🚨 THIS LIST MUST NAME EVERY TERM THAT CAN CHARGE THE BUDGET. A term whose counter is written by
+# _cc_fire_bound but never cleared here can only ratchet upward, so it spends its release once and
+# then refuses forever with no way back — an UNBOUNDED gate on the operator's own path, which is the
+# exact defect §W3 item 2 built this bound to remove. It was `load headroom` and hardcoded; Wave E
+# (task #170) added segments and active, and any future term MUST be added here in the same diff.
+# tests/handoff-fire-capacity-gate.bats asserts the list matches the terms that call _cc_fire_bound.
+#
+# 🚨 THE LIST IS A LITERAL INSIDE THE FUNCTION, DELIBERATELY. It was briefly hoisted to a
+# `_CC_FIRE_TERMS` variable, which is strictly worse here: tests/spawn-presence.bats runs this gate
+# by EXTRACTING named FUNCTIONS out of this file (extract_fn), and a bare variable is not a function,
+# so it would arrive unset. The `for` would then iterate over nothing, reset no counter, and every
+# extracted-gate test would pass while the bound it is testing silently did not exist — the
+# extraction's own failure mode (see tests/handoff-fire-capacity-gate.bats § THE EXTRACTION'S OWN
+# FAILURE MODE). Anything the gate needs must live INSIDE a function the harness names.
 _cc_fire_budget_reset() {
   local t f
-  for t in load headroom; do
+  for t in load headroom segments active; do
     f="$(_cc_fire_budget_file "$t")"
     [ -n "$f" ] && : > "$f" 2>/dev/null
   done
   return 0
+}
+
+# A term whose instrument could not be read is NAMED, never silently skipped — otherwise a window in
+# which a term stopped evaluating is indistinguishable from a window in which it evaluated and
+# cleared (the 222-dead-sysctl-rows shape). Mirrors capacity-admit's `_cc_admit_note_blind`.
+_cc_fire_note_blind() { # $1=term
+  CC_FIRE_BLIND="${CC_FIRE_BLIND:+$CC_FIRE_BLIND,}$1"
+  echo "-- capacity gate: ${1} term BLIND (instrument unreadable) — noted, not fatal" >&2
+  return 0
+}
+
+# Join the terms that actually evaluated into one detail string. Empty notes drop out entirely, so
+# the row can never carry a stale number for a term that did not run.
+_cc_fire_join_notes() {
+  local out="" n
+  for n in "$@"; do
+    [ -n "$n" ] || continue
+    out="${out:+$out · }$n"
+  done
+  printf '%s' "$out"
 }
 
 # ── THE PRESENCE CONSULT AT THIS SPAWN SITE (§W3 item 1) ─────────────────────────────────────────
@@ -4550,10 +4589,20 @@ capacity_gate() {
     return 0
   fi
   local ncpu load ceiling verdict lpc floor head_gb sysctl_bin
+  # Wave-E terms (task #170). `load_note`/`head_note`/`seg_note`/`act_note` are each a term's
+  # contribution to the detail string, EMPTY when that term did not evaluate — so the row a reader
+  # gets back names exactly the terms that ran, and a term switched off cannot leave a stale number
+  # behind claiming it did. `CC_FIRE_BLIND` accumulates the enabled-but-unreadable ones.
+  local load_note head_note seg_note act_note
+  local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling
   # ONE presence reading for this whole evaluation (§W3 item 1) — taken before any term, so the
   # refusal and the admit can never record two different worlds for one decision.
   CC_FIRE_PRESENCE="$(_cc_fire_presence)"
   if [ -n "$CC_FIRE_PRESENCE" ]; then CC_FIRE_PRES_NOTE=" · operator ${CC_FIRE_PRESENCE}"; else CC_FIRE_PRES_NOTE=""; fi
+  # Cleared per evaluation, not per process: capacity_gate() can be called more than once in a run
+  # (the pre-flight and the fire), and a blindness carried over from the first would convict the
+  # second of an instrument it never read.
+  CC_FIRE_BLIND=""
   # The resolver, both probes, both verdicts and both default numbers are the SHARED TERMS — see
   # the header above. Everything this function does with them is its own.
   sysctl_bin="$(cc_hw_resolve_sysctl "${CC_FIRE_SYSCTL:-}")"
@@ -4561,6 +4610,39 @@ capacity_gate() {
   load="$(cc_hw_load1 "$sysctl_bin")"
   if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
   ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-$CC_HW_DEFAULT_MAX_LOAD_PER_CORE}"
+  # ── THE LOAD TERM IS OFF BY DEFAULT (task #170, 2026-08-21) ───────────────────────────────────
+  # It is still here, still shares its ceiling and its verdict with the library, and its arithmetic
+  # was never wrong. It defaults OFF because load1 does not measure the quantity a SPAWN gate
+  # decides about. Measured while it was refusing real fires at 3.37/core against the 2.00 ceiling:
+  # the other three terms were nowhere near their limits — reclaimable headroom 21.64 GB against a
+  # 4 GB floor, compressor segments 6.99% against a 50% ceiling, 5 sessions mid-turn against a
+  # ceiling of 8 — and the runnable numerator over 5 samples was jq 25 / bash 20 / ps 8 / claude 8,
+  # i.e. our own hook and test-suite shell fan-out, which is per-TURN. Every live `claude` process
+  # sat in S/Ss; load1 counts only runnable and uninterruptible, so a RESIDENT session contributes
+  # ~0 to the number this term reads. A gate whose input does not move with the decision it gates
+  # can only refuse for reasons unrelated to that decision, which is what this one had been doing.
+  #
+  # STATE THE CLAIM PRECISELY — the loose form is false and was circulated before being caught. It
+  # is NOT true that "our sessions add nothing to load": our tooling is ~2/3 of the numerator. It is
+  # true that an ADDITIONAL RESIDENT SESSION adds ~nothing, and that is the only question a spawn
+  # gate asks. The distinction is the whole justification; a reader who collapses it will conclude
+  # the box is idle when it is not.
+  #
+  # 🚨 C18 (docs/research/memory-econ-rearchitecture-2026-08-10/prior-art.md:245): no gate default
+  # moves AS A SIDE EFFECT. This change IS the deliberate subject, and what it moves is a TERM
+  # SWITCH — never a ceiling. CC_FIRE_MAX_LOAD_PER_CORE is untouched, still 2.00, still expanded
+  # from the shared default below. So this is NOT the raise-the-ceiling fix that
+  # LOAD_INSENSITIVE_VERIFY_V2.md:156 forbids: that fix keeps a term whose input is wrong and moves
+  # the number it is compared against, which buys a window and re-breaks at the next occupancy.
+  # `CC_FIRE_LOAD_TERM=on` restores the previous behaviour verbatim, ceiling and all.
+  #
+  # The Agent tool's gate has run `CC_ADMIT_LOAD_TERM=off` since Wave D
+  # (hooks/agent-teams-enforce.sh:212-215), so two gates on one box could disagree about one
+  # instant — and were measured doing exactly that (fire REFUSE at 3.14/core while the Agent gate
+  # ADMITted: docs/research/orchestration-units-2026-08-19/A5-our-slot-accounting.md:17). After this
+  # they agree by construction rather than by coincidence, which is what the red-proof asserts.
+  load_note=""
+  if [ "${CC_FIRE_LOAD_TERM:-off}" != off ]; then
   # Each fail-open below is an admit the gate did NOT measure. Filed as basis "fail-open" with the
   # dead probe named, because a broken sysctl otherwise manufactures a 100%-admit population that is
   # indistinguishable from a quiet box — the gate deleted, reading as the gate healthy.
@@ -4601,20 +4683,37 @@ capacity_gate() {
     return 0
   fi
   echo "-- capacity gate: ADMIT — load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)" >&2
-  # Any admit resets both counters: the bound is on CONSECUTIVE refusals, not lifetime ones, exactly
-  # as capacity-admit's `_cc_admit_reset` does. Without this a box that alternated over/under the
-  # ceiling would eventually release on refusals spread across hours, which is not a saturation event.
-  _cc_fire_budget_reset
+  # 🚨 NO RESET HERE — THE RESET BELONGS TO THE GATE'S ADMIT, NOT TO A TERM'S (found by case E8).
+  # This line used to be `_cc_fire_budget_reset`, and so did the end of the headroom term. The bound
+  # is on CONSECUTIVE refusals, so resetting when a term CLEARS wipes the counter of every term
+  # BELOW it — which are the ones that then go on to refuse. A term that refuses on every evaluation
+  # while an earlier term admits therefore never accumulates a single refusal, and its release never
+  # arrives: it refuses FOREVER, which is precisely the unbounded gate §W3 item 2 exists to prevent.
+  # It was latent with two terms (nothing ever bound-tested headroom end-to-end, and load refuses
+  # first so its own counter was never wiped) and case E8 makes it observable with four.
+  # The single reset now sits on the path where the whole gate admits.
+  load_note="load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)"
+  fi
 
-  # ---- M10: memory-headroom term. Runs ONLY once the load term above has admitted, so the load
-  # refusal keeps its reason and its numbers; this term can only ever narrow admission further.
-  if [ "${CC_FIRE_HEADROOM_GATE:-on}" = off ]; then
+  # ---- M10: memory-headroom term. Runs ONLY once the load term above has admitted (or was off), so
+  # a load refusal keeps its reason and its numbers; this term can only ever narrow admission further.
+  head_note=""
+  if [ "${CC_FIRE_HEADROOM_GATE:-on}" = off ] && [ -n "$load_note" ]; then
     # A REAL measurement, but of one term only — kept out of `measured` so a headroom-blind window
     # can never be counted as evidence that both terms were exercised.
+    #
+    # 🚨 REACHED ONLY WHEN THE LOAD TERM ACTUALLY RAN, and that guard is the point (task #170). The
+    # basis is literally named `load-only`; emitting it while the load term was OFF would file a row
+    # asserting a number nothing measured. More importantly this branch RETURNS, so before the guard
+    # existed, switching headroom off silently deleted every term BELOW it — the precise defect
+    # capacity-admit.sh:672-677 forbids ("a blind term is a note, never an early return"; failing
+    # open out of the function deletes the terms it never asked about). With both of the old terms
+    # off we now FALL THROUGH to segments and active instead of admitting on nothing.
     emit_gate_admit capacity load-only \
-      "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · headroom term off"
+      "${load_note} · headroom term off"
     return 0
   fi
+  if [ "${CC_FIRE_HEADROOM_GATE:-on}" != off ]; then
   floor="${CC_FIRE_MIN_HEADROOM_GB:-$CC_HW_DEFAULT_MIN_HEADROOM_GB}"
   if [ -n "${CC_FIRE_HEADROOM_OVERRIDE:-}" ]; then
     head_gb="$CC_FIRE_HEADROOM_OVERRIDE"
@@ -4642,13 +4741,110 @@ capacity_gate() {
     return 0
   fi
   echo "-- capacity gate: headroom ADMIT — reclaimable ${head_gb}GB (floor ${floor}GB)" >&2
+  # No reset here either — see the 🚨 on the load term's admit. This one was the live instance:
+  # headroom clearing at 64 GB wiped the segments counter on every evaluation, so a box refusing on
+  # compressor pressure could never spend its budget and never be released.
+  head_note="reclaimable ${head_gb}GB (floor ${floor}GB)"
+  fi
+
+  # ── SEGMENTS TERM (task #170) — the compressor pressure that actually precedes a panic ─────────
+  # Ported from scripts/lib/capacity-admit.sh:666-689, which owns the ceiling's derivation and the
+  # instruction not to quote it but to re-derive it. Implemented HERE rather than by calling
+  # cc_capacity_admit, and that is deliberate: the library emits its own idl.jsonl row under
+  # gate:"capacity-admit", so delegating would file two rows for one decision and deflate the
+  # admit ratio that tests/handoff-fire-capacity-gate.bats cases 29/30 exist to keep readable.
+  # Shared MEASUREMENT (cc_hw_*), separate POLICY and separate TELEMETRY — the same split the
+  # CC_FIRE_* / CC_ADMIT_* namespaces already keep, for the same reason.
+  seg_note=""
+  if [ "${CC_FIRE_SEGMENT_TERM:-on}" != off ]; then
+    seg_ceiling="${CC_FIRE_MAX_SEGMENT_PCT:-${CC_ADMIT_MAX_SEGMENT_PCT:-50}}"
+    if [ -n "${CC_FIRE_SEGMENT_OVERRIDE:-}" ]; then
+      seg_pct="$CC_FIRE_SEGMENT_OVERRIDE"; seg_segs="?"; seg_lim="?"
+    else
+      seg_row="$(cc_hw_compressor_segment_pct "$sysctl_bin")" || seg_row=""
+      seg_pct="${seg_row%% *}"; seg_segs="${seg_row#* }"; seg_lim="${seg_segs#* }"; seg_segs="${seg_segs%% *}"
+    fi
+    # A BLIND TERM IS A NOTE, NEVER AN EARLY RETURN (capacity-admit.sh:672-677, verbatim rule). The
+    # two OLD terms above still fail open out of the function — that is their established, tested
+    # contract and this change does not touch it — but a term added after the fact must not, or it
+    # deletes every term below it over an input they never asked about.
+    if ! cc_hw_is_num "$seg_pct" || ! cc_hw_is_num "$seg_ceiling"; then
+      _cc_fire_note_blind segments
+    elif [ "$(cc_hw_segment_verdict "$seg_pct" "$seg_ceiling")" = REFUSE ]; then
+      echo "!! capacity gate: REFUSING a net-new fire — compressor segments ${seg_pct}% of limit (${seg_segs} of ${seg_lim}) > ceiling ${seg_ceiling}%." >&2
+      echo "   This is the quantity that preceded the watchdog panics; unlike load it does not self-clear by waiting." >&2
+      echo "   Shed memory first (quit finished sessions), then re-fire." >&2
+      echo "   Lower the bar for one fire: CC_FIRE_MAX_SEGMENT_PCT=<n> ; disable the term: CC_FIRE_SEGMENT_TERM=off" >&2
+      emit_fire_refusal segments "compressor segments ${seg_pct}% of limit (${seg_segs} of ${seg_lim}) > ceiling ${seg_ceiling}%${CC_FIRE_PRES_NOTE}"
+      _cc_fire_bound segments "compressor segments ${seg_pct}% of limit (${seg_segs} of ${seg_lim}) > ceiling ${seg_ceiling}%${CC_FIRE_PRES_NOTE}" || return 9
+      return 0
+    else
+      # The raw segment counts ride the row when they were READ; under the test override they are
+      # literally "?" (the library does the same), and printing "(? of ?)" into a ledger row is worse
+      # than printing nothing — a reader cannot tell an unknown from a real zero.
+      if [ "$seg_segs" = "?" ]; then
+        seg_note="compressor segments ${seg_pct}% of limit (ceiling ${seg_ceiling}%)"
+      else
+        seg_note="compressor segments ${seg_pct}% of limit (${seg_segs} of ${seg_lim}, ceiling ${seg_ceiling}%)"
+      fi
+    fi
+  fi
+
+  # ── ACTIVE-CONCURRENCY TERM (task #170) — the ceiling this design point actually needs ─────────
+  # Ported from capacity-admit.sh:707-717. This is the term that REPLACES load's intent rather than
+  # its arithmetic: load was reaching for "how much work is this box already doing", and the honest
+  # instrument for that is a count of sessions MID-TURN, not a number dominated by our own per-turn
+  # shell fan-out. Ceiling 8 is the top of the measured band and is derived in the library's header.
+  #
+  # 🚨 IT IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so it
+  # UNDER-refuses. Say so rather than implying coverage we do not have: nothing here replaces load
+  # for pure CPU saturation by a non-session workload — a runaway build still pins this box and no
+  # term below will refuse over it. That is a known, accepted gap, not an oversight.
+  act_note=""
+  if [ "${CC_FIRE_ACTIVE_TERM:-on}" != off ]; then
+    act_ceiling="${CC_FIRE_ACTIVE_CEILING:-${CC_ADMIT_ACTIVE_CEILING:-8}}"
+    if [ -n "${CC_FIRE_ACTIVE_OVERRIDE:-}" ]; then
+      act="$CC_FIRE_ACTIVE_OVERRIDE"
+    elif command -v cc_sp_active >/dev/null 2>&1; then
+      act="$(cc_sp_active 2>/dev/null || true)"
+    else
+      act=""
+    fi
+    if ! cc_hw_is_int "$act" || ! cc_hw_is_int "$act_ceiling"; then
+      _cc_fire_note_blind active
+    elif [ $(( act + 1 )) -gt "$act_ceiling" ]; then
+      echo "!! capacity gate: REFUSING a net-new fire — ${act} sessions mid-turn + 1 > active ceiling ${act_ceiling}." >&2
+      echo "   This counts sessions ACTUALLY TAKING A TURN, not resident panes; an idle pane costs nothing and is not counted." >&2
+      echo "   Let the wave drain, then re-fire. Raise for one fire: CC_FIRE_ACTIVE_CEILING=<n> ; disable: CC_FIRE_ACTIVE_TERM=off" >&2
+      emit_fire_refusal active "${act} sessions mid-turn + 1 > active ceiling ${act_ceiling}${CC_FIRE_PRES_NOTE}"
+      _cc_fire_bound active "${act} sessions mid-turn + 1 > active ceiling ${act_ceiling}${CC_FIRE_PRES_NOTE}" || return 9
+      return 0
+    else
+      act_note="${act} sessions mid-turn (ceiling ${act_ceiling})"
+    fi
+  fi
+
   _cc_fire_budget_reset
-  # The only basis that means what a naive reader assumes "admit" means: BOTH terms read a live
-  # instrument and both cleared. One row per gate evaluation, carrying both terms' numbers, so the
-  # admit is as auditable as the refusal already was ("a refusal with no numbers is unauditable" —
-  # and an admit with no numbers is worse, because nothing about it looks wrong).
+  # ── THE ADMIT ROW — `measured` means EVERY ENABLED TERM READ A LIVE INSTRUMENT AND CLEARED ─────
+  # Composed from the per-term notes, so the row names exactly the terms that ran. A term switched
+  # off contributes nothing and cannot leave a number behind claiming it ran.
+  #
+  # 🚨 THE ALL-BLIND CASE IS NOT `measured` (task #170 risk 2). With four terms, the two newest are
+  # NOTED-blind rather than fail-open, so a box where every enabled term's probe is dead would admit
+  # every fire while filing basis:"measured" — the 222-dead-sysctl-rows shape exactly, a gate
+  # deleted while reading back as a gate healthy. When nothing cleared, the basis is `fail-open` and
+  # the blind terms are NAMED, which is the same vocabulary the load/headroom fail-opens already use
+  # (basis parity, coverage case 27) and keeps the ungated window out of the measured population.
+  local admit_detail
+  admit_detail="$(_cc_fire_join_notes "$load_note" "$head_note" "$seg_note" "$act_note")"
+  if [ -z "$admit_detail" ]; then
+    echo "-- capacity gate: ADMIT (fail-open) — no enabled term could be read${CC_FIRE_BLIND:+ (blind: $CC_FIRE_BLIND)}" >&2
+    emit_gate_admit capacity fail-open \
+      "no enabled term could be read${CC_FIRE_BLIND:+ — blind: $CC_FIRE_BLIND}${CC_FIRE_PRES_NOTE}"
+    return 0
+  fi
   emit_gate_admit capacity measured \
-    "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)${CC_FIRE_PRES_NOTE}"
+    "${admit_detail}${CC_FIRE_BLIND:+ · blind: $CC_FIRE_BLIND}${CC_FIRE_PRES_NOTE}"
   return 0
 }
 

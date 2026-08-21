@@ -296,10 +296,12 @@ EOF
   # capacity_gate() and its bound helpers VERBATIM from the real script — extracted, never
   # re-implemented, or this case would be testing a copy of the gate.
   extract_fn "$REPO/scripts/handoff-fire.sh" \
-    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound capacity_gate \
+    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound \
+    _cc_fire_note_blind _cc_fire_join_notes capacity_gate \
     > "$BATS_TEST_TMPDIR/gate.sh"
   grep -q '^capacity_gate() {' "$BATS_TEST_TMPDIR/gate.sh"
-  run env CC_FIRE_LOADAVG_OVERRIDE=1.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
+  run env CC_FIRE_LOAD_TERM=on CC_FIRE_SEGMENT_OVERRIDE=0 CC_FIRE_ACTIVE_OVERRIDE=0 \
+      CC_FIRE_LOADAVG_OVERRIDE=1.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
       CC_FIRE_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/fire" \
       bash -c '
         emit_gate_admit()   { :; }
@@ -313,7 +315,8 @@ EOF
 
   # (c) AND THE ASYMMETRY IS NOW BOUNDED IN BOTH DIRECTIONS (§W3 item 2): the operator's gate can no
   #     longer refuse forever. Over a genuinely saturated box it refuses ONCE and then releases.
-  run env CC_FIRE_LOADAVG_OVERRIDE=99.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
+  run env CC_FIRE_LOAD_TERM=on CC_FIRE_SEGMENT_OVERRIDE=0 CC_FIRE_ACTIVE_OVERRIDE=0 \
+      CC_FIRE_LOADAVG_OVERRIDE=99.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
       CC_FIRE_ADMIT_BUDGET=1 CC_FIRE_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/fire2" \
       bash -c '
         emit_gate_admit()   { :; }
@@ -432,10 +435,12 @@ EOF
   # On pristine trunk: 9 then 9, and the third, and the hundredth — the unbounded refusal §W3 names as
   # "the ONLY path that can be refused indefinitely is the human's".
   extract_fn "$REPO/scripts/handoff-fire.sh" \
-    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound capacity_gate \
+    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound \
+    _cc_fire_note_blind _cc_fire_join_notes capacity_gate \
     > "$BATS_TEST_TMPDIR/gate.sh"
   grep -q '^capacity_gate() {' "$BATS_TEST_TMPDIR/gate.sh"
-  run env CC_FIRE_LOADAVG_OVERRIDE=99.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
+  run env CC_FIRE_LOAD_TERM=on CC_FIRE_SEGMENT_OVERRIDE=0 CC_FIRE_ACTIVE_OVERRIDE=0 \
+      CC_FIRE_LOADAVG_OVERRIDE=99.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
       CC_FIRE_ADMIT_BUDGET=1 CC_FIRE_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/fire29" \
       bash -c '
         emit_gate_admit()   { :; }
@@ -455,9 +460,11 @@ EOF
   # nothing about presence and the DoD claim is uncheckable from the ledger afterwards.
   beat s1 999940 999940
   extract_fn "$REPO/scripts/handoff-fire.sh" \
-    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound capacity_gate \
+    _cc_fire_budget_file _cc_fire_budget_reset _cc_fire_presence _cc_fire_bound \
+    _cc_fire_note_blind _cc_fire_join_notes capacity_gate \
     > "$BATS_TEST_TMPDIR/gate.sh"
-  run env CC_FIRE_LOADAVG_OVERRIDE=1.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
+  run env CC_FIRE_LOAD_TERM=on CC_FIRE_SEGMENT_OVERRIDE=0 CC_FIRE_ACTIVE_OVERRIDE=0 \
+      CC_FIRE_LOADAVG_OVERRIDE=1.0 CC_FIRE_HEADROOM_OVERRIDE=64 \
       CC_FIRE_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/fire30" \
       bash -c '
         emit_gate_admit()   { printf "ADMIT %s\n" "$*"; }
