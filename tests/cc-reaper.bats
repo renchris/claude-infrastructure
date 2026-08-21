@@ -2793,3 +2793,31 @@ EOF
   run td_called
   [ "$status" -ne 0 ] || false
 }
+
+# ── THE WAKE PATH'S WRAPPER WAS UNPROTECTED WHILE ITS WATCHER WAS (2026-08-21). `wl` carried
+# `cc-await-ping` but not `mailbox-wake-arm`, and those are the two halves of ONE mechanism: the hook
+# wrapper blocks synchronously on the watcher (hooks/mailbox-wake-arm.sh:204 is a plain `$( )`, no
+# nohup/setsid/disown), then reads its result and RE-ARMS. So protecting only the watcher protects
+# the half that cannot restart itself: TERM the wrapper and the wake path is gone even when the
+# watcher survives, because nothing is left to consume its verdict. Live at filing: two wrappers at
+# ppid 1 awaiting the 600 s floor. Same closed-world shape as the land pair above — the wrapper must
+# survive AND the unrelated orphan beside it must still die, so the exemption cannot widen into
+# "the arm collects nothing".
+@test "garbage: the mailbox wake-arm wrapper is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'FIX'
+90301 1 45:00 bash
+90302 1 45:00 bash
+90303 1 45:00 bash
+FIX
+  cat > "$GB" <<'FIX'
+90301 /bin/bash /Users/x/.claude/hooks/mailbox-wake-arm.sh
+90302 /bin/bash /Users/x/.claude/hooks/../bin/cc-await-ping 388 --timeout 14340 --interval 15
+90303 /bin/bash /Users/x/some/unrelated/orphan.sh
+FIX
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # the control (90303) fired, so the fixture reaches the actuator; both wake-path halves did not.
+  [ "$got" = "90303 " ]
+}
