@@ -660,6 +660,37 @@ empty pages the operator to run `/limit-recover`. Two bounded fixes, neither of 
   says `reduce-wave-size`; nothing does. Reserve the `QUOTA CLIFF` string and the `/limit-recover`
   directive for the genuinely-capped verdict. (Memory class: *new-enum-member-falls-into-fail-closed-default*
   and *new-nonverdict-state-strands-its-consumers* — this is both.)
+
+  ✅ **DONE 2026-08-20, `47e95198` (drain recycle #74, backlog `63c8215eacdc`).** Shipped wider than
+  F1 as written, because the collapse convicts all four verdicts and F1 named only the cheapest one.
+  The consumer now captures the producer's stderr and dispatches on `WALL[<verdict>]`, with the rc
+  kept as the fallback map so a failed capture and lane v1 both degrade to the contract rather than
+  to silence: `capacity` → defer, no page · `auth` → page `/relogin`, never `/limit-recover` ·
+  `unknown` → defer, no page, no failure · `capped` → unchanged, verbatim. An rc *outside* the four
+  defined verdicts still fails closed and loud — narrowed, not removed. The `reduce-wave-size` half
+  is actuated: one re-plan at the bound the producer now puts on the wire as a keyed `capacity=<n>`
+  token, cc-wave-plan still the arbiter, so it cannot loop.
+
+  🚨 **The arm that was actually costing production was `unknown`, not `capacity`.** F13 in
+  `docs/research/usage-telemetry-100p-2026-08-16/utilization.md`: the live dispatcher exited 3 on
+  `wave-plan returned non-cliff rc=6`, `launchctl` **LastExitStatus 768**, `failed` per day
+  **7 · 20 · 16 · 16 · 96 · 136** across 08-11..08-16. A *defined non-verdict* — "the oracle gave no
+  answer, retry next pass" — was being turned into a config-fail that killed the pass. F1 did not
+  name it because F1 was written from the cliff record; the telemetry sweep found it five days later
+  and nothing connected the two.
+
+  Proof: `tests/cc-dispatch-wall-verdict.bats`, 13 cases built as PAIRS (rc 4 alone cannot separate
+  capped from capacity, so every claim is two runs of one harness differing only in the WALL token).
+  8 go RED on pristine `origin/main` via the kept `CC_DISPATCH_UNDER_TEST` seam; 5 are by-design
+  green on both arms and say so in their names. Includes a **parity test** asserting the producer
+  emits the two tokens the consumer parses — the control this defect existed for want of, since the
+  discrimination had been produced, tested and landed with no observer downstream.
+
+  ⚠️ **A note for whoever writes the next consumer arm:** the dispositions were chosen against the
+  READERS, not against taste. `scripts/dispatch-acceptance.sh` A3 fails on *any* `abstained` record
+  since v2 began, and `bin/cc-dispatch`'s own selftest fails on any `decision` record without an
+  `.id` (and pins an exact decision count). Both obvious spellings would have reddened a live reader,
+  so capacity/unknown follow the at-ceiling precedent (bump `DEFERRED`, print, no new record).
 - **F2 (planner).** A `poll throttled ↻ (cached usage)` row at `session_pct: 4` is excellent evidence
   of headroom. Excluding it is right for a *route* (pick the best account) and wrong for a *capacity
   count* (how many slots exist at all). Count cached-but-healthy rows toward capacity while still
