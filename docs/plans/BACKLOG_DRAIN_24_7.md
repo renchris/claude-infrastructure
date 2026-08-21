@@ -8936,13 +8936,24 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
      CONSTRUCTION: this chain recycles IN PLACE as one pane, so the pane the brief names is gone
      the moment the brief is written — the author IS the target's replacement. #104, #105 and #106
      each inherited that spelling and each re-diagnosed it.
-   - ⚠️ **`--role` is the durable cure but it is REMEDY-SHAPED UNTIL CLAIMED.** The lead prescribed
+   - 🚨 **`--role` is the durable cure and it is BLOCKED — do NOT spend a recycle claiming the
+     role, because the claim LOOKS like it worked.** The lead prescribed
      `cc-notify --role claude-infrastructure` from `cc-notify`'s own help. #106 ran it:
-     `verdict=unresolvable enqueued=0 reason=role-unset`, and `cc-roles list` holds only
-     `docs-lead UNVERIFIED` and `orchestrator ABSENT` — **the role has never been claimed by
-     anyone.** A cure cited from a tool's help text is a claim about the tool, not about this
-     machine's state (method 9). It becomes real only once someone runs the claim
-     (`handoff-fire --as-role`, which the script does support, or `cc-roles claim`).
+     `verdict=unresolvable enqueued=0 reason=role-unset`, with `cc-roles list` holding only
+     `docs-lead UNVERIFIED` and `orchestrator ABSENT`. The lead then claimed a role to make the
+     cure real — `cc-roles claim drain-lead --pane 102` succeeded, `cc-roles list` showed
+     `drain-lead LIVE 102`, `cc-roles read drain-lead` printed `102` — **and `cc-notify --role
+     drain-lead` still returned "role is not set".** Root cause by `od -c`: **`cc-roles claim`
+     writes a 6-LINE RECORD (100 bytes: bare address, then `pid=`/`pane=`/`role=`/`claimed=`/
+     `host=`), while `cc-notify` expects the file to hold ONE bare address** — the only role it
+     accepts, `docs-lead`, is a bare `450` (4 bytes). Writer emits a record, reader expects a
+     scalar. Filed **`1c760dca69ea`**; `2aa51822cca8` is blocked on it.
+     **Two lessons, both already this plan's own:** a cure cited from a tool's help text is a claim
+     about the tool, not about this machine (method 9) — and this is the **third consecutive
+     instance** of *one program pins a shared record's format and a consumer in ANOTHER program is
+     inside the blast radius* (`land-lock`→`cc-backlog` #105, the registry `lstart` triple #106,
+     now `cc-roles`→`cc-notify`). **A standing lint is worth considering: for every file written by
+     one tool and read by another, pin the format in ONE place.**
    - ✅ **What works today: resolve a LIVE name and page that.** `cc-sessions --names` lists live
      registry rows; the chain's lead verifier is `claude-infrastructure-102`, which #106 paged with
      `verdict=delivered enqueued=1 reason=wake-path-armed`. **Re-resolve it each recycle — do not
@@ -8950,6 +8961,16 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
    - Trust the stderr verdict, never the send: `wake-path armed` = instant · `NO watcher armed` =
      lands next turn · `mailbox only` = target gone · `unresolvable` = your target does not exist,
      surface it. **DELIVERED IS NOT READ** — proof is `cc-notify --receipt <uuid> <line>`.
+8. 🚨 **SET `SHIP_LAND_SMOKE_BUDGET_S=420` ON THE FIRST LAND whenever the diff touches a file with a
+   big suite** — an INVARIANT, not a recommendation (lead ruling to #106). The default 120 s budget
+   has now produced a vacuous gate three recycles running, and the lead's tally names three
+   *different* mechanisms: a zero-suite selector (#104), an rc-127 green (#105), and a partial smoke
+   that **pushed two reds to trunk** (#106). A land whose smoke is `PARTIAL`, or that reports a
+   suite `GATE-KILLED at exit 124 with the budget SPENT`, is **behaviourally ungated on exactly the
+   file you changed**. Sizes worth budgeting for: `cc-notify` 105 tests / ~2 min · `ship-land` 145 /
+   ~7 min · `test-hermeticity-lint` 68 / ~10 min · `capacity-alarm` 49 / >3 min. **And still close
+   the gap yourself by hash + re-run (method 41) — the budget lowers the odds, it does not remove
+   the duty.**
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
