@@ -111,6 +111,23 @@ Surfaces: `--split-right` default (⌘D — same view, same profile, like a team
 
 ## 5 · `/ship` lands the work on the trunk — serialized, migration-safe, one gate
 
+> **SCOPE — this section describes RESO's `/ship`, not this repo's.** `scripts/ship-reconcile.sh`,
+> `scripts/worktree-pool.sh`, the migration renumbering, `pnpm typecheck` / `test:unit` /
+> `design:gate`, and `pnpm worktree:gc` are all reso-management-app artifacts and exist ONLY there;
+> `scripts/land-lock.sh` is the one artifact both repos ship. **claude-infrastructure lands through
+> `scripts/ship-land.sh`** (its own fail-closed path: landing lock + last-moment re-fetch + full gate
+> + content-verify + stranded sweep) and has **no pool and no `ship-reconcile.sh` — by design, not as
+> a gap.** Read every bare `scripts/…` path below as `<reso>/scripts/…`.
+>
+> *Why this note exists (2026-08-20, backlog `9a14c2ef8224`): an agent working IN claude-infrastructure
+> read the unqualified "10 pre-provisioned slots" claim below, ran `git log --all -- scripts/worktree-pool.sh`,
+> got nothing, and filed a "PHANTOM script, 15 files reference it — decide delete-or-build" item that then
+> survived three recycles. Both prescribed remedies were harmful: BUILDING a second pool would contend for the
+> shared `~/Development/.worktrees/wt-pool-N` namespace that `handoff-fire.sh`'s ownership gate names as the
+> hazard, and DELETING the references would remove that gate — the repo-relative `POOL="$REPO/scripts/worktree-pool.sh"`
+> probe is a per-repo CAPABILITY test whose refusal in this repo is the correct outcome. An absent file
+> reached through `$REPO/` is not a phantom; it is a capability this repo does not have.*
+
 The mirror image of launch. Once a worktree's work is committed, `/ship` reconciles it onto
 `origin/main` — the SOLE trunk, since auto-deploy ships from it — and pushes `HEAD:main`, with the
 whole fetch→reconcile→gate→push folded into ONE machine-wide-locked child so the trunk cannot move
@@ -159,7 +176,8 @@ form of the durable rule: **single owner per shared file, serialize migration-ge
 tolerance (2 retries) instead of failing on the first timing-flake — NOT a `--no-verify` bypass; a
 real regression still fails all three attempts.
 
-**Warm pool feeds the front** (`scripts/worktree-pool.sh`): 10 pre-provisioned slots at
+**Warm pool feeds the front** (reso's `<reso>/scripts/worktree-pool.sh` — this repo ships no pool and
+takes the cold path; see the SCOPE note at the top of this section): 10 pre-provisioned slots at
 `~/Development/.worktrees/wt-pool-N` sit on `pool/slot-N` at `origin/main` with `node_modules`,
 styled-system codegen, `.env.local`, and a seeded `sqlite.db` already built; `claim <branch>`
 `git switch -C`es a slot in ~3 s (no `git worktree add` on the hot path — that races, GH #34645), and
