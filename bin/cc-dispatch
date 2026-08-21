@@ -2292,10 +2292,33 @@ dispatch() { # <dry|run|decide>
     # `--worktree` instead would take handoff-fire's COLD path, which races CC boot for the
     # auto-submit keystroke (memory cold-worktree-fire-autosubmit-race). So we create it here, fully
     # provisioned, and the fire is a plain warm `cd`. Absent/existing path ⇒ no-op; failure reopens.
+    #
+    # F3 — BUT NOT FOR A CLOUD FIRE, AND THE FLAG STAYS IN THE ARGV REGARDLESS (backlog e86e500e96c0,
+    # docs/plans/CLOUD_BACKLOG_PIPELINE.md §A2a). Both operations below are about a LOCAL directory,
+    # and the cloud actuator selected ~90 lines down is `cc-offload up --via api --task <brief>`,
+    # which never cd's anywhere near `$wcwd` — the VM clones from origin. cc-wave-plan is a pure
+    # planner with ZERO venue awareness (bin/cc-wave-plan:715 emits `--cwd` unconditionally; the file
+    # contains no `venuePlan` at all), so EVERY cloud row arrives here carrying a `--cwd` and was
+    # provisioned-then-freshness-gated against a tree its fire would never touch. Measured: of the
+    # three rows this gate has `blocked`, three carry `venuePlan=cloud` and none is local — and the
+    # live dispatcher runs `CC_DISPATCH_VENUE_ONLY=cloud` (read from launchd argv), so the ONLY lane
+    # it admits is the one the gate is irrelevant to. A2a measured the first-order cost at 2 of 3
+    # cloud fires lost; since A1 gave the refusal its BLOCKED exit the loss is no longer a loop but
+    # an operator-gated row, which is strictly harder to undo.
+    #
+    # THIS SKIPS THE TWO FILESYSTEM OPERATIONS, IT DOES NOT STRIP `--cwd`. Removing the flag from
+    # `fire_args` would be the obvious reading of F3 and it is WRONG: `fire_branch` falls back to the
+    # basename of `--cwd` when no `--worktree` is present, and its return value is the branch handed
+    # to `cloud_declare` — so a stripped argv would declare the cloud session with an EMPTY branch
+    # and the reconcile would watch a ref that does not exist. That is the same mislabel-as-verdict
+    # this venue block was written to prevent. The argv is left byte-identical; only the two local
+    # side effects are venue-scoped.
     local wcwd="" wj
-    for ((wj=0; wj<${#fire_args[@]}-1; wj++)); do
-      [ "${fire_args[$wj]}" = "--cwd" ] && { wcwd="${fire_args[$((wj+1))]}"; break; }
-    done
+    if [ "$venue" != cloud ]; then
+      for ((wj=0; wj<${#fire_args[@]}-1; wj++)); do
+        [ "${fire_args[$wj]}" = "--cwd" ] && { wcwd="${fire_args[$((wj+1))]}"; break; }
+      done
+    fi
     if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd" "$iproj"; then
       local wsr; wsr="$(self_release "$id" worktree-fail)"
       FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened${wsr})"; continue

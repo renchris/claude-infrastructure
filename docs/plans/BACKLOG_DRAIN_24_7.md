@@ -87,6 +87,93 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #87: `master-fire-gate` 24 open → 23 open / 2 blocked.
+  closed 1 / filed 0** (twenty-third consecutive recycle in `master-fire-gate`). Row
+  `e86e500e96c0` closed: *"cloud fires die on a LOCAL worktree freshness gate the VM never touches —
+  2 of 3 lost (F3)"*, filed 2026-08-12T03:55:50Z.
+  🚨 **THE SHAPE BREAK: this row was NOT cured, and closing it meant BUILDING the cure.** Every
+  recycle from #77 to #86 closed its row by adjudicating a cure that already existed somewhere — the
+  question was always *where*, *when*, or *whether the instrument could see it*. This row's remedy
+  was simply unimplemented on trunk, in a lane the live dispatcher now runs exclusively, so the
+  honest close was a diff. **A row whose premise survives every check is not a row to keep reading;
+  it is a row to fix.**
+  **P1 "the gate is venue-blind" — CONFIRMED, and CONSUMED, not merely defined** (method item 12).
+  Venue resolves at `bin/cc-dispatch:2085-2095`; local worktree provisioning at `:2299` and the M2
+  freshness gate at `:2309` are guarded ONLY on `[ -n "$wcwd" ]`, with no venue term; the cloud
+  actuator is selected `~90` lines LATER at `:2387` and is `cc-offload up --via api --task <brief>`,
+  which reads only `--prompt-file` and never cd's near that directory. So the gate both PRECEDES and
+  is IRRELEVANT TO the actuator it gates.
+  **P2 "every cloud row carries a `--cwd` to be judged on" — CONFIRMED at the producer.**
+  `bin/cc-wave-plan:715` emits `--cwd ${WTROOT}/wt-<id>` unconditionally, and the whole 1,132-line
+  file contains **ZERO** occurrences of `venue` or `venuePlan`. The planner is venue-blind by
+  construction, so there is no cloud row that escapes the gate by lacking the flag.
+  **MEASURED — the harm is now EXCLUSIVELY cloud, and the population proves it.** Of the rows this
+  gate has `blocked`, **3 of 3 carry `venuePlan=cloud` and 0 are local** (`02ba4e52389a`,
+  `ee1ac85c6ff6`, `62599dd76a60`) — and the live dispatcher runs `CC_DISPATCH_VENUE_ONLY=cloud`,
+  read from **launchd argv** (`launchctl print gui/$UID/com.claude.dispatcher` →
+  `CC_FIRE_CLOUD=on CC_DISPATCH_VENUE_ONLY=cloud`), so the ONLY lane it admits is the one the gate
+  cannot speak about. `ee1ac85c6ff6` is one of `master-fire-gate`'s own 2 blocked rows: its WORK is a
+  TSV field-collapse guard, and it is operator-gated over a stale directory its fire would never use.
+  🚨 **AND THE A1 FIX MADE THIS STRICTLY WORSE, which is why it could not wait.** `ef0165fb1a96`
+  (2026-08-16T09:23:55Z) gave the refusal a BLOCKED exit instead of a reopen — correct for the local
+  lane it was designed for, and for the cloud lane it converted a *retry loop* into an
+  **operator-gated row**, i.e. a state no autonomous pass can leave. The row's measured cost at
+  filing (2 of 3 cloud fires lost) understates today's: the loss is no longer transient.
+  🚨 **WRONG REMEDY REJECTED — "implement F3 by stripping `--cwd` from `fire_args`."** This is the
+  OBVIOUS reading of the row's own prescription (*"skip local worktree provisioning and the M2
+  freshness gate when venue = cloud"*) and it silently breaks the cloud lane in a second place:
+  `fire_branch()` falls back to **the basename of `--cwd`** when no `--worktree` is present, and its
+  return value is the branch handed to `cloud_declare` → `cc-cloud declare --branch`. A stripped
+  argv declares the session with an EMPTY branch and the reconcile then watches a ref that can never
+  appear — the exact mislabel-as-verdict failure `bin/cc-dispatch`'s own venue block was written to
+  prevent (its comment records fire #1 losing its real branch this way). **The fix therefore scopes
+  the two FILESYSTEM side effects and leaves the argv byte-identical**, pinned by its own test arm.
+  (Memory: `prescribed-remedy-worse-than-the-bug`.)
+  🚨 **WRONG CAUSE REJECTED — "the refusal string is gone from `bin/cc-dispatch`, so this was cured."**
+  A `git grep -F 'does not contain origin/main'` over `bin/cc-dispatch` returns **ZERO** — identical
+  to absence — and the only trunk hits are in `docs/`. The code interpolates: `:2357` reads
+  `"… its HEAD does not contain $wbase (pre-existing worktree, never re-based)"`. The doc quoted the
+  *rendered output*; the source carries the *template*. **A literal needle over templated code reads
+  0 exactly like a cure.** Found only by grepping the MECHANISM (`wt_base_state`, `--is-ancestor`,
+  `pre-existing worktree`) instead of the message. (Memory class:
+  `caller-census-keyed-on-path-misses-the-name`.)
+  **DATING — #86's timezone trap recurred on the same commit, and the habit caught it.** Row
+  `firstTs` `2026-08-12T03:55:50Z` (already UTC) vs the four commits touching `bin/cc-dispatch`
+  since, each printed BOTH ways: `a48ab4594` `local=2026-08-12T02:11:03-07:00` /
+  **`UTC=2026-08-12T09:11:03Z`** (reads *before* the row as a string, is **5h15m after** it in fact)
+  · `4608a5308` `UTC=2026-08-12T13:42:50Z` · `ef0165fb1` `UTC=2026-08-16T09:23:55Z` ·
+  `47e95198d` `UTC=2026-08-21T04:09:04Z`. **None implements F3**, verified by reading the code rather
+  than the subjects. `cc-premise check e86e500e96c0` → `verdict=clear`; no sibling row owns this
+  (`579bc8781b5b` owns claim-less spawn paths, `1b00d62958a6` is the W4 wave row and is NOT retired
+  by a constituent close).
+  **THE FIX — one venue guard covering both side effects, at the one place both read.** `wcwd` is
+  left EMPTY when `venue = cloud`, so the provisioning guard (`:2322`) and the freshness gate
+  (`:2332`) both short-circuit on their existing `[ -n "$wcwd" ]` test — no new branch, no second
+  predicate to drift. The argv is untouched.
+  **RED-PROOFED — `tests/cc-dispatch-venue-worktree.bats`, 3 arms, control pinned at `ba082bc4b`**
+  (the pre-fix artifact, recovered with `git archive`, `setup()` failing LOUD if it cannot be — an
+  absent control would make every RED half pass vacuously). **Positive-controlled by RUNNING the
+  suite against the pristine binary in place**: `1..3`, **`not ok 1` + `ok 2` + `not ok 3`** — arms 1
+  (cloud fires) and 3 (argv survives) FAIL pre-fix, proving they can fail at all; arm 2 is a
+  **non-discrimination control** (*the SAME stale tree still blocks a LOCAL row*) and is green on
+  BOTH binaries by design — it exists to prove the guard did not widen into a hole in the M2 gate.
+  Post-fix `1..3`, 3 ok. The swapped-in control measured sha256 `7ca3cd8463fa3b58…`, byte-identical
+  to `origin/main` and to the DEPLOYED binary #86 fingerprinted.
+  **GATES.** `bash -n` OK · `shellcheck -S style bin/cc-dispatch` rc=0 (the gate's own level, not
+  `-S warning`) · `bats-shellcheck-lint` rc=0 *1 suite(s) scanned* (non-vacuous) · `bats-kill-guard-lint`
+  rc=0 *1 suite(s)* · `test-hermeticity-lint tests` rc=0 *523 suite(s), 0 new leaks* ·
+  `bats-testname-eval-lint tests` rc=0 *523 suite(s)* — **523, up from 522: the new suite is inside
+  the denominator** · `bats-shim-parity-lint` NOT-ACTIVE (the healthy default) ·
+  `bats-assert-liveness.py` silent on the suite, **and its silence positive-controlled** by planting
+  a mid-test `! false` into a copy, which it caught (`DEAD [negation]`, rc=1). Regression:
+  `cc-dispatch-firegate` **15/15** (the suite that pins the very code changed), `cc-dispatch-venue`
+  23/23, `cc-dispatch-venue-only` 7/7.
+  **NOT A FINDING, deliberately unfiled:** the three rows this gate already blocked are NOT
+  auto-unblocked by the fix — `blocked` is the operator-only state by construction and an agent
+  silently unblocking three rows would be exactly the laundering this chain refuses. The fix stops
+  the *minting*; the three existing rows keep the `--needs` string the gate wrote, which already
+  names the one command that clears each.
+
 - **2026-08-21 — drain recycle #86: `master-fire-gate` 25 open → 24 open / 2 blocked.
   closed 1 / filed 0** (twenty-second consecutive recycle in `master-fire-gate`). Row `1f4e2c357649`
   closed: *"a local venue window will STARVE cloud: CEILING is global and the S7 key has no venue
