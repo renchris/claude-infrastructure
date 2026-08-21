@@ -87,6 +87,99 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #79: `master-fire-gate` 32 open → 31 open / 2 blocked.
+  closed 1 / filed 0 (fifteenth consecutive recycle in `master-fire-gate`). 🚨 THE FINDING: an
+  operator-gate keyed on the REMEDY's cost was written as a property of the WHOLE ROW, so the
+  row's own 0-second, read-only, dispositive probe inherited a "NOT agent-actionable" label that
+  only the destructive step had earned — and running it refutes that step's guard condition
+  outright. The gate held for 26 days over a command that destroys nothing.**
+
+  **Effort choice.** #78 left `master-fire-gate` warm at 32 open. Row `3c6bf04ba842` —
+  *"OPERATOR (C10, judgment call — NOT agent-actionable): the iTerm2 Python API is wedged
+  machine-wide … the usual remedy is restarting iTerm2 … with ~45 panes and ~110 registered
+  sessions live that would TERMINATE EVERY RUNNING SESSION on this machine"* (firstTs
+  2026-07-26T05:17Z). It carries no body; the title is the whole item, and it prescribes its own
+  SAFER SEQUENCE in three ordered steps. Method item 1 again: **the title did all the work.**
+
+  **What the row's own step 2 says to do, and what it returns now.** Step 2 is verbatim *"let the
+  13 blocked it2 forks age out and re-probe with `timeout 20 ~/.claude/bin/it2 session list
+  --json`"*. Run 2026-08-21T05:30Z: **rc=0, elapsed 0s, 1,872 bytes, 13 sessions parsed.** At
+  filing the same command returned **rc=124 and ZERO bytes**. The premise is refuted by the
+  instrument the row itself nominated.
+
+  🚨 **But that green alone would have been the `wrong-cause-corroborated-by-true-metric` trap,
+  and it took a second path to escape it.** This pane is **kitty** — `KITTY_WINDOW_ID=449` with a
+  *synthetic* `ITERM_SESSION_ID=w0t0p0:449` — and `~/.claude/bin/it2` is not the CLI at all but a
+  **wrapper** that can divert to `bin/it2-kitty` (5 occurrences; the divert gate is
+  `cc-in-kitty`). So a green `it2` probe is consistent with *"the shim answered and the iTerm2
+  Python API is still wedged"* — a true metric about the wrong subject. Resolved by probing the
+  **raw API with no wrapper and no shim** (`python3` → `iterm2.run_until_complete` →
+  `async_get_app`): **rc=0, 0s, `PYAPI_OK sessions=6 windows=3`.** Both `kitty` (pid 587) and
+  `iTerm2` (pid 6805) are live; the API answers for itself.
+
+  **All three parts adjudicated separately (#77's method item 6, now paying off three recycles
+  running).** A headline close would have laundered two of them:
+  - **Step 1** *("land the timeout-wrapping fix so the fleet degrades gracefully — no restart
+    needed")* — **LANDED AND LIVE**, verified by CONTENT in the live layer: `~/.claude/bin/it2`
+    carries interception 3 verbatim, *"EVERY fork of the real CLI is process-BOUNDED (default
+    30s)"*, and every live fork on the box runs under `timeout -k 5 30`. Upstream `7674c07d550e`
+    is done (content-verified `045438a2`); the osascript half `b72a2b8e7666` is done.
+  - **Step 2** — **RUN this turn**, green on both paths, blocked forks **13 → 0**.
+  - **Step 3** *("ONLY if it stays wedged … consider the restart")* — **MOOT**, its guard
+    condition false; and independently already satisfied. iTerm2 restarted **2026-08-19T11:36:56Z**
+    (TZ-pinned, 1d17h elapsed at close) — 24 days *after* this row was filed — and now serves
+    **6 sessions in 3 windows**, not the ~45 panes / ~110 registered sessions whose serialized
+    API queue produced the congestion in the first place.
+
+  **The zero is absence, not a broken instrument — and two earlier readings were DISCARDED to get
+  there.** A substring census matched the bare word `it2` inside *my own echo string*, then again
+  inside a *concurrent `jq`'s JSON argv* (memory: `pgrep-f-matches-agent-briefs` — argv carries
+  whole briefs). Re-anchored on the **executable position** (argv[0], or `timeout … <path>/it2
+  session`), and positive-controlled with `exec -a .../it2 sleep 6`: the control appeared as
+  `DIRECT 2623` inside its window and vanished after. The surviving population **churns** — pids
+  2384/2394/3672/80498 across three samples seconds apart, 80498 gone within 6s — rather than
+  piling up as it did at filing (13 blocked, oldest 4m20s).
+
+  **Two wrong causes rejected, recorded so a successor does not re-derive them** (method item 11):
+  - *"Two orphaned forks (39246/39397, ppid 1) survived their `timeout -k 5 30`, so the landed
+    cure has a hole"* — **NOT a finding.** Both were gone at the next sample: transient in-flight
+    forks, not stuck. This is exactly method item 9, and the anti-capture list forbids hardening a
+    transient into a permanent row.
+  - *"The green probe is the kitty shim"* — refuted by the raw-API path above.
+
+  **NOT FILED, deliberately — a decayed reason attached to a still-correct verdict.** Sibling
+  `b2787f38dd80`'s own closing evidence reads *"premise fully refuted — iTerm2 not running, fleet
+  migrated to kitty"* (2026-08-09). **That is FALSE as of now** — iTerm2 came back on 2026-08-19,
+  ten days later. Its *verdict* nevertheless still holds: the row's work was *"restart it — 154%
+  CPU / 8.4GB after 14d uptime"*, and uptime is now 1d17h. Re-filing would manufacture work over a
+  premise that decayed underneath a conclusion that did not. Worth knowing that a
+  closed-on-disappearance row can have its subject **come back**, which is the inverse of
+  `parked-blocker-obsoleted-by-later-fix`.
+
+  **Sibling census before closing (method item 3 — a row scoped to a prerequisite is not a row for
+  the work).** Every part of the SAFER SEQUENCE has its own row and all are done: step 1 →
+  `7674c07d550e` + `b72a2b8e7666`, step 3 → `b2787f38dd80`. **Nothing un-rowed is retired by this
+  close.** Class census on the **discriminating** axis (method item 10): exactly **1** open row
+  carries a blanket `NOT agent-actionable` / `OPERATOR (C10` label, and it is this one — so there
+  is no population to build an arm for, and **nothing is filed**.
+
+  🚨 **THE SHAPE — the family's GATE-SPAN face.** #73 = state destroyed UPSTREAM of a gate that
+  knew how to use it · #74 = destroyed DOWNSTREAM at its only consumer · #75 = correct in a
+  sibling document that never reached the authoritative one · #76 = reached the authoritative
+  store, then decayed there in the present tense · #77 = correct, landed and authoritative, and
+  the INSTRUMENT pointed at it could not read it · #78 = correct, landed, authoritative and
+  self-describing, with no consumer at all · **#79 = correct, landed, and reachable by a
+  0-second read-only command — behind a label that forbade running it.** The gate was real:
+  restarting iTerm2 across ~45 panes IS destructive and IS the operator's call. But the gate was
+  written across the whole row, and the row contained a probe that destroys nothing and settles
+  the question. **A gate's span must equal its subject** — the gate-shaped sibling of
+  `assertion-span-must-equal-its-subject`. Nearest existing memory:
+  `abstain-rule-can-retire-the-common-case` (an over-wide rule deleting the main path) and
+  `work-item-remedy-can-become-forbidden`. No index line added — the memory index remains at cap.
+
+  **Land:** see the closing commit. `master-fire-gate` **31 open / 2 blocked**; `ungrouped` moved
+  **106 → 107** (still minting, still unowned, and still not mine — premise 4 holds).
+
 - **2026-08-20 — drain recycle #78: `master-fire-gate` 33 open → 32 open / 2 blocked.
   closed 1 / filed 1 (fourteenth consecutive recycle in `master-fire-gate`; the filing is a
   BLOCKED operator-gated row in a DIFFERENT condition, so the fire-gate count is still net −1,
