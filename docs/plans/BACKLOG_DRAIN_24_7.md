@@ -87,6 +87,88 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-20 — drain recycle #78: `master-fire-gate` 33 open → 32 open / 2 blocked.
+  closed 1 / filed 1 (fourteenth consecutive recycle in `master-fire-gate`; the filing is a
+  BLOCKED operator-gated row in a DIFFERENT condition, so the fire-gate count is still net −1,
+  and the seven-recycle run of filing nothing ends here deliberately). 🚨 THE FINDING: a landed
+  artifact can DECLARE ITS OWN CONSUMER in the present tense while having no consumer at all —
+  and stay that way because the only row representing its rollout was scoped to the
+  PREREQUISITE, so when the prerequisite cleared, nothing was left to ask again.**
+
+  **Effort choice.** #77 left `master-fire-gate` warm at 33 open. Row `e06ba316a1aa` — *"Worktree
+  isolation rollout step 1: deploy-gate convergence (BLOCKS steps 3/4) — re-measure the premise
+  first"*, filed 2026-08-01, no body, no falsifier, `needs` recording two claim→reopen thrash
+  cycles. The title IS the whole item, and it carries its own instruction.
+
+  **THE SHAPE — the family's CONSUMER face.** #73 = state destroyed UPSTREAM of a gate that knew
+  how to use it · #74 = destroyed DOWNSTREAM at its only consumer · #75 = correct in a sibling
+  document that never reached the authoritative one · #76 = reached the authoritative store, then
+  decayed there in the present tense · #77 = correct, landed and authoritative, and the INSTRUMENT
+  pointed at it could not read it · **#78 = correct, landed, authoritative AND self-describing —
+  with no consumer whatsoever, because the ordering constraint that justified having none outlived
+  the blocker it was written for, silently.** Memory: `spec-named-mechanism-may-be-prose-only`,
+  `conclusion-must-reach-the-enforcing-store`.
+
+  **The measurement — the premise the row ordered re-measured IS refuted.** Filing-day premise
+  (`docs/research/worktree-wrapper-pattern-2026-07-24.md` §7.4 item 3): *"the green gate is
+  currently deadlocked at this commit rate"*, sourced to `docs/plans/DEPLOY_GATE_CONVERGENCE.md`,
+  whose §2 recorded **8 h / 120 commits behind, refusing**. Measured this turn:
+  `deploy-live.sh --dry-run --offline` rc=0 → *"already deployed — live layer is at the newest
+  deployable commit `7871ee4be392` (5 un-stamped commit(s) above)"*, and
+  `git rev-list --count 7871ee4be392..origin/main` = 5, all merely un-stamped-yet, none refused.
+  The lane is observably ADVANCING, not idle: `deploy.log` carries
+  `deployed 4369cae88bb4 → 7871ee4be392`. Two mechanisms did it and **only one is that doc's own
+  fix** (§8.1) — `postland-verify.sh`'s `RETRY_QOS` utility band restored the ladder's ability to
+  *decide*, and `DEPLOY_LANE_GROUND_UP.md`'s two-tier target (T2 degrades to the newest NOT-RED
+  commit past `CC_DEPLOY_MAX_LAG_COMMITS` 25 / `_HOURS` 6) took green off the critical path.
+  Both successor docs close themselves (`§8.5`; front-matter `status: complete`).
+
+  **Part-by-part adjudication is what stopped this closing the whole rollout.** #77's method item
+  6 paid off immediately: the row is **step 1**, and steps 2/3/4 were never rows at all. Steps 2
+  and 3 turn out DONE and content-verified live (`scripts/desk-invariant.sh:96` + the
+  `ISOLATION EXEMPT (2026-08-01)` block at `:242-249`, present byte-for-byte in the live
+  `~/.claude/scripts/desk-invariant.sh` — §8.4's ordering constraint explicitly demands that
+  check be by CONTENT). **Step 4 is not done, and nothing on disk owned it.** Filed as
+  `3c51c384f885` (blocked, `master-operator-gated`).
+
+  **Step 4's measurement, with a positive control on the matcher.** `.worktree-isolate` landed
+  2026-08-01 (`d78ba97f4`) and its own body states that *"`~/.zshrc:_cc_route_check()` — the gate
+  shared by every launcher — **reads it**"*. It does not: `grep -cF worktree-isolate` reads **0**
+  in `~/.zshrc`, `~/.zshenv` and `~/.zprofile`, while the same matcher on the same file reads
+  **3** for `reso-management-app`. The gate is still verbatim
+  `~/.zshrc:112: [[ -d "$_top/.git" && "$(basename "$_top")" == "reso-management-app" ]] || return 0`
+  — the exact line §7.4 named. So claude-infrastructure has never isolated a single launch, and
+  the marker is a policy file whose stated reader was never written. **And the flip is still not
+  safe to fire:** §8.2 shows the gate BODY's second rung (`$HOME/.reso/bin/worktree-pool.sh`) is
+  not repo-scoped, so widening only the condition runs reso's pool logic against any repo; and
+  §7.4 item 1's reaper prerequisite is *still un-run* —
+  `docs/activation/pending-activation/27-worktree-gc-infra-activate.sh` sits ROTTING >24 h in the
+  activation queue, so flipping today adds one worktree+branch per session at 14-27 sessions/day
+  with no sweeper. Both constraints are in the filed row's `needs`, not in prose.
+
+  **AN ADJACENT ALARM, CHECKED AND CLEARED — not filed.** The tail of
+  `autonomy/postland/deploy.log` reads *"REFUSED — merged `7871ee4be392` but install.sh FAILED —
+  re-run install.sh by hand"*, which reads exactly like the LIVE_ADDS stranding class. It stranded
+  nothing: `scripts/deploy-link-parity.sh` from the SHARED checkout reports
+  **415 linked · 0 staged-pending · 10 live-extra · 2 actionable**, and both actionable rows are
+  ORPHAN (dangling link, source deleted: `bin/browsermcp-wrapper.sh`, retired by `87ef04ead50d`;
+  `bin/cc-cloud-watch`) — **0 MISSING**, so no landed file is unreachable. The orphan-removal class
+  is already open row `456d5c61f4c8`. Verifying before filing is what kept this a non-event rather
+  than a duplicate row; per the anti-capture list, a transient failure is not a permanent rule.
+
+  **A WRONG CAUSE TESTED AND REJECTED, recorded so the next reader does not re-derive it**
+  (`wrong-cause-corroborated-by-true-metric`). The resident global `CLAUDE.md` says worktree
+  isolation is *"CONDITIONAL, not 'always'"* and argues against always-isolate on the
+  90%-single-session case — which reads like a policy reversal that would retire this whole
+  rollout. It is not: that rule's own condition is *"2+ concurrent WRITER sessions → each writer
+  gets its own worktree"*, and in claude-infrastructure that condition is permanently true (4+
+  live sessions on one index is the documented reason `.claude/CLAUDE.md` forbids committing in
+  the shared checkout at all). The two agree; only the framing differs.
+
+  **Control on the evidence write** (open row `6bfd83f03c3a`): the 3,256-byte evidence string was
+  routed through a file via `--evidence "$(cat …)"`, then read back out of the ledger with `jq`
+  and compared to the source — **IDENTICAL**. Controlled, not assumed.
+
 - **2026-08-20 — drain recycle #77: `master-fire-gate` 34 open → 33 open / 2 blocked.
   closed 1 / filed 0 (sixth consecutive net-negative recycle; thirteenth consecutive in
   `master-fire-gate`). 🚨 THE FINDING: a row's own stored falsifier can be STRUCTURALLY
