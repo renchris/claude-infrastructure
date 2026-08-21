@@ -87,6 +87,102 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #116: the eleven-recycle "warm bounded item" is NOT A BUG — the pin it
+  says is missing is at file scope, 200 lines above the site. But the axis it pointed at was real one
+  layer down: that pin is load-bearing, and the land gate cannot see it being deleted. filed 0 /
+  closed 0 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  **still differs** from trunk (checkout **14** behind, budget 25) — so #114's fix has now been landed
+  and *not running* for **three consecutive recycles**. Every probe was written with the Write tool;
+  zero heredocs, nothing lost. Fold at open: `master-convergence-deadlock` **46/4**, store-wide
+  **271 open · 182 blocked · 2553 items** — **identical to #115's close on all three**, i.e. no
+  sibling movement in the window, not stasis in the effort.
+
+  Target: **`scripts/cc-gc.sh:263-266`**, unfiled and carried as "THE RECOMMENDED START" since #105.
+  The claim: *reads a bare ambient `ps -o lstart=` and parses it with `date -j -f '%a %b %e %T %Y'`,
+  which cannot parse `Fri 21 Aug …`, so `pstart` comes back EMPTY and the guard at :266 silently
+  no-ops.* Adjudicated per conjunct (method 25):
+  · **the ambient dialect defeats that format on this box** — **TRUE, and current.** Measured
+    three-arm (method 26, the third arm being a wrong-format control that MUST fail, so a uniformly
+    succeeding instrument could not read as exoneration): ambient `en_CA.UTF-8` renders
+    `Fri 21 Aug 14:37:09 2026` → parse **EMPTY**; `LC_ALL=C` renders `Fri Aug 21 14:37:09 2026` →
+    `1787348229`; control → EMPTY. `scripts/lib/cc-common.sh:141`'s comment documenting this is
+    accurate and has not rotted.
+  · **the cited lines** — **correct** (263 = ps, 265 = date, 266 = guard). Rare; method 2 usually
+    bites here.
+  · **cc-gc.sh reads it BARE** — **REFUTED, and this is the finding.** `export LC_ALL=C` sits at
+    **line 59**, top-level and unconditional, immediately after `set -uo pipefail`, and it is
+    *exported*, so it reaches both `ps` and `date`. The site is pinned; it is simply pinned somewhere
+    a reader of the site never looks.
+  · **therefore the guard silently no-ops** — **REFUTED**, as a consequence of the above.
+
+  🚨 **WHY IT SURVIVED ELEVEN RECYCLES, which is the generalisable half: the CLASSIFIER WAS
+  LINE-SCOPED AND THE PIN IS FILE-SCOPED.** A grep asking "does this call carry `LC_ALL=C`" is
+  answering a question about a *line* when the shell's answer is a property of the *file* (and, one
+  level out, of the *process environment*). It cannot return anything but BARE here, so it produced
+  the same false positive every time it was re-run, and each re-derivation prescribed an inline pin
+  the file already has. **Before classifying a site by what its line carries, ask what scope the
+  mechanism actually reads at** — this is the same shape as #115's artifact-vs-run distinction, one
+  rung less abstract: the answer was in the file, just not in the neighbourhood.
+
+  **THE REAL DEFECT, one layer down, found by asking what that pin is holding up.** Line 59 is
+  load-bearing for the whole `recycled-pid` reap path — the file's only reap reason besides an
+  outright dead pid. Measured 2×2 (pin present/stripped × ambient/`LC_ALL=C`), anti-vacuity cell
+  first so the fixture is proven to reach the path:
+
+  |               | ambient `en_CA.UTF-8`     | `LC_ALL=C`            |
+  |---------------|---------------------------|-----------------------|
+  | pin present   | reaped, `recycled=1`      | reaped, `recycled=1`  |
+  | pin STRIPPED  | **NOT reaped, `recycled=0`** | reaped, `recycled=1` |
+
+  Stripping it kills that path **silently** — empty parse → the documented `ambiguity ⇒ KEEP` arm →
+  still exit 0, merely `recycled=0`, while the stale pairs the adapter exists to collect (audit: 93
+  files / 83 stale) accumulate. And **nothing guarded it**: the pre-existing discriminator pair reds
+  on the desk but stays **green under the land gate**, because `scripts/offbox-run.sh:134` runs every
+  suite under `env -i … LC_ALL=C` — **the runner supplies the very pin the subject is supposed to
+  own**, so a diff deleting line 59 lands green. Generalising: *a hermetic runner's allowlist can
+  ALIAS a subject's own invariant, and every test of that invariant then passes for the runner's
+  reason instead of the subject's.* Ask, of any env-shaped invariant, whether the harness sets it too.
+
+  **Landed** `98e293eea` — two cases in the existing `tests/cc-gc.bats` (no new file: premise 2's
+  `LIVE_ADDS` hazard and the "extend, don't add under `scripts/`" rule both point the same way), kept
+  separate because they fail for different reasons: a **structural** one asserting the top-level
+  `export LC_ALL=` exists *above* the parse it covers (scope, not presence — can never go vacuous),
+  and a **behavioural** one pinning a non-C dialect explicitly, which skips loudly on a box that
+  cannot render one. Plus a comment at the parse site, because a line-scoped grep is exactly what
+  keeps misreading it (#115's lesson: the next reader reads the comment, not the index).
+  Red-proof, strip line 59 and run both ways: **off-box both new cases red while the pre-existing
+  case stays green** — a suite's own `export LC_ALL=` overrides the runner's allowlist value, so the
+  behavioural case reaches the hostile dialect even under `env -i`. That corrected a sentence I had
+  already written claiming it would skip there. Unmutated **28/28 green desk and off-box, 0 skips**;
+  blast radius on the desk is 3, all naming the pin, the third being the pre-existing case's genuine
+  dependency.
+
+  **NOT FILED, deliberately (method 10, the harm half):** there is no bug at `cc-gc.sh:263-266`, so
+  filing one would have minted a permanent false row — the outcome the last eleven briefs were one
+  step away from. The gate-blindness *is* real, and it is now fixed in the same diff rather than
+  filed, which is the cheaper disposition.
+
+  **Wrong causes rejected** (method 43): (1) my own opening prior — that the eleven-recycle
+  recommendation was a live bug; killed by line 59. (2) That the chain's "~30 BARE sites" figure was
+  inflated by the same file-scope blindness — measured and **NO**: exactly **2** of 44 sites tree-wide
+  are file-pinned and they are the two named here, so that figure survives *this* axis. (3) …but my
+  own first census was wrong in the other direction: 7 of its 30 were **anchor-table string literals**
+  inside `scripts/redproof-lstart-dialect.sh`, never executed — the instrument was in its own corpus
+  (method 48). Re-censused on the axis that decides exposure: of **27 live lstart sites, 25
+  compare/store strings** (dialect-immune — both sides come from the same `ps`, so any dialect
+  cancels), exactly **2 parse**, and **both are pinned**. The exposed set is **EMPTY**, positive-
+  controlled across three miss-modes (no third format literal tree-wide, no variable-held format, no
+  non-`date` parser fed an lstart). (4) That the TZ axis was a second defect here — rejected: `ps`
+  renders and `date` parses in the same ambient TZ within one process, so it cancels; only a DST fold
+  is exposed and the 120 s guard band makes it non-demonstrable. (5) That the pre-existing test
+  already covered the pin — rejected by the 2×2: it does, but only where nothing enforces.
+
+  **For #117:** `scripts/cc-gc.sh:263-266` is **CLOSED as not-a-bug — do not carry it forward as the
+  recommended start, and do not file it.** The warm bounded item is gone; pick by the row, not by the
+  slug. `786ac458be00` and `fd10594f088c` are unchanged and both still want an owner's mandate or a
+  size-first census respectively.
+
 - **2026-08-21 — drain recycle #115: the abstain was right and its recorded reason was the weakest of
   the three available — read as written it prescribes the one fix that cannot work, and that fix
   fails in the retracting direction. closed 1 / filed 1 / landed 2 commits.**
