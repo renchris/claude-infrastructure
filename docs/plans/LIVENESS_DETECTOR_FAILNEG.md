@@ -360,6 +360,20 @@ current-as-of-2026-08-14 state so a successor starts from measurement rather tha
 
 ## Status log
 
+- **2026-08-20** — D1 follow-up (backlog `016174e64121`, closed on this evidence). The row was a
+  SIXTH measured instance of D1, filed 2026-08-11T18:37Z — twenty minutes before `6509abd23` landed
+  at 18:57Z. Its artifacts survive and settle it: `mailbox/.sent/349` holds `2026-08-11T11:36:35-0700
+  345`, the ping the row says was sent; replaying the pre-fix substring read against that real line
+  with an alias `want` returns *not-sent* (the row's `(auto, unannounced retire)` verbatim) while the
+  landed reader returns cannot-tell. **Fixed, not open.**
+  **But D1's rc-3 branch called itself "the transitional honesty term", and it is not transitional.**
+  `_record_send` deliberately omits the redundant third field when the caller's spelling already WAS
+  the resolved key (pinned by `tests/announce-before-retire.bats` — *"and one when they do not"*), so
+  the current writer keeps minting one-spelling lines: **82 of 243** such lines in the live store were
+  written AFTER the both-spellings fix landed. The verdict was right and the MESSAGE was wrong — it
+  told the operator the record predated a format it postdates, implying a remedy (wait for the rollout)
+  that does not exist. Message and comment corrected; two green tests in one suite had asserted the two
+  halves and nothing drove a single record through both, so an interaction case now does.
 - **2026-08-14** — Close-out. W1 + W2 content-verified present on `origin/main`; frozen DoD
   discharged; plan set `status: complete`. Prize list re-measured: ranks 1/2/3/5/6 fixed by later
   waves, 7 addressed, **4/8/9/10 still live** and carried forward above. No code changed by this

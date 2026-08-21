@@ -194,7 +194,7 @@ STUB
   printf '2026-08-09T15:27:20-0700 6\n' > "$MDIR/.sent/$PANE"
   run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"predates the both-spellings format"* ]] || false
+  [[ "$output" == *"carries only resolved ids"* ]] || false
   [[ "$output" != *"NO ping was ever sent"* ]] || false
   grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
   ! grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
@@ -237,7 +237,7 @@ STUB
   printf '2026-08-09T15:27:20-0700 6\n' > "$MDIR/.sent/$PANE"
   run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
   [[ "$output" == *"NO ping was ever sent"* ]] || false  # ← the bug, reproduced on demand
-  [[ "$output" != *"predates the both-spellings format"* ]] || false
+  [[ "$output" != *"carries only resolved ids"* ]] || false
 }
 
 @test "FAILNEG: cc-notify records BOTH spellings when they differ, and one when they do not" {
@@ -247,6 +247,53 @@ STUB
     "$REPO/bin/cc-notify" --mailbox-only "$ORIG" "HANDOFF-PING test: done"
   [ "$(awk 'NR==1{print NF}' "$CC_MAILBOX_DIR/.sent/$PANE")" = 2 ]
   grep -q "$ORIG" "$CC_MAILBOX_DIR/.sent/$PANE"
+}
+
+# ── THE TWO HALVES, PUT TOGETHER (item 016174e64121, 2026-08-20) ─────────────────────────────────
+# The test directly above pins that the CURRENT writer still mints a one-spelling line, on purpose.
+# The rc-3 tests above pin that the reader answers a one-spelling line with cannot-tell. Both were
+# green, and the message the second one asserted told the operator the record "predates the
+# both-spellings format" — i.e. that the shape is old and draining. It is neither: measured on the
+# operator's live store, 82 of 243 one-spelling lines were written AFTER that format landed. Nothing
+# in this suite drove the writer and the reader through ONE record, so the contradiction survived.
+#
+# The verdict is NOT under test here and does not change — a one-spelling line genuinely cannot
+# answer an alias want. What is under test is that the message states the CONDITION and never the
+# record's age.
+@test "MINTED-TODAY: a record the CURRENT writer just wrote is not described as predating its format" {
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox4"; mkdir -p "$CC_MAILBOX_DIR"
+  # Drive the REAL writer — a fixture hand-printed here could not catch the writer changing shape.
+  run env ITERM_SESSION_ID="w0t0p0:$PANE" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg4" \
+    "$REPO/bin/cc-notify" --mailbox-only "$ORIG" "HANDOFF-PING test: done"
+  [ "$status" -eq 0 ]
+  # PREMISE CONTROL: if the writer ever starts emitting both spellings here, this record no longer
+  # reaches the rc-3 branch and every assertion below would be about nothing. Fail loudly instead.
+  [ "$(awk 'NR==1{print NF}' "$CC_MAILBOX_DIR/.sent/$PANE")" = 2 ]
+
+  stamp_with_notifyback "claude-infrastructure-6"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$CC_MAILBOX_DIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT a statement about the record's age"* ]] || false
+  [[ "$output" != *"predates the both-spellings format"* ]] || false
+  # VERDICT CONTROL: the cannot-tell answer is unchanged — this diff moves prose, not polarity.
+  [[ "$output" != *"NO ping was ever sent"* ]] || false
+  grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
+  ! grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "MINTED-TODAY CONTROL: the age disclaimer rides the cannot-tell path ONLY" {
+  # GREEN IN BOTH ARMS BY DESIGN — a compliant control, not a red-proof case. Its job is to stop the
+  # assertion above from being satisfiable by spraying the new sentence onto every path: a definite
+  # negative (a NEW record whose as-given spelling names someone else) must still ACCUSE, with no
+  # disclaimer riding along.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-19T09:00:00-0700 99 claude-infrastructure-99\n' > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NO ping was ever sent"* ]] || false
+  [[ "$output" != *"NOT a statement about the record's age"* ]] || false
+  grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
 }
 
 # ── ERREXIT REACHABILITY (2026-08-11, backlog 5bf8aaaf2f5c) ──────────────────────────────────────
@@ -323,7 +370,7 @@ mutant_bare_awk() {  # → writes fn-noguard.sh
   run errexit_drive "$BATS_TEST_TMPDIR/fn.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"SENTINEL-REACHED"* ]] || false
-  [[ "$output" == *"predates the both-spellings format"* ]] || false
+  [[ "$output" == *"carries only resolved ids"* ]] || false
   grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
 }
 

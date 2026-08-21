@@ -2805,13 +2805,30 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir [$4=unlanded
       # Fields 2..NF are the target spellings (resolved, and as-given when they differ); field 1 is
       # the timestamp. awk's own rc is the point: 0/1/3 are ANSWERS, anything else is a failed read.
       #
-      # rc 3 = LEGACY RECORD, and it is the transitional honesty term. Lines written before the
-      # both-spellings fix carry only the RESOLVED key, so when the armed address is an alias they
-      # cannot answer the question either way: the single field might BE what that alias resolved to,
-      # or might not. Calling that "never pinged" would re-commit this item's own defect against the
-      # store's own history — every .sent file already on disk is in the old format. So a no-match
-      # over a legacy line is cannot-tell, while a no-match over a NEW line (which carries the
-      # as-given spelling whenever it differs) stays the definite negative the positive control needs.
+      # rc 3 = ONE-SPELLING RECORD (the `legacy-record` token is kept for continuity). A line that
+      # carries only the RESOLVED key cannot answer the question when the armed address is an alias:
+      # the single field might BE what that alias resolved to, or might not. Calling that "never
+      # pinged" would re-commit this item's own defect against the store's own history.
+      #
+      # 🚨 IT IS NOT A TRANSITIONAL TERM, and calling it one was this branch's own overclaim (item
+      # 016174e64121, 2026-08-20). The sentence here used to end "…a no-match over a NEW line (which
+      # carries the as-given spelling whenever it differs) stays the definite negative the positive
+      # control needs" — true only of the half of new lines where the spellings DIFFER. cc-notify's
+      # `_record_send` deliberately OMITS the redundant third field when the caller's own spelling
+      # already WAS the resolved key, and tests/announce-before-retire.bats pins that (`… and one
+      # when they do not`). So the current writer still mints one-spelling lines, on purpose, and
+      # this rc-3 population never drains to zero: measured on the operator's live store 2026-08-20,
+      # 82 of 243 one-field-target lines were written AFTER the both-spellings fix landed. Two green
+      # tests in ONE suite asserted the two halves and nothing put them together.
+      #
+      # What that costs is bounded and is NOT the verdict: a one-spelling line genuinely cannot
+      # answer an ALIAS want, so cannot-tell stays correct. It is the MESSAGE that was wrong — it
+      # told the operator the record predated a format it postdates, and the remedy that implies
+      # (wait for the new format to roll out) is not a remedy at all. The message below therefore
+      # states the CONDITION (only resolved ids to compare) and never the record's age.
+      #
+      # The definite negative the positive control needs survives elsewhere, unchanged: an absent or
+      # empty record, and any line carrying an as-given spelling that is not `want`.
       #
       # `|| rc=$?` IS LOAD-BEARING, and its absence deleted every branch below (2026-08-11, backlog
       # 5bf8aaaf2f5c). This file runs `set -euo pipefail` (:273), and an awk whose non-zero exits are
@@ -2856,7 +2873,7 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir [$4=unlanded
     # Distinct exit path, distinct wording. The originator still gets told — it must never be left
     # waiting — but it is told the question could not be ANSWERED, not that the peer stayed silent.
     if [ "$verdict" = legacy-record ]; then
-      echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) predates the both-spellings format — it holds only resolved ids, so whether one of them IS $nb is UNKNOWN, not answered. Announcing that, rather than accusing the peer of silence." >&2
+      echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) carries only resolved ids for the sends it made — no as-given spelling to compare $nb against — so whether one of them IS $nb is UNKNOWN, not answered. This is NOT a statement about the record's age: cc-notify still writes that shape whenever the caller's own spelling already WAS the resolved key. Announcing that, rather than accusing the peer of silence." >&2
     else
       echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) could NOT BE READ — so whether it pinged is UNKNOWN, not answered. Announcing that, rather than accusing the peer of silence." >&2
     fi
