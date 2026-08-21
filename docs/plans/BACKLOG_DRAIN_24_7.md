@@ -87,6 +87,92 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #91: `master-fire-gate` 20 open → 19 open / 2 blocked.
+  closed 1 / filed 0** (twenty-seventh consecutive recycle in `master-fire-gate`). Row
+  `e15a743e12ba` closed: *"shrink the off-box exclusion list with a census run — 44 entries were
+  seeded on MEASUREMENT not attribution, and scripts/offbox-run.sh now ignores SIGTERM so the
+  runner-hostile entries (pkill-scope, flagged in-file) may already have lost their reason; run
+  'offbox-run.sh census' and delete every entry that comes back green"*, filed 2026-08-10T09:57:12Z.
+  ONE commit, ONE file (`scripts/offbox-excluded.manifest`, 43 → 33 entries). The off-box hermetic
+  partition widens **477 → 487 suites**; `offbox-partition.sh lint` reads
+  `clean — 523 suites = 487 partition + 36 excluded (3 host, 33 off-box)`.
+
+  **THE ROW WAS RIGHT, ITS NAMED EXAMPLE WAS RIGHT, AND THE MEASUREMENT IT ASKED FOR HAD ALREADY
+  BEEN TAKEN — THREE TIMES — BY A MACHINE THAT PRINTS INTO A PAGE NOBODY OPENS.** The prescription
+  reads like hours of work: run a 517-suite census and adjudicate 43 entries. It cost one `gh`
+  query. `13f09023d` (2026-08-12T23:00:28Z, ~2.5 d AFTER this row was filed) landed a **daily
+  census cron** (`43 9 * * *`) and a fold step, *"release candidates — the shrink half of the
+  ratchet"*, that computes `excluded ∩ green` and writes it to `$GITHUB_STEP_SUMMARY`. It has been
+  printing **`release candidates (16)`** every day since. The manifest's own FOURTH-SEEDING block
+  had written its release condition in advance — *"Run the census, and if this suite comes back
+  green, delete these three lines"* — and `pkill-scope.bats`, the suite that block is about and the
+  one this row names by hand, has been green in every census. Eleven days of a correct detector
+  with no reader (memory `detector-with-no-owner-is-not-an-actuator`, and the same shape as #78's
+  *landed, no consumer*). **The generalisable move: before running an expensive prescription, ask
+  whether a scheduled job already ran it and where it writes.**
+
+  🚨 **A BOUND THAT MOVED IS NOT A SUBJECT THAT IMPROVED — `worktree-gc-infra` WITHHELD.** It is
+  green 53/53 in all three censuses, so the row's literal rule (*"delete every entry that comes back
+  green"*) admits it. Its own entry says something narrower: it was excluded **on COST**, CUT at the
+  then-120 s bound, *"re-admissible if it ever gets faster"*. It did not get faster. It runs at
+  **252 s / 249 s / 251 s** and the BOUND went 120 → 300 — a raise `hermetic.yml` decided on two
+  OTHER suites' numbers. 251 of 300 puts it inside the tail of the distribution its own bound is
+  drawn from, which that file's bound comment names as unable to discriminate a hung suite from a
+  slow one (memory `bound-must-fit-the-band-not-the-bench`). Admitting it makes the producer a
+  coin-flip on any slow runner, and the manifest's header states which direction is unrecoverable:
+  an over-broad entry loses coverage that never existed; a wrong deletion *stops the producer
+  producing anything for everyone*. **Read an entry's stated release condition, not the list's
+  general rule** — this one's condition was about the suite, and only the bound had changed.
+
+  🚨 **BATS RENDERS A SKIP AS `ok`, SO A FULL-COUNT GREEN CAN STILL BE VACUOUS —
+  `iterm2-appname-lint` WITHHELD.** It reported 4 ok / 0 not ok in all three censuses, which passes
+  every count-based check. Reading the file refutes it: **three of its four cases are `skip`-guarded
+  on a machine axis the runner does not have** — `pgrep -x "Microsoft Excel"`,
+  `[ -d "/Applications/Microsoft Excel.app" ] || skip "control app absent"`, and
+  `command -v osacompile`. A hosted macOS runner has no Excel, so the green is mostly skips wearing
+  passes. `offbox-run.sh` only keeps a TAP log for `red`/`cut` (`:153`), so the artifact cannot
+  answer this and the FILE has to. The other twelve candidates were read the same way: only
+  `capacity-ramp` has real `skip` calls and they key on a sed-anchor miss — deterministic file
+  content, identical on runner and box, not a machine axis.
+
+  🚨 **WRONG REMEDY REJECTED — treat the 16 the CI named as the deletion set.** That is the row's
+  own instruction and it is one sample. Applying it verbatim would have deleted **`capacity-admit`**,
+  which is green / **RED** / green across the censuses of 08-18 / 08-19 / 08-20 (21 ok, then 20 ok +
+  1 notok, then 21 ok) — flaky off-box, not cured, and the deletion would have been decided by which
+  day the reader happened to open. The bar applied instead is **green in three independent censuses
+  at FULL test count in the revision each run actually saw**. That also caught
+  **`handoff-fire-capacity-gate`** (43/43 green three times — but `f944d6e3e` added eight cases
+  AFTER the last census, so the justifying measurement describes a file that no longer exists) and
+  **`subshell-cleanup-lint`** (red 08-18, green 08-19/20 — two samples, not three). Six of sixteen
+  withheld; **each carries its own re-check condition at its own line in the manifest**, so the next
+  reader inherits the adjudication rather than redoing it.
+
+  🚨 **WRONG CENSUS RUN NEARLY MANUFACTURED A FINDING.** Run `32355827703` (2026-08-20T09:49:19Z)
+  looked like the daily census by clock alone, and its `suite` job log shows
+  `bash scripts/offbox-run.sh census 1 10` — but that is the **echoed script**, and the `if/else`
+  echoes BOTH branches. Its TSVs held **471 rows and not one of the 46 excluded suites**, which read
+  exactly like *"the census does not run the suites it exists to run"* — a fabricated defect. The
+  discriminator is the fold's own JSON: `"suites":471,"expected":471` is a PARTITION run;
+  the real census is `32357106290` (10:04:31Z) at `"suites":517,"expected":471`. **Never read a
+  branch off an echoed script; read the artifact the run produced.**
+
+  **The ten delisted**, each green ×3 at full count with its recorded cause named as dissolved:
+  `land-gate-cas` (15/15, 61-78 s — the slow-fixture red is gone) · `pkill-scope` (22/22 — the named
+  one: `ed095d4be`'s `trap '' TERM` means a process-killing suite now costs its own row, not the 34
+  suites behind it) · `iterm-sticky-command` (7/7) and `kitty-recovery-launch` (19/19) — the
+  terminal-emulator class HINT does not bind them; they assert text, not a live emulator ·
+  `capacity-ramp` (20/20) · `task-quality-gate` (10/10) · `handoff-fired-cwd-index` (19/19) ·
+  `bats-assert-liveness` (36/36) · `session-end-gc-lock` (7/7) · `live-session-registry-atomic`
+  (8/8 before `bdf57e195` grew it, 15/15 after — green at full count on both sides of that commit,
+  a stronger result than either alone).
+
+  **Gates.** `offbox-partition.sh lint` rc=0, `clean` (it is the guard that would red on a stale or
+  redundant entry). `bats tests/offbox-partition.bats tests/offbox-admission-lint.bats
+  tests/runner-stdin-immunity-gates.bats` → **plan=49 ok=49 notok=0**. ⚠️ Counted with `awk`, not
+  `grep -c`: `grep -c '^ok '` on that same file returned **47** against a `1..49` plan and 49 result
+  lines — a silent one-off in the instrument, and 47+0≠49 was the only thing that showed it. Read
+  the plan line AND make the sum equal it (method item 25, sharpened).
+
 - **2026-08-21 — drain recycle #90: `master-fire-gate` 21 open → 20 open / 2 blocked.
   closed 1 / filed 0** (twenty-sixth consecutive recycle in `master-fire-gate`). Row
   `aabf363ff409` closed: *"cc-classify has no LIVELOCKED cause — a session burning turns to restate
