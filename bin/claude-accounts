@@ -139,18 +139,40 @@ both oauth endpoints rate-limit under load.
 import fcntl
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import traceback
 import unicodedata
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+
+# ---- concurrency guards for the 5-way sweep (collect()) ---------------------------------------
+# collect() fans the four account probes plus working_concurrency out over a thread pool. Every
+# race those threads can reach is INTRA-PROCESS and new — collect() already runs under the
+# process-level single-flight flock in get_data(), so nothing here is a cross-process guard.
+#
+# _REJECTED_LOCK guards the rejected-grant ledger's whole load -> mutate -> save, which is a
+# non-atomic read-modify-write on ONE shared file: two threads marking DIFFERENT accounts both
+# read the pre-state and the last writer replays it, silently dropping the other's record. That
+# record is what suppresses a 90s re-heal of a grant already proven dead (see _load_rejected),
+# so losing it costs a wasted heal per sweep, forever, on an account nothing can fix but /login.
+#
+# _HEAL_GATE serialises `claude auth login`. Mechanically the per-account heals look independent
+# (per-account flock, per-account CLAUDE_CONFIG_DIR, per-account keychain item, and heal's
+# rotation gate attributes on exactly that env var) — but it is an opaque third-party binary and
+# its shared-state footprint OUTSIDE CLAUDE_CONFIG_DIR is unverified. Unverified is not safe, and
+# the hedge is free: any sweep that heals is already >=90s, so the fast path never touches this.
+_REJECTED_LOCK = threading.Lock()
+_HEAL_GATE = threading.Semaphore(1)
 
 HOME = os.path.expanduser("~")
 CFG_PATH = os.environ.get("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
@@ -638,6 +660,23 @@ def _ssl_ctx():
 SSL_CTX = None
 
 
+def _ssl_warm():
+    """Build both lazy urllib globals ON THE MAIN THREAD, before any fan-out.
+
+    Two of them, and the second is the one that matters. (a) SSL_CTX is a lazy `global` in
+    fetch_usage: four threads racing it is benign (an ssl.SSLContext is safe to share) but pays
+    for four contexts and keeps whichever lands last. (b) urllib.request's module-global
+    `_opener` is built lazily inside urlopen(), and on macOS build_opener() reaches
+    getproxies_macosx_sysconf() — a SystemConfiguration FFI call. A concurrent FIRST build of
+    that is the least-audited path in the whole fan-out, so it is simply never done concurrently:
+    warm it once here and every worker finds it already installed."""
+    global SSL_CTX
+    if SSL_CTX is None:
+        SSL_CTX = _ssl_ctx()
+    if getattr(urllib.request, "_opener", None) is None:
+        urllib.request.install_opener(urllib.request.build_opener())
+
+
 def fetch_usage(cfg, token, retries=2):
     global SSL_CTX
     if SSL_CTX is None:
@@ -658,12 +697,18 @@ def fetch_usage(cfg, token, retries=2):
             except Exception:
                 pass
             if e.code == 429 and attempt < retries:
-                time.sleep(1.5 * (attempt + 1))
+                # JITTER, and it is created by the fan-out, not inherited. Serially the four
+                # calls self-stagger by ~340ms each, so a deterministic `1.5 * (attempt + 1)`
+                # ladder never collided. Concurrently, four simultaneous 429s would back off by
+                # the IDENTICAL interval and retry simultaneously, twice — a thundering herd
+                # against the endpoint that just throttled us. Half-to-full randomisation keeps
+                # the same expected delay while decorrelating the retries.
+                time.sleep(1.5 * (attempt + 1) * (0.5 + random.random()))
                 continue
             return e.code, body
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
             if attempt < retries:
-                time.sleep(1.0)
+                time.sleep(1.0 * (0.5 + random.random()))
                 continue
             return None, None
     return None, None
@@ -898,11 +943,18 @@ def _load_rejected():
 
 
 def _save_rejected(ledger):
-    """Atomic replace; best-effort — a failed persist must never break a sweep."""
+    """Atomic replace; best-effort — a failed persist must never break a sweep.
+
+    The temp name carries the THREAD ident as well as the pid. A pid-only name is unique across
+    processes and identical across threads, so two concurrent savers opened the same temp path:
+    the second `open(..., "w")` truncated the first's half-written bytes and both then
+    os.replace'd one file, renaming a truncated or interleaved JSON into place (and the losing
+    replace raised into the OSError swallow below, so it failed SILENTLY). Harmless while
+    collect() was serial; a real corruption path the moment the sweep fans out."""
     try:
         path = _rejected_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp"
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, "w") as f:
             json.dump(ledger, f, indent=2, sort_keys=True)
         os.replace(tmp, path)
@@ -911,17 +963,22 @@ def _save_rejected(ledger):
 
 
 def _mark_rejected(acct_name, refresh_token, detail):
-    led = _load_rejected()
-    led[acct_name] = {"rt": _rt_fingerprint(refresh_token), "detail": detail,
-                      "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    _save_rejected(led)
+    # The LOCK spans load -> mutate -> save, not just the save: the lost update happens in the
+    # gap between the read and the write, so guarding only _save_rejected would still let two
+    # threads read the same pre-state and have the last writer replay it.
+    with _REJECTED_LOCK:
+        led = _load_rejected()
+        led[acct_name] = {"rt": _rt_fingerprint(refresh_token), "detail": detail,
+                          "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        _save_rejected(led)
 
 
 def _clear_rejected(acct_name):
-    led = _load_rejected()
-    if acct_name in led:
-        del led[acct_name]
-        _save_rejected(led)
+    with _REJECTED_LOCK:
+        led = _load_rejected()
+        if acct_name in led:
+            del led[acct_name]
+            _save_rejected(led)
 
 
 def _rejected_for(acct_name, refresh_token):
@@ -949,7 +1006,10 @@ def save_lastgood(ledger):
     """Atomic replace; best-effort (a failed persist must never break a sweep)."""
     try:
         os.makedirs(os.path.dirname(LASTGOOD_PATH), exist_ok=True)
-        tmp = f"{LASTGOOD_PATH}.{os.getpid()}.tmp"
+        # Same pid-is-not-unique-across-threads reason as _save_rejected. Called once per sweep
+        # from the MAIN thread today, so this is prophylactic — but the two savers must not
+        # differ, or the next caller to move inside the pool re-acquires the defect.
+        tmp = f"{LASTGOOD_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, "w") as f:
             json.dump(ledger, f, indent=2, sort_keys=True)
         os.replace(tmp, LASTGOOD_PATH)
@@ -1076,7 +1136,10 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         row["error"] = "login EXPIRED — run /login (refresh token past expiry)"
     elif stale and not no_heal:
         rt_before = creds.get("refreshToken")
-        ok, detail = heal(cfg, acct, rt_before, k_live)
+        # Only the opaque subprocess is serialised — see _HEAL_GATE. Everything around it stays
+        # concurrent, and this costs the fast path nothing (a sweep that heals is already >=90s).
+        with _HEAL_GATE:
+            ok, detail = heal(cfg, acct, rt_before, k_live)
         if ok:
             creds, kstate = read_creds(acct["config_dir"], kc)
             token = (creds or {}).get("accessToken")
@@ -1138,6 +1201,17 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         row["poll_throttled"] = True
         row["error"] = ("poll throttled ↻ (cached usage)"
                         if inherit_lastgood(row, ledger, prev) else "poll throttled ↻")
+        # THE INSTRUMENT. Until this line the 429 branch emitted nothing at all, so
+        # ~/.claude/logs/claude-accounts.log held zero throttle entries across 5,413 lines —
+        # which reads as "429 never fires" and is actually a null from a blind instrument. The
+        # fan-out is what makes that unacceptable: it does not change the PER-TOKEN request rate
+        # (four accounts, four bearer tokens, one request each) but it does compress four
+        # requests from ~1.35s of self-staggering into ~0ms, so if the endpoint's throttle is
+        # IP- or org-scoped rather than token-scoped, this change is what discovers it. Shipping
+        # the fan-out without this line ships its one new failure mode unmeasurable.
+        log_event(f"probe {name}: 429 poll-throttled ↻ — transient endpoint throttle, NOT a "
+                  f"usage cap (a real cap is HTTP 200 with percent≈100). "
+                  f"lastgood={'served' if row.get('stale_quota') else 'absent'}")
         return row, None
     if not u or "limits" not in u:
         row["error"] = f"no data (http {status})"
@@ -1173,24 +1247,43 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
 
 
 def collect(cfg, no_heal=False, prev=None):
+    """Sweep every account -> [row]. FIVE-WAY CONCURRENT: the N account probes plus the working
+    census, which is the design's whole point.
+
+    The obvious reading — "parallelise the per-account loop" — leaves most of the win on the
+    table, because the loop was only 54% of the sweep. Measured cold, serially: load_cfg 44ms,
+    concurrency() 221ms, working_concurrency() 865ms, 4 probes 1350ms = 2480ms. The single
+    largest term was working_concurrency, and it is not consumed INSIDE the loop at all — its
+    result is attached to each row after the probe returns. It is a pure 5th independent task,
+    so co-scheduling it is free and it is what actually moves the floor: 2.6-4x, against ~40%
+    for probes-only.
+
+    Two things deliberately stay serial. concurrency() is a PREFIX, not a peer: k_live is the
+    input to every probe's heal rotation-safety gate, so it must be complete before any probe
+    starts. And every ledger write — `ledger[name] = entry`, save_lastgood — stays on this
+    thread, below the pool, which is what keeps the shared dict and the dirty flag race-free
+    without a lock.
+
+    executor.map, never as_completed: row ORDER is load-bearing (render_table renders in row
+    order, and tests index rows[0]), and as_completed would make both nondeterministic — a
+    flaky-not-red suite, the worst failure shape available here."""
     kc = cfg["keychain_account"]
     # None (ps unreadable) rides through as None per row — NOT as 0. `.get(name, 0)` on an empty
     # dict would re-fabricate the very zero the None contract exists to abolish, so the unmeasured
     # case is spelled out rather than defaulted.
     counts = concurrency(cfg)
     k_of_name = (lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
-    # M7: the working census rides the sweep beside the pane census (same recorder-economics as
-    # record_utilization — the sweep is already paid for). None = walk over budget → k_eff falls
-    # back to the pane census for every row of this sweep.
-    wcounts = working_concurrency(cfg) if _term_on("CC_ROUTE_KWORK") else None
+    _ssl_warm()                       # both lazy urllib globals, main thread, before fan-out
     ledger = load_lastgood()
-    lastgood_dirty = False
-    rows = []
-    for acct in cfg["accounts"]:
+
+    def _one(acct):
+        """-> (row, entry). NEVER raises: the per-account containment that used to wrap the loop
+        body moves inside the worker, because an exception escaping here would poison map()'s
+        whole result and blank all four rows — the exact regression probe_account was split out
+        of collect() to prevent."""
         name = acct["name"]
         try:
-            row, entry = probe_account(cfg, acct, kc, k_of_name(name), ledger, prev,
-                                       no_heal)
+            return probe_account(cfg, acct, kc, k_of_name(name), ledger, prev, no_heal)
         except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
             # Containment, not concealment — the traceback goes to the log so a real
             # regression is still discoverable rather than silently degrading forever.
@@ -1200,13 +1293,40 @@ def collect(cfg, no_heal=False, prev=None):
                    "auth": "probe-error",
                    "error": f"probe failed: {type(e).__name__} (see claude-accounts.log)"}
             inherit_lastgood(row, ledger, prev)
-            entry = None
+            return row, None
+
+    accounts = list(cfg["accounts"])
+    ex = ThreadPoolExecutor(max_workers=len(accounts) + 1)
+    try:
+        # M7: the working census rides the sweep beside the pane census (same recorder-economics
+        # as record_utilization — the sweep is already paid for). None = walk over budget →
+        # k_eff falls back to the pane census for every row of this sweep, and that matters more
+        # here than it looks: the walk now shares the box with N TLS threads, and a breach is not
+        # a slow row, it is a fleet-wide k_work blackout for the WHOLE sweep — the routing signal
+        # blinded by the very change meant to speed the sweep up.
+        #
+        # The budget is deliberately NOT overridden. The design note that specified this fan-out
+        # said "raise budget_s to 3.0", correctly, against the 2.0 default it measured; the
+        # default has since been raised to KWORK_BUDGET_S = 5.0. Passing 3.0 now would CUT the
+        # budget by 40% and, worse, hard-code past _cliff_env's CC_ROUTE_KWORK_BUDGET_S — the
+        # operator's own override — so the prescription is satisfied by leaving it alone.
+        wf = (ex.submit(working_concurrency, cfg) if _term_on("CC_ROUTE_KWORK") else None)
+        results = list(ex.map(_one, accounts))            # map ⇒ ORDER PRESERVED
+        wcounts = wf.result() if wf else None
+    finally:
+        # cancel_futures so a Ctrl-C during a sweep does not join a retry ladder (~40s) or a
+        # heal (~90s). A plain `with` block shuts down with wait=True and would.
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    lastgood_dirty = False
+    rows = []
+    for acct, (row, entry) in zip(accounts, results):
         # Uniformly, success and exception paths alike: absent (None) whenever the walk could
         # not measure, so k_eff's census fallback — not a fabricated 0 — is what cached rows
         # replay for the TTL.
-        row["k_work"] = wcounts.get(name) if wcounts is not None else None
+        row["k_work"] = wcounts.get(acct["name"]) if wcounts is not None else None
         if entry:
-            ledger[name] = entry
+            ledger[acct["name"]] = entry
             lastgood_dirty = True
         rows.append(row)
     if lastgood_dirty:
