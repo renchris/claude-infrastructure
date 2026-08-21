@@ -8929,16 +8929,27 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
 6. THE CHAIN IS THE DELIVERABLE: firing recycle #N+1 (or, at true zero live rows, writing the
    chain-complete entry in this plan) outranks finishing one more row. A recycle that runs out
    of context mid-effort still fires its successor with the effort in-flight.
-7. 🚨 **THE BACK-CHANNEL ADDRESSES A ROLE, NEVER A PANE** (backlog `2aa51822cca8`, condition
-   `drain-brief-names-a-dead-originator`; lead note to #106). The brief block must read
-   `cc-notify --role <name> "HANDOFF-PING …"`, not `cc-notify claude-infrastructure-<N-1> …`.
-   **Naming the predecessor pane is dead BY CONSTRUCTION, not by accident:** this chain recycles
-   IN PLACE as one pane, so the pane the brief names is gone the moment the brief is written —
-   the author IS the target's replacement. #104, #105 and #106 each inherited the dead spelling
-   and each had to re-diagnose it. `--role` resolves `~/.claude/cc-roles/<name>` at SEND time, so
-   a recycled pane is followed automatically; `cc-notify`'s own help already says to prefer it for
-   any automated pager. Keep trusting the stderr verdict (`wake-path armed` = instant ·
-   `NO watcher armed` = lands next turn · `mailbox only` = target gone, surface it in the report).
+7. 🚨 **THE BACK-CHANNEL MUST NAME SOMETHING THAT RESOLVES — NOT THE PREDECESSOR PANE, AND NOT AN
+   UNCLAIMED ROLE** (backlog `2aa51822cca8`, condition `drain-brief-names-a-dead-originator`; lead
+   note to #106, then measured by #106).
+   - **Never `cc-notify claude-infrastructure-<N-1>`.** Naming the predecessor pane is dead BY
+     CONSTRUCTION: this chain recycles IN PLACE as one pane, so the pane the brief names is gone
+     the moment the brief is written — the author IS the target's replacement. #104, #105 and #106
+     each inherited that spelling and each re-diagnosed it.
+   - ⚠️ **`--role` is the durable cure but it is REMEDY-SHAPED UNTIL CLAIMED.** The lead prescribed
+     `cc-notify --role claude-infrastructure` from `cc-notify`'s own help. #106 ran it:
+     `verdict=unresolvable enqueued=0 reason=role-unset`, and `cc-roles list` holds only
+     `docs-lead UNVERIFIED` and `orchestrator ABSENT` — **the role has never been claimed by
+     anyone.** A cure cited from a tool's help text is a claim about the tool, not about this
+     machine's state (method 9). It becomes real only once someone runs the claim
+     (`handoff-fire --as-role`, which the script does support, or `cc-roles claim`).
+   - ✅ **What works today: resolve a LIVE name and page that.** `cc-sessions --names` lists live
+     registry rows; the chain's lead verifier is `claude-infrastructure-102`, which #106 paged with
+     `verdict=delivered enqueued=1 reason=wake-path-armed`. **Re-resolve it each recycle — do not
+     copy the number forward, that is the same defect one layer up.**
+   - Trust the stderr verdict, never the send: `wake-path armed` = instant · `NO watcher armed` =
+     lands next turn · `mailbox only` = target gone · `unresolvable` = your target does not exist,
+     surface it. **DELIVERED IS NOT READ** — proof is `cc-notify --receipt <uuid> <line>`.
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
