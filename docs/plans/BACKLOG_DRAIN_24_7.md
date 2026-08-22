@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #134: three rows were cured, each cure WROTE THE ROW'S OWN ID INTO
+  THE CODE, and the store learned nothing from any of them. filed 0 / closed 3 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  sixteenth consecutive clean reading.** Converge lag **10** at open (budget 25). Fold at open:
+  `master-convergence-deadlock` **39 open / 6 blocked**, exactly where #133 left it.
+
+  **THE FINDING IS A RATE, NOT AN ANECDOTE.** Method 19 — *search the tree for the row's own id
+  before assuming it is uncured* — has been in this list since #113 and has been a cheap
+  tie-breaker. This recycle it was the WHOLE recycle: it retired three long-open rows (filed
+  2026-07-26, 2026-08-03, 2026-08-10) in about four commands, because each row's fix had been
+  landed by some earlier session that wrote the row's twelve-hex id into a comment beside the cure
+  — and **nothing ever walks that pointer backwards.** `scripts/ship-land.sh` names `9c5d0ba74e79`
+  at seven sites; `scripts/unattended-path-lint.sh` opens by calling `cb6701bf2217` "the generator
+  item for this lint"; `run_smoke`'s header answers `97de2797ccf5` in prose. Three cures, three
+  citations, three rows still open. **The citation is a one-way edge: a fixer proves diligence by
+  naming the row, and the naming reaches no reader who folds the store.**
+
+  🚨 **AND THE CURE IS THE BEST AVAILABLE CRITIQUE OF ITS OWN ROW — which is the part a close has to
+  carry.** Two of the three cures deliberately REFUSED the row's prescription and said why, in the
+  code, at length. That is not "done"; it is an adjudication that exists nowhere else:
+
+  **`9c5d0ba74e79`** (*a SIGKILLed bats run is misreported as GATE RED*) prescribed "check `$? >128`
+  (signal) and report GATE-KILLED distinctly". `ship-land.sh:1483` implements the split and refutes
+  the instrument in the same block: *"an earlier draft here keyed on `rc > 128`, which is simply
+  wrong — bats masks the signal, so a SIGKILLed suite surfaces as plain `1`. The TAP body is the
+  only honest discriminator."* Graded against its own prescription the cure would read as ABSENT.
+  Verified by running, not reading: `bats -f 'gate-killed' tests/ship-land.bats` ⇒ **1..8, 8 ok / 0
+  not-ok / 0 skips**, including the positive control *"a suite that NAMES a failing test still exits
+  6"* — so the softening did not buy itself by softening real reds. The row's `sig` fixture
+  reproduces its own 2026-07-26 signature byte-wise (plan + ok lines, then 137).
+
+  **`cb6701bf2217`** (*CORPUS LINT: no launchd-invoked script may resolve a binary by bare name*)
+  is built as `scripts/unattended-path-lint.sh` (98 KB) + `tests/unattended-path-lint.bats`, wired
+  UNCONDITIONALLY into ship-land's statics phase at `:3001-3025` behind a mandatory `--selftest`
+  precondition that goes RED if the detector stops discriminating — which is the row's *"positive
+  control required, else the lint is vacuous"*, enforced by the gate rather than by a reviewer.
+  The lint's header then measures the row's own SPEC as wrong twice: the prescribed trigger ("each
+  plist under `launchd/` that EXPORTS its own PATH, read FROM THE PLIST") selects **one** plist,
+  because the rest set PATH inline in a `ProgramArguments` string or inherit it from a login shell;
+  and hooks — out of the row's scope entirely — are *where the class actually survives*. It shipped
+  a superset over three populations (plists, hooks, the bats corpus). Live: `--selftest` ⇒ **39/39,
+  rc 0, "GREEN on the real tree"**.
+  ⚠️ Instrument trap inside that file: `:896` narrates `--selftest` *"FAILING 2/23 (cases 14 and 17)"*.
+  That is a DATED account of a blind spot already fixed (`/usr/sbin:/sbin` are now in the static
+  suffix), not current state — a count written in a comment is evidence with a timestamp, and this
+  one reads exactly like a broken control.
+
+  **`97de2797ccf5`** (*smoke counts a GATE-KILLED suite as "named a failure"*, its own 1-open group
+  `ship-land-gatekilled-counted-as-red`) is cured at the layer the row named: `run_smoke`'s contract
+  line now reads *"never sets GATE_KILLED (see below)"*, and a cut becomes `smoke:"partial"` and
+  **lands** — *"a non-verdict must never block a land (R6/§4.1)"*. Its falsifier ("a branch whose
+  only smoke failure is exit 124 with zero `not ok` lands without an override") is pinned as two
+  tests; both green this turn ⇒ **1..4, 4 ok / 0 not-ok / 0 skips**. Independently corroborated by
+  #133's own live land, which carried `tests/cc-reaper.bats` GATE-KILLED at exit 124 and pushed.
+
+  **RE-DERIVED, NOT CLOSED — `5fc8ff411a7c` ("six MORE ship-land arms restate a lint pathspec").**
+  Its population is **12, not six**: of 15 `own_run` arms, exactly 2 derive scope via
+  `lint_own_scope` (PERMGATE, TSVPAD — the only two lints carrying `--print-scope`), 1 asks its own
+  lint (`BATS_SC --own-lines`), and **12 restate a literal `git diff --name-only … -- <pathspec>`**.
+  But the harm is **latent, measured zero today**: every one of the 12 pathspecs currently MATCHES
+  its lint's real scan root — `self-path` (`LAYERS="scripts hooks bin"`), `pane-spawn` (`bin scripts
+  hooks commands`), `chromium-bundle` (`scripts hooks bin tools`), `utc-stamp` (default targets
+  `bin hooks scripts`) all agree with their arm exactly, and `pipefail-sigpipe` — which walks the
+  WHOLE tree for `*.sh`/`*.bats` — is covered because git pathspec `*` crosses `/`, and because
+  **0 of 527 `.bats` files live outside `tests/`**. So the row's own defence holds and its remedy is
+  still the right one. Left OPEN deliberately, and NOT half-built: five lints × `--print-scope` +
+  routing + extending `tests/land-lint-scope-derived.bats` case 9 is a wave, and a partial sweep
+  would leave the invariant unasserted while looking asserted. It is also `ungrouped`, so it moves
+  no effort count.
+
+  **WRONG CAUSES REJECTED — six, and FOUR were about the instruments** (the thirteenth consecutive
+  recycle where that held; budget one explicit instrument-check per probe):
+  1. *"These rows are old, so they are probably stale"* — rejected AS A METHOD, not as a conclusion.
+     Age is not evidence: #124's row was 5× too broad and genuinely open; #133's row was filed two
+     weeks AFTER the mechanism it misread shipped. What licensed all three closes was the code
+     citing the id, never the date.
+  2. *"`rc > 128` is absent from ship-land, so `9c5d0ba74e79` was never fixed"* — the near-miss.
+     Grading a cure against the ROW'S prescription instead of against the DEFECT would have scored a
+     complete, tested, seven-site fix as absent. bats masks the signal; the row's instrument was
+     wrong and the code says so.
+  3. *"`--selftest FAILING 2/23` at `unattended-path-lint.sh:896` means the control is broken"* —
+     refuted by executing it: 39/39. See the instrument trap above.
+  4. *"the 12 restating arms are a live fail-open"* — refuted by comparing every arm's pathspec to
+     its lint's scan root; all 12 match.
+  5. *"a `.bats` outside `tests/` slips the pipefail arm's own-set"* — refuted by census: 0 of 527.
+  6. *"a test asserting the pathspec↔scan-root invariant is a cheaper fix than `--print-scope`"* —
+     rejected on the standing lint's own logic: a test-side re-derivation would be a THIRD copy of a
+     value already pinned in two places. `--print-scope` is right because it makes the lint the sole
+     source. A cheaper fix that adds a copy is not cheaper.
+
+  🆕 **THE TWENTY-SEVENTH STANDING-LINT SHAPE: WHEN A FIX CITES THE ROW IT CURES, THE CITATION IS A
+  ONE-WAY EDGE — SO GREP THE TREE FOR A ROW'S ID BEFORE READING THE ROW.** For every artifact
+  written by one party and read by another, pin the format in ONE place. Here the two artifacts are
+  a **backlog row** and **the comment that cures it**, and they are joined by an id the fixer writes
+  in exactly one direction. Three consequences, and the third is the discipline: **(a)** the store's
+  open-count overstates real debt by however many cures cited their row and closed nothing — three,
+  this recycle alone, all long-open; **(b)** the cure is also the row's sharpest CRITIQUE, so a
+  close that rests on "it looks done" throws away the adjudication of the row's own remedy — record
+  *why the prescription was refused*, in the row's vocabulary (method 15); **(c)** the check is
+  nearly free and belongs BEFORE the technical read, not after it — `grep -rn <id> scripts/ hooks/
+  bin/ tests/` costs one command and can retire the row before you have spent a thought on its
+  claims. Ordering matters: read the row first and you will grade the cure against the
+  prescription, which is defect 2 above.
+
 - **2026-08-22 — drain recycle #133: the row was right that the gate convicted the wrong person and
   wrong about what made it do so — and its prescribed remedy would have deleted the safety property
   the mechanism exists for. filed 0 / closed 1 / landed 3 commits.**
