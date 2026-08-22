@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #159: confirming ONE END of a differential is not a differential —
+  postland's bisect proved the tip was red and named it, never asking whether its PARENT was red too,
+  so a pre-existing trunk red convicted an innocent land. filed 0 / closed 1 / landed 2 commits (the
+  fix + this log). FIRST CLOSE INSIDE `master-convergence-deadlock` IN TWENTY-THREE RECYCLES.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twenty-second consecutive clean use; fiftieth consecutive 0-page reading).
+  Gate 2: **`qos-diff` empty, the forty-first consecutive clean reading.** Converge lag **0** in this
+  worktree at open (HEAD == `origin/main` == `280b0b3a8`, tree clean); **the LIVE layer read 13
+  behind** (8 at #155's close, 9 at #156's, 10 at #157's, 13 at #158's — the shared checkout drifts
+  ~1-2/recycle because nothing fast-forwards it).
+  Board at open: **open 259 / blocked 187 / done 2150 / claimed 3, of 2599** — identical on every
+  stratum to #158's close, so the per-row diff is empty in both directions and **no row entered or
+  left between the two readings**. First such window in five recycles (down #155, pinned #156, up
+  #157, down-with-blocked-up #158, **pinned-and-per-row-identical here**). Method 80 still binds: the
+  flat number being equal is not what makes this empty — the per-row diff is.
+  `master-convergence-deadlock` **34 open / 6 blocked at open**; this recycle closed **INSIDE** it,
+  declared before the close, breaking a twenty-two-recycle streak of closing outside the warm effort.
+
+  **ROW CLOSED — `e1c603144edc`** (*"postland bisect named the newest LAND as culprit for a red its
+  diff cannot cause"*), filed 2026-08-09T04:43:10Z. **Closed by FIXING it** — the second consecutive
+  close by construction rather than refutation, and every load-bearing claim re-derived TRUE.
+  · **The row's file-touch claim is exact.** `0d50b76a214c`'s entire diff is `bin/cc-classify`,
+    `bin/cc-reaper`, `tests/cc-classify.bats`, `tests/cc-reaper.bats` — four files, verbatim as filed.
+  · **Its line citations are stale** (method 2): `tests/deploy-link-parity.bats:304,324,338` are now a
+    comment about `:?` guarding the ARGUMENT, and a `has "bin/cc-ghost"` assertion. Grep the string.
+  · **Its distance figure is stale too — and in the direction that matters.** The row says the
+    last-green was 115 commits behind; `git rev-list --count 71e96bcbc825..0d50b76a214c` reads **132**.
+  · **THE STAMP CORROBORATES THE INCIDENT INDEPENDENTLY OF THE ROW.**
+    `$HOME/.claude/autonomy/postland/stamps/c43aea4c7b9d….json` reads
+    `commit=0d50b76a214c… · verdict=red · failing=["scripts/git-identity-lint.sh"] ·
+    ts=2026-08-08T23:56:47Z · load=10.55`. A loaded box is exactly the regime in which interior
+    bisect probes flake green.
+  · 🚨 **THE ROW'S OWN SUSPECT WAS WRONG, AND THE TRUE MECHANISM IS SHARPER.** The row guesses *"the
+    bisect degenerates when last-green is far behind and lands on HEAD"*. Dating the range refutes the
+    "cannot cause" framing in the title while **strengthening** the complaint: the red's real source
+    **`8da2332e60ce`** (`tests/deploy-link-parity.bats`, +215 lines) landed **2026-08-08T15:43**, is
+    **NOT** an ancestor of the last-green, **IS** an ancestor of the culprit, and therefore sat
+    **INSIDE the range — 70 minutes before the blamed land.** So the true first-bad was in range and
+    reachable; the walk simply probed GREEN at commits that were red, narrowed onto the tip, and the
+    tip confirmation then found the tip red and let the culprit stand. Nothing degenerated about the
+    range; **the verdict rested on a ONE-ENDED measurement.**
+  · **NEITHER EXISTING GUARD REACHES IT, and both near-misses are instructive.**
+    `bisect_reach_ok` (`:1921`, landed `66857bc2e` 2026-08-17 — *after* the incident) vetoes only a
+    culprit whose diff is inert docs; this diff is code, so it does not fire. `bisect_floor_ok`
+    (`:1829`, landed `4348ddc25` 2026-08-06 — *before* it) probes the floor **only when
+    `rev-list --count good..culprit == 1`** (`:1833`), and here it is 132. The tip confirmation
+    (`:2120-2133`) runs the suite AT the tip and requires a definite red — then names it.
+  · 🆕 **THE ASYMMETRY THE COMMENT DOES NOT EXPLAIN (method 2, #156's lens).** The confirmation's own
+    justification for stopping at one probe is *"an INTERIOR culprit was genuinely executed and
+    returned BAD while its parent returned GOOD — a real measured differential that needs nothing
+    added"*. That sentence is TRUE of the interior case and is **exactly what is not true of the tip
+    case**, because the walk never ran the tip at all — which is why the confirmation exists. The
+    comment scopes the guard correctly and then borrows the interior case's differential to justify
+    the tip's. Three lines below it the file already says the right thing about this very path:
+    *"that is the walk with the least evidence of any, so it is the one worth measuring from BOTH
+    ENDS before C20 acts on it."* The floor end was measured; the tip end was not.
+  · **THE FIX** (`scripts/postland-verify.sh`): new `bisect_tip_differential_ok()`, called only after
+    the tip confirms red. It probes the tip's **PARENT**; a definite green there is the differential
+    and the culprit stands, a definite red means the tip did not cause it (`tip-no-differential`), and
+    anything else means nothing was measured (`tip-parent-unproven`) — mirroring the confirmation's own
+    *"anything but a definite red"* and the floor guard's abstain-on-unmeasurable. **Scoped to
+    `below > 1`**, so when the tip's parent IS the last-green, `bisect_floor_ok` keeps that end and the
+    fix costs zero extra bats runs: the two guards partition the range instead of overlapping.
+    Failure direction is deliberately the floor's, not `bisect_reach_ok`'s — this is a PROBE guard, so
+    an unreadable answer means nothing was measured, and a wrong veto costs only culprit REFINEMENT
+    (red_actions still pages and backlogs) while a wrong stand hands `POSTLAND_AUTOREVERT` (default
+    **on**, `:572`) an innocent land.
+  · **RED-PROOF, pinned at `280b0b3a8`, with a working staleness guard.** Three new tests
+    (**B26-B28**) in `tests/postland-verify-bisect-bound.bats`. Against the pre-fix subject:
+    **B26 not ok** (`status -eq 1` failed — pre-fix it exits **0**, i.e. it NAMES the tip: the
+    incident itself), **B27 not ok** (the parent was never probed), B28 ok. Against the fixed
+    subject: **3/3 ok**. The staleness guard is keyed on **`NO DIFFERENTIAL AT THE TIP`, text the FIX
+    introduces** — method 87 exactly: `bisect_floor_ok`, `RETRY_TO` and `culprit` all pre-exist, and
+    keying on any of them would have convicted a correct pin, which is how #158's guard failed.
+    Positive control on the pin: `bisect_floor_ok()` present = **1**, so the pin is a real subject.
+  · **THE FIXTURE IS THE INCIDENT, NOT A RE-ENACTMENT.** `stub_bats_walk_green_then_red` is green
+    while `BISECT_LOG` exists in the cell and red once it is gone — i.e. *"the interior probes were
+    wrong and every measurement taken after the walk was right"*, which is the 2026-08-08 shape
+    stated as a rule. Keyed on the cell's own bisect state rather than a step count, so it does not
+    silently change meaning when the walk's shape does. Non-vacuity is asserted, not assumed: B26
+    pins ≥1 walk probe, **exactly 2** post-walk probes, and that the second ran at `$BAD^`.
+  · **B28 IS A COST CONTROL, NOT A FALSIFIER — and it is labelled as one.** It is green on BOTH arms
+    of the red-proof, deliberately: it pins that the guard STANDS ASIDE at `below == 1`, asserting
+    `good` is measured **exactly once**. It would go red against an *unscoped* implementation, which
+    is the mutant it exists to catch.
+  · **MY OWN DIFF WENT RED AND THE CENSUS CAUGHT IT.** `B18` (*every `$BATS_BIN` call site is under a
+    bound — a census, which no runtime test can be*) failed on the new line, correctly: it is a
+    **pass** of `$runner` to a function, not an execution. The suite's own rule is that such sites are
+    *"named INDIVIDUALLY rather than pattern-guessed, so a genuinely new call site cannot hide among
+    them"* — so `bisect_tip_differential_ok ` was enumerated beside the existing `bisect_floor_ok `,
+    never widened into a pattern. The **execution** inside the new function is still censused and is
+    bounded (`bounded "$RETRY_TO" "$runner"`), so the exemption covers the pass only.
+
+  **Owed suites — 67 tests, 67 ok, 0 notok, 0 skip, all plan lines exact.** The same three standing
+  docs-consumers as #145-#158: `cc-dispatch-firegate` **15/15** (`1..15`) · `land-content-verify`
+  **25/25** (`1..25`) — **FIFTEENTH consecutive identical reading** — plus the subject's own contract
+  suite `postland-verify-bisect-bound` **27/27** (24 before this recycle, +3). Instrument control
+  `gate-select.sh --direct 492c51066~1..492c51066` reads **32**, a stable TWENTY-TWO-recycle control.
+  ⚠️ **`tests/postland-verify.bats` (125 `@test`) is NOT a cheap corroboration and did not earn a
+  verdict here** — it mints a worktree cell per test and reached only 9 ok in ~10 minutes before being
+  backgrounded. Method 83's lesson applies to a suite you choose as much as to one the selector
+  chooses: name which suites earned a verdict. The contract for the changed function lives in
+  `postland-verify-bisect-bound`, and that one ran in full.
+
 - **2026-08-22 — drain recycle #158: an in-source refusal defends the remedy it ARGUES against, never
   every remedy that shares its topic — `bin/cc-await-ping`'s comment refuses EVALUATING the goal
   predicate at write time, and the row asked only that the notice NAME it. filed 0 / closed 1 /
