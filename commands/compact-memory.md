@@ -145,9 +145,10 @@ minus the autonomous fork.
    M=<memory-dir> P=<project-dir>; shopt -s nullglob
    recs=(); for f in "$M"/*.md "$M"/archive/*.md; do          # E2 by CONTENT, never by filename
      b=${f##*/}; [[ $b == MEMORY.md || $b == *SNAPSHOT* || $b == *PRE-COMPACT* || $b == *PRECOMPACT* ]] && continue
-     grep -qE '^- \[[^]]*\]\([A-Za-z0-9._-]+\.md\)' "$f" && recs+=("$f")   # ANCHORED: skips ~~struck~~ + prose
+     grep -qE '^- \*{0,2}\[.*\([A-Za-z0-9._-]+\.md\)' "$f" && recs+=("$f")  # ANCHORED: skips ~~struck~~ + prose
    done
-   lines() { grep -ohE '^- \[[^]]*\]\([A-Za-z0-9._-]+\.md\)' "$@" 2>/dev/null | sed -E 's/.*\(([^)]*)\)/\1/'; }
+   # target = the LAST (….md) on the line. NOT [^]]* — see the 🚨 below.
+   lines() { grep -ohE '^- \*{0,2}\[.*\([A-Za-z0-9._-]+\.md\)' "$@" 2>/dev/null | sed -E 's/.*\(([A-Za-z0-9._-]+\.md)\).*/\1/'; }
    comm -23 <(printf '%s\n' "$M"/*.md | xargs -n1 basename | sort -u) \
             <( { printf 'MEMORY.md\n'; printf '%s\n' "${recs[@]##*/}"
                  lines "$M/MEMORY.md" "${recs[@]}"; } | sort -u ) |     # minus E1 + E2
@@ -160,6 +161,22 @@ minus the autonomous fork.
      [ "$hit" = 1 ] || echo "ORPHAN $f"
    done
    ```
+
+   🚨 **`[^]]*` IS THE WRONG WAY TO ANCHOR, and it fails in the safe-looking direction — the snippet
+   above carried it for two weeks.** A hook is free to contain a `]`, and the hooks most likely to
+   are the ones quoting a regex or an array index. Measured 2026-08-22 on reso, where a single index
+   line quotes `grep -qE "Tests +[0-9]+ passed"`: `[^]]*` stops at that `]`, never reaches the link,
+   and the line vanishes from the harvest. The damage compounds because the SAME expression harvests
+   the E2 demotion record — reso's `MEMORY-ARCHIVE.md` reported **459** links against a true **655**,
+   so **24 correctly-demoted topic files came back as ORPHAN** and a pass trusting it would have
+   re-indexed all 24 into an index that was already 214 chars from breach. The instrument even
+   announced itself: **33 index links against `N=34` entries**, and `cc-memory-rotate` said
+   `unparseable=1` in the same breath. **Match `.*` and take the LAST `(….md)` group** (a bullet has
+   exactly one link target and it terminates the line), and **reconcile the harvested count against
+   `grep -cE '^- \*{0,2}\['` before believing any orphan list** — an off-by-one there is not cosmetic,
+   it is one silently dropped rule. Same family as the `^- \[` vs `^- \*{0,2}\[` bold-bullet
+   under-count this file already documents: **both are a link scan whose anchor is narrower than the
+   bullets it must match, and both report a clean-looking answer while under-reading.**
 
    🚨 **Why E3 iterates instead of passing all three paths to one `grep`.** The one-shot form —
    `grep -rqF "$stem" "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" || echo ORPHAN` —
@@ -647,6 +664,34 @@ Consequences for how you run this command:
   the `memory-index-over-budget` group — and finding no caller to run it. So the `--condition` fix
   closed re-keying at the producer while these two were minted, but nothing joins pre-existing
   orphans, and a worker was spent on an index that was already 1 KB under its done target.
+- **This pass (2026-08-22, reso-management-app), for the record — the first on the OTHER index
+  shape, and the one that found the `[^]]*` harvest bug above.** Intake **24,786 chars / 35 lines,
+  headroom 214** — the closest to the cliff any recorded pass has begun, beating 2026-08-11's 106 B
+  only because the unit is different. **Read the shape before the formula:** reso has no
+  prefix/hook split at all (the hook lives INSIDE the link title), so `Σprefix` is not a term here
+  and the § BUDGET table's own reso row is the one to use — 34 entries averaging **728** chars
+  against a derived **661** budget ⇒ **LENGTH binds**, 3,649 chars of excess against 2,286 needed,
+  and the char cap binds while the line cap sits **165 lines** clear. `cc-memory-rotate --dry-run`
+  returned `verdict=exhausted` moving **0** — but for a NEW reason worth recording: at **N=34** the
+  index is already **under `min_keep=40`**, so on this project the rotor can *never* rotate at any
+  size and the § SCOPE CORRECTION band-check has no lower arm to fall back on. The lever is ours by
+  construction here, not merely in the band. Lever: **16 hand-authored rewrites**, no retitles
+  (reso's titles ARE its hooks — the near-lossless retitle lever does not exist on this shape),
+  **24,786 → 21,897 chars, headroom 214 → 3,103** (603 past the done target). 34/34 entries kept,
+  0 hooks grew, 0 lines removed, 0 dangling; rotor re-read `verdict=noop`, i.e. the pass cleared the
+  whole pressure band and not just the breach line. SAFE-AUTO a legitimate no-op on all five sweeps
+  (0 archivable after the durability criterion — both marker hits were live rules; **0** genuine
+  orphans, 15 E3-ok, 655 archived links). The inverse `CORRECTED`/`SUPERSEDED`/`REFUTED` sweep found
+  2 marked topic files and **0** index hooks asserting a refuted mechanism — both corrections had
+  already propagated into the hook. Index-only-fact audit: **11 flags, 0 real** — `TELL`, `7.7x`
+  (file says `~7.7×`), `SUCCESS` (file says *"the write really happened"*), `turso db show X` (file
+  says `<db>`) — the **seventh** consecutive pass in which the second detector pass carried the
+  entire verdict, and the first in which the first detector's flags were *all* emphasis variants of
+  the index's own ALL-CAPS vocabulary rather than format variants of a fact.
+  ⚠️ **A hazard specific to running this on reso: the interactive `grep` is ugrep (a shell function),
+  and a `grep -o -E` over these 700-char lines HUNG past a 120 s timeout.** Do the audits in
+  `python3`, not in a shell pipeline — which this file's own
+  `interactive-grep-is-ugrep-not-usr-bin-grep` note predicts but had not yet cost a turn.
 
 🚨 **A "denominator disagreement" between a KB figure and `wc -c` is arithmetically REFUTABLE — and
 when it refutes, the gap is STALENESS, which is a different bug with a different fix.** This item was
