@@ -1012,6 +1012,78 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
   ! grep -q 'do NOT re-arm' "$MB" || false           # RED: its only instruction was the denied one
 }
 
+# ── F5: THE NOTICE MUST NAME THE CHECK, NOT ONLY THE DECISION (2026-08-22) ────────────────────────
+# docs/research/handoff-high-value-capture-2026-08-19.md §5 F5 · backlog 3078f45dded4.
+# E1 above made the line CORRECT UNDER BOTH STATES. It did not make the reader able to tell WHICH
+# state it is in: the text said "check before you act" and named no check. Measured: this notice and
+# mailbox-drain.sh's goal-aware arm landed in the SAME commit (e8c2435aa, 2026-08-17), and all six
+# goal-hunt sessions the wave found START AFTER it, each having received the notice 4-12 times — so
+# the read-time evaluation was already live for every one of them and they hunted anyway. Naming the
+# check is NOT the remedy bin/cc-await-ping's own comment refuses (evaluating/branching HERE); it
+# costs one interpolated string and blocks nothing in the SIGTERM handler.
+
+@test "F5: the WAKE-PATH-DOWN line names a RUNNABLE check, not only the decision" {
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -qF 'WHICH REPAIR APPLIES DEPENDS ON YOUR /goal' "$MB"   # the decision — unchanged by this fix
+  grep -qF 'goal_live_condition' "$MB"                          # …and now the predicate that answers it
+  grep -qF 'hooks/lib/goal-state.sh' "$MB"                      # …with the file that defines it
+}
+
+@test "F5: the named check carries its FAIL DIRECTION (rc 1 is not a confident no)" {
+  # goal_live_condition returns 1 for "no goal", for "met/failed", AND for "could not read"
+  # (goal-state.sh header § FAIL DIRECTION). A reader who reads rc 1 as a confident "no goal" and
+  # re-arms under a live goal re-creates the E1 defect from the other side, so the notice that hands
+  # over the predicate must hand over its polarity in the same breath.
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -qF 'FAILS CLOSED' "$MB"
+  grep -qF 'never a confident no' "$MB"
+}
+
+@test "F5: naming the check did not cost the zero-cost observable (the drain header IS the verdict)" {
+  # The cheapest branch discriminator needs no command at all: the drain that delivers this line
+  # evaluates goal-liveness at that same boundary, so the header the reader is already looking at is
+  # the answer. A fix that shipped only the shell one-liner would leave the common case paying for it.
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -qF 'the header above it IS the verdict' "$MB"
+  [ "$(grep -c '' "$MB")" -eq 1 ]                    # and it is STILL one line — a line IS a message
+}
+
+# PINNED TO A SHA, NEVER A MOVING REF — same hazard E1's guard above documents: once this fix lands on
+# origin/main a moving ref would match the post-fix tree, the staleness guard would SKIP, and bats
+# renders a skip as `ok`. 950328c8c is the trunk tip this fix was written against, i.e. F5-pre-fix.
+CC_AWAIT_PING_F5_PREFIX_SHA="${CC_AWAIT_PING_F5_PREFIX_SHA:-950328c8c}"
+@test "F5 RED-PROOF: the pre-fix notice (pinned sha) names the decision and NO check" {
+  local old="$BATS_TEST_TMPDIR/pre-f5"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_AWAIT_PING_F5_PREFIX_SHA" bin/cc-await-ping | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_AWAIT_PING_F5_PREFIX_SHA unavailable"
+  [ -f "$old/bin/cc-await-ping" ] || false
+  # HARD staleness guard, never a skip: if the pinned tree already names the check, the pin has
+  # drifted onto a post-fix commit and this control is proving nothing.
+  # KEYED ON A STRING THAT LIVES ONLY IN THE NOTICE, not on `goal_live_condition` — the pre-fix file
+  # already contains that identifier, in the COMMENT at :636 explaining why the predicate is not
+  # evaluated here. Guarding on it convicted the pinned tree of being post-fix and the RED-PROOF
+  # failed on its own control (measured, first run of this case). The subject of this test is the
+  # emitted LINE, so the guard must be keyed on the line, not on the file that prints it.
+  ! grep -qF 'the header above it IS the verdict' "$old/bin/cc-await-ping" || false
+  "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  grep -qF 'WAKE-PATH-DOWN' "$MB"                            # positive control: it DID write a notice
+  grep -qF 'WHICH REPAIR APPLIES DEPENDS ON YOUR /goal' "$MB" # …and it DID name the decision
+  ! grep -q 'goal_live_condition' "$MB" || false             # RED: the decision, and no check
+}
+
 # ══ THE SENDER RECORDER (backlog b38279c10c55) ═══════════════════════════════════════════════════
 # A killed watcher used to say it was killed but never BY WHOM, because an exit code carries no
 # sender. These cases pin the SA_SIGINFO side-car that reads si_pid.
