@@ -188,6 +188,54 @@ def is_index(path):
     return is_document(path)
 
 
+WALK_RE_CACHE = {}
+
+
+def walks(d, body):
+    """Does this text WALK directory `d` — i.e. reach every file beneath it, at any depth?
+
+    The arm the document-inertness rung's proof was missing. Clauses (a)/(d)/(e) all ask whether a
+    suite NAMES something: the path, its IMMEDIATE parent, its stem. A suite that walks a directory
+    reads files it names nowhere, so "nothing named it" stops being a proof of inertness.
+    Measured 2026-08-22 on e4816542d: tests/install-skills-nested.bats walks
+    `find "$REPO/skills/kpmg-deck" -type f` and asserts every file it finds got linked, so
+    skills/kpmg-deck/references/*.md is READ by a suite while deciding INERT — while the identical
+    file one level up selects that same suite through clause (d). Depth alone flipped the answer.
+
+    A WALK and not a mention is what licenses "covers everything beneath", and that distinction is
+    load-bearing rather than fussy. Scored over this corpus, three candidate bounds: a bare-mention
+    rule pulled in 86 documents on 509 edges (47 of them tests/fixtures/* dragging 10 suites each
+    through a hub they merely share a prefix with); bounding the walk to the grandparent gave 27 on
+    36; this one gives 4 on 4 — the four real cases and nothing else. It is the same USES-vs-COVERS
+    distinction `is_index` already makes for clause (c), applied to directories instead of to
+    documents, which is also why it is not a hub blacklist: a suite that starts walking a new
+    directory is picked up on its own, and one that merely mentions a sibling path never is.
+    """
+    rx = WALK_RE_CACHE.get(d)
+    if rx is None:
+        q = re.escape(d)
+        # The trailing quote-or-space is a BOUNDARY, not decoration: without it `skills/kpmg-deck`
+        # would match a sibling `skills/kpmg-deck-extra` and cover files it cannot reach.
+        rx = re.compile(r'(?:find|ls)\s+[^\n]{0,40}%s["\']?\s|%s["\']?/\*' % (q, q))
+        WALK_RE_CACHE[d] = rx
+    return rx.search(body) is not None
+
+
+def ancestor_dirs(path):
+    """Every ancestor directory of `path`, deepest first, EXCLUDING a top-level one.
+
+    Top-level is excluded for exactly the reason clause (d) excludes it (`"/" in parent`): `tests`,
+    `skills`, `commands` are too common as bare words to be evidence of anything. Confirmed by the
+    same measurement — nothing walks the real agents/ or commands/ tree, so an ADD there still
+    decides INERT, correctly and unchanged.
+    """
+    d, out = os.path.dirname(path), []
+    while "/" in d:
+        out.append(d)
+        d = os.path.dirname(d)
+    return out
+
+
 def is_prose(path):
     if path in ("README.md", "CLAUDE.md"):
         return True
@@ -565,6 +613,14 @@ def main():
                 # evolve-fixtures/ at all; the one naming agents/ builds a fixture tree; the two
                 # that walk a tree wholesale walk $CC_PARITY_REPO and $CC_PAGES_DIR, not the repo;
                 # and nothing drives the repo-wide markdown walkers.)
+                # ⚠️ THAT PARENTHETICAL'S LAST-BUT-ONE CLAUSE WAS FALSE, and re-measuring it is what
+                # produced the arm below. Re-run 2026-08-22: three suites DO read a real document
+                # tree — desk-brief-ssot and wrap-ledger read one literal commands/*.md each (which
+                # clause (a) already covers), and install-skills-nested WALKS
+                # `find "$REPO/skills/kpmg-deck" -type f`, which clause (a) cannot cover because a
+                # walked file is named nowhere. The original sweep missed it by anchoring on
+                # `$REPO_ROOT` while these suites spell it `$REPO`; its control used the former, so
+                # it validated one branch of its own alternation and read clean over the other.
                 #
                 # `is_prose` cannot carry this — it is a path-PREFIX allowlist (README/CLAUDE,
                 # docs/), which only ever describes the trees that existed when it was written, so
@@ -580,8 +636,22 @@ def main():
                 # stale-gate re-round, as `direct=""` ⇒ exonerate nothing. A fail-closed rung
                 # failing OPEN at its consumer — the same inversion the prose-removal rung above
                 # was written for. Deciding it restores the smoke.
+                # …with ONE arm the enumeration above leaves out, and it is the arm this rung was
+                # filed on (backlog 7e8d59bbb848): a suite that WALKS an ancestor directory reads
+                # this file while naming neither it, nor its immediate parent, nor its stem. That
+                # is a real edge, not a hypothetical — see `walks`. It is applied HERE and not as a
+                # global clause on purpose: a CODE file no clause maps must keep failing CLOSED to
+                # FULL, and moving this above `if not hits` would NARROW that to a handful of
+                # suites. Only a path that would otherwise decide INERT can change, and only from
+                # zero suites to the ones that provably read it.
                 if is_document(path):
-                    note("(inert)", "document-unmapped:%s" % path)
+                    covered = set()
+                    for anc in ancestor_dirs(path):
+                        covered |= set(s for s in suites if walks(anc, text.get(s, "")))
+                    if covered:
+                        take(covered, "ancestor-walk")
+                    else:
+                        note("(inert)", "document-unmapped:%s" % path)
                 else:
                     emit_full("unmapped:%s" % path)
 

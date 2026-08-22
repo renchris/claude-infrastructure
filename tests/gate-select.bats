@@ -19,6 +19,11 @@
 #                       this (30 of 278 tracked .md fell through it). And because emit_full
 #                       ABORTS THE WHOLE SELECTION, one such doc took a real 82-suite land to
 #                       zero smoke — so the code half of a mixed land must survive the doc half.
+#   * doc under a WALKED ancestor dir → the walker, NOT inert. That proof enumerates the ways a
+#                       suite NAMES a path (clauses a/d/e); a suite that WALKS a directory reads
+#                       files it names nowhere, so the enumeration was one arm short. Bounded at
+#                       WALK evidence rather than a prefix mention: on the real corpus the mention
+#                       rule gave 86 documents / 509 edges, the walk rule 4 / 4.
 #   * suite-comment refs → SELECTED, never DIRECT unless the suite's CODE corroborates them.
 #                       A DIRECT edge claims "a failure here is caused by your diff", so its
 #                       evidence must live in executable text; a citation is not a dependency.
@@ -347,6 +352,68 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   [ -z "$output" ]
   gse
   has "(inert) <- document-unmapped:vendor/pkg/references/zz-notice.md"
+}
+
+@test "a document under a WALKED ancestor selects the walker — the arm the inertness proof missed" {
+  # backlog 7e8d59bbb848. The rung above is a PROOF, not a default: clauses (a)/(a')/(d)/(e) have
+  # just asked every suite whether it names this path, its IMMEDIATE parent, or its stem, and a
+  # document cannot execute. But a suite that WALKS a directory reads files it names nowhere, so
+  # the enumeration was one arm short. Real instance, measured 2026-08-22 on e4816542d:
+  # tests/install-skills-nested.bats runs `find "$REPO/skills/kpmg-deck" -type f` and asserts every
+  # file it finds got linked, while skills/kpmg-deck/references/*.md decided INERT — and the
+  # IDENTICAL file one level up selects that same suite through clause (d). Depth alone flipped it.
+  mkdir -p pkg/walked/deep
+  suite tests/walker.bats 'run bash -c "find pkg/walked -type f"'
+  git add -A
+  git commit -q -m seed-walker
+  printf '# nested\nprose\n' > pkg/walked/deep/zz-note.md
+  git add -A
+  git commit -q -m add-nested
+  gs
+  has tests/walker.bats
+  gse
+  has "tests/walker.bats <- ancestor-walk:pkg/walked/deep/zz-note.md"
+}
+
+@test "a MENTION of a sibling under the same ancestor does NOT cover the document" {
+  # THE BOUND THIS FIX IS CHOSEN AT, pinned so a later "simplification" to a prefix test cannot
+  # pass. A walk licenses "covers everything beneath"; a mention names ONE path that happens to
+  # share a prefix. Scored over the real corpus 2026-08-22: the mention rule pulled in 86 documents
+  # on 509 edges — 47 of them tests/fixtures/* dragging 10 suites each through a hub they share
+  # nothing with but the prefix — a grandparent bound gave 27 on 36, and the walk rule 4 on 4: the
+  # true cases and nothing else. Same USES-vs-COVERS distinction `is_index` makes for clause (c).
+  mkdir -p pkg/mentioned/deep
+  printf '# sibling\nprose\n' > pkg/mentioned/sibling.md
+  suite tests/mentioner.bats 'run cat pkg/mentioned/sibling.md'
+  git add -A
+  git commit -q -m seed-mentioner
+  printf '# nested\nprose\n' > pkg/mentioned/deep/zz-note.md
+  git add -A
+  git commit -q -m add-nested
+  gs
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  gse
+  has "(inert) <- document-unmapped:pkg/mentioned/deep/zz-note.md"
+}
+
+@test "the ancestor-walk needle stops at a directory BOUNDARY, not a bare prefix" {
+  # `pkg/walked` is a substring of `pkg/walked-extra`, so without the trailing quote-or-space the
+  # needle would hand a walker coverage of a sibling tree it can never reach. Cheap to pin and
+  # invisible when wrong: over-selection reads as a slow land, never as a failure.
+  mkdir -p pkg/walked/deep pkg/walked-extra
+  suite tests/boundary-walker.bats 'run bash -c "find pkg/walked-extra -type f"'
+  printf '# other\nprose\n' > pkg/walked-extra/other.md
+  git add -A
+  git commit -q -m seed-boundary
+  printf '# nested\nprose\n' > pkg/walked/deep/zz-note.md
+  git add -A
+  git commit -q -m add-nested
+  gs
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  gse
+  has "(inert) <- document-unmapped:pkg/walked/deep/zz-note.md"
 }
 
 @test "an unmapped doc does NOT poison a land that also touches mapped code" {
