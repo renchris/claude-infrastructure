@@ -425,6 +425,40 @@ net_timeout_abort() {  # $1=the op, as the operator would type it  $2=base for t
   exit 10
 }
 
+# ---- WHY a push was refused: a RACE vs anything else (backlog a85dbba865f3) --
+# A failed `git push` had exactly one spelling here — "non-fast-forward — a sibling beat you inside
+# the window" — for EVERY non-timeout failure. A pre-push HOOK refusal (githooks/pre-push refusing a
+# mis-authored range) is the common non-race case and was reported as a trunk race, which sends the
+# reader chasing siblings that were never there. scripts/cloud-reconcile.sh:618,656 already had to
+# work around exactly this ("ship-land would report that refusal as exit 7, an ordinary push race,
+# which is why it is caught HERE").
+#
+# The needles are MEASURED, not inferred from our own wording (probe 2026-08-22, both arms in one
+# script against a real bare remote):
+#   * a genuine non-ff prints  `! [rejected]        HEAD -> main (fetch first)`  — and the literal
+#     string "non-fast-forward" does NOT appear in it. Keying on the phrase our own error message
+#     uses would read 0 on the very case it names, so the discriminator is the `! [rejected]` line
+#     plus git's parenthesised reason, whose spellings are (fetch first)/(non-fast-forward)/(stale
+#     info).
+#   * a hook refusal prints NO rejected line at all — only `error: failed to push some refs`, with
+#     the hook's own diagnostic ahead of it.
+# So the two are cleanly separable from git's own output, and nothing else is needed: this asks only
+# "did git say a ref was rejected for a fast-forward reason", never "did the trunk move", so it costs
+# no extra in-lock network call.
+#
+# Counts, never `grep -q`: under this file's `set -o pipefail` a producer piped into an early-exiting
+# `grep -q` reads FALSE **on a match** (the same trap already documented at the two grep sites below).
+push_failure_kind() {  # $1 = git push's combined output → "non-ff" (a real race) | "refused"
+  local out="${1-}" n_rejected n_ffreason
+  n_rejected="$(printf '%s' "$out" | /usr/bin/grep -c '! \[rejected\]' || true)"
+  n_ffreason="$(printf '%s' "$out" | /usr/bin/grep -cE '\((fetch first|non-fast-forward|stale info)\)' || true)"
+  if [ "${n_rejected:-0}" -gt 0 ] && [ "${n_ffreason:-0}" -gt 0 ]; then
+    echo "non-ff"
+  else
+    echo "refused"
+  fi
+}
+
 # ---- the escalation surface, as TWO classes ---------------------------------
 # The two halves of the old single regex answer different questions, so they cannot share a scope:
 #
@@ -3672,7 +3706,14 @@ main_locked() {
 
   attest_refs "$LAND_BASE"
   LANDED_HEAD="$(git rev-parse HEAD)"
-  if ! git_net push origin "HEAD:$TRUNK" >&2; then
+  # The push's combined output is captured to a FILE and replayed, never swallowed: on a refusal the
+  # refusing party is usually the pre-push hook, and its diagnostic is the only thing that says WHY.
+  # A FILE and not `$(…)` deliberately — git_net sets NET_TIMED_OUT in the CURRENT shell, and a
+  # command substitution would run it in a subshell and silently lose that flag, downgrading a
+  # timeout (exit 10, a machine verdict, retryable) into an ordinary refusal.
+  local PUSH_LOG; PUSH_LOG="$(mktemp)"
+  if ! git_net push origin "HEAD:$TRUNK" >"$PUSH_LOG" 2>&1; then
+    cat "$PUSH_LOG" >&2
     # A TIMED-OUT push is the one case where the outcome is genuinely UNKNOWN — the remote may have
     # taken it. Which is fine and needs no reconciliation here: nothing is deleted, the tree is
     # clean, and a re-run's preflight fetch decides it (already landed ⇒ "nothing to land"; not
@@ -3680,9 +3721,16 @@ main_locked() {
     # sibling that we have no evidence for.
     [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
       "Whether the remote took the push is UNKNOWN; the next /ship re-fetches and decides — it will land it, or find it already there."
-    echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
+    if [ "$(push_failure_kind "$(cat "$PUSH_LOG")")" = "non-ff" ]; then
+      echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
+    else
+      echo "✗ ship-land: push to origin/$TRUNK REFUSED, and git rejected NO ref for a fast-forward reason — so this is NOT a trunk race and re-running /ship unchanged will not clear it. The refusing party is almost always the pre-push hook (githooks/pre-push — e.g. an unattributable author over the range); its output is above, verbatim. Fix what it names, then re-run /ship. Nothing was pushed; tree clean, backup ref ship/backup-* intact (exit 7)." >&2
+    fi
+    rm -f "$PUSH_LOG"
     exit 7
   fi
+  cat "$PUSH_LOG" >&2
+  rm -f "$PUSH_LOG"
 
   while :; do
     # BOUNDED, and here a timeout must ABORT rather than fall through: land-verify would then read a
@@ -3729,14 +3777,30 @@ main_locked() {
 
     attest_refs "$LAND_BASE"
     LANDED_HEAD="$(git rev-parse HEAD)"
-    if ! git_net push origin "HEAD:$TRUNK" >&2; then
+    local REPUSH_LOG; REPUSH_LOG="$(mktemp)"
+    if ! git_net push origin "HEAD:$TRUNK" >"$REPUSH_LOG" 2>&1; then
+      cat "$REPUSH_LOG" >&2
       [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
         "Whether the remote took this re-push is UNKNOWN; the next /ship re-fetches and decides."
-      # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
-      # verify fails (our head is not on the trunk) and drives another bounded reconcile; the attempt
-      # counter still terminates a persistently-rejecting remote.
-      echo "↻ ship-land: re-push non-ff inside the retry window — reconciling again next round." >&2
+      if [ "$(push_failure_kind "$(cat "$REPUSH_LOG")")" = "non-ff" ]; then
+        # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
+        # verify fails (our head is not on the trunk) and drives another bounded reconcile; the attempt
+        # counter still terminates a persistently-rejecting remote.
+        echo "↻ ship-land: re-push non-ff inside the retry window — reconciling again next round." >&2
+      else
+        # NOT a race, so reconciling cannot help: looping here would spend the whole retry budget and
+        # then exit 8 blaming "a concurrent rebase-land keeps dropping content" — a verdict with no
+        # relation to the cause. Say what actually happened and stop (same exit 7 as the first push:
+        # nothing landed, tree clean, backup ref intact).
+        echo "✗ ship-land: re-push REFUSED inside the retry window, and git rejected NO ref for a fast-forward reason — NOT a race, so reconciling again cannot clear it. The refusing party is almost always the pre-push hook; its output is above, verbatim. Fix what it names, then re-run /ship. Backup ref ship/backup-* intact (exit 7)." >&2
+        rm -f "$REPUSH_LOG"
+        # No attest_land here by design — _land_exit_trap attests EVERY non-zero terminal exit, and
+        # this file's own header says that rule lives in the trap and not at the exit sites. The
+        # first push's exit 7 is silent here for the same reason.
+        exit 7
+      fi
     fi
+    rm -f "$REPUSH_LOG"
   done
 
   # --- THE LAND IS PROVEN. Everything left is cleanup + bookkeeping, so the mutex ends HERE. ---

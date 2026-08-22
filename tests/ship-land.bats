@@ -3351,3 +3351,88 @@ _reland_title() { printf 're-land %s: ship-land could not complete and its autho
   [[ "$output" != *'${rc}'* ]] || { echo "exit code is back in the title: $output"; false; }
   [[ "$output" == *'${BRANCH}'* ]]
 }
+
+# ---- push-failure classification: a RACE vs anything else (backlog a85dbba865f3) -------------
+# Every non-timeout push failure used to print one sentence — "non-fast-forward — a sibling beat you
+# inside the window" — so a pre-push HOOK refusal was reported as a trunk race and sent the reader
+# chasing siblings that were never there (scripts/cloud-reconcile.sh:618,656 documents having to work
+# around exactly that).
+#
+# THE CORPORA BELOW ARE REAL `git push` OUTPUT, captured from a probe that drove both cases against a
+# real bare remote, and pasted verbatim rather than retyped (memory: a literal needle that spans a
+# line wrap reads 0, identical to absence). The load-bearing surprise is in the non-ff arm: git says
+# `(fetch first)` and the literal string "non-fast-forward" NEVER APPEARS — so a classifier keyed on
+# the wording of our own error message would read 0 on the very case that message names.
+
+_pfk_probe() {  # extract the pure function; sourcing ship-land.sh would RUN the pipeline
+  sed -n '/^push_failure_kind() {/,/^}/p' "$SHIPLAND" > "$BATS_TEST_TMPDIR/pfk.sh"
+  # Positive control (non-vacuity): a silent sed miss — function renamed or moved — leaves an EMPTY
+  # probe, and every assertion below would then pass or fail for a reason that has nothing to do with
+  # the classifier. Require the body to actually be here before trusting one verdict from it.
+  grep -q 'n_rejected' "$BATS_TEST_TMPDIR/pfk.sh" || { echo "sed extraction missed push_failure_kind"; false; }
+  echo "$BATS_TEST_TMPDIR/pfk.sh"
+}
+
+@test "push classify: a pre-push HOOK refusal is NOT reported as a trunk race" {
+  local probe; probe="$(_pfk_probe)"
+  # Real output, hook arm: the hook's own lines, then git's summary. NO rejected line at all.
+  run bash -c ". '$probe'; push_failure_kind 'E5a FAIL: src/thing.ts — identity guard refused this range
+see /tmp/e5a.log for the full gate output
+error: failed to push some refs to '\''/tmp/remA.git'\'''"
+  [ "$status" -eq 0 ]
+  [ "$output" = "refused" ]
+}
+
+@test "push classify: a genuine non-fast-forward IS still called a race" {
+  local probe; probe="$(_pfk_probe)"
+  # Real output, race arm. Note `(fetch first)` — and no "non-fast-forward" anywhere in it.
+  # THE CORPUS IS ONE printf LINE ON PURPOSE — do not "tidy" it back into a multi-line literal.
+  # git's rejected line begins with `!`, and bats-assert-liveness.py classifies any line whose first
+  # token is `!` as a whole-command negation, so a verbatim multi-line literal makes this suite's own
+  # test DATA read as two dead assertions and fails the gate. \n keeps the bytes identical.
+  run bash -c ". '$probe'; push_failure_kind \"\$(printf 'To /tmp/remB.git\n ! [rejected]        HEAD -> main (fetch first)\nerror: failed to push some refs\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.\n')\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "non-ff" ]
+}
+
+@test "push classify: the OTHER non-ff spelling — git says (non-fast-forward), not (fetch first)" {
+  # git picks the parenthesised reason by case; pinning only the one our probe happened to produce
+  # would leave the other spelling free to regress silently.
+  local probe; probe="$(_pfk_probe)"
+  # one printf line, for the same reason as the test above
+  run bash -c ". '$probe'; push_failure_kind \"\$(printf 'To /tmp/r.git\n ! [rejected]        HEAD -> main (non-fast-forward)\nerror: failed to push some refs\n')\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "non-ff" ]
+}
+
+@test "push classify: an empty/unreadable push log is NOT a race (fail toward the honest message)" {
+  # The default decides the failure direction (memory: gate-default-decides-failure-direction). If we
+  # cannot see git's reason, claiming a sibling raced us is a claim with no evidence — the same
+  # reasoning the timeout arm already applies one branch above it.
+  local probe; probe="$(_pfk_probe)"
+  run bash -c ". '$probe'; push_failure_kind ''"
+  [ "$status" -eq 0 ]
+  [ "$output" = "refused" ]
+}
+
+@test "push refused by a hook: the land says NOT-a-race and REPLAYS the hook's own words" {
+  # End-to-end through the real pipeline. A server-side decline is what the two pre-existing exit-7
+  # tests already use; what is new is that the OUTPUT must now name the cause. Note those two tests
+  # are titled "non-ff" but have always simulated a hook DECLINE — under the old single message the
+  # suite could not tell the two apart, which is the defect in miniature.
+  printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "E5a FAIL: unattributable author over this range" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
+  chmod +x "$ORIGIN/hooks/update"
+  on_branch_with feat/hook-refused hr.txt hello
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 7 ]
+  # the hook's own diagnostic reached the operator rather than being swallowed
+  echo "$output" | grep -q 'E5a FAIL: unattributable author over this range'
+  # …and the verdict does not invent a sibling
+  echo "$output" | grep -q 'NOT a trunk race'
+  [ "$(echo "$output" | grep -c 'a sibling beat you inside the window')" -eq 0 ]
+  # nothing landed, and the tree is clean — the refusal path's other promises are unchanged
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- hr.txt)" ]
+  [ -z "$(git status --porcelain)" ]
+}
