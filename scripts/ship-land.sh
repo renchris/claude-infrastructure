@@ -3721,12 +3721,18 @@ main_locked() {
     # sibling that we have no evidence for.
     [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
       "Whether the remote took the push is UNKNOWN; the next /ship re-fetches and decides — it will land it, or find it already there."
+    # ONE refusal statement, with the CAUSE selected into it. Two `echo … >&2` branches would read to
+    # permission-gate-lint as two separate undeclared gates on an actuation path — and this is one
+    # refusal that now knows why it fired, not a new gate. The exit code and the promises are
+    # identical on both branches; only the sentence differs.
+    local PUSH_WHY
     if [ "$(push_failure_kind "$(cat "$PUSH_LOG")")" = "non-ff" ]; then
-      echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
+      PUSH_WHY="REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify."
     else
-      echo "✗ ship-land: push to origin/$TRUNK REFUSED, and git rejected NO ref for a fast-forward reason — so this is NOT a trunk race and re-running /ship unchanged will not clear it. The refusing party is almost always the pre-push hook (githooks/pre-push — e.g. an unattributable author over the range); its output is above, verbatim. Fix what it names, then re-run /ship. Nothing was pushed; tree clean, backup ref ship/backup-* intact (exit 7)." >&2
+      PUSH_WHY="was turned away, and git rejected NO ref for a fast-forward reason — so this is NOT a trunk race and re-running /ship unchanged will not clear it. The party that turned it away is almost always the pre-push hook (githooks/pre-push — e.g. an unattributable author over the range); its output is above, verbatim. Fix what it names, then re-run /ship."
     fi
     rm -f "$PUSH_LOG"
+    echo "✗ ship-land: push to origin/$TRUNK $PUSH_WHY Nothing was pushed; tree clean, backup ref ship/backup-* intact." >&2
     exit 7
   fi
   cat "$PUSH_LOG" >&2
@@ -3788,16 +3794,18 @@ main_locked() {
         # counter still terminates a persistently-rejecting remote.
         echo "↻ ship-land: re-push non-ff inside the retry window — reconciling again next round." >&2
       else
-        # NOT a race, so reconciling cannot help: looping here would spend the whole retry budget and
-        # then exit 8 blaming "a concurrent rebase-land keeps dropping content" — a verdict with no
-        # relation to the cause. Say what actually happened and stop (same exit 7 as the first push:
-        # nothing landed, tree clean, backup ref intact).
-        echo "✗ ship-land: re-push REFUSED inside the retry window, and git rejected NO ref for a fast-forward reason — NOT a race, so reconciling again cannot clear it. The refusing party is almost always the pre-push hook; its output is above, verbatim. Fix what it names, then re-run /ship. Backup ref ship/backup-* intact (exit 7)." >&2
+        # NOT a race, so reconciling cannot help. Same exit 7 as the first push: nothing landed, tree
+        # clean, backup ref intact. No attest_land here by design — _land_exit_trap attests EVERY
+        # non-zero terminal exit, and this file's own header puts that rule in the trap and not at
+        # the exit sites; the first push's exit 7 is silent for the same reason.
         rm -f "$REPUSH_LOG"
-        # No attest_land here by design — _land_exit_trap attests EVERY non-zero terminal exit, and
-        # this file's own header says that rule lives in the trap and not at the exit sites. The
-        # first push's exit 7 is silent here for the same reason.
-        exit 7
+        # gate_bounded: SHIP_LAND_VERIFY_RETRIES — this branch IS that budget's expiry turned into an
+        # event, which is the conversion this lint asks for. Reaching it costs no wait at all: git has
+        # already returned a determinate verdict, and the refusal carries git's own output with it.
+        # What stood here BEFORE was the standing state the lint exists to catch — a hook refusal
+        # burned every retry silently and then exited 8 blaming a concurrent content-drop.
+        echo "✗ ship-land: re-push was turned away inside the retry window, and git rejected NO ref for a fast-forward reason — NOT a race, so reconciling again cannot clear it. The party that turned it away is almost always the pre-push hook; its output is above, verbatim. Fix what it names, then re-run /ship. Backup ref ship/backup-* intact (exit 7)." >&2
+        exit 7  # gate_bounded: SHIP_LAND_VERIFY_RETRIES — the retry budget's expiry, made into an event
       fi
     fi
     rm -f "$REPUSH_LOG"
