@@ -245,7 +245,10 @@ load-bearing part (the `expect` wrapper) into a tracked script the skill can nam
    widen `cc-close-attrib`'s three-slot `argv` capture so a close record can answer *why* a process
    was selected, not merely that it died.
 2. **Fix §2** (`lead-crash-watchdog.sh:899` consults the teardown marker before exiting quietly).
-3. **Fix §3** (reap-eligibility must not convict members that cannot write refs).
+3. **Fix §3** (reap-eligibility must not convict members that cannot write refs). **STILL OPEN, and
+   it is a value fork, not a coding task — see §7:** the branch's answer (defer while the transcript
+   grows) contradicts trunk's `teammate-auto-shutdown` test 43 (reap, never a forever-defer), which
+   predates it by five days. Filed rather than decided.
 4. Land the README row in §4 of `README.md` documenting `resume-sessions` (in this branch).
 5. Decide on §5 (track the `reso-*` actuators, or retire them). **CLOSED — see §7: trunk already
    did it, better, on 2026-08-10 and 2026-08-17.**
@@ -254,27 +257,52 @@ load-bearing part (the `expect` wrapper) into a tracked script the skill can nam
 
 ## 7. Recovery of this branch, 2026-08-22 — and the measurement that bounds it
 
-This document, and three of the four fixes it prescribes, sat reachable only from
-`refs/heads/fix/sigterm-forensics` for thirteen days (backlog `41099442ae0e`). Recovered today by
-`cherry-pick -x`, each verified absent from trunk *before* picking — marker present in the commit,
-absent at its parent, absent on `origin/main`, against a positive control proving the probe could
-see the file at all — and each red-proofed in a scratch tree against trunk's own subject:
+This document and the four fixes it prescribes sat reachable only from
+`refs/heads/fix/sigterm-forensics` for thirteen days (backlog `41099442ae0e`). All five patches
+were adjudicated today; **three were recovered by `cherry-pick -x` and two were refused.** Every
+one was first verified absent from trunk *before* picking — marker present in the commit, absent at
+its parent, absent on `origin/main`, against a positive control proving the probe could see the
+file at all — and every recovered one was red-proofed in a scratch tree against trunk's own
+subject, with the control asserted to carry the pre-fix shape and to ABORT rather than pass if it
+did not:
 
-| patch | disposition | red-proof at trunk |
+| patch | disposition | evidence |
 |---|---|---|
-| `30017e2a4` guard: an option after the pattern is another pattern | **RECOVERED** | 3 red (22, 23, 24) of plan 28 |
-| `23406cbe4` watchdog: a caught SIGTERM is not a clean exit | **RECOVERED** | 4 red (27, 28, 30, 31) of plan 31 |
-| `a3db53228` reap-guard: ref-absence is not idleness | **RECOVERED** | 1 red (20) of plan 23 |
+| `30017e2a4` guard: an option after the pattern is another pattern | **RECOVERED** | 3 red at trunk (22, 23, 24) of plan 28 |
+| `23406cbe4` watchdog: a caught SIGTERM is not a clean exit | **RECOVERED** | 4 red at trunk (27, 28, 30, 31) of plan 31 |
 | `db1f92470` this document's §1c/§1d conviction | **RECOVERED** | n/a — docs |
-| `410f920c9` track the `reso-*` actuators | **SUPERSEDED — deliberately NOT recovered** | would REGRESS trunk |
+| `a3db53228` reap-guard: ref-absence is not idleness | **REFUSED — contradicts a trunk assertion five days OLDER than itself** | reds `teammate-auto-shutdown` 43 + 44 |
+| `410f920c9` track the `reso-*` actuators | **REFUSED — superseded by a better cure** | would REGRESS trunk |
 
-**Why `410f920c9` is a refusal and not a gap.** Its two `bin/` files exist on trunk already, tracked
-by another route, and trunk's copies are strictly newer: `bin/reso-resume-one`'s header on
-`origin/main` names *this branch by ref* and records three defects fixed on 2026-08-10 (a pinned
-`--effort`, a stale binary path, a stale model id), and `bin/reso-keepalive` gained a kitty arm on
-2026-08-17. Cherry-picking the branch version would revert all four. A patch that is
-content-absent from trunk by patch-id can still be *superseded by a better cure*, and the oracle
-that answers "are these bytes on main" cannot tell the two apart.
+**So three of the five recovered, and two are refusals rather than gaps.** Both refusals are the
+same class, and it is a class the store cannot see: a patch that is *content-absent from trunk by
+patch-id* can still be superseded, and the landedness oracle — "are these bytes on main" — returns
+the identical answer for work that was dropped and for work that was replaced by something better.
+
+**Why `410f920c9` is a refusal.** Its two `bin/` files exist on trunk already, tracked by another
+route, and trunk's copies are strictly newer: `bin/reso-resume-one`'s header on `origin/main` names
+*this branch by ref* and records three defects fixed on 2026-08-10 (a pinned `--effort`, a stale
+binary path, a stale model id), and `bin/reso-keepalive` gained a kitty arm on 2026-08-17. Picking
+the branch version would revert all four. Backlog rows `6ab41e312a13` and `8550b6129d9c`, both
+closed, are where that content actually landed.
+
+**Why `a3db53228` is a refusal, and this one is sharper.** Applying it turns
+`tests/teammate-auto-shutdown.bats` 43 and 44 red — 48/50, both failing on a close that never
+happens because the member is deferred instead of reaped. Test 43 is titled *"R-b on a shared cwd:
+a READ-ONLY member has no ref by construction → REAP, not a forever-defer"*, and it is the exact
+inverse of the patch's own test 20, *"read-only member whose transcript is STILL GROWING → DEFER,
+not reaped"*. **Trunk's assertion is dated 2026-08-04 (`5cd17f5da`) — five days BEFORE the patch
+was written.** The patch was therefore never landable as authored; its branch suite passed in
+isolation and the contradiction lived in a *different* suite that the branch, never having reached
+the gate, never ran. A green suite is a claim about the suite, not about the tree.
+
+Both framings start from the same true premise — a read-only member cannot write a ref, so ref
+absence says nothing about it — and reach opposite actions: reap (risk: kill a live member) versus
+defer (risk: a pane that never closes). That is a value fork about whether the fleet may kill live
+agents, not a defect with a correct answer sitting in a branch, so it is filed rather than decided
+here — backlog `cbd6bf980b1f`, BLOCKED, with the question stated as its `needs`. `a3db53228`
+should not be recovered until it is answered, and a DEFER answer must change trunk's test 43 in the
+same diff.
 
 ### The 2026-08-09 conviction does NOT explain the cuts running today
 
