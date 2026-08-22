@@ -1830,7 +1830,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # escalated to GATE_KILLED, because a non-verdict must never block a land (R6/§4.1): the corpus
   # behind us will re-prove the tree, and turning "the box was busy" into a failed land is exactly
   # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
-  local range="$1" direct budget start f n=0 red=0 cut=0 srv
+  local range="$1" direct own budget start f n=0 red=0 cut=0 srv own_red=0
   local -a redf=()          # the direct suites that named a failure — attested, not just counted
   # ---- P0 §3: `none` WAS FIVE CAUSES WEARING ONE TOKEN ------------------------------------------
   # (§2.B.) 83% of lands execute no test of their own diff, and until now the ledger could not say
@@ -1885,6 +1885,30 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     echo "⚠ gate: selector '$GATE_SELECT' missing/not executable — no smoke this land; the post-land verifier proves this tree." >&2
     return 0
   fi
+  # THE SELECTION HAS TWO POPULATIONS AND EVERY CONSUMER BELOW USED TO READ IT AS ONE (backlog
+  # fb178d6d8d14). UNION SCOPE hands the selector a SECOND range on a re-round, so `direct` is
+  # {suites this diff maps to} ∪ {suites the SIBLING delta maps to}. Running both is right and is
+  # not in question — the composed tree is what we are about to push. What was wrong is that both
+  # of the things that then JUDGE a failure ("intermittence in code you are landing is a finding,
+  # not a flake"; "this is a VERDICT about your diff … fix it, do not retry unchanged") are clauses
+  # whose truth has a POPULATION, and it is the own-range one. The row that filed this measured the
+  # consequence landing 75df8db2c884: round 2 selected 13 suites including one with zero references
+  # to either changed file, the lander was told to go fix it, and the same failure was ALREADY an
+  # open item filed by the post-land verifier against a sibling's commit.
+  #
+  # The row's own prescribed remedy — "assert selected-suites is a SUBSET of gate-select over the
+  # attested base..head; a suite outside that set must never be able to set the exit code" — is
+  # REFUSED here, and deliberately: that deletes union scope, which is the only thing covering the
+  # composed tree's sole novelty. The defect is attribution, not selection. So: run the union,
+  # judge with the own set.
+  #
+  # ORDER MATTERS — the own-range call goes FIRST because tests/land-gate-cas.bats reads the LAST
+  # selector invocation to assert the re-round carried two ranges. Skipped entirely when there is
+  # no union (round 1, ~70% of lands), where own IS direct by construction and this costs nothing.
+  own=""
+  if [[ -n "$EXTRA_RANGE" ]]; then
+    own="$("$GATE_SELECT" --direct "$range" 2>/dev/null || true)"
+  fi
   direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
   if [[ "$direct" = "FULL" ]]; then
     # FULL is the selector's own fail-closed answer ("I could not decide"). It can no longer mean
@@ -1898,6 +1922,19 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # lint-only land as far as the smoke is concerned, and must take that branch (and its zero cost)
   # rather than a separate one.
   direct="$(filter_host_suites "$direct" | grep -v '^[[:space:]]*$' || true)"
+  # OWN resolves to the SAME list as `direct` in both of the cases where the partition is unknown or
+  # absent, so every judgment below keeps its present behaviour unless a union genuinely added a
+  # suite this diff does not map to. FAIL-CLOSED both ways: no union ⇒ everything is ours (true by
+  # construction); the own-range selector answering FULL ("I cannot decide") ⇒ everything is ours
+  # (the safe direction — an undecided selector must never be read as "none of this is yours",
+  # which would exonerate the whole smoke). Normalised identically, or the membership test below
+  # would compare a filtered path against an unfiltered one and silently miss.
+  if [[ -z "$EXTRA_RANGE" || "$own" = "FULL" ]]; then
+    own="$direct"
+  else
+    own="$(printf '%s\n' "$own" | grep -v '^[[:space:]]*$' || true)"
+    own="$(filter_host_suites "$own" | grep -v '^[[:space:]]*$' || true)"
+  fi
   if [[ -z "$direct" ]]; then
     SMOKE_STATE="none-nodirect"
     echo "→ gate: smoke — 0 direct suite(s) map to this range (lint-only land)." >&2
@@ -1932,11 +1969,18 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
       break
     fi
     n=$(( n + 1 ))
-    srv=0; run_scoped_suite "$f" "$direct" || srv=$?
+    # `own`, NOT `direct`: run_scoped_suite's carve-out reads this list as "code you are landing",
+    # and on a re-round `direct` also holds the sibling delta's suites, which are not that.
+    srv=0; run_scoped_suite "$f" "$own" || srv=$?
     case "$srv" in
       0) ;;
       2) cut=1 ;;                                        # cut twice / bound fired ⇒ NO verdict
-      *) red=$(( red + 1 )); redf+=("$f") ;;             # a named `not ok` ⇒ a verdict
+      # Membership by `case` over a newline-fenced string, NOT `printf | grep -qxF`: this file runs
+      # under `set -o pipefail`, where a producer piped into an early-exiting `grep -q` can be
+      # promoted to 141 on a MATCH (the ratchet ~800 lines below is the repo's own scar for it).
+      # Fork-free, and it cannot report the opposite of what it found.
+      *) red=$(( red + 1 )); redf+=("$f")                # a named `not ok` ⇒ a verdict
+         case $'\n'"$own"$'\n' in *$'\n'"$f"$'\n'*) own_red=$(( own_red + 1 )) ;; esac ;;
     esac
   done <<< "$direct"
   SMOKE_S=$(( $(date +%s) - start ))
@@ -1946,8 +1990,30 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
 
   if [[ "$red" -gt 0 ]]; then
     SMOKE_STATE="red"
-    for f in "${redf[@]}"; do gate_red smoke "$f"; done
-    echo "✗ gate: smoke RED — $red of $n direct suite(s) named a failure. This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged." >&2
+    # ATTEST THE POPULATION, not just the suite. `smoke:<file>` said which suite; it could not say
+    # whether that suite was reachable from this diff at all, so land.log could not distinguish
+    # "the lander broke a test" from "a sibling landed a red mid-gate and the next lander wore it".
+    # A distinct arm makes the two separable in gate-red-census.sh, which counts arms as MENTIONS
+    # rather than a partition, so a new one costs its readers nothing.
+    for f in "${redf[@]}"; do
+      case $'\n'"$own"$'\n' in
+        *$'\n'"$f"$'\n'*) gate_red smoke "$f" ;;
+        *)                gate_red smoke-sibling "$f" ;;
+      esac
+    done
+    if [[ "$own_red" -gt 0 ]]; then
+      echo "✗ gate: smoke RED — $red of $n direct suite(s) named a failure ($own_red mapped to YOUR diff). This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged." >&2
+    else
+      # THE WHOLE RED CAME FROM UNION SCOPE. Still blocks — we are about to push onto a composed
+      # tree that has a named failure in it, and fail-closed is the right direction for a gate —
+      # but the old sentence made a claim it had no evidence for and prescribed an action the
+      # lander cannot take. "Fix it, do not retry unchanged" pointed at a subsystem this diff never
+      # touched; on a box whose trunk is persistently not-green that converts every mid-gate
+      # sibling landing into a false conviction of the next lander, and the measured instance was
+      # already an OPEN item filed by the post-land verifier against the sibling's commit.
+      echo "✗ gate: smoke RED — $red of $n direct suite(s) named a failure, and NONE of them map to your diff: they were selected by UNION SCOPE (the trunk delta \"$EXTRA_RANGE\" a sibling landed while we gated). This is NOT a verdict about your code — do not go edit it." >&2
+      echo "  The composed tree is red, so the land is refused; the failure belongs to that sibling delta and is very likely already filed by the post-land verifier. Check there before touching anything, and re-run /ship once trunk is green." >&2
+    fi
     return 1
   fi
   if [[ "$cut" -eq 1 ]]; then
