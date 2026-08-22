@@ -87,6 +87,146 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #121: the row asked for a scoping that was ALREADY LIVE at the only
+  venue that enforces — and the real defect was that the gate doing it covers ONE of three fire
+  paths. filed 1 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **the live
+  `qos-rewrite.sh` is now content-identical to trunk — `qos-diff-rc=0`, 0 diff lines** (checkout
+  **3** behind, budget 25). The seven-recycle heredoc alarm is over; #120's mid-session converger run
+  held. Fold at open: `master-convergence-deadlock` **45/4**, unchanged from #120's close — one
+  window of no movement after #120 broke the six-window freeze. **This close holds it at 45/4: one
+  closed inside the group, one filed inside the group.**
+
+  Target: the brief's recommended start — row `f6b460816387`, *"`pane-id-lint` fires 26 findings that
+  are ALL historical pane ids quoted in docs/research prose — a whole-tree lint makes every author
+  answerable for every other's docs; scope it to the DIFF and report the rest labelled."*
+  **CLOSED. The remedy is already implemented at the only enforcing venue, by a better design than
+  the row prescribes — and three of the row's four premises are now false.**
+
+  **1. The cure was already in the tree, in a comment that states the row's own argument.**
+  `scripts/handoff-fire.sh` `payload_pane_id_gate` hands the lint a private box holding *only the
+  fire's own payload*, and its header says why in the row's words: *"SCOPED TO THE PAYLOAD,
+  DELIBERATELY… a corpus-scoped gate would refuse every fire on the box over other authors' files.
+  Block on what this fire OWNS; report the rest labelled."* That last clause is the row's title.
+  **Payload-scope is strictly better than the diff-scope the row asks for**: a payload is not a diff
+  — a recycle brief authored in `/tmp` has no diff at all — so diff-scope is unimplementable at the
+  one place the lint actually gates. Method 20 again: a cure that implements none of the row's fix
+  candidates can still be the cure.
+
+  **2. The row's premises, re-derived — three of four false.** *(Method 2. Every count in this store
+  is stale until you run it.)*
+  · **"26 findings"** → **134 flagged lines / 155 token-occurrences.** Off by 5×.
+  · **"ALL in `docs/research` prose"** → **FALSE: 41 are in `docs/plans`**, across 17 directories.
+  · **"ALL historical pane ids"** → **FALSE: 122 of 155 occurrences (93 distinct tokens) are PURE
+  DECIMAL**, and sampled they are byte offsets (`11939419`), spinlock tick counts (`12583200`), a
+  one-year TTL constant (`31536000`), a GPU cache dir name (`16777235_530`), and **8-hex git short
+  shas** (`66960552`, `86556233`) — the last being this repo's dominant recurring benign shape.
+  · **"a whole-tree lint makes every author answerable"** → TRUE as a principle, and **empirically
+  not happening**: **all 20 surviving real fire payloads on this box PASS the gate.** The count could
+  never have shown that; only running the gate over the live payload population could.
+
+  🚨 **3. THE ACTUAL DEFECT, found by reading the control flow the row never mentions: the gate is on
+  ONE of THREE fire paths.** `handoff-fire.sh` branches `if DRY` / `elif RECYCLE` / `else`. Only the
+  `else` arm runs `payload_pane_id_gate`. So:
+  · **`--dry-run` previewed `payload_lint_gate` and nothing else** — a dry run printed a clean
+  readout for a payload the real fire exits 3 on. **Fixed this session** (`Scope (grown): +dry-run
+  pane-id preview`, Follow-On Gate F1–F4 PASS). The gate now takes `$2=mode`; `preview` reports on
+  stdout and returns 0, and **every other value including a typo and the empty string is `enforce`,
+  so the mode fails CLOSED**. It is called *before* the back-channel preview — the order the real
+  fire runs its gates — and is handed **`$PROMPT_FILE`, deliberately NOT the
+  `${PROMPT_FILE_ORIG:-…}` the sibling preview uses**, because that is exactly what the enforce arm
+  lints. *Previewing a different span is how a preview comes to disagree with the fire it previews* —
+  the standing lint's shape, between a preview and the thing previewed.
+  · **`--recycle` runs NEITHER gate** — and that is this chain's own succession mechanism, 121 links
+  deep. **FILED, not fixed** (see below): with 79% of what this lint flags on authored prose being
+  benign pure-decimal, bolting a fail-closed gate onto the chain's lifeline is a change that must be
+  sized against precision first. Method 20's converse — a prescribed fix can be actively harmful.
+
+  **4. Three in-tree censuses corrected at their decision sites** (#117's pattern: when nothing was
+  wrong, the landable guard is a sentence in the producer's own header carrying the census). All
+  three had rotted the same way and each is the number a reader would *act on*:
+  · `handoff-fire.sh`, the argument FOR payload-scope: *"28 violations across 12+ files"* → 134
+  across 17 dirs. **Restated, not dropped** — the argument is monotone in that count, so a reader who
+  re-measures a bigger number must not read it as evidence the conclusion is stale.
+  · `scripts/pane-id-lint.sh` PRECISION block: *"4 pure-decimal non-tokens"* → 122 of 155 (93
+  distinct). Its own header already records this claim rotting ONCE; it has now rotted ~23× more.
+  🚨 **The number is restated precisely because it makes the already-rejected "require a hex letter"
+  fix look better** — it would now cut 79% of the noise, which is exactly the trade a future reader
+  will be tempted by — **and it must still be rejected**: `99261468`, the motivating truncation, is
+  pure decimal, so the rule deletes the true positive the lint exists for. A false negative is a
+  hard-failed succession (`cc-notify` exit 3, unmailboxable); a false positive is one
+  `pane-id-lint:allow` marker. The costs are not commensurable and no ratio makes them so.
+  · `tests/handoff-payload-gates.bats` scope note: same stale figure, plus the 20/20 payload fact.
+  · Also censused **by NAME, not by path**: exactly **one enforcing caller**. `nightly-regression.sh`
+  runs it corpus-wide, but **that job is dormant — its launchd agent is not loaded and the last
+  `regression.log` entry is 2026-07-26** — so today's whole-tree exit 1 blocks nothing and must be
+  read as a *report*, not a gate verdict. Recorded in the lint's header.
+
+  **5. Wrong causes rejected, with why** (method 43):
+  · **"The lint is orphaned — ZERO call sites."** The tree asserts this in **three** places
+  (`handoff-fire.sh`, `tests/handoff-payload-gates.bats:11`, `tests/typed-send-lint.bats:29`). True
+  when written, **false now — and the very file that says it BUILDS the call site eleven lines
+  below**. Believing the comment would have closed the row as harmless for the wrong reason.
+  · **"Scope it to the diff"** (the row's own remedy) — unimplementable where it matters; see §1.
+  · **"Require a hex letter"** / **"widen `scrub_benign`"** — both rejected by the subject's own
+  documented policy (method 11), and my measurement *strengthens the temptation*, which is why the
+  number was restated rather than acted on. Every decimal-shaped scrub risks a false negative on the
+  all-digit class the motivating token lives in.
+  · **"The gate false-positives and will break real fires"** — **my own mid-session hypothesis,
+  REFUTED by measurement.** I had a plausible case from the corpus (79% pure-decimal, git short shas
+  everywhere) and the live population contradicted it: 20/20 real payloads pass. *The corpus is not
+  the payload population* — they are two spans, and only one of them is what the gate reads.
+  · **"Extend the gate to the recycle path now"** — actively harmful while precision is unsettled.
+  · **"The nightly is the live harm"** — dormant since 2026-07-26; not loaded in `launchctl`.
+
+  **Evidence.** `tests/handoff-payload-gates.bats` 19 → 22 (an **EXTEND** — premise 2, no new file).
+  Green **22/22**, plan `1..22` matched, **0 skips**; off-box under `env -i LC_ALL=C` **green
+  ok=22 notok=0** (state column read, never the rc). `tests/pane-id-lint.bats` **9/9** unaffected.
+  Red-proofed in a scratch tree from pinned parent `ddb6c8c6b`: **2/2 bug-proving cases not-ok**,
+  each on the assertion naming the defect. Negative control non-vacuous **on both halves** — the
+  parent carries the prior single-arg signature (1 occurrence) and **none** of the three cure needles
+  (0/0/0), while the cured tree carries all three. 🚨 **The third new case (typo → enforce) PASSES
+  pre-fix and is therefore NOT a red-proof case** — the parent has no mode parameter at all, so it is
+  a forward regression guard for the new one; saying "3/3 red" would have been false.
+  `bats-assert-liveness` silent **and positive-controlled** (it flags an injected dead negation, so
+  the silence is a verdict); `bats-kill-guard` clean; `shellcheck -S style` clean on both scripts;
+  scoped `bats-shellcheck-lint --range` **0 blocking** (the one SC2034 is `HF_DIR` at parent line 48,
+  pre-existing and not on a diff line).
+  🆕 **A ninth `gate-select.sh --direct` reading: a bare list of 80 suites with no verdict sentence**
+  (`handoff-fire.sh` is touched by that many). Method 41 applied by narrowing to the population that
+  can actually regress from a new readout line — the **42** suites that invoke `handoff-fire` *with*
+  `--dry-run` — and running those, rather than 80 blind or 2 complacently. Result: **41 suites,
+  933 ok / 9 not-ok, 4 red.**
+
+  🚨 **MEASURED, NOT FILED — all four reds are PRE-EXISTING, and the discriminator is the ENV, not
+  the diff.** Every one is **green IN PLACE on this tree** (`fire-autonomy` 28/28 ·
+  `handoff-selfclose-kitty-identity` 17/17 · `cc-backlog` 141/141 · `operator-readout` 81/81 — the
+  last matching #120's own by-hand 81/81) and red **only** under `offbox-run`'s `env -i LC_ALL=C`.
+  Method 52's shape, and the offbox header already names the remedy: *"THE CURE IS IN THE SUITE, NOT
+  HERE."* Attributed by a **simultaneous offbox A/B against pinned parent `ddb6c8c6b`**, with a
+  negative control asserting the parent lacks the cure needle:
+  · `fire-autonomy` parent **27/1** vs mine **27/1** — identical.
+  · `handoff-selfclose-kitty-identity` parent **15/2** vs mine **15/2** — identical.
+  · `cc-backlog` parent **134/7** vs mine **139/2**; `operator-readout` parent **76/5** vs mine
+  **77/4** — **mine is BETTER on both**, so neither can be a regression of this diff.
+  Not filed, deliberately: `closed >= filed` is the drain's discipline and this recycle already
+  spends its one filing on the recycle-path coverage hole. ⚠️ **A first A/B of `cc-backlog` was a
+  NON-VERDICT and is recorded as such** — the parent arm ran from a `mktemp -d`, and those cases key
+  on the repo NAME and on a deployed binary, both of which the scratch location changes (parent read
+  136/5+1skip there). *A red-proof scratch tree is not a neutral place to run a suite that reads its
+  own location.* The offbox A/B above replaced it because it holds that variable fixed on both arms.
+  ⚠️ **`tests/cc-backlog.bats` also mentions `handoff-fire` only in COMMENTS** (3 sites, none
+  executing it) — checked before attributing, because a suite appearing in a grep-built population is
+  not thereby a suite that exercises the subject.
+
+  **Filed (1, inside the group): `d6d7edef60a3`** — *handoff-fire runs its payload gates on 1 of 3
+  fire paths; `--recycle` runs NEITHER*. The row carries the **coupling** in its own title so the
+  next owner cannot pick it up and "fix" it into a chain-breaker: do not simply add the gate, because
+  79% of what the lint flags on authored prose is benign pure-decimal, and neither of the two obvious
+  precision fixes is available (the hex-letter rule deletes the motivating true positive; widening
+  `scrub_benign` carries the same false-negative risk). Live harm today is nil — size it, don't rush
+  it. **Closed (1, inside the group): `f6b460816387`.** Group holds at **45/4**.
+
 - **2026-08-21 — drain recycle #120: the ledger's two bounded live-layer reads answered a FAILED
   read with the same value they use for a CLEAN read of "nothing to report", and in both cases that
   value is the one that clears the close. filed 0 / closed 1 / landed 1 commit.**
