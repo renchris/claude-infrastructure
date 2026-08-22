@@ -87,6 +87,141 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #142: the row was TRUE when written, mostly cured by a sibling ten
+  days later — and the last live half of it was the cure's own safety warning, which had been
+  unreachable code since the day it shipped. filed 0 / closed 1 / landed 1 commit (CODE, not docs).
+  A whole CONDITION retired to zero.**
+  Gate 1 clear — **0 `.page` files**, `find` at the corrected path `$HOME/.claude/autonomy/postland`,
+  directory asserted to EXIST first (fifth consecutive clean use). Gate 2: **`qos-diff` empty, the
+  twenty-fourth consecutive clean reading.** Converge lag **18** at open (budget 25). Board at open:
+  **open 254 / blocked 181 / done 2131 / claimed 4, of 2570** — exactly #141's close, so **no sibling
+  moved the board between recycles**; retire-in-one **44**. Family census: the five 100% positive
+  controls all held (`gate-select` · `land-lock` · `payload-lint` · `session-continue` ·
+  `shellcheck`); `wake-path` remains least drained at 28%.
+  🚨 **FIFTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, a sixth consecutive window.
+  #140's label recommendation acted on again, for the same reason: method 79 keeps surfacing rows
+  decidable in one pass.
+
+  **METHOD 79 CHOSE THE ROW FOR A FOURTH CONSECUTIVE RECYCLE** — and this time it was the lead
+  #141 had already named as strongest, so the brief's own ranking and the fold agreed.
+
+  **CLOSED — `c94cf98ab91f`** (`role-resolution-dead-target`, filed 2026-08-08T01:05:12Z,
+  `lastTs` 2026-08-11T09:49:12Z so it WAS edited once, `source=peer-report-708`). Its claim: *"role
+  resolution enqueues into a DEAD box and returns success."*
+
+  🚨 **THIS ONE WAS TRUE WHEN WRITTEN — the first in four recycles that was.** #140 and #141 both
+  closed never-was rows, and the same two-command dating check (`git rev-list -1 --before=<firstTs>`
+  + `git show <sha>:<file>`) here returns the opposite answer: `bin/cc-roles` did not exist until
+  `ab8a69edd` (2026-08-18T00:22:11Z), **ten days after filing**, and the `role_uuid()` of the filing
+  day was a bare `head -n1` with **zero** references to any liveness predicate. A dead pane resolved
+  to a well-formed uuid and the send exited 0. **The dating check is not a refutation tool — it is a
+  dating tool, and it must be allowed to confirm.** Three consecutive uses had refuted; treating the
+  method as "the one that kills rows" would have inverted this verdict.
+
+  **THE ROW'S THREE ASKS, ALL DELIVERED, PROVEN IN BOTH DIRECTIONS.** Six arms in a fixture
+  (`CC_ROLES_DIR` · `CC_ROLES_BIN` · `CC_MAILBOX_DIR` · `CC_REGISTRY_DIR` ·
+  `CC_NOTIFY_PHONE_FALLBACK=0`), with the pre-cure binary `ab8a69edd~1` as a first-class arm per
+  #141's template:
+
+  | arm | binary | role file | rc | verdict |
+  |---|---|---|---|---|
+  | **P0** | `ab8a69edd~1` | dead claimant | **0** | `delivered` ← **THE DEFECT, reproduced** |
+  | P1 | `ab8a69edd~1` | missing | 3 | `unresolvable` |
+  | A1 | HEAD | missing | 3 | `unresolvable` — ask half 1 |
+  | **A2** | HEAD | dead claimant | **3** | `unresolvable` — ask half 2 ← CORE |
+  | **A3** | HEAD | live claimant | **0** | `mailbox-only` ← POSITIVE CONTROL |
+  | A4 | HEAD | bare pointer | 0 | `mailbox-only` — UNVERIFIED, delivers by design |
+
+  Ask 3 (a liveness sweep) is `cc-roles list`, which prints `ABSENT dead-pid` / `UNVERIFIED <t>` /
+  `LIVE <t>` per file. **A3 is the row's own requirement**, not decoration: it demanded a positive
+  control in BOTH directions because a guard that only ever refuses is as useless as one that never
+  does. #141's lesson about one-directional controls certifying half a mechanism is why P0 and A3
+  are in the same script.
+
+  🚨 **THE FINDING: THE CURE'S SAFETY CONDITION WAS DEAD CODE, AND ONLY THE `A4` ARM COULD SEE IT.**
+  `cc-roles` reads a role as LIVE / ABSENT / **UNVERIFIED**, and cc-notify deliberately lets
+  UNVERIFIED *deliver* rather than folding it into ABSENT — correct, because every role file written
+  before `cc-roles` existed is that shape and folding it would retire the main path (memory:
+  `abstain-rule-can-retire-the-common-case`). But that decision carries a condition the code states
+  outright: *"saying so is the only thing that stops the next reader assuming it was [checked]."*
+  **The saying never happened.** `ROLE_STATE` is assigned inside `role_uuid()`, and the send path
+  called it as `uuid="$(role_uuid "$ROLE")"` — a command substitution, i.e. a **subshell** — so every
+  assignment died with the child and the parent read the empty initialiser on every send. `ROLE_STATE`
+  had exactly **one** reader, that note, and it was unreachable. Measured pre-fix: `cc-roles list`
+  reported `UNVERIFIED` for the same file the send delivered **without a word**. An UNVERIFIED role
+  therefore delivered exactly as silently as a LIVE one — and because the enqueue succeeds, nothing
+  downstream could tell. **That is `claimed-outcome-vs-checked-outcome`, the memory the row itself
+  cites, surviving inside the very cure built to answer it.**
+  Fixed in `5d0d8941d`: `role_uuid` also returns its target in `ROLE_UUID_OUT` and the send path
+  invokes it without a substitution; the two callers that only want the target (`:970` --list
+  arbitration, `:1403` desk-reroute) keep reading stdout unchanged. No rc, verdict or delivery
+  behaviour changes — this only makes an existing warning appear. Post-fix polarity across all three
+  states: unverified **1** warning · live **0** · dead **0**.
+
+  🆕 **NEW AXIS — A ROW'S "CURED" STATUS CAN BE TRUE OF ITS ASK AND FALSE OF ITS ASK'S CONDITION.**
+  Two of three asks were plainly delivered and would have licensed a close on the reading every prior
+  recycle used. The third state was documented as a deliberate exception — and an exception granted
+  *on a condition* is only as cured as the condition. **Reading the comment that grants an exception
+  is not enough; the thing it promises in exchange has to be executed.** The `A4` arm existed only
+  because the row demanded controls in both directions, so the row's own rigour requirement is what
+  exposed the residual its headline never mentioned.
+
+  🆕 **THE ROW'S CAUTION (b) WAS ALREADY HONOURED BY THE CURE — AND CHECKING IT FIRST WAS FREE.**
+  It said *"check whether that guard is reachable on the `--role` path at all before adding a second
+  one; do not re-implement an existing predicate outside its actuator."* Neither #140 nor #141 had
+  checked. It IS reachable: `bin/cc-notify:898` delegates to `cc-roles`' single `role_state()` and
+  says so, citing the same memory the row cites. **A row that tells you what to check first is
+  usually pointing at the fastest route to the verdict** (#141's method-15 lesson, second sighting).
+  No second predicate was added; the fix is a variable-scope repair.
+
+  **STORED FALSIFIER: remedy-shaped and permanently unusable** —
+  `awk "/^role_uuid/,/^  TARGET=/" bin/cc-notify | grep -q registry` reads 0 and always will,
+  because `role_uuid` does not mention the registry *precisely because it delegates*, which is what
+  caution (b) demanded. **The falsifier asserts the presence of the fix its own row forbade.** A
+  seventh shape for method 9's list.
+
+  🆕 **THE SAME GENERATOR IS LIVE ELSEWHERE, AND IS NOT MINE TO CLOSE.** The cross-condition phrase
+  sweep found three open/blocked rows — `3f90cf2c9e0a`, `71e164a86b59`, `354c73ebd400` — over
+  *"BRANCH assigned inside a `$( )` child so the EXIT trap reads the parent's stale copy"* in
+  `scripts/ship-land.sh:3680`. **Same generator, different file, own conditions, left open and
+  named.** Worth recording that this shape has now been found twice in unrelated files and only one
+  of the two had a lint watching for it — a corpus lint keyed on *assignment inside a command
+  substitution whose value is read in the parent* would have caught both.
+
+  **NOT rested on a vanished precondition (method 21).** The row's stated precondition —
+  `cc-roles/` holding one file pointing at dead pane 390 — is gone; #139 measured the store already
+  repointed and that entry archived. Every arm runs in a fixture precisely so the verdict is about
+  the MECHANISM and cannot be an artifact of what the operator's box holds today.
+
+  **WRONG CAUSES REJECTED.** (1) *"The row is cured, close it on the two obvious asks"* — the
+  comfortable answer, and the one the ask table supports; refuted by the A4 arm the row itself
+  required. (2) *"`ROLE_STATE` is fine because `cc-roles list` reports UNVERIFIED correctly"* — the
+  sweep and the send are different consumers of the same predicate, and only one of them was
+  reporting; a working sibling is not evidence about your path. (3) *"Add a registry check to
+  `role_uuid` per the stored falsifier"* — would have re-implemented the predicate outside its
+  actuator, exactly what caution (b) and `make-the-actuator-the-arbiter` forbid, and would have made
+  the falsifier green by breaking the design.
+
+  **BOUNDARIES NAMED, NONE CLOSED:** `71bd004cc416` (a specific lost splash message — an operator-owned
+  role-OWNERSHIP question this row explicitly declined to hand-fix) · `82a4ee2b1a84` (a REGISTRATION
+  gap, not a resolver gap). Verified `done` so no boundary problem: `aa8aed0d713a`, `cb6701bf2217`,
+  `08ba1e3dccc2`, `817faf3a4968`.
+
+  **GATES.** `gate-select --direct` selected **16** suites — the first non-empty selection in nine
+  recycles, and self-controlling (a code commit must select). **All 16 run: 396 tests, ok=396,
+  notok=0, skip=0, every TAP plan equal to `ok+notok`.** `tests/cc-notify.bats` 1..108 (three tests
+  added, extending an existing suite so premise 2 costs nothing). Offbox hermetic run of cc-notify
+  **green, ok=108, 100 s** (checked against `offbox-excluded.manifest` first — not excluded).
+  `shellcheck -S style` clean · `bats-kill-guard-lint` clean · `bats-assert-liveness` **0 dead in 0
+  of 1**, positive-controlled via `--summary` so the silence is a verdict and not a miss ·
+  `self-path-lint --selftest` 32/32.
+  **Red-proof** of the three new tests against the pre-fix binary via a `cp -Rp` overlay with
+  `origin/main:bin/cc-notify` dropped over it: **1..3, the UNVERIFIED test the ONLY not-ok, the other
+  two green on BOTH arms** — so the red is attributable to the single changed line and the two
+  polarity tests are not vacuous. The overlay asserted `ROLE_UUID_OUT` count 0 pre / 6 post as an
+  abort condition before running anything.
+
 - **2026-08-22 — drain recycle #141: the row read a kitty decimal pane id as an instance of
   "pane-UUID", so its headline indicted an arm that had never been missing — while the defect it
   really tripped over was cured five hours later. filed 0 / closed 1 / landed 1 commit. A whole
