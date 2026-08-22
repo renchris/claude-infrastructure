@@ -87,6 +87,85 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #152: the row counted the patches that did NOT land; the value was in
+  the two that DID. `git cherry` separated them in one command. filed 0 / closed 1 / landed 1 commit
+  (DOCS).** Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory
+  asserted to EXIST first (fifteenth consecutive clean use). Gate 2: **`qos-diff` empty, the
+  thirty-fourth consecutive clean reading.** Converge lag **4** at open (budget 25); shared checkout
+  HEAD `3f5a009fe` vs `origin/main` `c1308dca3`. Board at open: **open 262 / blocked 183 / done 2142 /
+  claimed 3, of 2590**. **Declared before closing: this close moves open (262 → 261 by my hand) and
+  retires the condition `stranded-postland-kill-nonverdict`; it does NOT move
+  `master-convergence-deadlock`, which held at 34 open / 6 blocked — a SIXTEENTH consecutive window
+  closing outside the nominal warm effort.** ⚠️ **Retire-in-one NOT reported**: neither candidate
+  definition I could derive reproduces #151's 40 (title-length <200 gives 44; open-with-empty
+  evidence+needs+dodRef gives 158), so I do not hold the canonical predicate and a number here would
+  invent a comparison rather than re-derive one. Whoever owns that count should write the predicate
+  down; until then it is not a trendable figure.
+
+  **CLOSED — `02ad49233919`** (`stranded-postland-kill-nonverdict`): *"recover branch
+  fix/postland-kill-nonverdict — 3 patches content-absent from origin/main (tip 2793fa89b)."*
+  **Premise TRUE and still exactly true; harm NIL; remedy REMEDY-NEGATIVE.** This was the strongest
+  remaining sibling of the 2026-08-16 `fire-r2-recovery T5` family precisely because a `fix/` branch
+  is the least likely to be parked-by-design — and that reasoning was sound but landed on the wrong
+  half of the branch.
+
+  🚨 **THE LINT (the FORTY-SIXTH): A STRANDED BRANCH'S *UNLANDED* PATCHES AND ITS *VALUABLE* PATCHES
+  CAN BE DISJOINT SETS, AND A PATCH COUNT CANNOT TELL YOU WHICH — `git cherry` CAN, IN ONE COMMAND.**
+  `git cherry origin/main 2793fa89b` reads **2 landed-by-content** (`-` fad4fa564, `-` 93398cc6e) and
+  **3 unlanded** (`+` 356344be4, `+` fdc3393f2, `+` 2793fa89b) — the row's "3" is exactly right and
+  exactly uninformative, because the two that landed are **the code** and all three that did not touch
+  **only `HANDOFF-deploy-deadlock.md`** (61 + 20 + 8 line deltas, no other path): a successor brief
+  *about* the fix, not the fix. The kill-nonverdict fix is on trunk and has been EXTENDED since —
+  `scripts/postland-verify.sh:1624` carries the branch's own `ABSTAIN_RC=124` per-file reset with its
+  comment wording intact, plus `ABSTAIN_BOUND`/`ABSTAIN_EL` added later, and the `*) abstain=1` arm
+  sits at `:1689`. The `-`/`+` split is the whole adjudication; a count of "3 absent" invited a
+  recovery that would have landed the one part with no value left in it.
+
+  🚨 **AND ITS SECOND HALF, WHICH IS WHAT ACTUALLY FORBADE THE LAND: A RECOVERED BRIEF INHERITS NONE
+  OF ITS ORIGINAL FRESHNESS — RE-DERIVE ITS NUMBERS AGAINST TODAY'S TREE BEFORE LANDING IT.** The doc's
+  four-item NOT-DONE list was the close's own evidence and it is settled three ways over: item 2 landed
+  as `93398cc6e`; item 3 (land via `/ship`) landed; item 4's explicit caveat — *"do not claim the
+  deadlock is closed until a real green stamp appears"* — is **SATISFIED BY MEASUREMENT, not
+  assumption**: **41 green stamps** in `~/.claude/autonomy/postland/stamps` where the doc was written at
+  **1**, and `last-green` = `3f5a009fe82c40a8c064595c48544fbd5800ae14`, the shared checkout's own HEAD.
+  That leaves item 1 as the sole residual — and it prescribes a bats bound sized for **"62 tests at
+  ~81 s/test"** while `tests/postland-verify.bats` on `origin/main` now carries **125 `@test` blocks**
+  (62 at the branch tip). **Off by 2×.** Landing the brief would have put a stale prescription on trunk
+  under a filename that reads as current guidance. Its substance is already held by **seven** later,
+  better-specified rows — `26d4010f1b22` (corpus assertions carry wall-clock bounds sized on an idle
+  box), `09b19c40ad70`, `19ae324e9697`, `33c286c30624`, `b6f03adab3f9`, `d70b7e8ffdf2`, and blocked
+  `782607797fc5` — so nothing was filed here; a duplicate would have been the defect.
+
+  **This is NOT a vanished-precondition close (method 21), and the distinction is the point.** The
+  row's subject is still literally true — those three patches are genuinely absent from `origin/main`
+  — and the deadlock's cure was *measured live* rather than presumed gone. What is refuted is the
+  REMEDY. Contrast the family: #150's sibling closed because the artifact **ordered its own deletion**;
+  #151's sibling **earned a land** because its artifact declared `status: open` with "Landed on
+  origin/main" as a DoD item; this one closes because the artifact's value **already landed under a
+  different sha** and its remainder aged out. Three siblings, three different discriminators, one
+  command each.
+  **Instrument notes.** #151's `git status --porcelain` screen returns the OPPOSITE answer here —
+  `HANDOFF-deploy-deadlock.md` is **absent** from the shared checkout working tree, not untracked, so
+  no consumer is reading it off disk. The citation grep was positive-controlled in the same breath
+  (`git grep -l -- "HANDOFF-deploy-deadlock" origin/main` → empty at rc 1, while
+  `git grep -l -- "ABSTAIN_RC" origin/main` → rc 0 naming `scripts/postland-verify.sh`) — necessary,
+  because the first attempt read `rc=$?` off a `| head` and returned a meaningless `rc=0` (method 49).
+  A convention test ("does trunk ever carry a root `HANDOFF-*.md`?") was run and **discarded as
+  uninformative**: `git log --all --diff-filter=A` finds exactly one such file ever, and it is the
+  subject — n=1, and the 1 is itself. Branch `fix/postland-kill-nonverdict` deliberately **NOT
+  deleted** (destructive; the operator's call), same disposition as #150 and #151.
+
+  **Board / attribution.** Per-row diff vs the opening snapshot: **2 LEFT, 0 ENTERED** — and only one
+  is mine. `616d58ac42df` (floor-plan doc rot) went **open → claimed** by
+  `Chriss-MacBook-Pro-3-74893` at 19:34:29Z, inside my window; without the opening snapshot it would
+  have read as my own close. Close: **open 260 / blocked 183 / done 2143 / claimed 4**. Evidence
+  round-trip verified against the STORE, not the renderer (#151's `72eaff9dd199` correction): folded
+  the append-only JSONL rather than reading the last matching line, 3 events (`add`/`venue`/`done`),
+  store 2909 B vs file 2910 B — the by-design trailing-newline strip, at exactly `len(disk)` — and **0
+  U+FFFD in this row**. ⚠️ Whole-store replacement-char count is now **2** where #151 measured **1**;
+  the new one is **not mine** (this row's evidence is clean), so a sibling's write or the renderer
+  defect landed it — noted, not chased.
+
 - **2026-08-22 — drain recycle #151: the same sweep, the same oracle, the OPPOSITE verdict — this
   branch's file says `status: open`, a landed trunk doc links to it, and an open row reads it from an
   UNTRACKED path. Recovered and landed. filed 0 / closed 1 / landed 1 commit (DOCS, one ADD).**
