@@ -282,3 +282,44 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   run "$CE" check "$id"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+@test "EXTERNAL DEPLOY: a provider CLI the VM does not install is refused under its OWN token" {
+  # Regression for backlog `96c57c1c4a6c`, the item that exposed the class: a vector.toml filter
+  # that drops a serving app's logs, whose directory "has NEVER been deployed" and needs a one-time
+  # `flyctl apps create`. The artifact is ordinary repo text and the repo is the item's own, so no
+  # list above fires — measured on the real title, which returned `eligible / (nothing fired)`.
+  # The separate token matters for the same reason branch-banking's does: a reader handed
+  # `ineligible-box` goes looking for a keychain on this disk, not for a Fly credential.
+  local id; id="$(add fly "fly-log-shipper-iad ships NOTHING for a serving reso-iad; needs a one-time 'flyctl apps create'")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-external-deploy"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"flyctl"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "EXTERNAL DEPLOY: the provider's artifacts count, not just its CLI" {
+  local id; id="$(add fly "carry the app in fly.toml the way the sin shipper does, then fly deploy it")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-external-deploy"* ]] || { echo "$output"; false; }
+}
+
+@test "EXTERNAL DEPLOY lookalike: 'flying'/'superfly' are not Fly — boundaries hold both ways" {
+  # The paired control. Bare `\bfly\b` was tested and rejected for exactly this: it takes the
+  # ordinary English word with it, and every refusal assertion above would still pass.
+  local id; id="$(add ctl "stop the log lines flying past; the superfly parser and fly.iowa stay as they are")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
+@test "EXTERNAL DEPLOY: the ABSTRACT credential spelling is deliberately NOT the class" {
+  # The width guard, pinned as a test because it is the failure this file's header names: over the
+  # repo's own corpus `credentials?` matches 506 lines and `secrets?` 133, so classifying on them
+  # would refuse a large slice of ordinary repo work. Ordinary work that merely SAYS "credentials"
+  # must stay claimable off-box; only the named provider refuses.
+  local id; id="$(add ctl "document how the resolver caches credentials and rotates the secret in the README")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
