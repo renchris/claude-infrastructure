@@ -87,6 +87,113 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #143: three rows were one gap, and the gap's own cure enumerated four
+  members of a five-member fleet. filed 1 / closed 2 / landed 1 commit (CODE). A whole CONDITION
+  retired; the ownership decision closed two rows exactly as #142's brief predicted it might.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (sixth consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-fifth
+  consecutive clean reading.** Converge lag **0** at open (budget 25) — the second consecutive zero.
+  Board at open: **open 254 / blocked 181 / done 2132 / claimed 3, of 2570**; retire-in-one **43**.
+  ⚠️ **That is NOT #142's close** (`open 253 / done 2132 / claimed 4`): a sibling moved one row from
+  `claimed` back to `open` between recycles. The five-recycle run of "board at open == predecessor's
+  close" is broken, so **re-fold, never inherit** is load-bearing again rather than ceremonial.
+  🚨 **SIXTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, a seventh consecutive window.
+
+  **METHOD 79 CHOSE NOTHING THIS TIME — the brief's named lead did, and it was right.** #142 flagged
+  `e077cce6c49b` as the strongest single lead *with* the warning that it was one of THREE rows over
+  the same gap and that deciding ownership might close more than one. That is exactly what happened.
+
+  **THE GAP, MEASURED FIRST.** `scripts/settings-drift-assert.sh --assert` (exit 1) reports SEVEN
+  divergences, every one "missing in: `.claude-next`": `cc-unattended-ask-guard.sh` ·
+  `coldcompile-admit.sh` · `session-deregister.sh` · `desk-brief-inject.sh` · `session-beat.sh stop` ·
+  `handed-off-session-guard.sh` · `session-beat.sh prompt`. That detector **is** the stored falsifier
+  of `02e67ee88123`, whose title says it "closes itself when the dirs agree" — so it is the one row
+  of the three with a mechanical owner and an automatic close.
+
+  **CLOSED — `8b6aac832811`** (`session-beat-unwired-in-claude-next`, retire-in-one) and
+  **`e077cce6c49b`** (project **reso-management-app**, `ungrouped`), both as SUBSETS of
+  `02e67ee88123`, not as refutations: both name `session-beat.sh stop` + `prompt`, which are 2 of the
+  7, and the owner cannot pass while they are unwired. Superset proved **with controls in both
+  directions** — the two subject lines read 1 in the detector's output while a non-drifting hook
+  (`mailbox-drain.sh`) and a nonexistent needle both read 0. `e077cce6c49b` was additionally filed on
+  the **wrong board**: every artifact it names is claude-infrastructure's, which reso's gates and
+  lands cannot reach. **Counts moved: claude-infrastructure open −1, reso open −1; the warm effort 0.**
+
+  🚨 **THE FINDING, AND IT IS THE STANDING LINT'S THIRTY-SIXTH FACE — AN ENUMERATION AND THE
+  POPULATION IT CLAIMS TO COVER.** `migrations/0006-coldcompile-admit-registration.sh:85` looped over
+  `.claude · .claude-secondary · .claude-tertiary · .claude-quaternary` — **four of the fleet's
+  five**, omitting `.claude-next`. That is the DEFAULT dir of the bare `claude` launcher
+  (`~/.zshrc:460`), i.e. the busiest account, and the one whose `next dev` cold compiles are the very
+  storms the admission gate exists to serialise. **Re-running could never help: the omission is in
+  the enumeration, not in the state.**
+
+  **It read as covered from every angle, which is why it survived.** 0006's own header said *"mirrored
+  across four config dirs"* — so the list AGREED with its documentation. Five sibling migrations
+  (`0005`, `0007`, `0011`, `0012`, `0014`) spell the identical loop **with** `.claude-next`, so the
+  fleet size was never in doubt anywhere else. And `tests/coldcompile-admit-migration.bats` fixtures
+  exactly **ONE** config dir — a population of one, over which a four-of-five loop is not weakly
+  covered but **structurally untestable**, passing 7/7 forever.
+
+  **THE ONE JUSTIFICATION THAT WOULD HAVE MADE THE OMISSION CORRECT IS REFUTED, and refuting it was
+  the whole investigation.** `.claude-next/hooks` is a forked real dir missing `coldcompile-admit.sh`,
+  and `0009`'s header argues at length that a settings entry naming an absent hook file is *not*
+  inert but dispatched-and-failing on every matching event — which for `PreToolUse|Bash` would be
+  every Bash call in the account. Plausible, and it would have made the omission a deliberate safety
+  decision (method 51: a difference is a DECISION until proven an omission). **It does not apply:
+  0 of 66 hook commands in `.claude-next/settings.json` resolve through `$CLAUDE_CONFIG_DIR`; all 66
+  are spelled `~/.claude/hooks/…`,** so the command names the canonical dir, which has the file. The
+  live control is that `mailbox-wake-arm.sh` and `goal-inert-watch.sh` are **already** wired into
+  `.claude-next` by `0007` and `0005` while equally absent from that dir — and the account runs.
+  (Corollary, recorded not filed: `0009` links targets first to avoid a hazard its own wire spelling
+  does not have, and `0013`'s later, measured header explicitly refutes `0009`'s model. The links are
+  additive and harmless, so this is a stale rationale, not a defect.)
+
+  **FIXED** — `migrations/0006` line 85 now enumerates all five, with the refutation recorded inline
+  so the next reader does not re-derive it; the header's "four config dirs" corrected to five.
+  **Red-proof, both arms in one script over a `git show origin/main:` overlay:** PRE `1..9 ok=7
+  notok=2`, HEAD `1..9 ok=9 notok=0`, plan-match on both, **and tests 1–7 green on BOTH arms** — so
+  the red is attributable to the one changed line rather than to a broken fixture. Two new tests went
+  into the EXISTING suite (no ADD): one asserting all five fleet dirs register **with a discriminating
+  control** that a sixth, non-fleet `.claude-experimental` must NOT (so a glob-based "fix" would read
+  red, not green), one asserting five-dir idempotence. Four changed-suite gates green: offbox
+  `green ok=9/1 s` (not in the excluded partition) · self-path-lint 32/32 · kill-guard clean ·
+  liveness `0 dead in 0 of 1` via `--summary` · `shellcheck -S style` clean.
+
+  **FILED — `ba255d25bdc3`** (linked to `settings-drift-across-config-dirs`): the seventh divergence,
+  `UserPromptSubmit|handed-off-session-guard.sh`, is wired into `settings.json` by **no migration at
+  all** — it appears in `migrations/` only inside `0013`'s PROSE, as one entry in a list of absent
+  hook FILES. So `0009` covers 5, the fixed `0006` covers 1, and **even a perfect operator run of
+  every staged c10 migration leaves one line drifting**, the detector still exits 1, and
+  `02e67ee88123` can never self-close as its own title promises. Its falsifier is **outcome-shaped,
+  not remedy-shaped** (it asks whether the line still drifts, not whether a particular edit exists)
+  and its polarity was checked at filing: rc 1 today, i.e. the bug is present.
+
+  🚨 **METHOD 80 EARNED ITS KEEP, FOR THE FIRST TIME AS A CORRECTION RATHER THAN A CONFIRMATION.**
+  The per-row diff across my own two folds shows **four** changes and only **three** are mine:
+  `a1136cd016cb` moved `open → claimed` while I worked. The `claimed` count therefore went 3 → 4 for
+  a reason that has nothing to do with this recycle, and a close reading the aggregate would have
+  claimed it. Board at close: **open 252 / blocked 181 / done 2134 / claimed 4, of 2571**.
+  Retire-in-one **43 → 41**, and both steps are mine and expected: −1 for retiring
+  `session-beat-unwired-in-claude-next`, −1 because filing `ba255d25bdc3` into
+  `settings-drift-across-config-dirs` gives that condition a second open row. **A retire-in-one count
+  that falls because you filed honestly is not a regression** — the alternative was a fourth orphan
+  row over the same gap, which is how this cluster formed in the first place.
+
+  **WRONG CAUSES REJECTED.** (1) *The dangling-hook hazard* — the comfortable reading, backed by a
+  sibling migration's own header, which would have made the omission correct; killed by the 66/66
+  spelling census plus two live counter-examples. (2) *"`venueWhy=ineligible-box` means G2, so this
+  cluster is not a drain pickup"* — the brief has carried that gloss for several recycles;
+  `bin/cc-eligible:346` defines it as *"anything about THIS BOX — local-only state a VM cannot see"*,
+  i.e. a **venue** marker meaning local-only. It is the opposite of a blocker for a session already
+  on the box. (3) *"The cure is missing, so build it"* — refuted by method 3: `0009` and `0013`
+  already exist, and their own backlog rows `4ce34a4f703c` / `11da376d60e3` are **`done`**, closed on
+  the migrations being WRITTEN while both `migration-verify`s still exit 1. **STAGED ≠ APPLIED** is
+  method 55's eleventh face, and it is structural here, not an oversight: a `c10` migration is staged
+  and never executed by the converger (`scripts/deploy-migrations.sh:469-474` — *"a c10 migration that
+  EXECUTED would be the runner self-authorizing the C10 rescope"*), so its row closing on authorship
+  is the intended contract. Nothing about that lets the drift close itself.
+
 - **2026-08-22 — drain recycle #142: the row was TRUE when written, mostly cured by a sibling ten
   days later — and the last live half of it was the cure's own safety warning, which had been
   unreachable code since the day it shipped. filed 0 / closed 1 / landed 1 commit (CODE, not docs).
