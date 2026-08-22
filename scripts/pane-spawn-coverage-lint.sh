@@ -219,6 +219,70 @@ psc_context() {
   printf '%s\n' "$SCAN_SENTINEL"
 }
 
+# ── PYTHON DOCSTRINGS: THE COMMENT FORM THAT CARRIES NO `#` (backlog c6a47d8c3ccb) ──────────────
+# scan_file drops a leading-`#` line because a comment DESCRIBES a primitive rather than issuing
+# one — "without this the lint would flag its own documentation", as the selftest case says. That
+# argument is about PROSE, not about shell, and Python's `#` comments already inherit it. Python's
+# OTHER comment form does not: a docstring line opens with no `#`, so prose citing
+# `launch --type=os-window` inside one is read as a spawn site, and in a file that issues nothing
+# that is a TIER 1 BLOCK — a land refused because its diff DOCUMENTED a primitive. `.py` has been
+# in collect_files' -name set since this lint shipped, so the scan reaches those files; only the
+# skip rule never learned the language.
+#
+# FAILS TOWARD FLAGGING, AND THAT IS THE ENTIRE DESIGN. This is a MODEL of the file, and a wrong
+# model that deletes a real site is the uninstrumented spawner the ratchet exists to catch — the
+# one direction that costs something. So the model REFUSES rather than guesses, in three places,
+# and each refusal falls back to exactly today's behaviour:
+#   • a body mixing `"""` and `'''`  ⇒ no skips at all; one toggle cannot track two delimiters
+#   • a toggle still OPEN at EOF     ⇒ no skips at all; the quoting is not what this model thinks
+#   • an inline triple-quoted string ⇒ not prose unless the line OPENS with the delimiter, so
+#                                      `x = f("""…""")` is judged exactly as it is today
+# A false positive is the worst any of those can do, and a missed spawner is unreachable from here.
+# Pinned in --selftest in BOTH directions: the prose cases go green, and a real invocation sitting
+# in a file that also contains docstrings stays RED.
+#
+# Costs nothing on the common path — scan_file calls this only for a `.py` file that ALREADY has a
+# site match, which is 0 of the 36 `.py` files under bin/ scripts/ hooks/ commands/ today.
+#
+# Reads the body scan_file ALREADY read through psc_body's guarded retry, so this adds no predicate
+# that can die and no fourth could-not-run path; it is pure shell over a string in hand.
+psc_docstring_lines() {
+  local body="$1"
+  local line stripped d n rest nr=0 open=0 out=""
+  # One delimiter or none. Both present ⇒ refuse (see the header above).
+  case "$body" in
+    *'"""'*)
+      case "$body" in *"'''"*) return 0 ;; esac
+      d='"""' ;;
+    *"'''"*) d="'''" ;;
+    *) return 0 ;;
+  esac
+  while IFS= read -r line; do
+    nr=$((nr + 1))
+    n=0; rest="$line"
+    while :; do
+      case "$rest" in *"$d"*) n=$((n + 1)); rest="${rest#*"$d"}" ;; *) break ;; esac
+    done
+    if [ "$open" = 1 ]; then
+      # Interior of a docstring, including the line that closes it: prose either way.
+      out="$out$nr|"
+    else
+      stripped="${line#"${line%%[![:space:]]*}"}"
+      # Only a line that OPENS with the delimiter is a docstring. A triple-quoted string used
+      # mid-expression is left alone — that is the third refusal above.
+      case "$stripped" in
+        "$d"*|[rRbBuUfF]"$d"*|[rRbBuUfF][rRbBuUfF]"$d"*) out="$out$nr|" ;;
+      esac
+    fi
+    [ $((n % 2)) = 1 ] && open=$((1 - open))
+  done <<EOF
+$body
+EOF
+  # Unbalanced ⇒ the model did not resolve ⇒ skip nothing.
+  [ "$open" = 0 ] || return 0
+  [ -z "$out" ] || printf '|%s' "$out"
+}
+
 # THE EMIT DETECTOR. Every branch in scan_file that prints a finding increments exactly one of these
 # three, so their sum is unchanged across a file IFF that file emitted nothing. `checked` is
 # deliberately NOT in the sum: it counts SITES, and a file whose every site is covered increments it
@@ -286,7 +350,7 @@ collect_files() {
 }
 
 scan_file() {
-  local f="$1" rel line n ctx file_covered body sites
+  local f="$1" rel line n ctx file_covered body sites docprose
   rel="${f#"$ROOT"/}"
   body="$(psc_body "$f")"
   if [ "$body" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; return 0; fi
@@ -294,6 +358,10 @@ scan_file() {
   sites="$(psc_sites "$f")"
   if [ "$sites" = "$SCAN_SENTINEL" ]; then CHECK_FAILED=1; return 0; fi
   [ -n "$sites" ] || return 0
+  # Python's docstring prose — computed HERE, after the early return above, so a `.py` file with no
+  # site match never pays for it. `|n|` delimited so the per-line test is a `case`, never a pipe.
+  docprose=""
+  case "$f" in *.py) docprose="$(psc_docstring_lines "$body")" ;; esac
   # A heredoc, NOT `< <(grep …)`: the population is scanned once above so its failure can be seen,
   # and re-running the grep here would be a second, unguarded predicate.
   while IFS=: read -r n line; do
@@ -301,6 +369,11 @@ scan_file() {
       # Comment lines describe primitives; they do not issue them. Leading-# only, so an inline
       # trailing comment on a real launch still counts as the launch it is.
       case "$(printf '%s' "$line" | sed 's/^[[:space:]]*//')" in '#'*) continue ;; esac
+      # …and the same argument for the comment form that carries no `#`. A `case` and not a
+      # `printf | grep -qxF`: under the `set -o pipefail` above, grep -q SIGPIPEs its producer and
+      # the pipeline reads FALSE precisely WHEN IT MATCHES — the trap this file's own tier-2 notice
+      # case records having fallen into.
+      case "$docprose" in *"|$n|"*) continue ;; esac
       # `--type=background` runs a program with NO window — not a surface, so not a site.
       case "$line" in *--type=background*) continue ;; esac
       # `detach-window` is a primitive ONLY without a target tab.
@@ -397,7 +470,10 @@ if [ "$SELFTEST" = 1 ]; then
   _case "covered by an inline command -v guard is GREEN" 0 \
     'command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty 1 /tmp x
 kt launch --type=window --cwd=current'
-  _case "covered by python log_pane_spawn( is GREEN" 0 'log_pane_spawn("os-window","kitty","3","d")
+  # The `log_pane_spawn(` CALL FORM — named for the form, not for a language. _case writes
+  # `case.sh`, so this fixture is Python-SHAPED in a shell filename and proves nothing about how a
+  # `.py` file is scanned; the _pycase block below owns that axis (backlog c6a47d8c3ccb).
+  _case "covered by the log_pane_spawn( call form is GREEN" 0 'log_pane_spawn("os-window","kitty","3","d")
 kitty("detach-window", "--match", "id:3")'
   # RED — a per-file shim is NOT coverage. This is the extraction trap the header describes: it
   # LOOKS instrumented and is a `command not found` inside every sed-extracted unit test.
@@ -430,6 +506,77 @@ kt launch --type=window --cwd=current'
   # `--type=background` spawns no window, so it is not a site at all — in an UNinstrumented file,
   # which is the only condition under which a real site would block.
   _case "launch --type=background is not a site" 0 'kitty @ launch --type=background -- /bin/echo hi'
+
+  # ── THE LANGUAGE AXIS (backlog c6a47d8c3ccb) ────────────────────────────────────────────────────
+  # Every case above writes `case.sh`, so none of them says anything about a `.py` file — including
+  # the `log_pane_spawn(` one, whose fixture is Python-SHAPED but lands in a shell filename. `.py`
+  # is in collect_files' -name set, so these are real scan targets and need their own fixture.
+  _pycase() { # $1=name $2=expected-rc $3=file-body
+    total=$((total + 1))
+    rm -f "$T/scripts/case.sh"
+    printf '%s\n' "$3" > "$T/scripts/case.py"
+    ( CC_PSC_ALLOWLIST="" "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")" "$T" >/dev/null 2>&1 )
+    local got=$?
+    if [ "$got" = "$2" ]; then pass=$((pass + 1)); else echo "  selftest FAIL: $1 (want rc=$2, got rc=$got)" >&2; fi
+    # Restore the invariant the shell cases and the own-scope block below both rely on.
+    rm -f "$T/scripts/case.py"
+    printf ': nothing here\n' > "$T/scripts/case.sh"
+  }
+  # GREEN — the defect this closed: prose inside a multi-line docstring, in a file that issues
+  # nothing. Pre-fix this is rc 1, a tier-1 block on a file whose only sin is documenting kitty.
+  # shellcheck disable=SC2016  # authoring a Python DOCSTRING: the backticks are prose, not a command
+  _pycase "a primitive cited in a multi-line docstring is GREEN" 0 '"""Helper notes.
+
+The kitty primitive is `launch --type=os-window`, which creates a new OS window.
+We deliberately do not use it here.
+"""
+
+
+def main() -> None:
+    print("nothing spawned")'
+  # GREEN — the one-line docstring, the commonest shape of all.
+  # shellcheck disable=SC2016  # authoring a Python DOCSTRING: the backticks are prose, not a command
+  _pycase "a primitive cited in a one-line docstring is GREEN" 0 '"""Notes: the primitive is `launch --type=os-window`."""
+
+
+def main() -> None:
+    print("nothing spawned")'
+  # RED — THE CONTROL THAT MUST FAIL. A real invocation as a shell command string, in a file that
+  # ALSO carries a docstring, so the toggle is exercised and must not swallow the site below it.
+  # Without this case the two greens above are satisfied by a lint that simply stopped looking.
+  _pycase "a real invocation BELOW a docstring is still RED" 1 '"""Spawns a window."""
+
+import subprocess
+
+
+def main() -> None:
+    subprocess.run("kitty @ launch --type=os-window", shell=True, check=True)'
+  # RED — the mixed-delimiter refusal. `"""` and `'"'''"'` in one body means one toggle cannot track
+  # it, so NOTHING is skipped and the file is judged exactly as it is today. Deliberate, not a gap.
+  # shellcheck disable=SC2016  # authoring a Python DOCSTRING: the backticks are prose, not a command
+  _pycase "mixed triple-quote delimiters skip nothing (fails toward flagging)" 1 '"""Notes: `launch --type=os-window` creates a window."""
+
+X = '"'''"'other'"'''"'
+
+
+def main() -> None:
+    print("nothing spawned")'
+  # RED — the unbalanced refusal. A docstring the model never saw close means the model did not
+  # resolve, so it declines to act at all rather than guessing a region.
+  # shellcheck disable=SC2016  # authoring a Python DOCSTRING: the backticks are prose, not a command
+  _pycase "an unbalanced docstring skips nothing (fails toward flagging)" 1 '"""Notes: `launch --type=os-window` creates a window.
+
+
+def main() -> None:
+    print("nothing spawned")'
+  # RED — a triple-quoted string used MID-EXPRESSION is not a docstring opener, so the line is
+  # judged as the code it is. This is the third refusal, and it is the one that keeps the skip from
+  # being a general "any line near a quote" amnesty.
+  _pycase "an inline triple-quoted string is not a docstring opener" 1 'CMD = ("""kitty @ launch --type=os-window""")
+
+
+def main() -> None:
+    print(CMD)'
   # ── OWN-SCOPE, both directions. This is the clause that BOUNDS the gate, so an unverified one
   # would be a `gate_bounded:` marker asserting a budget nothing enforces.
   printf 'kt launch --type=window --cwd=current\n' > "$T/scripts/case.sh"
@@ -504,7 +651,7 @@ kt launch --type=window --cwd=current'
   _deadcase sed  "$REAL_SED"  "a dead CONTEXT READ must be a non-verdict, not an uncovered site"
 
   if [ "$pass" = "$total" ]; then
-    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; LOUD on an unreadable root and on a root with nothing to scan; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset; and each of the three per-file predicates (site scan, file read, context read) is RE-ASKED 3x and then condemns the run to exit 2 rather than degrading into a clean file or a fabricated violation."
+    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; in a .py file, GREEN on a primitive merely CITED in a one-line or multi-line docstring while a real invocation below one stays RED, and the three deliberate refusals (mixed delimiters, an unbalanced docstring, an inline triple-quoted string) each skip nothing and keep today's verdict; LOUD on an unreadable root and on a root with nothing to scan; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset; and each of the three per-file predicates (site scan, file read, context read) is RE-ASKED 3x and then condemns the run to exit 2 rather than degrading into a clean file or a fabricated violation."
     exit 0
   fi
   echo "pane-spawn-coverage-lint --selftest: $pass/$total FAILED — the detector does not discriminate." >&2
