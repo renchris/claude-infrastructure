@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-22 | `a1136cd016cb` | `reso-management-app` | label-foreign — **after 5 days of silence**; both remedies measured already-provisioned (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,122 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# SIXTH OCCURRENCE, five days later — `a1136cd016cb`, and both remedies are already provisioned
+
+*Written from inside that sixth VM. The class, its cause and its two candidate remedies are settled
+above and are **not** re-derived. One fact here is new and it changes what the open decision is
+waiting on.*
+
+**2026-08-22.** Backlog item `a1136cd016cb`, **project `reso-management-app`**, was dispatched to a
+`--venue cloud` session whose one attached repository is `renchris/claude-infrastructure`. Its brief
+names `/Users/chrisren/Development/reso-management-app` and its subject is that app's floor-plan
+components — *17/17 non-page components default-exported against the repo's named-export rule*, plus
+~10 exported-but-uncalled symbols (`marshalFloorPlanElement`, `parseFloorPlanConfig`,
+`isFloorPlanConfig`, `surroundPath`, `WristbandColorKey`). No such tree exists here, so the item was
+**unworkable on arrival** — the same label-foreign route as 08-14 / 08-16 / 08-17, on the project the
+08-17 rows already named.
+
+The only structural novelty is the **gap**: the previous row is 08-17 and this is 08-22. The class
+went five days without a recorded occurrence and then produced one anyway, which is what an unfixed
+cause looks like when dispatch volume, not the cause, sets the interval.
+
+## The new fact — the decision is waiting on a *choice*, not on a *design*
+
+The 08-16 doc frames the remedy as two shapes, **(a) fail closed** at the fire and **(b) route by
+`item.project`**, and says choosing between them "depends on facts unverifiable from any VM". That
+is still true of (b). It is **not** true of the implementation, for either shape: both are already
+fully provisioned in trunk, and the parts are simply never joined. Measured here, on `origin/main`
+(this VM is 0 behind):
+
+| shape | the knob | the value | why it does not fire |
+|---|---|---|---|
+| **(b) route by project** | `CC_OFFLOAD_REPO` — `bin/cc-offload:84`, exercised by `tests/cc-offload.bats:48` | `project_repo "$iproj"` — already computed at `bin/cc-dispatch:2228`, in the same function, for the rails decision | the cloud fire at `bin/cc-dispatch:2450-2455` builds `up_args` and execs `"$offload_bin"` **without exporting `CC_OFFLOAD_REPO`**. `$iproj` is unconditionally in scope there (set at `:2214-2215`, outside the `pfile` guard that `irepo` sits in). |
+| **(a) fail closed at the fire** | — | the item id itself | the fire already passes `--item "$id"` (`cc-dispatch:2450`) and `cc-offload` already parses it (`:390`) — but only to forward it onto the declaration (`:550`). `cc-offload` never resolves that id's `project` and never compares it to the origin of `$ROOT`. |
+
+Two consequences, and the second is the load-bearing one:
+
+1. **(a) needs no dispatcher change at all.** It is implementable entirely inside `bin/cc-offload`,
+   using information the fire already hands it. It therefore depends on **none** of the facts the
+   08-16 doc correctly says are unverifiable from a VM — no GitHub App installation question, no
+   "does `cc-offload land` work against the second repo". Those bear on (b) alone.
+2. So the open decision is no longer *"which shape, and can it be built?"* It is *"is refusing the
+   fire acceptable while the routing question is settled?"* — a one-bit call, and the cheaper half of
+   it has no unknowns left in front of it.
+
+This does not make the guard shippable from here; see § Not fixed here below, where the three
+standing refusals are re-confirmed unchanged.
+
+## The rails, re-measured — one differs again, in the loud direction
+
+The record above has `cc-backlog` resolvable-but-inert. On this VM the two rail binaries are **not on
+`PATH` at all** — `~/.claude/bin` does not exist — so a worker following the brief verbatim gets
+`command not found` (rc 127). Run from the checkout, where a worker will find them:
+
+```
+$ ./bin/cc-backlog block a1136cd016cb --needs "…"
+cc-backlog block: unknown id a1136cd016cb                             # rc 3   ← loud
+
+$ ./bin/cc-notify --role desk "…"
+cc-notify: verdict=unresolvable enqueued=0 uuid= reason=role-unset    # rc 0   ← SILENT
+```
+
+The 08-17 §4 correction holds and is now confirmed on a third VM: **`cc-notify` is the silent one.**
+The `block` call created an empty `~/.claude/autonomy/backlog.jsonl` as a side effect and wrote **no
+record**. **The ledger was not updated by this session and must not be reported as such.** This
+branch is the notification.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present |
+| `HEAD` vs `origin/main` | **0 behind** — fresh fetch succeeded; this VM *is* at `claude-infrastructure` trunk (`56b785a0`) |
+| `bin/cc-offload:84` on trunk | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged; still no guard, 5 days on** |
+| `/Users`, `~/Development`, any `reso-management-app` checkout | absent (`find / -maxdepth 6 -name reso-management-app` → 0 hits) |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| `cc-eligible check a1136cd016cb` (fixture) | `verdict=eligible` · `refused: (nothing fired)` · `history: no-repo — NOT CERTIFIED` |
+| `bats`, `shellcheck` | both **ABSENT** (`jq`, `python3` present) |
+
+The `cc-eligible` verdict is the **sixth** consecutive one and is still correct on its own terms: the
+work is repo-only, names no local-only state, cites no sha. Nothing here reopens the
+widen-the-denylist question that the 08-16 doc closed with a no — the gap remains the pair
+(`item.project`, `session.attached_repo`).
+
+## Operator actions
+
+The 08-16 §3 decision is unchanged and now carries a sixth datapoint of cost, plus the finding above
+that its (a) half has no unknowns left. Nothing new is proposed. The ledger disposition needs the
+Mac:
+
+```
+cc-backlog block a1136cd016cb --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SIXTH OCCURRENCE)"
+```
+
+`block`, not `reopen` and not `done`: the item is blocked on **where it was sent**, not on
+information or a judgment call, and parking it out of the wave is what stops a seventh fire into the
+same VM shape before the guard exists. `done` would be false — nothing about the floor-plan
+components changed.
+
+## The item itself — NOT adjudicated
+
+No claim is made about the floor-plan components, and none should be inferred. Whether all 17 are
+default-exported, whether the repo's named-export rule binds them, and whether those ~10 symbols are
+genuinely uncalled were never readable from this session — `/Users` and `/root/Development` are
+absent and the five named symbols return 0 hits over this checkout. The brief's own mandated first
+step — *read what the item cites on TRUNK, because a post-land RED reproduces faithfully in a stale
+tree* (`cc-backlog 6110fc45141e`) — is unrunnable here for the strongest reason available: there is
+no tree, stale or otherwise. Diagnosing it from the brief's prose is the anti-goal `bin/cc-venue` §5
+names.
+
+## Not fixed here, deliberately
+
+The three standing refusals hold verbatim and are not re-argued: `bin/cc-offload` fires paid cloud
+sessions and neither `bats` nor `shellcheck` is installed here, so the repo's gate cannot be run on a
+shell change; `bin/cc-eligible`'s `OFFBOX_LANE` states that a session this lane created cannot verify
+a change to the lane; and a 50-commit clone cannot adjudicate its own admission. The § above locates
+both remedies precisely so that whoever holds the decision can act in one edit — locating is the
+whole contribution, and landing an ungated guard into the fire path would trade a bounded waste for
+an unbounded one.
