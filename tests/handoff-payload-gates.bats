@@ -19,9 +19,15 @@
 #         fleet can stop firing while handoffs.jsonl shows only silence. "No fires logged" and "no
 #         fires attempted" were the same bits.
 #
-# SCOPE NOTE that is load-bearing: the pane-id gate is PAYLOAD-scoped, never corpus-scoped. The live
-# docs corpus carries 28 violations across 12+ files owned by other rows, so a corpus-scoped gate
-# would refuse every fire on the box over somebody else's file — a fleet-wide hard stop.
+# SCOPE NOTE that is load-bearing: the pane-id gate is PAYLOAD-scoped, never corpus-scoped. A
+# corpus-scoped gate would refuse every fire on the box over somebody else's file — a fleet-wide hard
+# stop. Re-measured 2026-08-21 (recycle #121): the figure this note used to carry, "28 violations
+# across 12+ files", is now 134 flagged lines across 17 directories — the argument is monotone in
+# that count, so the rot strengthens the scoping rather than dating it. Payload-scope is also
+# non-punitive in fact, not just in principle: all 20 surviving real fire payloads on this box PASS.
+#
+# M-11 PREVIEW (recycle #121): the gate takes a MODE. `--dry-run` previews it, so a dry run predicts
+# the refusal instead of going quiet about it; preview reports on stdout and returns 0.
 
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
@@ -178,6 +184,52 @@ setup() {
   # POSITIVE CONTROL: with the real resolver the same payload IS refused, so the admit above is the
   # degradation path and not a broken gate.
   run payload_pane_id_gate "$PF"
+  [ "$status" -eq 3 ]
+}
+
+# ── M-11 preview: --dry-run must PREDICT the refusal, not go quiet about it (recycle #121) ──────
+#
+# The mismatch these pin: handoff-fire has three fire paths and the pane-id gate was on ONE. The
+# dry-run branch previewed payload_lint_gate and nothing else, so `--dry-run` printed a clean readout
+# for a payload the real fire exits 3 on. A preview whose silence does not mean "would fire" is worse
+# than no preview, because it is consulted precisely to avoid the abort.
+
+@test "M-11 preview: a payload that WOULD be refused is reported, and the preview does not abort" {
+  printf 'ping the orchestrator pane 99261468 when done\n' > "$PF"
+  run payload_pane_id_gate "$PF" preview
+  # returns 0 — a preview reports, it never becomes the failure it is previewing
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WOULD REFUSE"* ]] || false
+  # it must name the OFFENDING TOKEN, not merely that something is wrong: the operator's next action
+  # is to edit that token out of the payload, and a verdict with no locus cannot be acted on.
+  [[ "$output" == *"99261468"* ]] || false
+}
+
+@test "M-11 preview: preview and enforce agree on the SAME payload — the verdicts cannot diverge" {
+  # The discriminator this suite exists for: preview is only worth having if it answers the same
+  # question the fire asks. Both arms are run over both a REFUSED and an ADMITTED payload, so a
+  # preview hard-wired to either verdict fails one of the two pairs.
+  printf 'pane 99261468\n' > "$PF"
+  run payload_pane_id_gate "$PF"; local enforce_bad="$status"
+  run payload_pane_id_gate "$PF" preview; local preview_bad="$output"
+  [ "$enforce_bad" -eq 3 ]
+  [[ "$preview_bad" == *"WOULD REFUSE"* ]] || false
+
+  printf 'fired by 71B42B48-1331-4F60-8DA3-6849F2682CA2 (historical fact)\n' > "$PF"
+  run payload_pane_id_gate "$PF"; local enforce_ok="$status"
+  run payload_pane_id_gate "$PF" preview; local preview_ok="$output"
+  [ "$enforce_ok" -eq 0 ]
+  # the CONTROL that can fail: on an admitted payload the preview must be SILENT about refusing
+  [[ "$preview_ok" != *"WOULD REFUSE"* ]] || false
+}
+
+@test "M-11 preview: an unrecognised mode is treated as ENFORCE, so a typo fails CLOSED" {
+  # mode is a bare string; the default and every non-'preview' value must reach the abort path.
+  # A gate that silently downgraded to advisory on a misspelled mode would be the F13 shape again.
+  printf 'pane 99261468\n' > "$PF"
+  run payload_pane_id_gate "$PF" preveiw
+  [ "$status" -eq 3 ]
+  run payload_pane_id_gate "$PF" ""
   [ "$status" -eq 3 ]
 }
 

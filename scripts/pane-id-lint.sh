@@ -44,6 +44,29 @@ SCAN="${1:-$ROOT/docs}"
 # is REJECTED and must never be reintroduced: `99261468` — the very truncation that motivated this
 # lint — is all digits, so that trade buys 4 fewer false positives at the cost of a false NEGATIVE
 # on a real one (tests/pane-id-lint.bats pins this).
+#
+# RE-MEASURED 2026-08-21 (recycle #121). It has rotted AGAIN, by ~23x on the axis that tempts the
+# rejected fix: 134 flagged lines / 155 token-occurrences, of which 122 occurrences (93 distinct
+# tokens) are PURE DECIMAL. Sampled, the pure-decimal class is byte offsets (11937875, 11939419),
+# spinlock tick counts (12583200), a one-year TTL constant (31536000), a GPU cache dir name
+# (16777235_530) and 8-hex git SHORT SHAS quoted in prose (66960552, 86556233) — the last being the
+# dominant and most reliably-recurring benign shape in this repo.
+# THE NUMBER IS RESTATED PRECISELY BECAUSE IT MAKES THE REJECTED FIX LOOK BETTER, AND IT MUST STILL
+# BE REJECTED. "Require a hex letter" would now clear 122 of 155 occurrences — a 79% noise cut, which
+# is exactly the trade a future reader will be tempted by. It is still wrong for the same reason it
+# was wrong at 4: `99261468` is pure decimal, so the rule deletes the motivating true positive. A
+# false negative here is a hard-failed succession (cc-notify exit 3, unmailboxable); a false positive
+# is one `pane-id-lint:allow` marker. The costs are not commensurable and the ratio never makes them
+# so — do not re-derive this trade from the noise count alone.
+# The three scrubs below were NOT widened to cover the new shapes: every decimal-shaped scrub is a
+# candidate false negative on the same all-digit class the motivating token lives in, and the live
+# harm being avoided is nil — all 20 surviving real fire payloads on this box PASS (recycle #121).
+#
+# CALL SITES (censused 2026-08-21 by NAME, not by path). Exactly one ENFORCING caller:
+# handoff-fire.sh payload_pane_id_gate, which hands this a private box holding one payload — never
+# the corpus. scripts/nightly-regression.sh runs it corpus-wide, but that job is dormant (its launchd
+# agent is not loaded; last regression.log entry 2026-07-26). So the corpus-wide exit 1 this script
+# returns today blocks nothing; read a whole-tree run as a REPORT, not as a gate verdict.
 # Instead: three NARROW numeric shapes that are provably not pane ids are scrubbed from a COPY of
 # the line, and the line is re-tested. Scrubbing a copy (rather than a line-level `grep -v`) keeps a
 # line that carries BOTH a benign number and a real pane id flagged.

@@ -4963,12 +4963,28 @@ capacity_gate() {
 # because a payload is what the next successor copies its addresses from.
 #
 # SCOPED TO THE PAYLOAD, DELIBERATELY. The lint can also scan the whole docs corpus, and doing that
-# here would be a fleet-wide hard stop: the live corpus currently carries 28 violations across 12+
-# files owned by other rows (V2 §2 M-19), so a corpus-scoped gate would refuse every fire on the box
-# over other authors' files. Block on what this fire OWNS; report the rest labelled.
+# here would be a fleet-wide hard stop: a corpus-scoped gate would refuse every fire on the box over
+# other authors' files (V2 §2 M-19). Block on what this fire OWNS; report the rest labelled.
+#
+# RE-MEASURED 2026-08-21 (recycle #121, backlog f6b460816387 — the row that asked for exactly this
+# scoping and was closed as already-cured HERE). The figure this comment used to carry — "28
+# violations across 12+ files" — had rotted by ~5x: the corpus now yields 134 flagged lines across 17
+# directories, and they are NOT confined to docs/research (41 are in docs/plans). The rot strengthens
+# the decision rather than weakening it, which is why the number is restated instead of dropped: the
+# argument for payload-scope is monotone in the corpus count, so a reader who re-measures and finds a
+# bigger number must not read it as evidence the comment is stale in its CONCLUSION.
+# The payload scope is also empirically non-punitive, which the count alone cannot show: all 20
+# surviving real fire payloads on this box PASS the gate. Authors are answerable for their own
+# payload and provably not for each other's docs.
 # CC_PANE_ID_GATE=0 disables (R8).
-payload_pane_id_gate() { # $1=prompt-file → 0 ok / 3 refuse
-  local pf="${1:-}" lint out d
+#
+# TWO MODES, because a dry run that cannot predict a refusal is not a preview of the fire. $2 is
+# 'enforce' (default — abort, return 3) or 'preview' (report on STDOUT, always return 0). The dry-run
+# caller must hand this the SAME artifact the enforce caller lints ($PROMPT_FILE, NOT
+# ${PROMPT_FILE_ORIG:-…} as payload_lint_gate's preview does) — otherwise the two arms judge two
+# different spans and the preview is faithfully reporting on a file the real fire never reads.
+payload_pane_id_gate() { # $1=prompt-file $2=mode(enforce|preview) → 0 ok / 3 refuse
+  local pf="${1:-}" mode="${2:-enforce}" lint out d
   [ "${CC_PANE_ID_GATE:-1}" != 0 ] || return 0
   [ -f "$pf" ] || return 0
   # Resolve the lint the same 3-path way the mailbox lib is resolved: script-relative FIRST (the
@@ -4985,6 +5001,14 @@ payload_pane_id_gate() { # $1=prompt-file → 0 ok / 3 refuse
   cp "$pf" "$box/payload.md" 2>/dev/null || { rm -rf "$box"; return 0; }
   if out="$("$lint" "$box" 2>&1)"; then rm -rf "$box"; return 0; fi
   rm -rf "$box"
+  if [ "$mode" = preview ]; then
+    # STDOUT, not stderr: this is a line of the dry-run READOUT, and it must not return 3 — a preview
+    # that aborted would make --dry-run a side-effect-free way to fail rather than to look.
+    echo "pane-id:  ⛔ WOULD REFUSE — the payload carries a truncated pane id; the real fire exits 3."
+    printf '%s\n' "$out" | sed 's/^/          /'
+    echo "          Fix before firing, or override with CC_PANE_ID_GATE=0."
+    return 0
+  fi
   { echo "!! handoff-fire ABORTED: the payload carries TRUNCATED pane id(s) — a landmine for the successor."
     printf '%s\n' "$out" | sed 's/^/!!   /'
     echo "!!   A truncated id is worse than a stale one: stale-full fails loud AND mailboxes; truncated"
@@ -9654,6 +9678,11 @@ if [ "$DRY" = 1 ]; then
     echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
     echo "registry:  provisional row if no P8 SessionStart row appears ≤${FIRE_REG_TIMEOUT:-30}s (P0-12)"
     [ -n "$AS_ROLE" ] && echo "role:      --as-role $AS_ROLE → $CC_ROLES_DIR/$AS_ROLE = <fired pane> (P0-15)"
+    # M-11 preview, in the SAME ORDER the real fire runs its gates (pane-id, then back-channel), so a
+    # dry run names the FIRST refusal a fire would hit rather than a later one. Argument is
+    # $PROMPT_FILE — deliberately NOT the ORIG used one line below — because that is exactly what the
+    # enforce arm lints; previewing a different span is how a preview comes to disagree with its fire.
+    payload_pane_id_gate "$PROMPT_FILE" preview
     payload_lint_gate "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" preview   # T-P2-5: preview the back-channel lint. ORIG keeps this the PRE-trailer payload — which the comment always claimed, but stopped being true for a dry run the moment the back-channel became the default (a dry run now makes a copy, because NOTIFY_BACK is set even when DRY=1).
   fi
   # Printed for a recycle too since 2026-08-15 — the recycle path now pre-trusts unconditionally
