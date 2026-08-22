@@ -87,7 +87,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
-- **2026-08-22 — drain recycle #136: #135 found a stored probe that FALSELY CLOSES a live row; this
+- **2026-08-22 — drain recycle #137: the row asked for a queue in front of the expensive phase; the
+  project BUILT that queue, MEASURED it, and DELETED it — a close carried by the system's own
+  refusal, not by a new measurement. filed 0 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  nineteenth consecutive clean reading.** Converge lag **13** at open (budget 25). Fold at open:
+  `master-convergence-deadlock` **35 open / 6 blocked**, exactly where #136 left it.
+
+  **THE ID-GREP IS NOW A CONFIRMED CHEAP NULL — THIRD RECYCLE, THIRD IDENTICAL ANSWER.** Over all
+  35 open rows it returned the same three cited rows as #135 and #136 — `b7252a3bb015` (5 hits),
+  `786ac458be00` (2), `6a82c9405b9e` (1) — with every mode already assigned. Keep running it (one
+  command, and a NEW citation would be real news), but #136's demotion of it is now measured rather
+  than predicted. **Method 78's family census chose the row for the third recycle running.**
+  Re-run over 30 family regexes against all 2,578 rows, ranked by `done/(done+open+blocked)`:
+  `postland_net_live/no-green` **14/15 with 0 open** (#136's close, visible in the ranking) ·
+  `ff-only refusal` **16/18** · `deploy-wedged` **4/5** · `payload-lint/fire gate` **4/5** ·
+  `land-lock` **12/14** · `verify_engagement/sleep-count` **2/3**. The `land-lock` family is new to
+  the board — #136's regex set did not carry it — and its two open rows are where the row came from.
+
+  **CLOSED — `e91937f897cc`** (filed 2026-07-26T06:09:21Z, open 27 days, `master-convergence-deadlock`).
+  *"ship-land gates BEFORE taking the land-lock, so N concurrent landers each run the full ~1400-test
+  suite in parallel and OOM/SIGTERM each other … The lock serializes only the push, which is the
+  cheap part. Consider gating under a shared slot/semaphore, or a concurrency cap, so the expensive
+  phase is serialized too."*
+
+  🚨 **SOUND AS FILED, AND THE DIAGNOSIS IS STILL TRUE TODAY — WHAT DIED IS THE PRESCRIPTION AND THE
+  CAUSAL MODEL UNDER IT.** This is #136's grading split applied a second time (method 2's sixth
+  axis), and it lands differently: #136's row had its mechanism deleted, this one's mechanism was
+  PROMOTED to a load-bearing invariant. Verified at `8edac699b61c`, the trunk sha 49 s before filing
+  (`git show <sha>:<path>` — method 28's cheapest form): `run_gate` at `:390` ran UNLOCKED ahead of
+  the `$LAND_LOCK` re-exec at `:660`/`:670`, exactly as claimed, and two further `run_gate` calls at
+  `:456`/`:523` ran the FULL corpus **inside** the lock. Then `492c51066`
+  (2026-07-28T19:37:30Z, *"v2 fast lane — corpus-free land, bounded direct-suite smoke"*) rewrote
+  the lane **61 hours after filing** — the same commit that cured #136's row. Four grounds:
+
+  1. **The mechanism is now the DESIGN, structurally enforced.** "Gate outside the lock" is no
+     longer an oversight to fix but the v2 invariant: *"NOTHING HEAVY MAY EVER ENTER THE LOCK, in
+     EITHER lane — the lock covers the race window (a 5-15s hold), never a proof"* (`ship-land.sh`
+     header `:65-69`), enforced at the only place that could start a suite — `run_gate` returns
+     `SMOKE_STATE="none-locked"` while `IN_LAND_LOCK=1` (`:1858-1864`), *"not a policy an author can
+     forget"*. The row's own observation that *"the lock serializes only the push, which is the cheap
+     part"* is now the stated goal, with `land-verify` measured at **0.485 s**.
+  2. **The magnitude driver in the row's cost model is deleted.** The row prices the harm at "the
+     full ~1400-test suite" per lander. v2 made the land corpus-free: the smoke is the
+     `gate-select.sh --direct` suites of THIS diff minus the host-manifest suites, one process per
+     suite, `nice`d, under **ONE TOTAL** wall budget `SHIP_LAND_SMOKE_BUDGET_S` (default 120 s,
+     `:1955-1958`), each child bounded by `timeout -k 10` against the shared deadline. Measured
+     across recycles #114–#136 a land selects **0–32** suites, not the v1 corpus of **126**.
+  3. **THE PRESCRIBED REMEDY WAS BUILT, MEASURED, AND DELETED — with its reason in the code.** v1's
+     `gate_admit` was precisely this row's ask: *"a bounded WAIT in front of the v1 gate's FULL
+     126-suite corpus (20-53 min)"*. `:1385-1386`: *"v2 (492c5106) deleted both the corpus and the
+     wait."* The replacement rule names the refusal on the row's own axis — R7 SHED = SKIP: *"at
+     1-min load ≥ CC_GATE_MAX_LOAD the smoke is SKIPPED ENTIRELY, never waited. **Waiting WAS the
+     amplifier; shedding defers to the net, never to a queue**"* (`:90-92`). The lock half carries
+     the same verdict with numbers: v1's in-lock corpus was *"the single worst thing this script ever
+     did"* — a **3h36m** lock holder and a multi-day jam, with **26.4 h** of accumulated lock-WAIT
+     buying **79 s** of actual work (`:70-75`). A machine-wide lander cap is genuinely NOT
+     implemented today (only a per-worktree in-flight guard, exit 11) — so this is a close by
+     **refusal on the merits**, not by "already done".
+  4. **The row's causal model is measured false.** It assumes the landers ARE the load that kills
+     them. `MACHINE_CAPACITY_V2` §8.5.7, quoted at `:1391-1397`, measured this box **SURVIVING
+     29.15–59.80 (2.92–5.98/core) across 13 samples at a constant 31–32 sessions** — ordinary heavy
+     operation, not distress — and killed the instrument outright: loadavg *"swung 2.05x in 100 s at
+     constant workload, the whole session fleet is only ~18% of process CPU, and a single iTerm2
+     process out-consumes it — so the signal is neither ATTRIBUTABLE to the gate nor SHEDDABLE by
+     skipping its smoke."*
+
+  **BOUNDARY KEPT — the signalled deaths are NOT closed by this.** The row's evidence (Killed:9 /
+  Terminated:15 / exit 143/144) is the SIGTERM-with-no-identified-sender phenomenon, and it is owned
+  by the still-OPEN `b7252a3bb015`, whose subject is a different consumer — **postland's** corpus
+  (`cc-bats`), not the land gate. #125 measured cut `run_s` median **2590 s (n=186)** against green
+  **2566 s (n=37)** — the same distribution — which refutes sibling contention as that row's cause
+  too. Closing this row narrows the concurrency framing; it names no culprit for the kills.
+
+  **Tests run THIS turn** (method 6 — the close cites only assertions that were executed):
+  `bats -f 'never the corpus|the wall BUDGET kills|the budget is a TOTAL|shed REGRESSION CONTROL|load >= ceiling|in-lock: the smoke short-circuits|in-lock POSITIVE CONTROL' tests/ship-land.bats`
+  ⇒ **plan `1..7`, ok=7, notok=0, skip=0, 21 s.** These pin all four grounds: `:959` *"runs ONLY the
+  --direct suites of this diff, never the corpus"* · `:1617`/`:1634` the wall budget as a TOTAL ·
+  `:1806` the survived-band regression control + `:1871` shed⇒skip · `:2665` no clone under the lock
+  with its unlocked positive control at `:2686`.
+
+  **WRONG CAUSES REJECTED (method 43), and two were about the instruments:**
+  (a) *"the row is cured, the gate now runs under the lock"* — **false, and backwards**: the gate
+  still runs unlocked and is now REQUIRED to. Grading it as cured would have inverted the finding.
+  (b) *"v2 shrank the suite, so the harm is zero"* — **overreach**: the smoke is bounded, not
+  serialized, so N landers can still overlap; the close rests on the refusal and the load
+  measurement, not on an absence-of-harm claim I did not measure.
+  (c) *"the Killed:9/143/144 evidence closes with the row"* — **no**: different subject, separately
+  owned, and #125's distributions already refute the contention story there.
+  (d) **instrument:** the family census's first `fam()` helper piped `grep -c` into `awk`, which
+  counts LINES not ROWS and silently yields a single number per family — caught by writing a second
+  helper and comparing; the `-c` variant was abandoned before any ranking was read.
+  (e) **instrument:** the test-filter control grepped `^@test "(<alternation>` and reported **3**
+  named tests where bats then planned **7**, because four of the seven cited names match
+  mid-string. The control did its job (non-zero ⇒ not a `1..0` typo) but under-counts by
+  construction; **the authoritative number is the plan line**, and 7 equals the seven tests cited.
+
+
   one is its exact mirror — a probe that FALSELY HOLDS OPEN a cured one, because it encodes the
   filer's prescribed EDIT instead of the defect. filed 0 / closed 1 / landed 1 commit.**
   Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
