@@ -900,8 +900,21 @@ resolve() {
 # resolves exactly as it always did: nothing about it can be convicted, and every role file written
 # before cc-roles existed is that shape, so treating it as absent would retire the main path.
 ROLE_STATE=""    # live | absent | unverified | legacy  (for the messages + the fallback leg)
+ROLE_UUID_OUT="" # the resolved target, ALSO returned out-of-band — see why immediately below.
+#
+# ── WHY THE TARGET COMES BACK IN A GLOBAL AND NOT JUST ON STDOUT (backlog c94cf98ab91f) ──────────
+# ROLE_STATE is set INSIDE this function, and the send path used to call it as `uuid="$(role_uuid
+# "$ROLE")"`. A command substitution is a SUBSHELL, so every assignment above died with it and the
+# parent read the empty initialiser forever: the unverified note below — the one thing that stops a
+# caller assuming a legacy pointer was checked — was unreachable code, and an UNVERIFIED role
+# delivered exactly as silently as a LIVE one. Measured on the pre-fix binary: `cc-roles list` said
+# UNVERIFIED while the send printed 0 warning lines. Callers that only want the target (the --list
+# arbitration, the desk-reroute leg) may still read stdout unchanged; a caller that needs the STATE
+# must invoke this WITHOUT a substitution and read ROLE_UUID_OUT (memory:
+# claimed-outcome-vs-checked-outcome — the enqueue succeeded, so nothing else could tell).
 role_uuid() { # <role-name> → current target (empty + rc 1 if the role is unset OR its claimant is dead)
   local r="$1" u="" rc=0
+  ROLE_UUID_OUT=""
   if [ -n "$ROLES_BIN" ]; then
     u="$("$ROLES_BIN" read "$r" 2>/dev/null)"; rc=$?
     case "$rc" in
@@ -910,23 +923,25 @@ role_uuid() { # <role-name> → current target (empty + rc 1 if the role is unse
       *) ROLE_STATE=absent; return 1 ;;
     esac
     [ -n "$u" ] || { ROLE_STATE=absent; return 1; }
-    printf '%s' "$u"; return 0
+    ROLE_UUID_OUT="$u"; printf '%s' "$u"; return 0
   fi
   ROLE_STATE=legacy
   [ -f "$ROLES_DIR/$r" ] || { ROLE_STATE=absent; return 1; }
   u="$(head -n1 "$ROLES_DIR/$r" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$u" ] || { ROLE_STATE=absent; return 1; }
-  printf '%s' "$u"
+  ROLE_UUID_OUT="$u"; printf '%s' "$u"
 }
 
 if [ -n "$ROLE" ]; then
-  if ! uuid="$(role_uuid "$ROLE")"; then
+  # NOT `uuid="$(role_uuid …)"` — that subshell is exactly what made ROLE_STATE unreadable here.
+  if ! role_uuid "$ROLE" >/dev/null; then
     verdict unresolvable reason=role-unset "target=--role $ROLE"
     echo "cc-notify: role '$ROLE' is not set — no live pane at $ROLES_DIR/$ROLE (missing, empty, or its claimant is dead)" >&2
     echo "  a role is pointed at a pane by cc-roles claim / handoff-fire (--as-role) / desk-register; check: cc-roles list" >&2
     phone_fallback "role-unset" "no live '$ROLE' — a page could not be addressed"
     exit 3
   fi
+  uuid="$ROLE_UUID_OUT"
   # An UNVERIFIED claim resolves — but nothing about it has been checked, and saying so is the only
   # thing that stops the next reader assuming it was. This is the shape of every role file written
   # before cc-roles existed, including the one on the operator's own box.
