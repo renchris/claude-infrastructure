@@ -254,17 +254,24 @@
 #   real read — so wherever this file sits inside the scanned root the extractor must find it. An
 #   anchor that exercised only one half could not tell a broken intersection from an empty tree.
 #
-#   TWO EXCLUSIONS, and BOTH were forced by measurement against a trunk that moved mid-flight —
-#   which is the strongest evidence this file's "derive the list at the LAST possible moment" rule
-#   has ever collected. Neither was in the design; both are in build_env_table() with their numbers:
-#     * a $HOME-ROOTED default is RULE 1's business (rule 5 makes the identical exclusion, in the
-#       same words). Rule 5's two-form test is also widened here to `${HOME` — three tools spell it
-#       that way and rule 5 misses every one.
+#   ONE EXCLUSION — and it was TWO until 2026-08-21, when the second was measured and deleted
+#   (backlog b2775a8bbc3a). What survives is in build_env_table() with its numbers:
 #     * a variable this repo also EXPORTS as a plain session setting is a CONFIGURED input, not
 #       leaked pane state. CC_PANE_CMD / _DIR / _INTERACTIVE are exported NOWHERE — they exist only
 #       as pane-launch arguments — while CLAUDE_CONFIG_DIR is exported by a launcher and is ambient
-#       in every session by design. Between them these took a first run against the new base from
-#       123 suites to 1.
+#       in every session by design.
+#
+#   THE DELETED ONE WAS "a $HOME-ROOTED default is RULE 1's business", and its removal is worth
+#   recording because of HOW it survived scrutiny for twelve days. The pair was credited JOINTLY —
+#   "between them these took a first run against the new base from 123 suites to 1" — so neither
+#   number attributed to either line, and the blanket drew its whole justification from a total its
+#   sibling had earned. A/B'd against this tree with only that line differing: it claims THREE
+#   suites, all for CC_PANE_CMD_DIR, and ZERO for CLAUDE_CONFIG_DIR, which the EXPORTED test above
+#   already removes unaided. Its entire remaining effect was to hide CC_PANE_CMD_DIR — injected at
+#   bin/it2-kitty:989 in the SAME `--env` block as CC_PANE_CMD_INTERACTIVE, i.e. the direct sibling
+#   of this rule's founding incident, missed only because its default happens to mention $HOME.
+#   A JOINT FIGURE IS NOT AN ATTRIBUTION: if two guards are justified by one number, at most one of
+#   them has been measured.
 #
 #   MEASURED AGAINST TRUNK, every figure read back out of THIS file's own extractor rather than out
 #   of the survey that proposed the rule — and the two DISAGREED, worth recording because the survey
@@ -935,20 +942,37 @@ build_env_table() {
           case " $props " in *" $v "*) ;; *) props="$props $v" ;; esac ;;
         \$\{*)
           rest="${tok#\$\{}"; v="${rest%%:-*}"; d="${rest#*:-}"; d="${d%\}}"
-          # A $HOME-ROOTED default is RULE 1's business and must never be claimed by rule 6 — rule
-          # 5's table build makes the identical exclusion, in the same words, and for the identical
-          # reason: double-reporting one breach under two rules teaches nobody anything and inflates
-          # two ratchets at once. MEASURED, not stylistic: `CLAUDE_CONFIG_DIR` defaults to
-          # `$HOME/.claude`, is read by 54 tools here, and gained an injection site on 2026-08-08
-          # (scripts/cloud-websetup-drive.sh drives a per-account web-setup). Without this line rule
-          # 6 claimed 123 of 324 suites on its first run against that trunk — the exact "fires on
-          # most of the tree" failure this rule's whole design exists to avoid, and a rule-1 question
-          # (is the $HOME fixture complete?) wearing rule 6's clothes. That gap is real and is filed
-          # SEPARATELY; it is not this rule's class and must not ride in on it silently.
-          # `${HOME` as well as `$HOME`: three tools here spell it `${CLAUDE_CONFIG_DIR:-${HOME:-}/…}`,
-          # and rule 5's two-form test would miss every one of them. Same reason `~/` is listed.
-          # shellcheck disable=SC2016  # the patterns match the LITERAL strings; expansion would break them
-          case "$d" in *'$HOME'*|*'${HOME'*|*'~/'*) continue ;; esac
+          # THERE IS NO $HOME-ROOTED EXCLUSION HERE, AND ITS REMOVAL IS THE WHOLE OF backlog
+          # b2775a8bbc3a (2026-08-21). One stood here, reading
+          # `case "$d" in *'$HOME'*|*'${HOME'*|*'~/'*) continue ;; esac`, on the argument that a
+          # $HOME-rooted default is RULE 1's business. That argument is FALSE for this rule's class,
+          # and the row that filed it says why: a $HOME-rooted default is only the FALLBACK, so an
+          # ambient value overrides it outright and rule 1's remedy — fixture $HOME in setup() —
+          # never touches it. It was not double-reporting a breach rule 1 catches; rule 1 never
+          # caught it. The line's own comment conceded exactly this ("That gap is real and is filed
+          # SEPARATELY") and then let the gap ride anyway.
+          #
+          # WHY IT LOOKED LOAD-BEARING AND WAS NOT — the header credited the two exclusions JOINTLY
+          # ("between them ... from 123 suites to 1"), so neither figure attributed, and the blanket
+          # inherited the pair's whole justification. Separated by A/B against this tree
+          # (2026-08-21, both arms the same lint, only this line differing): removing it claims
+          # THREE more suites, all for ONE variable — CC_PANE_CMD_DIR — and ZERO more for
+          # CLAUDE_CONFIG_DIR, because the EXPORTED test below already removes that one on its own.
+          # So the sibling exclusion was doing all the work the pair was credited with, and the
+          # blanket's entire remaining effect was to blind rule 6 to CC_PANE_CMD_DIR: injected by
+          # bin/it2-kitty:989, in the SAME `--env` block as CC_PANE_CMD_INTERACTIVE, which is rule
+          # 6's own founding variable (0588d255). The rule was blind to the sibling of the incident
+          # it was built for, and only because that sibling's default happens to mention $HOME.
+          #
+          # THE HARM WAS MEASURED BEFORE THIS CHANGED, behaviourally rather than by grep: each
+          # unpinned in-scope suite run twice, once with CC_PANE_CMD_DIR unset and once pointed at a
+          # fresh EMPTY canary dir, comparing verdict AND files created under the canary. 4 of 4
+          # clean (rc 0 throughout, no timeouts), so nothing is red today — this is prophylaxis, and
+          # it earns its place the way ship-land.sh:1696 argues: it costs no standing list. The
+          # probe was positive-controlled first, by deleting the pin from tests/it2-kitty-argv-
+          # spawn.bats in a scratch tree — pinned 21/21 both arms with an empty canary, unpinned
+          # 13-ok/8-not-ok vs 18-ok/3-not-ok WITH 2 files in the canary. An instrument that cannot
+          # fail cannot acquit, and every zero above would otherwise have been a shrug.
           cands="$cands$f	$v
 " ;;
       esac

@@ -34,7 +34,10 @@ setup() {
   # included when an agent runs this suite from the pane that fired it. Inheriting one makes the
   # suite go red exactly THERE and green everywhere else, which reads as a genuine trunk red.
   # `unset`, never the inherited-value allowlist: scripts/test-hermeticity-lint.sh says so verbatim.
-  unset CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
+  # CC_PANE_CMD_DIR is injected from the SAME `--env` block as the two below (bin/it2-kitty:989);
+  # it was missed here only because rule 6 excluded any seam whose default mentions $HOME — that
+  # exclusion is deleted as of 2026-08-21 (backlog b2775a8bbc3a).
+  unset CC_PANE_CMD_INTERACTIVE CC_PANE_CMD CC_PANE_CMD_DIR
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   KA="$REPO/bin/reso-keepalive"
   export CC_KEEPALIVE_LOG="$BATS_TEST_TMPDIR/keepalive.log"
