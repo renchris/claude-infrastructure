@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #122: a docstring is a comment, and the skip rule only knew one
+  comment form — then the census that proved the harm latent was run with the instrument under
+  suspicion. filed 1 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff-rc=0`, 0 diff
+  lines — the third consecutive clean reading**; the heredoc alarm stays over. Converge lag **5**
+  (budget 25, no ADDs in this land, so the commit budget genuinely applies) ⇒ ✅ not 🚀. Land lock
+  free at open. Fold at open: `master-convergence-deadlock` **45/4**, unchanged from #121's close.
+  **This close HOLDS it at 45/4 — one closed inside the group, one filed inside the group**, the
+  second consecutive window at that number and the third since #120 broke the six-window 46/4 freeze.
+
+  Target: the brief's recommended start — row `c6a47d8c3ccb`, *"pane-spawn-coverage-lint is blind to
+  Python docstrings, so prose citing a launch primitive reads as a spawn site."* **CLOSED BY FIX**
+  (`scripts/pane-spawn-coverage-lint.sh`). Unusually for this chain, the row was **right about its
+  mechanism and right about its cited evidence in kind** — only its line numbers had rotted (`:151`
+  → `:284` for the `-name '*.py'` inclusion, `:177` → `~:400` for the selftest case). What it did
+  not say is what the harm actually costs, and that took measuring.
+
+  **1. The caller census first (method 64), and it inverted the prior's lesson.** #121 found three
+  files asserting `pane-id-lint` has ZERO call sites while one of them wired it up eleven lines
+  below the sentence. Checking the analogous claim here went the other way: `scripts/ship-land.sh:2864`
+  wires this lint into the land gate, with `--selftest` as a hard precondition and `own_run` carrying
+  per-land scope. So a tier-1 finding here is **a land refusal, not a report** — the row's harm is
+  real in kind, and dismissing it as an unused lint would have been wrong.
+
+  **2. The mechanism, stated more precisely than the row states it.** `scan_file` already skips a
+  leading-`#` line, and its own selftest says why: *"prose describing a primitive is not one. Without
+  this the lint would flag its own documentation."* That argument is about PROSE, not about shell.
+  Python's `#` comments inherit it; Python's **other** comment form does not, because a docstring
+  line opens with no `#`. `.py` has been in `collect_files`' `-name` set since the lint shipped, so
+  the scan reaches those files — **only the skip rule never learned the language.** Proven with a
+  3-arm probe against the live lint: docstring prose in an uninstrumented `.py` **blocks (rc 1)**,
+  the same prose in a `#` comment passes, and a real invocation blocks. Arm E confirmed an
+  instrumented file degrades to a tier-2 NOTICE, as designed.
+
+  **3. THE FIX FAILS TOWARD FLAGGING, AND THAT IS THE WHOLE DESIGN.** `psc_docstring_lines` is a
+  *model* of the triple-quote region, and a wrong model that deletes a real site is the
+  uninstrumented spawner the ratchet exists to catch — the only direction that costs anything. So it
+  **refuses rather than guesses** in three places, each falling back to exactly today's verdict: a
+  body mixing `"""` and `'''` (one toggle cannot track two delimiters), a toggle still open at EOF,
+  and an inline triple-quoted string used mid-expression. It reads the body `psc_body` already
+  fetched through its guarded retry, so it adds **no predicate that can die and no fourth
+  could-not-run path**, and it runs only for a `.py` file that already has a site match — 0 of 36
+  today. The per-line test is a `case`, never `printf | grep -qxF`: under this file's own `pipefail`,
+  `grep -q` SIGPIPEs its producer and reads FALSE precisely when it MATCHES — the trap this file's
+  own tier-2 notice case records having fallen into.
+
+  **4. THE CENSUS THAT PROVED THE HARM LATENT WAS FIRST RUN WITH THE INSTRUMENT UNDER SUSPICION —
+  and fixing that is what produced the filing.** The first pass reported *"0 of 36 `.py` files match"*
+  and read as a clean absence. It was `PSC_SITE_RE` answering a question about `PSC_SITE_RE`. Re-run
+  with an **independent, whitespace-agnostic vocabulary needle**, positive-controlled on the `.sh`
+  population where it hits **67 of 303** files: only **3** `.py` files carry any spawn vocabulary and
+  **none issues a surface** — an allowlist NAME, a classifier regex, and `scripts/assignee-chain-state.py`
+  building `["kitty","@",…,"ls"]`, a query whose own docstring says *"opens no pane, closes nothing."*
+  Same conclusion, sound reason — **and the re-census is what exposed the next defect.**
+
+  **5. FILED `a54e2e838acc` (linked into the group): the site regex requires LITERAL WHITESPACE, so
+  the argv-LIST form is invisible — and that is the idiomatic Python form.** A shell array
+  `KARGS=(launch --type=os-window)` separates tokens with whitespace and IS caught (one of the 5 live
+  tier-2 notices). `subprocess.run(["kitty","@","launch","--type=os-window"])` separates them with
+  `", "` and matches nothing. **This is the expensive direction**: the docstring bug was a false
+  POSITIVE that refuses a land and names the file; this one is silent. Harm is latent (0 live
+  instances) but `assignee-chain-state.py` already builds kitty argv lists and is one token from it.
+
+  **Wrong causes rejected, with why (method 43).**
+  · *"0 of 36 `.py` files match ⇒ harm is empty"* — my own first census, produced by the suspect
+    instrument. Conclusion survived re-derivation; the REASON did not, and the reason is what found
+    the filing.
+  · *"a real Python invocation goes undetected"* — my v1 control PASSED and nearly read as a finding
+    about the lint. It was a defect in MY fixture: the regex needs literal whitespace and an argv-list
+    arm cannot match, so its pass was a non-verdict. Rebuilt as a shell-command-string arm, which
+    correctly went RED. The list-form gap is real, but **the v1 pass was not evidence for it** — it
+    became evidence only after being measured deliberately.
+  · *"widen `PSC_SITE_RE` to tolerate quotes and commas"* — the tempting one-line fix for #5.
+    Rejected: loosening the **detection** predicate is a different risk class from the skip rule, and
+    the header records the 5/23 false-positive rate that motivated the two-tier design. Filed with
+    the rejection stated rather than acted on (method 11).
+  · *"strip docstrings before scanning"* — a general strip is a model that can be wrong in the
+    false-negative direction. Rejected for the three explicit refusals above.
+  · *"treat the 4 non-bug-proving cases as red-proof"* — they pass pre-fix because the parent flags
+    everything. Reported as FORWARD GUARDS (#121's lesson), never counted as red-proof.
+
+  **Evidence.** Selftest **23 → 29** (an EXTEND — no new file, premise 2 respected; the language axis
+  needed `_pycase`, because every prior case writes `case.sh` and therefore says nothing about a
+  `.py` file — including the one NAMED *"covered by python log_pane_spawn("*, whose fixture is
+  Python-shaped in a shell filename; renamed to the call form it actually tests). 29/29 rc 0,
+  `shellcheck -S style` rc 0, `bash -n` rc 0, `self-path-lint --selftest` rc 0. Full real-tree run
+  **OK — 21 sites across 424 files, 5 tier-2 notices, 0 advisory**, shape unchanged.
+  `gate-select.sh --direct` reading #12: **a bare single suite path, no verdict sentence, rc 0** —
+  `tests/pane-spawn-memo.bats`, run in place **11/11 plan `1..11` 0 skips** and off-box under
+  `env -i LC_ALL=C` **green ok=11 notok=0 (22s, state column read, never the rc)**.
+  Red-proofed by SIMULTANEOUS A/B against pinned parent `7d7f739f5`, both arms through the same
+  runner from the same kind of scratch corpus so tree LOCATION is held fixed (#121's limit case):
+  negative control non-vacuous on BOTH halves — parent carries **0 of 3** cure needles and the prior
+  case name ×1, cured carries 2/4/8 — and **2 of the 6 new cases are BUG-PROVING (red at parent,
+  green at cure)**, the other 4 forward guards. The `_pycase` harness was itself positive-controlled
+  by an anchor-derived mutation in a scratch copy with pre- and post-conditions asserted: it went
+  **28/29 and named the case**, so 29/29 is a verdict rather than a silent pass.
+  Second commit: the tier-2 notice comment cited *"`set -o pipefail` (line 65)"* while `pipefail` is
+  set at line 112 — cite the construct, not the coordinate; a line number is the one part of a
+  comment that rots without anyone touching the sentence.
+
+  **THE STANDING LINT, FIFTEENTH FACE: A SKIP RULE AND THE LANGUAGES ITS CORPUS CONTAINS.** The
+  producer (`collect_files`) admitted `.py` from day one; the consumer (`scan_file`'s skip) was
+  written for shell and never told. Both halves are in one file, three functions apart, and neither
+  is wrong on its own — the defect lives in the space between the population one selects and the
+  assumptions the other makes about it. **Ask of any filter: what is in the set it runs over that it
+  was not written for?**
+
 - **2026-08-21 — drain recycle #121: the row asked for a scoping that was ALREADY LIVE at the only
   venue that enforces — and the real defect was that the gate doing it covers ONE of three fire
   paths. filed 1 / closed 1 / landed 1 commit.**
