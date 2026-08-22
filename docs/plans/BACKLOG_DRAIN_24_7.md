@@ -87,6 +87,144 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #131: a fix WIDENED a population and left its sibling rung resting on
+  the narrower one, so a premise that was true when written went silently false. filed 1 / closed 1 /
+  landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  thirteenth consecutive clean reading.** Converge lag **11** at open (budget 25; both landed paths
+  are `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **41 open / 6 blocked**, exactly where #130 left it.
+
+  **Worked the recommended start, `ad4743f9ee2c`, and — unusually for this list — its three-week-old
+  measurement re-derived EXACTLY, all four arms.** No line number rotted, no count drifted, the cited
+  synthetic delete of `vendor/codex-security/NOTICE.md` still printed
+  `FULL <- deleted:vendor/codex-security/NOTICE.md`, and the same delete under `docs/` still decided
+  inert. Method 70 run in the healthy direction cleared it: the row was filed 2026-07-31T23:22:08Z,
+  **four minutes after** its sibling fix `ed40b065a` landed (23:18:02Z), and the delete rung has not
+  been touched since `22fe687ee` (2026-07-30). A row filed minutes after the fix it is a sibling of
+  is a *deliberate* remainder, not a stale one — worth checking before assuming rot.
+
+  **THE SHAPE, AND IT IS THE TWENTY-FOURTH STANDING-LINT ENTRY: A FIX THAT WIDENS A POPULATION
+  FALSIFIES EVERY RULE WHOSE STATED PREMISE WAS TRUE ONLY OF THE OLD ONE — AND THE WIDENING FIX WILL
+  NOT MENTION THEM.** #130's entry was *a correction anchors what it touched and leaves what it did
+  not*, about two sibling rules in one file. This is its generator. The prose-removal rung states its
+  premise in its own words — ***"Prose has no ladder — only the literal ref above."*** That was TRUE
+  of the population `is_prose` names (README/CLAUDE, `docs/`). `ed40b065a` then widened the DOCUMENT
+  population past `is_prose` on purpose, for a reason it also wrote down — *"`is_prose` … is a
+  path-PREFIX allowlist, which only ever describes the trees that existed when it was written"* — and
+  revisited only the `unmapped` A/M/T rung four lines below. Nothing was edited into contradiction;
+  the older rung's sentence simply stopped being true. **When you widen a population, grep the file
+  for every sentence quantified over the old one.**
+
+  **The row's own prescribed fix is a FAIL-OPEN, and measuring it is what ruled it out (method 20 —
+  a prescribed remedy can be actively harmful).** The row proposed extending the prose rung to
+  markdown in trees `install.sh` does not glob, while flagging that this "reintroduces an allowlist".
+  The allowlist is not the problem — the *branch* is. Non-`docs/` markdown **has a ladder**:
+
+  | `vendor/codex-security/NOTICE.md` | selection | via |
+  |---|---|---|
+  | MODIFY (trunk, unchanged) | 3 suites | clause (d) `pkgdir` → `deploy-parity`, clause (e) `stem` ×2 |
+  | DELETE (trunk, the defect) | **FULL** | = **no direct-suite smoke, exonerate nothing** |
+  | DELETE via the row's prose fix | **0** | `prose_refs` is literal-only *by its own docstring* |
+  | DELETE after this fix | **3** | identical to its own MODIFY |
+
+  🚨 **That third row was BUILT AND RUN, not inferred** — my first draft reasoned it out from
+  `prose_refs`'s docstring, which would have been a claim about a verdict I had never asked for
+  (method 22). So the row's remedy was implemented verbatim as a mutant on trunk — anchor asserted
+  unique, mutation asserted gone-then-present — and measured: **0 suites**. And 0 is the *worse*
+  answer, not merely the equal one: `FULL` at least means "this selection is untrustworthy", whereas
+  an empty selection is the selector asserting **"provably inert"**, which the land lane believes.
+  The row's fix would have upgraded an admitted non-answer into a confident wrong one. **A remedy
+  that makes DELETE weaker than MODIFY of the same path is refuted by that fact alone**; it is one
+  mutant and it killed the row's own suggestion.
+
+  **The fix: a removed DOCUMENT runs the SAME clause ladder as a modified one** (`deleted_doc` falls
+  through, and the two guards that would have stopped it — the `A/M/T` status gate and
+  `absent-at-head`, which a removal satisfies *by construction* — are excepted). That is also what
+  preserves the wiring re-check the blanket rule was protecting, **without** the tree allowlist:
+  clause (f) still fires on a deleted `commands/*.md` or `skills/**/*.md`, since `INSTALL_RE` matches
+  them and `in_base` is true of a path present at the base. Measured after: vendor `0 → 3`
+  (= its modify), `agents/deep-research.md` `0 → 4` (= its modify), a `skills/**/SKILL.md` `0 → 4`,
+  `commands/ship.md` `0 → 113`. **`docs/` deletes are byte-for-byte unchanged** — the prose rung
+  still owns them, and both its tests are controls that stayed GREEN on both arms.
+
+  🚨 **NAMED IN THE CODE RATHER THAN LEFT FOR THE NEXT READER, because my first draft of the comment
+  claimed something my own measurement then refuted.** I wrote *"running the ladder keeps delete >=
+  modify"*, then saw `commands/ship.md` give **113 on delete vs 228 on modify** and had to go find
+  out why before shipping the sentence. Cause: `refs_of` keeps a harvested candidate only
+  `if cand in tset`, so **a path absent at HEAD is in no file's refs and therefore in no suite's
+  closure — clause (c) cannot fire for a removed path, structurally, not by choice.** That is the
+  entire 115-suite gap. It is the loosest clause in the ladder by this file's own account (a MENTION
+  graph, not a dependency graph), recovering it would change the closure for *every* file, and the
+  rung still takes the selection from **zero** to 113. The lesson is the near-miss: **a rationale
+  comment is an assertion, and it must be measured like one — I nearly shipped a stated premise that
+  this file's own behaviour contradicts, which is exactly the defect this recycle was fixing.**
+
+  **Split the row's second finding out (method 62) and the measurement REFUTED its implied remedy —
+  then found the population was bigger than the row said.** Filed **`7e8d59bbb848`** into the same
+  condition. The row said only *"`agents/` is absent from `INSTALL_RE` even though install.sh now
+  globs it"*. Measured on trunk `5ba77d093`:
+  - Adding `agents/` to `INSTALL_RE` **would not fire on the failing case at all** — clause (f) is
+    gated on `in_base(path)`, so it covers only a PRE-EXISTING member, and the failing case is an
+    **ADD**. `install.sh:281` says so in its own words: *"a brand-new tracked file is not linked at
+    all, however current the checkout."*
+  - And **even where it fires it buys zero coverage**: `INSTALL_SUITE` is
+    `tests/install-wire-hooks.bats`, which has **0 mentions of `agents/`** across its 7 tests. The
+    suites that can actually see an unlinked agent are `deploy-link-parity.bats:442` and
+    `deploy-parity.bats:708,1087` — a **parity** suite, not the install-wire suite (method 71: the
+    prescribed detector detects nothing; method 20 again).
+  - **The population is wider than `agents/`.** An ADD of `commands/zz-new.md` is **also INERT(0)**,
+    which the row never named. Controls held: `vendor/` and `docs/` ADDs are correctly inert, and a
+    `scripts/*.sh` ADD still answers FULL.
+  - **It is a REGRESSION, not an ancient gap.** Before the `is_document ⇒ inert` widening, an
+    unmapped `agents/*.md` ADD answered FULL via the `unmapped` rung. The widening's own verification
+    note reads *"the one naming `agents/` builds a fixture tree"* — i.e. it asked whether a **suite**
+    maps the path, a question structurally unable to answer an install-**wiring** one, and which can
+    never be true of a path that does not yet exist. **The inertness proof has a hole exactly the
+    size of the question it did not ask.** Same generator as the headline defect, one rung over.
+
+  **Bootstrap hazard, named before starting and then honoured**: `gate-select.sh` is ON the land path,
+  so this diff selects the suites that gate its own commit. Every arm ran in a `git archive` scratch
+  tree with the subject supplied by `git show HEAD:` — never by editing in place and landing hopefully.
+
+  **Wrong causes rejected (method 43 — five, and THREE were about my own instruments, the tenth
+  consecutive recycle where that held):** (1) *"the row is stale like every other row"* — refuted by
+  dating it against the file's own history; it re-derived exactly. (2) *"widen `is_prose`"*, the row's
+  own prescription — refuted by the delete-vs-modify table above. (3) *"the 113-vs-228 gap is a bug in
+  my fix"* — refuted by reading `refs_of`; it is `tset` filtering, structural. (4) *"add `agents/` to
+  `INSTALL_RE` and move on"* — refuted twice over (`in_base` gating, and a suite with no agents
+  assertions). (5) *"`skills/` is fine because its ADD selects 3 suites"* — refuted by reading the
+  explain line: the hit is clause (e) matching the literal word `SKILL`, an accident, not a wiring
+  clause.
+
+  **Evidence.** Red-proof by grafting the NEW tests onto HEAD's subject (method 29's strongest form):
+  **3/3 FAIL pre-fix, 3/3 pass post-fix**, with the 4 controls — code delete ⇒ FULL, both prose-delete
+  rungs, and the doc-outside-`docs/` **MODIFY** ladder — **GREEN on BOTH arms**, so the fix bought no
+  green by regressing what it sits beside. Precondition asserted: the parent carries the prior shape
+  **exactly once, comment-stripped**. Every `bats -f` filter asserted `1..1` (a typo yields `1..0`,
+  which reads like a clean run). Each new test pins ONE clause the prose branch cannot reach —
+  naming (b), install-glob (f), and the inert proof — so a future "simplification" back to `is_prose`
+  FAILS rather than passes. Owed suites (`--direct`, a **bare list of 3 paths, rc 0, no verdict
+  sentence** — the eleventh such reading) run in full, plus **three contract CONSUMERS the selector
+  cannot name** (`gate-manifest`, `gate-ownscope-leak`, `land-gate-cas` — gate-select's output is
+  consumed by the land gate) — **272 assertions, 0 not-ok, 0 skips, every plan line equal to
+  `ok+notok`**:
+
+  | suite | why | plan | ok | notok | skip | secs |
+  |---|---|---|---|---|---|---|
+  | `tests/gate-select.bats` | owed (direct) — the subject | `1..40` | 40 | 0 | 0 | 22 |
+  | `tests/self-path-lint.bats` | owed (direct) | `1..18` | 18 | 0 | 0 | 8 |
+  | `tests/ship-land.bats` | owed (direct) — consumes `FULL`/`direct` | `1..145` | 145 | 0 | 0 | 292 |
+  | `tests/gate-manifest.bats` | consumer, unnamed by the selector | `1..33` | 33 | 0 | 0 | 5 |
+  | `tests/gate-ownscope-leak.bats` | consumer, unnamed by the selector | `1..21` | 21 | 0 | 0 | 7 |
+  | `tests/land-gate-cas.bats` | consumer, unnamed by the selector | `1..15` | 15 | 0 | 0 | 68 |
+
+  `--selftest` 9/9 · `shellcheck -S style` ·
+  `bats-shellcheck-lint` · `bats-kill-guard-lint` clean · `bats-assert-liveness` silent,
+  positive-controlled **36/36** · `self-path-lint --selftest` 32/32 · `test-hermeticity-lint tests`
+  clean (**527 suites, 0 new leaks**) · off-box **green** on the changed suite (STATE column, never
+  the rc).
+
 - **2026-08-22 — drain recycle #130: a correction anchored the NEW rule and left the OLD one matching
   prose, so the very case the correction exists to refuse walked back in through the rule it did not
   touch. filed 0 / closed 1 / landed 2 commits.**
