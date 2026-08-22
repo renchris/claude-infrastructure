@@ -87,6 +87,85 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #146: `lastTs` moved three days after the cure landed, and what moved
+  it was a machine re-certifying WHERE the row could run. filed 0 / closed 1 / landed 1 commit
+  (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (ninth consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-eighth
+  consecutive clean reading.** Converge lag **6** at open (budget 25).
+  Board at open: **open 250 / blocked 182 / done 2136 / claimed 4, of 2572** — an exact match for
+  #145's close. Retire-in-one **42**. At close: **open 249 / done 2137**, total **2572 unchanged**,
+  retire-in-one **42**. Per-row diff (method 80, from an id-list snapshotted at open): exactly **one**
+  id left `open` — `44750ff72ae7`, mine → `done` — and **zero** entered. So this window the aggregate
+  happens to tell the truth, which is knowable only *because* it was diffed; #144 measured it
+  over-crediting by two and #145 under-crediting to zero.
+  🚨 **NINTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, a tenth consecutive window. The
+  row is `ungrouped`, so it retires **no** condition either — both counts were named in advance.
+
+  **THE INTERSECTION #145 RECOMMENDED WAS DRAINED, AND THE WIDENED ID-GREP IS WHAT PAID.** Method 79
+  (retire-in-one, 42 conditions) ∩ method 77 (cited in code, 20 of 432 open+blocked ids) yielded
+  exactly **one** row — `f495d5374c01`, which #145 had already read and declined as a launchd
+  umbrella. That is a real result, not a failure: the fold's cheap seam can be *empty*, and finding
+  it empty in two commands is why it goes first. The row came from the **plain id-grep** instead —
+  and specifically from #145's widening of it to `open` **AND** `blocked`, which is what put
+  `44750ff72ae7` in a 20-row list at all. It appears in **no** lead list in any prior brief.
+
+  **CLOSED — `44750ff72ae7`** (`validate-bash`'s `git add -f` denylist convicts an innocent
+  `git add f.txt`). Four citations, one of them `tests/git-add-force-argv.bats` — a suite whose NAME
+  is the row's own prescription ("match the ARGUMENT position … not the substring"). Cure:
+  **`fd467813a`** (2026-08-18T03:25:24Z), which added `hooks/lib/is-true-flag.sh :: git_add_force_scan`
+  and shipped a 297-line, 13-test suite. Adjudicated behaviourally against **two** artifacts:
+  · the suite, run this session — **1..13 ok=13 notok=0 skip=0**, plan matched, ~17.6 s. Test 2 IS the
+    control the row asks for **by name**; test 12 is a RED control that convicts the shipped pre-fix
+    hook recovered from git, pinning both directions exactly at **missed 8/14** and **false-deny 4/8**.
+  · an INDEPENDENT arm the suite does not run — the **LIVE DEPLOYED** hook, `~/.claude/hooks/`, which
+    is what actually gates every session's Bash call. Both corpora, hermetic `$HOME`:
+    **live = 0/14 missed, 0/8 false-denied; pre-fix control = 8/14, 4/8** — the control reproducing
+    the suite's pinned numbers independently is what makes the live green non-vacuous. The row's own
+    reported symptom, `rm -f f.txt && echo x > f.txt && git add f.txt`, sits in the control's
+    false-deny list and is ALLOWED live. Running, not merely landed: both hook files are symlinks
+    into the checkout and their live bytes carry `git_add_force_scan`.
+  Not closed on the vanished precondition (method 21): "the throwaway fixture repo is long gone and
+  the symptom does not recur" was true, available, and refused.
+
+  🚨 **THE FINDING — ASK WHAT MOVED A ROW'S `lastTs`, NOT ONLY THAT IT MOVED.** `firstTs`
+  2026-08-17T07:32:59Z · cure landed ~20 h later · **`lastTs` 2026-08-21T10:59:51Z, three days AFTER
+  the cure**. A row touched in place *after* its own fix shipped reads exactly like a human who
+  re-checked it and found it still live. It was not one. `by` is **`cc-backlog-reap`**; the `needs`
+  it wrote is about a worktree-occupancy oracle that could not resolve past a 21600 s dispatch
+  ceiling; and the `venueWhy` it stamped reads *"eligible: no local-only spelling fired; every cited
+  sha is inside the newest 50 commits of origin/main …; premise clear"*. Per `cc-eligible`'s own
+  `unreachable()` docstring that clause certifies **REACHABILITY** — whether a cloud clone could SEE
+  the shas a row cites — and **this row cites no sha at all**, so it is satisfied over an empty set.
+  This is #143's correction pointed at a new surface: `venueWhy` answers **where**, never **whether**,
+  and the same is now true of the *timestamp* the venue machinery leaves behind. #145 taught that the
+  `firstTs`/`lastTs` pair tells you a row was rewritten; the missing half is that an automated
+  re-certification is indistinguishable from a re-adjudication unless you read `by`.
+
+  **THE CROSS-`project` SWEEP RAN — first time, after five recycles named it — and its verdict is a
+  method, not a list.** A naive name-keyed sweep is **not discriminating**, because the two boards
+  share tool names: reso has its own `scripts/hooks/pre-commit` and a TypeScript `postland-verify`
+  test, so `b384effb4100` and `92f66bf9600a` are correctly filed and a sweep that convicted on the
+  name alone would have moved both. The signal only convicts where **the named path exists in exactly
+  one repo**. By that test: **`scripts/ship-land.sh` exists ONLY in claude-infrastructure**, so
+  **`a7f7802473e2`** (ship-land misreports a pre-push HOOK REJECTION as "CAS rounds exhausted") and
+  **`38bddf30180c`** (ship-land's rebase-failure detector may misfire) are claude-infrastructure work
+  sitting on **reso's** board — structurally invisible to this drain's fold, which is why nobody has
+  worked them. `cc-backlog` has no relabel verb, so they are handed forward as **rows to work**, not
+  as a filing to fix. Same shape as `e077cce6c49b`, which #143 closed.
+
+  **WRONG CAUSES REJECTED.** (1) *A duplicate of `c3568d7982af`* — refuted: that row is the `rm -rf`
+  half of the same denylist class (memory `denylist-enumerates-spellings-not-the-class`), cured by a
+  different commit, and is already `done`. Same class, different guard. (2) *The cure was the row's
+  prescription taken literally* — refuted, and this is the interesting one: `hooks/validate-bash.sh:705`
+  records that the fix went **further** than the prescription on purpose ("the equivalence class is
+  not enumerable by regex, so it is not enumerated"), tokenizing and reading the flag off the
+  invocation's own argv — which is what catches `git stage -f`, `--forc` and `git -C /tmp/x add -f`,
+  **three spellings the prescription as written would still have missed**. A prescription can be
+  correct and still be weaker than the cure it asks for. (3) *`lastTs` after the cure meant someone
+  re-checked* — refuted above.
+
 - **2026-08-22 — drain recycle #145: the row was filed 35 hours after its own cure landed. filed 0 /
   closed 1 / landed 1 commit (DOCS).**
   Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
