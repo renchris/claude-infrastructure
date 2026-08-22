@@ -533,7 +533,13 @@ EOF
   # composed tree's only novelty. v2 narrows the surface: the plain (non---direct) selector call
   # and the `lint` call are both GONE, so --direct is where this has to hold.
   grep '^--direct' "$BATS_TEST_TMPDIR/sel-argv" > "$BATS_TEST_TMPDIR/direct-only"
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/direct-only" | tr -d ' ')" = "2" ]                    # two rounds
+  # THREE calls, not two, and the third is not a second selection — it is the ATTRIBUTION call
+  # (backlog fb178d6d8d14). A re-round asks the selector twice: once with our range alone, to learn
+  # which of the suites it is about to run this diff actually maps to, and once with the union, to
+  # learn which to RUN. Round 1 has no union and asks once. The own-range call is deliberately made
+  # FIRST so `tail -1` below still reads the union call; head/tail are what this test asserts on, so
+  # only the count moved.
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/direct-only" | tr -d ' ')" = "3" ]                    # r1 + r2 own + r2 union
   [ "$(head -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "1" ]  # r1: 1 range
   [ "$(tail -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
   fb="$(sed -E 's/^--direct //; s/\.\..*//' < "$BATS_TEST_TMPDIR/direct-only" | head -1)"  # r1's base
@@ -542,6 +548,108 @@ EOF
   # …and the selector's OTHER two entry points are never called at all in the fast lane: the plain
   # selection decided the corpus tier (deleted) and `lint` gated a degrade-to-FULL (deleted).
   [ "$(grep -cv '^--direct' "$BATS_TEST_TMPDIR/sel-argv")" -eq 0 ]
+}
+
+# ── UNION SCOPE HAS TWO POPULATIONS, AND THE JUDGMENTS BELONG TO ONE OF THEM (fb178d6d8d14) ──────
+# The re-round's suite list is {this diff's suites} ∪ {the sibling delta's}, because the composed
+# tree is what gets pushed. Running both is correct and none of these tests question it. What they
+# pin is that the two things which then JUDGE a failure — run_scoped_suite's carve-out
+# ("intermittence in code you are landing is a FINDING, not a flake") and exit 6's sentence ("a
+# VERDICT about your diff … fix it, do not retry unchanged") — are clauses whose truth holds over
+# the OWN-range half alone. Measured instance, landing 75df8db2c884: round 2 selected 13 suites
+# including one with zero references to either changed file, the lander was told to go fix it, and
+# that same failure was already an open item the post-land verifier had filed against the sibling.
+#
+# THE ROW'S OWN PRESCRIPTION IS REFUSED AND THESE TESTS ENCODE THE REFUSAL: it asked that the
+# selection be asserted a SUBSET of gate-select over the attested base..head, "a suite outside that
+# set must never be able to set the exit code". That deletes union scope, i.e. the only coverage of
+# the composed tree's sole novelty. The defect was attribution, never selection.
+
+union_fixture() {   # smoke_fixture + a SECOND suite on trunk + an ARITY-KEYED selector
+  # The real selector takes N ranges and unions them, so `--direct <range>` and `--direct <range>
+  # <extra>` are one program answering two questions; arity is the only thing that tells them apart
+  # on the wire. b.bats is reachable ONLY from the union answer, which is what makes it the sibling
+  # delta's suite for the purposes of every assertion below.
+  smoke_fixture
+  printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
+  git add tests/b.bats && git commit -q -m "seed suite b" && git push -q origin HEAD:main
+  git fetch -q origin main
+  cat > "$SEL" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
+case "\$1" in lint) exit 0 ;; esac
+if [ "\$1" = "--direct" ] && [ -n "\${3:-}" ]; then printf 'tests/a.bats\ntests/b.bats\n'; else echo tests/a.bats; fi
+EOF
+  chmod +x "$SEL"
+}
+
+union_bats() {  # $1 = a case-arm body keyed on the suite path, spliced into the shim
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/bats-argv"
+T="$BATS_TEST_TMPDIR"
+for a in "\$@"; do
+  case "\$a" in
+$1
+  esac
+done
+echo "1..1"; echo "ok 1 fine"; exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+}
+
+@test "union: the carve-out is keyed on the OWN range — a pass-on-retry in a SIBLING-delta suite is a flake" {
+  union_fixture
+  # b names a failure on its first run and passes the exoneration re-run: a FLAKE by the repo's own
+  # definition. It is not code this land is shipping, so it must not be convicted as intermittence.
+  union_bats '    tests/b.bats) if [ ! -f "$T/b-seen" ]; then : > "$T/b-seen"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi ;;'
+  echo 1 > "$MOVER_ARMED"
+  our_branch feat/union-flake union-flake.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                              # …and the land PROCEEDS
+  echo "$output" | grep -q "STALE GATE"                            # the union really did fire
+  echo "$output" | grep -q "EXONERATED"
+  [ "$(echo "$output" | grep -c "finding, not a flake")" -eq 0 ]
+  [ -f "$POSTLAND_DIR/flakes.jsonl" ]                              # counted, never hidden
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- union-flake.sh)" ]
+}
+
+@test "union: a smoke RED entirely from the SIBLING delta is not a verdict about your diff" {
+  union_fixture
+  union_bats '    tests/b.bats) echo "1..1"; echo "not ok 1 boom"; exit 1 ;;'
+  echo 1 > "$MOVER_ARMED"
+  our_branch feat/union-red union-red.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                              # fail-closed: the tree IS red…
+  echo "$output" | grep -q "NONE of them map to your diff"         # …but the claim is truthful
+  echo "$output" | grep -q "UNION SCOPE"
+  [ "$(echo "$output" | grep -c "VERDICT about your diff")" -eq 0 ]
+  grep -q '"red":"smoke-sibling:tests/b.bats"' "$LAND_LOG"         # attested as the OTHER population
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- union-red.sh)" ]
+}
+
+@test "union: one OWN suite red among sibling reds keeps the verdict wording, and BOTH arms attest" {
+  # THE BOUNDARY, and it must be able to fail on its own: a build that merely renamed the arm, or
+  # dropped the sentence outright, passes the test above and reds here.
+  union_fixture
+  # a is green on round 1 (so the CAS re-round is reached at all) and red on round 2 — the shape a
+  # real own-suite regression has when a sibling lands mid-gate.
+  union_bats '    tests/b.bats) echo "1..1"; echo "not ok 1 boom"; exit 1 ;;
+    tests/a.bats) if [ -f "$T/a-seen" ]; then echo "1..1"; echo "not ok 1 boom"; exit 1; fi
+                  : > "$T/a-seen" ;;'
+  echo 1 > "$MOVER_ARMED"
+  our_branch feat/union-mixed union-mixed.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "VERDICT about your diff"
+  echo "$output" | grep -q "1 mapped to YOUR diff"
+  grep -q '"red":"[^"]*smoke:tests/a.bats' "$LAND_LOG"
+  grep -q '"red":"[^"]*smoke-sibling:tests/b.bats' "$LAND_LOG"
 }
 
 @test "P0 exit 42 attests: the stale re-round is a ROW, marked non-terminal, and lands once" {

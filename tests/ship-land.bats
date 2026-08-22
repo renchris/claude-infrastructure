@@ -1122,6 +1122,11 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   # to the runner AS the direct set, so the carve-out covers every suite it runs. The consequence
   # is that flake-exoneration cannot fire in the fast lane at ALL for a named failure — its
   # surviving home is the LANE=v1 corpus, where NON-direct suites exist (twin in that section).
+  # THE POPULATION OF THAT CLAUSE IS "no union scope", which is this fixture and ~70% of lands
+  # (backlog fb178d6d8d14). On a stale-gate re-round the run-list is the OWN list plus the sibling
+  # delta's suites, and the carve-out is then keyed on the own half alone — a suite that only the
+  # union selected is not "code you are landing", so a pass-on-retry there IS a flake. The union
+  # section further down pins that half; this one pins that nothing changed without a union.
   # The `--direct` list here names ONLY a.bats while the selector's plain list names b.bats, so a
   # build that passed the plain list as the direct set would exonerate a.bats and land green.
   scope_fixture
