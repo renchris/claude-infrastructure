@@ -87,6 +87,26 @@ hookrun() { # $1=cwd → run hook mode with stdin JSON; stdout in $output
   printf '{"session_id":"t-%s","cwd":"%s"}' "$BATS_TEST_NUMBER" "${1:-}" | "$HOOK"
 }
 
+# ── EXPECT A PATH THE WAY THE RENDERER PRINTS IT, NOT THE WAY THE FIXTURE SPELLS IT ───────────────
+# The deploy platter prints through the hook's own `tildify` (hooks/operator-readout.sh:255 —
+# `${1/#$HOME/~}`), so an assertion naming an ABSOLUTE fixture path is only correct while the
+# fixture happens to live OUTSIDE $HOME. At this desk it does — $TMPDIR is /var/folders/… — so five
+# deploy-platter assertions read as sound for as long as anyone ran them here. Under
+# scripts/offbox-run.sh (and any harness handing a suite a fresh HOME with TMPDIR inside it)
+# BATS_TEST_TMPDIR IS under $HOME, the platter renders `~/tmp/bats-run-…/present-deploy.sh`, and the
+# four POSITIVE ones went red for the RENDERING rather than the routing they exist to test.
+#
+# 🚨 The fifth was worse and was NOT red: the `! grep -qF "▶ bash $live"` control at the held-lane
+# case passed off-box *because nothing could ever match it* — a neutered assertion, not an absent
+# one, and the only arm stopping "refusing lanes are held" from being satisfied by holding every
+# lane. Routing it through here is what makes it able to fail again.
+#
+# Mirrored rather than extracted: the transform is one parameter expansion, and the suite already
+# pins it END-TO-END in "deploy platter: the SEAM's default is the live ~/.claude/scripts copy",
+# which asserts the rendered `~/.claude/…` form directly. That case is the contract; this is only
+# how the fixture-path cases spell what it already guarantees.
+tild() { printf '%s' "${1/#$HOME/~}"; }
+
 # clean repo, HEAD == origin/main (landed → ✅-shaped git state)
 mkrepo_landed() {
   local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
@@ -322,7 +342,7 @@ EOS
   # DEFAULT is pinned by its own case below (memory: hermetic-suite-leaks-caller-identity).
   live="$BATS_TEST_TMPDIR/dl-default.sh"; printf '#!/bin/bash\n' > "$live"
   CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q "▶ bash $live   \[deploy: live layer 1 behind origin/main\]"
+  echo "$output" | grep -q "▶ bash $(tild "$live")   \[deploy: live layer 1 behind origin/main\]"
 }
 
 @test "deploy platter: the SEAM's default is the live ~/.claude/scripts copy" {
@@ -458,7 +478,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   mkdir -p "$w/scripts"; printf '#!/bin/bash\n' > "$w/scripts/deploy-live.sh"
   export CC_SHARED_CHECKOUT="$w"
   CC_DEPLOY_SCRIPT="$BATS_TEST_TMPDIR/absent-deploy.sh" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qF "bash $w/scripts/deploy-live.sh" || false
+  echo "$output" | grep -qF "bash $(tild "$w/scripts/deploy-live.sh")" || false
   ! echo "$output" | grep -q 'absent-deploy.sh' || false
 }
 
@@ -469,7 +489,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   export CC_SHARED_CHECKOUT="$w"
   live="$BATS_TEST_TMPDIR/present-deploy.sh"; printf '#!/bin/bash\n' > "$live"
   CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qF "bash $live" || false
+  echo "$output" | grep -qF "bash $(tild "$live")" || false
 }
 
 @test "state line: dirty repo renders 🔧 with the uncommitted-file fact" {
@@ -995,7 +1015,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '⊘ deploy HELD: live layer 1 behind origin/main' || false
   echo "$output" | grep -q 'the lane refuses: no GREEN tree is a DESCENDANT' || false
-  ! echo "$output" | grep -qF "▶ bash $live" || false     # never offered as a step
+  ! echo "$output" | grep -qF "▶ bash $(tild "$live")" || false   # never offered as a step
   echo "$output" | grep -q '1 held' || false              # named in the governing partition
 }
 
@@ -1008,7 +1028,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   export CC_SHARED_CHECKOUT="$w"
   live="$BATS_TEST_TMPDIR/advancing-deploy.sh"; printf '#!/bin/bash\nexit 0\n' > "$live"
   CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qF "bash $live" || false
+  echo "$output" | grep -qF "bash $(tild "$live")" || false
   ! echo "$output" | grep -q 'HELD' || false
   ! echo "$output" | grep -q 'held' || false
 }

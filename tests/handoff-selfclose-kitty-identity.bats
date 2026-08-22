@@ -203,7 +203,15 @@ sc() { # $1=cc-in-kitty rc  $2=KITTY_WINDOW_ID ("" to unset)  $3=ITERM_SESSION_I
 
 rc() { # $1=cc-in-kitty rc  $2=KITTY_WINDOW_ID ("" to unset)  $3=ITERM_SESSION_ID ("" to unset)
   local cik="$1" kw="$2" it="$3"
+  # CLAUDE_CONFIG_DIR pinned because --recycle derives its ACCOUNT from it (handoff-fire.sh:7199)
+  # and exits 1 when it cannot — a refusal that fires BEFORE pane resolution, so both positive cases
+  # here died on the account rather than on the identity they exist to pin. Left ambient this helper
+  # asserts the operator's environment, not the subject: green at the desk, red under every fresh
+  # HOME. Only the basename is read, so no directory need exist. This also restores the NEGATIVE
+  # CONTROL below to a genuine one — with the account resolvable, its exit 1 can only be the pane
+  # refusal it names, where before it had a second, silent way to be right.
   run env -u ITERM_SESSION_ID -u CC_TERM -u KITTY_WINDOW_ID \
+      CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/.claude-secondary" \
       FAKE_CIK_RC="$cik" \
       ${kw:+KITTY_WINDOW_ID="$kw"} ${it:+ITERM_SESSION_ID="$it"} \
       /bin/bash -c 'cd "$1" || exit 99; exec /bin/bash "$2" --recycle --prompt-file "$3" --dry-run' \
