@@ -217,9 +217,35 @@ tests/worktree-gc-infra.bats
 # revision each run actually saw, with its recorded cause named as dissolved. Six of the sixteen
 # candidates were withheld on that bar and each carries its reason at its own line above.
 #
-#   tests/land-gate-cas.bats            15/15 · 78s/61s/61s — the slow-fixture red is gone. Its
-#     entry's own hypothesis (a bound sized on a fast box truncating on a slow one) is consistent
-#     with the cure: the per-suite bound went 120 → 300 in hermetic.yml. It is nowhere near it.
+#   tests/land-gate-cas.bats            15/15 · 78s/61s/61s — green, and the DELETION STANDS: the
+#     three-census bar was met. But the CAUSE recorded here was wrong, and is corrected 2026-08-21
+#     (recycle #127, backlog 4eafdbe0a072). It read: *"its entry's own hypothesis (a bound sized on
+#     a fast box truncating on a slow one) is consistent with the cure: the per-suite bound went
+#     120 → 300 in hermetic.yml."* Three measurements refute that:
+#       · The 120 → 300 raise is real, but it landed at 33a8f41a8, 2026-08-12T09:36Z — BEFORE all
+#         three cited reds (bc8327717 22:01 · aee9071d7 23:56 · e71ea0b66 2026-08-13T01:23). Read
+#         the value out of each of those trees: all three already say '300'. A change that precedes
+#         every failure it is credited with curing cannot be its cure.
+#       · Those runs took 40s / 43s / 51s — 13-17% of that bound. None was ever CUT; all three fold
+#         `red ok=14 notok=1` at the SUITE level. (Run 31657575571's JOB verdict does read "cut",
+#         because 42 OTHER suites went unreported. That is a different fact about a different
+#         population, and it is the easiest one to read onto this row by mistake.)
+#       · The three reds are TWO causes, not one. bc8327717 and aee9071d7 predate c5f1d1d56 and are
+#         the stale-WORDING red it fixed. e71ea0b66 carries c5f1d1d56 AND a2de71b95 and is the
+#         stale-MODE red: a2de71b95 made ship-land run the sweep `--mine`, so the fixture's 40
+#         strands belong to no session, the sweep correctly reports CLEAN, and the un-mine verdict
+#         the case grepped out of `$output` became unreachable. Cured by 565606e1e (2026-08-15) —
+#         which is what the suite's own header at the "many refs" case already documents.
+#     A/B on this desk, plain env, scratch trees: pre-fix sha e71ea0b66 reds ON-BOX (notok=1, at the
+#     `on 40 of 6[0-9][0-9] local branch(es)` grep), HEAD is green, prior-shape control asserted in
+#     both directions. So the entry's "red off-box only / green on-box" framing was false at its own
+#     sha as well: the defect was deterministic, and the on-box corpus could always have seen it.
+#     KEPT RATHER THAN DELETED because the wrong cause is the reusable part. Three genuinely green
+#     censuses corroborated a mechanism that never operated — and a true metric beside a false cause
+#     reads as diagnosed (memory: wrong-cause-corroborated-by-true-metric). The next reader of a
+#     land-gate-cas red would have gone to the bound. The real mechanism is a semantic conflict
+#     between sibling lands 19 minutes apart, neither an ancestor of the other, which no clean
+#     rebase can see — a class that recurs, and one a timing hypothesis will never surface.
 #   tests/iterm-sticky-command.bats      7/7 · ~1s — no `skip` in the file; the terminal-emulator
 #   tests/kitty-recovery-launch.bats   19/19 · ~13s — class header's HINT ("a hosted runner has no
 #     terminal application") turns out not to bind these two: they assert text, not a live emulator.
