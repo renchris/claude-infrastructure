@@ -331,6 +331,41 @@ BANKING = [
     ("wt-slug", r"\bwt-[a-z0-9][a-z0-9-]*\b"),
 ]
 
+EXTERNAL_DEPLOY = [
+    # DEPLOY TO EXTERNAL INFRA — a THIRD axis, and the reason it is not folded into BOX or GITHUB.
+    # BOX names state that exists only on this disk; GITHUB names reach past the one cloned repo.
+    # This names neither: the artifact is ordinary repo text (a `vector.toml`, a `fly.toml`), the
+    # repo is the item's own, and the work still cannot finish off-box because FINISHING IT MEANS
+    # DEPLOYING — a provider CLI the VM does not install and a credential it does not hold. Same
+    # structure as the `hook` entry's argument: a VM can write the change perfectly and can never
+    # learn whether it took.
+    #
+    # THE MISS THIS CLOSES, measured not supposed. Backlog `96c57c1c4a6c` — the fly-log-shipper-iad
+    # filter that drops a serving app's logs — says `flyctl apps create`, says the directory "has
+    # NEVER been deployed", and spells no word in any list above. `cc-eligible why` on its real
+    # title returns `verdict=eligible / refused: (nothing fired)`, so it is dispatched to a VM that
+    # has no flyctl, no Fly credential, and (its project being reso-management-app) not even the
+    # repo. One burned worker slot per dispatch — the same cost the `wt-slug` entry above was added
+    # to stop, arriving through a door that entry does not cover.
+    #
+    # NARROW ON PURPOSE, AND THE WIDTH WAS MEASURED. The tempting spelling is the ABSTRACT one —
+    # the item does say "creds" — and it is precisely the hunch this file's header forbids: over
+    # this repo's own corpus `\bcredentials?\b` matches 506 lines and `\bsecrets?\b` 133, so either
+    # would refuse a large slice of ordinary repo work and starve the tap outright. The PROVIDER is
+    # the safe unit, exactly as the lists above name `launchd` and `jetsam` rather than "OS state":
+    # `flyctl` matches 3 lines, the Fly artifact suffixes 14, `fly deploy` 15 — all of them real
+    # Fly.io infrastructure, no second meaning in the corpus. Bare `\bfly\b` was TESTED AND
+    # REJECTED: it takes "flying" with it, which is the word-boundary failure this suite pairs a
+    # lookalike control against.
+    #
+    # Refusing is the safe side under this file's own asymmetry rule: a wrong INELIGIBLE leaves the
+    # item claimable locally, losing nothing, while a wrong ELIGIBLE puts a worker in a VM that
+    # cannot do the work and cannot say so.
+    ("flyctl", r"\bflyctl\b"),                       # 96c57c1c4a6c
+    ("fly-artifact", r"\bfly\.(?:io|toml|dev)\b"),   # 96c57c1c4a6c (sibling shipper dirs)
+    ("fly-deploy", r"\bfly deploy\b"),
+]
+
 # Compiled once, in REFUSAL ORDER. Order decides which verdict a multi-class item reports, and it
 # runs widest-first: an item that says both "launchd" and "render" is box work whose remedy happens
 # to be visible, not design work. The alternative — reporting every class — makes the verdict token
@@ -346,6 +381,11 @@ CLASSES = [
     ("ineligible-box", "anything about THIS BOX — local-only state a VM cannot see", BOX),
     ("ineligible-visual", "VISUAL/DESIGN — needs the local browser + dev server", VISUAL),
     ("ineligible-branch-banking", "BRANCH BANKING — the corpus exists only on this disk", BANKING),
+    # THE TWO REACH-PAST-THE-VM CLASSES, last and adjacent because they answer the same question
+    # from two sides: what does finishing this item touch that the VM's single clone does not
+    # contain? External deploy leads GitHub only because a Fly item that also says "PR" is deploy
+    # work whose landing happens to need a PR, not the other way round.
+    ("ineligible-external-deploy", "DEPLOY TO EXTERNAL INFRA — needs a provider CLI + credential the VM has none of", EXTERNAL_DEPLOY),
     ("ineligible-github", "NEEDS GITHUB beyond the one cloned repo — no gh CLI off-box", GITHUB),
 ]
 CLASSES = [(v, d, [(t, re.compile(p, re.I)) for t, p in pats]) for v, d, pats in CLASSES]
