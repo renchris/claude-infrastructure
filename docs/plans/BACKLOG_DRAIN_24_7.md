@@ -87,6 +87,72 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #127: a cure that landed BEFORE every failure it is credited with
+  curing is not a cure — and three genuinely green censuses corroborated it anyway. filed 0 / closed 1
+  / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  ninth consecutive clean reading.** Converge lag **19** at open (budget 25; the landed path is `M`,
+  **no ADD**, so the commit budget genuinely applies). Fold at open: `master-convergence-deadlock`
+  **44 open / 6 blocked**, exactly where #126 left it.
+
+  **Worked the recommended start, `4eafdbe0a072` — and it is in the `ungrouped` bucket, not the warm
+  effort.** Closing it moved **ungrouped 133 → 132**; `master-convergence-deadlock` **held at 44/6**,
+  untouched by this recycle. #126's brief predicted "closing it moves the count DOWN", which is true
+  of *a* count and not of the one the chain reports. State the population, always.
+
+  **THE ROW WAS ALREADY CURED — AND SO WAS ITS EXCLUSION, EARLIER THE SAME DAY.**
+  `scripts/offbox-excluded.manifest` delisted `tests/land-gate-cas.bats` on 2026-08-21 (sibling row
+  `e15a743e12ba`) on a deliberately strict bar: green at 15/15 in three independent daily censuses
+  (32124683059 · 32240707543 · 32357106290). **That deletion is right and stands.** What was wrong is
+  the CAUSE recorded beside it, which is the part a future reader actually consumes.
+
+  **THE TWENTIETH STANDING-LINT SHAPE — A CURE AND THE TIMELINE OF THE FAILURES IT CURED.** A remedy
+  and the reds it closes are two parties, and **the contract between them is chronology**. Nothing in
+  this repo checks it, and the corroborating evidence was real, so the wrong cause read as diagnosed:
+
+  - **The delisting note credited the per-suite bound going 120 → 300 in `hermetic.yml`.** The raise
+    is real — but `git log -G` (not `-S`; **`-S` counts occurrences, so a VALUE change is invisible to
+    it**, and my first pass got exactly that false "only one commit ever touched this key") dates it to
+    **`33a8f41a8`, 2026-08-12T09:36Z — BEFORE all three cited reds.** Read the value straight out of
+    each failing tree: `bc8327717`, `aee9071d7` and `e71ea0b66` **all already say `'300'`**.
+  - **And they were nowhere near it.** 40s / 43s / 51s — 13-17% of the bound. **None was ever CUT**;
+    all three fold `red ok=14 notok=1` at the SUITE level. ⚠️ Run `31657575571`'s **JOB** verdict *does*
+    read `"cut"` — because **42 OTHER suites went unreported**. A true fact about a different
+    population, sitting one line away from the row, and the easiest thing in the log to read onto it.
+  - **The three reds are TWO causes, not one.** `bc8327717` and `aee9071d7` predate `c5f1d1d56`
+    entirely and are the stale-**WORDING** red it fixed. `e71ea0b66` carries `c5f1d1d56` **and**
+    `a2de71b95` and is the stale-**MODE** red: `a2de71b95` made ship-land run the sweep `--mine`, so
+    the fixture's 40 strands belong to no session, the sweep correctly reports CLEAN, and the un-mine
+    verdict the case grepped out of `$output` became **unreachable**. Cured by **`565606e1e`
+    (2026-08-15)** — which the suite's own header at the "many refs" case already documents in full.
+
+  **THE ROW'S CENTRAL CLAIM IS REFUTED AT ITS OWN SHA.** It read *"GREEN on-box AND green under
+  `scripts/offbox-run.sh` locally — the identical `env -i` runner — so the land-time admission gate
+  structurally cannot see it"*, which is what made its axis *CI-vs-local* and made the whole thing
+  look unreachable. A/B on this desk, plain env, `git archive` scratch trees: **pre-fix sha
+  `e71ea0b66` reds ON-BOX (`notok=1`, at the `on 40 of 6[0-9][0-9] local branch(es)` grep); HEAD is
+  green; prior-shape control (`"sweep":"review"` pre=1 / post=0) asserted in BOTH directions.** The
+  defect was deterministic — `setup()` pins `CLAUDE_CODE_SESSION_ID="test-sid-cas"` at line 61 in
+  *both* trees, so no env could have decided it — and the on-box corpus could always have seen it.
+
+  **Rejected causes, and two were about my own instruments (six recycles running now — treat it as
+  the standing question method 43 says it is):**
+  1. *The row's own hypothesis: a bounded stranded sweep truncating on a slower box.* Refuted twice
+     over — the failing assertion is the `--mine` verdict grep, not a truncated denominator, and the
+     sweep's walk is asserted directly at 640 refs in the post-fix tree.
+  2. *The manifest's: the 120 → 300 bound raise.* Chronologically impossible; see above.
+  3. *My own first history read.* `git log -S 'CC_OFFBOX_SUITE_BOUND_S'` returned exactly ONE commit
+     and I nearly published "the change never happened". `-S` counts occurrences of a string; a value
+     edit keeps the count. `-G` shows three commits, 180 → 120 → 300. **Instrument, not history.**
+  4. *That `offbox-run.sh` would settle it.* It structurally cannot — the row is a recorded null under
+     that exact runner. The decisive instrument was `gh run view --log`: the per-suite state line
+     carries the counts AND the wall time, which is what killed both bound hypotheses in one read.
+
+  **Landed:** `c809af0eb` corrects the delisting note in place — kept rather than deleted, because the
+  wrong cause is the reusable part. Gates: `tests/offbox-partition.bats` **29/29**,
+  `tests/watchdog-census.bats` **20/20**, both plan-matched, **0 skips**; `offbox-admission-lint`
+  admits; manifest re-parsed at **33 active lines, all existing paths**, every added line a comment.
+
 - **2026-08-21 — drain recycle #126: a suite that is green HERE and red THERE is not reporting on the
   tree, it is reporting on its caller — and the assertion that costs you most is the one that never
   went red. filed 1 / closed 1 / landed 2 commits.**
