@@ -87,6 +87,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #126: a suite that is green HERE and red THERE is not reporting on the
+  tree, it is reporting on its caller — and the assertion that costs you most is the one that never
+  went red. filed 1 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  seventh consecutive clean reading.** Converge lag **17** at open (budget 25; both landed paths are
+  `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **44 open / 6 blocked**, exactly where #125 left it.
+
+  **Worked the recommended start — the four off-box-only reds, MEASURED-NOT-FILED since #121 and
+  declined by #122/#123/#124/#125.** Re-measured first, and they reproduce **exactly**: `fire-autonomy`
+  27/1 · `handoff-selfclose-kitty-identity` 15/2 · `cc-backlog` 139/2 · `operator-readout` 77/4 — nine
+  not-ok, identical to #121's simultaneous A/B against pinned parent `ddb6c8c6b`. ⚠️ **`offbox-run.sh`
+  returned rc 0 over all four reds**, as its own contract says it will; the state column is the verdict.
+
+  **THE NINETEENTH STANDING-LINT SHAPE — A SUITE'S GREEN AND THE ENVIRONMENT THAT PRODUCED IT.**
+  Every one of the three causes is the same shape wearing different clothes: an input the suite never
+  states, supplied by the operator's desk and by nowhere else. The suite is one party, the harness is
+  the other, and **the contract between them is the env — so a suite must NAME every variable its
+  subject reads.** `scripts/offbox-run.sh:129` already states the law in the imperative — *"THE CURE IS
+  IN THE SUITE, NOT HERE"* — and its own census explains why the harness may not simply supply more:
+  the `env -i` allowlist *is* what a suite is entitled to assume, so widening it costs every other
+  suite an axis it could have tested.
+
+  - **`CLAUDE_CONFIG_DIR` is not on that allowlist, and `--recycle` derives its ACCOUNT from it**
+    (`handoff-fire.sh:7199` `env_account`, the reverse of `cfg_dir`), exiting 1 **before** `pre_trust`
+    or pane resolution runs. So `fire-autonomy`'s plain-recycle case and both positive kitty cases
+    asserted nothing off-box. Only the BASENAME is read, so pinning a declared one is the whole
+    fixture. **`--account` is deliberately NOT the cure for the plain-recycle case** — the three
+    sibling cases pass it, but an explicit account is the operator ASKING, and that case's entire
+    subject is the `auto` arm it would bypass.
+  - **`tests/cc-backlog.bats` `guard_env` omitted the `CC_BACKLOG_WT_ROOT` pin its own `reap_env`
+    makes 400 lines later** — and `reap_env` states the reason out loud: *"a live dispatch worktree
+    there must never decide a unit test's verdict"*. `reopen`/`unblock` consult the worktree-occupancy
+    oracle (`bin/cc-backlog:4323`), which is **three-valued** and answers UNRESOLVED — not
+    "unoccupied" — when the ROOT `~/Development/.worktrees` is itself absent, so both DEAD-claim
+    recovery cases abstained rc 4 on every machine but this one. Method 51 resolved as a genuine
+    OMISSION, with the omitted site's own sibling carrying the rationale.
+  - **`tests/operator-readout.bats` asserted ABSOLUTE fixture paths against a renderer that tildifies
+    anything under `$HOME`** (`hooks/operator-readout.sh:255`). Correct only while `TMPDIR` sits
+    OUTSIDE `$HOME` — true of this desk (`/var/folders/…`), false under every fresh-HOME harness,
+    where the platter renders `~/tmp/bats-run-…/present-deploy.sh`.
+
+  🚨 **THE FINDING THAT WAS NOT A RED, AND IS THE REASON THIS ROW WAS WORTH TAKING.** The same cause
+  had also **neutered a fifth assertion that no red would ever have surfaced**: the
+  `! grep -qF "▶ bash $live"` control at *"deploy-lag: a lane that REFUSES renders ⊘ HELD"* — the only
+  arm stopping *"refusing lanes are held"* from being satisfied by holding **every** lane — passed
+  off-box **because nothing could match its needle**. A positive assertion announces this failure by
+  going red; a negative one is silently promoted to a tautology, so the same environment leak costs
+  four visible reds and one invisible loss of coverage. **Proven by mutant, not argued:** a hook
+  mutated to emit the ▶ row from the HELD branch is **invisible to the pre-fix suite (1 ok / 0 not-ok)
+  and caught by the post-fix one (0 ok / 1 not-ok)** — same mutant, same tree, same env, only the
+  suite version differs. Method 60's shape found in the wild: *a neutered assertion and an absent one
+  are not the same defect*, and only the neutered one reads as coverage.
+
+  **Method 41 discharged before the land, not after.** `gate-select.sh --direct` printed a **BARE LIST
+  OF 4 PATHS with no verdict sentence** — the #121/#124/#125 shape, now seen five times, so treat the
+  bare list as a normal reading rather than a bug. Those four paths are **exactly** the four suites in
+  the diff, and every one had already been run green in the FINAL tree state both in place and
+  off-box, so the selector's whole named population was verified before `ship-land` started.
+
+  **Evidence.** Off-box after: **28/0 · 17/0 · 141/0 · 81/0**, each equal to its in-place count, zero
+  red logs written. In place: the same four, plan lines **28/17/141/81** matched by `ok+notok`, **0
+  skips**. Mutant M1 (the platter names a different script) reds all four positive cases **0 ok / 4
+  not-ok**, so the rewritten assertions can still fail — without it, a `tild` returning `""` would
+  leave the needle `bash ` and match unconditionally. `bats-kill-guard-lint` 0 · `bats-assert-liveness`
+  **0 findings on all four, with its own 36-case suite green** so the silence is a verdict ·
+  `bats-testname-eval-lint` 0 · `self-path-lint --selftest` 32/32 · `bats-shim-parity-lint` NOT-ACTIVE
+  (the healthy default) · `test-hermeticity-lint` **clean over 527 suites, 0 new leaks**.
+
+  ⚠️ **That last gate is clean AND structurally blind to this entire class** — it audits `$HOME`
+  WRITES, while all three causes are env-var READS the harness declines to supply. Not filed: row
+  **`7c05d45796d8`** already owns that lint, wave-sized at 123 of 355 suites. Left open.
+
+  **Wrong causes rejected, and two are about my own instruments again — the fifth recycle running:**
+  (1) *that `offbox-run.sh` should carry `CLAUDE_CONFIG_DIR`* — refuted by the runner's own census
+  comment; (2) *that `--account` fixes the plain-recycle case* — it bypasses the arm under test;
+  (3) 🚨 **a first probe appeared to REFUTE the tildify cause outright**: it rendered the deploy line
+  UNTILDIFIED off-box and no line at all at the desk, i.e. both arms wrong. Cause: `mktemp -d` under
+  `env -i` did not honour the `TMPDIR` I had set, so the probe's fixture landed OUTSIDE `$HOME` and
+  reproduced neither arm — **the instrument, not the hypothesis**. `bats --print-output-on-failure` on
+  the REAL suite settled it in one read (`~/tmp/bats-run-…`). (4) A red-proof `perl -0pi` rewrite
+  silently changed nothing and returned 0; the POST-condition guard caught it, and `| tail` then ate
+  the script's own exit code — **method 34's trap, hit while proving something else.** Both replaced
+  by a counted, assertion-guarded Python rewrite taking anchor and replacement from FILES.
+
+  **Filed 1 / closed 1.** `af69f569531d` filed with the full three-cause measurement, then closed on
+  the landed fix — the group holds at **44 open**. ⚠️ A first `add` was **mis-filed with an absolute
+  path as the project label**, which the tool warned about and which puts a row where no worker can
+  reach it; there is no relabel verb, so it was re-filed verbatim and `568eafb48afa` closed as a
+  **clerical supersession, not a finding**. Read the project label the tool echoes back.
+
 - **2026-08-22 — drain recycle #125: a stranded patch can be UNLANDABLE rather than merely unlanded
   — and the oracle for "is it on trunk" cannot tell dropped work from replaced work. filed 1
   (BLOCKED) / closed 1 / landed 4 commits.**
