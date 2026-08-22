@@ -2892,6 +2892,38 @@ cmd_link() {
 # probes call a script or read outside the repo) — is silent, because "I could not ask" must not read
 # as either answer. Kill switch is cc-premise's own `CC_PREMISE_FILING_SCREEN=off`, deliberately not a
 # second one: one screen, one way to turn it off.
+#
+# WHICH STORED PROBES CAN ACTUALLY RETRACT — censused 2026-08-22 (drain recycle #124), because the
+# EXIT-0 REFUSAL above screens one direction and nothing screens the other. Population: every stored
+# falsifier in the `master-convergence-deadlock` effort — 34 probes over 102 rows (17 open · 15 done
+# · 2 blocked), all re-run at trunk 9fb369bcd with a per-probe existence control, so an rc 1 caused by
+# an ABSENT FILE is never read as an absent needle (0 real targets missing). The question a probe must
+# be able to answer is "is this row still live?", and the only state where that is checkable is one
+# where the subject is KNOWN-FIXED. Three of the 15 done rows were not closed by a fix at all
+# (`16c864bd34a8` closed as a duplicate whose own evidence says "NOT closed as cured — the defect is
+# LIVE today" · `903e7ae67621` closed STALE, the world moved · `b7252a3bb015` auto-closed BY its own
+# probe), so they cannot test the question and are excluded rather than counted.
+#
+# Of the 12 rows closed by a LANDED FIX: 7 probes retract (exit 0), 5 do not (42%). The immortal five
+# split into exactly two shapes, and the ratio is the finding:
+#   * 4 of 5 — A PROBE THAT GREPS FOR A PRESCRIBED LITERAL THE ACTUAL CURE NEVER TYPED.
+#     `3709b1649792` `9be5e66e1c34` `9f69e13fc2e0` `f6b460816387`. This is memory
+#     cure-implements-none-of-the-rows-candidates wearing a probe's clothes: the row proposes an
+#     implementation, the probe asserts that implementation's spelling, and a BETTER fix leaves the
+#     needle absent forever. `f6b460816387` says it outright in its own evidence — "CURED at the only
+#     enforcing venue, by a better design than prescribed". The probe then convicts the cure.
+#   * 1 of 5 — the input/needle COUPLING `fd10594f088c` named: the token the probe FEEDS the subject
+#     is the token it asserts on, so once the subject stops emitting, absence reads identically to the
+#     bug (`e2eaaa0f4907`, the archetype, worked in full on that row).
+# So the coupling shape is real and its archetype is confirmed, but it is 20% of the immortals and 8%
+# of the fix-closed population — NOT the dominant cause. Write the needle against the DEFECT'S
+# BEHAVIOUR, never against the remedy's spelling; a probe you can satisfy by typing a string is a
+# probe a different correct fix will fail.
+#
+# AND #108's "24 of 24 stored falsifiers exit 1" IS NOT EVIDENCE THAT 24 ROWS WERE LIVE. At the rates
+# above, a same-shaped population carries ~1 immortal probe for every 2 that retract; a one-pass run
+# cannot separate "still live" from "cannot retract", which is why this census re-ran against
+# known-fixed subjects instead. The population is also not fixed at 24 — it is 34 ten recycles later.
 cmd_falsify() {
   local id="${1:-}"; [ $# -gt 0 ] && shift
   local probe="" force=0 norun=0 clear=0

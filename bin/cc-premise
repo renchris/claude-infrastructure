@@ -2645,6 +2645,35 @@ def _close_falsified(candidates, idx, sha, cap):
     `assess` runs `filing_day_screen` on every stored probe that exits 0 and downgrades the verdict
     out of BLOCKING when the probe would ALSO have passed on filing day. A probe that never
     discriminated therefore never reaches this function.
+
+    BUT THAT EXCLUSION CANNOT REACH A PROBE THAT SAMPLES RUNTIME STATE, and those are exactly the
+    probes this function can close a LIVE row with. Measured 2026-08-22 (drain recycle #124) on
+    `b7252a3bb015` — "postland's corpus cc-bats is killed by an EXTERNAL SIGTERM, 28 cut of the last
+    40 stamps" — auto-closed here on 2026-08-16 by its own stored probe. That probe reads the NEWEST
+    stamp only (`ls -t … | head -1`) and exits 0 unless that one stamp is a no-failing `cut`. The
+    phenomenon runs at 27 of 40 (67.5%), so the probe exits 0 roughly one time in three BY SAMPLING,
+    with the defect fully present. It is not a verdict; it is a coin. Re-measured today the rate is
+    27/40 over a window (08-20 → 08-22) lying ENTIRELY AFTER the close, newest stamp a cut: the row
+    was shut for six days while its subject ran unchanged, invisible to the drain.
+
+    EVERY BOUND ABOVE IS A RE-READING OF THE SAME INSTANTANEOUS SAMPLE, which is why none of them
+    caught it. Bound 1 re-asks "immediately before acting" — seconds later, against a stamp
+    population that has not moved, so it returns the same answer and reads as corroboration
+    (memory: discriminating-retry-must-move-away-from-the-noise). And the anti-coverage screen never
+    votes at all: `filing_day_screen` resolves a probe through `_probe_clauses`, which returns None —
+    UNDECIDABLE — for "a script call, pipe, variable, redirect, absolute path", i.e. for every shape a
+    runtime-state probe MUST have. Only ANTI_COVERAGE downgrades in `assess`; UNDECIDABLE is the
+    fail-open default and passes straight through to `falsified`. cmd_falsify's header already records
+    that UNDECIDABLE is "the majority: most probes call a script or read outside the repo" — true, and
+    harmless where it was written (a WARNING on a human's write), load-bearing here (an autonomous
+    close). The screen is a TREE question; the dangerous probes are RUNTIME questions. It is not weak,
+    it is out of population (memory: filter-inherits-its-producers-population).
+
+    THE FIX IS A VALUE FORK AND IS NOT TAKEN HERE — filed and BLOCKED rather than guessed. Making
+    UNDECIDABLE refuse an auto-close is the conservative direction, but it retires auto-close for the
+    MAJORITY of probes by this file's own count, and how much unattended drain the operator wants to
+    trade for that is theirs to decide. Do not narrow this quietly: the shape to fix is
+    "a probe whose reading is a SAMPLE", and a sample needs a rate, not a retry.
     """
     closed, skipped, lines = 0, 0, []
     if cap <= 0:
