@@ -87,6 +87,150 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #133: the row was right that the gate convicted the wrong person and
+  wrong about what made it do so — and its prescribed remedy would have deleted the safety property
+  the mechanism exists for. filed 0 / closed 1 / landed 3 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  fifteenth consecutive clean reading.** Converge lag **7** at open (budget 25; both landed paths
+  are `M`, **no ADD**). Fold at open: `master-convergence-deadlock` **40 open / 6 blocked**, exactly
+  where #132 left it.
+
+  Worked `fb178d6d8d14` — "the CAS re-round's suite selection EXCEEDS its own recorded range, so a
+  sibling's red is attributed to YOUR diff as exit 6", filed 2026-08-09 while landing 75df8db2c884.
+  **Its three claims score TRUE / TRUE / REFUSED, and the one it never made is the one that mattered.**
+
+  **CLAIM 1 — "the re-round selected from something other than the range it attested" — TRUE as a
+  measurement and WRONG as a conclusion.** The extra suites came from **UNION SCOPE**, a deliberate,
+  documented mechanism: on a stale-gate re-round the selector is handed a SECOND range
+  (`FIRST_BASE..<this round's base>`) so the smoke covers what siblings landed while we gated — the
+  composed tree's only novelty. `git log -S EXTRA_RANGE -- scripts/ship-land.sh` dates it to
+  **`e34a7ea18` / `94e6b0810`, 2026-07-26T01:08:12Z — fourteen days BEFORE the row was filed**, and
+  ship-land.sh states it twice in its own header. So the row's proof ("gate-select over THAT range
+  returns the red suite zero times") is a correct measurement of a mechanism working as designed.
+  What actually exceeded its span was the **ATTESTATION**: land.log records one range and the
+  selection ran over two, so no reader could reconstruct why a suite ran.
+
+  **CLAIM 3 — the prescribed remedy — REFUSED, and this is the load-bearing call.** The row asks
+  that selected-suites be asserted a SUBSET of gate-select over the attested `base..head`, and that
+  "a suite outside that set must never be able to set the exit code". That **deletes union scope**,
+  i.e. the only coverage of the one thing a re-round exists to re-prove. Method 20 again: the
+  prescribed fix, built as written, removes a safety property. The defect is attribution, never
+  selection — so: **run the union, judge with the own set.**
+
+  🚨 **AND THE ROW NEVER NAMED THE SECOND CONSUMER, WHICH IS THE ONE THAT CONVICTS SILENTLY.** The
+  row indicts exit 6's sentence. But `run_scoped_suite`'s **flake carve-out** reads the same list,
+  and its own comment states the rule it is applying: *"intermittence in code you are landing is a
+  FINDING, not a flake"*. On a re-round that list also holds the sibling delta's suites, which are
+  not code you are landing — so a suite belonging to someone else's commit that failed once and
+  passed its exoneration re-run was convicted as intermittence in YOUR diff, with no message
+  distinguishing it from a real one. Fixing only the sentence the row named would have left that
+  in place. **THE STANDING LINT, TWENTY-SIXTH ENTRY: WHEN ONE ARTIFACT IS THE UNION OF TWO
+  POPULATIONS, EVERY CONSUMER MUST BE CENSUSED — the one the report names is not the only one, and
+  the unnamed consumer is the one whose premise is written in a comment rather than in a message.**
+
+  **The fix.** `run_smoke` asks the selector for the own-range answer as well — **first**, so the
+  union call stays last for `tests/land-gate-cas.bats`'s existing head/tail assertions — and judges
+  with it: the carve-out gets `own`, and a red whose failures are ALL union-only attests
+  `smoke-sibling:<suite>` instead of `smoke:<suite>` and says so in words. Cost is bounded to the
+  ~30% of rounds that re-gate (measured selector: **3.7 s** on a 127–137 s round); when there is no
+  union, `own` IS `direct` by construction and the code path is byte-for-byte the old one. Both
+  unknown states fail CLOSED: no union ⇒ everything is ours; own-range selector answers `FULL`
+  ("cannot decide") ⇒ everything is ours.
+
+  **What was deliberately NOT changed, with the reason, so it is not re-litigated as an omission:**
+  a union-only red **still blocks the land**. We are about to push onto a composed tree that has a
+  named failure in it, and a gate is fail-closed. The row's implicit ask — let it through, since the
+  sibling already landed it — needs a fact nobody has: whether that suite is red on trunk *alone* or
+  red only in combination with our diff, which costs a second run at the sibling's base to learn.
+  The honest fix is the claim, not the block: the lander is now told the failure is not theirs and
+  told **not** to go edit it, which is exactly the prescribed action the row objected to.
+
+  **Red-proof, ONE MUTANT PER SITE, in a `git clone --shared -n` pinned at `fabe67111`** (a selector
+  takes a RANGE, so an archive with no history cannot host this):
+
+  | arm | plan | ok | notok | which cases died |
+  |---|---|---|---|---|
+  | C0 the fix | 1..3 | 3 | 0 | — |
+  | C1 PRE-FIX subject + new tests | 1..3 | 0 | **3** | all three |
+  | M1 carve-out reads the UNION list | 1..3 | 2 | 1 | case 1 only |
+  | M2 own-diff wording unconditional | 1..3 | 2 | 1 | case 2 only |
+  | M3 attestation arms collapsed | 1..3 | 1 | 2 | cases 2+3 |
+  | M4 `own_red` never increments | 1..3 | 2 | 1 | case 3 only |
+
+  Every case is killed by a mutant that leaves the others green (1←M1, 2←M2, 3←M4), so no case is
+  carried by another's coverage — #132's lesson applied: *a mutant that kills most of your tests is
+  not evidence about the ones it left green.*
+
+  **INSTRUMENT LESSON — AN ENV SEAM'S EXISTENCE IS NOT PROOF IT REACHES THE PATH YOU NEED.**
+  `SHIP_LAND_FIRST_BASE` is read at `ship-land.sh:266` and is listed in both suites' `unset` blocks,
+  so it reads exactly like the seam for driving a union from a test. It is **unconditionally
+  overwritten at `ship-land.sh:3952`** (`FIRST_BASE="$(git rev-parse "origin/$TRUNK")"`) on every
+  real land — it survives only into the in-lock re-exec child. Three tests built on it passed their
+  status assertions and failed their content ones, a shape that reads like a fix that does not work.
+  The real driver was already in the tree: `tests/land-gate-cas.bats`'s `MOVER_ARMED` fixture lands
+  a sibling *during* the gate, which is the actual event. **Grep for every assignment to a variable
+  before believing the one that reads it.**
+
+  **The subject's own ratchet is a spec for how to write in it.** The first draft of the membership
+  test was `printf '%s\n' "$own" | grep -qxF -- "$f"` — copied from the carve-out three lines away —
+  which is the exact shape `scripts/pipefail-sigpipe-lint.sh` exists to refuse (ship-land.sh runs
+  under `set -o pipefail`, where an early-exiting `grep -q` can promote a producer's SIGPIPE to 141
+  **on a match**). Replaced with a fork-free `case` over a newline-fenced string before the lint ever
+  ran. Method 11 in its cheapest form: read what the file already forbids.
+
+  **SPAN.** `tests/land-gate-cas.bats`'s re-round test asserted **exactly 2** `--direct` selector
+  calls; there are now **3**, and the third is not a second selection but the ATTRIBUTION call. The
+  count was updated with that reason written down, and its `head -1`/`tail -1` assertions are
+  untouched — which is why the own-range call is made first.
+
+  **`Scope (grown): +the stale allowlist row that was already convicting landers` — the SAME SHAPE,
+  one level up, found by running the owed suites.** `tests/pipefail-sigpipe-lint.bats` case 14 ("the
+  allowlist may only ever SHRINK — it is regenerable from the tree") is RED, and A/B in a detached
+  clone at `fabe67111` (the parent of my own first commit) reds identically ⇒ **not attributable to
+  this diff**. The entire delta is one row, `hooks/smart-bash-allowlist.sh	0`, left behind when that
+  hook's violations went to zero (`a7ec1b5fb` / `14555a8b4` / `732147576`). It is a **no-op by the
+  lint's own lookup** — `scripts/pipefail-sigpipe-lint.sh:335`'s awk `END` arm already prints 0 for a
+  path it does not find — so removing it cannot move any verdict, and removal is the one direction
+  the ratchet endorses. Fixed rather than filed (`dcff153e6`) because that suite is in gate-select's
+  `--direct` answer for any land touching ship-land.sh or the lint: **a stale row on trunk reds the
+  NEXT lander's smoke and exit 6 tells them it is a verdict about their diff.** Attribution before
+  driving cuts both ways — it was not my red, and leaving it would have made it the next person's.
+
+  **NON-FINDING, recorded so it is not re-derived: `tests/ship-land.bats` is RED under
+  `offbox-run.sh` (139 ok / 6 not-ok, all `P4 inbox` cases) and BYTE-IDENTICAL at the parent — and
+  the whole question is out of population.** The suite is an explicit entry in
+  `scripts/offbox-excluded.manifest`, with its measurement recorded beside it (`run 31362043861:
+  notok=40`), i.e. it is deliberately outside the hermetic partition
+  (`offbox-partition.sh list` = 491 suites, and this is not one of them). Method 46's "run the
+  off-box arm on a changed suite" is right for a suite the partition CONTAINS — both of the ones
+  that matter here do, and both are green off-box (`land-gate-cas` 18/18, `pipefail-sigpipe-lint`
+  18/18). **Forcing an excluded suite through the runner asks a question CI never asks, and its
+  answer looks exactly like a regression.** Method 65 in its own instrument's clothing.
+
+  **Owed suites RUN, not deferred to the smoke — 33 suites, `1018 ok / 0 not-ok / 0 skips`** after
+  the allowlist fix (the single not-ok in the first pass was the pre-existing case 14 above, and
+  `pipefail-sigpipe-lint` re-ran 18/18 clean). Every suite `gate-select --direct` named, plus
+  **`tests/gate-red-census.bats` (30/30), which the selector cannot name**: it reads land.log's `red`
+  arm field, and this diff extends that field's VALUE set with a new arm — a file-mapping selector is
+  structurally blind to a consumer that reads a value. Notable members: `ship-land` 145/145 ·
+  `cc-reaper` 171/171 · `test-hermeticity-lint` 68/68 · `land-gate-cas` **18/18** (15 + the 3 new).
+  Statics: `shellcheck -S style` clean · `self-path-lint --selftest` 32/32 ·
+  `bats-kill-guard-lint` clean · `bats-assert-liveness` silent (positive-controlled by its own suite
+  in the owed run) · `bats-testname-eval-lint` 527 clean · `pipefail-sigpipe-lint` clean.
+
+  **Wrong causes rejected (6, four of them about my own instruments — the twelfth consecutive
+  recycle where that held):** (1) "the re-round selected outside its range" — no, it selected over a
+  union it attested nowhere; (2) the row's subset assertion — deletes union scope; (3)
+  `SHIP_LAND_FIRST_BASE` as the test seam — clobbered at :3952, measured not assumed; (4) "the
+  neighbouring `printf | grep -q` is fine, copy it" — the repo ships a ratchet against it; (5) "build
+  the mixed-red boundary by making every bats call red" — round 1 then reds and the CAS re-round is
+  never reached, so the union never fires at all; the boundary needs a suite green on round 1 and red
+  on round 2; (6) "`ship-land.bats` regressed off-box" — it is manifest-excluded from the partition,
+  and the parent reds identically.
+
+  **Row `fb178d6d8d14` CLOSED** (evidence `ccfdd36fa`). Nothing filed —
+  `master-convergence-deadlock` **40 → 39 open / 6 blocked**, moved by this recycle.
+
 - **2026-08-22 — drain recycle #132: a PROOF that enumerates the ways a suite NAMES a path is blind
   to a suite that WALKS a directory — and the sweep that verified the premise validated one branch
   of its own alternation. filed 0 / closed 1 / landed 2 commits.**
