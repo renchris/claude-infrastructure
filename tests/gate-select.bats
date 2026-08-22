@@ -6,6 +6,11 @@
 #   * delete / rename of PROSE → the suites that NAME the vanished path (and, on a rename, the
 #                       new one) — FULL there means "no smoke at all" in the v2 lane, so the
 #                       blanket rung ran ZERO suites on a docs land; both ends must be prose
+#   * delete of a DOCUMENT outside docs/ → the SAME clause ladder as its own modify, not FULL and
+#                       not the prose branch. The prose rung's premise ("prose has no ladder") is
+#                       true only of `is_prose`'s population; .md elsewhere DOES have one, so
+#                       literal-only would select FEWER suites than the identical file's modify.
+#                       Clause (f) still fires, so a commands/ or skills/ removal re-checks wiring.
 #   * new file        → the SAME clauses as a modified one; FULL only via the `unmapped` rung
 #                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
 #   * unmapped .md    → INERT, not FULL: a document cannot execute, so once the clauses have
@@ -211,6 +216,67 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   [ "$output" = FULL ]
   gse
   has "FULL <- renamed:docs/rename-me.md"
+}
+
+@test "DOCUMENT delete outside docs/ ⇒ the CODE clause ladder, not FULL" {
+  # The delete-side mirror of "a doc outside docs/ still runs the CODE clause ladder". The prose
+  # rung rests on "prose has no ladder — only the literal ref", true only of the population
+  # `is_prose` names; the sibling fix widened DOCUMENT past it and left this rung behind, so every
+  # .md outside docs/ answered FULL on delete — which the v2 lane reads as NO smoke at all.
+  #
+  # The discriminator is deliberate: this suite names NO path, so clause (b) naming is the only
+  # thing that can select it and `prose_refs` (literal-only) would find nothing. A "fix" that
+  # widened `is_prose` instead of running the ladder therefore FAILS here rather than passing.
+  mkdir -p commands
+  printf '# drop command\n' > commands/zz-drop.md
+  suite tests/zz-drop.bats 'run bash scripts/foo.sh'
+  git add -A
+  git commit -q -m seed-pair
+  git rm -q commands/zz-drop.md
+  git commit -q -m drop-doc
+  gs
+  [ "$status" -eq 0 ]
+  [ "$output" != FULL ]
+  has tests/zz-drop.bats
+  gse
+  has "tests/zz-drop.bats <- naming:commands/zz-drop.md"
+}
+
+@test "DOCUMENT delete in an install-globbed tree still forces the wiring re-check (clause f)" {
+  # Why deciding the delete does NOT skip the wiring check the blanket rung was protecting:
+  # removing a commands/*.md or skills/**/*.md IS an install.sh wiring change, and clause (f)
+  # still fires because INSTALL_RE matches the path and `in_base` is true of one that existed at
+  # the base. Nothing else here can select the install suite — no tests/zz-wired.bats exists and
+  # no suite names the path or its stem — so this pins clause (f) alone.
+  mkdir -p commands
+  printf '# wired command\n' > commands/zz-wired.md
+  git add -A
+  git commit -q -m seed-wired
+  git rm -q commands/zz-wired.md
+  git commit -q -m drop-wired
+  gs
+  [ "$status" -eq 0 ]
+  [ "$output" != FULL ]
+  has tests/install-wire-hooks.bats
+  gse
+  has "tests/install-wire-hooks.bats <- install-glob:commands/zz-wired.md"
+}
+
+@test "DOCUMENT delete nothing maps ⇒ inert (empty, exit 0), not FULL" {
+  # The removal-side twin of the `unmapped` document rung: once the ladder has asked every suite
+  # whether it names the path, its directory or its stem, "nothing mapped it" is a PROOF for a
+  # file that cannot execute — the same proof, whether the file was modified or removed.
+  mkdir -p vendor/pkg
+  printf '# vendored\nprose\n' > vendor/pkg/zz-gone.md
+  git add -A
+  git commit -q -m seed-vendored
+  git rm -q vendor/pkg/zz-gone.md
+  git commit -q -m drop-vendored
+  gs
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  gse
+  has "(inert) <- document-unmapped:vendor/pkg/zz-gone.md"
 }
 
 @test "new unmapped script ⇒ FULL (via the unmapped rung, not a blanket added ⇒ FULL)" {

@@ -417,6 +417,7 @@ def main():
         if not path:
             emit_full("unparseable-diff-record:%s" % status)
         code = status[0]
+        deleted_doc = False            # set by the document-removal rung; read by two guards below
 
         # PROSE REMOVAL — the one rung above the blanket D/R fail-closed.
         #
@@ -458,10 +459,50 @@ def main():
                 # break when it moves; it still RUNS, it just may not veto the land on its own flake.
                 direct_picked |= dhits
                 continue
-            if code == "D":
-                emit_full("deleted:%s" % path)
-            emit_full("%s:%s" % ("renamed" if code == "R" else "copied", path))
-        if code not in ("A", "M", "T"):
+            # DOCUMENT REMOVAL — the same widening the `unmapped` rung already took, applied to
+            # the rung the widening fix did not touch.
+            #
+            # The prose rung above rests on one stated premise: "Prose has no ladder — only the
+            # literal ref above." That is true of the population `is_prose` names (README/CLAUDE,
+            # docs/) and FALSE outside it, and the sibling fix that introduced `is_document`
+            # widened the DOCUMENT population past `is_prose` without revisiting this rung. So
+            # every .md living elsewhere still answered FULL on delete — measured on this corpus:
+            # vendor/codex-security 23, evolve-fixtures/pyramid-principle/cases 4, agents/ 3, plus
+            # commands/ and skills/. FULL is not "run everything" in the v2 lane; it is NO
+            # direct-suite smoke and exonerate-nothing, i.e. the same fail-OPEN the rung above was
+            # written to end.
+            #
+            # It cannot simply JOIN the rung above, and that is the whole reason this is a separate
+            # rung rather than a wider `is_prose`. Those paths DO have a ladder: measured here,
+            # MODIFYING vendor/codex-security/NOTICE.md selects tests/deploy-parity.bats through
+            # clause (d) pkgdir and two more through clause (e) stem — none of which prose_refs
+            # (literal-only, by its own docstring) can see. Judging that delete as prose would
+            # select strictly FEWER suites than the identical file's MODIFY, converting an
+            # over-broad FULL into a genuine fail-open.
+            #
+            # WHAT THIS RUNG DOES NOT RECOVER, stated so the next reader does not have to measure
+            # it: clause (c) cannot fire for a removed path, structurally and not by choice.
+            # `refs_of` keeps a harvested candidate only `if cand in tset`, so a path absent at
+            # HEAD is in no file's refs and therefore in no suite's closure. Measured here:
+            # deleting commands/ship.md selects 113 suites where modifying it selects 228, and the
+            # whole difference is clause (c). That is the loosest clause in the ladder by this
+            # file's own account — a MENTION graph, not a dependency graph — and the rung still
+            # takes the selection from ZERO (what FULL means at the v2 consumer) to 113. Recovering
+            # (c) would mean harvesting refs against a path that no longer exists, which changes
+            # the closure for every file, not just this one.
+            #
+            # Running the ladder is also what preserves the wiring re-check the blanket rule was
+            # protecting, WITHOUT the tree allowlist that re-check seemed to require: clause (f)
+            # still fires on a deleted commands/*.md or skills/**/*.md, because INSTALL_RE matches
+            # them and `in_base` is true of a path that existed at the base. A CODE delete is
+            # untouched and still fails closed — it is the one that takes its whole ladder with it.
+            if code == "D" and is_document(path):
+                deleted_doc = True     # fall through to the A/M/T clause ladder below
+            else:
+                if code == "D":
+                    emit_full("deleted:%s" % path)
+                emit_full("%s:%s" % ("renamed" if code == "R" else "copied", path))
+        if code not in ("A", "M", "T") and not deleted_doc:
             emit_full("status-%s:%s" % (status, path))
 
         trigger = full_trigger(path)
@@ -497,7 +538,9 @@ def main():
             # a path that did not exist, so FULL bought no coverage the clauses do not already
             # buy. (Measured 2026-07-26: 33 of 39 scoped-era gate failures ran with
             # selected_n=-1 — i.e. widened to FULL — while every land that stayed narrow landed.)
-            if path not in tset:
+            # A REMOVED document is absent at HEAD BY CONSTRUCTION — that is the change itself,
+            # not the anomaly this guard exists to fail closed on.
+            if path not in tset and not deleted_doc:
                 emit_full("absent-at-head:%s" % path)
             stem = os.path.splitext(os.path.basename(path))[0]
             lit = set(s for s in suites if path in text.get(s, ""))                          # (a)
