@@ -1674,7 +1674,28 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   # and every exoneration re-run reach bats only through here. No caller pipes into gate_bats
   # (they pipe its OUTPUT — run_scoped_suite tees), so nothing loses a stdin it was using.
   local homeenv=() pre=() rem
-  [[ -n "${GATE_HOME:-}" ]] && homeenv=(HOME="$GATE_HOME")
+  # CLAUDE_CONFIG_DIR RIDES WITH $HOME, AND WITHOUT IT THE ISOLATION HAS A HOLE IT CANNOT SEE.
+  # Overriding HOME is the whole mechanism above, and it has NO purchase on this variable: it is an
+  # ABSOLUTE path, so a child resolving `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` walks straight past
+  # the clone to whatever the operator's session exported. That is not the bounded, honest gap
+  # gate_home_setup documents ("writes THROUGH a symlinked entry are not contained") — a symlinked
+  # entry is still reached via $HOME, so isolation at least DECIDES it. This routes around $HOME as
+  # a mechanism entirely, and it is live on this desk: the launcher `bin/claude-kimi` exports it and
+  # every session here runs with it set to a per-account dir (e.g. ~/.claude-quaternary), which the
+  # clone list does NOT clone — so the gate clones the `.claude` its children do not read and leaves
+  # unprotected the one they do. Measured 2026-08-21: 79 tools under bin/ scripts/ hooks/ read it.
+  #
+  # SET, NOT UNSET, and that is measured too. For the 65 readers spelling `${CLAUDE_CONFIG_DIR:-
+  # $HOME/.claude}` the two are identical once HOME is the clone. They diverge for the 6 that spell
+  # `${CLAUDE_CONFIG_DIR:-}` (scripts/handoff-fire.sh among them) and the 3 bare `$CLAUDE_CONFIG_DIR`
+  # reads: unsetting hands those an EMPTY string, i.e. paths rooted at `/` — a NEW failure mode the
+  # gate itself would introduce. Setting it gives all three classes one contained answer.
+  #
+  # FAIL-OPEN IS PRESERVED IN BOTH DIRECTIONS. This rides the same `-n "$GATE_HOME"` test as HOME, so
+  # a gate that fell open re-roots nothing. And if `.claude` is not in the clone list, `$GATE_HOME/
+  # .claude` is the symlink step 1 farmed to the real one — the child then reaches exactly what it
+  # reaches today, never an ABSENT path (the one outcome gate_home_setup must never cause).
+  [[ -n "${GATE_HOME:-}" ]] && homeenv=(HOME="$GATE_HOME" CLAUDE_CONFIG_DIR="$GATE_HOME/.claude")
   if [[ -n "${SMOKE_DEADLINE:-}" ]]; then
     if [[ -n "$TIMEOUT_BIN" && -x "$TIMEOUT_BIN" ]]; then
       rem=$(( SMOKE_DEADLINE - $(date +%s) ))
