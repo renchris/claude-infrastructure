@@ -30,6 +30,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `c33f3b1cb278` | `reso-management-app` | label-foreign |
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
+| 08-22 | `a1136cd016cb` | `reso-management-app` | label-foreign — **after a 5-day gap, guard still absent** (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -452,3 +453,78 @@ unbounded one.
 file was never readable from this session. The premise is confirmed *by citation to a dated read of
 trunk*, not by this VM re-reading it — a distinction that matters precisely because the brief's
 mandated first step (read what the item cites on trunk) is unrunnable here.
+
+---
+
+# The seventh, five days later — the gap did not close on its own
+
+**2026-08-22.** Backlog item `a1136cd016cb`, project `reso-management-app`, title *"floor-plan: 17/17
+non-page components are default-exported against the repo's named-export rule; ~10 exported-but-uncalled
+symbols (`marshalFloorPlanElement`, `parseFloorPlanConfig`, `isFloorPlanConfig`, `surroundPath`,
+`WristbandColorKey`) pass every gate"*, fired into a cloud session whose one attached repository is
+`renchris/claude-infrastructure`. Its brief names `/Users/chrisren/Development/reso-management-app`.
+Same route as 08-14/08-16/08-17: **label-foreign**, no new spelling, no new mechanism.
+
+This row exists for one fact the six above cannot carry: **elapsed time against an open decision.**
+
+## The one new measurement
+
+| what | value |
+|---|---|
+| gap since the last recorded occurrence | **5 days** (08-17 → 08-22) |
+| `bin/cc-offload` since 08-17 | one commit (`adf7a01`, qos-rewrite) — **`REPO="${CC_OFFLOAD_REPO:-$ROOT}"` at `:84` unchanged** |
+| `bin/cc-eligible`, `bin/cc-venue` since 08-17 | **no commits** |
+| the 08-16 §3 decision | still open — **6 days**, now a seventh datapoint of cost |
+
+The class had produced six dispatches in four consecutive days, which reads as a burst. It is not a
+burst: it went quiet for five days and then fired again on the same mechanism, because nothing in the
+fire path changed. A quiet interval is not evidence of a fix — the only thing that distinguishes the
+two is a commit, and there is none.
+
+## Measured from inside this session
+
+Reach, and the oracle's verdict, both reproduce the 08-17 readings exactly; recorded as a control, not
+as a finding.
+
+| probe | verdict |
+|---|---|
+| clone | `git rev-list --count HEAD` → **50**, `.git/shallow` present |
+| `~/Development` (`/root/Development`), `/Users`, `~/.claude/autonomy` | all **absent** |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| the five cited symbols, over the whole checkout | **0 hits each** |
+| `cc-eligible explain a1136cd016cb` (scratch ledger, `source` carrying the absolute path) | `eligible` · classes `[]` |
+
+The brief's blocked-path rails fail quietly here in exactly the way § *The rails handed to this dispatch
+fail QUIETLY here* records: `~/.claude/autonomy/` is absent, so `cc-backlog block` and `cc-notify --role
+desk` would both exit 0 having done nothing. This file, on the pushed branch, is again the notification.
+
+## Operator actions
+
+The §3 decision from `cloud-venue-project-repo-mismatch-2026-08-16.md` — **(a) fail closed at the fire
+vs (b) route by `item.project`** — is unchanged. Nothing new is proposed.
+
+The ledger disposition for this item needs the Mac:
+
+```
+cc-backlog block a1136cd016cb --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app; premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § SEVENTH)"
+```
+
+`block`, not `reopen`: the item is blocked on **where it was sent**, and parking it out of the dispatch
+wave is what stops an eighth fire into the same VM shape before the guard exists.
+
+## The item itself — NOT adjudicated
+
+No claim is made about the floor-plan default-exports or the ~10 exported-but-uncalled symbols, and none
+should be inferred. Whether those symbols are dead, whether the named-export rule is enforced by the
+repo's own lint, and whether either was already fixed on `origin/main` were never readable from this
+session: the brief's mandated first step — *read what this item cites on TRUNK, because a post-land RED
+reproduces faithfully in a stale tree* (`cc-backlog 6110fc45141e`) — is unrunnable here because there is
+no tree, stale or otherwise. A dead-code deletion diagnosed from prose is the exact anti-goal
+`bin/cc-venue` §5 names.
+
+## Not fixed here, deliberately
+
+The refusals recorded by the 08-16 and 08-17 sessions still hold verbatim and are not re-argued:
+`bin/cc-offload` fires paid cloud sessions and the repo's shell gate cannot be run here; `cc-eligible`'s
+`OFFBOX_LANE` class states that a session this lane created cannot verify a change to the lane; a
+50-commit shallow clone cannot adjudicate its own admission.
