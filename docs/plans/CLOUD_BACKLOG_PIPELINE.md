@@ -1321,3 +1321,78 @@ DID land, because it lands re-authored and rebased under a new sha. One evidence
 session cited `0d173af4b` as "on trunk" on that basis and had to be corrected in an append. Ask
 whether trunk carries the CONTENT (A6.1's instrument), or grep trunk for the subject and read that
 commit's diff — never ancestry.
+
+## A8 · A CLOUD SESSION'S SOURCE SET IS ONE REPO, AND `cc-eligible` HAS NO ARM FOR THE OTHER PROJECTS
+
+*Reported 2026-08-22 from inside a cloud VM that was fired at a `project=reso` item and could not
+reach a single file the item names. This section is a FINDING, not a fix: §A2a's `offbox-lane`
+circularity ("the observer and the subject are the same object", `bin/cc-eligible:212-238`) forbids
+a session this lane created from writing the lane's own admission rule, and `bin/cc-venue`'s guard
+says the same thing from the other side — a cloud label may only be written from a certification,
+and this clone cannot certify. So the decision below is left to the desk.*
+
+**The defect, in one sentence: `cc-eligible` classifies on the WORDS of an item and never on WHICH
+REPO the item's project resolves to, so every non-`claude-infrastructure` row is judged against a
+predicate that cannot see the one thing that disqualifies it.**
+
+The two halves are already true separately, and nothing joins them:
+
+- `bin/cc-dispatch:367` `project_repo()` resolves `reso` → `$HOME/Development/reso-management-app`,
+  and stamps that **local absolute path** into the composed brief (`:2294`, verbatim: *"repo
+  /Users/chrisren/Development/reso-management-app"*). Correct for a local fire; off-box it names a
+  directory that does not exist and never will.
+- A cloud session's authorized source set is **one repository** — `scripts/cloud-create-api.py:454`
+  defaults `--repo renchris/claude-infrastructure`, and that set is what the git proxy enforces
+  (`:19`, the measured 403). The VM has no `gh`, no second clone, and no path to one.
+
+**Positive control, run in the VM against trunk's own predicate** (`bin/cc-eligible` @ `dac95c56`,
+byte-identical to the working copy — `git diff --quiet origin/main` clean):
+
+```
+classify(<item 96c57c1c4a6c's text>) → ('eligible', 'repo-only work — no local-only state named', [])
+classify_all(...)                    → []
+```
+
+**Zero classes fire.** The item reads as textbook repo-only work — it names a `vector.toml`, a
+filter expression, and a sibling directory to copy. Every one of those is repo text; none of it is
+in *this* repo. The six spelling classes are all about the work's SUBJECT (this box, a browser, a
+pane, the lane itself) and `deep-history` is about the VM's REACH INTO ONE REPO. Cross-repo is a
+third axis and it is unrepresented.
+
+This is precisely the failure mode `bin/cc-eligible:44-49` names as the unrecoverable one: *"a wrong
+ELIGIBLE puts a worker in a VM that CANNOT do the work at all and cannot tell you so — it will
+improvise something plausible against state it cannot see."* The only reason this instance did not
+improvise is that the miss is total rather than partial — there is no reso tree to hallucinate
+against, so the wall arrives at the first `ls`. A cross-repo item whose brief happens to describe a
+file that ALSO exists in claude-infrastructure would not get that mercy.
+
+**Why §A2b's census did not catch it.** The census reads the refusing buckets, and this class lands
+in the ELIGIBLE bucket — the one §A2b's own header calls "where a missed spelling does damage". The
+7 reso rows it does discuss are counted under `visual` ("need Turso creds the VM has no channel
+for"), i.e. they were refused for an incidental reason that happened to fire, not because anything
+knew they were reso. Remove the Turso wording from those rows and they become eligible too.
+
+**The denominator is unmeasurable from here, and that is part of the finding.** `~/.claude/autonomy/
+backlog.jsonl` does not exist in a VM, so a cloud session cannot audit how many open non-infra rows
+are exposed. One command at the desk answers it:
+
+```
+join -j1 <(cc-eligible sweep --json | jq -r '.eligible[].id' | sort) \
+         <(cc-backlog list --open --json |
+             jq -r '.[]|select(.project!="claude-infrastructure")|.id' | sort) | wc -l
+```
+
+*(A join, not a `select`, because `sweep`'s bucket rows carry only `id`/`status`/`title`/`tokens`
+— `cc-eligible:847-850` — and the project lives on the ledger side.)*
+
+**The fork the desk owns.** Both arms are defensible and they are not the same decision:
+
+- **(a) Refuse.** Add a project→repo arm to `assess_full` — ineligible when the item's project does
+  not resolve to the repo the VM clones. Cheap, fails in the safe direction, costs the tap every
+  foreign-repo row (per §A2b that tap is small anyway).
+- **(b) Attach.** Pass the item's project repo through to `cloud-create-api.py --repo` so the VM
+  clones the tree the brief names. Strictly better *if* the GitHub App grants that account access to
+  the repo and `sources` accepts it — both unverified, and unverifiable from inside the lane.
+
+Not a hunch about the predicate's precision (§A2b's closing parenthetical) and not a loosening —
+this is the one direction that class of change is allowed to go.
