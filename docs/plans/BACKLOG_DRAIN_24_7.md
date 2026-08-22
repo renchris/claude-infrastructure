@@ -87,6 +87,98 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #123: an argv list is an invocation, and the site regex only knew
+  whitespace — the fix's real content is which widening was rejected, and why. filed 0 / closed 1 /
+  landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  fourth consecutive clean reading**; the heredoc alarm stays over. Converge lag **8** at open
+  (budget 25; this land's paths are both `M`, no ADD, so the commit budget genuinely applies) ⇒ ✅
+  not 🚀. Fold at open: `master-convergence-deadlock` **45/4**, held by #121 and #122 alike.
+
+  **Row `a54e2e838acc` CLOSED by fix** (`0abc99695`) — #122's own filing, and the second consecutive
+  row whose mechanism, evidence and class were ALL correct. Nothing in it was stale. What it left
+  open was the part that mattered: it named a candidate direction and forbade the obvious one, but
+  neither was measured. Doing that measurement is where this session's content is.
+
+  **The mechanism, re-derived.** `PSC_SITE_RE`'s family 1 reads `launch[[:space:]]+--type=` —
+  literal whitespace between verb and flag. That is how a shell writes an argv, and how an UNQUOTED
+  shell array writes one, which is why `KARGS=(launch --type=os-window)` is among the tree's five
+  live tier-2 notices. A list-based language separates the same two tokens with `","`, so
+  `subprocess.run(["kitty","@","launch","--type=os-window"])` matches nothing and the file reads as
+  having zero spawn sites. **The gap is about QUOTING, not about Python** — a quoted SHELL array,
+  `KARGS=("launch" "--type=os-window")`, is invisible for the identical reason, and the row scoped
+  it one language too narrowly. Direction matters: c6a47d8c3ccb was a false POSITIVE that refused a
+  land and named the file; this is a false NEGATIVE in a coverage ratchet, and it is silent.
+
+  🚨 **THE MEASUREMENT THAT DECIDED THE FIX WAS A CENSUS OF THE REJECTED ALTERNATIVE, NOT OF THE
+  BUG.** The row said "do not naively widen" and gave a reason from the header (the 5/23
+  false-positive rate that motivated the two-tier design). That is an argument, and an argument is
+  not a count. Censusing the 426-file population with an INDEPENDENT superset needle
+  (`launch.{0,40}--(type|location)=` — deliberately not `PSC_SITE_RE`, #122's method-59 trap) turned
+  the argument into a name: the proximity widening has a **LIVE TIER-1 FALSE POSITIVE in the tree
+  today**, `bin/cc-where:175`, prose reading "an overlay launch on it — kitty @ launch with
+  `--type=overlay --keep-focus`", in a file with **zero** logger calls. It would have refused every
+  land until someone instrumented a file that spawns nothing. The adjacency rule — verb element
+  immediately followed by a `--flag` element — adds **0** lines over the same population. So the two
+  candidates were separated by one command, and the loser was disqualified by a real line rather
+  than by a plausible worry.
+
+  **The fix is two appended alternations, never a loosened first one.** The whitespace form is left
+  byte-for-byte alone, so the change can only ADD matches and can never move a verdict the tree
+  already has — which is what makes "real-tree shape unchanged" a checkable claim rather than a
+  hope. Confirmed: **OK, 21 sites / 424 files, 5 tier-2 notices, 0 advisory**, identical to #122's
+  reading. The `--type=background` exclusion is line-keyed and therefore composes with the new form
+  for free; that is pinned rather than assumed.
+
+  ⚠️ **STATED LIMIT, recorded in the header the way tier 2's limit is, and deliberately NOT filed.**
+  A list SPLIT ACROSS LINES stays invisible — every predicate here is line-scoped, and closing it
+  needs the multi-line parsing the tier-2 note already declines on the same grounds. Not filed
+  because this file's own precedent for a silent, unclosable-without-a-parser limit is a header
+  paragraph, and minting a row for it would duplicate a decision the file already states. The
+  at-risk file makes the limit tolerable rather than academic: `scripts/assignee-chain-state.py`
+  builds `["kitty", "@"] + [...] + ["ls"]`, one token from a site, and **that concatenation shape IS
+  caught** — pinned as its own selftest case.
+
+  **Evidence.** Selftest **29 → 36** (an EXTEND of the script's own harness — no new file, premise
+  2). 36/36 rc 0 · `shellcheck -S style` rc 0 · `bash -n` rc 0 · `self-path-lint --selftest` 32/32 ·
+  `tests/pane-spawn-memo.bats` **11/11 in place and 11/11 green off-box** under `env -i LC_ALL=C`.
+  Red-proofed by SIMULTANEOUS A/B against pinned parent `0716e6532`, both arms driven by ONE runner
+  over the same kind of scratch corpus so tree LOCATION is held fixed (#121's limit case): **4 arms
+  BUG-PROVING** (rc 0 at the parent, rc 1 cured — spaced list, compact list + `--location=`,
+  appended fragment, quoted shell array) and **5 FORWARD GUARDS identical on both arms** (the tree's
+  own prose line, an instrumented argv list, `--type=background` in list form, the whitespace form,
+  and the docstring case the parent already cured). Negative control non-vacuous in BOTH halves:
+  three cure needles 0/0/0 at the parent, with the prior shape asserted present and the probe set to
+  ABORT rather than pass if it were not.
+
+  **Selector reading #13** — `gate-select.sh --direct 0716e6532...HEAD`, run AFTER committing
+  (method 12): **a BARE SINGLE SUITE PATH, no verdict sentence, rc 0** (`tests/pane-spawn-memo.bats`)
+  — the identical shape #122 got. Method 41 was already satisfied before the land: that suite had
+  been run in place and off-box.
+
+  **Wrong causes rejected, and two of the four were about the instruments rather than the subject:**
+  (1) *"widen `PSC_SITE_RE` to tolerate quotes and commas"* — refuted by the `bin/cc-where:175`
+  false positive above, which is the whole reason this entry exists. (2) *"this is a Python
+  problem"* — the row's framing and half a session's assumption; refuted by the quoted shell array,
+  which fails identically and is now its own `_case`. (3) *"`--type=background` needs a second
+  exclusion for the list form"* — refuted by reading `scan_file`: the exclusion is keyed on the LINE,
+  so it already composes; a second one would have been dead code asserting a duplicate. (4) 🚨 *"the
+  shipping regex is wrong because a control said NOT-OK"* — the must-not-fire probe reported
+  `--type=background` FIRING, and the honest reading was **my expectation was mislabeled, not the
+  regex broken**: that exclusion lives downstream in `scan_file`, one layer below the regex the
+  probe was testing. **A control that fails at the wrong LAYER indicts the probe's scope, not the
+  subject** — the sibling of #122's control that failed to fail.
+
+  **NEW GENERALISABLE SHAPE — a prohibition is not a measurement, and censusing the REJECTED option
+  is often cheaper than defending the chosen one.** The row correctly forbade the naive widening and
+  correctly named a safer direction, and a session could have implemented the safe one and shipped
+  a true, unevidenced claim. One census over the population turned "this could false-positive" into
+  "it false-positives HERE, on this line, in a file with no logger call" — which is what makes the
+  header paragraph durable instead of decorative, and what a future reader needs before they widen
+  it again. **When a work item forbids an approach, measure the forbidden one: its counterexample is
+  the artifact, and if there is no counterexample the prohibition itself is the thing that has
+  rotted.**
+
 - **2026-08-21 — drain recycle #122: a docstring is a comment, and the skip rule only knew one
   comment form — then the census that proved the harm latent was run with the instrument under
   suspicion. filed 1 / closed 1 / landed 2 commits.**
