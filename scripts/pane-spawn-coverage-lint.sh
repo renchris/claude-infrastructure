@@ -494,7 +494,7 @@ kt launch --type=window --cwd=current'
   total=$((total + 1))
   printf 'cc_log_pane_spawn split kitty 1 /tmp x\n%s\nkt launch --type=window\n' \
     "$(for i in $(seq 1 40); do echo ": $i"; done)" > "$T/scripts/case.sh"
-  # CAPTURE, then match — never `… | grep -q`. Under `set -o pipefail` (line 65) grep -q exits on the
+  # CAPTURE, then match — never `… | grep -q`. Under the `set -uo pipefail` above, grep -q exits on the
   # first match, SIGPIPEs the producer, and the pipeline's status becomes 141: the probe reads FALSE
   # precisely WHEN IT MATCHES. Measured here — this case failed while the notice was being printed
   # correctly (memory `pipefail-inverts-early-exit-probe`, 358 candidate sites in this tree).
