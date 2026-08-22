@@ -87,6 +87,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #139: the row named the venue its own fix belonged in, the fix landed
+  there 49 minutes later, and nobody closed it. filed 0 / closed 1 / landed 1 commit. A whole
+  CONDITION retired to zero.**
+  Gate 1 clear — **no `.page` file on disk**, checked with `find` at the corrected path
+  `$HOME/.claude/autonomy/postland` (#138's instrument correction held; the directory was asserted to
+  exist before the question was asked, so a zero could not mean "wrong path"). Gate 2: **`qos-diff`
+  empty, the twenty-first consecutive clean reading.** Converge lag **15** at open (budget 25). Fold
+  at open: `master-convergence-deadlock` **34 open / 6 blocked**, exactly where #138 left it.
+
+  **THE ID-GREP IS A CONFIRMED CHEAP NULL — FIFTH RECYCLE, FIFTH IDENTICAL ANSWER.** Over all 34
+  in-group open rows it again returned `b7252a3bb015` (5 hits), `786ac458be00` (2), `6a82c9405b9e`
+  (1), positive control non-zero, driver aborting had it read 0. Run it; budget nothing on it.
+
+  **METHOD 79 (the retire-in-one fold) CHOSE THE ROW ON ITS FIRST OUTING, AND IT BEAT METHOD 78 ON
+  THIS BOARD.** #138 left the fold as a new artifact; run against 2,569 rows it named **46**
+  non-`ungrouped` conditions holding exactly 1 open and 0 blocked rows. The family census (method 78,
+  33 regexes) ran alongside and read five families at 100% — `payload-lint` · `shellcheck` ·
+  `gate-select` · `session-continue` · `land-lock` — which is the positive control that the regex set
+  is not too broad, and its cheapest live position was `operator-readout` at 15/1. But the census
+  ranks a family the drain INVENTED; the retire-in-one fold reads **the store's own grouping**, and
+  the row it surfaced was the drain chain's own. ⚠️ **Compare RANKS, never denominators** (method 61):
+  this recycle's `payload-lint` reads 3/0/0 where #138's read 5/8 — a regex difference, not an event.
+
+  **CLOSED — `2aa51822cca8`** (filed 2026-08-21T16:29:38Z, `firstTs == lastTs` — never edited,
+  condition `drain-brief-names-a-dead-originator`, `source=drain-lead-verify`). Closing it **drains
+  that condition to ZERO and retires it from the board**; the retire-in-one set falls 46 → 45.
+  ⚠️ **DIFFERENT BUCKET, said before the close and unchanged after it:**
+  `master-convergence-deadlock` is **unmoved at 34 open / 6 blocked**, and this recycle claims no
+  movement there.
+
+  🚨 **THE SHAPE: A ROW CAN NAME THE VENUE ITS OWN FIX BELONGS IN, GET THAT FIX, AND STAY OPEN —
+  BECAUSE THE AUTHOR SPENT THE NEXT 55 MINUTES DECOMPOSING IT INSTEAD OF CLOSING IT.** #138 found a
+  row superseded by its author's next row; this is the constructive twin. The row ended *"Fix belongs
+  in BACKLOG_DRAIN_24_7 §4.1, the template each recycle regenerates its brief from"* — and it does,
+  now, at `docs/plans/BACKLOG_DRAIN_24_7.md:12257-12288`, as §4.1 brief-body **invariant 7**, headed
+  with the row's own id. The whole adjudication took 55 minutes and left the parent open. Dates
+  normalised to UTC via `%ct` + `date -r`, and every cited sha confirmed on trunk with
+  `git merge-base --is-ancestor`:
+
+  | | | |
+  |---|---|---|
+  | row filed | — | 2026-08-21T16:29:38Z |
+  | row id first cited in the plan | `e0d69fa9f` | 16:42:23Z (+13 min) |
+  | invariant 7 headline **+ the working route** | `da0e7ffd2` | 17:18:49Z (**+49 min**) |
+  | `--role` proven BLOCKED, `1c760dca69ea` filed | `ce8fb6c07` | 17:24:33Z (+55 min) |
+
+  Four claims, graded separately (method 25):
+  1. **Diagnosis — TRUE and PROMOTED.** Invariant 7's first bullet is the row's mechanism verbatim:
+     *"Never `cc-notify claude-infrastructure-<N-1>`. Naming the predecessor pane is dead BY
+     CONSTRUCTION: this chain recycles IN PLACE as one pane, so the pane the brief names is gone the
+     moment the brief is written."*
+  2. **The ask — DELIVERED, to the venue the row itself named, 49 minutes after filing.** The cure
+     POSTDATES the filing and responds to it. This is the opposite of a stale row.
+  3. **The prescription — REFUTED, by this row's own author, 50 minutes later.** The row prescribed
+     *"address the ROLE, not the pane — `cc-notify --role`"*, cited from `cc-notify`'s own help.
+     `1c760dca69ea` (same `source=drain-lead-verify`, `firstTs` 17:20:15Z) records the `od -c` root
+     cause: **`cc-roles claim` writes a 6-LINE RECORD while `cc-notify` expects ONE bare address** —
+     writer emits a record, reader expects a scalar. The author extracted the prescription rather
+     than abandoning it, so closing the parent loses nothing.
+  4. **Harm — DISCHARGED structurally** (corroboration, never the grounds — method 21). The row's
+     harm was *"every recycle rediscovers it"*: #104 reported *"claude-infrastructure-103 is UNKNOWN
+     in the registry"*, #105 *"originator pane 104 is GONE"*, #106 re-diagnosed it again. Since
+     invariant 7 landed, **no recycle has rediscovered it** — #139's brief inherits the warning
+     verbatim, names the row id, and forbids the dead spelling before the session takes a turn. The
+     cure is a property of the TEMPLATE, not of any one window.
+
+  **BOUNDARY KEPT — two surviving halves, both already owned, NEITHER closed here** (method 23):
+  **`1c760dca69ea`** (OPEN, retire-in-one) owns the format mismatch that blocks `--role`;
+  **`c94cf98ab91f`** (OPEN, retire-in-one, `role-resolution-dead-target`) owns the other half — a
+  `--role` page to a missing-or-dead target **enqueues and returns success**, so the caller's rc says
+  delivered.
+
+  ⚠️ **ONE HALF-STALE CLAUSE IN THIS PLAN, RECORDED SO THE NEXT READER DOES NOT TAKE IT AS A LIVE
+  BLOCK.** Line 12275 reads *"`2aa51822cca8` is blocked on it"*, written at 17:24:33Z — **six minutes
+  after** the same commit series had already landed the working route at 17:18:49Z, and the store
+  never carried it (status was `open`, never `blocked`). It is true of the DURABLE cure and false of
+  the operational need. Same shape as #136's stale clause: a rationale that went half stale while its
+  load-bearing premise survived.
+
+  🆕 **MEASURED, HANDED ON, NOT ACTED ON — the `cc-roles` store has moved since the two surviving rows
+  were filed.** `~/.claude/cc-roles/` now holds `docs-lead` (a bare `450`), `drain-lead` (**a bare
+  `102` — one line, the scalar format `cc-notify` expects**) and an **empty** `orchestrator`, with the
+  dead pane-390 pointer moved aside to `archive/orchestrator.dead-pane-390.20260809T231034Z`.
+  `cc-roles list` reads `docs-lead UNVERIFIED 450 · drain-lead UNVERIFIED 102 · orchestrator ABSENT
+  empty`. That is movement inside `1c760dca69ea`'s and `c94cf98ab91f`'s territory, **not this row's**,
+  so it is handed on. 🚨 **It does not license closing either one**: `UNVERIFIED` is `cc-roles`' own
+  hedge, and `c94cf98ab91f`'s ask is a **fail-loud guard in both directions**, which no amount of
+  pointer repair delivers. The brief's standing ban stands — do not spend a recycle claiming a role.
+
+  **WRONG CAUSES REJECTED (method 43) — three, and the second is the one that nearly stopped the
+  close:**
+  a) *"Closing on a vanished precondition."* Rejected on the dates: the fix postdates the filing by
+     49 minutes and lives in the template, so the MECHANISM discharges the row. Today's live green —
+     `cc-sessions --names` resolving `claude-infrastructure-102` — is recorded as corroboration only.
+  b) *"The row pre-emptively objects to exactly this close."* Its title calls the live-name route
+     **"a fallback, not a design"**, which reads as a refusal written in advance. Rejected on
+     chronology: at 16:29 that fallback was UNDOCUMENTED behaviour each recycle improvised — which is
+     precisely *why* every recycle rediscovered it. At 17:18 it became a written, mandated procedure
+     carrying a re-resolve-each-time clause. **The object of the complaint no longer exists in the
+     form complained of.** A modal phrase is a separate claim (method 22), and this one was true of
+     the world at filing and false of the world 49 minutes later.
+  c) *"The `cc-roles` store still holds the dead pointer the family complains about."* Rejected by
+     reading the store (above) — and it belongs to the two survivor rows regardless.
+
+  **INSTRUMENT CHECKS (method 4/59) — three, all cheap, all pre-registered to abort.** The
+  author-sweep needle was positive-controlled before it was trusted: `source="drain-lead-verify"`
+  returns **7** rows and the driver ABORTS below 2, so its null on *"anything filed after
+  `1c760dca69ea` about this subject"* could not be read as absence. The id-grep aborts at 0 on
+  `b7252a3bb015` (read 5). The row was checked for a `falsifier` field **before** hunting for one —
+  `jq keys` shows none (#138's addition), which is why no probe was minted.
+
 - **2026-08-22 — drain recycle #138: a row updated IN PLACE was superseded by its own author's NEXT
   row 32 minutes later, and the in-place update is exactly what hid it. filed 0 / closed 1 /
   landed 1 commit. A whole CONDITION retired to zero.**
