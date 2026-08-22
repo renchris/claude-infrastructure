@@ -37,6 +37,21 @@
 set -uo pipefail
 
 UUID='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
+# 🚨 ANCHORED TO THE cc-notify ARGUMENT POSITION — for the SAME reason SESSION_NAME_REF is, and it
+# was an omission that this rule was not (backlog bacdfc4f63ab, measured 2026-08-22).
+# The 2026-08-08 correction below anchored the NEW session-name rule and left this PRE-EXISTING uuid
+# rule matching a bare token ANYWHERE in the payload. So the very case that correction exists to
+# refuse walks straight back in whenever any uuid appears in unrelated prose — and a fire payload
+# almost always carries one (a predecessor session id, a plan ref, a cited pane). Measured:
+#     cc-notify 775 …                          (no uuid in the file)  → RED    ← the correction works
+#     cc-notify 775 … + "predecessor was <uuid>" in prose → GREEN, and `cc-notify 775` is
+#                                                            verdict=unresolvable → the W5 root,
+#                                                            reached THROUGH a green F3.
+# Optional flags are tolerated (`cc-notify --receipt <uuid> …`) because the DOWNSIDE OF A FALSE-RED
+# HERE IS DESTRUCTIVE, not cosmetic: payload_lint_gate … enforce aborts the fire (exit 4) and
+# fire_cleanup then removes the worktree and DELETES THE BRANCH. Measured against every real payload
+# on this box: 116 of 116 genuine greens stay green (0 false-RED), and the laundered case goes RED.
+UUID_REF="cc-notify([[:space:]]+--[A-Za-z-]+)*[[:space:]]+\"?$UUID"
 SENDMSG='SendMessage'
 # non-teammate TERMINAL targets/events — the scope F2/a forbids over SendMessage.
 ANN='desk|orchestrator|operator|terminal|ship-witness|succession|program-complete'
@@ -76,7 +91,7 @@ lint_file() {
   [ -n "$pf" ] && [ -f "$pf" ] && [ -s "$pf" ] || { echo "payload-lint: CANNOT DETERMINE — no readable payload '$pf'"; return 2; }
   local fail=0 has_cc has_uuid has_role has_pane presc
   grep -qE 'cc-notify'   "$pf" && has_cc=1   || has_cc=0
-  grep -qE "$UUID"       "$pf" && has_uuid=1 || has_uuid=0
+  grep -qE "$UUID_REF"   "$pf" && has_uuid=1 || has_uuid=0
   grep -qE "$ROLE_REF"   "$pf" && has_role=1 || has_role=0
   grep -qE "$SESSION_NAME_REF" "$pf" && has_pane=1 || has_pane=0
   # F3 — the back-channel block: a cc-notify reference AND a resolvable target — a full desk uuid,
@@ -154,6 +169,29 @@ SUCCESSOR FIRE — continue the build.
 BACK-CHANNEL: ping the originator via cc-notify 776 "HANDOFF-PING w6: <status>".
 EOF
 
+  # (5c) THE LAUNDERED BARE PANE ID — (5b) with a uuid added in UNRELATED PROSE, which is what every
+  #      real fire payload carries (a predecessor session id, a plan ref, a cited pane). Until
+  #      2026-08-22 the uuid rule matched a bare token ANYWHERE, so this went GREEN while its actual
+  #      back-channel `cc-notify 776` is verdict=unresolvable — the W5 root reached THROUGH a green
+  #      F3 (backlog bacdfc4f63ab). (5b) only stayed RED because it happens to contain no uuid at
+  #      all; one line of ordinary prose made it vacuous. MUST stay RED.
+  cat >"$d/bareint-laundered.txt" <<EOF
+SUCCESSOR FIRE — continue the build.
+Context: the predecessor session was $DESK (read its transcript for the rejected approaches).
+BACK-CHANNEL: ping the originator via cc-notify 776 "HANDOFF-PING w6: <status>".
+EOF
+
+  # (5d) PREFIXED FORM — \`w0t0p0:<uuid>\` is \$ITERM_SESSION_ID verbatim, and it is NOT deliverable:
+  #      cc-notify's resolver rejects it at every arm (the ':' fails the safe-filename gate, and both
+  #      uuid arms are ^...\$-anchored), so it returns no-such-target. handoff-fire.sh normalizes it
+  #      off with \${BACK_SID##*:} before use for exactly this reason. An AUTHORED payload gets no
+  #      such normalization, and the old unanchored rule passed it on the uuid SUBSTRING after the
+  #      colon — the same substring bug handoff-fire.sh:7926 names. MUST stay RED.
+  cat >"$d/prefixed.txt" <<EOF
+SUCCESSOR FIRE — continue the build.
+BACK-CHANNEL: ping the originator via cc-notify w0t0p0:$DESK "HANDOFF-PING w6: <status>".
+EOF
+
   # (6) PROSE INTEGER — a number that is NOT a cc-notify target must NOT satisfy F3, or the widening
   #     above would turn "100 req/min" in an ordinary brief into a fake back-channel. MUST stay RED.
   cat >"$d/prose-int.txt" <<'EOF'
@@ -174,8 +212,10 @@ EOF
   expect "$d/paneid.txt"  0 "kitty session-name back-channel (cc-notify <registry name>) did not go GREEN"
   expect "$d/bareint.txt" 1 "a BARE pane id (cc-notify 776 — verdict=unresolvable) wrongly satisfied F3"
   expect "$d/prose-int.txt" 1 "a prose integer (not a cc-notify target) wrongly satisfied F3"
+  expect "$d/bareint-laundered.txt" 1 "a bare pane id LAUNDERED by an unrelated prose uuid wrongly satisfied F3"
+  expect "$d/prefixed.txt" 1 "a w0t0p0:-prefixed address (no-such-target) wrongly satisfied F3 on its uuid substring"
   if [ "$fails" -eq 0 ]; then
-    echo "payload-lint --selftest: 8/8 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated) AND on a kitty session NAME; RED on a bare pane id (undeliverable) and on a prose integer; LOUD on missing."
+    echo "payload-lint --selftest: 10/10 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated) AND on a kitty session NAME; RED on a bare pane id (undeliverable), on a prose integer, on a bare pane id laundered by a prose uuid, and on a w0t0p0:-prefixed address; LOUD on missing."
     exit 0
   fi
   echo "payload-lint --selftest: FAILED — the lint does not discriminate (do not trust F3)."
