@@ -57,7 +57,11 @@ setup() {
   # greps them, but the seam is pinned for the same reason the block above pins handoff-fire's: a
   # case added later that EXECUTES either file must not inherit a live pane's launch command.
   # UNSET rather than assigned, because "absent" is the state their readers branch on.
-  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE
+  # CC_PANE_CMD_DIR rides with its two siblings: bin/it2-kitty:989 injects all three from ONE
+  # `--env` block, so a pane that carries either of the above carries this one too. It was missed
+  # here (and in two sibling suites) only because rule 6 excluded any seam whose default mentions
+  # $HOME — deleted 2026-08-21, backlog b2775a8bbc3a.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_DIR
 }
 
 # a real call site, not a comment or a doc mention

@@ -38,7 +38,10 @@ setup() {
   # subject a caller's intent: :626 reads an ambient CC_PANE_CMD as its own, takes the pre-delivered
   # branch, and the legacy-typed stamp case would silently stop testing the typed path. Unset in
   # setup() rather than in fake_kitty(), because the library-only tests never call fake_kitty.
-  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE
+  # CC_PANE_CMD_DIR joins them: :989 injects all three from ONE `--env` block, so "these two" was
+  # never the real set. It was invisible to rule 6 until 2026-08-21 because its default mentions
+  # $HOME and rule 6 excluded every such seam — backlog b2775a8bbc3a deleted that exclusion.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_DIR
 
   # handoff-fire's capacity_gate() reads live machine load and this box lives above its ceiling; a
   # test naming self-close must not have its verdict decided by what else is running.
