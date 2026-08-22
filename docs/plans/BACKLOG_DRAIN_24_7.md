@@ -87,6 +87,108 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #124: a stored probe that greps for the PRESCRIBED FIX convicts a
+  better cure — and the same abstention lets a SAMPLING probe close a live row. filed 1 (BLOCKED) /
+  closed 1 / reopened 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  fifth consecutive clean reading.** Converge lag **10** at open (budget 25; both landed paths are
+  `M`, no ADD, so the commit budget applies) ⇒ ✅ not 🚀. Fold at open: `master-convergence-deadlock`
+  **44/4**, exactly where #123 left it.
+
+  **Row `fd10594f088c` CLOSED BY ANSWER, not by a fix** — it was question-shaped and asked for a
+  census, so the deliverable is the census with an honest denominator. **Bound stated before starting
+  and honoured:** static shape-census over ALL stored falsifiers in the effort, dynamic re-run over
+  the subset whose subject is known-fixed. It did not become a wave.
+
+  **The population is 34, not the 24 this chain has been quoting** — 34 probes over 102 rows (17 open
+  / 15 done / 2 blocked). #108's number was ten recycles ago and the generator kept minting
+  (memory: `generator-population-grows-during-its-own-repair`). All 34 re-run at trunk `9fb369bcd`
+  through one runner, each with a per-probe **existence control** so an `rc 1` produced by an ABSENT
+  FILE is never read as an absent needle — 0 real targets missing, so no immortal verdict below is an
+  artifact of a moved file.
+
+  **Coupling is only checkable where the subject is KNOWN-FIXED, and three "done" rows are not that.**
+  Excluded rather than counted: `16c864bd34a8` (closed as a DUPLICATE, its own evidence saying *"NOT
+  closed as cured — the defect is LIVE today"*), `903e7ae67621` (closed STALE, the world moved), and
+  `b7252a3bb015` (auto-closed **by its own probe** — see below). Excluding them is the whole
+  difference between a denominator and a headline: of the **12 rows closed by a LANDED FIX, 7 probes
+  retract and 5 do not (42%)**.
+
+  🚨 **THE ROW'S OWN HYPOTHESIS IS REAL AND IS THE MINORITY — 1 of the 5.** The input/needle coupling
+  it named is confirmed at its archetype `e2eaaa0f4907`, but it is 20% of the immortals and 8% of the
+  fix-closed population. **The dominant shape, 4 of 5, is a probe that greps for a PRESCRIBED LITERAL
+  the actual cure never typed** (`3709b1649792` · `9be5e66e1c34` · `9f69e13fc2e0` · `f6b460816387`) —
+  memory `cure-implements-none-of-the-rows-candidates` wearing a probe's clothes. `f6b460816387` says
+  it in its own evidence, *"CURED at the only enforcing venue, by a better design than prescribed"* —
+  and its probe then **convicts the cure**. So the row's screening question ("does the probe's INPUT
+  contain the token its NEEDLE asserts on?") catches the minority; the durable rule is wider and is
+  what landed: **write the needle against the DEFECT'S BEHAVIOUR, never against the remedy's
+  spelling.** A probe you can satisfy by typing a string is a probe a different correct fix will fail.
+
+  **#108's "24/24 exit 1" is upheld as uninterpretable, with a sharper reason than the row gave.** It
+  cannot separate "still live" from "cannot retract"; at today's rates a same-shaped population
+  carries ~1 immortal for every 2 retractors. A one-pass run over live rows can never answer this —
+  only a re-run against known-fixed subjects can, which is why this census is shaped that way.
+
+  🚨 **THE BY-CATCH IS THE COSTLIER FINDING, AND IT RUNS THE OTHER DIRECTION.** `fd10594f088c` worried
+  about probes that can never exit 0 (immortal rows — wasted attention). The inverse loses work:
+  **`cc-premise sweep --close-falsified` auto-closed the LIVE row `b7252a3bb015` on 2026-08-16.** Its
+  probe reads the **newest stamp only** (`ls -t … | head -1`) and exits 0 unless that one stamp is a
+  no-failing `cut`. The phenomenon runs at **27 of 40 (67.5%)**, so the probe exits 0 about **one time
+  in three by sampling**, with the defect fully present. It is not a verdict, it is a coin.
+  **Re-measured across the window since the close** (method 21 — never on one fresh reading): 27/40
+  over `2026-08-20T12:22Z → 2026-08-22T01:56Z`, a window lying **entirely after** the close, newest
+  stamp a `cut`. The row sat shut for six days while its subject ran unchanged. **Reopened with
+  `--force`** — the verb refused the plain spelling and named this exact case ("the completion was
+  premature"), which is the guard working.
+
+  **Why no bound caught it, traced through both files.** `_close_falsified` carries FOUR bounds and
+  its header calls the anti-coverage screen *"what makes this safe at all"* — and **every bound is a
+  re-reading of the same instantaneous sample.** Bound 1 re-asks "immediately before acting", seconds
+  later, against a stamp population that has not moved: same answer, read as corroboration (memory:
+  `discriminating-retry-must-move-away-from-the-noise`). And the screen never votes — `filing_day_screen`
+  resolves probes through `_probe_clauses`, which returns `None`/UNDECIDABLE for *"a script call, pipe,
+  variable, redirect, absolute path"*, i.e. **every shape a runtime-state probe must have**. Only
+  `ANTI_COVERAGE` downgrades in `assess`; UNDECIDABLE is the fail-open default and passes straight
+  through to `falsified`. **`cmd_falsify`'s header already records that UNDECIDABLE is "the majority:
+  most probes call a script or read outside the repo"** — true, and harmless where it was written (a
+  WARNING on a human's write), load-bearing where it wasn't checked (an autonomous close). The screen
+  is a TREE question; the dangerous probes are RUNTIME questions. **Out of population, not weak**
+  (memory: `filter-inherits-its-producers-population` — #123's lint, same shape, other file). Method 11
+  pays for the **thirteenth** consecutive recycle: the producer's own header held the argument, applied
+  to the neighbouring case.
+
+  **Landed at the two decision sites, no new file** (premise 2 — `bin/cc-backlog` `cmd_falsify` gets
+  the census and both immortal shapes, where a probe is *attached*; `bin/cc-premise` `_close_falsified`
+  gets the sampling hole beside the safety claim it refutes). **The fix was NOT taken** — making
+  UNDECIDABLE refuse an auto-close is conservative but retires auto-close for the majority of stored
+  probes by that file's own count, trading unattended drain for correctness. That is a value fork, so
+  it is **filed and BLOCKED as `228e30f8adce`** with the decision named (precedent: `55063c2fee84`'s
+  treatment, and #115–#123 all declining `786ac458be00` as owner's-mandate). The class to fix is
+  stated so nobody narrows it to one probe's spelling: **"a probe whose reading is a SAMPLE", and a
+  sample needs a RATE, not a retry.**
+
+  **Wrong causes rejected — and two are about my own instruments, which is the half that generalises.**
+  (1) The runner's first pass read an empty backlog JSON; the seductive cause was "`cc-backlog` is not
+  on PATH in a bash subshell". The real one: **a heredoc-supplied python program occupies stdin**, so
+  the pipe into `python3 -` was silently empty. The JSON now goes through a FILE. (2) The existence
+  control flagged `e2eaaa0f4907` as having a missing target (`tests/x.bats`) — which would have
+  explained its `rc 1` innocently. Wrong: that token is **inside the command the probe FEEDS the
+  subject**, not a file it reads, and my control mistook fed input for a target — a misfire that is
+  itself the signature of the coupling shape (memory: `probe-must-not-assert-about-the-wrong-layer`,
+  #123's control that fired at the wrong layer). (3) `b79591064f75` [open] and `16c864bd34a8` [done]
+  carry a **byte-identical probe**, so the done one "must have retracted" — it does not; it exits 1,
+  because that row was closed as a duplicate and explicitly not as cured. (4) Adopting the row's
+  coupling hypothesis unmeasured, which method 20 forbids in exactly the same words it forbids
+  rejecting a prescribed remedy unmeasured — it was 1 of 5.
+
+  **Evidence.** `bash -n` rc 0 · `shellcheck -S style bin/cc-backlog` rc 0 · `python3 -m py_compile
+  bin/cc-premise` rc 0 · `tests/cc-backlog-falsify.bats` 26/26 · `tests/cc-premise-falsifier.bats`
+  12/12 · `tests/cc-premise-filing-day.bats` 13/13 · `tests/cc-premise.bats` 25/25 — 76 assertions,
+  plan line matched `ok+notok` in every suite, **0 skips**. Both edits are header/docstring-only: no
+  executable byte changes, which is why the census lands as documentation and the behaviour change is
+  blocked as a decision. Backlog evidence round-tripped through `jq` byte-identical.
+
 - **2026-08-21 — drain recycle #123: an argv list is an invocation, and the site regex only knew
   whitespace — the fix's real content is which widening was rejected, and why. filed 0 / closed 1 /
   landed 2 commits.**
