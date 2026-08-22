@@ -65,6 +65,15 @@ setup() {
   # ~/ once per invocation — measured: 115 s → >8 min on tests/ship-land.bats). This suite is the
   # one place that wants the real mechanism, so it opts back in explicitly.
   export SHIP_LAND_GATE_HOME_ISO=on
+  # THE OPERATOR'S CONFIG DIR, STOOD IN FOR — and pinned, because a fixtured $HOME does NOT redirect
+  # CLAUDE_CONFIG_DIR (it is absolute). Unpinned, this variable arrives from the launcher that
+  # started the session (`bin/claude-kimi` exports it; here it is ~/.claude-quaternary), so the
+  # config-dir case below would drive its mutation into the operator's REAL live config dir. The
+  # stand-in is deliberately OUTSIDE $HOME, matching the real topology: isolation works by
+  # overriding HOME, and this path does not go through HOME at all.
+  export AMBIENT_CONFIG="$BATS_TEST_TMPDIR/ambient-config"
+  mkdir -p "$AMBIENT_CONFIG/autonomy"
+  export CLAUDE_CONFIG_DIR="$AMBIENT_CONFIG"
 }
 
 # ── fixtures ───────────────────────────────────────────────────────────────────────────────────
@@ -80,12 +89,20 @@ iso_fixture() {   # stub `bats` that REPORTS the $HOME it was handed and MUTATES
 #!/bin/bash
 { echo "HOME=\$HOME"
   echo "ISO=\${GATE_HOME_ISOLATED-unset}"
+  echo "CCD=\${CLAUDE_CONFIG_DIR-unset}"
   echo "IDL=\$(tr '\n' ',' < "\$HOME/.claude/autonomy/idl.jsonl" 2>/dev/null)"
   echo "RESO=\$(tr '\n' ',' < "\$HOME/.reso/ledger" 2>/dev/null)"
   echo "ARGS=\$*"
 } >> "$PROBE"
 # The cross-talk this exists to contain: a non-hermetic suite writing the operator's desk state.
 echo MUTATION-FROM-GATE >> "\$HOME/.claude/autonomy/idl.jsonl" 2>/dev/null
+# The SAME cross-talk through the config-dir seam. Spelled the way the tree spells it (65 of the 79
+# readers use exactly this form), so the stub exercises the real resolution rather than a paraphrase
+# of it: overriding HOME redirects the fallback but never a CLAUDE_CONFIG_DIR that is actually set.
+ccd="\${CLAUDE_CONFIG_DIR:-\$HOME/.claude}"
+mkdir -p "\$ccd/autonomy" 2>/dev/null
+echo MUTATION-VIA-CONFIG-DIR >> "\$ccd/autonomy/idl.jsonl" 2>/dev/null
+echo "CCDWROTE=\$(grep -c MUTATION-VIA-CONFIG-DIR "\$ccd/autonomy/idl.jsonl" 2>/dev/null || echo 0)" >> "$PROBE"
 case "\$(cat "$STUB_RC" 2>/dev/null)" in
   red) echo "1..1"; echo "not ok 1 a genuine failure"; exit 1 ;;   # a REAL red: a not-ok IS present
   cut) exit 1 ;;                                                   # a CUT: rc!=0 with ZERO output
@@ -292,6 +309,31 @@ P
   [ "$status" -eq 0 ]
   echo "$output" | grep -qx '1' || false
   [ "$(cat "$HOME/.claude/autonomy/idl.jsonl")" = LIVE ]
+}
+
+@test "(b) a mutation through CLAUDE_CONFIG_DIR is contained too — \$HOME alone does not redirect it" {
+  # THE HOLE THIS CLOSES: isolation works by overriding HOME, and CLAUDE_CONFIG_DIR is an ABSOLUTE
+  # path, so pre-fix a child resolving `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` walked straight past the
+  # clone into whatever the launcher exported — on this desk a per-account dir the clone list does
+  # not clone. So the gate cloned the `.claude` its children do not read and left unprotected the one
+  # they do. Sibling of (b) above, and red pre-fix on two independent assertions (the CCD= value and
+  # the stand-in's contents), which is why it is a case and not a line in that one.
+  iso_fixture
+  landable feat/iso-configdir
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  grep -q '^ARGS=' "$PROBE" || false                                   # the mutating stub DID run
+  # the child was handed a CLONE-ROOTED config dir, and NOT the ambient one setup() exports
+  grep -q "^CCD=$SHIP_LAND_GATE_HOME_ROOT/gate-home\." "$PROBE" || false
+  [ "$(count_in "^CCD=$AMBIENT_CONFIG\$" "$(cat "$PROBE")")" -eq 0 ]
+  # POSITIVE CONTROL, for (b)'s reason at 283: without it the containment assertion below is also
+  # satisfied by a write that silently FAILED — the stand-in clean for the wrong reason.
+  grep -q '^CCDWROTE=1$' "$PROBE" || false
+  # …and the operator's config dir never saw it. Through count_in, not a bare `grep -c <file>`:
+  # once the fix works the stand-in's idl.jsonl does not EXIST, and `grep -c` on a missing file
+  # prints nothing, so `|| true` yields an EMPTY string and `[ "" -eq 0 ]` dies with "integer
+  # expression expected" — the success case failing on the assertion's shape. Measured here.
+  [ "$(count_in MUTATION-VIA-CONFIG-DIR "$(cat "$AMBIENT_CONFIG/autonomy/idl.jsonl" 2>/dev/null)")" -eq 0 ]
 }
 
 @test "(b) ship-land's OWN ledger still writes to the REAL ~/ (the flake denominator survives)" {
