@@ -87,6 +87,111 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #147: a row's TITLE named one file, its EVIDENCE quoted another, in
+  another repo — and the lander's own sibling script had documented the defect in prose rather than
+  fix it. filed 0 / closed 1 / landed 1 commit (CODE + TESTS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (tenth consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-ninth
+  consecutive clean reading.** Converge lag **7** at open (budget 25).
+  Board at open: **open 251 / blocked 182 / done 2137 / claimed 2, of 2572**. Against #146's close
+  (open 249 / claimed 4) the aggregate moved **+2 open / −2 claimed** before this session touched
+  anything — a reminder that a delta is not authorship (method 80). Retire-in-one **42** at open.
+  **Declared before closing: this close moves the retire-in-one count (42 → 41) and does NOT move
+  `master-convergence-deadlock`, which held at 34 open / 6 blocked — an ELEVENTH consecutive window
+  closing outside the nominal warm effort.**
+
+  **CLOSED — `a85dbba865f3`** (`shipland-push-failure-mislabel`): `scripts/ship-land.sh` reported
+  EVERY non-timeout push failure as *"non-fast-forward — a sibling beat you inside the window"*,
+  with nothing checked. Cure `47de4bd39`, this session's own commit.
+
+  **THE ROW WAS TRUE, AND THE PROJECT HAD ALREADY WRITTEN THAT DOWN — IN A SIBLING SCRIPT'S PROSE.**
+  `scripts/cloud-reconcile.sh:618` and `:656` both read *"githooks/pre-push would refuse the push
+  (and ship-land would report that refusal as exit 7, an ordinary push race, which is why it is
+  caught HERE)"*. A second script had been built to work AROUND the mislabel rather than fix it. No
+  id-grep could reach that (the id is cited nowhere — **20 cited of 433** over open+blocked, same
+  instrument as #146, one more row in the population); it was reached by grepping the **symptom
+  string**, which is method 18's cheapest arm and the one that paid here.
+
+  **THE NEEDLES ARE MEASURED, AND THE SURPRISE IS IN THE ARM THAT WAS SUPPOSED TO BE EASY.** A probe
+  drove both cases against a real bare remote, both arms in one file: a genuine non-ff prints
+  `! [rejected]        HEAD -> main (fetch first)` and **the literal string `non-fast-forward` never
+  appears in it**, so a classifier keyed on the wording of our own error message would have read 0 on
+  the very case that message names — shipping the exact inverse of the reported bug as its fix
+  (method 49). A hook refusal prints **no rejected line at all**. Third measured fact, the
+  "swallowed" half of the complaint: under the old `git push … >&2` spelling **0** of the hook's
+  lines reached the caller's captured stream (110 bytes captured, none of them the hook's).
+
+  **TWO SITES, AND THE SECOND WAS WORSE THAN THE ONE THE ROW NAMED.** The verify-retry loop carried
+  the same unconditional label and then **looped**: a hook refusal there spent the whole retry budget
+  and exited **8** blaming *"a concurrent rebase-land keeps dropping content"* — a verdict with no
+  relation to the cause, and the shape `38bddf30180c` fears ("a session reads a false STOP and
+  abandons a good land"). Method 51's converse: two sites making the same unproven claim is a defect
+  until proven a pattern.
+
+  **SCOPE HELD DELIBERATELY.** Exit codes unchanged — a refused push is still 7, so every consumer's
+  handling (nothing landed, tree clean, backup ref intact) stays correct and only the *diagnosis*
+  moved. A new exit code was considered and rejected: it lands in every derivation's fail-closed
+  `*)` arm silently (memory `new-enum-member-falls-into-fail-closed-default`), and the caller's
+  handling was never the broken part. No `attest_land` at the new exit site either — the file's own
+  header puts that rule in `_land_exit_trap` *"HERE, not at the exit sites"* (method 11, the
+  thirty-sixth consecutive recycle where reading the subject's documented policy answered the
+  design question).
+
+  **🆕 THE CORRECTION THIS RECYCLE PAYS FOR — #146's TWO HANDED-FORWARD LEADS WERE NOT OURS, AND THE
+  REASONING THAT MADE THEM LOOK OURS IS THE LESSON.** #146 ran the cross-`project` sweep for the
+  first time and derived a genuinely good discriminator: convict only where the named path exists in
+  exactly ONE repo. By that test `a7f7802473e2` ("scripts/ship-land.sh misreports a pre-push HOOK
+  REJECTION as *CAS rounds exhausted — trunk is moving faster than this land*") was ours, since
+  `scripts/ship-land.sh` exists only here. **It is not ours.** Neither quoted string exists in this
+  repo at all; the row's own evidence line — *"already sits on top of origin/main (…) — no reconcile
+  needed"* — is **reso's `scripts/ship-reconcile.sh:149`, verbatim**. The row's TITLE names one file
+  and its EVIDENCE fingerprints another, in another repo. It is correctly filed to reso and was left
+  there. `38bddf30180c` is **`blocked`, not open**, held by a live off-box worker per its own
+  `needs`, and its `venueWhy` is exactly the vacuous "premise clear" reachability certificate #146
+  warned about — also not a drain pickup. **So the two "strongest concrete leads" #146 left were a
+  mis-attribution and a blocked row; the row that paid came from the retire-in-one fold instead, one
+  line above them in the same output.**
+  **The generalisable lint (the FORTIETH, and it sharpens #146's own): A PATH IN A ROW'S TITLE IS A
+  CLAIM; THE OUTPUT IT QUOTES IS A FINGERPRINT. Convict on the string, not on the path — a title can
+  name the wrong file, and #146's path test is necessary but not sufficient.** One grep of the quoted
+  message across both repos settles in seconds what a path census gets wrong.
+
+  **VERIFICATION.** 5 tests extending `tests/ship-land.bats` (**no new file** — premise 2): both
+  measured corpora, **both** non-ff spellings git can emit, the empty-log default (fail toward the
+  honest message — memory `gate-default-decides-failure-direction`), and an end-to-end land refused
+  by a hook that must replay the hook's words and must not name a sibling. Red-proofed by overlay
+  (#126's form, the fix being uncommitted): scratch copy with `ship-land.sh` reverted to HEAD and the
+  new tests kept — **ARM RED plan `1..5` ok=0 notok=5 · ARM GREEN plan `1..5` ok=5 notok=0 · skip=0
+  on both**, with an overlay control asserting the classifier is genuinely absent pre-fix. Honest
+  limit, stated rather than glossed: tests 1-4 red pre-fix because the function is *absent* (the
+  non-vacuity control firing); **test 5, the end-to-end, is the one that convicts the BEHAVIOUR.**
+  Full suite after the change: **150/150, plan matched, 0 skips, rc 0** (145 pre-existing + 5).
+  `shellcheck -S style` rc 0 · `bats-kill-guard-lint` clean · `bats-assert-liveness` **0 dead —
+  after reading 2**, which is its own positive control: git's rejected line starts with `!`, which
+  the analyzer reads as a whole-command negation, so a verbatim multi-line corpus makes the test
+  DATA fail the gate. The corpora are single `printf` lines for exactly that reason, and the suite
+  says so inline so the next author does not "tidy" them back.
+
+  **A STALE-FIXTURE FINDING, NOT FILED (it is cured in place by this diff).** Both pre-existing
+  exit-7 tests are titled *"push non-ff"* / *"a sibling beat us to the push"* and both simulate the
+  failure with a **server-side `update` hook** — i.e. a hook DECLINE, never a real race. The suite
+  has never had a genuine non-ff fixture, and under the old single message it could not have
+  noticed: every push failure said the same sentence, so the two cases were indistinguishable to the
+  tests as well as to the operator. Both still pass unchanged (they assert exit 7 and `grep -qi
+  reject`, and the new message contains "rejected"); the real-race polarity is now pinned by the
+  measured corpus instead.
+
+  **WRONG CAUSES REJECTED (method 43).** (1) *Key the classifier on "non-fast-forward"* — refuted by
+  the probe; it is absent from real non-ff output. (2) *Assert `origin/TRUNK` actually MOVED before
+  claiming a race* — the sibling reso row's own prescription, not adopted: it costs an extra network
+  call inside the mutex this file's R5 section exists to keep short, and git's output already
+  answers it. (3) *Capture the push output with `$(…)`* — would run `git_net` in a subshell and lose
+  `NET_TIMED_OUT`, downgrading a timeout (exit 10, retryable machine verdict) to an ordinary
+  refusal; captured to a file instead. Cause (3) is the `command-substitution-assignment` cluster
+  #142 named, hit live rather than as a lint.
+
+  **Land:** `SHIP_LAND_SMOKE_BUDGET_S=420`, rc 0, FF, content-verified both directions.
+
 - **2026-08-22 — drain recycle #146: `lastTs` moved three days after the cure landed, and what moved
   it was a machine re-certifying WHERE the row could run. filed 0 / closed 1 / landed 1 commit
   (DOCS).**
