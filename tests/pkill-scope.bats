@@ -387,3 +387,59 @@ EOF
   n="$(git grep -hE '(pkill|killall)' -- '*.sh' '*.bats' 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null | grep -c . || true)"
   [ "$n" -gt 0 ]
 }
+
+# ── an option placed AFTER the pattern is not an option (incident 2026-08-09) ─────────────────────
+# `pkill -f "next dev" -P $$` killed three Claude sessions across two account dirs at 07:38:17Z.
+# BSD getopt stops at the first operand, so -P and $$ were never options — pgrep/pkill treated them
+# as ADDITIONAL PATTERNS, OR'd, and `-P` is a substring of the HANDOFF-PING brief every fired peer
+# carries in its argv. The author wrote a scoping flag and the shell delivered a machine-wide one.
+# The guard's own scope allowlist accepted that `-P` as proof of scoping, so the form it was written
+# to stop would have passed it — which is why this check is target-INDEPENDENT and runs first.
+
+@test "guard: the incident command itself is DENIED (no gate program named anywhere in it)" {
+  [ "$(decision 'pkill -f "next dev" -P $$')" = "DENY" ]
+  [ "$(decision 'pkill -f "next dev" -P $$ 2>/dev/null; lsof -t -i:3381 | xargs kill')" = "DENY" ]
+}
+
+@test "guard: a trailing flag is denied whatever it is, and whatever it targets" {
+  [ "$(decision 'pkill -f my-daemon -9')" = "DENY" ]        # inert signal spec
+  [ "$(decision 'pkill -f bats -u chrisren')" = "DENY" ]    # inert user scope
+  [ "$(decision 'killall Dock --quiet')" = "DENY" ]
+}
+
+@test "guard: the SAME flags in option position still pass — the fix is about POSITION" {
+  [ "$(decision 'pkill -f -P 12345 "next dev"')" = "PASS" ]
+  [ "$(decision 'pkill -9 -f my-daemon')" = "PASS" ]
+  [ "$(decision 'pkill -P 12345 -f bats')" = "PASS" ]       # the pre-existing scoped form, unchanged
+  [ "$(decision 'pkill -u chrisren -f my-daemon')" = "PASS" ]
+}
+
+@test "guard: an option's ARGUMENT is not mistaken for the pattern operand" {
+  # -P consumes the next word. If the walker treated 12345 as the operand, -f would look trailing
+  # and every correctly-scoped call in the repo would start denying.
+  [ "$(decision 'pkill -P 12345 -f "bats.*${PWD##*/}"')" = "PASS" ]
+  [ "$(decision 'pkill -u chrisren -t ttys001 -f my-daemon')" = "PASS" ]
+}
+
+@test "guard: still not fooled by a message body (the text-is-not-execution rule holds)" {
+  [ "$(decision 'git commit -m "fix: pkill -f x -P \$\$ was inert"')" = "PASS" ]
+}
+
+@test "guard: a QUOTED pattern containing a dash-word is not mistaken for a trailing flag" {
+  # The false positive this check shipped with, caught by sweeping it over the repo's own 107
+  # tracked kill lines: `--trunk` lives INSIDE the pattern. The line is still denied — it is an
+  # unscoped gate kill — but by the clause that is actually true of it, with the actionable message.
+  run bash -c 'printf %s "$1" | python3 -c "import json,sys;print(json.dumps({\"tool_input\":{\"command\":sys.stdin.read()}}))" | bash "$2"' _ \
+      'pkill -f "ship-land.sh --trunk main"' "$HOOK"
+  printf '%s' "$output" | grep -q 'Worktree-UNSCOPED'
+  # The must-NOT-contain half, written LIVE. `! cmd` is exempt from errexit, so the obvious
+  # spelling asserts nothing — the land gate's dead-assertion ratchet caught exactly that here.
+  # `if cmd; then false; fi` puts the failure on a branch errexit does reach.
+  if printf '%s' "$output" | grep -q 'Inert flag'; then
+    echo "denied by the WRONG clause: --trunk inside the quoted pattern read as a trailing flag"
+    false
+  fi
+  # and a SCOPED pattern carrying a dash-word must pass outright
+  [ "$(decision 'pkill -f "bats --tap ${PWD##*/}"')" = "PASS" ]
+  [ "$(decision 'pkill -f "bats --tap .worktrees/wt-x"')" = "PASS" ]
+}

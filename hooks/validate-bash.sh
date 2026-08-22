@@ -628,6 +628,42 @@ if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:
   PK_OCCURRENCES=$(printf '%s' "$CMD_NOHD" | grep -oE '(pkill|killall)[^;&|]*' || true)
   while IFS= read -r pk; do
     [[ -z "$pk" ]] && continue
+    # ── AN OPTION AFTER THE PATTERN IS NOT AN OPTION (2026-08-09). Target-INDEPENDENT, and it runs
+    # BEFORE the gate-program filter below, because the incident that added it named no gate at all.
+    #
+    # BSD getopt stops at the first non-option argument, and pgrep/pkill then treat every remaining
+    # word as an ADDITIONAL PATTERN, OR'd with the first. So `pkill -f "next dev" -P $$` does not
+    # mean "my own children matching next dev" — it means "kill anything matching /next dev/ OR /-P/
+    # OR /<pid>/", and `-P` is a two-character substring that appears in every fired handoff peer's
+    # argv (HANDOFF-PING contains it). Measured: that exact line killed three sessions across two
+    # account dirs at 07:38:17Z on 2026-08-09, sparing only the caller's own (pkill excludes its
+    # ancestors). The author wrote a scoping flag; the shell delivered a machine-wide pattern.
+    #
+    # This is ALWAYS a bug — the trailing token is never doing what it reads as — so it is a deny
+    # regardless of what is being killed, and it is what makes the `-P` clause in the scope
+    # allowlist below SOUND: a `-P` that survives to that test is necessarily in option position.
+    # Walk a QUOTE-NEUTRALISED copy, for the same reason the command-position test above does. A
+    # quoted pattern may legitimately contain a dash-word — `pkill -f "ship-land.sh --trunk main"`
+    # is the guard's OWN documented example — and a whitespace walker over the raw text reads that
+    # `--trunk` as a trailing option. Caught by sweeping this check across the repo's 107 tracked
+    # kill lines before shipping it: it convicted that line, with the wrong reason. Collapsing each
+    # quoted run to one empty token makes a quoted pattern exactly one operand, which is what it is.
+    _pk_noq=$(printf '%s' "$pk" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+    _pk_bad_opt=$(printf '%s\n' "$_pk_noq" | awk '{
+      operand = 0
+      for (i = 2; i <= NF; i++) {
+        t = $i
+        if (t ~ /^-/) {
+          if (operand) { print t; exit }
+          if (t ~ /^-[FGjPstuUMN]$/) i++     # these consume the next word as their argument
+          continue
+        }
+        operand = 1
+      }
+    }')
+    if [[ -n "$_pk_bad_opt" ]]; then
+      deny "Inert flag in a kill: '$_pk_bad_opt' comes AFTER the pattern in '$(echo "$pk" | cut -c1-60)', so pkill/pgrep never parse it as an option. BSD getopt stops at the first operand and every later word becomes an ADDITIONAL PATTERN, OR'd with the first — so this does not narrow the kill, it WIDENS it, and the widening is invisible in the text. Measured 2026-08-09: 'pkill -f \"next dev\" -P \$\$' killed three Claude sessions across two account dirs in one instant, because '-P' matches the argv of every fired handoff peer (HANDOFF-PING contains it); only the caller's own session lived, and only because pkill excludes its own ancestors. Put every flag BEFORE the pattern: 'pkill -f -P \$\$ \"next dev\"' — or verify the selection first with the read-only 'pgrep' form of the same line."
+    fi
     # Does this occurrence target a GATE program at all? Otherwise it is none of our business.
     echo "$pk" | grep -qE '(bats|ship-land|postland-verify)' || continue
     # Is it scoped to ONE worktree? Any of: a $PWD-derived expression, a -P (parent-pid) scope,
