@@ -642,6 +642,24 @@ _sigrecord_arm
 # own goal-aware nudge in the same block (its E2 arm names a goal-blocking watcher's pid outright),
 # so this line's whole job is to be CORRECT UNDER BOTH STATES rather than to contradict it.
 #
+# ── F5 (2026-08-22): NAMING THE CHECK IS NOT THE REMEDY THE PARAGRAPH ABOVE REFUSES ────────────────
+# docs/research/handoff-high-value-capture-2026-08-19.md §5 F5, backlog 3078f45dded4. The refusal
+# above is sound and STANDS — it refuses EVALUATING the predicate here (a multi-MB grep in a SIGTERM
+# handler) and BRANCHING on it here (a read-time question answered at write time). It does not
+# refuse NAMING the check, which costs one interpolated string and blocks nothing.
+#
+# The clause it does not defend is the last one: "the reader is not left guessing either". That was
+# MEASURED FALSE. This function and mailbox-drain.sh's goal-aware arm landed in the SAME commit
+# (e8c2435aa, 2026-08-17 00:02:05 -0700), and all six of the goal-hunt sessions the wave found START
+# AFTER it — earliest +1 h 45 m — each having received this notice 4-12 times. So the drain-side arm
+# was already live for every one of them and they went hunting anyway: the read-time evaluation
+# exists, but nothing in this line TELLS the reader that the header they are looking at IS the
+# verdict. The notice named a decision ("check before you act") and no check; the fix names both the
+# zero-cost observable and the runnable predicate, and states its fail direction, because
+# goal_live_condition returns rc 1 for "no goal", "met/failed" AND "could not read" alike
+# (goal-state.sh header, FAIL DIRECTION) — a reader who treats rc 1 as a confident no re-creates the
+# E1 defect from the other side.
+#
 # ONE LINE, no embedded newline: the mailbox is line-oriented and a line IS a message.
 # shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
 _wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
@@ -651,9 +669,9 @@ _wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
   # BOTH improvements, deliberately: trunk's MEASURED slice (elapsed + budget, so a reader can size
   # how much of the arm was actually covered) AND this commit's goal-aware branch (which repair
   # applies at all). They were written against each other and neither subsumes the other.
-  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1.\n' \
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". THE CHECK, if you cannot tell which branch you are in: the drain that delivered this line re-evaluates goal-liveness at that same boundary, so the header above it IS the verdict — "no inbox wake path armed" is branch (a), and a nudge quoting your /goal condition is branch (b). To run the predicate yourself: . %s/.claude/hooks/lib/goal-state.sh && goal_live_condition <your transcript .jsonl> — it FAILS CLOSED, so rc 1 means "no live goal OR could not tell", never a confident no. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1; F5 in docs/research/handoff-high-value-capture-2026-08-19.md.\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" "${2:-}" \
-    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" \
+    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" "$HOME" \
     >> "$box" 2>/dev/null || true
   return 0
 }
