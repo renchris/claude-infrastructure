@@ -110,3 +110,45 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   ! registered || false
   [[ "$output" == *"not a fleet config"* ]]
 }
+
+# ── the ENUMERATION axis ──────────────────────────────────────────────────────────────────────────
+# Tests 1-7 all run against the setup() fixture, which builds exactly ONE config dir. That is a
+# population of one, so a loop that names four of the fleet's five dirs passes every one of them —
+# the axis is not weakly covered here, it is structurally unreachable. `.claude-next` was the missing
+# member, and it is the DEFAULT dir of the bare `claude` launcher, so the gap was in the busiest
+# account. The fixture below is the first in this file with a fleet in it.
+peer() { # <dirname> — a second fleet config dir carrying the same real Bash group shape
+  mkdir -p "$HOME/$1"
+  cp -p "$SETTINGS" "$HOME/$1/settings.json"
+}
+reg_in() { jq -e --arg c "$HOOK_CMD" '[.hooks.PreToolUse[]?.hooks[]?.command] | any(. == $c)' "$HOME/$1/settings.json" >/dev/null 2>&1; }
+
+@test "8 registers into ALL FIVE fleet config dirs, and into no dir outside the fleet" {
+  for d in .claude-next .claude-secondary .claude-tertiary .claude-quaternary .claude-experimental; do peer "$d"; done
+
+  run bash "$MIG"
+  [ "$status" -eq 0 ]
+
+  # every fleet member, named individually so a failure says WHICH dir was missed
+  registered
+  reg_in .claude-next
+  reg_in .claude-secondary
+  reg_in .claude-tertiary
+  reg_in .claude-quaternary
+
+  # DISCRIMINATING CONTROL: the loop is an enumeration of the fleet, not a glob over $HOME/.claude*.
+  # Without this, a "fix" that globbed every config-shaped dir would read identically green while
+  # registering a PreToolUse hook into a dir nobody declared part of the fleet.
+  ! reg_in .claude-experimental || false
+}
+
+@test "9 the five-dir run stays idempotent — no dir gains a duplicate entry" {
+  for d in .claude-next .claude-secondary .claude-tertiary .claude-quaternary; do peer "$d"; done
+  bash "$MIG" >/dev/null
+  run bash "$MIG"
+  [ "$status" -eq 0 ]
+  for d in .claude .claude-next .claude-secondary .claude-tertiary .claude-quaternary; do
+    n="$(jq -r --arg c "$HOOK_CMD" '[.hooks.PreToolUse[]?.hooks[]? | select(.command==$c)] | length' "$HOME/$d/settings.json")"
+    [ "$n" = "1" ] || { echo "dir $d has $n entries, expected exactly 1"; false; }
+  done
+}
