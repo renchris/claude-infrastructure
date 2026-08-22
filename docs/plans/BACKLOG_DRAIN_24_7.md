@@ -87,6 +87,147 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #140: the row's root cause was inferred from a help line instead of
+  the resolver, and the resolver had been delegating correctly for three days before it was filed.
+  filed 0 / closed 1 / landed 1 commit. A whole CONDITION retired to zero.**
+  Gate 1 clear — **0 `.page` files**, `find` at the corrected path `$HOME/.claude/autonomy/postland`,
+  directory asserted to EXIST first (#138's instrument correction, third consecutive clean use).
+  Gate 2: **`qos-diff` empty, the twenty-second consecutive clean reading.** Converge lag **16** at
+  open (budget 25). Board at open: **open 256 / blocked 181 / done 2129 of 2570** — one row more than
+  #139 left, so **a sibling moved the board between recycles**; retire-in-one **46**.
+  🚨 **THIRD CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` is **unmoved at 34 open / 6 blocked**. See the label note at the end
+  of this entry — three in a row is now a fact about the label, not about three recycles.
+
+  **METHOD 79 CHOSE THE ROW AGAIN, AND ITS DUPLICATE-DETECTOR REFINEMENT IS WHAT PAID.** The
+  retire-in-one fold named 46 conditions; #139's refinement — *read the list end-to-end and look for
+  clusters* — surfaced `1c760dca69ea` · `c94cf98ab91f` · `bbf226c496a5` as **three conditions over
+  ONE subject** (`cc-roles` → `cc-notify` addressing). Reading them together cost one pass and
+  adjudicated two of the three, which is the argument for the refinement.
+
+  **CLOSED — `1c760dca69ea`** (filed 2026-08-21T17:20:15Z, `firstTs == lastTs` — never edited,
+  condition `cc-roles-writes-a-record-cc-notify-cannot-read`, `source=drain-lead-verify`). Its claim:
+  *"`cc-roles claim` writes a 6-line RECORD while `cc-notify --role` expects a bare SCALAR, so the
+  entire role indirection is unusable via its documented consumer."*
+
+  🚨 **REFUTED BY EXECUTION, NOT BY READING — and the row was WRONG AS FILED, not overtaken.**
+  A fixtured `CC_ROLES_DIR`/`CC_REGISTRY_DIR`/`CC_MAILBOX_DIR` ran the real `claim → read → page`
+  chain in four arms with controls in both directions:
+
+  | arm | file shape | `cc-roles read` | `cc-notify --role` |
+  |---|---|---|---|
+  | A1 legacy bare scalar | 1 line, `PANE-A` | rc **4** UNVERIFIED, prints target | `verdict=mailbox-only enqueued=1` — **0** role-unset |
+  | A2 record, **LIVE** claimant | **6 lines**, 97 B | rc **0** LIVE, prints `PANE-B` | `verdict=mailbox-only enqueued=1` — **0** role-unset |
+  | A3 record, **DEAD** claimant | 6 lines | rc **1** `reason=dead-pid` | rc 3, **1** role-unset |
+  | A4 unset role (neg. control) | — | — | rc 3, **1** role-unset |
+
+  A2 is the row-killing arm and A4 is what makes it non-vacuous: the `role-unset` token IS reachable,
+  so its absence in A1/A2 is an answer rather than a broken needle. **The reader accepts BOTH
+  shapes.** Cause: `cc-notify`'s `role_uuid()` (`bin/cc-notify:903-920`) never parses the file — it
+  **delegates to `cc-roles read`**, whose `target_of()` is `head -n1`, and line 1 is the bare target
+  *by design* (`bin/cc-roles:31-37`, *"exactly what every existing `head -n1` reader already
+  expects"*). **Method 11 again, twenty-ninth consecutive recycle: the subject's own header answered
+  the whole row.**
+
+  **DATED, and this is the sharper half (method 70).** `git log -S` puts the delegation at
+  `5d84136a3` + `ab8a69edd`, **2026-08-18T00:22:11Z — three days BEFORE the row was filed**, and the
+  `bin/cc-notify` on trunk at the filing instant already carried it (`git rev-list -1 --before` +
+  `git show <sha>:bin/cc-notify`, hits=1). The record-**writer** and the record-**reader** shipped in
+  the **same commit series**, driven by `aa8aed0d713a` (DONE). So this is not #138's supersession or
+  #139's decomposition: the row was never true of the shipped code.
+
+  ✅ **THE ACTUAL MECHANISM BEHIND A REAL SYMPTOM — worth more than the close.** The filer's sequence
+  (claim succeeds · `list` says LIVE · `read` prints the target · the page says role-unset) is
+  genuine, and A3/A5 reproduce it: **`cc-roles claim` defaults `pid=$PPID`, the shell that INVOKED
+  the claim** (`bin/cc-roles:121-124`, deliberate). An agent's Bash tool call gets a shell that dies
+  the instant that call returns, so the claim is LIVE inside the call that made it and reads
+  `ABSENT dead-pid` from the very next one. **A recycle cannot hold a role by claiming it from a tool
+  call** — a liveness binding, not a format bug. The prescribed cure (make the writer emit a scalar /
+  the reader parse a record) would have deleted the liveness property the tool exists to provide
+  (`bin/cc-roles:16-29`: *STALE is strictly worse than ABSENT*) — method 20's shape, caught by
+  reading before building.
+
+  **BOUNDARY KEPT, and the same probe HARDENED the neighbour (method 23).** Arm A1 is
+  `c94cf98ab91f`'s (`role-resolution-dead-target`, OPEN, retire-in-one) exact defect, alive today: a
+  role with no liveness evidence resolves UNVERIFIED and `cc-notify` **enqueues at rc 0** —
+  `verdict=mailbox-only enqueued=1 reason=target-not-live`. **Deliberately NOT closed.** #139 warned
+  its headline was dead (the pane-390 pointer was archived) and that closing on that would be a
+  vanished precondition; this recycle instead gives it a **same-moment mechanism reproduction**, so
+  the next owner starts from a live repro rather than a stale headline. `bbf226c496a5` also left
+  open, unexamined beyond the cluster read.
+
+  **PREMISES, ADJUDICATED SEPARATELY (method 25) — four claims, two survivors:**
+  ① *"writer emits a record, reader expects a scalar"* — **REFUTED** (A2). ② *"the entire role
+  indirection is unusable via its documented consumer"* — **REFUTED** (A1 and A2 both deliver).
+  ③ *"only 2 roles exist and neither works (docs-lead UNVERIFIED, orchestrator ABSENT)"* — **REFUTED
+  in its load-bearing half**: UNVERIFIED is not broken, A1 proves an UNVERIFIED role resolves *and*
+  delivers; and there are now three role files plus an archive. ④ *"FAILS LOUD, so no message
+  vanishes silently"* — **TRUE for the dead-pid path (A3) and FALSE for the UNVERIFIED path (A1)**,
+  which is precisely why `c94cf98ab91f` survives.
+
+  **WRONG CAUSES REJECTED (method 43) — three, and the third is the trap #139 flagged by name:**
+  (a) *"the store was hand-repaired, so it is fixed now"* — the **vanished-precondition** trap
+  (method 21); rejected outright, nothing here rests on the live store, every arm ran in a fixture.
+  (b) *"`cc-notify`'s help says the file holds ONE address, therefore the reader is scalar-only"* —
+  the row's own inference; refuted by execution, and the help line is **TRUE** (line 1 *is* the one
+  address). (c) *"`drain-lead` now holds a bare `102`, therefore `cc-roles claim` was changed to
+  write scalars"* — refuted by A2/A5: `claim` still writes a 6-line record **today**; the bare `102`
+  came from a **different writer** (`handoff-fire`'s `write_role`, cited at `bin/cc-roles:37`).
+  A file's current bytes do not identify which program wrote them.
+
+  **THE THIRTY-THIRD FACE OF THE STANDING LINT — and it is the lint being OBEYED.** Every prior face
+  was *artifact written by one party, read by another, format pinned in two places*. This pair pins
+  it in **ONE** place and the consumer goes through **the producer's own reader**, which is why it
+  works — so `cc-roles`→`cc-notify` is **struck from the lint's evidence set**, where §4.1 had
+  recorded it as the "third consecutive instance". *A rationale that counts a refuted member is an
+  assertion carrying a false premise* (method 131/74). Stated positively: **when a consumer resolves
+  a shared artifact by CALLING the producer, the format cannot drift — look for the delegation before
+  alleging a mismatch.**
+
+  **ALSO CORRECTED IN THE SAME DIFF (the venue lesson, #139's method 3):** §4.1 invariant 7 stated
+  the refuted root cause as fact and told every future recycle that `--role` is blocked *because of a
+  format mismatch*. The **operational ban still stands** — it is now stated with the measured reason
+  (ephemeral `$PPID`) plus the live `c94cf98ab91f` half. #139 proved a drain row's fix can land in
+  this plan itself; #140's converse duty is that **closing a row whose reasoning this plan quotes
+  means fixing the quote in the same commit**, or the next brief cites a closed row for a false
+  reason.
+
+  🚨 **THE STANDING FOLD IS BLIND TO A FIFTH STATUS, AND THIS RECYCLE FOUND IT BY ACCIDENT.** After
+  the close the board read `open 256 / blocked 181 / done 2130 of 2570` — **open UNCHANGED**, which
+  for a moment looked like the close had not landed. Diffing the per-row status of the two folds
+  attributed it exactly: `1c760dca69ea` open→done (**mine**) and `616d58ac42df` claimed→open (**a
+  concurrent sibling's**, not this recycle's). The board carries a **`claimed`** status — 4 rows
+  before, 3 after — and §4.1's standing fold selects only `open or blocked`, so `claimed` rows are in
+  no count any recycle has ever printed, and `open + blocked + done` has silently been **4 short of
+  the total** all along. Neither number was wrong; the strata were unnamed (memory:
+  `zero-claim-must-name-its-excluded-strata`). **Two duties for #141 onward:** print
+  `group_by(.status)` at least once so the excluded stratum is visible, and **diff the per-row
+  statuses across your own two folds before attributing any movement** — on a board with live
+  siblings, a delta is not authorship.
+
+  **Instrument hygiene:** id-grep over all 256 open rows returned **12** cited rows (control non-zero,
+  driver aborting at 0) — note the count is over ALL open rows here, not the 34 in-group ones #135–#139
+  measured at 3, which is method 61 and not an event. Author sweep `source=drain-lead-verify` returned
+  **7** rows (control ≥2) and showed two later rows by the same author, **neither** touching this
+  subject — so "nothing newer by this author" is an answer, not a spelling failure. Phrase sweep found
+  20 rows mentioning `cc-roles`; no duplicate of this row's claim.
+
+  ⚠️ **ON THE WARM-EFFORT LABEL — three consecutive recycles have now closed outside it** (#138, #139,
+  #140), each declared in advance. That is no longer three coincidences: `master-convergence-deadlock`'s
+  34 open rows are dominated by items the drain has repeatedly and correctly declined (`b7252a3bb015`
+  is 16 recycles deep; `786ac458be00` blocks other work by design; several are `venueWhy=ineligible-box`
+  G2 surfaces), while the retire-in-one fold keeps surfacing rows that are **decidable in one pass and
+  retire a whole condition**. **Recommendation to #141: keep reporting the warm effort's count, but
+  stop treating it as the default target** — pick by decidability, and say which count you will move
+  before you close. Its two most tractable rows remain `f660a37851cd` and `5b1cb9415742`.
+
+  Owed suites, docs-only discharge (method 41), seventh consecutive recycle of this shape: `--direct`
+  read **0** (`lint-only land`), `--explain` named the same three `prose-cited` consumers, all RUN:
+  `tests/cc-dispatch-firegate.bats` **1..15 ok=15** · `tests/land-content-verify.bats` **1..25 ok=25**
+  · `tests/postland-verify-bisect-bound.bats` **1..24 ok=24** ⇒ **64 tests, 0 not-ok, 0 skip**, every
+  plan line matched by `ok+notok`. Instrument controlled against a code commit from another branch
+  (`492c51066~1...492c51066` ⇒ 32), the same stable reading #138 and #139 got.
+
 - **2026-08-22 — drain recycle #139: the row named the venue its own fix belonged in, the fix landed
   there 49 minutes later, and nobody closed it. filed 0 / closed 1 / landed 1 commit. A whole
   CONDITION retired to zero.**
@@ -12372,24 +12513,48 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
      CONSTRUCTION: this chain recycles IN PLACE as one pane, so the pane the brief names is gone
      the moment the brief is written — the author IS the target's replacement. #104, #105 and #106
      each inherited that spelling and each re-diagnosed it.
-   - 🚨 **`--role` is the durable cure and it is BLOCKED — do NOT spend a recycle claiming the
-     role, because the claim LOOKS like it worked.** The lead prescribed
-     `cc-notify --role claude-infrastructure` from `cc-notify`'s own help. #106 ran it:
-     `verdict=unresolvable enqueued=0 reason=role-unset`, with `cc-roles list` holding only
-     `docs-lead UNVERIFIED` and `orchestrator ABSENT`. The lead then claimed a role to make the
-     cure real — `cc-roles claim drain-lead --pane 102` succeeded, `cc-roles list` showed
-     `drain-lead LIVE 102`, `cc-roles read drain-lead` printed `102` — **and `cc-notify --role
-     drain-lead` still returned "role is not set".** Root cause by `od -c`: **`cc-roles claim`
-     writes a 6-LINE RECORD (100 bytes: bare address, then `pid=`/`pane=`/`role=`/`claimed=`/
-     `host=`), while `cc-notify` expects the file to hold ONE bare address** — the only role it
-     accepts, `docs-lead`, is a bare `450` (4 bytes). Writer emits a record, reader expects a
-     scalar. Filed **`1c760dca69ea`**; `2aa51822cca8` is blocked on it.
-     **Two lessons, both already this plan's own:** a cure cited from a tool's help text is a claim
-     about the tool, not about this machine (method 9) — and this is the **third consecutive
-     instance** of *one program pins a shared record's format and a consumer in ANOTHER program is
-     inside the blast radius* (`land-lock`→`cc-backlog` #105, the registry `lstart` triple #106,
-     now `cc-roles`→`cc-notify`). **A standing lint is worth considering: for every file written by
-     one tool and read by another, pin the format in ONE place.**
+   - 🚨 **`--role` is the durable cure and it is STILL NOT USABLE FROM A RECYCLE — do NOT spend a
+     recycle claiming the role, because the claim LOOKS like it worked.** The ban stands; the
+     REASON below was wrong for a day and was corrected by #140, which measured it.
+     **What #106 saw is real:** `cc-notify --role claude-infrastructure` →
+     `verdict=unresolvable enqueued=0 reason=role-unset`; then `cc-roles claim drain-lead --pane 102`
+     succeeded, `cc-roles list` showed `drain-lead LIVE 102`, `cc-roles read drain-lead` printed
+     `102`, **and `cc-notify --role drain-lead` still returned "role is not set".**
+     🚨 **The root cause recorded here until 2026-08-22 — "`cc-roles claim` writes a 6-LINE RECORD
+     while `cc-notify` expects ONE bare address; writer emits a record, reader expects a scalar" —
+     is REFUTED.** #140 ran the claim→read→page chain in a fixtured `CC_ROLES_DIR` with controls in
+     both directions. `cc-roles claim` does write a 6-line record — but `cc-notify`'s `role_uuid()`
+     (`bin/cc-notify:903-920`) does not parse the file at all: it **delegates to `cc-roles read`**,
+     whose `target_of()` is `head -n1`, and line 1 is the bare target **on purpose**
+     (`bin/cc-roles:31-37`: *"exactly what every existing `head -n1` reader already expects"*).
+     Measured: a 6-line record with a LIVE claimant → `cc-roles read` rc 0, `cc-notify --role` →
+     `verdict=mailbox-only enqueued=1 uuid=PANE-B`, **zero `reason=role-unset`**. A legacy bare
+     scalar → rc 4 UNVERIFIED, also delivered. **The reader accepts BOTH shapes.** Dating kills it
+     twice over: the delegation landed in `5d84136a3` + `ab8a69edd` (2026-08-18T00:22:11Z), and the
+     `bin/cc-notify` on trunk at the filing instant already carried it — the record-writer and the
+     record-reader **shipped in the same commit series**, driven by `aa8aed0d713a` (DONE).
+     ✅ **The ACTUAL mechanism, and the one to remember:** `cc-roles claim` defaults
+     **`pid=$PPID` — the shell that INVOKED the claim** (`bin/cc-roles:121-124`, deliberate). An
+     agent's Bash tool call gets a shell that **dies the instant that tool call returns**, so the
+     claim is LIVE inside the call that made it and reads `ABSENT dead-pid` from the very next one —
+     which is exactly the "claimed successfully, then role-unset" sequence above. Reproduced: dead
+     claimant → `cc-roles read` rc 1 `reason=dead-pid`, `cc-notify --role` rc 3 `role-unset`.
+     **So a recycle cannot hold a role by claiming it from a tool call** — not a format bug, a
+     liveness binding. Row **`1c760dca69ea` is CLOSED** by #140 on that adjudication.
+     ⚠️ **And the OTHER half is live: never trust a bare/legacy role pointer for delivery.** A role
+     with no liveness evidence (every hand-written pointer, including `drain-lead`'s bare `102`)
+     resolves UNVERIFIED and `cc-notify` **enqueues at rc 0** into a target that is not live —
+     measured `verdict=mailbox-only enqueued=1 reason=target-not-live`. That is backlog
+     **`c94cf98ab91f`** (`role-resolution-dead-target`, OPEN), reproduced same-moment by #140 and
+     **deliberately not closed** — its ask is to make that path fail LOUD, with a positive control
+     in both directions.
+     **The lesson that survives:** a cure cited from a tool's help text is a claim about the tool,
+     not about this machine (method 9) — and it cuts both ways, because *this row's own root cause
+     was itself inferred from a help line rather than from the resolver.*
+     ⚠️ **The standing format-blast-radius lint keeps its other members** (`land-lock`→`cc-backlog`
+     #105, the registry `lstart` triple #106) — but **`cc-roles`→`cc-notify` is NOT one of them**
+     and must not be counted as its third instance: that pair pins the format in ONE place and the
+     consumer goes through the producer's own reader, which is the lint being OBEYED, not broken.
    - ✅ **What works today: resolve a LIVE name and page that.** `cc-sessions --names` lists live
      registry rows; the chain's lead verifier is `claude-infrastructure-102`, which #106 paged with
      `verdict=delivered enqueued=1 reason=wake-path-armed`. **Re-resolve it each recycle — do not
