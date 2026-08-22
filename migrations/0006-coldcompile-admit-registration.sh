@@ -44,7 +44,7 @@ set -uo pipefail
 # shellcheck disable=SC2088  # the tilde is DELIBERATELY literal: this string is stored INTO
 # settings.json, where CC expands it at hook-run time. Every sibling Bash entry is written the same
 # way. Expanding it here would hard-code this machine's absolute $HOME into a config that is
-# mirrored across four config dirs.
+# mirrored across five config dirs.
 HOOK_CMD='~/.claude/hooks/coldcompile-admit.sh'
 CLAUDE_DIR="${CC_CLAUDE_DIR:-$HOME/.claude}"
 HOOK_FILE="$CLAUDE_DIR/hooks/coldcompile-admit.sh"
@@ -82,7 +82,29 @@ if [ "$UNDO" -eq 0 ]; then
   fi
 fi
 
-for dir in "$HOME"/.claude "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
+# THE FLEET IS FIVE CONFIG DIRS, AND THIS LIST USED TO NAME FOUR. `.claude-next` was absent, so the
+# one account this hook most needed to reach was the one it could never reach — `claude`, the bare
+# launcher, defaults to CLAUDE_CONFIG_DIR=~/.claude-next (~/.zshrc:460), i.e. the busiest account and
+# the one whose `next dev` cold compiles are the very storms this admission gate exists to serialise.
+# Re-running the migration could not help: the omission is in the enumeration, not in the state.
+#
+# It read as covered from every angle. The header above said "mirrored across four config dirs", so
+# the list AGREED with its own documentation; five sibling migrations (0005, 0007, 0011, 0012, 0014)
+# spell the identical loop WITH `.claude-next`, so the fleet size was never in doubt anywhere else;
+# and `tests/coldcompile-admit-migration.bats` fixtures exactly ONE config dir, which makes the
+# enumeration axis structurally untestable — a full green over a population of one.
+#
+# THE ONE JUSTIFICATION THAT WOULD HAVE MADE THE OMISSION CORRECT IS REFUTED, so it is recorded here
+# rather than left for the next reader to re-derive. `.claude-next/hooks` is a forked real directory
+# missing coldcompile-admit.sh (migration 0013), and 0009's header argues a settings entry naming an
+# absent hook file is not inert but dispatched-and-failing on every matching event — which for a
+# PreToolUse(Bash) entry would be every Bash call in the account. That hazard does not apply here:
+# measured 2026-08-22, ALL 66 hook commands in ~/.claude-next/settings.json are spelled
+# `~/.claude/hooks/…` and NONE resolves through $CLAUDE_CONFIG_DIR, so the command this migration
+# writes names the canonical dir, which has the file. The live control is that `mailbox-wake-arm.sh`
+# and `goal-inert-watch.sh` are ALREADY wired into .claude-next by 0007 and 0005 while equally absent
+# from .claude-next/hooks — and that account runs.
+for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
   f="$dir/settings.json"
   [ -f "$f" ] || continue
 
