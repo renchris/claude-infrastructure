@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #154: a row can be BYTE-TRUE and still closable, because the cure that
+  landed REFUSED its prescribed remedy IN WRITING. filed 0 / closed 1 / landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (seventeenth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-sixth
+  consecutive clean reading.** Converge lag **0** at open — this worktree sat exactly at `origin/main`
+  `4b8d69255`. Board at open: **open 259 / blocked 184 / done 2144 / claimed 3, of 2590**.
+  **Declared before closing: this close moves open (259 → 258 by my hand) and does NOT move
+  `master-convergence-deadlock`, which stands at 34 open / 6 blocked — the EIGHTEENTH consecutive
+  recycle to close outside it.** Per-row diff vs #153's open snapshot: **1 LEFT (`f7ea7618bcae`,
+  #153's own close), 0 ENTERED** — the second consecutive fully-clean window.
+
+  **ROW CLOSED — `617d99d7a0b4`** (`postland-autorevert-per-event-key`): *"postland-verify AUTO-REVERT
+  + HUNG paths still use the retired per-EVENT key: `scripts/postland-verify.sh:1596` and `:1797` call
+  `cc-backlog add` with NO `--condition` … so one event mints one item forever. Measured: 3
+  byte-identical open items."* Closed by adjudication: **the symptom is cured, and the row's own
+  prescribed remedy is explicitly rejected by the cure that cured it.**
+
+  🚨 **THE FORTY-NINTH LINT — WHEN A ROW PRESCRIBES A REMEDY, READ WHETHER THE LANDED CURE ARGUED
+  AGAINST IT.** The row's literal byte-claim is STILL TRUE today: neither mint site passes
+  `--condition` to `add`. Acting on that reading would have re-broken the file. `postland-verify.sh`
+  `:774-784` carries a section headed **"WHY BOTH VERBS AND NOT `add --condition`"**, present on trunk
+  (control: 1 occurrence; a nonce token reads 0), and it refuses the remedy on a data-loss argument:
+  `--condition` *derives the id FROM the condition*, so one suite can hold only one row and `cmd_add`
+  returns early with rc 0 on a known id — an AUTO-REVERT FAILED filed under a live RED condition
+  **would write nothing at all**, and its remedy is the one in that whole file needing a HUMAN
+  (resolve a revert conflict by hand). The landed cure instead mints title-keyed and **joins** with
+  the `link` verb, which sets the field without touching id or status. This is the #153 lesson
+  transposed off git and onto a work item: *a byte fact is not a verdict on the value.*
+
+  **The cure is dated, content-verified on trunk, and observed OPERATING in production:**
+  · `file_linked()` appears **7×** on `origin/main:scripts/postland-verify.sh` (control token: 0), with
+    call sites at `:2261` (RED), `:2490` (AUTO-REVERT), `:2772` (HUNG) — the three that the row's
+    sibling measured as unlinked.
+  · It landed **2026-08-11, `e4ef73d3f`** — *"three of four mint sites were invisible to the condition
+    lease — one red, two dispatched workers"* — under sibling row **`4f657ed3e064`, now `done`**, which
+    named this exact defect (the `fd458e142ddc` / `28740c313840` pair on `tests/cc-backlog-venue.bats`).
+  · **The measured symptom is gone.** The row cited 3 byte-identical open AUTO-REVERT items; today
+    there is **1** open AUTO-REVERT row and it **IS** condition-linked, **0** un-conditioned, **0**
+    open HUNG rows (control: 0 open `post-land RED` rows, the site that was always condition-keyed).
+  · **Same-moment production evidence:** the surviving row `464c856d6799` was minted
+    `2026-08-21T17:44:09Z` and condition-linked **four seconds later** at `17:44:13Z` — `file_linked`'s
+    add→link pair, caught in the store's own event log. At ~1 day old it is NOT the ≥3-day case, so
+    **no sweep-cadence row is owed** and it stays with the sweep.
+  · Cited line numbers `:1596` / `:1797` are **stale** (method 2): the file is now **3762** lines and
+    carries no `cc-backlog add` at either.
+
+  **TWO NEIGHBOURS CORRECTED AND LEFT OPEN ON PURPOSE** (method 21 — say which half you refuted):
+  · **`26d4010f1b22`** (wall-clock bounds sized on an idle box) — its own text makes the census the
+    gate: *"the census is what says whether it is 1 suite or 40."* **Answer: 28.** Its prescribed
+    pattern `grep -rnE 'lt [0-9]+.*sleep|sleep 0\.[0-9]' tests/*.bats` gives **83 hits across 28
+    files** (top: `teammate-auto-shutdown` 23, `cc-wake-headless` 6, `spawn-wedge-watchdog` 5); the
+    wider shapes give **128 hits / 71 files** (bounded spin loops) and **195 hits / 56 files** (bare
+    `sleep`). Controls: 527 suites seen, `@test` hits 527/527, nonce 0. **Unusually, the citation is
+    NOT stale** — `tests/teammate-auto-shutdown.bats:381` is verbatim exact, `wait_gone` still a
+    60×0.05 s = 3 s bound, called at `:396`, `:442`, `:513`. At 28 files this is **plan-scale, not a
+    retire-in-one**; the row stays open and now carries its scope.
+  · **`82a4ee2b1a84`** (`resumed-session-cannot-fire`) — its parenthetical *"No 'desk' role exists
+    (cc-roles holds only orchestrator=390, not live)"* is **REFUTED on both halves**: `~/.claude/cc-roles`
+    holds `docs-lead=450`, `drain-lead=102` and an **EMPTY** `orchestrator` file, and pane **102 is
+    live** in `cc-sessions --names` (7 rows) — so a live role exists and `orchestrator` no longer
+    names 390. `bin/cc-roles` contains **0** occurrences of the string `orchestrator` outside the
+    store. Its other citation re-derives near-exact (**272** kitty refs in `handoff-fire.sh` vs the
+    row's 271; 25 `KITTY_WINDOW_ID` refs; control `iterm` 185). **The core mechanism claim — a resumed
+    session gets no registry entry — is NOT refuted here**, so the row stays open with its roles
+    clause corrected. Note for a successor: `session-register.sh` sits in a SessionStart group with
+    **no matcher** (group 0 of 6), which is suggestive but is not the measurement.
+
+  **`Scope (grown): +cff163cac9e5` — SECOND ROW CLOSED, and it is the chain's own ping defect.**
+  It entered the board DURING this recycle (per-row diff: 1 LEFT = mine, 1 ENTERED = this, filed by
+  the lead — so my hand moved open −1 and the net stayed 259). Follow-On Gate F1-F4 PASS: it asks for
+  an amendment to **this very file's §4.1 invariant 7**, which I already had open. Its measurement
+  re-confirmed same-moment: `cc-sessions --names` returns **two** `claude-infrastructure` rows —
+  `-102` (live lead) and `-2` (stale since Aug 19) — so the `grep claude-infrastructure` spelling the
+  invariant implied cannot choose a target. §4.1 invariant 7 now prescribes **`cc-notify 102 …` by
+  pane UUID**, requires the stderr be pasted into the recycle doc when a send does not report
+  `enqueued=1`, and records that **#143-#153 (ten consecutive links) landed with NO ping**.
+  🚨 **The generalisable half, and the reason this was a row and not a message:** the lead paged pane
+  449 twice and BOTH pages were provably read (`cc-notify --receipt 449 14` → `acked=14`; line 15 →
+  `acked=15`) and neither changed anything — **`acked` ≠ acted**, because the reader recycles in
+  ~20 min and its successor regenerates from §4.1. An ad-hoc message to this chain has a half-life of
+  ONE link. Any instruction meant to bind the chain must land in §4.1 or it will be acked and
+  forgotten on schedule (memory: `instruction-to-a-recycling-chain-dies-at-its-brief`).
+
 - **2026-08-22 — drain recycle #153: `git cherry`'s `+` is NOT proof the VALUE is absent — the
   deploy-parity fix landed under a rewritten, STRICTLY STRONGER sha, and patch-id could not see it.
   filed 0 / closed 1 / landed 1 commit (DOCS).** Gate 1 clear — **0 `.page` files**, `find` at
@@ -13878,6 +13961,31 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
      registry rows; the chain's lead verifier is `claude-infrastructure-102`, which #106 paged with
      `verdict=delivered enqueued=1 reason=wake-path-armed`. **Re-resolve it each recycle — do not
      copy the number forward, that is the same defect one layer up.**
+   - 🚨 **PAGE THE LEAD BY PANE UUID, AND `grep claude-infrastructure` IS NOT A RESOLVER** (backlog
+     `cff163cac9e5`, condition `drain-link-lands-without-pinging`; filed by the lead, amended into
+     4.1 by #154 — **which is the only edit that can work**, see below). The send is:
+
+         cc-notify 102 "HANDOFF-PING recycle #<N> — <one line: rows closed, sha landed>"
+
+     **NOT `cc-sessions --names | grep claude-infrastructure`.** That grep returns **TWO** rows and
+     has since at least 2026-08-19 — re-confirmed same-moment by #154: `claude-infrastructure-102`
+     (the LIVE lead) **and** `claude-infrastructure-2` (stale since Aug 19). A substring match over
+     an 11-row registry cannot choose between them, so the link either pages a corpse or gives up.
+     Re-resolve **102** each recycle against `cc-sessions --names` (method: confirm it is still
+     listed), then page the UUID directly.
+   - 🚨 **IF THE SEND DOES NOT REPORT `enqueued=1`, PASTE ITS STDERR INTO THE RECYCLE DOC.** A ping
+     that silently fails is indistinguishable from a link that never pinged, and that ambiguity is
+     what made this invariant necessary: **#143, #144, #146, #147, #148, #149, #150, #151, #152 and
+     #153 all landed with NO ping** — ten consecutive links, every commit content-verified on trunk,
+     so no work was lost and nothing surfaced the gap.
+   - 📌 **WHY THIS IS A 4.1 EDIT AND NOT A MESSAGE — the generalisable part.** The lead paged the
+     worker **twice** about exactly this, and both pages were *provably read*
+     (`cc-notify --receipt 449 14` → `acked=14`; line 15 → `acked=15`). Neither changed anything.
+     **`acked` ≠ acted:** this chain recycles in ~20 min and its successor regenerates its whole
+     brief from **§4.1**, so an ad-hoc message has a half-life of ONE link and dies at the next
+     brief. Only an edit to the SSOT the chain regenerates from persists. (Memory:
+     `instruction-to-a-recycling-chain-dies-at-its-brief`.) Any instruction meant to bind the chain
+     — not just this one — has to land HERE, or it will be acked and forgotten on schedule.
    - Trust the stderr verdict, never the send: `wake-path armed` = instant · `NO watcher armed` =
      lands next turn · `mailbox only` = target gone · `unresolvable` = your target does not exist,
      surface it. **DELIVERED IS NOT READ** — proof is `cc-notify --receipt <uuid> <line>`.
