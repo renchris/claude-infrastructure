@@ -87,6 +87,90 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #151: the same sweep, the same oracle, the OPPOSITE verdict — this
+  branch's file says `status: open`, a landed trunk doc links to it, and an open row reads it from an
+  UNTRACKED path. Recovered and landed. filed 0 / closed 1 / landed 1 commit (DOCS, one ADD).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (fourteenth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-third
+  consecutive clean reading.** Converge lag **9** at open (budget 25). Board at open: **open 258 /
+  blocked 183 / done 2141 / claimed 4, of 2586** — *exactly* as #150 left them, so the inter-recycle
+  gap was clean on all four counts for the first time in this run of windows. Retire-in-one read
+  **41** by this session's own fold (#150 reported 38; re-derived, not inherited — method 3).
+  **Declared before closing: this close moves open (258 → 257) and retires the condition
+  `stranded-mcp-config-ssot`; it does NOT move `master-convergence-deadlock`, which held at 34 open /
+  6 blocked — a FIFTEENTH consecutive window closing outside the nominal warm effort.**
+
+  **CLOSED — `70ead42cc75e`** (`stranded-mcp-config-ssot`): *"recover claude-infrastructure branch
+  feat/mcp-config-ssot — 1 patch content-absent from origin/main (tip aed9485e1)."* **TRUE, UNCURED,
+  AND GENUINELY STRANDED — the first row of this four-row sibling family to earn a LAND.** #150 closed
+  its sibling `446f8f8b33f0` with no code change because that branch's files ordered their own
+  deletion. Applying #150's forty-fourth lint FIRST here gave the opposite reading in one command:
+  line 2 of `docs/plans/MCP_CONFIG_SSOT.md` is **`status: open`**, and its § Definition of done item 8
+  is **"Landed on `origin/main`."** An artifact can specify its own absence; this one specifies its
+  own presence.
+
+  🚨 **THE LINT (the FORTY-FIFTH): A "CONTENT-ABSENT FROM ORIGIN/MAIN" VERDICT IS A CLAIM ABOUT GIT,
+  AND THE BYTES MAY BE SITTING UNTRACKED IN THE WORKING TREE — READABLE BY EVERY CONSUMER, INVISIBLE
+  TO EVERY LANDEDNESS ORACLE, AND DELETED BY ANY CLEAN.** Measured here: `git status --porcelain` in
+  the shared checkout reads **`?? docs/plans/MCP_CONFIG_SSOT.md`**; the path is in **no** tree
+  (`ls-tree` = 0 at both HEAD and `origin/main`); and the on-disk copy is **byte-identical to branch
+  tip `aed9485e1`, 10,914 B both.** That identity is precisely *why nothing looked broken* — every
+  consumer resolving the path succeeded. Two consumers were doing exactly that:
+  `docs/research/mcp-modal-fire-stall-2026-08-15.md` (landed 2026-08-16T04:42:36Z) links it as its
+  **"Companion plan"** and cites its § Why this exists as the evidence for **M4**; and **open** row
+  `9f203fa60cd0` carries that path as its **`dodRef`**. A landed trunk document and an open work row
+  both depended on a file that existed nowhere in git. This is the memory
+  *landedness-over-commits-is-blind-to-staged-content* firing on the RECOVERY side rather than the
+  deletion side — ask per PATH by CONTENT, and ask `git status` before concluding either "lost" or
+  "safe". The recovery was taken from the immutable tip sha, never from the working-tree copy
+  (method 42).
+
+  **The premise was re-measured rather than assumed, and it SURVIVES — but not where the row implied.**
+  Read-only over the five live config dirs, same moment: all five of `~/.claude`, `~/.claude-next`,
+  `~/.claude-secondary`, `~/.claude-tertiary`, `~/.claude-quaternary` carry an `oauthAccount` key, so
+  the plan's § Landmines *"five dirs, not four"* is **exactly true today**. **Divergence #1 is still
+  live** — `~/.claude.json` registers `ms365` as `npx -y @softeria/ms-365-mcp-server@latest` while all
+  five config dirs register the resolved fnm binary: one name, two endpoints, two OAuth token stores,
+  seven days on. **Divergence #2's instance has VANISHED and that is not a cure** — `mac-messages` is
+  now absent from all six copies, removed everywhere rather than unified, so resting the adjudication
+  on it would have been a vanished-precondition close (method 21). The mechanism claim rides on
+  divergence #1, which is why this row could be closed at all. Corroborated independently by
+  `docs/research/startup-2026-08-16/measure-mcp-servers.md` (landed 2026-08-17T05:58:39Z, i.e. AFTER
+  the row was filed), whose Finding **R-1** records the same `@latest` split — a *measurement* of the
+  plan's premise, not an answer to its design fork. #148's test therefore returns **negative**: the
+  project has not answered this one. Both sides of the plan's own Wave-1 question 5 are still `open`
+  (`9f203fa60cd0` and `8079d6039639`), so the two plans are still racing on one surface exactly as it
+  warned.
+
+  🚨 **THE CONTROL VETOED THE HYPOTHESIS MID-RUN, AND THAT IS THE SECOND-MOST USEFUL THING HERE.**
+  The attractive theory was that `9f203fa60cd0`'s stored falsifier —
+  `plan-phase-scan.sh <dodRef> --falsify 2>/dev/null` — could never self-close *because its dodRef
+  file was missing*, making it a blind outcome-shaped probe (#144's shape). A two-arm probe in ONE
+  script (method 27) put the MS365 sibling beside it: same producer (`source="plan-open"`), filed
+  ~2 h apart, same `venueWhy`, same falsifier shape, **differing in exactly one input** — MS365's plan
+  doc IS on trunk. Result: **both arms returned empty at rc 1.** The instrument is uniformly silent
+  (method 4), so the silence is *not* attributable to the missing file and the hypothesis is
+  **REFUTED**. The same run also corrected a second belief: the dodRef path *does* resolve on the
+  shared checkout — which is what exposed the untracked-bytes seam above. A probe built to prove one
+  thing disproved it and handed over the real finding.
+
+  **Wrong causes rejected, recorded per method 43.** (a) *"The sweep's oracle is broken"* — no, again:
+  it asked "are these bytes in `origin/main`" and answered correctly both times; #150's gap was a
+  missing second question about INTENT, and this recycle's is a missing second question about the
+  WORKING TREE. (b) *"The falsifier is blind because its dodRef is absent"* — refuted by the control
+  above. (c) *"Divergence #2 is fixed, so the plan is obsolete"* — refused under method 21; the
+  instance vanished by deletion, not by unification. (d) *"The 2026-08-17 measurement doc supersedes
+  the plan"* — refused; it measures the premise and never touches the design fork, which is the whole
+  content of the plan. (e) *"Rewrite the recovered plan to reflect today"* — refused; INTEGRATE, so
+  the 171-line body landed verbatim from the tip sha and the re-measurement was **appended** to its
+  own § Status log, with `status:` left `open` because **nothing in Wave 1 was run.** This was a
+  recovery of an artifact, not progress on the work it describes.
+
+  ⚠️ **This land is an ADD (`docs/plans/MCP_CONFIG_SSOT.md`), so premise 2's `LIVE_ADDS` interaction
+  applies** — but `docs/` is reached by NO live-layer symlink (`ls ~/.claude` carries no `docs`
+  entry), so any `🚀` rung over this path is the known false positive tracked by the still-open row
+  `4e6a51df2a84`, not a real staleness. Named here rather than discovered at close.
+
 - **2026-08-22 — drain recycle #150: the artifact's own line 3 ordered its own deletion, so its
   absence from trunk was the SPECIFIED end state — and the answer it existed to produce had been on
   trunk for 23 h before the row was filed. filed 0 / closed 1 / landed 1 commit (DOCS).**
