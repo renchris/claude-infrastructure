@@ -87,6 +87,125 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #128: an isolation mechanism that works by overriding `$HOME` has no
+  purchase on an ABSOLUTE path — so ship-land's gate cloned the config dir its children do not read
+  and left unprotected the one they do. filed 0 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  tenth consecutive clean reading.** Converge lag **4** at open (budget 25; both landed paths are
+  `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **44 open / 6 blocked**, exactly where #126 and #127 left it.
+
+  **Worked the recommended start, `7c05d45796d8` — and this one IS in the warm effort** (I checked
+  the bucket first, per #127's lesson). Closing it moves `master-convergence-deadlock` **44 → 43
+  open**, 6 blocked.
+
+  **THE ROW ASKED FOR A LINT. THE MEASUREMENT REFUSES IT, AND NAMES A ONE-LINE CHOKEPOINT INSTEAD.**
+  The row is right about the mechanism and asks for the wrong instrument. Its own numbers, re-derived
+  2026-08-21 over `bin/ scripts/ hooks/` (345 files, the two census instruments excluded by name):
+
+  - **"54 tools read it" is now 79** — grown, as a 12-day-old count should be. But **"6 with an EMPTY
+    default, incl. `handoff-fire.sh`" and "exported by `bin/claude-kimi`" are both EXACT**, and the
+    classes matter more than the total: **65** spell `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, **6**
+    spell `${CLAUDE_CONFIG_DIR:-}`, **3** read it bare, **1** exports it.
+  - **The naive rule it warns about is now 194 of 527 suites** (row: 123 of 355). Both halves grew;
+    the RATIO is unchanged at ~37%, so the "fires on most of the tree" character is intact.
+  - **A write-narrowed cut — only suites naming a tool that WRITES through a V-derived path — is 83.**
+    Still wave-sized. A read-hygiene lint at either size is detection with no owner (memory:
+    `detector-with-no-owner-is-not-an-actuator`), which is what the row's own title feared.
+
+  **THEN THE HARM, MEASURED BEHAVIOURALLY RATHER THAN BY GREP — AND IT IS ZERO.** Static scope is a
+  proxy; the harm is a WRITE. Point `CLAUDE_CONFIG_DIR` at a fresh EMPTY canary dir, run the suite,
+  count files created under it: a hit is unambiguously a write that escaped the suite's `$HOME`
+  fixture. **83 of 83 wrote nothing — the census is complete, with no silent cap.** ⚠️ It nearly
+  carried one: on the first pass `tests/test-hermeticity-lint.bats` hit **rc 124 at a 300 s bound**,
+  and a timeout's canary count of 0 is a **NON-VERDICT, not an acquittal** — it would have read as
+  the 83rd clean row. Re-run under a 900 s bound it finishes **68/68, 0 skips, canary 0**.
+  ⚠️ The instrument was positive-controlled first, and had to be: its first two real suites answered
+  `0` on BOTH arms, which indicts the needle before the tree (#127's method 4). A synthetic suite
+  that fixtures `$HOME` and then writes through the seam reads **leak-arm 1 / control-arm 0** — so
+  the zeros are verdicts.
+
+  **THE TWENTY-FIRST STANDING-LINT SHAPE — AN ISOLATION MECHANISM AND THE PATHS IT CAN ACTUALLY
+  REACH.** `scripts/ship-land.sh`'s `gate_bats()` is the documented single chokepoint every bats
+  runner funnels through, and its entire isolation is one assignment: `homeenv=(HOME="$GATE_HOME")`.
+  **`CLAUDE_CONFIG_DIR` is an ABSOLUTE path, so overriding `$HOME` has no purchase on it at all.**
+
+  - **This is NOT the bounded gap `gate_home_setup` already documents.** That header is honest about
+    its scope — "writes THROUGH a symlinked entry are not contained" — but a symlinked entry is still
+    reached *via* `$HOME`, so isolation at least DECIDES it. This routes around `$HOME` as a
+    mechanism entirely, which the scope statement does not contemplate.
+  - **And it is live, not theoretical.** `bin/claude-kimi` exports the variable and every session on
+    this desk runs with it set to a per-account dir (`~/.claude-quaternary`) — which the clone list
+    does **not** clone. So the gate clones the `.claude` its children do not read and leaves
+    unprotected the one they do.
+  - **A/B-CONFIRMED, discriminating in both directions.** Under today's gate env the write lands
+    OUTSIDE the clone (clone=0 / outside=1); with the config dir re-rooted it lands INSIDE
+    (clone=1 / outside=0). A run where both arms agreed would have indicted the harness — the driver
+    aborts on exactly that.
+  - **`GATE_HOME_ISOLATED` is a DETECTOR WITH NO CONSUMER — checked, not assumed.** Its comment says
+    "Phase 2b can refuse to CACHE a non-isolated green", and a repo-wide grep finds **no reader
+    outside its own test suite**. So the harm is *incomplete isolation*, **not** a poisoned proof
+    cache; the tempting stronger claim is prose-only today (memory:
+    `spec-named-mechanism-may-be-prose-only`).
+
+  **THE CURE IS ONE ASSIGNMENT, AND `SET` BEATS `UNSET` ON A MEASURED SPLIT.** `homeenv=(HOME=…
+  CLAUDE_CONFIG_DIR="$GATE_HOME/.claude")`. For the 65 home-rooted readers the two options are
+  IDENTICAL once `HOME` is the clone; they diverge for the **6 empty-default + 3 bare** readers,
+  which unsetting would hand an EMPTY string — paths rooted at `/`, a **new failure mode the gate
+  itself would introduce**. Setting gives all three classes one contained answer, and makes the gate
+  agree with `scripts/offbox-run.sh`, where `env -i` already leaves the variable unset so those
+  readers resolve to the fixture. Fail-open survives both ways: it rides the same `-n "$GATE_HOME"`
+  test as `HOME`, and if `.claude` is not in the clone list then `$GATE_HOME/.claude` is the symlink
+  step 1 farmed to the real one — today's behaviour exactly, never an ABSENT path.
+
+  **WHY THE FIX IS WORTH LANDING WHEN THE MEASURED HARM IS ZERO — stated plainly rather than
+  dressed up.** It is PROPHYLACTIC, not curative: no suite in the corpus reaches the seam today. It
+  earns its place because it costs nothing ongoing and immunises the class *without a list anyone
+  must remember to join* — which is the argument `ship-land.sh:1696` already makes for scrubbing the
+  measurement carriers at the gate rather than in two suites' setups (memory:
+  `enforcement-must-live-at-the-chokepoint`). A lint would have bought the same class at 83-194
+  suites of standing maintenance.
+
+  **THE SUITE THAT PROVES ISOLATION WAS ITSELF UNPINNED ON THIS AXIS.**
+  `tests/gate-home-isolation.bats` fixtures `$HOME` and its header calls itself hermetic, but it did
+  not pin `CLAUDE_CONFIG_DIR` (count: 0). Unpinned, the new case would have driven its mutation into
+  the operator's **real live config dir**, so `setup()` now pins a sandbox stand-in — deliberately
+  OUTSIDE `$HOME`, matching the real topology. ⚠️ **`scripts/ship-land.sh` itself never reads the
+  variable** (checked — the tempting "the isolation suite is a self-demonstrating instance" claim is
+  FALSE); the exposure is entirely in what its CHILDREN read.
+
+  **WRONG CAUSES AND WRONG INSTRUMENTS REJECTED — four, and two were my own.**
+  1. **"The naive rule is the answer, just scoped to writers."** Refuted by the behavioural sweep: 83
+     write-cut suites, 0 actual writes. Scope narrowing never reached a defensible size, and the
+     harm it would guard is empty.
+  2. **"`GATE_HOME_ISOLATED=1` licenses a cached green, so this poisons the proof cache."** Refuted
+     by grepping for consumers — there are none outside its own suite.
+  3. **INSTRUMENT: the canary read `0` on both arms of its first two suites.** Not an acquittal — a
+     needle that cannot discriminate. Cured with a synthetic positive control before any zero was
+     believed.
+  4. **INSTRUMENT: `bats -f '(b) …'` is a REGEX**, so the unescaped `(b)` is a capture group matching
+     a bare `b`, matching NO test and yielding `1..0` — a non-verdict that reads exactly like a clean
+     run. The red-proof driver's pre/post-condition asserts caught it; a bare rc read would not have.
+  5. **`grep -c <file>` on an ABSENT file prints nothing**, so `|| true` yields an EMPTY string and
+     `[ "" -eq 0 ]` dies with "integer expression expected" — the SUCCESS case failing on the
+     assertion's own shape, because once the fix works the stand-in's file does not exist. Rewritten
+     through the suite's own `count_in` helper.
+
+  **Evidence.** Red-proofed in scratch trees from `git archive HEAD` — both arms the same new test
+  file, only `ship-land.sh` differing, with the prior shape asserted PRESENT at the parent and the
+  fixed shape asserted present in the green tree: **RED notok=1** at the `CCD=` assertion, **GREEN
+  ok=1**, plan `1..1` and **0 skips on both arms**. `tests/gate-home-isolation.bats` **23/23** on the
+  desk and **green 23/23 under `offbox-run.sh` (37 s)** — plan-matched, 0 skips, two environments.
+  `tests/ship-land.bats` **145/145**, 0 skips. `shellcheck -S style` clean on `ship-land.sh`;
+  `bats-kill-guard-lint` clean; `bats-assert-liveness` silent and **positive-controlled at 36/36**;
+  `self-path-lint --selftest` 32/32.
+  **Method 41 discharged BY PROOF rather than by running 32 suites.** `gate-select --direct` printed
+  **a BARE LIST OF 32 PATHS, no verdict sentence, rc 0** (the eighth sighting of that shape — a
+  normal reading). My line is inside `homeenv`, populated **only** when `GATE_HOME` is non-empty, and
+  a fixture pipeline under bats skips isolation unless `SHIP_LAND_GATE_HOME_ISO=on`. Exactly **two**
+  suites set that — `gate-home-isolation` and `ship-land` — and **both were run green at full
+  count**. For the other 30 the line is unreachable, which beats a partial run (method 67).
+
 - **2026-08-21 — drain recycle #127: a cure that landed BEFORE every failure it is credited with
   curing is not a cure — and three genuinely green censuses corroborated it anyway. filed 0 / closed 1
   / landed 2 commits.**
