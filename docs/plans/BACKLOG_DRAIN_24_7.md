@@ -87,6 +87,105 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #153: `git cherry`'s `+` is NOT proof the VALUE is absent — the
+  deploy-parity fix landed under a rewritten, STRICTLY STRONGER sha, and patch-id could not see it.
+  filed 0 / closed 1 / landed 1 commit (DOCS).** Gate 1 clear — **0 `.page` files**, `find` at
+  `$HOME/.claude/autonomy/postland`, directory asserted to EXIST first (sixteenth consecutive clean
+  use). Gate 2: **`qos-diff` empty, the thirty-fifth consecutive clean reading.** Converge lag **0**
+  at open — this worktree sat exactly at `origin/main` `30bc9aeb5`; the shared checkout (the LIVE
+  layer) was at `b787025e3`, 6 behind trunk. Board at open: **open 260 / blocked 184 / done 2143 /
+  claimed 3, of 2590**. **Declared before closing: this close moves open (260 → 259 by my hand) and
+  does NOT move `master-convergence-deadlock`, which stands at 34 open / 6 blocked — the SEVENTEENTH
+  consecutive recycle to close outside it.**
+
+  **ROW CLOSED — `f7ea7618bcae`** (`stranded-wt-checkpoint-branch`): *"recover branch
+  `wt-8532922cce46` — nine patches content-absent from origin/main (tip `e86c42eaa`, includes the
+  deploy-parity fix of 2026-08-09); ahead-456 is checkpoint inflation, the real missing set is nine."*
+  Every factual clause in that title is TRUE and it is still the wrong conclusion.
+
+  **`git cherry` sized it in one command, and the row's own arithmetic was exact:** 456 total,
+  **447 landed (`-`) / 9 absent (`+`)** — "ahead-456 is checkpoint inflation, the real missing set is
+  nine" verbatim confirmed. But the 9 partition into two disjoint sets that the count cannot separate:
+  **8 are README banner / Blender ARTWORK** (2026-07-29 → 07-31: `assets/demo` ×7, `tools/banner` ×5,
+  `README.md` ×3, `assets/blender` ×3, `tools/blender` ×2 — multi-MB `.mp4`/`.webp` binaries), and
+  **1 is the named value**, `e86c42eaa` *"fix(deploy-parity): the remedy quoted a diagnosis withdrawn
+  53 minutes after it shipped"*, 2 files / 33 insertions.
+
+  🚨 **THE FORTY-SEVENTH LINT — `git cherry`'s `+` MEANS "THESE BYTES ARE NOT ON TRUNK", NEVER "THIS
+  VALUE IS NOT ON TRUNK". A remedy that landed REWRITTEN reads as `+` forever.** `e86c42eaa` is `+`,
+  and its remedy is nonetheless on trunk today, in stronger form, under a different sha. Measured on
+  its own two paths:
+  · `scripts/deploy-parity-assert.sh` — branch tip **535** lines, origin/main **999** (+464).
+  · `tests/deploy-parity.bats` — branch tip **626** lines, origin/main **1146** (+520).
+  · The remedy's own guarantee — the output-ban on `structurally unsatisfiable` — is on trunk at
+    `tests/deploy-parity.bats:677`, and its comment at `:662` names the same *"withdrew 53 minutes
+    after"* history in the same words.
+  · **Trunk is STRICTLY stronger, not merely equivalent:** of the three positive pins the corrected
+    remedy needs, the branch tip carries 2 (`DEPLOY_GATE_CONVERGENCE.md §7`, `CHURNING red set`) and
+    **0** of `DEPLOY_LANE_GROUND_UP` — the two-tier lane that did not exist on 2026-08-09. Trunk
+    carries all three.
+  · The one surviving occurrence in the script, `scripts/deploy-parity-assert.sh:935`, is **a COMMENT
+    documenting the history** (*"Until 2026-08-07 this said…"*), and **emitted-output occurrences of
+    the phrase on trunk = 0**, which is exactly why the ban is green.
+  **Same-moment proof, not inference: `cc-bats tests/deploy-parity.bats` → rc 0, `ok=69 notok=0
+  skip=0`, including `ok 41 provenance: a provenance-only exit 1 names the right kind, and never
+  prescribes another ff` — the very test `e86c42eaa` created.**
+
+  ⚠️ **THE THREE-WAY CONTRAST IS NOW A FOUR-WAY ONE, and this member is the one that inverts the
+  oracle.** #150's sibling: the artifact **ordered its own deletion**. #151's: it **earned a land**
+  (`status: open`). #152's: its value **already landed under a different sha** — and `git cherry`
+  showed that as `-`, so the oracle agreed. **#153's value ALSO already landed under a different sha,
+  and `git cherry` showed it as `+`** — because #152's landed byte-identically and mine landed
+  rewritten. **The `-`/`+` split is a byte fact; the cure/uncured question is a CONTENT one. Read the
+  subject file on trunk before believing a `+`.** (memory: `landedness-oracle-is-blind-to-intent`,
+  `cited-sha-may-not-survive-the-land`.)
+
+  **The 8 artwork patches are NOT orphaned by this close — two OPEN rows already track them**, which
+  is why filed stayed 0: `e3aed0f34f3e` (`tools/blender/clawd_bmo.py` absent from trunk) and
+  `925d843f6665` (`wt-ee1ac85c6ff6` holds `clawd_bmo.py` + 3 `assets/blender/*.webp` staged). Whether
+  the README banner should change, and whether multi-MB binaries should land, is an operator value
+  fork — not a drain adjudication.
+
+  🚨 **CORRECTION TO AN OPEN ROW — `e3aed0f34f3e`'s CENTRAL CENSUS IS REFUTED, AND RECYCLE #100 WAS
+  RIGHT ALL ALONG. The row itself asks for this correction to live here, so here it is.** That row
+  reads *"`tools/blender/clawd_bmo.py` is reachable from **0 of 1902** branch refs (control README.md
+  1902/1902) — it survives ONLY in reapable refs/checkpoints and sweepable worktree copies… Recycle
+  #100 closed `2228b5bf8477` partly on 'reachable from 8 named branches', which is refuted by
+  measurement."* **Re-derived 2026-08-22 with a positive control in every arm, three agreeing
+  instruments: the file is reachable from EIGHT named branch refs.**
+  · `refs/heads` — 1866 refs, **TARGET=8**, CONTROL(`README.md`)=1866
+  · `refs/remotes` — 70 refs, TARGET=0, CONTROL=70
+  · direct pipeline, no loop arithmetic — `carriers_total=8`, same 8 names
+  The carriers: `fix/accounts-eval-bin-resolver` · `ship/backup-08dba0ec` · `ship/backup-1a2c536a` ·
+  `ship/backup-499b6599` · `wt-26a9362990cb` · `wt-8532922cce46` · `wt-dda10a298842` ·
+  `wt-e06ba316a1aa`. **Three of the eight are `ship/backup-*` refs** — the ship machinery's own
+  backups, which is a more durable home than the row's "reapable checkpoints" premise allows.
+  ⚠️ **What is NOT refuted, and why the row stays OPEN:** the file is genuinely **ABSENT from
+  origin/main** (`git cat-file -e origin/main:tools/blender/clawd_bmo.py` → miss), so its prescribed
+  cure — *"cheap permanent fix: land the file"* — survives intact. **Only the census was wrong; the
+  ask was not.** There is no relabel verb on `cc-backlog`, so the correction lives here, which is
+  precisely what the row's own last sentence requested.
+
+  🚨 **AND THE MECHANISM OF THAT WRONG 0 REPRODUCED ITSELF IN MY OWN HANDS — 48TH LINT, SELF-
+  DEMONSTRATING.** My first split-by-ref-space run was an INLINE Bash-tool call (**which is zsh**) and
+  it printed `refs/heads refs=1866 carrying=0` / `refs/remotes refs=70 carrying=0` — **0, silently, no
+  error, with a correct-looking denominator of 1936.** The identical loop body in a Write-tool
+  `#!/bin/bash` file printed **8**. The only thing that separated a true 8 from a false 0 was that the
+  bash version **carried a positive control**; the zsh one did not, and a bare `carrying=0` beside a
+  right-looking `refs=1866` reads exactly like a measurement. **This is very likely how
+  `e3aed0f34f3e` got its 0 in the first place** — its quoted control (`1902/1902`) proves the
+  DENOMINATOR was alive, which is not the same as proving the TARGET arm could ever return non-zero.
+  **A control must be able to distinguish the arm under test, not merely prove the loop ran** (memory:
+  `verification-harness-vacuous-pass-traps`, `positive-control-the-denominator`; method 4).
+
+  **Owed suites:** `bash scripts/gate-select.sh --direct 30bc9aeb5..HEAD` — **EMPTY** (docs-only);
+  instrument control `--direct 492c51066~1..492c51066 | wc -l` read **32**, a stable SIXTEEN-recycle
+  reading. `--explain` named the same three standing docs-consumers as #145–#152. Suite run this
+  turn for the adjudication itself: `tests/deploy-parity.bats` **69 ok / 0 notok / 0 skip, rc 0**.
+  **Branch `wt-8532922cce46` NOT deleted** — deleting a ref is destructive and is the operator's call;
+  same disposition as #150–#152, and here it is load-bearing, since that branch is one of the 8
+  carriers of a file trunk does not have.
+
 - **2026-08-22 — drain recycle #152: the row counted the patches that did NOT land; the value was in
   the two that DID. `git cherry` separated them in one command. filed 0 / closed 1 / landed 1 commit
   (DOCS).** Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory
