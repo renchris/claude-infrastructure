@@ -87,6 +87,84 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #145: the row was filed 35 hours after its own cure landed. filed 0 /
+  closed 1 / landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (eighth consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-seventh
+  consecutive clean reading.** Converge lag **4** at open (budget 25).
+  Board at open: **open 250 / blocked 182 / done 2135 / claimed 4, of 2571** — an EXACT match for
+  #144's close, so sibling churn did not recur in this window either. Retire-in-one **43**
+  (#144 closed at 45; the delta is siblings', not this recycle's — per-row status diffed, method 80).
+  🚨 **EIGHTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, a ninth consecutive window.
+
+  **THE ROW CAME FROM THE FOLD THIS TIME, at the one place two methods overlap.** `b0b83b6c5845`
+  (`postland-scan-item-duplicate-minting`) is simultaneously **retire-in-one** (method 79) and
+  **cited in code** (method 77) — only two rows on the whole board are both, and the other
+  (`f495d5374c01`) is a `launchd` umbrella, not a drain pickup. The citation is one line:
+  `bin/cc-backlog:379`, *"named by sibling item b0b83b6c5845"*. Method 77's lookup is still the
+  cheapest move on this board — eleven recycles of nulls on the id-grep, then one hit that WAS the
+  recycle.
+
+  **CLOSED — `b0b83b6c5845`.** Its remedy had two halves and BOTH are landed; this close proves each
+  behaviourally rather than reading it off the code.
+  · **MINT side**, cured by `545169711a9d` (2026-08-07T08:35:42Z): `bin/cc-backlog:1376` derives the
+    id as `mk_cond_id(project, condition)` whenever `--condition` is present, so the sha-bearing
+    title is displayed but is **not identity**. Proved with a three-arm probe against a throwaway
+    `CC_BACKLOG_FILE` — **A** same condition, titles differing only by `@ <sha>` ⇒ **1 row**;
+    **B** the SAME two titles with no condition ⇒ **2 rows** (the row's defect reproduces);
+    **C** same condition, titles differing in prose too ⇒ **1 row**. Arm B is what makes A
+    non-vacuous; arm C kills the competing reading that the two titles were merely too alike.
+  · **DETECT side**, cured by `6b8fd23029dd` (2026-08-11T06:14:40Z): `dups` KEY 2 `title`, whose own
+    header names THIS ROW as its population and — because the live population had already aged out —
+    deliberately pins its firing on a fixture. `tests/cc-backlog-dups-family.bats` **1..22, ok=22,
+    notok=0, skip=0**; test 3 *is* the remedy (*"title key collapses three rows that differ ONLY by a
+    trailing @ sha"*) and test 4 is its negative control.
+
+  🚨 **THE FINDING: A ROW CAN BE FILED AFTER ITS OWN CURE HAS LANDED, BY AN AUTHOR WHO IS NOT WRONG
+  ABOUT ANYTHING THEY SAW.** All UTC: the four duplicates this row cites minted 2026-08-01/02; the
+  mint-side cure landed **2026-08-07T08:35:42Z**; the row was **FILED 2026-08-08T19:43:05Z** — thirty
+  five hours later — describing the mint side as live. Its author had just lived the incident and
+  reported it faithfully; the mechanism had changed underneath the incident, and nothing connects a
+  landed commit back to a not-yet-written row. Its `lastTs` (2026-08-11T10:37:55Z) then lands
+  **between** cure 2 (06:14:40Z) and cure 3 (23:09:21Z) on one day — touched in place four hours
+  after half its remedy shipped, and never re-checked. **Method 70 has always said to date a cure
+  against the failures it is credited with curing; this adds the other direction — date the row's own
+  `firstTs` against the cures, because `firstTs` is a claim about the world at an instant and 35
+  hours is long enough for it to have been false when written.** Distinct from #140's
+  *wrong-when-written*: nothing here was ever wrong, it was LATE.
+
+  **THE PRESCRIBED ELEMENT THAT WAS REFUSED, AND CORRECTLY — a third cure nobody asked for.** The row
+  asked that the scanner *"keep the sha in the EVIDENCE/body, never the title"*. `e4ef73d3ff34`
+  (2026-08-11T23:09:21Z, backlog `4f657ed3e064`) refuses exactly that at
+  `scripts/postland-verify.sh:771-780`, with the measurement: `--condition` DERIVES the id from the
+  condition, so one suite can hold only one row and `cmd_add` returns early on a known id — giving
+  the other three mint sites a condition **at `add`** would not dedupe them, it would **delete the
+  second item's content**, and the deleted one (`AUTO-REVERT FAILED`) is the single remedy in that
+  file needing a human. The shipped shape is `file_linked`: mint TITLE-keyed, then `link
+  --condition`, so both rows survive and the **lease**, not the mint, stops the second dispatch.
+  Enumeration checked rather than assumed (method 75): the header claims four mint sites with three
+  routed through `file_linked` — verified exactly, `:2261` `:2490` `:2772` via `file_linked`, `:2696`
+  condition-keyed, **no fifth**.
+
+  **THE MOST DUPLICATE-SHAPED THING ON THE BOARD IS A DECISION.** `postland-red-autonomy-sweep`
+  carries **7 rows**, all *"post-land HUNG: tests/autonomy-sweep.bats wedged at N/M @ <tree>"*,
+  2026-08-12 → 08-14 — and that is the HUNG site behaving as designed:
+  `postland-verify.sh:2769-2772` writes its reason down — *"the tree in the title keeps each hang
+  episode its own row; the condition is what tells guard (6) they are one piece of work."*
+  Per-episode rows sharing one condition is the intended shape, not the per-event minting this row
+  filed. Board today: **30 distinct `postland-red-*` conditions over 40 rows.**
+
+  **WRONG CAUSES REJECTED.** (1) *"The sha is still in the title, so the mint side is open"* — it is,
+  at `:2687` and `:2773`, and that is the **cure's own wording**: cc-backlog's `--condition` refusal
+  message prescribes it verbatim (*"Put the measurement in --title; it is displayed, it just stops
+  being identity"*). Identity moved; the display did not. (2) *"The 7-row family proves duplicates
+  still mint"* — a documented decision by a different mint site (method 51: a difference is a
+  decision until proven an omission, and this one wrote the reason down). (3) *"0 open sha-suffixed
+  rows today, so it is fixed"* — the comfortable close, and a **vanished precondition** (method 21).
+  The population aged out between filing and fix; KEY 2's own header says so. This close rests on
+  arms A/B/C and on test 3, both mechanism.
+
 - **2026-08-22 — drain recycle #144: the cure existed, the spelling it had to write did not — and the
   falsifier could not have told the difference. filed 0 / closed 1 / landed 1 commit (CODE).**
   Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
