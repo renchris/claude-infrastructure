@@ -87,6 +87,119 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #130: a correction anchored the NEW rule and left the OLD one matching
+  prose, so the very case the correction exists to refuse walked back in through the rule it did not
+  touch. filed 0 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  twelfth consecutive clean reading.** Converge lag **8** at open (budget 25; both landed paths are
+  `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **42 open / 6 blocked**, exactly where #129 left it.
+
+  **Worked the recommended start, `bacdfc4f63ab`, and it IS in the warm effort** (bucket checked
+  first, per #127). Closing it moves `master-convergence-deadlock` **42 → 41 open**, 6 blocked.
+
+  **BOTH of the row's own claims were false, and the mechanism it named was still real at a site it
+  did not name.** The row: *"payload-lint F3 green-lights an UNDELIVERABLE back-channel: `cc-notify
+  775` passes PANE_ID_REF … Fix: F3 should call `cc-notify --resolve` rather than re-implement the
+  check as a regex."*
+
+  - **Its headline case is CURED, 29 minutes after it was filed.** Row `firstTs`
+    2026-08-08T09:59:46Z; `55c18e2b0` ("address the back-channel by registry NAME — a bare pane id
+    does not resolve") landed 2026-08-08T10:29:11Z. Measured today: `cc-notify 775` in a payload →
+    **RED**. Nobody closed the row (method 70, dated the healthy direction this time — the cure
+    POST-dates the filing rather than predating it).
+  - **Its prescribed fix does not exist.** `cc-notify` has no `--resolve` verb — 0 matches in the
+    argument parser, and `cc-notify --resolve foo` exits **2, "unknown option"**. The row named a
+    capability rather than citing one (brief's warning, confirmed). That is a finding, not a blocker.
+  - **But the mechanism survives at the OTHER rule.** `SESSION_NAME_REF` is anchored to the
+    `cc-notify` ARGUMENT position and its header states the reason in its own words — *"never a bare
+    token anywhere in the prose"*. The pre-existing `UUID` rule was never given the same treatment.
+    So the cured case walks straight back in the moment any uuid appears in unrelated prose, which a
+    real fire payload almost always carries (a predecessor session id, a plan ref, a cited pane):
+
+    | payload | F3 | `cc-notify` argument actually resolves? |
+    |---|---|---|
+    | `cc-notify <uuid>` | GREEN | RESOLVES |
+    | `cc-notify 775`, no uuid in file | RED | UNKNOWN |
+    | `cc-notify 775` **+ a uuid in prose** | **GREEN** | **UNKNOWN** ← the W5 root, through a green F3 |
+    | `cc-notify w0t0p0:<uuid>` | **GREEN** | **UNKNOWN** |
+
+    The prefixed form passed on the uuid SUBSTRING after the colon — the same substring bug
+    `handoff-fire.sh:7926` names. `cc-notify`'s resolver rejects it at every arm (`:` fails the
+    safe-filename gate; both uuid arms are `^…$`-anchored), and handoff-fire normalizes it off with
+    `${BACK_SID##*:}` before use. An **authored** payload gets no such normalization.
+
+  **METHOD 71 HELD FOR THE THIRD CONSECUTIVE RECYCLE, and this time it decided the SHAPE rather than
+  the disposition.** Harm measured behaviourally BEFORE writing anything, over every real payload on
+  the box (185 files; 122 carrying a back-channel): **6 RED · 116 GREEN-with-a-resolvable-argument ·
+  0 laundered.** Harm is **ZERO**. Shipped anyway on the corollary — the cure is one anchored pattern
+  that closes the class and costs **no standing list** anyone must remember to join.
+
+  🆕 **THE NEW MEASUREMENT THIS RECYCLE ADDS — WHEN A FALSE POSITIVE IS DESTRUCTIVE, ITS RATE IS THE
+  DECIDING NUMBER, NOT THE HARM IT PREVENTS.** `payload-lint.sh`'s own header says it plainly: *"a
+  refused fire is not inert: it runs `fire_cleanup`, which removes the worktree and deletes the
+  branch."* So tightening this gate is not a cosmetic trade — a false-RED **destroys work**. The
+  anchor was therefore measured in the direction that could hurt, against the 116 real greens:
+  **0 false-RED (116/116 still green)**, under both a strict and a flag-tolerant candidate. The
+  tolerant one shipped (`cc-notify([[:space:]]+--[A-Za-z-]+)*[[:space:]]+"?$UUID`) — same closure,
+  more headroom, since the asymmetric downside argues for the more permissive of two equally-closing
+  patterns.
+
+  **The selftest fixture was ONE LINE OF PROSE from vacuous.** Case (5b) — the bare pane id, written
+  2026-08-08 specifically to hold this line — stayed RED only because it happens to contain no uuid
+  **at all**. Adding one ordinary context sentence flips it GREEN. That is
+  `sibling-guard-makes-the-fixture-vacuous` reached from a new direction: not a sibling guard
+  covering the axis, but the fixture being **too small to reach the regime its own subject runs in**.
+  New cases **(5c)** laundered-by-prose-uuid and **(5d)** the `w0t0p0:` prefixed form; selftest
+  **8/8 → 10/10**, and both new cases **FAIL against the unanchored rule** (grafted onto it directly),
+  so neither is vacuous.
+
+  **Second commit — an exact-count assertion that could only ever fire on GROWTH.**
+  `tests/payload-lint.bats`'s first test pinned the literal `8/8`, and its own comment states the
+  intent correctly: *"it is what stops a selftest silently shrinking to zero checks."* A literal
+  equality cannot express that intent — it is symmetric, so it reds just as loudly on a GAIN, and
+  gaining is the only thing that has ever happened (5→8 on 2026-08-08 forced an edit here; 8→10 in
+  commit 1 forced another). Both were additions; neither was a defect the assertion could catch.
+  Replaced with **FLOOR + TALLY** (both halves of `N/M` equal, `M ≥ 8`, an unparseable tally fails
+  LOUD). Positive-controlled against three mutants, **all caught**: shrink below floor (10/10 → 3/3 —
+  the trap actually guarded), halves disagreeing while still exiting 0 (10/10 → 9/10), and the tally
+  vanishing. Baseline plan line **`1..1`, not `1..0`** — the filter matched a real test.
+  (memory: `exact-count-assertion-tripwires-its-own-subject`.)
+
+  **Wrong causes rejected — five, and THREE were about my own instruments (the ninth consecutive
+  recycle where that holds; budget one instrument-check per probe, it is a standing prior):**
+  1. *"The row is simply stale — close it as already-cured and move on."* Refuted: the headline case
+     is cured, the **mechanism is not**. A row can be wrong in its example and right in its class.
+  2. *"Implement the row's `cc-notify --resolve` and have F3 call the actuator"* (memory
+     `make-the-actuator-the-arbiter` argues for it). Refuted on measurement: the verb does not exist,
+     and building it would put a **subprocess in a pre-fire gate** — the exact thing `cc-notify`'s own
+     header (v4, "RESOLVER AVAILABILITY") rewrote itself to avoid after sends hung under load.
+  3. **INSTRUMENT** — the first probe's `row_bare_int` fixture went RED and read as "row refuted,
+     done". It carried **no uuid at all**, so it never reached the laundering regime. The finding came
+     only from asking what a *real* payload looks like (memory:
+     `control-fixture-must-reach-the-bugs-regime`).
+  4. **INSTRUMENT** — a static grep of the repo's own templates says **5 files** pair a `cc-notify`
+     mention with a uuid, which reads like the harm figure. It is the **static proxy**, not the event;
+     the behavioural census over 122 real payloads says **0**. Method 71's two numbers, again differing
+     by their nature rather than their magnitude.
+  5. **INSTRUMENT** — the red-proof's prior-shape needle was nearly counted **without comment-
+     stripping**. It happened to read 0 either way here (the fix's comment paraphrases rather than
+     quotes the deleted call), but that is luck, not method: #129's abort came from exactly this.
+     Both readings are printed side by side in the driver so the trap is visible rather than avoided.
+
+  **Evidence.** Red-proof: laundered **GREEN→RED**, prefixed **GREEN→RED**, a well-formed payload
+  **GREEN on both arms** (the destructive direction, controlled); prior shape present **exactly once**
+  at the parent counted comment-stripped, **0** after. Corpus regression identical pre/post: 116
+  green, 6 red, **0 laundered**. Owed suites (`gate-select --direct` printed **a BARE LIST OF 3
+  PATHS, no verdict sentence, rc 0** — the **tenth** reading of that shape) run in full, plus three
+  adjacent contract suites: `payload-lint` **10/10** · `payload-lint-tool-parity` **5/5** ·
+  `handoff-fire-failed-cleanup` **8/8** · `handoff-payload-gates` **22/22** · `notify-back` **17/17** ·
+  `cc-notify` **105/105**. All plan lines matched `ok+notok`; **0 skips throughout**. Off-box
+  (`env -i LC_ALL=C`) **green on both changed-suite paths, read from the STATE column**. Lints:
+  `shellcheck -S style` clean · `bats-shellcheck-lint` clean · `bats-kill-guard-lint` clean ·
+  `bats-assert-liveness` silent and positive-controlled **36/36** · `self-path-lint --selftest`
+  **32/32** · `test-hermeticity-lint tests` clean (527 suites, **0 new leaks**).
+
 - **2026-08-21 — drain recycle #129: two guards were justified by ONE number, so at most one of them
   had been measured — and the unmeasured one was blinding its rule to the sibling of the incident
   that created it. filed 0 / closed 1 / landed 2 commits.**
