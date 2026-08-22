@@ -173,6 +173,22 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   and not a convenience. (f) *"file the sibling as a new row"* — see §2. (g) *"LIVE_SRC=unknown for
   the lag"* — see §3.
 
+  🚨 **6. THE STANDING LINT CAUGHT ME, IN THE BRIEF I WAS HANDED — a claim about a rule's TEXT
+  read as a claim about its BEHAVIOUR, seven links running.** Premise 9 of every brief since #107
+  says *"§4.1 invariant 8 (`SHIP_LAND_SMOKE_BUDGET_S=420`) IS LANDED at line ~8964, verified
+  #107–#119"*. That is TRUE — of the paragraph. It is not a fact about the effective budget:
+  `scripts/ship-land.sh:1897` reads `budget="${SHIP_LAND_SMOKE_BUDGET_S:-120}"`, and invariant 8's
+  own first words are **"SET … ON THE FIRST LAND"** — a duty the session performs, not a default in
+  place. I read it as the latter, exported nothing, and got the **seventh distinct selector
+  reading**: `smoke PARTIAL — 2 direct suite(s) attempted in 120s`, with
+  `tests/completion-assert.bats` **GATE-KILLED at exit 124, ZERO not-ok** — out of **8** selected.
+  Method 41 then closed it by hand: `gate-select.sh --direct <parent>...HEAD` names the exact 8
+  (it runs fine AFTER a land), and all 8 went green in this session — boundary-handoff 43/43 ·
+  completion-assert 91/91 · dod-path 14/14 · dod-persist 30/30 · operator-readout 81/81 ·
+  operator-surface-scope 21/21 · wrap-ledger-memo 23/23 · wrap-ledger 77/77 = **380 tests, 0 not-ok,
+  0 skips, every plan matched.** Nothing was harmed; the *reading* is the finding, and invariant 8
+  now carries it. **Successors: `SHIP_LAND_SMOKE_BUDGET_S=420 bash scripts/ship-land.sh`.**
+
   **MEASURED, NOT FILED — the shipped `grep -c` has method 37's double-output shape and is correct
   by accident.** `LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"`: under
   `pipefail`, zero adds makes `grep -c .` print `0` **and exit 1**, so `|| echo 0` also runs and the
@@ -10380,6 +10396,20 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
    ~7 min · `test-hermeticity-lint` 68 / ~10 min · `capacity-alarm` 49 / >3 min. **And still close
    the gap yourself by hash + re-run (method 41) — the budget lowers the odds, it does not remove
    the duty.**
+   🚨 **THIS IS A DUTY YOU PERFORM, NOT A SETTING THAT IS IN PLACE — and the per-recycle brief has
+   been paraphrasing it the other way for seven links** (#120). The briefs' premise 9 reads
+   *"invariant 8 (`SHIP_LAND_SMOKE_BUDGET_S=420`) IS LANDED at line ~8964, verified #107–#119"*,
+   which is TRUE of this paragraph's text and says nothing about the effective budget:
+   `scripts/ship-land.sh:1897` is `budget="${SHIP_LAND_SMOKE_BUDGET_S:-120}"`, so a land that does
+   not EXPORT it gets **120 s**. #120 read "is landed" as "the default is 420", exported nothing,
+   and its land came back `smoke PARTIAL — 2 direct suite(s) attempted in 120s` with
+   `tests/completion-assert.bats` GATE-KILLED at exit 124 — of **8** selected. Nothing was harmed
+   (all 8 were then run green by hand, 380 tests), but the reading is what to fix: **when a brief
+   says a rule "is landed", ask whether that names the rule's TEXT or the behaviour it prescribes.**
+   The one-command form, and the way to know which 8 you owe:
+
+       SHIP_LAND_SMOKE_BUDGET_S=420 bash scripts/ship-land.sh
+       bash scripts/gate-select.sh --direct <parent>...HEAD    # the exact list, before or after
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
