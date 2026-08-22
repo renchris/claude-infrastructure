@@ -87,6 +87,91 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #138: a row updated IN PLACE was superseded by its own author's NEXT
+  row 32 minutes later, and the in-place update is exactly what hid it. filed 0 / closed 1 /
+  landed 1 commit. A whole CONDITION retired to zero.**
+  Gate 1 clear — **no `.page` file on disk**; see the instrument correction below, because the first
+  reading of this gate was taken at the wrong path. Gate 2: **`qos-diff` empty, the twentieth
+  consecutive clean reading.** Converge lag **14** at open (budget 25). Fold at open:
+  `master-convergence-deadlock` **34 open / 6 blocked**, exactly where #137 left it.
+
+  **THE ID-GREP IS A CONFIRMED CHEAP NULL — FOURTH RECYCLE, FOURTH IDENTICAL ANSWER.** Over all 34
+  in-group open rows it again returned `b7252a3bb015` (5 hits), `786ac458be00` (2), `6a82c9405b9e`
+  (1), every mode already assigned, with the `b7252a3bb015` positive control non-zero and the driver
+  aborting if it had read 0. Run it; budget nothing on it. **Method 78's family census chose the row
+  for the fourth recycle running** — 33 regexes over all 2,569 rows, ranked by
+  `done/(done+open+blocked)`, with #137's positive-control discipline held: `shellcheck` **21/21**
+  and `gate-select` **19/19** read **100%**, which is what proves the regex set is not too broad.
+  Ranking below those: `land-lock` **15/16** · `verify_engagement` **27/30** · `ship-land` **369/408**
+  · `postland_net_live/no-green` **15/17** · `deploy-wedged` **4/5** · `payload-lint` **5/8**. The
+  `land-lock` survivor and the strongest single lead were the same row.
+
+  **CLOSED — `eef88daa030a`** (filed 2026-08-10T12:44:32Z, updated in place 2026-08-21T17:57:00Z,
+  condition `deploy-live-frozen`). Closing it **drains that condition to ZERO and retires it from the
+  board.** ⚠️ It is a DIFFERENT BUCKET: `master-convergence-deadlock` is **unmoved at 34 open /
+  6 blocked**, and this recycle does not claim otherwise.
+
+  🚨 **METHOD 2's SEVENTH AXIS, AND IT IS A NEW SHAPE OF STALENESS: A ROW CAN BE SUPERSEDED BY ITS
+  OWN AUTHOR'S NEXT ROW, AND AN IN-PLACE UPDATE MAKES THAT INVISIBLE.** #136's row had its mechanism
+  deleted; #137's had its mechanism promoted and its prescription deleted; this one's *background*
+  claim was promoted to design while its own **headline** — the thing the row itself labels *"TREND,
+  and it is the new information"* — was refuted by the same author, from the same `source`
+  (`drain-lead-verify`), **32 minutes later**, in `17e94bb423ef`. The row's `lastTs`
+  (2026-08-21T17:57:00Z) precedes its successor's `firstTs` (2026-08-21T18:29:03Z), so the row still
+  reads as *current* while being the older of the two documents. **When a row has been updated in
+  place, its `lastTs` is not evidence that nothing newer exists — search the store for what its own
+  author filed next.** Four claims, graded separately:
+
+  1. **The slug's premise is dead, and that is re-confirmed today WITHOUT running the converger**
+     (no G2 escalation — the record was read, the converger was not run). Live HEAD `5ae53154e`
+     carries tree `4a275b22b6b8f1667d29c839a483c42965ab9789`, which is **exactly the newest green
+     stamp** (2026-08-22T08:15:31Z, 4 h old), and walking all 14 commits of `HEAD..origin/main`
+     against the tree-keyed stamp store finds **ZERO green-stamped trees above live HEAD**. The
+     converger is not frozen, not lagging, and is declining nothing it could take.
+  2. **The headline TREND claim is refuted by its own successor.** The row attributes growing lag to
+     a THROUGHPUT deficit — *"the drain chain lands 1-3 commits per ~35min recycle and stamping is
+     not keeping pace."* `17e94bb423ef` measured the last **six** stamp verdicts rather than one and
+     killed exactly that: *"the verifier JUMPS TO THE NEWEST TREE each cycle, it does not walk a
+     backlog, so cycle time alone bounds steady-state lag at ~commits-per-cycle (about 2), never
+     12"*, and *"Lag 2 → 12 is a run of non-green verdicts, NOT a throughput deficit."*
+  3. **The concrete harm is discharged** — corroboration only, never the grounds (method 21). Both
+     fixes named as un-stamped and therefore not live are ancestors of live HEAD today:
+     `fc1e0674b` (capacity-alarm census fail-open, 2026-08-21T13:32:24Z) and `84757849b` (land-lock
+     locale mutex, 2026-08-21T13:59:59Z).
+  4. **The row's own prediction is falsified.** *"At the current landing rate the budget is hours
+     away, not days"*, written 17:57Z; **18 h later the lag is 14 against a budget of 25**, unbreached.
+
+  **THE SURVIVING TRUE HALF IS PROMOTED TO DESIGN — AND IS NOT THIS ROW'S TO OWN (method 23).**
+  *"The bottleneck moved to STAMPING"* is not merely still true; `scripts/deploy-live.sh`'s header
+  states it as the **design premise of the entire three-tier ladder**: *"the verifier emits 0.17
+  greens/day while trunk moves ~63 commits/day, so the green pointer permanently LAGS"* — which is
+  precisely why **T1H** (hermetic off-box green) and **T2** (degraded, lag-past-budget) exist beside
+  T1 at all, after a measured incident of *"534 identical refusals, launchd runs=276 every one exit 1,
+  live layer 91 commits stale, ZERO pages"*. Stamp population measured 2026-08-22: **379 total /
+  39 green / 137 red / 195 cut / 8 hung**, with **7 greens in the last 24 h**. **BOUNDARY KEPT** —
+  that phenomenon stays open under three sharper rows and is NOT closed here: `17e94bb423ef` (the
+  actionable target is verdict **quality**, why 4 of 6 cycles end cut or red), `d70b7e8ffdf2` (three
+  consecutive cuts make deploy-live's T1 green tier structurally unreachable), and `01ab05685857`
+  (verifier inertness — and per the standing contract, never to be closed on a fresh green, which is
+  why the 4 h-old green above is recorded as context and not as its cure).
+
+  **WRONG CAUSES REJECTED — three, and two were my own instruments (the seventeenth consecutive
+  recycle where the instrument-check paid).**
+  (a) *"Greens have stopped being produced"* — inferred from 39 green reading identical to #136's 39.
+  Refuted by **dating** the population: 7 greens landed in the last 24 h and the newest is 4 h old,
+  so #136's read was the same day and nothing had stalled. A count equal to yesterday's is not
+  evidence of a stall until you date its members.
+  (b) 🚨 *"The stamps directory is empty / absent"* — my first probe read **0 stamps and no stamps
+  dir**, which would have been a catastrophic false finding, since a missing stamps dir is
+  deploy-live's own `no-stamps-dir` **refusal** state. The instrument was wrong, not the box: the
+  path is **`$HOME/.claude/autonomy/postland`**, NOT `$HOME/.claude/state/autonomy/postland`. **The
+  same wrong path also invalidated this recycle's first post-land page scan** — re-run at the real
+  path, `postland/*.page` is **0** and no page mentions `13096ba5a`, so premise 10 holds and gate 1
+  is genuinely clear. Note the failure mode: the wrong path produced a *plausible, alarming* answer
+  on one probe and a *plausible, reassuring* answer on the other, and neither looked like an error.
+  (c) *"The converger is declining a green it should take"* — refuted by the per-commit walk in
+  claim 1: zero greens above live HEAD.
+
 - **2026-08-22 — drain recycle #137: the row asked for a queue in front of the expensive phase; the
   project BUILT that queue, MEASURED it, and DELETED it — a close carried by the system's own
   refusal, not by a new measurement. filed 0 / closed 1 / landed 1 commit.**
