@@ -87,6 +87,119 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #148: the row asked for a design fork to be settled; it had been
+  settled in writing and BUILT two days later — and the row was touched in place three hours after
+  its own cure landed, and left open. filed 0 / closed 1 / landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (eleventh consecutive clean use). Gate 2: **`qos-diff` empty, the thirtieth
+  consecutive clean reading.** Converge lag **6** at open (budget 25).
+  Board at open: **open 261 / blocked 182 / done 2138 / claimed 4, of 2585** — identical to #147's
+  close in every bucket, so nothing moved in the gap. Retire-in-one **44** at open (up from 41:
+  three conditions newly fell to one open row). id-grep **19 cited of 443** — the count fell by one
+  while the population grew by ten, same instrument (method 61: compare ranks, never denominators).
+  **Declared before closing: this close moves the retire-in-one count (44 → 43) and does NOT move
+  `master-convergence-deadlock`, which held at 34 open / 6 blocked — a TWELFTH consecutive window
+  closing outside the nominal warm effort.**
+
+  **CLOSED — `847e4d2c4753`** (`postland-no-green-side-retraction`): *"postland-verify has NO
+  green-side retraction … a condition-keyed RED item therefore outlives its own fix forever, and
+  dispatch keeps firing workers at a dead condition. Design fork to settle before coding: which
+  items may a green run retract …, and what happens to a suite that is green because it was
+  DELETED."* Closed by an ANSWER, not a fix (method 15) — no code change.
+
+  **THE SCOPE ERROR THAT GENERATED THE ROW: A FILE-SCOPED GREP CARRYING A SYSTEM-SCOPED
+  CONCLUSION.** The row's mechanism claim is *still true today* — `scripts/postland-verify.sh` calls
+  no `done`/`resolve`/`close` verb, and its own stored falsifier confirms it (rc 1 this turn). But
+  the retraction was never supposed to live there. It lives one component over, in the **falsifier
+  runner**: postland ATTACHES a stored probe to every item it mints, and `bin/cc-premise` re-runs
+  that probe and closes the row. The row greped one file and concluded about the system, so the
+  working actuator was invisible to it. **Ask what a needle's SCOPE is before believing its null**
+  (method 58) — and note this is the mirror of #147, where the answer was also one file over, but
+  there it was a work-around and here it is the cure.
+
+  **THE ABSENCE IS DELIBERATE, AND THE SUBJECT SAYS SO IN ITS OWN HEADER** (method 11, the
+  thirty-seventh consecutive recycle to find the highest yield here). `postland-verify.sh:3161-3190`
+  § `--falsify-red`: retraction cannot live in this file because cc-premise gives a probe **20 s**
+  while one suite alone runs **~50 min** in this band — so an honest probe would hold a claim
+  hostage and a probe that fit would be *"a permanent non-verdict wearing a measurement's clothes"*.
+  It reads **last-green ancestry** instead of re-running anything. Method 51 again: the difference
+  between two sites is a DECISION until proven an omission, and here the decision is written down
+  with its measurement.
+
+  **BOTH HORNS OF THE FORK ARE ANSWERED IN CODE, AND THE SECOND IS ANSWERED IN TWO DIRECTIONS.**
+  `verb_falsify_red` (`:3193-3224`) requires `merge-base --is-ancestor <accused> <last-green>` (else
+  1, still live); an unattributed `tests/` subject needs no span clause because `tests/` IS the
+  corpus; every FILE subject must additionally not be excluded by `scripts/host-suites.manifest`
+  **read at the green's own ref**, and must EXIST at that ref. That is horn 1 — *only* suites the
+  green actually covered — answered more tightly than the row asked. Horn 2, the deleted suite,
+  splits: at `:2485` a green containing the accused commit settles the premise whether *"the revert
+  worked, someone fixed forward, **or the suite left the corpus**"*; but a suite deleted BEFORE the
+  green does not retract — `git cat-file -e "$lgc:$path" || return 2`, *"a green cannot vouch for a
+  file it never saw"*. Every failure returns **2 (could not ask)**, never 0.
+
+  **THE HARM IS REFUTED FROM THE STORE, NOT FROM A VANISHED PRECONDITION** (method 21). 13 rows
+  carry a `--falsify-red` probe: **12 done, 1 open**; **8** were retracted green-side citing
+  `falsifier passed: … (auto-closed by cc-premise sweep --close-falsified)` (`e8a5750bc5f4`,
+  `00f04bcc9c25`, `caa3935c8156`, …), and **42** rows board-wide carry that auto-close evidence. The
+  single open one (`464c856d6799`) was filed 2026-08-21 — **~1 day of sweep latency, not "forever"**
+  — and its own probe exits 0 right now, so it is a pending auto-close rather than a stranded row.
+  The dispatch half is gated too: `bin/cc-premise:236` `BLOCKING = ("superseded", "self-duplicate",
+  "falsified")` and `:2276` `if fverdict == "falsified": return fals` — a falsified premise REFUSES
+  the claim. The row's own cited example `5531b940c122` is `done`, closed **twelve minutes before
+  this row was filed**.
+
+  🚨 **THE CONTROL VETOED THE OPERATOR AGAIN — THIRD SESSION RUNNING (#140's rule collecting a third
+  debt).** A two-direction live probe drove the DEPLOYED verb on six arms. Five landed as predicted
+  (two known-retracted rows → 0; the open row → 0, i.e. genuinely falsified and merely unswept; a
+  never-existed suite → 2; missing args → 2). The sixth, `tests/anti-vacuity-contract.bats @
+  af0127d07ada`, returned **2 where I expected 0** — that row had been *closed* on this exact probe.
+  The naive read is *"the retraction verb has regressed"*. `rev-parse` settled it in one command:
+  **`af0127d07ada` no longer resolves as a commit in this checkout** (rebased/GC'd) while the other
+  three shas do, so the verb's OWN step-4 positive control fires — *"BOTH refs must RESOLVE before
+  either is compared … without it an unreadable object reads as a clean negative and this verb goes
+  quietly inert while still returning a confident number"* — and it abstains. **The instrument was
+  right and the expectation was wrong**, and the same-suite/different-sha pair is what isolated it:
+  steps 7-8 could not be the cause, because the sibling arm on that identical suite reached 0.
+  (memory: `cited-sha-may-not-survive-the-land`.)
+
+  **THE STORED FALSIFIER IS REFUTED, NOT MERELY UNSATISFIED.**
+  `grep -qE "BACKLOG_BIN[\"] (done|resolve|close)" scripts/postland-verify.sh` exits 1, so by its own
+  probe the row reads "still live". It is **remedy-shaped** — it greps for the prescribed edit — and
+  the shipped design REFUSES that edit for a measured reason. Satisfying it would install a second,
+  bound-violating retraction path beside the working one. Run every falsifier; adjudicate every
+  falsifier; obey none (method 9, and the #142 shape: *a falsifier asserting the presence of a fix
+  its own system forbids*).
+
+  **DATING — THE ROW WAS TOUCHED AFTER ITS OWN CURE AND STILL LEFT OPEN** (method 70; UTC via `%ct`).
+  Row `firstTs` **2026-08-08T20:57:27Z**. `verb_falsify_red` **and** the deleted-suite guard landed
+  together in `fe6ebd0fbf35` at **2026-08-11T06:39:30Z** — 2 d 10 h after filing. The row's `lastTs`
+  is **2026-08-11T09:54:22Z**: **three hours and fifteen minutes after its own cure**, by a session
+  (`by=Chriss-MacBook-Pro-3-86571`, not `cc-backlog-reap`). The autonomous close-side actuator
+  followed in `044a3ebbe938` (**2026-08-12T13:56:38Z**), extended by `55e473a8f6ec`
+  (2026-08-17T06:11:04Z). So the gap this row sat in is not "nobody built it" — it is CURED ≠ CLOSED
+  (#145) with a sharper edge: **the row was in someone's hands after the cure had landed.**
+
+  **CITATIONS ROTTED WHOLESALE, AS METHOD 2 PREDICTS.** All four line numbers in the title
+  (`:1481 :1596 :1746 :1797`) are stale — the file is now 3762 lines. The mint sites are `:793` (the
+  `file_linked` helper, called at `:2261`, `:2490`, `:2772`) and `:2696` — **FOUR, not the five the
+  row claims**, re-confirming #145's independent measurement against a different artifact.
+
+  **Wrong causes rejected.** (1) *"postland-verify needs a close verb added"* — the row's own
+  prescription, refused by the design on a measured bound (method 20: a prescribed fix can be
+  correct in target and forbidden by the system it targets). (2) *"the absence of a close verb in
+  this file proves rows are never retracted"* — the scope error above; the file-scoped grep was
+  true and the system-scoped inference was false. (3) *"ARM A1's rc 2 means the verb regressed"* —
+  refuted by `rev-parse` in one command; the accused sha is simply gone and the verb correctly
+  abstains.
+
+  🆕 **THE FORTY-FIRST LINT — A ROW THAT ASKS A DESIGN QUESTION MUST BE RE-ASKED OF THE DESIGN, NOT
+  OF THE FILE IT NAMES.** #147's lint said *convict on the string, not the path*. This one is its
+  sibling one level up: when a row's payload is **a fork to settle** rather than a defect to fix, the
+  cheapest disproof is not a grep of the named file at all — it is reading whether the project has
+  since ANSWERED the question anywhere, because a settled fork leaves its answer in a header, a
+  contract comment, and a return-code table long before anyone remembers to close the row. Here all
+  three existed, in the very file the row named, ~2000 lines below the line numbers it cited.
+
 - **2026-08-22 — drain recycle #147: a row's TITLE named one file, its EVIDENCE quoted another, in
   another repo — and the lander's own sibling script had documented the defect in prose rather than
   fix it. filed 0 / closed 1 / landed 1 commit (CODE + TESTS).**
