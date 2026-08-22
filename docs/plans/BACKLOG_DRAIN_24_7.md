@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #156: an INCOMPLETE comment mints a work item exactly as a STALE one
+  does — this row's code and comment agreed, and the reader still reached a wrong conclusion because
+  neither said WHY. filed 0 / closed 1 / landed 1 commit (install.sh comment + this log).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (nineteenth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-eighth
+  consecutive clean reading.** Converge lag **0** in this worktree at open (HEAD == `origin/main` ==
+  `37b4ee44c`, tree clean); **the LIVE layer read 9 behind** (was 8 at #155's close — see the
+  live-layer note below; `docs/` is reached by no live-layer symlink, and `install.sh` is not in the
+  live layer at all — `~/.claude/install.sh` is ABSENT, re-confirmed this recycle).
+  Board at open: **open 260 / blocked 184 / done 2147 / claimed 2, of 2593** — byte-identical to
+  #155's close, so nothing entered or left the board in that window.
+  **Declared before closing: this close moves open (260 → 259 by my hand) and does NOT move
+  `master-convergence-deadlock`, which stands at 34 open / 6 blocked — the TWENTIETH consecutive
+  recycle to close outside it.** `gate-select` instrument control read **32** (nineteen-recycle stable).
+
+  **ROW CLOSED — `204e0d795e98`** (`install-sh-does-not-union-permissions-allow`): *"install.sh unions
+  deny/ask but not allow, so permissions.allow has forked across 5 config dirs."* **Mechanism TRUE,
+  consequence REFUTED, remedy refuted TWICE — as a no-op and as a fail-open change.**
+
+  · **MECHANISM — TRUE, and deliberate.** `install.sh:1023-1024` (pre-edit numbering) unions exactly
+    `.permissions.deny` and `.permissions.ask` and never touches `.permissions.allow`. Counted in the
+    file: `allow` **0** occurrences, `ask` **1**, `deny` **2**; nonce control 0. The header at `:991`
+    already said so in words. **Code and comment AGREED — nothing was stale.**
+  · **CONSEQUENCE — FALSE AS STATED.** Five config dirs carry a `settings.json` (`~/.claude`,
+    `-next`, `-quaternary`, `-secondary`, `-tertiary`; the other eight `~/.claude-*` dirs carry none
+    and are not the population). `allow` reads **339 / 339 / 338 / 338 / 338**; `ask` is **6** and
+    `deny` is **41** in all five, equal to the template exactly — the union is working. The `allow`
+    UNION across all five is **339**, every dir holds 338 or 339 of it, and the **entire divergence is
+    ONE entry — `Bash(kitten @ send-text:*)`** — present in the two kitty-side dirs, absent from the
+    other three. **99.7% convergent. That is not a fork.**
+  · **REMEDY — a NO-OP on the very gap it names.** All **17** template `allow` entries are already
+    present in **all five** dirs (missing-count **0** everywhere), positive-controlled by injecting a
+    fabricated `Bash(zzq_nonce_204e:*)` template-side, which the same `comm` correctly reported as the
+    one missing entry. Unioning the template's `allow` would add nothing anywhere, and it **provably
+    cannot** add `Bash(kitten @ send-text:*)` — that entry is not in the template; it is locally
+    accreted.
+  · **REMEDY — and FAIL-OPEN, which is the whole design.** `deny`/`ask` are RESTRICTIVE, so unioning
+    them behind the operator's back is monotonically fail-closed. `allow` is PERMISSIVE: unioning it
+    would silently WIDEN every dir's auto-allow surface on each install — **the exact fail-open shape
+    this worktree's own frozen DoD was opened to remove from `hooks/smart-bash-allowlist.sh`.** The
+    template's `allow` IS still seeded wholesale into a dir with no `settings.json` yet (`:1018`,
+    `base = clean template`), so a fresh dir starts complete. **Seed-at-creation, never re-union, is
+    the intended lifecycle.**
+  · **NOT the cause of convergence** — recorded so the next reader does not re-derive it. The five
+    `settings.json` are five distinct inodes, `nlink=1`, no symlinks, mtimes within **five seconds**
+    of each other (`2026-08-22T07:26:06Z..07:26:11Z`) — a live fan-out writer, not `install.sh`. And
+    `bin/cc-permission-audit` is a **PRUNER** over multiple paths (`obj["permissions"]["allow"] =
+    survivors`, `:397`), which converges the arrays **downward**. `allow` stays aligned by pruning and
+    by hand, never by the union this row asked for.
+
+  **RESIDUAL — named and deliberately NOT filed.** Three dirs lack one `allow` entry, so a
+  `kitten @ send-text` call prompts there. 1 of 339 (**0.3%**), not what this row is about, unreachable
+  by this row's remedy, and `bin/cc-permission-audit` already ranks exactly this class from observed
+  prompt traffic (*"TOP 25 PROMPT CANDIDATES (add these to permissions.allow)"*). **Filing it would be
+  minting a work item from a 0.3% gap a running tool already reports on evidence.** filed **0** /
+  closed **1** (1 >= 0).
+
+  🚨 **THE FIFTY-FIRST LINT — AN INCOMPLETE COMMENT IS A WORK-ITEM GENERATOR TOO, AND IT IS HARDER TO
+  CATCH THAN A STALE ONE.** #155's fiftieth lint was a comment that had gone FALSE. This row is its
+  inverse and the more dangerous shape: **every word at `:991` was TRUE.** It said what the union
+  does; it never said why `allow` is excluded. A careful reader diffed template against dirs, saw
+  `allow` un-unioned, and inferred a fork — reasoning correctly from a comment that was accurate and
+  incomplete. **A stale comment is refuted by re-deriving it (method 2). An incomplete one survives
+  every re-derivation, because it is true.** The tell is not falsity — it is a comment stating a
+  MECHANISM where the reader needs an ASYMMETRY: `deny`/`ask` unioned, `allow` not, with no reason
+  given is an invitation to "fix" the odd one out. **Method 2 gains a clause: when a comment describes
+  a rule that treats sibling keys DIFFERENTLY, the missing why is the defect — file the reason at the
+  mechanism, not the row.**
+
+  **DURABLE FIX LANDED WITH THE CLOSE.** `install.sh` now carries the reason at both places a reader
+  lands: a header clause at the merge block and a one-line marker on the jq program itself
+  (*"DELIBERATELY NOT unioned … Do not 'fix'"*). **Proven INERT before landing:** `bash -n` clean, and
+  the jq program with and without the added comment produces **byte-identical** output on a fixture
+  whose template `allow` would have been injected had the semantics shifted (`allow` stayed
+  `["keep-me"]`), with a **malformed-jq positive control** confirming the harness can fail. This is
+  the cheapest possible cure — it changes no behaviour and retires the generator.
+
+  **Evidence round-trip (method 31):** `len(disk)=5010` vs `len(store)=5009`, equal after `rstrip`,
+  **0 U+FFFD** in the row, delta exactly `len(disk)-1` (the by-design trailing-newline strip),
+  `disk+"X"` control **False**. **SIXTH consecutive clean round-trip.** ⚠️ **Whole-store U+FFFD read
+  2, DOWN from 3** at #154 and #155 — it moved *down*, which settles it: the count is churn, not a
+  drift. Stop watching it unless it climbs above 3.
+
 - **2026-08-22 — drain recycle #155: a STALE COMMENT can mint a work item, and the item outlives the
   comment's own subject. filed 0 / closed 1 / landed 1 commit (DOCS).**
   Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted

@@ -989,6 +989,17 @@ fi
 # anti-premature-done Stop hooks (session-continue, anti-deference, teammate-checkpoint, boundary-handoff)
 # MUST survive a settings reset. This ADDITIVELY merges the template's .hooks (adds missing EVENTS only —
 # never clobbers a populated event) + unions .permissions.deny/.ask into $CONFIG_DIR/settings.json.
+# .permissions.allow is EXCLUDED FROM THE UNION BY DESIGN, and this asymmetry is the whole point:
+# deny/ask are RESTRICTIVE, so unioning them is monotonically fail-CLOSED and safe to do behind the
+# operator's back; allow is PERMISSIVE, so unioning it would silently WIDEN every config dir's
+# auto-allow surface on each install — the exact fail-open move the operator's own ask/deny gates
+# exist to prevent. The template's allow IS still seeded wholesale into a dir that has no
+# settings.json yet (base = clean template, below), so a fresh dir starts complete; thereafter allow
+# is that dir's own to grow. Measured 2026-08-22 (backlog 204e0d795e98, closed on this evidence):
+# across the five live config dirs the allow arrays hold 338-339 of a 339-entry union — all 17
+# template entries present in all five (missing=0, positive-controlled) and the entire divergence is
+# ONE locally-accreted entry, Bash(kitten @ send-text:*), which is not in the template. So unioning
+# allow here would be a provable NO-OP on that divergence while widening permissions fleet-wide.
 # --wire-hooks opts in; a config with NO .hooks is auto-wired (fresh install). A read-only ASSERT always
 # reports template hooks not present in the target. (Merging settings.json is the OPERATOR's hand via
 # this installer — never an agent Write; the C10 ceiling holds.)
@@ -1022,6 +1033,7 @@ else
             | .permissions = (.permissions // {})
             | .permissions.deny = (((.permissions.deny // []) + ($t.permissions.deny // [])) | unique)
             | .permissions.ask  = (((.permissions.ask  // []) + ($t.permissions.ask  // [])) | unique)
+            # .permissions.allow is DELIBERATELY NOT unioned — see the header note above. Do not "fix".
           ' > "$target_settings.tmp" && mv "$target_settings.tmp" "$target_settings"; then
         # Merge is ADDITIVE + order-preserving: it wires missing EVENTS in full and unions deny/ask,
         # but never reorders a populated event (the Stop FM1 chain order is load-bearing).
