@@ -87,6 +87,79 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #155: a STALE COMMENT can mint a work item, and the item outlives the
+  comment's own subject. filed 0 / closed 1 / landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (eighteenth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-seventh
+  consecutive clean reading.** Converge lag **0** in this worktree at open (HEAD == `origin/main` ==
+  `87bac0a0b`, tree clean); **the LIVE layer read 8 behind** — see the live-layer note below.
+  Board at open: **open 259 / blocked 184 / done 2146 / claimed 3, of 2592**.
+  **Declared before closing: this close moves open (259 → 258 by my hand) and does NOT move
+  `master-convergence-deadlock`, which stands at 34 open / 6 blocked — the NINETEENTH consecutive
+  recycle to close outside it.** `gate-select` instrument control read **32** (eighteen-recycle stable).
+
+  **ROW CLOSED — `82a4ee2b1a84`** (`resumed-session-cannot-fire`): *"a RESUMED session cannot dispatch:
+  no registry entry ⇒ `--notify-back` unresolvable (kitty has no ITERM_SESSION_ID), and the
+  `--no-notify-back` fallback then aborts on the F3 payload gate because briefs still say 'ping back'.
+  No 'desk' role exists (cc-roles holds only orchestrator=390, not live)."* **All five claims refuted;
+  the harm is unreachable.** #154 had already refuted the roles clause and left the core open — this
+  closes the core.
+
+  · **"no registry entry" — FALSE.** `hooks/session-register.sh` sits in `~/.claude/settings.json`
+    SessionStart **group 0 with NO matcher**, so it fires on every source including `resume`; it reads
+    **nothing** from the `source` field (0 gating hits; nonce control 0). It keys the row on the PANE
+    (`:203` `row="$reg_dir/$pane.json"`), and its **only** refusal arm (`:204-215`) requires a LIVE
+    STRICT ANCESTOR pid still holding that pane — `kill -0 "$inc" && pid_is_strict_ancestor "$inc"`,
+    i.e. a *nested* session. A resume's predecessor process is dead, so `kill -0` fails and the row is
+    written. Resume into a new pane writes a new row. **Entry exists either way.**
+  · **"`--notify-back` unresolvable in kitty" — FALSE.** `scripts/handoff-fire.sh` `self_pane_id()`
+    (`:1625-1631`) returns **`$KITTY_WINDOW_ID` FIRST** when `CC_TERM=kitty`, falling back to
+    `${ITERM_SESSION_ID##*:}` only otherwise. **9 call sites**, including the general fire path
+    `SID="${SESSION_ID:-$(self_pane_id)}"` at `:7176` and `SC_SID` at `:5864`.
+  · **"the fallback aborts on the F3 payload gate" — FALSE.** `payload_lint_gate()` (`:5023-5057`)
+    aborts only when **`rc==1` AND `intent==1`**, and `intent` is set **only** by an `F3/a` verdict or
+    a literal **`cc-notify`** reference in the payload (`:5030`). The prose phrase *"ping back"* sets
+    neither. A RED with no back-channel intent — a one-way fire — takes the documented *"LOUD note,
+    never block"* path and returns 0 (`:5043-5056`). Where a payload **does** carry a `cc-notify`
+    recipe under `--no-notify-back`, the abort is the gate working as designed, and its own message
+    names the cure verbatim (*"For a deliberate one-way fire, drop the cc-notify reference"*).
+  · **"no desk role; cc-roles holds only orchestrator=390" — FALSE on both halves.** `bin/cc-roles`
+    contains **0** occurrences of `orchestrator` and **5** of `desk`; the live store holds
+    `docs-lead=450`, `drain-lead=102`, and an **EMPTY** `orchestrator` file — never `390`.
+    (Re-derived independently of #154.)
+  · **The fix-direction citation argues against the row.** *"handoff-fire already has 271 kitty refs"*
+    re-derives at **272** (case-insensitive), with **25** `KITTY_WINDOW_ID` refs — kitty is *already*
+    first-class in the resolver.
+
+  🚨 **THE FIFTIETH LINT — A STALE COMMENT IS A WORK-ITEM GENERATOR, AND IT OUTLIVES THE CODE IT
+  DESCRIBES.** `handoff-fire.sh:160` still reads *"`$KITTY_WINDOW_ID` (self-close only — see
+  `self_pane_id`)"*. That parenthetical is **stale prose**: `self_pane_id` has 9 call sites including
+  the fire path, so the resolver it describes as self-close-only is in fact general. Read top-down,
+  that one line makes this row's entire chain look sound — *"kitty ids are self-close-only, therefore a
+  kitty pane cannot be a notify-back target, therefore a resumed kitty session cannot dispatch"* — and
+  every link after it inherits the error. **Method 2 says re-derive a row's citations; this adds: when a
+  row's premise traces to a COMMENT, re-derive the comment against its own function's call sites.** A
+  measurement can refute a claim about behaviour; only reading the callers refutes a claim about scope.
+
+  **Residual, RECORDED NOT FILED (deliberate):** that `:160` comment is worth one line of repair, and
+  this recycle did **not** make it. `handoff-fire.sh` is an actuation file *and* the fire mechanism this
+  session must use to fire its own successor; landing a one-line comment change through the
+  actuation-file gates, minutes before firing through that same script, is a self-referential risk that
+  exceeds the value. Filing a backlog row for a comment nit would be board noise (`closed >= filed`
+  bought with a row nobody should work). **The next recycle that already has a legitimate reason to
+  touch `handoff-fire.sh` should fold it in.**
+
+  **Evidence round-trip (method 31):** `len(disk)=3374` vs `len(store)=3373` — the by-design trailing
+  newline strip, exactly `len(disk)-1`; equal after `rstrip`; **0 U+FFFD** in the row. Positive control
+  (`disk+"X"`) reads False as required. **FIFTH consecutive clean round-trip.** Whole-store U+FFFD
+  **3 — UNCHANGED from #154**, so the +1-per-window drift #151→#154 showed did **not** continue; treat
+  the earlier reading as noise unless it climbs again.
+
+  ⚠️ **LIVE-LAYER NOTE for the successor.** The shared checkout read **8 behind `origin/main`** at this
+  recycle's open (`b787025e3`). That is the live layer's own lag, not this worktree's, and this
+  recycle's land is **docs-only** — `docs/` is reached by no live-layer symlink (row `4e6a51df2a84`),
+  so it contributes **no `LIVE_ADDS`** and cannot make that lag worse. Re-measure it; do not inherit it.
+
 - **2026-08-22 — drain recycle #154: a row can be BYTE-TRUE and still closable, because the cure that
   landed REFUSED its prescribed remedy IN WRITING. filed 0 / closed 1 / landed 1 commit (DOCS).**
   Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
