@@ -1,7 +1,9 @@
 # Three sessions died at one instant, and nothing said so — 2026-08-09
 
-**Status:** root cause of the SIGTERM **NOT YET CONVICTED**. Everything else below is verified from
-disk. Two defects ARE convicted and are the durable value of this document.
+**Status:** root cause **CONVICTED 2026-08-09** (§1c) — a peer session's `pkill -f "next dev" -P $$`,
+whose `-P` scope was never parsed and became a *pattern* that matches every handoff brief. Four
+defects are now convicted: §1c (the kill), §1d (the guard that would have allowed it), §2 (why
+nothing alarmed), §3 (why both hunts died).
 
 Scope (frozen): investigate and resolve why three sessions closed abruptly and unintended — two
 fired `/handoff` peers that were expected to re-ping, and one independent main session with no
@@ -52,9 +54,75 @@ Generalisable: *a graceful-looking exit is not evidence of a voluntary one.* The
   its awk predicate contains `if (comm[p]=="claude.exe") continue` and marks every ancestor of a
   live claude untouchable (`bin/cc-reaper:310-390`). Not convicted; not fully excluded either.
 
-**Still open:** who sent it. Both agents dispatched to answer this were killed before reporting
-(§3). The distinguishing fingerprint: at that instant pid `82520` (started `07:10:17Z`) **survived**
-and exited cleanly rc 0 at `07:38:42Z` — whatever the predicate was, it excluded that one.
+### 1c. CONVICTED — a `pkill` whose `-P` scope was never parsed, and became a pattern
+
+The sender is `bash-execution.log [2026-08-09T07:38:16Z]`, session
+`54400a9d-2d49-4edc-b914-89c9266510f6` (pane `894`, `wt-bs-header-phone`), shutting down its own dev
+server one turn before self-closing:
+
+```
+pkill -f "next dev" -P $$ 2>/dev/null; lsof -nP -iTCP:3381 -sTCP:LISTEN -t 2>/dev/null | xargs -r kill
+```
+
+**`-P $$` is placed after the operand, so `pkill` never parses it as an option.** BSD `getopt` stops
+at the first non-option argument; `pgrep`/`pkill` then treat every remaining word as an *additional
+pattern*, OR'd. The intended "only my own children" became a third pattern list:
+
+> kill anything whose full argv matches `next dev` **OR** `-P` **OR** `<the shell's pid>`
+
+`-P` is a two-character substring, and **every fired handoff peer carries its brief in `argv`** —
+`HANDOFF-PING` alone contains it. So the command's real selection was *the fleet's handoff peers*.
+
+Verified three ways, read-only, on the live box:
+
+| claim | evidence |
+|---|---|
+| `-P` after the operand is not an option | `pgrep -P 99999` → 0 procs (a true ppid filter); `pgrep -f zzzz-unique -P 99999` → 18 procs |
+| operands are OR'd, not intersected | `pgrep -f MARKERALPHA` → 1; `pgrep -f MARKERALPHA -P 99999` → that 1 **plus** every `-P` match |
+| the shape still selects live sessions | `pgrep -f "next dev" -P $$` today selects **20** processes — 3 live `claude` sessions in 3 different account dirs, their `cc-close-attrib` wrappers, ~10 Bash-tool shells (their argv ends `pwd -P`), and the 3 real dev servers. Every claude match attributes to the `-P` operand, in `HANDOFF-PING` |
+
+All three victims' argv contained `-P`: `e55264aa` (`cc-fired/891.json`) and `d505227f`
+(`cc-fired/895.json`) are fired peers whose briefs carry `HANDOFF-PING`; `49e10824` was launched
+with a prompt that also contains the substring. This is the same class as
+`pgrep-f-matches-agent-briefs` — argv carries whole briefs — one level worse, because here the
+*pattern* was an accident rather than the *subject*.
+
+**The survivor is explained by the same command.** `pgrep`/`pkill` exclude themselves **and all
+their ancestors** by default (`man pgrep`: *"-a Include process ancestors in the match list. By
+default, the current pgrep or pkill process and all of its ancestors are excluded"*). Pid `82520`
+started `07:10:17Z` and exited rc 0 at `07:38:42Z` — that is pane `894` itself
+(`cc-fired/894.json`: fired `07:10:10Z`, `closedAt 07:38:37Z`). It matched the pattern as squarely
+as the three that died and lived **only** because it was the caller's own ancestor. The fingerprint
+§1b called distinguishing was not a predicate at all.
+
+**Why the first pass exonerated it.** `close-records` reports `argv` as **`argv[first 3]` only** —
+`bin/cc-close-attrib:55,147` writes a fixed three-slot array. The recorded
+`claude --permission-mode auto` is a *truncation*, so testing the pattern against the record returns
+"no match" for a process whose real argv matched. The store that identifies the victims cannot
+answer why they were selected, and it does not say so.
+*Generalisable: a fixed-arity capture of a variable-length field is indistinguishable from a short
+value, and every negative drawn from it is unsound.*
+
+**Excluded with evidence, this pass:** `~/.zsh_history` is live on both sides of the window
+(`06:48:32Z`, then `07:43:29Z`) with **nothing between** — the operator did not type it.
+`devserver-gc` is dry-run only (`act=0`, "would TERM") and its run in that hour was `07:40:07Z`,
+*after* the kill. `devserver-census.sh:266` TERMs an ancestor chain but stops climbing at the first
+parent that is not `next dev`/`pnpm dev`, so it cannot reach a session. Memory pressure is out:
+`compressor-sentinel` read `pct 8.5`, `strk 0` across the window; the 774 MB drop at `07:38:19Z` is
+the deaths, not their cause (and jetsam sends SIGKILL, not SIGTERM).
+
+### 1d. CONVICTED — the guard against exactly this accepts `-P` as proof of scoping
+
+`hooks/validate-bash.sh:243` exists because an unscoped `pkill -f bats` killed every concurrent
+session's landing gate (the 2026-07-26 false-RED epidemic, backlog `a0718a5d78b3`). Its allowlist of
+"this one is scoped, let it pass" includes `(^|[[:space:]])-P[[:space:]]` — **the very token that is
+inert when it follows the pattern.** So `pkill -f "bats" -P $$` reads as scoped to the guard and
+runs machine-wide, which is the epidemic the guard was written to end.
+
+It did not fire here for a second reason: it only engages when the occurrence names
+`bats|ship-land|postland-verify`, and this one named `next dev`. Both halves are defects — the
+scope test accepts a token it never validates the *position* of, and the target test assumes the only
+thing worth protecting is a gate process.
 
 ---
 
@@ -172,11 +240,64 @@ load-bearing part (the `expect` wrapper) into a tracked script the skill can nam
 
 ## 6. Next actions
 
-1. **Convict the SIGTERM sender.** Re-run the hunt; see §1b for what is already excluded and the
-   pid-`82520`-survived fingerprint. Highest-value unread store: `~/.claude/logs/bash-execution.log`
-   rows in `07:36:00–07:39:00Z`, plus cross-account transcripts and `~/.zsh_history` at that second.
-   **Do not dispatch a read-only subagent to do this until §3 is fixed — it will be reaped again.**
+1. ~~Convict the SIGTERM sender.~~ **DONE — §1c.** Follow-on, now that the mechanism is known:
+   fix §1d's guard (accepts an unvalidated `-P` as proof of scope; only defends gate programs), and
+   widen `cc-close-attrib`'s three-slot `argv` capture so a close record can answer *why* a process
+   was selected, not merely that it died.
 2. **Fix §2** (`lead-crash-watchdog.sh:899` consults the teardown marker before exiting quietly).
 3. **Fix §3** (reap-eligibility must not convict members that cannot write refs).
 4. Land the README row in §4 of `README.md` documenting `resume-sessions` (in this branch).
-5. Decide on §5 (track the `reso-*` actuators, or retire them).
+5. Decide on §5 (track the `reso-*` actuators, or retire them). **CLOSED — see §7: trunk already
+   did it, better, on 2026-08-10 and 2026-08-17.**
+
+---
+
+## 7. Recovery of this branch, 2026-08-22 — and the measurement that bounds it
+
+This document, and three of the four fixes it prescribes, sat reachable only from
+`refs/heads/fix/sigterm-forensics` for thirteen days (backlog `41099442ae0e`). Recovered today by
+`cherry-pick -x`, each verified absent from trunk *before* picking — marker present in the commit,
+absent at its parent, absent on `origin/main`, against a positive control proving the probe could
+see the file at all — and each red-proofed in a scratch tree against trunk's own subject:
+
+| patch | disposition | red-proof at trunk |
+|---|---|---|
+| `30017e2a4` guard: an option after the pattern is another pattern | **RECOVERED** | 3 red (22, 23, 24) of plan 28 |
+| `23406cbe4` watchdog: a caught SIGTERM is not a clean exit | **RECOVERED** | 4 red (27, 28, 30, 31) of plan 31 |
+| `a3db53228` reap-guard: ref-absence is not idleness | **RECOVERED** | 1 red (20) of plan 23 |
+| `db1f92470` this document's §1c/§1d conviction | **RECOVERED** | n/a — docs |
+| `410f920c9` track the `reso-*` actuators | **SUPERSEDED — deliberately NOT recovered** | would REGRESS trunk |
+
+**Why `410f920c9` is a refusal and not a gap.** Its two `bin/` files exist on trunk already, tracked
+by another route, and trunk's copies are strictly newer: `bin/reso-resume-one`'s header on
+`origin/main` names *this branch by ref* and records three defects fixed on 2026-08-10 (a pinned
+`--effort`, a stale binary path, a stale model id), and `bin/reso-keepalive` gained a kitty arm on
+2026-08-17. Cherry-picking the branch version would revert all four. A patch that is
+content-absent from trunk by patch-id can still be *superseded by a better cure*, and the oracle
+that answers "are these bytes on main" cannot tell the two apart.
+
+### The 2026-08-09 conviction does NOT explain the cuts running today
+
+§1c convicts a specific `pkill` on a specific day, and that conviction stands. It is tempting —
+and wrong — to read the surviving cut rate as the same bug still running. Measured 2026-08-22 over
+the whole 368-stamp history in `~/.claude/autonomy/postland/stamps`:
+
+- The corpus runner is cut, with zero not-ok, in **27 of the last 40 stamps (67.5%)**; over the
+  last 80, **60 (75%)**. `runner.log` attributes almost all of them to *"KILLED by signal 15|9 from
+  OUTSIDE this runner (sender unidentified)"*.
+- **`run_s` for cuts and for greens is the same distribution** — cut median 2590 s (n=186), green
+  median 2566 s (n=37), and 70% of cuts vs 27 of 37 greens fall in the same 2100–3100 s band.
+
+That equality is the discriminating fact, and it refutes both easy stories. A stray pattern-kill
+from a sibling session arrives at a time uncorrelated with the run, so it would truncate runs at
+*uniformly distributed* points and cuts would be markedly **shorter** than greens. A wall-clock
+bound would pin cuts to a **narrower** band than greens. Neither holds: the kill arrives when the
+run is approximately finished, which is a third mechanism nobody has named.
+
+So the three patches recovered here are sound and independently justified — the guard genuinely
+would have allowed the 2026-08-09 kill, and trunk today genuinely cannot tell an external SIGTERM
+from a recycle (`lead-crash-watchdog` test 27, red at trunk) — but **none of them is licensed as a
+cure for the 67.5% rate.** Backlog `b7252a3bb015` stays open on that ground. Whoever works it next:
+close it on the RATE across a window, measured with the same instrument on both sides, never on one
+reading — a probe sampling the single newest stamp exits 0 one time in three with the bug fully
+present, which is how that row was auto-closed for six days in August.
