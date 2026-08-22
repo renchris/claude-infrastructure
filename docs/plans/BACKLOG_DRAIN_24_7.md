@@ -190,6 +190,45 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   refusal; captured to a file instead. Cause (3) is the `command-substitution-assignment` cluster
   #142 named, hit live rather than as a lint.
 
+  **THE FIRST LAND ATTEMPT WENT RED, AND THE GATE WAS RIGHT.** `permission-gate-lint --selftest`
+  FAILED (rc 6, nothing pushed) because `scripts/ship-land.sh` is an ACTUATION file and its
+  undeclared-guard-refusal ratchet moved **9 → 11**. A/B against the parent tree separated it in one
+  command: 30/30 there, stale-ratchet here — **mine, not inherited**. Raising the ratchet is exactly
+  what the lint forbids (it tightens downward only), so the fix was structural: the first push site
+  now selects a CAUSE into one variable and keeps a SINGLE refusal statement (two `echo … >&2`
+  branches read as two new gates when it is one refusal that finally knows why it fired), and the
+  genuinely-new early exit in the retry loop carries a `gate_bounded:` declaration naming
+  `SHIP_LAND_VERIFY_RETRIES` — honestly, because that branch IS the retry budget's expiry turned into
+  an event, which is the conversion the lint asks for. Two incidental lessons, both cheap and both
+  measured: the detector anchors on the terminal statement, so a marker must be trailing on it or in
+  the comment block directly above **it** (a marker above the enclosing `if` moved the anchor instead
+  of clearing it); and a *string assignment* whose text reads like a refusal is counted as one, so
+  the branch wording changed rather than the ratchet. Landed as this recycle's third commit — **not
+  cited by sha here, deliberately**: the first attempt to name it cited the sha of the very commit
+  carrying the sentence, and the amend that filled the placeholder in changed that sha, so the
+  citation was stale the instant it was written (method 42, in its self-referential form). `git log`
+  holds the id; the SSOT holds the reasoning. Selftest back to **30/30**, no ship-land finding,
+  ratchet back at its 9.
+
+  **AND THE RED-PROOF'S OWN CONTROL VETOED A RE-RUN — the second time this session an instrument
+  caught its operator.** Re-running the overlay after that restructure printed
+  `push_failure_kind present in overlay: 1 (expect 0)` with **ARM RED reading 5 ok**: the script
+  reverted `HEAD:scripts/ship-land.sh`, and by then HEAD *was* the fixed bytes, so the "pre-fix" arm
+  had silently become a second green arm. Read without the control, that is indistinguishable from
+  "the new tests are vacuous" — the exact false verdict #140's rule exists to stop. Pinned to the
+  immutable parent sha (`56b785a0d`), it returns **RED 0 ok / 5 notok · GREEN 5 ok / 0 notok**.
+  Method 42 generalises past citations: **a red-proof must revert to an immutable sha, never to
+  `HEAD`, because committing your own fix moves HEAD under the control.**
+
+  **NOT MINE, MEASURED AND FILED — `418628734437`.** The owed-suite run reddened
+  `tests/pipefail-sigpipe-lint.bats` test 7 (the 62 KB arm). It reads no repo file — it is a pure
+  pipe-buffer probe — so a single verdict is a SAMPLE. Measured at loadavg 9.3: the **raw inner
+  probe, touching NEITHER tree, failed 1/7**; via bats, 3/7 in my tree and 1/7 at the parent, i.e.
+  one flaky population, not a tree difference. The test's own comment asserts the opposite
+  ("Deterministic on this box (0/10 and 10/10)"). Left open and filed rather than driven — it is not
+  in this diff, and the dangerous shape is that a 1-run parent green plus a 1-run red in your tree
+  reads exactly like a regression you caused.
+
   **Land:** `SHIP_LAND_SMOKE_BUDGET_S=420`, rc 0, FF, content-verified both directions.
 
 - **2026-08-22 — drain recycle #146: `lastTs` moved three days after the cure landed, and what moved
