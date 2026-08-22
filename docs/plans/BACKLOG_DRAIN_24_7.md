@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #157: a row that PRESCRIBES its own red-proof is closed by RUNNING
+  that proof, never by reading the diff that satisfies it — and a second row's ACQUITTAL was found
+  to have gone stale in a way that nearly convicted a working mechanism. filed 0 / closed 1 /
+  landed 1 commit (this log).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twentieth consecutive clean use; forty-eighth consecutive 0-page reading).
+  Gate 2: **`qos-diff` empty, the thirty-ninth consecutive clean reading.** Converge lag **0** in this
+  worktree at open (HEAD == `origin/main` == `ee420ab2f`, tree clean); **the LIVE layer read 10
+  behind** (8 at #155's close, 9 at #156's, 10 here — the shared checkout is drifting ~1/recycle
+  because nothing fast-forwards it; `docs/` is reached by no live-layer symlink, so this land adds
+  no `LIVE_ADDS`).
+  Board at open: **open 260 / blocked 185 / done 2148 / claimed 3, of 2596** — byte-identical to
+  #156's close.
+  **Declared before closing: this close moves open (260 → 259 by my hand) and does NOT move
+  `master-convergence-deadlock`, which stands at 34 open / 6 blocked — the TWENTY-FIRST consecutive
+  recycle to close outside it.** `gate-select` instrument control read **32** (twenty-recycle stable).
+
+  **ROW CLOSED — `47fe4cd7d0e0`** (*"URGENT: both hard gates in `hooks/agent-teams-enforce.sh` are
+  DEAD on 2.1.220 — they key on `team_name`, which the runtime no longer has"*). The row was filed,
+  marked `done`, and **reopened 48 seconds later** on 2026-08-21. **Both halves of its own prescribed
+  fix are landed, and the claim is refuted BY EXECUTION — not by reading the diff.**
+
+  · **HALF ONE — the hook.** `hooks/agent-teams-enforce.sh:41` now reads
+    `TEAMMATE_ID="${TEAM_NAME:-$NAME}"` — the row's prescription verbatim — and **both hard gates key
+    on it**: `:523` (model allowlist) and `:576` (brief-size cap). `:36-37` carries the rationale in
+    the file itself (*"TEAMMATE_ID is the union, and it is what every teammate gate must key on"*).
+    Nonce control 0.
+  · **HALF TWO — the suite.** `tests/agent-teams-enforce.bats:52-54` adds `run_hook_named`, building
+    the MODERN `{name: …}` shape, with **3 call sites**; `run_hook` (classic `{team_name: …}`) keeps
+    9. ⚠️ **The census that found this was nearly blind:** grepping `"name"[[:space:]]*:` returned
+    **0**, because the helper builds its JSON with **unquoted jq keys** (`{tool_input:{name:$nm,…}}`).
+    A quoted-key grep is structurally blind to a jq object literal — the null read as absence.
+  · **THE CLOSE IS AN EXECUTION, NOT A READING.** The row supplied its own criterion — *"both probes
+    must FLIP allow→deny and the negative control stay deny"* — so it was RUN against the trunk hook,
+    with `CC_LINEAGE_GATE=off` so a denial from the unrelated lineage gate could not be miscredited
+    (method 4: the control must distinguish the arm under test):
+
+    | arm | case | verdict | attributed reason |
+    |---|---|---|---|
+    | P1 | `{name}` + 300-line brief | **deny** | *"301 lines — at/over the 250-line hard cap"* |
+    | P2 | `{name}` + off-allowlist model | **deny** | *"model=… is not on the Max-plan auto-mode allowlist"* |
+    | N  | `{name}` + small brief + ok model | **allow** | — (the arms are not deny-everything) |
+    | C  | `{team_name}` + 300-line brief (legacy) | **deny** | no regression on the classic shape |
+
+    **4/4 on the row's own criterion.** `tests/agent-teams-enforce.bats`: **24 ok / 0 notok / 0 skip**.
+
+  **MEASURED AND DELIBERATELY NOT FILED — `ac13c22fe291` (`checkpoint-dead-member-floor`): its
+  ACQUITTAL has gone stale, and re-deriving it nearly convicted a mechanism that is working
+  perfectly.** The row adjudicates itself *"DELIBERATELY NOT FIXED"* on the arithmetic *"~180 refs …
+  about 3.2% of a 5,553-ref store … a slow accumulator, not the runaway the original lane reported."*
+  Re-measured on the shared checkout today: **4,512 refs / 820 members / 475 dead members (newest ref
+  >14 d) holding 1,319 refs = 29.23%.** The store **SHRANK** (5,553 → 4,512) while the term the row
+  named as *the only uncollected one* **grew 7.3×** (180 → 1,319) and went from a 3% rounding error to
+  the **dominant** term.
+
+  · 🚨 **AND YET THE MECHANISM IS EXACTLY AS THE ROW DESCRIBES IT.** The collector
+    (`hooks/teammate-checkpoint.sh:153-248`) survives a ref iff *rank ≤ `GC_FLOOR` 3*, **or**
+    *(rank ≤ `GC_KEEP` 50 **and** age ≤ 14 d)*. So a dead member should hold ~3 refs — and the
+    refs-per-dead-member histogram is `{1:73, 2:69, 3:319, …}`, i.e. **319 of 475 dead members sit at
+    exactly the floor**. The ratio is **1319/475 = 2.78**, against the row's own **180/65 = 2.77**.
+    **The ratio is invariant to four significant figures. Only the member count grew** — which is
+    precisely what the row predicted: *"grows only with MEMBER COUNT."*
+  · **THE LINT (the 52nd).** **A SHARE-OF-STORE METRIC CANNOT DISCRIMINATE "THE COLLECTOR BROKE" FROM
+    "THE COLLECTOR WORKS AND THERE ARE MORE MEMBERS" — because its numerator and denominator move on
+    different mechanisms.** 3.2% → 29.23% is a 9× move that reads as a runaway and is not one; the
+    per-member RATIO, which holds the mechanism, did not move at all. **When re-deriving a row's
+    numbers, re-derive the INVARIANT the mechanism implies, not the headline share** — an acquittal
+    stated as a percentage rots the moment its population changes, while the same acquittal stated as
+    "3 refs per dead member" would still be true today. Sibling of method 80 (a delta is not
+    authorship) and of `uniform-error-ratio-indicts-the-model`.
+  · **Two members exceed the cap of 50** — `claude-infrastructure` (113) and `recycle-11` (97, this
+    very worktree). Both are LIVE members inside the 14 d window; the sweep is damped to once/day and
+    a simulation of the next sweep deletes **282** refs (control: an `+inf` cutoff deletes 2,468, so
+    the simulator can distinguish). **Pending, not broken.**
+  · **NOT FILED, deliberately.** The row's stated design reason stands untouched — the floor is what
+    makes a respawn recoverable however stale its worktree, and `scripts/reap-guard.sh` reads exactly
+    these refs as its work-preservation oracle. Any remedy must prove those reads stay satisfied,
+    which is a design task, not a drain pickup. **The harm remains reachable, so per method 21 the row
+    stays OPEN** — this is a correction to its arithmetic, recorded here, not a close.
+  · **Instrument control (method 4).** The census's member derivation was checked against the
+    collector's own: the collector strips the LAST path component (`${_m%/*}`), the probe took the
+    FIRST — these differ iff any ref nests deeper than `refs/checkpoints/<member>/<ts>`. Depth
+    histogram: **4,512 of 4,512 at depth 2**, both derivations yield **820** members, sets equal.
+    The census measures exactly the collector's population.
+
+  **Owed suites.** Docs-only land — `gate-select --direct origin/main..HEAD` read **EMPTY** and
+  `--explain` emitted nothing, so no direct clauses and no `FULL` fail-closed verdict (contrast #156,
+  which touched a full-trigger file and thereby bought itself NO smoke at all — method 83).
+  The three standing docs-consumers, unchanged for a **THIRTEENTH** consecutive recycle:
+  `cc-dispatch-firegate` **15** · `land-content-verify` **25** · `postland-verify-bisect-bound` **24**
+  = **64 tests, 64 ok, 0 notok, 0 skip**, all three plan lines exact. Plus the subject's own suite
+  `agent-teams-enforce` **24 ok**. **Aggregate 88 ok / 0 notok / 0 skip, no NO-PLAN, no
+  PLAN-MISMATCH.**
+
+  **Board at close: open 261 / blocked 185 / done 2149 / claimed 2, of 2597.** Per-row diff (method
+  80): **1 LEFT** — `47fe4cd7d0e0`, MINE, → `done`. **2 ENTERED**, both `reso-management-app` and
+  **both foreign**: `4cda16c0f2ba` (a self-downgrade superseding `9d453706da6a`) and `96c57c1c4a6c`
+  (`fly-log-shipper-iad` ships nothing for a serving `reso-iad`). Of those two, **one is a genuinely
+  new row and one is a `claimed` → `open` transition** — `claimed` fell 3 → 2 while the total rose
+  2596 → 2597. **The flat open count ROSE by 1 across a window in which I closed a row.** Do not read
+  that as regression, and do not read #156's flat zero as a hold: three consecutive recycles have now
+  seen the flat number move down, stay pinned, and move up, with the drain working identically in all
+  three. **Diff the per-row list or say nothing.**
+
 - **2026-08-22 — drain recycle #156: an INCOMPLETE comment mints a work item exactly as a STALE one
   does — this row's code and comment agreed, and the reader still reached a wrong conclusion because
   neither said WHY. filed 0 / closed 1 / landed 1 commit (install.sh comment + this log).**
