@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #158: an in-source refusal defends the remedy it ARGUES against, never
+  every remedy that shares its topic — `bin/cc-await-ping`'s comment refuses EVALUATING the goal
+  predicate at write time, and the row asked only that the notice NAME it. filed 0 / closed 1 /
+  landed 2 commits (the fix + this log).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twenty-first consecutive clean use; forty-ninth consecutive 0-page reading).
+  Gate 2: **`qos-diff` empty, the fortieth consecutive clean reading.** Converge lag **0** in this
+  worktree at open (HEAD == `origin/main` == `950328c8c`, tree clean); **the LIVE layer read 11
+  behind** (8 at #155's close, 9 at #156's, 10 at #157's, 11 here — the shared checkout keeps drifting
+  ~1/recycle because nothing fast-forwards it).
+  Board at open: **open 260 / blocked 186 / done 2149 / claimed 3, of 2598.** Per-row diff vs #157's
+  open snapshot: **1 LEFT** (`47fe4cd7d0e0` — #157's own close) · **2 ENTERED** — `2e203c885904`
+  (blocked, claude-infrastructure: a re-land row for a `ship-land` that could not complete) and
+  `4cda16c0f2ba` (open, **reso — foreign**). The flat open count FELL by 1 while blocked ROSE by 1;
+  a fourth consecutive recycle in which the flat number moved a fourth different way (down #155,
+  pinned #156, up #157, down-with-blocked-up here) with the drain performing identically. **Method 80
+  holds: diff the per-row list or say nothing.** `master-convergence-deadlock` **34 open / 6 blocked
+  — UNMOVED, a TWENTY-SECOND consecutive window**, and this recycle again closed outside it,
+  declared before the close.
+
+  **ROW CLOSED — `3078f45dded4`** (*"F5 · `cc-await-ping` WAKE-PATH-DOWN notice names the decision,
+  never the check — CONFIRMED LIVE"*). Origin: `docs/research/handoff-high-value-capture-2026-08-19.md`
+  §5 F5, the wave's self-described *"cheapest, highest-confidence item"*. **Closed by FIXING it, not
+  by refuting it** — every one of its claims re-derived TRUE.
+  · **The cited line was stale** (method 2): the row says `bin/cc-await-ping:525`; that is the
+    `SIGINFO` ctypes struct. The notice is `_wake_down_notice()` at **:647-659**, printf at **:654**.
+  · **The row's own control reproduced exactly, with a working positive control.** Over the trunk
+    notice line: names the decision (`WHICH REPAIR APPLIES DEPENDS ON YOUR /goal`) = **1**; names
+    `goal_live_condition` = **0**; names `goal-state.sh` = **0**; POSITIVE CONTROL — the same line
+    names `session-continue.sh set` = **1**, so the zeroes are real absence, not instrument death.
+  · 🚨 **THE NEAR-MISS THAT DECIDED THE DISPOSITION.** The subject carries an in-source refusal at
+    **:635-643** — *"WHY THE TEXT CARRIES BOTH BRANCHES RATHER THAN BRANCHING ON A PREDICATE HERE"* —
+    which reads, on first pass, exactly like #150's `cc-blockers` case: a remedy REFUSED IN WRITING by
+    the file it targets, i.e. a close. **It is not.** The comment refuses two acts — EVALUATING the
+    predicate here (a multi-MB grep inside a SIGTERM handler) and BRANCHING on it here (a read-time
+    question answered at write time). The row asked for neither. It asked that the notice **NAME**
+    the check, which costs one interpolated string and blocks nothing. Reading the refusal as
+    covering the row would have closed a live row on an argument aimed at a different remedy.
+  · **The one clause the refusal DID assert against the row was measured FALSE, by the row's own
+    lineage.** The comment ends *"The reader is not left guessing either — hooks/mailbox-drain.sh
+    evaluates the live predicate at that same boundary"*. True as code (`mailbox-drain.sh:377-378`
+    calls `goal_live_condition "$own_tp"`, verified present on trunk, and this very session saw its
+    output — the `🔔 No inbox wake path armed.` header is that arm's `_hdr`). But **`e8c2435aa`
+    (2026-08-17 00:02:05 -0700) introduced the notice text, the refusal comment AND the mailbox-drain
+    arm in ONE commit** (verified: `git log -S` on all three strings returns that same sha), and the
+    wave measured that **all six goal-hunt sessions START AFTER it** — earliest +1 h 45 m — each
+    having received the notice **4-12×**. The read-time evaluation was already live for every one of
+    them and they hunted anyway. The arm exists; nothing in the line told the reader that the header
+    they were already looking at IS the verdict.
+  · **THE FIX** (`bin/cc-await-ping`): the notice now names **both** discriminators — the zero-cost
+    observable (*"the header above it IS the verdict"*) and the runnable predicate
+    (`. $HOME/.claude/hooks/lib/goal-state.sh && goal_live_condition <your transcript .jsonl>`) —
+    **plus its fail direction**, because `goal_live_condition` returns rc 1 for *no goal*,
+    *met/failed* AND *could not read* alike (`goal-state.sh` header § FAIL DIRECTION). A reader who
+    treats rc 1 as a confident "no goal" and re-arms under a live one re-creates the E1 defect from
+    the other side, so handing over the predicate without its polarity would have been half a fix.
+    Still **ONE mailbox line** (the file's own invariant — a line IS a message), asserted by test.
+  · **RED-PROOF, four cases, pinned to `950328c8c`** (`tests/cc-await-ping.bats`, mirroring E1's
+    sha-pinned shape and its hard-failure staleness guard). Suite **82 ok / 0 notok / 0 skip**, plan
+    `1..82` exact.
+  🚨 **THE FIFTY-THIRD LINT — A STALENESS GUARD KEYED ON AN IDENTIFIER CONVICTS THE COMMENT THAT
+  EXPLAINS WHY THE IDENTIFIER IS ABSENT.** The red-proof's guard was
+  `! grep -q 'goal_live_condition' <pre-fix file>`, meaning *"if the pinned tree already names the
+  check, the pin has drifted post-fix"*. It **failed on its first run** — and the pinned tree was
+  correct. The pre-fix file contains `goal_live_condition` at **:636**, inside the very comment
+  arguing why the notice does not call it. **The subject of the test is the emitted LINE; the guard
+  was keyed on the FILE that prints it.** Re-keyed onto a string that exists only in the new notice
+  text (`the header above it IS the verdict`) it goes red pre-fix and green post-fix as designed.
+  Sibling of method 85 (`a quoted-key grep is blind to a jq object literal`) with the polarity
+  inverted: there a true absence read as absent for the wrong reason, here a true absence read as
+  PRESENT because the file discusses what it does not do. **Generalisable: when a fix adds a call to
+  an existing symbol, that symbol is already in the file — in imports, in prose, in the argument
+  against calling it. Key the control on text the FIX introduces, never on the symbol it calls.**
+  Owed suites: the same three standing docs-consumers as #145-#157 — `cc-dispatch-firegate` (15) ·
+  `land-content-verify` (25) · `postland-verify-bisect-bound` (24) — **64 tests, 64 ok, 0 notok,
+  0 skip**, all three plan lines exact, **FOURTEENTH consecutive identical reading**; plus the
+  subject's own suite (82). **Aggregate 146 ok / 0 notok / 0 skip, no NO-PLAN, no PLAN-MISMATCH.**
+  `land-lock --status` read `holder: (free)` before the land. **No file ADDED** — the suite was
+  EXTENDED, per still-open row `4e6a51df2a84`; `bin/cc-await-ping` is not in `gate-select`'s
+  `FULL_FILES`, so method 83's fail-closed-costs-you-the-smoke-gate trap does not apply here.
+
 - **2026-08-22 — drain recycle #157: a row that PRESCRIBES its own red-proof is closed by RUNNING
   that proof, never by reading the diff that satisfies it — and a second row's ACQUITTAL was found
   to have gone stale in a way that nearly convicted a working mechanism. filed 0 / closed 1 /
