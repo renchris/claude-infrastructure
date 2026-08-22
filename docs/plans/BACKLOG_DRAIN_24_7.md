@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #149: the subject had been byte-frozen for seven days BEFORE the row
+  was filed, so "stale" was mechanically unavailable — the row was never true. filed 0 / closed 1 /
+  landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twelfth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-first
+  consecutive clean reading.** Converge lag **7** at open (budget 25; #148 landed an `M`, no ADD).
+  Board at open: **open 260 / blocked 182 / done 2139 / claimed 4, of 2585** — identical to #148's
+  close in every bucket, so nothing moved in the gap. Retire-in-one **43** at open.
+  **Declared before closing: this close moves open (260 → 259) and retire-in-one (43 → 42), and does
+  NOT move `master-convergence-deadlock`, which held at 34 open / 6 blocked — a THIRTEENTH
+  consecutive window closing outside the nominal warm effort.**
+
+  **CLOSED — `65a61438e6a3`** (`dead-assertion-analyzer-ignores-quoting`): *"bats dead-assertion
+  analyzer tokenizes without respecting quoting (flags `&&` inside a quoted argument)."* Refuted on
+  nine arms with a live two-way positive control. **No code change.**
+
+  🚨 **THE LINT (the FORTY-THIRD): DATE THE ROW'S `firstTs` AGAINST THE SUBJECT'S LAST-MODIFIED TIME
+  BEFORE ADJUDICATING ANYTHING — WHEN THE ARTIFACT WAS ALREADY BYTE-FROZEN AT FILING, "STALE" IS NOT
+  ONE OF THE ANSWERS.** `scripts/bats-assert-liveness.py` last changed at `e178b45c0`,
+  **2026-08-14T10:31:41Z**; the blob is `3365b6ba…` at that commit and at `origin/main` today. The
+  row was filed **2026-08-21T05:28:38Z** — **6 d 19 h later**, against an unchanged file. That single
+  comparison collapses the adjudication space by half: the file the row describes *is* the file on
+  disk now, so the row cannot be "true when written, cured since". It is either true today or it was
+  never true — and eight false-positive arms say never. This is the sibling of #145 (cures landing
+  BEFORE a row's `firstTs`) and #146 (what actually moved a `lastTs`), one step further back: those
+  ask *when was it cured*, this asks *was a cure even possible*. One `git log` on the subject, read
+  against one field on the row, and it costs nothing to run first.
+
+  **THE MEASUREMENT.** A finding needs all three of: an assertionish head (`RE_ASSERTIONISH` at `:61`
+  is `^(\[\[?|test|grep|diff|cmp|!)(\s|$)` — `run …` does **not** qualify), NON-FINAL position in the
+  test body, and the `&&` inside a quoted span. Eight arms built to satisfy the first two so only
+  quoting is under test — single-quoted · double-quoted · escaped inner quote · inside `$( )` · across
+  a line continuation · inside a `<<'EOS'` body · single-quote-inside-double · `"$pat && $other"` —
+  **all 0**, plus a ninth on the other code path (`[[` inside a quoted argument, which reaches
+  `elem_dead_class` rather than the AND-OR split) also 0. Quote-awareness is not recent either:
+  `strip_quoted()` and `split_and_or()` both enter at `f1b813f6d`, 2026-07-26, the analyzer's original
+  feature commit. **Harm is exactly zero, measured:** the analyzer over the whole corpus — **527
+  `tests/*.bats` holding 1941 lines containing `&&`** — reports `0 dead assertion(s) in 0 of 527
+  file(s)`.
+
+  🚨 **THE CONTROL I HAD TO THROW AWAY, AND WHY IT MATTERS MORE THAN THE ROW.** The first positive
+  control was `[ "$status" -eq 0 ] && echo done` — right *shape*, right head, and it read **0**. Read
+  naively that is "the analyzer is silent on `&&` generally", which would have licensed the same
+  close on a **blind** instrument. The cause was position, not quoting: it sat LAST in the test body,
+  where `classify()`'s finality rule rescues it. **A control can satisfy every property of the
+  mechanism it probes except the one that arms it** — here, non-finality — and it fails silently, in
+  the passing direction. The rebuilt control (`grep -q alpha /etc/hosts && echo found`, non-final)
+  fires `DEAD [and-absorbed]` rc 1 in the same batch as the eight silences, so the instrument is
+  proven to move in both directions. Method 26 wants a control that *can* fail; this adds: **name the
+  property that makes it able to fail, and check the control has it.**
+
+  **THE DEFECT IS NOT NEXT DOOR EITHER** — checked because the sibling FIXER carries two `done` rows
+  in exactly this class (`04b1de8de84e`, `278b392f69e5`), and #147's lesson is that the second site
+  can be worse than the named one. `scripts/bats-assert-liveness-fix.py` **shares** the analyzer's
+  split (5 references to `split_and_or`/`strip_quoted`): on the quoted arm it exits 0 UNCHANGED, on
+  the bare arm it rewrites to `… && echo found || false`. The third `&&`-splitter,
+  `scripts/bats-kill-guard-lint.sh`, reports `clean` on the quoted arm. All three are quote-aware.
+
+  **WRONG CAUSES REJECTED.** (1) **The id-grep read `0 cited of 442`** against #148's `19 of 443` —
+  which reads as the board having changed under us. It was an instrument failure: `grep -rql` — `-q`
+  suppresses `-l`, so the needle printed nothing and *every* row scored uncited. Re-run correctly:
+  **19 of 442**, matching #148 rank-for-rank (method 61). A uniform answer indicts the instrument
+  (method 4), and this one was uniform in the direction that would have looked like a finding.
+  (2) **`~/.claude/scripts/bats-assert-liveness.py` does not exist**, which reads as a live-layer
+  stranding of a `scripts/` file. It is not one — `scripts/ship-land.sh:2847` invokes it by
+  REPO-RELATIVE path (`DEAD_LINT="${SHIP_LAND_DEAD_LINT:-scripts/bats-assert-liveness.py}"`), so it
+  is not a symlinked live-layer consumer at all. **ABSENT ≠ MISSING** — #148's own sixteenth face of
+  method 55, and the first time this chain has hit it about a *path* rather than a *verb*.
+  (3) The sibling fixer as the true subject — refuted above.
+
+  **`venueWhy` CARRIED NOTHING, AGAIN, IN THE SEDUCTIVE SPELLING.** It reads *"eligible: … every
+  cited sha is inside the newest 50 commits … premise clear"* over a row that **cites no sha**, so the
+  reachability clause is satisfied vacuously — the #143 correction, confirmed for a fourth recycle
+  (#147, #148, now #149). Read `venueWhy` as *where*, never *whether*.
+
 - **2026-08-22 — drain recycle #148: the row asked for a design fork to be settled; it had been
   settled in writing and BUILT two days later — and the row was touched in place three hours after
   its own cure landed, and left open. filed 0 / closed 1 / landed 1 commit (DOCS).**
