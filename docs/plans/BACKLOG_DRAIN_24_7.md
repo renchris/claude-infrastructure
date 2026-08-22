@@ -92,9 +92,21 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
   to EXIST first (eighth consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-seventh
   consecutive clean reading.** Converge lag **4** at open (budget 25).
-  Board at open: **open 250 / blocked 182 / done 2135 / claimed 4, of 2571** — an EXACT match for
-  #144's close, so sibling churn did not recur in this window either. Retire-in-one **43**
-  (#144 closed at 45; the delta is siblings', not this recycle's — per-row status diffed, method 80).
+  Board at open: **open 250 / blocked 182 / done 2135 / claimed 4, of 2571** — an exact match for
+  #144's close. Retire-in-one **43** (#144 closed at 45; the delta is siblings', not this recycle's —
+  per-row status diffed, method 80).
+  🚨 **AND THEN THE AGGREGATE LIED IN THE OTHER DIRECTION — measured, not assumed.** At close the
+  board reads **open 250** again, identical to open, which reads as *this recycle moved nothing*.
+  The per-row diff says otherwise: exactly **one** id left `open` (`b0b83b6c5845`, mine → `done`) and
+  **zero** entered, while the TOTAL went **2571 → 2572** because a sibling filed `617d071cef41`
+  (*post-deploy HOST CUT*) at **15:27:39Z**, nine minutes before my close at 15:36:07Z. One close and
+  one sibling filing cancelled in the aggregate. #144 caught the aggregate OVER-crediting a recycle by
+  two; this is the mirror image — **the same statistic UNDER-crediting it to zero.** A stable `open`
+  count is not evidence of a quiet window, and it is not evidence of a wasted one. Method 80 is not
+  "diff per row when the number moves"; it is **diff per row, because the number moving or not moving
+  tells you nothing about who moved it.** *(This paragraph corrects the sentence above it, which as
+  first written asserted "sibling churn did not recur in this window either" — false by my own later
+  measurement, kept visible per method 74.)*
   🚨 **EIGHTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
   `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, a ninth consecutive window.
 
