@@ -87,6 +87,98 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #125: a stranded patch can be UNLANDABLE rather than merely unlanded
+  — and the oracle for "is it on trunk" cannot tell dropped work from replaced work. filed 1
+  (BLOCKED) / closed 1 / landed 4 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  sixth consecutive clean reading.** Converge lag **12** at open and at close (budget 25; all landed
+  paths are `M`, **no ADD**, so the commit budget genuinely applies) ⇒ ✅ not 🚀. Fold at open:
+  `master-convergence-deadlock` **44/5**, exactly where #124 left it.
+
+  **Worked the recommended start — the stranded branch `fix/sigterm-forensics` (row
+  `41099442ae0e`), CLOSED.** The row said "5 patches content-absent from origin/main". That is true
+  by patch-id and it is not the whole disposition: **3 recovered, 2 REFUSED**, and the two refusals
+  are the finding.
+
+  **THE SEVENTEENTH STANDING-LINT SHAPE — A PATCH'S ABSENCE FROM TRUNK AND ITS ELIGIBILITY TO LAND.**
+  `git merge-base --is-ancestor` / patch-id answer *"are these bytes on main"*, and they return the
+  **identical** answer for work that was dropped, work that was superseded by a better cure, and
+  work that CONTRADICTS trunk and never could have landed. A recovery driven off that oracle alone
+  re-applies all three. Ask, per patch, not "is it absent" but "**what does trunk say about this
+  question today, and how old is trunk's answer**".
+
+  - **`410f920c9` — SUPERSEDED.** Its two `bin/` files are on trunk already by another route, and
+    trunk's are strictly newer: `bin/reso-resume-one`'s header on `origin/main` **names this branch
+    by ref** and records three defects fixed 2026-08-10 (pinned `--effort`, stale binary path, stale
+    model id); `bin/reso-keepalive` gained a kitty arm 2026-08-17. Closed rows `6ab41e312a13` and
+    `8550b6129d9c` are where that content actually landed. Picking it would revert four fixes.
+  - **`a3db53228` (reap-guard) — CONTRADICTS TRUNK, and was never landable as authored.** Applying
+    it reds `tests/teammate-auto-shutdown.bats` 43 and 44 (48/50). Test 43 —
+    *"a READ-ONLY member has no ref by construction → REAP, not a forever-defer"* — is the exact
+    inverse of the patch's own test 20, and **trunk's assertion (`5cd17f5da`) predates the patch by
+    FIVE DAYS**. Its branch suite passed in isolation; the contradiction lived in a *different*
+    suite the branch never ran, never having reached the gate. **A green suite is a claim about the
+    suite, not about the tree** — and an unlanded branch's green is the weakest form of it. Same
+    true premise ("a read-only member cannot write a ref, so ref-absence is no evidence"), opposite
+    action; the fork is whether the fleet may kill a live read-only agent ⇒ **filed BLOCKED as
+    `cbd6bf980b1f`** with the question as its `needs`, and DROPPED from the land.
+
+  **Recovered, each red-proofed in a scratch tree against trunk's own subject** (controls asserted
+  and ABORTing, never degrading to a pass): `30017e2a4` the pkill-scope guard — **3 red at trunk**
+  (22, 23, 24) of plan 28 · `23406cbe4` the crash-watchdog — **4 red at trunk** (27, 28, 30, 31) of
+  plan 31 · `db1f92470` the forensics conviction (docs). Trunk's copy of that document still opened
+  ***"root cause of the SIGTERM NOT YET CONVICTED"*** — 182 lines vs the branch's 265 — so the
+  machine's own record denied a root cause found thirteen days earlier, which is precisely why
+  downstream rows still call the sender unidentified.
+
+  **The guard was gated on FALSE POSITIVES, not only on its tests.** It denies fleet-wide, so a
+  wrong deny is worse than the bug. Re-ran the author's own sweep over TODAY's tree **through the
+  real hook, never a re-implementation of its regex**: 111 tracked kill lines, **1 denied — and that
+  one is PROSE in a markdown doc** describing a false positive, convicted by the unrelated
+  `git add -f` clause. 0 executable false positives. Both sweep controls asserted: the 2026-08-09
+  incident line must read `deny` and a correctly-scoped `pkill -P 12345 -f bats` must read `allow`,
+  so an `allow` is an acquittal rather than a broken instrument.
+
+  🚨 **THE MEASUREMENT THAT REFUSED THE EASY CLOSE — and it is the reason `b7252a3bb015` STAYS
+  OPEN.** #124 reopened that row (postland's corpus killed by an external SIGTERM, sender
+  unidentified) and it was tempting to close it on this land: the branch's own `db1f92470` *names*
+  the sender. Measured instead, over **all 368 stamps**: cut `run_s` median **2590 s (n=186)** and
+  green `run_s` median **2566 s (n=37)** are the **same distribution** — 70% of cuts and 27 of 37
+  greens inside one 2100–3100 s band. That equality kills both easy stories. **A stray sibling
+  pattern-kill arrives at a time uncorrelated with the run, so cuts would be markedly SHORTER than
+  greens; a wall-clock bound would make cuts NARROWER than greens.** Neither holds: the kill lands
+  when the run is approximately *finished*, which is a third mechanism nobody has named. So the
+  recovered fixes are independently justified and **none of them is licensed as a cure for the
+  67.5% rate** (re-measured 27/40 over 08-20→08-22; 60/80 = 75% over the wider window). Recorded
+  inline in the forensics doc §7 so the next reader cannot re-derive the wrong conclusion.
+  *(Rejected causes, with why — two of the four about my own instruments again, the third recycle
+  running: (1) "the narrow run_s band proves a timeout" — refuted by the green arm having the same
+  band; (2) "the sender is a stray `pkill -f bats` from a sibling" — refuted by the same equality
+  AND by 0 bats-matching pkill lines in `bash-execution.log` over the window; (3) "`cut` means
+  SIGTERM" — `cut` is a multi-cause NOTHING-PROVEN verdict and `runner.log` records the why per
+  event, which is the artifact that settles it; (4) "the sites-TSV red is a pre-existing trunk red"
+  — refuted by an A/B in a pristine scratch tree, it was mine.)*
+
+  **A LINE-NUMBER PIN IS A CONTRACT, AND MINE BROKE IT — BY DESIGN.**
+  `tests/fixtures/validate-bash-sites.tsv` pins every grep site in `hooks/validate-bash.sh` **by
+  line number**, and its own header says an edit that moves a site MUST fail the coverage assertion.
+  The recovered guard inserts 36 lines in one hunk at 628, so the suite went **1/7**. Re-pinned 22
+  of 31 rows by **re-deriving each from its OWN pattern**, never by adding 36 — a constant offset
+  silently mis-pins any row the edit landed *inside* and is indistinguishable from a correct
+  re-pin. Guards, each ABORTing: a vanished pattern is a change to adjudicate, not a re-pin; an
+  ambiguous pattern (5 rows) resolves ONLY on an exact hit against the arithmetic expectation, never
+  a nearest match; every rewritten pin is re-read from the file and must carry its pattern or
+  nothing is written. All 22 moved by exactly +36 — uniformity is the check, since one hunk cannot
+  produce two deltas.
+
+  **Method 41 discharged in full, and re-run in the FINAL tree state.** The selector printed a
+  **BARE LIST OF 30 SUITE PATHS WITH NO VERDICT SENTENCE, rc 0** (the #121/#124 shape) — then **29**
+  after the reap-guard drop. Ran all of them twice: first pass **28/30 green**, the 2 reds
+  attributed by A/B at trunk in a pristine scratch tree and both proven **MINE**, then fixed; final
+  pass **29/29 green, 645 assertions, 0 not-ok, 1 skip**, every suite's `ok+notok` equal to its
+  plan. `cc-reaper` alone is 171 assertions / 521 s. Gates: `bash -n` 0 · `shellcheck -S style` 0 ·
+  `bats-kill-guard-lint` clean · `bats-assert-liveness` 0 · `self-path-lint --selftest` 32/32.
+
 - **2026-08-22 — drain recycle #124: a stored probe that greps for the PRESCRIBED FIX convicts a
   better cure — and the same abstention lets a SAMPLING probe close a live row. filed 1 (BLOCKED) /
   closed 1 / reopened 1 / landed 2 commits.**
