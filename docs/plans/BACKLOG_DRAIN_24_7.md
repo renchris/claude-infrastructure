@@ -87,6 +87,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #135: a code citation of a row id has FOUR modes and only ONE
+  licenses a close; the row I closed was the last open member of a family whose SUPERSET row was
+  already done. filed 0 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  seventeenth consecutive clean reading.** Converge lag **11** at open (budget 25). Fold at open:
+  `master-convergence-deadlock` **37 open / 6 blocked**, exactly where #134 left it.
+
+  **#134 PROMOTED `grep -rn <row-id>` TO STEP 1. RUNNING IT AT SCALE IS WHAT SHOWS ITS FAILURE
+  MODE.** I ran the lookup across all **37** open rows in the warm effort, not on a shortlist.
+  Restricted to code (`scripts/ hooks/ bin/ tests/` — `docs/` hits are triage prose, a different
+  population), **4 of 37** rows are cited in code. Reading all four, the citations fall into four
+  kinds, and **hit-count cannot tell them apart**:
+
+  | Mode | Row | What the citation actually is | Licenses a close? |
+  |---|---|---|---|
+  | **CURE** | (#134's three) | the fix names the row beside itself | **yes**, after you run it |
+  | **PROVENANCE** | `63929c8d6072` | a comment citing the row as the *reason for a convention* | only via the defect |
+  | **DEPENDENCY** | `786ac458be00` | code saying *"we cannot do X until this row lands"* | **no — inverted** |
+  | **ROUTING DATA** | `6a82c9405b9e` | the id as a table entry (`bin/cc-eligible:174`) | **no** |
+
+  🚨 **AND THE COUNTER-INSTANCE IS THE ONE THAT WOULD HAVE COST REAL WORK.** `b7252a3bb015` has
+  **five** code citations — the highest of any open row, higher than two of #134's three cures —
+  and two of them read literally *"fixed 2026-08-12, backlog b7252a3bb015"*
+  (`tests/worker-claim-gate-coverage.bats:244`, `tests/autonomy-sweep.bats:603`). By hit-count and
+  by the words in the comments it is indistinguishable from a cured row. It is not: #124 REOPENED
+  it and #125–#134 each deliberately kept it open. The code that cites it is *documenting its own
+  false close* — `bin/cc-premise:2645-2658` records that the row **auto-closed on 2026-08-16 by its
+  own stored probe**, a probe that reads the newest stamp only (`ls -t … | head -1`) against a
+  phenomenon running at 27/40, so it *"exits 0 roughly one time in three BY SAMPLING, with the
+  defect fully present. It is not a verdict; it is a coin"* — and the row sat shut for six days
+  while its subject ran unchanged. **So the ordering #134 prescribed (grep first, read second) is
+  right, but its verdict is not: the grep selects candidates, and only reading every hit assigns a
+  mode.** A count is a count of what the needle names (method 7) — and this needle names four
+  different things.
+
+  **CLOSED — `63929c8d6072`** (filed 2026-07-25, open 28 days; the brief listed it as *"probably
+  WAVE-sized at 28 files"*, so the next recycle would have sized a wave for zero work).
+  *"89 non-final bare-`!` assertions are structurally dead across 28 test files (31 in
+  cc-reaper.bats); fix via `refute()` helper + add `shellcheck -S error tests/*.bats` to the /ship
+  gate."* Three independent grounds, in ascending strength:
+
+  1. **THE DEFECT IS AT ZERO, MEASURED.** `python3 scripts/bats-assert-liveness.py --summary` reads
+     **`0 dead assertion(s) in 0 of 527 file(s)`** — the denominator is printed, so this is a
+     measured zero and not an empty invocation. The analyzer was **positive-controlled** on a
+     synthetic fixture (rc **1**, two findings, correctly sparing the *final* bare-`!` it must not
+     flag) and **negative-controlled** on a token absent from the tree. It has no file-level
+     allowlist that could hide a finding. Zero holds for every class, not just the row's.
+  2. **THE ROW IS A STRICT SUBSET OF AN ALREADY-CLOSED ROW.** The cross-condition duplicate search
+     (method 16) surfaced **`94edb2fa9f14`, status `done`**: *"212 dead assertions across 51 files —
+     TWO silent classes: non-final bare-`!` (**89**) AND non-final `[[ ]]` (123)"*, same
+     *"31 in cc-reaper.bats"* detail, same filing day. `63929c8d6072` is one class of a two-class
+     row that was closed. Every downstream member of the family is closed too — the gate it asked
+     for (`19a44d4e2e75`), the fail-open hardening of that gate (`73583e2519d6`), three
+     analyzer/fixer defects (`278b392f69e5`, `04b1de8de84e`, `846c0b05f553`), two residual sweeps
+     (`88ddedca9642`, `b6d23882cadf`) and the shed hole (`e38d68f0c3c2`). **It was the last open
+     member of a drained family.**
+  3. **THE MECHANISM, not the vanished precondition** (method 21). Corpus swept to zero (226
+     revived; 224 passed, the 2 reds neither a product bug) · chokepoint ratchet at
+     `ship-land.sh:2795`, own-scope, exit 6 *real* verdict · sibling line-scoped `.bats` shellcheck
+     ratchet at `:3196` · standing repo-wide suite `tests/bats-assert-liveness.bats`, **run this
+     turn: `1..36`, 36 ok / 0 not-ok / 0 skips** · fixer `scripts/bats-assert-liveness-fix.py`.
+
+  **BOTH HALVES OF THE PRESCRIPTION WERE REFUSED, AND BOTH REFUSALS ARE WRITTEN DOWN** (method 15 /
+  #134's fourth grading axis — score the row against THE DEFECT, never against its own remedy):
+
+  - *"fix via `refute()` helper"* → refused as the general form. `refute()` survives as a per-suite
+    local in **4 of 527** suites. `ship-land.sh:2869-2874` states why: *"the right form is PER
+    CLASS. A uniform `|| false` is WRONG for the whole `A && <never-succeeds>` family … where BOTH
+    branches then reach the appended false."* The fixer rewrites those to `! A || <same RHS>` and
+    **declines (exit 2, line named, file untouched) rather than guess**.
+  - *"add `shellcheck -S error tests/*.bats` to the /ship gate"* → refused, and measured wrong
+    **twice** in `docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md` — written the same day the row
+    was filed. §:493 quotes the item's own note back at it: *"It catches neither 89 nor the class"*
+    — shellcheck covers only bare-`!` and **does not flag non-final `[[ ]]` at all (123)**. And
+    widening `is_shell_file()`, which is literally what the item prescribed, hands every match to
+    `bash -n` as well, which **fails on all 189 of 189 suites** (`@test "x" { … }` is not bash), so
+    it would red every land that touches a test file. bats got its own line-scoped pass instead.
+
+  **THE THREE COMPETING COUNTS ARE THREE TRUE NUMBERS, NOT A ROT** (method 61 / #118). The row says
+  **89**, `tests/tsv-field-collapse.bats:20` says **212**, `ship-land.sh:3202` says **226**. The
+  source document reconciles all three in one table (`:101`, `:104`): **89** is the `negation`
+  class alone and *"agrees"* across both instruments; **212** is the first instrument's all-class
+  total; **226** is the corrected total after a heredoc-skip defect that had been swallowing
+  findings was fixed. **So I did NOT "correct" the 212 in the test comment** — it cites
+  `94edb2fa9f14`, whose title carries exactly 212, and a citation faithful to its source is a
+  decision, not an omission (method 51).
+
+  **WRONG CAUSES REJECTED (6 — and 3 were about my own instruments, the fourteenth consecutive
+  recycle where instrument error outnumbered subject error):**
+  1. *"The analyzer is dead — it prints nothing over 527 files at rc 0."* **REFUTED**, and this is
+     the shape method 49 warns about: an empty stdout at rc 0 is this lint's clean verdict AND the
+     signature of every could-not-run (`ship-land.sh:2839` documents the same trap costing a green
+     until `73583e2519d6`). The synthetic fixture forced rc 1 with findings.
+  2. *"`deadbeef1234` is a safe negative control."* **REFUTED — it read 16 hits.** It is a stock
+     *fixture* id in five suites (`cloud-return`, `cc-offload`, `backlog-triage-tools`,
+     `gate-select`, `handoff-orphaned-assignee`). My negative control was drawn from the same
+     population as the thing it was screening — **exactly #134's lesson, committed again one
+     recycle later, in the opposite direction**: #134's control could not FAIL, mine could not
+     PASS. Replaced with a hex verified absent from the tree.
+  3. *"`docs/` hits count as citations."* **REFUTED** — 14 of the 37 rows hit in `docs/`, nearly all
+     inside `backlog-consolidation-2026-08-09/OUT-*.md` triage tables, which cite ids *because they
+     are triaging them*. Including `docs/` turns a 4/37 signal into 14/37 noise.
+  4. *"Five code citations plus the words *fixed … backlog b7252a3bb015* mean cured."* **REFUTED** —
+     see the counter-instance above; the row is open on purpose and the citing code says so.
+  5. *"The stale-looking `212` in `tsv-field-collapse.bats:20` is a rot to fix."* **REFUTED** — it
+     is a faithful citation of `94edb2fa9f14`'s own number. Editing it would also have pulled that
+     suite into this land's direct-suite set for no gain.
+  6. *"`shellcheck -S error` on `tests/*.bats` is the cheap missing gate."* **REFUTED** by the
+     source doc's 189/189 `bash -n` measurement, not by reading the code.
+
+  **Left OPEN, deliberately:** `786ac458be00` (its two code citations are *dependency* markers —
+  other work is blocked on it, the inverse of curable; #115–#135 have now all declined it, and it
+  remains an owner's mandate) · `6a82c9405b9e` (routing-table entry; unchanged, still load-borne) ·
+  `b7252a3bb015` (see above — the third mechanism stays unnamed; do NOT close it on a probe).
+
 - **2026-08-22 — drain recycle #134: three rows were cured, each cure WROTE THE ROW'S OWN ID INTO
   THE CODE, and the store learned nothing from any of them. filed 0 / closed 3 / landed 1 commit.**
   Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
