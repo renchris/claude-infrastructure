@@ -22,7 +22,8 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   SRC="$HOME/.claude/hooks"; DST="$HOME/.claude-next"
   mkdir -p "$SRC" "$DST/hooks"
-  for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh; do
+  for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh \
+           handed-off-session-guard.sh; do
     printf '#!/bin/bash\nexit 0\n' > "$SRC/$h"; chmod +x "$SRC/$h"
   done
   # the drifted shape, reduced to its essentials: the five events exist and carry siblings, but none
@@ -61,7 +62,7 @@ wired() { # <event> <substring> → count of matching entries
   printf '%s' "$output" | grep -q 'session-deregister.sh — already present' || false
 }
 
-@test "0009 wires all five entries exactly once" {
+@test "0009 wires all six entries exactly once" {
   run bash "$MIG"
   [ "$status" -eq 0 ]
   [ "$(wired PreToolUse       'cc-unattended-ask-guard')" -eq 1 ]
@@ -72,6 +73,46 @@ wired() { # <event> <substring> → count of matching entries
   # has nothing to do with the subject.
   [ "$(wired Stop             'session-beat\.sh stop')"   -eq 1 ]
   [ "$(wired UserPromptSubmit 'session-beat\.sh prompt')" -eq 1 ]
+  [ "$(wired UserPromptSubmit 'handed-off-session-guard')" -eq 1 ]
+}
+
+@test "0009 reproduces the fleet's timeout spelling — 5 keys present, handed-off's ABSENT" {
+  # THE CONTROL, and it is what makes the sixth entry non-vacuous. settings-drift-assert.sh compares
+  # hook commands by basename+args and never looks at `timeout` (scripts/settings-drift-assert.sh:14,
+  # :26), so a `wire … 5` for handed-off-session-guard.sh would close the drift line and pass every
+  # other test in this file while writing a key the four sibling config dirs do not carry — a
+  # divergence the detector is structurally blind to. Both directions are asserted in one test so a
+  # "fix" that gives every entry a timeout, or none of them one, cannot go green.
+  run bash "$MIG"
+  [ "$status" -eq 0 ]
+  local f="$DST/settings.json"
+  key() { # <event> <substring> → "HAS" / "NONE" per matching entry, joined
+    jq -r --arg e "$1" --arg s "$2" \
+      '[.hooks[$e][]?.hooks[]? | select((.command|tostring)|test($s))
+        | if has("timeout") then "HAS" else "NONE" end] | join(",")' "$f"
+  }
+  [ "$(key PreToolUse       'cc-unattended-ask-guard')"  = "HAS" ]
+  [ "$(key SessionEnd       'session-deregister')"       = "HAS" ]
+  [ "$(key SessionStart     'desk-brief-inject')"        = "HAS" ]
+  [ "$(key Stop             'session-beat\.sh stop')"    = "HAS" ]
+  [ "$(key UserPromptSubmit 'session-beat\.sh prompt')"  = "HAS" ]
+  [ "$(key UserPromptSubmit 'handed-off-session-guard')" = "NONE" ]
+}
+
+@test "0009 links handed-off-session-guard.sh before wiring it" {
+  # The sixth entry's target is absent from .claude-next/hooks like three of the original five, so it
+  # takes the same link-then-wire path. Pinned per-entry rather than as a total, because a count says
+  # nothing about WHICH file landed.
+  run bash "$MIG"
+  [ "$status" -eq 0 ]
+  [ -f "$DST/hooks/handed-off-session-guard.sh" ]
+  printf '%s' "$output" | grep -q 'hooks/handed-off-session-guard.sh — linked' || false
+}
+
+@test "0009 declares handed-off-session-guard in its own migration-verify line" {
+  # A migration whose verifier does not test its newest effect reports `applied` over a half-done job
+  # — registration-state.sh reads this line and nothing else (migrations/README.md).
+  grep -q '^# migration-verify: .*handed-off-session-guard' "$MIG" || false
 }
 
 @test "0009 NEVER wires a hook whose target is missing (the wired-but-unlinked hazard)" {

@@ -4,10 +4,10 @@
 # is the spelling the other four config dirs already carry. Substituting $HOME would write a
 # machine-absolute path into a file whose whole purpose here is to MATCH its siblings.
 # migration-class: c10
-# migration-step: restore the 5 guardrail hooks that .claude-next alone is missing (unattended-ask guard, session-deregister, desk-brief-inject, session-beat x2) — it links 3 hook files and edits settings.json, which is C10
+# migration-step: restore the 6 guardrail hooks that .claude-next alone is missing (unattended-ask guard, session-deregister, desk-brief-inject, session-beat x2, handed-off-session-guard) — it links 4 hook files and edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0009-claude-next-guardrail-parity.sh
 # migration-subject: ~/.claude-next/settings.json
-# migration-verify: jq -e '[.hooks.PreToolUse[].hooks[]?.command] + [.hooks.SessionEnd[].hooks[]?.command] + [.hooks.SessionStart[].hooks[]?.command] + [.hooks.Stop[].hooks[]?.command] + [.hooks.UserPromptSubmit[].hooks[]?.command] | map(tostring) | (any(test("cc-unattended-ask-guard\\.sh")) and any(test("session-deregister\\.sh")) and any(test("desk-brief-inject\\.sh")) and any(test("session-beat\\.sh stop")) and any(test("session-beat\\.sh prompt")))' "$HOME/.claude-next/settings.json" >/dev/null
+# migration-verify: jq -e '[.hooks.PreToolUse[].hooks[]?.command] + [.hooks.SessionEnd[].hooks[]?.command] + [.hooks.SessionStart[].hooks[]?.command] + [.hooks.Stop[].hooks[]?.command] + [.hooks.UserPromptSubmit[].hooks[]?.command] | map(tostring) | (any(test("cc-unattended-ask-guard\\.sh")) and any(test("session-deregister\\.sh")) and any(test("desk-brief-inject\\.sh")) and any(test("session-beat\\.sh stop")) and any(test("session-beat\\.sh prompt")) and any(test("handed-off-session-guard\\.sh")))' "$HOME/.claude-next/settings.json" >/dev/null
 # migration-conflict: test -e "$HOME/.claude-next/hooks" && ! test -L "$HOME/.claude-next/hooks" && ! test -e "$HOME/.claude-next/hooks/session-beat.sh"
 #
 # The conflict oracle separates the two ways this can read unsatisfied, because they need OPPOSITE
@@ -30,6 +30,23 @@
 #     Stop            | session-beat.sh stop
 #     UserPromptSubmit| session-beat.sh prompt
 #
+# ── SIXTH ENTRY ADDED 2026-08-22 (backlog ba255d25bdc3), and the DATE is the point ────────────────
+#
+#     UserPromptSubmit| handed-off-session-guard.sh    ← wired with NO timeout key; see wire()
+#
+# This was NOT an omission in the list above. hooks/handed-off-session-guard.sh was added to the repo
+# on 2026-08-17 (bac277d95); this migration was written on 2026-08-11 (a19e3d9cf), six days EARLIER.
+# The list was complete over its population when written, and the population then grew.
+#
+# That is the mechanism worth recording, because it will happen again. A new fleet-wide hook reaches
+# the three symlinked config dirs' hooks/ for free, but settings.json is a REAL FILE in all five dirs
+# — nothing symlinks it, and install.sh merges only into the ONE $CONFIG_DIR it is invoked for. So
+# every hook wired into the canonical settings.json needs .claude-next wired by hand, i.e. by a c10
+# migration, EVERY TIME. 0013 (unforking .claude-next/hooks) cures the FILE half of this permanently
+# and is the right long-term fix; it does not cure the SETTINGS half, and nothing currently does.
+# A recurring gap with no owning mechanism is the thing to fix, not each instance of it — but that is
+# a fleet-wide design call, and this migration's job is parity for the instances now on the board.
+#
 # `claude` — the bare launcher, i.e. account 1 and the busiest — defaults to CLAUDE_CONFIG_DIR=
 # ~/.claude-next (~/.zshrc:460). So the dir missing the unattended-ask guard is not an obscure
 # fallback; it is the default.
@@ -45,22 +62,45 @@
 # "2 of 5" becoming "1 of 5" with nobody acting: .claude-quaternary self-healed because it
 # symlinks. .claude-next did not because it does not.
 #
-# WHY THE LINKS COME FIRST (the ordering is load-bearing, not tidiness). Three of the four hook
-# TARGETS are absent from .claude-next/hooks: cc-unattended-ask-guard.sh, desk-brief-inject.sh and
-# session-beat.sh. (session-deregister.sh is already linked — its settings entry is simply missing.)
+# WHY THE LINKS COME FIRST (the ordering is load-bearing, not tidiness). Four of the five hook
+# TARGETS are absent from .claude-next/hooks: cc-unattended-ask-guard.sh, desk-brief-inject.sh,
+# session-beat.sh and handed-off-session-guard.sh. (session-deregister.sh is already linked — its
+# settings entry is simply missing.)
 # A settings.json entry pointing at a hook file that does not exist is not inert: the harness
 # dispatches it and the exec fails, on EVERY matching event. For PreToolUse that is every Bash /
 # AskUserQuestion call in the account. So wiring before linking would convert a missing guardrail
 # into a broken account — strictly worse than the defect. This migration links first, verifies each
 # link resolves, and wires ONLY what it has already proven runnable.
 #
-# SCOPE — deliberately 4 files, not the 22 that differ. .claude-next/hooks is 22 entries behind
-# ~/.claude/hooks. This migration links exactly the four it wires and no others. The remaining 18
+#   ⚠️ CORRECTION 2026-08-22 — the hazard that ordering guards against does not actually exist here,
+#   and the paragraph above is kept only because the ordering it produces is still the right one.
+#   Every hook COMMAND in .claude-next/settings.json is spelled `~/.claude/hooks/…`; 0 of 66 resolve
+#   through $CLAUDE_CONFIG_DIR (measured 2026-08-22, and 0013's header measures the same thing
+#   independently at :31-38). So a settings entry reaches the CANONICAL hooks dir and cannot dangle
+#   on account of .claude-next/hooks/ lacking the file — mailbox-wake-arm.sh and goal-inert-watch.sh
+#   are already wired there while equally absent from that dir, with the account running. Link-first
+#   is therefore ADDITIVE AND HARMLESS rather than load-bearing: it is retained because the links are
+#   independently wanted (they are what the 55 runtime $CLAUDE_CONFIG_DIR/hooks/… resolution sites
+#   read), not because wiring first would break anything. Do not cite this paragraph as evidence for
+#   the dangling-hook hazard elsewhere.
+#
+# SCOPE — deliberately 5 files, not the 22 that differ. .claude-next/hooks is 22 entries behind
+# ~/.claude/hooks. This migration links exactly the five it wires and no others. The remaining 17
 # are filed separately: deciding whether each absence is a fork artifact or a deliberate omission is
 # a judgment call per file, and a blind 22-file sweep on a C10 surface would activate hooks in the
 # default account that nobody chose to activate there. Fixing the forked-dir GENERATOR (converting
 # hooks/ to a symlink) is likewise filed, not done here — it requires every .claude-next pane
 # closed, which a migration cannot assert.
+#
+#   WHY THE SIXTH ENTRY IS NOT THAT SWEEP, stated explicitly because the counter moved from 4 to 5.
+#   The declined sweep and this addition are over DIFFERENT POPULATIONS. The 22 are hook FILES absent
+#   from .claude-next/hooks; for most of them no settings.json anywhere wires them, so wiring one
+#   WOULD be activating something in the default account that nobody chose — which is the objection,
+#   and it stands. handed-off-session-guard.sh is in the intersection: an absent file that the OTHER
+#   FOUR config dirs already wire, and that settings-drift-assert.sh therefore names as a divergence
+#   in its own output. Adding it activates nothing new fleet-wide; it stops one account being the
+#   exception. The selection rule this migration has always used is "the lines the detector names",
+#   and that rule is what picked the sixth — not a widened net. 0013 remains the answer for the 22.
 #
 # IDEMPOTENT + REVERSIBLE. Every step is skip-if-already-done. Each settings write is preceded by a
 # timestamped backup and followed by a by-content verify; a failed verify restores and reports. The
@@ -82,7 +122,8 @@ rc=0
 # ── 1. LINK the hook files this migration is about to wire ────────────────────────────────────────
 # Only these four. Each is verified to resolve to a readable file AFTER linking, because a link
 # created against a missing source is exactly the dangling-hook hazard described above.
-for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh; do
+for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh \
+         handed-off-session-guard.sh; do
   src="$SRC_HOOKS/$h"
   dst="$DST_HOOKS/$h"
   if [ ! -f "$src" ]; then
@@ -101,7 +142,9 @@ for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session
 done
 
 # ── 2. WIRE the five settings entries ─────────────────────────────────────────────────────────────
-# Each row: <event> <matcher-or-empty> <command> <timeout> <match-substring>
+# Each row: <event> <matcher-or-empty> <command> <timeout-or-empty> <match-substring>
+# An empty timeout writes NO `timeout` key — the spelling the four sibling dirs carry for
+# handed-off-session-guard.sh. See wire()'s header for why a plausible 5 would be wrong there.
 # The command spellings are copied from ~/.claude/settings.json so the drift assertion (which
 # normalizes by basename+args) sees them as the SAME hook.
 # ONE backup for the whole run, taken lazily before the FIRST write and never again.
@@ -127,7 +170,18 @@ ensure_backup() { # → 0 backup exists (or was just made) · 1 could not make o
   return 0
 }
 
-wire() { # <event> <matcher> <command> <timeout> <hook-file-that-must-exist>
+wire() { # <event> <matcher> <command> <timeout|""> <hook-file-that-must-exist>
+  # An EMPTY timeout means "write no `timeout` key at all", and it is a spelling this function has to
+  # be able to produce rather than a nicety. The fleet's canonical settings.json carries 81 hook
+  # entries WITH a timeout and 3 without — keychain-guard.sh, waiting-recycle.sh and
+  # handed-off-session-guard.sh — and this migration's whole contract is that .claude-next ends up
+  # MATCHING its four siblings. Substituting a plausible 5 for an absent key would satisfy
+  # settings-drift-assert.sh, because that detector normalizes by basename+args and never compares
+  # timeouts (scripts/settings-drift-assert.sh:14,26) — i.e. it would close the drift line while
+  # silently minting a divergence the detector is structurally blind to. Whether those three SHOULD
+  # carry a ceiling is a real question (scripts/settings-hook-timeouts.sh exists to answer it, and its
+  # header argues yes), but it is a fleet-wide C10 judgment owned elsewhere; a parity migration that
+  # answered it unilaterally, in one dir, would be deciding it by side effect.
   local ev="$1" matcher="$2" cmd="$3" tmo="$4" needs="$5" tmp
 
   # never wire a hook whose target is not runnable — the whole point of step 1's ordering
@@ -147,16 +201,18 @@ wire() { # <event> <matcher> <command> <timeout> <hook-file-that-must-exist>
   # Append into the EXISTING matcher group when one exists, else create that group. Never disturb a
   # sibling group: a matcher group is a dispatch unit, and folding two together silently changes
   # which events every hook in them sees.
-  if jq --arg ev "$ev" --arg m "$matcher" --arg c "$cmd" --argjson t "$tmo" '
-        .hooks[$ev] = (
+  if jq --arg ev "$ev" --arg m "$matcher" --arg c "$cmd" --argjson t "${tmo:-null}" '
+        ( {"type":"command","command":$c}
+          + (if $t == null then {} else {"timeout":$t} end) ) as $entry
+        | .hooks[$ev] = (
           (.hooks[$ev] // []) as $groups
           | ( [ $groups | to_entries[]
                 | select( (if $m == "" then (.value.matcher // "") == ""
                            else (.value.matcher // "") == $m end) ) | .key ] ) as $hit
           | if ($hit | length) > 0
-            then ( $groups | .[$hit[0]].hooks += [{"type":"command","command":$c,"timeout":$t}] )
+            then ( $groups | .[$hit[0]].hooks += [$entry] )
             else ( $groups + [ (if $m == "" then {} else {matcher:$m} end)
-                               + {hooks:[{"type":"command","command":$c,"timeout":$t}]} ] )
+                               + {hooks:[$entry]} ] )
             end
         )' "$F" > "$tmp" 2>/dev/null && [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1; then
     # verify BY CONTENT before replacing the live file: present exactly once, under the right event
@@ -177,6 +233,7 @@ wire SessionEnd       ""                "~/.claude/hooks/session-deregister.sh" 
 wire SessionStart     ""                "~/.claude/hooks/desk-brief-inject.sh"       5 desk-brief-inject.sh
 wire Stop             ""                "~/.claude/hooks/session-beat.sh stop"       5 session-beat.sh
 wire UserPromptSubmit ""                "~/.claude/hooks/session-beat.sh prompt"     5 session-beat.sh
+wire UserPromptSubmit ""                "~/.claude/hooks/handed-off-session-guard.sh" "" handed-off-session-guard.sh
 
 # ── 3. report the drift assertion's verdict, so the migration's own effect is measured ────────────
 DRIFT_BIN="${CC_DRIFT_BIN:-$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")/scripts/settings-drift-assert.sh}"
