@@ -87,6 +87,103 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #129: two guards were justified by ONE number, so at most one of them
+  had been measured — and the unmeasured one was blinding its rule to the sibling of the incident
+  that created it. filed 0 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  eleventh consecutive clean reading.** Converge lag **6** at open (budget 25; all four landed paths
+  are `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **43 open / 6 blocked**, exactly where #128 left it.
+
+  **Worked the recommended start, `b2775a8bbc3a`, and it IS in the warm effort** (bucket checked
+  first, per #127). Closing it moves `master-convergence-deadlock` **43 → 42 open**, 6 blocked.
+
+  **THE ROW ASKED FOR A RATCHET OVER 216 SEAMS. THE MEASUREMENT REFUSES IT AND DELETES A LINE
+  INSTEAD.** Two recycles running (#128 was the first), a row named a real mechanism and prescribed
+  the wrong instrument. Method 71 applied a second time, and it held.
+
+  - **Scale re-derived** over `bin/ scripts/ hooks/` (336 files, the two census instruments excluded
+    by name): the `${VAR:-$HOME/…}` class is **519 distinct (file, variable) pairs / 257 variables**,
+    against the row's 216. Stale, and stale UPWARD — which normally argues *for* a ratchet.
+  - **But scope is a proxy and propagation is the mechanism.** Rule 6's own founding argument is
+    that a variable can only be INHERITED if something PUTS it there. Applied to this class:
+    **injected via the `--env` launch API = 2** (`CC_PANE_CMD_DIR`, `CLAUDE_CONFIG_DIR`); **present
+    in a real live desk session's environment = 2** of 257 (`CLAUDE_CONFIG_DIR` and `HOME` itself).
+    The other 255 have no mechanism that puts them anywhere. `CLAUDE_CONFIG_DIR` was cured at the
+    ship-land chokepoint by #128 (`c1eecb54e`) and is already excluded here as a configured input.
+    **That leaves exactly one variable, and one variable does not want a staged allowlist.**
+
+  **THE FINDING: rule 6 was blind to the sibling of its own founding variable.** `CC_PANE_CMD_DIR`
+  is injected at `bin/it2-kitty:989` from the SAME `--env` block as `CC_PANE_CMD_INTERACTIVE` —
+  rule 6's founding incident (`0588d255`, 5 red on a pristine tree, one of them a negative control).
+  It was excluded solely because its default reads `$HOME/.claude/run/kitty-pane-cmd`.
+
+  **WHY THE BLANKET SURVIVED TWELVE DAYS OF SCRUTINY, and this is the transferable part.** Rule 6's
+  header credited its two exclusions **JOINTLY** — *"between them these took a first run against the
+  new base from 123 suites to 1"* — so neither figure attributed to either line, and the blanket drew
+  its whole justification from a total its sibling had earned. A/B'd with only that line differing:
+  removing it claims **3** more suites, **all** for `CC_PANE_CMD_DIR`, and **0** more for
+  `CLAUDE_CONFIG_DIR`, which the EXPORTED test removes unaided. **A JOINT FIGURE IS NOT AN
+  ATTRIBUTION: if two guards are justified by one number, at most one of them has been measured.**
+
+  **HARM, MEASURED BEHAVIOURALLY BEFORE ANYTHING CHANGED — and it is ZERO.** Each unpinned in-scope
+  suite run twice, once with `CC_PANE_CMD_DIR` unset and once pointed at a fresh EMPTY canary dir,
+  comparing verdict AND files created under the canary: **4 of 4 clean, rc 0 throughout.** Recorded
+  because a timeout scores 0 canary files and reads exactly like a clean suite (#128's addendum to
+  method 49). So nothing was red — this is prophylaxis, and it earns its place on method 71's
+  corollary: it closes the class and costs **no standing list**.
+  **The probe was positive-controlled first** — the pin deleted from `tests/it2-kitty-argv-spawn.bats`
+  in a scratch tree: pinned **21/21 both arms, canary empty**; unpinned **13-ok/8-not-ok vs
+  18-ok/3-not-ok WITH 2 files in the canary**. Two independent signals, and an instrument that
+  cannot fail cannot acquit.
+
+  **CORROBORATION WORTH MORE THAN THE COUNT: all three newly-claimed suites already `unset
+  CC_PANE_CMD CC_PANE_CMD_INTERACTIVE` in `setup()` and omit only the third.** The blind spot slipped
+  past three authors who were each deliberately defending this exact class. `tests/spawn-lineage.bats`
+  additionally exports it **inside one test body** (`:153`) — rule 1's founding reason for rejecting a
+  per-test position, so the lint is right to flag the suite, and a whole-file grep in the red-proof's
+  precondition would have declared the control vacuous over the very distinction the rule draws.
+
+  **Red-proof**, three arms in one script, `git archive` scratch trees, prior shape asserted LIVE at
+  the parent and absent in the fix: parent lint + unpinned ⇒ **0** (the bug) · fixed lint + unpinned
+  ⇒ **3** (exactly the population) · fixed lint + pinned ⇒ **0** (the cure).
+  ⚠️ **Counted COMMENT-STRIPPED on both sides, and the first run ABORTED because it was not.** The
+  fix's own comment quotes the deleted line verbatim to say what was removed, so a naive `grep -F`
+  read the documentation as live code and declared the fix unapplied. That is this file's own rule-6
+  lesson — a predicate that matches prose — landing on the red-proof that verifies it. Method 48 is
+  not only about census instruments: **a fix that documents what it deleted puts the prior shape back
+  into its own file.**
+
+  **Gates:** lint `--selftest` **128/128** · the three suites **51/51** desk and **51/51 green
+  off-box** under `env -i` (two environments, method 69) · whole-tree lint parity vs parent adds **no
+  violation**, rc 0 both arms · `shellcheck -S style` clean · `bats-kill-guard-lint` clean ·
+  `bats-assert-liveness` silent and **positive-controlled at 36/36** · `self-path-lint --selftest` ok.
+
+  **METHOD 41 DISCHARGED BY RUNNING THE OWED SET, not by a reachability proof this time.**
+  `gate-select.sh --direct` named **8** suites (a bare list, no verdict sentence, rc 0 — the NINTH
+  sighting of that shape). All eight run in full, in the background, while this entry was written:
+  `capacity-admit-coverage` 15/15 · `reso-keepalive` 14/14 · `spawn-lineage` 22/22 ·
+  `cloud-refusal-route` 46/46 · `gate-ownscope-leak` 21/21 · `herm-suite-memo` 7/7 ·
+  **`test-hermeticity-lint` 68/68** · `ship-land` 145/145 — **338 assertions, 0 not-ok, 0 skips, rc 0
+  throughout, every plan line complete.** #128 discharged the same duty by PROVING its changed line
+  unreachable from 30 of 32 owed suites; both are valid, and the choice is just the size of the owed
+  set. An 8-suite set is cheaper to run than to argue about.
+
+  **Wrong causes rejected, three of them about my own instruments** (eighth recycle running — budget
+  one instrument-check per probe; it is a standing prior now, not a coincidence):
+  1. *"216 seams × 356 suites, so this needs a staged allowlist"* — the row's own sizing. **Refuted
+     by the propagation cut**: 257 variables, 2 with any mechanism, 1 left after #128. The ratchet
+     would have carried hundreds of standing entries to guard one variable.
+  2. *"#128 already cured this"* — it re-roots ONE variable and only under ship-land's gate. The
+     brief said so and it is correct; verified rather than assumed.
+  3. *"the fix is unapplied"* — the red-proof's own `grep -F` counting the fix's documentation.
+  4. *"`tests/spawn-lineage.bats` already pins it, so the control is vacuous"* — a whole-file grep
+     hitting a PER-TEST export at `:153`. Scoped to setup() bodies, which is the lint's own scope.
+  5. *"`handoff-fire-kitty-daemon.bats` is in the population"* — my census said 4 unpinned, rule 6's
+     own scope test says 3. Rule 6 keys on the repo-relative tool PATH via `seam_names_tool`; my
+     census was looser. **The narrower instrument is the authority — I did not widen the fix to
+     match my own grep.**
+
 - **2026-08-21 — drain recycle #128: an isolation mechanism that works by overriding `$HOME` has no
   purchase on an ABSOLUTE path — so ship-land's gate cloned the config dir its children do not read
   and left unprotected the one they do. filed 0 / closed 1 / landed 2 commits.**
