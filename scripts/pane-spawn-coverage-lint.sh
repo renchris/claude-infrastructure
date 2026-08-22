@@ -30,6 +30,36 @@
 # something that spawns no pane — and a rule that fires where its subject does not exist is the
 # always-fires alarm (memory `alarm-polarity-and-attention-budget`).
 #
+# ── THE ARGV-LIST FORM OF FAMILY 1 (backlog a54e2e838acc) ───────────────────────────────────────
+# Family 1 was written as `launch[[:space:]]+--type=`, i.e. it requires LITERAL WHITESPACE between
+# the verb and its flag. That is how a shell writes an argv — `kitty @ launch --type=os-window`, and
+# `KARGS=(launch --type=os-window)` too, since an unquoted array separates its elements with spaces.
+# It is NOT how a list-based language writes one. `subprocess.run(["kitty","@","launch",
+# "--type=os-window"])` separates the same two tokens with `","`, matches nothing, and the file reads
+# as having ZERO spawn sites. That is a false NEGATIVE in a coverage ratchet — the expensive
+# direction, and the silent one: the docstring gap above (c6a47d8c3ccb) refused a land and named the
+# file, while this one simply never fires. The same blind spot covers a QUOTED shell array,
+# `KARGS=("launch" "--type=os-window")`, so this was never really a Python fact — it is a fact about
+# quoting, and `.py` is merely where the quoted form is idiomatic rather than unusual.
+#
+# THE RULE ADDED IS ADJACENCY, NOT PROXIMITY, and that distinction was measured rather than
+# reasoned. The obvious widening — allow anything between the verb and the flag, `launch.{0,40}--
+# type=` — has a LIVE TIER-1 FALSE POSITIVE in this tree today: bin/cc-where:175 is prose reading
+# "an overlay launch on it — kitty @ launch with `--type=overlay --keep-focus`", in a file with zero
+# logger calls, so that widening would refuse every land until someone instrumented a file that
+# spawns nothing. Requiring the two tokens to be ADJACENT LIST ELEMENTS — verb element, then
+# immediately a `--flag` element — is decidable from one line, and English does not put a quote and
+# a comma between a verb and its flag. Censused over the 426-file population: the adjacency form
+# adds 0 lines, the proximity form adds exactly that one false positive.
+#
+# ⚠ STATED LIMIT, as tier 2's is: a list SPLIT ACROSS LINES is still invisible, because every
+# predicate here is line-scoped. `["kitty", "@", "launch",\n "--type=os-window"]` — what a formatter
+# produces once the call exceeds its column budget — is not reached, and closing it would need the
+# multi-line parsing the tier-2 note already declines on the same grounds. The single-line form is
+# what a hand-written call looks like, and it is what the one at-risk file in the tree would produce:
+# scripts/assignee-chain-state.py already builds `["kitty", "@"] + [...] + ["ls"]`, one token from a
+# site, and that concatenation shape IS caught.
+#
 # ── TWO TIERS, BECAUSE A PRIMITIVE AND THE LINE THAT ISSUES IT ARE OFTEN NOT THE SAME LINE ──────
 # Measured over this tree: five of the 23 sites are DECLARATIONS, not invocations —
 # `KARGS=(launch --type=os-window)` builds an argv issued 70 lines later; `set newTab to (create tab
@@ -177,6 +207,10 @@ CHECK_FAILED=0
 # try count would let the harness collapse the state under test.
 PSC_RETRY_SLEEP="${CC_PSC_RETRY_SLEEP:-1}"
 PSC_SITE_RE='launch[[:space:]]+--type=|launch[[:space:]]+--location=|create tab with|create window with|split vertically with|split horizontally with|detach-window'
+# …and family 1 again, as ADJACENT QUOTED ARGV ELEMENTS — see "THE ARGV-LIST FORM" in the header.
+# Two alternations, not a loosened first one: the whitespace form above is left byte-for-byte alone,
+# so this can only ADD matches and can never change a verdict the tree already has.
+PSC_SITE_RE="$PSC_SITE_RE|launch[\"'][[:space:],]*[\"']--type=|launch[\"'][[:space:],]*[\"']--location="
 
 # psc_body <file> — the file's bytes, for the file-level coverage question. An EMPTY file is an
 # ANSWER (rc 0, no output); only a read that could not run yields the sentinel.
@@ -577,6 +611,57 @@ def main() -> None:
 
 def main() -> None:
     print(CMD)'
+
+  # ── THE ARGV-LIST FORM (backlog a54e2e838acc) ───────────────────────────────────────────────────
+  # The cases above all issue their primitive as a shell command STRING. None of them says anything
+  # about the form a list-based language actually writes, where the separator is `","` and not a
+  # space — which is why the gap survived the language axis being added at all.
+  # RED — the shape the row was filed on. Pre-fix this is rc 0: the file reads as having no sites.
+  _pycase "a launch issued as ADJACENT ARGV LIST elements is RED" 1 'import subprocess
+
+
+def main() -> None:
+    subprocess.run(["kitty", "@", "launch", "--type=os-window"], check=True)'
+  # RED — the same form with no spaces at all, and via `--location=`, so neither the separator
+  # spacing nor the second flag of family 1 is load-bearing.
+  _pycase "a compact argv list and --location= are both RED" 1 'import subprocess
+
+
+def main() -> None:
+    subprocess.run(["kitty","@","launch","--location=vsplit"], check=True)'
+  # RED — the CONCATENATION shape, which is what the one at-risk file in this tree already builds.
+  _pycase "a launch appended as a list fragment is RED" 1 'import subprocess
+
+
+def main() -> None:
+    cmd = ["kitty", "@"] + ["launch", "--type=os-window"]
+    subprocess.run(cmd, check=True)'
+  # GREEN — and instrumented, so the new form is a real SITE that coverage can satisfy, not merely
+  # a new way to go red. Without this the three cases above are met by a rule that only ever blocks.
+  _pycase "an instrumented argv-list launch is GREEN" 0 'import subprocess
+
+
+def main() -> None:
+    log_pane_spawn("os-window", "kitty", "3", "d")
+    subprocess.run(["kitty", "@", "launch", "--type=os-window"], check=True)'
+  # GREEN — `--type=background` spawns no window in ANY form. The downstream exclusion is keyed on
+  # the line, so it must compose with the new alternation rather than being bypassed by it.
+  _pycase "an argv-list --type=background is still not a site" 0 'import subprocess
+
+
+def main() -> None:
+    subprocess.run(["kitty", "@", "launch", "--type=background", "--", "/bin/echo", "hi"])'
+  # RED — the quoted SHELL array, which is the same quoting fact in the other language and proves
+  # this was never a Python-only gap.
+  # shellcheck disable=SC2016  # authoring a shell FIXTURE: ${KARGS[@]} is expanded by the fixture
+  _case "a quoted shell array launch is RED" 1 'KARGS=("launch" "--type=os-window")
+kitty @ "${KARGS[@]}"'
+  # GREEN — THE GUARD ON THE WIDENING ITSELF, and it is a real line: bin/cc-where:175, prose in a
+  # file with no logger call. A proximity rule (`launch` … `--type=` within N chars) flags it and
+  # refuses every land; the adjacency rule cannot. Note there is no leading `#` here — the comment
+  # skip is deliberately NOT what saves this case, or it would prove nothing about the regex.
+  # shellcheck disable=SC2016  # a fixture quoting the tree's own prose: the backticks are prose
+  _case "prose naming a launch and a --type= flag is GREEN" 0 '    an overlay launch on it — kitty @ launch with `--type=overlay --keep-focus`):'
   # ── OWN-SCOPE, both directions. This is the clause that BOUNDS the gate, so an unverified one
   # would be a `gate_bounded:` marker asserting a budget nothing enforces.
   printf 'kt launch --type=window --cwd=current\n' > "$T/scripts/case.sh"
@@ -651,7 +736,7 @@ def main() -> None:
   _deadcase sed  "$REAL_SED"  "a dead CONTEXT READ must be a non-verdict, not an uncovered site"
 
   if [ "$pass" = "$total" ]; then
-    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; in a .py file, GREEN on a primitive merely CITED in a one-line or multi-line docstring while a real invocation below one stays RED, and the three deliberate refusals (mixed delimiters, an unbalanced docstring, an inline triple-quoted string) each skip nothing and keep today's verdict; LOUD on an unreadable root and on a root with nothing to scan; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset; and each of the three per-file predicates (site scan, file read, context read) is RE-ASKED 3x and then condemns the run to exit 2 rather than degrading into a clean file or a fabricated violation."
+    echo "pane-spawn-coverage-lint --selftest: $pass/$total — tier 1 RED on bare kitty/osascript/detach primitives in an uninstrumented file; tier 2 emits a NOTICE (not RED) for a declaration-shape site in an instrumented file; GREEN on both accepted call forms, a targeted detach, --type=background, a caller, and a comment; in a .py file, GREEN on a primitive merely CITED in a one-line or multi-line docstring while a real invocation below one stays RED, and the three deliberate refusals (mixed delimiters, an unbalanced docstring, an inline triple-quoted string) each skip nothing and keep today's verdict; family 1 is detected as ADJACENT ARGV LIST elements too — spaced, compact, --location=, and appended-fragment forms all RED, an instrumented one GREEN, --type=background still not a site, the quoted shell array RED — while prose naming a launch beside a --type= flag stays GREEN, which is the bound a proximity rule would have broken; LOUD on an unreadable root and on a root with nothing to scan; own-scope blocks INSIDE the diff, reports ADVISORY OUTSIDE it, honors set-EMPTY, and stays strict when unset; and each of the three per-file predicates (site scan, file read, context read) is RE-ASKED 3x and then condemns the run to exit 2 rather than degrading into a clean file or a fabricated violation."
     exit 0
   fi
   echo "pane-spawn-coverage-lint --selftest: $pass/$total FAILED — the detector does not discriminate." >&2
