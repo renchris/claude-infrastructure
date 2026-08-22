@@ -87,6 +87,109 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #132: a PROOF that enumerates the ways a suite NAMES a path is blind
+  to a suite that WALKS a directory — and the sweep that verified the premise validated one branch
+  of its own alternation. filed 0 / closed 1 / landed 2 commits.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  fourteenth consecutive clean reading.** Converge lag **5** at open (budget 25; both landed paths
+  are `M`, **no ADD**, so the commit budget genuinely applies). Fold at open:
+  `master-convergence-deadlock` **41 open / 6 blocked**, exactly where #131 left it.
+
+  Worked the recommended start `7e8d59bbb848` — #131's own split-out half, filed four hours earlier
+  with its measurement complete and its obvious remedy already refuted. **Its four population claims
+  re-derived, three exactly and one wrong: the row's stated CONTROL was false.** `agents/zz-new.md`
+  ADD → `(inert)` 0 suites ✓, `commands/zz-new.md` → 0 ✓ (a tree the parent row never named),
+  `skills/zz-new/SKILL.md` → 3 but by clause (e) matching the literal word `SKILL` ✓ — and
+  **`vendor/codex-security/zz-new.md` → 1, via clause (d) `pkgdir`, not the INERT the row asserts.**
+  The row instructs a fix to positive-control that vendor ADDs stay inert; that control would have
+  pinned a premise that was never true.
+
+  **THE SHAPE, AND IT IS THE TWENTY-FIFTH STANDING-LINT ENTRY: A PROOF IS ONLY AS COMPLETE AS ITS
+  ENUMERATION, AND THE ARM IT OMITS IS THE ONE THAT LEAVES NO TRACE TO GREP FOR.** The rung reads:
+  clauses (a)/(a')/(d)/(e) have just asked every suite whether it names this path, its directory or
+  its stem; a document cannot execute; therefore "nothing mapped it" is a PROOF of inertness, not a
+  default. Every arm asks whether a suite **NAMES** something. **A suite that WALKS a directory
+  reads every file beneath it while naming none of them**, so the enumeration was one arm short —
+  and being an omission rather than a wrong clause, no needle over the code could find it. Measured:
+  `tests/install-skills-nested.bats` runs `find "$REPO/skills/kpmg-deck" -type f` and asserts every
+  file it finds got linked, so `skills/kpmg-deck/references/*.md` is READ by a suite while deciding
+  INERT — while the **identical file one level up** selects that same suite through clause (d).
+  Depth alone flipped the answer, over the very directory whose `references/brand-kit.md` is the
+  suite's own pinned fixture.
+
+  🚨 **AND THE INSTRUMENT LESSON IS THE TRANSFERABLE ONE: A CONTROL THAT EXERCISES ONE BRANCH OF AN
+  ALTERNATION VALIDATES ONLY THAT BRANCH.** My first census of "does any suite read a real document
+  tree" returned **zero hits with a control that fired** — `install.sh` via `$REPO_ROOT` — and that
+  positive-controlled null is exactly what the rung's own dated parenthetical had concluded
+  ("the two that walk a tree wholesale walk `$CC_PARITY_REPO` and `$CC_PAGES_DIR`, not the repo").
+  Both were wrong the same way: the needle alternated `$REPO_ROOT|$BATS_TEST_DIRNAME/..|git -C`,
+  the three suites that DO read a real doc tree spell it **`$REPO`**, and the control used
+  `$REPO_ROOT`. Widening the needle by one alternative turned 0 hits into **9, across
+  `desk-brief-ssot`, `wrap-ledger` and `install-skills-nested`**. A null result is only as strong as
+  the *weakest* branch its control covers; a disjunctive needle needs a positive per disjunct.
+  (Method 59 held — the control was real — and was still not enough. Method 49's question, "what
+  does a miss look like", has to be asked per alternative.)
+
+  **A second instrument caught the same way, and it is why the anomaly was visible at all:**
+  `GS_EXPLAIN=1` is IGNORED — the bash wrapper overwrites it from its own `--explain` flag — so the
+  first explain run printed nothing for every probe. For `agents/` that empty output would have read
+  as CONFIRMATION of "no clause fired". It was caught only because `vendor/` had answered **1** and
+  therefore owed an explanation. **An anomaly you cannot explain is a reason to doubt the
+  instrument, not to round the anomaly off.**
+
+  **The fix is the missing arm and nothing else, and the BOUND is the fix.** Before concluding
+  INERT, a document asks whether any suite WALKS an ancestor directory of it. Placed inside the
+  document branch, never above `if not hits` — a CODE file no clause maps must keep failing CLOSED
+  to FULL, and hoisting it would NARROW that to a handful of suites. Only a path that would
+  otherwise decide INERT can change, and only from zero upward. The three candidate bounds were
+  scored over the real corpus rather than argued:
+
+  | bound | documents pulled in | edges | target case |
+  |---|---|---|---|
+  | bare MENTION of any ancestor | 86 | 509 | HIT — but 47 are `tests/fixtures/*` dragging 10 suites each |
+  | mention, bounded to the GRANDPARENT | 27 | 36 | HIT — still 22 vendor docs, and an arbitrary depth |
+  | **WALK evidence, any depth (shipped)** | **4** | **4** | **HIT — the true cases and nothing else** |
+
+  A walk is what licenses "covers everything beneath"; a mention names ONE path that happens to
+  share a prefix. That is the same USES-vs-COVERS distinction `is_index` already makes for clause
+  (c), applied to directories instead of documents — which is also why it is not a hub blacklist,
+  the remedy this file explicitly rejected for clause (c). **The naive version of my own fix
+  reproduced the hub cascade the file was built to prevent; one measurement, not one argument, is
+  what separated them.**
+
+  **The row's own decision — fail closed, or select the parity suites — is answered NEITHER WAY, and
+  both halves were measured.** An ADD of `agents/*.md` or `commands/*.md` stays INERT because that
+  is correct: A/B over ten candidate suites with both files added is byte-identical to baseline
+  (**392 assertions, 0 not-ok**), while the CONTROL — a new wired leg appended to `install.sh` —
+  turns `deploy-parity`'s anti-rot case **red (68 ok / 1 not ok)**, so the harness could have seen
+  otherwise. Failing closed would also resurrect the cost the widening bought, since `emit_full`
+  ABORTS the whole selection. The row's other implied remedy is dead twice over: clause (f) is gated
+  on `in_base(path)` so it **cannot fire for an ADD at all**, and `INSTALL_SUITE` carries **0
+  mentions of `agents/` across its 7 tests** — it tests settings.json hook-object wiring and
+  `scripts/limit-recover` deployment. The suites that can see an unlinked agent are the PARITY ones.
+
+  **Evidence.** Red-proof with **one mutant per site**, each new assertion failing on its own arm —
+  trunk subject + the new tests grafted on ⇒ the walked-ancestor case FAILS (1 not-ok of 3);
+  `walks` relaxed to a bare mention ⇒ the mention-vs-walk bound FAILS; the needle's trailing
+  boundary removed ⇒ the directory-boundary case FAILS; the fix ⇒ **3/3, and the full suite 43/43,
+  0 skips**. ⚠️ The boundary case passed on BOTH of the first two arms — an assertion not yet proven
+  able to fail — and needed its own third mutant; a mutant that kills two of three tests is not
+  evidence about the third. Behavioural A/B on the real repo (overlay onto a pinned clone, every
+  arm precondition-aborting on contamination): `skills/kpmg-deck/references/zz-new.md` **0 →
+  `install-skills-nested.bats`**, every other probe UNCHANGED — `tests/fixtures/codex-probe/**`
+  still inert, `scripts/*.sh` ADD still FULL, `vendor/` and the depth-1 skills case still exactly
+  where they were. Owed suites (`--direct` printed a **BARE LIST OF 3 PATHS**, rc 0 — the twelfth
+  such reading) plus the contract CONSUMERS the selector cannot name.
+
+  **Wrong causes rejected** (three of five were about my own instruments — the eleventh consecutive
+  recycle where that held): (1) *"no suite reads a real document tree, so INERT is right and the row
+  is a pure refutation"* — I had a green positive control and was one alternation branch from
+  shipping it; (2) *"`GS_EXPLAIN=1` works, so an empty explain means no clause fired"* — the wrapper
+  overwrites it; (3) *"add `agents/` to `INSTALL_RE`"* — cannot fire for an ADD, and buys zero
+  coverage where it does; (4) *"any ancestor directory mention"* — imports the hub cascade, 86 docs
+  / 509 edges; (5) *"bound it to the grandparent"* — an arbitrary depth that still pulls 22 vendor
+  docs, and would break the moment a walked tree nested one level deeper.
+
 - **2026-08-22 — drain recycle #131: a fix WIDENED a population and left its sibling rung resting on
   the narrower one, so a premise that was true when written went silently false. filed 1 / closed 1 /
   landed 2 commits.**
