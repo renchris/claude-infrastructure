@@ -116,6 +116,17 @@ refute_in_file() { [ "$(grep -c "$1" "$2")" -eq 0 ]; }
 guard_env() {
   printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
   export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  # HERMETIC worktree root — the same pin `reap_env` makes below, for the same stated reason, which
+  # this section simply omitted. `reopen` and `unblock` consult the worktree-occupancy oracle
+  # (bin/cc-backlog:4323 `item_worktree`), and that oracle is THREE-valued: when
+  # $CC_BACKLOG_WT_ROOT/wt-<id>'s ROOT is itself absent it answers UNRESOLVED, not "unoccupied", and
+  # both verbs abstain with rc 4 rather than recovering the claim. Unpinned, the default root is
+  # ~/Development/.worktrees, so the two DEAD-claim recovery cases were decided by whether the
+  # CALLER's home happens to carry that directory: green at this desk, red under
+  # scripts/offbox-run.sh's fresh `env -i` HOME, and red on any other machine. reap_env states the
+  # law — "a live dispatch worktree there must never decide a unit test's verdict" — and it binds
+  # here identically, since it is the same oracle behind a different verb.
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/wtroot"; mkdir -p "$CC_BACKLOG_WT_ROOT"
   HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
 }
 st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }

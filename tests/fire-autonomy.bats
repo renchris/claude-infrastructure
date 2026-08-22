@@ -214,7 +214,17 @@ STUB
 # this test could pass while the plain path stayed broken.
 @test "dry-run: a PLAIN recycle (no reloc, no re-pick) still pre-trusts the launch dir" {
   printf 'x\n' > "$BATS_TEST_TMPDIR/p.txt"
+  # CLAUDE_CONFIG_DIR is the recycle path's ACCOUNT input and cannot be left ambient. The three
+  # sibling cases above pass `--account`, but this one may not: an explicit account is the operator
+  # ASKING, and the plain recycle's whole subject is the `auto` arm — so it derives the account from
+  # this session's own config dir (handoff-fire.sh:7199 `env_account`, the reverse of cfg_dir) and
+  # REFUSES with exit 1 when it cannot. Unset, that refusal came before pre_trust ever ran, so the
+  # case asserted nothing about pre-trust off-box; at the desk it passed only on the operator's
+  # ambient value. Only the BASENAME is read — no directory need exist — so pinning a declared one
+  # here is the whole fixture, and `.claude-secondary` is the same account the --worktree case above
+  # already names by its `next2` spelling.
   run env -u ITERM_SESSION_ID CC_RECYCLE_REPICK=off \
+      CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/.claude-secondary" \
       bash "$HF" --recycle --session-id FAKE-0000-0000-0000-000000000001 \
                  --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run
   [ "$status" -eq 0 ]
