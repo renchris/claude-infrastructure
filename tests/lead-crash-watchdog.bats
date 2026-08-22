@@ -333,3 +333,80 @@ kill_daemons() { local f p
   kill_daemons
   [ "$(spawns)" -eq 1 ]
 }
+
+# ── a CAUGHT SIGTERM is not a clean exit (incident 2026-08-09) ─────────────────────────────────────
+# Three sessions were killed by one stray `pkill`; all three watchdogs logged "pid file gone — exit"
+# and nothing alarmed. TWO independent sites laundered the kill, and each is asserted below:
+#   (1) map_exit_class put 143 in the clean-exit arm beside 0 and 130, so the close-record rung —
+#       the FIRST rung, which outranks every heuristic — absolved the death before any evidence was
+#       read. SIGTERM is CATCHABLE: Claude Code runs SessionEnd and prints its ordinary resume
+#       banner, so a kill and an /exit are identical on screen AND in the exit code.
+#   (2) local_watchdog's `pid file gone` check returned 0 unconditionally, and session-end.sh:32
+#       removes that pidfile on ANY exit including a caught TERM — so the daemon left before ever
+#       reaching the crash ladder.
+# Both arms are asserted in BOTH directions: a SANCTIONED TERM (cc-teardown writes its marker
+# unconditionally before killing) must still read RECYCLE, or the fix trades a silent miss for a
+# false crash — the one thing this file must never do.
+
+@test "SIGTERM (143) with NO teardown marker → CRASH / external-sigterm" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9143,"exit_code":143,"signal":"15","stderr_tail":"","version":"2.1.220"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9143-100.json"
+  mk_tx s_term "ordinary work, no recycle language anywhere in this tail" 1
+  run bash "$HOOK" --classify s_term 9143
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = "CRASH" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "external-sigterm" ]
+}
+
+@test "SIGTERM (143) WITH a fresh teardown marker → RECYCLE (a sanctioned TERM is still sanctioned)" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9144,"exit_code":143,"signal":"15","stderr_tail":"","version":"2.1.220"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9144-100.json"
+  mk_tx s_term_ok "ordinary work, no recycle language anywhere in this tail" 1
+  printf '{"key_kind":"sid","sid":"s_term_ok","mode":"terminal"}\n' > "$CC_TEARDOWN_DIR/s_term_ok.json"
+  run bash "$HOOK" --classify s_term_ok 9144
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "deliberate-teardown" ]
+}
+
+@test "control: 0 and 130 are STILL clean-exit (the fix must not convict a voluntary close)" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9000,"exit_code":0,"signal":"","stderr_tail":"","version":"2.1.220"}\n'   > "$CC_CLOSE_RECORDS_DIR/9000-100.json"
+  printf '{"pid":9130,"exit_code":130,"signal":"2","stderr_tail":"","version":"2.1.220"}\n' > "$CC_CLOSE_RECORDS_DIR/9130-100.json"
+  mk_tx s_zero "nothing conclusive" 1
+  [ "$(bash "$HOOK" --classify s_zero 9000 | cut -f2)" = "clean-exit" ]
+  [ "$(bash "$HOOK" --classify s_zero 9130 | cut -f2)" = "clean-exit" ]
+}
+
+# ── the pid-file-gone branch itself ────────────────────────────────────────────────────────────────
+# local_watchdog lives inside the detached-daemon subshell, so it is extracted by name and driven
+# with stubbed collaborators — the branch decides between "exit quietly" and "hand to handle_crash",
+# and that decision is the whole fix.
+lw_harness() { # $1=lead-liveness rc (1=gone, 0=alive) ; sets CALLED file
+  WATCHDOG_DIR="$BATS_TEST_TMPDIR/wd"; mkdir -p "$WATCHDOG_DIR"
+  CALLED="$BATS_TEST_TMPDIR/handle_crash.called"; rm -f "$CALLED"
+  eval "$(sed -n '/^  local_watchdog() {/,/^  }$/p' "$HOOK" | sed 's/^  //')"
+  eval "lead_alive() { return $1; }"
+  handle_crash() { printf '%s %s\n' "$1" "$2" > "$CALLED"; }
+  # No poll-interval stub: the extracted body sleeps a LITERAL 30, and both tests below return on
+  # the first branch before reaching it. A stub for a knob the subject does not read would be
+  # decoration that also reads as coverage — the land gate's .bats shellcheck ratchet named it.
+}
+
+@test "pid file gone AND the lead process is GONE → handled as a death, not assumed clean" {
+  lw_harness 1
+  run local_watchdog 4242 s_gone ""
+  [ "$status" -eq 0 ]
+  [ -f "$CALLED" ]                                    # RED before the fix: it returned 0 first
+  grep -q '^4242 s_gone$' "$CALLED"
+  printf '%s' "$output" | grep -q "classifying, not assuming"
+}
+
+@test "pid file gone but the lead is ALIVE → still a quiet exit (someone else removed the file)" {
+  lw_harness 0
+  run local_watchdog 4243 s_alive ""
+  [ "$status" -eq 0 ]
+  [ ! -f "$CALLED" ]                                  # never invent a crash for a living session
+  printf '%s' "$output" | grep -q "lead still alive"
+}

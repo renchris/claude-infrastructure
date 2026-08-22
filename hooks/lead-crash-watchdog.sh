@@ -152,9 +152,20 @@ close_record_summary() {
 # exit code → CLASS<TAB>CAUSE (ground truth). Non-numeric/absent ⇒ return 1 (no override).
 #   0/130/143 (SIGINT/SIGTERM) = clean-exit · 137 (SIGKILL) = killed-oom-or-force ·
 #   139 (SIGSEGV) = binary-crash · any other nonzero = error-exit.
+# 143 (SIGTERM) is DELIBERATELY not here. It used to sit in the clean-exit arm beside 0 and 130,
+# which made every externally-killed session self-certify as a voluntary one — the incident of
+# 2026-08-09, where three sessions were killed by one stray `pkill` and this rung classified all
+# three RECYCLE/clean-exit at the ladder's FIRST step, before any evidence was consulted.
+# SIGTERM is CATCHABLE and Claude Code catches it: it runs SessionEnd and prints its ordinary resume
+# banner, so a kill and an `/exit` are byte-identical on screen AND in the exit code. 0 and 130 are
+# different — nothing external produces them (130 is the operator's own Ctrl-C).
+# So 143 returns 1 = "unmapped", and the caller falls through to the ladder, where the teardown
+# marker decides: cc-teardown TERMs, but writes its marker unconditionally first (bin/cc-teardown
+# :275), so a SANCTIONED TERM still reads RECYCLE and only an unattributed one reads CRASH.
 map_exit_class() {
   case "$1" in
-    0|130|143)    printf 'RECYCLE\tclean-exit' ;;
+    143)          return 1 ;;
+    0|130)        printf 'RECYCLE\tclean-exit' ;;
     137)          printf 'CRASH\tkilled-oom-or-force' ;;
     139)          printf 'CRASH\tbinary-crash' ;;
     ''|*[!0-9]*)  return 1 ;;
@@ -242,14 +253,14 @@ classify_death() {
   # $3 = when this session died, for jetsam attribution: an EPOCH, the literal `auto` (derive from disk —
   # what cc-crash-report --backfill passes, since its deaths are historical), or omitted ⇒ NOW, which is
   # correct for the live daemon and is what every pre-existing caller gets unchanged.
-  local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0
+  local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0 ec=""
   if [[ "$death" == "auto" ]]; then death=$(resolve_death_epoch "$sid" "$pid"); fi
   case "$death" in ''|*[!0-9]*) death=$(date +%s) ;; esac
   # 0) CLOSE-RECORD FIRST — per-pid ground truth OUTRANKS every heuristic below (incl. jetsam:
   #    137 already IS the SIGKILL/OOM case; a clean exit for THIS pid is clean even if some other
   #    process tripped a JetsamEvent). Absent record ⇒ fall through to the existing ladder.
   if [[ -n "$pid" ]]; then
-    local cr ec cls
+    local cr cls
     cr=$(find_close_record "$pid") || cr=""
     if [[ -n "$cr" ]]; then
       ec=$(close_record_field "$cr" exit_code)
@@ -307,6 +318,10 @@ classify_death() {
   # 3) otherwise a genuine but un-attributed crash (large context ⇒ likely OOM)
   local cause="abrupt-unknown"
   [[ "${kb:-0}" -gt 4096 ]] && cause="suspected-oom-large-context"
+  # …and if the close record said 143, the cause is not unknown at all: something sent SIGTERM and
+  # left no teardown marker. Naming it is what makes the row actionable — `abrupt-unknown` reads as
+  # "we have no idea", while external-sigterm says WHICH question to ask (who sent it).
+  [[ "$ec" == "143" ]] && cause="external-sigterm"
   printf 'CRASH\t%s\t%s\t%s' "$cause" "${kb:-0}" "${recs:-0}"
 }
 
@@ -896,8 +911,35 @@ trap '' HUP
     local pid_file="$WATCHDOG_DIR/$sid.pid" holder lrc cur repins=0
 
     while :; do
-      # pid file gone = clean shutdown elsewhere
-      [[ -f "$pid_file" ]] || { echo "[watchdog $sid] pid file gone — exit"; return 0; }
+      # PID FILE GONE — which is NOT, on its own, evidence of a clean shutdown.
+      #
+      # It used to `return 0` here unconditionally, and that single line made this whole daemon
+      # blind to the commonest unexpected death there is. hooks/session-end.sh:32 removes
+      # $WATCHDOG_DIR/<sid>.pid on ANY exit, and SessionEnd RUNS ON A CAUGHT SIGTERM — so an
+      # externally-killed session deleted its own pidfile on the way out, this check sat first in
+      # the poll loop and won the race against the death check below, and the daemon left before
+      # ever reaching the crash ladder. Every TERMed session laundered itself into "clean shutdown
+      # elsewhere"; the watchdog could only ever fire on a death where SessionEnd did NOT run
+      # (SIGKILL, panic). Measured 2026-08-09: three sessions killed by one stray `pkill`, three
+      # watchdogs, three "pid file gone — exit", zero alarms.
+      #
+      # The discriminator already existed one function away. So: only the LIVE process is a clean
+      # shutdown elsewhere (someone removed the file, the session is fine). A process that is GONE
+      # goes to handle_crash, which classifies before it acts — a sanctioned teardown has a marker
+      # and lands RECYCLE (ledger row only, no team teardown; handle_crash acts iff class=CRASH),
+      # and an unattributed death lands CRASH, which is the alarm this file exists to raise.
+      # lead_alive's ambiguous state 2 (pin mismatch, still a claude binary) stays quiet: never
+      # invent a crash — a missed exit costs an idle process, a false crash destroys working teams.
+      if [[ ! -f "$pid_file" ]]; then
+        local plrc=0; lead_alive "$pid" "$start" || plrc=$?
+        if (( plrc == 1 )); then
+          echo "[watchdog $sid] pid file gone AND lead pid=$pid is gone — classifying, not assuming"
+          handle_crash "$pid" "$sid"
+        else
+          echo "[watchdog $sid] pid file gone, lead still alive — exit"
+        fi
+        return 0
+      fi
       # SUPERSEDED — the pidfile is keyed by sid and only THIS sid's SessionStart rewrites it, so a
       # different pid in it means the sid re-registered under a new process and a newer daemon owns
       # the watch. The spawn guard above already treats exactly that condition as "the incumbent is
