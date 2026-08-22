@@ -87,6 +87,101 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #136: #135 found a stored probe that FALSELY CLOSES a live row; this
+  one is its exact mirror — a probe that FALSELY HOLDS OPEN a cured one, because it encodes the
+  filer's prescribed EDIT instead of the defect. filed 0 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: **`qos-diff` empty, the
+  eighteenth consecutive clean reading.** Converge lag **12** at open (budget 25). Fold at open:
+  `master-convergence-deadlock` **36 open / 6 blocked**, exactly where #135 left it.
+
+  **BOTH CHEAP LOOKUPS RUN FIRST, AND THE SECOND IS THE ONE THAT PAID.** The id-grep over all 36
+  open rows (`scripts/ hooks/ bin/ tests/`) returned **3** cited rows — `b7252a3bb015` (5),
+  `786ac458be00` (2), `6a82c9405b9e` (1) — i.e. exactly #135's set minus the row it closed, with
+  every mode already assigned. **A lookup whose answer is stable across a recycle has become a
+  cheap NULL, not a lead**, so the weight moved to the cross-condition family census (method 16,
+  promoted by #135). Run over twenty family regexes against all 2,569 rows it ranks the board by
+  how drained each family is, and four families sat at one open row apiece:
+  `deploy-wedged/NO-GREEN-AHEAD` **23/24** · `ff-only refusal` **16/18** ·
+  `postland_net_live/no-green` **13/15** · `verify_engagement/sleep-count` **5/6**.
+
+  **CLOSED — `9a57611ececc`** (filed 2026-07-26, open 27 days). *"ship-land.sh postland_net_live:
+  'no green stamp' is read as NOT-ADOPTED when it can equally mean ADOPTED-AND-FAILING-EVERY-TIME —
+  scoped lands are being permitted on a safety net that has never once gone green."*
+
+  🚨 **THE ROW WAS SOUND AS FILED IN EVERY PARTICULAR — AND THE ARCHITECTURE WENT THE OPPOSITE WAY
+  ON ITS PRESCRIPTION 46 HOURS LATER.** Checked against `7acc13b03`, the trunk sha ~2h before
+  filing: `postland_net_live()` was headed *"0 = trust the post-land net (or it is not adopted yet)
+  / 1 = INERT"* — two-state, as claimed; `[[ "$newest" -gt 0 ]] || return 0` collapsed
+  zero-greens-ever into not-adopted, the row's case (c) exactly; and it **was** a control-flow
+  input — `:574` read `elif [[ "$SCOPE" = "scoped" ]] && ! postland_net_live; then`. Then
+  `492c51066` (2026-07-28T19:37:30Z) rewrote the lane. Four grounds, none resting on the vanished
+  precondition (which also vanished: **378 stamps / 39 green / 137 red** today, vs the row's
+  "14 stamps, zero green, ever"):
+
+  1. **The harm mechanism is dead.** `NET_STATE` is now *"ATTESTED, never enforced"*
+     (`ship-land.sh:319`); the function *"ALWAYS returns 0 — never blocks a land"* (`:1315`); the
+     call site `:3427` is a bare invocation whose rc nothing consumes, commented *"it decides
+     NOTHING"*. **No conditional anywhere reads `NET_STATE`** — the only `if` touching it is the
+     function's own internal assignment (`:1340`). Scope comes from `gate-select --direct` and
+     `SHIP_LAND_LANE` (`:222`). The row's harm has no code path left.
+  2. **The prescribed remedy is refused, by name, with its reason.** The row's fix for (c) was
+     *"degrade to FULL"*. That **is** v1, deleted deliberately: `:1316-1323` calls it *"the
+     amplifier law (R7) in its purest form: the net is inert precisely when the box is wedged, and
+     the response was to add 40 minutes of bats per land to a wedged box."* Pinned inert by
+     `tests/ship-land.bats:1261` — *"never a corpus degrade"*, asserting no corpus was summoned.
+  3. **(c) collapsing into (a) is a TESTED DECISION, not an omission** (method 51).
+     `tests/ship-land.bats:1310` seeds an ancient never-green stamp and asserts `net:"none"` —
+     *"'not adopted', not 'inert' (bootstrap must not warn)"*.
+  4. **The row's actual ask is DELIVERED, at the enforcing site.** *"Say so loudly"* belongs to the
+     freshness alarm v2's own header names (R9 / cc-blockers), and `bin/cc-blockers` `alarm_rows`
+     implements the row's three-state split: no stamps dir ⇒ `NEVER-ACTIVATED` (`:329-335`) ·
+     stale-with-lands ⇒ `STALE` (`:387-394`) · alive+stamping+all-not-green ⇒
+     `PERSISTENT-RED`/`PERSISTENT-NOT-GREEN` (`:412-430`), whose DETAIL cell carries the **lifetime**
+     denominator `"newest %s all red, %s green of %s ever"` — the exact sentence the row wanted.
+     `:313-315` records those denominators were added *because* the capped window "used to say
+     '5 verdicts, 0 green EVER' against a real history of 33".
+
+  Tests run **this turn**, not recalled: `bats -f 'net INVERSION|net: a fresh GREEN stamp|net:
+  stamps with NO green one yet' tests/ship-land.bats` ⇒ **plan `1..3`, ok=3, notok=0, skip=0**.
+  The row's *"do NOT close on the 7 suites going green"* instruction is honoured — that finding was
+  routed elsewhere at filing and is no part of this adjudication.
+
+  🆕 **THE LESSON — A FALSIFIER THAT GREPS FOR THE FILER'S EDIT IS A TEST OF "DID SOMEONE TAKE MY
+  ADVICE", NOT "IS THE DEFECT GONE".** This row's stored probe greps `postland_net_live` for the
+  literal `newest" -gt 0 ]] || return 0` and returns **rc 1 — still present ⇒ still open**. That
+  line is now correct *by decision* and guarded by a test. Because the cure changed the
+  ARCHITECTURE rather than the line, the probe is **permanently red over a cured row** — and it is
+  the exact mirror of #135's coin, which was permanently green over a live one. Same defect in both
+  directions: a probe that is not about the defect. Prescription-shaped probes (#101/#108's 71%)
+  fail this way *by construction* — the cure that ships is rarely the cure that was imagined, and
+  here the shipped cure was the imagined one's **opposite**.
+
+  **WRONG CAUSES REJECTED — and three were about my own instruments** (the fifteenth consecutive
+  recycle where that held):
+  · *"greens exist now, so it's cured"* — a vanished precondition (method 21); rested on mechanism.
+  · *"the three-state ask is unbuilt, since the function still collapses (c)"* — the ask **migrated**
+  to the enforcing site, which v2's own header names as its owner (method 10: harm migrates).
+  · *"the stored falsifier says still-open, so it is"* — rejecting that IS the finding.
+  · **INSTRUMENT:** my consumer census used a jq-style `\.net\b` needle; its positive control read
+  **`.red`=0, `.smoke`=0, `.gate_scope`=0** in the prod tree, proving the needle cannot tell a
+  consumed field from an unconsumed one. Replaced by reading **every** `net` mention in **every**
+  `land.log` reader — all 24 were the English word (*"net-new panes"*, *"safety net"*). A raw count
+  would have reported *"6 hits in cc-blockers ⇒ consumed"* and inverted the answer.
+  · **INSTRUMENT:** asserted `bats -f`'s plan line `== 1..3` rather than trusting rc 0 (#128's
+  `1..0` non-verdict trap).
+
+  **MEASURED, NOT FILED.** `scripts/postland-verify.sh:3074-3076` still justifies
+  `stamp_is_verdict` partly on *"which drives ship-land to declare the whole post-land net INERT and
+  degrade every gate scoped→FULL"* — a consequence chain v2 deleted. Its load-bearing premise
+  (*"abstaining strands the tree UNVERIFIED FOREVER"*) survives, so the conclusion stands and this
+  is a stale clause, not a defect (method 25). Left for a recycle already touching that file
+  (`8740c03e428c` / `6f350b0e2048` / `799ec26e3a74` / `bf7412ee84bf` / `01ab05685857`) rather than
+  paying a >20 min `tests/postland-verify.bats` gate for a comment on a box whose load is itself an
+  open row.
+
+  **Effort:** `master-convergence-deadlock` **36 → 35 open / 6 blocked** — closed 1 in this group,
+  filed 0.
+
 - **2026-08-22 — drain recycle #135: a code citation of a row id has FOUR modes and only ONE
   licenses a close; the row I closed was the last open member of a family whose SUPERSET row was
   already done. filed 0 / closed 1 / landed 1 commit.**
