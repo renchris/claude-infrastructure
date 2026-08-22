@@ -29,6 +29,10 @@
 #   B17-B18       a FOURTH clause, and the first that looks at what a fired bound left BEHIND rather
 #                 than at how the SUT returned from it: the kill must reach the wedged bats itself,
 #                 and every $BATS_BIN call site must be under a bound at all. Own block below.
+#   B26-B28       a SIXTH clause — the TIP DIFFERENTIAL — and the other end of B13's. Confirming the
+#                 tip is red proves ONE end; C20 acts on "did the tip MAKE it red", so a tip whose
+#                 PARENT is red too is undecidable. Scoped to `below > 1` so it never duplicates the
+#                 floor probe. Own block below.
 #   B19-B24       a FIFTH clause — REACHABILITY — and the first decided from the TREE rather than
 #                 from a probe: a commit whose diff cannot touch the failing subject is not a
 #                 candidate, and the walk's steps/elapsed/load are recorded beside every verdict so
@@ -632,7 +636,7 @@ teardown() {
   # ...and the exempted runner is EXECUTED only under a bound. The non-executing mentions are named
   # individually rather than pattern-guessed, so a genuinely new call site cannot hide among them.
   exec_sites="$(/usr/bin/grep -n '"\$runner"' "$joined" \
-      | /usr/bin/grep -v 'rm -f\|chmod\|> "\$runner"\|bisect_floor_ok ' || true)"
+      | /usr/bin/grep -v 'rm -f\|chmod\|> "\$runner"\|bisect_floor_ok \|bisect_tip_differential_ok ' || true)"
   # FLOOR, deliberately not an exact tally (an exact count reds on legitimate GROWTH and catches no
   # regression): >=3 only so a renamed variable cannot make the emptiness below read as green.
   [ "$(printf '%s' "$exec_sites" | /usr/bin/grep -c .)" -ge 3 ]
@@ -848,4 +852,126 @@ subject_names() {
   [ "$status" -eq 0 ]
   [[ "$output" == "$FIRSTBAD" ]] || false
   ! grep -q "bisect UNREACHABLE" "$RUNLOG" || false
+}
+
+# ════ B26-B28 · THE TIP DIFFERENTIAL — the SIXTH clause, and the other end of B13's ═══════════════
+#
+# B10-B12 pin that a walk landing on the tip must CONFIRM the tip is red before naming it. That
+# proves ONE END. The question C20 acts on is not "is the tip red" but "did the tip MAKE it red",
+# and a pre-existing trunk red is red at the tip too — so a confirmation alone still convicts an
+# innocent land, which is precisely what B13-B16 refuse to allow at the FLOOR. This is that clause
+# at the tip: with the parent probed, an abstention is owed whenever both ends are red.
+#
+# WHY IT EXISTS (backlog e1c603144edc, stamp c43aea4c7b9d). 2026-08-08T23:56Z, load 10.55: the
+# corpus convicted scripts/git-identity-lint.sh and named culprit 0d50b76a214c, whose entire diff is
+# bin/cc-classify, bin/cc-reaper and their two suites. The red's real source, 8da2332e60ce, had
+# landed 70 minutes earlier and sat INSIDE the range, 132 commits above the last-green — so the true
+# first-bad was in range and reachable, and the interior probes simply returned GREEN at commits
+# that were red. Neither existing guard reaches it: bisect_reach_ok does not veto a code diff, and
+# bisect_floor_ok is scoped to `below == 1`. POSTLAND_AUTOREVERT defaults to on.
+#
+# THE FIXTURE IS THE INCIDENT, not a re-enactment of it. A stub that is green while the walk is in
+# progress and red once it is over is exactly "the interior probes were wrong and every measurement
+# taken afterwards was right" — and it is keyed on the cell's own bisect state rather than on a step
+# count, so it does not quietly change meaning when the walk's shape does.
+
+# GREEN for as long as the WALK is running, RED after it — the 2026-08-08 shape. Every call is
+# logged with the sha it ran at, so a test can prove the walk really did probe green AND that the
+# post-walk probes really ran, rather than passing because nothing happened at all.
+stub_bats_walk_green_then_red() {
+  cat > "$STUB/bats-stub" <<'STUBEOF'
+#!/bin/bash
+case "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac
+bl="$(git rev-parse --git-path BISECT_LOG 2>/dev/null || true)"
+if [ -n "$bl" ] && [ -f "$bl" ]; then
+  printf '%s walk\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 0
+fi
+printf '%s post\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 1
+STUBEOF
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+  export CC_STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  : > "$CC_STUB_CALLS"
+}
+
+# The B11 shape — red exactly where the BAD marker is — with every call logged at its sha, so the
+# control can prove the parent was PROBED and answered green, not that the guard was skipped.
+stub_bats_marker_logging() {
+  cat > "$STUB/bats-stub" <<'STUBEOF'
+#!/bin/bash
+case "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac
+if [ -f BAD ]; then printf '%s red\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 1; fi
+printf '%s green\n' "$(git rev-parse HEAD 2>/dev/null)" >> "$CC_STUB_CALLS"; exit 0
+STUBEOF
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+  export CC_STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  : > "$CC_STUB_CALLS"
+}
+
+@test "B26: a tip that is red AND whose PARENT is red is UNDECIDABLE — confirming one end is not a differential" {
+  mk_history 5
+  stub_bats_walk_green_then_red
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  # THE clause: C20 reverts what a bisect names, and here the tip provably did not cause the red.
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  [[ "$output" != *"$BAD"* ]] || false
+  [[ "$output" == *"tip-no-differential"* ]] || false
+
+  # ...and the abstention came from the PARENT PROBE, not from a bound, not from the older tip
+  # confirmation, and not from a parse that happened to come back empty. Without these three the
+  # test passes for the wrong reason the moment any earlier guard starts firing here.
+  grep -q "bisect NO DIFFERENTIAL AT THE TIP" "$RUNLOG"
+  ! grep -q "bisect UNCONFIRMED" "$RUNLOG" || false
+  ! grep -q "bisect CUT" "$RUNLOG" || false
+
+  # NON-VACUITY: the fixture must actually have produced the incident's shape — a walk that probed
+  # green at least once, then TWO post-walk measurements (the tip confirmation and the parent).
+  [ "$(grep -c ' walk$' "$CC_STUB_CALLS")" -ge 1 ]
+  [ "$(grep -c ' post$' "$CC_STUB_CALLS")" -eq 2 ]
+  # ...and the second of them ran at the tip's PARENT, which is the commit this clause is about.
+  [ "$(grep ' post$' "$CC_STUB_CALLS" | sed -n '1p' | cut -d' ' -f1)" = "$BAD" ]
+  [ "$(grep ' post$' "$CC_STUB_CALLS" | sed -n '2p' | cut -d' ' -f1)" = "$(git -C "$R" rev-parse "$BAD^")" ]
+}
+
+@test "B27: CONTROL — a GENUINE tip regression is still named, and the parent was PROBED to prove it" {
+  mk_history_tip_bad 5            # the true first-bad IS the tip; its parent is genuinely green
+  stub_bats_marker_logging
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$BAD" ]] || false
+  ! grep -q "bisect NO DIFFERENTIAL AT THE TIP" "$RUNLOG" || false
+  ! grep -q "bisect TIP PARENT UNPROVEN" "$RUNLOG" || false
+
+  # The guard must have RUN and passed, not been skipped: the last measurement of the run is the
+  # tip's parent, answering green. A guard that never probes would satisfy every assertion above.
+  [ "$(tail -1 "$CC_STUB_CALLS")" = "$(git -C "$R" rev-parse "$BAD^") green" ]
+}
+
+@test "B28: the guard STANDS ASIDE when the tip's parent IS good — floor_ok owns that end, and pays for it once" {
+  # The two guards partition the range rather than overlap: at `below == 1` the tip's parent is the
+  # last-green itself, which bisect_floor_ok already probes (B13/B15). Probing here as well would
+  # buy a second identical bats run and no bit — so the scoping is a cost clause, and this pins it.
+  mk_history 2 2                  # GOOD=c1, BAD=c2, first-bad AT the tip ⇒ rev-list good..bad = 1
+  stub_bats_marker_logging
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$BAD" ]] || false
+  [ "$(git -C "$R" rev-list --count "$GOOD..$BAD")" -eq 1 ]   # or this fixture proves nothing
+  # The floor guard handled it...
+  grep -q "bisect floor CONFIRMED green" "$RUNLOG"
+  # ...and the tip differential never spoke, on either arm.
+  ! grep -q "NO DIFFERENTIAL AT THE TIP" "$RUNLOG" || false
+  ! grep -q "TIP PARENT UNPROVEN" "$RUNLOG" || false
+  # ...and `good` was measured exactly ONCE, by floor_ok — never twice.
+  [ "$(grep -c "^$GOOD " "$CC_STUB_CALLS")" -eq 1 ]
 }

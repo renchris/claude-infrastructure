@@ -1965,6 +1965,58 @@ EOF
   BISECT_WHY="unreachable"
   return 1
 }
+# ── CONFIRMING THE TIP IS RED IS ONE END OF A DIFFERENTIAL, NOT THE DIFFERENTIAL ─────────────────
+# The tip confirmation below proves `bad` is reproducibly red. That is necessary and it is NOT
+# sufficient, because the question C20 acts on is not "is the tip red" but "did the TIP MAKE it
+# red" — and a pre-existing trunk red is red at the tip too. The floor guard already knows this: it
+# probes `good` precisely to establish that the walk had a measured green to stand on. This is that
+# same clause at the other end, and the file's own words for why both are owed on this path are
+# already three lines below the confirmation — "measuring from both ends before C20 acts on it".
+#
+# Measured, not reasoned (backlog e1c603144edc). 2026-08-08T23:56Z, load 10.55: the corpus convicted
+# scripts/git-identity-lint.sh and the bisect named 0d50b76a214c — a land whose entire diff is
+# bin/cc-classify, bin/cc-reaper and their two suites. The red's actual source, 8da2332e60ce
+# (tests/deploy-link-parity.bats, +215 lines), had landed 70 MINUTES EARLIER and sat INSIDE the
+# range: 132 commits above the last-green. So the true first-bad was in range and reachable, the
+# interior probes returned GREEN at commits that were red, the walk narrowed onto the tip, the
+# confirmation found the tip red — and the culprit stood on a ONE-ENDED measurement. Neither
+# existing guard covers it: bisect_reach_ok does not veto (the diff is code, not docs) and
+# bisect_floor_ok is scoped to `below == 1` (here it is 132).
+#
+# SCOPED TO `below > 1`, and that scoping is what keeps it free. When the tip's parent IS `good`,
+# bisect_floor_ok probes exactly this commit for exactly this reason, so running here too would buy
+# a second identical bats run and no bit. The two guards therefore partition the space rather than
+# overlap: parent == good ⇒ floor_ok, parent != good ⇒ here.
+#
+# FAILURE DIRECTION, deliberately the floor's and not bisect_reach_ok's. This is a PROBE guard, so
+# an unreadable answer means we measured nothing, and the tip path's evidence without it is zero:
+# anything but a definite GREEN at the parent is undecidable, mirroring the confirmation's own
+# "anything but a definite red". A wrong veto costs culprit REFINEMENT and red_actions still pages
+# and backlogs the red; a wrong stand hands C20 an innocent land, which is how revert f323b427 left
+# trunk strictly worse than it found it.
+bisect_tip_differential_ok() { # <good> <bad> <runner> <counter> <file> — 0 = culprit stands; 1 = abstain
+  local good="$1" bad="$2" runner="$3" counter="$4" file="$5" below parent rc=0
+  below="$(git -C "$WORKTREE" rev-list --count "$good..$bad" 2>/dev/null || true)"
+  case "$below" in ''|*[!0-9]*) below=0 ;; esac
+  [ "$below" -le 1 ] && return 0            # the parent IS good — bisect_floor_ok owns this end
+  parent="$(git -C "$WORKTREE" rev-parse --verify -q "${bad}^" 2>/dev/null || true)"
+  [ -n "$parent" ] || {
+    log "bisect TIP PARENT UNPROVEN: cannot resolve the parent of the tip $(sha12 "$bad") — the walk never ran the tip, so nothing measured a differential; undecidable, no culprit named"
+    BISECT_WHY="tip-parent-unproven"; return 1; }
+  : > "$counter"                            # a differential probe is not a bisect STEP (see B8)
+  if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$parent" >/dev/null 2>&1; then
+    log "bisect TIP PARENT UNPROVEN: cannot check out the tip's parent $(sha12 "$parent") to compare against it — undecidable, no culprit named"
+    BISECT_WHY="tip-parent-unproven"; return 1
+  fi
+  rc=0; bounded "$RETRY_TO" "$runner" || rc=$?
+  [ "$rc" -eq 0 ] && return 0               # parent GREEN — a real measured differential; culprit stands
+  if [ "$rc" -eq 1 ]; then
+    log "bisect NO DIFFERENTIAL AT THE TIP: $file is reproducibly red at the tip $(sha12 "$bad") AND at its parent $(sha12 "$parent"), so the tip did not cause it — the interior probes that walked past it were wrong (contention or a pre-existing trunk red); undecidable, no culprit named"
+    BISECT_WHY="tip-no-differential"; return 1
+  fi
+  log "bisect TIP PARENT UNPROVEN: $file is neither definitely red nor definitely green at the tip's parent $(sha12 "$parent") (runner rc=$rc) — no differential was measured; undecidable, no culprit named"
+  BISECT_WHY="tip-parent-unproven"; return 1
+}
 do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
   # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
   local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps b0
@@ -2128,6 +2180,9 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
           if [ "$rc" -ne 1 ]; then
             log "bisect UNCONFIRMED: the walk named the TIP $(sha12 "$bad") without ever running it, and $file is NOT reproducibly red there ALONE (runner rc=$rc) — undecidable, no culprit named"
             BISECT_WHY="tip-unconfirmed"; culprit=""
+          else
+            # ...and red at the tip is one END of the differential, never the differential itself.
+            bisect_tip_differential_ok "$good" "$bad" "$runner" "$counter" "$file" || culprit=""
           fi
         fi
       fi
