@@ -12,12 +12,24 @@ setup() {
   P="$BATS_TEST_TMPDIR/p.txt"
 }
 
-@test "selftest passes 8/8 (a zero-check suite must not 'pass')" {
+@test "selftest passes every check and never shrinks toward zero checks" {
   run "$L" --selftest
   [ "$status" -eq 0 ]
-  # 5→8 on 2026-08-08: + a kitty pane-id back-channel goes GREEN, + a prose integer stays RED.
-  # The COUNT is the assertion — it is what stops a selftest silently shrinking to zero checks.
-  [[ "$output" == *"8/8"* ]]
+  # FLOOR + TALLY, not a literal count. The intent is unchanged and is the right one — the COUNT is
+  # what stops a selftest silently shrinking to zero checks — but a LITERAL count cannot express it:
+  # it reds on the suite's own GROWTH, so it is a tripwire on the next fix rather than a guard on a
+  # regression, and it fired that way twice. 5→8 on 2026-08-08 (+ a kitty pane-id back-channel goes
+  # GREEN, + a prose integer stays RED) needed an edit here; 8→10 on 2026-08-22 (the uuid rule
+  # anchored to the cc-notify argument position, + the laundered and prefixed cases) needed another.
+  # Both were additions, and neither was a defect this assertion could have caught.
+  # So assert the two things actually meant: every check PASSED (both halves equal), and the total
+  # never falls below the floor already reached.
+  got="$(printf '%s\n' "$output" | sed -n 's|.*selftest: \([0-9][0-9]*\)/\([0-9][0-9]*\).*|\1|p' | head -1)"
+  tot="$(printf '%s\n' "$output" | sed -n 's|.*selftest: \([0-9][0-9]*\)/\([0-9][0-9]*\).*|\2|p' | head -1)"
+  [ -n "$got" ] || { echo "no N/M tally in selftest output: $output"; false; }
+  [ -n "$tot" ] || { echo "no N/M tally in selftest output: $output"; false; }
+  [ "$got" -eq "$tot" ] || { echo "selftest reported $got/$tot — not every check passed"; false; }
+  [ "$tot" -ge 8 ] || { echo "selftest shrank to $tot checks (floor 8) — the zero-check trap"; false; }
 }
 
 @test "block-less payload → RED (exit 1) — the W5 drop" {
