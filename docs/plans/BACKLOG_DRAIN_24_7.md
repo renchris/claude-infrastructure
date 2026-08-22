@@ -171,6 +171,39 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   entry), so any `🚀` rung over this path is the known false positive tracked by the still-open row
   `4e6a51df2a84`, not a real staleness. Named here rather than discovered at close.
 
+  🚨 **FILED — `72eaff9dd199`: METHOD 31'S OWN INSTRUMENT HAS A FALSE-POSITIVE MODE, AND IT FIRED ON
+  THIS CLOSE.** Method 31 says route long evidence through a file and *diff the `jq` read-back*;
+  #138–#150 all report that diff byte-clean. Here it came back **dirty** — one 3-byte em-dash
+  returned as **two U+FFFD**, the signature of a decoder seeing the character SPLIT. **The record was
+  never damaged.** Read straight out of the store (`~/.claude/autonomy/backlog.jsonl` — JSONL, per
+  `bin/cc-backlog:812`, *not* `backlog.json`), the evidence is `orig[:-1] == disk` exactly, the sole
+  delta being a trailing newline the tool strips by design; the whole 4.8 MB store contains **one**
+  U+FFFD and that one is a **literal the new row's own reproducer deliberately contains.** The
+  mangling is entirely in **`cc-backlog list --all --json`'s OUTPUT path.**
+  **The boundary was located by padding**, which is what turned a one-off into a filed defect:
+  pad 0 → corrupts at evidence byte 3986 · pad 1 → 3987 · pad 2, 3, 10, 64 → **CLEAN**. So the
+  character is mangled only while it **straddles absolute output byte ~3988** (= 4096 − 108 of
+  enclosing record prefix — a 4 KiB chunk), and is clean once it starts at or after it.
+  **Five hypotheses died on the way**, each by measurement, and two of them were mine and confident:
+  *the store is corrupt* (0 U+FFFD on disk) · *`done()` no-ops on a done row so I re-read a stale
+  record* (fixtured ALPHA→BRAVO proves it overwrites) · *a length threshold* (four rows carry LONGER
+  evidence, to 8522 B, all clean) · *offset 3986 is special* (synthetic em-dashes placed AT 3986
+  round-tripped clean) · *a fixed absolute position independent of the char* (pad 1 moved the
+  corruption WITH the character). **Rate 1 of 2587 rows**, which is exactly why thirteen consecutive
+  recycles diffed clean before this one — the trigger is a multibyte char coinciding with the
+  boundary, not evidence length.
+  ⚠️ **Two instrument traps paid for inside this one investigation, both method 49.** Guessing
+  `~/.claude/autonomy/backlog.json` finds a **different existing file** (`backlog-ratchet.json`)
+  whose miss reads exactly like *"row absent"*. And the store is an **append-only EVENT log** — one
+  JSON event per line, a row spanning several, effective state a FOLD — so *"read the last matching
+  line"* returns the `reopen` event, which carries **no evidence field**, and reads exactly like a
+  **lost record**. It is not lost; `cc-backlog list` folds correctly. **The fold-free store-side
+  check is a U+FFFD count over the WHOLE FILE.**
+  **Until the renderer is fixed, method 31's diff should compare against the STORE, rstripping the
+  trailing newline — not against `cc-backlog list --all --json`.** A recycle trusting the current
+  form would conclude its own close was damaged and try to repair a record that was always intact,
+  which is precisely what this session started to do.
+
 - **2026-08-22 — drain recycle #150: the artifact's own line 3 ordered its own deletion, so its
   absence from trunk was the SPECIFIED end state — and the answer it existed to produce had been on
   trunk for 23 h before the row was filed. filed 0 / closed 1 / landed 1 commit (DOCS).**
