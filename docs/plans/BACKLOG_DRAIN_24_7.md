@@ -87,6 +87,123 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #141: the row read a kitty decimal pane id as an instance of
+  "pane-UUID", so its headline indicted an arm that had never been missing — while the defect it
+  really tripped over was cured five hours later. filed 0 / closed 1 / landed 1 commit. A whole
+  CONDITION retired to zero.**
+  Gate 1 clear — **0 `.page` files**, `find` at the corrected path `$HOME/.claude/autonomy/postland`,
+  directory asserted to EXIST first (#138's instrument correction, fourth consecutive clean use).
+  Gate 2: **`qos-diff` empty, the twenty-third consecutive clean reading.** Converge lag **17** at
+  open (budget 25). Board at open: **open 255 / blocked 181 / done 2130 / claimed 4, of 2570** —
+  #140's own close landed (256 → 255) and the `claimed` stratum moved 3 → 4, so **a sibling moved the
+  board between recycles**; retire-in-one **45**.
+  🚨 **FOURTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` is **unmoved at 34 open / 6 blocked**. #140's label recommendation is
+  hereby ACTED ON rather than overruled — see the note at the end of this entry.
+
+  **METHOD 79 CHOSE THE ROW FOR THE THIRD CONSECUTIVE RECYCLE.** The retire-in-one fold named 45
+  conditions; `bbf226c496a5` was the one #140 read but did not investigate, and #140's own sizing of
+  it ("question-shaped, refuses the naive answer, its landed sibling likely holds the why") was
+  accurate enough to be picked up cold.
+
+  **CLOSED — `bbf226c496a5`** (filed 2026-08-11T00:16:32Z, `firstTs == lastTs` — never edited,
+  condition `cc-notify-bare-pane-uuid-unresolvable`, `source=tsv-chokepoint-session`). Its claim:
+  *"cc-notify's help documents a bare pane-UUID as a valid target and the resolver rejects it."*
+
+  🚨 **THE HEADLINE WAS NEVER TRUE — #140's tenth axis, applied deliberately rather than stumbled
+  into.** `git rev-list -1 --before="<firstTs>"` puts trunk at `7adc3c93a1b5` (2026-08-11T00:08:31Z,
+  eight minutes before the row was filed), and that tree ALREADY carried the raw-full-UUID
+  passthrough arm. The pre-fix parent binary itself resolves a full 36-char pane UUID at **rc 0**.
+  The help's `pane-UUID` promise was honoured the whole time.
+
+  **THE ROW MADE A CATEGORY ERROR ACROSS TWO ID-SPACES.** Its reproduction addressed `169` — a kitty
+  **decimal pane id** — and read that as an instance of *pane-UUID*. `bin/cc-notify:836-838` now
+  names all three id-spaces sharing that code path explicitly (iTerm2 uuids · kitty decimal integers
+  · headless `hdl-<16 hex>`). **A pane id refusing says nothing about whether a pane UUID resolves**,
+  and the row never tested the kind it indicted.
+
+  **THE OBSERVATION WAS REAL; ONLY THE CAUSE WAS INVENTED** (method 10, #140's face, second
+  consecutive sighting). The row-backed pane-id arm was genuinely ABSENT at filing (grep count 0 at
+  `7adc3c93a1b5`), so `cc-notify 169` really did refuse. Cured by **`5a16e0af7`** *"kitty numeric
+  pane ids resolve via their registry row"* (2026-08-11T05:31:38Z) — **5 h 15 min after the row was
+  filed** — then widened from the numeric SPELLING to the whole safe-filename CLASS by **`1028a238b`**
+  (2026-08-19T05:23:40Z), after a headless `hdl-…` address walked straight back into the same hole.
+
+  **FOUR ARMS, ONE FIXTURE, CONTROLS FIRST** (`CC_REGISTRY_DIR`/`CC_MAILBOX_DIR`/`CC_ROLES_DIR`,
+  `CC_NOTIFY_PHONE_FALLBACK=0`, real binaries — #140's method-28 form, no overlay and no clone):
+
+  | arm | target | rc | verdict | reason |
+  |---|---|---|---|---|
+  | **A4** `169` — PARENT `bba172d1da8d`, pre-fix | positional | **3** | `unresolvable` | `no-such-target` ← CONTROL |
+  | A1 `169` — HEAD | positional | **0** | `mailbox-only` | `target-not-live` |
+  | A2 `aaaaaaaa-1111-…-444444444444` — HEAD | positional | **0** | `mailbox-only` | `target-not-live` |
+  | **A3** `999` — HEAD, unregistered | positional | **3** | `unresolvable` | `no-such-target` ← NEG CONTROL |
+
+  A4 is what makes A1 non-vacuous, and it is the strongest form of that control this chain has run:
+  the parent carries the prior shape AND its stderr reproduces **the row's own quoted sentence
+  verbatim** — *"it is not a pane UUID or a known uuid prefix"*. A3 is the control in the other
+  direction: the resolver can still refuse, so A1 is not a guard softened into always-yes. The probe
+  **aborts without printing a conclusion** if A4 ever resolves.
+
+  **BOTH HORNS REFUSED** (method 15, #132's shape). The row asks: *"either make the resolver accept a
+  bare pane UUID (matching the help), or narrow the help … do not assume the first without checking
+  why the uuid arm was scoped out."* Horn 1 is already true and always was (A2) — nothing to
+  implement. Horn 2 would make the help WRONG. And the row's own caution answers itself: **the uuid
+  arm was never scoped out.** It is `bin/cc-notify:858-862`, and `:1001` actively PRESCRIBES it —
+  *"address the target by its full 36-char pane UUID (that path needs no registry)"* — as the
+  documented escape hatch for exactly the case where the registry is unreadable.
+
+  **THE HONEST RESIDUAL RUNS THE OPPOSITE WAY, AND IS NOT A DEFECT.** Since `5a16e0af7`/`1028a238b`
+  the resolver accepts MORE than help line 5 advertises: any registry-row-backed safe-filename pane
+  id resolves, and `friendly-name | pane-UUID | --self` does not mention it. The help now
+  **under-documents rather than over-promises**, which is the safe direction — it can lose no
+  message, only make one harder to address.
+
+  **Severity confirmed LOW, exactly as the row self-corrected.** It fails LOUD (exit 3, parseable
+  `verdict=unresolvable`), so no peer mail was ever silently dropped — re-measured at HEAD by A3.
+  The row's own retraction of the peer report that raised it ("*I first measured rc=0 and that was MY
+  error: the rc came through a `| tail`*") is sound and is the `bats|tail` trap already in memory.
+
+  **Wrong causes rejected** (method 43): **(1)** *"the help is stale and should be narrowed"* — the
+  comfortable close, and it would have SHIPPED A LIE, because A2 proves the documented kind resolves;
+  the help's actual defect is the opposite sign. **(2)** *"`169` failed, so pane-UUID targets fail"* —
+  the row's own inference, and the one an unfixtured reader repeats; it collapses two id-spaces that
+  `bin/cc-notify:836-838` keeps deliberately distinct. **(3)** *"the arm was added 2026-08-07, so the
+  row was already cured at filing"* — the rationale comment at `:840` says so and **the comment is
+  wrong**; `git log -S '^[0-9]+$' -- bin/cc-notify` returns `5a16e0af7` and nothing earlier, so
+  2026-08-07 is the INCIDENT date (the `cc-notify 247` refusal), not the fix date. Believing the
+  comment would have produced a right verdict from a false premise.
+
+  **Duplicate + sibling checks** (methods 16, 23). The only other open row touching pane resolution
+  is `82a4ee2b1a84` (`resumed-session-cannot-fire`) — a REGISTRATION gap, not a resolver gap;
+  different subject, left open and named. Sibling `bacdfc4f63ab` (payload-lint F3 green-lights an
+  undeliverable back-channel) is already **done** — #130's close. Author needle
+  `source=tsv-chokepoint-session` returns **3** rows (control ≥2 satisfied); the other two are
+  deploy-live green-tree rows, both done, neither touching this subject — so the null is an answer,
+  not a spelling failure.
+
+  **MEASURED, NOT FILED** — a residual for a recycle already touching `bin/cc-notify`: the rationale
+  comment at `:840` mis-dates the numeric arm by four days (says *added 2026-08-07*; landed
+  2026-08-11 in `5a16e0af7`). A stale date inside a load-bearing rationale comment (method 74). Not
+  worth a code land plus `tests/cc-notify.bats` (105 tests / ~2 min) on its own — same disposition as
+  #136's `postland-verify.sh:3074` stale clause.
+
+  🆕 **THE STANDING LINT'S THIRTY-FOURTH SHAPE: A DOCUMENTED TARGET KIND AND THE ID-SPACES THAT
+  ACTUALLY SHARE ITS CODE PATH.** Help line 5 names three kinds; the resolver serves **five** arms
+  across **three** id-spaces. A reporter who hits a refusal in one id-space will name it with the
+  vocabulary the help gave them, and the help's vocabulary does not partition what the code does — so
+  the bug report lands on an innocent arm. This is not the writer/reader FORMAT drift the lint
+  usually catches; it is the same failure one level up, in the **taxonomy**. Before accepting that a
+  documented kind is broken, **check which arm the reporter's example actually exercises.**
+
+  🚨 **ON THE LABEL — #140's RECOMMENDATION IS ACTED ON, NOT OVERRULED.** Four consecutive recycles
+  have now closed outside `master-convergence-deadlock`, each declared in advance, and each retired a
+  whole condition instead. That is a fact about the label: its 34 open rows are dominated by items the
+  drain has repeatedly and correctly declined (`b7252a3bb015` is 17 recycles deep; `786ac458be00`
+  blocks other work BY DESIGN; several are `venueWhy=ineligible-box` G2 surfaces), while method 79
+  keeps surfacing rows decidable in one pass. **Keep REPORTING the warm effort's count; do not treat
+  it as the default target.** Its two most tractable rows remain `f660a37851cd` and `5b1cb9415742`.
+
 - **2026-08-22 — drain recycle #140: the row's root cause was inferred from a help line instead of
   the resolver, and the resolver had been delegating correctly for three days before it was filed.
   filed 0 / closed 1 / landed 1 commit. A whole CONDITION retired to zero.**
