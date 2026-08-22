@@ -310,6 +310,50 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   [ "$status" -eq 3 ]
 }
 
+# ── THE THREE ROLE STATES, PINNED IN BOTH DIRECTIONS (2026-08-22, backlog c94cf98ab91f) ───────────
+# cc-roles reads a role as LIVE (0) / ABSENT (1) / UNVERIFIED (4), and cc-notify maps those to
+# deliver / exit 3 / deliver-with-a-warning. UNVERIFIED is allowed to deliver ON THE EXPLICIT
+# CONDITION that the caller is TOLD — a legacy pointer asserts nothing, and every role file written
+# before cc-roles existed is that shape, so folding it into ABSENT would retire the main path.
+#
+# That warning was UNREACHABLE CODE until this commit: the send path called `uuid="$(role_uuid …)"`,
+# and a command substitution is a SUBSHELL, so ROLE_STATE was assigned in a child and the parent read
+# the empty initialiser every time. Measured on the pre-fix binary: `cc-roles list` reported
+# UNVERIFIED while the send printed ZERO warning lines and delivered exactly as silently as a LIVE
+# role — the claimed-outcome-vs-checked-outcome shape, where the enqueue succeeds so nothing else can
+# tell. These three pin the WHOLE polarity, not just the fix: an alarm that fires on every state
+# carries as few bits as one that never fires (memory: alarm-polarity-and-attention-budget).
+@test "--role UNVERIFIED (legacy pointer, no liveness evidence) delivers AND says it is unchecked" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"          # line 1 only — no pid=/pane= evidence
+  run "$NOTIFY" --role desk "x"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no liveness evidence"* ]] || false
+  [[ "$output" == *"cc-roles claim desk"* ]] || false   # names the cure, not just the complaint
+}
+
+@test "--role LIVE (claim carries a live pid) delivers and does NOT warn about liveness" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\npid=%s\n' "$UUID" "$$" > "$CC_ROLES_DIR/desk"
+  run "$NOTIFY" --role desk "x"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"no liveness evidence"* ]] || false
+}
+
+@test "--role with a DEAD claimant → exit 3, not a silent enqueue into a box nobody drains" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  sh -c 'exit 0' & local dead=$!
+  wait "$dead" 2>/dev/null || true
+  # control the needle: a pid that is somehow still alive would make this test vacuous.
+  run kill -0 "$dead"
+  [ "$status" -ne 0 ]
+  printf '%s\npid=%s\n' "$UUID" "$dead" > "$CC_ROLES_DIR/desk"
+  run "$NOTIFY" --role desk "x"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"role 'desk' is not set"* ]] || false
+  [[ "$output" != *"no liveness evidence"* ]] || false  # ABSENT is not UNVERIFIED
+}
+
 # ── EMPTY POSITIONAL TARGET ≠ UNKNOWN TARGET (2026-08-10, backlog 08ba1e3dccc2) ───────────────────
 # `cc-notify "$(cat ~/.claude/cc-roles/desk)" "<msg>"` is the sanctioned back-channel form, and when
 # the role is unset the substitution collapses the address to "" in the CALLER's shell. That empty
