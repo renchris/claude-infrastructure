@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #144: the cure existed, the spelling it had to write did not — and the
+  falsifier could not have told the difference. filed 0 / closed 1 / landed 1 commit (CODE).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (seventh consecutive clean use). Gate 2: **`qos-diff` empty, the twenty-sixth
+  consecutive clean reading.** Converge lag **2** at open (budget 25), all `M`, no ADD.
+  Board at open: **open 252 / blocked 182 / done 2134 / claimed 3, of 2571** — an EXACT match for
+  #143's close, so the sibling churn #143 caught did not recur. Retire-in-one **44** (#143 closed at
+  41; the delta is siblings', not this recycle's — per-row status diffed, method 80).
+  🚨 **SEVENTH CONSECUTIVE CLOSE OUTSIDE THE WARM EFFORT, DECLARED BEFORE THE CLOSE:**
+  `master-convergence-deadlock` **unmoved at 34 open / 6 blocked**, an eighth consecutive window.
+
+  **THE BRIEF'S NAMED LEAD AGAIN, and it was #143's own filing.** `ba255d25bdc3` — the seventh
+  divergence `settings-drift-assert.sh --assert` reports, `UserPromptSubmit |
+  handed-off-session-guard.sh`, wired by NO migration anywhere (the name appears in `migrations/`
+  only inside `0013`'s prose at `:29`). Re-verified true on the live fleet before touching anything.
+
+  **CLOSED — `ba255d25bdc3`**, by `4c7f84f55`: `migrations/0009` now links and wires it, and its own
+  `migration-verify` line tests for it. Proved **outcome-shaped, not remedy-shaped**, by driving the
+  detector through its `CC_DRIFT_DIRS` seam with the parent's `0009` as the control arm —
+  `PARENT before=1 after=1` (entry never written) · `HEAD before=1 after=0`. The parent arm is what
+  makes it non-vacuous: same fixture, same detector, unmodified migration, line unmoved.
+
+  🚨 **THE FINDING: `wire()` COULD NOT PRODUCE THE ONE SPELLING THE FLEET USES, AND THE ROW'S OWN
+  FALSIFIER WAS BLIND TO THAT.** The row prescribes the right spelling — *"no timeout"* — and `0009`
+  could not emit it: `wire()` passed `--argjson t "$tmo"` and wrote `"timeout":$t` unconditionally.
+  All four sibling config dirs carry this hook with **NO timeout key** (3 of 84 canonical hook
+  entries lack one: `keychain-guard.sh`, `waiting-recycle.sh`, `handed-off-session-guard.sh`).
+  And `settings-drift-assert.sh` normalizes by **basename+args** and never compares timeouts
+  (`:14`, `:26`) — so `wire … 5` would have driven **this row's own falsifier to 0**, passed all ten
+  existing tests, and minted a divergence the detector is structurally incapable of seeing. `wire()`
+  now accepts an empty timeout and omits the key; the suite pins **both directions in one test**
+  (the five originals `HAS`, handed-off `NONE`), and the `wire … 5` mutant reds on **exactly** that
+  test, 12/13 otherwise green. *Deliberately NOT decided: whether those three entries should carry a
+  ceiling. `scripts/settings-hook-timeouts.sh` exists to answer it and its header argues yes; it is a
+  fleet-wide C10 judgment, and a parity migration answering it in one dir decides it by side effect.*
+
+  🚨 **THE ROW'S ONE WRONG INFERENCE — AND #143'S FRESH LESSON IS WHAT MADE IT COMFORTABLE.** The row
+  reads the gap as `0009` covering *"5 of the detector's 7 lines"*, i.e. an incomplete enumeration —
+  which is **exactly** the shape #143 had just closed on `0006`. It is not that.
+  `hooks/handed-off-session-guard.sh` was ADDED **2026-08-17** (`bac277d95`); `0009` was written
+  **2026-08-11** (`a19e3d9cf`), six days EARLIER. The list was complete over its population when
+  written; **the population then grew.** No more careful author would have caught it.
+
+  **THE GENERATOR, which will produce the next instance.** A new fleet-wide hook reaches the three
+  symlinked config dirs' `hooks/` for free, but **`settings.json` is a REAL FILE in all five dirs**
+  (verified — none is a symlink) and `install.sh` merge-wires only into the ONE `$CONFIG_DIR` it is
+  invoked for. So every hook wired into the canonical `settings.json` needs `.claude-next` wired by
+  hand, i.e. by a c10 migration, **every time**. `0013` cures the **file** half permanently by
+  unforking `.claude-next/hooks`; **nothing cures the settings half.** Recorded in `0009`'s header.
+  Not filed — a fleet-wide design call, not a drain pickup.
+
+  **ALSO CORRECTED IN PASSING:** `0009`'s *WHY THE LINKS COME FIRST* argues a settings entry naming
+  an absent hook file is dispatched-and-failing. **0 of 66** hook commands in
+  `.claude-next/settings.json` resolve through `$CLAUDE_CONFIG_DIR` — all are `~/.claude/hooks/…` —
+  and `mailbox-wake-arm.sh` + `goal-inert-watch.sh` are already wired there while equally absent from
+  that dir, with the account running. Link-first is **additive and harmless, not load-bearing**; the
+  paragraph is kept with the correction attached so it stops being cited for a hazard that does not
+  exist. (`0013`'s header measures the same thing independently at `:31-38`.)
+
+  **STAGED ≠ APPLIED, stated so the close is not misread.** `0009` is ledgered **`staged`**, never
+  `applied` — the intended c10 contract. So the row's stored falsifier keeps reading 1 on the LIVE
+  fleet until the operator runs it, exactly as for `4ce34a4f703c` and `11da376d60e3`, both already
+  `done`. The row's stated gap — *"even a perfect operator run of every staged c10 leaves this ONE
+  line drifting"* — is what is now false. **Consequence for `02e67ee88123`:** its self-close is now
+  **mechanically reachable for the first time**; it stays OPEN and self-closes when the dirs actually
+  agree. The operator step is already filed as `f30fa039f98f`, untouched.
+
+  **WRONG CAUSES REJECTED.** (1) *"`0009` omitted it — an incomplete enumeration"*: the row's own
+  framing, and the most comfortable one available, because it is the shape the PREVIOUS recycle just
+  found. Refuted by two commit dates. **The freshly-learned lesson is the one most likely to misfile
+  the next row.** (2) *"Wire it with `timeout 5` like its five siblings"* — sameness-as-pattern
+  (method 51's converse). All five of `0009`'s entries carry `5`, so `5` looked like house style; the
+  fleet's spelling for THIS hook is no key at all, and the falsifier could not have told me. (3)
+  *"The link half is justified by `0009`'s stated dangling-hook hazard"* — the links are wanted, but
+  for a different reason (the 55 runtime `$CLAUDE_CONFIG_DIR/hooks/…` resolution sites), not that one.
+
+  **Owed suites — `--direct` **1**, `--explain` named **2**: `claude-next-guardrail-parity-migration`
+  (13/13, ~2 s) + `bats-assert-liveness` (36/36, ~13 s), plans matched, 0 skips.** Red-proof: PRE
+  (origin/main's `0009`, `cmp`-identical suite) `1..13 ok=9 notok=4`; HEAD `1..13 ok=13 notok=0`; the
+  9 pre-existing tests green on **both** arms; fix needle asserted **0 pre / 10 head** before running.
+
 - **2026-08-22 — drain recycle #143: three rows were one gap, and the gap's own cure enumerated four
   members of a five-member fleet. filed 1 / closed 2 / landed 1 commit (CODE). A whole CONDITION
   retired; the ownership decision closed two rows exactly as #142's brief predicted it might.**
