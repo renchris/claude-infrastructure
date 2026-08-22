@@ -620,6 +620,103 @@ mk_failed_migration() {
   [ ! -s "$BATS_TEST_TMPDIR/err2.txt" ]
 }
 
+# ── the BOUNDED-READ lever (2026-08-21, backlog 4fe8d531ce68) ────────────────────────────────────
+# `_bounded` runs `timeout <secs> <cmd…>`. A shim FIRST on PATH makes ONE named read fail exactly
+# the way a real timeout does — empty stdout, rc 124 — while every other read passes through
+# untouched, so the fixture is a scalpel rather than a broken box.
+#
+# THE MARKER FILE IS THE CONTROL THAT CAN FAIL. Both cases below assert a `?`, and `?` is also what
+# a shim that never ran would NOT produce — but a fixture that silently stopped reaching the read at
+# all would leave the same green if the assertion were only on the ledger's output. So each test
+# asserts the shim was on the executed path before reading its verdict (MEMORY.md
+# positive-control-the-denominator). It also makes these cases deterministic on a runner with no
+# coreutils: real `timeout` is homebrew-only on this box, and `command -v timeout` finds this one
+# either way — without it, `_bounded` would silently run UNBOUNDED and both cases would go vacuous.
+mk_timeout_shim() {                        # $1 = argv token to fail on ; $2 = marker path
+  local dir="$BATS_TEST_TMPDIR/shimbin"
+  mkdir -p "$dir"
+  # ONE redirect, not four (SC2129) — and it is not only style here: a half-written shim would
+  # still be +x and would exec as a broken interpreter, turning a real verdict into a crash.
+  # `shift` drops _bounded's seconds argument; everything unmatched passes straight through.
+  printf '#!/usr/bin/env bash\nshift\nfor a in "$@"; do case "$a" in %s) echo fired >> "%s"; exit 124 ;; esac; done\nexec "$@"\n' \
+    "$1" "$2" > "$dir/timeout"
+  chmod +x "$dir/timeout"
+  PATH="$dir:$PATH"; export PATH
+}
+
+# ── 2f. THE ROW ITSELF: a FAILED added-file read is not a read of zero added files ──
+# `_adds="$(_bounded … || true)"` swallowed the bound's rc, and a swallowed failure is
+# INDISTINGUISHABLE at that point from a clean read of no adds: `_adds` is empty either way and
+# `grep -c .` answers 0. 0 means "no added file" — the one converge lag that gets NO budget — so the
+# ledger rendered ✅ SAFE TO CLOSE off a sensor that never reported. The `?` arm existed but was
+# reachable only through the cat-file miss, never through the bound.
+@test "bounded added-file read FAILS ⇒ LIVE_ADDS=?, never the phantom 0 that clears the close" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1
+  # CONTROL: unaided, this exact fixture SEES the add and breaches. Without it a `?` below could
+  # come from a fixture that never had an add to find.
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+
+  mk_timeout_shim '--diff-filter=A' "$BATS_TEST_TMPDIR/shim-adds"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-adds" ]              # the shim WAS on the executed path
+  [ "$(field "$output" LIVE_ADDS)" = "?" ]          # pre-fix: 0
+  # ✅ is the CORRECT rung here and the point of the fix is not to change it: an unresolvable sensor
+  # may not manufacture a rung either. What changes is that the close now SAYS the check did not
+  # resolve, instead of asserting a clean bill of health over a question nothing answered.
+  [ "$(field "$output" RUNG)" = "✅" ]
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qi "UNRESOLVED"
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-adds.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-adds.txt" ]
+}
+
+# ── 2g. THE SIBLING READ, one line up: a FAILED lag read is not a lag of zero ──
+# `lag="$(_bounded … || echo 0)"` had the same shape and a worse landing: 0 is INSIDE every commit
+# budget, so an unreadable live layer rendered "converging (0 commit(s) behind; within the converge
+# budget)" — a comparison reported as made against a number nothing read. LIVE_LAG feeds arithmetic,
+# so it takes `?` plus a guard rather than LIVE_SRC=unknown: returning early would ALSO skip the
+# added-file read, and an add breaches at lag 1, so one transient failure would have silenced a 🚀
+# the other sensor could still have found.
+@test "bounded lag read FAILS ⇒ LIVE_LAG=?, commit budget abstains, no phantom 'within budget'" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=1
+  advance_trunk 3                                   # edits only; 3 > 1 ⇒ the COMMIT budget is the lever
+  # CONTROL: unaided, this fixture breaches ON THE COUNT — so the `?` below is the read failing,
+  # not the lag being small.
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+
+  mk_timeout_shim 'HEAD..*' "$BATS_TEST_TMPDIR/shim-lag"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/shim-lag" ]
+  [ "$(field "$output" LIVE_LAG)" = "?" ]           # pre-fix: 0
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]      # --is-ancestor still answered; only the COUNT failed
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]          # and the added-file read still ran — not skipped
+  [ "$(field "$output" RUNG)" = "✅" ]
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -qi "UNREADABLE"
+  # the two phantom comparisons, pinned as ABSENT — each asserts a bound against a lag nothing read
+  ! printf '%s' "$output" | grep -qi "within the converge budget" || false
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q "within budget (1)" || false
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err-lag.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err-lag.txt" ]
+}
+
 # ── 3. past the COMMIT budget ⇒ 🚀, and the next-verb points at the converger ──
 @test "live behind PAST the commit budget ⇒ RUNG=🚀 (landed but not live)" {
   ok_state

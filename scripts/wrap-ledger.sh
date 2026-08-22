@@ -789,7 +789,7 @@ _count_failed_migrations() {
 # Sets LIVE / LIVE_SRC / LIVE_SHA / LIVE_LAG / MIG_FAILED / LIVE_BREACH. Called ONLY on the
 # ✅-eligible path with a resolved trunk (see the rung block) — a worse rung cannot be changed by it.
 compute_live_layer() {
-  local my_origin live_origin sha lag now ct age_s
+  local my_origin live_origin sha lag lag_rc now ct age_s _adds _arc
 
   # `git config --get remote.origin.url` is the cheapest probe that answers "same repo?" and it
   # touches no network. It is compared BYTE-EQUAL on purpose: a fuzzy match (ssh-vs-https, .git
@@ -819,8 +819,24 @@ compute_live_layer() {
   # pure-read, and a fetch writes objects and refs into someone else's repo. So this reads the live
   # layer's LAST-FETCHED trunk ref and can only UNDERSTATE the lag — which fails toward ✅, never
   # toward a manufactured 🚀. Keeping that ref fresh is the converger's job, not the ledger's.
-  lag="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" rev-list --count "HEAD..$TRUNK" 2>/dev/null || echo 0)"
-  case "$lag" in ''|*[!0-9]*) lag=0 ;; esac
+  #
+  # CAPTURE THE BOUND'S OWN rc (2026-08-21, backlog 4fe8d531ce68's sibling read). This was
+  # `|| echo 0`, which swallowed it: a timed-out or otherwise failed read produced lag=0 — inside
+  # every budget — so an UNRESOLVABLE sensor rendered `✅ SAFE TO CLOSE` over a live layer it had
+  # never actually measured. That is the exact inverse of this function's law two branches up.
+  # `?`, not `unknown`-and-return: returning here would ALSO skip the added-file read below, and an
+  # ADD breaches at lag 1 with no budget — so a transient failure on THIS read would have silenced
+  # a true 🚀 that the adds read could still have found. `?` is not a number, so the commit-budget
+  # arm below skips it (it is guarded), while the TIME budget and the added-file arm still decide.
+  # It reaches the two out-of-repo consumers safely: completion-assert.sh and operator-readout.sh
+  # both normalise a non-numeric LIVE_LAG before use.
+  lag="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" rev-list --count "HEAD..$TRUNK" 2>/dev/null)"
+  lag_rc=$?
+  if [ "$lag_rc" -ne 0 ]; then
+    lag="?"
+  else
+    case "$lag" in ''|*[!0-9]*) lag=0 ;; esac
+  fi
   LIVE_LAG="$lag"
 
   # --is-ancestor, never equality: the live layer legitimately runs AHEAD of this session's HEAD
@@ -850,9 +866,20 @@ compute_live_layer() {
     # readable here in both topologies; when it is not, say `?` and change NOTHING — an unresolvable
     # sensor never manufactures a rung, exactly as LIVE_SRC=unknown does one branch up.
     if git cat-file -e "${LIVE_SHA}^{commit}" 2>/dev/null; then
-      _adds="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --diff-filter=A --name-only "$LIVE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
-      LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"
-      case "$LIVE_ADDS" in ''|*[!0-9]*) LIVE_ADDS=0 ;; esac
+      # CAPTURE THE BOUND'S OWN rc (2026-08-21, backlog 4fe8d531ce68). This was `|| true`, which
+      # swallowed it — and a swallowed failure is INDISTINGUISHABLE HERE from a clean read of zero
+      # adds: `_adds` is empty either way, `grep -c .` answers 0, and 0 means "no added file", the
+      # one converge lag that gets NO budget. So a timed-out sensor manufactured the ✅ the comment
+      # four lines above forbids it from manufacturing. The `?` arm already existed but was
+      # reachable ONLY through the cat-file miss, never through the bound.
+      _adds="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --diff-filter=A --name-only "$LIVE_SHA" "$HEAD_SHA" 2>/dev/null)"
+      _arc=$?
+      if [ "$_arc" -ne 0 ]; then
+        LIVE_ADDS="?"
+      else
+        LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"
+        case "$LIVE_ADDS" in ''|*[!0-9]*) LIVE_ADDS=0 ;; esac
+      fi
     else
       LIVE_ADDS="?"
     fi
@@ -881,7 +908,12 @@ compute_live_layer() {
     # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
     if [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
       LIVE_BREACH=1
-    elif [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ] || [ "$age_s" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
+    # LIVE_LAG carries `?` on an unresolved bounded read, for the same reason and with the same
+    # guard: an unresolvable sensor may not breach, and it may not clear either — so it drops out of
+    # the COMMIT budget and leaves the TIME budget (which is derived from HEAD's own committer date
+    # and needs no live read) as the arm that still decides.
+    elif { [ "$LIVE_LAG" != "?" ] && [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ]; } \
+         || [ "$age_s" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
       LIVE_BREACH=1
     fi
   fi
@@ -990,7 +1022,14 @@ else
     # a land. Not a rung (it would fire at every close), but not silent either: the one line says
     # the conclusion is in flight. It ranks last because an absent DoD is the less-verified fact and
     # wins the single line; this one still reaches every consumer via LIVE_SRC/LIVE_LAG below.
-    RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the converge budget)."
+    # "within the converge budget" is a CLAIM ABOUT A MEASUREMENT, so it may only be said when the
+    # measurement was made. On `?` the commit budget abstained and the TIME budget is what cleared
+    # this close — say that, rather than asserting a bound on a lag nothing read (2026-08-21).
+    if [ "$LIVE_LAG" = "?" ]; then
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (commit lag UNREADABLE; no added file and inside the time budget)."
+    else
+      RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the converge budget)."
+    fi
   fi
   fi   # closes the CUSTODY_OPEN branch (its 🔧 arm above short-circuits this whole chain)
 fi
@@ -1051,7 +1090,12 @@ emit_full() {
   # different claims and a ledger that conflates them is how a conclusion ships inert.
   # The BEHIND verdict is three-valued, not two: an added file breaches with the lag still inside
   # the budget, so "PAST budget" would be a false reason attached to a true rung.
+  # `within budget (N)` asserts a COMPARISON; on an unreadable lag no comparison was made, and
+  # printing the budget beside a `?` reads as though it had been (2026-08-21). Stated as the base
+  # rather than appended, so the stronger causes below still overwrite it — but each of those names
+  # a fact that was actually READ, so none of them inherits the phantom comparison.
   local behind_why="within budget (${LIVE_BUDGET_COMMITS})"
+  if [ "$LIVE_LAG" = "?" ]; then behind_why="commit lag UNREADABLE — budget not applied"; fi
   if [ "$LIVE_ADDS" = "?" ]; then behind_why="${behind_why} · added-file check UNRESOLVED"
   elif [ "$LIVE_ADDS" -gt 0 ]; then behind_why="${LIVE_ADDS} NEW file(s) ABSENT — no budget covers an add"
   elif [ "$LIVE_BREACH" -eq 1 ]; then behind_why="PAST budget"; fi

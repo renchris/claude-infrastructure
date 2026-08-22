@@ -87,6 +87,102 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-21 — drain recycle #120: the ledger's two bounded live-layer reads answered a FAILED
+  read with the same value they use for a CLEAN read of "nothing to report", and in both cases that
+  value is the one that clears the close. filed 0 / closed 1 / landed 1 commit.**
+  Gate 1 clear — **no `.page` file on disk** (`find`, not a glob). Gate 2: the live `qos-rewrite.sh`
+  **still differs** from trunk, 106 diff lines (checkout **21** behind, budget 25) — #114's fix
+  landed and *not running* for **seven consecutive recycles**. Zero heredocs; every probe written
+  with the Write tool. Fold at open: `master-convergence-deadlock` **46/4** — a *sixth* consecutive
+  window with no movement. **This close moves it to 45/4 — the first movement in six windows, and
+  this recycle caused it.**
+
+  Target: #119's handover — row `4fe8d531ce68`, *"`wrap-ledger.sh` LIVE_ADDS timeout yields `0` not
+  `?`, hiding the one converge lag that gets no budget."* **CLOSED. Mechanism true, harm real, and
+  the same defect turned out to be sitting one line above it on a different variable.**
+
+  **1. The defect, reproduced with a control that could have failed.**
+  `_adds="$(_bounded … --diff-filter=A … || true)"` swallowed the bound's rc, and *at that point a
+  swallowed failure is indistinguishable from a clean read of zero adds* — `_adds` is empty either
+  way, `grep -c .` answers `0`, and `0` means "no added file", the one converge lag that gets **no
+  budget**. The `?` arm existed at the next line but was reachable **only** through the `cat-file -e`
+  miss, never through the bound. Probe: three arms, one file — (A) unaided, the fixture reads
+  `LIVE_ADDS=1 RUNG=🚀`; (B) with `timeout` shimmed to fail *only* that one read, `LIVE_ADDS=0
+  RUNG=✅`; (C) a marker file proving the shim was on the executed path, without which (B) is a
+  non-verdict. All three held: **an unresolvable sensor rendered `✅ SAFE TO CLOSE`.**
+
+  🚨 **2. THE SIBLING READ ONE LINE UP HAS THE SAME SHAPE AND A WORSE LANDING — fixed in the same
+  diff (`Scope (grown): +LIVE_LAG`, Follow-On Gate F1–F4 PASS).**
+  `lag="$(_bounded … rev-list --count "HEAD..$TRUNK" … || echo 0)"`. A failed read became lag `0`,
+  which is **inside every commit budget**, so the close rendered *"converging (0 commit(s) behind;
+  within the converge budget)"* — a comparison **reported as made** against a number nothing read.
+  Measured on the same harness at a real lag of 30 against a budget of 1: unaided `LIVE_LAG=30
+  RUNG=🚀`; with the read failed, `LIVE_LAG=0 RUNG=✅`. Not filed as a separate row: it is a one-line
+  sibling inside the same function, and filing it would have spent another whole recycle on a fix
+  that was already in hand.
+
+  🚨 **3. THE FIX FOR THE SIBLING IS *NOT* THE STATE ALREADY PRECEDENTED ONE BRANCH UP.** The
+  function's own idiom for "we could not make the read" is `LIVE_SRC="unknown"; return 0`, and that
+  was the first draft. **Rejected on tracing the control flow: `return 0` also skips the added-file
+  read below it**, and an ADD breaches at lag 1 with no budget — so one transient failure on the
+  *lag* read would have silenced a true `🚀` that the *adds* read could still have found. `LIVE_LAG`
+  takes `?` plus a guard on the single arithmetic consumer instead, which keeps the two sensors
+  independent. This is MEMORY.md `proxy-must-be-independent-of-what-it-supplements` arriving as a
+  control-flow question rather than a statistical one.
+
+  **4. The consumers needed nothing — census FIRST, and it collapsed the fix to the producer**
+  (method 55's inverse). All seven `LIVE_ADDS` readers already handle `?`: five guard `!= "?"`
+  in-file, and the two out-of-repo ones (`hooks/completion-assert.sh:493`,
+  `hooks/operator-readout.sh:561`) normalise a non-numeric value before use — `completion-assert.sh`
+  says so in its own comment, *"the two auditors cannot disagree"*. `LIVE_LAG` has exactly **one**
+  arithmetic consumer (`:884`); everything else is display, and `completion-assert.sh:488` already
+  maps a non-numeric lag to `?`. **Two guarded lines, no consumer sweep.**
+
+  **5. Two sentences were also made honest, because a `?` that renders as a claim is not a fix.**
+  The `✅` one-liner said *"within the converge budget"* and the `--full` block said *"within budget
+  (25)"* — both assert a **comparison** — while interpolating an unread lag. On `?` they now read
+  *"commit lag UNREADABLE"* and name the arm that actually cleared the close (the time budget, which
+  is derived from HEAD's own committer date and needs no live read).
+
+  **Evidence.** `scripts/wrap-ledger.sh` (2 read sites + 1 budget guard + 2 renderings),
+  `tests/wrap-ledger.bats` +2 cases (2f, 2g) — an EXTEND, not an ADD, so no `LIVE_ADDS` false
+  positive from my own land (row `4e6a51df2a84`). Suite **77/77** plan `1..77`, 0 skips; under
+  `offbox-run.sh` (`env -i LC_ALL=C`) **77/77 green in 48 s**, read off the state column, never the
+  rc. Consumers re-run: `wrap-ledger-memo` 23/23, `completion-assert` 91/91, `operator-readout`
+  81/81 — all plans matched, 0 skips. `test-hermeticity-lint tests` clean over 527 suites, **0 new
+  leaks**; `shellcheck -S style` clean; `bats-shellcheck-lint` clean; `bats-kill-guard-lint` clean;
+  `bats-assert-liveness` clean; `self-path-lint --selftest` 32/32.
+  **Red-proof** in a scratch tree from the pinned parent (never a file swap): negative control
+  asserts the parent carries **both** prior shapes and **not** the cure, else it aborts; the two new
+  cases go **2/2 not-ok**, each failing on the exact assertion that names the defect
+  (`LIVE_ADDS=?`, `LIVE_LAG=?`) — with their *control* arms passing at the parent, which is what
+  proves the fixture reaches the mechanism there and only the cure is missing.
+
+  **Wrong causes rejected** (method 43): (a) the row's cited **`wrap-ledger.sh:712`** — stale, that
+  is the BLOCKED decision-count block; the real site is `:853`. (b) *"the consumers need fixing
+  too"* — refuted by the census in §4. (c) *"the `|| true` is load-bearing for errexit"* — refuted at
+  `:152`, the script is `set -uo pipefail` with **no `-e`**, so it never was. (d) *"test for rc
+  124"* — rejected: `timeout`'s 124 collides with a child's own (MEMORY.md
+  `timeout-rc-collides-with-the-childs-own-rc`), and `_bounded` runs **unbounded** when `timeout` is
+  absent, so 124 is neither necessary nor sufficient; any non-zero from `git diff --name-only` means
+  the read did not complete, which is the whole question. (e) *"force the timeout with a fractional
+  `WRAP_LIVE_TIMEOUT_S`"* — rejected as the **test** lever: real `timeout` here is
+  `/opt/homebrew/bin/timeout`, so under `env -i` or a hardened `PATH` `command -v timeout` fails and
+  `_bounded` runs unbounded — the case would have gone **vacuous exactly on the runner that
+  matters**. The shim makes `command -v timeout` succeed either way, which is why it is the fixture
+  and not a convenience. (f) *"file the sibling as a new row"* — see §2. (g) *"LIVE_SRC=unknown for
+  the lag"* — see §3.
+
+  **MEASURED, NOT FILED — the shipped `grep -c` has method 37's double-output shape and is correct
+  by accident.** `LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"`: under
+  `pipefail`, zero adds makes `grep -c .` print `0` **and exit 1**, so `|| echo 0` also runs and the
+  substitution captures `0\n0`. The `case … *[!0-9]*` normaliser on the next line catches the newline
+  and yields `0` — the right answer, reached by a path nobody designed. Left alone deliberately: the
+  outcome is correct and the normaliser is the documented guard. **My own red-proof script tripped
+  the identical shape** (`n_cure=$(grep -c … || echo 0)` → `[ "0\n0" -ne 0 ]` → *"integer expression
+  expected"*), which did **not** change its verdict — a genuinely-cured parent yields a bare `1` with
+  rc 0 — but it is worth recording that the harness and its subject shared a defect this session.
+
 - **2026-08-21 — drain recycle #119: `/compact-memory` bundled a population-independent conclusion
   onto a population-dependent premise, so at the populations where the premise fails the sound
   argument falls with it — and the premise's own constant, `17,100`, is a THIRD KB convention this
