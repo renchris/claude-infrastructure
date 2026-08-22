@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #150: the artifact's own line 3 ordered its own deletion, so its
+  absence from trunk was the SPECIFIED end state — and the answer it existed to produce had been on
+  trunk for 23 h before the row was filed. filed 0 / closed 1 / landed 1 commit (DOCS).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (thirteenth consecutive clean use). Gate 2: **`qos-diff` empty, the thirty-second
+  consecutive clean reading.** Converge lag **8** at open (budget 25; #149 landed an `M`, no ADD).
+  Board at open: **open 259 / blocked 183 / done 2140 / claimed 4, of 2586** — open and done exactly
+  as #149 left them; **blocked 182 → 183 and retire-in-one 42 → 39 moved in the gap, by siblings, not
+  by this session.** **Declared before closing: this close moves open (259 → 258) and retire-in-one,
+  and does NOT move `master-convergence-deadlock`, which held at 34 open / 6 blocked — a FOURTEENTH
+  consecutive window closing outside the nominal warm effort.**
+
+  **CLOSED — `446f8f8b33f0`** (`stranded-probe-conclusion-semantics`): *"recover claude-infrastructure
+  branch probe-conclusion-semantics — 1 patch content-absent from origin/main (tip b2afc59e6)."*
+  **TRUE IN MECHANISM, ZERO IN HARM, AND THE PRESCRIBED REMEDY INVERTED. No code change.**
+  The bytes really are absent — re-measured same-moment, both files absent from `origin/main` and the
+  branch patch-id `07662a18bd6af61b` matching no commit in trunk's last 400. But line 3 of BOTH files
+  reads **`# THROWAWAY PROBE — deleted once measured. Records the answer in
+  docs/plans/CI_GREEN_PRODUCER_NOTIFICATION.md so nobody re-runs it.`** Recovering the branch would
+  re-land two workflows whose first line instructs their own deletion.
+
+  🚨 **THE LINT (the FORTY-FOURTH): BEFORE RECOVERING A "CONTENT-ABSENT" BRANCH, READ THE FIRST THREE
+  LINES OF THE FILES IT ADDS — AN ARTIFACT CAN SPECIFY ITS OWN ABSENCE, AND A PATCH-ID ORACLE CANNOT
+  SEE THAT.** The oracle asks *"are these bytes in main"* and answered correctly; the defect is that
+  no other question was asked. There is no third answer for **must never be**. That is the gap the
+  memory *landedness-oracle-is-blind-to-intent* already names (SUPERSEDED + PARKED-BY-DESIGN; only
+  the branch's own doc answers why it exists) — and here the branch's own doc was **line 3 of the
+  file itself**, cheaper to read than the patch-id was to compute. Umbrella for the class:
+  `806277b4eb8b`. **No new row filed** — the class is already owned and the lesson already in memory.
+
+  **THE TIMELINE WAS THE WHOLE ADJUDICATION** (UTC, `%ct`-derived): tip `b2afc59e6` authored
+  **2026-08-15T22:58:34Z** → `docs/plans/CI_GREEN_PRODUCER_NOTIFICATION.md` ADDED to trunk
+  **2026-08-15T23:07:40Z**, *nine minutes later* → row filed **2026-08-16T22:57:43Z**, **23 h 50 m
+  after the answer was already on trunk.** The #145 shape: already obsolete when filed. §2 of that
+  doc, *"What was measured, not assumed"*, records all three answers the two probe files pose —
+  a job skipped by an `if:` on a needs-output publishes `completed:skipped` with run conclusion
+  `success`, and *"`skipped` is not `success`"*, so `scripts/offbox-green-pull.sh` falls to its no-op
+  arm. The cure shipped too: trunk's `.github/workflows/hermetic.yml` carries 4 matches for
+  `continue-on-error|skipped`, and the doc's before/after table records the `verdict` check-run moving
+  `completed:failure` → `completed:skipped`. **Branch NOT deleted** — its header says "deleted once
+  measured" and it has been, but deleting a ref is destructive and the operator's call.
+
+  🚨 **AND THE ROW THIS RECYCLE DELIBERATELY LEFT OPEN, with the measurement that makes it
+  ADJUDICABLE — `5b1cb9415742` (`deploy-wedged` NO-GREEN-AHEAD is unbudgeted). #149's brief called it
+  the cheapest question-shaped close on the board. IT IS NOT. Do not spend the same hour twice.**
+  Both horns of its stated fork are **already refused in writing in `bin/cc-blockers`' own prose**,
+  each with a dated live-host measurement: budgeting it on `CC_DEPLOY_MAX_LAG_*` is refused at
+  `:490-498` (the lag is a PROXY that *shares a cause with the freeze* — measured 2026-08-08, 27 raw
+  ff's in the reflog reset BOTH of `deploy-stale`'s legs while the lane had been wedged 12 h, so "the
+  producer of the wedge is also the suppressor of its alarm"), and deferring to `deploy-stale` is
+  refused at `:46-53` (that is the exact blindness the structural test was built to escape).
+  **But the row's THIRD claim survives, and it is the live one.** The rung's justification says the
+  state is *"absorbing — deploy-live has nothing it may advance to and refuses every tick until a new
+  green lands ABOVE the layer"*. **`scripts/deploy-live.sh`'s own header refutes that in one line**
+  (`:40-42`): *"T1's producer emits 0.17 greens/day, so the healthy silent path is unreachable in
+  practice and **every advance has to come through T2's absence-of-evidence door**"* — and T1H
+  (`:28-33`) carries **no lag budget at all**, advancing on a positive off-box result. So no-green-
+  ahead is the ORDINARY state the ladder was designed to advance through, not an absorbing one, which
+  is exactly what the row observed on 2026-08-10 (the layer advancing through it via T2).
+  **Measured today, read-only, over the real store** (`$HOME/.claude/autonomy/postland/stamps`, 386
+  stamps — 201 cut / 137 red / 40 green / 8 hung): the newest green's commit **IS** live HEAD
+  (`93c0f5255ce5`, and `last-green` holds the same sha), so `merge-base --is-ancestor HEAD HEAD` is
+  true and **the rung does not fire right now** — but that is a SAMPLE, not a rate (method 67), and
+  greens 2-12 sit 24 to 136 commits behind live HEAD. **Closing it on today's silence would be a
+  vanished-precondition close (method 21).** What it needs is an owner's call on alarm design, not a
+  drain adjudication. Two nulls that look like evidence and are not: `postland/deploy.log` greps 0 for
+  `deploy-wedged` (**wrong producer** — that is the converger's log, the rung is `cc-blockers`', so
+  method 49), and `autonomy/deploy-when-green.log` is **0 bytes** (method 54 — no emission on the
+  healthy path).
+
+  **ALSO MEASURED, NOT FILED, for whoever picks up `84394a44f133`** (`CC_INSTALL_RESIDENT_RELOAD`
+  flip): its central claim — *"the live copies carry NEITHER the actuator nor the reporter"* — is now
+  **half false and half unmeasurable as stated**. `~/.claude/scripts/deploy-live.sh` is a symlink into
+  the checkout and greps **4** for `resident_image_stale` (row measured 0 on 2026-08-20), because the
+  checkout has advanced past `0c34771ca`; and `~/.claude/install.sh` **does not exist at all**, so the
+  row's `grep -c … = 0` on it was #138's wrong-path zero, not a measurement of frozen bytes. The
+  row's ASK (repair the passive-cycle criterion before flipping) still stands and its own title says
+  **do not flip on n=1** — so this is a narrowing, not a close.
+
+  Owed suites: `--direct` **EMPTY** (docs-only); instrument control `492c51066~1...492c51066` read
+  **32**, a stable THIRTEEN-recycle control. `--explain` named the same three standing docs-consumers
+  as #145/#146/#148/#149, all run.
+
 - **2026-08-22 — drain recycle #149: the subject had been byte-frozen for seven days BEFORE the row
   was filed, so "stale" was mechanically unavailable — the row was never true. filed 0 / closed 1 /
   landed 1 commit (DOCS).**
