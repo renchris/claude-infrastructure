@@ -595,6 +595,30 @@ Mixed turn → show the worst-open rung only.
 decision. Anything that does not change that decision belongs in the commit message, the plan file,
 or nowhere — a close needing paragraphs has buried its own decision point. Cap every close at:
 
+🚨 **The cap is a NUMBER and the exclusions are NAMED.** Until 2026-08-23 this whole section was
+adjectives — "focused", "brief", "pyramid-lite" — and an adjective is scored by the model against
+its own notion of the adjective, so it never binds. Claude Code's own built-in recap prompt, pulled
+verbatim out of the 2.1.220 binary (`docs/research/recap-prompt-extraction-2026-08-23.md`), spends
+half of its 41 words on precisely the two things this lacked:
+
+> *The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences, no
+> markdown. Lead with the overall goal and current task, then the one next action. Skip root-cause
+> narrative, fix internals, secondary to-dos, and em-dash tangents.*
+
+Borrow both. **Budget: line 1 ≤ 30 words, the whole close ≤ 120** — excluding any rendered block and
+the command, which are reproduced verbatim per the Silver-Platter rule and are never counted against
+it. **Skip, by name: root-cause narrative · fix internals · secondary to-dos · em-dash tangents.**
+Those four are what a coding agent actually does when it over-explains, and each is checkable in a
+way "be concise" is not.
+
+⚠️ **Spend that budget by DROPPING items, never by compressing the survivors.** Anthropic's Opus 5
+guidance — shipped inside the same binary, in the bundled `claude-api` skill — is explicit that this
+is the failure mode: *"Being readable and being concise are different things, and readable matters
+more… The way to keep output short is to be selective about what you include, not to compress the
+writing into fragments, abbreviations, arrow chains like `A → B → fails`, or jargon."* A close that
+reaches 120 words by turning its sentences into `sha → gate → ✅` has broken this rule, not met it,
+and it re-creates the cross-reference defect the `G-A` incident below already cost a round-trip.
+
 1. **Line 1 = the governing state**, the rung verbatim from live reads. The answer, first — no
    preamble, no narrative wind-up, no chronology of what you tried. It must carry an **idea, not a
    category**: *"205 manual steps"* names the pile and says nothing about it — the blank assertion
