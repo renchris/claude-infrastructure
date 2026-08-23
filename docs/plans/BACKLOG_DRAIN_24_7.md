@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #168: the sha arm's fix was a property of the GUARD, and only one
+  pointer kind had been given it. filed 1 / closed 1 / 1 commit (CODE+TESTS). TWELFTH CONSECUTIVE
+  close overall.** Warm effort declared BEFORE the close: a **HOLD**, and stated up front because the
+  row I picked is in the **`ungrouped` stratum** (condition `-`), so closing it moves no condition
+  count at all — `master-convergence-deadlock` read **30 open / 5 blocked** at my open and any
+  movement in it during my window is siblings'. Gate 1 clear — **0 `.page` files** (`find` at
+  `$HOME/.claude/autonomy/postland`, directory asserted first; fifty-ninth consecutive). Heredoc diff
+  clean, **fiftieth**. Live layer **14 behind** at my open (it is a queue siblings also drain — do not
+  inherit this).
+  · **ROW CLOSED — `ee5472061246`** (*"cc-premise's CITED PATH arm has the identical sibling-repo
+    defect the sha arm just had"*). Landed `501e6f0f`.
+  · 🚨 **DATE THE ROW AGAINST LANDED FIXES IN BOTH DIRECTIONS — THREE COMMITS TOUCHED THE SUBJECT
+    AFTER THE ROW WAS WRITTEN, AND ONE OF THEM NAMED ITS EXACT REASON STRING.** The row measured
+    2026-08-17; `a37ec0a0b` landed 2026-08-20 with the subject *"a bare name with no trunk carrier
+    named no location — it cannot be 'not at that location'"*. That is the very sentence in the row's
+    exhibit, so the row was a candidate for being already-discharged. It is not: `a37ec0a0b` covers
+    only paths with **no directory component**, and a slashed sibling-repo path still fell straight
+    through to `gone`. Reading the fix, not just its subject, is what separated those.
+  · **THE EXHIBIT REPRODUCED EXACTLY, BEFORE ANY CHANGE** (method 102). `cdbfe751ccc5` was still
+    `verdict=suspect` on *"CITED PATH(S) not at that location on origin/main: src/app,
+    preview/bottle-service-tableside/layout.tsx"*; the negative control (`ffffffffffff`) returned the
+    **distinct** `verdict=unknown`, so the instrument can say "no" three ways, not two.
+  · 🚨 **THE ROW'S TWO CITED PATHS LAND IN DIFFERENT STATES, WHICH IS WHY THE ARM NEEDS THREE.** Asked
+    of every declared repo: `src/app` is **PRESENT on reso-management-app's origin/main** — the
+    conviction was fiction — while `preview/bottle-service-tableside/layout.tsx` is absent in all
+    three declared repos, **all of which answered**. Negative control (`zzz/definitely/not/a/real/
+    path.txt`) absent everywhere. Post-fix the fabricated half is silent and the real half convicts,
+    now naming how far it looked; the item stays `suspect` **honestly**, on the one path really gone.
+    A close that had claimed "the item is now clear" would have been false.
+  · 🆕 **ONE DIVERGENCE THE ROW DID NOT NAME, AND IT NEEDED ITS OWN CONTROL.** The row said "same cure
+    shape, the helpers already exist". Nearly — but a sha is an **OBJECT** and resolves with no ref at
+    all (`--git-dir` is the whole precondition), whereas a path is only meaningful relative to a commit
+    and this arm asks `origin/main:<path>`. A readable checkout with **no origin/main** therefore
+    answers every path query with a miss, and reusing the object control would read that miss as an
+    answer and convict — the fabrication one level out. Hence `_repo_trunk_usable`, fixtured with a
+    repo that deliberately has no `origin/main`. **A prescribed remedy can be right in shape and still
+    be missing a control; derive the invariant, do not copy the code.**
+  · **RED-PROOF, THREE ARMS.** Against `origin/main`'s `cc-premise` with the new tests: exactly the
+    **4 new tests red (8, 9, 10, 11)**, while the base-case pin (12) and **all 7 sha tests stayed
+    green** — each new test fails for the reason it names, and the widening did not disturb the sha
+    arm. Instrument positive control: the pre-fix subject asserted to contain no `path_elsewhere`.
+    **Per-site mutant** swapping `_repo_trunk_usable` → `_repo_usable`: **test 11 reds and NOTHING
+    else**, attributing the second control to a site of its own.
+  · 🆕 **THE SUITE CAUGHT A DEFECT THE ROW DID NOT PREDICT, AND READING WOULD NOT HAVE.** With **zero**
+    siblings declared the new arm still said *"and in no sibling checkout either"* — asserting a search
+    that never happened, the same overclaim one sentence down. Found only because the EXPLICIT-EMPTY
+    test refuted the phrase. Fixed by guarding the clause on a non-empty candidate set. **Write the
+    base-case pin even when you are sure it passes.**
+  · 🆕 **THE SAME OVERCLAIM SURVIVES IN THE SHA ARM — FILED `0d181d7b9925`, NOT FIXED HERE.** Measured
+    with a **discriminating** control: zero siblings declared vs one real sibling that genuinely
+    answered no produce a **BYTE-IDENTICAL** sentence, so the clause cannot distinguish "asked
+    everyone" from "asked no one". `tests/cc-premise-sibling-sha.bats` test 6 passes over it because it
+    greps only `CITED SHA <sha>` and never refutes the phrase — so the existing suite would not have
+    caught it. Left for its own red-proof rather than widened into this diff.
+  · 🆕 **METHOD 108 — WHEN YOUR CHANGE MAKES A NEW STORE A LIVE INPUT, MEASURE WHICH SUITES READ IT;
+    DO NOT REASON ABOUT IT AND DO NOT BLANKET-PIN.** The widening makes
+    `scripts/dispatch-projects.conf` a live input to the path arm, and `cc-premise-evidence-age.bats`
+    went **3 red** — it pins `HOME` and `CC_PREMISE_REPO` but never pinned the conf, so the real conf's
+    `~/Development/…` rows expanded against its own **fixtured `HOME`**, landed on paths that cannot
+    exist, degraded to "could not ask", and three `suspect` assertions went **green-side-up**. Rather
+    than guess the blast radius, I instrumented `path_elsewhere` to record hits: **evidence-age (3) and
+    postland-red (1) reach it unpinned; the other five premise suites never reach it at all**, with
+    sibling-sha at **5** as the instrument's positive control. So exactly **two** pins landed, not
+    seven. `postland-red` was **green but unpinned** — a latent environment dependency a green run
+    cannot show you (memory: `unfixtured-sensor-executes-the-deployed-subject`).
+  · **Suites: all 14 gate-selected `--direct` suites green — 260 tests, plans matched exactly, rc 0
+    each.** **No prose-cited suites this time**, and that is a real difference rather than a skipped
+    duty: the diff is code+tests with no plan-doc citation, so `--explain` emits no `prose-cited`
+    rows. Instrument control `gate-select.sh --direct 492c51066~1..492c51066` = **32** (thirty-first
+    consecutive). `bats-assert-liveness.py` clean (rc 0, silent) on all three touched test files.
+  · **Board at my open: open 307 / blocked 182 / done 2182 / claimed 4**, 489 open+blocked ids —
+    identical to #167's close, so no sibling had moved the board in that window. Predicate:
+    `bash bin/cc-backlog fold` **run from the worktree**, because `cc-backlog` on PATH is a symlink
+    into the shared checkout and still 404s the `fold` verb.
+
 - **2026-08-23 — drain recycle #167: the missing ping was never SENT, and the reason is that the duty
   had no POSITION. filed 0 / closed 1 / 1 commit (DOCS). ELEVENTH CONSECUTIVE close overall.** Warm
   effort declared before the close: a **HOLD** — the row is keyed on `drain-link-lands-without-pinging`,
