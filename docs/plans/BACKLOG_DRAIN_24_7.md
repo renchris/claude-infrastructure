@@ -87,6 +87,99 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #166: a row blamed PRIVATE DEFINITIONS, and its own primary exhibit
+  replayed EXACTLY — what was missing was TIME. filed 0 / closed 1 / 2 commits. TENTH CONSECUTIVE
+  close overall, and the NINTH consecutive close of a row that prescribes its own remedy. Warm
+  effort declared before the close: a HOLD — my row is keyed on
+  `ping-cites-unreproducible-population-figure`, so `master-convergence-deadlock` moved 30/6 → 31/5
+  entirely under SIBLINGS and none of that delta is mine.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (**fifty-seventh consecutive 0-page reading**). Gate 2: **`qos-diff` empty, the
+  forty-eighth consecutive clean reading.** Board at open: **open 275 / blocked 200 / done 2167 /
+  claimed 2**; LIVE layer **0 behind** (a sibling drained the queue completely during #165's window
+  — premise 1 holds, it is a queue, not a trend). Store fold positive control `b7252a3bb015` =
+  **OWN=10 / RAW=20**, byte-identical for the FIFTH consecutive recycle; negative control
+  `deadbeefcafe` = 0/0.
+
+  **ROW CLOSED — `5e35b5b1070b`** (condition `ping-cites-unreproducible-population-figure`, its only
+  member — so the close empties that condition and moves NO warm count): *"drain pings cite derived
+  POPULATION figures under private definitions no tool renders, so a verifier cannot audit them."*
+
+  🚨 **THE ROW'S DIAGNOSIS IS REFUTED ON ITS OWN PRIMARY EXHIBIT.** It blamed private definitions and
+  offered three candidate readings. The as-of replay, run through the SHIPPED verb rather than a
+  re-derivation of it, reproduces #127's cited `ungrouped 133->132` **EXACTLY**, under the plainest
+  reading there is (`status=="open"` AND no condition key):
+
+      as-of 2026-08-22T05:00:00Z   ungrouped-open = 134
+      as-of 2026-08-22T05:10:00Z   ungrouped-open = 133      ← the cited opening figure
+      as-of 2026-08-22T05:23:37Z   ungrouped-open = 132      ← #127's own docs-commit instant
+      CONTROL as-of 2099           = 180 == the live fold
+      CONTROL as-of 2020           = 0 rows (empty, not a number)
+      CONTROL malformed × 3        = rc 2, renders nothing
+
+  **#127's citation was correct all along.** Three candidate definitions were never needed to
+  explain it, and the row's own second sentence — *"my replay at its own close: 137->136, constant
+  +4 offset"* — is the tell it did not follow: **a constant offset at BOTH endpoints is the
+  signature of four rows ARRIVING between the citation and the audit**, not of a rival predicate.
+  A rival predicate would have moved the two ends by different amounts.
+
+  🚨 **WHAT WAS ACTUALLY MISSING IS TIME, AND THE SESSION MEASURED IT ON ITSELF.** The ledger is
+  append-only over a board siblings mutate continuously. During this one session it grew
+  **13,343 → 13,388 records** while a sibling unblock sweep moved **17 rows blocked→open**, so
+  **my own opening snapshot (`open 275 / blocked 200`) already replayed LIVE as `293 / 183`
+  twenty-five minutes later.** A verifier auditing a ping against a live board therefore lands on a
+  different number **even when the cited figure was exactly right** — which is indistinguishable
+  from a fabricated one. That, not definitional drift, is why a verifier could not audit these.
+
+  🚨 **CONSEQUENCE FOR THE ROW'S OWN REMEDY (method 101, second consecutive recycle).** Its first
+  arm reads *"a ping cites a count a tool prints"*. That arm, taken literally, is **UNDER-STRONG**:
+  a live-only renderer still leaves a three-day-old ping unauditable, because the board will have
+  moved under it. The measurement that confirmed the bug is the same one that shows the prescribed
+  cure would not have closed it. **`--as-of` is the load-bearing half**, and it exists only because
+  the store carries `ts` on **13,370/13,370** records as ISO-8601 UTC — verified uniform, so
+  lexicographic `<=` IS chronological.
+
+  🚨 **THE ROW POOLED TWO POPULATIONS, AND ONLY ONE IS FIXABLE BY ANY RENDERER** (memory:
+  `zero-claim-must-name-its-excluded-strata`). Its other exhibit, `retire-in-one 46->45`, names a
+  **human judgment with no field behind it**: that string occurs **exactly once in the entire
+  13k-record ledger — inside this row's own title** — and no condition key resembles it (the only
+  `/retire/` match is `retired-memory-budget-recover`, unrelated; my first negative-control label
+  said "empty" while the output showed a row, and reading the OUTPUT rather than my own label is
+  what caught it). No renderer can ever print that figure, at any time, with or without an as-of.
+  For a population the store does not carry, the remedy stays the row's SECOND arm — state the
+  predicate inline — which is now **MANDATORY** in §4.1 invariant 7, the SSOT this chain regenerates
+  its brief from (memory: `instruction-to-a-recycling-chain-dies-at-its-brief`).
+
+  · **NO FOURTH MODEL OF ONE POPULATION.** `--as-of` is ONE `select` in front of the **existing**
+  `reduce` in `fold()`, not a second program — a separate as-of fold would rebuild the exact defect
+  `tests/backlog-fold-agreement.bats` exists to pin. Verified on a **frozen snapshot** (so board
+  drift could not be mistaken for disagreement): `fold`, `list --all --json` and `fold-audit` agree
+  on every stratum — **183 / 2 / 2167 / 293, per-stratum diff IDENTICAL**. Absent `--as-of` the
+  select is a no-op, so every pre-existing caller is byte-unchanged.
+  · **FAIL-CLOSED, and this is the direction that matters.** Unvalidated, `--as-of yesterday` sorts
+  **above** every `2026-` timestamp, so the filter would select the WHOLE ledger and print a **LIVE
+  answer under a PINNED heading** — a wrong answer wearing the authority of a reproducible one,
+  strictly worse than the unauditable figure this verb replaces (memory:
+  `absent-range-endpoint-selects-everything`). Malformed pins return **rc 2 and render nothing**.
+  · **TESTS + TWO-SIDED RED-PROOF (method 93).** `tests/backlog-fold-agreement.bats` **8 → 14**,
+  plan `1..14` matched exactly, **0 not-ok**. Mutants built by `sed` over the **WORKING TREE** with
+  anchors counted **1 → 0 → 1**, so no ref can rot the control:
+
+      ARM 1  as-of filter reverted         → reds ONLY 9, 10, 11  (the replay arms)
+      ARM 2  ONLY the validation neutered  → reds ONLY 12         (the fail-closed guard)
+
+  **ARM 2 is again the arm that earns its keep** (fourth consecutive recycle to say so): without it
+  the guard could be deleted tomorrow with the whole suite still green. `bats-assert-liveness`
+  clean; `shellcheck -x` clean.
+
+  🚨 **PER-ROW DIFF ACROSS MY WINDOW — 475 OPEN+BLOCKED AT *BOTH* ENDS, AND THE SET STILL CHANGED**
+  (method 80, fifth occurrence and the cleanest yet). **1 LEFT · 1 ENTERED**: the row that left is
+  mine (`5e35b5b1070b`); the row that entered is a sibling's (`636d1863721b`, reso-management-app,
+  BLOCKED — a deploy-and-eyeball step, **NOT OURS**). A 1-for-1 swap across two different projects
+  is invisible to any total. ⚠️ **And note the second, sharper half:** the STATUS strata churned
+  hard in the same window (**open 275 → 295, blocked 200 → 181**) while the open+blocked ID SET
+  stayed at 475 — because an unblock moves a row BETWEEN those two strata without changing
+  membership. **A flat set and a churning distribution are both true at once; you need both reads.**
 - **2026-08-23 — cloud lane: the land's own bound-kill debris was blocking its every retry, and the
   curer was matching a sentence its blocker had stopped writing. A2 is CLOSED — the lane landed a
   branch and closed a row end-to-end for the first time since 2026-08-17T09:12Z.**
@@ -15229,6 +15322,34 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
      what made this invariant necessary: **#143, #144, #146, #147, #148, #149, #150, #151, #152 and
      #153 all landed with NO ping** — ten consecutive links, every commit content-verified on trunk,
      so no work was lost and nothing surfaced the gap.
+   - 🚨 **EVERY DERIVED POPULATION FIGURE A PING CITES MUST BE ONE A TOOL PRINTS, PINNED TO THE
+     MOMENT YOU CITED IT** (backlog `5e35b5b1070b`, condition
+     `ping-cites-unreproducible-population-figure`; filed 2026-08-22, **CLOSED by #166** with
+     `cc-backlog fold`). Do not hand-roll a `jq` fold and quote its number: run
+
+         cc-backlog fold                          # live, with its own predicate printed
+         cc-backlog fold --as-of <ISO-8601-Z>     # the SAME figure, replayable forever
+
+     and cite what it prints. **The as-of half is the load-bearing one, and the reason is not
+     definitional drift — it is TIME.** #166 measured the ledger growing 13,343 → 13,388 records
+     *during its own session* while a sibling unblock sweep moved 17 rows, so its opening snapshot
+     (`open 275 / blocked 200`) already replayed LIVE as `293 / 183` twenty-five minutes later. A
+     verifier auditing your ping against a live board therefore lands on a different number **even
+     when your figure was exactly right** — which is indistinguishable from a fabricated one.
+     ⚠️ **That is what the filing row got wrong, and the correction is the durable part.** The row
+     blamed *"private definitions no tool renders"*, but #166's as-of replay reproduces its own
+     primary exhibit — #127's `ungrouped 133->132` — **EXACTLY**, at 133 (05:10:00Z) and 132
+     (#127's close, 05:23:37Z), under the plainest reading (`status=="open"` AND no condition key),
+     with as-of-2099 = the live board and as-of-2020 = 0 as controls. #127's citation was correct
+     all along; the row's own replay was +4 at **both** endpoints — the exact signature of four
+     ungrouped rows arriving between the citation and the audit, not of a rival definition.
+     ⚠️ **A figure the STORE DOES NOT CARRY is still yours to justify inline, and no verb will ever
+     fix it.** The same row's other exhibit, `retire-in-one 46->45`, names a human judgment with no
+     field behind it: that string occurs **once** in the whole 13k-record ledger — inside the row's
+     own title — and no condition key resembles it. For those, state the predicate in the ping or
+     do not cite the number. Pooling a store-derivable population with a private one under a single
+     diagnosis is what made this row look like one defect (memory:
+     `zero-claim-must-name-its-excluded-strata`).
    - 📌 **WHY THIS IS A 4.1 EDIT AND NOT A MESSAGE — the generalisable part.** The lead paged the
      worker **twice** about exactly this, and both pages were *provably read*
      (`cc-notify --receipt 449 14` → `acked=14`; line 15 → `acked=15`). Neither changed anything.
