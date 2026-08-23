@@ -46,6 +46,9 @@ CC_PLACEHOLDER_RE='<[A-Za-z][A-Za-z0-9_.-]*>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|x
 # ph_toks — the DISTINCT placeholder tokens, ≤3, space-joined. This is what NAMES the missing value
 #   on the rendered row, so the operator reads `<your-address>` rather than being told, uselessly,
 #   that "a value is missing".
+# shellcheck disable=SC2034,SC2016  # SC2034: consumed by the scripts that SOURCE this lib, not
+# here. SC2016: `$ph` is jq's parameter, deliberately NOT expanded by the shell — expanding it would
+# inline the regex into the program text, where its `|` and `[` would be jq syntax.
 CC_PH_JQ='
 def ph_exec: (. // "") | sub("[[:space:]]+#[^\"\u0027]*$"; "");
 def ph_hit($ph): (ph_exec | test($ph));
