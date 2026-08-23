@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #172: the remedy was applied, looked applied, and the seam it was
+  supposed to close was never on the path. filed 0 / closed 1 / 2 commits (CODE+TESTS, then DOCS).
+  SIXTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **MOVE**: the row sits in **`master-convergence-deadlock`**, which read **28 open / 6 blocked** at
+  my open and **27 open / 6 blocked** at my close. ⚠️ The operator-set goal again asked that effort
+  to reach **0 open** in one recycle — it did not, and saying so plainly is the report. It also
+  named the WRONG successor for the **THIRD consecutive time** (its text says "recycle #171 is
+  FIRED"; #171 is my PREDECESSOR and §2.1's newest entry, so I am **#172** and I fired **#173**).
+  Gate 1 clear — **0 `.page` files** (`find` at `$HOME/.claude/autonomy/postland`, directory
+  asserted first; **sixty-third consecutive**). Heredoc diff clean, **fifty-fourth**. Board at my
+  open: **open 307 / blocked 187 / done 2191 / claimed 3**, **494** open+blocked, predicate
+  `bash bin/cc-backlog fold` from the worktree (⚠️ still NOT the PATH copy).
+  · **ROW CLOSED — `091a590f738a`** (*"test-hermeticity ratchet has no rule for the dispatch-kick
+    seam"*). Landed as *feat(test-hermeticity-lint): rule 8 — a $HOME-hermetic suite still spawns
+    the operator's dispatcher* (cite by SUBJECT — a land rebases, so any sha written here is
+    unreachable).
+  · 🆕 **METHOD 114 — WHEN A FALLBACK CHAIN CONTAINS THE REMEDY'S OWN SEAM, THE REMEDY CAN BE
+    UNREACHABLE.** `kick_bin()` (`bin/cc-backlog:5806`) resolves `CC_BACKLOG_KICK_BIN` →
+    `command -v cc-dispatch` → `$HOME/.claude/bin/cc-dispatch`. The `$HOME` leg is **REAL**, and
+    that is precisely what hides the defect: a suite that fixtures `$HOME` looks remediated, reads
+    clean under rule 1, and still executes the operator's DEPLOYED tool, because the PATH leg wins
+    **before** `$HOME` is ever consulted. **Ask where in the ORDER your remedy sits, not merely
+    whether the seam it names exists.** (memory: `lookup-miss-is-not-absence`.)
+  · 🆕 **METHOD 115 — THE PIN THAT LOOKS LIKE A FIX AND CLOSES NOTHING IS THE ONE A RULE MUST
+    EXCLUDE BY NAME.** Three seams exist (`CC_BACKLOG_KICK`, `_BIN`, `_MARKER`) and only two are
+    individually sufficient. Pinning `_MARKER` alone relocates the debounce stamp while the live
+    PATH leg still spawns — so the obvious `CC_BACKLOG_KICK` **substring** spelling would have
+    CERTIFIED a suite that still spawns. The `(_BIN)?=` boundary is what refuses it, and a selftest
+    case exists for no other purpose than to pin that boundary. **A compliance predicate is only as
+    good as the near-miss it rejects.**
+  · **THE EXHIBIT — TWO-SIDED, ON REAL SUITES, WITH A STUB STANDING WHERE THE DEPLOYED TOOL STANDS.**
+    A recording `cc-dispatch` first on PATH: **ARM `tests/cc-eligible.bats`** ($HOME-hermetic,
+    unpinned) → **0 not-ok and 25 LIVE DISPATCHER SPAWNS in one run**; **CTRL
+    `tests/cc-backlog-needs.bats`** (pinned) → **0 spawns**. **Both suites are GREEN** — the leak is
+    invisible to the suite's own verdict, which is why a week of green runs said nothing. Those
+    spawned dispatchers inherit the suite's exported fixtures, so they journal decisions about a
+    **temp test backlog into the operator's PRODUCTION `idl.jsonl`**.
+  · **THE ROW WAS FILED BY THE COMMIT THAT COULD NOT FIX IT.** `63bf5c56`'s own closing line reads
+    *"The ratchet has no rule for this leak class… Filed separately."* It hand-fixed three suites on
+    2026-08-08 and said plainly nothing stopped the fourth. **Measured today the population is TEN**
+    — the generator kept minting for fifteen days (memory:
+    `generator-population-grows-during-its-own-repair`).
+  · **THE LINT HAD GROWN 4 → 7 RULES SINCE FILING, SO I CHECKED WHETHER ONE ALREADY OWNED IT**
+    (method 112). None did: `CC_BACKLOG_KICK`, `_BIN` and `_MARKER` appeared **zero times** in the
+    whole file. Rule 5 is the near neighbour and is blind by construction — its shape 5b matches a
+    **two-leg** `${VAR:-barename}` default whose holder is executed, and `CC_BACKLOG_KICK_BIN`'s
+    default is **EMPTY**. **A rule count is not coverage; grep the identifiers.**
+  · **SCOPE CHOSEN BY MEASUREMENT OVER THREE CANDIDATES, not by taste.** `names cc-backlog` = 71
+    suites (most only READ the store and cannot kick) · bare ` add ` token = 58 (fires on the word
+    in unrelated positions) · **`cc-backlog` AND `add --title` = 20**, containing all three
+    known-guilty suites. The widest scope would have shipped 42 allowlist lines **no predicate can
+    ever retire** — rule 5's own header names that failure and it was avoidable by measuring first.
+  · **THE POSITIVE CONTROLS ARE IN SCOPE AND PASS — checked BEFORE the predicate was written.**
+    `tests/dispatch-cadence.bats` OWNS the kick and must toggle it per-test; it clears only because
+    its `setup()` defines `mk_kick_stub()`, whose body assigns the BIN. **A predicate demanding a
+    specific VALUE would have reddened the mechanism's own coverage** — rule 3's scope-by-the-leg
+    lesson, one rule later.
+  · **COVERAGE ATTRIBUTED BY MUTATION, never by a green count** (memory:
+    `per-site-mutation-attributes-coverage`): 4 mutants, one per site, each reddening its OWN named
+    case against a clean baseline. ⚠️ **The first mutation harness convicted itself** — it ran
+    mutants from a temp dir, so `ROOT` resolved there and the real-tree scan failed for a reason
+    unrelated to the mutant (memory: `corrected-instrument-can-lie-again`). The mutant now lives in
+    the repo's own `scripts/`, so the only difference between runs is the mutated bytes.
+  · ⚠️ **THE LIVENESS GATE EARNED ITS PLACE, TWICE IN ONE FILE.** It caught
+    `grep -q … && false` in my last case — errexit absorbs an inverted rc in non-final position, so
+    the assertion **always passed**. Its replacement then failed for the OPPOSITE reason: `grep -c`
+    exits **1** on a zero count and a bare `x="$(… grep -c …)"` assignment propagates that rc, so
+    errexit failed the test on the very outcome it asserted. The count now sits **inside `[ ]`**,
+    where the substitution's rc is discarded — which is exactly the body of the `refute_match()`
+    helper other suites here define. **Both halves of that trap are live in this repo.**
+  · **THE SUITE DOGFOODS RULE 8, AND THIS DIFF CREATED THE NEED.** Its own new fixture strings carry
+    `cc-backlog … add --title`, which IS rule 8's scope predicate, so adding the cases pulled the
+    suite into the rule it proves. Without the `setup()` pin **the lint's own suite would sit on the
+    lint's own exemption list**.
+  · **STRUCTURAL REMAINDER, NAMED AND NOT LAUNDERED:** the **10 grandfathered suites keep spawning**
+    until each is retired one at a time. That is the ratchet's stated contract, not a new item — do
+    NOT file it. `tests/postland-verify.bats` is on the list **despite pinning all three seams**,
+    because it pins them PER-TEST; the allowlist comment says so, so the line does not read as an
+    oversight to whoever greps for the pin and finds it.
+  · **Gates:** `--selftest` **144/144** (was 128) · `tests/test-hermeticity-lint.bats` **78/78**,
+    real plan `1..78`, 0 not-ok · bare scan of `tests/` clean — **533 suites, 10 grandfathered
+    (dispatch kick), 0 new leaks** · `shellcheck -S warning` clean · `bats-assert-liveness` clean.
+  · **BOARD, BY ID DIFF RATHER THAN BY TOTAL — and this is why the diff is mandatory.** At my close:
+    **open 307 / blocked 188 / done 2193 / claimed 3**. The open TOTAL is **unchanged at 307**, and
+    it is unchanged over real movement in both directions: a **sibling closed `f528269fcd76`** and
+    **opened three** (`3dd6dcf66e37`, `6c7538cf1799`, `a1c0237f3ced`) inside my window. **Reading
+    the total alone would have reported my own effect as zero.**
+
 - **2026-08-23 — drain recycle #171: two gates shared a boundary and each deferred that boundary to
   the other, so the shape fell through the seam between them. filed 0 / closed 1 / 2 commits
   (CODE+TESTS, then DOCS). FIFTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
