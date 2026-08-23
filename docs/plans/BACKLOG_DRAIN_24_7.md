@@ -87,6 +87,91 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #163: the ratchet's fail-open did not fail to measure, it RETRACTED
+  its own standing row — two scheduled siblings guarded their engine with `exit 0`, and for one of
+  them that rc is a registered falsifier, which cc-premise reads as THE CONDITION IS GONE. filed 0 /
+  closed 1 / 2 commits. SEVENTH CONSECUTIVE close overall, and the SIXTH consecutive close of a row
+  that prescribes its own red-proof. DECLARED HOLD on the warm effort, stated before the close: the
+  row's condition is `ungrouped`, so `master-convergence-deadlock` is UNMOVED at 31/6 — picked by
+  decidability, as #162 did.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (**fifty-fourth consecutive 0-page reading**). Gate 2: **`qos-diff` empty, the
+  forty-fifth consecutive clean reading.** Converge lag **0** in this worktree at open (HEAD ==
+  `origin/main`, tree clean); the LIVE layer read **7 behind at open** (2 → 7 across #162's window;
+  21 → 1 across #161's) — still a queue siblings also drain, still not a trend. Instrument control
+  `gate-select --direct 492c51066~1..492c51066` = **32**, a stable TWENTY-SIX-recycle reading.
+
+  **ROW CLOSED — `2366f99e04a7`**, condition `ungrouped`: *"two SCHEDULED siblings of
+  `backlog-grouping-sweep.sh` fail-open on a missing engine exactly as it did before `963dbd0a2`."*
+  Both are wired into the SAME `autonomy-sweep.sh` block — `:538` runs the trigger as `--file`, `:539`
+  the ratchet as `--assert`, both on a 300 s tick with `>/dev/null 2>&1`. **The row's `538-539`
+  coordinate was EXACT and current**, which is worth recording against method 2's usual result.
+
+  🚨 **THE ASYMMETRY THE ROW DID NOT NAME, AND IT IS THE WHOLE VALUE OF THE FIX.** The trigger's
+  fail-open merely misreported. The ratchet's `--assert` is **registered as a stored falsifier at
+  `autonomy-sweep.sh:803`** for the row that same block files
+  (`backlog-ratchet-coverage-regression`), and `cc-premise`'s `run_falsifier` reads exit 0 as *the
+  condition is gone*. So an absent engine did not fail to measure coverage — it told the currency
+  pass the regression had cleared and handed the closer a **retraction built on a measurement that
+  never ran**. Identical rc, two entirely different harms; only one of them is reversible by looking
+  again. Both now exit **2** — the code each file's own unknown-arg arm (`:74`, `:144`) already
+  reserved for "could not measure", and the code `cc-premise` already holds in
+  `_FALSIFIER_UNASKABLE_RCS` (`{2,124,126,127}` → UNVERIFIED), so no consumer is stranded by a fourth
+  state.
+
+  🚨 **THE ROW'S PREMISE WAS HALF WRONG AND THE CORRECTION IS IN THE EVIDENCE, NOT SILENT.** It said
+  both engines live under `scripts/backlog-consolidation/*.py`, *"precisely the deploy-class path"*
+  whose `install.sh` coverage gap made the grouping sweep inert. **Measured: both scripts have ZERO
+  python references** (`grep -c 'python\|\.py\b'` = 0, 0); their engine is **jq**. And jq is reachable
+  under the launchd invocation — `/bin/zsh -lc`, a **login** shell, so homebrew is on PATH — so unlike
+  the grouping sweep this was a **LATENT** fail-open, not live harm. The defect class and the
+  retraction consequence are real; *the deploy-class rationale for calling these the highest-value
+  follow-on is not.* **Close the row on the defect, correct the reason in writing.**
+
+  🆕 **TWO BOUNDARIES DECIDED IN WRITING BEFORE CODING, both NARROWER than the literal reading**
+  (method 94, second consecutive recycle):
+  · **Only the ENGINE guard converts.** The store guard directly above it keeps `exit 0` — a missing
+    interpreter means the measurement never happened, a missing store means there was nothing to
+    measure. `963dbd0a2` drew exactly this line: two engine guards converted, no data guard touched.
+    Widening to every `exit 0` in the file is the too-strong reading of *"fail-open on a missing
+    engine"*.
+  · **Only the TRIGGER files a row**, from `--file` (its scheduled mode), condition-keyed
+    (`backlog-consolidation-engine-absent`) and send-damped through `hooks/lib/page-damp.sh`. **The
+    ratchet files nothing, deliberately**: its scheduled mode IS the falsifier probe, and a probe
+    that writes to the ledger it is being asked about is not a probe. Its rc still reaches a reader
+    as `ratchet_rc`, and jq is absent for both siblings at once, so the trigger's page carries the
+    news for the pair. **The no-filing arm is PINNED**, so a later "consistency" edit that adds one
+    reds.
+
+  **CALLER rc HANDLING CHECKED IN THE SAME DIFF, as the row required.** `_trig_rc` is journal-only
+  (`:836`). `_rat_rc` has exactly ONE consumer, `:797`, an **exact match on `"1"`** — so a 2 cannot be
+  laundered into a coverage regression, and the comment above it already cites
+  `new-enum-member-falls-into-fail-closed-default`. The sweep's `note` field now names rc 2 for both.
+
+  **RED-PROOF: 10 clauses, EXTENDING the two existing suites rather than adding files** (trigger
+  15 → 20, ratchet 19 → 24) — premise 2, so no `LIVE_ADDS` breach. Each subject gets a **MUTANT** arm
+  restoring the pre-fix spelling at the one site the change touched, asserted to reach **exit 0 on
+  the same fixture**, with the anchor counted **before and after** the sed so a rename reds the anchor
+  instead of producing a mutant identical to the subject. 🚨 **The mutants are a sed over the working
+  tree, never a `git show` of a ref** — method 93, the defect that refused #162's first land: a branch
+  name advances past the fix the moment it lands and the control then compares the fix to itself.
+  A working-tree mutant is immune to that class by construction, which is the cheaper answer than
+  pinning a literal sha whenever the pre-fix spelling is a one-line revert.
+  **Vacuity guard one level below the assertion** (method 91, THIRD consecutive recycle): the engine
+  guard is reachable only after the store guard passes, so a fixture with no store would exit 0 at the
+  **wrong guard** and say nothing about the change — every case re-asserts `$CC_BACKLOG_FILE` exists
+  rather than trusting `setup()`. Polarity pinned on both (engine present is never rc 2).
+  ⚠️ **The ratchet mutant's first spelling DIED ON ITS OWN DELIMITER** — `sed "s|^command -v jq .*|…||…"`
+  reads the replacement's `||` as the closing delimiter (*"bad flag in substitute command"*). Switched
+  to `@`. **Found by RUNNING it, not by reading it** — the same lesson as `greedy-anchor`.
+
+  **Owed suites — ALL TWELVE direct consumers run BY HAND before the land, in ONE invocation:
+  `1..303`, 303 ok, 0 not ok, rc 0, plan matching exactly (no retry, no mismatch — cf. method 95).**
+  `autonomy-sweep` · `backlog-consolidation-trigger` · `backlog-freshness` · `backlog-pipeline-unwedge`
+  · `backlog-ratchet` · `cc-backlog-add-update` · `cc-escalations` · `cloud-refusal-route` ·
+  `cloud-return` · `drain-chain-assert` · `tsv-field-collapse` · `unfired-brief-sweep`.
+  `bats-assert-liveness.py` clean (rc 0, silent) on both edited suites.
+
 - **2026-08-23 — drain recycle #162: a watcher read its OWN PREDECESSOR'S CORPSE as the ping it was
   waiting for — `cc-await-ping` decided "mail arrived" on line count alone, so the arm that REPLACES
   a killed watcher fired on the dead one's WAKE-PATH-DOWN notice and exited `verdict=ping elapsed=0s`
