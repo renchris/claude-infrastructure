@@ -1,6 +1,10 @@
 ---
-status: open
+status: complete
 ---
+
+> **DONE 2026-08-23.** W1 measured, W2 shipped as `completion-assert` arm **D7** + `close_act_*` in
+> `hooks/lib/close-shape.sh`. Outcome, learnings and the two scope changes the numbers forced are in
+> § W1 RESULT and § W2 AS BUILT at the foot of this file. Everything above is preserved as filed.
 
 # CLOSE SCANNABILITY — the decision must be findable in one line
 
@@ -128,3 +132,73 @@ Design direction, not a specification — W1's numbers decide the final shape:
 - The assert is wired, latched, capped, and demonstrated to block a bad close AND pass a good one —
   both shown as command output in the transcript.
 - `bats` (or the repo's gate) green, and the change landed on `origin/main`.
+
+---
+
+## W1 RESULT — DONE 2026-08-23 (`5a565ba79`)
+
+Full report: [`docs/research/close-scannability-2026-08-23.md`](../research/close-scannability-2026-08-23.md).
+300 rung-carrying closes, 1,373 transcripts, 14-day window, all four account roots.
+
+**63.3% of closes require an operator act. One of 190 states it at line 1; median line 6; 54.7%
+never state it as its own line at all.** Whether the operator then *acts* splits **35.4% vs 9.4%**
+on exactly that axis — p = 2.7e-05, measured within the 185 closes that all contain a command, so
+runnability is held fixed and position is doing the work.
+
+**Three learnings the plan could not have had:**
+
+1. **The plan's assumed outcome measure was the wrong one.** Counting clarifying questions gives
+   1.8% against a 1.1% control — noise. The operator mostly does not ask, they just do not act. The
+   corpus records an act directly (`<bash-input>`), and only that measure separates.
+2. **The defect is position, not styling and not absence.** The `▶` marker is already present in
+   40.5% of act-required closes and **has never once put the act at line 1**. 2026-08-01 solved
+   *is this a command*; nothing ever governed *where it goes*.
+3. **Being early is not the property that matters; being a LINE is.** An act welded into line 1 is
+   acted on 4.2% of the time — *worse* than a close with no act verb anywhere (15.4%). The cliff is
+   is-a-line vs is-not-a-line; lines 1-3 / 4-6 / 7+ are flat within noise.
+
+## W2 AS BUILT — DONE 2026-08-23
+
+`completion-assert.sh` arm **D7** + `close_act_missing` / `close_act_ok` / `close_act_template` /
+`close_act_reason` in `hooks/lib/close-shape.sh`; pulled by `/wrap` from the same code path. All
+four constraints held: no new Stop hook, no change to rung computation in `wrap-ledger.sh`, no gate
+weakened, and the arm is proven to fire negatively (`bats -f D7`, plus a live block/pass pair on the
+real hook with the same ledger, session and substance — only the act's placement differs).
+
+### Two scope changes the numbers forced, and one the mechanism forced
+
+- **DROPPED — a new canonical form for multi-step physical acts (the plan's D3, "the true novel
+  gap").** It is 2.6% of act-required closes (n=5). Instead: `▶` is reused, because the corpus shows
+  it has *already* generalised past commands — 81 occurrences, 19 labels, including `▶ Open this:`,
+  `▶ Look here:`, `▶ Reopen and tap:`, `▶ Reply with this to unblock it:` — and `ACT: <sentence>` is
+  accepted as the second legal shape for the case with nothing to paste. **Nothing here is a new
+  rendering claim:** the 2026-08-01 screenshot-verified span form is reused byte for byte, and
+  position was measured *behaviourally*, never visually.
+- **CHANGED — a window (3 non-empty unfenced lines), not literal line 1.** Line 1 is already owned
+  by the rung, and R3 shows position within the message is flat. Demanding they share one row would
+  buy nothing measurable.
+- **SCOPED to `👤`, and `⛔` is an exclusion with a reason, not an oversight.** The ⛔ ledger term
+  sets `contra=1` for every ⛔ close that reaches the arms, so a contra-gated D7 term would be
+  unreachable and an ungated one would divert a conviction's arm and budget. A branch no fixture can
+  drive is a claim with no control. The reachable ⛔ gap is *upstream of every arm* — a correct ⛔
+  close asserts no done-tell and abstains at the close-tell gate — so closing it means widening that
+  gate, which changes the population every existing arm was tuned against. **Filed as separate work,
+  not smuggled in here.**
+
+### Known issues / follow-on
+
+- **`⛔` closes remain unreachable by any arm** (above). Needs its own evidence and its own
+  regression set for the widened close-tell gate.
+- **`✅` closes requiring an act are out of scope by construction** (42 of 190 in the sample). By the
+  ledger's own definition a ✅ close has no filed operator step; those 42 are closes whose rung and
+  whose prose disagree, which is a different defect (the rung is wrong, or the step was never filed)
+  and belongs to D1, not D7.
+- **`CLOSE_SHAPE_LIB` was a fallback, not an override** — found only by writing the fail-safe test,
+  which blocked instead of abstaining because the fixture path fell through to the checkout. Now a
+  hard override, matching `AGENT_IDENTITY_LIB`'s documented correction. *An untestable failure path
+  is an untested one.*
+- **One existing D1 test became order-dependent** and is now pinned (`CC_CLOSE_ACT=0`) with its D7
+  half asserted separately end-to-end. Filing a step is *also* what makes wrap-ledger compute `👤`,
+  so that fixture reaches two arms at once; it passed or failed on whether the ledger memo handed it
+  a cached `✅`. Pinning the axis is the suite's existing technique, not a weakening — the conviction
+  it would have produced is asserted in `D7 END-TO-END`.
