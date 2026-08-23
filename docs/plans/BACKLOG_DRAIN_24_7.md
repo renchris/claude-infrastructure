@@ -87,6 +87,93 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #164: the refusal's loss claim was FALSE of the very file that wedged
+  it — an untracked blocker byte-identical to the blob the advance writes is provably lossless to
+  remove, and the lane said the opposite to every operator who met one. filed 0 / closed 1 /
+  2 commits. EIGHTH CONSECUTIVE close overall, and the SEVENTH consecutive close of a row that
+  prescribes its own red-proof. The warm effort MOVED this time: the row's condition IS
+  `master-convergence-deadlock`, declared before the close — 31 → 30 open.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (**fifty-fifth consecutive 0-page reading**). Gate 2: **`qos-diff` empty, the
+  forty-sixth consecutive clean reading.** Board at open: **open 273 / blocked 194 / done 2160 /
+  claimed 1** — it had ROSE from #163's 269 while nothing of ours closed, which is intake, exactly as
+  method 80 keeps finding. LIVE layer **13 behind** at open (7 → 9 across #163's window; 2 → 7 across
+  #162's) — inside the 25-commit degrade budget, still a queue siblings also drain. Instrument
+  control `gate-select --direct 492c51066~1..492c51066` = **32**, a stable TWENTY-SEVEN-recycle
+  reading.
+
+  🚨 **THE SELECTOR MUST BE GIVEN THE MERGE-BASE, NOT `origin/main`, AND `--direct origin/main..HEAD`
+  SILENTLY ANSWERS THE WRONG QUESTION WHEN TRUNK HAS MOVED.** The brief's own recipe reads
+  `--direct origin/main..HEAD`. A sibling landed while this session worked (`beba9eab5` → `fc0f28380`,
+  memory-nudge + config-mirror), and that spelling returned **`FULL`** — the whole corpus — citing
+  `shared-lib:lib/config-mirror.zsh` and `literal:hooks/memory-nudge.sh`, **neither of which is in this
+  session's diff**. `git log origin/main..HEAD` is merge-base-correct and read 1 commit; `git diff
+  origin/main..HEAD` is NOT (two-dot in `diff` means plain endpoint-to-endpoint), so the selector was
+  handed a sibling's files as if they were ours. Against `$(git merge-base origin/main HEAD)..HEAD`
+  the honest answer is **14 suites**. Two failure directions, and the dangerous one is not the loud
+  one: here it over-selected and merely cost time, but the same confusion on a range where trunk is
+  BEHIND under-selects and buys silent non-coverage. **Compute the base, never assume the ref.**
+
+  **ROW CLOSED — `40625550e49f`**, condition `master-convergence-deadlock`: *"deploy-live.sh's ff-only
+  refusal names two causes, rules both out, then punts to a hand read."* **HALF of it had already
+  landed and the half that mattered to the operator had not** — `b088240bb` (2026-08-11 15:37 PDT =
+  22:37Z) added `untracked_blockers()`, captured git's stderr, and made the message name THREE causes.
+  The row was filed at **20:18:50Z the same day, two hours and nineteen minutes BEFORE that commit**,
+  so the fix and the row never saw each other. Method 21 applies in the ordinary direction — say which
+  half — and the surviving half is the row's own second sentence, which nobody implemented: *"where the
+  untracked blob sha EQUALS the incoming tracked blob sha, say so and offer the move-aside, since that
+  case is provably lossless."*
+
+  🚨 **THE DEFECT IS A TRUE SENTENCE APPLIED TO A SET THAT CONTAINS ITS OWN COUNTEREXAMPLE.** The
+  refusal told every operator *"they exist only in this checkout, so no land, branch or stash can bring
+  one back"* — correct for the general untracked file, and **false for the one that actually froze the
+  lane**. The live blocker was `docs/ground-up-payloads/LOCUS-GAP-BRIEF-2026-08-08.md`, byte-identical
+  to the blob trunk was adding (**same sha `1ed1c149`**) because someone drafted it in the SHARED
+  checkout before the same content landed from a worktree. Nothing whatever was at risk, git's own
+  *"move or remove"* was the cure, and the advance then went clean. The cost of the wrong sentence was
+  not confusion: the live layer sat **31 commits behind a budget of 25 with 13 ADDED files**, and an
+  ADD gets no converge budget — every `[ -f x ] && . x` guard on those thirteen was a SILENT skip.
+
+  **TWO BOUNDARIES DECIDED IN WRITING BEFORE CODING, BOTH NARROWER THAN THE LITERAL READING**
+  (method 94, third consecutive recycle). (1) **CLASSIFY, NEVER ACT.** *"Offer the move-aside"* read
+  literally is an auto-move, which contradicts the lane's own invariant three lines above the call
+  site — *detect, name, page, stop; never stash, check out, move or discard*. "Provably lossless"
+  licenses the OPERATOR's `rm`, not ours; what changed is that they are now told **which of the two
+  cases they are in** instead of always being told the pessimistic one. **Pinned** — L8f asserts the
+  file still exists, byte-unchanged, after the refusal. (2) **PER PATH, NEVER PER SET.** `read-tree`
+  aborts at the first collision today, so the set is normally one — but a set-wide "lossless" over a
+  mixed set would license deleting the member that is NOT recoverable, the exact inversion this
+  classification exists to prevent. Two lists, each carrying only its own claim.
+
+  🚨 **THE FAIL-CLOSED DIRECTION IS NOT SYMMETRIC, AND THE LOAD-BEARING CASE IS A SYMLINK.** A false
+  *redundant* invites deleting the only copy of something; a false *unique* costs a hand-check. So
+  every uncertainty answers UNIQUE. The instance that proves the guard is not decoration: **`git
+  hash-object` FOLLOWS a symlink**, so for a link pointing at byte-identical content the computed blob
+  **EQUALS** the incoming one (measured in a throwaway repo, both `19a2e53b`), and a hash-only oracle
+  would call it provably lossless. It is not — `rm` removes the LINK, the merge writes a regular file,
+  and `elsewhere.txt`, the path actually holding those bytes as an untracked artifact, is never
+  restored by anything. `--path` on `hash-object` is load-bearing for the same reason in the other
+  direction: it applies the path's own gitattributes, so the sha compared is the one git would STORE.
+
+  **RED-PROOFS — 3 clauses, `tests/deploy-live.bats` 121 → 124, both mutant arms `sed` over the WORKING
+  TREE** (method 93's corollary — no ref exists to advance, so the moving-ref class cannot occur),
+  anchor counted **before AND after** each substitution. **L8f arm 2** neuters the classifier to answer
+  UNIQUE for every path, which **is** the pre-fix behaviour exactly, and the lossless verdict
+  disappears on the identical fixture. **L8h arm 2** deletes the `-L` guard and the oracle **does**
+  call the symlink lossless — without that arm the guard could be removed tomorrow and every other test
+  would stay green. **L8g** is the discriminating control: one byte of difference, no lossless claim.
+  **Method 91 again (fourth consecutive recycle): the arm under test is guard THREE in an ordered
+  chain** — green-stamp ladder, then dirty-TRACKED, then untracked-collision — so every case asserts
+  the refusal is of the `UNTRACKED COLLISION` class rather than merely asserting a non-zero exit; a
+  fixture falling out at guard 1 would exit 1 for the wrong reason and credit the change with nothing.
+
+  **OWED SUITES RUN BY HAND BEFORE THE LAND (method 83).** 14 direct suites against the merge-base
+  range: **`1..473`, 473 ok, 0 not ok, rc 0, every plan matched exactly** — no retry, no mismatch
+  (method 95 stayed unexercised). `bats-assert-liveness` clean; it caught two `! grep -q` negations
+  mid-test on the first pass, which errexit renders permanently passing, and both were rewritten to the
+  counted form. `--explain | grep prose-cited` returned **0** for the fix commit and the two standing
+  docs-consumers for the §2.1 commit.
+
 - **2026-08-23 — drain recycle #163: the ratchet's fail-open did not fail to measure, it RETRACTED
   its own standing row — two scheduled siblings guarded their engine with `exit 0`, and for one of
   them that rc is a registered falsifier, which cc-premise reads as THE CONDITION IS GONE. filed 0 /
