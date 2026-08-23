@@ -56,6 +56,11 @@
 #   backlog-consolidation-trigger.sh --fold          DRY RUN: what would fold, what would escalate
 #   backlog-consolidation-trigger.sh --fold --apply  write the links
 #   --threshold N                                    default 5
+#
+# EXIT CODES — three, and the third is why the engine guard below is fail-CLOSED (backlog 2366f99e04a7):
+#   0  measured: nothing crossed, or it crossed and was reported/filed/folded
+#   1  --assert only: a cluster crosses the threshold
+#   2  COULD NOT MEASURE — bad usage, or THE ENGINE IS ABSENT (no jq)
 set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
@@ -75,8 +80,62 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── THE ENGINE GUARD IS FAIL-CLOSED (backlog 2366f99e04a7) ───────────────────────────────────────
+# Same defect and same shape as scripts/backlog-grouping-sweep.sh carried for its entire deployed
+# life (fixed in 963dbd0a2): this script is wired into autonomy-sweep.sh:538 as `--file` on a 300 s
+# tick with `>/dev/null 2>&1`, so the one-line stderr below reached nobody and the rc was the only
+# thing that left the process. `exit 0` on an absent engine is therefore indistinguishable, to the
+# only reader there is, from a clean store with no cluster to report.
+#
+# 2, NOT A NEW CODE — and this file already agrees: the unknown-arg arm above exits 2 for exactly
+# this meaning. 2 is also in cc-premise's `_FALSIFIER_UNASKABLE_RCS` ({2,124,126,127}, "COULD NOT
+# ASK"), so a stored falsifier that shells out to this script renders UNVERIFIED rather than the
+# "NOT REFUTED" a fourth code would strand its consumer with.
+#
+# WHY THE STORE GUARD ABOVE IS NOT CONVERTED WITH IT. 963dbd0a2 converted its two ENGINE guards and
+# left every data guard alone, and the distinction is real: a missing interpreter means the
+# measurement never happened, while a missing store means there is nothing to measure — a
+# legitimately empty read, not a non-verdict. Widening this to every `exit 0` in the file is the
+# too-strong reading of "fail-open on a missing engine" (memory: gate-exemption-is-not-permission).
 [ -f "$BACKLOG" ] || { printf 'no store at %s — nothing to measure\n' "$BACKLOG" >&2; exit 0; }
-command -v jq >/dev/null 2>&1 || { printf 'jq missing — cannot measure (fail-open)\n' >&2; exit 0; }
+
+# Send-damping, best-effort: an absent lib means UNDAMPED, never a lost page (page-damp.sh's own
+# fail-open posture), matching the grouping sweep's resolution ladder verbatim.
+for _c in "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/page-damp.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
+          "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+
+# engine_absent <reason> <fingerprint> — says it on stderr for a human at a terminal, FILES it for
+# the scheduled caller whose stderr goes to /dev/null, and exits 2 in every mode. The filing is
+# confined to `--file` — the mode autonomy-sweep actually schedules — so `--assert` and `--fold`
+# stay pure reads: a probe that writes to the ledger it is being asked about is not a probe.
+engine_absent() {
+  printf 'backlog-consolidation-trigger: %s — CANNOT MEASURE (fail-closed, rc 2)\n' "$1" >&2
+  if [ "$MODE" = "file" ] && [ -x "$BACKLOG_BIN" ]; then
+    # The fingerprint is the STATE, never a clock or a count — one that moved every sweep would look
+    # wired and damp nothing.
+    if ! command -v damp_should_send >/dev/null 2>&1 || damp_should_send "store:backlog" "CONSOLIDATION-ENGINE-ABSENT:$2"; then
+      "$BACKLOG_BIN" add --project claude-infrastructure \
+        --condition backlog-consolidation-engine-absent \
+        --title "the backlog consolidation trigger cannot run: $1 — it is wired into autonomy-sweep on a 300 s tick and has been reporting success while detecting no cluster; every duplicate pile stays unescalated until the engine is back" \
+        --source backlog-consolidation-trigger \
+        --falsifier "command -v jq >/dev/null 2>&1" \
+        --dod-ref "origin/main:docs/plans/BACKLOG_SELF_DRAINING_2026-08-12.md" >/dev/null 2>&1 \
+        || {
+          # The marker records an INTENT to send. The filing failed — most likely because cc-backlog
+          # needs the very engine that is missing — so drop it, or the whole TTL would suppress the
+          # retry of a page nobody ever received.
+          command -v damp_forget >/dev/null 2>&1 && damp_forget "store:backlog" "CONSOLIDATION-ENGINE-ABSENT:$2"
+          printf 'backlog-consolidation-trigger: could not file the engine-absent row\n' >&2
+        }
+    fi
+  fi
+  exit 2
+}
+command -v jq >/dev/null 2>&1 || engine_absent "jq missing" "no-jq"
 # The child reads the store through the env, not through argv — so a fixture run (or a --threshold
 # sweep against a copy) reaches the SAME store this script measured, never the operator's live one.
 export CC_BACKLOG_FILE="$BACKLOG"
