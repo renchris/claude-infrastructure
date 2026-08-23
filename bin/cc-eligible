@@ -359,16 +359,47 @@ CLASSES = [(v, d, [(t, re.compile(p, re.I)) for t, p in pats]) for v, d, pats in
 # the more actionable sentence to lead with — and `why` reports both regardless.
 DEEP_HISTORY = "ineligible-deep-history"
 
+# ── THE SECOND MEASURED CLASS: THE ITEM'S REPO IS NOT THE REPO THE VM IS GIVEN ─────────────────
+# MEASURED 2026-08-23 over the whole live cloud population, and it is not one contributor among
+# many — it is the DOMINANT cause of the 133-session `NOT-STARTED` pile. Joining each declaration's
+# `item=` to that item's `project` in the backlog puts 106 of 133 (80%) on a repo the VM was never
+# given: 92 reso-management-app, 14 doc_classifier, against 13 for claude-infrastructure.
+#
+# THOSE SESSIONS DID NOT FAIL TO START — THE LABEL IS A MISNOMER FOR THEM. 130 of the 133 still
+# answer `GET /v1/code/sessions/<id>`, and 119 read `environment_kind: anthropic_cloud` AND
+# `sources: 1` — a real VM with a repository attached, i.e. fully able to push. They booted, read
+# the brief, found the project absent and correctly stopped, in their own words:
+#   "reso-management-app repo absent in cloud VM; backlog item unreachable"
+#   "wrong venue: reso-management-app not in this container"
+#   "doc_classifier repo not accessible; item requires on-box dispatch"
+# One sampled session spent $2.00 and 15,464 output tokens to reach that verdict. `cc-cloud` calls
+# every one of them NOT-STARTED because its only sensor is whether the declared branch appeared,
+# and a session that correctly declines to do the work commits nothing to push.
+#
+# WHY THE SPELLING TABLE ABOVE COULD NOT CATCH THIS, AND WHY WIDENING IT NEVER WILL. Every class in
+# CLASSES is a regex over the item's TEXT, so it can only refuse an item that happens to SAY a
+# refused word. Reachability is not a word — it is a property of the pair (the item's project, the
+# one repo `cc-offload` attaches). BANKING's own `wt-slug` entry is this same defect caught one item
+# at a time: `4abcbbbbc997` was promoted to cloud purely because it spelled its worktree `wt-bsm-gap`
+# and never the word `worktree`. Two of the burned sessions named the gap outright — "root cause:
+# cc-eligible lacks cross-repo arm" and "cc-eligible gate doesn't check project scope".
+#
+# BEFORE the history arm in refusal order: if the repo is not there at all, the depth of its clone
+# is not the sentence to lead with, and every sha in the item is unreachable for a reason that has
+# nothing to do with a horizon.
+CROSS_REPO = "ineligible-cross-repo"
+
 # Every refusing verdict with its one-line description, spelling-backed and measured alike. The
 # census renders from THIS, not from CLASSES, so a measured class cannot be invisible in the report
 # that exists to find what the classifier misses.
 SWEEP_ROWS = [(v, d) for v, d, _p in CLASSES] + [
+    (CROSS_REPO, "ANOTHER REPO — the VM is given exactly one, and this is not it (measured)"),
     (DEEP_HISTORY, "NEEDS HISTORY the shallow cloud clone cannot see (measured)"),
 ]
 
 # The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
 # disagree about which is which — cc-premise's BLOCKING, same reason.
-BLOCKING = tuple(v for v, _d, _p in CLASSES) + (DEEP_HISTORY,)
+BLOCKING = tuple(v for v, _d, _p in CLASSES) + (CROSS_REPO, DEEP_HISTORY)
 
 # The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
 # things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
@@ -610,6 +641,114 @@ class HistoryOracle:
         return out
 
 
+def _git_out(repo, args):
+    """One git read against <repo>, or None. NEVER raises: an unmeasurable state must fail OPEN,
+    and this arm is reached from inside cc-backlog's claim path."""
+    if not repo or not os.path.isdir(repo):
+        return None
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo] + args,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT_S, text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def _norm_remote(url):
+    """`git@host:owner/name.git`, `https://host/owner/name` and `ssh://host/owner/name/` all mean
+    owner/name. Compared normalised so two spellings of ONE repo are never read as two repos —
+    the false-positive direction, which would refuse work that is in fact reachable."""
+    if not url:
+        return ""
+    u = url.strip().rstrip("/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    u = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", u)   # scheme
+    u = re.sub(r"^[^@/]+@", "", u)                      # user@
+    u = u.replace(":", "/")                             # scp-style host:owner/name
+    parts = [p for p in u.split("/") if p]
+    return "/".join(parts[-2:]).lower() if len(parts) >= 2 else u.lower()
+
+
+def _origin_of(repo):
+    return _git_out(repo, ["remote", "get-url", "origin"])
+
+
+# ── THE ONE REPO A CLOUD VM IS GIVEN ──────────────────────────────────────────────────────────
+# `cc-offload`'s API create attaches exactly ONE `git_repository` source, derived from the origin of
+# its own `$REPO` — `bin/cc-offload:84`, `REPO="${CC_OFFLOAD_REPO:-$ROOT}"`, ROOT being the install
+# root of the off-box lane's own tooling, i.e. the repo THIS FILE lives in.
+#
+# THE LANE IS A REPO, SO IT IS IDENTIFIED BY ITS ORIGIN AND FOUND VIA THIS SCRIPT — never by
+# assembling $HOME/Development/<name>. That assembly was tried first and is wrong in exactly the
+# place this work happens: inside a git WORKTREE, `rev-parse --show-toplevel` yields the worktree
+# directory, so the basename is the BRANCH name (`cloud-notstarted`) and the lane resolved to a path
+# that does not exist. Reading the origin of whatever repo contains this file is right in a worktree
+# and in the shared checkout alike, because both carry the same origin.
+#
+# GATED ON LIVING UNDER $HOME/Development, and that guard is load-bearing rather than stylistic.
+# All seven suites that reach this predicate fixture $HOME to a temp dir; an ungated __file__
+# derivation would measure their temp-dir projects against the operator's REAL checkout and read
+# `ineligible-cross-repo` for every fixture — a new blocking arm silently reddening its siblings.
+# With the guard, the real script is not under the fixtured $HOME, the lane is unresolvable, and the
+# arm fails open, which is this file's law for every state it cannot measure.
+#
+# `CC_ELIGIBLE_CLOUD_REPO=""` (set, but empty) is the kill switch — spelled as a value rather than a
+# second flag, so the override and the off-switch cannot disagree about which repo the lane holds.
+_LANE_REPO = []
+
+
+def cloud_repo():
+    """The single repo a cloud VM is given, or "" when it cannot be determined (⇒ arm disabled)."""
+    override = os.environ.get("CC_ELIGIBLE_CLOUD_REPO")
+    if override is not None:
+        return override
+    off = os.environ.get("CC_OFFLOAD_REPO")
+    if off:
+        return off
+    if not _LANE_REPO:
+        _LANE_REPO.append(_lane_from_self())
+    return _LANE_REPO[0]
+
+
+def _lane_from_self():
+    here = os.path.dirname(os.path.realpath(__file__))
+    top = _git_out(here, ["rev-parse", "--show-toplevel"])
+    if not top:
+        return ""
+    dev = os.path.realpath(os.path.join(os.path.expanduser("~"), "Development"))
+    return top if os.path.realpath(top).startswith(dev + os.sep) else ""
+
+
+def cross_repo(project):
+    """(unreachable, why) — is this item's project outside the ONE repo a cloud VM is given?
+
+    Fails OPEN in every direction it cannot measure, exactly like the history oracle: this arm
+    refuses only on a fact it established. The three open cases are a disabled/unresolvable lane, a
+    projectless item, and a lane path that is not a readable git repo (which is what a fixtured
+    $HOME produces).
+    """
+    lane = cloud_repo()
+    if not lane or not project:
+        return False, ""
+    lane_origin = _norm_remote(_origin_of(lane))
+    if not lane_origin:
+        return False, ""                       # lane not a readable git repo ⇒ nothing to measure
+    item_repo = repo_for(project)
+    if not item_repo:
+        return False, ""
+    if os.path.realpath(item_repo) == os.path.realpath(lane):
+        return False, ""                       # the same tree, reached by another path
+    item_origin = _norm_remote(_origin_of(item_repo))
+    if item_origin and item_origin == lane_origin:
+        return False, ""                       # ONE repo, two checkouts — reachable after all
+    seen = item_origin or ("no readable git repo at %s" % item_repo)
+    return True, "project %r is %s; the VM is given only %s" % (project, seen, lane_origin)
+
+
 def repo_for(project):
     """The tree an item's project means. cc-dispatch's project_repo convention, deliberately.
 
@@ -661,14 +800,29 @@ def assess_full(item_id, idx, measure=True):
             "tokens": [], "title": "", "project": "", "classes": [],
             "history": {"state": "not-measured", "repo": "", "ref": "", "depth": CLOUD_DEPTH,
                         "unreachable": []},
+            "reach": {"state": "not-measured", "lane": "", "why": ""},
         }
     text = ent["text"]
     classes = classify_all(text)
 
-    orc = oracle_for(ent.get("project", ""))
+    project = ent.get("project", "")
+    orc = oracle_for(project)
     hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
             "unreachable": []}
+    reach = {"state": "not-measured", "lane": "", "why": ""}
     if measure:
+        # REACH BEFORE HISTORY, in that order: a repo the VM never receives has no horizon worth
+        # reporting, and "this is another repo" is the sentence that tells a reader what to do.
+        reach["lane"] = cloud_repo()
+        elsewhere, why = cross_repo(project)
+        reach["state"] = "elsewhere" if elsewhere else "reachable-or-unmeasured"
+        reach["why"] = why
+        if elsewhere:
+            classes.append({
+                "verdict": CROSS_REPO,
+                "description": "ANOTHER REPO — the VM is given exactly one and this is not it",
+                "tokens": [project],
+            })
         hist["state"] = orc.certify()
         hist["ref"] = orc.ref
         bad = orc.unreachable(text)
@@ -684,13 +838,14 @@ def assess_full(item_id, idx, measure=True):
         first = classes[0]
         return {
             "id": item_id, "verdict": first["verdict"], "description": first["description"],
-            "tokens": first["tokens"], "title": ent["title"], "project": ent.get("project", ""),
-            "classes": classes, "history": hist,
+            "tokens": first["tokens"], "title": ent["title"], "project": project,
+            "classes": classes, "history": hist, "reach": reach,
         }
     return {
         "id": item_id, "verdict": "eligible",
         "description": "repo-only work — no local-only state named", "tokens": [],
-        "title": ent["title"], "project": ent.get("project", ""), "classes": [], "history": hist,
+        "title": ent["title"], "project": project, "classes": [], "history": hist,
+        "reach": reach,
     }
 
 
@@ -751,6 +906,12 @@ def cmd_explain(item_id):
     sys.exit(0)
 
 
+REACH_NOTE = {
+    "elsewhere": "the item's project is NOT the one repo the VM is given",
+    "reachable-or-unmeasured": "either the lane's own repo, or nothing measurable — arm fails OPEN",
+    "not-measured": "not measured",
+}
+
 HISTORY_NOTE = {
     "ok": "certified against a FULL clone — the horizon is real",
     "no-repo": "NOT CERTIFIED: no readable git repo for this project — reach is unknown",
@@ -781,6 +942,10 @@ def cmd_why(item_id, as_json):
             w("  refused : %-27s %s\n" % (c["verdict"], ", ".join(c["tokens"])))
     else:
         w("  refused : (nothing fired)\n")
+    r = full.get("reach") or {}
+    w("  reach   : %s — %s\n" % (r.get("state", "not-measured"),
+                                 r.get("why") or REACH_NOTE.get(r.get("state", ""), "")))
+    w("            lane=%s\n" % (r.get("lane") or "(unresolved — arm off)"))
     h = full["history"]
     w("  history : %s — %s\n" % (h["state"], HISTORY_NOTE.get(h["state"], "")))
     w("            repo=%s ref=%s depth=%s\n" % (h["repo"] or "(none)", h["ref"] or "-", h["depth"]))
