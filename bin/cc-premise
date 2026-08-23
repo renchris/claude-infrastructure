@@ -2454,7 +2454,20 @@ def assess(item_id, idx, out=None, run_probes=True):
                         "there." % ", ".join(unaskable)
                     )
                 else:
-                    scope, hedge = ", and in no sibling checkout either", ""
+                    # THE SCOPE CLAUSE IS ITSELF A CLAIM, and reaching this branch does not earn it.
+                    # `unaskable` being empty means every candidate ANSWERED — but with no `repo=`
+                    # row declared there is no candidate set, the loop in `sha_elsewhere` never
+                    # runs, and the same `(None, [])` comes back from a search that never happened.
+                    # So the clause has to be guarded on the candidate set existing, not on the
+                    # branch. MEASURED (backlog 0d181d7b9925): unguarded, this line was BYTE-
+                    # IDENTICAL to the one printed when a real sibling was asked and answered no —
+                    # zero information in exactly the case the clause was added to describe.
+                    # Pinned by this arm's own EXPLICIT-EMPTY test, whose paired conviction one
+                    # test up asserts the clause DOES appear when a sibling really was asked.
+                    scope = (
+                        ", and in no sibling checkout either" if _sibling_repos() else ""
+                    )
+                    hedge = ""
                 if sha_context(text, sha):
                     lines.append(
                         "CITED SHA %s: no such object here (%s)%s. This repo lands by REBASE, so a "

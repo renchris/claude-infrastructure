@@ -185,6 +185,13 @@ conf_row() { printf '%s %s\n' "$1" "$2" >> "$CC_DISPATCH_PROJECTS_CONF"; }
   [ "$status" -eq 0 ]
   [ "$(verdict "$output")" = suspect ]
   printf '%s' "$output" | grep -q "CITED SHA $sha"
+  # …and the conviction may not claim a search that never happened. With no candidate set at all,
+  # "in no sibling checkout either" is an overclaim, and it is invisible to a grep for the sha:
+  # MEASURED 2026-08-23 (backlog 0d181d7b9925), this line was BYTE-IDENTICAL to the one the second
+  # test asserts, where a real sibling was asked and answered no. That is the whole defect — the
+  # clause carries zero information in exactly the case it was added to describe. Its pair is the
+  # `grep -q` on line 119: one arm must say it, this one must not.
+  refute_match "$output" "in no sibling checkout either"
 }
 
 @test "a comment and a trailing #comment on a repo= row parse the way cc-dispatch parses them" {
