@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # test-hermeticity-lint — the RATCHET that stops NEW test harnesses from running against AMBIENT
-# STATE. Six rules, one mechanism, each a different thing "ambient" can mean: rule 1 is the
+# STATE. Eight rules, one mechanism, each a different thing "ambient" can mean: rule 1 is the
 # operator's live ~/ ($HOME fixtured in setup()), rule 2 the machine's live LOAD
 # (CC_FIRE_CAPACITY_GATE=off, for a suite that drives handoff-fire), rule 3 an operator-armed lever
 # (LCW_ORPHAN_CLOSE, for a suite driving the orphan-close leg), rule 4 a SIBLING RUN OF ITSELF — a
@@ -8,7 +8,11 @@
 # collide — rule 5 state that does not resolve under $HOME at all (an absolute /tmp default, or a
 # bare name executed off the operator's PATH), and rule 6 a value already IN THE ENVIRONMENT: a
 # variable this repo injects into every pane it launches, which every descendant of a fired pane
-# inherits, bats included. Rules 1-3, 5 and 6 judge tests/*.bats; rule 4 judges the ~50 tools in
+# inherits, bats included; rule 7 the capacity-ADMIT gate (rule 2's twin at the other gate); and
+# rule 8 an ambient PATH — a suite driving a real `cc-backlog add` spawns the operator's DEPLOYED
+# cc-dispatch, because kick_bin() resolves `command -v cc-dispatch` BEFORE its $HOME fallback, so a
+# suite can be fully rule-1 hermetic and still spawn it (measured: tests/cc-eligible.bats, 0 not-ok
+# and 25 spawns per run). Rules 1-3 and 5-8 judge tests/*.bats; rule 4 judges the ~50 tools in
 # bin/, scripts/ and hooks/ that ship a selftest instead of a suite and were outside the ratchet
 # entirely until it landed. Two properties matter for each and both are proved here: it
 # discriminates (RED on a new violation, RED on an entry that stayed grandfathered after being
@@ -22,6 +26,14 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # dogfood: this suite obeys its own rule 1
   export CC_FIRE_CAPACITY_GATE=off                         # dogfood rule 2 — this file names handoff-fire
   export CC_ADMIT_GATE=off                                 # dogfood rule 7 — it names capacity-admit's callers
+  # Dogfood RULE 8, and the need for it is CREATED by this file's own rule-8 cases: they carry
+  # `cc-backlog … add --title` fixture strings, which is exactly rule 8's scope predicate, so adding
+  # them pulls this suite INTO the rule it proves. Without this pin the lint's own suite would have
+  # to sit on the lint's own exemption list — the rot the header below names. The pin is also simply
+  # TRUE: nothing here should ever spawn the operator's dispatcher.
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   # Rule 4 OFF by default here, and switched back ON by name in the cases that mean to test it.
   # Every fixture-targeted case below passes a temp dir as the scan dir, but rule 4's population is
   # the REPO's tool dirs — it is driven off $ROOT, not off that argument, precisely so ship-land's
@@ -1032,4 +1044,113 @@ echo "$MODE"'
   CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/r7indep_admit"
   [ "$status" -eq 1 ] || false                          # rule 7 convicts it, and rule 2 does not
   echo "$output" | grep -q 'capacity-admit' || false
+}
+
+# ── RULE 8 (the dispatch kick). `cc-backlog add` — and only `add` — ends in dispatch_kick(), which
+# backgrounds `cc-dispatch --decide`. kick_bin() resolves CC_BACKLOG_KICK_BIN -> `command -v
+# cc-dispatch` -> $HOME/.claude/bin/cc-dispatch, and the PATH leg wins BEFORE $HOME: that ordering is
+# the entire rule. A suite can fixture $HOME, read clean under rule 1, and still spawn the operator's
+# deployed dispatcher — which then inherits the suite's own fixtures and journals decisions about a
+# temp test backlog into the production idl.jsonl. Filed as backlog 091a590f738a by the commit that
+# hand-fixed three suites (63bf5c56) and could not stop the fourth; the population is now ten.
+
+@test "RULE 8 RED: a suite driving a real cc-backlog add without pinning the kick is AMBIENT" {
+  mk_suite kickleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickleak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'CC_BACKLOG_KICK' || false
+}
+
+@test "RULE 8 GREEN form 1: CC_BACKLOG_KICK=off in setup() — the kill switch" {
+  mk_suite kickpin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_BACKLOG_KICK=off' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickpin"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 8 GREEN form 2: a CC_BACKLOG_KICK_BIN pin alone — independently sufficient" {
+  # This form is not decoration: tests/dispatch-cadence.bats OWNS the kick and must toggle the kill
+  # switch per-test, so it clears rule 8 on a BIN pin. A rule demanding form 1 would RED the
+  # mechanism's own positive control — rule 3's scope-by-the-leg lesson, one rule later.
+  mk_suite kickbinpin \
+    'export HOME="$BATS_TEST_TMPDIR/home"; export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/nope"' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickbinpin"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 8 RED: pinning CC_BACKLOG_KICK_MARKER ALONE stays a violation — it closes nothing" {
+  # THE EXCLUSION CONTROL. The marker pin relocates the debounce stamp and leaves kick_bin()'s live
+  # PATH leg completely intact, so the suite still spawns the operator's dispatcher. Certifying it
+  # would mint a false negative on the exact shape that looks remediated. The obvious substring
+  # spelling `CC_BACKLOG_KICK` passes this fixture; the `(_BIN)?=` boundary is what fails it.
+  mk_suite kickmarker \
+    'export HOME="$BATS_TEST_TMPDIR/home"; export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.k"' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickmarker"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "RULE 8 scope: naming cc-backlog without driving \`add\` does not pull a suite in" {
+  # The clause that keeps the population at 20 instead of 71. Most suites naming cc-backlog only
+  # READ the store, and a reader cannot kick.
+  mk_suite kickread 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bin/cc-backlog list --all --json'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickread"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 8 scope: a suite that never names cc-backlog is out of scope entirely" {
+  mk_suite nokick 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/some-other-tool.sh'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/nokick"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 8 ratchet: fixed-but-still-grandfathered goes RED; grandfathered-and-unfixed passes" {
+  mk_suite kickleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/kickleak"
+  [ "$status" -eq 0 ] || false                          # today's list blocks nobody
+  mk_suite kickpin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_BACKLOG_KICK=off' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/kickpin"
+  [ "$status" -eq 1 ] || false                          # the ratchet only shrinks
+}
+
+@test "RULE 8 kill switch: CC_HERM_KICK_RULE=off disables it — with the RED as its positive control" {
+  mk_suite kickleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" run bash "$LINT" "$FIX/kickleak"
+  [ "$status" -eq 1 ] || false                          # control: the rule DOES fire on this fixture
+  CC_HERM_KICK_ALLOWLIST="" CC_HERM_KICK_RULE=off run bash "$LINT" "$FIX/kickleak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 8 own-scope: an AMBIENT violation outside the diff is advisory, inside it blocks" {
+  mk_suite_in_tests kickleak 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/kickleak/tests"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'advisory, not blocking' || false
+  CC_HERM_KICK_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/kickleak/tests"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 8 is INDEPENDENT of rule 1 — a \$HOME-hermetic suite still spawns the live dispatcher" {
+  # The case that makes rule 8 a RULE and not a shape of rule 1, and the one the measurement is
+  # about. Both fixtures below fixture $HOME, so rule 1 is satisfied and silent; only the kick pin
+  # varies. If this pair ever collapses, rule 8 has become a restatement of rule 1 and the real
+  # leak — the `command -v cc-dispatch` leg that $HOME cannot reach — is unowned again.
+  mk_suite r8indep_home 'export HOME="$BATS_TEST_TMPDIR/home"' \
+    'run bin/cc-backlog add --title t --project p'
+  CC_HERM_KICK_ALLOWLIST="" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r8indep_home"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'CC_BACKLOG_KICK' || false
+  # and the $HOME fixture is genuinely present, so this is not rule 1 convicting under another name.
+  # COUNTED, never `grep -q … && false`: under bats' errexit an inverted rc in non-final position is
+  # absorbed and the assertion silently always passes (scripts/bats-assert-liveness.py flags it, and
+  # it flagged this very line before this form replaced it — memory: negated-assertion-dead-unless-final).
+  # The COUNT goes inside `[ ]`, which is the whole trick: grep -c exits 1 when the count is zero,
+  # and a bare `x="$(… grep -c …)"` assignment propagates that rc, so errexit fails the test on the
+  # very outcome it is asserting. Inside a test expression the substitution's rc is discarded and
+  # only the NUMBER is judged. Same body as the refute_match() helper other suites here define.
+  [ "$(printf '%s\n' "$output" | grep -c 'does not fixture')" -eq 0 ] || false
 }
