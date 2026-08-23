@@ -161,6 +161,30 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   · Suites run by hand this turn: `cloud-ceiling-probe` **22/22** (19 green / 3 red pre-fix),
     `tsv-field-collapse` **34/34** (33/1 pre-fix), `backlog-fold-agreement` **14/14**. Selector
     instrument control **32**, thirty-third consecutive.
+  · 🚨 **THE LAND GATE REFUSED (`LAND_RC=6`) AND IT WAS RIGHT — this defect class ALREADY HAS A
+    DEDICATED GATE, and neither the row nor I knew it.** `scripts/pipefail-sigpipe-lint.sh` ratchets
+    exactly `producer | early-exit-consumer` under pipefail, with a per-file allowlist
+    (`scripts/pipefail-sigpipe-allow.txt`). It grandfathered `cloud-ceiling-probe.sh` at **4**. My
+    fix took the tree to **3**, and the gate blocked the push on the ratchet's **DOWNWARD** half:
+    *"a grandfathered site was FIXED but its allowlist count was not lowered — without it the list
+    becomes a permanent exemption."* Lowered 4 → 3; `--selftest` **27/27** both directions; lint
+    clean. **Before working a defect class, grep for a lint that already owns it — the row's
+    prescribed fix said nothing about the allowlist, and a fix that leaves the ratchet high silently
+    re-grants the exemption it just earned back.**
+  · 🚨 **CORRECTION TO MY OWN COMMIT MESSAGE (`ff14bad6e`) AND TO THE BULLET ABOVE.** I wrote that
+    the row's cited `:167-168` had "drifted" and now resolved to prose. **False, and the census
+    proves it:** `:167` is `config_dir_for`'s `| head -1` and `:179`/`:351` are the other two — i.e.
+    the row's LINE NUMBERS point precisely at the `head -1` half of the defect class, while its
+    PROSE describes the `grep -q` half in `classify_outcome`. The row conflated two halves of one
+    class and I resolved the conflict by believing the prose and calling the numbers stale. Both
+    were live; they simply named different sites. **When a row's cited lines disagree with its
+    cited symptom, that is not drift to be discounted — it is TWO populations, and the census is
+    what tells them apart.**
+  · **The three `head -1` sites are still there, deliberately and now on the record.** They read
+    `accounts.json`, whose jq output is a handful of lines and cannot reach the pipe buffer, so the
+    inversion is unreachable — which is presumably why the allowlist grandfathered them in the first
+    place. Left at 3 rather than driven to 0: that is the repo's own standing judgment, not mine to
+    overturn inside a drain pickup.
 
 - **2026-08-23 — drain recycle #169: the fix's SHAPE was already landed one pointer kind over, and
   the invariant still had to be re-derived rather than copied. filed 0 / closed 1 / 2 commits
