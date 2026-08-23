@@ -94,8 +94,17 @@ tests/idle-slope-sweep.bats
 tests/qos-rewrite.bats
 # run 31362043861: notok=1
 tests/boot-resume.bats
-# run 31362043861: notok=2
-tests/unattended-sysctl-path.bats
+# tests/unattended-sysctl-path.bats DELISTED 2026-08-23 — same SHRINK direction, and its seeded
+# measurement turns out to name the cure exactly. Admitted on run 31362043861 at notok=2; the cause
+# was found and fixed in "fix(tests): two cases needed the box to be BUSY to pass, and the filed
+# cause said the opposite" (item 6a82c9405b9e). Its two qos-census cases invoked the real
+# scripts/qos-census.sh as a bare out="$(...)", so bats' errexit consumed that script's four-state
+# VERDICT rc (0 PASS / 1 FAIL / 3 NO-BURST / 4 SIGNAL-DEAD) as if it were a health signal. A runner
+# is by definition quiet, so the verdict there is always NO-BURST — rc 3 — and the two cases could
+# not pass off-box BY CONSTRUCTION. That is what notok=2 was: not a machine-coupling, an inverted
+# test. A/B on the identical runner (scripts/offbox-run.sh suites, the one CI uses), pre-fix blob
+# swapped in place: RED 7 ok / 2 notok -> GREEN 10 ok / 0 notok. A named mechanism PLUS a census
+# green is the whole bar, and the land's own ratchet arm re-measured it green independently.
 # tests/watchdog-census.bats DELISTED 2026-08-15 — the SHRINK direction this file declares itself
 # subject to ("RE-MEASURED, NOT CURATED"). Admitted on run 31362043861 at notok=1; the cause was
 # then found and fixed in 30494ba09 (a death-path bound rule that guarded the bug it was written
@@ -131,8 +140,13 @@ tests/python-deps.bats
 # BINARIES THE MACHINE HAS. The runner image ships none of tmux, kitty, pnpm, yarn, uv; the box the
 # daemons run on resolves all five inside the hardened PATH itself (/opt/homebrew/bin ×4,
 # /usr/local/bin/yarn), which is why it is 18/18 green here and 15-ok/3-notok there. An off-box
-# verdict on this suite is a claim about the runner's package set, never about our tree. Its own
-# sibling tests/unattended-sysctl-path.bats has been excluded for this class since the seed run.
+# verdict on this suite is a claim about the runner's package set, never about our tree.
+# ⚠️ 2026-08-23: this comment used to close by citing its sibling tests/unattended-sysctl-path.bats
+# as excluded "for this class". That is no longer true, and the reason it was ever cited was wrong.
+# The sibling was never machine-coupled — its notok=2 was an inverted test (see its DELIST note
+# above), which is why fixing the test alone cured it off-box while THIS entry, which really is a
+# claim about the runner's package set, is untouched. Two entries can share a seed run without
+# sharing a cause; only this one has the cause named.
 tests/unattended-path-lint.bats
 # run 31362043861: notok=1
 tests/subshell-cleanup-lint.bats
