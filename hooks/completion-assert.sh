@@ -668,7 +668,24 @@ fi
 #   ANGLE-BRACKET SHAPE ONLY, plus the two conventional literals. `<word>` cannot be confused with
 #   a shell redirect (`cmd < file` has spaces; `<<EOF` is doubled), and $VAR / ~ / $(cmd) are all
 #   things a shell RESOLVES on paste — they are not placeholders and are deliberately excluded.
+#
+#   THE SHAPE MOVED TO hooks/lib/placeholder.sh (2026-08-22) and is SOURCED here, unchanged. It is
+#   now also the RENDER-time rule for hooks/operator-readout.sh and bin/cc-do, which can refuse to
+#   platter a stored command with a hole in it — the only half of this defect that is prevention
+#   rather than apology. Two copies of the regex would be two answers to "is this pasteable", and
+#   the drift would be silent in the direction that plates the bad command.
+#   The literal below is the FALLBACK, not a second definition: this arm must survive a missing lib
+#   (an assert that stops asserting is worse than one that duplicates six tokens), and
+#   tests/completion-assert.bats pins the two against each other so they cannot diverge unnoticed.
 CA_PLACEHOLDER='<[A-Za-z][A-Za-z0-9_.-]*>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
+_ca_plib="${PLACEHOLDER_LIB:-$_cascd/lib/placeholder.sh}"
+[ -f "$_ca_plib" ] || _ca_plib="$CFG/hooks/lib/placeholder.sh"
+[ -f "$_ca_plib" ] || _ca_plib="$HOME/.claude/hooks/lib/placeholder.sh"
+# shellcheck source=lib/placeholder.sh
+# shellcheck disable=SC1090,SC1091
+if [ -f "$_ca_plib" ] && . "$_ca_plib" 2>/dev/null && [ -n "${CC_PLACEHOLDER_RE:-}" ]; then
+  CA_PLACEHOLDER="$CC_PLACEHOLDER_RE"
+fi
 d5=0
 ca_prev=""
 while IFS= read -r ca_l; do
@@ -823,7 +840,7 @@ reason=""
 [ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
-[ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all — it is a question to ask or a step to file."
+[ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all: DELETE the command from your close and do ONE of two things instead — if the value is the operator's to give, ask for it as your line-1 rung in one sentence naming what the value IS (\"the email address the alarms should go to\", never \"<your-address>\"), or file the step with \`cc-backlog needs \"<step, naming the value>\" --run \"<the command>\"\`, which renders as a ✎ SUPPLY row the operator cannot mistake for something to paste. Re-close with the placeholder line GONE, not restyled."
 [ "$d6" -eq 1 ] && reason="${reason:+$reason }$(close_shape_reason "$RUNG" "$_d6_missing")"
 [ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"

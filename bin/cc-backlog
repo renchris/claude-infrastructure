@@ -2453,6 +2453,37 @@ cmd_needs() {
   [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
   [ -n "$session" ] || session="${CC_SESSION_ID:-}"
 
+  # ── PLACEHOLDER WARN (2026-08-22) — the EARLIEST point this defect can be told to its author ───
+  # `--run` is the channel by which an agent-authored command reaches the operator's board, and the
+  # incident that produced this was exactly such a command with `<your-address>` still in it. The
+  # renderers now refuse to platter it as `▶` (they draw a `✎ SUPPLY <token>` row instead), so
+  # correctness does not depend on this warning — but the RENDERED row can only be as useful as the
+  # `needs` prose the filer wrote, and the filer is the only party who knows what the value IS.
+  # So: say it here, while the author is still in the turn that can fix it.
+  #
+  # ADVISORY AND FAIL-OPEN, never a refusal. The step is the thing worth protecting: refusing the
+  # mint would LOSE an operator-only step over a formatting complaint, which is the one outcome
+  # worse than a row that needs a value (same doctrine as the operator-condition link below).
+  if [ -n "$run" ]; then
+    local _phl=""
+    for _c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../hooks/lib/placeholder.sh" \
+              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/placeholder.sh" \
+              "$HOME/.claude/hooks/lib/placeholder.sh"; do
+      [ -f "$_c" ] && { _phl="$_c"; break; }
+    done
+    # shellcheck source=../hooks/lib/placeholder.sh
+    # shellcheck disable=SC1090,SC1091
+    if [ -n "$_phl" ] && . "$_phl" 2>/dev/null && ph_hit "$run"; then
+      { printf 'cc-backlog needs: the --run command still contains %s — it is NOT pasteable.\n' "$PH_TOKENS"
+        printf '  Filed anyway (a step is worth more than a tidy command), and it will render as\n'
+        printf '  "✎ SUPPLY %s" instead of "▶ <command>", so nobody can paste it by reflex.\n' "$PH_TOKENS"
+        printf '  If you can resolve the value, re-file with the literal command. If it is the\n'
+        printf '  operator to give, make sure your step SENTENCE says what the value is — that\n'
+        printf '  sentence is the only thing the board can show them about it.\n'
+      } >&2
+    fi
+  fi
+
   # ── THE MINT BRAKE (READINESS R7 — see MECHANICAL FOLD in the header) ────────────────────────
   # Ask, BEFORE minting, whether this exact step about this exact subject is already a live row.
   # The question is put to KEY 4 and nothing else: one program answers it here, in `dups`, and in

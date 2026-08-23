@@ -638,6 +638,32 @@ cc-do')" "$w" "a2-d2-barectl"
   [ "$status" -eq 0 ]; fired "$output"
 }
 
+@test "D5 SSOT: the shape is the LIB's, and the inline fallback is byte-identical to it" {
+  # The shape moved to hooks/lib/placeholder.sh (2026-08-22) so the RENDERERS could refuse to platter
+  # a stored command with a hole in it — the only half of this defect that is prevention rather than
+  # apology. This arm keeps an inline copy so a missing lib cannot stop it asserting; that copy is a
+  # FALLBACK, not a second definition, and two answers to "is this pasteable" would drift silently in
+  # the direction that plates the bad command. So: pin them against each other.
+  local repo; repo="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  local from_lib from_hook
+  from_lib="$(grep -m1 '^CC_PLACEHOLDER_RE=' "$repo/hooks/lib/placeholder.sh" | cut -d= -f2-)"
+  from_hook="$(grep -m1 '^CA_PLACEHOLDER=' "$repo/hooks/completion-assert.sh" | cut -d= -f2-)"
+  [ -n "$from_lib" ] && [ "$from_lib" = "$from_hook" ]
+}
+
+@test "D5 still FIRES with the lib unreachable — the fallback is live, not decorative" {
+  local w; w="$(mkrepo_landed a2d5nolib)"
+  PLACEHOLDER_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh" \
+  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nocfg" \
+    run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Run this:
+
+`aws sns subscribe --protocol email --notification-endpoint <your-address>`')" "$w" "a2-d5-nolib"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'placeholder'
+}
+
 # ---- false-positive guards: each pins a lane a blanket placeholder-hunt would have broken -----
 
 @test "FP GUARD: a placeholder in a MID-SENTENCE mention is documentation, not a handover" {

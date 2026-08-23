@@ -282,6 +282,35 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   [ "$output" -eq 0 ]
 }
 
+@test "a row's --run WITH A PLACEHOLDER is not a paste target — ✎, and no command line under it" {
+  # Same defect as the close block's (operator, 2026-08-22: `--notification-endpoint <your-address>`
+  # handed over under a run marker). This board prints a row's own `run` as its paste target, so it
+  # hands the same unpasteable line over by a second route. The suppression rides the mechanism that
+  # is already there — putting the GENERIC pointer in `cmd` — so there is no fifth field to sync.
+  id="$("$BACKLOG" needs "give me the address the alarms should go to" \
+        --run 'aws sns subscribe --topic-arn arn:x --notification-endpoint <your-address>' --project p 2>/dev/null)"
+  run "$DO" --list </dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '✎' || false
+  echo "$output" | grep -q 'SUPPLY <your-address>' || false
+  ! echo "$output" | grep -q 'aws sns subscribe' || false          # nothing to paste by reflex
+  # POSITIVE CONTROL, same store: a complete command still hangs under its row as before, so this is
+  # a refusal of templates and not a refusal of every backlog command.
+  ok="$("$BACKLOG" needs "rotate the signing key" --run 'op item edit signing-key' --project p)"
+  run "$DO" --list </dev/null
+  echo "$output" | grep -A1 -- "$ok" | grep -q 'op item edit signing-key' || false
+}
+
+@test "cc-backlog needs WARNS at filing time when --run still has a hole in it (and files anyway)" {
+  # The earliest point the defect can be told to its author — while it is still in the turn that can
+  # fix it. ADVISORY: refusing would lose an operator-only step over a formatting complaint, which is
+  # worse than a row that needs a value. rc 0 and the id on stdout are the contract every caller uses.
+  run "$BACKLOG" needs "give me the alerts inbox address" --run 'cmd --to <your-address>' --project p
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'NOT pasteable' || false
+  echo "$output" | grep -qE '^[0-9a-f]{12}$' || false     # the id still reaches stdout
+}
+
 @test "a row's --run is NOT promoted to runnable — it is never counted, never executed" {
   # The hazard this design refuses. The live population includes a production-token revoke, an
   # `rm -i`, and `brew services stop postgresql@14`; the bulk Enter must never reach any of them.
