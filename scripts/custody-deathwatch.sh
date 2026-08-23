@@ -110,7 +110,18 @@ resolve() {
   return 1
 }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)" || ROOT=""
+# RESOLVED before the '..' traversal, and the two uses of this file's own path are deliberately
+# DIFFERENT (self-path-lint would flag the unresolved form here, correctly):
+#   · ROOT — a sibling-binary FALLBACK. ~/.claude/{scripts,hooks,bin}/ are per-file symlinks into
+#     the checkout, so an unresolved `$0/..` from the deployed copy lands in ~/.claude and misses
+#     ../bin entirely. It must resolve.
+#   · the DEPLOYED guard below — reads `$0` UNRESOLVED on purpose, because resolving it follows the
+#     deployed symlink back into the checkout and erases the only difference there is
+#     (autonomy-sweep.sh records the incident that bought that rule).
+# Same file, opposite requirements: one asks "where do my siblings live", the other asks "which copy
+# of me is running".
+_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)" || ROOT=""
 CUSTODY_BIN="$(resolve "${CC_DEATHWATCH_CUSTODY_BIN:-}" cc-custody "$ROOT/bin/cc-custody" "$HOME/.claude/bin/cc-custody")" || CUSTODY_BIN=""
 NOTIFY_BIN="$(resolve  "${CC_DEATHWATCH_NOTIFY_BIN:-}"  cc-notify  "$ROOT/bin/cc-notify"  "$HOME/.claude/bin/cc-notify")"   || NOTIFY_BIN=""
 BACKLOG_BIN="$(resolve "${CC_DEATHWATCH_BACKLOG_BIN:-}" cc-backlog "$ROOT/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog")" || BACKLOG_BIN=""
