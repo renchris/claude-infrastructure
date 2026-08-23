@@ -62,7 +62,44 @@ NEGATION='never|not a teammate|unresolv|do ?n.?t|does ?n.?t|avoid|degrad|silent|
 # uuid incident). A payload pairing cc-notify with a role reference (the cc-roles/<role> path a reader
 # cats, or a --role flag) is addressable and MUST satisfy F3 alongside a literal uuid — else every
 # role-driven fire (every /goal fire uses `cc-notify "$(cat ~/.claude/cc-roles/desk)"`) false-REDs.
-ROLE_REF='cc-roles/(desk|operator|orchestrator)|--role[[:space:]=]+(desk|operator|orchestrator)'
+#
+# 🚨 IT IS THE CLASS "a role", NOT THREE SPELLINGS — corrected 2026-08-23 (backlog f1a51344cb84).
+# This rule enumerated `desk|operator|orchestrator`, but cc-roles manages ARBITRARY roles: `cc-roles
+# claim <role>` imposes no name validation at all, and `cc-notify --role <name>` (:556) is likewise
+# name-agnostic — it just reads $CC_ROLES_DIR/<name>. So the list could only ever be a snapshot of
+# the roles its author happened to know, and it decayed exactly as an enumeration does. Measured on
+# this box the day of the fix, the list was not merely incomplete but ANTI-CORRELATED with reality:
+#     desk          allowlisted  — NO role file at all
+#     operator      allowlisted  — NO role file at all
+#     orchestrator  allowlisted  — file present, reads ABSENT/empty
+#     drain-lead    REFUSED      — file present, reads LIVE 102
+#     docs-lead     REFUSED      — file present, reads UNVERIFIED 450
+# i.e. it admitted three names of which zero resolved, and refused the only two that did. A fire
+# briefed with `cc-notify --role drain-lead` aborted F3 twice with "resolvable target: ABSENT" while
+# that role read LIVE. Widening the list to five names would just repeat the class (memory:
+# denylist-enumerates-spellings-not-the-class), so the arm keys on the role-reference FORM.
+#
+# WHY FORM AND NOT LIVE RESOLVABILITY — the obvious remedy is refuted by the same measurement.
+# Shelling out to `cc-roles read <role>` would RED `--role desk` today, because desk has no file —
+# and the desk's own /goal fires are the main path this arm exists to keep green. A false-RED here is
+# the UNRECOVERABLE direction (payload_lint_gate … enforce aborts the fire → fire_cleanup removes the
+# worktree and DELETES THE BRANCH), so a liveness-keyed arm would be strictly more dangerous than the
+# bug it replaces. It would also be asymmetric: F3's other two arms assert FORM too — the uuid arm
+# never checks the pane is alive, the session-name arm never checks the registry. Liveness is
+# cc-notify's job at SEND time (it distinguishes role-unset / mailbox-only), not a static lint's.
+#
+# THE ANCHOR IS WHAT PAYS FOR THE WIDENING, and its absence here was a THIRD instance of the bug the
+# 2026-08-22 correction above fixed for UUID_REF (backlog bacdfc4f63ab). That correction anchored the
+# uuid and session-name rules to the cc-notify ARGUMENT POSITION and left this rule matching `--role
+# <name>` ANYWHERE in the payload — so ordinary prose satisfies it. Measured pre-fix:
+#     "never use --role desk here; it is the wrong pane"   → GREEN, with no back-channel at all
+# Unanchored, widening the token to the class would multiply that false-GREEN across every lowercase
+# word ("use --role instead"). Anchored to a role-consuming SENDER's argument position, prose cannot
+# reach it and the widening is free. The senders are the ones that actually resolve a role
+# (cc-roles' own header names them); the cc-roles/<role> PATH form needs no anchor — its literal
+# prefix is already specific. Measured over every real payload on this box: 174 payloads, 112 green /
+# 62 red BEFORE and AFTER, 0 GREEN→RED — no false-RED bought by the anchor.
+ROLE_REF='cc-roles/[a-z][a-z0-9-]*|(cc-notify|cc-announce|cc-await-ping)([[:space:]]+--[A-Za-z-]+)*[[:space:]]+--role[[:space:]=]+"?[a-z][a-z0-9-]*'
 # KITTY SESSION NAME (2026-08-08) — the third resolvable target, and its absence was a REAL refusal,
 # not a theoretical gap. iTerm2 pane ids are uuids; KITTY pane ids are BARE INTEGERS
 # ($KITTY_WINDOW_ID), and kitty-setup.sh exports a synthetic $ITERM_SESSION_ID of the form `w0t0p0:776`
@@ -151,6 +188,31 @@ BACK-CHANNEL: announce to the desk via cc-notify "$(cat ~/.claude/cc-roles/desk)
 NEVER SendMessage — the desk is NOT a teammate.
 EOF
 
+  # (4b) A ROLE OUTSIDE THE OLD THREE-NAME LIST — the case backlog f1a51344cb84 measured. `drain-lead`
+  #      read LIVE 102 while `desk` and `operator` had no role file at all, yet this payload aborted
+  #      F3 twice with "resolvable target: ABSENT". cc-roles imposes no name validation and cc-notify
+  #      --role is name-agnostic, so a role is a role. MUST go GREEN.
+  cat >"$d/role-other.txt" <<'EOF'
+SUCCESSOR FIRE — continue the build.
+BACK-CHANNEL: on completion, cc-notify --role drain-lead "HANDOFF-PING: <rows closed, sha landed>".
+NEVER SendMessage — the lead is NOT a teammate.
+EOF
+
+  # (4c) PROSE MENTIONING --role, NOT IN A SENDER'S ARGUMENT POSITION — the false-GREEN the old
+  #      UNANCHORED rule bought, and the one that would multiply if the token were widened without
+  #      anchoring: this payload has NO addressable back-channel, yet `--role desk` anywhere in it
+  #      satisfied F3. Same class as the uuid rule's 2026-08-22 anchoring (bacdfc4f63ab). MUST be RED.
+  #      🚨 IT MUST MENTION cc-notify. F3 is an ORDERED pair of conditions and `has_cc` is the FIRST:
+  #      a fixture with no cc-notify at all REDs on that, not on the role arm, and credits this
+  #      anchor with nothing — the first draft of this case did exactly that and passed against a
+  #      mutant with the anchor deleted (method: the vacuity lives one level below the assertion).
+  #      So cc-notify is present and UNADDRESSED, and the only --role is in prose.
+  cat >"$d/role-prose.txt" <<'EOF'
+SUCCESSOR FIRE — continue the build.
+Addressing note: cc-notify is available on this box, but never use --role desk here — it is the
+wrong pane, and --role indirection in general is not how this wave reports.
+EOF
+
   # (5) KITTY SESSION NAME — cc-notify + the registry name, no uuid, no role. This is what
   #     handoff-fire.sh's --notify-back trailer emits on a kitty box, and what cc-notify actually
   #     resolves (verdict=delivered). MUST go GREEN.
@@ -208,6 +270,8 @@ EOF
   expect "$d/present.txt" 0 "well-formed payload did not go GREEN (a prohibition false-RED'd?)"
   expect "$d/sendmsg.txt" 1 "a SendMessage terminal-announce did not go RED"
   expect "$d/role.txt"    0 "role-indirection payload (cc-notify + cc-roles/<role>, no uuid) did not go GREEN"
+  expect "$d/role-other.txt" 0 "a role OUTSIDE the old desk|operator|orchestrator list (cc-notify --role drain-lead, LIVE) wrongly false-RED'd"
+  expect "$d/role-prose.txt" 1 "prose mentioning --role, with NO back-channel, wrongly satisfied F3 (the unanchored-rule false-GREEN)"
   expect "$d/absent.txt"  2 "a missing file did not exit 2 (LOUD)"
   expect "$d/paneid.txt"  0 "kitty session-name back-channel (cc-notify <registry name>) did not go GREEN"
   expect "$d/bareint.txt" 1 "a BARE pane id (cc-notify 776 — verdict=unresolvable) wrongly satisfied F3"
@@ -215,7 +279,7 @@ EOF
   expect "$d/bareint-laundered.txt" 1 "a bare pane id LAUNDERED by an unrelated prose uuid wrongly satisfied F3"
   expect "$d/prefixed.txt" 1 "a w0t0p0:-prefixed address (no-such-target) wrongly satisfied F3 on its uuid substring"
   if [ "$fails" -eq 0 ]; then
-    echo "payload-lint --selftest: 10/10 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated) AND on a kitty session NAME; RED on a bare pane id (undeliverable), on a prose integer, on a bare pane id laundered by a prose uuid, and on a w0t0p0:-prefixed address; LOUD on missing."
+    echo "payload-lint --selftest: 12/12 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated), on a role OUTSIDE the old three-name list (--role drain-lead) AND on a kitty session NAME; RED on a bare pane id (undeliverable), on a prose integer, on a bare pane id laundered by a prose uuid, on a w0t0p0:-prefixed address, and on prose merely mentioning --role with no back-channel; LOUD on missing."
     exit 0
   fi
   echo "payload-lint --selftest: FAILED — the lint does not discriminate (do not trust F3)."

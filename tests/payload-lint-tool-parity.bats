@@ -27,12 +27,26 @@ setup() {
   P="$BATS_TEST_TMPDIR/payload.md"
 }
 
-# The three role names payload-lint.sh's ROLE_REF regex sanctions. Anything the LINTER blesses, the
-# TOOL must accept — that equivalence is the whole contract.
+# The roles payload-lint.sh's ROLE_REF regex sanctions. Anything the LINTER blesses, the TOOL must
+# accept — that equivalence is the whole contract.
+#
+# 2026-08-23 (backlog f1a51344cb84): ROLE_REF used to enumerate exactly desk|operator|orchestrator,
+# and this loop was that list transcribed. It now keys on the CLASS "a role reference", because
+# cc-roles imposes no name validation and cc-notify --role (:556) just reads $CC_ROLES_DIR/<name> —
+# so the blessed set is open-ended and a three-name loop would no longer cover it. drain-lead and
+# docs-lead are the two roles that actually resolved on the box the day of the fix, and they are
+# exactly the two the old list refused; they are in the loop so this contract is exercised against a
+# role the enumeration would have rejected, not only against its incumbents.
 @test "every role the linter blesses is a role the REAL cc-notify accepts (--role <role>)" {
   local r
-  for r in desk operator orchestrator; do
+  for r in desk operator orchestrator drain-lead docs-lead; do
     printf '%s\n' "$UUID" > "$CC_ROLES_DIR/$r"
+    # BOTH halves, per role — the linter must bless it AND the tool must honour it. Asserting only
+    # the tool half would leave the widened set untested on the side that actually changed.
+    { printf 'FIRE.\n'
+      printf 'BACK-CHANNEL: cc-notify --role %s "parity probe %s".\n' "$r" "$r"; } > "$P"
+    run "$LINT" "$P"
+    [ "$status" -eq 0 ] || { echo "the LINTER refused role '$r' (status $status): $output"; false; }
     run "$NOTIFY" --role "$r" "parity probe $r"
     [ "$status" -eq 0 ] || { echo "cc-notify REJECTED the lint-blessed role '$r' (status $status): $output"; false; }
     grep -q "parity probe $r" "$CC_MAILBOX_DIR/$UUID.md"

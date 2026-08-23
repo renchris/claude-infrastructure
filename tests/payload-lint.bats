@@ -94,3 +94,68 @@ setup() {
   run "$L" "$BATS_TEST_TMPDIR/does-not-exist.txt"
   [ "$status" -eq 2 ]
 }
+
+# ── ROLE_REF is the CLASS "a role", not three spellings (backlog f1a51344cb84, 2026-08-23) ─────────
+# ROLE_REF enumerated desk|operator|orchestrator while cc-roles manages arbitrary roles. Measured the
+# day of the fix, the list was ANTI-CORRELATED with reality: desk and operator had no role file at
+# all, orchestrator read ABSENT/empty, and the only two roles that resolved — drain-lead (LIVE 102)
+# and docs-lead (UNVERIFIED 450) — were the two it refused. A false-RED here is the unrecoverable
+# direction: payload_lint_gate … enforce aborts the fire and fire_cleanup DELETES THE BRANCH.
+
+@test "a role OUTSIDE the old three-name list (--role drain-lead) → GREEN — the f1a51344cb84 case" {
+  { printf 'FIRE. continue the build.\n'
+    printf 'BACK-CHANNEL: cc-notify --role drain-lead "HANDOFF-PING: done" on completion.\n'; } > "$P"
+  run "$L" "$P"
+  [ "$status" -eq 0 ] || { echo "false-RED on a LIVE role: $output"; false; }
+}
+
+@test "the cc-roles/<role> PATH form also takes any role, not just the old three" {
+  { printf 'FIRE. continue the build.\n'
+    printf 'BACK-CHANNEL: cc-notify "$(cat ~/.claude/cc-roles/drain-lead)" on completion.\n'; } > "$P"
+  run "$L" "$P"
+  [ "$status" -eq 0 ] || { echo "false-RED on the path form of a LIVE role: $output"; false; }
+}
+
+@test "prose mentioning --role, with cc-notify present but UNADDRESSED → RED (the anchor)" {
+  # The widening is only safe because the flag form is anchored to a role-consuming SENDER's argument
+  # position. Unanchored — as it shipped — this payload went GREEN carrying no back-channel at all.
+  # It MUST mention cc-notify: has_cc is F3's FIRST condition, so a fixture without it REDs there and
+  # proves nothing about the role arm (that vacuity is why the mutant arm below exists).
+  { printf 'FIRE. continue the build.\n'
+    printf 'cc-notify is available here, but never use --role desk — it is the wrong pane.\n'; } > "$P"
+  run "$L" "$P"
+  [ "$status" -eq 1 ] || { echo "prose laundered a back-channel through F3: $output"; false; }
+  [[ "$output" == *"F3"* ]]
+}
+
+# ── MUTANT ARMS — the fix must be the reason the three clauses above pass ──────────────────────────
+# Both mutants are `sed` over the WORKING TREE with the ROLE_REF site counted BEFORE and AFTER, so no
+# moving ref is replayed (an arm that compares the fix to itself cannot occur) and a rename of the
+# site REDS the anchor instead of silently yielding a mutant identical to the subject.
+
+@test "MUTANT: restoring the three-name enumeration REDS the LIVE-role case" {
+  [ "$(grep -c '^ROLE_REF=' "$L")" -eq 1 ]
+  local m="$BATS_TEST_TMPDIR/m1.sh"
+  sed "s@^ROLE_REF=.*@ROLE_REF='cc-roles/(desk|operator|orchestrator)|--role[[:space:]=]+(desk|operator|orchestrator)'@" "$L" > "$m"
+  [ "$(grep -c 'cc-await-ping' "$m")" -eq 0 ]     # the fixed regex is gone
+  chmod +x "$m"
+  { printf 'FIRE.\n'
+    printf 'BACK-CHANNEL: cc-notify --role drain-lead "done".\n'; } > "$P"
+  run bash "$m" "$P"
+  [ "$status" -eq 1 ] || { echo "the enumeration is UNGUARDED — reverting it changed nothing"; false; }
+}
+
+@test "MUTANT: deleting the sender anchor GREENS the prose payload" {
+  # Without this arm the anchor could be removed tomorrow and every other test would stay green,
+  # because the widened token alone still passes all the positive cases.
+  [ "$(grep -c '^ROLE_REF=' "$L")" -eq 1 ]
+  local m="$BATS_TEST_TMPDIR/m2.sh"
+  sed "s@^ROLE_REF=.*@ROLE_REF='cc-roles/[a-z][a-z0-9-]*|--role[[:space:]=]+\"?[a-z][a-z0-9-]*'@" "$L" > "$m"
+  [ "$(grep -c 'cc-await-ping' "$m")" -eq 0 ]     # the anchor is gone
+  [ "$(grep -c 'a-z0-9-' "$m")" -ge 1 ]           # the widened token survives
+  chmod +x "$m"
+  { printf 'FIRE.\n'
+    printf 'cc-notify is available here, but never use --role desk — it is the wrong pane.\n'; } > "$P"
+  run bash "$m" "$P"
+  [ "$status" -eq 0 ] || { echo "the ANCHOR is UNGUARDED — deleting it changed nothing"; false; }
+}
