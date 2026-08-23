@@ -1036,11 +1036,29 @@ valid_records() { # [--strict] → rc 1 on a short read (default: warn on stderr
 }
 
 # Fold the trail → a JSON ARRAY of one object per id (latest status + carried meta).
-fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its rc out to the caller
+fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carries its rc to the caller
+  # --as-of REPLAYS THE FOLD AS IT STOOD AT A PAST MOMENT, by dropping records written after it.
+  # This is one filter in front of the EXISTING reduce, deliberately — not a second fold. A separate
+  # as-of program would be a second model of the same population, which is the exact defect
+  # tests/backlog-fold-agreement.bats exists to pin (memory: sibling-auditors-must-share-the-state-
+  # model). When $asof is "" the select is a no-op, so every pre-existing caller is byte-unchanged.
+  #
+  # Lexicographic <= IS chronological here: every record carries `ts` as ISO-8601 UTC with a literal
+  # Z, verified 13370/13370 on the live ledger, and that form sorts as it dates. A record with NO ts
+  # compares as "" and is therefore KEPT by any as-of — the fail-open direction on purpose, so a
+  # replay can never under-count by silently dropping a record it could not date.
   local -a vr=(valid_records)
-  if [ "${1:-}" = --strict ]; then vr+=(--strict); shift; fi
-  "${vr[@]}" | jq -s '
-    reduce .[] as $r ({};
+  local asof=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --strict) vr+=(--strict); shift ;;
+      --as-of)  asof="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      *) break ;;
+    esac
+  done
+  "${vr[@]}" | jq -s --arg asof "$asof" '
+    [ .[] | select($asof == "" or (.ts // "") <= $asof) ]
+    | reduce .[] as $r ({};
       .[$r.id] = ((.[$r.id] // {}) as $p | {
         id:       $r.id,
         project:  ($r.project  // $p.project  // ""),
@@ -3829,6 +3847,99 @@ cmd_list() {
     done
 }
 
+# cmd_fold — RENDER THE POPULATION FIGURES THE DRAIN CITES, WITH THE PREDICATE THAT PRODUCED THEM,
+# and (with --as-of) as they stood at a past moment.
+#
+# WHY THIS VERB EXISTS. Backlog row 5e35b5b1070b: drain hand-off pings cite derived population
+# counts — "ungrouped 133->132" — that no tool rendered, so a verifier could not audit them. The row
+# attributed that to PRIVATE DEFINITIONS. Measured 2026-08-23, that diagnosis is REFUTED on its own
+# primary exhibit: an as-of replay of recycle #127's window reproduces 133 -> 132 EXACTLY under the
+# plainest reading (status=="open" AND no condition key) — 133 at 2026-08-22T05:10:00Z, 132 at
+# #127's close 05:23:37Z — with as-of-2099 equal to the live board (171 / 196) and as-of-2020 equal
+# to 0 as the two controls. The cited figure was correct, and three candidate definitions were never
+# needed to explain it.
+#
+# What was actually missing is TIME, not definition. The ledger is append-only over a board that
+# mutates under siblings (13367 -> 13370 records during the session that wrote this verb), so a
+# verifier replaying a ping LIVE necessarily lands on a different number — which is
+# indistinguishable from a fabricated one. The row's own replay was +4 at BOTH endpoints, exactly
+# the shape of four ungrouped rows arriving between the citation and the audit. That is why --as-of
+# is the load-bearing half here, and why the row's first remedy arm — "cite a count a tool prints" —
+# would NOT have closed it: a live-only renderer still leaves a three-day-old ping unauditable.
+#
+# THE ROW'S SECOND POPULATION IS NOT FIXABLE HERE, and saying so is part of the fix rather than an
+# omission from it. Its other exhibit, "retire-in-one 46->45", names a HUMAN JUDGMENT with no field
+# behind it: that string occurs exactly ONCE in the entire ledger, inside that row's own title, and
+# no condition key resembles it. No renderer can print it, at any time, with or without an as-of.
+# For a population the store does not carry, the remedy stays the row's SECOND arm — state the
+# predicate inline, or do not cite the figure. Pooling those two populations under one diagnosis is
+# what made the row look like one defect (memory: zero-claim-must-name-its-excluded-strata).
+cmd_fold() {
+  local asof="" fmt="table" projfilter=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --as-of)   asof="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --json)    fmt="json" ;;
+      --project) projfilter="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog fold: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  # FAIL CLOSED ON A MALFORMED --as-of. Unvalidated, a bad value reaches jq as a plain string
+  # compare, and "yesterday" sorts ABOVE every 2026- timestamp — so the filter would silently select
+  # the WHOLE ledger and render a LIVE fold under a PINNED heading. That is a wrong answer wearing
+  # the authority of a reproducible one, which is strictly worse than the unauditable figure this
+  # verb exists to replace (memory: absent-range-endpoint-selects-everything).
+  if [ -n "$asof" ]; then
+    case "$asof" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
+      *) printf 'cc-backlog fold: --as-of must be ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ), got: %s\n' \
+           "$asof" >&2
+         return 2 ;;
+    esac
+  fi
+  ensure_file
+
+  if [ "$fmt" = json ]; then
+    fold --as-of "$asof" | jq -c --arg proj "$projfilter" --arg asof "$asof" '
+      [ .[] | select($proj == "" or .project == $proj) ] as $rows
+      | def cond: (if (.condition // "") == "" then "ungrouped" else .condition end);
+        { asOf:      (if $asof == "" then null else $asof end),
+          predicate: "ungrouped = row carries no condition key; open/blocked/claimed/done = folded status; each row counted once",
+          rows:      ($rows | length),
+          status:    ($rows | group_by(.status) | map({key: .[0].status, value: length}) | from_entries),
+          conditions: ($rows | map(select(.status == "open" or .status == "blocked"))
+                             | group_by(cond)
+                             | map({ condition: (.[0] | cond),
+                                     open:    ([ .[] | select(.status=="open")    ] | length),
+                                     blocked: ([ .[] | select(.status=="blocked") ] | length) })
+                             | sort_by(.condition)) }'
+    return 0
+  fi
+
+  printf 'CONDITION FOLD — cc-backlog fold%s\n' "${asof:+ --as-of $asof}"
+  printf 'predicate: ungrouped = row carries no condition key · open/blocked = folded status · each row counted once\n'
+  if [ -n "$asof" ]; then printf 'as-of:     PINNED %s (records after it dropped)\n' "$asof"
+  else                    printf 'as-of:     LIVE %s (a later replay WILL differ — pin it with --as-of)\n' "$(now_iso)"; fi
+
+  fold --as-of "$asof" | jq -r --arg proj "$projfilter" '
+    [ .[] | select($proj == "" or .project == $proj) ] as $rows
+    | def cond: (if (.condition // "") == "" then "ungrouped" else .condition end);
+      "R\($rows | length)",
+      ($rows | map(select(.status == "open" or .status == "blocked"))
+             | group_by(cond)
+             | sort_by(.[0] | cond)[]
+             | "C\(.[0] | cond)\([ .[] | select(.status=="open") ] | length)\([ .[] | select(.status=="blocked") ] | length)"),
+      ($rows | group_by(.status)[] | "S\(.[0].status)\(length)")' \
+  | while IFS=$'\037' read -r tag a b c; do
+      case "$tag" in
+        R) printf 'rows:      %s folded\n\n' "$a" ;;
+        C) printf '%-52s open=%-5s blocked=%s\n' "$a" "$b" "$c" ;;
+        S) printf 'STATUS %-10s %s\n' "$a" "$b" ;;
+      esac
+    done
+}
+
 # cmd_venue — RECORD A ROUTING DECISION on an open row. The write half of `bin/cc-venue`.
 #
 # It is a separate verb from `claim --venue` for the reason spelled out at `venuePlan` in the fold:
@@ -5749,6 +5860,8 @@ case "${1:-}" in
   # dispatch wave, so a kick is pure waste and risks a worker on a human-only step (header § needs).
   needs)   shift; cmd_needs "$@" ;;
   reap)    shift; cmd_reap "$@" ;;
+  # Pure read, no dispatch_kick: rendering a population cannot make an item newly dispatchable.
+  fold)    shift; cmd_fold "$@" ;;
   # Instrument, not a workflow verb (see cmd_fold_audit) — read-only, no args, absent from `help`.
   fold-audit) shift; cmd_fold_audit "$@" ;;
   compact) shift; cmd_compact "$@" ;;
