@@ -87,6 +87,81 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #170: the item's pairing clause was right about the MECHANISM and
+  wrong about the FINDING, and checking which was the work. filed 0 / closed 1 / 2 commits
+  (CODE+TESTS, then DOCS). FOURTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
+  close, and this one is a **MOVE, not a hold**: the row sits in
+  **`master-convergence-deadlock`**, which read **30 open / 6 blocked** at my open and
+  **29 open / 6 blocked** at my close — the count the goal names actually moved. (Note the blocked
+  tail had already gone **5 → 6** between #169's close and my open, i.e. a sibling's, not mine.)
+  Gate 1 clear — **0 `.page` files** (`find` at `$HOME/.claude/autonomy/postland`, directory
+  asserted first; **sixty-first consecutive**). Heredoc diff clean, **fifty-second**. Live layer
+  **1 behind** at my open — the lowest reading in this lineage's record, and still not to be
+  inherited. Board at my open: **open 308 / blocked 187 / done 2188 / claimed 2**, **495**
+  open+blocked, predicate `bash bin/cc-backlog fold` from the worktree (⚠️ still NOT the PATH copy).
+  · **ROW CLOSED — `130814a95132`** (*"harden scripts/cloud-ceiling-probe.sh:167-168 —
+    classify_outcome pipes an UNBOUNDED PTY capture into grep -qE with the status consumed under
+    set -euo pipefail"*). Landed `ff14bad6e`.
+  · 🚨 **THE ROW CITED TWO SITES AND THERE WERE FOUR — because the line numbers had drifted and the
+    census was never re-run.** `:167-168` now resolves to prose; `classify_outcome` sits at `:185`.
+    Beyond its two arms, **`is_harness_refusal` (:204) and `is_bundle_refusal` (:223) carry the
+    identical defect in a shape the row's own grep would not have found**: they call `grep -qiE`
+    reading **stdin bare**, and it is their CALLERS at `:317-318` that supply the pipe. A census
+    keyed on the row's cited lines finds 50% of the population. **Re-derive the site list from the
+    MECHANISM (a producer piped into an early-exit consumer), never from the row's line numbers.**
+  · 🆕 **THE FIX IS WORSE-THAN-STATED IN A DIRECTION THE ROW DID NOT NAME, AND THE ORDERING IS WHY.**
+    The row frames the cost as a paid create reading `refused-other` — a non-verdict after spending
+    real weekly quota. True, and not the worst of it. `is_harness_refusal` is deliberately ordered
+    **ahead of** the quota patterns, and the file's own comment says why: *"a fault in the instrument
+    must never be publishable as a property of the accounts."* Invert that arm silently and the run
+    does not lose a verdict — it **falls through to the quota arm and publishes our own rig's fault
+    as a CEILING**, which is the single outcome the ordering exists to prevent. **When a row names a
+    defect in one arm of an ORDERED chain, price it at the arm that runs FIRST.**
+  · **REPRODUCED WITH A PROBE BUILT TO FLIP (method 109, second outing).** Same pattern, same token
+    on line 1, only the payload size differing: **1,637 bytes → `verdict=created`; 200,161 bytes →
+    `verdict=refused-other`; `AGREE=no`**. Post-cure both read `created`, `AGREE=yes`. A second probe
+    ran the row's **prescribed** cure at 200 KB before I adopted it — `CURED=yes` **plus a negative
+    control proving the cured form can still say no**, because a fix that matched everything would
+    make both arms agree for the wrong reason.
+  · 🆕 **THE PAIRING CLAUSE WAS RIGHT ABOUT THE MECHANISM AND WRONG ABOUT THE FINDING — and the row
+    would have read as satisfied either way.** It warned that touching this file pulls
+    `tests/tsv-field-collapse.bats` into the gate's own-scope as a pre-existing trunk red, via *"an
+    unpadded-TSV finding in the SAME file"*. **Measured: guard 27 (unpadded `IFS=tab` readers) is
+    GREEN and names nothing in `cloud-ceiling-probe.sh`.** The suite really is red on trunk — but at
+    **case 34, over `bin/cc-backlog`**, which pastes **six RAW 0x1f sentinel bytes** into `fold()`'s
+    jq program. Had I trusted the clause's stated cause I would have gone looking for a TSV reader
+    that does not exist, found nothing, and concluded the pairing was stale. **A pairing clause names
+    a CONSEQUENCE (this suite enters own-scope) and a CAUSE (why it is red). The consequence can hold
+    while the cause has been replaced — run the suite and read WHICH case fails.**
+  · **THE SECOND FIX ADOPTS THE FILE'S OWN CONVENTION, NOT A NEW ONE.** `bin/cc-backlog` already
+    spells the sentinel `\u001f` in three other jq programs (`:2309`, `:5383`, `:5726`); the
+    later-landed `fold` verb departed from it. My rewriter **asserts those three still exist before
+    running** — a positive control that fired on its first invocation and told me the file MIXES both
+    spellings, which is the fact that made the fix arguable rather than a preference. Landed
+    `c4d36a4c0`. Byte-neutrality **proven, not assumed**: an `--as-of` PINNED fold is identical before
+    and after (44 condition rows, 4 status rows). **Pinning is what makes the comparison
+    attributable** — LIVE mode stamps its own timestamp and would differ for an unrelated reason.
+  · **PRE-EXISTING, AND FIXED ANYWAY — the attribution rule cuts both ways.** The 0x1f bytes are on
+    `origin/main`, byte-identical, with no local diff, so this was a trunk red **inherited, not
+    caused**. The global rule says such a 🔧 is not mine to drive. It was driven regardless because
+    **this land's own diff pulls that suite into the gate's own-scope**, which converts someone
+    else's red into a blocker on my green. *Attribute before you drive* decides whose fault it is —
+    it does not decide whether the gate will let you land.
+  · **NOT DONE, stated rather than silently skipped.** `config_dir_for` and `weekly_pct_for` also end
+    in `| head -1`, the other early-exit consumer named by the parent row `791345455b58` (DONE).
+    Both read `accounts.json`, whose jq output is a handful of lines and **cannot reach the pipe
+    buffer**, so the inversion is unreachable there. Left unchanged deliberately.
+  · **Nothing filed.** The four cured sites are the whole population in that file (`grep -c 'grep -q'`
+    now returns 1, and that one is inside my own explanatory comment).
+  · **Board at my close: open 308 / blocked 186 / done 2190 / claimed 3**, **494** open+blocked. The
+    open-id diff shows **3 ids leaving and 2 arriving** — only one of the departures is mine, so
+    **siblings DID move the board inside my window** (unlike #169's, where exactly one left and none
+    arrived). Reporting the delta as if it were mine would have been wrong by two rows in each
+    direction; the id-list diff is what makes that statement a measurement.
+  · Suites run by hand this turn: `cloud-ceiling-probe` **22/22** (19 green / 3 red pre-fix),
+    `tsv-field-collapse` **34/34** (33/1 pre-fix), `backlog-fold-agreement` **14/14**. Selector
+    instrument control **32**, thirty-third consecutive.
+
 - **2026-08-23 — drain recycle #169: the fix's SHAPE was already landed one pointer kind over, and
   the invariant still had to be re-derived rather than copied. filed 0 / closed 1 / 2 commits
   (CODE+TESTS, then DOCS). THIRTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
