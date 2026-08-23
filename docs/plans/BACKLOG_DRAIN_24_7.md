@@ -87,6 +87,95 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #174: a test that needed the box to be BUSY to pass, and a filed
+  cause that said the exact opposite. filed 0 / closed 1 / 2 commits (TESTS, then DOCS).
+  EIGHTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **MOVE**: the row sits in **`master-convergence-deadlock`**, which read **26 open / 6 blocked** at
+  my open and **25 open / 6 blocked** at my close. ⚠️ The operator-set goal again asked that effort
+  to reach **0 open** in one recycle — 25 rows remain, it did not, and saying so plainly is the
+  report. It also named the WRONG successor for the **FIFTH consecutive time** (its text says
+  "recycle #171 is FIRED"; §2.1's newest entry was #173, so I am **#174** and I fired **#175**).
+  Gate 1 clear — **0 `.page` files** (`find` at `$HOME/.claude/autonomy/postland`, directory
+  asserted first; **sixty-fifth consecutive**). Heredoc diff clean, **fifty-sixth**. Live lag **0**
+  at my open, so no converge was due. Board at my open: **open 317 / blocked 190 / done 2204 /
+  claimed 3**, **507** open+blocked, predicate `bash bin/cc-backlog fold` run from the worktree.
+
+  🆕 **THE ID-LIST SNAPSHOT FINALLY PAID, IN THE DIRECTION NOBODY HAD SEEN YET — IT ATTRIBUTED A
+  MOVE AS *ENTIRELY MINE*.** #172 saw the total stay FLAT across real sibling movement; #173 saw it
+  move by MORE than its own effect. #174 is the third case: `comm` over the open+blocked id lists
+  returned **exactly one** id leaving (`6a82c9405b9e`, mine) and **zero** entering, so **open 317 →
+  316 and the warm count 26 → 25 are wholly my effect, with no sibling activity to net out**. That
+  is a claim the bare totals could never support, and it is the first window in three where the
+  snapshot's answer was "nothing else happened".
+
+  **ROW CLOSED — `6a82c9405b9e`** (*"tests/unattended-sysctl-path.bats: the two qos-census cases
+  fail when sibling suites run concurrently"*). Landed as *fix(tests): two cases needed the box to
+  be BUSY to pass, and the filed cause said the opposite* — **cite by SUBJECT, never by sha; a land
+  rebases.** What generalises:
+
+  · 🆕 **METHOD 120 — A BARE `out="$(cmd)"` SILENTLY PROMOTES cmd's EXIT CODE INTO A HEALTH
+    ASSERTION, AND ERREXIT MAKES IT THE *FIRST* ONE.** The two cases invoked the real
+    `scripts/qos-census.sh` to read ONE field out of its JSON. They never mentioned its rc — and
+    that is exactly the problem: bats' errexit aborts on any non-zero rc, *before* the case's own
+    `[ -n "$out" ]` diagnostic can run. The rc is a four-state VERDICT ABOUT THE BOX
+    (`qos-census.sh:15-21` — 0 PASS / 1 FAIL / 3 NO-BURST / 4 SIGNAL-DEAD), so the cases were
+    coupled to machine contention while asserting nothing about PATH, the only thing the suite
+    exists to check. **Ask what a subject's exit code MEANS before letting an assignment consume
+    it** — and when it is a verdict rather than a health signal, judge it explicitly.
+  · 🆕 **METHOD 121 — AN INVERTED TEST LOOKS EXACTLY LIKE A FLAKY ONE, AND THE FILED CAUSE WILL
+    USUALLY BE THE FLAKY READING.** The row read *"fail when sibling suites run concurrently … >=2
+    runs in flight => PASS/FAIL, not NO-BURST"*. Measured **standalone, nothing else in flight**,
+    both cases failed **`with status 3`** — NO-BURST. They failed *because the box was quiet*; rc 0
+    requires a burst present AND coverage above threshold, so **concurrency was the only thing that
+    could ever have made them pass**. A test that needs the box to be BUSY to go green is not
+    flaky, it is inverted. **Run the "flaky under load" case ALONE first** — the polarity is the
+    whole diagnosis, and both readings predict "sometimes red".
+  · 🆕 **METHOD 122 — `$` IS AN ANCHOR ONLY AT THE END OF A BRE; IN AN EARLIER ALTERNATION BRANCH
+    IT IS A LITERAL DOLLAR SIGN.** My own new control went red reading 1 of 4 lines, and **my first
+    diagnosis of that was also wrong**: *"BSD grep has no BRE `\|` alternation"* is **REFUTED** —
+    on grep 2.6.0-FreeBSD, `alpha\|beta` matches both. The real cause is the anchor. Measured on
+    `scripts/qos-census.sh`: the four-branch anchored BRE reads **1**, *identical to the last branch
+    alone*; dropping every `$` reads **4**; `-E` reads **4**; the non-verdict `Exit 2\.$` reads
+    **0**. Decisive: `grep 'Exit 3\.$\|zzz'` over a file holding a **literal** `Exit 3.$` line
+    matches THAT line and not a plain `Exit 3.` one. ⚠️ **Invisible interactively** — the Bash
+    tool's grep is ugrep and answers 4 for BOTH forms (memory:
+    `interactive-grep-is-ugrep-not-usr-bin-grep`). **Re-measure any regex verdict with
+    `/usr/bin/grep`, which is what bats runs.**
+  · 🆕 **THE NULL WAS ONLY REPORTABLE BECAUSE THE CENSUS'S POSITIVE CONTROL FAILED FIRST.** I
+    censused the repo for the same `$\|` shape. The first control **replayed HEAD — which already
+    carried my fix** — so it hunted a line that no longer existed, and its silence meant nothing
+    (memory: `read-the-diff-not-the-commit-subject`). Rerun against a **synthetic fixture** holding
+    the pre-fix line verbatim plus three must-not-match shapes, it scores **BAD=1 GOOD=0**, and only
+    then does its **ZERO live sites** mean absence. **Nothing filed** — the `\|` hits elsewhere in
+    `tests/` are `-E` forms or carry no `$`.
+  · **THE SIBLING SUITE ALREADY HAD IT RIGHT AND SAID SO OUT LOUD.** `tests/qos-chokepoint.bats`
+    case **(vii)** is literally *"census reports NO-BURST (rc 3), not a pass, when nothing is in
+    flight"*, reached via `run`. Its census call sites use `run` **5** times and the bare-assignment
+    shape **0** times. **When a row blames the environment, grep the sibling that calls the same
+    subject** — the correct idiom next door both confirms the defect and hands you the fix.
+  · ⚠️ **THE RELAXATION HAD A TOO-WEAK HALF, AND IT IS THE HALF THAT NEEDED ITS OWN CASE.**
+    Accepting the rc is a *widening*: at "any rc" both cases go green on a census never found (127)
+    or mis-invoked (2), asserting nothing. The new third case pins **both** directions and re-reads
+    the four accepted codes **off the script's own header**, so editing that contract without
+    editing the allowance goes red (memory: `guard-proxy-fails-in-both-directions`).
+  · **PER-SITE MUTATION, and one site came back unattributed first.** M1 numeric-case guard **1
+    red KILLED**; M2 unreachable-case guard **1 red KILLED**; M3 `verdict_rc_ok` too WEAK **1 red
+    KILLED**; M4 too STRICT **3 red, KILLED and correctly wide** (it mutates the SHARED helper all
+    three cases consume — a single-case kill would have been the surprising result, and it is
+    reported as three rather than filed down to one); M5 header grep back to the BRE form **1 red
+    KILLED**. ⚠️ **M1's first anchor matched TWICE** — its find-string was a *substring* of M2's
+    line, which differs only by the `QOS_CENSUS_SYSCTL=` prefix — and attributed nothing until
+    anchored on `HOME="$HOME" bash`. **A per-site mutant needs an anchor unique against its
+    SIBLING sites, not just against the file.**
+
+  **SCOPE.** The suite is **NOT** in `tests/host-suites.manifest`, so these two were live **corpus**
+  reds, not manifest-excluded ones. Suite **9 → 10** tests, **10/10** green, `grep -cE '^not ok'` =
+  **0** over the whole capture. Owed gates run **SEQUENTIALLY**, all with real plans:
+  `tests/unattended-sysctl-path.bats` 10/10, `tests/bats-assert-liveness.bats` 36/36,
+  `tests/qos-chokepoint.bats` 47/47 (run because this evidence makes a factual claim about it).
+  `bats-assert-liveness.py` clean; `bats-shellcheck-lint.sh --range` clean, 0 blocking findings;
+  gate-select instrument control **32**, unchanged.
+
 - **2026-08-23 — drain recycle #173: the auditor could not see the class by construction, and the
   detector that could had never run. filed 0 / closed 1 / 2 commits (CODE+TESTS, then DOCS).
   SEVENTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
