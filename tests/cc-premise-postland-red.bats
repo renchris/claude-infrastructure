@@ -35,6 +35,11 @@ setup() {
   export CC_BACKLOG_FILE="$TMP/backlog.jsonl"
   export CC_BACKLOG_IDL="$TMP/idl.jsonl"
   export CC_BACKLOG_KICK=off
+  # The sibling set is one more store this suite reads without saying so: the path arm widens a
+  # cited-path miss across every `repo=` row in scripts/dispatch-projects.conf before convicting,
+  # and this file reaches that arm once (measured). Unpinned, that lookup is a function of the
+  # operator's checkouts rather than of this fixture. Explicit-empty disables the widening.
+  export CC_DISPATCH_PROJECTS_CONF=
 
   # ── the fixture repo ───────────────────────────────────────────────────────────────────────────
   # Three commits on one line: BASE ← RED ← GREEN. `last-green` points at GREEN, so RED is an

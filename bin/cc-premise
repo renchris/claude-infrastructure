@@ -721,6 +721,15 @@ def _git_usable():
 # origin/main — in reso-management-app. The item's own project IS claude-infrastructure, so
 # `own_repo` waved it straight through to a checkout that could never hold that object.
 #
+# IT IS A PROPERTY OF THE GUARD, NOT OF ONE ARM — so both pointer kinds widen here (backlog
+# ee5472061246). Fixing only the sha arm left the SAME item minting the SAME fiction in a different
+# sentence: re-measured 2026-08-23, cdbfe751ccc5 was still `suspect`, now on "CITED PATH(S) not at
+# that location on origin/main: src/app, …", where `src/app` is a live directory on
+# reso-management-app's origin/main. `sha_elsewhere` and `path_elsewhere` therefore share this
+# candidate set, this budget, and — because the epistemics are identical — the same three states.
+# The arms differ in one place only, and it is the askability control: an object needs a readable
+# repo, a path needs a readable repo AND an origin/main to resolve against (`_repo_trunk_usable`).
+#
 # WHY THE SIBLING ROW'S FIX IS NOT THIS ONE (42fd907d1459, closed): "require the token to resolve
 # as a git object in ANY ref" is still scoped to THIS checkout, so a sibling-repo sha fails it too
 # and the same false line is emitted. Absence has to be asked of every repo the item could
@@ -755,8 +764,10 @@ _SIBLING_REPO_MAX = 6
 _WIDEN_CALL_MAX = 60
 
 _SIBLING_REPOS = []      # one-slot cache: [(label, path), …]
-_REPO_USABLE = {}        # path → bool, the per-repo positive control
+_REPO_USABLE = {}        # path → bool, the per-repo positive control (objects)
+_REPO_TRUNK_USABLE = {}  # path → bool, the per-repo positive control (a NAMED ref)
 _SHA_ELSEWHERE = {}      # sha → verdict tuple; a token cited twice costs one lookup
+_PATH_ELSEWHERE = {}     # path → verdict tuple; ditto for the path arm
 _WIDEN_CALLS = [0]
 
 
@@ -804,6 +815,30 @@ def _repo_usable(path):
     return _REPO_USABLE[path]
 
 
+def _repo_trunk_usable(path):
+    """Does THIS checkout answer a question about origin/main? One cheap probe per repo, cached.
+
+    A SECOND control, and it is not duplication of `_repo_usable`. The two arms ask different
+    questions of a sibling and therefore need different proofs of askability. A sha is an OBJECT:
+    `cat-file -t` finds it whether or not any ref points at it, so `--git-dir` is the whole
+    precondition. A PATH is only ever meaningful relative to a commit, and this arm resolves it as
+    `origin/main:<path>` — so a readable checkout that simply has no `origin/main` (a fresh clone
+    mid-fetch, a repo whose trunk is named something else, a bare mirror with no remote-tracking
+    refs) answers every path query with a miss.
+
+    Reusing `_repo_usable` here would read that miss as "asked and answered no", which is the exact
+    fabrication one level out that the sibling widening exists to stop (memory:
+    lookup-miss-is-not-absence). Getting this wrong would be invisible in the common case, because
+    every checkout the operator actually has DOES carry origin/main — so the fixture below pins a
+    repo that deliberately does not.
+    """
+    if path not in _REPO_TRUNK_USABLE:
+        _REPO_TRUNK_USABLE[path] = (
+            _git_at(path, ["rev-parse", "--verify", "origin/main"]) is not None
+        )
+    return _REPO_TRUNK_USABLE[path]
+
+
 def sha_elsewhere(sha):
     """Does this token resolve in some OTHER checkout? → (label | None, [labels not askable]).
 
@@ -836,6 +871,55 @@ def sha_elsewhere(sha):
             break
     _SHA_ELSEWHERE[sha] = (found, unaskable)
     return _SHA_ELSEWHERE[sha]
+
+
+def path_elsewhere(path):
+    """Does this cited path resolve on origin/main in some OTHER checkout? → (label|None, [labels]).
+
+    THE SHA ARM'S DEFECT, ONE POINTER KIND OVER. `sha_elsewhere` above closed the divergence for
+    cited SHAS: the block gates on `own_repo` — the ITEM's project — and then resolves the item's
+    citations against THIS checkout, two different questions that come apart for the standing class
+    of meta-items filed in claude-infrastructure ABOUT another project's work. Cited PATHS were left
+    resolving against this checkout alone, so the same item kept minting the same fiction in a
+    different sentence.
+
+    MEASURED (item cdbfe751ccc5, 2026-08-23, after 11b85f97b fixed the sha arm): still
+    verdict=suspect, now on "CITED PATH(S) not at that location on origin/main: src/app,
+    preview/bottle-service-tableside/layout.tsx". Asked of every declared repo, `src/app` is PRESENT
+    on reso-management-app's origin/main — a live directory in the repo the item is actually about.
+    The finding was fiction and the row was live work.
+
+    Three states, kept apart on purpose (memory: lookup-miss-is-not-absence), identical to the sha
+    arm's because the epistemics are identical:
+      (label, …)   it resolves there — this repo's "absent" describes a path into a sibling, and
+                   the honest output is silence.
+      (None, [])   every candidate ANSWERED, and answered no. Only this earns "absent".
+      (None, [x])  x could not be asked. Still absent HERE, but not proven absent anywhere — so the
+                   line concedes it and the verdict does not move.
+
+    It shares `_WIDEN_CALLS` with the sha arm deliberately: the budget bounds git execs per premise
+    check, and an item citing twenty shas AND twenty paths costs the same axis twice. Exhausting it
+    is NOT an absence proof — it degrades to "could not ask", exactly as the sha arm does.
+    """
+    if path in _PATH_ELSEWHERE:
+        return _PATH_ELSEWHERE[path]
+    unaskable = []
+    found = None
+    for label, repo in _sibling_repos():
+        if _WIDEN_CALLS[0] >= _WIDEN_CALL_MAX:
+            unaskable.append(label)
+            continue
+        # Two controls, because a path query needs BOTH a readable repo and a trunk to resolve
+        # against. Either one missing is a "could not ask", never an absence.
+        if not _repo_usable(repo) or not _repo_trunk_usable(repo):
+            unaskable.append(label)
+            continue
+        _WIDEN_CALLS[0] += 1
+        if _git_at(repo, ["cat-file", "-e", "origin/main:" + path]) is not None:
+            found = label
+            break
+    _PATH_ELSEWHERE[path] = (found, unaskable)
+    return _PATH_ELSEWHERE[path]
 
 
 def cited_shas(text, known_ids):
@@ -2437,14 +2521,48 @@ def assess(item_id, idx, out=None, run_probes=True):
                 # "I was not told where this lives" is not evidence that the premise died.
                 unlocatable.append(p)
                 continue
-            gone.append(p)
+            # THIS REPO FIRST, AND ONLY THEN THE OTHERS — the same ordering the sha arm uses, for
+            # the same reason. The common item cites its own repo's paths and they resolve above,
+            # so the single-repo case never pays for the cross-repo one; the widening runs on the
+            # miss, which is exactly where the false finding was minted.
+            found_at, unaskable = path_elsewhere(p)
+            if found_at:
+                # A live path in a sibling checkout — silence is the answer. Deliberately NOT
+                # `note_present`: that list is handed to THIS repo's `git log` by the churn arm
+                # below, and a path this repo does not carry would ask it a question about a file
+                # it has never held.
+                continue
+            gone.append((p, unaskable))
         if gone:
-            if verdict == "clear":
+            # A verdict needs a PROOF of absence, and only a path every candidate repo answered
+            # "no" to is one. One such path is enough; a body of nothing but could-not-ask paths
+            # still prints its line but leaves the verdict where it was.
+            proven = [p for p, un in gone if not un]
+            conceded = [(p, un) for p, un in gone if un]
+            if verdict == "clear" and proven:
                 verdict = "suspect"
-            lines.append(
-                "CITED PATH(S) not at that location on origin/main: %s — moved, renamed, or never "
-                "landed. Confirm before acting." % ", ".join(gone[:6])
-            )
+            if proven:
+                # THE SCOPE CLAUSE IS ITSELF A CLAIM, and it may only be made when a sibling was
+                # actually asked. With no `repo=` row declared there is no candidate set, so "in no
+                # sibling checkout either" would assert a search that never happened — the same
+                # overclaim, one sentence down, that this whole widening exists to stop. Caught by
+                # this arm's own EXPLICIT-EMPTY test rather than by reading.
+                scope = (
+                    ", and in no sibling checkout either" if _sibling_repos() else ""
+                )
+                lines.append(
+                    "CITED PATH(S) not at that location on origin/main%s: %s — moved, renamed, or "
+                    "never landed. Confirm before acting." % (scope, ", ".join(proven[:6]))
+                )
+            # The concession is per PATH, because askability is per repo and per token: one
+            # unreadable sibling must weaken the sentence about the path it could have held, not
+            # every sentence in the block.
+            for p, un in conceded[:6]:
+                lines.append(
+                    "CITED PATH %s is not at that location on origin/main — NOT PROVEN ABSENT: %s "
+                    "could not be asked, so it may resolve there. Confirm before acting."
+                    % (p, ", ".join(un))
+                )
         if unlocatable:
             lines.append(
                 "CITED NAME(S) with no directory component and no carrier on origin/main: %s — this "

@@ -200,3 +200,122 @@ conf_row() { printf '%s %s\n' "$1" "$2" >> "$CC_DISPATCH_PROJECTS_CONF"; }
   [ "$(verdict "$output")" = clear ]
   refute_match "$output" "CITED SHA"
 }
+
+# ── the same divergence, one pointer kind over: CITED PATHS (backlog ee5472061246) ────────────────
+#
+# Fixing the sha arm alone left the SAME item minting the SAME fiction in a different sentence, and
+# that is why these live beside the sha tests rather than in a file of their own. RE-MEASURED
+# 2026-08-23, after 11b85f97b landed: cdbfe751ccc5 was still verdict=suspect, now on "CITED PATH(S)
+# not at that location on origin/main: src/app, preview/bottle-service-tableside/layout.tsx" —
+# where `src/app` is a live directory on reso-management-app's origin/main. Asked of every declared
+# repo, that item's two paths land in two DIFFERENT states (one resolves in a sibling, one is
+# absent everywhere), which is why the arm needs three states and not a boolean.
+#
+# EVERY REFUSAL HERE IS PAIRED WITH A CONVICTION, for the reason the header gives: a widening sized
+# wrong silences the arm outright, and an arm that reports nothing passes a suite that only asserts
+# the negatives (memory: alarm-polarity-and-attention-budget).
+
+# addpath <repo> <path> — commit a file at <path> and advance origin/main.
+#
+# Dates pinned like `mkrepo`'s, for the same reason: an unpinned commit makes the tree's sha a
+# function of the wall clock, and these repos are also cited BY sha elsewhere in this file.
+addpath() {
+  local r="$1" p="$2"
+  mkdir -p "$r/$(dirname "$p")"
+  printf 'x\n' > "$r/$p"
+  git -C "$r" add -A
+  GIT_AUTHOR_DATE="2026-01-02T00:00:00Z" GIT_COMMITTER_DATE="2026-01-02T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t -C "$r" commit -qm "add $p"
+  git -C "$r" update-ref refs/remotes/origin/main HEAD
+}
+
+@test "a claude-infrastructure item citing a SIBLING repo's PATH is silent and stays clear" {
+  # THE HEADLINE, and verbatim the shape of the live exhibit: our item, their file.
+  here="$(mkrepo here)"; there="$(mkrepo there)"
+  addpath "$there" src/app/page.tsx
+  export CC_PREMISE_REPO="$here"
+  conf_row reso-management-app "repo=$there"
+
+  add aaaa1111aaaa "STAND DOWN — src/app/page.tsx is reso's work, close this as a duplicate"
+  run "$CP" check aaaa1111aaaa
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  refute_match "$output" "CITED PATH"
+}
+
+@test "a path in NO repo at all still convicts — and now says how far it looked" {
+  # THE PAIRED CONVICTION. Without this half the fix could equally have been "delete the arm", and
+  # a suite asserting only the silence would go green on a sensor that reports nothing at all
+  # (memory: per-site-mutation-attributes-coverage). The scope clause is the half that is new:
+  # pre-fix this convicted too, but could not say it had asked anyone else.
+  here="$(mkrepo here)"; there="$(mkrepo there)"
+  export CC_PREMISE_REPO="$here"
+  conf_row reso-management-app "repo=$there"
+
+  add bbbb2222bbbb "fix src/app/page.tsx — it is red"
+  run "$CP" check bbbb2222bbbb
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = suspect ]
+  printf '%s' "$output" | grep -q "in no sibling checkout either"
+  refute_match "$output" "NOT PROVEN ABSENT"
+}
+
+@test "an UNASKABLE sibling concedes instead of convicting a PATH — could-not-ask is not absent" {
+  # A declared repo whose checkout is missing is kept as a CANDIDATE on purpose (see
+  # `_sibling_repos`): dropping it here would let a vanished sibling read as "asked and answered
+  # no", which is the same fabrication one level out.
+  here="$(mkrepo here)"
+  export CC_PREMISE_REPO="$here"
+  conf_row reso-management-app "repo=$BATS_TEST_TMPDIR/never-cloned"
+
+  add cccc3333cccc "fix src/app/page.tsx — it is red"
+  run "$CP" check cccc3333cccc
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  printf '%s' "$output" | grep -q "NOT PROVEN ABSENT"
+}
+
+@test "a sibling with NO origin/main is UNASKABLE for a path, though its objects are readable" {
+  # THE SECOND CONTROL, and the one site that separates `_repo_trunk_usable` from `_repo_usable`.
+  # A sha is an OBJECT and resolves with no ref at all, so the sha arm's control is `--git-dir`. A
+  # PATH is only meaningful relative to a commit, and this arm asks `origin/main:<path>` — so a
+  # perfectly readable checkout that simply has no origin/main answers every path query with a
+  # miss. Reusing the object control here would call this repo ASKABLE, take that miss as an
+  # answer, and convict: `verdict=suspect` with no concession, which is what this test would then
+  # read. It is the mutant that attributes the second control to a site of its own.
+  here="$(mkrepo here)"
+  notrunk="$BATS_TEST_TMPDIR/notrunk"; mkdir -p "$notrunk"
+  printf 'seed\n' > "$notrunk/seed"
+  git -C "$notrunk" init -q -b main .
+  git -C "$notrunk" add -A
+  GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t -C "$notrunk" commit -qm "seed notrunk"
+  # …and deliberately NO `update-ref refs/remotes/origin/main`. That absence IS the fixture.
+  [ "$(git -C "$notrunk" rev-parse --verify --quiet origin/main | wc -l | tr -d ' ')" -eq 0 ]
+  export CC_PREMISE_REPO="$here"
+  conf_row reso-management-app "repo=$notrunk"
+
+  add dddd4444dddd "fix src/app/page.tsx — it is red"
+  run "$CP" check dddd4444dddd
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  printf '%s' "$output" | grep -q "NOT PROVEN ABSENT"
+}
+
+@test "EXPLICIT-EMPTY conf disables the PATH widening — and that reproduces the OLD conviction" {
+  # The hermetic pin, and simultaneously the cleanest statement of what changed: the same item and
+  # the same sibling checkout as the headline test, with only the conf taken away, convicts again.
+  # This one holds BOTH before and after the fix — that is its job. It is the base case, so a
+  # widening that quietly swallowed every path finding would red here.
+  here="$(mkrepo here)"; there="$(mkrepo there)"
+  addpath "$there" src/app/page.tsx
+  export CC_PREMISE_REPO="$here"
+  export CC_DISPATCH_PROJECTS_CONF=
+
+  add eeee5555eeee "STAND DOWN — src/app/page.tsx is reso's work, close this as a duplicate"
+  run "$CP" check eeee5555eeee
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = suspect ]
+  printf '%s' "$output" | grep -q "src/app/page.tsx"
+  refute_match "$output" "in no sibling checkout either"
+}
