@@ -391,13 +391,17 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   (completion-assert), and keeps the originator wakeable (the wake floor treats open custody like
   pending mail). *Awaiting ARMED is the legitimate non-close state; "done" is not.* Collect →
   land → `cc-custody return <marker|slug>`; supersede → `cc-custody abandon <token> --why …`.
-  **(3) THE ORIGIN PYRAMID CLOSE** (completion-assert D6 + `hooks/lib/close-shape.sh` — ONE code
+  **(3) THE ORIGIN CLOSE CONTRACT** (completion-assert D6 + `hooks/lib/close-shape.sh` — ONE code
   path with `/wrap`): an ORIGIN session (no fired-peer stamp — `hooks/lib/origin-identity.sh`)
-  closing genuine completion (✅/👤) after real written work must END with the operator's two
-  standing answers, mechanically matched: `Complication:` / `Solution:` / `Outcome:` (one line
-  each, minimal Pyramid form) + `Good to close: yes — complete, durable, deployed live, no loose
-  ends; follow-on: <filed ids|none>` — an honest `Good to close: no — <what remains + who owns
-  it>` also satisfies (the contract is that the question is ANSWERED; hedging stays D3's defect).
+  closing genuine completion (✅/👤) after real written work must answer, mechanically matched,
+  **two** things: line 1 carries the ledger's own **rung glyph** (`line-1-rung`), and the close
+  states `Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` — an honest
+  `Good to close: no — <what remains + who owns it>` also satisfies (the contract is that the
+  question is ANSWERED; hedging stays D3's defect). *Put the verdict on the SECOND line, not the
+  last* — § The close message S2 carries the measurement. 🚨 **`Complication:` / `Solution:` /
+  `Outcome:` are NO LONGER DEMANDED** (W3, 2026-08-23): where a close has a real body above them
+  they restate it — `Outcome:` is novel 1 time in 7 — for a median 89 words against a close that
+  should fit one pane. Write them only where they say something the body does not.
   Latched + capped with the other arms; assignees and fired peers are exempt (their close is the
   lead's harvest / the notify-back ping). The frozen DoD now survives the worktree hop too —
   repo-identity keyed via `hooks/lib/dod-path.sh` (new captures) with lossless per-toplevel legacy
@@ -591,163 +595,232 @@ Mixed turn → show the worst-open rung only.
   control is not diligence, it is a hang. The "no operator step left unrun" clause is no longer
   prose discipline: file each one (below) and `wrap-ledger.sh` computes `👤` instead of `✅` for you.
 
-**The close message — pyramid-lite, hard-capped.** The operator reads a close to make exactly ONE
-decision. Anything that does not change that decision belongs in the commit message, the plan file,
-or nowhere — a close needing paragraphs has buried its own decision point. Cap every close at:
+**The close message — a relay, slotted.** The operator reads a close to make exactly ONE decision. A
+close is not a report of the session; it is a **relay of what the stores already know**, plus the few
+clauses no store can hold. Every line is one of exactly two things, and anything that is neither does
+not appear at all: **(a) RENDERED** — produced by a shipped renderer and reproduced verbatim
+(`scripts/wrap-ledger.sh` for the state, `hooks/operator-readout.sh --render` for the operator's
+pile) — or **(b) one of the SIX SLOTS below.**
 
-🚨 **The cap is a NUMBER and the exclusions are NAMED.** Until 2026-08-23 this whole section was
-adjectives — "focused", "brief", "pyramid-lite" — and an adjective is scored by the model against
-its own notion of the adjective, so it never binds. Claude Code's own built-in recap prompt, pulled
-verbatim out of the 2.1.220 binary (`docs/research/recap-prompt-extraction-2026-08-23.md`), spends
-half of its 41 words on precisely the two things this lacked:
+🚨 **THE ADMISSIBILITY RULE — this replaces the word cap, and the word cap is deleted.**
 
-> *The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences, no
-> markdown. Lead with the overall goal and current task, then the one next action. Skip root-cause
-> narrative, fix internals, secondary to-dos, and em-dash tangents.*
+> A line may appear only if it fills a slot and carries exactly ONE fact, and that fact must either
+> **change what the operator does next** or **name the store where a dropped fact can be read back**.
+> Everything else is not shortened, it is **deleted** — and a deletion is legal only once the fact is
+> already in a store a named command reads.
 
-Borrow both. **Budget: line 1 ≤ 30 words, the whole close ≤ 120** — excluding any rendered block and
-the command, which are reproduced verbatim per the Silver-Platter rule and are never counted against
-it. **Skip, by name: root-cause narrative · fix internals · secondary to-dos · em-dash tangents.**
-Those four are what a coding agent actually does when it over-explains, and each is checkable in a
-way "be concise" is not.
+*Why the cap went (2026-08-23).* Over 998 closes each paired with a genuine human reply,
+`r(words, failure) = −0.0097`, flat across all ten deciles and null inside every difficulty stratum;
+a **107-word** close obeying every structural rule and a **407-word** close drew the *verbatim
+identical* operator reply. 68.0% of 325 operator closes already exceeded 120 words, including the
+353-word close written by a session whose own CLAUDE.md carried the cap. And a cap is satisfiable by
+compression, which no available measurement can see. **Honest limit:** that failure axis is *"did the
+operator have to reply"* and cannot see the SCANNING cost the operator actually complained about,
+which is why acceptance test 2 is rendered ROWS, not words. What the evidence *does* support: on this
+surface facts-per-word decays to a **0.109** slope above 300 words while rendered rows grow at
+**0.929** and distinct governing states are flat at **0.008**. A close is a bounded decision layer
+under an unbounded reference layer. **Schema the first; give the second a destination and cut it.**
 
-⚠️ **Spend that budget by DROPPING items, never by compressing the survivors.** Anthropic's Opus 5
-guidance — shipped inside the same binary, in the bundled `claude-api` skill — is explicit that this
-is the failure mode: *"Being readable and being concise are different things, and readable matters
-more… The way to keep output short is to be selective about what you include, not to compress the
-writing into fragments, abbreviations, arrow chains like `A → B → fails`, or jargon."* A close that
-reaches 120 words by turning its sentences into `sha → gate → ✅` has broken this rule, not met it,
-and it re-creates the cross-reference defect the `G-A` incident below already cost a round-trip.
+⚠️ **Spend the slots by DROPPING items, never by compressing the survivors.** Anthropic's Opus 5
+guidance, shipped in the binary's bundled `claude-api` skill: *"Being readable and being concise are
+different things, and readable matters more… The way to keep output short is to be selective about
+what you include, not to compress the writing into fragments, abbreviations, arrow chains like
+`A → B → fails`, or jargon."* A close that fits by turning sentences into `sha → gate → ✅` has broken
+this rule, not met it. **Skip, by name: root-cause narrative · fix internals · secondary to-dos ·
+em-dash tangents.**
 
-1. **Line 1 = the governing state**, the rung verbatim from live reads. The answer, first — no
-   preamble, no narrative wind-up, no chronology of what you tried. It must carry an **idea, not a
-   category**: *"205 manual steps"* names the pile and says nothing about it — the blank assertion
-   Minto kills with *"'There are three problems' tells the kind, not the idea"* (Ch 7 p. 94).
-   *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it must
-   **summarise the level below it** (pyramid rule 1) — so it partitions along the groupings that
-   actually follow, never a total that conflates them.
-   🚨 **ONE rung, UNHEDGED — line 1 answers "is it safe to close?" with no qualifier riding along.**
-   *"Yes — with one thing still parked"* asserts and withdraws in the same sentence, and it cost a
-   full round-trip: the operator had to ask *"so you want me to run the command or want me to
-   close?"*, and the answer turned out to be *"Close. Ignore the command — that was me hedging on a
-   yes/no question."* If something is parked or is the operator's, **that IS the rung** (`📦` / `👤`);
-   if it is immaterial, it does not appear in line 1 at all. Never both.
-2. **≤3 supporting lines**, each a fact that *changes what the operator does* (a gate verdict, a
-   named blocker, the landed sha). Not a tour of the work; `git log` holds that. (≤3 is the mind's
-   limit, Ch 6 p. 78 — aim 4–5 per grouping, never 7+.)
-3. **The command block — only if the operator must run something.** See ONE COMMAND below.
-   **Action before argument** (Ch 5 pp. 65–66): the command comes BEFORE its justification, *unless*
-   the operator cannot act without the reason first — a `--force`, a destructive flag, a choice
-   between two commands. Then one line of why, then the command. Never more than one line of why.
+### The six slots, in this order. Unfilled slots are omitted, never padded.
 
-🚨 **Every identifier is expanded at first use in that same message — and a label is never the
-subject of line 1.** A close opened `✅ Wave 1 + Wave 2 complete & live on trunk`, reported "six
-commits landed — M8, S1, S3, S4, S2", and made its one blocking question `G-A is the one thing I
-need from you`. The operator's entire reply was *"What is G-A, how do I give it to you"* — a full
-round-trip spent on vocabulary. The next message answered it in one sentence — *a one-word business
-call: may a new paying customer's database sit on Turso's Fly line? You answer by saying "G-A: yes"
-or "G-A: no"; there is no command to run* — which is what line 1 should have been. Two defects, and
-the second is the load-bearing one:
+| | Slot | The one fact | Present when |
+|---|---|---|---|
+| **S1** | **STATE** — line 1 | the ledger's rung glyph + state clause, relayed, plus ONE clause naming what the work WAS | always |
+| **S2** | **VERDICT** — line 2 | `Good to close: yes\|no — …`, with the follow-on ledger | terminal close (`✅`/`👤`) after real written work |
+| **S3** | **ACT** — line 3 | the `▶ Run this:` marker, its command on the next line | only when the operator must do something |
+| **S4** | **OUTCOME** | what is now true **against the frozen scope** that was not before | after written work |
+| **S5** | **EVIDENCE** | the sha and/or doc path that HOLDS what this close dropped | whenever anything was dropped |
+| **S6** | **WAITING** | what is theirs, each item NAMED in plain English | only when something is theirs |
 
-- **Unexpanded tokens.** `M8 · S1 · S3 · S4 · S2 · R1/R2 · SIN` name nothing to a reader who was not
-  in the session; `R1`/`R2` are worse than jargon, because they are OUR OWN Minto vocabulary
-  (current-state / desired-state, `pyramid-principle-full/sessions/01-define-problem.md`) leaking
-  into an operator-facing close. Expand it, or — where the id carries no meaning to the reader at
-  all, as a plan-section label does — **delete it**: `git log` and the plan file already hold it.
-- **The label doing the answer's job.** *"G-A is the one thing I need from you"* makes the
-  identifier the subject and the decision the predicate — a category, not an idea, which rule 1
-  above already forbids (Ch 7 p. 94). The answer-first form states the decision: *"⛔ One call is
-  yours: may a new paying customer's database sit on Turso's Fly line? Reply yes or no — nothing to
-  run."* A close that must first be asked *"what is that"* has failed the 30-second test before the
-  operator reaches line 2.
+S1–S3 are the three lines they scan; S4–S6 are the ≤3 supporting lines (Ch 6 p. 78). **The order is
+arithmetic, not taste:** S3 occupies two physical rows (`▶ Run this:` then the command), so the
+verdict at line 2 is exactly what keeps the act's marker at non-blank line 3, inside the shipped
+`CC_ACT_WINDOW` of 3 — verified by executing `close_act_missing` on this shape.
+
+**S1 — STATE. The renderer owns the state clause; you own the subject clause.** Run
+`scripts/wrap-ledger.sh --machine` first and take `READOUT`; its shape is always `<rung glyph> <state
+clause> — <tail>`. Copy the glyph and state clause verbatim; replace the tail with ONE clause naming
+what the work was. Do **not** render line 1 whole: the ledger yields a Minto *idea* when its fact is
+itself the conclusion (`📦 Done, but only on a branch…`, `⛔ Blocked — need your call: <the
+decision>`) and a *category* whenever its fact is a count over a population it cannot name (`22
+uncommitted change(s)`, `N step(s) need you`, `N decision(s)`) — three of seven rungs including `👤`,
+and no field on disk knows what you built. **Where the rendered tail is a count, your clause EXPANDS
+it**, in the shape `operator-readout.sh:818-819` already ships: `13 runnable now, 207 need your call`
+partitions the pile along the groupings that follow instead of naming its size. The one exception is
+`⛔`, whose tail is `BLOCKED_WHAT` — the operator's own words — and is kept.
+
+🚨 **ONE rung, UNHEDGED — and the hedge is banned at DOCUMENT scale, not just sentence scale.**
+*"Yes — with one thing still parked"* asserts and withdraws in one sentence and cost a full
+round-trip. So does a close whose line 1 read *"All five resolved — close whenever you like"* and
+whose last paragraph introduced *"Five follow-ons sit in the backlog queue"*: measured, and the
+operator still replied *"Are we good to close?"*. If something is parked or is theirs, **that IS the
+rung** (`📦` / `👤`); if it is immaterial it does not appear in line 1 at all. Never both — and
+anything that would withdraw the assertion goes in S2's `follow-on:` clause, *beside* it, never below
+it. **It must carry an idea, not a category:** *"205 manual steps"* names the pile and says nothing —
+the blank assertion Minto kills with *"'There are three problems' tells the kind, not the idea"*
+(Ch 7 p. 94). *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it
+must summarise the level below it, partitioning along the groupings that actually follow.
+
+**S2 — VERDICT. `Good to close: …`, on line 2, never last.** This line is **not derivable from the
+rung**: over 613 closes carrying it the rung predicts the verdict only **73.4%** of the time, **48 of
+313 `✅` closes answer "no"**, **39 of 97 `👤` answer "yes"**, `🚀` splits 47/53, **17.6%** carry no
+rung glyph at all (making this the only decision in the message), and **51.4%** carry follow-on ids no
+renderer computes. **Position is the whole failure.** It sits as the last non-empty line in **90.7%**
+of closes today; a 173-word close with `✅` at line 1 whose literal last line read `Good to close:
+yes — complete, landed, no loose ends; follow-on: none.` drew the operator's entire next message,
+**"Good to close?"**. A rendered certificate is no substitute either — `operator-readout.sh:1254`
+already prints `✅ SAFE TO CLOSE — nothing is left on this side.` at every certified close, and **107
+of 403 `✅` closes still drew a re-ask.** An honest `Good to close: no — <what remains + who owns it>`
+satisfies equally; the contract is that the question is ANSWERED. *`Complication:` / `Solution:` /
+`Outcome:` are no longer required* — where a close has a real body they restate it (`Outcome:` is
+novel 1 time in 7, `Solution:` 2 in 7) for a median 89 words, and scored on whether they change the
+operator's next action they run 1/30, **0/30** and ~3/30 against `Good to close:` at **30/30**. The
+first two are what the recap prompt names by name as skip. Write them only if they say something the
+body does not.
+
+**S3 — ACT. Its own line, third, at most one.** The one position claim with a measured effect: over
+300 closes, when the act is its own line the operator acts **35.4%** of the time; welded into a
+sentence **9.4%** (p = 2.7e-05); welded into line 1, **4.2%** — worse than no act at all. Being a LINE
+is the property. **Action before argument** (Ch 5 pp. 65–66): the reason comes first only when they
+cannot act without it — a `--force`, a destructive flag, a choice between two commands — and then it
+is one line, never more.
+
+**S4 — OUTCOME. State the goal, not the increment.** What is now true, **against the frozen scope**,
+that was not before. A well-formed close that summarised its last turn drew *"So, where are we for our
+current steps?"* plus a re-paste of the original prompt. `Scope (frozen):` is on disk; diff against it.
+
+**S5 — EVIDENCE. The receipt that makes the drop legal.** Name the landed sha and/or doc path that
+HOLDS what this close dropped. `git show <sha>` is the narrative tier and here it works: 45 of 50
+recent commits carry a body, mean 252 words, holding the measurements, p-values and kill switches.
+**But only if you name the sha and it is reachable** — 1 in 10 commits is bodyless, and a sha on no
+branch (a sibling's, or one an ancestor-rewriting land replaced) resolves in your checkout and nowhere
+else. Before citing one it must answer `git merge-base --is-ancestor <sha> origin/main`.
+
+**S6 — WAITING. Named, never counted.** 🚨 **A count is not a fact.** *"the 11 👤 are yours"* (107
+words) and *"The three remaining decisions — R-29, R-37, R-38"* (407 words) drew the **identical**
+reply: *"Drive us through the N decisions."* An item **this session** created is named in plain
+English — never a bare count, never an id alone. The machine's **standing** pile is the opposite case
+and stays counted: it renders as one `◆` line in the `OPERATOR ▸` block carrying its own listing
+command, and re-prosing it is the defect that block exists to prevent. Saying what is *theirs* is the
+only protective feature measured (−6.9pp, p = 0.029) **and** the one fact `/wrap` can never retrieve
+(it reports `Blocked on you: unknown — session id unresolvable`), so it may never be dropped. Omit S6
+when nothing is theirs; S2's `follow-on:` clause discharges it.
+
+🚨 **Every identifier is expanded at first use in that same message — and a label is never the subject
+of a line.** The largest measured effect on this surface: ≥2 opaque hex ids → **49.2% vs 33.6%**
+failure, **+15.5pp, p = 0.0001**, surviving stratification — roughly 10× the predictive power of
+length, which is null. A close made its blocking question `G-A is the one thing I need from you`, and
+the operator's entire reply was *"What is G-A, how do I give it to you"*. The next message answered it
+in one sentence — *a one-word business call: may a new paying customer's database sit on Turso's Fly
+line? You answer "G-A: yes" or "G-A: no"; there is no command to run* — which is what the line should
+have been. Two defects: **unexpanded tokens** (`M8 · S1 · S3 · S2 · R1/R2 · SIN` name nothing to a
+reader who was not in the session; `R1`/`R2` are worse than jargon because they are our OWN Minto
+vocabulary leaking out — expand it, or where the id means nothing to the reader at all, as a
+plan-section label does, **delete it**, since `git log` and the plan file hold it; and **a filed id is
+not an expansion** — `1031594b6327` is inadmissible, `` `1031594b6327` ("build the `--why <topic>`
+tier") `` is admissible), and **the label doing the answer's job** (making the identifier the subject
+and the decision the predicate is a category, not an idea — Ch 7 p. 94; the answer-first form states
+the decision).
 
 **Corollary — a decision you are holding IS the rung, and filing it is what makes it one.** Open it
-the moment you have it (`cc-decide open --class C …`); `wrap-ledger.sh` then computes `⛔` from your
-own session's open class-C packets and it outranks everything. Unfiled, a decision has no git
-footprint, no backlog row and no matched phrase, so every sensor is blind to it and
-`✅ SAFE TO CLOSE — nothing of mine is open` renders underneath it — truthfully, over facts that say
-nothing about a question. That is exactly how a blocking decision ended up in paragraph 4 under a ✅.
-Same law as the operator-only step above: prose is where it gets buried.
+the moment you have it (`cc-decide open --class C --what <plain English, no codenames>`);
+`wrap-ledger.sh` then computes `⛔` from your own session's open class-C packets and it outranks
+everything. Unfiled, a decision has no git footprint, no backlog row and no matched phrase, so every
+sensor is blind to it and `✅ SAFE TO CLOSE — nothing of mine is open` renders underneath it —
+truthfully, over facts that say nothing about a question. (`⛔` is also the *safest* rung measured, at
+27.4% failure against `✅`'s 37.2%: a close that names one decision and asks for it is the one the
+operator can act on without a round-trip.)
 
-**Acceptance — the 30-second test** (Ch 3 p. 29): if the operator cannot get the whole thinking —
-state · what it means · what to do — inside 30 seconds, the close has FAILED. And the defect is in
-the ideas, not the wording (Ch 1 p. 11): restructure it, do not polish it.
+### Where the dropped detail goes — and the row that makes the rule a VETO
 
-🚨 **Three dispositions, never a fourth. "Say the word" is not a disposition.** Every open item a
-close names resolves to exactly one of:
+| Detail dropped from the close | Its store | The ONE command that reads it back |
+|---|---|---|
+| governing state (rung · dirty · gate · landedness · live-lag · goal) | live git + gate reads | `/wrap` — 8 lines / 100 words; `--full` for the 13-row ledger |
+| operator-owned actions and decisions | `~/.claude/autonomy/{backlog.jsonl,decisions/,pending-activation/}` | `/wrap` renders the counted block; expand with `cc-do --list` · `cc-decide list --open` · `cc-backlog list --blocked` |
+| why the work was done, what changed, the evidence | the commit body | `git show <sha>` — **name the sha, and it must be an ancestor of trunk** |
+| design decisions, rejected approaches, measurements | `docs/plans/*.md` · `docs/research/*.md` | open the path — **the close must name the path** |
+| reasoning, dead ends, synthesis never committed and never written to a doc | **nowhere** | **NONE EXISTS** |
+
+⚠️ **`/wrap --full` is NOT the narrative tier** — all 13 rows are repository state, zero words about
+the work. And **no shipped command reads a session's own narrative back**: 96 entries in `bin/`, and
+the ones that touch transcripts consume them to compute a verdict, never to show one; scrollback is
+the only route. The precedent is on trunk and is why this is a veto — 48 of 58 proposed Stop-hook
+shortenings died because ~1,100 words were routed to a `--why <topic>` flag three emitters proposed
+and **none implemented**, *"a deletion wearing a pointer's clothes"*
+(`docs/plans/STOPHOOK_MESSAGE_TIERING.md`; filed as `1031594b6327`, not started). **If the detail is
+not committed and not in a doc, you have not dropped it, you have deleted it** — commit it, write it
+to a named doc, or keep it in the close.
+
+**Acceptance — two tests, both checkable.** (1) **The 30-second test** (Ch 3 p. 29): if the operator
+cannot get state · what it means · what to do inside 30 seconds, the close has FAILED, and the defect
+is in the ideas, not the wording (Ch 1 p. 11) — restructure it, do not polish it. (2) **It fits one
+24-row pane, relayed blocks included.** Rendered rows, not words, is the unit that means "a wall of
+text": each written line becomes ~3 rows at 100 columns, and **46.2% of operator-facing closes
+currently overflow one pane.** This is the bound the word cap was reaching for and missing.
+
+🚨 **Three dispositions, never a fourth. "Say the word" is not a disposition.**
 
 | | Disposition | What it looks like in the close |
 |---|---|---|
-| **DRIVEN** | you did it this turn | it is in the ≤3 supporting lines, past tense, with its evidence |
-| **FILED** | it is in a store, so a renderer surfaces it | `cc-backlog needs "<step>"` for an operator-only step (`--run "<cmd>"` when one exists) · `cc-backlog add` for agent work. It then renders as ONE counted line in the `OPERATOR ▸` block — never as your prose |
-| **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS your line-1 rung (`⛔`), stated as the one decision you need |
+| **DRIVEN** | you did it this turn | S4, past tense, with its receipt in S5 |
+| **FILED** | it is in a store, so a renderer surfaces it | `cc-backlog needs "<step>"` for an operator-only step (`--run "<cmd>"` when one exists) · `cc-backlog add` for agent work. The STANDING pile then renders as ONE counted line in the `OPERATOR ▸` block — never as your prose. An item THIS SESSION filed is still named, in S2 or S6 |
+| **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS S1's rung (`⛔`), stated as the one decision you need |
 
-**Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job
-is not done until the job is done."* A close that names researched, in-scope remaining work and then
-says *"say the word and I'll pick up either; otherwise this is a clean stopping point"* has spent a
-round-trip to learn something already settled — the Follow-On Gate (F1-F4) authorised it before you
-asked, and re-asking an F1-F4 PASS is deference-fishing. **Drive it, or file it.** The corollary
-binds the operator's side too: they should never have to ask *"good to close?"*, because the close
-already answered it in line 1.
+**Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job is
+not done until the job is done."* Naming researched, in-scope remaining work and then saying *"say the
+word and I'll pick up either"* spends a round-trip on something the Follow-On Gate already settled.
+**Drive it, or file it.** And they should never have to ask *"good to close?"* — S2 answered it.
 
 **Operator-owned steps are FILED, never prosed.** `operator-readout.sh` renders the close block by
-construction from disk truth — but it can only render what a store holds. A step you discovered
-*this session* ("authenticate X in /mcp", "restart Cursor") exists in no store until you file it, so
-it can only be prose, and prose is exactly where it gets buried. File it the moment you discover it;
-`wrap-ledger.sh` then counts it into the `👤` rung and line 1 tells the operator before they close.
-The test for filing rather than doing is unchanged and strict: file it only if **you genuinely
-cannot** — credentials, a GUI-only action, something physical, or a value judgment that is theirs.
-An operator-only step is not an escape hatch from work you could have done.
+construction from disk truth, but it can only render what a store holds. A step you discovered *this
+session* ("authenticate X in /mcp", "restart Cursor") exists in no store until you file it, so it can
+only be prose, and prose is where it gets buried. File it the moment you find it; `wrap-ledger.sh`
+then counts it into the `👤` rung. The test for filing rather than doing is strict: file it only if
+**you genuinely cannot** — credentials, a GUI-only action, something physical, or a value judgment
+that is theirs. An operator-only step is not an escape hatch from work you could have done.
 
-**Manual steps are rendered by construction (silver-platter close) and collapse to ONE COMMAND.**
-When operator-owned steps exist on disk (deploy-lag · pending activations · open class-C decisions ·
-blocked backlog) or work sits 📦-parked, the `operator-readout.sh` Stop hook renders the block from
-disk truth, damped: any change renders NOW; unchanged re-asserts after 15 min. `/wrap` prints the
-same block (`hooks/operator-readout.sh --render` — one renderer, so push and pull cannot drift).
-Two rules bind your prose:
+**ONE COMMAND, never a list — and the form is MEASURED, not assumed.** **Relay, never paraphrase:**
+reproduce any rendered block verbatim, never dissolving it back into a sentence (Silver-Platter). Give
+them exactly one thing to select and paste. Their words: *"I had to comb through the entire return
+body to fish out which is the command to copy and paste and not just more paragraph text."* The form
+that works in this TUI, screenshot-verified 2026-08-01:
 
-- **Relay, never paraphrase.** Lead with the same governing line and reproduce any rendered command
-  verbatim — never dissolve it back into a sentence (the Silver-Platter rule).
-- **ONE command, never a list — and the form is MEASURED, not assumed.** Give the operator exactly
-  one thing to select and paste. Their words: *"I had to comb through the entire return body to fish
-  out which is the command to copy and paste and not just more paragraph text."* The form that
-  actually works in this TUI, screenshot-verified 2026-08-01:
+```text
+▶ Run this:
 
-  ```text
-  ▶ Run this:
+`<the one command>`          ← inline-code span, alone on its line
+```
 
-  `<the one command>`          ← inline-code span, alone on its line
-  ```
+A marker line of its own, then the command as an **inline-code span**. Three properties, and only this
+form has all three: it renders **blue on every wrapped row** · the `▶` **breaks left-align scanning** ·
+**no row begins with chrome**, so a click-drag from first character to last pastes exactly the command.
+🚨 **Do NOT use a ` ```bash ` fence** — a fence gets *syntax* highlighting and a bare command name has
+no syntax to colour, so it renders **plain white, less visible than the prose around it**, while
+inline code is blue unconditionally. **Do NOT use a blockquote** either: it gives blue *and* a left
+rule, but the `│` is inside the selection and lands in the paste, corrupting the command. A `$` prefix
+corrupts a drag-copy the same way. *(Generalisable lesson: a rendering claim is only true of the
+renderer you measured. The fence rule shipped, landed, and was hook-enforced for a whole session
+before anyone looked at a screenshot.)*
 
-  A marker line of its own, then the command as an **inline-code span**. Three properties, and only
-  this form has all three: it renders **blue on every wrapped row** · the `▶` **breaks left-align
-  scanning** · **no row begins with chrome**, so a click-drag from first character to last pastes
-  exactly the command.
-
-  🚨 **Do NOT use a ` ```bash ` fence.** That was this rule's first form and the operator's
-  screenshot disproved it: a fence gets *syntax* highlighting, and a bare command name has no syntax
-  to colour, so it renders **plain white — less visible than the prose around it**, while inline code
-  is blue unconditionally. **Do NOT use a blockquote** either: it gives blue *and* a left rule, but
-  the `│` is inside the selection and lands in the paste, corrupting the command (verified by the
-  operator pasting one). A `$` prompt prefix corrupts a drag-copy the same way.
-  *(Generalisable lesson: a rendering claim is only true of the renderer you measured. The fence rule
-  shipped, landed, and was enforced by a hook for a whole session before anyone looked at a
-  screenshot.)*
-
-  Multiple runnable steps collapse to **`cc-do`** — the driver that prints them,
-  confirms once, and runs them in irreversibility order (`cc-do --list` to look first, `cc-do <stem>`
-  for exactly one). Judgment items are counted, not itemized. A numbered wall of commands that wrap
-  four lines each is the defect this replaced — it is unreadable in a terminal and unpasteable
-  besides.
-- **Every command shown carries a run / don't-run verdict — and at a close there is only one verdict.**
-  A command under a `▶ Run this:` marker means *run this*. If you would tell the operator to ignore
-  it, **it does not appear at all** — not marked, not bare. (One close showed a command, then had to
-  follow up with "Ignore the command"; another trailed a command with "which is the main reason I'd
-  leave it", leaving the operator unable to tell a recommendation from an instruction.)
-  Reference-only commands stay in inline backticks **mid-sentence, never alone on their own line** —
-  the marker line plus a lone span is what makes a command an instruction, so the discriminator is
-  position, not styling. Never in the closing block either way.
-
+Multiple runnable steps collapse to **`cc-do`** — it prints them, confirms once, and runs them in
+irreversibility order (`cc-do --list` to look, `cc-do <stem>` for exactly one). `cc-do --list` is
+**317 lines / 6,845 words**, 19× the close it would be inlined into; the collapsed
+`▶ cc-do [N runnable]` row is its only admissible form. Judgment items are counted, not itemized.
+**Every command shown carries a run / don't-run verdict, and at a close there is only one verdict.** A
+command under a `▶ Run this:` marker means *run this*. If you would tell them to ignore it, **it does
+not appear at all** — not marked, not bare. (One close showed a command and had to follow up with
+"Ignore the command"; another trailed one with "which is the main reason I'd leave it".)
+Reference-only commands stay in inline backticks **mid-sentence, never alone on their own line** — the
+marker plus a lone span is what makes a command an instruction, so the discriminator is position, not
+styling. Never in the closing block either way.
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 
 ```text

@@ -41,20 +41,44 @@
 # One awk pass rather than four greps: the value test needs the text AFTER the anchor match, which
 # grep -q cannot hand back.
 #
-# Env seam (tests): none needed — pure functions over $1.
+# Env seam (tests): CC_VERDICT_WINDOW (default 0 = position-free — the verdict may sit at any
+# non-blank, non-fenced line). It ships OFF on purpose, and that is measured rather than timid:
+# only 1.1% of the 613 currently-compliant closes put the verdict at position <=3, so switching
+# the window on at the same time as the template move would fail closes that are honest today.
+# Move the placement via close_shape_template first, re-measure, THEN set the window. The fence
+# skip added below is what makes turning it on possible later at all.
 # shellcheck shell=bash
 
-_CS_COMPLICATION='(^|[^[:alpha:]])complication[[:space:]]*:'
-_CS_SOLUTION='(^|[^[:alpha:]])solution[[:space:]]*:'
-_CS_OUTCOME='(^|[^[:alpha:]])outcome[[:space:]]*:'
-_CS_VERDICT='(good|safe)[[:space:]]+to[[:space:]]+close'
+# THE PYRAMID LABELS ARE NO LONGER DEMANDED (CLOSE_SHAPE W3, measured 2026-08-23). Where a close
+# has a real body above them they RESTATE it: `Outcome:` carries a novel fact 1 time in 7 and
+# `Solution:` 2 in 7, for a median 89 words — against a close budget that was 120. Scored on
+# whether the line changes the operator's next action they run 1/30, 0/30 and ~3/30, against
+# `Good to close:` at 30/30. Their apparent 80/70/70% novelty was an artifact of the block BEING
+# the whole close in a third of cases. Prose that says something the body does not is still
+# welcome; a MECHANICAL DEMAND for it is what forced 88 words of restatement into the 71% of
+# closes that already had a body. The verdict alone is kept, because it alone is not derivable
+# from the rung — over 613 closes the rung predicts it only 73.4% of the time, 48 of 313 `✅`
+# closes answer "no", and 17.6% carry no rung glyph at all, making it the only close decision in
+# the message. Measurement: docs/research/close-shape-2026-08-23.md § M3.
+#
+# 'safe' is dropped from the verdict anchor DELIBERATELY, and it is load-bearing rather than
+# cosmetic. hooks/operator-readout.sh:1254 renders `✅ SAFE TO CLOSE — nothing is left on this
+# side.` at every certified close, and the Silver-Platter rule tells the model to reproduce a
+# rendered block VERBATIM. Executed against the pre-W3 lib:
+#     close_shape_missing "✅ SAFE TO CLOSE — nothing is left on this side."
+#       → "Complication: Solution: Outcome:"     (i.e. the verdict half already PASSED)
+# So the moment C/S/O stop being demanded, a close that merely RELAYS the certificate would
+# satisfy the whole contract without answering anything. 0 of the 613 currently-compliant closes
+# rely on the `safe` alternative.
+_CS_VERDICT='good[[:space:]]+to[[:space:]]+close'
 
 # close_shape_missing <msg> → prints the space-joined missing elements ('' when complete)
 close_shape_missing() {
-  printf '%s' "${1:-}" | awk -v c="$_CS_COMPLICATION" -v s="$_CS_SOLUTION" \
-                             -v o="$_CS_OUTCOME"      -v v="$_CS_VERDICT" '
+  printf '%s' "${1:-}" | awk -v v="$_CS_VERDICT" -v w="${CC_VERDICT_WINDOW:-0}" '
     # real(<lowercased line>, <anchor>) → 1 iff the anchor matches AND its value is an answer
     # rather than the template placeholder it was copied from (MENTION vs USE, above).
+    # UNCHANGED byte-for-byte from the four-anchor version — the placeholder guard is still
+    # load-bearing, and narrowing to one anchor must not quietly re-open the template bypass.
     function real(l, re,   rest) {
       if (!match(l, re)) return 0
       rest = substr(l, RSTART + RLENGTH)
@@ -62,33 +86,40 @@ close_shape_missing() {
       sub(/[[:space:]]+$/, "", rest)
       return (rest ~ /^<.*>$/) ? 0 : 1
     }
-    { l = tolower($0)
-      if (real(l, c)) C = 1
-      if (real(l, s)) S = 1
-      if (real(l, o)) O = 1
-      if (real(l, v)) V = 1 }
-    END { m = ""
-      if (!C) m = m "Complication: "
-      if (!S) m = m "Solution: "
-      if (!O) m = m "Outcome: "
-      if (!V) m = m "good-to-close-verdict "
-      sub(/ $/, "", m)
-      printf "%s", m }'
+    # FENCED REGIONS ARE SKIPPED — the same rule close_act_missing already applies. A close that
+    # relays the rendered OPERATOR ▸ block verbatim (which the Silver-Platter rule REQUIRES) must
+    # not thereby satisfy a contract it never answered in its own voice.
+    BEGIN { n = 0; fence = 0; if (w !~ /^[0-9]+$/) w = 0 }
+    { t = $0
+      if (t ~ /^[ \t]*```/) { fence = !fence; next }
+      if (fence) next
+      sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
+      if (t == "") next
+      n++
+      if (real(tolower(t), v)) { if (w + 0 == 0 || n <= w + 0) V = 1 } }
+    END { printf "%s", (V ? "" : "good-to-close-verdict") }'
 }
 
-# close_shape_ok <msg> → rc 0 iff all four elements are present
+# close_shape_ok <msg> → rc 0 iff the close answers "good to close?"
 close_shape_ok() {
   [ -z "$(close_shape_missing "${1:-}")" ]
 }
 
-# close_shape_template → the fill-in skeleton, shared by push (D6 reason) and pull (/wrap)
+# close_shape_template → the fill-in skeleton, shared by push (D6 reason) and pull (/wrap).
+#
+# 🚨 THE TEMPLATE MUST NOT CONTAIN A LITERAL '▶'. D7's close_act_missing matches on
+# index(t, "▶") > 0 outside fences, so putting the marker in this skeleton would let a close that
+# merely QUOTES the skeleton satisfy D7 vacuously — re-creating on the act surface exactly the
+# MENTION-vs-USE defect the real() guard above was written to prevent. The S3 line therefore
+# DESCRIBES the act slot and points at close_act_template, which already owns the marker.
+# (The shape side stays guarded too: the verdict value below begins '<' and ends '>', so
+# close_shape_ok "$(close_shape_template)" is still rc 1.)
 close_shape_template() {
   cat <<'TPL'
-<line 1 = the ledger rung readout, verbatim from wrap-ledger — never restated from memory>
-Complication: <what made this work necessary — one line>
-Solution: <what was built/changed, with the landed sha — one line>
-Outcome: <what is now true that was not before — one line>
-Good to close: <yes — complete, durable, deployed live, no loose ends; follow-on: <filed ids|none> | no — <what remains + who owns it>>
+<S1 line 1 = wrap-ledger READOUT's rung glyph and state clause verbatim, then YOUR one clause naming what the work was (or expanding the count the ledger could only count)>
+Good to close: <yes — nothing of mine is open; follow-on: <filed ids, each expanded in plain English|none> | no — <what remains + who owns it>>
+<S3, only when the operator must act: the run-this marker line, then the one literal command — see close_act_template>
+<then AT MOST three supporting lines, one fact each: S4 what is now true against the frozen scope · S5 the sha or doc path that HOLDS what this close dropped · S6 what is theirs, NAMED not counted>
 TPL
 }
 
@@ -203,6 +234,12 @@ close_act_reason() {
 # one chain teach the model nothing).
 close_shape_reason() {
   local rung="${1:-?}" missing="${2:-}"
-  printf 'Origin-session close contract: this session wrote real work and the ledger reads %s, but the close is missing [%s]. End with the operator'\''s two answers, in this exact shape (labels are matched mechanically):\n%s' \
+  # NO BACKTICKS IN THIS FORMAT STRING. It is single-quoted (so the ledger's own %s placeholders
+  # survive), and a literal backtick inside it reads to shellcheck as a command substitution that
+  # will not expand — SC2016, which this repo's land gate treats as RED. The block reason is plain
+  # text shown to a model, never rendered markdown, so the backticks bought nothing anyway.
+  # And percent signs are DOUBLED, not quadrupled: printf turns %% into one %. An earlier draft
+  # carried %%%% through from a diff and rendered "73%%" to every blocked close.
+  printf 'Origin-session close contract: this session wrote real work and the ledger reads %s, but the close is missing [%s]. A missing good-to-close-verdict means the close never answers "good to close?" — and that answer is NOT derivable from the rung: over 613 closes the rung predicts it only 73%% of the time, 48 of 313 closes reading complete-and-live answer NO, and 17.6%% carry no rung glyph at all. Put it on the SECOND line, directly under the rung and BEFORE any supporting detail — 90.7%% of closes bury it as the last line and the operator asks the question anyway. A missing line-1-rung means line 1 does not carry the ledger'\''s own rung glyph: run scripts/wrap-ledger.sh --machine, relay READOUT'\''s glyph and state clause verbatim, then add ONE clause of your own naming what the work was. Complication/Solution/Outcome are no longer required — where a close has a real body they restate it (Outcome is novel 1 time in 7) for a median 89 words; write them only if they say something the body does not. Shape:\n%s' \
     "$rung" "${missing:-the required close shape}" "$(close_shape_template)"
 }

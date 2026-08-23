@@ -1069,7 +1069,14 @@ PY
   run run_ca "$tr" "$w" "d6-sess-1"
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'Origin-session close contract'
-  printf '%s' "$output" | grep -q 'Complication:'
+  # W3: the reason names the MISSING TOKEN, not a Pyramid label. This assertion used to grep
+  # 'Complication:' — which it only ever matched because close_shape_template() rendered that
+  # label into the block reason. Once the three labels stopped being demanded the template stopped
+  # emitting them, and this line would have gone RED while the arm itself was working correctly:
+  # the fixture close ("Everything is done and landed on trunk.") answers no verdict AND carries
+  # no rung glyph, so BOTH W3 tokens are legitimately missing.
+  printf '%s' "$output" | grep -q 'good-to-close-verdict'
+  printf '%s' "$output" | grep -q 'line-1-rung'
   grep -q '"arm":"shape"' "$COMPLETION_IDL"
 }
 
@@ -1335,7 +1342,9 @@ _cs_lib() { bash -c '. "$1/hooks/lib/close-shape.sh"; '"$2" _ "$REPO"; }
   run _cs_lib "$REPO" 'close_shape_ok "$(close_shape_template)"'
   [ "$status" -ne 0 ]
   run _cs_lib "$REPO" 'printf "%s" "$(close_shape_missing "$(close_shape_template)")"'
-  [ "$output" = "Complication: Solution: Outcome: good-to-close-verdict" ]
+  # W3: one anchor, so one token. The MENTION-vs-USE guard is unchanged — the template's verdict
+  # value still begins '<' and ends '>', which is exactly why quoting it answers nothing.
+  [ "$output" = "good-to-close-verdict" ]
 }
 
 @test "close-shape CONTROL (green both sides — the no-false-FAIL half): an honest close PASSES" {
