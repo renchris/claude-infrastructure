@@ -1416,10 +1416,15 @@ wake_down_line() { # <uuid-it-was-armed-for>
   # <root>/hooks symlinked to the repo's, because the script resolves its mailbox lib as
   # "$_bd/../hooks/lib/mailbox-pending.sh" and would otherwise silently fall back to the LIVE
   # ~/.claude copy — a different subject than the one under test.
+  #
+  # A LITERAL SHA, never a moving ref (moving-ref-control-lint, which caught this land). `origin/main`
+  # advances past this fix the moment it lands, and the control then replays the FIXED file and
+  # compares the fix to itself. 0fe052972 is the parent of the fix commit — the last sha at which this
+  # defect is present — and it is already an ancestor of trunk, so it cannot move.
   local root="$BATS_TEST_TMPDIR/prefix"
   mkdir -p "$root/bin"
-  git -C "$REPO" show origin/main:bin/cc-await-ping > "$root/bin/cc-await-ping" \
-    || skip "origin/main copy unavailable"
+  git -C "$REPO" show 0fe052972:bin/cc-await-ping > "$root/bin/cc-await-ping" \
+    || skip "pinned pre-fix copy unavailable"
   chmod +x "$root/bin/cc-await-ping"
   ln -s "$REPO/hooks" "$root/hooks"
 
