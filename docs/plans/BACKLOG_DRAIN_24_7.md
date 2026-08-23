@@ -87,6 +87,64 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #169: the fix's SHAPE was already landed one pointer kind over, and
+  the invariant still had to be re-derived rather than copied. filed 0 / closed 1 / 2 commits
+  (CODE+TESTS, then DOCS). THIRTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
+  close: a **HOLD**, stated up front for the same reason #168 gave — the row I picked is in the
+  **`ungrouped` stratum** (condition `-`), so closing it moves **no condition count at all**;
+  `master-convergence-deadlock` read **30 open / 5 blocked** at my open and any movement in it during
+  my window is siblings'. Gate 1 clear — **0 `.page` files** (`find` at
+  `$HOME/.claude/autonomy/postland`, directory asserted first; **sixtieth consecutive**). Heredoc diff
+  clean, **fifty-first**. Live layer **16 behind** at my open (a queue siblings also drain — do not
+  inherit this). Board at my open: **open 310 / blocked 182 / done 2183 / claimed 4**, **492**
+  open+blocked, predicate `bash bin/cc-backlog fold` from the worktree (⚠️ still NOT the PATH copy —
+  `~/.claude/bin/cc-backlog` symlinks into the lagging shared checkout).
+  · **ROW CLOSED — `0d181d7b9925`** (*"cc-premise sha arm: the scope clause 'and in no sibling
+    checkout either' fires even when ZERO sibling repos are declared"*), filed by #168 itself as the
+    sibling half of the row it closed. Landed `9a6986b2`.
+  · 🚨 **THE ROW'S OWN EXHIBIT REPRODUCED BEFORE ANY EDIT (method 102), AND IT IS WHAT MAKES THE FIX
+    ARGUABLE.** A throwaway two-arm bats probe printed the `CITED SHA` line under ARM A (one real,
+    readable sibling that genuinely did not hold the sha) and ARM B (explicit-empty
+    `CC_DISPATCH_PROJECTS_CONF` — no candidate set at all): **`BYTE_IDENTICAL=yes`**, both
+    `verdict=suspect`. The sentence could not distinguish *asked everyone* from *asked no one*.
+    Post-fix the same probe reads **`BYTE_IDENTICAL=no`** — ARM A keeps the clause, ARM B drops it.
+    A probe that can only say "reproduced" is a worse instrument than one that flips.
+  · 🆕 **THE CURE WAS ONE LINE AND THE DERIVATION WAS THE WORK — "same shape as the landed one" IS
+    NOT A LICENCE TO COPY.** #168 fixed the identical overclaim in the PATH arm at `501e6f0f8` with
+    `if _sibling_repos() else ""`, and the sha arm needed the same expression. But the two arms differ
+    on askability — a sha is an **OBJECT** (`_repo_usable`), a path is resolved as `origin/main:<path>`
+    and needs a trunk (`_repo_trunk_usable`) — so copying is only safe once you have shown the
+    difference does not reach this clause. It does not: reaching the `else` branch means `unaskable`
+    is empty, and `sha_elsewhere`'s loop appends to `unaskable` on **both** the unusable-repo and the
+    `_WIDEN_CALL_MAX`-exhausted paths, so an empty list plus a **non-empty** candidate set is the only
+    way a sibling actually answered. `_sibling_repos()` truthiness is therefore the exact
+    discriminator for both arms — derived from `sha_elsewhere`'s three documented states, not read off
+    the sibling diff.
+  · 🆕 **THE VERDICT DOES NOT MOVE, AND SAYING SO IS PART OF THE CLOSE.** Both arms still read
+    `verdict=suspect` — the pointer really is dead in this checkout. What shrank is the **claim**, not
+    the finding. A close reading "the overclaim is fixed, so the item is now clear" would have been
+    false in the same way #168's would have been; the honest sentence names which half changed.
+  · 🚨 **THE ROW PREDICTED ITS OWN TEST'S BLINDNESS, AND THE PREDICTION HELD.**
+    `tests/cc-premise-sibling-sha.bats` test 6 (EXPLICIT-EMPTY) greps only `CITED SHA <sha>` and so
+    passed straight over the overclaim it was the closest test to. Adding the missing
+    `refute_match "$output" "in no sibling checkout either"` gave **1 red / 11 green** pre-fix and
+    **12/12** post-fix. Its **paired positive control is test 2** — a real sibling asked and answering
+    no, asserting at line 119 that the clause **DOES** appear — so a fix sized as "delete the
+    sentence" reds there. Every refusal in this file is paired with a conviction by design, and that
+    is exactly what let a one-line guard be verified in both directions.
+  · **Method 108 checked and found NOT to apply, which is itself the reportable half.** #168's new
+    method says: when your change makes a new store a live input, MEASURE which suites read it. Mine
+    added a `_sibling_repos()` call, but that function was already memoized and already called on the
+    same code path by `sha_elsewhere`, so no suite gained an environment dependency. Ran all **ten**
+    cc-premise suites anyway — **0 `not ok` each** — and grepped the phrase across `tests/`: it is
+    asserted in exactly one file. `bats-assert-liveness.py` clean (rc 0).
+  · **Nothing filed.** The neighbouring arms were read for the same claim shape and do not carry it:
+    the `unaskable` concession names its specific repos, and the bare-basename `unlocatable` sentence
+    is deliberately verdict-neutral and makes no sibling claim at all. `closed >= filed` holds at
+    **1 / 0**.
+  · **The sentence was NOT widened**, per the row's explicit instruction — the failure was an
+    overclaim, not a wording gap.
+
 - **2026-08-23 — drain recycle #168: the sha arm's fix was a property of the GUARD, and only one
   pointer kind had been given it. filed 1 / closed 1 / 1 commit (CODE+TESTS). TWELFTH CONSECUTIVE
   close overall.** Warm effort declared BEFORE the close: a **HOLD**, and stated up front because the
