@@ -66,6 +66,24 @@ BLG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
 DEPLOY_SCRIPT="${CC_DEPLOY_SCRIPT:-$HOME/.claude/scripts/deploy-live.sh}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# The placeholder shape (hooks/lib/placeholder.sh) — SSOT shared with hooks/operator-readout.sh and
+# completion-assert D5. THIS board prints a blocked row's own `run` as the row's PASTE TARGET, so a
+# stored command with a hole in it is handed over here exactly as it was in the close block that
+# started this (operator, 2026-08-22: *"never give us spoon-fed commands if it's not ready for us to
+# actually run"*). Resolve through $0's symlink first (the live copy is ~/.claude/bin/cc-do -> the
+# checkout; a brand-new lib has no live symlink until install.sh runs). Missing ⇒ defs that answer
+# `false`, i.e. today's behaviour — never an empty $ph, which jq's `test("")` makes true for EVERY
+# row.
+_PH_LIB=""
+for _c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../hooks/lib/placeholder.sh" \
+          "$SCRIPT_DIR/../hooks/lib/placeholder.sh" \
+          "$CFG/hooks/lib/placeholder.sh" "$HOME/.claude/hooks/lib/placeholder.sh"; do
+  [ -f "$_c" ] && { _PH_LIB="$_c"; break; }
+done
+# shellcheck source=../hooks/lib/placeholder.sh
+# shellcheck disable=SC1090,SC1091
+{ [ -n "$_PH_LIB" ] && . "$_PH_LIB" 2>/dev/null; } || {
+  CC_PLACEHOLDER_RE=''; CC_PH_JQ='def ph_hit($ph): false; def ph_toks($ph): "";'; }
 TABC="$(printf '\t')"
 # TSV empty-field placeholder. A single tab in IFS is still IFS *whitespace*, so a run of two tabs
 # collapses into one delimiter and every later field shifts one position LEFT — silently, exit 0.
@@ -97,7 +115,9 @@ STEPS="$(mktemp "${TMPDIR:-/tmp}/ccdo.XXXXXX")" || { printf 'cc-do: mktemp faile
 trap 'rm -f "$STEPS"' EXIT
 # one step per line — class<TAB>mark<TAB>name<TAB>cmd<TAB>label<TAB>path
 #   class ∈ {deploy,activation,decision,backlog}, emitted in that (irreversibility) order
-#   mark  ▶ = cc-do runs it · ◆ = yours to rule on, cc-do never runs it
+#   mark  ▶ = cc-do runs it · ◆ = yours to rule on, cc-do never runs it · ✎ = the row's stored
+#         command still has a placeholder in it, so it is NOT a paste target and its paste line is
+#         suppressed; the label names the value that is missing (hooks/lib/placeholder.sh)
 #   path  the script to exec (runnable classes only; `-` otherwise) — kept as its OWN field so
 #         execution never has to re-parse `cmd`, i.e. never needs eval
 emit() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "${6:-$PAD}" >> "$STEPS"; }
@@ -226,15 +246,25 @@ collect() {
     done
   fi
   if [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
-    "$blg" list --blocked --json 2>/dev/null | jq -r '
+    "$blg" list --blocked --json 2>/dev/null \
+      | jq -r --arg ph "$CC_PLACEHOLDER_RE" "$CC_PH_JQ"'
       .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
       # Same gsub as $t/$n: a tab inside `run` would shift every later column and silently re-point
       # the fields (memory: tsv-field-collapse). NOT truncated — a half command is worse than none.
       | ((.run // "") | gsub("[\n\t]"; " ")) as $r
-      | (if $r == "" then "cc-backlog list --blocked" else $r end) as $cmd
-      | "backlog\t◆\t\(.id // "?")\t\($cmd)\tbacklog: \($t) — needs: \($n)\t-"
+      # A `run` that still carries a placeholder is NOT a paste target (2026-08-22). Putting the
+      # GENERIC pointer in `cmd` is what suppresses the paste line — itemize_class prints that line
+      # only when `cmd` differs from the class pointer, so the one mechanism already there does the
+      # work and there is no fifth field to keep in sync. The mark drops to ✎ and the label NAMES
+      # the missing value, matching hooks/operator-readout.sh row-for-row.
+      | ($r != "" and ($r | ph_hit($ph))) as $hole
+      | (if $r == "" or $hole then "cc-backlog list --blocked" else $r end) as $cmd
+      | (if $hole then "✎" else "◆" end) as $mk
+      | (if $hole then "backlog: SUPPLY \($r | ph_toks($ph)) — \($n)"
+         else "backlog: \($t) — needs: \($n)" end) as $label
+      | "backlog\t\($mk)\t\(.id // "?")\t\($cmd)\t\($label)\t-"
     ' 2>/dev/null >> "$STEPS"
   fi
 }
