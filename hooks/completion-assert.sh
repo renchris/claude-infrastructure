@@ -789,7 +789,30 @@ if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra" -eq 0 ] \
     fi
   fi
   if [ "$_d6_ok" -eq 1 ] && _ca_source_close_shape; then
-    if ! close_shape_ok "$MSG"; then d6=1; _d6_missing="$(close_shape_missing "$MSG")"; fi
+    _d6_missing="$(close_shape_missing "$MSG")"
+    # LINE 1 MUST CARRY THE LEDGER'S OWN RUNG GLYPH (CLOSE_SHAPE W3, measured 2026-08-23). This is
+    # the enforcement gap that made the relay instruction inert: two files already tell the model
+    # to reproduce wrap-ledger's READOUT verbatim (hooks/lib/close-shape.sh and commands/wrap.md),
+    # and NOTHING checked — `grep -n READOUT hooks/completion-assert.sh` returned zero lines, and
+    # compliance measured 3/167 = 1.8% on closes where the readout was fresh in context.
+    #   CONTAINMENT, never equality. The model owns the subject clause, and byte-equality would
+    # make the IDEAL close illegal: the renderer emits a Minto CATEGORY rather than an idea for 3
+    # of 7 rungs (including 👤, whose tail is a bare count over a population no field on disk can
+    # name), so a fully-rendered line 1 would ship the blank assertion CLAUDE.md forbids.
+    # Containment also tolerates `**✅ …**` bold-wrapping, which a "$RUNG"* prefix test would
+    # convict — and a false FAIL on an honest close is strictly worse than a false PASS
+    # (hooks/lib/close-shape.sh's own header states that ordering).
+    #   No new class, cap or latch: the token joins _d6_missing and reuses the existing `shape`
+    # budget. The arm is already gated to RUNG ∈ {✅,👤} + origin + positive write evidence +
+    # contra=0 above, so it cannot reach a mid-wave message.
+    case "$ca_first" in
+      *"$RUNG"*) : ;;
+      *) _d6_missing="${_d6_missing:+$_d6_missing }line-1-rung" ;;
+    esac
+    # An explicit `if` rather than a trailing `[ … ] && d6=1`: this hook runs under `set -uo
+    # pipefail`, so a false test as the last command of the compound would abort the moment
+    # anyone adds `-e`.
+    if [ -n "$_d6_missing" ]; then d6=1; fi
   fi
 fi
 
