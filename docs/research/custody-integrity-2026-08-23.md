@@ -178,16 +178,43 @@ live work is the worse failure. Full table: `/tmp/custody-research/RECONCILIATIO
 
 | Disposition | n | Evidence |
 |---|---:|---|
-| `ABANDON-never-started` | **113** | no origin ref past the boot budget **AND** no sha observed **AND** no remote-tracking ref — positive-controlled |
+| `ABANDON-never-started` | **103** | no origin ref past the boot budget **AND** no sha observed **AND** no remote-tracking ref — positive-controlled — **AND the control plane says the peer is idle** (see the correction below) |
+| `KEEP-OPEN-not-idle` | **10** | git-side identical to the row above, but the control plane reports `requires_action` ×7, `running` ×1, `WORKER_STATUS_UNSPECIFIED` ×2 |
 | `KEEP-OPEN-real-branch` | 36 | branch on origin + sha observed; commits not on trunk |
 | `KEEP-OPEN-land-refused` | 23 | as above, plus a `.land-refused` artifact naming a mechanical blocker |
 | `KEEP-OPEN-off-trunk` | 3 | branch deleted from origin, but the observed sha is present locally and is **not** an ancestor of `origin/main` |
 | `RETURNED` | 2 | panes 377 + 552 — work content-verified on reso `origin/main` |
 | `KEEP-OPEN-alive` | 2 | panes 600 and 602, present in `cc-pane list` |
 
-Store went **180 → 65 open**. The 62 cloud rows left open all hold **real commits that are on no
-trunk** — they are a landing backlog, not a bookkeeping artifact, and closing them would erase the
-only record that the work exists.
+Store went **180 → 80 open**. The 62 cloud rows with branches hold **real commits that are on no
+trunk** — a landing backlog, not a bookkeeping artifact; closing them would erase the only record
+that the work exists.
+
+### The correction I had to make — a false close, caught and reversed
+
+**My first pass abandoned 113 rows, and 10 of them were live peers.** The never-started test used
+only git-side evidence — no origin ref, no sha observed, no remote-tracking ref — and all three are
+*true of a session that is blocked waiting for input*. A `requires_action` peer has not pushed a
+branch **precisely because it is stuck**, not because it is gone. Abandoning it records "this peer
+is gone, nothing is owed" over a peer that is alive.
+
+The overlap was exactly total: `comm -12` of the 113 abandoned against the 10 non-idle returned
+**10 of 10**. All ten were re-opened (`cc-custody open` appends, and the fold takes the latest
+verdict per key) and each verified back to `OPEN`.
+
+Two lessons, and the second is the sharper one:
+
+- **A liveness test must include an axis that can distinguish "never ran" from "ran and is
+  waiting".** Git-side evidence cannot: both look like silence on the remote. Only the control
+  plane separates them.
+- **The warning was already written down when I acted.** The census subagent's adversarial pass
+  said *"a blanket reap would have been wrong on all 10"* — I ran my own git-side census, agreed
+  with its shape, and executed before reading its adversarial section. Reading a report's findings
+  and skipping its refutations is how a measured warning becomes a repeated mistake. Same family as
+  [[work-item-citation-refutes-its-own-remedy]].
+
+This is also why the deathwatch itself **never discharges**: had this been the mechanism rather
+than a human-directed reconciliation, the same error would have run unattended every 300 seconds.
 
 ## 6. What this does NOT fix
 

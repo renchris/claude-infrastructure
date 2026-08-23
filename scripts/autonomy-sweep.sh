@@ -984,7 +984,7 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
     note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
 
-# ── CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────────
+# ── 2e. CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────
 # The two blocks above only ever speak to an address the FIRE recorded. Measured 2026-08-23: 1055 of
 # cloud-return's 1116 wake attempts resolved to "the declaration names no notify-back target —
 # nothing to wake", because a launchd-dispatched fire has no ITERM_SESSION_ID and its cwd is `/`.
