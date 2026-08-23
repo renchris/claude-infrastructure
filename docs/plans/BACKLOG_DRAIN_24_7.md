@@ -174,7 +174,38 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `tests/unattended-sysctl-path.bats` 10/10, `tests/bats-assert-liveness.bats` 36/36,
   `tests/qos-chokepoint.bats` 47/47 (run because this evidence makes a factual claim about it).
   `bats-assert-liveness.py` clean; `bats-shellcheck-lint.sh --range` clean, 0 blocking findings;
-  gate-select instrument control **32**, unchanged.
+  gate-select instrument control **32**, unchanged. **`LAND_RC=0` ON THE FIRST TRY — SECOND
+  CONSECUTIVE**, and #173's recipe reproduced: **both lints run BEFORE the land**. The smoke was a
+  real **`✓ gate: smoke green — 1 direct suite(s) in 24s`**, not a PARTIAL non-verdict.
+
+  🆕 **Scope (grown): +delist `tests/unattended-sysctl-path.bats` from
+  `scripts/offbox-excluded.manifest`** — Follow-On Gate F1-F4 PASS, and it was **my own diff's
+  consequence, named by my own land**: `RATCHET … is green off-box now — delete its line
+  (advisory)`. Landed as *fix(offbox): the exclusion was never machine-coupling — notok=2 was the
+  inverted test itself*. 🆕 **METHOD 123 — AN EXCLUSION LIST'S SEEDED *MEASUREMENT* CAN NAME THE
+  CURE ITS ASSUMED *CAUSE* HIDES.** The entry was admitted at **`notok=2`**, and notok=2 is
+  **exactly** the two cases I fixed. A CI runner is by definition quiet, so qos-census's verdict
+  there is always NO-BURST (rc 3) and those two cases **could not pass off-box BY CONSTRUCTION**.
+  The line was never recording machine-coupling — it was recording the inverted test. **This is
+  only recoverable because the file's header refuses to store causes**: *"a cause is a hypothesis…
+  nothing here claims a cause was verified"*. A list that had stored "needs the real box" would
+  have been unfalsifiable. **Store the measurement; the cause rots, the number does not.** The
+  sibling comment that cited this suite as excluded "for this class" was corrected in the same
+  commit — `unattended-path-lint.bats` really IS a package-set claim and stays; **two entries can
+  share a seed run without sharing a cause**.
+
+  ⚠️ 🆕 **AND TWO VACUOUS ARMS CAME FIRST, EITHER OF WHICH WOULD HAVE PASSED FOR EVIDENCE.** My A/B
+  v1 computed `$PRE` as `git merge-base origin/main HEAD` **AFTER the land** — at which point the
+  merge-base **IS my own tip** — so both arms ran identical bytes and **both read green**, which
+  would have "shown" the pre-fix suite passing off-box and refuted my fix's whole reason. It was
+  caught only because ARM A reported **10 ok for a 9-test file**. Its sanity check then failed too:
+  `$PRE:tests/…` in the zsh Bash tool fires zsh's **`:t` history modifier** and ate the path.
+  **The base moves mid-session — pin the pre-fix sha as a CONSTANT the moment you have it** — and
+  **a control that cannot state which bytes it ran is not a control.** Corrected A/B on the
+  identical runner CI uses, sanity-checked on `@test` count so the arms are distinguishable:
+  **pre-fix RED 7 ok / 2 notok** → **post-fix GREEN 10 ok / 0 notok**. `offbox-partition lint`
+  clean — **534 = 499 partition + 35 excluded (3 host, 32 off-box)**, the suite now INSIDE the
+  partition; stuck ratchet entries **1 → 0**.
 
 - **2026-08-23 — drain recycle #173: the auditor could not see the class by construction, and the
   detector that could had never run. filed 0 / closed 1 / 2 commits (CODE+TESTS, then DOCS).
