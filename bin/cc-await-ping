@@ -925,6 +925,48 @@ WOKEEOF
   WOKE_MAP="$out$k $v"
 }
 
+# ── F12 (2026-08-22): A WATCHER MUST NOT READ ITS OWN PREDECESSOR'S CORPSE AS THE PING IT AWAITS ───
+# backlog b1a9e3142ee4, NARROWED 2026-08-19 and red-proved here. `_wake_down_notice` writes the
+# WAKE-PATH-DOWN verdict INTO the watched box on purpose (see its header: that placement is correct
+# and must not move — the inbox is the one channel a lead provably consumes). But the take loop below
+# decides "a ping arrived" purely on `mailbox_lines > cursor`, and a control line we wrote ourselves
+# counts. So the arm that REPLACES a killed watcher can meet the dead one's notice, fire on it, and
+# exit `verdict=ping elapsed=0s` — with harness status "completed, exit 0". The wake path was never
+# established, and it is INDISTINGUISHABLE from one that delivered real mail. That polarity is the
+# load-bearing half of the defect, and it is reached by the ordering the wake-floor itself prescribes
+# ("arm before you stop" puts the arm in the same turn as the death, ahead of the boundary drain).
+#
+# WHY THE DISCRIMINATOR IS KEYED ON *OUR OWN KEYSET*, not on the marker text. A WAKE-PATH-DOWN
+# FORWARDED from another pane is REAL PEER MAIL — a sibling telling us its wake path dropped — and a
+# blanket skip of the marker would suppress it. The notice interpolates the key it was armed for, so
+# "armed for [<one of OUR keys>]" separates our own corpse from a neighbour's report exactly.
+#
+# FAIL DIRECTION, deliberately OPEN: every uncertain branch below (unreadable box, empty window)
+# returns "real mail present", i.e. the pre-fix behaviour. This suppressor can only ever make the
+# watcher keep watching over lines it PROVED are its own; it can never swallow a delivery.
+_own_wake_down_line() {   # <line> → 0 iff this is a WAKE-PATH-DOWN notice armed for one of OUR keys
+  local _k
+  case "$1" in
+    *"[cc-await-ping] WAKE-PATH-DOWN: the watcher armed for ["*) ;;
+    *) return 1 ;;
+  esac
+  for _k in $(_keys); do
+    case "$1" in *"the watcher armed for [$_k]"*) return 0 ;; esac
+  done
+  return 1
+}
+_real_mail_after() {   # <key> <from> → 0 iff the window holds >=1 line that is NOT our own control line
+  local _f _line _n=0
+  _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
+  [ -n "$_f" ] && [ -f "$_f" ] || return 0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _own_wake_down_line "$_line" || return 0
+    _n=$(( _n + 1 ))
+  done < <(tail -n "+$(( $2 + 1 ))" "$_f" 2>/dev/null)
+  [ "$_n" -gt 0 ] && return 1
+  return 0
+}
+
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
@@ -954,7 +996,15 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       # behaviour (already-pending mail fires at once) and it is the ONLY time .seen is consulted.
       if ! _woke_get "$_k" >/dev/null 2>&1; then _woke_set "$_k" "$(mailbox_seen "$_k")"; fi
       _w="$(_woke_get "$_k")"; case "$_w" in ''|*[!0-9]*) _w=0 ;; esac
-      if [ "$(mailbox_lines "$_k")" -gt "$_w" ]; then _HIT="$_k"; _FROM="$_w"; break; fi
+      if [ "$(mailbox_lines "$_k")" -gt "$_w" ]; then
+        # F12: a window holding ONLY our own WAKE-PATH-DOWN corpse-notice is not a ping. Advance our
+        # PRIVATE cursor past it (so we do not re-test it every poll) and keep watching. `.seen` is
+        # deliberately untouched: the notice stays pending for hooks/mailbox-drain.sh, which is the
+        # reader it was written for.
+        if _real_mail_after "$_k" "$_w"; then _HIT="$_k"; _FROM="$_w"; break; fi
+        _woke_set "$_k" "$(mailbox_lines "$_k")"
+        echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+      fi
     done
     if [ -n "$_HIT" ]; then
       # Window opens at OUR cursor, never at .seen — so a drain that already advanced .seen past this
