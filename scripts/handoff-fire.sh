@@ -690,7 +690,7 @@ emit_fire_refusal() { # $1=reason $2=detail → always 0 — a fire that did NOT
 #                asked for one, which is exactly the silent non-emission this whole change is about.
 #   Deliberately-omitted is NOT a verdict here. It is `goal_requested:false` on the fire's OWN row
 #   (emit_handoff_telemetry), because its denominator is FIRES, not goal attempts — see there.
-emit_goal_event() { # $1=verdict (set|unverified|abstained|unreachable) $2=detail → always 0
+emit_goal_event() { # $1=verdict (set|unverified|abstained|unreachable|held|mangled) $2=detail → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
@@ -2070,6 +2070,124 @@ it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 
   fi
   hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
   /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+  hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+}
+
+# ---- COMPOSER-CONTENT oracle (recycle-100p 2026-08-22 — docs/research/recycle-100p-2026-08-22.md)
+# What is sitting UNSUBMITTED in a live CC composer? The injection sites that type into one
+# (/exit at recycle_fire, the watcher's CR nudges, arm_goal's /goal paste) previously judged only
+# OWNERSHIP ("is this a CC pane", composer_owned) and never CONTENT — and content is what decides
+# whether a keystroke is safe: measured 30 draft+"/exit" merges in 24 days (≥8 swallowed a real
+# in-flight operator message), because /exit into a NON-empty composer does not exit — it merges
+# with the draft into ONE text message (the 60-day corpus holds ZERO exact-"/exit" enqueues, so an
+# empty-composer /exit always interrupts). And there is NO safe scrub to recover with: measured on
+# 2.1.220 (probe P2), Ctrl-U and Esc both leave the composer intact, and Ctrl-C/Esc double as
+# turn-interrupt — so the only non-destructive move on a non-empty composer is to WAIT or abstain.
+#
+# THE PARSE, and why it is byte-level: the input box is the text between the LAST TWO full-width
+# border rows (runs of U+2500 ─). Inside it an EMPTY composer renders only non-ASCII ink (the ❯
+# prompt glyph, cursor artifacts); any draft is printable ASCII. So: keep printable ASCII only,
+# drop the one anchored placeholder a never-typed-in session shows (`Try "…"`, measured P2), strip
+# whitespace — empty ⇒ EMPTY, anything else ⇒ that content (whitespace-stripped, so a wrapped draft
+# compares stably; same trick as cc-type-verified.sh). The border is matched as a repeated BYTE
+# run, never a literal phrase — literal TUI phrases die at the wrap (memory
+# tui-literal-phrase-match-is-width-dependent); a border row is width-invariant by construction.
+# A torn/unreadable screen or a missing box returns rc 1 = UNKNOWN, and every caller fails toward
+# NOT typing (the 2026-08-06 rule: typing needs the affirmative).
+composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer content, space-stripped; rc 0 parsed / 1 UNKNOWN
+  local it2="${1:-}" id="${2:-}" scr raw rc b12='────────────'
+  [ -n "$it2" ] && [ -n "$id" ] || return 1
+  scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES:-24}" 2>/dev/null || true)"
+  [ -n "$scr" ] || return 1
+  raw="$(printf '%s\n' "$scr" | LC_ALL=C awk -v b="$b12" '
+    { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+    END {
+      if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
+      for (i = b2 + 1; i < b1; i++) print line[i]
+    }')" && rc=0 || rc=$?
+  [ "$rc" = 0 ] || return 1
+  raw="$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]')"
+  # Anchored placeholder: exact-whole-row only — a real draft that merely STARTS with `Try "` must
+  # still read as a draft (the failure direction of a loose match is typing over operator text).
+  if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
+    raw=""
+  fi
+  printf '%s' "$raw" | LC_ALL=C tr -d '[:space:]'
+  return 0
+}
+
+# recycle_composer_gate — the /exit pre-condition, as a NAMED decision so tests can drive it on
+# fixture screens (the actuation — typing or refusing — stays at the call sites).
+#   rc 0 = composer PROVEN empty within the wait → safe to type /exit
+#   rc 1 = held: stayed non-empty (last content on stdout)
+#   rc 2 = unknown: unreadable/boxless for the whole wait (never treated as empty)
+recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
+  local it2="$1" sid="$2" wait="${3:-180}" ivl="${4:-15}" t=0 c crc
+  while :; do
+    c="$(composer_content "$it2" "$sid")" && crc=0 || crc=1
+    [ "$crc" = 0 ] && [ -z "$c" ] && return 0
+    if [ "$t" -ge "$wait" ]; then
+      if [ "$crc" = 0 ]; then printf '%s' "$c"; return 1; fi
+      return 2
+    fi
+    /bin/sleep "$ivl"; t=$((t + ivl))
+  done
+}
+
+# recycle_nudge_decision — what may the watcher's 60/150/300s checkpoint DO, decided from the
+# composer's actual content (the blind CR this replaces is what submitted merged "draft+/exit"
+# buffers). Prints exactly one token; the caller actuates:
+#   cr      composer holds exactly the stranded /exit the nudge exists to submit
+#   retype  composer empty AND claude alive (typed-but-lost /exit) — caller may retype ONCE, gated
+#   hold    composer holds anything else — a CR would submit someone else's buffer
+#   unknown composer unreadable — typing needs the affirmative
+recycle_nudge_decision() { # $1=it2-bin $2=sid
+  local c
+  c="$(composer_content "$1" "$2")" || { printf 'unknown'; return 0; }
+  case "$c" in
+    /exit) printf 'cr' ;;
+    "")    printf 'retype' ;;
+    *)     printf 'hold' ;;
+  esac
+  return 0
+}
+
+# VERIFIED composer paste — the cc-type-verified.sh discipline adapted to the one surface where
+# scrub-and-retype is IMPOSSIBLE (no safe scrub, above). So instead of retyping on mangle it
+# (a) refuses to paste until the composer is PROVEN EMPTY (bounded pre-wait — a held operator
+# draft defers us, never the reverse), (b) refuses to submit unless the read-back shows EXACTLY
+# the pasted text, and (c) on mismatch leaves the composer untouched for a human — unsubmitted
+# text is recoverable; a submitted hybrid is not (that is the mangle class this exists to end).
+#   rc 0 pasted+verified+submitted · 1 send failed · 2 abstained (ownership / unreadable screen) ·
+#   3 HELD (composer stayed non-empty through the pre-wait) · 4 MANGLED (read-back mismatch — CR NOT sent)
+it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait-s]
+  local it2="$1" id="$2" text="$3" wait="${4:-${FIRE_PASTE_PREWAIT:-30}}"
+  local ivl="${FIRE_PASTE_PREIVL:-5}" t=0 c crc want got
+  if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
+    echo "⚠ verified paste ABSTAINED — no proof a live CC session owns pane $id" >&2
+    return 2
+  fi
+  while :; do
+    c="$(composer_content "$it2" "$id")" && crc=0 || crc=1
+    [ "$crc" = 0 ] && [ -z "$c" ] && break
+    if [ "$t" -ge "$wait" ]; then
+      if [ "$crc" = 0 ]; then
+        echo "⚠ verified paste HELD ${wait}s — composer occupied: '$(printf '%.80s' "$c")' (an unsubmitted draft; pasting would append to it and a CR would submit the hybrid)" >&2
+        return 3
+      fi
+      echo "⚠ verified paste ABSTAINED — composer unreadable for ${wait}s (torn frame / no input box on screen); typing needs the affirmative" >&2
+      return 2
+    fi
+    /bin/sleep "$ivl"; t=$((t + ivl))
+  done
+  hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
+  /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+  want="$(printf '%s' "$text" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]')"
+  got="$(composer_content "$it2" "$id")" && crc=0 || crc=1
+  if [ "$crc" != 0 ] || [ "$got" != "$want" ]; then
+    echo "⚠ verified paste MANGLED — read-back saw '$(printf '%.80s' "${got:-<unreadable>}")', expected the pasted text; CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
+    return 4
+  fi
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
 }
 
@@ -4263,7 +4381,7 @@ inherit_recycle_goal() { # $1=predecessor-sid → always 0
 
 # MESSAGE 2. Never fails the fire — see FAIL-CLOSED above. Always 0.
 arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable verdict
-  local it2="${1:-}" pane="${2:-}" cond="${3:-}" t=0
+  local it2="${1:-}" pane="${2:-}" cond="${3:-}" t=0 arm_rc=0
   local timeout="${FIRE_GOAL_VERIFY_TIMEOUT:-45}" interval="${FIRE_GOAL_VERIFY_INTERVAL:-3}"
   [ -n "$cond" ] || return 0
   if [ -z "$it2" ] || [ -z "$pane" ]; then
@@ -4271,12 +4389,33 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable 
     emit_goal_event abstained "no pane/it2 binding for the arming paste" || true
     return 0
   fi
-  # The ownership gate lives INSIDE it2_paste_submit (composer_owned) and abstains loudly.
-  if ! it2_paste_submit "$it2" "$pane" "/goal $cond"; then
-    echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused" >&2
-    emit_goal_event abstained "arming paste refused/abstained for pane $pane" || true
-    return 0
-  fi
+  # VERIFIED paste (recycle-100p 2026-08-22): the old call here was it2_paste_submit — ownership-
+  # gated but content-blind, a bracketed paste followed by a BLIND CR. That made this the ONE
+  # unverified injection on the whole recycle chain (the shell relaunch line is nonce-verified;
+  # this was not), and the mangle shape was measured live (P2): a paste into a composer holding an
+  # operator draft APPENDS to it, and the CR submits the hybrid. The verified form pastes only
+  # into a PROVEN-EMPTY composer, reads the paste back, and sends the CR only on exact proof —
+  # each failure gets its own verdict + ledger row, and the fired session is told IN-BAND
+  # (cc-notify — context, never keystrokes) exactly what to do, so a failed arm no longer waits
+  # for the operator to spot it.
+  arm_rc=0; it2_paste_submit_verified "$it2" "$pane" "/goal $cond" || arm_rc=$?
+  case "$arm_rc" in
+    0) : ;;
+    3)
+      echo "⚠ goal NOT armed — pane $pane's composer stayed occupied through the pre-paste wait (an unsubmitted draft; pasting would have appended to it). The session HAS its brief and is working. Re-arm by typing '/goal $cond' into it once the composer is clear. goal-arm verdict=held reason=composer-occupied" >&2
+      emit_goal_event held "composer occupied through pre-paste wait for pane $pane" || true
+      command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM DEFERRED: your composer held unsubmitted text, so the Stop-hook goal was NOT armed (nothing was typed over it). When the composer is clear, arm it yourself by submitting exactly: /goal $cond" >/dev/null 2>&1 || true
+      return 0 ;;
+    4)
+      echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; the /goal text sits UNSUBMITTED in pane $pane's composer. goal-arm verdict=mangled reason=readback-mismatch" >&2
+      emit_goal_event mangled "post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted" || true
+      command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM MANGLED (no harm done): a /goal paste landed in your composer but the read-back did not match, so it was NOT submitted. If the composer shows only the /goal line, press Enter to arm it; otherwise clear the composer and submit exactly: /goal $cond" >/dev/null 2>&1 || true
+      return 0 ;;
+    *)
+      echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused" >&2
+      emit_goal_event abstained "arming paste refused/abstained for pane $pane (rc=$arm_rc)" || true
+      return 0 ;;
+  esac
   while [ "$t" -lt "$timeout" ]; do
     if goal_armed_for_pane "$pane" "$cond"; then
       echo "→ goal ARMED + VERIFIED on pane $pane (read back from the session's own transcript, ${#cond} chars). goal-arm verdict=set" >&2
@@ -5258,9 +5397,38 @@ if [ "${1:-}" = "__recycle" ]; then
   waited=0
   while [ "$waited" -lt 600 ] && ! at_shell; do
     sleep 3; waited=$((waited+3))
-    case "$waited" in 60|150|300) "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;; esac
+    case "$waited" in 60|150|300)
+      # NUDGE GATE (recycle-100p 2026-08-22): this used to be a BLIND CR — and a blind CR is what
+      # SUBMITS a merged "draft+/exit" buffer (the ≥8 swallowed operator messages in the 24-day
+      # corpus were fired by exactly this class of submit). A CR is now sent ONLY onto a composer
+      # PROVEN to hold exactly the stranded /exit it exists to submit. An EMPTY composer with
+      # claude still alive at the 60s checkpoint gets ONE gated retype of /exit (the typed-but-
+      # lost transport case), itself read back before its CR. Anything else — a draft, a merged
+      # buffer, an unreadable box — HOLDS: the recycle then fails loudly at the 600s refusal with
+      # the session alive and the operator's text intact, which is the recoverable outcome.
+      nd="$(recycle_nudge_decision "$IT2" "$RSID")"
+      case "$nd" in
+        cr)
+          hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
+        retype)
+          if [ "$waited" = 60 ]; then
+            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
+            sleep 1
+            nc="$(composer_content "$IT2" "$RSID")" || nc=""
+            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+          fi ;;
+        *)
+          echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
+          emit_recycle_event recycle-nudge-held "" "$RSID" "decision=$nd at ${waited}s" || true ;;
+      esac ;;
+    esac
   done
   if ! at_shell; then
+    # LEDGER COMPLETENESS (recycle-100p): both real recycle failures in the 3.5-day instrumented
+    # window emitted ZERO outcome rows — a failed recycle was ledger-invisible, provable only by
+    # intent-gap analysis over self-deleting TMPDIR logs. Every terminal watcher failure now
+    # writes its recycle-dead row before exiting.
+    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $(pane_cc_state "$TTY_PATH"))" || true
     echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $(pane_cc_state "$TTY_PATH")) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
     exit 1
   fi
@@ -5286,7 +5454,13 @@ if [ "${1:-}" = "__recycle" ]; then
     if it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
     sleep 3
   done
-  [ "$ok" = 1 ] || { echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
+  [ "$ok" = 1 ] || {
+    # The pane-88 incident class (2026-08-20): this branch stranded a pane at a bare shell and left
+    # NOTHING in the ledger — 100% success by row census while the pane sat dead. Emit + durable
+    # alarm before exiting; the alarm is what the desk sweeps, the row is what the rate queries see.
+    emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice — pane stranded at a bare shell" || true
+    hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
+    echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
   echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
   # Confirm the successor actually STARTS — a mistyped launcher, missing shell function, or
   # auth bounce otherwise dies silently and strands the pane at a prompt. One guarded retype
@@ -7127,9 +7301,13 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
 # own Bash call, so that call's result boundary deterministically injected the payload INLINE
 # (the model kept working in the OLD context) while /clear stayed queued behind it, armed to
 # wipe everything at turn end. The Jul-2 verification missed this because its busy turn was
-# pure text generation — no tool boundary, so nothing steered. The only queue semantic this
-# design still relies on is /exit (a built-in) holding to turn end — the exact behavior the
-# incident re-confirmed and self-close's E2E proved. Everything after the exit is queue-free.
+# pure text generation — no tool boundary, so nothing steered. /exit itself is a THIRD semantics
+# and the design relies on it: typed into an EMPTY composer it INTERRUPTS the in-flight turn and
+# exits in seconds — it does NOT hold to turn end (E2E 2026-07-03 twice + self-close's E2E; this
+# sentence used to claim the opposite, the FM-F self-contradiction — resolved 2026-08-22, and the
+# 60-day corpus agrees: zero exact-"/exit" enqueues exist). What CAN defeat it is a NON-empty
+# composer, where /exit merges with the draft into text — which is why recycle_fire now gates the
+# keystroke on composer_content (recycle-100p). Everything after the exit is queue-free.
 # The relaunch composes through the normal account/launcher/flag machinery below; SID + account
 # defaulting happen here, execution happens in recycle_fire at the bottom.
 SID=""
@@ -9500,6 +9678,27 @@ recycle_fire() {
       echo "!!   If a session is running there, /exit it yourself and re-run --recycle. If the pane is at a shell prompt, run: $CMD" >&2
       exit 1 ;;
   esac
+  # COMPOSER GATE (recycle-100p 2026-08-22 — docs/research/recycle-100p-2026-08-22.md §2.1/§3).
+  # /exit into a NON-empty composer does not exit: it MERGES with the draft into one text message
+  # (measured 30 merges / 24 days, ≥8 of them swallowing a real in-flight operator message; the
+  # 60-day corpus holds ZERO exact-"/exit" enqueues, so an empty-composer /exit always interrupts).
+  # There is no safe scrub (P2: Ctrl-U/Esc inert on the 2.1.220 composer), so a held draft DEFERS
+  # the recycle — bounded wait, then a loud refusal that leaves the session alive and the draft
+  # intact. That is the right polarity: the draft is the operator mid-thought, and a recycle rail
+  # can always re-fire; a swallowed message cannot be unsent. UNKNOWN (no box readable) also
+  # refuses — typing needs the affirmative. Kill switch: CC_RECYCLE_COMPOSER_GATE=off.
+  RCY_IT2="${REAL_IT2:-$HOME/.claude/bin/it2}"
+  if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
+    rcy_cg_c=""; rcy_cg_rc=0
+    rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "${CC_RECYCLE_DRAFT_WAIT:-180}" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+    if [ "$rcy_cg_rc" != 0 ]; then
+      [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
+      emit_recycle_event recycle-held-draft "" "$SID" "composer non-empty for ${CC_RECYCLE_DRAFT_WAIT:-180}s: ${rcy_cg_c}" || true
+      command -v cc-notify >/dev/null 2>&1 && cc-notify "$SID" "RECYCLE DEFERRED: this pane's composer holds an unsubmitted draft ('$(printf '%.60s' "${rcy_cg_c}")') — typing /exit now would merge with it and submit the hybrid (the measured Aug-16/Aug-22 mangle class). Send or clear the draft, then re-run the recycle." >/dev/null 2>&1 || true
+      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer holds unsubmitted text ('${rcy_cg_c}') — /exit would MERGE with it into one text message and there is no safe scrub. Nothing was typed; the session stays alive. Clear/send the draft, then re-run: $CMD" >&2
+      exit 1
+    fi
+  fi
   # ORDER IS LOAD-BEARING: watcher FIRST (heartbeat-verified), /exit LAST. A typed /exit
   # INTERRUPTS the in-flight turn and exits within seconds (E2E 2026-07-03 — twice: the busy
   # turn died with no output persisted; /exit does NOT enqueue-to-turn-end the way /clear does).
@@ -9555,6 +9754,20 @@ recycle_fire() {
   # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned recycle, not a
   # CRASH (the /exit interrupt kills this pane mid-Bash). Guarded: never blocks the close.
   write_teardown_marker "$SID" recycle || true
+  # Freshness re-read (recycle-100p): the long composer gate ran BEFORE the watcher armed — seconds
+  # ago. One last content read right before the irreversible keystroke narrows the type-over-draft
+  # race to this read→write gap (~1s). UNKNOWN refuses too: an unreadable box is not an empty one.
+  if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
+    rcy_cg_c=""; rcy_cg_rc=0
+    rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rcy_cg_rc=$?
+    if [ "$rcy_cg_rc" != 0 ]; then
+      [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
+      kill "$WATCHER_PID" 2>/dev/null || true
+      emit_recycle_event recycle-held-draft "" "$SID" "freshness re-read pre-/exit: ${rcy_cg_c}" || true
+      echo "!! recycle ABORTED at the last read: composer became non-empty ('${rcy_cg_c}') between arming and /exit — nothing typed, watcher disarmed, session stays alive. Re-run: $CMD" >&2
+      exit 1
+    fi
+  fi
   wrote=0
   for _ in 1 2 3; do
     if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
@@ -9593,7 +9806,7 @@ if [ "$DRY" = 1 ]; then
     else
       echo "subagents: none in flight"
     fi
-    echo "chain:    arm watcher (setsid-detached, heartbeat-verified) → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
+    echo "chain:    composer gate (refuse /exit over a held draft — ≤${CC_RECYCLE_DRAFT_WAIT:-180}s wait, no safe scrub exists) → arm watcher (setsid-detached, heartbeat-verified) → freshness re-read → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (content-gated nudges @60/150/300s: CR only onto a proven stranded /exit) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else
     echo "surface:  $SURFACE"
     if [ "$FOLLOW" = 1 ]; then
