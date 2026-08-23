@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #173: the auditor could not see the class by construction, and the
+  detector that could had never run. filed 0 / closed 1 / 2 commits (CODE+TESTS, then DOCS).
+  SEVENTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **MOVE**: the row sits in **`master-convergence-deadlock`**, which read **27 open / 6 blocked** at
+  my open. ⚠️ The operator-set goal again asked that effort to reach **0 open** in one recycle — it
+  did not, and saying so plainly is the report. It also named the WRONG successor for the **FOURTH
+  consecutive time** (its text says "recycle #171 is FIRED"; #171 finished two recycles ago and
+  §2.1's newest entry was #172, so I am **#173** and I fired **#174**). Gate 1 clear — **0 `.page`
+  files** (`find` at `$HOME/.claude/autonomy/postland`, directory asserted first; **sixty-fourth
+  consecutive**). Heredoc diff clean, **fifty-fifth**. Board at my open: **open 314 / blocked 187 /
+  done 2200 / claimed 3**, **501** open+blocked, predicate `bash bin/cc-backlog fold` from the
+  worktree (the PATH copy still lags — the `fold` verb landed into that gap).
+
+  **ROW CLOSED — `456d5c61f4c8`** (*"deploy-live.sh has no leg that REMOVES a live ~/.claude symlink
+  whose repo source was deleted"*). Landed as *feat(deploy): a deleted file left its live symlink on
+  PATH forever, and the auditor could not see it by construction* — **cite by SUBJECT, never by sha;
+  a land rebases.** Read by #170 and #171 and left unpicked both times. What generalises:
+
+  · 🆕 **METHOD 117 — A WALK OVER A LIVING SET IS STRUCTURALLY BLIND TO WHAT LEAVES IT.**
+    `deploy-parity-assert.sh` iterates the TRACKED listing and asks "is there a live counterpart?".
+    A DELETED file leaves that listing, so the walk never visits it again — while its live symlink
+    survives, resolving for `command -v` and failing with ENOENT at exec. The auditor was not
+    wrong, it was **unable to be wrong**: nothing in its input could name the defect. **Ask what
+    leaves your enumeration, not only what is in it** — and note this is the same shape as
+    `lookup-miss-is-not-absence` seen from the producer side.
+  · 🆕 **METHOD 118 — THE ROW'S OWN BLAST-RADIUS ARGUMENT CAN BE AN ARGUMENT ABOUT A PREDICATE IT
+    CHOSE, NOT ABOUT THE TASK.** The row deferred for a year-shaped reason: *"a prune leg with a
+    wrong is-this-tracked predicate would DELETE live links"* — true, and the whole reason it sat
+    open through three recycles. But the task never needed that predicate. `[ -L ] && [ ! -e ]` —
+    *is this link already dead?* — needs no tracked-file enumeration and cannot touch a path that
+    resolves. **When a row defers on risk, check whether the risk belongs to the REMEDY IT
+    IMAGINED**; a different predicate can dissolve the blast radius rather than manage it.
+  · 🆕 **METHOD 119 — A CONTROL WHOSE AXIS A SIBLING GUARD ALREADY OWNS IS VACUOUS, AND ONLY
+    MUTATION SAYS SO.** The first healthy-link control fixtured a **TRACKED** file — which the
+    forward-walk claim-check already excludes — so deleting the resolves-guard redded **nothing**.
+    The case that discriminates is a source **PRESENT on disk but absent from the INDEX**
+    (mid-authoring, or landed and not yet `git add`ed), which no claim-check can help with. 3 of 8
+    sites came back unattributed on the first harness run; that number is the finding.
+    (memory: `sibling-guard-makes-the-fixture-vacuous`, `per-site-mutation-attributes-coverage`.)
+  · 🆕 **AND THE HONEST TAIL: 2 OF THE 8 SITES ARE UNATTRIBUTABLE, NOT UNTESTED.** The `-L` guards
+    on both sides cannot be redded by any mutant — a real file passes `-e`, and a path existing in
+    no form makes `rm -f` a no-op. They stay as the stated invariant and **say in place that they
+    are defence in depth**. Reporting 8/8 would have been the easy lie; the comment is the fix.
+  · **A DETECTOR ALREADY EXISTED AND HAD NEVER RUN — the row's premise was stale in the other
+    direction too.** `scripts/deploy-link-parity.sh` carries a correct `sweep_orphans()` that landed
+    **2026-08-08, one day AFTER the row was filed**. Census 2026-08-23: **ZERO execution sites** in
+    `scripts/`, `bin/`, `hooks/`, `launchd/` or `settings.json` — every reference is a comment or a
+    doc, so its verdict has never once reached the live layer (memory:
+    `detector-with-no-owner-is-not-an-actuator`). Its hardcoded directory list was deliberately NOT
+    ported: the sweep's scope is **DERIVED from the want-list on the same run**, so a class added to
+    the walk gains orphan coverage with no edit and the two directions cannot drift
+    (`sibling-auditors-must-share-the-state-model`). The price is written into the code, not hidden —
+    a directory whose LAST tracked file was deleted contributes no rel and is not swept.
+  · **THE EXHIBIT WORTH COPYING — two-sided, against the REAL live layer, same moment, read-only.**
+    `CC_PARITY_REPO=<shared checkout> CC_PARITY_LIVE=$HOME/.claude`, which is safe because
+    `file_need()` returns 0 early whenever `CC_PARITY_REPO` is set (*"a declared fixture subject
+    never writes to a real store"*, `deploy-parity-assert.sh:191`). **trunk's assert → 0 ORPHAN
+    lines, zero mentions; this assert → 2**, naming exactly `~/.claude/bin/cc-cloud-watch` (source
+    deleted by `799c3282a`) and `~/.claude/bin/browsermcp-wrapper.sh` (deleted by `47cc3f279`).
+    **549 links before and after** — the control that proves the exhibit mutated nothing.
+  · **THE GENERATOR IS LIVE, WHICH IS THE TRIAGE FACT.** `browsermcp-wrapper.sh` was minted **four
+    days AFTER the row was filed**, by an ordinary retirement commit. Residue would have argued for
+    a hand-sweep; a generator argues for the leg. (memory:
+    `generator-population-grows-during-its-own-repair`.)
+  · ⚠️ **MY OWN FIRST PROBE HIT THE SUPPRESSED-STDERR TRAP AND I NEARLY BELIEVED IT.**
+    `find ~/.claude -type l ! -e . 2>/dev/null | wc -l` printed a clean **`DANGLING_COUNT=0`** —
+    `-e` is not a BSD `find` primary, and `2>/dev/null` rendered the failure as a zero. The correct
+    idiom is `! -exec test -e {} \; -print`, which returned **9**. A **negative control**
+    (the same idiom inverted must return the healthy 540) is what makes the count believable.
+    (memory: `suppressed-stderr-turns-a-failed-command-into-a-zero`.)
+  · ⚠️ **`shellcheck -S warning` IS STILL NOT THE GATE** — bare `shellcheck` caught an **info-level
+    SC2016** (backticks inside a single-quoted `printf`), the same class that reddened #172's first
+    land. And `bats-assert-liveness.py` caught **two DEAD `[[ ]]` assertions** — dead precisely
+    because they were NOT the final statement of their test. Both now carry `|| false`. That
+    analyzer has now earned its keep two recycles running.
+
+  Suites: `tests/deploy-parity.bats` **69 → 75**, `tests/deploy-live.bats` **124 → 130**; both run
+  SEQUENTIALLY to a real plan, **0 not-ok** (75/75, 130/130). ⚠️ `tests/deploy-live.bats` exceeds the
+  Bash tool's 120 s default — pass a longer timeout or it is the POLLER that dies, not the run.
+
+  Board at my close: **open 312 / blocked 188 / done 2203 / claimed 3**,
+  `master-convergence-deadlock` **26 open / 6 blocked** — the warm count moved **27 → 26**, and mine
+  is the only close in that condition. 🚨 **THE PER-ROW ID DIFF IS WHY THAT CLAIM IS SAFE, and #172's
+  lesson held again in the opposite direction**: the open TOTAL fell 314 → 312, which is **not** my
+  1 close — siblings closed `8559c91df3e8` and `9579a3e8acb3` and opened `5360804bf756` and
+  `b1d392e7636d` inside my window. **Snapshot the id list at your open and `comm` it at your close;
+  the total is a number four different sessions are writing.** Predicate: `bash bin/cc-backlog fold`.
+
 - **2026-08-23 — drain recycle #172: the remedy was applied, looked applied, and the seam it was
   supposed to close was never on the path. filed 0 / closed 1 / 2 commits (CODE+TESTS, then DOCS).
   SIXTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
