@@ -101,7 +101,9 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   open+blocked, predicate `bash bin/cc-backlog fold` from the worktree (⚠️ still NOT the PATH copy).
   · **ROW CLOSED — `130814a95132`** (*"harden scripts/cloud-ceiling-probe.sh:167-168 —
     classify_outcome pipes an UNBOUNDED PTY capture into grep -qE with the status consumed under
-    set -euo pipefail"*). Landed `ff14bad6e`.
+    set -euo pipefail"*). Landed as *fix(cloud-ceiling-probe): grep -q inverts every classifier
+    once the capture crosses the pipe buffer* (cite by subject — a land rebases, so the sha this
+    was written with is already unreachable).
   · 🚨 **THE ROW CITED TWO SITES AND THERE WERE FOUR — because the line numbers had drifted and the
     census was never re-run.** `:167-168` now resolves to prose; `classify_outcome` sits at `:185`.
     Beyond its two arms, **`is_harness_refusal` (:204) and `is_bundle_refusal` (:223) carry the
@@ -137,8 +139,8 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     spells the sentinel `\u001f` in three other jq programs (`:2309`, `:5383`, `:5726`); the
     later-landed `fold` verb departed from it. My rewriter **asserts those three still exist before
     running** — a positive control that fired on its first invocation and told me the file MIXES both
-    spellings, which is the fact that made the fix arguable rather than a preference. Landed
-    `c4d36a4c0`. Byte-neutrality **proven, not assumed**: an `--as-of` PINNED fold is identical before
+    spellings, which is the fact that made the fix arguable rather than a preference. Landed as *fix(cc-backlog): fold's jq pasted RAW 0x1f sentinels,
+    standing-red on trunk*. Byte-neutrality **proven, not assumed**: an `--as-of` PINNED fold is identical before
     and after (44 condition rows, 4 status rows). **Pinning is what makes the comparison
     attributable** — LIVE mode stamps its own timestamp and would differ for an unrelated reason.
   · **PRE-EXISTING, AND FIXED ANYWAY — the attribution rule cuts both ways.** The 0x1f bytes are on
@@ -171,7 +173,7 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     clean. **Before working a defect class, grep for a lint that already owns it — the row's
     prescribed fix said nothing about the allowlist, and a fix that leaves the ratchet high silently
     re-grants the exemption it just earned back.**
-  · 🚨 **CORRECTION TO MY OWN COMMIT MESSAGE (`ff14bad6e`) AND TO THE BULLET ABOVE.** I wrote that
+  · 🚨 **CORRECTION TO MY OWN COMMIT MESSAGE (*fix(cloud-ceiling-probe): grep -q inverts every classifier…*) AND TO THE BULLET ABOVE.** I wrote that
     the row's cited `:167-168` had "drifted" and now resolved to prose. **False, and the census
     proves it:** `:167` is `config_dir_for`'s `| head -1` and `:179`/`:351` are the other two — i.e.
     the row's LINE NUMBERS point precisely at the `head -1` half of the defect class, while its
