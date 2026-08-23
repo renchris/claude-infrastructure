@@ -357,6 +357,68 @@
 #   position neither strip_comments nor strip_prose can distinguish, and the broad-scope asymmetry
 #   says keep them in and let the ratchet retire them one at a time.
 #
+# RULE 8 (the dispatch kick) — the class 63bf5c56 FIXED BY HAND and then filed against this ratchet
+# in its own closing line: "the ratchet has no rule for this leak class — rule 2 caught this same
+# suite's LOAD coupling but nothing scopes 'a test spawns the operator's real dispatcher'". Backlog
+# 091a590f738a. Three suites were pinned that day and nothing stopped the fourth; measured here
+# 2026-08-23, the population is TEN.
+#
+# THE SEAM. `cc-backlog add` — and ONLY `add`; every other verb documents why it does not — ends in
+# dispatch_kick(), which stamps a marker and backgrounds `cc-dispatch --decide`, by design, so filed
+# work dispatches without waiting for the next cron tick. Unfixtured, that spawns the OPERATOR'S
+# deployed dispatcher, which inherits the suite's own exported fixtures (CC_DISPATCH_IDL,
+# CC_BACKLOG_FILE) and so both races the suite's foreground pass on the suite's own state and
+# journals decisions about a TEMP TEST backlog into the operator's PRODUCTION idl.jsonl.
+#
+# WHY THIS IS NOT RULE 1 WEARING A NEW NAME, and it is the whole point: kick_bin() is a THREE-leg
+# resolver and its legs are ordered `CC_BACKLOG_KICK_BIN` → `command -v cc-dispatch` → `$HOME/
+# .claude/bin/cc-dispatch`. The $HOME leg is REAL, which is what makes the blind spot: a suite that
+# fixtures $HOME looks remediated, reads clean under rule 1, and still spawns the live tool, because
+# the PATH leg wins before $HOME is ever consulted. The remedy appears applied and is not (memory:
+# lookup-miss-is-not-absence). Rule 5 cannot see it either: its shape 5b matches a TWO-leg
+# `${VAR:-barename}` default whose holder is executed, and CC_BACKLOG_KICK_BIN's default is EMPTY.
+#
+# MEASURED TWO-SIDED ON REAL SUITES, not on a fixture, with a recording stub named cc-dispatch first
+# on PATH — i.e. standing exactly where the deployed tool stands:
+#   ARM  tests/cc-eligible.bats      $HOME-hermetic, unpinned  → 0 not-ok, 25 LIVE DISPATCHER SPAWNS
+#   CTRL tests/cc-backlog-needs.bats $HOME-hermetic, pinned    → 0 not-ok,  0 spawns
+# BOTH suites are GREEN, which is the finding: the leak is invisible to the suite's own verdict, and
+# was invisible to this lint — which named CC_BACKLOG_KICK nowhere at all before this diff.
+#
+#   SCOPE, chosen by measurement over three candidates rather than by taste. A suite is in scope iff
+#   its COMMENT-STRIPPED text names `cc-backlog` AND contains an `add --title` invocation — the
+#   canonical form, since `add` requires --title. Naming cc-backlog alone pulls in 71 suites, most of
+#   which only ever READ the store and can never kick; a bare ` add ` token pulls in 58 and matches
+#   the verb in unrelated prose positions. `add --title` is 20, and 63bf5c56's three known-guilty
+#   suites are all inside it. ACCEPTED FLOOR, stated rather than hidden: a suite that reaches `add`
+#   through a helper which builds the verb from variables is not matched textually.
+#
+#   COMPLIANCE — rule 3's ASYMMETRY, and here it is DERIVED rather than chosen. A suite is compliant
+#   iff its setup()/setup_file() BODY takes a position on `CC_BACKLOG_KICK` or `CC_BACKLOG_KICK_BIN`.
+#   Which position does not matter — the kill switch returns before the marker is touched, and any
+#   BIN pin makes the spawn unreachable via `[ -x "$bin" ] || return 0`. What is forbidden is
+#   inheriting BOTH. CC_BACKLOG_KICK_MARKER deliberately does NOT count: pinning the marker alone
+#   leaves kick_bin()'s PATH leg live, so it relocates the debounce stamp while still spawning the
+#   operator's dispatcher — the one pin that looks like a fix and closes nothing.
+#   Per-test pinning does NOT count, for rule 1's reason verbatim: it leaves every other test in the
+#   file spawning. That is not hypothetical here — tests/postland-verify.bats pins all three seams
+#   per-test and is grandfathered below for exactly that.
+#
+#   BELT-AND-BRACES IS RECOMMENDED BUT NOT ENFORCED. 63bf5c56 pinned all three seams in each suite it
+#   fixed and postland-verify.bats:1093 calls that MANDATORY when a suite drives the real binary;
+#   this rule demands only what is individually SUFFICIENT, because demanding all three would red
+#   suites that are already closed. The header says it so the stricter practice does not get lost.
+#
+#   THE POSITIVE CONTROLS ARE IN SCOPE AND PASS, which is what stops this rule from disarming the
+#   mechanism's own coverage — rule 3's lesson about scoping by the LEG. tests/dispatch-cadence.bats
+#   OWNS the kick and must be free to toggle it per-test; it passes because its setup() defines
+#   mk_kick_stub(), whose body assigns CC_BACKLOG_KICK_BIN. tests/cc-backlog-needs.bats passes on the
+#   kill switch. A predicate demanding a specific VALUE would have reddened both.
+#
+#   Rule 8's grandfather list (EMBEDDED_KICK_ALLOWLIST) ships with the 10 measured above, under the
+#   same contract as rules 1-2, 5 and 7 — ONLY EVER DELETE LINES; pinning a suite without deleting
+#   its line is a RED.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
@@ -380,6 +442,8 @@
 #                              (default: this script's ROOT), for CC_HERM_SEAM_ROOT's reason
 #   CC_HERM_ADMIT_ALLOWLIST    overrides rule 7's embedded allowlist (same set-but-empty semantics)
 #   CC_HERM_ADMIT_RULE=off     kill switch — disables rule 7 entirely, leaving rules 1-6 untouched
+#   CC_HERM_KICK_ALLOWLIST     overrides rule 8's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_KICK_RULE=off      kill switch — disables rule 8 entirely, leaving rules 1-7 untouched
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -790,6 +854,37 @@ ADMITALLOW
 # "grandfather nothing".
 ADMIT_ALLOW="${CC_HERM_ADMIT_ALLOWLIST-$EMBEDDED_ADMIT_ALLOWLIST}"
 ADMIT_RULE="${CC_HERM_ADMIT_RULE:-on}"
+
+# RULE 8's grandfather list — the 10 suites that drive a real `cc-backlog add --title` while
+# inheriting BOTH kick seams, measured 2026-08-23 out of THIS file's own predicates (not out of the
+# probe that proposed the rule: the probe's looser ` add ` scope returned 32, and its widest
+# `names cc-backlog` scope 42, both of which would have shipped lines no predicate can ever retire).
+#
+# tests/postland-verify.bats is on this list despite pinning all three seams, because it pins them
+# PER-TEST — the exact shape rule 1's "per-test does not count" clause exists for, and worth naming
+# here so its line does not read as an oversight when someone greps for the pin and finds it.
+#
+# NOT fixed in this landing diff, for rule 7's reason verbatim: ten suites is too wide a behavioural
+# change to review inside a lint's own diff, and each fix wants its own two-sided spawn measurement
+# rather than a sweep. The ratchet retires them one at a time.
+EMBEDDED_KICK_ALLOWLIST="$(cat <<'KICKALLOW'
+backlog-freshness.bats
+cc-backlog-project-dispatch.bats
+cc-backlog-reopen-lease.bats
+cc-backlog-venue-plan.bats
+cc-backlog-venue.bats
+cc-backlog.bats
+cc-eligible-history.bats
+cc-eligible.bats
+cc-venue.bats
+postland-verify.bats
+KICKALLOW
+)"
+
+# Rule 8's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim.
+# `-` not `:-`, so set-but-EMPTY means "grandfather nothing".
+KICK_ALLOW="${CC_HERM_KICK_ALLOWLIST-$EMBEDDED_KICK_ALLOWLIST}"
+KICK_RULE="${CC_HERM_KICK_RULE:-on}"
 
 # THE EXTRACTOR'S ANCHOR, and it must exercise BOTH halves of the intersection or it cannot tell a
 # broken extractor from an empty tree. These two lines are read by nothing: the first is a literal
@@ -1304,6 +1399,66 @@ is_admit_pinned() {
   return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
 }
 
+# ── RULE 8's two predicates. Same shape, same 3-try retry, same CHECK_FAILED third state and the
+# same fail-SAFE directions as rules 2, 3 and 7's pairs above.
+
+# Is this suite in scope for rule 8? 0 = it drives a real `cc-backlog add` · 1 = it does not.
+# Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
+#
+# BOTH clauses are required and the conjunction is the rule's precision: `cc-backlog` alone matches
+# 71 suites (most only READ the store — no verb, no kick), and a bare ` add ` token matches 58 and
+# fires on the word in unrelated positions. Together: 20. COMMENT-STRIPPED for references_fire()'s
+# reason — a suite that only NAMES the tool in prose executes nothing.
+references_kick() {
+  local rc code
+  code="$(code_lines "$1" 2>/dev/null)"
+  for _ in 1 2 3; do
+    grep -qF 'cc-backlog' <<<"$code"; rc=$?
+    # rc 1 here is a real "out of scope", not a failure — short-circuit before the second clause.
+    [ "$rc" -eq 1 ] && return 1
+    if [ "$rc" -eq 0 ]; then
+      grep -qE '(^|[[:space:];&|(])add[[:space:]]+--title' <<<"$code"; rc=$?
+      case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+      esac
+    fi
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ kick-scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate an AMBIENT violation
+}
+
+# 0 = takes a deterministic position on the dispatch kick in setup() · 1 = inherits the operator's.
+# Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation. Comment-stripped through
+# setup_statements(), so a setup() that merely DOCUMENTS the pin does not read as pinned — the
+# prose-match regression rules 2 and 3 were both proven vacuous by.
+#
+# ANY position counts, for RULE 3's asymmetry (see the header): the kill switch returns before the
+# marker is touched, and any BIN pin makes the spawn unreachable. CC_BACKLOG_KICK_MARKER is excluded
+# BY CONSTRUCTION — the regex names KICK and KICK_BIN only — because pinning the marker alone
+# relocates the debounce stamp while leaving kick_bin()'s live PATH leg intact, i.e. it is the one
+# pin that looks like a fix and still spawns the operator's dispatcher. The `(_BIN)?=` boundary is
+# what keeps _MARKER out while admitting both sufficient spellings.
+is_kick_pinned() {
+  local rc st
+  for _ in 1 2 3; do
+    # Pipe-free for is_hermetic()'s reason — same producer, same early-exit match, same pipefail
+    # promotion that would otherwise render a MATCH as "the check could not run".
+    st="$(setup_statements "$1")"
+    grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?CC_BACKLOG_KICK(_BIN)?=' <<< "$st"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ kick-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
 # ── RULE 3's two predicates. Same shape, same retry, same CHECK_FAILED third state, same fail-SAFE
 # directions as rule 2's pair above — and same accepted floor: textual, so a suite that reaches the
 # close leg through some other wrapper is not matched. The ratchet binds where evidence is plain.
@@ -1675,13 +1830,14 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
   readset="$(
     printf 'herm-readset/v1\n'
     printf 'lint=%s\n'        "$selfblob"
-    printf 'rules=%s|%s|%s|%s|%s\n' "$FIRE_RULE" "$ORPHAN_RULE" "$SEAM_RULE" "$ENV_RULE" "$ADMIT_RULE"
+    printf 'rules=%s|%s|%s|%s|%s|%s\n' "$FIRE_RULE" "$ORPHAN_RULE" "$SEAM_RULE" "$ENV_RULE" "$ADMIT_RULE" "$KICK_RULE"
     printf 'allow=%s\n'       "$1"
     printf 'fire_allow=%s\n'  "$FIRE_ALLOW"
     printf 'orph_allow=%s\n'  "$ORPHAN_ALLOW"
     printf 'seam_allow=%s\n'  "$SEAM_ALLOW"
     printf 'env_allow=%s\n'   "$ENV_ALLOW"
     printf 'admit_allow=%s\n' "$ADMIT_ALLOW"
+    printf 'kick_allow=%s\n'  "$KICK_ALLOW"
     printf 'seam_root=%s\n'   "$SEAM_ROOT"
     printf 'env_root=%s\n'    "$ENV_ROOT"
     printf 'seam_table=%s\n'  "$SEAM_TABLE"
@@ -1703,13 +1859,14 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
 }
 
 # THE EMIT DETECTOR. Every branch in lint_dir that prints a finding also increments exactly one of
-# these thirteen counters, so their sum is unchanged across a suite IFF that suite emitted nothing.
+# these fifteen counters, so their sum is unchanged across a suite IFF that suite emitted nothing.
 # Two lines instead of an `emitted=1` on twenty printf sites — but it is only true while it stays
 # true, so --selftest pins a violating suite under EVERY rule as never-memoized (herm_memo cases
 # below). A new rule that prints without counting would be caught there, not here.
 herm_emit_sum() {
   printf '%s' "$(( new_leak + stuck + other + fire_leak + fire_stuck + orphan_leak + orphan_stuck \
-                 + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck ))"
+                 + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck \
+                 + kick_leak + kick_stuck ))"
 }
 
 HERM_CHECKER=""
@@ -1727,6 +1884,7 @@ lint_dir() {
   local env_allow="$ENV_ALLOW" env_leak=0 env_stuck=0
   local env_text="" env_setup="" env_why="" env_seen="" e_tool e_var
   local admit_allow="$ADMIT_ALLOW" admit_leak=0 admit_stuck=0
+  local kick_allow="$KICK_ALLOW" kick_leak=0 kick_stuck=0
   local _herm_emit0=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
@@ -1859,6 +2017,32 @@ lint_dir() {
           admit_leak=$((admit_leak + 1))
         else
           printf '  ambient? %s does not close capacity-admit (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
+    # ── RULE 8, applied INDEPENDENTLY of rules 1-7 (a suite can violate any, all, or none) and ONLY
+    # to suites that drive a real `cc-backlog add`. A suite that never files an item cannot kick and
+    # must never appear here — that scoping is why references_kick() exists. Deliberately NOT folded
+    # into rule 1: a suite can be $HOME-hermetic and still spawn the operator's dispatcher, which is
+    # this rule's whole finding (see RULE 8's header, and the two-sided 25-vs-0 exhibit in it).
+    if [ "$KICK_RULE" = on ] && references_kick "$f"; then
+      if is_kick_pinned "$f"; then
+        if in_allowlist "$base" "$kick_allow"; then
+          if in_own "$f" "$own" "$own_scoped"; then
+            printf '  RATCHET-KICK %s pins the dispatch kick now — delete its KICK allowlist line\n' "$base"
+            kick_stuck=$((kick_stuck + 1))
+          else
+            printf '  ratchet-kick? %s pins the kick but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$kick_allow"; then
+        if in_own "$f" "$own" "$own_scoped"; then
+          printf '  AMBIENT  %s: setup() pins neither CC_BACKLOG_KICK nor CC_BACKLOG_KICK_BIN — its `add` spawns the operator'"'"'s real cc-dispatch\n' "$base"
+          kick_leak=$((kick_leak + 1))
+        else
+          printf '  ambient? %s does not pin the dispatch kick (NOT in your diff — advisory, not blocking)\n' "$base"
           other=$((other + 1))
         fi
       fi
@@ -2059,6 +2243,20 @@ EOF
     echo "test-hermeticity-lint: ⛔ $admit_stuck suite(s) above close the capacity-admit gate but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ADMIT_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
+  if [ "$kick_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $kick_leak suite(s) above drive a real \`cc-backlog add\` without pinning the dispatch kick."
+    echo "  WHY: \`add\` ends in dispatch_kick(), and kick_bin() resolves CC_BACKLOG_KICK_BIN -> \`command -v"
+    echo "       cc-dispatch\` -> \$HOME/.claude/bin/cc-dispatch. The PATH leg wins BEFORE \$HOME, so fixturing"
+    echo "       \$HOME does not close it: the suite spawns the operator's DEPLOYED dispatcher, which inherits"
+    echo "       the suite's own fixtures and journals test decisions into the production idl.jsonl."
+    echo "       Measured: tests/cc-eligible.bats is \$HOME-hermetic, passes 0 not-ok, and spawns it 25x per run."
+    echo "  Fix: in setup(), \`export CC_BACKLOG_KICK=off\` (recommended, with CC_BACKLOG_KICK_MARKER and"
+    echo "       CC_BACKLOG_KICK_BIN pinned to \$BATS_TEST_TMPDIR as belt-and-braces — see tests/cc-backlog-needs.bats:38-40)."
+  fi
+  if [ "$kick_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $kick_stuck suite(s) above pin the dispatch kick but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_KICK_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
   if [ "$orphan_leak" -gt 0 ]; then
     echo "test-hermeticity-lint: ⛔ $orphan_leak suite(s) above drive the orphaned-pane close leg against an AMBIENT arming lever."
     echo "  WHY: ~/.zshrc sources ~/.claude/autonomy/watchdog.env, which exports LCW_ORPHAN_CLOSE=1, so"
@@ -2099,7 +2297,7 @@ EOF
     echo "test-hermeticity-lint: ⛔ $env_stuck suite(s) above pin their inherited-value seams but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ENV_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck)) -eq 0 ] || return 1
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck + kick_leak + kick_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
   local fire_note orphan_note
@@ -2130,7 +2328,13 @@ EOF
   else
     admit_note="capacity-admit rule OFF (CC_HERM_ADMIT_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, $admit_note, 0 new leaks."
+  local kick_note
+  if [ "$KICK_RULE" = on ]; then
+    kick_note="$(printf '%s\n' "$kick_allow" | grep -c .) grandfathered (dispatch kick)"
+  else
+    kick_note="dispatch-kick rule OFF (CC_HERM_KICK_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, $admit_note, $kick_note, 0 new leaks."
   return 0
 }
 
@@ -2355,6 +2559,117 @@ F
   # below would be consistent with a rule that reds on everything.
   mkdir -p "$d/noadmit" "$d/admitleak" "$d/admitpin" "$d/admitform2" "$d/admitform2short" \
            "$d/admitpertest" "$d/admitcomment" "$d/admitproseonly"
+  # ── RULE 8's fixtures. Every one fixtures $HOME and names no handoff-fire and no admit caller, so
+  # a rule-8 verdict cannot be another rule leaking through — and the $HOME pin is doing REAL work
+  # here rather than ceremony: rule 8's entire claim is that a $HOME-hermetic suite still spawns the
+  # operator's dispatcher, so a fixture that skipped it would prove nothing this rule is about.
+  # `nokick` and `kickreadonly` are the two scope controls: the first names no cc-backlog at all, the
+  # second names it but only READS the store, which is 51 of the 71 suites the widest scope would
+  # have swept in.
+  mkdir -p "$d/nokick" "$d/kickleak" "$d/kickpin" "$d/kickbinpin" "$d/kickmarkeronly" \
+           "$d/kickpertest" "$d/kickcomment" "$d/kickreadonly" "$d/kickhelperfn"
+  cat >"$d/nokick/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/kickleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog add --title "t" --project p; }
+F
+  # FORM 1 — the kill switch. Returns before the marker is touched and before the bin is resolved.
+  cat >"$d/kickpin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog add --title "t" --project p; }
+F
+  # FORM 2 — a BIN pin. Independently sufficient (`[ -x "$bin" ] || return 0`), and it is what the
+  # kick's own positive control tests/dispatch-cadence.bats uses, so a rule demanding form 1 only
+  # would red the suite that OWNS the mechanism. RULE 3's asymmetry, and here it is load-bearing.
+  cat >"$d/kickbinpin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog add --title "t" --project p; }
+F
+  # 🚨 THE CONTROL THAT PINS THIS RULE'S ONE EXCLUSION, and the assertion whose absence would make
+  # rule 8 certify a suite that still spawns. Pinning the MARKER alone relocates the debounce stamp
+  # and leaves kick_bin()'s live `command -v cc-dispatch` leg completely intact — the one pin that
+  # looks like a fix and closes nothing. It MUST stay RED, and a `CC_BACKLOG_KICK` substring match
+  # (the obvious spelling) would have passed it, since _MARKER contains the stem.
+  cat >"$d/kickmarkeronly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog add --title "t" --project p; }
+F
+  # PER-TEST — rule 1's clause verbatim: it leaves every OTHER test in the file spawning. This is
+  # tests/postland-verify.bats's real shape, which is why that suite is grandfathered rather than
+  # counted as compliant.
+  cat >"$d/kickpertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { export CC_BACKLOG_KICK=off; run bin/cc-backlog add --title "t" --project p; }
+F
+  # THE PROSE-MATCH REGRESSION, one rule later — rule 3 was proven VACUOUS by exactly this shape and
+  # rules 2 and 7 were each retrofitted against it. A setup() that DOCUMENTS the pin has not set it.
+  cat >"$d/kickcomment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # the kick is disabled here with export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog add --title "t" --project p; }
+F
+  # SCOPE CONTROL 2: names cc-backlog but drives no `add`, so it cannot kick. Without this, every
+  # assertion above is consistent with a rule that fires on the tool's NAME — which would have swept
+  # in 51 extra suites and shipped allowlist lines no predicate could ever retire.
+  cat >"$d/kickreadonly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+}
+@test "x" { run bin/cc-backlog list --all --json; }
+F
+  # THE POSITIVE CONTROL'S OWN SHAPE, asserted rather than assumed: a pin that lives inside a HELPER
+  # FUNCTION DEFINED IN setup(). tests/dispatch-cadence.bats pins the bin inside mk_kick_stub(), and
+  # if setup_bodies() did not carry a nested function body this rule would red the kick's own
+  # coverage — the failure mode rule 3's scope-by-leg note exists to prevent.
+  cat >"$d/kickhelperfn/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+  mk_kick_stub() {
+    printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/cc-dispatch"
+    chmod +x "$BATS_TEST_TMPDIR/cc-dispatch"
+    export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/cc-dispatch"
+  }
+}
+@test "x" { mk_kick_stub; run bin/cc-backlog add --title "t" --project p; }
+F
   cat >"$d/noadmit/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
 setup() {
@@ -2927,6 +3242,12 @@ F
   # therefore need no `CC_HERM_ADMIT_RULE=off` companion, unlike rules 5 and 6's.
   ADMIT_RULE=on
   ADMIT_ALLOW=""
+  # Rule 8's knobs, pinned ON+empty for rule 7's reason verbatim: its scope demands BOTH `cc-backlog`
+  # and an `add --title` invocation, and no rules-1-7 fixture drives the backlog at all, so an ON
+  # rule 8 cannot convict a fixture whose subject is another rule. Verified by running the selftest
+  # with this pin in place, exactly as rule 7's note above records.
+  KICK_RULE=on
+  KICK_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -2941,6 +3262,7 @@ F
   SEAM_RULE=on; SEAM_ALLOW="$EMBEDDED_SEAM_ALLOWLIST"; SEAM_ROOT="$ROOT"
   ENV_RULE=on; ENV_ALLOW="$EMBEDDED_ENV_ALLOWLIST"; ENV_ROOT="$ROOT"; ENV_TABLE_ROOT=""
   ADMIT_ALLOW="$EMBEDDED_ADMIT_ALLOWLIST"
+  KICK_ALLOW="$EMBEDDED_KICK_ALLOWLIST"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
   # Read CHECK_FAILED on the very next line. It is a global that the NEXT lint_dir call resets, so
   # anything between the call and this read is a chance to lose the one bit that tells a lost fork
@@ -2951,6 +3273,7 @@ F
   SEAM_RULE=off; SEAM_ALLOW=""
   ENV_RULE=off; ENV_ALLOW=""
   ADMIT_ALLOW=""
+  KICK_ALLOW=""
   selftest_realtree_disposition "$rc_real" "$cf_real"; disp_real=$?
   if [ "$disp_real" -eq 2 ]; then
     echo "SELFTEST NON-VERDICT: a predicate could not RUN while scanning $ROOT/tests — a fact about this BOX (a lost fork under load), NOT a claim about the tree or about either allowlist"
@@ -3151,6 +3474,46 @@ F
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_ADMIT_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_ADMIT_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="zz-fixture.bats" CC_HERM_ADMIT_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ADMIT_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ADMIT_ALLOWLIST="" CC_HERM_ADMIT_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/admitleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ADMIT_RULE=off did not disable rule 7"; fails=1; }
+
+  # ── RULE 8 (the dispatch kick). Same battery as rules 2/3/7: both violation kinds, both compliant
+  # FORMS, the prose-match regression, the per-test shape, TWO scope controls, the exclusion control,
+  # the ratchet in both directions, own-scope both ways, and both env seams at the entrypoint.
+  # (a8) the leak, and the rule's inertness control — if this passes, rule 8 is doing nothing.
+  lint_dir "$d/kickleak" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a suite driving \`cc-backlog add\` without pinning the kick did not go RED (rule 8 is inert)"; fails=1; }
+  # (b8) FORM 1 — the kill switch.
+  lint_dir "$d/kickpin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning CC_BACKLOG_KICK=off in setup() did not go GREEN"; fails=1; }
+  # (c8) FORM 2 — a BIN pin, independently sufficient. RULE 3's asymmetry; the kick's own positive
+  # control uses this form, so a rule demanding form 1 would disarm the mechanism's coverage.
+  lint_dir "$d/kickbinpin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning CC_BACKLOG_KICK_BIN in setup() did not go GREEN (rule 8 is demanding a specific VALUE)"; fails=1; }
+  # (d8) 🚨 THE EXCLUSION CONTROL — MARKER alone must stay RED. It relocates the debounce stamp and
+  # leaves the live PATH leg intact, so certifying it would mint a false negative on a suite that
+  # still spawns. A `CC_BACKLOG_KICK` substring match passes this; the `(_BIN)?=` boundary is what
+  # fails it, and this case is the only thing pinning that boundary.
+  lint_dir "$d/kickmarkeronly" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: pinning CC_BACKLOG_KICK_MARKER ALONE read as compliant — it closes nothing, the PATH leg still spawns"; fails=1; }
+  # (e8) per-test pinning does not count — rule 1's clause, verbatim.
+  lint_dir "$d/kickpertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PER-TEST kick pin read as compliant — every other test in the file still spawns"; fails=1; }
+  # (f8) the prose-match regression: a setup() COMMENT naming the pin has not set it.
+  lint_dir "$d/kickcomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming the pin read as pinned (rule 8 is not comment-stripped)"; fails=1; }
+  # (g8) SCOPE CONTROL 1: names no cc-backlog at all. Without it every case above is consistent with
+  # a rule that reds on everything.
+  lint_dir "$d/nokick" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite that never names cc-backlog was pulled INTO rule 8"; fails=1; }
+  # (h8) SCOPE CONTROL 2: names cc-backlog but drives no `add`, so it cannot kick. This is the clause
+  # that keeps the population at 20 instead of 71.
+  lint_dir "$d/kickreadonly" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a READ-ONLY cc-backlog suite was pulled INTO rule 8 — the \`add --title\` clause is not binding"; fails=1; }
+  # (i8) the positive control's own shape: a pin inside a helper function DEFINED in setup().
+  lint_dir "$d/kickhelperfn" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a pin inside a setup()-defined helper read as unpinned — this would RED tests/dispatch-cadence.bats, the kick's own coverage"; fails=1; }
+  # (j8) the ratchet, both directions.
+  KICK_ALLOW="zz-fixture.bats"
+  lint_dir "$d/kickleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered unpinned kick suite did not go GREEN"; fails=1; }
+  lint_dir "$d/kickpin"  "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-grandfathered suite did not go RED (kick ratchet is not shrinking)"; fails=1; }
+  KICK_ALLOW=""
+  # (k8) own-scope, both ways — a violation OUTSIDE the diff advises, INSIDE it blocks.
+  lint_dir "$d/kickleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a kick violation OUTSIDE the own-set blocked"; fails=1; }
+  lint_dir "$d/kickleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a kick violation INSIDE the own-set did not block"; fails=1; }
+  # (l8) entrypoint parity for both env seams, all three directions — rule 7's (k7) verbatim.
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_KICK_ALLOWLIST="" CC_HERM_KICK_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/kickleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_KICK_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_KICK_ALLOWLIST="zz-fixture.bats" CC_HERM_KICK_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/kickleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_KICK_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_KICK_ALLOWLIST="" CC_HERM_KICK_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/kickleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_KICK_RULE=off did not disable rule 8"; fails=1; }
 
   # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
   # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
@@ -3376,7 +3739,7 @@ F
   # must isolate the MEMO should not also be re-testing five rules that have their own cases above.
   memo_run() {  # $1=rule-1 allowlist → combined output; runs inside the fixture repo
     ( cd "$memo_repo" || exit 2
-      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ENV_RULE=off; ADMIT_RULE=off
+      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ENV_RULE=off; ADMIT_RULE=off; KICK_RULE=off
       lint_dir tests "$1" 2>&1 )
   }
   # (a1) POSITIVE CONTROL — the memo can actually carry a verdict on a real, committed corpus.
@@ -3465,7 +3828,7 @@ F
   ) >/dev/null 2>&1
   memo_run6() {  # $1=ENV_ROOT → combined output, rule 6 the only rule left on
     ( cd "$memo_repo" || exit 2
-      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ADMIT_RULE=off
+      FIRE_RULE=off; ORPHAN_RULE=off; SEAM_RULE=off; ADMIT_RULE=off; KICK_RULE=off
       ENV_RULE=on; ENV_ROOT="$1"; ENV_TABLE_ROOT=""; ENV_ALLOW=""
       lint_dir tests6 "" 2>&1 )
   }
@@ -3507,7 +3870,7 @@ F
     exit 2
   fi
   if [ "$sx" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 128/128 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (the PATH form matched against the judged path, a BARE entry matched in any directory, and the SAME basename under a DIFFERENT directory proved NOT to block — the collapse control), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form and its collapse control (the same tool basename under another dir must not block), NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 144/144 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (the PATH form matched against the judged path, a BARE entry matched in any directory, and the SAME basename under a DIFFERENT directory proved NOT to block — the collapse control), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form and its collapse control (the same tool basename under another dir must not block), NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint. RULE 8 (the dispatch kick): RED on a suite driving a real \`cc-backlog add\` while inheriting both kick seams + on a PER-TEST pin + on a setup() COMMENT that merely names the pin + on a pinned-but-still-grandfathered suite, GREEN on FORM 1 (CC_BACKLOG_KICK=off) + on FORM 2 (a CC_BACKLOG_KICK_BIN pin, independently sufficient — a rule demanding form 1 would RED tests/dispatch-cadence.bats, the suite that OWNS the kick) + on a pin living inside a HELPER FUNCTION defined in setup(), which is that suite's actual shape + on a grandfathered one + on the TWO scope controls that keep the population at 20 instead of 71 — a suite naming no cc-backlog at all, and one that names it but only READS the store; and the case rule 7's battery has no analogue for, RED on pinning CC_BACKLOG_KICK_MARKER **alone** — the one pin that looks like a remedy and closes nothing, since kick_bin() resolves \`command -v cc-dispatch\` BEFORE \$HOME and the marker pin merely relocates the debounce stamp while the spawn stays live, so a rule certifying it would mint a false negative on a suite still spawning the operator's dispatcher (the obvious \`CC_BACKLOG_KICK\` substring spelling passes it; the \`(_BIN)?=\` boundary is what fails it); own-scope honoured both ways, and both env seams (CC_HERM_KICK_ALLOWLIST, CC_HERM_KICK_RULE=off) proved at the entrypoint. Rule 8's four sites are attributed by MUTATION rather than by a green count — pin-regex widened to accept _MARKER, scope stripped of its \`add --title\` clause, pin predicate reading the RAW setup body, and the lint_dir wiring disabled outright: each reds its OWN named case against a clean baseline."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
