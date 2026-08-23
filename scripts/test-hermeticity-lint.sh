@@ -2039,7 +2039,10 @@ lint_dir() {
         fi
       elif ! in_allowlist "$base" "$kick_allow"; then
         if in_own "$f" "$own" "$own_scoped"; then
-          printf '  AMBIENT  %s: setup() pins neither CC_BACKLOG_KICK nor CC_BACKLOG_KICK_BIN — its `add` spawns the operator'"'"'s real cc-dispatch\n' "$base"
+          # Prose deliberately carries neither backticks nor an apostrophe: inside a single-quoted
+          # printf format, backticks read as a command substitution (SC2016) and an apostrophe forces
+          # the '"'"' escape dance that made this line unreadable. The message says the same thing.
+          printf '  AMBIENT  %s: setup() pins neither CC_BACKLOG_KICK nor CC_BACKLOG_KICK_BIN — its add verb spawns the DEPLOYED cc-dispatch\n' "$base"
           kick_leak=$((kick_leak + 1))
         else
           printf '  ambient? %s does not pin the dispatch kick (NOT in your diff — advisory, not blocking)\n' "$base"

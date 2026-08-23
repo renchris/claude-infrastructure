@@ -173,7 +173,14 @@ skip_if_selftest_nonverdict() {
     && { echo "a bad ROOT was abstained on — the guard has grown over the structural failure it must not hide" >&2; return 1; }
   selftest_is_nonverdict 1 'test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate.' \
     && { echo "a genuine FAILED selftest was abstained on — the instrument check is now unfalsifiable" >&2; return 1; }
-  return 0
+  # `true`, not `return 0`, and the difference is worth 81 shellcheck findings. This statement IS
+  # load-bearing — the `&&` compound above it leaves rc 1 whenever its right arm does not run, so
+  # deleting it would invert the test — but shellcheck parses `@test "…" {` as a plain command GROUP
+  # rather than a function definition, so a `return` here reads as a TOP-LEVEL return that ends the
+  # script. Everything below it in the file was therefore reported unreachable: 81 SC2317 findings
+  # in this file alone (94 fleet-wide; the only other file with any, tests/fire-autonomy.bats, has
+  # the identical shape at :256). `true` sets the same rc without terminating the parse.
+  true
 }
 
 @test "the real tree is CLEAN (exit 0) — the embedded allowlist matches HEAD, nightly stays green" {
