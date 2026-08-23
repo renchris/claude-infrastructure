@@ -87,6 +87,86 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #162: a watcher read its OWN PREDECESSOR'S CORPSE as the ping it was
+  waiting for — `cc-await-ping` decided "mail arrived" on line count alone, so the arm that REPLACES
+  a killed watcher fired on the dead one's WAKE-PATH-DOWN notice and exited `verdict=ping elapsed=0s`
+  with harness status "completed, exit 0". filed 0 / closed 1 / landed 2 commits (the fix + this log).
+  SIXTH CONSECUTIVE close overall — and a DECLARED HOLD on the warm effort: the row's condition is
+  `wake-path-notice-self-consumes`, so `master-convergence-deadlock` is UNMOVED at 31/6 while the
+  board went 261 → 260 open / 2156 → 2157 done.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twenty-fifth consecutive clean use; **fifty-third consecutive 0-page reading**, at
+  open AND close). Gate 2: **`qos-diff` empty, the forty-fourth consecutive clean reading.** Converge
+  lag **0** in this worktree at open (HEAD == `origin/main`, tree clean); **the LIVE layer read 2
+  behind at open** (21 → 1 across #161's own window, 8/9/10/13/15 at #155–#160) — a queue siblings
+  also drain, so re-measure and never extrapolate. Board at open: **open 261 / blocked 191 /
+  done 2156 / claimed 2**; `master-convergence-deadlock` **31 open / 6 blocked** — identical to #161's
+  close, so nothing moved in the gap.
+  · **THE PARKED WATCHER WAS NOT MINE, AND CHECKING IS ONE `ps`.** The brief said to kill pid 85352 as
+    the first Bash call. It was already gone. `pgrep -f cc-await-ping` returned **10** pids, of which
+    only **2** were watchers at all (the other 8 are the memory row `pgrep-f-matches-agent-briefs`
+    exactly: a `bats` corpus run and a `claude` launcher whose argv MENTIONS the string). Both live
+    watchers trace to OTHER claude processes — 12373 → pane `81f97aeb…`, 29148 → parent pid 66227 —
+    while **my own claude is 86512**. So this session entered with NO background Bash of its own and
+    the operator's `/goal` evaluated normally. **Trace the ancestry to your own pid before killing a
+    watcher**: a sibling's wake path looks identical in `pgrep` and killing it makes a peer deaf.
+  · **ROW CLOSED — `b1a9e3142ee4`** (*"cc-await-ping's WAKE-PATH-DOWN notice"*), condition
+    `wake-path-notice-self-consumes`. **The FIFTH consecutive close of a row that prescribes its own
+    red-proof, and the first this chain has worked while LIVING INSIDE the mechanism** — a forwarded
+    WAKE-PATH-DOWN was delivered into this very session at startup, which is what confirmed the
+    notice reaches the inbox as designed before a line of the fix was written.
+  · **THE ROW'S OWN NARROWING WAS RIGHT AND ITS FIX DIRECTION WAS RIGHT.** Filed overstated, then
+    self-corrected 2026-08-19 to *"an ORDERING RACE between the re-arm and the drain, not a property
+    of the channel"*, with the fix direction *"do not move the notice off the inbox — make the watcher
+    skip its OWN control lines"*. Measured: the notice is written to the watched box at
+    `_wake_down_notice` (`bin/cc-await-ping:665`) deliberately, its header arguing the placement at
+    length; the read side at **`:957`** was the whole defect — `[ "$(mailbox_lines "$_k")" -gt "$_w" ]`
+    and nothing else. **The startup `pending-mail` refusal (`:424`) does NOT cover this**: it is
+    inside the `IDLE_SCOPED` block, and the notice's own prescribed re-arm
+    (`cc-await-ping --timeout 14400 --interval 15`) is the BARE form, which never reaches it.
+  · 🚨 **THE DISCRIMINATOR IS KEYED ON THE KEYSET, NOT ON THE MARKER TEXT — and the row did not say
+    so.** The obvious reading of *"skip its own control lines"* is a substring match on
+    `WAKE-PATH-DOWN`. That is wrong in the too-strong direction: a WAKE-PATH-DOWN **forwarded from
+    another pane is real peer mail** — a sibling reporting its wake path dropped — and this session
+    received exactly one at startup. The notice interpolates the key it was armed for, so
+    `armed for [<one of OUR keys>]` separates our corpse from a neighbour's report exactly.
+    Every uncertain branch (unreadable box, empty window) returns *real mail present*, so the
+    suppressor is strictly weaker than the delivery path and can only ever keep the watcher watching
+    over lines it PROVED are its own. The private cursor advances past them; **`.seen` deliberately
+    does not**, so the notice stays pending for `mailbox-drain.sh`, the reader it was written for.
+  · **THE VACUITY TRAP WAS ONE LEVEL BELOW THE ASSERTION AGAIN (method 91, second consecutive
+    recycle).** The assertion is about a VERDICT, but the verdict only differs when the watcher is on
+    the **keyset/private-cursor path** (`_have_lib=1`). The other path (`:997`) computes its baseline
+    at ARM time, so an already-pending line never fires there — a fixture landing on it passes
+    against a subject with **no fix in it at all**. Both arms therefore assert the banner string
+    `private cursor, seeded from .seen` BEFORE the verdict. The pre-fix arm needed the same care for
+    a different reason: the script resolves its lib as `"$_bd/../hooks/lib/mailbox-pending.sh"` and
+    **falls back to the LIVE `~/.claude` copy** (`:207`), so a bare `git show` into a tmpdir would
+    have run the repo's script against the deployed lib — a different subject. Planted at
+    `<root>/bin/` with `<root>/hooks` symlinked to the repo's.
+  · **FOUR TESTS, `tests/cc-await-ping.bats` 82 → 86 `@test`** (an EXTEND, not an add — premise 2).
+    F12 is the row's prescribed red-proof verbatim; two CONTROLs pin both too-strong directions
+    (forwarded notice still fires · our notice alongside real mail delivers both); **F12 RED-PROOF is
+    arm 2** against `origin/main`'s pinned copy and requires `verdict=ping`, with a
+    `! grep -q '_real_mail_after'` guard so a pinned copy that already carried the fix could not
+    launder a pass (`control-must-replay-the-real-artifact`). **4/4, plan line `1..4` exact**, then
+    the full suite **86 ok / 0 not ok / plan `1..86` exact**; `bats-assert-liveness.py` silent, rc 0.
+  · **Selector: 7 DIRECT suites** map to the range, none of which is a docs suite; instrument control
+    `492c51066~1..492c51066` re-derived at **32**, a stable twenty-fifth-recycle reading.
+  · **OWED SUITES: the six consumers + the two standing docs-consumers ran as ONE invocation —
+    `1..171`, 171 ok, 0 logic reds.** ⚠️ **A `not ok` line and a plan mismatch that are BOTH the same
+    retry, and neither is a red.** The raw counts read `OK=171 NOTOK=1` against a plan of 171 — 172
+    results for 171 tests. `not ok 71` is followed IMMEDIATELY by `ok 71` **of the same name**: cc-bats
+    retried it and it passed, so the duplicate result is the retry and the accounting closes at 171
+    distinct tests. Its body is `mailbox-wake-arm.bats:231 \`sleep 30 & local dead=$!' failed` — a
+    **fork failure under load**, not a logic red, and it dies before the test can reach the take loop
+    this diff touches. **Attribute by the failing STATEMENT, not by the suite's membership in your
+    range**: this suite is a genuine consumer of `cc-await-ping`, so a red in it would have looked
+    like mine on every axis except the one that decides.
+  · **Board at close: open 260 / blocked 191 / done 2157 / claimed 2.** Per-row diff across the
+    window: **1 LEFT (`b1a9e3142ee4` — MINE) · 0 ENTERED**, and the flat board agrees (261 → 260).
+    `master-convergence-deadlock` **31 open / 6 blocked, unmoved** — the declared HOLD above.
+
 - **2026-08-23 — drain recycle #161: the bisect ran for ONE suite, so its sha is a verdict about ONE
   entry — `red_actions` stamped that scalar culprit onto EVERY per-entry backlog title, and a
   non-primary row named a commit where its own suite is GREEN. filed 0 / closed 1 / landed 2 commits
