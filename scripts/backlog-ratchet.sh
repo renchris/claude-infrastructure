@@ -113,6 +113,11 @@
 #   backlog-ratchet.sh --json       machine-readable, for a hook or a dashboard
 #   backlog-ratchet.sh --assert     exit 1 iff coverage fell below the high-water mark
 #
+# EXIT CODES — three, and the third is why the engine guard below is fail-CLOSED (backlog 2366f99e04a7):
+#   0  measured: coverage is at or above the high-water mark (census/json always 0)
+#   1  --assert only: coverage fell below it
+#   2  COULD NOT MEASURE — bad usage, or THE ENGINE IS ABSENT (no jq)
+#
 # Knobs (all defaulted; each exists because an unguarded latch is how this file died once):
 #   CC_RATCHET_MAX_HW   ceiling on a recordable high-water   (default 95.0 — 100 is unreachable)
 #   CC_RATCHET_MIN_N    floor on the denominator that may set one (default 20 — a degenerate
@@ -144,8 +149,34 @@ case "${1:-}" in
   *) printf 'backlog-ratchet: unknown arg %s\n' "$1" >&2; exit 2 ;;
 esac
 
+# ── THE ENGINE GUARD IS FAIL-CLOSED (backlog 2366f99e04a7) ───────────────────────────────────────
+# Same defect and same shape as scripts/backlog-grouping-sweep.sh carried for its entire deployed
+# life (fixed in 963dbd0a2). This script is wired into autonomy-sweep.sh:539 as `--assert` on a
+# 300 s tick with `>/dev/null 2>&1`, so the one-line stderr below reached nobody and the rc was the
+# only thing that left the process.
+#
+# 🚨 AND HERE THE FAIL-OPEN DID NOT MERELY MISREPORT — IT WOULD HAVE RETRACTED A STANDING ROW.
+# `--assert` is registered as a stored falsifier at autonomy-sweep.sh:803 for the row it files
+# (condition backlog-ratchet-coverage-regression), and cc-premise's `run_falsifier` reads exit 0 as
+# THE CONDITION IS GONE. So an absent jq did not just fail to measure coverage: it told the currency
+# pass the coverage regression had cleared, and the closer would retire the alarm on the strength of
+# a measurement that never ran. 2 is in cc-premise's `_FALSIFIER_UNASKABLE_RCS` ({2,124,126,127}),
+# which renders "UNVERIFIED, not confirmed" — the state this actually is.
+#
+# 2, NOT A NEW CODE, and this file already agrees: the unknown-arg arm above exits 2 for exactly this
+# meaning. A fourth code would land outside that set and render "NOT REFUTED", stranding the same
+# consumer (memory: new-enum-member-falls-into-fail-closed-default).
+#
+# NO FILING HERE, UNLIKE THE TRIGGER SIBLING — a deliberate asymmetry, not an omission. The trigger
+# files from `--file`, the mode autonomy-sweep schedules for it. This script's scheduled mode IS the
+# falsifier probe, and a probe that writes to the ledger it is being asked about is not a probe. The
+# rc reaches its reader anyway: autonomy-sweep journals it as `ratchet_rc`, and jq is absent for both
+# siblings at once, so the trigger's own damped page carries the news for the pair.
+#
+# THE STORE GUARD IS NOT CONVERTED WITH IT: a missing interpreter means the measurement never
+# happened, a missing store means there was nothing to measure. 963dbd0a2 drew the same line.
 [ -f "$BACKLOG" ] || { printf 'backlog-ratchet: no store at %s — nothing to measure\n' "$BACKLOG" >&2; exit 0; }
-command -v jq >/dev/null 2>&1 || { printf 'backlog-ratchet: jq missing — cannot measure (fail-open)\n' >&2; exit 0; }
+command -v jq >/dev/null 2>&1 || { printf 'backlog-ratchet: jq missing — CANNOT MEASURE (fail-closed, rc 2)\n' >&2; exit 2; }
 
 # The FOLD, not the raw ledger: an item's current state is its last event, and `falsifier` is
 # last-write-wins exactly as cc-premise reads it. Computing this from raw records would double-count

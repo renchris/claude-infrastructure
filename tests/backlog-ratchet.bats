@@ -286,3 +286,94 @@ postland_row() {
   run "$SUT"
   printf '%s' "$output" | grep -q '2 live minus 1 needs-class'
 }
+
+# ── THE ENGINE GUARD IS FAIL-CLOSED (backlog 2366f99e04a7) ───────────────────────────────────────
+# 🚨 HERE THE FAIL-OPEN DID NOT MERELY MISREPORT — IT WOULD HAVE RETRACTED A STANDING ROW, which is
+# why this sibling's guard matters more than the trigger's. `--assert` is registered as the stored
+# falsifier at autonomy-sweep.sh:803 for the row that same block files (condition
+# backlog-ratchet-coverage-regression), and cc-premise's `run_falsifier` reads exit 0 as THE
+# CONDITION IS GONE. So an absent jq did not fail to measure coverage: it told the currency pass the
+# regression had cleared and handed the closer a retraction built on a measurement that never ran.
+# 2 is in cc-premise's _FALSIFIER_UNASKABLE_RCS ({2,124,126,127}) and renders "UNVERIFIED".
+#
+# THE NO-FILING ARM IS PINNED TOO, because it is a deliberate asymmetry with the trigger sibling
+# rather than an omission: this script's scheduled mode IS the probe, and a probe that writes to the
+# ledger it is being asked about is not a probe. A later "consistency" edit that adds a filing here
+# reds the last case below.
+
+# A PATH with no jq on it — named, not shadowed: absence cannot be spelled as an override.
+nojq_path() {
+  local d="$BATS_TEST_TMPDIR/nojq" t p
+  mkdir -p "$d"
+  for t in dirname date mkdir rm head tr cat grep sed; do
+    p="$(command -v "$t" 2>/dev/null)"
+    [ -n "$p" ] && ln -sf "$p" "$d/$t"
+  done
+  printf '%s' "$d"
+}
+
+# THE MUTANT: the pre-fix fail-open restored at the one site this change touched, anchored both ways
+# so a rename reds the anchor instead of quietly producing a mutant identical to the subject. A sed
+# over the working tree rather than a `git show` of a ref — a branch name advances past the fix the
+# moment it lands and the control would then compare the fix to itself
+# (memory: control-must-replay-the-real-artifact).
+eg_mutant() {
+  EG_MUT="$BATS_TEST_TMPDIR/mutant-ratchet.sh"
+  [ "$(grep -c 'CANNOT MEASURE (fail-closed, rc 2)' "$SUT")" -eq 1 ]
+  # Delimiter `@`, not `|`: the replacement contains `||` and sed reads the first one as the closing
+  # delimiter ("bad flag in substitute command"). Caught by running it, not by reading it.
+  sed "s@^command -v jq .*@command -v jq >/dev/null 2>\&1 || { printf 'backlog-ratchet: jq missing — fail-open\\\\n' >\&2; exit 0; }@" "$SUT" > "$EG_MUT"
+  [ "$(grep -c 'CANNOT MEASURE (fail-closed, rc 2)' "$EG_MUT")" -eq 0 ]
+  chmod +x "$EG_MUT"
+}
+
+@test "no jq ⇒ rc 2 — the 0 it used to return RETRACTED its own stored falsifier" {
+  # The store guard sits above the engine guard, so a fixture without a store would exit 0 at the
+  # WRONG guard and say nothing about this change. setup() writes it; re-assert rather than trust.
+  [ -f "$CC_BACKLOG_FILE" ]
+  add a 2026-08-01T00:00:00Z "true"
+  # `env` rather than a PATH prefix on `run`: the restricted PATH has no bash either, so the prefix
+  # form exits 127 and every assertion would be measuring the harness.
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --assert
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'CANNOT MEASURE'
+}
+
+@test "MUTANT: the pre-fix exit reaches 0 on the same fixture — the arm that credits the change" {
+  [ -f "$CC_BACKLOG_FILE" ]
+  add a 2026-08-01T00:00:00Z "true"
+  eg_mutant
+  run env PATH="$(nojq_path)" /bin/bash "$EG_MUT" --assert
+  # rc 0 is exactly what cc-premise reads as THE CONDITION IS GONE.
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'fail-open'
+}
+
+@test "no jq ⇒ rc 2 in the census mode too, not only under --assert" {
+  [ -f "$CC_BACKLOG_FILE" ]
+  run env PATH="$(nojq_path)" /bin/bash "$SUT"
+  [ "$status" -eq 2 ]
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --json
+  [ "$status" -eq 2 ]
+}
+
+@test "the engine-absent exit WRITES NOTHING — this sibling files no row, deliberately" {
+  [ -f "$CC_BACKLOG_FILE" ]
+  add a 2026-08-01T00:00:00Z "true"
+  local before after
+  before="$(cksum < "$CC_BACKLOG_FILE")"
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --assert
+  [ "$status" -eq 2 ]
+  after="$(cksum < "$CC_BACKLOG_FILE")"
+  [ "$before" = "$after" ]
+  # …and it does not latch a high-water mark off a measurement that never happened.
+  [ ! -f "$CC_RATCHET_STATE" ]
+}
+
+@test "POLARITY: engine present is never rc 2 — an alarm that always fires carries no bits" {
+  add a 2026-08-01T00:00:00Z "true"
+  run "$SUT" --assert
+  [ "$status" -ne 2 ]
+  run "$SUT" --json
+  [ "$status" -eq 0 ]
+}

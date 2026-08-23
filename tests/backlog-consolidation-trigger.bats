@@ -235,3 +235,107 @@ WRAP
   [ "$(bash "$CB" list --all --json | jq '[.[]|select(.source=="backlog-consolidation-trigger")]|length')" -eq 1 ]
   bash "$CB" list --all --json | jq -e '.[]|select(.source=="backlog-consolidation-trigger")|.title|test("REFUSED")' >/dev/null
 }
+
+# ── THE ENGINE GUARD IS FAIL-CLOSED (backlog 2366f99e04a7) ───────────────────────────────────────
+# This script is wired into autonomy-sweep.sh:538 as `--file` on a 300 s tick with `>/dev/null 2>&1`,
+# so its stderr reaches nobody and the rc is the ONLY thing that leaves the process. `exit 0` on an
+# absent jq was therefore indistinguishable, to the only reader there is, from a clean store with no
+# cluster — the same shape backlog-grouping-sweep.sh carried for its whole deployed life (963dbd0a2).
+#
+# THE MUTANT ARM IS WHAT CREDITS THE CHANGE. Every `[ "$status" -eq 2 ]` below would also pass
+# against a subject that exited 2 for an unrelated reason, so the pre-fix spelling is restored at the
+# one site this change touched and asserted to reach 0 on the SAME fixture. It is a sed over the
+# working tree with anchors counted BOTH ways rather than a `git show` of a ref: a branch name
+# advances past the fix the moment it lands and would then compare the fix to itself
+# (memory: control-must-replay-the-real-artifact, per-site-mutation-attributes-coverage).
+#
+# VACUITY, ONE LEVEL BELOW THE ASSERTION: the engine guard is reached only after the store guard
+# above it passes, so a fixture with no store would exit 0 at the WRONG guard and say nothing about
+# this change. setup() writes $CC_BACKLOG_FILE, and store_present() re-asserts it here rather than
+# trusting that.
+
+store_present() { [ -f "$CC_BACKLOG_FILE" ]; }
+
+# A PATH with no jq on it. Built by NAMING what the guard path needs rather than by shadowing,
+# because absence cannot be spelled as an override.
+nojq_path() {
+  local d="$BATS_TEST_TMPDIR/nojq" t p
+  mkdir -p "$d"
+  for t in dirname date mkdir rm head tr cat grep sed; do
+    p="$(command -v "$t" 2>/dev/null)"
+    [ -n "$p" ] && ln -sf "$p" "$d/$t"
+  done
+  printf '%s' "$d"
+}
+
+# A cc-backlog that records every invocation; the store's own behaviour is not under test here.
+eg_stub_backlog() {
+  EG_CALLS="$BATS_TEST_TMPDIR/eg.calls"
+  EG_STUB="$BATS_TEST_TMPDIR/cc-backlog-stub"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$EG_CALLS" > "$EG_STUB"
+  chmod +x "$EG_STUB"
+  export CC_BACKLOG_BIN="$EG_STUB"
+  export CC_PAGE_DAMP_DIR="$BATS_TEST_TMPDIR/damp"
+}
+eg_calls() { [ -f "${EG_CALLS:-}" ] && wc -l < "$EG_CALLS" | tr -d ' ' || printf '0'; }
+
+# THE MUTANT: the pre-fix fail-open restored at the one site this change created, anchored both ways
+# so a rename of the site reds the anchor instead of silently producing a mutant identical to the
+# subject (memory: sibling-guard-makes-the-fixture-vacuous).
+eg_mutant() {
+  EG_MUT="$BATS_TEST_TMPDIR/mutant-trigger.sh"
+  [ "$(grep -c '|| engine_absent ' "$SUT")" -eq 1 ]
+  sed 's/|| engine_absent .*/|| { printf "jq missing — fail-open\\n" >\&2; exit 0; }/' "$SUT" > "$EG_MUT"
+  [ "$(grep -c '|| engine_absent ' "$EG_MUT")" -eq 0 ]
+  chmod +x "$EG_MUT"
+}
+
+@test "no jq ⇒ rc 2, not the fail-open 0 the scheduled caller could not tell from a clean store" {
+  store_present
+  seed_sha_cluster 6
+  # `env` rather than a PATH prefix on `run`: the restricted PATH has no bash on it either, so the
+  # prefix form exits 127 and every assertion below would be measuring the harness
+  # (memory: hermetic-in-stubs-not-in-interpreter).
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --threshold 5
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'jq missing'
+  printf '%s' "$output" | grep -q 'CANNOT MEASURE'
+}
+
+@test "MUTANT: the pre-fix exit reaches 0 on the same fixture — the arm that credits the change" {
+  store_present
+  seed_sha_cluster 6
+  eg_mutant
+  run env PATH="$(nojq_path)" /bin/bash "$EG_MUT" --threshold 5
+  # Fail-open, exactly as trunk behaved: an absent engine read as a clean store.
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'fail-open'
+}
+
+@test "--file with no jq files ONE condition-keyed, self-falsifying row" {
+  store_present
+  eg_stub_backlog
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --file --threshold 5
+  [ "$status" -eq 2 ]
+  [ "$(eg_calls)" -eq 1 ]
+  grep -q 'backlog-consolidation-engine-absent' "$EG_CALLS"
+  grep -q 'command -v jq' "$EG_CALLS"
+}
+
+@test "--assert with no jq stays a pure READ: rc 2, and not one write to the ledger" {
+  store_present
+  eg_stub_backlog
+  run env PATH="$(nojq_path)" /bin/bash "$SUT" --assert --threshold 5
+  # 2 is in cc-premise's _FALSIFIER_UNASKABLE_RCS, so a consumer reads UNVERIFIED — never "gone".
+  [ "$status" -eq 2 ]
+  [ "$(eg_calls)" -eq 0 ]
+}
+
+@test "POLARITY: engine present is never rc 2 — an alarm that always fires carries no bits" {
+  store_present
+  seed_sha_cluster 6
+  run "$SUT" --threshold 5
+  [ "$status" -eq 0 ]
+  run "$SUT" --assert --threshold 5
+  [ "$status" -eq 1 ]
+}
