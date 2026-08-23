@@ -270,8 +270,16 @@ OPEN_JSON="$("$CUSTODY_BIN" list --open --json 2>/dev/null)" || OPEN_JSON=""
 [ -n "$OPEN_JSON" ] || OPEN_JSON='[]'
 TOTAL="$(printf '%s' "$OPEN_JSON" | jq 'length' 2>/dev/null)" || TOTAL=0
 
-load_pane_oracle
-load_cloud_oracle
+# LOAD EACH ORACLE ONLY IF THE OPEN SET ACTUALLY CONTAINS ITS KIND. The cloud oracle is a
+# per-session control-plane round trip (bounded at CLOUD_TIMEOUT_S, measured rc 124 at 90 s on the
+# live store), so paying it when no cloud row exists spends a minute of the sweep's budget to
+# answer a question nobody asked — and on a tick where the bound bites, that cost lands on the
+# LOCAL rows' latency too. Counting first is exact and free: the open set is already in hand.
+_n_cloud="$(printf '%s' "$OPEN_JSON" | jq '[.[] | select((.targetPane//"") | startswith("cloud:"))] | length' 2>/dev/null)" || _n_cloud=0
+_n_local="$(printf '%s' "$OPEN_JSON" | jq '[.[] | select(((.targetPane//"") | startswith("cloud:")) | not)] | length' 2>/dev/null)" || _n_local=0
+# The originator-pane lookup also needs the pane oracle, so load it whenever ANY row could name one.
+[ "${_n_local:-0}" -gt 0 ] || [ "$(printf '%s' "$OPEN_JSON" | jq '[.[] | select(has("originatorPane"))] | length' 2>/dev/null || echo 0)" -gt 0 ] && load_pane_oracle
+[ "${_n_cloud:-0}" -gt 0 ] && load_cloud_oracle
 
 n_alive=0; n_gone=0; n_unknown=0; n_reported=0; n_latched=0
 ORPHANS=""              # marker \x1f disposition \x1f age \x1f slug \x1f target \x1f cwd
