@@ -1486,6 +1486,102 @@ STUB
   ! printf '%s' "$output" | grep -q '[0-9]' || { echo "a condition key carries a digit: $output"; false; }
 }
 
+# ── C13i: the SHA in a per-entry title is per-entry too (backlog 8740c03e428c) ───────────────────
+# C13e pins that every failing suite gets filed and C13d that each carries its OWN test name. The
+# third field — the SHA — was still the scalar `$c12`, a verdict do_bisect reached for FAILING[0]
+# ALONE, stamped onto every title. So a non-primary row named a commit where its own suite is GREEN:
+# item 99df8fdb4fda read '@ f60b7ca220ee', bisected for tests/boot-resume-launch.bats, while
+# tests/boundary-handoff.bats passes at that sha. The durable row outlives the page, so that title is
+# the whole of what a worker gets — and it points them at `git revert` on an innocent commit.
+#
+# WHY THIS FIXTURE IS NOT multi_red_bats: with no last-green, do_bisect ABSTAINS, `culprit` falls
+# back to the target, and `$c12` and `sha12 $sha` are the SAME STRING — so every assertion below
+# would pass against the unfixed subject. The bug is only observable where the bisect CONVICTS a sha
+# the target is not, which needs three things this stub buys and multi_red_bats cannot: a green
+# window to set the floor, a marker commit to converge on, and an innocent commit on top so culprit
+# != target. `[ -f BAD ]` is the same tree-driven discriminator stub_bats_marker uses one suite over
+# (tests/postland-verify-bisect-bound.bats), because the probe's cwd IS the bisect cell.
+bisectable_multi_red_bats() {   # green until BAD appears, then the 3-file attributed TAP
+  local f="$BATS_TEST_TMPDIR/bats-bisectable"
+  cat > "$f" <<'STUB'
+#!/bin/bash
+[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }
+# The floor and every interior probe answer from the TREE, not from a counter: this is what makes
+# the walk decidable instead of red-everywhere (which bisect_floor_ok correctly refuses, B13).
+if [ ! -f BAD ]; then echo "1..1"; echo "ok 1 fine"; exit 0; fi
+# The retry ladder re-runs ONE test (`-f <regex> <file>`) and must PLAN >0 and exit 1, or the ladder
+# reads a non-verdict and the file is never convicted at all.
+[ "$1" = "-f" ] && { echo "1..1"; echo "not ok 1 replay"; exit 1; }
+echo "1..3"
+echo "not ok 1 alpha"
+echo "# (in test file tests/aaa-sorts-first.bats, line 3)"
+echo "not ok 2 bravo"
+echo "# (in test file tests/gate-home-isolation.bats, line 4)"
+echo "not ok 3 charlie"
+echo "# (in test file tests/it2-kitty.bats, line 5)"
+exit 1
+STUB
+  chmod +x "$f"; printf '%s' "$f"
+}
+
+@test "C13i: a NON-PRIMARY failing entry names the TARGET sha, not the primary's bisected culprit" {
+  fake="$(bisectable_multi_red_bats)"
+  export CC_POSTLAND_BATS="$fake"
+  # Cuts accumulate across the four windows below; the cool-off would refuse the last one for a
+  # reason that has nothing to do with this test's subject.
+  export CC_POSTLAND_CUT_MAX=99
+
+  # THE SUITES THE TAP NAMES MUST EXIST IN THE TREE, and this is not fixture decoration — it is the
+  # difference between a walk and a non-verdict. do_bisect writes a runner whose first line is
+  # `[ -f <file> ] || exit 125`, and 125 is git's "cannot test this commit", so with the file absent
+  # EVERY probe abstains and `bisect run` returns no first-bad (measured: why=no-first-bad steps=1,
+  # both arms then agreeing on the target and this test passing vacuously against the unfixed
+  # subject). They must exist at the FLOOR too, or bisect_floor_ok takes its "the file did not exist
+  # at the last-green" branch and skips the confirmation the control below reads. Contents are
+  # irrelevant — CC_POSTLAND_BATS answers for every suite in this fixture.
+  local s
+  for s in aaa-sorts-first gate-home-isolation it2-kitty; do
+    printf '@test "%s" { true; }\n' "$s" > "$R/tests/$s.bats"
+  done
+  push_commit "the suites the TAP names"
+
+  run bash "$SUT" --run-if-needed                     # no BAD yet => GREEN, sets the bisect floor
+  [ "$status" -eq 0 ]
+  [ -f "$CC_POSTLAND_DIR/last-green" ]                # control: the floor exists, so a walk is possible
+
+  touch "$R/BAD"; push_commit "the culprit"           # first bad commit
+  culprit="$(origin_head)"
+  echo innocent > "$R/innocent"; push_commit "innocent, on top"   # target != culprit
+  target="$(origin_head)"
+  culprit12="${culprit:0:12}"; target12="${target:0:12}"
+  # THE VACUITY GUARD. If these were equal the two arms of the fix render one string and every
+  # assertion below passes against the unfixed subject — the fixture, not the code, would be what
+  # made the test green.
+  [ "$culprit12" != "$target12" ]
+
+  run bash "$SUT" --run-if-needed                     # window 1 => candidate, cut
+  second_window                                       # window 2 => RED, files all three
+
+  [ -f "$REC/cc-backlog.argv" ]
+  # CONTROL that the bisect really CONVICTED rather than abstaining: the page is state-keyed on the
+  # culprit, so its existence under the culprit's sha — not the target's — is the walk's own verdict.
+  # Without this the test could pass on a run where do_bisect gave up and both arms agreed by luck.
+  [ -f "$CC_PAGES_DIR/postland-red-$culprit12.page" ]
+  grep -q 'bisected from last-green' "$CC_PAGES_DIR/postland-red-$culprit12.page"
+
+  # The PRIMARY keeps the bisect's answer — the fix must not blanket-replace the sha, or it would
+  # throw away the one attribution that was correct all along.
+  grep -q "post-land RED: tests/aaa-sorts-first.bats::alpha @ $culprit12" "$REC/cc-backlog.argv"
+  # THE REGRESSION, both non-primary entries: pre-fix these carried $culprit12 — a sha bisected for a
+  # different suite entirely.
+  grep -q "post-land RED: tests/gate-home-isolation.bats::bravo @ $target12" "$REC/cc-backlog.argv"
+  grep -q "post-land RED: tests/it2-kitty.bats::charlie @ $target12" "$REC/cc-backlog.argv"
+  # ...stated once more as a COUNT, because the two greps above would both pass if the fix had
+  # replaced every sha with the target: exactly one row may name the culprit.
+  [ "$(grep -c "post-land RED:.*@ $culprit12" "$REC/cc-backlog.argv")" = "1" ]
+  [ "$(grep -c "post-land RED:.*@ $target12" "$REC/cc-backlog.argv")" = "2" ]
+}
+
 # ── C32: ONE RED EPISODE, ONE LEASE — every mint site JOINS the suite's condition group ─────────
 # C13e-g above cover ONE of this file's four mint sites: red_actions' per-entry loop, which is
 # condition-keyed and therefore idempotent and lease-visible. The other three (AUTO-REVERT

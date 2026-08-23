@@ -2722,7 +2722,7 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   # The PAGE is untouched and stays per-EVENT (state-keyed by culprit sha, cleared on green): the
   # two artifacts are supposed to have different lifetimes, and only the backlog is durable.
   if [ -x "$BACKLOG_BIN" ]; then
-    local i n fentry fname ftitle berr brc nfiled=0 refused=0 skipped=0
+    local i n fentry fname ftitle esha berr brc nfiled=0 refused=0 skipped=0
     n="${#FAILING[@]}"
     for ((i = 0; i < n; i++)); do            # builtin, not `seq` — this path runs starved
       # A pathological all-red tree must not fork one `cc-backlog` per suite on a path that runs
@@ -2742,12 +2742,36 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
       # wholesale by the caller and pads no name, so the tail is legitimately unnamed.
       fname="${FAILNAME[$i]:-}"; fname="${fname//[$'\n\r']/ }"; fname="${fname:0:120}"
       [ -n "$fname" ] || fname='?'
-      ftitle="post-land RED: $fentry::$fname @ $c12"
+      # ── THE SHA IS PER-ENTRY, BECAUSE THE BISECT WAS NOT (2026-08-22, backlog 8740c03e428c) ────
+      # do_bisect above ran for exactly ONE suite — `$file`, which the sole call site fixes as
+      # FAILING[0] — so `$c12` is a verdict about THAT entry and about no other. Stamping the scalar
+      # on every title cross-attributes: a non-primary item names a commit where its own suite is
+      # GREEN. Measured on item 99df8fdb4fda, whose title read '@ f60b7ca220ee' — a sha bisected for
+      # tests/boot-resume-launch.bats — while tests/boundary-handoff.bats PASSES at that sha
+      # (reproduced in a detached worktree). This is the same cross-attribution class FAILNAME
+      # already fixed one field over for the test NAME (C13d's trailing comment): a per-entry loop
+      # must read a per-entry value, never a scalar computed for the primary.
+      #
+      # Keyed on the ENTRY, not on `$i -eq 0`, so the predicate states the thing that is actually
+      # true — "this is the entry the bisect ran for". The two agree at today's only call site; they
+      # diverge for a future caller passing a `$file` outside FAILING, and there the entry-keyed form
+      # attributes NOTHING rather than mis-attributing entry 0. That is the safe direction: the cost
+      # of naming no culprit is a worker who has to bisect by hand, and the cost of naming the wrong
+      # one is a `git revert` of an innocent commit.
+      #
+      # INERT WHERE THERE IS NO VERDICT TO MIS-SPEND: when the bisect abstained, `culprit` has
+      # already fallen back to `$sha`, so both arms render the identical string and no title moves.
+      if [ "$fentry" = "$file" ]; then esha="$c12"; else esha="$(sha12 "$sha")"; fi
+      ftitle="post-land RED: $fentry::$fname @ $esha"
       # The durable artifact outlives the page (which is state-keyed and cleared on the next green),
       # so a worker who opens this row a day later has only the title. A title naming a sha that is
       # not on trunk, with nothing saying so, is what sends them to `git revert` against a tree that
       # never had it — the exact dead end item a31d1fe3de3d recorded.
-      [ "$orphan" = 1 ] && ftitle="$ftitle (culprit NOT in trunk — orphaned by a rebase-land; $otwin)"
+      # Gated on the same entry predicate: `orphan` is trunk_state's answer about the CULPRIT, so on
+      # a non-primary row — which now names `$sha`, a different commit — the note would assert
+      # non-membership of a sha nobody checked. Silence there is the honest rendering.
+      [ "$orphan" = 1 ] && [ "$fentry" = "$file" ] \
+        && ftitle="$ftitle (culprit NOT in trunk — orphaned by a rebase-land; $otwin)"
       # stderr is CAPTURED, not discarded: a --condition add against an item already marked done
       # warns and deliberately does NOT re-open (cc-backlog's DONE-GUARD). Swallowing that would
       # make a RECURRENCE invisible — the exact failure mode being fixed — so it goes to runner.log.
