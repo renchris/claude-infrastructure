@@ -82,6 +82,7 @@ for _c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../h
 done
 # shellcheck source=../hooks/lib/placeholder.sh
 # shellcheck disable=SC1090,SC1091
+# shellcheck disable=SC2016  # $ph is jq's parameter, deliberately not expanded by the shell
 { [ -n "$_PH_LIB" ] && . "$_PH_LIB" 2>/dev/null; } || {
   CC_PLACEHOLDER_RE=''; CC_PH_JQ='def ph_hit($ph): false; def ph_toks($ph): "";'; }
 TABC="$(printf '\t')"

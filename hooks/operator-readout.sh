@@ -275,6 +275,7 @@ if ! . "$_plib" 2>/dev/null; then
   # `test("")` true for every row and turn the whole board into ✎ — the one failure mode worse than
   # the defect this closes. Defs that answer `false` restore the pre-2026-08-22 render exactly.
   CC_PLACEHOLDER_RE=''
+  # shellcheck disable=SC2016  # $ph is jq's parameter, deliberately not expanded by the shell
   CC_PH_JQ='def ph_hit($ph): false; def ph_toks($ph): "";'
 fi
 
