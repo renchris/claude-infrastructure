@@ -110,7 +110,6 @@ scripts/alarm-polarity-lint.sh
 scripts/boundary-hook-e2e.sh
 scripts/comms-safety-gate.sh
 scripts/effort-parity-assert.sh
-scripts/growth-coverage-lint.sh
 scripts/launchd-parity-lint.sh
 scripts/lead-deathwatch.sh
 scripts/lead-reconciler.sh
