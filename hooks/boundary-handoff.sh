@@ -192,7 +192,7 @@ if ! . "$_ilib" 2>/dev/null; then
   # Fail LOUD but SAFE: with no writer this hook cannot log its own disposition, so proceeding
   # would recreate exactly the "didn't fire" ≡ "never evaluated" ambiguity the IDL removes. A Stop
   # hook must never block on a misconfig → exit 0.
-  printf 'boundary-handoff: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  printf 'boundary-handoff: FATAL — cannot source %s (IDL writer inert; no advisory this Stop). Run install.sh to relink hooks/lib.\n' "$_ilib" >&2
   exit 0
 fi
 # "sid": this hook keeps its session id in lowercase `sid` (assigned just above), unlike the others.

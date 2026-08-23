@@ -833,7 +833,7 @@ render_block() {
     # SESSION filed; the pile has its own counted ◆ line), so it is demoted here and labelled for
     # what it is. Only the certified case reorders — every other rung keeps the existing shape.
     if [ "$RUNG" = "✅" ] && [ "${CERT_WROTE:-2}" = "0" ]; then
-      hdr="OPERATOR ▸ ${state} · ${_lead} (standing, not blocking this close)"
+      hdr="OPERATOR ▸ ${state}${_y:+ · $_y}"
     fi
   elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ]; then hdr="OPERATOR ▸ ${state}"
@@ -1003,10 +1003,10 @@ render_block() {
 
   # ── escalation records (D3) — ONE counted line, outside both mode branches so it reads the same in
   # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆|✎)`, and
-  # these are not operator STEPS — they are records a machine should have drained. `◆` because there
-  # is no single command that clears them (ack is per-record, and acking an undelivered escalation is
-  # a judgment, not a chore).
-  [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations list\n' "$esc_n"
+  # these are not operator STEPS — they are records a machine should have drained. `◆` because acking
+  # an undelivered escalation is a judgment, not a chore — but `ack --all` DOES clear the pile in one
+  # command (bin/cc-escalations:205-219, selftest case 4), so the row names it.
+  [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations ack --all\n' "$esc_n"
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).

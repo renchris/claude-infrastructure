@@ -1227,7 +1227,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   mk_escalation 1; mk_escalation 2; mk_escalation 3
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q '◆ 3 escalation record(s) unseen — cc-escalations list' || false
+  echo "$output" | grep -q '◆ 3 escalation record(s) unseen — cc-escalations ack --all' || false
 }
 
 @test "ESCALATIONS: an M3 dead letter counts into the SAME ◆ line, its .ran evidence does not" {
@@ -1301,7 +1301,7 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   mk_escalation 1
   for m in collapse on off; do
     CC_OPREADOUT_CLASSBUDGET="$m" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-    echo "$output" | grep -q '◆ 1 escalation record(s) unseen — cc-escalations list' || false
+    echo "$output" | grep -q '◆ 1 escalation record(s) unseen — cc-escalations ack --all' || false
   done
 }
 

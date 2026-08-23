@@ -124,7 +124,7 @@ _ilib="$_cascd/lib/idl-log.sh"
 if ! . "$_ilib" 2>/dev/null; then
   # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
   # must never block the turn on a misconfig.
-  printf 'completion-assert: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  printf 'completion-assert: FATAL — cannot source %s (IDL writer inert; run install.sh).\n' "$_ilib" >&2
   exit 0
 fi
 idl_init "$IDL" "completion-assert"
@@ -433,7 +433,14 @@ if [ "$DIRTY" -eq 1 ]; then
     _ca_exon="${_ca_exon}dirty-predates-session:${_ca_dp} "
   elif [ "$_ca_d" -eq 2 ] && _ca_dx="$(_ca_dirt_outside_exec)" && [ -n "$_ca_dx" ]; then
     _ca_exon="${_ca_exon}dirty-outside-session-exec:${_ca_dx} "
-  else contra=1; facts="${facts}dirty tree (${DIRTY_N} file(s)); "; fi
+  else
+    contra=1
+    if [ "$_ca_d" -eq 0 ]; then
+      facts="${facts}dirty tree — ${DIRTY_N} file(s) YOU edited are uncommitted; "
+    else
+      facts="${facts}dirty tree (${DIRTY_N} file(s)), authorship UNRESOLVED — commit only paths you wrote, or name the park; "
+    fi
+  fi
 fi
 if [ "$UNLANDED" -eq 1 ]; then
   _ca_mine unlanded; _ca_u=$?
@@ -497,7 +504,7 @@ if [ "$RUNG" = "🚀" ]; then
   elif [ "$_ca_adds" -gt 0 ]; then
     facts="${facts}LANDED BUT NOT LIVE — ${_ca_adds} NEW file(s) in the landed diff are ABSENT from the live layer (~/.claude is per-file symlinks, so an added file has no link and every \`command -v\`/\`[ -f ]\` consumer guard silently skips it — the feature is a no-op, not a stale one), and no converge budget covers an add (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
   else
-    facts="${facts}LANDED BUT NOT LIVE — the live layer is ${_ca_livelag} commit(s) behind and PAST its converge budget, so the machine still runs the old bytes (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
+    facts="${facts}LANDED BUT NOT LIVE — the live layer is ${_ca_livelag} commit(s) behind and PAST its converge budget; converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh; "
   fi
 fi
 
@@ -526,7 +533,7 @@ fi
 if [ "$RUNG" = "⛔" ]; then
   _ca_blocked="$(lfield BLOCKED)"; case "$_ca_blocked" in ''|*[!0-9]*) _ca_blocked="?" ;; esac
   contra=1
-  facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open and only you can settle them; the close asserted done while holding them (cc-decide list --open); "
+  facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open (cc-decide list --open); that IS your rung; "
 fi
 
 # ── ARM 2 (operator surface) — see the contract block above. MUST precede the ledger-clean
