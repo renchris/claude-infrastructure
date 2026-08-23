@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — cloud lane: the land's own bound-kill debris was blocking its every retry, and the
+  curer was matching a sentence its blocker had stopped writing. A2 is CLOSED — the lane landed a
+  branch and closed a row end-to-end for the first time since 2026-08-17T09:12Z.**
+  Fired to make Lane A contribute. The brief's premise — "it runs, it does work, and its work CANNOT
+  LAND" — is confirmed; the two mechanisms behind it are now named and fixed.
+
+  **State at intake, re-measured (the brief's figures had already moved — the generator was still
+  minting):** 70 `origin/claude/fire-*` branches, not 60; **91** unlanded commits, not 81; **zero**
+  fully landed. Since 08-18 the return ledger held 80 `land-refused` + 40 `land-cut` + 15 `abstain`
+  and **0 `returned`**, against **140 lifetime** successes — so the lane HAD worked and stopped.
+
+  **Mechanism 1 — the land poisons its own branch (dominant: 80 of 135 rows).** autonomy-sweep runs
+  the return pass under `timeout -k 10 900` (autonomy-sweep.sh:952): SIGTERM at 900 s, **SIGKILL**
+  10 s later. SIGKILL runs no EXIT trap, so desk-land's cleanup never fires and its throwaway
+  `$WTROOT/.desk-land-<branch>-<pid>` survives **with the branch checked out into it**. Every later
+  attempt then dies at cloud-reconcile.sh:613:
+  `fatal: cannot force update the branch 'claude/fire-…' used by worktree at '/private/tmp/.desk-land-…-42401'`
+  — rc 65, once per pass, forever, because nothing reaps the debris. The refusal's own advice
+  ("remove that worktree, then re-run") was addressed to a human who never came. Measured before the
+  fix: **9 abandoned sandboxes, every creator PID dead, 2 still holding refs.**
+  Note the naming drift that hid it: §4's 2026-08-17 forensics named `/private/tmp/wt-land-*`, of
+  which **zero exist**. The live generation is dot-prefixed `.desk-land-*`, which an ordinary glob
+  does not match — so a cleanup keyed on the old name finds nothing and reads as "nothing to do".
+  Fix `cd5d009b5`: cloud-reconcile asks whether the holder is ownerless BEFORE refusing. The sandbox
+  name ends in its creator's `$$`, so liveness is READ (`kill -0`), never inferred from age. It
+  reaps only what is provably ownerless and falls THROUGH to the existing heal path — the first cut
+  retried with an UNFORCED fetch and still refused, because an unforced fetch cannot move a diverged
+  head.
+
+  **Mechanism 2 — a correct verdict no actuator could reach (the 20 hostage rows).** The brief read
+  these as a liveness oracle stuck on ALIVE. **That premise is refuted, and the refutation is the
+  finding:** `cc-cloud --table` already read STALLED / NOT-STARTED / ABANDONED for every one of them,
+  and `cloud_map` maps all three to `open`. What failed is the CURE SWEEP that applies it:
+  cc-backlog's selector matched `"worker runs off-box (venue"` while `cloud_map` writes
+  `"a LIVE off-box worker (cc-cloud reads ALIVE) still holds this item past the ceiling…"`. Writer
+  and reader are joined on PROSE, and the prose drifted. Measured: the select matched **0** rows
+  while **20** carried the sentence its own blocker writes, oldest stuck since 08-18. Fix
+  `d0f40767f`. The block record persists only `{by,event,id,needs,ts}` — no token to key on — so the
+  new suite RENDERS `cloud_map`'s printf and feeds it to the sweep, and a future rewording goes red
+  instead of silently stranding rows.
+
+  **Applied to the live box:** 9 abandoned sandboxes reaped (every cloud branch ref freed) · cure
+  sweep run → **all 20 hostage rows now `open`** (blocked 194 → 181) · `claude/fire-20260818T075756Z
+  -6910-1` landed as **`c0fa70e5a`**, content-verified (`git diff origin/main <branch> -- <path>`
+  EMPTY, patch-id match), `cc-cloud` reads `state=LANDED`, and row **`5ab3327ed0c8` closed `done`**
+  on that evidence. That is A2's probe, passed: spawn → work → land → close.
+
+  **Disposition of all 70 branches (none dropped):** 34 **PARKED-BY-DESIGN** (49 commits) — their
+  declarations were marked terminal in a **21-second burst on 2026-08-18T03:53:57–03:54:18Z**, 36 of
+  the 41 with no success marker, and `.retired` records only a timestamp, so the store cannot say
+  who or why. Reviving them is a value fork with a safe default, so it is decision packet
+  **`922699aacda0`** (class B — the tool's contract reserves C for hard blocks carrying NO default),
+  not a guess. 33 **LANDABLE NOW** (38 commits) · 3 **NEEDS REBASE** (4 commits, the rc-70 class).
+
+  **…and what a `--all` sweep then showed, which is the honest tail.** With the rail working, the
+  sweep correctly SKIPPED all 34 retired as terminal, HEALED several diverged local heads through
+  the new path, landed the acceptance branch, and then stopped on a real rebase conflict. Re-measured
+  after: **34 retired · 16 active-and-CLEAN · 20 active-and-CONFLICTED**, up from 3 conflicted at
+  intake. That rise is not a regression, it is the shape of the work: a large share of these branches
+  edit **the same file** (`docs/research/venue-foreign-repo-recurrence-2026-08-17.md` — seven of them
+  are successive essays on one recurring dispatch), so landing any one makes its siblings conflict by
+  construction. They are the rc-70 class §4 already assigns to W3 refusal routing — a genuine content
+  conflict a VM must resolve, not a lane defect. **The lane is fixed; the queue behind it is not
+  empty, and one sweep was never going to empty it.** A conflicted sweep also leaves a sandbox with a
+  rebase in progress, which is precisely the debris `cd5d009b5` now reaps on the next attempt instead
+  of refusing forever — observed live: one such sandbox was left, its creator dead, and the new
+  predicate classified it ownerless; a second, whose creator was still ALIVE, was correctly left
+  untouched.
+
+  **Venue policy — no change, and it is not a fork.** The brief inherited §1.4's warning that
+  `CC_DISPATCH_VENUE_ONLY=cloud` "parks the local majority indefinitely". **§4 A4 already supersedes
+  that with a reason, and the reason measures TRUE today:** Lane B is drained by the local
+  goal-armed chain, not the dispatcher — origin/main took **61–110 commits every day** 08-16→08-22.
+  The dispatcher parks 229 of 248 dispatchable rows, and those rows are Lane B's, not its. Flipping
+  it to local would fire panes that collide with the drain session's leases (exactly A4's warning)
+  and blow the concurrency budget — the capacity gate refused this session's own subagents at 8
+  sessions mid-turn. Keep it.
+
+  **Method notes worth keeping.** Two of this session's own instruments lied before they were
+  trusted: a `probe 2>/dev/null | wc -l` rendered a FAILED command as a clean `0`, and an unquoted
+  path list silently became ONE bogus pathspec because **the Bash tool runs zsh, which does not
+  word-split** — both fixed by re-running in real bash from a file. A first fix was written into
+  desk-land.sh and REVERTED when its own red-proof showed the production path never reaches that
+  branch (`find_worktree_for_branch` and `worktree_holding` are byte-identical by design, so the
+  sandbox is found as a "live worktree" and the throwaway path is never taken). And the land gate
+  caught two DEAD negated assertions in this session's new tests plus an SC2129 — the gate was right
+  about the red-proof, twice.
+
 - **2026-08-23 — drain recycle #165: an allowlist of three role NAMES had gone ANTI-CORRELATED with
   reality — it admitted three roles of which zero resolved and refused the only two that did, and a
   refusal here DELETES THE BRANCH. filed 0 / closed 1 / 2 commits. NINTH CONSECUTIVE close overall,
