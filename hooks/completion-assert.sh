@@ -713,7 +713,7 @@ fi
 #   The literal below is the FALLBACK, not a second definition: this arm must survive a missing lib
 #   (an assert that stops asserting is worse than one that duplicates six tokens), and
 #   tests/completion-assert.bats pins the two against each other so they cannot diverge unnoticed.
-CA_PLACEHOLDER='<[A-Za-z][A-Za-z0-9_.-]*>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
+CA_PLACEHOLDER='<[A-Za-z][A-Za-z0-9 _.#-]*[A-Za-z0-9]>|<[A-Za-z]>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
 _ca_plib="${PLACEHOLDER_LIB:-$_cascd/lib/placeholder.sh}"
 [ -f "$_ca_plib" ] || _ca_plib="$CFG/hooks/lib/placeholder.sh"
 [ -f "$_ca_plib" ] || _ca_plib="$HOME/.claude/hooks/lib/placeholder.sh"

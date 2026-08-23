@@ -21,7 +21,32 @@
 #   redirect (`cmd < file` has spaces; `<<EOF` is doubled). `$VAR`, `~`, `$(cmd)` and backticks are
 #   deliberately EXCLUDED and must stay excluded: a shell RESOLVES those on paste, so a line
 #   carrying them is genuinely runnable.
-CC_PLACEHOLDER_RE='<[A-Za-z][A-Za-z0-9_.-]*>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
+#
+# ── SPACES INSIDE THE BRACKETS (2026-08-23, operator ruling) ──
+#   The class held no SPACE, so it caught `<addr>` and `<pw>` and missed the form a model actually
+#   writes when the value is DESCRIBED rather than named:
+#
+#       --secret-string '{"email":"…","password":"<your SevenRooms password>"}'
+#
+#   That shipped to the operator under a `▶ Run this:` marker — the one place the contract promises
+#   a literal, pasteable command — and drew "we cant have placeholders … unless you truly want me
+#   to run as is there". The rule was already written and simply did not match. This is a widened
+#   class, not a new arm.
+#
+#   REDIRECTS STILL CANNOT MATCH, and the two anchors are what guarantee that — not the absence of
+#   the space, which is what the old comment below relied on:
+#     · `<` must be followed IMMEDIATELY by a letter, so `cmd < file` cannot match.
+#     · the character before the closing `>` must be alphanumeric, so `cat <<EOF > out` cannot
+#       match: its candidate content is `EOF ` and ends in a space. That case is precisely what
+#       admitting the space would otherwise let in, and is the reason for the trailing anchor.
+#   NO PARENTHESES, and that is a correctness constraint rather than a style one. This regex is
+#   consumed by BOTH bash `[[ =~ ]]` (POSIX ERE) and jq `scan()` (Oniguruma). A capture group is
+#   the one construct they disagree about: jq's `scan` returns the CAPTURES when the pattern has a
+#   group and the whole match when it does not, so writing the two-or-more case as
+#   `<[A-Za-z](…)?>` silently changed every rendered token from `<your-address>` to `our-addres`.
+#   Non-capturing `(?:…)` is not available — POSIX ERE has no such form. So the length cases are
+#   spelled as two alternatives instead. Ten tests caught this; keep it group-free.
+CC_PLACEHOLDER_RE='<[A-Za-z][A-Za-z0-9 _.#-]*[A-Za-z0-9]>|<[A-Za-z]>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
 
 # ── jq side ─────────────────────────────────────────────────────────────────────────────────────
 # Every DISK-driven consumer (operator-readout's decision + backlog legs, cc-do's backlog leg)
