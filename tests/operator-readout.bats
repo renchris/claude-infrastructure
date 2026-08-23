@@ -908,6 +908,128 @@ hookrun_sid() { # $1=session_id $2=cwd
   [ "$msg" = "$ref" ]
 }
 
+# ── ✎ A VALUE IS MISSING (2026-08-22 operator incident) ───────────────────────────────────────────
+# THE DEFECT: a close plattered `aws sns subscribe … --notification-endpoint <your-address>` under a
+# run marker. `▶` is a PROMISE — "paste this" — and a template breaks it in the one place the
+# operator trusts. completion-assert D5 catches the MODEL's prose, but only at Stop, i.e. after they
+# have already read it. The rows THIS hook renders from disk it can refuse to platter, which is the
+# only half of this defect that is prevention rather than apology.
+@test "PLACEHOLDER: a stored run command with a hole in it renders ✎ SUPPLY, never ▶" {
+  _stub_backlog "[ $(_blocked_item ph-1 "Subscribe the alerts inbox" \
+      "the email address the bridge alarms should go to" \
+      "aws sns subscribe --topic-arn arn:x --protocol email --notification-endpoint <your-address>" S1) ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  [ "$status" -eq 0 ]
+  # NAMES the missing value, and says what it IS — the filer's own prose, the only party who knows
+  echo "$output" | grep -q '✎ SUPPLY <your-address> — the email address the bridge alarms should go to   \[this session ph-1\]' || false
+  # the mark it must NOT get, and the command it must NOT hand over: there is nothing here to select
+  ! echo "$output" | grep -q '▶' || false
+  ! echo "$output" | grep -q 'aws sns subscribe' || false
+}
+
+@test "PLACEHOLDER: the two conventional literals convict too (YOUR_ / PASTE_)" {
+  _stub_backlog "[ $(_blocked_item ph-2 "Set the key" "operator must mint it" "aws configure set key YOUR_KEY_ID" S1),
+                   $(_blocked_item ph-3 "Post the token" "operator must copy it" "curl -H tok:PASTE_TOKEN_HERE x" S1) ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '✎ SUPPLY YOUR_KEY_ID' || false
+  echo "$output" | grep -q '✎ SUPPLY PASTE_TOKEN_HERE' || false
+}
+
+@test "PLACEHOLDER: a shell-RESOLVED token is not a placeholder — the row stays ▶" {
+  # \$VAR / ~ / \$(cmd) are resolved by the shell on paste, so a line carrying them is genuinely
+  # runnable. The regression this guards is the tempting one: widening the shape until the board
+  # convicts itself and every ▶ becomes a ✎.
+  _stub_backlog "[ $(_blocked_item ph-4 "Load the dispatcher" "operator must load it" \
+      'launchctl load ~/L/$USER-dispatcher.plist' S1) ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '▶ launchctl load ~/L/\$USER-dispatcher.plist' || false
+  ! echo "$output" | grep -q '✎' || false
+}
+
+@test "PLACEHOLDER: a hole inside a TRAILING # COMMENT does not convict a runnable command" {
+  # MEASURED, not hypothetical: of the 71 live blocked rows carrying a `run`, exactly one matches the
+  # shape — 6484a07b7221, ending `… exit \$_rc   # last attempt: rc=143 (SIGTERM), head pinned at
+  # <unrecorded>`. That command runs perfectly. Convicting it would put a "supply a value" row on the
+  # board for a value nobody needs — the board lying, which is how it teaches the operator to skim.
+  _stub_backlog "[ $(_blocked_item ph-5 "Retry the land" "operator must retry it" \
+      'bash ship-land.sh; exit $_rc   # last attempt: rc=143, head pinned at <unrecorded>' S1) ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '▶ bash ship-land.sh' || false
+  ! echo "$output" | grep -q '✎' || false
+}
+
+@test "PLACEHOLDER: a decision packet's run_command is held to the same rule" {
+  # The decision leg has its own ▶ arm; a fix covering only the backlog leg would leave the same
+  # unpasteable line reachable by another route.
+  cat > "$CC_DECISIONS_DIR/dph.json" <<'EOJ'
+{"id":"dph1234","class":"C","status":"open","created":"2026-08-22T00:00:00Z",
+ "what_plain":"Subscribe the alerts inbox to the topic. Tail.",
+ "run_command":"aws sns subscribe --notification-endpoint <your-address>"}
+EOJ
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '✎ SUPPLY <your-address> — Subscribe the alerts inbox to the topic' || false
+  ! echo "$output" | grep -q 'aws sns subscribe' || false
+}
+
+@test "PLACEHOLDER COLOUR: ✎ carries SGR, ▶ rows stay byte-identical (paste-safety not traded)" {
+  # MEASURED (docs/research/tui-systemmessage-render-2026-08-22.md): a Stop systemMessage renders in
+  # the TUI's own grey, an ESC we emit survives verbatim to the terminal, and markdown does NOT
+  # render — so ANSI is the only colour lever in this block, and it is the operator's ask ("so I can
+  # see it and not gloss over it"). THE CONSTRAINT: a runnable line must not change one byte for it.
+  _stub_backlog "[ $(_blocked_item pc-1 "Subscribe" "the address alarms go to" \
+      "aws sns subscribe --notification-endpoint <your-address>" S1),
+                   $(_blocked_item pc-2 "Load it" "operator must load it" "launchctl load ~/x.plist" S1) ]"
+  plain="$(CC_OPREADOUT_COLOR=0 "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1)"
+  lit="$(CC_OPREADOUT_COLOR=1 "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1)"
+  esc="$(printf '\033')"
+  # off ⇒ not one escape byte anywhere (this is what /wrap's model-captured pull surface gets)
+  ! printf '%s' "$plain" | grep -q "$esc" || false
+  # on ⇒ the SUPPLY clause carries the TUI's own warning amber, closed with 22;39 — NOT 0m: this line
+  # renders INSIDE the TUI's styled block, and 0m would reset attributes the renderer set around us
+  printf '%s' "$lit" | grep -q "${esc}\[1;38;2;255;193;7mSUPPLY <your-address>${esc}\[22;39m" || false
+  # …and the ▶ row is byte-identical with colour on and off
+  [ "$(printf '%s' "$plain" | grep '▶')" = "$(printf '%s' "$lit" | grep '▶')" ]
+  # the mark is NEVER preceded by an escape: the downstream `^ [0-9]+ (▶|◆|✎)` count and every test
+  # anchored on ' ✎ ' would break if colour started before it
+  printf '%s' "$lit" | grep -q " ✎ ${esc}\[" || false
+}
+
+@test "PLACEHOLDER: NO_COLOR is honoured, and --render at a non-tty is plain by default" {
+  _stub_backlog "[ $(_blocked_item pc-3 "Subscribe" "the address" "cmd --to <your-address>" S1) ]"
+  esc="$(printf '\033')"
+  run env NO_COLOR=1 CC_OPREADOUT_COLOR=auto "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  ! echo "$output" | grep -q "$esc" || false
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1     # bats captures ⇒ stdout is not a tty
+  ! echo "$output" | grep -q "$esc" || false
+  echo "$output" | grep -q '✎ SUPPLY <your-address>' || false
+}
+
+@test "PLACEHOLDER: hook mode DOES colour — its destination is the TUI, and that is measured" {
+  # The one deliberate push/pull difference. Hook output is decoded by the TUI (jq emits the ESC as
+  # the \\u001b escape the pty probe measured surviving); --render's is captured by the MODEL, where
+  # escape bytes are noise it would relay as prose. Pinned so the difference stays a decision rather
+  # than being rediscovered later as a bug.
+  w="$(mkrepo_landed phc)"
+  _stub_backlog "[ $(_blocked_item pc-4 "Subscribe" "the address alarms go to" "cmd --to <your-address>" live-sid-9) ]"
+  msg="$(hookrun_sid live-sid-9 "$w" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q "$(printf '\033')\[1;38;2;255;193;7mSUPPLY" || false
+}
+
+@test "PLACEHOLDER: a missing lib degrades to TODAY'S render, never to convict-everything" {
+  # The failure mode worse than the defect: an empty \$ph makes jq's `test(\"\")` true for EVERY row,
+  # so a lib that failed to resolve would turn the whole board into ✎. The fallback defs answer
+  # `false`, restoring the pre-2026-08-22 render exactly.
+  _stub_backlog "[ $(_blocked_item ph-6 "Load it" "operator must load it" "launchctl load ~/x.plist" S1),
+                   $(_blocked_item ph-7 "Subscribe" "the address" "cmd --to <your-address>" S1) ]"
+  hidden="$BATS_TEST_TMPDIR/hidden-hook"; mkdir -p "$hidden/lib"
+  cp "$HOOK" "$hidden/"; cp "$REPO/hooks/lib/idl-log.sh" "$hidden/lib/"
+  HOME="$BATS_TEST_TMPDIR/nohome" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nocfg" \
+    run bash "$hidden/operator-readout.sh" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q '✎' || false
+  echo "$output" | grep -q '▶ launchctl load ~/x.plist' || false
+}
+
 # ── 🚀 (face 4 of the inertness generator) ────────────────────────────────────────────────────────
 # wrap-ledger grew a rung between 📦 and 👤: landed on trunk, but the LIVE LAYER — the store
 # behaviour actually reads — is behind past its converge budget, or a migration carrying the
