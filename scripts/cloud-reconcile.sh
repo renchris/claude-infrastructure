@@ -639,6 +639,21 @@ fill_paths() {  # <decl-id> — best-effort, never fatal to a land that already 
   return 0
 }
 
+# ── the ledger verdicts that rode home with the work ─────────────────────────────────────────
+# A cloud VM cannot write ~/.claude/autonomy/backlog.jsonl, so it records its `done`/`block`
+# verdicts as files under autonomy/handback/ and they arrive on this box by the same land that
+# brought the diff (scripts/backlog-handback.sh — full argument in its header). This is the one
+# place that is guaranteed to run after they arrive: a cloud branch can only reach trunk through
+# here. REPORT-ONLY and fail-open — it never applies anything, never touches this script's exit
+# code, and is silent when nothing is pending, so the sweep's own verdict cannot be confused with
+# the ledger's.
+handback_report() {
+  local hb="$REPO/scripts/backlog-handback.sh"
+  [ -x "$hb" ] || return 0
+  "$hb" render 2>/dev/null || true
+  return 0
+}
+
 land_one() {  # <branch> — classify() must have run for it. → 0 landed, else the lander's code
   local b="$1" rc=0
   local -a a=(--branch "$b" --repo "$C_REPO")
@@ -662,6 +677,7 @@ if [ "$MODE" = list ]; then
   done <<EOF
 $CANDS
 EOF
+  handback_report
   exit 0
 fi
 
@@ -697,6 +713,7 @@ EOF
   if [ "$rc" -eq 0 ]; then
     echo "✓ $TARGET — landed via $LAND_BIN."
     [ "$DRY_RUN" = 1 ] || fill_paths "$C_ID"
+    handback_report
     exit 0
   fi
   echo "✗ $TARGET — lander exited $rc." >&2
@@ -765,5 +782,6 @@ $ORDER
 EOF
 
 echo "cloud-reconcile: $LANDED_N ok, $FAILED failed."
+handback_report
 [ "$FAILED" -eq 0 ] || exit 70
 exit 0

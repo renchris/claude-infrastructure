@@ -14725,6 +14725,64 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     the next wave and burns a slot per pass.
   - **Operator-only step, unchanged and now with both shas:**
     `cc-backlog done 354c73ebd400 --evidence "6ce67de910d6e46f825a7eae0db28b741964f5de + 66857bc2ef210003b34b0889c23dc3191777b881"`
+- **2026-08-23 — `354c73ebd400` dispatched a THIRD time. Re-confirmed done in minutes; the rest of
+  the slot went on the transport both earlier passes named and neither built. The re-derivation was
+  never the work — the missing hand-back was.**
+  - **Re-confirmed on trunk `58816c74`, by content first.** `subshell-cleanup-lint.sh` over trunk's
+    `ship-land.sh`: clean, rc 0; `--selftest` PASS (30), the four cure/bounds fixtures included.
+    `bisect_floor_ok` (`postland-verify.sh:1832`, wired `:2195`) and `bisect_reach_ok` (`:1924`,
+    wired `:2142`) both present. **The shallow-clone trap reproduced exactly as the 08-19 entry
+    predicted** — `git rev-parse --is-shallow-repository` = `true`, ancestry answered NO,
+    `fetch --deepen 400` (811 commits) flipped both shas to YES. That entry's warning is what
+    stopped this pass from re-deriving a diff that would have reverted trunk; it is the single
+    highest-value line either predecessor wrote.
+  - **THE FIX IS THE CHANNEL, not the row.** `scripts/backlog-handback.sh` +
+    `autonomy/handback/` + `tests/backlog-handback.bats`, wired into `scripts/cloud-reconcile.sh`
+    at all three verbs. An off-box worker records its `done`/`block` as a JSON file in the repo;
+    the record rides home on the same land as the diff; `render` surfaces ONE command and
+    `CONFIRM=1 … apply` folds it into the ledger. Same shape as `offbox-green-pull.sh` in the
+    opposite direction — a verdict nobody transports is a verdict nobody enforces.
+    - **Wired where it cannot be missed.** `cloud-reconcile.sh` is the ONLY route a `claude/*`
+      branch has to trunk, so the box that lands the work necessarily runs the reporter that
+      surfaces the verdict that came with it. An unwired renderer would have been this same defect
+      wearing a fix's clothes (`tests/backlog-handback.bats` pins the call sites as a ratchet, and
+      says plainly that it is structural, not behavioural).
+    - **The ceiling is enforced, not described.** No `add` verb and an unknown id is REPORTED never
+      filed (so the transport can only advance rows the box already has) · two verbs only ·
+      jq-parsed with every field pattern-validated on the way IN *and* on the way OUT, because the
+      file between them is a git artifact a later commit can edit · payload reaches `cc-backlog` as
+      argv, never as shell text · `apply` is `CONFIRM=1` default-off, so the unattended path can
+      SURFACE a verdict and can never spend one.
+    - **`apply` verifies by re-reading the ledger, never by the exit code.** `cc-backlog done` on an
+      unknown id exits **0** with a message — so an exit-code check would have reported a no-op as
+      an applied verdict. It asserts `wasDone`, which is the DONE LATCH `cc-dispatch` reads, i.e.
+      the field that actually stops the re-dispatch; a `done` that moved `status` and not the latch
+      would have closed the row and re-dispatched it anyway.
+    - **`[]` is not an answer.** `cc-backlog list --all --json` prints `[]` rc 0 against a MISSING
+      ledger, byte-identical to an empty one, so the ledger FILE is probed directly: off-box, every
+      record reads `NO-LEDGER` and `list` says CANNOT FOLD rather than "0 pending". The bats control
+      asserts the string `0 pending` never appears there.
+    - **Two defects the repo's own gate and lints caught before they shipped**, both worth keeping:
+      (1) `IFS=$'\t' read` COLLAPSES runs of tabs — tab is an IFS whitespace character — so an
+      `@tsv` row with two adjacent empty fields shifted every later value one column left and
+      `origin` landed in `needs`. Replaced with one `jq` call per field. (2) `cmd | grep -q` is
+      unusable as an assertion under `pipefail`: grep exits at the first match, the producer takes
+      SIGPIPE, and a PASSING assertion reports 141 — intermittently, depending on where the matching
+      row sits. The repo already has `pipefail-sigpipe-lint` for exactly this class. The land gate's
+      `dead-assertion` arm then caught a `! grep -q …` control that errexit can never reach;
+      `bats-assert-liveness-fix.py` revived it and it was mutant-checked in both directions.
+  - **Gate state, measured not asserted.** `ship-land.sh --precheck --working` reaches
+    `unattended-path-lint --selftest FAILED (12 of 39)` and stops. Reproduced IDENTICALLY — same
+    count — on a pristine detached `origin/main` worktree, so nothing in this diff reaches it: the
+    lint's fixtures are calibrated to macOS PATHs and this is a Linux container (`tmux`/`yq` sit on
+    `/usr/bin` here, Homebrew-only there). `shellcheck` clean on both changed scripts;
+    `backlog-handback --selftest` PASS (22); `tests/backlog-handback.bats` 13/13;
+    `tests/cloud-reconcile.bats` 31/31 still green.
+  - **Operator-only step — now ONE command instead of a transcription.** After
+    `cloud-reconcile.sh` lands this branch it prints the block itself; the command is
+    `CONFIRM=1 scripts/backlog-handback.sh apply`. The old hand-typed
+    `cc-backlog done 354c73ebd400 --evidence "…"` still works and is equivalent; the record in
+    `autonomy/handback/` carries both shas so nothing has to be re-derived to run either.
 - **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
   (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
   `6644273f3`; content-verified on `origin/main`.**
