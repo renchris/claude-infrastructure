@@ -175,6 +175,39 @@ _cc_sync_memory_mirror() {
       [[ "$_CC_LINK" == "$c" ]] && continue                        # already shared
     fi
     if [[ -d "$d" && ! -L "$d" ]]; then                            # dst has its own real memory
+      if [[ ! -d "$c" ]]; then
+        # ADOPT — safe in DEFAULT mode, because there is NOTHING TO MERGE. Canonical does not
+        # exist, so no union has to be computed and no copy of anything can be lost: the move is
+        # a rename and the symlink hands it straight back, so the writing session keeps reading
+        # its own memory live (proven by hand on `sevenrooms-bridge`, 2026-08-22).
+        #
+        # This case used to fall into the `continue` below, which is why a project first touched
+        # on a NON-PRIMARY account stranded FOREVER: no automation ever passes --convert
+        # (config-mirror-assert.sh runs the mirror in default mode at SessionStart), so the skip
+        # that is correct for the merge was also skipping the case that needs no merge. 13 slugs
+        # were invisible to every other account when this was measured on 2026-08-22 — and since
+        # the router picks an account by live quota headroom, that is silent knowledge loss.
+        #
+        # `mkdir "$c"` is an ATOMIC CLAIM, not a convenience. Between the -d test above and the
+        # move, canonical can come into existence: the SAME slug can be stranded on two accounts
+        # at once (`agent-workstation` was, on tertiary and quaternary), and an account-1 session
+        # can start writing memory at any moment. A plain `mv "$d" "$c"` in that window does not
+        # fail — POSIX mv moves the source INSIDE an existing directory, silently producing
+        # "$c/memory" that no reader ever looks at. mkdir fails instead, this run leaves the slug
+        # alone, and the next one sees both sides populated and routes to the merge branch, which
+        # is the correct handling once canonical is real.
+        local -a _ents
+        mkdir -p "${c:h}" 2>/dev/null
+        if command mkdir "$c" 2>/dev/null; then
+          _ents=( "$d"/*(ND) )
+          (( $#_ents )) && command mv -- $_ents "$c"/ 2>/dev/null
+          # rmdir REFUSES a non-empty directory, so a partially-moved slug can never reach the
+          # symlink: `ln -sfn "$c" "$d"` onto a surviving real dir would create "$d/memory"
+          # rather than replace "$d", stranding the remainder one level deeper than it started.
+          command rmdir "$d" 2>/dev/null && ln -sfn "$c" "$d"
+        fi
+        continue
+      fi
       (( convert )) || continue                                    # safe mode: don't merge under a live session
       mkdir -p "$c"; command rsync -a --ignore-existing "$d"/ "$c"/ 2>/dev/null
       if [[ -f "$d/MEMORY.md" && -f "$c/MEMORY.md" ]] && ! cmp -s "$d/MEMORY.md" "$c/MEMORY.md"; then
