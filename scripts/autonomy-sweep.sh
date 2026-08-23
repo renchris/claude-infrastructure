@@ -984,6 +984,34 @@ log_idl cloud-refusal-route "$(jq -cn --arg c "$_cloudrfz_rc" \
   '{cloud_refusal_rc:$c,
     note:"0 = pass completed (per-refusal outcomes in the refusal-route ledger); 4 = another pass held the lock; 124 = the bound cut the pass, next tick resumes (a refusal is idempotent per artifact, so nothing is double-sent); skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never send off-box"}')"
 
+# ── CUSTODY DEATHWATCH — the arm that runs when NOBODY IS HOME ────────────────────────────────────
+# The two blocks above only ever speak to an address the FIRE recorded. Measured 2026-08-23: 1055 of
+# cloud-return's 1116 wake attempts resolved to "the declaration names no notify-back target —
+# nothing to wake", because a launchd-dispatched fire has no ITERM_SESSION_ID and its cwd is `/`.
+# So the news existed 1116 times and reached someone 61 times, and the 175 undischarged cloud debts
+# sit in a shard keyed on `/` that no `--cwd .` consumer can see. Separately, a peer killed by
+# SIGKILL runs no EXIT trap and no self-close, so the local lane's two discharge routes both miss it
+# (panes 377 and 552 are the surviving proof).
+#
+# This pass closes both by reading the custody store STORE-WIDE and reporting gone/stale peers to an
+# address that exists by construction — the originator's inbox when its pane is alive, else ONE
+# aggregated `cc-backlog needs` row. It NEVER discharges a debt, so its worst failure is operator
+# noise, never a debt closed over live work. Full rationale in the script header.
+#
+# It carries its OWN deployed-copy guard keyed the same way this file's is, so the call here is
+# unconditional and a suite copy is inert on the far side rather than by omission here — one guard,
+# in the file that does the writing.
+_custdw="$_SWEEP_DIR/custody-deathwatch.sh"
+_custdw_rc="skipped"
+if [ -x "$_custdw" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 120 bash "$_custdw" --sweep >/dev/null 2>&1
+  else bash "$_custdw" --sweep >/dev/null 2>&1; fi
+  _custdw_rc=$?
+fi
+log_idl custody-deathwatch "$(jq -cn --arg c "$_custdw_rc" \
+  '{custody_deathwatch_rc:$c,
+    note:"0 = pass completed (per-peer verdicts in ~/.claude/autonomy/custody-deathwatch/deathwatch.jsonl, which also records whether each oracle could run); 124 = the bound cut the pass, next tick resumes (the pass is latched per marker, so nothing is double-reported); skipped = tool absent (NOT clean). A checkout copy self-reports skipped-not-deployed in its own ledger rather than here."}')"
+
 # ── 2f. UNFIRED BRIEFS — a succession that was WRITTEN and never FIRED ────────────────────────────
 # backlog 4a11a0ac850a: a lead announced a recycle, wrote the successor brief, and died before
 # firing it. Nothing noticed, because the only artifact was a file in /tmp that looks exactly like
