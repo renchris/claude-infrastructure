@@ -1144,3 +1144,107 @@ _filefix() {   # a stub cc-backlog that records its argv; nothing here can reach
     fi
   done
 }
+
+# ── ORPHAN: the live link whose repo source was DELETED (backlog 456d5c61f4c8) ───────────────────
+# THE FORWARD WALK CANNOT SEE THIS CLASS, BY CONSTRUCTION. Every leg above iterates the TRACKED
+# listing and asks "is there a live counterpart?". When a file is deleted from the repo it leaves
+# that listing, so the walk never visits it again and its live symlink — which still resolves on
+# PATH via `command -v`, and then fails with ENOENT when executed — is invisible to this auditor
+# forever. Measured 2026-08-23 on the operator's live layer: TWO such links, ~/.claude/bin/
+# cc-cloud-watch (source deleted by 799c3282a) and ~/.claude/bin/browsermcp-wrapper.sh (deleted by
+# 47cc3f279, i.e. the generator was still minting them 4 days AFTER the row was filed).
+#
+# The sweep's scope is DERIVED from the want-list rather than maintained beside it: a second
+# directory list is exactly the "two auditors over one population with different state models"
+# divergence this file has already paid for twice (see the backlog-consolidation note above). The
+# price is honest and stated here — a directory whose LAST tracked file was deleted contributes no
+# rel to the walk and is therefore not swept.
+@test "ORPHAN: a live link whose repo source was DELETED is reported, exit 1 (RED-PROOF)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-alive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-alive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-alive.sh"
+  _track                                   # cc-alive.sh is tracked AND healthy ⇒ zero MISSING
+  # the deleted one: a live link into this repo, with no tracked source and no file on disk
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-deleted.sh" "$CC_PARITY_LIVE/hooks/lib/cc-deleted.sh"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ORPHAN: rm -f $CC_PARITY_LIVE/hooks/lib/cc-deleted.sh"* ]] || false
+  [[ "$output" != *"MISSING: ln -sf"* ]]   # it is NOT a miss — there is nothing to link it to
+}
+
+@test "ORPHAN control: a HEALTHY link in the same swept directory is never reported" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-alive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-alive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-alive.sh"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ORPHAN"* ]]
+}
+
+@test "ORPHAN control: a dangling link pointing OUTSIDE this checkout is not ours to judge" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib" "$BATS_TEST_TMPDIR/elsewhere"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-alive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-alive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-alive.sh"
+  _track
+  # A dangling link into someone else's tree. deploy-link-parity.sh's header states the same scope
+  # clause: "a link pointing anywhere else is explicitly not ours to judge".
+  ln -sfn "$BATS_TEST_TMPDIR/elsewhere/gone.sh" "$CC_PARITY_LIVE/hooks/lib/foreign.sh"
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ORPHAN"* ]]
+}
+
+@test "ORPHAN control: a dangling link to a STILL-TRACKED file stays MISSING and is never also ORPHAN" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh"
+  _track
+  # Same shape as the DANGLING case above: the source EXISTS, the link is simply pointed at the
+  # wrong place. That is a MISS the refresh repairs with `ln -sf`. Claiming it as an ORPHAN too
+  # would hand deploy-live a prune AND a relink for one file in one tick — a flap, two lines, one
+  # remedy. The forward walk claims the path first; the sweep defers to it.
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/gone.sh" "$CC_PARITY_LIVE/hooks/lib/cc-interactive.sh"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf"* ]] || false
+  [[ "$output" != *"ORPHAN"* ]]
+}
+
+@test "ORPHAN control: a REAL untracked file in a swept directory is not an orphan link" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-alive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-alive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-alive.sh"
+  _track
+  # An unversioned REAL file on an executed surface is deploy-link-parity.sh's STRAY class, which
+  # asks a different question and has a different remedy. This leg deletes; it may only ever claim
+  # a path that is already inert.
+  printf '#!/bin/bash\n' > "$CC_PARITY_LIVE/hooks/lib/hand-written.sh"
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ORPHAN"* ]]
+}
+
+@test "ORPHAN control: a link to a PRESENT-but-UNTRACKED source resolves, so it is never an orphan" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-alive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-alive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-alive.sh"
+  _track                                   # cc-alive.sh is tracked; the next one deliberately is NOT
+  # THE ONE CASE THE RESOLVES-GUARD ALONE DECIDES, and the reason it is a separate test: a source
+  # PRESENT on disk but absent from the INDEX — a file mid-authoring, or landed and not yet added.
+  # The forward walk reads `git ls-files`, so it never claims this path and the claim-check cannot
+  # help; every other control here is shadowed by that check. Only `[ -e ]` stands between a live,
+  # WORKING link and an ORPHAN verdict whose consumer deletes. Mutation-attributed: dropping the
+  # resolves-guard reds this case and no other.
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/not-added-yet.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/not-added-yet.sh" "$CC_PARITY_LIVE/hooks/lib/not-added-yet.sh"
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ORPHAN"* ]] || false                # `|| false`: a mid-test [[ ]] is dead otherwise
+  [ -L "$CC_PARITY_LIVE/hooks/lib/not-added-yet.sh" ]   # and it is still there to be linked
+}

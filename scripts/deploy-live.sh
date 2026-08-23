@@ -991,6 +991,57 @@ copy_drift_notice() { # <assert stdout> — never fails, never mutates the live 
   return 0
 }
 
+# ── ORPHAN prune: the live link whose repo source was DELETED ────────────────────────────────────
+# The mirror of link_refresh, and the other half of the same architecture: this consumes a VERDICT
+# the assert produces rather than re-deriving a want-list, for the reason link_refresh's header
+# gives — two auditors over one population that do not share a state model disagree.
+#
+# WHY IT EXISTS (backlog 456d5c61f4c8). The assert's forward walk iterates the TRACKED listing, so a
+# file DELETED from the repo leaves that listing and its live symlink is never visited again. The
+# link survives: `command -v` resolves it, and the exec then fails with ENOENT. Nothing reported it.
+# Measured 2026-08-23 on the live host — bin/cc-cloud-watch (source deleted by 799c3282a) and
+# bin/browsermcp-wrapper.sh (deleted by 47cc3f279, four days AFTER the row was filed).
+#
+# THE SAFETY ARGUMENT, WHICH IS THE WHOLE DESIGN. This is the only leg on this path that DELETES, at
+# 144 ticks/day, and the row that asked for it feared exactly that: "a prune leg with a wrong
+# is-this-tracked predicate would DELETE live links". That fear is answered by not using that
+# predicate. The question here is never "is this tracked?" — it is "is this link ALREADY DEAD?", and
+# the two conditions are re-derived HERE, on this side, rather than taken from the verdict:
+#
+#   [ -L "$dest" ]   it is a symlink        — a real file is deploy-link-parity's STRAY class
+#   [ ! -e "$dest" ] it does not resolve    — so the path is ALREADY INERT
+#
+# A path satisfying both cannot be serving any caller: it resolves to nothing before this runs and
+# after. So the worst case of a wrong, stale or corrupted verdict is that a broken link is removed —
+# and if it was broken only because the checkout is mid-branch-switch, link_refresh re-creates it
+# from the same assert's MISSING lines as soon as the source is back. The actuator is the arbiter
+# (memory: make-the-actuator-the-arbiter); tests/deploy-live.bats pins both refusals with verdicts
+# that name a healthy link and a real file.
+orphan_prune() { # <assert stdout> — removes ONLY an already-dead link; honors --dry-run
+  local out="$1" orph line dest n=0
+  orph="$(printf '%s\n' "$out" | grep '^ORPHAN: rm -f ' 2>/dev/null || true)"
+  [ -n "$orph" ] || return 0   # steady state emits NOTHING: --auto's silence contract holds here too
+  while IFS= read -r line; do
+    dest="${line#ORPHAN: rm -f }"
+    [ -n "$dest" ] || continue
+    # Re-derived, NOT trusted. See the block above: these two lines are the entire blast radius.
+    # The `-L` line is deliberately unattributable — no mutant reds it alone, because a real file
+    # passes `-e` and a path that exists in no form makes `rm -f` a no-op. It states the invariant
+    # ("only ever a symlink") for the reader and for the next edit; `-e` is the line doing the work.
+    [ -L "$dest" ] || continue
+    [ -e "$dest" ] && continue
+    if [ "$DRY_RUN" -eq 1 ]; then say "  would prune $dest"; n=$((n + 1)); continue; fi
+    if rm -f "$dest" 2>/dev/null; then n=$((n + 1)); say "  pruned $dest"
+    else say "  FAILED to prune $dest"; fi
+  done <<EOF
+$orph
+EOF
+  if [ "$n" -gt 0 ] && [ "$DRY_RUN" -eq 1 ]; then say "orphan-prune: $n dead live link(s) WOULD BE pruned; nothing mutated"
+  elif [ "$n" -gt 0 ]; then say "orphan-prune: $n dead live link(s) removed — the repo source was deleted"
+  fi
+  return 0
+}
+
 link_refresh() { # never fails, never changes the exit code, never touches a PENDING file
   local out rc miss line src dest n=0
   # UNSET ⇒ the default path. SET (including SET-EMPTY) ⇒ honored verbatim, so
@@ -1007,6 +1058,12 @@ link_refresh() { # never fails, never changes the exit code, never touches a PEN
   # BEFORE the steady-state early return below: copy drift PERSISTS by definition (nothing on this
   # path repairs it), so an empty MISSING list is exactly when it must still be reported.
   copy_drift_notice "$out"
+  # BEFORE the steady-state early return below, for the same reason copy_drift_notice is: an empty
+  # MISSING list says nothing about the ORPHAN set, and a tick with dead links but no missing ones
+  # is the ordinary case after a deletion lands. Prune first, then link: the two sets are disjoint
+  # at the producer (the assert's forward walk claims a path before the sweep can), so the order is
+  # a readability choice, not a correctness one.
+  orphan_prune "$out"
   miss="$(printf '%s\n' "$out" | grep '^MISSING: ln -sf ' 2>/dev/null || true)"
   [ -n "$miss" ] || return 0   # steady state emits NOTHING: --auto's silence contract holds here too
   while IFS= read -r line; do
