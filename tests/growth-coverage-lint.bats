@@ -187,3 +187,37 @@ materialize_reference() {  # $1=reference file  $2=root to build
   grep -qE '^cc-teardown +reaper=' "$conf"
   grep -qE '^autonomy/inbox-guard +reaper=' "$conf"
 }
+
+# ── invoked THROUGH a symlink, as the live layer invokes it (row 18ad63b3012a) ─────────────────
+# Every case above presets GROWTH_COVERAGE_SSOT in setup(), which seams straight past the
+# derivation under test — which is why 15 green tests coexisted with a live permanent exit 2.
+# These two unset it deliberately: the SSOT must be found relative to the RESOLVED script, not to
+# the symlink's own directory. ~/.claude/scripts holds per-file symlinks and deploy-live.sh links
+# only *.sh, so the sibling .conf is never deployed and dirname "$0" can only miss.
+# Failure-distinct (L2): pre-fix the first FAILS with status 2 and prints no ssot= line at all.
+@test "the SSOT resolves through a symlink invocation, not to the link's own dir" {
+  local linkdir="$BATS_TEST_TMPDIR/livelayer"
+  mkdir -p "$linkdir"
+  ln -s "$LINT" "$linkdir/growth-coverage-lint.sh"
+  unset GROWTH_COVERAGE_SSOT
+  run bash "$linkdir/growth-coverage-lint.sh"
+  # 2 is the fail-closed "SSOT unreadable" rung — reaching it here is the defect, not a verdict.
+  [ "$status" -ne 2 ]
+  echo "$output" | grep -q "ssot=$REPO/scripts/growth-coverage.conf"
+}
+
+@test "the reaper scan root resolves through a symlink too, not to the live layer" {
+  local linkdir="$BATS_TEST_TMPDIR/livelayer2"
+  mkdir -p "$linkdir"
+  ln -s "$LINT" "$linkdir/growth-coverage-lint.sh"
+  unset GROWTH_COVERAGE_SSOT
+  # A reaper token that exists ONLY in the checkout's scripts/. If the `..` root resolved to the
+  # link's parent instead, REAPER_SCAN's relative `bin hooks scripts` would read a tree without it
+  # and the claim would render as dangling — so this asserts the cd landed in the checkout.
+  echo 'symlink-probe-dir reaper=growth-coverage-lint.sh' > "$BATS_TEST_TMPDIR/probe.conf"
+  mkdir -p "$GROWTH_ROOT/symlink-probe-dir"
+  run env GROWTH_COVERAGE_SSOT="$BATS_TEST_TMPDIR/probe.conf" \
+          bash "$linkdir/growth-coverage-lint.sh"
+  [ "$status" -ne 2 ]
+  [ "$(echo "$output" | grep -c "symlink-probe-dir.*was renamed or deleted")" -eq 0 ]
+}

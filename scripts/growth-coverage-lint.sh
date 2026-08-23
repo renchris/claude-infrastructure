@@ -38,10 +38,38 @@
 #         2 = the SSOT itself is missing/unreadable (fail-closed — a lint that cannot read its own
 #             list must not report health)
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 2
+
+# Resolve $0 THROUGH symlinks before deriving ANYTHING from it. ~/.claude/scripts is a real dir of
+# per-file symlinks into the checkout, so invoked as ~/.claude/scripts/growth-coverage-lint.sh an
+# unresolved dirname yields ~/.claude/scripts — and BOTH derivations below break there, in two
+# different directions:
+#   · the SSOT sibling: ~/.claude/scripts/growth-coverage.conf does not exist and can never exist,
+#     because deploy-live.sh links only *.sh (it has no concept of a .conf payload at all). So the
+#     live-path invocation hit the fail-closed rung and returned exit 2 — a PERMANENT non-verdict,
+#     not a red. Harmless only by accident: com.claude.nightly-regression.plist invokes this from
+#     $REPO. Any caller using the live path got no verdict at all.
+#   · the `..` root: a bare `dirname "$0"/..` is ~/.claude, so REAPER_SCAN's relative `bin hooks
+#     scripts` would read the LIVE layer instead of the checkout — a different population (it holds
+#     session-authored files that are in no commit). Fixing only the SSOT would have UNMASKED that:
+#     exit 2 was the thing suppressing it, so a partial fix trades a loud non-verdict for a quiet
+#     wrong one. Both derivations move together or neither does.
+# macOS ships the BSD userland, so there is no `readlink -f`; the manual loop is the portable form
+# (bash 3.2 safe). Same shape and same reason as scripts/self-path-lint.sh's own `_resolve_self` —
+# which is the lint that owns this class, and whose ratchet no longer grandfathers this file.
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+cd "$(dirname "$SELF")/.." || exit 2
 
 GROWTH_ROOT="${GROWTH_ROOT:-$HOME/.claude}"
-SSOT="${GROWTH_COVERAGE_SSOT:-$(dirname "$0")/growth-coverage.conf}"
+SSOT="${GROWTH_COVERAGE_SSOT:-$(dirname "$SELF")/growth-coverage.conf}"
 REAPER_SCAN="${GROWTH_REAPER_SCAN:-bin hooks scripts statusline.sh}"
 STRICT=0; SELFTEST=0
 
