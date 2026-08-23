@@ -689,7 +689,12 @@ cc-do')" "$w" "a2-d2-barectl"
   local repo; repo="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # shellcheck disable=SC1090,SC1091
   . "$repo/hooks/lib/placeholder.sh"
-  printf '%s' "$CC_PLACEHOLDER_RE" | grep -q '(' && false || true
+  # Was `… | grep -q '(' && false || true` — the A-&&-never-succeeds family, where BOTH branches
+  # reach a success, so it passed even on a RE that DOES contain '('. Revived by
+  # scripts/bats-assert-liveness-fix.py (indentation restored by hand) and mutant-verified in both
+  # directions: a RE without '(' passes, a RE of "<(a|b)>" fails, and the OLD form passed that same
+  # mutant. Pre-existing since 219697c32; surfaced because this land touches the file.
+  ! printf '%s' "$CC_PLACEHOLDER_RE" | grep -q '(' || false
 
   # …and the property that absence protects: scan returns the WHOLE token.
   run jq -nr --arg s 'subscribe --endpoint <your-address>' --arg ph "$CC_PLACEHOLDER_RE" \
