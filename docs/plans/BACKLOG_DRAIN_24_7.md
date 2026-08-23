@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — CLOUD VM, handed THIS PLAN'S OWN SSOT ROW (`70f0001c657b`). The row is unhostable
+  here and that is now MEASURED, not argued — and the measurement found something the box cannot
+  see: THIS CHAIN'S GOAL PREDICATE CLEARS VACUOUSLY IN AN EMPTY-STORE ENVIRONMENT. filed 0 /
+  closed 0 / 2 commits. The row is NOT closed and NOT blocked; two local commands are owed (below).**
+
+  **FIRST STEP, per the brief: `git rev-list --count HEAD..origin/main` = 0 — this tree IS trunk
+  (`c9a6ece6`), so nothing below is a stale read.** The clone is `--is-shallow-repository true` at
+  **exactly 50 commits**, which incidentally re-confirms `cc-eligible`'s `CLOUD_DEPTH = 50` as
+  current (cloud-vm-shallow-clone-blast-radius-2026-08-11 §1) rather than a stale constant.
+
+  🚨 **THE FINDING THAT ONLY A VM COULD MAKE: §4.1's goal is satisfied by an environment with no
+  backlog.** Run verbatim here, `cc-backlog list --open --json` prints `[]`, `| jq length` prints
+  **`0`**, the condition-filtered form prints **`0`**, and **every rc is 0**. cc-backlog fails OPEN
+  on an unreadable store — correct, and its own design — and `/goal`'s evaluator is a TOOL-LESS
+  model reading only what the session surfaced. So a goal-armed cloud link would read its own
+  success condition as CLEARED, immediately, having drained nothing. That is §1's false-zero by a
+  **second road**: §1.1's zero was per-effort and blind to its blocked tail; this one is
+  whole-store and blind to the STORE. Cured in **§4.1 invariant 9** (new): the zero must be printed
+  beside the store fold positive control the recycles already run (`b7252a3bb015` = `OWN=10/RAW=20`)
+  and the negative control (`deadbeefcafe` = 0/0) — the controls existed in every recent recycle's
+  PRACTICE and in none of the TEMPLATE, which is the gap that lets a fresh link skip them
+  (memory: `instruction-to-a-recycling-chain-dies-at-its-brief`).
+
+  **WHY THE ROW CANNOT BE WORKED HERE, measured rather than asserted.** `git ls-files autonomy/` =
+  **0** and `~/.claude/autonomy/` does not exist, exactly as `bin/cc-cloud`'s header states; every
+  wave in this plan is a fold of that file. `cc-notify --role desk` returns
+  `verdict=unresolvable enqueued=0 reason=role-unset` **and** `fallback=phone-unwired`, so the
+  back-channel is doubly dead. As with `ce7651b02a17` (§4, 2026-08-18), **a pushed ref is the only
+  observable this box can read**, which is why this entry is the channel.
+
+  🚨 **AND THE MISROUTE HAS A GENERATOR — 27 OF 44 OPEN PLANS MINT AN OFF-BOX-ELIGIBLE ROW.**
+  `cc-discover`'s C2 critic files one row per open plan as
+  `add_candidate "advance $title" "$proj" "$path" "plan-open"` (cc-discover:273), so the row's
+  ENTIRE `SPAN_FIELDS` span is a one-line headline, a path, and the word `plan-open`. `cc-eligible`
+  classifies exactly that. Run over this row's real span — title, dodRef (both relative and the
+  brief's absolute form), condition, and a plausible source — the verdict is **`eligible`, tokens
+  `[]`, under every reading**, with `launchd plist` and `~/.claude live layer` as positive controls
+  refusing correctly. A ten-word title cannot say what a 15,000-line plan is about, and
+  `BACKLOG_DRAIN_24_7` is one of the 27.
+
+  🚨 **THE OBVIOUS REPAIR IS REFUTED BY ITS OWN CONTROL, WHICH IS THE HALF WORTH KEEPING.** "Then
+  classify the plan BODY" fires on **44 of 44** — a predicate true of every member of its
+  population is not a classifier. So neither the thin span nor the fat one recovers venue for this
+  row class, and the answer is a per-plan **declaration**, not a better guess at text. That is a
+  design change to the venue rule and is **deliberately not built here**, for three independent
+  reasons that all point the same way: `cc-eligible`'s own `OFFBOX_LANE` class exists to refuse
+  off-box edits to the venue rule ("a session this lane created cannot verify a change to the
+  lane"); `bin/cc-venue`'s producer abstains on a shallow clone **by measurement**; and
+  MASTER_OPERATOR_GATED.md (2026-08-15) already declined to add a spelling from one instance. What
+  was missing there was a COUNT — *"the right change needs a count over the very store this venue
+  cannot read"* — and the count above needs no store at all, because the population is a
+  deterministic function of files in the checkout.
+
+  **Landed as an instrument, not a sentence** (cc-eligible's own header: a sentence in a plan is
+  advisory and advisory is behind a diode). `scripts/plan-venue-census.py` + 9 arms in
+  `tests/plan-venue-census.bats`. It **imports cc-eligible's table** rather than re-typing it and
+  takes its population from `find-plan.sh --list-open` rather than minting a fourth `plan_status()`
+  — the two ways this file could rot into a sibling that disagrees with the gate. **Two-sided
+  red-proof, three mutants over the working tree, anchors counted 1 → 0 → 1:** classification
+  neutered → reds ONLY 2, 6, 7; the control branch forced → reds ONLY 5; the bucket header renamed
+  → reds ONLY 3. Arm 6 is the one that earns its keep — pointed at a MUTANT `cc-eligible` carrying
+  one extra spelling, the census verdict must move, which is the only arm a re-typed table fails.
+  ⚠️ **The liveness lint was right about the first draft:** five `[[ "$output" == … ]]` assertions
+  sat non-final and were therefore DEAD (bash exempts `[[ ]]` from errexit); all five are now
+  ordinary `grep -qF` commands, live in any position. Gates run here: `py_compile` ✓ ·
+  `bats-assert-liveness` rc 0 on this file ✓ · `bats-shellcheck-lint` clean ✓ ·
+  `test-hermeticity-lint` clean, 0 new leaks ✓ · shellcheck **0.11.0**, the version `.shellcheckrc`
+  documents the gate as running. `tests/bats-assert-liveness.bats` carries 5 pre-existing reds
+  (3, 4, 13, 20, 35) **identically with these files moved aside** — not this diff's, and named
+  rather than laundered.
+
+  **THE LAND STILL CANNOT RUN OFF-BOX, and the refusal was differenced before being called that**
+  (§4, 2026-08-15, re-confirmed). `ship-land.sh --precheck` reds on one arm:
+  `unattended-path-lint --selftest FAILED (9 of 39) — the detector does not discriminate`, because
+  its fixtures are macOS PATH facts. A worktree checked out at **`origin/main` in this same
+  container** fails **identically, 9 of 39**. This diff touches `docs/plans/*.md`, `*.py` and
+  `*.bats` and **no shell file at all**, so it cannot cause a shell-PATH lint red by construction.
+  The lint fails CLOSED and is right to: on this box a clean verdict would mean nothing. `git push`
+  of the branch is therefore the whole of what this session can do — the local
+  `cloud-reconcile → desk-land → ship-land` chain runs the real gate, which is the lane's design
+  (recycle #166 proved it end-to-end with `c0fa70e5a`), not a bypass of it.
+
+  **TWO COMMANDS ARE OWED LOCALLY — this row is neither `done` nor `block`ed, deliberately.** It is
+  a VENUE constraint, not an operator gate: `block` would park ordinary agent work behind a human
+  who has nothing to do (MASTER_OPERATOR_GATED.md's own rule for this exact class).
+
+      cc-backlog venue 70f0001c657b --venue local \
+        --why "store-fold-deliverable: every wave folds ~/.claude/autonomy/backlog.jsonl, which no VM has"
+      cc-backlog reopen 70f0001c657b          # --force iff the cloud claim still folds LIVE
+
 - **2026-08-23 — drain recycle #166: a row blamed PRIVATE DEFINITIONS, and its own primary exhibit
   replayed EXACTLY — what was missing was TIME. filed 0 / closed 1 / 2 commits. TENTH CONSECUTIVE
   close overall, and the NINTH consecutive close of a row that prescribes its own remedy. Warm
@@ -15385,6 +15475,24 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
 
        SHIP_LAND_SMOKE_BUDGET_S=420 bash scripts/ship-land.sh
        bash scripts/gate-select.sh --direct <parent>...HEAD    # the exact list, before or after
+
+9. 🚨 **THE ZERO-PROOF NEEDS A STORE POSITIVE CONTROL — `0 open` IS ALSO WHAT AN ABSENT STORE
+   PRINTS** (measured 2026-08-23 from the cloud VM that was handed this plan's own SSOT row; §2.1).
+   The goal above clears on *"`cc-backlog list --open --json | jq` output printed showing 0 open"*.
+   Run **verbatim** in an environment where `~/.claude/autonomy/backlog.jsonl` does not exist, that
+   command prints `[]`, `jq length` prints **`0`**, `jq '[.[] | select(.condition=="master-
+   convergence-deadlock")] | length'` prints **`0`**, and **every rc is 0** — cc-backlog's reader
+   fails OPEN on an unreadable store, correctly, and the goal evaluator is a TOOL-LESS model that
+   sees only the printed `0`. So this chain's success predicate is **vacuously satisfiable by an
+   environment that has no backlog at all**: §1's false-zero defect arriving by a second road — not
+   a per-effort zero blind to its blocked tail, but a whole-store zero blind to the store.
+   **The cure is the control the recycles already run and the TEMPLATE never required.** Every
+   recent recycle opens by printing the store fold positive control (`b7252a3bb015` = `OWN=10 /
+   RAW=20`) and the negative control (`deadbeefcafe` = 0/0); nothing above made that part of the
+   GOAL, so a fresh link that skipped it could clear on a number meaning nothing. Print both
+   controls in the same breath as the zero: **a zero beside a live positive control is a drain; a
+   zero standing alone is not evidence of anything** (memory: `zero-claim-must-name-its-excluded-
+   strata`, here in its sharper form — a zero must first name the population it was read FROM).
 
 **Inflow control (the other half of "drain"):**
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
