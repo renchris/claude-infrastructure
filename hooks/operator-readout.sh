@@ -73,11 +73,45 @@
 #                are the dispatcher's work, not operator steps). Header when it is the only signal,
 #                footer otherwise.
 #   Line marks: `▶` = run this exact command · `◆` = judgment/decision (no single command exists) ·
-#   `↳` = N more of this class, and this command lists them (the class-rollup, §4 M2).
+#   `↳` = N more of this class, and this command lists them (the class-rollup, §4 M2) ·
+#   `⊘` = a runnable step its own actuator currently REFUSES (nobody's action) ·
+#   `✎` = A VALUE IS MISSING — the stored command still contains a placeholder, so it is NOT
+#         pasteable. See the ✎ block below; this mark exists because `▶` is a PROMISE ("paste
+#         this") and a template breaks that promise in the one place the operator trusts it.
 #   `yours` reuses that SAME vocabulary rather than minting a glyph: `▶` when the item carries a
 #   `.run`, `◆` when it does not. A new mark would have to be taught; these two already mean
 #   exactly the right thing, and the operator's eye already reads them.
 #   (`▸` is NOT available as a mark — it is the header's own glyph, `OPERATOR ▸`; caught by a test.)
+#
+# ── ✎ A VALUE IS MISSING (2026-08-22, operator incident) ────────────────────────────────────────
+#   THE DEFECT: a close plattered `aws sns subscribe … --notification-endpoint <your-address>` under
+#   a run marker. Operator: *"What is <your-address> — never give us spoon-fed commands if it's not
+#   ready for us to actually run."* Same class as the earlier `git -C <checkout> pull …` they pasted
+#   and got `no such file or directory: checkout`. completion-assert's D5 catches this in the MODEL's
+#   prose, but only at Stop — i.e. after they have read it. This renderer emits its OWN `▶` lines
+#   from disk, so for those it can PREVENT rather than apologise: a stored command whose executable
+#   part still carries a placeholder (hooks/lib/placeholder.sh — one shape, shared with D5 and cc-do)
+#   may NOT render as `▶`. `▶` means "paste this"; a template makes that a lie.
+#   The `✎` row instead NAMES the missing token, carries the filer's own `needs` prose as what the
+#   value IS, and keeps the id so the operator can round-trip. The command itself is deliberately
+#   NOT printed: there is nothing to select, which is the point.
+#
+#   COLOUR — MEASURED, NOT ASSUMED (the ```bash-fence lesson: a rendering claim is only true of the
+#   renderer you measured). Probe: a pty-hosted real TUI (2.1.220) with a project-scoped Stop hook
+#   emitting one systemMessage carrying three sentinels; raw pty bytes inspected.
+#   Re-run: docs/research/tui-systemmessage-render-2026-08-22.md § Re-run it. Results:
+#     · the block renders as `⎿ Stop says: …` wrapped in the TUI's own grey (SGR 38;2;153;153;153)
+#       — that grey IS the "block of white text" the operator says they gloss over;
+#     · an ESC we emit SURVIVES VERBATIM to the terminal (`\033[33m` arrived intact, our `\033[0m`
+#       normalised by Ink to `\033[39m`), so ANSI is the working colour lever here;
+#     · markdown is NOT rendered — backticks arrive as literal backticks. The "inline code renders
+#       blue" rule is about the MODEL's prose, and it buys NOTHING in this block.
+#   So `✎` colours its `SUPPLY <token>` clause in the TUI's own warning amber (38;2;255;193;7 —
+#   copied from the TUI's own `⚠` line, so it is native and provably supported by the emulator that
+#   renders it). SGR bytes are attributes, not characters, so nothing is added to a drag-selection.
+#   `▶` lines are left BYTE-IDENTICAL — the paste-safety property is not traded for colour.
+#   Seam: CC_OPREADOUT_COLOR=auto|1|0 (auto = on in hook mode, on in --render only at a tty, so the
+#   model's own /wrap capture stays escape-free); NO_COLOR is honoured.
 #
 # ── CLASS BUDGET (OPERATOR_SURFACE_V2 §4 M2) ── the render budget is allocated per CLASS, not
 #   first-come, because a fixed window over a flat list STARVES WHOLE CLASSES. Measured 2026-07-29:
@@ -110,7 +144,7 @@
 #   step itself and costs the same line.
 #   `yours` IS NEVER COLLAPSED — see the class-budget note above. Its lines take the surrounding
 #   mode's idiom (bare `▶`/`◆` under collapse, where nothing is numbered; numbered under the
-#   itemised/legacy modes, where everything is) so the `^ [0-9]+ (▶|◆)` NSTEPS count downstream
+#   itemised/legacy modes, where everything is) so the `^ [0-9]+ (▶|◆|✎)` NSTEPS count downstream
 #   stays consistent within each mode rather than agreeing with neither.
 #   Modes: CC_OPREADOUT_CLASSBUDGET=collapse (default) · =on (per-class itemisation) · =off (legacy).
 #   DEGRADATION: collapse is refused when cc-do does not resolve — a close naming a command the
@@ -225,6 +259,39 @@ while [ $# -gt 0 ]; do
   esac
   [ $# -gt 0 ] && shift
 done
+
+# ── placeholder shape + colour (the ✎ state; see the block in the header) ────────────────────────
+# Resolved through $0's own symlink first, for the same reason idl-log.sh is below: a brand-new
+# hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs.
+_plib="$SCRIPT_DIR/lib/placeholder.sh"
+[ -f "$_plib" ] || { _ptgt="$0"; [ -L "$_ptgt" ] && _ptgt="$(readlink "$_ptgt")"
+  _plib="$(cd "$(dirname "$_ptgt")" 2>/dev/null && pwd)/lib/placeholder.sh"; }
+[ -f "$_plib" ] || _plib="$CFG/hooks/lib/placeholder.sh"
+[ -f "$_plib" ] || _plib="$HOME/.claude/hooks/lib/placeholder.sh"
+# shellcheck source=lib/placeholder.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_plib" 2>/dev/null; then
+  # DEGRADE TO TODAY'S BEHAVIOUR, never to a convict-everything one. An EMPTY $ph would make jq's
+  # `test("")` true for every row and turn the whole board into ✎ — the one failure mode worse than
+  # the defect this closes. Defs that answer `false` restore the pre-2026-08-22 render exactly.
+  CC_PLACEHOLDER_RE=''
+  CC_PH_JQ='def ph_hit($ph): false; def ph_toks($ph): "";'
+fi
+
+# COLOUR — measured (see header). `auto`: ON in hook mode, whose destination IS the TUI; in
+# `--render` ON only at a tty, because /wrap's block is captured by the MODEL, and escape bytes in a
+# transcript are noise it would then relay as prose. NO_COLOR (de-facto standard) always wins.
+C_ON=""; C_OFF=""
+case "${CC_OPREADOUT_COLOR:-auto}" in
+  0|off|no) : ;;
+  1|on|yes) C_ON=$'\033[1;38;2;255;193;7m'; C_OFF=$'\033[22;39m' ;;
+  *) if [ -z "${NO_COLOR+x}" ] && { [ "$MODE" = hook ] || [ -t 1 ]; }; then
+       # 22;39 (un-bold + default fg), NOT 0m: this line renders INSIDE the TUI's own styled block,
+       # and 0m would reset attributes the renderer set around us. Measured: Ink rewrites our 0m to
+       # 39m anyway, so saying 22;39 is saying what actually happens.
+       C_ON=$'\033[1;38;2;255;193;7m'; C_OFF=$'\033[22;39m'
+     fi ;;
+esac
 
 # B-3 writer = the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02); see that file for the
 # "jq-encode EVERY field" invariant. IDL_OFF carries this hook's extra rule: the `--render` pull
@@ -428,7 +495,7 @@ render_block() {
       # left them visible to `cc-decide list --open` yet absent from the numbered steps, which is
       # the surface the operator actually reads. Class A is deliberately NOT folded: it also lacks
       # a default/deadline, but it is a post-hoc audit trail with nothing for the operator to do.
-      jq -r '
+      jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" "$CC_PH_JQ"'
         select((.status // "" | if . == "" then "open" else . end) == "open"
                and ((.class // "") == "C"
                     or ((.class // "") == "B"
@@ -451,7 +518,13 @@ render_block() {
         # Field 4 = the id, so the COLLAPSE line can name the packets it counts. `cc-decide veto`
         # resolves an EXACT id, so a counted line that dropped the ids would leave the operator
         # nothing to paste — the same round-trip defect the 8-char slice caused.
-        | (if $run != ""      then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
+        # ✎ first, for the reason spelled out on the backlog leg: `▶` is a promise to the operator
+        # that the line is pasteable, and a run_command carrying a placeholder breaks it. Only
+        # `run_command` is checked — `staged_artifact_path` is a path this machine wrote and `bash
+        # <that path>` is complete by construction.
+        | (if $run != "" and ($run | ph_hit($ph)) then
+             "decision\t✎\t\($con)SUPPLY \($run | ph_toks($ph))\($coff) — \($sent | .[0:70])   [decision \($cls) \($id8)]\t\($id8)"
+           elif $run != ""   then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            else "decision\t◆\t[decision \($cls) \($id8)] \($sent)\t\($id8)" end) as $line
         | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
@@ -477,7 +550,9 @@ render_block() {
     done
   fi
   if [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
-    blg_list_cached "$blg" --blocked --json | jq -r --arg sid "$SID" '
+    blg_list_cached "$blg" --blocked --json \
+      | jq -r --arg sid "$SID" --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
+        "$CC_PH_JQ"'
       .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
@@ -488,7 +563,16 @@ render_block() {
       # pile into `yours`.
       | (if $sid != "" and $sid != "?" and (.session // "") == $sid then "yours" else "backlog" end) as $c
       | (if $c == "yours" then "this session" else "backlog" end) as $w
-      | if $run != "" then "\($c)\t▶\t\($run)   [\($w) \($id): \($t)]\t\($id)"
+      # ✎ BEFORE ▶ — the order IS the guarantee. A stored command that still carries a placeholder
+      # must never reach the `▶` arm, because `▶` says "paste this" and a template cannot be pasted.
+      # ANSWER FIRST (Minto): the row leads with the MISSING VALUE, coloured, then what it is (the
+      # filer`s own `needs` prose), then the id so it still reconciles with the store. The command
+      # is NOT printed — there is deliberately nothing here to select. The TITLE is dropped too:
+      # `cc-backlog needs` files one sentence as BOTH title and `needs`, so printing both padded
+      # the one row that must not wrap.
+      | if $run != "" and ($run | ph_hit($ph)) then
+          "\($c)\t✎\t\($con)SUPPLY \($run | ph_toks($ph))\($coff) — \($n)   [\($w) \($id)]\t\($id)"
+        elif $run != "" then "\($c)\t▶\t\($run)   [\($w) \($id): \($t)]\t\($id)"
         else "\($c)\t◆\t[\($w) \($id)] \($t) — needs: \($n)\t\($id)" end' 2>/dev/null >> "$steps_file"
   fi
 
@@ -762,7 +846,7 @@ render_block() {
   # so the completeness guarantee (I10) holds here exactly as it does for every other class.
   # Numbering follows the surrounding MODE, not this class: bare under collapse (where nothing is
   # numbered), numbered under itemised/legacy (where everything is) — so `NSTEPS`
-  # (`grep -cE '^ [0-9]+ (▶|◆)'`) keeps counting whatever that mode counts.
+  # (`grep -cE '^ [0-9]+ (▶|◆|✎)'`) keeps counting whatever that mode counts.
   local YMAX=5 y_shown=0 y_lines=0 y_num=""
   [ "$CBUDGET" = collapse ] || y_num=1
   if [ "$c_yours" -gt 0 ]; then
@@ -917,7 +1001,7 @@ render_block() {
   fi   # ── end CBUDGET collapse / itemise branch ──
 
   # ── escalation records (D3) — ONE counted line, outside both mode branches so it reads the same in
-  # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆)`, and
+  # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆|✎)`, and
   # these are not operator STEPS — they are records a machine should have drained. `◆` because there
   # is no single command that clears them (ack is per-record, and acking an undelivered escalation is
   # a judgment, not a chore).
@@ -1201,7 +1285,12 @@ if [ -n "$SKEY" ] && [ -n "$HASH" ]; then
   printf '%s %s %s\n' "$HASH" "$NOW" "$STAMP" > "$LATCH" 2>/dev/null || true
 fi
 
-NSTEPS="$(printf '%s\n' "$BLOCK" | grep -cE '^ [0-9]+ (▶|◆)' 2>/dev/null)"
+# `✎` joins the counted marks (2026-08-22): it IS one of the numbered rows the operator reads, so
+# leaving it out would under-report `shown` against a block that grew a line. Purely additive — no
+# line that counted before stops counting. `⊘` stays out, deliberately: a held row is unnumbered and
+# is nobody's step. The mark is never preceded by an escape (colour starts AFTER it) precisely so
+# this anchor survives the ✎ row's colouring.
+NSTEPS="$(printf '%s\n' "$BLOCK" | grep -cE '^ [0-9]+ (▶|◆|✎)' 2>/dev/null)"
 case "$NSTEPS" in ''|*[!0-9]*) NSTEPS=0 ;; esac
 case "$TOTAL"  in ''|*[!0-9]*) TOTAL=0  ;; esac
 case "$Q_N"    in ''|*[!0-9]*) Q_N=0    ;; esac

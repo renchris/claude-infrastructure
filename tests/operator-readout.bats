@@ -1277,3 +1277,62 @@ CC_READOUT_CUSTODY_PREFIX_SHA="${CC_READOUT_CUSTODY_PREFIX_SHA:-73ceb76aa}"
   printf '%s' "$output" | grep -q 'in progress — loose ends' \
     || { echo "control did not reproduce the drop: $output"; false; }
 }
+
+# ── ✎ A VALUE IS MISSING (operator incident 2026-08-22) ─────────────────────────────────────────
+# A close plattered `aws sns subscribe … --notification-endpoint <your-address>` under a run
+# marker. `▶` is a PROMISE — "paste this" — and a template breaks it in the one place the operator
+# trusts. completion-assert catches it in the MODEL's prose but only at Stop, i.e. after they have
+# read it. This renderer emits its OWN rows from disk, so here it can PREVENT rather than apologise.
+
+ph_stub() { # $1 = the `run` value the store would hold → path to a cc-backlog stub emitting it
+  local stub="$BATS_TEST_TMPDIR/cc-backlog-ph-stub-$BATS_TEST_NUMBER"
+  cat > "$stub" <<EOS
+#!/bin/bash
+printf '[{"id":"ph0000000001","title":"Subscribe to the alert topic","needs":"the email address alarms should go to","run":"$1","status":"blocked"}]\n'
+EOS
+  chmod +x "$stub"; printf '%s' "$stub"
+}
+
+@test "✎: a stored command carrying a placeholder must NOT render as ▶" {
+  # The exact incident command. If this ever renders ▶ again, the operator can paste a template.
+  s="$(ph_stub 'aws sns subscribe --protocol email --notification-endpoint <your-address>')"
+  CC_BACKLOG_BIN="$s" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  ! echo "$output" | grep -q '▶ aws sns subscribe' || false
+  echo "$output" | grep -q '✎' || false
+}
+
+@test "✎: the row NAMES the missing token, so the operator knows what to supply" {
+  s="$(ph_stub 'aws sns subscribe --protocol email --notification-endpoint <your-address>')"
+  CC_BACKLOG_BIN="$s" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  # The token itself, and the filer's prose saying what the value IS — "a value is missing" alone
+  # is useless, which is the whole complaint that produced this row.
+  echo "$output" | grep -q '<your-address>' || false
+  echo "$output" | grep -q 'the email address alarms should go to' || false
+}
+
+@test "✎ CONTROL: a complete command still renders ▶ (the check has to be able to NOT fire)" {
+  # Without this, "never platter a template" is satisfiable by never plattering anything.
+  s="$(ph_stub 'aws sns subscribe --protocol email --notification-endpoint ren.chris@outlook.com')"
+  CC_BACKLOG_BIN="$s" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '▶ aws sns subscribe' || false
+  ! echo "$output" | grep -q '✎' || false
+}
+
+@test "✎ CONTROL: an angle-bracket inside a trailing # comment does NOT flag the row" {
+  # MEASURED false positive: of the 71 live blocked rows carrying a run, exactly one matched the
+  # placeholder shape — its command ends `… # last attempt: rc=143, head pinned at <unrecorded>`.
+  # That command runs perfectly. Flagging it would put a "supply a value" row on the board for a
+  # value nobody needs, and a board that cries wolf is one the operator learns to skim.
+  s="$(ph_stub 'bash deploy.sh   # last attempt: rc=143 (SIGTERM), head pinned at <unrecorded>')"
+  CC_BACKLOG_BIN="$s" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '▶ bash deploy.sh' || false
+  ! echo "$output" | grep -q '✎' || false
+}
+
+@test "✎: the row is COUNTED — it is work the operator must act on, not a footnote" {
+  s="$(ph_stub 'aws sns subscribe --notification-endpoint <your-address>')"
+  CC_BACKLOG_BIN="$s" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  # NSTEPS greps '^ [0-9]+ (▶|◆|✎)' downstream; a ✎ that fell out of the count would let the
+  # header read "0 runnable" while a real operator step sat on the board.
+  echo "$output" | grep -qE '^ +[0-9]* *✎|✎' || false
+}
