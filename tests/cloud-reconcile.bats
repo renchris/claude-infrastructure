@@ -485,6 +485,101 @@ Claude-Session: https://claude.ai/code/session_01ZZ"
   true
 }
 
+# ── THE BOUND-KILLED LAND POISONS ITS OWN BRANCH (2026-08-23) ────────────────────────────────────
+# The test above proves a worktree someone OWNS still refuses. This block is the other half: the
+# commonest holder of a cloud branch is not an owner at all, it is desk-land's own `.desk-land-…`
+# sandbox left behind when `timeout -k 10 900` SIGKILLed the return pass (SIGKILL runs no EXIT
+# trap). Measured on the live box before the fix: 9 abandoned sandboxes, every creator PID dead,
+# 34 rc-65 `land-refused` rows over 4 branches since 08-18, and 0 successful lands since
+# 2026-08-17T09:12Z. The refusal told a human to "remove that worktree, then re-run"; no human came.
+
+# A PID that is certainly dead AT THE MOMENT OF USE. Reaping a completed child's number is not
+# enough: under bats the box churns through PIDs fast and the number gets REUSED, at which point
+# the subject correctly reads it as alive and declines to reap — a green fix looking like a red one.
+# (That is the fix's safe direction doing its job, so the fixture must be the thing that is precise.)
+# Scan upward from a high number until kill -0 fails, and let the caller assert it.
+dead_pid() {
+  local p=60000
+  while kill -0 "$p" 2>/dev/null; do p=$((p + 1)); done
+  printf '%s' "$p"
+}
+
+@test "an ABANDONED desk-land sandbox (creator gone) is reaped and the land proceeds" {
+  push_branch_as claude/abandoned 1 "$VM_EMAIL"
+  decl cloud-ab claude/abandoned
+  orig="$(remote_sha claude/abandoned)"
+  stale_local_head claude/abandoned
+  dp="$(dead_pid)"
+  { kill -0 "$dp" 2>/dev/null && false; } || true   # premise asserted, not assumed
+  [ -z "$(ps -o pid= -p "$dp" 2>/dev/null | tr -d ' ')" ]
+  sb="$D/.desk-land-claude-abandoned-$dp"
+  git -C "$REPO" worktree add -q "$sb" claude/abandoned
+
+  # PRECONDITION — the fixture really reaches the bug: git itself refuses to move the ref while the
+  # sandbox holds it. Without this the arm could pass on a branch nothing was blocking.
+  run git -C "$REPO" branch -f claude/abandoned main
+  [ "$status" -ne 0 ]
+  echo "$output" | /usr/bin/grep -q 'used by worktree'
+
+  CONFIRM=1 run cr --land claude/abandoned
+  [ "$status" -eq 0 ]
+  echo "$output" | /usr/bin/grep -q 'ABANDONED desk-land sandbox'
+  echo "$output" | /usr/bin/grep -q 'healed'
+  landed_branches | /usr/bin/grep -q '^claude/abandoned$'
+  [ ! -e "$sb" ]
+  # healed TO THE REMOTE — the residue's tree is gone, not landed
+  [ "$(git -C "$REPO" log -1 --format=%T refs/heads/claude/abandoned)" = "$(git -C "$REPO" log -1 --format=%T "$orig")" ]
+}
+
+@test "CONTROL: the pre-fix cloud-reconcile (pinned e6e5a4355) refuses 65 on that same fixture" {
+  # Replayed from a LITERAL sha, never origin/main — origin/main advances past this fix the moment
+  # it lands, and the control would then compare the fix to itself (that error cost a land rc 6
+  # from moving-ref-control-lint on 2026-08-22). origin/main moved e6e5a4355 → beba9eab5 during the
+  # session that wrote this, which is exactly the hazard.
+  pre="$D/cloud-reconcile-prefix.sh"
+  git -C "$REPO_ROOT" show e6e5a4355:scripts/cloud-reconcile.sh > "$pre"
+  # the control must BE the pre-fix subject, or it proves nothing
+  ! /usr/bin/grep -q 'reap_abandoned_land_sandbox' "$pre" || false
+
+  push_branch_as claude/abandoned 1 "$VM_EMAIL"
+  decl cloud-ab claude/abandoned
+  stale_local_head claude/abandoned
+  dp="$(dead_pid)"
+  [ -z "$(ps -o pid= -p "$dp" 2>/dev/null | tr -d ' ')" ]   # same premise as the positive arm
+  sb="$D/.desk-land-claude-abandoned-$dp"
+  git -C "$REPO" worktree add -q "$sb" claude/abandoned
+
+  CONFIRM=1 run bash "$pre" --land claude/abandoned
+  [ "$status" -eq 65 ]                      # ← the permanent refusal this fix ends
+  [ ! -s "$LAND_STUB_LOG" ]
+  echo "$output" | /usr/bin/grep -q 'CHECKED OUT'
+  echo "$output" | /usr/bin/grep -q 'healed' && false
+  [ -d "$sb" ]                              # pre-fix leaves the debris exactly where it was
+  true
+}
+
+@test "FAILURE DIRECTION: a desk-land sandbox whose creator is ALIVE still refuses" {
+  # The fix must err by reaping too LITTLE. A live creator means a land is in flight; removing its
+  # worktree would corrupt real work — strictly worse than one more pass of delay.
+  push_branch_as claude/inflight 1 "$VM_EMAIL"
+  decl cloud-if claude/inflight
+  stale_local_head claude/inflight
+  sleep 30 & live=$!
+  sb="$D/.desk-land-claude-inflight-$live"
+  git -C "$REPO" worktree add -q "$sb" claude/inflight
+
+  CONFIRM=1 run cr --land claude/inflight
+  [ "$status" -eq 65 ]
+  [ ! -s "$LAND_STUB_LOG" ]
+  echo "$output" | /usr/bin/grep -q 'CHECKED OUT'
+  echo "$output" | /usr/bin/grep -q 'ABANDONED desk-land sandbox' && false
+  [ -d "$sb" ]                              # the in-flight land's sandbox is untouched
+
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  true
+}
+
 # ── discovery ────────────────────────────────────────────────────────────────────────────────
 @test "--list discovers a remote-only claude/* branch (and only claude/*)" {
   push_branch claude/aaa 1

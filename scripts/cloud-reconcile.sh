@@ -264,9 +264,65 @@ worktree_holding() {  # <repo> <branch> → the worktree path with that branch c
     /^branch /{ if(substr($0,8)==b){print wt; exit} }'
 }
 
+# ── THE LAND'S OWN CRASH DEBRIS IS WHAT PREVENTS THE LAND'S RETRY (fixed 2026-08-23) ─────────────
+# desk-land.sh mints a throwaway worktree `$WTROOT/.desk-land-<branch>-<pid>` and removes it from an
+# EXIT trap. autonomy-sweep runs the whole return pass under `timeout -k 10 900`
+# (autonomy-sweep.sh:952): SIGTERM at 900 s, then SIGKILL 10 s later — and SIGKILL runs no trap. A
+# land still working at that moment dies with its sandbox intact, and that sandbox holds the branch
+# CHECKED OUT. Every later attempt on that branch then dies here:
+#   fatal: cannot force update the branch 'claude/fire-20260819T170309Z-21035-1'
+#          used by worktree at '/private/tmp/.desk-land-claude-fire-20260819T170309Z-21035-1-42401'
+# which fetch_branch reported as "a real conflict someone owns" and cloud-return filed as
+# `land-refused` rc 65 — once per pass, forever, because nothing reaps the debris. The advice the
+# refusal printed ("remove that worktree, then re-run") was addressed to a human who never came.
+#
+# MEASURED ON THE LIVE BOX 2026-08-23T07:30Z, before this fix: 9 abandoned sandboxes present, every
+# creator PID dead, 2 of them still holding refs; 34 rc-65 `land-refused` rows across 4 branches
+# since 08-18; and ZERO successful lands since 2026-08-17T09:12Z against 140 lifetime successes.
+# 70 `origin/claude/fire-*` branches carried 91 unlanded commits at that moment.
+#
+# THE OWNERSHIP QUESTION HAS A DIRECT ANSWER, SO DO NOT GUESS IT FROM AGE. The sandbox name ends in
+# the `$$` that created it, so "is anyone still working here?" is READ, not inferred — unlike a
+# staleness timeout, which is a bound sized in one regime and wrong in the next (memory:
+# liveness-proxy-cannot-be-output-age; bound-must-fit-the-band-not-the-bench).
+#
+# FAILURE DIRECTION — this reaps only what is provably ownerless, and errs by reaping too LITTLE:
+# a live PID, an unparseable suffix, or any worktree not of desk-land's own `.desk-land-…` shape is
+# LEFT ALONE and the original refusal stands unchanged. PID reuse can only make it more conservative
+# (a recycled number reads alive, so we skip). The worst case is debris surviving one more pass; it
+# is never a worktree pulled from under a running land, and never a human's desk worktree. That
+# asymmetry is the whole point: stale debris costs a delayed branch, a wrongly-reaped sandbox
+# corrupts work in flight.
+#
+# reap_abandoned_land_sandbox <repo> <worktree-path>
+#   → 0  it was desk-land's own ownerless residue, and it is now gone (caller may retry)
+#   → 1  not ours, or still owned, or removal failed — NOTHING was touched
+reap_abandoned_land_sandbox() {
+  local repo="$1" wt="$2" base pid
+  base="$(basename "$wt")"
+  case "$base" in
+    .desk-land-*) ;;
+    *) return 1 ;;                       # not desk-land's shape ⇒ never ours to remove
+  esac
+  pid="${base##*-}"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;             # no readable owner ⇒ abstain rather than guess
+  esac
+  if kill -0 "$pid" 2>/dev/null; then
+    return 1                             # owner alive ⇒ a real land is in flight; leave it
+  fi
+  "$GIT_BIN" -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 \
+    || rm -rf "$wt" >/dev/null 2>&1 || true
+  "$GIT_BIN" -C "$repo" worktree prune >/dev/null 2>&1 || true
+  if [ -e "$wt" ]; then
+    return 1                             # could not actually remove it ⇒ report no cure
+  fi
+  return 0
+}
+
 FETCH_DETAIL=""
 fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed) · 1 refused · 2 cannot
-  local repo="$1" b="$2" wt
+  local repo="$1" b="$2" wt reaped
   FETCH_DETAIL=""
   "$GIT_BIN" -C "$repo" fetch -q "$REMOTE" "refs/heads/$b:refs/heads/$b" >/dev/null 2>&1 && return 0
 
@@ -278,10 +334,24 @@ fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed)
     return 2
   fi
 
+  reaped=""
   wt="$(worktree_holding "$repo" "$b")"
   if [ -n "$wt" ]; then
-    FETCH_DETAIL="local '$b' is CHECKED OUT in a worktree ($wt) — a real conflict someone owns. NOT forcing: land it from there, or remove that worktree, then re-run."
-    return 1
+    # "someone owns it" is a CLAIM, and for the commonest holder it is false. See
+    # reap_abandoned_land_sandbox: a land cut by its own bound leaves `.desk-land-<branch>-<pid>`
+    # holding this exact ref, owned by a process that no longer exists. Ask before refusing.
+    if reap_abandoned_land_sandbox "$repo" "$wt"; then
+      # The blocker is gone, and what remains is EXACTLY the case the heal path below already
+      # handles: a diverged local head checked out nowhere. Fall through to it rather than
+      # re-implementing the fetch here — the first cut of this fix retried with an UNFORCED fetch
+      # and still refused, because an unforced fetch cannot move a diverged head. Reusing the
+      # vetted path also keeps the cloud-branch PREFIX guard in front of every force.
+      reaped="$wt"
+      wt=""
+    else
+      FETCH_DETAIL="local '$b' is CHECKED OUT in a worktree ($wt) — a real conflict someone owns. NOT forcing: land it from there, or remove that worktree, then re-run."
+      return 1
+    fi
   fi
 
   # Scoped by restating the DISCOVERY filter rather than a second literal: $PREFIX is the one place
@@ -296,7 +366,11 @@ fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed)
   esac
 
   if "$GIT_BIN" -C "$repo" fetch -q --force "$REMOTE" "refs/heads/$b:refs/heads/$b" >/dev/null 2>&1; then
-    FETCH_DETAIL="healed: local '$b' had diverged and is checked out nowhere — residue of an earlier failed attempt — so it was reset to '$REMOTE', which is the authority for a cloud branch."
+    if [ -n "$reaped" ]; then
+      FETCH_DETAIL="healed: '$b' was held by an ABANDONED desk-land sandbox ($reaped) whose creator process no longer exists — the residue of a bound-killed land, owned by nobody. Removed it, then reset the diverged local head to '$REMOTE', which is the authority for a cloud branch."
+    else
+      FETCH_DETAIL="healed: local '$b' had diverged and is checked out nowhere — residue of an earlier failed attempt — so it was reset to '$REMOTE', which is the authority for a cloud branch."
+    fi
     return 0
   fi
   FETCH_DETAIL="local '$b' has diverged, is checked out nowhere, and even a forced re-fetch from '$REMOTE' failed. This is not the stale-residue case."
