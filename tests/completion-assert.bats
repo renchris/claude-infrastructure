@@ -647,6 +647,57 @@ cc-do')" "$w" "a2-d2-barectl"
   [ "$status" -eq 0 ]; fired "$output"
 }
 
+@test "D5 a MULTI-WORD placeholder fires — the value described, not named" {
+  # The escape that reached the operator, 2026-08-23. The class held no SPACE, so `<addr>` and
+  # `<pw>` convicted while `<your SevenRooms password>` — the form a model writes when it DESCRIBES
+  # the value rather than naming it — sailed through, under a `▶ Run this:` marker, the one place
+  # the contract promises something literal enough to paste. The rule was already written; it
+  # simply did not match.
+  local w; w="$(mkrepo_landed a2d5mw)"
+  run run_ca "$(mkfix '👤 My side is done & landed — 1 step needs you.
+
+▶ Run this:
+
+`aws secretsmanager create-secret --name sevenrooms/sidecar/login --secret-string {"password":"<your SevenRooms password>"}`')" "$w" "a2-d5-mw"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'placeholder'
+}
+
+@test "D5 CONTROL: a heredoc-plus-redirect is NOT a placeholder" {
+  # The case that admitting the space would otherwise let in: `<<EOF > out` reads as `<EOF >` once
+  # a space is legal inside the brackets. The trailing must-be-alphanumeric anchor is what excludes
+  # it, and this test is what makes that anchor load-bearing rather than decorative. A false FIRE
+  # here is worse than the escape above — it convicts a correct command, and an arm that cries wolf
+  # teaches the operator to paste through the next real one.
+  local w; w="$(mkrepo_landed a2d5hd)"
+  run run_ca "$(mkfix '👤 My side is done & landed — 1 step needs you.
+
+▶ Run this:
+
+`cat <<EOF > /tmp/report.txt`')" "$w" "a2-d5-hd"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'placeholder' && false || true
+}
+
+@test "D5 REGRESSION: the shape carries NO capture group — jq scan would return the group" {
+  # Spelling the two-or-more case as `<[A-Za-z](…)?>` is the obvious way to admit spaces, and it is
+  # wrong in a way bash cannot see: this regex is consumed by bash `[[ =~ ]]` (POSIX ERE) AND by jq
+  # `scan()` (Oniguruma), and `scan` returns the CAPTURES when a group is present. Every rendered
+  # token silently became `our-addres` instead of `<your-address>`; 10 operator-readout and cc-do
+  # tests caught it. Non-capturing `(?:…)` does not exist in POSIX ERE, so the length cases must
+  # stay separate alternatives.
+  local repo; repo="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # shellcheck disable=SC1090,SC1091
+  . "$repo/hooks/lib/placeholder.sh"
+  printf '%s' "$CC_PLACEHOLDER_RE" | grep -q '(' && false || true
+
+  # …and the property that absence protects: scan returns the WHOLE token.
+  run jq -nr --arg s 'subscribe --endpoint <your-address>' --arg ph "$CC_PLACEHOLDER_RE" \
+    '[$s | scan($ph)] | join(",")'
+  [ "$status" -eq 0 ]
+  [ "$output" = "<your-address>" ]
+}
+
 @test "D5 SSOT: the shape is the LIB's, and the inline fallback is byte-identical to it" {
   # The shape moved to hooks/lib/placeholder.sh (2026-08-22) so the RENDERERS could refuse to platter
   # a stored command with a hole in it — the only half of this defect that is prevention rather than
