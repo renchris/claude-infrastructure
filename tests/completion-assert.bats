@@ -299,8 +299,17 @@ Two things remain yours before this is fully wired up.")" "$w" "a2-d1"
 }
 
 # ── D1 abstain: the SAME close, but the step IS filed for THIS session ⇒ nothing to nag about ──
+# PIN THE D7 AXIS OFF (2026-08-23). Filing that row is also what makes wrap-ledger compute RUNG=👤
+# — CC_BACKLOG_BIN is its env seam too — and this close states no act line, so D7 convicts it. That
+# conviction is CORRECT (a 👤 close whose line 1 reads "✅ Complete" and whose act is nowhere is
+# exactly D7's target) and must not be weakened to keep this case green. But this case is about
+# D1's abstain, and a test that measures two arms at once measures neither: without the pin it
+# passed or failed on ORDER, because wrap-ledger's memo could hand it a cached ✅ from an earlier
+# test. Same technique the setup() uses for AGENT_IDENTITY_LIB — judge the fixture on its own axis.
+# The D7 axis has its own cases at the end of this file, including this shape.
 @test "D1 abstains when a blocked backlog item carries this session" {
   local w; w="$(mkrepo_landed a2d1ok)"
+  export CC_CLOSE_ACT=0
   export CC_BACKLOG_STUB_JSON='[{"id":"abc123","status":"blocked","session":"a2-d1-filed","project":"p","title":"t","needs":"run the mcp add"}]'
   run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green.
 
@@ -1349,4 +1358,211 @@ Good to close: <yes — complete, durable, deployed live, no loose ends; follow-
   run run_ca "$(mkfix "All complete, nothing to do.")" "$w" "capcompat-s"
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"capped:1>=1"' "$COMPLETION_IDL"
+}
+
+# ── D7 — THE ACT LINE (CLOSE_SCANNABILITY W2, measured 2026-08-23) ─────────────────────────────
+# The operator: closes "force me to scan really long and hard what the actual decisions are and
+# it's not 'scan one line' for an actionable silver-plattered what to do". The founding close had a
+# correct rung AND the blocker in its supporting lines and still drew "Whats blocked on me? Be
+# explicit" — every arm above passed it, because the act was WELDED INTO a sentence rather than
+# being a line. Parameters come from docs/research/close-scannability-2026-08-23.md.
+#
+# The ledger is a STUB (mkledger, as the ⛔ cases above are) because D7 CONSUMES wrap-ledger's RUNG
+# verdict and never re-derives it; what is under test is whether the hook honours a 👤.
+# CC_BACKLOG_STUB_JSON carries a row for the session in these cases, which is what a real 👤 means
+# (a step IS filed) and which keeps D1 out of the way so each assertion names one arm.
+CA_YOURS_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin/main YOURS=1 RUNG=👤)
+ca_filed() { export CC_BACKLOG_STUB_JSON="[{\"id\":\"y1\",\"status\":\"blocked\",\"session\":\"$1\",\"project\":\"p\",\"title\":\"t\",\"needs\":\"finish the login\"}]"; }
+
+# The founding evidence, reduced: three acts welded into line 1, nothing else wrong with the close.
+CA_WELDED="👤 My side is done and landed — resend the code, tick Trust this browser, then close that Chrome window.
+- Your code expired at 07:51Z; hit Resend and I will pull the fresh one.
+- Chrome pid 35559 is still running and must be closed after you verify."
+
+@test "D7 UNIT: an act welded into line 1 is not an act LINE" {
+  . "$REPO/hooks/lib/close-shape.sh"
+  [ "$(close_act_missing "$CA_WELDED")" = "act-line" ]
+}
+
+# The unit must be able to go BOTH ways or the positive above is vacuous.
+@test "D7 UNIT CONTROL: the SAME close with the act on its own line PASSES" {
+  . "$REPO/hooks/lib/close-shape.sh"
+  run close_act_missing "👤 My side is done and landed — one step is yours.
+▶ Finish this, then quit the window:
+\`open -a 'Google Chrome' https://example.test/verify\`"
+  [ -z "$output" ]
+}
+
+@test "D7 UNIT: the ACT: label is the second legal shape, and its VALUE is the discriminator" {
+  . "$REPO/hooks/lib/close-shape.sh"
+  [ -z "$(close_act_missing "👤 done
+ACT: finish the login in the open Chrome window, then quit it")" ]
+  [ -z "$(close_act_missing "👤 done
+**ACT:** quit Chrome")" ]
+  # a bare label with the act on the NEXT line is exactly the shape being ruled out
+  [ "$(close_act_missing "👤 done
+ACT:
+finish the login")" = "act-line" ]
+  # and a template placeholder answers nothing (same law as close_shape's MENTION-vs-USE)
+  [ "$(close_act_missing "👤 done
+ACT: <the one act>")" = "act-line" ]
+}
+
+# 13 of the 81 ▶ occurrences in the corpus are the ` ▶ cc-do [N runnable]` row INSIDE the rendered
+# OPERATOR block's fence. A matcher that counts it passes a close whose real act is at line 11.
+@test "D7 UNIT: a ▶ inside a fence is the rendered block, not this close's act ⇒ still missing" {
+  . "$REPO/hooks/lib/close-shape.sh"
+  [ "$(close_act_missing '```
+OPERATOR ▸ 13 runnable now, 205 need your call
+ ▶ cc-do   [13 runnable]
+```
+👤 My side is done and landed.
+some supporting prose
+more supporting prose
+▶ Open this:')" = "act-line" ]
+}
+
+# …and the same fence must not COUNT against the window either, or a close that obeys the
+# Silver-Platter rule (reproduce the rendered block verbatim) could never comply.
+@test "D7 UNIT CONTROL: the fenced block is skipped, not counted — act at line 2 after it PASSES" {
+  . "$REPO/hooks/lib/close-shape.sh"
+  run close_act_missing '```
+OPERATOR ▸ 13 runnable now, 205 need your call
+ ▶ cc-do   [13 runnable]
+```
+👤 My side is done and landed — one step is yours.
+▶ Run this:
+`cc-do land-the-mcp-wiring`'
+  [ -z "$output" ]
+}
+
+@test "D7: a 👤 close whose act is welded into prose ⇒ FIRE" {
+  WRAP_LEDGER_BIN="$(mkledger act1 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-1"
+  run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'no single line IS that act'
+  printf '%s' "$output" | /usr/bin/grep -q 'ACT: <one imperative sentence'
+  /usr/bin/grep -q '"arm":"act"' "$COMPLETION_IDL"
+  /usr/bin/grep -q '"class":"act"' "$COMPLETION_IDL"
+  /usr/bin/grep -q '"rung":"👤"' "$COMPLETION_IDL"
+}
+
+# THE NEGATIVE HALF. Same ledger, same session, same substance — the act moved onto its own line.
+# An assert that cannot pass a good close is indistinguishable from one that is not wired up.
+@test "D7 CONTROL: the SAME close with the act on its own line ⇒ ABSTAIN (ledger-clean)" {
+  WRAP_LEDGER_BIN="$(mkledger act2 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-2"
+  run run_ca "$(mkfix "👤 My side is done and landed — one step is yours.
+▶ Finish this, then quit the window:
+\`open -a 'Google Chrome' https://example.test/verify\`
+- Your code expired at 07:51Z; hit Resend and I will pull the fresh one.")" "$BATS_TEST_TMPDIR" "act-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}
+
+# THE WINDOW IS THE LEVER — the measured median act line is 6. The same message must flip on the
+# window alone, or the fire above could be explained by anything else in the close.
+@test "D7: an act at the measured median line 6 FIRES, and widening the window alone clears it" {
+  local msg="👤 My side is done and landed.
+supporting line a
+supporting line b
+supporting line c
+supporting line d
+▶ Run this:
+\`cc-do finish-the-login\`"
+  WRAP_LEDGER_BIN="$(mkledger act3 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-3"
+  run run_ca "$(mkfix "$msg")" "$BATS_TEST_TMPDIR" "act-3"
+  [ "$status" -eq 0 ]; fired "$output"
+  CC_ACT_WINDOW=8 run run_ca "$(mkfix "$msg")" "$BATS_TEST_TMPDIR" "act-3b"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "D7 SCOPE: the SAME act-less close over a ✅ ledger ⇒ ABSTAIN (👤 is the only rung)" {
+  WRAP_LEDGER_BIN="$(mkledger act4 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main YOURS=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  ca_filed "act-4"
+  run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-4"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}
+
+@test "D7 KILL SWITCH: CC_CLOSE_ACT=0 silences the arm" {
+  WRAP_LEDGER_BIN="$(mkledger act5 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-5"
+  CC_CLOSE_ACT=0 run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-5"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "D7 LATCH + CAP: fires to COMPLETION_ACT_MAX on distinct closes, then silent" {
+  WRAP_LEDGER_BIN="$(mkledger act6 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-6"
+  export COMPLETION_ACT_MAX=1
+  run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-6"
+  [ "$status" -eq 0 ]; fired "$output"
+  # identical content ⇒ latched, whatever the cap says
+  run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-6"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"latched-already-fired"' "$COMPLETION_IDL"
+  # a DIFFERENT act-less close ⇒ the cap, named by its own class
+  run run_ca "$(mkfix "👤 Landed and done — go and finish the login, then quit the window.")" \
+             "$BATS_TEST_TMPDIR" "act-6"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"capped:act:1>=1"' "$COMPLETION_IDL"
+}
+
+# THE NO-DISTURBANCE PROOF. `act` is claimed ONLY when D7 fired alone; when another arm fires on the
+# same message that arm's demand governs and its budget is untouched. Without this, adding D7 would
+# silently divert D1's convictions into a different, smaller counter.
+@test "D7 CLASS: a message that also fires D1 keeps class=assert, and both sentences are emitted" {
+  WRAP_LEDGER_BIN="$(mkledger act7 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  export CC_BACKLOG_STUB_JSON='[]'      # nothing filed for this session ⇒ D1 convicts
+  # the handoff phrase sits on line 2, not line 1 — otherwise D3 co-fires on it (settled verdict +
+  # retraction in one line) and the arm string under test would be measuring three arms, not two.
+  run run_ca "$(mkfix "👤 Landed and complete.
+Two things remain yours, and I have written them up above.")" \
+             "$BATS_TEST_TMPDIR" "act-7"
+  [ "$status" -eq 0 ]; fired "$output"
+  /usr/bin/grep -q '"arm":"handoff+act"' "$COMPLETION_IDL"
+  /usr/bin/grep -q '"class":"assert"' "$COMPLETION_IDL"
+  printf '%s' "$output" | /usr/bin/grep -q 'cc-backlog needs'
+  printf '%s' "$output" | /usr/bin/grep -q 'no single line IS that act'
+}
+
+# A stale live lib (no close_act_ok) must be NO DEMAND, never a block — a Stop hook may not block
+# the turn on its own misconfiguration.
+@test "D7 FAIL-SAFE: an unreachable close-shape lib ⇒ silent abstain, not a block" {
+  WRAP_LEDGER_BIN="$(mkledger act8 "${CA_YOURS_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  ca_filed "act-8"
+  CLOSE_SHAPE_LIB="$BATS_TEST_TMPDIR/no-such-close-shape.sh" \
+    run run_ca "$(mkfix "$CA_WELDED")" "$BATS_TEST_TMPDIR" "act-8"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# The other side of the pin on the D1-abstain case above: that fixture's shape — a step filed for
+# THIS session (so the REAL wrap-ledger computes 👤) and a close with no act line — is exactly what
+# D7 exists to catch, and here it is asserted through the real ledger rather than a stub. Without
+# this, pinning the axis off up there would have removed coverage instead of separating it.
+@test "D7 END-TO-END: a real 👤 ledger (not a stub) + no act line ⇒ FIRE" {
+  local w; w="$(mkrepo_landed a2d7e2e)"
+  export CC_BACKLOG_STUB_JSON='[{"id":"abc123","status":"blocked","session":"d7-e2e","project":"p","title":"t","needs":"run the mcp add"}]'
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green.
+
+Two things remain yours before this is fully wired up.")" "$w" "d7-e2e"
+  [ "$status" -eq 0 ]; fired "$output"
+  /usr/bin/grep -q '"rung":"👤"' "$COMPLETION_IDL"
+  printf '%s' "$output" | /usr/bin/grep -q 'no single line IS that act'
+}
+
+# …and the same real ledger with the act stated as a line ⇒ the arm is silent. The pair is the
+# no-false-FAIL half through the REAL wrap-ledger, matching the stubbed pair above.
+@test "D7 END-TO-END CONTROL: the same real 👤 ledger WITH an act line ⇒ no act demand" {
+  local w; w="$(mkrepo_landed a2d7e2eok)"
+  export CC_BACKLOG_STUB_JSON='[{"id":"abc123","status":"blocked","session":"d7-e2e-ok","project":"p","title":"t","needs":"run the mcp add"}]'
+  run run_ca "$(mkfix "👤 My side is done & landed — one step is yours.
+▶ Run this:
+\`cc-do run-the-mcp-add\`")" "$w" "d7-e2e-ok"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
 }

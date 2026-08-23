@@ -130,3 +130,17 @@ shape-missing close, latched + capped):
 
 Line 1 stays wrap-ledger's rung readout, verbatim. An honest `Good to close: no — <what remains +
 who owns it>` satisfies the contract; a hedged both-ways answer does not (D3 owns that defect).
+
+## The act line (CLOSE_SCANNABILITY W2, 2026-08-23)
+
+When the rung is `👤`, one line — inside the first 3 non-empty unfenced lines — must BE the single
+next physical act, and nothing else may be that line. Same one-code-path rule as above (push =
+completion-assert D7, pull = here):
+
+!`bash -c '. ~/.claude/hooks/lib/close-shape.sh 2>/dev/null || . "$(git rev-parse --show-toplevel 2>/dev/null)/hooks/lib/close-shape.sh"; close_act_template' 2>/dev/null || true`
+
+Measured over 300 closes (`docs/research/close-scannability-2026-08-23.md`): when the act is its own
+line the operator acts 35% of the time; welded into a sentence, 9%; **welded into line 1, 4% — the
+worst case of all**, so moving it earlier is not the fix, making it a line is. A fenced block (the
+rendered `OPERATOR ▸` readout, reproduced verbatim per the Silver-Platter rule) is skipped by the
+matcher and does not count against the window — relaying it neither satisfies this nor costs you.

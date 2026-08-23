@@ -95,6 +95,8 @@
 #   CC_BACKLOG_BIN (arm 2 D1 — tests stub it; the real binary is resolved when unset) ·
 #   SESSION_WRITES_LIB / ORIGIN_IDENTITY_LIB / CLOSE_SHAPE_LIB / CC_FIRED_DIR / CC_CLOSE_SHAPE
 #   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch) ·
+#   CC_CLOSE_ACT / CC_ACT_WINDOW / COMPLETION_ACT_MAX (arm D7 — the act line; CC_CLOSE_ACT=0 is its
+#   kill switch, and `act` is its own cap class for the reason the latch block gives) ·
 #   PEER_OWNED_LIB / CC_REGISTRY_DIR (LIVE-PEER-OWNED attribution — see the block at that term)
 set -uo pipefail
 
@@ -422,6 +424,33 @@ _ca_dirt_outside_exec() {   # stdout: `paths=N,windows=…,newest=…,span=…` 
   _ca_po_source || return 2
   command -v dirt_outside_session_execution >/dev/null 2>&1 || return 2
   dirt_outside_session_execution "$CWD" "$TP"
+}
+
+# hooks/lib/close-shape.sh now has TWO consumers here (D6's origin contract, D7's act line), so the
+# four-step resolution chain is factored rather than copied — the same reason _ca_po_source was
+# factored when its second consumer arrived. CLOSE_SHAPE_LIB stays the head of the chain, exactly
+# as D6 has always read it.
+#   CLOSE_SHAPE_LIB is a HARD override, not the head of the fallback chain — the same correction
+# `_ca_assignee` already carries for AGENT_IDENTITY_LIB, and for the same reason: an override folded
+# into a fallback list stops being an override, so pointing it at a missing file silently resolved
+# the REAL lib and the "no lib ⇒ no demand" path could never be exercised. Found by writing that
+# test: it blocked instead of abstaining, because the fixture path fell through to the checkout.
+# An untestable failure path is an untested one.
+_ca_source_close_shape() {   # rc 0 sourced · rc 1 no lib / unsourceable
+  local lib t
+  if [ -n "${CLOSE_SHAPE_LIB:-}" ]; then
+    lib="$CLOSE_SHAPE_LIB"
+  else
+    lib="$_cascd/lib/close-shape.sh"
+    [ -f "$lib" ] || { t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+      lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/close-shape.sh"; }
+    [ -f "$lib" ] || lib="$CFG/hooks/lib/close-shape.sh"
+    [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/close-shape.sh"
+  fi
+  [ -f "$lib" ] || return 1
+  # shellcheck source=lib/close-shape.sh
+  # shellcheck disable=SC1090,SC1091
+  . "$lib" 2>/dev/null || return 1
 }
 
 contra=0; facts=""; _ca_exon=""
@@ -759,17 +788,51 @@ if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra" -eq 0 ] \
       _d6_ok=0
     fi
   fi
-  if [ "$_d6_ok" -eq 1 ]; then
-    _d6_shl="${CLOSE_SHAPE_LIB:-$_cascd/lib/close-shape.sh}"
-    [ -f "$_d6_shl" ] || { _d6_t="$0"; [ -L "$_d6_t" ] && _d6_t="$(readlink "$_d6_t")"
-      _d6_shl="$(cd "$(dirname "$_d6_t")" 2>/dev/null && pwd)/lib/close-shape.sh"; }
-    [ -f "$_d6_shl" ] || _d6_shl="$CFG/hooks/lib/close-shape.sh"
-    [ -f "$_d6_shl" ] || _d6_shl="$HOME/.claude/hooks/lib/close-shape.sh"
-    # shellcheck source=lib/close-shape.sh
-    # shellcheck disable=SC1090,SC1091
-    if [ -f "$_d6_shl" ] && . "$_d6_shl" 2>/dev/null; then
-      if ! close_shape_ok "$MSG"; then d6=1; _d6_missing="$(close_shape_missing "$MSG")"; fi
-    fi
+  if [ "$_d6_ok" -eq 1 ] && _ca_source_close_shape; then
+    if ! close_shape_ok "$MSG"; then d6=1; _d6_missing="$(close_shape_missing "$MSG")"; fi
+  fi
+fi
+
+# ── D7 — THE ACT LINE (CLOSE_SCANNABILITY W2, measured 2026-08-23) ───────────────────────────────
+# The operator, in their own words: closes "force me to scan really long and hard what the actual
+# decisions are and it's not 'scan one line' for an actionable silver-plattered what to do". The
+# load-bearing evidence is a close that had a correct ⛔ rung AND had the blocker in its supporting
+# lines and STILL drew "Whats blocked on me? Be explicit" — nothing was missing and nothing was
+# hedged, so no arm above could see it. D1 wants an unfiled step (it was filed). D2 wants a bare
+# command (it was styled). D3 is line-1-scoped and the line 1 was consistent. D5 wants a
+# placeholder. D6 wants the Pyramid answers. The close satisfied every one of them and was still
+# unusable, because the act was welded into a sentence rather than being a line.
+#
+# THE MEASUREMENT — docs/research/close-scannability-2026-08-23.md, 300 rung-carrying closes over
+# 1,373 transcripts: 1 of 190 act-required closes states the act at line 1, median line 6, 54.7%
+# never as its own line. Whether the operator then ACTS (a `<bash-input>` record) splits 35.4% vs
+# 9.4% on exactly that axis, p=2.7e-05, measured within the 185 closes that ALL contain a command
+# so runnability is held fixed. The matcher and the window live in hooks/lib/close-shape.sh beside
+# the D6 matchers — ONE code path, pushed here and pulled by /wrap.
+#
+# SCOPED TO RUNG=👤, AND THE OTHER RUNGS ARE EXCLUSIONS WITH REASONS, NOT OVERSIGHTS:
+#   · 👤 is the rung whose DEFINITION is "operator-only step(s) this session filed are unrun", so
+#     an act provably exists in a store and demanding a line for it can never be a guess. It is 80
+#     of the 190 act-required closes measured.
+#   · ⛔ is deliberately NOT included even though it is the rung of the founding evidence. Its
+#     ledger term above sets contra=1 for EVERY ⛔ close that gets this far, so a D7 term gated on
+#     contra=0 would be unreachable, and one that is not gated would divert a conviction's reason
+#     and arm string. A branch no fixture can drive is a claim with no control (MEMORY.md
+#     control-must-be-able-to-fail), so it is not written. The reachable ⛔ gap is upstream of every
+#     arm — a CORRECT ⛔ close asserts no done-tell and abstains at the close-tell gate — and
+#     closing it means widening that gate, which would change the population every existing arm was
+#     tuned against. That is a separate change with its own evidence, not a rider on this one.
+#   · ✅/📦/🚀/🔧 either have no operator act by definition or already have a drivable agent action
+#     the arms above demand.
+# GATED ON contra=0 for the same reason D6 is: when the ledger already contradicts the close, the
+# drivable action is the demand, and stacking a shape demand before it teaches nothing.
+# Confirmed assignees are exempt (a teammate pane has no operator reading its close) — the same
+# carve-out D6 makes, via the same oracle. A missing/unsourceable lib ⇒ no demand, never a block.
+# CC_CLOSE_ACT=0 disables the arm outright, mirroring CC_CLOSE_SHAPE.
+d7=0
+if [ "${CC_CLOSE_ACT:-1}" != 0 ] && [ "$contra" -eq 0 ] && [ "$RUNG" = "👤" ] && ! _ca_assignee; then
+  if _ca_source_close_shape && command -v close_act_ok >/dev/null 2>&1; then
+    close_act_ok "$MSG" || d7=1
   fi
 fi
 
@@ -777,7 +840,8 @@ fi
 # was clean" and "the ledger was dirty but none of it was mine". Distinguish them in the IDL or
 # the next person debugging a missed conviction cannot tell which happened.
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
-  || [ "$d5" -eq 1 ] || [ "$d6" -eq 1 ] || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
+  || [ "$d5" -eq 1 ] || [ "$d6" -eq 1 ] || [ "$d7" -eq 1 ] \
+  || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
 
 # ── Latch-set + hard cap, PER CLASS (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -806,8 +870,18 @@ FIRED="$STATE_DIR/$SKEY.fired"
 #   Latch lines are `<hash> <class>`; the dedup key is field 1 alone, so an identical message
 # never re-fires whatever class it fired as. A LEGACY bare-hash line counts as `assert`, which is
 # what every fire written before this change was.
+#   D7 (the act line) is a THIRD class for the same reason `shape` is a second one — it is a
+# different demand with a different subject, and it becomes reachable only where the conviction
+# arms have gone quiet, so a shared counter would guarantee it is spent before it is needed.
+# `act` is claimed ONLY when D7 fired ALONE: if any other arm fired on the same message that arm's
+# demand governs, and its budget stays exactly the budget it has always drawn on. So no existing
+# firing case changes class, count or reason string — D7 can only add a new class to messages that
+# would otherwise not have fired at all, or add one sentence to a fire that already happened.
 CLASS=assert; CLASS_MAX="$MAX"
-if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"; fi
+if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"
+elif [ "$d7" -eq 1 ] && [ "$contra" -eq 0 ] \
+     && [ "$d1" -eq 0 ] && [ "$d2" -eq 0 ] && [ "$d3" -eq 0 ] && [ "$d4" -eq 0 ] && [ "$d5" -eq 0 ]
+then CLASS=act; CLASS_MAX="${COMPLETION_ACT_MAX:-2}"; fi
 case "$CLASS_MAX" in ''|*[!0-9]*) CLASS_MAX=2 ;; esac
 if [ -f "$FIRED" ] && awk -v h="$HASH" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$FIRED" 2>/dev/null
 then abstain "latched-already-fired"; fi
@@ -836,6 +910,7 @@ arm=""
 [ "$d2" -eq 1 ] && arm="${arm:+$arm+}fence"
 [ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
 [ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
+[ "$d7" -eq 1 ] && arm="${arm:+$arm+}act"
 log_idl fired "false-done" \
   "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --arg class "$CLASS" \
             --argjson count "$((N+1))" --argjson max "$CLASS_MAX" \
@@ -849,6 +924,7 @@ reason=""
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
 [ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all: DELETE the command from your close and do ONE of two things instead — if the value is the operator's to give, ask for it as your line-1 rung in one sentence naming what the value IS (\"the email address the alarms should go to\", never \"<your-address>\"), or file the step with \`cc-backlog needs \"<step, naming the value>\" --run \"<the command>\"\`, which renders as a ✎ SUPPLY row the operator cannot mistake for something to paste. Re-close with the placeholder line GONE, not restyled."
 [ "$d6" -eq 1 ] && reason="${reason:+$reason }$(close_shape_reason "$RUNG" "$_d6_missing")"
+[ "$d7" -eq 1 ] && reason="${reason:+$reason }$(close_act_reason "$RUNG" "${CC_ACT_WINDOW:-3}")"
 [ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"
 reason="$reason (completion-assert ${CLASS} $((N+1))/${CLASS_MAX})"
