@@ -24,6 +24,21 @@
 # asserted here only so a regression in them cannot hide behind a green suite:
 #     qos-census.sh          /usr/sbin/taskpolicy first  (pre-existing)
 #     team-orphan-reaper.sh  /usr/sbin/lsof first        (9ac045cb, 2026-07-26)
+#
+# THE TWO qos-census CASES ASKED A QUESTION THEY NEVER MEANT TO ASK (item 6a82c9405b9e, fixed
+# 2026-08-23). They invoke the real qos-census.sh to read ONE FIELD out of its JSON — and took its
+# exit code as a health signal by omission, because a bare `out="$(...)"` under bats' errexit aborts
+# the test on any non-zero rc. But that rc is a VERDICT ABOUT THE BOX (0 PASS / 1 FAIL / 3 NO-BURST /
+# 4 SIGNAL-DEAD), so the cases were coupled to the machine's contention level and asserted nothing
+# about PATH. The census emitted 429 bytes of correct JSON carrying loadavg1=21.55 and exited 3.
+#
+# THE FILED CAUSE WAS BACKWARDS, and this is the part worth keeping. The item read "fail when
+# sibling suites run concurrently … >=2 runs in flight => PASS/FAIL, not NO-BURST". Measured
+# standalone with nothing else in flight, both cases failed `with status 3` — NO-BURST. Concurrency
+# was the only thing that could ever have made them pass, since rc 0 requires a burst AND coverage
+# above threshold. A test that needs the box to be BUSY to go green is not flaky, it is inverted.
+# The sibling suite already had it right and says so out loud: tests/qos-chokepoint.bats case (vii),
+# "census reports NO-BURST (rc 3), not a pass, when nothing is in flight", via `run`.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
@@ -40,6 +55,13 @@ plist_path() {
   /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' "$1" 2>/dev/null \
     | sed -n 's/.*export PATH="\([^"]*\)".*/\1/p'
 }
+
+# qos-census.sh exits a VERDICT ABOUT THE LIVE BOX, not a statement about whether it produced
+# output (scripts/qos-census.sh:15-21): 0 PASS · 1 FAIL · 3 NO-BURST · 4 SIGNAL-DEAD. This suite
+# asks only whether the loadavg1 FIELD is readable on the launchd PATH, so every one of those four
+# is a legitimate run — but 2 (usage error) and 127 (not found) are genuine breaks and must still
+# fail. Widening this to "any rc" would let the two cases below go green on a census that never ran.
+verdict_rc_ok() { case "$1" in 0|1|3|4) return 0 ;; *) return 1 ;; esac; }
 
 # ── the controls come first: if these ever pass, everything below proves nothing ─────────────────
 
@@ -69,9 +91,14 @@ plist_path() {
 # ── qos-census: end-to-end, the real script, on the real plist PATH ──────────────────────────────
 
 @test "qos-census reads a NUMERIC loadavg1 on its own launchd PATH" {
-  local p="${QOS_PATH//\$HOME/$HOME}" out load
+  local p="${QOS_PATH//\$HOME/$HOME}" out load rc=0
   # --no-append: never touch the operator's live census log from a test.
-  out="$(env -i PATH="$p" HOME="$HOME" bash "$QOS" --json --no-append 2>/dev/null)"
+  # The `|| rc=$?` is load-bearing, not defensive tidying: an UNGUARDED assignment here coupled this
+  # case to the box's contention level, because errexit aborts the test on any non-zero rc and the
+  # quiet-box verdict is NO-BURST (3). Measured 2026-08-23, standalone with no sibling suite in
+  # flight: `failed with status 3`. The rc is judged explicitly below instead.
+  out="$(env -i PATH="$p" HOME="$HOME" bash "$QOS" --json --no-append 2>/dev/null)" || rc=$?
+  verdict_rc_ok "$rc" || { echo "qos-census exited $rc, which is not one of its four verdicts"; false; }
   [ -n "$out" ] || { echo "qos-census produced no output on PATH=$p"; false; }
   load="$(printf '%s' "$out" | sed -n 's/.*"loadavg1":"\([^"]*\)".*/\1/p')"
   echo "loadavg1=[$load]"
@@ -85,12 +112,38 @@ plist_path() {
   # The seam is set-but-EMPTY, which is honored verbatim; this is the ONLY way to reach the
   # unreadable branch on a host where /usr/sbin/sysctl exists. Without it this direction is untested
   # and the fallback could rot into rendering 0 again.
-  local p="${QOS_PATH//\$HOME/$HOME}" out load
-  out="$(env -i PATH="$p" HOME="$HOME" QOS_CENSUS_SYSCTL= bash "$QOS" --json --no-append 2>/dev/null)"
+  local p="${QOS_PATH//\$HOME/$HOME}" out load rc=0
+  # Guarded for the same reason as the case above — see verdict_rc_ok().
+  out="$(env -i PATH="$p" HOME="$HOME" QOS_CENSUS_SYSCTL= bash "$QOS" --json --no-append 2>/dev/null)" || rc=$?
+  verdict_rc_ok "$rc" || { echo "qos-census exited $rc, which is not one of its four verdicts"; false; }
   [ -n "$out" ] || { echo "qos-census produced no output with the probe disabled"; false; }
   load="$(printf '%s' "$out" | sed -n 's/.*"loadavg1":"\([^"]*\)".*/\1/p')"
   echo "loadavg1=[$load]"
   [ "$load" = "?" ] || { echo "unreadable sysctl rendered [$load]; must be '?', never a number"; false; }
+}
+
+@test "CONTROL: the verdict allowance accepts qos-census's four verdicts and REJECTS anything else" {
+  # The two cases above stop failing on a quiet box because they no longer treat qos-census's rc as
+  # a health signal. That relaxation has a too-weak direction, and this is the half that proves it
+  # did not happen: if verdict_rc_ok were widened to "any rc", both cases would go green on a census
+  # that was never found (127) or was mis-invoked (2), asserting nothing at all.
+  local rc
+  for rc in 0 1 3 4; do
+    verdict_rc_ok "$rc" || { echo "rc $rc is a documented qos-census verdict and must be ACCEPTED"; false; }
+  done
+  for rc in 2 5 126 127; do
+    if verdict_rc_ok "$rc"; then echo "rc $rc is NOT a verdict and must be REJECTED"; false; fi
+  done
+  # The four accepted codes are read off the script's own header, not restated from memory — if that
+  # contract is edited, this must be edited with it.
+  # -E, and the `$` matters more than the alternation. In a BSD BRE, `$` is an anchor ONLY at the
+  # very end of the whole expression; in any earlier branch it is a LITERAL dollar sign. So
+  # `grep -c 'Exit 3\.$\|Exit 0\.$\|Exit 1\.$\|Exit 4\.$'` reads 1, identical to `grep -c 'Exit
+  # 4\.$'` alone — the first three branches match nothing, which is how this assertion first went
+  # red. (Alternation itself is fine: dropping every `$` reads 4. Verified 2026-08-23 on BSD grep
+  # 2.6.0-FreeBSD; a pattern containing a literal `Exit 3.$` IS matched by the BRE form.)
+  local n; n="$(grep -cE 'Exit [0134]\.$' "$QOS")"
+  [ "$n" -eq 4 ] || { echo "qos-census documents $n verdict exits, not 4 — verdict_rc_ok is stale"; false; }
 }
 
 # ── postland-verify: the resolution block + load1(), replayed from the shipping file ─────────────
