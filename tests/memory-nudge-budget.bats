@@ -520,3 +520,54 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   has "$out" 'Auto-rotation unavailable'
   [ "$(wc -c <"$idx" | tr -d ' ')" -eq "$before" ]
 }
+
+# ── the index PATH is pinned, not left to the model to guess ──────────────────
+#
+# The product's own memory instruction says "add a one-line pointer in `MEMORY.md`" with no path.
+# A session that has to CREATE the index therefore guesses, and the observed guess is one level up
+# at projects/<slug>/MEMORY.md. That spot is invisible twice: the cross-account memory mirror
+# shares projects/<slug>/memory/ and nothing above it, and its merge only unions "$d/MEMORY.md"
+# INSIDE memory/. So a misplaced index is neither shared to the other accounts nor merged — the
+# knowledge is written, and then silently unreachable from every account but the one that wrote it.
+# This hook is the only authoring site of that instruction we control; the rest is in the binary.
+
+@test "the nudge names the absolute index path, not a bare filename" {
+  out=""
+  idx="$BATS_TEST_TMPDIR/pinned/memory/MEMORY.md"; mkdir -p "${idx%/*}"
+  printf -- '- [T](t.md) — h\n' > "$idx"
+  for _ in $(seq 1 12); do out="$(fire s-pin "$idx" || true)"; done
+  has "$(printf '%s' "$out" | ctx)" "$idx"
+}
+
+@test "a project with NO index yet is still told WHERE to create it" {
+  # The load-bearing case: MEM is only set when the file already exists, so this is exactly the
+  # session that will create the index — and the only one whose guess can strand a project.
+  proj="$BATS_TEST_TMPDIR/newproj"; mkdir -p "$proj"
+  git init -q "$proj"
+  proj_phys="$(cd "$proj" && pwd -P)"
+  slug="$(printf '%s' "$proj_phys" | tr '/.' '--')"
+  want="$CLAUDE_CONFIG_DIR/projects/$slug/memory/MEMORY.md"
+  out=""
+  for _ in $(seq 1 12); do
+    out="$(printf '{"session_id":"s-new","cwd":"%s"}' "$proj" | bash "$HOOK" || true)"
+  done
+  ctxt="$(printf '%s' "$out" | ctx)"
+  has "$ctxt" "$want"
+  has "$ctxt" "NOT one level up"
+}
+
+@test "even on a hostile cwd the nudge pins a memory/ path, never a bare MEMORY.md" {
+  # The shape-only fallback in the hook is defensive and NOT reachable from here: CWD falls back
+  # to $PWD whenever the harness hands an unusable one, and $PWD is always a real directory, so
+  # the path branch always wins. Asserting the invariant both branches satisfy is therefore the
+  # honest test — forcing the dead branch would only pin the fallback's wording, and a test that
+  # cannot reach the code it names is the vacuous kind this suite's header already warns about.
+  out=""
+  for _ in $(seq 1 12); do
+    out="$(printf '{"session_id":"s-shape","cwd":"/nonexistent-cwd-xyz"}' | CLAUDE_CONFIG_DIR="/nonexistent-cfg-xyz" bash "$HOOK" || true)"
+  done
+  ctxt="$(printf '%s' "$out" | ctx)"
+  has "$ctxt" "/memory/MEMORY.md"
+  has "$ctxt" "NOT one level up"
+  hasnt "$ctxt" "append one index line to MEMORY.md and create the topic file with frontmatter. SKIP"
+}

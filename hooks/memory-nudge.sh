@@ -91,6 +91,7 @@ CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 
 MEM="${MEMORY_INDEX_PATH:-}"
+WANT="$MEM"
 if [ -z "$MEM" ]; then
   ROOT=""
   if GCD=$(cd "$CWD" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
@@ -106,6 +107,11 @@ if [ -z "$MEM" ]; then
     for base in "$cand" "$phys"; do
       [ -n "$base" ] || continue
       p="$CFG/projects/$(slugify "$base")/memory/MEMORY.md"
+      # WANT is where the index BELONGS, recorded whether or not it exists yet. MEM is only set
+      # when the file is already there, so on a brand-new project MEM stays empty — and that is
+      # precisely the session that has to be told the path, because it is the one about to
+      # CREATE the index. See the nudge text below for why naming it matters.
+      [ -n "$WANT" ] || WANT="$p"
       [ -f "$p" ] && { MEM="$p"; break 2; }
     done
   done
@@ -339,7 +345,21 @@ else
   [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
 fi
 
-NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — append one index line to MEMORY.md and create the topic file with frontmatter. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
+# PIN THE PATH. The product's own memory instruction says "add a one-line pointer in `MEMORY.md`"
+# without a path, so a session that has to CREATE the index guesses — and the observed guess is one
+# level up, at projects/<slug>/MEMORY.md. That location is invisible twice over: the cross-account
+# memory mirror shares projects/<slug>/memory/ and nothing above it, and the mirror's merge only
+# knows "$d/MEMORY.md" INSIDE memory/, so a misplaced index is neither shared nor unioned. Measured
+# 2026-08-22: 39 slugs correct, and the misplaced ones were written by exactly the sessions that
+# created their project's memory for the first time. This hook already resolves the right path for
+# its budget measurement; naming it in the nudge costs nothing and is the only authoring site of
+# this instruction we control (the rest is in the Claude Code binary).
+if [ -n "$WANT" ]; then
+  WHERE="the index is $WANT — create it there, NOT one level up at the project root (an index outside memory/ is invisible to the cross-account mirror), and topic files beside it"
+else
+  WHERE="the index lives at <config-dir>/projects/<slug>/memory/MEMORY.md — inside memory/, NOT one level up at the project root (an index outside memory/ is invisible to the cross-account mirror), and topic files beside it"
+fi
+NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — append one index line to MEMORY.md and create the topic file with frontmatter; $WHERE. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.
