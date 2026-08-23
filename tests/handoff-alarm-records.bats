@@ -295,8 +295,10 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
 }
 
 @test "no collateral: the completion push keeps its own guard and is NOT an alarm site" {
-  # D1 owns three sites. The completion push and the succession announce are a different mechanism
-  # with a different failure model; converting them here would be scope no reviewer asked for.
+  # D1 owns three sites; recycle-100p (2026-08-22) added a FOURTH — the watcher's relaunch-write-
+  # failed branch (class recycle-relaunch-failed), previously one of the two ledger-invisible
+  # recycle deaths. The completion push and the succession announce stay non-sites: a different
+  # mechanism with a different failure model; converting them here would be unasked scope.
   [ "$(grep -c 'if \[ -x "\$HOME/.claude/bin/cc-notify" \]' "$FIRE")" -eq 1 ]
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 3 ]
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 4 ]
 }

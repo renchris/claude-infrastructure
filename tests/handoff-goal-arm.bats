@@ -176,7 +176,7 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 # ── 3 · arm_goal: THREE VERDICTS, AND IT NEVER FAILS THE FIRE ──────────────────────────────────
 
 @test "arm_goal with no condition does nothing and says nothing" {
-  it2_paste_submit() { echo "PASTED" >&3; return 0; }
+  it2_paste_submit_verified() { echo "PASTED" >&3; return 0; }
   run arm_goal /bin/true 900 ''
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -186,7 +186,7 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 @test "verdict=set — pasted AND read back from the session's own transcript" {
   command -v jq >/dev/null 2>&1 || skip "verdict rows need jq"
   STUB_SID=s4 _write_goal_transcript s4 'finish the brief'
-  it2_paste_submit() { return 0; }
+  it2_paste_submit_verified() { return 0; }
   STUB_SID=s4 run arm_goal /bin/true 900 'finish the brief'
   [ "$status" -eq 0 ]
   [[ "$output" == *"goal-arm verdict=set"* ]] || false
@@ -196,7 +196,7 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 
 @test "verdict=abstained — the paste refused (pane not provably a live CC composer)" {
   command -v jq >/dev/null 2>&1 || skip "verdict rows need jq"
-  it2_paste_submit() { return 1; }
+  it2_paste_submit_verified() { return 1; }
   STUB_SID=s5 run arm_goal /bin/true 900 'finish the brief'
   [ "$status" -eq 0 ]                              # ← never fails the fire
   [[ "$output" == *"goal-arm verdict=abstained"* ]] || false
@@ -208,7 +208,7 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 @test "verdict=unverified — submitted, but NO goal_status ever appeared (never called 'armed')" {
   command -v jq >/dev/null 2>&1 || skip "verdict rows need jq"
   : > "$PDIR/s6.jsonl"
-  it2_paste_submit() { return 0; }
+  it2_paste_submit_verified() { return 0; }
   STUB_SID=s6 run arm_goal /bin/true 900 'finish the brief'
   [ "$status" -eq 0 ]
   [[ "$output" == *"goal-arm verdict=unverified"* ]] || false
@@ -218,7 +218,7 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 }
 
 @test "verdict=abstained when there is no pane to paste into at all" {
-  it2_paste_submit() { echo "SHOULD NOT PASTE" >&2; return 0; }
+  it2_paste_submit_verified() { echo "SHOULD NOT PASTE" >&2; return 0; }
   run arm_goal /bin/true '' 'finish the brief'
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=abstained"* ]] || false
