@@ -175,6 +175,61 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     explained by the green sweep at `:3011` clearing `postland-cut-*.page`. **A refuted claim is not
     a successor row.**
 
+  **CLOSE-TIME FACTS.** Landed **`d3a10361c`** on `origin/main` — `land-verify: 3 path(s) present +
+  content-identical`, `ship-backup-reap` reaped `ship/backup-d3a10361c`, `stranded-sweep clean`,
+  `gate-green NOT advanced` (normal — a land makes no full-suite claim). ⚠️ **The base MOVED under
+  the land**: `d6fb20666..d3a10361c`, so a sibling landed between this recycle's open (`2f45c78e9`)
+  and its push, and the local shas were rewritten. Verified BY CONTENT, never by sha
+  (memory `cited-sha-may-not-survive-the-land`): `merge-base --is-ancestor` rc 0, `git diff --stat
+  origin/main` EMPTY on all three paths, `files to PRESERVE` present 1× and `C29b` 5× on trunk.
+  **Per-row window diff: 1 LEFT (`bf7412ee84bf`, MINE) · 7 ENTERED, none mine** — 3
+  claude-infrastructure + 4 reso, all sibling-filed. The flat board rose (258→260 open, 187→191
+  blocked, claimed 3→2) entirely on sibling activity; **the flat delta would have reported this
+  recycle as net-negative, which is exactly why method 80 exists.** `master-convergence-deadlock`
+  **33 → 32 open**, blocked unchanged at 6 — the count declared before the close, and a second
+  consecutive move inside the warm effort. **filed 0 / closed 1.**
+
+  🚨 **THE LAND'S OWN GATE CAUGHT A DEFECT IN THIS DIFF — and it is the standing `!`-dead class
+  wearing a different face.** Land attempt 1 went **GATE RED** (rc 6, no push) on the
+  dead-assertion ratchet: `[ "$status" -eq 0 ] && [ "$output" -ge 1 ]` mid-test is `and-absorbed`.
+  errexit exempts every command in a `&&` list *except the one after the final `&&`*, so when the
+  LHS fails the list short-circuits, returns non-zero, and **execution CONTINUES** — the status
+  check was unreachable and only the output check was ever live. Fixed by splitting into two
+  standalone commands rather than by running `bats-assert-liveness-fix.py`, because the fixer's
+  `! A || B` rewrite is the wrong form for two INDEPENDENT assertions and one-per-line is the idiom
+  the rest of the suite already uses. **Per the gate's own instruction that a hand-edit be proven in
+  BOTH directions and never by the analyzer alone, verified with a per-site mutant**: `-eq 0` →
+  `-eq 77` reds the test at exactly line 1000, where the `&&` form absorbed it silently; analyzer
+  clean; mutant reverted. **The lesson generalises past `!`: the memory entry says "`!` dead unless
+  final", and the ratchet reads the whole `&&`-list family — so ANY multi-clause assertion that is
+  not the test's last statement is suspect, not just a negated one.**
+
+  ⚠️ **THREE LAND ATTEMPTS, AND THE SECOND ONE FOUND A LIMIT THE BRIEF HAD WRONG.** #159's brief
+  says the land "will likely exceed the Bash tool's 600 s ceiling and be **auto-backgrounded**;
+  that is survivable". **Attempt 2 was not auto-backgrounded — it was KILLED (exit 143) mid-smoke**,
+  and the `; echo "LAND_RC=$?"` sentinel never ran, so the log ended with no verdict at all.
+  Nothing was lost (smoke precedes the push, so no push had happened, and `land-lock --status` read
+  `(free)` — the lock released cleanly), but **a sentinel appended by the same compound command
+  cannot survive that compound being SIGTERMed.** Attempt 3 ran the land as a SINGLE background
+  Bash-tool job — not double-backgrounded, which stays banned — and completed rc 0.
+  **Take the auto-background as a possibility, never a guarantee: background the land deliberately.**
+
+  **METHOD 83 HOLDS FOR THE THIRD CONSECUTIVE RECYCLE — PARTIAL IS THE NORM AT 420 s.** Selector
+  answered **13 real suites** (not the fail-closed `FULL`), instrument control `--direct
+  492c51066~1..492c51066` = **32**, a twenty-three-recycle stable reading. The land attempted
+  **3 in 426 s**, and **naming them required matching plan lines to `bats --count`, because the gate
+  names only the suite it KILLS**: `1..22` = `cc-backlog-dups-family` and `1..21` =
+  `cc-premise-postland-red` earned full verdicts (43 ok), while `1..171` =
+  **`tests/cc-reaper.bats` was GATE-KILLED at the budget** after 158 ok (exit 124, ZERO `not ok` —
+  the gate's own text calls it *"NOT a red and NOT evidence about your tree"*). 22+21+158 = the 201
+  `ok` in the smoke block, so the accounting closes exactly. The remaining **10 never started**.
+  Land rc 0. ⚠️ A first draft of this paragraph named `falsifier-emission` as the second verdict —
+  **it never ran.** The suite list a selector PRINTS is not the list a budgeted smoke EXECUTES;
+  reconcile the plan lines against `bats --count` before naming any suite as covered. ⚠️ `tests/postland-verify.bats` is in the selection and is the budget sink
+  that guarantees this — **which is why its C29 family was run standalone BEFORE the land (10/10,
+  plan line `1..10` exact), not left to the smoke.** ⚠️ **And the box was ~4× slower than #159's**:
+  ~275 s per postland-verify test against #159's ~65 s. Size nothing off this run.
+
 - **2026-08-22 — drain recycle #159: confirming ONE END of a differential is not a differential —
   postland's bisect proved the tip was red and named it, never asking whether its PARENT was red too,
   so a pre-existing trunk red convicted an innocent land. filed 0 / closed 1 / landed 2 commits (the
