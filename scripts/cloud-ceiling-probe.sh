@@ -182,10 +182,22 @@ weekly_pct_for() { # → integer, or "?" when unreadable. NEVER 0 on failure: 0 
 
 # THE CLASSIFIER. Its patterns are the instrument, and `--control` exists to prove they match this
 # API's real refusal string rather than the one we imagined.
+#
+# `grep -E … >/dev/null`, NEVER `grep -qE`. Under `set -o pipefail` (:70) a `-q` grep exits at its
+# FIRST match, and once the producer's write exceeds the 64 KiB pipe buffer that early exit sends
+# the producer SIGPIPE — so the PIPELINE reports failure on the exact input it just matched, and
+# the arm reads as "no match". Measured: 200/200 created below 64 KiB, 1/100 AT 64 KiB, 0/200 at
+# 200 KB. Redirecting instead of `-q` makes grep drain stdin, so the verdict stops depending on the
+# capture's LENGTH — a property no pattern here can control.
+#
+# This is not a corner case for THIS producer. `$out` is a 180s PTY capture of a CLI that paints
+# progress, colour and cursor moves throughout, so the large regime is the ordinary one; and the
+# probe has already SPENT the operator's weekly quota by the time it classifies. The inversion
+# therefore converts a paid, successful create into a published non-verdict.
 classify_outcome() { # stdin = combined create output; echoes created|refused-quota|refused-other
   local out; out="$(cat)"
-  if printf '%s' "$out" | grep -qE 'session_[A-Za-z0-9]+'; then printf 'created'; return 0; fi
-  if printf '%s' "$out" | grep -qiE 'usage limit|rate limit|quota|too many|weekly limit|limit reached|exceeded|429'; then
+  if printf '%s' "$out" | grep -E 'session_[A-Za-z0-9]+' >/dev/null; then printf 'created'; return 0; fi
+  if printf '%s' "$out" | grep -iE 'usage limit|rate limit|quota|too many|weekly limit|limit reached|exceeded|429' >/dev/null; then
     printf 'refused-quota'; return 0
   fi
   printf 'refused-other'
@@ -200,8 +212,13 @@ classify_outcome() { # stdin = combined create output; echoes created|refused-qu
 # in `refused-other`, whose control verdict is "✗ classifier WRONG" — convicting the classifier for
 # being RIGHT (it correctly declined to call a TTY complaint a quota refusal) while the rig was the
 # thing at fault. Same for `script: tcgetattr … not supported on socket`, our own allocator failing.
+#
+# Redirect rather than `-q`, for the reason given at classify_outcome — and it matters MOST here.
+# This arm is deliberately ordered ahead of the quota patterns, so its silent inversion does not
+# merely lose a verdict: the run falls through to quota and a fault in our own rig gets published
+# as a CEILING, which is the single outcome the ordering exists to prevent.
 is_harness_refusal() { # stdin → 0 iff this refusal is about how WE called it
-  grep -qiE 'interactive terminal|requires a (tty|terminal)|not a tty|tcgetattr|Operation not supported on socket|pty-run:|unknown option|unrecognized (option|argument)|cannot be combined with|requires a description|no config_dir|no claude binary|no pty allocator'
+  grep -iE 'interactive terminal|requires a (tty|terminal)|not a tty|tcgetattr|Operation not supported on socket|pty-run:|unknown option|unrecognized (option|argument)|cannot be combined with|requires a description|no config_dir|no claude binary|no pty allocator' >/dev/null
 }
 
 # ── THE FIFTH STATE: THE REPO'S BUNDLE, WHICH IS NEITHER OUR RIG NOR THEIR QUOTA ────────────────
@@ -219,8 +236,12 @@ is_harness_refusal() { # stdin → 0 iff this refusal is about how WE called it
 # Kept AHEAD of the quota arm for the original reason, which is unchanged: a transport failure must
 # never reach the quota patterns. This split changes what a run is CALLED, never what it is allowed
 # to publish.
+#
+# Redirect rather than `-q`, per classify_outcome. This arm's real capture is the LARGEST of the
+# three: the refusal arrives only after three upload retries of a ~95 MiB bundle, with progress
+# painted throughout — so it sits furthest inside the regime where `-q` inverts.
 is_bundle_refusal() { # stdin → 0 iff the create died seeding the sandbox, not on any limit
-  grep -qiE 'Bundle upload failed|Repo is too large to bundle|setup GitHub'
+  grep -iE 'Bundle upload failed|Repo is too large to bundle|setup GitHub' >/dev/null
 }
 
 # Strip the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching, so it emits

@@ -59,6 +59,33 @@ capable_stub() {
   printf '\n# --cloud ultrareview\n' >> "$D/fake-claude"
 }
 
+# A capable stub whose output CROSSES the 64 KiB pipe buffer, decisive line FIRST.
+#
+# The SIZE is the whole point. Every classifier in the probe is `producer | grep -q …` under
+# `set -o pipefail`, and `grep -q` exits at its first match — so once the producer's write exceeds
+# the pipe buffer it takes SIGPIPE, and the PIPELINE reports failure on the very input it just
+# matched. The verdict then inverts on a property of the payload's LENGTH, which no pattern of the
+# classifier's own can control (memory: grep-q-under-pipefail-inverts-the-verdict).
+#
+# Every stub above fits in the buffer, so none of them can reach that regime — which is precisely
+# how a control named after a bug stays green (memory: control-fixture-must-reach-the-bugs-regime).
+# And the large regime is the ORDINARY one here, not a corner case: a real create is a 180s PTY
+# capture of a CLI that paints progress, colour and cursor moves the whole time.
+#
+# The filler is inert BY CONSTRUCTION — it matches no pattern in classify_outcome,
+# is_harness_refusal or is_bundle_refusal — so any verdict change is attributable to length alone.
+big_stub() { # $1 = the decisive first line (must contain no single quote); ~240 KB of filler follows
+  cat > "$D/fake-claude" <<STUB
+#!/bin/bash
+# --cloud ultrareview
+printf '%s\n' '$1'
+awk 'BEGIN{ s=""; for(i=0;i<80;i++) s = s "inert-padding-bytes-"; for(j=0;j<150;j++) print s }'
+exit 0
+STUB
+  chmod +x "$D/fake-claude"
+  export CLOUD_CEILING_CLAUDE_BIN="$D/fake-claude"
+}
+
 @test "THE REGRESSION: a created verdict reaches the ledger — the read does not kill the run" {
   capable_stub 'Created cloud session: session_01AAA'
   run "$P" --account acct-a --max 1 --confirm
@@ -230,6 +257,46 @@ EOF
   [[ "$output" != *"CEILING ="* ]] || false
   [[ "$output" != *"about HOW IT CALLED"* ]] || false
   [[ "$output" == *"seeding the sandbox"* ]] || false
+  run /usr/bin/grep -c '"verdict":"bundle"' "$CLOUD_CEILING_LEDGER"
+  [ "$output" -eq 1 ]
+}
+
+@test "a CREATED session is still created when the capture crosses the pipe buffer" {
+  # Same stimulus as "THE REGRESSION" above, same token, same position on line 1 — only the
+  # capture's LENGTH differs. That test is this one's positive control: if both are red the fixture
+  # is broken, and only this one going red is the defect.
+  #
+  # Measured pre-fix: 200/200 created below 64 KiB, 1/100 AT 64 KiB, 0/200 at 200 KB. The probe
+  # spends REAL weekly quota to reach this point, so the inversion converts a paid, successful
+  # create into a published non-verdict — the one outcome a measurement rig must never buy.
+  big_stub 'Created cloud session: session_01AAA'
+  run bash "$P" --account acct-a --max 1 --confirm
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"LOWER BOUND"* ]] || false
+  run /usr/bin/grep -c '"outcome":"created"' "$CLOUD_CEILING_LEDGER"
+  [ "$output" -eq 1 ]
+}
+
+@test "a rig refusal is still the RIG's when the capture crosses the pipe buffer" {
+  # is_harness_refusal is checked FIRST so that a fault in our own instrument can never be
+  # published as a property of the accounts. Inverting it silently is therefore worse than
+  # inverting the created arm: the run falls through to the quota patterns, and a rig fault
+  # becomes a CEILING. This pairs with the small-payload rig test above.
+  big_stub 'Error: --cloud requires an interactive terminal. Drop --cloud, or run from a TTY.'
+  run bash "$P" --control --confirm
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"refused BEFORE the account was ever consulted"* ]] || false
+  [[ "$output" != *"classifier WRONG"* ]]
+}
+
+@test "a BUNDLE refusal is still the bundle's when the capture crosses the pipe buffer" {
+  # The third ordered arm, and the one whose real-world capture is LARGEST: this refusal arrives
+  # after three upload retries of a ~95 MiB bundle, with the CLI painting progress throughout.
+  big_stub 'Error: Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on https://claude.ai/code'
+  run bash "$P" --account acct-a --max 4 --confirm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"seeding the sandbox"* ]] || false
+  [[ "$output" != *"CEILING ="* ]] || false
   run /usr/bin/grep -c '"verdict":"bundle"' "$CLOUD_CEILING_LEDGER"
   [ "$output" -eq 1 ]
 }
