@@ -2278,3 +2278,95 @@ assert_same_patch_id() {                              # the fixture really is a 
   run grep -cF 'FROZEN' "$PAGES/deploy-diverged-superseded.page"
   [ "$output" -ge 1 ] || false                        # ...and says what the freeze costs
 }
+
+# ── ORPHAN prune: the live link whose repo source was DELETED (backlog 456d5c61f4c8) ─────────────
+# The mirror of link_refresh. The assert gained a reverse sweep because its forward walk iterates
+# the TRACKED listing and a deleted file has left that listing — so its live symlink survives,
+# resolving for `command -v` and failing with ENOENT at exec, seen by nobody. Two were live on the
+# operator's host when this landed (bin/cc-cloud-watch, bin/browsermcp-wrapper.sh).
+#
+# THIS CONSUMER DELETES, so it does not trust the verdict it is given. Every case below fixes the
+# assert's output and varies only what is actually on disk: the actuator re-derives the dangling
+# predicate itself, and the three controls are what prove a wrong or stale verdict cannot destroy
+# anything (memory: make-the-actuator-the-arbiter). Nothing here can remove a path that resolves.
+orphan() { # <live-relative> — a DANGLING link into the fixture repo; returns its path via $ODEST
+  ODEST="$LIVE/$1"
+  mkdir -p "${ODEST%/*}"
+  ln -sfn "$SHARED/$1" "$ODEST"                    # $SHARED/$1 deliberately never created
+  printf 'ORPHAN: rm -f %s\n' "$ODEST" >> "$PARITY_OUT"
+}
+
+@test "ORPHAN: a dangling live link into the checkout is PRUNED (RED-PROOF)" {
+  seed_parity 1
+  orphan hooks/cc-deleted.sh
+  [ -L "$ODEST" ]                                  # present before...
+  [ ! -e "$ODEST" ]                                # ...and already inert, which is what makes it safe
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ ! -L "$ODEST" ]                                # gone
+  echo "$output" | grep -q "orphan-prune: 1 dead live link"
+}
+
+@test "ORPHAN control: a verdict naming a HEALTHY link deletes NOTHING — the actuator re-derives" {
+  seed_parity 1
+  mkdir -p "$LIVE/hooks"
+  echo payload > "$SHARED/hooks/alive.sh"
+  ln -sfn "$SHARED/hooks/alive.sh" "$LIVE/hooks/alive.sh"
+  # A stale or simply wrong verdict: the link resolves, so the prune must refuse it on its own
+  # evidence rather than on the assert's say-so. This is the case the row feared and the reason the
+  # predicate is "is it dangling", never "is it tracked".
+  printf 'ORPHAN: rm -f %s\n' "$LIVE/hooks/alive.sh" >> "$PARITY_OUT"
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$LIVE/hooks/alive.sh" ]                    # untouched
+  [ -e "$LIVE/hooks/alive.sh" ]                    # and still resolving
+  [[ "$output" != *"orphan-prune"* ]]
+}
+
+@test "ORPHAN control: a verdict naming a REAL FILE deletes NOTHING — only symlinks are ever claimed" {
+  seed_parity 1
+  mkdir -p "$LIVE/hooks"
+  echo "hand-written, in no checkout" > "$LIVE/hooks/real.sh"
+  printf 'ORPHAN: rm -f %s\n' "$LIVE/hooks/real.sh" >> "$PARITY_OUT"
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -f "$LIVE/hooks/real.sh" ]                     # an unversioned real file is STRAY's problem
+  [[ "$output" != *"orphan-prune"* ]]
+}
+
+@test "ORPHAN control: --dry-run previews the prune and removes NOTHING" {
+  seed_parity 1
+  orphan hooks/cc-deleted.sh
+  stamp HEAD
+  run dlp --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would prune"
+  echo "$output" | grep -q "WOULD BE pruned"
+  [ -L "$ODEST" ]                                  # still there
+}
+
+@test "ORPHAN control: the prune and the refresh are disjoint — one tick does both, neither flaps" {
+  seed_parity 1
+  miss hooks/brand-new.sh                          # a genuine gap the refresh must still repair
+  orphan hooks/cc-deleted.sh                       # and a dead link the prune must remove
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$DEST" ]                                   # created
+  [ ! -L "$ODEST" ]                                # removed
+  echo "$output" | grep -q "link-refresh: 1 live link"
+  echo "$output" | grep -q "orphan-prune: 1 dead live link"
+}
+
+@test "ORPHAN control: no ORPHAN line ⇒ the prune narrates nothing (the 144×/day silence contract)" {
+  seed_parity 1
+  miss hooks/only-a-miss.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"orphan-prune"* ]] || false          # `|| false`: a mid-test [[ ]] is dead otherwise
+  [[ "$output" != *"would prune"* ]]
+}

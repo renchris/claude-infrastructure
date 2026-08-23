@@ -375,6 +375,7 @@ PAGES="${CC_PARITY_PAGES:-${CC_PAGES_DIR:-$LIVE/autonomy/pages}}"
 FILED_DIR="${CC_PARITY_FILED_DIR:-$LIVE/autonomy/parity-filed}"
 missing=0
 pending=0
+orphans=0
 
 # STAGED-PENDING is a THIRD state between "linked" and "drift", and it is the repo's own design:
 # a settings-wired hook is deliberately left UNLINKED until its staged activation script runs, so
@@ -427,6 +428,11 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
     noverdict=1
     _tracked=""
   fi
+  # The two accumulators the ORPHAN sweep below reads. They are filled by the SAME walk that emits
+  # MISSING, which is the whole point: the reverse sweep's scope is DERIVED from the want-list, not
+  # maintained beside it. See the sweep's own header for why a second directory list is a defect.
+  _claimed=""   # rels this walk owns — the sweep defers to it rather than double-claiming a path
+  _odirs=""     # live-relative dirs the want-list populates — the sweep visits exactly these
   # Heredoc, NOT a pipe: the loop must run in THIS shell or its `missing`/`drift` writes are lost.
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -500,6 +506,14 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
+    # Recorded BEFORE any verdict below, so every want=1 path is claimed however it is scored —
+    # LINKED, PENDING, MISSING or NOVERDICT alike. A path claimed here can never also be swept as
+    # an ORPHAN, which is what stops one file producing a prune AND a relink in the same tick.
+    _claimed="$_claimed $rel"
+    case "$rel" in
+      */*) _odirs="$_odirs ${rel%/*}" ;;
+      *)   _odirs="$_odirs ." ;;        # a root SSOT — its directory is the live root itself
+    esac
     # ── root SSOTs: EXISTENCE IS NOT ENOUGH (2026-08-12, consolidation audit 02 / b13787e71c9f) ──
     # Every other class here asks "is there a live counterpart?", and for a per-file surface of
     # hundreds that is the right question: the failure class is a BRAND-NEW tracked file nobody
@@ -600,6 +614,69 @@ EOF
   done <<EOF
 $_tracked
 EOF
+
+  # ── ORPHAN: the live link whose repo source was DELETED (backlog 456d5c61f4c8) ─────────────────
+  # THE FORWARD WALK CANNOT SEE THIS CLASS, BY CONSTRUCTION, and that is the whole finding. Every
+  # leg above iterates the TRACKED listing and asks "is there a live counterpart?". A file DELETED
+  # from the repo leaves that listing, so the walk never visits it again — while its live symlink
+  # survives, still resolving for `command -v` and then failing with ENOENT at exec. Nothing on the
+  # machine reported it: this assert had no converse leg, and deploy-live.sh consumes this assert.
+  #
+  # Measured 2026-08-23 on the operator's live layer — TWO orphans, both from ordinary deletions:
+  # ~/.claude/bin/cc-cloud-watch (source deleted by 799c3282a) and ~/.claude/bin/browsermcp-wrapper.sh
+  # (deleted by 47cc3f279). The second is the one that matters for triage: it was minted FOUR DAYS
+  # AFTER the row was filed, so this is a live generator, not a one-off residue.
+  #
+  # WHY THE SCOPE IS DERIVED, NOT LISTED. scripts/deploy-link-parity.sh already carries a correct
+  # sweep_orphans() (landed 2026-08-08, one day after the row) — and it is a detector with no owner:
+  # census 2026-08-23 found ZERO execution sites for that script anywhere in scripts/, bin/, hooks/,
+  # launchd/ or settings.json, so its verdict has never once reached the live layer. Porting its
+  # hardcoded directory list here would have re-created the "two auditors over one population with
+  # different state models" divergence this file has already paid for twice (see the
+  # backlog-consolidation note above, and pending_owner's scar). Instead the sweep visits exactly
+  # the directories the want-list populated on THIS run, so a class added above gains orphan
+  # coverage with no edit here and the two directions cannot drift apart.
+  #
+  # THE PRICE, STATED RATHER THAN HIDDEN: a directory whose LAST tracked file was deleted
+  # contributes no rel, so it is not swept. That is a real hole and it is the correct one to accept
+  # — the alternative is the second list.
+  #
+  # WHAT THIS MAY CLAIM IS DELIBERATELY NARROW, because the consumer DELETES. Three conditions, all
+  # required: it is a SYMLINK (a real file is deploy-link-parity's STRAY question, a different
+  # remedy), it does NOT RESOLVE (so the path is already inert — removing it cannot break a caller
+  # that works today), and its target is INSIDE THIS CHECKOUT (a link into someone else's tree is
+  # explicitly not ours to judge, same scope clause deploy-link-parity.sh:49 states). Unquoted
+  # $_odirs word-splitting is safe here for the same reason link_refresh's field-splitting is:
+  # tracked runtime paths are space-free by contract.
+  _oseen=""
+  for _od in $_odirs; do
+    case " $_oseen " in *" $_od "*) continue ;; esac
+    _oseen="$_oseen $_od"
+    if [ "$_od" = "." ]; then _odir="$LIVE"; else _odir="$LIVE/$_od"; fi
+    [ -d "$_odir" ] || continue
+    for _l in "$_odir"/*; do
+      # NO MUTANT CAN RED THIS LINE ALONE, and that is a property of the input space, not a gap in
+      # the suite: a real file passes `-e` and a non-matching glob literal fails the $REPO scope
+      # check, so the two guards below already decide every reachable case. It stays because it is
+      # the primary statement of what this leg may claim, and its consumer deletes — but it is
+      # defence in depth, not a discriminating guard, and calling it "covered" would be false.
+      [ -L "$_l" ] || continue                              # real file ⇒ STRAY's question, not ours
+      [ -e "$_l" ] && continue                              # it RESOLVES ⇒ healthy ⇒ never claimed
+      _orel="${_l#"$LIVE"/}"
+      case " $_claimed " in *" $_orel "*) continue ;; esac  # the forward walk owns it (it is a MISS)
+      _ot="$(readlink "$_l")"
+      case "$_ot" in "$REPO"/*) ;; *) continue ;; esac      # points elsewhere ⇒ not ours to judge
+      printf 'ORPHAN: rm -f %s\n' "$_l"
+      report "ORPHAN" "$_orel" "live link → deleted repo source; resolves to nothing"
+      orphans=$((orphans + 1))
+      drift=1
+    done
+  done
+fi
+if [ "$orphans" -ne 0 ]; then
+  printf '\ndeploy-parity-assert: %s live symlink(s) under %s point at a repo source that no longer exists.\n' "$orphans" "$LIVE" >&2
+  printf 'Each still resolves for command -v and then fails with ENOENT at exec. Run the rm -f lines\n' >&2
+  printf 'above, or let deploy-live.sh prune them on its next tick (it re-derives the predicate itself).\n' >&2
 fi
 if [ "$missing" -ne 0 ]; then
   printf '\ndeploy-parity-assert: %s tracked runtime file(s) have NO live counterpart under %s.\n' "$missing" "$LIVE" >&2
