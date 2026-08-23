@@ -959,6 +959,112 @@ PS
   [ "$output" = "red" ]
 }
 
+# ── C29b a verdict spends only the candidates it ADJUDICATED ──────────────────────────────────────
+# THE EVIDENCE LEAK, filed 2026-08-11, measured off runner.log 2026-08-22. `conviction_clear` wiped
+# the WHOLE ledger at all three verdict sites. That is right for a GREEN — it ran the corpus,
+# everything passed, so every candidate row predating it is genuinely stale — and wrong for a RED,
+# which exonerates nothing: it names file A and says nothing whatever about file B, dropped from
+# FAILING in that same run only because C29 ruled one window insufficient. 42 of 79 pendings were
+# wiped; 22 of those by a RED or a HUNG (27.8% of all pendings), 7 of them SAME-RUN — the pending
+# and the verdict seconds apart inside one corroborate_convictions loop.
+#
+# WHY NO TEST CAUGHT IT FOR ELEVEN DAYS, and what that demands of these three: every C29 fixture
+# above puts exactly ONE failing file in the tree, and with one file there is no such thing as
+# "one corroborates while another pends" — the mixed state that reaches the RED branch with a live
+# pending is unreachable from a single-file fixture, so the bug had no shape to fail in. These
+# fixtures therefore put TWO files in one run, which is the whole point.
+@test "C29b: a RED does not spend a file it never adjudicated (the SAME-RUN wipe)" {
+  led="$CC_POSTLAND_DIR/convictions"
+  printf '@test "f" { false; }\n' > "$R/tests/alwaysbad.bats"      # A — fails from run 1
+  # B — passes run 1, fails from run 2 on, so it enters FAILING one window BEHIND A. That offset is
+  # the fixture's entire job: it is what makes run 2 corroborate A while B is still on its first.
+  c="$BATS_TEST_TMPDIR/late-counter"
+  add_stateful_test latebad "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 1 ] && exit 0\nexit 1\n' "$c")"
+  push_commit "two suites, one failing a window ahead of the other"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # window 1: A fails (pends), B passes
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                            # precondition, asserted not assumed
+  second_window                                    # window 2: A corroborates => RED, B pends
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]
+  run jq -r '.failing | join(",")' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "${output#*alwaysbad}" != "$output" ]          # ...on A, the file it actually adjudicated
+  # THE ASSERTION THE UNSCOPED WIPE CANNOT SATISFY: B's row was written seconds earlier by the very
+  # loop that produced this verdict, and the verdict said nothing about B.
+  [ -f "$led" ]
+  run grep -c 'tests/latebad.bats' "$led"
+  [ "$status" -eq 0 ] && [ "$output" -ge 1 ]       # B's candidacy SURVIVES the red
+  # ...and the other half of "only what it adjudicated": A was convicted, so A's rows ARE spent.
+  # Without this the test would also pass if the fix simply stopped clearing anything, which is the
+  # stale-row trap conviction_clear's first paragraph exists to prevent.
+  run grep -c 'tests/alwaysbad.bats' "$led"
+  [ "$output" = "0" ]
+}
+
+@test "C29b: the preserved candidacy CONVERGES — B reds in its own second window" {
+  # The state assertion above proves the row survives; this proves the row is still WORTH something,
+  # which is the claim that actually matters. Each wipe costs a full corpus run to re-earn, and the
+  # two files the ledger named most often (handoff-fire-capacity-gate, handoff-fire-completion-push)
+  # pended twice, were wiped twice, and were never once convicted.
+  printf '@test "f" { false; }\n' > "$R/tests/alwaysbad.bats"
+  c="$BATS_TEST_TMPDIR/late-counter"
+  add_stateful_test latebad "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 1 ] && exit 0\nexit 1\n' "$c")"
+  push_commit "two suites, one failing a window ahead of the other"
+  t1="$(origin_tree)"
+  # CUT_MAX pinned for the same reason test "the SPREAD floor holds" pins it: this fixture takes
+  # three sweeps, and a cool-off refusal on an unrelated constant would red it for a reason that has
+  # nothing to do with corroboration.
+  export CC_POSTLAND_CUT_MAX=99
+  run bash "$SUT" --run-if-needed                  # window 1
+  second_window                                    # window 2 => RED on A, B pending
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t1.json"
+  [ "$output" = "red" ]                            # precondition
+  printf '# retarget\n' >> "$R/tests/alwaysbad.bats"
+  push_commit "a new tree, both suites still failing"
+  t2="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # B's SECOND window — A starts over, B converges
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  [ "$output" = "red" ]                            # unscoped-wipe answer here is `cut`: B re-pends
+  run jq -r '.failing | join(",")' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  [ "${output#*latebad}" != "$output" ]            # ...and it is B that reds, off the preserved row
+}
+
+@test "C29b CONTROL: a GREEN still spends the ledger WHOLE (green on both arms, by design)" {
+  # Labelled a CONTROL, not a falsifier, because it passes before the fix as well — its job is to
+  # catch an OVER-SCOPED one. The asymmetry is the entire argument: the fix must preserve on a red
+  # and must NOT preserve on a green, and a change that made preservation the default would leave
+  # every assertion above green while re-opening the stale-row trap C29 exists to prevent.
+  led="$CC_POSTLAND_DIR/convictions"
+  c="$BATS_TEST_TMPDIR/window-counter"
+  add_stateful_test loadflake "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 3 ] && exit 1\nexit 0\n' "$c")"
+  push_commit "convicted in window 1, exonerated in window 2"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # window 1 => a candidate row exists
+  [ -f "$led" ]                                    # the control's own positive control: it was THERE
+  run grep -c 'tests/loadflake.bats' "$led"
+  [ "$status" -eq 0 ] && [ "$output" -ge 1 ]
+  second_window                                    # window 2 => GREEN
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]
+  [ ! -f "$led" ]                                  # a real exoneration spends EVERY candidate
+}
+
+@test "C29b census: every conviction_clear call site is scoped, or is provably the green" {
+  # A CENSUS, which no runtime fixture can be. The three tests above exercise the three verdict
+  # branches that exist TODAY; a fourth added later would wipe the pendings again and every one of
+  # them would still pass. Sites are named INDIVIDUALLY rather than pattern-guessed, so a genuinely
+  # new call site cannot hide among them. Anchored on statement position (`cut_clear; …`), because
+  # the same identifier appears in prose in four comments and a substring count would drift with the
+  # documentation rather than with the code.
+  run grep -c 'cut_clear; conviction_clear' "$SUT"
+  [ "$output" = "3" ]                              # hung, green, red — no fourth verdict site
+  run grep -c 'cut_clear; conviction_clear "\${CONVICT_PENDED\[@\]' "$SUT"
+  [ "$output" = "2" ]                              # the two that adjudicate nothing about a pending
+  run grep -c 'cut_clear; conviction_clear  ' "$SUT"
+  [ "$output" = "1" ]                              # ...and exactly one bare call: the green
+}
+
 @test "C29: a DETERMINISTIC red is never delayed — bash -n convicts in ONE window" {
   # The exemption, and why it is safe: syntax and the whole-tree prelints reproduce BY CONSTRUCTION,
   # so a second window cannot tell them anything and delaying them would only leave a broken trunk
