@@ -3925,12 +3925,12 @@ cmd_fold() {
   fold --as-of "$asof" | jq -r --arg proj "$projfilter" '
     [ .[] | select($proj == "" or .project == $proj) ] as $rows
     | def cond: (if (.condition // "") == "" then "ungrouped" else .condition end);
-      "R\($rows | length)",
+      "R\u001f\($rows | length)",
       ($rows | map(select(.status == "open" or .status == "blocked"))
              | group_by(cond)
              | sort_by(.[0] | cond)[]
-             | "C\(.[0] | cond)\([ .[] | select(.status=="open") ] | length)\([ .[] | select(.status=="blocked") ] | length)"),
-      ($rows | group_by(.status)[] | "S\(.[0].status)\(length)")' \
+             | "C\u001f\(.[0] | cond)\u001f\([ .[] | select(.status=="open") ] | length)\u001f\([ .[] | select(.status=="blocked") ] | length)"),
+      ($rows | group_by(.status)[] | "S\u001f\(.[0].status)\u001f\(length)")' \
   | while IFS=$'\037' read -r tag a b c; do
       case "$tag" in
         R) printf 'rows:      %s folded\n\n' "$a" ;;
