@@ -68,6 +68,19 @@
 #                step as `run` on the `block` record and folds at bin/cc-backlog:1058 — 60 of 160
 #                blocked rows carry it today and render `▶ <cmd>`. Pinned by
 #                tests/cc-backlog-needs.bats:140 (fold) + tests/operator-readout.bats:299 (render).
+#                RANKED BY IMPACT AND DATED (2026-08-23). The class used to itemize only at
+#                `cn <= 3`, so the pile named NOTHING at exactly the sizes where naming is the
+#                only thing that helps — three rows blocking the whole cloud lane sat inside
+#                `◆ 188 blocked backlog — your call`, indistinguishable from 185 minor ones. Rows
+#                now leave the leg ordered by how many `block` records they have accumulated (=
+#                how many times a session reached this row, could not proceed, and filed it
+#                again — revealed impact, per-row, from disk), and the collapse line NAMES the
+#                head of that order at ANY class size, count still attached. The same read dates
+#                each row's premise from its LAST `block` record, because filing is write-once
+#                and nothing re-validates a blocked row: 1dca461d4b90 demanded a GitHub App that
+#                had been installed for two months. Both quantities come from
+#                blg_blockhits_cached (fail-open to the plain count). See its header for the two
+#                candidate metrics that were measured and rejected.
 #   queue        cc-backlog OPEN items for the cwd project (git-toplevel basename, the same
 #                normalization cc-dispatch applies) → one COUNTED line, never itemized (open items
 #                are the dispatcher's work, not operator steps). Header when it is the only signal,
@@ -203,6 +216,66 @@ blg_list_cached() {  # $1 = cc-backlog binary · $2.. = `list` args; stdout = it
     rm -f "$tmp"                                    # tool produced nothing → cache nothing
   fi
   find "$dir" -type f -mmin +240 -delete 2>/dev/null || true   # bound the dir (miss path only)
+}
+
+# ── blocked-row IMPACT + PREMISE-AGE, off the raw event stream (2026-08-23) ────────────────────
+# WHY A SECOND READ AT ALL. `list --blocked --json` is a FOLD: it carries `lastTs`/`firstTs` and
+# nothing about how the row got there. Both quantities this hook now needs are properties of the
+# EVENT HISTORY, not of the folded row, and neither can be recovered from the fold:
+#
+#   n     how many separate `block` records the row has accumulated = how many times a session
+#         reached this row, could not proceed, and filed it AGAIN. That is REVEALED impact: it
+#         counts work actually stopping here, and it is per-row, so it does not tie.
+#   last  the ts of the most recent `block` record = when a session last ASSERTED this premise.
+#         Staleness has to be measured against this and nothing else.
+#
+# THE TWO CANDIDATE METRICS THIS REPLACES WERE MEASURED AND REJECTED — recorded because the next
+# reader will think of them first (both were tried against the live 188-row store on 2026-08-23):
+#
+#   condition fan-in ("how many open rows wait on the same `condition` slug"). DEGENERATE HERE.
+#     `condition` is a THEME tag, not a dependency edge, and `cmd_transition` auto-links every
+#     operator-gated row to one catch-all: 112 of the 188 carry `master-operator-gated`, and the
+#     next group (`master-product-repos`, 35 open waiters) ties ALL 19 of its blocked rows at the
+#     same score, so the tiebreak fell through to id order — i.e. alphabetical, which is exactly
+#     the non-ranking this change exists to delete.
+#   fold span (`lastTs - firstTs`). POLLUTED. A `link` record moves `lastTs` without anyone
+#     re-examining the row: 10eb9e8c5d0c and 6a8df00b9b52 were filed 2026-07-20, blocked once,
+#     never touched again — and scored 23d/22d, second and third, purely off one bookkeeping
+#     `link` on 2026-08-12 (the same 70%-of-lastTs rewrite recorded in memory). Ranking by it
+#     promotes the rows NOBODY has looked at over the rows work keeps dying on.
+#
+# COST. One `jq` over the whole append-only store, ~53 ms on a 5 MB / 1722-block-record ledger,
+# and cached on the SAME exact (mtime,size) invalidator as the fold above — so on the hot Stop
+# path this is a `cat`, and the fork is paid only on a turn that already changed the store.
+# FAIL-OPEN: any failure yields `[]`, every row scores 0, and the renderer degrades to the plain
+# counted line it emitted before this existed.
+blg_blockhits_cached() {  # stdout = JSON array [{id,n,last}] — one entry per ever-blocked id
+  local dir="${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.$UID}"
+  local key out tmp
+  [ -f "$BLG_FILE" ] || { printf '[]\n'; return 0; }
+  key="$(stat -f '%m-%z' "$BLG_FILE" 2>/dev/null || true)"
+  if [ -z "$key" ]; then _blg_blockhits_raw; return 0; fi
+  key="blockhits-$key-$BLG_FILE"; key="${key//[^A-Za-z0-9._-]/_}"
+  out="$dir/$key"
+  if [ -s "$out" ]; then cat "$out" 2>/dev/null && return 0; fi
+  mkdir -p "$dir" 2>/dev/null || { _blg_blockhits_raw; return 0; }
+  tmp="$(mktemp "$dir/.h.XXXXXX" 2>/dev/null)" || { _blg_blockhits_raw; return 0; }
+  _blg_blockhits_raw > "$tmp"
+  if [ -s "$tmp" ]; then
+    mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
+    cat "$out" 2>/dev/null || printf '[]\n'
+  else
+    rm -f "$tmp"; printf '[]\n'
+  fi
+}
+_blg_blockhits_raw() {
+  # `-s` slurps the whole ledger once; a malformed line would abort jq, so the `||` arm guarantees
+  # this function's contract (a parseable array on stdout) even then.
+  jq -s '[ .[] | select((.event // "") == "block") | {id: (.id // ""), ts: (.ts // "")} ]
+         | map(select(.id != ""))
+         | group_by(.id)
+         | map({id: .[0].id, n: length, last: (map(.ts) | max)})' "$BLG_FILE" 2>/dev/null \
+    || printf '[]\n'
 }
 
 SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
@@ -395,6 +468,18 @@ render_block() {
   #   on               — the per-class itemisation + rollups (§4 M2). Kill switch for collapse.
   #   off              — legacy flat first-come + `+N more` footer.
   local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-collapse}"
+  # How many blocked rows the collapse line may NAME beneath itself, and how old a row's premise
+  # must be before the block says so. Two, not five: the operator reads a close to make ONE
+  # decision, and the whole complaint was volume. Both are `--argjson` into jq below, so a
+  # non-numeric override would abort the leg — clamp to the default rather than fail the class.
+  local BLK_TOPK="${CC_OPREADOUT_BLK_TOPK:-2}" BLK_STALE_D="${CC_OPREADOUT_STALE_D:-14}"
+  case "$BLK_TOPK"    in ''|*[!0-9]*) BLK_TOPK=2  ;; esac
+  case "$BLK_STALE_D" in ''|*[!0-9]*) BLK_STALE_D=14 ;; esac
+  # Premise-age clock. -1 ⇒ jq's own `now`, which is what production uses and costs no fork. A
+  # suite that asserted "unchecked 30d" against the wall clock would be asserting about the day it
+  # ran, so the seam exists for the same reason CC_OPREADOUT_NOW exists for the damping latch.
+  local BLK_NOW="${CC_OPREADOUT_NOW_EPOCH:--1}"
+  case "$BLK_NOW" in ''|*[!0-9]*) BLK_NOW=-1 ;; esac
   # The collapse's whole output is a pointer to cc-do; without cc-do it would be a pointer to
   # nothing. Degrade to the itemisation that always runs, rather than to a lie.
   [ "$CBUDGET" = collapse ] && [ -z "$CC_DO" ] && CBUDGET=on
@@ -550,15 +635,46 @@ render_block() {
       [ -x "$f" ] && { blg="$f"; break; }
     done
   fi
+  #
+  #     RANKED, NOT SOURCE-ORDERED (2026-08-23 operator directive, from a live failure). The class
+  #     used to itemize only at `cn <= 3` and print a bare count above it, so the pile named
+  #     NOTHING exactly where naming mattered most: three rows that blocked the whole cloud lane
+  #     sat inside `◆ 188 blocked backlog — your call`, indistinguishable from 185 minor ones, and
+  #     the operator's reply was "What is it??? Spell it out. I don't want to have to scan the
+  #     entire walls of text to go fish what you are needing me to do." Rows now leave this jq in
+  #     IMPACT order — `n` block records desc, then premise age desc, then id for determinism — so
+  #     the itemised mode spends its allocation on the rows work is actually dying on, and the
+  #     collapse mode below can NAME the head of that order at any class size.
+  #     The `yours` rows are emitted as one contiguous run ahead of `backlog` for the reason the
+  #     itemise loop documents: a backlog→yours→backlog interleave makes `close_class` fire a
+  #     class's rollup twice.
+  local hits_file; hits_file="$(mktemp "${TMPDIR:-/tmp}/opreadout-hits.XXXXXX")" || hits_file=""
   if [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
+    # `--slurpfile` needs a real path, and an EMPTY one would abort the whole leg — i.e. lose 188
+    # rows to a ranking failure. Guarantee a parseable file before jq ever sees it.
+    if [ -n "$hits_file" ]; then blg_blockhits_cached > "$hits_file"; fi
+    [ -s "${hits_file:-/nonexistent}" ] || { hits_file="${TMPDIR:-/tmp}/opreadout-hits-empty.$$"; printf '[]\n' > "$hits_file"; }
     blg_list_cached "$blg" --blocked --json \
       | jq -r --arg sid "$SID" --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
+        --slurpfile hits "$hits_file" --argjson topk "$BLK_TOPK" --argjson staled "$BLK_STALE_D" \
+        --argjson nowarg "$BLK_NOW" \
         "$CC_PH_JQ"'
-      .[]?
+      # id → {n: how many times a session filed this block, last: when one last asserted it}.
+      (($hits[0] // []) | map({key: .id, value: {n: .n, last: .last}}) | from_entries) as $H
+      | (if $nowarg < 0 then now else $nowarg end) as $nowt
+      | [ .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
       | (.run // .run_command // "" | gsub("[\n\t]"; " ")) as $run
       | (.id // "?") as $id
+      | ($H[$id] // {n: 0, last: ""}) as $hit
+      # PREMISE AGE, measured from the last `block` record and from nothing else. `lastTs` on the
+      # fold is moved by `link`/`venue` bookkeeping that re-examines nothing, so a row whose
+      # premise died two months ago reads as touched-yesterday through it. -1 = unmeasurable
+      # (no block record, or an unparseable ts) and is treated as "no claim either way" — it can
+      # never mark a row stale and never earns it a naming slot.
+      | (if ($hit.last // "") == "" then -1
+         else (try (((($nowt - ($hit.last | fromdateiso8601)) / 86400) | floor)) catch -1) end) as $age
       # `?` is this hook`s own unresolvable-session sentinel, and "" is a caller that passed none;
       # neither may ever match an item, or a session-less close would promote the whole standing
       # pile into `yours`.
@@ -571,11 +687,36 @@ render_block() {
       # is NOT printed — there is deliberately nothing here to select. The TITLE is dropped too:
       # `cc-backlog needs` files one sentence as BOTH title and `needs`, so printing both padded
       # the one row that must not wrap.
-      | if $run != "" and ($run | ph_hit($ph)) then
-          "\($c)\t✎\t\($con)SUPPLY \($run | ph_toks($ph))\($coff) — \($n)   [\($w) \($id)]\t\($id)"
-        elif $run != "" then "\($c)\t▶\t\($run)   [\($w) \($id): \($t)]\t\($id)"
-        else "\($c)\t◆\t[\($w) \($id)] \($t) — needs: \($n)\t\($id)" end' 2>/dev/null >> "$steps_file"
+      # Truncated at a WORD, not at a byte: "ship-land could no" is how a reader learns to distrust
+      # a line. The `…` says the sentence continues, and the class command reaches the whole row.
+      | (if ($t | length) > 36 then (($t[0:36] | sub(" [^ ]*$"; "")) + "…") else $t end) as $tt
+      | { c: $c, id: $id, hits: $hit.n, age: $age, title: $tt,
+          line: (if $run != "" and ($run | ph_hit($ph)) then
+              "\($c)\t✎\t\($con)SUPPLY \($run | ph_toks($ph))\($coff) — \($n)   [\($w) \($id)]\t\($id)"
+            elif $run != "" then "\($c)\t▶\t\($run)   [\($w) \($id): \($t)]\t\($id)"
+            else "\($c)\t◆\t[\($w) \($id)] \($t) — needs: \($n)\t\($id)" end) } ]
+      # IMPACT ORDER. `hits` leads because it counts work actually stopping here; age breaks its
+      # ties because, between two rows the fleet hit the same number of times, the one nobody has
+      # re-examined in longest is the one a close is most likely to have been carrying dead; `id`
+      # breaks the rest so the render is deterministic and the damping latch can hash it.
+      | ([ .[] | select(.c == "yours") ]) as $ys
+      | ([ .[] | select(.c == "backlog") ]
+         | sort_by([ -.hits, -(if .age < 0 then 0 else .age end), .id ])) as $bs
+      # A NAMING SLOT IS EARNED BY A MEASUREMENT, NEVER BY A CLASS BEING BIG. A row qualifies only
+      # if something on disk actually distinguishes it: it was blocked more than once, or its
+      # premise has a measurable age. Where the store says nothing (an id with no block record —
+      # every fixture that stubs the fold directly), the head is EMPTY and the renderer falls back
+      # to the plain counted line. Naming two arbitrary rows out of 188 would be the "3 of 174 is
+      # noise" defect this file already refuses on the runnable classes, wearing a ranking.
+      | ([ $bs[] | select(.hits > 1 or .age >= 0) ][0:$topk]) as $top
+      | ([ $bs[] | select(.age >= $staled) ] | length) as $stale
+      | ( $ys[] | .line ),
+        ( $bs[] | .line ),
+        ( $top[]
+          | "blgtop\t◆\t\(.id)  \(if .hits > 1 then "blocked \(.hits)× · " else "" end)\(if .age < 0 then "last re-checked: never" elif .age == 0 then "re-checked today" else "unchecked \(.age)d" end) — \(.title)\t\(.id)" ),
+        "blgmeta\t·\t\($top | length) \($stale) \($staled)\t-"' 2>/dev/null >> "$steps_file"
   fi
+  [ -n "$hits_file" ] && rm -f "$hits_file"
 
   # 5 · open-queue visibility (operator crux 2026-07-25: "we are just sitting here on todo items…
   #     not clearly surfaced"). OPEN (auto-drainable) items rendered NOWHERE — only blocked ones
@@ -740,6 +881,13 @@ render_block() {
   # flat renderer it supersedes (C19: no new fork may enter render_block).
   while IFS="$TABC" read -r cls mark text stem; do
     [ -n "$mark" ] || continue
+    # `blgtop`/`blgmeta` are RENDER DATA, not steps: the named head and its aggregate, carried in
+    # the same file because the jq that computed them is the only place the whole blocked stream
+    # exists at once. They carry a non-empty mark on purpose — IFS is a single TAB and a tab IS
+    # IFS whitespace, so an empty field would collapse and shift every later field LEFT (memory:
+    # ifs-whitespace-collapses-empty-fields) — and are skipped BEFORE `total`, because a head row
+    # duplicates a `backlog` row that is already counted.
+    case "$cls" in blgtop|blgmeta) continue ;; esac
     total=$((total + 1))
     case "$cls" in
       deploy)     c_deploy=$((c_deploy + 1)) ;;
@@ -909,6 +1057,20 @@ render_block() {
       if [ "$runnable" -le 3 ]; then printf ' ▶ %s   [%s runnable: %s]\n' "$CC_DO" "$runnable" "$stems"
       else                           printf ' ▶ %s   [%s runnable]\n'     "$CC_DO" "$runnable"; fi
     fi
+    # Aggregates the ranking jq computed while it still had the whole blocked stream in hand:
+    # how many rows earned a naming slot, how many have an unverified premise, and the horizon
+    # that word is measured against. Read here rather than recomputed, so the render and the
+    # ranking can never disagree. Absent row (no backlog leg, or the leg failed) ⇒ all zero ⇒ the
+    # incumbent counted line, which is the fail-open path.
+    local blk_named=0 blk_stale=0 blk_hz="$BLK_STALE_D" _bm1 _bm2 _bm3
+    while IFS="$TABC" read -r c2 mark text stem; do
+      [ "$c2" = blgmeta ] || continue
+      read -r _bm1 _bm2 _bm3 <<<"$text"
+      case "$_bm1" in ''|*[!0-9]*) _bm1=0 ;; esac
+      case "$_bm2" in ''|*[!0-9]*) _bm2=0 ;; esac
+      case "$_bm3" in ''|*[!0-9]*) _bm3="$BLK_STALE_D" ;; esac
+      blk_named="$_bm1"; blk_stale="$_bm2"; blk_hz="$_bm3"
+    done < "$steps_file"
     for cls in decision backlog; do
       case "$cls" in
         decision) cn="$c_decision"; rcmd='cc-decide list --open';     clabel="decisions" ;;
@@ -930,6 +1092,31 @@ render_block() {
             [ -n "$stem" ] && stems="${stems:+$stems · }${stem}"
           done < "$steps_file"
           printf ' ◆ %s %s — your call: %s   %s\n' "$cn" "$clabel" "$stems" "$rcmd"
+        elif [ "$cls" = backlog ] && [ "$blk_named" -gt 0 ]; then
+          # THE 4+ ARM — the one that failed. It printed a bare count, so the pile named nothing
+          # at exactly the size where naming is the only thing that helps. It now leads with the
+          # IDEA (Minto Ch 7 p. 94: "188 blocked" tells the kind, not the idea) and NAMES the head
+          # of the impact order beneath it. The count did not go away — a count may follow a name,
+          # it may never replace one — and the class's listing command still rides the header, so
+          # the completeness guarantee (I10) is untouched.
+          printf ' ◆ %s %s — work keeps stopping at these %s   %s\n' "$cn" "$clabel" "$blk_named" "$rcmd"
+          while IFS="$TABC" read -r c2 mark text stem; do
+            [ "$c2" = blgtop ] || continue
+            # Indented by THREE, and therefore outside `^ [0-9]+ (▶|◆|✎)` (NSTEPS) and `^ (▶|◆)`
+            # (the one-line-per-class assertions): these are the header's supporting detail, not
+            # new steps, and every counter downstream must go on counting what it counted.
+            printf '   %s %s\n' "$mark" "$text"
+          done < "$steps_file"
+          # THE SECOND DEFECT, and it is not a ranking problem: NOTHING EVER RE-VALIDATES A BLOCKED
+          # ROW. Filing is write-once, so a premise that died months ago keeps rendering as a live
+          # demand on the operator — measured on 1dca461d4b90, which asked for a GitHub App that
+          # had been installed, all-repositories, with write access, for two months, spanning the
+          # entire window in which it kept being surfaced. A perfectly ranked list of dead asks is
+          # still a wall someone has to audit by hand, so the share whose premise nobody has
+          # re-asserted is stated OUT LOUD rather than left for the operator to discover one row
+          # at a time. `─` is the file's existing aside mark; no new glyph is minted.
+          [ "${blk_stale:-0}" -gt 0 ] && \
+            printf '   ─ %s of %s last re-checked >%sd ago — premise unverified\n' "$blk_stale" "$cn" "$blk_hz"
         else
           printf ' ◆ %s %s — your call   %s\n' "$cn" "$clabel" "$rcmd"
         fi
@@ -978,6 +1165,9 @@ render_block() {
     # no allocation and close_class has no arm for it, so letting it through would emit a bare row
     # outside the budget the other classes are held to).
     [ "$cls" = held ] && continue
+    # Same for the collapse-mode head rows: they are a re-presentation of `backlog` rows this loop
+    # already itemizes in impact order, and letting them open a class run would double the class.
+    case "$cls" in blgtop|blgmeta) continue ;; esac
     if [ "$cls" != "$last_cls" ]; then
       [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
       last_cls="$cls"; pc=0

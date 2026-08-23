@@ -1458,3 +1458,162 @@ EOS
   # header read "0 runnable" while a real operator step sat on the board.
   echo "$output" | grep -qE '^ +[0-9]* *✎|✎' || false
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# IMPACT RANKING + PREMISE AGE on the blocked class (operator directive 2026-08-23)
+#
+# THE FAILURE THAT ORDERED THIS. The operator asked what was blocking the cloud lane. The close
+# said "blocked on credentials only you can grant" and named three row ids. The reply was: "What is
+# it??? Spell it out. I don't want to have to scan the entire walls of text to go fish what you are
+# needing me to do." Three of 188 blocked an entire lane and NOTHING distinguished them from the
+# other 185, because the class itemized only at `cn <= 3` and printed a bare count above that — so
+# the pile named nothing exactly where naming is the only thing that helps. The `yours` class fixed
+# a NARROWER case (steps THIS session filed) and structurally cannot reach this one: those three
+# rows were filed days earlier by other sessions, so they are in no current session's bucket, and
+# they are 3-of-188, so they never clear the size gate. Invisible at every close, forever.
+#
+# THE SECOND DEFECT, found the same hour, and it is not a ranking problem: NOTHING EVER
+# RE-VALIDATES A BLOCKED ROW. One of the three (1dca461d4b90, install the GitHub App) had been
+# stale for two months — installed, all-repositories, write access, for the entire window in which
+# it kept rendering as a live demand. A perfectly ranked list of dead asks is still a wall.
+#
+# WHAT THE FIXTURES PIN. The impact signal is read off the REAL append-only store
+# ($CC_BACKLOG_FILE) — one `block` record per time a session reached this row, could not proceed,
+# and filed it again — while the fold itself stays stubbed, so these cases pin the ranking without
+# depending on `cc-backlog block`'s own transition rules. Premise age is measured from the last
+# `block` record and from nothing else: `lastTs` on the fold is moved by `link`/`venue`
+# bookkeeping that re-examines nothing (measured live: two rows blocked once on 2026-07-20 and
+# never touched again scored 2nd and 3rd on a lastTs-derived span, purely off one `link`).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# 2026-08-20T00:00:00Z. Pinned so "unchecked 30d" is an assertion about the fixture, not about the
+# day the suite runs (same reason CC_OPREADOUT_NOW is pinned for the damping latch).
+RANK_NOW=1787184000
+
+_block_evt() {  # $1=id $2=ISO ts — one `block` record, the unit the impact count counts
+  printf '{"id":"%s","ts":"%s","event":"block"}\n' "$1" "$2" >> "$CC_BACKLOG_FILE"
+}
+
+_rank_fixture() {  # 5 low-impact rows + $1 as the id of the high-impact one
+  local hi="$1"
+  _block_evt "$hi" 2026-07-21T00:00:00Z; _block_evt "$hi" 2026-07-25T00:00:00Z
+  _block_evt "$hi" 2026-08-01T00:00:00Z; _block_evt "$hi" 2026-08-05T00:00:00Z
+  _block_evt "$hi" 2026-08-10T00:00:00Z
+  local i; for i in 1 2 3 4 5; do _block_evt "b-$i" 2026-08-19T00:00:00Z; done
+  _stub_backlog "[ $(_blocked_item "$hi" "Grant the cloud lane its credential" "operator must grant" "" ""),
+                   $(_blocked_item b-1 "one"   "operator" "" ""), $(_blocked_item b-2 "two"   "operator" "" ""),
+                   $(_blocked_item b-3 "three" "operator" "" ""), $(_blocked_item b-4 "four"  "operator" "" ""),
+                   $(_blocked_item b-5 "five"  "operator" "" "") ]"
+}
+
+@test "RANK: the highest-impact blocked row is NAMED at a class size where nothing used to be" {
+  # THE RED-PROOF. Pre-fix this rendered `◆ 6 blocked backlog — your call` and not one id; the
+  # class named items only at cn<=3, i.e. never at the size that matters.
+  _rank_fixture zz-cloud            # sorts LAST alphabetically — see the id-order case below
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'zz-cloud' || false
+  echo "$output" | grep -q 'blocked 5×' || false
+  echo "$output" | grep -q 'Grant the cloud lane its credential' || false
+  # A COUNT MAY FOLLOW A NAME; IT MAY NEVER REPLACE ONE. The 6 is still on the header, and so is
+  # the command that lists all of them — the completeness guarantee is untouched.
+  echo "$output" | grep -q '◆ 6 blocked backlog — work keeps stopping at these 2   cc-backlog list --blocked' || false
+}
+
+@test "RANK is by IMPACT, not by id order — the named row is the one work kept stopping at" {
+  # `zz-cloud` sorts after every `b-N`, so a renderer that named "the first N" would name b-1/b-2.
+  _rank_fixture zz-cloud
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  # first named row is the high-impact one, not the alphabetically-first
+  first="$(echo "$output" | grep -E '^   ◆ ' | head -1)"
+  echo "$first" | grep -q 'zz-cloud' || false
+  ! echo "$first" | grep -q 'b-1' || false
+}
+
+@test "RANK is by IMPACT, not recency — a row blocked 5× outranks five blocked TODAY" {
+  # The low-impact rows are re-blocked on the pinned `now`; the high-impact one has not been
+  # touched in 10 days. Recency ordering would bury it; impact ordering does not.
+  _rank_fixture aa-cloud
+  _block_evt b-1 2026-08-20T00:00:00Z; _block_evt b-2 2026-08-20T00:00:00Z
+  printf '\n' >> "$CC_BACKLOG_FILE"       # store change ⇒ fold-cache miss, as in production
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -E '^   ◆ ' | head -1 | grep -q 'aa-cloud' || false
+}
+
+@test "STALENESS: a named row carries how long its premise has gone unre-asserted" {
+  # 1dca461d4b90's defect: filing is write-once, so a dead premise renders as a live demand
+  # forever. The age is measured from the last `block` record — 2026-08-10 vs a pinned 2026-08-20.
+  _rank_fixture zz-cloud
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q 'zz-cloud  blocked 5× · unchecked 10d' || false
+}
+
+@test "STALENESS: the share of the class whose premise nobody re-asserted is stated out loud" {
+  # A ranked list of dead asks is still a wall to audit by hand. Horizon lowered to 5d so the
+  # fixture's own 10d row crosses it and the 1d rows do not — i.e. the count discriminates.
+  _rank_fixture zz-cloud
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW CC_OPREADOUT_STALE_D=5 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '─ 1 of 6 last re-checked >5d ago — premise unverified' || false
+  # CONTROL — the line must be able to NOT fire: at a horizon above every row's age it is absent.
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW CC_OPREADOUT_STALE_D=90 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  ! echo "$output" | grep -q 'premise unverified' || false
+}
+
+@test "FAIL-OPEN: an unparseable store degrades to the incumbent count, never to an empty class" {
+  # This is a Stop hook on the live path. A ranking that errors must lose the RANKING, not the
+  # class — the 6 rows and their listing command still have to reach the operator.
+  _rank_fixture zz-cloud
+  printf 'this is not json\n' >> "$CC_BACKLOG_FILE"     # `jq -s` over the store now aborts
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '◆ 6 blocked backlog — your call   cc-backlog list --blocked' || false
+  ! echo "$output" | grep -q 'work keeps stopping' || false
+}
+
+@test "NO NAMING WITHOUT A MEASUREMENT: a store that distinguishes nothing keeps the plain count" {
+  # Naming 2 arbitrary rows out of 188 is the "3 of 174 is noise" defect wearing a ranking. Rows
+  # with no block record at all (every fixture that stubs the fold directly) earn no slot.
+  _stub_backlog "[ $(_blocked_item n-1 "one" "operator" "" ""), $(_blocked_item n-2 "two" "operator" "" ""),
+                   $(_blocked_item n-3 "three" "operator" "" ""), $(_blocked_item n-4 "four" "operator" "" ""),
+                   $(_blocked_item n-5 "five" "operator" "" "") ]"
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 5 blocked backlog — your call   cc-backlog list --blocked' || false
+}
+
+@test "the named head is SUPPORTING DETAIL: it changes no downstream count and stays in budget" {
+  # The head rows are indented by three, so `^ (▶|◆)` (one line per class) and `^ [0-9]+ (▶|◆|✎)`
+  # (NSTEPS) go on counting exactly what they counted. A head that inflated NSTEPS would make the
+  # header claim operator steps that do not exist.
+  _rank_fixture zz-cloud
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$(echo "$output" | grep -cE '^ (▶|◆)')" -eq 1 ]
+  [ "$(echo "$output" | grep -cE '^ [0-9]+ (▶|◆|✎)')" -eq 0 ]
+  echo "$output" | head -1 | grep -q '6 need your call' || false
+  # and it fits a terminal — the constraint every collapse line in this file is held to.
+  [ "$(echo "$output" | awk '{print length($0)}' | sort -rn | head -1)" -le 100 ]
+}
+
+# ── ARM 2: the pre-fix renderer, at a LITERAL pinned sha ─────────────────────────────────────────
+# NOT `origin/main`: a land advances that ref past this fix, and the control then compares the fix
+# to itself and passes vacuously (that error cost a land rc 6 on 2026-08-22). ebf071b2a is the
+# parent of the ranking commit and holds the renderer as it was when the operator hit the wall.
+CC_READOUT_RANK_PREFIX_SHA="${CC_READOUT_RANK_PREFIX_SHA:-ebf071b2a}"
+
+@test "RED-PROOF: the pre-rank renderer (pinned sha) names NOTHING in a 6-row blocked class" {
+  local old="$BATS_TEST_TMPDIR/pre-rank-hook"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_READOUT_RANK_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_READOUT_RANK_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/operator-readout.sh" ] || false
+  # the control must be a tree that genuinely predates the fix, not a re-copy of it
+  ! grep -q 'blgtop' "$old/hooks/operator-readout.sh" || false
+  _rank_fixture zz-cloud
+  CC_OPREADOUT_NOW_EPOCH=$RANK_NOW run "$old/hooks/operator-readout.sh" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # RED, and this is the operator's whole complaint in one assertion: six rows, one of them hit
+  # five times, and the block says only how many there are.
+  echo "$output" | grep -q '◆ 6 blocked backlog — your call' \
+    || { echo "control did not reproduce the pre-fix line: $output"; false; }
+  ! echo "$output" | grep -q 'zz-cloud' \
+    || { echo "control ALREADY names the high-impact row — the arm proves nothing: $output"; false; }
+  ! echo "$output" | grep -q 'premise unverified' || false
+}
