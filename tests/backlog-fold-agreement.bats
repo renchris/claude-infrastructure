@@ -172,3 +172,92 @@ list_status() { bash "$CB" list --all --json 2>/dev/null | jq -r --arg i "$1" '.
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 non-terminal item(s) scanned"* ]]
 }
+
+# ── THE THIRD AUDITOR: `cc-backlog fold` and its --as-of replay (row 5e35b5b1070b) ─────────────
+#
+# The row: drain pings cite population figures ("ungrouped 133->132") that no tool rendered, so a
+# verifier could not audit them. Its diagnosis — PRIVATE DEFINITIONS — is refuted on its own primary
+# exhibit: the shipped verb replays #127's window to 133 -> 132 EXACTLY under the plainest reading.
+# What was missing is TIME. The ledger is append-only over a board siblings mutate, so a verifier
+# replaying LIVE necessarily lands on a different number, which is indistinguishable from a made-up
+# one. `--as-of` is therefore the load-bearing half, and the arms below are ordered to prove that:
+# the agreement arm pins that the verb did NOT introduce a fourth model of the population, and the
+# refusal arm pins the one failure that would be WORSE than the unauditable figure it replaces.
+#
+# ts_of <id> <event> → the ledger's OWN timestamp for that record. Deriving the pin from the file
+# rather than recomputing the rec() epoch arithmetic keeps the fixture self-anchoring: a change to
+# rec()'s clock moves the pin with it instead of silently pinning the wrong instant.
+ts_of() { jq -r --arg i "$1" --arg e "$2" 'select(.id==$i and .event==$e)|.ts' "$CC_BACKLOG_FILE" | tail -1; }
+fold_rows() { if [ -z "${1:-}" ]; then bash "$CB" fold --json; else bash "$CB" fold --as-of "$1" --json; fi; }
+ungrouped_open() { fold_rows "${1:-}" | jq -r '[.conditions[]|select(.condition=="ungrouped")|.open][0] // 0'; }
+
+@test "AS-OF: a pinned fold drops every record written after the pin" {
+  rec a1 add title="row that existed at the pin"
+  local pin; pin="$(ts_of a1 add)"
+  rec a2 add title="row that arrived after the pin"
+  [ "$(fold_rows ""     | jq -r '.rows')" -eq 2 ]
+  [ "$(fold_rows "$pin" | jq -r '.rows')" -eq 1 ]
+}
+
+@test "AS-OF: replays a population figure the LIVE fold no longer shows — the row's actual defect" {
+  rec u1 add title="ungrouped row present when the figure was cited"
+  local pin; pin="$(ts_of u1 add)"
+  rec u2 add title="ungrouped row a sibling filed afterwards"
+  rec u3 add title="another ungrouped row a sibling filed afterwards"
+  # This IS the row's '+offset at both endpoints': the citation was right, the live replay is not.
+  [ "$(ungrouped_open "$pin")" -eq 1 ]
+  [ "$(ungrouped_open "")"     -eq 3 ]
+}
+
+@test "AS-OF: a pinned fold sees a status as it stood, not as it later became" {
+  rec s1 add title="row blocked after the pin"
+  local pin; pin="$(ts_of s1 add)"
+  rec s1 block needs="a human must decide" by=someone
+  rec s1 link condition="cond-later"
+  [ "$(fold_rows "$pin" | jq -r '.status.open // 0')"    -eq 1 ]
+  [ "$(fold_rows "$pin" | jq -r '.status.blocked // 0')" -eq 0 ]
+  [ "$(fold_rows ""     | jq -r '.status.blocked // 0')" -eq 1 ]
+}
+
+@test "AS-OF: a MALFORMED pin REFUSES — it never renders a live fold under a pinned heading" {
+  rec m1 add title="a row that exists"
+  # Each of these sorts ABOVE every real ISO timestamp or truncates one, so an unvalidated compare
+  # would select the WHOLE ledger and print a LIVE answer wearing a PINNED heading — strictly worse
+  # than the unauditable figure this verb replaces (absent-range-endpoint-selects-everything).
+  local bad
+  for bad in yesterday 2026-08-22 2026-08-22T05:23:37 now 9999; do
+    run bash "$CB" fold --as-of "$bad"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | grep -c 'CONDITION FOLD')" -eq 0 ]
+  done
+}
+
+@test "FOLD: the new verb agrees with list --all --json on every status stratum" {
+  # A fourth model of one population is the exact defect the rest of this file pins, so the verb is
+  # compared against the PRODUCTION reader rather than a re-derivation of it.
+  rec g1 add title="open ungrouped"
+  rec g2 add title="blocked and conditioned"
+  rec g2 block needs="a human must decide" by=someone
+  rec g2 link condition="cond-z"
+  rec g3 add title="closed row"
+  rec g3 "done" evidence="landed"
+  rec g4 add title="held row"
+  rec g4 claim by=worker-1 venue=local
+  local a b
+  a="$(bash "$CB" fold --json | jq -Sc '.status')"
+  b="$(bash "$CB" list --all --json | jq -Sc 'group_by(.status)|map({key:.[0].status,value:length})|from_entries')"
+  [ "$a" = "$b" ]
+}
+
+@test "FOLD: renders its own predicate, and 'ungrouped' means no condition key" {
+  rec p1 add title="conditioned row"
+  rec p1 link condition="cond-z"
+  rec p2 add title="row with no condition key"
+  run bash "$CB" fold
+  [ "$status" -eq 0 ]
+  # The predicate line is the row's remedy itself — a figure whose definition ships with it.
+  [ "$(printf '%s' "$output" | grep -c '^predicate: ')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'no condition key')" -ge 1 ]
+  [ "$(printf '%s' "$output" | grep -cE '^cond-z +open=1 ')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -cE '^ungrouped +open=1 ')" -eq 1 ]
+}
