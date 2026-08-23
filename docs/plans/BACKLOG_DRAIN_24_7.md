@@ -163,6 +163,29 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     this diff touches. **Attribute by the failing STATEMENT, not by the suite's membership in your
     range**: this suite is a genuine consumer of `cc-await-ping`, so a red in it would have looked
     like mine on every axis except the one that decides.
+  · 🚨 **THE FIRST LAND WAS REFUSED, AND THE GATE WAS RIGHT ABOUT MY OWN RED-PROOF —
+    `moving-ref-control-lint`, rc 6, nothing pushed.** Arm 2 replayed the pre-fix subject from
+    **`origin/main`**, which advances past this very fix the moment it lands; the control would then
+    replay the FIXED file and compare the fix to itself. **This is the one defect class an arm-2
+    red-proof is uniquely prone to, and running it green proves nothing about it** — the arm passes
+    for its author every time, and only turns bad AFTER the land, in someone else's session.
+    Re-pinned to the literal parent sha **`0fe052972`** (already an ancestor of trunk, so it cannot
+    move) and landed clean at attempt 2. **Two takeaways for anyone building an arm-2 here:** pin a
+    LITERAL sha, normally `<fix-commit>^`, never a branch name; and keep the marker assertion — mine
+    (`! grep -q '_real_mail_after'`) would have made the stale control a permanent RED rather than a
+    vacuous green, which is the better failure of the two but still a defect. The gate's own text
+    names both halves and says why the pin alone is insufficient.
+  · **Land 2: `21591eab4`, rc 0**, `land-verify: 3 path(s) present + content-identical`,
+    `ship-backup-reap` reaped `ship/backup-204bfc3c8`, `stranded-sweep clean`, `gate-green NOT
+    advanced` (normal). ⚠️ **THE BASE MOVED AGAIN — `a51e9b493..21591eab4`**, the THIRD consecutive
+    land whose base moved between open and push. Verified BY CONTENT, never by count
+    (`cited-sha-may-not-survive-the-land`): `--is-ancestor` rc 0, `git diff --stat origin/main` EMPTY
+    on all three paths, `_real_mail_after` ×2 · `@test "F12` ×4 · the pinned-sha line ×1 · the log
+    entry ×1 on trunk, nonsense-token control 0.
+  · **Smoke PARTIAL for the FIFTH consecutive land** — 2 direct suites attempted in 421 s of a 420 s
+    budget; `tests/cc-reaper.bats` **GATE-KILLED (exit 124, ZERO `not ok`)**, which the gate itself
+    labels *"NOT a red and NOT evidence about your tree"*. The five remaining direct suites never
+    started — but they were the ones already run by hand above, which is why the hand-run matters.
   · **Board at close: open 260 / blocked 191 / done 2157 / claimed 2.** Per-row diff across the
     window: **1 LEFT (`b1a9e3142ee4` — MINE) · 0 ENTERED**, and the flat board agrees (261 → 260).
     `master-convergence-deadlock` **31 open / 6 blocked, unmoved** — the declared HOLD above.
