@@ -1353,3 +1353,85 @@ recorder_pid() { # <watcher pid> -> pid of its python side-car, empty if none
   grep -q 'WAKE-PATH-DOWN' "$CC_MAILBOX_DIR/$UUID.md" \
     || { echo "a real kill must still file the inbox anomaly"; false; }
 }
+
+# ── F12: a watcher must not read its own predecessor's corpse as the ping it awaits ───────────────
+# backlog b1a9e3142ee4. `_wake_down_notice` writes the WAKE-PATH-DOWN verdict into the watched box BY
+# DESIGN (that placement is correct and stays). The defect is on the READ side: the take loop decided
+# "a ping arrived" on line-count alone, so the arm that REPLACES a killed watcher fired on the dead
+# one's own notice and exited verdict=ping elapsed=0s — a wake path that was never established,
+# indistinguishable from one that delivered real mail.
+#
+# The notice's exact prefix, as `_wake_down_notice` interpolates it. Keyed on the uuid it names, which
+# is what separates OUR corpse from a sibling's forwarded report.
+wake_down_line() { # <uuid-it-was-armed-for>
+  printf '2026-08-22T21:26:58-0700 [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIGTERM; elapsed=9531s budget=14340s — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping. WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act.\n' "$1"
+}
+
+@test "F12: an arm meeting its OWN undrained WAKE-PATH-DOWN keeps WATCHING, not verdict=ping" {
+  wake_down_line "$UUID" > "$MB"        # pending: .seen is absent ⇒ cursor 0, so the window holds it
+  run "$AWAIT" "$UUID" --interval 1 --timeout 3
+
+  # VACUITY CONTROL, and the reason this case can fail for the right reason only. The no-lib path
+  # (`from line N`) computes its baseline at ARM time, so a pre-existing line would never fire there
+  # and this test would pass against a subject that has no fix in it at all. Pin that we are on the
+  # keyset/private-cursor path, which is the one that fires on already-pending mail (F6a).
+  [[ "$output" == *"private cursor, seeded from .seen"* ]] \
+    || { echo "not on the lib path — this case would be vacuous: $output"; false; }
+
+  [ "$status" -eq 2 ] || { echo "expected the watch to run its term (exit 2), got $status"; echo "$output"; false; }
+  [[ "$output" == *"verdict=timeout"* ]] || { echo "expected verdict=timeout: $output"; false; }
+  [[ "$output" != *"verdict=ping"* ]] \
+    || { echo "fired on its own corpse-notice — the wake path was never established: $output"; false; }
+  [[ "$output" == *"skipped 1 WAKE-PATH-DOWN control line(s) of our own"* ]] \
+    || { echo "the skip must be stated, or a live watch is indistinguishable from a swallowed ping: $output"; false; }
+
+  # The notice is NOT consumed: it stays pending so the boundary drain still surfaces it as peer mail.
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ] || [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 0 ] \
+    || { echo "advanced .seen past a notice it never delivered"; false; }
+}
+
+@test "F12 CONTROL — a FORWARDED WAKE-PATH-DOWN naming ANOTHER pane is real mail and still fires" {
+  # The too-strong direction, and the reason the discriminator is keyed on our own keyset rather than
+  # on the marker text: a sibling telling us ITS wake path dropped is ordinary peer mail.
+  wake_down_line "CCCCCCCC-9999-8888-7777-666666666666" > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ] || { echo "suppressed a peer's report as if it were our own: $status / $output"; false; }
+  [[ "$output" == *"verdict=ping"* ]] || { echo "expected a delivery: $output"; false; }
+  [[ "$output" == *"CCCCCCCC-9999-8888-7777-666666666666"* ]] || { echo "body not delivered: $output"; false; }
+}
+
+@test "F12 CONTROL — our own notice ALONGSIDE real mail still delivers both" {
+  # The other too-strong direction: the skip is a property of the WINDOW, not of the line. One real
+  # line anywhere in it makes the whole window a delivery.
+  wake_down_line "$UUID" > "$MB"
+  printf '2026-08-22T21:30:00-0700 [peer] HANDOFF-PING recycle #162: real mail\n' >> "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ] || { echo "a window containing real mail must fire: $status / $output"; false; }
+  [[ "$output" == *"HANDOFF-PING recycle #162: real mail"* ]] || { echo "lost the real line: $output"; false; }
+}
+
+@test "F12 RED-PROOF — the same fixture against the PINNED PRE-FIX subject exits verdict=ping" {
+  # Arm 2. Without this the case above is an assertion nobody has watched fail: it must be shown to
+  # DISCRIMINATE the fix, not merely to pass beside it. The pre-fix copy is planted at <root>/bin/ with
+  # <root>/hooks symlinked to the repo's, because the script resolves its mailbox lib as
+  # "$_bd/../hooks/lib/mailbox-pending.sh" and would otherwise silently fall back to the LIVE
+  # ~/.claude copy — a different subject than the one under test.
+  local root="$BATS_TEST_TMPDIR/prefix"
+  mkdir -p "$root/bin"
+  git -C "$REPO" show origin/main:bin/cc-await-ping > "$root/bin/cc-await-ping" \
+    || skip "origin/main copy unavailable"
+  chmod +x "$root/bin/cc-await-ping"
+  ln -s "$REPO/hooks" "$root/hooks"
+
+  # The pinned copy must be the PRE-FIX one, or this proves nothing (control-must-replay-the-real-artifact).
+  ! grep -q '_real_mail_after' "$root/bin/cc-await-ping" \
+    || { echo "the pinned copy already carries the fix — this arm cannot red"; false; }
+
+  wake_down_line "$UUID" > "$MB"
+  run "$root/bin/cc-await-ping" "$UUID" --interval 1 --timeout 3
+  [[ "$output" == *"private cursor, seeded from .seen"* ]] \
+    || { echo "arm 2 not on the lib path — the red would be for the wrong reason: $output"; false; }
+  [ "$status" -eq 0 ] || { echo "expected the pre-fix subject to fire on its own corpse: $status"; echo "$output"; false; }
+  [[ "$output" == *"verdict=ping"* ]] \
+    || { echo "expected pre-fix verdict=ping — the defect did not reproduce: $output"; false; }
+}
