@@ -87,6 +87,90 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #165: an allowlist of three role NAMES had gone ANTI-CORRELATED with
+  reality — it admitted three roles of which zero resolved and refused the only two that did, and a
+  refusal here DELETES THE BRANCH. filed 0 / closed 1 / 2 commits. NINTH CONSECUTIVE close overall,
+  and the EIGHTH consecutive close of a row that prescribes its own red-proof. Warm effort declared
+  before the close: a HOLD — the row carries NO condition, so `master-convergence-deadlock` stays
+  30/6 and no board delta of mine may be read into it.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (**fifty-sixth consecutive 0-page reading**). Gate 2: **`qos-diff` empty, the
+  forty-seventh consecutive clean reading.** Board at open: **open 273 / blocked 197 / done 2163 /
+  claimed 2**. LIVE layer **15 behind** at open (#164's window: 13 → 15; #163's: 7 → 9) — inside the
+  25-commit degrade budget. Store fold positive control `b7252a3bb015` = **OWN=10 / RAW=20**,
+  byte-identical for the FOURTH consecutive recycle; negative control `deadbeefcafe` = 0/0.
+
+  **ROW CLOSED — `f1a51344cb84`** (no condition — it is in the `ungrouped` stratum, so the warm
+  effort could not move and was declared held BEFORE the close): *"payload-lint F3 role allowlist is
+  hardcoded to desk|operator|orchestrator, so every OTHER live cc-roles role false-REDs a legitimate
+  fire."* Filed 07:05:37Z the same morning by `drain-lead-recycle-163`; OWN=1 (`add` only), CITE=0 —
+  no prior falsify or claim.
+
+  🚨 **AN ENUMERATION DOES NOT MERELY GO STALE — IT CAN INVERT, AND THIS ONE HAD.** The row says the
+  list is incomplete. The measurement says something stronger and more damning:
+
+      desk          allowlisted  — NO role file at all
+      operator      allowlisted  — NO role file at all
+      orchestrator  allowlisted  — file present, reads ABSENT/empty
+      drain-lead    REFUSED      — file present, reads LIVE 102
+      docs-lead     REFUSED      — file present, reads UNVERIFIED 450
+
+  Every name the gate admitted was one that could not be delivered to, and every name it refused was
+  one that could. `cc-roles claim <role>` imposes **no name validation whatsoever** and
+  `cc-notify --role <name>` (`bin/cc-notify:556`) is likewise name-agnostic — it just reads
+  `$CC_ROLES_DIR/<name>` — so the list could never have been anything but a snapshot of the roles its
+  author happened to know. Widening it to five names would repeat the class (memory:
+  `denylist-enumerates-spellings-not-the-class`), so the arm now keys on the role-reference FORM.
+
+  🚨 **THE ROW'S OWN PRESCRIBED REMEDY IS REFUTED BY THE SAME MEASUREMENT THAT CONFIRMS THE BUG.**
+  The row proposes *"key the arm on cc-roles resolvability, not a name list"*. Live resolvability
+  would RED **`--role desk`** — and the desk's `/goal` fires are the single main path this arm exists
+  to keep green (the file's own comment at :63-64 says so). A false-RED here is the UNRECOVERABLE
+  direction: `payload_lint_gate … enforce` aborts the fire and `fire_cleanup` removes the worktree and
+  **DELETES THE BRANCH**. So the prescribed cure is strictly more dangerous than the disease. It is
+  also asymmetric — F3's other two arms assert FORM too (the uuid arm never checks the pane is alive,
+  the session-name arm never checks the registry), and the header DECLARES the tool a static proxy.
+  Liveness is `cc-notify`'s job at SEND time, where it can distinguish role-unset from mailbox-only.
+  **Method 94's third question, and the fourth consecutive recycle it has paid: read the prescription
+  literally, then ask whether the literal reading is too strong.** Here it was not merely too strong,
+  it was inverted.
+
+  🚨 **A SECOND, UNFILED DEFECT OF AN ALREADY-KNOWN CLASS — AND IT IS WHAT PAYS FOR THE WIDENING.**
+  The `--role` arm was never ANCHORED. The 2026-08-22 correction (`bacdfc4f63ab`) anchored `UUID_REF`
+  and `SESSION_NAME_REF` to the cc-notify ARGUMENT POSITION and left this rule matching `--role
+  <name>` anywhere in the payload, so ordinary prose satisfied F3 — measured pre-fix, *"never use
+  --role desk here; it is the wrong pane"* linted **GREEN carrying no back-channel at all**. Third
+  instance of one class, in one file, found only because the fix required reading the neighbours. It
+  is also load-bearing rather than incidental: **unanchored, widening the token would multiply that
+  false-GREEN across every lowercase word** (*"use --role instead"*). Anchor first, then widen — the
+  tightening is what buys the loosening, and neither half is correct alone.
+
+  **Fix:** `cc-roles/<role>` (self-anchoring by its literal path prefix) **or** `--role <role>` in a
+  role-consuming SENDER's argument position — `cc-notify|cc-announce|cc-await-ping`, the resolvers
+  `cc-roles`' own header names. **No false-RED, measured the way this file's own header establishes:
+  174 real payloads on the box, 112 green / 62 red BEFORE and AFTER, 0 GREEN→RED.** ⚠️ Also 0
+  RED→GREEN — no payload here currently uses a non-allowlisted role, so **that corpus is a SAFETY
+  control and NOT a demonstration of the fix**; the demonstration is the red-proof. Say which one a
+  number is doing.
+
+  🚨 **THE VACUITY WAS ONE LEVEL BELOW THE ASSERTION AGAIN — FIFTH CONSECUTIVE RECYCLE (method 91) —
+  AND ONLY THE SECOND MUTANT ARM FOUND IT.** F3 is an ORDERED pair and `has_cc` is the FIRST
+  condition. The prose fixture's first draft contained no `cc-notify` at all, so it RED'd on `has_cc`
+  and credited the anchor with **nothing**: it passed against a mutant with the anchor deleted. The
+  arm that caught it is the one that neuters a single guard rather than reverting the whole line —
+  without it the anchor could be removed tomorrow and every other test would stay green, because the
+  widened token alone passes all the positive cases. **Caught by RUNNING the mutants, not by reading
+  them.** Both arms are `sed` over the WORKING TREE with the `ROLE_REF` site counted before and after
+  (method 93 — no moving ref, and a rename of the site reds the anchor).
+
+  **2 commits, 1 land.** `tests/payload-lint.bats` 10 → **15 `@test`** (extending, premise 2, no
+  `LIVE_ADDS` breach); `--selftest` 10/10 → **12/12**. ⚠️ `tests/payload-lint-tool-parity.bats`'s role
+  loop WAS the old allowlist transcribed (*"the three role names ROLE_REF sanctions"*) — leaving it
+  would have made its own comment false and created a `stale-assertion-becomes-an-inverted-guard`
+  instance in the same diff, so it now covers `drain-lead`/`docs-lead` and asserts **BOTH halves per
+  role** (linter blesses AND cc-notify honours), since only the linter's half changed.
+  `bats-assert-liveness` clean on both edited suites; `shellcheck -x` clean.
+
 - **2026-08-23 — drain recycle #164: the refusal's loss claim was FALSE of the very file that wedged
   it — an untracked blocker byte-identical to the blob the advance writes is provably lossless to
   remove, and the lane said the opposite to every operator who met one. filed 0 / closed 1 /
