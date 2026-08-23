@@ -994,7 +994,11 @@ PS
   # loop that produced this verdict, and the verdict said nothing about B.
   [ -f "$led" ]
   run grep -c 'tests/latebad.bats' "$led"
-  [ "$status" -eq 0 ] && [ "$output" -ge 1 ]       # B's candidacy SURVIVES the red
+  # SEPARATE STATEMENTS, not `A && B`: errexit exempts every command in a && list except the one
+  # after the final &&, so a mid-test `A && B` whose A fails short-circuits and execution CONTINUES
+  # — the LHS is dead. Caught by the land's own dead-assertion ratchet on this very diff.
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]                              # B's candidacy SURVIVES the red
   # ...and the other half of "only what it adjudicated": A was convicted, so A's rows ARE spent.
   # Without this the test would also pass if the fix simply stopped clearing anything, which is the
   # stale-row trap conviction_clear's first paragraph exists to prevent.
@@ -1043,7 +1047,8 @@ PS
   run bash "$SUT" --run-if-needed                  # window 1 => a candidate row exists
   [ -f "$led" ]                                    # the control's own positive control: it was THERE
   run grep -c 'tests/loadflake.bats' "$led"
-  [ "$status" -eq 0 ] && [ "$output" -ge 1 ]
+  [ "$status" -eq 0 ]                              # separate statements — see the note above
+  [ "$output" -ge 1 ]
   second_window                                    # window 2 => GREEN
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "green" ]
