@@ -44,6 +44,15 @@ setup() {
   # EXPLICITLY EMPTY, not unset: an unset variable defaults to cc-premise's own checkout, and these
   # assertions would then depend on this repo's real history.
   export CC_PREMISE_REPO=
+  # …AND THE SIBLING SET IS THE SECOND SUCH STORE, which this suite did not know it read. The path
+  # arm now widens a miss across every `repo=` row in scripts/dispatch-projects.conf before it may
+  # convict, so leaving this unset points three of these tests at the OPERATOR's checkouts. It is
+  # not even a stable dependency: the rows expand with `~`, which resolves against the fixtured
+  # $HOME above, so they land on paths that do not exist, degrade to "could not ask" — and the arm
+  # correctly declines to convict, turning three suspect assertions green-side-up. MEASURED, not
+  # reasoned: instrumenting the widening showed exactly this file (3 hits) and
+  # cc-premise-postland-red.bats (1) reaching it unpinned. Explicit-empty disables the widening.
+  export CC_DISPATCH_PROJECTS_CONF=
   : > "$CC_BACKLOG_FILE"
 }
 
