@@ -31,6 +31,7 @@ prediction moving from argued to observed, on the project that had not yet been 
 | 08-17 | `5ab3327ed0c8` | `reso-management-app` | label-foreign **+ store-foreign** — see § The fifth |
 | 08-17 | `38de29ec5e59` | `doc_classifier` | label-foreign — **second cloud burn of the same item** (§ below) |
 | 08-18 | `5ab3327ed0c8` | `reso-management-app` | label-foreign — **second cloud burn**, the day after § The fifth adjudicated it (§ below) |
+| 08-23 | `616d58ac42df` | `reso-management-app` | label-foreign — after a **5-day quiet gap**; cause re-verified UNSHIPPED on trunk (§ below) |
 
 The 08-17 `reso-management-app` row is a **repeat of the 08-14/08-16 route**, not a fifth route. The class has stopped producing
 new spellings and is now producing recurrences on a known mechanism — which is why nothing about the
@@ -594,3 +595,112 @@ repository at all.
 
 **The ledger was NOT updated by this session.** The `b3a403c16f95` row in new fact 3 is a probe
 artifact on an ephemeral store and must not be looked for on the Mac. This branch is the notification.
+
+---
+
+# 2026-08-23 — the class resumes after a 5-day gap, and the cause is still on trunk
+
+**Backlog item `616d58ac42df`, project `reso-management-app`**, fired into a `--venue cloud` session
+whose one attached repository is `renchris/claude-infrastructure`. Its brief names
+`/Users/chrisren/Development/reso-management-app` and cites `venueSvgData.ts:34-38`,
+`venueSvgRendering.ts:92` and `FLOOR_PLAN.md`. None is reachable here — the same label-foreign route
+as 08-14/08-16/08-17/08-18, on the same project. **Eighth dispatch, sixth distinct item, third
+distinct `reso-management-app` item.**
+
+Nothing about the discriminator, the cause, the rails or the standing refusals is re-derived; all of
+it is settled above and holds verbatim. Two facts are new, and both are dates rather than mechanisms.
+
+## New fact 1 — the gap was not a fix
+
+The last recorded occurrence is **08-18**. This one is **08-23**: five days with no row. A gap that
+size invites the reading that the tap stopped producing foreign fires — which is exactly the reading
+this row refutes. The class did not stop; it resumed on the project it had already burned twice.
+That matters for how the pending decision is prioritised: quiet is not evidence, because the
+producer (`bin/cc-offload`) is unchanged and only the *arrival rate of foreign-project items* moved.
+
+## New fact 2 — the cause is re-verified UNSHIPPED, seven days after it was filed
+
+Measured on today's trunk from inside this session (`HEAD..origin/main` → **0**, so this tree IS
+trunk — the brief's mandated first step, run in full for the `claude-infrastructure` half):
+
+| what | value |
+|---|---|
+| `bin/cc-offload:84` | `REPO="${CC_OFFLOAD_REPO:-$ROOT}"` — **unchanged** since the 08-16 session located it |
+| a `(item.project, attached_repo)` pair arm in `bin/cc-eligible` | **absent** — `grep` for `attached`/`item.project`/`foreign` hits only two prose comments |
+| `cc-eligible check` (fixtured on this item's real title + source) | `verdict=eligible`, classes `[]`, rc 0, `history.state: no-repo` for `/root/Development/reso-management-app` |
+
+So the 08-16 decision — **(a) fail closed at fire time vs (b) route by `item.project`** — is now
+**seven days open and carrying eight dispatches of cost**. The `no-repo` fail-open is the 08-14
+note's finding, unchanged and correctly by design; it is recorded here only to show the gate was
+consulted and still abstains.
+
+## The rails — new facts 2 and 3 of the 08-18 section both reproduce exactly
+
+Recorded because reproduction is what turns a correction into a rule, and because a worker reading
+only the *earlier* rails blocks in this file would still be misled. Unpiped, on this VM:
+
+```
+bin/cc-backlog reopen 616d58ac42df   → rc 3   (unknown id)
+bin/cc-notify --role desk "…"        → rc 3   (verdict=unresolvable enqueued=0 reason=role-unset)
+```
+
+Both fail **loudly**, as the 08-18 correction established — every `rc 0` in the older blocks is a
+`| head` artifact. And the store-creation side effect reproduces too: `/root/.claude/autonomy/` was
+absent at session start and exists after the first `reopen` (`ensure_file()`, `bin/cc-backlog:908-911`),
+holding a 0-byte `backlog.jsonl`. **`cc-backlog needs` was deliberately NOT run here** — per the 08-18
+finding it would have succeeded against that empty store and filed a well-formed id addressing
+nothing. The 08-18 warning is therefore load-bearing and worked: it changed this session's behaviour.
+
+## Measured from inside this session
+
+| what | value |
+|---|---|
+| host `$HOME` / cwd | `/root` / `/home/user/claude-infrastructure` |
+| clone | `rev-list --count HEAD` → **50**, `is-shallow-repository` → **true** |
+| `HEAD..origin/main` | **0** — this tree IS trunk |
+| `/Users`, `/root/Development` | both absent |
+| GitHub scope | `renchris/claude-infrastructure`, one repository |
+| the three cited files | **0 hits** over the whole checkout |
+| `bats` / `shellcheck` / `shfmt` | all **ABSENT** (`jq`, `python3`, `node` present) |
+
+## Operator actions
+
+Needs the Mac. Same disposition as the other `reso-management-app` rows, and `block` rather than
+`reopen` for the same reason: the item is blocked on **where it was sent**, not on information or a
+judgment call, and the guard that would stop it being re-fired into this same VM shape does not exist
+yet.
+
+```
+cc-backlog block 616d58ac42df --needs "re-dispatch to a session that can reach reso-management-app — a local claim, or a cloud fire whose attached git_repository source IS reso-management-app. EIGHTH foreign-repo dispatch; cause re-verified unshipped on trunk 2026-08-23 (bin/cc-offload:84). Premise NOT adjudicated (docs/research/venue-foreign-repo-recurrence-2026-08-17.md § 2026-08-23)."
+```
+
+**Verify the block took rather than assuming it** — the standing warning from new fact 1 of the
+08-18 section, which this session had no way to run.
+
+## Not fixed here, deliberately
+
+The three standing refusals are re-measured, not inherited, and all three still bind: `bats` and
+`shellcheck` are **absent**, so the repo's gate cannot be run on a change to `bin/cc-offload`, which
+fires **paid** sessions — landing an ungated guard there trades a bounded waste (one slot) for an
+unbounded one (a wrong refusal starves the tap); `bin/cc-eligible`'s `OFFBOX_LANE` class states that
+a session this lane created cannot verify a change to the lane; and `bin/cc-venue` abstains in a
+50-commit clone by measurement (`is-shallow-repository` → `true`, re-confirmed above).
+
+## The item itself — NOT adjudicated
+
+No claim is made about the floor-plan doc rot, and none should be inferred. Whether
+`venueSvgData.ts:34-38` still carries the dead docblock, whether `contentBounds` is required at
+`venueSvgRendering.ts:92`, whether `FLOOR_PLAN.md` frontmatter still reads `status:open`, and whether
+the FIRE STATE table and OP-7 are stale — none was readable from this session; the files return 0
+hits over the entire checkout. The brief's own mandated first step (*read what this item cites on
+TRUNK, because a post-land RED reproduces faithfully in a stale tree* — `cc-backlog 6110fc45141e`) is
+unrunnable here for the strongest reason available: there is no tree, stale or otherwise. Its
+companion clause — *if the cure is already on trunk, the item is DONE* — is equally unrunnable, and
+the item may well be exactly that: its own premise is that two prior premises went dead without the
+doc noticing, which is the shape of work that resolves itself. Deciding that from the brief's prose
+is the anti-goal `bin/cc-venue` §5 names — *"a wrongly-routed item improvises a plausible answer
+against history it cannot read, and reports success."*
+
+**The ledger was NOT updated by this session** — both rails returned rc 3, and the
+`/root/.claude/autonomy/backlog.jsonl` this session's probe created is empty and dies at teardown.
+This branch is the notification.
