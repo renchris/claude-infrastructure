@@ -5562,6 +5562,31 @@ cmd_reap() {
   # reap's OWN (`by == cc-backlog-reap`), its needs must carry the off-box sentence this fix
   # retired, and the row's last claim must be venue != local. A block written by anyone else, for
   # any other reason, is untouched — this can only ever undo the machine's own structural verdict.
+  #
+  # 🚨 THE THIRD AXIS IS PROSE, AND THE PROSE DRIFTED (fixed 2026-08-23). This selector matches the
+  # SENTENCE a block carries, but the sentence is written by `cloud_map` above — a sibling function
+  # that was free to be reworded, and was. cloud_map's BOOTING/ALIVE arm emits
+  #   "a LIVE off-box worker (cc-cloud reads ALIVE) still holds this item past the ceiling…"
+  # while this test still looked only for "worker runs off-box (venue" — a sentence nothing writes
+  # any more. Measured on the live store 2026-08-23: this select matched 0 rows while 20 blocked
+  # rows carried the sentence cloud_map actually writes, the oldest stuck since 08-18. So the curer
+  # was structurally blind to every row the blocker produced, and each one sat blocked for days
+  # while `cc-cloud --table` had ALREADY moved them to STALLED/NOT-STARTED/ABANDONED — states
+  # cloud_map maps to `open`. A correct verdict that no actuator can reach is not an actuator
+  # (memory: detector-with-no-owner-is-not-an-actuator).
+  #
+  # The block record persists only {by,event,id,needs,ts} — there is no token field to key on — so
+  # the sentence IS the join key, and a writer and a reader joined on prose can always drift again.
+  # tests/cc-backlog-cure-sweep.bats therefore pins the join BEHAVIOURALLY: it extracts cloud_map's
+  # own message and runs THIS regex against it with jq, so a future rewording fails the suite
+  # instead of silently stranding rows (memory: control-calibrated-to-implementation-decays — key
+  # the control on the mechanism, not on a spelling).
+  #
+  # FAILURE DIRECTION: this widens only what the sweep can SEE; it changes no verdict. Every row it
+  # newly reaches is still adjudicated by the same live `cloud_map` the claim sweep uses, and a row
+  # whose worker really is BOOTING/ALIVE stays blocked by that same map. So it fails by
+  # re-adjudicating a row the oracle might misjudge — never by leaving a row permanently
+  # unreachable, which is the state it was measured in.
   local cure_rows cured=0
   cure_rows="$(valid_records | jq -s -r '
     def st($e): if $e=="done" then "done" elif $e=="block" then "blocked"
@@ -5586,7 +5611,7 @@ cmd_reap() {
     | select(.status == "blocked")
     | select(.venue != "local")
     | select(.by == "cc-backlog-reap")
-    | select(.needs | test("worker runs off-box \\(venue|the worktree occupancy oracle could not be RESOLVED"))
+    | select(.needs | test("worker runs off-box \\(venue|the worktree occupancy oracle could not be RESOLVED|a LIVE off-box worker \\(cc-cloud reads"))
     | [.id, .venue] | join("\u001f")
   ')"
   if [ -n "$cure_rows" ]; then
