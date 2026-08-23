@@ -87,6 +87,94 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-22 — drain recycle #160: a verdict may spend only the candidates it ADJUDICATED —
+  postland's `conviction_clear` wiped the whole C29 ledger on every verdict, so a RED about file A
+  destroyed the pending evidence about file B that the same loop had written seconds earlier.
+  filed 0 / closed 1 / landed 2 commits (the fix + this log). SECOND CONSECUTIVE close inside
+  `master-convergence-deadlock`.**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twenty-third consecutive clean use; fifty-first consecutive 0-page reading).
+  Gate 2: **`qos-diff` empty, the forty-second consecutive clean reading.** Converge lag **0** in this
+  worktree at open (HEAD == `origin/main` == `2f45c78e9`, tree clean); **the LIVE layer read 15
+  behind** (8 at #155's close, 9 at #156's, 10 at #157's, 13 at #158's, 15 here).
+  Board at open: **open 258 / blocked 187 / done 2151 / claimed 3, of 2599** — flat-identical to
+  #159's close on every stratum; `master-convergence-deadlock` **33 open / 6 blocked**.
+
+  🚨 **A METHOD LINT BEFORE THE ROW — GREP THE STORE ON THE `id` FIELD, NEVER ON THE LINE.**
+  `grep '<id>' ~/.claude/autonomy/backlog.jsonl` is the documented way to read a row's event
+  history, and run raw it is **wrong in the one direction that matters**: it matches any line
+  CONTAINING the id, including other rows' `evidence` text citing it. For `bf7412ee84bf` that
+  returned **two `done` events** — for a row whose own history is `add`→`link`→`venue` and which is
+  OPEN. Parsing on `d.get('id')==<id>` separated 3 OWN events from 2 CITATIONS. A drain that had
+  taken the raw grep at face value would have skipped an open row as already closed. Sibling of the
+  `claimed ≠ open` fold lesson: **both are the store answering a question you did not ask.**
+
+  **ROW CLOSED — `bf7412ee84bf`** (*"C29 cross-window corroboration leaks 44% of its own evidence"*),
+  filed 2026-08-11T23:46:36Z, condition `master-convergence-deadlock`. **Closed by FIXING its primary
+  half and REFUTING its secondary half** — a third consecutive close by construction.
+  · **THE ROW'S SUSPECT SURVIVES DATING, and the population GREW under it** (method 88 applied and,
+    this time, confirming rather than refuting). At filing: 39 pendings, 19 corroborated, 17 wiped
+    (44%), 3 open, latency median 2950 s, 4 same-run wipes. Re-derived off `runner.log` on
+    2026-08-22 (5,542 lines, 2026-07-26 → now): **79 resolved, 37 corroborated, 42 wiped, 0 still
+    open, latency median 2949 s, 7 same-run wipes.** The defect kept minting for eleven days
+    (memory: `generator-population-grows-during-its-own-repair`), and **the latency median moved by
+    1 s across a doubled population** — the same invariance signature that settled `ac13c22fe291`
+    at #157 (2.78 vs 2.77). The shape never moved; only the evidence being discarded.
+  · 🚨 **BUT THE CENSUS SPLITS THE ROW'S HEADLINE, AND THE ROW DID NOT.** Wipes by killer:
+    **GREEN 20 · RED 19 · HUNG 3.** The GREEN wipes are **correct and defended in source** — a green
+    ran the corpus and everything passed, so every prior candidate row genuinely is stale. Only the
+    **22 RED/HUNG wipes are the leak = 27.8% of all pendings**, not the row's 44%/53%. A fix that
+    had adopted the headline figure would have scoped the green clear too and re-opened the exact
+    stale-row trap C29 exists to prevent. **The row's own number conflated a defended clear with an
+    undefended one; the killer split is what makes the fix scopeable.**
+  · **THE IN-SOURCE ARGUMENT DEFENDS ONE BRANCH OF THREE** (method 86, and #156's asymmetry lens
+    doing the deciding work). The comment above `conviction_clear` argues candidates are "spent" by
+    a verdict, illustrated with: *"the next sweep proves the whole corpus GREEN, **exonerating** F"*.
+    Its entire force is that word. **A RED exonerates nothing** — it names A and says nothing about
+    B, dropped from `FAILING` in that same run only because C29 ruled one window insufficient. So
+    the comment explains the MECHANISM and never the ASYMMETRY, which is precisely why it read as a
+    complete justification for eleven days. **Sharpest case:** one file corroborates while another
+    pends in one `corroborate_convictions` loop ⇒ `FAILING` non-empty ⇒ the RED branch ⇒ the wipe
+    deletes a row written seconds earlier by the loop that produced the verdict. **7 measured.**
+  · **THE FIX** — `conviction_clear()` is scoped BY ARGUMENT: no args ⇒ wipe whole (the green path,
+    byte-identical); args ⇒ preserve exactly those files' rows. Callers pass the new `CONVICT_PENDED`
+    array (the names the run already logged as awaiting a second window), guarded
+    `${CONVICT_PENDED[@]+"…"}` because the file runs `set -uo pipefail` on bash 3.2 where a bare
+    empty-array expansion is an unbound-variable error. **It fails CLOSED to the full wipe — the
+    OPPOSITE of the TTL prune in `conviction_observe`, deliberately**: a kept row for a CONVICTED
+    file is the stale row that reds a later single window, and a false red blocks deploy and can arm
+    AUTOREVERT, whereas a lost pending costs one re-pend. On the green branch `CONVICT_PENDED` is
+    **necessarily empty** (a pending forces `CUT` at `:2971`), so the change is provably inert there.
+  · **THE TEST GAP THE ROW NAMED WAS REAL AND IS THE GENERALISABLE PART.** Every prior C29 fixture
+    puts **exactly one** failing file in the tree — and with one file *"A corroborates while B
+    pends"* is not merely untested, it is **UNREACHABLE**: the bug had no shape to fail in. The
+    red-proof therefore puts TWO files in one run, offset by one window. **A single-file fixture is
+    not a weak test of a two-file invariant; it is a test of a different invariant.**
+  · **VERIFIED TWO-ARMED** against a pinned pre-fix subject via **`CC_POSTLAND_BIN`** (the cheapest
+    arm-2 in the repo, same lever the bisect suite uses). Post-fix **4 ok**; pre-fix **2 falsifiers
+    + the census red, CONTROL green**, failing at `[ -f "$led" ]` (ledger gone) and at `cut` where
+    `red` is required (B re-pends) — **the defect itself, not an incidental red.** Staleness guard
+    per method 87: keyed on `files to PRESERVE`, text the FIX introduces (**0** pre-fix), with
+    `conviction_clear` as positive control (**4** pre-fix) proving the pin is a real subject.
+  · **THE CONTROL IS LABELLED A CONTROL, NOT A FALSIFIER** — it is green on BOTH arms by design
+    (#159's B28 rule). Its job is the over-scoped fix: a change making preservation the default
+    leaves every falsifier above green while re-opening the stale-row trap.
+  · **A CENSUS NO RUNTIME FIXTURE CAN BE** — the three behavioural tests exercise the three verdict
+    branches that exist TODAY; a fourth added later would wipe pendings again and all three would
+    still pass. Sites named individually, anchored on statement position (`cut_clear; …`), because
+    the identifier also appears in four comments and a substring count would drift with the prose.
+  · 🚨 **THE ROW'S SECOND CLAIM IS REFUTED — measured, not inherited, and NOTHING was filed for it.**
+    The row asserts *"`cut_bump` keys consecutive cuts on the TREE and C29 pendings land on a moving
+    trunk, so every C29 cut line reads `consecutive=1` and CUT_MAX/`cut_page` can never fire"*.
+    Measured over 258 cut lines: C29 cuts read **44×1, 4×2, 1×7** — so "every" is false, and at
+    **89.8% at 1** they are **indistinguishable from the 86.5%** of all other cut classes
+    (179/207). Tree-keyed streaks are therefore **not a C29-specific defect**, and 12 cut lines sit
+    at `consecutive>=3`, which IS `cut_page`'s firing condition. ⚠️ **The follow-on question is
+    unanswerable from the log and must not be filed as if it were**: `cut_page` writes a `.page`
+    file and **logs nothing**, so a log-grep for it is a blind instrument, and 0 pages on disk is
+    explained by the green sweep at `:3011` clearing `postland-cut-*.page`. **A refuted claim is not
+    a successor row.**
+
 - **2026-08-22 — drain recycle #159: confirming ONE END of a differential is not a differential —
   postland's bisect proved the tip was red and named it, never asking whether its PARENT was red too,
   so a pre-existing trunk red convicted an innocent land. filed 0 / closed 1 / landed 2 commits (the
