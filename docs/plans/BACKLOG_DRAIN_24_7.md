@@ -87,6 +87,76 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #171: two gates shared a boundary and each deferred that boundary to
+  the other, so the shape fell through the seam between them. filed 0 / closed 1 / 2 commits
+  (CODE+TESTS, then DOCS). FIFTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
+  close, and this is a **MOVE**: the row sits in **`master-convergence-deadlock`**, which read
+  **29 open / 6 blocked** at my open and **28 open / 6 blocked** at my close. ⚠️ The operator-set
+  goal again asked that effort to reach **0 open** in one recycle and again named the WRONG
+  successor (its text says "recycle #171 is FIRED" — that is *me*; §2.1's newest entry was #170, so
+  the true successor is **#172**, which is what I fired). Gate 1 clear — **0 `.page` files**
+  (`find` at `$HOME/.claude/autonomy/postland`, directory asserted first; **sixty-second
+  consecutive**). Heredoc diff clean, **fifty-third**. Board at my open: **open 308 / blocked 187 /
+  done 2188+ / claimed 3**, **495** open+blocked, predicate `bash bin/cc-backlog fold` from the
+  worktree (⚠️ still NOT the PATH copy).
+  · **ROW CLOSED — `18ad63b3012a`** (*"the live layer and the checkout are not in bijection, in BOTH
+    directions"*). Landed as *fix(growth-coverage-lint): resolve $0 before deriving BOTH the SSOT and
+    the root* (cite by subject — a land rebases, so the sha this was written with is unreachable).
+  · 🆕 **METHOD 112 — WHEN TWO GATES BORDER EACH OTHER, READ WHAT EACH ONE SAYS THE OTHER COVERS.**
+    `scripts/self-path-lint.sh` is a dedicated ratchet for exactly this shape and had grandfathered
+    the file at `:113`. But it scopes itself to **`..` traversal only** and hands off the
+    same-directory-sibling case in its own header's words: *"the Class-1 shape, which is swept to
+    zero today and is what deploy-link-parity.sh already covers."* Measured:
+    `deploy-link-parity.sh:360` iterates `"$REPO"/scripts/*.sh`. So a **non-`.sh`** sibling is
+    invisible to the gate that was named as its owner. Neither gate is wrong on its own terms — the
+    population they JOINTLY cover is smaller than either believes, and nothing measures the union.
+    (Method 110 said *grep for the lint that owns the class*; this is its second half — **the lint
+    you find may have DELEGATED your case, and the delegate may not accept it.**)
+  · 🚨 **A PERMANENT NON-VERDICT IS NOT A RED, AND ONLY THE CALLER'S PATH KEPT IT INVISIBLE.**
+    Invoked through the live layer the lint returned **exit 2**, *"SSOT unreadable at
+    `~/.claude/scripts/growth-coverage.conf` — FAIL-CLOSED"*, on every run forever. It looked
+    healthy solely because `com.claude.nightly-regression.plist` invokes it from `$REPO`. And the
+    `.conf` was not merely absent — **`deploy-live.sh` contains ZERO occurrences of `.conf` in 1,939
+    lines**, so the sibling is unreachable by the deploy path, not late.
+  · 🆕 **METHOD 113 — A PARTIAL FIX CAN UNMASK THE DEFECT THE BUG WAS SUPPRESSING.** `:41` also did
+    `cd "$(dirname "$0")/.."`, so through the live path the root became `~/.claude` and
+    `REAPER_SCAN`'s relative `bin hooks scripts` would have read the LIVE layer — a different
+    population, holding session-authored files in no commit. **The exit 2 was the thing stopping
+    that.** Fixing only the SSOT would have traded a loud non-verdict for a quiet wrong one, so both
+    derivations had to move together. (Memory: `corrected-instrument-can-lie-again`.)
+  · **FACE B OF THE ROW IS REFUTED, ON THE HALF THAT MADE IT URGENT.** It reported
+    `~/.claude/autonomy/kitty-drift-retry.sh` and `deploy-when-green.sh` as unversioned executables
+    *"still writing their logs"*. Measured: **0** LaunchAgents plists name either, **0** loaded
+    launchd jobs, `kitty-drift-retry.log` last written **2026-07-31** (23 d stale),
+    `deploy-when-green.log` **size 0**. They are dead one-shots. **The row inferred liveness from a
+    log's EXISTENCE rather than its mtime** — the presence-is-liveness error, and it was already
+    wrong at filing.
+  · **A THIRD FILE THE ROW DID NOT NAME:** `~/.claude/autonomy/deferred-fire-deploy-lane.sh`,
+    equally dead, in no commit, and ledgered **nowhere** — `growth-coverage-lint` scans dirs and
+    `.jsonl`/`.log` surfaces, **not `.sh`**, so it is outside every gate's jurisdiction. Named here
+    rather than minted as a row: it is 1.5 KB of litter with zero live consequence, and inventing a
+    `growth-coverage.conf` entry for it would fake coverage the lint does not actually provide.
+  · **EVIDENCE.** Three-armed exhibit (live rc=2 · checkout rc=1 · live+`GROWTH_COVERAGE_SSOT`
+    override rc=1 — so the SSOT derivation was the *sole* cause). Red-proof **A/B on the real
+    artifact**, both arms invoked through a symlink with no `.conf` beside it: **git HEAD bytes
+    rc=2, working-tree bytes rc=0 — the control FLIPS.** Byte-neutrality on the checkout path (the
+    nightly's own invocation), inputs pinned on both arms: **identical rc, identical 78 lines**.
+  · 🚨 **THE SUITE WAS 15/15 GREEN OVER A LIVE PERMANENT EXIT 2, AND ITS OWN `setup()` IS WHY.**
+    Every case exported `GROWTH_COVERAGE_SSOT`, which seams straight past the derivation under test.
+    The two new cases unset it deliberately and invoke through a symlink. **A suite that presets the
+    seam can never reach the regime the bug lives in** (memory:
+    `control-fixture-must-reach-the-bugs-regime`) — and the fixture that hides it is in `setup()`,
+    where nobody reads it.
+  · **THE DOWNWARD RATCHET, PAID IN THE SAME DIFF** (method 110, #170's `LAND_RC=6` lesson):
+    self-path-lint's allowlist line for this file is deleted, because the lint **fails if a file is
+    fixed and its line survives**. Bare scan now reads *"25 grandfathered, 0 new unresolved
+    self-paths"* (was 26). Gates: `growth-coverage-lint.bats` **17/17** · `self-path-lint.bats`
+    **18/18** · `self-path-lint --selftest` **32/32** · shellcheck clean on both scripts.
+  · **STRUCTURAL REMAINDER, NOT FIXED AND NOT LAUNDERED:** `deploy-live.sh`'s payload scope is
+    narrower than the repo (`*.sh` only). That is the *cause* of face A rather than its consequence,
+    it is plan-scale, and it is **already carried by open row `4e6a51df2a84`**. I fixed the
+    consequence and left the cause where it is already filed.
+
 - **2026-08-23 — drain recycle #170: the item's pairing clause was right about the MECHANISM and
   wrong about the FINDING, and checking which was the work. filed 0 / closed 1 / 2 commits
   (CODE+TESTS, then DOCS). FOURTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the
