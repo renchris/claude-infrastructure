@@ -87,6 +87,110 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #161: the bisect ran for ONE suite, so its sha is a verdict about ONE
+  entry — `red_actions` stamped that scalar culprit onto EVERY per-entry backlog title, and a
+  non-primary row named a commit where its own suite is GREEN. filed 0 / closed 1 / landed 2 commits
+  (the fix + this log). THIRD CONSECUTIVE close inside `master-convergence-deadlock` (32 → 31).**
+  Gate 1 clear — **0 `.page` files**, `find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  to EXIST first (twenty-fourth consecutive clean use; **fifty-second consecutive 0-page reading**,
+  at open AND close). Gate 2: **`qos-diff` empty, the forty-third consecutive clean reading.**
+  Converge lag **0** in this worktree at open (HEAD == `origin/main`, tree clean); **the LIVE layer
+  read 21 behind at open** (8/9/10/13/15 at #155–#160) **and 1 at close** — a sibling converged it
+  mid-window, so the drift is not monotonic and must be re-measured, never extrapolated.
+  Board at open: **open 262 / blocked 191 / done 2154 / claimed 2**; `master-convergence-deadlock`
+  **32 open / 6 blocked**. At close: **open 261 / blocked 191 / done 2156 / claimed 2**, warm effort
+  **31 / 6**.
+
+  🚨 **METHOD 89 EARNED ITS KEEP ON ITS FIRST REUSE.** #160's 55th lint — grep the store on the `id`
+  FIELD, never on the line — was applied to the candidate row before anything else, and `8740c03e428c`
+  returned **OWN=4 / CITE=2**: its own history is `add`→`falsify`→`venue`→`link`, and the two extra
+  lines are `done` events belonging to rows `99df8fdb4fda` and `9a57611ececc` whose evidence prose
+  cites it. A raw `grep '<id>'` would again have shown **two `done` events for an OPEN row**. This is
+  now measured on two consecutive picks; treat the raw grep as simply wrong, not as a sharp edge.
+
+  **ROW CLOSED — `8740c03e428c`** (*"red_actions bisects FAILING[0] only, then stamps THAT culprit sha
+  onto EVERY per-entry backlog title"*), filed 2026-08-10T17:39:11Z, condition
+  `master-convergence-deadlock`. Closed **by construction — the fourth consecutive close of a row that
+  PRESCRIBES its own remedy and its own gate**, and the fifth consecutive close overall.
+  · **THE ROW'S CITED LINES WERE STALE, ITS DIAGNOSIS WAS NOT** (method 2). Cited
+    `scripts/postland-verify.sh:2008 c12 -> :2061 ftitle`; measured at pickup **`:2641` and `:2745`**
+    in a 3,868-line file. `do_bisect "$file" …` and the **sole** call site `red_actions "$sha"
+    "${FAILING[0]}"` (`:3031`) together fix `$file` as the primary, so `$c12` is a verdict about that
+    entry and no other — while the per-entry loop below it stamped the scalar on all of them.
+  · **THE FIX, KEYED ON THE ENTRY RATHER THAN ON THE INDEX.** The row prescribed *"keep `@ $c12` only
+    when fentry = FAILING[0]"*; the landed form asks `[ "$fentry" = "$file" ]` instead. The two agree
+    at today's only call site and **diverge for a future caller passing a `$file` outside FAILING** —
+    where the entry-keyed form attributes NOTHING rather than mis-attributing entry 0. That is the
+    safe direction: naming no culprit costs a worker a hand bisect, naming the wrong one costs a
+    `git revert` of an innocent commit. The **orphan suffix is gated on the same predicate**, because
+    `orphan` is `trunk_state`'s answer about the CULPRIT and a row now naming `$sha` would assert
+    non-membership of a sha nobody checked. The change is **INERT where the bisect abstained** —
+    `culprit` has already fallen back to `$sha`, so both arms render one string.
+  · 🚨 **THE RED-PROOF IS THE WHOLE STORY HERE, AND THE OBVIOUS FIXTURE WOULD HAVE BEEN VACUOUS.**
+    `multi_red_bats` — the existing 3-file fixture C13e-g already use — **cannot** red-prove this: with
+    no last-green the bisect abstains, `culprit` falls back to the target, and `$c12` and
+    `sha12 $sha` are **the same string**, so every assertion passes against the unfixed subject. The
+    bug is observable only where the bisect CONVICTS a sha the target is not. C13i therefore needs
+    four things, and **the fourth cost two failed runs to find**: a green window to set the floor, a
+    marker commit to converge on, an innocent commit on top so `culprit != target`, and — the one
+    that is not obvious — **the TAP's named suites PRESENT in the fixture tree**. `do_bisect` writes a
+    runner whose first line is `[ -f <file> ] || exit 125`, and 125 is git's *"cannot test this
+    commit"*, so with the suites absent EVERY probe abstains: measured `why=no-first-bad steps=1`, page
+    keyed on the target, all three titles identical. They must exist **at the floor** too, or
+    `bisect_floor_ok` takes its *"the file did not exist at the last-green"* branch and skips the
+    confirmation the control reads. The discriminator itself is `[ -f BAD ]`, the same tree-driven
+    shape `stub_bats_marker` uses in `tests/postland-verify-bisect-bound.bats` — the probe's cwd IS
+    the bisect cell.
+  · **TWO ARMS, VIA THE `CC_POSTLAND_BIN` SEAM** (`tests/postland-verify.bats:150` — the cheapest
+    arm-2 in this repo): the SAME test against `origin/main`'s pinned pre-fix script **reds at line
+    1577, the non-primary sha assertion** — not at a control, not at the vacuity guard — and goes
+    green against the fixed subject. **The controls did the deciding work**: an explicit vacuity guard
+    (`culprit12 != target12`), a walk-really-convicted control (the page is state-keyed on the
+    culprit, so its existence under the culprit's sha rather than the target's IS the walk's verdict,
+    plus `bisected from last-green`), and a **count** assertion in both directions — exactly one row
+    may name the culprit, exactly two the target — so a fix that blanket-replaced every sha would red
+    too. The first two runs failed **at the walk-convicted control**, which is precisely what stopped
+    a vacuous green from shipping.
+  · **The row's own stored falsifier flipped rc 1 → 0** against the LANDED copy — a genuine flip, not
+    a grep gamed: the sha moved into `$esha`, so the `ftitle=` line legitimately no longer names
+    `c12`. Recorded because #124's lesson (a falsifier that greps for the PRESCRIBED text convicts a
+    better cure) means a flip is worth stating but is never the evidence.
+
+  **GATES.** `bats --count` 129 → **130**; `bats-assert-liveness.py` rc 0 (run directly, per #160's
+  note); `shellcheck -S warning` rc 0; `bash -n` on the SUT rc 0. Sibling clauses sharing the edited
+  loop re-run green — **C13d/e/f/g/i 5/5, plan `1..5` exact**. **Owed suites: the same two standing
+  docs-consumers as #145–#160 — `cc-dispatch-firegate` (15) · `land-content-verify` (25) — 40 tests,
+  40 ok, 0 notok, 0 skip, both plan lines exact. SEVENTEENTH consecutive identical reading.**
+  `gate-select --direct` instrument control re-derived: **32** (a stable TWENTY-FOUR-recycle control).
+
+  🚨 **METHOD 83, FOURTH CONSECUTIVE PARTIAL — and this land shows BOTH failure shapes in one run.**
+  `--direct origin/main..HEAD` answered **13 suites** (a real verdict). The unlocked pass attempted
+  **3 in 425 s**: plan lines `1..22` (`cc-backlog-dups-family`), `1..21` (`cc-premise-postland-red`),
+  `1..171` (`tests/cc-reaper.bats`, **GATE-KILLED, exit 124, ZERO `not ok`** — *"NOT a red and NOT
+  evidence about your tree"*). 22+21+171 = **214**, exactly the `ok` count in the smoke block, so the
+  accounting closes and the other **10 never started**. Then the **locked** pass, after rebasing onto
+  the moved base, reported **`selector answered FULL`** — the fail-closed non-verdict — and ran **no
+  smoke at all**. So one land can be budget-partial on its first pass and selector-blind on its
+  second; **neither is evidence about the tree, and only the post-land verifier is.**
+
+  **LAND.** `9dfc6c4c7`, rc 0 — `land-verify: 2 path(s) present + content-identical`,
+  `ship-backup-reap` reaped `ship/backup-fffc6d07b`, `stranded-sweep clean`, `gate-green NOT advanced`
+  (normal — a land makes no full-suite claim). ⚠️ **THE BASE MOVED UNDER THIS LAND AGAIN**,
+  `14823cb21..9dfc6c4c7`, so a sibling landed between open and push and the local sha `fffc6d07b` was
+  rewritten. **Verified BY CONTENT** (memory `cited-sha-may-not-survive-the-land`): `--is-ancestor`
+  rc 0, `git diff --stat origin/main` **EMPTY** on both paths, both blobs present in trunk's tree,
+  `esha` ×4 and `@test "C13i` ×1 on trunk, **nonsense-token negative control 0**. No file ADDED, so
+  no `LIVE_ADDS` contribution. ⚠️ But `scripts/postland-verify.sh` IS reached by a live-layer symlink,
+  so **this fix is stale in the live layer until the converger runs** — a postland run today can still
+  cross-attribute.
+
+  🚨 **PER-ROW DIFF ACROSS THIS WINDOW (method 80): 2 LEFT · 1 ENTERED, and only ONE of the three is
+  ours.** LEFT: `8740c03e428c` (MINE) and `48fe5805f213` (**reso** — sync fast-path p95). ENTERED:
+  `ca967e9f1c54` (**reso** — instrument per-entity scan duration). The flat board fell 262 → 261 open
+  and stayed flat at 191 blocked, which this time happens to agree with the per-row read — **#160's
+  window is the reminder that it need not: there the flat board ROSE while a row was closed.** Diff
+  the per-row list or say nothing.
+
 - **2026-08-22 — drain recycle #160: a verdict may spend only the candidates it ADJUDICATED —
   postland's `conviction_clear` wiped the whole C29 ledger on every verdict, so a RED about file A
   destroyed the pending evidence about file B that the same loop had written seconds earlier.
