@@ -87,6 +87,66 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-23 — drain recycle #167: the missing ping was never SENT, and the reason is that the duty
+  had no POSITION. filed 0 / closed 1 / 1 commit (DOCS). ELEVENTH CONSECUTIVE close overall.** Warm
+  effort declared before the close: a **HOLD** — the row is keyed on `drain-link-lands-without-pinging`,
+  not on `master-convergence-deadlock`, so any movement in that count during my window is siblings'.
+  Gate 1 clear — **0 `.page` files** (`find` at `$HOME/.claude/autonomy/postland`, directory asserted
+  first; fifty-eighth consecutive). Heredoc diff clean, forty-ninth.
+  · **ROW CLOSED — `29460aeb90a8`** (*"a drain recycle can LAND ITS WORK AND VANISH FROM THE REPORTING
+    CHANNEL"*), filed OPEN by the lead at #125 with the explicit instruction **"CAUSE IS OPEN, do not
+    guess it"** and three candidates to separate: (a) the send never ran because the fire is the last
+    action, (b) `cc-notify` wrote a box the drain does not read, (c) the send ran and failed silently.
+  · 🚨 **IT IS (a), AND (b) AND (c) DIE ON THE SAME MEASUREMENT.** #124's own session — identified
+    WITHOUT any ping spelling, as the session that wrote `/tmp/fire-drain-recycle125.txt` and authored
+    `2f7ca43bc` — invoked `cc-notify` **0 times across 70 tool calls / 463 records**. Control: the
+    sessions on either side each invoked it exactly once carrying their ping (#123 @02:05:59Z, #125).
+    Sender-side concurs: `.sent/449` holds **no send between 19:05:59 and 21:24:18** local. `.sent` is
+    written by `mailbox_write` on a *successful enqueue*, so it cannot by itself separate (a) from (c)
+    — but with zero invocations there was nothing to fail, and (b) needs a resolved target that would
+    have left a line in some box, which the row's own positive control already showed does not exist
+    anywhere in the 6,278-file tree.
+  · 🚨 **THE CAUSE IS A DEFECT IN §4.1, NOT IN #124 — AND IT WAS STILL LIVE TODAY.** The goal
+    template's only terminal clause was *"recycle #<N+1> is FIRED … as the LAST action"*, invariant 6
+    ranks that fire above finishing one more row, and the ping existed solely inside invariant 7 —
+    whose heading governs the ADDRESS and which never said the send must happen or when. `--recycle`
+    replaces the context, so a duty with no position ahead of the fire is unreachable the moment a
+    session takes the goal literally. **FIXED IN THIS DIFF:** the ping's `enqueued=1` is now a clause
+    of the goal condition, ahead of the fire clause, and invariant 7 states the position and points at
+    it. The goal evaluator re-judges every turn and blocks the stop, so this is mechanical rather than
+    advisory (`enforcement-must-live-at-the-chokepoint`, one layer up).
+  · ⚠️ **#154's fix (`cff163cac9e5`) is complementary, not duplicated.** It repaired the ADDRESS (pane
+    UUID over the ambiguous `grep claude-infrastructure`) and added the paste-the-stderr rule. Neither
+    reaches a link that never invokes `cc-notify` at all, so the 13-link green run since #154 rested on
+    discipline. Both halves now stand.
+  · 🆕 **THE PING LABEL IS OFF-BY-ONE ACROSS PART OF THE RANGE, so recipient-side accounting lies.**
+    Session `f7a595d5` authored **#145's** docs commit and labelled its send
+    `HANDOFF-PING fire-drain-recycle146: #145 closed …` — label = SUCCESSOR, body = SENDER. That is
+    why two of my own instruments disagreed on #146 (a ping exists for it; its session sent none), and
+    it is now recorded in §4.1 with the sender-side anchor to use instead.
+  · **BLAST RADIUS, re-derived label-independently, WITH ITS COVERAGE STATED.** Of the landed recycles
+    ≥#100 whose session the sender-side anchor can identify — **25 of 59, i.e. the instrument is BLIND
+    for 34** — **3 sent no ping: #124, #146, #150.** The recipient-side count over the same range reads
+    11, and the two are not comparable for the reason above. Predicate for both, stated because no verb
+    renders it: LANDED = a `docs(drain): recycle #N` subject on origin/main; SENT = a `Bash` `tool_use`
+    matching `cc-notify.*HANDOFF-PING` in the transcript of the session that wrote
+    `/tmp/fire-drain-recycle<N+1>.txt`; corpus = all **five** `~/.claude*/projects` stores, 187 drain
+    transcripts, this session's own excluded by id.
+  · ⚠️ **TWO INSTRUMENT FAILURES CAUGHT BY CONTROLS, both of the same family — a null from a blind
+    instrument is not an absence.** (1) The first census keyed on the token `recycle124` and reported a
+    24-recycle gap; the modern wording is `recycle #166`, so it was blind to every recent ping. (2) The
+    transcript scan covered two account stores and went blind at #127, returning `-none-` for 34
+    recycles; there are **five** stores and `.claude-tertiary` / `.claude-quaternary` both hold drain
+    dirs (`transcript-corpus-spans-four-account-stores`). A third control fired correctly: the negative
+    control `recycle #9999` returned **1**, which was THIS session's own transcript — self-contamination,
+    excluded by id, and re-run to 0.
+  · Docs-only, ONE file, no adds. `tsc`/`lint` n/a; the repo's shell gates do not apply to a `.md`.
+    Board at my open: **open 306 / blocked 181 / done 2181 / claimed 4** (`cc-backlog fold`, STATUS
+    strata over all rows; 487 open+blocked, up from #166's 475). ⚠️ **`cc-backlog fold` is NOT reachable
+    from PATH** — `~/.claude/bin/cc-backlog` symlinks into the shared checkout, which was **11 behind**
+    origin/main at my open, so #166's own verb (now mandated by invariant 7) 404s for the fleet until
+    the converger runs. Not mine to converge from a worktree; ran it from the worktree copy instead.
+
 - **2026-08-23 — drain recycle #166: a row blamed PRIVATE DEFINITIONS, and its own primary exhibit
   replayed EXACTLY — what was missing was TIME. filed 0 / closed 1 / 2 commits. TENTH CONSECUTIVE
   close overall, and the NINTH consecutive close of a row that prescribes its own remedy. Warm
@@ -15235,10 +15295,52 @@ every pause-point — end of effort, ~60% context fill, or any natural seam):
       --account auto \
       --goal '<effort E> reaches 0 open rows (blocked tail reported, not hidden) — proven by
       cc-backlog list --open --json | jq output printed showing 0 open for condition <E>, plus the
-      filed-vs-closed tally for this recycle (closed >= filed); then recycle #<N+1> is FIRED
+      filed-vs-closed tally for this recycle (closed >= filed); the HANDOFF-PING to the lead is
+      SENT and its `enqueued=1` printed BEFORE the fire; then recycle #<N+1> is FIRED
       (handoff-fire --recycle) as the LAST action and its engagement line is printed; do not end
       the recycle net-positive on filings and do not close any row without same-moment content
       evidence'
+
+🚨 **THE PING CLAUSE ABOVE IS LOAD-BEARING AND IT IS WHY #124's PING DOES NOT EXIST** (backlog
+`29460aeb90a8`, condition `drain-link-lands-without-pinging`; cause established by #167, having been
+filed OPEN by the lead at #125 with "CAUSE IS OPEN, do not guess it"). The row offered three
+candidates — (a) the send never ran, (b) `cc-notify` wrote a box the drain does not read, (c) the
+send ran and failed silently. **It is (a), and (b) and (c) are refuted by the same measurement.**
+#124's own session is identifiable without relying on any ping spelling — it is the session that
+wrote `/tmp/fire-drain-recycle125.txt` and authored commit `2f7ca43bc` — and across **70 tool calls
+/ 463 records it invoked `cc-notify` ZERO times**, while the neighbours on either side each invoked
+it exactly once carrying their ping (`#123` @02:05:59Z, `#125` @03:2xZ). Sender-side agrees:
+`.sent/449` records **no send at all** between 19:05:59 and 21:24:18 local, and `.sent` is appended
+by `mailbox_write` on a *successful enqueue*, so (b) cannot survive either — a send that resolved
+anywhere would have left a line in some box, and the row's own positive control already showed the
+whole mailbox tree holds zero.
+
+**Why a correct session skipped it, and why that is a defect in THIS TEMPLATE rather than in #124.**
+Until this edit the goal condition's only terminal clause was *"recycle #<N+1> is FIRED … as the LAST
+action"*, and invariant 6 ranks that fire above finishing one more row. The ping had **no position in
+the sequence at all**: it lived solely inside invariant 7, whose heading governs the *address* ("the
+back-channel must name something that resolves") and which never said the send must happen, let alone
+when. `handoff-fire --recycle` replaces this context, so a duty with no position ahead of the fire is
+**unreachable the moment the session takes the goal at its word**. #123 pinged because it chose to;
+#124 did not because nothing required it anywhere it could not be skipped. The goal evaluator re-judges
+after every turn and blocks the stop, so putting the ping *in the condition* is the one place the
+requirement becomes mechanical instead of advisory — this is the same lesson as
+`enforcement-must-live-at-the-chokepoint`, one layer up.
+
+⚠️ **#154's fix (row `cff163cac9e5`) is complementary, not a duplicate — it repaired the ADDRESS, not
+the POSITION.** It replaced the ambiguous `grep claude-infrastructure` resolver with the pane UUID and
+added the paste-the-stderr rule. Both are right and both stay. Neither reaches a link that never
+invokes `cc-notify` at all, which is what #124 did, so the 13-link green run since #154 rests on
+discipline. This clause is what makes it rest on the evaluator.
+
+🚨 **SPELL THE PING WITH YOUR OWN RECYCLE NUMBER — the label is off-by-one across part of the range,
+and it makes recipient-side accounting lie.** Measured by #167: session `f7a595d5` authored **#145's**
+docs commit and labelled its send `HANDOFF-PING fire-drain-recycle146: #145 closed …`, i.e. the label
+named the SUCCESSOR while the body reported the SENDER. So "does the lead's box mention recycle #N"
+answers a different question for those links than for the modern `HANDOFF-PING recycle #<N> — …`
+form, and a census built on it reports a ping for a link that never sent one. **Anchor any audit of
+this condition on the SENDER side** — the session that wrote `/tmp/fire-drain-recycle<N+1>.txt` is
+recycle N, whatever anyone spelled — and keep the sender's-own-number form above.
 
 Brief body invariants (regenerate the specifics each recycle; never drop these):
 1. Pick the smallest live master-* effort from the CURRENT fold (never a remembered order);
@@ -15310,6 +15412,13 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
      4.1 by #154 — **which is the only edit that can work**, see below). The send is:
 
          cc-notify 102 "HANDOFF-PING recycle #<N> — <one line: rows closed, sha landed>"
+
+     🚨 **AND IT IS THE SECOND-TO-LAST ACTION — send it BEFORE the fire, never after.** This
+     invariant governs the ADDRESS; the goal template above governs the POSITION, and the position is
+     the half #124 was missing (backlog `29460aeb90a8`, cause established by #167 — its session
+     invoked `cc-notify` **zero** times, so no address could have saved it). `--recycle` replaces
+     this context, so anything sequenced after the fire is unreachable. Spell it with **your own**
+     recycle number, not the successor's — see the off-by-one measured at #145/#146 in §4.1 above.
 
      **NOT `cc-sessions --names | grep claude-infrastructure`.** That grep returns **TWO** rows and
      has since at least 2026-08-19 — re-confirmed same-moment by #154: `claude-infrastructure-102`
