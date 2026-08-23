@@ -701,6 +701,9 @@ FAILNAME=()
 # so a second window cannot tell them anything.
 LADDER_FAILING=()
 CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
+# ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
+# branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
+CONVICT_PENDED=()
 # Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
 # where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
 CORPUS_N=0
@@ -1785,7 +1788,7 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
       keep+=("$f"); keepname+=("${FAILNAME[$i]:-}")
       log "C29 CORROBORATED $f — convicted again in a SECOND window (>=${CONVICT_SPREAD}s apart): RED"
     else
-      CONVICT_PENDING=1; n=$(( n + 1 ))
+      CONVICT_PENDING=1; CONVICT_PENDED+=("$f"); n=$(( n + 1 ))
       log "C29 PENDING $f — convicted in ONE load window only; a same-window 2/3 is one experiment, not three (re-run next sweep decides)"
     fi
   done
@@ -2844,7 +2847,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
   FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
-  LADDER_FAILING=(); CONVICT_PENDING=0                                     # C29, same reset scope
+  LADDER_FAILING=(); CONVICT_PENDING=0; CONVICT_PENDED=()                  # C29, same reset scope
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
@@ -2977,7 +2980,9 @@ EOF
     # page the FILE with the fix that actually applies (timeout-wrap the seam), not "retry when
     # quieter" — which is the one response guaranteed never to clear it.
     write_stamp "$tree" "$sha" hung "$run_s" "$RETRIES" "$adv" "${SUSPECT:-tests/}"
-    cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
+    # ...spent EXCEPT the ones this verdict never adjudicated. A hang is a verdict about a wedged
+    # SUSPECT; it exonerates no pended file, so those keep their candidacy (see conviction_clear).
+    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}"
     log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s"
     hung_actions "$sha" "$tree"
     echo "postland-verify: HUNG $(sha12 "$sha") — ${SUSPECT:-tests/} wedged at $WEDGE_AT ($DEATH_SIG)"
@@ -2998,6 +3003,9 @@ EOF
   elif [ "${#FAILING[@]}" -eq 0 ]; then
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
+    # NO ARGUMENT HERE, and that is the whole asymmetry: a green ran the corpus and everything
+    # passed, so every candidate really is exonerated. This is the one branch conviction_clear's
+    # original argument was written about, and its behaviour is unchanged.
     cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
     # A now-passing state clears every standing page. postland-revert-* belongs in that set and was
     # the one class missing from it: a FAILED auto-revert's page asserts "trunk is STILL RED" and
@@ -3014,7 +3022,11 @@ EOF
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else
     write_stamp "$tree" "$sha" red "$run_s" "$RETRIES" "$adv" "${FAILING[@]}"
-    cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
+    # ...spent EXCEPT the ones this verdict never adjudicated. THE SHARPEST CASE IN THE FILE: when one
+    # file corroborates and another pends in the same corroborate_convictions loop, FAILING is
+    # non-empty, so control arrives HERE — and the unscoped wipe deleted the pending row written
+    # seconds earlier by the same loop. Measured 7 times (see conviction_clear).
+    cut_clear; conviction_clear "${CONVICT_PENDED[@]+"${CONVICT_PENDED[@]}"}"
     log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     red_actions "$sha" "${FAILING[0]}"
     echo "postland-verify: RED $(sha12 "$sha") — ${FAILING[*]}"
@@ -3154,7 +3166,46 @@ cut_clear() { rm -f "$CUTS" 2>/dev/null || true; }
 # cut); the next sweep proves the whole corpus GREEN, exonerating F; hours later F fails once on some
 # unrelated tree — and the stale row from before the exoneration corroborates it into an instant RED
 # off a single window, which is the exact defect C29 exists to prevent, rebuilt out of its own state.
-conviction_clear() { rm -f "$CONVICTIONS" 2>/dev/null || true; }
+#
+# ...BUT THAT ARGUMENT IS ABOUT A GREEN, AND ONLY A GREEN — the asymmetry it never stated, and the
+# reason this cleared 44% of C29's own evidence for eleven days. Its whole force is the word
+# EXONERATING: a green ran the corpus and everything passed, so every candidate row predating it
+# really is stale, and those wipes are correct. A RED exonerates nothing. It says file A is red and
+# says NOTHING about file B, which failed in that SAME run and was dropped from FAILING only because
+# C29 ruled one window insufficient — so wiping B's row destroys evidence the run itself had just
+# generated, seconds earlier, in this very loop. B then restarts from zero and can pend forever.
+#
+# MEASURED off runner.log 2026-08-22 (79 resolved pendings, up from 39 when this was filed — the
+# defect kept minting): 37 corroborated, 42 wiped. Of the wipes, 20 were GREENs (correct, the
+# paragraph above) and 22 were REDs or HUNGs — 27.8% of all pendings, leaked. 7 of those were
+# SAME-RUN, pending and verdict inside one corroborate_convictions loop. tests/cc-notify.bats,
+# tests/claude-accounts-core.bats and tests/compressor-sentinel.bats were each wiped repeatedly and
+# never once convicted; every wipe costs a full corpus run to re-earn. Corroboration latency median
+# was 2949s against the 2950s measured eleven days and one doubled population earlier — the shape
+# never moved, only the evidence being thrown away.
+#
+# So the clear is SCOPED BY ARGUMENT: no arguments ⇒ wipe whole (the green path, byte-identical
+# behaviour); arguments ⇒ preserve exactly those files' rows and spend every other. Callers pass the
+# files this verdict did NOT adjudicate, which is precisely CONVICT_PENDED — the names the run has
+# already logged as awaiting a second window. Nothing new is recorded and no run is scheduled.
+conviction_clear() { # [<file>…] — files to PRESERVE; no args ⇒ wipe whole (green: a real exoneration)
+  local tmp
+  [ "$#" -gt 0 ] && [ -f "$CONVICTIONS" ] || { rm -f "$CONVICTIONS" 2>/dev/null || true; return 0; }
+  # FAIL-CLOSED TO THE FULL WIPE — the OPPOSITE of the TTL prune in conviction_observe, which fails
+  # toward keeping, and deliberately so. There a skipped prune costs disk. Here a kept row for a file
+  # this verdict CONVICTED is exactly the stale row the first paragraph describes, and it corroborates
+  # a later single window into a false RED — which blocks deploy and can arm AUTOREVERT. A lost
+  # pending costs one re-pend. The asymmetry in the consequences is what picks the fallback.
+  tmp="$(mktemp "$STATE/convictions.XXXXXX" 2>/dev/null)" \
+    || { rm -f "$CONVICTIONS" 2>/dev/null || true; return 0; }
+  # Field 2 is the file. Matched WHOLE-FIELD against a space-delimited list rather than by substring,
+  # so a suite path that is a prefix of another cannot be preserved by accident; suite paths carry no
+  # spaces by construction (they are `tests/*.bats` and prelint script paths).
+  awk -F'\t' -v keep=" $* " 'index(keep, " " $2 " ") > 0' "$CONVICTIONS" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$CONVICTIONS" 2>/dev/null \
+    || { rm -f "$tmp" "$CONVICTIONS" 2>/dev/null || true; }
+  return 0
+}
 in_cut_cooloff() { # <tree> — 0 = still cooling off
   local pt pn pts
   [ -f "$CUTS" ] || return 1                      # see cut_bump: the redirect fails before 2>/dev/null
