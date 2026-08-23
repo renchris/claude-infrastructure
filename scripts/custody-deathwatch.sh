@@ -134,18 +134,37 @@ load_pane_oracle() {
 }
 
 CLOUD_STATES=""; CLOUD_OK=0
+CLOUD_TIMEOUT_S="${CC_DEATHWATCH_CLOUD_TIMEOUT_S:-60}"
 load_cloud_oracle() {
   [ -n "$CLOUD_BIN" ] || { CLOUD_OK=0; return 0; }
-  local out rc
-  out="$("$CLOUD_BIN" list --json 2>/dev/null)"; rc=$?
-  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then
-    # id<TAB>state, one per line. A parse failure is an oracle failure, not an empty world.
-    CLOUD_STATES="$(printf '%s' "$out" | jq -r '(if type=="array" then . else (.sessions // .rows // []) end)[]
-                        | [(.id // .session_id // ""), (.state // "UNKNOWN")] | @tsv' 2>/dev/null)" \
-      && CLOUD_OK=1 || CLOUD_OK=0
-  else
-    CLOUD_OK=0
-  fi
+  local out rc tmo
+  # 🚨 `--state` IS LOAD-BEARING, and omitting it produced a VACUOUS ORACLE that reported success.
+  # Measured 2026-08-23: `cc-cloud list --json` exits 0 with 149 KB of rows carrying
+  # id/branch/account/age_s and NO `state` key at all. The first version of this function read that,
+  # mapped every row through `.state // "UNKNOWN"`, and set CLOUD_OK=1 — so the pass logged
+  # `cloud_oracle_ok:true` while knowing nothing about any peer, which is a false green on the very
+  # instrument this file uses to avoid false greens. Only `--state` asks the control plane.
+  #
+  # BOUNDED, because `--state` is a per-session control-plane round trip: the same call took rc 124
+  # at 90 s on the live 260-declaration store. A cut oracle is a NON-VERDICT (rc must be 0), never a
+  # partial reading — adopting half a census would let an unqueried peer read as absent.
+  tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+  if [ -n "$tmo" ]; then out="$("$tmo" "$CLOUD_TIMEOUT_S" "$CLOUD_BIN" list --state --json 2>/dev/null)"; rc=$?
+  else out="$("$CLOUD_BIN" list --state --json 2>/dev/null)"; rc=$?; fi
+  [ "$rc" -eq 0 ] && [ -n "$out" ] || { CLOUD_OK=0; return 0; }
+
+  CLOUD_STATES="$(printf '%s' "$out" | jq -r '(if type=="array" then . else (.sessions // .rows // []) end)[]
+                      | [(.id // .session_id // ""), (.state // "")] | @tsv' 2>/dev/null)" || { CLOUD_OK=0; return 0; }
+
+  # THE SAMPLE MUST CARRY THE FIELD THE VERDICT NEEDS (memory: guard-sample-fields-bound-its-blind-spot).
+  # A response that parsed but carries no state on ANY row has not answered the question, so it is
+  # blindness — not a store full of row-level UNKNOWNs. The distinction decides whether the ledger
+  # records `cloud_oracle_ok:false` (visible, actionable) or lies. Note the discrimination is
+  # "no row has ANY state", not "some row says UNKNOWN": cc-cloud's own UNKNOWN is a real verdict
+  # meaning it could not measure THAT session, and must stay a row-level answer.
+  local with_state
+  with_state="$(printf '%s\n' "$CLOUD_STATES" | awk -F'\t' '$2 != "" {n++} END{print n+0}')"
+  [ "$with_state" -gt 0 ] && CLOUD_OK=1 || CLOUD_OK=0
 }
 
 # peer_disposition <targetPane> → prints ALIVE | GONE | UNKNOWN

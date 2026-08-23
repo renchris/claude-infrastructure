@@ -99,7 +99,7 @@ backdate() {
   "$CUSTODY" open --cwd "$WT" --target 999 --marker M-DEAD --slug fire-killed --originator-pane 100
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"gone=1"* ]]
+  [[ "$output" == *"gone=1"* ]] || false
   # originator pane 100 IS alive ⇒ it learns directly, on the channel it already reads
   [ "$(grep -c 'M-DEAD\|fire-killed' "$NOTIFIED")" -ge 1 ]
   [ "$(grep -c '^100	' "$NOTIFIED")" -eq 1 ]
@@ -111,7 +111,7 @@ backdate() {
   backdate M-LIVE 500
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"alive=1"* ]]
+  [[ "$output" == *"alive=1"* ]] || false
   [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
   [ "$(grep -c . "$FILED")" -eq 0 ]
 }
@@ -124,8 +124,8 @@ backdate() {
   backdate M-STALE 200
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"unknown=1"* ]]
-  [[ "$output" == *"gone=0"* ]]           # a blind oracle may never mint a death…
+  [[ "$output" == *"unknown=1"* ]] || false
+  [[ "$output" == *"gone=0"* ]] || false  # a blind oracle may never mint a death…
   [ "$(grep -c . "$FILED")" -eq 1 ]        # …but the operator is told regardless
 }
 
@@ -134,7 +134,7 @@ backdate() {
   "$CUSTODY" open --cwd "$WT" --target 999 --marker M-FRESH --slug fire-new
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"unknown=1"* ]]
+  [[ "$output" == *"unknown=1"* ]] || false
   [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
   [ "$(grep -c . "$FILED")" -eq 0 ]
 }
@@ -156,7 +156,7 @@ backdate() {
   local first; first="$(grep -c . "$NOTIFIED")"
   [ "$first" -eq 1 ]
   run bash "$SUBJ"
-  [[ "$output" == *"latched=1"* ]]
+  [[ "$output" == *"latched=1"* ]] || false
   [ "$(grep -c . "$NOTIFIED")" -eq 1 ]
 }
 
@@ -168,7 +168,7 @@ backdate() {
   done
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"gone=5"* ]]
+  [[ "$output" == *"gone=5"* ]] || false
   [ "$(grep -c . "$FILED")" -eq 1 ]           # ONE row, not five
   [ "$(grep -c '5 dispatched peer' "$FILED")" -eq 1 ]
 }
@@ -187,7 +187,7 @@ backdate() {
   "$CUSTODY" open --cwd "$WT" --target 999 --marker M-GUARD --slug fire-killed --originator-pane 100
   CC_DEATHWATCH_DEPLOYED=0 run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not the deployed copy"* ]]
+  [[ "$output" == *"not the deployed copy"* ]] || false
   [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
   [ "$(grep -c . "$FILED")" -eq 0 ]
 }
@@ -212,8 +212,8 @@ backdate() {
   "$CUSTODY" open --cwd / --target "cloud:session_C" --marker M-CC --slug cloud-session_C
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"alive=1"* ]]
-  [[ "$output" == *"gone=1"* ]]
+  [[ "$output" == *"alive=1"* ]] || false
+  [[ "$output" == *"gone=1"* ]] || false
   [[ "$output" == *"unknown=1"* ]]
 }
 
@@ -252,7 +252,7 @@ assert swapped_loop == 1 and swapped_feed == 1 and dropped == 3, (swapped_loop, 
 open(dst, 'w').write('\n'.join(out) + '\n')
 PY
   # ANCHOR CHECK — a mutant identical to the subject would make this arm vacuous
-  ! diff -q "$SUBJ" "$mutant" >/dev/null
+  ! diff -q "$SUBJ" "$mutant" >/dev/null || false
   [ "$(grep -c "IFS=\\\$'\\\\t' read -r marker" "$mutant")" -eq 1 ]
   # anchored on the FEED line, not on the bare token: the cloud oracle's own jq uses @tsv
   # legitimately (line ~144), so a bare '@tsv' anchor counts 2 and proves nothing about the swap.
@@ -261,13 +261,13 @@ PY
 
   run bash "$mutant"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"gone=1"* ]]        # arm 2 IS RED: the live pane is called dead
+  [[ "$output" == *"gone=1"* ]] || false # arm 2 IS RED: the live pane is called dead
 
   : > "$NOTIFIED"; : > "$FILED"; rm -rf "$CC_DEATHWATCH_STATE"
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"alive=1"* ]]       # arm 1 is GREEN: pane 602 is alive and stays unreported
-  [[ "$output" == *"gone=0"* ]]
+  [[ "$output" == *"alive=1"* ]] || false # arm 1 is GREEN: pane 602 is alive and stays unreported
+  [[ "$output" == *"gone=0"* ]] || false
   [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
 }
 
@@ -280,19 +280,48 @@ PY
   local mutant="$BATS_TEST_TMPDIR/mutant2.sh"
   sed 's|awk -v want="\$tp" .{gsub(/\^\[ \\t\]+\|\[ \\t\]+\$/,"")} \$0==want {n++} END{print n+0}.|awk -v want="$tp" '"'"'index($0, want) { n++ } END { print n+0 }'"'"'|' \
       "$SUBJ" > "$mutant"
-  ! diff -q "$SUBJ" "$mutant" >/dev/null
+  ! diff -q "$SUBJ" "$mutant" >/dev/null || false
   [ "$(grep -c 'index(\$0, want)' "$mutant")" -eq 1 ]
 
   run bash "$mutant"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"alive=1"* ]]       # arm 2 IS RED: dead pane 60 passes as alive off 602
-  [[ "$output" == *"gone=0"* ]]
+  [[ "$output" == *"alive=1"* ]] || false # arm 2 IS RED: dead pane 60 passes as alive off 602
+  [[ "$output" == *"gone=0"* ]] || false
 
   : > "$NOTIFIED"; : > "$FILED"; rm -rf "$CC_DEATHWATCH_STATE"
   run bash "$SUBJ"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"gone=1"* ]]        # arm 1 is GREEN: pane 60 is correctly dead
+  [[ "$output" == *"gone=1"* ]] || false # arm 1 is GREEN: pane 60 is correctly dead
   [ "$(grep -c . "$NOTIFIED")" -eq 1 ]
+}
+
+@test "REGRESSION: an oracle whose rows carry NO state field is BLIND, not a store of UNKNOWNs" {
+  # THE REAL BUG. `cc-cloud list --json` (no --state) exits 0 with 149 KB of rows that have no
+  # `state` key. The first oracle read that, mapped every row through `.state // "UNKNOWN"` and set
+  # CLOUD_OK=1 — logging `cloud_oracle_ok:true` while knowing nothing. The row-level answer is the
+  # same either way (UNKNOWN), so ONLY the ledger flag can tell a working sensor from a blind one,
+  # and a blind sensor claiming success is how a six-day outage stays invisible.
+  blind_pane_oracle
+  # a stateless-but-successful oracle: exit 0, well-formed rows, no `state` key anywhere
+  cat > "$BINS/cc-cloud" <<'STUB'
+#!/usr/bin/env bash
+cat <<'JSON'
+[{"id":"session_A","branch":"b1","account":"next"},{"id":"session_B","branch":"b2","account":"next"}]
+JSON
+STUB
+  chmod +x "$BINS/cc-cloud"; export CC_DEATHWATCH_CLOUD_BIN="$BINS/cc-cloud"
+
+  "$CUSTODY" open --cwd / --target "cloud:session_A" --marker M-NOSTATE --slug cloud-session_A
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.pass=="complete") | .cloud_oracle_ok' "$CC_DEATHWATCH_STATE/deathwatch.jsonl" | tail -1)" = "false" ]
+
+  # and the control: the SAME shape WITH a state field must read as a working oracle
+  rm -rf "$CC_DEATHWATCH_STATE"
+  cloud_oracle session_A=ALIVE
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.pass=="complete") | .cloud_oracle_ok' "$CC_DEATHWATCH_STATE/deathwatch.jsonl" | tail -1)" = "true" ]
 }
 
 @test "selftest passes (the oracle truth table, independent of any store)" {
