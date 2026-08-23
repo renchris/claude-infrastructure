@@ -84,7 +84,18 @@
 #                                                                 refused while the incumbent is live
 #                                                                 (claimer OR its worktree, minus the
 #                                                                 caller's own process tree)
-#   done    <id> --evidence <ref>
+#   done    <id> --evidence <ref>                                → ALSO stamps `lane` (closed set:
+#                                                                  cloud local-drain session sweep
+#                                                                  land) and `closedBy`, DERIVED from
+#                                                                  the closer's own process ancestry
+#                                                                  and cwd — no caller flag, because
+#                                                                  a flag callers must remember was
+#                                                                  measured at 0.26% adoption. See
+#                                                                  CLOSE ATTRIBUTION above
+#                                                                  cmd_transition. Never retroactive:
+#                                                                  a pre-existing `done` has no lane
+#                                                                  and keeps none. Read by
+#                                                                  scripts/backlog-telemetry.sh.
 #   reopen  <id> [--by <sid>] [--force]
 #           [--self-release spawn-fail|compose-fail|worktree-fail]  → the CLAIMER releasing a claim
 #                                                                  it never started work on; NOT
@@ -1473,6 +1484,171 @@ cmd_add() {
   echo "$id"
 }
 
+# ── CLOSE ATTRIBUTION (2026-08-23) ───────────────────────────────────────────────────────────────
+# WHY THIS EXISTS. `by` was NULL on 1,303 of the 1,309 `done` events in the 14 days to 2026-08-23 —
+# 99.5%. So "which lane closed this row" was UNANSWERABLE from the store, and the operator's two 24/7
+# drains (local and cloud) could not be told apart, or told from a human, or told from nothing at all.
+# The cloud lane had in fact stopped producing on 2026-08-17 while its launchd job still reported
+# loaded / pid live / last exit 0, and no number anywhere moved.
+#
+# 🚨 THE FIX IS A DERIVATION, NOT A FLAG, AND THAT IS THE WHOLE POINT. `--by` has existed on this verb
+# since the beginning and callers do not pass it: six rows in 2,296 do, in three different hand-invented
+# spellings (`local-drain-r4`, `fire-foldfix-orphan`, `drain-recycle37-1787128698`), none of which any
+# code in this tree ever wrote. A discipline with a 0.26% adoption rate is not a discipline, and adding
+# a sixth place to remember a flag would reproduce it exactly. The closer already KNOWS what it is —
+# its own process ancestry says so — so the store asks the closer instead of asking the caller.
+#
+# WHAT IS WRITTEN, and it is strictly ADDITIVE:
+#   · `lane`     — a CLOSED-SET token naming the lane that closed the row. The telemetry axis.
+#   · `closedBy` — a durable identity string, for joining a close back to the thing that made it.
+# Both are written ONLY on `done`, only when derivable, and NEVER retroactively. A pre-existing row
+# has no lane and keeps none: inferring one would manufacture precisely the certainty the readout
+# exists to measure the absence of. scripts/backlog-telemetry.sh counts a lane-less `done` as
+# `unattributed`, which is the true statement about it.
+#
+# NOT `by`, DELIBERATELY. `by` is the LEASE field: it names the CLAIMER, it is what the reopen/claim
+# guards read, and the fold carries it forward (`$r.by // $p.by`) so a row claimed by a worker and
+# closed by a sweep already folds to the worker's name. Overloading it would make a close look like a
+# claim to every guard in this file. A close is a different fact and gets a different field.
+#
+# NOT IN fold(), DELIBERATELY. fold() is a whitelist projection of the item's CURRENT STATE, and a
+# lane is a property of one RECORD, not of the item. Folding it would carry the closing lane across a
+# later `reopen`, so a re-opened row would read as still belonging to whatever closed it once —
+# the same carry-forward defect the `venue` block one screen up documents paying for.
+
+# The closed set. A token outside it is never written: this string SELECTS WHICH LANE a reader
+# believes did the work, so a typo accepted as free text would mint a lane that looks like a verdict
+# and silently split one lane's count in two (memory: denylist-enumerates-spellings-not-the-class —
+# the cure is a closed set, not a list of bad spellings).
+_bl_lane_valid() {
+  case "$1" in cloud|local-drain|session|sweep|land) return 0 ;; *) return 1 ;; esac
+}
+
+# ONE process row, by pid, FIRST LINE ONLY. Read this before editing:
+#
+# 🚨 `ps -axo command=` IS NOT LINE-ORIENTED HERE. A Claude Code session's argv carries its whole
+# brief, newlines and all, so one process renders as MANY lines — measured on this box while writing
+# this, where an awk walk over the full table died with `awk: newline in string` and, worse, would
+# have read a continuation line beginning with a number as another process's row. So: one `ps` per
+# hop, keyed on an explicit `-p <pid>`, and everything after the first line discarded.
+#
+# NO PIPE, deliberately. `ps ... | head -1` closes the pipe under the caller's `pipefail` and convicts
+# `ps` of SIGPIPE on the very output it just produced (memory: grep-q-under-pipefail-inverts-the-
+# verdict). Command substitution + parameter expansion has no such failure mode.
+#
+# SEAM: CC_BACKLOG_PSFIX_DIR — a directory of `<pid>` files, each holding one row in the same
+# "<ppid> <command>" shape. It exists because the ancestry walk is the load-bearing half of this
+# mechanism and the AMBIENT ancestry is not something a test can choose: the same suite runs under
+# ship-land's gate (ancestor `ship-land.sh` ⇒ lane `land`) and under an interactive session
+# (ancestor `claude` ⇒ lane `session`), so an un-seamed assertion about a derived lane is a test of
+# where it happened to be run. With the seam every branch is reachable deterministically.
+_bl_ps_row() { # <pid> → "<ppid> <command-first-line>", empty when the pid is gone
+  local row
+  if [ -n "${CC_BACKLOG_PSFIX_DIR:-}" ]; then
+    [ -f "$CC_BACKLOG_PSFIX_DIR/$1" ] || return 0
+    row="$(cat "$CC_BACKLOG_PSFIX_DIR/$1" 2>/dev/null || true)"
+  else
+    row="$(ps -o ppid=,command= -p "$1" 2>/dev/null || true)"
+  fi
+  printf '%s' "${row%%$'\n'*}"
+}
+
+# Derive the lane from the closer's own PROCESS ANCESTRY, anchored on ARGV POSITION.
+#
+# 🚨 POSITION, NEVER SUBSTRING, and this is the trap that makes the whole function delicate. The
+# `claude` process two hops above a typical close carries its entire brief in argv — including, right
+# now, the literal strings `cloud-return.sh`, `autonomy-sweep`, `cc-dispatch` and `24/7 drain`,
+# because this very task's brief discusses them. A substring test over that argv attributes an
+# interactive session's close to the cloud lane because somebody MENTIONED the cloud lane (memory:
+# pgrep-f-matches-agent-briefs — a live scan read 50 where the truth was 1). Only argv words 1 and 2
+# are consulted: a harness appears there as `bash /path/cloud-return.sh`, and prose never can.
+_bl_derive_lane() {
+  # (1) AN EXPLICIT DECLARATION WINS. A harness that knows what it is may say so, and that is
+  # strictly better evidence than anything inferred — the same argument mark_fired_peer makes for
+  # originClass: the class is recorded by the party that knows it. Validated, never slugified: an
+  # unknown value falls through to derivation rather than minting a bogus lane, and WARNS so a typo
+  # is loud rather than silently ignored.
+  if [ -n "${CC_BACKLOG_LANE:-}" ]; then
+    if _bl_lane_valid "$CC_BACKLOG_LANE"; then printf '%s' "$CC_BACKLOG_LANE"; return 0; fi
+    printf 'cc-backlog: ignoring CC_BACKLOG_LANE=%s — not one of: cloud local-drain session sweep land\n' \
+      "$CC_BACKLOG_LANE" >&2
+  fi
+  local pid ppid cmd w1 w2 b1 b2 hops saw_claude=0
+  pid="${CC_BACKLOG_PS_START_PID:-$$}"; saw_claude=0; hops=0
+  # A BOUNDED walk. Eight hops covers every real chain here (cc-backlog → its shell → the harness →
+  # launchd/claude) with room to spare, and the bound is what stops a pid-reuse cycle in the ps table
+  # from spinning this loop forever on a close that must not hang.
+  while [ "$hops" -lt 8 ]; do
+    hops=$(( hops + 1 ))
+    local row; row="$(_bl_ps_row "$pid")"
+    [ -n "$row" ] || break
+    ppid="${row%% *}"
+    case "$ppid" in ''|*[!0-9]*) break ;; esac
+    cmd="${row#"$ppid"}"
+    # Word-split argv. `set --` inside a function is scoped to the function's own positionals.
+    # shellcheck disable=SC2086  # splitting is the intent: we want argv WORDS, not one string.
+    set -- $cmd
+    w1="${1:-}"; w2="${2:-}"
+    b1="${w1##*/}"; b2="${w2##*/}"
+    # A harness script appears as `<interpreter> <script>` (word 2) or, when exec'd directly with a
+    # shebang, as `<script>` (word 1). Both positions are checked; no third one is.
+    case "$b1" in
+      cloud-return.sh|cc-cloud)                    printf 'cloud'; return 0 ;;
+      autonomy-sweep.sh|cc-reaper|cc-premise|cc-dispatch) printf 'sweep'; return 0 ;;
+      ship-land.sh)                                printf 'land';  return 0 ;;
+    esac
+    case "$b2" in
+      cloud-return.sh|cc-cloud)                    printf 'cloud'; return 0 ;;
+      autonomy-sweep.sh|cc-reaper|cc-premise|cc-dispatch) printf 'sweep'; return 0 ;;
+      ship-land.sh)                                printf 'land';  return 0 ;;
+    esac
+    case "$b1" in claude|claude.exe|claude-*) saw_claude=1 ;; esac
+    case "$b2" in claude|claude.exe|claude-*) saw_claude=1 ;; esac
+    pid="$ppid"
+    [ "$pid" != 1 ] || break
+  done
+  if [ "$saw_claude" -eq 1 ]; then
+    # (2) A CLAUDE SESSION. Which one it is — the local 24/7 drain or an ordinary session — is
+    # decided by CWD, not by argv, and that choice is the memory `argv-is-sampling-cwd-is-durable`
+    # states outright: argv is blind while a worker THINKS, cwd is durable. The local drain runs as a
+    # self-recycling pane in its own worktree under the drain root, so the directory IS the
+    # declaration. HONEST LIMIT, stated where the code is rather than in a doc: this is a CONVENTION,
+    # not an invariant — a drain fired into some other worktree reads `session`, and an operator
+    # typing into the drain pane still reads `local-drain`. It is checkable, wrong in only one
+    # direction, and beats the alternative of not distinguishing them at all.
+    local root cwd
+    root="${CC_BACKLOG_DRAIN_ROOT:-$HOME/Development/.worktrees/drain}"
+    # BOTH SIDES PHYSICALIZED, and this is not hygiene — it is the difference between the rule
+    # working and never firing. `pwd -P` resolves symlinks; the configured root is a literal string.
+    # On Darwin `/var` IS a symlink to `/private/var`, so a root anywhere under a symlinked parent
+    # compares unequal to its own cwd forever, and the local drain reads `session` — a silent
+    # mis-attribution, which is worse than no attribution because it looks like a measurement.
+    # Caught by D4 in tests/backlog-telemetry.bats, which fixtures exactly that shape.
+    if [ -d "$root" ]; then root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"; fi
+    cwd="$(pwd -P 2>/dev/null || printf '')"
+    case "$cwd" in "$root"|"$root"/*) printf 'local-drain'; return 0 ;; esac
+    printf 'session'; return 0
+  fi
+  # (3) NOTHING RESOLVED. Emit nothing — the row stays unattributed, which is the TRUE statement.
+  # A fallback guess here would be indistinguishable from a measurement to every later reader.
+  return 0
+}
+
+# The identity string. Durable by construction and explicitly NOT process-keyed: bin/cc-bus's
+# actor_id header states the rule this reuses — "a process-keyed id silently breaks everything" —
+# so this is <host>-<checkout>, which survives the shell that wrote it.
+_bl_derive_closed_by() {
+  if [ -n "${CC_BACKLOG_BY:-}" ]; then printf '%s' "$CC_BACKLOG_BY"; return 0; fi
+  local host unit top
+  host="$(hostname -s 2>/dev/null || printf 'box')"
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then unit="${top##*/}"; else unit=""; fi
+  [ -n "$unit" ] || unit="$(pwd -P 2>/dev/null || printf '')"
+  unit="${unit##*/}"
+  # Same [a-z0-9-] / 64-char shape bin/cc-bus sanitizes to, so the two identity spaces cannot drift.
+  printf '%s-%s' "$host" "${unit:-0}" \
+    | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | cut -c1-64
+}
+
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
@@ -2115,11 +2291,35 @@ cmd_transition() {
         | [.id, (.by // ""), (.venue // "local")] | join("\u001f")' 2>/dev/null)
     fi
   fi
+  # CLOSE ATTRIBUTION — derived here, on `done` and on no other event (see the block above
+  # cmd_transition). Wrapped so it can only ever ADD a field: `|| true` on both, because a close must
+  # never be blocked by a failure to describe itself. That asymmetry is the same one the
+  # unevidenced-close warning below argues for, and it matters more here — the unattended closers
+  # (reap, cloud-return, ship-land's auto-retraction) have no human to unwedge them, and a row they
+  # can neither close nor hand back is a strictly worse outcome than a row with no lane on it.
+  local lane="" closedby=""
+  if [ "$event" = "done" ]; then
+    # 🚨 STDERR IS **NOT** SUPPRESSED HERE, and it was in the first draft. `2>/dev/null` on this call
+    # site DELETED the only message the derivation can ever emit — the out-of-set CC_BACKLOG_LANE
+    # warning — so a typo'd lane was silently ignored and read exactly like a correctly-derived
+    # `unattributed`. A diagnostic behind a suppressed stream is a diagnostic that does not exist
+    # (memory: suppressed-stderr-turns-a-failed-command-into-a-zero; claimed-outcome-vs-checked-
+    # outcome). Caught by D7 in tests/backlog-telemetry.bats. Every oracle INSIDE the function
+    # already guards its own stderr, so nothing noisy escapes — only the warning does.
+    lane="$(_bl_derive_lane || true)"
+    if [ -n "$lane" ] && ! _bl_lane_valid "$lane"; then lane=""; fi
+    # An explicit --by is BETTER evidence than a derivation and wins outright; it is copied rather
+    # than moved, so `by` keeps meaning exactly what every guard in this file already reads it to mean.
+    if [ -n "$by" ]; then closedby="$by"; else closedby="$(_bl_derive_closed_by || true)"; fi
+  fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
      --arg selfrel "$selfrel" --arg role "$role" \
+     --arg lane "$lane" --arg closedby "$closedby" \
      '{id:$id, ts:$ts, event:$event}
+      + (if $lane != ""     then {lane:$lane}         else {} end)
+      + (if $closedby != "" then {closedBy:$closedby} else {} end)
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
       + (if $needs != ""    then {needs:$needs}       else {} end)
