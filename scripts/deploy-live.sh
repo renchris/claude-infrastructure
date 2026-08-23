@@ -1090,6 +1090,41 @@ untracked_blockers() { # <to-sha> — one path per line; empty ⇒ no untracked 
   return 0
 }
 
+# ── is a blocking UNTRACKED path BYTE-IDENTICAL to the blob the advance would put there? ─────────
+# The arm above names the collision and then tells the operator "they exist only in this checkout, so
+# no land, branch or stash can bring one back". That sentence is TRUE of the general case and FALSE
+# of the case that actually wedged this lane. Measured 2026-08-11 (item 40625550e49f): the blocker was
+# docs/ground-up-payloads/LOCUS-GAP-BRIEF-2026-08-08.md, byte-identical to the tracked blob trunk was
+# adding — same sha 1ed1c149 — a leftover from someone drafting in the SHARED checkout before the same
+# content landed from a worktree. Nothing whatever was at risk, git's own "move or remove" was the
+# cure, and the advance then went clean. The refusal said the opposite, so the live layer sat 31
+# commits behind its budget of 25 with 13 ADDED files silently skipping every `[ -f x ] && . x` guard.
+# A universal loss claim over a set that provably contains recoverable members is not caution; it is a
+# wrong answer that costs deploys.
+#
+# THIS CLASSIFIES. IT DOES NOT ACT. The lane's standing invariant is unchanged and deliberately so:
+# detect, name, page, stop — never stash, check out, move or discard (see the 🚨 above merge_blockers'
+# call site). "Provably lossless" licenses the OPERATOR's rm, not ours; the difference is that they
+# are now told which of the two cases they are in instead of being told the pessimistic one always.
+#
+# FAIL-CLOSED IN THE DIRECTION THAT MATTERS, which is not the symmetric one. A false "redundant"
+# invites a delete of the only copy of something; a false "unique" costs a hand-check and nothing
+# else. So every uncertainty — path absent from the target tree, a symlink or directory where a file
+# was expected, a hash that will not compute — answers UNIQUE, and only a computed, equal pair of
+# blob shas answers redundant. `--path` is not decoration: it applies the path's own gitattributes
+# (clean filters, eol) so the sha compared is the one git would actually STORE, not the raw bytes.
+untracked_is_redundant() { # <to-sha> <path> — rc 0 ⇒ removing it is provably lossless
+  local to="$1" path="$2" want have
+  [ -n "$path" ] || return 1
+  [ -L "$DEPLOY_REPO/$path" ] && return 1          # symlink: -f follows it; the blob is not its target
+  [ -f "$DEPLOY_REPO/$path" ] || return 1          # directory, device, vanished ⇒ nothing provable
+  want="$(g rev-parse --verify --quiet "$to:$path" 2>/dev/null)" || return 1
+  [ -n "$want" ] || return 1
+  have="$(g hash-object --path "$path" -- "$DEPLOY_REPO/$path" 2>/dev/null)" || return 1
+  [ -n "$have" ] || return 1
+  [ "$have" = "$want" ]
+}
+
 # ── SUPERSESSION: is every commit the live checkout carries ALREADY on trunk, BY CONTENT? ────────
 # A rebased land rewrites the commit OBJECT. A checkout that committed X and then watched X land as
 # X' is left holding an object `merge-base --is-ancestor` correctly reports absent from trunk, while
@@ -1761,6 +1796,20 @@ fi
 UNTRACKED="$(untracked_blockers "$TARGET")"
 if [ -n "$UNTRACKED" ]; then
   UNTRACKED_LIST="$(printf '%s\n' "$UNTRACKED" | tr '\n' ' ')"
+  # PER PATH, never per set. A mixed set is the realistic one once read-tree names more than one, and
+  # a set-wide "lossless" over it would license deleting the member that is NOT recoverable — the
+  # exact inversion this classification exists to prevent. Two lists, each carrying only its own claim.
+  UT_REDUNDANT=''; UT_UNIQUE=''
+  while IFS= read -r _utp; do
+    [ -n "$_utp" ] || continue
+    if untracked_is_redundant "$TARGET" "$_utp"; then
+      UT_REDUNDANT="${UT_REDUNDANT}${_utp}"$'\n'
+    else
+      UT_UNIQUE="${UT_UNIQUE}${_utp}"$'\n'
+    fi
+  done <<EOF
+$UNTRACKED
+EOF
   refusal_bump untracked-collision "UNTRACKED COLLISION — the advance to ${TARGET:0:12} ADDS tracked path(s) that already exist as UNTRACKED files: $UNTRACKED_LIST"
   if [ "$AUTO" -eq 1 ] && ! damp_ok "untracked-collision:$UNTRACKED_LIST"; then exit 1; fi
   mkdir -p "$PAGES_DIR" 2>/dev/null || true
@@ -1769,12 +1818,24 @@ if [ -n "$UNTRACKED" ]; then
     printf 'that already exist as UNTRACKED files in the shared checkout %s:\n' "$DEPLOY_REPO"
     printf '%s\n' "$UNTRACKED" | sed 's/^/  /'
     printf 'git refuses to overwrite them, so the fast-forward cannot run. git names the FIRST such\n'
-    printf 'path only — there may be more behind it. This lane never moves or deletes them: they\n'
-    printf 'exist only in this checkout, so no land, branch or stash can bring one back.\n'
-    printf 'Move, remove or commit them there and the next tick advances.\n'
+    printf 'path only — there may be more behind it. This lane never moves or deletes them.\n'
+    if [ -n "$UT_REDUNDANT" ]; then
+      printf 'PROVABLY LOSSLESS — byte-identical to the blob this advance writes at that same path\n'
+      printf '(equal blob sha), so removing it loses nothing: the merge puts the same bytes back.\n'
+      printf '%s' "$UT_REDUNDANT" | sed 's/^/  /'
+      printf '%s' "$UT_REDUNDANT" | sed "s|^|  rm $DEPLOY_REPO/|"
+    fi
+    if [ -n "$UT_UNIQUE" ]; then
+      printf 'NOT RECOVERABLE — these differ from the incoming blob, or could not be compared, so\n'
+      printf 'they exist only in this checkout and no land, branch or stash can bring one back.\n'
+      printf 'Move, remove or commit them there and the next tick advances.\n'
+      printf '%s' "$UT_UNIQUE" | sed 's/^/  /'
+    fi
     printf 'inspect (the WHOLE set): git -C %s status --porcelain -uall\n' "$DEPLOY_REPO"
   } > "$PAGES_DIR/deploy-untracked-collision.page" 2>/dev/null || true
-  die "UNTRACKED COLLISION — the advance to ${TARGET:0:12} ADDS tracked path(s) that already exist as UNTRACKED files: $UNTRACKED_LIST(git names the first one only; it will not overwrite them — move, remove or commit them yourself, then re-run)"
+  UT_TAIL='(git names the first one only; it will not overwrite them — move, remove or commit them yourself, then re-run)'
+  [ -n "$UT_REDUNDANT" ] && UT_TAIL="(git names the first one only; PROVABLY LOSSLESS to remove — byte-identical to the blob this advance writes there: $(printf '%s' "$UT_REDUNDANT" | tr '\n' ' ')— see the page for the exact rm; this lane never removes it for you)"
+  die "UNTRACKED COLLISION — the advance to ${TARGET:0:12} ADDS tracked path(s) that already exist as UNTRACKED files: ${UNTRACKED_LIST}${UT_TAIL}"
 fi
 
 # ⚠️ THE FILE UNDER THIS PROCESS CHANGES ON THE NEXT LINE. The merge rewrites the working tree and

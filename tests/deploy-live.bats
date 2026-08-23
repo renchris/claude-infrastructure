@@ -40,6 +40,17 @@ stamp() { # <rev> [verdict]
 dl() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
            CC_PAGES_DIR="$PAGES" /bin/bash "$DL" "$@"; }
 
+# dl against a MUTATED copy of the subject — arm 2 of a red-proof. The mutant is built by `sed` over
+# the WORKING TREE, never by replaying a ref: a branch name would compare the fix to itself and pass
+# for its author every time (moving-ref-control-lint refuses that shape). Each caller counts its
+# anchor BEFORE and AFTER the substitution, so a rename of the mutated site reds the anchor instead
+# of quietly producing a mutant byte-identical to the subject.
+dlm() { # <mutant-path> [args…]
+  local m="$1"; shift
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
+      CC_PAGES_DIR="$PAGES" /bin/bash "$m" "$@"
+}
+
 # advance origin/main by N commits while the clone's HEAD stays put (the deploy-lag shape)
 advance_origin() { # <name...>
   local head; head="$(git -C "$SHARED" rev-parse HEAD)"
@@ -1301,6 +1312,115 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   [ "$status" -eq 0 ]
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]         # it advanced anyway
   [ "$(cat "$SHARED/unrelated-scratch.txt")" = "scratch" ]   # still there, still untracked
+}
+
+@test "L8f a REDUNDANT untracked blocker is named PROVABLY LOSSLESS — and is still not removed" {
+  # THE HALF THAT DID NOT LAND WITH THE THIRD CAUSE (item 40625550e49f, filed 2026-08-11T20:18Z;
+  # b088240bb landed the DETECTION two hours later and stopped there). The refusal told every
+  # operator "they exist only in this checkout, so no land, branch or stash can bring one back" —
+  # true of the general case, FALSE of the one that actually wedged the lane. The live blocker was
+  # docs/ground-up-payloads/LOCUS-GAP-BRIEF-2026-08-08.md, byte-identical to the blob trunk was
+  # adding (same sha 1ed1c149) because someone drafted it in the SHARED checkout before the same
+  # content landed from a worktree. Nothing was at risk; git's own "move or remove" was the cure;
+  # the advance then went clean. The operator was told the pessimistic answer, and the live layer sat
+  # 31 commits behind a budget of 25 with 13 ADDED files silently skipping every `[ -f x ] && . x`.
+  #
+  # THE FIXTURE MUST REACH THE ARM UNDER TEST, which is guard THREE in a chain: the green-stamp
+  # ladder, then the dirty-TRACKED arm, then this one. A fixture that fell out earlier would exit
+  # non-zero for the wrong reason and credit nothing — so the class is asserted, not just the code.
+  advance_origin newfile                          # trunk ADDS newfile.txt containing "newfile\n"
+  stamp origin/main
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  echo newfile > "$SHARED/newfile.txt"            # byte-identical to the incoming blob
+  want_blob="$(git -C "$SHARED" rev-parse "origin/main:newfile.txt")"
+  [ "$(git -C "$SHARED" hash-object --path newfile.txt -- "$SHARED/newfile.txt")" = "$want_blob" ]
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNTRACKED COLLISION"* ]] || false         # reached guard 3, not 1 or 2
+  [[ "$output" == *"PROVABLY LOSSLESS"* ]] || false           # …and said the TRUE thing about it
+  [ -f "$PAGES/deploy-untracked-collision.page" ]
+  grep -q 'PROVABLY LOSSLESS' "$PAGES/deploy-untracked-collision.page"
+  grep -q "rm $SHARED/newfile.txt" "$PAGES/deploy-untracked-collision.page"   # the EXACT command
+  # …and the pessimistic claim is NOT made about a path it is false of. COUNTED, never `! grep -q`:
+  # errexit skips an inverted rc, so a mid-test negation always passes (bats-assert-liveness flags it).
+  [ "$(grep -c 'no land, branch or stash can bring one back' \
+       "$PAGES/deploy-untracked-collision.page")" -eq 0 ]
+  # B1 — CLASSIFY, NEVER ACT. "Provably lossless" licenses the OPERATOR's rm, not ours. This is the
+  # lane's standing invariant and the row's literal "offer the move-aside" is NOT read as permission.
+  [ "$(cat "$SHARED/newfile.txt")" = "newfile" ]              # the file is UNTOUCHED
+  grep -q 'never moves or deletes' "$PAGES/deploy-untracked-collision.page"
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]          # the tree did not move
+  [ ! -f "$INSTALL_LOG" ]
+
+  # ARM 2 — the MUTANT. Neutering the classifier so every path answers "unique" IS the pre-fix
+  # behaviour exactly, and it must lose the lossless verdict on this same fixture.
+  [ "$(grep -c '^untracked_is_redundant() { # <to-sha>' "$DL")" -eq 1 ]
+  MUT="$BATS_TEST_TMPDIR/dl-mut-noredundant.sh"
+  sed 's@^untracked_is_redundant() { # .*@untracked_is_redundant() { return 1; # MUTANT@' "$DL" > "$MUT"
+  [ "$(grep -c '^untracked_is_redundant() { # <to-sha>' "$MUT")" -eq 0 ]   # the mutant really mutated
+  [ "$(grep -c 'return 1; # MUTANT' "$MUT")" -eq 1 ]
+  rm -f "$PAGES/deploy-untracked-collision.page"
+  run dlm "$MUT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNTRACKED COLLISION"* ]] || false         # same arm, same fixture…
+  [[ "$output" != *"PROVABLY LOSSLESS"* ]] || false           # …and the verdict is GONE
+  grep -q 'no land, branch or stash can bring one back' "$PAGES/deploy-untracked-collision.page"
+}
+
+@test "L8g an untracked blocker whose bytes DIFFER is never called lossless (fail-closed)" {
+  # The discriminating half. An oracle that answered "redundant" for every collision would be green
+  # on L8f and catastrophic here: it would tell the operator to rm the only copy of a peer's file.
+  # One byte of difference is deliberate — the two cases are otherwise identical, so a test that
+  # passed by accident on L8f's fixture cannot also pass here.
+  advance_origin newfile
+  stamp origin/main
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  printf 'newfile and one more byte\n' > "$SHARED/newfile.txt"
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNTRACKED COLLISION"* ]] || false
+  [[ "$output" != *"PROVABLY LOSSLESS"* ]] || false
+  [ -f "$PAGES/deploy-untracked-collision.page" ]
+  [ "$(grep -c 'PROVABLY LOSSLESS' "$PAGES/deploy-untracked-collision.page")" -eq 0 ]
+  grep -q 'NOT RECOVERABLE' "$PAGES/deploy-untracked-collision.page"
+  grep -q 'no land, branch or stash can bring one back' "$PAGES/deploy-untracked-collision.page"
+  [ "$(cat "$SHARED/newfile.txt")" = "newfile and one more byte" ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]
+}
+
+@test "L8h a SYMLINK to identical bytes is NOT lossless — the -L guard is load-bearing, not decor" {
+  # THE FAIL-CLOSED CASE THAT LOOKS LIKE THE SAFE ONE. `git hash-object` FOLLOWS a symlink, so the
+  # blob it computes here EQUALS the incoming blob (measured) and a hash-only oracle would declare
+  # this provably lossless. It is not: `rm newfile.txt` removes the LINK, the merge writes a regular
+  # file, and elsewhere.txt — the only thing that actually held those bytes as an untracked artifact
+  # — is a different path the advance never restores. Uncertainty answers UNIQUE here because the two
+  # errors are not symmetric: a false "redundant" invites deleting the only copy of something, a
+  # false "unique" costs a hand-check.
+  advance_origin newfile
+  stamp origin/main
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  echo newfile > "$SHARED/elsewhere.txt"
+  ln -s elsewhere.txt "$SHARED/newfile.txt"
+  # the trap, pinned: hash-object through the link really does agree with the incoming blob, so this
+  # test is not passing because the shas happen to differ.
+  [ "$(git -C "$SHARED" hash-object --path newfile.txt -- "$SHARED/newfile.txt")" \
+    = "$(git -C "$SHARED" rev-parse "origin/main:newfile.txt")" ]
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNTRACKED COLLISION"* ]] || false
+  [[ "$output" != *"PROVABLY LOSSLESS"* ]] || false
+  [ -L "$SHARED/newfile.txt" ]                                # still a link, still untouched
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]
+
+  # ARM 2 — strip the -L guard and the oracle DOES call it lossless. Without this arm the guard could
+  # be deleted tomorrow and every test above would stay green.
+  [ "$(grep -c 'symlink: -f follows it' "$DL")" -eq 1 ]
+  MUT="$BATS_TEST_TMPDIR/dl-mut-nolinkguard.sh"
+  sed '/symlink: -f follows it/d' "$DL" > "$MUT"
+  [ "$(grep -c 'symlink: -f follows it' "$MUT")" -eq 0 ]
+  run dlm "$MUT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PROVABLY LOSSLESS"* ]] || false           # the guard was the only thing stopping it
 }
 
 @test "L8e a merge failure NO pre-flight models reports GIT'S OWN words, never a shrug" {
