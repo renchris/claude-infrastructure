@@ -87,6 +87,88 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #177: the silent arm was the one that reached the actuator — and
+  the row understated its own span by one site. filed 0 / closed 1 / 2 commits (CODE + docs).
+  TWENTY-FIRST CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **HOLD** on `master-convergence-deadlock`: I read every one of its 23 open rows and closed none of
+  them, because the decidable ones are decidable only as *decisions* — `07ac6d58d88d` asks an owner
+  to settle a public seam's contract, and I MEASURED the fact that settles it rather than guessing
+  (below). The row I closed is **`ungrouped`**, which went **214 → 213 open**. ⚠️ The operator-set
+  goal again asked `master-convergence-deadlock` to reach **0 open** in one recycle — 23 rows remain,
+  it did not, and saying so plainly is the report. It also named the WRONG successor for the
+  **EIGHTH consecutive time** (its text says "recycle #171"; §2.1's newest entry was #176, so I am
+  #177 and I fired **#178**). Board at open: **open 317 / blocked 188 / done 2209 / claimed 2**, 505
+  open+blocked. Post-land RED pages: **0** at open (**sixty-eighth consecutive**). Heredoc diff clean
+  (**fifty-ninth**).
+
+  **ROW CLOSED — `ee69a1b8dcd0`** (*"teammate close: the ONE refusal class that reaches the actuator
+  is the only one that pages nobody"*) — closed **FIXED, with code**. Landed as *fix(teammate-close):
+  a pane left standing must not be silent* — cite by SUBJECT, never by sha; a land rebases. The row
+  was TRUE and I confirmed it by execution, not by reading: `hooks/teammate-auto-shutdown.sh`'s
+  `close_and_log()` logged `✗ pane close FAILED`, retracted the teardown marker, and returned, while
+  `_page_desk_damped` was already wired on five sibling refusal paths in the same file (`:489`,
+  `:945`, `:985`, `:1144`, `:1155` — the row says six, it is five). What generalises:
+
+  · 🆕 **METHOD 130 — WHEN A ROW NAMES ONE SITE, ENUMERATE THE INVARIANT THAT SITE VIOLATES AND
+    COUNT THE OTHER SITES THAT VIOLATE IT.** The row named `:303` only. The real invariant is
+    *"every arm that RETRACTS the teardown marker must page"* — and `close_and_log` has **three**
+    such arms, not one: `:277` (rc 66, identity pin refused), `:295` (rc 0 but the pane SURVIVED —
+    the actuator lied), `:303` (the generic failure). `:295` is the worse silence of the two I
+    fixed, because it follows an actuator that *reported success*, and no row had ever named it.
+    This is the inverse of #176's method 128 (a row false at filing): here the row was true and
+    **too narrow**, which reads identically at triage and has the opposite remedy.
+  · 🆕 **METHOD 131 — A DELIBERATE SILENCE IS PART OF THE SPAN, AND IT IS PINNED, NOT FIXED.** I did
+    NOT page on rc 66. The file's own comment at `:270-275` says a refusal to close the WRONG window
+    "is the pin working, not the actuator breaking", and paging on a correct, expected, routine
+    refusal is exactly how an alarm's attention budget is spent to zero (memory:
+    `alarm-polarity-and-attention-budget`). Widening a fix to every site that *looks* alike is the
+    same defect as leaving it too narrow. The discrimination is now a **test**, not a comment.
+  · 🆕 **METHOD 132 — THE FINGERPRINT NEVER REACHES THE WIRE, SO DO NOT ASSERT ON IT.** My first
+    red-proof grepped the damping fingerprint (`CLOSE-FAILED:…`) in the notify capture and failed
+    **post-fix**, which for one reading looked like the fix not working. It was the assertion:
+    `_page_desk()` passes only `$1`, the MESSAGE — the fingerprint is `damp_should_send` state and
+    is never an argument to `cc-notify`. **A red that survives a fix indicts the assertion before it
+    indicts the subject.** The corrected tests assert the operator-readable message plus the pane id,
+    and pin the page count at exactly 1.
+  · **THE RED-PROOF IS TWO-ARM, PER-SITE ATTRIBUTED, AND ITS CONTROLS CAN FAIL.** `redproof-177.sh`
+    saves the fixed hook, `git checkout --`s the pre-fix one, runs the suite, restores, and runs
+    again — with a `trap` so a mid-run death cannot leave the tree pre-fix:
+
+        ARM A  pre-fix   plan=54  ok=52  not-ok=2   (exactly the two page tests)
+        ARM B  post-fix  plan=54  ok=54  not-ok=0
+        verdict=PROVED
+
+    Anti-vacuity assertions exit **2** (saved hook empty / carries no fix / checkout did not remove
+    it / restore lost it / no plan); an over-wide pre-fix red exits **3** as `MUTANT-TOO-WIDE`. Both
+    are NON-VERDICTS, never greens. The two **page negative controls** — the genuine success path and
+    the rc-66 path — pass in BOTH arms, which is what proves the new page is scoped to failure and
+    that the pre-fix red is the page's absence rather than a broken fixture.
+  · **BLAST RADIUS MEASURED BEFORE CHOOSING THE FILE** (#176's method 127-adjacent discipline, now
+    routine): `hooks/teammate-auto-shutdown.sh` owes **6** suites by literal path, against
+    `scripts/handoff-fire.sh`'s 88. That ratio is why this row was affordable and why the fire-path
+    rows in the same condition still are not.
+
+  **MEASURED AND DELIBERATELY LEFT OPEN — `07ac6d58d88d`, and the fact that settles it is now on
+  record so the next recycle does not re-derive it.** The row asks cc-pane's author to decide whether
+  `cc-pane send` splits into a raw verb and a verified one, or routes through a verified-typing
+  helper. **The premise holds** — re-measured 2026-08-24: still **zero in-repo callers** (`git grep
+  "cc-pane send"` returns only its own header `:8`, its own comment `:138`, two plan docs, and the
+  lint's own note), and `bin/cc-pane::drv_iterm2_send` is still line 138 of
+  `scripts/typed-send-lint.sh`'s `EMBEDDED_ALLOWLIST`. **THE DISCRIMINATOR, MEASURED:** the
+  dual-payload story is TRUE, not a hedge — `it2 session send` demonstrably carries control
+  characters in this repo (`scripts/handoff-fire.sh:1990` sends `$'\x15'`, `bin/reso-keepalive:216`
+  sends `$'\r'`) as well as command lines. That **refutes remedy (b)**: routing everything through
+  `osa_type_verified` would fail-loud on the control-character class, because that helper verifies by
+  reading back the pane's visible contents and a Ctrl-U echoes nothing. So the answer is **(a) split
+  the verb** — but a verb split on a public seam touches **20** suites and rewrites a documented
+  contract, which is an owner's call and not a drain pickup. Left open, unfiled (the row already
+  says this); what is new is that the fork is now decided on evidence rather than open on both horns.
+
+  **BOARD.** Re-folded at the ACTUAL close, not mid-way. ⚠️ `bin/cc-backlog fold` is still not on
+  PATH from the shared checkout — I ran **`bash bin/cc-backlog fold`** from the worktree, and that is
+  the predicate behind every count above.
+
+
 - **2026-08-24 — drain recycle #176: the row was false the day it was filed, and its prescribed fix
   would have edited 59 suites for nothing. filed 1 / closed 1 / 1 commit (DOCS only).
   TWENTIETH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
