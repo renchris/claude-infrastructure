@@ -87,6 +87,99 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #208: method 178 — an auditor that mirrors its deployer 1:1 can catch
+  the deployer's DRIFT but never its OMISSION, and two sibling checks agreed over a 16-day absence
+  because both were keyed on the same file EXTENSION. filed 0 / closed 1, and the close was earned by
+  DOING the row's third clause rather than finding it already done.**
+  Board at open: **477 open+blocked** (288 open / 189 blocked / 2268 done, claimed 5); at close
+  **476** (286 / 190 / 2269, claimed 5). `master-convergence-deadlock` **open=13 / blocked=6 at BOTH
+  ends — unmoved, by me and by anyone** (the blocked tail stated, not hidden). My one pick moved
+  `master-enforcing-store` **open 1 → 0** (blocked 7 unchanged). Closed 1, filed 0 — **net −1**, the
+  fifth consecutive negative-net link. `comm` over the pinned open+blocked id list: **3 departures,
+  only ONE of them mine** — `0c8b39b67665` and `485f8f87eb5f` both went open→**claimed** by other
+  machines (`Chriss-MacBook-Pro-3-31257` / `-21809`), which removes a row from open+blocked without
+  anyone closing anything, exactly #206's distinction — and **2 arrivals, both `.by=cc-backlog-reap`**
+  with `.by` POPULATED this time, unlike #207's empty-`.by` arrival. Claimed read 5 at both ends while
+  its membership churned underneath, so the total is stable and the population is not.
+
+  **METHOD 178 — A CHECK BUILT TO MIRROR ANOTHER CHECK 1:1 IS STRUCTURALLY BLIND TO WHAT THAT OTHER
+  CHECK OMITS.** `deploy-parity-assert.sh` exists to catch install.sh drifting from the live layer, and
+  its own header says it "mirrors install.sh 1:1". That is precisely why it could not see this: when
+  install.sh's `scripts/lib` loop globbed `*.sh` only, the auditor scored the directory's one `.py`
+  want=0 through its `scripts/*/*` catch-all, and `:508`'s `[ "$want" = 1 ] || continue` **skips a
+  want=0 path in BOTH directions**. Deployer and auditor agreed, and their agreement was the bug. The
+  discriminator is not "are the two checks consistent" but "is either of them keyed on something the
+  subject can change without either noticing" — here, a file EXTENSION. Siblings:
+  `sibling-auditors-must-share-the-state-model` (two auditors, different state models) and
+  `gate-must-not-key-on-its-own-signal`; this is the third variant — one state model, shared blind
+  spot. The same file already records two EARLIER instances of the class, and both were an auditor
+  LAGGING an installer. **This is the first where NEITHER side ever had the class**, which is why no
+  amount of reconciling the two would have surfaced it.
+
+  **THE ROW: `70cc9f44040f` — CLOSED, all three clauses discharged, and the third one done HERE.**
+  · **Clause 1 (the fail-open) was already fixed and live, but the row's citation is a DEAD SHA.** It
+  credited `9a651d48b` (from `87bdc8d45`); **both answer `--is-ancestor` rc 1**, against a POS control
+  `origin/main` at rc 0 and the pinned off-trunk NEG control `4e39debcf` at rc 1. The content landed as
+  a **third** sha, `963dbd0a2967`, identical subject, is-ancestor rc 0, same three paths — the land
+  rebased and rewrote the object. All three carry the identical blob `f6cab36a748b`, and so does trunk.
+  LIVE measured PER FILE: live symlink and trunk blob both sha256 `abbe1e0444dbb408`. **Only the
+  citation was wrong** (memory: `cited-sha-may-not-survive-the-land`), which is the exact hazard #205's
+  scar names and the reason the standing rule is to cite by SUBJECT.
+  · **Clause 2** — `6d96bf560` is-ancestor rc 0, and all 5 `backlog-consolidation/*.py` are live.
+  · **Clause 3, the generalisation, was recorded in the row's OWN evidence as "Out of scope and NOT
+  swept".** I swept it. `scripts/` has 4 engine-bearing subdirectories: `backlog-consolidation` 5/5
+  live, `limit-recover` 2/2 live, `relogin-probes` 0/4 and `meter-experiment` 0/1 both correctly
+  want=0 (dev probes, **0 launchd plists name them**). `scripts/lib` was **11 of 12** live, and the one
+  absent file was its only `.py`.
+
+  🚨 **THE LIVE HARM, MEASURED BY RUNNING IT AND NOT BY DERIVING IT — and I nearly shipped the
+  derivation.** `scripts/lib/pty-run.py` landed 2026-08-08 (`769ea1fca82f`, on trunk) and had been
+  tracked-but-absent for **16 days**. `cloud-create.sh:125` resolves the allocator against its OWN
+  source dir, so sourcing the **LIVE** copy with the variable unset yields
+  `~/.claude/scripts/lib/pty-run.py` — absent — while the worktree copy yields a path that exists;
+  nothing overrides `CC_CLOUD_PTY_RUN` anywhere in `scripts/`, `bin/` or `hooks/`. `:190` is
+  **fail-CLOSED**, so every cloud create driven from the live layer returned `refused-harness  no pty
+  allocator at …` without reaching the binary — and **both cloud lanes are scheduled**
+  (`com.chrisren.autonomy-sweep.plist` and `com.claude.dispatcher.plist` each export
+  `CC_FIRE_CLOUD=on`). **Fail-closed was the RIGHT polarity and still invisible**, because the refusal
+  is a classification a scheduled caller consumes, not a page a human reads. That is the inverse of the
+  row's own complaint — it indicted fail-OPEN — and it is the sharper lesson: *the polarity fix does not
+  buy you observability.*
+
+  **THE FIX — 3 files, 0 added** (premise 2 respected; #129–#208 have added no file). `install.sh:582`
+  globs `*.sh` **and** `*.py`, the existing `[[ -f "$f" ]] || continue` absorbing an unmatched glob
+  (NEG control on `*.zzqq` leaked nothing). `deploy-parity-assert.sh` gains `scripts/lib/*.py) want=1`
+  **before** the `scripts/*/*` catch-all — which is also what **re-arms `link_refresh()`** over the
+  class, since it repairs exactly this assert's own MISSING lines. `tests/deploy-parity.bats`
+  **extends** its existing "one RED per class" test rather than adding a suite, per that test's own
+  stated doctrine that a per-file report over a narrow pathspec is indistinguishable from a clean one.
+
+  **VERIFICATION — and one control had to be REPAIRED before it could be trusted.** shellcheck rc 0 on
+  both `.sh` files against a deliberately-bad file at rc 1; `bats-shellcheck-lint` clean (1 suite, 0
+  blocking); suite **75/75 GREEN, plan 75 == ok 75 + nok 0**; **MUTANT** arm removing only the `want=1`
+  line (1 line removed, asserted) went **RED 74/1 with the single failure at test 43 — the exact test
+  edited**, so coverage is attributed to the site; subject restored and diffed **IDENTICAL**, re-run
+  75/75 GREEN. The A/B of the auditor used `CC_PARITY_REPO` so **both** arms render real verdicts
+  rather than the rc-3 `CANNOT DETERMINE` non-verdict — my first attempt did NOT, and its "PRE mentions
+  pty-run 0 times" was **vacuous**, a non-verdict wearing a finding's clothes. Repaired: PRE has 19
+  class rows and **no `scripts/lib/*.py` row at all**; POST has 20 and reports `MISS  scripts/lib/*.py
+  1 tracked · 0 live · 1 missing` plus the exact `ln -sf`. **`comm` over the two class tables: ZERO
+  classes only-in-PRE, exactly one only-in-POST — no collateral.**
+  ⚠️ **`bats-assert-liveness.py`'s POSITIVE control failed silently and I nearly banked its green.** My
+  first control put the `[[ ]]` as the test's LAST statement, which is **genuinely live** (its rc
+  becomes the test's rc), so rc 0 was *correct* and proved nothing about the analyzer. The real dead
+  regime needs a statement AFTER it: that read **rc 1 `DEAD [cond-keyword]`**, with a `|| false` NEG
+  control at rc 0. **The brief told me to positive-control this analyzer and I still built the control
+  in the wrong regime** — the standing rule (#203's) is now doubly earned: *a control that returns the
+  expected-absent answer may simply have missed the regime.*
+
+  **Instrument notes for #209.** The `--all --not origin/main` scar is confirmed from the other side:
+  the lead independently drew **six distinct shas in one session** and reports the population is stable
+  *within* a moment but that `rev-list --all --not origin/main` also cannot emit an ancestor of the
+  `origin/main` it was given, so a post-land rc 0 is churn **plus a moving exclusion set**. Pinned
+  `4e39debcf` behaved on every draw here. Method 177's yield was **exactly as #207 bounded it**: 8
+  rows, 7 already explained, **1 live candidate** — run it, take the one, stop.
+
 - **2026-08-24 — drain recycle #207: method 177 — the row had already been adjudicated, by its own
   author, into its own evidence field, and nobody moved its status. filed 0 / closed 2.**
   Board at open: **476 open+blocked** (286 open / 190 blocked / 2266 done, claimed 6); at close

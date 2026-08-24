@@ -575,11 +575,37 @@ done
 # the boot-resume and autonomy-sweep launchd jobs (consolidation audit 02); if it is not deployed,
 # both fail LOUD at startup rather than degrading silently — so this loop is load-bearing, not
 # cosmetic.
+#
+# 🚨 *.py AS WELL AS *.sh, AND THE .py LEG IS WHY THIS COMMENT GREW. A deploy glob keyed on an
+# EXTENSION goes stale the moment a later commit puts a different extension in the same directory,
+# and NOTHING re-examines the glob — not even the auditor, because deploy-parity-assert.sh mirrors
+# this file 1:1 BY DESIGN and therefore scored the newcomer want=0 via its scripts/*/* catch-all.
+# Two sibling checks, one blind spot, because they share the extension: an auditor built to mirror
+# the deployer can catch the deployer's DRIFT but never its OMISSION.
+#
+# MEASURED 2026-08-24 (backlog 70cc9f44040f's generalisation clause, made concrete). scripts/lib/
+# gained pty-run.py on 2026-08-08 (769ea1fca82f, on trunk). This loop globbed *.sh, so it was never
+# linked — 11 of 12 files in the directory live, that one absent for 16 days. Its consumer resolves
+# it relative to its OWN source dir, so the LIVE copy of scripts/lib/cloud-create.sh computes
+# $HOME/.claude/scripts/lib/pty-run.py and finds nothing:
+#
+#   $ . ~/.claude/scripts/lib/cloud-create.sh; echo "$CC_CLOUD_PTY_RUN"
+#   /Users/chrisren/.claude/scripts/lib/pty-run.py        # absent
+#
+# cloud-create.sh:190 is fail-CLOSED, so every scheduled cloud create on this box returns
+# "refused-harness  no pty allocator at …" and never reaches the binary — and both cloud lanes are
+# scheduled (com.chrisren.autonomy-sweep.plist and com.claude.dispatcher.plist each export
+# CC_FIRE_CLOUD=on). Fail-closed is the RIGHT polarity and it is still invisible: the refusal is a
+# classification a scheduled caller consumes, not a page anyone reads. This is the ADD class from
+# CLAUDE.md — an added file is not stale, it is ABSENT — and want=0 disabled the one repair path
+# that could have healed it without an advance (link_refresh() repairs exactly the assert's own
+# MISSING lines; see deploy-parity-assert.sh's note on the backlog-consolidation instance, which is
+# this same defect caught one directory earlier).
 if [[ -d "$REPO_DIR/scripts/lib" ]]; then
   echo ""
   echo "Script libs → $CONFIG_DIR/scripts/lib/"
   ensure_real_dir "$CONFIG_DIR/scripts/lib"
-  for f in "$REPO_DIR"/scripts/lib/*.sh; do
+  for f in "$REPO_DIR"/scripts/lib/*.sh "$REPO_DIR"/scripts/lib/*.py; do
     [[ -f "$f" ]] || continue
     if $IS_GLOBAL; then
       link_file "$f" "$CONFIG_DIR/scripts/lib/$(basename "$f")"
