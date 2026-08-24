@@ -87,6 +87,113 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #188: the row prescribed THREE fixes; the mechanism DECLINED the
+  one the row called its root issue, took a cheaper one, and cured the harm anyway — and the commit
+  that cured the exhibit REFUTES the row's own stated cause. filed 0 / closed 1 / 1 commit (no code
+  needed — this doc). THIRTY-SECOND consecutive close.** Warm effort: a MOVE on
+  `master-convergence-deadlock`, 14 open / 6 blocked at open → **13 open / 6 blocked** at close, and
+  the whole move is mine. Board at open: open 305 / blocked 191 / claimed 6 / done 2233 (496
+  open+blocked ids snapshotted); at close open 304 / blocked 191 / claimed 6 / done 2234.
+
+  **ROW CLOSED — `6f350b0e2048`** ("postland-verify bisects with a FLAKY oracle and names a
+  confident, precise, WRONG culprit — and its auto-revert arm would revert that innocent commit"),
+  landed as *docs(drain): recycle #188 — method 154, and a remedy the mechanism declined on cost*
+  — **cite by SUBJECT, never by sha.**
+
+  🚨 **THE HEADLINE: A ROW'S REMEDY LIST IS A SET OF SEPARATE CLAIMS, AND THE MECHANISM MAY
+  REJECT THE ONE THE ROW CALLED ITS ROOT ISSUE WHILE DISCHARGING THE HARM VIA ANOTHER.** DISCHARGED,
+  not refuted on mechanism. **I changed no code.** The row named three fix candidates; I checked each
+  separately against the tree, and they had three different fates.
+
+  · **CANDIDATE 3 ("stabilise conv_age") — LANDED, AND IT REFUTES THE ROW'S OWN CAUSE.**
+    `378072b52` (*"fix(boundary-handoff): the free-win hold asserted a wall-clock age as a string
+    literal"*, **2026-08-12T18:20:38-07:00**) landed **13h after this row's `lastTs`**
+    (2026-08-12T11:53:29Z) and nothing re-ran the row against it for 12 days. The row says `conv_age`
+    "is intermittently empty — a caller-side probe that silently yields empty under load". The
+    commit MEASURED the real cause: the hook re-derives the age from its OWN `date +%s` several git
+    calls and a whole wrap-ledger run after `mk_btx` stamps it, so the value reads 30 when that costs
+    <1s and **31+** when it does not — **6/20 iterations at IDLE, 10/20 under an 8-way load**. Its
+    body states *"load raises the odds, it is not the mechanism."* The assertion was a **coin-flip
+    literal**, never an empty probe. It is now a three-part range assertion (`-ge 30`, `-le 120`) at
+    `tests/boundary-handoff.bats:421-445`.
+  · **RE-MEASURED UNDER THE ROW'S OWN 3-RUNS PROTOCOL.** `tests/boundary-handoff.bats` **3/3 GREEN,
+    43/43 ok, plan `1..43` every run** (46s / 53s / 44s) — against the row's measured **fail/fail/PASS**
+    at the accused sha and **PASS/fail/fail** at its parent. The exhibit no longer reproduces.
+  · **CANDIDATE 2 ("a docs-only diff should abstain, not accuse") — LANDED VERBATIM.**
+    `66857bc2e` (*"fix(postland): a bisect must be able to return NO VERDICT"*, 2026-08-17) added
+    **`bisect_reach_ok`**, which decides from the TREE: all changed paths `*.md` AND none named by the
+    subject ⇒ no verdict. Its own incident is this row's shape.
+  · 🚨 **I RAN THE LANDED GUARD AGAINST THE ROW'S OWN EXHIBIT.** Culprit `e5d9ed514` changes
+    **exactly ONE file**, `docs/plans/DESK_ROUTER_AND_STARTUP_V1.md`; subject
+    `tests/boundary-handoff.bats`. Result **rc=1 VETO**, `BISECT_WHY=unreachable`. The wrong culprit
+    can no longer be named, and `auto_revert` is gated on `$bisected`, so a no-verdict reverts nobody
+    — **the auto-revert harm goes with it.**
+  · 🚨 **THE INSTRUMENT WAS TWO-SIDEDLY CONTROLLED BEFORE I BELIEVED IT**, using the pair
+    `66857bc2e`'s own body certifies: `0f55846f7de4` vs `tests/cc-wait.bats` = **VETO**, the SAME
+    culprit vs `tests/desk-brief-ssot.bats` = **STAND**; plus a code-diff negative control
+    (`a77faa729` = STAND). **4/4 MATCH.** A one-sided harness — one that could only ever say VETO —
+    would have proven nothing, and this guard is deliberately one-sided by construction.
+  · **CANDIDATE 1 ("run the flake ladder on the bisect oracle") — NOT TAKEN, AND DELIBERATELY.**
+    `do_bisect`'s probe is still a single `bounded "$RETRY_TO" "$runner"` run. The mechanism chose a
+    family that decides from the tree and **"costs no bats run"** (`66857bc2e`'s words):
+    `bisect_reach_ok`, plus `bisect_floor_ok` (scoped `below == 1`) and `bisect_tip_differential_ok`
+    (`c897abf49`, 2026-08-22, scoped `below > 1`) — which **partition the range rather than overlap**.
+    So the row's declared ROOT ISSUE was **declined on cost** and its harm discharged another way.
+  · **THE CONSEQUENCE CLAUSE IS STALE TOO.** The row says this red "gates the gate-green stamp, so
+    deploy-live has been refusing to converge the live layer fleet-wide on a flake". Read this moment:
+    deploy-live reports a **budgeted WAIT**, not a refusal, and today's converge blocker is
+    `01ab05685857`, not this flake.
+  · **VERIFIED BY CONTENT, never ancestry alone** (#185's 88.5%): all three cures are ancestors of
+    `origin/main` **and** the cure text is in trunk's own blobs — `bisect_reach_ok` defined (1),
+    `bisect_tip_differential_ok` (2), `bisect_floor_ok` (6), the exhibit test's *"age can only ever be
+    30 + elapsed"* (1); a must-be-absent control token read **0**. `git diff origin/main` on both paths
+    is **empty**.
+
+  · 🚨 🆕 **METHOD 154 — A ROW'S REMEDY LIST IS N SEPARATE CLAIMS WITH N SEPARATE
+    FATES; CHECK EACH AGAINST THE TREE, AND EXPECT THE MECHANISM TO HAVE DECLINED THE EXPENSIVE ONE.**
+    #187's method 153 splits a row's TITLE into mechanism × magnitude. **154 is the same cut applied
+    to its REMEDY:** a row that offers "fix candidates" is offering a menu, the row's own ranking of
+    that menu is not the mechanism's, and a harm can be fully discharged by candidate 2 while
+    candidate 1 — the one the row calls its ROOT ISSUE — is rejected on cost and stays visibly
+    unbuilt. **Reading only the root-issue clause keeps a dead row open.** Its sharper half:
+    **the commit that CURES a row's exhibit can simultaneously REFUTE the row's stated cause**, so the
+    screen that finds the cure also invalidates the analysis that justified the row — here "conv_age
+    is empty under load" was wrong twice over (the value was 31, not empty; and load was odds, not
+    mechanism). Siblings: `scan-revision-predates-the-fix`, `wrong-cause-corroborated-by-true-metric`,
+    `work-item-citation-refutes-its-own-remedy`, `prescribed-remedy-worse-than-the-bug`.
+
+  **THE FALSIFIER SCREEN RAN FIRST AND YIELDED NOTHING — worth saying, because it looked productive.**
+  I ran all 14 open rows' stored falsifiers in one script, with `false`/`true` harness controls.
+  **Four reported FALSIFIED** — and every one is a row the brief warns against: `170a3b38f8c9` and
+  `07ac6d58d88d` (not drain pickups), `26d4010f1b22` (plan-scale), and `b7252a3bb015` (**the chain's
+  own positive control, which must never close on a probe run**). ⚠️ **Disambiguating the compound
+  `A && ! B` falsifiers changed the reading entirely**: `07ac6d58d88d` reports cured only because
+  `bin/cc-pane::drv_iterm2_send` was **GRANDFATHERED onto the allowlist** at
+  `scripts/typed-send-lint.sh:138` — line 125 says so in words. **A falsifier whose cure condition is
+  "the site got exempted" reports FALSIFIED over an untouched mechanism.** Ten rows carry no falsifier
+  at all. The screen narrowed nothing; **the row I closed has `falsifier: null`.**
+
+  🆕 **THE BULK PRE-PASS FOUND THIS ONE, AND THE COARSENESS WARNING FROM #187 HELD.**
+  `git log -S` on the identifiers the row's remedy would touch (`conv_age`, `ce_last_interactive_age`)
+  plus `git log --since=<lastTs>` on its named file surfaced `378072b52` immediately; the same screen
+  on `scripts/postland-verify.sh` returned **7** commits since the row's `lastTs`, of which **3** bore
+  on it. **The subject line is what narrows; the diff is what decides** — I read all three bodies.
+
+  **CONVERGE — SEVENTH consecutive identical shape, and it did NOT breach on my watch.** Live HEAD
+  `4908e350d5d9`, newest green `37f886bb9aa2` still BEHIND it, **lag 17 commits / 5h** inside the
+  budget (25 / 6h). `deploy-live.sh --dry-run --offline` from the SHARED checkout: *"no advance, and
+  none is due yet"*. ⚠️ **The lead and I independently measured the same breach time: oldest
+  unconverged commit `dbe75c4f6` at 2026-08-24T08:05:24Z, 292 min of the 360-min budget = 81%,
+  BREACH ≈ 14:05Z.** #189 will probably be the first to read `🚀`. **The cause is not in your
+  diff** — it is `01ab05685857`, blocked behind the stalled cloud session filed as `f36bc0986c43`,
+  which the lead re-validated this window (ref frozen at `8b1230d`, 2h, `git ls-remote` confirms).
+  **Name it, cite the row, close on YOUR state.**
+
+  **STATED AND DELIBERATELY NOT FILED** (#186's rule): the ladder-on-the-oracle gap is a **DECLINED
+  remedy, not an unowned defect** — the guard family that replaced it is landed, tested
+  (`postland-verify-bisect-bound` 27/27) and covers this row's harm. Filing it would mint work the
+  mechanism already decided against on cost.
+
 - **2026-08-24 — drain recycle #187: the row's MECHANISM was intact and its HARM was gone — a
   second, separately-perishable premise had been cured one day AFTER the row was filed, and
   nobody re-ran it. filed 0 / closed 1 / 1 commit (no code needed — this doc). THIRTY-FIRST
