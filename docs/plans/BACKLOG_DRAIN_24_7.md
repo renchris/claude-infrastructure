@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #209: method 179 — when a row indicts a MECHANISM, census the
+  mechanism's PRECONDITION instead of reproducing its exhibit; a precondition is a population
+  question and settles the claim at every occurrence, an exhibit is one draw that can fail to
+  reproduce for reasons unrelated to the claim. filed 0 / closed 1.**
+  Board at open: **475 open+blocked** (285 open / 190 blocked / 2269 done, claimed 6); at close
+  **474** (284 / 190 / 2270, claimed 6). `master-convergence-deadlock` **open=13 / blocked=6 at BOTH
+  ends — unmoved** (the blocked tail stated, not hidden). `comm` found **exactly one departure and
+  it was mine, and ZERO arrivals** — the cleanest link of the recent run; contrast #208 (3
+  departures, only 1 its own, 2 of them open→claimed by other machines) and #207/#205 (arrivals with
+  an EMPTY `.by`). **`claimed` read 6 at both ends AND its membership was STABLE**, checked by set
+  difference rather than by the total — #208's scar was a stable total hiding a churning population,
+  so the total alone is not the check. My pick was **ungrouped**, so this close moves **no condition
+  count**; net **−1**, the sixth consecutive negative-net link.
+
+  **CLOSED `be466707f31f` — "UNPROVEN, needs a controlled probe: completion-assert D6 close-shape
+  may emit false negatives" — REFUTED on its mechanism, with its OWN named alternative explanation
+  confirmed as the true cause and already discharged by a `done` sibling.** Both subjects were
+  byte-identical between worktree and trunk before I measured (`close-shape.sh` `eec100dd8ada`,
+  `completion-assert.sh` `a27e1956dcda`), so every reading reproduces on trunk by construction.
+  · **The suspicion.** The row indicts the MSG extraction at `completion-assert.sh:157-161` —
+    "`tail -1` of assistant text records" — of truncating a close so D6 reports a verdict the close
+    actually carried. **That mechanism has a precondition: one assistant RESPONSE must be written as
+    more than one text-bearing `type=="assistant"` record.** Censused over all four transcript
+    stores — **6982 files, 3440 carrying main-agent assistant text — a `message.id` owning >1 text
+    record occurs 0 times at the FINAL position and 0 times at ANY position**, and false negatives
+    (verdict in the final response, absent from the extracted MSG) are **0**. The instrument is not
+    silent: 133 extracted MSGs carry a verdict against 259 transcripts carrying one somewhere.
+    ⚠️ **This sharpens memory `transcript-lines-repeat-one-billed-response`** — one record per
+    CONTENT BLOCK is true of thinking/tool_use blocks and measurably NOT of text, which is precisely
+    why `tail -1` cannot truncate a close.
+  · **Tested against the code the row actually indicted, not only today's.** The row was filed
+    2026-08-18 against the FOUR-anchor matcher; **W3 (`eff291df6`, 2026-08-23, `--is-ancestor` rc 0
+    against the pinned NEG `4e39debcf` rc 1) narrowed `close_shape_missing` to the single token
+    `good-to-close-verdict`**, so "reported ALL FOUR missing" is not a report the current code can
+    emit. Rather than rest on a dead exhibit I extracted `eff291df6^:hooks/lib/close-shape.sh`
+    (verified to carry `_CS_COMPLICATION` / `_CS_SOLUTION` / `_CS_OUTCOME` / `_CS_VERDICT`),
+    **ran its controls FIRST** — NEG bare prose → `Complication: Solution: Outcome:
+    good-to-close-verdict`, POS all-four → `""` — and only then counted: **448 real closes carry all
+    four labels verbatim, 29 of them dated 2026-08-17 (the exhibit's own day), and 12 sampled from
+    that day read 12 COMPLETE, 0 missing.**
+  · **The alternative explanation the row named is the true one and already has an owner.** The row
+    wrote "ALTERNATIVE EXPLANATION NOT RULED OUT: the block simply stopped at the 3-attempt cap".
+    **`3b464e94b3ff` (status `done`) records it verbatim** — "D6+custody share `COMPLETION_MAX=3` so
+    mid-wave done-claims can spend the cap before the terminal close" — and the repair landed as
+    **`c2a35ab52` (2026-08-17)**, giving D6 its own `COMPLETION_SHAPE_MAX` class;
+    `completion-assert.sh:881-885` now says it in its own comments. **`c2a35ab52` landed the SAME DAY
+    as the behaviour the row observed**, which is why the row could see the symptom and not find the
+    cause. Its second concern (quoted template text satisfying the contract) is in the same sibling
+    and fixed by `e3c36ecff`; control: `close_shape_missing "Good to close: <yes|no>"` →
+    `good-to-close-verdict`, the placeholder still correctly refused.
+
+  🚨 **METHOD 179 — CENSUS THE PRECONDITION, DO NOT CHASE THE EXHIBIT.** This row could not be
+  settled the way it asked to be: its exhibit was two closes on one day and the repro that produced
+  it was permission-denied mid-session, so "run it again" was never going to answer. **Every
+  mechanism has a precondition, and a precondition is a POPULATION question rather than a draw.**
+  0-in-6982 refutes the claim at every Stop in the corpus, which is strictly stronger than
+  reproducing the two the row saw — and it is reachable when the exhibit is not. **Corollary, and it
+  is what made this row cheap rather than dangerous: a row that NAMES ITS OWN ALTERNATIVE
+  EXPLANATION has already done the hard half of the adjudication — test that half FIRST**, because
+  when the alternative is true the suspicion usually falls without any exhibit at all. Siblings:
+  **#203** (mechanism true, exhibit dead) and **#201** (close only when the surviving true content
+  has another owner) — this is the first case where BOTH hold at once, and all three residues
+  (`3b464e94b3ff` + `c2a35ab52`, `e3c36ecff`, `eff291df6`) are named owners, so nothing is orphaned
+  by the close.
+  ⚠️ **SCOPE NOTE, deliberately narrow: this row is about MY OWN close machinery, so the work was
+  READ-ONLY.** No file under `hooks/` was edited and the pre-W3 blob was extracted to a scratchpad
+  copy OUTSIDE the worktree. A row about the machinery that judges your own close is exactly the one
+  where "fix it while you are here" is the defect.
+
+  **Screens run, in the settled order.** **Method 177 was DRY, exactly as #208 predicted** — 8 rows
+  at #208, 7 of them the standing exclusions and 1 taken by #208; it returned **7** for me, all 7
+  the standing exclusions (`1b00d62958a6`, `b22e519e06cb`, `b7252a3bb015`, `a36e2b9bbac1`,
+  `b262e41b26fb`, `408427e74888`, `b583c5564aa2`). **#208's THIRTIETH shape returned 13** over the
+  475 open+blocked rows, POS control (`the`) 432 / NEG (`zzqqxx`) 0 — but every hit was already
+  excluded: 3 the lead's or operator-gated, 5 named in the brief's do-not-take lists, 5 in other
+  projects. ⚠️ **The one that looked live, `159c2211b0f2`, is a `master-fire-gate` row** (verified
+  by set membership against the condition's 10 open ids) **and the brief marks all ten NOT a drain
+  pickup** — its own title also scopes it out on Follow-On Gate F3 for arming a pane-closing
+  actuator. **So shape 30 is dry too on this board**; the pick came from the still-live method-174
+  prohibition hits the brief carries forward.
+  🆕 **A grep pattern is an instrument and BRE is where it fails silently.** My literal re-check
+  after a hook rewrite read `good\s+to\s+close = 0` and I nearly recorded a mangled file: `/usr/bin/grep`
+  without `-E` treats `\s` and `+` as literals, so the pattern could only ever miss. The line was
+  intact. **Re-read the LINE before indicting the file** — same family as #208's rc-3 non-verdict,
+  and flattering in the same direction (it would have sent me to repair a file that was fine).
+
+  **Hook + safety counters, all as floors.** The `qos-rewrite.sh` diff was **empty — the 91st
+  consecutive clean recycle**. Post-land RED pages **0**, the **100th** consecutive. The PostToolUse
+  rewrite hook fired **4 times before the inserter ran, and the inserter is a `.py` so it is a 5th
+  by construction** (cumulative floor **77**, and **78** with the inserter). 🆕 **#204's extension
+  predictor now holds SIX sessions and this is its cleanest sample yet: 4/4 firings were `.py`
+  (`screen30.py`, `probe_be46.py`, `probe_prew3.py`, `verify_board.py`) and 0/1 on the `.txt`
+  evidence body.** No rewrite altered a pinned literal (compile OK ×4; every constant re-grepped).
+  Board write verified by CONTENT chars-to-chars: **6203 == 6203 EXACT MATCH**, **10/10 negative
+  controls holding** and 5/5 positive; evidence body pure-ASCII (bytes == chars == 6204 on disk).
+
+  **Carried forward from the lead's ACK of #208, and it is time-bounded.** The lead accepted method
+  178 and the measured absence (11 `.sh` siblings present in the same live directory, the one `.py`
+  absent) but **refuted the inference that the absent allocator explains the cloud claim-thrash**:
+  `refused-harness` appears exactly **once** in the whole ledger against a positive control of 3602
+  occurrences of `claim`, so the refusal is real but is NOT reaching the store — **the churn is
+  UNATTRIBUTED, not diagnosed.** 🚨 **And the converge hazard it names bears on #208's own fix: T1
+  outranks T2 and deploys a GREEN-STAMPED commit, which may be OLDER than `92608b867`, so a green
+  stamp landing between `500553d48` and `92608b867` would advance the converger while
+  `scripts/lib/pty-run.py` stays absent — the lag counter looking healthier while the lane stays
+  dead.** **Check the live layer for the file, never the lag number.** Neither of us has touched
+  `--force` and neither should.
+
 - **2026-08-24 — drain recycle #208: method 178 — an auditor that mirrors its deployer 1:1 can catch
   the deployer's DRIFT but never its OMISSION, and two sibling checks agreed over a 16-day absence
   because both were keyed on the same file EXTENSION. filed 0 / closed 1, and the close was earned by
