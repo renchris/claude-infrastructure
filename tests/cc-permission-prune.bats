@@ -162,7 +162,127 @@ backups() { # count of backups made for the fixture
   # walk is rooted at HOME, which setup() has redirected into the test tmpdir.
   run python3 "$AUDIT" --prune
   [ "$status" -eq 0 ]
-  [[ "$output" == *"scope: 0 settings.local.json file(s)"* ]] || false
+  [[ "$output" == *"scope: 0 settings file(s)"* ]] || false
+}
+
+# ─────────────────────── the INERT class (auto-mode drop list) ───────────────────────
+#
+# A SECOND, DISJOINT class: entries `--permission-mode auto` drops before rule matching, so
+# they grant nothing in the mode every session on this box runs. Predicate transcribed from
+# docs/research/permission-matcher-truth-2026-08-20.md §3 (`pme`→`qNt`→`gsn`/`_sn`, `PHs`).
+#
+# L4 applies with unusual force here, because the two poles are what the predicate IS: a false
+# hit tells the operator to delete a rule that was carrying real weight. So every arm below
+# pairs a dropped spelling with the NEAREST spelling §3 says survives.
+
+INERT_FIX() { # <path> — one fixture holding both poles of every clause in §3
+  cat > "$1" <<'JSON'
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(python3 scripts/foo.py *)",
+      "Bash(node -e *)",
+      "Bash(python -m pkg.module:*)",
+      "Bash(npm run)",
+      "Bash(npm run test:*)",
+      "Bash(*)",
+      "Bash(curl -sS *)",
+      "Bash(curl https://api.github.com/*)",
+      "Bash(wget https://x.dev/a)",
+      "Bash(kubectl exec *)",
+      "Bash(kubectl get pods *)",
+      "Bash(gcloud logging read *)",
+      "Bash(git status:*)",
+      "Bash(rg:*)",
+      "Agent(Explore)",
+      "Read(//tmp/fixture/**)"
+    ]
+  }
+}
+JSON
+}
+
+inert_hit() { # <file> <rule> — did the report mark this rule INERT?
+  # -F is load-bearing, not tidiness: a rule spelling is FULL of regex metacharacters, and as a
+  # BRE `[INERT:` is an unterminated bracket expression — grep then fails for a reason that has
+  # nothing to do with the report, which would make every `! inert_hit` arm below pass vacuously.
+  python3 "$AUDIT" --prune "$1" | grep -qF -- "~ $2   [INERT:"
+}
+
+@test "INERT entries are REPORTED — every clause of the auto-mode drop predicate fires" {
+  local f="$BATS_TEST_TMPDIR/inert.settings.json"; INERT_FIX "$f"
+  # The exact count is the failure-distinct quantity: 0 means the predicate never ran, >7 means
+  # it swallowed one of the survivors this fixture pairs against each hit.
+  run python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"7 auto-mode-INERT entr(ies) of"* || "$output" == *"7 auto-mode-INERT entr(ies) ("* ]] || false
+  inert_hit "$f" 'Bash(python3:*)'        # bare `<cmd>:*`
+  inert_hit "$f" 'Bash(node -e *)'        # tail starts with a flag
+  inert_hit "$f" 'Bash(npm run)'          # bare multi-word member
+  inert_hit "$f" 'Bash(*)'                # gsn's blanket-star branch
+  inert_hit "$f" 'Bash(curl -sS *)'       # nSd member with no positional argument
+  inert_hit "$f" 'Bash(kubectl exec *)'   # nSd member whose first positional is a mutator
+  inert_hit "$f" 'Agent(Explore)'         # PHs: every Agent rule, whatever its specifier
+}
+
+@test "the nearest SURVIVING spelling of each clause is not flagged — no false hits" {
+  local f="$BATS_TEST_TMPDIR/inert.settings.json"; INERT_FIX "$f"
+  # Each of these is §3's own stated counter-example to the hit directly above it.
+  ! inert_hit "$f" 'Bash(python3 scripts/foo.py *)'   # narrowed by a positional
+  ! inert_hit "$f" 'Bash(python -m pkg.module:*)'     # the `-m` carve-out, `:*` spelling
+  ! inert_hit "$f" 'Bash(npm run test:*)'             # tail does not start with a flag
+  ! inert_hit "$f" 'Bash(curl https://api.github.com/*)'  # positional carrying a URL
+  ! inert_hit "$f" 'Bash(wget https://x.dev/a)'
+  ! inert_hit "$f" 'Bash(kubectl get pods *)'         # `get` is not a mutating verb
+  ! inert_hit "$f" 'Bash(gcloud logging read *)'      # nSd member WITH a positional
+  ! inert_hit "$f" 'Bash(git status:*)'               # never on the list
+  ! inert_hit "$f" 'Bash(rg:*)'
+  ! inert_hit "$f" 'Read(//tmp/fixture/**)'           # non-Bash, non-Agent
+}
+
+@test "CONFIRM=1 NEVER removes an INERT entry — the drop is mode-scoped, so it is a policy call" {
+  local f="$BATS_TEST_TMPDIR/inert.settings.json"; INERT_FIX "$f"
+  local sha; sha="$(shasum -a 256 "$f" | awk '{print $1}')"
+  run env CONFIRM=1 python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  # Byte-identical: nothing dead lives here, and 7 inert entries must not make it a rewrite.
+  [ "$(shasum -a 256 "$f" | awk '{print $1}')" = "$sha" ]
+  [ "$(allow_n "$f")" -eq 17 ]
+  run bash -c 'ls "$1".permprune-bak-* 2>/dev/null' _ "$f"
+  [ "$status" -ne 0 ]
+}
+
+@test "the redundancy fixture reports ZERO inert — the two classes are disjoint" {
+  # Guards the direction the count arms cannot: an ordinary allow list must not light up.
+  run python3 "$AUDIT" --prune "$FIX"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 auto-mode-INERT"* ]] || false
+}
+
+@test "autoMode.classifyAllShell=true is called out — it drops every Bash rule, fleet-wide" {
+  local f="$BATS_TEST_TMPDIR/cas.settings.json"
+  printf '%s\n' '{"autoMode":{"classifyAllShell":true},"permissions":{"allow":["Bash(python3:*)"]}}' > "$f"
+  run python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"classifyAllShell"* ]] || false
+}
+
+@test "discovery finds settings.json — the file that actually holds the entries" {
+  # THE REGRESSION THIS CLOSES: the walk collected only `settings.local.json`, but
+  # permission-settings-store-2026-08-20.md §1a measured "No settings.local.json exists in any
+  # config dir" — all five user-level stores are `settings.json`. So a bare `--prune` scanned
+  # zero of the entries it was pointed at and reported a clean bill.
+  printf '%s\n' '{"permissions":{"allow":["Bash(git:*)","Bash(git status --short)"]}}' \
+    > "$HOME/.claude/settings.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(ls:*)"]}}' \
+    > "$HOME/.claude/settings.local.json"
+  run python3 "$AUDIT" --prune
+  [ "$status" -eq 0 ]
+  # BOTH names, and the exact count is the quantity that distinguishes a fixed walk from the
+  # old one (which would report 1) and from an unbounded one (which would report more).
+  [[ "$output" == *"scope: 2 settings file(s)"* ]] || false
+  [[ "$output" == *"Bash(git status --short)"* ]] || false
 }
 
 @test "the plain report still works — --prune is additive, not a rewrite of the tool" {

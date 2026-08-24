@@ -20,6 +20,12 @@ Usage:
   cc-permission-audit [DAYS]            the report above (0/absent = all history)
   cc-permission-audit --prune [FILE…]   list provably-dead approved patterns; writes NOTHING
   CONFIRM=1 cc-permission-audit --prune [FILE…]   remove them (timestamped backup per file)
+
+--prune reports TWO disjoint classes and only ever removes the first:
+  DEAD  — provably redundant inside its own file (duplicate / shadowed). CONFIRM=1 removes.
+  INERT — dropped by auto mode before rule matching, so it grants nothing in the mode every
+          session here runs. REPORT-ONLY: the drop is mode-scoped and reverses outside auto,
+          so removing one is a policy call, not a semantics-preserving prune.
 """
 
 import json, glob, re, sys, collections, os, time
@@ -292,11 +298,144 @@ def archive_report():
 #     business and is not asserted here; 3 fleet-wide entries turn on it and they stay.
 #   · a shadower living in a DIFFERENT settings file. Precedence-merged files are edited
 #     independently, so the proof has to live in the file that is being rewritten.
+#
+# ────────────────────────── THE INERT PREDICATE (report-only) ────────────────────────────
+#
+# A SECOND, DISJOINT class, and it is REPORTED, NEVER REMOVED: an entry that this box's
+# `--permission-mode auto` DROPS before rule matching, so it grants nothing in the mode every
+# session here actually runs. Source: docs/research/permission-matcher-truth-2026-08-20.md §3,
+# which read the predicate out of the binary (`pme` → `qNt` → `gsn`/`_sn`, `PHs`).
+#
+# 🚨 WHY REPORT-ONLY, and why it is not folded into the dead set: the drop is MODE-SCOPED.
+# "Dropped rules are restored when you leave auto mode" — so deleting one IS a semantics
+# change for `default`/`acceptEdits`/`plan`-without-auto, which is exactly what the DEAD
+# predicate above promises never to do. Whether an inert entry should go is a POLICY call
+# about which modes the operator wants covered, so this arm hands them the list and stops.
+# CONFIRM=1 does not touch it.
+#
+# HONEST BOUND, inherited from the source doc: the drop is *code-and-doc verified* (the
+# decompiled predicate plus the `/permission-modes` docs' "broad allow rules that grant
+# arbitrary code execution are dropped") but **NOT probe-verified** — in auto mode no
+# observable distinguishes "allowed by rule" from "allowed by the classifier". Treat a hit as
+# "this entry is very probably buying you nothing", not as a proof of inertness.
+#
+# NOT MODELLED HERE, deliberately: `autoMode.classifyAllShell` (finding F10 — set true in ANY
+# settings source it drops EVERY Bash allow rule, making the per-rule question moot). It is a
+# cross-file setting, and this arm's proof, like the dead one's, stays inside a single file.
+# It is detected and reported as a banner instead, never used to widen the hit list.
+
+# `iSd` — the dangerous-command list, verbatim from the offset-19668065 dump in §3.
+INERT_CMDS = [
+    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua",
+    "npx", "bunx", "npm run", "yarn run", "pnpm run", "bun run",
+    "bash", "sh", "ssh", "zsh", "fish", "eval", "exec", "env", "xargs", "sudo",
+]
+# `nSd` — the network/cloud subset, which carries its own branch rather than the flag test.
+INERT_NET = ["curl", "wget", "kubectl", "aws", "gcloud", "gsutil"]
+# kubectl's mutating verbs: a rule whose first positional is one of these is dropped.
+KUBECTL_MUTATORS = {
+    "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
+    "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
+}
+# The one carve-out in the flag branch: `Bash(python -m pkg.module *)` survives.
+DASH_M_OK = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)$")
+
+
+def _inert_tail(content, cmd):
+    """The argument tail of `content` for `cmd`, with the trailing wildcard stripped, or None
+    when `content` is not a rule about `cmd` at all.
+
+    Returns "" for the bare forms `<cmd>`, `<cmd>:*`, `<cmd> *`, `<cmd>*` — every one of which
+    §3 lists as dropped outright.
+    """
+    if content == cmd:
+        return ""
+    for suf in (":*", " *", "*"):
+        if content == cmd + suf:
+            return ""
+    if not content.startswith(cmd + " "):
+        return None
+    tail = content[len(cmd) + 1:]
+    # Strip the trailing `*` ONLY — the `:` or space before it is a load-bearing separator for
+    # the `-m` carve-out, whose regex ends `(\s*:|\s+)$` precisely to accept both spellings.
+    return tail[:-1] if tail.endswith("*") else tail
+
+
+def inert_reason(rule):
+    """Why auto mode drops `rule`, or None if it survives. See THE INERT PREDICATE above."""
+    m = RULE_RE.match(rule)
+    if not m:
+        return None
+    tool, arg = m.group(1), m.group(2)
+    # `PHs`: every Agent allow rule is dropped in auto mode, whatever its specifier.
+    if tool == "Agent":
+        return "auto mode drops every Agent allow rule"
+    if tool != "Bash":
+        return None
+    content = arg.strip().lower()
+    # `gsn`: empty content, or a content that is nothing but whitespace and stars.
+    if content == "" or re.fullmatch(r"[\s*]+", content):
+        return "matches everything — dropped as a blanket shell grant"
+    # Longest command first, so `npm run` is tested before a future bare `npm`.
+    for cmd in sorted(INERT_CMDS, key=len, reverse=True):
+        tail = _inert_tail(content, cmd)
+        if tail is None:
+            continue
+        if tail == "":
+            return f"bare `{cmd}` grant — on the auto-mode drop list"
+        if tail.startswith("-"):
+            if DASH_M_OK.match(tail):
+                return None                      # `python -m pkg.module *` — the one carve-out
+            return f"`{cmd}` with a flag-only tail — on the auto-mode drop list"
+        return None                              # narrowed by a positional: survives
+    for cmd in sorted(INERT_NET, key=len, reverse=True):
+        tail = _inert_tail(content, cmd)
+        if tail is None:
+            continue
+        if "$" in tail or "`" in tail:
+            return f"`{cmd}` tail carries a substitution — dropped in auto mode"
+        args = tail.split()
+        positional = [a for a in args if not a.startswith("-")]
+        if cmd == "kubectl" and positional and positional[0] in KUBECTL_MUTATORS:
+            return f"`kubectl {positional[0]}` is a mutating verb — dropped in auto mode"
+        if not positional:
+            # curl/wget are exempt only when an argument actually carries a URL.
+            if cmd in ("curl", "wget") and any("://" in a for a in args):
+                return None
+            return f"`{cmd}` with no positional argument — on the auto-mode drop list"
+        return None
+    return None
+
+
+def inert_entries(allow):
+    """[(index, rule, reason)] for every auto-mode-inert entry in one `permissions.allow`."""
+    out = []
+    for i, rule in enumerate(allow):
+        why = inert_reason(rule)
+        if why:
+            out.append((i, rule, why))
+    return out
+
+
+def _classify_all_shell(obj):
+    """F10: `autoMode.classifyAllShell` true anywhere drops EVERY Bash allow rule outright."""
+    am = obj.get("autoMode") if isinstance(obj, dict) else None
+    return isinstance(am, dict) and am.get("classifyAllShell") is True
+
 
 WILDCARD = re.compile(r"[*?\[\]]")
 RULE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)\((.*)\)$", re.S)
 # Discovery is a bounded walk, not `**` — a recursive glob of $HOME does not terminate in
 # usable time. Explicit paths on the command line skip it entirely (that is what tests use).
+#
+# 🚨 BOTH filenames, and the second one is the whole population. The first cut collected only
+# `settings.local.json`, but permission-settings-store-2026-08-20.md §1a measured the box and
+# found "No settings.local.json exists in any config dir" — all five user-level stores, and
+# every one of the 339 approved patterns this tool was pointed at, live in `settings.json`.
+# So the shipped walk found precisely ZERO of the entries it was asked to audit, and reported
+# a clean bill over worktree-local files instead. Order is fixed (`settings.json` first) so a
+# report reads the same way twice.
+SETTINGS_NAMES = ("settings.json", "settings.local.json")
 WALK_SKIP = {
     "node_modules", "Library", "Applications", ".Trash", ".git", ".venv", "venv",
     "site-packages", "Movies", "Music", "Pictures", "Downloads", ".npm", ".cache",
@@ -316,8 +455,11 @@ def _settings_files():
             dirnames[:] = []
         else:
             dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
-        if "settings.local.json" in filenames and os.path.basename(dirpath).startswith(".claude"):
-            out.append(os.path.join(dirpath, "settings.local.json"))
+        if not os.path.basename(dirpath).startswith(".claude"):
+            continue
+        for name in SETTINGS_NAMES:
+            if name in filenames:
+                out.append(os.path.join(dirpath, name))
     return sorted(out)
 
 
@@ -369,8 +511,8 @@ def prune_report():
     apply = os.environ.get("CONFIRM", "0") == "1"
     files = _settings_files()
     print(f"── PRUNE {'(APPLY)' if apply else '(DRY RUN — nothing will be written)'} ──")
-    print(f"  scope: {len(files)} settings.local.json file(s)")
-    total = dead_total = written = failed = 0
+    print(f"  scope: {len(files)} settings file(s)")
+    total = dead_total = inert_total = written = failed = 0
     for path in files:
         try:
             with open(path, encoding="utf-8") as fh:
@@ -384,13 +526,20 @@ def prune_report():
             continue
         total += len(allow)
         survivors, dead = dead_entries(allow)
-        if not dead:
-            continue
+        inert = inert_entries(allow)
         dead_total += len(dead)
-        print(f"\n  {path}  ({len(allow)} → {len(survivors)}, {len(dead)} dead)")
+        inert_total += len(inert)
+        if dead or inert:
+            print(f"\n  {path}  ({len(allow)} → {len(survivors)}, "
+                  f"{len(dead)} dead, {len(inert)} inert)")
         for _, rule, why in dead:
             print(f"    - {rule[:100]}   [{why}]")
-        if not apply:
+        if _classify_all_shell(obj):
+            print("    ⚠ autoMode.classifyAllShell=true here — in auto mode this drops EVERY "
+                  "Bash allow rule in EVERY settings source, not just the ones listed below.")
+        for _, rule, why in inert:
+            print(f"    ~ {rule[:100]}   [INERT: {why}]")
+        if not dead or not apply:
             continue
         try:
             bak = _backup(path)                      # backup BEFORE the write, always
@@ -406,7 +555,12 @@ def prune_report():
             print(f"    ⚠ WRITE FAILED, file left alone: {e}")
             failed += 1
     pct = f"{100 * dead_total / total:.1f}%" if total else "n/a"
+    ipct = f"{100 * inert_total / total:.1f}%" if total else "n/a"
     print(f"\n  {dead_total} provably-dead entr(ies) of {total} approved patterns ({pct})")
+    print(f"  {inert_total} auto-mode-INERT entr(ies) ({ipct}) — reported, never removed: the "
+          "drop is mode-scoped")
+    print("    (they grant nothing under --permission-mode auto, but ARE restored in other "
+          "modes, so deleting one is a policy call — not the semantics-preserving prune above)")
     if apply:
         print(f"  {written} file(s) rewritten, {failed} skipped/failed")
     else:
