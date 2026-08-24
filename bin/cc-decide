@@ -159,6 +159,39 @@ cmd_open() {
     esac
   fi
 
+  # ── SESSION ATTRIBUTION LADDER — a CONTRACT, and the reason it needs a third rung ─────────────
+  # An explicit --session-sid always wins, so a caller filing on another session's behalf can say
+  # so (scripts/limit-recover/lr-reset-poller.sh:565 does exactly that). The env rungs mirror
+  # bin/cc-backlog:2669-2671 with ONE addition that measurement forced:
+  #
+  #   $CLAUDE_SESSION_ID is NOT exported to a tool-call shell — this repo says so in three places
+  #   (hooks/log-bash.sh:9 and hooks/validate-bash.sh:1266 both cite D-9; commands/wrap.md:23
+  #   "verified 2026-08-01") — and `cc-decide open` runs in exactly that shell. So a ladder ending
+  #   at CLAUDE_SESSION_ID resolves to "" at every real call site: the fix would be a NO-OP wearing
+  #   a fix's clothes. $CLAUDE_CODE_SESSION_ID IS set there and names the transcript — the same id
+  #   hooks/completion-assert.sh:211 feeds wrap-ledger as --session, and the one
+  #   scripts/ship-land.sh:1003 already uses for this purpose.
+  #
+  # WHY IT MATTERS: session_sid was written "" on every unflagged open, and
+  # scripts/wrap-ledger.sh:730 selects `(.session_sid // "") == $sid`, so an unattributed packet
+  # matched NOTHING — and :718 returns BLOCKED=0 when $sid is itself empty, so it could not match
+  # in either branch. An open class-C hard-block therefore blocked nobody and the close rendered
+  # "✅ SAFE TO CLOSE — nothing of mine is open" over it. Measured 2026-08-24: 11 of the 14 open
+  # class-C packets in the live store carried an empty sid, and the 3 that did not were one batch
+  # from 2026-07-18.
+  #
+  # FAIL DIRECTION IS MONOTONE: if none of the three is set, sid stays "" — byte-identical to the
+  # behaviour this replaces. The fix can be a no-op; it can never attribute a packet to the wrong
+  # session, because these ids are per-session uuids and cannot collide.
+  #
+  # NOTE mk_id is class+sid+what, so a resolved sid CHANGES the id — deliberately. Per-session
+  # keying is the design (see the header at :10); today's cross-session idempotency is an artifact
+  # of sid always being empty, not an intended property. Re-`open` within one session is still
+  # idempotent (same sid ⇒ same id).
+  [ -n "$sid" ] || sid="${CLAUDE_SESSION_ID:-}"
+  [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$sid" ] || sid="${CC_SESSION_ID:-}"
+
   ensure_dir
   [ -n "$id" ] || id="$(mk_id "$class" "$sid" "$what")"
   local file="$DECISIONS_DIR/$id.json"
