@@ -15,11 +15,21 @@
 #   2. THE DESTRUCTIVE KEYSTROKE IS PROOF-GATED. recycle_composer_gate refuses /exit over any
 #      non-empty or unreadable composer; recycle_nudge_decision only ever answers `cr` for a
 #      composer holding exactly the stranded /exit; it2_paste_submit_verified sends its CR only
-#      when the read-back matches the paste byte-for-byte (space-stripped).
-#   3. THE OLD BEHAVIOR IS THE RED-PROOF. it2_paste_submit (kept, fire-path resend) submits a CR
-#      with NO read-back — asserted here as the mutant control: on the same mismatch fixture the
-#      OLD path sends the CR and the NEW path withholds it. If someone "simplifies" the verified
-#      form back to a blind CR, that test is the one that goes red.
+#      when paste_readback_ok proves the composer holds exactly this paste and nothing else.
+#   3. THE OLD BEHAVIOR IS THE RED-PROOF, and it is now a LOCAL MUTANT rather than a shipped
+#      function. `it2_paste_submit` — the blind-CR primitive this suite used to import from the
+#      script as its control — was deleted on 2026-08-24 (a771a1611d28) when its last caller, the
+#      fire path's INC-4 brief resend, was migrated onto the verified form. The differential is
+#      what mattered, not the import, so the mutant is defined in this file: on the same mismatch
+#      fixture the blind form sends the CR and the shipped form withholds it. If someone
+#      "simplifies" the verified form back to a blind CR, the rc-4 test is the one that goes red.
+#
+# THE READ-BACK IS NOT THE PASTE (measured 2026-08-24, live CC pane). Anything over 800 chars or
+# 2 newlines — i.e. EVERY brief — is replaced in the composer by `[Pasted text #1 +N lines]`, so
+# byte-equality would call every real resend MANGLED. paste_readback_ok therefore accepts the
+# inline text OR that placeholder with N pinned to the payload's own newline count; the measured
+# hybrid shape (`also fix the margin[Pasted text #1 +19 lines]`) matches neither, which is the
+# property the fire path depends on.
 #
 # Hermeticity: KITTY_WINDOW_ID pinned off (memory: terminal-aware subjects make unpinned suites a
 # function of the developer's terminal); every it2 access goes through a stubbed hf_bounded.
@@ -44,7 +54,9 @@ setup() {
     sed -n '/^composer_content() {/,/^}/p'            "$HF"
     sed -n '/^recycle_composer_gate() {/,/^}/p'       "$HF"
     sed -n '/^recycle_nudge_decision() {/,/^}/p'      "$HF"
-    sed -n '/^it2_paste_submit() {/,/^}/p'            "$HF"
+    sed -n '/^_paste_newlines() {/,/^}/p'             "$HF"
+    sed -n '/^paste_readback_expect() {/,/^}/p'       "$HF"
+    sed -n '/^paste_readback_ok() {/,/^}/p'           "$HF"
     sed -n '/^it2_paste_submit_verified() {/,/^}/p'   "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
   bash -n "$BATS_TEST_TMPDIR/units.sh" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
@@ -235,13 +247,95 @@ phased_hf_bounded() {
 
 # ── 5. RED-PROOF: the old path submits the same mangle the new path withholds ────────────────
 
-@test "mutant control: OLD it2_paste_submit sends a blind CR on the identical mismatch fixture" {
-  # Same screens as the rc-4 test above. The pre-fix behavior (kept for the fire-path resend) has
-  # no read-back: it MUST send the CR here. If this test ever fails, it2_paste_submit grew a
-  # read-back — update arm_goal's rationale; if the rc-4 test fails instead, the verified path
-  # regressed to the blind CR this suite exists to prevent.
+@test "mutant control: a BLIND paste-submit sends a CR on the identical mismatch fixture" {
+  # The pre-fix behavior, verbatim and local: ownership gate, bracketed paste, unconditional CR.
+  # It MUST send the CR on a fixture the shipped form refuses — that differential is the whole
+  # claim. If the rc-4 test above fails instead, the verified path regressed to exactly this.
+  blind_paste_submit() {                                         # the DELETED it2_paste_submit
+    local it2="$1" id="$2" text="$3"
+    composer_owned "$id" || return 1
+    hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
+    hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+  }
   mk_screen "$GLYPH also fix the margin"
-  run it2_paste_submit it2 sid "/goal reply with DONE"
+  run blind_paste_submit it2 sid "/goal reply with DONE"
   [ "$status" -eq 0 ]
   grep -q $'SEND:\r' "$SENT_LOG"                                 # blind CR: sent regardless
+}
+
+@test "no blind paste primitive survives in the script — the mutant is test-local only" {
+  # The ratchet: scripts/typed-send-lint.sh dropped this function's grandfather line in the same
+  # commit, and a re-added blind helper would be a NEW violation. Keyed on the definition, so a
+  # comment naming the history (there is one) cannot satisfy or break it.
+  ! grep -qE '^it2_paste_submit\(\)' "$HF"
+}
+
+# ── 4b. the read-back oracle: what a MULTI-LINE brief actually shows ─────────────────────────
+# Fixtures are the MEASURED screens (live CC pane, tmux 120x40, 2026-08-24), not invented shapes.
+
+@test "readback: a 20-line brief reads back as the PLACEHOLDER, and that is a match" {
+  local brief; brief="$(printf 'line %s of the brief\n' 1 2 3 4 5 6 7 8 9 10)"   # 9 newlines
+  run paste_readback_ok "$brief" '[Pastedtext#1+9lines]'
+  [ "$status" -eq 0 ]
+}
+
+@test "readback: the placeholder's line count is PINNED — a different N is a mismatch" {
+  local brief; brief="$(printf 'line %s of the brief\n' 1 2 3 4 5 6 7 8 9 10)"   # 9 newlines
+  run paste_readback_ok "$brief" '[Pastedtext#1+8lines]'
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: a >800-char single-line paste reads back as the count-less placeholder" {
+  local long; long="$(printf 'X%.0s' $(seq 1 900))"
+  run paste_readback_ok "$long" '[Pastedtext#1]'
+  [ "$status" -eq 0 ]
+  run paste_readback_ok "$long" '[Pastedtext#1+3lines]'          # …and only that form
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: the MEASURED hybrid (draft + placeholder) is a MISMATCH — the whole point" {
+  local brief; brief="$(printf 'line %s of the brief\n' 1 2 3 4 5 6 7 8 9 10)"
+  run paste_readback_ok "$brief" 'alsofixthemargin[Pastedtext#1+9lines]'
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: a short ≤2-newline paste still verifies as its own text (the /goal shape)" {
+  run paste_readback_ok "/goal reply with DONE" "/goalreplywithDONE"
+  [ "$status" -eq 0 ]
+  run paste_readback_ok "/goal reply with DONE" "/goalreplywithDONEandshipit"
+  [ "$status" -ne 0 ]
+}
+
+@test "readback: newlines are counted CC's way — \\r\\n and lone \\r each count ONCE" {
+  run _paste_newlines "$(printf 'a\nb')"; [ "$output" = 1 ]
+  run _paste_newlines "a"$'\r\n'"b"$'\r'"c"; [ "$output" = 2 ]
+  run _paste_newlines "no newlines here"; [ "$output" = 0 ]
+}
+
+@test "verified paste: a real BRIEF pastes and submits against the placeholder read-back" {
+  # The end-to-end property the fire-path migration depends on: byte-equality would have refused
+  # this, because the composer never shows the brief.
+  local brief; brief="$(printf 'line %s of the brief\n' 1 2 3 4 5 6 7 8 9 10)"   # 9 newlines
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH [Pasted text #1 +9 lines]"
+  hf_bounded() { phased_hf_bounded "$@"; }
+  run it2_paste_submit_verified it2 sid "$brief"
+  [ "$status" -eq 0 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 2
+  tail -1 "$SENT_LOG" | grep -q $'SEND:\r'
+}
+
+@test "verified paste: brief pasted ONTO a draft that raced in → rc 4, CR WITHHELD" {
+  local brief; brief="$(printf 'line %s of the brief\n' 1 2 3 4 5 6 7 8 9 10)"
+  PRE_FILE="$BATS_TEST_TMPDIR/pre.txt"; POST_FILE="$BATS_TEST_TMPDIR/post.txt"
+  READS_FILE="$BATS_TEST_TMPDIR/reads"; : > "$READS_FILE"
+  SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
+  SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin[Pasted text #1 +9 lines]"
+  hf_bounded() { phased_hf_bounded "$@"; }
+  run it2_paste_submit_verified it2 sid "$brief"
+  [ "$status" -eq 4 ]
+  grep -c 'SEND:' "$SENT_LOG" | grep -qx 1
+  ! grep -q $'SEND:\r' "$SENT_LOG"
 }

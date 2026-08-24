@@ -97,9 +97,18 @@ LAYERS="scripts hooks bin"
 # ── the sanctioned verified-typing helpers, BY FUNCTION NAME ──────────────────────────────────────
 # A raw primitive inside one of these is the helper doing its job. Anywhere else it is a landmine.
 # Keyed on the name and not the file so the exemption ends where the function ends.
+#
+# it2_paste_submit_verified is the COMPOSER-side member of this set and was missing from it until
+# 2026-08-24 (a771a1611d28) — it landed two days earlier and was flagged by this lint from its
+# first run, which is a false positive of exactly the kind the list exists to retire: it pastes,
+# READS THE PANE BACK (composer_content + paste_readback_ok) and sends its CR only on proof, i.e.
+# the same three-step contract as it2_type_verified against a different surface. It is now the
+# ONLY paste route into a live composer in this tree — the blind it2_paste_submit was deleted in
+# the same commit — so a raw send outside it is a landmine with no remaining excuse.
 EMBEDDED_SANCTIONED="$(cat <<'SANCT'
 it2_type_verified
 _it2_type_line
+it2_paste_submit_verified
 osa_type_verified
 _cc_tv_type_line
 _cc_tv_scrub_type_read
@@ -118,9 +127,16 @@ SANCT
 # onto osa_type_verified while this lint was written, and deleting them is what the ratchet's
 # downward half demanded once that rewire landed. Do not re-add them.
 #
-# The two handoff-fire entries are the real grandfathers: as_write() types `/exit` at a pane and
-# it2_paste_submit() submits a brief into what it has proven is a composer — both older than this
-# rule, both still owed a routing through a verified helper.
+# handoff-fire.sh::as_write is the real grandfather: it types `/exit` at a pane, it is older than
+# this rule, and it is still owed a routing through a verified helper.
+#
+# ITS SIBLING IS GONE, WHICH IS THE RATCHET'S DOWNWARD HALF ACTUALLY TURNING. `handoff-fire.sh::
+# it2_paste_submit` sat here from the day this lint shipped, described as "submits a brief into
+# what it has proven is a composer … still owed a routing through a verified helper". That debt was
+# paid on 2026-08-24 (backlog a771a1611d28): its one caller — the INC-4 engagement resend — was
+# migrated onto it2_paste_submit_verified, which reads the composer back before any CR, and the
+# blind function was deleted rather than left callable. Do not re-add the line; a new blind paste
+# helper is a new violation, not a returning grandfather.
 #
 # bin/cc-pane::drv_iterm2_send is the FIRST entry this lint did not ship with, and the reason it is
 # here rather than fixed is worth stating. It arrived on main 2026-08-07, independently of this
@@ -134,7 +150,6 @@ SANCT
 # while silently exempting it would defeat the whole point of the ratchet. Tracked in the backlog.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 scripts/handoff-fire.sh::as_write
-scripts/handoff-fire.sh::it2_paste_submit
 bin/cc-pane::drv_iterm2_send
 ALLOW
 )"

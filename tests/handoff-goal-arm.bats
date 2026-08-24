@@ -17,8 +17,9 @@
 #      contains the condition verbatim whether or not the command was accepted, so a grep -F oracle
 #      would report success for an over-cap /goal that set nothing.
 #   3. FAILS CLOSED, IN THE RIGHT DIRECTION. arm_goal can never fail the fire (message 1 has already
-#      landed and been proven to engage) and can never type into a shell (it2_paste_submit's
-#      composer_owned gate). Both halves are asserted, including the never-non-zero contract.
+#      landed and been proven to engage) and can never type into a shell (the composer_owned gate
+#      inside it2_paste_submit_verified). Both halves are asserted, including the never-non-zero
+#      contract.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"

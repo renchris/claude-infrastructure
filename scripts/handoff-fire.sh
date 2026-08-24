@@ -2047,31 +2047,16 @@ EOF
   return 1
 }
 
-# INC-4 engagement RESEND: re-inject the (multi-line) BRIEF into what should be the fired session's
-# claude composer. Same bracketed-paste atomicity so that IF claude has not yet taken the pane (still
-# a shell) the brief lands as ONE inert buffer blob instead of flooding line-by-line as commands (the
-# ttys018 catastrophe).
-#
-# OWNERSHIP-GATED (item b3d1a77c75ae). This used to send CR with NO verification of any kind, on the
-# stated assumption that "the target is Ink's composer, not a shell input line". The cold --worktree
-# auto-submit race FALSIFIES exactly that assumption — this function runs only on the path where
-# engagement was NOT observed, i.e. precisely when CC may never have taken the pane. Bracketed paste
-# prevents the line-by-line FLOOD but does NOT prevent EXECUTION: it converts a flood into one
-# mangled command, which is itself a prime zsh CORRECT trigger, and the CR then runs it. So the CR is
-# now gated on positive proof of ownership; absent that proof this ABSTAINS ENTIRELY — it sends
-# neither the paste nor the CR, because a brief left sitting in a shell's input buffer is a loaded
-# gun for the operator's next Enter. Abstaining is loud, and the caller already fails loud on the
-# re-poll, so a lost resend can never read as a successful fire.
-it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 1 abstained or send failed
-  local it2="$1" id="$2" text="$3"
-  if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
-    echo "⚠ engagement resend ABSTAINED — no proof a live CC session owns pane $id (it may still be a shell); refusing to submit a brief into it" >&2
-    return 1
-  fi
-  hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
-  /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-  hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
-}
+# INC-4 engagement RESEND — re-injecting the (multi-line) BRIEF into what should be the fired
+# session's claude composer — HAS NO HELPER OF ITS OWN ANY MORE. It used to: `it2_paste_submit`,
+# ownership-gated (item b3d1a77c75ae) but content-BLIND, a bracketed paste followed by an unread
+# CR. It was deleted with its last caller's migration onto it2_paste_submit_verified (below,
+# a771a1611d28) rather than left in the tree, for the reason the ownership gate was added in the
+# first place: this path runs ONLY where engagement was not observed, i.e. precisely where CC may
+# never have taken the pane, and a callable blind-CR primitive is a loaded gun whether or not
+# anything currently calls it. Its ownership gate, its bracketed-paste atomicity and its
+# abstain-loudly polarity all survive inside the verified form; what does not survive is the blind
+# CR. `scripts/typed-send-lint.sh`'s allowlist lost its grandfather line in the same commit.
 
 # ---- COMPOSER-CONTENT oracle (recycle-100p 2026-08-22 — docs/research/recycle-100p-2026-08-22.md)
 # What is sitting UNSUBMITTED in a live CC composer? The injection sites that type into one
@@ -2152,17 +2137,72 @@ recycle_nudge_decision() { # $1=it2-bin $2=sid
   return 0
 }
 
+# ---- PASTE READ-BACK oracle: what the composer SHOWS after a bracketed paste -------------------
+# MEASURED, not inferred (live CC pane, tmux 120x40, 2026-08-24 — five pastes, screens in
+# docs/research/recycle-100p-2026-08-22.md § "The multi-line read-back is a PLACEHOLDER"). A
+# composer does NOT echo a pasted BRIEF: above either of two thresholds CC swaps the whole payload
+# for a PLACEHOLDER and the text never reaches the screen at all.
+#
+#   pasted text                             composer body (verbatim)      read-back, space-stripped
+#   ≤800 chars AND ≤2 newlines              the text itself               the text
+#   otherwise, 0 newlines                   [Pasted text #1]              [Pastedtext#1]
+#   otherwise, N>0 newlines                 [Pasted text #1 +N lines]     [Pastedtext#1+Nlines]
+#
+# THIS REFUTES THE "tail-anchored multi-line read-back" this function was asked for (backlog
+# a771a1611d28): there is no tail on screen to anchor to. `+N lines` is the newline COUNT, not the
+# line count (CC counts /\r\n|\r|\n/g), and the `paste again to expand` hint renders BELOW the
+# bottom border, i.e. outside composer_content's box — so the placeholder is the composer's WHOLE
+# content and an anchored match on it is exact.
+#
+# WHY THE UNION AND NOT CC's OWN BRANCH. Both renderings are accepted for any text rather than
+# predicting which one CC will pick. Deliberate: the 800 is a constant inside a binary that can
+# change under us, and `${#text}` counts codepoints where CC counts UTF-16 units — encoding that
+# guess buys nothing and goes stale silently, in the direction that BREAKS the fire path (a
+# false MANGLED withholds the CR and INC-4 stops recovering). Nothing is lost by the union: the
+# caller has just PROVEN the composer empty, so the only paste it can be holding is this one, and
+# both forms are anchored whole-content matches — the hybrid shape this exists to catch
+# (`also fix the margin[Pasted text #1 +19 lines]`, measured) matches neither.
+_paste_newlines() { # $1=text → stdout: newline count, \r\n|\r|\n each counted ONCE (CC's own regex)
+  local s="${1-}" nl
+  s="${s//$'\r\n'/$'\n'}"; s="${s//$'\r'/$'\n'}"
+  nl="${s//[!$'\n']/}"
+  printf '%s' "${#nl}"
+}
+
+paste_readback_expect() { # $1=text → stdout: the read-back forms a human should look for
+  local nl; nl="$(_paste_newlines "${1-}")"
+  if [ "$nl" -gt 0 ]; then printf 'the text itself, or [Pasted text #N +%s lines]' "$nl"
+  else printf 'the text itself, or [Pasted text #N]'; fi
+}
+
+paste_readback_ok() { # $1=pasted-text $2=space-stripped read-back → rc 0 proven / 1 mismatch
+  local text="${1-}" got="${2-}" nl want ere
+  want="$(printf '%s' "$text" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]')"
+  [ -n "$want" ] && [ "$got" = "$want" ] && return 0            # inline form (short, ≤2 newlines)
+  nl="$(_paste_newlines "$text")"
+  if [ "$nl" -gt 0 ]; then ere="^\[Pastedtext#[0-9][0-9]*[+]${nl}lines\]$"
+  else                     ere="^\[Pastedtext#[0-9][0-9]*\]$"; fi
+  printf '%s' "$got" | LC_ALL=C grep -qE "$ere"                 # placeholder form, N pinned exactly
+}
+
 # VERIFIED composer paste — the cc-type-verified.sh discipline adapted to the one surface where
 # scrub-and-retype is IMPOSSIBLE (no safe scrub, above). So instead of retyping on mangle it
 # (a) refuses to paste until the composer is PROVEN EMPTY (bounded pre-wait — a held operator
-# draft defers us, never the reverse), (b) refuses to submit unless the read-back shows EXACTLY
-# the pasted text, and (c) on mismatch leaves the composer untouched for a human — unsubmitted
-# text is recoverable; a submitted hybrid is not (that is the mangle class this exists to end).
+# draft defers us, never the reverse), (b) refuses to submit unless the read-back is one of the
+# two forms paste_readback_ok proves for THIS payload, and (c) on mismatch leaves the composer
+# untouched for a human — unsubmitted text is recoverable; a submitted hybrid is not (that is the
+# mangle class this exists to end).
+#
+# THE ONE CALLER IT USED TO HAVE IS NOW BOTH: the fire path's INC-4 brief resend was migrated onto
+# this function (a771a1611d28) and the blind-CR `it2_paste_submit` it used to call was DELETED, so
+# no unverified paste primitive survives in this file. A brief is multi-line and >800 chars, which
+# is exactly why paste_readback_ok exists — the old byte-equality read-back would have called every
+# real brief MANGLED.
 #   rc 0 pasted+verified+submitted · 1 send failed · 2 abstained (ownership / unreadable screen) ·
 #   3 HELD (composer stayed non-empty through the pre-wait) · 4 MANGLED (read-back mismatch — CR NOT sent)
 it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait-s]
   local it2="$1" id="$2" text="$3" wait="${4:-${FIRE_PASTE_PREWAIT:-30}}"
-  local ivl="${FIRE_PASTE_PREIVL:-5}" t=0 c crc want got
+  local ivl="${FIRE_PASTE_PREIVL:-5}" t=0 c crc got
   if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
     echo "⚠ verified paste ABSTAINED — no proof a live CC session owns pane $id" >&2
     return 2
@@ -2182,10 +2222,9 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
   done
   hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
   /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-  want="$(printf '%s' "$text" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]')"
   got="$(composer_content "$it2" "$id")" && crc=0 || crc=1
-  if [ "$crc" != 0 ] || [ "$got" != "$want" ]; then
-    echo "⚠ verified paste MANGLED — read-back saw '$(printf '%.80s' "${got:-<unreadable>}")', expected the pasted text; CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
+  if [ "$crc" != 0 ] || ! paste_readback_ok "$text" "$got"; then
+    echo "⚠ verified paste MANGLED — read-back saw '$(printf '%.80s' "${got:-<unreadable>}")', expected $(paste_readback_expect "$text"); CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
     return 4
   fi
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
@@ -2610,8 +2649,21 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
   [ -n "$ENGAGE_WEDGED" ] && return 4
   echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
+  # VERIFIED RESEND (a771a1611d28). This was the LAST blind CR in the fire path: it pasted the whole
+  # brief and pressed Enter without ever reading the composer back, which is the same defect the
+  # /goal arm was fixed for on 2026-08-22 — and worse here, because the payload is a whole brief
+  # rather than one line. The verified form adds the two proofs the ownership gate could not give:
+  # the composer is PROVEN EMPTY before the paste (so a resend can never append to, and then submit,
+  # an operator draft — INC-4's own ground truth is an EMPTY composer, so this defers nothing real),
+  # and the read-back must show exactly this paste (as the text, or as CC's placeholder for it —
+  # paste_readback_ok) before any CR.
+  #
+  # THE RESEND STAYS BEST-EFFORT, DELIBERATELY. Every non-zero is loud on stderr from inside the
+  # helper and none of them is a verdict here: the re-poll below is what decides, and it fails the
+  # fire LOUD on its own evidence. A withheld CR therefore costs a recovery, never a false "→ fired".
   if [ -n "$pane" ] && [ -n "$it2" ] && [ -n "$resend" ]; then
-    it2_paste_submit "$it2" "$pane" "$resend" || true   # bracketed-paste: no flood if pane is still a shell
+    it2_paste_submit_verified "$it2" "$pane" "$resend" \
+      || echo "⚠ INC-4 resend did not submit (see the reason above) — re-polling on the original launch only" >&2
   fi
   t=0
   while [ "$t" -lt "$retry" ]; do
@@ -4245,8 +4297,8 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 # landed and been PROVEN to engage before this runs, so every failure here leaves a session that has
 # its brief and is working. It can never produce the inverse — a goal with no brief — because the
 # goal is never the carrier of the brief. Concretely: arm_goal never fails the fire (the caller
-# ignores its status), and it2_paste_submit ABSTAINS unless composer_owned proves a live CC session
-# owns the pane, so it can never type into a shell.
+# ignores its status), and it2_paste_submit_verified ABSTAINS unless composer_owned proves a live CC
+# session owns the pane, so it can never type into a shell.
 #
 # AND IT IS READ BACK, never claimed. A paste that "succeeded" is not a goal that was SET (memory
 # claimed-outcome-vs-checked-outcome — a `|| true` plus a damping marker on a fake success deletes

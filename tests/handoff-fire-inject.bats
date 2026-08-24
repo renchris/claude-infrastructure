@@ -15,7 +15,8 @@
 #      line BEFORE any CR. The load-bearing safety property: a line that does NOT verify is NEVER
 #      submitted (no Enter), so a mangled command can never execute.
 # Plus: graceful degradation (final attempt falls back to a plain send, still echo-gated) and the
-# multi-line RESEND helper (it2_paste_submit) pastes-then-submits atomically (no line-by-line flood).
+# multi-line RESEND helper (it2_paste_submit_verified) pastes-then-submits atomically (no
+# line-by-line flood) after proving the composer holds exactly that paste.
 #
 # Functions are extracted from the real script (same technique as handoff-splitright.bats). REAL_IT2
 # is stubbed with a fake it2 that RECORDS every `session send` as an event (CTRLU / CR / PASTE / PLAIN)
@@ -111,12 +112,42 @@ SH
   eval "$(grep -E "^FIRE_NOCORRECT_LINE=" "$HF")"
   eval "$(sed -n '/^_it2_type_line() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^it2_type_verified() {/,/^}/p' "$HF")"
-  eval "$(sed -n '/^it2_paste_submit() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^_paste_newlines() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^paste_readback_expect() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^paste_readback_ok() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^it2_paste_submit_verified() {/,/^}/p' "$HF")"
+  export FIRE_PASTE_PREWAIT=0 FIRE_PASTE_PREIVL=0.01
 
   CMD='cd /private/tmp/wt-x && claude3 --effort max "$(cat /tmp/fire-abc.txt)"'
 }
 
 set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
+
+# The verified paste reads the COMPOSER twice — a proven-empty pre-check, then the read-back — and
+# this suite's fake it2 serves a raw echo of the wire, not an Ink input box. So composer_content is
+# stubbed here rather than driven: its parse is another suite's subject entirely
+# (tests/handoff-composer-gate.bats), and what these tests are about is the paste mechanics.
+# The phase counter is a FILE because composer_content runs inside $(…) — a shell counter would
+# increment in a subshell and every read would serve the pre screen forever.
+stub_composer() {   # $1 = the read-back the SECOND read should show (space-stripped); pre = EMPTY
+  CPOST="$1"; CPHASE="$BATS_TEST_TMPDIR/cphase"; : > "$CPHASE"
+  composer_content() {
+    echo r >> "$CPHASE"
+    if [ "$(wc -l < "$CPHASE")" -le 1 ]; then printf ''; else printf '%s' "$CPOST"; fi
+    return 0
+  }
+}
+
+# What the composer SHOWS for a payload — the measured rule, mirrored here so a fixture cannot
+# quietly disagree with the oracle it is testing (>800 chars or >2 newlines ⇒ placeholder).
+readback_of() {  # $1 = payload → the space-stripped composer content CC would render
+  local t="$1" nl; nl="$(_paste_newlines "$t")"
+  if [ "${#t}" -gt 800 ] || [ "$nl" -gt 2 ]; then
+    if [ "$nl" -gt 0 ]; then printf '[Pastedtext#1+%slines]' "$nl"; else printf '[Pastedtext#1]'; fi
+  else
+    printf '%s' "$t" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]'
+  fi
+}
 
 @test "it2_type_verified: happy path — bracketed-pastes, verifies the echo, THEN submits" {
   set_mode perfect
@@ -182,10 +213,11 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
   ! grep -q '^CR$' "$EVENTS"
 }
 
-@test "it2_paste_submit: pastes the multi-line brief atomically then submits (no flood)" {
+@test "it2_paste_submit_verified: pastes the multi-line brief atomically then submits (no flood)" {
   composer_owned() { return 0; }          # ownership PROVEN — this test is about the paste mechanics
   local brief=$'first line of brief\nsecond line: run the gate\n<!-- marker HANDOFF-ENGAGE-x -->'
-  run it2_paste_submit "$FAKE_IT2" SID "$brief"
+  stub_composer "$(readback_of "$brief")"
+  run it2_paste_submit_verified "$FAKE_IT2" SID "$brief"
   [ "$status" -eq 0 ]
   # Exactly one PASTE then one CR — the brief never goes out as line-by-line commands.
   [ "$(grep -cE '^(PASTE|PLAIN)$' "$EVENTS")" -eq 1 ]
@@ -279,37 +311,58 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
   done
 }
 
-# ---- D2: the RESEND's blind CR is gated on POSITIVE proof that CC owns the pane ------------------
-# The defect: it2_paste_submit sent CR with no verification of any kind, on the assumption that the
+# ---- D2: the RESEND is gated on POSITIVE proof that CC owns the pane -----------------------------
+# The defect: the resend helper sent CR with no verification of any kind, on the assumption that the
 # target is Ink's composer. verify_engagement calls it EXACTLY on the path where engagement was not
 # observed — i.e. precisely when CC may never have taken the pane and the target is still a shell.
+#
+# THE HELPER CHANGED, THE PROPERTY DID NOT (a771a1611d28, 2026-08-24). The resend used to call
+# `it2_paste_submit`: ownership-gated after b3d1a77c75ae, but content-blind — it pasted and pressed
+# Enter without ever reading the composer back. It was migrated onto it2_paste_submit_verified and
+# then DELETED, so these tests moved with it. Two consequences to read the assertions with: the
+# ownership abstention now returns 2 rather than 1 (the verified form spends 1 on a failed send),
+# and a proven-owned pane must ALSO read back before any CR.
 
-@test "it2_paste_submit: RED-PROOF — unproven ownership ABSTAINS (no paste, no CR) and is loud" {
+@test "it2_paste_submit_verified: RED-PROOF — unproven ownership ABSTAINS (no paste, no CR) and is loud" {
   composer_owned() { return 1; }           # the pane is (or may be) still a shell
   local brief=$'run the gate\nthen land'
-  run it2_paste_submit "$FAKE_IT2" SID "$brief"
-  [ "$status" -ne 0 ]
+  run it2_paste_submit_verified "$FAKE_IT2" SID "$brief"
+  [ "$status" -eq 2 ]
   ! grep -qE '^(PASTE|PLAIN)$' "$EVENTS" || false   # nothing is left sitting in a shell's buffer…
   ! grep -q '^CR$' "$EVENTS" || false               # …and above all, no Enter
   printf '%s\n' "$output" | grep -q 'ABSTAINED'     # named, never silent
 }
 
-@test "it2_paste_submit: POSITIVE CONTROL — proven ownership still pastes and submits" {
+@test "it2_paste_submit_verified: POSITIVE CONTROL — proven ownership pastes, reads back, submits" {
   composer_owned() { return 0; }
-  run it2_paste_submit "$FAKE_IT2" SID "brief"
+  stub_composer "$(readback_of brief)"
+  run it2_paste_submit_verified "$FAKE_IT2" SID "brief"
   [ "$status" -eq 0 ]
   grep -q '^PASTE$' "$EVENTS"
   grep -q '^CR$' "$EVENTS"
 }
 
-@test "it2_paste_submit: CC_FIRE_COMPOSER_GATE=off is a real escape hatch" {
+@test "it2_paste_submit_verified: a proven-owned pane whose read-back DISAGREES gets no CR" {
+  # The half the ownership gate never covered: CC owns the pane, and something else is in the
+  # composer anyway. This is the fire path's own race — the operator typing into the pane the
+  # resend is about to paste into — and it is why ownership alone was never enough.
+  composer_owned() { return 0; }
+  stub_composer "somethingelseentirely"
+  run it2_paste_submit_verified "$FAKE_IT2" SID "brief"
+  [ "$status" -eq 4 ]
+  grep -q '^PASTE$' "$EVENTS"
+  ! grep -q '^CR$' "$EVENTS" || false
+}
+
+@test "it2_paste_submit_verified: CC_FIRE_COMPOSER_GATE=off is a real escape hatch" {
   composer_owned() { return 1; }
+  stub_composer "$(readback_of brief)"
   # Prove the gate is LIVE first — otherwise "the switch turned it off" is indistinguishable from
   # "there was never a gate", and this test would certify a tree with no gate at all.
-  run it2_paste_submit "$FAKE_IT2" SID "brief"
-  [ "$status" -ne 0 ]
-  : > "$EVENTS"
-  CC_FIRE_COMPOSER_GATE=off run it2_paste_submit "$FAKE_IT2" SID "brief"
+  run it2_paste_submit_verified "$FAKE_IT2" SID "brief"
+  [ "$status" -eq 2 ]
+  : > "$EVENTS"; stub_composer "$(readback_of brief)"
+  CC_FIRE_COMPOSER_GATE=off run it2_paste_submit_verified "$FAKE_IT2" SID "brief"
   [ "$status" -eq 0 ]
   grep -q '^CR$' "$EVENTS"
 }
