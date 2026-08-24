@@ -87,6 +87,125 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #179: rule 7's pin predicate failed on exactly the suites that
+  were CORRECT, and the fix had been applied to every one of its siblings and never to it.
+  filed 1 / closed 1 / 2 commits (CODE + docs). TWENTY-THIRD CONSECUTIVE close overall.** Warm
+  effort declared in my FIRST line, before any work: this is a **HOLD** on
+  `master-convergence-deadlock` — **23 open / 6 blocked** at my open and unchanged at my close, every
+  one of those 23 plan-scale or carrying a standing warning. ⚠️ The operator-set goal again asked that
+  condition to reach **0 open** in one recycle; it cannot, and saying so plainly is the report. It
+  also named the WRONG successor for the **TENTH consecutive time** (its text says "recycle #171";
+  §2.1's newest entry was #178, so I am #179 and I fired **#180**). Board at my close:
+  **open 318 / blocked 193 / done 2213 / claimed 1**.
+
+  🚨 **MY NET EFFECT ON THE BOARD WAS ZERO, AND THAT IS THE STRUCTURAL FINDING OF THIS RECYCLE.** I
+  filed `722210a91870` and closed it in the same session, so the two cancel: `ungrouped` moved
+  214 → 215 entirely on a SIBLING's row, not mine. The chain's own rule sent me here — "file it
+  before working it" is right for an unfiled lead, and the strongest lead #178 left was unfiled — but
+  applied to a lead THE CHAIN ITSELF GENERATED it produces a recycle that does real engineering and
+  drains nothing. 🆕 **A recycle whose pick comes from the predecessor's brief rather than from the
+  store should expect a net-zero board move and should say so rather than presenting the filing as
+  drain.** If the goal's "closed >= filed" is to mean drain, the pick has to come from the STORE.
+
+  🆕 **AN EIGHTH WINDOW SHAPE, and it is a blind spot in the audit rather than a new population
+  event: MY OWN ID APPEARS IN NEITHER DIRECTION.** `comm` at the actual close showed
+  `LEFT(only-at-open)` EMPTY and four arrivals (`8ce6eccd7a89`, `b19974f7ba82`, `d1d51881cca1`,
+  `d26bf99b6e9a`, all siblings). A row filed AND closed BETWEEN the two snapshots is invisible to the
+  window by construction — it was never in the open set at either end. #172 saw FLAT; #173 moved by
+  more than its own effect; #174/#175 saw exactly their own id leave; #176 FLAT by construction;
+  #177 saw its own id leave and nothing arrive; #178 saw its id leave plus two arrivals. **Re-fold,
+  and do not read an empty LEFT as "I closed nothing".**
+
+  **ROW CLOSED — `722210a91870`** (filed and fixed this session), landed as *fix(hermeticity-lint):
+  rule 7's pin predicate failed on the suites that were correct* — **cite by SUBJECT, never by sha; a
+  land rebases.** `is_admit_pinned()` was the LAST `producer | grep -q` predicate in
+  `scripts/test-hermeticity-lint.sh`. What generalises:
+
+  · 🆕 **METHOD 136 — RUN THE TWIN DIFF IN BOTH DIRECTIONS; #178 ONLY RAN ONE.** #178's method 135
+    ported rule 7's third form-2 clause BACK to rule 2 and told the successor to look for more of
+    these. The one it did not check is the direction it had just travelled: what has rule 2 (and 3,
+    and 8) got that rule 7 has not? Answer: **pipe-freedom**. Rules 1-4 and 8 were all converted from
+    `producer | grep -q` to here-strings; rule 7 was cloned from rule 2 BEFORE that conversion and
+    kept the pipe, and the conversion commit never revisited it. **A twin diff run one way is half a
+    twin diff.** The cheap mechanical form: `grep -n '| *grep -q'` over the file — it returned
+    exactly one predicate, and that predicate was the answer.
+  · 🆕 **METHOD 137 — A GUARD CAN FAIL PRECISELY BECAUSE ITS SUBJECT IS COMPLIANT.** `grep -q` exits
+    at the FIRST match, so the producer only ever gets SIGPIPE when the pin IS present. Under
+    `set -o pipefail` that promotes 141, which is neither 0 nor 1, so it falls through the
+    predicate's case, exhausts all three retries DETERMINISTICALLY, latches `CHECK_FAILED` and exits
+    the whole lint 2 — a land GATE-KILLED on an unchanged tree, under a banner telling you to wait
+    for a quieter box. **The more compliant the tree, the likelier the non-verdict.** This file
+    already had that incident once (RULE 4's HERE-STRINGS block, rule 1, 36/40, three `/ship` runs
+    killed at load 0.31); rule 7 was the same bug still standing.
+  · 🆕 **METHOD 138 — REPORT A LATENT HAZARD AS LATENT, AND LET THE PRECEDENT CARRY THE FIX.**
+    Method 134 says re-run the population claim; here the honest answer went AGAINST urgency and I
+    kept it anyway. Measured through `setup_statements()` and never a file grep (method 133): the
+    largest setup body across all 534 suites is **4,457 B** against a **65,536 B** pipe buffer — a
+    14.7x margin, so **ZERO verdicts flip at this land**. The fix is justified not by the measurement
+    but by the file's OWN precedent: RULE 4's block used to argue the other predicates were safe
+    because their inputs were "small enough that it has never been observed", **and that bet LOST**;
+    `is_orphan_pinned()` already took this decision on identical-shape grounds without waiting for a
+    trigger. **The only thing keeping rule 7 safe was that a bash printf builtin issues ONE write for
+    a 4.5 KB string, and nothing in the tree enforces that it stays 4.5 KB.**
+  · 🆕 **METHOD 139 — WHEN THE HAZARD HAS A THRESHOLD, THE FIXTURE MUST BE BUILT, NOT FOUND, AND THE
+    HARNESS MUST ASSERT IT REACHED THE REGIME.** No fixture anywhere in this lint's 144-case battery
+    could reach the branch, because reaching it needs a setup() body past the pipe buffer and no real
+    suite has one (memory: `control-fixture-must-reach-the-bugs-regime`). Both the red-proof and the
+    new selftest case therefore MEASURE their own fixture through `setup_statements()` and REFUSE
+    below 65536 rather than passing green — and both keep a deliberately SMALL fixture as a control
+    that agrees in both arms, which is exactly what the vacuous version of this proof would have
+    looked like.
+  · **THE BRANCH HAD NO TEST OF ANY KIND — which is how it survived the conversion of every
+    sibling.** #178 said this in terms about form 2 and told the successor to grep the other
+    predicates for untested branches; that is the same seam, and it is still worth sweeping.
+
+  **THE RED-PROOF WAS TWO-ARM, POSITION-CONTROLLED AND SIZE-CONTROLLED.** Save the fixed file,
+  `git checkout $MB --` the pre-fix one, run, restore via `trap … EXIT`, run again:
+
+      ARM A  pre-fix   frontpin rc=2 nonverdict=1 | endpin rc=0 | nopin rc=1 ambient=1 | smallpin rc=0
+      ARM B  post-fix  frontpin rc=0 nonverdict=0 | endpin rc=0 | nopin rc=1 ambient=1 | smallpin rc=0
+      verdict=PROVED
+
+  Three controls agree across BOTH arms and each kills a different wrong reading: **`endpin`** is the
+  same 108 KB with the pin at the END, so grep cannot exit early — its agreement is what makes the
+  named case a claim about WHERE the match sits rather than about file size; **`nopin`** is a real
+  AMBIENT violation in both arms, proving the lint can still say no; **`smallpin`** is 82 bytes and
+  agrees in both, which is the vacuous proof this would have been. Six anti-vacuity conditions exit
+  2 (saved file empty / carries no fix / still has piped sites / checkout did not restore all five
+  piped sites / restore lost the fix / **fixture below the regime**), and a control diverging across
+  arms exits 3 as `MUTANT-TOO-WIDE`. `redproof-179.sh` is worth copying wholesale.
+
+  ⚠️ 🆕 **`gate-select.sh --explain | grep prose-cited` RETURNS NOTHING ON A CODE-ONLY COMMIT, AND
+  THAT IS CORRECT, NOT VACUOUS — but I could not tell which until I read the selector.** The label
+  for a CODE path is `cited:`; `prose-cited` is emitted only for PROSE paths (`gate-select.sh:578`
+  vs `:594`). My code commit produced **61** `cited:` suites and **0** `prose-cited`, and the `cited`
+  set is deliberately NOT direct. So the brief's recipe is right and its rationale is worth stating:
+  run `--direct` for the owed set, and re-run `--explain` for `prose-cited` **after the docs
+  commit**, which is the commit that touches prose at all.
+
+  **GATES: 5 direct suites, sequential, four separate verdict columns — 306 tests, 0 not-ok, every
+  suite with a real plan.** `cloud-refusal-route` 46/46 · `gate-ownscope-leak` 21/21 ·
+  `herm-suite-memo` 7/7 · `ship-land` 150/150 · `test-hermeticity-lint` 82/82. Embedded selftest
+  **144/144 → 147/147**, `SELFTEST_RC=0`, 0 `SELFTEST FAIL`. Bare `shellcheck` rc 0 — ⚠️ **my first
+  draft raised three SC2016 on generated fixture lines and I did NOT silence them with a disable
+  directive** (a disable binds to the NEXT construct; inserting below one steals it — memory:
+  `lint-directive-binds-to-the-next-construct`); the fixture's static halves moved to QUOTED
+  heredocs, which is the idiom every other fixture in that battery already uses.
+
+  ⚠️ **TIMING, because the brief's figure is stale in the unhelpful direction:**
+  `tests/test-hermeticity-lint.bats` took **~40 minutes**, not the ~8 the brief carries, and
+  `tests/herm-suite-memo.bats` took 7 minutes for 7 tests. Several cases invoke `--selftest`, which
+  is ~7 minutes by itself. **The Bash tool's poll loop died at its 10-minute ceiling THREE times and
+  every run was fine — the kill is the POLLER. Re-poll, do not conclude.**
+
+  🆕 **STILL UNFILED AND DELIBERATELY NOT FILED BY ME:** `tests/fire-autonomy.bats:256`. I confirmed
+  the shape the brief describes — the `return 0` IS inside an `@test` body (the test opens at :241)
+  and the file carries **14** SC2317 findings under the lint's own EXCLUDE_DEFAULT. But it is **not
+  the one-line change the brief hopes for**: SC2317 fires on statements after EVERY `return` in a
+  body shellcheck parses as a command group, so rewriting the final `return 0` addresses only its own
+  finding. I did not file it because filing without closing would have ended this recycle
+  net-positive on filings, which the goal forbids — it stays in the brief, as it has since #172.
+
 - **2026-08-24 — drain recycle #178: the row said the population was zero; it was one, and the
   census that said zero walked into the rule's own documented trap. filed 1 / closed 1 /
   2 commits (CODE + docs). TWENTY-SECOND CONSECUTIVE close overall.** Warm effort declared BEFORE
