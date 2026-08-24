@@ -489,7 +489,7 @@ EOF
   # 2. It is EMPTY on purpose. A boot commit that carried content would advance the ref AND put a
   #    byte on a branch the reconciler then has to land — the property both sides key on is
   #    "introduces no content", so `--allow-empty` is the instruction, never a touched file.
-  ! grep -qE 'touch |echo .* >> ' "$BATS_TEST_TMPDIR/create.log"
+  ! grep -qE 'touch |echo .* >> ' "$BATS_TEST_TMPDIR/create.log" || false
   # 3. FIRST, not last — the whole distinction between this and the pre-fix payload. The boot block
   #    must come before the return-your-work block, and it must say so in words the VM cannot read
   #    as end-of-session housekeeping.
@@ -497,7 +497,11 @@ EOF
   ret="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
   [ -n "$first" ] || { echo "nothing in the payload marks the push as the FIRST act"; false; }
   [ "$first" -lt "$boot" ] || { echo "the FIRST ACT heading must introduce the boot commit"; false; }
-  [ -n "$ret" ] && { [ "$boot" -lt "$ret" ] || { echo "the boot commit must precede the return-your-work block"; false; }; }
+  # Stated as two REQUIREMENTS, not as a guard. The fixer's uniform `|| false` on the guarded form
+  # made the block mandatory anyway while still reading as optional — and it IS mandatory: the
+  # payload always carries the return-your-work block, so a missing one is a defect, not a skip.
+  [ -n "$ret" ] || { echo "the payload lost its return-your-work block"; false; }
+  [ "$boot" -lt "$ret" ] || { echo "the boot commit must precede the return-your-work block"; false; }
   # 4. And the reason is IN the brief, because a VM that does not know why will reorder it.
   grep -q 'never booted' "$BATS_TEST_TMPDIR/create.log"
 }
