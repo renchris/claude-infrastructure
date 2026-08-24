@@ -134,6 +134,31 @@ ROOT="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd -P)" || ROOT=""
 STOCK_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 PY="/usr/bin/python3"
 
+# ── THE POPULATIONS, NAMED ONCE ──────────────────────────────────────────────────────────────────
+# The dirs a launchd job's target script may live in. Read TWICE below — once as an ERE alternation
+# inside plist_target_scripts, once as pathspecs in EMBEDDED_SCOPE — so the regex and the declared
+# scope cannot say different things about which targets this lint can reach.
+PLIST_TARGET_DIRS='scripts|bin|hooks'
+
+# Every path shape lint_tree can EMIT A FINDING ABOUT, as git pathspecs. Three populations feed it:
+#   hooks/*      hook_population()  — every hooks/*.sh in the tree
+#   tests/*      bats_population()  — every tests/*.bats in the tree
+#   $PLIST_TARGET_DIRS  the scripts each launchd plist executes; emit() names the TARGET, never the
+#                       plist, so `launchd/*` is deliberately absent — no finding and no allowlist
+#                       key has ever carried a plist path, and an own-set entry that can never match
+#                       a finding is inert weight that reads as coverage.
+# Built from PLIST_TARGET_DIRS rather than spelled out, so widening the plist regex widens the
+# declared scope in the same edit. De-duplicated because hooks/ is in two populations at once — a
+# repeated pathspec is harmless to git, but a reader has to stop and work that out.
+# The `${VAR//|/ }` expansion is unquoted for word-splitting only: PLIST_TARGET_DIRS holds nothing
+# but dir names and pipes, so there is no glob character for pathname expansion to act on.
+EMBEDDED_SCOPE="hooks/* tests/*"
+for _s_d in ${PLIST_TARGET_DIRS//|/ }; do
+  case " $EMBEDDED_SCOPE " in *" $_s_d/* "*) continue ;; esac
+  EMBEDDED_SCOPE="$EMBEDDED_SCOPE $_s_d/*"
+done
+unset _s_d
+
 # ── The ratchet ──────────────────────────────────────────────────────────────────────────────────
 # One "<repo-relative-file>:<binary>" per line. Entries are grandfathered SITES, not blanket
 # exemptions for the binary: the same binary in a new file is still RED. Delete a line the moment
@@ -402,6 +427,7 @@ usage() {
 usage: unattended-path-lint.sh [ROOT]        scan a repo root (default: this script's repo)
        unattended-path-lint.sh --selftest    prove the detector still discriminates, both directions
        unattended-path-lint.sh --list        print the scanned populations and their PATHs, then exit
+       unattended-path-lint.sh --print-scope print the judged populations as git pathspecs, then exit
        unattended-path-lint.sh --emit-inventory [ROOT]
                                              print EMBEDDED_BINARY_INVENTORY unioned with every
                                              scanned word this box resolves — paste it back in.
@@ -412,6 +438,39 @@ USAGE
 }
 
 die2() { echo "unattended-path-lint: $*" >&2; exit 2; }
+
+# ── --print-scope: the populations this lint JUDGES, as git pathspecs, one per line ───────────────
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 'tests/*'`, under a
+# comment reading "the pathspec must list every population the lint judges, or a land that adds a
+# bare-name call to one of them produces an own-set without it and the finding degrades to
+# advisory." Nothing executes a comment — and that comment is a record of the drift ALREADY HAVING
+# HAPPENED ONCE: `tests/*` had to be added by hand after a bare `md5` in cc-queue.bats C12 passed
+# vacuously on every scheduled run, because the third population had been added here and the
+# pathspec over there had not moved (memory: resident-policy-must-not-restate-perishable-facts).
+#
+# NO ENV SEAM on the populations — the three env vars this lint reads move the allowlist, the
+# own-set and the inventory, never the scanned set — and that is exactly why the restatement looked
+# safe and was still worth closing: it did not need a runtime seam to come apart, it came apart from
+# a CODE edit, in the silent direction, and was found only after a test had been passing vacuously.
+#
+# BEFORE the entrypoint's `${1:-$ROOT}`, so the flag can never be taken for a scan root. It answers
+# about the lint's SHAPE, so it neither requires a readable root nor touches one.
+# An UNRUNNABLE lint (missing, or an older copy that treats this flag as a root and exits 2 with
+# nothing on stdout) is the consumer's NON-VERDICT — never an empty scope from here.
+if [ "${1:-}" = "--print-scope" ]; then
+  # Globbing OFF for the split, and this one is not cosmetic: EMBEDDED_SCOPE holds `*` characters,
+  # so an unquoted expansion would PATHNAME-EXPAND `hooks/*` against the caller's CWD and print the
+  # gate's actual hook files where a pathspec belongs. (The sibling lints print `<dir>/*` from a
+  # dir-name-only list, which has no glob character to expand — this one does.)
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  set -f
+  # shellcheck disable=SC2086  # deliberate word-split of the pathspec list; globbing is off for it
+  printf '%s\n' $EMBEDDED_SCOPE
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
+fi
 
 # ── The scanner ──────────────────────────────────────────────────────────────────────────────────
 # stdin: nothing. argv: shell files. stdout: "<file>\t<line>\t<word>" for every unquoted word in
@@ -969,10 +1028,14 @@ plist_effective_path() { # $1=plist -> stdout: a PATH string, or the LOGIN_SHELL
 # them, and the whole launchd half scanned NOTHING while reporting a clean corpus. It survived a
 # full run against the real tree looking exactly like "the plists are fine". Only the plist positive
 # control caught it, which is why the generating item made that control mandatory.
+# The dir alternation comes from PLIST_TARGET_DIRS so this regex and the scope this lint DECLARES
+# (EMBEDDED_SCOPE / --print-scope) cannot name different sets of reachable targets. Note the `\$`:
+# inside double quotes a bare `$-` would expand to the shell's option flags and silently corrupt the
+# bracket expression — the same class of quiet mangling the sed note above records.
 plist_target_scripts() { # $1=plist -> repo-relative script paths it executes
   plist_arg_strings "$1" \
-    | grep -oE '[A-Za-z0-9_./$-]*/(scripts|bin|hooks)/[A-Za-z0-9_.-]+' \
-    | sed -E 's#.*/(scripts|bin|hooks)/#\1/#' \
+    | grep -oE "[A-Za-z0-9_./\$-]*/($PLIST_TARGET_DIRS)/[A-Za-z0-9_.-]+" \
+    | sed -E "s#.*/($PLIST_TARGET_DIRS)/#\1/#" \
     | sort -u
 }
 

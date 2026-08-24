@@ -283,9 +283,22 @@ up_fixture() {
 
   # …and the caller half, asserted on ship-land's source: a re-introduced strip would silently put
   # the collapse back with every lint here still passing, because the lints never see the caller.
-  run grep -n "uown=\"\$(git diff --name-only" "$REPO/scripts/ship-land.sh"
-  [ "$status" -eq 0 ]
+  #
+  # THE ARM MOVED, THE PROPERTY DID NOT (backlog 5fc8ff411a7c). The own-set is no longer built from
+  # a pathspec spelled out in ship-land; it is DERIVED — `uown="$(lint_own_scope "$UTC_LINT" …)"` —
+  # so the line this used to grep for is gone. What must still hold is that the paths reaching the
+  # lint are UNSTRIPPED, and there are now two places a strip could be re-introduced: the arm, and
+  # lint_own_scope itself, which is shared by all eight arms and would merge the scan roots for
+  # every one of them at once. Both are checked.
+  run grep -n 'uown="\$(lint_own_scope "\$UTC_LINT"' "$REPO/scripts/ship-land.sh"
+  [ "$status" -eq 0 ] || { echo "the utc arm no longer derives its own-set from the lint" >&2; return 1; }
   case "$output" in *"sed 's:^[^/]*/::'"*) echo "ship-land strips the leading component off the utc own-set again — the three scan roots are merged" >&2; return 1 ;; esac
+  # lint_own_scope's own body: it must hand back `git diff --name-only` verbatim.
+  local body; body="$(sed -n '/^lint_own_scope() {/,/^}/p' "$REPO/scripts/ship-land.sh")"
+  [ -n "$body" ] || { echo "lint_own_scope not found — the extractor stopped matching" >&2; return 1; }
+  case "$body" in *"sed 's:^[^/]*/::'"*|*"cut -d/ -f2-"*)
+    echo "lint_own_scope strips the leading component — the collapse is back for ALL EIGHT arms" >&2; return 1 ;;
+  esac
 }
 
 @test "basename collapse: a BARE own-entry is still wide — it matches in any directory" {

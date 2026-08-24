@@ -149,6 +149,41 @@ ROOT="${CC_PIPEFAIL_ROOT:-$(cd "$(dirname "$SELF")/.." && pwd)}"
 ALLOWLIST_DEFAULT="$(dirname "$SELF")/pipefail-sigpipe-allow.txt"
 ALLOWLIST="${CC_PIPEFAIL_ALLOWLIST:-$ALLOWLIST_DEFAULT}"
 
+# ── THE POPULATION, NAMED ONCE ───────────────────────────────────────────────────────────────────
+# Every path shape this lint judges. Written as glob patterns because BOTH readers want them that
+# way: in_scope() matches a repo-relative path against them, and --print-scope hands the same words
+# to `git diff -- <pathspec>`. A git pathspec's `*` matches `/` unless `:(glob)` magic is asked for,
+# and so does bash's in a `case`, so the two agree on `bin/*` reaching `bin/lib/x`.
+#
+# NOT a superset of the file list the fallback `find` builds — that list is what the scan CONSIDERS
+# when there is no git; this is what it JUDGES, and the case below is the only gate on the latter.
+EMBEDDED_SCOPE='*.sh *.bats bin/* hooks/* scripts/*'
+
+# SPLIT ONCE, WITH GLOBBING OFF — this is not cosmetic. An unquoted `$EMBEDDED_SCOPE` is subject to
+# pathname expansion as well as word splitting, and scan() runs after `cd "$ROOT"`, so `*.sh` would
+# expand to the repo's actual shell files and the population would silently become "those specific
+# files" instead of "every .sh". Splitting here, under `set -f`, means both readers below consume a
+# QUOTED array expansion and neither can re-introduce it.
+_ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+set -f
+# shellcheck disable=SC2206  # deliberate word-split of the pattern list; globbing is off for it
+SCOPE_PATTERNS=($EMBEDDED_SCOPE)
+[ "$_ps_restore_f" -eq 1 ] || set +f
+
+# in_scope <repo-relative-path> — is this path in the judged population?
+# Factored out of scan()'s inline `case` so EMBEDDED_SCOPE is the ONLY place the population is
+# written down. The loop is ~5 pattern tests per file against a scan that already runs two greps and
+# an awk per file, so it costs nothing measurable. A `case` PATTERN is exempt from pathname
+# expansion by the standard, so the unquoted `$p` below is a pattern and never a glob result.
+in_scope() {
+  local p
+  for p in "${SCOPE_PATTERNS[@]}"; do
+    # shellcheck disable=SC2254  # the expansion IS the pattern — quoting it would match literally
+    case "$1" in $p) return 0 ;; esac
+  done
+  return 1
+}
+
 # ── the detector ─────────────────────────────────────────────────────────────────────────────────
 # One awk program, fed one file at a time. Kept in awk rather than bash+grep because the analysis is
 # positional (which stage is LAST, which command word is FIRST) and a line-regex cannot see that.
@@ -313,11 +348,13 @@ scan() {
 
   printf '%s\n' "$rel" | while IFS= read -r f; do
     [ -n "$f" ] || continue
+    # A DETECTOR MUST NOT SCAN ITSELF, nor its own suite: both necessarily CONTAIN the shapes they
+    # hunt, as fixture text. Kept ahead of in_scope so the exclusion cannot be widened away by an
+    # edit to EMBEDDED_SCOPE.
     case "$f" in
       scripts/pipefail-sigpipe-lint.sh|tests/pipefail-sigpipe-lint.bats) continue ;;
-      *.sh|*.bats|bin/*|hooks/*|scripts/*) ;;
-      *) continue ;;
     esac
+    in_scope "$f" || continue
     [ -f "$f" ] || continue
     # clause 1 — the file must actually enable pipefail
     grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" >/dev/null 2>&1 || continue
@@ -562,6 +599,34 @@ EOF"
   echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
   return 0
 }
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*' 'tests/*' 'docs/*' '*.sh'`, and that
+# restatement had ALREADY DRIFTED: it carried no `*.bats`, so a .bats file outside tests/ was judged
+# by the lint and could never appear in the own-set — the finding would drop to advisory and land.
+# It also carried `tests/*` and `docs/*`, which this lint judges only through `*.sh` and `*.bats`
+# anyway. Two populations, written down twice, already disagreeing in both directions (memory:
+# resident-policy-must-not-restate-perishable-facts).
+#
+# NO ENV SEAM on the population — CC_PIPEFAIL_ROOT moves the scan ROOT, not the shapes judged under
+# it — and that is exactly why the restatement looked safe and was still worth closing: it did not
+# need a runtime seam to come apart, and it had already come apart without one.
+#
+# The self-exclusions (this file and its own suite) are deliberately NOT expressed here. An own-set
+# entry the lint never reports simply never matches a finding, so over-approximation is inert; a
+# MISSING entry is the silent-advisory defect above. Over-approximate, never under.
+# An UNRUNNABLE lint (missing, or an older copy whose `*) usage` arm exits 2 with nothing on stdout)
+# is the consumer's NON-VERDICT — never an empty scope from here.
+case "${1:---scan}" in
+  --print-scope)
+    # The array, QUOTED — the split (and its `set -f`) already happened once, up top. Printing
+    # `$EMBEDDED_SCOPE` unquoted here would pathname-expand `*.sh` against the caller's CWD and hand
+    # the gate a list of real files where a pattern belongs.
+    printf '%s\n' "${SCOPE_PATTERNS[@]}"
+    exit 0 ;;
+esac
 
 case "${1:---scan}" in
   -h|--help) usage; exit 0 ;;

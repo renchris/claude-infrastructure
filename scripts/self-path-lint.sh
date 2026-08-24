@@ -578,6 +578,33 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"'
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# Straight off $LAYERS, which lint_tree already uses as its only scan-root list — so this is a READ
+# of the population, not a second copy of it.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*'`. That is $LAYERS written down a
+# second time, in another file, and the drift is SILENT in the dangerous direction: add a fourth
+# deployed layer here and a land introducing an unresolved `$0` under it builds an own-set WITHOUT
+# that file, so the finding drops to advisory and lands (memory:
+# resident-policy-must-not-restate-perishable-facts).
+#
+# NO ENV SEAM on $LAYERS, deliberately — and that is precisely why the restatement looked safe and
+# was still worth closing: a runtime seam is not the only way two copies come apart. A CODE edit to
+# the LAYERS line does it just as silently, with nothing to catch it.
+#
+# `<layer>/*` is an OVER-approximation by exactly one rule — lint_tree skips `*/tests/*` and its own
+# basename — and over-approximation is the safe direction here: an own-set entry the lint never
+# reports simply never matches a finding, while a MISSING entry is the silent-advisory defect above.
+# An UNRUNNABLE lint (missing, or an older copy that treats this flag as a scan root) exits non-zero
+# with nothing on stdout, which is the consumer's NON-VERDICT — never an empty scope from here.
+if [ "${1:-}" = "--print-scope" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of $LAYERS; each layer becomes one pathspec
+  for _ps_l in $LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  exit 0
+fi
+
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   # The header block, DERIVED rather than a hardcoded line range: every edit to the header would
   # otherwise silently truncate --help mid-sentence (this one had already lost the exit codes, the

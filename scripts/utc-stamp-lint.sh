@@ -49,6 +49,12 @@ while [ -L "$SELF" ]; do
 done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
+# ── THE POPULATION, NAMED ONCE ───────────────────────────────────────────────────────────────────
+# The three symlink-deployed layers this lint scans. Three sites read it — the default target list
+# below, the --selftest real-tree sweep, and --print-scope — so widening the lint is one edit, and a
+# caller that ASKS (scripts/ship-land.sh via lint_own_scope) learns the new dir for free.
+EMBEDDED_DIRS="bin hooks scripts"
+
 # ── the ratchet: files grandfathered with a lying UTC stamp. ONLY EVER DELETE LINES. ──
 # EMPTY, and that is the point — the tree was swept clean before this landed (the one historical
 # violation, cc-reaper:59, was fixed in b4e3c355). An allowlist that starts empty can only shrink.
@@ -233,7 +239,8 @@ now(){ date -u +%s; }"
   lint_dir "$d/scarpath/bin" "" "scripts/probe.sh" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an own-set naming the same basename under ANOTHER scan root blocked — the basename collapse is back"; fails=1; }
 
   # the real tree must be clean, and a bad dir is a NON-VERDICT (2), never a false all-clear
-  for real in bin hooks scripts; do
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list — see EMBEDDED_DIRS
+  for real in $EMBEDDED_DIRS; do
     lint_dir "$ROOT/$real" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
     case "$rc_real" in
       0) ;;
@@ -265,6 +272,29 @@ now(){ date -u +%s; }"
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*'`. Two populations, one written down
+# twice, and the drift is SILENT in the dangerous direction: widen EMBEDDED_DIRS here and a land
+# adding a lying Z stamp under the new dir builds an own-set WITHOUT that file, so the finding
+# degrades to advisory and lands (memory: resident-policy-must-not-restate-perishable-facts).
+#
+# NO ENV SEAM, deliberately — CC_UTC_ALLOWLIST moves the ratchet, not the scanned population, and
+# this lint takes its targets as ARGUMENTS. That is exactly why the restatement looked safe and was
+# still worth closing: a runtime seam is not the only way two copies come apart, a CODE edit to the
+# line above does it just as silently and with nothing to catch it.
+#
+# `<dir>/*` is EXACT rather than approximate: lint_dir recurses each target, and a git pathspec's
+# `*` matches `/` unless `:(glob)` magic is asked for — so the two cover the same file set.
+# An UNRUNNABLE lint (missing, or an older copy that treats this flag as a scan root) exits non-zero
+# with nothing on stdout, which is the consumer's NON-VERDICT — never an empty scope from here.
+if [ "${1:-}" = "--print-scope" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list; each dir becomes one pathspec
+  for _ps_d in $EMBEDDED_DIRS; do printf '%s/*\n' "$_ps_d"; done
+  exit 0
+fi
+
 rc=0
 # Default targets built as a real ARRAY. `for t in "${@:-$A $B $C}"` looks equivalent and is not: with
 # no args the quoted default expands as ONE word, so $target became the whole "bin hooks scripts"
@@ -274,7 +304,9 @@ rc=0
 if [ "$#" -gt 0 ]; then
   targets=("$@")
 else
-  targets=("$ROOT/bin" "$ROOT/hooks" "$ROOT/scripts")
+  targets=()
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list — see EMBEDDED_DIRS
+  for _t_d in $EMBEDDED_DIRS; do targets+=("$ROOT/$_t_d"); done
 fi
 scanned=0
 # A per-target NON-VERDICT is not a tree-red. `lint_dir` answers with THREE codes — 0 = clean,

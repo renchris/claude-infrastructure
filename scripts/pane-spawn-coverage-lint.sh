@@ -142,6 +142,39 @@
 set -uo pipefail
 
 WINDOW="${CC_PSC_WINDOW:-12}"
+
+# ── THE POPULATION, NAMED ONCE ───────────────────────────────────────────────────────────────────
+# The dirs collect_files walks. Three sites read it — collect_files, the nothing-to-scan non-verdict
+# at the foot of this file, and --print-scope — so widening the lint is one edit, and a caller that
+# ASKS (scripts/ship-land.sh via lint_own_scope) learns the new dir for free.
+PSC_DIRS="bin scripts hooks commands"
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*' 'commands/*'`. That is PSC_DIRS
+# written down a second time, in another file, and the drift is SILENT in the dangerous direction:
+# add a fifth dir here and a land introducing an uninstrumented spawner under it builds an own-set
+# WITHOUT that file, so the finding drops to advisory and lands (memory:
+# resident-policy-must-not-restate-perishable-facts) — and this lint's whole purpose is the
+# soundness of "no row ⇒ not from this tree", which one un-blocked spawner ends.
+#
+# NO ENV SEAM on the dir list, deliberately — and that is why the restatement looked safe and was
+# still worth closing: a CODE edit to PSC_DIRS parts the two copies just as silently as a runtime
+# one would, and nothing was watching for it.
+#
+# CONSUMED HERE, beside --selftest and for the identical reason stated below: `$1` becomes the scan
+# ROOT four lines down, so an unhandled flag resolves to a directory named "--print-scope".
+# `<dir>/*` is an OVER-approximation by two rules — collect_files takes only `*.sh`, `*.py` and
+# extensionless files, and skips the allowlist — and over-approximation is the safe direction: an
+# own-set entry the lint never reports simply never matches a finding, while a MISSING entry is the
+# silent-advisory defect above.
+if [ "${1:-}" = "--print-scope" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list; each dir becomes one pathspec
+  for _ps_d in $PSC_DIRS; do printf '%s/*\n' "$_ps_d"; done
+  exit 0
+fi
+
 # Consume --selftest BEFORE $1 is read as a scan root, or the flag resolves to a directory named
 # "--selftest" and the lint reports rc=2 on its own verification path.
 SELFTEST=0
@@ -371,7 +404,8 @@ psc_memo_arm() {  # $@ = the EXACT ordered population → 0 = armed
 # the only way this API can serve one file's verdict for another.
 collect_files() {
   local d f rel
-  for d in bin scripts hooks commands; do
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list — see PSC_DIRS
+  for d in $PSC_DIRS; do
     [ -d "$ROOT/$d" ] || continue
     while IFS= read -r f; do
       case "$(basename -- "$f")" in "$SELF_BASE"|pane-spawn-log.sh) continue ;; esac
@@ -758,11 +792,13 @@ scan_all
 if [ "$PSC_MEMO_OK" = "1" ]; then
   echo "pane-spawn-coverage-lint: per-file memo — $PSC_MEMO_HITS verdict(s) carried, $PSC_MEMO_RAN proven fresh." >&2
 fi
-# NOTHING TO SCAN IS NOT A CLEAN TREE. A scan root that is a directory but holds no bin/, scripts/,
-# hooks/ or commands/ file proved nothing about coverage, and reporting OK over it is the same
-# silent-green this third state exists to close — one directory typo away from a green gate.
+# NOTHING TO SCAN IS NOT A CLEAN TREE. A scan root that is a directory but holds no file in any of
+# PSC_DIRS proved nothing about coverage, and reporting OK over it is the same silent-green this
+# third state exists to close — one directory typo away from a green gate. The dirs are NAMED from
+# PSC_DIRS rather than spelled out, so a widening cannot leave this line telling the reader to look
+# in the wrong places.
 if [ "$seen" -eq 0 ]; then
-  echo "pane-spawn-coverage-lint: ⛔ nothing to scan under $ROOT (no bin/, scripts/, hooks/ or commands/ file)" >&2
+  echo "pane-spawn-coverage-lint: ⛔ nothing to scan under $ROOT (no file under: $PSC_DIRS)" >&2
   exit 2
 fi
 # CHECKED AFTER the findings are printed and BEFORE any verdict is reported. An unrunnable predicate

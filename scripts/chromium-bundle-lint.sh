@@ -49,7 +49,12 @@ ALLOW='scripts/lib/cc-common.sh'
 # named latent finding.
 GRANDFATHERED='tools/motion-film/capture.mjs'
 
-usage() { echo "usage: $(basename "$0") [--root DIR] [--selftest]" >&2; exit 2; }
+# ── THE POPULATION, NAMED ONCE ───────────────────────────────────────────────────────────────────
+# The source dirs a screenshot path could live in. scan_tree reads it, and so does --print-scope, so
+# a caller that ASKS (scripts/ship-land.sh via lint_own_scope) learns a widening for free.
+EMBEDDED_DIRS="scripts hooks bin tools"
+
+usage() { echo "usage: $(basename "$0") [--root DIR] [--print-scope] [--selftest]" >&2; exit 2; }
 
 # scan_tree <root> — prints "path:line:text" for every offending line. Returns 0 clean, 1 findings,
 # 2 unrunnable. Scans the source dirs a screenshot path could live in.
@@ -58,7 +63,8 @@ scan_tree() {
   [ -d "$root" ] || { echo "chromium-bundle-lint: scan root does not exist: $root" >&2; return 2; }
 
   local dirs=() d
-  for d in scripts hooks bin tools; do [ -d "$root/$d" ] && dirs+=("$d"); done
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list — see EMBEDDED_DIRS
+  for d in $EMBEDDED_DIRS; do [ -d "$root/$d" ] && dirs+=("$d"); done
   [ "${#dirs[@]}" -gt 0 ] || { echo "chromium-bundle-lint: no source dirs under $root" >&2; return 2; }
 
   # grep exit 0=match 1=no-match; anything else is a broken detector and must be LOUD.
@@ -187,6 +193,29 @@ done'
   expect_rc 0 "a SET-BUT-EMPTY own-set blocked — a docs-only land refused over a sibling's file" "$d/red" ""
 
   echo "chromium-bundle-lint --selftest: OK"
+  exit 0
+fi
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# WHY IT EXISTS (backlog 5fc8ff411a7c, the sibling of 0be0bd2c0b65 that closed the first two arms).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# pathspec RESTATED there as `-- 'bin/*' 'hooks/*' 'scripts/*' 'tools/*'`. That is EMBEDDED_DIRS
+# written down a second time, in another file, and the drift is SILENT in the dangerous direction:
+# add a fifth source dir here and a land introducing a bundle-launching screenshot path under it
+# builds an own-set WITHOUT that file, so the finding drops to advisory and lands (memory:
+# resident-policy-must-not-restate-perishable-facts).
+#
+# NO ENV SEAM on the dir list, deliberately — and that is why the restatement looked safe and was
+# still worth closing: a CODE edit to EMBEDDED_DIRS parts the two copies just as silently as a
+# runtime one would, and nothing was watching for it.
+#
+# BEFORE the --root loop below, because --print-scope answers about the lint's SHAPE, not about a
+# tree: it must not require a readable root and must not be mistaken for one.
+# An UNRUNNABLE lint (missing, or an older copy whose `*) usage` arm exits 2 with nothing on stdout)
+# is the consumer's NON-VERDICT — never an empty scope from here.
+if [ "${1:-}" = "--print-scope" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the dir list; each dir becomes one pathspec
+  for _ps_d in $EMBEDDED_DIRS; do printf '%s/*\n' "$_ps_d"; done
   exit 0
 fi
 
