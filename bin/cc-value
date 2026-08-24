@@ -16,6 +16,17 @@
 #     that joins to live telemetry (config_dir → account). Trailer-less commits (most, incl. the
 #     `Claude-Session:` URL style which does NOT join) are counted in the FLEET total but left
 #     UNATTRIBUTED — never guessed onto an account.
+#     🚨 AND THE JOIN NOW REPORTS ITS OWN COVERAGE, because leaving that unsaid was this file's
+#     own defect (USAGE_TELEMETRY_100P §2.7 / §4 M7). This repo measured the trailer EXTINCT —
+#     0 of the last 500 commits on trunk carry either key, 2026-08-24 — and nothing here noticed:
+#     `byacct` was empty for every account, so every render printed "+0c" per account and every
+#     busy session over 40% fill was flagged a CHURNER, on evidence that was structurally absent
+#     rather than negative. That is an instrument reporting confidently over an empty join, which
+#     is strictly worse than no instrument. So `.attribution` now carries {verdict, reason, key,
+#     commits, attributed, trailerless, unjoined, coverage_pct}: on ABSTAIN the per-account and
+#     per-session commit columns are NULL rather than 0, the session-churn detector holds its
+#     fire, and the table says why in one line. `trailerless` vs `unjoined` are kept apart on
+#     purpose — an extinct key and a partial telemetry read demand opposite fixes.
 #   • tasks-closed — folded from the cc-backlog JSONL (status==done, done-transition in window).
 #     The `claim.by` field is a SHELL pid (`<host>-<pid>`), NOT the claude session UUID, so tasks
 #     are counted at FLEET level only — never split per-account (that would be fabrication).
@@ -239,18 +250,46 @@ build_json() {
     --argjson accts "$accts" \
     --argjson window "$WINDOW_H" \
     --argjson churnmin "$CHURN_MIN" \
+    --arg ref "$REF" \
     --argjson now "$nowt" '
     # uuid → acct (only sessions we can see in telemetry)
     ($tel | map(select(.acct!="")) | map({key:.sid,value:.acct}) | from_entries) as $u2a |
-    # per-account commit tallies (attributed) + fleet total + unattributed
-    ( reduce $commits[] as $u ({total:0, byacct:{}, unattr:0, bysid:{}};
+    # per-account commit tallies (attributed) + fleet total + unattributed.
+    #
+    # THE TWO WAYS A COMMIT FAILS TO ATTRIBUTE ARE DIFFERENT FACTS AND ARE COUNTED SEPARATELY
+    # (USAGE_TELEMETRY_100P §4 M7). `trailerless` = the commit carries no Session-Id/Land-Session
+    # trailer at all, so the JOIN KEY IS EXTINCT in that repo. `unjoined` = it carries one, but no
+    # live telemetry row names that session, so the key is alive and the JOIN is merely partial.
+    # They demand opposite responses — disconnect the instrument vs. widen the telemetry read —
+    # and the single `unattr` counter this used to keep could not tell them apart. Measured on
+    # this repo own trunk 2026-08-24: 0 of the last 500 commits carry either trailer, i.e. the
+    # key is extinct and every per-account `commits` figure was a 0 produced by an empty join.
+    ( reduce $commits[] as $u ({total:0, byacct:{}, unattr:0, trailerless:0, unjoined:0, bysid:{}};
         .total += 1
         | ($u2a[$u]) as $a
-        | if $u == "-" then .unattr += 1
-          elif $a == null then .unattr += 1
+        | if $u == "-" then (.unattr += 1 | .trailerless += 1)
+          elif $a == null then (.unattr += 1 | .unjoined += 1)
           else .byacct[$a] = ((.byacct[$a]//0)+1) end
         | if $u != "-" then .bysid[$u] = ((.bysid[$u]//0)+1) else . end
       ) ) as $c |
+    # THE COVERAGE OF THE JOIN ITSELF — the verdict M7 requires. An instrument silently reporting over an
+    # empty join is worse than no instrument: it renders "+0c" for every account, which reads as
+    # "this account landed nothing" when the truth is "nothing here can be attributed at all".
+    # Abstain, never impute (design law §3.3.4): when nothing joins, the per-account column is
+    # NULL and the reason is named, rather than a zero that a reader will believe.
+    ( if $c.total == 0 then
+        {verdict:"NO-DATA", reason:"no commits landed on \($ref) in the window — the join is untested here, neither proven nor refuted"}
+      elif $c.total > $c.unattr then
+        {verdict:"OK", reason:"\($c.total - $c.unattr) of \($c.total) landed commit(s) joined to an account"}
+      elif $c.trailerless == $c.total then
+        {verdict:"ABSTAIN", reason:"the join key is EXTINCT — 0 of \($c.total) landed commit(s) carry a Session-Id or Land-Session trailer, so no commit can be attributed to any account. The per-account commit column is null, not zero."}
+      else
+        {verdict:"ABSTAIN", reason:"0 of \($c.total) landed commit(s) joined — \($c.trailerless) carry no Session-Id/Land-Session trailer and \($c.unjoined) name a session no live telemetry row knows. The per-account commit column is null, not zero."}
+      end
+      + {key:"Session-Id|Land-Session", commits:$c.total, attributed:($c.total - $c.unattr),
+         trailerless:$c.trailerless, unjoined:$c.unjoined,
+         coverage_pct: (if $c.total>0 then ((($c.total - $c.unattr)/$c.total*1000)|round/10) else null end)}
+    ) as $attr |
     # active accounts + their spend (session_pct/weekly_pct) from claude-accounts rows
     ( $tel | map(select(.active and .acct!="")) | map(.acct) | unique ) as $active_accts |
     ( ($accts.rows // []) | map({key:.acct, value:{s:.session_pct, w:.weekly_pct}}) | from_entries ) as $q |
@@ -265,6 +304,7 @@ build_json() {
       now: $now,
       churn_min_pct: $churnmin,
       repos: $repos,
+      attribution: $attr,
       fleet: {
         commits: $c.total,
         commits_unattributed: $c.unattr,
@@ -280,7 +320,11 @@ build_json() {
       accounts: (
         ( ($active_accts + ($c.byacct|keys) + $spend_accts) | unique ) | map(. as $a | {
           acct: $a,
-          commits: ($c.byacct[$a] // 0),
+          # NULL, not 0, when the join abstains (M7). A zero here is a CLAIM — "this account landed
+          # nothing" — and under an empty join that claim is unfounded for every account at once.
+          # `// 0` at the two consumers (cc-board, render_table) keeps them rendering; both read
+          # .attribution.verdict to decide whether the number means anything.
+          commits: (if $attr.verdict == "ABSTAIN" then null else ($c.byacct[$a] // 0) end),
           session_pct: ($q[$a].s),
           weekly_pct: ($q[$a].w),
           active: ($active_accts | index($a) != null),
@@ -298,10 +342,16 @@ build_json() {
           sid: .sid,
           sid8: (.sid[0:8]),
           acct: .acct,
-          commits: ($c.bysid[.sid] // 0),
+          commits: (if $attr.verdict == "ABSTAIN" then null else ($c.bysid[.sid] // 0) end),
           used_pct: .used,
           active: .active,
-          churn: (.active and ($c.bysid[.sid] // 0) == 0 and (.used // 0) >= 40)
+          # 🚨 THE CONCRETE HARM OF THE EXTINCT JOIN, and the reason M7 is a correctness fix and not
+          # a labelling one. This predicate is "burning context and landing nothing" — but under an
+          # empty join `bysid` is empty for EVERY session, so every busy session over 40% fill was
+          # flagged a churner, on evidence that was structurally absent rather than negative. A
+          # detector whose input is dead cannot fire: when the join abstains, so does this.
+          churn: ($attr.verdict != "ABSTAIN" and .active
+                  and ($c.bysid[.sid] // 0) == 0 and (.used // 0) >= 40)
         })
       )
     }'
@@ -319,9 +369,19 @@ render_table() {
       + (if .ratio!=null then " · v/spend \(.ratio)" else "" end)
       + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed" else "" end))
   ' 2>/dev/null
+  # THE JOIN'S OWN VERDICT, rendered ABOVE the per-account column it governs (M7). A reader who
+  # never sees this line reads "+0c" as a measurement of the account. It is printed only when the
+  # join is not delivering — an OK line at every render would carry no information at all.
+  printf '%s' "$j" | jq -r '
+    if (.attribution.verdict // "OK") == "ABSTAIN"
+    then "  ⚠ ATTRIBUTION ABSTAINS — \(.attribution.reason)"
+    elif (.attribution.verdict // "") == "OK" and (.attribution.coverage_pct // 100) < 100
+    then "  attribution: \(.attribution.attributed)/\(.attribution.commits) commit(s) joined (\(.attribution.coverage_pct)%)"
+    else empty end' 2>/dev/null
   # per-account lines (separate pass → stable column widths via awk)
   printf '%s' "$j" | jq -r '.accounts[] |
-    "\(.acct)\t+\(.commits)c\t5h \(.session_pct // "?")%\twk \(.weekly_pct // "?")%\t"
+    "\(.acct)\t" + (if .commits == null then "?c" else "+\(.commits)c" end)
+    + "\t5h \(.session_pct // "?")%\twk \(.weekly_pct // "?")%\t"
     + (if .churn then "CHURN? (spend, 0 landed commits)" elif .active then "active" else "idle" end)' 2>/dev/null \
     | awk -F'\t' '{printf "  %-7s %-5s %-9s %-9s %s\n",$1,$2,$3,$4,$5}'
 }
@@ -437,6 +497,12 @@ run_selftest() {
   check "next3 spends 12% + 0 commits + 0 fleet? — NOT (fleet closed a task)"  '(.accounts[]|select(.acct=="next3")|.churn)==false'
   check "session uuid-AAA reads its own 1 commit"           '(.sessions[]|select(.sid=="uuid-AAA")|.commits)==1'
   check "repos scanned == 1 (explicit CC_VALUE_REPOS)"      '(.repos|length)==1'
+  # M7 — the join reports its OWN coverage, and the healthy branch proves the verdict is derived
+  # rather than hardcoded to ABSTAIN. 1 of 2 joined here, so coverage is 50% and NOT abstaining.
+  check "M7 join verdict OK when >0 commits joined"         '.attribution.verdict=="OK"'
+  check "M7 coverage is PROVEN in the output (1/2 = 50%)"   '.attribution.attributed==1 and .attribution.commits==2 and .attribution.coverage_pct==50'
+  check "M7 the two failure modes are counted APART"        '.attribution.trailerless==1 and .attribution.unjoined==0'
+  check "M7 a joined world keeps per-account commits NUMERIC" '(.accounts[]|select(.acct=="next")|.commits)==1'
 
   # churn RED-proof: wipe all value (no commits, no tasks) but keep active spend → fleet churn fires.
   local EMPTY="$tmp/emptyrepo"; git init -q "$EMPTY"
@@ -473,6 +539,37 @@ run_selftest() {
     printf '  ok   %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; pass=$((pass+1))
   else
     printf '  FAIL %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; fail=$((fail+1))
+  fi
+
+  # ── M7: THE EXTINCT-JOIN WORLD. The $UNATTR fixture is exactly this repo's measured reality —
+  # every in-window commit trailer-less, so nothing can join. Four things must be true at once,
+  # and each one was FALSE before M7: the verdict abstains, the reason names the extinction, the
+  # per-account column is null rather than a zero a reader would believe, and the session-churn
+  # detector holds its fire instead of convicting every busy session on absent evidence.
+  _m7() { # <label> <jq-filter-bool>
+    if printf '%s' "$JU" | jq -e "$2" >/dev/null 2>&1; then
+      printf '  ok   %s\n' "$1"; pass=$((pass+1))
+    else
+      printf '  FAIL %s\n' "$1"; fail=$((fail+1))
+    fi
+  }
+  _m7 "M7 extinct join ⇒ verdict ABSTAIN"            '.attribution.verdict=="ABSTAIN"'
+  _m7 "M7 ABSTAIN names the EXTINCT key, not a count" '(.attribution.reason|test("EXTINCT")) and (.attribution.reason|test("Session-Id"))'
+  _m7 "M7 coverage_pct is 0, attributed 0 of 1"       '.attribution.coverage_pct==0 and .attribution.attributed==0 and .attribution.trailerless==1'
+  _m7 "M7 per-account commits are NULL, never 0"      '([.accounts[]|select(.commits!=null)]|length)==0'
+  _m7 "M7 per-session commits are NULL, never 0"      '([.sessions[]|select(.commits!=null)]|length)==0'
+  # THE FALSE-CONVICTION RED-PROOF. uuid-AAA is active at 55% fill — over the 40% churn floor —
+  # and under the pre-M7 predicate its empty `bysid` entry made it a churner in every render.
+  _m7 "M7 session churn CANNOT fire while the join abstains" '([.sessions[]|select(.churn)]|length)==0'
+  # ...and the same session in the JOINED world is not silently un-churnable either: the guard
+  # must be the ABSTAIN, not a blanket disable. (Proven by the OK-world checks above, where
+  # uuid-AAA carries a real commit count.)
+  if printf '%s' "$JU" | bash -c 'jq -r .' >/dev/null 2>&1 \
+     && CC_VALUE_REPOS="$UNATTR" CC_BACKLOG_FILE="$tmp/none.jsonl" bash "$SELF" 2>/dev/null \
+        | grep -q "ATTRIBUTION ABSTAINS"; then
+    printf '  ok   %s\n' "M7 the TABLE says the join abstained (a null column that is not explained is a new defect)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "M7 the TABLE says the join abstained (a null column that is not explained is a new defect)"; fail=$((fail+1))
   fi
 
   # graceful degrade: no telemetry dir at all → still emits valid json, no crash.
@@ -538,6 +635,10 @@ case "$MODE" in
       ($me.commits // (.fleet as $f | null)) as $c |
       if $me == null then
         "session \($s[0:8]) — no live telemetry row; landed-commit contribution not resolvable here"
+      elif $me.commits == null then
+        # M7: a null here is the JOIN abstaining, not a session that landed nothing. Saying
+        # "0 commits landed" over an extinct key is the exact false claim this fix exists to stop.
+        "session \($s[0:8]) on \($me.acct // "?") — ctx \($me.used_pct)% · landed commits UNKNOWN: \(.attribution.reason)"
       else
         "session \($s[0:8]) on \($me.acct // "?") — \($me.commits) commit\(if $me.commits==1 then "" else "s" end) landed in \(.window_h)h · ctx \($me.used_pct)%"
         + (if $me.churn then "   ⚠ churn (ctx spent, 0 landed)" else "" end)
