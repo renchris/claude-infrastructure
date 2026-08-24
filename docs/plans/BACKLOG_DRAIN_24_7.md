@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #183: the two auditors were never answering one question — one
+  REPORTS liveness, the other AUTHORISES an advance, so making them agree arms the degraded door.
+  filed 0 / closed 2 / 1 commit (code-comment). TWENTY-SEVENTH CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 20 open / 5
+  blocked at open — now **19 open / 5 blocked**. Board at open: open 313 / blocked 189 / done 2227,
+  502 open+blocked ids snapshotted. Picked from the STORE, inside the goal's warm condition.
+  I took #182's own downstream lead and closed **both** rows that prescribe the same change:
+  `42fbbf112209` (in-condition) and `704511ab7e90` (ungrouped, same mechanism, no condition key).
+  Both **REFUTED, not fixed**.
+
+  **The rows asked for one thing:** give `deploy-live.sh` wrap-ledger's ADDS predicate, so
+  "LIVE_ADDS > 0 breaches at a lag of 1", on the premise that two sibling auditors of one question
+  — *is the landed diff live* — disagree because only one models an added file. I re-derived both
+  halves from the shipped source rather than inheriting #182's numbers, with a positive control
+  (wrap-ledger, 19 add-awareness sites) and a bogus-token control (0) so the grep could not be blind.
+
+  · **The PREMISE is false.** `TARGET` — the variable whose being set *is* the advance — is assigned
+    in six places (`:1472` init, `:1498` bootstrap, `:1500` `--force`, `:1539` T1, `:1623` T1H,
+    `:1653` T2) and **not one reads a lag variable**. The criterion is a VERIFIED TREE: T1 (newest
+    GREEN tree descending from live HEAD) or T1H (off-box hermetic green, which carries **no lag
+    budget at all**, by design). Lag advances nothing, so "judges it purely by COMMIT LAG" names a
+    mechanism the script does not have.
+  · **The REMEDY is strictly harmful, and the subject says so itself.** `LAG_TRIP` is read in five
+    conditionals; exactly **one ARMS anything** — `:1639` — and what it arms is the **T2 DEGRADED
+    door**, which takes the newest NOT-RED commit and banners an **UNVERIFIED** deploy (`:1658`).
+    The header above it, `:1634`, already reads *"T2 · DEGRADED — authorised by the LAG, never by
+    the reason."* The other two reads (`:1678`, `:1725`) test `-z` and gate the benign in-budget
+    wait. Tripping the budget does not make a correct deploy happen sooner; it authorises an
+    incorrect one.
+  · **POPULATION, re-measured (do not inherit #182's 28.5%).** Over the last **400** non-merge
+    commits on `origin/main`, **49 add at least one file — 12.2%**. Controls: `50b7e7dc9` adds=1,
+    `04673720a` adds=0. So the remedy would make the unverified advance the **default path for one
+    trunk commit in eight**. ⚠️ My figure and #182's differ by more than 2x on the same predicate;
+    the windows differ, and that is exactly why the brief says re-measure rather than quote.
+
+  🚨 🆕 **METHOD 149 — WHEN TWO AUDITORS DISAGREE, ASK WHAT EACH ONE'S ANSWER IS *FOR* BEFORE
+  RECONCILING THEM.** These two never shared a question. `wrap-ledger` **REPORTS** whether landed
+  content reached the live layer; `deploy-live` **AUTHORISES** an advance. A disagreement between a
+  report and an authorisation is not an inconsistency to be fixed — the terms mean different things,
+  and importing one into the other converts a description into a permission. This is the *general*
+  form of #182's method 148 (which asked what the disputed term authorises); 148 is the test, 149 is
+  the reason the test works. Sibling of memory `sibling-auditors-must-share-the-state-model`, and
+  its limit: that memory says share the model, and these two rows are the case where they **must
+  not**.
+
+  **WHAT LANDED** (comment-only, no behavior change; `bash -n` + bare `shellcheck` clean): an
+  18-line note in `scripts/deploy-live.sh`'s lag-budget header recording the refusal, both
+  measurements, and the pointer to where the real work is. Subject *docs(deploy-live): the lag
+  budget is an authorisation, not a liveness report* — **cite by SUBJECT, never by sha; a land
+  rebases.** ⚠️ **The insert shifted every line below `:1436` by +18** — I cited pre-edit numbers in
+  the first draft and had to re-derive all ten post-edit and re-verify each with `sed -n`. Re-read
+  before citing.
+
+  **THE INERTNESS IS STILL REAL AND STILL OPEN.** Refuting the cure does not refute the symptom: a
+  land that adds a file does sit inert while the ledger correctly reads 🚀. That work is
+  `4e6a51df2a84`, which stays open and already names its own blocker — it needs a **positive
+  deployed-dir set**, and `deploy-live` publishes none (0 add-awareness sites, measured). Anyone
+  picking up the 🚀 seam should start there, not in the converger.
+
+  **TOOLS.** Selector instrument control **32**, unchanged — a **forty-sixth**-recycle control.
+  Owed set for a single-file `scripts/deploy-live.sh` commit = **14 direct + 1 cited** (`cited:` on
+  `tests/install-resident-reload.bats`) = **15 suites, 507 tests, all green**, `listed=15 rows=15`.
+  `land-lock.sh --status` read `holder: (free)` before the land. 🆕 **My first runner invocation was
+  a VACUOUS PASS and its own guard let it through**: the runner `cd`s to the worktree, so the
+  relative list path I passed resolved nowhere, fd 3 read nothing, and it printed `listed=0 rows=0`
+  — which satisfies `listed -ne rows` and produced **no REFUSED line**. An emptiness guard that only
+  compares two counters cannot catch the case where BOTH are zero; I added an explicit `listed -eq 0`
+  refusal and re-ran with an absolute path. **A table with no rows is not a green.**
+
 - **2026-08-24 — drain recycle #182: two conditions co-present in ONE exhibit were read as one
   causing the other — the 🚀 add-breach and the converger's decline are INDEPENDENT axes.
   filed 0 / closed 1 / 1 commit (code-comment). TWENTY-SIXTH CONSECUTIVE close overall.**
