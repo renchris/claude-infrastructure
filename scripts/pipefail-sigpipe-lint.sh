@@ -124,6 +124,7 @@ pipefail-sigpipe-lint — ratchet on `producer | early-exit-consumer` under set 
   pipefail-sigpipe-lint.sh --selftest   prove the detector still discriminates (both directions)
   pipefail-sigpipe-lint.sh --census     print every violating site, ignoring the allowlist
   pipefail-sigpipe-lint.sh --regen      print an allowlist for the tree as it stands
+  pipefail-sigpipe-lint.sh --print-scope  name the population it judges, as git pathspecs
 
 Exit: 0 clean · 1 violation · 2 could not run (never silent-green).
 USAGE
@@ -148,6 +149,46 @@ ROOT="${CC_PIPEFAIL_ROOT:-$(cd "$(dirname "$SELF")/.." && pwd)}"
 
 ALLOWLIST_DEFAULT="$(dirname "$SELF")/pipefail-sigpipe-allow.txt"
 ALLOWLIST="${CC_PIPEFAIL_ALLOWLIST:-$ALLOWLIST_DEFAULT}"
+
+# ── the population, NAMED ONCE ───────────────────────────────────────────────────────────────────
+# The file shapes this lint judges, as git pathspecs. scan() tests membership with in_scan_set below
+# and `--print-scope` prints the same list, so the two cannot disagree.
+#
+# A LIST AND A LOOP RATHER THAN A `case` ALTERNATION, and that is forced rather than stylistic: a
+# case pattern coming from a variable is expanded as ONE pattern — the `|` inside it is a literal,
+# not an alternation separator — so a five-shape population cannot be driven from a single string
+# through `case … in $VAR)`. Splitting the string and asking `case` once per shape is the only
+# spelling where the scan and --print-scope read the SAME declaration. It costs one builtin match
+# per shape per file over `git ls-files`, which is not measurable beside the per-file greps below.
+#
+# These are bash patterns AND git pathspecs at once, deliberately: both match `/` with `*` (git needs
+# `:(glob)` magic before `*` stops crossing a slash), so `*.sh` covers every depth in both readings
+# and `bin/*` covers the whole subtree in both.
+SCAN_PATHSPECS='*.sh *.bats bin/* hooks/* scripts/*'
+
+# Split ONCE, with globbing OFF, into the array both consumers read. The `set -f` is not cosmetic and
+# it is not a style choice: scan() runs `cd "$ROOT"` before it filters, so an unguarded `for p in
+# $SCAN_PATHSPECS` PATHNAME-EXPANDS every shape against the repo root — `*.sh` becomes the root's own
+# .sh files (or stays literal if there are none) and `bin/*` becomes every file in bin/. The
+# population then silently narrows to whatever happens to sit in the tree, which is the same
+# degrade-to-advisory direction this whole flag exists to close. RED-PROVED while writing this: the
+# unguarded form dropped all six docs/activation/*.sh sites from `--census`, exit 0, no diagnostic.
+SCAN_PATTERNS=()
+_sp_restore_f=0; case "$-" in *f*) _sp_restore_f=1 ;; esac
+set -f
+# shellcheck disable=SC2086  # deliberate word-split into one pattern per shape; globbing is off
+for _sp in $SCAN_PATHSPECS; do SCAN_PATTERNS+=("$_sp"); done
+[ "$_sp_restore_f" -eq 1 ] || set +f
+unset _sp _sp_restore_f
+
+in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
+  local p
+  for p in "${SCAN_PATTERNS[@]}"; do
+    # shellcheck disable=SC2254  # $p is a PATTERN here; quoting it would make it a literal string
+    case "$1" in $p) return 0 ;; esac
+  done
+  return 1
+}
 
 # ── the detector ─────────────────────────────────────────────────────────────────────────────────
 # One awk program, fed one file at a time. Kept in awk rather than bash+grep because the analysis is
@@ -315,9 +356,8 @@ scan() {
     [ -n "$f" ] || continue
     case "$f" in
       scripts/pipefail-sigpipe-lint.sh|tests/pipefail-sigpipe-lint.bats) continue ;;
-      *.sh|*.bats|bin/*|hooks/*|scripts/*) ;;
-      *) continue ;;
     esac
+    in_scan_set "$f" || continue
     [ -f "$f" ] || continue
     # clause 1 — the file must actually enable pipefail
     grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" >/dev/null 2>&1 || continue
@@ -562,6 +602,34 @@ EOF"
   echo "✓ $SELF_NAME --selftest: $pass/$total (both directions; builtin producer RED on a variable or substitution, GREEN on a literal)"
   return 0
 }
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# SCAN_PATHSPECS is the SAME declaration scan() filters with (via in_scan_set), so the two cannot
+# disagree: adding a judged file shape moves the scan and this answer in one edit.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms left out of it).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# `-- 'bin/*' 'hooks/*' 'scripts/*' 'tests/*' 'docs/*' '*.sh'` pathspec RESTATED in ship-land. That
+# restatement could not drift at RUNTIME (CC_PIPEFAIL_ROOT moves the scan ROOT, never the population),
+# and that was the whole of its defence: it could still drift by a CODE edit to the judged shapes,
+# with the same silent failure direction — an own-set that MISSES a file does not error, it is the
+# legitimate spelling of "this land touches nothing I judge", so the finding degrades to advisory and
+# the land proceeds.
+#
+# AND IT HAD ALREADY DRIFTED, which is why this arm is the one worth reading. The restated pathspec
+# carried `docs/*` and `tests/*` — neither of which this lint judges as such — while MISSING `*.bats`,
+# which it does judge at every depth. Today every .bats file lives under tests/, so the miss is
+# latent and nothing is red; a .bats file added anywhere else would have been judged by this lint and
+# absent from the own-set, i.e. advisory, i.e. landed. That is the drift the comment asked an author
+# to prevent by hand, sitting in the tree, unnoticed, on an arm whose defence was that it could not
+# drift.
+# It prints SCAN_PATTERNS, the array in_scan_set matches against — not the raw string, and not a
+# re-split of it. A second split here would be a second chance to get the globbing guard wrong, on
+# the exact expansion that already had it wrong once (see the SCAN_PATTERNS note above).
+if [ "${1:-}" = "--print-scope" ]; then
+  printf '%s\n' "${SCAN_PATTERNS[@]}"
+  exit 0
+fi
 
 case "${1:---scan}" in
   -h|--help) usage; exit 0 ;;

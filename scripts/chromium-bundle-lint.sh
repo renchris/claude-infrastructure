@@ -49,7 +49,12 @@ ALLOW='scripts/lib/cc-common.sh'
 # named latent finding.
 GRANDFATHERED='tools/motion-film/capture.mjs'
 
-usage() { echo "usage: $(basename "$0") [--root DIR] [--selftest]" >&2; exit 2; }
+# THE POPULATION, NAMED ONCE. scan_tree walks these and `--print-scope` prints them, so the dirs a
+# screenshot path could live in are declared in exactly one place — see --print-scope below for why
+# a second spelling of this list is the defect and not the redundancy.
+SCAN_LAYERS='scripts hooks bin tools'
+
+usage() { echo "usage: $(basename "$0") [--root DIR] [--print-scope] [--selftest]" >&2; exit 2; }
 
 # scan_tree <root> — prints "path:line:text" for every offending line. Returns 0 clean, 1 findings,
 # 2 unrunnable. Scans the source dirs a screenshot path could live in.
@@ -58,7 +63,8 @@ scan_tree() {
   [ -d "$root" ] || { echo "chromium-bundle-lint: scan root does not exist: $root" >&2; return 2; }
 
   local dirs=() d
-  for d in scripts hooks bin tools; do [ -d "$root/$d" ] && dirs+=("$d"); done
+  # shellcheck disable=SC2086  # deliberate word-split of SCAN_LAYERS; the list is a fixed literal
+  for d in $SCAN_LAYERS; do [ -d "$root/$d" ] && dirs+=("$d"); done
   [ "${#dirs[@]}" -gt 0 ] || { echo "chromium-bundle-lint: no source dirs under $root" >&2; return 2; }
 
   # grep exit 0=match 1=no-match; anything else is a broken detector and must be LOUD.
@@ -187,6 +193,34 @@ done'
   expect_rc 0 "a SET-BUT-EMPTY own-set blocked — a docs-only land refused over a sibling's file" "$d/red" ""
 
   echo "chromium-bundle-lint --selftest: OK"
+  exit 0
+fi
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# SCAN_LAYERS is the SAME list scan_tree walks, so the two cannot disagree: adding a dir a
+# screenshot path could live in moves the scan and this answer in one edit. `<layer>/*` is EXACT
+# rather than approximate — the scan is `grep -rn` under each dir, i.e. recursive, and a git
+# pathspec's `*` matches `/` unless `:(glob)` magic is asked for, so the two cover the same files.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms left out of it).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# `-- 'bin/*' 'hooks/*' 'scripts/*' 'tools/*'` pathspec RESTATED in ship-land. That restatement could
+# not drift at RUNTIME (this lint has no env seam on its population), and that was the whole of its
+# defence: it could still drift by a CODE edit to SCAN_LAYERS, with the same silent failure direction
+# — an own-set that MISSES a file does not error, it is the legitimate spelling of "this land touches
+# nothing I judge", so the finding degrades to advisory and the land proceeds.
+#
+# Consumed BEFORE --root, and by its own guard rather than an arm of the loop below: `usage` exits 2
+# on anything unrecognised, and an exit 2 with empty stdout is precisely the shape ship-land's
+# lint_own_scope must read as a NON-VERDICT. Answering here keeps that code path meaning "this lint
+# cannot say", which is the only reading that does not collapse into an empty own-set.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split: an unquoted expansion would also PATHNAME-EXPAND each layer against
+  # the caller's CWD and print real repo paths instead of the pathspec.
+  set -f
+  for _ps_l in $SCAN_LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  [ "$_ps_restore_f" -eq 1 ] || set +f
   exit 0
 fi
 

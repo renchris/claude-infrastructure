@@ -578,6 +578,36 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"'
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# LAYERS is the SAME variable lint_tree walks (:315), so the two cannot disagree: widening the
+# deployed layers moves the scan and this answer in one edit. `<layer>/*` is EXACT rather than
+# approximate — the walk is recursive under each layer, and a git pathspec's `*` matches `/` unless
+# `:(glob)` magic is asked for, so the two cover the same file set.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms that were left out of
+# it). scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land —
+# from a `-- 'bin/*' 'hooks/*' 'scripts/*'` pathspec RESTATED in ship-land. Unlike the two arms
+# 0be0bd2c0b65 closed, that restatement could not drift at RUNTIME (this lint has no env seam on its
+# population), and that was the whole of its defence: it could still drift by a CODE edit to LAYERS,
+# with the same silent failure direction — an own-set that MISSES a file does not error, it is the
+# legitimate spelling of "this land touches nothing I judge", so the finding degrades to advisory
+# and the land proceeds (memory: resident-policy-must-not-restate-perishable-facts).
+#
+# EXIT 0 WITH A NON-EMPTY LIST IS THE ONLY SUCCESS. A lint that cannot answer — missing, or an older
+# copy that reads the flag as a scan root and exits 2 — yields an empty answer, and ship-land's
+# lint_own_scope turns that into a NON-VERDICT (rc 2 ⇒ GATE_KILLED ⇒ retryable), never into an empty
+# own-set. Those are different answers: empty-with-rc-0 legitimately means "your land touches nothing
+# I judge", and collapsing them reinstates the silent-advisory defect by a new route.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split: an unquoted expansion would also PATHNAME-EXPAND each layer against
+  # the caller's CWD and print real repo paths instead of the pathspec.
+  set -f
+  for _ps_l in $LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
+fi
+
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   # The header block, DERIVED rather than a hardcoded line range: every edit to the header would
   # otherwise silently truncate --help mid-sentence (this one had already lost the exit codes, the

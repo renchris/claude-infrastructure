@@ -146,6 +146,37 @@ WINDOW="${CC_PSC_WINDOW:-12}"
 # "--selftest" and the lint reports rc=2 on its own verification path.
 SELFTEST=0
 if [ "${1:-}" = "--selftest" ]; then SELFTEST=1; shift; fi
+
+# THE POPULATION'S DIRECTORIES, NAMED ONCE. collect_files walks these and `--print-scope` prints
+# them, so the dirs that can hold a spawn site are declared in exactly one place.
+PSC_LAYERS="bin scripts hooks commands"
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# Answered HERE, ahead of `ROOT="${1:-$SELF_ROOT}"` below, for the same reason --selftest is consumed
+# above: past that line the flag resolves to a directory named "--print-scope" and the lint reports a
+# non-verdict on its own scope question.
+#
+# `<layer>/*` is a SUPERSET of what collect_files keeps — that walk also filters by name (`*.sh`,
+# `*.py`, or no extension at all, the last of which no git pathspec can express) — and the direction
+# is the safe one. The own-set is matched against the paths this lint REPORTS, so an entry naming a
+# file it never judges is inert; an own-set that MISSES a judged file is the failure, because it does
+# not error — it is the legitimate spelling of "this land touches nothing I judge", so the finding
+# degrades to advisory and the land proceeds.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms left out of it).
+# scripts/ship-land.sh built this lint's own-scope set from a `-- 'bin/*' 'hooks/*' 'scripts/*'
+# 'commands/*'` pathspec RESTATED in ship-land. That restatement could not drift at RUNTIME (this
+# lint has no env seam on its population), and that was the whole of its defence: it could still
+# drift by a CODE edit to PSC_LAYERS, silently, in the advisory direction.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split: an unquoted expansion would also PATHNAME-EXPAND each layer against
+  # the caller's CWD and print real repo paths instead of the pathspec.
+  set -f
+  for _ps_l in $PSC_LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
+fi
 # SELF is symlink-resolved and ABSOLUTE — ~/.claude reaches this file through a per-file symlink, so
 # an unresolved $0 keys the memo on a path that differs per caller for identical bytes, and
 # SELF_ROOT would land in ~/.claude rather than the checkout. The sibling lint shipped both of those
@@ -371,7 +402,8 @@ psc_memo_arm() {  # $@ = the EXACT ordered population → 0 = armed
 # the only way this API can serve one file's verdict for another.
 collect_files() {
   local d f rel
-  for d in bin scripts hooks commands; do
+  # shellcheck disable=SC2086  # deliberate word-split of PSC_LAYERS; the list is a fixed literal
+  for d in $PSC_LAYERS; do
     [ -d "$ROOT/$d" ] || continue
     while IFS= read -r f; do
       case "$(basename -- "$f")" in "$SELF_BASE"|pane-spawn-log.sh) continue ;; esac
