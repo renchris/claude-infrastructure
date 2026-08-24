@@ -817,7 +817,7 @@ _few_load_window() {   # sources the hardware terms + the subject, both as the f
   engagement_seen()   { printf 'poll\n' >> "$POLLED"; return 0; }
   pane_parked_reason() { :; }
   pane_wedge_reason()  { :; }
-  it2_paste_submit()   { :; }
+  it2_paste_submit_verified() { :; }   # the resend helper (a771a1611d28 migrated it here)
   unset FIRE_ENGAGE_TIMEOUT
   export CC_FIRE_LOADAVG_OVERRIDE=900        # would be visible ONLY if the guard leaked
   run verify_engagement "$PROJ" "MARKER" "$REG" "$PANE" "/bin/true" "brief"
@@ -836,7 +836,7 @@ _few_load_window() {   # sources the hardware terms + the subject, both as the f
   engagement_seen()   { printf 'poll\n' >> "$POLLED"; return 0; }
   pane_parked_reason() { :; }
   pane_wedge_reason()  { :; }
-  it2_paste_submit()   { :; }
+  it2_paste_submit_verified() { :; }   # the resend helper (a771a1611d28 migrated it here)
   export CC_FIRE_LOADAVG_OVERRIDE=900 FIRE_ENGAGE_TIMEOUT=0 FIRE_ENGAGE_RETRY=0
   run verify_engagement "$PROJ" "MARKER" "$REG" "$PANE" "/bin/true" "brief"
   [ "$status" -eq 1 ]                        # straight to the expiry path, no poll at all

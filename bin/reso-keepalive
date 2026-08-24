@@ -209,8 +209,10 @@ while :; do
     #
     # STILL OWED, and a DIFFERENT class than this lint gates: discover() selects panes by scrollback
     # marker alone, so a pane whose claude has exited still matches and this prose lands in a zsh
-    # input line. handoff-fire.sh:it2_paste_submit refuses that shape outright — it ABSTAINS unless
-    # composer_owned() proves a live CC session owns the pane — and scripts/desk-invariant.sh:197
+    # input line. handoff-fire.sh:it2_paste_submit_verified refuses that shape outright — it
+    # ABSTAINS unless composer_owned() proves a live CC session owns the pane, and since
+    # a771a1611d28 it also refuses to send the CR unless it has READ THE COMPOSER BACK (the blind
+    # it2_paste_submit this comment used to name is gone) — and scripts/desk-invariant.sh:197
     # retired its own reprompt() for the same reason (critique F7). This loop has neither gate.
     "$IT2" session send -s "$id" "$NUDGE" 2>/dev/null; sleep 0.5
     "$IT2" session send -s "$id" $'\r' 2>/dev/null; sleep 0.3

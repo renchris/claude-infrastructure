@@ -49,7 +49,11 @@ setup() {
   eval "$(sed -n '/^pane_wedge_reason() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p' "$HF")"
-  eval "$(sed -n '/^it2_paste_submit() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^composer_content() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^_paste_newlines() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^paste_readback_expect() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^paste_readback_ok() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^it2_paste_submit_verified() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^verify_engagement() {/,/^}/p' "$HF")"
   eval "$(grep -E '^BP_(START|END)=' "$HF")"
 
@@ -58,11 +62,33 @@ setup() {
   # Fake it2: `session read` serves $SCREEN verbatim; `session send` RECORDS (so the abstain is
   # provable by absence). Nothing forks — a `&` in a bats fixture prints a spurious `not ok`
   # beside a passing body (memory: bats-background-job-fabricates-not-ok).
+  #
+  # A BRACKETED PASTE ALSO REDRAWS THE SCREEN, because the resend is verified now (a771a1611d28):
+  # it2_paste_submit_verified reads the composer back before its CR, so a fake whose screen never
+  # changes would make every re-send read as MANGLED and the positive control below would go green
+  # on a withheld CR — a fixture asserting the opposite of what its name claims. The redraw is the
+  # MEASURED shape (2026-08-24): a composer box holding `[Pasted text #1 +N lines]`, N = newline
+  # count, never the payload.
   IT2="$BATS_TEST_TMPDIR/it2"
-  cat > "$IT2" <<SH
-#!/bin/bash
-if [ "\$1 \$2" = "session read" ]; then cat "$SCREEN" 2>/dev/null; exit 0; fi
-if [ "\$1 \$2" = "session send" ]; then printf 'SEND\n' >> "$SENDS"; exit 0; fi
+  { printf '#!/bin/bash\n'; printf 'SCREEN=%q; SENDS=%q\n' "$SCREEN" "$SENDS"; } > "$IT2"
+  cat >> "$IT2" <<'SH'
+if [ "$1 $2" = "session read" ]; then cat "$SCREEN" 2>/dev/null; exit 0; fi
+if [ "$1 $2" = "session send" ]; then
+  printf 'SEND\n' >> "$SENDS"
+  shift 2; text=""
+  while [ $# -gt 0 ]; do case "$1" in -s) shift 2 ;; *) text="$1"; shift ;; esac; done
+  bps=$'\x1b[200~'; bpe=$'\x1b[201~'
+  case "$text" in
+    "$bps"*"$bpe")
+      inner="${text#"$bps"}"; inner="${inner%"$bpe"}"
+      nl="${inner//[!$'\n']/}"; b="$(printf '─%.0s' $(seq 1 100))"
+      { printf '%s\n' "$b"
+        if [ "${#nl}" -gt 0 ]; then printf '❯ [Pasted text #1 +%s lines]\n' "${#nl}"
+        else                        printf '❯ [Pasted text #1]\n'; fi
+        printf '%s\n' "$b"; } > "$SCREEN" ;;
+  esac
+  exit 0
+fi
 exit 0
 SH
   chmod +x "$IT2"
@@ -71,6 +97,16 @@ SH
   REG="$BATS_TEST_TMPDIR/reg";       mkdir -p "$REG"
   PANE="FAKEPANE-0000-0000-0000-000000000001"
   export FIRE_ENGAGE_TIMEOUT=1 FIRE_ENGAGE_RETRY=1 FIRE_ENGAGE_INTERVAL=1 FIRE_TYPE_SETTLE=0.01
+  export FIRE_PASTE_PREWAIT=0 FIRE_PASTE_PREIVL=0.01
+}
+
+# An EMPTY composer box, in the measured shape composer_content parses (a body between two
+# full-width U+2500 runs; the ❯ glyph is non-ASCII, so an empty box reads as empty). The resend
+# path needs one: it2_paste_submit_verified pastes only into a composer it has PROVEN empty, and a
+# screen with no box at all is UNKNOWN, which correctly refuses to type.
+empty_composer_screen() {
+  local b; b="$(printf '─%.0s' $(seq 1 100))"
+  printf '%s\n' "$b" "❯ " "$b" > "$SCREEN"
 }
 
 screen() { printf '%s\n' "$@" > "$SCREEN"; }
@@ -186,8 +222,9 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 }
 
 # CC_FIRE_COMPOSER_GATE=off in the next two tests ISOLATES this change from 0e03861c, which landed
-# independently while this was in flight and makes it2_paste_submit abstain unless composer_owned()
-# proves a live CC session owns the pane. That gate is STRICTLY STRONGER as a safety net (a positive
+# independently while this was in flight and makes the resend helper abstain unless composer_owned()
+# proves a live CC session owns the pane (that helper is it2_paste_submit_verified since
+# a771a1611d28; 0e03861c added the gate to the blind it2_paste_submit it replaced). That gate is STRICTLY STRONGER as a safety net (a positive
 # oracle, fail-closed on "unknown", where this one only fires on "provably parked") and it is the
 # reason the resend is now safe in general. But with it ON, both tests below would pass whether or
 # not this change existed — an over-determined assertion proving nothing about the code under test.
@@ -208,12 +245,28 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 
 @test "POSITIVE CONTROL: a NOT-parked never-engaged pane DOES still get the INC-4 re-send" {
   # Proves the abstain above is conditional, not a blanket removal of the recovery — same call,
-  # same corpus, only the screen differs.
+  # same corpus, only the screen differs. The screen is an EMPTY COMPOSER because that is INC-4's
+  # own ground truth (memory cold-worktree-fire-autosubmit-race: the session sat at an empty
+  # prompt, never having read the brief) and because the verified resend types only into one.
   export CC_FIRE_COMPOSER_GATE=off
-  screen "╭─ claude ─╮" "│ >        │"
+  empty_composer_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "$(printf 'the brief\nline two\nline three\nline four\n')"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c SEND "$SENDS")" -eq 2 ]   # the paste AND the CR — a withheld CR is not a re-send
+}
+
+@test "the re-send is VERIFIED: a composer that is NOT empty gets the paste withheld too" {
+  # The gap the parked/wedged short-circuits never covered: CC owns the pane, it is not parked and
+  # not wedged, and the composer holds an operator's unsubmitted draft. Pasting there appends to
+  # the draft and the CR submits the hybrid — the measured mangle class (recycle-100p 2026-08-22).
+  # The recovery is forgone, loudly; the draft is not destroyed.
+  export CC_FIRE_COMPOSER_GATE=off
+  local b; b="$(printf '─%.0s' $(seq 1 100))"
+  printf '%s\n' "$b" "❯ half-typed operator thought" "$b" > "$SCREEN"
   run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
   [ "$status" -eq 1 ]
-  [ -s "$SENDS" ]
+  [ ! -s "$SENDS" ]
+  printf '%s\n' "$output" | grep -q 'HELD'
 }
 
 # ---- the FOURTH STATE: claude STARTED, and stopped on a modal (backlog 75c2e3e2bde7) -----------
