@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #210: method 180 — a row can be TRUE IN EVERY CLAIM and still
+  prescribe a NO-OP, because the remedy names the one variable that is EMPTY exactly where the tool
+  runs. Run the REMEDY against its own execution environment, not only the premise. filed 0 /
+  closed 1.**
+  Board at open: **474 open+blocked** (284 open / 190 blocked / 2270 done, claimed 6); at close
+  **473** (283 / 190 / 2271, claimed 6). `master-convergence-deadlock` **open=13 / blocked=6 at BOTH
+  ends — unmoved** (the blocked tail stated, not hidden). `comm` found **exactly one departure, mine,
+  and ZERO arrivals** — the second consecutive link that clean. **`claimed` read 6 at both ends AND
+  its membership was STABLE by set difference**, not by the total. My pick was **ungrouped** (open
+  200 → 199), so the close moved **no condition count**.
+
+  **`0c5546c7264f` — CLOSED, and this is the first link where every claim was TRUE and the row's own
+  FIX was still refuted.** The row: `cc-decide open` writes `session_sid:""` when no `--session-sid`
+  is passed, so `wrap-ledger.sh`'s ⛔ rung — which counts open class-C packets filed by THIS session
+  — never sees it, and a close renders `✅ SAFE TO CLOSE — nothing of mine is open` over a live
+  hard-block. Verified, each claim run separately, with both subjects blob-identical between
+  worktree and `origin/main` BEFORE measuring (`bin/cc-decide` `ce0649257f94`,
+  `scripts/wrap-ledger.sh` `d87fcda53072`) — the cheap trunk-promotion move, now proven **eight**
+  times. Producer TRUE (`:112` initialises `sid=""`, `:126` is the only setter, no env fallback
+  existed). Consumer predicate TRUE **and two-sided**: `:730` selects `(.session_sid // "") == $sid`
+  so an empty sid cannot match a resolved session, **and** `:718` returns `BLOCKED=0` when `$sid` is
+  itself empty — it could not match in EITHER branch, which is stronger than the row's own
+  statement. "Re-open cannot repair" TRUE (`:165-166` returns early on an existing file; the verb
+  list at `:346-350` is `open|veto|action|list|expire-sweep`, so there is no repair verb either).
+  Population larger than the row claimed: over the live store of **146 packets**, **11 of the 14
+  open class-C packets carried an empty sid**, and the 3 that did not are one batch stamped the
+  identical sid at 2026-07-18T23:22:40Z — essentially nothing has been attributed in a month. POS
+  control 146 carry a class, NEG control class `ZZ` = 0.
+
+  🚨 **METHOD 180 — THE REMEDY WAS THE PART THAT FAILED.** The row prescribes *"default
+  `--session-sid` to the caller's session id (`CLAUDE_SESSION_ID` / the transcript sid)"*.
+  Implemented literally that changes NOTHING: **`CLAUDE_SESSION_ID` is not exported to a tool-call
+  shell, which is the only shell `cc-decide open` ever runs in.** This repo already says so in three
+  places — `hooks/log-bash.sh:9` and `hooks/validate-bash.sh:1266` (both cite D-9) and
+  `commands/wrap.md:23` ("verified 2026-08-01") — and it re-measured UNSET here while
+  `CLAUDE_CODE_SESSION_ID` was set. A one-line fix would have shipped the identical bug wearing a
+  fix's clothes, **with a green suite**. The generalisation: a row's premise and its remedy have
+  independent truth values, and the remedy has an execution environment the premise does not. Run
+  it there. Sibling of #206's token-surviving-as-data and #173's remedy-manufactures-the-defect,
+  but distinct — here the remedy is not harmful, it is **inert**.
+
+  ⚠️ **AND THE CONTROL THAT STOPPED A BIGGER, FALSE FINDING — record this one.** Reading
+  `wrap-ledger.sh --machine` from a Bash tool call returns `BLOCKED_SRC=none` / `YOURS_SRC=none`; no
+  production caller passes `--session`; **nothing** in the repo sets `WRAP_SESSION_ID` (0 files) and
+  CC does not export `CLAUDE_SESSION_ID`. That reads like a second, independent break, and "both
+  ends of the ⛔ rung are dead" was the more impressive finding. **It is FALSE.**
+  `hooks/completion-assert.sh:211` DOES pass `--session "$SID"` from the Stop hook's stdin JSON, and
+  its comment at `:202-210` records this very defect being found and repaired once before. A CLI
+  invocation has no stdin JSON, so `SRC=none` there is the **expected regime, not a defect** — my
+  reading could not indict the Stop path. Same family as #208's control that missed its detection
+  regime and #209's BRE miss: **our instrument failures keep pointing at the flattering answer.**
+  Also: the row's `session_pane:null` is a lookup miss — the field is `session_pane_uuid` (present on
+  135 of 146), and `.session_pane` exists on **0** of 146 (MEMORY.md `lookup-miss-is-not-absence`).
+
+  **FIXED, not merely adjudicated — no sibling owned it** (the row was the only open row naming
+  `cc-decide`), so #201's rule left fixing as the disposition. `bin/cc-decide` gains a documented
+  three-rung ladder before `mk_id`, mirroring the contract at `bin/cc-backlog:2669-2671` plus the
+  rung measurement forced: `--session-sid` > `CLAUDE_SESSION_ID` > **`CLAUDE_CODE_SESSION_ID`** >
+  `CC_SESSION_ID`. That third name is the one a tool-call shell actually has, it names the
+  transcript (verified: it resolved to this session's own transcript, corroborated independently by
+  the scratchpad path segment, with a bogus-uuid NEG control that did not resolve against **3613**
+  transcripts as POS), and it is the same id `completion-assert.sh:211` feeds wrap-ledger and the one
+  `scripts/ship-land.sh:1003` already uses. **Fail direction is MONOTONE:** with none set, `sid`
+  stays `""` — byte-identical to what it replaces; it can be a no-op, never a mis-attribution, since
+  these are per-session uuids that cannot collide. `mk_id` is `class+sid+what`, so a resolved sid
+  changes the id **deliberately** — per-session keying is the design (`bin/cc-decide:10`) and
+  today's cross-session idempotency was an artifact of `sid` always being empty. The one automated
+  caller, `scripts/limit-recover/lr-reset-poller.sh:565`, passes `--session-sid` explicitly and is
+  marker-guarded, so the ladder never fires for it — **checked before editing, because the remedy
+  had to be run where it actually executes.**
+  `tests/cc-decide.bats` **40 → 47, GREEN 47/47, 0 skips**, re-run AFTER the final edit. `setup()`
+  now unsets all three variables — without that the suite's ids would differ depending on whether it
+  ran from a tool-call shell or CI. **MUTANT-PROVEN ONE PER SITE:** deleting rung 1 reds exactly
+  test 39; rung 2 reds exactly tests 36 **and** 37 (both its own); rung 3 reds exactly test 40;
+  subject restored byte-identical after each, final sha equal to baseline. `shellcheck bin/cc-decide`
+  rc 0 against a deliberately-broken NEG control at rc 1; `bats-assert-liveness` rc 0 with a POSITIVE
+  control (a mid-test `[[ ]]` **with a statement after it**) correctly flagged DEAD. The single
+  `bats-shellcheck` finding (SC2012 at `:107`) is **INHERITED** — the pre-existing idempotency test,
+  not in this diff. `alarm-polarity` / `pipefail-sigpipe` are **N/A** to this diff and were not run
+  rather than claimed green.
+
+  🚨 **THE LEAD'S PREDICTED CONVERGE HAZARD HAS FIRED — CHECK THE FILE, NOT THE LAG.** At #209's
+  close `LIVE_SHA` was `500553d48eb7` at lag 11. It is now **`fd60f868b`, lag 2** — the converger
+  ran, and it advanced to a commit **BELOW** #208's fix: `fd60f868b` **is an ancestor of**
+  `92608b867` (rc 0), and `92608b867` is NOT an ancestor of live (rc 1), with a self-ancestry POS at
+  rc 0 and the pinned `4e39debcf` NEG at rc 1. The only two commits between live and trunk tip are
+  `329c8e9ff` and `92608b867` — the fix itself. **`~/.claude/scripts/lib/pty-run.py` is STILL
+  ABSENT** (11 `.sh` siblings present in that live directory, 0 `.py`; trunk carries the path, blob
+  `fd4c20c16ae8`; NEG control on a bogus live path absent, NEG on a bogus trunk path fatal). So the
+  lag counter fell from 11 to 2 and reads far healthier **while the cloud lane is exactly as dead** —
+  precisely the perverse case the lead described, now observed rather than predicted. I did not
+  touch `--force`: `deploy-live.sh:300` refuses it with `--auto` and `:483` says fix trunk, not this
+  lane.
+
+  Instrument notes for the successor. The `qos-rewrite.sh` diff was empty — **ninety-second**
+  consecutive clean recycle. **0** `.page` files under `autonomy/postland` — **101st** consecutive.
+  The PostToolUse hook fired **once before this insert** (`read210.py`) — all-time **79th**, and the
+  inserter is an **80th by construction**, since it is itself a `.py`. **#204's extension predictor
+  now holds seven sessions: 1/1 firings here were `.py`, 0/9 on the `.sh` and `.txt` files.** The
+  rewrite changed quote style and reflowed a tuple, altering no constant — verified with `py_compile`
+  plus an **`-E`** grep, deliberately not BRE, per #209's scar. One new scar of my own, same family:
+  my evidence read-back's POSITIVE control searched lowercase `monotone` against a phrase I had
+  written uppercase, and reported ABSENT on content that was present — **a case-sensitive control is
+  an instrument, and it too failed toward the comfortable reading.** The `EXACT_MATCH` on 6045 chars
+  is what actually settled it. Evidence body carried **3 non-ASCII characters** (em-dashes), not the
+  pure-ASCII the chain has kept since #205 — exact-match verified regardless, but the streak is
+  broken and the successor should re-assert it.
+
 - **2026-08-24 — drain recycle #209: method 179 — when a row indicts a MECHANISM, census the
   mechanism's PRECONDITION instead of reproducing its exhibit; a precondition is a population
   question and settles the claim at every occurrence, an exhibit is one draw that can fail to
