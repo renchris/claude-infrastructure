@@ -711,6 +711,13 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   printf 'x\n' > "$CC_PARITY_REPO/lib/config-mirror.zsh"       # lib/*.zsh
   printf 'x\n' > "$CC_PARITY_REPO/lib/cc-resume-shell.sh"      # lib/*.sh — both extensions are load-bearing
   printf 'x\n' > "$CC_PARITY_REPO/scripts/lib/pane-spawn-log.sh"  # the file that PROVED the ADD gap
+  # scripts/lib/*.py — a SECOND extension in the same directory, and the reason this class exists.
+  # install.sh's scripts/lib loop globbed *.sh only, so pty-run.py (769ea1fca82f, 2026-08-08) was
+  # never linked, and the assert scored it want=0 via scripts/*/*, whose `[ "$want" = 1 ] || continue`
+  # skips a path in BOTH directions. Deployer and auditor agreed over an absence because both were
+  # keyed on the same EXTENSION — the "coverage vs silence" hazard this block's header names, in the
+  # one form a 1:1 mirror cannot catch: not the deployer's DRIFT, but its OMISSION.
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/lib/pty-run.py"
   printf 'x\n' > "$CC_PARITY_REPO/bin/desk-register"           # bin/desk-* — its own install.sh glob
   printf 'x\n' > "$CC_PARITY_REPO/model-config.yaml"           # root SSOT
   printf 'x\n' > "$CC_PARITY_REPO/providers.json"              # root SSOT
@@ -720,10 +727,11 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   # Per-CLASS, not a total: a single count would go green again the moment one class regressed and
   # another gained a file. Each line is the exact remedy deploy-live's link_refresh consumes.
   for f in hooks/curl-gate.py agents/deep-research.md lib/config-mirror.zsh lib/cc-resume-shell.sh \
-           scripts/lib/pane-spawn-log.sh bin/desk-register model-config.yaml providers.json; do
+           scripts/lib/pane-spawn-log.sh scripts/lib/pty-run.py bin/desk-register \
+           model-config.yaml providers.json; do
     [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/$f $CC_PARITY_LIVE/$f"* ]] || false
   done
-  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 8 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 9 ]
 }
 
 # ── ROOT SSOT: LINK-NESS, not existence (2026-08-12, consolidation audit 02 / b13787e71c9f) ─────

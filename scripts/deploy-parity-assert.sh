@@ -470,6 +470,25 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # that would otherwise swallow it — the ordering hazard this block's first note names.
       scripts/lib/*/*)           want=0 ;;
       scripts/lib/*.sh)          want=1; cls='scripts/lib/*.sh' ;;
+      # scripts/lib/*.py — the THIRD instance of the defect the note below records, and the first
+      # where NEITHER side had the class. There, an auditor lagged an installer. Here install.sh's
+      # scripts/lib loop globbed *.sh ONLY, so when pty-run.py landed in that same directory on
+      # 2026-08-08 (769ea1fca82f, on trunk) the installer never linked it and this leg scored it
+      # want=0 via the scripts/*/* catch-all — and :508's `[ "$want" = 1 ] || continue` skips a
+      # want=0 path in BOTH directions, so neither check could see it. Two siblings agreed over an
+      # absence because both were keyed on the same EXTENSION: an auditor built to mirror the
+      # deployer 1:1 catches the deployer's DRIFT but never its OMISSION.
+      #
+      # MEASURED 2026-08-24 (backlog 70cc9f44040f's generalisation clause, made concrete): 11 of 12
+      # files in scripts/lib were live and pty-run.py had been absent for 16 days. The LIVE
+      # scripts/lib/cloud-create.sh resolves CC_CLOUD_PTY_RUN against its OWN source dir (:125), so
+      # it computed $HOME/.claude/scripts/lib/pty-run.py and its fail-CLOSED guard at :190 returned
+      # "refused-harness  no pty allocator at …" without ever reaching the binary — for every
+      # scheduled cloud create, since com.chrisren.autonomy-sweep.plist and com.claude.dispatcher
+      # .plist both export CC_FIRE_CLOUD=on. Fail-closed was the right polarity and still invisible:
+      # the refusal is a classification a scheduled caller consumes, not a page a human reads.
+      # want=1 here is also what re-arms link_refresh() over the class, exactly as below.
+      scripts/lib/*.py)          want=1; cls='scripts/lib/*.py' ;;
       # scripts/backlog-consolidation/*.py — SAME ordering hazard as scripts/lib above, and it bit.
       # install.sh gained this class on 2026-08-12 (6d96bf560) but this auditor did not, so the two
       # disagreed about the same population: the installer wanted the files live, the assert scored
