@@ -154,12 +154,36 @@ SH
   printf '%s\n' "$output" | grep -q -- '-l -i -c whatever' || false
 }
 
+# ── THE TWO TESTS BELOW MUST CLOSE STDIN, AND IT IS NOT HYGIENE (backlog 5a07814271ed) ──────────
+# These are the only two tests in this file that hand the runner a REAL shell (`/bin/zsh`); every
+# other one uses `/bin/echo`, which prints its argv and exits. That difference is load-bearing,
+# because cc-pane-runner:199 ends `_launch` with `_fallback ""`, which at :69 does
+#
+#     exec "${SHELL:-/bin/zsh}" -l -i          ← by design: the pane BECOMES an ordinary shell
+#
+# In production that is exactly right — the pane's stdin is a terminal and the operator gets a
+# prompt back. Under bats it is a trap: the exec'd interactive login zsh INHERITS the test runner's
+# stdin, and if that fd never reaches EOF the shell sits at a prompt forever. `/bin/echo -l -i`
+# cannot wedge whatever stdin does, which is why the other seventeen tests never showed this.
+#
+# MEASURED 2026-08-24 on an unmodified tree, both arms back-to-back at 1-min load 16.9 (NOT the
+# ~28 the backlog row suspected — load is held CONSTANT across the partition and does not
+# discriminate):
+#   stdin held open by a live writer → rc 124, bats emitted `1..2` and then ZERO results
+#   stdin </dev/null                  → rc 0, `ok 1` + `ok 2`, ONE SECOND
+# and directly against bin/cc-pane-runner at load 12-13, the same split, both arms.
+#
+# The consequence is far worse than a slow suite. A wedged run inside a belt sweep holds the run
+# long enough for bats' own tmpdir to be reclaimed underneath it; the run then dies with
+# `test_list_file.txt: No such file or directory` and `Executed 1328 instead of expected 2789`,
+# i.e. HALF the corpus silently unexecuted, presented as three ordinary `not ok` lines. Removing
+# either redirect below re-arms that.
 @test "CONTROL: an interactive-rc-only launcher RESOLVES under -l -i -c" {
   # This is the whole reason the branch exists. handoff's $CMD names `claude4` / `nocorrect claude4 …`,
   # which on this box is a zsh FUNCTION from the interactive rc — not a binary on PATH.
   local zd; zd="$(fixture_rc)"
   run env -u CC_PANE_CMD_DIR HOME="$zd" ZDOTDIR="$zd" \
-      CC_PANE_CMD="hfprobe_launcher hello" CC_PANE_CMD_INTERACTIVE=1 SHELL="/bin/zsh" "$RUNNER"
+      CC_PANE_CMD="hfprobe_launcher hello" CC_PANE_CMD_INTERACTIVE=1 SHELL="/bin/zsh" "$RUNNER" </dev/null
   printf '%s\n' "$output" | grep -q 'FN-RESOLVED:hello' || false
 }
 
@@ -168,9 +192,12 @@ SH
   # a zsh interactive-rc function does not exist. This is what would have happened had handoff simply
   # flipped the existing arming flag: the pane prints the command and dies on `command not found` —
   # strictly WORSE than typing it. A test of the positive branch alone could not tell the difference.
+  # `</dev/null` for the reason stated above the previous test: this arm sets SHELL=/bin/zsh too, so
+  # it reaches the SAME `exec "$SHELL" -l -i`. The backlog row named only the test above; measured
+  # here, this one wedges identically (rc 124 vs rc 0 on the stdin split, at the same load).
   local zd; zd="$(fixture_rc)"
   run env -u CC_PANE_CMD_DIR HOME="$zd" ZDOTDIR="$zd" \
-      CC_PANE_CMD="hfprobe_launcher hello" SHELL="/bin/zsh" "$RUNNER"
+      CC_PANE_CMD="hfprobe_launcher hello" SHELL="/bin/zsh" "$RUNNER" </dev/null
   ! printf '%s\n' "$output" | grep -q 'FN-RESOLVED' || false
   printf '%s\n' "$output" | grep -qi 'not found' || false
 }
