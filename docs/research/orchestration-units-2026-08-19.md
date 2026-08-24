@@ -176,10 +176,68 @@ without that factor is wrong by ~3×.
 | **1** | **Our own load gate** — `CC_FIRE_MAX_LOAD_PER_CORE=2.0 × 10 = load1 20.0` | **~4–8 *mid-turn* sessions** (2.5–5 runnable threads per genuinely-active session) — and **the ambient alone already exceeds it**: non-Claude load measured **20.19** with zero Claude units | 19 real refusals in 9 days, all `under_test:false` (8.6% of production evaluations). Worst: `load 118.95 on 10 cores = 11.89/core`. Counter-evidence that it is *not* a residency cap: at load 22.70 the box carried **20 resident trees with only 3 mid-turn** |
 | **2** | **Quota — the weekly meter** | **crossover at 26 resident panes (17–30)** | Model-free: weekly-meter slope ÷ mean `k_work`, 5 account-windows ⇒ **6.08 %/day per working unit** vs a 14.29 %/day allowance ⇒ **9.4 working units fleet (6.2–11.0)** ⇒ 9.4 ÷ 0.36 = **26 panes**. Cross-check: predicts `next` at 109%/reset; the readout independently renders **111%** |
 | **3** | **Terminal panes** | **~30** (iTerm2 froze at ~30 concurrent CC panes — prior repo work) | kitty currently carries 11–13 panes; untested at 30 in this wave |
-| **4** | **Memory** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB** — the failure mode is compressor exhaustion / watchdog panic, not OOM; 8.0–9.6 GB was already in the compressor at 92% memory use |
+| **4** | **Memory — bytes** | **~70 sessions / ~70 pane agents** (26.6 GB available ÷ ~375–382 MB) | `vm_stat`: free 366,838 + inactive 1,224,126 + purgeable 31,621 pages × 16 KiB. **Swap 0.00 MB** — the failure mode is compressor exhaustion / watchdog panic, not OOM; 8.0–9.6 GB was already in the compressor at 92% memory use |
+| **4b** | **Memory — compressor SEGMENTS** (the resource that has actually killed this box) | **≥135 resident panes** at the 50% admission ceiling — i.e. it does **not** bind, and §5's ranking never needed a memory row at all. See §5-bis | Per-unit segment cost, bounded above from §2's footprints against `vm.compressor_segment_limit` = 1,629,615 |
 
 ⇒ **Ordered: load gate (~4–8 active / felt ~15) < quota (26 panes) < terminal (~30) < memory (~70).**
-The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers.
+The prior repo ranking "memory > active-load" does **not** reproduce at today's numbers. Row 4's ~70
+is a *resident-byte* figure and is the last thing that binds; the resource that has actually killed
+this box is row **4b**, and it binds later still (≥135) — §5-bis carries that derivation, and it is
+the reason row 4 must not be read as the compressor wall.
+
+### §5-bis — row 4 was computed in the wrong resource, and the right one does not rank
+
+🚨 **Row 4 divides resident bytes by resident bytes and then names a failure mode that is neither.**
+*"Swap 0.00 MB — the failure mode is compressor exhaustion / watchdog panic, not OOM"* is correct and
+is the whole problem: compressor exhaustion is a **segment-descriptor table** running out, and this
+box has hit that ceiling **four times at only ~28–33% mean segment fill, with ~20 GB free and
+`memoryPressure` reading False**. A ranking whose numerator and denominator are both bytes cannot see
+it — every existing byte-denominated rung read a healthy box at death. (Filed by this wave's own
+completeness critic, G3: *"Per-unit segment cost is UNMEASURED for every one of the seven units in
+§2, so the wall with four incidents behind it has no number and no rank."*)
+
+**The bound, from constants already measured in this repo.** `vm.compressor_segment_limit` =
+**1,629,615** and `compressor_segment_pages_compressed_limit ÷ segment_limit` = exactly **16**, so a
+full segment holds 16 × 16 KiB = **256 KiB** of anonymous memory — but the four deaths occurred at
+~28% mean fill, i.e. **~72 KiB per segment**. Charging every byte of a unit's *physical footprint* to
+the compressor at that observed fill is the most generous per-unit cost the measured numbers permit:
+
+| unit | §2 footprint | ≤ segments | ≤ % of the 1,629,615 limit |
+|---|---|---|---|
+| 1. plain subagent | 0.6–11 MB | **9–157** | 0.0005–0.0096% |
+| 2. named teammate | 382 MB | **5,457** | 0.335% |
+| 3. workflow agent | 0.6–11 MB | **9–157** | 0.0005–0.0096% |
+| 4. dispatched pane session | 423 MB | **6,043** | 0.371% |
+| 5. backgrounded `--bg` | +302 MB / job | **4,314** | 0.265% |
+| 6. headless `claude -p` | 295 MB | **4,214** | 0.259% |
+| 7. cloud | 0 local | **0** | 0% |
+
+⇒ At the 50% ceiling `capacity-admit.sh` already enforces, the most expensive unit on the box walls
+at **135 resident panes**; at the 100% panic ceiling, **270**. Both sit *behind* the load gate, the
+quota crossover and the terminal — so **the segment wall does not rank, and row 4's ~70 was not
+merely computed in the wrong unit, it was reporting a wall that is not there.**
+
+**The cross-check is what makes this decisive rather than arithmetic.** The kernel's own per-process
+table at panic #5 counted **780 `node`, 13 `claude.exe`, 1 `WindowServer`**. Thirteen teammates at
+the bound above is **70,943 segments = 4.4%** of the limit the kernel reported at **100%**. The
+entire Claude fleet, priced at its most generous, cannot account for a twentieth of the resource that
+killed the box — while the node dev-toolchain burst beside it (700 procs / 38.9 GB, and swap 0 → 30
+GB in 300 s) accounts for it directly. This reproduces **§6 N8** — *"every capacity refusal in the
+fleet is substantially a refusal about the box's background"* — from a completely independent
+instrument.
+
+**And the bound is loose in the direction that strengthens all of this.** It charges 100% of each
+unit's footprint to the compressor, which **§8 Q1** already contradicts: 86–91% of every
+`claude.exe` footprint is private `IOAccelerator` (GPU) memory, which is not ordinary compressible
+anon. The true figures are plausibly ~10× lower still.
+
+**What remains genuinely unmeasured is a different quantity, and §8 Q12 now names it.** Segment
+exhaustion here is a **flow** failure, not a residency one — the sentinel keys on rate for exactly
+this reason (*"the kernel's own edge signal fires at 98% of the segment limit, which at the measured
+ramp is SEVEN POINT SIX SECONDS of warning"*), and the swapped half of the pool is bounded by 66
+swapfiles rather than by RAM. So the per-unit number worth having is a unit's **peak segment
+occupancy while it works**, which no residency figure predicts. `scripts/unit-segment-cost.sh` is
+that meter.
 
 ### For an in-process agent (workflow / plain subagent)
 
@@ -324,6 +382,20 @@ fan-out is structurally two levels deep because of one un-commented line.
 **Q11 — unowned.** The two routable non-Claude backends (Codex CLI, Pi·Codex) consume neither ceiling
 and no axis in this wave measured them. Probe: run one real task on each and compare wall-clock,
 fidelity, and whether our rails can see them at all.
+
+**Q12 — the residual after §5-bis, and the only part of row 4 still open.** §5-bis bounds each unit's
+*resident* segment cost and shows it does not rank. What no number covers is a unit's **peak segment
+occupancy while it is working** — the flow term, which is what the four panics were made of and what
+no residency figure predicts. **Probe, runnable today:**
+`scripts/unit-segment-cost.sh watch --label <unit> --units <n> -- <the wave>`, or its `--duration`
+form around a wave that is going to run anyway. It baselines the box first and **withholds** the
+number when the delta sits inside the box's own drift band — the discipline §6 N9 is missing, where
+*"the paired arrival differential failed independently for two agents (drift > signal)"* and failed
+by publishing values rather than by refusing to. It must run **on the M1 Max**: both probes are
+macOS-only sysctls, and the meter is global, so the differential is the only attribution available
+(`zprint`, the one per-owner instrument, hangs under the storm it measures and is banned).
+Highest-value pair: an 8-agent Workflow (units 1/3) and an 8-teammate wave (unit 2) — the two ends
+of §2's cost spread.
 
 ---
 

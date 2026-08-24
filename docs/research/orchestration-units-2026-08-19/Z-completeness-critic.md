@@ -91,6 +91,13 @@ UNMEASURED for every one of the seven units in §2**, so the wall with four inci
 8-teammate wave; the wall is `50% ÷ slope`. Two 30-second reads around waves that are going to run
 anyway.
 
+**RESOLVED IN PART (2026-08-24, backlog `33d9b33bbd28`).** The synthesis now carries **§5-bis**,
+which bounds all seven units' *resident* segment cost from measured footprints and shows the wall is
+**≥135 resident panes** — it does not rank, and 13 teammates at the panic account for **4.4%** of the
+limit the kernel read at 100%. The ranking defect this section names is fixed. What stays open is the
+**flow** term, refiled as the synthesis's **Q12**; the probe prescribed above now ships as
+`scripts/unit-segment-cost.sh`, with the drift discipline §6 N9's refuted differential lacked.
+
 ---
 
 ## G4 — §5 wall #3 (`terminal ~30`) is an iTerm2 figure, on the wrong unit, contradicted by §1
