@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #184: a REPORT and an AUTHORISATION printing the SAME fact is
+  AGREEMENT, not a contradiction — and "it fires permanently" is a duty cycle you can replay.
+  filed 0 / closed 1 / 1 commit (code-comment). TWENTY-EIGHTH CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 19 open / 5
+  blocked at open — now **18 open / 5 blocked**. Board at open: open 311 / blocked 189 / done 2229,
+  500 open+blocked ids snapshotted. Picked from the STORE, inside the goal's warm condition.
+
+  **ROW CLOSED — `5b1cb9415742`, REFUTED on all three of its live claims.** Landed as
+  *docs(cc-blockers): deploy-wedged and deploy-live agree — one reports, the other authorises*
+  — **cite by SUBJECT, never by sha; a land rebases.** The row alleged that `cc-blockers`'
+  `deploy-wedged` row and `scripts/deploy-live.sh` are "two auditors over one population [that]
+  now contradict each other", and asked for a decision between budgeting `deploy-wedged` on the
+  same `CC_DEPLOY_MAX_LAG_*` deploy-live uses, or demoting it to defer to `deploy-stale`.
+  · **BOTH HORNS were already refused in writing by the subject's own prose** — recycle #150's
+    finding, re-verified post-edit at `bin/cc-blockers:489-503`. Budgeting reintroduces the very
+    lag proxy the row was BUILT to escape, and `:491-498` measures why that proxy is blind: a raw
+    ff resets BOTH of deploy-stale's legs at once, so *"the producer of the wedge is also the
+    suppressor of its alarm"*. Deferring to `deploy-stale` defers to that same blind instrument.
+  · **THE PREMISE IS FALSE — they never disagreed.** Measured this session,
+    `deploy-live.sh --dry-run --offline` from the SHARED checkout prints: *"waiting — no GREEN tree
+    is a DESCENDANT of live HEAD `4908e350d5d9` (the newest one, `37f886bb9aa2`, is BEHIND it) …
+    lag 10 commit(s) / 3h, inside the degrade budget (25 / 6h) — no advance, and none is due yet"*.
+    The **structural clause IS `deploy-wedged` verbatim**; the budget clause says only whether a
+    DEGRADED advance is yet authorised. Importing the authoriser's budget into the reporter would
+    silence a TRUE report for exactly as long as the authoriser had not yet decided to act.
+  · **I11 IS NOT STALE.** The row called the comment *"in this exact state that command is what
+    refuses"* stale because deploy-live now words the state as a WAIT. The wording moved; the
+    behaviour did not — run in this state the command still yields no advance, so the platter must
+    still not offer it.
+  · **THE SURVIVING CLAIM IS REFUTED BY MEASUREMENT.** *"Green-behind is the NORMAL post-degrade
+    steady state, so the row fires permanently = alarm-polarity zero bits"* was tested by replaying
+    the predicate itself over the live layer's own reflog crossed with the postland stamp store —
+    2026-08-01..08-24, **46 green stamps · 295 reflog entries · 296 intervals**, with a POSITIVE
+    control (the current moment must evaluate WEDGED — it does, independently corroborated by the
+    dry-run above) and a NEGATIVE control (≥1 interval must CLEAR — **52** do; without it the
+    instrument could not distinguish the two states and any verdict would be vacuous).
+    **WEDGED 483.79 h = 87.3 % · CLEAR 70.59 h = 12.7 % · 28 state TRANSITIONS · longest CLEAR run
+    6.06 h · longest WEDGED run 34.27 h.** A **high duty cycle, not a constant** — so not zero
+    bits. `scripts/alarm-polarity-lint.sh` does not own this shape either: its header scopes it to
+    pattern A (verdict-equality) **deliberately**, and says so. Nothing is left to decide — both
+    offered remedies are refused and the premise motivating the fork is false, so the correct
+    action is the status quo. The **87.3 %** is recorded in the code comment at the I11 site
+    because it is the number a future owner will want, and because this seam has now been
+    re-analysed three times.
+
+  🚨 🆕 **METHOD 150 — A ROW CAN ALLEGE A CONTRADICTION BETWEEN TWO INSTRUMENTS THAT NEVER
+  DISAGREED. READ EACH ONE'S FULL OUTPUT BEFORE RECONCILING THEM.** This row's own `source` field
+  is `deploy-live-wait-d7fdb971` — it was filed FROM deploy-live's output, and it quoted the
+  **budget clause** (*"waiting, none is due yet"*) as if that were the whole message. deploy-live
+  prints TWO clauses, and the other one states the wedge in the same words `cc-blockers` uses. A
+  row that quotes ONE clause of a two-clause message can manufacture a contradiction that the
+  message itself refutes. #183's **method 149** ("ask what each auditor's answer is FOR") is the
+  frame; **150 is the cheaper check to run first** — before asking what the two answers are for,
+  confirm they are actually two answers. Sibling of memory
+  `sibling-auditors-must-share-the-state-model` and of `wrong-cause-corroborated-by-true-metric`.
+
+  **WHAT I MEASURED ABOUT THE TOOLS.**
+  · 🆕 **I proved my suite runner CAN REFUSE before trusting its green.** #183's runner produced a
+    vacuous pass (`listed=0 rows=0` satisfies a `listed -ne rows` check). I kept that guard, added
+    the `listed -eq 0` refusal, **and added the one that catches the actual root cause — a REFUSAL
+    ON A RELATIVE LIST PATH**, since #183's failure was a relative path handed to a script that
+    `cd`s internally. Both were then EXERCISED as negative controls (empty list → rc 2; relative
+    path → rc 2) before the real run. `scratchpad/run-suites-184.sh`.
+  · 🆕 **`bin/cc-blockers` is a CHEAP subject despite its size.** 1,484 → 1,505 lines, and **18**
+    suites mention it, but the selector owed only **7 direct + 3 cited = 10**, **383 tests**,
+    ~25 min, all green. Do not size a subject by its grep count.
+  · ⚠️ **The PostToolUse formatter fired on my probe — NINTH recycle running.** Re-compiled
+    (`python3 -m py_compile`) and re-counted every guard by its literal predicate: 7 `die(`
+    occurrences (6 call sites + the definition), both controls present. All survived.
+  · ⚠️ Selector instrument control unchanged, still **32** —
+    `bash scripts/gate-select.sh --direct 492c51066~1..492c51066 | wc -l`, a FORTY-SEVENTH-recycle
+    control. 🚨 A bare 0 and a broken selector are the same reading.
+  · 🆕 **The converger's state was the SAME shape for the THIRD consecutive recycle** — #182, #183
+    and #184 all read a correct WAIT on no GREEN descendant of live HEAD. Live HEAD `4908e350d5d9`
+    and green `37f886bb9aa2` are UNCHANGED since #183's close; lag **10 / 3h** inside the 25 / 6h
+    budget. The reflog shows why: `37f886bb9aa2` WAS live HEAD at 1787541778 and the layer then
+    ff'd past it to `4908e350d5d9` at 1787560214 — the mechanism `:492-498` describes, observed.
+  · 🆕 **My `comm` at close was clean: exactly 1 id left the open+blocked set, it was mine, 0
+    entered** (500 → 499). #183 saw 2 leave / 0 enter; #182 saw 7 leave with only 1 its own.
+    **Neither is the norm — re-`comm`, and never read a shrinking board as your own work.**
+  · **My own commits' ADD footprint: 0**, measured per-sha (`5b5698e8` adds=0), with the sibling
+    negative control `50b7e7dc9` coming back adds=1 so the predicate was not blind.
+
 - **2026-08-24 — drain recycle #183: the two auditors were never answering one question — one
   REPORTS liveness, the other AUTHORISES an advance, so making them agree arms the degraded door.
   filed 0 / closed 2 / 1 commit (code-comment). TWENTY-SEVENTH CONSECUTIVE close overall.**
