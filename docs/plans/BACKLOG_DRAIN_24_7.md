@@ -87,6 +87,98 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #180: the fire's own freshness cure was the unattributed raw-ff
+  producer, and the row had spent 16 days waiting for a watcher to name it.
+  filed 0 / closed 1 / 2 commits (CODE + docs). TWENTY-FOURTH CONSECUTIVE close overall.** Warm
+  effort declared in my first line: a MOVE on `master-convergence-deadlock`, 23 open / 6 blocked at
+  open. Board at open: open 319 / blocked 194 / done 2214. Picked from the STORE, inside the goal's
+  warm condition — #179's net-zero finding acted on.
+
+  **ROW CLOSED — `a9e5b17d3420`, FIXED WITH CODE.** Landed as *fix(handoff-fire): the freshness cure
+  raw-ff'd the one checkout it must never touch* — cite by SUBJECT, never by sha; a land rebases.
+  The row wanted the producer ATTRIBUTED before any guard, and explicitly refused a blanket ban
+  because `deploy-now.sh` is sanctioned. Both halves are now satisfied.
+
+  · **METHOD 140 — WHEN A ROW SAYS "ATTRIBUTE THE PRODUCER FIRST", THE PRODUCER MAY BE IN THE REPO
+    AND THE ROW MAY HAVE ALREADY LOOKED.** `a9e5b17d3420` said "the only raw-ff runner is
+    `deploy-now.sh:77` … the producer is likely peer agent sessions syncing by hand", and asked for
+    a reflog-watcher recording argv/ppid — instrumentation that must then RUN for days. It was not
+    needed. The producer was `hf_freshness_gate`'s LEFTOVER arm (`handoff-fire.sh:7059`), which runs
+    `git merge --ff-only origin/main` on whatever directory it is handed and had no shared-checkout
+    guard. The row's grep found `deploy-now.sh` because it searched for the raw-ff SPELLING against
+    a literal `origin/main`; this site passes `"$BASE"`, a VARIABLE that happens to be assigned
+    `origin/main` at line 429. **A spelling grep cannot see a producer that reaches the same
+    operation through a variable — widen to the OPERATION and resolve its arguments.**
+  · **METHOD 141 — THE MOST DANGEROUS TREE IS THE ONE THAT BEST FITS THE CURE'S OWN PRECONDITION.**
+    The arm fires on `own=0 && !dirty` — no commits of its own, clean. That is not an edge case for
+    the shared checkout, it is its NORMAL STATE, and `--cwd` is how a lead re-fires a peer into the
+    directory it is already in (`deploy-parity-assert.sh:912` records 8 of 15 live sessions cwd'd
+    there). **Ask which real tree BEST matches a cure's guard, not which one plausibly might.**
+  · **METHOD 142 — RE-RUN THE ROW'S POPULATION CLAIM WITH ITS OWN DISCRIMINATOR, THEN DATE IT
+    AGAINST THE FIX THAT WAS SUPPOSED TO END IT.** The row's discriminator is stated in its own
+    text: deploy-live merges a TARGET SHA, a raw ff merges the REF. Measured on the shared
+    checkout's reflog 2026-08-24: **43** `merge origin/main: Fast-forward` against **70**
+    resolved-SHA. **11 of the 43 fall AFTER `5626e682f` (2026-08-10) deleted `deploy-now.sh`'s raw
+    ff**, newest 2026-08-18 — i.e. the population outlived the only producer anyone had named,
+    which is what proves a second one exists (memory: `landed-remedy-with-surviving-symptom`).
+  · **🚨 METHOD 143 — CONTROL THE RED-PROOF SEAM WITH A LANDED CASE BEFORE BELIEVING ITS RED. MY
+    FIRST RED-PROOF WAS A FALSE RED AND I ALMOST BANKED IT.** ARM A was a lone copy of
+    `handoff-fire.sh` in a scratch dir via the suite's own documented `HF_OVERRIDE`. It cannot cure
+    anything — the script sources its siblings relative to its OWN directory — so it failed
+    IDENTICALLY with and without the guard, and printed a plausible `MUTANT-TOO-WIDE`. Caught by
+    running the suite's **own landed case 2** through the same seam: it failed too. The arm now
+    materialises the WHOLE tree at the pinned base with `git archive`, and that control is a
+    PRECONDITION that REFUSES rather than a line in the output. **Never run a control from a path
+    the subject resolves its own identity from — and when a red appears, ask FIRST whether the
+    instrument can produce a green at all.**
+  · **🚨 METHOD 144 — A LOOP WHOSE BODY RUNS `bats` LOSES ITS OWN LIST TO STDIN, AND REPORTS A
+    CONFIDENT GREEN FOR THE SUITES IT NEVER RAN.** My runner read the suite list on stdin; `bats`
+    reads stdin too, ate the rest of it, and the run ended after **20 of 80** suites — then printed
+    `green=20 RED=0` and a DONE sentinel. Nothing in that output says "incomplete". Fixed by putting
+    the list on **fd 3** and giving `bats` `</dev/null`, plus an anti-vacuity guard that REFUSES
+    unless the table carries one row per listed suite. **A summary that counts what it PROCESSED
+    cannot detect what it SKIPPED — assert against the DENOMINATOR.**
+  · **⚠️ AND THE CAUSE OF THAT WAS DOUBLE-BACKGROUNDING, WHICH THE BRIEF BANS FOR THE LAND.** I ran
+    `nohup … &` inside a `run_in_background` Bash call. Two runners raced on one table and the
+    second's truncation ate the first's rows, and the harness fired its completion notification for
+    the LAUNCHER, not the run — so the event-driven wake was lost and every check became a poll.
+    **The ban is not land-specific. One job, one wake.**
+
+  **THE RED-PROOF WAS TWO-ARM WITH A REFUSING INSTRUMENT CONTROL** (`scratchpad/redproof-180.sh`,
+  worth copying wholesale — it is the corrected shape, not the one that fooled me):
+
+      instrument control: landed case 2 GREEN through the pre-fix seam OK
+      anti-vacuity: pre-fix lacks guard OK · post-fix has guard OK
+      ARM A  pre-fix   12 not-ok=1 | 13 not-ok=0 | 14 not-ok=1
+      ARM B  post-fix  12 not-ok=0 | 13 not-ok=0 | 14 not-ok=0
+      verdict=PROVED  (12,14 RED pre-fix and GREEN post-fix; control 13 green in BOTH arms)
+
+  Case 12 asserts the TREE (the shared checkout does not move), 14 the MESSAGE, and **13 is the
+  control that agrees in both arms** — an ordinary worktree is still cured with the shared-checkout
+  fixture present, which is what makes 12 a claim about WHICH tree rather than about curing at all.
+
+  **MEASURED AND DELIBERATELY LEFT OPEN — `7e2e0ab9c358` IS CONFIRMED AND 21× LARGER THAN FILED.**
+  Attributing SHA-ffs by CONTENT (deploy-live logs `deployed <from> → <to>`, naming the sha):
+  **49 of 70 attributed, 21 UNATTRIBUTED**, including the row's own exhibit `71e96bcbc825`
+  (2026-08-07 16:28). The denominator is sound — `deploy.log` is unrotated, its first `deployed`
+  line is the first deployment ever, and `say "deployed …"` has existed since **2026-07-25**, before
+  the reflog window opens (2026-08-01), so these are not a logging artifact. `ship-land` is ruled
+  out (`ship-land.sh:4002` REFUSES to operate on the shared checkout). **I did not file anything:
+  the row already exists — do not re-file it, and do not close it on my measurement alone.**
+
+  **ALSO MEASURED: the provenance leg reads the reflog with `-1`** (`deploy-parity-assert.sh:885`),
+  i.e. ONE entry — deliberately, and its own comment justifies it ("how the live layer got HERE").
+  But `.claude/commands/ship.md:120` and `5626e682f`'s body both say a raw ff scores UNGATED
+  **"permanently"**, and that is false: the finding is erased by the very next sanctioned SHA ff.
+  **A doc-vs-code asymmetry, not a code defect — I did not "fix" the code to match the prose.**
+
+  **GATES.** Owed set **80 direct** — the full `handoff-fire.sh` blast radius, which is why every
+  recycle since #155 declined this file. All 80 run: **1513 tests, 0 red, 0 non-verdict, 0
+  plan-mismatch**, with the row-count guard confirming 80 of 80 actually executed. `shellcheck`
+  bare on `handoff-fire.sh` rc 0 (so SC2016 was in scope); `bats-assert-liveness` clean. Selector
+  instrument control **32**, unchanged for a forty-third recycle. Post-land RED pages **0**
+  (seventy-first consecutive); heredoc `diff` clean (sixty-second).
+
 - **2026-08-24 — drain recycle #179: rule 7's pin predicate failed on exactly the suites that
   were CORRECT, and the fix had been applied to every one of its siblings and never to it.
   filed 1 / closed 1 / 2 commits (CODE + docs). TWENTY-THIRD CONSECUTIVE close overall.** Warm
