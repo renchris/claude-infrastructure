@@ -615,10 +615,27 @@ EOF
 }
 
 landed() { # <branch> → 0 iff every commit since the merge-base is on the trunk by patch-id
-  local br="$1" out
+  # PATCH-ID, never `merge-base --is-ancestor`. A rebased land rewrites the objects, so the branch
+  # tip stays unreachable from the trunk even when every patch of it shipped. Measured 2026-08-24
+  # across all 1946 local branches here: of the 721 whose every patch IS on the trunk,
+  # `--is-ancestor` acquits 83 and CONVICTS 638 (88.5%). A check written that way can only ever
+  # convict, so anything resting on one never clears — backlog item e733ca203b07 carried exactly
+  # that falsifier and burned two worker claim→reopen cycles against work already discharged.
+  # (memory: cited-sha-may-not-survive-the-land, landedness-oracle-is-blind-to-intent)
+  local br="$1" out cnt
   "$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 || return 1
   out="$("$GIT_BIN" -C "$MAIN" cherry "$TRUNK" "$br" 2>/dev/null)" || return 1
-  ! printf '%s\n' "$out" | grep -q '^+'
+  # COUNTED, never `grep -q` — the rule this file already states at the cc-probe site further down.
+  # Under the `set -uo pipefail` at :145 the old `! printf '%s\n' "$out" | grep -q '^+'` INVERTS
+  # once the cherry output outgrows the pipe buffer: grep exits on the first match, printf takes
+  # SIGPIPE (141), pipefail makes the pipeline non-zero, and `!` flips that to 0 — "landed" for a
+  # branch with nothing landed, feeding both the DISPOSE/KEEP class split and the `--prune-branches`
+  # delete gate. Measured 2026-08-24 on all-'+' input: inverts at 144000 B, correct at 7200 B; the
+  # count form below is correct at both. LATENT today by 3.3x — the largest real cherry output in
+  # this repo is 19608 B (wt-8532922cce46) and 0 of 1935 branches reach 64 KiB — so that is a
+  # margin, not a cure. (memory: grep-q-under-pipefail-inverts-the-verdict)
+  cnt="$(printf '%s\n' "$out" | grep -c '^+')"
+  [ "${cnt:-0}" -eq 0 ]
 }
 
 DIRT_BLOCKER=""
