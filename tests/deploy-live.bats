@@ -332,6 +332,116 @@ pv_stub() { # <name> <body…> → an executable stand-in for postland-verify.sh
   echo "$output" | grep -q "ok   postland-inertness"
 }
 
+# ── nightly step 5b: postland-green-starvation (backlog 01ab05685857) ────────────────────────────
+# The condition step 5 cannot see. It keys on a stamp EXISTING, and the producer's own vocabulary
+# calls a `cut` "no verdict" — so a net that stamps every tick and never earns a green reads ALIVE
+# there while trunk goes unproven. Measured on the box as three breaches of the 24h budget
+# (57h/53h/26h), none of which paged. Every test below asserts BOTH check names off ONE run: the
+# whole claim is that the two verdicts DISAGREE, and either one alone is satisfied by a check that
+# simply mirrors the other.
+commit_at() { # <name> <epoch> — a trunk commit with a CHOSEN clock (the quantity 5b measures)
+  echo "$1" > "$SHARED/$1.txt"; git -C "$SHARED" add -A
+  GIT_AUTHOR_DATE="$2 +0000" GIT_COMMITTER_DATE="$2 +0000" \
+    git -C "$SHARED" commit -q -m "$1"
+  git -C "$SHARED" push -qf origin gs:main
+}
+
+# EVERY commit's clock has to be ours, ROOT INCLUDED, or these tests silently stop discriminating.
+# setup()'s `a` is dated NOW, so on a trunk built on top of it the OLDEST unproven commit is always
+# ~0s old — and an implementation that walks straight past a green (i.e. one keyed on the newest
+# green's AGE, which is what this check must NOT be) abstains for that reason alone. Measured while
+# writing these: the mutant survived tests 2 and 3 until trunk started from an orphan.
+new_trunk() { # <name> <epoch> — replace origin/main with a history whose every clock is chosen here
+  git -C "$SHARED" checkout -q --orphan gs
+  commit_at "$1" "$2"
+}
+
+offbox_green() { # <rev> — the off-box lane's WEAKER acquittal, in its own store
+  local tree; tree="$(git -C "$SHARED" rev-parse "$1^{tree}")"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox"
+  printf '{"verdict":"green","scope":"offbox-hermetic","tree":"%s"}\n' "$tree" \
+    > "$BATS_TEST_TMPDIR/postland/offbox/$tree.json"
+}
+
+starved_trunk() { # a green 3d back, then two RED-stamped commits landed 2d ago
+  local old=$(( $(date +%s) - 3 * 86400 )) mid=$(( $(date +%s) - 2 * 86400 ))
+  new_trunk base "$old"; stamp origin/main green
+  commit_at r1 "$mid"; stamp origin/main red
+  commit_at r2 "$mid"; stamp origin/main red
+}
+
+@test "nightly 5b: RED when trunk carries UNPROVEN content past the green budget" {
+  starved_trunk
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -ne 0 ]
+  # THE PAIR, off one run: step 5 is SATISFIED by the red stamps (the net is demonstrably running)
+  # and 5b still reds. A single-verdict assertion here would pass against a copy of step 5.
+  echo "$output" | grep -q "ok   postland-inertness" || false
+  echo "$output" | grep -q "RED  postland-green-starvation" || false
+  grep -q "postland net GREEN-STARVED" "$PAGES/nightly-regression.page" || false
+  grep -q "newest verdict over that span: red" "$PAGES/nightly-regression.page" || false
+  grep -q "2 commit(s) sit above the newest green" "$PAGES/nightly-regression.page" || false
+}
+
+@test "nightly 5b: an ANCIENT green on the trunk TIP abstains — the quiet-trunk control" {
+  # The control that separates this check from the row's own wording. Stamps are TREE-keyed and a
+  # proven tree is deliberately never re-run, so a trunk that has not moved for a week keeps a
+  # week-old newest green and is FULLY proven the whole time. An implementation keyed on "newest
+  # green stamp age" — which is what the row says — reds here, on a healthy machine.
+  new_trunk old7 "$(( $(date +%s) - 7 * 86400 ))"; stamp origin/main green
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q "ok   postland-green-starvation" || false
+}
+
+@test "nightly 5b: a YOUNG unproven span abstains — the budget is a budget, not a tripwire" {
+  # Trunk moved ten minutes ago after a long quiet spell: the newest green is 3 days old and nothing
+  # is wrong. Only the span nothing has re-proven is old enough to convict, and it is 600s here.
+  new_trunk base "$(( $(date +%s) - 3 * 86400 ))"; stamp origin/main green
+  commit_at fresh "$(( $(date +%s) - 600 ))"
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  echo "$output" | grep -q "ok   postland-green-starvation" || false
+}
+
+@test "nightly 5b: a stamps dir that has NEVER stamped is step 5's fact, not 5b's" {
+  # Two checks paging over one repair is the noise that gets a nightly ignored. The dir exists
+  # (setup mints it) and is empty, so step 5 reds on it and 5b says nothing at all.
+  advance_origin b
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "RED  postland-inertness" || false
+  echo "$output" | grep -q "ok   postland-green-starvation" || false
+}
+
+@test "nightly 5b: green-abstains when the net is not adopted (no stamps dir)" {
+  advance_origin b
+  run nightly "$BATS_TEST_TMPDIR/no-such-postland"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "ok   postland-green-starvation" || false
+}
+
+@test "nightly 5b: an off-box acquittal is REPORTED and never cancels the red" {
+  # The off-box lane proves a hermetic SUBSET, so it cannot acquit the host-coupled suites this
+  # check is about — but which of the two it is changes the repair entirely, so the page says so.
+  # Anti-laundering: if a file drop under offbox/ could turn this green, the weaker claim would
+  # silently become the stronger one, which is the exact reason it lives in its own store.
+  starved_trunk
+  offbox_green origin/main
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "RED  postland-green-starvation" || false
+  grep -q "off-box acquittal: yes, off-box hermetic green from" "$PAGES/nightly-regression.page" || false
+}
+
+@test "nightly 5b: a bare file drop under offbox/ is NOT an acquittal (both fields, or neither)" {
+  starved_trunk
+  local tree; tree="$(git -C "$SHARED" rev-parse origin/main^{tree})"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox"
+  printf '{"verdict":"green","tree":"%s"}\n' "$tree" > "$BATS_TEST_TMPDIR/postland/offbox/$tree.json"
+  run nightly "$BATS_TEST_TMPDIR/postland"
+  grep -q "off-box acquittal: none" "$PAGES/nightly-regression.page" || false
+}
+
 # ── --auto autopilot (LAND_PIPELINE_V2 §4.3) ─────────────────────────────────────────────────────
 # EVERY `[[ ]]` below carries `|| false`. Not style — a non-final `[[ ]]` is errexit-EXEMPT under
 # bats, so it is a DEAD assertion that can never fail its test (`[ ]` and simple commands ARE live).
