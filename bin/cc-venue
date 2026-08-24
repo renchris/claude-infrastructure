@@ -23,9 +23,15 @@ on keywords would have sent both.** So the decision is four separate questions, 
 is a word list:
 
     1. does the specification NAME state a VM cannot see?      → bin/cc-eligible spelling classes
+   1b. is the specification ITSELF on trunk (its `dodRef`)?    → `dod_trunk_state`, below
     2. does it CITE history the shallow clone cannot reach?    → bin/cc-eligible measured arm
     3. is its premise still standing against TODAY's tree?     → bin/cc-premise, re-run here
     4. can this box CERTIFY 2 at all?                          → the horizon oracle state
+
+Question 1b is the one this file shipped without, and the block above `dod_trunk_state` carries the
+measurement: an item whose DoD lived only in the dispatching box's working tree was promoted, and
+the VM arrived unable to read a word of what it was sent to do. It is numbered 1b rather than 5
+because it is the same question as 1 — state a VM cannot see — asked of the one field no arm read.
 
 NOT A SECOND ELIGIBILITY IMPLEMENTATION. Questions 1, 2 and 4 are answered by importing
 `bin/cc-eligible` — the module object, not a re-derivation of its rules — because that same file is
@@ -77,6 +83,7 @@ Env:
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -183,6 +190,8 @@ def usable_paths(text, cp):
 # uses, for the same reason (a machine reads the first field, a human reads the line).
 WHY_ELIGIBLE = "eligible"
 WHY_UNCERTIFIED = "uncertified-history"
+WHY_DOD_OFFTRUNK = "ineligible-dod-offtrunk"
+WHY_DOD_UNCERTIFIED = "uncertified-dod"
 PREMISE_PREFIX = "premise-"
 
 # cc-premise verdicts that are NOT "the premise is standing". `clear` is the only one this file
@@ -227,6 +236,114 @@ def premise_verdict(item_id):
 
 def _clip(s, n):
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# ── QUESTION 1b: IS THE ITEM'S OWN SPECIFICATION ON TRUNK? ──────────────────────────────────────
+# The `dodRef` is the one citation whose absence a cloud worker cannot work around, and it was the
+# one citation NO arm of this decision resolved. Measured 2026-08-24 on item 4ce239d21d67, whose
+# dodRef is `…/docs/plans/RATIFY_DECISIONS_TRIAGE.md` — a file present in the DISPATCHING box's
+# working tree and in no commit reachable from any ref (`git log --all -S` over a distinctive
+# phrase: zero hits). It was dispatched off-box, and the VM's fresh clone could not read one word
+# of the specification it was sent to satisfy.
+#
+# WHY NO EXISTING ARM CAUGHT IT, and the shape is an ASYMMETRY between two folds over one field:
+#   · cc-eligible's `SPAN_FIELDS` DOES carry `dodRef` into its spec text — but its arms are the
+#     spelling classes (a word list; a plan path fires none, verified: `classify_all` → []) and
+#     `HistoryOracle.unreachable`, which resolves HEX tokens. Neither asks about a path.
+#   · cc-premise DOES own the path-vs-trunk arm (`cited_paths` → `cat-file -e origin/main:<p>` →
+#     `suspect`) — but its spec text is `("title", "needs", "evidence")` and `dodRef` is folded to
+#     a SEPARATE field (bin/cc-premise:500, :535), read only by the `plan-open` probe, which is
+#     scoped to that source AND gated on `os.path.exists` on THIS box. So the path arm never sees
+#     a dodRef, the verdict stays `clear`, and `clear` is this file's green light.
+# The field reaches the classifier that cannot check paths, and is withheld from the one that can.
+#
+# THE FIX GOES HERE, IN THE PRODUCER, and not by widening either fold. Adding `dodRef` to
+# cc-premise's spec text would flip every row whose plan is off-trunk to `suspect` store-wide —
+# the fabricated-finding class that file measured at 80 false convictions in 156 (bin/cc-premise:697)
+# — and `suspect` is read by workers and sweeps, not just by this decision. This arm's blast radius
+# is exactly one bit in one direction: cloud → local, which the header above prices at nothing.
+#
+# IT MAY ONLY ACQUIT ON A POSITIVE RESOLUTION. An absolute dodRef (`/Users/…/repo/docs/plans/x.md`,
+# the spelling `cc-dispatch`'s own `[ -f "$sdod" ]` gate reads) is tried as progressive suffixes so
+# a path recorded from the filing box's filesystem still resolves against trunk; every candidate
+# missing is what earns `absent`. A suffix that resolves to some OTHER file of the same name is a
+# false ACQUIT, and that is the direction this whole file is safe to be wrong in.
+_MAX_DOD_CANDIDATES = 12
+
+
+def _looks_like_path(s):
+    """Is this dodRef a claim about a FILE, or a reference of some other kind?
+
+    `decision:5f0a…`, `#anchor-only` and a bare word are not path claims and this arm has nothing to
+    say about them — returning False routes them onward UNCHANGED, which is the difference between
+    a scoped arm and one that convicts every row it does not understand.
+    """
+    return "/" in s or bool(re.search(r"\.[A-Za-z0-9]{1,6}$", s))
+
+
+def _dod_candidates(dod):
+    """The trunk pathspecs this dodRef could mean, longest first. Bounded.
+
+    A RELATIVE dodRef means itself and nothing else. An ABSOLUTE one carries the filing box's mount
+    prefix, which no `git cat-file` will ever accept, so each suffix is a candidate — `docs/plans/x.md`
+    is reached by dropping `/Users/<user>/Development/<repo>/`.
+    """
+    p = dod.split("#", 1)[0].strip().rstrip(".,;:)")
+    if not p or not _looks_like_path(p):
+        return []
+    if not p.startswith("/"):
+        return [p]
+    segs = [s for s in p.split("/") if s]
+    return ["/".join(segs[i:]) for i in range(len(segs))][:_MAX_DOD_CANDIDATES]
+
+
+def dod_trunk_state(dod, repo, ref):
+    """('n/a'|'ok'|'absent'|'unknown', pathspec|"") — does this item's DoD exist on trunk?
+
+    The four answers are kept apart for the reason every reader in this stack keeps them apart
+    (memory: lookup-miss-is-not-absence): `n/a` is "not a path claim", `unknown` is "could not ask",
+    and only `absent` is a proof. Collapsing `unknown` into `absent` would refuse the whole cloud
+    tap on an unreadable checkout; collapsing it into `ok` would promote on having failed to look.
+    """
+    cands = _dod_candidates(dod or "")
+    if not cands:
+        return "n/a", ""
+    if not repo or not os.path.isdir(repo) or not ref:
+        return "unknown", cands[0]
+    asked = False
+    for c in cands:
+        rc, _out, _err = _run(["git", "-C", repo, "cat-file", "-e", "%s:%s" % (ref, c)], timeout=20)
+        if rc is None:
+            continue          # this candidate could not be asked; another still might answer
+        asked = True
+        if rc == 0:
+            return "ok", c
+    return ("absent", cands[-1]) if asked else ("unknown", cands[0])
+
+
+_DODREFS = []  # one-slot cache; None inside means "asked and could not read the ledger"
+
+
+def dodref_of(item_id):
+    """This item's recorded dodRef, or None when the ledger could not be read.
+
+    Read from `cc-backlog list`'s FOLD rather than re-folded here, so this arm and cc-dispatch's
+    plan-open gate can never disagree about WHICH plan an item points at (bin/cc-premise:525-532
+    makes the same choice for the same reason).
+    """
+    if not _DODREFS:
+        exe = _resolve("CC_VENUE_BACKLOG_BIN", "cc-backlog")
+        rc, out, _err = _run([exe, "list", "--all", "--json"], timeout=180)
+        try:
+            rows = json.loads(out) if rc == 0 else None
+        except ValueError:
+            rows = None
+        _DODREFS.append(
+            None if rows is None
+            else {r.get("id"): (r.get("dodRef") or "") for r in rows if r.get("id")}
+        )
+    m = _DODREFS[0]
+    return None if m is None else m.get(item_id, "")
 
 
 def build_index():
@@ -284,6 +401,35 @@ def decide(item_id, idx):
                     300),
                 "eligible": full, "premise": None}
 
+    # QUESTION 1b, BEFORE THE PREMISE PROBE. Ordering is cheapest-first here for the same reason the
+    # block above gives: `premise_verdict` EXECUTES this item's stored falsifier, and spending a
+    # side effect on work that can never go off-box buys a verdict nobody will read. A handful of
+    # `cat-file -e` against an already-certified checkout is the cheaper question, and it is asked
+    # only of the rows that carry a dodRef at all.
+    dod = dodref_of(item_id)
+    if dod is None:
+        return {"id": item_id, "venue": "local", "token": WHY_DOD_UNCERTIFIED,
+                "detail": "the ledger could not be re-read for this item's dodRef, so its "
+                          "specification could not be located on trunk — a producer may not "
+                          "promote on having failed to look",
+                "eligible": full, "premise": None}
+    dstate, dpath = dod_trunk_state(dod, hist["repo"], hist["ref"])
+    if dstate == "absent":
+        return {"id": item_id, "venue": "local", "token": WHY_DOD_OFFTRUNK,
+                "detail": _clip(
+                    "this item's DoD (%s) is on no commit reachable from %s — it exists only in a "
+                    "working tree, and a cloud clone would arrive with the specification it was "
+                    "sent to satisfy unreadable. Land the plan, or run this one locally."
+                    % (dod, hist["ref"]), 300),
+                "eligible": full, "premise": None}
+    if dstate == "unknown":
+        return {"id": item_id, "venue": "local", "token": WHY_DOD_UNCERTIFIED,
+                "detail": _clip(
+                    "this item's DoD (%s) could not be resolved against %s in %s — not proven "
+                    "absent, and not certified present either" % (dod, hist["ref"] or "trunk",
+                                                                  hist["repo"] or "none"), 300),
+                "eligible": full, "premise": None}
+
     pv = premise_verdict(item_id)
     if pv != PREMISE_OK and pv != "skipped":
         return {"id": item_id, "venue": "local", "token": PREMISE_PREFIX + (pv or "unreadable"),
@@ -297,8 +443,9 @@ def decide(item_id, idx):
         "id": item_id, "venue": "cloud", "token": WHY_ELIGIBLE,
         "detail": _clip(
             "no local-only spelling fired; every cited sha is inside the newest %d commits of %s "
-            "(certified from a full clone at %s); premise %s"
-            % (hist["depth"], hist["ref"], hist["repo"], pv), 300),
+            "(certified from a full clone at %s); DoD %s; premise %s"
+            % (hist["depth"], hist["ref"], hist["repo"],
+               "on trunk at %s" % dpath if dstate == "ok" else "not cited", pv), 300),
         "eligible": full, "premise": pv,
     }
 
