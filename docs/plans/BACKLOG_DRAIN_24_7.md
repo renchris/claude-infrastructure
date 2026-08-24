@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #186: the fix had already landed under a DIFFERENT ROW, in a
+  different condition, ten hours after this row's last touch — and the row's own miscounted census
+  is what made it unfindable. filed 0 / closed 1 / 1 commit (no code needed — this doc). THIRTIETH
+  CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 16 open / 6
+  blocked at open — now **15 open**. Board at open: open 307 / blocked 191 / claimed 6 / done 2231,
+  498 open+blocked ids snapshotted. Picked from the STORE, inside the goal's warm condition.
+
+  **ROW CLOSED — `5ef317c7aa37`** ("Execution-locus enforcement points at the wrong ACT:
+  agent-teams-enforce.sh binds matcher 'Agent' ONLY, so it cannot fire until the lead has ALREADY
+  decided to delegate — a lead that opens Edit on a source file and writes a plan phase by hand
+  meets ZERO delegation logic"). **DISCHARGED, not refuted** — it was accurate when written. No
+  code was needed: the fix is `d9aaf84f3259` (2026-08-11T18:57:13Z), which added **BRANCH 2** to
+  `hooks/plan-agent-teams-default.sh` — a PreToolUse `Write|Edit|MultiEdit` arm that fires on
+  **source** files. The row's `lastTs` is **2026-08-11T09:02:23Z, ~10h EARLIER**, and the sibling
+  row that owns the land, **`14bcdfee2eb8`, is `done`** — filed under condition
+  `master-account-facts`, not this one.
+
+  · **Verified by CONTENT this moment, never by ancestry alone** (#185's 88.5% measurement):
+    `~/.claude/hooks/plan-agent-teams-default.sh` is content-identical to `origin/main` and carries
+    `_locus_source_branch`; `d9aaf84f3259` is an ancestor of trunk **and**
+    `git diff origin/main d9aaf84f3259 -- hooks/plan-agent-teams-default.sh` is empty.
+  · **Every clause the row called MANDATORY is built.** The nudge names the exact command the row
+    specified (`handoff-fire.sh --prompt-file … --notify-back … --goal`); it is `additionalContext`,
+    **not** a deny, matching "consider a deny only after the false-positive rate is MEASURED" — and
+    the rate was measured at exact predicate parity over 163 sessions: **4/163 = 2.5%**, latched to
+    one fire per session. `tests/plan-agent-teams-locus.bats` = **16 tests, 16/16 green this turn**,
+    with positive controls in BOTH directions *and* a **pre-fix MUTANT control** ("the pre-fix hook
+    does NOT fire on the same fixture"), so the green is not vacuous.
+  · **The stated BLOCKER was DISSOLVED, not solved.** The row parked on "(b) no per-phase dispatch
+    record exists to read — that store must exist first". No such store was ever built; branch 2
+    replaced predicate (b) with a session-keyed **slice counter**, so the missing store left the
+    path. **A row can be blocked on a premise its own fix never needs.**
+
+  🚨 **WHY NOTHING FOUND IT — THE ROW'S OWN CENSUS OMITTED THE HOOK THE ROW WAS ABOUT.** LIMIT 2
+  enumerates "the three PreToolUse `Write|Edit|MultiEdit` hooks" as backup, directory-boundary, and
+  **MEMORY.md bytes**. But MEMORY.md bytes is `hooks/lib/memory-index-budget.sh`, a **library
+  sourced by `backup-before-write.sh`** — the row says "via backup-before-write.sh" *itself*. Slot 3
+  therefore **double-counts hook 1**, and the real third registered hook went unnamed:
+  **`plan-agent-teams-default.sh`**, registered at `Write|Edit|MultiEdit` since `c8d8c64e3`
+  (**2026-04-17**, four months before the row measured), and whose entire subject **is** the
+  Execution Locus. The one hook the row was really about is the one its census dropped.
+
+  · **Measured: all four obvious joins fail.** `dodRef`/`source` cannot link the two rows (different
+    dodRef; the sibling's source is `reso-bottle-service-motion-session`, with no dodRef). The
+    **condition key cannot either** — `master-convergence-deadlock` vs `master-account-facts`, so
+    the drain's own picking instrument is what hid the sibling. A **filename join also fails**: the
+    rows name **disjoint** files — this one names `agent-teams-enforce.sh`, the sibling names
+    `plan-agent-teams-default.sh` + `validate-plan-structure.sh`.
+
+  **RE-MEASURED WITH THE ROW'S OWN PREDICATE (it measured 2026-08-07; this is 2026-08-24):**
+  P1 `agent-teams-enforce.sh` binds matcher `Agent` **ONLY** — **still TRUE** (1 registration).
+  Denominator moved **13 → 16** registered PreToolUse entries; claim direction unchanged.
+  P3 no PreToolUse hook keys on context fill — **still TRUE, 0 of 16** match
+  `used_pct|context_pct|CONTEXT_FILL`. **Instrument positive-controlled before believing its 0:**
+  `waiting-recycle.sh` = 22 matches, `boundary-handoff.sh` = 14.
+
+  **WHAT SURVIVES — stated, deliberately NOT re-filed** (no evidence of a live defect on either;
+  filing them would mint work rather than close it): LIMIT 1 stands —
+  `validate-plan-structure.sh:107` still greps for a **declaration**, so declaration ≠ compliance —
+  but the row itself calls it "weak, known" and it is now materially less load-bearing, because
+  branch 2 keys on **the ACT** and reads no declaration at all. SPEC clause **(c)**, a context-fill
+  threshold, was never built; but (c)'s purpose was bounding false positives, which was achieved and
+  **measured** another way, and the row labels its SPEC "starting point, not a prescription".
+
+  🆕 **METHOD 152 — BEFORE WORKING A ROW, ASK WHETHER A SIBLING **ROW** ALREADY CLOSED IT, AND DO
+  NOT USE THE ROW'S OWN ENUMERATION AS THE SEARCH KEY.** #185's method 151 asks whether the
+  **mechanism** already did the work, and says read its ledger. 152 is the adjacent face: the work
+  may have been done by another **row**, in another **condition**, citing another **doc**, naming
+  another **file** — so none of the four joins reaches it. **The durable check is to date the row's
+  claim against the SUBJECT FILE's git history** (`git log -S` on the identifier the row's *remedy*
+  would touch), because that reaches the fix whatever store or condition recorded it. Siblings:
+  `refuted-open-row-remints-its-own-analysis`, `scan-revision-predates-the-fix`,
+  `parked-blocker-obsoleted-by-later-fix`.
+
+  **Tooling notes.** The classifier **DENIED `kill <pid>`** on the parked `cc-await-ping` the drain
+  told me to kill; I did not work around it and lost nothing — the live `/goal` blocks stops, so
+  peer mail still arrived at every boundary. `bash bin/cc-backlog fold` again worked from the
+  worktree. The operator-set goal **again named the wrong successor** (it said "#185" while #185 was
+  already the predecessor); I fired **#187**, read off §2.1's newest entry as the brief instructs.
+
 - **2026-08-24 — drain recycle #185: the row asked for a salvage the mechanism had already
   performed — and its own falsifier could never have told it so. filed 0 / closed 1 / 2 commits
   (1 code fix + this doc). TWENTY-NINTH CONSECUTIVE close overall.**
