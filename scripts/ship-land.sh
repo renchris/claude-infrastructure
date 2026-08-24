@@ -316,7 +316,7 @@ gate_red() {  # $1=arm  [$2=subject: the file/suite it named] — raise GATE_RED
 SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"
 SMOKE_N="${SHIP_LAND_SMOKE_N:-0}"              # direct suites the smoke actually RAN
 SMOKE_S="${SHIP_LAND_SMOKE_S:-0}"              # wall seconds the smoke spent
-NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | inert | none — ATTESTED, never enforced
+NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | starved | inert | none — ATTESTED, never enforced
 SMOKE_DEADLINE=""                              # non-empty ⇒ gate_bats bounds every child by it
 
 # ---- P0: THE PIPELINE MEASURES ITSELF ---------------------------------------
@@ -1346,7 +1346,56 @@ detect_trunk() {
   printf '%s' "$t"
 }
 
-postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — never blocks a land.
+# postland_mtime <path> — epoch mtime, or 0. BSD `stat -f %m` first, then GNU `stat -c %Y`, and
+# DIGITS-ONLY from either. The plain `stat -f %m … || stat -c %Y …` idiom this replaces is correct
+# on the box that runs the lander and quietly wrong anywhere else, which is exactly where the sensor
+# below now has to be provable: measured on GNU coreutils, `stat -f %m <file>` prints the whole
+# FILESYSTEM block to STDOUT and exits 1, so the `||` fires and the capture becomes six lines of
+# block counts with the real epoch glued on the end. Under `set -u` the first `-gt` on that string
+# then dies on "File: unbound variable" — a freshness sensor that aborts the shell instead of
+# reporting a stale green. The digits guard is the belt: an rc-0 answer that is not a number can
+# never become an mtime either.
+# `if`, not a bare `&&` chain: this file runs `set -uo pipefail` today, but a failing `&&` LIST is
+# one of the few things errexit does not exempt, so the chain form would turn a future `set -e` into
+# a lander that dies inside its own freshness sensor. An `if` condition is exempt unconditionally.
+postland_mtime() {
+  local v
+  if v="$(stat -f %m "$1" 2>/dev/null)" && [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  if v="$(stat -c %Y "$1" 2>/dev/null)" && [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  printf '0'
+}
+
+# postland_offbox_note — the SECOND producer's freshness, as a message clause and NOTHING ELSE.
+# Never sets NET_STATE, never returns non-zero, never keeps a land from warning. It exists because
+# v2's message asserted "nothing is re-proving the trunk", a clause that was true when it was
+# written and is false whenever `.github/workflows/hermetic.yml` is alive: that workflow acquits the
+# hermetic partition hourly and `scripts/offbox-green-pull.sh` transports its greens into
+# $POSTLAND_DIR/offbox, where `deploy-live` already spends them at its T1H tier.
+#
+# THE SEPARATION IS DELIBERATE AND IS PRESERVED HERE. offbox-green-pull.sh § IT WRITES TO offbox/,
+# NEVER TO stamps/ measured why: no consumer of the on-box store reads any field but `.verdict`, so
+# a hermetic-SUBSET green dropped into `stamps/` would be indistinguishable from a full-corpus one.
+# The same rule binds this function — it may only ADD A SENTENCE. An off-box green can never make
+# NET_STATE `live`, because a subset that cannot see the machine-coupled suites can acquit what it
+# ran and nothing else.
+postland_offbox_note() {
+  local odir onew=0 oage m p
+  odir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/offbox"
+  [[ -d "$odir" ]] || return 0
+  # Only greens are ever written there (offbox-green-pull.sh § ONLY GREEN IS EVER WRITTEN), so
+  # mtime alone is the freshness clock and no verdict re-read is needed.
+  while IFS= read -r p; do
+    m="$(postland_mtime "$p")"
+    [[ "$m" -gt "$onew" ]] && onew="$m"
+  done < <(find "$odir" -type f -name '*.json' 2>/dev/null)
+  [[ "$onew" -gt 0 ]] || return 0
+  oage=$(( ( $(date +%s) - onew ) / 3600 ))
+  [[ "$oage" -lt "${POSTLAND_MAX_STAMP_AGE_H:-24}" ]] || return 0
+  printf ' Trunk is NOT unverified meanwhile: the off-box hermetic producer left a green %sh ago in %s — a SUBSET claim (it cannot see the machine-coupled suites), so it never substitutes for this verdict and never sets net:"live".' \
+    "$oage" "$odir"
+}
+
+postland_net_live() {  # sets NET_STATE=live|starved|inert|none. ALWAYS returns 0 — never blocks a land.
   # ABSENCE IS LOUD, but loudness is the whole remedy (v2). v1 read an inert net as "do not
   # narrow" and DEGRADED THE LAND TO THE FULL CORPUS — a fail-closed path picking the MORE
   # expensive action, i.e. the amplifier law (R7) in its purest form: the net is inert precisely
@@ -1356,24 +1405,61 @@ postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — ne
   # an inert net costs is verification LATENCY, which R9's freshness alarm surfaces to the
   # operator (cc-blockers / operator-readout), where a human can act on it.
   # No stamps dir / no green stamp yet ⇒ the net simply is not adopted (the bootstrap land).
+  #
+  # ── v3: INERT AND STARVED ARE DIFFERENT FAULTS WITH DIFFERENT REMEDIES, AND v2 NAMED ONE ───────
+  # v2 read GREEN stamps and nothing else, so a verifier that wakes every 5 minutes and writes a
+  # `red` or a `cut` every single time was reported as *"looks INERT"*, with the remedy *"check
+  # that com.claude.postland-verify is loaded (launchctl list) and that its stamps dir is
+  # advancing"*. In that failure BOTH of those checks PASS — the job is loaded and the dir IS
+  # advancing — so a reader who follows the remedy finds nothing wrong and discards the alarm.
+  #
+  # MEASURED, and twice independently, which is what makes this a sensor defect rather than a
+  # reading error: backlog `01ab05685857` was filed verbatim out of this message ("postland-verify
+  # is INERT — newest GREEN stamp 46h old (max 24h), so nothing is re-proving trunk"), and the two
+  # later passes that touched it both had to hand-correct its premise before they could do anything
+  # — *"'INERT' is wrong — the daemon is LOADED and RUNNING (launchctl: 85038; stamps advancing
+  # 114→33 behind today). The true fact is green STARVATION"*
+  # (docs/plans/backlog-consolidation-2026-08-09/OUT-landgate.md:154) and *"premise false —
+  # postland-verify is ALIVE and stamping"* (docs/research/blocked-tail-triage-2026-08-16.md:60).
+  # An alarm every reader has to correct before acting on it costs a pass per reader and buries the
+  # real cause; the row survived three of them.
+  #
+  # The discriminator is the one the v2 message already implied ("its stamps dir is advancing") and
+  # never actually consulted: THE NEWEST STAMP OF ANY VERDICT. Fresh stamps with a stale green ⇒
+  # the job runs and the CORPUS is red or cut (`starved`, and launchctl is the wrong place to
+  # look). No fresh stamp of any verdict ⇒ the job really has stopped (`inert`, and only there is
+  # the launchctl remedy correct). Both still WARN and both still LAND — v2's inversion is
+  # untouched, and `starved` is a new NON-live value, so no consumer that keys on `live` changes
+  # its answer.
   NET_STATE="none"
   [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
-  local dir age max newest=0 m p
+  local dir age max newest=0 anyest=0 runs_age m p
   dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
   [[ -d "$dir" ]] || return 0
   # A stamp is GREEN by CONTENT ("verdict":"green"), not by filename — the naming is T3's to
-  # choose and must not be a hidden coupling. Newest green stamp's mtime is the liveness clock.
+  # choose and must not be a hidden coupling. The newest GREEN stamp's mtime is the liveness clock;
+  # the newest stamp of ANY verdict is the RUNNING clock, and the pair is the whole discriminator.
   while IFS= read -r p; do
+    m="$(postland_mtime "$p")"
+    [[ "$m" -gt "$anyest" ]] && anyest="$m"
     grep -qs '"verdict"[[:space:]]*:[[:space:]]*"green"' "$p" || continue
-    m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo 0)"
     [[ "$m" -gt "$newest" ]] && newest="$m"
   done < <(find "$dir" -type f 2>/dev/null)
+  # UNCHANGED, and load-bearing: a net that has never gone green is NOT ADOPTED, never `starved`.
+  # The bootstrap land writes red stamps and no green one, which is exactly the `starved` shape —
+  # so this guard, not the discriminator below, is what keeps the bootstrap silent.
   [[ "$newest" -gt 0 ]] || return 0
   max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
   age=$(( ( $(date +%s) - newest ) / 3600 ))
   if [[ "$age" -lt "$max" ]]; then NET_STATE="live"; return 0; fi
+  runs_age=$(( ( $(date +%s) - anyest ) / 3600 ))
+  if [[ "$runs_age" -lt "$max" ]]; then
+    NET_STATE="starved"
+    echo "⚠ ship-land: the post-land VERIFIER is RUNNING but GREEN-STARVED — its newest stamp of any verdict is ${runs_age}h old, so the job IS loaded and its stamps dir IS advancing, while the newest GREEN stamp is ${age}h old (max ${max}h). The fault is in the CORPUS, not the daemon: do not go check launchctl — read the newest stamps' verdicts in ${dir} and fix what is red or cut there. This land PROCEEDS (a land never made the full-suite claim). Attested net:\"starved\".$(postland_offbox_note) (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+    return 0
+  fi
   NET_STATE="inert"
-  echo "⚠ ship-land: the post-land VERIFIER looks INERT — newest GREEN stamp is ${age}h old (max ${max}h). This land PROCEEDS (a land never made the full-suite claim), but nothing is re-proving the trunk: check that com.claude.postland-verify is loaded (launchctl list) and that its stamps dir is advancing. Attested net:\"inert\". (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  echo "⚠ ship-land: the post-land VERIFIER looks INERT — no stamp of ANY verdict inside ${max}h (the newest is ${runs_age}h old) and the newest GREEN stamp is ${age}h old. This land PROCEEDS (a land never made the full-suite claim), but the on-box verifier is not re-proving the trunk: check that com.claude.postland-verify is loaded (launchctl list) and that ${dir} is advancing. Attested net:\"inert\".$(postland_offbox_note) (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
   return 0
 }
 

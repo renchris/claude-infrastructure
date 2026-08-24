@@ -1157,7 +1157,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -qE '"smoke":"(green|red|partial|skipped|none-[a-z]+)"' "$LAND_LOG"
   grep -qE '"smoke_n":[0-9]+' "$LAND_LOG"
   grep -qE '"smoke_s":[0-9]+' "$LAND_LOG"
-  grep -qE '"net":"(live|inert|none)"' "$LAND_LOG"
+  grep -qE '"net":"(live|starved|inert|none)"' "$LAND_LOG"
   grep -q '"selected_n":' "$LAND_LOG"
   grep -q '"red":""' "$LAND_LOG"                            # green ⇒ no arm claimed a red
 }
@@ -1258,13 +1258,22 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
 # literal: a fixture pinned to a wall-clock constant changes meaning as the clock advances and has
 # already taken the fleet's gate down on a calendar boundary with no code change.
 
-@test "net INVERSION: an INERT verifier WARNS and the land PROCEEDS — never a corpus degrade" {
+@test "net INVERSION: a STARVED verifier WARNS and the land PROCEEDS — never a corpus degrade" {
   # v1: stamps exist but the newest GREEN one has gone cold ⇒ "do not narrow" ⇒ run the FULL
   # corpus. That is the amplifier law (R7) at its purest: the net goes inert precisely when the box
   # is wedged, and the response was to add 40 minutes of bats per land to a wedged box. v2 keeps
-  # the detection and drops the escalation — warn, attest net:"inert", land. Nothing is lost: the
-  # land never made the full-suite claim, so an inert net costs verification LATENCY, which R9's
-  # freshness alarm surfaces to the operator.
+  # the detection and drops the escalation — warn, attest, land. Nothing is lost: the land never
+  # made the full-suite claim, so a non-live net costs verification LATENCY, which R9's freshness
+  # alarm surfaces to the operator.
+  #
+  # v3 RELABELS THIS FIXTURE, and the relabelling is the point rather than a concession to the
+  # diff. The fixture is a FRESH red stamp beside a 48h-old green — i.e. a daemon that is loaded
+  # and advancing while its corpus is red, which v2 reported as "looks INERT" and sent the reader
+  # to `launchctl list`, where nothing is wrong. That is the exact text backlog `01ab05685857` was
+  # filed from and the exact premise two later passes had to hand-correct. The INVERSION this test
+  # owns — warn, land, never summon the corpus — is asserted below unchanged; only the label and
+  # the remedy move. The genuine no-stamps-at-all case gets its own test underneath, so the two
+  # halves of the discriminator are pinned apart rather than collapsed.
   scope_fixture
   stub_selector "" "tests/a.bats"
   mkdir -p "$POSTLAND_DIR/stamps"
@@ -1275,13 +1284,36 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
 
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                                        # LANDS — the whole inversion
-  echo "$output" | grep -q "looks INERT"                     # …loudly
+  echo "$output" | grep -q "GREEN-STARVED"                   # …loudly
   echo "$output" | grep -q "This land PROCEEDS"
-  grep -q '"net":"inert"' "$LAND_LOG"                        # …and durably
+  echo "$output" | grep -q "do not go check launchctl"       # the remedy that actually applies
+  grep -q '"net":"starved"' "$LAND_LOG"                      # …and durably
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # the smoke is UNCHANGED by the net…
   [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]              # …and no corpus was summoned
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- stn.sh)" ]
+}
+
+@test "net: EVERY stamp cold ⇒ net:inert, and only there is launchctl the prescribed remedy" {
+  # The other half of v3's discriminator, and the positive control for the test above: if the
+  # `starved` branch simply swallowed every non-live case, "inert" would be unreachable and the
+  # relabelling would have DELETED a state rather than split one. Same fixture shape, one
+  # difference — nothing in the stamps dir is fresh, so the daemon really has stopped.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  mkdir -p "$POSTLAND_DIR/stamps"
+  printf '{"head":"deadbee","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/deadbee.json"
+  printf '{"head":"alsocold","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/alsocold.json"
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/deadbee.json"
+  touch -t "$(date -v -30H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/alsocold.json"
+  landable feat/dead-net dn.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "looks INERT"
+  echo "$output" | grep -q "check that com.claude.postland-verify is loaded"
+  grep -q '"net":"inert"' "$LAND_LOG"
+  [ "$(echo "$output" | grep -c "GREEN-STARVED")" -eq 0 ]    # the two states are exclusive
 }
 
 @test "net: a fresh GREEN stamp ⇒ net:live, no warning; kill switch ⇒ net:none" {
