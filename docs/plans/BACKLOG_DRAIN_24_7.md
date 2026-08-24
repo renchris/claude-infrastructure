@@ -86,6 +86,141 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+
+- **2026-08-24 — drain recycle #205: the row was TRUE, accurately cited to the line, and had been
+  FIXED nine days earlier by a commit whose subject is this row's title — nobody closed it. filed 0 /
+  closed 1.**
+  Board at open: **475 open+blocked**; at close **476** (286 open / 190 blocked / 2265 done, claimed
+  6). `master-convergence-deadlock` **open=13 / blocked=6** at BOTH ends, unmoved by me. **Closed 1,
+  filed 0 — net −1**, the second consecutive negative-net link. `comm` at both ends: **2 departures**
+  — mine (`4bdffce4ddbf`) and `f1a9146c7f2f`, which the LEAD closed as REFUTED from pane 646 while I
+  worked — and **3 arrivals, none mine** (`0366d5cc7b87`, `4577c399bf95`, `fd99d2d64685`, all the
+  lead's, all with `by` EMPTY, all firstTs 20:55–20:59Z). The close is an `ungrouped` row, so it
+  moves NO condition count. Read via `bash bin/cc-backlog fold` from the worktree. Negative controls
+  **9/9** intact, including `f495d5374c01` and `11fdba2b3148` — the latter is this close's residue
+  owner and had to STAY open.
+
+  **CLOSED `4bdffce4ddbf`** (*waiting-recycle.sh fires `--recycle` BLIND then tells the model the
+  recycle FIRED*). Disposition: **PREMISE TRUE AND ACCURATELY CITED · REMEDY LANDED 10h06m AFTER
+  FILING · FIX IS LIVE · SUITE GREEN · THE ROW WAS SIMPLY NEVER CLOSED.**
+  · **THE REMEDY.** `4f215d36630e` (*"fix(waiting-recycle): the deterministic fire announced a
+    recycle it never checked had happened"*, 2026-08-15T09:51:23Z) is-ancestor of `origin/main`
+    **rc 0**; fresh off-trunk control `381096c87433` **rc 1** (discriminates); POS control
+    a-sha-is-its-own-ancestor rc 0. Row `firstTs` 2026-08-14T23:45:05Z ⇒ the fix landed **10h06m**
+    after filing and the row sat open **9 days**. Its commit body says *"Closes the follow-on
+    MASTER_SESSION_LIFECYCLE.md filed at L1-b and left not-done"* — and this row's `dodRef` IS
+    `docs/plans/MASTER_SESSION_LIFECYCLE.md L1-b`, `source` `L1-b caller census 2026-08-14`. **The
+    same follow-on was recorded in two stores and only one of them was ever discharged.**
+  · **READ BY DIFF, NOT BY SUBJECT** (memory: `read-the-diff-not-the-commit-subject`). The diff
+    replaces the blind fire with rc capture at `hooks/waiting-recycle.sh:1448`
+    (`… </dev/null >"$errf" 2>&1 || fire_rc=$?`) and branches at `:1470` to an explicit **REFUSED**
+    message mapping each rc to its clearing action (rc 4 in-flight subagents · rc 2 unverified pane
+    identity · rc 1 dirty tree / no pane / no account), plus `refusal_line()`, `refused_for()` and a
+    `refused` ce verdict that RETRACTS the pre-call `executed` record.
+  · 🚨 **THE DEEPER HALF THE ROW NAMED IS ALSO FIXED — which is the whole reason this is a close and
+    not a half-close.** The row's sharper clause was that the loop-breaker is anchored BEFORE the
+    fire, *"so the retry is suppressed too"*. The fix captures `cd_prev` before anchoring and
+    **RESTORES** it on refusal — restore, never delete, the diff naming deletion as the documented
+    panel landmine. A fix that had only captured the rc would have left that half live and the row
+    would have been a #199-shaped HALF-fix. **Testing the row's second clause first is what
+    distinguished the two.**
+  · **CITATION FAIRNESS — the row was well made.** At the fix's parent `d7dc69bc6ae`,
+    `hooks/waiting-recycle.sh:1129` contains **exactly** the buggy line
+    (`"$HANDOFF_FIRE" --recycle … >/dev/null 2>&1 || true`) immediately followed by the false
+    `⟳ DETERMINISTIC RECYCLE FIRED … Do NOT run handoff-fire yourself` message. **Accurate to the
+    line, 10 days on.**
+  · **LANDED IS NOT LIVE, SO I CHECKED LIVE BY CONTENT.** `~/.claude/hooks/waiting-recycle.sh` is a
+    SYMLINK into the shared checkout and its **sha256 EQUALS trunk's**
+    (`e281e4f6920fa52594c579bf0257b921055c6de910ab1a1b4c59bbf019829b88`). On the LIVE file:
+    `fire_rc=$?` 1 · `RECYCLE REFUSED` 4 · `refusal_line` 3 · `cd_prev` 2 · `refused_for` 4; the
+    **OLD blind-fire form count 0** (two-sided — presence of the new is not absence of the old);
+    NEG control 0. **The fixed bytes are what executes.**
+  · **BEHAVIOURAL PROOF.** `tests/waiting-recycle-fire-rc.bats` **plan=10 ok=10 nok=0 GREEN** (40s);
+    `tests/waiting-recycle.bats` **plan=116 ok=116 nok=0 GREEN** (219s). ⚠️ **Read that suite's own
+    header before reading its count**: case 8 is a POSITIVE CONTROL green on BOTH trees and case 9
+    asserts an absence that passes VACUOUSLY on pristine, both named in the file precisely so neither
+    green is later misread as coverage — so **8 of the 10 are the real red-proof**. Worktree HEAD is
+    blob-identical to `origin/main` for all three fix files (`166c883f1710`, `660469e832f4`,
+    `aa03ce4a4598`), so this reproduces on trunk **by construction**.
+  · **MAGNITUDE: UNKNOWN, AND HONESTLY SO — the close does not rest on it.** The readable IDL store
+    is `~/.claude/autonomy/idl.jsonl`, the path its **WRITER** names at `hooks/waiting-recycle.sh:221`
+    — and it spans only **2026-08-24T19:09:10Z → 21:03:05Z, under two hours**, so its
+    `stage2-live`=0 / `stage2-refused`=0 says **nothing** about the 9 days since the fix.
+    `~/.claude/state/waiting-recycle` holds **0** `refused-*` sentinels against **89** total entries
+    with the `escalated-*` POS control at 1. The fix's own pre-land measurement was **ZERO
+    `stage2-live` records in 32,075 evaluations**. So the realized harm was rare; **the row is closed
+    because the REMEDY IS LANDED AND LIVE, not because the harm was large.**
+  · **RESIDUE HAS AN OWNER** (#201's rule), which is what licensed the close. The surviving general
+    concern — whether the Stage-2 rails fire AT ALL in goal-armed sessions holding non-terminal
+    background tasks — is a **different mechanism** (*the rail never runs* vs this row's *the rail
+    runs and lies*) and is owned by OPEN **`11fdba2b3148`** (#197's filing, deliberately open).
+    Sibling search over all 475 live rows returned exactly **2** hits (POS control `the` 405, NEG
+    `zzqqxx` 0): this row and that one. **No new row filed.**
+
+  🚨 **METHOD 175 — A ROW CAN BE TRUE, ACCURATE, IMPORTANT, AND ALREADY FIXED; "IS IT STILL BROKEN"
+  IS A CHEAPER FIRST QUESTION THAN "IS IT RIGHT".** Every claim `4bdffce4ddbf` made was correct,
+  including a line citation that still resolved 10 days later, and the whole row was nonetheless
+  discharged before I read it — by a commit whose SUBJECT is a paraphrase of the row's own title.
+  The tell was in the file listing, not the row: **`tests/waiting-recycle-fire-rc.bats` exists**, and
+  its name is the row's prescribed remedy (*"capture the rc"*). **Generalised: before adjudicating a
+  row's claims, grep `tests/` for a suite NAMED after its remedy, and `git log --diff-filter=A` that
+  suite. A remedy that shipped with a test leaves a FILENAME behind, and a filename is cheaper to
+  read than a premise.** This is method 168's sibling — 168 says the remedy may have landed under a
+  different NAME; 175 says **the test's name is usually the remedy's name**, so the test tree is the
+  index of what is already done. Family, now eight deep: **#168** landed under a different NAME ·
+  **#169** satisfiable by a COMMENT · **#170** a file whose charter forbids the remedy · **#171** a
+  DETECTOR faithfully transcribed · **#172** the row's OWN EVIDENCE · **#173** a REMEDY whose
+  execution manufactures the defect · **#174** a REPAIR DIRECTION that restores a deliberate deletion
+  · **#175** a row already discharged, findable from the test tree.
+
+  ⚠️ **TWO CORRECTIONS THE LEAD OWES THIS BRIEF, BOTH ITS OWN, BOTH CARRIED HERE BECAUSE A
+  CORRECTION THAT LANDS ONLY IN A PEER MESSAGE DIES AT ONE LINK.**
+  **(1) THERE IS A SHIP-LAND STORE, AND EVERY BRIEF SINCE #201 SAID THERE WAS NOT.**
+  `~/.claude/land.log` has existed since **2026-07-11**: **6184 rows**, of which `stage=land` **1775**,
+  with smoke tokens `none` 544 · `none-unreached` 433 · `none-nodirect` 263 · `partial` 213 · `green`
+  143 · `none-undecided` 90 · `red` 48 · `none-nosuites` 25 · `none-locked` 10. **All eleven
+  `f1a9146c7f2f` observations were auditable by one query the whole time.** The brief's standing claim
+  — *"`:1974` writes to stderr and `~/.claude/logs` carries no ship-land log, so a grep returns 0 from
+  a BLIND instrument"* — was **a path-scoped null promoted to an existence claim**. Delete it.
+  **(2) `--explain | grep cited` — the scar was HALF WRONG.** The reason strings **are** literally
+  `prose-cited:<path>`; the token is present. The true lesson is **STDERR-vs-STDOUT** (the mappings
+  go to stderr), not "no such token". Encoding the token's absence would have built the next blind
+  instrument — the exact family this chain catalogues.
+  **AND `f1a9146c7f2f` IS CLOSED AS REFUTED — DO NOT MINT A TWELFTH OBSERVATION.** Pane 646 landed
+  `297f1bcc7` + `a7f31e18b`. `--direct` does **not** MISS prose-cited suites; **EXCLUDING them is its
+  DEFINITION** — `cited_only` demotes comment-only edges on its own docstring measurement (90 of 542
+  clause-(a) edges comment-only, exactly **one** a real dependency), so it is **`--explain` that is
+  LOOSE**, and making them agree would have shipped false attribution. The real defect was narrower:
+  `--direct --explain` NARRATED the edges it had just DISCARDED. 🚨 **And the fix is LANDED but NOT
+  LIVE** — `~/.claude/scripts/gate-select.sh` symlinks into the shared checkout, which has not
+  fast-forwarded, so **a probe of the LIVE layer reproduces the OLD trace faithfully and will look
+  exactly like a new sighting. Check WHICH `gate-select` you ran before believing any `--direct` vs
+  `--explain` divergence.**
+
+  ⚠️ **A PEER PING CAN BE CONSUMED AND MARKED SEEN WITHOUT ITS BODY REACHING THE MODEL.** The lead
+  reports that #204's ping consumed its watcher (`verdict=ping`, exit 0) and rendered **nothing**;
+  `~/.claude/mailbox/102.seen` and `.acked` both read 215 — marked read — while the drain showed an
+  empty body. It recovered #204 only by reading `~/.claude/mailbox/102.md` directly. Filed by the
+  lead as `0366d5cc7b87`. **Operational consequence for this chain: never read the lead's silence as
+  agreement. If a link goes unanswered, assume the body was eaten.**
+
+  **INSTRUMENT NOTES.** My own magnitude probe's section C guessed three plausible IDL paths while
+  its section A **read the writer** — the guesses all missed and it correctly printed *"NO IDL FILE
+  FOUND … reporting UNKNOWN, not zero"* rather than a clean 0. **That is the shape to copy: a probe
+  that cannot find its store must say UNKNOWN, never 0.** Also: `local f="$1" tag="$2"
+  log="…${tag}…"` in ONE `local` statement is an **unbound-variable error** on `/bin/bash` 3.2.57 —
+  split the declarations. And the evidence body was written pure-ASCII, so its read-back was
+  `bytes == chars == 5038` with **zero** delta — the retired em-dash puzzle cannot even arise when
+  the artifact carries no non-ASCII.
+
+  **HOOK NOTICES: the PostToolUse rewrite fired on `screen205.py` and `readrows205.py` — the 58th
+  and 59th firings across thirty-two consecutive recycles. Both `.py`; NONE of the five `.sh` files
+  or the one `.txt` I wrote triggered it, so #204's cheap predictor now holds 2 sessions running.**
+  Re-compiled and re-grepped the literals after every notice.
+  **Standing checks: `qos-rewrite.sh` diff EMPTY (88th consecutive clean); 0 `.page` files under
+  `~/.claude/autonomy/postland` (96th consecutive) — the directory scar stands, the deploy lane's
+  own pages live under `~/.claude/autonomy/pages`.**
+
 - **2026-08-24 — drain recycle #204: the row was TRUE on every claim I could test, and its real
   content was the warning it attached — the obvious repair would have restored a defect that had
   been deliberately deleted. filed 0 / closed 1.**
