@@ -87,6 +87,89 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #175: pollution was reachable only through the staleness door —
+  two independent axes, one shared refusal. filed 0 / closed 1 / 2 commits (FIX+TEST, then DOCS).
+  NINETEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **MOVE**: the row sits in **`master-convergence-deadlock`**, which read **25 open / 6 blocked** at
+  my open and **24 open / 6 blocked** at my close. ⚠️ The operator-set goal again asked that effort
+  to reach **0 open** in one recycle — 24 rows remain, it did not, and saying so plainly is the
+  report. It also named the WRONG successor for the **SIXTH consecutive time** (its text says
+  "recycle #171 is FIRED"; §2.1's newest entry was #174, so I am **#175** and I fired **#176**).
+  Gate 1 clear — **0 `.page` files** (`find` at `$HOME/.claude/autonomy/postland`, directory
+  asserted first; **sixty-sixth consecutive**). Heredoc diff clean, **fifty-seventh**. Board at my
+  open: **open 316 / blocked 189 / done 2206 / claimed 3**, **505** open+blocked, predicate
+  `bash bin/cc-backlog fold` run from the worktree.
+
+  🆕 **THE ID-LIST SNAPSHOT ATTRIBUTED THE MOVE AS ENTIRELY MINE FOR THE SECOND WINDOW RUNNING.**
+  `comm` over the open+blocked id lists returned **exactly one** id leaving (`e281cde67a48`, mine)
+  and **zero** entering, **505 → 504**. #172 saw the total stay FLAT across real sibling movement;
+  #173 saw it move by MORE than its own effect; #174 and now #175 saw "nothing else happened".
+  **Four windows, three different answers — keep re-running it, and re-run it at the ACTUAL close.**
+
+  **ROW CLOSED — `e281cde67a48`** (*"cc-dispatch reuses a STALE, POLLUTED worktree instead of
+  resetting it"*). Landed as *fix(cc-dispatch): pollution was only reachable through the staleness
+  door* — **cite by SUBJECT, never by sha; a land rebases.** What generalises:
+
+  · 🆕 **METHOD 124 — WHEN A ROW NAMES TWO PROPERTIES WITH AN "AND", CHECK WHETHER THE GUARD CAN
+    REACH EITHER ONE ALONE.** The row's exhibit was *"439 commits behind origin/main **AND** carried
+    8 staged foreign files"*, and the landed guard read the pollution probe (`wdirty`) **inside**
+    `if [ "$wstate" = stale ]`. So a tree could be convicted of pollution only when it happened to
+    also be stale. Staleness is a fact about the **BASE**; pollution is a fact about the **WORKING
+    TREE**. Two independent axes, one door — and the conjunction in the row's own sentence is what
+    hid it, because every fixture anyone wrote reproduced BOTH halves at once. **Every one of the
+    five sibling cases in that suite calls `advance_trunk` first**, so the whole arm was entered
+    through the stale door and the fresh door had never been opened.
+  · 🆕 **METHOD 125 — AN EMPTY CELL IS A FACT ABOUT THE POPULATION, NOT ABOUT THE MECHANISM, AND YOU
+    MUST SAY WHICH.** I measured the hole against all 48 live `wt-*` worktrees, replicating
+    cc-dispatch's own two predicates verbatim, and the blind cell came back **0**:
+    **fresh&dirty 0 · fresh&clean 0 · stale&dirty 41 · stale&clean 7**. That **refuted my own
+    hypothesis** about live impact — every polluted tree on this box is *also* behind, because this
+    trunk moves many times a day, so the incumbent guard catches all 41. The mechanism is still
+    broken: the repo is per-**ITEM** (`project_repo`), and in a slower project a `wt-` dir polluted
+    an hour after it was cut is still **fresh**, so the incumbent fires straight into it. **The fix
+    costs the measured population exactly zero rows.** ⚠️ The tempting wrong move here is to drop the
+    fix because the cell is empty; the other tempting wrong move is to claim an impact the cell
+    refutes. **Record the number and the reason it is zero** (method 123's shape: a number stays
+    falsifiable, *"this cannot happen here"* never can).
+  · 🆕 **METHOD 126 — A REFUSAL THAT NAMES THE WRONG AXIS IS A FALSE VERDICT WEARING A TRUE ONE'S
+    WORDS.** The single refusal message said *"its HEAD does not contain $wbase (pre-existing
+    worktree, never re-based)"* — false of a current-but-polluted tree, and it is the half a reader
+    ACTS on (the `--needs` line tells the operator to `git log $wbase..HEAD`, which shows nothing
+    for that tree). Each branch now names its own axis. **The test asserts the refusal TEXT**, which
+    is what makes the new case provably distinct from the stale siblings rather than a second copy
+    of them.
+  · ⚠️ 🆕 **THE ALARMING INTERMEDIATE READING WAS WRONG, AND ONLY THE THIRD CUT SHOWED IT.** First
+    cut: **41 of 48** live worktrees read DIRTY — which looks like a fleet-wide dispatch stall.
+    Second cut partitioned the dirt and found **~8 identical banner/blender paths staged across ~35
+    distinct worktrees**, which looks like an unattributed shared producer worth filing. Third cut
+    asked the only question that decides anything — *whose rows are these?* — and answered **27
+    `done` · 12 NOT-A-ROW (hand-named lead worktrees, never dispatch targets) · 2 `blocked`**. So it
+    is residue of FINISHED work, already owned by open rows `e733ca203b07` and `35de32d78364`, and
+    one of the two blocked rows is `ee1ac85c6ff6` — the exact exhibit the A1 comment already names.
+    **I filed nothing.** A count over a population you have not identified is not a finding
+    (memory: `positive-control-the-denominator`); **ask who owns the rows before you file the
+    census.**
+  · **THE RED-PROOF RAN ON THE REAL ARTIFACT, PRE-FIX, AND FAILED ON THE SUBSTANTIVE ASSERTION** —
+    `[ "$(spawns)" -eq 0 ]`, i.e. a worker WAS spawned into the polluted tree — not on a setup
+    error, which is the failure mode that makes a red-proof vacuous. Test written FIRST, run RED,
+    then the fix, then GREEN. The suite's own `$PRISTINE` pair (pinned sha `a7bf7068`) is kept, but
+    **the load-bearing control is the CURRENT shipped binary**, because pristine predates M2
+    entirely and cannot distinguish my arm from the one already landed.
+
+  **BOARD.** Open: **open 316 / blocked 189 / done 2206 / claimed 3**. Close: **open 315 / blocked
+  189 / done 2207 / claimed 3**, `master-convergence-deadlock` **24 open / 6 blocked**. Predicate
+  `bash bin/cc-backlog fold` from the worktree (⚠️ `~/.claude/bin/cc-backlog` symlinks the SHARED
+  checkout and may lag the `fold` verb). **RE-FOLD; these move fast.**
+
+  **GATES.** All **19** gate-selected direct suites run BY HAND, sequentially, whole-capture counts,
+  every one with a real plan: **404 tests, 0 reds** (firegate 16 · v2 16 · venue-worktree 3 ·
+  cc-dispatch 12 · fire-evidence 11 · projects 19 · supersession 3 · venue-only 7 · readiness 30 ·
+  venue 23 · wall-verdict 13 · backlog-pipeline-unwedge 16 · condition-lease 21 · dups-family 22 ·
+  premise-plan-open 12 · falsifier-emission 16 · fire-engagement 44 · lstart-dialect-bin 16 ·
+  operator-readout 104). `prose-cited` **0**. Instrument control **32**, a stable
+  THIRTY-EIGHTH-recycle reading. `shellcheck bin/cc-dispatch` **0 findings whole-file**;
+  `bats-shellcheck-lint --range` clean; `bats-assert-liveness.py` clean.
+
 - **2026-08-23 — drain recycle #174: a test that needed the box to be BUSY to pass, and a filed
   cause that said the exact opposite. filed 0 / closed 1 / 2 commits (TESTS, then DOCS).
   EIGHTEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
