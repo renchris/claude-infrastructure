@@ -231,3 +231,70 @@ fire() {
   echo "$output" | grep -q "worktree: $WTROOT/wt-x  (exists — reused as-is)" || false
   [ "$(lag_of wt-x)" -eq 5 ]
 }
+
+# ── 12-14: THE SHARED CHECKOUT — the one tree the LEFTOVER arm may not cure ─────────────────────
+#
+# The cure above runs `merge --ff-only origin/main` on whatever directory it is handed, and
+# ~/Development/claude-infrastructure is the per-file-symlink SOURCE for ~/.claude. Advancing it
+# that way runs no install.sh, so every brand-new tracked file lands UNLINKED and silently does
+# nothing (the LIVE_ADDS harm, cc-backlog 4e6a51df2a84); it also reflogs the REF rather than a
+# resolved SHA, which deploy-parity-assert's provenance leg scores UNGATED.
+#
+# IT IS NOT A HYPOTHETICAL, AND THE SHAPE IS THE POINT: the shared checkout normally sits on `main`,
+# clean, with no commits of its own — EXACTLY the `own=0 && !dirty` shape the cure arm selects — and
+# `--cwd` is how a lead re-fires a peer into the directory it is already in. Measured on the live
+# shared checkout's own reflog 2026-08-24: 43 `merge origin/main: Fast-forward` entries against 70
+# resolved-SHA ones, 11 of them AFTER 5626e682f (2026-08-10) deleted deploy-now.sh's raw ff — i.e.
+# after the only producer anyone had named was already gone. cc-backlog a9e5b17d3420 concluded the
+# remaining producer was "likely peer agent sessions syncing the shared checkout by hand"; it was
+# not, it was this line, on an automated path, on every fire.
+#
+# 12 is the RED-PROOF case: on origin/main the shared checkout is fast-forwarded like any other
+#    tree, so it FAILS there. It asserts the TREE, not the message — the message is case 14.
+# 13 is its CONTROL and passes on BOTH trees. Without it, 12 would also pass if the guard simply
+#    stopped curing everything (memory: control-fixture-must-reach-the-bugs-regime).
+# 14 pins the WARN-NEVER-REFUSE rule: withholding the ff must not turn into a refusal, which would
+#    break re-engagement of a peer that happens to be cwd'd there.
+
+# mkshared — a shared-checkout-shaped repo five commits behind its own origin/main, clean, with no
+# commits of its own. Deliberately at the script's REAL default path under the fixtured $HOME, so
+# these cases exercise the same resolution production uses rather than an override seam. Its own
+# SH_* vars, because mkfixture's BASE_OLD/BASE_TIP belong to $REPO and must survive.
+mkshared() {
+  local s="$HOME/Development/claude-infrastructure" i
+  mkdir -p "$s"
+  g "$s" init -q -b main
+  echo x > "$s/f"; g "$s" add f; g "$s" commit -qm init
+  SH_OLD="$(g "$s" rev-parse HEAD)"
+  for i in 1 2 3 4 5; do echo "$i" >> "$s/f"; g "$s" commit -qam "trunk $i"; done
+  g "$s" update-ref refs/remotes/origin/main HEAD
+  g "$s" reset -q --hard "$SH_OLD"
+  SHARED="$(cd "$s" && pwd -P)"
+}
+
+@test "12 the SHARED CHECKOUT is NOT fast-forwarded by the cure — the symlink source stays put" {
+  mkshared
+  [ "$(git -C "$SHARED" rev-list --count HEAD..origin/main)" -eq 5 ]
+  fire "$REPO" --cwd "$SHARED"
+  # THE BEHAVIOUR, not the message: a raw ff here is the harm, so the tree is what must not move.
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$SH_OLD" ]
+  [ "$(git -C "$SHARED" rev-list --count HEAD..origin/main)" -eq 5 ]
+}
+
+@test "13 CONTROL — an ordinary worktree is STILL cured with the shared checkout present" {
+  # Passes on both trees. This is what makes 12 a claim about WHICH tree, not about curing at all.
+  mkshared
+  stale_wt wt-x
+  [ "$(lag_of wt-x)" -eq 5 ]
+  fire "$REPO" --worktree wt-x
+  [ "$(lag_of wt-x)" -eq 0 ]
+  [ "$(git -C "$WTROOT/wt-x" rev-parse HEAD)" = "$BASE_TIP" ]
+}
+
+@test "14 it WARNS and fires anyway — withholding the ff is never a refusal" {
+  mkshared
+  fire "$REPO" --dry-run --cwd "$SHARED"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "NOT fast-forwarded: this is the shared checkout" || false
+  echo "$output" | grep -q "advances the files but runs no install.sh" || false
+}
