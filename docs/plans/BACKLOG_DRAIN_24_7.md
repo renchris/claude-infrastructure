@@ -86,6 +86,104 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #200: the falsifier greps the ONE FILE the architecture forbids
+  from carrying the remedy — and the remedy had been on trunk, in the sibling skill, for TEN DAYS
+  before the row was filed. filed 0 / closed 1 / 1 single-row condition retired / 1 skill corrected.**
+  Board at open: **481 open+blocked** (289 open / 192 blocked / 2251 done, claimed 6); at close
+  **482** (289 / 193 / 2252, claimed 6). `master-convergence-deadlock` **open=13 / blocked=6** at
+  BOTH ends, unmoved by me. `master-operator-gated` **0 open / 112 blocked**. **Closed 1 > filed 0.**
+  `comm` at both ends: **1 departure** (my close), **2 arrivals**, NEITHER mine — `f1a9146c7f2f` is
+  the LEAD's own filing of the gate-select vacuous green, and `7b6a27c2ae61` is a
+  `re-land claude/fire-…` row the `981a403a05fa` generator emitted straight into blocked.
+  Converge re-measured at close: **lag 13** (shared HEAD `8b9becd6d`, budget 25); my diff ADDS 0
+  files, so no `LIVE_ADDS` breach; `deploy.log` mtime `2026-08-24T18:23:18Z` (TZ=UTC pinned).
+
+  🚨 **METHOD 170 — A STORED FALSIFIER CAN NAME A SUBJECT FILE THE ARCHITECTURE FORBIDS FROM
+  CARRYING THE REMEDY, AND THEN IT CAN ONLY EVER SAY "PREMISE STANDS".** `57d16a466471`
+  (`wave-teardown-at-consumption`) stores
+  `grep -q shutdown_request skills/research-subagents/SKILL.md`. It returned **rc 1** and the
+  instrument is SOUND — positive controls `subagent`=**68**, `research`=**53**; negative control
+  **0**; target **0**. Method 169 does not fire (no occurrence at all, so no comment could satisfy
+  it). It is blind for a *structural* reason instead: that same file's own § Relationship to Other
+  Rules declared the two skills **"Disjoint — that file governs implementation agents; this governs
+  research subagents"**, so the check demanded the token appear in the file whose charter says the
+  remedy belongs elsewhere. **168 says a text-grep tests the remedy's SPELLING; 169 says the
+  spelling can be the BUG REPORT; 170 says the FILE can be the wrong one BY DESIGN — and no run of
+  the check, however sound, can ever discover that.** Memory siblings:
+  `spec-named-mechanism-may-be-prose-only`, `caller-census-keyed-on-path-misses-the-name`.
+
+  **THE CLOSE — six claims measured separately, all same-moment.**
+  · **PREMISE A is TRUE of the named file and FALSE of the repo (method 168, file-location
+    variant).** `skills/agent-teams/SKILL.md` carries **7** occurrences, including the Shutdown
+    Protocol at `:340-341` and, at `:320-334`, the correct diagnosis of this very incident class:
+    *"`name:` SILENTLY MAKES IT A TEAMMATE — the auto-terminate you are counting on does not
+    happen"* — three `Explore` agents spawned with `name:` and **no `team_name`** were given an
+    implicit team by the runtime, reported, went idle, and held panes **~1h16m** until an explicit
+    `shutdown_request`. Its prescription is verbatim the row's own remedy candidate 1: *"Tear down
+    every agent you named, research included"*, then ps-verify `pgrep -f "agent-id <name>@"`.
+  · **THE REMEDY PREDATES THE ROW BY TEN DAYS (method 155).** `git log -S` with three literals
+    quoted OUT of the file each returns exactly **1** commit — **`79a48157a`,
+    2026-08-01T13:43:31-07:00** — against the row's `firstTs` **2026-08-11T00:58:41Z**. POS control
+    `-S 'Shutdown Protocol'`=**2**, NEG control bogus literal=**0**. `--is-ancestor origin/main`
+    **rc 0** against an off-trunk control **`b2b35976f96b`** at **rc 1**. LIVE, not merely landed:
+    `~/.claude/skills/agent-teams/SKILL.md` is a symlink, byte-identical, `shutdown_request`=7.
+  · **NOTHING MOVED SINCE FILING.** `--since=firstTs` on BOTH skill paths = **0** commits (POS
+    control: the drain SSOT at **233** over the same window; NEG control nonexistent path **0**).
+    The row was filed while its own remedy already sat on trunk in the sibling file.
+  · **REMEDY CANDIDATE 2 IS REFUTED BY THE REAPER'S OWN SOURCE (method 158).** `bin/cc-reaper`
+    (2365 lines, `#!/bin/bash`) states the opposite doctrine in its safety header: done-evidence is
+    *"DERIVED from positive signals … NEVER inferred from silence — 'idle ≠ done'"* (`:61`), and
+    *"idle + clean + landed is every interactive conversation's steady state between operator
+    prompts — it is worker-done evidence only when the spawner stamped the pane a self-retiring
+    worker"* (`:50-53`), enforced at `:1605-1617`. **A "delivered-content-landed oracle" IS that
+    forbidden inference.** Census: `idle`=33, `landed`=61, `delivered`=9, `shutdown_request`=**0**,
+    neg control 0.
+  · **AND THE UNNAMED POPULATION IS A CATEGORY ERROR.** `cc-reaper:982`: *"A subagent runs
+    IN-PROCESS, so tearing the pane down SIGKILLs it mid-run with its deliverable unwritten and
+    nothing observes the loss."* All **29** `subagent` occurrences are a KEEP guard
+    (`session_subagent_inflight` `:1023`, three-valued, 900 s cap ≈3× the measured p99.9 of 306 s
+    over 584 completed transcripts) — an in-flight subagent **refuses** a reap. An unnamed research
+    subagent holds no pane to tear down; only a NAMED one does, and that population is
+    `agent-teams`'.
+  · **MAGNITUDE DEAD (method 153).** Live census classified by `basename(argv[0])` at argv
+    POSITION, `TZ=UTC LC_ALL=C`: **0** processes mentioning `agent-id`, **13** live claude
+    entrypoints, positive control **956** total processes. The 10 panes are gone; the exhibit's
+    transcript survives (**4** `ff519bfd` matches under `~/.claude-tertiary/projects`, 0 under the
+    other two extant roots) but the harm does not.
+
+  🚨 **THE RESIDUE WAS REAL, AND IT WAS DRIVEN RATHER THAN FILED — AND THE FIX MAKES THE FALSIFIER
+  HONEST.** The row's surviving true content is not its claim.
+  `skills/research-subagents/SKILL.md:11-14` defined its own population as *"`Agent` calls with no
+  `team_name`, fire-and-forget, return-and-die"* — **precisely the predicate `agent-teams:326`
+  measured as WRONG** (*"the real rule on this runtime is: `name:` is the switch, not
+  `team_name`"*) — and its Relationship table split the two files on `team_name` for the same
+  reason. A lead reading only that file, naming its agents, reproduces this row's harm exactly.
+  Corrected in the same diff: the Scope block now carries the `name:`-is-the-lifecycle-switch rule
+  with the 2026-08-01 measurement and the ps-verify line, and the Relationship row now splits the
+  two skills on `name:`, never on `team_name`. Verified by CONTENT — 5 new anchors present, **7**
+  pre-existing anchors intact, 11 insertions / 1 deletion / 1 file, tree otherwise clean. Sibling
+  search BEFORE deciding to file: the only open+blocked rows matching `research-subagents` or
+  `agent-teams` were the row itself (neg control 0), so nothing owned the residue.
+  **Re-run after the edit, the stored falsifier returns rc 0** — and its single matching line is
+  the *prescription*, not prose about the bug. Where #199 found a leg satisfied by a comment
+  NARRATING the incident, this one is cleared by the remedy's **EFFECT**. That is the anti-169
+  case, and it is the first one this chain has produced.
+
+  **GATES.** Diff is **docs/skill-only, 1 file, 0 ADDs**, so all five repo lints did not apply —
+  `shellcheck` (no `.sh`/`bin/` file), `bats-shellcheck-lint`, `bats-assert-liveness`,
+  `alarm-polarity-lint`, `pipefail-sigpipe-lint`. **Stated as not-applicable rather than claimed
+  green.** Selector re-run after the final commit; the `--explain` reader is the one cited.
+
+  ⚠️ **HOOK-FIRING COUNT, WRITTEN LAST AND STATED AS A FLOOR — AND THE FLOOR EARNED ITS KEEP THE
+  MOMENT IT WAS WRITTEN.** #199's scar was a count that went stale between composition and land; I
+  drafted this paragraph reading **0**, and by the time the guard re-check had run the PostToolUse
+  rewrite hook had fired **twice** — on the §2.1 inserter and on the `ast.parse` guard-checker.
+  So: **at least 2 this recycle, cumulative at least 36** — the 35th and 36th across twenty-six
+  consecutive recycles. **A count of events still in progress cannot be finalised by running a
+  command earlier, only by writing it as a floor**, which is why this reads "at least" and not a
+  number. The heredoc `diff` was clean for the **eighty-second** consecutive recycle, and
+  `~/.claude/autonomy/postland` held **0** `.page` files at open — **ninety-first** consecutive.
+
 - **2026-08-24 — drain recycle #199: the row was HALF FIXED and HALF MISATTRIBUTED — its own
   sibling row had closed one path, and a whole-log census put the other at 2.5% of the KEEPs it
   was blamed for. filed 0 / closed 1 / 1 single-row condition retired / this doc.**
