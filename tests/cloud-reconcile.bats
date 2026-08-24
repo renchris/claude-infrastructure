@@ -848,3 +848,74 @@ dead_pid() {
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
 }
+
+# ── THE BOOT HEARTBEAT — backlog 0c8b39b67665 ───────────────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1's absence contract is now implemented in the cloud brief
+# (scripts/handoff-fire.sh, CLOUD_PAYLOAD): the VM's FIRST act is `git commit --allow-empty` and a
+# push, so that "no ref past the boot budget" means `never started` and nothing else. That contract
+# manufactures a branch class this script had never met — a real, declared head whose entire content
+# is a heartbeat — and the pre-existing path would have landed it: classify() returns ELIGIBLE
+# (landed() is not-landed on the empty path set BY DESIGN), reauthor_branch replays the empty commit
+# happily (commit-tree carries the base tree across), and the lander pushes it. One empty commit on
+# trunk per cloud fire that booted and produced nothing, forever, growing with the fleet.
+#
+# RED-PROOF (re-runnable): CLOUD_RECONCILE_SUBJECT_ROOT=<pre-fix tree> against this file. Both
+# acting arms go red there — the lander is called for the boot-only branch and returns 0, so
+# `landed_branches` names it.
+
+push_boot_only() {  # $1=branch — the contract's own artifact: one EMPTY commit on main, pushed
+  local b="$1" w
+  w="$D/w-$(printf '%s' "$b" | tr / -)"
+  git -C "$REPO" worktree add -q -b "$b" "$w" main
+  git -C "$w" -c user.email="$VM_EMAIL" -c user.name=cloud commit -q --allow-empty \
+      -m "chore: cloud session boot"
+  git -C "$w" push -q origin "HEAD:refs/heads/$b"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D "$b"
+  rm -rf "$w"
+  true
+}
+
+@test "a BOOT-ONLY branch is not landed — the contract's heartbeat never reaches trunk" {
+  push_boot_only claude/boot
+  decl bootid claude/boot
+  run env CONFIRM=1 bash "$CR" --land claude/boot
+  [ "$status" -eq 0 ]                                   # booting is healthy, not a failure
+  [[ "$output" == *"BOOT-ONLY"* ]] || { echo "$output"; false; }
+  # The load-bearing assertion: the lander was never asked. Anything weaker would pass on a run
+  # that landed an empty commit and merely printed a note about it.
+  [ ! -s "$LAND_STUB_LOG" ]
+}
+
+@test "…and --all skips it while a sibling carrying real content still lands" {
+  push_boot_only claude/boot
+  push_branch claude/real 1
+  decl bootid claude/boot
+  decl realid claude/real
+  run env CONFIRM=1 bash "$CR" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped: BOOT-ONLY"* ]] || { echo "$output"; false; }
+  # Discrimination, not a blanket refusal of the venue: exactly one branch reached the lander.
+  run landed_branches
+  [ "$output" = "claude/real" ]
+}
+
+@test "FAILURE DIRECTION: an UNREADABLE range is never read as boot-only — a sensor is not a verdict" {
+  # The hazard this pins is one line deep: diff_size() takes its rc from `wc` through a pipe, so a
+  # git failure there yields 0 — which as a boot-only predicate would silently classify every
+  # branch whose range cannot be computed as "nothing to land" and drop real work on the floor.
+  # boot_only() checks git's OWN exit code, so an unresolvable trunk falls through to the ordinary
+  # path and refuses loudly instead.
+  push_branch claude/real 1
+  { printf 'id=%s\n' badtrunk
+    printf 'branch=claude/real\n'
+    printf 'remote=origin\n'
+    printf 'repo=%s\n' "$REPO"
+    printf 'trunk=origin/no-such-trunk-ref\n'
+    printf 'paths=\n'
+    printf 'declared_at=2000000000\n'
+  } > "$CC_CLOUD_STATE/badtrunk.decl"
+  run env CONFIRM=1 bash "$CR" --land claude/real
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"BOOT-ONLY"* ]] || { echo "an unreadable range was reported as boot-only"; false; }
+}

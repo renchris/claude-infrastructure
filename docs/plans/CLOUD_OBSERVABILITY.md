@@ -150,6 +150,48 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a Where the contract is implemented — and how long it was prose only
+
+🚨 **This paragraph was the SOLE basis for C1 being readable as "never booted", and for eleven
+months nothing implemented it** (backlog `0c8b39b67665`, closed 2026-08-24). The state function
+shipped, `declare` shipped, the fire-time baseline shipped, and the *only* clause that gave any of
+them meaning lived in this document and nowhere else. The brief `handoff-fire.sh` actually sent
+asked for the push at the **end** — its heading read *"read this before you finish"* and its body
+*"push whatever you have before you finish"* — so a session that booted normally and had not yet
+written a file was indistinguishable from one that never ran. C1 was a confident verdict over an
+ambiguity: exactly the defect §4.2 refuses one level down, where `rc≠0` and empty stdout are kept
+apart because both are "empty".
+
+It is now in the payload, not in prose. `scripts/handoff-fire.sh` (`CLOUD_PAYLOAD`) opens the brief
+with a **FIRST ACT** block the VM runs before it plans or reads anything:
+
+```text
+git switch -c <declared branch>
+git commit --allow-empty -m "chore: cloud session boot"
+git push -u origin HEAD
+```
+
+and states *why* it is first, because a VM that does not know why will reorder it.
+`tests/handoff-fire-cloud.bats` case 20 pins the three properties — the ordering
+(`switch -c` → commit → push), that the commit is `--allow-empty` and never a touched file, and
+that the block precedes the return-your-work block. Red-proof: `--allow-empty` occurs **0** times
+in the pre-fix `scripts/handoff-fire.sh`, so case 20 dies on its first assertion there.
+
+**`--allow-empty` is load-bearing in two directions, not one.** Upward, `declare` records the
+branch's pre-fire sha and reads `sha == base_sha` as *produced nothing* (§5.1), so the boot commit
+must advance the ref. Downward, the contract manufactures a branch class the return path had never
+met — a real, declared head whose entire content is a heartbeat — and `scripts/cloud-reconcile.sh`
+would have landed it: `classify()` returns ELIGIBLE (an empty path set is not-landed **by design**,
+`a435e3987fbf`), `reauthor_branch` replays an empty commit happily, and the lander pushes it. That
+is one empty commit on trunk per cloud fire that booted and produced nothing, growing with the
+fleet. `cloud-reconcile.sh` therefore gained a **BOOT-ONLY** arm keyed on the same property the
+contract leans on — *introduces no content vs the merge-base* — so the two cannot drift: the commit
+that makes a session observable is exactly the commit that must not land. It is checked after
+`fetch_branch` rather than in `classify()`, because the test needs a local head; it exits 0, since
+booting is a healthy outcome; and it reads git's **own** exit code rather than reusing
+`diff_size()`, whose rc comes from `wc` through a pipe and so returns 0 when git fails — a sensor
+that could not run is never a verdict (§4.2 again, one level further down).
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +818,11 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). ✅ **BUILT 2026-08-24** — this is no longer
+   something a fire has to remember: `scripts/handoff-fire.sh`'s `CLOUD_PAYLOAD` prepends the FIRST
+   ACT block (`switch -c` → `commit --allow-empty` → `push -u`) to every cloud brief, and
+   `scripts/cloud-reconcile.sh` skips the boot commit rather than landing it. Mechanics, and why
+   the empty commit is load-bearing in both directions, in §4.1a.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does
@@ -817,6 +863,14 @@ is the safe one. A reservation that never binds expires into `U0 UNKNOWN` (never
 finding** (§6.5). If the CLI create route ships a bundle of the local tree rather than cloning the
 remote, then the branch the VM pushes may not be the branch this box declared. Until one fire
 settles it, declare the branch the *brief* names and treat a mismatch as `U0`, not as absence.
+
+↳ **Still open, and narrowed** (2026-08-24). The *implementation* half is closed — §4.1a — and it
+closes this caveat by construction on the naming question: the payload does not ask the VM to find
+a branch, it hands it the exact name the fire declared and makes `git switch -c <that name>` the
+first line the session executes, so the declared branch and the pushed branch are the same string
+by the same mechanism that already satisfied B1. What remains open is the **bundle** half: whether
+a bundled VM's push reaches this box's `origin` at all. That is a property of the create route, not
+of the brief, and only a live fire settles it. `U0`-not-absence stays the rule until one does.
 
 ---
 

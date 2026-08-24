@@ -7781,20 +7781,50 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 AND THE PUSH IS THE **FIRST** ACT, NOT THE LAST — that is the ONE thing that makes absence
+  # informative, and until now it was prose only (backlog 0c8b39b67665). CLOUD_OBSERVABILITY.md
+  # §4.1 states the contract exactly: "the session's brief requires its first act to be pushing
+  # that branch — an empty commit is enough", and §4.3 keys C1 NOT-STARTED on it. Nothing
+  # implemented it. The payload said "read this before you finish" and "push whatever you have
+  # before you finish", i.e. it asked for the push at the END of the session — so no-ref meant
+  # `never booted` OR `booted and has written nothing yet` OR `booted, worked, and had nothing it
+  # judged worth committing`, which are three different worlds with three different cures. C1 was
+  # a confident verdict over an ambiguity, which is the exact defect §4.2 refuses one level down
+  # (rc≠0 vs empty stdout). The empty commit costs nothing, carries no content, and collapses the
+  # three worlds into one: past the boot budget, no ref means the session never ran.
+  #
+  # It is a `--allow-empty` commit ON PURPOSE, not a touched file: it must advance the ref without
+  # putting a byte in the tree, because `declare` records the branch's pre-fire sha as a baseline
+  # (§5.1) and reads `sha == base_sha` as "produced nothing", and because scripts/cloud-reconcile.sh
+  # must be able to SKIP a boot-only branch rather than land an empty commit onto trunk — which is
+  # what its BOOT-ONLY arm now does, keyed on the same "introduces no content" property.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
 "'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+── FIRST ACT — RUN THESE THREE LINES BEFORE ANYTHING ELSE (this session runs off-box) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+channel back is a git push. Do this NOW — before you plan, before you read another file, before
+you write a line:
 
     git switch -c '"$CLOUD_BRANCH"'
+    git commit --allow-empty -m "chore: cloud session boot"
     git push -u origin HEAD
 
+WHY IT IS THE FIRST ACT AND NOT THE LAST. The firing side watches exactly one thing: whether that
+branch appears on the remote. It has no other channel to you, so it cannot tell a session that
+never booted from one that booted and has not written anything yet — both are "no ref". The empty
+commit is what separates them. Push it immediately and your absence becomes informative; delay it
+and a healthy session reads as NOT-STARTED past the boot budget and gets re-fired underneath
+itself. The commit carries no content, so it lands nothing: the reconciler skips a branch that
+introduces no changes.
+
+── HOW TO RETURN YOUR WORK ──
 That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+for your progress — a push anywhere else is invisible and your work will strand. Keep pushing to
+it as you go, and push whatever you have before you finish even if the work is incomplete; an
+unpushed cloud session leaves no trace of any kind. A local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and lands it.'
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

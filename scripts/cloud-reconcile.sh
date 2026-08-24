@@ -383,6 +383,27 @@ diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large senti
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
 }
 
+# ── BOOT-ONLY: the branch exists because the observability contract required it to ───────────
+# CLOUD_OBSERVABILITY.md §4.1 makes the cloud brief push its declared branch as its FIRST act, with
+# an empty commit, so that "no ref past the boot budget" means `never started` and nothing else
+# (scripts/handoff-fire.sh, CLOUD_PAYLOAD). That contract manufactures a branch class this script
+# had never seen: a real, declared head whose whole content is a heartbeat. classify() would call it
+# ELIGIBLE — `landed()` returns not-landed on the empty path set BY DESIGN — and the land path would
+# faithfully re-author the empty commit and push it to trunk. One empty commit on trunk per cloud
+# fire that booted and produced nothing, forever.
+#
+# The predicate is the SAME property the contract leans on — "introduces no content" — so the two
+# cannot drift: the commit that makes a session observable is exactly the commit that must not land.
+# It is NOT built on diff_size(): that one's rc comes from `wc` through a pipe, so a git failure
+# yields 0 and would read as boot-only. A sensor that could not run is never a verdict (§4.2), so
+# git's own exit code is checked and an unreadable range falls through to the ordinary land path.
+boot_only() {  # <repo> <trunk-ref> <branch> → 0 = introduces NO content vs the merge-base
+  local out rc=0
+  out="$("$GIT_BIN" -C "$1" diff --name-only "$2...refs/heads/$3" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  [ -z "$out" ]
+}
+
 # ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
 git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
   # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
@@ -686,6 +707,13 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # The boot heartbeat is checked HERE and not in classify(), because the test needs a local head
+  # and classify() runs against a remote-only ref. Exit 0, not a failure: the session booted, which
+  # is a healthy outcome for the contract — it simply has nothing to land yet.
+  if boot_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — BOOT-ONLY: the branch carries the observability contract's boot commit and no content. Nothing to land."
+    exit 0
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +752,10 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  if boot_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: BOOT-ONLY, the observability contract's boot commit with no content behind it."
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
