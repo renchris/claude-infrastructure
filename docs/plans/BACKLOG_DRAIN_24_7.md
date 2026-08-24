@@ -87,6 +87,106 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #194: the remedy a contract PRESCRIBES can be one no deployer
+  IMPLEMENTS — and the migration built to close a drift was itself missing a member of it.
+  filed 0 / closed 1 / 1 migration fixed / this doc.** Board at open: **488 open+blocked**;
+  `master-operator-gated` **0 open / 111 blocked**; `master-convergence-deadlock`
+  **open=14 / blocked=5** (printed by `bash bin/cc-backlog fold` from the worktree — the blocked
+  tail is stated, not hidden). Zero `.page` files under `autonomy/postland` (**EIGHTY-FIFTH**
+  consecutive; 231 under `autonomy/pages`, a different store). Heredoc diff clean
+  (**seventy-sixth**). Live layer BEHIND by **3** at open (#193 read 2), no ADDs, within budget.
+  ⚠️ **The operator-set goal named itself wrong AGAIN** — it said "#191 has reported" and "then
+  recycle #192 is FIRED" while #194 was the session running. §2.1's newest entry was #193. Fire
+  off the LOG, never the goal text.
+
+  **CLOSED `77c208f09ba3` — and it is an UNGROUPED row, so it moves NO condition count.** Split
+  MECHANISM × MAGNITUDE × REMEDY (method 153) and only the mechanism survived. MECHANISM TRUE: the
+  live `com.claude.browser-spin-guard.plist` IS a regular file, and
+  `docs/activation/pending-activation/41-browser-spin-guard-activate.sh:47` really does prescribe
+  `ln -sfn`. MAGNITUDE ZERO: live sha256 == repo sha256 (`b764db18…`), controlled against a
+  DIFFERENT plist in the same run, which compared NO. POPULATION (method 156): **0 of 51**
+  LaunchAgents are symlinks; **26** have a repo twin (control: the repo ships exactly 26) and
+  **26 of 26 are byte-identical, 0 drifted** — the exhibit is not anomalous, it is universal.
+  REMEDY REFUTED: repo-wide over `*.sh` with docs excluded, `ln -sfn`→**0**, `ln -s`→**0**,
+  `cp `→**0** lines writing into LaunchAgents; the only prescription of one anywhere is the **1**
+  occurrence in that activation doc. What actually deploys is `install.sh:889-894`, an
+  unconditional `copy_file` over every `launchd/*.plist` — so a hand-restored symlink is reverted
+  by the next global install, and would meanwhile be the only symlinked agent of 51.
+
+  🆕 **METHOD 161 — A REMEDY THAT A CONTRACT PRESCRIBES IS NOT A REMEDY THE SYSTEM PERFORMS.
+  BEFORE ACCEPTING "restore X", GREP FOR THE DEPLOYER THAT WOULD DO X AND ASK WHETHER THE
+  MECHANISM THAT ACTUALLY RUNS WOULD UNDO IT.** Sibling of 154/158; memory sibling
+  `spec-named-mechanism-may-be-prose-only`. The tell here was cheap and I nearly skipped it: the
+  population census. One plist deployed "wrongly" is a bug; **51 of 51** deployed that way is the
+  deployment method, and the contract is the thing that is out of date.
+
+  🚨 **THE MIGRATION FIX — `migrations/0009-claude-next-guardrail-parity.sh`, and its own header
+  predicted this.** Working the `master-operator-gated` claude-infrastructure subset (#193's
+  recommendation A), I re-measured `6a428f48fd2e` with the EXACT registered-command set difference
+  rather than the row's list. The count is right and **the membership is wrong**: the difference is
+  5, but it is `cc-unattended-ask-guard.sh` · **`coldcompile-admit.sh`** · `session-deregister.sh` ·
+  `desk-brief-inject.sh` · `handed-off-session-guard.sh`. The row's `session-beat.sh` ×2 is **already
+  wired** in `.claude-next` (both events, target resolves) — cured since filing — and
+  `coldcompile-admit.sh` is a member the row never names. Confirmed independently by
+  `scripts/settings-drift-assert.sh`, which prints exactly those 5 as "missing in: .claude-next".
+  Migration 0009 wired six entries and mentioned coldcompile **0** times (control: it mentions
+  `handed-off-session-guard` **10** times), so the row's operator instruction *"expect: 5
+  divergences → GREEN"* was FALSE — the true outcome was **5 → 1**. Worse, 0009's
+  `migration-verify:` predicate is keyed on **its own enumeration**, so the runner would have marked
+  the step verified while step 3's independent detector still printed DRIFT
+  (memory: `gate-must-not-key-on-its-own-signal`). **Both halves fixed**: added the link, the
+  `wire PreToolUse "Bash" … coldcompile-admit.sh 10` call (matcher and timeout read off the three
+  sibling dirs, not invented), and a seventh clause in `migration-verify`. **Red-proof, not a
+  claim:** on a simulated post-OLD-migration dir the six-clause predicate returns **rc=0 (GREEN)**
+  over a live divergence and the seven-clause returns **rc=1**; controls — new predicate rc=1 on
+  `.claude-next`, rc=0 on `.claude` AND `.claude-secondary`, so it is discriminating, not vacuously
+  red. `shellcheck` 0 findings; 7 `wire` calls LISTED not counted.
+
+  ⚠️ **BUT THE DATE REFUSES THE OBVIOUS STORY, AND I RECORDED THE UNKNOWN RATHER THAN GUESSING.**
+  0009's header explains its sixth entry as "the population then grew" and warns "it will happen
+  again". It did — but `hooks/coldcompile-admit.sh` landed **2026-08-09** (`8db131c2a`), **two days
+  BEFORE** the migration was written (2026-08-11, `a19e3d9cf`), whereas the sixth genuinely came
+  later (`bac277d95`, 2026-08-16). So either the 08-11 census under-counted, or the pair was wired
+  after the file landed — and **this repo cannot distinguish them**: `~/.claude/settings.json` is a
+  real UNTRACKED file (verified: not a symlink), and the tracked `.claude/settings.json` is the
+  repo's own project settings carrying none of the fleet hook set, so there is no history to date
+  the WIRING against. Written into the file as unresolved.
+
+  **BUCKET (A) IS DRAINED OF AGENT-CLOSABLE WORK — that is the run's other result, and it is a
+  HOLD backed by measurement.** #193's recommendation A was the ~26 claude-infrastructure
+  non-`re-land` `master-operator-gated` rows. I re-measured the four most measurable and **all four
+  are genuine gates**; none closed: · `85fc4f3216a7` **still TRUE and worsened again** —
+  `com.claude.auth-timeseries` still loaded at exit **126**, `~/.claude/scripts/auth-timeseries.sh`
+  still ABSENT (control: `deploy-live.sh` PRESENT in the same run), err log **97 KB → 216 KB → 594
+  KB / 5,716 failure lines**, mtime minutes old. · `3c51c384f885` **fully TRUE** — `worktree-isolate`
+  = **0** in `.zshrc`/`.zshenv`/`.zprofile` against a control of **3** for `reso-management-app`;
+  gate still `~/.zshrc:112`; prerequisite `27-worktree-gc-infra-activate.sh` still un-run. ⚠️ My
+  own grep's single apparent "reader" (`bin/cc-resume-resolve`) was a **greedy substring** matching
+  the prose word *worktree-isolat**ed*** in a comment — memory
+  `greedy-anchor-matches-the-longer-token`; the marker is read by nothing, confirmed harder than the
+  row states. · `0a9db99fee41` **dormant, decision live** — service started, log frozen at
+  2026-08-13T22:44:32Z, 7 postgres processes; a paradigm OPERATOR VALUE CALL. · `6a428f48fd2e`
+  **gate real** (3 hooks genuinely unregistered, C10) — corrected, not closed.
+
+  🆕 **METHOD 162 — MY OWN INSTRUMENT FAILED AND ITS CONTROL CAUGHT IT, AGAIN.**
+  `pgrep -x launchd` returned **0** while `ps -p 1` reads `/sbin/launchd`. A liveness read built on
+  `pgrep -x` is blind to pid 1 and to the caller's own ancestors (memory:
+  `pgrep-excludes-the-callers-ancestors`); `ps -axo pid=,comm=` saw launchd=1, postgres=1,
+  bogus-name=0 in the same run. **Every process-liveness claim in this entry is from `ps`, with
+  both controls printed.** The standing lesson holds: report the control beside the verdict.
+
+  **Board write verified by content**: `77c208f09ba3` reads `status=done` with **2,674** chars of
+  evidence, and the two negative controls — `5511ea906e2e` (#193 left it blocked on method 160) and
+  `6a428f48fd2e` — both still read `blocked`. Every board call ran under `CC_BACKLOG_KICK=off`.
+  All probes, the closer and this inserter were **Write-tool files**. 🚨 **The PostToolUse formatter
+  fired on this inserter — the TWENTY-FOURTH firing across nineteen consecutive recycles**, and it
+  fired on the one file whose correctness decides whether §2.1 survives. Re-compiled
+  (`python3 -m py_compile` OK) and re-**LISTED** the guards afterwards: **9** conditions paired 1:1
+  with **9** `die()` actions (118→119, 122/123→124, 127→128, 132→133, 136→137, 142→143, 147→148,
+  151→152, 155→156), the three-way `startswith` conflict check among the survivors. ⚠️ **An earlier
+  draft of this very paragraph asserted the streak had broken; the notice arrived on the Write that
+  created it.** A claim about your own run is as perishable as any other — re-read before landing it.
+
 - **2026-08-24 — drain recycle #193: #192's own recommendation was built on a discriminator
   that is an ALGEBRAIC IDENTITY OF ITS PRODUCER — and the pile it pointed at still paid, from
   reading rows rather than testing a field. filed 0 / closed 5 / this doc.** Board at open:
