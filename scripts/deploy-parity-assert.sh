@@ -893,6 +893,19 @@ if [ "$do_provenance" = 1 ] && [ -e "$REPO/.git" ]; then
     # `reset …`, `checkout …`). That is the entire discriminator, and it holds for --bootstrap and
     # --force too: both reach the same resolved-SHA merge, which is why mechanism and content are
     # scored separately below rather than collapsed into one verdict.
+    #
+    # ⚠️ DO NOT TRY TO "ATTRIBUTE" A RESOLVED-SHA FF AGAINST deploy.log — IT IS NOT AN ATTRIBUTION
+    # INSTRUMENT, and reading it as one has now produced a filed bug and a second session's
+    # escalation of it. deploy.log is the launchd job's StandardOutPath, and deploy-live.sh has no
+    # log wiring of its own (its say() prints to stdout), so deploy.log records `--auto` runs and
+    # NOTHING ELSE. A session running the sanctioned converge BY HAND — which validate-bash.sh's own
+    # deny message instructs, and which `--force` uses as the documented escape hatch precisely when
+    # the auto lane is refusing — writes its `deployed X → Y` line to a terminal that is then gone.
+    # Measured on the shared checkout 2026-08-24: 71 resolved-SHA ffs against 43 `deployed` lines,
+    # i.e. 28 sanctioned advances this log structurally cannot see. Backlog 7e2e0ab9c358 read that
+    # gap as "a NON-deploy-live actor scores GATED, so the leg launders" and asked for the leg to be
+    # TIGHTENED before the actor was named. The actor is deploy-live itself, invoked manually;
+    # tightening against that population would RED every manual converge. Closed refuted 2026-08-24.
     _sanctioned=0
     case "$_how" in
       "merge "*": Fast-forward")
