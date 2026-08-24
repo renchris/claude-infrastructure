@@ -86,6 +86,108 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #202: the row was TRUE, and the falsifier that was supposed to retire
+  it can never pass — because the row wrote the corrupt byte into its OWN evidence. filed 0 /
+  closed 1.**
+  Board at open: **476 open+blocked**; at close **475** (285 open / 190 blocked / 2260 done, claimed
+  6). `master-convergence-deadlock` **open=13 / blocked=6** at BOTH ends, unmoved by me. **Closed 1 >
+  filed 0.** `comm` at both ends: **1 departure, mine**, and **0 arrivals** — the second consecutive
+  zero-arrival link. The close is an `ungrouped` row, so it moves NO condition count; the two
+  condition keys new since #201's brief (`memory-index-compaction`, `vrt-rebless-downgrade`) are both
+  **reso-management-app**, not new claude-infrastructure ground.
+
+  **CLOSED `72eaff9dd199`** — *"cc-backlog list --all --json mangles a UTF-8 multibyte char that
+  straddles a ~4KiB OUTPUT chunk boundary … FALSELY reports corruption on any evidence long enough to
+  cross it — the store on disk is INTACT"*. Disposition matches #191: **mechanism TRUE, magnitude
+  DEAD, stated conclusion FALSE.**
+  - **PREMISE TRUE, reproduced.** `list --all --json` emits **3** U+FFFD; the store holds **2**. The
+    store decodes as UTF-8 cleanly (5292135 B, 13996 lines, 29437 non-ASCII bytes, 50 distinct
+    non-ASCII chars), so *"the store on disk is INTACT"* is **confirmed**. Deterministic: three runs
+    byte-identical at 4152337 B, U+FFFD=3 each. The 3 decompose as **1 faithful + 2 new corruption**
+    (the store holds two identical `done` records for this row, each carrying a literal U+FFFD in its
+    evidence; the fold dedupes to the latest, 2 stored → 1 emitted).
+  - **MECHANISM LOCATED AT SOURCE AND RED-PROVED.** `list --all --json` is `fold | jq -c`
+    (`bin/cc-backlog:3811`); `fold` is `valid_records | jq -s` (`:1059`); **`valid_records` (`:991`)
+    pipes the WHOLE LEDGER through `jq -Rr`** — raw-text input, which must UTF-8-decode. jq as a JSON
+    parser is **innocent**: the whole store through `jq -c .` gives U+FFFD=2 (exactly the stored
+    ones), and the offending row alone gives **0 in, 0 out**. Synthetic sweep, one JSONL line per
+    candidate offset with a 3-byte em-dash at an exact LINE-RELATIVE byte offset, each through the
+    SAME jq program: **4093 → 2 U+FFFD · 4094 → 3 · 4088-4092, 4095-4103, 100, 2048, 8190, 8191,
+    8192, 8193, 12286, 12287 → ALL CLEAN.** The harness produced BOTH outcomes, so neither verdict is
+    a uniform artifact. The live row's em-dash sits at line-offset **4093** in both its copies.
+  - 🚨 **THE MAGNITUDE IS FALSE, AND THAT IS WHY IT CLOSES.** It is **not** a recurring 4KiB grid —
+    8190/8192/8193/12286/12287 are clean, so only the **FIRST** jq raw-reader buffer edge bites: a
+    **TWO-BYTE window at line-offset 4093-4094**. WHOLE-POPULATION census, every row's stored
+    evidence vs the same row's emitted evidence: **2228 rows carry evidence and exactly ONE
+    round-trip differs** — `70ead42cc75e`, 6928 → 6929 chars, delta **+1**, first divergence at char
+    3963 (store `—`, tool `��`). **1 of 2228 = 0.045%**, not *"any evidence long enough"*.
+  - **BLAST RADIUS IS READ-PATH ONLY; THE STORE CANNOT BE CORRUPTED BY THIS.** The one full-ledger
+    rewrite, `cmd_compact` (`:4386`), does **not** read through `valid_records`: its loop is
+    `while IFS= read -r line … done < "$BACKLOG"` (`:4462-4476`) — raw bytes via bash `read`,
+    re-emitted verbatim by `printf '%s\n'`, with jq forked only to extract `.id`. This upgrades the
+    row's own *"store is INTACT"* from an observation to a **structural property**.
+  - 🚨 **THE NEW SHAPE — #202's TWENTY-FOURTH: A FALSIFIER DEFEATED BY ITS OWN ROW'S EVIDENCE TEXT.**
+    Its predicate is *exit 0 iff `list --all --json` contains ZERO U+FFFD*. It reads 3 today. But the
+    floor after a **perfect fix** is **not 0**: the store legitimately holds 2 U+FFFD as deliberate
+    content and **both belong to this row**, whose author quoted a literal `grep -c $'<U+FFFD>'`
+    command into its own evidence while documenting the bug. A faithful emitter MUST reproduce stored
+    content, so the predicate can **never** reach 0. **The act of documenting the corrupt byte
+    permanently poisoned the detector meant to retire the row.** This extends the family one step
+    further in: **#168** a remedy landed under a different NAME · **#169** a condition satisfiable by
+    a COMMENT · **#170** a file whose charter forbids the remedy · **#171** a DETECTOR the row
+    faithfully transcribed · **#202** the row's OWN EVIDENCE. **Ask not only whether a falsifier can
+    fail, but whether the row's own text has made passing impossible.**
+  - **NOT FIXED IN CODE, deliberately, and the direction is recorded so it is not re-derived.**
+    `valid_records` is the hottest read path in `bin/cc-backlog` and **97 suites name `cc-backlog`** —
+    far outside a recycle's gate budget. FIX DIRECTION: keep the one-fork-per-file win but stop
+    passing the PAYLOAD through jq's raw decoder — have `jq -Rr` emit only the E/G/B tag and pair it
+    against lines read from `"$BACKLOG"` by bash, which is byte-transparent. Re-run the offset sweep
+    above as the red-proof.
+  - 🆕 **THE SIGNATURE EVERY FUTURE RECYCLE SHOULD KNOW.** A method-31 evidence round-trip showing a
+    **+1-character delta with a doubled replacement char** is THIS read-path artifact, **not** store
+    corruption — re-read the store directly before believing a corruption report. ⚠️ **And it is NOT
+    the delta #200 and #201 saw**: theirs were **negative** (input 6792 → stored 6787, 3115 → 3114),
+    this one is **positive**, so those have a different cause and remain unexplained. **My own close
+    round-tripped EXACTLY: input 6138 chars, stored 6138, delta 0** — which is itself the finding,
+    since the artifact depends on byte offset, not on length.
+
+  **INSTRUMENT CONTROLS, run before anything above was believed** (method 162; #201 paid this twice).
+  The U+FFFD counter was positive/negative controlled on injected fixtures (1 and 0 as expected)
+  BEFORE being pointed at the subject. 🚨 **LOCALE was tested as a confounder, because these probes
+  export `LC_ALL=C` per the brief's own pinning rule and a C locale turns character ops into BYTE ops**
+  (memory: `c-locale-turns-character-ops-into-byte-ops`): four arms — `LC_ALL=C`,
+  `LC_ALL=en_CA.UTF-8`, `LC_ALL` unset with `LANG=en_CA.UTF-8`, `LC_ALL=C.UTF-8` — produced
+  **byte-identical output at U+FFFD=3**, so locale is NOT the variable and the finding is not an
+  artifact of my own pinning. Redirect-to-file and pipe-to-file capture were byte-identical too,
+  ruling out the capture path.
+
+  **MUST-CARRY FROM THE LEAD — `ff4e6cbead11`, and half-fixing it makes activation 35 PERMANENTLY
+  UNRUNNABLE.** Relayed verbatim because a correction that lands only in a peer message dies at one
+  link. **TWO BUGS THAT CANCEL**, both measured on disk by the lead: **(1) THE PROBE CAN NEVER MATCH**
+  — activation `:71-72` greps `"state":"OK"` with **no space**, the collector writes `"state": "OK"`
+  **with** a space (30 matches with, **0** without, in the live store), so `ok` is structurally 0 for
+  ANY output and the gate's condition is permanently *refuse*. **(2) THE GUARD FAILS OPEN** —
+  `grep -c` prints 0 **and exits 1**, so `ok=$(grep -c … || echo 0)` yields the two-line string
+  `0\n0` and `[ "$ok" -lt 1 ]` throws *"integer expression expected"*, i.e. nonzero, so the `if` takes
+  the FALSE branch and arms anyway. **Net: it always arms, on a probe that always reports failure.**
+  🚨 **THE OBVIOUS FIX IS THE DANGEROUS ONE:** fix (2) alone and the guard correctly evaluates an
+  always-zero probe and **REFUSES FOREVER** — a working feature permanently unactivatable, with no
+  visible reason why. **They must be fixed together, and (1) first.** The outcome VINDICATES the
+  arming and indicts the gate: 36 rows in the live store, 30 `state=OK`, 6 `EMPTY`, `err.log` frozen
+  at its pre-arming 18:35:11Z with zero new failures — the gate's stated fear (*"a recorder that would
+  report every account as logged-out"*) is exactly what did NOT happen. **Do not re-file; the lead
+  owns it.**
+
+  **`f1a9146c7f2f` — the lead confirmed the gate-select vacuous green AT THE SOURCE, and there is NO
+  STORE.** `scripts/ship-land.sh:1974` prints `→ gate: smoke — 0 direct suite(s) map to this range
+  (lint-only land).` and `:80` defines the smoke set as *"`gate-select.sh --direct` suites of THIS
+  diff MINUS the HOST suites"* — so when `--direct` goes vacuous on a range that genuinely has
+  suites, **ship-land declares a lint-only land and skips the behavioural gate while reporting
+  success**. 🚨 **Second-order:** `:1974` writes to **stderr** and `~/.claude/logs` carries no
+  ship-land log at all, so a grep for `lint-only land` returns 0 from a **blind instrument**, not
+  from absence — **the decision leaves NO DURABLE TRACE**, no past skip can be counted and no future
+  one detected after the fact. **The fix must ADD THE RECORD, not only fix the reader.** Do not
+  re-file. **`--explain` remains the reader that has never been vacuous; say which reader you used.**
 - **2026-08-24 — drain recycle #201: the row was faithful and the DETECTOR was wrong — a lint false
   positive, already fixed and landed ELEVEN MINUTES before the row reporting it was filed. filed 0 /
   closed 2 / 2 single-row conditions retired.**
