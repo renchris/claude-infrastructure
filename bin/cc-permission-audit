@@ -512,6 +512,18 @@ def prune_report():
     files = _settings_files()
     print(f"── PRUNE {'(APPLY)' if apply else '(DRY RUN — nothing will be written)'} ──")
     print(f"  scope: {len(files)} settings file(s)")
+    # The blast radius GREW when discovery learned `settings.json`, and a rewrite of a live
+    # user-level store is a different thing from a rewrite of a worktree-local one. Naming the
+    # files before touching them is the whole cost of not surprising anyone.
+    # The escalation set is exactly "what the old walk could never have reached", and the old
+    # walk reached only settings.local.json — so that, not an equality test on "settings.json",
+    # is the predicate. It also stays honest for an explicit path, which may be named anything.
+    live = [p for p in files if not os.path.basename(p).endswith("settings.local.json")]
+    if apply and live:
+        print(f"  ⚠ {len(live)} of these are LIVE user/project settings.json, not "
+              "settings.local.json — each is backed up before it is rewritten:")
+        for p in live:
+            print(f"      {p}")
     total = dead_total = inert_total = written = failed = 0
     for path in files:
         try:

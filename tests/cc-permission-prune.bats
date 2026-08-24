@@ -285,6 +285,20 @@ inert_hit() { # <file> <rule> — did the report mark this rule INERT?
   [[ "$output" == *"Bash(git status --short)"* ]] || false
 }
 
+@test "APPLY names a live settings.json before rewriting it — the blast radius is not silent" {
+  # Discovery learning `settings.json` grew what CONFIRM=1 can touch from worktree-local files
+  # to the operator's live user-level stores. That escalation is announced, not inferred.
+  local f="$BATS_TEST_TMPDIR/live.settings.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git:*)","Bash(git status --short)"]}}' > "$f"
+  run env CONFIRM=1 python3 "$AUDIT" --prune "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are LIVE user/project settings.json"* ]] || false
+  [[ "$output" == *"$f"* ]] || false
+  # and the DRY RUN says nothing of the sort — the warning belongs to the write, not the read
+  run python3 "$AUDIT" --prune "$f"
+  [[ "$output" != *"are LIVE user/project settings.json"* ]] || false
+}
+
 @test "the plain report still works — --prune is additive, not a rewrite of the tool" {
   cat > "$HOME/.claude/settings.json" <<'JSON'
 {"permissions":{"allow":["Bash(ls:*)"],"deny":[],"ask":[]}}
