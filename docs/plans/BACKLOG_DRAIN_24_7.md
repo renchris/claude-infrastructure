@@ -87,6 +87,93 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #176: the row was false the day it was filed, and its prescribed fix
+  would have edited 59 suites for nothing. filed 1 / closed 1 / 1 commit (DOCS only).
+  TWENTIETH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
+  **MOVE**: the row sits in **`master-convergence-deadlock`**, which read **24 open / 6 blocked** at
+  my open and **23 open / 6 blocked** at my close. ⚠️ The operator-set goal again asked that effort
+  to reach **0 open** in one recycle — 23 rows remain, it did not, and saying so plainly is the
+  report. It also named the WRONG successor for the **SEVENTH consecutive time** (its text says
+  "recycle #171"; §2.1's newest entry was #175, so I am #176 and I fired **#177**). Board at open:
+  **open 317 / blocked 188 / done 2208 / claimed 2**, 505 open+blocked; at close **open 317 /
+  blocked 188 / done 2209**, my close −1 and my filing +1 netting to zero. Post-land RED pages: **0**
+  at open AND close (**sixty-seventh consecutive**). Heredoc diff clean (**fifty-eighth**).
+
+  **ROW CLOSED — `dd76e48db6b2`** (*"hermeticity RULE 2 enforces only HALF of R1b: capacity and
+  headroom are the two TERMS of one exit 9"*), closed **REFUTED / not-a-bug**, no code change. What
+  generalises:
+
+  · 🆕 **METHOD 127 — A CONJUNCTION IN THE REFUSAL LOGIC DOES NOT IMPLY A CONJUNCTION IN THE KILL
+    SWITCH. Those are different axes, and a row can be built entirely out of conflating them.** The
+    row reasoned, correctly, that `capacity_gate()` refuses if ANY term is past its bar, and then
+    inferred that pinning one term's switch leaves the others live. False:
+    `CC_FIRE_CAPACITY_GATE=off` is a **whole-function bypass** at `scripts/handoff-fire.sh:4738`
+    that returns before any term with basis `gate-off`, detail *"no term evaluated"*. **The gate
+    evaluates four terms and has exactly one bypass.** This is the exact inverse of #175's method
+    124: there a filing's AND hid a guard that could only convict the conjunction; here a gate's
+    genuine AND invented a hole in a switch that has no conjunction at all. **Ask separately how the
+    mechanism DECIDES and how it is TURNED OFF — reading either one tells you nothing about the
+    other.**
+  · 🆕 **METHOD 128 — DATE THE ROW AGAINST ITS OWN MEASUREMENT DATE, NOT ONLY AGAINST LATER FIXES.**
+    The chain's standing order is to date a row against fixes that landed *after* it. This row
+    failed the *other* direction: its own text says *"Measured 2026-08-08"*, and the early return was
+    already present at `origin/main` `26d5c893596a` (last commit before 2026-08-09) at `:3548`, with
+    the `no term evaluated` string landed **2026-07-31** in `a08d75a1b`. It was **never true**, not
+    stale. A row that was false at filing looks exactly like a row that rotted, and the two have
+    different lessons: rot indicts the chain's re-dating discipline, a false filing indicts the
+    reasoning that produced it.
+  · 🆕 **METHOD 129 — WHEN A ROW SAYS "THE LINT ONLY CHECKS X", READ THE PREDICATE, NOT THE RULE'S
+    PROSE.** `is_fire_pinned()` (`scripts/test-hermeticity-lint.sh:1318-1323`) has **TWO** sufficient
+    forms, and **form 2 pins the memory term EXPLICITLY** (`CC_FIRE_SYSCTL=` **AND**
+    `CC_FIRE_HEADROOM_OVERRIDE=`) — the precise term the row asserts nothing tests. The row's author
+    appears to have read the rule's header comment rather than its function body.
+  · **THE FALSIFIER RAN THE REAL FUNCTION AND ITS CONTROL COULD FAIL.** Extracted the shipping
+    `capacity_gate()` body with the suite's own `awk` idiom, sourced the real
+    `scripts/lib/capacity-admit.sh`, stubbed only the emit/bound plumbing (which records, never
+    decides), and put **recording** `sysctl`/`vm_stat` stubs on `PATH` so "did any ambient probe
+    run" is measured rather than argued. Headroom override 1 GB against a 999 GB floor:
+
+        ARM A gate ON (control)   REFUSE reason=headroom  | ambient_probe_calls=2
+        ARM B CAPACITY_GATE=off   ADMIT  basis=gate-off   | ambient_probe_calls=0
+
+    ARM A is the half that matters: it **discriminated**, so ARM B's zero is a fact and not a dead
+    probe. Anti-vacuity assertions on the extract (it must contain the kill switch AND
+    `cc_hw_headroom_verdict`) exit 2 rather than passing, and an indeterminate ARM B exits 3 — a
+    NON-VERDICT, never a green.
+  · **THE PRESCRIBED FIX WOULD HAVE BEEN PURE NOISE, AND THE POPULATION HAD TRIPLED.** The row says
+    *"add `CC_FIRE_HEADROOM_GATE=off` to the 40 capacity-only suites"*. Re-measured 2026-08-24: **124
+    pin capacity · 65 pin both · 59 capacity-only** — so the row's own "the hole does not grow" claim
+    was false too (40 → 59). Executing the remedy would have touched **59 suites for zero
+    behavioural effect**, since none of them evaluates a term at all. **A row's remedy can be
+    refuted by the same measurement that refutes its bug — check both halves, not just the count.**
+  · **AND THE ARITHMETIC IN THE ROW'S FIRST SENTENCE IS STALE IN A WAY THE FILE ITSELF CAUSED.** The
+    gate has **FOUR** terms — `load`, `headroom`, `segments`, `active` (`handoff-fire.sh:4642`,
+    `:649`) — and the load term now **defaults OFF** (`CC_FIRE_LOAD_TERM:-off`). But
+    `handoff-fire.sh:639-641` *still* reads *"capacity+headroom are the two TERMS of the single
+    capacity_gate()"*, contradicting its own case arm eight lines below which lists all four and says
+    so explicitly. **The stale comment is the generator of the wrong row**, which is why the filing
+    below names it rather than leaving it as prose here.
+
+  **FILED 1 — `8375a0f8fdca`** (ungrouped, deliberately: `bin/cc-backlog`'s own header forbids
+  INFERRING a condition at mint). It carries the one thing that survived the refutation: **form 2
+  pins only 3 of the 4 terms** — the `active` term reads `cc_sp_active`, which neither the sysctl
+  stub nor the headroom override touches, and `handoff-fire.sh` sources `spawn-presence.sh` at
+  `:4680-4683` so that function IS in scope in a real fire. ⚠️ **The live population relying on form
+  2 alone is ZERO** (all 65 suites setting `CC_FIRE_HEADROOM_OVERRIDE` also pin
+  `CC_FIRE_CAPACITY_GATE=off`), so **nothing is broken today** — recorded as a fact about the
+  POPULATION, not the mechanism (#175's method 125, applied to a hole rather than to an impact).
+  The filing also carries the `:639-641` comment fix and states **why #176 did not do it inline:
+  cost, not risk** — an edit to `scripts/handoff-fire.sh` owes **88 direct suites by literal path**
+  (plus 25 by stem), against the **19** that already produced a `PARTIAL` land smoke for #175. **Fold
+  it into any other diff that already touches that file.**
+
+  **WHAT THE NEXT RECYCLE SHOULD TAKE FROM THIS.** The chain's highest-yield shape is still a row
+  that prescribes its own proof — but this recycle is the counter-example that shape needs:
+  `dd76e48db6b2` prescribed its own RED-proof ("via git archive per A2") and was **still wrong**,
+  because a prescribed proof tests the remedy, never the premise. **Run the row's PREMISE against
+  the shipping code before you run its prescribed proof.** One extracted function and a recording
+  stub settled in one command what a 59-suite edit would have entombed.
+
 - **2026-08-24 — drain recycle #175: pollution was reachable only through the staleness door —
   two independent axes, one shared refusal. filed 0 / closed 1 / 2 commits (FIX+TEST, then DOCS).
   NINETEENTH CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
