@@ -87,6 +87,87 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #181: the "unattributed" population was the instrument's blind spot,
+  not a second actor — deploy.log only ever recorded `--auto` runs.
+  filed 0 / closed 1 / 1 commit (docs + code-comment). TWENTY-FIFTH CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 22 open / 6
+  blocked at open. Board at open: open 318 / blocked 190 / done 2222. Picked from the STORE, inside
+  the goal's warm condition — I took the lead #180 handed forward and it did NOT survive contact.
+
+  **ROW CLOSED — `7e2e0ab9c358`, REFUTED (not fixed).** Landed as *docs(deploy-provenance):
+  deploy.log records --auto runs only, so it never attributed anything* — cite by SUBJECT, never by
+  sha; a land rebases. The row claimed "provenance GATED is laundered: a resolved-SHA ff by a
+  NON-deploy-live actor scores GATED", and told its reader to **find the actor before tightening,
+  or the leg gets stricter against an unknown population**. That instruction was the correct one and
+  it is what saved the leg: the population is not unknown, and tightening would have RED'd it.
+
+  **THE FINDING.** `deploy-live.sh` has **no log wiring of its own** — `say()` at `:304` is a bare
+  `printf` to stdout, and a comment-stripped grep of the whole 2,000-line script finds **zero**
+  tee/append/exec-redirect sites. `deploy.log` is the launchd job's `StandardOutPath`
+  (`com.claude.deploy-live.plist`), and that job runs `exec "$D" --auto`. Therefore **deploy.log
+  records `--auto` runs and nothing else.** A session running the sanctioned converge BY HAND writes
+  its `deployed X → Y` line to a terminal that is then gone. Manual invocation is not exotic here:
+  `hooks/validate-bash.sh:1040` denies a raw ff and prescribes `bash <shared>/scripts/deploy-live.sh`
+  as the remedy, every drain brief repeats it, and `--force` is the documented escape hatch used
+  **precisely when the auto lane is refusing** — which is the state the row's own exhibit records at
+  its tip. All three modes reach the same resolved-SHA merge at `deploy-live.sh:1926`, which this
+  leg's own comment already said.
+
+  **RE-MEASURED, not inherited** (`scratchpad/attrib-181b.sh`, positive control on every regex +
+  a negative control that must match zero): shared-checkout reflog **292 entries — 43 raw-REF ffs ·
+  71 resolved-SHA ffs · 34 `pull*`** against **43 `deployed` lines** in deploy.log. The **28**-entry
+  gap is sanctioned advances the log structurally cannot see.
+
+  🚨 **AND #180's OWN NUMBERS WERE INTERNALLY IMPOSSIBLE — I nearly inherited them.** #180 reported
+  "49 of 70 attributed to deploy-live by CONTENT" while also reporting deploy.log holds **42**
+  `deployed` lines whole-life. **49 > 42**: a 1:1 attribution cannot match more ffs than there are
+  records to match against. That arithmetic is visible on the face of the handoff brief and it is
+  the thing that made me re-measure instead of building on it. My own count (71/43/28) differs from
+  #180's (70/49/21) on every column.
+
+  **WHAT LANDED.** No behavior change — both edits are prose, verified with `bash -n` and a bare
+  `shellcheck` (SC2016-clean). Two corrections, both of which are what GENERATED the false lead:
+  · `.claude/commands/ship.md` said a raw ff scores UNGATED **"permanently"**. The leg reads
+  `git log -g -1` (`deploy-parity-assert.sh:885`) — the NEWEST reflog entry only — so the very next
+  sanctioned SHA ff **erases** the finding. Corrected to "until the next advance overwrites it",
+  with the mechanism named. The same sentence also called `deploy-live.sh --auto` "the only
+  sanctioned advance", contradicting the deny message two files over; it now names all three modes.
+  *(This is exactly the docs-vs-code asymmetry #180 measured and deliberately left unfixed — it is
+  discharged here, in the diff that already had to touch the deploy family.)*
+  · `scripts/deploy-parity-assert.sh`'s discriminator comment now states outright that deploy.log is
+  **not an attribution instrument**, with the measurement and the reason, so a third session does
+  not re-derive this.
+
+  **METHODS — 144 stand; #181 exercised 140, 142, 143 and adds two:**
+
+  🆕 **145. A HANDED-FORWARD MEASUREMENT IS AN INHERITED PREMISE — AUDIT ITS ARITHMETIC BEFORE YOU
+  BUILD ON IT.** The strongest lead in my brief came with numbers that could not all be true at
+  once (49 attributed out of a 42-line log). A predecessor's measurement earns the same police-work
+  as a row's own claim: cross-check the totals against each other FIRST, because a lead that is
+  half-done is also half-unverified, and the half you inherit is the half nobody re-ran.
+
+  🆕 **146. BEFORE CALLING A POPULATION "UNATTRIBUTED", ASK WHAT THE ATTRIBUTION INSTRUMENT CAN
+  STRUCTURALLY SEE.** A log is not a census. `deploy.log` looks like the deploy lane's record and is
+  in fact one caller's stdout capture, so a whole sanctioned population — manual runs, i.e. the mode
+  the docs actively instruct — was invisible to it by construction. The residue then reads as a
+  foreign actor. **Find the log's WRITER (here: a plist `StandardOutPath`, not the script) before
+  reading its silence as absence.** This is the store-side twin of `lookup-miss-is-not-absence`.
+
+  ⚠️ **AND A THIRD, SMALLER ONE, PAID FOR IN A REFUSED PROBE:** my first attribution script died on
+  `[: 0\n0: integer expression expected` because `grep -c` **exits 1 on a zero count**, so
+  `$(grep -c … || echo 0)` yields TWO lines. The negative control caught it and refused rather than
+  passing vacuously — which is the control working. Count through a helper that takes `head -1` and
+  normalises non-numerics.
+
+  **TOOLS AS MEASURED.** Owed set **9 suites — 8 direct + 1 prose-cited**; the `.claude/commands/
+  ship.md` edit is what pulls in the whole `ship-*` family, so a docs-only touch there is NOT free.
+  ⚠️ **The prose-cited label is `cited:` in `--explain`'s output, not `prose-cited`** — grepping for
+  the brief's spelling returned nothing and read as "none owed"; the real answer was
+  `tests/validate-bash-ff-gate.bats <- cited:.claude/commands/ship.md`. A `deploy-parity-assert.sh`
+  edit alone is only **3** direct suites (measured free, by running the selector over a past
+  single-file commit `a11bb3658` rather than guessing). Selector instrument control **32** ✓.
+
+
 - **2026-08-24 — drain recycle #180: the fire's own freshness cure was the unattributed raw-ff
   producer, and the row had spent 16 days waiting for a watcher to name it.
   filed 0 / closed 1 / 2 commits (CODE + docs). TWENTY-FOURTH CONSECUTIVE close overall.** Warm
