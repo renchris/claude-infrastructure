@@ -87,6 +87,114 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #195: a repro MILDER than the harness ACQUITS — my first probe
+  returned 0/60 at every size and would have exonerated a row that reds an innocent land 22% of
+  the time. filed 1 / closed 2 / 1 flake fixed with an in-session A/B / this doc.** Board at open:
+  **487 open+blocked** (299 open / 188 blocked / 2244 done); `master-operator-gated`
+  **0 open / 111 blocked**; `master-convergence-deadlock` **open=14 / blocked=5** (printed by
+  `bash bin/cc-backlog fold` run from the worktree — the blocked tail is stated, not hidden).
+  Zero `.page` files under `autonomy/postland` (**EIGHTY-SIXTH** consecutive; the deploy lane's own
+  pages live under `autonomy/pages`, a different and populated store). Heredoc diff clean
+  (**seventy-seventh**). Live layer BEHIND by **6** at open (#194 read 3, #193 2, #192 0) — the base
+  moves, re-measure it.
+
+  **`418628734437` CLOSED BY FIXING IT** (`329fa5504`). `tests/pipefail-sigpipe-lint.bats` test 7's
+  sub-buffer arm asserted `status 0` while failing **9/40**, and its own comment asserted the
+  opposite: *"Deterministic on this box (0/10 and 10/10), because the boundary is the buffer rather
+  than a scheduling race"*. Both halves false. Two corrections the row itself does not have:
+  · **THE ARM WAS NOT THE SIZE IT SAID.** `head -c 63488` is 62 KiB of payload, but the arm pipes it
+    through `fold -w 80` (**+794** newlines) with a `MATCHME` prefix (**+9**), so it actually wrote
+    **64290** bytes — **1246** under the 65536 buffer, not the ~2 KiB "62 KB" implies. Confirmed by
+    piping the arm through `wc -c`. The arithmetic omitted the framing the test itself introduced.
+  · **THE TRANSITION IS A GRADED BAND, NOT A BOUNDARY**, so the stated CAUSE was wrong too:
+    writes 60750 → 1/40 · 62775 → 3/40 · **64290 → 9/40 and 12/40** · 64800 → 12/40 · 65200 → 6/40 ·
+    65821 → 120/120. A buffer boundary produces a step; a race produces a rising band.
+  **FIX = the row's own candidate (b)**, moved off the edge and NOT deleted (the row is explicit it
+  is clause 3's empirical basis): **57344 raw → 58069 written, 0/120 at loadavg 15.3**, 7.4 KB of
+  margin, still **14×** the 4 KiB arm — so it still proves what it exists to prove. A/B in ONE
+  session with both controls beside the subject: fixed test 7 through bats **25/25 pass**; pre-fix
+  arm 63488 raw **6/25 nonzero (24%)** — *reproducing right now*; post-fix arm **0/25**; the 128 KB
+  arm still **25/25 nonzero**, so the bracket is intact.
+
+  🆕 **METHOD 163 — A REPRO MILDER THAN THE HARNESS EXONERATES, AND IT IS THE DEFAULT FAILURE.** My
+  first probe ran `printf <62KB single line> | grep -q x` at nine sizes and got **0/60 everywhere**,
+  with both controls healthy (must-fail 10/10, must-pass 0/10) — a clean-looking acquittal of a row
+  that is simply TRUE. The defect: one unfolded line gives `grep -q` nothing to match EARLY, so it
+  consumes the whole payload, so the producer never takes SIGPIPE — **no race existed to lose.** The
+  bug's regime needed `fold -w 80` *and* an early match. **Copy the arm VERBATIM from the subject;
+  do not paraphrase it into something simpler.** Siblings: `control-fixture-must-reach-the-bugs-regime`,
+  `prescribed-repro-weaker-than-the-harness`, and #194's method 161.
+
+  **`d70b7e8ffdf2` CLOSED — CONCLUSION REFUTED, MECHANISM TRUE BUT MISATTRIBUTED.** Row: *"cut, not
+  green, on 3 consecutive runs — so deploy-live's T1 green tier is **structurally dead**"*, cause
+  *"the bound is sized for a quieter box … it can only ever produce a non-verdict"*.
+  · **MAGNITUDE FALSE.** Whole-store census of `~/.claude/autonomy/postland/stamps`, **423** stamps,
+    read by the jq FIELD: **cut 232 · red 137 · green 46 · hung 8** (423 files, 423 parsed).
+    **30 greens AFTER the row's own `firstTs`**, 16 at or before; CONTROL over all verdicts 164/259,
+    so the partition discriminates. Newest green **2026-08-24T03:22:12Z**; live `last-green` =
+    `37f886bb9aa2`, and the row's cited `7ac9d6970ce8` is a **strict ancestor** of it
+    (`--is-ancestor` rc 0, reverse rc 1).
+  · **THE STATED CAUSE IS REFUTED TWICE.** (a) *The alleged discriminator does not discriminate*:
+    `run_s` green **n=46 min=1994 median=2564 max=11554** vs cut **n=232 min=1989 median=2580
+    max=12432** — medians **16 s apart (0.6%)**, a green has run **3.2 h** and still counted green.
+    A runtime bound would make cuts systematically LONGER. (b) *The producer says otherwise*:
+    `postland-verify.sh:2998` sets `CUT=1` from three NAMED conditions — `PRELINT_UNPROVEN`,
+    `LADDER_UNPROVEN`, `CONVICT_PENDING` — **none a total-runtime bound**, and `:3022-3025` says the
+    two cut populations *"need OPPOSITE things said about them"*. A C29 pending is a deliberate
+    two-window design; no bound growth removes it.
+  · **MECHANISM STANDS**: cuts do dominate — 232/423 overall, **128 of 170** in 7 days, **18 of 20**
+    in 24 h. That half is real; *"T1 is dead"* and *"the bound is too small"* are not, and the remedy
+    those words imply would not have worked.
+
+  🆕 **METHOD 164 — WHEN A ROW NAMES A CAUSE, TEST WHETHER THE CAUSE'S OWN DISCRIMINATOR ACTUALLY
+  DISCRIMINATES.** Split MECHANISM × MAGNITUDE × **CAUSE** (extends 153). The population was real and
+  the cited variable was recorded, so the row read as diagnosed — but partitioning `run_s` by verdict
+  showed the two arms are the same distribution. **A cause you can measure on both arms is refutable
+  in one query; do that before adopting its remedy.** Sibling: `wrong-cause-corroborated-by-true-metric`.
+
+  **FILED `4cec179c6ba5` — and it is WHY that row read the way it did.** `CUT_WHY` already
+  distinguishes the two cut populations at **6** set-sites and reaches the log (`:3021`) and the page
+  (`:3254`), but it is **NOT a stamp field**: 0 occurrences in `write_stamp`'s printf `:2214-2218`
+  (**CONTROL: `retries` appears 4×** there), and both live stamp schemas confirm it (**376** files
+  and **48**, neither carrying a why key). So the only DURABLE store shows 232 undifferentiated cuts
+  — exactly the reading that produces *"the bound is too small"*, at a cost of two recycles now.
+  **NOT done in-session, deliberately:** `CUT_WHY` interpolates lint output, TAP descriptions and
+  `rc_why` text, and the file has **no JSON escaper** (`json_array:738` is unescaped), so a naive
+  field would write **invalid JSON into the store `deploy-live` reads to decide an advance**; and
+  `tests/postland-verify.bats` is **130 tests**, unrunnable whole in a recycle.
+
+  **`617d071cef41` MEASURED AND DELIBERATELY LEFT OPEN.** I ran its **stored falsifier** —
+  `deploy-live.sh --falsify-host 'tests/test-hermeticity-lint.bats'` — after reading its predicate
+  (`:255-275`, a pure read-only early dispatch before any fetch/merge/deploy, so running it is safe).
+  **rc=1 "still live"**, and the falsifier is SOUND, not stuck: controls in the same run gave rc **0**
+  on a nonexistent suite, rc **1** on a live one, rc **2** on no-arg. `DEPLOY_REPO` is the shared
+  checkout (`:86`), **not** `~/.claude` — which matters, because `~/.claude/tests` does not exist, so
+  had it been the live layer this falsifier would exit 0 for EVERY suite and retract every row it
+  ever filed. Its ledger is live too: `postland/host-cuts` holds exactly one row,
+  `tests/test-hermeticity-lint.bats 2 1787586694` (= 2026-08-24T15:51:34Z), i.e. **2 of
+  `HOST_CUT_MAX`=3**. Population: 10 `post-deploy HOST` rows, 9 done, this 1 open.
+
+  ⚠️ **TWO INSTRUMENT FAILURES OF MY OWN, both caught by controls — report the control beside the
+  verdict.** (1) I grepped `verdict=<x>` over the stamps and got a **uniform 0 across every token
+  including my own bogus control** — the stamps are JSON; a uniform zero indicts the harness
+  (`uniform-error-ratio-indicts-the-model`). (2) My green-listing loop emitted **nothing** while the
+  same run counted **46** greens — an `xargs -I{} sh -c` quoting defect, not an absence
+  (`suppressed-stderr-turns-a-failed-command-into-a-zero`). Also: `stat -f '%Sm' -t '…Z'` renders in
+  the **ambient timezone** while labelling it `Z` — I pinned `TZ=UTC` after noticing
+  (`process-start-time-renders-in-ambient-timezone`).
+
+  **Board at close: 486 open+blocked** (298 open / 188 blocked / 2246 done; `claimed` 5) —
+  `comm`'d against the open snapshot and **fully attributed, with zero sibling churn this session**:
+  departures exactly `418628734437` + `d70b7e8ffdf2` (my two closes), arrivals exactly
+  `4cec179c6ba5` (my filing). 487 − 2 + 1 = 486. `master-convergence-deadlock` unchanged at
+  **open=14 / blocked=5**. **Closed 2 > filed 1.**
+  ⚠️ I first wrote *"297 open / 189 blocked"* into this very entry as a PREDICTION and the fold
+  refuted it — a claim about your own run is as perishable as any other (#194's scar, re-earned).
+  Gates: suite **18/18**; selector `--direct` on `$MB..HEAD` cites **exactly 1** suite, the one run
+  (a non-vacuous 1, not a broken 0); `bats-shellcheck-lint --range` clean, 1 scanned, 0 blocking;
+  `bats-assert-liveness` no dead assertions; `pipefail-sigpipe-lint.sh` clean. Alarm-polarity lint
+  **not applicable and not claimed** (no emitter touched). Own commits add **0** files.
+
 - **2026-08-24 — drain recycle #194: the remedy a contract PRESCRIBES can be one no deployer
   IMPLEMENTS — and the migration built to close a drift was itself missing a member of it.
   filed 0 / closed 1 / 1 migration fixed / this doc.** Board at open: **488 open+blocked**;
