@@ -522,10 +522,10 @@ and can fire in parallel with M3.
 | **M1** | ⏭ **NEXT (unblocked by M3)** — **Govern the dispatcher** — 254 of 261 items are parked behind a cloud-only venue filter since 2026-08-11; admit them **against measured headroom**, never wholesale | S — ~~blockedBy M3~~ **ready** | the dispatcher fires while its account's burn ratio is below pace and throttles as it approaches 1.0; over one full weekly window no account exceeds 100% and the parked count falls; do not release the queue un-governed, and do not disable any safety gate to do it | Re-scoped from "unblock" to "admit against headroom". **Un-governed it is Q3** — 26–74× the remaining allowance, 4–5 walled days/week |
 | **M2** | **Fix the DoD truncation** — `dod-persist.sh` concatenates a frozen legacy store, overflows the ~9,200 B cap, and delivers the *oldest* scope | S | a session in this repo shows the NEWEST `Scope (frozen):` line inline in `hook_additional_context`, with no `<persisted-output>` stub, on 3 consecutive starts | **Quality restoration.** 51% of injections currently carry a superseded contract — the frozen-DoD mechanism is silently not working |
 | ~~**M3**~~ | ✅ **DONE 2026-08-16 `47ddbf47c` — the burn-ratio instrument.** `wall_projection()` in `bin/claude-accounts`: `burn_ratio` = (weekly_pct/100) ÷ elapsed_fraction, `proj_end_pct`, `wall_risk`, all exported per row; the footer is re-captioned from `pace to 100%` (which named the failure mode as the goal) to *weekly burn (1.00× = lands exactly at the 100% wall)* and flags `⚠ WALL`. **Abstains below 5% elapsed** — the load-bearing guard: at 1 h in, a 1% reading projects to 168% and would page on every fresh window. | **L** *(deviation from the S default: the metric's whole content is the correction this session measured; a dispatched brief would have had to re-derive it, and the change is one function + one footer)* | met — live on 4 accounts at 0.46/0.51/0.54/0.73×, all projecting 46–73% by reset, no wall risk | Closed the error class that inverted this plan's own premise (§1), in the renderer that produced it. 8 bats, RED-proved 8/8; the floor additionally mutant-proved (0.05→0.0 reds case 1 alone) because an absence-red is weak |
-| **M4** | **The price list as code** — `cc-quota-price`: re-fit tokens→pp on a schedule from `account-utilization.jsonl` × deduped transcripts, with the **`message.id` dedup as a tested invariant** | S | `cc-quota-price --selftest` passes, including a RED-proof case that a non-deduping extractor inflates output tokens ≥2× | Without it, every later cost claim is unpriced — and the dedup bug silently corrupted a keystone number in this very wave |
+| ~~**M4**~~ | ✅ **DONE 2026-08-24 `5727aeab`** — **the price list as code.** `bin/cc-quota-price` + `tests/cc-quota-price.bats`: L1 deduped transcript census × L2 `account-utilization.jsonl` → L3 NNLS fit on the same (account, 6h) grid §2.2 used. The `message.id` dedup is a **tested invariant with a live seam** (`CC_QP_DEDUP=0`), not a comment. **cache_read is refused as a fitted coefficient** — §2.8's experimental bound is reported instead, because `corr(output, cache_read)=+0.909` plus NNLS's zero floor makes a fitted 0.0000 a boundary artifact, which is exactly what A1's exact zero was. | **L** *(deviation from the S default: the whole content of the tool is §2.1/§2.8's corrections, which a dispatched brief would have had to re-derive from this plan before it could write a line)* | met — `--selftest` 13/13 (incl. the ≥2× RED-proof) · bats 14/14 · fit recovers a KNOWN price vector within 5% | Every later cost claim was unpriced without it. The dedup bug silently corrupted a keystone number in this very wave |
 | **M5** | **De-duplicate `./CLAUDE.md`** — byte-identical to the global copy on all 5 load paths; move the versioned source to a path Claude Code does not auto-load | **S** *(reclassified — see below)* | a session in this repo loads the global CLAUDE.md exactly once; the deploy gate still asserts repo↔live parity from the new path; `install.sh` still reports the line count | Q1 free win, ~5 pp/week fleet, zero informational loss |
 | **M6** | **Enable OTel** in all 5 config dirs + a local collector | S | `claude_code.token.usage` rows land in the collector for a live session, and `grep ENABLE_TELEMETRY` finds it in 5/5 settings.json | The token-free numerator; scope (c) satisfied by construction |
-| **M7** | **Disconnect or repair `cc-value`'s extinct join** — it joins on a git trailer this repo measured extinct 4 days ago | S | `cc-value` either reports ABSTAIN with a named reason, or joins on a key with >0 coverage proven in its output | An instrument silently reporting over an empty join is worse than no instrument |
+| ~~**M7**~~ | ✅ **DONE 2026-08-24 `09c3c4c5`** — **`cc-value`'s extinct join now reports its own coverage.** Re-measured on trunk: **0 of the last 500 commits** carry `Session-Id:` or `Land-Session:`. `.attribution` carries {verdict, reason, key, commits, attributed, **trailerless**, **unjoined**, coverage_pct}; on ABSTAIN the per-account and per-session commit columns are **NULL, not 0**, and `cc-board`'s footer renders `?c`. | **L** | met — ABSTAIN names the extinct key; the joined world still reports 1/2 = 50% coverage, so the verdict is DERIVED, not hardcoded | An instrument silently reporting over an empty join is worse than no instrument |
 
 **M5's blast radius, recorded because it caught the lead out.** M5 was first written as `L` — "one
 file move, briefing a session costs more than doing it". A reference sweep before touching anything
@@ -545,8 +545,38 @@ exists to prevent index corruption and lost commits. **That trade is a genuine f
 operator's, not mine** — quota savings vs. concurrency safety, where the safety side has a measured
 incident history. Filed rather than decided.
 
-### §4.1 Landed this session
+### §4.1 Landed 2026-08-16 (the research wave)
 
 | commit | what |
 |---|---|
 | `7c9f36316` | `fix(cache-expiry-warning)` — TTL 300s→3600s (77.3% of its fires were false) and the `/clear`//`/compact` advice removed, because against the weekly limit it converted a free `cache_read` into a paid `cache_creation`. Verified with a positive control. |
+| `47ddbf47c` | `feat(claude-accounts)` — M3, the burn-ratio instrument. See the M3 row above. |
+
+### §4.2 Landed 2026-08-24 (M4 + M7)
+
+| commit | what |
+|---|---|
+| `5727aeab` | **M4 — `bin/cc-quota-price` + `tests/cc-quota-price.bats`.** The converter §3.1 calls the actual deliverable, made re-runnable. 13 selftest cases + 14 bats cases; **RED-proved by mutation 6/6** (dedup removed → case 1 · reset guard → 7 · stale filter → 8 · absent-store abstain → 3 · cache_read promoted to fitted → 6 · bucket floor → 9). Two assertions were WEAKENED-PROOF at first pass and were tightened until their mutants went red — see the learning below. |
+| `09c3c4c5` | **M7 — `cc-value` + `cc-board`.** The attribution join reports its own coverage and abstains when it has none. RED-proved by mutation 5/5. |
+
+**Learnings from this wave, recorded because both generalise past this plan.**
+
+1. 🚨 **A mutation that survives is a WEAKENED assertion, and the survivor looked like the strongest
+   case in the file.** M4's abstain case asserted the reason names the store's *path*. Deleting the
+   entire absent-store guard did **not** turn it red: control fell through to the *next* abstain rung
+   ("0 usable samples"), whose reason also names the path. The case was checking the noun both rungs
+   share instead of the verb that distinguishes them. Same shape on the cache_read case — it asserted
+   the *label* `bounded` while a mutant that promoted cache_read to a regressor still produced that
+   label, because the bounded block overwrote the fitted one downstream. **The fix in both was to
+   assert against the thing only the correct code path can produce**: the rung's own words
+   (`"does not exist"`), and the absence of `cache_read` from `fit.coef_pp_per_token` — i.e. that the
+   column never entered the design matrix, not that its output was relabelled afterwards. *Generalisable
+   rule: assert on the discriminator between the branches, never on what they have in common — and
+   run the mutant, because reading the assertion will not tell you which one you wrote.*
+2. **An empty join does not merely under-report — it makes a detector FIRE.** M7 was filed as "an
+   instrument silently reporting over an empty join", i.e. a reporting defect. It was worse than
+   that: `cc-value`'s per-session churn predicate is `bysid[sid] == 0`, and an empty join satisfies
+   it for *every* session, so every active session over 40% fill was being convicted of churning on
+   evidence that was structurally absent rather than negative. *Generalisable: when a join dies, audit
+   every predicate that reads `count == 0` off it — absence and zero are the same value and opposite
+   facts.*
