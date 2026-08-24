@@ -510,6 +510,27 @@ EOF
   # lies. Both clauses are proven runnable at emit time by the rev-parse and rev-list that just
   # succeeded against these same two refs in this same repo. Fail-OPEN as everywhere in this file: an
   # unreadable count drops only the magnitude clause, never the row.
+  #
+  # RE-MEASURED 2026-08-24 (cc-backlog 5b1cb9415742, CLOSED REFUTED). That row read this row and
+  # deploy-live.sh as two auditors of one population contradicting each other, and asked for one of
+  # two fixes: budget this row on the CC_DEPLOY_MAX_LAG_* deploy-live uses, or demote it to defer to
+  # deploy-stale. Both are already refused in writing above (:489-503), and the premise is false as
+  # well — deploy-live does not disagree with this row, it states the SAME fact. Its live wording is
+  # "waiting — no GREEN tree is a DESCENDANT of live HEAD <sha> (the newest one, <sha>, is BEHIND
+  # it) … no advance, and none is due yet": the structural clause IS this row, and the budget clause
+  # only says whether a DEGRADED advance is yet authorised. A REPORT and an AUTHORISATION are not
+  # two answers to one question, so importing the authoriser's budget here would silence a true
+  # report for exactly as long as the authoriser had not yet decided to act.
+  # I11 is therefore NOT stale either: the wording moved from "refuses" to "waiting", the behaviour
+  # did not — run in this state the command still yields no advance, so the platter must still not
+  # offer it.
+  # The row's remaining claim — "green-behind is the NORMAL post-degrade steady state, so this fires
+  # permanently = alarm-polarity zero bits" — was tested by replaying THIS predicate over the live
+  # layer's own reflog x the stamp store (2026-08-01..08-24: 46 green stamps, 295 reflog entries,
+  # 296 intervals, positive+negative controls both passing). WEDGED 87.3% of 23.1 days, but with 28
+  # state TRANSITIONS, 52 clear intervals and a longest clear run of 6.06h. A high duty cycle, not a
+  # constant — so not zero bits. The 87.3% is recorded here because it is the number a future owner
+  # will want, and because this seam has now been re-analysed three times.
   if ! git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1; then
     behind_g="$(git -C "$DEPLOY_REPO" rev-list --count "$gcommit..$head_sha" 2>/dev/null || true)"
     case "${behind_g:-}" in ''|*[!0-9]*|0) behind_g="" ;; esac
