@@ -87,6 +87,90 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #192: THE DISPATCH WAS ITSELF THE EXHIBIT. This row was dispatched
+  OFF-BOX, and `cc-eligible` says `eligible` for it — because an "advance `<plan>`" row names no
+  work at classification time. filed 0 / closed 0 / 0 refreshed (no store reachable) / 1 commit
+  (this doc).** I could not run a normal recycle: the venue this row was routed to has no
+  `~/.claude/autonomy/backlog.jsonl`, so there is no board to open, no row to pick, and no
+  `cc-backlog` verb that resolves. No board counts this entry — that absence IS the finding.
+  (Written concurrently with #191 and rebased onto it; the two share no subject.)
+
+  🆕 **METHOD 158 — A ROW WHOSE WORK IS CHOSEN *AFTER* THE CLAIM CANNOT BE VENUE-CLASSIFIED, AND A
+  CLASSIFIER THAT ANSWERS ANYWAY IS ANSWERING ABOUT THE PLAN, NOT THE WORK.** 155 dates a remedy
+  against `firstTs`; 156 censuses the population behind an N=1 exhibit; 157 counts the harm in its
+  own store. 158 is the *temporal* case — the span the classifier reads is complete and the work it
+  describes does not exist yet. The honest verdict is `not-measurable`, and this file's own doctrine
+  already says what to do with one.
+
+  🚨 **THE MEASUREMENT, POSITIVE-CONTROLLED.** `SPAN_FIELDS = ("title", "dodRef", "condition",
+  "source")` (`bin/cc-eligible:450`) — the classifier reads the dodRef *path string*, never the
+  plan's contents. Reconstructing this row's real span (title + `docs/plans/BACKLOG_DRAIN_24_7.md` +
+  `master-convergence-deadlock` + source) into a synthetic store and running the gate:
+  · `70f0001c657b` → **`verdict=eligible`, `refused: (nothing fired)`** — the full `why` assessment.
+  · Control A, a launchd/pane row → `ineligible-box`, **rc 3**. Control B, a README typo →
+    `eligible`, rc 0. The harness separates the classes, so the `eligible` above is a real verdict
+    and not a broken probe.
+  · Against the LIVE (absent) store the gate returns `verdict=unknown-store` and **fail-opens by
+    design** (`:440` "ledger unreadable — fail-open"). So nothing gated this dispatch on content
+    either: the one instrument that could have refused abstained, correctly, for a different reason.
+  · The `history` arm is off here too — `no-repo`, `repo=/root/Development/claude-infrastructure`,
+    a path that does not exist in this container. The measured arm never ran.
+
+  **WHY THE `eligible` IS NOT A MISSING SPELLING** — which matters, because this file's header warns
+  that "a word added because it *sounds local* costs the cloud tap a whole class of real work".
+  Nothing is missing from the denylist. The title *"advance BACKLOG_DRAIN_24_7 — drain cc-backlog to
+  zero"* is an accurate description of a plan, and a plan is not local-only state. The work this
+  recycle would actually have done — read the board, pick a row, refresh it, read
+  `~/.claude/autonomy/postland/deploy.log` — is local-only in every instance, and **none of it is
+  nameable until a worker is already running.** `bin/cc-discover:273` mints this whole kind under
+  source **`plan-open`** (`add_candidate "advance $title" … "plan-open"`), and it is the one kind of
+  the four (C1 `frontier-hole`, C3 `wiring-inert`, C4 `gate-red` all name their subject) whose work
+  is deferred. This is the exact failure this file's own header predicts: *"a wrong ELIGIBLE puts a
+  worker in a VM that CANNOT do the work at all and cannot tell you so — it will improvise something
+  plausible against state it cannot see."*
+
+  **THE FIX IS SPECIFIED AND CHEAP — AND THIS SESSION MAY NOT LAND IT.** Doctrine-consistent shape:
+  `plan-open` is an **unmeasurable state for the venue predicate**, so the PRODUCER (`cc-venue`)
+  must not mint a cloud label for it while the GATE stays fail-open — byte-for-byte how `shallow` is
+  already handled (`bin/cc-eligible:81-88`). Cost, measured the way #190 costed its candidate:
+  `gate-select --direct` on a `bin/cc-eligible` commit returns **5** suites
+  (`cc-dispatch-readiness`, `cc-eligible-cross-repo`, `cc-eligible-history`, `cc-eligible`,
+  `cc-venue`) against 319 selected — an order of magnitude under the 59 that #190 called too big.
+  **It is refused on grounds of OBSERVER, not cost:** both spellings of the fix return
+  **`verdict=ineligible-offbox-lane`** from the gate itself (`named: venue`), with a README-typo row
+  in the same store returning `eligible` as the control. `bin/cc-eligible:213-231` states the rule —
+  *"A SESSION THIS LANE CREATED CANNOT VERIFY A CHANGE TO THE LANE … it is that the observer and the
+  subject are the same object"* — and names `venue` in the list for precisely "an item asking to
+  edit THIS FILE". **#193, on the local box, should land it.**
+
+  **THE OFF-BOX LANE'S CAPABILITY ENVELOPE, measured here so #193 need not re-derive it.** This
+  container is the documented cloud-VM fingerprint exactly: `--is-shallow-repository` → **true**,
+  visible depth **50** — the two numbers `bin/cc-eligible:502-503` cites from
+  `cloud-vm-shallow-clone-blast-radius-2026-08-11.md` §1.
+  · **`bats` and `shellcheck` are absent** (both Homebrew/macOS on the box). `bats` is recoverable —
+    `npm i bats` gives **bats 1.13.0**, and with it the 5 direct suites above and the 3 this
+    docs-only commit selects all run. The lane is *not* structurally unable to gate itself; it
+    merely ships without a runner. Worth knowing before anyone concludes cloud work cannot be gated.
+  · **`gate-select.sh` fails CLOSED to `FULL` on any range crossing the graft** —
+    `selector-error … exit status 128`, graft boundary `8ddc2c5d`, positive-controlled against an
+    in-horizon range that narrows to 2 suites correctly. **Bounded, not a blanket:** a worker's own
+    feature-branch range (`HEAD~1..HEAD`) is in-horizon and narrows fine. It bites re-gating an
+    older range, and a `FULL` here is unrunnable in practice.
+  · ⚠️ **A `chmod 000` unreadability fixture is VACUOUS in this lane.** `tests/cc-venue.bats:186`
+    test 11 is the ONE not-ok in the 5-suite baseline, **identically on clean `origin/main` in this
+    same container**: the lane runs as **uid 0**, root bypasses the permission bits, the ledger is
+    readable, and the test's premise cannot hold. Same family as the macOS-PATH
+    `unattended-path-lint` fixture failure already recorded above for `master-operator-gated` — *the
+    verdict is the container's, not the tree's*. Not a trunk red; do not "fix" it from a diff.
+
+  **FOR #193, in order.** (1) Land the `cc-venue` producer refusal for `source=plan-open`, locally,
+  where the observer is not the subject. (2) Note that this makes every `plan-open` umbrella
+  local-only by construction — which is correct, and is what §2's "79% of labelled refusals name
+  THIS MACHINE" already implies for the drain's own row. (3) Untouched here and now owned by #191's
+  descendant-ness finding rather than #190's: the `master-convergence-deadlock` cluster needs
+  `~/.claude/autonomy/postland/` and `stamps/`, neither of which exists in this lane, and
+  `scripts/postland-verify.sh` is a `FULL`-gate file — a local job twice over.
+
 - **2026-08-24 — drain recycle #191: the convergence deadlock is NOT a missing green. 45 of 46
   green stamps are ANCESTORS of live HEAD and 0 are descendants, so `--ff-only` can never move.
   filed 0 / closed 1 / 1 row REFRESHED / 1 commit (this doc).** Warm effort: the single-row-condition
