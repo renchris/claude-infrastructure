@@ -13,6 +13,16 @@ return-and-die, exploration/decomposition/discovery only. **Not** teammates or
 assignee agents for plan implementation (those live in `agent-teams.md`, have
 worktrees, write code, persist until shutdown).
 
+🚨 **`name:` — not `team_name` — is the lifecycle switch, so "fire-and-forget" above
+describes an UNNAMED call only.** Measured 2026-08-01 on CC 2.1.219 (`agent-teams`
+§ *`name:` silently makes it a teammate*, landed `79a48157a`): three `Explore` agents
+spawned with `name:` and **no `team_name`** were assigned an implicit team by the
+runtime, reported, went idle, and held their panes ~1h16m until an explicit
+`shutdown_request`. A named research agent is therefore governed by `agent-teams`
+§ Shutdown Protocol, not by this file — **tear down every agent you named, research
+included, then ps-verify** (`pgrep -f "agent-id <name>@"`, empty ⇒ actually gone).
+Leave it unnamed and it reaps itself; name it and you have taken on its teardown.
+
 The downward bias on research-subagent count is a **cognition** problem, not an
 **output** problem. Existing anti-cap rules ("if proposing ≤5, cite file:line")
 constrain stated counts; they do not constrain the count-first thinking that
@@ -854,7 +864,7 @@ less. The framing is the trigger; the actual question space is what counts.
 
 | File | Scope | Relationship |
 |---|---|---|
-| `agent-teams.md` | Teammates / assignees with `team_name`, worktrees, code work | Disjoint — that file governs implementation agents; this governs research subagents |
+| `agent-teams.md` | Any agent spawned with `name:` — teammates, assignees, AND named research agents — plus worktrees and code work | Disjoint on COGNITION (that file governs implementation discipline; this governs spawn-count discipline) but NOT on LIFECYCLE: teardown of every named agent lives there, because `name:` is the persistence switch. Split the two files on `name:`, never on `team_name` |
 | Critical Rule #6 in project `CLAUDE.md` files | Forbids STATING low caps in proposals | Complementary — that rule constrains output, this constrains cognition |
 | `feedback-no-parallelism-cap.md` (memory) | Past case studies of under-spawning | Empirical backing for this rule |
 
