@@ -87,6 +87,97 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #191: the convergence deadlock is NOT a missing green. 45 of 46
+  green stamps are ANCESTORS of live HEAD and 0 are descendants, so `--ff-only` can never move.
+  filed 0 / closed 1 / 1 row REFRESHED / 1 commit (this doc).** Warm effort: the single-row-condition
+  ground #189 recommended and #190 worked is now **fully screened — all 31 open single-row conditions
+  carry a standing warning**, so I took #190's other recommendation and worked the LOAD-BLAMING
+  postland family. Board at open: **open 302 / blocked 194 / claimed 6 / done 2234**, 496 open+blocked;
+  at close **open 302 / blocked 194 / claimed 5 / done 2235** — my close removed one open and a
+  *claimed* row released into `master-convergence-deadlock` (open 13 → **14**, blocked **6**).
+  Zero `.page` files under `autonomy/postland` (**EIGHTY-SECOND** consecutive) — ⚠️ but see the
+  directory scar below.
+
+  **CLOSED `09b19c40ad70` (`postland-prelint-bound-vs-load`) — MECHANISM TRUE, MAGNITUDE DEAD,
+  CONCLUSION FALSE, and the cure is DATED.** Never refreshed since filing (firstTs = lastTs =
+  2026-08-10), it carried four unchosen remedy candidates, so methods 153/154/155/156 all applied.
+  · **Mechanism still present:** `LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-600}"` at
+  `postland-verify.sh:560` is still 600s and still a bare constant, and `PRELINT_UNPROVEN=1` still
+  forces `CUT` at `:2998`. The row was right about the code.
+  · **Magnitude dead:** 42 prelint-600s-bound events exist in all of `runner.log`, ending
+  **2026-08-17**; the row's own named subject `test-hermeticity-lint` last hit the bound
+  **2026-08-14T03:23:41Z**, ten days ago.
+  · 🚨 **THE CONTROL THAT MAKES THAT A CURE AND NOT A DORMANCY** — a bound stops firing both when it
+  is fixed and when its subject stops running, and only a positive control separates them. Prelints
+  ran **160 times today**, 32 of them hermeticity, at a steady 32–68 hermeticity lines/day right
+  across the window; the newest hermeticity line of any kind is `2026-08-24T13:56:08Z ... clean
+  (whole-tree strict)`. Full volume, zero bound-hits ⇒ **cured**.
+  · **Method 155 named the wrong cure and then the right one.** Candidate (b) *"run the prelints at a
+  QoS that is not the corpus's PRI-4 clamp"* is **REFUTED**: `LINT_QOS` landed in `89f2ae253` on
+  **2026-07-30, eleven days BEFORE the row's `firstTs`** — already true at filing. What cured it is
+  that **(b) was INERT until `20bc7a5ee` (2026-08-11)**, whose subject says it outright — *"the corpus
+  band was set by the plist, and the lever we were holding back was a no-op."* That is why the row
+  could be filed on 08-10 with its own remedy already landed. Candidate (c) then landed too
+  (`c62c4a9cd`, `7bb7a9f82`, 2026-08-13 — *"the gate's heaviest arm re-proved 467 unchanged suites on
+  every re-round"*), and the hermeticity bound-hits stop the next day. (a) and (d) were never done and
+  are not needed.
+
+  🚨 **THE FINDING THAT OUTRANKS THE ROW: THE CONVERGE IS NOT BLOCKED BY A MISSING GREEN, AND BOTH
+  STANDING READINGS ARE REFUTED FROM THE STORES.**
+  · **Greens are minted every day.** 46 green stamps exist (`stamps/` verdict field): 9 on 08-21, 4 on
+  08-22, 3 on 08-23, **2 today**. Verdict totals store-wide: **230 cut · 137 red · 46 green · 8 hung**.
+  · **`last-green` is CURRENT, not pinned.** The pointer reads `37f886bb9aa2` and that IS the newest
+  green stamp, minted **2026-08-24T03:22:12Z**. #190's *"last-green stays pinned behind live HEAD"* and
+  the lead's *"no green can appear"* are both false — the kills are real, greens survive them.
+  · 🚨 **THE ACTUAL BLOCKER, censused over the whole of `deploy.log`:** of **932** `REFUSED` lines,
+  **842 (90%) read `not a descendant`**, 19 `install.sh FAILED`, 6 `DIVERGED`, and **ZERO** `no green`.
+  · **Why no green can ever qualify:** `deploy-live` needs a green **DESCENDING** from live HEAD so
+  `--ff-only` can move the tree. Over every green in the store: **45 of 46 subjects are ANCESTORS of
+  live HEAD (`4908e350d5d9`), 0 are descendants, 1 unrelated.** `last-green` sits **7 commits BEHIND
+  live HEAD** and 27 behind `origin/main`, while live HEAD is 20 behind `origin/main`. **The live layer
+  is AHEAD of the verifier, not behind it** — the verifier keeps certifying history the box has already
+  run, so nothing it produces is ever fast-forwardable.
+  · **The machine already filed the correct diagnosis and mis-routed it.** `8e17ab75a613`, minted by
+  the lane itself 2026-08-23, is titled *"deploy lane refusing on repeat: the verifier is alive but
+  nothing ABOVE the live layer has verified"* — exactly right — and sits **blocked under
+  `master-operator-gated`**, where the drain chain never looks, while `01ab05685857`, `799ec26e3a74`,
+  the permanent `GATE=stale` 🔧 and `master-convergence-deadlock` itself all carry the wrong cause.
+  · **#190's 362 external-signal kills are real and are NOT the converge blocker.** They cost
+  throughput, not convergence. They deserve their own row; do not fold them into this cluster.
+
+  🆕 **METHOD 157 — WHEN A ROW'S HARM IS "X CAN NEVER HAPPEN", GO COUNT X IN ITS OWN STORE BEFORE
+  ACCEPTING THE CHAIN THAT EXPLAINS WHY. A TRUE MECHANISM AND A TRUE SYMPTOM CAN BE JOINED BY A FALSE
+  "THEREFORE", AND EVERY LATER ROW INHERITS THE JOIN, NOT THE EVIDENCE.** Four rows, two recycles and
+  the lead all reasoned *verifier is cut ⇒ no green ⇒ converge frozen*. The first link was true (362
+  kills), the last was true (932 refusals), and the middle was never measured — 46 greens sat in the
+  store the whole time. Siblings: `wrong-cause-corroborated-by-true-metric`,
+  `nonzero-history-means-regression-not-absence`, `positive-control-the-denominator`.
+
+  ⚠️ **A LIVE INSTANCE OF `b82a4060b00f` BLOCKED MY OWN WRITE — REFRESHED THAT ROW INSTEAD.** I tried
+  to append the convergence measurement to `8e17ab75a613` with `add --condition master-operator-gated`.
+  It returned **rc 0 and wrote nothing**: the condition key `f3f2f0805807` is DONE (2026-08-17), so it
+  printed *"WARNING — this event-key is already DONE; NOT re-opened"* and dropped the measurement;
+  content-verified afterwards, the target's title was unchanged. This is exactly the sub-case #190
+  predicted analytically — `master-operator-gated` has **0 open / 118 blocked**, so the prescribed
+  remedy *"update the open one"* names **no target**, and the only escape hatch
+  (`reopen f3f2f0805807 --force`) would reopen a completed wave umbrella closed on real evidence.
+  **I declined to force it** and recorded the instance on `b82a4060b00f` (open, single-row condition —
+  that add landed, verified by content: marker present, original preserved, grew by exactly the
+  addendum). **Severity is above #190's "friction with a working workaround" reading: the workaround
+  is unavailable in precisely this sub-case, and what the latch dropped was a root cause.**
+
+  **MEASURED, for the successor:** `deploy.log` refusal census — 932 REFUSED / 842 not-a-descendant /
+  19 install.sh-FAILED / 6 DIVERGED / 0 no-green. Stamp store 421 files, verdicts 230 cut · 137 red ·
+  46 green · 8 hung. `runner.log` 804,947 bytes: 362 `KILLED by signal`, 22 `STALL:`, 4,077 `prelint`.
+  Prelint constants: `LINT_TO` `:560`, `PRELINT_SELFTEST` `:563`, `PRELINTS` array `:551`,
+  `LINT_QOS` `:447/:449`, the cut clause `:2998`, `LOCK_TTL=3600` `:274`.
+  ⚠️ **SCAR — the `.page` check is scoped to the WRONG DIRECTORY.** The brief's standing check looks
+  under `~/.claude/autonomy/postland` (0 files, correct). The deploy lane writes its escalation pages
+  to **`~/.claude/autonomy/pages`**, which holds **231** `.page` files including
+  `deploy-refusal-escalation-verifier-lag.page` and `deploy-degraded-4908e350d5d9.page`. The
+  eighty-two-recycle "0 pages" streak is true of the directory it names and says nothing about the
+  lane's actual pages. ⚠️ Also: `tests/host-suites.manifest` does **not** exist at that path.
+
 - **2026-08-24 — drain recycle #190: the row's cited exhibit was DEAD and its premise ALIVE — the
   harm's true population is the six `master-*` WAVE UMBRELLAS, and the row's own remedy is
   under-specified on exactly those six. filed 0 / closed 0 / 2 rows REFRESHED / 1 commit (this
