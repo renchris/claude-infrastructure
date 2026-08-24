@@ -14,6 +14,12 @@ setup() {
   CD="$REPO/bin/cc-decide"
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # HERMETIC: `open` resolves session_sid from the environment when no --session-sid is passed
+  # (bin/cc-decide, the attribution ladder). This suite is run BOTH from a Claude tool-call shell —
+  # where $CLAUDE_CODE_SESSION_ID is set — and from CI, where none of the three is. Leaving them
+  # ambient would make every unflagged `open` in this file mint a different id depending on WHERE
+  # the suite ran, which is the same trap tests/completion-assert.bats:23 unsets for.
+  unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID
 }
 
 # ── open: valid packets ────────────────────────────────────────────────────────
@@ -387,6 +393,81 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # ...and the table for the same query still cannot answer it — the reason --json exists.
   run bash "$CD" list --open
   ! echo "$output" | grep -q "SID-A" || false
+}
+
+# ══ open: SESSION ATTRIBUTION — the packet must know who filed it ═══════════════════════════════
+# An unattributed packet is invisible to the ⛔ rung: scripts/wrap-ledger.sh:730 selects
+# `(.session_sid // "") == $sid`, so session_sid "" matches nothing, and :718 returns BLOCKED=0
+# when $sid is itself empty — it cannot match in either branch. Measured 2026-08-24: 11 of the 14
+# open class-C packets in the live store carried an empty sid, so a hard block rendered as
+# "✅ SAFE TO CLOSE — nothing of mine is open". These pin the ladder, INCLUDING its third rung:
+# $CLAUDE_SESSION_ID is not exported to a tool-call shell (hooks/log-bash.sh:9 D-9), which is the
+# only shell `cc-decide open` ever runs in, so a ladder without CLAUDE_CODE_SESSION_ID is a no-op.
+
+@test "open with NO --session-sid attributes the packet to the calling session" {
+  export CLAUDE_CODE_SESSION_ID="SID-ENV-CCS"
+  run bash "$CD" open --class C --what "a hard block nobody can see"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "SID-ENV-CCS" ]
+}
+
+@test "CLAUDE_CODE_SESSION_ID alone suffices — the rung a tool-call shell actually has" {
+  # Guards the exact no-op the obvious fix would have shipped: defaulting only to
+  # CLAUDE_SESSION_ID leaves sid "" at every real call site, because CC does not export it there.
+  export CLAUDE_CODE_SESSION_ID="SID-ONLY-CCS"
+  run bash "$CD" open --class C --what "reachable from the shell that files it"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "SID-ONLY-CCS" ]
+}
+
+@test "an explicit --session-sid OUTRANKS the environment" {
+  # lr-reset-poller.sh:565 files on another session's behalf; the flag must always win.
+  export CLAUDE_CODE_SESSION_ID="SID-ENV"
+  export CLAUDE_SESSION_ID="SID-ENV-2"
+  run bash "$CD" open --class B --what "filed on another session's behalf" \
+    --default "d" --deadline "2099-01-01T00:00:00Z" --session-sid "SID-EXPLICIT"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "SID-EXPLICIT" ]
+}
+
+@test "CLAUDE_SESSION_ID is the FIRST env rung — it outranks CLAUDE_CODE_SESSION_ID" {
+  export CLAUDE_SESSION_ID="SID-FIRST"
+  export CLAUDE_CODE_SESSION_ID="SID-SECOND"
+  run bash "$CD" open --class C --what "ladder order"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "SID-FIRST" ]
+}
+
+@test "CC_SESSION_ID is the LAST env rung — parity with bin/cc-backlog:2669-2671" {
+  # Without this the third rung would be uncovered, and a green suite would credit no site
+  # (MEMORY.md per-site-mutation-attributes-coverage).
+  export CC_SESSION_ID="SID-LAST"
+  run bash "$CD" open --class C --what "third rung"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "SID-LAST" ]
+}
+
+@test "with NO session in the environment the sid stays empty — the fix is monotone" {
+  # The fail direction that makes this safe: unresolvable ⇒ byte-identical to the old behaviour,
+  # never a wrong attribution. setup() already unset all three.
+  run bash "$CD" open --class C --what "nothing to resolve"
+  [ "$status" -eq 0 ]
+  run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
+  [ "$output" = "" ]
+}
+
+@test "re-open within ONE session is still idempotent — same sid, same id, one packet" {
+  export CLAUDE_CODE_SESSION_ID="SID-SAME"
+  a=$(bash "$CD" open --class C --what "same decision twice")
+  b=$(bash "$CD" open --class C --what "same decision twice")
+  [ "$a" = "$b" ]
+  run bash -c "find '$CC_DECISIONS_DIR' -maxdepth 1 -name '*.json' | wc -l | tr -d ' '"
+  [ "$output" = "1" ]
 }
 
 @test "list --json with ZERO rows emits [] — 'read fine, zero rows' ≠ 'the read failed'" {
