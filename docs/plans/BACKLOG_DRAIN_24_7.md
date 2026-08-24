@@ -86,6 +86,86 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #197: a row that has ALREADY CORRECTED ITSELF installs a second cause
+  nobody audits — and this one had been false for fourteen days at the moment it was written.
+  filed 0 / closed 1 / 1 single-row condition retired / 1 row held with a written correction / this doc.**
+  Board at open: **487 open+blocked** (297 open / 190 blocked / 2248 done, claimed 3); at close
+  **484** (294 open / 190 blocked / 2249 done, claimed 5). `master-operator-gated` **0 open / 111
+  blocked**; `master-convergence-deadlock` **open=14 / blocked=5**, UNCHANGED by the close — printed
+  by `bash bin/cc-backlog fold` run from the worktree, blocked tail stated not hidden. **Closed 1 >
+  filed 0.** Like #196 and unlike #194/#195, the close was not an ungrouped row: it retired the whole
+  single-row condition `verifier-cycle-exceeds-landing-interval`, which is now **absent from the fold
+  entirely** (asserted: 0 rows, with `master-convergence-deadlock` as the positive control at 1).
+  `comm` at both ends: **3 departures, 0 arrivals** — my 1 close plus **2 sibling claims**
+  (`8f59467c92b0`, `e981656df348`, both `status=claimed by=Chriss-MacBook-Pro-3-26786`), which is the
+  ordinary churn #195/#196 happened not to see.
+
+  🆕 **METHOD 167 — WHEN A ROW HAS ALREADY CORRECTED ITSELF, THE REPLACEMENT CAUSE IS THE UNAUDITED
+  ONE.** A self-correction reads as diligence, and it buys the successor cause a credibility the
+  successor never earned. `17e94bb423ef` opens with `CORRECTED BY ITS OWN AUTHOR ... the original
+  cause was wrong`, refutes itself properly (six stamp verdicts read instead of one), and then
+  installs `REAL CAUSE: deploy-live advances only to GREEN`. That replacement was false when it was
+  typed. The correction is the load-bearing signal, but read the other way round from how it looks:
+  it tells you exactly where the author WAS looking, and what they wrote next is the thing they were
+  not. Audit the replacement with the same instruments you would have used on the original — here,
+  three of them disagreed with it. Sibling of #196's method 165 (hold the named cause constant) and
+  of the eighteenth shape in the brief (a row carrying its own premise caveat).
+
+  **THE THREE REFUTATIONS, all same-moment.** (1) SOURCE: `scripts/deploy-live.sh:1634` is
+  `# ── T2 · DEGRADED — authorised by the LAG, never by the reason`, and `:1658` banners `taking the
+  newest NOT-RED commit instead, authorised by $LAG_TRIP`. NOT-RED is not GREEN — a cut, or an
+  unstamped commit, satisfies it; `:1449` prices the path in the code's own words as *"the degraded,
+  unverified advance ... the DEFAULT path for 12.2% of trunk commits"*. (2) DATE (method 155): that
+  path landed **dcf2f11aa, 2026-08-07T02:03:30-07:00**, against the row's `firstTs`
+  **2026-08-21T18:29:03Z** — **fourteen days earlier**, so this is not cured-by-later-fix, it is
+  false-at-filing. (3) LOG, whole file never a tail: `~/.claude/autonomy/postland/deploy.log`, 3368
+  lines, **26** DEGRADED advances actually performed, bogus-token control **0**; the recent ones read
+  *"none of the 20 commit(s) above it has verified; taking the newest NOT-RED commit instead"* — the
+  lane advancing with zero green above live HEAD, twenty commits deep.
+
+  🚨 **MY INSTRUMENT FAILED ITS OWN POSITIVE CONTROL, AND THAT IS THE ONLY REASON A FOURTH DATUM IS
+  TRUSTWORTHY.** I asked each postland stamp for its `.sha` field and got `-` for every one, which
+  rendered as *"the live sha has no stamp"* — a true conclusion reached by a blind instrument. The
+  positive control caught it: stamps carry **no `.sha` field at all** (keys are
+  `checks,commit,env,failing,retries,run_s,shellcheck_advisory,suites,tree,ts,verdict`) and the sha
+  IS the basename. Re-keyed: positive control `050254cb6946…json` → hit, `verdict=red`; negative
+  control `ffffffffffff*` → NONE; **subject `8b9becd6d2e5…` → NO STAMP OF ANY VERDICT**, which
+  "advances only to GREEN" cannot produce. Verdict census re-measured by the jq FIELD across **425**
+  stamps: **cut 233 / red 138 / green 46 / hung 8** (#196 read 424 / 137 red — it grows).
+
+  📌 **THE LEAD'S GENERALISATION OF #195's METHOD 163, LANDED HERE IN ITS OWN WORDS AT ITS REQUEST:**
+  *"a working control pair does NOT establish that your fixture reaches the bug regime; it only
+  establishes it can tell pass from fail in the regime it does reach. Controls prove DISCRIMINATION,
+  never COVERAGE."* The lead named three of its own errors of this shape in one session — reading 6
+  stamps of 421 as the population, counting a tally FILE as a per-event directory, and running a
+  `needs == title` predicate that was an identity of its own producer — each with a healthy-looking
+  instrument.
+
+  **WHY NOTHING WAS FILED.** The row's surviving prescription — *"the actionable target is verdict
+  QUALITY ... not sharding the suite"* — is correct and **already owned twice**: the CUT half (233 of
+  425, by far the largest bucket) by `4cec179c6ba5` (OPEN, #195's filing, which states the
+  discriminator — postland-verify stamps cannot tell a TRUNCATION cut from a C29-pending cut, and
+  `CUT_WHY` already exists at 6 sites with opposite meanings), and the truncation-shaped non-verdict
+  by `da839cd0d89e` (OPEN, #196's filing). The brief's standing warning on this row said *file its
+  successor question first if you close it*; the correct discharge was to **verify the owners exist
+  and name them**, because minting a third row over the same question is exactly the duplication the
+  close exists to stop (memory: `refuted-open-row-remints-its-own-analysis`).
+
+  ⚠️ **`11fdba2b3148` (`recycle-advisory-goal-blindspot`) — HELD OPEN, WITH A CORRECTION A SUCCESSOR
+  SHOULD NOT RE-DERIVE.** Its premise names *"Stop-keyed recycle rails"* and enumerates two, but only
+  **one is in that class**: today `~/.claude/settings.json` registers **`PostToolUse
+  ~/.claude/hooks/waiting-recycle.sh`** and **`Stop ~/.claude/hooks/boundary-handoff.sh`** — so
+  `waiting-recycle` is already on a non-Stop channel, which IS the row's own remedy candidate A
+  ("fill-keyed advisory on a non-Stop channel"). The tracked template
+  `settings-templates/settings.example.json` carried that same pairing at the row's `firstTs`
+  (as-of commit `d86418b0e`). **But the template is not the enforcing store** and
+  `~/.claude/settings.json` is untracked, so the LIVE registration on 2026-08-11 is not datable from
+  git and the row's harm claim cannot be refuted on that axis (memory:
+  `conclusion-must-reach-the-enforcing-store`). What is measurable today: `boundary-handoff.sh`
+  carries **0** goal tokens (positive control: 21 `boundary` tokens), so the Stop-keyed half of the
+  mechanism is live and unaddressed. **The row survives on `boundary-handoff` alone, and half its own
+  remedy is already shipped without anyone recording it.** A HOLD backed by measurement is a result,
+  not a miss.
 
 - **2026-08-24 — drain recycle #196: the cause a row NAMES can be refuted by holding it CONSTANT
   across both arms — load ~28 was the suspect, stdin was the culprit, and the wedge reproduced at
