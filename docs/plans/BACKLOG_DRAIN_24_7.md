@@ -87,6 +87,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #189: HOLD on `master-convergence-deadlock` — I screened five rows,
+  and every one of them is TRUE and LIVE today. filed 0 / closed 0 / 1 commit (this doc). The
+  thirty-two-close run ENDS here, and it ends on measurement, not on effort.** Warm effort: a HOLD —
+  `master-convergence-deadlock` 13 open / 6 blocked at open, **13 open / 6 blocked** at close. Board
+  at open: open 302 / blocked 194 / claimed 6 / done 2234 (496 open+blocked ids snapshotted).
+  Converge at open: **EIGHTH consecutive correct WAIT** — lag 18 commits / 5h inside the degrade
+  budget (25 / 6h), `deploy-live.sh --dry-run --offline` from the shared checkout printing *"no
+  advance, and none is due yet"*.
+
+  🚨 **THE HEADLINE — METHOD 155: DATE A REMEDY CANDIDATE AGAINST THE ROW'S `firstTs`, NOT ONLY ITS
+  `lastTs`. A CANDIDATE THAT WAS ALREADY LANDED WHEN THE ROW WAS FILED, AND DID NOT CURE, IS
+  *REFUTED AS A REMEDY* — WHICH IS STRICTLY STRONGER THAN "PENDING", BECAUSE IT REMOVES THAT
+  CANDIDATE FROM THE MENU PERMANENTLY.** #188's method 154 established that a row's remedy list is N
+  claims with N fates. 155 is the fate 154 did not enumerate: *already true at filing, and the harm
+  survived it anyway*. A row born partly stale does not announce itself — its `lastTs` may be days
+  later than the cure, so the ordinary `--since <lastTs>` screen returns nothing and the candidate
+  reads as untried. Siblings: `scan-revision-predates-the-fix`, `init-state-is-not-runtime-state`,
+  `filed-blocker-is-never-revalidated`.
+
+  **ROW `799ec26e3a74` — NARROWED FROM THREE CANDIDATES TO ONE, AND DELIBERATELY LEFT OPEN.** ("The
+  postland wedge is NOT fixed — the 2026-08-11 --force advance bought ONE advance, and the structural
+  cause is untouched.") firstTs 2026-08-11T22:19:13Z, lastTs 2026-08-12T11:46:28Z.
+  · **CANDIDATE (a) "nice/taskpolicy the sweep into the background band" — ALREADY LANDED 14 DAYS
+    BEFORE THE ROW WAS FILED, AND REFUTED AS A CURE.** `taskpolicy -c background` first entered
+    `scripts/postland-verify.sh` in `0152be39a` (*"feat(postland): v2 verdict owner — fresh worktree,
+    tree/host partition, background QoS, auto-revert, gate-green sync"*, **2026-07-28T11:16:31-07:00**),
+    reinforced by `4cea43d9e` and `dc12c8db9` the same day and by `20bc7a5ee` (2026-08-11, *"the corpus
+    band was set by the plist, and the lever we were holding back was a no-op"*). The live band today is
+    `QOS=(nice -n 19 "$TASKPOLICY_BIN" -c background)` at `postland-verify.sh:428`, exactly what the row
+    prescribes and exactly what `darwin-qos-band-mechanics` requires — **16 `taskpolicy` sites in the
+    file.** The sweeps are cut anyway (below). Candidate (a) is not pending; it is spent.
+  · **CANDIDATE (c) "let deploy-live accept an ANCESTOR green when content-identical" — ANSWERED 4
+    DAYS BEFORE THE ROW, WITH A DIFFERENT REMEDY, AND REFUTED ON MECHANISM BY THE LANE'S OWN CODE.**
+    `dcf2f11aa` (*"feat(deploy-live): a lagging green pointer degrades under a budget instead of
+    deadlocking"*, **2026-08-07T02:03:30-07:00**) replaced the deadlock with the degrade budget that
+    printed today's correct WAIT. `deploy-live.sh:1801-1804` states why (c) itself is unsafe: a target
+    that is not a descendant means *"`--ff-only` would exit 0 WITHOUT moving the tree, so the lane would
+    report a deploy that NEVER HAPPENED"* — the row's own failure mode, reached from the other side.
+  · **CANDIDATE (b) "shrink what a sweep must prove" — THE ONLY SURVIVOR, AND ITS MAGNITUDE MOVED
+    AGAINST US.** The row sizes the corpus at "the FULL 422-suite corpus". Today's stamps read
+    **`suites: 533`** — **+26% since the row**, so the one live remedy is harder now than when it was
+    written. (The tree/host partition landed in that same `0152be39a`, so the *partition* half of (b)
+    is done; the changed-paths scoping half is not.)
+
+  🚨 **AND THE INSTRUMENT SCAR THAT ALMOST COST A FALSE CLOSE — READ THIS BEFORE ANY STORE-COUNT
+  ARGUMENT.** I had a clean refutation drafted: `~/.claude/autonomy/postland/last-green` had advanced
+  from the row-era `699bbb743aa2` to `37f886bb9aa2` (ancestry **two-sidedly controlled** — forward
+  TRUE, reverse FALSE), and 234 of 420 stamp files were written in the last 12 days. Both facts are
+  true. **Both are irrelevant, because a stamp file is not a green.** Opening the newest six and
+  reading their `verdict` field: **`cut`, `cut`, `cut`, `cut`, `cut`, `cut`** — the newest 26 minutes
+  old, `run_s` 2264-2424s, `failing: []`, `retries: 0`. The verifier runs ~20x/day and is cut nearly
+  every time. **The row's core claim is CONFIRMED, not refuted.** A file count over a verdict store
+  answers "did it run", never "did it pass" (memory: `wrong-cause-corroborated-by-true-metric`,
+  `claimed-outcome-vs-checked-outcome`).
+  ⚠️ **Second instrument defect in the same probe, caught by dating the hits:** `grep -c -- '--force'
+  $HOME/.claude/autonomy/postland/deploy.log` returned **3**, which read as "three operator --force
+  advances". All three are the string `cc-backlog reopen 1807b8c02c85 --force` inside a backlog-title
+  template. **Zero are deploy forces.** And the count is a lower bound regardless: `deploy.log` is the
+  launchd plist's `StandardOutPath` (#181), so a hand-run `--force` leaves no trace in it at all.
+  ⚠️ **Third: `find … -exec ls -l | sort -k8` is a STRING sort on day-of-month, not mtime order** — it
+  reported "Aug 22" as newest when the true newest was 26 minutes old. Sort on `stat -f '%m'`.
+
+  **ROW `d6d7edef60a3` — PREMISE RE-VERIFIED TRUE AND LIVE; NOT A PICKUP, AND NOW FOR A SHARPER
+  REASON.** ("handoff-fire runs its payload gates on 1 of 3 fire paths: `--recycle` runs NEITHER
+  `payload_pane_id_gate` NOR `payload_lint_gate`.") The dispatch is a three-arm chain in
+  `scripts/handoff-fire.sh`: the dry-run arm previews both gates at **`:9946`/`:9947`** but only when
+  `RECYCLE = 0` (`:9938`); **`:9954 elif [ "$RECYCLE" = 1 ]` calls `recycle_fire` and returns**; and
+  only the `else` arm at **`:9986`** reaches the enforce calls at **`:9992`/`:9995`**. So `--recycle`
+  — this chain's own succession path, 122 links deep — bypasses both, and `--dry-run --recycle`
+  bypasses even the preview. 🚨 **I also refuted the tempting escape hatch:** one could hope the row's
+  "chain-breaker" coupling clause names the wrong instrument, since `pane-id-lint.sh` scans authored
+  prose and the gate judges a payload. It does not — `payload_pane_id_gate` (`:5125-5160`) **resolves
+  and invokes `scripts/pane-id-lint.sh` itself**, copying the payload into a private `mktemp -d` box
+  so the lint's directory scan sees only this file (`:5139-5141`). The coupling clause is about the
+  right instrument, on the right corpus. **The row's own blocker stands; do not wire the gate.**
+
+  **ROW `329dd6350eb3` — DECLINED FOR THE FIFTH CONSECUTIVE RECYCLE, NOW WITH A MECHANICAL REASON
+  RATHER THAN A COST WARNING.** ("cloud create is intermittent: 1 of 4 attempts succeeded on next3.")
+  The row states a RATE, and a rate needs a denominator. `cc-cloud list` enumerates *successes* only —
+  every row is a live `session_*` with a `claude/fire-<ts>` branch — and a failed create falls back to
+  bundle mode, producing no row. I grepped `bin/cc-cloud` for the fallback path and for any attempt
+  logging: **`bundle` appears once, in a comment; there are zero `jsonl`/log-file writes.** So there is
+  no attempt log anywhere in the subject, the denominator is structurally invisible, and the only way
+  to measure the rate is to spend cloud quota — which is precisely the row's own remedy and precisely
+  what its `venueWhy: ineligible-box: quota` forbids. **Counting the visible successes would have been
+  `positive-control-the-denominator` verbatim.**
+
+  **ROW `786ac458be00` — THE STANDING BRIEF UNDERSTATES ITS COST BY AN ORDER OF MAGNITUDE. ASK THE
+  SELECTOR.** The brief has said since #184 that this row is "genuinely decidable and small — add a
+  prelint field to the stamp printf at `postland-verify.sh:2159`" but that `tests/postland-verify.bats`
+  is 130 tests, so "budget a whole recycle". **The selector says the bill is 13 direct suites, not
+  one:** `gate-select.sh --direct 9dfc6c4c7~1..9dfc6c4c7` returns `cc-backlog-dups-family` ·
+  `cc-premise-postland-red` · **`cc-reaper` (171 tests)** · **`deploy-live` (130)** ·
+  `falsifier-emission` · `git-identity-guard` · `postland-verify-bisect-bound` ·
+  **`postland-verify` (130)** · `runner-stdin-immunity` · `subshell-cleanup-lint` ·
+  `tap-grammar-parity` · `test-afunix-path-lint` · `unattended-sysctl-path`. Three 130+-test suites in
+  one owed set. **Do not start this in a recycle.** Its premise is nonetheless still TRUE — the six
+  stamps I opened carry `tree · commit · verdict · failing · ts · run_s · retries · suites · checks ·
+  shellcheck_advisory · env` and **no prelint field**.
+  ⚠️ Selector control run first, per the standing rule: `gate-select.sh --direct
+  492c51066~1..492c51066` = **32**, the fifty-third consecutive pass. A bare count from a broken
+  selector and a true 13 are the same reading without it.
+
+  **WHY A HOLD IS THE RIGHT ANSWER HERE, AND WHAT IT COSTS.** #188's brief said the warm condition's
+  unwarned seam is empty and that a HOLD is legitimate; this recycle is the confirmation, from the
+  other direction. I did not fail to find a close — **I found four rows whose premises are all TRUE
+  today**, which is the same evidence a close would rest on, pointed the other way. The honest
+  consequence is that `master-convergence-deadlock`'s remaining 13 are no longer a drain population:
+  they are gated (`170a3b38f8c9` operator OAuth, `35de32d78364` anti-thrash park, `73b8c28f6aae`
+  blocked on Wave A), quota-bound (`329dd6350eb3`), coupled (`d6d7edef60a3`, `07ac6d58d88d`),
+  plan-scale (`26d4010f1b22`, `799ec26e3a74`'s surviving candidate (b)), suite-prohibitive
+  (`786ac458be00`), or the SIGKILL cluster every recycle since #125 has deliberately preserved
+  (`ac1afe12ff0e`, `b6f03adab3f9`, `b7252a3bb015`). **#190 should pick from another condition, and say
+  so in its first line.**
+
 - **2026-08-24 — drain recycle #188: the row prescribed THREE fixes; the mechanism DECLINED the
   one the row called its root issue, took a cheaper one, and cured the harm anyway — and the commit
   that cured the exhibit REFUTES the row's own stated cause. filed 0 / closed 1 / 1 commit (no code
