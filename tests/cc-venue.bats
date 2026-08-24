@@ -340,3 +340,96 @@ EOF
   run "$CV" label nosuchid0000
   [ "$status" -eq 3 ] || { echo "$output"; false; }
 }
+
+# ── QUESTION 1b: IS THE ITEM'S OWN SPECIFICATION ON TRUNK? ──────────────────────────────────────
+# The arm added 2026-08-24. What it guards is the same silent-and-expensive failure the header
+# names, on the one citation no arm resolved: a `dodRef` naming a plan that exists only in the
+# DISPATCHING box's working tree. Every case below is paired with a control that must still route
+# cloud, because "it refused" is worthless unless the same shape is shown to be promotable.
+
+land_plan() {  # land_plan <repo-relative path> — commit it and move origin/main onto it
+  mkdir -p "$G/$(dirname "$1")"
+  echo "# plan" > "$G/$1"
+  git -C "$G" add "$1"
+  git -C "$G" commit -qm "plan $1"
+  git -C "$G" update-ref refs/remotes/origin/main "$(git -C "$G" rev-parse main)"
+}
+
+add_dod() { "$CB" add --title "$1" --project probe --source "${3:-s}" --dod-ref "$2"; }
+
+@test "23 a dodRef on no commit routes LOCAL — the VM would arrive unable to read its own spec" {
+  mkrepo
+  # NOT landed: the file is written into the working tree exactly as the filing box holds it, which
+  # is the whole condition. `git ls-tree origin/main` has never heard of it.
+  mkdir -p "$G/docs/plans"; echo "# open" > "$G/docs/plans/TRIAGE_B.md"
+  local id; id="$(add_dod "triage the open remainder" "docs/plans/TRIAGE_B.md")"
+  [ "$(venue_of "$id")" = local ] || { "$CV" assess "$id"; false; }
+  "$CV" assess "$id" --json | jq -e '.why | test("^ineligible-dod-offtrunk: ")' >/dev/null \
+    || { "$CV" assess "$id"; false; }
+  # The why must NAME the path, or a reader cannot act on the refusal.
+  "$CV" assess "$id" --json | jq -e '.why | test("docs/plans/TRIAGE_B.md")' >/dev/null \
+    || { "$CV" assess "$id"; false; }
+}
+
+@test "24 CONTROL: the same item with its plan ON trunk routes CLOUD — the arm is scoped, not blanket" {
+  mkrepo
+  land_plan "docs/plans/TRIAGE_A.md"
+  local id; id="$(add_dod "triage the open remainder" "docs/plans/TRIAGE_A.md")"
+  [ "$(venue_of "$id")" = cloud ] || { "$CV" assess "$id"; false; }
+  "$CV" assess "$id" --json | jq -e '.why | test("DoD on trunk at docs/plans/TRIAGE_A.md")' >/dev/null \
+    || { "$CV" assess "$id"; false; }
+}
+
+@test "25 an ABSOLUTE dodRef resolves by suffix — a filing-box mount prefix is not absence" {
+  mkrepo
+  land_plan "docs/plans/TRIAGE_A.md"
+  # The spelling cc-dispatch's own `[ -f "$sdod" ]` gate reads, and the spelling the live store
+  # carries. Resolved as a repo-root path it is absent; that reading would refuse every such row.
+  local id; id="$(add_dod "triage" "/Users/someone/Development/probe/docs/plans/TRIAGE_A.md")"
+  [ "$(venue_of "$id")" = cloud ] || { "$CV" assess "$id"; false; }
+}
+
+@test "26 an absolute dodRef whose suffix is on NO commit is still refused, and named" {
+  mkrepo
+  local id; id="$(add_dod "triage" "/Users/someone/Development/probe/docs/plans/TRIAGE_B.md")"
+  [ "$(venue_of "$id")" = local ] || { "$CV" assess "$id"; false; }
+  "$CV" assess "$id" --json | jq -e '.why | test("^ineligible-dod-offtrunk: ")' >/dev/null \
+    || { "$CV" assess "$id"; false; }
+}
+
+@test "27 a row with NO dodRef is untouched — the arm convicts only what it can read" {
+  mkrepo
+  local id; id="$(add "add a bats case for the tsv-pad helper")"
+  [ "$(venue_of "$id")" = cloud ] || { "$CV" assess "$id"; false; }
+}
+
+@test "28 a dodRef that is not a path claim is untouched — decision:<id> is not a missing file" {
+  mkrepo
+  local id; id="$(add_dod "ratify the open decisions" "decision:5f0ab12c9d34")"
+  [ "$(venue_of "$id")" = cloud ] || { "$CV" assess "$id"; false; }
+}
+
+@test "29 the arm runs BEFORE the premise probe — no falsifier is spent on work that cannot go" {
+  mkrepo
+  mkdir -p "$G/docs/plans"; echo "# open" > "$G/docs/plans/TRIAGE_B.md"
+  local stub="$BATS_TEST_TMPDIR/premise-marker"
+  cat > "$stub" <<EOF
+#!/bin/bash
+touch "$BATS_TEST_TMPDIR/premise-ran"
+echo "verdict=clear"
+exit 0
+EOF
+  chmod +x "$stub"
+
+  local off; off="$(add_dod "triage the open remainder" "docs/plans/TRIAGE_B.md")"
+  CC_VENUE_PREMISE=on CC_VENUE_PREMISE_BIN="$stub" "$CV" assess "$off" >/dev/null
+  [ ! -e "$BATS_TEST_TMPDIR/premise-ran" ] \
+    || { echo "the premise probe ran on an item already refused for its DoD"; false; }
+
+  # THE CONTROL that makes the line above a statement about ORDER rather than about a dead stub.
+  land_plan "docs/plans/TRIAGE_A.md"
+  local on; on="$(add_dod "triage the open remainder" "docs/plans/TRIAGE_A.md" a2)"
+  CC_VENUE_PREMISE=on CC_VENUE_PREMISE_BIN="$stub" "$CV" assess "$on" >/dev/null
+  [ -e "$BATS_TEST_TMPDIR/premise-ran" ] \
+    || { echo "the stub never runs at all — case 29 proves nothing"; false; }
+}
