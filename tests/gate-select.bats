@@ -582,6 +582,34 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   has "FULL <- shared-lib:lib/desk.zsh"
 }
 
+@test "--direct --explain MARKS the demoted edge, and names FULL as the abstention" {
+  # THE INSTRUMENT MUST NOT CONTRADICT ITS OWN STDOUT. Pre-fix, `--direct --explain` printed a
+  # demoted edge in the SAME shape as a selecting one, so the trace narrated suites the selection
+  # had dropped while stdout was empty — read ten separate times as "--direct returns 0 where
+  # --explain names 3", i.e. as a bug in the gate. It is not: the empty set is the correct verdict
+  # for a range whose only edges are citations. `cited_only` is doing its job; the trace was lying.
+  bump scripts/ratchet-lint.sh
+  run bash -c "bash '$SEL' --direct --explain HEAD~1..HEAD 2>&1 >/dev/null"
+  has "tests/ratchet-citer.bats <- NOT-DIRECT cited:scripts/ratchet-lint.sh"
+  # The summary must name the abstention token, because "empty" vs "could not tell" is exactly
+  # the distinction a consumer needs and emptiness alone cannot carry it.
+  printf '%s\n' "$output" | grep -qF 'abstains by printing the literal token FULL'
+  # …and the demotion is scoped to --direct: without it, the same edge IS a selection.
+  gse
+  has "tests/ratchet-citer.bats <- cited:scripts/ratchet-lint.sh"
+  lacks "tests/ratchet-citer.bats <- NOT-DIRECT cited:scripts/ratchet-lint.sh"
+}
+
+@test "--direct --explain leaves the SELECTION itself untouched (reporting-only)" {
+  # The whole change is a stderr contract. If it ever moves stdout, the land gate's suite set
+  # moved with it — so pin that --explain cannot alter what --direct selects.
+  bump scripts/foo.sh
+  run bash "$SEL" --direct HEAD~1..HEAD
+  local quiet="$output"
+  run bash -c "bash '$SEL' --direct --explain HEAD~1..HEAD 2>/dev/null"
+  [ "$output" = "$quiet" ]
+}
+
 @test "bad range, unresolvable rev and unknown option all fail CLOSED" {
   run bash "$SEL" HEAD
   [ "$status" -eq 0 ]
