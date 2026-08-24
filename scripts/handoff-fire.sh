@@ -6974,6 +6974,25 @@ fi
 # the three can never disagree. "" for anything that is not a git worktree.
 hf_git_owner() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true; }
 
+# Is <dir> the SHARED CHECKOUT — the per-file-symlink SOURCE for ~/.claude? See the CURE arm of
+# hf_freshness_gate for why that one directory may never be fast-forwarded here.
+#
+# Compared by RESOLVED TOPLEVEL, not by string: ~/Development is itself a symlink on some boxes, and
+# `--show-toplevel` in a LINKED worktree returns the worktree's own path, so a linked worktree of the
+# shared checkout correctly does NOT match — it is an ordinary tree and curing it is the whole point
+# of the gate. Path override exists so the hermetic cases can point this at a fixture; same spelling
+# and same default as ship-land.sh:3999, which already refuses to LAND from this directory.
+hf_is_shared_checkout() {
+  local d="$1" shared top
+  shared="${CC_FIRE_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
+  [ -n "$shared" ] && [ -d "$shared" ] || return 1
+  shared="$(cd "$shared" 2>/dev/null && pwd -P)" || return 1
+  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] || return 1
+  top="$(cd "$top" 2>/dev/null && pwd -P)" || return 1
+  [ "$top" = "$shared" ]
+}
+
 # ---- FIRE-TIME FRESHNESS: never hand a worker a tree that PREDATES trunk ----------------------
 # (cc-backlog 6110fc45141e.) On 2026-08-08 a dispatched worker was fired into an ALREADY-EXISTING
 # `wt-<id>` worktree whose HEAD measured `git rev-list --count HEAD..origin/main` = 735 — eight days
@@ -7051,6 +7070,35 @@ hf_freshness_gate() {
   own="$(git -C "$d" rev-list --count "$BASE..HEAD" 2>/dev/null || echo unknown)"
   dirty="$(git -C "$d" status --porcelain --untracked-files=no 2>/dev/null || true)"
   if [ "$own" = 0 ] && [ -z "$dirty" ]; then
+    # THE SHARED CHECKOUT IS THE ONE TREE THIS ARM MAY NOT CURE, and it is the tree most likely to
+    # reach it: ~/Development/claude-infrastructure normally sits on `main`, clean, with no commits
+    # of its own — i.e. EXACTLY the `own=0 && !dirty` shape above — and `--cwd` is how a lead re-fires
+    # a peer into whatever directory it is already in (8 of 15 live sessions were cwd'd there,
+    # scripts/deploy-parity-assert.sh:912). So the cure fired on the symlink SOURCE.
+    #
+    # `merge --ff-only origin/main` there is the operation .claude/commands/ship.md:120 forbids BY
+    # NAME. It advances the files and runs no install.sh, and ~/.claude/{hooks,commands,scripts,bin,
+    # skills} are directories of PER-FILE symlinks — so a brand-new tracked file lands with no link
+    # and silently does nothing, which is the LIVE_ADDS harm (cc-backlog 4e6a51df2a84), not a
+    # cosmetic one. It also reflogs the REF, which is precisely what deploy-parity-assert's
+    # provenance leg scores UNGATED (scripts/deploy-parity-assert.sh:890).
+    #
+    # MEASURED 2026-08-24 on the shared checkout's own reflog: 43 `merge origin/main: Fast-forward`
+    # entries against 70 resolved-SHA ones, 11 of them AFTER 5626e682f deleted deploy-now.sh's raw
+    # ff (2026-08-10) — i.e. after the only producer anyone had named was gone. cc-backlog
+    # a9e5b17d3420 concluded the remaining producer was "likely peer agent sessions syncing the
+    # shared checkout by hand"; it was not, it was this line, on an automated path, every fire.
+    #
+    # WARN, NEVER REFUSE — the same rule the MODE paragraph states above. A refusal here would break
+    # re-engagement of a peer that happens to be cwd'd in the shared checkout, which is the
+    # guard-refusal-fires-on-its-own-harness shape. The fire proceeds; only the ff is withheld.
+    if hf_is_shared_checkout "$d"; then
+      HF_WT_FRESH="STALE by $lag commit(s) behind $BASE — NOT fast-forwarded: this is the shared checkout, the symlink source for ~/.claude$note"
+      echo "⚠ $HF_WT_FRESH" >&2
+      echo "   A raw \`merge --ff-only $BASE\` here advances the files but runs no install.sh, so a brand-new tracked file lands UNLINKED and silently does nothing." >&2
+      echo "   The sanctioned advance is \`bash $d/scripts/deploy-live.sh\` (green-stamp gated, and it runs install.sh). Firing anyway — only the fast-forward is withheld." >&2
+      return 0
+    fi
     if [ "$DRY" = 1 ]; then
       HF_WT_FRESH="STALE by $lag commit(s) behind $BASE with no commits of its own — would be fast-forwarded to $BASE before the fire$note"
       echo "→ $HF_WT_FRESH" >&2
