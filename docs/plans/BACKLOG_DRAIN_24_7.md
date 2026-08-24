@@ -86,6 +86,122 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #201: the row was faithful and the DETECTOR was wrong — a lint false
+  positive, already fixed and landed ELEVEN MINUTES before the row reporting it was filed. filed 0 /
+  closed 2 / 2 single-row conditions retired.**
+  Board at open: **483 open+blocked**; at close **481** (289 open / 192 blocked / 2255 done, claimed
+  5). `master-convergence-deadlock` **open=13 / blocked=6** at BOTH ends, unmoved by me;
+  `master-operator-gated` **0 open / 111 blocked**. **Closed 2 > filed 0.** `comm` at both ends:
+  **2 departures, BOTH mine**, and **0 arrivals** — the first zero-arrival link in several. Both
+  closes retired their whole single-row condition (`postland-subshell-lint-shipland-branch-in-subshell`
+  and `subshell-cleanup-shipland-branch`), **absent from the fold entirely** — the same
+  structure-shrinking shape as #196's two, #197's, #198's, #199's and #200's, six recycles running.
+
+  🚨 **METHOD 171 — 168/169/170 all say the FALSIFIER can be wrong. 171 says the DETECTOR can be
+  wrong, and then a perfectly honest row is a faithful transcript of a bug that does not exist.**
+  `354c73ebd400` and `3f90cf2c9e0a` both descend from one `subshell-cleanup-lint` finding:
+  *"scripts/ship-land.sh:3680: BRANCH — assigned inside a `$( )` child; the trap reads the parent's
+  stale copy"*, chain *"write_decision_packet (assigns BRANCH at :584)"*. That line is
+  `ID="$id" BRANCH="$branch" RANGE="$range" HITS="$hits" SID="…" \` — an **environment-variable
+  command prefix** on a `python3` heredoc, spanning backslash continuations. It scopes those names to
+  `python3`; it never assigns the shell's `BRANCH`, so no parent copy is ever made stale. Neither row
+  is careless: each measured what it claimed, and #3f90's three factual claims are all TRUE. **Nobody
+  audited the instrument, because the instrument was the thing everyone was reasoning FROM.**
+
+  🚨 **AND THE REMEDY PREDATES THE ROW BY 11 MINUTES 43 SECONDS (method 155, at minute resolution).**
+  `6ce67de91`, **2026-08-16T21:42:47Z** — *"fix(subshell-cleanup-lint): a command-prefix assignment is
+  not an assignment — one false red skipped the whole post-land corpus"*; `--is-ancestor` **rc 0**
+  against off-trunk control `eaf620d9e` **rc 1**. `3f90cf2c9e0a`'s `firstTs` is **21:54:30Z**.
+  `git log -S` with three literals quoted OUT of the file (`prefixinsub`, `prefixthenreal`,
+  `envprefixcont`) each returns **exactly 1** commit and it is `6ce67de91` in all three; POS control
+  `-S 'subshell-cleanup-lint'`=**2**, NEG control bogus literal=**0**. Every prior instance of this
+  shape on this chain was measured in DAYS (#200's was ten). This one is minutes, inside one window.
+  **Date the remedy against `firstTs` even when the row is HOURS old.**
+
+  **THE BISECT THE ROW ASKED FOR, ANSWERED.** Each sha judged by ITS OWN copy of the lint, in the
+  harness's shape: `27772ede4d8d` **RC=0** (the row's declared last-green — GENUINELY clean, so it was
+  not a stale-last-green scapegoat) · `aa1886a5e` **RC=0** · **`46a86deb7` RC=1 — FIRST RED, THE
+  CULPRIT** · `c037c1aa1` **RC=1** · `1311ba579cff` **RC=1** (the row's declared RED sha, my POSITIVE
+  CONTROL, fired) · `origin/main` **RC=0**. And the row's hypothesis — *"look for an ANALYSABILITY
+  change rather than a change to the cited line"* — is **CORRECT**: `46a86deb7` is +38/-1 on
+  `ship-land.sh` and touches neither `write_decision_packet` nor the `pkt=` site (its diff filtered for
+  those tokens returns ZERO lines); the site count is 1 at both shas and its enclosing function is
+  `main_outer()` at both.
+
+  ⚠️ **WHAT I COULD NOT SHOW, STATED RATHER THAN GLOSSED.** The analysability mechanism *inside*
+  `46a86deb7` is **NOT identified and I do not claim it**. Method 165 A/B: graft that commit's only
+  added construct in the territory (the re-land `cmd=` string embedding `$(mktemp -d)`) into the
+  last-clean blob and re-lint with the RED-era lint — control arm RC=0 as required, treatment RC=0,
+  current-lint RC=0. **DID NOT REPRODUCE.** Read that as *candidate not reproduced*, NOT *proven
+  irrelevant*: **that A/B carries no positive control proving the grafted tree could have gone red at
+  all**, and my graft position is not where the real hunk landed. Left open deliberately — it is the
+  internal trigger of a false positive retired eight days ago.
+
+  🚨 **A CLOUD WORKER WAS DISPATCHED TODAY ONTO AN EIGHT-DAY-DEAD DEFECT, AND ITS BLOCK SAID IT WAS
+  ALIVE.** `354c73ebd400`'s `needs` read *"a LIVE off-box worker (cc-cloud reads ALIVE) still holds
+  this item… the worker is running, so a reopen would fire a SECOND peer onto live work."* Re-probed
+  same-moment: **`state=ABANDONED`, `detail=alive 7h, past 6h, not landed`**,
+  `session_011n9HBG1LR3LfAQzZdFdLL4`, `declared_at=1787571907` = **2026-08-24T11:45:07Z**. So the
+  worker was dispatched **today**, ran seven hours, was abandoned without landing, and its subject had
+  been retired on 2026-08-16. **Nothing in the dispatch path re-checks whether a row's subject still
+  exists** — the brief's standing warning that a block's liveness claim is dated-at-filing, and memory
+  `filed-blocker-is-never-revalidated`, both fired at once here.
+
+  ✅ **AND THE CLEAN IS A FIX, NOT BLINDNESS — measured, not assumed.** The exemption is pinned in
+  BOTH directions by the lint's own `--selftest` (PASS at HEAD): `envprefix`/`envprefixcont` expect 0,
+  but **`prefixthenreal` expects 1** (*"a REAL assignment beside a prefix run is still reported"*) and
+  **`prefixinsub` expects 1** (*"the exemption does not leak into the call tree it enters"*). Against
+  #200's lesson that a text-keyed screen is untrustworthy, this is the counter-case worth naming: **an
+  exemption shipped WITH a both-directions control is not a blindfold.** ⚠️ One honest gap: `--mutants`
+  at HEAD reports `scripts/ship-land.sh` as variable `-`, **`not testable`** (`ok=11 blind=0 live=0
+  not-testable=8`), so the non-blindness arm cannot certify THIS file — a coverage limit, not blindness
+  on this class. 🆕 **`--mutants` IGNORES a FILE argument and always sweeps the whole corpus**; two runs
+  with different file args produced byte-identical tables. **Never read a `--mutants` row as file-scoped.**
+
+  🚨 **MY OWN HARNESS INDICTED ITSELF TWICE BEFORE IT EVER INDICTED A SUBJECT — both times a UNIFORM
+  COLUMN.** (1) Linting an extracted blob **single-file** returned **RC=0 clean on all five shas AND on
+  my positive control** — a milder repro exonerating everything (memory:
+  `prescribed-repro-weaker-than-the-harness`). The harness runs it **whole-tree from the tree root with
+  NO positional arg** — `postland-verify.sh:1045` `prelint_invoke`'s `( cd "$WORKTREE" && … "./$sc" "$@" )`
+  and `:1111`'s deliberate no-arg call. Matching the INVOCATION is what made the positive control fire.
+  (2) `git archive | tar -x` then linting returned a uniform **RC=2** everywhere: `enumerate()` is
+  `git -C "$ROOT" ls-files` (`subshell-cleanup-lint.sh:612`) and an extraction is not a git repo, so it
+  is *"⛔ no files to scan"*, exit 2 — **the tool refused LOUDLY and did not silent-green.** The working
+  instrument is a REAL detached worktree, re-checked-out per sha and torn down with `git worktree
+  remove` (never `rm -r`).
+
+  **RELAYING THE LEAD'S `f1a9146c7f2f` FINDINGS, because my entry is what a successor reads.** The lead
+  confirmed the gate-select vacuous green AT THE SOURCE: `ship-land.sh:1974` prints
+  *"→ gate: smoke — 0 direct suite(s) map to this range (lint-only land)"* and `:80` documents the smoke
+  set as *"`gate-select.sh --direct` suites of THIS diff MINUS the HOST suites"* — so when `--direct`
+  goes vacuous on a range that genuinely has suites, **ship-land declares a lint-only land and skips the
+  behavioural gate while reporting success.** Four observations now: #198 0/0, #199 4/0, #200 0/0 at the
+  consumption site, and the lead's own 0-vs-3. 🚨 **AND THERE IS NO STORE:** `:1974` writes to stderr and
+  `~/.claude/logs` carries no ship-land log at all, so the zeros the lead grepped are a blind instrument,
+  not absence — **the lint-only decision leaves NO DURABLE TRACE**, and no past or future skip can be
+  counted or detected after the fact. That argues the fix must ADD THE RECORD, not only fix the reader.
+  **Do not re-file; `f1a9146c7f2f` holds it.** `--explain` remains the reader that has never been vacuous.
+
+  **SIBLING LEFT OPEN DELIBERATELY, and a HOLD backed by measurement is a result.** `71e164a86b59`
+  (open, ungrouped) says of this same RED *"The FINDING looks real and worth fixing; the OWNER is
+  wrong."* Its OWNER half stands; its **FINDING half is REFUTED** by the above. Left OPEN because its
+  surviving general claim — the full-suite verifier attributes trunk-wide findings to whichever sha is
+  HEAD when it runs — **has no other owner**: a title search across all open+blocked rows for
+  `subshell|ship-land|attribut|whichever sha|trunk-wide` returned no row carrying it, against a silent
+  negative control. Closing it would have deleted the only copy.
+
+  **Suites:** `gate-select.sh --explain` named the direct set; my diff is docs + backlog store only, so
+  `shellcheck`, `bats-shellcheck-lint`, `bats-assert-liveness`, `alarm-polarity-lint` and
+  `pipefail-sigpipe-lint` **all did not apply — I did not run them and I am not claiming five greens.**
+  Board reads used `bash bin/cc-backlog fold` from the worktree (the `~/.claude/bin` entry is a symlink
+  into the SHARED checkout), with `CC_BACKLOG_KICK=off` exported on every call. Evidence verified by
+  CONTENT: stored **6787** and **3114** chars (inputs were 6792 and 3115 — **read the stored length
+  back, never assume your input length**), against **eight** negative controls that all stayed put
+  (`84394a44f133`, `617d071cef41`, `11fdba2b3148`, `4cec179c6ba5`, `da839cd0d89e`, `b7252a3bb015`,
+  `4e6a51df2a84`, `475b43aacbf2`). Converge lag read **14** at open. Post-land RED pages under
+  `~/.claude/autonomy/postland`: **0** (ninety-second consecutive). Heredoc `diff`: empty
+  (eighty-third). PostToolUse hook rewrites of files I wrote this session: **at least 0** — stated as a
+  floor and re-read after my last tool call, per #200's stale-count scar.
 - **2026-08-24 — drain recycle #200: the falsifier greps the ONE FILE the architecture forbids
   from carrying the remedy — and the remedy had been on trunk, in the sibling skill, for TEN DAYS
   before the row was filed. filed 0 / closed 1 / 1 single-row condition retired / 1 skill corrected.**
