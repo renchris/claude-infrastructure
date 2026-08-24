@@ -7,7 +7,7 @@
 # prescribed-remedy-worse-than-the-bug — so every assertion here EXECUTES the real script against a
 # fixtured $HOME rather than reading it.
 #
-# THE LOAD-BEARING ONE IS ORDERING. Three of the four hook TARGETS are absent from
+# THE LOAD-BEARING ONE IS ORDERING. Five of the six hook TARGETS are absent from
 # .claude-next/hooks, and a settings.json entry pointing at a hook file that does not exist is not
 # inert: the harness dispatches it and the exec fails on EVERY matching event — for PreToolUse, that
 # is every Bash and AskUserQuestion call in the busiest account. So "wired but unlinked" is strictly
@@ -23,11 +23,11 @@ setup() {
   SRC="$HOME/.claude/hooks"; DST="$HOME/.claude-next"
   mkdir -p "$SRC" "$DST/hooks"
   for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh \
-           handed-off-session-guard.sh; do
+           handed-off-session-guard.sh coldcompile-admit.sh; do
     printf '#!/bin/bash\nexit 0\n' > "$SRC/$h"; chmod +x "$SRC/$h"
   done
   # the drifted shape, reduced to its essentials: the five events exist and carry siblings, but none
-  # of the five subject entries is present, and only session-deregister.sh is already linked.
+  # of the subject entries is present, and only session-deregister.sh is already linked.
   ln -sfn "$SRC/session-deregister.sh" "$DST/hooks/session-deregister.sh"
   jq -n '{hooks:{
       PreToolUse:      [{matcher:"Bash", hooks:[{type:"command",command:"~/.claude/hooks/validate-bash.sh",timeout:5}]}],
@@ -53,16 +53,17 @@ wired() { # <event> <substring> → count of matching entries
   grep -q '^# migration-run: ' "$MIG" || false
 }
 
-@test "0009 links the three absent hook targets and leaves the already-linked one alone" {
+@test "0009 links the five absent hook targets and leaves the already-linked one alone" {
   run bash "$MIG"
   [ "$status" -eq 0 ]
-  for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh; do
+  for h in cc-unattended-ask-guard.sh desk-brief-inject.sh session-beat.sh session-deregister.sh \
+           handed-off-session-guard.sh coldcompile-admit.sh; do
     [ -f "$DST/hooks/$h" ]
   done
   printf '%s' "$output" | grep -q 'session-deregister.sh — already present' || false
 }
 
-@test "0009 wires all six entries exactly once" {
+@test "0009 wires all seven entries exactly once" {
   run bash "$MIG"
   [ "$status" -eq 0 ]
   [ "$(wired PreToolUse       'cc-unattended-ask-guard')" -eq 1 ]
@@ -74,9 +75,13 @@ wired() { # <event> <substring> → count of matching entries
   [ "$(wired Stop             'session-beat\.sh stop')"   -eq 1 ]
   [ "$(wired UserPromptSubmit 'session-beat\.sh prompt')" -eq 1 ]
   [ "$(wired UserPromptSubmit 'handed-off-session-guard')" -eq 1 ]
+  # SEVENTH (drain recycle #194). Its absence was not a stale list: settings-drift-assert.sh named
+  # coldcompile-admit.sh as one of the five live "missing in: .claude-next" divergences while this
+  # migration mentioned it nowhere, so a completed run left 1 of 5 standing.
+  [ "$(wired PreToolUse       'coldcompile-admit')"       -eq 1 ]
 }
 
-@test "0009 reproduces the fleet's timeout spelling — 5 keys present, handed-off's ABSENT" {
+@test "0009 reproduces the fleet's timeout spelling — 6 keys present, handed-off's ABSENT" {
   # THE CONTROL, and it is what makes the sixth entry non-vacuous. settings-drift-assert.sh compares
   # hook commands by basename+args and never looks at `timeout` (scripts/settings-drift-assert.sh:14,
   # :26), so a `wire … 5` for handed-off-session-guard.sh would close the drift line and pass every
@@ -97,6 +102,11 @@ wired() { # <event> <substring> → count of matching entries
   [ "$(key Stop             'session-beat\.sh stop')"    = "HAS" ]
   [ "$(key UserPromptSubmit 'session-beat\.sh prompt')"  = "HAS" ]
   [ "$(key UserPromptSubmit 'handed-off-session-guard')" = "NONE" ]
+  # coldcompile-admit carries timeout 10, not the 5 most entries use and not the absent key
+  # handed-off uses — read off .claude, .claude-secondary and .claude-quaternary, which all three
+  # spell it identically. A plausible 5 here would pass drift-assert and still diverge.
+  [ "$(key PreToolUse       'coldcompile-admit')"        = "HAS" ]
+  [ "$(jq -r '[.hooks.PreToolUse[]?.hooks[]? | select((.command|tostring)|test("coldcompile-admit")) | .timeout] | join(",")' "$f")" = "10" ]
 }
 
 @test "0009 links handed-off-session-guard.sh before wiring it" {
@@ -113,6 +123,16 @@ wired() { # <event> <substring> → count of matching entries
   # A migration whose verifier does not test its newest effect reports `applied` over a half-done job
   # — registration-state.sh reads this line and nothing else (migrations/README.md).
   grep -q '^# migration-verify: .*handed-off-session-guard' "$MIG" || false
+}
+
+@test "0009 declares coldcompile-admit in its own migration-verify line" {
+  # THE REGRESSION GUARD FOR THE DEFECT THAT ADDED THE SEVENTH ENTRY (drain recycle #194). Before it,
+  # `migration-verify:` was keyed on this migration's OWN enumeration and never mentioned
+  # coldcompile-admit — so registration-state.sh, which reads that line and nothing else, would have
+  # reported `applied` while step 3's INDEPENDENT detector still printed
+  # `DRIFT … "PreToolUse|coldcompile-admit.sh" — missing in: .claude-next`. A gate keyed on its own
+  # signal cannot see what its author did not list, and the two verdicts disagreeing is the symptom.
+  grep -q '^# migration-verify: .*coldcompile-admit' "$MIG" || false
 }
 
 @test "0009 NEVER wires a hook whose target is missing (the wired-but-unlinked hazard)" {
@@ -140,6 +160,10 @@ wired() { # <event> <substring> → count of matching entries
   [ "$(jq '.hooks.Stop[0].hooks | length' "$DST/settings.json")" -eq 2 ]
   # PreToolUse is the exception BY DESIGN: no AskUserQuestion group exists, so one is created
   [ "$(jq '[.hooks.PreToolUse[] | select(.matcher == "AskUserQuestion")] | length' "$DST/settings.json")" -eq 1 ]
+  # …but the "Bash" group DOES exist in the fixture, so coldcompile-admit must JOIN it, not fork a
+  # second one. Exactly one Bash group, and it holds the fixture's own entry plus ours.
+  [ "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Bash")] | length' "$DST/settings.json")" -eq 1 ]
+  [ "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Bash")][0].hooks | length' "$DST/settings.json")" -eq 2 ]
 }
 
 @test "0009 is idempotent — a second run changes nothing and mints no second backup" {
