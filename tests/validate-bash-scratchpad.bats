@@ -193,3 +193,60 @@ prefix_hook() {
   probe "rm -rf $SP/prefix-bin && rm -rf $D/repo"
   refused "$output" || false
 }
+
+# ── SAME-COMMAND VARIABLE RESOLUTION ────────────────────────────────────────────────────────────
+# The category above only ever saw a LITERAL absolute path, and agents do not write literals. Over
+# the harness's own PermissionRequest archive, 717 of the recursive-rm prompt targets are variables
+# and 291 of those resolve into a session scratchpad — this category, asked about on a spelling.
+#
+# Same two-sided law as the rest of this file: every PERMIT is paired with the REFUSAL that differs
+# by one lever, so a resolver that simply said yes more often fails here.
+#   (11) permit  D=<own scratchpad>/x ; rm -rf "$D"
+#        ↔ (13) refuse D=$(mktemp -d)          — value undecidable at hook time
+#        ↔ (14) refuse a name assigned TWICE   — which assignment is live is undecidable
+#        ↔ (15) refuse D=<ANOTHER session's>   — resolution does not touch the predicate
+#        ↔ (16) refuse D=<a repo working tree> — the ordinary case must still ask
+#        ↔ (17) refuse $DIR resolved via $D    — prefix confusion would be a silent mis-permit
+
+@test "(11) PERMITS rm -rf \"\$D\" when D is literally assigned to a path in this scratchpad" {
+  probe "D=$SP/prefix-bin && rm -rf \"\$D\""
+  [ "$status" -eq 0 ]
+  permitted "$output" || { echo "decision was: $(decision "$output")"; false; }
+}
+
+@test "(12) PERMITS the braced spelling and a suffix appended to the variable" {
+  probe "D=$SP && rm -rf \"\${D}/prefix-bin\""
+  permitted "$output" || { echo "braced: $(decision "$output")"; false; }
+  probe "D=$SP && rm -rf \"\$D/build-1/obj\""
+  permitted "$output" || { echo "suffix: $(decision "$output")"; false; }
+}
+
+@test "(13) REFUSES a command-substitution assignment — the value is not knowable at hook time" {
+  probe "D=\$(mktemp -d) && rm -rf \"\$D\""
+  refused "$output" || { echo "mktemp -d was PERMITTED — the resolver guessed"; false; }
+}
+
+@test "(14) REFUSES a name assigned twice, even when the FIRST assignment is safe" {
+  probe "D=$SP/prefix-bin; D=/Users/chrisren/Development/realrepo; rm -rf \"\$D\""
+  refused "$output" || { echo "reassignment was PERMITTED — the resolver picked one"; false; }
+}
+
+@test "(15) REFUSES another session's scratchpad reached through a variable" {
+  probe "D=$OTHER_SP/prefix-bin && rm -rf \"\$D\""
+  refused "$output" || { echo "another session's scratchpad was PERMITTED"; false; }
+}
+
+@test "(16) REFUSES an ordinary repo path reached through a variable" {
+  probe "D=$D/repo/src && rm -rf \"\$D\""
+  refused "$output" || { echo "a repo tree was PERMITTED"; false; }
+}
+
+@test "(17) REFUSES \$DIR when only D is assigned — no prefix confusion between \$D and \$DIR" {
+  probe "D=$SP && rm -rf \"\$DIR\""
+  refused "$output" || { echo "\$DIR resolved via \$D — a silent mis-permit"; false; }
+}
+
+@test "(18) an unresolvable variable is refused exactly as before — no new permit path" {
+  probe "rm -rf \"\$UNSET_ANYWHERE/x\""
+  refused "$output" || { echo "an unassigned variable was PERMITTED"; false; }
+}

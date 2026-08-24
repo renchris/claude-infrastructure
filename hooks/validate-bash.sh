@@ -1158,6 +1158,69 @@ is_own_scratchpad_target() {  # <argv-token> → 0 iff it RESOLVES strictly unde
 }
 # ── SCRATCHPAD-CATEGORY END ─────────────────────────────────────────────────────────────────────
 
+# ── SAME-COMMAND VARIABLE RESOLUTION ────────────────────────────────────────────────────────────
+# The scratchpad category above is right, and still misses most of what it was built for, because it
+# can only see a target spelled as a LITERAL absolute path — `_sp_resolve` refuses any token holding
+# a `$` (:1112, deliberately: guessing at an unexpanded token is the spoofable prefix match it
+# exists to avoid). Agents do not write literals. They write:
+#
+#     D=/private/tmp/claude-501/<slug>/<sid>/scratchpad/probe && rm -rf "$D"
+#
+# MEASURED against the harness's own PermissionRequest archive (~/.claude/autonomy/permission-archive,
+# 2,684 resolved prompts, 2026-07-31 →): 968 of the 1,297 non-curl prompts (75%) carry a recursive
+# rm, and 717 of those targets are variables. 291 of them resolve into a claude-501 session
+# scratchpad tree — the category this file ALREADY sanctions, asked about anyway because of the
+# spelling. It is the largest single non-curl prompt source in the fleet, and for a DISPATCHED
+# session an ask is terminal (the four losses recorded in the SCRATCHPAD-CATEGORY comment above).
+#
+# WHY THIS CANNOT WIDEN THE CATEGORY. Resolution runs BEFORE the predicates and changes neither of
+# them: the expanded token must still be absolute and must still `_sp_resolve` STRICTLY under THIS
+# session's scratchpad root, symlink chains followed. So the only way a wrong expansion can permit
+# anything is by landing inside the session's own scratchpad — the safe case, by construction.
+# A token that does not fully resolve keeps its `$` and is refused exactly as before.
+#
+# AND IT REFUSES AMBIGUITY RATHER THAN PICKING. A name assigned more than once, or assigned from a
+# command substitution / another variable / a glob (`D=$(mktemp -d)`), has no decidable value at
+# hook time, so it is not resolved at all. That is what stops `D=<scratchpad>; D=$(…); rm -rf "$D"`
+# being read as its first assignment.
+_rm_literal_assignment() {  # <NAME> → its value iff assigned EXACTLY ONCE, LITERALLY, in this command
+  local name="$1" all
+  all=$(printf '%s\n' "$CMD" \
+        | grep -oE "(^|[[:space:];&|(])${name}=[^[:space:];&|]*" \
+        | sed -E "s|^[[:space:];&|(]*${name}=||")
+  [[ -n "$all" ]] || return 1
+  printf '%s\n' "$all" | grep -qE '[$`*?]' && return 1              # non-literal ⇒ undecidable
+  [[ "$(printf '%s\n' "$all" | sort -u | wc -l | tr -d ' ')" == "1" ]] || return 1   # reassigned
+  printf '%s\n' "$all" | head -1 | sed -E 's|^"||; s|"$||; s|^'"'"'||; s|'"'"'$||'
+}
+
+_rm_expand_token() {  # <token> → the token with resolvable same-command variables expanded
+  local t="$1" i name val braced plain
+  for i in 1 2 3 4; do
+    case "$t" in *'$'*) ;; *) break ;; esac
+    # Greedy `.*` takes the LAST reference and the loop walks the rest. The captured name is
+    # maximal, so driving from the REFERENCE rather than from the assignment list is what stops
+    # `$D` from matching inside `$DIR`.
+    name=$(printf '%s' "$t" | sed -nE 's/.*\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?.*/\1/p' | head -1)
+    [[ -n "$name" ]] || break
+    val=$(_rm_literal_assignment "$name") || break
+    [[ -n "$val" ]] || break
+    # Escaped-$ inside double quotes, so these are the LITERAL strings `${NAME}` and `$NAME` —
+    # they are patterns to match in the token, never expansions to perform.
+    braced="\${$name}"; plain="\$$name"
+    t="${t//$braced/$val}"
+    t="${t//$plain/$val}"
+  done
+  printf '%s' "$t"
+}
+
+# rm_target_is_permitted <argv-token> — the two predicates, over the RESOLVED spelling of the token.
+rm_target_is_permitted() {
+  local resolved
+  resolved=$(_rm_expand_token "$1")
+  is_safe_rm_target "$resolved" || is_own_scratchpad_target "$resolved"
+}
+
 # is_safe_rm_target <argv-token> — shared by both paths below, for the same no-drift reason.
 is_safe_rm_target() {
   # Strip leading `./` or `/` (but NOT a leading `.` — `.next` must match `\.next`).
@@ -1174,7 +1237,7 @@ if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
   # without force, is the trigger — unchanged in meaning, only in reach.
   while IFS=$'\t' read -r rm_rec rm_force rm_target; do
     [[ "$rm_rec" == "1" ]] || continue
-    if ! is_safe_rm_target "$rm_target" && ! is_own_scratchpad_target "$rm_target"; then
+    if ! rm_target_is_permitted "$rm_target"; then
       warn "rm -r on non-build-artifact target: '$rm_target'. Verify intentional."
     fi
   done <<<"$RM_SCAN"
@@ -1184,7 +1247,7 @@ elif [[ "$RM_PRESENT" == "1" ]]; then
     while IFS= read -r occurrence; do
       printf '%s' "$occurrence" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)' || continue
       target=$(printf '%s' "$occurrence" | sed -E 's/^rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*//')
-      if ! is_safe_rm_target "$target" && ! is_own_scratchpad_target "$target"; then
+      if ! rm_target_is_permitted "$target"; then
         warn "rm -r on non-build-artifact target: '$target'. Verify intentional."
         # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
         break
