@@ -86,6 +86,131 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #198: the stored falsifier said "premise stands" and the remedy had
+  been on trunk for five days — a text-grep falsifier tests the remedy's SPELLING, never its EFFECT.
+  filed 0 / closed 1 / 1 single-row condition retired / this doc.**
+  Board at open: **484 open+blocked** (294 open / 190 blocked / 2249 done, claimed 5); at close
+  **484** (292 open / 192 blocked / 2250 done, claimed 4). `master-operator-gated` **0 open / 111
+  blocked**; `master-convergence-deadlock` **open=13 / blocked=6** at close (open=14 / blocked=5 at
+  my open — moved by a SIBLING, not by me: `01ab05685857` blocked→claimed and `70f0001c657b`
+  claimed→blocked) — printed by `bash bin/cc-backlog fold` run from the worktree, blocked tail
+  stated not hidden. **Closed 1 > filed 0.** Like #196 and #197, the close retired a whole
+  single-row condition — `daemon-runs-stale-bytes-after-script-only-land` is now **absent from the
+  fold entirely**, with `resident-reload-arm-criterion-unreachable` at open=1 as the positive
+  control. `comm` at both ends: **2 departures, 2 arrivals** — my 1 close (`status=done`) plus 1
+  sibling claim (`01ab05685857`, `status=claimed by=Chriss-MacBook-Pro-3-10526`); both arrivals are
+  `by=cc-backlog-reap` transitions INTO blocked (`70f0001c657b`, `78b76e1a8311`), not new work.
+  Attribute every departure AND arrival by STATUS — a reap looks exactly like a filing in a count.
+
+  🚨 **METHOD 168 — A STORED TEXT-GREP FALSIFIER KEYS ON THE REMEDY'S SPELLING, NOT ITS EFFECT.**
+  `d74191a99b5f` stores `grep -qE "script_changed|script_mtime" install.sh`. It returns **rc 1**
+  ("premise stands") and it is a SOUND instrument — positive control `plist_changed`=4, negative
+  control bogus=0, so it can fail. It is simply blind: the remedy landed spelled
+  **`resident_image_stale`**, an inode/mtime probe on the RUNNING image. The falsifier could grep
+  correctly forever and never see it. The brief's settled census says **71% of falsifiers are
+  text-greps (ANTI-coverage)**; this is what that costs in a single row. **When a stored text-grep
+  says the premise stands, ask whether the remedy could have landed under a different name** — go
+  read the subject file's structure, not its identifiers. Sibling of method 161 (grep for the
+  DEPLOYER that would perform the remedy) and of 151 (has the mechanism ALREADY DONE the thing).
+
+  **`d74191a99b5f` — CLOSED, all six claims measured separately, same moment.**
+  · **MECHANISM 1 TRUE, LINE DRIFTED.** `if $loaded && ! $plist_changed; then continue` is present
+    verbatim. The row cites `install.sh:696`; that line today is `[[ -d "$skilldir" ]] || continue`
+    inside the SKILLS loop. The real site is **`:915`**. Drift over 15 days is not a refutation —
+    but a cited line number is a claim to re-locate, never to trust.
+  · **MECHANISM 2 REFUTED BY THE SOURCE, WHICH NAMES THE ROW.** `install.sh:840-842`: *"THE ROW
+    NAMED THE WRONG STATEMENT. It cites the PID skip ('executing right now, not reloaded'). That
+    branch is UNREACHABLE for an unchanged plist: this skip returns first, and copy_file only
+    increments `installed` when the bytes actually differ."* The commit body says it outright:
+    *"Fixing the line the row named would have changed nothing."*
+  · **GENERAL FIX LANDED TEN DAYS AFTER `firstTs` (method 155).** Row `firstTs`
+    **2026-08-09T23:52:28Z**. **`976c6b418`, 2026-08-19T20:58:42-07:00** (*"a KeepAlive daemon's
+    'next natural load' never arrives, so the skip that is right for a periodic job strands it
+    forever"*) introduces the entire resident block — one occurrence-commit each for the `RESIDENT
+    DAEMONS` heading, `CC_INSTALL_RESIDENT_RELOAD`, `resident_bounce_vetoed`, `resident_image_stale`.
+    **`b2763f882`, 2026-08-19T21:23:32-07:00** moves the probes into `scripts/lib/cc-common.sh` so
+    `deploy-live.sh` cannot drift from `install.sh`. Both `--is-ancestor origin/main` **rc 0**,
+    against an off-trunk control (`7b1113089`) returning **rc 1**. ⚠️ **My first ancestry control
+    was my own HEAD — which was #197's already-landed commit, so it returned rc 0 and discriminated
+    nothing.** Same class as #196's and #197's control scars; it recurs because the nearest sha to
+    hand is always the one you just inherited. All four probes defined: `cc-common.sh:111`
+    `plist_is_resident` · `:124` `resident_program` · `:152` `resident_image_stale` · `:167`
+    `resident_pid`; bogus-fn control empty.
+  · **THE PER-OCCURRENCE FIX IS DECLINED BY THE MECHANISM, ON THE ROW'S OWN NAMED EXHIBIT.** The row
+    prescribes `launchctl kickstart -k gui/$(id -u)/com.claude.compressor-sentinel`.
+    `install.sh:866-879` `resident_bounce_vetoed` vetoes **that exact label**: the sentinel SIGSTOPs
+    burst processes and owes each a SIGCONT, a debt living only in its frozen ledger, so bouncing it
+    with a non-empty ledger strands them stopped forever — *"the remedy strictly worse than the
+    stale image it cures."* Ledger measured this session: **0 bytes, 0 lines**, so `[ -s ]` is false
+    and the veto would NOT fire today — the veto is still the reason the blanket prescription must
+    never be encoded. This is #188's shape (a remedy the mechanism declined on cost), reached from
+    the opposite direction: here the mechanism declined it **by name**.
+  · **THE ROW'S POPULATION INSTRUMENT IS STILL WRONG TODAY.** The commit records `grep -l KeepAlive`
+    = **6 of 22** against PlistBuddy's **3 of 22** — three plists name KeepAlive only in a COMMENT,
+    two of those saying the job is deliberately NOT KeepAlive. Re-measured this session with the
+    repo's own probes: **26 plists, 3 resident** (`caffeinate-floor`, `compressor-sentinel`,
+    `lead-supervisor`), 23 non-resident — independently reproducing the corrected 3. **And the naive
+    `grep -l KeepAlive` still reads 6 today**, so the row's instrument is live-wrong, not merely
+    historically wrong. (Memory: `guard-proxy-fails-in-both-directions`; a grep that matches the
+    comment documenting a token answers a different question than the one asked.)
+  · **THE EXHIBIT IS DEAD AND THE HARM IS NOT REPRODUCING.** Row exhibit: `compressor-sentinel` pid
+    48326 up since 2026-08-09. Live now: **pid 36268, `resident_image_stale` = no**;
+    `lead-supervisor` **pid 34524, stale = no**; `caffeinate-floor` pid 1054 exec'd into
+    `/usr/bin/caffeinate`, **exempt by construction** (argv names no repo file) and reported as
+    exempt rather than skipped. Both executing residents were STALE on 2026-08-20; both are fresh
+    now.
+  · **NOTHING FILED, DELIBERATELY.** The surviving half — detection is unconditional but the launchd
+    MUTATION sits behind `CC_INSTALL_RESIDENT_RELOAD`, default 0, so an unattended install WARNS and
+    counts rather than reloading — is **already owned by `84394a44f133`** (OPEN,
+    `resident-reload-arm-criterion-unreachable`), which cites `install.sh:927`, the exact flag line,
+    and holds a genuine operator decision. #197's discharge, reused: **verify the owner exists and
+    NAME it**, because a third row over one question is the duplication the close exists to stop.
+
+  🆕 **A DATUM FOR `84394a44f133`'s OWNER, RECORDED HERE RATHER THAN REFILED — ITS BLOCKING PREMISE
+  IS NOW STALE.** That row's blocker is *"the live copies carry NEITHER the actuator nor the reporter
+  and the cycle has accumulated exactly zero data"*, measured 2026-08-20 at `grep -c` = 0 on both.
+  Measured this session on the SHARED checkout (HEAD `8b9becd6d`, lag 11) — which **IS** the live
+  `install.sh`, since `~/.claude/install.sh` does not exist (premise 4-11, re-confirmed):
+  `install.sh` **`resident_bounce_vetoed`=2 · `resident_image_stale`=1 ·
+  `CC_INSTALL_RESIDENT_RELOAD`=3**; `scripts/deploy-live.sh` **`resident_image_stale`=4**. Positive
+  control `plist_changed`=4, negative control bogus=0. **The live layer converged; the observation
+  cycle can now accumulate.** The n=1 caution and the criterion-repair remain that row's own work —
+  **do not flip the default on this datum**; it puts `bootout`/`bootstrap` on an autonomous path over
+  the lead supervisor and the kernel-panic guard. Memory sibling:
+  `parked-blocker-obsoleted-by-later-fix` and `filed-blocker-is-never-revalidated` — a blocker is
+  filed once and never re-checked, so a dead premise demands action forever.
+
+  **THE ORDER OF OPERATIONS THAT DECIDED THIS ROW, unchanged from #197 plus one step:** read the
+  `falsifier` field FIRST and ask whether it could ever pass AND ever fail → 🆕 **and when it is a
+  text-grep that says "premise stands", ask whether the remedy landed under a DIFFERENT NAME (168)**
+  → re-locate every cited line number before trusting it → read the subject's own header comments,
+  **and here the comment block was the answer, because it NAMED the row and refuted it** → date each
+  remedy candidate against `firstTs`, not only `lastTs` (155) → run the row's population claim with a
+  CORRECTED instrument and check whether the ORIGINAL one is still wrong today → re-probe the exhibit
+  → and before filing the residue, grep for the sibling row that already owns it (152).
+
+  **Suites:** my diff is **docs-only** (`docs/plans/BACKLOG_DRAIN_24_7.md`), so `shellcheck`,
+  `bats-shellcheck-lint`, `bats-assert-liveness`, `alarm-polarity-lint` and `pipefail-sigpipe-lint`
+  **all did not apply** — stated rather than claimed as five greens never run. Direct set from
+  `gate-select.sh --direct "$MB..HEAD"` recorded below with a per-suite verdict table; a suite whose
+  `ok+not-ok` disagrees with `plan` is rendered **NON-VERDICT(truncated)**, never a green (#196's
+  `da839cd0d89e`).
+
+  ⚠️ **The PostToolUse formatter fired on this inserter — the TWENTY-EIGHTH firing in twenty-three
+  consecutive recycles**, again on the one file whose correctness decides whether §2.1 survives.
+  Re-compiled with `python3 -m py_compile` and re-LISTED the guards after the notice: **9 guard
+  conditions G1-G9 across 10 `die()` call sites** — **G1 carries two** (the read and the write), the
+  rest one each. 🚨 **I WROTE "12" IN THIS SENTENCE BEFORE RUNNING THE COUNT, AND IT WAS WRONG** —
+  #195's scar reproduced exactly: a sentence stating its own numbers, written ahead of the
+  measurement that produces them. **A number about your own run is a PREDICTION until the command
+  has run.** And the raw `grep -c 'die('` genuinely reads **12**, because it also matches the `def
+  die` DEFINITION and one line of this entry's own PROSE describing the guards — the brief's *"a grep
+  that counts a token can match the comment that documents it"* hazard, firing inside the very
+  paragraph that cites it. The LIST is what shows every guard present; the count showed neither the
+  coverage nor its own contamination. Ran the inserter a second time on purpose — refused **rc 2**
+  (double-insert), a free negative control. Entry written AFTER the fold, then read back OUT OF THE
+  FILE and five arithmetic identities re-checked in a python block: 294+190=484, 292+192=484, done
+  delta 1, departures 2 = 1 done + 1 claimed, arrivals 2 = 2 blocked.
 - **2026-08-24 — drain recycle #197: a row that has ALREADY CORRECTED ITSELF installs a second cause
   nobody audits — and this one had been false for fourteen days at the moment it was written.
   filed 0 / closed 1 / 1 single-row condition retired / 1 row held with a written correction / this doc.**
