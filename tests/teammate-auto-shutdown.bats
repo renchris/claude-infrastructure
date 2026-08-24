@@ -868,6 +868,65 @@ EOF
   [ -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
 }
 
+# ══ A SILENT CLOSE FAILURE IS THE ONE REFUSAL CLASS THAT REACHED THE ACTUATOR ════════════════════
+# close_and_log has three arms that RETRACT the teardown marker — i.e. three ways to end with the
+# pane still standing and the subsystem knowing it. Two of them told nobody. _page_desk_damped is
+# called on five other refusal paths in this same file (:489 ADOPTION-UNPROVABLE, :945
+# SHARED-CWD-NEVER-REAPS, :985 WORKTREE-UNRESOLVED, :1144/:1155 ADOPTION-*), so the omission was an
+# asymmetry, not a policy. The residency alarm cannot cover the gap either: assignee-pane-residency.sh
+# needs min_events=5 residents past 4h to assert, so a 2-3 pane stick renders NOT-EXERCISED and the
+# only symptom of a stuck fleet is absence. Measured on three real members that hit rc=67 and never
+# produced a '✓ closed pane' (s3-sweep-fix/win437 2026-08-12; rekey-A29/win301 + rekey-A6/win300
+# 2026-08-17). Backlog ee69a1b8dcd0.
+#
+# rc 66 is DELIBERATELY still silent — the identity pin refusing to close the wrong window is the pin
+# working, and paging on a correct, expected refusal is how an alarm's attention budget gets spent
+# down to nothing (memory: alarm-polarity-and-attention-budget). Test 49 pins that it stays quiet.
+
+@test "a hard-failed close PAGES the desk — a pane left standing must not be silent" {
+  _cik 0; _it2_says "PANE-Z" 1                # close returns rc 1: the actuator could not act
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "pane close FAILED" "$LOGF"
+  [ -e "$D/notify-calls.log" ]
+  # The FINGERPRINT is damping state and never reaches the wire — assert the operator-readable
+  # message, which is the thing a desk actually gets, and that the pane id travels with it.
+  grep -q "could NOT be closed" "$D/notify-calls.log"
+  grep -q "PANE-Z" "$D/notify-calls.log"
+  [ "$(grep -c 'cc-notify' "$D/notify-calls.log")" -eq 1 ]
+}
+
+@test "a close that LIED (rc=0, pane survives) PAGES the desk — the worse of the two silences" {
+  _cik 0; _it2_says "PANE-Z" 0                # enumerator still lists it after a 'successful' close
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "STILL PRESENT" "$LOGF"
+  [ -e "$D/notify-calls.log" ]
+  grep -q "SURVIVED a close that reported success" "$D/notify-calls.log"
+  grep -q "PANE-Z" "$D/notify-calls.log"
+  [ "$(grep -c 'cc-notify' "$D/notify-calls.log")" -eq 1 ]
+}
+
+@test "PAGE NEGATIVE CONTROL: a genuinely-closed pane pages nobody" {
+  _cik 0; _it2_says "SOME-OTHER-PANE" 0       # the real success path
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane PANE-Z" "$LOGF"
+  [ ! -e "$D/notify-calls.log" ]
+}
+
+@test "PAGE NEGATIVE CONTROL: rc 66 stays silent — the identity pin refusing is the pin WORKING" {
+  _cik 0; _it2_says "PANE-Z" 66
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "identity pin REFUSED" "$LOGF"
+  [ ! -e "$D/notify-calls.log" ]
+}
+
 # ══ THE SHARED-CWD CLOSE: GATE ON THE MEMBER'S OWN FOOTPRINT (2026-08-04) ═════════════════════════
 # The hook already computed the right answer and then threw it away. On a shared cwd it logs
 # "shared cwd is dirty, but NOTHING this member wrote is" — 10/10 members did, live — and then hands

@@ -294,14 +294,26 @@ close_and_log() {
     if pane_present "$pane"; then
       log "  ✗ close reported rc=0 but pane $pane ($who) is STILL PRESENT — actuator lied"
       retract_teardown_marker "$pane" "${SESSION_ID:-}"
+      _page_desk_damped "CLOSE-LIED:$pane:$who" \
+        "teammate-auto-shutdown: pane $pane ($who) SURVIVED a close that reported success — the actuator lied. Pane is still standing; close it manually and treat the backend as suspect."
     else
       log "  ✓ closed pane $pane ($who)"
     fi
   elif [[ "$err" == *"not found"* || "$err" == *"find pane"* ]]; then
     log "  ~ pane $pane ($who) already gone (${err:-not found})"
   else
+    # ── A FAILED CLOSE MUST PAGE — it is the one refusal class that REACHED the actuator ─────────
+    # Every other refusal path in this file already pages (_page_desk_damped at :489, :945, :985,
+    # :1144, :1155); this arm logged, retracted, and returned, so a pane left standing was the only
+    # outcome nobody heard about. The residency alarm cannot cover it: assignee-pane-residency.sh
+    # needs min_events=5 residents past 4h, so a 2-3 pane stick renders NOT-EXERCISED. Measured on
+    # three members that hit rc=67 and never logged a ✓ (2026-08-12, 2026-08-17). Damped on
+    # (pane, who, rc) — STATE, never a clock — so a re-fire on the same stuck pane stays quiet while
+    # a NEW pane failing is genuinely new news. Backlog ee69a1b8dcd0.
     log "  ✗ pane close FAILED (rc=$rc) for $pane ($who): ${err:-<no stderr>}"
     retract_teardown_marker "$pane" "${SESSION_ID:-}"
+    _page_desk_damped "CLOSE-FAILED:$pane:$who:rc$rc" \
+      "teammate-auto-shutdown: pane $pane ($who) could NOT be closed (rc=$rc): ${err:-<no stderr>}. The pane is still standing — close it manually."
   fi
 }
 
