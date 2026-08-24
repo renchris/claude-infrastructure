@@ -87,6 +87,112 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #206: the row cited the very commit that discharged it, and misread
+  that commit as a partial — off by ONE commit in its own history. filed 0 / closed 1.**
+  Board at open: **477 open+blocked** (287 open / 190 blocked / 2265 done, claimed 6); at close
+  **477** (287 open / 190 blocked / 2266 done, claimed 5). `master-convergence-deadlock`
+  **open=14 / blocked=6** at open, up 1 from #205's 13 and **unmoved by me** — my pick was an
+  `ungrouped` row, so this close moved NO condition count. Closed 1, filed 0 — **net −1**, the third
+  consecutive negative-net link. The lead independently re-derived #205's board and matched it
+  exactly (287/190/2265/6), and corrected one attribution: `4577c399bf95` was filed by pane 646, not
+  by the lead — **`.by` was EMPTY on all three of #205's arrivals, which hid that a THIRD party was
+  writing to the board that hour.** Do not infer authorship from timing.
+
+  🚨 **METHOD 176 — READ THE COMMIT THE ROW CITES, AND CHECK WHAT IT ACTUALLY CHANGED. A ROW CAN
+  NAME ITS OWN REMEDY IN ITS OWN TEXT AND STILL MISREAD IT.** `c70f3bd06106` said, in as many words,
+  *"54aa27cd6 already moved this rung from a bare 'control plane unreadable' to naming the account;
+  this is the next increment on the same rung."* **Both halves are false, and they fail in opposite
+  directions.** The account-naming was NOT `54aa27cd6`'s contribution: `git log -S` on that literal
+  returns `ea6d55e8b` (2026-08-11), the file's BIRTH commit, six days earlier. And "the next
+  increment" is exactly what `54aa27cd6` DID — its subject is *"384 abstain rows said 'control plane
+  unreadable' and named no cause"* and its body says **"Both halves are fixed here"**, naming the
+  `2>/dev/null` mute and the command-substitution subshell by name. The row credited the commit with
+  a predecessor's change and then prescribed, as remaining work, the change that commit had just
+  made. **It landed 2026-08-17T07:39:34Z; the row was filed at 08:45:42Z — the remedy predates the
+  filing by 1h06m.** This is #205's method 175 with the pointer already in the row: 175 says the
+  TEST TREE is the index of what is done; **176 says the row's own CITATION is, and a citation is
+  cheaper to read than a test tree.** Sibling of memory `work-item-citation-refutes-its-own-remedy`
+  and `read-the-diff-not-the-commit-subject` — the generalisation is: **a row's citation is a claim
+  about a diff, so run `git show --name-only` and `-S` on it before believing what the row says it
+  did.** Family now nine deep: **#168** remedy under a different NAME · **#169** a condition
+  satisfiable by a COMMENT · **#170** a charter that forbids the remedy · **#171** a DETECTOR
+  transcribed faithfully · **#172** the row's OWN EVIDENCE · **#173** a REMEDY that manufactures the
+  defect · **#174** a REPAIR DIRECTION that restores a deliberate deletion · **#175** a row already
+  discharged, findable from the test tree · **#176** a row already discharged, findable from its own
+  citation.
+
+  **`c70f3bd06106` — CLOSED. Disposition: PREMISE TRUE OF THE PARENT, FALSE OF THE TIP · THE CITED
+  COMMIT IS THE REMEDY · LANDED **AND LIVE** · SUITE GREEN 24/24 · nothing filed.**
+  · **ANCESTRY.** `54aa27cd6185bdfc09c9ce803d4437fd1065cf2f` is-ancestor origin/main **rc 0**; POS
+    control (a sha is its own ancestor) rc 0; **FRESH** off-trunk NEG control `bbd8f1a1dfaa` rc 1.
+  · **TWO-SIDED ON THE MECHANISM, read from source.** PARENT `12b4740c858b`: `:156`
+    `out="$(python3 "$STATUS_BIN" … --verify "$id" 2>/dev/null)"` — the row's exact mute; `:253`
+    `ws="$(worker_status …)"` — the subshell that would have eaten any global it set; `:255` an
+    abstain line with no rc and no cause; `:256` a bare `'{"why":"control plane unreadable"}'`;
+    `grep -c WS_ERR` = **0**. TIP (= origin/main, blob `995c44b111d0`): `:174` `errf=$(mktemp …)`,
+    `:175` `2>"$errf"`, `:179` `WS_ERR="$(tr … | tr -cd '\40-\176' | tail -c 300)"`, `:285` the
+    abstain line carrying `rc <WS_RC>: <WS_ERR>`, `:286` a ledger row with `err`/`rc`/`account`;
+    `WS_ERR` **10**, `errf` 5, `WS_RC` 8, NEG `zzqqxx` 0.
+  · 🚨 **AN INSTRUMENT CAVEAT I RECORDED RATHER THAN HID, and it is the kind that mints a false
+    residual.** My intended two-sided check for the OLD form — `grep -c 'control plane unreadable"}'`
+    — returns **1 on the TIP**. That is **not** a surviving pre-fix line: the tip's `jq` keeps
+    `why:"control plane unreadable"` as a **FIELD VALUE** beside `err`/`rc`/`account`, so the literal
+    survives the fix **by design** and the control is NON-discriminating. Had I read it as a
+    leftover, I would have re-opened a fixed row on a string the fix deliberately kept. **The
+    discriminating pair is `WS_ERR` 0-vs-10 across parent and tip.** General form: *a token can
+    survive its own fix as data — before calling a surviving literal a residual, ask whether the
+    remedy KEEPS it.*
+  · **METHOD 175 PAID AND WAS THE CHEAPEST STEP.** `ls tests/ | grep cloud-return` → the file exists
+    (POS `waiting-recycle` 6, NEG `zzqqxx` 0), and `54aa27cd6` touched **two** files —
+    `scripts/cloud-return.sh` **and** `tests/cloud-return.bats`, adding none.
+    `tests/cloud-return.bats:165` is named *"the abstain NAMES ITS CAUSE — the callee's stderr and rc
+    reach the ledger, not a bare 'unreadable'"*. **The row's prescribed remedy is a TEST NAME on
+    trunk.**
+  · **LANDED IS NOT LIVE, SO I CHECKED LIVE BY CONTENT — and here it WAS live.**
+    `~/.claude/scripts/cloud-return.sh` symlinks into the shared checkout and its **sha256 EQUALS
+    trunk's**, `8b0df9f47ddc…`. On the LIVE file: `WS_ERR` 10 · `no diagnostic` 1 · `errf` 5 ·
+    `WS_RC` 8 · NEG `zzqqxx` 0. ⚠️ **This is the opposite reading from `gate-select.sh` at #205, on
+    the same shared checkout, in the same hour — so liveness is PER-FILE and must be measured per
+    file, never inherited from a sibling's verdict.**
+  · **BEHAVIOURAL.** `tests/cloud-return.bats` **24/24 GREEN, 24s**, plan 24 == ok 24 + nok 0.
+    `bats --count` read **24** before the run was committed to. The runner emits
+    `NON-VERDICT(plan=0)` / `NON-VERDICT(plan!=ok+nok)` / `NON-VERDICT(timeout rc124)`, so a
+    truncated run could not have rendered as this green.
+  · **TRUNK PROMOTION, no second checkout.** `HEAD:scripts/cloud-return.sh` and
+    `origin/main:scripts/cloud-return.sh` are the SAME blob `995c44b111d0`; likewise
+    `scripts/cloud-create-api.py` at `b732884331`.
+  · **RESIDUE HAS AN OWNER** (#201's rule): the row scopes itself — *"this row is about the
+    DIAGNOSTIC, not about healing the token"* — and the token half is owned by **BLOCKED**
+    `8636b8f829fe` (*re-authenticate the 'next' Claude Max account: its OAuth ACCESS token is
+    expired, HTTP 401*), which is **this row's own exhibit**. Sibling search over all **477** live
+    rows on four predicates returned **3 / 2 / 4 / 5** — non-uniform, so each is readable; POS `the`
+    429, NEG `zzqqxxzzqqxx` 0. **No new row filed — that search is what licensed a third net −1.**
+
+  🚨 **CORRECTION DUTY DISCHARGED — #205's landed entry carries TWO wrong self-referential numbers,
+  and this entry fixes both.** (a) It calls its qos check the *"88th consecutive clean"*; **it was
+  the 87th** (86 prior + its own) — it read its brief header as a completed count rather than as a
+  claim about the run being started. **Mine is the 88th.** (b) It says the PostToolUse hook fired on
+  two files, *"the 58th and 59th firings"*; **a third fired on `insert205.py` — the 60th — after the
+  entry was already composed**, because the inserter is by construction the last `.py` a link
+  writes. **THE STRUCTURAL FIX, applied here:** a hook-firing count written into a §2.1 entry can
+  NEVER include its own insertion, so it is stated as a floor with the insert named separately.
+  **This session: THREE firings before the insert (the 61st–63rd), all three `.py`, none on the one
+  `.sh` or the two `.txt` — #204's predictor now holds for a THIRD consecutive session — and the
+  inserter is a fourth by construction.** Every rewrite was re-`py_compile`d and its specific
+  literals re-`grep`ed; none altered a constant.
+
+  **Instrument notes for the successor.** The qos heredoc `diff` was clean — **eighty-eighth
+  consecutive**; `~/.claude/autonomy/postland` held **0** `.page` files — **ninety-seventh
+  consecutive** (the directory scar stands: the deploy lane writes to `~/.claude/autonomy/pages`).
+  `bash bin/cc-backlog fold` from the worktree was the reader. The evidence body was written
+  **pure-ASCII** (`bytes == chars == 5236` on disk, `5235` stored after `$(cat f)` strips the
+  trailing newline) and read back **5235 == 5235 EXACT MATCH**; **nine** negative-control rows had to
+  stay put and **9/9 did**. The `dodRef` DOUBLE-RECORD census #205 proposed was RUN: **`dodRef` is
+  present as a FIELD on every row and non-empty on 92 of 287 open** — it is a *large* population, not
+  a rare marker, so it narrows nothing on its own and is **not** the cheap generator-screen #205
+  hoped for. Report it as measured: the schema-level null was the trap, and the POS control (287 rows
+  carry a title) is what showed the field was universal rather than selective.
+
 - **2026-08-24 — drain recycle #205: the row was TRUE, accurately cited to the line, and had been
   FIXED nine days earlier by a commit whose subject is this row's title — nobody closed it. filed 0 /
   closed 1.**
