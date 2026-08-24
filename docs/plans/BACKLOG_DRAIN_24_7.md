@@ -87,6 +87,96 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #178: the row said the population was zero; it was one, and the
+  census that said zero walked into the rule's own documented trap. filed 1 / closed 1 /
+  2 commits (CODE + docs). TWENTY-SECOND CONSECUTIVE close overall.** Warm effort declared BEFORE
+  the close, and this is a **HOLD** on `master-convergence-deadlock`: it stood at **23 open / 6
+  blocked** at my open and stands there at my close — I moved **`ungrouped`**, 213 → 214 (my close
+  −1, my filing +1, and a SIBLING's row +1 during the session). ⚠️ The operator-set goal again asked
+  `master-convergence-deadlock` to reach **0 open** in one recycle; 23 rows remain and saying so
+  plainly is the report. It also named the WRONG successor for the **NINTH consecutive time** (its
+  text says "recycle #171"; §2.1's newest entry was #177, so I am #178 and I fired **#179**).
+  Board at close: **open 317 / blocked 188 / done 2211 / claimed 2**.
+
+  **ROW CLOSED — `8375a0f8fdca`** (#176's own filing, *"rule 2's form 2 pins only 3 of
+  capacity_gate's 4 terms"*) — closed **FIXED, WITH CODE**. Landed as *fix(hermeticity-lint): form 2
+  certified a suite that still read the live box* — **cite by SUBJECT, never by sha; a land
+  rebases.** The row was TRUE on its mechanism and WRONG on its population. What generalises:
+
+  · 🆕 **METHOD 133 — THE CENSUS THAT JUSTIFIES EXTENDING A PREDICATE MUST RUN THROUGH THAT
+    PREDICATE'S OWN EXTRACTOR.** I measured the flip-population with a raw `grep` over all 534 suite
+    FILES and got **zero**, which made the clause look free. The real answer is **one**, and the miss
+    is not a slip — it is *this rule's own documented hole*, re-entered by the census taken to
+    justify hardening it. `is_fire_pinned()` reads `setup_statements()`: **setup-only, and
+    comment-stripped**. `tests/spawn-presence.bats` NAMES `CC_FIRE_CAPACITY_GATE=off` in a setup()
+    COMMENT explaining why form 1 is unavailable to it, so a file-scoped grep scores it form 1 while
+    the predicate scores it form 2. **The instrument must be the subject's own predicate, or the
+    denominator is a different population wearing the same name** (memory:
+    `positive-control-the-denominator`). The tell was free and I had it: the suite my own reasoning
+    had *already named* as needing the third route was the one my census said did not exist.
+  · 🆕 **METHOD 134 — A ROW'S "ZERO LIVE POPULATION" IS A MEASUREMENT, NOT A PROPERTY, AND IT ROTS
+    LIKE ANY OTHER.** `8375a0f8fdca` was filed on 2026-08-24 asserting *"THE LIVE POPULATION IS ZERO
+    AND THAT IS A FACT ABOUT THE POPULATION, NOT THE MECHANISM"* — the strongest possible phrasing,
+    and false when written. A zero-population clause is the one clause a filer never re-runs, because
+    it reads as permission rather than as a claim. **Re-run it; it is the cheapest half of the row
+    and the half that decides whether the fix is free.**
+  · 🆕 **METHOD 135 — WHEN A TWIN RULE ALREADY CARRIES YOUR FIX, PORT THE SHAPE AND RE-DERIVE THE
+    ARITY.** Rule 7 (`is_admit_pinned`) grew a THIRD form-2 clause for its RESERVE term, and its own
+    test says in terms: *"the one case rule 2 has no analogue for, and the whole reason rule 7 is not
+    a name-swap of is_fire_pinned"*. That stopped being true at Wave E (task #170) and **the fix was
+    never ported back** — the twin's header was left asserting an asymmetry that had dissolved.
+    But the arity does NOT port: rule 2 takes **three** spellings to rule 7's two, because the
+    `active` term has three real closures (`CC_FIRE_ACTIVE_TERM=off` · `CC_FIRE_ACTIVE_OVERRIDE` ·
+    `CC_SP_ACTIVE_OVERRIDE`) and RESERVE has two — there is **no** `CC_ADMIT_RESERVE_OVERRIDE`
+    (measured: 0 hits in `scripts/`). **One spelling per route that genuinely stops the read** —
+    copying the twin's count would have been both too narrow (method 130) and unexplained.
+  · **THE POST-FIX RED WAS REAL AND METHOD 132 DID NOT APPLY.** My first ARM B came back with **5**
+    failing — all of them the tests that lint the REAL tree or run `--selftest`. #177's method 132
+    says a red surviving a fix indicts the assertion first; here the opposite held, and the
+    discriminator was free: those 5 were **green in ARM A and red only in ARM B**, so my change
+    CAUSED them. **Ask which arm the red is new in before deciding whether to doubt the assertion.**
+  · **THE FIX HAD A SECOND HALF AND THE LINT NAMED IT FOR ME.** `tests/spawn-presence.bats` really
+    did read the live mid-turn census; the honest remedy was to close it, not to allowlist it — the
+    rule's own header says that list may only ever SHRINK. Pinned at the CENSUS
+    (`CC_SP_ACTIVE_OVERRIDE=0`) rather than the gate, matching that file's own `CC_SP_TREES_OVERRIDE`
+    idiom three lines above, and **pinned rather than switched off** because cases 20/29/30 exercise
+    the term (method 131: a term you delete is not a term you fixtured).
+  · **AND FORM 2 HAD NO TEST OF ANY KIND** — reachable, load-bearing, uncovered, which is how the
+    missing clause survived two weeks past the change that opened it. Four cases added in rule 7's
+    shape: one RED proving the two-variable form does not count, three GREENs naming one spelling
+    each. **A predicate branch with no test is how an arity goes stale silently.**
+
+  **THE RED-PROOF** (two-arm, trap-protected, subject pinned at merge-base `37f886bb9` in
+  `/tmp/mb178.txt`): save the fixed lint, `git checkout $MB --` it, run, restore via `trap … EXIT`,
+  run again.
+
+      ARM A  pre-fix   plan=82  ok=81  not-ok=1   (exactly the TWO-VARIABLE case, matched by name)
+      ARM B  post-fix  plan=82  ok=82  not-ok=0
+      verdict=PROVED
+
+  Anti-vacuity exits **2** (saved file empty / carries no fix / checkout did not remove it / restore
+  lost it / plan 0 / plans differ between arms); an over-wide pre-fix red exits **3** as
+  `MUTANT-TOO-WIDE`, and a red that is not the named case exits **3** as `MUTANT-MISATTRIBUTED` —
+  that last guard is new and is what makes "not-ok=1" mean the RIGHT one. **The three GREEN spelling
+  tests pass in BOTH arms**, which is what proves the pre-fix red is the missing clause rather than a
+  broken fixture. `redproof-178.sh` is worth copying wholesale.
+
+  **GATES.** 6 direct suites, 0 prose-cited (selector control **32/32**): test-hermeticity-lint
+  **82/82** · spawn-presence **31/31** · ship-land **150/150** · cloud-refusal-route **46/46** ·
+  gate-ownscope-leak **21/21** · herm-suite-memo **7/7** = **337 tests, 0 reds, 0 non-verdicts**,
+  all with real plans. `shellcheck` clean, `bats-assert-liveness` clean on both suites,
+  `bats-shellcheck-lint --range` clean with **2 suites really scanned** (a real scan, not the
+  docs-only non-event). ⚠️ **The Bash tool's poll loop died twice** on the ~16-minute red-proof and
+  the run was fine both times — **the kill is the poller; re-poll, do not conclude.**
+
+  **ROW FILED — `ec56a79f7934`** (1 filed / 1 closed; `closed >= filed` holds). The row's SECOND,
+  **separable** defect: `handoff-fire.sh:639-641` still calls capacity+headroom *"the two TERMS"*,
+  contradicting its own case arm at `:644-649`. **It has already mis-generated one row**
+  (`dd76e48db6b2`, refuted by #176), so it is a live generator, not a cosmetic. Declined inline on
+  **cost, not risk** — 88 direct suites — as #155–#178 have all declined that file. Filed separately
+  so it does not vanish inside a done row. **Fold it into any other diff that already touches
+  `handoff-fire.sh`.**
+
 - **2026-08-24 — drain recycle #177: the silent arm was the one that reached the actuator — and
   the row understated its own span by one site. filed 0 / closed 1 / 2 commits (CODE + docs).
   TWENTY-FIRST CONSECUTIVE close overall.** Warm effort declared BEFORE the close, and this is a
