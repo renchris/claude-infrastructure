@@ -1315,6 +1315,35 @@ references_fire() {
 # load-insensitive as form 1's while the coverage survives. Comment-stripped like form 1, and for
 # form 1's reason. A suite with NEITHER form is still AMBIENT and still blocks: a second door, not
 # a hole.
+#
+# THREE CLAUSES IN FORM 2 SINCE 2026-08-24 (backlog 8375a0f8fdca), and the third is the same class
+# of defect rule 7's third clause was built against — found there first, and NOT ported back here at
+# the time. RULE 7's header called this "the one case rule 2 has no analogue for"; it stopped being
+# true when Wave E (task #170) gave capacity_gate() its third and fourth terms. `segments` rides the
+# sysctl stub and is closed by clause 1, but `active` (handoff-fire.sh:5038-5044) reads cc_sp_active
+# — a LIVE mid-turn session census that neither instrument override touches, and which a fixtured
+# $HOME does not absent, because handoff-fire.sh sources spawn-presence.sh at :4680-4683 relative to
+# its OWN directory and so loads the real library. A two-variable form 2 therefore certified as
+# PINNED a suite whose fires could still be REFUSED (exit 9) by whatever else the fleet was doing.
+#
+# THREE SPELLINGS CLOSE IT, against rule 7's two, and the count is not a style choice — it is one
+# spelling per route that genuinely stops the ambient read. CC_FIRE_ACTIVE_TERM=off skips the term
+# before the census; CC_FIRE_ACTIVE_OVERRIDE pins the value at the gate (handoff-fire.sh:5040);
+# CC_SP_ACTIVE_OVERRIDE pins cc_sp_active's own return (spawn-presence.sh:254), and that third route
+# has to be here for tests/spawn-presence.bats's reason — it is the presence library's own suite, so
+# it can no more turn the census off than the gate suite can use form 1. Rule 7 has only two because
+# its RESERVE term has only two: there is no CC_ADMIT_RESERVE_OVERRIDE (measured: 0 hits in scripts/).
+#
+# MEASURED BEFORE CHANGING IT, the way form 1's comment-strip was — and the FIRST measurement was
+# WRONG, in a way worth keeping here because this rule's own header is where the trap is documented.
+# A raw grep over all 534 suites in tests/ said ZERO suites satisfy form 2 without form 1, so the
+# clause looked free. It is ONE: tests/spawn-presence.bats. The raw grep counted it as form 1
+# because it NAMES `CC_FIRE_CAPACITY_GATE=off` in a setup() COMMENT explaining why form 1 is
+# unavailable to it — the exact prose-match hole this predicate was comment-stripped against, walked
+# into by the census taken to justify extending it. THE CENSUS MUST USE setup_statements(), not the
+# file. That one suite is genuinely ambient on the active term and is FIXED IN THIS SAME DIFF (it
+# now pins CC_SP_ACTIVE_OVERRIDE), so the tree is clean at the land and the allowlist still only
+# ever shrinks — nobody is grandfathered in.
 is_fire_pinned() {
   local rc st
   for _ in 1 2 3; do
@@ -1322,7 +1351,10 @@ is_fire_pinned() {
     grep -qF 'CC_FIRE_CAPACITY_GATE=off' <<< "$st"; rc=$?
     if [ "$rc" -eq 1 ] \
        && grep -qF 'CC_FIRE_SYSCTL=' <<< "$st" \
-       && grep -qF 'CC_FIRE_HEADROOM_OVERRIDE=' <<< "$st"; then rc=0; fi
+       && grep -qF 'CC_FIRE_HEADROOM_OVERRIDE=' <<< "$st" \
+       && { grep -qF 'CC_FIRE_ACTIVE_TERM=off' <<< "$st" \
+            || grep -qF 'CC_FIRE_ACTIVE_OVERRIDE=' <<< "$st" \
+            || grep -qF 'CC_SP_ACTIVE_OVERRIDE=' <<< "$st"; }; then rc=0; fi
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
