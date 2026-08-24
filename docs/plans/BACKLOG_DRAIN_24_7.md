@@ -87,6 +87,119 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #196: the cause a row NAMES can be refuted by holding it CONSTANT
+  across both arms — load ~28 was the suspect, stdin was the culprit, and the wedge reproduced at
+  load 12. filed 1 / closed 2 / 1 corpus-truncating wedge fixed with an in-session A/B / this doc.**
+  Board at open: **486 open+blocked** (298 open / 188 blocked / 2246 done); at close **485**
+  (297 open / 188 blocked / 2248 done). `master-operator-gated` **0 open / 111 blocked**;
+  `master-convergence-deadlock` **open=14 / blocked=5**, UNCHANGED by either close — printed by
+  `bash bin/cc-backlog fold` run from the worktree, blocked tail stated not hidden. **Closed 2 >
+  filed 1.** Unlike #194 and #195, neither close was an ungrouped row: each retired a whole
+  single-row condition, so `master-verification-integrity` and `postland-corpus-stall-at-test-zero`
+  are both **absent from the fold entirely** and the condition list is two shorter.
+
+  🆕 **METHOD 165 — TO REFUTE A NAMED CAUSE, HOLD IT CONSTANT AND VARY SOMETHING ELSE; A CAUSE THAT
+  CANNOT SURVIVE ITS OWN CONTROL ARM WAS NEVER MEASURED, ONLY OBSERVED ALONGSIDE.** This is method
+  164's other half. 164 partitions the cause's own variable BY THE OUTCOME and checks it
+  discriminates (green median 2564 vs cut 2580). 165 is for when the row gives you no such variable
+  — only "both instances were at load ~28". You cannot partition one number. What you CAN do is
+  build two arms that differ in a candidate you invented, run them back to back so the suspected
+  cause is identical in both, and see whether the outcome still splits. `5a07814271ed` suspected
+  "a bound sized in the foreground band". I ran stdin-closed against stdin-held-open at 1-min load
+  **13.69 → 12.32**, and again through the real harness at **16.92** — less than two-thirds of the
+  row's 28 in every arm — and got **rc 0 vs rc 124** each time. The row's own caveat said
+  "re-measure on a quiet box before sizing anything"; the box was never quiet, and it did not need
+  to be, because a cause held constant across a split outcome is refuted wherever it sits.
+  Siblings: `wrong-cause-corroborated-by-true-metric`, `bound-must-fit-the-band-not-the-bench`.
+
+  🆕 **METHOD 166 — WHEN A ROW NAMES ONE INSTANCE OF A SHAPE, ENUMERATE THE SHAPE AND COUNT ITS
+  MEMBERS BEFORE FIXING THE ONE.** The row named exactly one test. The discriminating property was
+  not "this test" but "hands the runner a REAL shell": 17 of the 19 tests in the file pass
+  `SHELL=/bin/echo`, which prints its argv and exits and — measured — returns rc 0 in BOTH stdin
+  modes. Two pass `SHELL=/bin/zsh`. Both wedge, on the same split, at the same load. Fixing only
+  the named one would have left a live wedge one test below it and looked green, because bats stops
+  at the first hang and the second never runs. Extends #195's method 156 from populations of rows
+  to populations of *call sites*.
+
+  **`5a07814271ed` — CLOSED BY FIXING IT (`ae2f3585`), observation TRUE, stated cause REFUTED.**
+  · **MECHANISM, and it is a correct production design abused by a test.** `bin/cc-pane-runner:199`
+    ends `_launch` with `_fallback ""`, and `:69` is `exec "${SHELL:-/bin/zsh}" -l -i`. In a real
+    pane that is exactly right — the pane BECOMES an ordinary shell, which is what keeps every later
+    `it2 session run/send` against it working, and the file says so at length. Under bats the exec'd
+    interactive login zsh **inherits the test runner's stdin** and sits at a prompt until that fd
+    sees EOF. Nothing in the suite bounds it.
+  · **THE SPLIT, both arms back to back, load held constant.** Direct against the runner at load
+    13.69→12.32: `stdin </dev/null` **rc 0**; stdin held open by a live writer **rc 124**.
+    `SHELL=/bin/echo` control: **rc 0 in BOTH modes**. Eval-path shape: same **rc 0 / rc 124**.
+  · **THROUGH THE REAL HARNESS, unmodified tree** (`git diff origin/main` EMPTY), load 16.92:
+    stdin open → **rc 124, bats emitted `1..2` and then ZERO results**; `</dev/null` → **rc 0,
+    `ok 1` + `ok 2`, ONE SECOND**.
+  · **A/B IN ONE SESSION, pre-fix arm REPLAYED FROM `origin/main`** rather than hand-written, both
+    arms under the condition that wedges: **POST — fixed suite, ALL 19 tests, rc 0, ok=19,
+    not-ok=0**; **PRE — origin/main bytes, rc 124, `1..2` planned, zero results**, reproducing
+    right then.
+  · **SIBLING CENSUS:** the six other suites naming `cc-pane-runner` (`cc-relogin`,
+    `it2-kitty-argv-spawn`, `it2-kitty-composer-guard`, `fire-engagement`, `worker-claim-gate`,
+    `spawn-wedge-watchdog`) set a real `SHELL` **zero** times, so blast radius was exactly the two
+    sites and no production file is touched.
+
+  **`33c286c30624` — CLOSED, magnitude REFUTED BY A WHOLE-LOG CENSUS, survivor owned four times.**
+  · **The claim was "now the DOMINANT cut cause".** Whole-log census of `runner.log` (the verifier's
+    own log, `postland-verify.sh:605`), **6134 lines**, every token over the whole file:
+    **`STALL:` 22 · `KILLED by signal` 368 · `at test 0` 13 · `prelint` 4107**. NEGATIVE CONTROL, a
+    deliberately bogus token in the same run: **0**, so the instrument can return zero and this is
+    not a uniform harness artifact. **Stalls are 5.6% of the cut population.** #190 refuted this on
+    a tail of 8; this is the census, and it is the third recycle spent on one dead magnitude claim.
+  · **Its SUSPECT is unsupported too:** it names "cc-bats gathering 327 suites". The corpus is now
+    **536** `tests/*.bats` (+64%), and #195's stamp measurement independently killed the time-bound
+    reading (green median 2564 vs cut 2580 against a 10800 s bound). Stamps re-censused by the jq
+    FIELD this moment: **424 files — cut 233 / red 137 / green 46 / hung 8**.
+  · **The subject's own source settles it in place** (`postland-verify.sh:1524-1532`): both stall
+    sites set `cutby` and force rc 124, and no `STALL:` line precedes any killed run, so the two are
+    DISTINGUISHABLE and these are external kills. The same block states why the row must not stand
+    as written — *"a guessed cause is worse than a named unknown when it prescribes a remedy, and
+    this one did: 'the box is busy' reads as 'retry when quieter', which is the one response
+    guaranteed never to clear it, on a box whose steady state is saturation."*
+  · **What survives is already owned, four times:** `ac1afe12ff0e`, `b6f03adab3f9`, `b7252a3bb015`,
+    `f4863408f038`. Memory `refuted-open-row-remints-its-own-analysis` is why closing it is part of
+    the work rather than tidiness.
+
+  **FILED — `da839cd0d89e`, the row's SECOND defect, split out because the fix does not touch it.**
+  A bats run whose run-dir vanishes is a **NON-VERDICT that renders as a partial pass**: the run dies
+  with `Executed 1328 instead of expected 2789` and presents that as **three ordinary `not ok`
+  lines**, so a belt sweep can under-report its own coverage by **52%** and read green-ish. The
+  chain already treats `plan=0` and `listed=0` as non-verdicts — but a HUMAN applies that rule by
+  reading the output; **no instrument does**, and bats emits the two counts itself. A red says *the
+  tree is broken*; a truncated run says *we do not know*. ⚠️ **Not the same defect as
+  `62599dd76a60`** (that discards a COMPLETED TAP), and **do not fold it into `4cec179c6ba5`**,
+  which owns the stamp-side undifferentiated-cut defect and carries an unescaped-JSON hazard.
+
+  **INSTRUMENT DEFECT OF MY OWN, caught by its own control.** My stdin-open arm used
+  `{ sleep N; } | <subject>`, so the *pipeline* waits for the sleeping writer and **`elapsed` is the
+  writer's lifetime, not the subject's** — the POST arm read `wall=260s` while returning `ok=19`.
+  The rc is the clean signal and the wall is contaminated; I report both and lean on rc. A second
+  one: my "count the redirects" check read **4** where the code carries **2**, because my own
+  comment block quotes `</dev/null` twice in prose — a grep whose pattern matches the *documentation
+  of* the thing it counts. Anchored on `"$RUNNER" </dev/null` and got 2.
+
+  **VERIFICATION.** Board writes content-verified — both closes `status=done` with evidence
+  **2889** and **3217** chars, the filing open at **2277** — against **six** negative controls that
+  all had to stay put and did: `617d071cef41` (open), `6a428f48fd2e` (blocked), `5511ea906e2e`
+  (blocked), `b7252a3bb015` (open), `b6f03adab3f9` (open), `ac1afe12ff0e` (open) — the last three
+  deliberately, since I cited them as the surviving owners. `comm` at both ends: departures exactly
+  my 2 closes, arrivals exactly my 1 filing, **zero sibling churn**. Selector on the pinned
+  `MB=db84bccfd` re-run after my last code commit = **1 suite**, the one I ran **19/19**. Per-sha
+  ADD check: my commit adds **0**; control `50b7e7dc9` adds **1**. Converge lag **8** at open and
+  at close. Lints: `bats-assert-liveness.py` rc 0, `pipefail-sigpipe-lint` clean; **shellcheck and
+  alarm-polarity did not apply (no `.sh`, no alarm emitter) and are NOT claimed**.
+
+  **FOR THE LEAD, who asked for method 163 in its own words:** *a working control pair does NOT
+  establish that your fixture reaches the bug's regime; it only establishes it can tell pass from
+  fail in the regime it does reach. Controls prove DISCRIMINATION, never COVERAGE.* Recorded here
+  verbatim at their request. Their operational note is adopted: **address this chain by UUID, not by
+  registry name** — the name tracks cwd and alternates `claude-infrastructure-<n>` /
+  `recycle-11-<n>` across recycles, which bounced one of their sends. Successors should do the same.
+
 - **2026-08-24 — drain recycle #195: a repro MILDER than the harness ACQUITS — my first probe
   returned 0/60 at every size and would have exonerated a row that reds an innocent land 22% of
   the time. filed 1 / closed 2 / 1 flake fixed with an in-session A/B / this doc.** Board at open:
