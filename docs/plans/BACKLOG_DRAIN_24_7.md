@@ -87,6 +87,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #190: the row's cited exhibit was DEAD and its premise ALIVE — the
+  harm's true population is the six `master-*` WAVE UMBRELLAS, and the row's own remedy is
+  under-specified on exactly those six. filed 0 / closed 0 / 2 rows REFRESHED / 1 commit (this
+  doc).** Warm effort: I did NOT pick from `master-convergence-deadlock` — per #189's primary
+  recommendation I screened the ~30 single-row conditions, which no recycle had systematically
+  touched, and found THREE unwarned by any prior brief (`b82a4060b00f`, `8ea3acef7d64`,
+  `3f90cf2c9e0a`). Board at open: **open 302 / blocked 194 / claimed 6 / done 2234**, 496 open+blocked
+  ids; at close 497 — `5fc8ff411a7c` ENTERED as **open** (the silent stalled cloud worker the lead
+  filed as `4043f0515a18`; its claim ceiling evidently tripped — not my doing, and not re-filed).
+  Zero `.page` files (EIGHTY-FIRST consecutive); heredoc diff clean (SEVENTY-SECOND).
+
+  🆕 **METHOD 156 — WHEN A ROW CITES ONE EXHIBIT, CENSUS THE WHOLE POPULATION WITH THE SUBJECT'S OWN
+  KEY DERIVATION BEFORE BELIEVING THE EXHIBIT IS TYPICAL. A REMEDY DESIGNED AGAINST AN N=1 EXHIBIT
+  CAN BE UNDER-SPECIFIED ON EVERY INSTANCE THAT ACTUALLY OCCURS.** #189's method 155 dates a remedy
+  candidate against `firstTs`; 156 is the population analogue — the exhibit can be *true at filing*,
+  *dead by now*, and *unrepresentative all along*, and only a census over the subject's own predicate
+  tells you which. Siblings: `positive-control-the-denominator`, `control-fixture-must-reach-the-bugs-regime`,
+  `scan-revision-predates-the-fix`.
+
+  **ROW `b82a4060b00f` — PREMISE CONFIRMED, EXHIBIT DEAD, REMEDY UNDER-SPECIFIED, FIX OUT OF REACH.
+  REFRESHED IN PLACE, LEFT OPEN.** (firstTs 2026-08-19T13:18:20Z, lastTs 2026-08-23T09:14:13Z.)
+  · **MECHANISM CONFIRMED IN CODE.** The add-side done-guard is `bin/cc-backlog:1407-1432`; the
+    UPDATE ARM is `:1433-1492` and its write condition is `[ .status != "done" ] && <a real diff>`
+    (`:1483-1484`). The done-exclusion is DELIBERATE, argued at `:1456-1467` with two reasons, one
+    explicitly DISCHARGED 2026-08-13 (`cc-value`'s raw-event fold) and one standing (*"a done row's
+    title is the history its evidence refers to"*).
+  · 🚨 **METHOD 155 APPLIED AND IT REFUTES THE OBVIOUS CANDIDATE.** The update arm landed
+    **2026-08-12**, SEVEN DAYS BEFORE the row's `firstTs` — already true at filing, and it does not
+    cure, because it excludes `done` by construction. *Refuted as a remedy, not pending.*
+  · **THE CITED EXHIBIT RESOLVED ITSELF, VIA THE ROW'S OWN ESCAPE HATCH.** `150c50055e1c`'s event
+    history: done `2026-08-11T00:27:30Z` (so the 08-19 measurement was CORRECT), then **reopen
+    `2026-08-21T09:55:56Z`**, update `21:32:14Z`, done `23:01:55Z`. The prescribed
+    `reopen --force` was exercised and the fresh measurement DID land. All **11** rows carrying
+    `memory-index-over-budget` are now `done`, so the exhibit has ZERO live siblings and can no
+    longer demonstrate the harm. **This is FRICTION with a working, exercised workaround — not data
+    loss.** Severity is below what the title implies.
+  · 🚨 **THE TRUE POPULATION — 6 of 197, AND ALL SIX ARE WAVE UMBRELLAS.** Censused with the
+    subject's own `mk_cond_id` (`bin/cc-backlog:910-912`), **positive-controlled**: my reproduction
+    derived `150c50055e1c` for `memory-index-over-budget`, the id the row itself names, and the probe
+    REFUSES (rc 3) on a mismatch rather than reporting. Of 197 (project,condition) pairs the harm
+    conjunction holds in **6**: `master-convergence-deadlock` `3b22efbc2340` (13 open/6 blocked) ·
+    `master-operator-gated` `f3f2f0805807` (0/118) · `master-fleet-footprint` `66ef300dd0b4` (1/4) ·
+    `master-stranded-work` `0328e7cc5742` (0/4) · `master-session-lifecycle` `f5ed2d0dd0cb` (1/1) ·
+    `master-verification-integrity` `3ec6c070f52f` (1/0). **103** pairs are key-done with NO live
+    sibling (no harm), **36** have a live key, **52** have no key row at all.
+  · 🚨 **THIS DOC'S OWN §2 LINE 87 CORROBORATES IT:** *"M1-M6 all reached done 2026-08-10,
+    deliberately mass-reopened 2026-08-12 as standing umbrellas."* They were made standing PRECISELY
+    so they could keep carrying fresh measurements — and all six have since gone `done` again,
+    re-creating the latch the reopen existed to defeat. The harm is not hypothetical; it is the
+    designed-against state returning.
+  · **THE REMEDY IS UNDER-SPECIFIED ON EXACTLY THAT POPULATION.** *"accept the add as an update to
+    the open one"* was designed against a ONE-open-sibling exhibit. On the 6 real instances it names
+    no target for **3**: `master-operator-gated` and `master-stranded-work` have **ZERO** open
+    siblings (only blocked), and `master-convergence-deadlock` has **THIRTEEN** with no tie-break.
+    And these keys are completed WAVE rows closed on real evidence (`3b22efbc2340`'s is a green
+    off-box stamp minted 2026-08-13), so routing an umbrella-level measurement into an arbitrary
+    member would corrupt that member's title — **the very rot the row objects to.**
+  · **COST: 59 DIRECT SUITES.** `gate-select.sh --direct` on a `bin/cc-backlog` commit returns **59**
+    (control: the same call is non-zero, so this is not a broken-selector 0), including
+    `postland-verify.bats` (130) and 24 `cc-backlog*`/`cc-premise*` suites. That is 4.5x
+    `786ac458be00`'s 13, which #189 already called too big for a recycle. **Do NOT start this here.**
+  · ⚠️ **Its `needs` field asserts a live off-box worker — FALSE TODAY.** `cc-cloud show --item
+    b82a4060b00f` reads `state=STALLED, ref frozen at ddfb4d1 for 4d`, and `claim=none`. Another
+    instance of `filed-blocker-is-never-revalidated`: nothing held this row.
+
+  🚨 **THE CONVERGENCE ROOT CAUSE IS NAMED IN THE RUNNER'S OWN LOG, AND IT IS NEITHER HYPOTHESIS ON
+  THE BOARD. ROW `33c286c30624` REFRESHED.** The lead (`claude-infrastructure-102`) asked me to test
+  a single-cause hypothesis: the cut is *a bound that no longer fits its band*, the corpus having
+  grown 422 → 533 suites (+26%). **REFUTED in one read.** The wall bound is **10800s**
+  (`postland-verify.sh:276`, *"was 5400, was 2700"*) and observed `run_s` across the 8 most recent
+  cuts is **2145–2810** — a factor of four clear. Nothing is overrunning.
+  · **WHAT THE LOG ACTUALLY SAYS.** Seven of those eight `CUT` lines in
+    `~/.claude/autonomy/postland/deploy.log` read *"zero not-ok in a non-zero run — the run was
+    **KILLED by signal 15** (one: signal 9) **from OUTSIDE this runner (sender unidentified)** - not
+    the tree"*. The eighth is the C29 ladder (`run_s=7976, retries=12`). **ZERO are stall cuts.**
+  · **SO `33c286c30624`'s "now the dominant cut cause" IS STALE TOO** (its suspect is `cc-bats`
+    gathering 327 suites under load — a STALL). `postland-verify.sh:1530-1532` gives the
+    discriminator in words: both stall sites set `cutby` and force **rc 124**, and **no `STALL:` line
+    precedes any of the 14** killed runs. Stall and external kill are distinguishable in the log, and
+    these are the latter. Refreshed in place, left open.
+  · **THE LOAD VARIANT IS DEAD TOO, BY THE CODE'S OWN NUMBERS** (`:1524-1526`): killed runs average
+    load **13.18** vs green's **9.56**, but the distributions OVERLAP and **the extremes INVERT** —
+    killed at **2.26** and **5.90**, GREEN at **16.09** and **14.60**. Load cannot separate the
+    populations. `:1527-1529` also kills the 15-vs-9 split as evidence of two senders: `timeout -k 10`
+    re-raises the child's signal, so an external TERM manufactures an internal KILL ten seconds later.
+  · **THE SENDER IS A DELIBERATE NAMED UNKNOWN, NOT AN OVERSIGHT.** `:1534-1538`: *"A GUESSED CAUSE
+    IS WORSE THAN A NAMED UNKNOWN when it prescribes a remedy"* — the guess *"the box is busy"* reads
+    as *"retry when quieter"*, which is the one response guaranteed never to clear it on a box whose
+    steady state is saturation. The sender-identifying remedy (a child-process snapshot taken before
+    `wait`, written into the stamp) is **already filed** there. `:1530-1532` also records that the
+    parent survived every kill, excluding anything signalling the process group, the launchd job or
+    the session. **Do not guess a culprit; that file has already refused to.**
+  · **CONSEQUENCE FOR THE WHOLE CLUSTER.** The verifier is cut ~20x/day, so `last-green` stays pinned
+    at `37f886bb9aa2` behind live HEAD and `deploy-live` can never advance. **`master-convergence-
+    deadlock`'s root cause is this external sender** — not the stalled cloud sessions (the lead has
+    already corrected that to the operator) and not the corpus size. `01ab05685857`, `799ec26e3a74`
+    and the permanent `GATE=stale` 🔧 are four labels on this one fact.
+
+  **THE OTHER TWO UNWARNED ROWS, screened and NOT picked** (recorded so #191 need not re-derive):
+  `8ea3acef7d64` — fired sessions on account `next` stall at a settings.json hooks-update approval
+  modal, sibling of the fixed `.mcp.json` modal (#161); a MODAL/UI-gated fire-path row, and the fire
+  path is `handoff-fire.sh` (80 direct suites). `3f90cf2c9e0a` — already a *completed* measurement
+  (it exonerates last-green `27772ede4d8d` for the subshell-cleanup-lint RED and narrows the blame to
+  `c037c1aa1`/`46a86deb7`/`aa1886a5e`, pointing at an ANALYSABILITY change rather than the cited
+  line); it reads as a finding awaiting an owner, not a task.
+
+  **TOOLS.** `dispatch_kick` (`bin/cc-backlog:5813-5830`) backgrounds `cc-dispatch --decide` on every
+  rc-0 `add` — I ran both refreshes under the documented kill switch **`CC_BACKLOG_KICK=off`**
+  (`:5815`) so a title refresh could not put a worker on live work. The inserter and the refresher
+  were Write-tool python FILES; the PostToolUse formatter fired on the refresher (SEVENTEENTH firing,
+  fifteen consecutive recycles) and I re-compiled and re-LISTED **6** guard conditions paired 1:1 with
+  their actions by line number (88→89, 92→94, 99→101, 107→108, 134→135, 136→137) — semantics intact.
+  Both refreshes were re-run as a **free negative control** and both refused via the idempotence
+  guard. Update events content-verified in the store at `13:57:26Z` / `13:57:33Z`.
+
 - **2026-08-24 — drain recycle #189: HOLD on `master-convergence-deadlock` — I screened five rows,
   and every one of them is TRUE and LIVE today. filed 0 / closed 0 / 1 commit (this doc). The
   thirty-two-close run ENDS here, and it ends on measurement, not on effort.** Warm effort: a HOLD —
