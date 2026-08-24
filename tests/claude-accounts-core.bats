@@ -1781,10 +1781,18 @@ print("OK")'
 n3 = row(acct="next3", weekly_pct=81, weekly_reset_h=27.8)
 n2 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_ppd=9.0)
 line = ca.pace_line([n2, n3])
-assert line.startswith("pace to 100%: next3 "), line     # soonest reset first, regardless of input order
-assert "next2 17%/d" in line, line
-assert "recent 9%/d — BEHIND" in line, line              # measured < needed ⇒ flagged
+assert line.startswith("weekly burn (1.00× = lands exactly at the 100% wall): next3 "), line  # soonest reset first, regardless of input order
+assert "next2 burn 0.48× → ~48% by reset, needs 17%/d over 5d" in line, line   # ratio + projection, with the %/day figure retained beside them
+assert "(recent 9%/d)" in line, line                     # a measured series still renders...
+assert "BEHIND" not in line, line                        # ...but WITHOUT the old flag. 47ddbf47c DELETED it as a defect: on 2026-08-16 three
+                                                         # freshly-reset windows each read BEHIND, which is correct and reads as gross
+                                                         # under-utilisation. Restoring it to satisfy this test would re-introduce that.
 assert "recent" not in line.split("·")[0], line          # no series span for next3 ⇒ no claim
+# the signal that REPLACED BEHIND, and it has the OPPOSITE polarity: over-utilisation, not under
+wall = ca.pace_line([row(acct="next4", weekly_pct=60, weekly_reset_h=84.0)])
+assert "next4 burn 1.20× → ~120% by reset ⚠ WALL, needs 11%/d over 3d" in wall, wall
+# below MIN_ELAPSED_FRAC ⇒ ABSTAIN, rather than projecting 1% at 1 h elapsed out to 168%
+assert "next2 too early to project" in ca.pace_line([row(acct="next2", weekly_pct=1, weekly_reset_h=166.0)])
 # no data ⇒ no line (a pace line over nothing would render at every error state)
 assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
 print("OK")'
