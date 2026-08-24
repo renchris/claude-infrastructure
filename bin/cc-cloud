@@ -4,7 +4,10 @@
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
-#   cc-cloud fill-paths --id <id> | --all            fill `paths=` POST-HOC from the VM's own commits
+#   cc-cloud fill-paths --id <id> | --branch <b> | --all
+#                                                    fill `paths=` POST-HOC from the VM's own commits
+#                                                    (--branch selects by declared branch, for a
+#                                                    caller about to DELETE that ref)
 #   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
 #   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
@@ -93,14 +96,47 @@
 # easy to get wrong).
 #
 # ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
-#   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git).
+#   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git),
+#                   or the ref VANISHED after a push and landedness is not assertable (see below).
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref (or the ref is STILL at its fire-time sha), past declared_at+boot_s  ROW
+#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s                    ROW
+#                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
+#
+# ── ORDERING: C3 PRECEDES C1, because a branch ref is DELETED on the way to being landed ─────────
+# A raw branch-presence probe scores a landed-then-pruned session identically to one that never
+# booted: both are `ls-remote` rc=0 with empty stdout. That is not a hypothetical. This repo's own
+# `scripts/branch-prune-landed.sh` deletes remote branches whose every commit is patch-equivalent on
+# the trunk — it deleted 54 of them in one pass on 2026-08-19 — so DELETION IS THE NORMAL LAST STEP
+# OF A SUCCESSFUL SESSION, and reading absence as failure inverts the verdict on exactly the
+# sessions that worked. Measured before the fix: one declaration, content on trunk, flips
+# LANDED -> NOT-STARTED on nothing but `git update-ref -d` against the remote, and emits an
+# actionable row telling the operator to go re-open a session that had already finished.
+# Any rate computed over these states therefore STEPS DOWN at a prune with no change in the fleet:
+# the 2026-08-17 "the cloud return/land arm died" reading (push rate 81% through 08-16, 33% from
+# 08-18) is that artifact (backlog f85fce7c26f5).
+#
+# `landed()` reads the TRUNK TREE and never the branch ref, so it answers just as well for a branch
+# that no longer exists — the check simply had to be asked FIRST.
+#
+# TWO GUARDS, both load-bearing, because the naive hoist inverts the OTHER way:
+#   1. C3 is not asked until the session is known to have pushed. `landed()` tests path PRESENCE,
+#      so a declaration naming a file that ALREADY exists on the trunk would read LANDED from the
+#      instant of the declaration — a never-started session reported as finished, which is strictly
+#      worse than the bug being fixed. Evidence of a push is the gate.
+#   2. Evidence-of-push is POSITIVE and durable, never inferred from absence: the `.seen` sidecar
+#      (written by `poll` only after a probe returned a sha, never deleted) or `paths_src` (written
+#      by `fill-paths` only after a path set was derived from the branch's own commits). With a ref
+#      gone and NEITHER present, there is genuinely no evidence the session ever pushed, and C1
+#      still fires — that is the honest limit, not a hole.
+# A pushed ref that is gone and whose landedness is not assertable is U0, not C1: the claim
+# "never started" has been REFUTED, and "landed" was declined, so no verdict is available.
+# `scripts/branch-prune-landed.sh` fills the path set BEFORE it deletes, so a prune from here on
+# leaves C3 answerable rather than manufacturing this UNKNOWN.
 #
 # ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
 # `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
@@ -230,6 +266,28 @@ id_for_item() { # <backlog-item-id> → echoes the declaration id, rc 0; rc 1 = 
   printf '%s\n' "$best"
 }
 
+# ── ids_for_branch — the BRANCH-SIDE lookup, so a caller about to DELETE a ref can warn its owner ──
+# `scripts/branch-prune-landed.sh` deletes remote branches whose commits are already on the trunk.
+# That deletion destroys the only input `fill-paths` has, so a declaration that had not yet derived
+# its path set can never derive one afterwards and its landedness stops being assertable forever.
+# The prune therefore asks this first and fills what it is about to make underivable.
+#
+# ALL matches, not the newest: unlike an item (one row, re-fired), a branch name genuinely may be
+# shared, and a caller preserving evidence must preserve it for every declaration that would lose it.
+# RETIRED ARE NOT SKIPPED, for id_for_item's reason: `list` keeps them for forensics, and forensics
+# over a deleted branch is precisely what this preserves.
+ids_for_branch() { # <branch> → echoes every declaration id naming it, rc 0; rc 1 = none
+  local branch="$1" f b any=0
+  [ -n "$branch" ] || return 1
+  [ -d "$STATE" ] || return 1
+  for f in "$STATE"/*.decl; do
+    [ -f "$f" ] || continue
+    [ "$(dfield "$f" branch)" = "$branch" ] || continue
+    b="${f##*/}"; printf '%s\n' "${b%.decl}"; any=1
+  done
+  [ "$any" -eq 1 ] || return 1
+}
+
 # The network sensor. Returns rc 0 with the sha on stdout (ref present), rc 0 with EMPTY stdout
 # (remote reachable, ref absent), or rc 2 (SENSOR FAILED — never to be read as absence).
 NET_BOUND=""
@@ -343,10 +401,15 @@ decl_set() { # <file> <key> <value>
 # replay the real post-land artifact cannot fail the way production does
 # (memory: control-must-replay-the-real-artifact).
 cmd_fill_paths() {
-  local id="" all=0 force=0 rc=0 worst=0 n_filled=0 print_only=0 set_to="" have_set=0
+  local id="" all=0 force=0 rc=0 worst=0 n_filled=0 print_only=0 set_to="" have_set=0 for_branch=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) id="${2:-}"; shift 2 ;;
+      # `--branch` selects by the DECLARATION's branch, for a caller (the prune) that holds a ref
+      # name and not an id. A branch nothing declares is rc 0 with nothing done, NOT an error: the
+      # prune deletes many branches no cloud session ever owned, and a non-zero rc there would make
+      # the common case indistinguishable from a real failure to preserve.
+      --branch) for_branch="${2:-}"; shift 2 ;;
       --all) all=1; shift ;;
       --force) force=1; shift ;;
       --print) print_only=1; shift ;;
@@ -374,7 +437,23 @@ cmd_fill_paths() {
     printf '✓ %s — paths=%s (derived before the land, written after it)\n' "$id" "$set_to"
     return 0
   fi
-  [ -n "$id" ] || [ "$all" -eq 1 ] || { echo "cc-cloud fill-paths: --id <id> or --all is required" >&2; return 2; }
+  if [ -n "$for_branch" ]; then
+    [ -z "$id" ] || { echo "cc-cloud fill-paths: --branch and --id are alternative selectors" >&2; return 2; }
+    local _sel _one _worst=0
+    local -a _flags=()
+    [ "$force" -eq 1 ]      && _flags+=(--force)
+    [ "$print_only" -eq 1 ] && _flags+=(--print)
+    _sel="$(ids_for_branch "$for_branch")" || return 0   # nothing declares it — nothing to preserve
+    while IFS= read -r _one; do
+      [ -n "$_one" ] || continue
+      cmd_fill_paths --id "$_one" "${_flags[@]+"${_flags[@]}"}" || {
+        rc=$?; [ "$_worst" -lt "$rc" ] && _worst="$rc"; }
+    done <<EOF
+$_sel
+EOF
+    return "$_worst"
+  fi
+  [ -n "$id" ] || [ "$all" -eq 1 ] || { echo "cc-cloud fill-paths: --id <id>, --branch <b> or --all is required" >&2; return 2; }
 
   local one f repo trunk remote branch cur out ref cand
   while IFS= read -r one; do
@@ -446,7 +525,7 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
-  local sha rc n age url_cmd first_seen sha_age base_sha base_probe
+  local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -472,7 +551,18 @@ classify() { # <id>
     return 0
   fi
 
-  if [ -z "$sha" ]; then
+  # ── PUSH EVIDENCE: the fact that separates "never created" from "no longer there" ───────────────
+  # An absent ref has TWO causes and they are opposite verdicts. `poll` writes the sidecar only
+  # after a probe returned a sha, and never deletes it; `fill-paths` writes `paths_src` only after
+  # deriving a path set from the branch's own commits. Either one is POSITIVE, durable evidence
+  # that the ref existed — evidence that survives the ref itself.
+  seen_sha="$(dfield "$seen" sha)"
+  paths_src="$(dfield "$f" paths_src)"
+  if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
+
+  # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
+  # evidence-of-push alone is the defect below.
+  if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$boot" ]; then
       printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
     else
@@ -482,9 +572,20 @@ classify() { # <id>
   fi
 
   # C3 before C4: a landed session has stopped pushing ON PURPOSE.
+  # C3 also before C1: `landed()` reads the TRUNK TREE and never the branch ref, so it answers just
+  # as well for a branch that has been DELETED. See the ORDERING note in the header.
   landed "$repo" "$trunk" "$paths"; rc=$?
   if [ "$rc" -eq 0 ]; then
     printf 'LANDED\tcontent present on %s\t-\n' "$trunk"; return 0
+  fi
+
+  # The ref is gone but it provably existed. Not NOT-STARTED — that verdict is refuted by the
+  # evidence above — and not LANDED either, because the C3 check right above declined. This is the
+  # honest middle the file's own law demands: a fact we cannot establish yields no verdict.
+  if [ -z "$sha" ]; then
+    printf 'UNKNOWN\tref vanished after push of %.7s\t%s\n' \
+      "${seen_sha:-unknown}" "cc-cloud fill-paths --id $id"
+    return 0
   fi
 
   # BASELINE (C1/C2 for a ref that exists but has not MOVED since the fire). Only when the fire-time

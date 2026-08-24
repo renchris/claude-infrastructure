@@ -267,6 +267,140 @@ setup() {
   [ "$(rows)" -eq 1 ]
 }
 
+# ── C3 OUTRANKS C1 TOO: the ref is DELETED on the way to being landed (backlog f85fce7c26f5) ──────
+# `scripts/branch-prune-landed.sh` deletes remote branches whose commits are already on the trunk —
+# 54 of them in one pass on 2026-08-19. A probe that reads absence as failure therefore inverts the
+# verdict on exactly the sessions that SUCCEEDED, and any rate over those states steps down at a
+# prune with no change in the fleet at all.
+@test "C3 a LANDED session stays LANDED after its branch is pruned — deletion is the last step of success" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo work docs/thing.md)"
+  cloud declare --id pruned --branch feat/a --remote "$r" --repo "$repo" \
+        --trunk origin/main --paths docs/thing.md --boot 900 --stall 3600 --life 999999
+  push_ref "$r" feat/a >/dev/null
+  cloud poll >/dev/null
+
+  export CC_CLOUD_NOW=$((T0 + 100000))
+  [ "$(tstate pruned)" = "LANDED" ]        # control: the same declaration, ref still present
+
+  # The ONLY thing that changes is the remote ref. The content on trunk is untouched.
+  git -C "$r" update-ref -d refs/heads/feat/a
+  [ "$(tstate pruned)" = "LANDED" ]
+  # ...and it emits NO row. The pre-fix behaviour was a NOT-STARTED row whose recover_cmd told the
+  # operator to go re-open a session that had already finished.
+  [ "$(rows)" -eq 0 ]
+}
+
+# The guard on the arm above, and it inverts the OTHER way. `landed()` tests path PRESENCE, so
+# hoisting C3 unconditionally would report a session that never booted as finished the moment it
+# declared a path that already exists on the trunk. Evidence-of-push is what separates them.
+@test "C1 survives the hoist: no ref and NO evidence of one is still NOT-STARTED, even when the declared path is already on trunk" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo work docs/thing.md)"
+  # docs/thing.md is ALREADY on this trunk, and this session never pushes anything.
+  cloud declare --id neverran --branch feat/b --remote "$r" --repo "$repo" \
+        --trunk origin/main --paths docs/thing.md --boot 900 --stall 3600 --life 999999
+
+  [ "$(tstate neverran)" = "BOOTING" ]     # control: inside the budget, silent
+  export CC_CLOUD_NOW=$((T0 + 100000))
+  [ "$(tstate neverran)" = "NOT-STARTED" ]
+  [ "$(rows)" -eq 1 ]
+  [ "$(field subject)" = "neverran" ]
+}
+
+# The honest middle. Pushed, ref now gone, landedness NOT assertable: "never started" is refuted by
+# the sidecar and "landed" was declined by C3, so no verdict is available and none is invented.
+@test "U0 a ref that VANISHED after a push is UNKNOWN, never NOT-STARTED" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo work docs/thing.md)"
+  # No --paths: landedness is not assertable for this declaration by construction.
+  cloud declare --id gone --branch feat/c --remote "$r" --repo "$repo" \
+        --trunk origin/main --boot 900 --stall 999999 --life 999999
+  # CONTROL, same fixture, never pushed and never polled — no sidecar, so no evidence of a push.
+  cloud declare --id never --branch feat/d --remote "$r" --repo "$repo" \
+        --trunk origin/main --boot 900 --stall 999999 --life 999999
+  push_ref "$r" feat/c >/dev/null
+  cloud poll >/dev/null                     # writes gone's sidecar; `never` has no ref, so none
+
+  export CC_CLOUD_NOW=$((T0 + 100000))
+  [ "$(tstate gone)" = "ALIVE" ]            # control: before the deletion
+  git -C "$r" update-ref -d refs/heads/feat/c
+
+  [ "$(tstate gone)" = "UNKNOWN" ]
+  # UNKNOWN emits no row — a prune must not manufacture an alarm — but it does fail --check, so the
+  # board never passes vacuously over a session whose fate it cannot state.
+  [ "$("$CLOUD" --json | grep -c '"subject":"gone"' || true)" -eq 0 ]
+  run "$CLOUD" --check
+  [ "$status" -ne 0 ]
+
+  # POSITIVE CONTROL: identically aged, identically ref-less, but with NO evidence it ever pushed.
+  # That one is still convicted — the honest limit of this arm, not a hole in it.
+  [ "$(tstate never)" = "NOT-STARTED" ]
+}
+
+# ── the generator: the prune destroys the input `fill-paths` needs, so it fills BEFORE it deletes ─
+@test "fill-paths --branch selects by declared branch, and is rc 0 on a branch nothing declares" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo work docs/keep.md)"
+  # A real branch in the local repo, forked off the trunk, so branch_paths can bound its range.
+  git -C "$repo" checkout -q -b feat/a
+  mkdir -p "$repo/docs"; printf 'vm' > "$repo/docs/vm-wrote-this.md"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m vm
+
+  cloud declare --id one --branch feat/a --remote "$r" --repo "$repo" --trunk origin/main
+  cloud declare --id two --branch feat/a --remote "$r" --repo "$repo" --trunk origin/main
+
+  # BOTH declarations naming the branch are filled — unlike an item, a branch may genuinely be
+  # shared, and a caller preserving evidence must preserve it for every declaration that loses it.
+  run "$CLOUD" fill-paths --branch feat/a
+  [ "$status" -eq 0 ]
+  [ "$(cloud list --json | grep -c '"paths":"docs/vm-wrote-this.md"')" -eq 2 ]
+
+  # A branch nothing declares is rc 0 and does nothing. The prune deletes many such branches, and a
+  # non-zero rc there would be indistinguishable from a real failure to preserve.
+  run "$CLOUD" fill-paths --branch feat/nobody-declared-this
+  [ "$status" -eq 0 ]
+
+  # --branch and --id are alternative selectors, not composable.
+  run "$CLOUD" fill-paths --branch feat/a --id one
+  [ "$status" -eq 2 ]
+}
+
+# The two halves joined: a path set preserved before the deletion is what keeps C3 answerable, so a
+# prune from here on yields LANDED rather than the UNKNOWN the arm above has to emit.
+@test "a path set filled BEFORE the prune keeps the session LANDED after it" {
+  have_subject
+  r="$(bare rem)"
+  repo="$(trunk_repo work docs/thing.md)"
+  # The branch's own commit touches a file that IS on the trunk — i.e. it landed.
+  git -C "$repo" checkout -q -b feat/a
+  printf 'landed-by-the-vm' > "$repo/docs/thing.md"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m vm
+  git -C "$repo" checkout -q - >/dev/null 2>&1 || true
+
+  # Declared with NO paths — exactly what `cc-offload up` writes at fire time.
+  cloud declare --id off --branch feat/a --remote "$r" --repo "$repo" \
+        --trunk origin/main --boot 900 --stall 999999 --life 999999
+  push_ref "$r" feat/a >/dev/null
+  cloud poll >/dev/null
+  export CC_CLOUD_NOW=$((T0 + 100000))
+
+  # CONTROL: without the fill, deleting the ref leaves landedness unassertable.
+  git -C "$r" update-ref -d refs/heads/feat/a
+  [ "$(tstate off)" = "UNKNOWN" ]
+
+  # WITH the fill (which the prune now performs while the ref is still reachable), C3 answers.
+  cloud fill-paths --branch feat/a >/dev/null
+  [ "$(tstate off)" = "LANDED" ]
+  [ "$(rows)" -eq 0 ]
+}
+
 # ── C6 ABANDONED ─────────────────────────────────────────────────────────────────────────────────
 @test "C6 ABANDONED: pushed, never landed, past its lifetime" {
   have_subject
