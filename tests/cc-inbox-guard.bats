@@ -266,14 +266,60 @@ forks() { local f="$BATS_TEST_TMPDIR/forks"; [ -f "$f" ] && wc -c < "$f" | tr -d
   pushed
 }
 
-@test "P2: a pre-1970 ts keeps the OLD (date-rejects → treat as now) verdict, not new arithmetic" {
-  # BSD date REJECTS 1900-01-01, so the old path scored it age=0 → no alarm. Arithmetic would make it
-  # ~126 years overdue and alarm. The fast path must decline ep<0 and let `date` decide.
-  printf '1900-01-01T00:00:00+0000 [peer] date rejects this\n' > "$CC_MAILBOX_DIR/$U.md"
+# REWRITTEN 2026-08-24 (backlog 4218bdea6601). This test used to assert ONE HALF of the invariant —
+# `not_pushed` plus a `within deadline` line — on a premise written into its own name: *"BSD date
+# REJECTS 1900-01-01, so the old path scored it age=0"*. That premise is a fact about the RUNNER's
+# `date`, not about this guard, and it is false wherever `date` accepts a pre-1970 stamp: GNU
+# `date -d '1900-01-01T00:00:00+0000' +%s` returns -2208988800, so iso_epoch yields a negative epoch,
+# age comes out ~126 years, and the line escalates. That escalation is the CORRECT deferral — it is
+# exactly what the ORIGINAL date-backed path produces on such a box — and the old assertions scored it
+# as a defect. The suite went red at 5077964c34cf without a line of bin/cc-inbox-guard changing.
+#
+# What the guard actually promises here is DEFERRAL, not silence: `scan_window`'s awk declines ep<0
+# (bin/cc-inbox-guard:350-353) so the original `date`-backed path decides, whatever it decides. So the
+# two things asserted below are the two halves of that promise, and both hold on either kind of date:
+#   MECHANISM — `date` is consulted with THIS timestamp. Mutation M5 (let the fast path do pre-1970
+#               arithmetic) forks no date for the line at all, so the argv log stays empty and this
+#               reds — which is the RED-proof the old shape only had by accident of the runner.
+#               Unambiguous because iso_epoch is the only caller in the sweep that hands `date` an
+#               arbitrary ISO string; now()/utc()/stamp() pass format strings only.
+#   AGREEMENT — the sweep's verdict is the one THAT epoch implies, computed here from `date` rather
+#               than restated as a constant. Rejects ⇒ ep=0 ⇒ substituted with now ⇒ within deadline;
+#               accepts ⇒ ~126y overdue ⇒ escalates. Either way the guard may not disagree with the
+#               path it just deferred to.
+@test "P2: a pre-1970 ts is DECLINED by the fast path and decided by date, not by new arithmetic" {
+  local TS='1900-01-01T00:00:00+0000'
+  printf '%s [peer] the fast path must not score this itself\n' "$TS" > "$CC_MAILBOX_DIR/$U.md"
   export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+
+  # a `date` stub that RECORDS its argv and delegates to the real one — same shape as fork_stubs()
+  local d="$BATS_TEST_TMPDIR/datestub" rd log old_path
+  log="$BATS_TEST_TMPDIR/date.args"
+  mkdir -p "$d"; rd="$(command -v date)"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexec %s "$@"\n' "$log" "$rd" > "$d/date"
+  chmod +x "$d/date"
+
+  old_path="$PATH"
+  PATH="$d:$PATH"
   run "$G" sweep
-  not_pushed
-  printf '%s' "$output" | grep -q 'within deadline'
+  PATH="$old_path"
+  [ "$status" -eq 0 ]
+
+  # MECHANISM. `|| true` normalizes grep's rc-1-on-zero-matches so the count is data and the `[ ]` is
+  # the verdict (same reason as the selftest floor above); a zero count is precisely the M5 failure.
+  [ "$(grep -c -- "$TS" "$log" 2>/dev/null || true)" -ge 1 ]
+
+  # AGREEMENT. iso_epoch's own two-step resolve (BSD `-j -f`, then GNU `-d`, then 0), run here against
+  # the REAL date so this arm reads the box rather than trusting the subject's copy of the answer.
+  local ep
+  ep="$(command date -j -f '%Y-%m-%dT%H:%M:%S%z' "$TS" +%s 2>/dev/null \
+        || command date -d "$TS" +%s 2>/dev/null || printf 0)"
+  if [ "${ep:-0}" = 0 ]; then
+    not_pushed
+    printf '%s' "$output" | grep -q 'within deadline'
+  else
+    pushed
+  fi
 }
 
 @test "P4: mail that lands DURING a sweep still gets its own alarm (not pre-damped)" {
