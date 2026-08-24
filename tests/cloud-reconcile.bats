@@ -848,3 +848,84 @@ dead_pid() {
   [[ "$output" == *"NOT filled"* ]] || false   # … but the non-verdict is NAMED
   grep -q '^paths=$' "$CC_CLOUD_STATE/nofill.decl"
 }
+
+# ══ THE BOOT MARKER — a branch that must NOT be landed (backlog 0c8b39b67665) ═══════════════════
+# The fire payload now requires a cloud VM's FIRST act to be an empty commit pushed to its branch,
+# which is what makes `no ref` mean "never booted" (CLOUD_OBSERVABILITY.md §4.1). The consequence
+# arrives HERE: a `claude/*` branch now exists for a session's whole working life instead of only at
+# the end of it, and this reconciler is the only participant that has fetched the range and can
+# therefore tell a heartbeat from a result.
+#
+# Landing one would do two bad things at once — put a no-op commit on trunk, and hand
+# scripts/cloud-return.sh an exit 0, which it reads as "the work is home" and answers with a
+# done-mark, a custody discharge and a wake. So it gets its OWN exit code, and the two controls
+# below are what keep it a guard rather than a blanket refusal of the venue.
+
+# A branch carrying exactly the fire's boot marker and nothing else.
+push_boot_branch() {  # $1=branch
+  local b="$1" w tok
+  tok="$(bash -c '. "'"$ROOT"'/scripts/lib/cloud-brief.sh"; cc_cloud_boot_commit_message')"
+  w="$D/w-$(printf '%s' "$b" | tr / -)"
+  git -C "$REPO" worktree add -q -b "$b" "$w" main
+  git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q --allow-empty -m "$tok"
+  git -C "$w" push -q origin "HEAD:refs/heads/$b"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D "$b"
+  rm -rf "$w"
+  true
+}
+
+@test "a branch carrying ONLY the boot marker is not landed — its own exit, never 0 and never 70" {
+  push_boot_branch claude/booting
+  decl booting claude/booting
+  CONFIRM=1 run cr --land claude/booting
+  # 66, specifically. 0 is what cloud-return reads as "finished" and would answer with a wake and a
+  # done-mark over a session that has not started working; 70 is a failure, and this is a healthy
+  # session mid-flight, so a sweep reporting it would alarm on every in-flight fire.
+  [ "$status" -eq 66 ]
+  [[ "$output" == *"boot marker"* ]] || false
+  # The lander was never invoked, so nothing reached trunk.
+  [ ! -s "$LAND_STUB_LOG" ] || { echo "the lander ran over a boot-only range"; false; }
+}
+
+@test "CONTROL — the same branch, one real commit later, lands normally" {
+  # The transition the whole design turns on. Without this the guard could be a blanket refusal of
+  # every cloud branch and case 1 would still pass, converting "returns empty" into "never returns".
+  push_boot_branch claude/working
+  decl working claude/working
+  CONFIRM=1 run cr --land claude/working
+  [ "$status" -eq 66 ]
+
+  local w
+  w="$D/w-advance"
+  git -C "$REPO" fetch -q origin
+  git -C "$REPO" worktree add -q -b claude/working-adv "$w" origin/claude/working
+  echo real > "$w/real.txt"
+  git -C "$w" add -A
+  git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q -m "feat: the actual work"
+  git -C "$w" push -q origin "HEAD:refs/heads/claude/working"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D claude/working-adv
+
+  CONFIRM=1 run cr --land claude/working
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/working$'
+}
+
+@test "--all SKIPS a boot-only branch and does not count it as FAILED" {
+  # A sweep is a fleet-wide report. Counting a healthy in-flight session as a failure would make
+  # `cloud-reconcile: N ok, M failed` alarm on every managed fire — an alarm that always fires
+  # carries no bits — and would exit 70 at a caller that has nothing to fix.
+  push_boot_branch claude/sweep-boot
+  decl sweep-boot claude/sweep-boot
+  push_branch claude/sweep-work 1
+  decl sweep-work claude/sweep-work
+  CONFIRM=1 run cr --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped"* ]] || false
+  [[ "$output" == *"0 failed"* ]] || false
+  # The real branch in the same sweep still landed — one skipped branch must not hold the queue.
+  landed_branches | /usr/bin/grep -q '^claude/sweep-work$'
+  landed_branches | /usr/bin/grep -q '^claude/sweep-boot$' && { echo "the boot-only branch was landed"; false; }
+  true
+}

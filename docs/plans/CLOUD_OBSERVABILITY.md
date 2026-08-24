@@ -150,6 +150,85 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a ✅ IMPLEMENTED 2026-08-24 — and it had been prose only until then (backlog `0c8b39b67665`)
+
+🚨 **Everything §4 asserts rested on a contract no fire had ever delivered.** Measured on trunk
+before the fix: `grep -rn 'first act\|empty commit' bin/ scripts/ commands/ skills/ templates/`
+found the instruction in **no payload and no composer**. The two legs said:
+
+| leg | what it actually told the VM |
+| --- | --- |
+| `handoff-fire.sh --cloud` | a *"HOW TO RETURN YOUR WORK … read this **before you finish**"* block — the push as the LAST act |
+| `cc-offload up --via api` | **nothing.** `cc-notify --cloud <id> "$(cat "$pf")"` ships the operator's brief verbatim, so the session was never told its branch name — even though the create authorises exactly one in `outcomes.git_info.branches` |
+
+So `no ref` could not discriminate never-booted from nothing-to-commit-yet, which is the ONE
+distinction the state function is organised around. A session working perfectly for twenty minutes
+produced evidence byte-identical to a session that never existed, and C1 `NOT-STARTED` was a
+confident verdict about nothing. **§11.4 is that ambiguity recorded live** — its own words, *"what
+is NOT established: whether the VM executed at all"*, is what the contract exists to establish and
+what the payload never asked for.
+
+The text now lives in **`scripts/lib/cloud-brief.sh`**, sourced by both legs — fail-closed on both,
+because a create with no contract spends an account's rate limit on a session that may run
+perfectly and is unobservable for the whole of it. It prescribes, as the first three commands:
+
+```
+git switch -c <branch>
+git commit --allow-empty -m "chore(cloud): boot marker [cc-cloud-boot]"
+git push -u origin HEAD
+```
+
+**One library rather than two texts, because this contract had already drifted before it was
+implemented:** the CLI leg's own header records that `switch -c` existed only in a prose line of
+*this document* for as long as the payload got the push wrong (§7.4, B1).
+
+#### 4.1b The contract's cost, and where it is paid
+
+⚠️ **Making the first push mandatory moves the hazard from "cannot see it" to "sees it too early",
+and the second is worse.** `scripts/cloud-return.sh` calls a session finished on a conjunction
+whose only load-bearing term is *the pushed sha has been quiet for 180 s* — because
+`worker_status: idle` is measured to be the between-turns state as much as the finished state
+(§13.6). A boot push at T+30 s followed by three minutes of ordinary thinking satisfies that
+conjunction **exactly**. Un-guarded, the contract would have converted *never returns* into
+*returns immediately, empty, and cuts a live session off*: item marked done, custody discharged,
+originator woken. A false completion is strictly worse than a stranding.
+
+The discriminator is `cc_cloud_boot_only`, and there is **one arbiter** — `cloud-reconcile.sh`,
+which has already fetched the branch and is therefore the only participant that can read the range
+at all. It reports in its **exit code (66)**, not in prose a caller would have to grep:
+
+- `--land` on a boot-only branch → **66**, before `derive_paths` and before the lander. Not 0,
+  which `cloud-return.sh` reads as *the work is home*; not 70, which is a failure, over a healthy
+  session mid-flight.
+- `--all` → **skipped, not counted as failed.** A sweep that alarmed on every in-flight fire would
+  carry as many bits as one that never fired.
+- `cloud-return.sh` maps 66 to **waiting**: no artifact, no wake, no `.returned` latch, no
+  done-mark. It is the conjunction's **fourth term**.
+
+The verdict is itself conjunctive, and the two halves are pinned by separate fixtures: a range is
+boot-only when it **changes no file** (the fact that decides whether landing it would put a no-op
+commit on trunk) **and** every commit carries the token (so the skip is attributable to this
+contract and can never swallow a range another producer wrote). An **empty** range is not boot-only
+— nothing at all is a different state with its own honest report — and an **unreadable** one
+abstains (rc 2), never 0, for the same reason `ls-remote` rc≠0 is `UNKNOWN` in §4.2.
+
+The token is in the **subject**, not a trailer: `cloud-reconcile` re-authors every cloud commit and,
+on a commit-msg refusal, drops the inherited trailer block wholesale (§13.5). A trailer is precisely
+the part of a message this stack reserves the right to delete.
+
+Coverage: `tests/cloud-brief.bats` (8, per-site mutation — dropping either half of the conjunction
+convicts exactly one case), `tests/handoff-fire-cloud.bats` 20-21, `tests/cc-offload.bats` (two
+boot-contract cases), `tests/cloud-reconcile.bats` 32-34 (with the transition control: the same
+branch, one real commit later, lands normally), `tests/cloud-return.bats` (66-is-waiting, with the
+discrimination control that an ordinary refusal still files and wakes). All four caller-side cases
+are RED on the pre-change tree, replayed 2026-08-24.
+
+⚠️ **Found on the way, and fixed because it made the API leg untestable anywhere but the operator's
+Mac:** `bin/cc-offload:404` read `${ITERM_SESSION_ID##*:}` unguarded under `set -u`, so `up` aborted
+with `unbound variable` on every box where iTerm2 had not exported the id — launchd, cron, a hook, a
+fired session, and 11 of this suite's own cases. The very next branch already handled the empty
+value and said so; the abort came from asking for the variable at all.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:

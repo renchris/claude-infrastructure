@@ -39,6 +39,13 @@
 #      cc-cloud's own `.seen` sidecar. A session that is merely between turns pushes again; one
 #      that is finished does not. This is the axis that is INDEPENDENT of the idle flag, which is
 #      the whole reason it is here (memory: proxy-must-be-independent-of-what-it-supplements).
+#   4. the branch carries WORK, not just the fire's boot marker — added 2026-08-24 with the boot
+#      contract (backlog 0c8b39b67665). Terms 1-3 were written when a branch appeared only once a
+#      session had something to say; now the payload requires an empty commit pushed as the FIRST
+#      act, so term 1 is satisfied within seconds of boot and terms 2 and 3 are satisfied by three
+#      minutes of ordinary thinking. Without this term the contract that fixed "never observable"
+#      would have bought it with "returned empty, 180 s in, every time". Judged by the reconciler
+#      (exit 66), which is the only participant that has fetched the range.
 #
 # ── THE SWEEP'S POPULATION IS WHAT THE SWEEP ARMED ──────────────────────────────────────────────
 # `--sweep` acts ONLY on declarations carrying the W2 management fields (`notify_back` or
@@ -334,6 +341,24 @@ handle() { # <row-json> → prints outcome lines
     # and pointed W3 at a routing job that does not exist. Nothing was wrong with the branch.
     # 124/137/143 are the three ways a bound reaches a process (timeout's own code, SIGKILL, SIGTERM)
     # and ship-land's killed token corroborates from the other side; either is enough to abstain.
+    # 🚨 66 IS NOT A REFUSAL EITHER — it is "nothing to land YET" (backlog 0c8b39b67665).
+    # The fire payload now requires the VM's first act to be an empty boot commit pushed to its
+    # branch, which is what makes `no ref` mean "never booted" instead of meaning nothing at all
+    # (CLOUD_OBSERVABILITY.md §4.1). The cost of that contract lands HERE: a branch now exists from
+    # the session's first seconds, so the conjunction above can be satisfied while the session has
+    # produced no work — `worker_status: idle` is the between-turns state (§13.6), and three
+    # minutes of ordinary thinking is three minutes of quiet. Without this arm every managed cloud
+    # fire would be "returned" empty about 180 s after boot: the item marked done, custody
+    # discharged, the originator woken, and a live session cut off. A false completion is strictly
+    # worse than the stranding this file exists to end.
+    # The reconciler is the ONE arbiter of it — it has already fetched the branch, so it is the only
+    # participant that can read the range at all — and it says so in its own exit code rather than
+    # in prose this would have to grep.
+    if [ "$land_rc" -eq 66 ]; then
+      say "· $id — pushed its boot marker and nothing since; not finished. Waiting (the branch is the heartbeat, not the result)."
+      ledger "$id" waiting "$(jq -cn --arg b "$branch" '{branch:$b, why:"boot marker only — no work pushed yet"}')"
+      return 0
+    fi
     case "$land_rc" in
       124|137|143) land_rc=-1 ;;
     esac

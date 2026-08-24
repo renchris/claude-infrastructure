@@ -7730,6 +7730,26 @@ if [ "$CLOUD" = 1 ]; then
   . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
     emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
 
+  # THE BOOT CONTRACT lives beside the create, and is resolved from the SAME directory the create
+  # library came from rather than by a second search — the two are one implementation split across
+  # two files, and a fire that found one copy and a different copy of the other would compose a
+  # payload naming a branch nothing else in this run agrees about.
+  #
+  # FAIL-CLOSED for the same reason the create library is: without it the payload carries no return
+  # instruction at all, so the create would spend an account's rate limit on a session that cannot
+  # push its work anywhere this box can see. CLOUD_OBSERVABILITY.md §4.1 — absence is only
+  # informative because the contract makes it so, and the contract only exists if it is delivered.
+  _CC_BRIEF="${CC_FIRE_CLOUD_BRIEF_LIB:-$(dirname "$_CC_CC")/cloud-brief.sh}"
+  if [ ! -f "$_CC_BRIEF" ]; then
+    echo "!! cloud fire: REFUSING — scripts/lib/cloud-brief.sh is unreachable, so the payload would carry no boot contract." >&2
+    echo "   Without it the VM is never told which branch to push or when, and 'no ref' stops meaning anything." >&2
+    emit_fire_refusal cloud-brief-absent "scripts/lib/cloud-brief.sh unreachable — no boot contract to deliver"
+    exit 10
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_BRIEF" || { echo "!! cloud fire: cloud-brief.sh failed to source" >&2
+    emit_fire_refusal cloud-brief-absent "scripts/lib/cloud-brief.sh failed to source"; exit 10; }
+
   # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
   # a placeholder string, which cannot be routed — and an unrouted create would silently run as
   # whichever account this session happens to be, then be declared under a name that is not its
@@ -7781,20 +7801,17 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 …AND THE PUSH IS THE FIRST ACT, NOT THE LAST (backlog 0c8b39b67665). The block this used to
+  # inline said "read this before you finish" and put the push at the end of the session's life,
+  # which is not the contract CLOUD_OBSERVABILITY.md §4.1 says the state function rests on. §4.1
+  # requires the FIRST act to be the push — "an empty commit is enough" — precisely so that no-ref
+  # stops being ambiguous: without it, a session working perfectly for twenty minutes and a session
+  # that never booted produce byte-identical evidence, and C1 NOT-STARTED is a verdict about
+  # nothing. The text now lives in scripts/lib/cloud-brief.sh, which the API leg shares, so the
+  # contract cannot be true on one leg and absent on the other — which is exactly how it stood.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
-"'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
-You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
-
-    git switch -c '"$CLOUD_BRANCH"'
-    git push -u origin HEAD
-
-That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+$(cc_cloud_return_block "$CLOUD_BRANCH")"
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

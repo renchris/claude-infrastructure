@@ -153,6 +153,37 @@ seen_at() { # <epoch>
   grep -q 'reconcile confirm=1 --land claude/vm' "$CALLS" || false
 }
 
+@test "A BOOT MARKER IS NOT A RESULT — the reconciler's exit 66 is WAITING, not a refusal" {
+  # THE COST OF THE BOOT CONTRACT, paid here (backlog 0c8b39b67665). The fire payload now requires
+  # the VM's FIRST act to be an empty commit pushed to its branch — that is what makes `no ref`
+  # mean "never booted" (CLOUD_OBSERVABILITY.md §4.1). But terms 1-3 of the conjunction above were
+  # all written for a world where a branch appeared only once a session had something to say. Now
+  # term 1 is satisfied within seconds of boot, `idle` is the between-turns state, and three
+  # minutes of ordinary thinking is three minutes of quiet — so WITHOUT this arm every managed
+  # cloud fire would be "returned" empty about 180 s after booting: item marked done, custody
+  # discharged, originator woken, live session cut off. A false completion is strictly worse than
+  # the stranding the contract exists to end, so the guard is pinned here rather than trusted.
+  declare_managed
+  seen_at 1000
+  LAND_RC=66 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"boot marker"* ]] || false
+  grep -q 'reconcile confirm=1 --land claude/vm' "$CALLS" || false   # it DID ask — 66 is an answer
+  # None of the five things a completion does may have happened.
+  [ ! -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  [ ! -f "$CC_CLOUD_STATE/session_test.returned" ]
+  ! grep -q 'cc-notify' "$CALLS" || false
+  ! grep -q 'cc-custody return' "$CALLS" || false
+  ! grep -q 'cc-backlog done' "$CALLS" || false
+
+  # DISCRIMINATION CONTROL, same fixture, one number moved: an ordinary refusal must still file its
+  # artifact and wake the originator. Without this, "swallow every non-zero exit" would pass.
+  : >"$CALLS"
+  LAND_RC=6 CC_RETURN_NOW=999999 run "$SUT" --sweep
+  [ -f "$CC_CLOUD_STATE/session_test.land-refused" ]
+  grep -q 'cc-notify PANE-UUID HANDOFF-PING cloud/session_test: LAND REFUSED' "$CALLS" || false
+}
+
 @test "a control plane that cannot be read ABSTAINS — it never reads as 'finished'" {
   declare_managed
   seen_at 1000

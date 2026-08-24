@@ -71,6 +71,10 @@
 # authorship of the commits that go on OUR trunk, and the VM's originals stay where they were.
 #
 # EXITS. 0 ok · 64 usage · 65 refusal (no CONFIRM · branch absent from the remote · retired) ·
+#   66 --land only: NOTHING TO LAND YET — the branch carries only the fire's boot marker, so the VM
+#   has booted and pushed but has produced no work. Its own code rather than 0, because 0 is what
+#   scripts/cloud-return.sh reads as "the work is home" and answers with a done-mark and a wake;
+#   and rather than 70, because that is a failure and this is a healthy session mid-flight.
 #   69 SENSOR FAILED (remote unreachable — never read as absence) · 70 at least one branch failed
 #   to land — which now includes "the range needed re-authoring and could not be re-authored", a
 #   per-branch failure like any other rather than a new exit code its callers would not read.
@@ -110,6 +114,37 @@ MODE="" TARGET="" DRY_RUN=0 INCLUDE_UNDECLARED=0
 SELF="$0"; while [ -L "$SELF" ]; do _t="$(readlink "$SELF")"; case "$_t" in /*) SELF="$_t" ;; *) SELF="$(dirname "$SELF")/$_t" ;; esac; done
 usage() { sed -n '2,/^set -euo pipefail/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 die() { echo "!! cloud-reconcile: $2" >&2; exit "$1"; }
+
+# ── THE BOOT MARKER (backlog 0c8b39b67665) ────────────────────────────────────────────────────
+# The fire payload now requires the VM's FIRST act to be an empty commit pushed to its branch
+# (CLOUD_OBSERVABILITY.md §4.1's contract, finally delivered), so from now on a branch EXISTS for
+# the whole of a session's working life and not merely at the end of it. That is the point — it is
+# what makes `no ref` mean "never booted" — and it hands this script a range it must not land: a
+# commit that changes nothing, which would go on trunk as a no-op and which `fill_paths` can only
+# report as an empty path set.
+#
+# FAIL-OPEN, deliberately, and it is the opposite call from the fire path's. There, a missing
+# library means a create spends an account's rate limit on an unobservable session, so it refuses.
+# Here it would mean every landed cloud result strands behind a missing file. The asymmetry is the
+# harm: one stray empty commit on trunk against every cloud round trip blocked. Same reasoning as
+# the fire's preflight, whose own header records "cc-cloud unreachable is a SKIP, not a refusal".
+BRIEF_LIB="${CLOUD_RECONCILE_BRIEF_LIB:-$(dirname "$SELF")/lib/cloud-brief.sh}"
+BRIEF_OK=0
+# shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$BRIEF_LIB" ] && . "$BRIEF_LIB"; then BRIEF_OK=1; fi
+
+# 0 = this branch is the boot marker and nothing else. Never 0 when the check could not run.
+boot_only() {  # <repo> <trunk-ref> <branch>
+  [ "$BRIEF_OK" = 1 ] || return 1
+  # cc_cloud_boot_only reads $GIT_BIN, which this script already exports as its own git seam — the
+  # suite swaps it, and a detector on a different binary from the fetch that fed it would be
+  # judging a tree nobody else looked at.
+  local r=0
+  cc_cloud_boot_only "$1" "$2" "refs/heads/$3" || r=$?
+  return "$r"
+}
+
+BOOT_ONLY_SAY='carries only the boot marker — the VM has pushed no work yet. Nothing to land, and landing it would put an empty commit on trunk. This is a WAITING state, not a failure: the session is alive and observable, which is exactly what the marker is for.'
 
 # ── args ─────────────────────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -686,6 +721,16 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  # AFTER the fetch, because the range is only readable once the branch is a local head — and
+  # BEFORE derive_paths/reauthor, because neither has anything to say about a range that must not
+  # be landed. Its own exit code: `nothing to land` here is NOT the LANDED case's exit 0, which
+  # scripts/cloud-return.sh reads as "the work is home" and answers by marking the item done and
+  # waking the originator. That would be a false completion over a session that has not started
+  # working yet — strictly worse than the stranding this whole stack is organised against.
+  if boot_only "$C_REPO" "$C_TRUNK" "$TARGET"; then
+    echo "· $TARGET — $BOOT_ONLY_SAY"
+    exit 66
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -724,6 +769,13 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  # A boot-only branch is SKIPPED, not counted as FAILED: it is a session doing its job, and a
+  # sweep that reported it as a failure would make `cloud-reconcile: N ok, M failed` alarm on every
+  # healthy in-flight fire — an alarm that always fires carries no bits.
+  if boot_only "$C_REPO" "$C_TRUNK" "$b"; then
+    echo "· $b — skipped: $BOOT_ONLY_SAY"
+    continue
+  fi
   derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then

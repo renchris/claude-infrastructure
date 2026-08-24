@@ -514,6 +514,65 @@ EOF
   [[ "$output" == *"must be"* ]] || false
 }
 
+# ══ up --via api — THE BOOT CONTRACT (backlog 0c8b39b67665) ═════════════════════════════════════
+# This leg delivered the operator's task file VERBATIM. The create authorises exactly one branch in
+# `outcomes.git_info.branches`, and the session was never told its name — so it could not have
+# obeyed CLOUD_OBSERVABILITY.md §4.1's contract even if it had wanted to, and `no ref` could not
+# discriminate a session that never booted from one that has simply not committed yet. That is what
+# §11.4's terminal `NOT-STARTED` is, live: a confident-looking verdict about nothing.
+#
+# The assertion is on the DELIVERED BRIEF, not on the source. cc-notify's stub records its whole
+# argv, so the message the VM would actually receive is what these cases read.
+
+@test "up --via api delivers the BOOT CONTRACT with the brief — branch named, first act stated" {
+  echo "do the thing" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  # The operator's own brief still goes through untouched — the contract is appended, never a
+  # replacement, and a composer that ate the brief would be the more expensive failure.
+  grep -q 'do the thing' "$CALLS" || false
+  # The branch the create authorised is the branch the VM is told to push. Same string, from the
+  # same variable: a contract naming a different branch is worse than none, because it fires.
+  local br
+  br="$(sed -n 's/.*cc-cloud declare .*--branch \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+  [ -n "$br" ] || { echo "no branch was declared, so there is nothing for the brief to name"; false; }
+  grep -qF "git switch -c $br" "$CALLS" || { echo "the brief does not name the declared branch $br"; false; }
+  grep -qF -- '--allow-empty' "$CALLS" || { echo "the brief prescribes no boot commit"; false; }
+  grep -qF "$(bash -c '. "'"${BATS_TEST_DIRNAME}"'/../scripts/lib/cloud-brief.sh"; cc_cloud_boot_token')" "$CALLS" \
+    || { echo "the boot commit carries no token, so the local side cannot recognise a heartbeat"; false; }
+}
+
+@test "up --via api REFUSES when the boot-contract library is missing — before the create" {
+  # Fail-closed and BEFORE the create, the same ordering the acceptance pair already establishes on
+  # this leg (§13.4: a half-right session must cost a create and nothing else). A brief with no
+  # contract produces a session that may run perfectly and is unobservable while it does.
+  echo x >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import os, sys
+open(os.environ["CALLS"], "a").write("create-api MUST-NOT-RUN\n")
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh" \
+    CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"boot contract"* ]] || false
+  ! grep -q 'MUST-NOT-RUN' "$CALLS"        # the account's rate limit was NOT spent
+  ! grep -q 'cc-cloud declare' "$CALLS"    # and nothing was declared
+}
+
 # ══ up — the W2 management arms (custody · goal · wake) ═════════════════════════════════════════
 # Each of these pins a fact that CANNOT be reconstructed after the fire: the originator's pane, the
 # goal, and the custody debt are properties of the moment of firing, and by the time the VM finishes

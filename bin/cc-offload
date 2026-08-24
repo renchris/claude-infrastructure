@@ -82,6 +82,7 @@ CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
   [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
 WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
 REPO="${CC_OFFLOAD_REPO:-$ROOT}"
+BRIEF_LIB="${CC_OFFLOAD_BRIEF_LIB:-$ROOT/scripts/lib/cloud-brief.sh}"
 # The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
 # scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
 CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
@@ -400,7 +401,14 @@ cmd_up() {
   # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
   # than an accident of environment.
   if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
-    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+    # `:-` IS LOAD-BEARING UNDER `set -u`. Without it this line is a hard `unbound variable` abort
+    # on any box where iTerm2 did not export the id — which is every non-interactive caller this
+    # command is designed for: launchd, cron, a hook, a fired session, and the whole `up` half of
+    # tests/cc-offload.bats on any machine but the operator's own. The very next branch already
+    # treats an empty value as "no pane to wake" and says so, so the empty case was handled; the
+    # abort came from asking for the variable at all. Found while adding the boot contract to this
+    # leg (backlog 0c8b39b67665): the API-leg tests could not be run to observe it.
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID:-}"; UP_NOTIFY_BACK="${UP_NOTIFY_BACK##*:}"
   fi
   if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
   elif [ -z "$UP_NOTIFY_BACK" ]; then
@@ -507,6 +515,16 @@ cmd_up_api() {
   local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
   [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
+  # FAIL-CLOSED, and BEFORE the create — the same ordering the acceptance pair already establishes
+  # on this leg (§13.4: a half-right session must cost a create and nothing else). A brief with no
+  # boot contract produces a session that may run perfectly and is unobservable while it does, and
+  # discovering that after the rate limit is spent is the expensive half.
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ ! -f "$BRIEF_LIB" ] || ! . "$BRIEF_LIB"; then
+    note "cc-offload: missing or unreadable $BRIEF_LIB — the brief would carry no boot contract."
+    note "  Without it the VM is never told which branch to push or when, and 'no ref' means nothing."
+    return 3
+  fi
 
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
@@ -565,7 +583,16 @@ cmd_up_api() {
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
-    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    # THE BRIEF CARRIES THE BOOT CONTRACT, and on this leg it had carried nothing at all: the
+    # operator's task file went to the VM verbatim, so the session was never told the branch name
+    # — even though the create had already authorised exactly one — let alone that its FIRST act is
+    # to push it. CLOUD_OBSERVABILITY.md §4.1 is the whole reason `no ref` is readable as a verdict;
+    # undelivered, C1 NOT-STARTED cannot tell a session that never booted from one that has simply
+    # not committed yet, and §11.4's terminal `NOT-STARTED` is exactly that non-answer, live.
+    # Backlog 0c8b39b67665. The text is scripts/lib/cloud-brief.sh's, shared with the CLI leg.
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" \
+      "$(cat "$pf")
+$(cc_cloud_return_block "$br")" >/dev/null 2>&1
     local drc=$?
     if [ "$drc" != 0 ]; then
       note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."

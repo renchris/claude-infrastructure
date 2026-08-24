@@ -461,3 +461,58 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20-21 — THE BOOT CONTRACT (backlog 0c8b39b67665) ────────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the paragraph the state function rests on: absence is ambiguous,
+# there is no inbound channel to a cloud VM, and the ONLY resolution is a contract requiring the
+# session's FIRST act to be a push. Case 17 above proved the payload creates the branch before
+# pushing it; what it could not see is WHEN. The block this leg used to inline was headed "read
+# this before you finish" and put the push at the end of the session's life, so a session working
+# perfectly for twenty minutes and a session that never booted produced byte-identical evidence and
+# C1 NOT-STARTED was a verdict about nothing.
+#
+# RED-PROOF — RUN 2026-08-24, both RED on the pre-change tree. Replay from the LITERAL parent of
+# the commit that landed this (`git show <fix-sha>^:scripts/handoff-fire.sh`), never from a moving
+# ref: `origin/main` advances past the fix and the control then compares the fix to itself
+# (scripts/moving-ref-control-lint.sh). The marker that proves the replay is genuinely pre-fix is
+# `cloud-brief` — the old file references it nowhere, so `! grep -q cloud-brief "$PRE"` must hold.
+#   · 20 red: the old block prescribes no commit at all, so there is no boot push to find.
+#   · 21 red: the old leg has no cloud-brief.sh dependency, so removing the library changes
+#     nothing and the fire sails on into its create.
+
+@test "20 the payload's FIRST instruction is the boot push — an empty commit, before any work" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local tok boot work
+  tok="$(bash -c '. "'"$REPO"'/scripts/lib/cloud-brief.sh"; cc_cloud_boot_token')"
+  # The token is read from the library rather than spelled here, so this case cannot drift away
+  # from the detector scripts/cloud-return.sh and scripts/cloud-reconcile.sh actually use.
+  grep -qF -- "--allow-empty" "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload never prescribes the boot commit"; false; }
+  grep -qF -- "$tok" "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the boot commit carries no token, so the local side cannot recognise a heartbeat"; false; }
+  boot="$(grep -n -- '--allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  work="$(grep -n 'Then do the work' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$work" ] || { echo "the payload never tells the session to push its actual work"; false; }
+  [ "$boot" -lt "$work" ] || { echo "the boot push must PRECEDE the work (boot=$boot work=$work)"; false; }
+  # The old framing must be GONE, not merely outranked: a block that still says "before you finish"
+  # invites exactly the reading the contract exists to forbid.
+  ! grep -q 'read this before you finish' "$BATS_TEST_TMPDIR/create.log"
+}
+
+@test "21 the boot-contract library being ABSENT is a REFUSAL — never a fire with no contract" {
+  # Same fail-closed reasoning as case 10's missing create library, and for a sharper reason: this
+  # one would SUCCEED. A create with no contract in its payload spends an account's rate limit on a
+  # session that may run perfectly and is unobservable for the whole of it, and nothing about the
+  # fire's own output would say so.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: this create must never be reached" 0
+  cfire CC_FIRE_CLOUD_BRIEF_LIB="$BATS_TEST_TMPDIR/no-such-brief.sh" \
+        CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"boot contract"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/create.log" ]      # the account's rate limit was NOT spent
+  [ ! -f "$CLOUD_DECL_LOG" ]                   # and nothing was declared
+}
