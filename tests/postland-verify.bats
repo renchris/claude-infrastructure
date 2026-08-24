@@ -1798,15 +1798,26 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
 }
 
 @test "STALL bound: slow-but-PROGRESSING corpus is never cut (non-regression control)" {
-  # The other half of the split the stall bound exists for: each test completes within the stall
+  # The other half of the split the stall bound exists for: each result lands within the stall
   # window, so progress keeps resetting the clock and the run finishes GREEN even though its total
   # wall exceeds several stall windows. (Passes pre-change too — this is the control that pins the
   # stall bound to STALLS; the discriminating half is the run_s assertion above.)
-  run bash "$SUT" --run-if-needed
-  [ "$status" -eq 0 ]
-  printf '@test "s1" { sleep 2; }\n@test "s2" { sleep 2; }\n@test "s3" { sleep 2; }\n@test "s4" { sleep 2; }\n' \
-    > "$R/tests/slowly.bats"
-  push_commit "a slow but progressing suite"
+  #
+  # THE PROGRESS IS STUBBED, NOT SLEPT, and that is load-bearing (row 19ae324e9697, filed
+  # 2026-08-08). The previous form pushed a REAL four-test corpus of `{ sleep 2; }` against a 4s
+  # window, which left ~2s of the window for bats per-test overhead. That overhead is UNBOUNDED
+  # under load, so this control was measured 16/16 green at load 8-10 and RED at load 12-25,
+  # identically on trunk — it was measuring the box, not the SUT, and no constant tweak fixes that.
+  # A stub writing TAP on a clock we own removes the load-dependent term outright: all eight results
+  # come from ONE process, so the inter-result gap is a bare `sleep 1` with no bats test lifecycle
+  # inside it, leaving 3s of the 4s window as slack against scheduler jitter (the old form's slack
+  # had to absorb a whole per-test spawn+setup+teardown). It still discriminates: eight 1s gaps put
+  # the total wall at 8s, twice the window, so a stall clock that failed to reset on progress would
+  # cut this run at t=4s and no green could be stamped — verified by mutation, 2026-08-24.
+  b="$(stub_bats slowprogress "case \"\$1\" in --count) echo 8; exit 0 ;; esac
+printf '1..8\n'
+for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done")"
+  export CC_POSTLAND_BATS="$b"
   tree="$(origin_tree)"
   POSTLAND_STALL_S=4 POSTLAND_STALL_POLL_S=1 POSTLAND_SUITE_TIMEOUT_S=120 POSTLAND_FILE_TIMEOUT_S=30 \
     run bash "$SUT" --run-if-needed
