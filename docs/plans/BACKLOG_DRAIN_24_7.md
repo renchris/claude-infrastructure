@@ -15826,6 +15826,58 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
     the next wave and burns a slot per pass.
   - **Operator-only step, unchanged and now with both shas:**
     `cc-backlog done 354c73ebd400 --evidence "6ce67de910d6e46f825a7eae0db28b741964f5de + 66857bc2ef210003b34b0889c23dc3191777b881"`
+- **2026-08-24 — `354c73ebd400` re-dispatched a THIRD time and re-confirmed done at trunk
+  `2401b084f`. Third slot. The new finding is not about the item at all: a cloud pass whose correct
+  output is NO DIFF cannot close its own row, and that is readable in `cloud-return.sh` rather than
+  inferred from the outcome.**
+  - **Re-confirmed by running, not by citing the two prior passes.** Trunk's
+    `subshell-cleanup-lint.sh` over trunk's `ship-land.sh`: clean, rc 0; `--selftest` PASS, all 30
+    fixtures including `envprefix` / `envprefixcont` / `prefixthenreal` / `prefixinsub`. The
+    both-directions control re-run: the PRE-fix lint over `6ce67de9^:scripts/ship-land.sh`
+    reproduces the item verbatim — `:3687 BRANCH — assigned inside a $( ) child`, chain
+    `write_decision_packet` `:584`, trap `_land_exit_trap → land_failure_inbox` `:813` — and
+    trunk's lint over that SAME pre-fix tree is clean. So the cure is aimed at this finding and is
+    not a blanket skip. Bash semantics re-measured directly rather than quoted: `V=orig; f(){ :; };
+    V=inside f` leaves `V=orig`, and `V2=x /bin/true` leaves `V2` unset — a command-PREFIX
+    assignment writes the command's environment, never the shell's, and the site at
+    `ship-land.sh:618` prefixes an EXTERNAL `python3`, so no global was ever set and the trap's
+    `BRANCH` was never stale.
+  - **Clause 2 is hardened one guard further than at the 08-19 pass.** `postland-verify.sh` now
+    carries FOUR refusals, not three: reachability (`bisect_reach_ok` `:1924`, wired `:2142`),
+    the floor proof (`bisect_floor_ok` `:1832`), the tip confirmation, and
+    `bisect_tip_differential_ok` (`:2000`, wired `:2188`) — which landed since and covers exactly
+    the gap the other three do not (`:1879`).
+  - **The shallow-clone trap fired again, and the 08-19 rail caught it.** This container cloned at
+    depth 50; `git rev-parse --is-shallow-repository` → true. `git fetch --deepen 500` moved the
+    count 50 → 963, after which `--is-ancestor` answered YES for BOTH cited shas. Unteepened, the
+    check answers NO and licenses re-deriving a diff that would revert trunk (`6110fc45141e`).
+  - 🚨 **WHY IT RE-DISPATCHES — the mechanism, read out of the file.** `cloud-return.sh` is the
+    return path, and its mark-done arm (`:395-423`) fires only when `landed_ok -eq 0`, i.e. when a
+    LAND content-verified on trunk; otherwise `:420` says `left <id> open — the content is not
+    verified on trunk`. And the arm is unreachable at all unless the VM PUSHED: `:272` / `:273`
+    return early on `BOOTING` / `NOT-STARTED`, `:292` on a still-running worker. **A pass whose correct
+    deliverable is a disproof or an already-landed discharge produces nothing to push, therefore
+    nothing to land, therefore no close — every wave re-dispatches it, forever.** This is a
+    statement about the code, not a diagnosis of the two prior passes (their fire declarations live
+    on the operator's box and are not observable from cloud).
+  - **The consequence is a rule, and this entry obeys it: a cloud pass that closes an item on
+    already-landed evidence must PUSH ITS VERDICT** — a doc commit is a diff, its path exists on
+    trunk, so `fill-paths` + the `ls-tree` content check pass and the return path has something to
+    land and something to close. A pass that leaves only prose in a transcript hands the return
+    path nothing.
+  - **The land gate reds here for the same container reason as 08-17, now with the mechanism
+    measured rather than inherited.** `ship-land.sh --precheck --working` → `unattended-path-lint
+    --selftest FAILED (9 of 39)`, and a pristine detached `origin/main` worktree fails the SAME 9,
+    so nothing in this doc-only diff reaches it. Cause: the fixtures name binaries that are
+    Homebrew-only on macOS, and `command -v` here answers `/usr/bin/tmux` and `/usr/bin/yq` — so
+    every fixture built on them resolves under the unattended PATH and the expected RED never
+    fires. Fixture 1 (`shellcheck`, absent here) still fires, which is what identifies the axis.
+    Committed and pushed to the branch rather than bypassing the gate; the land belongs on the
+    operator's box, where the same selftest is green.
+  - **The close verb is still unreachable here.** `bin/cc-backlog done 354c73ebd400` → `unknown id`;
+    `cc-backlog list` is empty (`~/.claude/autonomy/` does not exist in this container). Operator
+    step unchanged, and the doc-only land above is the first half of it:
+    `cc-backlog done 354c73ebd400 --evidence "6ce67de910d6e46f825a7eae0db28b741964f5de + 66857bc2ef210003b34b0889c23dc3191777b881"`
 - **2026-08-17 ~13:50Z — recycle #15: `master-enforcing-store` 1 open → `0 open / 11 blocked
   (10 operator-gated, 1 cloud-venue build)`. filed 1 / closed 2. Eight commits, two lands,
   `6644273f3`; content-verified on `origin/main`.**
