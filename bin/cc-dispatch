@@ -2390,19 +2390,47 @@ dispatch() { # <dry|run|decide>
         # unlanded content anyway — ee1ac85c6ff6 carried 4 files absent from trunk entirely, staged and
         # never committed (memory: landedness-over-commits-is-blind-to-staged-content). `status
         # --porcelain` sees all three populations; a `rev-list` alone would have fast-forwarded over it.
-        if [ "$wstate" = stale ]; then
-          local wdirty wahead
-          wdirty="$(git -C "$wcwd" status --porcelain 2>/dev/null | head -1)"
-          wahead="$(git -C "$wcwd" rev-list --count "$wbase..HEAD" 2>/dev/null || echo unknown)"
-          if [ -z "$wdirty" ] && [ "$wahead" = 0 ] \
+        # ── POLLUTION IS ITS OWN AXIS, NOT A SIDE-CONDITION OF STALENESS (backlog e281cde67a48) ──
+        # `wdirty` used to be read only INSIDE `if [ "$wstate" = stale ]`, so the guard could see a
+        # polluted tree only when it happened to ALSO be behind the base. A `wt-<id>` directory whose
+        # HEAD already contains the base and whose working tree carries a dead worker's staged files
+        # was fired into unchecked — "cc-dispatch reuses a STALE, POLLUTED worktree" minus the stale.
+        # The two axes are independent: staleness is a fact about the BASE, pollution a fact about the
+        # WORKING TREE, and only one of them had a door into the refusal.
+        #
+        # 🚨 THE BLIND CELL IS EMPTY ON THIS BOX, AND THAT IS A PROPERTY OF THIS REPO'S COMMIT RATE,
+        # NOT OF THE MECHANISM. Measured 2026-08-24 over all 48 live `wt-*` worktrees:
+        #     fresh&dirty 0 · fresh&clean 0 · stale&dirty 41 · stale&clean 7
+        # every polluted tree here is ALSO behind, because this trunk moves many times a day, so the
+        # incumbent guard happens to catch all 41. The repo is per-ITEM (`project_repo`), and in a
+        # slower project a wt- dir polluted an hour after it was cut is still FRESH — there the
+        # incumbent fires straight into it. So this arm changes nothing on the measured population
+        # (its cost here is exactly zero rows) and closes the hole where the population is not this
+        # one. The MEASUREMENT is what is recorded, never the cause: a number stays falsifiable, a
+        # hypothesis ("this cannot happen here") never can.
+        local wdirty wahead
+        wdirty="$(git -C "$wcwd" status --porcelain 2>/dev/null | head -1)"
+        wahead="$(git -C "$wcwd" rev-list --count "$wbase..HEAD" 2>/dev/null || echo unknown)"
+        if [ "$wstate" = stale ] || [ -n "$wdirty" ]; then
+          # The fast-forward remains the STALE-only exit, and still only for a tree that can lose
+          # nothing. A current tree has nothing to fast-forward, so pollution has exactly one exit.
+          if [ "$wstate" = stale ] && [ -z "$wdirty" ] && [ "$wahead" = 0 ] \
              && git -C "$wcwd" merge -q --ff-only "$wbase" >/dev/null 2>&1 \
              && [ "$(wt_base_state "$wcwd" HEAD "$wbase")" = fresh ]; then
             echo "cc-dispatch: $wcwd was behind $wbase with nothing of its own — fast-forwarded, firing" >&2
           else
-            echo "cc-dispatch: refusing to fire into $wcwd — its HEAD does not contain $wbase (pre-existing worktree, never re-based)" >&2
             local wsr2 wnote wblocked
+            # NAME THE AXIS ACTUALLY FOUND. Reporting a HEAD that "does not contain $wbase" over a
+            # tree that demonstrably does is a false verdict wearing a true one's words, and it is the
+            # half a reader would act on.
+            if [ "$wstate" = stale ]; then
+              echo "cc-dispatch: refusing to fire into $wcwd — its HEAD does not contain $wbase (pre-existing worktree, never re-based)" >&2
+              wnote="pre-existing worktree $wcwd is behind $wbase and cannot be fast-forwarded"
+            else
+              echo "cc-dispatch: refusing to fire into $wcwd — it carries content a worker would inherit (pre-existing worktree, current but polluted)" >&2
+              wnote="pre-existing worktree $wcwd is current with $wbase but carries foreign content"
+            fi
             wsr2="$(self_release "$id" worktree-fail)"
-            wnote="pre-existing worktree $wcwd is behind $wbase and cannot be fast-forwarded"
             [ -n "$wdirty" ] && wnote="$wnote (uncommitted/staged content)"
             [ "$wahead" != 0 ] && wnote="$wnote (carries $wahead commit(s) of its own)"
             # Blocked AFTER the release, never before: status folds last-event-wins, so this ordering
