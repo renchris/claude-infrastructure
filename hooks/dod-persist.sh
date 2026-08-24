@@ -26,7 +26,9 @@
 # unchanged) keeps the durable file small — it accumulates only DISTINCT frozen scopes.
 #
 # Env seams (tests): WRAP_DOD_FILE · WRAP_DOD_DIR — SHARED with wrap-ledger, so a test that points
-# both at one file proves the producer↔consumer contract end-to-end.
+# both at one file proves the producer↔consumer contract end-to-end. CC_DOD_CTX_MAX overrides the
+# SessionStart byte cap (default 9200 — see THE BYTE CAP below; a hook payload over ~10 KB is
+# silently replaced by the harness with a head-truncated stub, and this store used to run ~44 KB).
 set -uo pipefail
 
 # ── DoD path — the SHARED lib (CLOSE_INTEGRITY W3): repo-identity key, legacy read-fallback ──
@@ -196,6 +198,9 @@ case "$event" in
     # NEWEST frozen line only. The frame now says what the rest of the store has always meant.
     # LOSSLESS — the full history is still injected verbatim, reframed as context rather than
     # dropped, so nothing a successor legitimately inherits can go missing.
+    # ⚠ AMENDED (M2, below): "lossless" holds up to the byte cap and no further. Over it the
+    # OLDEST captures are elided, NAMED as elided, and left on disk — because the alternative was
+    # never "lossless", it was the harness discarding the whole payload without telling anyone.
     cur=""
     while IFS= read -r _cf; do
       [ -n "$_cf" ] && [ -f "$_cf" ] || continue
@@ -214,13 +219,54 @@ CUREOF
       # no frozen line anywhere (a grown-only store): name no contract rather than invent one
       _lead="THE CURRENT CONTRACT is not recorded — no 'Scope (frozen):' line exists in this store yet. Treat the history below as context only, and freeze a scope before claiming completeness."
     fi
-    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
+    # ── THE BYTE CAP (USAGE_TELEMETRY_100P §2.4 / §4 M2) ──────────────────────────────────────
+    # 🚨 THE CARRIER WAS SILENTLY TRUNCATED, AND SILENTLY IS THE WHOLE PROBLEM. The harness
+    # replaces any hook `additionalContext` over ~10 KB with a ~2.3 KB stub containing only the
+    # FIRST ~2 KB of the payload, and says nothing to either side. This store concatenates a live
+    # file with a frozen legacy one — measured at ~44 KB — so it is the ONLY hook in the fleet
+    # that overflows the cap, and it did so in 51% of the sessions it fired in. The contract this
+    # hook exists to deliver was structurally unreachable in half of them.
+    #
+    # The newest-wins reframe above already moved the binding scope to the TOP, so the stub at
+    # least previews the right contract rather than the oldest superseded one. This closes the
+    # other half: the payload is kept UNDER the cap so no stub is produced at all.
+    #
+    # WHAT IS DROPPED, AND WHY THAT ORDER. `$_lead` — the current contract — is never droppable;
+    # it is the entire point of the hook. History is elided OLDEST-FIRST, one '## ' capture block
+    # at a time, because the store is newest-last and a predecessor's finished contract is the
+    # least load-bearing thing here. The elision is NAMED in the frame and the store files are
+    # named with it, so a session that needs the full history knows it was cut and where to read
+    # it — a silent cut is what this fix exists to remove, and re-introducing one here would just
+    # move the defect from the harness into this file.
+    _CAP="${CC_DOD_CTX_MAX:-9200}"
+    case "$_CAP" in ''|*[!0-9]*) _CAP=9200 ;; esac
+    _srcs="$(dod_read_files "$cwd" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+    _elided=0
+    while : ; do
+      if [ "$_elided" -gt 0 ]; then
+        _hist="Everything below is this wave's INTEGRATE-only history — the newest $((ncap - _elided)) of ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest last. THE ${_elided} OLDEST CAPTURE(S) WERE ELIDED to stay under the ${_CAP}-byte hook-context cap (over it the harness silently replaces this whole payload with a head-truncated stub); the full history is on disk in: ${_srcs:-the durable DoD store}. A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it."
+      else
+        _hist="Everything below is this wave's INTEGRATE-only history — ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest last. A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it."
+      fi
+      framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
 
 $_lead
 
-Everything below is this wave's INTEGRATE-only history — ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest last. A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it.
+$_hist
 
 $content"
+      # BYTES, not characters: the cap the harness applies is a byte cap, and this frame is full of
+      # multi-byte punctuation, so `${#framed}` would under-count it by hundreds.
+      _blen="$(LC_ALL=C printf '%s' "$framed" | wc -c 2>/dev/null | tr -d ' ')"
+      case "$_blen" in ''|*[!0-9]*) break ;; esac
+      [ "$_blen" -le "$_CAP" ] && break
+      # Nothing left to give: the lead alone is over the cap. Emit it anyway — a head-truncated
+      # stub of the CURRENT contract still previews the binding scope, which is strictly better
+      # than withholding it, and the frame above has already put that contract first.
+      [ -n "$content" ] || break
+      content="$(printf '%s\n' "$content" | awk '/^## /{seen++} seen>1{print}')"
+      _elided=$((_elided + 1))
+    done
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     exit 0 ;;
   PreCompact)

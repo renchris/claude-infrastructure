@@ -358,3 +358,89 @@ _hist_mark_live() {  # $1 = the injected context
   printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
   printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'the only scope'
 }
+
+# ── THE BYTE CAP (USAGE_TELEMETRY_100P §2.4 / §4 M2) ──────────────────────────────
+# The harness silently replaces any hook additionalContext over ~10 KB with a ~2.3 KB head-
+# truncated stub. This store concatenates a live file with a frozen legacy one — measured at
+# ~44 KB — so it was the ONLY hook in the fleet that overflowed, in 51% of the sessions it fired
+# in, and the binding contract was therefore structurally unreachable in half of them. The frame
+# now stays UNDER the cap by eliding the OLDEST captures, naming the elision, and naming the store.
+#
+# CC_DOD_CTX_MAX is the cap seam. These cases drive it small rather than writing 44 KB of fixture:
+# the property under test is "the emitted payload never exceeds the cap", which is scale-free, and
+# a 9,200-byte fixture would make every assertion below a slow way of asserting the same thing.
+
+# bytes, exactly as the hook counts them — a `${#var}` here would under-count the frame's
+# multi-byte punctuation and quietly make the cap assertions pass on an over-cap payload.
+blen() { LC_ALL=C printf '%s' "$1" | wc -c | tr -d ' '; }
+
+# N distinct captures, oldest first, each padded so the store is comfortably over any small cap.
+_bulk() { # $1=count
+  local i
+  for i in $(seq 1 "$1"); do
+    ( cd "$CWD" && bash "$HOOK" set "wave $i scope $(printf 'x%.0s' $(seq 1 200))" >/dev/null )
+  done
+}
+
+@test "M2 cap: an over-cap store is emitted UNDER the cap, never handed to the harness to truncate" {
+  _bulk 8
+  CC_DOD_CTX_MAX=3000 run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(ctx_of "$output")"
+  [ "$(blen "$ctx")" -le 3000 ]
+}
+
+@test "M2 cap RED-PROOF: the same store WITHOUT the cap is over it (the case above is not vacuous)" {
+  # If this store fitted under 3000 bytes anyway, the case above would pass for the wrong reason.
+  _bulk 8
+  CC_DOD_CTX_MAX=999999 run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  [ "$(blen "$ctx")" -gt 3000 ]
+}
+
+@test "M2 cap: the CURRENT contract survives the cap — it is never what gets dropped" {
+  _bulk 8
+  ( cd "$CWD" && bash "$HOOK" set "THE BINDING SCOPE that must survive" >/dev/null )
+  CC_DOD_CTX_MAX=3000 run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'THE BINDING SCOPE that must survive'
+  printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
+}
+
+@test "M2 cap: OLDEST-first is the drop order — wave 1 goes before the newest capture does" {
+  _bulk 8
+  CC_DOD_CTX_MAX=3000 run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'wave 8 scope'                    # the newest is kept …
+  [ "$(printf '%s' "$ctx" | grep -cF 'wave 1 scope')" -eq 0 ]    # … and the oldest is gone
+}
+
+@test "M2 cap: the elision is NAMED and points at the store — a silent cut is the same defect" {
+  _bulk 8
+  CC_DOD_CTX_MAX=3000 run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'ELIDED'
+  printf '%s' "$ctx" | grep -q 'the full history is on disk in'
+  # the count is stated, not implied
+  printf '%s' "$ctx" | grep -qE 'THE [0-9]+ OLDEST CAPTURE\(S\) WERE ELIDED'
+}
+
+@test "M2 cap CONTROL: an under-cap store is untouched — no elision notice, full history" {
+  ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
+  run run_hook "$(sjson SessionStart)"
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'wave ONE scope'
+  printf '%s' "$ctx" | grep -q 'wave TWO scope'
+  [ "$(printf '%s' "$ctx" | grep -cF 'ELIDED')" -eq 0 ]
+}
+
+@test "M2 cap: a single capture larger than the cap still emits the contract, never nothing" {
+  # The degenerate end. Withholding the contract because it does not fit is strictly worse than
+  # letting the harness stub a payload whose FIRST bytes are already the binding scope.
+  ( cd "$CWD" && bash "$HOOK" set "ONE ENORMOUS SCOPE $(printf 'y%.0s' $(seq 1 4000))" >/dev/null )
+  CC_DOD_CTX_MAX=500 run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(ctx_of "$output")"
+  printf '%s' "$ctx" | grep -q 'ONE ENORMOUS SCOPE'
+}
