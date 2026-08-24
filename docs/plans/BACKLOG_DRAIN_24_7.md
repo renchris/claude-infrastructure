@@ -87,6 +87,107 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #193: #192's own recommendation was built on a discriminator
+  that is an ALGEBRAIC IDENTITY OF ITS PRODUCER — and the pile it pointed at still paid, from
+  reading rows rather than testing a field. filed 0 / closed 5 / this doc.** Board at open:
+  **493 open+blocked**; `master-operator-gated` **0 open / 116 blocked**;
+  `master-convergence-deadlock` **open=14 / blocked=5** (printed by `bash bin/cc-backlog fold` from
+  the worktree — the blocked tail is stated, not hidden). Zero `.page` files under
+  `autonomy/postland` (**EIGHTY-FOURTH** consecutive). Heredoc diff clean (**seventy-fifth**).
+  PostToolUse formatter fired on **five** scratch files (twenty-third firing across eighteen
+  recycles); every one re-compiled with `py_compile` and its guards re-listed before running.
+  **All five closes carry same-moment content evidence; I filed nothing, so closed > filed.**
+
+  🚨 **METHOD 159 — A DISCRIMINATOR COMPUTED FROM TWO FIELDS THAT ONE PRODUCER WRITES FROM ONE
+  INPUT IS AN ALGEBRAIC RESTATEMENT OF THAT PRODUCER, NOT A MEASUREMENT OF THE POPULATION. BEFORE
+  USING THE EQUALITY OF TWO FIELDS AS A SIGNAL, READ THE WRITER AND ASK WHETHER THEY CAN EVER
+  DIFFER.** #192 measured that **94 of 117** `master-operator-gated` rows carry a `needs` field
+  verbatim restating their own title, and read that as *"no operator step was ever named ⇒ agent
+  work misfiled as an operator gate ⇒ this is a drain population"*. The census is arithmetically
+  right (I re-measured: **93 of 116** today) and every inference from it is wrong. `cmd_needs`
+  (`bin/cc-backlog:2631`) takes ONE positional `$step` and spends it twice —
+  `aargs=(--title "$step" --source needs)` then `targs=(block "$id" --needs "$step")` — and its own
+  header says so: *"The positional step is BOTH the item title and the `--needs` prose: they are
+  the same sentence, and asking the caller to write it twice is the friction this verb removes."*
+  So `needs == title` holds for **every** row the verb files, unconditionally, by design. It cannot
+  discriminate a real gate from misfiled work, and the false-positive list is decisive: `Run 'sudo
+  pmset -a powermode 1'`, `Connect AC power`, `Sign in to the motion-plus MCP server`, `confirm with
+  KPMG whether the agreed '6 hours' includes lunch`, `Ask Turso support`, `Approve the
+  history-rewrite tool in Bash permissions`, `Look at the two production floor plans and sign off`
+  — paradigm operator gates, **all of them inside the "misfiled agent work" bucket**. Sibling of
+  method 156 and of memory `proxy-must-be-independent-of-what-it-supplements`; the same shape as
+  #192's own 540-of-540 scar, one level up — there the predicate was wrong, here the predicate is
+  *right* and measures the wrong thing.
+
+  🆕 **AND THE COMPLEMENT INVERTS TOO.** #192 read the 23 whose `needs` DIFFERS as "a real gate".
+  Measured: **113 of 116** rows in the condition are `source:"needs"`, yet **20** of those read
+  DIFF — impossible if the verb were the only writer. All 20 are **UNRELATED prose**, and every one
+  opens `OPERATOR (…)` / `OPERATOR RULING BY EYE` / `OPERATOR VALUE CALL`: someone later ran
+  `block <id> --needs "<hand-written prose>"` and overwrote the auto-copy. So `needs != title`
+  measures **curation effort**, not gate reality. **Neither direction of the test says anything
+  about whether a human is required.** The only thing that does is reading the title — which is
+  what #192's own `e57b6bf516b8` close and the lead's `8e17ab75a613` unblock actually did.
+  ⚠️ **And 58 of 116 are project `reso-management-app`** — not ours to drain at all.
+
+  **SO THE PILE IS NOT THE DRAIN POPULATION #192 DESCRIBED — BUT IT IS STILL A DRAIN POPULATION,
+  FOUND BY READING.** Six rows in the `claude-infrastructure` subset are live-layer-convergence
+  claims, exactly #192's fourteenth shape (*a harm stated as a consequence for the live layer*).
+  **CLOSED FIVE, all by content against the shared checkout's HEAD `8b9becd6d2e5` (`rev-list
+  --count origin/main..HEAD` = **0**, i.e. NOT diverged), every predicate positive- AND
+  negative-controlled in the same run:**
+  · **`d587c805992e`** — 4beb9a42e IS an ancestor of live HEAD, it does touch
+    `hooks/agent-teams-enforce.sh`, the live hook is byte-IDENTICAL (sha256) to the HEAD blob, and
+    **15 of 15** of the commit's added lines are present verbatim. The "BROKEN gate is still the one
+    running" is cured.
+  · **`cf95ac41fc0e`** — premise dead AND consequence **FALSE AS REASONED**: the cited blocker
+    `a2a9f18c7` touches **exactly one file, `tests/operator-readout-live-symlink.bats`** — a
+    TEST-ONLY commit that could never have gated `lib/config-mirror.zsh`. Its landing was never the
+    thing standing between the machine and the post-fix mirror.
+  · **`b2471036cd30`** — the sharper twin, and its own prescribed action HAS HAPPENED: neither
+    `d3eb6c55d` nor `a2a9f18c7` is an ancestor of live HEAD, the checkout was reconciled. Its
+    content-vs-ancestry diagnosis was right and is kept.
+  · **`b173c0951e21`** — **its own stated ONE CHECK now passes, both legs**: the symlink exists,
+    resolves, and is `-x` (the operative test at `autonomy-sweep.sh:1085`, not `-e`), and
+    `deathwatch.jsonl` carries 2 `pass=complete` rows. ⚠️ **Checked because it looks like a defect
+    and is not:** the two newest ledger rows read `pass=skipped-not-deployed`, emitted by
+    `custody-deathwatch.sh:260` and documented as expected at `autonomy-sweep.sh:1092` — *"a
+    checkout copy self-reports skipped-not-deployed in its own ledger rather than here"*. **A named
+    skip is the opposite of the silent no-op the row filed.**
+  · **`2c779915a2ad`** — fold-fix live by content: **88 of 88** of its added lines touching
+    `bin/cc-backlog` are present verbatim in `~/.claude/bin/cc-backlog`, bogus-line negative control
+    absent. **Citation corrected:** the row credits `9a964ea78`, which touches only
+    `scripts/test-hermeticity-lint.sh` + `tests/autonomy-sweep.bats`; the adder is `8ae61e12e`
+    (205 refs contain it), whose three same-subject siblings `fc0a74efe`/`2327dc4bd`/`7e3f67465` are
+    contained by 1/0/1 and are NOT ancestors — a rebased land
+    (`cited-sha-may-not-survive-the-land`).
+
+  🚨 **THE SIXTH ROW IS THE RESULT #194 SHOULD CARRY: `5511ea906e2e` IS STILL TRUE, AND FOLLOWING
+  ITS OWN SELF-CLOSE INSTRUCTION WOULD HAVE CLOSED IT WRONGLY.** It says *"TRANSIENT AND
+  SELF-RESOLVING … re-run deploy-live.sh first, and if it has advanced, close this"*. The converger
+  HAS advanced — live HEAD went `3aa96304253c` → `8b9becd6d2e5`, and the sibling `ae3fc5d05` that
+  adds the file is now an ancestor — **and `~/.claude/scripts/mcp-modal-probe.py` is STILL ABSENT**
+  (control: `~/.claude/scripts/deploy-live.sh` present in the same run). 🆕 **METHOD 160 — A ROW
+  THAT NAMES ITS OWN CLOSE CONDITION MAY NAME THE WRONG ONE. TEST THE CONDITION *AND* THE HARM
+  SEPARATELY: "the thing I am waiting on happened" is not "the harm went away."** Here the advance
+  and the cure are different events — a `.py` ADD is cured by a symlink being minted, not by the
+  layer moving. **Live exhibit for `4e6a51df2a84`; deliberately left blocked, NOT re-filed** (it is
+  the second confirmed `LIVE_ADDS` instance after `scripts/lib/pane-spawn-log.sh`, and the
+  `hooks/smart-bash-allowlist.sh:91-97` symlink-walk #192 found remains its remedy pattern).
+
+  ⚠️ **MY OWN INSTRUMENT FAILED FIRST, AND THE CONTROL CAUGHT IT.** I reached for
+  `git log -1 <sha> -- <path>` to ask "does this commit touch this path". It walks history **from**
+  the sha, so it is non-empty whenever the path merely EXISTS, and it answered **YES for both**
+  `9a964ea78 -- bin/cc-backlog` and `a2a9f18c7 -- lib/config-mirror.zsh` — the two rows I was about
+  to close on that basis, in the direction that would have made the rows look CORRECT. The fix is
+  `git show --name-only --pretty=format: <sha>`, controlled by asserting a known-True and a
+  known-False pair in the same run (`4beb9a42e` touches `hooks/agent-teams-enforce.sh` = True,
+  touches `bin/cc-backlog` = False). **Report the control beside the verdict, always.**
+
+  **Fold after: `master-operator-gated` 116 → 111 blocked; `master-convergence-deadlock` unchanged
+  at open=14 / blocked=5.** Live layer measured at **lag 2** at my open (`8b9becd6d2e5` vs
+  `origin/main 8d2adba2c69f`), 0 adds in the range — **re-measure, it moves**: #192 read 0, #191
+  read 20.
+
 - **2026-08-24 — drain recycle #192: the live layer CONVERGED, and not by the path three rows
   say is required — `deploy-live` took its own DEGRADED escape hatch. filed 0 / closed 2 / 1 commit
   of code + this doc.** Board at open: **open 302 / blocked 194 / claimed 5 / done 2235**, 496
