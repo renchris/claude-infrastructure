@@ -66,6 +66,18 @@ EOF
   chmod +x "$BIN/sysctl"
   export CC_FIRE_SYSCTL="$BIN/sysctl"
   export CC_FIRE_HEADROOM_OVERRIDE=64
+  # THE THIRD CLAUSE (backlog 8375a0f8fdca, 2026-08-24). The two exports above closed both paths the
+  # gate had when this comment was written — and Wave E (task #170) then gave capacity_gate() two
+  # more terms. `segments` rides the sysctl stub above, but `active` (handoff-fire.sh:5038-5044)
+  # reads cc_sp_active: a LIVE mid-turn session census that neither export touches, and that a
+  # fixtured $HOME does not absent, because handoff-fire.sh sources spawn-presence.sh at :4680-4683
+  # relative to its OWN directory and so loads the real library — THIS library. So cases 20, 29 and
+  # 30 could be REFUSED (exit 9) by whatever else the fleet happened to be doing, which is the exact
+  # ambience form 2 exists to deny. Pinned rather than switched off (CC_FIRE_ACTIVE_TERM=off would
+  # delete the term those cases exercise), and pinned at the CENSUS rather than at the gate, which is
+  # this file's established idiom for its own library — CC_SP_TREES_OVERRIDE above does the same for
+  # the sibling census. 0 admits under any ceiling; individual cases still override per-case.
+  export CC_SP_ACTIVE_OVERRIDE=0
   # THE NON-$HOME SEAMS (lint rule 5a/5b): fixturing $HOME does not redirect an ABSOLUTE /tmp default,
   # nor a BARE NAME the subject then EXECUTES off the operator's PATH. An ABSENT path is the right
   # value — these sensors fail open on one — so they point into the tmpdir and nothing else.

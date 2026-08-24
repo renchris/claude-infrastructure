@@ -462,6 +462,68 @@ skip_if_selftest_nonverdict() {
   [ "$status" -eq 0 ] || false
 }
 
+# ── FORM 2 (backlog 8375a0f8fdca). Until 2026-08-24 form 2 lived in is_fire_pinned() with NO test of
+# any kind — it was reachable, load-bearing, and uncovered, which is how its third clause went
+# missing for the two weeks after Wave E (task #170) added the `active` term. The four cases below
+# are the shape rule 7's form 2 already had: each GREEN names ONE closure spelling, and the RED
+# proves the short form does NOT count. The three GREENs are also this pair's negative controls —
+# they pass both BEFORE and AFTER the third clause, so a red on the RED alone is the clause landing
+# rather than the fixture breaking.
+
+@test "RULE 2 GREEN: FORM 2 needs ALL THREE terms — a suite whose SUBJECT is the gate cannot use form 1" {
+  mk_suite fireform2 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_FIRE_SYSCTL=/bin/true
+  export CC_FIRE_HEADROOM_OVERRIDE=64
+  export CC_FIRE_ACTIVE_TERM=off' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireform2"
+  [ "$status" -eq 0 ] || { echo "form 2 is unreachable:"; echo "$output"; false; }
+}
+
+@test "RULE 2 RED: the TWO-VARIABLE form 2 is NOT closed — the active term is a third ambient input" {
+  # The case ported from rule 7, whose header called it "the one case rule 2 has no analogue for".
+  # That stopped being true at task #170: capacity_gate() grew `segments` and `active`, and while
+  # segments rides the CC_FIRE_SYSCTL stub, active reads cc_sp_active — a live mid-turn session
+  # census. handoff-fire.sh sources spawn-presence.sh at :4680-4683 relative to its own directory,
+  # so a fixtured $HOME does not absent it and the term can REFUSE the fire (exit 9) over what the
+  # rest of the fleet is doing. Certifying this suite as PINNED is a false negative minted by the
+  # rule that exists to prevent it — rule 7's words for its own twin of this case.
+  mk_suite fireform2short 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_FIRE_SYSCTL=/bin/true
+  export CC_FIRE_HEADROOM_OVERRIDE=64' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireform2short"
+  [ "$status" -eq 1 ] || { echo "the two-variable form counted as PINNED:"; echo "$output"; false; }
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 2 GREEN: CC_FIRE_ACTIVE_OVERRIDE is the SECOND active closure — it pins the value at the gate" {
+  # handoff-fire.sh:5040 takes the override ahead of the census, so the live read never happens.
+  # tests/handoff-fire-capacity-gate.bats and tests/handoff-fire-cloud.bats both already use this
+  # spelling; it must therefore count, or the lint would convict two suites that are already correct.
+  mk_suite fireform2b 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_FIRE_SYSCTL=/bin/true
+  export CC_FIRE_HEADROOM_OVERRIDE=64
+  export CC_FIRE_ACTIVE_OVERRIDE=0' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireform2b"
+  [ "$status" -eq 0 ] || { echo "the gate-level override did not count:"; echo "$output"; false; }
+}
+
+@test "RULE 2 GREEN: CC_SP_ACTIVE_OVERRIDE is the THIRD — it pins the census itself" {
+  # Rule 7's CC_SP_TREES_OVERRIDE clause, in this rule's term. tests/spawn-presence.bats is the
+  # presence library's OWN suite and references handoff-fire; it can no more turn the census off
+  # than the gate suite can use form 1, so the route that pins cc_sp_active's return
+  # (spawn-presence.sh:254) has to be a sufficient spelling here.
+  mk_suite fireform2c 'export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_FIRE_SYSCTL=/bin/true
+  export CC_FIRE_HEADROOM_OVERRIDE=64
+  export CC_SP_ACTIVE_OVERRIDE=1' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireform2c"
+  [ "$status" -eq 0 ] || { echo "the census-level override did not count:"; echo "$output"; false; }
+}
+
 @test "RULE 2 RED: a suite that pins the gate but is STILL grandfathered (the ratchet only shrinks)" {
   mk_suite firepin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_FIRE_CAPACITY_GATE=off' \
     'run bash ./scripts/handoff-fire.sh --dry-run'
