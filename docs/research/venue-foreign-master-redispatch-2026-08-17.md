@@ -48,6 +48,8 @@ everything right and it bought two days.
 | 08-16 | `c07fb00eb9b6` | `doc_classifier` | label-foreign — located the cause | `cloud-venue-project-repo-mismatch-2026-08-16.md` |
 | 08-17 07:15 | `c33f3b1cb278` | `reso-management-app` | label-foreign | `venue-foreign-repo-recurrence-2026-08-17.md` |
 | 08-17 08:52 | **`8f59467c92b0`** | `claude-infrastructure` | subject-foreign, cross-repo — **repeat of row 3** | this file |
+| 08-18 | `5ab3327ed0c8` | `reso-management-app` | label-foreign — **second cloud burn** | `venue-foreign-repo-recurrence-2026-08-17.md` |
+| 08-24 | `485f8f87eb5f` | `claude-infrastructure` | subject-foreign — **first occurrence since the label-foreign guard shipped**; §3's prediction measured | `venue-foreign-subject-residue-2026-08-24.md` |
 
 **Six dispatches over five distinct items in four days.** The 08-15 master fire is absent from the
 `venue-*` family because that worker wrote its disproof where its brief pointed — the plan file — and
@@ -58,6 +60,14 @@ So the class's own ledger is assembled by whichever misrouted worker happens to 
 and it sees only the occurrences that chose the same filename convention. Any count taken from the
 `venue-*` docs is a floor, not a total. This matters for the decision below: it is being weighed
 against a cost figure that is low by at least one.
+
+*(Appended 2026-08-24. The heading's "six dispatches, five items" is the count as of 08-17 and is left
+as written; the table now carries **eight dispatches over six items**. The 08-24 row is the one that
+changes §3 below from a forecast into a measurement — the label-foreign guard has since SHIPPED as
+`cross_repo()` in `bin/cc-eligible`, it refuses label-foreign at rc 3, and it passes subject-foreign at
+rc 0 on identical item text. §3 predicted exactly that. Details, and the enumerable pool the two
+`claude-infrastructure`-labelled rows were both drawn from, in
+`venue-foreign-subject-residue-2026-08-24.md`.)*
 
 ## 3 · 🚨 Both filed options PASS this row — the remedy as filed cannot stop its own worst case
 

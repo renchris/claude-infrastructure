@@ -594,3 +594,38 @@ repository at all.
 
 **The ledger was NOT updated by this session.** The `b3a403c16f95` row in new fact 3 is a probe
 artifact on an ephemeral store and must not be looked for on the Mac. This branch is the notification.
+
+---
+
+# 2026-08-24 CORRECTION — "no guard has shipped" is no longer true
+
+Two lines above assert the cause is unguarded on trunk:
+
+- `:399` — `bin/cc-offload:84 | REPO="${CC_OFFLOAD_REPO:-$ROOT}" — **unchanged; no guard has shipped**`
+- `:485` — `bin/cc-offload:84   REPO="${CC_OFFLOAD_REPO:-$ROOT}"            # cause unchanged`
+
+**Both halves are still literally true of `bin/cc-offload`, and the conclusion they support is now
+false.** `cc-offload:84` is indeed unchanged — re-read on trunk today. But a guard shipped *elsewhere*:
+`cross_repo()` in **`bin/cc-eligible`** (`:735-749`) compares `repo_for(item.project)`'s origin against
+the lane's and refuses the mismatch. Measured on two fixtured rows with identical title text, differing
+only in `project`:
+
+| route | `project` | verdict | rc |
+|---|---|---|---|
+| label-foreign | `reso-management-app` | `ineligible-cross-repo` | **3** |
+| subject-foreign | `claude-infrastructure` | `eligible` | **0** |
+
+So every **label-foreign** row in the table above — `1cc794cbc6c4`, `c07fb00eb9b6`, `c33f3b1cb278`,
+`5ab3327ed0c8` — would now be refused, and the **subject-foreign** rows would not. The 08-24 occurrence
+(`485f8f87eb5f`) is the first datapoint after that change and lands on the surviving route, exactly as
+`venue-foreign-master-redispatch-2026-08-17.md` §3 predicted of a `project`-keyed remedy.
+
+The lesson is about *where* this family looks. Each file re-reads `cc-offload:84` because 08-16 located
+the cause there and the placement argument (gate the fire, not the claim) is sound. Watching the one
+line the cause lives on is not the same as watching for the fix, which landed on the *other* side of a
+placement debate this family had already settled — and so read as absent for a week.
+
+Dating it precisely is not possible from a cloud VM: `.git/shallow` at depth 50 collapses
+`git log -S"def cross_repo"` onto the shallow boundary. Full write-up, the pool the two subject-foreign
+`claude-infrastructure` rows were drawn from, and a store-safe probe method that does **not** reproduce
+new fact 3's hazard: `venue-foreign-subject-residue-2026-08-24.md`.
