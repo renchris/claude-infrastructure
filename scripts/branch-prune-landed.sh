@@ -94,6 +94,36 @@ fi
 # batch would sit in the record indistinguishable from a successful one. So the outcome is folded
 # back in below, per branch: PRUNE -> DELETED or DELETE-FAILED. (Repo memory:
 # claimed-outcome-vs-checked-outcome — a claim under a damping marker is not a checked result.)
+# ── PRESERVE THE EVIDENCE THIS DELETION DESTROYS (backlog f85fce7c26f5) ────────────────────────
+# `bin/cc-cloud` answers "did this off-box session finish?" by asking whether its declared paths are
+# content-present on the trunk — and it derives that path set from the BRANCH'S OWN COMMITS, which
+# this loop is about to make unreachable. A declaration whose `paths=` is still empty at deletion
+# time can therefore never assert landedness again, and its session reads UNKNOWN forever.
+# So: fill first, delete second. The ordering is the whole point — one line later is too late.
+#
+# FAIL-OPEN, DELIBERATELY. Preservation is a courtesy to a different tool; a missing cc-cloud, an
+# undeclared branch, or a delete-only range must not stop a prune that is otherwise correct. Every
+# outcome is reported, so a silent skip is not one of them. `--branch` is rc 0 when nothing declares
+# the branch, which is the common case here: most pruned branches were never cloud sessions.
+#
+# HONEST LIMIT, measured rather than assumed: this preserves the REBASED land and NOT the fast-
+# forwarded one. `fill-paths` bounds its range at the merge-base with the trunk, and for a branch
+# that is a true ANCESTOR of the trunk that range is empty — it refuses (naming that cause exactly)
+# rather than writing an empty set, and the session stays UNKNOWN. That is the rare arm here: this
+# file's own header records `--merged` finding 1 of 97 against `git cherry`'s 56, because ship-land
+# rebases. Verified both ways on a fixture: rebased land -> `paths=docs/vm.md`, session reads
+# LANDED after the delete; ancestor land -> refusal, session reads UNKNOWN. UNKNOWN is the correct
+# verdict for it — it emits no row and states that landedness is not assertable, which is the fact.
+if command -v cc-cloud >/dev/null 2>&1; then
+  echo "preserving cc-cloud path sets for ${#safe[@]} branch(es) before deleting them..."
+  for b in "${safe[@]}"; do
+    cc-cloud fill-paths --branch "$b" 2>&1 | sed 's/^/    /' || true
+  done
+else
+  echo "note: cc-cloud not on PATH — path sets NOT preserved; any cloud session on these branches" >&2
+  echo "      will read UNKNOWN rather than LANDED (bin/cc-cloud, ORDERING note)." >&2
+fi
+
 rc=0
 i=0
 deleted_list="$(mktemp)"; failed_list="$(mktemp)"
