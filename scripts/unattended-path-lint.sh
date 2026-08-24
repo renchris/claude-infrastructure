@@ -134,6 +134,26 @@ ROOT="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd -P)" || ROOT=""
 STOCK_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 PY="/usr/bin/python3"
 
+# ── THE THREE POPULATIONS, EACH NAMED ONCE ───────────────────────────────────────────────────────
+# This lint judges three disjoint file sets (see the header's "WHY THE bats CORPUS IS A THIRD
+# POPULATION"), and each is declared here so the collector below and `--print-scope` read the SAME
+# declaration rather than two spellings of it.
+#
+#   HOOK_GLOB           — hook_population's whole-directory glob.
+#   PLIST_TARGET_LAYERS — the dirs a launchd plist may execute a script out of. It is what builds the
+#                         alternation inside plist_target_scripts' grep/sed, so widening it moves the
+#                         matcher and the printed scope in one edit. Kept as a space-separated list
+#                         rather than as the regex because a list is what --print-scope needs; the
+#                         regex is derived FROM it, never beside it.
+#   BATS_GLOB           — bats_population's whole-directory glob.
+HOOK_GLOB='hooks/*.sh'
+PLIST_TARGET_LAYERS='scripts bin hooks'
+BATS_GLOB='tests/*.bats'
+# `scripts|bin|hooks`, for the two ERE call sites. Parameter expansion rather than `tr` on purpose:
+# this file is itself scanned by the launchd half whenever a plist executes it, and a bare-name
+# subprocess here would be the lint minting its own finding.
+PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
+
 # ── The ratchet ──────────────────────────────────────────────────────────────────────────────────
 # One "<repo-relative-file>:<binary>" per line. Entries are grandfathered SITES, not blanket
 # exemptions for the binary: the same binary in a new file is still RED. Delete a line the moment
@@ -401,6 +421,7 @@ usage() {
   cat >&2 <<'USAGE'
 usage: unattended-path-lint.sh [ROOT]        scan a repo root (default: this script's repo)
        unattended-path-lint.sh --selftest    prove the detector still discriminates, both directions
+       unattended-path-lint.sh --print-scope name the three populations it judges, as git pathspecs
        unattended-path-lint.sh --list        print the scanned populations and their PATHs, then exit
        unattended-path-lint.sh --emit-inventory [ROOT]
                                              print EMBEDDED_BINARY_INVENTORY unioned with every
@@ -1014,8 +1035,8 @@ plist_effective_path() { # $1=plist -> stdout: a PATH string, or the LOGIN_SHELL
 # control caught it, which is why the generating item made that control mandatory.
 plist_target_scripts() { # $1=plist -> repo-relative script paths it executes
   plist_arg_strings "$1" \
-    | grep -oE '[A-Za-z0-9_./$-]*/(scripts|bin|hooks)/[A-Za-z0-9_.-]+' \
-    | sed -E 's#.*/(scripts|bin|hooks)/#\1/#' \
+    | grep -oE '[A-Za-z0-9_./$-]*/('"$PLIST_TARGET_ALT"')/[A-Za-z0-9_.-]+' \
+    | sed -E 's#.*/('"$PLIST_TARGET_ALT"')/#\1/#' \
     | sort -u
 }
 
@@ -1049,7 +1070,8 @@ file_effective_path() { # $1=file $2=repo root -> stdout: PATH string ('' if it 
 # does not currently fire is still a hook, and wiring one up must not be the act that first exposes
 # a latent bare-name call.
 hook_population() { # $1=root
-  ( cd "$1" 2>/dev/null && ls hooks/*.sh 2>/dev/null )
+  # shellcheck disable=SC2086  # HOOK_GLOB is a GLOB and must stay unquoted; ls is what expands it
+  ( cd "$1" 2>/dev/null && ls $HOOK_GLOB 2>/dev/null )
 }
 
 # ── The bats-corpus half ─────────────────────────────────────────────────────────────────────────
@@ -1057,7 +1079,8 @@ hook_population() { # $1=root
 # half uses, and for the same reason: the alternative is a manifest, and a file a manifest forgets is
 # still executed by `bats tests/`. Both runners take the DIRECTORY, not a file list.
 bats_population() { # $1=root
-  ( cd "$1" 2>/dev/null && ls tests/*.bats 2>/dev/null )
+  # shellcheck disable=SC2086  # BATS_GLOB is a GLOB and must stay unquoted; ls is what expands it
+  ( cd "$1" 2>/dev/null && ls $BATS_GLOB 2>/dev/null )
 }
 
 # The PATHs the corpus actually runs under: one "<plist>\t<expanded PATH>" line per runner PRESENT in
@@ -1749,6 +1772,52 @@ PLIST
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."
   exit 1
+fi
+
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# Printed from the SAME three declarations lint_tree collects with — PLIST_TARGET_LAYERS (which also
+# builds plist_target_scripts' regex), HOOK_GLOB and BATS_GLOB — so widening any population moves the
+# scan and this answer in one edit.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms left out of it).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# `-- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 'tests/*'` pathspec RESTATED in ship-land, under a
+# comment reading "the pathspec must list every population the lint judges, or a land that adds a
+# bare-name call to one of them produces an own-set without it and the finding degrades to advisory".
+# Nothing executes a comment — and this arm is the one that had already needed the comment honoured
+# once, when the bats corpus became a third population and `tests/*` had to be added by hand.
+#
+# TWO DELIBERATE DIFFERENCES FROM THAT RESTATED PATHSPEC, both in the safe direction:
+#
+#   · `launchd/*` IS GONE, and it never judged anything. The launchd half reads a plist to learn the
+#     PATH a job runs with, then scans the SCRIPTS that plist executes — so every path this lint can
+#     report is a hooks/*.sh, a plist_target_scripts result (scripts/ bin/ hooks/), or a tests/*.bats.
+#     `emit` is called with nothing else, so a plist sitting in an own-set can never match a finding:
+#     it was inert, not protective. Printing a population this lint does not judge would make the
+#     flag's contract false at its first use.
+#
+#   · `tests/*.bats`, not `tests/*`. The corpus half judges .bats files; the narrowing is exact
+#     rather than approximate, because bats_population is `ls tests/*.bats` and a git pathspec's `*`
+#     matches `/` unless `:(glob)` magic is asked for.
+#
+# `hooks/*.sh` is printed BESIDE `hooks/*` rather than folded into it. The two come from different
+# declarations — one from HOOK_GLOB, one from PLIST_TARGET_LAYERS — and dropping the narrower on the
+# grounds that today's wider one contains it would make the hook half's scope depend on a subset
+# relation nothing checks. git resolves the overlap by listing each path once.
+#
+# Consumed BEFORE the entrypoint below, which reads `${1:-$ROOT}` as a scan root: past that line the
+# flag resolves to a directory named "--print-scope" and the lint answers exit 2 to a question about
+# its own scope.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split AND for the two globs: unquoted, they would PATHNAME-EXPAND against
+  # the caller's CWD and print real repo paths instead of the pathspecs — the failure mode that
+  # dropped six sites from a sibling lint's census while exiting 0 (see pipefail-sigpipe-lint.sh).
+  set -f
+  for _ps_l in $PLIST_TARGET_LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  printf '%s\n' "$HOOK_GLOB" "$BATS_GLOB"
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
 fi
 
 # ── entrypoint ───────────────────────────────────────────────────────────────────────────────────
