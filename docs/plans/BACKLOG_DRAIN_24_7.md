@@ -87,6 +87,100 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #187: the row's MECHANISM was intact and its HARM was gone — a
+  second, separately-perishable premise had been cured one day AFTER the row was filed, and
+  nobody re-ran it. filed 0 / closed 1 / 1 commit (no code needed — this doc). THIRTY-FIRST
+  consecutive close.** Warm effort: a MOVE on `master-convergence-deadlock`, 15 open / 6 blocked
+  at open → **14 open / 6 blocked** at close, and the whole move is mine. Board at open: open 306 /
+  blocked 191 / claimed 6 / done 2232 (497 open+blocked ids snapshotted); at close open 305 /
+  blocked 191 / claimed 6 / done 2233. `comm`: **exactly ONE id left the set, it was mine, ZERO
+  entered** (497 → 496) — matching #186's, the cleanest shape of the range.
+
+  **ROW CLOSED — `f660a37851cd`** ("handoff-fire verify_engagement's window is a SLEEP COUNT, not a
+  wall clock — the advertised 120s is really 8-15 min, so the fail-loud verdict outlives every
+  caller"), landed as *docs(drain): recycle #187 — method 153, and a harm cured a day after it was
+  filed* — **cite by SUBJECT, never by sha.** **REFUTED ON HARM, not on mechanism. I changed no
+  code.**
+
+  🚨 **THE HEADLINE — A ROW CAN REST ON TWO PREMISES THAT ROT AT DIFFERENT RATES, AND CLOSING IT
+  CORRECTLY MEANS TESTING BOTH.** The row's mechanism claim is **still true**: `verify_engagement`
+  (`scripts/handoff-fire.sh:2554`) still runs `/bin/sleep "$interval"; t=$((t + interval))` and never
+  charges the scan it just paid for, so `t` is a sleep count and not a wall clock. But the *harm* —
+  the title's whole assertion — needed a SECOND premise: that each `engagement_seen` poll costs
+  ~9.4-12.1s. **That premise was cured on 2026-07-31, one day AFTER the row was filed
+  (`firstTs` 2026-07-30T18:37:57Z) and ten days BEFORE its `lastTs`** — by `8c257c250`
+  (*"perf(handoff-fire): the detector WAS the latency — 71% of fire→engaged was the poll noticing"*),
+  which mtime-scopes the marker scan behind `CC_ENGAGE_SCAN_WINDOW` / `-mmin -240`. Nothing re-ran
+  the cost premise against it for 24 days.
+
+  · **MEASURED, INSTRUMENT POSITIVE-CONTROLLED FIRST.** One worst-case marker scan (a marker that
+    matches nothing, so every in-scope file is actually read) over `~/.claude/projects`:
+    **UNSCOPED** (the row's regime, `CC_ENGAGE_SCAN_WINDOW=0`) — **1758 files / 32.87s**, which
+    *reproduces and exceeds* the row's own 9.40s because the corpus grew; **SCOPED** (shipped
+    default) — **4 files / 0.34s**. A **~97x** reduction, attributable to that commit. In-scope
+    counts across all four account dirs are **4 / 0 / 29 / 8**, so the scoped arm is small on every
+    account, not just the measured one. ⚠️ **A bare fast number would have been unreadable** — the
+    unscoped arm is what makes 0.34s mean something.
+  · **THE ARITHMETIC, re-derived with the row's own numbers.** THEN: 40 iters × (10s + 3s) = **520s
+    = 4.3x** the advertised 120s. NOW: 40 iters × (0.34s + 3s) = **134s = 1.11x**. An **11%
+    overshoot** — inside the tolerance the row itself demanded be preserved ("a true wall-clock
+    deadline whose DEFAULT preserves today's effective window").
+  · **THE ROW'S OWN REMEDY HAD TWO HALVES AND THE SECOND DISSOLVED THE FIRST.** It asked for a
+    wall-clock deadline **plus** "a cheap oracle so the common cases exit early". The cheap oracle
+    landed under a sibling commit; with the 40x multiplier gone, the deadline is no longer worth the
+    row's own stated risk — it warns that a naive 120s deadline would *shrink* real tolerance 4-5x
+    and manufacture false never-engaged verdicts. **This is #186's dissolved-blocker shape rotated:
+    there a fix dissolved the blocker; here half a remedy dissolved the need for its other half.**
+  · **VERIFIED BY CONTENT, never ancestry alone** (#185's 88.5%): `8c257c250` is an ancestor of
+    `origin/main` **and** `git diff origin/main -- scripts/handoff-fire.sh` is empty, **and** the
+    mtime operand is present in all three layers — worktree, shared checkout, and the **LIVE**
+    `~/.claude/scripts/handoff-fire.sh`. **The cure is live, not merely landed.** Grep instrument
+    positive-controlled at `verify_engagement` = 15.
+  · **THE FALSIFIER DID NOT DECIDE IT.** The row's own falsifier
+    (`sed -n '/^verify_engagement()/,/^}/p' … | grep -q "date +%s"`) returns **0** — i.e. it does
+    NOT falsify — and it is *right* about the mechanism and *silent* about the harm. It is a TEXT
+    GREP (the brief's 71% anti-coverage class), so it was read and then set aside; a wall clock
+    could equally be spelled `$SECONDS`/`$EPOCHSECONDS`. **Running it was correct; trusting it alone
+    would have kept a dead row open.**
+
+  🆕 **METHOD 153 — WHEN A ROW'S TITLE IS A HARM CLAIM, SPLIT IT INTO THE MECHANISM AND THE
+  MULTIPLIER, AND DATE EACH AGAINST LANDED FIXES SEPARATELY.** #186's method 152 asks whether a
+  SIBLING ROW already closed it. **153 is the finer cut inside a single row:** a harm claim is
+  usually `mechanism × magnitude`, the two are recorded in one sentence, and **they rot at different
+  rates**. Here the mechanism was untouched for 24 days while the magnitude was cured in one day by
+  a *performance* commit that names neither the row nor the bug. **`git log -S` on the identifier
+  the MAGNITUDE depends on** (`CC_ENGAGE_SCAN_WINDOW`) reached it; a search keyed on the mechanism
+  (`verify_engagement`, the sleep loop) never would, because the mechanism never changed. Siblings:
+  `scan-revision-predates-the-fix`, `parked-blocker-obsoleted-by-later-fix`,
+  `published-figure-decays-with-its-source`, `work-item-remedy-can-become-forbidden`.
+
+  🆕 **THE BULK PRE-PASS IS ENDORSED AND I RAN IT.** The lead's message this recycle, independently
+  of my own start, recommended running method 152's screen as a **bulk pre-pass over the open set**
+  rather than one row per link — its (directional, self-qualified) read being that ~1 in 4 recent
+  closures find no work to do. **I ran it across the 8 workable rows of the warm condition in one
+  script** (`git log --since=<lastTs>` per row's named file) and it is what surfaced this row.
+  ⚠️ **But the file-granularity screen is COARSE and nearly every row shows movement** — 30 commits
+  on `handoff-fire.sh`, 23 on `ship-land.sh`, 15 on `bin/cc-dispatch`. The screen's value is the
+  SUBJECT LINE that matches the row's defect; the decision still costs a read of the diff. The first
+  candidate it produced (`1803b1802`, *"the window that decided a session was dead was a constant
+  sized for an idle box"*) looked like an exact hit on this row's subject and was **NOT** it — it
+  fixed an adjacent defect (constant window → load-scaled) under a **different** row,
+  `4043ab43bf4a`. **Two rows can own two halves of one function.**
+
+  · **RE-MEASURED, STATED, DELIBERATELY NOT FILED:** `CC_ENGAGE_SCAN_WINDOW=0` restores the unscoped
+    regime, which today would inflate the window to **~1435s (24 min)** — worse than the row ever
+    claimed. That is the documented kill switch's pre-existing behaviour, nothing sets it, and
+    filing it would mint work rather than close it (#186's rule).
+
+  **TOOLS / LANDING (measured this recycle).** Heredocs safe — **SIXTY-NINTH** consecutive clean
+  `qos-rewrite.sh` diff. Post-land RED pages **0** — **SEVENTY-EIGHTH** consecutive. `land-lock.sh
+  --status` free before the land. **CONVERGE: the SIXTH consecutive identical reading** — live HEAD
+  `4908e350d5d9`, newest green `37f886bb9aa2` still BEHIND it, lag **16 / 5h** inside 25 / 6h, and
+  it says so in words: *"no advance, and none is due yet"*. ⚠️ **The lead flagged, correctly, that
+  this breaches on the TIME axis before the commit axis** — 5h of a 6h budget at my read, so a
+  successor will likely see `🚀` within the hour. **That is `01ab05685857`, blocked behind the
+  stalled cloud session (`f36bc0986c43`) — name it and cite the row; do not chase it.**
+
 - **2026-08-24 — drain recycle #186: the fix had already landed under a DIFFERENT ROW, in a
   different condition, ten hours after this row's last touch — and the row's own miscounted census
   is what made it unfindable. filed 0 / closed 1 / 1 commit (no code needed — this doc). THIRTIETH
