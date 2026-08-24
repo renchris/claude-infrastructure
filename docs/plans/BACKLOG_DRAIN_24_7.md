@@ -87,6 +87,113 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #207: method 177 — the row had already been adjudicated, by its own
+  author, into its own evidence field, and nobody moved its status. filed 0 / closed 2.**
+  Board at open: **476 open+blocked** (286 open / 190 blocked / 2266 done, claimed 6); at close
+  **475** (286 / 189 / 2268, claimed 6). Open held at 286 across a close **because the lead filed
+  `3595c391fc71` at 21:54:53Z while I worked** and it exactly offset my one open departure;
+  `ungrouped` sat at 202 both ends for the same reason. `master-convergence-deadlock` **open=13 /
+  blocked=6 at BOTH ends — unmoved, by me and by anyone**; one of my two picks was `ungrouped` (moves
+  no condition count) and the other moved `master-enforcing-store` blocked 8 → 7. Closed 2, filed 0 —
+  **net −2**, the fourth consecutive negative-net link. `comm` over the pinned open+blocked id list:
+  **2 departures, both mine and both genuine CLOSES** (not claims — the distinction #206 had to draw),
+  and **1 arrival**, the lead's, whose `.by` is **EMPTY**: I know its author only because the peer
+  said so in mail. That is the third consecutive link where `.by` hid a real third party.
+
+  **METHOD 177 — `evidence` IS THE CLOSING ARTIFACT, SO AN OPEN ROW CARRYING ONE IS AN ADJUDICATION
+  THAT NEVER BECAME A STATE CHANGE.** The field is written by `cc-backlog done <id> --evidence …`.
+  Measured across the whole board: **non-empty on 2224 of 2266 `done` rows (98.1%)** and on **5 of
+  286 `open` rows (1.7%)** — a ratio that is not incidental but the signature of a field the *close
+  verb* writes. So the screen is one `jq` filter, it enumerates the class **completely** (5 open + 5
+  blocked, board-wide), and it is precise rather than merely suggestive. Both of today's closes came
+  out of it. This is the sibling of #205's method 175 and #206's method 176 and it is *cheaper than
+  both*: 175 searches the test tree, 176 reads the row's citation, **177 reads a single field and
+  needs no git at all**.
+  🚨 **But the yield is bounded and the boundedness is the finding.** Ten rows is the entire class,
+  and reading all ten shows most are *correctly* open: `1b00d62958a6` and `b22e519e06cb` carry
+  evidence explaining a **deliberate reopen** (the W4 wave), `a36e2b9bbac1` and `b262e41b26fb` are
+  `981a403a05fa` re-land emissions that must not be closed individually, `b7252a3bb015` is this
+  chain's own deliberately-held positive control, `b583c5564aa2` is reso. **So #208 should run this
+  screen once, expect ~2 live candidates, and not mistake a saturated screen over a 1.7% population
+  for a rich vein** — the same trap #206 hit from the other side with `dodRef` (present on 500/500,
+  so it flagged nothing).
+
+  **CLOSE 1 — `35190812890d`. Disposition: ALL THREE CLAUSES REFUTED · THE ROW REFUTED ITSELF 12 DAYS
+  AGO · residue owned by five open rows · nothing filed.** Its title asserted an absolute — *"the live
+  `~/.claude` layer cannot advance **at all**"* — which is shape #13, and absolutes are cheap to test.
+  · **"postland-verify never stamps GREEN"** — the store `~/.claude/autonomy/postland/stamps` holds
+    **432** stamps spanning **2026-07-26T02:16:42Z .. 2026-08-24T21:24:51Z** (span printed beside the
+    count, per #205's rule 3): cut 237 / red 139 / **green 48** / hung 8. Restricted to the row's own
+    filing instant onward: **249** stamps, cut 180 / **green 39** / red 25 / hung 5, newest GREEN
+    **2026-08-24T20:16:13Z, run_s 3191, commit `500553d48eb7`** — 1h40m before this close. POS control
+    `-newermt 1970-01-02` = 432 (the full store); NEG `-newermt 2099-01-01` = 0.
+  · **"tests/autonomy-sweep.bats hangs (run_s 4144-5235s)"** as *the blocker* — run_s over those 249 is
+    n=249 **min 263 / p50 2513 / max 10282**, p50 well below the claimed band; the suite is named in
+    `failing[]` **5 times** and is not even the leader (`subshell-cleanup-lint.sh` 9,
+    `claude-accounts-core.bats` 7, autonomy-sweep 5). POS: 30 of 249 stamps carry a non-empty
+    `failing[]`; NEG: `zzqqxxzzqqxx` 0.
+  · **"the live layer cannot advance at all"** — **FALSE by 913.** Live HEAD is `500553d48eb7` on
+    `main` (symlinks read, not assumed: `~/.claude/scripts/postland-verify.sh`, `…/deploy-live.sh` and
+    `…/hooks/qos-rewrite.sh` all resolve into the shared checkout). Commits on that HEAD after the
+    filing instant = **913** (POS since 2026-01-01 = 3579; NEG since 2099-01-01 = 0). And the chain the
+    row calls impossible **is the steady state**: the newest GREEN stamp is stamped *on* `500553d48eb7`,
+    `--is-ancestor` rc 0 against both live HEAD and origin/main, with NEG control `4e39debcf` rc 1.
+  · 🚨 **THE ROW ALREADY KNEW, AND THAT IS THE WHOLE LESSON.** firstTs 09:29:41Z, lastTs **12:39:52Z** —
+    3h10m later somebody wrote the verdict *into the row*: *"Also falsified: 'deploy-live is
+    fail-closed on GREEN stamps' as a live blocker … so the live layer converges"* and
+    *"tests/autonomy-sweep.bats is not in `failing[]`"*. **Every selector on this board reads
+    `status`. A refutation written into a text field is invisible to the fold, to every count, and to
+    every screen** — so the row went on presenting as candidate work for 12 days, and appeared in this
+    chain's own lead lists.
+  · **RESIDUE HAS OWNERS** (#201's rule), which is what licensed a fourth net −1-or-better. The
+    surviving mechanism is the corpus **CUT**, and it is *worse* than the row recorded (row: 28 cut of
+    the last 40; measured now **180 cut of 249**, 72%). A four-predicate search over all **482** live
+    rows returned **15 / 7 / 7 / 19** — non-uniform, so each is readable (POS `the` 423, NEG 0) —
+    naming five OPEN owners: `b7252a3bb015`, `ac1afe12ff0e`, `b6f03adab3f9`, `4cec179c6ba5`,
+    `b83f4a2ba219`. The GREEN-staleness half is owned by `01ab05685857`, currently CLAIMED.
+
+  **CLOSE 2 — `5436396f405c` (BLOCKED). Disposition: DISCHARGED, LANDED **AND LIVE**, SUITE GREEN
+  18/18 · nothing filed.** Its evidence said *"OBSOLETE 2026-08-18 … the fix landed and is LIVE"* and
+  cited `17ecae6c6`. Verified clause by clause rather than believed, because a citation is a claim
+  about a diff (method 176): **is-ancestor origin/main rc 0**, subject *"feat(ff-gate): deny an ungated
+  advance of the shared checkout at the tool call that makes it"*, NEG control `4e39debcf` rc 1 ·
+  `git show --name-only` = **exactly two paths**, `hooks/validate-bash.sh` **and**
+  `tests/validate-bash-ff-gate.bats`, i.e. the remedy shipped with its suite, which is method 175's
+  signature (`ls tests/ | grep validate-bash` 6; POS `*.bats` 536; NEG 0) · **LIVE, measured per
+  file**: `~/.claude/hooks/validate-bash.sh` symlinks into the checkout and its sha256 **equals** the
+  trunk blob's, `c79d5e8303af51d9` — live independent of the repo's 8-commit converge lag · **the
+  enforcing store carries it**: all five config dirs register it, `validate-bash=1` each with
+  `PreToolUse` POS 1 and NEG 0, **5/5**, none answering UNKNOWN · **behavioural**:
+  `tests/validate-bash-ff-gate.bats` **18/18 GREEN in 9s**, plan 18 == ok 18 + nok 0 (`bats --count`
+  read 18 first). Residue — *a hand-advance also skips `install.sh`, so new files never get linked* —
+  is the `LIVE_ADDS` mechanism, owned by OPEN `4e6a51df2a84`.
+
+  **INSTRUMENT SCARS FROM THIS LINK.**
+  · 🚨 **`find -newermt` REJECTS AN ISO-8601 `Z` STRING ON BSD** — `2026-08-12T09:29:41Z` prints
+    `Can't parse date/time` and the arm produces **nothing**. Under a `| wc -l` or a damping redirect
+    that is a clean **0**, i.e. the failure renders as *"no stamps since the filing"* — which would
+    have **confirmed** the row I was refuting. Use `'2026-08-12 09:29:41'` with `TZ=UTC` pinned. This
+    is the `--since`-rc scar in a new dress: **read the OUTPUT, and control it**.
+  · **A PROBE THAT CANNOT FIND ITS STORE MUST SAY UNKNOWN** (#205's rule 2) — mine did, and it paid
+    immediately: my first guess `~/.claude/state/postland/stamps` is **absent**; the real store is
+    `~/.claude/autonomy/postland/stamps`, read out of `postland-verify.sh:100`. A `0` there would have
+    been a fabricated refutation of my own thesis.
+  · **PRESENT vs NON-EMPTY, again, and this time it was the LOAD-BEARING measurement rather than a
+    caveat.** `evidence` is present on 133/133 open claude-infrastructure rows and non-empty on **4**.
+    A screen that counted *presence* would have read 133 and said nothing; the whole method is in the
+    gap between the two numbers.
+
+  **HOUSEKEEPING.** qos-rewrite `diff` empty — **89th** consecutive clean. `find` under
+  `~/.claude/autonomy/postland` for `*.page` = **0**, **98th** consecutive (directory asserted present
+  first; the deploy lane's own pages still live in `autonomy/pages`). The PostToolUse hook fired
+  **seven times before the insert (65th-71st across thirty-four consecutive recycles)**, and the
+  inserter is itself a `.py`, so it is a **72nd by construction**. 🆕 **#204's predictor now holds a
+  FOURTH session and on this link's strongest sample: all seven firings were `.py`, and NONE of my
+  eight `.sh` or two `.txt` files triggered it — 7/7 vs 0/10.** No rewrite altered a constant
+  (`py_compile` + `/usr/bin/grep -n` on the regex literals after each). The land was **docs-only**, so
+  all five pre-land lints were **N/A and none was run or claimed**. `master-fire-gate` still 10 open,
+  `master-product-repos` 34 open — untouched.
+
 - **2026-08-24 — drain recycle #206: the row cited the very commit that discharged it, and misread
   that commit as a partial — off by ONE commit in its own history. filed 0 / closed 1.**
   Board at open: **477 open+blocked** (287 open / 190 blocked / 2265 done, claimed 6); at close
