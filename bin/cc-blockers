@@ -16,8 +16,10 @@
 # …with ONE drop rule: a relogin row whose .deadline is EARLIER than that account's LIVE
 # login_expires_at is STALE BY CONSTRUCTION and is not rendered (see drop_stale_relogin below).
 #
-# ALSO renders three LAND-PIPELINE alarms (LAND_PIPELINE_V2 §4.4) that are NOT board rows: they are
-# fact-bound DISK reads, computed here every invocation.
+# ALSO renders the LAND-PIPELINE alarms (LAND_PIPELINE_V2 §4.4) that are NOT board rows: they are
+# fact-bound DISK reads, computed here every invocation. (Said as a LIST, not a count — the count
+# read "three" against seven listed kinds for weeks, and a header that miscounts its own body is the
+# first thing a reader stops trusting.)
 #   kind=="verifier-inert"  NEVER-ACTIVATED (no stamps dir has ever existed — an un-run C10 step)
 #                           or STALE (stamps stopped while land.log kept moving)
 #   kind=="trunk-red"       the verifier is ALIVE (stamping fresh, OR provably mid-run) and NOT ONE
@@ -38,6 +40,14 @@
 #                           hung run is WORSE than a red one for "is trunk persistently failing".
 #                           For a VERDICT ask "is it red?"; for an ALARM ask "is it green?".
 #                           Kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores `red == seen`.
+#   kind=="green-starved"   UNCERTIFIED — the verifier is ALIVE and HAS certified before, but the
+#                           newest GREEN is older than CC_POSTLAND_GREEN_MAX_H (24h) and work has
+#                           landed on top of it. The state BETWEEN trunk-red and never-green: greens
+#                           do arrive, just not inside the budget, and one green anywhere in the
+#                           newest-N window makes `fcount < seen` so trunk-red abstains while
+#                           never-green needs no green to have EVER existed. Second sensor is
+#                           `land > green`, never a land window — an old green over an unmoved trunk
+#                           is a certified trunk. Defers to trunk-red (`emitted`), which is sharper.
 #   kind=="land-lock-hung" a LIVE holder of the machine-wide landing mutex is past its hold
 #                           budget (ORPHANED-HELD when its ppid is 1 — the observed shape). H2
 #                           forbids reaping it, so the page IS the recovery. Delegated to
@@ -66,7 +76,9 @@
 #                           was SILENT through 53 commits of halted deploy. Emitted only when no
 #                           sharper row already claimed the reason.
 # The three are mutually exclusive by construction on the verifier-ALIVE axis: STALE needs a stamp
-# past the budget AND no run in progress, PERSISTENT-RED needs a fresh stamp OR a run in progress.
+# past the budget AND no run in progress, PERSISTENT-RED needs a fresh stamp OR a run in progress —
+# and green-starved shares PERSISTENT-RED's liveness predicate verbatim so it inherits that same
+# exclusion from STALE, then defers to PERSISTENT-RED itself on `emitted`.
 # Stamp age alone was the original axis and it was WRONG — a stamp is only written when a run ENDS,
 # so a slow-but-healthy verifier read as inert and suppressed the red row (see verifier_running()).
 # All exist because a launchd job dies
@@ -174,6 +186,13 @@ LANDLOG="${CC_LAND_LOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
 DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD lag budget (minutes)
+# ── GREEN-STARVED budget (cc-backlog 01ab05685857) ───────────────────────────────────────────────
+# How long trunk may go UNCERTIFIED before that is news. 24h because that is the number the row was
+# filed against and the same window `green_24h` below already uses — one budget for one policy, on
+# the DEPLOY_MAX_LAG_* precedent two lines down. Same non-numeric fallback, for the same reason: a
+# garbage override must not be able to take a sensor down under `-u`.
+GREEN_MAX_H="${CC_POSTLAND_GREEN_MAX_H:-24}"
+case "$GREEN_MAX_H" in ''|*[!0-9]*) GREEN_MAX_H=24 ;; esac
 # ── DEPLOY-STALE budget (DEPLOY_LANE_GROUND_UP §2.3 D2). SAME NAMES AND SAME DEFAULTS as
 # scripts/deploy-live.sh, deliberately: two numbers for one policy would let the lane sit refusing
 # inside a window the board still calls healthy, which is a slower version of the silence being fixed.
@@ -436,6 +455,53 @@ EOF
     # shellcheck disable=SC2016  # $v is jq's --arg binding, EMITTED for the operator's jq to read.
     printf '{"kind":"trunk-red","state":"%s","detail":"%s","subject":"%s","recover_cmd":"jq -r --arg v red %sselect(.verdict==$v).failing[]?%s %s/*.json | sort | uniq -c | sort -rn | head","ts":%s}\n' \
       "$astate" "$dtl" "$STAMPS_DIR" "'" "'" "$STAMPS_DIR" "$now"
+    emitted=1
+  fi
+
+  # ── (b') GREEN-STARVED — the verifier is ALIVE, HAS certified before, and has not certified the
+  # work that landed since. cc-backlog 01ab05685857, whose own consolidation verdict is this row:
+  # *"INERT is wrong — the daemon is LOADED and RUNNING. The true fact is green STARVATION: newest
+  # green 47.5h old vs a 24h max"* (docs/plans/backlog-consolidation-2026-08-09/OUT-landgate.md).
+  #
+  # THE HOLE. `green_24h` is computed above and read by exactly one predicate — as a CONJUNCT of
+  # trunk-red — so the board can say "every one of the newest N verdicts failed" and it can say "no
+  # green has EVER existed", but it has no row for the state BETWEEN them: greens do arrive, just not
+  # inside the budget. Whenever one green sits in the newest-N window, `fcount < seen` and trunk-red
+  # abstains; `gcommit` is non-empty so never-green abstains; the stamp cursor keeps advancing so
+  # verifier-inert/STALE abstains. Every sensor is correct and the board is silent. That is not a
+  # rare corner: measured on the live store 2026-08-01..08-24, 40 green of 386 stamps (~10%), so at
+  # REDRUN_N=5 a green lands in the window roughly two draws in five — and the row's own re-audit
+  # measured 3 breaches of the 24h max (57h, 53h, 26h) with nothing on the board for any of them.
+  #
+  # THE SECOND SENSOR IS `land_ts > green_ts`, NOT a 24h land window. A 46h-old green over a trunk
+  # that has not moved is a certified trunk, not a starved one — the age alone is a property of the
+  # box's idleness. What makes it news is that work landed ON TOP of the newest certification and is
+  # running uncertified. This is verifier-inert/STALE's own idiom (`land_ts > newest_ts`) pointed at
+  # the GREEN cursor instead of the stamp cursor, which is exactly the axis that differs.
+  #
+  # LIVENESS IS trunk-red's, ON PURPOSE, not a second oracle: fresh stamp OR a run in flight. A dead
+  # verifier is verifier-inert's story and its fix is `launchctl`; this row's fix is the opposite one
+  # (find out why the runs come back non-green), so sharing the predicate is what keeps the two
+  # mutually exclusive by construction rather than by hope.
+  #
+  # `emitted` GATED, never-green's shape: trunk-red is the SHARPER row wherever both are true — it
+  # names the failing suites — so the operator never gets two rows for one fault. Deploy rows below
+  # are deliberately NOT gated against this one (the deploy-stale/L2 precedent): "trunk is
+  # uncertified" and "the layer cannot advance" are two facts, and each stays true without the other.
+  #
+  # For an ALARM ask "is it green?" — there is no equality against a failure name anywhere here, so
+  # this row is born on the right side of scripts/alarm-polarity-lint.sh's bug class.
+  if [ "$emitted" -eq 0 ] && [ -n "$gcommit" ] && [ "$green_ts" -gt 0 ] \
+     && [ "$((now - green_ts))" -gt "$((GREEN_MAX_H * 3600))" ] \
+     && { [ "$((now - newest_ts))" -le "$((ALARM_H * 3600))" ] || verifier_running; } \
+     && [ -n "$land_ts" ] && [ "$land_ts" -gt "$green_ts" ]; then
+    # DETAIL is ASCII-only and sized for the 44-BYTE column (printf pads by bytes; one em-dash
+    # shifts it). Carries the LIFETIME rate beside the age: the age says the certification is old,
+    # the rate says whether that is a blip or the steady state, and only the pair sizes the problem.
+    dtl="$(printf 'newest green %sh old (max %sh); %s/%s ever' \
+             "$(hrs "$((now - green_ts))")" "$GREEN_MAX_H" "$life_g" "$life")"
+    printf '{"kind":"green-starved","state":"UNCERTIFIED","detail":"%s","subject":"%s","recover_cmd":"jq -r .verdict %s/*.json | sort | uniq -c | sort -rn ; tail -40 %s/runner.log","ts":%s}\n' \
+      "$dtl" "$LAST_GREEN" "$STAMPS_DIR" "$POSTLAND_DIR" "$now"
     emitted=1
   fi
 
@@ -1363,7 +1429,7 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # A kind absent from this selector is EMITTED and then silently dropped from the table — it rides the
 # --json array and vanishes from the one surface the operator reads. That is not hypothetical: the
 # mirror bug has bitten this file before, which is why every kind here carries a render test.
-LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-wedged" or .kind=="deploy-stale" or .kind=="never-green" or .kind=="land-lock-hung")'
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="green-starved" or .kind=="deploy-lag" or .kind=="deploy-wedged" or .kind=="deploy-stale" or .kind=="never-green" or .kind=="land-lock-hung")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —
