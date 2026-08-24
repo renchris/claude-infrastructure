@@ -228,6 +228,31 @@ single-feature per-account fits are not.
 | R6 | **Do not use `$73.50/pp` as an internal cost.** It is an API-list *equivalent* (finding #15), not Anthropic's budget; `limit_dollars` is null and cannot be recovered. Use it only for cross-model routing arithmetic, never for a "we're spending $X" claim. | Prevents a 158×-inflated spend figure entering a close or a plan. | NONE (it is a guardrail) | 0 |
 | R7 | **Re-run the fit after ≥ 2 more full weekly cycles per account, and after any Anthropic pricing/limit announcement.** Current n = 5 cycles / 6.2 days; the Fable coefficient in particular is unstable (bootstrap p5 = 0). | Tightens `fable_out` from [0, 2.65] to something usable; detects re-weighting. | NONE | 30 min once R3 exists |
 
+### R1 — what it superseded, and the ruling that closed it (added 2026-08-24)
+
+R1's "standing incentive to trim context" was not hypothetical: it was a **named, live policy line in
+this repo**, and R1 shipped without citing it, so both documents stood for 15 days giving directly
+opposite advice. `scaling-bottlenecks-2026-08-09.md:36,150` prescribed *"68% of quota cost is
+cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity — bigger than a fifth
+account"*, carried into that doc's standing-policy list. It was priced from a composition model
+(cache-read 68% / cache-write 18% / output 14%), never from the meter.
+
+**Ruled 2026-08-24, class A (measurement supersedes an unvalidated composition model): this
+document's rate governs.** That clause is struck at both sites; the full reasoning, the arithmetic
+showing the 68% premise fails under the API-list hypothesis too (**~28%**, so the lever is worth 0%
+to ≤ +16%, never +50%), and the corrected sustainable-active figure (A6 §C4's model-free
+**6.2–11.0**, replacing the cache-read-priced 3.9) are in
+**`scaling-bottlenecks-2026-08-09.md` §2a**. Chain of custody:
+`orchestration-units-2026-08-19.md` N7 (REFUTED, *"needs a filed decision"*) →
+`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C6 (found the live consequence, and
+correctly held this doc's cache-read result to *a bound, not a point*) →
+`orchestration-units-2026-08-19/Z-completeness-critic.md` G15 (no decision was filed) → §2a (filed).
+
+⚠️ **Read R1 as scoped to quota, which is all it ever measured.** It removes the *quota* reason to
+trim context. It says nothing about the context-window ceiling — a hard `Prompt is too long` refusal
+with no auto-compaction beneath it — which is the entire basis of `CLAUDE.md` § Context Stewardship
+and is unaffected by anything in this file.
+
 ---
 
 ## What would falsify my headline

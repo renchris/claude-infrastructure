@@ -33,8 +33,83 @@ of the render floor" was a ratio between two emulators, one absent).
 | 1c | └ toolchain bursts (the crash igniter) | D3's 15% segment bar = **19.9 GB of anon at panic packing** — the entire S6.2 remainder; and S6.2's "19 GB left for bursts" recomputes to **−4 GB** at the corrected constant | ~1 cold compile | 05, 01 |
 | 2 | **Active-session load** (the felt daily ceiling) | **2.5–5 runnable threads per genuinely-active session** (measured 27→44 load at 9 active), not 1.6 (a mixed-fleet average) | **~4–8 concurrent active** on the load-20 gate — matches the felt ~12–15-session pain and all 127/127 historic gate refusals | 09 |
 | 3 | **Fleet-self-imposed caps** | router `KMAX=8` × 4 accounts — **refuses the 33rd session** (proven on the shipped binary; `handoff-fire.sh:5266` turns rc 2 into HALT). oauth refresh herd: one credential/expiry instant per ~37 sessions, rotating tokens ⇒ a losing racer logs out the whole account, and `heal()` refuses to run while sessions are live ⇒ can never fire at 150. git shared store crosses `gc.auto` (6700 loose) within hours at 15×. `.claude.json`: 171 KB whole-file rewrite, no lockfile. | 32 · any refresh instant · hours · races now | 07, 08 |
-| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain **~3.9 concurrent active 24/7** (~654 active-h/week); 10 active affordable ~39% of the week. **68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account. | active work, not residency | 07 |
+| 4 | **Account quota (active half only)** | residency ≈ free; 4 Max accounts sustain ~~**~3.9 concurrent active 24/7**~~ → **6.2–11.0 measured** (~654 active-h/week); 10 active affordable ~39% of the week. ~~**68% of quota cost is cache-read at median ~200K contexts ⇒ halving context ≈ +50% active capacity** — bigger than a fifth account.~~ 🚨 **STRUCK 2026-08-24 — REFUTED by measurement; see §2a.** | active work, not residency | 07 |
 | — | **NOT walls** (each with evidence) | render (idle panes 0.001 cores; occluded windows free; unit = drawn OS window ~0.05 cores; corrected wall 226–440 all-visible-all-active panes; sane 150-topology = 0.4–0.6 cores) · ptys (~30%, 1/pane+16 static) · pid-wrap (REFUTED: 923 pids/s ⇒ wrap every 108 s, live-observed; the panic correlation was a 2%-prior coincidence) · Mach ports (incident #0 re-explained as WindowServer CPU serialization — amplifier gone under kitty) · fd/kqueue/logd/disk/Spotlight/FS | — | 02, 08, 09 |
+
+### 2a · CORRECTION 2026-08-24 — the quota row's cache-read premise is refuted, and with it the "halving context" lever
+
+*(Sites: the rank-4 row above — still line 36 — and the standing-policy bullet formerly cited as
+`:150`, which this insertion pushed into **§5 P2**. Chase the section, not the number; every external
+citation of `:150` predates 2026-08-24.)*
+
+🚨 **The struck clause in rank 4 is wrong, and it was standing policy for 15 days.** Rank 4 priced the
+quota wall with **cache-read at 68% of cost** (axis 07's composition: cache-read 68.0% / cache-write
+18.0% / output 14.0% at ~200K median contexts) and derived from that a headline lever — *halve the
+context, gain +50% active capacity, bigger than a fifth account*. Seven days later a direct meter
+experiment measured the exchange rate instead of modelling it, and the premise does not survive.
+
+| | This doc (2026-08-09, axis 07) | `usage-telemetry-100p-2026-08-16/exchange-rate.md` (measured) |
+|---|---|---|
+| cache-read price | 0.10× multiplier, **68% of quota cost** | Opus-5 **0.000 pp/Mtok** (p95 ≤ 0.0017 over ≥590M tokens); ≥590M tokens per weekly pp |
+| what costs | context volume | **output** (1.282 pp/Mtok) and **cache-creation** (0.105) |
+| the prescription | *"halving context ≈ +50% active capacity"* | R1: *"Stop treating long cached context as quota-expensive… it authorises **more** context"* |
+| method | composition model over token counts | NNLS over 265 ≥2 h intervals / 4 accounts, R²=0.82, CV RMSE 1.63 pp vs sd 2.13; independently replicated on the disjoint 5-hour bucket (128 intervals, R²=0.54, same zero on cache-read) |
+
+**The decision (filed 2026-08-24, class A — measurement supersedes an unvalidated composition model).
+The measured rate governs; the halving lever is dead; the two docs now cite each other.** Rationale
+in three parts, the third being why this is a ruling and not another measurement request:
+
+1. **The refutation does not depend on the disputed point estimate.** `exchange-rate.md`'s own
+   abstentions table is honest that cache-read is *a bound, not a point* — `corr(out, cr) = 0.936`,
+   `cond(X) = 23,556`, and the free and API-list-priced hypotheses both fit (R² 0.813 vs 0.797); the
+   A6 verifier (`orchestration-units-2026-08-19/A6-VERIFY-quota-economics.md` §C6) correctly called
+   the finder's "confirmed free" an overclaim on exactly that ground. **It does not matter here,
+   because 68% fails under both hypotheses.** Priced at API list — the alternative that fits nearly
+   as well, weights `5·in + 25·out + 6.25·cc + 0.5·cr` from finding #15 — account `next`'s realised
+   80 pp cycle (6.47B tokens, 5.44B of them cache-read, ~1.0B cache-creation, 22–31M output) puts
+   cache-read at **~28% of dollar cost** (27–30% across the published ranges), not 68%
+   *(DERIVED-HERE from that doc's published figures; a bound-check, not a new measurement)*. So the
+   lever is worth **0% under the measured fit and ≤ ~+16% under the list-price alternative** — and
+   even that is an upper bound, since halving the window does not halve cache-creation. Never +50%.
+2. **Rank 4's "~3.9 concurrent active 24/7" was priced with the same broken composition, so it too
+   was wrong — but do not simply divide it out.** N7 corrects it to 3.9 / 0.32 = **12.2** under the
+   free hypothesis; the list-price hypothesis would give ~5.4. The figure that owes nothing to either
+   is A6 §C4's model-free derivation, **6.2–11.0 sustainable working units fleet-wide**, which
+   brackets both and is what rank 4 now carries. Three independent derivations converging on ~9–12 is
+   the strongest result in that wave.
+3. **Why a ruling, not a re-measurement.** `orchestration-units-2026-08-19.md` N7 marked this REFUTED
+   on 2026-08-19 and closed with *"needs a filed decision, not another measurement"*; that wave's
+   completeness critic (`Z-completeness-critic.md` G15) then observed that **the synthesis named the
+   contradiction and filed nothing**, leaving live-but-refuted guidance invisible to every sensor.
+   A third measurement would not have changed that. This block, the reciprocal citation added to
+   `exchange-rate.md`, and the status flip on prior-art row 55 ARE the filing.
+   Class **A**, not C as G15 guessed: `cc-decide`'s taxonomy reserves C for human-only hard blocks
+   (C10 self-mod, C6 money-path, permission denial), and this is an agent ruling on evidence with no
+   value fork for the operator. Packet `758827c8333e` was opened, **but this session ran dispatched
+   on an ephemeral box, so its `~/.claude/autonomy/decisions/` does not survive** — the durable trail
+   is this commit and this block, which is the form the close protocol's evidence tier actually
+   reads back (`git show <sha>`).
+
+⚠️ **This does NOT weaken context stewardship — it removes a justification stewardship never rested
+on.** The global `CLAUDE.md` § Context Stewardship is argued entirely from the **context-window
+ceiling** (a hard `Prompt is too long` API refusal with no auto-compaction safety net) and from
+decision rot, never from quota; grep confirms the 68% figure never reached it. Recycle at the right
+moment for those reasons. Do not trim a context to save quota — per R1 that trade buys ≤16% of token
+volume at ≤1/12 weight and spends the quality-positive direction to get it.
+
+**Still open (not resolved by this decision):** which of the two fits is true. `exchange-rate.md`
+§"What would falsify my headline" #3 specifies the experiment that separates them — replay a very
+large cached context many times with near-zero output; predicted ≈ 0 pp under the measured fit,
+~1 pp per 2B cache-read tokens under API-list. That probe would move the ≤+16% bound to a point, but
+it cannot revive +50%, which both hypotheses already exclude.
+
+**Downstream carriers of the struck figure**, corrected or annotated with this block:
+`memory-econ-rearchitecture-2026-08-10/prior-art.md` row 55/56 (a LIVE-status ledger — flipped).
+Left as dated audit records of what was believed on their date, not corrected:
+`jcode-due-diligence-2026-08-11.md:53`, `jcode-due-diligence-2026-08-11/bottleneck-audit.md:73`,
+`jcode-due-diligence-2026-08-11/ranked-levers.md:36,:54`.
+
+---
 
 **Felt lag, precisely (12):** turn-end lag is **3.7 s p50 / 7.7 s p90** and 92% of it is ONE call —
 `cc-backlog list --blocked --json` (2.1 MB store, ~60 jq forks) inside the Stop readout. Chronic CPU
@@ -147,8 +222,15 @@ already exists, not render work.
   closes the F3 half that a SPAWN gate can close and no more** — axis 10's thundering-herd path is
   a *wake* of existing residents, which no spawn gate sees by construction, so wake-side damping
   remains open and unowned.
-- Standing policy: **context stewardship IS capacity** — median turn context ~200K, 68% of quota
-  cost is cache-read; halving context ≈ +50% sustainable active work (07).
+- ~~Standing policy: **context stewardship IS capacity** — median turn context ~200K, 68% of quota
+  cost is cache-read; halving context ≈ +50% sustainable active work (07).~~
+  🚨 **STRUCK 2026-08-24 — see §2a.** Measured Opus-5 cache-read is **0.000 pp/Mtok**, so this
+  bullet's premise and its lever are both refuted, and `exchange-rate.md` R1 gives the opposite
+  advice (*re-reads are ~free; only output and cache-creation cost*). Context stewardship remains
+  standing policy on its own grounds — the hard `Prompt is too long` ceiling and decision rot — but
+  it is **not** a quota lever. Replacement standing policy: **quota is spent by what you EMIT, not
+  by what you re-read**; the sustainable-active figure is A6 §C4's model-free **6.2–11.0**, not the
+  cache-read-priced 3.9.
 
 **P3 — prove it (only after P1+P2):** D1 ramp 19→40→80→150 with the fixed abort sensors;
 D8 re-specified (cold compile at ≥80 needs its synthetic-spawn contradiction resolved, 05);
