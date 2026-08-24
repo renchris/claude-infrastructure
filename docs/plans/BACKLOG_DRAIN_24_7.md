@@ -87,6 +87,107 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #185: the row asked for a salvage the mechanism had already
+  performed — and its own falsifier could never have told it so. filed 0 / closed 1 / 2 commits
+  (1 code fix + this doc). TWENTY-NINTH CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 18 open / 6
+  blocked at open — now **17 open**. Board at open: open 310 / blocked 190 / done 2230, 500
+  open+blocked ids snapshotted. Picked from the STORE, inside the goal's warm condition.
+
+  **ROW CLOSED — `e733ca203b07`** ("SALVAGE 7 orphaned worktrees: 15 unlanded commits past the 72h
+  horizon with NO owning backlog item — worktree-gc keeps them forever (correctly) but nothing will
+  ever reclaim them"). Landed as *fix(worktree-gc): landed() reported LANDED for a wholly unlanded
+  branch* — **cite by SUBJECT, never by sha; a land rebases.** The row was DISCHARGED, not refuted:
+  every action it asked for had already been taken, on the record, before its own last touch.
+  · **ALL 7 WORKTREES ARE GONE**, keyed on `git worktree list --porcelain`'s own branch records
+    rather than on a slug guess (0 of 7; positive control `main` reads 1 of 76).
+  · **6 OF THE 7 CARRY BOTH A DISPOSAL RECORD AND AN EXPLICIT WARRANT**, written 2026-08-11
+    05:43:48Z–05:56:52Z, each `verified: points-at+cherry-set`, each naming the trunk commit that
+    SUPERSEDES it — gu13c/gate by `3ca10115`, gu13c/m4m5 by `ed4e87f0`+`e2538d15`, gu13c/mem by
+    `5eb6cdff`+`cbd0f082`, gu13c/qos by `178efbea` (whose `config/qos-batch.patterns` is
+    byte-identical to the branch), fix/accounts-eval-bin-resolver in three parts, and
+    feat/tmux-isid-resolver because *"main never adopted tmux"*. The row's own remedy (b) — *"record
+    the abandon decision explicitly with `worktree-gc.sh --warrant <path> --reason`"* — is therefore
+    **already executed**, by the very mechanism the row accused of never reclaiming anything. The
+    row's `lastTs` is `2026-08-11T09:49:16Z`, roughly **four hours after** the last of those
+    warrants, and its `needs` field records *"persistent thrash — 2 fast claim→reopen cycle(s)"*.
+  · **THE 7TH IS SETTLED TOO, AND NEEDED NO WARRANT.** `fix/opus5-effort-ladder` exists as no ref
+    at all — not local, not remote — and appears in neither store. That is the correct outcome, not
+    a hole: `--prune-branches` is DOUBLE-gated (`landed "$branch" || continue`, then `branch -d`,
+    *never* `-D`, so git's own merged-check is the second gate), and it deletes only landed,
+    worktree-less, unprotected branches. A branch reaped that way was abandoned by nobody.
+  · **BOTH PRESCRIBED REMEDIES WERE UNEXECUTABLE AS WRITTEN** by the time the row was last touched.
+    Remedy (a) is *per worktree* and there are none. Remedy (b) refuses by design: the warrant writer
+    resolves its path against `git worktree list` and exits 2 with *"Warrants are keyed on git's own
+    worktree records, never on a directory"* — a comment that also states the intent that makes the
+    whole disposition legible: *"Disposal therefore removes a DIRECTORY, never a commit — the branch
+    IS the durable ref"*, and *"Branches are KEPT by default (a vanished worktree must stay
+    recoverable via its branch)"*. The 6 surviving branch refs are the mechanism working.
+  · **THE ROW'S HEADLINE COUNT CONTRADICTED ITS OWN ENUMERATION AT FILING**: "15 unlanded commits",
+    but 9+2+2+1+1+1+1 = **17**. Today the content oracle reads 16 across the 6 surviving refs — and
+    those are 16 patches whose *intent* is discharged on trunk under different bytes, which is
+    exactly the SUPERSEDED case a patch-id oracle cannot express (memory:
+    `landedness-oracle-is-blind-to-intent`).
+
+  🚨 **METHOD 151 — BEFORE DOING WHAT A ROW ASKS, ASK WHETHER THE MECHANISM ALREADY DID IT, AND GO
+  READ ITS LEDGER.** This row named a mechanism (`worktree-gc.sh`), accused it of inaction, and
+  prescribed by hand the exact record that mechanism writes automatically — while that mechanism's
+  own append-only ledger already held six of the seven records, timestamped four hours before the
+  row was last touched. The ledger cost one `grep`. Two worker claim→reopen cycles were spent
+  instead. #150's frame was *confirm two instruments actually disagree*; **151 is one step earlier —
+  confirm the work is actually undone.** Sibling of `refused-duplicate-does-not-stand-down` and
+  `refuted-open-row-remints-its-own-analysis`.
+
+  🚨 **AND THE REASON IT COULD NEVER SELF-CLEAR: THE ROW'S OWN FALSIFIER CAN ONLY EVER CONVICT.**
+  Its `falsifier` field was `git merge-base --is-ancestor "$b" origin/main` per branch. A rebased
+  land rewrites the objects, so the branch tip stays unreachable from the trunk even when every
+  patch of it shipped. **Measured across all 1946 local branches in the shared checkout: of the 721
+  whose every patch IS on the trunk by patch-id, `--is-ancestor` acquits 83 and CONVICTS 638
+  (88.5%).** A row resting on that check never closes, whatever anyone does about it. It is now
+  recorded beside the patch-id predicate it protects, so the next author does not "simplify" it back.
+
+  🆕 **SCOPE (grown), F1-F4 PASS: a CONFIRMED INVERSION IN `landed()`, FOUND IN THE SAME FILE.**
+  `scripts/worktree-gc.sh`'s `landed()` decided its verdict with
+  `! printf '%s\n' "$out" | grep -q '^+'` under the `set -uo pipefail` at `:145` — the exact idiom
+  this same file forbids elsewhere (*"Counted, never `grep -q`"*, citing memory
+  `grep-q-under-pipefail-inverts-the-verdict`). Once the `git cherry` output outgrows the pipe
+  buffer, grep exits on the first match, printf takes SIGPIPE (141), pipefail makes the pipeline
+  non-zero and the leading `!` flips it to **0 — "landed" for a branch with nothing landed**. It
+  gates both the DISPOSE/KEEP class split and the `--prune-branches` delete gate; the delete path is
+  double-gated by `branch -d`, the class split is not.
+  **RED-PROOF, function-level, both arms replayed OUT OF GIT** (pre-fix arm taken from the pinned
+  merge-base `0f3e8bd25` and never from the working tree; `$GIT_BIN` stubbed to emit N `+` lines, so
+  "not landed" is correct at every size): 100 lines → pre `rc=1` ok / post `rc=1` ok; **2000 lines →
+  pre `rc=0` LANDED-WRONG / post `rc=1` ok**; 8000 lines → same. ⚠️ **LATENT TODAY BY 3.3x, AND SAID
+  OUT LOUD RATHER THAN USED TO DECLINE THE FIX**: the largest real `git cherry` output in this repo
+  is **19,608 B** (`wt-8532922cce46`); **0 of 1935** branches reach the 64 KiB pipe buffer. That is a
+  margin, not a cure — it shrinks every time trunk moves ahead of a stale branch.
+
+  **TOOLS.** Selector instrument control **32** — a forty-eighth-recycle constant. Owed set **3
+  direct + 3 cited = 6 suites** (`live-session-registry-atomic` · `worktree-gc-infra` ·
+  `worktree-gc` · cited: `cc-fleet` · `cc-reaper` · `install-worktree-refusal`). `shellcheck 0.11.0`
+  read **0 findings on this file both before and after**, and was positive-controlled at 2 findings
+  on a known-bad file first — a bare 0 and a broken instrument are the same reading.
+  🆕 **A CONTROL FIRED ON MY OWN COMMENT.** The post-fix arm's "contains no `grep -q`" control read
+  1, not 0, because the comment I had just written *quotes the old idiom verbatim*. Re-run against
+  executable lines only (comments stripped) it reads 0. Same class as #184's `die(` census reading 9
+  against an expected 8. **Strip comments before believing a source-text census of your own diff.**
+  🆕 **AND MY OWN `set -e` KILLED A PROBE MID-RUN.** probe-185e wrote `set -e 2>/dev/null || true`
+  inside a loop, which switched errexit ON for the remainder of the script; the next arm's
+  `[ "$c" -eq 0 ]` returned 1 and the script exited silently, dropping two whole sections. It read as
+  a timeout. **A probe that stops early looks exactly like a probe that was killed.**
+  Runner: `scratchpad/run-suites-185.sh` — four columns (green / RED / NON-VERDICT / PLAN-MISMATCH),
+  list on **fd 3** as an ABSOLUTE path, `bats` given `</dev/null`, refusing on a relative path, on a
+  missing list, on `listed == 0`, and on `rows != listed`. **All three refusals exercised as negative
+  controls before the real run** (rc 2 each) — a guard you have not seen fire is a guard you are
+  assuming.
+
+  **CONVERGER — the SAME shape for the FOURTH consecutive recycle** (#182, #183, #184, #185): a
+  correct WAIT on *no GREEN tree DESCENDING from live HEAD* `4908e350d5d9` (newest green
+  `37f886bb9aa2` is BEHIND it) — both unchanged since #183. Lag **12 / 3h**, inside the degrade
+  budget (25 / 6h); was 10 at #184's open and close. `LIVE_ADDS` **0** — this recycle modified
+  exactly two files and added none (premise 2). No hand converge was run.
+
 - **2026-08-24 — drain recycle #184: a REPORT and an AUTHORISATION printing the SAME fact is
   AGREEMENT, not a contradiction — and "it fires permanently" is a duty cycle you can replay.
   filed 0 / closed 1 / 1 commit (code-comment). TWENTY-EIGHTH CONSECUTIVE close overall.**
