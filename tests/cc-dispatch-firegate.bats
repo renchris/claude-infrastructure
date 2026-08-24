@@ -447,6 +447,34 @@ advance_trunk() {
   [ "$(git -C "$C/wt/wt-stg" rev-parse HEAD)" != "$(git -C "$C/repos/proj" rev-parse origin/main)" ] || false
 }
 
+@test "A1: pollution is its OWN axis — a CURRENT worktree carrying foreign content blocks, and staleness is not what convicts it" {
+  mk_repo "$C/repos/proj"
+  git -C "$C/repos/proj" branch "wt-cur" origin/main
+  mkdir -p "$C/wt"
+  git -C "$C/repos/proj" worktree add -q "$C/wt/wt-cur" wt-cur
+  # NO advance_trunk, deliberately. Every other fixture in this arm advances the trunk first, so every
+  # one of them reaches the guard through the STALE door — this is the cell none of them enter, and the
+  # cell the guard could not see while `wdirty` was read only inside `if [ "$wstate" = stale ]`.
+  git -C "$C/wt/wt-cur" merge-base --is-ancestor origin/main HEAD || false
+  echo foreign > "$C/wt/wt-cur/foreign"; git -C "$C/wt/wt-cur" add foreign
+
+  items '[{"id":"cur","project":"proj","status":"open","title":"a piece of work to be done"}]'
+  fresh; CC_DISPATCH_CEILING=9 "$DISP" --once >/dev/null 2>"$C/err.log"
+  [ "$(spawns)" -eq 0 ] || false
+  grep -q 'block cur' "$C/backlog.log" || false
+  # THE DISCRIMINATOR against the sibling stale cases: the refusal must name the axis it actually
+  # found. A message about a HEAD that does not contain the base would be false of this tree, and a
+  # test that accepted it would pass just as well on the stale path it is meant to be distinct from.
+  grep -q 'current but polluted' "$C/err.log" || false
+  # the foreign bytes survive — an unattended dispatcher may not clean a tree it did not create
+  git -C "$C/wt/wt-cur" diff --cached --name-only | grep -qx foreign || false
+
+  # RED: the pristine tree fires a worker straight into the polluted-but-current directory.
+  echo '[]' > "$C/blocked.json"
+  fresh; CC_DISPATCH_CEILING=9 "$PRISTINE" --once >/dev/null 2>&1
+  [ "$(spawns)" -eq 1 ] || false
+}
+
 @test "A1 fail-open: a store that REFUSES the block degrades to the incumbent reopen, never a stranded claim" {
   mk_repo "$C/repos/proj"
   git -C "$C/repos/proj" branch "wt-fo" origin/main
