@@ -1434,6 +1434,24 @@ if [ "$LAG_COMMITS" -gt "$MAX_LAG_COMMITS" ]; then
 elif [ "$LAG_HOURS" -gt "$MAX_LAG_HOURS" ]; then
   LAG_TRIP="${LAG_HOURS}h since the live commit was authored (budget ${MAX_LAG_HOURS}h)"
 fi
+# DO NOT make this budget add-aware. Backlog 42fbbf112209 / 704511ab7e90 proposed exactly that —
+# adopt wrap-ledger's ADDS predicate here so "LIVE_ADDS > 0 breaches at a lag of 1" — on the premise
+# that the two scripts are sibling auditors of one question that disagree. Both halves were measured
+# false on 2026-08-24 and the rows are closed REFUTED:
+#   · This script does not judge liveness by lag at all. TARGET — the advance — is set in six places
+#     (:1498 bootstrap, :1500 --force, :1539 T1, :1623 T1H, :1653 T2) and NOT ONE of them reads a lag
+#     variable. The criterion is a VERIFIED tree: T1 (green descendant of live HEAD) or T1H (off-box
+#     hermetic green, which carries no lag budget by design). Lag never advances anything.
+#   · Tripping the budget therefore does not make a deploy happen sooner. Its only ARMING use is
+#     :1639, the T2 door, which takes the newest NOT-RED commit and banners an UNVERIFIED deploy
+#     (:1658, and see :1634 — "authorised by the LAG, never by the reason"). The other two reads
+#     (:1678, :1725) test -z and gate the benign in-budget wait. So breaching on every added file
+#     would make the degraded, unverified advance the DEFAULT path for 12.2% of trunk commits
+#     (49 of the last 400 non-merge commits on origin/main add >= 1 file).
+# The two scripts are not answering one question: wrap-ledger REPORTS whether landed content reached
+# the live layer; this script AUTHORISES an advance. Agreement is safe between reports, not between a
+# report and an authorisation. The real defect the 🚀 rung surfaces is on the ledger's side and is
+# tracked by 4e6a51df2a84 — which needs a positive deployed-dir set that this script does not publish.
 
 # ── PULL THE OFF-BOX VERDICT, BOUNDED AND FAIL-OPEN (backlog b4f93c9fa73c) ───────────────────────
 # GitHub cannot write to this machine, so the second producer's last mile is a pull, and this is the
