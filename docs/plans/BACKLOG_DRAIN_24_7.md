@@ -86,6 +86,88 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #203: the row's mechanism was real, its own headline exhibit now
+  yields ZERO, and its prescribed remedy would have injected two FALSE POSITIVES. filed 1 /
+  closed 1.**
+  Board at open: **475 open+blocked**; at close **476** (286 open / 190 blocked / 2261 done, claimed
+  6). `master-convergence-deadlock` **open=13 / blocked=6** at BOTH ends, unmoved by me. **Closed 1 =
+  filed 1** (my own net 0). `comm` at both ends: **1 departure, mine**, and **2 arrivals** — mine
+  (`522cba3f1f7b`) plus a sibling's `f86530dca9d1` under `wake-path-sigterm` at 19:56:01Z, which is
+  not mine. The close is an `ungrouped` row, so it moves NO condition count. Read via `bash
+  bin/cc-backlog fold` from the worktree. Negative controls 8/8 intact.
+
+  **CLOSED `3f5ea840b296`** (*unattended-path-lint's launchd population is a DIRECTORY*).
+  Disposition: **MECHANISM TRUE, EXHIBIT DEAD, REMEDY HARMFUL.**
+  · **PREMISE TRUE, reproduced.** The lint globs `"$ROOT"/launchd/*.plist` at three sites
+    (`scripts/unattended-path-lint.sh:1111`, `:1262`, `:1301`).
+    `com.reso.lr-reset-poller.plist` is tracked on origin/main at `scripts/limit-recover/`,
+    installed in `~/Library/LaunchAgents`, launchctl-loaded, and is the ONE tracked plist outside
+    `launchd/`. Its stored falsifier returns rc 1 = *premise stands*, correctly.
+  · **The falsifier is EFFECT-KEYED and live** — rare here — but carries two latent instrument bugs:
+    `2>/dev/null` would render a CRASHED `--list` as *premise stands*, and `grep -q` can SIGPIPE its
+    producer under pipefail. Neither fires today.
+  · **MAGNITUDE GREW but is the WRONG magnitude.** Re-censused: 51 installed LaunchAgents, 26
+    audited-by-glob, **25 installed-but-unaudited**, of which **13 are ours**. The row said 12.
+  · 🆕 **A SECOND HOLE THE ROW DOES NOT NAME:** `launchd/staged/` holds **5** tracked plists and a
+    bash `*` glob does NOT cross `/`, so they are unaudited too — and three (`accounts-keepwarm`,
+    `cc-gc`, `relogin`) are installed and LIVE. `staged/` is documented as deliberately outside
+    `install.sh`'s NON-RECURSIVE glob (`tests/install-staged-plist.bats:43`,
+    `tests/cc-relogin-poll.bats:930`, `tests/cc-fleet.bats:601`) — but that exclusion is about
+    **INSTALLING**, not about PATH-auditing, so it does not transfer.
+  · 🚨 **THE ROW'S OWN EXHIBIT YIELDS ZERO.** Per-plist partition against the REAL lint on a full
+    `git archive HEAD` tree; control arm rc 0 clean, **both outcomes present**: `lr-reset-poller`
+    **rc 0 / 0 findings**, `cc-gc` 0, `lead-reconciler` 0, `relogin` 0, `scratchpad-reaper` 0,
+    `accounts-keepwarm` **rc 1 / 2 findings**. The instance was fixed in `b2f192698`, as the row
+    itself records.
+  · 🚨 **AND BOTH SURFACED FINDINGS ARE FALSE POSITIVES.** They land on `bin/claude-accounts`, which
+    is **`#!/usr/bin/env python3`, 4605 lines** — the lint is a SHELL bare-binary scanner with no
+    shebang guard. `msg` (:203) **proven false by mutating the REAL artifact**: renaming
+    `def log_event(msg)` → `(text)` REMOVED the finding, and a *binary-unreachable-on-PATH* finding
+    that a python parameter rename erases was never about a binary. `claude` (:17) **proven false by
+    census**: 62 bare-word occurrences = **40 string/docstring + 22 comment + 0 CODE** (mostly path
+    segments in `~/.claude/…` prose); mutating :17 merely MOVED the report to :216. The file already
+    resolves its binary absolutely via `resolve_claude_bin()` (`:212`).
+    So *"grandfather what that surfaces"* would write two lies into `EMBEDDED_ALLOWLIST`, which the
+    lint's own STUCK-RATCHET check then keeps alive as recurring maintenance.
+  · **LATENT, NOT LIVE:** 0 of the 23 shipped plists with an in-tree target name a python script
+    (all shell), so the lint is green on trunk today. Latent surface: **50** tracked python-shebang
+    files under `bin/` + `scripts/`.
+  · **RESIDUE OWNER: filed `522cba3f1f7b`** — no open row owned the language blindness. **FIX
+    DIRECTION:** add the shebang guard FIRST, THEN widen the population, and only then grandfather.
+
+  🆕 **METHOD 173 — WHEN A ROW PRESCRIBES WIDENING A DETECTOR'S POPULATION, RUN THE DETECTOR OVER
+  THE NEW MEMBERS BEFORE BELIEVING THE WIDENING IS SAFE — AND CLASSIFY EVERY FINDING IT PRODUCES.**
+  A coverage hole is stated as *absence* of judgment, which sounds costless to fix. But the widened
+  population's yield can be **zero true positives and N false ones**, and the row's own prescribed
+  grandfather pass is what makes the false ones PERMANENT. Here the widening's entire measured yield
+  was 2 findings, both prose matches in a python file. The family, now six deep: **#168** a remedy
+  landed under a different NAME · **#169** a condition satisfiable by a COMMENT · **#170** a file
+  whose charter forbids the remedy · **#171** a DETECTOR the row faithfully transcribed · **#172**
+  the row's OWN EVIDENCE · **#173** a REMEDY whose execution manufactures the defect it audits for.
+  Memory siblings: `prescribed-remedy-worse-than-the-bug`, `gate-exemption-is-not-permission`,
+  `control-fixture-must-reach-the-bugs-regime`.
+
+  🆕 **AND A THREE-LINK PUZZLE IS RETIRED: the "unexplained NEGATIVE read-back delta" #200, #201 and
+  #202 each carried forward is a UNITS MISMATCH, not corruption.** Measuring the input with
+  `wc -c` (**bytes**) and the stored value with python `len()` (**chars**) understates by one per
+  extra UTF-8 byte, and `$(cat file)` strips the trailing newline besides. My close measured −26
+  that way and **0 char-to-char, `EXACT MATCH: True`** — with exactly 13 non-ASCII chars, so
+  26 = 13 × 2 to the byte. #200's −5 and #201's −1 both fit the same arithmetic. **Compare chars to
+  chars; a `wc -c` against a `len()` is not a corruption signal.** (#202's U+FFFD read-path finding
+  is a genuinely different and still-real artifact — it was POSITIVE and offset-dependent.)
+
+  **Instrument scars paid this link.** (1) My first red-proof harness was INVALID: a minimal temp
+  ROOT tripped the lint's STUCK-RATCHET check, which exits BEFORE the plist scan, so all three arms
+  returned **byte-identical stderr** — a uniform rc indicting the harness, caught only because the
+  brief says so. The fix was a full `git archive HEAD` tree per arm. (2) My synthetic 6-line python
+  positive control returned **0 findings on both arms** — it never reached the regime and proved
+  nothing; only mutating the REAL artifact carried the result, and the probe's own assertion refused
+  to let me claim a clean attribution from it. (3) A `git log --since` NEG control on a bogus path
+  returns **rc 0 with empty output**, so rc is not the discriminator there — the OUTPUT is. (4) I
+  executed two commands by accident: **backticks inside a double-quoted `echo` in a bash file are
+  command substitution**, so a probe header ran `claude` and `msg`. Harmless here; it would not be
+  in a script that decides something.
+
 - **2026-08-24 — drain recycle #202: the row was TRUE, and the falsifier that was supposed to retire
   it can never pass — because the row wrote the corrupt byte into its OWN evidence. filed 0 /
   closed 1.**
