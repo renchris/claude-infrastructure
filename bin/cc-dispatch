@@ -391,9 +391,44 @@ LOCK_HELD=0
 PASS_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 FREE_SLOTS=0    # admission budget for this pass  (set by the decision stage)
 LIVE_RAW=""     # live-worker count as read, "" = UNKNOWN (never conflated with 0)
+# THE CEILING THIS PASS IS ACTUALLY CHARGED AGAINST — the one `idl_decision` journals, and the
+# denominator `free_slots` was computed from. It is NOT always $CEILING: a venue-narrowed pass is
+# bounded by its own lane's resource (see the lane block at the decision stage), and journalling the
+# on-box ceiling next to a cloud lane's free_slots produced records that are arithmetically
+# impossible under their own fields — live `{"free_slots":6,"ceiling":12,"live_workers":0}`, where
+# 6 = CLOUD_CEILING−0 and 12 = CEILING. A reader taking that at face value derives the wrong
+# denominator and cannot tell the two lanes apart, which is exactly how this lane's outage stayed
+# unreadable. Seeded here, before the first `idl_decision` call site, because several fire ahead of
+# the lane block (the guarded/already-done skips) and an empty value would make `jq --argjson` fail
+# and the record vanish under `|| true` — a silent hole in the journal, worse than a wrong number.
+LANE_CEILING="$CEILING"
+case "${CC_DISPATCH_VENUE_ONLY:-}" in cloud) LANE_CEILING="$CLOUD_CEILING" ;; esac
 
 FIRED=0; ABSTAINED=0; FAILED=0; SKIPPED=0   # run counters → the summary record
 ADMITTED=0; DEFERRED=0                      # v2 decision counters → the same summary
+
+# ── EVERY ADMITTED ID MUST REACH A TERMINAL RECORD ────────────────────────────────────────────────
+# A pass that admits N items and journals nothing about them summarises `fired:0 failed:0
+# abstained:0` — which reads as "there was nothing to do", the exact opposite of what happened.
+# Measured on the non-venue-filtered lane 2026-08-24: pass 20260824T083341Z-71481 admitted 12 and
+# emitted ZERO downstream per-id records, then summarised all-zeros; ~12 items every 5 minutes, all
+# day, invisible. The hole is structural, not a bug in one arm: the spawn loop iterates the PLAN
+# (`i < n`) and breaks at MAX_SPAWN, so any admitted id the planner did not place — including the
+# whole wave when it returns an empty array with rc 0 — falls out of the pass unnamed. The
+# early-return walls (capacity/auth/unknown/capped) drop them the same way.
+#
+# So the pass reconciles itself: ADMITTED_IDS is what it let in, TERMINAL_IDS is what it accounted
+# for, and the difference is journalled per id as `unplaced` and counted into the summary. The
+# invariant `admitted == admitted_terminal + unplaced` then holds by construction; the CONTENT claim
+# is that `unplaced` is 0 on a healthy pass, and a non-zero value is now a readable event with an id
+# attached rather than a silent zero (memory: zero-claim-must-name-its-excluded-strata).
+NL='
+'                 # the separator both id sets are delimited by; membership is tested as "$NL$id$NL"
+                  # so a 12-hex id can never match a prefix of a longer one
+ADMITTED_IDS=""   # newline-separated ids this pass ADMITTED (published by the decision stage)
+TERMINAL_IDS=""   # newline-separated admitted ids that reached a per-id terminal record
+UNPLACED=0        # admitted ids that reached NONE — 0 on a healthy pass
+RECONCILE=0       # 1 once the pass is past the journal-only early returns (decide/dry/in-flight)
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -424,9 +459,45 @@ resolve_bin() {
 # idl <action> <detail> — one append-only decision record (best-effort; a cron sweep never
 # hard-fails on log I/O). Shape mirrors the desk IDL: {ts, actor, action, detail}.
 idl() {
+  # THE TERMINAL MARK LIVES HERE, not at the twelve call sites that emit one. Every per-id outcome
+  # in the spawn loop already writes its id as the first token of `detail` ("<id>: …" for a skip or
+  # a failure, "<id> -> <account>" for a fire), so the accounting can be derived from the record
+  # instead of maintained beside it. Marking at the sites would mean a thirteenth arm added later
+  # silently re-opens the hole — the same enum-consumer defect the wave-plan verdict map was built
+  # to close. Positively discriminated against the admitted set, so a detail that is not an id (e.g.
+  # "placement missing id") marks nothing rather than corrupting the fold.
+  case "$1" in
+    fired|failed|skipped)
+      local _tid="${2%% *}"; _tid="${_tid%:}"
+      case "$NL$ADMITTED_IDS" in *"$NL$_tid$NL"*)
+        case "$NL$TERMINAL_IDS" in *"$NL$_tid$NL"*) ;; *) TERMINAL_IDS="$TERMINAL_IDS$_tid$NL" ;; esac ;;
+      esac ;;
+  esac
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --arg action "$1" --arg detail "$2" \
      '{ts:$ts, actor:"cc-dispatch", action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
+}
+
+# idl_unplaced <id> — an ADMITTED id that reached no terminal record. Its own action token rather
+# than `failed` or `skipped`: it is neither (nothing refused it and nothing broke), and folding it
+# into either would mislabel a capacity artefact as a fault — the same reason a cloud-ineligible
+# refusal is a skip and not a failure. The item keeps its row and is re-admitted next pass.
+idl_unplaced() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg reason "$2" \
+     '{ts:$ts, actor:"cc-dispatch", action:"unplaced", pass:$pass, id:$id, reason:$reason,
+       detail:($id + ": admitted but never placed — " + $reason)}' >> "$IDL" 2>/dev/null || true
+}
+
+# reconcile_admitted — run from idl_summary on every firing pass, so no exit path can skip it.
+reconcile_admitted() {
+  local _id
+  while IFS= read -r _id; do
+    [ -n "$_id" ] || continue
+    case "$NL$TERMINAL_IDS" in *"$NL$_id$NL"*) continue ;; esac
+    UNPLACED=$((UNPLACED + 1))
+    idl_unplaced "$_id" "the wave planner placed no slot for it and no arm refused it — re-admitted next pass"
+  done < <(printf '%s' "$ADMITTED_IDS")
 }
 
 # ── S1: the decision journal ──────────────────────────────────────────────────────────────────────
@@ -444,7 +515,7 @@ idl_decision() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg verdict "$2" \
      --argjson position "$3" --arg reason "$4" --argjson free "$FREE_SLOTS" \
-     --argjson ceiling "$CEILING" --arg live "$LIVE_RAW" --arg project "${5:-$PROJECT}" \
+     --argjson ceiling "${LANE_CEILING:-$CEILING}" --arg live "$LIVE_RAW" --arg project "${5:-$PROJECT}" \
      '{ts:$ts, actor:"cc-dispatch", action:"decision", pass:$pass, project:$project, id:$id,
        verdict:$verdict, position:$position, reason:$reason, free_slots:$free, ceiling:$ceiling,
        live_workers:(if $live == "" then null else ($live|tonumber) end)}' \
@@ -1366,14 +1437,32 @@ ready_rate_pct() {
 }
 
 idl_summary() {
+  # RECONCILE FIRST — the unplaced records must precede the summary that counts them, and running it
+  # here rather than at one call site is what makes every exit path (capacity, auth, unknown, capped,
+  # and the normal tail) covered by construction. Journal-only passes are exempt: `--decide` and a
+  # held singleton admit on paper and fire nothing BY DESIGN, so reconciling them would report a hole
+  # at every tick and an alarm that always fires carries no information
+  # (memory: alarm-polarity-and-attention-budget).
+  [ "$RECONCILE" -eq 1 ] && reconcile_admitted
+  # On an EXEMPT pass this field must be `null`, not a number. Computing ADMITTED−UNPLACED there
+  # would render `admitted_terminal:6` for six ids nothing accounted for — a count derived from a
+  # denominator that was never measured, which is the same defect as the cloud record journalling
+  # the on-box ceiling. `reconciled` says which regime applied, and `null` makes the field
+  # unreadable-as-a-count rather than quietly wrong (memory: init-state-is-not-runtime-state).
+  local _terminal=null
+  if [ "$RECONCILE" -eq 1 ]; then
+    _terminal=$((ADMITTED - UNPLACED)); [ "$_terminal" -lt 0 ] && _terminal=0
+  fi
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
      --argjson s "$SKIPPED" --argjson a "$ADMITTED" --argjson d "$DEFERRED" --arg pass "$PASS_ID" \
      --argjson rc "$READY_CHECKED" --argjson rv "$READY_VOID" --argjson ru "$READY_UNKNOWN" \
      --argjson rp "$(ready_rate_pct)" --arg rg "$READY_GATE" \
+     --argjson up "$UNPLACED" --argjson at "$_terminal" --argjson rec "$RECONCILE" \
      '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s,
        admitted:$a, deferred:$d, pass:$pass, ready_gate:$rg, ready_checked:$rc, ready_void:$rv,
-       ready_unknown:$ru, ready_would_block_pct:$rp}' \
+       ready_unknown:$ru, ready_would_block_pct:$rp,
+       admitted_terminal:$at, unplaced:$up, reconciled:($rec == 1)}' \
      >> "$IDL" 2>/dev/null || true
 }
 
@@ -1506,6 +1595,77 @@ dispatch() { # <dry|run|decide>
     venue_parked=$((_before - _after))
     if [ "$venue_parked" -gt 0 ]; then
       idl skipped "venue-only=$VENUE_ONLY parked $venue_parked of $_before dispatchable item(s) — they carry a different venuePlan or none, and will NOT fire while this filter is set"
+    fi
+
+    # ── A VENUE REFUSAL COSTS THE ROW ITS SLOT ────────────────────────────────────────────────────
+    # A row the actuator has already refused for THIS venue keeps its `venuePlan=cloud` label, so it
+    # is dispatchable, so it re-admits at the head of the queue every pass and is refused again — and
+    # because it holds a slot while doing so, the rows behind it that CAN run off-box never reach
+    # admission at all. Measured 2026-08-24: the six oldest such rows occupied all six cloud slots
+    # and the seven eligible rows were admitted zero times in a day.
+    #
+    # 🚨 NOT VIA thrash_map, and this is the whole design of the fix. `thrash_map` keys on
+    # `.action=="failed"`, and the arm that records this refusal chose `skipped` DELIBERATELY (see
+    # its note at the claim gate): a refusal is the system working, not a fault, and feeding a
+    # fault-shaped signal into a fault-shaped counter to solve an ORDERING problem re-opens exactly
+    # what that note closed. So this reads the actuator's own recorded verdict instead — no new
+    # predicate, no re-implementation of eligibility, the actuator stays the arbiter
+    # (memory: make-the-actuator-the-arbiter).
+    #
+    # AND IT SELF-CLEARS TWO WAYS, which is what stops it becoming the next stale label — the very
+    # defect this whole fix set exists to cure. A refusal excludes only while BOTH hold:
+    #
+    #   · it is NEWER than the row's own `lastTs`. A reopen, an unblock, an edited condition —
+    #     anything that happens TO the row — overrides a verdict taken about the older row.
+    #   · it is YOUNGER than CC_DISPATCH_VENUE_REFUSAL_TTL (default 24 h). A verdict has a shelf
+    #     life. Without this the exclusion could be permanent, and the one thing this repair may not
+    #     do is mint a second immortal label (memory: resident-policy-must-not-restate-perishable-
+    #     facts). Expiry costs one re-admission per row per day against the ~288 it replaces.
+    #
+    # A RE-LABEL DELIBERATELY DOES NOT CLEAR IT, and that is not an oversight: `cc-backlog` excludes
+    # `venue` records from `lastTs` on purpose (bin/cc-backlog:1157-1170 — a bookkeeping annotation
+    # is not an event in the row's life, and letting it advance the clock once flattened the whole
+    # backlog to one timestamp). The label itself is the other half of the cure: a re-derived row
+    # that is genuinely ineligible reads `venuePlan=local` and leaves the cloud queue by the filter
+    # above, so the two arms agree without either one having to consult the other.
+    #
+    # The TTL is compared inside jq via `now`, not with `date -v`/`date -d`: those two spellings are
+    # BSD-only and GNU-only respectively, and the suite runs on both.
+    #
+    # The grep is a COST GATE and is strictly weaker than the jq predicate it shadows (jq also
+    # requires actor and action), so it can only ever save a scan of 8 MB, never admit or suppress a
+    # row the predicate would decide differently. `|| true` because grep exits 1 on no match and a
+    # queue with no prior refusals is the healthy case, not an error.
+    #
+    # The id is the FIRST TOKEN of the detail, which is the claim gate's own record format. The
+    # shape guard on it is a plain hex test with no length floor: it rejects the non-id details that
+    # share this journal ("placement missing id", "venue-only=cloud parked …"), while a length floor
+    # would be a second, arbitrary predicate that could silently drop a real id.
+    if [ "$VENUE_ONLY" = cloud ]; then
+      local _ref_json _rb _ra _refused
+      _refused="$(grep -F 'cloud-ineligible' "$IDL" 2>/dev/null || true)"
+      _ref_json='{}'
+      if [ -n "$_refused" ]; then
+        _ref_json="$(printf '%s\n' "$_refused" | jq -s -c '
+            [ .[] | select(.actor=="cc-dispatch" and .action=="skipped")
+                  | select((.detail // "") | test("cloud-ineligible"))
+                  | {id: ((.detail // "") | split(":")[0] | ascii_downcase), ts: (.ts // "")}
+                  | select(.id | test("^[0-9a-f]+$")) ]
+            | group_by(.id) | map({key: .[0].id, value: (map(.ts) | max)}) | from_entries' \
+          2>/dev/null || printf '{}')"
+      fi
+      local _ttl; _ttl="${CC_DISPATCH_VENUE_REFUSAL_TTL:-86400}"
+      is_uint "$_ttl" || _ttl=86400
+      _rb="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+      dispatchable="$(printf '%s' "$dispatchable" | jq -c --argjson r "$_ref_json" --argjson ttl "$_ttl" '
+          ((now - $ttl) | todate) as $cut
+          | [ .[] | ($r[.id] // "") as $ref
+                  | select($ref == "" or $ref <= (.lastTs // .ts // "") or $ref < $cut) ]' \
+        2>/dev/null || printf '%s' "$dispatchable")"
+      _ra="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+      if [ "$((_rb - _ra))" -gt 0 ]; then
+        idl skipped "venue-refused: $((_rb - _ra)) of $_rb cloud item(s) were ALREADY refused off-box by the actuator and have not been touched since — they yield their slot to work that can run, and re-enter the queue the moment the row is re-labelled or otherwise updated"
+      fi
     fi
   fi
 
@@ -1673,6 +1833,10 @@ dispatch() { # <dry|run|decide>
         local) _lane=local; _lane_ceiling="$CEILING" ;;
         *)     _lane=any;   _lane_ceiling="$CEILING" ;;
       esac
+      # ONE denominator, journalled and computed from the same value. `LANE_CEILING` is seeded at
+      # config time off the same env var this case reads, so the two can only disagree if this
+      # block's mapping changes without the seed — which this assignment makes impossible.
+      LANE_CEILING="$_lane_ceiling"
       LIVE_RAW="$(live_workers "$backlog" "$_lane")"
       if [ -z "$LIVE_RAW" ]; then
         # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable ledger would stall the queue
@@ -1859,6 +2023,12 @@ dispatch() { # <dry|run|decide>
   # recorded as `cluster-sibling` — a wave that contradicts its own decision records. Selecting by id
   # keeps the journal and the wave one artifact, and it PRESERVES QUEUE ORDER because the select runs
   # over `ordered`.
+  # PUBLISH THE ADMIT SET and arm the reconciliation. Here, and not in the decision loop: everything
+  # above this line either journals and returns (decide / in-flight / dry / at-ceiling) or admits
+  # nothing, and arming there would flag those by-design no-fire passes as holes. From this point on
+  # the pass has let items in and owes each of them an outcome.
+  ADMITTED_IDS="$admitted_ids"
+  RECONCILE=1
   if [ "$v2" -eq 1 ]; then
     local admit_json
     admit_json="$(printf '%s' "$admitted_ids" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
