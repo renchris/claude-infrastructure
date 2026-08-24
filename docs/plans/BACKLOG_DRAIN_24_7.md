@@ -87,6 +87,83 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #182: two conditions co-present in ONE exhibit were read as one
+  causing the other — the 🚀 add-breach and the converger's decline are INDEPENDENT axes.
+  filed 0 / closed 1 / 1 commit (code-comment). TWENTY-SIXTH CONSECUTIVE close overall.**
+  Warm effort declared in my first line: a MOVE on `master-convergence-deadlock`, 21 open / 6
+  blocked at open — now **20 open / 5 blocked**. Board at open: open 318 / blocked 190 / done 2224.
+  Picked from the STORE, inside the goal's warm condition. I took the lead #181 recommended
+  (`b79591064f75`) and it did NOT survive contact — but in the opposite direction to #181's:
+  #181's lead lost its POPULATION, mine kept both halves of its evidence and lost its CONCLUSION.
+
+  **ROW CLOSED — `b79591064f75`, REFUTED (not fixed).** Landed as *docs(wrap-ledger): the
+  add-breach and the converger's decline are independent axes* — cite by SUBJECT, never by sha; a
+  land rebases. The row claimed the 🚀 rung "names a converger that DETERMINISTICALLY
+  declines", so CLAUDE.md's no-unreachable-✅ guarantee fails whenever `LIVE_ADDS` breaches inside
+  the commit-count budget.
+
+  🚨 **METHOD 147 — TWO CONDITIONS PRESENT IN ONE EXHIBIT ARE NOT TWO HALVES OF ONE
+  MECHANISM. ASK WHICH VARIABLE THE SUBJECT ACTUALLY BRANCHES ON.** Both halves of the row's
+  evidence re-measured TRUE: `wrap-ledger.sh` breaches on an ADD at lag 1 with no budget (4
+  `LIVE_ADDS -gt 0` arms, 2 `--diff-filter=A` sites), and `deploy-live.sh` is add-blind (**0**
+  `diff-filter=A`, **0** `LIVE_ADDS`; positive control `LAG_COMMITS`=16 / `LAG_TRIP`=11 proves the
+  instrument reads that file, negative control 0). The conclusion still does not follow.
+  `deploy-live` advances **iff it sets `$TARGET`**, and `$TARGET` comes from **T1** (newest GREEN
+  tree DESCENDING from live HEAD) or **T1H** (off-box hermetic green, no on-box RED). *Neither
+  reads added files.* The adds and the decline are independent; the row's single exhibit carried
+  both and read co-presence as causation — and its own quoted refusal names the real cause,
+  "no GREEN tree is a DESCENDANT of live HEAD". Twin of memory `wrong-cause-corroborated-by-true-metric`,
+  but sharper: here BOTH corroborating facts are true AND relevant, and still do not compose.
+
+  🚨 **METHOD 148 — BEFORE ADOPTING "MAKE THE TWO AUDITORS AGREE", ASK WHAT THE
+  DISAGREEING TERM ACTUALLY AUTHORISES.** The row's fix — give `deploy-live` the same
+  add-awareness — is **strictly harmful**, and the measurement that shows it is one grep. The lag
+  budget's ONLY *positive* effect is arming **T2 at `deploy-live.sh:1621`**: the DEGRADED door that
+  takes the newest NOT-RED commit and advances under a page recording an **UNVERIFIED** deploy. The
+  other two `LAG_TRIP` conditionals (`:1660`, `:1707`) test `-z` and gate the *benign in-budget
+  wait*. So tripping the budget on every add — 28.5% of trunk commits, by the file's own measured
+  figure — would make absence-of-evidence the **DEFAULT deploy path**. Making two auditors agree
+  is only safe when the term they disagree on is a *report*; this one is an **authorisation**.
+  ⚠️ The row's SECOND fix is refuted too, on its premise: "render it as waiting-on-verifier
+  rather than prescribe a command it knows will decline" — this ledger never reads the green
+  ladder, so it **cannot know** the converger will decline, and silencing the command would withhold
+  a correct drivable action in every case where T1/T1H is non-empty.
+
+  **WHAT THE ROW DID SURFACE**, and what the landed comment records so a fourth session does not
+  re-derive it: a persistent breach here **need not be a converger OUTAGE**. *Verifier famine*
+  produces the same picture, and `deploy-live` already pages that under its own name (`:464`).
+
+  **TOOLS / MEASUREMENTS.**
+  · 🆕 **A NON-VERDICT ARRIVED FROM A SIBLING'S LOAD, AND THE FOUR-COLUMN RUNNER IS WHAT
+  KEPT IT OUT OF BOTH GREEN AND RED.** `tests/wrap-ledger.bats` + `wrap-ledger-memo.bats` — the two
+  suites most directly about my file — came back **rc=75, no plan**: *"cc-bats: REFUSED — 2
+  concurrent bats execution root(s) … nothing ran, nothing was verified — this is a DEFERRAL,
+  not a test result."* Holders were two sibling sessions in the SHARED checkout. **Do not take the
+  printed `CC_BATS_MAX_ROOTS=0` override** — that defeats a load guard that is doing its job.
+  · 🆕 **MY OWN `pgrep -f 'bats tests/'` POLL WAS THE WRONG INSTRUMENT AND BURNED ~9 MIN**
+  — it counts PROCESSES (children included: 3–8 while the ceiling is 2 ROOTS), so it never
+  reported a free slot. **Loop the ACTUATOR, never a proxy for it** (memory:
+  `make-the-actuator-the-arbiter`): re-running the suite through `cc-bats` itself went green on
+  **attempt 1**.
+  · Owed set = **10 suites (9 direct + 1 cited)**; **all 10 green, 444 tests, 0 red, 0
+  non-verdict**: `boundary-handoff` 43 · `completion-assert` 111 · `dod-path` 14 ·
+  `dod-persist` 30 · `goal-state` 18 · `operator-readout-live-symlink` 3 ·
+  `operator-readout` 104 · `operator-surface-scope` 21 · `wrap-ledger-memo` 23 ·
+  `wrap-ledger` 77.
+  · ⚠️ **The `cited:` label bit again is worth restating: grep `cited`, NEVER
+  `prose-cited`.** A `scripts/wrap-ledger.sh` edit cites `tests/goal-state.bats`.
+  · Blast radius measured for free before choosing the file, via a past single-file commit:
+  `gate-select.sh --direct 7bc4b4e5a~1..7bc4b4e5a` = **9** suites. Selector instrument control
+  unchanged at **32** (`492c51066~1..492c51066`) — a FORTY-FIVE-recycle control.
+  · **`LAND_RC=0`**, first attempt, scratch kept OUTSIDE the worktree. A `⛔` sat above it —
+  `GATE-KILLED: tests/wrap-ledger.bats — cut by the smoke budget (exit 124, ZERO 'not ok')` —
+  and its own text says it is NOT a red; **I had run that suite myself this turn at 77/77 green.**
+  · `land-lock.sh --status` read `holder: (free)` before the land. `deploy-live.sh --dry-run
+  --offline` at my open: **waiting**, no GREEN descendant of live HEAD `4908e350d5d9`, lag 4
+  commit(s) / 1h inside the 25 / 6h budget — a correct WAIT, and now known to be independent of
+  adds. My own adds: **0**. PostToolUse formatter fired on my inserter (SIXTH recycle running) —
+  re-compiled and re-counted; all 7 guards survived.
+
 - **2026-08-24 — drain recycle #181: the "unattributed" population was the instrument's blind spot,
   not a second actor — deploy.log only ever recorded `--auto` runs.
   filed 0 / closed 1 / 1 commit (docs + code-comment). TWENTY-FIFTH CONSECUTIVE close overall.**
