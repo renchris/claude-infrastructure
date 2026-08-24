@@ -49,6 +49,11 @@ while [ -L "$SELF" ]; do
 done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
+# THE DEFAULT POPULATION, NAMED ONCE — the layers a bare invocation scans, and the answer
+# `--print-scope` gives. Declared here rather than spelled out at the targets= line below so the two
+# cannot disagree; see --print-scope for why a second spelling of this list is the defect.
+SCAN_LAYERS="bin hooks scripts"
+
 # ── the ratchet: files grandfathered with a lying UTC stamp. ONLY EVER DELETE LINES. ──
 # EMPTY, and that is the point — the tree was swept clean before this landed (the one historical
 # violation, cc-reaper:59, was fixed in b4e3c355). An allowlist that starts empty can only shrink.
@@ -265,6 +270,38 @@ now(){ date -u +%s; }"
   exit 1
 fi
 
+# ── --print-scope: the population this lint JUDGES, as git pathspecs, one per line ────────────────
+# SCAN_LAYERS is the SAME list the default targets are built from below, so the two cannot disagree:
+# adding a scanned layer moves the scan and this answer in one edit. `<layer>/*` is EXACT rather than
+# approximate — lint_dir walks each target recursively, and a git pathspec's `*` matches `/` unless
+# `:(glob)` magic is asked for, so the two cover the same file set.
+#
+# IT ANSWERS FOR THE BARE INVOCATION, which is the only one ship-land makes (the UTC arm calls this
+# lint with no scan root, so `$#` is 0 and the default targets are what gets judged). A caller that
+# passes its own root is asking a different question and already knows the answer it passed in.
+#
+# WHY IT EXISTS (backlog 5fc8ff411a7c, extending 0be0bd2c0b65 to the six arms left out of it).
+# scripts/ship-land.sh built this lint's own-scope set — the files allowed to BLOCK a land — from a
+# `-- 'bin/*' 'hooks/*' 'scripts/*'` pathspec RESTATED in ship-land. That restatement could not drift
+# at RUNTIME (this lint has no env seam on its population), and that was the whole of its defence: it
+# could still drift by a CODE edit to the layer list, with the same silent failure direction — an
+# own-set that MISSES a file does not error, it is the legitimate spelling of "this land touches
+# nothing I judge", so the finding degrades to advisory and the land proceeds.
+#
+# THE PATHS ARE UNSTRIPPED AND MUST STAY SO. This lint reports the FULL scanned path and its in_own
+# matches on a component boundary (see the `sed 's:^[^/]*/::'` that was removed from ship-land's UTC
+# arm in c1a29f8ee045): `bin/cc-foo` and `scripts/cc-foo` are different files, and a layer-relative
+# answer here would merge those namespaces again.
+if [ "${1:-}" = "--print-scope" ]; then
+  _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
+  # Globbing OFF for the split: an unquoted expansion would also PATHNAME-EXPAND each layer against
+  # the caller's CWD and print real repo paths instead of the pathspec.
+  set -f
+  for _ps_l in $SCAN_LAYERS; do printf '%s/*\n' "$_ps_l"; done
+  [ "$_ps_restore_f" -eq 1 ] || set +f
+  exit 0
+fi
+
 rc=0
 # Default targets built as a real ARRAY. `for t in "${@:-$A $B $C}"` looks equivalent and is not: with
 # no args the quoted default expands as ONE word, so $target became the whole "bin hooks scripts"
@@ -274,7 +311,9 @@ rc=0
 if [ "$#" -gt 0 ]; then
   targets=("$@")
 else
-  targets=("$ROOT/bin" "$ROOT/hooks" "$ROOT/scripts")
+  targets=()
+  # shellcheck disable=SC2086  # deliberate word-split of SCAN_LAYERS; the list is a fixed literal
+  for _l in $SCAN_LAYERS; do targets+=("$ROOT/$_l"); done
 fi
 scanned=0
 # A per-target NON-VERDICT is not a tree-red. `lint_dir` answers with THREE codes — 0 = clean,

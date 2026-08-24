@@ -2333,15 +2333,26 @@ bats_sc_nonverdict() {
 # lint_own_scope <lint> <range> — the own-set for a lint that can NAME the population it judges.
 # Echoes newline-delimited repo-relative paths from this land's diff; rc 2 ⇒ the lint could not say.
 #
-# THE SEAM THIS CLOSES (backlog 0be0bd2c0b65). Two arms below used to build their own-set from a
-# pathspec RESTATED here — `-- 'install.sh' 'scripts/*'` for permission-gate, `-- 'bin/*' 'hooks/*'
-# 'scripts/*'` for tsv-pad — each with a comment telling the next author to widen it in the same diff
-# if the lint's env seam (CC_PERMGATE_SET / CC_TSVPAD_DIRS) ever reached another directory. Nothing
-# executes a comment. The two populations could drift apart, and the drift is silent in the dangerous
-# direction: a land that adds a violation under a directory the stale pathspec misses builds an
-# own-set WITHOUT that file, so the finding degrades to advisory and lands. Deriving the pathspec
-# from the lint makes them identical by construction rather than by discipline
+# THE SEAM THIS CLOSES (backlog 0be0bd2c0b65, widened to all eight own-scope arms by 5fc8ff411a7c).
+# Every arm below used to build its own-set from a pathspec RESTATED here — `-- 'install.sh'
+# 'scripts/*'` for permission-gate, `-- 'bin/*' 'hooks/*' 'scripts/*'` for tsv-pad, and six more
+# beside them — each with a comment telling the next author to widen it in the same diff if the
+# lint's population ever reached another directory. Nothing executes a comment. The two populations
+# could drift apart, and the drift is silent in the dangerous direction: a land that adds a violation
+# under a directory the stale pathspec misses builds an own-set WITHOUT that file, so the finding
+# degrades to advisory and lands. Deriving the pathspec from the lint makes them identical by
+# construction rather than by discipline
 # (memory: resident-policy-must-not-restate-perishable-facts).
+#
+# TWO DRIFT ROUTES, AND ONLY THE FIRST WAS CLOSED FIRST. permission-gate and tsv-pad were done ahead
+# of the rest because their populations are env-overridable (CC_PERMGATE_SET / CC_TSVPAD_DIRS), so
+# they could move at RUNTIME, with no diff at all. The other six have no env seam, and that was the
+# whole of their defence — they could still drift by a CODE edit to the lint's own scan set, in the
+# same silent direction, from an author with no reason to open this file. Measured while closing
+# them: the pipefail arm's restated pathspec HAD already drifted (it carried `docs/*` and `tests/*`,
+# which that lint does not judge as such, and MISSED `*.bats`, which it judges at every depth), and
+# the unattended arm's had needed a manual widening once already when its third population landed.
+# A defence that depends on nobody editing the lint is not a defence.
 #
 # rc 2 IS A NON-VERDICT AND MUST STAY ONE. A lint that cannot answer `--print-scope` (missing, or an
 # older copy that does not know the flag and exits 2 with empty stdout) must NOT silently yield an
@@ -2353,7 +2364,7 @@ bats_sc_nonverdict() {
 # A land that legitimately touches none of the lint's population still returns rc 0 with EMPTY
 # output, which is the SET-BUT-EMPTY state own_run already carries. Empty-with-rc-0 and
 # empty-with-rc-2 are different answers here, exactly as they are for the lints themselves.
-# shellcheck disable=SC2329  # invoked from run_gate's permission-gate and tsv-pad arms below.
+# shellcheck disable=SC2329  # invoked from all eight of run_gate's own-scope arms below.
 lint_own_scope() {  # $1=lint path · $2=diff range
   local lint="$1" range="$2" line
   local spec=()
@@ -2745,9 +2756,15 @@ run_gate() {  # $1=range → 0 green / 1 red
       # reported — and it MERGED the three namespaces on the way: `bin/cc-foo` and `scripts/cc-foo`
       # both became `cc-foo`, so a diff touching one blocked the land over the other. Latent only
       # because no basename collides across those dirs today, which is a property of the tree.
-      # utc-stamp-lint's in_own now matches the FULL scanned path on a component boundary, so the
-      # unstripped path is what it wants; the two changes are one fix and must land together.
-      uown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
+      # utc-stamp-lint's in_own matches the FULL scanned path on a component boundary, and
+      # --print-scope answers with unstripped pathspecs for exactly that reason.
+      # ASKED FOR, not restated (backlog 5fc8ff411a7c): the line used to hardcode
+      # `'bin/*' 'hooks/*' 'scripts/*'` — see lint_own_scope for why a restated population can only
+      # fail silently, and why a CODE-edit drift is the same defect as the env-seam drift.
+      uown="$(lint_own_scope "$UTC_LINT" "$range")" || {
+        arm_nonverdict "utc-stamp-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$uown" ]] && echo "→ gate: utc-stamp own-scope — blocking on $(printf '%s\n' "$uown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: UTC timestamp-contract ratchet (a Z suffix from a non-UTC clock)" >&2
@@ -2795,7 +2812,15 @@ run_gate() {  # $1=range → 0 green / 1 red
   if [[ -x "$PF_LINT" ]]; then
     local pown=""
     if [[ "${SHIP_LAND_PIPEFAIL_OWN_SCOPE:-on}" != "off" ]]; then
-      pown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'tests/*' 'docs/*' '*.sh' 2>/dev/null || true)"
+      # ASKED FOR, not restated (backlog 5fc8ff411a7c). The line used to hardcode
+      # `'bin/*' 'hooks/*' 'scripts/*' 'tests/*' 'docs/*' '*.sh'`, and THAT PATHSPEC HAD ALREADY
+      # DRIFTED: it carried `docs/*` and `tests/*`, neither of which this lint judges as such, while
+      # MISSING `*.bats`, which it judges at every depth. Latent only because every .bats file lives
+      # under tests/ today — a property of the tree, not of the rule. See lint_own_scope.
+      pown="$(lint_own_scope "$PF_LINT" "$range")" || {
+        arm_nonverdict "pipefail-sigpipe-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$pown" ]] && echo "→ gate: pipefail-sigpipe own-scope — blocking on $(printf '%s\n' "$pown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: pipefail/SIGPIPE ratchet (an early-exit pipe consumer that reads FALSE on a match)" >&2
@@ -2946,7 +2971,13 @@ run_gate() {  # $1=range → 0 green / 1 red
     if [[ "${SHIP_LAND_SELFPATH_OWN_SCOPE:-on}" != "off" ]]; then
       # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
       # component strip (unlike the utc own-set above, which is layer-relative).
-      spown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
+      # ASKED FOR, not restated (backlog 5fc8ff411a7c): the line used to hardcode
+      # `'bin/*' 'hooks/*' 'scripts/*'`, which is self-path-lint's LAYERS spelled a second time in a
+      # second file. --print-scope answers from LAYERS itself; see lint_own_scope.
+      spown="$(lint_own_scope "$SELFPATH_LINT" "$range")" || {
+        arm_nonverdict "self-path-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$spown" ]] && echo "→ gate: self-path own-scope — blocking on $(printf '%s\n' "$spown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: script-dir resolution ratchet (a repo root derived from an unresolved \$0)" >&2
@@ -2987,7 +3018,13 @@ run_gate() {  # $1=range → 0 green / 1 red
     local psown=""
     if [[ "${SHIP_LAND_PSPAWN_OWN_SCOPE:-on}" != "off" ]]; then
       # Repo-relative, which is how this lint reports paths (it scans from the repo ROOT).
-      psown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'commands/*' 2>/dev/null || true)"
+      # ASKED FOR, not restated (backlog 5fc8ff411a7c): the line used to hardcode
+      # `'bin/*' 'hooks/*' 'scripts/*' 'commands/*'`, i.e. PSC_LAYERS spelled a second time in a
+      # second file. See lint_own_scope.
+      psown="$(lint_own_scope "$PSPAWN_LINT" "$range")" || {
+        arm_nonverdict "pane-spawn-coverage-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$psown" ]] && echo "→ gate: pane-spawn own-scope — blocking on $(printf '%s\n' "$psown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: pane-spawn coverage ratchet (a spawn site that leaves no row)" >&2
@@ -3037,15 +3074,22 @@ run_gate() {  # $1=range → 0 green / 1 red
     local upown=""
     if [[ "${SHIP_LAND_UNATTENDED_OWN_SCOPE:-on}" != "off" ]]; then
       # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
-      # component strip. The pathspec must list every population the lint judges, or a land that adds
-      # a bare-name call to one of them produces an own-set without it and the finding degrades to
-      # advisory.
-      # 'tests/*' is here because the lint gained a THIRD population — the bats corpus the two
-      # scheduled runners execute. Omitting it would be the exact degradation the paragraph above
-      # warns of: a land adding a bare /sbin-only binary to a .bats file would build an own-set
-      # without that file, the finding would drop to advisory, and it would land — which is how the
-      # bare `md5` in cc-queue.bats C12 passed vacuously on every scheduled run.
-      upown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 'tests/*' 2>/dev/null || true)"
+      # component strip. It is now ASKED FOR rather than restated (backlog 5fc8ff411a7c): the line
+      # used to hardcode `'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 'tests/*'` under a comment saying
+      # the pathspec "must list every population the lint judges, or a land that adds a bare-name
+      # call to one of them produces an own-set without it and the finding degrades to advisory".
+      #
+      # THIS ARM IS THE PROOF THAT A COMMENT IS NOT A MECHANISM. That comment had already had to be
+      # honoured by hand once — `tests/*` was appended when the lint gained a THIRD population, the
+      # bats corpus, after a bare `md5` in cc-queue.bats C12 passed vacuously on every scheduled run.
+      # The next population would have needed the same manual step, from an author with no reason to
+      # look here. --print-scope reports all three (see lint_own_scope), and drops `launchd/*`, which
+      # never judged anything: the launchd half reads a plist for its PATH and scans the SCRIPTS it
+      # executes, so no finding's path is ever a plist and a plist in the own-set was inert.
+      upown="$(lint_own_scope "$UNATTENDED_LINT" "$range")" || {
+        arm_nonverdict "unattended-path-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
       [[ -n "$upown" ]] && echo "→ gate: unattended-path own-scope — blocking on $(printf '%s\n' "$upown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: bare-name binaries on unattended paths (launchd jobs + hooks + the bats corpus)" >&2
@@ -3146,7 +3190,13 @@ run_gate() {  # $1=range → 0 green / 1 red
   if [[ -x "$CHROMIUM_LINT" ]]; then
     local cbown=""
     if [[ "${SHIP_LAND_CHROMIUM_OWN_SCOPE:-on}" != "off" ]]; then
-      cbown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'tools/*' 2>/dev/null || true)"
+      # ASKED FOR, not restated (backlog 5fc8ff411a7c): the line used to hardcode
+      # `'bin/*' 'hooks/*' 'scripts/*' 'tools/*'`, i.e. SCAN_LAYERS spelled a second time in a second
+      # file. See lint_own_scope.
+      cbown="$(lint_own_scope "$CHROMIUM_LINT" "$range")" || {
+        arm_nonverdict "chromium-bundle-lint" \
+          "It could not name the population it judges (--print-scope), so an own-set built here would be a GUESS at its scope."
+        return 1; }
     fi
     echo "→ gate: chromium-bundle ratchet (a headless screenshot path launching the full app bundle)" >&2
     if ! "$CHROMIUM_LINT" --selftest >/dev/null 2>&1; then
