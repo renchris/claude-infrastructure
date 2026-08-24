@@ -461,3 +461,43 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── 20 — the §4.1 absence contract, backlog 0c8b39b67665 ────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 is the sole reason C1 NOT-STARTED is readable as "never booted": the
+# brief must require its FIRST act to be pushing the declared branch, and an empty commit is enough.
+# That was prose only. The payload asked for the push at the END ("read this before you finish",
+# "push whatever you have before you finish"), so no-ref conflated three worlds — never booted,
+# booted and not yet writing, booted with nothing worth committing — and C1 was a confident verdict
+# over an ambiguity. This case pins the three properties that collapse them.
+#
+# RED-PROOF (re-runnable): replay against `git show <pre-fix sha>:scripts/handoff-fire.sh` in a
+# scratch tree. It goes RED on the very first assertion — `--allow-empty` appears nowhere in that
+# file, so the boot commit the contract names was never instructed at all.
+@test "20 the payload demands the boot commit as the FIRST act — the absence contract, implemented" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw boot push ret first
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  boot="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$boot" ] || { echo "the payload never instructs the EMPTY COMMIT — §4.1's contract is still prose"; false; }
+  # 1. The order the contract needs: create the branch, put a commit on it, push it.
+  [ "$sw" -lt "$boot" ] || { echo "the boot commit must follow the branch it lands on (sw=$sw boot=$boot)"; false; }
+  [ "$boot" -lt "$push" ] || { echo "the boot commit must PRECEDE the push (boot=$boot push=$push)"; false; }
+  # 2. It is EMPTY on purpose. A boot commit that carried content would advance the ref AND put a
+  #    byte on a branch the reconciler then has to land — the property both sides key on is
+  #    "introduces no content", so `--allow-empty` is the instruction, never a touched file.
+  ! grep -qE 'touch |echo .* >> ' "$BATS_TEST_TMPDIR/create.log"
+  # 3. FIRST, not last — the whole distinction between this and the pre-fix payload. The boot block
+  #    must come before the return-your-work block, and it must say so in words the VM cannot read
+  #    as end-of-session housekeeping.
+  first="$(grep -n 'FIRST ACT' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  ret="$(grep -n 'HOW TO RETURN YOUR WORK' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$first" ] || { echo "nothing in the payload marks the push as the FIRST act"; false; }
+  [ "$first" -lt "$boot" ] || { echo "the FIRST ACT heading must introduce the boot commit"; false; }
+  [ -n "$ret" ] && { [ "$boot" -lt "$ret" ] || { echo "the boot commit must precede the return-your-work block"; false; }; }
+  # 4. And the reason is IN the brief, because a VM that does not know why will reorder it.
+  grep -q 'never booted' "$BATS_TEST_TMPDIR/create.log"
+}
