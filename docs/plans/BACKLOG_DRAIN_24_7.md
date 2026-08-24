@@ -86,6 +86,118 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #199: the row was HALF FIXED and HALF MISATTRIBUTED — its own
+  sibling row had closed one path, and a whole-log census put the other at 2.5% of the KEEPs it
+  was blamed for. filed 0 / closed 1 / 1 single-row condition retired / this doc.**
+  Board at open: **483 open+blocked** (291 open / 192 blocked / 2250 done, claimed 5); at close
+  **482** (289 open / 193 blocked / 2251 done, claimed 5). `master-operator-gated` **0 open / 111
+  blocked**; `master-convergence-deadlock` **open=13 / blocked=6** at both ends, unmoved by me —
+  printed by `bash bin/cc-backlog fold` run from the worktree, blocked tail stated not hidden.
+  **Closed 1 > filed 0.** Like #196, #197 and #198, the close retired a whole single-row condition:
+  `launcher-scaffolding-defeats-reclamation` is now **absent from the fold entirely** (grep count 0,
+  against `master-convergence-deadlock` at 1 as the positive control). `comm` at both ends:
+  **2 departures, 1 arrival** — my 1 close (`8e4ffc92ab5b`, `status=done`) plus 1 sibling claim
+  (`0c8b39b67665`, `status=claimed by=Chriss-MacBook-Pro-3-69387`); the single arrival is
+  `a771a1611d28`, a `by=cc-backlog-reap` transition INTO blocked, not new work. Seven arithmetic
+  identities re-checked out of the file after insertion.
+
+  🚨 **METHOD 169 — A STORED FALSIFIER CAN BE SATISFIABLE BY A COMMENT DESCRIBING THE BUG.** This is
+  #198's method 168 one turn further in. `8e4ffc92ab5b` stores
+  `grep -q cc-pane-runner scripts/worktree-gc.sh && grep -q cc-pane-runner bin/cc-teardown`. It
+  returned rc 1 ("premise stands") and the instrument is SOUND — positive controls `worktree`=176 in
+  `worktree-gc.sh` and `teardown`=104 in `cc-teardown`, negative controls 0/0. But **leg 2 already
+  returns 1**, and its single occurrence is `bin/cc-teardown:527` — a COMMENT narrating the very
+  incident the row was filed for (`chain login → cc-pane-runner → zsh → cc-close-attrib(43248) →`).
+  So half this falsifier was already satisfied by prose ABOUT the bug, and the whole of it would flip
+  to "premise gone" the moment anyone wrote a TODO into `worktree-gc.sh` saying "we should discount
+  cc-pane-runner". 168 says a text-grep tests the remedy's SPELLING, never its EFFECT; 169 says the
+  spelling it tests can be the BUG REPORT. Memory siblings: `spec-named-mechanism-may-be-prose-only`,
+  `gate-must-not-key-on-its-own-signal`. #196 and #198 both measured a grep matching the comment that
+  documents its token; here that miscount is not noise in a census — it is the falsifier's own
+  passing condition.
+
+  **THE CLOSE, and the six claims measured separately.**
+  · **PATH 1 IS FIXED AND ITS ROW IS ALREADY CLOSED (method 152).** The row filed instance (1) as
+    sibling `47878886746f`; that row is **status=done** (lastTs 2026-08-19T02:14:08Z) and its fix
+    landed as **`d72f2981b`, 2026-08-18T19:05:11-07:00** ("fix(cc-teardown): the launcher's own tee
+    made every wrapped session un-reapable", touching `bin/cc-teardown` + `tests/cc-teardown.bats`).
+    `--is-ancestor origin/main` **rc 0**, against an OFF-TRUNK control `4a10fc1d603c` returning
+    **rc 1**. A row whose headline says "defeats BOTH paths" had one path closed under it.
+  · **PATH 2's MECHANISM IS TRUE AND WIDER THAN THE ROW NAMES (method 166).**
+    `scripts/worktree-gc.sh:417` is `pids="$("$PGREP_BIN" -f claude 2>/dev/null)"`, feeding
+    `LIVE_CWDS` (`:481-484`) read by `is_live_cwd` (`:491`) at `:1117`. `pgrep -f claude` matches any
+    argv containing the string — **and the repo path itself contains `claude-infrastructure`**. Live
+    census, classified by argv POSITION (`basename(argv[0])`): **72 pids, 71 resolvable, 12 real
+    claude entrypoints, 59 = 83.1% not**. So the row understates its own mechanism by naming ONE
+    spelling: today's scaffolding is `cc-close-attrib`, the close-records `tee`,
+    `lead-crash-watchdog.sh` and zsh snapshot shells — and **`bin/cc-pane-runner` is no longer on the
+    live launch chain at all** (measured: `cc-close-attrib → claude`).
+  · **BUT THE HARM NEEDS A SCAFFOLDING-ONLY HOLDER, AND THERE ARE ZERO (method 165).** Partitioned
+    all **7** `.worktrees` paths reachable from that pgrep by whether a REAL claude is ALSO cwd'd
+    there: **7 of 7 have one**, so every KEEP today is correct for a correct reason. Positive
+    control: the shared checkout reads `real=2 scaffold=16`.
+  · **THE CONCLUSION IS FALSE ON ATTRIBUTION — WHOLE-LOG CENSUS, NEVER A TAIL (method 157).**
+    `~/.claude/logs/worktree-gc-infra.log`, **1464 lines / 220,582 bytes / 15 distinct days
+    2026-07-29..2026-08-24**. KEEP reasons: **gate-4 total 15** (all `is_live_cwd`; registry-PID 0,
+    recent-writes 0, open-holders 0, occupancy-unproven 0) against **non-gate-4 total 582** — dirty
+    tree **383**, unlanded **103**, detached HEAD **79**, hard-excluded **16**, idle floor **1**.
+    Negative control 0; positive control `worktree-gc`=71. **GATE 4 IS 15 OF 597 KEEPs = 2.5%**, and
+    the paths it named are live wave worktrees including this session's own `drain/recycle-11` (5
+    hits), held correctly. The accumulation the row predicts IS real — 72 linked worktrees, 170 dirs
+    under `.worktrees` — but of the **9** clean+landed reap-eligible worktrees present today, **8 are
+    held by DETACHED HEAD** (`worktree-gc.sh:1123`) and the 9th is this session. **Gate 4 is not what
+    holds the leak.**
+  · **THE EXHIBIT IS DEAD (method 156's sibling).** pids **41346** and **62653** both GONE;
+    `~/Development/.worktrees/lr-effort` **ABSENT**. Positive control: the probe's own pid resolved.
+  · **THE PRESCRIBED REMEDY ALREADY EXISTS IN-REPO UNDER A DIFFERENT NAME, AND ITS AUTHOR WROTE DOWN
+    WHY (method 168).** `bin/it2-kitty:754-756`, a sibling gate asking the same question: *"A bare
+    substring test was tried first and REJECTED: every pane on this box runs
+    `bash …/claude-infrastructure/bin/cc-pane-runner`, so the repo path name itself matched on every
+    pane and made this arm permanently inert."* Its shipped answer is
+    `CC_EXE = ("claude","claude.exe")` + `os.path.basename(argv[0])` at `:767-774` — the exact
+    discriminator this census reached independently. It landed **`5f5fd7270`,
+    2026-08-10T11:05:41-07:00**, about **three hours AFTER this row's `firstTs`**
+    (2026-08-10T14:59:28Z), and was never ported: `git log -S CC_EXE -- scripts/worktree-gc.sh` = **0
+    commits**, against positive controls `-S PGREP_BIN`=**2** and `-S claude_cwds`=**3** on the same
+    path and a bogus token = **0**.
+  · **WHY THE PORT IS NOT A FOLLOW-ON.** Narrowing gate 4 is the DANGEROUS direction on a file whose
+    own header records sweeping an OCCUPIED worktree on 2026-08-11, and the row's own CONTROL clause
+    ("a genuinely foreign holder must still force KEEP/DEFER") is that risk stated. It buys 2.5% of
+    KEEPs and **0** actual reclamations. That is a design decision, not a measurement.
+  · **NOTHING FILED, DELIBERATELY.** The one surviving true claim — the sprawl is real — is already
+    owned by **`475b43aacbf2`** (blocked, `master-stranded-work`): *"Worktree sprawl: 273 dirs on disk
+    vs 151 git-registered = 122 orphaned"*. #197's and #198's discharge, reused: verify the owner
+    exists and NAME it, because a third row over one question is the duplication a close exists to
+    stop. Verified present as a negative control on the close.
+
+  🚨 **MY OWN CLASS-MATCH FELL TO THE VERY MECHANISM UNDER TEST, AND ONLY THE FULL COMMAND LINE
+  CAUGHT IT.** Probe 4 classified "is this process scaffolding?" with `case "$cmd" in *cc-pane-runner*)`
+  and reported **1 runner alive**. It was pid 12748 running **`shellcheck -f gcc …`** over a file list
+  that happened to include `bin/cc-pane-runner` — the match lived past the 110-column `cut` I was
+  printing, so the display showed a command with no `cc-pane-runner` in it and the classifier still
+  said RUNNER. **A substring test for a tool's name matched a tool being LINTED**, inside the probe
+  written to measure exactly that defect. Memory: `pgrep-f-matches-agent-briefs`,
+  `positive-control-the-denominator`. The cure is the same one `it2-kitty` shipped: anchor on argv
+  POSITION, and never truncate the field you are matching on.
+
+  ⚠️ **AND ONE `-S` LEG OF MINE WAS A NON-VERDICT BESIDE A CONTROL THAT ALSO READ ZERO.** Probe 7 ran
+  `git log -S'pgrep -f claude' -- scripts/worktree-gc.sh` and got **0** — beside a bogus token also
+  **0**. The file's literal is `"$PGREP_BIN" -f claude`, so my token had never existed in any
+  revision; the zero was about my spelling, not the history. #198 hit the identical shape on
+  `gate-select.sh --direct`. **Quote the literal out of the file before you `-S` for it**, and re-run
+  with a token the file provably contains (`PGREP_BIN`=2, `claude_cwds`=3) before reading any zero.
+
+  **Tooling and controls, for the successor.** The `qos-rewrite.sh` diff was **empty for the
+  eighty-first consecutive recycle**. **0** `.page` files under `~/.claude/autonomy/postland`
+  (**ninetieth** consecutive; the directory scar stands — the deploy lane writes to
+  `autonomy/pages`). A **PostToolUse hook rewrote three files I had just written** (`p5-census.py`,
+  `p6-discriminate.py`, `p10-log.py`) — the **30th, 31st and 32nd** firings across twenty-four
+  recycles; each was re-compiled with `python3 -m py_compile` and its decision points re-listed. On
+  `p10-log.py` **`grep -c '^    ("'` read 12 where I had written 13 PATTERNS entries** — the hook had
+  reflowed one onto another line. I read the list back **through `ast.parse`** rather than a grep and
+  it showed all 13. **Prefer a LIST you can read over a number you cannot** — and when the number
+  disagrees with what you wrote, suspect the INSTRUMENT before the file.
+
 - **2026-08-24 — drain recycle #198: the stored falsifier said "premise stands" and the remedy had
   been on trunk for five days — a text-grep falsifier tests the remedy's SPELLING, never its EFFECT.
   filed 0 / closed 1 / 1 single-row condition retired / this doc.**
