@@ -485,6 +485,10 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
 }
 
 @test "alarm never-green is SILENCED by a single green stamp ever having existed" {
+  # NOTE (2026-08-24): this fixture is now ALSO green-starved's own window — an old green under a
+  # newer land — so `kinds` here is "green-starved ", not empty. The claim under test is unchanged
+  # and is deliberately asserted on the never-green COUNT rather than on the whole board: what this
+  # test owns is "a green ever existed ⇒ never-green must not fire", not the board's total row set.
   mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 30H     # green is OLD — outside 24h
   : > "$CC_LAND_LOG"
   run ccb --json
@@ -538,6 +542,118 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   run ccb
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
   echo "$output" | grep -q 'never-green' || false
+}
+
+# ── green-starved: the state BETWEEN trunk-red and never-green ────────────────────────────────────
+#
+# THE GAP THESE PIN (cc-backlog 01ab05685857). The row was filed as "postland-verify is INERT" and
+# its own consolidation pass refuted the title while confirming the fact: the daemon is loaded,
+# running and stamping — greens simply stop arriving. Re-audited over the live store, three breaches
+# of the 24h max (57h, 53h, 26h) with NOTHING on the board for any of them, because every incumbent
+# sensor is correct and silent here: the stamp cursor advances (verifier-inert cannot fire), a green
+# exists (never-green cannot fire), and one green anywhere in the newest N makes `fcount < seen`
+# (trunk-red abstains). `green_24h` was already computed and read by exactly one predicate — as a
+# CONJUNCT of trunk-red — so no row was ever keyed on it.
+#
+# Each fixture below varies exactly one leg of the predicate against an otherwise-firing baseline,
+# which is what makes the silences evidence rather than vacuity.
+
+@test "alarm green-starved/UNCERTIFIED: the verifier is alive, the newest green is past the budget" {
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 30H
+  : > "$CC_LAND_LOG"                                      # a land ON TOP of the newest green
+  [ "$(kinds)" = "green-starved " ]
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="green-starved")] | .[0].state')" = "UNCERTIFIED" ]
+  # MAGNITUDE beside the cause (§4 F4): the age says the certification is old, the LIFETIME rate says
+  # whether that is a blip or the steady state. Only the pair sizes the problem.
+  echo "$output" | jq -r '[.[] | select(.kind=="green-starved")] | .[0].detail' \
+    | grep -q 'newest green 30h old (max 24h); 1/3 ever' || false
+  # I11 — the platter must be RUNNABLE and must not offer a fix this state rejects. The operator's
+  # question here is "why do the runs stop coming back green", so it is the verdict census + the log.
+  local cmd
+  cmd="$(echo "$output" | jq -r '[.[] | select(.kind=="green-starved")] | .[0].recover_cmd')"
+  [ "$cmd" = "jq -r .verdict $CC_POSTLAND_DIR/stamps/*.json | sort | uniq -c | sort -rn ; tail -40 $CC_POSTLAND_DIR/runner.log" ]
+}
+
+@test "alarm green-starved is SILENT inside the budget (the false-positive control)" {
+  mkstamp r1 red 1M; mkstamp g green 5H
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "" ]
+}
+
+@test "alarm green-starved needs a land ON TOP of the green — an idle box is a CERTIFIED trunk" {
+  # The second sensor is `land > green`, never a land window. A 46h-old green over a trunk that has
+  # not moved certifies that trunk; the age alone is a property of the box's idleness. This is
+  # verifier-inert/STALE's own idiom (`land > newest stamp`) pointed at the GREEN cursor instead.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 30H
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-40H +%Y%m%d%H%M)" "$CC_LAND_LOG"   # land OLDER than the green
+  [ "$(kinds)" = "" ]
+}
+
+@test "alarm green-starved has no premise with the land sensor absent (fail-OPEN)" {
+  mkstamp r1 red 1M; mkstamp g green 30H                  # no land.log at all
+  [ "$(kinds)" = "" ]
+}
+
+@test "alarm green-starved DEFERS to trunk-red — one fault, one row" {
+  # Both are true whenever the whole window is non-green; trunk-red is the sharper row because it
+  # names the failing suites. never-green's `emitted` shape, for never-green's reason.
+  for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done
+  mkstamp g green 30H
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "trunk-red " ]
+}
+
+@test "alarm green-starved DEFERS to verifier-inert/STALE (a dead verifier is the sharper fault)" {
+  # Mutually exclusive by CONSTRUCTION, not by an `emitted` gate: this row shares trunk-red's
+  # liveness predicate verbatim, and STALE is its complement. The two fixes are opposites —
+  # `launchctl` there, "why are the runs not green" here — so the wrong one is worse than none.
+  mkstamp r1 red 9H; mkstamp h1 hung 10H; mkstamp g green 30H
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "verifier-inert " ]
+}
+
+@test "alarm green-starved fires MID-RUN even though the newest stamp is past the budget" {
+  # The measured normal case, not an edge one: a stamp is written only when a run ENDS, and runs
+  # here have measured out to 10112s against ALARM_H=3h. Keyed on stamp freshness alone this row
+  # would go silent exactly while the verifier was slowest — which is when greens starve.
+  mkstamp r1 red 9H; mkstamp g green 30H
+  : > "$CC_LAND_LOG"
+  hold_run_lock                                           # the verifier's OWN in-progress mark
+  [ "$(kinds)" = "green-starved " ]
+}
+
+@test "alarm green-starved is disjoint from never-green by construction (no green EVER)" {
+  mkstamp r1 red 1M; mkstamp h1 hung 2M                   # nothing has ever been green
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  [ "$(kinds)" = "never-green " ]
+}
+
+@test "green-starved: the budget is LIVE, and a garbage override cannot take the sensor down" {
+  # ANTI-VACUITY (§2.8 A-6). The silence above must be the budget's doing, so the SAME fixture is
+  # forced to fire by moving only the budget — a fixture that could never fire would satisfy every
+  # silence assertion for the wrong reason. Then the R5 half: a non-numeric override falls back to
+  # the default rather than crashing the sensor, because `[ n -gt abc ]` under -u would take the
+  # whole board down and a garbage budget must never be able to do that.
+  mkstamp r1 red 1M; mkstamp g green 5H
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "" ]
+  export CC_POSTLAND_GREEN_MAX_H=1
+  [ "$(kinds)" = "green-starved " ]
+  export CC_POSTLAND_GREEN_MAX_H=garbage
+  [ "$(kinds)" = "" ]
+}
+
+@test "alarm green-starved renders in the LAND-PIPELINE table, not only in --json" {
+  # The mirror bug this file has been bitten by before: a kind absent from LAND_SEL is EMITTED and
+  # then silently dropped from the one surface the operator reads. Every kind carries this test.
+  mkstamp r1 red 1M; mkstamp g green 30H
+  : > "$CC_LAND_LOG"
+  run ccb
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'green-starved' || false
+  echo "$output" | grep -q 'UNCERTIFIED' || false
 }
 
 @test "trunk-red PERSISTENT-NOT-GREEN renders in the LAND-PIPELINE table too (new state, same SEL)" {

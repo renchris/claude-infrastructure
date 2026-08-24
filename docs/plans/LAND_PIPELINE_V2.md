@@ -960,6 +960,23 @@ symlink (deploy-parity test 8 red until `bash install.sh` runs live or the first
 advance self-heals it — operator readout carries the one-liner). Corpus exposure already
 nil: deploy-parity.bats is manifest-partitioned since verifier Phase A.
 
+**§4.4 ALARM ADDITION (2026-08-24, cc-backlog `01ab05685857`):** `green-starved` / `UNCERTIFIED` —
+the verifier is ALIVE and HAS certified before, but the newest GREEN is older than
+`CC_POSTLAND_GREEN_MAX_H` (24h) and work has landed on top of it. The state BETWEEN trunk-red and
+never-green, and it was covered by nothing: `green_24h` was computed in `alarm_rows` and read by
+exactly ONE predicate — as a conjunct of trunk-red — so one green anywhere in the newest N makes
+`fcount < seen`, trunk-red abstains, `gcommit` is non-empty so never-green abstains, and the stamp
+cursor keeps advancing so verifier-inert abstains. Every sensor correct, board silent. Not a corner:
+40 green of 386 stamps over 2026-08-01..08-24 (~10%) puts a green in a 5-wide window roughly two
+draws in five, and the row's own re-audit measured **3 breaches of the 24h max (57h, 53h, 26h)** with
+nothing surfaced for any of them. Second sensor is `land > green`, never a land window — an old green
+over an unmoved trunk is a CERTIFIED trunk, not a starved one; the age alone is a property of the
+box's idleness. Liveness is trunk-red's predicate verbatim (fresh stamp OR a run in flight), which is
+what keeps it mutually exclusive with STALE by construction rather than by hope, and it defers to
+trunk-red on `emitted` because trunk-red names the failing suites. The row's filed title ("INERT")
+was refuted by its own consolidation pass — the daemon is loaded and running; what stops is the
+certification, not the job — so the fix is an alarm, never a `launchctl`.
+
 **§4.1 DESIGN ADDITION (2026-07-28, found at integration):** the smoke's direct list must
 ALSO exclude scripts/host-suites.manifest entries (read from the tree being landed; missing
 ⇒ no filter). A host suite arriving as a DIRECT suite of a diff reds the land for a
