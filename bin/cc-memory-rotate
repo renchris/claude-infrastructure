@@ -345,7 +345,15 @@ while :; do
   # archived topics must stay discoverable from the auto-loaded surface.)
   HAVE_PTR=0
   if grep -q 'archive/MEMORY_ARCHIVE' "$INDEX"; then HAVE_PTR=1; fi
-  PTR_LINE="<!-- cold tier: archive/MEMORY_ARCHIVE_*-COLD.md — auto-rotated by cc-memory-rotate near the ${LIMIT} B read limit; restore = paste the line back -->"
+  # UNIT: loader CHARS, not bytes. `${LIMIT} B` stood here until 2026-08-24 and was the dead
+  # pre-2026-08-15 byte premise re-seeded into the one file the next observer measures — this
+  # pointer is written INTO the index, so a stale unit label teaches every reader of it to size
+  # the next cut in `wc -c` and mint another false "over budget" item (backlog c7bef93baca6).
+  # KEEP THIS LINE SHORT. The loader strips block comments so it is free against the 25000-char
+  # cap (test 9), but it is NOT free against the LINE cap or the disk the index costs everywhere
+  # else — a first pass at this fix spelled the unit out in full and RED-ed tests 17 and 20 on
+  # raw size. The explanation goes in this comment; the stamp gets the one corrected word.
+  PTR_LINE="<!-- cold tier: archive/MEMORY_ARCHIVE_*-COLD.md — auto-rotated by cc-memory-rotate near the ${LIMIT}-char read limit; restore = paste the line back -->"
 
   # Classify → eligible list "mtime<TAB>lineno<TAB>file", oldest mtime first. Stage-1 type
   # keeps also record their ordinal, so breach pressure can re-judge exactly that set.
