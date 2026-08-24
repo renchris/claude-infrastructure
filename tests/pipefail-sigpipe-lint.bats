@@ -99,12 +99,33 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   run bash -c 'set -uo pipefail; V="MATCHME$(head -c 4096 /dev/zero | tr "\0" x)"; printf "%s" "$V" | grep -q MATCHME'
   [ "$status" -eq 0 ] || { echo "builtin producer took SIGPIPE at 4 KiB — the exemption is unsound"; false; }
 
-  # 62 KB still fits one write; 64 KiB does not. Deterministic on this box (0/10 and 10/10), because
-  # the boundary is the buffer rather than a scheduling race — which is exactly why the command word
-  # cannot decide it. A variable's length is not readable off the line, so the ARGUMENT decides.
+  # A payload well UNDER the pipe buffer still fits one write; 64 KiB does not. The command word
+  # cannot decide it — a variable's length is not readable off the line, so the ARGUMENT decides.
+  #
+  # THIS ARM WAS 63488 AND IT WAS FLAKY, for a reason worth keeping (backlog 418628734437, measured
+  # here 2026-08-24 at loadavg 11-15). Two corrections to what this comment used to claim:
+  #
+  # (1) THE SIZE WAS NOT WHAT IT SAID. `head -c 63488` is 62 KiB of payload, but `fold -w 80` adds
+  #     794 newlines and the MATCHME prefix adds 9, so the arm actually wrote 64290 bytes — 1246
+  #     under the 65536 buffer, not the ~2 KiB of headroom "62 KB" implies. The arithmetic omitted
+  #     the framing it had itself introduced.
+  # (2) "Deterministic on this box (0/10 and 10/10), because the boundary is the buffer rather than
+  #     a scheduling race" WAS FALSE — measured 9/40 nonzero on this very arm, i.e. it red an
+  #     innocent land ~22% of the time. The transition is a GRADED BAND, not a step, which is the
+  #     signature of a race and not of a boundary:
+  #       writes 60750 -> 1/40 · 62775 -> 3/40 · 64290 -> 9/40 and 12/40 · 64800 -> 12/40
+  #       · 65200 -> 6/40 · 65821 -> 120/120
+  #     Whether the producer sees EPIPE depends on whether grep exits before the write completes, so
+  #     near the buffer it is genuinely probabilistic.
+  #
+  # 57344 (56 KiB raw -> 58069 bytes written) is 0/120 at loadavg 15.3, with 7.4 KB of margin, and
+  # still 14x the 4 KiB arm above — so it proves what this arm exists to prove (the exemption holds
+  # for a LARGE sub-buffer payload, not merely a tiny one) without sitting on the cliff. Do not
+  # raise it back toward 64 KiB: the band above is where the flake lives. The 128 KB arm below is
+  # the one that must fail, and it saturates, so the two arms still bracket the buffer.
   run bash -c 'set -uo pipefail; V="MATCHME
-$(head -c 63488 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
-  [ "$status" -eq 0 ] || { echo "builtin producer failed UNDER the pipe buffer (62 KB) — the literal exemption would be unsound too"; false; }
+$(head -c 57344 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
+  [ "$status" -eq 0 ] || { echo "builtin producer failed UNDER the pipe buffer (56 KiB) — the literal exemption would be unsound too"; false; }
   run bash -c 'set -uo pipefail; V="MATCHME
 $(head -c 131072 /dev/zero | tr "\0" x | fold -w 80)"; printf "%s\n" "$V" | grep -q MATCHME'
   [ "$status" -ne 0 ] || { echo "builtin producer survived 128 KB — clause 3's NARROWING is over-scoped and 127 sites are false positives"; false; }
