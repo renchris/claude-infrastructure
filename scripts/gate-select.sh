@@ -13,11 +13,21 @@
 # python3, an unparseable range, an internal error — every one of them prints FULL. A
 # false FULL costs wall-clock; a false narrow selection ships an untested regression.
 #
-#   --explain  one stderr line per decision (`tests/X.bats <- literal:scripts/foo.sh`).
+#   --explain  one stderr line per decision (`tests/X.bats <- literal:scripts/foo.sh`). Under
+#              --direct a DEMOTED edge is marked `NOT-DIRECT` and a closing summary states the
+#              direct/demoted counts — because dropping a suite IS a decision, and an --explain
+#              trace that narrates edges the selection discarded reads as a bug in the gate.
 #   --direct   print only the DIRECT clauses (literal-path + naming-convention) — the land
 #              gate uses this to tell a real RED from a flake in a merely-adjacent suite.
 #              A DIRECT edge needs evidence in the suite's EXECUTABLE text; a path a suite only
 #              CITES in a comment selects it but never makes it un-exonerable (see `cited_only`).
+#
+# EMPTY IS A VERDICT; `FULL` IS THE ABSTENTION. `--direct` printing nothing at exit 0 means the
+# judgement completed and no suite executes this diff — the normal answer for a prose-only range,
+# whose every edge is a citation. This selector abstains by printing the literal token FULL (every
+# fail_closed door and every internal error), never by silence, so a consumer that needs to tell
+# "nothing to run" from "I could not tell" reads FULL, not emptiness. ship-land.sh keeps those as
+# separate land.log tokens already: `none-nodirect` vs `none-undecided`.
 #
 # MULTI-RANGE: the changed-file sets of every range are UNIONED before the rules run, so a
 # CAS-stale re-gate can pass the sibling trunk delta as a second range and see the novelty
@@ -444,7 +454,7 @@ def main():
                 seen.add(rec)
                 changes.append(rec)
 
-    picked, direct_picked = set(), set()
+    picked, direct_picked, demoted = set(), set(), set()
 
     def prose_refs(p):
         """The ONE coupling a prose path has to the corpus: a suite that NAMES it literally.
@@ -563,7 +573,21 @@ def main():
 
         def take(found, tag, direct=False, _h=hits, _d=dhits, _p=path):
             for suite in sorted(found):
-                note(suite, "%s:%s" % (tag, _p))
+                # UNDER --direct AN INDIRECT CLAUSE IS A DEMOTION, AND --explain MUST SAY SO.
+                # --explain's contract is "one stderr line per DECISION". Under --direct the
+                # decision taken here is to DROP this suite, but the line printed was identical to
+                # a selecting one — so `--direct --explain` narrated three edges over an empty
+                # stdout, and the instrument read as a bug in the gate. That mismatch is the
+                # measured generator of this row: TEN independent observers filed "--direct
+                # returns 0 where --explain names 3" against ranges where the empty set was
+                # CORRECT (250 of 262 none-nodirect lands in ~/.claude/land.log are prose-only,
+                # where the only edges are citations `cited_only` exists to demote). The trace,
+                # not the selection, is what was wrong. Marking it makes observation 11 free.
+                if DIRECT and not direct:
+                    note(suite, "NOT-DIRECT %s:%s" % (tag, _p))
+                    demoted.add(suite)
+                else:
+                    note(suite, "%s:%s" % (tag, _p))
                 _h.add(suite)
                 if direct:
                     _d.add(suite)
@@ -657,6 +681,21 @@ def main():
 
         picked |= hits
         direct_picked |= dhits
+
+    # THE VERDICT/ABSTENTION LINE. An empty direct set and an abstention are DIFFERENT ANSWERS and
+    # this selector has always spelled them differently — an abstention is the literal token FULL
+    # (every fail_closed door, every internal error), never silence. But nothing ever SAID so at
+    # the point of observation, so an empty stdout kept being read as "the selector could not
+    # tell". It is the opposite: it is a completed judgement that no suite executes this diff.
+    # Printed only under --direct --explain, i.e. exactly when someone is asking why the set is
+    # what it is. Consumers read stdout; this is for the human holding the two flags.
+    if DIRECT and EXPLAIN:
+        only_indirect = sorted(demoted - direct_picked)
+        sys.stderr.write(
+            "gate-select --direct: %d direct suite(s); %d reached ONLY by non-direct clauses "
+            "(marked NOT-DIRECT above). An empty direct set is a VERDICT — nothing this diff "
+            "executes — NOT an abstention; this selector abstains by printing the literal token "
+            "FULL.\n" % (len(direct_picked), len(only_indirect)))
 
     for suite in sorted(direct_picked if DIRECT else picked):
         sys.stdout.write("%s\n" % suite)
