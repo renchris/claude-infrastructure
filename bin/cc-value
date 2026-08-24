@@ -260,11 +260,37 @@ build_json() {
     # an account can burn quota and then go idle, and it must still be visible to the churn detector
     # (otherwise a spent-then-parked account silently escapes the net-negative check).
     ( [ $q | to_entries[] | select((.value.s // 0) >= $churnmin) | .key ] ) as $spend_accts |
+    # ── THE JOIN COVERAGE, AND THE ABSTENTION IT DRIVES (M7, USAGE_TELEMETRY_100P §4) ──────────
+    # Everything per-account and per-session in this ledger is keyed on a `Session-Id:`/
+    # `Land-Session:` UUID trailer. That key went EXTINCT: measured on the trunk of this repo,
+    # 0 of 50 landed commits carry either trailer. The ledger nonetheless kept rendering the
+    # attributed columns, and a dead join is indistinguishable from a true zero at the surface —
+    # `next +0c` reads "this account landed nothing" when it means "nothing is joinable".
+    # Design law 4 (ABSTAIN, NEVER IMPUTE) says report null, with the reason named.
+    #
+    # `abstain` is about a DEAD JOIN, not an empty window: with no in-window commits at all there
+    # is nothing to attribute and nothing to abstain from, so coverage is null and abstain false —
+    # which is what keeps the churn detectors (whose whole job is the zero-value window) working.
+    ( if $c.total > 0 then (($c.total - $c.unattr) / $c.total * 1000 | round / 10) else null end ) as $coverage |
+    ( $c.total > 0 and ($c.total - $c.unattr) == 0 ) as $abstain |
     {
       window_h: $window,
       now: $now,
       churn_min_pct: $churnmin,
       repos: $repos,
+      # The instrument reporting on its own join. A consumer that renders an attributed number
+      # MUST read this first: `abstain` true means the per-account/per-session `commits` fields
+      # below are NOT measurements and may not be rendered as such.
+      attribution: {
+        key: "Session-Id:/Land-Session: git trailer",
+        commits_total: $c.total,
+        commits_attributed: ($c.total - $c.unattr),
+        coverage_pct: $coverage,
+        abstain: $abstain,
+        reason: (if $abstain then
+            "0 of \($c.total) landed commit(s) in this window carry a joinable Session-Id:/Land-Session: trailer — per-account and per-session commit attribution is not derivable. Fleet totals are unaffected."
+          else null end)
+      },
       fleet: {
         commits: $c.total,
         commits_unattributed: $c.unattr,
@@ -281,6 +307,10 @@ build_json() {
         ( ($active_accts + ($c.byacct|keys) + $spend_accts) | unique ) | map(. as $a | {
           acct: $a,
           commits: ($c.byacct[$a] // 0),
+          # false ⇒ the 0 above is the dead join, not a measurement. Kept as a SIBLING flag rather
+          # than nulling `commits`, because cc-board interpolates that field directly and a null
+          # would render the string "null" onto the operator board — a worse lie than the 0.
+          commits_known: ($abstain | not),
           session_pct: ($q[$a].s),
           weekly_pct: ($q[$a].w),
           active: ($active_accts | index($a) != null),
@@ -299,9 +329,17 @@ build_json() {
           sid8: (.sid[0:8]),
           acct: .acct,
           commits: ($c.bysid[.sid] // 0),
+          commits_known: ($abstain | not),
           used_pct: .used,
           active: .active,
-          churn: (.active and ($c.bysid[.sid] // 0) == 0 and (.used // 0) >= 40)
+          # 🚨 SESSION CHURN IS THE ONE DETECTOR THE DEAD JOIN ACTUALLY CORRUPTS, and it corrupts it
+          # UNIVERSALLY. Its predicate is "active, burned ≥40% of context, landed 0 commits BY MY
+          # UUID" — and under an extinct trailer nobody lands a commit by their UUID, so every
+          # working session in the fleet is flagged a churner at once. The two other churn arms
+          # (fleet, per-account) gate on $fleet_value, which counts unattributed commits too, so
+          # they were never join-dependent; this one is, and it must abstain rather than accuse.
+          churn: (if $abstain then false
+                  else (.active and ($c.bysid[.sid] // 0) == 0 and (.used // 0) >= 40) end)
         })
       )
     }'
@@ -317,11 +355,15 @@ render_table() {
       + (if .commits_unattributed>0 then " (\(.commits_unattributed) unattributed)" else "" end)
       + " · \(.tasks) tasks closed   |  spend ~\(.spend_pct)% (Σ5h · \(.active_sessions) active)"
       + (if .ratio!=null then " · v/spend \(.ratio)" else "" end)
-      + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed" else "" end))
+      + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed" else "" end)),
+    # M7: the abstention is stated ONCE, above the columns it disqualifies, and it names the key.
+    # Silence here is what made the dead join indistinguishable from a productive-but-idle fleet.
+    (.attribution | select(.abstain) | "  ⚠ ATTRIBUTION ABSTAINED — \(.reason)")
   ' 2>/dev/null
   # per-account lines (separate pass → stable column widths via awk)
   printf '%s' "$j" | jq -r '.accounts[] |
-    "\(.acct)\t+\(.commits)c\t5h \(.session_pct // "?")%\twk \(.weekly_pct // "?")%\t"
+    "\(.acct)\t" + (if .commits_known then "+\(.commits)c" else "+?c" end)
+    + "\t5h \(.session_pct // "?")%\twk \(.weekly_pct // "?")%\t"
     + (if .churn then "CHURN? (spend, 0 landed commits)" elif .active then "active" else "idle" end)' 2>/dev/null \
     | awk -F'\t' '{printf "  %-7s %-5s %-9s %-9s %s\n",$1,$2,$3,$4,$5}'
 }
@@ -334,7 +376,20 @@ render_table() {
 # The cache path is a plain file OUTSIDE $TDIR so it can never be mistaken for a telemetry row.
 CACHE_TTL="${CC_VALUE_CACHE_TTL:-60}"
 CACHE_FILE="${CC_VALUE_CACHE:-${TMPDIR:-/tmp}/cc-value-cache.json}"
-file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# 🚨 THE `||` FALLBACK DOES NOT FIRE ON GNU COREUTILS, because GNU `stat -f` SUCCEEDS. It means
+# "print FILE SYSTEM status", not "format", so `stat -f %m "$1"` treats `%m` as a missing file
+# (stderr, discarded) and `$1` as a real one — exit 0, with multi-line filesystem info on stdout.
+# That output then reached `age=$(( now - $(file_mtime …) ))`, and under `set -u` bash died on
+# `File: unbound variable`: every `cc-value --cached` on Linux (cloud sessions, cc-board's embed)
+# crashed, and the two cache selftests were RED. Discriminate on the OUTPUT being a bare integer,
+# never on the exit status — a portability probe that trusts `$?` is testing the wrong thing.
+file_mtime() {
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null)"                     # GNU coreutils
+  case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$1" 2>/dev/null)" ;; esac   # BSD/Darwin
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
+}
 emit_cached() {
   [ -n "${CC_NOW:-}" ] && { build_json; return; }        # tests: never touch the shared cache
   local age=999999
@@ -438,6 +493,16 @@ run_selftest() {
   check "session uuid-AAA reads its own 1 commit"           '(.sessions[]|select(.sid=="uuid-AAA")|.commits)==1'
   check "repos scanned == 1 (explicit CC_VALUE_REPOS)"      '(.repos|length)==1'
 
+  # ── M7: THE JOIN REPORTS ON ITSELF (USAGE_TELEMETRY_100P §4) ────────────────────────────────
+  # POSITIVE CONTROL, and it is the half that makes the abstention falsifiable rather than a
+  # constant: this world HAS a live join (1 of 2 commits carries Session-Id: uuid-AAA), so
+  # coverage must be a real 50% and the ledger must NOT abstain. A fix that hard-wired
+  # `abstain: true` — or one that abstained whenever any commit was unattributed — dies here.
+  check "live join ⇒ coverage 50%, no abstention"           '.attribution.coverage_pct==50 and .attribution.abstain==false'
+  check "live join ⇒ attributed count is proven, not assumed" '.attribution.commits_attributed==1 and .attribution.commits_total==2'
+  check "no abstention ⇒ per-acct commits are a MEASUREMENT" '(.accounts[]|select(.acct=="next")|.commits_known)==true'
+  check "the abstain reason is null while the join is alive" '.attribution.reason==null'
+
   # churn RED-proof: wipe all value (no commits, no tasks) but keep active spend → fleet churn fires.
   local EMPTY="$tmp/emptyrepo"; git init -q "$EMPTY"
   git -C "$EMPTY" config user.email t@t; git -C "$EMPTY" config user.name t
@@ -473,6 +538,60 @@ run_selftest() {
     printf '  ok   %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; pass=$((pass+1))
   else
     printf '  FAIL %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; fail=$((fail+1))
+  fi
+
+  # ── M7 RED-PROOF: THE EXTINCT JOIN MUST ABSTAIN, AND MUST STOP ACCUSING ──────────────────────
+  # $UNATTR is the live fleet's actual condition, measured 2026-08-24: every in-window commit is
+  # trailerless, so the Session-Id join resolves nobody. Before this fix the ledger rendered that
+  # as `next +0c` — a confident zero indistinguishable from "this account genuinely landed
+  # nothing" — and, worse, flagged CHURN on every active session at once, because session churn's
+  # predicate is "landed 0 commits BY MY UUID" and under a dead join nobody ever has.
+  # These four are red against the pre-M7 binary: it emitted no `.attribution` object at all, and
+  # `.sessions[].churn` was true for uuid-AAA (active, used_pct 55 ≥ 40, 0 commits joined).
+  ju_check() { # <label> <jq-filter-bool>
+    if printf '%s' "$JU" | jq -e "$2" >/dev/null 2>&1; then
+      printf '  ok   %s\n' "$1"; pass=$((pass+1))
+    else
+      printf '  FAIL %s\n' "$1"; fail=$((fail+1))
+    fi
+  }
+  ju_check "extinct join ⇒ ABSTAIN, coverage proven 0 (not silently 0 commits)" \
+           '.attribution.abstain==true and .attribution.coverage_pct==0 and .attribution.commits_attributed==0'
+  ju_check "extinct join ⇒ the reason NAMES the missing key" \
+           '(.attribution.reason|type=="string") and (.attribution.key|test("Session-Id"))'
+  ju_check "extinct join ⇒ per-acct +0c is disqualified (commits_known false)" \
+           '([.accounts[]|.commits_known]|all(.==false))'
+  ju_check "extinct join ⇒ NO session-churn false positive (was: every active session)" \
+           '([.sessions[]|select(.active)]|length)>0 and ([.sessions[]|.churn]|all(.==false))'
+  # the renderer must SAY it, not just carry the flag in json a human never reads
+  if CC_VALUE_REPOS="$UNATTR" CC_BACKLOG_FILE="$tmp/none.jsonl" bash "$SELF" 2>/dev/null \
+       | grep -q 'ATTRIBUTION ABSTAINED'; then
+    printf '  ok   %s\n' "extinct join ⇒ the TABLE states the abstention above the columns"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "extinct join ⇒ the TABLE states the abstention above the columns"; fail=$((fail+1))
+  fi
+  # and --session must abstain rather than answer "0 commits landed" from a join that resolves nobody
+  if CC_VALUE_REPOS="$UNATTR" CC_BACKLOG_FILE="$tmp/none.jsonl" bash "$SELF" --session uuid-AAA 2>/dev/null \
+       | grep -q 'ABSTAINED'; then
+    printf '  ok   %s\n' "extinct join ⇒ --session ABSTAINS (was: a confident '0 commits landed')"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "extinct join ⇒ --session ABSTAINS (was: a confident '0 commits landed')"; fail=$((fail+1))
+  fi
+  # …and with the join ALIVE it still answers, so the abstention is not a blanket refusal
+  if bash "$SELF" --session uuid-AAA 2>/dev/null | grep -q '1 commit landed'; then
+    printf '  ok   %s\n' "live join ⇒ --session still ANSWERS (abstention is not a blanket refusal)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "live join ⇒ --session still ANSWERS (abstention is not a blanket refusal)"; fail=$((fail+1))
+  fi
+
+  # ── M7: file_mtime must return a BARE INTEGER on this platform, or --cached dies under set -u.
+  # GNU `stat -f` SUCCEEDS (it means "filesystem status"), so the old `stat -f %m || stat -c %Y`
+  # fallback never fired on Linux and fed multi-line text into $(( )). Assert the contract the
+  # arithmetic actually needs, rather than trusting either stat's exit status.
+  if [ "$(file_mtime "$BL")" -gt 0 ] 2>/dev/null; then
+    printf '  ok   %s\n' "file_mtime returns a bare epoch on this platform (GNU + BSD stat)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "file_mtime returns a bare epoch on this platform (GNU + BSD stat)"; fail=$((fail+1))
   fi
 
   # graceful degrade: no telemetry dir at all → still emits valid json, no crash.
@@ -538,6 +657,10 @@ case "$MODE" in
       ($me.commits // (.fleet as $f | null)) as $c |
       if $me == null then
         "session \($s[0:8]) — no live telemetry row; landed-commit contribution not resolvable here"
+      elif (.attribution.abstain) then
+        # M7: without this arm the answer to "what did I land?" was a confident "0 commits landed"
+        # computed from a join that resolves nobody. Abstain, and name the key that is missing.
+        "session \($s[0:8]) on \($me.acct // "?") — landed-commit contribution ABSTAINED: \(.attribution.reason)"
       else
         "session \($s[0:8]) on \($me.acct // "?") — \($me.commits) commit\(if $me.commits==1 then "" else "s" end) landed in \(.window_h)h · ctx \($me.used_pct)%"
         + (if $me.churn then "   ⚠ churn (ctx spent, 0 landed)" else "" end)
