@@ -157,6 +157,42 @@ branch queue is empty or explicitly abandoned with reasons, the production deplo
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-08-24 — THIRD cloud dispatch of `8f59467c92b0`, the first one a LANDED guard should have
+  stopped — and this time the disproof reached the enforcing store.** Same VM shape as 08-15 and
+  08-17 (one checkout, GitHub scope of one repo, no `~/Development`, no
+  `~/.claude/autonomy/backlog.jsonl`). R1-R4 untouched and still **open, correct as filed, and
+  unstarted** — nothing about the plan is refuted, only the venue. Three things this fire measured
+  that neither prior one could: **(1)** the cross-repo arm the 08-15/08-17 sessions asked for DID
+  land (`460211b83`, 08-23T21:30Z) and this row walked straight through it ~20 h later — not a
+  failure of the arm, which keys on `cross_repo(project)` and correctly finds this row's project
+  label *accurate*; that converts 08-17 §3's prediction into a measurement against a shipped
+  implementation. **(2)** 🚨 **the repair 08-17 filed cannot see this row either.** Its "read the
+  item's TEXT for another dispatch-set project" is inert because the classifier's text is
+  `SPAN_FIELDS` = `title · dodRef · condition · source`, and none of this row's four contains
+  `reso-management-app` or `doc_classifier` — a constraint this plan states at Phase 0 about a
+  *different* arm and which nobody connected to the 08-17 remedy. **(3)** the obvious repair to
+  THAT — follow `dodRef` and scan the plan body — is worse: measured over the 45 open plans in
+  `docs/plans`, **14 (31%) merely MENTION a product repo in passing**, so a body scan refuses a
+  third of this repo's plan-derived cloud work to park one row, which is `cc-eligible`'s own
+  named failure mode (*a denylist enumerates spellings, never the class*).
+  **Fixed here, not just filed** (`182c81e9`): a fourth arm, `FOREIGN_TREE =
+  "ineligible-foreign-tree"`, whose signal is **DECLARED rather than inferred** — this plan's
+  frontmatter now carries `targets: reso-management-app, doc_classifier`, and `declared_targets()`
+  reads only the frontmatter, measuring each target through the existing `cross_repo()` so it
+  inherits that arm's fail-open law. Zero false positives by construction (the 31% are untouched,
+  pinned as test 3); two trees are expressible, which the 08-15 entry below notes no single-valued
+  field can do (test 4); and a wrong refusal costs only the cloud venue — the item still drains
+  locally — which is why this was landable where 08-17 §6 correctly declined to touch the fire path.
+  Two of 08-17's three refusal grounds were **re-measured and do not hold**: `bats` and `shellcheck`
+  are both installable here in ~30 s (`npm install -g bats`, `pip install shellcheck-py`), so the
+  gate ran — **64/64 green**, red-proof measured against parent `7fbc0ffb` (FAIL 1,2,4,8,9 · PASS
+  3,5,6,7,10). The third ground stands and is why the arm is inert on a VM: `cloud_repo()` needs the
+  script under `$HOME/Development`, so the lane is unresolvable here and the reach family fails open;
+  it takes effect on the dispatching box. One pre-existing RED named and not driven:
+  `tests/cc-venue.bats` test 11, which fails identically on parent `7fbc0ffb`. Full measurement →
+  `docs/research/venue-foreign-tree-declared-2026-08-24.md`. **Disposition unchanged from 08-17:
+  `cc-backlog block`, not `reopen`** — the rails still fail at rc 0 from a VM, so verify the block
+  took; the landed arm should now make that belt-and-braces rather than the only guard.
 - **2026-08-17 — the SAME row was cloud-dispatched AGAIN, and the re-fire is the finding.**
   `8f59467c92b0` was fired into an identical VM shape (one checkout, GitHub scope of one repo, no
   `~/Development`) ~2 days after the 08-15 entry below wrote its disproof into THIS FILE. R1-R4 were
