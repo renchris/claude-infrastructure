@@ -111,6 +111,27 @@
 #   re-read — so a healthy box self-clears it within one close. It persists exactly as long as a
 #   real converger outage does, which is the state it exists to report.
 #
+#   ⚠️ BUT "self-clears within one close" IS CONDITIONAL, AND THE CONDITION IS NOT THE ADD
+#   (measured 2026-08-24, backlog b79591064f75 — closed REFUTED). That row read this asymmetry as a
+#   deadlock: this ledger breaches on an ADD, while deploy-live.sh cannot see adds at all (0
+#   `diff-filter=A` sites, 0 `LIVE_ADDS`; its budget is LAG_COMMITS/LAG_HOURS only) — concluding the
+#   🚀 rung "names a converger that DETERMINISTICALLY declines", so CLAUDE.md's
+#   no-unreachable-✅ guarantee fails. Both halves are TRUE and the conclusion does NOT follow.
+#   deploy-live advances iff it sets $TARGET, and $TARGET comes from T1 (newest GREEN tree that
+#   DESCENDS from live HEAD) or T1H (an OFF-BOX hermetic green with no on-box RED). Neither reads
+#   added files. Adds and the decline are INDEPENDENT axes; the row's single exhibit carried both
+#   and read co-presence as causation — its own quoted refusal names the real cause, "no GREEN tree
+#   is a DESCENDANT of live HEAD".
+#   So do NOT "give deploy-live the same add-awareness" to make the two agree. The lag budget's only
+#   POSITIVE effect is arming T2 at deploy-live.sh:1621 — the DEGRADED door that takes the newest
+#   NOT-RED commit and advances under a page recording an UNVERIFIED deploy. Tripping that on every
+#   add (28.5% of trunk commits, above) would make absence-of-evidence the DEFAULT deploy path.
+#   And do NOT suppress the prescription here either: this ledger never reads the green ladder, so
+#   it cannot know the converger will decline, and silencing the command would withhold a correct
+#   drivable action in every case where T1/T1H is non-empty.
+#   What the row DID surface: a persistent breach here need not be a converger OUTAGE. VERIFIER
+#   FAMINE produces the same picture, and deploy-live pages that under its own name (:464).
+#
 #   LADDER POSITION: 📦 and 🚀 are the two "the value is not where it needs to be" rungs, in store
 #   order branch → trunk → live, so 🚀 sits directly below 📦. 👤 asks a different question (the
 #   OPERATOR's queue) and ranks below both.
