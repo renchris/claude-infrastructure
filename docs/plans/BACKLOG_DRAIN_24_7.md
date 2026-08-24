@@ -87,6 +87,120 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-24 — drain recycle #192: the live layer CONVERGED, and not by the path three rows
+  say is required — `deploy-live` took its own DEGRADED escape hatch. filed 0 / closed 2 / 1 commit
+  of code + this doc.** Board at open: **open 302 / blocked 194 / claimed 5 / done 2235**, 496
+  open+blocked. Zero `.page` files under `autonomy/postland` (**EIGHTY-THIRD** consecutive; the
+  directory scar from #191 stands — `autonomy/pages` is a different, populated store). Heredoc diff
+  clean (**seventy-fourth**). Warm effort: #191's recommendation (A), the LOAD-BLAMING postland
+  family. **Both closes carry same-moment content evidence; I filed nothing, so closed > filed.**
+
+  🚨 **THE HEADLINE — THE CONVERGE DEADLOCK IS NOT PERMANENT, AND THE CONVERGER BROKE IT ITSELF
+  WHILE #191 WAS WRITING THAT IT COULD NOT.** Live lag went **20 → 0**: shared-checkout HEAD ==
+  `origin/main` == `8b9becd6d2e5` after a `fetch`, both `rev-list --count` directions 0, and both
+  #191's live HEAD `4908e350d5d9` and `e57b6bf516b8`'s `36cbb55eda4c` are now ANCESTORS of it.
+  It did **not** converge via a green descendant. `deploy.log`, verbatim:
+
+      deploy-live: !!!!! DEGRADED deploy — no GREEN tree is a DESCENDANT of live HEAD 4908e350d5d9
+      (the newest one, 37f886bb9aa2, is BEHIND it — deploying that would report a deploy that never
+      happened); taking the newest NOT-RED commit instead, authorised by 7h since the live commit
+      was authored (budget 6h) !!!!!
+      deploy-live: deployed 4908e350d5d9 → 8b9becd6d2e5
+
+  The commit it deployed is **#191's own §2.1 entry**. So #191's descendant-ness census is CORRECT
+  and its conclusion is not: green-descendant-ness is still **0 of 46** (45 ancestors, 1 unrelated),
+  yet the layer converged anyway, because `deploy-live` carries a **staleness budget** (6h since the
+  live commit was authored) that nobody in this cluster had read. **Green-descendant-ness gates the
+  CLEAN path only.** The permanent-`GATE=stale` 🔧 and the "not hand-fixable" framing both rest on a
+  premise the actor itself does not hold.
+
+  🆕 **METHOD 158 — A CORRECT DIAGNOSIS OF A BLOCKER PLUS A TRUE OBSERVATION THAT IT KEEPS FIRING
+  DOES NOT ESTABLISH THAT THE MECHANISM HAS NO OTHER PATH. BEFORE WRITING "CANNOT" OR "NOT
+  HAND-FIXABLE", READ THE ACTOR'S OWN SOURCE FOR ITS ESCAPE HATCHES AND ITS BUDGETS.** 842 refusals
+  and a 0/46 descendant census are both real, and neither one is evidence about what `deploy-live`
+  does when the *refusal itself* gets old. Sibling of 157 (which says go COUNT the thing claimed
+  impossible); 158 says go READ THE ALTERNATE BRANCH. Siblings in memory:
+  `spec-named-mechanism-may-be-prose-only`, `wrong-cause-corroborated-by-true-metric`.
+
+  🚨 **AND THE CORRECT DIAGNOSIS WAS ON THE BOARD SIX DAYS BEFORE #191 ELEVATED IT.**
+  `e57b6bf516b8` (filed **2026-08-18**) states it *more precisely* than `8e17ab75a613` (2026-08-23,
+  the one #191 called the machine's first correct filing): it names the live HEAD `36cbb55eda4c`
+  AND the newest green `555e3b270f1e` and says the green is BEHIND it. **Both were blocked under
+  `master-operator-gated`, where the drain never looks.** The cluster did not lack the diagnosis; it
+  lacked a reader.
+
+  **CLOSED `e57b6bf516b8` — premise DEAD, one consequence FALSE, the other CURED, all three by
+  content.** (1) Premise: lag 0, above. (2) Its requirement *"Needs a postland-verify GREEN on a
+  descendant of live HEAD"* + *"Not hand-fixable"* — refuted by the converger's own log. (3)
+  Consequence (a), *"tests/validate-bash-scratchpad.bats is absent from the live layer entirely — no
+  symlink, so it silently never runs"* — **FALSE AS REASONED: `~/.claude/tests` DOES NOT EXIST AT
+  ALL.** All **540** tracked `tests/` files read "absent", which **failed my own positive control** —
+  0 present out of 540 means the *predicate* is wrong, not that 540 files are missing. Tests are
+  unlinked BY DESIGN and the added one is in no way special. (4) Consequence (b) — CURED: `017650872`
+  IS an ancestor of live HEAD and both live `ship-land.sh`/`desk-land.sh` symlinks resolve into the
+  checkout, now at `origin/main`.
+
+  **CLOSED `19ae324e9697` (`postland-stall-control-load-sensitive`) — FIXED, not argued away;
+  commit `9f1853bb`.** The control pushed a real four-test corpus of `{ sleep 2; }` against
+  `POSTLAND_STALL_S=4`, so the inter-TAP gap was `2s + bats per-test overhead` and only ~2s of the
+  window was left for a whole spawn+setup+teardown — it measured the box (16/16 green at load 8-10,
+  RED at 12-25). **Method 152 by git, not by reading:** `git log -S 'POSTLAND_STALL_S=4'` and
+  `-S 'slow-but-PROGRESSING'` over the file each return **exactly one** commit, `dc12c8db9`, which
+  INTRODUCED the test — no sibling had fixed it, and the row's *"no constant tweak fixes it"* is
+  right, because a constant cannot bound an unbounded term. **The remedy's machinery already had 22
+  exemplars in the same file** (`stub_bats`, `tests/postland-verify.bats:270`; the PRE-PLAN test 20
+  lines below already drives TAP deterministically). It now emits `1..8` then eight `ok` lines from
+  ONE process with a bare `sleep 1` between, so the load-dependent term is **gone, not smaller**,
+  leaving 3s of the 4s window as slack. **RED-PROOFED BY MUTATION, BOTH CONSTANT SETS:** gap
+  `1s→7s` at window 3s and `1s→9s` at window 4s each produced
+  `` not ok 1 … `[ "$output" = "green" ]' failed ``, and the shipped form is green at both. Not a
+  vacuous fixture.
+  ⚠️ **MAGNITUDE MEASURED AND DELIBERATELY NOT USED TO CLOSE IT** (method 153, refused): across all
+  422 stamps `tests/postland-verify.bats` appears in `failing[]` **ten** times, newest **2026-08-07**
+  — the day BEFORE the row was filed. That is *not* dormancy-closes-row: the row's evidence is a
+  **deliberate load experiment**, not a stamp observation, so the store's silence only says the box
+  has not been at load 12-25 during a run reaching this suite. Corpus demonstrably live (533 suites,
+  stamps through 14:32Z, 24 reds since 08-12). **A row whose evidence is an experiment cannot be
+  closed by the absence of an observation.**
+
+  🚨 **THE LEAD'S CENSUS, ANSWERED — AND IT IS EVIDENCE FOR AN EXISTING ROW, SO I FILED NOTHING.**
+  Of the **117** rows blocked under `master-operator-gated`, **94 have a `needs` field that verbatim
+  restates the first 60 chars of their own title**; 23 differ (a real gate); **0** are empty. The 94
+  are dominated by auto-filed `re-land claude/fire-…: ship-land could not complete…` rows. **This
+  generator is ALREADY FILED as `981a403a05fa`** (*"SECOND generator refills master-operator-gated…
+  desk-land.sh files a 're-land <branch>' step via the cc-backlog needs verb"*, blocked under
+  `master-stranded-work`). Filing a new row would be the minting defect the lead named; the census
+  belongs to `981a403a05fa`. **`cc-backlog needs` files already-blocked BY CONSTRUCTION and copies
+  the title into `needs`** — that is why `master-operator-gated` reads 0 open / 118 blocked and why
+  two correct convergence diagnoses were invisible.
+
+  🆕 **MEASURED — THE `LIVE_ADDS` HARM HAS A WORKING MITIGATION EXEMPLAR IN-TREE, AND I ALMOST
+  MIS-REPORTED IT AS A BREACH.** Live-layer absences, per dir, controlled: `scripts/` 38 of 242 ·
+  `bin/` 5 of 95 · `hooks/` 3 of 78 · `commands/` 0 of 20 · `tests/` **540 of 540 (BY DESIGN — the
+  control fails, see above)**. Depth is NOT the rule (51 of 62 subdirectory files ARE present;
+  `hooks/lib` is 27 of 28). Extension nearly is: `.sh` 255 present / 2 absent, suffixless 87/2,
+  `.md` 20/0, but `.py` **4 present / 23 absent**, and `.conf` `.manifest` `.mjs` `.swift` `.txt`
+  all absent. **The one absent file in `hooks/lib` is `smart-bash-allowlist.py`** (added 2026-08-20)
+  — and `hooks/smart-bash-allowlist.sh:99` delegates its whole core to it, with a **fail-OPEN
+  `exit 0`** if it is unreadable. That looks like a live permission-hook breach and **is not**:
+  `:91-97` walks the symlink chain back to the checkout, and I resolved it from the live path —
+  `_CORE=/Users/chrisren/Development/claude-infrastructure/hooks/lib/smart-bash-allowlist.py`,
+  readable, **hook FUNCTIONAL**. Its comment says the layer does not *"mint a symlink for each new
+  sibling file"*, i.e. this was anticipated. **That symlink-walk is the remedy pattern for
+  `4e6a51df2a84`** (the open `LIVE_ADDS` row) and for the `pane-spawn-log.sh` scar — a consumer can
+  be made immune to never being linked. Do not re-file it; it is evidence for that row.
+
+  ⚠️ **SUITE DISPOSITION, STATED HONESTLY.** Selector: `--direct` = **1** suite,
+  `tests/postland-verify.bats` — the file I edited (130 tests); `cited` = none. **I did not run all
+  130.** At the observed rate (6 TAP rows in the first minutes) the full run cannot finish inside
+  its 3000s bound, and 50 minutes of load on a load-sensitive box would degrade the land's own
+  smoke, so I stopped it — **that is a NON-VERDICT, never a green.** What I did run, foreground,
+  is the entire family sharing my change's machinery: `cc-bats --filter 'STALL bound|PRE-PLAN'` →
+  **6/6 green**, including the discriminating wedge half and all four PRE-PLAN neighbours. Plus
+  `bats --count` **130 unchanged**, `bats-assert-liveness` clean, `bats-shellcheck-lint` **0
+  blocking** (1 pre-existing, off-diff). `ship-land`'s own smoke owns the rest under
+  `SHIP_LAND_SMOKE_BUDGET_S=420`.
+
 - **2026-08-24 — drain recycle #191: the convergence deadlock is NOT a missing green. 45 of 46
   green stamps are ANCESTORS of live HEAD and 0 are descendants, so `--ff-only` can never move.
   filed 0 / closed 1 / 1 row REFRESHED / 1 commit (this doc).** Warm effort: the single-row-condition
