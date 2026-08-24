@@ -282,6 +282,15 @@ opposite advice. The synthesis names the contradiction, says a filed decision is
 files nothing — so by this repo's own close protocol it is invisible to every sensor.
 **Probe: `cc-decide open --class C`, one line, plus an INTEGRATE edit striking line 36/150.**
 
+✅ **CLOSED 2026-08-24** (backlog `564d151b76e5`). The strike landed at both sites and the two docs
+now cite each other; ruling + reasoning in `scaling-bottlenecks-2026-08-09.md` **§2a**. Filed **class
+A**, not C: `cc-decide`'s own taxonomy reserves C for human-only hard blocks (C10 self-mod, C6
+money-path, permission denial), and this is an agent ruling on evidence — a measurement superseding
+an unvalidated composition model, with no value fork for the operator, since `CLAUDE.md` § Context
+Stewardship never rested on the quota argument being struck. This critic's diagnosis was the load-
+bearing one: A6 §C6 and N7 both *named* the contradiction, and naming it left it invisible to every
+sensor for 15 days.
+
 ---
 
 ## Live-state note (not a gap — verified so the synthesis's assertion has a timestamp)
