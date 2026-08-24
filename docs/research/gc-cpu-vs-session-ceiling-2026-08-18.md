@@ -144,6 +144,23 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+> ⟶ **DERIVED 2026-08-24** (item `e981656df348`) —
+> [`load-ceiling-derivation-2026-08-24.md`](load-ceiling-derivation-2026-08-24.md). The finding above
+> stands and its citation defect is fixed at source (`capacity-admit.sh:132` no longer claims §9.5).
+> Three corrections to the *actionable* as written here:
+> 1. **The two-arm experiment prescribed cannot be run** — see §5's amendment. The instrument that
+>    does resolve the marginal is per-root attribution, and it had already run when this was written.
+> 2. **No measured failure point exists to set the ceiling from**, and that is a proof about the axis:
+>    catching the one fatal reading needs `T ≤ 2.53`, clearing the survived population needs
+>    `T > 5.98`. The two are disjoint. Neither "derive it" nor "move it" can succeed *as a capacity
+>    threshold*; the only admissible role left is a runaway circuit-breaker, whose derived value is
+>    **8.0/core** — the value `.claude/commands/ship.md:118` already derived from this same survived
+>    population for the land gate on 2026-08-08.
+> 3. **"The constant that stops us" stopped stopping us on 2026-08-21.** Task #170 defaulted the fire
+>    path's load *term* off (`handoff-fire.sh:4879`); the Agent-tool path has been off since Wave D.
+>    `2.0` now binds on exactly two unattended recovery callers (`boot-resume-launch.sh:266`,
+>    `lr-fire-resume.sh:318`) — where the budget bound makes it a delay plus a page, not an outage.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
@@ -205,6 +222,21 @@ argv** (argv reads 30–33 against a true 15–16, because briefs mention the pa
 ps -axo comm= | grep -c 'claude-220/node_modules'      # the honest session count
 # sample load1 5 min -> fire ONE --goal-armed session doing real work -> sample 5 min
 ```
+
+> ⟶ **DISCHARGED 2026-08-24, and the design above is REFUTED as infeasible** (item `e981656df348`;
+> [`load-ceiling-derivation-2026-08-24.md`](load-ceiling-derivation-2026-08-24.md) §3).
+> **Whole-box Δload cannot resolve one session.** `orchestration-units-2026-08-19/A8` §1.5 attempted
+> exactly this design the next day and the box's load *fell* during the probe (28.96 → 26.75); the
+> effect is ~0.23 load units against the ±8 swing this doc's own §2 table records at constant
+> N=15–16, so a paired design needs **~10³–10⁴ arms** to resolve it.
+> **The number, from the instrument that does resolve it** — per-root attribution with a positive
+> control (busy probe 1.30), a negative control (blocked wrapper 0.000 over 608 samples) and B3's
+> passing level control (load ÷ census 0.913–1.235 over a 2.7× load range): one additional
+> **working** session is **1.16% of the box's runnable population (≈0.23 load units at the 20.0
+> ceiling)**; one additional **resident** session **0.22% (≈0.044)**. Stated as a share because A8's
+> ×1.553 and B3's 0.913–1.235 count different denominators (procs vs threads) and do not contradict.
+> This adjudicates the four candidates listed in the bullet above (`0.172` / `0.566` / `1.89` /
+> `2.5–5`, spanning 30×): it corroborates `0.172` and refutes `1.89` and `2.5–5`.
 
 **The control that must be able to fail:** the sampler has to reproduce the load average it
 apportions. If the census stays flat while load moves, it is the instrument — which is exactly how

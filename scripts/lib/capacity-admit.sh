@@ -129,8 +129,41 @@
 # other two.
 
 # The ONE literal for each term. Both gates expand these; neither may carry a number of its own
-# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 2.0/core is §9.5's measured ceiling;
-# 4 GB is M10's reclaimable floor.
+# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 4 GB is M10's reclaimable floor.
+#
+# 🚨 2.0/core IS NOT DERIVED, and the citation that used to stand here made it look like it was.
+# This line read *"2.0/core is §9.5's measured ceiling"* until 2026-08-24. MACHINE_CAPACITY_V2 §9.5
+# is titled "SELF-CORRECTION — my 'permanent dispatch outage' projection is FALSIFIED"; it derives
+# no ceiling. It observes the gate refusing at 2.92-5.98/core and admitting at 1.55, i.e. that a
+# threshold thresholds — and those same refusing readings are the SURVIVED population that proves
+# no threshold on this axis can work. The citation pointed at the evidence AGAINST the number.
+# The real origin is 0fc3a3d33 (2026-07-29), whose body measures the motivating lag incident at
+# 2.72/core and then states "default 2.0" with no rule connecting the two — below the incident it
+# was chosen from, and below every load this box has been recorded surviving.
+#
+# DERIVED 2026-08-24 (item e981656df348) — docs/research/load-ceiling-derivation-2026-08-24.md:
+#   · the axis admits NO capacity constant, twice over. Catching the one fatal reading (2.53/core,
+#     the 08-05 panic) needs T <= 2.53; not firing on the survived population needs T > 5.98
+#     (13 consecutive samples at a CONSTANT 31-32 sessions, plus reso's 42 h at 2.50 and §12.2's
+#     healthy 2.16). Disjoint intervals — the repo's own [[threshold-must-separate-fatal-from-
+#     survived]], already written into capacity-alarm's rung 7 and never applied here. At the
+#     shipped 2.0 the term scores specificity 0.00 over 20 survived readings.
+#   · a capacity model needs a stable ambient; ambient moved 8.35 -> 46.39 in ONE day and is 87.3%
+#     of the numerator, so this one literal expresses "50 sessions" and "0 sessions" on the same
+#     box on the same day.
+#   · the blocked marginal is now measured: one ADDITIONAL working session is ~1.16% of the box's
+#     runnable population (~0.23 load units at the 20.0 ceiling), ~0.22% when resident at a prompt.
+#     The decision variable is ~0.6% of the noise in the quantity being thresholded.
+#   · under the ONLY admissible rule — a runaway circuit-breaker above the whole survived
+#     population — the derived value is 8.0/core, which is what .claude/commands/ship.md:118
+#     already derived from this same population for the land gate on 2026-08-08. Two gates on one
+#     box differ 4x on one axis for no derived reason.
+# THE NUMBER IS DELIBERATELY UNCHANGED HERE. Moving it is a gate default on the universal spawn
+# chokepoint and belongs with the term decision the doc sequences (§6: finish #170's demotion on
+# boot-resume-launch.sh:266 / lr-fire-resume.sh:318, XOR set the breaker to 8.0 — never both).
+# What still evaluates this literal at all: only those two unattended recovery callers. The fire
+# path has had CC_FIRE_LOAD_TERM off since 2026-08-21 (task #170) and the Agent-tool path
+# CC_ADMIT_LOAD_TERM=off since Wave D.
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 
