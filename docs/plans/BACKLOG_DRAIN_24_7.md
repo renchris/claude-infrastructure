@@ -86,6 +86,123 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-24 — drain recycle #204: the row was TRUE on every claim I could test, and its real
+  content was the warning it attached — the obvious repair would have restored a defect that had
+  been deliberately deleted. filed 0 / closed 1.**
+  Board at open: **476 open+blocked**; at close **475** (285 open / 190 blocked / 2262 done, claimed
+  6). `master-convergence-deadlock` **open=13 / blocked=6** at BOTH ends, unmoved by me. **Closed 1,
+  filed 0 — net −1**, the first negative-net link since #199. `comm` at both ends: **1 departure,
+  mine (`a6d7d8a1659f`)**, and **0 arrivals**. The close is an `ungrouped` row, so it moves NO
+  condition count. Read via `bash bin/cc-backlog fold` from the worktree. Negative controls 9/9
+  intact, including `f495d5374c01` — the residue owner, which had to STAY open.
+
+  **CLOSED `a6d7d8a1659f`** (*router M7 pace-line test RED at the commit postland calls LAST-GREEN*).
+  Disposition: **PREMISE TRUE AND STILL LIVE · CAUSAL CLAIM TRUE BY ANCESTRY · MAGNITUDE HALF
+  DECAYED · FIXED — and the row was RIGHT to forbid the obvious repair.**
+  · **PREMISE TRUE, reproduced 7 days on, and on TRUNK not just my branch.** My HEAD and origin/main
+    are blob-identical for the suite (`bcb95e611009`) and the subject (`bin/claude-accounts`,
+    `42eb39f0eaf3`), so the red reproduces on trunk by construction. Isolated arm `plan=1 ok=0
+    nok=1`; the whole router M7 family `6 ok / 1 not ok`, so ONE test fails, not the harness. Suite
+    untouched since the row's `firstTs` (0 commits; POS control 509, NEG control 0 lines — and on
+    `--since` the rc is useless, the OUTPUT is the discriminator). The cited `:1791` still sits
+    inside the named `@test`, which opens at `:1779`.
+  · 🚨 **THE DIAGNOSIS THE ROW DEMANDED, AND WHY ITS OWN PROHIBITION WAS THE POINT.** `47ddbf47c`
+    re-shaped `pace_line` (`bin/claude-accounts:2006-2032`): the caption moved from `pace to 100%: `
+    to `weekly burn (1.00× = …)`, each account gained a burn ratio and a projection, and the
+    `— BEHIND` flag was **DELETED**. Three of the five assertions pinned the old prose. The tempting
+    repair is to make the renderer emit `— BEHIND` again — and the subject's own docstring
+    (`:1980-1985`) records why it must not: on 2026-08-16 three accounts read BEHIND at 1-3% weekly
+    while their previous complete windows had closed at 91/92/100/85%. They were three windows that
+    had just reset. *"Every figure was correct and the obvious interpretation was inverted."* Its
+    replacement `⚠ WALL` (`:2025`) carries the **OPPOSITE POLARITY** — BEHIND flagged under-use,
+    WALL flags a projection reaching 100%, i.e. an account DOWN until reset. **Restoring BEHIND to
+    satisfy the test would re-introduce the exact false signal `47ddbf47c` landed to remove.**
+  · **THE ROW'S CAUSAL CLAIM IS TRUE, BY ANCESTRY.** `47ddbf47c` (08-16T22:45) **IS** an ancestor of
+    `f5b67a94760e` (08-17T04:46) and the reverse is not (POS control: a sha is its own ancestor,
+    rc 0) — so the test was already red at the alleged LAST-GREEN and the bisect baseline was false.
+  · **MAGNITUDE HALF DECAYED.** `f5b67a94760e` is **not stamped at all** among the 513 files in
+    `~/.claude/autonomy/postland`, and that store carries greens dated **2026-08-24**
+    (`11ba70054fdbd8` 20:16:13Z, `63946ecd89928` 18:39:14Z) — so the "elects the newest unstamped
+    commit as culprit" consequence no longer runs off this sha. Sha is the FILENAME, no `.sha` field
+    (#197).
+  · **THE FIX (`b6475b9be`, `tests/claude-accounts-core.bats` only, 11 ins / 3 del, 0 ADDs).** The
+    test moves to the new contract and gains assertions that make it guard the new INTENT rather
+    than merely stop failing: `assert "BEHIND" not in line` pins the deletion so a future repair
+    cannot silently restore the flag; a `⚠ WALL` fixture pins the replacement on its opposite
+    polarity; an ABSTAIN fixture pins `MIN_ELAPSED_FRAC` so a 1% reading at 1 h cannot project to
+    168%. **Every expected string was DERIVED BY EXECUTING `pace_line` itself.**
+    `bin/claude-accounts` is NOT touched — the renderer was correct, the test was stale.
+  · **VERIFICATION, both outcomes present.** Post-fix arm `plan=1 ok=1 nok=0`; **FULL suite on the
+    COMMITTED tree `plan=84 ok=84 nok=0`, `plan == ok+nok`**; **RED-PROOF: restoring the single
+    `— BEHIND` assertion returns it to `plan=1 ok=0 nok=1` RED**, so the flip is attributable to
+    that assertion alone; NEG control `plan=0 → NON-VERDICT`, never a green.
+
+  🚨 **METHOD 174 — WHEN A ROW FORBIDS A SPECIFIC KIND OF FIX, THAT PROHIBITION IS THE ROW'S REAL
+  CONTENT; TEST IT BEFORE TESTING THE PREMISE.** This row's premise, magnitude and causal claim were
+  all cheap to check and all essentially TRUE — the row was well-made. Its actual value was one
+  clause: *"needs a real diagnosis of the Python failure, not a phrase repair."* Ignore that clause
+  and the work is a 3-line prose edit that goes green and silently re-arms a deleted defect. The
+  generalisation: **a stale test's assertion may be pinning behaviour the subject changed ON
+  PURPOSE, so "make the test pass" and "make the code correct" point in OPPOSITE directions — read
+  the commit that broke it and ask whether the assertion or the subject is the thing that moved.**
+  Family, now seven deep: **#168** a remedy landed under a different NAME · **#169** a condition
+  satisfiable by a COMMENT · **#170** a file whose charter forbids the remedy · **#171** a DETECTOR
+  the row faithfully transcribed · **#172** the row's OWN EVIDENCE · **#173** a REMEDY whose
+  execution manufactures the defect · **#174** a REPAIR DIRECTION that restores a deliberate
+  deletion. Memory siblings: `stale-assertion-becomes-an-inverted-guard` (the exact shape),
+  `prescribed-remedy-worse-than-the-bug`, `control-must-replay-the-real-artifact`. Same shape as the
+  lead's `ff4e6cbead11` half-fix hazard, from the test side rather than the guard side.
+
+  **INSTRUMENT CONTROLS — one nearly licensed a false green.** `bats-assert-liveness.py` read
+  **rc 0 / 0 bytes** on my file. My first positive control injected `! grep -q …`, which is that
+  checker's **DOCUMENTED blind spot** (memory: `negated-assertion-dead-unless-final`) — it stayed
+  silent, and that silence proved **nothing**. Re-controlled with a mid-test `[[ ]]` (its
+  `CLASS_COND`, `scripts/bats-assert-liveness.py:52`) it reported `DEAD [cond-keyword]` at rc 1, so
+  the clean is real. 🚨 **A control drawn from the same family as the finding can land inside the
+  instrument's KNOWN blindness — pick the control from the tool's own declared classes.** Also:
+  `bats-shellcheck-lint.sh` has **no `--file` flag** (usage: `--census | --range <git-range> |
+  <target...>`); the bare-target form is clean and **self-reports its denominator** — *1 suite(s)
+  scanned, 0 blocking finding(s), 0 unanalyzable* — which is what makes it a green rather than a
+  null. `shellcheck` / `alarm-polarity` / `pipefail-sigpipe` do NOT apply to a `.bats`-only diff and
+  were NOT run; not claimed green.
+
+  🚨 **THE NEGATIVE READ-BACK DELTA IS RETIRED — the lead's condition is MET, verbatim.** Its ask
+  was the Counter of UTF-8 widths over #203's own artifact: for `3f5ea840b296`'s stored evidence,
+  **`bytes 5109 chars 5083 delta -26`, non-ascii 13, `Counter: {3: 13}`**, and the delta
+  **re-derives from the Counter alone: −26, MATCHES**. All 13 are the SAME character, `'—'`. The
+  title field is an independent second instance: **`{3: 2}`, delta −4, MATCHES**. Controls: a
+  constructed `em-dash + é` string gives `{3: 1, 2: 1}` delta −3, pure ASCII gives `{}` delta 0. So
+  #203's model was right and the lead's 2-byte alternative is refuted — **the puzzle #200, #201 and
+  #202 each carried forward is CLOSED. Do not carry it again.** #202's U+FFFD read-path finding was
+  POSITIVE and offset-dependent and remains a genuinely different, still-real artifact.
+
+  ⚠️ **`f1a9146c7f2f` DID NOT DECLARE A LINT-ONLY LAND HERE — but the OBSERVATION SPLITS IN TWO, and
+  I nearly filed the wrong half.** I first measured the selector on the range BEFORE my docs commit
+  and wrote this paragraph off it: `--direct` **1**, `--explain` **2**, the extra being
+  `tests/bats-assert-liveness.bats` cited as `assert-liveness:…` — a **HOST** suite that
+  `ship-land.sh:80` says the smoke set subtracts **by design**. True, and not the bug. **Re-run
+  after my LAST commit, as the brief requires, the same range reads `--direct` 1 vs `--explain` 5**
+  — the three additions being `cc-dispatch-firegate`, `land-content-verify` and
+  `postland-verify-bisect-bound`, each cited `prose-cited:docs/plans/BACKLOG_DRAIN_24_7.md`. **Those
+  are exactly the same 3 suites #201, #202 and #203 each logged as their "0-vs-3".** So the
+  prose-cited omission IS real and IS this chain's recurring shape; what is absent here is only its
+  *consequence* — my `--direct` is non-vacuous (1), so the smoke gate runs a real suite and no
+  lint-only land is declared. 🚨 **The two claims must be kept apart: `--direct` MISSES prose-cited
+  suites (recurring, now also at #204), and `--direct` GOING VACUOUS makes ship-land skip the
+  behavioural gate while reporting success (nine observations, not ten — this land is not one).**
+  ⚠️ **And the generalisable scar: a selector reading measured before your last commit is STALE, and
+  it fails in the flattering direction** — my pre-docs measurement made a recurring defect look
+  absent. The lead is routing the missing-record fix; do not re-file, and do not hand it a datum
+  gathered off the wrong range.
+
+  ⚠️ **The PostToolUse hook fired on at least 6 files I wrote this session** — a FLOOR, recomposed
+  after my last write, because it moved twice while I worked (`delta204.py`, `rows204.py`,
+  `derive204.py`, `sibling204.py`, `close204.py`, `insert204.py`) — the **52nd through 57th**
+  firings across thirty-one consecutive recycles. **Every one was a `.py`; not one `.sh` or `.txt`
+  I wrote triggered it**, which is a cheaper predictor than "re-check everything". Re-compiled and
+  re-grepped the literals every time; it mattered on `derive204.py`, which carries the non-ASCII
+  `⚠ WALL` constant the whole fix turns on.
+
 - **2026-08-24 — drain recycle #203: the row's mechanism was real, its own headline exhibit now
   yields ZERO, and its prescribed remedy would have injected two FALSE POSITIVES. filed 1 /
   closed 1.**
