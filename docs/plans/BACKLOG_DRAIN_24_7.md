@@ -58,6 +58,16 @@ the ledger are the full disk state — a successor needs nothing from this conte
    wired (autonomy-sweep, 6h cadence) but has **validated 0 rows in production** (every run
    rc-124 bound-exceeded or rc-0 `note=unparsed`); backlog-ratchet coverage regression is live
    as of this hour (33.8 high-water, assert rc=1).
+   ⚠️ **THREE OF THESE FOUR ARE CLOSED — this paragraph is the 2026-08-16 snapshot and is kept as
+   the record of what was true then** (annotated 2026-08-24, verified by content on `origin/main`).
+   The `plan_status()` sentence is still literally TRUE OF THE FUNCTION and is no longer the
+   operative path: `scripts/find-plan.sh:43-57` is unchanged **on purpose**, because the re-mint
+   class is screened one run EARLIER at the mint site (`bin/cc-discover:268`, C2/`944abba49`), and
+   a fourth `plan_status()` was refused there in writing — §4's C2 row carries the quote and the
+   measured limit. Empty-evidence closes now emit a countable `verdict=done-without-evidence`
+   (C3/`672f34757`); the premise pass has validated 138 rows and closed 5 in production
+   (C4). **Only the ratchet clause is unre-measured here** — it reads the live store, which a cloud
+   VM cannot reach, so it is left standing rather than guessed at.
 
 **One-line answer:** the backlog was never drained — a per-effort "0 open" close (blind to its
 blocked tail) was read as program completion, the drain chain had no cross-effort successor, and
@@ -86,6 +96,121 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+
+- **2026-08-24 — CLOUD dispatch at `70f0001c657b` (this plan's own SSOT row): the §4 worklist had
+  been LANDED for eight days and still read as work, and C2's prescription is one its own
+  implementer refused in writing. filed 0 / closed 0 / 1 commit (docs). NOT a numbered local
+  recycle — Lane A, no store.**
+  ⚠️ **Read this entry as written from inside a VM.** No recycle number is claimed and **no method
+  number is minted**: methods are globally numbered here, #184 took 150, and the local chain's #185
+  will take 151 — a cloud link taking it would collide with a session that cannot see this file yet.
+  The lesson is stated below unnumbered; number it locally if it earns one.
+
+  **WHAT A CLOUD VM COULD NOT DO, said first so nothing below is read as more than it is.**
+  `~/.claude/autonomy/backlog.jsonl` does not exist in the VM and cannot (`bin/cc-cloud`'s header;
+  `git ls-files autonomy/` is 0). So `cc-backlog done|block|reopen|claim` and `cc-notify` are all
+  unreachable, **this row is neither closed nor re-keyed by this entry**, and the chain's own
+  row-picking method — *pick the smallest live master-\* effort from the CURRENT fold* (§4.1
+  invariant 1) — was unavailable. A pushed ref is the only observable this box produces. **The land
+  is owed locally**, and this is the same venue verdict `MASTER_OPERATOR_GATED.md` recorded on
+  2026-08-15 for this row's siblings — re-confirmed here, with one correction below.
+
+  ✅ **THE 2026-08-15 "the LAND cannot run off-box" VERDICT IS PARTLY A MISSING-TOOL ARTIFACT, and
+  that is worth correcting because it has been quoted three times.** Two of its three arms were
+  *absent binaries*, not box facts: `shellcheck` and `bats` are **`apt-get`-installable in this
+  VM** (measured: shellcheck 0.9.0, bats 1.10.0), so a session that reports them missing has not
+  yet tried. What IS a genuine box refusal is the third arm, and it reproduces exactly:
+  `scripts/unattended-path-lint.sh --selftest` fails **9 of 39** here — *"the detector does not
+  discriminate"* — because its fixtures are macOS PATH facts (`/sbin/md5`, `/usr/sbin/sysctl`,
+  `/usr/sbin/lsof`). It fails CLOSED and is right to. ⚠️ The shellcheck arm also stays
+  version-skewed: **0.9.0** is what apt ships, `.shellcheckrc`'s own header documents the gate as
+  running **0.11**, and the two disagree on this tree (the known SC2119/SC2120 notes). So: more of
+  the gate is reachable off-box than the record said, and the land still is not.
+
+  🚨 **THE FINDING — A LANDED WORKLIST THAT STILL READS AS WORK IS A GENERATOR, AND I AM THE
+  MEASURED INSTANCE.** §4's inflow list C1–C4 shipped between 2026-08-16T03:09Z and that evening
+  (§2.1's own 20:30Z entry says so) and the list itself was never annotated. Every item verified
+  here **by content on `origin/main`**, not by trusting that entry:
+  · **C1 `46a86deb7`** — retry runs TRUNK's pipeline. As prescribed.
+  · **C2 `944abba49`** — screened at the MINT SITE (`bin/cc-discover:268`), **not** in
+    `plan_status()`. The prescription was refused there in writing.
+  · **C3 `672f34757`** — `verdict=done-without-evidence` at `bin/cc-backlog:2376`; the WARN rung
+    only. The prescription's *"then refuses, ratcheted"* half is genuinely still open.
+  · **C4** — `scripts/autonomy-sweep.sh:752-834`, sharded, on its own 6h cadence, 138 validated / 5
+    closed in production. Its brief's root cause was refuted at implementation (the pass runs at
+    UTILITY; `unparsed` was `_die_open` exiting 0), so the bound was never the defect.
+  **The instance:** dispatched at this row, I read §4 as the worklist, picked C2 as the item whose
+  class my own row belongs to, and opened `scripts/find-plan.sh` to write the fix. `plan_status()`
+  is frontmatter-only on trunk to this day, so the defect **reproduces perfectly** and the diff
+  would have looked correct. Only the brief's mandated trunk-check stopped it. That is
+  `6110fc45141e`'s hazard one level up: not a diff that reverts trunk, but **a diff that builds the
+  design the shipped fix rejected, as a fourth copy of a function whose own header documents three
+  copies already disagreeing** (`scripts/find-plan.sh:14-18`).
+  **The lesson, unnumbered:** *a worklist and an execution log are two stores, and only one of them
+  gets updated when the work lands.* §2.1 recorded C1–C4 done the same day; §4 kept prescribing
+  them for eight. A reader picking work reads the WORKLIST — so a landed item must be struck where
+  it was ASKED FOR, not only where it was reported. Sibling of
+  `instruction-to-a-recycling-chain-dies-at-its-brief` (§4.1's own note) and its inverse: that one
+  says an instruction must land in the SSOT to persist; this one says **a COMPLETION must land there
+  too, or the SSOT keeps issuing it.**
+
+  **WHAT I MEASURED ABOUT THE INSTRUMENTS.**
+  · 🆕 **C2's cure has a REACH LIMIT this file makes visible, and it bears directly on this row.**
+    `plan-phase-scan.sh --falsify` on THIS plan: **rc 1, empty stdout, all 11 sections `PENDING`** —
+    including `§1 Root cause` (finished) and `§2.1 Execution log` (never finishable). A section reads
+    `DONE` only from a `DONE` token, a 7+ hex sha in its **heading**, or a body `**Status**:` line
+    (`:15-18,204-248`), and none of this plan's headings carry one. So clause (b) can never fire here
+    and the screen reduces to clause (a), the frontmatter — the very signal §1.5 called insufficient.
+    **Not a defect** (minting `advance` against a genuinely open plan is correct), but it means
+    `70f0001c657b` re-mints every discovery pass until the frontmatter flips, and no falsifier
+    retires it. Control: `MASTER_OPERATOR_GATED.md` answers rc 1 the same way.
+  · 🆕 **My own diff was checked against that instrument as a negative control.** The shas I added
+    sit in §4's BODY, never in a heading, and status is derived from headings plus `**Status**:`
+    lines — so this annotation must NOT flip the plan to falsified. Re-run after the edit: **still
+    rc 1, still 11 PENDING.** A docs edit that had accidentally retracted this plan's own row would
+    have been indistinguishable from one that merely described it.
+  · ⚠️ **My clone is SHALLOW (`--is-shallow-repository` true, 50 commits).** All three cited shas
+    resolve (`git cat-file -t` → commit) and their subjects were read directly, but **no reachability
+    or ancestry claim in this entry rests on `git log` walking history I do not have.**
+  · 🆕 **THE LAND GATE WAS RUN ON THE REAL DIFF, AND THE REFUSAL IS THE BOX'S, WITH A DIFFERENTIAL
+    TO PROVE IT.** `ship-land.sh --precheck` → **rc 6, `GATE RED … arm(s): unattended-path-selftest`**.
+    Every other arm reached a verdict and was clean on this diff — moving-ref (536 suites, 0
+    controls), git-identity (806 files), UTC-stamp (94/105/232), pipefail-SIGPIPE, self-path (375
+    files, 25 grandfathered), pane-spawn (428 files, 21 sites, 5 tier-2 notices, 0 advisory). **The
+    one red is not mine and the control is same-session:** I ran `unattended-path-lint --selftest`
+    BEFORE committing, on a clean tree at `origin/main`, and it failed the identical **9 of 39** —
+    and this diff is ONE `.md` file while that lint scans shell. Per CLAUDE.md's attribute-before-you-
+    drive rule this is a 🔧 I did not cause; it is named, not driven, and **no override belongs near
+    it** — the lint fails CLOSED because its clean verdict on Linux would mean nothing.
+    ⚠️ An unchanged tree answers *"nothing to gate — origin/main already contains HEAD"* at rc 0,
+    which is a correct ABSTAIN and is **not** evidence about a diff. Precheck before you have a
+    commit measures nothing.
+
+  🚨 **THIS ROW IS VENUE=LOCAL AND THE LANE KEEPS DRAWING IT — a SECOND instance of the class the
+  2026-08-18 `ce7651b02a17` entry opened, and the first one inside this repo.** That entry's case
+  was a FOREIGN-project row a VM could not clone; mine is the harder one, because on every measure
+  `cc-eligible` takes I look eligible — the project IS `claude-infrastructure`, the repo IS the one
+  the VM gets, and `460211b8`'s cross-repo reach arm (which closes that entry's defect) correctly
+  passes me. What a VM cannot reach is the row's **deliverable**: this plan's method is *pick from
+  the live fold*, and the fold is `~/.claude/autonomy/backlog.jsonl`, a `$HOME` store no VM has.
+  That is the same shape `MASTER_OPERATOR_GATED.md` recorded on 2026-08-15 — *"the fact that the
+  DELIVERABLE is a fold of a $HOME-resident store lives only in the plan BODY, which the classifier
+  deliberately does not read"* — and it is now observed twice, so it is a class, not an instance.
+  ⚠️ **And `--self-release` still cannot express it**, exactly as that entry predicted: the token set
+  is CLOSED to `spawn-fail | compose-fail | worktree-fail` (`bin/cc-backlog:1549-1552`), all three
+  spelling ways the DISPATCHER failed to fire, and there is no spelling for *the venue could not host
+  the work*. So this claim will lapse on its lease and read as thrash. The proposed fourth token
+  (`venue-unhostable`) now has its second witness.
+
+  **WHAT IS OWED, NAMED RATHER THAN FILED** (no store here — these need a local session):
+  · **Re-key the venue FIRST, so the lane stops spending cloud slots on this row:**
+    `cc-backlog venue 70f0001c657b --venue local --why "store-resident-deliverable: the plan's
+    method is a fold of ~/.claude/autonomy/backlog.jsonl, which no VM has"`
+  · `cc-backlog done 70f0001c657b --evidence "<the landed sha>"` once this lands, **or** a
+    deliberate decision to leave it standing, since §4's C2 note now shows nothing else retires it.
+  · **C3's ratchet half** — `cc-backlog done` still only WARNS on empty `--evidence`. §1.5's
+    *"27 of 628 dones in 7d carry EMPTY evidence"* is the population that motivated the refusal
+    rung; nobody has re-measured it since, and the counter to do it with now exists.
 
 - **2026-08-24 — drain recycle #184: a REPORT and an AUTHORISATION printing the SAME fact is
   AGREEMENT, not a contradiction — and "it fires permanently" is a duty cycle you can replay.
@@ -16959,17 +17084,58 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
        bash scripts/gate-select.sh --direct <parent>...HEAD    # the exact list, before or after
 
 **Inflow control (the other half of "drain"):**
+
+🚨 **ALL FOUR ARE LANDED. THE PRESCRIPTIONS BELOW ARE KEPT AS WRITTEN AND ARE NO LONGER WORK —
+READ THE LANDED LINE BEFORE THE PRESCRIPTION** (annotated 2026-08-24 by a cloud recycle; each
+verified by CONTENT on `origin/main`, not by the §2.1 entry that claimed them). This list read as
+an open worklist for eight days after its last item shipped, and **C2's prescription is one the
+shipped fix explicitly REFUSED** — so a reader who obeyed it would build the design its
+implementer rejected, in a fourth place. See §2.1's 2026-08-24 cloud-recycle entry for the
+measured instance.
+
 - C1 re-land minter: pre-fix-branch-bytes leak — the retry executes the BRANCH's old
   ship-land.sh (`git checkout $BRANCH && bash scripts/ship-land.sh`); make the retry command
   invoke TRUNK's ship-land against the branch so aa1886a5e's brake + 40613b786's rc-5 screen
   actually govern retries of old branches.
+  ✅ **LANDED `46a86deb7`** — *fix(ship-land): the re-land retry runs TRUNK's pipeline against the
+  branch, not the branch's own*. Implemented AS PRESCRIBED.
 - C2 find-plan.sh plan_status(): read the status LOG/body, not frontmatter alone — kills the
   4-day "advance a finished plan" re-mint class.
+  ✅ **LANDED `944abba49`** — *fix(cc-discover): screen the plan-open candidate through its own
+  falsifier before minting* — **BY A DIFFERENT MECHANISM, AND THIS PRESCRIPTION WAS REFUSED IN
+  WRITING.** The cure is at the MINT SITE, not in the reader: `bin/cc-discover:268` screens each
+  `plan-open` candidate through `plan-phase-scan.sh <plan> --falsify` before filing, fail-OPEN on
+  every answer that is not literally `FALSIFIED`. Its own comment (`bin/cc-discover:253-259`)
+  refuses the line above by name: *"deliberately not a second, looser status reader. There are
+  already three copies of plan_status() in this tree and the third disagrees with the other two …
+  a fourth signal invented here would be a fourth answer to 'is this plan finished'."*
+  `scripts/find-plan.sh:43-57` is therefore UNCHANGED ON PURPOSE and is not a residue to clean up.
+  ⚠️ **The cure's REACH, measured here, is narrower than "kills the class":** `--falsify` answers
+  on (a) the frontmatter status word or (b) zero level-≥2 sections reading `PENDING`/`IN_PROGRESS`,
+  and a section reads `DONE` only from a `DONE` token, a 7+ hex sha in its HEADING, or a body
+  `**Status**:` line (`scripts/plan-phase-scan.sh:15-18,204-248`). **On a plan whose headings carry
+  none of those, clause (b) can never fire.** Measured on THIS file the same day: `--falsify` → rc
+  1, empty stdout, with **all 11 sections `PENDING`** including `§1 Root cause` (finished) and
+  `§2.1 Execution log` (a log, never finishable). So for this plan the screen reduces to clause
+  (a) — the frontmatter — which is the exact signal §1.5 called insufficient. That is a LIMIT, not
+  a defect: clause (a) ∪ (b) is still a strict superset of the frontmatter read, and minting
+  `advance` against a genuinely open plan is CORRECT. It does mean **row `70f0001c657b` re-mints
+  every discovery pass until this plan's frontmatter flips**, and no falsifier will retire it.
 - C3 done-with-evidence: `cc-backlog done` warns (then refuses, ratcheted) on empty
   --evidence.
+  ✅ **LANDED `672f34757`** — *feat(cc-backlog): done with empty --evidence warns and emits a
+  countable verdict*; `verdict=done-without-evidence` at `bin/cc-backlog:2376`. Implemented AS
+  PRESCRIBED at the WARN rung; **the "then refuses, ratcheted" half is deliberately still open** —
+  the counter is the point (`:2366`), and nothing here has ratcheted it to a refusal.
 - C4 premise-pass repair: it has validated 0 rows ever (420s rc-124 + `unparsed` on the one
   completing run). Fix the bound to fit the Background band it runs in (bound-fits-the-band)
   and the --json parse; prove ≥1 production pass that RECORDS validations.
+  ✅ **LANDED** and productionised — `scripts/autonomy-sweep.sh:752-834,924-926` runs it on its own
+  `CC_PREMISE_PASS_EVERY_S` (6h) cadence with a sharded `--limit` and a named note taxonomy
+  (`not-due` · `bound-exceeded` · `read-failed:<why>` · `ok`), emitting `premise_rows_validated` /
+  `_closed` / `_deferred` / `premise_shard_pending`. §2.1's proof stands: `premise_rows_validated:138,
+  closed:5`. ⚠️ **The brief's root cause was REFUTED at implementation** — the pass runs at UTILITY,
+  and `unparsed` was `_die_open` exiting 0 with `verdict=unknown` on stdout; it was never the bound.
 
 ## §5 Verification before mass fire (W-P1 exit gate)
 
