@@ -525,7 +525,7 @@ and can fire in parallel with M3.
 | **M4** | **The price list as code** — `cc-quota-price`: re-fit tokens→pp on a schedule from `account-utilization.jsonl` × deduped transcripts, with the **`message.id` dedup as a tested invariant** | S | `cc-quota-price --selftest` passes, including a RED-proof case that a non-deduping extractor inflates output tokens ≥2× | Without it, every later cost claim is unpriced — and the dedup bug silently corrupted a keystone number in this very wave |
 | **M5** | **De-duplicate `./CLAUDE.md`** — byte-identical to the global copy on all 5 load paths; move the versioned source to a path Claude Code does not auto-load | **S** *(reclassified — see below)* | a session in this repo loads the global CLAUDE.md exactly once; the deploy gate still asserts repo↔live parity from the new path; `install.sh` still reports the line count | Q1 free win, ~5 pp/week fleet, zero informational loss |
 | **M6** | **Enable OTel** in all 5 config dirs + a local collector | S | `claude_code.token.usage` rows land in the collector for a live session, and `grep ENABLE_TELEMETRY` finds it in 5/5 settings.json | The token-free numerator; scope (c) satisfied by construction |
-| **M7** | **Disconnect or repair `cc-value`'s extinct join** — it joins on a git trailer this repo measured extinct 4 days ago | S | `cc-value` either reports ABSTAIN with a named reason, or joins on a key with >0 coverage proven in its output | An instrument silently reporting over an empty join is worse than no instrument |
+| ~~**M7**~~ | ✅ **DONE 2026-08-24 `3f05f1f6` — `cc-value` now measures its own join.** A `.attribution` object carries `commits_total` · `commits_attributed` · `coverage_pct` · `abstain` · a `reason` naming the missing key; under abstention the table prints `+?c` and states the abstention above the columns it disqualifies, `--session`/`--me` abstain rather than answer, and per-account/per-session rows gain `commits_known: false`. **The join was re-verified extinct before anything was touched: 0 of 50 trunk commits carry a `Session-Id:`/`Land-Session:` trailer.** | **L** *(deviation from the S default, same shape as M3: the goal condition is a two-way discriminator — abstain when dead, still answer when alive — so the whole brief would have been the diff)* | met — RED-proved against the trunk binary on the extinct-join fixture; selftest 29/29, up from 27 with 2 red | See §4.1 for the defect this actually closed, which was not the one the row predicted |
 
 **M5's blast radius, recorded because it caught the lead out.** M5 was first written as `L` — "one
 file move, briefing a session costs more than doing it". A reference sweep before touching anything
@@ -550,3 +550,57 @@ incident history. Filed rather than decided.
 | commit | what |
 |---|---|
 | `7c9f36316` | `fix(cache-expiry-warning)` — TTL 300s→3600s (77.3% of its fires were false) and the `/clear`//`/compact` advice removed, because against the weekly limit it converted a free `cache_read` into a paid `cache_creation`. Verified with a positive control. |
+
+### §4.2 M7 — what the extinct join was actually doing (2026-08-24, `3f05f1f6`)
+
+M7 was filed as *"an instrument silently reporting over an empty join is worse than no
+instrument"*. **It was not reporting silently. It was accusing**, and that is a strictly worse
+failure than the row anticipated.
+
+`cc-value` renders three churn verdicts. Two — fleet and per-account — gate on `fleet.value`,
+which counts *unattributed* commits, so they were never join-dependent and were always correct.
+The third, session churn, has the predicate *active · ctx ≥ 40% · **landed 0 commits by my
+UUID***. Under an extinct trailer nobody lands a commit by their UUID, so that arm did not
+degrade toward silence — it fired on **every working session in the fleet, simultaneously and
+permanently**. RED-proved against the trunk binary on the extinct-join fixture:
+
+```
+trunk:  session uuid-AAA on next — 0 commits landed in 24h · ctx 55%   ⚠ churn (ctx spent, 0 landed)
+now:    session uuid-AAA on next — landed-commit contribution ABSTAINED: 0 of 1 landed commit(s)
+        in this window carry a joinable Session-Id:/Land-Session: trailer …
+```
+
+**The generalisable defect: an abstention has to be reachable from the predicate that needs it.**
+`cc-value`'s header already carried the truth discipline in full — design law 4, "abstain, never
+fabricate", spelled out over twenty lines, with the per-account arm deliberately gated on
+`fleet.value` *because* "most landed commits carry no joinable `Session-Id` trailer". The author
+knew the join was weak and hardened two of the three consumers against it. The third read the
+same dead map and reached the opposite conclusion, because nothing in the program ever
+**measured the join** — coverage existed nowhere as a value, so no predicate could consult it.
+Prose next to the code is not a guard; the fix is that `attribution.abstain` is now a *field*,
+computed once, that every consumer reads.
+
+**Two design points worth keeping:**
+
+- **`abstain` is about a dead join, not an empty window.** With no in-window commits there is
+  nothing to attribute, so `coverage_pct` is null and `abstain` is false. Conflating the two
+  would have disabled the churn detectors on precisely the zero-value window they exist for —
+  the fix silencing the alarm it was meant to make honest. Both halves are pinned by cases.
+- **The abstention must be falsifiable, not constant.** The selftest's live-join world (1 of 2
+  commits attributed) asserts coverage is a real 50%, that the ledger does *not* abstain, and
+  that `--session` still answers. A fix that hard-wired `abstain: true`, or that abstained on
+  any unattributed commit, dies there. An abstention that always fires carries no more
+  information than the false zero it replaced.
+
+**Found en route, and fixed in the same commit** (it gated the selftest): `file_mtime`'s
+`stat -f %m || stat -c %Y` fallback **never fires on GNU coreutils**, because GNU `stat -f`
+*succeeds* — it means "filesystem status", not "format", so `%m` is a missing file (stderr,
+discarded) and `$1` is a real one. Exit 0, multi-line filesystem info on stdout, straight into
+`age=$(( … ))`, and `set -u` killed the process with `File: unbound variable`. Every
+`cc-value --cached` on Linux — cloud sessions, and `cc-board`'s embed — was crashing, and the
+two cache selftests shipped RED. *Generalisable: a portability probe that branches on `$?` is
+testing the wrong thing; branch on whether the output has the shape the caller needs.* Both
+stats are now tried and the result accepted only if it is a bare integer.
+
+**Still open in §4:** M1, M2, M4, M5, M6. M1 and M6 need the operator's box (live account
+headroom; the 5 config dirs) and cannot be driven from a cloud container.
