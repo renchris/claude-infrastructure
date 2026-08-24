@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""cc-quota-price — the price list as CODE (USAGE_TELEMETRY_100P §4 M4, §3.1 L3).
+
+WHY THIS EXISTS. The fleet has a good NUMERATOR (what tokens we moved — every transcript records
+it) and a good DENOMINATOR (what quota we are allowed — `account-utilization.jsonl` samples
+`api/oauth/usage` every ~6 min), and until now it had NOTHING THAT CONVERTS BETWEEN THEM. That
+converter is the price list, and USAGE_TELEMETRY_100P §3.1 names it "the actual deliverable":
+without it, every cost claim in this repo is unpriced, and a token census can only report the
+class that costs nothing. §2.2's governing fact — ~97% of the tokens this fleet moves cost ~0% of
+its quota — is *only* visible through this join.
+
+The plan's price list was fitted BY HAND, once, in a research wave, and the hand fit was wrong
+until it was corrected twice (§2.1). This file is that arithmetic made re-runnable, with the bug
+that corrupted it turned into a tested invariant.
+
+🚨 THE INVARIANT THIS FILE EXISTS TO HOLD — DEDUPE ON `message.id` OR BE WRONG BY 2.4x.
+Claude Code writes a streaming assistant message to the transcript ONCE PER CONTENT BLOCK: same
+`message.id`, same `requestId`, and the identical COMPLETE `usage` object on every one of them.
+A census that sums records therefore counts one billing event 2-3x. Measured in this corpus
+(§2.1): 58.7% repeat records, 98.5% byte-identical usage, 0 records spanning files. Three
+independent derivations of this wave hit the bug; A1's own falsifier #6 NAMED the hazard and was
+not run, and the resulting price list was published 2.1-2.8x too high. `--selftest` case 2
+RED-proves the dedup by running the production extractor with the dedup DISABLED (`CC_QP_DEDUP=0`)
+and asserting the naive count inflates output >=2x — so if anyone deletes the dedup, case 1 goes
+red rather than the number going quietly wrong.
+
+METHOD (and it is the plan's own, so the two agree by construction).
+  L1 numerator   walk the transcript roots, dedupe on message.id, sum the four token classes.
+  L2 denominator walk account-utilization.jsonl, form (account, bucket) pairs, take
+                 Delta weekly_pct across each bucket.
+  L3 the join    non-negative least squares through the origin: Delta pp ~ output + cache_creation
+                 + input. cache_read is EXCLUDED as a regressor by default and reported as bounded
+                 (see below), never as a fitted zero.
+
+WHY BUCKETS AND NOT SAMPLES. `weekly_pct` is an INTEGER percent, so the Delta across one ~6-minute
+sample is 0 almost always and the regression would be fitting quantization noise. §2.2's own model
+comparison used 67 `(account, 6h)` buckets; this defaults to the same 6h and exposes it as
+`--bucket-h`.
+
+WHY cache_read IS NOT A FITTED COEFFICIENT. §2.8 settled the ORDER by experiment (31.7M cache_read
+against 208 output moved the weekly meter by 1 point where list pricing demanded 4.62), bounding
+cache_read at <=0.018-0.049 pp/Mtok. But `corr(output, cache_read) = +0.909` in observational data
+makes the coefficient UNIDENTIFIABLE from a fit, and NNLS is bounded below at zero, so a fitted
+0.0000 is a BOUNDARY ARTIFACT and not a measurement — A1's exact zero was exactly that. So this
+tool refuses to publish a cache_read coefficient by default: it reports the experimental bound and
+the measured collinearity instead. `--with-cache-read` adds the column as a labelled DIAGNOSTIC,
+never as the price list.
+
+ABSTAIN, NEVER IMPUTE (design law §3.3.4, carried from CONTEXT_ECONOMY_V2). A missing store, a
+window with no movement, too few buckets -> the verdict is ABSTAIN with the reason NAMED, exit 3,
+and no numbers. A price list that quietly interpolates over an empty join is the `cc-value` failure
+(§2.7) in a new file.
+
+Usage:
+  cc-quota-price                    the price list table
+  cc-quota-price --json             machine-readable {verdict, price, fit, census, buckets}
+  cc-quota-price --census           the deduped token census only (no fit, no denominator needed)
+  cc-quota-price --selftest         hermetic RED-provable self-check; exit 1 on any failed case
+
+Options:
+  --since <all|Nd|Nh|YYYY-MM-DD>    window (default 7d)
+  --bucket-h <N>                    denominator bucket width in hours (default 6)
+  --acct <name>                     restrict to one account
+  --with-cache-read                 add cache_read as a DIAGNOSTIC column (see above)
+  --min-buckets <N>                 abstain below this many moving buckets (default 12)
+
+Config (all env, test-overridable):
+  CC_QP_ROOTS        newline/':'-separated transcript roots (default: the 4 real config dirs)
+  CC_UTIL_LOG        the utilization series (same override claude-accounts/pool-floor.sh honor)
+  CC_QP_MIN_BUCKETS  default for --min-buckets
+  CC_QP_MAX_GAP_S    a sample gap wider than this breaks a bucket (default 5400)
+  CC_QP_DEDUP        TEST SEAM ONLY. 0 disables the message.id dedup so the selftest can
+                     RED-prove it. Prints a loud stderr warning; never set it in production.
+  CC_NOW             epoch override for "now" (tests)
+
+Exit: 0 verdict · 1 selftest failure · 2 usage · 3 ABSTAIN (no data / no recoverable denominator).
+"""
+
+import glob
+import itertools
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
+PROG = "cc-quota-price"
+HOME = os.path.expanduser("~")
+
+# The four REAL config dirs. ~/.claude-next{,2,3,4}/projects are SYMLINKS into these (§1), so
+# naming only the real roots keeps the scan cheap; the walk realpath-dedupes regardless, because a
+# double-counted file is the same 2x error the message.id dedup exists to prevent, one level up.
+DEFAULT_ROOTS = [
+    (os.path.join(HOME, ".claude", "projects"), "next"),
+    (os.path.join(HOME, ".claude-secondary", "projects"), "next2"),
+    (os.path.join(HOME, ".claude-tertiary", "projects"), "next3"),
+    (os.path.join(HOME, ".claude-quaternary", "projects"), "next4"),
+]
+
+# config-dir basename -> account. Mirrors lib/account-map.generated.sh
+# `cc_acct_name_for_dir_basename`; an unknown basename maps to "" and its tokens are counted in the
+# census but can never enter a fit, because no denominator series names that account.
+DIR_TO_ACCT = {
+    ".claude": "next", "claude": "next", ".claude-next": "next", "claude-next": "next",
+    ".claude-secondary": "next2", "claude-secondary": "next2",
+    ".claude-tertiary": "next3", "claude-tertiary": "next3",
+    ".claude-quaternary": "next4", "claude-quaternary": "next4",
+}
+
+CLASSES = ("output", "cache_creation", "input", "cache_read")
+# The regressors of the published price list. cache_read is deliberately absent — see the module
+# docstring. --with-cache-read appends it as a diagnostic.
+FIT_CLASSES = ("output", "cache_creation", "input")
+
+
+def now_epoch():
+    v = os.environ.get("CC_NOW")
+    if v:
+        try:
+            return int(float(v))
+        except ValueError:
+            pass
+    return int(time.time())
+
+
+def parse_since(spec, now):
+    """'all' | '<N>d' | '<N>h' | 'YYYY-MM-DD' -> epoch floor (None for 'all')."""
+    if not spec or spec == "all":
+        return None
+    try:
+        if spec.endswith("d"):
+            return now - int(float(spec[:-1])) * 86400
+        if spec.endswith("h"):
+            return now - int(float(spec[:-1])) * 3600
+        return int(datetime.strptime(spec, "%Y-%m-%d")
+                   .replace(tzinfo=timezone.utc).timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def iso_to_epoch(s):
+    if not isinstance(s, str) or not s:
+        return None
+    t = s.strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
+
+
+# ── L1: the deduped token census ──────────────────────────────────────────────────────────────
+def transcript_roots():
+    """[(dir, acct)] — CC_QP_ROOTS overrides. An override entry is 'path' or 'path=acct'."""
+    raw = os.environ.get("CC_QP_ROOTS")
+    if not raw:
+        return [(d, a) for d, a in DEFAULT_ROOTS if os.path.isdir(d)]
+    out = []
+    for part in raw.replace(":", "\n").split("\n"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            d, acct = part.split("=", 1)
+        else:
+            d, acct = part, ""
+        d = os.path.expanduser(d)
+        if not acct:
+            # derive from the config-dir basename: <cfg>/projects -> basename(<cfg>)
+            acct = DIR_TO_ACCT.get(os.path.basename(os.path.dirname(os.path.abspath(d))), "")
+        if os.path.isdir(d):
+            out.append((d, acct))
+    return out
+
+
+def census(since=None, acct_filter=None):
+    """Walk the transcript roots and return the DEDUPED per-(acct, epoch) token records.
+
+    Returns (records, meta) where records is a list of
+        {"ts": epoch, "acct": str, "model": str, "output":.., "cache_creation":.., ...}
+    one per DEDUPED billed response, and meta carries the dedup evidence.
+
+    The dedup key is `message.id`, falling back to `requestId` and then to (file, line) so that a
+    record which carries NEITHER is counted once rather than dropped — dropping real billed spend
+    would bias the fit low, which is the same fabrication as inventing it, in the other direction.
+    """
+    dedup = os.environ.get("CC_QP_DEDUP", "1") != "0"
+    if not dedup:
+        sys.stderr.write(
+            f"{PROG}: 🚨 CC_QP_DEDUP=0 — message.id dedup DISABLED. This is a TEST SEAM; the "
+            "resulting census over-counts every streamed response 2-3x.\n")
+
+    seen = set()
+    recs = []
+    meta = {"files": 0, "records": 0, "deduped": 0, "repeats": 0,
+            "unkeyed": 0, "models": {}, "roots": []}
+
+    seen_files = set()
+    for root, acct in transcript_roots():
+        if acct_filter and acct != acct_filter:
+            continue
+        meta["roots"].append({"dir": root, "acct": acct})
+        for f in glob.iglob(os.path.join(root, "**", "*.jsonl"), recursive=True):
+            rp = os.path.realpath(f)
+            if rp in seen_files:
+                continue          # a symlinked root would otherwise contribute every file twice
+            seen_files.add(rp)
+            # A file last written before the window opened cannot hold an in-window record.
+            if since is not None:
+                try:
+                    if os.stat(rp).st_mtime < since:
+                        continue
+                except OSError:
+                    continue
+            meta["files"] += 1
+            try:
+                fh = open(rp, "rb")
+            except OSError:
+                continue
+            with fh:
+                for lineno, line in enumerate(fh):
+                    if b'"usage"' not in line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    m = d.get("message")
+                    if not isinstance(m, dict):
+                        continue
+                    u = m.get("usage")
+                    if not isinstance(u, dict):
+                        continue
+                    meta["records"] += 1
+                    key = m.get("id") or d.get("requestId")
+                    if not key:
+                        meta["unkeyed"] += 1
+                        key = f"{rp}#{lineno}"
+                    if dedup:
+                        if key in seen:
+                            meta["repeats"] += 1
+                            continue
+                        seen.add(key)
+                    ts = iso_to_epoch(d.get("timestamp"))
+                    if ts is None:
+                        continue
+                    if since is not None and ts < since:
+                        continue
+                    model = m.get("model") or "unknown"
+                    meta["models"][model] = meta["models"].get(model, 0) + 1
+                    meta["deduped"] += 1
+                    recs.append({
+                        "ts": ts, "acct": acct, "model": model,
+                        "input": int(u.get("input_tokens") or 0),
+                        "output": int(u.get("output_tokens") or 0),
+                        "cache_creation": int(u.get("cache_creation_input_tokens") or 0),
+                        "cache_read": int(u.get("cache_read_input_tokens") or 0),
+                    })
+    return recs, meta
+
+
+# ── L2: the denominator — (account, bucket) -> Delta weekly_pct ────────────────────────────────
+def util_path():
+    return os.environ.get("CC_UTIL_LOG") or os.path.join(
+        HOME, ".claude", "logs", "account-utilization.jsonl")
+
+
+def util_rows(path, since=None, acct_filter=None):
+    rows = []
+    try:
+        fh = open(path, "rb")
+    except OSError:
+        return rows
+    with fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            acct = d.get("acct")
+            if not acct or (acct_filter and acct != acct_filter):
+                continue
+            if d.get("stale"):
+                continue            # "we could not measure" is not "nothing was happening"
+            wp = d.get("weekly_pct")
+            ts = iso_to_epoch(d.get("ts"))
+            if wp is None or ts is None:
+                continue
+            if since is not None and ts < since:
+                continue
+            rows.append({"ts": ts, "acct": acct, "weekly_pct": float(wp),
+                         "reset": d.get("weekly_reset_at") or ""})
+    rows.sort(key=lambda r: (r["acct"], r["ts"]))
+    return rows
+
+
+def buckets(urows, bucket_h, max_gap_s):
+    """[(acct, t0, t1, delta_pp)] — one per usable bucket.
+
+    A bucket is DROPPED, never repaired, when:
+      · it spans a weekly reset (weekly_pct falls, or weekly_reset_at changes) — the counter went
+        backwards, so its Delta is not spend. This is the same error class that inverted this
+        plan's own premise (§1): a resetting counter read as if it were cumulative.
+      · its samples are further apart than max_gap_s — the tokens spent in the gap are unmeasured,
+        so the pair prices spend it cannot see.
+    """
+    width = int(bucket_h * 3600)
+    out = []
+    by_acct = {}
+    for r in urows:
+        by_acct.setdefault(r["acct"], []).append(r)
+    for acct, rs in sorted(by_acct.items()):
+        # group into fixed-width blocks aligned to the epoch so buckets are reproducible
+        blocks = {}
+        for r in rs:
+            blocks.setdefault(int(r["ts"]) // width, []).append(r)
+        for _, members in sorted(blocks.items()):
+            if len(members) < 2:
+                continue
+            a, b = members[0], members[-1]
+            if b["ts"] - a["ts"] > max_gap_s * len(members):
+                continue
+            if a["reset"] != b["reset"]:
+                continue                      # a reset boundary fell inside this bucket
+            gapped = any(members[i + 1]["ts"] - members[i]["ts"] > max_gap_s
+                         for i in range(len(members) - 1))
+            if gapped:
+                continue
+            if any(members[i + 1]["weekly_pct"] < members[i]["weekly_pct"]
+                   for i in range(len(members) - 1)):
+                continue                      # the counter went backwards: a reset, not spend
+            out.append((acct, a["ts"], b["ts"], b["weekly_pct"] - a["weekly_pct"]))
+    return out
+
+
+def join(recs, bkts):
+    """Sum each bucket's deduped tokens. Returns rows [{acct,t0,t1,dpp,<class>:..,models:{}}]."""
+    by_acct = {}
+    for r in recs:
+        by_acct.setdefault(r["acct"], []).append(r)
+    for v in by_acct.values():
+        v.sort(key=lambda r: r["ts"])
+    rows = []
+    for acct, t0, t1, dpp in bkts:
+        row = {"acct": acct, "t0": t0, "t1": t1, "dpp": dpp, "n_resp": 0, "models": {}}
+        for c in CLASSES:
+            row[c] = 0
+        for r in by_acct.get(acct, ()):
+            if t0 <= r["ts"] <= t1:
+                row["n_resp"] += 1
+                row["models"][r["model"]] = row["models"].get(r["model"], 0) + r["output"]
+                for c in CLASSES:
+                    row[c] += r[c]
+        rows.append(row)
+    return rows
+
+
+# ── L3: the fit ───────────────────────────────────────────────────────────────────────────────
+def _solve(ata, atb):
+    """Gaussian elimination with partial pivoting. Returns None on a singular system."""
+    n = len(atb)
+    m = [list(ata[i]) + [atb[i]] for i in range(n)]
+    for col in range(n):
+        piv = max(range(col, n), key=lambda r: abs(m[r][col]))
+        if abs(m[piv][col]) < 1e-12:
+            return None
+        m[col], m[piv] = m[piv], m[col]
+        pv = m[col][col]
+        for r in range(n):
+            if r == col:
+                continue
+            f = m[r][col] / pv
+            if f:
+                for c in range(col, n + 1):
+                    m[r][c] -= f * m[col][c]
+    return [m[i][n] / m[i][i] for i in range(n)]
+
+
+def nnls(A, b):
+    """Exact NNLS for a small number of columns, by exhaustive support search.
+
+    The NNLS optimum is the unconstrained least-squares solution on its own support, and that
+    solution is nonnegative. So enumerating every subset of columns, keeping the subsets whose
+    unconstrained solution is feasible (all coefficients >= 0), and taking the minimum residual
+    among them yields the exact optimum. With <= 4 columns that is <= 16 solves — no iteration, so
+    no convergence bug to hide a wrong price behind.
+    """
+    n = len(A[0]) if A else 0
+    best, best_rss = [0.0] * n, sum(v * v for v in b)
+    for k in range(1, n + 1):
+        for S in itertools.combinations(range(n), k):
+            ata = [[sum(row[i] * row[j] for row in A) for j in S] for i in S]
+            atb = [sum(row[i] * y for row, y in zip(A, b)) for i in S]
+            sol = _solve(ata, atb)
+            if sol is None or any(v < 0 for v in sol):
+                continue
+            x = [0.0] * n
+            for idx, i in enumerate(S):
+                x[i] = sol[idx]
+            rss = sum((y - sum(row[i] * x[i] for i in range(n))) ** 2 for row, y in zip(A, b))
+            if rss < best_rss - 1e-15:
+                best, best_rss = x, rss
+    return best, best_rss
+
+
+def corr(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+    sxx = sum((a - mx) ** 2 for a in xs)
+    syy = sum((b - my) ** 2 for b in ys)
+    if sxx <= 0 or syy <= 0:
+        return None
+    return sxy / (sxx * syy) ** 0.5
+
+
+def fit(rows, cols):
+    A = [[float(r[c]) for c in cols] for r in rows]
+    b = [float(r["dpp"]) for r in rows]
+    x, rss = nnls(A, b)
+    tss = sum(v * v for v in b)                       # through the origin: TSS about 0
+    r2 = 1.0 - rss / tss if tss > 0 else None
+    rel_rmse = ((rss / len(b)) ** 0.5) / (sum(b) / len(b)) if b and sum(b) > 0 else None
+    return {
+        "coef_pp_per_token": dict(zip(cols, x)),
+        "r2": r2, "rel_rmse": rel_rmse, "n": len(b),
+        "collinearity": {
+            f"{a}~{c}": corr([r[a] for r in rows], [r[c] for r in rows])
+            for a, c in itertools.combinations(CLASSES, 2)
+        },
+    }
+
+
+# ── verdict assembly ──────────────────────────────────────────────────────────────────────────
+# §2.8's experimental bound on cache_read, quoted rather than fitted. Units: pp per 1M tokens.
+CACHE_READ_BOUND_PP_PER_MTOK = 0.049
+
+
+def build(args):
+    now = now_epoch()
+    since = parse_since(args["since"], now)
+    recs, meta = census(since, args["acct"])
+    if args["census_only"]:
+        tot = {c: sum(r[c] for r in recs) for c in CLASSES}
+        return {"verdict": "CENSUS", "window": args["since"], "census": meta, "tokens": tot}, 0
+
+    up = util_path()
+    if not os.path.exists(up):
+        return _abstain(f"no denominator: the utilization series {up} does not exist. "
+                        "Nothing on this box can convert tokens to weekly points without it.",
+                        meta, args), 3
+    urows = util_rows(up, since, args["acct"])
+    if len(urows) < 2:
+        return _abstain(f"no denominator: {len(urows)} usable sample(s) in {up} for window "
+                        f"'{args['since']}' (stale rows are excluded by design).", meta, args), 3
+    if not recs:
+        return _abstain(f"no numerator: 0 billed responses found in {meta['files']} transcript "
+                        f"file(s) across {len(meta['roots'])} root(s) for window "
+                        f"'{args['since']}'.", meta, args), 3
+
+    bkts = buckets(urows, args["bucket_h"], args["max_gap_s"])
+    rows = join(recs, bkts)
+    moving = [r for r in rows if r["dpp"] > 0]
+    if len(moving) < args["min_buckets"]:
+        return _abstain(
+            f"insufficient movement: {len(moving)} bucket(s) with a positive "
+            f"Delta weekly_pct, below the floor of {args['min_buckets']} "
+            f"({len(rows)} bucket(s) formed from {len(urows)} sample(s) at "
+            f"{args['bucket_h']}h). weekly_pct is an INTEGER percent, so a short or quiet "
+            "window genuinely cannot price anything — widen --since or --bucket-h.",
+            meta, args, extra={"buckets_formed": len(rows), "buckets_moving": len(moving)}), 3
+
+    cols = list(FIT_CLASSES) + (["cache_read"] if args["with_cache_read"] else [])
+    f = fit(moving, cols)
+
+    price = {}
+    for c in cols:
+        pp_per_tok = f["coef_pp_per_token"][c]
+        price[c] = {
+            "pp_per_mtok": pp_per_tok * 1e6,
+            "tokens_per_pp": (1.0 / pp_per_tok) if pp_per_tok > 0 else None,
+            "kind": "fitted" if c in FIT_CLASSES else "diagnostic",
+        }
+    if not args["with_cache_read"]:
+        price["cache_read"] = {
+            "pp_per_mtok": None,
+            "tokens_per_pp": None,
+            "kind": "bounded",
+            "bound_pp_per_mtok": CACHE_READ_BOUND_PP_PER_MTOK,
+            "why": "NOT FITTED. §2.8 bounded it by experiment at <=0.018-0.049 pp/Mtok; "
+                   "observationally it is collinear with output (r~+0.91), so a fitted value "
+                   "would be a boundary artifact, not a measurement.",
+        }
+
+    mix = {}
+    for r in moving:
+        for m, v in r["models"].items():
+            mix[m] = mix.get(m, 0) + v
+    tot_out = sum(mix.values()) or 1
+    dominant = max(mix.items(), key=lambda kv: kv[1]) if mix else ("unknown", 0)
+    blended = dominant[1] / tot_out < 0.90
+
+    return {
+        "verdict": "OK",
+        "window": args["since"], "bucket_h": args["bucket_h"],
+        "price": price,
+        "fit": f,
+        "census": meta,
+        "buckets": {"formed": len(rows), "moving": len(moving),
+                    "samples": len(urows), "min_required": args["min_buckets"]},
+        "model_mix": {m: v / tot_out for m, v in sorted(mix.items(), key=lambda kv: -kv[1])},
+        "blended": blended,
+        "caveats": ([
+            f"BLENDED PRICE — the dominant model is only {dominant[1] / tot_out:.0%} of fitted "
+            "output tokens, so these coefficients describe a mix, not one model."
+        ] if blended else []) + ([
+            "cache_read is included as a DIAGNOSTIC only — it is collinear with output and NNLS "
+            "is bounded below at zero, so neither a positive value nor a 0.0000 here is evidence."
+        ] if args["with_cache_read"] else []),
+    }, 0
+
+
+def _abstain(reason, meta, args, extra=None):
+    d = {"verdict": "ABSTAIN", "reason": reason, "window": args["since"], "census": meta}
+    if extra:
+        d.update(extra)
+    return d
+
+
+# ── renderer ──────────────────────────────────────────────────────────────────────────────────
+def render(d):
+    v = d["verdict"]
+    if v == "ABSTAIN":
+        print(f"{PROG}: ABSTAIN — {d['reason']}")
+        print("  (abstain, never impute — design law §3.3.4. No price is reported.)")
+        return
+    if v == "CENSUS":
+        t = d["tokens"]
+        m = d["census"]
+        print(f"deduped token census — window {d['window']} · {m['files']} file(s) · "
+              f"{m['deduped']} billed response(s)")
+        for c in CLASSES:
+            print(f"  {c:<15s} {t[c]:>18,}")
+        if m["records"]:
+            print(f"  dedup: {m['repeats']:,} of {m['records']:,} record(s) were repeats "
+                  f"({m['repeats'] / m['records']:.1%}) — summing lines would have "
+                  f"over-counted by {m['records'] / max(m['deduped'], 1):.2f}x")
+        return
+
+    b, f = d["buckets"], d["fit"]
+    print(f"quota price list — window {d['window']} · {b['moving']} moving bucket(s) of "
+          f"{b['formed']} at {d['bucket_h']}h · R² {f['r2']:.3f}"
+          + (f" · rel-RMSE {f['rel_rmse']:.3f}" if f["rel_rmse"] is not None else ""))
+    print()
+    print(f"  {'class':<15s} {'pp / Mtok':>12s} {'tokens / 1 pp':>16s}   basis")
+    for c in CLASSES:
+        p = d["price"].get(c)
+        if not p:
+            continue
+        if p["pp_per_mtok"] is None:
+            print(f"  {c:<15s} {'—':>12s} {'—':>16s}   bounded <= "
+                  f"{p['bound_pp_per_mtok']} pp/Mtok (§2.8, by experiment)")
+        else:
+            tpp = f"{p['tokens_per_pp']:,.0f}" if p["tokens_per_pp"] else "—"
+            print(f"  {c:<15s} {p['pp_per_mtok']:>12.3f} {tpp:>16s}   {p['kind']}")
+    print()
+    print("  model mix: " + ", ".join(f"{m} {s:.0%}" for m, s in
+                                      list(d["model_mix"].items())[:4]))
+    cr = f["collinearity"].get("output~cache_read")
+    if cr is not None:
+        print(f"  corr(output, cache_read) = {cr:+.3f}"
+              + ("   ⚠ collinear — cache_read is unidentifiable from this data"
+                 if abs(cr) > 0.7 else ""))
+    for c in d["caveats"]:
+        print(f"  ⚠ {c}")
+
+
+# ── selftest ──────────────────────────────────────────────────────────────────────────────────
+def _tx_line(ts, mid, model, out, cc, cr, inp):
+    return json.dumps({
+        "type": "assistant", "timestamp": ts, "requestId": "req_" + mid,
+        "message": {"id": mid, "model": model, "usage": {
+            "input_tokens": inp, "output_tokens": out,
+            "cache_creation_input_tokens": cc, "cache_read_input_tokens": cr}},
+    }) + "\n"
+
+
+def _util_line(ts, acct, wp, reset="2026-08-23T00:00:00Z", stale=False):
+    return json.dumps({"ts": ts, "acct": acct, "weekly_pct": wp,
+                       "weekly_reset_at": reset, "stale": stale}) + "\n"
+
+
+def _iso(e):
+    return datetime.fromtimestamp(e, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run(argv, env):
+    """Run this very file in a child with a fixtured environment; return (rc, parsed-json)."""
+    import subprocess
+    e = dict(os.environ)
+    e.update({k: str(v) for k, v in env.items()})
+    p = subprocess.run([sys.executable, os.path.abspath(__file__)] + argv,
+                       capture_output=True, text=True, env=e)
+    try:
+        return p.returncode, json.loads(p.stdout), p.stderr
+    except ValueError:
+        return p.returncode, None, p.stdout + p.stderr
+
+
+def selftest():
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="cc-quota-price-selftest.")
+    npass = nfail = 0
+
+    def check(name, ok, detail=""):
+        nonlocal npass, nfail
+        if ok:
+            npass += 1
+            print(f"  ok   {name}")
+        else:
+            nfail += 1
+            print(f"  FAIL {name}" + (f"   [{detail}]" if detail else ""))
+
+    try:
+        T = 1787000000                        # frozen "now"; every fixture stamp is relative
+        root = os.path.join(tmp, ".claude-secondary", "projects", "proj")
+        os.makedirs(root)
+        util = os.path.join(tmp, "util.jsonl")
+        base_env = {"CC_NOW": T, "CC_UTIL_LOG": util,
+                    "CC_QP_ROOTS": os.path.join(tmp, ".claude-secondary", "projects") + "=next2"}
+
+        # ── fixture A: ONE billed response, written as THREE streamed lines (the real shape) ──
+        # Same message.id, same requestId, identical complete usage on every line — exactly what
+        # Claude Code writes per content block. True output for the session is 1000, not 3000.
+        with open(os.path.join(root, "a.jsonl"), "w") as fh:
+            for _ in range(3):
+                fh.write(_tx_line(_iso(T - 3600), "msg_AAA", "claude-opus-5",
+                                  out=1000, cc=5000, cr=900000, inp=10))
+            fh.write(_tx_line(_iso(T - 3500), "msg_BBB", "claude-opus-5",
+                              out=500, cc=2000, cr=800000, inp=10))
+
+        rc, d, err = _run(["--census", "--json", "--since", "1d"], base_env)
+        check("1  census dedupes on message.id (3 streamed lines = 1 billed response)",
+              rc == 0 and d and d["tokens"]["output"] == 1500 and d["census"]["deduped"] == 2,
+              f"rc={rc} got={d and d['tokens']['output']}")
+
+        # ── case 2: the RED-PROOF for case 1. Flip the production dedup off via its test seam
+        # and assert the naive census inflates output >=2x. If anyone deletes the dedup, case 1
+        # goes red; if anyone weakens this assertion, case 2 goes red. The invariant is live.
+        env2 = dict(base_env, CC_QP_DEDUP=0)
+        rc2, d2, err2 = _run(["--census", "--json", "--since", "1d"], env2)
+        naive = d2["tokens"]["output"] if d2 else 0
+        check("2  RED-PROOF: a NON-deduping extractor inflates output >=2x",
+              rc2 == 0 and naive >= 2 * 1500,
+              f"naive={naive} deduped=1500 ratio={naive / 1500 if naive else 0:.2f}x")
+        check("2b RED-PROOF names its own seam loudly on stderr",
+              "CC_QP_DEDUP=0" in (err2 or ""), (err2 or "")[:80])
+
+        # ── case 3: absent denominator ⇒ ABSTAIN with the path named, exit 3, valid json ──
+        # The reason must name WHICH rung fired ("does not exist"), not merely the path: an
+        # empty store and an absent one are different facts, and a reason that cannot tell them
+        # apart lets the absent-store guard be deleted without any case going red (found by
+        # mutation — the first version of this assertion survived exactly that deletion).
+        rc3, d3, _ = _run(["--json", "--since", "1d"],
+                          dict(base_env, CC_UTIL_LOG=os.path.join(tmp, "nope.jsonl")))
+        check("3  absent utilization store ⇒ ABSTAIN(exit 3), reason names the path AND the rung",
+              rc3 == 3 and d3 and d3["verdict"] == "ABSTAIN" and "nope.jsonl" in d3["reason"]
+              and "does not exist" in d3["reason"],
+              f"rc={rc3} v={d3 and d3['verdict']} r={(d3 or {}).get('reason', '')[:90]}")
+        # 3b the OTHER denominator rung: the store exists but carries too few usable samples
+        empty = os.path.join(tmp, "empty.jsonl")
+        open(empty, "w").close()
+        rc3b, d3b, _ = _run(["--json", "--since", "1d"], dict(base_env, CC_UTIL_LOG=empty))
+        check("3b present-but-empty store ⇒ a DIFFERENT abstain reason, not the absent-store one",
+              rc3b == 3 and d3b["verdict"] == "ABSTAIN"
+              and "usable sample" in d3b["reason"] and "does not exist" not in d3b["reason"],
+              (d3b or {}).get("reason", "")[:90])
+
+        # ── fixture B: a priceable corpus. 24 buckets, each with a KNOWN token vector, and a
+        # Delta weekly_pct synthesized from a KNOWN coefficient vector so the fit has a truth to
+        # be checked against. out=4 pp/Mtok, cc=0.3 pp/Mtok, in=0 — and cache_read moves with
+        # output (the real corpus's +0.91 collinearity) while contributing nothing.
+        C_OUT, C_CC = 4.0e-6, 0.3e-6
+        # Bucket starts are ALIGNED to the 6h epoch blocks the producer itself uses. An unaligned
+        # fixture straddles two blocks, splitting every bucket's samples from its tokens — which is
+        # how this case first went red, and is worth keeping as a note: the alignment is part of
+        # the contract, not an artifact of the test.
+        BW = 6 * 3600
+        with open(util, "w") as uh, open(os.path.join(root, "b.jsonl"), "w") as th:
+            wp = 0.0
+            for i in range(24):
+                t0 = (T // BW - (30 - i)) * BW
+                out = 40000 + 7000 * (i % 5)
+                cc = 900000 + 130000 * (i % 3)
+                dpp = out * C_OUT + cc * C_CC
+                # samples every 30 min across the 6h bucket; the pct rises only at the close, as
+                # an integer-percent meter really does
+                for s in range(12):
+                    uh.write(_util_line(_iso(t0 + s * 1800), "next2", wp))
+                uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next2", wp + dpp))
+                wp += dpp
+                th.write(_tx_line(_iso(t0 + 600), f"msg_B{i}", "claude-opus-5",
+                                  out=out, cc=cc, cr=out * 300, inp=100))
+
+        rc4, d4, err4 = _run(["--json", "--since", "10d", "--bucket-h", "6"], base_env)
+        ok4 = rc4 == 0 and d4 and d4["verdict"] == "OK"
+        got_out = d4["price"]["output"]["pp_per_mtok"] if ok4 else None
+        got_cc = d4["price"]["cache_creation"]["pp_per_mtok"] if ok4 else None
+        check("4  fit recovers a KNOWN price list within 5%",
+              ok4 and abs(got_out - 4.0) / 4.0 < 0.05 and abs(got_cc - 0.3) / 0.3 < 0.05,
+              f"rc={rc4} out={got_out} cc={got_cc} err={(err4 or '')[:120]}")
+
+        # ── case 5: NON-DEGENERACY. Case 4 must be capable of failing — a tolerance that accepts
+        # anything proves nothing. Assert the SAME check rejects a price it was not fitted to.
+        check("5  NON-DEGENERACY: case 4's tolerance rejects a wrong price (mutant)",
+              ok4 and not (abs(got_out - 8.0) / 8.0 < 0.05),
+              f"out={got_out}")
+
+        # ── case 6: cache_read is reported as BOUNDED, never as a fitted coefficient ──
+        # It must not merely be LABELLED bounded — it must never have been a REGRESSOR, or a
+        # boundary-artifact zero is still being computed and one line from being published.
+        cr6 = d4["price"]["cache_read"] if ok4 else {}
+        check("6  cache_read is 'bounded', not fitted, and never entered the design matrix",
+              cr6.get("kind") == "bounded" and cr6.get("pp_per_mtok") is None
+              and cr6.get("bound_pp_per_mtok") == CACHE_READ_BOUND_PP_PER_MTOK
+              and ok4 and "cache_read" not in d4["fit"]["coef_pp_per_token"],
+              str(cr6)[:120])
+        # ...and the diagnostic flag labels it as such rather than promoting it to the price list
+        rc6b, d6b, _ = _run(["--json", "--since", "10d", "--with-cache-read"], base_env)
+        check("6b --with-cache-read labels the column DIAGNOSTIC and says why",
+              rc6b == 0 and d6b["price"]["cache_read"]["kind"] == "diagnostic"
+              and any("DIAGNOSTIC" in c for c in d6b["caveats"]),
+              str(d6b and d6b["price"]["cache_read"])[:120])
+
+        # ── case 7: a bucket spanning a weekly RESET is DROPPED, not read as negative spend.
+        # This is the §1 error class — a resetting counter read as if it were cumulative.
+        with open(util, "a") as uh:
+            t0 = (T // BW - 3) * BW
+            for s in range(12):
+                uh.write(_util_line(_iso(t0 + s * 1800), "next2", 90.0 - s))   # falls: a reset
+            uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next2", 95.0))
+        rc7, d7, _ = _run(["--json", "--since", "10d"], base_env)
+        check("7  a bucket whose weekly_pct FALLS (a reset) is dropped, not priced",
+              rc7 == 0 and d7["buckets"]["moving"] == d4["buckets"]["moving"],
+              f"before={d4 and d4['buckets']['moving']} after={d7 and d7['buckets']['moving']}")
+
+        # ── case 8: stale rows are excluded — "could not measure" != "nothing happened" ──
+        with open(util, "a") as uh:
+            t0 = (T // BW - 2) * BW
+            for s in range(12):
+                uh.write(_util_line(_iso(t0 + s * 1800), "next2", 95.0, stale=True))
+            uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next2", 99.0, stale=True))
+        rc8, d8, _ = _run(["--json", "--since", "10d"], base_env)
+        check("8  stale utilization rows never enter a bucket",
+              rc8 == 0 and d8["buckets"]["moving"] == d4["buckets"]["moving"],
+              f"{d8 and d8['buckets']}")
+
+        # ── case 9: too few moving buckets ⇒ ABSTAIN naming the count and the floor ──
+        rc9, d9, _ = _run(["--json", "--since", "10d", "--min-buckets", "500"], base_env)
+        check("9  below the bucket floor ⇒ ABSTAIN(exit 3) naming the count AND the floor",
+              rc9 == 3 and d9["verdict"] == "ABSTAIN" and "500" in d9["reason"]
+              and str(d9["buckets_moving"]) in d9["reason"],
+              f"rc={rc9} {(d9 or {}).get('reason', '')[:100]}")
+
+        # ── case 10: the table renderer never crashes and never invents a number on ABSTAIN ──
+        import subprocess
+        e = dict(os.environ)
+        e.update({k: str(v) for k, v in base_env.items()})
+        e["CC_UTIL_LOG"] = os.path.join(tmp, "nope.jsonl")
+        p = subprocess.run([sys.executable, os.path.abspath(__file__), "--since", "1d"],
+                           capture_output=True, text=True, env=e)
+        check("10 ABSTAIN renders a reason and no price table",
+              p.returncode == 3 and "ABSTAIN" in p.stdout and "pp / Mtok" not in p.stdout,
+              p.stdout[:120])
+
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print(f"\n{PROG} --selftest: {npass} passed, {nfail} failed")
+    return 1 if nfail else 0
+
+
+# ── main ──────────────────────────────────────────────────────────────────────────────────────
+def main(argv):
+    args = {
+        "json": False, "census_only": False, "since": "7d", "bucket_h": 6.0,
+        "acct": None, "with_cache_read": False,
+        "min_buckets": int(os.environ.get("CC_QP_MIN_BUCKETS", "12")),
+        "max_gap_s": int(os.environ.get("CC_QP_MAX_GAP_S", "5400")),
+    }
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            args["json"] = True
+        elif a == "--census":
+            args["census_only"] = True
+        elif a == "--with-cache-read":
+            args["with_cache_read"] = True
+        elif a == "--selftest":
+            return selftest()
+        elif a in ("-h", "--help"):
+            sys.stderr.write(__doc__)
+            return 2
+        elif a in ("--since", "--bucket-h", "--acct", "--min-buckets") and i + 1 < len(argv):
+            i += 1
+            key = a[2:].replace("-", "_")
+            if key == "bucket_h":
+                args[key] = float(argv[i])
+            elif key == "min_buckets":
+                args[key] = int(argv[i])
+            else:
+                args[key] = argv[i]
+        else:
+            sys.stderr.write(f"{PROG}: unknown argument {a!r}\n")
+            return 2
+        i += 1
+
+    d, rc = build(args)
+    if args["json"]:
+        print(json.dumps(d, separators=(",", ":"), sort_keys=True, default=str))
+    else:
+        render(d)
+    return rc
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(0)
