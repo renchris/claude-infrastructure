@@ -4,6 +4,7 @@
 whose GitHub scope is exactly `renchris/claude-infrastructure` and whose disk holds exactly that
 clone. The item's subject is `renchris/reso-management-app` → `.github/workflows/tenant-drift.yml`.
 That file cannot be read, edited, or landed from here, so the item was not attempted.
+**Re-dispatched to the same venue 2026-08-25, 18h16m after this document landed — §5.**
 
 This is the 107th instance of the class `bin/cc-eligible` documents at `CROSS_REPO` — but it is
 **not** the shape that arm refuses, which is why it got through.
@@ -53,6 +54,29 @@ and cannot drift again, which the alternative (bumping `version: 9` to `11.9.0`)
 -          version: 9
 ```
 
+**CONFIRMED UPSTREAM 2026-08-25, against the action's own source rather than its README** — which
+documents `version` as "optional when `packageManager` exists" and says nothing at all about the
+two disagreeing. `readTargetVersion()` in `pnpm/action-setup@master` `src/install-pnpm/run.ts`:
+
+```ts
+if (version) {
+  if (packageManagerVersion && packageManagerVersion !== version) {
+    throw new Error(`Multiple versions of pnpm specified: …
+Remove one of these versions to avoid version mismatch errors like ERR_PNPM_BAD_PM_VERSION`)
+  }
+  return version
+}
+```
+
+Three things follow that the pre-derivation could only assume. The guard is `!==`, so this is a
+**disagreement** check, not a both-present check — which is why the workflow ran green until reso's
+`packageManager` moved off 9 and has been red on every commit since. The action names exactly two
+cures, and deleting `version:` is the correct one: deleting `packageManager` instead would satisfy
+the same guard while unpinning every local `pnpm` invocation in the repo. And `return version`
+means the input WINS when they agree — so bumping `version: 9` → `11.9.0` is green today and red
+at the next `packageManager` bump, which is the drift this check exists to catch, in the check
+itself.
+
 **Expect the first green setup to produce a red check, and do not read that as a failed fix.** The
 drift check has never once executed since 2026-05-24, so its first real run is also its first
 assertion against ~3 months of unaudited tenant config. A red there is the alarm working; the
@@ -73,3 +97,45 @@ Neither `cc-backlog` verb could be run from here — this container has no
 `~/.claude/autonomy/backlog.jsonl`, so `block`/`done`/`reopen` would have created a fresh store
 that nothing reads. A write that no reader can see is a fake discharge, which is the failure this
 document exists instead of.
+
+## 5. §4's request was made to a dispatch that has no reader for it (2026-08-25)
+
+**This is the SECOND cloud dispatch of `485f8f87eb5f`, and §1–§4 were already on trunk when it
+fired.** They became reachable at `cc87238f` (2026-08-25T04:45:28Z); this session was fired at
+2026-08-25T23:01:28Z — **18h16m later**, into the same venue, against the same unreachable file.
+§4 addressed itself to "the next dispatch". The next dispatch was this one, and it arrived carrying
+no channel by which a document on trunk could have reached it.
+
+That is the correction §4 needs: **a doc is not a mechanism, and the dispatcher reads venue labels,
+not `docs/research/`.** The reason it reads a stale one is already measured, in `cc87238f`'s own
+body: *"venue-label staleness is measured per-ITEM (did trunk move under the paths this item cites)
+and never per-RULE."* This item's label was written once from `project = claude-infrastructure` →
+cloud (§1), and nothing since has asked again. Landing a refusal cannot invalidate a label; only
+the item's own cited paths moving can, and none of this item's paths live in this repo.
+
+Re-measured here rather than recalled, and all of §1–§2 holds: no reso clone on disk (no
+`~/Development`, no `/Users/chrisren`), GitHub scope exactly `renchris/claude-infrastructure`, no
+`tenant-drift.yml` anywhere on `origin/main`, `.github/workflows/` still `diagrams.yml` +
+`hermetic.yml`. The tree is trunk (`HEAD..origin/main` = 0). §2's staleness arithmetic advances
+with the calendar and nothing else: the last direct measurement of the failing run is now **15 days**
+old, and reso's trunk remains the only oracle for whether the cure has since landed there.
+
+`cc-backlog` still cannot discharge it, and the shape is worse than "no store": `bin/cc-backlog:995`
+runs `mkdir -p "$(dirname "$BACKLOG")"` before writing, so `cc-backlog block 485f8f87eb5f` here
+**succeeds** — creating `/root/.claude/autonomy/backlog.jsonl` and writing a row for an id that
+store has never held, then exiting 0 into an ephemeral container. A silent exit 0 is what makes it
+a fake discharge rather than a failure.
+
+**Why this session did not repair the predicate either, and it is the code's rule rather than
+caution.** The repair §1 identifies — teach `cross_repo()` to read a target repo out of the item's
+text, not only its `project` field — *is* the admission rule, and `bin/cc-eligible`'s own
+`OFFBOX_LANE` states the bar for changing it: *"A SESSION THIS LANE CREATED CANNOT VERIFY A CHANGE
+TO THE LANE… the observer and the subject are the same object."* That list carries
+`("venue", r"\bvenue\b")` precisely so an item asking for this edit is refused the cloud lane; a
+cloud session performing the edit unasked is the same circularity with the gate skipped. `cc-venue:55`
+keys the guard on the effect for the same reason. Both still stand.
+
+So the item stays parked-by-hand, and the durable fix is one an on-box session can make without
+touching the lane rule at all: **this item's target repo exists only in its prose.** Put
+`renchris/reso-management-app` in a field the join can see, and the arm that already works for 106
+of 107 (§1) works for this one too — no predicate widened, no observer judging itself.
