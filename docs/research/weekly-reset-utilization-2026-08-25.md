@@ -194,6 +194,33 @@ The one real cost in view is `next3`'s ~8 pp, and with 3.8 h left that is essent
   uninformative, and speaks only in the last ~2 days where linear and empirical converge
   (day 6: −17 pp; day 7: −2 pp).
 
+  ✅ **SHIPPED 2026-08-25** (backlog `70ed289c10fb`) — `MIN_ELAPSED_FRAC` 0.05 → **0.90**, so
+  `wall_projection()` returns `(None, None)` for all but the last ~17 h of a weekly window. Two
+  things about the shipped threshold are worth recording, because neither is what this bullet
+  said:
+
+  1. **The floor is 0.90, not the 0.714 that "the last ~2 days" literally names.** This doc's own
+     §3 backtest reads **35 pp of error still at day 5** (= phase 0.714), and the parenthetical
+     above cites day 6 and day 7 — not day 5 — as the convergent region. The independent
+     drain-telemetry wave of the same date resolved the identical question on more data
+     (`docs/research/drain-telemetry-2026-08-25/SYNTHESIS-design.md` §1.5, from
+     `axis-D-windows.md` §4–§5: 11,287 adjacent pairs over 12 window instances, phase
+     decorrelated from calendar day at r = +0.030) and put it at **phase 0.90**, where the
+     backtested MAE is 18.3 pp against 36.7 at 0.70. Both readings point past 0.714; 0.90 is the
+     one with a measured MAE beneath it.
+  2. **The mid-week `⚠ WALL` flag went with the projection, and that is intended.** `wall_risk`
+     is derived from `proj_end_pct`, so abstaining silences the flag too. SYNTHESIS §1.5 asks for
+     exactly that — *"keep the raw `burn_ratio`/WALL flag on the 5h meter only"* — and §3 above
+     holds the only mid-week weekly WALL in the backtest, which was **false**: `next` at 51% on
+     day 3 of 08-23 projected 119% ⚠ WALL and closed at **99%**. The shortfall regime, the half
+     that is 4/4, is carried by M3a's `wk_strand_pp`, which has no such floor and is unchanged.
+
+  Not done, deliberately: the empirical-trajectory replacement this bullet contemplates. Axis-D
+  **built and leave-one-out backtested** it and it **loses** — MAE 54.1 vs the linear 39.5 —
+  because between-window shape variance dominates the mean shape, and the shape is a fossil of
+  the operator's own end-of-window rush, so an estimator fitted to it goes wrong toward
+  complacency the moment the rush stops. Do not ship a shape-fitted weekly projector.
+
 **Reproduce:** the analysis scripts are in this session's scratchpad; the one-command version of
 the retrospective is `python3 scripts/desk-strand-replay.py`.
 

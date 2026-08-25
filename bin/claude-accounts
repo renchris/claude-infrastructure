@@ -2152,9 +2152,12 @@ def apply_burn(rows, cfg, samples=None):
 
     # Window-phase view, exported so consumers ROUTE on it instead of re-deriving it from a raw
     # percentage (the governed dispatcher, USAGE_TELEMETRY_100P §4 M1, admits work against this).
-    # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
+    # Absent keys mean "not honest to say" — see wall_projection's abstain rule; a consumer that
     # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
-    # inversion this metric exists to prevent.
+    # inversion this metric exists to prevent. SINCE 2026-08-25 THE ABSENCE IS THE COMMON CASE:
+    # the floor is phase 0.90, so these keys are present only in the last ~17 h of a weekly
+    # window. A router that reads their absence as a value — 0, or "no wall risk" — is now wrong
+    # for ~90% of every week rather than for its first 8 h.
     # M5: rank each account's REQUIRED rate inside its own realised history. Stamped here, beside
     # the other burn facts, because this is the one place that holds both the rows and the series;
     # pace_line renders what is stamped, so there is still exactly one renderer (L3).
@@ -2284,7 +2287,7 @@ def fmt_burst(bp):
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
-MIN_ELAPSED_FRAC = 0.05  # ~8.4 h — below this a projection is noise, so we ABSTAIN
+MIN_ELAPSED_FRAC = 0.90  # ~151 h in — below this the LINEAR model is refuted, so we ABSTAIN
 
 
 def wall_projection(r):
@@ -2300,10 +2303,45 @@ def wall_projection(r):
       burn_ratio = (weekly_pct/100) / elapsed_fraction    1.0 = exactly on pace to end at 100%
       proj_end   = weekly_pct / elapsed_fraction          where the window lands if nothing changes
 
-    ABSTAIN below MIN_ELAPSED_FRAC. This is the whole point rather than a nicety: at 1 h elapsed
-    a 1% reading projects to 168%, so an un-floored projection would page on every fresh window —
-    manufacturing the very false alarm the metric exists to remove. Returning None is the honest
-    answer to "too early to say", per the repo's abstain-never-impute rule.
+    ABSTAIN below MIN_ELAPSED_FRAC. This is the whole point rather than a nicety, and TWO
+    distinct failures now sit under the one guard:
+
+      * The NOISE floor (0.05, the original reason). At 1 h elapsed a 1% reading projects to
+        168%, so an un-floored projection would page on every fresh window — manufacturing the
+        very false alarm the metric exists to remove.
+      * The SHAPE floor (0.90, widened 2026-08-25). Dividing by elapsed fraction removes the
+        PHASE error only under an assumption of LINEAR burn, and that assumption is false here.
+        Burn is heavily back-loaded: phase 0.0-0.7 averages 10.9 weekly-pp/day against 25.2 in
+        phase 0.7-1.0 — a 2.3x acceleration, over 11,287 adjacent pairs across 12 window
+        instances, with phase decorrelated from calendar day (r = +0.030), so it is a property
+        of the window and not a fleet-wide date effect. Backtested, THIS projector's MAE by
+        phase is 47.2 / 46.9 / 46.2 / 36.7 / 18.3 pp at phase 0.1 / 0.3 / 0.5 / 0.7 / 0.9; four
+        windows sitting at 61, 31, 20 and 13% at phase 0.5 all finished at 92-100%. A CONSTANT
+        predictor — the leave-one-out mean of the other windows' finals — scores 5.3 pp at
+        mid-week against this projector's 46.2, so what shipped here was 8.7x worse than the
+        number 94. Mid-window percentage carries essentially no information about where the
+        window lands, and the honest answer to that is None.
+        (docs/research/drain-telemetry-2026-08-25/axis-D-windows.md §4-§5.)
+
+    WHY 0.90 AND NOT "the last ~2 days" (0.714). weekly-reset-utilization-2026-08-25 §6
+    prescribes the last ~2 days, but its own §3 backtest still reads 35 pp of error at day 5
+    (phase 0.714) and cites day 6 (-17 pp) and day 7 (-2 pp) as the convergent region. The
+    drain-telemetry wave resolved the same question independently and on more data at phase
+    0.90 (SYNTHESIS-design.md §1.5). Both point past 0.714; 0.90 is the one with a measured MAE
+    beneath it.
+
+    WHAT SURVIVES THE FLOOR IS A SANITY FIGURE, NOT A FORECAST. Even at phase 0.90 the linear
+    MAE is 18.3 pp against the constant predictor's 5.3, on a window with ~17 h left to run.
+    There is deliberately no lead-time claim on this number anywhere.
+
+    THE LINEAR DIVISOR IS NOT REPLACED HERE, AND THAT IS A FINDING RATHER THAN A DEFERRAL. The
+    obvious remedy — divide by the empirical burn SHAPE instead — was built and backtested
+    leave-one-out and it LOSES: MAE 54.1 vs the linear 39.5 overall, because between-window
+    shape variance dominates the mean shape and dividing by a small S amplifies it. It also
+    refutes itself: the shape is a fossil of the operator's own end-of-window rush, so an
+    estimator fitted to it goes wrong in the direction of complacency the moment the rush stops.
+    Widening the abstain is the cheap correct move; do NOT ship a shape-fitted weekly projector.
+    Returning None stays the honest answer, per the repo's abstain-never-impute rule.
     """
     wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
     if wp is None or not isinstance(wrh, (int, float)):
@@ -2414,11 +2452,19 @@ def pace_line(rows):
     NOWCAST, NOT FORECAST — the caption says `at the last 48h of pace` and there is deliberately
     no lead-time claim anywhere on this surface. §5.1 LB-2.
 
-    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives
-    unchanged on them, because an account on a wall trajectory has no strand and is still the
-    most important thing on the line; what does NOT survive is rendering a weekly projection
-    ABOVE 100 as a number, which is the regime where every projector measured here is wrong by
-    50-130 pp. An abstention renders as the word plus its reason, never as a zero."""
+    ZERO-STRAND ROWS STILL RENDER, and render last. `wall_projection`'s burn RATIO survives on
+    them, because an account on a wall trajectory has no strand and is still the most important
+    thing on the line; what does NOT survive is rendering a weekly projection ABOVE 100 as a
+    number, which is the regime where every projector measured here is wrong by 50-130 pp. An
+    abstention renders as the word plus its reason, never as a zero.
+
+    THE RATIO IS NOW A LATE-WINDOW CLAUSE, NOT A STANDING ONE. `wall_projection` abstains below
+    phase 0.90 (widened 2026-08-25 — the linear model is refuted mid-week, MAE 46 pp), so for
+    most of every week a zero-strand row renders `no strand — on pace to fill the window` with
+    no `Nx burn` and no `⚠ WALL` beside it. That is the fix, not a lost warning: the one
+    mid-week WALL in the backtest was FALSE (next @ 2026-08-23 projected 119% at day 3 and
+    closed at 99%), and the shortfall regime — the half that is 4/4 — is carried by M3a's
+    strand, which has no such floor."""
     def _strand(x):
         # Computed here, not read off the stamp, for the same reason wall_projection is called
         # rather than read off `burn_ratio`: the renderer must not silently render nothing when

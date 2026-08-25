@@ -223,17 +223,33 @@ print("OK")'
   # next at phase 0.32 on 2026-08-25: weekly_pct 52, 114 h left, EWMA 1.725 %/h -> a raw
   # projection of 248.7%. In that regime EVERY projector measured here is badly wrong (the
   # incumbent renders 154.6%, this EWMA 231.4%, against a truth near 100%), so the clamp keeps
-  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot. The
-  # account is reported as on a WALL TRAJECTORY, which is true and actionable; "248%" is neither.
+  # the shortfall regime -- where the arithmetic converges -- and discards the overshoot.
+  #
+  # THE WALL ARM MOVED TO A LATE-WINDOW PHASE (2026-08-25, backlog 70ed289c10fb) -- this case
+  # used to assert `⚠ WALL trajectory` HERE, at phase 0.32, on the grounds that the direction is
+  # true and actionable even where the magnitude is not. It is not: the one mid-week WALL in the
+  # backtest was FALSE (this same account at 51% on day 3 of 2026-08-23 projected 119% and closed
+  # at 99%), and SYNTHESIS-design.md §1.5 resolved it -- "keep the raw burn_ratio/WALL flag on the
+  # 5h meter only". wall_projection now abstains below phase 0.90, so at 114 h left the row is
+  # bare. The clamp under test is unchanged; only the phase at which the flag may speak moved.
   run python3 -c "$LOAD"'
 r = {"acct": "next", "weekly_pct": 52, "weekly_reset_h": 114.0, "burn_wk_ewma_ph": 1.725}
 st = ca.wk_strand_pp(r)
 assert st == 0.0, st
 line = ca.pace_line([r])
-assert "⚠ WALL trajectory" in line, line
+assert "next no strand — on pace to fill the window" in line, line
+assert "WALL" not in line, line
 assert "248" not in line, line
 assert "231" not in line, line
 assert "154" not in line, line
+# CONTROL: the flag is deferred, not deleted. Same overshoot shape at phase 0.95 still names the
+# wall, and the number behind it still never renders.
+late = ca.pace_line([{"acct": "next", "weekly_pct": 97, "weekly_reset_h": 8.4,
+                      "burn_wk_ewma_ph": 1.0}])
+assert ca.wk_strand_pp({"acct": "next", "weekly_pct": 97, "weekly_reset_h": 8.4,
+                        "burn_wk_ewma_ph": 1.0}) == 0.0, late
+assert "⚠ WALL trajectory" in late, late
+assert "102" not in late, late
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
