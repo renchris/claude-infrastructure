@@ -19,6 +19,15 @@ setup() {
   # non-$HOME seams (hermeticity ratchet): these default to ABSOLUTE /tmp paths, which a
   # fixtured $HOME cannot redirect — an absent path is right, the sensors fail open on it.
   export CC_PERMPEND_DIR="$D/permpend" CC_TELEMETRY_DIR="$D/telemetry"
+  # R5f (2026-08-25, recycle #227): the same class, for the seam the R5f tests introduce. Those
+  # tests drive the REAL bin/cc-classify, whose own enumerator seam defaults to the BARE NAME
+  # `cc-sessions` — a bare name is resolved off the operator's PATH and EXECUTED, so a fixtured
+  # $HOME cannot defend it (test-hermeticity rule 5b, which caught this in the land gate rather
+  # than here). Each R5f test still exports this inside its own wrapper, which wins in the child;
+  # this is the suite-wide floor so no future test can reach the live fleet by forgetting to.
+  # An ABSENT path is the right default — cc-classify fails open on one, which is the very
+  # behaviour under test.
+  export CC_CLASSIFY_SESSIONS_BIN="$D/absent-cc-sessions"
   # BEAT-FAMILY seams — the OVERRIDE half of the leak fixed above, and the half a fixtured $HOME
   # cannot reach. `cb_beat_dir` reads "${CC_BEAT_DIR:-$HOME/.claude/cc-beats}": the $HOME path is
   # only the FALLBACK, so an ambient CC_BEAT_DIR wins outright and reinstates the 2026-07-31
@@ -3077,6 +3086,12 @@ set_registry() { # <n> — n hermetic cc-registry rows under $CC_REGISTRY_DIR
   [ "$(grep -c 'cause=REGISTRATION' "$D/notify-calls")" -eq 0 ]
   # and the retired claim is gone from the EMITTING record, not merely from the file (control 4).
   [ "$(grep -c "isn't registering" "$D/notify-calls")" -eq 0 ]
+  # R5f (recycle #227): PROVENANCE, not just verdict. Until the evidence= axis existed this test was
+  # satisfied by ANY route to cause=ENUMERATION — a mutant forcing R5f's producer-self-report branch
+  # to fire unconditionally left it green, so it credited the arithmetic for a verdict the
+  # arithmetic had not computed. There is no producer self-report in this fixture; the registry is
+  # what decided, and the assertion now says so.
+  [ "$(grep -c 'evidence=REGISTRY-ARITHMETIC' "$D/notify-calls")" -eq 1 ]
 }
 
 @test "R5e: a genuine registration gap IS still named as one (the fix did not just invert the bug)" {
@@ -3143,4 +3158,136 @@ EOF
   [ "$(echo "$output" | grep 'EMPTY classification' | grep -c 'cause=REGISTRATION')" -eq 1 ]
   [ "$(grep -c 'the enumerator failed open' "$CC_REAPER_LOG")" -eq 0 ]
   [ "$(echo "$output" | grep -c 'the enumerator failed open')" -eq 0 ]
+}
+
+# ── R5f (2026-08-25, recycle #227) — THE PRODUCER'S OWN VERDICT, WHICH THIS FILE USED TO DISCARD ──
+# R5e stopped two of cc-reaper's diagnostics naming opposite causes for one event. Its replacement
+# inherited their shared premise: that `enum` is a MEASUREMENT. It is not when cc-classify's session
+# enumerator fails — that returns [] at rc 0, so the value is the producer's FALLBACK, and the
+# registry partition becomes arithmetic over a non-number.
+# MEASURED by execution before writing any of this, against the real binary with its
+# CC_CLASSIFY_SESSIONS_BIN seam pinned: an enumerator exiting 3 and one truthfully returning []
+# are BYTE-IDENTICAL on stdout and rc (both `[]`, both 0), and cc-reaper reported
+#   cause=REGISTRATION … all 4 unseen are unregistered; a spawn mode is not registering
+# for BOTH — to the log AND to the desk page. The only discriminator is cc-classify:998's own
+# stderr line, and both classify call sites sent it to /dev/null.
+#
+# THESE TESTS DRIVE THE REAL cc-classify, not a mock, and that is deliberate: the override keys on a
+# literal the PRODUCER emits, so a silent rewording there would otherwise revert this file to the
+# wrong answer with every test still green. The pair that carries the finding is the first and the
+# fourth — identical fixtures but for the enumerator's exit code, which is exactly the bit the old
+# code could not see.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+use_real_classify() { # <enumerator body> — the REAL cc-classify with its enumerator seam pinned
+  printf '#!/bin/bash\n%s\n' "$1" > "$D/bin/enum"
+  printf '#!/bin/bash\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
+         "$D/bin/enum" "$REPO/bin/cc-classify" > "$D/bin/classify"
+  chmod +x "$D/bin/enum" "$D/bin/classify"
+  export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+}
+
+@test "R5f: a producer that reports its OWN enumerator failed is believed over the registry arithmetic" {
+  # THE FINDING. Registry is EMPTY and every live pane is unseen — the arithmetic's textbook
+  # REGISTRATION case — but the producer has already said the emptiness is its fallback, so no
+  # spawn mode may be implicated. Old code said "a spawn mode is not registering" here.
+  set_desk; set_live 4
+  use_real_classify 'exit 3'
+  set_registry 0
+  [ -d "$CC_REGISTRY_DIR" ]                          # empty, not absent — the states R5e separated
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # POSITIVE control on the same pipeline: R5c really did fire this sweep.
+  [ "$(grep -c 'classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s)' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=PRODUCER-SELF-REPORT')" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=ENUMERATION')" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=REGISTRATION')" -eq 0 ]
+  [ "$(grep -c 'a spawn mode is not registering' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5f: the override reaches R5c's say() seam too, not only its log() seam" {
+  # R5c emits at two seams that fail independently (#226's scar) — one assertion per seam.
+  set_desk; set_live 4
+  use_real_classify 'exit 3'
+  set_registry 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep 'EMPTY classification' | grep -c 'evidence=PRODUCER-SELF-REPORT')" -eq 1 ]
+  [ "$(echo "$output" | grep 'EMPTY classification' | grep -c 'cause=REGISTRATION')" -eq 0 ]
+}
+
+@test "R5f: the override reaches the self-check DESK PAGE, the line an operator would act on" {
+  # The third claim site. A wrong cause in the log is a wrong record; a wrong cause here sends the
+  # operator to audit spawn registration for a fault that is entirely in the enumerator.
+  set_desk; set_live 4
+  use_real_classify 'exit 3'
+  set_registry 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 4' "$D/notify-calls"
+  [ "$(grep -c 'evidence=PRODUCER-SELF-REPORT' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'cause=REGISTRATION' "$D/notify-calls")" -eq 0 ]
+}
+
+@test "R5f: a TRUTHFULLY empty enumerator still gets the registry arithmetic (the fix did not invert)" {
+  # THE CONTROL THAT CARRIES THE FINDING. Byte-identical fixture to the first test but for the
+  # enumerator's exit code — [] at rc 0 either way — and the verdict must now differ.
+  set_desk; set_live 4
+  use_real_classify 'printf "[]\n"'
+  set_registry 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s)' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=REGISTRY-ARITHMETIC')" -eq 1 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=REGISTRATION')" -eq 1 ]
+  [ "$(grep -c 'evidence=PRODUCER-SELF-REPORT' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5f: the RETRY call site captures the producer's stderr too, not only the first attempt" {
+  # ONE MUTANT PER SITE, and the classify producer is forked at TWO. The retry only runs after the
+  # bound fires, so without this the second site would ship with a mutant that reds nothing —
+  # exactly the green-that-means-nothing #226 hit at R5c's two seams.
+  set_desk; set_live 4
+  printf '#!/bin/bash\nexit 3\n' > "$D/bin/enum"; chmod +x "$D/bin/enum"
+  printf '#!/bin/bash\nn=$(cat %s 2>/dev/null || echo 0); n=$(( n + 1 )); echo "$n" > %s\nif [ "$n" = 1 ]; then sleep 5; exit 0; fi\nexport CC_CLASSIFY_SESSIONS_BIN=%s\nexec bash %s "$@"\n' \
+         "$D/ccount" "$D/ccount" "$D/bin/enum" "$REPO/bin/cc-classify" > "$D/bin/classify"
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_TIMEOUT_S=1
+  set_registry 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # POSITIVE controls: the bound really fired, and the producer really was forked twice.
+  [ "$(grep -c 'bound-fired classify' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(cat "$D/ccount")" = 2 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=PRODUCER-SELF-REPORT')" -eq 1 ]
+  [ "$(grep -c 'cause=REGISTRATION' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5f: an explicitly SET seam is not clobbered by the computed value" {
+  # The states under test must be pinnable, and a computed value silently winning over a set-but-
+  # different one is how a harness collapses them (memory: harness-default-collapses-the-states-
+  # under-test). Producer DOES self-report; the seam says it did not; the seam wins, so the three
+  # tests above cannot be passing by accident of the default.
+  set_desk; set_live 4
+  use_real_classify 'exit 3'
+  set_registry 0
+  export CC_REAPER_CLASSIFY_ENUM_SELFREPORT=0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'evidence=REGISTRY-ARITHMETIC')" -eq 1 ]
+  [ "$(grep -c 'evidence=PRODUCER-SELF-REPORT' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5f: an ABSENT registry still says UNATTRIBUTED, and carries an evidence= token of its own" {
+  # Every arm carries the new axis — a field only some rows have is not a flag. This is also the
+  # arm where the two axes must not collide: UNREADABLE-STORE is not a substring of
+  # REGISTRY-ARITHMETIC, nor of PRODUCER-SELF-REPORT, in either direction (control 11).
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1
+  [ ! -d "$CC_REGISTRY_DIR" ]
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'cause=UNATTRIBUTED evidence=UNREADABLE-STORE' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'evidence=REGISTRY-ARITHMETIC' "$D/notify-calls")" -eq 0 ]
+  [ "$(grep -c 'evidence=PRODUCER-SELF-REPORT' "$D/notify-calls")" -eq 0 ]
 }
