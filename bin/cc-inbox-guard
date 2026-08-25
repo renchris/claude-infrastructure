@@ -403,7 +403,18 @@ escalate() { # <uuid> <acked> <lines> <reason> <phone-msg>
   last="$(cat "$mk" 2>/dev/null || true)"
   if [ "$last" = "$ackln" ]; then
     echo "  keep   $u — already escalated (acked:lines=$ackln; damped)"
-    return 0
+    # rc 3 = DAMPED, and the distinction is the whole contract. Every caller below used to increment
+    # its escalation counter unconditionally after calling this function, so a sweep that raised
+    # NOTHING and merely re-recognised already-damped boxes still reported them as escalations.
+    # Measured on the live reaper log 2026-08-25 (recycle #228): 67 `sweep done` summaries, every one
+    # in a stable 211-225 band — stable precisely because the number tracks the DAMPED population and
+    # not the escalations. An isolated dry-run over the same 782-box store scored 360 "escalation(s)"
+    # of which 357 were damped keeps and 3 were real: a 120x overstatement on the one line an
+    # operator reads to decide how loud the fleet is. A count that merges two arms meaning opposite
+    # things cannot be read at all (memory: convergence-counter-measures-distance-not-delivery).
+    # rc 0 stays "escalated, or under --dry-run would have"; 3 is free here (2 is this file's own die
+    # code) and no caller treats a non-zero rc from escalate() as failure.
+    return 3
   fi
   if [ "$DRY" = 1 ]; then echo "  WOULD-ESCALATE $u — $reason"; return 0; fi
   local pr; pr="$(phone "⚠️ UNDELIVERED comms" "$pmsg")"
@@ -419,6 +430,9 @@ sweep() {
   # backfill the registry first so a live-but-unregistered pane is classifiable (F8), gated off dry-run.
   [ "$DRY" = 0 ] && [ -n "$RECONCILE_BIN" ] && _ig_bounded "$RECONCILE_BIN" >/dev/null 2>&1 || true
   local now; now="$(now)"; local n_esc=0
+  # ONE `local` per line: /bin/bash here is 3.2.57, where a multi-variable `local` does not see its
+  # own earlier initialiser. n_damp is the arm that used to be folded into n_esc — see escalate().
+  local n_damp=0
 
   # F4: enqueue-FAILED records — a message that could not even persist. Escalate + consume the record.
   if [ -d "$ALARM_DIR" ]; then
@@ -509,7 +523,7 @@ sweep() {
     if [ "${raw_seen:-0}" -gt "$lines" ] 2>/dev/null; then
       escalate "$u" "$acked" "$lines" "cursor past EOF (.seen=$raw_seen > lines=$lines) — mailbox rotated/truncated under a live cursor; mail may have been dropped" \
         "inbox $u cursor past EOF ($raw_seen>$lines) — possible dropped mail"
-      n_esc=$((n_esc+1))
+      case $? in 3) n_damp=$((n_damp+1)) ;; *) n_esc=$((n_esc+1)) ;; esac
     fi
 
     [ "$unacked" -gt 0 ] 2>/dev/null || continue   # nothing unconsumed → fine
@@ -544,13 +558,15 @@ SCANEOF
       *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE ($(indeterminate_why "$u")) — cannot prove delivery" \
                   "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
     esac
-    n_esc=$((n_esc+1))
+    # `case` propagates the rc of the branch it ran, so this reads escalate()'s own verdict rather
+    # than re-deriving it. All three arms above are escalate() calls, so no arm can miss it.
+    case $? in 3) n_damp=$((n_damp+1)) ;; *) n_esc=$((n_esc+1)) ;; esac
   done <<WLEOF
 $wlist
 WLEOF
   # Reaching this line means the whole worklist was examined. Its ABSENCE from a log entry is now
   # readable against the announce above: worklist N, no "sweep done" ⇒ cut before all N.
-  echo "cc-inbox-guard: sweep done — all $n_work box(es) examined, $n_esc escalation(s)$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
+  echo "cc-inbox-guard: sweep done — all $n_work box(es) examined, $n_esc escalation(s), damped=$n_damp$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
   return 0
 }
 

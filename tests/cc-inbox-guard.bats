@@ -591,3 +591,52 @@ mkbox() {   # $1 = key — a box holding one 2h-old unacked message, i.e. always
   # stated explicitly, so a regression to the pre-fix order is unambiguous rather than merely "not equal"
   [ "$order" != "aaa bbb ccc ddd eee " ]
 }
+
+# ── W3 (recycle #228): the summary's escalation count MERGED two arms that mean opposite things ────
+# escalate() returns early on a damped repeat, but all four call sites incremented n_esc regardless,
+# so `sweep done — N escalation(s)` reported "escalated" for boxes that paged nobody. Measured on the
+# live reaper log: 67 summaries, all in a stable 211-225 band; an isolated dry-run over the real
+# 782-box store scored 360 of which 357 were damped and 3 real. Assertions use `grep -c … -eq N`
+# rather than `grep -q`: under pipefail a `producer | grep -q` fails on the input it just matched.
+@test "W3: a REAL escalation is counted as an escalation, not damped" {
+  msg_aged 3600 peer
+  export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'examined, 1 escalation(s), damped=0')" -eq 1 ]
+}
+
+@test "W3: a DAMPED repeat is counted as damped, NOT as an escalation" {
+  msg_aged 3600 peer
+  export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+  "$G" sweep >/dev/null          # sweep 1 escalates for real and writes the (acked:lines) marker
+  run "$G" sweep                 # sweep 2 sees the same key → damped, and must say so
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'examined, 0 escalation(s), damped=1')" -eq 1 ]
+}
+
+@test "W3: escalations and damped PARTITION the boxes that reached escalate()" {
+  # Two arms in ONE sweep, so this cannot pass by both counters tracking the same population.
+  mkbox aaa; mkbox bbb; mkbox ccc
+  mkdir -p "$CC_INBOX_GUARD_STATE_DIR"
+  for k in aaa bbb; do printf '0:1' > "$CC_INBOX_GUARD_STATE_DIR/$k.escalated"; done
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  e="$(printf '%s\n' "$output" | grep -oE 'examined, [0-9]+ escalation' | grep -oE '^examined, [0-9]+' | grep -oE '[0-9]+')"
+  d="$(printf '%s\n' "$output" | grep -oE 'damped=[0-9]+' | grep -oE '[0-9]+')"
+  [ "$e" = "1" ]
+  [ "$d" = "2" ]
+  [ "$((e + d))" -eq 3 ]         # …and the parts sum to the worklist (control 24)
+}
+
+@test "W3: the cursor-past-EOF call site attributes its own damped repeat (site 2 of 2)" {
+  # The F11 site increments a DIFFERENT n_esc line from the liveness arms, so a fix applied at one
+  # site and not the other passes every test above. One assertion per SITE, deliberately.
+  msg_aged 60 peer
+  printf '9\n' > "$CC_MAILBOX_DIR/$U.seen"   # .seen=9 > 1 line → rotated/truncated → F11 escalates
+  export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+  "$G" sweep >/dev/null
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'examined, 0 escalation(s), damped=1')" -eq 1 ]
+}
