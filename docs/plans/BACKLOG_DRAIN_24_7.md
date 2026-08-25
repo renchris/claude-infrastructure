@@ -86,6 +86,123 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #223: method 193 — THE ACQUITTALS GOT A WEAKER INSTRUMENT THAN THE
+  CONVICTION, SO THE ONE THAT WAS STILL BROKEN WALKED.**
+  Took #222's lead 1, the four "correctly blocked (cc-cloud reads ALIVE)" rows, and it paid
+  immediately: **`564d151b76e5` reads `STALLED` (ref frozen 7h) and `4ce239d21d67` reads `LANDED`
+  (content present on origin/main) while BOTH are still `blocked`** — the discriminating
+  observation #222 asked for. `cloud_map` maps STALLED to unblock and **LANDED to done**, so both
+  should have been actuated. Widening the probe to the cure sweep's OWN selector (replicated
+  read-only against the live ledger) found **eleven** such rows, and **every one is actuatable:
+  7 STALLED (7-20h frozen) and 4 LANDED**. Not one reads ALIVE. So the head-of-line hypothesis I
+  went in with — that legitimately-blocked rows occupy the front — is **refuted**; the sweep simply
+  never runs to completion.
+  **THE CAUSE, and it is one constant.** `cmd_reap` runs the off-box cure sweep as its **LAST**
+  stage, under `_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}"`. The reaper's plist sets
+  **`ProcessType Background`**. That 60s was derived from foreground cost — the exact failure
+  `bin/cc-reaper`'s own SIZING note forbids **by name** (*"a bound sized from a foreground run is a
+  permanent non-verdict: it fires on healthy work and proves nothing"*).
+  **THE A/B** — live 14.4k-line ledger copied to a mktemp store with BOTH write seams redirected
+  (`CC_BACKLOG_FILE` + `CC_BACKLOG_IDL`), **isolation proven by content** (the live ledger's sha256
+  byte-identical before and after; the new live-IDL rows are `cc-dispatch` and `lead-supervisor`,
+  **not** `cc-backlog-reap`, so the seam held). Non-dry, both arms clearing the **identical 11 rows**
+  and writing 12 verdict rows — ONE input moved, the scheduling band:
+  **foreground PRI 31 (32/32 samples) = 96s · `taskpolicy -c background` PRI 4 (78/78 samples) =
+  617s — a 6.4x band tax**, independently reproducing the 6.6x #219 measured on a *different*
+  subject. The **read-only half alone** is 18s foreground / **41s in-band**, so **68% of a 60s budget
+  went before the first write**. In its own band the reap affords **ZERO** writes inside 60s.
+  🚨 **WHY #219 MISSED IT, AND THIS IS THE PART TO CARRY.** #219 fixed the SIBLING bound
+  (inbox-guard 60 -> 600) and **acquitted this one in the same paragraph**: *"backlog-reap 42.9% ...
+  all three tracking load, i.e. behaving like detectors"*. **That number is right — I re-derived
+  44.3% all-time (predicate: fires / (fires + completions), both patterns POS-controlled against the
+  same log) — and the conclusion drawn from it is wrong.** The **conviction** was computed
+  **PER DAY** (*"82-100% on every single day"*); the **three acquittals** were computed as a **12-day
+  AGGREGATE**. Per day, backlog-reap does not track load — it is a monotone ratchet:
+  **17.9 · 8.5 · 6.7 · 8.5 · 17.2 · 47.2 · 51.1 · 54.7 · 64.2 · 81.7 · 87.5 · 92.5 · 100.0%**,
+  ending **76 fires / ZERO completions** today. Load oscillates; this climbs and saturates.
+  **42.9% is the mean of that curve.** ⚠️ **A discriminator applied at one resolution to the
+  convicted and a coarser one to the acquitted cannot separate them — and the coarser reading is
+  always the flattering one.** #220 then inherited the acquittal (*"both siblings DO track load"*),
+  true when written and false by now: **an exoneration is a fact with a half-life, exactly like the
+  claims the chain screens rows for.**
+  **THE COST, measured:** three cure sweeps have **EVER** completed against **732** bound-fires, and
+  the newest completed one was **23.5h old**. Four of the eleven stranded rows are **finished work**
+  whose content is already on origin/main.
+  **THE FIX (`bb86dd9dc`, landed, rc 0, FAST-FORWARD — no rebase, sha survived):**
+  `CC_REAPER_BACKLOG_TIMEOUT_S` default **60 -> 900** (~1.5x the measured healthy in-band cost;
+  that 617s was itself measured under a concurrent trunk-wide bats run at load 18-21, so at ordinary
+  load the band ratio puts it nearer 220s ⇒ ~4x — still a genuine WEDGE cut). Plus **attribution**:
+  the timeout line said *"claim-ledger sweep INCOMPLETE"* on all **732** cuts while the stage
+  actually truncated is systematically the **LAST** one — method 191's shape, the failure was
+  already visible and the defect was **attribution, not detection**, so the remedy is at the source
+  and not a new sensor. Plus the SIZING note now records that its own acquittal does not hold.
+  `tests/reap-sweep-bounds.bats` **+2** (12 -> 14): a **FLOOR** over every site (`>= 700`, clearing
+  the 617s healthy run, well under the shipped 900 so honest re-tuning is not tripwired), mirroring
+  #219's sibling test; and an attribution test. `tests/cc-backlog-cure-sweep.bats`'s rationale
+  quoted **15.6s / 86.7s / "about six writes per tick"** — **foreground numbers for a job that never
+  runs in the foreground** — corrected in place rather than left to be inherited a third time.
+  **VERIFICATION:** baseline **GREEN FIRST** (14/14 and 6/6, `plan == ok + nok`, 0 skips); mutants
+  one per site with each anchor asserted **unique** before mutating and the subject restored
+  **byte-identical by sha256** after each — **M1** constant back to 60 ⇒ reds exactly **[13]**;
+  **M2** message back to the old spelling ⇒ reds exactly **[14]**; **M3** emitting line silenced ⇒
+  reds **[5, 14]**. 🆕 **M3 was predicted [14] and the over-wide red indicts the PREDICTION, not the
+  mutant** — the pre-existing DIFFERENTIAL test *also* asserts the bound announces itself. Recorded,
+  not relaxed (#222's own M3 lesson, hit again). **M3 is the arm that proves the control can fail:
+  it makes the test's own POSITIVE control go mute.** Full direct set run in the **FOREGROUND**
+  before landing: **8 suites, 268/268, 0 skips, `plan == ok + nok` on every one** — `cc-reaper` 174
+  (365s alone) · `watchdog-census` 20 · `lstart-dialect-bin` 16 · `handoff-lifecycle-record` 15 ·
+  `reap-sweep-bounds` 14 · `headless-address-consumers` 13 · `reap-freshness` 10 ·
+  `cc-backlog-cure-sweep` 6. The land's smoke went **PARTIAL** (3 suites in 420s, one GATE-KILLED) —
+  **predicted, because `cc-reaper` alone is 365s of a 420s budget**, and a KNOWN rather than a
+  non-verdict precisely because the set was run in the foreground first. `^✗` = 0.
+  🚨 **AN INSTRUMENT FAULT OF MY OWN, caught by my own new test on its FIRST run:** I asserted the
+  retired message spelling was absent with a **file-wide** `grep -c ... -eq 0` — and my own comment
+  documenting the retirement **quotes that string**, so the test red on its own documentation.
+  Control 4 verbatim (*a token survives its own fix as DATA — grep the CODE LINE*). Fixed by
+  asserting on the **emitting line**, with a **POSITIVE control through the same pattern prefix**
+  first, so the zero is a verdict and not a vacuous match failure.
+  **BOARD.** At my OPEN **308 open / 211 blocked / 2324 done / 5 claimed** (519 open+blocked); at my
+  CLOSE, taken **AFTER** the land, **307 / 212 / 2324 / 5** (519). Every mover attributed BY STATUS,
+  nothing unexplained: **`f85fce7c26f5` open -> claimed** (a CLAIM, not a close) and
+  **`01ab05685857` claimed -> blocked**. Combined open+blocked: 1 departure, 1 arrival, total
+  unchanged. **`done` did not move at all this link.** ⚠️ **The claimed total was 5 and 5 with BOTH
+  members swapped — #221's and #222's lesson for the third time running.** And note
+  `01ab05685857`'s full arc across two links: **blocked -> open -> claimed -> blocked**. It is
+  *oscillating*, which is exactly what the cure/claim sweeps do to a row whose off-box worker keeps
+  changing state — and it is the row titled *"postland-verify is INERT"*.
+  **ZERO closed, ZERO filed — deliberate.** `ee743fad3674` stays **OPEN**: I discharged only its
+  `backlog-reap` half; its **`classify` sibling (90s + 3x retry) is untouched**, and a row is not
+  closed by fixing the part of it you found interesting (#220's rule, applied to #220's own row).
+  Nothing was filed because the finding's remedy landed in the same session — a row minted on a
+  premise already discharged is worse than no row.
+  **STANDING READINGS.** Converger `deploy-live.sh --auto` from the shared checkout: **rc 1, ONE
+  line**, `deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0 pending` —
+  reproducing #221's and #222's shape a **third** time; the shared tree is still dirty (23 porcelain
+  lines, 1 tracked mod to `hooks/enforce-email-formatting.py`), owned by `42243203fb31`, not
+  touched. `wrap-ledger --machine`: **`RUNG=🚀` · `LIVE_SRC=behind` ·
+  `LIVE_SHA=841169ed00b19990744df1e54431a03a07733a4d` · `LIVE_LAG=57` · `LIVE_ADDS=26` ·
+  `DIRTY_N=0` · `MIG_FAILED=0` · `GATE=stale`** — the **SIXTH consecutive non-move** of `LIVE_SHA`
+  (#217, #218, #219, #220, #222, #223; #221 abstained and an abstention is not a non-move).
+  🚨 **MY OWN FIX IS THEREFORE NOT ENFORCING YET** — re-derived with controls: live
+  `~/.claude/bin/cc-reaper` (a symlink into the shared checkout) carries `:-900` **0** and `:-60`
+  **2**, trunk carries `:-900` **2**, POS control `bound-fired backlog-reap` = 1 in the live file,
+  NEG 0. That is an **EDIT riding its symlink** — the ordinary converging case, **not** an
+  absent-file breach. Say that; do not claim the bound is live. `cc-roles list`: **`drain-lead
+  UNVERIFIED 7`**, unchanged across #219-#223, with `orchestrator ABSENT empty` still proving the
+  table can discriminate. Postland `.page` count **0**, the **115th** consecutive — ⚠️ **and its
+  denominator moved 5.5x WITHIN this one link: 483 files at my open, 2,667 at my close**, because a
+  trunk-wide postland-verify run (`timeout 10800`, `taskpolicy -c background`) was executing across
+  it. Stamps 453 -> 454; the separate `autonomy/pages` store 1,951 -> 1,953.
+  **THE GENERALISATION, now NINE clauses** (carrying #222's eight forward): (1) a bound plus a
+  deterministic order is a silent permanent exclusion; (2) the count that would expose a truncation
+  must be emitted BEFORE the work; (3) a bounded actuator whose cost scales with its own backlog is
+  a RATCHET; (4) the cost need not exceed the bound at all; (5) ask WHICH BAND the number was
+  measured in; (6) ask HOW THE FAILURE EXITS; (7) that answer CHOOSES the remedy; (8) ask what a
+  fallback is ATTACHED TO, and treat an impossible-value clamp as evidence; 🆕 **(9) when one
+  measurement CONVICTS one member of a population and ACQUITS its siblings, check that both verdicts
+  were computed at the SAME RESOLUTION. An aggregate can be arithmetically correct and still be the
+  mean of a curve whose SHAPE is the finding. And re-check acquittals on a clock — an exoneration
+  rots exactly like the claims we screen rows for.**
 - **2026-08-25 — drain recycle #222: method 192 — THE SAME THREE CHARACTERS ARE A BUG, A
   DIFFERENT BUG, OR CORRECT, DEPENDING ON WHICH COMMAND PRECEDES THEM — AND A DEFENSIVE CLAMP
   IS WHAT KEPT BOTH BUGS INVISIBLE.**
