@@ -1157,7 +1157,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -qE '"smoke":"(green|red|partial|skipped|none-[a-z]+)"' "$LAND_LOG"
   grep -qE '"smoke_n":[0-9]+' "$LAND_LOG"
   grep -qE '"smoke_s":[0-9]+' "$LAND_LOG"
-  grep -qE '"net":"(live|inert|none)"' "$LAND_LOG"
+  grep -qE '"net":"(live|uncertified|inert|none)"' "$LAND_LOG"
   grep -q '"selected_n":' "$LAND_LOG"
   grep -q '"red":""' "$LAND_LOG"                            # green ⇒ no arm claimed a red
 }
@@ -1258,30 +1258,67 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
 # literal: a fixture pinned to a wall-clock constant changes meaning as the clock advances and has
 # already taken the fleet's gate down on a calendar boundary with no code change.
 
-@test "net INVERSION: an INERT verifier WARNS and the land PROCEEDS — never a corpus degrade" {
+@test "net INVERSION: a non-certifying net WARNS and the land PROCEEDS — never a corpus degrade" {
   # v1: stamps exist but the newest GREEN one has gone cold ⇒ "do not narrow" ⇒ run the FULL
-  # corpus. That is the amplifier law (R7) at its purest: the net goes inert precisely when the box
+  # corpus. That is the amplifier law (R7) at its purest: the net goes quiet precisely when the box
   # is wedged, and the response was to add 40 minutes of bats per land to a wedged box. v2 keeps
-  # the detection and drops the escalation — warn, attest net:"inert", land. Nothing is lost: the
-  # land never made the full-suite claim, so an inert net costs verification LATENCY, which R9's
-  # freshness alarm surfaces to the operator.
+  # the detection and drops the escalation — warn, attest the state, land. Nothing is lost: the
+  # land never made the full-suite claim, so a net that is not certifying costs verification
+  # LATENCY, which R9's freshness alarm surfaces to the operator.
+  #
+  # THE FIXTURE IS THE ALIVE-BUT-RED POPULATION, and its old comment on the red stamp read
+  # `red ≠ liveness` — backwards, and it is the error backlog 01ab05685857 was filed off. A stamp
+  # written NOW is the strongest liveness evidence there is, whatever its verdict; what a red stamp
+  # withholds is CERTIFICATION. So this shape must never print the launchd remedy: the stamps dir
+  # is advancing under the operator's nose while the message tells them to go check that the job is
+  # loaded. The `inert` arm below owns that message, on the fixture that earns it.
   scope_fixture
   stub_selector "" "tests/a.bats"
   mkdir -p "$POSTLAND_DIR/stamps"
   printf '{"head":"deadbee","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/deadbee.json"
-  printf '{"head":"newer","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/newer.json"   # red ≠ liveness
+  printf '{"head":"newer","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/newer.json"   # ALIVE, not green
   touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/deadbee.json"   # ran once, went cold
   landable feat/stale-net stn.sh
 
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                                        # LANDS — the whole inversion
-  echo "$output" | grep -q "looks INERT"                     # …loudly
+  echo "$output" | grep -q "RUNNING but trunk is NOT CERTIFYING"   # …loudly
   echo "$output" | grep -q "This land PROCEEDS"
-  grep -q '"net":"inert"' "$LAND_LOG"                        # …and durably
+  echo "$output" | grep -q "cc-blockers"                     # the remedy that fits this fault…
+  [ "$(echo "$output" | grep -c "launchctl")" -eq 0 ]        # …and NOT the one that does not
+  [ "$(echo "$output" | grep -c "looks INERT")" -eq 0 ]      # the mis-attribution, pinned dead
+  grep -q '"net":"uncertified"' "$LAND_LOG"                  # …and durably
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # the smoke is UNCHANGED by the net…
   [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]              # …and no corpus was summoned
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- stn.sh)" ]
+}
+
+@test "net: NOTHING has stamped at all ⇒ 'inert' and the launchd remedy — the other population" {
+  # The discriminator's other side, on the same fixture shape as the test above with ONE byte of
+  # difference: the red stamp is aged too, so no verdict of any kind is recent. Now the job really
+  # has stopped and `launchctl list` really is the action. Written as its own test rather than an
+  # extra assertion because a single test that passed on both fixtures is exactly what let one
+  # state serve two faults for as long as it did.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  mkdir -p "$POSTLAND_DIR/stamps"
+  printf '{"head":"deadbee","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/deadbee.json"
+  printf '{"head":"newer","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/newer.json"
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/deadbee.json"
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/newer.json"   # …and nothing since
+  landable feat/dead-net dnn.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                        # still LANDS — unchanged
+  echo "$output" | grep -q "looks INERT"
+  echo "$output" | grep -q "launchctl list"                  # the remedy that fits THIS fault
+  [ "$(echo "$output" | grep -c "NOT CERTIFYING")" -eq 0 ]
+  grep -q '"net":"inert"' "$LAND_LOG"
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # the smoke is UNCHANGED by the net…
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]              # …and no corpus was summoned
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- dnn.sh)" ]
 }
 
 @test "net: a fresh GREEN stamp ⇒ net:live, no warning; kill switch ⇒ net:none" {

@@ -1346,34 +1346,77 @@ detect_trunk() {
   printf '%s' "$t"
 }
 
-postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — never blocks a land.
+postland_net_live() {  # sets NET_STATE=live|uncertified|inert|none. ALWAYS 0 — never blocks a land.
   # ABSENCE IS LOUD, but loudness is the whole remedy (v2). v1 read an inert net as "do not
   # narrow" and DEGRADED THE LAND TO THE FULL CORPUS — a fail-closed path picking the MORE
   # expensive action, i.e. the amplifier law (R7) in its purest form: the net is inert precisely
   # when the box is wedged, and the response was to add 40 minutes of bats per land to a wedged
-  # box. v2 keeps the detection and drops the escalation: WARN on stderr, attest net:"inert", and
+  # box. v2 keeps the detection and drops the escalation: WARN on stderr, attest the state, and
   # LAND. Correctness is not lost — the land never claimed the full suite in the first place; what
-  # an inert net costs is verification LATENCY, which R9's freshness alarm surfaces to the
-  # operator (cc-blockers / operator-readout), where a human can act on it.
+  # a net that is not certifying costs is verification LATENCY, which R9's freshness alarm surfaces
+  # to the operator (cc-blockers / operator-readout), where a human can act on it.
   # No stamps dir / no green stamp yet ⇒ the net simply is not adopted (the bootstrap land).
+  #
+  # ⚠️ ONE STATE MAY NOT SERVE TWO FAULTS, and this guard did exactly that until 2026-08-25.
+  # `inert` was computed from the newest GREEN stamp ALONE, so it fired identically on two
+  # populations whose remedies are opposites:
+  #   * the job is DEAD           — nothing has stamped at all; the fix is launchctl.
+  #   * the job RUNS and TRUNK IS RED — it stamps every sweep and every verdict is red, so the
+  #     newest green goes cold while the stamps dir advances the whole time; the fix is the failing
+  #     suites, and launchctl is a no-op that costs the operator the trip.
+  # Which population the live box was in is settled, and by trunk rather than by its stamps:
+  # `scripts/typed-send-lint.sh` scans RED on origin/main here (two un-echo-verified session-send
+  # sites, scripts/handoff-fire.sh:2183 and :5415), and tests/typed-send-lint.bats:309 asserts that
+  # lint prints `clean` on the REAL tree. That wrapper is NOT in scripts/host-suites.manifest, so it
+  # is in the tree corpus of every sweep, and its failure is a grep over the tree — deterministic,
+  # not load-dependent, so it survives the retry ladder into a RED stamp every time. The verifier
+  # was doing its job perfectly and saying so; only this message disagreed.
+  # This file already carries the law it broke, 600 lines up at the `red` attestation: one value
+  # serving both "answered no" and "could not ask" fabricated 80 of 156 findings
+  # (memory: sensor-default-off-makes-blindness-the-shipping-path). MEASURED CONSEQUENCE, and the
+  # reason this is a fix rather than a tidy-up: backlog 01ab05685857 was filed off this message and
+  # its title asserts "postland-verify is INERT … nothing is re-proving trunk" — while its own next
+  # clause names the THREE RED SUITES the net had just stamped, which is proof the job was alive.
+  # The dispatch that item bought went to the launchd job; nothing went to the red suites. The
+  # fixture at tests/ship-land.bats ("net INVERSION") encoded the same error in its comment
+  # (`red ≠ liveness`): a fresh RED stamp is the strongest evidence of liveness there is — what it
+  # is not is CERTIFICATION, and those are the two words this function now keeps apart.
+  #
+  # SCOPE, deliberately narrow: this picks WHICH REMEDY to print, nothing else. Both non-live arms
+  # still warn, still land, still attest. bin/cc-blockers owns the sharp adjudication — it has the
+  # land.log clock and a run-in-progress sensor this path does not, and splits the same population
+  # four ways (verifier-inert · trunk-red · deploy-lag · never-green). Residual, unchanged from
+  # before and NOT newly introduced: a quiet trunk stamps nothing because the net correctly abstains
+  # on an already-decided tree, and reads as `inert` here. That case read `inert` under the old
+  # predicate too, so nothing regressed; cc-blockers' land.log clock is what tells it apart.
   NET_STATE="none"
   [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
-  local dir age max newest=0 m p
+  local dir age sage max newest=0 seen=0 m p
   dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
   [[ -d "$dir" ]] || return 0
   # A stamp is GREEN by CONTENT ("verdict":"green"), not by filename — the naming is T3's to
-  # choose and must not be a hidden coupling. Newest green stamp's mtime is the liveness clock.
+  # choose and must not be a hidden coupling. Newest green stamp's mtime is the CERTIFICATION
+  # clock; newest stamp of ANY verdict is the LIVENESS clock. One pass, both clocks.
   while IFS= read -r p; do
-    grep -qs '"verdict"[[:space:]]*:[[:space:]]*"green"' "$p" || continue
     m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo 0)"
+    [[ "$m" -gt "$seen" ]] && seen="$m"
+    grep -qs '"verdict"[[:space:]]*:[[:space:]]*"green"' "$p" || continue
     [[ "$m" -gt "$newest" ]] && newest="$m"
   done < <(find "$dir" -type f 2>/dev/null)
   [[ "$newest" -gt 0 ]] || return 0
   max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
   age=$(( ( $(date +%s) - newest ) / 3600 ))
   if [[ "$age" -lt "$max" ]]; then NET_STATE="live"; return 0; fi
+  sage=$(( ( $(date +%s) - seen ) / 3600 ))
+  if [[ "$sage" -lt "$max" ]]; then
+    # ALIVE, NOT CERTIFYING. Never name launchd here: the stamps dir is advancing, so the one
+    # instruction that reads as an action would send the operator to a job that is already loaded.
+    NET_STATE="uncertified"
+    echo "⚠ ship-land: the post-land verifier is RUNNING but trunk is NOT CERTIFYING — newest GREEN stamp is ${age}h old (max ${max}h) while a verdict was stamped ${sage}h ago, so the job is alive and every recent verdict is non-green. This land PROCEEDS (a land never made the full-suite claim), but the live layer stays pinned until a green exists: the fault is the failing suite(s), NOT launchd. Run \`cc-blockers\` for the named row. Attested net:\"uncertified\". (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+    return 0
+  fi
   NET_STATE="inert"
-  echo "⚠ ship-land: the post-land VERIFIER looks INERT — newest GREEN stamp is ${age}h old (max ${max}h). This land PROCEEDS (a land never made the full-suite claim), but nothing is re-proving the trunk: check that com.claude.postland-verify is loaded (launchctl list) and that its stamps dir is advancing. Attested net:\"inert\". (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  echo "⚠ ship-land: the post-land VERIFIER looks INERT — newest GREEN stamp is ${age}h old (max ${max}h) and NOTHING has stamped for ${sage}h, so the job itself has stopped. This land PROCEEDS (a land never made the full-suite claim), but nothing is re-proving the trunk: check that com.claude.postland-verify is loaded (launchctl list) and that its stamps dir is advancing. Attested net:\"inert\". (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
   return 0
 }
 
