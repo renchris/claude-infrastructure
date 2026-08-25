@@ -120,7 +120,37 @@ For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5`
 high while its statusline still read "Fable 5". Omit the flag and prior behaviour is unchanged
 (`high`). Same flag, same values and same reason as `lr-handoff.sh --effort` (`0c00b814`).
 
-**Layout** (default = window per account, split panes; ask if unsure): create an iTerm2 window per
+🚨 **Layout — ONE OS WINDOW PER MONITOR, split panes inside each. Do not hand-roll it; pipe the
+winners into `bin/cc-resume-layout.sh`** (operator ruling 2026-08-24):
+
+```
+python3 ~/.claude/scripts/limit-recover/lr-select.py --scan --allow-missing-cwd --max-total N \
+  | bash ~/Development/claude-infrastructure/bin/cc-resume-layout.sh
+```
+
+It takes lr-select's TSV verbatim, splits the batch across the monitors that are NOT the one you
+are on, opens one OS window per monitor with the group's panes split inside it, equalizes them, and
+places each window on its screen. `--per-window N` · `--stagger SECS` · `--use-all-screens` ·
+`--dry-run`.
+
+**Why this is a rule and not a preference.** The two sentences below said "a window per account"
+and "anchor the split to the CALLING pane" — neither says where the WINDOWS go. Recovering 10
+sessions on kitty, that under-specification resolved to `kitty @ launch --type=tab` ten times: ten
+tabs crammed into the one OS window the operator was reading, on one monitor, with three monitors
+empty. Operator: *"do a window per monitor screen with split panes across each."* Three traps that
+each cost a round, all now handled inside the script — read its header before changing it:
+**(1)** the `splits` layout HALVES the current pane per split, so four chained splits came out
+149/74/36/36 columns, and a 36-column pane wraps its own status footer, which is how "the nudge
+did not take" got misread — cure is `layout_action equalize` (config/kitty.conf:317), NOT
+`goto-layout grid` (`enabled_layouts` is `splits,stack`, so grid is refused).
+**(2)** `--target-tab id:N` matches a TAB id, not a window id — pass `--target-tab window_id:N`.
+**(3)** an OS window's Accessibility name is its active pane's title, which Claude Code repaints
+with a spinner glyph, so matching on it is a race; launch with `--os-window-title <marker>`, which
+overrides program-set titles, and match the marker you own. Placement is Accessibility (System
+Events) because kitty has no move-to-display remote command; the caller's own screen is identified
+by `platform_window_id` → CGWindowList bounds, never by "frontmost" (measured wrong on this box).
+
+**Legacy (iTerm2), and still the fallback when there is one screen:** create an iTerm2 window per
 account with `create window` then `split vertically/horizontally with default profile`, and run the
 `reso-resume-one` command in each pane. NEVER reuse the current window's `current session` for the first
 pane — that's YOUR tab (off-by-one); always create a fresh window. Protect your own session by
@@ -143,7 +173,10 @@ other windows as needed" is the explicit override, not a restriction the default
 further splits by passing the previous call's printed window id as the next `--anchor`, which is
 how several resumed sessions stack into one column beside you. To relocate an ALREADY-RUNNING
 pane after the fact (not at launch time), `kitty @ detach-window --match id:<id> --target-tab
-id:<any-window-in-target-tab>` moves it live without killing the process — or right-click
+window_id:<any-window-in-target-tab>` moves it live without killing the process. ⚠️ It is
+`window_id:`, **not** `id:` — that field matches a TAB id, so passing a window id there silently
+lands the pane in whatever tab happens to hold that number (measured 2026-08-24: panes meant to
+join window 3's tab landed in an unrelated tab 3 instead). Or right-click
 (cmd+right) the pane for the same menu, point-and-click (`bin/kitty-pane-menu`, config/kitty.conf
 §6c — iTerm2-parity "Move Session to…").
 Verify your OWN window id from `$KITTY_WINDOW_ID` directly — do NOT infer "which pane is me" from
