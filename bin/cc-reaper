@@ -271,6 +271,10 @@ INFLIGHT_BELT="${CC_REAPER_INFLIGHT_BELT:-1}"          # operator kill-switch fo
 GOAL_BELT="${CC_REAPER_GOAL_BELT:-1}"                  # operator kill-switch for leg 4 alone
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
+# R5e (2026-08-25, recycle #226): the registry is read ONLY to ATTRIBUTE the blind-spot delta, never
+# to compute it — live_pane_count stays registry-independent (see its header). Same spelling as
+# cc-sessions:51 so a test that isolates one isolates both.
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
 # cc-notify must resolve under launchd's bare default PATH — env override → beside-script bin → ~/.claude/bin
 # → PATH (mirrors lead-supervisor's resolve order; the reaper's own NOTIFY_BIN seam is added for tests).
@@ -917,6 +921,56 @@ live_pane_count(){
     END { print c+0 }'
 }
 
+# ── R5e (2026-08-25, recycle #226): ATTRIBUTION for the live−enumerated gap ─────────────────────
+# THE DEFECT: two diagnostics in this file name OPPOSITE causes for the SAME observation, each
+# unconditionally, and neither reads the one store that decides between them.
+#   self_check (below)  — delta > tol  ⇒ "a spawn mode isn't registering in cc-registry"
+#   R5c (in sweep)      — enum 0, rc 0 ⇒ "the enumerator failed open"
+# When enum is 0 and live > 0 and classify exited 0, BOTH fire in the same sweep and contradict each
+# other. MEASURED on this box 2026-08-25, read-only: live_pane_count 18 · cc-registry 16 rows ·
+# `cc-classify --all --json` 7 entries at rc 0, and all 7 paneUUIDs are a SUBSET of the registry's.
+# So 9 of the 11-pane delta are registered AND unenumerated — the self-check's sole asserted cause is
+# wrong about 9 of 11, and has been asserted that way for 676+ consecutive persisted sweeps
+# (`self-check page REFUSED: live=29 enum=0 delta=29 (persisted 676 sweep(s))`, 2026-08-23T21:03:10Z).
+# THE DISCRIMINATOR IS FREE AND LOCAL — the registry's own row count, which PARTITIONS the delta:
+#     (live − enum)  ==  (live − reg)            +  (reg − enum)
+#      the delta          genuinely unregistered    registered but not enumerated
+# The identity holds by construction, and the code below clamps so it holds even if `enum` ever
+# exceeds `reg` (a future non-registry source in cc-sessions would do that) — a partition is a
+# finding only if its parts sum to the whole.
+# WHY THIS DOES NOT COMPROMISE live_pane_count's DELIBERATE REGISTRY-INDEPENDENCE: the truth signal
+# is still ps. The registry is consulted only to say WHICH of two causes the gap belongs to, which is
+# a question about the registry — asking it of the registry is the point, not a leak.
+registry_row_count() { # → row count, or -1 for UNKNOWN. A probe that cannot find its store must say
+                       # UNKNOWN, never 0: an absent dir and an empty one want OPPOSITE words here.
+  [ -d "$REG_DIR" ] || { printf '%s\n' -1; return 0; }
+  local f n=0
+  for f in "$REG_DIR"/*.json; do [ -e "$f" ] && n=$(( n + 1 )); done
+  printf '%s\n' "$n"
+}
+
+blindspot_cause() { # <live> <enum> <delta> → one clause naming the cause(s) the numbers SUPPORT
+  local live="$1" enum="$2" delta="$3" reg unreg unenum
+  reg="$(registry_row_count)"; case "$reg" in ''|*[!0-9-]*) reg=-1 ;; esac
+  # Each arm leads with a PARSEABLE token before the prose. The four tokens are mutually
+  # non-substring on purpose: the first draft of this used the prose itself, and "a registration gap"
+  # is a substring of "NOT a registration gap", so a grep for one matched the other and two opposite
+  # arms were indistinguishable to every consumer — including this file's own tests.
+  if [ "$reg" -lt 0 ]; then
+    printf 'cause=UNATTRIBUTED — no readable cc-registry at %s, so neither a registration gap nor an enumeration failure can be ruled out' "$REG_DIR"
+    return 0
+  fi
+  unreg=$(( live - reg )); [ "$unreg" -lt 0 ] && unreg=0; [ "$unreg" -gt "$delta" ] && unreg="$delta"
+  unenum=$(( delta - unreg ))
+  if [ "$unreg" = 0 ]; then
+    printf 'cause=ENUMERATION — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are registered-but-unenumerated; the enumerator is the subject, NOT a spawn mode failing to register' "$reg" "$live" "$unenum"
+  elif [ "$unenum" = 0 ]; then
+    printf 'cause=REGISTRATION — cc-registry holds %d row(s) for %d live pane(s), so all %d unseen are unregistered; a spawn mode is not registering' "$reg" "$live" "$unreg"
+  else
+    printf 'cause=BOTH — cc-registry holds %d row(s) for %d live pane(s), so the gap splits: %d unregistered (a spawn mode is not registering) + %d registered-but-unenumerated (the enumerator)' "$reg" "$live" "$unreg" "$unenum"
+  fi
+}
+
 # clean AND the branch's content is on trunk — the load-bearing work-landed re-check (post-classify race
 # guard). P0-17 landed-by-CONTENT (a18 L-10): a squash/cherry-pick land (different sha, same content)
 # leaves HEAD "N ahead" by COUNT though the work is durably on trunk; a count check DEFERred it forever.
@@ -1473,14 +1527,14 @@ self_check() { # <reap> <enumerated>
     return 0
   fi
   if [ "$reap" = 0 ]; then
-    say "cc-reaper self-check: WOULD-PAGE — $live live panes vs $enum enumerated (Δ$delta unseen; a spawn mode isn't registering)"; return 0
+    say "cc-reaper self-check: WOULD-PAGE — $live live panes vs $enum enumerated (Δ$delta unseen; $(blindspot_cause "$live" "$enum" "$delta"))"; return 0
   fi
   mkdir -p "$PAGEDIR" 2>/dev/null || true
   local consec paged
   read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
   consec=$(( consec + 1 ))
   if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
-    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): a spawn mode isn't registering in cc-registry, so they can't be classified or reaped. Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
+    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): $(blindspot_cause "$live" "$enum" "$delta"). Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
                 "selfcheck-blind:delta${delta}" || true
     idl_selfcheck "$live" "$enum" "$delta"
     # Same three-way accounting as handle_surface: the blind-spot FINDING is recorded either way, but
@@ -1620,8 +1674,13 @@ sweep() {
     local live_now; live_now="$(live_pane_count 2>/dev/null)"
     case "$live_now" in ''|*[!0-9]*) live_now=0 ;; esac
     if [ "$live_now" -gt 0 ]; then
-      say "cc-classify returned an EMPTY classification while $live_now live pane(s) exist — NO VERDICT this sweep (the enumerator failed open); reaping nothing"
-      log "classify EMPTY-BUT-POPULATED: 0 enumerated vs $live_now live pane(s) — enumerator failed open at rc=$crc; sweep yields NO candidates"
+      # R5e (recycle #226): this line used to assert "the enumerator failed open" unconditionally,
+      # which is the EXACT MIRROR of self_check's unconditional "a spawn mode isn't registering" —
+      # two sibling diagnostics naming opposite causes for the same sweep. An empty classification at
+      # rc 0 over an EMPTY registry is a registration gap, not an enumerator fault, and only the
+      # registry tells them apart. Same helper, so the two can no longer contradict each other.
+      say "cc-classify returned an EMPTY classification while $live_now live pane(s) exist — NO VERDICT this sweep ($(blindspot_cause "$live_now" 0 "$live_now")); reaping nothing"
+      log "classify EMPTY-BUT-POPULATED: 0 enumerated vs $live_now live pane(s) — $(blindspot_cause "$live_now" 0 "$live_now"); classify rc=$crc; sweep yields NO candidates"
     fi
   fi
   local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i

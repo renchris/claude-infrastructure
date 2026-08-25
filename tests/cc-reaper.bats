@@ -165,6 +165,12 @@ EOF
   export CC_REAPER_GUARD_BIN="$D/bin/guard"
   export CC_REAPER_PAGEDIR="$D/pages"
   export CC_REAPER_IDL="$D/idl.jsonl"
+  # HERMETICITY (R5e, recycle #226): the blind-spot ATTRIBUTION reads cc-registry to tell a
+  # registration gap from an enumeration failure. Unset, that read lands on the operator's LIVE
+  # ~/.claude/cc-registry and every self-check assertion below would depend on the real fleet's
+  # size at the moment the suite runs. Pointed at $D and left ABSENT by default, so the default is
+  # the honest "cause UNATTRIBUTED" arm — which is itself the no-store branch, exercised explicitly.
+  export CC_REGISTRY_DIR="$D/registry"
   export CC_PAGE_TO=""                        # neutralize any inherited real desk target
   export CC_PAGE_TO_FILE="$D/desk"            # absent by default → no notify; opt in via set_desk
   export CC_REAPER_SELFCHECK_MIN_PERSIST=1    # one sweep pages a real blind spot (hysteresis tests override)
@@ -3036,4 +3042,105 @@ EOF
   # POSITIVE control through the SAME pipeline: the healthy stubs really did run and really did log,
   # so the three zeros above are verdicts rather than a sweep that never reached these forks.
   [ "$(grep -c 'reconcile: cc-reconcile: mock 0 backfilled' "$CC_REAPER_LOG")" -eq 1 ]
+}
+
+# ─── recycle #226 ────────────────────────────────────────────────────────────────────────────────
+# R5e — the blind-spot ATTRIBUTION. self_check asserted "a spawn mode isn't registering in
+# cc-registry" for EVERY positive delta, and R5c asserted "the enumerator failed open" for every
+# empty-at-rc-0 classification. Those are OPPOSITE causes for the same observation, both
+# unconditional, and when enum is 0 with live panes present BOTH fire in one sweep. MEASURED on the
+# live box 2026-08-25, read-only: live 18 · cc-registry 16 rows · classify 7 entries at rc 0, and all
+# 7 paneUUIDs a SUBSET of the registry's ⇒ 9 of the 11-pane delta were registered AND unenumerated,
+# so the asserted cause was wrong about 9 of 11.
+# The registry row count partitions the delta exactly: (live−enum) == (live−reg) + (reg−enum).
+# One test per ARM, plus the two states a naive count collapses (absent dir vs EMPTY dir) — that pair
+# is the one that matters, because `find | wc -l` renders both as 0 and would turn "I cannot tell"
+# into a confident "everything is unregistered".
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+set_registry() { # <n> — n hermetic cc-registry rows under $CC_REGISTRY_DIR
+  mkdir -p "$CC_REGISTRY_DIR"
+  local k
+  for ((k=0; k<$1; k++)); do printf '{}\n' > "$CC_REGISTRY_DIR/row-$k.json"; done
+}
+
+@test "R5e: registered-but-unenumerated is NOT reported as a spawn mode failing to register" {
+  # THE PRODUCTION CASE (9 of 11 on the live box). Every live pane HAS a registry row, so the
+  # registration gap is refuted by the sweep's own machine state and the enumerator is the subject.
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1      # 1 enumerated
+  set_registry 4                                    # ...but 4 registered ⇒ the 3 unseen ARE registered
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 3' "$D/notify-calls"                                  # the finding still stands
+  [ "$(grep -c 'cause=ENUMERATION' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'cause=REGISTRATION' "$D/notify-calls")" -eq 0 ]
+  # and the retired claim is gone from the EMITTING record, not merely from the file (control 4).
+  [ "$(grep -c "isn't registering" "$D/notify-calls")" -eq 0 ]
+}
+
+@test "R5e: a genuine registration gap IS still named as one (the fix did not just invert the bug)" {
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1
+  set_registry 1                                    # 1 registered, 4 live ⇒ all 3 unseen unregistered
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 3' "$D/notify-calls"
+  [ "$(grep -c 'cause=REGISTRATION' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'cause=ENUMERATION' "$D/notify-calls")" -eq 0 ]
+}
+
+@test "R5e: a delta with BOTH causes present splits, and the two parts sum to the delta" {
+  # A partition is a finding only if its parts sum to the whole — asserted here, not assumed.
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1
+  set_registry 2                                    # 4 live, 2 registered, 1 enumerated
+  run "$R" sweep --reap                             # ⇒ delta 3 = 2 unregistered + 1 unenumerated
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 3' "$D/notify-calls"
+  [ "$(grep -c 'cause=BOTH' "$D/notify-calls")" -eq 1 ]
+  grep -q '2 unregistered' "$D/notify-calls"
+  grep -q '1 registered-but-unenumerated' "$D/notify-calls"
+}
+
+@test "R5e: an ABSENT registry says UNATTRIBUTED — it must not read as 'everything is unregistered'" {
+  # THE CONTROL THAT MATTERS, paired with the EMPTY-dir test below: same code path, opposite words.
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1
+  [ ! -d "$CC_REGISTRY_DIR" ]                       # the premise this test rests on, asserted
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 3' "$D/notify-calls"
+  [ "$(grep -c 'cause=UNATTRIBUTED' "$D/notify-calls")" -eq 1 ]
+  [ "$(grep -c 'cause=REGISTRATION' "$D/notify-calls")" -eq 0 ]
+  [ "$(grep -c 'cause=ENUMERATION' "$D/notify-calls")" -eq 0 ]
+}
+
+@test "R5e: R5c stops blaming the enumerator when an EMPTY registry explains the empty classification" {
+  # The MIRROR of the self-check defect, at the sibling site. classify legitimately returns [] at
+  # rc 0 over an empty registry — a registration gap, not an enumerator fault, and the old line
+  # asserted the fault unconditionally. The registry dir EXISTS here and is EMPTY, which the test
+  # above proves is NOT the same state as absent.
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+printf '[]\n'
+exit 0
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  set_live 4
+  set_registry 0                                    # dir present, zero rows
+  [ -d "$CC_REGISTRY_DIR" ]
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # POSITIVE control on the same log through the same pipeline: R5c really did fire this sweep.
+  [ "$(grep -c 'classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s)' "$CC_REAPER_LOG")" -eq 1 ]
+  # ATTRIBUTED TO R5c'S OWN LINE, never file-wide — self_check also fires this sweep and also carries
+  # a cause= token, so a file-wide grep would pass on the sibling's line and prove nothing here.
+  [ "$(grep 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG" | grep -c 'cause=REGISTRATION')" -eq 1 ]
+  # R5c emits at TWO seams — log() and say() — and they fail independently. Asserting only the log
+  # left the operator-facing line uncovered: a mutant that reverted say() alone stayed green here.
+  # Same attribution discipline, on R5c's own stdout line.
+  [ "$(echo "$output" | grep 'EMPTY classification' | grep -c 'cause=REGISTRATION')" -eq 1 ]
+  [ "$(grep -c 'the enumerator failed open' "$CC_REAPER_LOG")" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'the enumerator failed open')" -eq 0 ]
 }
