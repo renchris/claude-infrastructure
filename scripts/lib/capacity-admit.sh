@@ -129,8 +129,43 @@
 # other two.
 
 # The ONE literal for each term. Both gates expand these; neither may carry a number of its own
-# (tests/capacity-admit-coverage.bats case 26 is the ratchet). 2.0/core is §9.5's measured ceiling;
-# 4 GB is M10's reclaimable floor.
+# (tests/capacity-admit-coverage.bats case 26 is the ratchet).
+#
+# 🚨 2.0/core IS NOT A MEASURED FAILURE CEILING, and this comment used to say it was — "2.0/core is
+# §9.5's measured ceiling". §9.5 CONTAINS NO DERIVATION: what it records is that this gate ADMITS at
+# 1.55/core and REFUSES at 2.92/core, which is a demonstration that a threshold thresholds. The
+# number was PICKED at `0fc3a3d33`, whose own body measures the motivating 2026-07-29 lag incident at
+# 2.72/core and states no rule for choosing 2.0 from it; the 2026-08-07 extraction (`a27a4d9485da`)
+# carried the literal forward verbatim, citation included. A number is not derived by being moved.
+#
+# DERIVED 2026-08-25, item e981656df348 → docs/research/max-load-per-core-derivation-2026-08-25.md.
+# The result is that NO number is derivable on this axis, and the reason is one line of arithmetic:
+# the only one of the box's five deaths carrying a load reading (2026-08-05, 25.3 on 10 cores =
+# 2.53/core) sits BELOW 14 of the 15 survived readings on the same box — §8.5.7's 13 samples at
+# 2.92-5.98/core at a CONSTANT 31-32 sessions, and §12.2's 2.16/core with 24 GB free and 0 B
+# compressor. So any ceiling low enough to have refused at the fatal reading refuses 93% of the
+# survived record, and any ceiling high enough to spare that record admits the death. 2.0 is not
+# between those populations either — it is BELOW BOTH, refusing all 16 incident-window readings, so
+# what it separates is "in use" from "idle", never fatal from survived. `capacity-alarm.sh:141-147`
+# has stated the same conclusion about the same axis since 2026-08-06.
+#
+# THEREFORE: DO NOT MOVE IT on capacity grounds, in EITHER direction. Raising it was refuted (the
+# 3.0/core ⇒ 20-22 sessions projection rests on a load ∝ sessions proportionality the data
+# contradicts); lowering it to the one fatal reading would refuse 93% of the survived record. What
+# this number IS: a busy-box speed bump, affordable only because a refusal is bounded to ONE
+# round-trip (CC_FIRE_ADMIT_BUDGET=1, then `basis: budget-expired` admits). The terms that appear in
+# the five panics' actual evidence chains are below in this file — segments, active, headroom — and
+# the highest-volume spawn surface already runs with CC_ADMIT_LOAD_TERM=off (see the load term's own
+# header, `── load term. Switchable PER CALLER`).
+#
+# 4 GB: M10 (`MACHINE_CAPACITY_V2.md:1040`) names `CC_FIRE_MIN_HEADROOM_GB` and states NO value, so
+# "M10's reclaimable floor" is the same shape of citation. NOT audited — that item derived the load
+# constant only — and recorded rather than asserted (§6 of the doc above; see also the headroom
+# probe's header below, which measures this term as having fired 0 times in 127 refusals).
+#
+# (Line numbers are deliberately absent from these two back-references: this comment's own defect is
+# a citation that stopped pointing at what it named, and a `:NNN` into this same file rots the next
+# time anyone edits above it — as this very edit just did to three of them.)
 CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0
 CC_HW_DEFAULT_MIN_HEADROOM_GB=4
 

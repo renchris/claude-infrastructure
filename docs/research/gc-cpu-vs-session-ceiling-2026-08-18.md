@@ -144,6 +144,27 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+> ### ⟶ RESOLVED 2026-08-25 (item `e981656df348`) — and the resolution corrects the paragraph above
+>
+> Derivation: [`max-load-per-core-derivation-2026-08-25.md`](max-load-per-core-derivation-2026-08-25.md).
+> The false citation is fixed at the source (`scripts/lib/capacity-admit.sh`, comment-only).
+>
+> **The finding stands and is strengthened: the number was never derived.** What this section got
+> wrong is the *remedy*. "Set the ceiling from a measured failure point" presumes such a point exists
+> on this axis, and **the record already on disk shows it does not**: the only one of the box's five
+> deaths carrying a load reading (2026-08-05, 25.3/10 cores = **2.53/core**) sits **below 14 of the 15
+> survived readings** on the same box. Any ceiling that would have refused at the fatal reading refuses
+> 93% of the survived record; any ceiling that spares that record admits the death. And 2.0 is below
+> *both* populations, so it separates "in use" from "idle", never fatal from survived.
+>
+> **Consequence for §5's "one next measurement".** The marginal Δload-per-session experiment was this
+> item's stated blocker, and it could not have unblocked it: **m is a denominator; what the constant
+> lacks is a numerator.** The experiment stays worth running for everything else that divides by m
+> (`CC_ADMIT_ACTIVE_CEILING`, `MACHINE_CAPACITY_V2`'s model, every "+N sessions" figure in this file) —
+> it is simply not what gated the ceiling. Disposition: **do not move 2.0 in either direction**; the
+> capacity decision belongs to the terms that appear in the panics' evidence chains (segments, active,
+> headroom), all three already shipped in the same library.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
