@@ -55,6 +55,12 @@ setup() {
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"  # the recipe-once marker lands here
+  # R4 (pre-write freshness, 2026-08-25) denies a draft write unless the session has listed
+  # RECEIVED mail recently. These fixtures are single calls with no session history, so without
+  # this stamp the four ALLOW controls would go red — and the red-proof DENY cases would go green
+  # for the WRONG REASON, which is exactly the vacuity the header note says this suite prevents.
+  # R4's own behaviour is covered in tests/email-freshness-gate.bats, not smuggled in here.
+  touch "$TMPDIR/cc-ms365-inbound-bats"
 }
 
 # decision <gate> <tool_name> <tool_input-json> -> prints allow | deny.
