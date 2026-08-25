@@ -276,3 +276,29 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" -ge 1 ]
 }
+
+@test "SIZING: the inbox-guard bound clears the measured background-band cost of a HEALTHY sweep" {
+  # A bound BELOW a healthy run is a permanent non-verdict — the exact failure the R5 SIZING note
+  # in bin/cc-reaper forbids by name ("it fires on healthy work and proves nothing"), and the
+  # reason this suite's own header refuses to assert wall-clock. The rule was written; the
+  # constant was never re-derived against a run in the band launchd actually gives this job.
+  #
+  # MEASURED 2026-08-25 (recycle #219), isolated 872-box mailbox copy, non-dry, BOTH arms emitting
+  # the identical 362 escalations — one input moved, the scheduling band:
+  #     foreground                     PRI 31 (6/6 samples)     38s
+  #     taskpolicy -c background       PRI  4 (12/48 samples)  249s   <- ProcessType Background
+  # PRI 4 is unreachable without taskpolicy (nice alone leaves 31), so the arm demonstrably moved.
+  # At 60s the bound fired on 1,564 of 1,646 logged sweeps (95.0%), and 82-100% on every one of
+  # 12 days INCLUDING the quietest, while reconcile/backlog-reap/classify swung 0-100% with load.
+  #
+  # This is a FLOOR over EVERY site, not an equality pin: a later re-derivation may raise the
+  # bound, and a partial edit that lowers any one site back under the measured healthy cost must
+  # red. Deliberately well under the shipped 600 so honest re-tuning is not tripwired.
+  total="$(grep -cE 'CC_REAPER_GUARD_TIMEOUT_S:-[0-9]+' "$REPO/bin/cc-reaper")"
+  [ "$total" -ge 2 ]
+  # strip THROUGH the ':-' — 's/.*://' leaves the '-' and yields a negative, which reds on a
+  # perfectly good constant (caught by this very assertion on its first run).
+  low="$(grep -oE 'CC_REAPER_GUARD_TIMEOUT_S:-[0-9]+' "$REPO/bin/cc-reaper" | sed 's/.*:-//' | sort -n | head -1)"
+  [ -n "$low" ]
+  [ "$low" -ge 300 ]
+}

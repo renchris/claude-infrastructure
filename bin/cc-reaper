@@ -382,6 +382,22 @@ fi
 # non-verdict: it fires on healthy work and proves nothing. These are sized as WEDGE detectors — far
 # above any healthy run, far below the 300s interval — not as latency targets.
 #
+# 2026-08-25 (recycle #219) — THE RULE ABOVE WAS RIGHT AND THE CONSTANTS NEVER OBEYED IT, because
+# the rule was written and the numbers were never re-derived against a background-band run. Measured
+# over this log's 1,646 completed sweeps (12 days): reconcile fired 8.7%, backlog-reap 42.9%,
+# classify 68.7% — all three tracking load, i.e. behaving like detectors — and inbox-guard 95.0%,
+# flat at 82-100% on every single day regardless of load. The A/B that settles it is recorded at the
+# ride-along block near the end of this file: the same work costs 38s foreground and 249s under
+# `taskpolicy -c background`, a 6.6x band tax, against a 60s bound. GUARD raised 60 -> 600 there.
+#
+# AND THE SECOND CLAUSE ("far below the 300s interval") NO LONGER HOLDS AS WRITTEN, for a reason
+# that postdates it: the single-instance sweep lock (below) SKIPs a tick that finds a live sweep
+# rather than queueing it, which is what made an overrunning sweep safe. 46.2% of sweeps already
+# exceed 300s and 6.7% exceed 600s, by design tolerance, not by fault. Classify's 3x retry alone
+# admits a 90+270=360s worst case above the interval. Read the clause as: bound every fork so a
+# WEDGE is always cut, and pay skipped ticks for it — not as a per-fork budget that must sum under
+# 300s, which no longer has a solution on this box.
+#
 # No timeout(1) anywhere ⇒ run unbounded rather than break the call (degrade, never regress).
 # Seams: CC_REAPER_TIMEOUT_BIN (set-but-EMPTY disables bounding) · CC_REAPER_{RECONCILE,BACKLOG,GUARD,CLASSIFY}_TIMEOUT_S
 if [ -n "${CC_REAPER_TIMEOUT_BIN+set}" ]; then
@@ -1904,10 +1920,31 @@ sweep() {
     [ "$brc" = 124 ] && log "bound-fired backlog-reap: exceeded ${CC_REAPER_BACKLOG_TIMEOUT_S:-60}s — claim-ledger sweep INCOMPLETE this cadence"
     [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
   fi
+  # BOUND SIZED TO THE BAND (2026-08-25, recycle #219). This default was 60s and fired on
+  # 1,564 of 1,646 sweeps — 95.0% all-time, and 82-100% on EVERY ONE of the log's 12 days,
+  # including the quietest (2026-08-15: classify fired 13%, backlog-reap 7%, reconcile 0%,
+  # median sweep 119s — and inbox-guard still fired 88%). Its three sibling bounds swing an
+  # order of magnitude with load; this one does not move, which is what says it is measuring
+  # nothing. That is the exact failure the SIZING note at the top of this file forbids by
+  # name: "a bound sized from a foreground run is a permanent non-verdict: it fires on
+  # healthy work and proves nothing."
+  # A/B, same isolated 872-box store copy, same non-dry sweep, both arms emitting the
+  # IDENTICAL 362 escalations, ONE input moved — the scheduling band:
+  #     foreground (PRI 31, 6/6 samples)                       38s
+  #     taskpolicy -c background (PRI 4, 12/48 samples)       249s   ← what launchd gives us
+  # 249s is a HEALTHY run in this job's own band, so a 60s bound could only ever fire. 600s
+  # is ~2.4x that measured healthy cost: still a genuine wedge cut (the 5-day gate blockage
+  # came from an UNBOUNDED fork, and that must stay impossible), but far enough above healthy
+  # work to carry information again.
+  # It costs sweep wall-clock, and that is the right trade here: this fork is off the decision
+  # path, runs last, and is append-only/idempotent, while the single-instance lock SKIPs rather
+  # than queues — so an overrunning sweep is already the tolerated case (46.2% of sweeps
+  # exceed the 300s StartInterval today). What the 60s bound bought instead was a fail-loud
+  # subsystem cut mid-worklist on every single sweep.
   if [ "$reap" = 1 ] && [ -n "$GUARD_BIN" ]; then
     local gout grc
-    gout="$(_rp_bounded "${CC_REAPER_GUARD_TIMEOUT_S:-60}" "$GUARD_BIN" sweep 2>/dev/null)"; grc=$?
-    [ "$grc" = 124 ] && log "bound-fired inbox-guard: exceeded ${CC_REAPER_GUARD_TIMEOUT_S:-60}s — mail escalation INCOMPLETE this cadence"
+    gout="$(_rp_bounded "${CC_REAPER_GUARD_TIMEOUT_S:-600}" "$GUARD_BIN" sweep 2>/dev/null)"; grc=$?
+    [ "$grc" = 124 ] && log "bound-fired inbox-guard: exceeded ${CC_REAPER_GUARD_TIMEOUT_S:-600}s — mail escalation INCOMPLETE this cadence"
     [ -n "$gout" ] && log "inbox-guard: $gout"
   fi
 
