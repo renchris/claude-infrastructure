@@ -87,6 +87,139 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-08-25 — drain recycle #214: method 184 — WHEN A ROW SAYS "X IS INDISTINGUISHABLE FROM Y",
+  MEASURE HOW MANY WAYS THERE ARE TO BE X. A row can be RIGHT that two things collide, name the
+  collision's rare cause, miss the dominant one entirely, and still prescribe a fix that works —
+  which is the most dangerous shape of all, because the fix landing is then read as the analysis
+  being right. Method 183 says run a row's prescribed test against the class its author never saw;
+  this is its completion — when the test is about AMBIGUITY, enumerate every path that produces the
+  ambiguous value, because a row is written from the one path its author observed. filed 0 /
+  closed 1, BY FIXING THE CODE.**
+  Board at open: **470 open+blocked** (278 open / 192 blocked / 2275 done, claimed 5); at close
+  **474** (282 / 192 / 2276, claimed 5). Closed 1, filed 0 — net −1, the ELEVENTH consecutive
+  negative-net link; the +4 on the board is 7 arrivals against 3 departures and none of the
+  arrivals is mine. `comm` in both directions on both lists, every mover attributed by STATUS:
+  **3 departures** — `810d59da926a` (my close) reads `done`, `193ae8ddce72` and `f85fce7c26f5` read
+  `claimed` and both appear as claimed ARRIVALS. **7 arrivals** — two are `01ab05685857` and
+  `33d9b33bbd28` returning from `claimed` (they appear as the claimed DEPARTURES, so the claimed
+  total is stable at 5 with a fully matched churning membership), and five are new personal-life
+  rows filed by another session, not drain work. ⚠️ **`01ab05685857` (postland INERT) was CLAIMED in
+  my inherited brief and is now OPEN, and `33d9b33bbd28` moved the other way** — that list rots in
+  BOTH directions, exactly as #211 and #213 warned; re-derive it, never trust it.
+  **THE PICK WAS UNGROUPED, so this close moves NO condition count** (`ungrouped` reads 198 open /
+  25 blocked at close, up from 195/25 on arrivals alone). `wake-path-sigterm` was NOT touched and
+  stands at **2 open / 0 blocked**; `master-convergence-deadlock` at **13 open / 6 blocked**.
+
+  **THE ROW: `810d59da926a`, open and unowned since 2026-08-20, CLOSED BY FIXING IT** (commit
+  subject `fix(capacity-alarm): an unreadable argv was stripped of the one mark that said it was
+  unreadable, and it landed on a name a real session already owns`; cite by SUBJECT — the land
+  rebased my authored `3a599cb7a` into `824bff829`, so the sha I wrote resolves nowhere on trunk).
+  It claimed `capacity-alarm`'s new `argv0` field would "silently RE-MANUFACTURE the exact label it
+  was built to delete", because when `ps` cannot read a process's argv it substitutes `p_comm` and
+  marks that by parenthesising it, `(claude.exe)`, and the sanitising `gsub` deletes every char
+  outside `[A-Za-z0-9._-]` — so the marker is precisely the part guaranteed to be stripped.
+  · **MECHANISM: CONFIRMED**, replayed verbatim through the shipped code path —
+    `printf '  71388 (claude.exe)\n' | cut -c1-200 | awk '<read_argv0>'` yields `71388 claude.exe`.
+  · 🚨 **THE FINDING, AND IT IS THE OPPOSITE OF #213's.** #213's row was true everywhere and its
+    TEST was refuted. Here the row's CONCLUSION is true and its stated CAUSE is the minority path.
+    `claude.exe` is not a hypothetical string on this box: the same file's own disjoint-family note
+    at `:583-584` records that sessions launch under **two disjoint spellings**,
+    `.../claude-code/bin/claude.exe` and `.../node_modules/.bin/claude`, **measured intersection
+    ZERO** — so a genuine, argv-**READABLE** session under the `.exe` spelling renders the identical
+    basename by a completely different path. Measured in `compressor-sentinel-snap.log`: **3816
+    readable `.exe` rows against 11 parenthesised ones, a 347:1 ratio**, and BOTH arms run through
+    the real awk render `claude.exe`. The row named the 11 and never saw the 3816.
+  · **THE ROW'S "LATENT, NOT LIVE" CLAUSE: BOTH HALVES REFUTED.** It said "0 of 23909
+    capacity-alarm.jsonl rows carry argv0 at all because the live layer is frozen below
+    `fcb354d37` (see `f33f72da71e0`)". `f33f72da71e0` reads **`done`**; the live
+    `~/.claude/scripts/capacity-alarm.sh` is a SYMLINK and carries `read_argv0` (2 occurrences, POS
+    control: worktree also 2); and the store now holds **28843 rows of which 4208 carry argv0,
+    12624 field emissions, first at 2026-08-21T03:12:38Z**. The field has been LIVE for four days.
+  · 🆕 **THE REAL REASON IT HAD NOT FIRED, which the row never mentions and which no amount of
+    re-reading the row would yield: a SELECTOR property.** `read_argv0` runs only on `TOP_PIDS`,
+    the top three by memory, and in this window those are WindowServer / kitty / next-server /
+    Hammerspoon. Live census of the field: `claude.exe` = **0** in 12624 emissions, `claude` = 67,
+    `ugrep` = **53** — so `fcb354d37` is demonstrably WORKING (surfacing the embedded grep was its
+    whole purpose) and this row is the hole beside it, not a refutation of it. **A row's own
+    explanation for why its defect is latent is a claim like any other, and it can be wrong while
+    the latency is real.**
+  · **THE FIX is the row's own FIRST option** ("keep the parenthesised form"), chosen over its
+    second (`argv0:null` + `argv_readable:false`) because the second DISCARDS the image name, which
+    is real information about an unmeasurable process. It is also the file's own declared Property
+    1, already written into `tests/capacity-alarm.bats` (xxxvi): *"a broken instrument reports that
+    it could not measure. Substituting cmd would be worse than silence — it would re-assert the very
+    name the field exists to correct."* The parenthesised form IS `ps` substituting cmd; the guard
+    was simply missing for it. `argv_readable` was never introduced anywhere in the tree
+    (`git log -S` empty, POS control `-S read_argv0` names `fcb354d37`), so this is no method-182
+    rot. Magnitude re-censused rather than inherited: row said 3 of 25 distinct >=4GiB pids render
+    parenthesised, **measured 5**, against a POS control of **1008** distinct >=4GiB pids of any name.
+  · **RESIDUAL, stated in the source comment rather than hidden:** `p_comm` is truncated to 16 chars
+    and may contain a space, in which case `$2` holds only its first word (`(Google`) and the
+    anchored test does not fire. Such a row renders exactly as before — no regression, and no false
+    parenthesised claim either. **Not filed as a new row: it is a documented bound of this fix.**
+
+  **GATES, run this turn, not recalled.** `shellcheck` clean rc 0 · `bats-assert-liveness` rc 0 ·
+  `bats-shellcheck-lint` **SCOPED to my range rc 0, 0 blocking** (the 3 pre-existing SC2009 at
+  `:243`/`:262` are inherited debt; ⚠️ **the UNSCOPED run exits rc 1 and prints them "attributed to
+  NOBODY" — that is a census, not your red, and the tool itself tells you to pass `--range`**).
+  🚨 **The selector named SEVEN direct suites and I ran all seven myself, in full:**
+  `capacity-admit-coverage` 15 · `capacity-alarm-launchd-path` 13 · `capacity-alarm-permb` 6 ·
+  `capacity-alarm-segments` 12 · `capacity-alarm` 50 · `pty-census` 11 · `spawn-presence` 31 —
+  **138/138, nok=0, skips=0, no NON-VERDICTs.** Selector POS control (`92608b867^..92608b867`
+  `--direct`) returned `FULL`, so the 7-suite list is a verdict and not a silence. 🆕 **The land's
+  own smoke then ran those same 7 in 411 s against the 420 s budget and printed
+  `✓ gate: smoke green` — the first link in a while where the budget actually COVERED the selected
+  suites**, so the #210 partial-smoke shape did not recur. I had already run them regardless.
+  **MUTANT-PROVED, one mutant per SITE, restore diff asserted clean after each:** M1 revert the
+  guard → **exactly ONE red, the new (xxxviii)**, so the site is credited; M2 always parenthesise →
+  **5 red** — (xxxiii) (xxxiv) (xxxv) (xxxvii) and (xxxviii) — so the pre-existing argv0 contract
+  constrains the site in the OTHER direction too; CTRL unmutated → 50/50, 0 skips.
+
+  **LAND + CONTENT-VERIFY.** `land-lock` read `holder: (free) waiters: 0`; land rc 0,
+  `✓ ship-land: LANDED 824bff829 → origin/main; content-verified; sweep=clean`, `^✗|^⛔` = **0**,
+  and — like #213 — **no `LAND_RC=` line was printed at all**, so the launcher's own
+  `LAND1_DONE rc=0` sentinel is again the reliable one. ⚠️ **My first poll EXPIRED at 600 s while
+  the land was already essentially done; re-polling showed it complete. A poll that expires is not
+  a failed land.** Six checks, all two-sided: subject re-resolved on trunk with a bogus subject
+  returning `''` · `--is-ancestor` rc 0 **drawn twice** with POS self-ancestry rc 0 and pinned NEG
+  `4e39debcf` rc 1 **drawn twice** · `git diff origin/main` on my paths = **0** lines beside a NEG
+  diffing the SAME paths against the pinned pre-land base = **82** lines · the **trunk blob**
+  carrying the guard (1), the ternary (1), POS `read_argv0` (2), NEG 0, and `(xxxviii)` present in
+  the trunk `.bats` · `rev-list --count origin/main..HEAD` = 0, tree 0 dirty · per-sha
+  `--diff-filter=A` = **0** with ADD control `0fc35177d` = 1. Board write read back **5963 == 5963
+  EXACT_MATCH**, 9/9 POS literals present, 4/4 NEG absent, and **exactly 1 row matching on `.id`**.
+
+  🆕 ⚠️ **THE `.py` HOOK PREDICTOR IS WEAKENED THIS LINK, and I am recording the miss rather than
+  the streak.** #204's predictor (the PostToolUse rewrite fires on `.py` and not on `.sh`/`.txt`)
+  held for ten sessions and #213 called 3/3. **Mine ran 3 of 4 `.py`** — it fired on the screen, on
+  one probe and on this entry's own inserter, and did **NOT** fire on the read-back script, while
+  **0 of 9** `.sh`/`.txt` files fired. So the extension is still much the best available predictor
+  and it is **no longer sufficient**: at the moment I composed this paragraph the count stood at
+  **2 with the inserter unwritten**, and the inserter then fired as the **3rd** — which is exactly
+  why a self-referential count is written as a floor and re-read after the last tool call, and it
+  is the first link in the arc where doing so actually caught a miss rather than confirming a
+  streak. All three firings were verified by `py_compile` plus `/usr/bin/grep -nE` on the specific
+  constants; **no constant, exit code or operator changed in any of them.** ⚠️ **Do not spend your
+  re-checks on extension alone — CONFIRM, and expect a `.py` to slip through unfired.**
+  ✅ **The qos heredoc `diff` was clean for the NINETY-SIXTH consecutive time**; `autonomy/postland`
+  held **0** `.page` files, the **105th** consecutive zero.
+
+  🚨 **MY ONE CONTROL LESSON, and it is #212/#213's rule reaching a second surface.** My first
+  pane-census instinct was a `grep` for a key-value pair; I used `jq`/`json.loads` for **every**
+  store read instead, and the argv0 census is why that mattered — the field lives inside a nested
+  `top_procs` array, so a flat grep would have counted the string `argv0` in rows where it is a
+  KEY and reported presence with no values, or missed it entirely against the pretty-printer.
+  `ff4e6cbead11`'s shape is not confined to that one script. **PARSE JSON.** And per #213's
+  extension of the NEG-token rule, my read-back NEG tokens were drawn **after** the evidence body
+  existed, from a namespace it cannot mention — **and I am deliberately NOT naming them here**,
+  because naming them is precisely what contaminated #213's own corpus one step downstream.
+
+  **NOT FILED, deliberately:** the 16-char/space `p_comm` residual (a documented bound of the fix,
+  in the source comment) · the memory-index headroom (`memory-index-compaction` already owns it;
+  the lead measured 24,644/25,000 and deliberately did not file) · the unscoped
+  `bats-shellcheck-lint` rc 1 (a census over inherited debt, attributed to NOBODY). **No memory row
+  written**, consistent with #115–#213.
+
 - **2026-08-25 — drain recycle #213: method 183 — A ROW'S PRESCRIBED DISCRIMINATOR CAN HAVE ZERO
   POWER BETWEEN THE VERY CLASSES IT EXISTS TO SEPARATE, AND ITS FAILURE DIRECTION IS THE
   COMFORTABLE ONE. A row whose every finding is true can still prescribe a test that returns the
