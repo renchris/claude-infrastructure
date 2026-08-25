@@ -892,3 +892,54 @@ unrunnable, and 15 days have passed since the last direct measurement, so the on
 re-run it before writing a diff. Deciding it from the brief's prose is the anti-goal `bin/cc-venue`
 §5 names — *"a wrongly-routed item improvises a plausible answer against history it cannot read, and
 reports success."*
+
+## Addendum, same session — 🚨 the standing "the gate cannot be run here" refusal is WRONG, and the truth is worse
+
+Every section above (08-17 through 08-23) carries a version of *"`bats` and `shellcheck` are absent,
+so the repo's gate cannot be run on a shell change."* Both binaries are indeed absent. But the
+inference drawn from that — *the gate is simply unavailable here* — is false, and this session
+measured the real behaviour by running the docs-only land it was entitled to run.
+
+`scripts/ship-land.sh --dry-run` **runs**, reaches its ratchet phase, and exits **6 — GATE RED**, on
+a three-file markdown diff. The red arm is `unattended-path-lint --selftest`, which fails **11 of
+42**. It fails **identically on clean `origin/main`** — measured in a throwaway worktree at
+`origin/main` with this session's commit absent — so it is **pre-existing on trunk, not caused by any
+diff**, and `ship-land.sh` fails closed. **No land of any kind is possible from this venue.**
+
+### Why it is red, and why the fix it prints must NOT be applied
+
+The lint's real-tree arm reports 20 `EMBEDDED_ALLOWLIST` entries as no longer needed and instructs:
+
+> `Fix: delete their lines from EMBEDDED_ALLOWLIST … — the ratchet only shrinks.`
+
+The flagged entries are `timeout`, `gtimeout`, `sysctl`, `taskpolicy`, `lsof`, `gh`, `cc-notify`. An
+allowlist entry is judged stale when its binary **resolves on the unattended PATH**, so the verdict is
+a pure function of *which binaries exist on the box running the lint*. Measured here:
+
+| binary | this Linux VM | why it matters |
+|---|---|---|
+| `timeout` | **present** (`/usr/bin/timeout`) | not in macOS's base system — which is why the repo uses `gtimeout` at all |
+| `gtimeout`, `taskpolicy`, `osascript`, `plutil`, `gh`, `cc-notify` | **absent** | all present or installed on the operator's Mac |
+| `sysctl` | `/usr/sbin` | reachable here; the Mac's unattended `launchd` PATH is the case this lint exists for |
+
+So the ratchet is macOS-tuned and this is a Linux VM, and the inversion on `timeout` alone is enough
+to produce the false *"stale allowlist"* verdict. **A cloud session that obeyed the printed fix would
+delete protections the operator's box still needs, and the ratchet-only-shrinks rule means the
+deletion is designed to be hard to undo.** The gate's own remediation instruction is actively harmful
+when followed from this venue — which is a strictly worse trap than a gate that merely refuses to
+start, because this one prints a confident, specific, wrong instruction to a worker with no way to
+check it.
+
+Two portable consequences, and the second is the one that generalises past this repo:
+
+1. **This is not a trunk regression and must not be filed as one.** Nothing is wrong on the Mac. Any
+   future VM that reports "trunk gate is red" from this venue is reporting its own environment.
+2. **`ship-land.sh` is not venue-portable, and it fails closed rather than abstaining.** A ratchet
+   whose verdict depends on the host's installed binaries has no way to say *"I am not on the box I
+   was written for"* — so it converts an unmeasurable state into a RED, which is the opposite of the
+   fail-open law `bin/cc-eligible`'s header states for exactly this reason. Whether the right shape is
+   an abstain arm keyed on `uname`/a marker file, or a pinned tool manifest, is a real decision and it
+   needs the box that can verify both sides.
+
+This is why the commit on this branch is pushed **but not landed**, and it is the honest version of
+the refusal the four sections above were reaching for.
