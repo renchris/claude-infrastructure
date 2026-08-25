@@ -1523,9 +1523,42 @@ sweep() {
     log "bound-fired classify: retry exceeded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 ))s — sweep yields NO candidates (fail-closed)"
     cj='[]'
   fi
+  if [ "$crc" != 0 ] && [ "$crc" != 124 ]; then
+    # R5b (2026-08-25, recycle #220): the BOUND was not the only way this producer fails, and until
+    # now it was the only way that got NAMED. rc 124 is timeout(1)'s; any other nonzero rc is the
+    # child's own failure — a missing binary (127), a crash, a shell error — and it fell straight
+    # through the `case "$cj" in '')` line below to an empty candidate set, printing "0 classified"
+    # byte-identically to a healthy idle sweep. _rp_bounded's own comment requires rc 124 to "stay
+    # distinguishable from the child's own failure"; it defended only one direction of that.
+    say "cc-classify FAILED rc=$crc (not a timeout) — no verdict this sweep; reaping nothing"
+    log "classify FAILED: rc=$crc — producer error, NOT the bound; sweep yields NO candidates (fail-closed)"
+    cj='[]'
+  fi
   case "$cj" in '') cj='[]' ;; esac
   classify_t0="$(reaper_now)"; case "$classify_t0" in ''|*[!0-9]*) classify_t0="$(date +%s)" ;; esac
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
+  # R5c (2026-08-25, recycle #220): AN EMPTY CLASSIFICATION IS ONLY CREDIBLE IF THE BOX IS EMPTY, and
+  # no rc arm above can establish that. cc-classify:951 reads
+  #   all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"
+  # and cmd_all then `return 0` — so a dead, missing or garbage-emitting enumerator yields an EMPTY
+  # ARRAY AT rc 0. Measured three arms against the real binary: healthy = rc 0 / 8 entries; enumerator
+  # exits 3 = rc 0 / [] / zero stderr; enumerator emits non-JSON at rc 0 = rc 0 / []. The healthy run
+  # and the failed one are INDISTINGUISHABLE BY rc, so widening the rc branch — the remedy the backlog
+  # row prescribes — has zero power over the mode that actually fires here. The signal is the LENGTH,
+  # and length is only readable against an INDEPENDENT count of live panes, which this file already
+  # owns (live_pane_count, deliberately not registry-derived — see its header).
+  # Over the 5,424 summarised sweeps in cc-reaper.out.log, 1,145 ended "0 classified" and ALL 1,145
+  # had live>0 (median 17, max 54): a legitimately-empty classification has never once been observed.
+  # This changes the RECORD, never the action — n is already 0, so nothing was going to be reaped
+  # either way. Being blind and saying so nowhere IS the defect.
+  if [ "$n" = 0 ]; then
+    local live_now; live_now="$(live_pane_count 2>/dev/null)"
+    case "$live_now" in ''|*[!0-9]*) live_now=0 ;; esac
+    if [ "$live_now" -gt 0 ]; then
+      say "cc-classify returned an EMPTY classification while $live_now live pane(s) exist — NO VERDICT this sweep (the enumerator failed open); reaping nothing"
+      log "classify EMPTY-BUT-POPULATED: 0 enumerated vs $live_now live pane(s) — enumerator failed open at rc=$crc; sweep yields NO candidates"
+    fi
+  fi
   local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i
   for ((i=0; i<n; i++)); do
     local o cause name pane cwd idle landed xpid xlstart started fstate
