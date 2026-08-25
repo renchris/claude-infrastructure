@@ -5540,10 +5540,14 @@ if [ "${1:-}" = "__recycle" ]; then
     # ESCALATE, don't just log (2026-08-25, RECYCLE_SIGTERM_INCIDENT deliverable 3). This is the
     # TERMINAL failure of a recycle: the /exit already landed, so the predecessor is GONE and the
     # successor was never typed — the pane holds no claude at all and the session's remaining work
-    # is stranded with it. Its SIBLING terminal failure (recycle-relaunch-failed, ~30 lines below)
-    # has alarmed since it was written; this arm only ever emitted a ledger row, so the WORSE of
-    # the two outcomes was the quieter one. Measured: pane 30 on 2026-08-25 burned 600 s
-    # (21:36:05Z → 21:46:16Z) across three `decision=unknown` holds and nothing told anyone.
+    # is stranded with it. `recycle-dead` is emitted from THREE sites and this was the ONLY quiet
+    # one — the relaunch-write-failed site (~30 lines below) alarms via recycle-relaunch-failed,
+    # and the relaunched-but-never-engaged site alarms via hf_alarm recycle-dead — so the arm with
+    # the WORST outcome (pane holds no claude at all) was the one nobody heard. Measured: pane 30
+    # on 2026-08-25 burned 600 s (21:36:05Z → 21:46:16Z) across three `decision=unknown` holds and
+    # nothing told anyone. NOTE for anyone red-proofing this: a control that greps the FILE for
+    # `hf_alarm recycle-dead` is vacuous — the never-engaged site already matches it. Key on this
+    # site's own wording (tests/handoff-recycle-dead-escalates.bats).
     #
     # 🚨 THE VERDICT IS AN ABSTENTION AND THE MESSAGE MUST NOT LAUNDER IT INTO A FINDING.
     # `unknown` is returned from SEVEN branches of pane_cc_state (:2863, 2874, 2884, 2890, 2892,
