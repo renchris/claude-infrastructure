@@ -1847,7 +1847,7 @@ assert "next3 strand ~5pp of 8 · p96 of its own 3h burns" in line, line
 # RP-26 — a zero-strand account still RENDERS, and renders LAST. A sorted() over a list filtered
 # on strand > 0 passes RP-25 and drops this row silently.
 assert "next no strand" in line, line
-assert "wall trajectory" in line, line
+assert "⚠ WALL trajectory" in line, line
 assert line.rstrip().split(chr(10))[-1].strip().startswith("next no strand"), line
 # ...and its burn RATIO survives unchanged, while the >100 PROJECTION does not render as a number
 assert "1.62× burn" in line, line
