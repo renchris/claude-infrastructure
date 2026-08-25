@@ -147,9 +147,15 @@
 # that file's own conclusion, executable in its selftest (5.98/core pinned as a known false ALARM).
 #
 # 🚨 THIS IS NOT A CASE TO RAISE THE NUMBER. `fix(fire-gate): load1 does not move with the spawn it
-# was gating` (f944d6e3, 2026-08-20, ancestor of trunk) established the stronger fact: an additional
-# RESIDENT session moves the 1-min runnable count by ~0, so NO value of this literal can make the
-# term correct — the INPUT is wrong, not the number. The load term therefore DEFAULTS OFF in
+# was gating` (2026-08-20) established the stronger fact: an additional RESIDENT session moves the
+# 1-min runnable count by ~0, so NO value of this literal can make the term correct — the INPUT is
+# wrong, not the number. VERIFY IT IN THE CODE, NOT BY SHA: the claim's anchor on trunk is the
+# `${CC_FIRE_LOAD_TERM:-off}` default in `capacity_gate()` (scripts/handoff-fire.sh) and the reasoning
+# block immediately above it, both greppable. This sentence used to name `f944d6e3` "ancestor of
+# trunk"; that sha is NOT an ancestor of origin/main — it survives only on the cloud fire branches
+# that produced it, and its content reached trunk under a rebased sha inside another subject's land.
+# It resolved in the authoring checkout and nowhere else, which is precisely the failure the
+# cite-by-SUBJECT rule six lines above exists to prevent. The load term therefore DEFAULTS OFF in
 # capacity_gate() (CC_FIRE_LOAD_TERM) and has been off on the Agent-tool path since Wave D;
 # `segments` and `active` carry its intent because they DO move with the spawn. The literal stays at
 # 2.0 on purpose — C18: a fix moves a TERM SWITCH, never a ceiling — and raising it is the lazy

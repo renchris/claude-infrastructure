@@ -144,6 +144,55 @@ measurement (load1 delta across N all-active sessions) and set the ceiling from 
 point. That is a two-arm experiment, not a config edit, and it is the only thing that can legitimately
 move a capacity constant.
 
+### 3.1 · CLOSED 2026-08-25 — the diagnosis landed, the prescription above is REFUTED, and its named blocker answers a different question
+
+Backlog `e981656df348` carried this section as its DoD. Closing it, with all three halves settled
+separately, because they did not settle the same way.
+
+**The diagnosis is DISCHARGED on trunk.** `e89918f2b` (*docs(capacity-admit): the ceiling cites a
+section that has no derivation, and the term it parameterises already defaults off*, ancestor of
+`origin/main`) deleted the false provenance from `scripts/lib/capacity-admit.sh` and replaced it with
+the finding above, verbatim and in place. The line this section indicted no longer reads "§9.5's
+measured ceiling". Comment only; the literal is untouched at `2.0`.
+
+**The prescription in the paragraph above is REFUTED, and cannot be repaired by running it.** "Set the
+ceiling from a measured failure point" presumes a failure point exists to be found on this axis. This
+document already contains the refutation four paragraphs earlier and did not carry it forward into the
+recommendation: `scripts/capacity-alarm.sh:139-147` records **the survived population containing the
+fatal value** — fatal 2026-08-05 at 2.53/core against 13 consecutive survived samples spanning
+2.92-5.98/core, plus 42 h at 2.5/core with no panic. Re-verified on trunk 2026-08-25, verbatim, in that
+file's own words: *"no setting of these two numbers can make it"* separate fatal from survived. A
+two-arm experiment run against a class the discriminator provably cannot separate returns a number with
+the same standing as the one it replaces. **The instrument is what fails here, not the diligence.**
+
+**The named blocker could not have discharged this item either.** The row was parked behind "the
+marginal-load measurement" (§5's one-hour on-box window, adjudicated separately as `193ae8ddce72`).
+Marginal Δload per active session is a **capacity-in-sessions coefficient**: it converts a ceiling into
+a session count. It cannot locate a boundary — and by that adjudication's own finding the instrument
+behind it is *unidentified* on this box. This item was blocked on a measurement that answers a
+different question, which is why the block never lifted.
+
+**And the stronger fact had already landed before the block was even reviewed.** `fix(fire-gate): load1
+does not move with the spawn it was gating` (2026-08-20) established that an additional RESIDENT
+session moves the 1-min runnable count by ~0 — so **no value of this literal can make the term
+correct: the input is wrong, not the number.** The load term now defaults off in `capacity_gate()`
+(`${CC_FIRE_LOAD_TERM:-off}`, verified on trunk) and has been off on the Agent-tool path since Wave D.
+The literal still binds only on the two unattended recovery callers
+(`scripts/boot-resume-launch.sh:266`, `scripts/limit-recover/lr-fire-resume.sh:318`), deliberately, and
+both are budget-released after `CC_ADMIT_BUDGET` consecutive refusals.
+
+**What is left, therefore, is a term to delete or re-key — not a constant to derive.** Nothing above
+licenses raising `2.0`; per C18 a fix moves a term switch, never a ceiling, and
+`docs/plans/LOAD_INSENSITIVE_VERIFY_V2.md:156` rejects the raise by name. Any successor work is against
+the two unattended callers' *input*, and should be filed as its own row rather than reopening this one.
+
+**One residual defect, fixed in the same commit as this note.** The comment that discharged the
+diagnosis cited the fire-gate fix as `f944d6e3, ancestor of trunk`. It is not: that sha survives only
+on the cloud fire branches that produced it, and its content reached trunk under a rebased sha inside
+another subject's land — so the citation resolved in its authoring checkout and nowhere else. The same
+comment block instructs readers to cite by SUBJECT *six lines earlier*. It now cites the subject and
+names the greppable code anchor (`${CC_FIRE_LOAD_TERM:-off}` in `capacity_gate()`) instead of a sha.
+
 ## 4 · If 2.1.234 is adopted, adopt it on other grounds — and set one env var first
 
 The upgrade is defensible for 33 releases of unrelated fixes, never for capacity. Two items gate it:
