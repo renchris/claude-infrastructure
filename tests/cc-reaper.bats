@@ -2868,3 +2868,65 @@ FIX
   grep -E '^STRANDED_SURFACE_RE=' "$R" | grep -q 'crashed'      # anchor: the line still exists
   ! grep -E '^STRANDED_SURFACE_RE=' "$R" | grep -q 'livelocked' || false
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# R5b / R5c (2026-08-25, recycle #220) — A SILENT EVIDENCE PRODUCER
+#
+# The sweep bounded its classify call and branched on rc 124 alone. Two other ways to get no evidence
+# were therefore reported as a healthy idle sweep, byte-identically: the child's OWN nonzero rc, and —
+# the one that actually fires in production — a child that exits 0 carrying an EMPTY ARRAY, because
+# cc-classify:951 reads `all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"` and cmd_all then
+# returns 0. Measured against the real binary: healthy = rc 0 / 8 entries, enumerator-exits-3 = rc 0 /
+# [] / zero stderr. Identical rc, so rc cannot be the discriminator — the LENGTH is, read against the
+# independent live-pane count. Over 5,424 summarised sweeps in cc-reaper.out.log, 1,145 ended
+# "0 classified" and ALL 1,145 had live>0.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "R5c: classify EMPTY at rc 0 while live panes exist is NAMED, not reported as a healthy sweep" {
+  # The production shape: the enumerator failed open, so the producer succeeds emptily.
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+printf '[]\n'
+exit 0
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  set_live 4
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'EMPTY classification'
+  echo "$output" | grep -q '4 live pane(s) exist'
+  grep -q 'classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s)' "$CC_REAPER_LOG"
+}
+
+@test "R5c CONTROL: an EMPTY box makes an empty classification legitimate — no false alarm" {
+  # This is the arm that keeps R5c from being an always-firing alarm. Drop the live_now>0 guard and
+  # this test reds — which is the whole reason it is written as a control rather than assumed.
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+printf '[]\n'
+exit 0
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  set_live 0
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'EMPTY classification')" -eq 0 ]
+  [ "$(grep -c 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG")" -eq 0 ]
+}
+
+@test "R5b: a non-124 classify rc is the CHILD's own failure and is named as such, not as the bound" {
+  # rc 127 is the shape the backlog row prescribes as its falsifier. It is real, it was silent, and it
+  # is NOT the mode that fires in production — hence a separate arm from R5c above.
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+exit 127
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  set_live 0                       # isolate the rc arm: no live panes ⇒ R5c stays silent
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'cc-classify FAILED rc=127'
+  grep -q 'classify FAILED: rc=127 — producer error, NOT the bound' "$CC_REAPER_LOG"
+  # and it must NOT be mislabelled as the timeout path
+  [ "$(grep -c 'bound-fired classify' "$CC_REAPER_LOG")" -eq 0 ]
+}
