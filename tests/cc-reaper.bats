@@ -2914,6 +2914,48 @@ EOF
   [ "$(grep -c 'EMPTY-BUT-POPULATED' "$CC_REAPER_LOG")" -eq 0 ]
 }
 
+# ─── recycle #224 ────────────────────────────────────────────────────────────────────────────────
+# R5c above is gated on the classification being EMPTY. Every path into that block sets cj='[]',
+# including the two that have already named their own cause (the bound at rc 124, the producer's own
+# nonzero rc), so an `n == 0` predicate re-diagnoses both and blames the enumerator — printing
+# "enumerator failed open at rc=124" while rc 124 is timeout(1)'s "the bound fired". #220's two R5c
+# tests both pin rc 0, so the wide predicate had no arm that could see this. These two are that arm.
+# They are CONTROLS in the strict sense: drop `&& [ "$crc" = 0 ]` from the subject and both red.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "R5c SCOPE: a bound-fired classify names the BOUND, and R5c does not re-blame the enumerator" {
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+sleep 30
+printf '[]\n'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  export CC_REAPER_CLASSIFY_TIMEOUT_S=1
+  set_live 4
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # POSITIVE control on the same log, through the same pipeline: the cause that IS correct is stated.
+  [ "$(grep -c 'bound-fired classify: retry exceeded' "$CC_REAPER_LOG")" -eq 1 ]
+  # and the wrong one is not. Asserted on the EMITTING line, never file-wide: the retired spelling
+  # survives as DATA in the comment that documents it (control 4, recycle #223's own scar).
+  [ "$(grep -c 'classify EMPTY-BUT-POPULATED' "$CC_REAPER_LOG")" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'the enumerator failed open')" -eq 0 ]
+}
+
+@test "R5c SCOPE: a producer-error classify names the CHILD's rc, and R5c does not re-blame it either" {
+  cat > "$D/bin/classify" <<'EOF'
+#!/bin/bash
+exit 127
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  set_live 4
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'classify FAILED: rc=127' "$CC_REAPER_LOG")" -eq 1 ]
+  [ "$(grep -c 'classify EMPTY-BUT-POPULATED' "$CC_REAPER_LOG")" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'the enumerator failed open')" -eq 0 ]
+}
+
 @test "R5b: a non-124 classify rc is the CHILD's own failure and is named as such, not as the bound" {
   # rc 127 is the shape the backlog row prescribes as its falsifier. It is real, it was silent, and it
   # is NOT the mode that fires in production — hence a separate arm from R5c above.

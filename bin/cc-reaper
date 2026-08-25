@@ -401,6 +401,30 @@ fi
 # under taskpolicy -c background, 6.4x — the 6.6x above, reproduced on a second subject).
 # The rule this file states was right BOTH times; only one constant was re-derived the first time.
 #
+# 2026-08-25 (recycle #224) — THE CLASSIFY ACQUITTAL IN THE #219 PARAGRAPH DOES HOLD. Re-screened
+# with the same instrument that overturned backlog-reap, because clause 9 of that finding says an
+# exoneration rots exactly like a claim — but it rots, it does not automatically expire, and this one
+# had not. Two corrections to HOW it was computed, neither of which changes the verdict:
+#   (a) 68.7% MERGES TWO ARMS THAT MEAN OPPOSITE THINGS. Of 1,144 `bound-fired classify` lines over
+#       1,679 sweeps, 853 are arm 1 (the 90s bound, after which the 3x retry runs and RESCUES 65.9%
+#       of them) and 291 are arm 2 (the retry also fired: no verdict at all). Arm 1 firing is the
+#       design working; arm 2 is a total loss. A census that greps `bound-fired classify` cannot
+#       distinguish them — anchor on `: exceeded` vs `: retry exceeded`.
+#   (b) PER DAY, arm 2 oscillates 1.8%-49.5% with 4 direction changes across 13 days, against
+#       backlog-reap's monotone 6.7% -> 100.0% climb. It is a load tracker, not a ratchet.
+# AND THE BOUND IS SIZED RIGHT, which is the part that had never been measured. Same two-arm band
+# A/B as the ride-along block, on `cc-classify --all --json` (read-only; its one write path is gated
+# on the tests-only CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE), both arms returning an identical 7
+# entries, run at load ~10:
+#     foreground                  PRI 31 (19/19 samples across two runs)      5s
+#     taskpolicy -c background    PRI  4 (60/60 samples)                     31s
+# A 6.2x band tax — the third independent reproduction of this box's ratio (6.6x inbox-guard, 6.4x
+# backlog-reap). 90s is 2.9x healthy IN-BAND cost, so unlike its two siblings this constant was
+# never a foreground number: a classify that passes 90s is 3x healthy in-band and one that passes
+# 270s is 8.7x, which is a genuine wedge either way. DO NOT WIDEN IT. The 291 arm-2 sweeps are the
+# box wedging, faithfully detected — the remaining half of backlog row ee743fad3674, measured and
+# found sound rather than fixed.
+#
 # AND THE SECOND CLAUSE ("far below the 300s interval") NO LONGER HOLDS AS WRITTEN, for a reason
 # that postdates it: the single-instance sweep lock (below) SKIPs a tick that finds a live sweep
 # rather than queueing it, which is what made an overrunning sweep safe. 46.2% of sweeps already
@@ -1562,7 +1586,27 @@ sweep() {
   # had live>0 (median 17, max 54): a legitimately-empty classification has never once been observed.
   # This changes the RECORD, never the action — n is already 0, so nothing was going to be reaped
   # either way. Being blind and saying so nowhere IS the defect.
-  if [ "$n" = 0 ]; then
+  #
+  # SCOPED TO THE SUCCEEDING PRODUCER (2026-08-25, recycle #224) — R5c above rejected "widen the rc
+  # branch" as having zero power over the mode that actually fires, and it was right; but the guard
+  # it built instead was gated on `n == 0` ALONE, which is satisfied by every path that reaches here,
+  # including the two directly above that have ALREADY named their own cause. Both of those set
+  # cj='[]' before falling through, so R5c re-diagnosed them — and named a DIFFERENT and WRONG cause:
+  #     bound-fired classify: retry exceeded 3s — sweep yields NO candidates (fail-closed)
+  #     classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s) — enumerator failed open at rc=124
+  # rc=124 is timeout(1)'s "the bound fired" code, so the second line contradicts the field it prints
+  # in its own text, and the say() beside it tells the operator the enumerator "failed open" when the
+  # enumerator was never given a chance to answer — it was killed. #220's two R5c tests both pin
+  # rc 0 (empty/live>0 and empty/live==0); neither exercises a nonzero crc, which is why a predicate
+  # this wide passed. Reproduced by execution before fixing, not inferred from reading.
+  # SCALE, and why it read clean: this has fired ZERO times in the log's 1,673 sweeps because R5c is
+  # landed-not-live (~/.claude/bin/cc-reaper is a symlink into the shared checkout, 58 commits behind;
+  # EMPTY-BUT-POPULATED count is 0 there and 1 on trunk). It is LATENT, and it arrives in full the
+  # moment the live layer converges: 289 of those sweeps (17.3%) took the rc-124 arm with live panes
+  # present, so each would have carried the wrong subsystem's name exactly once.
+  # The signal R5c exists for is unchanged — an enumerator that fails OPEN returns rc 0, so scoping to
+  # crc==0 removes nothing it can detect and only stops it answering questions already answered.
+  if [ "$n" = 0 ] && [ "$crc" = 0 ]; then
     local live_now; live_now="$(live_pane_count 2>/dev/null)"
     case "$live_now" in ''|*[!0-9]*) live_now=0 ;; esac
     if [ "$live_now" -gt 0 ]; then
