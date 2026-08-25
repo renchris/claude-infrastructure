@@ -7833,20 +7833,54 @@ if [ "$CLOUD" = 1 ]; then
   # there the name is authorised AT CREATE. cc_cloud_create's signature is `cfg cwd prompt`
   # (scripts/lib/cloud-create.sh:185): the CLI leg has NO branch parameter at all, so the payload
   # is the only place the branch can be established, and establishing it is a real `switch -c`.
+  #
+  # 🚨 THE PUSH IS THE **FIRST** ACT, AND THE EMPTY COMMIT IS WHAT MAKES IT ONE (backlog
+  # 0c8b39b67665). This is CLOUD_OBSERVABILITY.md §4.1's absence contract — "the session's brief
+  # requires its first act to be pushing that branch — an empty commit is enough" — and until this
+  # block it existed ONLY as that prose sentence. What the payload actually said was "push whatever
+  # you have BEFORE YOU FINISH", i.e. a CLOSING act, and the difference is the whole state machine:
+  #
+  #   §4.3 C1 NOT-STARTED  =  no ref, past declared_at + boot_s  (default 900s, bin/cc-cloud:173)
+  #
+  # Under a closing-push contract that arm is unsound. A session that booted fine and has simply
+  # been reading for sixteen minutes has pushed nothing, so it presents BYTE-IDENTICALLY to one that
+  # was never created, died at boot, or was refused entitlement — the exact four-way conflation §4.1
+  # says only a contract can break. The verdict then fires in the DESTRUCTIVE direction: NOT-STARTED
+  # is actionable ("re-fire, or check entitlement"), and §5.2's three liars — cc-spawn-verify,
+  # cc-board and com.claude.team-orphan-reaper on its 600s timer — key their abstention on a
+  # declaration that reads healthy. An empty commit costs one round trip and makes absence mean
+  # something: no ref past the budget is now genuinely "it never got that far".
+  #
+  # The commit is EMPTY on purpose rather than deferred until there is content to push: content is
+  # exactly what a session does not have at the instant the discriminator is needed. It lands
+  # harmlessly — cloud-return.sh gates the land on worker_status AND a QUIET_S window
+  # (scripts/cloud-return.sh:295-311), so a boot commit never trips a premature land, and
+  # `fill-paths` derives nothing from it, so it cannot fake a C3 LANDED either.
   CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
 "'
-── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+── DO THIS FIRST, BEFORE YOU START THE TASK ABOVE (this session runs off-box) ──
 You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
 filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
-channel back is a git push, and it must go to exactly this branch — CREATE IT FIRST, then push it:
+channel back is a git push, and it must go to exactly this branch:
 
     git switch -c '"$CLOUD_BRANCH"'
+    git commit --allow-empty -m "chore: cloud session boot"
     git push -u origin HEAD
 
+Run those three lines as your FIRST act — before you read a file, run a search or write a line. The
+commit is empty on purpose: it exists so that there is something to push before any work is done.
+
+This is not bookkeeping. The firing side cannot see this VM at all, so the ONE thing that separates
+a session that booted from one that was never created, died at boot, or was refused entitlement is
+whether that branch exists within the boot budget. Until you push it, a perfectly healthy session
+reads NOT-STARTED on the operator'"'"'s machine, and may be re-fired or reaped underneath you.
+
+── HOW TO RETURN YOUR WORK ──
 That branch name was assigned by the firing side and is already declared as the one thing watched
-for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
-have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
-of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+for your progress — a push anywhere else is invisible and your work will strand. Keep committing to
+it as you go, and push again before you finish even if the work is incomplete; beyond that boot
+commit, an unpushed cloud session leaves no trace of any kind. A local reconciler
+(scripts/cloud-reconcile.sh) discovers the branch and lands it.'
 
   if [ "$DRY" = 1 ]; then
     echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"

@@ -150,6 +150,35 @@ session's brief requires its **first act** to be pushing that branch — an empt
 Absence then becomes informative: no ref inside the budget is `BOOTING` (expected); no ref past it
 is `NOT-STARTED` (actionable — re-fire, or check entitlement).
 
+#### 4.1a The contract is now PRODUCED, and for a year it was only this paragraph
+
+*(backlog `0c8b39b67665`, 2026-08-25.)* Every clause above is load-bearing on the word **first**, and
+until this entry no code anywhere emitted it. `scripts/handoff-fire.sh` assigns the branch and
+instructs a push (§11.2 finding 2), but what its payload actually said was *"Push whatever you have
+**before you finish**"* — a **closing** act. Under a closing-push contract, C1 is unsound in the
+destructive direction:
+
+> A session that booted cleanly and has spent sixteen minutes reading presents **byte-identically**
+> to one that was never created, died at boot, or was refused entitlement — the same four-way
+> conflation this section says only a contract can break. `boot_s` defaults to 900 s
+> (`bin/cc-cloud:173`), so a perfectly ordinary first turn outruns it. The verdict then fires
+> *actionably*: `NOT-STARTED` means "re-fire, or check entitlement", and §5.2's three liars —
+> `cc-spawn-verify`, `cc-board` and the destructive `com.claude.team-orphan-reaper` on its 600 s
+> timer — abstain on a declaration that reads healthy.
+
+The payload now instructs `git switch -c <branch>` → `git commit --allow-empty` → `git push -u`
+**as the first act, before the VM reads a file**, and states the verdict it exists to prevent (an
+unexplained rule is the first thing a long brief loses). Three cases in `tests/handoff-fire-cloud.bats`
+pin it — 20 the command triple and its ordering, 21 the *wording* (a payload can carry all three
+lines and still defer them in prose), 22 the non-regression control for §11.2's `switch -c` fix. 20
+and 21 are RED against the pre-fix tree, 22 green on both.
+
+Why **empty** rather than "push once you have something": content is exactly what a session does not
+have at the instant the discriminator is needed. It costs one round trip and cannot mislead anything
+downstream — `scripts/cloud-return.sh:295-311` gates the land on `worker_status` *and* a quiet
+window, so a boot commit never trips a premature land, and `fill-paths` derives no path set from it,
+so it cannot fake a C3 `LANDED` either.
+
 ### 4.2 The discriminator the whole design rests on
 
 Measured, not assumed:
@@ -776,7 +805,10 @@ Before any cloud session is fired, in this order:
 1. `cc-cloud declare --id <id> --branch <b> --paths <what it will land> --url <session url>` —
    an undeclared cloud session is unobservable, and `declare` refuses without `--id`/`--branch`.
 2. The session's brief must require **pushing the declared branch as its first act**, so that
-   absence past the boot budget means something (§4.1).
+   absence past the boot budget means something (§4.1). **BUILT** (§4.1a, backlog `0c8b39b67665`):
+   `scripts/handoff-fire.sh`'s cloud payload now instructs `switch -c` → `commit --allow-empty` →
+   `push -u` before the VM reads a file. This step was prose-only until then, and C1 was unsound for
+   as long as it was.
 3. §5.2 must be wired first — otherwise `com.claude.team-orphan-reaper` may archive the team
    while the session is healthy.
 4. On completion, `cc-cloud retire --id <id>` — or let C3 `LANDED` render it silent, which it does

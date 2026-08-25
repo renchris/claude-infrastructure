@@ -461,3 +461,64 @@ EOF
   [ -s "$CLOUD_DECL_LOG" ]
   [ ! -f "$BATS_TEST_TMPDIR/pf-off.log" ]                # the override SKIPS the probe, not just its verdict
 }
+
+# ── the ABSENCE CONTRACT — backlog 0c8b39b67665 ─────────────────────────────────────────────────
+# CLOUD_OBSERVABILITY.md §4.1 makes the boot push a CONTRACT, not a courtesy: "the session's brief
+# requires its first act to be pushing that branch — an empty commit is enough". It is the sole
+# basis on which §4.3's C1 arm (no ref past declared_at + boot_s) may be read as NOT-STARTED, and
+# it lived only in that prose sentence — the payload said "push whatever you have BEFORE YOU
+# FINISH", which is a CLOSING act. Under a closing-push contract a session that booted and has been
+# reading for sixteen minutes is byte-identical to one that never booted, and the verdict fires in
+# the destructive direction (re-fire; the 600s orphan reaper).
+#
+# RED-PROOF (re-runnable): replay this file against `git show <pre-fix sha>:scripts/handoff-fire.sh`
+# in a scratch tree. 20 goes RED on the `--allow-empty` grep — the payload had no commit line at all
+# — and 21 goes RED because the trailer's own heading read "read this before you finish".
+# 22 is green on BOTH trees BY DESIGN: it is the non-regression control for case 17's ordering, so a
+# future rewrite cannot satisfy 20 by inserting a commit line ahead of the branch that holds it.
+
+@test "20 the payload makes the push the FIRST act — an empty boot commit, between switch and push" {
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  [ -s "$BATS_TEST_TMPDIR/create.log" ]
+  local sw commit push
+  sw="$(grep -n 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  commit="$(grep -n 'git commit --allow-empty' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  push="$(grep -n 'git push -u origin HEAD' "$BATS_TEST_TMPDIR/create.log" | head -1 | cut -d: -f1)"
+  [ -n "$commit" ] || { echo "the payload never gives the VM anything to push before it has done work"; false; }
+  [ -n "$sw" ] && [ -n "$push" ] || { echo "the branch/push pair went missing"; false; }
+  # Order is the contract: the commit must land ON the assigned branch, and be pushed after it.
+  [ "$sw" -lt "$commit" ] || { echo "the boot commit must follow switch -c (sw=$sw commit=$commit)"; false; }
+  [ "$commit" -lt "$push" ] || { echo "the boot commit must precede the push (commit=$commit push=$push)"; false; }
+}
+
+@test "21 the payload SAYS first, not last — the instruction is ordered against the brief" {
+  # The three git lines are useless if the surrounding prose defers them: an agent reading "before
+  # you finish" complies perfectly and still pushes nothing for an hour. So the wording is under
+  # test, not just the commands.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  grep -qi 'FIRST act' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload never tells the VM the push comes first"; false; }
+  # …and it must not simultaneously frame the whole block as an end-of-session chore, which is
+  # exactly the pre-fix heading.
+  ! grep -qi 'read this before you finish' "$BATS_TEST_TMPDIR/create.log"
+  # It must also say WHY, because a rule with no stated cost is the first thing an agent drops when
+  # the brief is long: absence past the boot budget is what reads as NOT-STARTED.
+  grep -q 'NOT-STARTED' "$BATS_TEST_TMPDIR/create.log" \
+    || { echo "the payload never names the verdict the boot push exists to prevent"; false; }
+}
+
+@test "22 CONTROL — the boot commit did not displace the assigned branch or the return channel" {
+  # Green on both trees by design. Case 20 could be satisfied by a payload that commits on whatever
+  # branch the VM happens to be on, or that drops the reconciler pointer for space; neither is the
+  # contract. This pins the parts case 17 established so 20 cannot be met by regressing them.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: t" 0
+  cfire CLOUD_CREATE_LOG="$BATS_TEST_TMPDIR/create.log"
+  grep -q 'git switch -c claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+  ! grep -q 'HEAD:claude/fire-' "$BATS_TEST_TMPDIR/create.log"
+  grep -q 'cloud-reconcile.sh' "$BATS_TEST_TMPDIR/create.log"
+}
