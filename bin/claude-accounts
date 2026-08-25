@@ -140,6 +140,7 @@ import fcntl
 import glob
 import gzip
 import json
+import math
 import os
 import random
 import re
@@ -2102,7 +2103,12 @@ def apply_burn(rows, cfg, samples=None):
     A negative delta is a window that ROLLED between samples — a reset crossing, not negative
     burn — and reads as unknown. Fail-soft: a thin series leaves the fields absent, which is
     bit-for-bit the pre-M7 behavior."""
-    samples = _util_tail()[0] if samples is None else samples
+    # BURST_LOOKBACK_H, not 48: burst_percentile ranks a demand against the account's OWN history
+    # and needs BURST_MIN_WINDOWS=200 of them, which 48 h cannot supply at any grid point above
+    # 6 h. Every consumer below still filters to its own span, so widening the read changes no
+    # rate. It is also nearly free — measured on the live 3.6 MB series, 48 h reads in 66 ms and
+    # 336 h in 73 ms, because the doubling seek amortises and the parse dominates.
+    samples = _util_tail(hours=BURST_LOOKBACK_H)[0] if samples is None else samples
     if not samples:
         return
     now = time.time()
@@ -2149,6 +2155,14 @@ def apply_burn(rows, cfg, samples=None):
     # Absent keys mean "too early to say" — see wall_projection's abstain rule; a consumer that
     # treats a missing burn_ratio as 0 would read a fresh window as idle, which is the exact
     # inversion this metric exists to prevent.
+    # M5: rank each account's REQUIRED rate inside its own realised history. Stamped here, beside
+    # the other burn facts, because this is the one place that holds both the rows and the series;
+    # pace_line renders what is stamped, so there is still exactly one renderer (L3).
+    for r in rows:
+        bp = burst_percentile(r, samples)
+        if bp is not None:
+            r["burst"] = bp
+
     for r in rows:
         ratio, proj = wall_projection(r)
         if ratio is not None:
@@ -2166,6 +2180,85 @@ def pace_need_ppd(r):
     if not isinstance(wrh, (int, float)) or wrh <= 0:
         return None
     return max(0.0, 100.0 - r["weekly_pct"]) / (wrh / 24.0)
+
+
+BURST_LOOKBACK_H = 336.0                     # 14 d — the span apply_burn reads for the ranking
+BURST_H_GRID = (1.0, 3.0, 6.0, 12.0, 24.0)   # the horizons a demand can be expressed against
+BURST_MIN_WINDOWS = 200                      # below this the account's own history cannot rank it
+BURST_MIN_RESET_H = 0.5                      # inside the last half hour the rate is quantization
+BURST_SPAN_LO, BURST_SPAN_HI = 0.9, 1.15     # a window counts only if it actually covers ~H hours
+
+
+def burst_percentile(r, samples):
+    """Is this account's required weekly burn rate ROUTINE for it, or a p95 stunt it has never
+    pulled off? Returns None (abstain) or
+    {"pct": float|None, "h": float, "n": int, "need_pph": float, "never": bool}.
+
+    THE DEFECT IT CURES. The footer renders `needs 88%/d over 2.2h` — a rate quoted in a unit
+    ELEVEN TIMES LONGER than the window it has to happen in, which is uninterpretable: nothing
+    on the line says whether 88%/day is a Tuesday or a personal record. `pace_need_ppd` keeps
+    its field, because it still answers "how hard would I have to push"; what is replaced is its
+    rendering as a bare rate.
+
+    Ranked first among the metrics because it is the only one no refutation touched. Its one
+    out-of-sample datum has the right polarity: at 09:27Z on 2026-08-25 next3 needed a p95.5
+    3 h burn to close 8 pp, did not perform it (92% -> 92% over the following 2.2 h), and its
+    window closed short. One live case is not a validation, but it is the correct direction.
+
+    Ranked against THIS ACCOUNT'S OWN history — never the fleet's — at the horizon the demand
+    actually lives on: H is the nearest grid point to weekly_reset_h ON A LOG SCALE, because
+    the grid is geometric and a linear nearest would send a 2.5 h deadline to the 1 h bucket.
+
+    ABSTAIN (L2): None below BURST_MIN_WINDOWS qualifying windows for that account, and None
+    inside BURST_MIN_RESET_H of the reset. When the demand exceeds every window the account has
+    ever run, `never` is True and `pct` is None — the p100 is NOT extrapolated, because there is
+    no evidence above the maximum and a rendered "p100" reads as a rate that has been achieved."""
+    wp, wrh = r.get("weekly_pct"), r.get("weekly_reset_h")
+    if wp is None or not isinstance(wrh, (int, float)) or wrh < BURST_MIN_RESET_H:
+        return None
+    need_pph = max(0.0, 100.0 - wp) / wrh
+    h = min(BURST_H_GRID, key=lambda g: abs(math.log(g) - math.log(max(wrh, 1e-9))))
+    ss = sorted((e for e in samples or []
+                 if e.get("acct") == r.get("acct") and e.get("weekly_pct") is not None
+                 and e.get("_t") is not None),
+                key=lambda e: e["_t"])
+    lo_s, hi_s = BURST_SPAN_LO * h * 3600.0, BURST_SPAN_HI * h * 3600.0
+    rates = []
+    j = 0
+    for i, a in enumerate(ss):
+        if j < i + 1:
+            j = i + 1
+        while j < len(ss) and ss[j]["_t"] - a["_t"] < lo_s:
+            j += 1
+        if j >= len(ss):
+            break
+        b = ss[j]
+        dt = b["_t"] - a["_t"]
+        if dt > hi_s:
+            continue
+        # INSIDE ONE weekly window, both witnesses: a window that straddles a reset would read
+        # the new window's level as the old one's accrual.
+        if _rolled(a, b, "weekly_reset_at", "weekly_pct"):
+            continue
+        if _reset_key(a.get("weekly_reset_at")) != _reset_key(b.get("weekly_reset_at")):
+            continue
+        rates.append((b["weekly_pct"] - a["weekly_pct"]) / (dt / 3600.0))
+    n = len(rates)
+    if n < BURST_MIN_WINDOWS:
+        return None
+    if need_pph > max(rates):
+        return {"pct": None, "h": h, "n": n, "need_pph": need_pph, "never": True}
+    pct = 100.0 * sum(1 for x in rates if x < need_pph) / n
+    return {"pct": pct, "h": h, "n": n, "need_pph": need_pph, "never": False}
+
+
+def fmt_burst(bp):
+    """The one rendering of burst_percentile, so the abstain states cannot be spelled two ways."""
+    if not bp:
+        return None
+    if bp["never"]:
+        return f"needs more than it has EVER burned in {bp['h']:.0f}h"
+    return f"p{bp['pct']:.0f} of its own {bp['h']:.0f}h burns"
 
 
 WEEK_H = 168.0          # the weekly bucket's span; reset stamps are exactly 7 d apart
@@ -2222,7 +2315,17 @@ def pace_line(rows):
             p = f"{r['acct']} burn {ratio:.2f}× → ~{proj:.0f}% by reset"
             if proj >= 100.0:
                 p += " ⚠ WALL"
-            p += f", needs {need:.0f}%/d over {fmt_h(r['weekly_reset_h'], narrow=True)}"
+            # M5 REPLACES THE RENDERING, not the field. `needs 88%/d over 2.2h` quotes a rate in
+            # a unit 11x longer than the window it must happen in, and says nothing about whether
+            # the account has ever burned that fast. The percentile answers that; the bare rate
+            # survives only where the percentile abstains, so an abstention never renders as a
+            # silently missing clause.
+            b = fmt_burst(r.get("burst"))
+            if b:
+                p += f", {b} to close {max(0.0, 100.0 - r['weekly_pct']):.0f}pp in " \
+                     f"{fmt_h(r['weekly_reset_h'], narrow=True)}"
+            else:
+                p += f", needs {need:.0f}%/d over {fmt_h(r['weekly_reset_h'], narrow=True)}"
         b = r.get("burn_wk_ppd")
         if isinstance(b, (int, float)):
             p += f" (recent {b:.0f}%/d)"

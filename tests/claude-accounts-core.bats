@@ -1790,7 +1790,21 @@ n3 = row(acct="next3", weekly_pct=81, weekly_reset_h=27.8)
 n2 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_ppd=9.0)
 line = ca.pace_line([n2, n3])
 assert line.startswith("weekly burn (1.00× = lands exactly at the 100% wall): next3 "), line  # soonest reset first, regardless of input order
-assert "next2 burn 0.48× → ~48% by reset, needs 17%/d over 5d" in line, line   # ratio + projection, with the %/day figure retained beside them
+assert "next2 burn 0.48× → ~48% by reset, needs 17%/d over 5d" in line, line   # ratio + projection, and the %/day figure is the FALLBACK: it renders
+                                                         # only where burst_percentile ABSTAINED, which is this fixture (no series).
+# M5 (S2): where the percentile IS available it REPLACES that bare rate. `needs 17%/d over 5d`
+# quotes a rate in a unit longer than the window it must happen in and says nothing about whether
+# the account has ever burned that fast; the percentile is that missing fact. Both spellings are
+# pinned here because the fallback is what keeps an abstention from rendering as a missing clause.
+m5 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8,
+         burst={"pct": 64.7, "h": 24.0, "n": 2448, "need_pph": 0.71, "never": False})
+assert "p65 of its own 24h burns to close 87pp in 5d" in ca.pace_line([m5]), ca.pace_line([m5])
+assert "needs 17%/d" not in ca.pace_line([m5]), ca.pace_line([m5])
+# above the observed maximum there is NO evidence at all, so it says so rather than render p100
+nv = row(acct="next3", weekly_pct=92, weekly_reset_h=27.8,
+         burst={"pct": None, "h": 3.0, "n": 2576, "need_pph": 25.0, "never": True})
+assert "needs more than it has EVER burned in 3h" in ca.pace_line([nv]), ca.pace_line([nv])
+assert "p100" not in ca.pace_line([nv]), ca.pace_line([nv])
 assert "(recent 9%/d)" in line, line                     # a measured series still renders...
 assert "BEHIND" not in line, line                        # ...but WITHOUT the old flag. 47ddbf47c DELETED it as a defect: on 2026-08-16 three
                                                          # freshly-reset windows each read BEHIND, which is correct and reads as gross
