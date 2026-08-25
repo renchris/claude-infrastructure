@@ -86,6 +86,117 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   done 2026-08-10, deliberately mass-reopened 2026-08-12 as standing umbrellas.
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
+- **2026-08-25 — drain recycle #227: method 197 — A FIX THAT INHERITED ITS PREDECESSOR'S PREMISE,
+  BESIDE A PRODUCER THAT HAD ALREADY NAMED THE CAUSE ON A CHANNEL THE CONSUMER CLOSED.**
+  Took #226's own lead 1 — the discarded stderr at the reaper's classify fork, filed by nobody — and
+  found that it is not a separate defect from #226's but the SAME one, one premise down. R5e stopped
+  two of `bin/cc-reaper`'s diagnostics naming opposite causes for a single event and routed them
+  through one helper so they could not contradict each other again. **That helper inherited what
+  both of them assumed: that `enum` is a MEASUREMENT.** It is not, when `cc-classify`'s session
+  enumerator fails — that path returns `[]` at rc 0, so the value is the producer's FALLBACK, and
+  `blindspot_cause`'s partition `(live−enum) == (live−reg) + (reg−enum)` becomes **arithmetic over a
+  non-number**, with its "unregistered" term manufactured outright.
+  **MEASURED BY EXECUTION BEFORE WRITING ANYTHING — the sixth consecutive link where running the
+  producer beat reading it.** Against the REAL binary with its `CC_CLASSIFY_SESSIONS_BIN` seam
+  pinned, in an isolated store (the operator's live `cc-registry` read **16 rows before and after
+  every arm**):
+  | arm | stdout | rc | stderr |
+  |---|---|---|---|
+  | **F** enumerator exits 3 | `[]` | **0** | the self-report (`grep -c` = **1**) |
+  | **T** enumerator returns `[]` | `[]` | **0** | **0 bytes** (`grep -c` = **0**) |
+  **BYTE-IDENTICAL ON STDOUT AND rc.** A real `sweep --reap` over both arms emitted the SAME line, to
+  the log AND to the desk page: `classify EMPTY-BUT-POPULATED: 0 enumerated vs 4 live pane(s) —
+  cause=REGISTRATION … all 4 unseen are unregistered; a spawn mode is not registering`. For arm F
+  that is confidently wrong, **on the line an operator would act on**. With the registry partially
+  populated (2 of 4 live) the same dead enumerator yields `cause=BOTH … 2 unregistered (a spawn mode
+  is not registering) + 2 registered-but-unenumerated` — **half of it an artifact of the arithmetic.**
+  🚨 **THE DISCRIMINATOR WAS NEVER MISSING.** `bin/cc-classify:998` already prints
+  `session enumerator FAILED (rc=%s from %s) — the empty classification below is a FALLBACK, not a
+  verdict` on stderr whenever `ENUM_OK != 1`. `bin/cc-reaper` forks that producer at **two** sites and
+  sent stderr to `/dev/null` at both, then guessed the same fact from the registry. **Method 191 in
+  its purest form: the caller needs no new sensor, it needs to stop closing the channel the producer
+  is already speaking on.**
+  **THE FIX (`434a9c85c`, landed, content-verified):** capture classify's stderr at both call sites;
+  record the producer's verdict in `CLASSIFY_ENUM_SELFREPORT`; consult it in `blindspot_cause`
+  BEFORE the arithmetic. Every arm now also carries a parseable **`evidence=`** token —
+  **`PRODUCER-SELF-REPORT` · `REGISTRY-ARITHMETIC` · `UNREADABLE-STORE`** — **orthogonal to
+  `cause=`**, so a consumer keying on `cause=` is unaffected and no arm lacks the field. No token is
+  a substring of another **in either axis** (#226's scar). `tests/cc-reaper.bats` **185 → 192**; all
+  four literals verified = 1/3/1/9 on trunk by content, impossible NEG literal 0.
+  **FOUR THINGS IT DELIBERATELY DOES NOT DO — CARRY ALL FOUR:**
+  - 🚨 **It does not read the ABSENCE of a self-report as a clean bill. Presence-only, therefore
+    MONOTONE** — it can add attribution, never withdraw it. **That is not caution for its own sake:
+    method 194 measured that the LIVE `~/.claude/bin/cc-classify` (a symlink into the shared
+    checkout) does not carry the emitting line AT ALL** — `session enumerator FAILED` reads **0 live
+    / 2 trunk**, POS control `cmd_all()` **1 in both**, impossible NEG literal **0**. A design that
+    read absence as health would be confidently wrong on every live sweep — **the same defect, one
+    layer further down.**
+  - **It does not change `_rp_bounded`.** #226's brief warned that this lead touches the helper four
+    bounded forks share. **REFUTED BY EXECUTION, not by reading:** the `2>/dev/null` is at the CALL
+    SITE, so capturing it is a call-site change — both spellings run against the real binary, stdout
+    byte-identical, stderr recovered. **A scoping warning is a claim with a half-life too.**
+  - **It does not change stdout, rc, or which sessions get reaped.** Record only.
+  - **It does not touch `live_pane_count`** — the truth signal stays ps-derived, and it does not
+    address `88b6e65e4acf`'s damping clause, **which STAYS OPEN.**
+  **MUTANTS — one per SITE and one per SEAM**, predictions stated before running, baseline asserted
+  green first (12/12 filtered, 0 skips), subject restored byte-identical by sha256 on every arm and
+  again at the end. **M1** override branch deleted ⇒ 4 arms · **M2** first classify fork reverted to
+  `2>/dev/null` ⇒ 3 · **M3** the RETRY fork reverted ⇒ 1 · **M4** absent registry reported as zero
+  rows ⇒ both UNATTRIBUTED tests · **M5 CONTROL** the override forced to fire always ⇒ **all eight
+  arithmetic arms.** **FIVE FOR FIVE — in round 2.**
+  🚨 **ROUND 1 MISMATCHED ON M5 AND THE MISMATCH WAS THE POINT.** R5e's *"registered-but-unenumerated
+  is NOT reported as a spawn mode failing to register"* stayed **GREEN** under a mutant that made the
+  producer-self-report branch fire unconditionally. **The code was right and the TEST was
+  under-specified** — it asserted the verdict and could not see the PROVENANCE, so it credited the
+  arithmetic for a verdict the arithmetic had not computed. Strengthened in the same diff with one
+  `evidence=` assertion. **A new axis can retroactively under-specify an existing assertion; when you
+  add one, re-ask what the old tests can still tell apart.**
+  🚨 **MY OWN INSTRUMENT FAULTS — THE SECOND ONE WAS CAUGHT BY A GATE, NOT BY ME.**
+  (1) The M5 prediction above. (2) **The first land went `rc 6` GATE RED before running a single
+  test**, on `test-hermeticity-lint`: my new tests drive the REAL `cc-classify`, so the suite now
+  names `CC_CLASSIFY_SESSIONS_BIN`, whose default is the **BARE NAME `cc-sessions`** — resolved off
+  the operator's PATH and EXECUTED, which a fixtured `$HOME` cannot defend (rule 5b). **That is
+  control 17 — #226's own closing lesson, "before adding a read to a subject, ask what its suite does
+  NOT isolate, and add the isolation in the same diff" — and I read it, wrote the read, and did not
+  ask.** `setup()` now pins it at an absent path (cc-classify fails open on one, which is the
+  behaviour under test); each R5f test still exports its own inside a wrapper, which wins in the
+  child. **Amended, re-lint, re-land. The gate was the instrument that worked; record that rather
+  than only the finding.**
+  (3) ⚠️ **The rebase rewrote my sha TWICE** — `66b4cb26` → `dedf01bb2` → `4fd11844` → `434a9c85c`,
+  the last under a sibling landing mid-gate. **Nothing cited it until after the land; had the §2.1
+  entry been written first it would have named a dead object** (memory: `cited-sha-may-not-survive-
+  the-land`). **This is why the entry is a SECOND commit, not a co-committed one.**
+  **BOARD** at my open **307 open / 211 blocked / 2,326 done / 6 claimed** (518 combined, 2,850
+  folded), against #226's close of 309/210/2,326/5. **THREE movers over the gap, and all four lists
+  were
+  needed to see them:** `0c8b39b67665` **open → claimed** · `564d151b76e5` **open → claimed** (one of
+  the eleven cloud rows) · `193ae8ddce72` **claimed → blocked**. Per-status deltas reconcile with the
+  combined `comm` exactly (−2 open, +1 blocked, +1 claimed net = −1 combined). 🚨 **`done` did NOT
+  move (2,326 → 2,326) for the SECOND consecutive link** — the off-box actuation rate now reads
+  **2, 2, 0, 0** across four links under an unchanged `:-900` (0 live / 2 trunk). **Report the tally
+  and the bound together; neither is interpretable alone.**
+  **FILED: `3e8473494af4`** (the discarded-stderr lead, filed BEFORE the work per #226's instruction;
+  board write verified by content, **24 literals through a whitespace joiner, 3 NEG controls at 0,
+  matchcount 1, bogus-id NEG 0**). **CLOSED: nothing** — #217–#227 have now all closed nothing, and
+  `88b6e65e4acf`'s residue is named above rather than laundered.
+  **CONVERGER re-run and reproduced #221–#226's shape a SEVENTH time:** `rc=1`, output is ONE line
+  (`deploy-migrations: migrate: 0 applied, 14 staged (operator-owned), 0 pending`), shared checkout
+  dirty with **23 entries**, the blocking one `hooks/enforce-email-formatting.py` (` M`).
+  **`42243203fb31` owns it** — do not re-file, do not clean. `wrap-ledger --machine` at my open:
+  `RUNG=🚀 · LIVE_SRC=behind · LIVE_SHA=841169ed00b1 · LIVE_LAG=64 · LIVE_ADDS=26 · DIRTY_N=0 ·
+  MIG_FAILED=0 · GATE=stale`. **`LIVE_SHA` is an ELEVENTH consecutive non-move**; `LIVE_ADDS=26` is
+  neither mine nor #226's (I added **zero** files, asserted as an rc-90 refusal at commit time
+  against a control that CAN fail, which spoke with 1).
+  **GATES:** `shellcheck bin/cc-reaper` rc 0 / **0 findings** · `bash -n` rc 0 ·
+  `bats-assert-liveness.py` rc 0 · scoped `bats-shellcheck-lint --range` rc 0, clean, 1 suite, 0
+  blocking, **2 pre-existing advisory** · **`alarm-polarity-lint` DECLARED NOT-RUN** (mute on three
+  independent subjects, `e07dc5e09f83` OPEN — its green is a non-verdict).
+  **280 tests run in the FOREGROUND before landing**: `cc-reaper` **192/192** (~340 s at load 8–12,
+  run TWICE — once before the seam pin and once after) plus the selector's other six —
+  `handoff-lifecycle-record` 15, `headless-address-consumers` 13, `lstart-dialect-bin` 16,
+  `reap-freshness` 10, `reap-sweep-bounds` 14, `watchdog-census` 20 — **88/88, 0 skips, plan == ok.**
+  Selector drew **7** for `bin/cc-reaper` a **fifth** consecutive time (7, 8, 7, 7, 7, 7), POS control
+  speaking with **4**. **0 postland RED pages after the land, denominator 2,665.**
 - **2026-08-25 — drain recycle #226: method 196 — TWO SIBLING DIAGNOSTICS NAMING OPPOSITE CAUSES FOR
   ONE EVENT, NEITHER READING THE STORE THAT DECIDES BETWEEN THEM.**
   Took #225's lead 1 — `88b6e65e4acf`, #220's own filing and the last unworked `cc-reaper` self-check
