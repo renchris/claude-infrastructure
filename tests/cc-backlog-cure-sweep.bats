@@ -126,11 +126,21 @@ status_of() {  # $1=id → the folded state
 }
 
 # ── THE SECOND DEFECT (measured 2026-08-25): THE SWEEP IS REGULARLY CUT OFF MID-LOOP ─────────────
-# The sweep above is the LAST stage of `cmd_reap`, and cc-reaper runs the whole reap under a 60s
-# bound (`_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}"`). Measured cost on the live 14k-line
+# The sweep above is the LAST stage of `cmd_reap`, and cc-reaper runs the whole reap under a bound
+# (`_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-...}"`). Measured cost on the live 14k-line
 # ledger: the reap is 15.6s with no writes and 86.7s with 9 unblocks, because ONE `cmd_transition`
 # costs ~7.4s — so the sweep can afford about six writes per tick and is SIGTERM'd after that.
 # cc-reaper.log carried 694 `bound-fired backlog-reap` entries.
+#
+# ⚠️ THOSE THREE NUMBERS ARE FOREGROUND NUMBERS AND THE REAP DOES NOT RUN IN THE FOREGROUND
+# (recycle #223). com.chrisren.cc-reaper.plist sets `ProcessType Background`, and the same non-dry
+# reap re-measured across that band costs 96s foreground against 617s under `taskpolicy -c
+# background` — a 6.4x tax. The read-only half alone is 41s in-band. So "about six writes per tick"
+# was an affordance the job never had: under the 60s bound it then carried, the reap afforded ZERO
+# writes in its own band, which is why the cure sweep completed three times in the whole log while
+# eleven curable rows sat blocked for up to 23.5h. The bound was raised 60 -> 900 and the sizing
+# A/B is recorded at cc-reaper's ride-along block; a cost model quoted in the wrong band reads as a
+# tuning detail and is actually the verdict (memory: bound-must-fit-the-band-not-the-bench).
 #
 # That alone would be tolerable if the truncation were fair and visible. It was neither:
 #   * `group_by(.id)` made the order a FIXED permutation, so the SAME suffix was cut every tick.
