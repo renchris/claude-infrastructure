@@ -1,7 +1,9 @@
 # A cloud dispatch whose specification was never committed — item 4ce239d21d67
 
 **Filed 2026-08-24, from the cloud session that received the dispatch.**
-Landed cure: `bin/cc-venue` question 1b (`ineligible-dod-offtrunk`), tests `cc-venue.bats` 23-29.
+Cure: `bin/cc-venue` question 1b (`ineligible-dod-offtrunk`), tests `cc-venue.bats` 23-29.
+⚠️ **That cure sat UNLANDED for 7h28m and the same mis-route recurred — see §6, written by the
+second cloud session, which is what actually carried both commits onto trunk.**
 
 This is the fifth entry in the `venue-*` family and the first whose defect is not about *which
 repo* an item names. It is about whether the item's **own specification** exists anywhere a VM can
@@ -137,3 +139,77 @@ The cure stops the **next** mis-route. It does not do the RATIFY work, and canno
 4. **Worth a census, not assumed:** how many live rows carry a `dodRef` that resolves nowhere on
    trunk? `cc-venue run --json` now answers it directly — count `token:ineligible-dod-offtrunk`.
    That census needs the live ledger and so belongs on the box.
+
+---
+
+## 6. The cure was never landed, so the mis-route recurred — measured on the second dispatch
+
+*Added 2026-08-25 by the SECOND cloud session dispatched against this same item.*
+
+Everything in §1-§5 was correct. It was also **stranded**: both commits sat on
+`origin/claude/fire-20260824T173421Z-26819-1` and neither ever reached trunk. The item stayed open
+with its `dodRef` unchanged, the producer still had no question 1b, and the dispatcher did the only
+thing an unfixed producer can do — **it sent the same item off-box again**:
+
+| Event | Time (UTC) | Evidence |
+|---|---|---|
+| Cure committed | 2026-08-24 17:46:58 | `262e7848` (`fix(cc-venue)`) |
+| Disproof committed | 2026-08-24 17:48:01 | `0ec44a65` (`docs(research)`) |
+| **Neither landed** | — | `git merge-base --is-ancestor <sha> origin/main` → **false** for both; `git branch -a --contains` names one branch and it is not `main` |
+| **Same item dispatched again** | **2026-08-25 01:15:39** | this session's own branch, `claude/fire-20260825T011539Z-45220-1` |
+
+**7h28m between the fix and the recurrence it was written to prevent.** The second VM arrived, ran
+the same two probes from a fresh clone standing on trunk, and reproduced §1's table exactly —
+because from trunk's point of view nothing had happened.
+
+**This is the third face of the same defect and it belongs beside the other two.** §3 explains why
+no *classifier* asked the question; this section is why asking it would not yet have mattered. A
+cure that is committed but not landed is, to every consumer, indistinguishable from a cure that was
+never written — the `📦`-stranded class the root `CLAUDE.md` prices at "one crash, stale worktree,
+or forgotten branch from being lost". Here the loss was not hypothetical: it was **a whole second
+cloud session**, spent re-deriving a conclusion that already existed on a branch nobody read.
+
+⚠️ **The doc asserted its own landing.** This file's header read *"Landed cure: `bin/cc-venue`
+question 1b"* while the commit carrying it had never been an ancestor of `main` — written in the
+future tense of a `/ship` that did not run. **A document may not certify its own landedness**; the
+only admissible proof is `git merge-base --is-ancestor` against the trunk ref, which is the check
+this section ran and the previous header did not. The header now says `Cure:` and points here.
+
+### What this session verified before landing, rather than inheriting
+
+The §4 claims were **re-run from scratch**, not taken on trust — a stale tree reproduces a
+post-land RED faithfully, so an inherited green is worth nothing:
+
+- **Red-proof, both directions.** With trunk's `bin/cc-venue` restored in place: **24 ok / 5 not-ok**
+  — cases **23, 24, 26, 29** fail, exactly as §4 claims. With the fix: **28 ok / 1 not-ok**. Cases
+  **25, 27, 28** pass in both directions, confirming the arm is scoped rather than blanket.
+- **Case 11 is a container artifact, confirmed by control.** It `chmod 000`s the ledger and asserts
+  a refusal; this VM runs as **uid 0** (`id -u` → `0`), so root reads the file anyway and the
+  refusal never fires. It fails **identically with the fix stashed**, so it is not from this change.
+  The `cc-dispatch-readiness` suite — the other suite `gate-select.sh --direct` names for this diff
+  — is **30/30 green**.
+- **The arm convicts this item's own `dodRef`**, which §4 argued but never executed against the
+  real value. Calling `dod_trunk_state()` directly, `repo` = this clone, `ref` = `origin/main`:
+
+  | `dodRef` | verdict |
+  |---|---|
+  | `/Users/chrisren/…/docs/plans/RATIFY_DECISIONS_TRIAGE.md` (the live value) | **`absent`** → routes LOCAL |
+  | `/Users/chrisren/…/docs/plans/BACKLOG_DRAIN_24_7.md` (a plan on trunk) | `ok` → still eligible |
+  | `decision:5f0a1b2c3d4e` | `n/a` → untouched |
+
+  The absolute filing-box path is convicted **by suffix**, which is the mount-prefix case §4 says is
+  the whole reason the candidate ladder exists. Had question 1b been on trunk at 01:15, this
+  session would not have been dispatched.
+
+### What is STILL open after this land
+
+§5's four items are **unchanged and still the operator's** — landing the cure does not do the RATIFY
+work, and this VM still has no `~/.claude/autonomy/`, so the §5.3 `cc-backlog add` remains unfiled
+from here. One item is added:
+
+5. **Item `4ce239d21d67` must not be dispatched a third time.** With question 1b on trunk the
+   producer now refuses it by itself (`venueWhy: ineligible-dod-offtrunk`), so no operator action is
+   needed to *stop* the loop. What remains is the disposition: either commit
+   `docs/plans/RATIFY_DECISIONS_TRIAGE.md` so the item becomes workable anywhere, or leave it
+   uncommitted and work the item locally. Until one of those happens the RATIFY triage itself —
+   the 18 not-DONE sections — has been touched by nobody, twice.
