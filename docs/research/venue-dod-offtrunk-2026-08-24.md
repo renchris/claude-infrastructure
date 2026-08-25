@@ -379,3 +379,52 @@ The disposition has not changed since §5 wrote it, and is now overdue: **either
 the item becomes workable anywhere, or work the item locally.** What HAS changed is that the
 dispatcher will no longer keep choosing for you — with `037144e0` on trunk the stale `cloud` label is
 re-derived on the next pass rather than on a 6 h timer, so the fourth dispatch does not happen.
+
+### 7.6 …and this cure could not be landed from this venue either — the fourth face
+
+§6's finding was that a cure which never lands is invisible. §7's is that a landed cure cannot reach
+rows already labelled. This section is the third member of that family, discovered while trying to
+land §7.3: **`scripts/ship-land.sh` cannot complete in a cloud container at all**, so a cloud
+worker's only sanctioned landing rail is closed to it.
+
+```
+✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates.
+✗ ship-land: GATE RED — not pushing.                                            EXIT=6
+```
+
+**It is not a verdict about this diff.** `scripts/unattended-path-lint.sh` decides whether a bare
+binary name is reachable by asking *"does this box install such a binary at all"* — and a NO
+**drops** the finding (`:889-897`, the lint's own founding example). Its fixtures are macOS stock
+binaries in `/usr/sbin:/sbin`, which do not exist on Linux, so on this platform the detector cannot
+discriminate in either direction and its self-check fails by construction. Proven, not inferred:
+
+| Probe | Result |
+|---|---|
+| `unattended-path-lint.sh --selftest` in this branch | FAILED, 9 of 39 |
+| the same, in a clean `git worktree` at **`origin/main`** | FAILED, **9 of 39** |
+| `diff` of the two failing-case sets | **byte-identical** |
+| the lint's real scan over this land's own files (`CC_UNATTENDED_OWN`) | **rc 0 — clean** |
+
+So the arm that blocks the land is red on trunk, in a tree this change never touched, and says
+nothing whatever about the two files being landed.
+
+**Not bypassed, deliberately.** `SHIP_LAND_UNATTENDED_LINT` would skip the arm in one assignment and
+the land would go green. That is disabling a guard to get green — prohibited outright, and the guard
+is real on the operator's macOS box where it *can* discriminate. A bare `git push origin HEAD:main`
+is prohibited by both this repo's `.claude/CLAUDE.md` (standing-land is "exclusively for the
+fail-closed project-local `/ship`") and this session's own rails. Neither escape is legitimate, so
+the work is committed and pushed to its own branch and **the land is the operator's step**.
+
+**Why this belongs in this family rather than in a note.** The pipeline's own law, quoted in the
+`/ship` skill, is that a cut suite is a **non-verdict** — *"a claim about the machine, not your
+tree"* — and R6 says a non-verdict is not a red. This arm produces exactly such a non-verdict and is
+nonetheless classified `gate_red`, which closes the only sanctioned rail for every cloud lander. The
+measured cost of that class is already on the record two sections above: **§6 is what a stranded
+cloud cure costs, and it cost a whole session.** This is the same trap one layer down — §7's cure
+against a fourth dispatch is, as of this writing, exactly as stranded as §6's was, and for a reason
+the author cannot fix from inside the venue.
+
+**The narrow fix is NOT attempted here, on purpose.** Giving the lint (or the gate arm) a platform
+guard is a change to the land pipeline every session on the operator's box depends on, and it cannot
+be validated on the platform where it matters from a Linux container. Filing it beats landing an
+unvalidatable change to the thing that does the landing.
